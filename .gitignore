@@ -43,6 +43,9 @@ docker-compose.override.yml
 # Node (for agent tooling)
 node_modules/
 
+# MCP output
+outputs/
+
 # Scratch
 scratch/
 .local/

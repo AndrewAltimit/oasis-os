@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "reaction-search": {
+      "httpUrl": "http://localhost:8024/messages",
+      "timeout": 5000
+    }
+  }
+}
