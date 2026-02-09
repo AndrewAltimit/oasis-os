@@ -250,8 +250,7 @@ impl PspBackend {
             let atlas_layout = Layout::from_size_align(atlas_size, 16).unwrap();
             let atlas_ptr = alloc(atlas_layout);
             if atlas_ptr.is_null() {
-                psp::dprintln!("OASIS_OS: FATAL - font atlas allocation failed");
-                return;
+                panic!("OASIS_OS: FATAL - font atlas allocation failed (OOM)");
             }
             self.font_atlas_ptr = atlas_ptr;
 
@@ -2097,8 +2096,8 @@ impl Drop for AudioPlayer {
 // Power callbacks (sleep/wake)
 // ---------------------------------------------------------------------------
 
-/// Flags indicating power events. Matches `sys::PowerInfo` bits.
-static mut POWER_RESUMED: bool = false;
+/// Flag indicating a resume-from-sleep event occurred.
+static POWER_RESUMED: AtomicBool = AtomicBool::new(false);
 
 /// Register a power callback for suspend/resume notification.
 ///
@@ -2122,14 +2121,7 @@ pub fn register_power_callback() {
 
 /// Check and clear the "resumed from sleep" flag.
 pub fn check_power_resumed() -> bool {
-    // SAFETY: POWER_RESUMED is only written from the power callback
-    // (firmware thread) and read/cleared here (main thread). Racing
-    // is benign: worst case is a missed or duplicate resume event.
-    unsafe {
-        let r = POWER_RESUMED;
-        POWER_RESUMED = false;
-        r
-    }
+    POWER_RESUMED.swap(false, Ordering::AcqRel)
 }
 
 /// Prevent the PSP from auto-suspending due to idle timeout.
@@ -2141,14 +2133,13 @@ pub fn power_tick() {
     }
 }
 
-/// SAFETY: Called by the PSP firmware on power state changes. Writes to
-/// POWER_RESUMED (see check_power_resumed for race analysis).
+/// SAFETY: Called by the PSP firmware on power state changes. POWER_RESUMED
+/// is an AtomicBool, so cross-thread access is safe without unsafe.
 unsafe extern "C" fn power_callback(_arg1: i32, power_info: i32, _arg: *mut c_void) -> i32 {
     let info = sys::PowerInfo::from_bits_truncate(power_info as u32);
     if info.contains(sys::PowerInfo::RESUME_COMPLETE) {
         psp::dprintln!("OASIS_OS: Resumed from sleep");
-        // SAFETY: See check_power_resumed -- benign data race.
-        unsafe { POWER_RESUMED = true };
+        POWER_RESUMED.store(true, Ordering::Release);
     }
     if info.contains(sys::PowerInfo::SUSPENDING) {
         psp::dprintln!("OASIS_OS: Entering suspend");
