@@ -100,11 +100,11 @@ impl Ue5Backend {
             let sa = color.a as u16;
             let da = 255 - sa;
             self.buffer[offset] =
-                ((color.r as u16 * sa + self.buffer[offset] as u16 * da) / 255) as u8;
+                ((color.r as u16 * sa + self.buffer[offset] as u16 * da + 127) / 255) as u8;
             self.buffer[offset + 1] =
-                ((color.g as u16 * sa + self.buffer[offset + 1] as u16 * da) / 255) as u8;
+                ((color.g as u16 * sa + self.buffer[offset + 1] as u16 * da + 127) / 255) as u8;
             self.buffer[offset + 2] =
-                ((color.b as u16 * sa + self.buffer[offset + 2] as u16 * da) / 255) as u8;
+                ((color.b as u16 * sa + self.buffer[offset + 2] as u16 * da + 127) / 255) as u8;
             self.buffer[offset + 3] = 255;
         }
     }

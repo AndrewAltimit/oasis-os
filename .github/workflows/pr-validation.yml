@@ -82,6 +82,20 @@ jobs:
         run: docker compose --profile ci run --rm rust-ci cargo deny check
 
       # -- PSP Backend Build -------------------------------------------------
+      - name: Setup PSP SDK
+        run: |
+          # rust-std-src is gitignored; recreate symlink for self-hosted runner.
+          if [ ! -e "crates/oasis-backend-psp/rust-std-src" ]; then
+            RUST_PSP_DIR="${RUST_PSP_DIR:-$HOME/Documents/repos/rust-psp}"
+            if [ -d "$RUST_PSP_DIR/rust-std-src" ]; then
+              ln -sf "$RUST_PSP_DIR/rust-std-src" crates/oasis-backend-psp/rust-std-src
+              echo "Linked rust-std-src from $RUST_PSP_DIR"
+            else
+              echo "::error::rust-std-src not found at $RUST_PSP_DIR/rust-std-src"
+              exit 1
+            fi
+          fi
+
       - name: Build PSP EBOOT
         run: |
           cd crates/oasis-backend-psp

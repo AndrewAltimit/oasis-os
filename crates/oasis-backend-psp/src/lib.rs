@@ -220,6 +220,12 @@ impl PspBackend {
 
     /// Initialize PSP display via GU and controller hardware.
     pub fn init(&mut self) {
+        // SAFETY: All calls in this block are PSP firmware FFI functions
+        // (sceCtrl*, sceGu*, sceGum*, sceDisplay*, sceKernelVolatileMem*)
+        // and standard library `alloc`. The VRAM allocator, GU display
+        // list, and framebuffer pointers are used according to the PSP SDK
+        // contracts. The static DISPLAY_LIST is exclusively accessed here
+        // and in swap_buffers (single-threaded main loop).
         unsafe {
             // Controller setup.
             sys::sceCtrlSetSamplingCycle(0);
@@ -243,6 +249,10 @@ impl PspBackend {
             let atlas_size = (FONT_ATLAS_W * FONT_ATLAS_H * 4) as usize;
             let atlas_layout = Layout::from_size_align(atlas_size, 16).unwrap();
             let atlas_ptr = alloc(atlas_layout);
+            if atlas_ptr.is_null() {
+                psp::dprintln!("OASIS_OS: FATAL - font atlas allocation failed");
+                return;
+            }
             self.font_atlas_ptr = atlas_ptr;
 
             // GU initialization.
@@ -341,6 +351,9 @@ impl PspBackend {
     ///
     /// 16 glyphs per row, 6 rows (95 glyphs for ASCII 32-126).
     /// Each glyph is 8x8. White where bit is set, transparent elsewhere.
+    /// SAFETY: `buf` must point to a valid, 16-byte-aligned allocation of at
+    /// least `FONT_ATLAS_W * FONT_ATLAS_H * 4` bytes. Caller ensures this
+    /// via `alloc(atlas_layout)` with a null check.
     unsafe fn build_font_atlas(&self, buf: *mut u8) {
         let pixels = buf as *mut u32;
         let stride = FONT_ATLAS_W;
@@ -372,6 +385,8 @@ impl PspBackend {
 
     /// Clear the screen to a solid color.
     pub fn clear_inner(&mut self, color: Color) {
+        // SAFETY: sceGuClearColor/sceGuClear are GU FFI calls that operate
+        // on the current display list. Called within a valid GU frame.
         unsafe {
             sys::sceGuClearColor(color.to_abgr());
             sys::sceGuClear(ClearBuffer::COLOR_BUFFER_BIT | ClearBuffer::FAST_CLEAR_BIT);
@@ -380,6 +395,9 @@ impl PspBackend {
 
     /// Draw a filled rectangle.
     pub fn fill_rect_inner(&mut self, x: i32, y: i32, w: u32, h: u32, color: Color) {
+        // SAFETY: sceGuGetMemory returns a display-list-embedded pointer
+        // valid until sceGuFinish. We write exactly 2 ColorVertex structs
+        // via ptr::write, then pass them to sceGuDrawArray as Sprites.
         unsafe {
             sys::sceGuDisable(GuState::Texture2D);
 
@@ -427,6 +445,10 @@ impl PspBackend {
         let glyph_w = (font::GLYPH_WIDTH as i32) * scale;
         let abgr = color.to_abgr();
 
+        // SAFETY: Binds the font atlas texture (RAM pointer via uncached
+        // mirror) and draws glyph sprites. sceGuGetMemory vertices are
+        // valid until sceGuFinish. font_atlas_ptr is checked non-null
+        // during init().
         unsafe {
             // Bind font atlas (RAM texture -- use uncached pointer + flush).
             let uncached_atlas = (self.font_atlas_ptr as usize | 0x4000_0000) as *const c_void;
@@ -512,6 +534,9 @@ impl PspBackend {
         let buf_h = texture.buf_h;
         let data_ptr = texture.data;
 
+        // SAFETY: Binds the texture (RAM pointer via uncached mirror) and
+        // draws a Sprites primitive. data_ptr validity is ensured by
+        // load_texture_inner (allocated and populated before insertion).
         unsafe {
             // Textures are in RAM -- use uncached address and flush.
             let uncached_ptr = (data_ptr as usize | 0x4000_0000) as *const c_void;
@@ -610,6 +635,8 @@ impl PspBackend {
             };
 
         // Zero the buffer first (for padding areas).
+        // SAFETY: `data` was just allocated with `buf_size` bytes and
+        // confirmed non-null above. from_raw_parts_mut is valid.
         unsafe {
             // Manual zero loop to avoid core::ptr::write_bytes (see MEMORY.md footgun).
             let slice = std::slice::from_raw_parts_mut(data, buf_size);
@@ -662,6 +689,8 @@ impl PspBackend {
         if idx < self.textures.len() {
             if let Some(texture) = self.textures[idx].take() {
                 if !texture.in_volatile {
+                    // SAFETY: texture.data was allocated with texture.layout
+                    // via alloc() in load_texture_inner. Not in volatile mem.
                     unsafe {
                         dealloc(texture.data, texture.layout);
                     }
@@ -672,6 +701,7 @@ impl PspBackend {
 
     /// Set the clipping rectangle via GU scissor.
     pub fn set_clip_rect_inner(&mut self, x: i32, y: i32, w: u32, h: u32) {
+        // SAFETY: sceGuScissor is a GU FFI call operating on the display list.
         unsafe {
             sys::sceGuScissor(x, y, x + w as i32, y + h as i32);
         }
@@ -679,6 +709,7 @@ impl PspBackend {
 
     /// Reset clipping to full screen.
     pub fn reset_clip_rect_inner(&mut self) {
+        // SAFETY: sceGuScissor is a GU FFI call operating on the display list.
         unsafe {
             sys::sceGuScissor(0, 0, SCREEN_WIDTH as i32, SCREEN_HEIGHT as i32);
         }
@@ -686,6 +717,8 @@ impl PspBackend {
 
     /// Finalize the current display list, swap buffers, and open the next frame.
     pub fn swap_buffers_inner(&mut self) {
+        // SAFETY: GU frame lifecycle calls. DISPLAY_LIST is exclusively
+        // accessed from the single-threaded main loop (init/swap_buffers).
         unsafe {
             sys::sceGuFinish();
             sys::sceGuSync(GuSyncMode::Finish, GuSyncBehavior::Wait);
@@ -703,6 +736,8 @@ impl PspBackend {
         let mut events = Vec::new();
         let mut pad = SceCtrlData::default();
 
+        // SAFETY: sceCtrlPeekBufferPositive writes into the provided
+        // SceCtrlData struct. pad is stack-allocated and valid.
         unsafe {
             sys::sceCtrlPeekBufferPositive(&mut pad as *mut SceCtrlData, 1);
         }
@@ -1401,6 +1436,8 @@ impl SystemInfo {
     /// Volatile memory status is reported by `PspBackend` (which claims it
     /// during `init()` for the texture cache).
     pub fn query() -> Self {
+        // SAFETY: scePower* functions are PSP firmware FFI returning scalar
+        // values. No pointer aliasing or lifetime concerns.
         unsafe {
             let cpu_mhz = sys::scePowerGetCpuClockFrequency();
             let bus_mhz = sys::scePowerGetBusClockFrequency();
@@ -1442,6 +1479,9 @@ pub struct StatusBarInfo {
 impl StatusBarInfo {
     /// Poll live status from PSP hardware.
     pub fn poll() -> Self {
+        // SAFETY: PSP firmware FFI calls (scePower*, sceRtc*, sceUsb*,
+        // sceWlan*). `time` is stack-allocated and passed by mutable
+        // reference to sceRtcGetCurrentClockLocalTime.
         unsafe {
             let battery_exist = sys::scePowerIsBatteryExist() > 0;
             let battery_percent = if battery_exist {
@@ -1488,12 +1528,16 @@ impl StatusBarInfo {
 /// Register a default exception handler that prints the exception type
 /// via debug output. Prevents silent crashes on real hardware.
 pub fn register_exception_handler() {
+    // SAFETY: Registers a static function pointer as the default exception
+    // handler. The callback signature matches the PSP SDK contract.
     unsafe {
         sys::sceKernelRegisterDefaultExceptionHandler(exception_handler);
     }
 }
 
 /// Exception handler callback -- prints exception info and halts.
+/// SAFETY: Called by the PSP firmware on unhandled CPU exceptions.
+/// Only reads the exception code; does not dereference the context pointer.
 unsafe extern "C" fn exception_handler(exception: u32, _context: *mut c_void) -> i32 {
     let name = match exception {
         0 => "Interrupt",
@@ -1530,6 +1574,7 @@ unsafe extern "C" fn exception_handler(exception: u32, _context: *mut c_void) ->
 ///
 /// Returns 0 on success, < 0 on error.
 pub fn set_clock(pll: i32, cpu: i32, bus: i32) -> i32 {
+    // SAFETY: scePowerSetClockFrequency is a firmware FFI call with scalar args.
     unsafe { sys::scePowerSetClockFrequency(pll, cpu, bus) }
 }
 
@@ -1559,6 +1604,8 @@ pub fn list_directory(path: &str) -> Vec<FileEntry> {
     path_buf.extend_from_slice(path.as_bytes());
     path_buf.push(0);
 
+    // SAFETY: sceIo* calls are PSP file I/O FFI. path_buf is
+    // null-terminated. dirent is stack-allocated and zeroed.
     unsafe {
         let dfd = sys::sceIoDopen(path_buf.as_ptr());
         if dfd.0 < 0 {
@@ -1627,6 +1674,9 @@ pub fn read_file(path: &str) -> Option<Vec<u8>> {
     path_buf.extend_from_slice(path.as_bytes());
     path_buf.push(0);
 
+    // SAFETY: sceIo* calls are PSP file I/O FFI. path_buf is
+    // null-terminated. stat and data buffer are properly allocated.
+    // Read loop uses sceIoRead with bounded chunk sizes.
     unsafe {
         // Get file size first via stat.
         let mut stat: sys::SceIoStat = std::mem::zeroed();
@@ -1677,6 +1727,10 @@ pub fn read_file(path: &str) -> Option<Vec<u8>> {
 /// `max_w` and `max_h` set the maximum decode dimensions (use 480, 272 for
 /// screen-sized images).
 pub fn decode_jpeg(jpeg_data: &[u8], max_w: i32, max_h: i32) -> Option<(u32, u32, Vec<u8>)> {
+    // SAFETY: sceJpeg* calls are PSP hardware MJPEG decoder FFI. out_buf
+    // is allocated with 64-byte alignment per SDK requirement. Null check
+    // on out_buf before use. jpeg_copy is a mutable Vec copy passed to the
+    // decoder. Cleanup (dealloc, delete, finish) on all error paths.
     unsafe {
         if sys::sceJpegInitMJpeg() < 0 {
             return None;
@@ -1785,6 +1839,7 @@ impl AudioPlayer {
 
     /// Initialize the MP3 subsystem and allocate buffers.
     pub fn init(&mut self) -> bool {
+        // SAFETY: sceMp3InitResource is a firmware FFI call.
         unsafe {
             if sys::sceMp3InitResource() < 0 {
                 return false;
@@ -1823,6 +1878,9 @@ impl AudioPlayer {
         self.file_data = data;
         self.file_pos = 0;
 
+        // SAFETY: sceMp3* and sceAudio* are PSP firmware FFI calls.
+        // mp3_buf and pcm_buf are confirmed non-null in init(). File
+        // data is owned by self.file_data for the decoder's lifetime.
         unsafe {
             // Set up MP3 init args.
             let mut init_arg = sys::SceMp3InitArg {
@@ -1907,6 +1965,9 @@ impl AudioPlayer {
             return;
         }
 
+        // SAFETY: sceMp3* and sceAudio* FFI calls with valid handles
+        // established in load_and_play. dst pointer from sceMp3Decode
+        // is valid for the decoded frame's lifetime.
         unsafe {
             let mp3h = sys::Mp3Handle(self.mp3_handle);
 
@@ -1935,12 +1996,14 @@ impl AudioPlayer {
     /// Stop playback and release resources.
     pub fn stop(&mut self) {
         if self.mp3_handle >= 0 {
+            // SAFETY: Handle is valid (>= 0). Release returns it to the firmware.
             unsafe {
                 sys::sceMp3ReleaseMp3Handle(sys::Mp3Handle(self.mp3_handle));
             }
             self.mp3_handle = -1;
         }
         if self.channel >= 0 {
+            // SAFETY: Channel is valid (>= 0). Release returns it to the firmware.
             unsafe {
                 sys::sceAudioChRelease(self.channel);
             }
@@ -1967,6 +2030,9 @@ impl AudioPlayer {
 
     /// Feed MP3 data from the file buffer into the decoder's stream buffer.
     fn feed_data(&mut self) -> bool {
+        // SAFETY: sceMp3GetInfoToAddStreamData provides a write_ptr into
+        // the decoder's internal stream buffer. copy_nonoverlapping is
+        // bounded by min(to_write, remaining file data).
         unsafe {
             let mp3h = sys::Mp3Handle(self.mp3_handle);
             let mut write_ptr: *mut u8 = ptr::null_mut();
@@ -2012,11 +2078,15 @@ impl Drop for AudioPlayer {
     fn drop(&mut self) {
         self.stop();
         if !self.mp3_buf.is_null() {
+            // SAFETY: mp3_buf was allocated with mp3_buf_layout in init().
             unsafe { dealloc(self.mp3_buf, self.mp3_buf_layout) };
         }
         if !self.pcm_buf.is_null() {
+            // SAFETY: pcm_buf was allocated with pcm_buf_layout in init().
             unsafe { dealloc(self.pcm_buf, self.pcm_buf_layout) };
         }
+        // SAFETY: Terminates the MP3 subsystem. Safe to call even if
+        // init failed (firmware ignores redundant term calls).
         unsafe {
             sys::sceMp3TermResource();
         }
@@ -2035,6 +2105,9 @@ static mut POWER_RESUMED: bool = false;
 /// On suspend, the PSP saves state automatically. On resume, the callback
 /// sets a flag that can be polled from the main loop to re-init state.
 pub fn register_power_callback() {
+    // SAFETY: sceKernelCreateCallback and scePowerRegisterCallback are
+    // firmware FFI. The callback name is a static null-terminated string.
+    // power_callback matches the expected extern "C" signature.
     unsafe {
         let cbid = sys::sceKernelCreateCallback(
             b"OasisPowerCB\0".as_ptr(),
@@ -2049,6 +2122,9 @@ pub fn register_power_callback() {
 
 /// Check and clear the "resumed from sleep" flag.
 pub fn check_power_resumed() -> bool {
+    // SAFETY: POWER_RESUMED is only written from the power callback
+    // (firmware thread) and read/cleared here (main thread). Racing
+    // is benign: worst case is a missed or duplicate resume event.
     unsafe {
         let r = POWER_RESUMED;
         POWER_RESUMED = false;
@@ -2059,15 +2135,19 @@ pub fn check_power_resumed() -> bool {
 /// Prevent the PSP from auto-suspending due to idle timeout.
 /// Call once per frame during active use.
 pub fn power_tick() {
+    // SAFETY: scePowerTick is a firmware FFI call with no pointer args.
     unsafe {
         sys::scePowerTick(sys::PowerTick::All);
     }
 }
 
+/// SAFETY: Called by the PSP firmware on power state changes. Writes to
+/// POWER_RESUMED (see check_power_resumed for race analysis).
 unsafe extern "C" fn power_callback(_arg1: i32, power_info: i32, _arg: *mut c_void) -> i32 {
     let info = sys::PowerInfo::from_bits_truncate(power_info as u32);
     if info.contains(sys::PowerInfo::RESUME_COMPLETE) {
         psp::dprintln!("OASIS_OS: Resumed from sleep");
+        // SAFETY: See check_power_resumed -- benign data race.
         unsafe { POWER_RESUMED = true };
     }
     if info.contains(sys::PowerInfo::SUSPENDING) {
