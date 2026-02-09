@@ -147,45 +147,45 @@ impl SkinTheme {
             if let Some(w) = ov.border_width {
                 theme.border_width = w;
             }
-            if let Some(ref c) = ov.titlebar_active {
-                if let Some(parsed) = parse_hex_color(c) {
-                    theme.titlebar_active_color = parsed;
-                }
+            if let Some(ref c) = ov.titlebar_active
+                && let Some(parsed) = parse_hex_color(c)
+            {
+                theme.titlebar_active_color = parsed;
             }
-            if let Some(ref c) = ov.titlebar_inactive {
-                if let Some(parsed) = parse_hex_color(c) {
-                    theme.titlebar_inactive_color = parsed;
-                }
+            if let Some(ref c) = ov.titlebar_inactive
+                && let Some(parsed) = parse_hex_color(c)
+            {
+                theme.titlebar_inactive_color = parsed;
             }
-            if let Some(ref c) = ov.titlebar_text {
-                if let Some(parsed) = parse_hex_color(c) {
-                    theme.titlebar_text_color = parsed;
-                }
+            if let Some(ref c) = ov.titlebar_text
+                && let Some(parsed) = parse_hex_color(c)
+            {
+                theme.titlebar_text_color = parsed;
             }
-            if let Some(ref c) = ov.frame_color {
-                if let Some(parsed) = parse_hex_color(c) {
-                    theme.frame_color = parsed;
-                }
+            if let Some(ref c) = ov.frame_color
+                && let Some(parsed) = parse_hex_color(c)
+            {
+                theme.frame_color = parsed;
             }
-            if let Some(ref c) = ov.content_bg {
-                if let Some(parsed) = parse_hex_color(c) {
-                    theme.content_bg_color = parsed;
-                }
+            if let Some(ref c) = ov.content_bg
+                && let Some(parsed) = parse_hex_color(c)
+            {
+                theme.content_bg_color = parsed;
             }
-            if let Some(ref c) = ov.btn_close {
-                if let Some(parsed) = parse_hex_color(c) {
-                    theme.btn_close_color = parsed;
-                }
+            if let Some(ref c) = ov.btn_close
+                && let Some(parsed) = parse_hex_color(c)
+            {
+                theme.btn_close_color = parsed;
             }
-            if let Some(ref c) = ov.btn_minimize {
-                if let Some(parsed) = parse_hex_color(c) {
-                    theme.btn_minimize_color = parsed;
-                }
+            if let Some(ref c) = ov.btn_minimize
+                && let Some(parsed) = parse_hex_color(c)
+            {
+                theme.btn_minimize_color = parsed;
             }
-            if let Some(ref c) = ov.btn_maximize {
-                if let Some(parsed) = parse_hex_color(c) {
-                    theme.btn_maximize_color = parsed;
-                }
+            if let Some(ref c) = ov.btn_maximize
+                && let Some(parsed) = parse_hex_color(c)
+            {
+                theme.btn_maximize_color = parsed;
             }
             if let Some(s) = ov.button_size {
                 theme.button_size = s;

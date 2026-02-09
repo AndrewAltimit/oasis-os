@@ -212,12 +212,12 @@ impl PluginManager {
         for entry in &entries {
             if entry.kind == crate::vfs::EntryKind::Directory {
                 let manifest_path = format!("{plugin_dir}/{}/plugin.toml", entry.name);
-                if vfs.exists(&manifest_path) {
-                    if let Ok(data) = vfs.read(&manifest_path) {
-                        let toml_str = String::from_utf8_lossy(&data);
-                        if let Ok(manifest) = toml::from_str::<PluginManifest>(&toml_str) {
-                            manifests.push(manifest);
-                        }
+                if vfs.exists(&manifest_path)
+                    && let Ok(data) = vfs.read(&manifest_path)
+                {
+                    let toml_str = String::from_utf8_lossy(&data);
+                    if let Ok(manifest) = toml::from_str::<PluginManifest>(&toml_str) {
+                        manifests.push(manifest);
                     }
                 }
             }

@@ -247,15 +247,15 @@ impl Skin {
                 if let Some(fs) = def.font_size {
                     obj.font_size = fs;
                 }
-                if let Some(ref c) = def.color {
-                    if let Some(parsed) = parse_hex_color(c) {
-                        obj.color = parsed;
-                    }
+                if let Some(ref c) = def.color
+                    && let Some(parsed) = parse_hex_color(c)
+                {
+                    obj.color = parsed;
                 }
-                if let Some(ref c) = def.text_color {
-                    if let Some(parsed) = parse_hex_color(c) {
-                        obj.text_color = parsed;
-                    }
+                if let Some(ref c) = def.text_color
+                    && let Some(parsed) = parse_hex_color(c)
+                {
+                    obj.text_color = parsed;
                 }
             }
         }

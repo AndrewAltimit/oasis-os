@@ -32,10 +32,10 @@ impl SystemHealth {
         let mut health = Self::default();
 
         // CPU temperature from thermal zone.
-        if let Ok(temp_str) = std::fs::read_to_string("/sys/class/thermal/thermal_zone0/temp") {
-            if let Ok(millideg) = temp_str.trim().parse::<u64>() {
-                health.cpu_temp_c = Some(millideg as f32 / 1000.0);
-            }
+        if let Ok(temp_str) = std::fs::read_to_string("/sys/class/thermal/thermal_zone0/temp")
+            && let Ok(millideg) = temp_str.trim().parse::<u64>()
+        {
+            health.cpu_temp_c = Some(millideg as f32 / 1000.0);
         }
 
         // Memory from /proc/meminfo.
@@ -63,11 +63,11 @@ impl SystemHealth {
                     if iface != "lo" {
                         // Check operstate.
                         let state_path = format!("/sys/class/net/{iface}/operstate");
-                        if let Ok(state) = std::fs::read_to_string(&state_path) {
-                            if state.trim() == "up" {
-                                health.network_up = true;
-                                break;
-                            }
+                        if let Ok(state) = std::fs::read_to_string(&state_path)
+                            && state.trim() == "up"
+                        {
+                            health.network_up = true;
+                            break;
                         }
                     }
                 }

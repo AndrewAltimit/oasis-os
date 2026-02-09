@@ -82,10 +82,10 @@ pub fn discover_apps(
         if entry.kind != EntryKind::Directory {
             continue;
         }
-        if let Some(skip) = skip_self {
-            if entry.name == skip {
-                continue;
-            }
+        if let Some(skip) = skip_self
+            && entry.name == skip
+        {
+            continue;
         }
 
         let dir_path = if scan_path == "/" {

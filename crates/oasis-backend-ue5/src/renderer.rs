@@ -81,14 +81,13 @@ impl Ue5Backend {
             return;
         }
         // Clip check.
-        if let Some(clip) = &self.clip {
-            if x < clip.x
+        if let Some(clip) = &self.clip
+            && (x < clip.x
                 || y < clip.y
                 || ux >= (clip.x as u32).saturating_add(clip.w)
-                || uy >= (clip.y as u32).saturating_add(clip.h)
-            {
-                return;
-            }
+                || uy >= (clip.y as u32).saturating_add(clip.h))
+        {
+            return;
         }
         let offset = ((uy * self.width + ux) * 4) as usize;
         // Alpha blending (source over).

@@ -101,20 +101,20 @@ impl Vfs for MemoryVfs {
             }
             // Must start with prefix and not have another `/` after it
             // (i.e. direct child only).
-            if let Some(rest) = key.strip_prefix(&prefix) {
-                if !rest.contains('/') {
-                    entries.push(VfsEntry {
-                        name: rest.to_string(),
-                        kind: match node {
-                            Node::Dir => EntryKind::Directory,
-                            Node::File(_) => EntryKind::File,
-                        },
-                        size: match node {
-                            Node::File(data) => data.len() as u64,
-                            Node::Dir => 0,
-                        },
-                    });
-                }
+            if let Some(rest) = key.strip_prefix(&prefix)
+                && !rest.contains('/')
+            {
+                entries.push(VfsEntry {
+                    name: rest.to_string(),
+                    kind: match node {
+                        Node::Dir => EntryKind::Directory,
+                        Node::File(_) => EntryKind::File,
+                    },
+                    size: match node {
+                        Node::File(data) => data.len() as u64,
+                        Node::Dir => 0,
+                    },
+                });
             }
         }
         entries.sort_by(|a, b| a.name.cmp(&b.name));

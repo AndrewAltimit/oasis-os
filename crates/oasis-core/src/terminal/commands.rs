@@ -628,14 +628,14 @@ impl Command for RemoteCmd {
         let target = args[0];
 
         // Try addr:port format.
-        if let Some((addr, port_str)) = target.rsplit_once(':') {
-            if let Ok(port) = port_str.parse::<u16>() {
-                return Ok(CommandOutput::RemoteConnect {
-                    address: addr.to_string(),
-                    port,
-                    psk: None,
-                });
-            }
+        if let Some((addr, port_str)) = target.rsplit_once(':')
+            && let Ok(port) = port_str.parse::<u16>()
+        {
+            return Ok(CommandOutput::RemoteConnect {
+                address: addr.to_string(),
+                port,
+                psk: None,
+            });
         }
 
         // Look up saved host from VFS config.

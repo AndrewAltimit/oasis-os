@@ -251,23 +251,22 @@ fn main() -> Result<()> {
                     },
                     InputEvent::ButtonPress(btn) => {
                         // Forward D-pad and Confirm to the active window's runner.
-                        if let Some(active_id) = wm.active_window().map(|s| s.to_string()) {
-                            if let Some((_, runner)) =
+                        if let Some(active_id) = wm.active_window().map(|s| s.to_string())
+                            && let Some((_, runner)) =
                                 open_runners.iter_mut().find(|(id, _)| *id == active_id)
-                            {
-                                match runner.handle_input(btn, &vfs) {
-                                    AppAction::Exit => {
-                                        let _ = wm.close_window(&active_id, &mut sdi);
-                                        open_runners.retain(|(rid, _)| *rid != active_id);
-                                        if wm.window_count() == 0 {
-                                            mode = Mode::Dashboard;
-                                        }
-                                    },
-                                    AppAction::SwitchToTerminal => {
-                                        mode = Mode::Terminal;
-                                    },
-                                    AppAction::None => {},
-                                }
+                        {
+                            match runner.handle_input(btn, &vfs) {
+                                AppAction::Exit => {
+                                    let _ = wm.close_window(&active_id, &mut sdi);
+                                    open_runners.retain(|(rid, _)| *rid != active_id);
+                                    if wm.window_count() == 0 {
+                                        mode = Mode::Dashboard;
+                                    }
+                                },
+                                AppAction::SwitchToTerminal => {
+                                    mode = Mode::Terminal;
+                                },
+                                AppAction::None => {},
                             }
                         }
                     },
@@ -308,35 +307,35 @@ fn main() -> Result<()> {
 
                 // Launch app from dashboard as floating window.
                 InputEvent::ButtonPress(Button::Confirm) if mode == Mode::Dashboard => {
-                    if bottom_bar.active_tab == MediaTab::None {
-                        if let Some(app) = dashboard.selected_app() {
-                            log::info!("Launching app: {}", app.title);
-                            if app.title == "Terminal" {
-                                mode = Mode::Terminal;
+                    if bottom_bar.active_tab == MediaTab::None
+                        && let Some(app) = dashboard.selected_app()
+                    {
+                        log::info!("Launching app: {}", app.title);
+                        if app.title == "Terminal" {
+                            mode = Mode::Terminal;
+                        } else {
+                            let win_id = app.title.to_lowercase().replace(' ', "_");
+                            if wm.get_window(&win_id).is_some() {
+                                let _ = wm.focus_window(&win_id, &mut sdi);
                             } else {
-                                let win_id = app.title.to_lowercase().replace(' ', "_");
-                                if wm.get_window(&win_id).is_some() {
-                                    let _ = wm.focus_window(&win_id, &mut sdi);
-                                } else {
-                                    let wc = WindowConfig {
-                                        id: win_id.clone(),
-                                        title: app.title.clone(),
-                                        x: None,
-                                        y: None,
-                                        width: 380,
-                                        height: 220,
-                                        window_type: WindowType::AppWindow,
-                                    };
-                                    let _ = wm.create_window(&wc, &mut sdi);
-                                    open_runners.push((win_id, AppRunner::launch(app, &vfs)));
-                                }
-                                mode = Mode::Desktop;
+                                let wc = WindowConfig {
+                                    id: win_id.clone(),
+                                    title: app.title.clone(),
+                                    x: None,
+                                    y: None,
+                                    width: 380,
+                                    height: 220,
+                                    window_type: WindowType::AppWindow,
+                                };
+                                let _ = wm.create_window(&wc, &mut sdi);
+                                open_runners.push((win_id, AppRunner::launch(app, &vfs)));
                             }
-                            active_transition = Some(transition::fade_in(
-                                config.screen_width,
-                                config.screen_height,
-                            ));
+                            mode = Mode::Desktop;
                         }
+                        active_transition = Some(transition::fade_in(
+                            config.screen_width,
+                            config.screen_height,
+                        ));
                     }
                 },
 
@@ -825,12 +824,12 @@ fn load_disk_samples(vfs: &mut MemoryVfs) {
     for name in &music_files {
         let disk_path = samples_dir.join(name);
         let vfs_path = format!("/home/user/music/{name}");
-        if disk_path.exists() {
-            if let Ok(data) = std::fs::read(&disk_path) {
-                log::info!("Loaded from disk: {vfs_path} ({} bytes)", data.len());
-                vfs.write(&vfs_path, &data).unwrap();
-                continue;
-            }
+        if disk_path.exists()
+            && let Ok(data) = std::fs::read(&disk_path)
+        {
+            log::info!("Loaded from disk: {vfs_path} ({} bytes)", data.len());
+            vfs.write(&vfs_path, &data).unwrap();
+            continue;
         }
         vfs.write(
             &vfs_path,
@@ -844,12 +843,12 @@ fn load_disk_samples(vfs: &mut MemoryVfs) {
     for name in &photo_files {
         let disk_path = samples_dir.join(name);
         let vfs_path = format!("/home/user/photos/{name}");
-        if disk_path.exists() {
-            if let Ok(data) = std::fs::read(&disk_path) {
-                log::info!("Loaded from disk: {vfs_path} ({} bytes)", data.len());
-                vfs.write(&vfs_path, &data).unwrap();
-                continue;
-            }
+        if disk_path.exists()
+            && let Ok(data) = std::fs::read(&disk_path)
+        {
+            log::info!("Loaded from disk: {vfs_path} ({} bytes)", data.len());
+            vfs.write(&vfs_path, &data).unwrap();
+            continue;
         }
         vfs.write(
             &vfs_path,
@@ -872,14 +871,13 @@ fn load_disk_dir(vfs: &mut MemoryVfs, disk_dir: &std::path::Path, vfs_dir: &str)
     };
     for entry in entries.flatten() {
         let path = entry.path();
-        if path.is_file() {
-            if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
-                if let Ok(data) = std::fs::read(&path) {
-                    let vfs_path = format!("{vfs_dir}/{name}");
-                    log::info!("Loaded from disk: {vfs_path} ({} bytes)", data.len());
-                    vfs.write(&vfs_path, &data).unwrap();
-                }
-            }
+        if path.is_file()
+            && let Some(name) = path.file_name().and_then(|n| n.to_str())
+            && let Ok(data) = std::fs::read(&path)
+        {
+            let vfs_path = format!("{vfs_dir}/{name}");
+            log::info!("Loaded from disk: {vfs_path} ({} bytes)", data.len());
+            vfs.write(&vfs_path, &data).unwrap();
         }
     }
 }

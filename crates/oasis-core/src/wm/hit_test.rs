@@ -61,43 +61,43 @@ fn hit_test_window(window: &Window, x: i32, y: i32, theme: &WmTheme) -> Option<H
     }
 
     // 1. Titlebar buttons (highest priority).
-    if let Some((bx, by, bw, bh)) = window.close_btn_rect(theme) {
-        if point_in_rect(x, y, bx, by, bw, bh) {
-            return Some(HitRegion::TitlebarButton(
-                window.id.clone(),
-                ButtonKind::Close,
-            ));
-        }
+    if let Some((bx, by, bw, bh)) = window.close_btn_rect(theme)
+        && point_in_rect(x, y, bx, by, bw, bh)
+    {
+        return Some(HitRegion::TitlebarButton(
+            window.id.clone(),
+            ButtonKind::Close,
+        ));
     }
-    if let Some((bx, by, bw, bh)) = window.minimize_btn_rect(theme) {
-        if point_in_rect(x, y, bx, by, bw, bh) {
-            return Some(HitRegion::TitlebarButton(
-                window.id.clone(),
-                ButtonKind::Minimize,
-            ));
-        }
+    if let Some((bx, by, bw, bh)) = window.minimize_btn_rect(theme)
+        && point_in_rect(x, y, bx, by, bw, bh)
+    {
+        return Some(HitRegion::TitlebarButton(
+            window.id.clone(),
+            ButtonKind::Minimize,
+        ));
     }
-    if let Some((bx, by, bw, bh)) = window.maximize_btn_rect(theme) {
-        if point_in_rect(x, y, bx, by, bw, bh) {
-            return Some(HitRegion::TitlebarButton(
-                window.id.clone(),
-                ButtonKind::Maximize,
-            ));
-        }
+    if let Some((bx, by, bw, bh)) = window.maximize_btn_rect(theme)
+        && point_in_rect(x, y, bx, by, bw, bh)
+    {
+        return Some(HitRegion::TitlebarButton(
+            window.id.clone(),
+            ButtonKind::Maximize,
+        ));
     }
 
     // 2. Titlebar body (initiates drag).
-    if let Some((tx, ty, tw, th)) = window.titlebar_rect(theme) {
-        if point_in_rect(x, y, tx, ty, tw, th) {
-            return Some(HitRegion::Titlebar(window.id.clone()));
-        }
+    if let Some((tx, ty, tw, th)) = window.titlebar_rect(theme)
+        && point_in_rect(x, y, tx, ty, tw, th)
+    {
+        return Some(HitRegion::Titlebar(window.id.clone()));
     }
 
     // 3. Resize handles (edges and corners).
-    if window.is_resizable() {
-        if let Some(edge) = check_resize_handles(window, x, y, theme) {
-            return Some(HitRegion::ResizeHandle(window.id.clone(), edge));
-        }
+    if window.is_resizable()
+        && let Some(edge) = check_resize_handles(window, x, y, theme)
+    {
+        return Some(HitRegion::ResizeHandle(window.id.clone(), edge));
     }
 
     // 4. Content area.

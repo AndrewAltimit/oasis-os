@@ -112,10 +112,10 @@ pub struct OasisInstance {
 impl OasisInstance {
     /// Fire a callback if registered.
     fn fire_callback(&self, event: u32, detail: &str) {
-        if let Some(cb) = self.callbacks.get(&event) {
-            if let Ok(c_detail) = CString::new(detail) {
-                cb(event, c_detail.as_ptr());
-            }
+        if let Some(cb) = self.callbacks.get(&event)
+            && let Ok(c_detail) = CString::new(detail)
+        {
+            cb(event, c_detail.as_ptr());
         }
     }
 }

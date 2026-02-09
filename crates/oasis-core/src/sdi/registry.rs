@@ -150,15 +150,15 @@ impl SdiRegistry {
             if let Some(fs) = entry.font_size {
                 obj.font_size = fs;
             }
-            if let Some(ref c) = entry.color {
-                if let Some(parsed) = parse_color(c) {
-                    obj.color = parsed;
-                }
+            if let Some(ref c) = entry.color
+                && let Some(parsed) = parse_color(c)
+            {
+                obj.color = parsed;
             }
-            if let Some(ref c) = entry.text_color {
-                if let Some(parsed) = parse_color(c) {
-                    obj.text_color = parsed;
-                }
+            if let Some(ref c) = entry.text_color
+                && let Some(parsed) = parse_color(c)
+            {
+                obj.text_color = parsed;
             }
             if let Some(o) = entry.overlay {
                 obj.overlay = o;

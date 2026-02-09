@@ -442,16 +442,16 @@ impl WindowManager {
             HitRegion::Titlebar(id) => {
                 self.focus_window_internal(&id, sdi);
                 // Start drag if the window is draggable.
-                if let Some(window) = self.windows.iter().find(|w| w.id == id) {
-                    if window.is_draggable() {
-                        self.drag = Some(DragState::Moving {
-                            window_id: id.clone(),
-                            start_cursor_x: x,
-                            start_cursor_y: y,
-                            start_win_x: window.x,
-                            start_win_y: window.y,
-                        });
-                    }
+                if let Some(window) = self.windows.iter().find(|w| w.id == id)
+                    && window.is_draggable()
+                {
+                    self.drag = Some(DragState::Moving {
+                        window_id: id.clone(),
+                        start_cursor_x: x,
+                        start_cursor_y: y,
+                        start_win_x: window.x,
+                        start_win_y: window.y,
+                    });
                 }
                 WmEvent::WindowFocused(id)
             },
@@ -709,29 +709,29 @@ impl WindowManager {
         }
 
         // Buttons.
-        if let Some((bx, by, bw, bh)) = window.close_btn_rect(theme) {
-            if let Ok(obj) = sdi.get_mut(&window.sdi_name("btn_close")) {
-                obj.x = bx;
-                obj.y = by;
-                obj.w = bw;
-                obj.h = bh;
-            }
+        if let Some((bx, by, bw, bh)) = window.close_btn_rect(theme)
+            && let Ok(obj) = sdi.get_mut(&window.sdi_name("btn_close"))
+        {
+            obj.x = bx;
+            obj.y = by;
+            obj.w = bw;
+            obj.h = bh;
         }
-        if let Some((bx, by, bw, bh)) = window.minimize_btn_rect(theme) {
-            if let Ok(obj) = sdi.get_mut(&window.sdi_name("btn_minimize")) {
-                obj.x = bx;
-                obj.y = by;
-                obj.w = bw;
-                obj.h = bh;
-            }
+        if let Some((bx, by, bw, bh)) = window.minimize_btn_rect(theme)
+            && let Ok(obj) = sdi.get_mut(&window.sdi_name("btn_minimize"))
+        {
+            obj.x = bx;
+            obj.y = by;
+            obj.w = bw;
+            obj.h = bh;
         }
-        if let Some((bx, by, bw, bh)) = window.maximize_btn_rect(theme) {
-            if let Ok(obj) = sdi.get_mut(&window.sdi_name("btn_maximize")) {
-                obj.x = bx;
-                obj.y = by;
-                obj.w = bw;
-                obj.h = bh;
-            }
+        if let Some((bx, by, bw, bh)) = window.maximize_btn_rect(theme)
+            && let Ok(obj) = sdi.get_mut(&window.sdi_name("btn_maximize"))
+        {
+            obj.x = bx;
+            obj.y = by;
+            obj.w = bw;
+            obj.h = bh;
         }
 
         // Content.

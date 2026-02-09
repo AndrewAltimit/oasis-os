@@ -140,22 +140,22 @@ impl CorruptedModifiers {
             }
 
             // Text garbling.
-            if garble_chance > 0.0 {
-                if let Some(ref text) = obj.text {
-                    let garbled: String = text
-                        .chars()
-                        .map(|ch| {
-                            if ch.is_ascii_alphanumeric() && rng.next_f32() < garble_chance {
-                                let idx = rng.next_u32() as usize % GLITCH_CHARS.len();
-                                GLITCH_CHARS[idx] as char
-                            } else {
-                                ch
-                            }
-                        })
-                        .collect();
-                    if garbled != *text {
-                        obj.text = Some(garbled);
-                    }
+            if garble_chance > 0.0
+                && let Some(ref text) = obj.text
+            {
+                let garbled: String = text
+                    .chars()
+                    .map(|ch| {
+                        if ch.is_ascii_alphanumeric() && rng.next_f32() < garble_chance {
+                            let idx = rng.next_u32() as usize % GLITCH_CHARS.len();
+                            GLITCH_CHARS[idx] as char
+                        } else {
+                            ch
+                        }
+                    })
+                    .collect();
+                if garbled != *text {
+                    obj.text = Some(garbled);
                 }
             }
         }
