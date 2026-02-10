@@ -104,6 +104,46 @@ pub struct ActiveTheme {
     /// Start menu panel shadow level.
     pub sm_panel_shadow_level: u8,
 
+    // -- Start menu layout --
+    /// Layout mode: "grid" or "list".
+    pub sm_layout_mode: String,
+    /// Start button label text.
+    pub sm_button_label: String,
+    /// Start button width.
+    pub sm_button_width: u32,
+    /// Start button height.
+    pub sm_button_height: u32,
+    /// Start button shape: "pill" or "rect".
+    pub sm_button_shape: String,
+    /// Start menu panel width.
+    pub sm_panel_width: u32,
+    /// Number of columns in the menu grid.
+    pub sm_columns: usize,
+    /// Start button gradient top color (None = flat fill).
+    pub sm_button_gradient_top: Option<Color>,
+    /// Start button gradient bottom color.
+    pub sm_button_gradient_bottom: Option<Color>,
+    /// Header text (None = no header).
+    pub sm_header_text: Option<String>,
+    /// Header background color.
+    pub sm_header_bg: Color,
+    /// Header text color.
+    pub sm_header_text_color: Color,
+    /// Header height.
+    pub sm_header_height: u32,
+    /// Whether footer is enabled.
+    pub sm_footer_enabled: bool,
+    /// Footer background color.
+    pub sm_footer_bg: Color,
+    /// Footer text color.
+    pub sm_footer_text_color: Color,
+    /// Footer height.
+    pub sm_footer_height: u32,
+    /// Item icon size.
+    pub sm_item_icon_size: u32,
+    /// Item row height.
+    pub sm_item_row_height: i32,
+
     // -- Icon geometry --
     /// Icon card border radius (pixels).
     pub icon_border_radius: u16,
@@ -183,6 +223,25 @@ impl Default for ActiveTheme {
             sm_button_text: Color::WHITE,
             sm_panel_border_radius: 4,
             sm_panel_shadow_level: 1,
+            sm_layout_mode: "grid".to_string(),
+            sm_button_label: "START".to_string(),
+            sm_button_width: 48,
+            sm_button_height: 18,
+            sm_button_shape: "pill".to_string(),
+            sm_panel_width: 200,
+            sm_columns: 2,
+            sm_button_gradient_top: None,
+            sm_button_gradient_bottom: None,
+            sm_header_text: None,
+            sm_header_bg: Color::rgba(30, 30, 50, 240),
+            sm_header_text_color: Color::WHITE,
+            sm_header_height: 0,
+            sm_footer_enabled: false,
+            sm_footer_bg: Color::rgba(30, 30, 50, 240),
+            sm_footer_text_color: Color::WHITE,
+            sm_footer_height: 0,
+            sm_item_icon_size: 14,
+            sm_item_row_height: 22,
             icon_body_color: Color::rgb(250, 250, 248),
             icon_fold_color: Color::rgb(210, 210, 205),
             icon_outline_color: Color::rgba(255, 255, 255, 180),
@@ -317,6 +376,41 @@ impl ActiveTheme {
                 .and_then(|s| s.panel_border_radius)
                 .unwrap_or_else(|| skin.border_radius.unwrap_or(4)),
             sm_panel_shadow_level: sm.and_then(|s| s.panel_shadow_level).unwrap_or(1),
+            sm_layout_mode: sm
+                .and_then(|s| s.layout_mode.clone())
+                .unwrap_or_else(|| "grid".to_string()),
+            sm_button_label: sm
+                .and_then(|s| s.button_label.clone())
+                .unwrap_or_else(|| "START".to_string()),
+            sm_button_width: sm.and_then(|s| s.button_width).unwrap_or(48),
+            sm_button_height: sm.and_then(|s| s.button_height).unwrap_or(18),
+            sm_button_shape: sm
+                .and_then(|s| s.button_shape.clone())
+                .unwrap_or_else(|| "pill".to_string()),
+            sm_panel_width: sm.and_then(|s| s.panel_width).unwrap_or(200),
+            sm_columns: sm.and_then(|s| s.columns).unwrap_or(2),
+            sm_button_gradient_top: sm
+                .and_then(|s| s.button_gradient_top.as_ref())
+                .and_then(|s| parse_hex_color(s)),
+            sm_button_gradient_bottom: sm
+                .and_then(|s| s.button_gradient_bottom.as_ref())
+                .and_then(|s| parse_hex_color(s)),
+            sm_header_text: sm.and_then(|s| s.header_text.clone()),
+            sm_header_bg: ov(
+                sm.and_then(|s| s.header_bg.as_ref()),
+                Color::rgba(30, 30, 50, 240),
+            ),
+            sm_header_text_color: ov(sm.and_then(|s| s.header_text_color.as_ref()), text),
+            sm_header_height: sm.and_then(|s| s.header_height).unwrap_or(0),
+            sm_footer_enabled: sm.and_then(|s| s.footer_enabled).unwrap_or(false),
+            sm_footer_bg: ov(
+                sm.and_then(|s| s.footer_bg.as_ref()),
+                Color::rgba(30, 30, 50, 240),
+            ),
+            sm_footer_text_color: ov(sm.and_then(|s| s.footer_text_color.as_ref()), text),
+            sm_footer_height: sm.and_then(|s| s.footer_height).unwrap_or(0),
+            sm_item_icon_size: sm.and_then(|s| s.item_icon_size).unwrap_or(14),
+            sm_item_row_height: sm.and_then(|s| s.item_row_height).unwrap_or(22),
             icon_body_color: ov(ico.and_then(|i| i.body_color.as_ref()), text),
             icon_fold_color: ov(ico.and_then(|i| i.fold_color.as_ref()), dim),
             icon_outline_color: ov(

@@ -13,22 +13,14 @@ use crate::theme;
 
 // -- Layout constants ---------------------------------------------------------
 
-/// Start button position and size on the bottom bar.
+/// Start button X position on the bottom bar.
 const BTN_X: i32 = 4;
-const BTN_Y: i32 = theme::BOTTOMBAR_Y + 3;
-const BTN_W: u32 = 48;
-const BTN_H: u32 = 18;
-
-/// Menu panel geometry.
+/// Menu panel X position.
 const MENU_X: i32 = 2;
-const MENU_W: u32 = 200;
-const MENU_COLS: usize = 2;
-const ITEM_ROW_H: i32 = 22;
-const ICON_SIZE: u32 = 14;
+/// Padding inside the menu panel.
 const PAD_TOP: i32 = 8;
 const PAD_BOTTOM: i32 = 8;
 const PAD_LEFT: i32 = 8;
-const COL_W: i32 = (MENU_W as i32 - PAD_LEFT * 2) / MENU_COLS as i32;
 
 /// Z-order for menu objects (above bars at 900, below cursor).
 const Z_MENU: i32 = 950;
@@ -72,43 +64,56 @@ pub struct StartMenuState {
     pub items: Vec<StartMenuItem>,
     /// Currently selected item index.
     pub selected: usize,
-    /// Number of columns (always 2).
-    cols: usize,
+    /// Snapshot of the active theme for layout calculations.
+    at: ActiveTheme,
     /// Computed menu panel height.
     menu_h: u32,
     /// Computed menu panel Y position.
     menu_y: i32,
+    /// Y position of the start button.
+    btn_y: i32,
+    /// Header height (0 if no header).
+    header_h: u32,
+    /// Footer height (0 if no footer).
+    footer_h: u32,
 }
 
 impl StartMenuState {
-    /// Create a new start menu with the given items.
+    /// Create a new start menu with the given items (uses default theme).
     pub fn new(items: Vec<StartMenuItem>) -> Self {
-        let rows = items.len().div_ceil(MENU_COLS);
-        let menu_h = (PAD_TOP + rows as i32 * ITEM_ROW_H + PAD_BOTTOM) as u32;
-        let menu_y = theme::BOTTOMBAR_Y - menu_h as i32 - 2;
-        Self {
-            open: false,
-            items,
-            selected: 0,
-            cols: MENU_COLS,
-            menu_h,
-            menu_y,
-        }
+        Self::new_with_theme(items, &ActiveTheme::default())
     }
 
     /// Create a new start menu with geometry derived from the active theme.
     pub fn new_with_theme(items: Vec<StartMenuItem>, at: &ActiveTheme) -> Self {
-        let rows = items.len().div_ceil(MENU_COLS);
-        let menu_h = (PAD_TOP + rows as i32 * ITEM_ROW_H + PAD_BOTTOM) as u32;
+        let cols = at.sm_columns.max(1);
+        let rows = items.len().div_ceil(cols);
+        let header_h = if at.sm_header_text.is_some() && at.sm_header_height > 0 {
+            at.sm_header_height
+        } else {
+            0
+        };
+        let footer_h = if at.sm_footer_enabled && at.sm_footer_height > 0 {
+            at.sm_footer_height
+        } else {
+            0
+        };
+        let menu_h = header_h
+            + (PAD_TOP + rows as i32 * at.sm_item_row_height + PAD_BOTTOM) as u32
+            + footer_h;
         let bar_y = (theme::SCREEN_H - at.bottombar_height) as i32;
+        let btn_y = bar_y + 3;
         let menu_y = bar_y - menu_h as i32 - 2;
         Self {
             open: false,
             items,
             selected: 0,
-            cols: MENU_COLS,
+            at: at.clone(),
             menu_h,
             menu_y,
+            btn_y,
+            header_h,
+            footer_h,
         }
     }
 
@@ -168,18 +173,18 @@ impl StartMenuState {
         if !self.open {
             return StartMenuAction::None;
         }
-        let rows = self.items.len().div_ceil(self.cols);
-        let row = self.selected / self.cols;
-        let col = self.selected % self.cols;
+        let cols = self.at.sm_columns.max(1);
+        let row = self.selected / cols;
+        let col = self.selected % cols;
 
         match button {
             Button::Up => {
                 if row > 0 {
-                    self.selected -= self.cols;
+                    self.selected -= cols;
                 }
             },
             Button::Down => {
-                let new_idx = self.selected + self.cols;
+                let new_idx = self.selected + cols;
                 if new_idx < self.items.len() {
                     self.selected = new_idx;
                 }
@@ -190,7 +195,7 @@ impl StartMenuState {
                 }
             },
             Button::Right => {
-                if col + 1 < self.cols && self.selected + 1 < self.items.len() {
+                if col + 1 < cols && self.selected + 1 < self.items.len() {
                     self.selected += 1;
                 }
             },
@@ -204,13 +209,14 @@ impl StartMenuState {
             },
             _ => {},
         }
-        let _ = rows; // suppress unused warning
         StartMenuAction::None
     }
 
     /// Test whether a pointer click hits the start button.
     pub fn hit_test_button(&self, x: i32, y: i32) -> bool {
-        x >= BTN_X && x < BTN_X + BTN_W as i32 && y >= BTN_Y && y < BTN_Y + BTN_H as i32
+        let btn_w = self.at.sm_button_width;
+        let btn_h = self.at.sm_button_height;
+        x >= BTN_X && x < BTN_X + btn_w as i32 && y >= self.btn_y && y < self.btn_y + btn_h as i32
     }
 
     /// Test whether a pointer click hits a menu item. Returns the action if so.
@@ -218,23 +224,27 @@ impl StartMenuState {
         if !self.open {
             return None;
         }
+        let menu_w = self.at.sm_panel_width;
         // Check if within menu panel.
         if x < MENU_X
-            || x >= MENU_X + MENU_W as i32
+            || x >= MENU_X + menu_w as i32
             || y < self.menu_y
             || y >= self.menu_y + self.menu_h as i32
         {
             return None;
         }
-        // Determine which item was clicked.
-        let rel_y = y - self.menu_y - PAD_TOP;
+        // Items start after header.
+        let items_top = self.menu_y + self.header_h as i32 + PAD_TOP;
+        let rel_y = y - items_top;
         let rel_x = x - MENU_X - PAD_LEFT;
         if rel_y < 0 || rel_x < 0 {
             return None;
         }
-        let row = rel_y / ITEM_ROW_H;
-        let col = rel_x / COL_W;
-        let idx = row as usize * self.cols + col as usize;
+        let cols = self.at.sm_columns.max(1);
+        let col_w = (menu_w as i32 - PAD_LEFT * 2) / cols as i32;
+        let row = rel_y / self.at.sm_item_row_height;
+        let col = rel_x / col_w;
+        let idx = row as usize * cols + col as usize;
         if idx < self.items.len() {
             Some(self.items[idx].action.clone())
         } else {
@@ -244,9 +254,10 @@ impl StartMenuState {
 
     /// Test whether a click is inside the open menu panel (for consuming clicks).
     pub fn hit_test_panel(&self, x: i32, y: i32) -> bool {
+        let menu_w = self.at.sm_panel_width;
         self.open
             && x >= MENU_X
-            && x < MENU_X + MENU_W as i32
+            && x < MENU_X + menu_w as i32
             && y >= self.menu_y
             && y < self.menu_y + self.menu_h as i32
     }
@@ -273,7 +284,15 @@ impl StartMenuState {
     // -- Private SDI helpers --------------------------------------------------
 
     fn update_button_sdi(&self, sdi: &mut SdiRegistry, at: &ActiveTheme) {
-        // Button background pill.
+        let btn_w = at.sm_button_width;
+        let btn_h = at.sm_button_height;
+        let radius = if at.sm_button_shape == "rect" {
+            Some(2u16)
+        } else {
+            Some(btn_h as u16 / 2)
+        };
+
+        // Button background.
         if !sdi.contains("start_btn_bg") {
             let obj = sdi.create("start_btn_bg");
             obj.overlay = true;
@@ -281,12 +300,14 @@ impl StartMenuState {
         }
         if let Ok(obj) = sdi.get_mut("start_btn_bg") {
             obj.x = BTN_X;
-            obj.y = BTN_Y;
-            obj.w = BTN_W;
-            obj.h = BTN_H;
+            obj.y = self.btn_y;
+            obj.w = btn_w;
+            obj.h = btn_h;
             obj.color = at.sm_button_bg;
             obj.visible = true;
-            obj.border_radius = Some(BTN_H as u16 / 2);
+            obj.border_radius = radius;
+            obj.gradient_top = at.sm_button_gradient_top;
+            obj.gradient_bottom = at.sm_button_gradient_bottom;
         }
 
         // Button text.
@@ -297,15 +318,22 @@ impl StartMenuState {
         }
         if let Ok(obj) = sdi.get_mut("start_btn_text") {
             obj.x = BTN_X + 6;
-            obj.y = BTN_Y + 5;
+            obj.y = self.btn_y + (btn_h as i32 - at.font_small as i32) / 2;
             obj.font_size = at.font_small;
-            obj.text = Some("START".to_string());
+            obj.text = Some(at.sm_button_label.clone());
             obj.text_color = at.sm_button_text;
             obj.visible = true;
         }
     }
 
     fn update_menu_sdi(&self, sdi: &mut SdiRegistry, at: &ActiveTheme) {
+        let menu_w = at.sm_panel_width;
+        let cols = at.sm_columns.max(1);
+        let col_w = (menu_w as i32 - PAD_LEFT * 2) / cols as i32;
+        let item_row_h = at.sm_item_row_height;
+        let icon_size = at.sm_item_icon_size;
+        let items_top = self.menu_y + self.header_h as i32;
+
         // Panel background.
         if !sdi.contains("sm_bg") {
             let obj = sdi.create("sm_bg");
@@ -315,7 +343,7 @@ impl StartMenuState {
         if let Ok(obj) = sdi.get_mut("sm_bg") {
             obj.x = MENU_X;
             obj.y = self.menu_y;
-            obj.w = MENU_W;
+            obj.w = menu_w;
             obj.h = self.menu_h;
             obj.color = at.sm_panel_bg;
             obj.visible = true;
@@ -334,7 +362,7 @@ impl StartMenuState {
         if let Ok(obj) = sdi.get_mut("sm_border") {
             obj.x = MENU_X;
             obj.y = self.menu_y;
-            obj.w = MENU_W;
+            obj.w = menu_w;
             obj.h = self.menu_h;
             obj.color = Color::rgba(0, 0, 0, 0); // transparent fill
             obj.visible = true;
@@ -343,18 +371,51 @@ impl StartMenuState {
             obj.stroke_color = Some(at.sm_panel_border);
         }
 
+        // Header (if configured).
+        if let Some(ref header_text) = at.sm_header_text
+            && self.header_h > 0
+        {
+            if !sdi.contains("sm_header_bg") {
+                let obj = sdi.create("sm_header_bg");
+                obj.overlay = true;
+                obj.z = Z_MENU + 1;
+            }
+            if let Ok(obj) = sdi.get_mut("sm_header_bg") {
+                obj.x = MENU_X;
+                obj.y = self.menu_y;
+                obj.w = menu_w;
+                obj.h = self.header_h;
+                obj.color = at.sm_header_bg;
+                obj.visible = true;
+                obj.border_radius = Some(at.sm_panel_border_radius);
+            }
+            if !sdi.contains("sm_header_text") {
+                let obj = sdi.create("sm_header_text");
+                obj.overlay = true;
+                obj.z = Z_MENU + 2;
+            }
+            if let Ok(obj) = sdi.get_mut("sm_header_text") {
+                obj.x = MENU_X + PAD_LEFT;
+                obj.y = self.menu_y + (self.header_h as i32 - at.font_small as i32) / 2;
+                obj.font_size = at.font_small;
+                obj.text = Some(header_text.clone());
+                obj.text_color = at.sm_header_text_color;
+                obj.visible = true;
+            }
+        }
+
         // Selection highlight.
-        let sel_row = self.selected / self.cols;
-        let sel_col = self.selected % self.cols;
-        let hl_x = MENU_X + PAD_LEFT + sel_col as i32 * COL_W;
-        let hl_y = self.menu_y + PAD_TOP + sel_row as i32 * ITEM_ROW_H;
+        let sel_row = self.selected / cols;
+        let sel_col = self.selected % cols;
+        let hl_x = MENU_X + PAD_LEFT + sel_col as i32 * col_w;
+        let hl_y = items_top + PAD_TOP + sel_row as i32 * item_row_h;
         ensure_rounded_fill(
             sdi,
             "sm_highlight",
             hl_x,
             hl_y,
-            COL_W as u32 - 2,
-            ITEM_ROW_H as u32 - 2,
+            col_w as u32 - 2,
+            item_row_h as u32 - 2,
             at.sm_highlight_color,
             at.sm_panel_border_radius,
         );
@@ -364,17 +425,15 @@ impl StartMenuState {
 
         // Items: icon placeholder + label.
         for (i, item) in self.items.iter().enumerate().take(MAX_ITEMS) {
-            let row = i / self.cols;
-            let col = i % self.cols;
-            let ix = MENU_X + PAD_LEFT + col as i32 * COL_W + 2;
-            let iy = self.menu_y
-                + PAD_TOP
-                + row as i32 * ITEM_ROW_H
-                + (ITEM_ROW_H - ICON_SIZE as i32) / 2;
+            let row = i / cols;
+            let col = i % cols;
+            let ix = MENU_X + PAD_LEFT + col as i32 * col_w + 2;
+            let iy =
+                items_top + PAD_TOP + row as i32 * item_row_h + (item_row_h - icon_size as i32) / 2;
 
             // Icon placeholder (colored square).
             let icon_name = format!("sm_item_icon_{i}");
-            ensure_rounded_fill(sdi, &icon_name, ix, iy, ICON_SIZE, ICON_SIZE, item.color, 2);
+            ensure_rounded_fill(sdi, &icon_name, ix, iy, icon_size, icon_size, item.color, 2);
             if let Ok(obj) = sdi.get_mut(&icon_name) {
                 obj.z = Z_MENU + 3;
             }
@@ -389,7 +448,7 @@ impl StartMenuState {
             ensure_text(
                 sdi,
                 &label_name,
-                ix + ICON_SIZE as i32 + 4,
+                ix + icon_size as i32 + 4,
                 iy + 3,
                 at.font_small,
                 text_color,
@@ -410,10 +469,53 @@ impl StartMenuState {
                 }
             }
         }
+
+        // Footer (if configured).
+        if at.sm_footer_enabled && self.footer_h > 0 {
+            if !sdi.contains("sm_footer_bg") {
+                let obj = sdi.create("sm_footer_bg");
+                obj.overlay = true;
+                obj.z = Z_MENU + 1;
+            }
+            if let Ok(obj) = sdi.get_mut("sm_footer_bg") {
+                obj.x = MENU_X;
+                obj.y = self.menu_y + self.menu_h as i32 - self.footer_h as i32;
+                obj.w = menu_w;
+                obj.h = self.footer_h;
+                obj.color = at.sm_footer_bg;
+                obj.visible = true;
+                obj.border_radius = Some(at.sm_panel_border_radius);
+            }
+            if !sdi.contains("sm_footer_text") {
+                let obj = sdi.create("sm_footer_text");
+                obj.overlay = true;
+                obj.z = Z_MENU + 2;
+            }
+            if let Ok(obj) = sdi.get_mut("sm_footer_text") {
+                obj.x = MENU_X + PAD_LEFT;
+                obj.y = self.menu_y + self.menu_h as i32 - self.footer_h as i32
+                    + (self.footer_h as i32 - at.font_small as i32) / 2;
+                obj.font_size = at.font_small;
+                obj.text = Some("Log Off  Shut Down".to_string());
+                obj.text_color = at.sm_footer_text_color;
+                obj.visible = true;
+            }
+        }
     }
 
     fn hide_menu_sdi(&self, sdi: &mut SdiRegistry) {
-        hide_objects(sdi, &["sm_bg", "sm_border", "sm_highlight"]);
+        hide_objects(
+            sdi,
+            &[
+                "sm_bg",
+                "sm_border",
+                "sm_highlight",
+                "sm_header_bg",
+                "sm_header_text",
+                "sm_footer_bg",
+                "sm_footer_text",
+            ],
+        );
         for i in 0..MAX_ITEMS {
             for prefix in &["sm_item_icon_", "sm_item_label_"] {
                 let name = format!("{prefix}{i}");
@@ -491,7 +593,7 @@ mod tests {
     #[test]
     fn hit_test_button() {
         let sm = StartMenuState::new(StartMenuState::default_items());
-        assert!(sm.hit_test_button(BTN_X + 1, BTN_Y + 1));
+        assert!(sm.hit_test_button(BTN_X + 1, sm.btn_y + 1));
         assert!(!sm.hit_test_button(300, 100));
     }
 
@@ -505,8 +607,8 @@ mod tests {
     fn hit_test_item_when_open() {
         let mut sm = StartMenuState::new(StartMenuState::default_items());
         sm.open = true;
-        // Click on first item area.
-        let y = sm.menu_y + PAD_TOP + 2;
+        // Click on first item area (items start after header).
+        let y = sm.menu_y + sm.header_h as i32 + PAD_TOP + 2;
         let x = MENU_X + PAD_LEFT + 2;
         let action = sm.hit_test_item(x, y);
         assert!(action.is_some());
@@ -553,10 +655,12 @@ mod tests {
 
     #[test]
     fn menu_geometry() {
+        let at = ActiveTheme::default();
         let sm = StartMenuState::new(StartMenuState::default_items());
-        // 6 items in 2 cols = 3 rows.
-        let expected_h = (PAD_TOP + 3 * ITEM_ROW_H + PAD_BOTTOM) as u32;
+        // 6 items in 2 cols = 3 rows, default item_row_height = 22.
+        let expected_h = (PAD_TOP + 3 * at.sm_item_row_height + PAD_BOTTOM) as u32;
         assert_eq!(sm.menu_h, expected_h);
-        assert!(sm.menu_y < theme::BOTTOMBAR_Y);
+        let bar_y = (theme::SCREEN_H - at.bottombar_height) as i32;
+        assert!(sm.menu_y < bar_y);
     }
 }

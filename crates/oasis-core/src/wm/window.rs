@@ -103,6 +103,52 @@ pub struct WmTheme {
     pub frame_border_radius: u16,
     /// Window button corner radius.
     pub button_radius: u16,
+
+    // -- Tier 1: Button layout and title alignment --
+    /// Which side the window buttons are on: "right" or "left".
+    pub button_side: String,
+    /// Close button glyph text.
+    pub glyph_close: String,
+    /// Minimize button glyph text.
+    pub glyph_minimize: String,
+    /// Maximize button glyph text.
+    pub glyph_maximize: String,
+    /// Title text alignment: "left" or "center".
+    pub title_align: String,
+
+    // -- Tier 2: Separator and glyph colors --
+    /// Whether a 1px separator line is drawn at the titlebar bottom edge.
+    pub separator_enabled: bool,
+    /// Separator line color.
+    pub separator_color: Color,
+    /// Close glyph text color.
+    pub glyph_close_color: Color,
+    /// Minimize glyph text color.
+    pub glyph_minimize_color: Color,
+    /// Maximize glyph text color.
+    pub glyph_maximize_color: Color,
+    /// Spacing between window buttons.
+    pub button_spacing: i32,
+
+    // -- Tier 3: Hover, shadow, stroke, insets --
+    /// Close button hover color.
+    pub btn_close_hover: Color,
+    /// Minimize button hover color.
+    pub btn_minimize_hover: Color,
+    /// Maximize button hover color.
+    pub btn_maximize_hover: Color,
+    /// Whether title text has a drop shadow.
+    pub title_text_shadow: bool,
+    /// Title text shadow color.
+    pub title_text_shadow_color: Color,
+    /// Content area stroke width (0 = none).
+    pub content_stroke_width: u16,
+    /// Content area stroke color.
+    pub content_stroke_color: Color,
+    /// Top inset when maximized (for status bar awareness).
+    pub maximize_top_inset: u32,
+    /// Bottom inset when maximized (for bottom bar awareness).
+    pub maximize_bottom_inset: u32,
 }
 
 impl Default for WmTheme {
@@ -130,6 +176,26 @@ impl Default for WmTheme {
             frame_shadow_level: 0,
             frame_border_radius: 0,
             button_radius: 0,
+            button_side: "right".to_string(),
+            glyph_close: "x".to_string(),
+            glyph_minimize: "_".to_string(),
+            glyph_maximize: "+".to_string(),
+            title_align: "left".to_string(),
+            separator_enabled: false,
+            separator_color: Color::rgba(255, 255, 255, 30),
+            glyph_close_color: Color::WHITE,
+            glyph_minimize_color: Color::WHITE,
+            glyph_maximize_color: Color::WHITE,
+            button_spacing: 2,
+            btn_close_hover: Color::rgb(220, 80, 80),
+            btn_minimize_hover: Color::rgb(220, 200, 80),
+            btn_maximize_hover: Color::rgb(80, 200, 80),
+            title_text_shadow: false,
+            title_text_shadow_color: Color::rgba(0, 0, 0, 150),
+            content_stroke_width: 0,
+            content_stroke_color: Color::rgba(255, 255, 255, 20),
+            maximize_top_inset: 0,
+            maximize_bottom_inset: 0,
         }
     }
 }
@@ -238,42 +304,81 @@ impl Window {
         Some((tx, ty, tw, th))
     }
 
-    /// Compute close button rectangle (top-right of titlebar).
+    /// Compute a button's X position given its index (0=close, 1=minimize, 2=maximize).
+    fn button_x(&self, theme: &WmTheme, tx: i32, tw: u32, idx: i32) -> i32 {
+        let btn_size = theme.button_size.min(theme.titlebar_height) as i32;
+        let sp = theme.button_spacing;
+        if theme.button_side == "left" {
+            tx + 2 + idx * (btn_size + sp)
+        } else {
+            tx + tw as i32 - (idx + 1) * btn_size - idx * sp - 2
+        }
+    }
+
+    /// Compute close button rectangle.
     pub fn close_btn_rect(&self, theme: &WmTheme) -> Option<(i32, i32, u32, u32)> {
         let (tx, ty, tw, th) = self.titlebar_rect(theme)?;
         if !self.has_close_button() {
             return None;
         }
         let btn_size = theme.button_size.min(th);
-        let bx = tx + tw as i32 - btn_size as i32 - 2;
+        let bx = self.button_x(theme, tx, tw, 0);
         let by = ty + (th as i32 - btn_size as i32) / 2;
         Some((bx, by, btn_size, btn_size))
     }
 
-    /// Compute minimize button rectangle (left of close).
+    /// Compute minimize button rectangle.
     pub fn minimize_btn_rect(&self, theme: &WmTheme) -> Option<(i32, i32, u32, u32)> {
         let (tx, ty, tw, th) = self.titlebar_rect(theme)?;
         if !self.has_minimize_button() {
             return None;
         }
         let btn_size = theme.button_size.min(th);
-        // Position: 2 buttons from the right edge (close is rightmost).
-        let bx = tx + tw as i32 - (btn_size as i32) * 2 - 4;
+        let bx = self.button_x(theme, tx, tw, 1);
         let by = ty + (th as i32 - btn_size as i32) / 2;
         Some((bx, by, btn_size, btn_size))
     }
 
-    /// Compute maximize button rectangle (between minimize and close).
+    /// Compute maximize button rectangle.
     pub fn maximize_btn_rect(&self, theme: &WmTheme) -> Option<(i32, i32, u32, u32)> {
         let (tx, ty, tw, th) = self.titlebar_rect(theme)?;
         if !self.has_maximize_button() {
             return None;
         }
         let btn_size = theme.button_size.min(th);
-        // Position: 3 buttons from the right edge.
-        let bx = tx + tw as i32 - (btn_size as i32) * 3 - 6;
+        let bx = self.button_x(theme, tx, tw, 2);
         let by = ty + (th as i32 - btn_size as i32) / 2;
         Some((bx, by, btn_size, btn_size))
+    }
+
+    /// Compute the title text X position and available width.
+    pub fn title_text_x(&self, theme: &WmTheme) -> Option<(i32, u32)> {
+        let (tx, _ty, tw, _th) = self.titlebar_rect(theme)?;
+        let btn_size = theme.button_size.min(theme.titlebar_height) as i32;
+        let sp = theme.button_spacing;
+        // Count how many buttons this window type has.
+        let btn_count = [
+            self.has_close_button(),
+            self.has_minimize_button(),
+            self.has_maximize_button(),
+        ]
+        .iter()
+        .filter(|&&v| v)
+        .count() as i32;
+        let buttons_w = if btn_count > 0 {
+            btn_count * btn_size + (btn_count - 1) * sp + 4
+        } else {
+            0
+        };
+        let (text_x, avail_w) = if theme.title_align == "center" {
+            // Center in available space.
+            (tx + 4, tw.saturating_sub(buttons_w as u32 + 8))
+        } else if theme.button_side == "left" {
+            (tx + buttons_w + 4, tw.saturating_sub(buttons_w as u32 + 8))
+        } else {
+            (tx + 4, tw.saturating_sub(buttons_w as u32 + 8))
+        };
+        Some((text_x, avail_w))
     }
 
     /// Whether this window type has a close button.
@@ -315,23 +420,39 @@ impl Window {
                 "frame",
                 "titlebar",
                 "title_text",
+                "title_shadow",
+                "separator",
                 "btn_close",
                 "btn_close_glyph",
                 "content",
+                "content_stroke",
             ],
-            WindowType::Panel => vec!["frame", "titlebar", "title_text", "content"],
+            WindowType::Panel => vec![
+                "frame",
+                "titlebar",
+                "title_text",
+                "title_shadow",
+                "separator",
+                "content",
+                "content_stroke",
+            ],
             WindowType::Dialog => vec![
                 "frame",
                 "titlebar",
                 "title_text",
+                "title_shadow",
+                "separator",
                 "btn_close",
                 "btn_close_glyph",
                 "content",
+                "content_stroke",
             ],
             WindowType::AppWindow => vec![
                 "frame",
                 "titlebar",
                 "title_text",
+                "title_shadow",
+                "separator",
                 "btn_close",
                 "btn_close_glyph",
                 "btn_minimize",
@@ -339,6 +460,7 @@ impl Window {
                 "btn_maximize",
                 "btn_maximize_glyph",
                 "content",
+                "content_stroke",
             ],
         }
     }

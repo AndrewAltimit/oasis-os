@@ -123,6 +123,49 @@ pub struct WmThemeOverrides {
     pub frame_border_radius: Option<u16>,
     #[serde(default)]
     pub button_radius: Option<u16>,
+    // Tier 1
+    #[serde(default)]
+    pub button_side: Option<String>,
+    #[serde(default)]
+    pub glyph_close: Option<String>,
+    #[serde(default)]
+    pub glyph_minimize: Option<String>,
+    #[serde(default)]
+    pub glyph_maximize: Option<String>,
+    #[serde(default)]
+    pub title_align: Option<String>,
+    // Tier 2
+    #[serde(default)]
+    pub separator_enabled: Option<bool>,
+    #[serde(default)]
+    pub separator_color: Option<String>,
+    #[serde(default)]
+    pub glyph_close_color: Option<String>,
+    #[serde(default)]
+    pub glyph_minimize_color: Option<String>,
+    #[serde(default)]
+    pub glyph_maximize_color: Option<String>,
+    #[serde(default)]
+    pub button_spacing: Option<i32>,
+    // Tier 3
+    #[serde(default)]
+    pub btn_close_hover: Option<String>,
+    #[serde(default)]
+    pub btn_minimize_hover: Option<String>,
+    #[serde(default)]
+    pub btn_maximize_hover: Option<String>,
+    #[serde(default)]
+    pub title_text_shadow: Option<bool>,
+    #[serde(default)]
+    pub title_text_shadow_color: Option<String>,
+    #[serde(default)]
+    pub content_stroke_width: Option<u16>,
+    #[serde(default)]
+    pub content_stroke_color: Option<String>,
+    #[serde(default)]
+    pub maximize_top_inset: Option<u32>,
+    #[serde(default)]
+    pub maximize_bottom_inset: Option<u32>,
 }
 
 /// Per-element overrides for status bar and bottom bar colors.
@@ -212,6 +255,49 @@ pub struct StartMenuOverrides {
     pub button_text: Option<String>,
     pub panel_border_radius: Option<u16>,
     pub panel_shadow_level: Option<u8>,
+    // Tier 1: Layout
+    #[serde(default)]
+    pub layout_mode: Option<String>,
+    #[serde(default)]
+    pub button_label: Option<String>,
+    #[serde(default)]
+    pub button_width: Option<u32>,
+    #[serde(default)]
+    pub button_height: Option<u32>,
+    #[serde(default)]
+    pub button_shape: Option<String>,
+    #[serde(default)]
+    pub panel_width: Option<u32>,
+    #[serde(default)]
+    pub columns: Option<usize>,
+    // Tier 2: Header/footer
+    #[serde(default)]
+    pub header_text: Option<String>,
+    #[serde(default)]
+    pub header_bg: Option<String>,
+    #[serde(default)]
+    pub header_text_color: Option<String>,
+    #[serde(default)]
+    pub header_height: Option<u32>,
+    #[serde(default)]
+    pub footer_enabled: Option<bool>,
+    #[serde(default)]
+    pub footer_bg: Option<String>,
+    #[serde(default)]
+    pub footer_text_color: Option<String>,
+    #[serde(default)]
+    pub footer_height: Option<u32>,
+    // Tier 2: Item geometry + button gradient
+    #[serde(default)]
+    pub item_icon_size: Option<u32>,
+    #[serde(default)]
+    pub item_row_height: Option<i32>,
+    #[serde(default)]
+    pub button_gradient: Option<bool>,
+    #[serde(default)]
+    pub button_gradient_top: Option<String>,
+    #[serde(default)]
+    pub button_gradient_bottom: Option<String>,
 }
 
 /// Per-element overrides for browser chrome colors.
@@ -517,6 +603,137 @@ impl SkinTheme {
             if let Some(r) = ov.button_radius {
                 theme.button_radius = r;
             }
+            // Tier 1
+            if let Some(ref s) = ov.button_side {
+                theme.button_side = s.clone();
+            }
+            if let Some(ref s) = ov.glyph_close {
+                theme.glyph_close = s.clone();
+            }
+            if let Some(ref s) = ov.glyph_minimize {
+                theme.glyph_minimize = s.clone();
+            }
+            if let Some(ref s) = ov.glyph_maximize {
+                theme.glyph_maximize = s.clone();
+            }
+            if let Some(ref s) = ov.title_align {
+                theme.title_align = s.clone();
+            }
+            // Tier 2
+            if let Some(v) = ov.separator_enabled {
+                theme.separator_enabled = v;
+            }
+            if let Some(ref c) = ov.separator_color
+                && let Some(parsed) = parse_hex_color(c)
+            {
+                theme.separator_color = parsed;
+            }
+            if let Some(ref c) = ov.glyph_close_color
+                && let Some(parsed) = parse_hex_color(c)
+            {
+                theme.glyph_close_color = parsed;
+            }
+            if let Some(ref c) = ov.glyph_minimize_color
+                && let Some(parsed) = parse_hex_color(c)
+            {
+                theme.glyph_minimize_color = parsed;
+            }
+            if let Some(ref c) = ov.glyph_maximize_color
+                && let Some(parsed) = parse_hex_color(c)
+            {
+                theme.glyph_maximize_color = parsed;
+            }
+            if let Some(s) = ov.button_spacing {
+                theme.button_spacing = s;
+            }
+            // Tier 3
+            if let Some(ref c) = ov.btn_close_hover
+                && let Some(parsed) = parse_hex_color(c)
+            {
+                theme.btn_close_hover = parsed;
+            }
+            if let Some(ref c) = ov.btn_minimize_hover
+                && let Some(parsed) = parse_hex_color(c)
+            {
+                theme.btn_minimize_hover = parsed;
+            }
+            if let Some(ref c) = ov.btn_maximize_hover
+                && let Some(parsed) = parse_hex_color(c)
+            {
+                theme.btn_maximize_hover = parsed;
+            }
+            if let Some(v) = ov.title_text_shadow {
+                theme.title_text_shadow = v;
+            }
+            if let Some(ref c) = ov.title_text_shadow_color
+                && let Some(parsed) = parse_hex_color(c)
+            {
+                theme.title_text_shadow_color = parsed;
+            }
+            if let Some(w) = ov.content_stroke_width {
+                theme.content_stroke_width = w;
+            }
+            if let Some(ref c) = ov.content_stroke_color
+                && let Some(parsed) = parse_hex_color(c)
+            {
+                theme.content_stroke_color = parsed;
+            }
+            if let Some(v) = ov.maximize_top_inset {
+                theme.maximize_top_inset = v;
+            }
+            if let Some(v) = ov.maximize_bottom_inset {
+                theme.maximize_bottom_inset = v;
+            }
+        }
+        // Default glyph colors to titlebar_text_color if not explicitly set.
+        if self
+            .wm_theme
+            .as_ref()
+            .and_then(|o| o.glyph_close_color.as_ref())
+            .is_none()
+        {
+            theme.glyph_close_color = theme.titlebar_text_color;
+        }
+        if self
+            .wm_theme
+            .as_ref()
+            .and_then(|o| o.glyph_minimize_color.as_ref())
+            .is_none()
+        {
+            theme.glyph_minimize_color = theme.titlebar_text_color;
+        }
+        if self
+            .wm_theme
+            .as_ref()
+            .and_then(|o| o.glyph_maximize_color.as_ref())
+            .is_none()
+        {
+            theme.glyph_maximize_color = theme.titlebar_text_color;
+        }
+        // Default hover colors to lighten(btn_color, 0.15) if not explicitly set.
+        if self
+            .wm_theme
+            .as_ref()
+            .and_then(|o| o.btn_close_hover.as_ref())
+            .is_none()
+        {
+            theme.btn_close_hover = lighten(theme.btn_close_color, 0.15);
+        }
+        if self
+            .wm_theme
+            .as_ref()
+            .and_then(|o| o.btn_minimize_hover.as_ref())
+            .is_none()
+        {
+            theme.btn_minimize_hover = lighten(theme.btn_minimize_color, 0.15);
+        }
+        if self
+            .wm_theme
+            .as_ref()
+            .and_then(|o| o.btn_maximize_hover.as_ref())
+            .is_none()
+        {
+            theme.btn_maximize_hover = lighten(theme.btn_maximize_color, 0.15);
         }
         theme
     }
