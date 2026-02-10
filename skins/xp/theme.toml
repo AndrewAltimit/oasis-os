@@ -74,14 +74,14 @@ angle = 90
 [geometry]
 statusbar_height = 26
 bottombar_height = 30
-icon_width = 48
-icon_height = 56
+icon_width = 24
+icon_height = 28
 
 [icon_overrides]
 body_color = "#ECE9D8"
 fold_color = "#C8C2AD"
 outline_color = "#0054E380"
-label_color = "#FFFFFFE6"
+label_color = "#000000E6"
 cursor_color = "#003399C0"
 icon_border_radius = 3
 cursor_border_radius = 4

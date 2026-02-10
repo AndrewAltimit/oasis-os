@@ -556,10 +556,14 @@ terminal = true
 file_browser = true
 browser = true
 window_manager = true
-dashboard_pages = 4
-icons_per_page = 4
-grid_cols = 2
+dashboard_pages = 2
+icons_per_page = 8
+grid_cols = 4
 grid_rows = 2
+start_menu = true
+show_version = false
+transition_fade_frames = 12
+transition_slide_frames = 16
 "#;
 
 const XP_THEME: &str = r##"
@@ -598,6 +602,25 @@ titlebar_inactive_gradient_bottom = "#7B7B7B"
 frame_shadow_level = 1
 frame_border_radius = 3
 button_radius = 2
+button_side = "right"
+glyph_close = "x"
+glyph_minimize = "_"
+glyph_maximize = "o"
+title_align = "left"
+separator_enabled = true
+separator_color = "#0054E340"
+glyph_close_color = "#FFFFFF"
+glyph_minimize_color = "#FFFFFF"
+glyph_maximize_color = "#FFFFFF"
+btn_close_hover = "#E66060"
+btn_minimize_hover = "#5080D0"
+btn_maximize_hover = "#5080D0"
+title_text_shadow = true
+title_text_shadow_color = "#00000060"
+content_stroke_width = 1
+content_stroke_color = "#0054E320"
+maximize_top_inset = 26
+maximize_bottom_inset = 30
 
 [bar_overrides]
 statusbar_bg = "#1F3E7B"
@@ -611,14 +634,60 @@ version_color = "#FFFFFF"
 clock_color = "#FFFFFF"
 separator_color = "#4080D0"
 
+[wallpaper]
+style = "gradient"
+color_stops = ["#003399", "#1F5FC2", "#3A8AE0", "#5BB5FF"]
+wave_enabled = false
+angle = 90
+
+[geometry]
+statusbar_height = 26
+bottombar_height = 30
+icon_width = 24
+icon_height = 28
+
 [icon_overrides]
 body_color = "#ECE9D8"
 fold_color = "#C8C2AD"
 outline_color = "#0054E380"
-label_color = "#FFFFFFE6"
+label_color = "#000000E6"
 cursor_color = "#003399C0"
 icon_border_radius = 3
 cursor_border_radius = 4
+icon_style = "card"
+cursor_style = "fill"
+
+[start_menu_overrides]
+panel_bg = "#1F3E7B"
+panel_gradient_top = "#3169C6"
+panel_gradient_bottom = "#0A246A"
+panel_border = "#4080D0"
+item_text = "#FFFFFF"
+item_text_active = "#FFFFFF"
+highlight_color = "#3A6EA580"
+button_bg = "#309E30"
+button_text = "#FFFFFF"
+panel_border_radius = 4
+panel_shadow_level = 1
+button_label = "start"
+button_width = 54
+button_height = 22
+button_shape = "rect"
+button_gradient = true
+button_gradient_top = "#4DA54D"
+button_gradient_bottom = "#2D852D"
+panel_width = 240
+columns = 2
+header_text = "User"
+header_bg = "#003399"
+header_text_color = "#FFFFFF"
+header_height = 28
+footer_enabled = true
+footer_bg = "#1F3E7B"
+footer_text_color = "#FFFFFF"
+footer_height = 24
+item_icon_size = 16
+item_row_height = 24
 
 [browser_overrides]
 chrome_bg = "#D6D2C2"

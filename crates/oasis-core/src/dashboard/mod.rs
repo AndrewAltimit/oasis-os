@@ -185,6 +185,7 @@ impl DashboardState {
             let fold_name = format!("icon_fold_{i}");
             let gfx_name = format!("icon_gfx_{i}");
             let label_name = format!("icon_label_{i}");
+            let label2_name = format!("icon_label2_{i}");
             let shadow_name = format!("icon_shadow_{i}");
 
             for name in [
@@ -194,6 +195,7 @@ impl DashboardState {
                 &fold_name,
                 &gfx_name,
                 &label_name,
+                &label2_name,
                 &shadow_name,
             ] {
                 if !sdi.contains(name) {
@@ -255,6 +257,7 @@ impl DashboardState {
                     &fold_name,
                     &gfx_name,
                     &label_name,
+                    &label2_name,
                     &shadow_name,
                 ] {
                     if let Ok(obj) = sdi.get_mut(name) {
@@ -317,6 +320,87 @@ impl DashboardState {
                 }
             } else {
                 cursor.visible = false;
+            }
+        }
+    }
+
+    /// Word-wrap a label into lines that fit within `max_chars` per line.
+    fn wrap_label(text: &str, max_chars: usize) -> Vec<String> {
+        let words: Vec<&str> = text.split_whitespace().collect();
+        if words.is_empty() {
+            return vec![];
+        }
+        let mut lines = Vec::new();
+        let mut cur = String::new();
+        for word in words {
+            let test_len = if cur.is_empty() {
+                word.len()
+            } else {
+                cur.len() + 1 + word.len()
+            };
+            if !cur.is_empty() && test_len > max_chars {
+                lines.push(cur);
+                cur = word.to_string();
+            } else {
+                if !cur.is_empty() {
+                    cur.push(' ');
+                }
+                cur.push_str(word);
+            }
+        }
+        if !cur.is_empty() {
+            lines.push(cur);
+        }
+        lines
+    }
+
+    /// Render word-wrapped, centered label lines under an icon.
+    #[allow(clippy::too_many_arguments)]
+    fn draw_label(
+        sdi: &mut SdiRegistry,
+        at: &ActiveTheme,
+        i: usize,
+        cell_x: i32,
+        cell_w: u32,
+        label_y: i32,
+        title: &str,
+    ) {
+        let fs = at.font_small;
+        let glyph_w = (fs.max(8) / 8) as u32 * 8;
+        let max_chars = (cell_w / glyph_w).max(1) as usize;
+        let lines = Self::wrap_label(title, max_chars);
+        let line_h = glyph_w as i32 + 1; // 1px spacing between lines
+
+        // Line 1.
+        if let Ok(obj) = sdi.get_mut(&format!("icon_label_{i}")) {
+            if let Some(line) = lines.first() {
+                let tw = line.len() as i32 * glyph_w as i32;
+                obj.x = cell_x + (cell_w as i32 - tw) / 2;
+                obj.y = label_y;
+                obj.w = 0;
+                obj.h = 0;
+                obj.font_size = fs;
+                obj.text = Some(line.clone());
+                obj.text_color = at.icon_label_color;
+                obj.visible = true;
+            } else {
+                obj.visible = false;
+            }
+        }
+        // Line 2.
+        if let Ok(obj) = sdi.get_mut(&format!("icon_label2_{i}")) {
+            if lines.len() > 1 {
+                let tw = lines[1].len() as i32 * glyph_w as i32;
+                obj.x = cell_x + (cell_w as i32 - tw) / 2;
+                obj.y = label_y + line_h;
+                obj.w = 0;
+                obj.h = 0;
+                obj.font_size = fs;
+                obj.text = Some(lines[1].clone());
+                obj.text_color = at.icon_label_color;
+                obj.visible = true;
+            } else {
+                obj.visible = false;
             }
         }
     }
@@ -401,16 +485,15 @@ impl DashboardState {
             );
             obj.text = None;
         }
-        if let Ok(obj) = sdi.get_mut(&format!("icon_label_{i}")) {
-            obj.x = cell_x;
-            obj.y = iy + icon_h as i32 + text_pad;
-            obj.w = 0;
-            obj.h = 0;
-            obj.font_size = at.font_small;
-            obj.text = Some(app.title.clone());
-            obj.text_color = at.icon_label_color;
-            obj.visible = true;
-        }
+        Self::draw_label(
+            sdi,
+            at,
+            i,
+            cell_x,
+            self.config.cell_w,
+            iy + icon_h as i32 + text_pad,
+            &app.title,
+        );
     }
 
     /// Draw a "card" style icon (flat rounded rect with accent fill, centered label).
@@ -453,16 +536,15 @@ impl DashboardState {
             obj.shadow_level = Some(1);
         }
         // Label below icon.
-        if let Ok(obj) = sdi.get_mut(&format!("icon_label_{i}")) {
-            obj.x = cell_x;
-            obj.y = iy + icon_h as i32 + text_pad;
-            obj.w = 0;
-            obj.h = 0;
-            obj.font_size = at.font_small;
-            obj.text = Some(app.title.clone());
-            obj.text_color = at.icon_label_color;
-            obj.visible = true;
-        }
+        Self::draw_label(
+            sdi,
+            at,
+            i,
+            cell_x,
+            self.config.cell_w,
+            iy + icon_h as i32 + text_pad,
+            &app.title,
+        );
     }
 
     /// Draw a "circle" style icon (large circle with first letter centered).
@@ -507,16 +589,15 @@ impl DashboardState {
             obj.shadow_level = Some(1);
         }
         // Label below icon.
-        if let Ok(obj) = sdi.get_mut(&format!("icon_label_{i}")) {
-            obj.x = cell_x;
-            obj.y = iy + icon_h as i32 + text_pad;
-            obj.w = 0;
-            obj.h = 0;
-            obj.font_size = at.font_small;
-            obj.text = Some(app.title.clone());
-            obj.text_color = at.icon_label_color;
-            obj.visible = true;
-        }
+        Self::draw_label(
+            sdi,
+            at,
+            i,
+            cell_x,
+            self.config.cell_w,
+            iy + icon_h as i32 + text_pad,
+            &app.title,
+        );
     }
 
     /// Hide all dashboard SDI objects.
@@ -526,6 +607,7 @@ impl DashboardState {
             for prefix in &[
                 "icon_",
                 "icon_label_",
+                "icon_label2_",
                 "icon_outline_",
                 "icon_stripe_",
                 "icon_fold_",
