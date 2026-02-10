@@ -2,6 +2,7 @@
 //! orchestration.
 
 pub mod cache;
+pub mod http;
 pub mod vfs;
 
 use std::fmt;
@@ -355,24 +356,36 @@ pub fn detect_content_type(url: &Url) -> ContentType {
 /// Load a resource according to the request's [`ResourceSource`].
 ///
 /// For `Vfs` requests only the VFS is consulted. For `Network` requests
-/// this currently returns an error (the network loader is not yet
-/// implemented). For `VfsThenNetwork` it tries the VFS first and falls
-/// back to a network error.
+/// the HTTP client is used directly. For `VfsThenNetwork` it tries the
+/// VFS first and falls back to the network.
 pub fn load_resource(
     vfs_backend: &dyn crate::vfs::Vfs,
     request: &ResourceRequest,
 ) -> Result<ResourceResponse> {
     match request.source {
         ResourceSource::Vfs => vfs::load_from_vfs(vfs_backend, request),
-        ResourceSource::Network => Err(crate::error::OasisError::Backend(
-            "network loader not yet implemented".to_string(),
-        )),
+        ResourceSource::Network => load_from_network(request),
         ResourceSource::VfsThenNetwork => match vfs::load_from_vfs(vfs_backend, request) {
             Ok(resp) => Ok(resp),
-            Err(_) => Err(crate::error::OasisError::Backend(
-                "network loader not yet implemented".to_string(),
-            )),
+            Err(_) => load_from_network(request),
         },
+    }
+}
+
+/// Load a resource over the network (HTTP only).
+fn load_from_network(request: &ResourceRequest) -> Result<ResourceResponse> {
+    let url = Url::parse(&request.url).ok_or_else(|| {
+        crate::error::OasisError::Backend(format!("invalid URL: {}", request.url,))
+    })?;
+
+    match url.scheme.as_str() {
+        "http" => http::http_get(&url),
+        "https" => Err(crate::error::OasisError::Backend(
+            "HTTPS not supported: TLS not available".to_string(),
+        )),
+        scheme => Err(crate::error::OasisError::Backend(format!(
+            "unsupported network scheme: {scheme}",
+        ))),
     }
 }
 

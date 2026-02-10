@@ -637,6 +637,17 @@ fn main() -> Result<()> {
                                     }
                                 }
                             },
+                            Ok(CommandOutput::BrowserSandbox { enable }) => {
+                                if let Some(ref mut bw) = browser {
+                                    bw.config.features.sandbox_only = enable;
+                                }
+                                let state = if enable {
+                                    "on (VFS only)"
+                                } else {
+                                    "off (HTTP enabled)"
+                                };
+                                output_lines.push(format!("Browser sandbox: {state}"));
+                            },
                             Err(e) => output_lines.push(format!("error: {e}")),
                         }
                         cwd = env.cwd;
@@ -686,6 +697,17 @@ fn main() -> Result<()> {
                     Ok(CommandOutput::ListenToggle { .. })
                     | Ok(CommandOutput::RemoteConnect { .. }) => {
                         "Not available via remote.".to_string()
+                    },
+                    Ok(CommandOutput::BrowserSandbox { enable }) => {
+                        if let Some(ref mut bw) = browser {
+                            bw.config.features.sandbox_only = enable;
+                        }
+                        let state = if enable {
+                            "on (VFS only)"
+                        } else {
+                            "off (HTTP enabled)"
+                        };
+                        format!("Browser sandbox: {state}")
                     },
                     Err(e) => format!("error: {e}"),
                 };

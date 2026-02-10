@@ -31,6 +31,11 @@ pub enum CommandOutput {
         port: u16,
         psk: Option<String>,
     },
+    /// Signal to the app to toggle browser sandbox mode.
+    BrowserSandbox {
+        /// `true` = sandbox on (VFS only), `false` = networking enabled.
+        enable: bool,
+    },
 }
 
 /// Shared mutable environment passed to every command.

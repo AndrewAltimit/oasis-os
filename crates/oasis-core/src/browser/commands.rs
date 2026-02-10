@@ -9,6 +9,7 @@ pub fn register_browser_commands(reg: &mut CommandRegistry) {
     reg.register(Box::new(FetchCmd));
     reg.register(Box::new(GeminiCmd));
     reg.register(Box::new(CurlCmd));
+    reg.register(Box::new(SandboxCmd));
 }
 
 // -------------------------------------------------------------------
@@ -148,10 +149,45 @@ impl Command for FetchCmd {
             }
         }
 
+        // VFS miss -- try HTTP for http:// URLs.
+        if url.starts_with("http://")
+            && let Some(parsed) = super::loader::Url::parse(url)
+        {
+            match super::loader::http::http_get(&parsed) {
+                Ok(resp) => {
+                    let text = String::from_utf8_lossy(&resp.body);
+                    if show_headers {
+                        let ct = format!("{:?}", resp.content_type);
+                        return Ok(CommandOutput::Text(format!(
+                            "HTTP-Status: {}\n\
+                             Content-Length: {}\n\
+                             Content-Type: {}",
+                            resp.status,
+                            resp.body.len(),
+                            ct,
+                        )));
+                    }
+                    let display = if text.len() > 4096 {
+                        format!(
+                            "{}...\n[truncated, {} bytes total]",
+                            &text[..text.floor_char_boundary(4096)],
+                            text.len(),
+                        )
+                    } else {
+                        text.to_string()
+                    };
+                    return Ok(CommandOutput::Text(display));
+                },
+                Err(e) => {
+                    return Ok(CommandOutput::Text(format!("[fetch] HTTP error: {e}")));
+                },
+            }
+        }
+
         Ok(CommandOutput::Text(format!(
             "[fetch] {} not found in VFS. \
-             Network fetching requires a running browser session.",
-            url
+             Network fetching requires an http:// URL.",
+            url,
         )))
     }
 }
@@ -266,6 +302,38 @@ impl Command for CurlCmd {
 
     fn execute(&self, args: &[&str], env: &mut Environment<'_>) -> Result<CommandOutput> {
         FetchCmd.execute(args, env)
+    }
+}
+
+// -------------------------------------------------------------------
+// sandbox
+// -------------------------------------------------------------------
+struct SandboxCmd;
+
+impl Command for SandboxCmd {
+    fn name(&self) -> &str {
+        "sandbox"
+    }
+
+    fn description(&self) -> &str {
+        "Toggle browser sandbox mode (block/allow network requests)"
+    }
+
+    fn usage(&self) -> &str {
+        "sandbox on | sandbox off"
+    }
+
+    fn execute(&self, args: &[&str], _env: &mut Environment<'_>) -> Result<CommandOutput> {
+        match args.first().copied() {
+            Some("on") => Ok(CommandOutput::BrowserSandbox { enable: true }),
+            Some("off") => Ok(CommandOutput::BrowserSandbox { enable: false }),
+            _ => Ok(CommandOutput::Text(
+                "Usage: sandbox on | sandbox off\n\
+                 sandbox on  — block all network requests (VFS only)\n\
+                 sandbox off — allow HTTP network requests"
+                    .to_string(),
+            )),
+        }
     }
 }
 
@@ -524,5 +592,35 @@ mod tests {
             guess_content_type("/foo/bar.xyz"),
             "application/octet-stream"
         );
+    }
+
+    #[test]
+    fn sandbox_on() {
+        let (reg, mut vfs) = setup();
+        match exec(&reg, &mut vfs, "sandbox on").unwrap() {
+            CommandOutput::BrowserSandbox { enable } => assert!(enable),
+            _ => panic!("expected BrowserSandbox"),
+        }
+    }
+
+    #[test]
+    fn sandbox_off() {
+        let (reg, mut vfs) = setup();
+        match exec(&reg, &mut vfs, "sandbox off").unwrap() {
+            CommandOutput::BrowserSandbox { enable } => assert!(!enable),
+            _ => panic!("expected BrowserSandbox"),
+        }
+    }
+
+    #[test]
+    fn sandbox_no_args_shows_usage() {
+        let (reg, mut vfs) = setup();
+        match exec(&reg, &mut vfs, "sandbox").unwrap() {
+            CommandOutput::Text(s) => {
+                assert!(s.contains("Usage"));
+                assert!(s.contains("sandbox"));
+            },
+            _ => panic!("expected text"),
+        }
     }
 }
