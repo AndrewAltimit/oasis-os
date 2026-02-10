@@ -30,9 +30,7 @@ const READ_TIMEOUT: Duration = Duration::from_secs(15);
 /// failures.
 pub fn http_get(url: &Url) -> Result<ResourceResponse> {
     if url.scheme == "https" {
-        return Err(OasisError::Backend(
-            "HTTPS not supported: TLS not available".to_string(),
-        ));
+        return Ok(https_error_page(url, url));
     }
     if url.scheme != "http" {
         return Err(OasisError::Backend(format!(
@@ -53,9 +51,7 @@ pub fn http_get(url: &Url) -> Result<ResourceResponse> {
                 .resolve(&location)
                 .ok_or_else(|| OasisError::Backend(format!("bad redirect Location: {location}")))?;
             if current_url.scheme == "https" {
-                return Err(OasisError::Backend(
-                    "redirect to HTTPS not supported: TLS not available".to_string(),
-                ));
+                return Ok(https_error_page(url, &current_url));
             }
             continue;
         }
@@ -322,6 +318,27 @@ fn find_subsequence(haystack: &[u8], needle: &[u8]) -> Option<usize> {
 // Tests
 // -------------------------------------------------------------------
 
+/// Generate a user-friendly error page when a site requires HTTPS.
+fn https_error_page(original_url: &Url, https_url: &Url) -> ResourceResponse {
+    let html = format!(
+        "<html><body>\
+         <h1>HTTPS Required</h1>\
+         <p>This site redirected to a secure (HTTPS) connection:</p>\
+         <p>{https_url}</p>\
+         <p>OASIS browser only supports plain HTTP. \
+         TLS/SSL is not available.</p>\
+         <p>Try a site that serves plain HTTP, such as:</p>\
+         <p>http://example.com</p>\
+         </body></html>"
+    );
+    ResourceResponse {
+        url: original_url.to_string(),
+        content_type: ContentType::Html,
+        body: html.into_bytes(),
+        status: 200,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -390,11 +407,11 @@ mod tests {
     }
 
     #[test]
-    fn https_rejected() {
+    fn https_returns_error_page() {
         let url = Url::parse("https://example.com/page").unwrap();
-        let err = http_get(&url).unwrap_err();
-        let msg = err.to_string();
-        assert!(msg.contains("HTTPS not supported"));
+        let resp = http_get(&url).unwrap();
+        let body = String::from_utf8(resp.body).unwrap();
+        assert!(body.contains("HTTPS Required"));
     }
 
     #[test]

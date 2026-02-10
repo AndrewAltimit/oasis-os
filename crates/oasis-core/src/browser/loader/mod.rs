@@ -379,10 +379,7 @@ fn load_from_network(request: &ResourceRequest) -> Result<ResourceResponse> {
     })?;
 
     match url.scheme.as_str() {
-        "http" => http::http_get(&url),
-        "https" => Err(crate::error::OasisError::Backend(
-            "HTTPS not supported: TLS not available".to_string(),
-        )),
+        "http" | "https" => http::http_get(&url),
         scheme => Err(crate::error::OasisError::Backend(format!(
             "unsupported network scheme: {scheme}",
         ))),
