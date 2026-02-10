@@ -372,7 +372,8 @@ fn main() -> Result<()> {
                                 let _ = wm.create_window(&wc, &mut sdi);
                                 let mut bw = BrowserWidget::new(Default::default());
                                 bw.set_window(0, 0, 380, 220);
-                                bw.navigate_vfs("/sites/home/index.html", &vfs);
+                                let home = bw.config.features.home_url.clone();
+                                bw.navigate_vfs(&home, &vfs);
                                 browser = Some(bw);
                             }
                             mode = Mode::Desktop;
@@ -439,7 +440,8 @@ fn main() -> Result<()> {
                                                     let mut bw =
                                                         BrowserWidget::new(Default::default());
                                                     bw.set_window(0, 0, 380, 220);
-                                                    bw.navigate_vfs("/sites/home/index.html", &vfs);
+                                                    let home = bw.config.features.home_url.clone();
+                                                    bw.navigate_vfs(&home, &vfs);
                                                     browser = Some(bw);
                                                 }
                                                 mode = Mode::Desktop;

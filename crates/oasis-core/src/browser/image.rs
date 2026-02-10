@@ -250,7 +250,15 @@ pub fn calculate_display_size(
     max_width: u32,
 ) -> (u32, u32) {
     match (attr_w, attr_h) {
-        (Some(w), Some(h)) => (w.min(max_width), h),
+        (Some(w), Some(h)) => {
+            let clamped = w.min(max_width);
+            let h = if clamped < w && w > 0 {
+                (h as f32 * clamped as f32 / w as f32) as u32
+            } else {
+                h
+            };
+            (clamped, h)
+        },
         (Some(w), None) => {
             let w = w.min(max_width);
             let h = if intrinsic_w > 0 {
@@ -266,7 +274,13 @@ pub fn calculate_display_size(
             } else {
                 intrinsic_w
             };
-            (w.min(max_width), h)
+            let clamped = w.min(max_width);
+            let h = if clamped < w && w > 0 {
+                (h as f32 * clamped as f32 / w as f32) as u32
+            } else {
+                h
+            };
+            (clamped, h)
         },
         (None, None) => {
             let w = intrinsic_w.min(max_width);
@@ -504,10 +518,11 @@ mod tests {
 
     #[test]
     fn calculate_display_size_both_dimensions_clamped() {
-        // Width exceeds max_width.
+        // Width exceeds max_width; height scaled proportionally.
         let (w, h) = calculate_display_size(100, 200, Some(600), Some(80), 480);
         assert_eq!(w, 480);
-        assert_eq!(h, 80);
+        // 80 * 480/600 = 64
+        assert_eq!(h, 64);
     }
 
     #[test]
