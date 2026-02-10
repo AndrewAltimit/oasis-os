@@ -240,10 +240,6 @@ fn psp_main() {
 
     // Query static hardware info (kernel mode, once at startup).
     let sysinfo = SystemInfo::query();
-    psp::dprintln!(
-        "OASIS_OS: CPU {}MHz, Bus {}MHz, ME {}MHz",
-        sysinfo.cpu_mhz, sysinfo.bus_mhz, sysinfo.me_mhz,
-    );
 
     // Load wallpaper texture.
     let wallpaper_data = oasis_backend_psp::generate_gradient(SCREEN_WIDTH, SCREEN_HEIGHT);
@@ -501,7 +497,6 @@ fn psp_main() {
                 InputEvent::ButtonPress(Button::Select) if classic_view == ClassicView::Dashboard => {
                     // Toggle to Desktop mode.
                     app_mode = AppMode::Desktop;
-                    psp::dprintln!("OASIS_OS: Switched to Desktop mode");
                 }
 
                 // -- Dashboard input --
