@@ -46,6 +46,18 @@ version_color = "#FFFFFF"
 clock_color = "#FFFFFF"
 separator_color = "#4080D0"
 
+[wallpaper]
+style = "gradient"
+color_stops = ["#003399", "#1F5FC2", "#3A8AE0", "#5BB5FF"]
+wave_enabled = false
+angle = 90
+
+[geometry]
+statusbar_height = 26
+bottombar_height = 30
+icon_width = 48
+icon_height = 56
+
 [icon_overrides]
 body_color = "#ECE9D8"
 fold_color = "#C8C2AD"
@@ -54,6 +66,8 @@ label_color = "#FFFFFFE6"
 cursor_color = "#003399C0"
 icon_border_radius = 3
 cursor_border_radius = 4
+icon_style = "card"
+cursor_style = "fill"
 
 [start_menu_overrides]
 panel_bg = "#1F3E7B"

@@ -52,6 +52,14 @@ impl Shadow {
         Ok(())
     }
 
+    /// Override the color of all shadow layers.
+    pub fn with_color(mut self, color: Color) -> Self {
+        for layer in &mut self.layers {
+            layer.color = color;
+        }
+        self
+    }
+
     /// Predefined elevation levels.
     pub fn elevation(level: u8) -> Self {
         match level {

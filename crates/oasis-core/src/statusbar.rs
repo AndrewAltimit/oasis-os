@@ -129,10 +129,17 @@ impl StatusBar {
 
     /// Synchronize SDI objects to reflect current status bar state.
     ///
-    /// Accepts an `ActiveTheme` for skin-driven colors. Pass
-    /// `&ActiveTheme::default()` for legacy behaviour.
-    pub fn update_sdi(&self, sdi: &mut SdiRegistry, at: &ActiveTheme) {
-        let bar_h = theme::STATUSBAR_H;
+    /// Accepts an `ActiveTheme` for skin-driven colors and `SkinFeatures`
+    /// for content visibility toggles. Pass `&ActiveTheme::default()` and
+    /// `&SkinFeatures::default()` for legacy behaviour.
+    pub fn update_sdi(
+        &self,
+        sdi: &mut SdiRegistry,
+        at: &ActiveTheme,
+        features: &crate::skin::SkinFeatures,
+    ) {
+        let bar_h = at.statusbar_height;
+        let font_small = at.font_small;
         let screen_w = theme::SCREEN_W;
 
         // Semi-transparent background bar.
@@ -148,6 +155,7 @@ impl StatusBar {
         }
         if let Ok(obj) = sdi.get_mut("bar_top") {
             obj.color = at.statusbar_bg;
+            obj.h = bar_h;
             obj.visible = true;
             obj.gradient_top = at.statusbar_gradient_top;
             obj.gradient_bottom = at.statusbar_gradient_bottom;
@@ -165,62 +173,80 @@ impl StatusBar {
         );
 
         // Battery + CPU info (left side).
-        ensure_text(
-            sdi,
-            "bar_battery",
-            6,
-            7,
-            theme::FONT_SMALL,
-            at.battery_color,
-        );
-        if let Ok(obj) = sdi.get_mut("bar_battery") {
-            let mut info = self.battery_text.clone();
-            if !self.cpu_text.is_empty() {
-                info = format!("{info}  {}", self.cpu_text);
+        if features.show_battery {
+            ensure_text(sdi, "bar_battery", 6, 7, font_small, at.battery_color);
+            if let Ok(obj) = sdi.get_mut("bar_battery") {
+                let mut info = self.battery_text.clone();
+                if !self.cpu_text.is_empty() {
+                    info = format!("{info}  {}", self.cpu_text);
+                }
+                obj.text = Some(info);
+                obj.visible = true;
             }
-            obj.text = Some(info);
+        } else if let Ok(obj) = sdi.get_mut("bar_battery") {
+            obj.visible = false;
         }
 
         // Version label (center area).
-        ensure_text(
-            sdi,
-            "bar_version",
-            180,
-            7,
-            theme::FONT_SMALL,
-            at.version_color,
-        );
-        if let Ok(obj) = sdi.get_mut("bar_version") {
-            obj.text = Some("Version 0.1".to_string());
+        if features.show_version {
+            ensure_text(sdi, "bar_version", 180, 7, font_small, at.version_color);
+            if let Ok(obj) = sdi.get_mut("bar_version") {
+                obj.text = Some("Version 0.1".to_string());
+                obj.visible = true;
+            }
+        } else if let Ok(obj) = sdi.get_mut("bar_version") {
+            obj.visible = false;
         }
 
         // Clock + date (right side).
-        ensure_text(sdi, "bar_clock", 290, 7, theme::FONT_SMALL, at.clock_color);
-        if let Ok(obj) = sdi.get_mut("bar_clock") {
-            if self.date_text.is_empty() {
-                obj.text = Some(self.clock_text.clone());
-            } else {
-                obj.text = Some(format!("{} {}", self.clock_text, self.date_text));
+        if features.show_clock {
+            ensure_text(sdi, "bar_clock", 290, 7, font_small, at.clock_color);
+            if let Ok(obj) = sdi.get_mut("bar_clock") {
+                if self.date_text.is_empty() {
+                    obj.text = Some(self.clock_text.clone());
+                } else {
+                    obj.text = Some(format!("{} {}", self.clock_text, self.date_text));
+                }
+                obj.visible = true;
             }
+        } else if let Ok(obj) = sdi.get_mut("bar_clock") {
+            obj.visible = false;
         }
 
         // Category label before tabs (PSIX: "MSO").
-        ensure_text(
-            sdi,
-            "bar_mso",
-            6,
-            bar_h as i32 + 3,
-            theme::FONT_SMALL,
-            at.category_label_color,
-        );
-        if let Ok(obj) = sdi.get_mut("bar_mso") {
-            obj.text = Some("OSS".to_string());
+        if features.show_tabs {
+            ensure_text(
+                sdi,
+                "bar_mso",
+                6,
+                bar_h as i32 + 3,
+                font_small,
+                at.category_label_color,
+            );
+            if let Ok(obj) = sdi.get_mut("bar_mso") {
+                obj.text = Some("OSS".to_string());
+                obj.visible = true;
+            }
+        } else if let Ok(obj) = sdi.get_mut("bar_mso") {
+            obj.visible = false;
         }
 
         // Tab row: single pill-shaped SDI objects (replaces 4-edge borders).
         let tab_y = bar_h as i32;
         for (i, tab) in TopTab::ALL.iter().enumerate() {
             let name = format!("bar_tab_{i}");
+            let bg_name = format!("bar_tab_bg_{i}");
+
+            if !features.show_tabs {
+                if let Ok(obj) = sdi.get_mut(&name) {
+                    obj.visible = false;
+                }
+                if let Ok(obj) = sdi.get_mut(&bg_name) {
+                    obj.visible = false;
+                }
+                continue;
+            }
+
             let x = theme::TAB_START_X + (i as i32) * (theme::TAB_W + theme::TAB_GAP);
             let tw = theme::TAB_W as u32;
             let th = theme::TAB_H as u32;
@@ -236,7 +262,6 @@ impl StatusBar {
             }
 
             // Single pill tab background (replaces fill + 4 borders).
-            let bg_name = format!("bar_tab_bg_{i}");
             if is_active {
                 ensure_pill(
                     sdi,
@@ -269,7 +294,7 @@ impl StatusBar {
                 &name,
                 tx.max(x + 2),
                 tab_y + 4,
-                theme::FONT_SMALL,
+                font_small,
                 Color::WHITE,
             );
             if let Ok(obj) = sdi.get_mut(&name) {
@@ -277,7 +302,7 @@ impl StatusBar {
                 obj.text_color = if is_active {
                     at.media_tab_active
                 } else {
-                    Color::rgb(160, 160, 160)
+                    at.media_tab_inactive
                 };
             }
         }
@@ -396,7 +421,8 @@ mod tests {
         let bar = StatusBar::new();
         let mut sdi = SdiRegistry::new();
         let at = crate::active_theme::ActiveTheme::default();
-        bar.update_sdi(&mut sdi, &at);
+        let feat = crate::skin::SkinFeatures::default();
+        bar.update_sdi(&mut sdi, &at, &feat);
         assert!(sdi.contains("bar_top"));
         assert!(sdi.contains("bar_version"));
         assert!(sdi.contains("bar_clock"));
@@ -410,7 +436,8 @@ mod tests {
         let bar = StatusBar::new();
         let mut sdi = SdiRegistry::new();
         let at = crate::active_theme::ActiveTheme::default();
-        bar.update_sdi(&mut sdi, &at);
+        let feat = crate::skin::SkinFeatures::default();
+        bar.update_sdi(&mut sdi, &at, &feat);
         assert!(sdi.get("bar_top").unwrap().overlay);
     }
 }

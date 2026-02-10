@@ -111,6 +111,38 @@ pub struct ActiveTheme {
     pub cursor_border_radius: u16,
     /// Cursor highlight stroke width (pixels).
     pub cursor_stroke_width: u16,
+
+    // -- Icon/cursor style --
+    /// Icon style variant: "document" (default), "card", or "circle".
+    pub icon_style: String,
+    /// Cursor style variant: "stroke" (default), "fill", or "underline".
+    pub cursor_style: String,
+
+    // -- Geometry overrides --
+    /// Status bar height (default 24).
+    pub statusbar_height: u32,
+    /// Bottom bar height (default 24).
+    pub bottombar_height: u32,
+    /// Tab row height (default 18).
+    pub tab_row_height: u32,
+    /// Icon width (default 42).
+    pub icon_width: u32,
+    /// Icon height (default 52).
+    pub icon_height: u32,
+    /// Small font size (default 8).
+    pub font_small: u16,
+
+    // -- Wallpaper config --
+    /// Wallpaper style: "gradient" (default), "solid", or "none".
+    pub wallpaper_style: String,
+    /// Wallpaper gradient color stops (default: PSIX 5-stop palette).
+    pub wallpaper_stops: Vec<Color>,
+    /// Whether PSIX arc ripple waves are enabled.
+    pub wallpaper_wave: bool,
+    /// Wave intensity 0.0-1.0.
+    pub wallpaper_wave_intensity: f32,
+    /// Gradient angle in degrees.
+    pub wallpaper_angle: f32,
 }
 
 impl Default for ActiveTheme {
@@ -160,6 +192,25 @@ impl Default for ActiveTheme {
             icon_border_radius: 4,
             cursor_border_radius: 6,
             cursor_stroke_width: 2,
+            icon_style: "document".to_string(),
+            cursor_style: "stroke".to_string(),
+            statusbar_height: 24,
+            bottombar_height: 24,
+            tab_row_height: 18,
+            icon_width: 42,
+            icon_height: 52,
+            font_small: 8,
+            wallpaper_style: "gradient".to_string(),
+            wallpaper_stops: vec![
+                Color::rgb(245, 110, 15),
+                Color::rgb(255, 230, 30),
+                Color::rgb(230, 245, 40),
+                Color::rgb(140, 235, 50),
+                Color::rgb(200, 252, 130),
+            ],
+            wallpaper_wave: true,
+            wallpaper_wave_intensity: 1.0,
+            wallpaper_angle: 0.0,
         }
     }
 }
@@ -291,6 +342,79 @@ impl ActiveTheme {
                 .and_then(|i| i.cursor_border_radius)
                 .unwrap_or_else(|| skin.border_radius.map(|r| r + 2).unwrap_or(6)),
             cursor_stroke_width: ico.and_then(|i| i.cursor_stroke_width).unwrap_or(2),
+            icon_style: ico
+                .and_then(|i| i.icon_style.clone())
+                .unwrap_or_else(|| "document".to_string()),
+            cursor_style: ico
+                .and_then(|i| i.cursor_style.clone())
+                .unwrap_or_else(|| "stroke".to_string()),
+            statusbar_height: skin
+                .geometry
+                .as_ref()
+                .and_then(|g| g.statusbar_height)
+                .unwrap_or(24),
+            bottombar_height: skin
+                .geometry
+                .as_ref()
+                .and_then(|g| g.bottombar_height)
+                .unwrap_or(24),
+            tab_row_height: skin
+                .geometry
+                .as_ref()
+                .and_then(|g| g.tab_row_height)
+                .unwrap_or(18),
+            icon_width: skin
+                .geometry
+                .as_ref()
+                .and_then(|g| g.icon_width)
+                .unwrap_or(42),
+            icon_height: skin
+                .geometry
+                .as_ref()
+                .and_then(|g| g.icon_height)
+                .unwrap_or(52),
+            font_small: skin
+                .geometry
+                .as_ref()
+                .and_then(|g| g.font_small)
+                .unwrap_or(8),
+            wallpaper_style: skin
+                .wallpaper
+                .as_ref()
+                .and_then(|w| w.style.clone())
+                .unwrap_or_else(|| "gradient".to_string()),
+            wallpaper_stops: skin
+                .wallpaper
+                .as_ref()
+                .and_then(|w| {
+                    w.color_stops.as_ref().map(|stops| {
+                        stops
+                            .iter()
+                            .filter_map(|s| parse_hex_color(s))
+                            .collect::<Vec<_>>()
+                    })
+                })
+                .filter(|v| !v.is_empty())
+                .unwrap_or_else(|| {
+                    vec![
+                        Color::rgb(245, 110, 15),
+                        Color::rgb(255, 230, 30),
+                        Color::rgb(230, 245, 40),
+                        Color::rgb(140, 235, 50),
+                        Color::rgb(200, 252, 130),
+                    ]
+                }),
+            wallpaper_wave: skin
+                .wallpaper
+                .as_ref()
+                .and_then(|w| w.wave_enabled)
+                .unwrap_or(true),
+            wallpaper_wave_intensity: skin
+                .wallpaper
+                .as_ref()
+                .and_then(|w| w.wave_intensity)
+                .unwrap_or(1.0),
+            wallpaper_angle: skin.wallpaper.as_ref().and_then(|w| w.angle).unwrap_or(0.0),
             statusbar_gradient_top: Self::bar_gradient_pair(
                 skin,
                 bar.and_then(|b| b.statusbar_gradient_top.as_ref()),

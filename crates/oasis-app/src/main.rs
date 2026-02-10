@@ -91,14 +91,15 @@ fn main() -> Result<()> {
     log::info!("Discovered {} apps", apps.len());
 
     // Set up dashboard.
-    let dash_config = DashboardConfig::from_features(&skin.features);
+    let dash_config = DashboardConfig::from_features(&skin.features, &active_theme);
     let mut dashboard = DashboardState::new(dash_config, apps);
 
     // Set up PSIX-style bars.
     let mut status_bar = StatusBar::new();
     let mut bottom_bar = BottomBar::new();
     bottom_bar.total_pages = dashboard.page_count();
-    let mut start_menu = StartMenuState::new(StartMenuState::default_items());
+    let mut start_menu =
+        StartMenuState::new_with_theme(StartMenuState::default_items(), &active_theme);
 
     // Set up command interpreter.
     let mut cmd_reg = CommandRegistry::new();
@@ -139,9 +140,13 @@ fn main() -> Result<()> {
     let mut sdi = SdiRegistry::new();
     skin.apply_layout(&mut sdi);
 
-    // -- Wallpaper: generate procedural gradient and load as texture --
+    // -- Wallpaper: generate from skin config and load as texture --
     let wallpaper_tex = {
-        let wp_data = wallpaper::generate_gradient(config.screen_width, config.screen_height);
+        let wp_data = wallpaper::generate_from_config(
+            config.screen_width,
+            config.screen_height,
+            &active_theme,
+        );
         backend.load_texture(config.screen_width, config.screen_height, &wp_data)?
     };
     setup_wallpaper(
@@ -169,10 +174,10 @@ fn main() -> Result<()> {
     let bg_color = Color::rgb(10, 10, 18);
 
     // Boot transition: fade in from black.
-    let mut active_transition: Option<transition::TransitionState> = Some(transition::fade_in(
-        config.screen_width,
-        config.screen_height,
-    ));
+    let fade_frames = skin.features.transition_fade_frames.unwrap_or(15);
+    let mut active_transition: Option<transition::TransitionState> = Some(
+        transition::fade_in_custom(config.screen_width, config.screen_height, fade_frames),
+    );
 
     // Frame counter for periodic updates (clock, battery).
     let mut frame_counter: u64 = 0;
@@ -407,9 +412,10 @@ fn main() -> Result<()> {
                             }
                             mode = Mode::Desktop;
                         }
-                        active_transition = Some(transition::fade_in(
+                        active_transition = Some(transition::fade_in_custom(
                             config.screen_width,
                             config.screen_height,
+                            skin.features.transition_fade_frames.unwrap_or(15),
                         ));
                     }
                 },
@@ -509,9 +515,10 @@ fn main() -> Result<()> {
                                                 }
                                                 mode = Mode::Desktop;
                                             }
-                                            active_transition = Some(transition::fade_in(
+                                            active_transition = Some(transition::fade_in_custom(
                                                 config.screen_width,
                                                 config.screen_height,
+                                                skin.features.transition_fade_frames.unwrap_or(15),
                                             ));
                                         }
                                     } else {
@@ -559,9 +566,10 @@ fn main() -> Result<()> {
                 InputEvent::TriggerPress(Trigger::Right) if mode == Mode::Dashboard => {
                     bottom_bar.next_tab();
                     bottom_bar.r_pressed = true;
-                    active_transition = Some(transition::fade_in(
+                    active_transition = Some(transition::fade_in_custom(
                         config.screen_width,
                         config.screen_height,
+                        skin.features.transition_fade_frames.unwrap_or(15),
                     ));
                 },
                 InputEvent::TriggerRelease(Trigger::Right) => {
@@ -734,13 +742,19 @@ fn main() -> Result<()> {
                                     active_theme = ActiveTheme::from_skin(&swapped.theme);
                                     browser_config = BrowserConfig::from_skin_theme(&swapped.theme);
                                     wm.set_theme(swapped.theme.build_wm_theme());
-                                    let dash_config =
-                                        DashboardConfig::from_features(&swapped.features);
+                                    let dash_config = DashboardConfig::from_features(
+                                        &swapped.features,
+                                        &active_theme,
+                                    );
                                     let apps = discover_apps(&vfs, "/apps", Some("OASISOS"))
                                         .unwrap_or_default();
                                     dashboard = DashboardState::new(dash_config, apps);
                                     bottom_bar.total_pages = dashboard.page_count();
                                     bottom_bar.current_page = 0;
+                                    start_menu = StartMenuState::new_with_theme(
+                                        StartMenuState::default_items(),
+                                        &active_theme,
+                                    );
                                     output_lines.push(format!(
                                         "Switched to skin: {}",
                                         swapped.manifest.name
@@ -857,8 +871,8 @@ fn main() -> Result<()> {
                     update_media_page(&mut sdi, &bottom_bar);
                 }
 
-                status_bar.update_sdi(&mut sdi, &active_theme);
-                bottom_bar.update_sdi(&mut sdi, &active_theme);
+                status_bar.update_sdi(&mut sdi, &active_theme, &skin.features);
+                bottom_bar.update_sdi(&mut sdi, &active_theme, &skin.features);
                 if skin.features.start_menu {
                     start_menu.update_sdi(&mut sdi, &active_theme);
                 }
@@ -880,8 +894,8 @@ fn main() -> Result<()> {
                 start_menu.close();
                 start_menu.hide_sdi(&mut sdi);
                 // Show bars behind windows in app mode.
-                status_bar.update_sdi(&mut sdi, &active_theme);
-                bottom_bar.update_sdi(&mut sdi, &active_theme);
+                status_bar.update_sdi(&mut sdi, &active_theme, &skin.features);
+                bottom_bar.update_sdi(&mut sdi, &active_theme, &skin.features);
                 if let Some(ref runner) = app_runner {
                     runner.update_sdi(&mut sdi);
                 }
@@ -893,8 +907,8 @@ fn main() -> Result<()> {
                 hide_media_page(&mut sdi);
                 start_menu.close();
                 start_menu.hide_sdi(&mut sdi);
-                status_bar.update_sdi(&mut sdi, &active_theme);
-                bottom_bar.update_sdi(&mut sdi, &active_theme);
+                status_bar.update_sdi(&mut sdi, &active_theme, &skin.features);
+                bottom_bar.update_sdi(&mut sdi, &active_theme, &skin.features);
             },
             Mode::Osk => {
                 if let Some(ref osk_state) = osk {
@@ -1014,9 +1028,10 @@ fn handle_start_action(
                     }
                     *mode = Mode::Desktop;
                 }
-                *active_transition = Some(transition::fade_in(
+                *active_transition = Some(transition::fade_in_custom(
                     config.screen_width,
                     config.screen_height,
+                    15,
                 ));
             }
         },

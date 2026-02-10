@@ -189,6 +189,11 @@ impl SdiRegistry {
             {
                 obj.stroke_color = Some(parsed);
             }
+            if let Some(ref c) = entry.shadow_color
+                && let Some(parsed) = parse_color(c)
+            {
+                obj.shadow_color = Some(parsed);
+            }
         }
         Ok(())
     }
@@ -246,7 +251,11 @@ impl SdiRegistry {
             if let Some(level) = obj.shadow_level
                 && level > 0
             {
-                Shadow::elevation(level).draw(backend, obj.x, obj.y, obj.w, obj.h, radius)?;
+                let mut shadow = Shadow::elevation(level);
+                if let Some(sc) = obj.shadow_color {
+                    shadow = shadow.with_color(sc);
+                }
+                shadow.draw(backend, obj.x, obj.y, obj.w, obj.h, radius)?;
             }
 
             // 2. Fill: choose the best primitive.
@@ -313,6 +322,7 @@ struct ThemeEntry {
     shadow_level: Option<u8>,
     stroke_width: Option<u16>,
     stroke_color: Option<String>,
+    shadow_color: Option<String>,
 }
 
 /// Parse a color string like "#RRGGBB" or "#RRGGBBAA".

@@ -51,21 +51,21 @@ fn main() -> anyhow::Result<()> {
     let mut vfs = MemoryVfs::new();
     populate_demo_vfs(&mut vfs);
 
+    let active_theme = ActiveTheme::from_skin(&skin.theme);
+
     let apps = discover_apps(&vfs, "/apps", Some("OASISOS"))?;
-    let dash_config = DashboardConfig::from_features(&skin.features);
+    let dash_config = DashboardConfig::from_features(&skin.features, &active_theme);
     let dashboard = DashboardState::new(dash_config, apps);
     let mut status_bar = StatusBar::new();
     let mut bottom_bar = BottomBar::new();
     bottom_bar.total_pages = dashboard.page_count();
-
-    let active_theme = ActiveTheme::from_skin(&skin.theme);
 
     let mut sdi = SdiRegistry::new();
     skin.apply_layout(&mut sdi);
 
     // Wallpaper.
     let wallpaper_tex = {
-        let wp_data = wallpaper::generate_gradient(w, h);
+        let wp_data = wallpaper::generate_from_config(w, h, &active_theme);
         backend.load_texture(w, h, &wp_data)?
     };
     {
@@ -101,8 +101,8 @@ fn main() -> anyhow::Result<()> {
 
     // -- Screenshot 1: Dashboard --
     dashboard.update_sdi(&mut sdi, &active_theme);
-    status_bar.update_sdi(&mut sdi, &active_theme);
-    bottom_bar.update_sdi(&mut sdi, &active_theme);
+    status_bar.update_sdi(&mut sdi, &active_theme, &skin.features);
+    bottom_bar.update_sdi(&mut sdi, &active_theme, &skin.features);
     mouse_cursor.update_sdi(&mut sdi);
     render_and_save(
         &mut backend,
@@ -116,8 +116,8 @@ fn main() -> anyhow::Result<()> {
     // -- Screenshot 2: AUDIO media tab --
     bottom_bar.active_tab = MediaTab::Audio;
     dashboard.hide_sdi(&mut sdi);
-    status_bar.update_sdi(&mut sdi, &active_theme);
-    bottom_bar.update_sdi(&mut sdi, &active_theme);
+    status_bar.update_sdi(&mut sdi, &active_theme, &skin.features);
+    bottom_bar.update_sdi(&mut sdi, &active_theme, &skin.features);
     update_media_page(&mut sdi, &bottom_bar);
     mouse_cursor.update_sdi(&mut sdi);
     render_and_save(
@@ -134,8 +134,8 @@ fn main() -> anyhow::Result<()> {
     status_bar.active_tab = oasis_core::statusbar::TopTab::Mods;
     hide_media_page(&mut sdi);
     dashboard.update_sdi(&mut sdi, &active_theme);
-    status_bar.update_sdi(&mut sdi, &active_theme);
-    bottom_bar.update_sdi(&mut sdi, &active_theme);
+    status_bar.update_sdi(&mut sdi, &active_theme, &skin.features);
+    bottom_bar.update_sdi(&mut sdi, &active_theme, &skin.features);
     mouse_cursor.update_sdi(&mut sdi);
     render_and_save(
         &mut backend,

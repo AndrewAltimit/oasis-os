@@ -9,3 +9,6 @@ icons_per_page = 4
 grid_cols = 2
 grid_rows = 2
 start_menu = true
+show_version = false
+transition_fade_frames = 12
+transition_slide_frames = 16

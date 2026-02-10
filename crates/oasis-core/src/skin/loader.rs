@@ -112,6 +112,30 @@ pub struct SkinFeatures {
     /// Whether corrupted modifiers are active.
     #[serde(default)]
     pub corrupted: bool,
+    /// Whether the battery indicator is shown in the status bar.
+    #[serde(default = "yes")]
+    pub show_battery: bool,
+    /// Whether the clock is shown in the status bar.
+    #[serde(default = "yes")]
+    pub show_clock: bool,
+    /// Whether the version label is shown in the status bar.
+    #[serde(default = "yes")]
+    pub show_version: bool,
+    /// Whether top tabs are shown in the status bar.
+    #[serde(default = "yes")]
+    pub show_tabs: bool,
+    /// Whether media category tabs are shown in the bottom bar.
+    #[serde(default = "yes")]
+    pub show_media_tabs: bool,
+    /// Whether page dots are shown in the bottom bar.
+    #[serde(default = "yes")]
+    pub show_page_dots: bool,
+    /// Custom fade transition duration in frames (default 15).
+    #[serde(default)]
+    pub transition_fade_frames: Option<u32>,
+    /// Custom slide transition duration in frames (default 20).
+    #[serde(default)]
+    pub transition_slide_frames: Option<u32>,
 }
 
 fn yes() -> bool {
@@ -145,6 +169,14 @@ impl Default for SkinFeatures {
             command_categories: Vec::new(),
             start_menu: true,
             corrupted: false,
+            show_battery: true,
+            show_clock: true,
+            show_version: true,
+            show_tabs: true,
+            show_media_tabs: true,
+            show_page_dots: true,
+            transition_fade_frames: None,
+            transition_slide_frames: None,
         }
     }
 }

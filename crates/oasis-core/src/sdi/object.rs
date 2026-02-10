@@ -54,6 +54,8 @@ pub struct SdiObject {
     pub stroke_width: Option<u16>,
     /// Stroke/outline color.
     pub stroke_color: Option<Color>,
+    /// Custom shadow color (default: black).
+    pub shadow_color: Option<Color>,
 }
 
 impl SdiObject {
@@ -80,6 +82,7 @@ impl SdiObject {
             shadow_level: None,
             stroke_width: None,
             stroke_color: None,
+            shadow_color: None,
         }
     }
 }

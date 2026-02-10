@@ -33,21 +33,23 @@ pub struct DashboardConfig {
 impl DashboardConfig {
     /// Create a config from skin features and screen dimensions.
     /// Uses PSIX-style layout: icons on the left side with generous spacing.
-    pub fn from_features(features: &SkinFeatures) -> Self {
+    pub fn from_features(features: &SkinFeatures, at: &ActiveTheme) -> Self {
         let cols = features.grid_cols;
         let rows = features.grid_rows;
+        let content_top = at.statusbar_height + at.tab_row_height;
+        let content_h = theme::SCREEN_H - content_top - at.bottombar_height;
         // PSIX places icons on the left ~half of the screen, sparsely.
         let grid_padding_x = 16u32;
         let grid_padding_y = 6u32;
         let cell_w = 110u32; // Wide cells for larger icons + labels.
-        let cell_h = (theme::CONTENT_H - 2 * grid_padding_y) / rows;
+        let cell_h = (content_h - 2 * grid_padding_y) / rows;
         Self {
             grid_cols: cols,
             grid_rows: rows,
             icons_per_page: features.icons_per_page,
             max_pages: features.dashboard_pages,
             grid_x: grid_padding_x as i32,
-            grid_y: (theme::CONTENT_TOP + grid_padding_y) as i32,
+            grid_y: (content_top + grid_padding_y) as i32,
             cell_w,
             cell_h,
             cursor_pad: 3,
@@ -163,8 +165,7 @@ impl DashboardState {
     }
 
     /// Synchronize SDI objects to reflect current dashboard state.
-    /// Creates/updates: PSIX-style document icons (white page with colored accent,
-    /// folded corner, and app graphic), text label below each, and cursor highlight.
+    /// Creates/updates icons (style-dependent), text labels, and cursor highlight.
     ///
     /// Accepts an `ActiveTheme` for skin-driven colors. Pass
     /// `&ActiveTheme::default()` for legacy behaviour.
@@ -172,14 +173,9 @@ impl DashboardState {
         let cols = self.config.grid_cols as usize;
         let page_apps = self.current_page_apps();
 
-        let icon_w = theme::ICON_W;
-        let icon_h = theme::ICON_H;
-        let stripe_h = theme::ICON_STRIPE_H;
-        let fold_size = theme::ICON_FOLD_SIZE;
+        let icon_w = at.icon_width;
+        let icon_h = at.icon_height;
         let text_pad = theme::ICON_LABEL_PAD;
-        let gfx_pad = theme::ICON_GFX_PAD;
-        let gfx_w = icon_w - 2 * gfx_pad;
-        let gfx_h = theme::ICON_GFX_H;
 
         let per_page = self.config.icons_per_page as usize;
         for i in 0..per_page {
@@ -213,89 +209,43 @@ impl DashboardState {
             let iy = cell_y + 4;
 
             if i < page_apps.len() {
-                // Shadow is handled by shadow_level on the icon body.
-                // Hide the legacy shadow object.
-                if let Ok(obj) = sdi.get_mut(&shadow_name) {
-                    obj.visible = false;
-                }
-
-                // Outline: rounded stroke instead of solid rect.
-                if let Ok(obj) = sdi.get_mut(&outline_name) {
-                    obj.x = ix - 1;
-                    obj.y = iy - 1;
-                    obj.w = icon_w + 2;
-                    obj.h = icon_h + 2;
-                    obj.visible = true;
-                    obj.color = Color::rgba(0, 0, 0, 0);
-                    obj.text = None;
-                    obj.border_radius = Some(at.icon_border_radius + 1);
-                    obj.stroke_width = Some(1);
-                    obj.stroke_color = Some(at.icon_outline_color);
-                }
-
-                // White document page body with rounded corners + shadow.
-                if let Ok(obj) = sdi.get_mut(&icon_name) {
-                    obj.x = ix;
-                    obj.y = iy;
-                    obj.w = icon_w;
-                    obj.h = icon_h;
-                    obj.visible = true;
-                    obj.color = at.icon_body_color;
-                    obj.text = None;
-                    obj.border_radius = Some(at.icon_border_radius);
-                    obj.shadow_level = Some(1);
-                }
-
-                // Colored stripe at top of document (app accent color).
-                if let Ok(obj) = sdi.get_mut(&stripe_name) {
-                    obj.x = ix;
-                    obj.y = iy;
-                    obj.w = icon_w - fold_size;
-                    obj.h = stripe_h;
-                    obj.visible = true;
-                    obj.color = page_apps[i].color;
-                    obj.text = None;
-                }
-
-                // Folded corner (top-right) -- lighter crease to simulate fold.
-                if let Ok(obj) = sdi.get_mut(&fold_name) {
-                    obj.x = ix + icon_w as i32 - fold_size as i32;
-                    obj.y = iy;
-                    obj.w = fold_size;
-                    obj.h = fold_size;
-                    obj.visible = true;
-                    obj.color = at.icon_fold_color;
-                    obj.text = None;
-                }
-
-                // Colored app graphic on the document body (PSIX-style icon image).
-                if let Ok(obj) = sdi.get_mut(&gfx_name) {
-                    obj.x = ix + gfx_pad as i32;
-                    obj.y = iy + stripe_h as i32 + 3;
-                    obj.w = gfx_w;
-                    obj.h = gfx_h;
-                    obj.visible = true;
-                    // Vibrant version of the app accent color for the graphic.
-                    let c = page_apps[i].color;
-                    obj.color = Color::rgba(
-                        c.r.saturating_add(30),
-                        c.g.saturating_add(10),
-                        c.b.saturating_add(30),
-                        200,
-                    );
-                    obj.text = None;
-                }
-
-                // Label below the document icon.
-                if let Ok(obj) = sdi.get_mut(&label_name) {
-                    obj.x = cell_x;
-                    obj.y = iy + icon_h as i32 + text_pad;
-                    obj.w = 0;
-                    obj.h = 0;
-                    obj.font_size = 8;
-                    obj.text = Some(page_apps[i].title.clone());
-                    obj.text_color = at.icon_label_color;
-                    obj.visible = true;
+                match at.icon_style.as_str() {
+                    "card" => self.draw_card_icon(
+                        sdi,
+                        at,
+                        i,
+                        ix,
+                        iy,
+                        icon_w,
+                        icon_h,
+                        cell_x,
+                        &page_apps[i],
+                        text_pad,
+                    ),
+                    "circle" => self.draw_circle_icon(
+                        sdi,
+                        at,
+                        i,
+                        ix,
+                        iy,
+                        icon_w,
+                        icon_h,
+                        cell_x,
+                        &page_apps[i],
+                        text_pad,
+                    ),
+                    _ => self.draw_document_icon(
+                        sdi,
+                        at,
+                        i,
+                        ix,
+                        iy,
+                        icon_w,
+                        icon_h,
+                        cell_x,
+                        &page_apps[i],
+                        text_pad,
+                    ),
                 }
             } else {
                 for name in [
@@ -314,7 +264,7 @@ impl DashboardState {
             }
         }
 
-        // Cursor highlight: rounded stroke frame around selected icon.
+        // Cursor highlight.
         let cursor_name = "cursor_highlight";
         if !sdi.contains(cursor_name) {
             sdi.create(cursor_name);
@@ -328,19 +278,244 @@ impl DashboardState {
                 let cell_y = self.config.grid_y + sel_row * self.config.cell_h as i32;
                 let ix = cell_x + (self.config.cell_w as i32 - icon_w as i32) / 2;
                 let iy = cell_y + 4;
-                cursor.x = ix - pad;
-                cursor.y = iy - pad;
-                cursor.w = icon_w + (pad * 2) as u32;
-                cursor.h = icon_h + (pad * 2) as u32;
-                cursor.color = Color::rgba(0, 0, 0, 0);
+
                 cursor.visible = true;
                 cursor.overlay = true;
-                cursor.border_radius = Some(at.cursor_border_radius);
-                cursor.stroke_width = Some(at.cursor_stroke_width);
-                cursor.stroke_color = Some(at.cursor_color);
+
+                match at.cursor_style.as_str() {
+                    "fill" => {
+                        cursor.x = ix - pad;
+                        cursor.y = iy - pad;
+                        cursor.w = icon_w + (pad * 2) as u32;
+                        cursor.h = icon_h + (pad * 2) as u32;
+                        cursor.color = at.cursor_color;
+                        cursor.border_radius = Some(at.cursor_border_radius);
+                        cursor.stroke_width = None;
+                        cursor.stroke_color = None;
+                    },
+                    "underline" => {
+                        cursor.x = ix;
+                        cursor.y = iy + icon_h as i32 + 1;
+                        cursor.w = icon_w;
+                        cursor.h = 3;
+                        cursor.color = at.cursor_color;
+                        cursor.border_radius = Some(1);
+                        cursor.stroke_width = None;
+                        cursor.stroke_color = None;
+                    },
+                    _ => {
+                        // "stroke" (default)
+                        cursor.x = ix - pad;
+                        cursor.y = iy - pad;
+                        cursor.w = icon_w + (pad * 2) as u32;
+                        cursor.h = icon_h + (pad * 2) as u32;
+                        cursor.color = Color::rgba(0, 0, 0, 0);
+                        cursor.border_radius = Some(at.cursor_border_radius);
+                        cursor.stroke_width = Some(at.cursor_stroke_width);
+                        cursor.stroke_color = Some(at.cursor_color);
+                    },
+                }
             } else {
                 cursor.visible = false;
             }
+        }
+    }
+
+    /// Draw a "document" style icon (default PSIX: white page, fold, stripe, gfx).
+    #[allow(clippy::too_many_arguments)]
+    fn draw_document_icon(
+        &self,
+        sdi: &mut SdiRegistry,
+        at: &ActiveTheme,
+        i: usize,
+        ix: i32,
+        iy: i32,
+        icon_w: u32,
+        icon_h: u32,
+        cell_x: i32,
+        app: &AppEntry,
+        text_pad: i32,
+    ) {
+        let stripe_h = theme::ICON_STRIPE_H;
+        let fold_size = theme::ICON_FOLD_SIZE;
+        let gfx_pad = theme::ICON_GFX_PAD;
+        let gfx_w = icon_w - 2 * gfx_pad;
+        let gfx_h = theme::ICON_GFX_H;
+
+        if let Ok(obj) = sdi.get_mut(&format!("icon_shadow_{i}")) {
+            obj.visible = false;
+        }
+        if let Ok(obj) = sdi.get_mut(&format!("icon_outline_{i}")) {
+            obj.x = ix - 1;
+            obj.y = iy - 1;
+            obj.w = icon_w + 2;
+            obj.h = icon_h + 2;
+            obj.visible = true;
+            obj.color = Color::rgba(0, 0, 0, 0);
+            obj.text = None;
+            obj.border_radius = Some(at.icon_border_radius + 1);
+            obj.stroke_width = Some(1);
+            obj.stroke_color = Some(at.icon_outline_color);
+        }
+        if let Ok(obj) = sdi.get_mut(&format!("icon_{i}")) {
+            obj.x = ix;
+            obj.y = iy;
+            obj.w = icon_w;
+            obj.h = icon_h;
+            obj.visible = true;
+            obj.color = at.icon_body_color;
+            obj.text = None;
+            obj.border_radius = Some(at.icon_border_radius);
+            obj.shadow_level = Some(1);
+        }
+        if let Ok(obj) = sdi.get_mut(&format!("icon_stripe_{i}")) {
+            obj.x = ix;
+            obj.y = iy;
+            obj.w = icon_w - fold_size;
+            obj.h = stripe_h;
+            obj.visible = true;
+            obj.color = app.color;
+            obj.text = None;
+        }
+        if let Ok(obj) = sdi.get_mut(&format!("icon_fold_{i}")) {
+            obj.x = ix + icon_w as i32 - fold_size as i32;
+            obj.y = iy;
+            obj.w = fold_size;
+            obj.h = fold_size;
+            obj.visible = true;
+            obj.color = at.icon_fold_color;
+            obj.text = None;
+        }
+        if let Ok(obj) = sdi.get_mut(&format!("icon_gfx_{i}")) {
+            obj.x = ix + gfx_pad as i32;
+            obj.y = iy + stripe_h as i32 + 3;
+            obj.w = gfx_w;
+            obj.h = gfx_h;
+            obj.visible = true;
+            let c = app.color;
+            obj.color = Color::rgba(
+                c.r.saturating_add(30),
+                c.g.saturating_add(10),
+                c.b.saturating_add(30),
+                200,
+            );
+            obj.text = None;
+        }
+        if let Ok(obj) = sdi.get_mut(&format!("icon_label_{i}")) {
+            obj.x = cell_x;
+            obj.y = iy + icon_h as i32 + text_pad;
+            obj.w = 0;
+            obj.h = 0;
+            obj.font_size = at.font_small;
+            obj.text = Some(app.title.clone());
+            obj.text_color = at.icon_label_color;
+            obj.visible = true;
+        }
+    }
+
+    /// Draw a "card" style icon (flat rounded rect with accent fill, centered label).
+    #[allow(clippy::too_many_arguments)]
+    fn draw_card_icon(
+        &self,
+        sdi: &mut SdiRegistry,
+        at: &ActiveTheme,
+        i: usize,
+        ix: i32,
+        iy: i32,
+        icon_w: u32,
+        icon_h: u32,
+        cell_x: i32,
+        app: &AppEntry,
+        text_pad: i32,
+    ) {
+        // Hide document-specific sub-objects.
+        for prefix in &[
+            "icon_outline_",
+            "icon_stripe_",
+            "icon_fold_",
+            "icon_gfx_",
+            "icon_shadow_",
+        ] {
+            if let Ok(obj) = sdi.get_mut(&format!("{prefix}{i}")) {
+                obj.visible = false;
+            }
+        }
+        // Card body: full-bleed accent color.
+        if let Ok(obj) = sdi.get_mut(&format!("icon_{i}")) {
+            obj.x = ix;
+            obj.y = iy;
+            obj.w = icon_w;
+            obj.h = icon_h;
+            obj.visible = true;
+            obj.color = app.color;
+            obj.text = None;
+            obj.border_radius = Some(at.icon_border_radius);
+            obj.shadow_level = Some(1);
+        }
+        // Label below icon.
+        if let Ok(obj) = sdi.get_mut(&format!("icon_label_{i}")) {
+            obj.x = cell_x;
+            obj.y = iy + icon_h as i32 + text_pad;
+            obj.w = 0;
+            obj.h = 0;
+            obj.font_size = at.font_small;
+            obj.text = Some(app.title.clone());
+            obj.text_color = at.icon_label_color;
+            obj.visible = true;
+        }
+    }
+
+    /// Draw a "circle" style icon (large circle with first letter centered).
+    #[allow(clippy::too_many_arguments)]
+    fn draw_circle_icon(
+        &self,
+        sdi: &mut SdiRegistry,
+        at: &ActiveTheme,
+        i: usize,
+        ix: i32,
+        iy: i32,
+        icon_w: u32,
+        icon_h: u32,
+        cell_x: i32,
+        app: &AppEntry,
+        text_pad: i32,
+    ) {
+        // Hide document-specific sub-objects.
+        for prefix in &[
+            "icon_outline_",
+            "icon_stripe_",
+            "icon_fold_",
+            "icon_gfx_",
+            "icon_shadow_",
+        ] {
+            if let Ok(obj) = sdi.get_mut(&format!("{prefix}{i}")) {
+                obj.visible = false;
+            }
+        }
+        // Circle body: use min dimension for a circle.
+        let diameter = icon_w.min(icon_h);
+        let radius = (diameter / 2) as u16;
+        if let Ok(obj) = sdi.get_mut(&format!("icon_{i}")) {
+            obj.x = ix + (icon_w as i32 - diameter as i32) / 2;
+            obj.y = iy + (icon_h as i32 - diameter as i32) / 2;
+            obj.w = diameter;
+            obj.h = diameter;
+            obj.visible = true;
+            obj.color = app.color;
+            obj.text = None;
+            obj.border_radius = Some(radius);
+            obj.shadow_level = Some(1);
+        }
+        // Label below icon.
+        if let Ok(obj) = sdi.get_mut(&format!("icon_label_{i}")) {
+            obj.x = cell_x;
+            obj.y = iy + icon_h as i32 + text_pad;
+            obj.w = 0;
+            obj.h = 0;
+            obj.font_size = at.font_small;
+            obj.text = Some(app.title.clone());
+            obj.text_color = at.icon_label_color;
+            obj.visible = true;
         }
     }
 

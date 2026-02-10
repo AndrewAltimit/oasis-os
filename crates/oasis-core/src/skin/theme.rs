@@ -78,6 +78,14 @@ pub struct SkinTheme {
     /// Per-element color overrides for the start menu popup.
     #[serde(default)]
     pub start_menu_overrides: Option<StartMenuOverrides>,
+
+    /// Wallpaper generation configuration.
+    #[serde(default)]
+    pub wallpaper: Option<WallpaperConfig>,
+
+    /// Geometry overrides (bar heights, icon sizes, font sizes).
+    #[serde(default)]
+    pub geometry: Option<GeometryOverrides>,
 }
 
 /// Optional overrides for the window manager theme.
@@ -156,6 +164,38 @@ pub struct IconOverrides {
     pub icon_border_radius: Option<u16>,
     pub cursor_border_radius: Option<u16>,
     pub cursor_stroke_width: Option<u16>,
+    /// Icon style variant: "document" (default), "card", or "circle".
+    #[serde(default)]
+    pub icon_style: Option<String>,
+    /// Cursor style variant: "stroke" (default), "fill", or "underline".
+    #[serde(default)]
+    pub cursor_style: Option<String>,
+}
+
+/// Wallpaper generation configuration.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct WallpaperConfig {
+    /// Style: "gradient" (default), "solid", or "none".
+    pub style: Option<String>,
+    /// Hex color stops for gradient wallpaper.
+    pub color_stops: Option<Vec<String>>,
+    /// Whether PSIX arc ripple waves are enabled (default true).
+    pub wave_enabled: Option<bool>,
+    /// Wave intensity 0.0-1.0 (default 1.0).
+    pub wave_intensity: Option<f32>,
+    /// Gradient angle in degrees: 0=horizontal, 90=vertical (default 0).
+    pub angle: Option<f32>,
+}
+
+/// Geometry overrides for bar heights, icon sizes, and font sizes.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct GeometryOverrides {
+    pub statusbar_height: Option<u32>,
+    pub bottombar_height: Option<u32>,
+    pub tab_row_height: Option<u32>,
+    pub icon_width: Option<u32>,
+    pub icon_height: Option<u32>,
+    pub font_small: Option<u16>,
 }
 
 /// Per-element overrides for the start menu popup and button.
@@ -237,6 +277,8 @@ impl Default for SkinTheme {
             icon_overrides: None,
             browser_overrides: None,
             start_menu_overrides: None,
+            wallpaper: None,
+            geometry: None,
         }
     }
 }

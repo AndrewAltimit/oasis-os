@@ -96,6 +96,22 @@ impl StartMenuState {
         }
     }
 
+    /// Create a new start menu with geometry derived from the active theme.
+    pub fn new_with_theme(items: Vec<StartMenuItem>, at: &ActiveTheme) -> Self {
+        let rows = items.len().div_ceil(MENU_COLS);
+        let menu_h = (PAD_TOP + rows as i32 * ITEM_ROW_H + PAD_BOTTOM) as u32;
+        let bar_y = (theme::SCREEN_H - at.bottombar_height) as i32;
+        let menu_y = bar_y - menu_h as i32 - 2;
+        Self {
+            open: false,
+            items,
+            selected: 0,
+            cols: MENU_COLS,
+            menu_h,
+            menu_y,
+        }
+    }
+
     /// Default set of start menu items.
     pub fn default_items() -> Vec<StartMenuItem> {
         vec![
@@ -282,7 +298,7 @@ impl StartMenuState {
         if let Ok(obj) = sdi.get_mut("start_btn_text") {
             obj.x = BTN_X + 6;
             obj.y = BTN_Y + 5;
-            obj.font_size = theme::FONT_SMALL;
+            obj.font_size = at.font_small;
             obj.text = Some("START".to_string());
             obj.text_color = at.sm_button_text;
             obj.visible = true;
@@ -375,7 +391,7 @@ impl StartMenuState {
                 &label_name,
                 ix + ICON_SIZE as i32 + 4,
                 iy + 3,
-                theme::FONT_SMALL,
+                at.font_small,
                 text_color,
             );
             if let Ok(obj) = sdi.get_mut(&label_name) {
