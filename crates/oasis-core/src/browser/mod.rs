@@ -76,6 +76,19 @@ impl layout::block::TextMeasurer for SimpleTextMeasurer {
 }
 
 // -----------------------------------------------------------------------
+// Focus
+// -----------------------------------------------------------------------
+
+/// Which part of the browser chrome has keyboard focus.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Focus {
+    /// Keyboard input goes to content (link navigation, scrolling).
+    Content,
+    /// Keyboard input goes to the URL bar for editing.
+    UrlBar,
+}
+
+// -----------------------------------------------------------------------
 // BrowserWidget
 // -----------------------------------------------------------------------
 
@@ -121,6 +134,15 @@ pub struct BrowserWidget {
     /// Index of the currently focused link (-1 = none).
     selected_link: i32,
 
+    /// Which part of the chrome has keyboard focus.
+    focus: Focus,
+
+    /// URL bar editing buffer (populated when focus is `UrlBar`).
+    url_input: String,
+
+    /// Cursor position within `url_input` (byte offset).
+    url_cursor: usize,
+
     /// Whether reader mode is active.
     reader_mode: bool,
 
@@ -153,6 +175,9 @@ impl BrowserWidget {
             link_map: Vec::new(),
             href_map: HashMap::new(),
             selected_link: -1,
+            focus: Focus::Content,
+            url_input: String::new(),
+            url_cursor: 0,
             reader_mode: false,
             reader_html: None,
             window_x: 0,
@@ -487,30 +512,60 @@ impl BrowserWidget {
         // URL bar.
         let url_x = self.window_x + (bw * 2) as i32;
         let url_w = self.window_w.saturating_sub(bw * 3);
-        backend.fill_rect(
-            url_x,
-            self.window_y + 2,
-            url_w,
-            h - 4,
-            self.config.url_bar_bg,
-        )?;
 
-        // URL text.
-        let url_text = self.nav.current_url().unwrap_or("about:blank");
-        // Truncate URL to fit the bar width.
-        let max_chars = (url_w / 8).saturating_sub(1) as usize;
-        let display_url = if url_text.len() > max_chars {
-            &url_text[..url_text.floor_char_boundary(max_chars)]
+        // Use a highlighted background when the URL bar is focused.
+        let bar_bg = if self.focus == Focus::UrlBar {
+            Color::rgb(60, 60, 80)
         } else {
-            url_text
+            self.config.url_bar_bg
         };
-        backend.draw_text(
-            display_url,
-            url_x + 4,
-            self.window_y + 4,
-            12,
-            self.config.url_bar_text,
-        )?;
+        backend.fill_rect(url_x, self.window_y + 2, url_w, h - 4, bar_bg)?;
+
+        // URL text: show the editing buffer when focused, otherwise
+        // the current navigation URL.
+        let max_chars = (url_w / 8).saturating_sub(1) as usize;
+        if self.focus == Focus::UrlBar {
+            // Show editing buffer with cursor indicator.
+            let display = if self.url_input.len() > max_chars {
+                &self.url_input[..self.url_input.floor_char_boundary(max_chars)]
+            } else {
+                &self.url_input
+            };
+            backend.draw_text(
+                display,
+                url_x + 4,
+                self.window_y + 4,
+                12,
+                self.config.url_bar_text,
+            )?;
+
+            // Draw cursor line.
+            let cursor_chars = self.url_input[..self.url_cursor].chars().count();
+            let cursor_px = url_x + 4 + cursor_chars as i32 * 8;
+            if cursor_px < url_x + url_w as i32 - 4 {
+                backend.fill_rect(
+                    cursor_px,
+                    self.window_y + 3,
+                    1,
+                    h - 6,
+                    self.config.url_bar_text,
+                )?;
+            }
+        } else {
+            let url_text = self.nav.current_url().unwrap_or("about:blank");
+            let display_url = if url_text.len() > max_chars {
+                &url_text[..url_text.floor_char_boundary(max_chars)]
+            } else {
+                url_text
+            };
+            backend.draw_text(
+                display_url,
+                url_x + 4,
+                self.window_y + 4,
+                12,
+                self.config.url_bar_text,
+            )?;
+        }
 
         // Home button (rightmost).
         let home_x = self.window_x + self.window_w as i32 - bw as i32;
@@ -582,6 +637,72 @@ impl BrowserWidget {
     /// Handle an input event. Returns `true` if the event was
     /// consumed.
     pub fn handle_input(&mut self, event: &InputEvent, vfs: &dyn Vfs) -> bool {
+        // URL-bar editing mode intercepts most keys.
+        if self.focus == Focus::UrlBar {
+            match event {
+                InputEvent::TextInput(ch) => {
+                    self.url_input.insert(self.url_cursor, *ch);
+                    self.url_cursor += ch.len_utf8();
+                    return true;
+                },
+                InputEvent::Backspace => {
+                    if self.url_cursor > 0 {
+                        // Find the previous character boundary.
+                        let prev = self.url_input[..self.url_cursor]
+                            .char_indices()
+                            .next_back()
+                            .map(|(i, _)| i)
+                            .unwrap_or(0);
+                        self.url_input.remove(prev);
+                        self.url_cursor = prev;
+                    }
+                    return true;
+                },
+                InputEvent::ButtonPress(Button::Confirm) => {
+                    let url = self.url_input.clone();
+                    self.focus = Focus::Content;
+                    if !url.is_empty() {
+                        self.navigate_to(&url, vfs);
+                    }
+                    return true;
+                },
+                InputEvent::ButtonPress(Button::Cancel) => {
+                    // Discard edits.
+                    self.focus = Focus::Content;
+                    self.url_input.clear();
+                    self.url_cursor = 0;
+                    return true;
+                },
+                InputEvent::ButtonPress(Button::Left) => {
+                    if self.url_cursor > 0 {
+                        let prev = self.url_input[..self.url_cursor]
+                            .char_indices()
+                            .next_back()
+                            .map(|(i, _)| i)
+                            .unwrap_or(0);
+                        self.url_cursor = prev;
+                    }
+                    return true;
+                },
+                InputEvent::ButtonPress(Button::Right) => {
+                    if self.url_cursor < self.url_input.len() {
+                        let next = self.url_input[self.url_cursor..]
+                            .chars()
+                            .next()
+                            .map(|c| self.url_cursor + c.len_utf8())
+                            .unwrap_or(self.url_input.len());
+                        self.url_cursor = next;
+                    }
+                    return true;
+                },
+                InputEvent::PointerClick { x, y } => {
+                    self.handle_click(*x, *y, vfs);
+                    return true;
+                },
+                _ => return false,
+            }
+        }
+
         match event {
             InputEvent::ButtonPress(Button::Up) => {
                 self.scroll.scroll_up();
@@ -692,18 +813,29 @@ impl BrowserWidget {
 
             if rel_x < bw {
                 // Back button.
+                self.focus = Focus::Content;
                 self.go_back(vfs);
             } else if rel_x < bw * 2 {
                 // Forward button.
+                self.focus = Focus::Content;
                 self.go_forward(vfs);
             } else if rel_x >= self.window_w as i32 - bw {
                 // Home button.
+                self.focus = Focus::Content;
                 self.go_home(vfs);
+            } else {
+                // URL bar area -- enter edit mode.
+                self.focus = Focus::UrlBar;
+                self.url_input = self.nav.current_url().unwrap_or("about:blank").to_string();
+                self.url_cursor = self.url_input.len();
             }
             return;
         }
 
-        // Click in content area: check link hit regions.
+        // Click in content area: leave URL bar editing.
+        self.focus = Focus::Content;
+
+        // Check link hit regions.
         for link in &self.link_map {
             let lx = link.rect.x;
             let ly = link.rect.y;

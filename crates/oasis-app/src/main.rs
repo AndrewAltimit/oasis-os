@@ -259,6 +259,20 @@ fn main() -> Result<()> {
                     InputEvent::ButtonPress(Button::Start) => {
                         mode = Mode::Terminal;
                     },
+                    InputEvent::TextInput(ch) => {
+                        if wm.active_window() == Some("browser")
+                            && let Some(ref mut bw) = browser
+                        {
+                            bw.handle_input(&InputEvent::TextInput(*ch), &vfs);
+                        }
+                    },
+                    InputEvent::Backspace => {
+                        if wm.active_window() == Some("browser")
+                            && let Some(ref mut bw) = browser
+                        {
+                            bw.handle_input(&InputEvent::Backspace, &vfs);
+                        }
+                    },
                     InputEvent::ButtonPress(btn) => {
                         if let Some(active_id) = wm.active_window().map(|s| s.to_string()) {
                             if active_id == "browser" {
