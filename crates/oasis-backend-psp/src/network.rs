@@ -16,6 +16,11 @@ use psp::sys;
 use oasis_core::backend::{NetworkBackend, NetworkStream};
 use oasis_core::error::{OasisError, Result};
 
+/// PSP socket option constants (BSD-compatible).
+const SOL_SOCKET: i32 = 0xFFFF;
+const SO_REUSEADDR: i32 = 0x0004;
+const SO_NONBLOCK: i32 = 0x0080;
+
 // ---------------------------------------------------------------------------
 // Network initialization (lazy, one-shot)
 // ---------------------------------------------------------------------------
@@ -233,13 +238,12 @@ impl NetworkBackend for PspNetworkBackend {
 
         // Set SO_REUSEADDR so we can rebind quickly.
         let one: i32 = 1;
-        // SAFETY: sceNetInetSetsockopt with SOL_SOCKET=0xFFFF,
-        // SO_REUSEADDR=0x0004.
+        // SAFETY: sceNetInetSetsockopt with valid SOL_SOCKET options.
         unsafe {
             sys::sceNetInetSetsockopt(
                 fd,
-                0xFFFF, // SOL_SOCKET
-                0x0004, // SO_REUSEADDR
+                SOL_SOCKET,
+                SO_REUSEADDR,
                 &one as *const i32 as *const c_void,
                 mem::size_of::<i32>() as u32,
             );
@@ -247,13 +251,12 @@ impl NetworkBackend for PspNetworkBackend {
 
         // Set non-blocking so accept() doesn't block the caller.
         let nb: i32 = 1;
-        // SAFETY: sceNetInetSetsockopt with SOL_SOCKET=0xFFFF,
-        // SO_NONBLOCK=0x80 (PSP-specific).
+        // SAFETY: SO_NONBLOCK is a PSP-specific socket option.
         unsafe {
             sys::sceNetInetSetsockopt(
                 fd,
-                0xFFFF, // SOL_SOCKET
-                0x0080, // SO_NONBLOCK (PSP)
+                SOL_SOCKET,
+                SO_NONBLOCK,
                 &nb as *const i32 as *const c_void,
                 mem::size_of::<i32>() as u32,
             );

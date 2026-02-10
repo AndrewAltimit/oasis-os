@@ -9,17 +9,23 @@
 //! anti-aliased rendering via a VRAM glyph atlas. Falls back to bitmap if
 //! system fonts are unavailable (e.g. PPSSPP emulator).
 
+use std::pin::Pin;
+
 use psp::font::{Font, FontLib, FontRenderer};
 use psp::sys::{SceFontFamilyCode, SceFontLanguageCode, SceFontStyleCode};
 
 /// System font wrapper (FontLib + Font + FontRenderer with VRAM atlas).
 ///
 /// Manages the self-referential FontRenderer<'a> -> &'a Font relationship
-/// via a heap-allocated Font with a stable address.
+/// via a `Pin<Box<Font>>` that guarantees the heap address is stable.
+///
+/// Drop order matters: `renderer` is declared first and therefore dropped
+/// first, before `_font` and `_fontlib` (Rust drops fields in declaration
+/// order).
 pub struct SystemFont {
     // Drop order: renderer first, then font, then fontlib.
     renderer: Option<FontRenderer<'static>>,
-    _font: Box<Font>,
+    _font: Pin<Box<Font>>,
     _fontlib: FontLib,
 }
 
@@ -34,13 +40,14 @@ impl SystemFont {
                 SceFontLanguageCode::Latin,
             )
             .ok()?;
-        let font = Box::new(font);
+        let font = Box::pin(font);
 
-        // SAFETY: `font` is heap-allocated (Box) so its address is stable.
-        // The transmuted reference lives as long as `_font`, which is
-        // dropped after `renderer` due to struct field drop order.
+        // SAFETY: The Font is behind Pin<Box<_>>, guaranteeing its heap
+        // address is stable for the lifetime of `_font`. The renderer is
+        // dropped before _font (struct field declaration order), so the
+        // reference remains valid for the entire lifetime of `renderer`.
         let font_ref: &'static Font =
-            unsafe { &*(font.as_ref() as *const Font) };
+            unsafe { &*(font.as_ref().get_ref() as *const Font) };
         let renderer = FontRenderer::new(font_ref, atlas_vram, 12.0);
 
         Some(Self {

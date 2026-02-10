@@ -124,29 +124,34 @@ impl PspBackend {
         let src_stride = (width * 4) as usize;
         let dst_stride = (buf_w * 4) as usize;
         let use_dma = src_stride >= 1024;
+        if use_dma {
+            // SAFETY: Writeback source data from CPU cache to RAM before DMA
+            // reads it, and writeback+invalidate destination so stale cache
+            // lines don't overwrite DMA results later.
+            unsafe {
+                psp::cache::dcache_writeback_invalidate_range(
+                    rgba_data.as_ptr() as *const std::ffi::c_void,
+                    rgba_data.len() as u32,
+                );
+                psp::cache::dcache_writeback_invalidate_range(
+                    data as *const std::ffi::c_void,
+                    buf_size as u32,
+                );
+            }
+        }
         for row in 0..height as usize {
             unsafe {
                 let src = rgba_data.as_ptr().add(row * src_stride);
                 let dst = data.add(row * dst_stride);
                 if use_dma {
                     // SAFETY: src and dst are valid, non-overlapping, and
-                    // src_stride > 0. DMA manages cache coherency internally.
+                    // src_stride > 0. Cache coherency handled above.
                     if psp::dma::memcpy_dma(dst, src, src_stride as u32).is_ok() {
                         continue;
                     }
                 }
                 // Fallback: CPU copy for small rows or DMA failure.
                 ptr::copy_nonoverlapping(src, dst, src_stride);
-            }
-        }
-        // Invalidate destination cache so GU reads fresh data.
-        if use_dma {
-            // SAFETY: data is valid for buf_size bytes.
-            unsafe {
-                psp::cache::dcache_invalidate_range(
-                    data as *const std::ffi::c_void,
-                    buf_size as u32,
-                );
             }
         }
 

@@ -1,5 +1,7 @@
 //! Audio playback (MP3 via psp::mp3 + psp::audio) and `AudioBackend` trait.
 
+use std::sync::Arc;
+
 use psp::audio::{AudioChannel, AudioFormat};
 use psp::mp3::Mp3Decoder;
 
@@ -193,7 +195,7 @@ impl AudioPlayer {
 /// `AudioHandle`.
 pub struct PspAudioBackend {
     audio: AudioHandle,
-    tracks: Vec<Option<Vec<u8>>>,
+    tracks: Vec<Option<Arc<Vec<u8>>>>,
     current_track: Option<u64>,
     volume: u8,
 }
@@ -217,7 +219,7 @@ impl AudioBackend for PspAudioBackend {
 
     fn load_track(&mut self, data: &[u8]) -> Result<AudioTrackId> {
         let id = self.tracks.len() as u64;
-        self.tracks.push(Some(data.to_vec()));
+        self.tracks.push(Some(Arc::new(data.to_vec())));
         Ok(AudioTrackId(id))
     }
 
@@ -229,9 +231,10 @@ impl AudioBackend for PspAudioBackend {
             .and_then(|slot| slot.as_ref())
             .ok_or_else(|| {
                 OasisError::Backend(format!("track {} not loaded", track.0))
-            })?
-            .clone();
-        send_audio_cmd(AudioCmd::LoadAndPlayData(data));
+            })?;
+        // Arc::clone is cheap (ref count bump) -- avoids duplicating the
+        // entire MP3 buffer on a memory-constrained device.
+        send_audio_cmd(AudioCmd::LoadAndPlayData(Arc::clone(data)));
         self.current_track = Some(track.0);
         Ok(())
     }

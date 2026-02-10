@@ -4,6 +4,8 @@
 //! priority tuning. Communication uses lock-free `SpscQueue` for commands
 //! and `SpinMutex` for shared state readable from the main thread.
 
+use std::sync::Arc;
+
 use psp::sync::{SpinMutex, SpscQueue};
 use psp::thread::ThreadBuilder;
 
@@ -71,7 +73,7 @@ impl SharedAudioState {
 /// Commands for the dedicated audio thread.
 pub enum AudioCmd {
     LoadAndPlay(String),
-    LoadAndPlayData(Vec<u8>),
+    LoadAndPlayData(Arc<Vec<u8>>),
     Pause,
     Resume,
     Stop,

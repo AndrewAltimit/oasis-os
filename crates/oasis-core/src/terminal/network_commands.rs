@@ -48,11 +48,19 @@ fn wifi_status(env: &mut Environment<'_>) -> Result<CommandOutput> {
     let mut lines = Vec::new();
     lines.push(format!(
         "WLAN hardware: {}",
-        if info.available { "available" } else { "unavailable" }
+        if info.available {
+            "available"
+        } else {
+            "unavailable"
+        }
     ));
     lines.push(format!(
         "Connection:    {}",
-        if info.connected { "connected" } else { "disconnected" }
+        if info.connected {
+            "connected"
+        } else {
+            "disconnected"
+        }
     ));
     if let Some(ip) = &info.ip_address {
         lines.push(format!("IP address:    {ip}"));
@@ -83,9 +91,7 @@ impl Command for PingCmd {
     }
     fn execute(&self, args: &[&str], env: &mut Environment<'_>) -> Result<CommandOutput> {
         if args.is_empty() {
-            return Err(OasisError::Command(
-                "usage: ping <hostname>".to_string(),
-            ));
+            return Err(OasisError::Command("usage: ping <hostname>".to_string()));
         }
         let Some(net) = env.network else {
             return Ok(CommandOutput::Text(
@@ -94,9 +100,7 @@ impl Command for PingCmd {
         };
         let info = net.wifi_info()?;
         if !info.connected {
-            return Ok(CommandOutput::Text(
-                "ping: WiFi not connected".to_string(),
-            ));
+            return Ok(CommandOutput::Text("ping: WiFi not connected".to_string()));
         }
         // The actual DNS resolve / ICMP ping would be handled by the
         // platform-specific implementation. For now, just report status.
@@ -124,9 +128,7 @@ impl Command for HttpCmd {
     }
     fn execute(&self, args: &[&str], env: &mut Environment<'_>) -> Result<CommandOutput> {
         if args.is_empty() {
-            return Err(OasisError::Command(
-                "usage: http <url>".to_string(),
-            ));
+            return Err(OasisError::Command("usage: http <url>".to_string()));
         }
         let Some(net) = env.network else {
             return Ok(CommandOutput::Text(
@@ -139,7 +141,11 @@ impl Command for HttpCmd {
                 let body_text = String::from_utf8_lossy(&resp.body);
                 // Truncate long responses for terminal display.
                 let truncated = if body_text.len() > 2048 {
-                    format!("{}...\n(truncated, {} bytes total)", &body_text[..2048], resp.body.len())
+                    format!(
+                        "{}...\n(truncated, {} bytes total)",
+                        &body_text[..2048],
+                        resp.body.len()
+                    )
                 } else {
                     body_text.into_owned()
                 };
@@ -149,7 +155,7 @@ impl Command for HttpCmd {
                     resp.body.len(),
                     truncated,
                 )))
-            }
+            },
             Err(e) => Ok(CommandOutput::Text(format!("http: {e}"))),
         }
     }
@@ -199,7 +205,7 @@ mod tests {
             CommandOutput::Text(s) => {
                 assert!(s.contains("unavailable"));
                 assert!(s.contains("disconnected"));
-            }
+            },
             _ => panic!("expected text"),
         }
     }
