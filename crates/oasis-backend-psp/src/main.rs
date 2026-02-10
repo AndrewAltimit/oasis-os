@@ -792,10 +792,7 @@ fn psp_main() {
                         Ok(Some(text)) => {
                             term_input = text;
                         }
-                        Ok(None) => {} // Cancelled
-                        Err(e) => {
-                            term_lines.push(format!("OSK error: {:?}", e));
-                        }
+                        Ok(None) | Err(_) => {} // Cancelled or unsupported (PPSSPP)
                     }
                 }
                 InputEvent::ButtonPress(Button::Up) if classic_view == ClassicView::Terminal => {
@@ -1313,7 +1310,7 @@ fn draw_desktop_taskbar(backend: &mut PspBackend, wm: &WindowManager) {
                 let label_w = (app.title.len() as i32 * 8 + 8) as u32;
                 backend.fill_rect_inner(tx - 2, bar_y + 1, label_w, TASKBAR_H - 2, Color::rgba(60, 90, 160, 140));
             }
-            backend.draw_text_inner(app.title, tx + 2, bar_y + 2, 8, label_clr);
+            backend.draw_text_inner(app.title, tx + 2, bar_y + 1, 8, label_clr);
             tx += app.title.len() as i32 * 8 + 12;
         }
     }
