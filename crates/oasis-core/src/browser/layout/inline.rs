@@ -46,6 +46,9 @@ pub fn layout_inline(parent: &mut LayoutBox, measurer: &dyn TextMeasurer) {
     let mut cursor_y = parent.dimensions.content.y;
     let last_line_idx = lines.len().saturating_sub(1);
 
+    // Track (line, line_y) pairs for child reconstruction.
+    let mut line_positions: Vec<f32> = Vec::new();
+
     for (i, line) in lines.iter_mut().enumerate() {
         // Compute line height (max of fragment heights).
         let line_height = line
@@ -70,11 +73,12 @@ pub fn layout_inline(parent: &mut LayoutBox, measurer: &dyn TextMeasurer) {
             parent.dimensions.content.x,
         );
 
+        line_positions.push(cursor_y);
         cursor_y += line.height;
     }
 
     // Store the lines' fragments back as children (flattened).
-    parent.children = lines_to_children(lines);
+    parent.children = lines_to_children(lines, &line_positions);
 
     // Update parent height.
     parent.dimensions.content.height = cursor_y - parent.dimensions.content.y;
@@ -136,25 +140,14 @@ fn text_fragments_for_inline(
 ) -> Vec<InlineFragment> {
     let style = &layout_box.style;
 
-    // If this is a leaf inline box representing a text node, extract
-    // its text. In our layout tree, text nodes become inline boxes
-    // with a node id. The actual text lives in the DOM; here we use
-    // the fact that text-only inline boxes have no children and we
-    // synthesize word fragments.
-    //
-    // For simplicity, we treat the node presence as evidence of a text
-    // node and produce fragments for the box itself (the text content
-    // will be filled during paint from the DOM). However, for layout
-    // purposes we need *some* text to measure. We use a placeholder
-    // approach: the inline box's children are recursively checked, and
-    // leaf inline boxes with no children are treated as single-word
-    // text runs.
+    // If this is a leaf inline box with stored text content, produce
+    // properly measured word fragments for line breaking.
+    if let Some(ref text) = layout_box.text {
+        return make_text_fragments(text, style, layout_box.node, measurer);
+    }
+
     if layout_box.children.is_empty() {
-        // Leaf inline: produce a single text fragment.
-        // The actual text is "unknown" at layout time without the DOM
-        // reference, so we emit a zero-width placeholder. In a full
-        // implementation the text would be looked up from the DOM.
-        // For testing, callers build InlineFragments directly.
+        // Leaf inline with no text: emit a zero-width placeholder.
         return vec![InlineFragment::Text {
             text: String::new(),
             x: 0.0,
@@ -165,7 +158,19 @@ fn text_fragments_for_inline(
     }
 
     // Recurse into children.
-    collect_inline_fragments(&layout_box.children, measurer)
+    let mut frags = collect_inline_fragments(&layout_box.children, measurer);
+
+    // Propagate this element's node ID to child fragments so that
+    // link elements (<a>) are tracked through the paint pass.
+    if let Some(node_id) = layout_box.node {
+        for frag in &mut frags {
+            if let InlineFragment::Text { node, .. } = frag {
+                *node = Some(node_id);
+            }
+        }
+    }
+
+    frags
 }
 
 /// Get the dimensions of a replaced inline element.
@@ -315,15 +320,48 @@ fn set_fragment_x(frag: &mut InlineFragment, x: f32) {
 
 /// Flatten line box fragments into layout box children for storage.
 ///
-/// This extracts `InlineBox` children and stores the line structure
-/// implicitly. For the current implementation, we keep the parent's
-/// children as-is (the parent's height was already set).
-fn lines_to_children(lines: Vec<LineBox>) -> Vec<LayoutBox> {
+/// Converts all fragments (text, inline boxes, replaced) into
+/// positioned `LayoutBox` children so the paint pass can render
+/// text and record link hit regions.
+fn lines_to_children(lines: Vec<LineBox>, line_positions: &[f32]) -> Vec<LayoutBox> {
     let mut children = Vec::new();
-    for line in lines {
+    for (line, &line_y) in lines.into_iter().zip(line_positions.iter()) {
+        let line_height = line.height;
         for frag in line.fragments {
-            if let InlineFragment::InlineBox { layout_box } = frag {
-                children.push(layout_box);
+            match frag {
+                InlineFragment::Text {
+                    text,
+                    x,
+                    width,
+                    style,
+                    node,
+                } => {
+                    let mut lb = LayoutBox::new(BoxType::Inline, style.clone(), node);
+                    lb.text = Some(text);
+                    lb.dimensions.content.x = x;
+                    lb.dimensions.content.y = line_y;
+                    lb.dimensions.content.width = width;
+                    lb.dimensions.content.height = line_height;
+                    children.push(lb);
+                },
+                InlineFragment::InlineBox { layout_box } => {
+                    children.push(layout_box);
+                },
+                InlineFragment::ReplacedInline {
+                    replaced,
+                    x,
+                    width,
+                    height,
+                    style,
+                    node,
+                } => {
+                    let mut lb = LayoutBox::new(BoxType::Replaced(replaced), style, node);
+                    lb.dimensions.content.x = x;
+                    lb.dimensions.content.y = line_y;
+                    lb.dimensions.content.width = width;
+                    lb.dimensions.content.height = height;
+                    children.push(lb);
+                },
             }
         }
     }

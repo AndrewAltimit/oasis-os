@@ -181,6 +181,8 @@ pub struct LayoutBox {
     pub children: Vec<LayoutBox>,
     pub node: Option<NodeId>,
     pub style: ComputedStyle,
+    /// Text content for inline leaf boxes representing DOM text nodes.
+    pub text: Option<String>,
 }
 
 impl LayoutBox {
@@ -192,6 +194,7 @@ impl LayoutBox {
             children: Vec::new(),
             node,
             style,
+            text: None,
         }
     }
 

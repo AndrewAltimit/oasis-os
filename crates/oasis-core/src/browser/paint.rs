@@ -306,6 +306,21 @@ fn paint_inline_content(
     ctx: &mut PaintContext,
     link_map: &HashMap<NodeId, String>,
 ) -> Result<()> {
+    // If this inline box carries text content, render it directly.
+    if let Some(ref text) = layout_box.text {
+        let content = &layout_box.dimensions.content;
+        paint_text(
+            text,
+            content.x,
+            content.y,
+            &layout_box.style,
+            backend,
+            offset_x,
+            offset_y,
+            ctx,
+        )?;
+    }
+
     for child in &layout_box.children {
         paint_box(child, backend, offset_x, offset_y, ctx, link_map)?;
     }
@@ -316,7 +331,7 @@ fn paint_inline_content(
 /// line-through).
 ///
 /// Called by [`paint_line_box`] when rendering inline fragment text runs.
-#[allow(dead_code, clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments)]
 fn paint_text(
     text: &str,
     x: f32,
@@ -519,139 +534,10 @@ fn has_text_content(layout_box: &LayoutBox) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::backend::{Color, TextureId};
+    use crate::backend::Color;
     use crate::browser::css::values::ComputedStyle;
     use crate::browser::layout::box_model::{EdgeSizes, Rect};
-
-    // ---------------------------------------------------------------
-    // Mock backend that records calls
-    // ---------------------------------------------------------------
-
-    #[derive(Debug, Clone)]
-    #[allow(dead_code)]
-    enum DrawCall {
-        FillRect {
-            x: i32,
-            y: i32,
-            w: u32,
-            h: u32,
-            color: Color,
-        },
-        DrawText {
-            text: String,
-            x: i32,
-            y: i32,
-            font_size: u16,
-            color: Color,
-        },
-        Blit {
-            tex: TextureId,
-            x: i32,
-            y: i32,
-            w: u32,
-            h: u32,
-        },
-    }
-
-    struct MockBackend {
-        calls: Vec<DrawCall>,
-    }
-
-    impl MockBackend {
-        fn new() -> Self {
-            Self { calls: Vec::new() }
-        }
-
-        fn fill_rect_count(&self) -> usize {
-            self.calls
-                .iter()
-                .filter(|c| matches!(c, DrawCall::FillRect { .. }))
-                .count()
-        }
-
-        fn draw_text_count(&self) -> usize {
-            self.calls
-                .iter()
-                .filter(|c| matches!(c, DrawCall::DrawText { .. }))
-                .count()
-        }
-    }
-
-    impl SdiBackend for MockBackend {
-        fn init(&mut self, _width: u32, _height: u32) -> Result<()> {
-            Ok(())
-        }
-
-        fn clear(&mut self, _color: Color) -> Result<()> {
-            Ok(())
-        }
-
-        fn blit(&mut self, tex: TextureId, x: i32, y: i32, w: u32, h: u32) -> Result<()> {
-            self.calls.push(DrawCall::Blit { tex, x, y, w, h });
-            Ok(())
-        }
-
-        fn fill_rect(&mut self, x: i32, y: i32, w: u32, h: u32, color: Color) -> Result<()> {
-            self.calls.push(DrawCall::FillRect { x, y, w, h, color });
-            Ok(())
-        }
-
-        fn draw_text(
-            &mut self,
-            text: &str,
-            x: i32,
-            y: i32,
-            font_size: u16,
-            color: Color,
-        ) -> Result<()> {
-            self.calls.push(DrawCall::DrawText {
-                text: text.to_string(),
-                x,
-                y,
-                font_size,
-                color,
-            });
-            Ok(())
-        }
-
-        fn swap_buffers(&mut self) -> Result<()> {
-            Ok(())
-        }
-
-        fn load_texture(
-            &mut self,
-            _width: u32,
-            _height: u32,
-            _rgba_data: &[u8],
-        ) -> Result<TextureId> {
-            Ok(TextureId(0))
-        }
-
-        fn destroy_texture(&mut self, _tex: TextureId) -> Result<()> {
-            Ok(())
-        }
-
-        fn set_clip_rect(&mut self, _x: i32, _y: i32, _w: u32, _h: u32) -> Result<()> {
-            Ok(())
-        }
-
-        fn reset_clip_rect(&mut self) -> Result<()> {
-            Ok(())
-        }
-
-        fn measure_text(&self, text: &str, _font_size: u16) -> u32 {
-            // 8 pixels per character (matching 8x8 bitmap font).
-            text.len() as u32 * 8
-        }
-
-        fn read_pixels(&self, _x: i32, _y: i32, _w: u32, _h: u32) -> Result<Vec<u8>> {
-            Ok(Vec::new())
-        }
-
-        fn shutdown(&mut self) -> Result<()> {
-            Ok(())
-        }
-    }
+    use crate::browser::test_utils::{DrawCall, MockBackend};
 
     // ---------------------------------------------------------------
     // Helper: build a simple block layout box

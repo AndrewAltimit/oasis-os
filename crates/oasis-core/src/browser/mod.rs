@@ -21,6 +21,9 @@ pub mod reader;
 pub mod scroll;
 pub mod skin;
 
+#[cfg(test)]
+pub(crate) mod test_utils;
+
 // -----------------------------------------------------------------------
 // Public re-exports
 // -----------------------------------------------------------------------
@@ -1052,6 +1055,7 @@ fn push_escaped(out: &mut String, text: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::browser::test_utils::MockBackend;
     use crate::vfs::MemoryVfs;
 
     // ---------------------------------------------------------------
@@ -1345,5 +1349,408 @@ mod tests {
         };
         browser4.process_response(response);
         assert!(browser4.document.is_some());
+    }
+
+    // ===============================================================
+    // Integration tests: full navigate -> parse -> layout -> paint
+    // ===============================================================
+
+    // ---------------------------------------------------------------
+    // Test: page renders text content
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn page_renders_text_content() {
+        let vfs = test_vfs();
+        let mut browser = make_browser();
+        browser.set_window(0, 0, 480, 272);
+        browser.navigate_vfs("vfs://sites/home/index.html", &vfs);
+
+        let mut backend = MockBackend::new();
+        browser.paint(&mut backend).unwrap();
+
+        assert!(
+            backend.has_text("Welcome"),
+            "page should render 'Welcome' heading text"
+        );
+        assert!(
+            backend.draw_text_count() > 0,
+            "should have at least one draw_text call"
+        );
+        assert!(
+            backend.fill_rect_count() > 0,
+            "should have fill_rect calls for chrome and backgrounds"
+        );
+    }
+
+    // ---------------------------------------------------------------
+    // Test: page renders links as clickable regions
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn page_renders_link_regions() {
+        let vfs = test_vfs();
+        let mut browser = make_browser();
+        browser.set_window(0, 0, 480, 272);
+        browser.navigate_vfs("vfs://sites/home/index.html", &vfs);
+
+        let mut backend = MockBackend::new();
+        browser.paint(&mut backend).unwrap();
+
+        assert!(
+            !browser.link_map.is_empty(),
+            "link_map should contain at least one link"
+        );
+        let has_page2 = browser
+            .link_map
+            .iter()
+            .any(|l| l.href.contains("page2.html"));
+        assert!(has_page2, "should have a link to page2.html");
+    }
+
+    // ---------------------------------------------------------------
+    // Test: navigation updates content
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn navigation_updates_content() {
+        let vfs = test_vfs();
+        let mut browser = make_browser();
+        browser.set_window(0, 0, 480, 272);
+        browser.navigate_vfs("vfs://sites/home/index.html", &vfs);
+
+        let mut backend = MockBackend::new();
+        browser.paint(&mut backend).unwrap();
+        assert!(backend.has_text("Welcome"), "page1 should show Welcome");
+
+        // Navigate to page 2.
+        browser.navigate_vfs("vfs://sites/home/page2.html", &vfs);
+        let mut backend2 = MockBackend::new();
+        browser.paint(&mut backend2).unwrap();
+        assert!(
+            backend2.has_text("Page Two"),
+            "page2 should show 'Page Two'"
+        );
+    }
+
+    // ---------------------------------------------------------------
+    // Test: chrome always renders
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn chrome_always_renders() {
+        let vfs = test_vfs();
+        let mut browser = make_browser();
+        browser.set_window(0, 0, 480, 272);
+        browser.navigate_vfs("vfs://sites/home/index.html", &vfs);
+
+        let mut backend = MockBackend::new();
+        browser.paint(&mut backend).unwrap();
+
+        // Chrome buttons: "<", ">", "H"
+        assert!(backend.has_text("<"), "should render back button '<'");
+        assert!(backend.has_text(">"), "should render forward button '>'");
+        assert!(backend.has_text("H"), "should render home button 'H'");
+        // URL bar should show the current URL.
+        assert!(backend.has_text("vfs://"), "should render URL in the bar");
+    }
+
+    // ---------------------------------------------------------------
+    // Test: error page renders on missing VFS path
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn error_page_renders_on_missing_path() {
+        let vfs = test_vfs();
+        let mut browser = make_browser();
+        browser.set_window(0, 0, 480, 272);
+        browser.navigate_vfs("vfs://nonexistent/page.html", &vfs);
+
+        assert_eq!(browser.loading_state(), LoadingState::Error);
+
+        let mut backend = MockBackend::new();
+        browser.paint(&mut backend).unwrap();
+
+        // Should render some error message text.
+        assert!(
+            backend.draw_text_count() > 0,
+            "error page should render text"
+        );
+    }
+
+    // ---------------------------------------------------------------
+    // Test: Gemini page renders text
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn gemini_page_renders_text() {
+        let vfs = test_vfs();
+        let mut browser = make_browser();
+        browser.set_window(0, 0, 480, 272);
+        browser.navigate_vfs("vfs://sites/gem.example/page.gmi", &vfs);
+
+        let mut backend = MockBackend::new();
+        browser.paint(&mut backend).unwrap();
+
+        assert!(
+            backend.has_text("Gemini Page"),
+            "should render Gemini heading text"
+        );
+    }
+
+    // ---------------------------------------------------------------
+    // Test: content height is nonzero after paint
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn content_height_nonzero_after_paint() {
+        let vfs = test_vfs();
+        let mut browser = make_browser();
+        browser.set_window(0, 0, 480, 272);
+        browser.navigate_vfs("vfs://sites/home/index.html", &vfs);
+
+        let mut backend = MockBackend::new();
+        browser.paint(&mut backend).unwrap();
+
+        assert!(
+            browser.scroll().content_height > 0,
+            "content_height should be nonzero for a page with content"
+        );
+    }
+
+    // ===============================================================
+    // URL bar editing unit tests
+    // ===============================================================
+
+    // ---------------------------------------------------------------
+    // Test: URL bar click sets focus
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn url_bar_click_sets_focus() {
+        let vfs = test_vfs();
+        let mut browser = make_browser();
+        browser.set_window(0, 0, 480, 272);
+        browser.navigate_vfs("vfs://sites/home/index.html", &vfs);
+
+        assert_eq!(browser.focus, Focus::Content);
+
+        // Click in URL bar area (between buttons).
+        let bw = browser.config.button_width;
+        let click_x = (bw * 2 + 10) as i32;
+        let click_y = browser.config.url_bar_height as i32 / 2;
+        browser.handle_click(click_x, click_y, &vfs);
+
+        assert_eq!(browser.focus, Focus::UrlBar);
+        assert_eq!(browser.url_input, "vfs://sites/home/index.html");
+        assert_eq!(browser.url_cursor, browser.url_input.len());
+    }
+
+    // ---------------------------------------------------------------
+    // Test: URL bar typing inserts chars
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn url_bar_typing_inserts_chars() {
+        let vfs = test_vfs();
+        let mut browser = make_browser();
+        browser.set_window(0, 0, 480, 272);
+        browser.navigate_vfs("vfs://sites/home/index.html", &vfs);
+
+        // Enter URL bar focus.
+        let bw = browser.config.button_width;
+        browser.handle_click((bw * 2 + 10) as i32, 5, &vfs);
+        assert_eq!(browser.focus, Focus::UrlBar);
+
+        let base_len = browser.url_input.len();
+
+        browser.handle_input(&InputEvent::TextInput('a'), &vfs);
+        browser.handle_input(&InputEvent::TextInput('b'), &vfs);
+        browser.handle_input(&InputEvent::TextInput('c'), &vfs);
+
+        assert_eq!(browser.url_input.len(), base_len + 3);
+        assert!(browser.url_input.ends_with("abc"));
+        assert_eq!(browser.url_cursor, browser.url_input.len());
+    }
+
+    // ---------------------------------------------------------------
+    // Test: URL bar backspace deletes
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn url_bar_backspace_deletes() {
+        let vfs = test_vfs();
+        let mut browser = make_browser();
+        browser.set_window(0, 0, 480, 272);
+        browser.navigate_vfs("vfs://sites/home/index.html", &vfs);
+
+        // Enter URL bar focus and type some chars.
+        let bw = browser.config.button_width;
+        browser.handle_click((bw * 2 + 10) as i32, 5, &vfs);
+        browser.handle_input(&InputEvent::TextInput('x'), &vfs);
+        browser.handle_input(&InputEvent::TextInput('y'), &vfs);
+        let before_bs = browser.url_input.len();
+
+        browser.handle_input(&InputEvent::Backspace, &vfs);
+        assert_eq!(browser.url_input.len(), before_bs - 1);
+        assert!(browser.url_input.ends_with('x'));
+    }
+
+    // ---------------------------------------------------------------
+    // Test: URL bar confirm navigates
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn url_bar_confirm_navigates() {
+        let vfs = test_vfs();
+        let mut browser = make_browser();
+        browser.set_window(0, 0, 480, 272);
+        browser.navigate_vfs("vfs://sites/home/index.html", &vfs);
+
+        // Enter URL bar and replace content.
+        let bw = browser.config.button_width;
+        browser.handle_click((bw * 2 + 10) as i32, 5, &vfs);
+
+        // Clear the input and type a new URL.
+        browser.url_input.clear();
+        browser.url_cursor = 0;
+        let target = "vfs://sites/home/page2.html";
+        for ch in target.chars() {
+            browser.handle_input(&InputEvent::TextInput(ch), &vfs);
+        }
+
+        // Press Confirm.
+        browser.handle_input(&InputEvent::ButtonPress(Button::Confirm), &vfs);
+
+        assert_eq!(browser.focus, Focus::Content);
+        assert_eq!(browser.current_url(), Some("vfs://sites/home/page2.html"));
+    }
+
+    // ---------------------------------------------------------------
+    // Test: URL bar cancel discards
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn url_bar_cancel_discards() {
+        let vfs = test_vfs();
+        let mut browser = make_browser();
+        browser.set_window(0, 0, 480, 272);
+        browser.navigate_vfs("vfs://sites/home/index.html", &vfs);
+
+        let original_url = browser.current_url().unwrap().to_string();
+
+        // Enter URL bar and modify.
+        let bw = browser.config.button_width;
+        browser.handle_click((bw * 2 + 10) as i32, 5, &vfs);
+        browser.handle_input(&InputEvent::TextInput('z'), &vfs);
+
+        // Press Cancel.
+        browser.handle_input(&InputEvent::ButtonPress(Button::Cancel), &vfs);
+
+        assert_eq!(browser.focus, Focus::Content);
+        assert!(browser.url_input.is_empty());
+        assert_eq!(browser.current_url(), Some(original_url.as_str()));
+    }
+
+    // ---------------------------------------------------------------
+    // Test: URL bar left/right moves cursor
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn url_bar_left_right_moves_cursor() {
+        let vfs = test_vfs();
+        let mut browser = make_browser();
+        browser.set_window(0, 0, 480, 272);
+        browser.navigate_vfs("vfs://sites/home/index.html", &vfs);
+
+        // Enter URL bar.
+        let bw = browser.config.button_width;
+        browser.handle_click((bw * 2 + 10) as i32, 5, &vfs);
+        let end_pos = browser.url_cursor;
+        assert!(end_pos > 0);
+
+        // Move left.
+        browser.handle_input(&InputEvent::ButtonPress(Button::Left), &vfs);
+        assert!(browser.url_cursor < end_pos);
+
+        let after_left = browser.url_cursor;
+
+        // Move right.
+        browser.handle_input(&InputEvent::ButtonPress(Button::Right), &vfs);
+        assert!(browser.url_cursor > after_left);
+    }
+
+    // ---------------------------------------------------------------
+    // Test: content click exits URL bar
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn content_click_exits_url_bar() {
+        let vfs = test_vfs();
+        let mut browser = make_browser();
+        browser.set_window(0, 0, 480, 272);
+        browser.navigate_vfs("vfs://sites/home/index.html", &vfs);
+
+        // Enter URL bar focus.
+        let bw = browser.config.button_width;
+        browser.handle_click((bw * 2 + 10) as i32, 5, &vfs);
+        assert_eq!(browser.focus, Focus::UrlBar);
+
+        // Click in content area (below URL bar).
+        let content_y = browser.config.url_bar_height as i32 + 50;
+        browser.handle_click(100, content_y, &vfs);
+        assert_eq!(browser.focus, Focus::Content);
+    }
+
+    // ===============================================================
+    // Paint pipeline tests for chrome rendering
+    // ===============================================================
+
+    // ---------------------------------------------------------------
+    // Test: paint chrome shows editing buffer in URL bar mode
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn paint_chrome_url_bar_editing() {
+        let vfs = test_vfs();
+        let mut browser = make_browser();
+        browser.set_window(0, 0, 480, 272);
+        browser.navigate_vfs("vfs://sites/home/index.html", &vfs);
+
+        // Enter URL bar and type something.
+        let bw = browser.config.button_width;
+        browser.handle_click((bw * 2 + 10) as i32, 5, &vfs);
+        browser.handle_input(&InputEvent::TextInput('!'), &vfs);
+
+        let mut backend = MockBackend::new();
+        browser.paint(&mut backend).unwrap();
+
+        // The URL bar should show the editing buffer (containing '!').
+        assert!(
+            backend.has_text("!"),
+            "URL bar should display the editing buffer text"
+        );
+    }
+
+    // ---------------------------------------------------------------
+    // Test: paint chrome normal mode shows URL
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn paint_chrome_normal_mode_shows_url() {
+        let vfs = test_vfs();
+        let mut browser = make_browser();
+        browser.set_window(0, 0, 480, 272);
+        browser.navigate_vfs("vfs://sites/home/index.html", &vfs);
+
+        assert_eq!(browser.focus, Focus::Content);
+
+        let mut backend = MockBackend::new();
+        browser.paint(&mut backend).unwrap();
+
+        assert!(
+            backend.has_text("vfs://sites/home/index.html"),
+            "chrome should display the current URL"
+        );
     }
 }

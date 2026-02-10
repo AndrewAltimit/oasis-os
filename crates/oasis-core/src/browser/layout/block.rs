@@ -122,7 +122,9 @@ fn build_box_for_node(
             let style = find_inherited_style(doc, node_id, styles);
             let mut inline_style = style;
             inline_style.display = Display::Inline;
-            Some(LayoutBox::new(BoxType::Inline, inline_style, Some(node_id)))
+            let mut lb = LayoutBox::new(BoxType::Inline, inline_style, Some(node_id));
+            lb.text = Some(text.clone());
+            Some(lb)
         },
         NodeKind::Comment(_) | NodeKind::Document => None,
     }
@@ -254,6 +256,7 @@ fn make_anonymous_block(children: Vec<LayoutBox>) -> LayoutBox {
             display: Display::Block,
             ..ComputedStyle::default()
         },
+        text: None,
     }
 }
 
