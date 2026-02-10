@@ -69,6 +69,10 @@ pub trait SdiBackend {
     /// Reset clipping to the full screen.
     fn reset_clip_rect(&mut self) -> Result<()>;
 
+    /// Measure the width of a text string at the given font size.
+    /// Returns width in pixels. Used by inline layout for line breaking.
+    fn measure_text(&self, text: &str, font_size: u16) -> u32;
+
     /// Read the current framebuffer as RGBA pixel data.
     /// Returns (width, height, rgba_bytes).
     fn read_pixels(&self, x: i32, y: i32, w: u32, h: u32) -> Result<Vec<u8>>;

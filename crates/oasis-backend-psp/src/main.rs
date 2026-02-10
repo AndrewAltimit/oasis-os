@@ -186,6 +186,11 @@ static APPS: &[AppEntry] = &[
         title: "Sys Monitor",
         color: Color::rgb(60, 179, 113),
     },
+    AppEntry {
+        id: "browser",
+        title: "Browser",
+        color: Color::rgb(50, 120, 200),
+    },
 ];
 
 // ---------------------------------------------------------------------------

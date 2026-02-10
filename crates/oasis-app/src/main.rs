@@ -12,6 +12,7 @@ use oasis_backend_sdl::SdlBackend;
 use oasis_core::apps::{AppAction, AppRunner};
 use oasis_core::backend::{Color, InputBackend, SdiBackend, TextureId};
 use oasis_core::bottombar::{BottomBar, MediaTab};
+use oasis_core::browser::BrowserWidget;
 use oasis_core::config::OasisConfig;
 use oasis_core::cursor::{self, CursorState};
 use oasis_core::dashboard::{DashboardConfig, DashboardState, discover_apps};
@@ -115,6 +116,9 @@ fn main() -> Result<()> {
     let mut wm = WindowManager::new(config.screen_width, config.screen_height);
     let mut open_runners: Vec<(String, AppRunner)> = Vec::new();
 
+    // Browser widget state (lives outside open_runners because it's not an AppRunner).
+    let mut browser: Option<BrowserWidget> = None;
+
     // Networking state.
     let mut net_backend = StdNetworkBackend::new();
     let mut listener: Option<RemoteListener> = None;
@@ -215,8 +219,24 @@ fn main() -> Result<()> {
                         match wm_event {
                             WmEvent::WindowClosed(id) => {
                                 open_runners.retain(|(rid, _)| *rid != id);
+                                if id == "browser" {
+                                    browser = None;
+                                }
                                 if wm.window_count() == 0 {
                                     mode = Mode::Dashboard;
+                                }
+                            },
+                            WmEvent::ContentClick(id, lx, ly) => {
+                                if id == "browser"
+                                    && let Some(ref mut bw) = browser
+                                {
+                                    // Convert content-local coords to absolute.
+                                    let abs_x = bw.window_x() + lx;
+                                    let abs_y = bw.window_y() + ly;
+                                    bw.handle_input(
+                                        &InputEvent::PointerClick { x: abs_x, y: abs_y },
+                                        &vfs,
+                                    );
                                 }
                             },
                             WmEvent::DesktopClick(_, _) => {
@@ -239,6 +259,9 @@ fn main() -> Result<()> {
                         if let Some(active_id) = wm.active_window().map(|s| s.to_string()) {
                             let _ = wm.close_window(&active_id, &mut sdi);
                             open_runners.retain(|(rid, _)| *rid != active_id);
+                            if active_id == "browser" {
+                                browser = None;
+                            }
                             if wm.window_count() == 0 {
                                 mode = Mode::Dashboard;
                             }
@@ -249,24 +272,43 @@ fn main() -> Result<()> {
                     InputEvent::ButtonPress(Button::Start) => {
                         mode = Mode::Terminal;
                     },
-                    InputEvent::ButtonPress(btn) => {
-                        // Forward D-pad and Confirm to the active window's runner.
-                        if let Some(active_id) = wm.active_window().map(|s| s.to_string())
-                            && let Some((_, runner)) =
-                                open_runners.iter_mut().find(|(id, _)| *id == active_id)
+                    InputEvent::TextInput(ch) => {
+                        if wm.active_window() == Some("browser")
+                            && let Some(ref mut bw) = browser
                         {
-                            match runner.handle_input(btn, &vfs) {
-                                AppAction::Exit => {
-                                    let _ = wm.close_window(&active_id, &mut sdi);
-                                    open_runners.retain(|(rid, _)| *rid != active_id);
-                                    if wm.window_count() == 0 {
-                                        mode = Mode::Dashboard;
-                                    }
-                                },
-                                AppAction::SwitchToTerminal => {
-                                    mode = Mode::Terminal;
-                                },
-                                AppAction::None => {},
+                            bw.handle_input(&InputEvent::TextInput(*ch), &vfs);
+                        }
+                    },
+                    InputEvent::Backspace => {
+                        if wm.active_window() == Some("browser")
+                            && let Some(ref mut bw) = browser
+                        {
+                            bw.handle_input(&InputEvent::Backspace, &vfs);
+                        }
+                    },
+                    InputEvent::ButtonPress(btn) => {
+                        if let Some(active_id) = wm.active_window().map(|s| s.to_string()) {
+                            if active_id == "browser" {
+                                // Route input to browser widget.
+                                if let Some(ref mut bw) = browser {
+                                    bw.handle_input(&InputEvent::ButtonPress(*btn), &vfs);
+                                }
+                            } else if let Some((_, runner)) =
+                                open_runners.iter_mut().find(|(id, _)| *id == active_id)
+                            {
+                                match runner.handle_input(btn, &vfs) {
+                                    AppAction::Exit => {
+                                        let _ = wm.close_window(&active_id, &mut sdi);
+                                        open_runners.retain(|(rid, _)| *rid != active_id);
+                                        if wm.window_count() == 0 {
+                                            mode = Mode::Dashboard;
+                                        }
+                                    },
+                                    AppAction::SwitchToTerminal => {
+                                        mode = Mode::Terminal;
+                                    },
+                                    AppAction::None => {},
+                                }
                             }
                         }
                     },
@@ -313,6 +355,28 @@ fn main() -> Result<()> {
                         log::info!("Launching app: {}", app.title);
                         if app.title == "Terminal" {
                             mode = Mode::Terminal;
+                        } else if app.title == "Browser" {
+                            let win_id = "browser";
+                            if wm.get_window(win_id).is_some() {
+                                let _ = wm.focus_window(win_id, &mut sdi);
+                            } else {
+                                let wc = WindowConfig {
+                                    id: win_id.to_string(),
+                                    title: "Browser".to_string(),
+                                    x: None,
+                                    y: None,
+                                    width: 380,
+                                    height: 220,
+                                    window_type: WindowType::AppWindow,
+                                };
+                                let _ = wm.create_window(&wc, &mut sdi);
+                                let mut bw = BrowserWidget::new(Default::default());
+                                bw.set_window(0, 0, 380, 220);
+                                let home = bw.config.features.home_url.clone();
+                                bw.navigate_vfs(&home, &vfs);
+                                browser = Some(bw);
+                            }
+                            mode = Mode::Desktop;
                         } else {
                             let win_id = app.title.to_lowercase().replace(' ', "_");
                             if wm.get_window(&win_id).is_some() {
@@ -358,6 +422,29 @@ fn main() -> Result<()> {
                                             log::info!("Click-launching app: {}", app.title);
                                             if app.title == "Terminal" {
                                                 mode = Mode::Terminal;
+                                            } else if app.title == "Browser" {
+                                                let win_id = "browser";
+                                                if wm.get_window(win_id).is_some() {
+                                                    let _ = wm.focus_window(win_id, &mut sdi);
+                                                } else {
+                                                    let wc = WindowConfig {
+                                                        id: win_id.to_string(),
+                                                        title: "Browser".to_string(),
+                                                        x: None,
+                                                        y: None,
+                                                        width: 380,
+                                                        height: 220,
+                                                        window_type: WindowType::AppWindow,
+                                                    };
+                                                    let _ = wm.create_window(&wc, &mut sdi);
+                                                    let mut bw =
+                                                        BrowserWidget::new(Default::default());
+                                                    bw.set_window(0, 0, 380, 220);
+                                                    let home = bw.config.features.home_url.clone();
+                                                    bw.navigate_vfs(&home, &vfs);
+                                                    browser = Some(bw);
+                                                }
+                                                mode = Mode::Desktop;
                                             } else {
                                                 let win_id =
                                                     app.title.to_lowercase().replace(' ', "_");
@@ -552,6 +639,17 @@ fn main() -> Result<()> {
                                     }
                                 }
                             },
+                            Ok(CommandOutput::BrowserSandbox { enable }) => {
+                                if let Some(ref mut bw) = browser {
+                                    bw.config.features.sandbox_only = enable;
+                                }
+                                let state = if enable {
+                                    "on (VFS only)"
+                                } else {
+                                    "off (HTTP enabled)"
+                                };
+                                output_lines.push(format!("Browser sandbox: {state}"));
+                            },
                             Err(e) => output_lines.push(format!("error: {e}")),
                         }
                         cwd = env.cwd;
@@ -601,6 +699,17 @@ fn main() -> Result<()> {
                     Ok(CommandOutput::ListenToggle { .. })
                     | Ok(CommandOutput::RemoteConnect { .. }) => {
                         "Not available via remote.".to_string()
+                    },
+                    Ok(CommandOutput::BrowserSandbox { enable }) => {
+                        if let Some(ref mut bw) = browser {
+                            bw.config.features.sandbox_only = enable;
+                        }
+                        let state = if enable {
+                            "on (VFS only)"
+                        } else {
+                            "off (HTTP enabled)"
+                        };
+                        format!("Browser sandbox: {state}")
                     },
                     Err(e) => format!("error: {e}"),
                 };
@@ -686,7 +795,16 @@ fn main() -> Result<()> {
         backend.clear(bg_color)?;
         if mode == Mode::Desktop && wm.window_count() > 0 {
             wm.draw_with_clips(&sdi, &mut backend, |window_id, cx, cy, cw, ch, be| {
-                if let Some((_, runner)) = open_runners.iter().find(|(id, _)| id == window_id) {
+                if window_id == "browser" {
+                    if let Some(ref mut bw) = browser {
+                        bw.set_window(cx, cy, cw, ch);
+                        bw.paint(be)
+                    } else {
+                        Ok(())
+                    }
+                } else if let Some((_, runner)) =
+                    open_runners.iter().find(|(id, _)| id == window_id)
+                {
                     runner.draw_windowed(cx, cy, cw, ch, be)
                 } else {
                     Ok(())
@@ -797,9 +915,34 @@ fn populate_demo_vfs(vfs: &mut MemoryVfs) {
         "Photo Viewer",
         "Package Manager",
         "System Monitor",
+        "Browser",
     ] {
         vfs.mkdir(&format!("/apps/{name}")).unwrap();
     }
+
+    // Browser home page content.
+    vfs.mkdir("/sites").unwrap();
+    vfs.mkdir("/sites/home").unwrap();
+    vfs.write(
+        "/sites/home/index.html",
+        b"<html><head><title>OASIS Home</title></head><body>\
+          <h1>Welcome to OASIS Browser</h1>\
+          <p>A lightweight HTML/CSS browser for OASIS_OS.</p>\
+          <ul>\
+          <li><a href=\"/sites/home/about.html\">About OASIS Browser</a></li>\
+          </ul>\
+          </body></html>",
+    )
+    .unwrap();
+    vfs.write(
+        "/sites/home/about.html",
+        b"<html><head><title>About</title></head><body>\
+          <h1>About OASIS Browser</h1>\
+          <p>Supports HTML, CSS, and Gemini protocol.</p>\
+          <p><a href=\"/sites/home/index.html\">Back to home</a></p>\
+          </body></html>",
+    )
+    .unwrap();
 
     vfs.mkdir("/home/user/music").unwrap();
     vfs.mkdir("/home/user/photos").unwrap();

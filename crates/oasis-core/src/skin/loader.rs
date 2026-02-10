@@ -71,6 +71,9 @@ pub struct SkinFeatures {
     /// Whether the file browser command (ls/cd/cat) is available.
     #[serde(default = "yes")]
     pub file_browser: bool,
+    /// Whether the HTML/CSS browser widget is available.
+    #[serde(default = "yes")]
+    pub browser: bool,
     /// Whether the window manager is active (for Desktop skin).
     #[serde(default)]
     pub window_manager: bool,
@@ -116,6 +119,7 @@ impl Default for SkinFeatures {
             dashboard: true,
             terminal: true,
             file_browser: true,
+            browser: true,
             window_manager: false,
             dashboard_pages: 3,
             icons_per_page: 6,
@@ -311,6 +315,7 @@ color = "#1A1A2D"
 dashboard = true
 terminal = true
 file_browser = true
+browser = true
 window_manager = false
 dashboard_pages = 3
 icons_per_page = 6
@@ -325,6 +330,7 @@ grid_rows = 2
         assert_eq!(skin.manifest.screen_width, 480);
         assert_eq!(skin.layout.objects.len(), 2);
         assert!(skin.features.dashboard);
+        assert!(skin.features.browser);
         assert!(!skin.features.window_manager);
         assert_eq!(skin.features.grid_cols, 3);
     }

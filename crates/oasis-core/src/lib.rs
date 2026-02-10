@@ -9,6 +9,7 @@ pub mod apps;
 pub mod audio;
 pub mod backend;
 pub mod bottombar;
+pub mod browser;
 pub mod config;
 pub mod cursor;
 pub mod dashboard;

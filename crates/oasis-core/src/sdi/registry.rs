@@ -505,6 +505,9 @@ font_size = 16
         fn reset_clip_rect(&mut self) -> Result<()> {
             Ok(())
         }
+        fn measure_text(&self, text: &str, font_size: u16) -> u32 {
+            text.len() as u32 * (font_size as u32 * 6 / 10).max(1)
+        }
         fn read_pixels(&self, _x: i32, _y: i32, w: u32, h: u32) -> Result<Vec<u8>> {
             Ok(vec![0u8; (w * h * 4) as usize])
         }

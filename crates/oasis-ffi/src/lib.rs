@@ -457,6 +457,10 @@ pub unsafe extern "C" fn oasis_send_command(
         Ok(CommandOutput::ListenToggle { .. }) | Ok(CommandOutput::RemoteConnect { .. }) => {
             "Not available via FFI.".to_string()
         },
+        Ok(CommandOutput::BrowserSandbox { enable }) => {
+            let state = if enable { "on" } else { "off" };
+            format!("Browser sandbox: {state}")
+        },
         Err(e) => format!("error: {e}"),
     };
 

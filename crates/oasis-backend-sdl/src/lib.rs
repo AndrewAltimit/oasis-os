@@ -214,6 +214,16 @@ impl SdiBackend for SdlBackend {
         Ok(())
     }
 
+    fn measure_text(&self, text: &str, font_size: u16) -> u32 {
+        // Must match draw_text: 8×8 bitmap font with integer scale.
+        let scale = if font_size >= 8 {
+            (font_size / 8) as u32
+        } else {
+            1
+        };
+        text.len() as u32 * 8 * scale
+    }
+
     fn read_pixels(&self, x: i32, y: i32, w: u32, h: u32) -> Result<Vec<u8>> {
         let rect = Rect::new(x, y, w, h);
         self.canvas

@@ -403,6 +403,11 @@ impl SdiBackend for PspBackend {
         Ok(())
     }
 
+    fn measure_text(&self, text: &str, _font_size: u16) -> u32 {
+        // PSP bitmap font is fixed 8×8 (no scaling support yet).
+        text.len() as u32 * 8
+    }
+
     fn read_pixels(&self, _x: i32, _y: i32, _w: u32, _h: u32) -> OasisResult<Vec<u8>> {
         Err(OasisError::Backend(
             "read_pixels not supported on PSP".into(),

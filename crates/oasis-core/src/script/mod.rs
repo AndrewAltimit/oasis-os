@@ -52,6 +52,10 @@ pub fn run_script(
             Ok(CommandOutput::ListenToggle { .. } | CommandOutput::RemoteConnect { .. }) => {
                 output.push("(network command skipped in script)".to_string());
             },
+            Ok(CommandOutput::BrowserSandbox { enable }) => {
+                let state = if enable { "on" } else { "off" };
+                output.push(format!("(browser sandbox set to {state})"));
+            },
             Err(e) => {
                 output.push(format!("error at line {}: {e}", i + 1));
             },
