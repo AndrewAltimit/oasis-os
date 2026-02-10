@@ -38,10 +38,11 @@ impl DashboardConfig {
         let rows = features.grid_rows;
         let content_top = at.statusbar_height + at.tab_row_height;
         let content_h = theme::SCREEN_H - content_top - at.bottombar_height;
-        // PSIX places icons on the left ~half of the screen, sparsely.
         let grid_padding_x = 16u32;
         let grid_padding_y = 6u32;
-        let cell_w = 110u32; // Wide cells for larger icons + labels.
+        // Size cells to fill available space evenly.
+        let avail_w = theme::SCREEN_W - 2 * grid_padding_x;
+        let cell_w = avail_w / cols;
         let cell_h = (content_h - 2 * grid_padding_y) / rows;
         Self {
             grid_cols: cols,
@@ -208,7 +209,7 @@ impl DashboardState {
             let cell_x = self.config.grid_x + col * self.config.cell_w as i32;
             let cell_y = self.config.grid_y + row * self.config.cell_h as i32;
             let ix = cell_x + (self.config.cell_w as i32 - icon_w as i32) / 2;
-            let iy = cell_y + 4;
+            let iy = cell_y + (self.config.cell_h as i32 - icon_h as i32) / 4;
 
             if i < page_apps.len() {
                 match at.icon_style.as_str() {
@@ -280,26 +281,31 @@ impl DashboardState {
                 let cell_x = self.config.grid_x + sel_col * self.config.cell_w as i32;
                 let cell_y = self.config.grid_y + sel_row * self.config.cell_h as i32;
                 let ix = cell_x + (self.config.cell_w as i32 - icon_w as i32) / 2;
-                let iy = cell_y + 4;
+                let iy = cell_y + (self.config.cell_h as i32 - icon_h as i32) / 4;
 
                 cursor.visible = true;
                 cursor.overlay = true;
+
+                // Include label area (icon + gap + up to 2 lines).
+                let glyph_h = at.font_small.max(8) as u32;
+                let label_h = text_pad as u32 + glyph_h * 2 + 1;
+                let total_h = icon_h + label_h;
 
                 match at.cursor_style.as_str() {
                     "fill" => {
                         cursor.x = ix - pad;
                         cursor.y = iy - pad;
                         cursor.w = icon_w + (pad * 2) as u32;
-                        cursor.h = icon_h + (pad * 2) as u32;
+                        cursor.h = total_h + (pad * 2) as u32;
                         cursor.color = at.cursor_color;
                         cursor.border_radius = Some(at.cursor_border_radius);
                         cursor.stroke_width = None;
                         cursor.stroke_color = None;
                     },
                     "underline" => {
-                        cursor.x = ix;
-                        cursor.y = iy + icon_h as i32 + 1;
-                        cursor.w = icon_w;
+                        cursor.x = cell_x;
+                        cursor.y = iy + icon_h as i32 + text_pad + glyph_h as i32 * 2 + 2;
+                        cursor.w = self.config.cell_w;
                         cursor.h = 3;
                         cursor.color = at.cursor_color;
                         cursor.border_radius = Some(1);
@@ -311,7 +317,7 @@ impl DashboardState {
                         cursor.x = ix - pad;
                         cursor.y = iy - pad;
                         cursor.w = icon_w + (pad * 2) as u32;
-                        cursor.h = icon_h + (pad * 2) as u32;
+                        cursor.h = total_h + (pad * 2) as u32;
                         cursor.color = Color::rgba(0, 0, 0, 0);
                         cursor.border_radius = Some(at.cursor_border_radius);
                         cursor.stroke_width = Some(at.cursor_stroke_width);
@@ -371,6 +377,28 @@ impl DashboardState {
         let lines = Self::wrap_label(title, max_chars);
         let line_h = glyph_w as i32 + 1; // 1px spacing between lines
 
+        // Label shadow (1px offset, uses icon_shadow_{i} as the SDI object).
+        if let Some(shadow_color) = at.icon_label_shadow {
+            if let Ok(obj) = sdi.get_mut(&format!("icon_shadow_{i}")) {
+                if let Some(line) = lines.first() {
+                    let tw = line.len() as i32 * glyph_w as i32;
+                    obj.x = cell_x + (cell_w as i32 - tw) / 2 + 1;
+                    obj.y = label_y + 1;
+                    obj.w = 0;
+                    obj.h = 0;
+                    obj.font_size = fs;
+                    obj.text = Some(line.clone());
+                    obj.text_color = shadow_color;
+                    obj.visible = true;
+                    obj.color = Color::rgba(0, 0, 0, 0);
+                } else {
+                    obj.visible = false;
+                }
+            }
+        } else if let Ok(obj) = sdi.get_mut(&format!("icon_shadow_{i}")) {
+            obj.visible = false;
+        }
+
         // Line 1.
         if let Ok(obj) = sdi.get_mut(&format!("icon_label_{i}")) {
             if let Some(line) = lines.first() {
@@ -426,9 +454,6 @@ impl DashboardState {
         let gfx_w = icon_w - 2 * gfx_pad;
         let gfx_h = theme::ICON_GFX_H;
 
-        if let Ok(obj) = sdi.get_mut(&format!("icon_shadow_{i}")) {
-            obj.visible = false;
-        }
         if let Ok(obj) = sdi.get_mut(&format!("icon_outline_{i}")) {
             obj.x = ix - 1;
             obj.y = iy - 1;
@@ -453,9 +478,10 @@ impl DashboardState {
             obj.shadow_level = Some(1);
         }
         if let Ok(obj) = sdi.get_mut(&format!("icon_stripe_{i}")) {
-            obj.x = ix;
+            let r = at.icon_border_radius as u32;
+            obj.x = ix + r as i32;
             obj.y = iy;
-            obj.w = icon_w - fold_size;
+            obj.w = icon_w - fold_size - r;
             obj.h = stripe_h;
             obj.visible = true;
             obj.color = app.color;
@@ -512,13 +538,7 @@ impl DashboardState {
         text_pad: i32,
     ) {
         // Hide document-specific sub-objects.
-        for prefix in &[
-            "icon_outline_",
-            "icon_stripe_",
-            "icon_fold_",
-            "icon_gfx_",
-            "icon_shadow_",
-        ] {
+        for prefix in &["icon_outline_", "icon_stripe_", "icon_fold_", "icon_gfx_"] {
             if let Ok(obj) = sdi.get_mut(&format!("{prefix}{i}")) {
                 obj.visible = false;
             }
@@ -563,13 +583,7 @@ impl DashboardState {
         text_pad: i32,
     ) {
         // Hide document-specific sub-objects.
-        for prefix in &[
-            "icon_outline_",
-            "icon_stripe_",
-            "icon_fold_",
-            "icon_gfx_",
-            "icon_shadow_",
-        ] {
+        for prefix in &["icon_outline_", "icon_stripe_", "icon_fold_", "icon_gfx_"] {
             if let Ok(obj) = sdi.get_mut(&format!("{prefix}{i}")) {
                 obj.visible = false;
             }

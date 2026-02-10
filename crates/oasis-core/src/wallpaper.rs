@@ -163,8 +163,8 @@ fn generate_gradient_config(
             // Multi-stop interpolation.
             let (r, g, b) = multi_stop_lerp(stops, t);
 
-            // Vertical brightness variation.
-            let vert = 1.0 + (0.5 - ny) * 0.18;
+            // Vertical brightness variation (only for wave-style wallpapers).
+            let vert = if wave { 1.0 + (0.5 - ny) * 0.18 } else { 1.0 };
 
             // Optional PSIX-style wave arcs.
             let wave_factor = if wave && wave_intensity > 0.0 {
@@ -213,7 +213,7 @@ fn lerp_rgb(a: (u8, u8, u8), b: (u8, u8, u8), t: f32) -> (u8, u8, u8) {
     let r = a.0 as f32 + (b.0 as f32 - a.0 as f32) * t;
     let g = a.1 as f32 + (b.1 as f32 - a.1 as f32) * t;
     let b_val = a.2 as f32 + (b.2 as f32 - a.2 as f32) * t;
-    (r as u8, g as u8, b_val as u8)
+    ((r + 0.5) as u8, (g + 0.5) as u8, (b_val + 0.5) as u8)
 }
 
 #[cfg(test)]

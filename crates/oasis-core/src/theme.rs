@@ -126,7 +126,7 @@ pub const ICON_SHADOW_COLOR: Color = Color::rgba(0, 0, 0, 70);
 /// Icon label text color.
 pub const ICON_LABEL_COLOR: Color = Color::rgba(255, 255, 255, 230);
 /// Cursor highlight color.
-pub const CURSOR_COLOR: Color = Color::rgba(255, 255, 255, 50);
+pub const CURSOR_COLOR: Color = Color::rgba(255, 255, 255, 90);
 
 // -- Modern icon rendering constants -----------------------------------------
 

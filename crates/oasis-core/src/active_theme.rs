@@ -67,6 +67,8 @@ pub struct ActiveTheme {
     pub icon_shadow_color: Color,
     /// Icon label text color.
     pub icon_label_color: Color,
+    /// Icon label text shadow color (None = no shadow).
+    pub icon_label_shadow: Option<Color>,
     /// Cursor highlight stroke color.
     pub cursor_color: Color,
 
@@ -247,7 +249,8 @@ impl Default for ActiveTheme {
             icon_outline_color: Color::rgba(255, 255, 255, 180),
             icon_shadow_color: Color::rgba(0, 0, 0, 70),
             icon_label_color: Color::rgba(255, 255, 255, 230),
-            cursor_color: Color::rgba(255, 255, 255, 50),
+            icon_label_shadow: Some(Color::rgba(0, 0, 0, 120)),
+            cursor_color: Color::rgba(255, 255, 255, 90),
             icon_border_radius: 4,
             cursor_border_radius: 6,
             cursor_stroke_width: 2,
@@ -425,6 +428,20 @@ impl ActiveTheme {
                 ico.and_then(|i| i.label_color.as_ref()),
                 with_alpha(text, 230),
             ),
+            icon_label_shadow: {
+                let lc = ov(
+                    ico.and_then(|i| i.label_color.as_ref()),
+                    with_alpha(text, 230),
+                );
+                // Auto-derive: light labels get a dark shadow for readability.
+                let brightness =
+                    lc.r as u16 * 3 / 10 + lc.g as u16 * 6 / 10 + lc.b as u16 / 10;
+                if brightness > 140 {
+                    Some(Color::rgba(0, 0, 0, 120))
+                } else {
+                    None
+                }
+            },
             cursor_color: ov(
                 ico.and_then(|i| i.cursor_color.as_ref()),
                 with_alpha(primary, 80),

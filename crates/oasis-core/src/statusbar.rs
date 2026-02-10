@@ -172,9 +172,13 @@ impl StatusBar {
             at.separator_color,
         );
 
+        // Vertically center text within the bar.
+        let text_y = (bar_h as i32 - font_small as i32) / 2;
+        let char_w = font_small.max(8) as i32 / 8 * 8;
+
         // Battery + CPU info (left side).
         if features.show_battery {
-            ensure_text(sdi, "bar_battery", 6, 7, font_small, at.battery_color);
+            ensure_text(sdi, "bar_battery", 6, text_y, font_small, at.battery_color);
             if let Ok(obj) = sdi.get_mut("bar_battery") {
                 let mut info = self.battery_text.clone();
                 if !self.cpu_text.is_empty() {
@@ -189,24 +193,37 @@ impl StatusBar {
 
         // Version label (center area).
         if features.show_version {
-            ensure_text(sdi, "bar_version", 180, 7, font_small, at.version_color);
+            let ver = "Version 0.1";
+            let ver_w = ver.len() as i32 * char_w;
+            let ver_x = (screen_w as i32 - ver_w) / 2;
+            ensure_text(sdi, "bar_version", ver_x, text_y, font_small, at.version_color);
             if let Ok(obj) = sdi.get_mut("bar_version") {
-                obj.text = Some("Version 0.1".to_string());
+                obj.text = Some(ver.to_string());
                 obj.visible = true;
             }
         } else if let Ok(obj) = sdi.get_mut("bar_version") {
             obj.visible = false;
         }
 
-        // Clock + date (right side).
+        // Clock + date (right side, right-aligned).
         if features.show_clock {
-            ensure_text(sdi, "bar_clock", 290, 7, font_small, at.clock_color);
+            let clock_str = if self.date_text.is_empty() {
+                self.clock_text.clone()
+            } else {
+                format!("{} {}", self.clock_text, self.date_text)
+            };
+            let clock_w = clock_str.len() as i32 * char_w;
+            let clock_x = screen_w as i32 - clock_w - 6;
+            ensure_text(
+                sdi,
+                "bar_clock",
+                clock_x,
+                text_y,
+                font_small,
+                at.clock_color,
+            );
             if let Ok(obj) = sdi.get_mut("bar_clock") {
-                if self.date_text.is_empty() {
-                    obj.text = Some(self.clock_text.clone());
-                } else {
-                    obj.text = Some(format!("{} {}", self.clock_text, self.date_text));
-                }
+                obj.text = Some(clock_str);
                 obj.visible = true;
             }
         } else if let Ok(obj) = sdi.get_mut("bar_clock") {
@@ -215,11 +232,12 @@ impl StatusBar {
 
         // Category label before tabs (PSIX: "MSO").
         if features.show_tabs {
+            let mso_y = bar_h as i32 + (theme::TAB_H - font_small as i32) / 2;
             ensure_text(
                 sdi,
                 "bar_mso",
                 6,
-                bar_h as i32 + 3,
+                mso_y,
                 font_small,
                 at.category_label_color,
             );
@@ -287,13 +305,14 @@ impl StatusBar {
                 );
             }
 
-            // Tab text (centered).
-            let tx = x + (theme::TAB_W - (tab.label().len() as i32 * theme::CHAR_W)) / 2;
+            // Tab text (centered in tab).
+            let tx = x + (theme::TAB_W - (tab.label().len() as i32 * char_w)) / 2;
+            let tab_text_y = tab_y + (theme::TAB_H - font_small as i32) / 2;
             ensure_text(
                 sdi,
                 &name,
                 tx.max(x + 2),
-                tab_y + 4,
+                tab_text_y,
                 font_small,
                 Color::WHITE,
             );

@@ -50,7 +50,7 @@ title_text_shadow = true
 title_text_shadow_color = "#00000060"
 content_stroke_width = 1
 content_stroke_color = "#0054E320"
-maximize_top_inset = 26
+maximize_top_inset = 44
 maximize_bottom_inset = 30
 
 [bar_overrides]

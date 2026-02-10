@@ -106,7 +106,9 @@ impl BottomBar {
         let bar_h = at.bottombar_height;
         let font_small = at.font_small;
         let screen_w = theme::SCREEN_W;
-        let char_w = theme::CHAR_W;
+        let char_w = font_small.max(8) as i32 / 8 * 8;
+        // Vertically center text within the bar.
+        let text_y = bar_y + (bar_h as i32 - font_small as i32) / 2;
 
         // Semi-transparent background bar.
         if !sdi.contains("bar_bottom") {
@@ -139,15 +141,27 @@ impl BottomBar {
             at.separator_color,
         );
 
-        // URL label on the left.
-        ensure_text(sdi, "bar_url", 8, bar_y + 8, font_small, at.url_color);
+        // URL label -- shift right past the start button when start menu is active.
+        let url_offset = if features.start_menu {
+            at.sm_button_width as i32 + 10
+        } else {
+            0
+        };
+        ensure_text(
+            sdi,
+            "bar_url",
+            8 + url_offset,
+            text_y,
+            font_small,
+            at.url_color,
+        );
         if let Ok(obj) = sdi.get_mut("bar_url") {
             obj.text = Some("HTTP://OASIS.LOCAL".to_string());
         }
 
         // Chrome bezel around URL area.
-        let url_bx = 2i32;
-        let url_bw = 190u32;
+        let url_bx = 2i32 + url_offset;
+        let url_bw = (190u32).saturating_sub(url_offset as u32);
         let bz_y = bar_y + 2;
         let bz_h = bar_h - 4;
         ensure_chrome_bezel(
@@ -191,7 +205,7 @@ impl BottomBar {
                 } else {
                     at.media_tab_inactive
                 };
-                ensure_text(sdi, &name, cx, bar_y + 8, font_small, color);
+                ensure_text(sdi, &name, cx, text_y, font_small, color);
                 if let Ok(obj) = sdi.get_mut(&name) {
                     obj.text = Some(label.to_string());
                     obj.text_color = color;
@@ -203,7 +217,7 @@ impl BottomBar {
                 if i < MediaTab::TABS.len() - 1 {
                     cx += theme::PIPE_GAP;
                     let pipe_name = format!("bar_bpipe_{i}");
-                    ensure_text(sdi, &pipe_name, cx, bar_y + 8, font_small, at.pipe_color);
+                    ensure_text(sdi, &pipe_name, cx, text_y, font_small, at.pipe_color);
                     if let Ok(obj) = sdi.get_mut(&pipe_name) {
                         obj.text = Some("|".to_string());
                     }
@@ -216,7 +230,7 @@ impl BottomBar {
                 sdi,
                 "bar_r_hint",
                 screen_w as i32 - theme::R_HINT_W,
-                bar_y + 8,
+                text_y,
                 font_small,
                 at.r_hint_color,
             );
@@ -241,7 +255,7 @@ impl BottomBar {
 
         // USB indicator (between bezels).
         let usb_x = url_bx + url_bw as i32 + 14;
-        ensure_text(sdi, "bar_usb", usb_x, bar_y + 8, font_small, at.usb_color);
+        ensure_text(sdi, "bar_usb", usb_x, text_y, font_small, at.usb_color);
         if let Ok(obj) = sdi.get_mut("bar_usb") {
             obj.text = Some("USB".to_string());
         }
@@ -261,7 +275,7 @@ impl BottomBar {
                     sdi,
                     &name,
                     dots_x + (i as i32) * 12,
-                    bar_y + 9,
+                    bar_y + (bar_h as i32 - 6) / 2,
                     6,
                     6,
                     dot_color,

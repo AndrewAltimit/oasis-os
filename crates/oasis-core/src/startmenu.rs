@@ -317,7 +317,9 @@ impl StartMenuState {
             obj.z = Z_BUTTON + 1;
         }
         if let Ok(obj) = sdi.get_mut("start_btn_text") {
-            obj.x = BTN_X + 6;
+            let char_w = at.font_small.max(8) as i32 / 8 * 8;
+            let text_w = at.sm_button_label.len() as i32 * char_w;
+            obj.x = BTN_X + (btn_w as i32 - text_w) / 2;
             obj.y = self.btn_y + (btn_h as i32 - at.font_small as i32) / 2;
             obj.font_size = at.font_small;
             obj.text = Some(at.sm_button_label.clone());
@@ -387,7 +389,8 @@ impl StartMenuState {
                 obj.h = self.header_h;
                 obj.color = at.sm_header_bg;
                 obj.visible = true;
-                obj.border_radius = Some(at.sm_panel_border_radius);
+                // No border_radius: only the panel bg rounds the corners.
+                obj.border_radius = None;
             }
             if !sdi.contains("sm_header_text") {
                 let obj = sdi.create("sm_header_text");
@@ -449,7 +452,7 @@ impl StartMenuState {
                 sdi,
                 &label_name,
                 ix + icon_size as i32 + 4,
-                iy + 3,
+                iy + (icon_size as i32 - at.font_small as i32) / 2,
                 at.font_small,
                 text_color,
             );
@@ -484,7 +487,8 @@ impl StartMenuState {
                 obj.h = self.footer_h;
                 obj.color = at.sm_footer_bg;
                 obj.visible = true;
-                obj.border_radius = Some(at.sm_panel_border_radius);
+                // No border_radius: only the panel bg rounds the corners.
+                obj.border_radius = None;
             }
             if !sdi.contains("sm_footer_text") {
                 let obj = sdi.create("sm_footer_text");

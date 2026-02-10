@@ -26,7 +26,7 @@ use oasis_core::dashboard::{DashboardConfig, DashboardState, discover_apps};
 use oasis_core::platform::DesktopPlatform;
 use oasis_core::platform::{PowerService, TimeService};
 use oasis_core::sdi::SdiRegistry;
-use oasis_core::skin::Skin;
+use oasis_core::skin::resolve_skin;
 use oasis_core::statusbar::StatusBar;
 use oasis_core::vfs::MemoryVfs;
 use oasis_core::wallpaper;
@@ -41,11 +41,11 @@ fn main() -> anyhow::Result<()> {
     let mut backend = SdlBackend::new("OASIS Screenshot", w, h)?;
     backend.init(w, h)?;
 
-    let skin = Skin::from_toml(
-        include_str!("../../../skins/classic/skin.toml"),
-        include_str!("../../../skins/classic/layout.toml"),
-        include_str!("../../../skins/classic/features.toml"),
-    )?;
+    let skin_name = std::env::args()
+        .nth(1)
+        .or_else(|| std::env::var("OASIS_SKIN").ok())
+        .unwrap_or_else(|| "classic".to_string());
+    let skin = resolve_skin(&skin_name)?;
 
     let platform = DesktopPlatform::new();
     let mut vfs = MemoryVfs::new();
