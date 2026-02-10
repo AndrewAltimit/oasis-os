@@ -1119,6 +1119,10 @@ impl TreeBuilder {
                     self.open_elements.push(id);
                 }
             },
+            Token::EndTag(ref tag) => {
+                let tag_name = TagName::from_str(&tag.name.to_ascii_lowercase());
+                self.close_to_tag_any_scope(&tag_name);
+            },
             _ => {},
         }
     }
