@@ -264,8 +264,13 @@ impl SdiBackend for Ue5Backend {
     }
 
     fn measure_text(&self, text: &str, font_size: u16) -> u32 {
-        let char_width = (font_size as u32).max(1) * 6 / 10;
-        text.len() as u32 * char_width
+        // Must match draw_text: 8×8 bitmap font with integer scale.
+        let scale = if font_size >= 8 {
+            (font_size / 8) as u32
+        } else {
+            1
+        };
+        text.len() as u32 * 8 * scale
     }
 
     fn read_pixels(&self, x: i32, y: i32, w: u32, h: u32) -> Result<Vec<u8>> {

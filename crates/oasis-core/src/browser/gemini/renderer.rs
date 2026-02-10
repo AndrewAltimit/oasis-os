@@ -136,6 +136,7 @@ fn render_gemini_line(
             text_style.color = theme.text_color;
             text_style.font_size = theme.font_size;
             let mut text_box = LayoutBox::new(BoxType::Inline, text_style, None);
+            text_box.text = Some(text.to_string());
             text_box.dimensions.content.x = 0.0;
             text_box.dimensions.content.y = *cursor_y;
             text_box.dimensions.content.width = content_width;
@@ -147,7 +148,7 @@ fn render_gemini_line(
         },
 
         GeminiLine::Link { url, display } => {
-            let _text = display.as_deref().unwrap_or(url.as_str());
+            let text = display.as_deref().unwrap_or(url.as_str());
             let mut style = ComputedStyle::default();
             style.display = Display::Block;
             style.color = theme.link_color;
@@ -161,6 +162,20 @@ fn render_gemini_line(
             b.dimensions.content.y = *cursor_y;
             b.dimensions.content.width = content_width;
             b.dimensions.content.height = height;
+
+            // Create inline child so the link text is actually painted.
+            let mut text_style = ComputedStyle::default();
+            text_style.color = theme.link_color;
+            text_style.font_size = theme.font_size;
+            text_style.text_decoration = TextDecoration::Underline;
+            let mut text_box = LayoutBox::new(BoxType::Inline, text_style, None);
+            text_box.text = Some(text.to_string());
+            text_box.dimensions.content.x = 0.0;
+            text_box.dimensions.content.y = *cursor_y;
+            let tw = measurer.measure_text(text, theme.font_size as u16) as f32;
+            text_box.dimensions.content.width = tw.min(content_width);
+            text_box.dimensions.content.height = height;
+            b.children.push(text_box);
 
             *cursor_y += height + line_height * 0.3;
             Some(b)
@@ -176,7 +191,7 @@ fn render_gemini_line(
             render_heading(text, 1.17, content_width, cursor_y, line_height, theme)
         },
 
-        GeminiLine::ListItem(_text) => {
+        GeminiLine::ListItem(text) => {
             let mut style = ComputedStyle::default();
             style.display = Display::Block;
             style.color = theme.text_color;
@@ -195,6 +210,18 @@ fn render_gemini_line(
             b.dimensions.content.y = *cursor_y;
             b.dimensions.content.width = content_width - 20.0;
             b.dimensions.content.height = line_height;
+
+            // Inline child so list item text is painted.
+            let mut text_style = ComputedStyle::default();
+            text_style.color = theme.text_color;
+            text_style.font_size = theme.font_size;
+            let mut text_box = LayoutBox::new(BoxType::Inline, text_style, None);
+            text_box.text = Some(text.to_string());
+            text_box.dimensions.content.x = 20.0;
+            text_box.dimensions.content.y = *cursor_y;
+            text_box.dimensions.content.width = content_width - 20.0;
+            text_box.dimensions.content.height = line_height;
+            b.children.push(text_box);
 
             *cursor_y += line_height + line_height * 0.2;
             Some(b)
@@ -222,6 +249,19 @@ fn render_gemini_line(
             b.dimensions.content.height = height;
             b.dimensions.border.left = 3.0;
             b.dimensions.padding.left = 10.0;
+
+            // Inline child so quote text is painted.
+            let mut text_style = ComputedStyle::default();
+            text_style.color = theme.quote_color;
+            text_style.font_size = theme.font_size;
+            text_style.font_style = FontStyle::Italic;
+            let mut text_box = LayoutBox::new(BoxType::Inline, text_style, None);
+            text_box.text = Some(text.to_string());
+            text_box.dimensions.content.x = 13.0;
+            text_box.dimensions.content.y = *cursor_y;
+            text_box.dimensions.content.width = content_width - 13.0;
+            text_box.dimensions.content.height = height;
+            b.children.push(text_box);
 
             *cursor_y += height + line_height * 0.3;
             Some(b)
@@ -255,6 +295,22 @@ fn render_gemini_line(
                 left: 8.0,
             };
 
+            // Add each preformatted line as an inline child.
+            let pre_font_size = theme.font_size - 1.0;
+            for (i, code_line) in lines.iter().enumerate() {
+                let mut text_style = ComputedStyle::default();
+                text_style.font_family = FontFamily::Monospace;
+                text_style.font_size = pre_font_size;
+                text_style.color = theme.text_color;
+                let mut text_box = LayoutBox::new(BoxType::Inline, text_style, None);
+                text_box.text = Some(code_line.to_string());
+                text_box.dimensions.content.x = 8.0;
+                text_box.dimensions.content.y = *cursor_y + 4.0 + i as f32 * line_height;
+                text_box.dimensions.content.width = content_width - 16.0;
+                text_box.dimensions.content.height = line_height;
+                b.children.push(text_box);
+            }
+
             *cursor_y += height + line_height * 0.5;
             Some(b)
         },
@@ -267,7 +323,7 @@ fn render_gemini_line(
 }
 
 fn render_heading(
-    _text: &str,
+    text: &str,
     scale: f32,
     content_width: f32,
     cursor_y: &mut f32,
@@ -283,11 +339,20 @@ fn render_heading(
     style.margin_bottom = line_height * 0.3;
 
     let height = style.font_size * 1.2;
-    let mut b = LayoutBox::new(BoxType::Block, style, None);
+    let mut b = LayoutBox::new(BoxType::Block, style.clone(), None);
     b.dimensions.content.x = 0.0;
     b.dimensions.content.y = *cursor_y + line_height * 0.5;
     b.dimensions.content.width = content_width;
     b.dimensions.content.height = height;
+
+    // Inline child so heading text is painted.
+    let mut text_box = LayoutBox::new(BoxType::Inline, style, None);
+    text_box.text = Some(text.to_string());
+    text_box.dimensions.content.x = 0.0;
+    text_box.dimensions.content.y = *cursor_y + line_height * 0.5;
+    text_box.dimensions.content.width = content_width;
+    text_box.dimensions.content.height = height;
+    b.children.push(text_box);
 
     *cursor_y += line_height * 0.5 + height + line_height * 0.3;
     Some(b)
