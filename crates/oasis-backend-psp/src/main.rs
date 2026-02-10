@@ -1373,6 +1373,8 @@ fn psp_main() {
         }
 
         // Status bar + bottom bar (always visible, drawn on top).
+        // Force bitmap font: all bar layouts use `len() * 8` fixed-width metrics.
+        backend.force_bitmap_font = true;
         draw_status_bar(&mut backend, top_tab, &status, &sysinfo);
 
         let url_text = match (app_mode, classic_view) {
@@ -1411,6 +1413,7 @@ fn psp_main() {
             &url_text,
             desktop_wm,
         );
+        backend.force_bitmap_font = false;
         viz_frame = viz_frame.wrapping_add(1);
 
         // Cursor (always on top).
