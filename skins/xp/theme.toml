@@ -1,0 +1,64 @@
+background = "#003399"
+primary = "#003399"
+secondary = "#1F3E7B"
+text = "#FFFFFF"
+dim_text = "#8899BB"
+status_bar = "#1F3E7B"
+prompt = "#FFFFFF"
+output = "#FFFFFF"
+error = "#FF0000"
+border_radius = 3
+shadow_intensity = 1
+gradient_enabled = true
+
+[wm_theme]
+titlebar_height = 24
+border_width = 1
+titlebar_active = "#0054E3"
+titlebar_inactive = "#7B7B7B"
+titlebar_text = "#FFFFFF"
+frame_color = "#0054E3"
+content_bg = "#ECE9D8"
+btn_close = "#C75050"
+btn_minimize = "#406BBD"
+btn_maximize = "#406BBD"
+button_size = 16
+titlebar_font_size = 12
+titlebar_radius = 4
+titlebar_gradient = true
+titlebar_gradient_top = "#3A6EA5"
+titlebar_gradient_bottom = "#0A246A"
+titlebar_inactive_gradient_top = "#B4B4B4"
+titlebar_inactive_gradient_bottom = "#7B7B7B"
+frame_shadow_level = 1
+frame_border_radius = 3
+button_radius = 2
+
+[bar_overrides]
+statusbar_bg = "#1F3E7B"
+statusbar_gradient_top = "#3169C6"
+statusbar_gradient_bottom = "#1F3E7B"
+bar_bg = "#1F3E7B"
+bar_gradient_top = "#3169C6"
+bar_gradient_bottom = "#1F3E7B"
+battery_color = "#FFFFFF"
+version_color = "#FFFFFF"
+clock_color = "#FFFFFF"
+separator_color = "#4080D0"
+
+[icon_overrides]
+body_color = "#ECE9D8"
+fold_color = "#C8C2AD"
+outline_color = "#0054E380"
+label_color = "#FFFFFFE6"
+cursor_color = "#003399C0"
+icon_border_radius = 3
+cursor_border_radius = 4
+
+[browser_overrides]
+chrome_bg = "#D6D2C2"
+chrome_text = "#000000"
+chrome_button_bg = "#ECE9D8"
+url_bar_bg = "#FFFFFF"
+url_bar_text = "#000000"
+link_color = "#0066CC"

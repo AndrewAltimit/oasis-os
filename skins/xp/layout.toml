@@ -1,0 +1,9 @@
+# XP Luna layout -- PSP dashboard with XP-themed bars
+# Top status bar (24px) + content area (224px) + bottom bar (24px) = 272px.
+
+[content_bg]
+x = 0
+y = 24
+w = 480
+h = 224
+color = "#ECE9D8"

@@ -529,6 +529,122 @@ shutdown_message = "Session ended."
 "#;
 
 // ---------------------------------------------------------------------------
+// XP skin: Windows XP Luna blue theme.
+// ---------------------------------------------------------------------------
+
+const XP_MANIFEST: &str = r#"
+name = "xp"
+version = "1.0"
+author = "OASIS_OS"
+description = "Windows XP Luna-inspired blue theme with gradient titlebars and taskbar"
+screen_width = 480
+screen_height = 272
+"#;
+
+const XP_LAYOUT: &str = r##"
+[content_bg]
+x = 0
+y = 24
+w = 480
+h = 224
+color = "#ECE9D8"
+"##;
+
+const XP_FEATURES: &str = r#"
+dashboard = true
+terminal = true
+file_browser = true
+browser = true
+window_manager = true
+dashboard_pages = 4
+icons_per_page = 4
+grid_cols = 2
+grid_rows = 2
+"#;
+
+const XP_THEME: &str = r##"
+background = "#003399"
+primary = "#003399"
+secondary = "#1F3E7B"
+text = "#FFFFFF"
+dim_text = "#8899BB"
+status_bar = "#1F3E7B"
+prompt = "#FFFFFF"
+output = "#FFFFFF"
+error = "#FF0000"
+border_radius = 3
+shadow_intensity = 1
+gradient_enabled = true
+
+[wm_theme]
+titlebar_height = 24
+border_width = 1
+titlebar_active = "#0054E3"
+titlebar_inactive = "#7B7B7B"
+titlebar_text = "#FFFFFF"
+frame_color = "#0054E3"
+content_bg = "#ECE9D8"
+btn_close = "#C75050"
+btn_minimize = "#406BBD"
+btn_maximize = "#406BBD"
+button_size = 16
+titlebar_font_size = 12
+titlebar_radius = 4
+titlebar_gradient = true
+titlebar_gradient_top = "#3A6EA5"
+titlebar_gradient_bottom = "#0A246A"
+titlebar_inactive_gradient_top = "#B4B4B4"
+titlebar_inactive_gradient_bottom = "#7B7B7B"
+frame_shadow_level = 1
+frame_border_radius = 3
+button_radius = 2
+
+[bar_overrides]
+statusbar_bg = "#1F3E7B"
+statusbar_gradient_top = "#3169C6"
+statusbar_gradient_bottom = "#1F3E7B"
+bar_bg = "#1F3E7B"
+bar_gradient_top = "#3169C6"
+bar_gradient_bottom = "#1F3E7B"
+battery_color = "#FFFFFF"
+version_color = "#FFFFFF"
+clock_color = "#FFFFFF"
+separator_color = "#4080D0"
+
+[icon_overrides]
+body_color = "#ECE9D8"
+fold_color = "#C8C2AD"
+outline_color = "#0054E380"
+label_color = "#FFFFFFE6"
+cursor_color = "#003399C0"
+icon_border_radius = 3
+cursor_border_radius = 4
+
+[browser_overrides]
+chrome_bg = "#D6D2C2"
+chrome_text = "#000000"
+chrome_button_bg = "#ECE9D8"
+url_bar_bg = "#FFFFFF"
+url_bar_text = "#000000"
+link_color = "#0066CC"
+"##;
+
+const XP_STRINGS: &str = r#"
+boot_text = [
+    "OASIS_OS v2.2 [xp]",
+    "Loading Windows XP Luna theme...",
+    "Desktop environment: active",
+    "Ready.",
+]
+prompt_format = "C:\\> "
+title = "OASIS XP"
+home_label = "My Computer"
+welcome_message = "Welcome to OASIS XP. Type 'help' for commands."
+error_prefix = "error: "
+shutdown_message = "Windows is shutting down..."
+"#;
+
+// ---------------------------------------------------------------------------
 // Agent Terminal skin: briefcase field terminal for AI agent management.
 // ---------------------------------------------------------------------------
 
@@ -698,6 +814,11 @@ error_prefix = "ERR: "
 shutdown_message = "Agent terminal session ended."
 "#;
 
+/// Load the XP skin.
+pub fn xp_skin() -> Result<Skin> {
+    Skin::from_toml_full(XP_MANIFEST, XP_LAYOUT, XP_FEATURES, XP_THEME, XP_STRINGS)
+}
+
 /// Load the Agent Terminal skin.
 pub fn agent_terminal_skin() -> Result<Skin> {
     Skin::from_toml_full(
@@ -740,6 +861,7 @@ pub fn load_builtin(name: &str) -> Result<Skin> {
         "desktop" => desktop_skin(),
         "agent-terminal" => agent_terminal_skin(),
         "modern" => modern_skin(),
+        "xp" => xp_skin(),
         _ => Err(crate::error::OasisError::Config(format!(
             "unknown built-in skin: {name}"
         ))),
@@ -755,6 +877,7 @@ pub fn builtin_names() -> &'static [&'static str] {
         "desktop",
         "agent-terminal",
         "modern",
+        "xp",
     ]
 }
 

@@ -89,6 +89,14 @@ pub struct WmTheme {
     pub titlebar_radius: u16,
     /// Whether the titlebar uses a gradient fill.
     pub titlebar_gradient: bool,
+    /// Explicit active titlebar gradient top color (overrides auto-derive).
+    pub titlebar_gradient_top: Option<Color>,
+    /// Explicit active titlebar gradient bottom color.
+    pub titlebar_gradient_bottom: Option<Color>,
+    /// Explicit inactive titlebar gradient top color.
+    pub titlebar_inactive_gradient_top: Option<Color>,
+    /// Explicit inactive titlebar gradient bottom color.
+    pub titlebar_inactive_gradient_bottom: Option<Color>,
     /// Shadow elevation for window frames (0 = none).
     pub frame_shadow_level: u8,
     /// Frame corner radius.
@@ -115,6 +123,10 @@ impl Default for WmTheme {
             titlebar_font_size: 12,
             titlebar_radius: 0,
             titlebar_gradient: false,
+            titlebar_gradient_top: None,
+            titlebar_gradient_bottom: None,
+            titlebar_inactive_gradient_top: None,
+            titlebar_inactive_gradient_bottom: None,
             frame_shadow_level: 0,
             frame_border_radius: 0,
             button_radius: 0,
@@ -299,18 +311,33 @@ impl Window {
     pub fn sdi_suffixes(&self) -> Vec<&'static str> {
         match self.window_type {
             WindowType::Fullscreen => vec!["content"],
-            WindowType::FloatingWidget => {
-                vec!["frame", "titlebar", "title_text", "btn_close", "content"]
-            },
+            WindowType::FloatingWidget => vec![
+                "frame",
+                "titlebar",
+                "title_text",
+                "btn_close",
+                "btn_close_glyph",
+                "content",
+            ],
             WindowType::Panel => vec!["frame", "titlebar", "title_text", "content"],
-            WindowType::Dialog => vec!["frame", "titlebar", "title_text", "btn_close", "content"],
+            WindowType::Dialog => vec![
+                "frame",
+                "titlebar",
+                "title_text",
+                "btn_close",
+                "btn_close_glyph",
+                "content",
+            ],
             WindowType::AppWindow => vec![
                 "frame",
                 "titlebar",
                 "title_text",
                 "btn_close",
+                "btn_close_glyph",
                 "btn_minimize",
+                "btn_minimize_glyph",
                 "btn_maximize",
+                "btn_maximize_glyph",
                 "content",
             ],
         }

@@ -115,6 +115,8 @@ impl BottomBar {
         if let Ok(obj) = sdi.get_mut("bar_bottom") {
             obj.color = at.bar_bg;
             obj.visible = true;
+            obj.gradient_top = at.bar_gradient_top;
+            obj.gradient_bottom = at.bar_gradient_bottom;
         }
 
         // Thin separator line at top of bottom bar.

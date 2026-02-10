@@ -149,6 +149,8 @@ impl StatusBar {
         if let Ok(obj) = sdi.get_mut("bar_top") {
             obj.color = at.statusbar_bg;
             obj.visible = true;
+            obj.gradient_top = at.statusbar_gradient_top;
+            obj.gradient_bottom = at.statusbar_gradient_bottom;
         }
 
         // Thin line separator below status bar.

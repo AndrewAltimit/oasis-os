@@ -98,6 +98,14 @@ pub struct WmThemeOverrides {
     #[serde(default)]
     pub titlebar_gradient: Option<bool>,
     #[serde(default)]
+    pub titlebar_gradient_top: Option<String>,
+    #[serde(default)]
+    pub titlebar_gradient_bottom: Option<String>,
+    #[serde(default)]
+    pub titlebar_inactive_gradient_top: Option<String>,
+    #[serde(default)]
+    pub titlebar_inactive_gradient_bottom: Option<String>,
+    #[serde(default)]
     pub frame_shadow_level: Option<u8>,
     #[serde(default)]
     pub frame_border_radius: Option<u16>,
@@ -126,6 +134,10 @@ pub struct BarOverrides {
     pub category_label_color: Option<String>,
     pub page_dot_active: Option<String>,
     pub page_dot_inactive: Option<String>,
+    pub statusbar_gradient_top: Option<String>,
+    pub statusbar_gradient_bottom: Option<String>,
+    pub bar_gradient_top: Option<String>,
+    pub bar_gradient_bottom: Option<String>,
 }
 
 /// Per-element overrides for dashboard icon rendering.
@@ -412,6 +424,26 @@ impl SkinTheme {
             }
             if let Some(g) = ov.titlebar_gradient {
                 theme.titlebar_gradient = g;
+            }
+            if let Some(ref c) = ov.titlebar_gradient_top
+                && let Some(parsed) = parse_hex_color(c)
+            {
+                theme.titlebar_gradient_top = Some(parsed);
+            }
+            if let Some(ref c) = ov.titlebar_gradient_bottom
+                && let Some(parsed) = parse_hex_color(c)
+            {
+                theme.titlebar_gradient_bottom = Some(parsed);
+            }
+            if let Some(ref c) = ov.titlebar_inactive_gradient_top
+                && let Some(parsed) = parse_hex_color(c)
+            {
+                theme.titlebar_inactive_gradient_top = Some(parsed);
+            }
+            if let Some(ref c) = ov.titlebar_inactive_gradient_bottom
+                && let Some(parsed) = parse_hex_color(c)
+            {
+                theme.titlebar_inactive_gradient_bottom = Some(parsed);
             }
             if let Some(s) = ov.frame_shadow_level {
                 theme.frame_shadow_level = s;

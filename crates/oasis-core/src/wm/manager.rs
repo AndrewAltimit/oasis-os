@@ -585,6 +585,33 @@ impl WindowManager {
             let tb_name = window.sdi_name("titlebar");
             if let Ok(obj) = sdi.get_mut(&tb_name) {
                 obj.color = color;
+                // Update gradient colors on focus change.
+                if self.theme.titlebar_gradient {
+                    use crate::ui::color::lighten;
+                    if is_active {
+                        obj.gradient_top = Some(
+                            self.theme
+                                .titlebar_gradient_top
+                                .unwrap_or_else(|| lighten(color, 0.1)),
+                        );
+                        obj.gradient_bottom =
+                            Some(self.theme.titlebar_gradient_bottom.unwrap_or(color));
+                    } else {
+                        obj.gradient_top = Some(
+                            self.theme
+                                .titlebar_inactive_gradient_top
+                                .unwrap_or_else(|| lighten(color, 0.1)),
+                        );
+                        obj.gradient_bottom = Some(
+                            self.theme
+                                .titlebar_inactive_gradient_bottom
+                                .unwrap_or(color),
+                        );
+                    }
+                } else {
+                    obj.gradient_top = None;
+                    obj.gradient_bottom = None;
+                }
             }
         }
 
@@ -631,8 +658,16 @@ impl WindowManager {
                 }
                 if theme.titlebar_gradient {
                     use crate::ui::color::lighten;
-                    obj.gradient_top = Some(lighten(theme.titlebar_active_color, 0.1));
-                    obj.gradient_bottom = Some(theme.titlebar_active_color);
+                    obj.gradient_top = Some(
+                        theme
+                            .titlebar_gradient_top
+                            .unwrap_or_else(|| lighten(theme.titlebar_active_color, 0.1)),
+                    );
+                    obj.gradient_bottom = Some(
+                        theme
+                            .titlebar_gradient_bottom
+                            .unwrap_or(theme.titlebar_active_color),
+                    );
                 }
             }
 
@@ -661,6 +696,16 @@ impl WindowManager {
             if theme.button_radius > 0 {
                 obj.border_radius = Some(theme.button_radius);
             }
+            // Glyph.
+            let gobj = sdi.create(window.sdi_name("btn_close_glyph"));
+            gobj.x = bx + (bw as i32 - 8) / 2;
+            gobj.y = by + (bh as i32 - 8) / 2;
+            gobj.w = bw;
+            gobj.h = bh;
+            gobj.text = Some("x".to_string());
+            gobj.font_size = 8;
+            gobj.text_color = theme.titlebar_text_color;
+            gobj.color = Color::rgba(0, 0, 0, 0);
         }
 
         // Minimize button.
@@ -674,6 +719,16 @@ impl WindowManager {
             if theme.button_radius > 0 {
                 obj.border_radius = Some(theme.button_radius);
             }
+            // Glyph.
+            let gobj = sdi.create(window.sdi_name("btn_minimize_glyph"));
+            gobj.x = bx + (bw as i32 - 8) / 2;
+            gobj.y = by + (bh as i32 - 8) / 2;
+            gobj.w = bw;
+            gobj.h = bh;
+            gobj.text = Some("_".to_string());
+            gobj.font_size = 8;
+            gobj.text_color = theme.titlebar_text_color;
+            gobj.color = Color::rgba(0, 0, 0, 0);
         }
 
         // Maximize button.
@@ -687,6 +742,16 @@ impl WindowManager {
             if theme.button_radius > 0 {
                 obj.border_radius = Some(theme.button_radius);
             }
+            // Glyph.
+            let gobj = sdi.create(window.sdi_name("btn_maximize_glyph"));
+            gobj.x = bx + (bw as i32 - 8) / 2;
+            gobj.y = by + (bh as i32 - 8) / 2;
+            gobj.w = bw;
+            gobj.h = bh;
+            gobj.text = Some("+".to_string());
+            gobj.font_size = 8;
+            gobj.text_color = theme.titlebar_text_color;
+            gobj.color = Color::rgba(0, 0, 0, 0);
         }
 
         // Content area (stays sharp for clip rect compatibility).
@@ -742,30 +807,42 @@ impl WindowManager {
             }
         }
 
-        // Buttons.
-        if let Some((bx, by, bw, bh)) = window.close_btn_rect(theme)
-            && let Ok(obj) = sdi.get_mut(&window.sdi_name("btn_close"))
-        {
-            obj.x = bx;
-            obj.y = by;
-            obj.w = bw;
-            obj.h = bh;
+        // Buttons + glyphs.
+        if let Some((bx, by, bw, bh)) = window.close_btn_rect(theme) {
+            if let Ok(obj) = sdi.get_mut(&window.sdi_name("btn_close")) {
+                obj.x = bx;
+                obj.y = by;
+                obj.w = bw;
+                obj.h = bh;
+            }
+            if let Ok(obj) = sdi.get_mut(&window.sdi_name("btn_close_glyph")) {
+                obj.x = bx + (bw as i32 - 8) / 2;
+                obj.y = by + (bh as i32 - 8) / 2;
+            }
         }
-        if let Some((bx, by, bw, bh)) = window.minimize_btn_rect(theme)
-            && let Ok(obj) = sdi.get_mut(&window.sdi_name("btn_minimize"))
-        {
-            obj.x = bx;
-            obj.y = by;
-            obj.w = bw;
-            obj.h = bh;
+        if let Some((bx, by, bw, bh)) = window.minimize_btn_rect(theme) {
+            if let Ok(obj) = sdi.get_mut(&window.sdi_name("btn_minimize")) {
+                obj.x = bx;
+                obj.y = by;
+                obj.w = bw;
+                obj.h = bh;
+            }
+            if let Ok(obj) = sdi.get_mut(&window.sdi_name("btn_minimize_glyph")) {
+                obj.x = bx + (bw as i32 - 8) / 2;
+                obj.y = by + (bh as i32 - 8) / 2;
+            }
         }
-        if let Some((bx, by, bw, bh)) = window.maximize_btn_rect(theme)
-            && let Ok(obj) = sdi.get_mut(&window.sdi_name("btn_maximize"))
-        {
-            obj.x = bx;
-            obj.y = by;
-            obj.w = bw;
-            obj.h = bh;
+        if let Some((bx, by, bw, bh)) = window.maximize_btn_rect(theme) {
+            if let Ok(obj) = sdi.get_mut(&window.sdi_name("btn_maximize")) {
+                obj.x = bx;
+                obj.y = by;
+                obj.w = bw;
+                obj.h = bh;
+            }
+            if let Ok(obj) = sdi.get_mut(&window.sdi_name("btn_maximize_glyph")) {
+                obj.x = bx + (bw as i32 - 8) / 2;
+                obj.y = by + (bh as i32 - 8) / 2;
+            }
         }
 
         // Content.

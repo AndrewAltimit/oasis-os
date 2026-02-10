@@ -70,6 +70,16 @@ pub struct ActiveTheme {
     /// Cursor highlight stroke color.
     pub cursor_color: Color,
 
+    // -- Bar gradients --
+    /// Status bar gradient top color (None = flat fill).
+    pub statusbar_gradient_top: Option<Color>,
+    /// Status bar gradient bottom color.
+    pub statusbar_gradient_bottom: Option<Color>,
+    /// Bottom bar gradient top color (None = flat fill).
+    pub bar_gradient_top: Option<Color>,
+    /// Bottom bar gradient bottom color.
+    pub bar_gradient_bottom: Option<Color>,
+
     // -- Icon geometry --
     /// Icon card border radius (pixels).
     pub icon_border_radius: u16,
@@ -102,6 +112,10 @@ impl Default for ActiveTheme {
             category_label_color: Color::rgb(220, 220, 220),
             page_dot_active: Color::rgba(255, 255, 255, 200),
             page_dot_inactive: Color::rgba(255, 255, 255, 50),
+            statusbar_gradient_top: None,
+            statusbar_gradient_bottom: None,
+            bar_gradient_top: None,
+            bar_gradient_bottom: None,
             icon_body_color: Color::rgb(250, 250, 248),
             icon_fold_color: Color::rgb(210, 210, 205),
             icon_outline_color: Color::rgba(255, 255, 255, 180),
@@ -212,7 +226,59 @@ impl ActiveTheme {
                 .and_then(|i| i.cursor_border_radius)
                 .unwrap_or_else(|| skin.border_radius.map(|r| r + 2).unwrap_or(6)),
             cursor_stroke_width: ico.and_then(|i| i.cursor_stroke_width).unwrap_or(2),
+            statusbar_gradient_top: Self::bar_gradient_pair(
+                skin,
+                bar.and_then(|b| b.statusbar_gradient_top.as_ref()),
+                bar.and_then(|b| b.statusbar_gradient_bottom.as_ref()),
+                status_bar_color,
+            )
+            .map(|(t, _)| t),
+            statusbar_gradient_bottom: Self::bar_gradient_pair(
+                skin,
+                bar.and_then(|b| b.statusbar_gradient_top.as_ref()),
+                bar.and_then(|b| b.statusbar_gradient_bottom.as_ref()),
+                status_bar_color,
+            )
+            .map(|(_, b)| b),
+            bar_gradient_top: Self::bar_gradient_pair(
+                skin,
+                bar.and_then(|b| b.bar_gradient_top.as_ref()),
+                bar.and_then(|b| b.bar_gradient_bottom.as_ref()),
+                status_bar_color,
+            )
+            .map(|(t, _)| t),
+            bar_gradient_bottom: Self::bar_gradient_pair(
+                skin,
+                bar.and_then(|b| b.bar_gradient_top.as_ref()),
+                bar.and_then(|b| b.bar_gradient_bottom.as_ref()),
+                status_bar_color,
+            )
+            .map(|(_, b)| b),
         }
+    }
+
+    /// Derive a gradient pair for a bar element.
+    ///
+    /// Returns `Some((top, bottom))` if gradient is enabled (either via explicit
+    /// overrides or via `gradient_enabled`), or `None` for flat fill.
+    fn bar_gradient_pair(
+        skin: &SkinTheme,
+        top_override: Option<&String>,
+        bot_override: Option<&String>,
+        base: Color,
+    ) -> Option<(Color, Color)> {
+        // Explicit overrides always win.
+        if let (Some(t), Some(b)) = (
+            top_override.and_then(|s| parse_hex_color(s)),
+            bot_override.and_then(|s| parse_hex_color(s)),
+        ) {
+            return Some((t, b));
+        }
+        // Auto-derive when gradient_enabled is set.
+        if skin.gradient_enabled == Some(true) {
+            return Some((lighten(base, 0.15), base));
+        }
+        None
     }
 }
 
