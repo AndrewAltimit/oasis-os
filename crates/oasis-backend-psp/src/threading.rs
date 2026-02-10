@@ -112,6 +112,14 @@ impl AudioHandle {
     pub fn channels(&self) -> u32 {
         SHARED_AUDIO.lock().channels
     }
+
+    pub fn position_ms(&self) -> u64 {
+        SHARED_AUDIO.lock().position_ms
+    }
+
+    pub fn duration_ms(&self) -> u64 {
+        SHARED_AUDIO.lock().duration_ms
+    }
 }
 
 /// Send an audio command from any context.

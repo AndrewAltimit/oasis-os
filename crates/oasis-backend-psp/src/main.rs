@@ -27,38 +27,43 @@ psp::module_kernel!("OASIS_OS", 1, 0);
 // Bar geometry.
 const STATUSBAR_H: u32 = 18;
 const TAB_ROW_H: u32 = 14;
-const BOTTOMBAR_H: u32 = 18;
+const BOTTOMBAR_H: u32 = 32;
 const BOTTOMBAR_Y: i32 = (SCREEN_HEIGHT - BOTTOMBAR_H) as i32;
 const CONTENT_TOP: u32 = STATUSBAR_H + TAB_ROW_H;
 const CONTENT_H: u32 = SCREEN_HEIGHT - CONTENT_TOP - BOTTOMBAR_H;
 
+// Two-layer bottom bar row constants.
+const BOTTOM_UPPER_Y: i32 = BOTTOMBAR_Y;
+const BOTTOM_UPPER_H: u32 = 16;
+const BOTTOM_LOWER_Y: i32 = BOTTOMBAR_Y + BOTTOM_UPPER_H as i32;
+
 // Font metrics.
 const CHAR_W: i32 = 8;
 
-// Status bar tab layout.
+// Status bar tab layout (4 beveled chrome tabs).
 const TAB_START_X: i32 = 34;
-const TAB_W: i32 = 45;
+const TAB_W: i32 = 40;
 const TAB_H: i32 = 12;
-const TAB_GAP: i32 = 4;
+const TAB_GAP: i32 = 3;
 
 // Bottom bar layout.
 const PIPE_GAP: i32 = 5;
 const R_HINT_W: i32 = 28;
 
-// Icon theme.
+// Icon theme (compact to fit 4 rows).
 const ICON_W: u32 = 42;
-const ICON_H: u32 = 52;
-const ICON_STRIPE_H: u32 = 12;
-const ICON_FOLD_SIZE: u32 = 10;
-const ICON_GFX_H: u32 = 22;
-const ICON_GFX_PAD: u32 = 4;
-const ICON_LABEL_PAD: i32 = 4;
+const ICON_H: u32 = 40;
+const ICON_STRIPE_H: u32 = 8;
+const ICON_FOLD_SIZE: u32 = 7;
+const ICON_GFX_H: u32 = 16;
+const ICON_GFX_PAD: u32 = 3;
+const ICON_LABEL_PAD: i32 = 1;
 
-// Dashboard grid (2 columns, 2 rows per page).
+// Dashboard grid (2 columns, 4 rows = 8 icons, no pagination).
 const GRID_COLS: usize = 2;
-const GRID_ROWS: usize = 2;
+const GRID_ROWS: usize = 4;
 const GRID_PAD_X: i32 = 16;
-const GRID_PAD_Y: i32 = 6;
+const GRID_PAD_Y: i32 = 2;
 const CELL_W: i32 = 110;
 const CELL_H: i32 = (CONTENT_H as i32 - 2 * GRID_PAD_Y) / GRID_ROWS as i32;
 const ICONS_PER_PAGE: usize = GRID_COLS * GRID_ROWS;
@@ -67,16 +72,14 @@ const CURSOR_PAD: i32 = 3;
 // Persistent configuration path on Memory Stick.
 const CONFIG_PATH: &str = "ms0:/PSP/GAME/OASISOS/config.rcfg";
 
-// Colors -- bar backgrounds.
-const STATUSBAR_BG: Color = Color::rgba(0, 0, 0, 80);
-const BAR_BG: Color = Color::rgba(0, 0, 0, 90);
-const SEPARATOR: Color = Color::rgba(255, 255, 255, 50);
+// Colors -- bar backgrounds (green-tinted opaque, matching PSIX reference).
+const STATUSBAR_BG: Color = Color::rgba(30, 80, 30, 200);
+const BAR_BG: Color = Color::rgba(30, 80, 30, 200);
+const SEPARATOR: Color = Color::rgba(180, 220, 180, 80);
 
 // Colors -- status bar.
 const BATTERY_CLR: Color = Color::rgb(120, 255, 120);
 const CATEGORY_CLR: Color = Color::rgb(220, 220, 220);
-const TAB_ACTIVE_FILL: Color = Color::rgba(255, 255, 255, 30);
-
 // Colors -- bottom bar.
 const URL_CLR: Color = Color::rgb(200, 200, 200);
 const USB_CLR: Color = Color::rgb(140, 140, 140);
@@ -84,15 +87,26 @@ const MEDIA_ACTIVE: Color = Color::WHITE;
 const MEDIA_INACTIVE: Color = Color::rgb(170, 170, 170);
 const PIPE_CLR: Color = Color::rgba(255, 255, 255, 60);
 const R_HINT_CLR: Color = Color::rgba(255, 255, 255, 140);
-const DOT_ACTIVE: Color = Color::rgba(255, 255, 255, 200);
-const DOT_INACTIVE: Color = Color::rgba(255, 255, 255, 50);
+// Colors -- visualizer & transport.
+const VIZ_BAR_CLR: Color = Color::rgba(120, 60, 160, 200);
+const VIZ_BAR_PEAK: Color = Color::rgba(180, 100, 220, 230);
+const TRANSPORT_CLR: Color = Color::rgba(220, 220, 220, 200);
+const TRANSPORT_ACTIVE: Color = Color::rgb(120, 255, 120);
+const L_HINT_CLR: Color = Color::rgba(255, 255, 255, 140);
 
-// Colors -- chrome bezel.
-const BEZEL_FILL: Color = Color::rgba(160, 170, 180, 80);
-const BEZEL_TOP: Color = Color::rgba(255, 255, 255, 120);
-const BEZEL_BOTTOM: Color = Color::rgba(60, 70, 80, 140);
-const BEZEL_LEFT: Color = Color::rgba(255, 255, 255, 80);
-const BEZEL_RIGHT: Color = Color::rgba(80, 90, 100, 120);
+// Visualizer constants.
+const VIZ_BAR_COUNT: i32 = 14;
+const VIZ_BAR_W: i32 = 3;
+const VIZ_BAR_GAP: i32 = 1;
+const VIZ_BAR_MAX_H: i32 = 12;
+const VIZ_BAR_MIN_H: i32 = 1;
+
+// Colors -- chrome bezel (green-tinted, matching PSIX reference).
+const BEZEL_FILL: Color = Color::rgba(50, 100, 50, 120);
+const BEZEL_TOP: Color = Color::rgba(200, 240, 200, 140);
+const BEZEL_BOTTOM: Color = Color::rgba(20, 50, 20, 160);
+const BEZEL_LEFT: Color = Color::rgba(180, 220, 180, 100);
+const BEZEL_RIGHT: Color = Color::rgba(30, 60, 30, 140);
 
 // Colors -- icons.
 const BODY_CLR: Color = Color::rgb(250, 250, 248);
@@ -141,29 +155,32 @@ static APPS: &[AppEntry] = &[
 
 #[derive(Clone, Copy, PartialEq)]
 enum TopTab {
-    Apps,
-    Mods,
+    Mso,
+    Umd,
+    Mod,
     Net,
 }
 
 impl TopTab {
     fn label(self) -> &'static str {
         match self {
-            Self::Apps => "APPS",
-            Self::Mods => "MODS",
+            Self::Mso => "MSO",
+            Self::Umd => "UMD",
+            Self::Mod => "MOD",
             Self::Net => "NET",
         }
     }
 
     fn next(self) -> Self {
         match self {
-            Self::Apps => Self::Mods,
-            Self::Mods => Self::Net,
-            Self::Net => Self::Apps,
+            Self::Mso => Self::Umd,
+            Self::Umd => Self::Mod,
+            Self::Mod => Self::Net,
+            Self::Net => Self::Mso,
         }
     }
 
-    const ALL: &[TopTab] = &[TopTab::Apps, TopTab::Mods, TopTab::Net];
+    const ALL: &[TopTab] = &[TopTab::Mso, TopTab::Umd, TopTab::Mod, TopTab::Net];
 }
 
 // ---------------------------------------------------------------------------
@@ -373,15 +390,11 @@ fn psp_main() {
     let mut classic_view = ClassicView::Dashboard;
 
     let mut selected: usize = 0;
-    let mut page: usize = 0;
-    let mut top_tab = TopTab::Apps;
+    let page: usize = 0;
+    let mut top_tab = TopTab::Mso;
     let mut media_tab = MediaTab::None;
-
-    let total_pages = if APPS.is_empty() {
-        1
-    } else {
-        (APPS.len() + ICONS_PER_PAGE - 1) / ICONS_PER_PAGE
-    };
+    let mut icons_hidden: bool = false;
+    let mut viz_frame: u32 = 0;
 
     // Terminal state.
     let vol_info = backend.volatile_mem_info();
@@ -670,13 +683,7 @@ fn psp_main() {
                     }
                 }
                 InputEvent::ButtonPress(Button::Cancel) if classic_view == ClassicView::Dashboard => {
-                    page = (page + 1) % total_pages;
-                    let page_start = page * ICONS_PER_PAGE;
-                    let page_count =
-                        APPS.len().saturating_sub(page_start).min(ICONS_PER_PAGE);
-                    if selected >= page_count && page_count > 0 {
-                        selected = page_count - 1;
-                    }
+                    icons_hidden = !icons_hidden;
                 }
 
                 // Trigger cycling.
@@ -1083,7 +1090,9 @@ fn psp_main() {
 
                 match classic_view {
                     ClassicView::Dashboard => {
-                        draw_dashboard(&mut backend, selected, page);
+                        if !icons_hidden {
+                            draw_dashboard(&mut backend, selected, page);
+                        }
                     }
                     ClassicView::Terminal => {
                         backend.force_bitmap_font = true;
@@ -1134,7 +1143,9 @@ fn psp_main() {
 
             AppMode::Desktop => {
                 // Draw dashboard icons behind windows.
-                draw_dashboard(&mut backend, selected, page);
+                if !icons_hidden {
+                    draw_dashboard(&mut backend, selected, page);
+                }
 
                 // Pre-compute values for windowed app renderers.
                 let settings_clock = config.get_i32("clock_mhz").unwrap_or(333);
@@ -1212,10 +1223,9 @@ fn psp_main() {
         }
 
         // Status bar + bottom bar (always visible, drawn on top).
-        draw_status_bar(&mut backend, top_tab, &status, fps, usb_active);
-        if app_mode == AppMode::Classic {
-            draw_bottom_bar(&mut backend, media_tab, page, total_pages);
-        }
+        draw_status_bar(&mut backend, top_tab, &status, &sysinfo);
+        draw_bottom_bar(&mut backend, media_tab, &audio, viz_frame, &status);
+        viz_frame = viz_frame.wrapping_add(1);
 
         // Cursor (always on top).
         let (cx, cy) = backend.cursor_pos();
@@ -1239,7 +1249,7 @@ fn hit_test_dashboard_icon(x: i32, y: i32, page: usize) -> Option<usize> {
         let cell_x = GRID_PAD_X + col * CELL_W;
         let cell_y = CONTENT_TOP as i32 + GRID_PAD_Y + row * CELL_H;
         let ix = cell_x + (CELL_W - ICON_W as i32) / 2;
-        let iy = cell_y + 4;
+        let iy = cell_y + 1;
         if x >= ix
             && x < ix + ICON_W as i32
             && y >= iy
@@ -1692,7 +1702,7 @@ fn draw_dashboard(backend: &mut PspBackend, selected: usize, page: usize) {
         let cell_x = GRID_PAD_X + col * CELL_W;
         let cell_y = CONTENT_TOP as i32 + GRID_PAD_Y + row * CELL_H;
         let ix = cell_x + (CELL_W - ICON_W as i32) / 2;
-        let iy = cell_y + 4;
+        let iy = cell_y + 1;
 
         draw_icon(backend, app, ix, iy);
 
@@ -1710,7 +1720,7 @@ fn draw_dashboard(backend: &mut PspBackend, selected: usize, page: usize) {
         let cell_x = GRID_PAD_X + sel_col * CELL_W;
         let cell_y = CONTENT_TOP as i32 + GRID_PAD_Y + sel_row * CELL_H;
         let ix = cell_x + (CELL_W - ICON_W as i32) / 2;
-        let iy = cell_y + 4;
+        let iy = cell_y + 1;
         backend.fill_rect_inner(
             ix - CURSOR_PAD,
             iy - CURSOR_PAD,
@@ -1757,16 +1767,20 @@ fn draw_icon(backend: &mut PspBackend, app: &AppEntry, ix: i32, iy: i32) {
 // Status bar rendering
 // ---------------------------------------------------------------------------
 
-fn draw_status_bar(backend: &mut PspBackend, active_tab: TopTab, status: &StatusBarInfo, fps: f32, usb_active: bool) {
+fn draw_status_bar(
+    backend: &mut PspBackend,
+    active_tab: TopTab,
+    status: &StatusBarInfo,
+    sysinfo: &SystemInfo,
+) {
     backend.fill_rect_inner(0, 0, SCREEN_WIDTH, STATUSBAR_H, STATUSBAR_BG);
     backend.fill_rect_inner(0, STATUSBAR_H as i32 - 1, SCREEN_WIDTH, 1, SEPARATOR);
 
+    // -- Left side: battery percentage + CPU MHz + version --
+
+    // Battery percentage (color-coded).
     let bat_label = if status.battery_percent >= 0 {
-        if status.battery_charging {
-            format!("CHG {}%", status.battery_percent)
-        } else {
-            format!("BAT {}%", status.battery_percent)
-        }
+        format!("{}%", status.battery_percent)
     } else if status.ac_power {
         String::from("AC")
     } else {
@@ -1781,50 +1795,50 @@ fn draw_status_bar(backend: &mut PspBackend, active_tab: TopTab, status: &Status
     };
     backend.draw_text_inner(&bat_label, 6, 5, 8, bat_color);
 
-    let wifi_label = if status.wifi_on { "WiFi" } else { "----" };
-    let wifi_color = if status.wifi_on {
-        Color::rgb(100, 200, 255)
-    } else {
-        Color::rgb(100, 100, 100)
-    };
-    backend.draw_text_inner(wifi_label, 96, 5, 8, wifi_color);
+    // CPU MHz with filled-square indicator (matching PSIX reference).
+    let bat_w = bat_label.len() as i32 * CHAR_W;
+    let mhz_x = 6 + bat_w + 8;
+    // Draw small filled square indicator (4x4 px).
+    backend.fill_rect_inner(mhz_x, 7, 5, 5, Color::WHITE);
+    let mhz_label = format!("{} MHZ", sysinfo.cpu_mhz);
+    backend.draw_text_inner(&mhz_label, mhz_x + 8, 5, 8, Color::WHITE);
 
-    let (usb_label, usb_color) = if usb_active {
-        ("USB+", Color::rgb(120, 255, 120))
-    } else if status.usb_connected {
-        ("USB", Color::rgb(200, 200, 200))
-    } else {
-        ("USB", Color::rgb(100, 100, 100))
-    };
-    backend.draw_text_inner(usb_label, 140, 5, 8, usb_color);
+    // Version string (centered-ish).
+    let ver_label = "Version 0.1 Public";
+    let ver_w = ver_label.len() as i32 * CHAR_W;
+    let ver_x = (SCREEN_WIDTH as i32 - ver_w) / 2;
+    backend.draw_text_inner(ver_label, ver_x, 5, 8, Color::WHITE);
 
-    let fps_label = format!("OASIS v0.1  {:.0}fps", fps);
-    backend.draw_text_inner(&fps_label, 200, 5, 8, Color::WHITE);
+    // -- Right side: time + full date --
+    let date_label = format!(
+        "{:02}:{:02} {} {}, {}",
+        status.hour,
+        status.minute,
+        status.month_name(),
+        status.day,
+        status.year,
+    );
+    let date_w = date_label.len() as i32 * CHAR_W;
+    let date_x = SCREEN_WIDTH as i32 - date_w - 6;
+    backend.draw_text_inner(&date_label, date_x, 5, 8, Color::WHITE);
 
-    let time_label = format!("{} {:02}:{:02}", status.day_of_week, status.hour, status.minute);
-    backend.draw_text_inner(&time_label, 396, 5, 8, Color::WHITE);
-
+    // -- Tab row --
     backend.draw_text_inner("OSS", 6, STATUSBAR_H as i32 + 3, 8, CATEGORY_CLR);
 
     let tab_y = STATUSBAR_H as i32;
     for (i, tab) in TopTab::ALL.iter().enumerate() {
         let x = TAB_START_X + (i as i32) * (TAB_W + TAB_GAP);
-        let alpha = if *tab == active_tab { 180u8 } else { 60u8 };
-        let border = Color::rgba(255, 255, 255, alpha);
-
-        backend.fill_rect_inner(x, tab_y, TAB_W as u32, 1, border);
-        backend.fill_rect_inner(x, tab_y + TAB_H - 1, TAB_W as u32, 1, border);
-        backend.fill_rect_inner(x, tab_y, 1, TAB_H as u32, border);
-        backend.fill_rect_inner(x + TAB_W - 1, tab_y, 1, TAB_H as u32, border);
 
         if *tab == active_tab {
-            backend.fill_rect_inner(
-                x + 1,
-                tab_y + 1,
-                (TAB_W - 2) as u32,
-                (TAB_H - 2) as u32,
-                TAB_ACTIVE_FILL,
-            );
+            // Beveled 3D chrome bezel for active tab.
+            draw_chrome_bezel(backend, x, tab_y, TAB_W as u32, TAB_H as u32);
+        } else {
+            // Subtle border-only for inactive tabs.
+            let border = Color::rgba(200, 255, 200, 60);
+            backend.fill_rect_inner(x, tab_y, TAB_W as u32, 1, border);
+            backend.fill_rect_inner(x, tab_y + TAB_H - 1, TAB_W as u32, 1, border);
+            backend.fill_rect_inner(x, tab_y, 1, TAB_H as u32, border);
+            backend.fill_rect_inner(x + TAB_W - 1, tab_y, 1, TAB_H as u32, border);
         }
 
         let label = tab.label();
@@ -1846,44 +1860,37 @@ fn draw_status_bar(backend: &mut PspBackend, active_tab: TopTab, status: &Status
 fn draw_bottom_bar(
     backend: &mut PspBackend,
     active_media: MediaTab,
-    current_page: usize,
-    total_pages: usize,
+    audio: &AudioHandle,
+    viz_frame: u32,
+    status: &StatusBarInfo,
 ) {
-    let bar_y = BOTTOMBAR_Y;
+    // Full 32px bottom bar background.
+    backend.fill_rect_inner(0, BOTTOMBAR_Y, SCREEN_WIDTH, BOTTOMBAR_H, BAR_BG);
+    backend.fill_rect_inner(0, BOTTOMBAR_Y, SCREEN_WIDTH, 1, SEPARATOR);
 
-    backend.fill_rect_inner(0, bar_y, SCREEN_WIDTH, BOTTOMBAR_H, BAR_BG);
-    backend.fill_rect_inner(0, bar_y, SCREEN_WIDTH, 1, SEPARATOR);
+    // -- Upper row (y=BOTTOM_UPPER_Y, 16px): URL bezel | Visualizer | Media tabs bezel --
 
+    // URL chrome bezel (left, 140px).
     let url_bx = 2i32;
-    let url_bw = 190u32;
-    let bz_y = bar_y + 2;
-    let bz_h = BOTTOMBAR_H - 4;
-    draw_chrome_bezel(backend, url_bx, bz_y, url_bw, bz_h);
+    let url_bw = 140u32;
+    let ubz_y = BOTTOM_UPPER_Y + 1;
+    let ubz_h = BOTTOM_UPPER_H - 2;
+    draw_chrome_bezel(backend, url_bx, ubz_y, url_bw, ubz_h);
+    backend.draw_text_inner("HTTP://OASIS.LOCAL", 6, BOTTOM_UPPER_Y + 4, 8, URL_CLR);
 
-    backend.draw_text_inner("HTTP://OASIS.LOCAL", 8, bar_y + 5, 8, URL_CLR);
+    // Visualizer (center of upper row).
+    draw_visualizer(backend, audio, viz_frame);
 
-    let usb_x = url_bx + url_bw as i32 + 14;
-    backend.draw_text_inner("USB", usb_x, bar_y + 5, 8, USB_CLR);
-
-    let dots_x = usb_x + 36;
-    let max_dots = 4usize;
-    for i in 0..total_pages.min(max_dots) {
-        let color = if i == current_page {
-            DOT_ACTIVE
-        } else {
-            DOT_INACTIVE
-        };
-        backend.fill_rect_inner(dots_x + (i as i32) * 12, bar_y + 6, 6, 6, color);
-    }
-
-    let labels_w: i32 = MediaTab::LABELS.iter().map(|l| l.len() as i32 * CHAR_W).sum();
+    // Media tabs chrome bezel (right).
+    let labels_w: i32 =
+        MediaTab::LABELS.iter().map(|l| l.len() as i32 * CHAR_W).sum();
     let pipes_w = (MediaTab::LABELS.len() as i32 - 1) * (PIPE_GAP * 2 + CHAR_W);
     let total_w = labels_w + pipes_w;
-    let tabs_x = SCREEN_WIDTH as i32 - total_w - R_HINT_W - 8;
+    let tabs_x = SCREEN_WIDTH as i32 - total_w - 8;
 
-    let tab_bx = tabs_x - 6;
-    let tab_bw = (total_w + R_HINT_W + 14) as u32;
-    draw_chrome_bezel(backend, tab_bx, bz_y, tab_bw, bz_h);
+    let tab_bx = tabs_x - 4;
+    let tab_bw = (total_w + 10) as u32;
+    draw_chrome_bezel(backend, tab_bx, ubz_y, tab_bw, ubz_h);
 
     let mut cx = tabs_x;
     for (i, label) in MediaTab::LABELS.iter().enumerate() {
@@ -1893,17 +1900,154 @@ fn draw_bottom_bar(
         } else {
             MEDIA_INACTIVE
         };
-        backend.draw_text_inner(label, cx, bar_y + 5, 8, color);
+        backend.draw_text_inner(label, cx, BOTTOM_UPPER_Y + 4, 8, color);
         cx += label.len() as i32 * CHAR_W;
 
         if i < MediaTab::LABELS.len() - 1 {
             cx += PIPE_GAP;
-            backend.draw_text_inner("|", cx, bar_y + 5, 8, PIPE_CLR);
+            backend.draw_text_inner("|", cx, BOTTOM_UPPER_Y + 4, 8, PIPE_CLR);
             cx += CHAR_W + PIPE_GAP;
         }
     }
 
-    backend.draw_text_inner("R>", SCREEN_WIDTH as i32 - R_HINT_W, bar_y + 5, 8, R_HINT_CLR);
+    // -- Lower row (y=BOTTOM_LOWER_Y, 16px): L hint | transport | USB | battery bar | R hint --
+    backend.fill_rect_inner(
+        0, BOTTOM_LOWER_Y, SCREEN_WIDTH, 1,
+        Color::rgba(255, 255, 255, 20),
+    );
+
+    // L hint.
+    backend.draw_text_inner("<L", 4, BOTTOM_LOWER_Y + 4, 8, L_HINT_CLR);
+
+    // Transport controls.
+    draw_transport_controls(backend, audio);
+
+    // USB label.
+    backend.draw_text_inner("USB", 250, BOTTOM_LOWER_Y + 4, 8, USB_CLR);
+
+    // Battery bar.
+    draw_battery_bar(backend, status);
+
+    // R hint.
+    backend.draw_text_inner(
+        "R>", SCREEN_WIDTH as i32 - R_HINT_W, BOTTOM_LOWER_Y + 4, 8, R_HINT_CLR,
+    );
+}
+
+/// Draw animated music visualizer bars in center of upper bottom row.
+fn draw_visualizer(
+    backend: &mut PspBackend,
+    audio: &AudioHandle,
+    viz_frame: u32,
+) {
+    let total_viz_w = VIZ_BAR_COUNT * (VIZ_BAR_W + VIZ_BAR_GAP) - VIZ_BAR_GAP;
+    let viz_x = (SCREEN_WIDTH as i32 - total_viz_w) / 2;
+    let viz_base_y = BOTTOM_UPPER_Y + BOTTOM_UPPER_H as i32 - 2;
+    let playing = audio.is_playing() && !audio.is_paused();
+
+    for i in 0..VIZ_BAR_COUNT {
+        let bar_h = if playing {
+            // Animated bars using sinf with different frequencies/phases.
+            let t = viz_frame as f32 * 0.12;
+            let freq = 0.7 + (i as f32) * 0.3;
+            let phase = (i as f32) * 1.1;
+            let val = libm::sinf(t * freq + phase);
+            let norm = (val + 1.0) * 0.5; // 0..1
+            VIZ_BAR_MIN_H + ((VIZ_BAR_MAX_H - VIZ_BAR_MIN_H) as f32 * norm) as i32
+        } else {
+            VIZ_BAR_MIN_H
+        };
+        let bx = viz_x + i * (VIZ_BAR_W + VIZ_BAR_GAP);
+        let by = viz_base_y - bar_h;
+        backend.fill_rect_inner(bx, by, VIZ_BAR_W as u32, bar_h as u32, VIZ_BAR_CLR);
+        // Peak highlight (top 1px).
+        if bar_h > 1 {
+            backend.fill_rect_inner(bx, by, VIZ_BAR_W as u32, 1, VIZ_BAR_PEAK);
+        }
+    }
+}
+
+/// Draw transport controls in the lower bottom row.
+fn draw_transport_controls(backend: &mut PspBackend, audio: &AudioHandle) {
+    let y = BOTTOM_LOWER_Y + 4;
+    let mut tx = 36i32;
+    let playing = audio.is_playing();
+    let paused = audio.is_paused();
+
+    // Rewind.
+    backend.draw_text_inner("<<", tx, y, 8, TRANSPORT_CLR);
+    tx += 20;
+
+    // Pause (two 2x8 bars, highlighted green when paused).
+    let pause_clr = if playing && paused {
+        TRANSPORT_ACTIVE
+    } else {
+        TRANSPORT_CLR
+    };
+    backend.fill_rect_inner(tx, y, 2, 8, pause_clr);
+    backend.fill_rect_inner(tx + 4, y, 2, 8, pause_clr);
+    tx += 12;
+
+    // Play arrow (highlighted green when playing and not paused).
+    let play_clr = if playing && !paused {
+        TRANSPORT_ACTIVE
+    } else {
+        TRANSPORT_CLR
+    };
+    backend.draw_text_inner(">", tx, y, 8, play_clr);
+    tx += 14;
+
+    // Forward.
+    backend.draw_text_inner(">>", tx, y, 8, TRANSPORT_CLR);
+    tx += 20;
+
+    // Stop (6x6 filled square, highlighted green when stopped).
+    let stop_clr = if !playing { TRANSPORT_ACTIVE } else { TRANSPORT_CLR };
+    backend.fill_rect_inner(tx, y + 1, 6, 6, stop_clr);
+}
+
+/// Draw horizontal battery bar in the lower bottom row.
+fn draw_battery_bar(backend: &mut PspBackend, status: &StatusBarInfo) {
+    let bar_x = 310i32;
+    let bar_y = BOTTOM_LOWER_Y + 4;
+    let bar_w = 60u32;
+    let bar_h = 8u32;
+
+    // Outline.
+    backend.fill_rect_inner(bar_x, bar_y, bar_w, 1, Color::rgba(200, 200, 200, 140));
+    backend.fill_rect_inner(
+        bar_x, bar_y + bar_h as i32 - 1, bar_w, 1,
+        Color::rgba(200, 200, 200, 140),
+    );
+    backend.fill_rect_inner(bar_x, bar_y, 1, bar_h, Color::rgba(200, 200, 200, 140));
+    backend.fill_rect_inner(
+        bar_x + bar_w as i32 - 1, bar_y, 1, bar_h,
+        Color::rgba(200, 200, 200, 140),
+    );
+
+    // Dark bg fill.
+    backend.fill_rect_inner(
+        bar_x + 1, bar_y + 1, bar_w - 2, bar_h - 2,
+        Color::rgba(20, 20, 20, 180),
+    );
+
+    // Colored fill proportional to battery_percent.
+    let pct = if status.battery_percent >= 0 {
+        status.battery_percent.min(100) as u32
+    } else {
+        0
+    };
+    let fill_w = ((bar_w - 2) * pct) / 100;
+    if fill_w > 0 {
+        let fill_clr = if pct >= 50 {
+            Color::rgb(120, 255, 120)
+        } else if pct >= 20 {
+            Color::rgb(255, 200, 80)
+        } else {
+            Color::rgb(255, 80, 80)
+        };
+        backend.fill_rect_inner(bar_x + 1, bar_y + 1, fill_w, bar_h - 2, fill_clr);
+    }
 }
 
 /// Draw a chrome/metallic bezel (fill + 4 edges).

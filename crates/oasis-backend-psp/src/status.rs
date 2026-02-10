@@ -40,6 +40,12 @@ impl SystemInfo {
 /// Day-of-week abbreviations (Monday=0 through Sunday=6).
 const DOW_NAMES: [&str; 7] = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 
+/// Full month names for date display.
+const MONTH_NAMES: [&str; 12] = [
+    "January", "February", "March", "April", "May", "June",
+    "July", "August", "September", "October", "November", "December",
+];
+
 /// Dynamic status info polled each frame (or periodically).
 pub struct StatusBarInfo {
     /// Battery charge percentage (0-100), or -1 if no battery.
@@ -54,6 +60,12 @@ pub struct StatusBarInfo {
     pub minute: u16,
     /// Day-of-week abbreviation (e.g. "Mon").
     pub day_of_week: &'static str,
+    /// Current month (1-12).
+    pub month: u16,
+    /// Current day of month (1-31).
+    pub day: u16,
+    /// Current year (e.g. 2026).
+    pub year: u16,
     /// Whether a USB cable is connected.
     pub usb_connected: bool,
     /// Whether the WiFi switch is on.
@@ -61,6 +73,15 @@ pub struct StatusBarInfo {
 }
 
 impl StatusBarInfo {
+    /// Full month name for the current date.
+    pub fn month_name(&self) -> &'static str {
+        if self.month >= 1 && self.month <= 12 {
+            MONTH_NAMES[(self.month - 1) as usize]
+        } else {
+            "???"
+        }
+    }
+
     /// Poll live status from PSP hardware.
     ///
     /// Uses `psp::rtc` for time and day-of-week instead of raw syscalls.
@@ -75,29 +96,37 @@ impl StatusBarInfo {
         };
 
         // Get time via psp::rtc (high-level API).
-        let (hour, minute, dow) = if let Ok(tick) = psp::rtc::Tick::now() {
-            if let Ok(local) = psp::rtc::to_local(&tick) {
-                if let Ok(dt) = local.to_datetime() {
-                    let dow_idx = psp::rtc::day_of_week(
-                        dt.year() as i32,
-                        dt.month() as i32,
-                        dt.day() as i32,
-                    );
-                    let dow_name = if (0..7).contains(&dow_idx) {
-                        DOW_NAMES[dow_idx as usize]
+        let (hour, minute, dow, month, day, year) =
+            if let Ok(tick) = psp::rtc::Tick::now() {
+                if let Ok(local) = psp::rtc::to_local(&tick) {
+                    if let Ok(dt) = local.to_datetime() {
+                        let dow_idx = psp::rtc::day_of_week(
+                            dt.year() as i32,
+                            dt.month() as i32,
+                            dt.day() as i32,
+                        );
+                        let dow_name = if (0..7).contains(&dow_idx) {
+                            DOW_NAMES[dow_idx as usize]
+                        } else {
+                            "???"
+                        };
+                        (
+                            dt.hour(),
+                            dt.minute(),
+                            dow_name,
+                            dt.month(),
+                            dt.day(),
+                            dt.year(),
+                        )
                     } else {
-                        "???"
-                    };
-                    (dt.hour(), dt.minute(), dow_name)
+                        (0, 0, "???", 0, 0, 0)
+                    }
                 } else {
-                    (0, 0, "???")
+                    (0, 0, "???", 0, 0, 0)
                 }
             } else {
-                (0, 0, "???")
-            }
-        } else {
-            (0, 0, "???")
-        };
+                (0, 0, "???", 0, 0, 0)
+            };
 
         // SAFETY: sceUsbGetState and sceWlanGetSwitchState are firmware
         // FFI calls returning scalar values.
@@ -115,6 +144,9 @@ impl StatusBarInfo {
             hour,
             minute,
             day_of_week: dow,
+            month,
+            day,
+            year,
             usb_connected,
             wifi_on,
         }
