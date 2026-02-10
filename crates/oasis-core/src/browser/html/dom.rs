@@ -519,9 +519,8 @@ impl Document {
         match &self.nodes[id].kind {
             NodeKind::Text(s) => out.push_str(s),
             _ => {
-                // Clone the child list to avoid borrowing `self` twice.
-                let children = self.nodes[id].children.clone();
-                for &child in &children {
+                for i in 0..self.nodes[id].children.len() {
+                    let child = self.nodes[id].children[i];
                     self.collect_text(child, out);
                 }
             },
@@ -539,8 +538,8 @@ impl Document {
         {
             return Some(node_id);
         }
-        let children = self.nodes[node_id].children.clone();
-        for &child in &children {
+        for i in 0..self.nodes[node_id].children.len() {
+            let child = self.nodes[node_id].children[i];
             if let Some(found) = self.find_element_by_id(child, target) {
                 return Some(found);
             }
@@ -572,8 +571,8 @@ impl Document {
         {
             return Some(node_id);
         }
-        let children = self.nodes[node_id].children.clone();
-        for &child in &children {
+        for i in 0..self.nodes[node_id].children.len() {
+            let child = self.nodes[node_id].children[i];
             if let Some(found) = self.find_first_element(child, tag) {
                 return Some(found);
             }
