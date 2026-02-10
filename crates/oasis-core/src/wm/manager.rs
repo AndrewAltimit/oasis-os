@@ -115,6 +115,11 @@ impl WindowManager {
         &self.theme
     }
 
+    /// Replace the visual theme at runtime.
+    pub fn set_theme(&mut self, theme: WmTheme) {
+        self.theme = theme;
+    }
+
     /// Get the number of open windows.
     pub fn window_count(&self) -> usize {
         self.windows.len()

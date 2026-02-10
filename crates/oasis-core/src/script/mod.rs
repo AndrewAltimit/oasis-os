@@ -56,6 +56,9 @@ pub fn run_script(
                 let state = if enable { "on" } else { "off" };
                 output.push(format!("(browser sandbox set to {state})"));
             },
+            Ok(CommandOutput::SkinSwap { name }) => {
+                output.push(format!("(skin swap to '{name}' skipped in script)"));
+            },
             Err(e) => {
                 output.push(format!("error at line {}: {e}", i + 1));
             },

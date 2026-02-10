@@ -17,6 +17,7 @@ use std::fs;
 use std::path::Path;
 
 use oasis_backend_sdl::SdlBackend;
+use oasis_core::active_theme::ActiveTheme;
 use oasis_core::backend::{Color, SdiBackend};
 use oasis_core::bottombar::{BottomBar, MediaTab};
 use oasis_core::config::OasisConfig;
@@ -56,6 +57,8 @@ fn main() -> anyhow::Result<()> {
     let mut status_bar = StatusBar::new();
     let mut bottom_bar = BottomBar::new();
     bottom_bar.total_pages = dashboard.page_count();
+
+    let active_theme = ActiveTheme::from_skin(&skin.theme);
 
     let mut sdi = SdiRegistry::new();
     skin.apply_layout(&mut sdi);
@@ -97,9 +100,9 @@ fn main() -> anyhow::Result<()> {
     fs::create_dir_all(out_dir)?;
 
     // -- Screenshot 1: Dashboard --
-    dashboard.update_sdi(&mut sdi);
-    status_bar.update_sdi(&mut sdi);
-    bottom_bar.update_sdi(&mut sdi);
+    dashboard.update_sdi(&mut sdi, &active_theme);
+    status_bar.update_sdi(&mut sdi, &active_theme);
+    bottom_bar.update_sdi(&mut sdi, &active_theme);
     mouse_cursor.update_sdi(&mut sdi);
     render_and_save(
         &mut backend,
@@ -113,8 +116,8 @@ fn main() -> anyhow::Result<()> {
     // -- Screenshot 2: AUDIO media tab --
     bottom_bar.active_tab = MediaTab::Audio;
     dashboard.hide_sdi(&mut sdi);
-    status_bar.update_sdi(&mut sdi);
-    bottom_bar.update_sdi(&mut sdi);
+    status_bar.update_sdi(&mut sdi, &active_theme);
+    bottom_bar.update_sdi(&mut sdi, &active_theme);
     update_media_page(&mut sdi, &bottom_bar);
     mouse_cursor.update_sdi(&mut sdi);
     render_and_save(
@@ -130,9 +133,9 @@ fn main() -> anyhow::Result<()> {
     bottom_bar.active_tab = MediaTab::None;
     status_bar.active_tab = oasis_core::statusbar::TopTab::Mods;
     hide_media_page(&mut sdi);
-    dashboard.update_sdi(&mut sdi);
-    status_bar.update_sdi(&mut sdi);
-    bottom_bar.update_sdi(&mut sdi);
+    dashboard.update_sdi(&mut sdi, &active_theme);
+    status_bar.update_sdi(&mut sdi, &active_theme);
+    bottom_bar.update_sdi(&mut sdi, &active_theme);
     mouse_cursor.update_sdi(&mut sdi);
     render_and_save(
         &mut backend,

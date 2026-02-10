@@ -7,6 +7,7 @@ mod discovery;
 
 pub use discovery::{AppEntry, discover_apps};
 
+use crate::active_theme::ActiveTheme;
 use crate::backend::Color;
 use crate::input::Button;
 use crate::sdi::SdiRegistry;
@@ -164,7 +165,10 @@ impl DashboardState {
     /// Synchronize SDI objects to reflect current dashboard state.
     /// Creates/updates: PSIX-style document icons (white page with colored accent,
     /// folded corner, and app graphic), text label below each, and cursor highlight.
-    pub fn update_sdi(&self, sdi: &mut SdiRegistry) {
+    ///
+    /// Accepts an `ActiveTheme` for skin-driven colors. Pass
+    /// `&ActiveTheme::default()` for legacy behaviour.
+    pub fn update_sdi(&self, sdi: &mut SdiRegistry, at: &ActiveTheme) {
         let cols = self.config.grid_cols as usize;
         let page_apps = self.current_page_apps();
 
@@ -224,9 +228,9 @@ impl DashboardState {
                     obj.visible = true;
                     obj.color = Color::rgba(0, 0, 0, 0);
                     obj.text = None;
-                    obj.border_radius = Some(theme::ICON_BORDER_RADIUS + 1);
+                    obj.border_radius = Some(at.icon_border_radius + 1);
                     obj.stroke_width = Some(1);
-                    obj.stroke_color = Some(theme::ICON_OUTLINE_COLOR);
+                    obj.stroke_color = Some(at.icon_outline_color);
                 }
 
                 // White document page body with rounded corners + shadow.
@@ -236,9 +240,9 @@ impl DashboardState {
                     obj.w = icon_w;
                     obj.h = icon_h;
                     obj.visible = true;
-                    obj.color = theme::ICON_BODY_COLOR;
+                    obj.color = at.icon_body_color;
                     obj.text = None;
-                    obj.border_radius = Some(theme::ICON_BORDER_RADIUS);
+                    obj.border_radius = Some(at.icon_border_radius);
                     obj.shadow_level = Some(1);
                 }
 
@@ -260,7 +264,7 @@ impl DashboardState {
                     obj.w = fold_size;
                     obj.h = fold_size;
                     obj.visible = true;
-                    obj.color = theme::ICON_FOLD_COLOR;
+                    obj.color = at.icon_fold_color;
                     obj.text = None;
                 }
 
@@ -290,7 +294,7 @@ impl DashboardState {
                     obj.h = 0;
                     obj.font_size = 8;
                     obj.text = Some(page_apps[i].title.clone());
-                    obj.text_color = theme::ICON_LABEL_COLOR;
+                    obj.text_color = at.icon_label_color;
                     obj.visible = true;
                 }
             } else {
@@ -331,9 +335,9 @@ impl DashboardState {
                 cursor.color = Color::rgba(0, 0, 0, 0);
                 cursor.visible = true;
                 cursor.overlay = true;
-                cursor.border_radius = Some(theme::CURSOR_BORDER_RADIUS);
-                cursor.stroke_width = Some(theme::CURSOR_STROKE_WIDTH);
-                cursor.stroke_color = Some(theme::CURSOR_COLOR);
+                cursor.border_radius = Some(at.cursor_border_radius);
+                cursor.stroke_width = Some(at.cursor_stroke_width);
+                cursor.stroke_color = Some(at.cursor_color);
             } else {
                 cursor.visible = false;
             }
@@ -479,7 +483,8 @@ mod tests {
     fn update_sdi_creates_objects() {
         let dash = DashboardState::new(test_config(), test_apps(3));
         let mut sdi = SdiRegistry::new();
-        dash.update_sdi(&mut sdi);
+        let at = crate::active_theme::ActiveTheme::default();
+        dash.update_sdi(&mut sdi, &at);
         assert!(sdi.contains("icon_0"));
         assert!(sdi.contains("icon_1"));
         assert!(sdi.contains("icon_2"));

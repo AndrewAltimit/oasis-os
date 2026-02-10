@@ -4,6 +4,7 @@
 //! backend abstraction traits, input event pipeline, configuration, and
 //! error types. This crate has zero platform dependencies.
 
+pub mod active_theme;
 pub mod agent;
 pub mod apps;
 pub mod audio;

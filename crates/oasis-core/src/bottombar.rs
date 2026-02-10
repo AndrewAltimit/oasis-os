@@ -4,6 +4,7 @@
 //! Displays URL label, USB indicator, media category tabs, page dots,
 //! and shoulder button hints.
 
+use crate::active_theme::ActiveTheme;
 use crate::sdi::SdiRegistry;
 use crate::sdi::helpers::{
     BezelStyle, ensure_border, ensure_chrome_bezel, ensure_rounded_fill, ensure_text, hide_bezel,
@@ -91,7 +92,10 @@ impl BottomBar {
     }
 
     /// Synchronize SDI objects to reflect current bottom bar state.
-    pub fn update_sdi(&self, sdi: &mut SdiRegistry) {
+    ///
+    /// Accepts an `ActiveTheme` for skin-driven colors. Pass
+    /// `&ActiveTheme::default()` for legacy behaviour.
+    pub fn update_sdi(&self, sdi: &mut SdiRegistry, at: &ActiveTheme) {
         let bar_y = theme::BOTTOMBAR_Y;
         let bar_h = theme::BOTTOMBAR_H;
         let screen_w = theme::SCREEN_W;
@@ -104,11 +108,12 @@ impl BottomBar {
             obj.y = bar_y;
             obj.w = screen_w;
             obj.h = bar_h;
-            obj.color = theme::BAR_BG;
+            obj.color = at.bar_bg;
             obj.overlay = true;
             obj.z = 900;
         }
         if let Ok(obj) = sdi.get_mut("bar_bottom") {
+            obj.color = at.bar_bg;
             obj.visible = true;
         }
 
@@ -120,7 +125,7 @@ impl BottomBar {
             bar_y,
             screen_w,
             1,
-            theme::SEPARATOR_COLOR,
+            at.separator_color,
         );
 
         // URL label on the left.
@@ -130,7 +135,7 @@ impl BottomBar {
             8,
             bar_y + 8,
             theme::FONT_SMALL,
-            theme::URL_COLOR,
+            at.url_color,
         );
         if let Ok(obj) = sdi.get_mut("bar_url") {
             obj.text = Some("HTTP://OASIS.LOCAL".to_string());
@@ -177,9 +182,9 @@ impl BottomBar {
             let name = format!("bar_btab_{i}");
 
             let color = if *tab == self.active_tab {
-                theme::MEDIA_TAB_ACTIVE
+                at.media_tab_active
             } else {
-                theme::MEDIA_TAB_INACTIVE
+                at.media_tab_inactive
             };
             ensure_text(sdi, &name, cx, bar_y + 8, theme::FONT_SMALL, color);
             if let Ok(obj) = sdi.get_mut(&name) {
@@ -198,7 +203,7 @@ impl BottomBar {
                     cx,
                     bar_y + 8,
                     theme::FONT_SMALL,
-                    theme::PIPE_COLOR,
+                    at.pipe_color,
                 );
                 if let Ok(obj) = sdi.get_mut(&pipe_name) {
                     obj.text = Some("|".to_string());
@@ -214,7 +219,7 @@ impl BottomBar {
             screen_w as i32 - theme::R_HINT_W,
             bar_y + 8,
             theme::FONT_SMALL,
-            theme::R_HINT_COLOR,
+            at.r_hint_color,
         );
         if let Ok(obj) = sdi.get_mut("bar_r_hint") {
             obj.text = Some("R>".to_string());
@@ -228,7 +233,7 @@ impl BottomBar {
             usb_x,
             bar_y + 8,
             theme::FONT_SMALL,
-            theme::USB_COLOR,
+            at.usb_color,
         );
         if let Ok(obj) = sdi.get_mut("bar_usb") {
             obj.text = Some("USB".to_string());
@@ -240,9 +245,9 @@ impl BottomBar {
         for i in 0..self.total_pages.min(max_dots) {
             let name = format!("bar_page_{i}");
             let dot_color = if i == self.current_page {
-                theme::PAGE_DOT_ACTIVE
+                at.page_dot_active
             } else {
-                theme::PAGE_DOT_INACTIVE
+                at.page_dot_inactive
             };
             ensure_rounded_fill(
                 sdi,
@@ -318,7 +323,8 @@ mod tests {
     fn update_sdi_creates_objects() {
         let bar = BottomBar::new();
         let mut sdi = SdiRegistry::new();
-        bar.update_sdi(&mut sdi);
+        let at = crate::active_theme::ActiveTheme::default();
+        bar.update_sdi(&mut sdi, &at);
         assert!(sdi.contains("bar_bottom"));
         assert!(sdi.contains("bar_url"));
         assert!(sdi.contains("bar_btab_0"));
@@ -336,7 +342,8 @@ mod tests {
         bar.total_pages = 3;
         bar.current_page = 1;
         let mut sdi = SdiRegistry::new();
-        bar.update_sdi(&mut sdi);
+        let at = crate::active_theme::ActiveTheme::default();
+        bar.update_sdi(&mut sdi, &at);
 
         assert!(sdi.get("bar_page_0").unwrap().visible);
         assert!(sdi.get("bar_page_1").unwrap().visible);
@@ -347,7 +354,8 @@ mod tests {
     fn bar_is_overlay() {
         let bar = BottomBar::new();
         let mut sdi = SdiRegistry::new();
-        bar.update_sdi(&mut sdi);
+        let at = crate::active_theme::ActiveTheme::default();
+        bar.update_sdi(&mut sdi, &at);
         assert!(sdi.get("bar_bottom").unwrap().overlay);
     }
 }

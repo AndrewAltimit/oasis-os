@@ -1,6 +1,7 @@
 //! Skin loading from TOML configuration files.
 
 use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
 
@@ -301,6 +302,52 @@ impl Skin {
                 }
             }
         }
+    }
+
+    /// Load a skin from a directory containing TOML files.
+    ///
+    /// Requires `skin.toml`, `layout.toml`, and `features.toml`.
+    /// Optional files: `theme.toml`, `strings.toml`, `corrupted.toml`.
+    pub fn from_directory(dir: &Path) -> Result<Self> {
+        let read = |name: &str| -> Result<String> {
+            let p = dir.join(name);
+            std::fs::read_to_string(&p)
+                .map_err(|e| OasisError::Config(format!("{}: {e}", p.display())))
+        };
+        let read_opt =
+            |name: &str| -> String { std::fs::read_to_string(dir.join(name)).unwrap_or_default() };
+
+        let manifest = read("skin.toml")?;
+        let layout = read("layout.toml")?;
+        let features = read("features.toml")?;
+        let theme = read_opt("theme.toml");
+        let strings = read_opt("strings.toml");
+        let corrupted = read_opt("corrupted.toml");
+
+        if corrupted.is_empty() {
+            Self::from_toml_full(&manifest, &layout, &features, &theme, &strings)
+        } else {
+            Self::from_toml_corrupted(&manifest, &layout, &features, &theme, &strings, &corrupted)
+        }
+    }
+
+    /// Scan a directory for skin subdirectories (those containing `skin.toml`).
+    ///
+    /// Returns `(name, path)` pairs sorted by name.
+    pub fn discover_skins(dir: &Path) -> Vec<(String, PathBuf)> {
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return Vec::new();
+        };
+        let mut skins: Vec<(String, PathBuf)> = entries
+            .filter_map(|e| e.ok())
+            .filter(|e| e.path().join("skin.toml").is_file())
+            .map(|e| {
+                let name = e.file_name().to_string_lossy().into_owned();
+                (name, e.path())
+            })
+            .collect();
+        skins.sort_by(|a, b| a.0.cmp(&b.0));
+        skins
     }
 
     /// Tear down the current SDI tree and rebuild from a new skin.

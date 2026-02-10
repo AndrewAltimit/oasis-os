@@ -9,10 +9,11 @@
 use anyhow::Result;
 
 use oasis_backend_sdl::SdlBackend;
+use oasis_core::active_theme::ActiveTheme;
 use oasis_core::apps::{AppAction, AppRunner};
 use oasis_core::backend::{Color, InputBackend, SdiBackend, TextureId};
 use oasis_core::bottombar::{BottomBar, MediaTab};
-use oasis_core::browser::BrowserWidget;
+use oasis_core::browser::{BrowserConfig, BrowserWidget};
 use oasis_core::config::OasisConfig;
 use oasis_core::cursor::{self, CursorState};
 use oasis_core::dashboard::{DashboardConfig, DashboardState, discover_apps};
@@ -22,7 +23,7 @@ use oasis_core::osk::{OskConfig, OskState};
 use oasis_core::platform::DesktopPlatform;
 use oasis_core::platform::{PowerService, TimeService};
 use oasis_core::sdi::SdiRegistry;
-use oasis_core::skin::Skin;
+use oasis_core::skin::{Skin, resolve_skin};
 use oasis_core::statusbar::StatusBar;
 use oasis_core::terminal::{CommandOutput, CommandRegistry, Environment, register_builtins};
 use oasis_core::transition;
@@ -61,17 +62,21 @@ fn main() -> Result<()> {
     )?;
     backend.init(config.screen_width, config.screen_height)?;
 
-    // Load Classic skin from embedded TOML strings.
-    let skin = Skin::from_toml(
-        include_str!("../../../skins/classic/skin.toml"),
-        include_str!("../../../skins/classic/layout.toml"),
-        include_str!("../../../skins/classic/features.toml"),
-    )?;
+    // Resolve skin from CLI arg, OASIS_SKIN env var, or config.
+    let skin_name = std::env::args()
+        .nth(1)
+        .or_else(|| std::env::var("OASIS_SKIN").ok())
+        .unwrap_or_else(|| config.skin_path.to_string_lossy().into_owned());
+    let mut skin = resolve_skin(&skin_name)?;
     log::info!(
         "Loaded skin: {} v{}",
         skin.manifest.name,
         skin.manifest.version
     );
+
+    // Derive runtime theme from the active skin.
+    let mut active_theme = ActiveTheme::from_skin(&skin.theme);
+    let mut browser_config = BrowserConfig::from_skin_theme(&skin.theme);
 
     // Set up platform services.
     let platform = DesktopPlatform::new();
@@ -113,7 +118,11 @@ fn main() -> Result<()> {
     let mut app_runner: Option<AppRunner> = None;
 
     // Window manager state (Desktop mode).
-    let mut wm = WindowManager::new(config.screen_width, config.screen_height);
+    let mut wm = WindowManager::with_theme(
+        config.screen_width,
+        config.screen_height,
+        skin.theme.build_wm_theme(),
+    );
     let mut open_runners: Vec<(String, AppRunner)> = Vec::new();
 
     // Browser widget state (lives outside open_runners because it's not an AppRunner).
@@ -370,7 +379,7 @@ fn main() -> Result<()> {
                                     window_type: WindowType::AppWindow,
                                 };
                                 let _ = wm.create_window(&wc, &mut sdi);
-                                let mut bw = BrowserWidget::new(Default::default());
+                                let mut bw = BrowserWidget::new(browser_config.clone());
                                 bw.set_window(0, 0, 380, 220);
                                 let home = bw.config.features.home_url.clone();
                                 bw.navigate_vfs(&home, &vfs);
@@ -438,7 +447,7 @@ fn main() -> Result<()> {
                                                     };
                                                     let _ = wm.create_window(&wc, &mut sdi);
                                                     let mut bw =
-                                                        BrowserWidget::new(Default::default());
+                                                        BrowserWidget::new(browser_config.clone());
                                                     bw.set_window(0, 0, 380, 220);
                                                     let home = bw.config.features.home_url.clone();
                                                     bw.navigate_vfs(&home, &vfs);
@@ -561,98 +570,133 @@ fn main() -> Result<()> {
                     input_buf.clear();
                     if !line.is_empty() {
                         output_lines.push(format!("> {line}"));
-                        let mut env = Environment {
-                            cwd: cwd.clone(),
-                            vfs: &mut vfs,
-                            power: Some(&platform),
-                            time: Some(&platform),
-                            usb: Some(&platform),
+                        let mut pending_skin_swap: Option<String> = None;
+                        {
+                            let mut env = Environment {
+                                cwd: cwd.clone(),
+                                vfs: &mut vfs,
+                                power: Some(&platform),
+                                time: Some(&platform),
+                                usb: Some(&platform),
 
-                            network: None,
-                        };
-                        match cmd_reg.execute(&line, &mut env) {
-                            Ok(CommandOutput::Text(text)) => {
-                                for l in text.lines() {
-                                    output_lines.push(l.to_string());
-                                }
-                            },
-                            Ok(CommandOutput::Table { headers, rows }) => {
-                                output_lines.push(headers.join(" | "));
-                                for row in &rows {
-                                    output_lines.push(row.join(" | "));
-                                }
-                            },
-                            Ok(CommandOutput::Clear) => output_lines.clear(),
-                            Ok(CommandOutput::None) => {},
-                            Ok(CommandOutput::ListenToggle { port }) => {
-                                if port == 0 {
-                                    if let Some(ref mut l) = listener {
-                                        l.stop();
-                                        listener = None;
-                                        output_lines.push("Remote listener stopped.".to_string());
-                                    } else {
-                                        output_lines.push("No listener running.".to_string());
+                                network: None,
+                            };
+                            match cmd_reg.execute(&line, &mut env) {
+                                Ok(CommandOutput::Text(text)) => {
+                                    for l in text.lines() {
+                                        output_lines.push(l.to_string());
                                     }
-                                } else if listener.is_some() {
-                                    output_lines.push(
-                                        "Listener already running. Use 'listen stop' first."
-                                            .to_string(),
-                                    );
-                                } else {
-                                    let cfg = ListenerConfig {
-                                        port,
-                                        psk: String::new(),
-                                        max_connections: 4,
-                                    };
-                                    let mut l = RemoteListener::new(cfg);
-                                    match l.start(&mut net_backend) {
-                                        Ok(()) => {
-                                            output_lines.push(format!("Listening on port {port}."));
-                                            listener = Some(l);
-                                        },
-                                        Err(e) => {
-                                            output_lines.push(format!("Listen error: {e}"));
-                                        },
+                                },
+                                Ok(CommandOutput::Table { headers, rows }) => {
+                                    output_lines.push(headers.join(" | "));
+                                    for row in &rows {
+                                        output_lines.push(row.join(" | "));
                                     }
-                                }
-                            },
-                            Ok(CommandOutput::RemoteConnect { address, port, psk }) => {
-                                if remote_client.is_some() {
-                                    output_lines
-                                        .push("Already connected. Disconnect first.".to_string());
-                                } else {
-                                    let mut client = RemoteClient::new();
-                                    match client.connect(
-                                        &mut net_backend,
-                                        &address,
-                                        port,
-                                        psk.as_deref(),
-                                    ) {
-                                        Ok(()) => {
+                                },
+                                Ok(CommandOutput::Clear) => output_lines.clear(),
+                                Ok(CommandOutput::None) => {},
+                                Ok(CommandOutput::ListenToggle { port }) => {
+                                    if port == 0 {
+                                        if let Some(ref mut l) = listener {
+                                            l.stop();
+                                            listener = None;
                                             output_lines
-                                                .push(format!("Connected to {address}:{port}."));
-                                            remote_client = Some(client);
-                                        },
-                                        Err(e) => {
-                                            output_lines.push(format!("Connect error: {e}"));
-                                        },
+                                                .push("Remote listener stopped.".to_string());
+                                        } else {
+                                            output_lines.push("No listener running.".to_string());
+                                        }
+                                    } else if listener.is_some() {
+                                        output_lines.push(
+                                            "Listener already running. Use 'listen stop' first."
+                                                .to_string(),
+                                        );
+                                    } else {
+                                        let cfg = ListenerConfig {
+                                            port,
+                                            psk: String::new(),
+                                            max_connections: 4,
+                                        };
+                                        let mut l = RemoteListener::new(cfg);
+                                        match l.start(&mut net_backend) {
+                                            Ok(()) => {
+                                                output_lines
+                                                    .push(format!("Listening on port {port}."));
+                                                listener = Some(l);
+                                            },
+                                            Err(e) => {
+                                                output_lines.push(format!("Listen error: {e}"));
+                                            },
+                                        }
                                     }
-                                }
-                            },
-                            Ok(CommandOutput::BrowserSandbox { enable }) => {
-                                if let Some(ref mut bw) = browser {
-                                    bw.config.features.sandbox_only = enable;
-                                }
-                                let state = if enable {
-                                    "on (VFS only)"
-                                } else {
-                                    "off (HTTP enabled)"
-                                };
-                                output_lines.push(format!("Browser sandbox: {state}"));
-                            },
-                            Err(e) => output_lines.push(format!("error: {e}")),
+                                },
+                                Ok(CommandOutput::RemoteConnect { address, port, psk }) => {
+                                    if remote_client.is_some() {
+                                        output_lines.push(
+                                            "Already connected. Disconnect first.".to_string(),
+                                        );
+                                    } else {
+                                        let mut client = RemoteClient::new();
+                                        match client.connect(
+                                            &mut net_backend,
+                                            &address,
+                                            port,
+                                            psk.as_deref(),
+                                        ) {
+                                            Ok(()) => {
+                                                output_lines.push(format!(
+                                                    "Connected to {address}:{port}."
+                                                ));
+                                                remote_client = Some(client);
+                                            },
+                                            Err(e) => {
+                                                output_lines.push(format!("Connect error: {e}"));
+                                            },
+                                        }
+                                    }
+                                },
+                                Ok(CommandOutput::BrowserSandbox { enable }) => {
+                                    if let Some(ref mut bw) = browser {
+                                        bw.config.features.sandbox_only = enable;
+                                    }
+                                    let state = if enable {
+                                        "on (VFS only)"
+                                    } else {
+                                        "off (HTTP enabled)"
+                                    };
+                                    output_lines.push(format!("Browser sandbox: {state}"));
+                                },
+                                Ok(CommandOutput::SkinSwap { name }) => {
+                                    pending_skin_swap = Some(name);
+                                },
+                                Err(e) => output_lines.push(format!("error: {e}")),
+                            }
+                            cwd = env.cwd;
+                        } // drop env (releases &mut vfs)
+                        if let Some(name) = pending_skin_swap {
+                            match resolve_skin(&name) {
+                                Ok(new_skin) => {
+                                    let swapped = Skin::swap(&skin, new_skin, &mut sdi);
+                                    active_theme = ActiveTheme::from_skin(&swapped.theme);
+                                    browser_config = BrowserConfig::from_skin_theme(&swapped.theme);
+                                    wm.set_theme(swapped.theme.build_wm_theme());
+                                    let dash_config =
+                                        DashboardConfig::from_features(&swapped.features);
+                                    let apps = discover_apps(&vfs, "/apps", Some("OASISOS"))
+                                        .unwrap_or_default();
+                                    dashboard = DashboardState::new(dash_config, apps);
+                                    bottom_bar.total_pages = dashboard.page_count();
+                                    bottom_bar.current_page = 0;
+                                    output_lines.push(format!(
+                                        "Switched to skin: {}",
+                                        swapped.manifest.name
+                                    ));
+                                    skin = swapped;
+                                },
+                                Err(e) => {
+                                    output_lines.push(format!("Skin error: {e}"));
+                                },
+                            }
                         }
-                        cwd = env.cwd;
                     }
                     while output_lines.len() > MAX_OUTPUT_LINES {
                         output_lines.remove(0);
@@ -711,6 +755,18 @@ fn main() -> Result<()> {
                         };
                         format!("Browser sandbox: {state}")
                     },
+                    Ok(CommandOutput::SkinSwap { name }) => match resolve_skin(&name) {
+                        Ok(new_skin) => {
+                            let swapped = Skin::swap(&skin, new_skin, &mut sdi);
+                            active_theme = ActiveTheme::from_skin(&swapped.theme);
+                            browser_config = BrowserConfig::from_skin_theme(&swapped.theme);
+                            wm.set_theme(swapped.theme.build_wm_theme());
+                            let msg = format!("Switched to skin: {}", swapped.manifest.name);
+                            skin = swapped;
+                            msg
+                        },
+                        Err(e) => format!("Skin error: {e}"),
+                    },
                     Err(e) => format!("error: {e}"),
                 };
                 cwd = env.cwd;
@@ -740,14 +796,14 @@ fn main() -> Result<()> {
                 AppRunner::hide_sdi(&mut sdi);
 
                 if bottom_bar.active_tab == MediaTab::None {
-                    dashboard.update_sdi(&mut sdi);
+                    dashboard.update_sdi(&mut sdi, &active_theme);
                 } else {
                     dashboard.hide_sdi(&mut sdi);
                     update_media_page(&mut sdi, &bottom_bar);
                 }
 
-                status_bar.update_sdi(&mut sdi);
-                bottom_bar.update_sdi(&mut sdi);
+                status_bar.update_sdi(&mut sdi, &active_theme);
+                bottom_bar.update_sdi(&mut sdi, &active_theme);
             },
             Mode::Terminal => {
                 dashboard.hide_sdi(&mut sdi);
@@ -762,8 +818,8 @@ fn main() -> Result<()> {
                 set_terminal_visible(&mut sdi, false);
                 hide_media_page(&mut sdi);
                 // Show bars behind windows in app mode.
-                status_bar.update_sdi(&mut sdi);
-                bottom_bar.update_sdi(&mut sdi);
+                status_bar.update_sdi(&mut sdi, &active_theme);
+                bottom_bar.update_sdi(&mut sdi, &active_theme);
                 if let Some(ref runner) = app_runner {
                     runner.update_sdi(&mut sdi);
                 }
@@ -773,8 +829,8 @@ fn main() -> Result<()> {
                 AppRunner::hide_sdi(&mut sdi);
                 dashboard.hide_sdi(&mut sdi);
                 hide_media_page(&mut sdi);
-                status_bar.update_sdi(&mut sdi);
-                bottom_bar.update_sdi(&mut sdi);
+                status_bar.update_sdi(&mut sdi, &active_theme);
+                bottom_bar.update_sdi(&mut sdi, &active_theme);
             },
             Mode::Osk => {
                 if let Some(ref osk_state) = osk {

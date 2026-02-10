@@ -2,6 +2,10 @@
 //!
 //! All magic numbers for colors, spacing, and screen layout live here
 //! so they can be changed in one place and stay consistent across modules.
+//!
+//! **Legacy defaults** -- prefer `ActiveTheme` for skin-driven rendering.
+//! These constants remain for PSP backend / FFI consumers that do not
+//! use the skin system.
 
 use crate::backend::Color;
 

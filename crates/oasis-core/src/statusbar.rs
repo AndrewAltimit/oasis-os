@@ -3,6 +3,7 @@
 //! Occupies the top 24 pixels of the 480x272 screen. Creates and updates
 //! SDI objects to display system status and top-level navigation tabs.
 
+use crate::active_theme::ActiveTheme;
 use crate::backend::Color;
 use crate::platform::{BatteryState, PowerInfo, SystemTime};
 use crate::sdi::SdiRegistry;
@@ -127,7 +128,10 @@ impl StatusBar {
     }
 
     /// Synchronize SDI objects to reflect current status bar state.
-    pub fn update_sdi(&self, sdi: &mut SdiRegistry) {
+    ///
+    /// Accepts an `ActiveTheme` for skin-driven colors. Pass
+    /// `&ActiveTheme::default()` for legacy behaviour.
+    pub fn update_sdi(&self, sdi: &mut SdiRegistry, at: &ActiveTheme) {
         let bar_h = theme::STATUSBAR_H;
         let screen_w = theme::SCREEN_W;
 
@@ -138,11 +142,12 @@ impl StatusBar {
             obj.y = 0;
             obj.w = screen_w;
             obj.h = bar_h;
-            obj.color = theme::STATUSBAR_BG;
+            obj.color = at.statusbar_bg;
             obj.overlay = true;
             obj.z = 900;
         }
         if let Ok(obj) = sdi.get_mut("bar_top") {
+            obj.color = at.statusbar_bg;
             obj.visible = true;
         }
 
@@ -154,7 +159,7 @@ impl StatusBar {
             bar_h as i32 - 1,
             screen_w,
             1,
-            theme::SEPARATOR_COLOR,
+            at.separator_color,
         );
 
         // Battery + CPU info (left side).
@@ -164,7 +169,7 @@ impl StatusBar {
             6,
             7,
             theme::FONT_SMALL,
-            theme::BATTERY_COLOR,
+            at.battery_color,
         );
         if let Ok(obj) = sdi.get_mut("bar_battery") {
             let mut info = self.battery_text.clone();
@@ -181,21 +186,14 @@ impl StatusBar {
             180,
             7,
             theme::FONT_SMALL,
-            theme::VERSION_COLOR,
+            at.version_color,
         );
         if let Ok(obj) = sdi.get_mut("bar_version") {
             obj.text = Some("Version 0.1".to_string());
         }
 
         // Clock + date (right side).
-        ensure_text(
-            sdi,
-            "bar_clock",
-            290,
-            7,
-            theme::FONT_SMALL,
-            theme::CLOCK_COLOR,
-        );
+        ensure_text(sdi, "bar_clock", 290, 7, theme::FONT_SMALL, at.clock_color);
         if let Ok(obj) = sdi.get_mut("bar_clock") {
             if self.date_text.is_empty() {
                 obj.text = Some(self.clock_text.clone());
@@ -211,7 +209,7 @@ impl StatusBar {
             6,
             bar_h as i32 + 3,
             theme::FONT_SMALL,
-            theme::CATEGORY_LABEL_COLOR,
+            at.category_label_color,
         );
         if let Ok(obj) = sdi.get_mut("bar_mso") {
             obj.text = Some("OSS".to_string());
@@ -245,8 +243,8 @@ impl StatusBar {
                     tab_y,
                     tw,
                     th,
-                    theme::TAB_ACTIVE_FILL,
-                    Color::rgba(255, 255, 255, theme::TAB_ACTIVE_ALPHA),
+                    at.tab_active_fill,
+                    Color::rgba(255, 255, 255, at.tab_active_alpha),
                 );
             } else {
                 // Inactive: transparent fill, dim stroke.
@@ -257,8 +255,8 @@ impl StatusBar {
                     tab_y,
                     tw,
                     th,
-                    theme::TAB_INACTIVE_FILL,
-                    Color::rgba(255, 255, 255, theme::TAB_INACTIVE_ALPHA),
+                    at.tab_inactive_fill,
+                    Color::rgba(255, 255, 255, at.tab_inactive_alpha),
                 );
             }
 
@@ -275,7 +273,7 @@ impl StatusBar {
             if let Ok(obj) = sdi.get_mut(&name) {
                 obj.text = Some(tab.label().to_string());
                 obj.text_color = if is_active {
-                    Color::WHITE
+                    at.media_tab_active
                 } else {
                     Color::rgb(160, 160, 160)
                 };
@@ -395,7 +393,8 @@ mod tests {
     fn update_sdi_creates_objects() {
         let bar = StatusBar::new();
         let mut sdi = SdiRegistry::new();
-        bar.update_sdi(&mut sdi);
+        let at = crate::active_theme::ActiveTheme::default();
+        bar.update_sdi(&mut sdi, &at);
         assert!(sdi.contains("bar_top"));
         assert!(sdi.contains("bar_version"));
         assert!(sdi.contains("bar_clock"));
@@ -408,7 +407,8 @@ mod tests {
     fn bar_top_is_overlay() {
         let bar = StatusBar::new();
         let mut sdi = SdiRegistry::new();
-        bar.update_sdi(&mut sdi);
+        let at = crate::active_theme::ActiveTheme::default();
+        bar.update_sdi(&mut sdi, &at);
         assert!(sdi.get("bar_top").unwrap().overlay);
     }
 }

@@ -62,6 +62,18 @@ pub struct SkinTheme {
     /// Whether the WM is visually themed by this skin.
     #[serde(default)]
     pub wm_theme: Option<WmThemeOverrides>,
+
+    /// Per-element color overrides for status/bottom bars.
+    #[serde(default)]
+    pub bar_overrides: Option<BarOverrides>,
+
+    /// Per-element color overrides for dashboard icons.
+    #[serde(default)]
+    pub icon_overrides: Option<IconOverrides>,
+
+    /// Per-element color overrides for browser chrome.
+    #[serde(default)]
+    pub browser_overrides: Option<BrowserOverrides>,
 }
 
 /// Optional overrides for the window manager theme.
@@ -91,6 +103,56 @@ pub struct WmThemeOverrides {
     pub frame_border_radius: Option<u16>,
     #[serde(default)]
     pub button_radius: Option<u16>,
+}
+
+/// Per-element overrides for status bar and bottom bar colors.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct BarOverrides {
+    pub bar_bg: Option<String>,
+    pub statusbar_bg: Option<String>,
+    pub separator_color: Option<String>,
+    pub battery_color: Option<String>,
+    pub version_color: Option<String>,
+    pub clock_color: Option<String>,
+    pub url_color: Option<String>,
+    pub usb_color: Option<String>,
+    pub tab_active_fill: Option<String>,
+    pub tab_active_alpha: Option<u8>,
+    pub tab_inactive_alpha: Option<u8>,
+    pub media_tab_active: Option<String>,
+    pub media_tab_inactive: Option<String>,
+    pub pipe_color: Option<String>,
+    pub r_hint_color: Option<String>,
+    pub category_label_color: Option<String>,
+    pub page_dot_active: Option<String>,
+    pub page_dot_inactive: Option<String>,
+}
+
+/// Per-element overrides for dashboard icon rendering.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct IconOverrides {
+    pub body_color: Option<String>,
+    pub fold_color: Option<String>,
+    pub outline_color: Option<String>,
+    pub shadow_color: Option<String>,
+    pub label_color: Option<String>,
+    pub cursor_color: Option<String>,
+    pub icon_border_radius: Option<u16>,
+    pub cursor_border_radius: Option<u16>,
+    pub cursor_stroke_width: Option<u16>,
+}
+
+/// Per-element overrides for browser chrome colors.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct BrowserOverrides {
+    pub chrome_bg: Option<String>,
+    pub chrome_text: Option<String>,
+    pub chrome_button_bg: Option<String>,
+    pub url_bar_bg: Option<String>,
+    pub url_bar_text: Option<String>,
+    pub status_bar_bg: Option<String>,
+    pub status_bar_text: Option<String>,
+    pub link_color: Option<String>,
 }
 
 fn default_bg() -> String {
@@ -139,6 +201,9 @@ impl Default for SkinTheme {
             shadow_intensity: None,
             gradient_enabled: None,
             wm_theme: None,
+            bar_overrides: None,
+            icon_overrides: None,
+            browser_overrides: None,
         }
     }
 }

@@ -36,6 +36,11 @@ pub enum CommandOutput {
         /// `true` = sandbox on (VFS only), `false` = networking enabled.
         enable: bool,
     },
+    /// Signal to the app to swap the active skin.
+    SkinSwap {
+        /// Skin name or path to load.
+        name: String,
+    },
 }
 
 /// Shared mutable environment passed to every command.

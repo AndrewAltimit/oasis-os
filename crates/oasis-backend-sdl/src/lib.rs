@@ -603,15 +603,13 @@ impl SdiBackend for SdlBackend {
             let mut d = 1 - cr;
             while cx <= cy {
                 // Top-left corner.
-                let _ = self.canvas.draw_point(sdl2::rect::Point::new(
-                    tx + r - cy,
-                    ty + r - cx,
-                ));
+                let _ = self
+                    .canvas
+                    .draw_point(sdl2::rect::Point::new(tx + r - cy, ty + r - cx));
                 if cx != cy {
-                    let _ = self.canvas.draw_point(sdl2::rect::Point::new(
-                        tx + r - cx,
-                        ty + r - cy,
-                    ));
+                    let _ = self
+                        .canvas
+                        .draw_point(sdl2::rect::Point::new(tx + r - cx, ty + r - cy));
                 }
                 // Top-right corner.
                 let _ = self.canvas.draw_point(sdl2::rect::Point::new(
@@ -697,12 +695,9 @@ impl SdiBackend for SdlBackend {
             let lx = tx + inset;
             let rx = tx + w as i32 - 1 - inset;
             if lx <= rx {
-                let _ = self.canvas.fill_rect(Rect::new(
-                    lx,
-                    ty + dy,
-                    (rx - lx + 1) as u32,
-                    1,
-                ));
+                let _ = self
+                    .canvas
+                    .fill_rect(Rect::new(lx, ty + dy, (rx - lx + 1) as u32, 1));
             }
         }
         Ok(())
