@@ -589,6 +589,8 @@ impl WindowManager {
     /// Create all SDI objects for a window.
     fn create_sdi_objects(&self, window: &Window, sdi: &mut SdiRegistry) {
         let theme = &self.theme;
+        let use_radius = theme.frame_border_radius > 0;
+        let use_shadow = theme.frame_shadow_level > 0;
 
         // Frame (background).
         if window.sdi_suffixes().contains(&"frame") {
@@ -598,6 +600,16 @@ impl WindowManager {
             obj.w = window.outer_w;
             obj.h = window.outer_h;
             obj.color = theme.frame_color;
+            if use_radius {
+                obj.border_radius = Some(theme.frame_border_radius);
+            }
+            if use_shadow {
+                obj.shadow_level = Some(theme.frame_shadow_level);
+            }
+            if theme.border_width > 0 {
+                obj.stroke_width = Some(theme.border_width as u16);
+                obj.stroke_color = Some(theme.frame_color);
+            }
         }
 
         // Titlebar.
@@ -609,6 +621,14 @@ impl WindowManager {
                 obj.w = tw;
                 obj.h = th;
                 obj.color = theme.titlebar_active_color;
+                if theme.titlebar_radius > 0 {
+                    obj.border_radius = Some(theme.titlebar_radius);
+                }
+                if theme.titlebar_gradient {
+                    use crate::ui::color::lighten;
+                    obj.gradient_top = Some(lighten(theme.titlebar_active_color, 0.1));
+                    obj.gradient_bottom = Some(theme.titlebar_active_color);
+                }
             }
 
             // Title text.
@@ -633,6 +653,9 @@ impl WindowManager {
             obj.w = bw;
             obj.h = bh;
             obj.color = theme.btn_close_color;
+            if theme.button_radius > 0 {
+                obj.border_radius = Some(theme.button_radius);
+            }
         }
 
         // Minimize button.
@@ -643,6 +666,9 @@ impl WindowManager {
             obj.w = bw;
             obj.h = bh;
             obj.color = theme.btn_minimize_color;
+            if theme.button_radius > 0 {
+                obj.border_radius = Some(theme.button_radius);
+            }
         }
 
         // Maximize button.
@@ -653,9 +679,12 @@ impl WindowManager {
             obj.w = bw;
             obj.h = bh;
             obj.color = theme.btn_maximize_color;
+            if theme.button_radius > 0 {
+                obj.border_radius = Some(theme.button_radius);
+            }
         }
 
-        // Content area.
+        // Content area (stays sharp for clip rect compatibility).
         {
             let (cx, cy, cw, ch) = window.content_rect(theme);
             let obj = sdi.create(window.sdi_name("content"));

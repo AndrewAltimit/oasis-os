@@ -1,0 +1,15 @@
+# Classic skin theme -- PSIX-style color palette with modern extensions
+background = "#0E0E1C"
+primary = "#4488CC"
+secondary = "#2A2A3E"
+text = "#E0E0F0"
+dim_text = "#707090"
+status_bar = "#18182C"
+prompt = "#44CC88"
+output = "#C0C0D8"
+error = "#FF4466"
+
+# Extended visual properties
+border_radius = 4
+shadow_intensity = 1
+gradient_enabled = true

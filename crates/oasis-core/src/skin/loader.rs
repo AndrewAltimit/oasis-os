@@ -50,6 +50,19 @@ pub struct SkinObjectDef {
     pub font_size: Option<u16>,
     pub alpha: Option<u8>,
     pub visible: Option<bool>,
+    // Extended visual properties.
+    #[serde(default)]
+    pub border_radius: Option<u16>,
+    #[serde(default)]
+    pub gradient_top: Option<String>,
+    #[serde(default)]
+    pub gradient_bottom: Option<String>,
+    #[serde(default)]
+    pub shadow_level: Option<u8>,
+    #[serde(default)]
+    pub stroke_width: Option<u16>,
+    #[serde(default)]
+    pub stroke_color: Option<String>,
 }
 
 /// Layout: a named collection of SDI object definitions (`layout.toml`).
@@ -260,6 +273,31 @@ impl Skin {
                     && let Some(parsed) = parse_hex_color(c)
                 {
                     obj.text_color = parsed;
+                }
+                // Extended visual properties.
+                if let Some(r) = def.border_radius {
+                    obj.border_radius = Some(r);
+                }
+                if let Some(ref c) = def.gradient_top
+                    && let Some(parsed) = parse_hex_color(c)
+                {
+                    obj.gradient_top = Some(parsed);
+                }
+                if let Some(ref c) = def.gradient_bottom
+                    && let Some(parsed) = parse_hex_color(c)
+                {
+                    obj.gradient_bottom = Some(parsed);
+                }
+                if let Some(s) = def.shadow_level {
+                    obj.shadow_level = Some(s);
+                }
+                if let Some(sw) = def.stroke_width {
+                    obj.stroke_width = Some(sw);
+                }
+                if let Some(ref c) = def.stroke_color
+                    && let Some(parsed) = parse_hex_color(c)
+                {
+                    obj.stroke_color = Some(parsed);
                 }
             }
         }

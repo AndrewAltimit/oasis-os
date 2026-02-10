@@ -317,6 +317,8 @@ y = 568
 w = 800
 h = 32
 color = "#222233"
+gradient_top = "#2A2A44"
+gradient_bottom = "#1A1A33"
 
 [taskbar_separator]
 x = 0
@@ -334,6 +336,7 @@ color = "#3264C8"
 text = "Start"
 font_size = 10
 text_color = "#FFFFFF"
+border_radius = 4
 
 [clock_display]
 x = 730
@@ -363,6 +366,8 @@ status_bar = "#222233"
 prompt = "#00FF00"
 output = "#CCCCCC"
 error = "#FF4444"
+border_radius = 4
+shadow_intensity = 1
 
 [wm_theme]
 titlebar_height = 24
@@ -378,6 +383,10 @@ btn_maximize = "#32C832"
 button_size = 16
 resize_handle_size = 6
 titlebar_font_size = 12
+titlebar_radius = 4
+frame_shadow_level = 1
+frame_border_radius = 2
+button_radius = 8
 "##;
 
 const DESKTOP_STRINGS: &str = r#"
@@ -430,6 +439,96 @@ pub fn corrupted_skin() -> Result<Skin> {
 }
 
 // ---------------------------------------------------------------------------
+// Modern skin: showcases all v2 visual features (rounded, gradients, shadows).
+// ---------------------------------------------------------------------------
+
+const MODERN_MANIFEST: &str = r#"
+name = "modern"
+version = "1.0"
+author = "OASIS_OS"
+description = "Modern UI with rounded corners, gradients, and shadows"
+screen_width = 480
+screen_height = 272
+"#;
+
+const MODERN_LAYOUT: &str = r##"
+[content_bg]
+x = 0
+y = 24
+w = 480
+h = 224
+color = "#14141E"
+gradient_top = "#181828"
+gradient_bottom = "#10101A"
+border_radius = 0
+shadow_level = 0
+"##;
+
+const MODERN_FEATURES: &str = r#"
+dashboard = true
+terminal = true
+file_browser = true
+browser = true
+window_manager = true
+dashboard_pages = 4
+icons_per_page = 4
+grid_cols = 2
+grid_rows = 2
+"#;
+
+const MODERN_THEME: &str = r##"
+background = "#14141E"
+primary = "#6C5CE7"
+secondary = "#3D3852"
+text = "#F0F0FF"
+dim_text = "#7E7A90"
+status_bar = "#1A1A2D"
+prompt = "#A29BFE"
+output = "#DDD6FE"
+error = "#FF6B6B"
+surface = "#1E1E30"
+accent_hover = "#8B7CF7"
+border_radius = 6
+shadow_intensity = 2
+gradient_enabled = true
+
+[wm_theme]
+titlebar_height = 24
+border_width = 1
+titlebar_active = "#6C5CE7"
+titlebar_inactive = "#3D3852"
+titlebar_text = "#F0F0FF"
+frame_color = "#2A2A40"
+content_bg = "#181828"
+btn_close = "#FF6B6B"
+btn_minimize = "#FFD93D"
+btn_maximize = "#6BCB77"
+button_size = 16
+resize_handle_size = 6
+titlebar_font_size = 12
+titlebar_radius = 6
+titlebar_gradient = true
+frame_shadow_level = 2
+frame_border_radius = 4
+button_radius = 8
+"##;
+
+const MODERN_STRINGS: &str = r#"
+boot_text = [
+    "OASIS_OS v2.2 [modern]",
+    "Loading modern interface...",
+    "UI subsystems: active",
+    "Ready.",
+]
+prompt_format = "> "
+title = "OASIS Modern"
+home_label = "Home"
+welcome_message = "Welcome to OASIS Modern. Type 'help' for commands."
+error_prefix = "error: "
+shutdown_message = "Session ended."
+"#;
+
+// ---------------------------------------------------------------------------
 // Agent Terminal skin: briefcase field terminal for AI agent management.
 // ---------------------------------------------------------------------------
 
@@ -469,6 +568,8 @@ y = 18
 w = 480
 h = 1
 color = "#006666"
+stroke_width = 1
+stroke_color = "#00666640"
 
 [agent_panel]
 x = 0
@@ -479,6 +580,7 @@ color = "#0D1F2D"
 text = "Agents: (loading...)"
 font_size = 8
 text_color = "#00AAAA"
+border_radius = 4
 
 [session_panel]
 x = 240
@@ -489,6 +591,7 @@ color = "#0D1F2D"
 text = "Sessions: (none)"
 font_size = 8
 text_color = "#00AAAA"
+border_radius = 4
 
 [panel_divider]
 x = 239
@@ -496,6 +599,8 @@ y = 19
 w = 1
 h = 80
 color = "#006666"
+stroke_width = 1
+stroke_color = "#00666640"
 
 [separator_mid]
 x = 0
@@ -503,6 +608,8 @@ y = 99
 w = 480
 h = 1
 color = "#006666"
+stroke_width = 1
+stroke_color = "#00666640"
 
 [health_bar]
 x = 0
@@ -513,6 +620,7 @@ color = "#0A1520"
 text = "CPU: -- | MEM: -- | NET: --"
 font_size = 8
 text_color = "#668888"
+border_radius = 4
 
 [separator_term]
 x = 0
@@ -520,6 +628,8 @@ y = 116
 w = 480
 h = 1
 color = "#006666"
+stroke_width = 1
+stroke_color = "#00666640"
 
 [terminal_bg]
 x = 0
@@ -527,6 +637,7 @@ y = 117
 w = 480
 h = 143
 color = "#060D15"
+border_radius = 4
 
 [terminal_output]
 x = 4
@@ -609,6 +720,17 @@ pub fn desktop_skin() -> Result<Skin> {
     )
 }
 
+/// Load the Modern skin.
+pub fn modern_skin() -> Result<Skin> {
+    Skin::from_toml_full(
+        MODERN_MANIFEST,
+        MODERN_LAYOUT,
+        MODERN_FEATURES,
+        MODERN_THEME,
+        MODERN_STRINGS,
+    )
+}
+
 /// Load a built-in skin by name.
 pub fn load_builtin(name: &str) -> Result<Skin> {
     match name {
@@ -617,6 +739,7 @@ pub fn load_builtin(name: &str) -> Result<Skin> {
         "corrupted" => corrupted_skin(),
         "desktop" => desktop_skin(),
         "agent-terminal" => agent_terminal_skin(),
+        "modern" => modern_skin(),
         _ => Err(crate::error::OasisError::Config(format!(
             "unknown built-in skin: {name}"
         ))),
@@ -631,6 +754,7 @@ pub fn builtin_names() -> &'static [&'static str] {
         "corrupted",
         "desktop",
         "agent-terminal",
+        "modern",
     ]
 }
 
@@ -840,5 +964,87 @@ mod tests {
         assert!(sdi.contains("agent_panel"));
         assert!(sdi.contains("tamper_indicator"));
         assert!(sdi.contains("health_bar"));
+    }
+
+    #[test]
+    fn modern_skin_loads() {
+        let skin = modern_skin().unwrap();
+        assert_eq!(skin.manifest.name, "modern");
+        assert!(skin.features.dashboard);
+        assert!(skin.features.terminal);
+        assert!(skin.features.window_manager);
+        assert!(skin.features.browser);
+        assert_eq!(skin.manifest.screen_width, 480);
+        assert_eq!(skin.manifest.screen_height, 272);
+    }
+
+    #[test]
+    fn modern_skin_has_wm_theme() {
+        let skin = modern_skin().unwrap();
+        let wm = skin.theme.build_wm_theme();
+        assert_eq!(wm.titlebar_radius, 6);
+        assert!(wm.titlebar_gradient);
+        assert_eq!(wm.frame_shadow_level, 2);
+        assert_eq!(wm.frame_border_radius, 4);
+        assert_eq!(wm.button_radius, 8);
+    }
+
+    #[test]
+    fn modern_skin_has_extended_theme_fields() {
+        let skin = modern_skin().unwrap();
+        assert_eq!(skin.theme.border_radius, Some(6));
+        assert_eq!(skin.theme.shadow_intensity, Some(2));
+        assert_eq!(skin.theme.gradient_enabled, Some(true));
+        assert!(skin.theme.surface.is_some());
+        assert!(skin.theme.accent_hover.is_some());
+    }
+
+    #[test]
+    fn modern_skin_applies_layout() {
+        let skin = modern_skin().unwrap();
+        let mut sdi = SdiRegistry::new();
+        skin.apply_layout(&mut sdi);
+        assert!(sdi.contains("content_bg"));
+    }
+
+    #[test]
+    fn modern_skin_content_bg_has_gradient() {
+        let skin = modern_skin().unwrap();
+        let mut sdi = SdiRegistry::new();
+        skin.apply_layout(&mut sdi);
+        let obj = sdi.get("content_bg").unwrap();
+        assert!(obj.gradient_top.is_some());
+        assert!(obj.gradient_bottom.is_some());
+    }
+
+    #[test]
+    fn desktop_skin_has_extended_wm_fields() {
+        let skin = desktop_skin().unwrap();
+        let wm = skin.theme.build_wm_theme();
+        assert_eq!(wm.titlebar_radius, 4);
+        assert_eq!(wm.frame_shadow_level, 1);
+        assert_eq!(wm.frame_border_radius, 2);
+        assert_eq!(wm.button_radius, 8);
+    }
+
+    #[test]
+    fn desktop_skin_taskbar_has_gradient() {
+        let skin = desktop_skin().unwrap();
+        let mut sdi = SdiRegistry::new();
+        skin.apply_layout(&mut sdi);
+        let obj = sdi.get("taskbar_bg").unwrap();
+        assert!(obj.gradient_top.is_some());
+        assert!(obj.gradient_bottom.is_some());
+    }
+
+    #[test]
+    fn agent_terminal_panels_have_border_radius() {
+        let skin = agent_terminal_skin().unwrap();
+        let mut sdi = SdiRegistry::new();
+        skin.apply_layout(&mut sdi);
+        let panel = sdi.get("agent_panel").unwrap();
+        assert_eq!(panel.border_radius, Some(4));
+        let session = sdi.get("session_panel").unwrap();
+        assert_eq!(session.border_radius, Some(4));
     }
 }

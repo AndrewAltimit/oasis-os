@@ -6,7 +6,8 @@
 
 use crate::sdi::SdiRegistry;
 use crate::sdi::helpers::{
-    BezelStyle, ensure_border, ensure_chrome_bezel, ensure_text, hide_bezel, hide_objects,
+    BezelStyle, ensure_border, ensure_chrome_bezel, ensure_rounded_fill, ensure_text, hide_bezel,
+    hide_objects,
 };
 use crate::theme;
 
@@ -233,28 +234,26 @@ impl BottomBar {
             obj.text = Some("USB".to_string());
         }
 
-        // Page dots.
+        // Page dots (rounded for circular appearance).
         let dots_x = usb_x + 36;
         let max_dots = theme::MAX_PAGE_DOTS;
         for i in 0..self.total_pages.min(max_dots) {
             let name = format!("bar_page_{i}");
-            if !sdi.contains(&name) {
-                let obj = sdi.create(&name);
-                obj.overlay = true;
-                obj.z = 901;
-            }
-            if let Ok(obj) = sdi.get_mut(&name) {
-                obj.x = dots_x + (i as i32) * 12;
-                obj.y = bar_y + 9;
-                obj.w = 6;
-                obj.h = 6;
-                obj.visible = true;
-                obj.color = if i == self.current_page {
-                    theme::PAGE_DOT_ACTIVE
-                } else {
-                    theme::PAGE_DOT_INACTIVE
-                };
-            }
+            let dot_color = if i == self.current_page {
+                theme::PAGE_DOT_ACTIVE
+            } else {
+                theme::PAGE_DOT_INACTIVE
+            };
+            ensure_rounded_fill(
+                sdi,
+                &name,
+                dots_x + (i as i32) * 12,
+                bar_y + 9,
+                6,
+                6,
+                dot_color,
+                3,
+            );
         }
         for i in self.total_pages.min(max_dots)..max_dots {
             let name = format!("bar_page_{i}");

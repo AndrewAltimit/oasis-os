@@ -11,6 +11,7 @@ use serde::Deserialize;
 use crate::backend::{Color, SdiBackend};
 use crate::error::{OasisError, Result};
 use crate::sdi::object::SdiObject;
+use crate::ui::shadow::Shadow;
 
 /// The SDI scene graph: a flat, named registry of blittable objects.
 #[derive(Debug)]
@@ -163,6 +164,31 @@ impl SdiRegistry {
             if let Some(o) = entry.overlay {
                 obj.overlay = o;
             }
+            // Extended visual properties.
+            if let Some(r) = entry.border_radius {
+                obj.border_radius = Some(r);
+            }
+            if let Some(ref c) = entry.gradient_top
+                && let Some(parsed) = parse_color(c)
+            {
+                obj.gradient_top = Some(parsed);
+            }
+            if let Some(ref c) = entry.gradient_bottom
+                && let Some(parsed) = parse_color(c)
+            {
+                obj.gradient_bottom = Some(parsed);
+            }
+            if let Some(s) = entry.shadow_level {
+                obj.shadow_level = Some(s);
+            }
+            if let Some(sw) = entry.stroke_width {
+                obj.stroke_width = Some(sw);
+            }
+            if let Some(ref c) = entry.stroke_color
+                && let Some(parsed) = parse_color(c)
+            {
+                obj.stroke_color = Some(parsed);
+            }
         }
         Ok(())
     }
@@ -199,6 +225,12 @@ impl SdiRegistry {
     }
 
     /// Render a single SDI object to the backend.
+    ///
+    /// Dispatch order for non-textured objects with nonzero area:
+    /// 1. Shadow (if `shadow_level > 0`)
+    /// 2. Fill: gradient+radius → gradient → rounded → flat (existing)
+    /// 3. Stroke (if `stroke_width` set)
+    /// 4. Text (if present)
     fn draw_object(obj: &SdiObject, backend: &mut dyn SdiBackend) -> Result<()> {
         // Textured object -- blit the texture.
         if let Some(tex) = obj.texture {
@@ -206,15 +238,52 @@ impl SdiRegistry {
             return Ok(());
         }
 
-        // If the object has a fill color with nonzero area, draw the rect.
-        // Use the color's own alpha, modulated by the object's alpha property.
-        if obj.w > 0 && obj.h > 0 {
+        let has_area = obj.w > 0 && obj.h > 0;
+        let radius = obj.border_radius.unwrap_or(0);
+
+        if has_area {
+            // 1. Shadow behind the rect.
+            if let Some(level) = obj.shadow_level
+                && level > 0
+            {
+                Shadow::elevation(level).draw(backend, obj.x, obj.y, obj.w, obj.h, radius)?;
+            }
+
+            // 2. Fill: choose the best primitive.
             let a = ((obj.color.a as u16) * (obj.alpha as u16) / 255) as u8;
             let color = Color::rgba(obj.color.r, obj.color.g, obj.color.b, a);
-            backend.fill_rect(obj.x, obj.y, obj.w, obj.h, color)?;
+
+            let has_gradient = obj.gradient_top.is_some() && obj.gradient_bottom.is_some();
+
+            if has_gradient && radius > 0 {
+                let top = obj.gradient_top.unwrap();
+                let bot = obj.gradient_bottom.unwrap();
+                backend
+                    .fill_rounded_rect_gradient_v(obj.x, obj.y, obj.w, obj.h, radius, top, bot)?;
+            } else if has_gradient {
+                let top = obj.gradient_top.unwrap();
+                let bot = obj.gradient_bottom.unwrap();
+                backend.fill_rect_gradient_v(obj.x, obj.y, obj.w, obj.h, top, bot)?;
+            } else if radius > 0 {
+                backend.fill_rounded_rect(obj.x, obj.y, obj.w, obj.h, radius, color)?;
+            } else {
+                backend.fill_rect(obj.x, obj.y, obj.w, obj.h, color)?;
+            }
+
+            // 3. Stroke outline.
+            if let Some(sw) = obj.stroke_width
+                && sw > 0
+            {
+                let sc = obj.stroke_color.unwrap_or(Color::rgba(255, 255, 255, 128));
+                if radius > 0 {
+                    backend.stroke_rounded_rect(obj.x, obj.y, obj.w, obj.h, radius, sw, sc)?;
+                } else {
+                    backend.stroke_rect(obj.x, obj.y, obj.w, obj.h, sw, sc)?;
+                }
+            }
         }
 
-        // If the object carries text, draw it on top.
+        // 4. Text on top.
         if let Some(ref text) = obj.text {
             backend.draw_text(text, obj.x, obj.y, obj.font_size, obj.text_color)?;
         }
@@ -237,6 +306,13 @@ struct ThemeEntry {
     color: Option<String>,
     text_color: Option<String>,
     overlay: Option<bool>,
+    // Extended visual properties.
+    border_radius: Option<u16>,
+    gradient_top: Option<String>,
+    gradient_bottom: Option<String>,
+    shadow_level: Option<u8>,
+    stroke_width: Option<u16>,
+    stroke_color: Option<String>,
 }
 
 /// Parse a color string like "#RRGGBB" or "#RRGGBBAA".

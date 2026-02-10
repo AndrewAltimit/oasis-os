@@ -209,29 +209,27 @@ impl DashboardState {
             let iy = cell_y + 4;
 
             if i < page_apps.len() {
-                // Drop shadow behind document (offset down-right).
+                // Shadow is handled by shadow_level on the icon body.
+                // Hide the legacy shadow object.
                 if let Ok(obj) = sdi.get_mut(&shadow_name) {
-                    obj.x = ix + 2;
-                    obj.y = iy + 3;
-                    obj.w = icon_w + 2;
-                    obj.h = icon_h + 1;
-                    obj.visible = true;
-                    obj.color = theme::ICON_SHADOW_COLOR;
-                    obj.text = None;
+                    obj.visible = false;
                 }
 
-                // White border/outline (1px larger than icon on each side).
+                // Outline: rounded stroke instead of solid rect.
                 if let Ok(obj) = sdi.get_mut(&outline_name) {
                     obj.x = ix - 1;
                     obj.y = iy - 1;
                     obj.w = icon_w + 2;
                     obj.h = icon_h + 2;
                     obj.visible = true;
-                    obj.color = theme::ICON_OUTLINE_COLOR;
+                    obj.color = Color::rgba(0, 0, 0, 0);
                     obj.text = None;
+                    obj.border_radius = Some(theme::ICON_BORDER_RADIUS + 1);
+                    obj.stroke_width = Some(1);
+                    obj.stroke_color = Some(theme::ICON_OUTLINE_COLOR);
                 }
 
-                // White document page body (bright, like paper).
+                // White document page body with rounded corners + shadow.
                 if let Ok(obj) = sdi.get_mut(&icon_name) {
                     obj.x = ix;
                     obj.y = iy;
@@ -240,6 +238,8 @@ impl DashboardState {
                     obj.visible = true;
                     obj.color = theme::ICON_BODY_COLOR;
                     obj.text = None;
+                    obj.border_radius = Some(theme::ICON_BORDER_RADIUS);
+                    obj.shadow_level = Some(1);
                 }
 
                 // Colored stripe at top of document (app accent color).
@@ -310,7 +310,7 @@ impl DashboardState {
             }
         }
 
-        // Cursor highlight (translucent white glow around selected icon).
+        // Cursor highlight: rounded stroke frame around selected icon.
         let cursor_name = "cursor_highlight";
         if !sdi.contains(cursor_name) {
             sdi.create(cursor_name);
@@ -328,9 +328,12 @@ impl DashboardState {
                 cursor.y = iy - pad;
                 cursor.w = icon_w + (pad * 2) as u32;
                 cursor.h = icon_h + (pad * 2) as u32;
-                cursor.color = theme::CURSOR_COLOR;
+                cursor.color = Color::rgba(0, 0, 0, 0);
                 cursor.visible = true;
                 cursor.overlay = true;
+                cursor.border_radius = Some(theme::CURSOR_BORDER_RADIUS);
+                cursor.stroke_width = Some(theme::CURSOR_STROKE_WIDTH);
+                cursor.stroke_color = Some(theme::CURSOR_COLOR);
             } else {
                 cursor.visible = false;
             }

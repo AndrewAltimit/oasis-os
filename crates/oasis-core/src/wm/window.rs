@@ -83,6 +83,18 @@ pub struct WmTheme {
     pub resize_handle_size: u32,
     /// Font size for titlebar text.
     pub titlebar_font_size: u16,
+
+    // -- Extended visual properties --
+    /// Titlebar corner radius (top corners only).
+    pub titlebar_radius: u16,
+    /// Whether the titlebar uses a gradient fill.
+    pub titlebar_gradient: bool,
+    /// Shadow elevation for window frames (0 = none).
+    pub frame_shadow_level: u8,
+    /// Frame corner radius.
+    pub frame_border_radius: u16,
+    /// Window button corner radius.
+    pub button_radius: u16,
 }
 
 impl Default for WmTheme {
@@ -101,6 +113,11 @@ impl Default for WmTheme {
             button_size: 16,
             resize_handle_size: 6,
             titlebar_font_size: 12,
+            titlebar_radius: 0,
+            titlebar_gradient: false,
+            frame_shadow_level: 0,
+            frame_border_radius: 0,
+            button_radius: 0,
         }
     }
 }

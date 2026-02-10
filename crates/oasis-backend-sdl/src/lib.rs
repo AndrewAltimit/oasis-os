@@ -553,6 +553,161 @@ impl SdiBackend for SdlBackend {
         Ok(())
     }
 
+    fn stroke_rounded_rect(
+        &mut self,
+        x: i32,
+        y: i32,
+        w: u32,
+        h: u32,
+        radius: u16,
+        stroke_width: u16,
+        color: Color,
+    ) -> Result<()> {
+        if radius == 0 || w == 0 || h == 0 {
+            return self.stroke_rect(x, y, w, h, stroke_width, color);
+        }
+        let (tx, ty) = self.translate(x, y);
+        let r = (radius as i32).min(w as i32 / 2).min(h as i32 / 2);
+        self.set_color(color);
+
+        let sw = (stroke_width as i32).max(1);
+        for t in 0..sw {
+            // Top edge.
+            let _ = self.canvas.draw_line(
+                sdl2::rect::Point::new(tx + r, ty + t),
+                sdl2::rect::Point::new(tx + w as i32 - 1 - r, ty + t),
+            );
+            // Bottom edge.
+            let _ = self.canvas.draw_line(
+                sdl2::rect::Point::new(tx + r, ty + h as i32 - 1 - t),
+                sdl2::rect::Point::new(tx + w as i32 - 1 - r, ty + h as i32 - 1 - t),
+            );
+            // Left edge.
+            let _ = self.canvas.draw_line(
+                sdl2::rect::Point::new(tx + t, ty + r),
+                sdl2::rect::Point::new(tx + t, ty + h as i32 - 1 - r),
+            );
+            // Right edge.
+            let _ = self.canvas.draw_line(
+                sdl2::rect::Point::new(tx + w as i32 - 1 - t, ty + r),
+                sdl2::rect::Point::new(tx + w as i32 - 1 - t, ty + h as i32 - 1 - r),
+            );
+
+            // Rounded corners via midpoint circle arc.
+            let cr = r - t;
+            if cr <= 0 {
+                continue;
+            }
+            let mut cx = 0i32;
+            let mut cy = cr;
+            let mut d = 1 - cr;
+            while cx <= cy {
+                // Top-left corner.
+                let _ = self.canvas.draw_point(sdl2::rect::Point::new(
+                    tx + r - cy,
+                    ty + r - cx,
+                ));
+                if cx != cy {
+                    let _ = self.canvas.draw_point(sdl2::rect::Point::new(
+                        tx + r - cx,
+                        ty + r - cy,
+                    ));
+                }
+                // Top-right corner.
+                let _ = self.canvas.draw_point(sdl2::rect::Point::new(
+                    tx + w as i32 - 1 - r + cy,
+                    ty + r - cx,
+                ));
+                if cx != cy {
+                    let _ = self.canvas.draw_point(sdl2::rect::Point::new(
+                        tx + w as i32 - 1 - r + cx,
+                        ty + r - cy,
+                    ));
+                }
+                // Bottom-left corner.
+                if cx != 0 {
+                    let _ = self.canvas.draw_point(sdl2::rect::Point::new(
+                        tx + r - cy,
+                        ty + h as i32 - 1 - r + cx,
+                    ));
+                }
+                let _ = self.canvas.draw_point(sdl2::rect::Point::new(
+                    tx + r - cx,
+                    ty + h as i32 - 1 - r + cy,
+                ));
+                // Bottom-right corner.
+                if cx != 0 {
+                    let _ = self.canvas.draw_point(sdl2::rect::Point::new(
+                        tx + w as i32 - 1 - r + cy,
+                        ty + h as i32 - 1 - r + cx,
+                    ));
+                }
+                let _ = self.canvas.draw_point(sdl2::rect::Point::new(
+                    tx + w as i32 - 1 - r + cx,
+                    ty + h as i32 - 1 - r + cy,
+                ));
+
+                cx += 1;
+                if d < 0 {
+                    d += 2 * cx + 1;
+                } else {
+                    cy -= 1;
+                    d += 2 * (cx - cy) + 1;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn fill_rounded_rect_gradient_v(
+        &mut self,
+        x: i32,
+        y: i32,
+        w: u32,
+        h: u32,
+        radius: u16,
+        top_color: Color,
+        bottom_color: Color,
+    ) -> Result<()> {
+        if radius == 0 || w == 0 || h == 0 {
+            return self.fill_rect_gradient_v(x, y, w, h, top_color, bottom_color);
+        }
+        let (tx, ty) = self.translate(x, y);
+        let r = (radius as i32).min(w as i32 / 2).min(h as i32 / 2);
+        let h_max = (h as i32 - 1).max(1);
+
+        // Draw scanline by scanline, clipping to the rounded rect shape.
+        for dy in 0..h as i32 {
+            let color = lerp_color_sdl(top_color, bottom_color, dy as u32, h_max as u32);
+            self.set_color(color);
+
+            // Compute horizontal inset for rounded corners.
+            let inset = if dy < r {
+                // Top corners.
+                let ry = r - dy;
+                r - isqrt((r * r - ry * ry).max(0))
+            } else if dy >= h as i32 - r {
+                // Bottom corners.
+                let ry = dy - (h as i32 - 1 - r);
+                r - isqrt((r * r - ry * ry).max(0))
+            } else {
+                0
+            };
+
+            let lx = tx + inset;
+            let rx = tx + w as i32 - 1 - inset;
+            if lx <= rx {
+                let _ = self.canvas.fill_rect(Rect::new(
+                    lx,
+                    ty + dy,
+                    (rx - lx + 1) as u32,
+                    1,
+                ));
+            }
+        }
+        Ok(())
+    }
+
     fn dim_screen(&mut self, alpha: u8) -> Result<()> {
         self.fill_rect(
             0,
@@ -871,6 +1026,22 @@ fn edge_x(x0: i32, y0: i32, x1: i32, y1: i32, y: i32) -> i32 {
         return x0;
     }
     x0 + (x1 - x0) * (y - y0) / (y1 - y0)
+}
+
+/// Integer square root (floor).
+fn isqrt(n: i32) -> i32 {
+    if n <= 0 {
+        return 0;
+    }
+    let mut x = (n as f32).sqrt() as i32;
+    // Newton correction.
+    while x * x > n {
+        x -= 1;
+    }
+    while (x + 1) * (x + 1) <= n {
+        x += 1;
+    }
+    x
 }
 
 /// Linear interpolation between two colors.

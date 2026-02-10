@@ -1062,6 +1062,9 @@ fn setup_terminal_objects(
         obj.w = 472;
         obj.h = 220;
         obj.color = Color::rgb(12, 12, 20);
+        obj.border_radius = Some(4);
+        obj.stroke_width = Some(1);
+        obj.stroke_color = Some(Color::rgba(255, 255, 255, 30));
     }
     if let Ok(obj) = sdi.get_mut("terminal_bg") {
         obj.visible = true;
@@ -1091,6 +1094,7 @@ fn setup_terminal_objects(
         obj.w = 472;
         obj.h = 20;
         obj.color = Color::rgb(20, 20, 35);
+        obj.border_radius = Some(3);
     }
     if let Ok(obj) = sdi.get_mut("term_input_bg") {
         obj.visible = true;

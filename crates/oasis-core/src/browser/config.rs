@@ -72,6 +72,9 @@ pub struct BrowserConfig {
     // Limits
     pub max_redirects: u8,
     pub max_image_dimension: u32,
+
+    /// Use themed chrome with rounded rects (true) or legacy flat chrome (false).
+    pub use_themed_chrome: bool,
 }
 
 impl Default for BrowserConfig {
@@ -98,6 +101,7 @@ impl Default for BrowserConfig {
             scroll_line_px: 16,
             max_redirects: 5,
             max_image_dimension: 480,
+            use_themed_chrome: true,
         }
     }
 }

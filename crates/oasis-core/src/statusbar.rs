@@ -6,7 +6,7 @@
 use crate::backend::Color;
 use crate::platform::{BatteryState, PowerInfo, SystemTime};
 use crate::sdi::SdiRegistry;
-use crate::sdi::helpers::{ensure_border, ensure_text, hide_objects};
+use crate::sdi::helpers::{ensure_border, ensure_pill, ensure_text, hide_objects};
 use crate::theme;
 
 /// Top-level tabs (cycled with L trigger).
@@ -217,77 +217,49 @@ impl StatusBar {
             obj.text = Some("OSS".to_string());
         }
 
-        // Tab row with outlined borders.
+        // Tab row: single pill-shaped SDI objects (replaces 4-edge borders).
         let tab_y = bar_h as i32;
         for (i, tab) in TopTab::ALL.iter().enumerate() {
             let name = format!("bar_tab_{i}");
             let x = theme::TAB_START_X + (i as i32) * (theme::TAB_W + theme::TAB_GAP);
-
-            let alpha = if *tab == self.active_tab {
-                theme::TAB_ACTIVE_ALPHA
-            } else {
-                theme::TAB_INACTIVE_ALPHA
-            };
-            let border_color = Color::rgba(255, 255, 255, alpha);
-
-            // Four border edges.
             let tw = theme::TAB_W as u32;
             let th = theme::TAB_H as u32;
-            ensure_border(
-                sdi,
-                &format!("bar_tab_bt_{i}"),
-                x,
-                tab_y,
-                tw,
-                1,
-                border_color,
-            );
-            ensure_border(
-                sdi,
-                &format!("bar_tab_bb_{i}"),
-                x,
-                tab_y + theme::TAB_H - 1,
-                tw,
-                1,
-                border_color,
-            );
-            ensure_border(
-                sdi,
-                &format!("bar_tab_bl_{i}"),
-                x,
-                tab_y,
-                1,
-                th,
-                border_color,
-            );
-            ensure_border(
-                sdi,
-                &format!("bar_tab_br_{i}"),
-                x + theme::TAB_W - 1,
-                tab_y,
-                1,
-                th,
-                border_color,
-            );
 
-            // Fill for active tab only.
-            let bg_name = format!("bar_tab_bg_{i}");
-            if !sdi.contains(&bg_name) {
-                let obj = sdi.create(&bg_name);
-                obj.overlay = true;
-                obj.z = 901;
+            let is_active = *tab == self.active_tab;
+
+            // Hide legacy 4-edge border objects.
+            for suffix in &["bt", "bb", "bl", "br"] {
+                let edge_name = format!("bar_tab_{suffix}_{i}");
+                if let Ok(obj) = sdi.get_mut(&edge_name) {
+                    obj.visible = false;
+                }
             }
-            if let Ok(obj) = sdi.get_mut(&bg_name) {
-                obj.x = x + 1;
-                obj.y = tab_y + 1;
-                obj.w = (theme::TAB_W - 2) as u32;
-                obj.h = (theme::TAB_H - 2) as u32;
-                obj.visible = true;
-                obj.color = if *tab == self.active_tab {
-                    theme::TAB_ACTIVE_FILL
-                } else {
-                    theme::TAB_INACTIVE_FILL
-                };
+
+            // Single pill tab background (replaces fill + 4 borders).
+            let bg_name = format!("bar_tab_bg_{i}");
+            if is_active {
+                ensure_pill(
+                    sdi,
+                    &bg_name,
+                    x,
+                    tab_y,
+                    tw,
+                    th,
+                    theme::TAB_ACTIVE_FILL,
+                    Color::rgba(255, 255, 255, theme::TAB_ACTIVE_ALPHA),
+                );
+            } else {
+                // Inactive: transparent fill, dim stroke.
+                ensure_pill(
+                    sdi,
+                    &bg_name,
+                    x,
+                    tab_y,
+                    tw,
+                    th,
+                    theme::TAB_INACTIVE_FILL,
+                    Color::rgba(255, 255, 255, theme::TAB_INACTIVE_ALPHA),
+                );
             }
 
             // Tab text (centered).
@@ -302,7 +274,7 @@ impl StatusBar {
             );
             if let Ok(obj) = sdi.get_mut(&name) {
                 obj.text = Some(tab.label().to_string());
-                obj.text_color = if *tab == self.active_tab {
+                obj.text_color = if is_active {
                     Color::WHITE
                 } else {
                     Color::rgb(160, 160, 160)

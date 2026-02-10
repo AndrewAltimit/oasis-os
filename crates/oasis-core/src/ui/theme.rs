@@ -77,6 +77,13 @@ pub struct Theme {
 }
 
 impl Theme {
+    /// Build a `Theme` from a `SkinTheme` (skin → ui bridge).
+    ///
+    /// Delegates to `SkinTheme::to_ui_theme()`.
+    pub fn from_skin_theme(skin: &crate::skin::theme::SkinTheme) -> Self {
+        skin.to_ui_theme()
+    }
+
     /// Dark theme matching the OASIS cyberpunk aesthetic.
     pub fn dark() -> Self {
         Self {

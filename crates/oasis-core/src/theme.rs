@@ -124,6 +124,15 @@ pub const ICON_LABEL_COLOR: Color = Color::rgba(255, 255, 255, 230);
 /// Cursor highlight color.
 pub const CURSOR_COLOR: Color = Color::rgba(255, 255, 255, 50);
 
+// -- Modern icon rendering constants -----------------------------------------
+
+/// Border radius for icon card bodies (pixels).
+pub const ICON_BORDER_RADIUS: u16 = 4;
+/// Border radius for cursor highlight frame (pixels).
+pub const CURSOR_BORDER_RADIUS: u16 = 6;
+/// Stroke width for cursor highlight frame (pixels).
+pub const CURSOR_STROKE_WIDTH: u16 = 2;
+
 #[cfg(test)]
 mod tests {
     use super::*;
