@@ -263,6 +263,11 @@ impl SdiBackend for Ue5Backend {
         Ok(())
     }
 
+    fn measure_text(&self, text: &str, font_size: u16) -> u32 {
+        let char_width = (font_size as u32).max(1) * 6 / 10;
+        text.len() as u32 * char_width
+    }
+
     fn read_pixels(&self, x: i32, y: i32, w: u32, h: u32) -> Result<Vec<u8>> {
         let mut out = vec![0u8; (w * h * 4) as usize];
         for row in 0..h {
