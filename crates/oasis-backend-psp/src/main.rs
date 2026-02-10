@@ -1203,6 +1203,7 @@ fn psp_main() {
 
                 match classic_view {
                     ClassicView::Dashboard => {
+                        backend.force_bitmap_font = true;
                         if !icons_hidden {
                             draw_dashboard(&mut backend, selected, page, viz_frame);
                         }
@@ -1216,11 +1217,11 @@ fn psp_main() {
                                 ("L/R", "Tabs"),
                             ],
                         );
+                        backend.force_bitmap_font = false;
                     },
                     ClassicView::Terminal => {
                         backend.force_bitmap_font = true;
                         draw_terminal(&mut backend, &term_lines, &term_input);
-                        backend.force_bitmap_font = false;
                         draw_button_hints(
                             &mut backend,
                             &[
@@ -1230,6 +1231,7 @@ fn psp_main() {
                                 ("Up", "Help"),
                             ],
                         );
+                        backend.force_bitmap_font = false;
                     },
                     ClassicView::FileManager => {
                         backend.force_bitmap_font = true;
@@ -1240,11 +1242,11 @@ fn psp_main() {
                             fm_selected,
                             fm_scroll,
                         );
-                        backend.force_bitmap_font = false;
                         draw_button_hints(
                             &mut backend,
                             &[("X", "Open"), ("O", "Back"), ("[]", "Del"), ("^v", "Nav")],
                         );
+                        backend.force_bitmap_font = false;
                     },
                     ClassicView::PhotoViewer => {
                         backend.force_bitmap_font = true;
@@ -1302,7 +1304,9 @@ fn psp_main() {
             AppMode::Desktop => {
                 // Draw dashboard icons behind windows.
                 if !icons_hidden {
+                    backend.force_bitmap_font = true;
                     draw_dashboard(&mut backend, selected, page, viz_frame);
+                    backend.force_bitmap_font = false;
                 }
 
                 // Pre-compute values for windowed app renderers.
