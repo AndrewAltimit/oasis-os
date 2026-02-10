@@ -76,6 +76,7 @@ pub enum AudioCmd {
     Pause,
     Resume,
     Stop,
+    SetVolume(u8),
     PlaySfx(SfxId),
     Shutdown,
 }
@@ -269,6 +270,9 @@ fn audio_thread_fn() {
                 let mut state = SHARED_AUDIO.lock();
                 state.playing = false;
                 state.paused = false;
+            },
+            Some(AudioCmd::SetVolume(v)) => {
+                player.set_volume(v);
             },
             Some(AudioCmd::PlaySfx(id)) => {
                 if let Some(sfx) = &sfx {

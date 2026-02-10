@@ -23,6 +23,8 @@ pub struct AudioPlayer {
     channel: Option<AudioChannel>,
     playing: bool,
     paused: bool,
+    /// Hardware volume (0x0000..=0x8000 range for PSP audio API).
+    hw_volume: i32,
     /// Cached MP3 info.
     pub sample_rate: u32,
     pub bitrate: u32,
@@ -40,6 +42,7 @@ impl AudioPlayer {
             channel: None,
             playing: false,
             paused: false,
+            hw_volume: 0x8000,
             sample_rate: 0,
             bitrate: 0,
             channels: 0,
@@ -129,7 +132,7 @@ impl AudioPlayer {
             Ok(samples) if !samples.is_empty() => {
                 self.frames_decoded += 1;
                 // output_blocking paces playback to hardware timing.
-                let _ = channel.output_blocking(0x8000, samples);
+                let _ = channel.output_blocking(self.hw_volume, samples);
             },
             _ => {
                 // End of stream or decode error.
@@ -150,6 +153,12 @@ impl AudioPlayer {
     /// Toggle pause/resume.
     pub fn toggle_pause(&mut self) {
         self.paused = !self.paused;
+    }
+
+    /// Set volume (0..=100) mapped to PSP hardware range (0x0000..=0x8000).
+    pub fn set_volume(&mut self, volume: u8) {
+        let v = volume.min(100) as i32;
+        self.hw_volume = v * 0x8000 / 100;
     }
 
     pub fn is_playing(&self) -> bool {
@@ -248,6 +257,7 @@ impl AudioBackend for PspAudioBackend {
 
     fn set_volume(&mut self, volume: u8) -> Result<()> {
         self.volume = volume.min(100);
+        send_audio_cmd(AudioCmd::SetVolume(self.volume));
         Ok(())
     }
 

@@ -141,9 +141,10 @@ impl Command for HttpCmd {
                 let body_text = String::from_utf8_lossy(&resp.body);
                 // Truncate long responses for terminal display.
                 let truncated = if body_text.len() > 2048 {
+                    let end = body_text.floor_char_boundary(2048);
                     format!(
                         "{}...\n(truncated, {} bytes total)",
-                        &body_text[..2048],
+                        &body_text[..end],
                         resp.body.len()
                     )
                 } else {
