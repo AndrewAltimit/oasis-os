@@ -16,6 +16,7 @@ authors = ["AndrewAltimit"]
 [dependencies]
 psp = { git = "https://github.com/AndrewAltimit/rust-psp", features = ["kernel", "std"] }
 oasis-core = { path = "../oasis-core" }
+libm = "0.2"
 
 # unicode-width workaround for mips target panic.
 [patch.crates-io]

@@ -1,8 +1,88 @@
-//! Embedded 8x8 bitmap font for software text rendering.
+//! Font rendering: system TrueType fonts (via `psp::font`) with 8x8 bitmap
+//! fallback.
 //!
-//! Covers printable ASCII (0x20 - 0x7E, 95 glyphs). Each glyph is 8 rows of
-//! 8 bits, MSB = leftmost pixel. Based on the classic IBM CGA/BIOS 8x8 font
-//! which is in the public domain.
+//! The bitmap font covers printable ASCII (0x20 - 0x7E, 95 glyphs). Each
+//! glyph is 8 rows of 8 bits, MSB = leftmost pixel. Based on the classic
+//! IBM CGA/BIOS 8x8 font (public domain).
+//!
+//! `SystemFont` wraps the PSP's built-in TrueType font library, providing
+//! anti-aliased rendering via a VRAM glyph atlas. Falls back to bitmap if
+//! system fonts are unavailable (e.g. PPSSPP emulator).
+
+use psp::font::{Font, FontLib, FontRenderer};
+use psp::sys::{SceFontFamilyCode, SceFontLanguageCode, SceFontStyleCode};
+
+/// System font wrapper (FontLib + Font + FontRenderer with VRAM atlas).
+///
+/// Manages the self-referential FontRenderer<'a> -> &'a Font relationship
+/// via a heap-allocated Font with a stable address.
+pub struct SystemFont {
+    // Drop order: renderer first, then font, then fontlib.
+    renderer: Option<FontRenderer<'static>>,
+    _font: Box<Font>,
+    _fontlib: FontLib,
+}
+
+impl SystemFont {
+    /// Try to initialize system fonts. Returns `None` if unavailable.
+    pub fn try_init(atlas_vram: *mut u8) -> Option<Self> {
+        let fontlib = FontLib::new(1).ok()?;
+        let font = fontlib
+            .find_optimum(
+                SceFontFamilyCode::SansSerif,
+                SceFontStyleCode::Regular,
+                SceFontLanguageCode::Latin,
+            )
+            .ok()?;
+        let font = Box::new(font);
+
+        // SAFETY: `font` is heap-allocated (Box) so its address is stable.
+        // The transmuted reference lives as long as `_font`, which is
+        // dropped after `renderer` due to struct field drop order.
+        let font_ref: &'static Font =
+            unsafe { &*(font.as_ref() as *const Font) };
+        let renderer = FontRenderer::new(font_ref, atlas_vram, 12.0);
+
+        psp::dprintln!("OASIS_OS: System font initialized");
+        Some(Self {
+            renderer: Some(renderer),
+            _font: font,
+            _fontlib: fontlib,
+        })
+    }
+
+    /// Queue text for drawing. Call `flush()` after all text is queued.
+    pub fn draw_text(&mut self, x: f32, y: f32, color_abgr: u32, text: &str) {
+        if let Some(r) = &mut self.renderer {
+            r.draw_text(x, y, color_abgr, text);
+        }
+    }
+
+    /// Measure the width of a text string in pixels.
+    pub fn measure_text(&self, text: &str) -> f32 {
+        self.renderer
+            .as_ref()
+            .map_or(0.0, |r| r.measure_text(text))
+    }
+
+    /// Get the line height in pixels.
+    pub fn line_height(&self) -> f32 {
+        self.renderer
+            .as_ref()
+            .map_or(12.0, |r| r.line_height())
+    }
+
+    /// Submit all queued glyph sprites to the GU.
+    ///
+    /// # Safety
+    /// Must be called within an active GU display list.
+    pub unsafe fn flush(&mut self) {
+        if let Some(r) = &mut self.renderer {
+            // SAFETY: Caller guarantees we're in an active GU display list.
+            unsafe { r.flush() };
+        }
+    }
+}
 
 /// Width of each glyph in pixels.
 pub const GLYPH_WIDTH: u32 = 8;

@@ -10,11 +10,13 @@
 #![no_main]
 
 use oasis_backend_psp::{
-    AudioHandle, Button, Color, FileEntry, InputEvent, IoRequest, IoResponse, PspBackend,
-    SdiBackend, SdiRegistry, StatusBarInfo, SystemInfo, TextureId, Trigger, WindowConfig,
-    WindowManager, WindowType, WmEvent, WorkerCmd, CURSOR_H, CURSOR_W, SCREEN_HEIGHT,
-    SCREEN_WIDTH,
+    AudioCmd, AudioHandle, Button, Color, FileEntry, InputEvent, IoCmd, IoResponse,
+    PspBackend, SdiBackend, SdiRegistry, SfxId, StatusBarInfo, SystemInfo, TextureId,
+    Trigger, WindowConfig, WindowManager, WindowType, WmEvent, CURSOR_H, CURSOR_W,
+    SCREEN_HEIGHT, SCREEN_WIDTH,
 };
+
+mod commands;
 
 psp::module_kernel!("OASIS_OS", 1, 0);
 
@@ -61,6 +63,9 @@ const CELL_W: i32 = 110;
 const CELL_H: i32 = (CONTENT_H as i32 - 2 * GRID_PAD_Y) / GRID_ROWS as i32;
 const ICONS_PER_PAGE: usize = GRID_COLS * GRID_ROWS;
 const CURSOR_PAD: i32 = 3;
+
+// Persistent configuration path on Memory Stick.
+const CONFIG_PATH: &str = "ms0:/PSP/GAME/OASISOS/config.rcfg";
 
 // Colors -- bar backgrounds.
 const STATUSBAR_BG: Color = Color::rgba(0, 0, 0, 80);
@@ -216,7 +221,7 @@ enum ClassicView {
 // ---------------------------------------------------------------------------
 
 fn psp_main() {
-    psp::enable_home_button();
+    let _ = psp::callback::setup_exit_callback();
 
     let mut backend = PspBackend::new();
     backend.init();
@@ -224,8 +229,14 @@ fn psp_main() {
     // Register exception handler (kernel mode) for crash diagnostics.
     oasis_backend_psp::register_exception_handler();
 
-    // Set maximum clock speed (333/333/166).
-    oasis_backend_psp::set_clock(333, 333, 166);
+    // Load persistent configuration.
+    let mut config = psp::config::Config::load(CONFIG_PATH)
+        .unwrap_or_else(|_| psp::config::Config::new());
+
+    // Set clock speed from config (default: max 333MHz).
+    let clock_mhz = config.get_i32("clock_mhz").unwrap_or(333);
+    let bus_mhz = config.get_i32("bus_mhz").unwrap_or(166);
+    oasis_backend_psp::set_clock(clock_mhz, bus_mhz);
 
     // Query static hardware info (kernel mode, once at startup).
     let sysinfo = SystemInfo::query();
@@ -284,12 +295,24 @@ fn psp_main() {
     ];
     let mut term_input = String::new();
 
+    // Try to restore previous terminal history from save data (silent).
+    if let Ok(saved) = commands::load_terminal_history() {
+        if !saved.is_empty() {
+            term_lines.push(String::from("(restored previous session)"));
+            term_lines.extend(saved);
+            term_lines.push(String::new());
+        }
+    }
+
     // File manager state.
     let mut fm_path = String::from("ms0:/");
     let mut fm_entries: Vec<FileEntry> = Vec::new();
     let mut fm_selected: usize = 0;
     let mut fm_scroll: usize = 0;
     let mut fm_loaded = false;
+
+    // USB storage mode handle (RAII: drop exits storage mode).
+    let mut usb_storage: Option<psp::usb::UsbStorageMode> = None;
 
     // Photo viewer state.
     let mut pv_path = String::from("ms0:/");
@@ -311,16 +334,20 @@ fn psp_main() {
     let mut mp_file_name = String::new();
 
     // Single background worker thread handles both audio and file I/O.
-    let (audio, io) = oasis_backend_psp::spawn_worker();
+    let (audio, io) = oasis_backend_psp::spawn_workers();
     let mut pv_loading = false; // true while waiting for async texture load
 
     // Confirm button held state for pointer simulation.
     let mut _confirm_held = false;
 
-    // Register power callback for sleep/wake handling.
-    oasis_backend_psp::register_power_callback();
+    // Register power callback for sleep/wake handling (keep handle alive).
+    let _power_cb = oasis_backend_psp::register_power_callback();
+
+    // Frame timing via hardware tick counter.
+    let mut frame_timer = psp::time::FrameTimer::new();
 
     loop {
+        let _dt = frame_timer.tick();
         // Prevent idle auto-suspend while running.
         oasis_backend_psp::power_tick();
 
@@ -330,7 +357,7 @@ fn psp_main() {
         }
 
         // -- Poll async I/O responses --
-        while let Ok(resp) = io.rx.try_recv() {
+        while let Some(resp) = io.try_recv() {
             match resp {
                 IoResponse::TextureReady {
                     path: _,
@@ -354,6 +381,15 @@ fn psp_main() {
                     pv_loading = false;
                 }
                 IoResponse::FileReady { .. } => {}
+                IoResponse::HttpDone { tag: _, status_code, body } => {
+                    let preview = String::from_utf8_lossy(
+                        &body[..body.len().min(256)],
+                    );
+                    term_lines.push(format!(
+                        "HTTP {status_code} ({} bytes): {preview}",
+                        body.len(),
+                    ));
+                }
             }
         }
 
@@ -547,7 +583,89 @@ fn psp_main() {
                 InputEvent::ButtonPress(Button::Confirm) if classic_view == ClassicView::Terminal => {
                     let cmd = term_input.clone();
                     term_lines.push(format!("> {}", cmd));
-                    let output = execute_command(&cmd);
+                    // Handle SFX commands via worker thread.
+                    let output = match cmd.trim() {
+                        "sfx click" => {
+                            audio.send(AudioCmd::PlaySfx(SfxId::Click));
+                            vec!["SFX: click".into()]
+                        }
+                        "sfx nav" => {
+                            audio.send(AudioCmd::PlaySfx(SfxId::Navigate));
+                            vec!["SFX: navigate".into()]
+                        }
+                        "sfx error" => {
+                            audio.send(AudioCmd::PlaySfx(SfxId::Error));
+                            vec!["SFX: error".into()]
+                        }
+                        "save" => {
+                            match commands::save_terminal_history(&term_lines) {
+                                Ok(()) => vec!["State saved.".into()],
+                                Err(e) => vec![format!("Save failed: {e}")],
+                            }
+                        }
+                        "load" => {
+                            match commands::load_terminal_history() {
+                                Ok(lines) => {
+                                    term_lines.clear();
+                                    term_lines.extend(lines);
+                                    vec!["State restored.".into()]
+                                }
+                                Err(e) => vec![format!("Load failed: {e}")],
+                            }
+                        }
+                        "usb mount" => {
+                            if usb_storage.is_some() {
+                                vec!["USB storage already active.".into()]
+                            } else {
+                                match psp::usb::start_bus() {
+                                    Ok(()) => match psp::usb::UsbStorageMode::activate() {
+                                        Ok(handle) => {
+                                            usb_storage = Some(handle);
+                                            vec!["USB storage mode active. Connect cable to PC.".into()]
+                                        }
+                                        Err(e) => vec![format!("USB activate failed: {e}")],
+                                    },
+                                    Err(e) => vec![format!("USB bus start failed: {e}")],
+                                }
+                            }
+                        }
+                        "usb unmount" | "usb eject" => {
+                            if usb_storage.take().is_some() {
+                                vec!["USB storage mode deactivated.".into()]
+                            } else {
+                                vec!["USB storage not active.".into()]
+                            }
+                        }
+                        "usb" | "usb status" => {
+                            let connected = psp::usb::is_connected();
+                            let established = psp::usb::is_established();
+                            let active = usb_storage.is_some();
+                            vec![
+                                format!("USB cable: {}", if connected { "connected" } else { "disconnected" }),
+                                format!("Storage mode: {}", if active { "ACTIVE" } else { "inactive" }),
+                                format!("Host mounted: {}", if established { "yes" } else { "no" }),
+                            ]
+                        }
+                        _ if cmd.trim().starts_with("play ") => {
+                            let path = cmd.trim().strip_prefix("play ").unwrap().trim();
+                            audio.send(AudioCmd::LoadAndPlay(path.to_string()));
+                            mp_file_name = path.to_string();
+                            vec![format!("Playing: {}", path)]
+                        }
+                        "pause" => {
+                            audio.send(AudioCmd::Pause);
+                            vec!["Paused.".into()]
+                        }
+                        "resume" => {
+                            audio.send(AudioCmd::Resume);
+                            vec!["Resumed.".into()]
+                        }
+                        "stop" => {
+                            audio.send(AudioCmd::Stop);
+                            vec!["Stopped.".into()]
+                        }
+                        _ => commands::execute_command(&cmd, &mut config),
+                    };
                     for line in output {
                         term_lines.push(line);
                     }
@@ -556,16 +674,32 @@ fn psp_main() {
                         term_lines.remove(0);
                     }
                 }
+                InputEvent::ButtonPress(Button::Square) if classic_view == ClassicView::Terminal => {
+                    // Open PSP on-screen keyboard for command input.
+                    match psp::osk::OskBuilder::new("Enter command")
+                        .max_chars(256)
+                        .initial_text(&term_input)
+                        .show()
+                    {
+                        Ok(Some(text)) => {
+                            term_input = text;
+                        }
+                        Ok(None) => {} // Cancelled
+                        Err(e) => {
+                            term_lines.push(format!("OSK error: {:?}", e));
+                        }
+                    }
+                }
                 InputEvent::ButtonPress(Button::Up) if classic_view == ClassicView::Terminal => {
                     term_lines.push(String::from("> help"));
-                    let output = execute_command("help");
+                    let output = commands::execute_command("help", &mut config);
                     for line in output {
                         term_lines.push(line);
                     }
                 }
                 InputEvent::ButtonPress(Button::Down) if classic_view == ClassicView::Terminal => {
                     term_lines.push(String::from("> status"));
-                    let output = execute_command("status");
+                    let output = commands::execute_command("status", &mut config);
                     for line in output {
                         term_lines.push(line);
                     }
@@ -613,6 +747,36 @@ fn psp_main() {
                         classic_view = ClassicView::Dashboard;
                     }
                 }
+                InputEvent::ButtonPress(Button::Square) if classic_view == ClassicView::FileManager => {
+                    // Delete selected file with confirmation dialog.
+                    if fm_selected < fm_entries.len() && !fm_entries[fm_selected].is_dir {
+                        let name = &fm_entries[fm_selected].name;
+                        let msg = format!("Delete {}?", name);
+                        match psp::dialog::confirm_dialog(&msg) {
+                            Ok(psp::dialog::DialogResult::Confirm) => {
+                                let full_path = if fm_path.ends_with('/') {
+                                    format!("{}{}", fm_path, name)
+                                } else {
+                                    format!("{}/{}", fm_path, name)
+                                };
+                                match psp::io::remove_file(&full_path) {
+                                    Ok(()) => {
+                                        term_lines.push(format!(
+                                            "Deleted: {}", full_path
+                                        ));
+                                        fm_loaded = false;
+                                    }
+                                    Err(e) => {
+                                        let _ = psp::dialog::error_dialog(
+                                            e.0 as u32,
+                                        );
+                                    }
+                                }
+                            }
+                            _ => {} // Cancelled or closed
+                        }
+                    }
+                }
                 InputEvent::ButtonPress(Button::Triangle) if classic_view == ClassicView::FileManager => {
                     classic_view = ClassicView::Dashboard;
                 }
@@ -652,11 +816,11 @@ fn psp_main() {
                             } else {
                                 format!("{}/{}", pv_path, entry.name)
                             };
-                            let _ = io.tx.send(WorkerCmd::Io(IoRequest::LoadTexture {
+                            io.send(IoCmd::LoadTexture {
                                 path: file_path,
                                 max_w: SCREEN_WIDTH as i32,
                                 max_h: SCREEN_HEIGHT as i32,
-                            }));
+                            });
                             pv_loading = true;
                         }
                     }
@@ -706,9 +870,9 @@ fn psp_main() {
                     if audio.is_playing() {
                         // Toggle pause via background thread.
                         if audio.is_paused() {
-                            let _ = audio.tx.send(WorkerCmd::AudioResume);
+                            audio.send(AudioCmd::Resume);
                         } else {
-                            let _ = audio.tx.send(WorkerCmd::AudioPause);
+                            audio.send(AudioCmd::Pause);
                         }
                     } else if mp_selected < mp_entries.len() {
                         let entry = &mp_entries[mp_selected];
@@ -728,16 +892,16 @@ fn psp_main() {
                                 format!("{}/{}", mp_path, entry.name)
                             };
                             mp_file_name = entry.name.clone();
-                            let _ = audio.tx.send(WorkerCmd::AudioLoadAndPlay(file_path));
+                            audio.send(AudioCmd::LoadAndPlay(file_path));
                             term_lines.push(format!("Playing: {}", entry.name));
                         }
                     }
                 }
                 InputEvent::ButtonPress(Button::Square) if classic_view == ClassicView::MusicPlayer => {
-                    let _ = audio.tx.send(WorkerCmd::AudioStop);
+                    audio.send(AudioCmd::Stop);
                 }
                 InputEvent::ButtonPress(Button::Cancel) if classic_view == ClassicView::MusicPlayer => {
-                    let _ = audio.tx.send(WorkerCmd::AudioStop);
+                    audio.send(AudioCmd::Stop);
                     if let Some(pos) = mp_path.rfind('/') {
                         if pos > 0 && !mp_path[..pos].ends_with(':') {
                             mp_path.truncate(pos);
@@ -762,6 +926,8 @@ fn psp_main() {
 
         // -- Render --
         let status = StatusBarInfo::poll();
+        let fps = frame_timer.fps();
+        let usb_active = usb_storage.is_some();
 
         backend.clear_inner(Color::BLACK);
 
@@ -861,6 +1027,18 @@ fn psp_main() {
                 // Draw dashboard icons behind windows.
                 draw_dashboard(&mut backend, selected, page);
 
+                // Pre-compute values for windowed app renderers.
+                let settings_clock = config.get_i32("clock_mhz").unwrap_or(333);
+                let settings_bus = config.get_i32("bus_mhz").unwrap_or(166);
+                let current_vol = backend.volatile_mem_info();
+                // SAFETY: scalar FFI returning available memory stats.
+                let (free_kb, max_blk_kb) = unsafe {
+                    (
+                        psp::sys::sceKernelTotalFreeMemSize() as i32 / 1024,
+                        psp::sys::sceKernelMaxFreeMemSize() as i32 / 1024,
+                    )
+                };
+
                 // Draw WM chrome (frames, titlebars) + clipped content.
                 let _ = wm.draw_with_clips(
                     &sdi,
@@ -892,6 +1070,24 @@ fn psp_main() {
                                     &mp_file_name, &audio, cx, cy, cw, ch, be,
                                 )
                             }
+                            "settings" => {
+                                draw_settings_windowed(
+                                    settings_clock, settings_bus, current_vol,
+                                    cx, cy, cw, ch, be,
+                                )
+                            }
+                            "network" => {
+                                draw_network_windowed(
+                                    &status, cx, cy, cw, ch, be,
+                                )
+                            }
+                            "sysmon" => {
+                                draw_sysmon_windowed(
+                                    &status, &sysinfo, fps, free_kb, max_blk_kb,
+                                    current_vol, usb_active,
+                                    cx, cy, cw, ch, be,
+                                )
+                            }
                             _ => Ok(()),
                         }
                     },
@@ -903,7 +1099,7 @@ fn psp_main() {
         }
 
         // Status bar + bottom bar (always visible, drawn on top).
-        draw_status_bar(&mut backend, top_tab, &status);
+        draw_status_bar(&mut backend, top_tab, &status, fps, usb_active);
         if app_mode == AppMode::Classic {
             draw_bottom_bar(&mut backend, media_tab, page, total_pages);
         }
@@ -1154,6 +1350,206 @@ fn draw_music_windowed(
     Ok(())
 }
 
+fn draw_settings_windowed(
+    clock_mhz: i32,
+    bus_mhz: i32,
+    vol_info: Option<(usize, usize)>,
+    cx: i32,
+    cy: i32,
+    cw: u32,
+    ch: u32,
+    be: &mut dyn SdiBackend,
+) -> oasis_backend_psp::OasisResult<()> {
+    be.fill_rect(cx, cy, cw, ch, Color::rgba(0, 20, 10, 210))?;
+    be.draw_text("SETTINGS", cx + 4, cy + 2, 8, Color::rgb(60, 179, 113))?;
+    be.fill_rect(cx, cy + 12, cw, 1, Color::rgba(255, 255, 255, 40))?;
+
+    let lbl = Color::rgb(160, 160, 160);
+    let val = Color::WHITE;
+    let mut y = cy + 16;
+    let vx = cx + 110;
+
+    be.draw_text("CPU Clock:", cx + 4, y, 8, lbl)?;
+    be.draw_text(&format!("{} MHz", clock_mhz), vx, y, 8, val)?;
+    y += 12;
+
+    be.draw_text("Bus Clock:", cx + 4, y, 8, lbl)?;
+    be.draw_text(&format!("{} MHz", bus_mhz), vx, y, 8, val)?;
+    y += 12;
+
+    let profile = match clock_mhz {
+        333 => "Max Performance",
+        266 => "Balanced",
+        222 => "Power Save",
+        _ => "Custom",
+    };
+    be.draw_text("Profile:", cx + 4, y, 8, lbl)?;
+    be.draw_text(profile, vx, y, 8, val)?;
+    y += 12;
+
+    be.draw_text("Display:", cx + 4, y, 8, lbl)?;
+    be.draw_text("480x272 RGBA8888", vx, y, 8, val)?;
+    y += 12;
+
+    if let Some((total, remaining)) = vol_info {
+        let used_kb = (total - remaining) / 1024;
+        let total_kb = total / 1024;
+        be.draw_text("Tex Cache:", cx + 4, y, 8, lbl)?;
+        be.draw_text(&format!("{}/{} KB", used_kb, total_kb), vx, y, 8, val)?;
+    } else {
+        be.draw_text("Tex Cache:", cx + 4, y, 8, lbl)?;
+        be.draw_text("N/A (PSP-1000)", vx, y, 8, Color::rgb(140, 140, 140))?;
+    }
+
+    Ok(())
+}
+
+fn draw_network_windowed(
+    status: &StatusBarInfo,
+    cx: i32,
+    cy: i32,
+    cw: u32,
+    ch: u32,
+    be: &mut dyn SdiBackend,
+) -> oasis_backend_psp::OasisResult<()> {
+    be.fill_rect(cx, cy, cw, ch, Color::rgba(15, 12, 0, 210))?;
+    be.draw_text("NETWORK", cx + 4, cy + 2, 8, Color::rgb(218, 165, 32))?;
+    be.fill_rect(cx, cy + 12, cw, 1, Color::rgba(255, 255, 255, 40))?;
+
+    let lbl = Color::rgb(160, 160, 160);
+    let mut y = cy + 16;
+    let vx = cx + 110;
+
+    let (wifi_str, wifi_clr) = if status.wifi_on {
+        ("ON", Color::rgb(100, 200, 255))
+    } else {
+        ("OFF", Color::rgb(255, 100, 100))
+    };
+    be.draw_text("WiFi Switch:", cx + 4, y, 8, lbl)?;
+    be.draw_text(wifi_str, vx, y, 8, wifi_clr)?;
+    y += 12;
+
+    let (usb_str, usb_clr) = if status.usb_connected {
+        ("Connected", Color::rgb(120, 255, 120))
+    } else {
+        ("Disconnected", Color::rgb(160, 160, 160))
+    };
+    be.draw_text("USB Cable:", cx + 4, y, 8, lbl)?;
+    be.draw_text(usb_str, vx, y, 8, usb_clr)?;
+    y += 12;
+
+    let (ac_str, ac_clr) = if status.ac_power {
+        ("Connected", Color::rgb(120, 255, 120))
+    } else {
+        ("Battery", Color::rgb(200, 200, 200))
+    };
+    be.draw_text("AC Power:", cx + 4, y, 8, lbl)?;
+    be.draw_text(ac_str, vx, y, 8, ac_clr)?;
+    y += 12;
+
+    if status.battery_percent >= 0 {
+        be.draw_text("Battery:", cx + 4, y, 8, lbl)?;
+        be.draw_text(&format!("{}%", status.battery_percent), vx, y, 8, Color::WHITE)?;
+    }
+
+    Ok(())
+}
+
+fn draw_sysmon_windowed(
+    status: &StatusBarInfo,
+    sysinfo: &SystemInfo,
+    fps: f32,
+    free_kb: i32,
+    max_blk_kb: i32,
+    vol_info: Option<(usize, usize)>,
+    usb_active: bool,
+    cx: i32,
+    cy: i32,
+    cw: u32,
+    ch: u32,
+    be: &mut dyn SdiBackend,
+) -> oasis_backend_psp::OasisResult<()> {
+    be.fill_rect(cx, cy, cw, ch, Color::rgba(0, 10, 20, 210))?;
+    be.draw_text("SYSTEM MONITOR", cx + 4, cy + 2, 8, Color::rgb(60, 179, 113))?;
+    be.fill_rect(cx, cy + 12, cw, 1, Color::rgba(255, 255, 255, 40))?;
+
+    let lbl = Color::rgb(140, 140, 140);
+    let val = Color::WHITE;
+    let mut y = cy + 16;
+    let vx = cx + 100;
+
+    let fps_clr = if fps >= 55.0 {
+        Color::rgb(120, 255, 120)
+    } else if fps >= 30.0 {
+        Color::rgb(255, 200, 80)
+    } else {
+        Color::rgb(255, 80, 80)
+    };
+    be.draw_text("FPS:", cx + 4, y, 8, lbl)?;
+    be.draw_text(&format!("{:.1}", fps), vx, y, 8, fps_clr)?;
+    y += 11;
+
+    be.draw_text("CPU/Bus/ME:", cx + 4, y, 8, lbl)?;
+    be.draw_text(
+        &format!("{}/{}/{}", sysinfo.cpu_mhz, sysinfo.bus_mhz, sysinfo.me_mhz),
+        vx, y, 8, val,
+    )?;
+    y += 11;
+
+    be.draw_text("Free RAM:", cx + 4, y, 8, lbl)?;
+    be.draw_text(&format!("{} KB", free_kb), vx, y, 8, val)?;
+    y += 11;
+
+    be.draw_text("Max Block:", cx + 4, y, 8, lbl)?;
+    be.draw_text(&format!("{} KB", max_blk_kb), vx, y, 8, val)?;
+    y += 11;
+
+    if let Some((total, remaining)) = vol_info {
+        let used_kb = (total - remaining) / 1024;
+        let total_kb = total / 1024;
+        be.draw_text("Tex VRAM:", cx + 4, y, 8, lbl)?;
+        be.draw_text(&format!("{}/{} KB", used_kb, total_kb), vx, y, 8, val)?;
+        y += 11;
+    }
+
+    let bat_clr = if status.battery_charging || status.battery_percent >= 50 {
+        Color::rgb(120, 255, 120)
+    } else if status.battery_percent >= 20 {
+        Color::rgb(255, 200, 80)
+    } else {
+        Color::rgb(255, 80, 80)
+    };
+    let bat_str = if status.battery_percent >= 0 {
+        if status.battery_charging {
+            format!("{}% CHG", status.battery_percent)
+        } else {
+            format!("{}%", status.battery_percent)
+        }
+    } else if status.ac_power {
+        "AC".into()
+    } else {
+        "N/A".into()
+    };
+    be.draw_text("Battery:", cx + 4, y, 8, lbl)?;
+    be.draw_text(&bat_str, vx, y, 8, bat_clr)?;
+    y += 11;
+
+    let wifi_str = if status.wifi_on { "ON" } else { "OFF" };
+    let usb_str = if usb_active {
+        "STORAGE"
+    } else if status.usb_connected {
+        "CONN"
+    } else {
+        "---"
+    };
+    be.draw_text("WiFi:", cx + 4, y, 8, lbl)?;
+    be.draw_text(wifi_str, vx, y, 8, val)?;
+    be.draw_text("USB:", cx + 150, y, 8, lbl)?;
+    be.draw_text(usb_str, cx + 190, y, 8, val)?;
+
+    Ok(())
+}
+
 // ---------------------------------------------------------------------------
 // Loading indicator
 // ---------------------------------------------------------------------------
@@ -1246,7 +1642,7 @@ fn draw_icon(backend: &mut PspBackend, app: &AppEntry, ix: i32, iy: i32) {
 // Status bar rendering
 // ---------------------------------------------------------------------------
 
-fn draw_status_bar(backend: &mut PspBackend, active_tab: TopTab, status: &StatusBarInfo) {
+fn draw_status_bar(backend: &mut PspBackend, active_tab: TopTab, status: &StatusBarInfo, fps: f32, usb_active: bool) {
     backend.fill_rect_inner(0, 0, SCREEN_WIDTH, STATUSBAR_H, STATUSBAR_BG);
     backend.fill_rect_inner(0, STATUSBAR_H as i32 - 1, SCREEN_WIDTH, 1, SEPARATOR);
 
@@ -1278,17 +1674,20 @@ fn draw_status_bar(backend: &mut PspBackend, active_tab: TopTab, status: &Status
     };
     backend.draw_text_inner(wifi_label, 96, 7, 8, wifi_color);
 
-    let usb_color = if status.usb_connected {
-        Color::rgb(200, 200, 200)
+    let (usb_label, usb_color) = if usb_active {
+        ("USB+", Color::rgb(120, 255, 120))
+    } else if status.usb_connected {
+        ("USB", Color::rgb(200, 200, 200))
     } else {
-        Color::rgb(100, 100, 100)
+        ("USB", Color::rgb(100, 100, 100))
     };
-    backend.draw_text_inner("USB", 140, 7, 8, usb_color);
+    backend.draw_text_inner(usb_label, 140, 7, 8, usb_color);
 
-    backend.draw_text_inner("OASIS v0.1", 200, 7, 8, Color::WHITE);
+    let fps_label = format!("OASIS v0.1  {:.0}fps", fps);
+    backend.draw_text_inner(&fps_label, 200, 7, 8, Color::WHITE);
 
-    let time_label = format!("{:02}:{:02}", status.hour, status.minute);
-    backend.draw_text_inner(&time_label, 420, 7, 8, Color::WHITE);
+    let time_label = format!("{} {:02}:{:02}", status.day_of_week, status.hour, status.minute);
+    backend.draw_text_inner(&time_label, 396, 7, 8, Color::WHITE);
 
     backend.draw_text_inner("OSS", 6, STATUSBAR_H as i32 + 3, 8, CATEGORY_CLR);
 
@@ -1711,109 +2110,4 @@ fn draw_music_player_threaded(
     backend.draw_text_inner(hint, hint_x, BOTTOMBAR_Y - 16, 8, Color::rgb(140, 140, 140));
 }
 
-// ---------------------------------------------------------------------------
-// Simple command interpreter
-// ---------------------------------------------------------------------------
-
-fn execute_command(cmd: &str) -> Vec<String> {
-    let trimmed = cmd.trim();
-    if trimmed.is_empty() {
-        return vec![];
-    }
-    match trimmed {
-        "help" => vec![
-            String::from("Available commands:"),
-            String::from("  help       - Show this message"),
-            String::from("  status     - System status"),
-            String::from("  ls [path]  - List directory"),
-            String::from("  clock      - Show/set CPU frequency"),
-            String::from("  clock 333  - Set max (333/333/166)"),
-            String::from("  clock 266  - Set balanced (266/266/133)"),
-            String::from("  clock 222  - Set power save (222/222/111)"),
-            String::from("  clear      - Clear terminal"),
-            String::from("  version    - Show version"),
-            String::from("  about      - About OASIS_OS"),
-        ],
-        "status" => {
-            let status = StatusBarInfo::poll();
-            let bat = if status.battery_percent >= 0 {
-                format!("Battery: {}%{}", status.battery_percent,
-                    if status.battery_charging { " (charging)" } else { "" })
-            } else {
-                String::from("Battery: N/A")
-            };
-            vec![
-                String::from("OASIS_OS v0.1.0 [PSP] (kernel mode)"),
-                String::from("Platform: mipsel-sony-psp"),
-                String::from("Display: 480x272 RGBA8888"),
-                String::from("Backend: sceGu hardware"),
-                format!("CPU: {}MHz  Bus: {}MHz",
-                    unsafe { psp::sys::scePowerGetCpuClockFrequency() },
-                    unsafe { psp::sys::scePowerGetBusClockFrequency() }),
-                bat,
-                format!("WiFi: {}  USB: {}",
-                    if status.wifi_on { "ON" } else { "OFF" },
-                    if status.usb_connected { "connected" } else { "---" }),
-                format!("Time: {:02}:{:02}", status.hour, status.minute),
-            ]
-        }
-        "clock" => {
-            let cpu = unsafe { psp::sys::scePowerGetCpuClockFrequency() };
-            let bus = unsafe { psp::sys::scePowerGetBusClockFrequency() };
-            vec![format!("Current: CPU {}MHz, Bus {}MHz", cpu, bus)]
-        }
-        "clock 333" => {
-            let ret = oasis_backend_psp::set_clock(333, 333, 166);
-            if ret >= 0 {
-                vec![String::from("Clock set: 333/333/166 (max performance)")]
-            } else {
-                vec![format!("Failed to set clock: {}", ret)]
-            }
-        }
-        "clock 266" => {
-            let ret = oasis_backend_psp::set_clock(266, 266, 133);
-            if ret >= 0 {
-                vec![String::from("Clock set: 266/266/133 (balanced)")]
-            } else {
-                vec![format!("Failed to set clock: {}", ret)]
-            }
-        }
-        "clock 222" => {
-            let ret = oasis_backend_psp::set_clock(222, 222, 111);
-            if ret >= 0 {
-                vec![String::from("Clock set: 222/222/111 (power save)")]
-            } else {
-                vec![format!("Failed to set clock: {}", ret)]
-            }
-        }
-        _ if trimmed.starts_with("ls") => {
-            let path = trimmed.strip_prefix("ls").unwrap().trim();
-            let dir = if path.is_empty() { "ms0:/" } else { path };
-            let entries = oasis_backend_psp::list_directory(dir);
-            if entries.is_empty() {
-                vec![format!("(empty or cannot open: {})", dir)]
-            } else {
-                let mut out = vec![format!("{}  ({} entries)", dir, entries.len())];
-                for e in entries.iter().take(30) {
-                    if e.is_dir {
-                        out.push(format!("  [D] {}/", e.name));
-                    } else {
-                        out.push(format!("  [F] {}  {}", e.name, oasis_backend_psp::format_size(e.size)));
-                    }
-                }
-                if entries.len() > 30 {
-                    out.push(format!("  ... and {} more", entries.len() - 30));
-                }
-                out
-            }
-        }
-        "version" => vec![String::from("OASIS_OS v0.1.0")],
-        "about" => vec![
-            String::from("OASIS_OS -- Embeddable OS Framework"),
-            String::from("PSP backend with GU rendering (kernel mode)"),
-            String::from("Floating windows + multiprocessing enabled"),
-        ],
-        "clear" => vec![],
-        _ => vec![format!("Unknown command: {}", trimmed)],
-    }
-}
+// Command interpreter and utilities are in commands.rs module.

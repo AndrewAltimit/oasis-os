@@ -438,6 +438,8 @@ pub unsafe extern "C" fn oasis_send_command(
         power: Some(&instance.platform),
         time: Some(&instance.platform),
         usb: Some(&instance.platform),
+
+        network: None,
     };
 
     let output = match instance.cmd_reg.execute(cmd_str, &mut env) {

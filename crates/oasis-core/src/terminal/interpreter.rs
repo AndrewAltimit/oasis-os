@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 
 use crate::error::{OasisError, Result};
-use crate::platform::{PowerService, TimeService, UsbService};
+use crate::platform::{NetworkService, PowerService, TimeService, UsbService};
 use crate::vfs::Vfs;
 
 /// Output produced by a command.
@@ -45,6 +45,8 @@ pub struct Environment<'a> {
     pub time: Option<&'a dyn TimeService>,
     /// USB service for status queries.
     pub usb: Option<&'a dyn UsbService>,
+    /// Network service for WiFi status queries.
+    pub network: Option<&'a dyn NetworkService>,
 }
 
 /// A single executable command.
@@ -145,6 +147,8 @@ mod tests {
             power: None,
             time: None,
             usb: None,
+
+            network: None,
         };
         match reg.execute("echo hello world", &mut env).unwrap() {
             CommandOutput::Text(s) => assert_eq!(s, "hello world"),
@@ -162,6 +166,8 @@ mod tests {
             power: None,
             time: None,
             usb: None,
+
+            network: None,
         };
         assert!(reg.execute("nonexistent", &mut env).is_err());
     }
@@ -176,6 +182,8 @@ mod tests {
             power: None,
             time: None,
             usb: None,
+
+            network: None,
         };
         match reg.execute("", &mut env).unwrap() {
             CommandOutput::None => {},

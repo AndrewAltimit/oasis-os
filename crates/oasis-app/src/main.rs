@@ -480,6 +480,8 @@ fn main() -> Result<()> {
                             power: Some(&platform),
                             time: Some(&platform),
                             usb: Some(&platform),
+
+                            network: None,
                         };
                         match cmd_reg.execute(&line, &mut env) {
                             Ok(CommandOutput::Text(text)) => {
@@ -581,6 +583,8 @@ fn main() -> Result<()> {
                     power: Some(&platform),
                     time: Some(&platform),
                     usb: Some(&platform),
+
+                    network: None,
                 };
                 let response = match cmd_reg.execute(&cmd_line, &mut env) {
                     Ok(CommandOutput::Text(text)) => text,

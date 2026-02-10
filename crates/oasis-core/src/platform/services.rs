@@ -154,6 +154,48 @@ pub trait OskService {
 }
 
 // ---------------------------------------------------------------------------
+// Network service
+// ---------------------------------------------------------------------------
+
+/// WiFi / network connection status.
+#[derive(Debug, Clone)]
+pub struct WifiInfo {
+    /// Whether the WLAN hardware is available (powered on + switch on).
+    pub available: bool,
+    /// Whether WiFi is connected to an access point.
+    pub connected: bool,
+    /// Assigned IP address (if connected).
+    pub ip_address: Option<String>,
+    /// MAC address as 6 bytes.
+    pub mac_address: [u8; 6],
+}
+
+/// HTTP response from a network service.
+#[derive(Debug, Clone)]
+pub struct HttpResponse {
+    /// HTTP status code (e.g. 200, 404).
+    pub status_code: u16,
+    /// Response body as bytes.
+    pub body: Vec<u8>,
+}
+
+/// Abstraction over platform WiFi / network status queries.
+pub trait NetworkService {
+    /// Query WiFi hardware and connection status.
+    fn wifi_info(&self) -> Result<WifiInfo>;
+
+    /// Perform a blocking HTTP GET request.
+    ///
+    /// Returns the status code and response body. Default implementation
+    /// returns an error (platform does not support HTTP).
+    fn http_get(&self, _url: &str) -> Result<HttpResponse> {
+        Err(crate::error::OasisError::Backend(
+            "HTTP not supported on this platform".into(),
+        ))
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Unified platform trait
 // ---------------------------------------------------------------------------
 
@@ -269,6 +311,17 @@ impl OskService for DesktopPlatform {
         self.osk_buffer = None;
         self.osk_title = None;
         Ok(())
+    }
+}
+
+impl NetworkService for DesktopPlatform {
+    fn wifi_info(&self) -> Result<WifiInfo> {
+        Ok(WifiInfo {
+            available: false,
+            connected: false,
+            ip_address: None,
+            mac_address: [0; 6],
+        })
     }
 }
 

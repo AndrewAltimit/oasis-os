@@ -7,8 +7,8 @@
 mod services;
 
 pub use services::{
-    BatteryState, CpuClock, DesktopPlatform, OskResult, OskService, Platform, PowerInfo,
-    PowerService, SystemTime, TimeService, UsbService, UsbState,
+    BatteryState, CpuClock, DesktopPlatform, HttpResponse, NetworkService, OskResult, OskService,
+    Platform, PowerInfo, PowerService, SystemTime, TimeService, UsbService, UsbState, WifiInfo,
 };
 
 #[cfg(test)]

@@ -274,6 +274,8 @@ mod tests {
             power: None,
             time: None,
             usb: None,
+
+            network: None,
         };
         reg.execute(line, &mut env)
     }

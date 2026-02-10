@@ -30,6 +30,8 @@ pub fn register_builtins(reg: &mut CommandRegistry) {
     reg.register(Box::new(ListenCmd));
     reg.register(Box::new(RemoteCmd));
     reg.register(Box::new(HostsCmd));
+    // Phase 6: network commands.
+    crate::terminal::register_network_commands(reg);
     // Phase 11: audio commands.
     crate::terminal::register_audio_commands(reg);
     // Phase 12: scripting, update, and transfer commands.
@@ -766,6 +768,8 @@ mod tests {
             power: None,
             time: None,
             usb: None,
+
+            network: None,
         };
         let result = reg.execute(line, &mut env);
         *cwd = env.cwd;
@@ -1020,6 +1024,8 @@ mod tests {
             power: Some(&platform),
             time: None,
             usb: None,
+
+            network: None,
         };
         match reg.execute("power", &mut env).unwrap() {
             CommandOutput::Text(s) => assert!(s.contains("NoBattery")),
@@ -1047,6 +1053,8 @@ mod tests {
             power: None,
             time: Some(&platform),
             usb: None,
+
+            network: None,
         };
         match reg.execute("clock", &mut env).unwrap() {
             CommandOutput::Text(s) => {
@@ -1087,6 +1095,8 @@ mod tests {
             power: None,
             time: None,
             usb: Some(&platform),
+
+            network: None,
         };
         match reg.execute("usb", &mut env).unwrap() {
             CommandOutput::Text(s) => assert!(s.contains("unsupported")),

@@ -79,6 +79,7 @@ dependencies = [
 name = "oasis-backend-psp"
 version = "0.1.0"
 dependencies = [
+ "libm",
  "oasis-core",
  "psp",
 ]
@@ -112,7 +113,7 @@ dependencies = [
 [[package]]
 name = "psp"
 version = "0.4.0"
-source = "git+https://github.com/AndrewAltimit/rust-psp#661e18f6cba30576491e0254d0100ae4ef5ee372"
+source = "git+https://github.com/AndrewAltimit/rust-psp#2af5efbcd144442fa1709710b3aa29afb7bd6320"
 dependencies = [
  "bitflags",
  "libm",
