@@ -215,10 +215,15 @@ impl CssTokenizer {
     }
 
     fn starts_number(&self) -> bool {
-        match self.peek() {
+        self.starts_number_at(0)
+    }
+
+    /// Check whether a number starts at `self.pos + offset`.
+    fn starts_number_at(&self, offset: usize) -> bool {
+        match self.input.get(self.pos + offset).copied() {
             Some(ch) if ch.is_ascii_digit() => true,
             Some('.') => matches!(
-                self.peek_at(1),
+                self.input.get(self.pos + offset + 1).copied(),
                 Some(d) if d.is_ascii_digit()
             ),
             _ => false,
@@ -262,7 +267,13 @@ impl CssTokenizer {
 
         // Numbers (and things that start with a digit or `.digit`).
         if self.starts_number() {
-            return self.tokenize_numeric();
+            return self.tokenize_numeric(1.0);
+        }
+
+        // Negative number: `-` followed by digit or `.digit`.
+        if ch == '-' && self.starts_number_at(1) {
+            self.advance(); // consume '-'
+            return self.tokenize_numeric(-1.0);
         }
 
         // Hash token.
@@ -308,7 +319,7 @@ impl CssTokenizer {
                 {
                     // Put the dot back conceptually and parse number.
                     self.pos -= 1;
-                    return self.tokenize_numeric();
+                    return self.tokenize_numeric(1.0);
                 }
                 CssToken::Dot
             },
@@ -321,8 +332,9 @@ impl CssTokenizer {
     }
 
     /// Consume a numeric token (Number, Percentage, or Dimension).
-    fn tokenize_numeric(&mut self) -> CssToken {
-        let value = self.consume_number();
+    /// `sign` is `1.0` for positive, `-1.0` for negative.
+    fn tokenize_numeric(&mut self, sign: f32) -> CssToken {
+        let value = self.consume_number() * sign;
         if self.peek() == Some('%') {
             self.advance();
             return CssToken::Percentage(value);
@@ -498,5 +510,71 @@ mod tests {
     fn unterminated_string() {
         let tokens = tokenize("\"oops");
         assert_eq!(tokens[0], CssToken::String("oops".into()));
+    }
+
+    #[test]
+    fn negative_dimension() {
+        let tokens = tokenize("-10px");
+        assert_eq!(
+            tokens,
+            vec![CssToken::Dimension(-10.0, "px".into()), CssToken::Eof]
+        );
+    }
+
+    #[test]
+    fn negative_number() {
+        let tokens = tokenize("-42");
+        assert_eq!(tokens, vec![CssToken::Number(-42.0), CssToken::Eof]);
+    }
+
+    #[test]
+    fn negative_percentage() {
+        let tokens = tokenize("-50%");
+        assert_eq!(tokens, vec![CssToken::Percentage(-50.0), CssToken::Eof]);
+    }
+
+    #[test]
+    fn negative_decimal_dimension() {
+        let tokens = tokenize("-1.5em");
+        assert_eq!(
+            tokens,
+            vec![CssToken::Dimension(-1.5, "em".into()), CssToken::Eof]
+        );
+    }
+
+    #[test]
+    fn negative_in_declaration() {
+        let tokens = tokenize("margin: -10px;");
+        assert_eq!(
+            tokens,
+            vec![
+                CssToken::Ident("margin".into()),
+                CssToken::Colon,
+                CssToken::Whitespace,
+                CssToken::Dimension(-10.0, "px".into()),
+                CssToken::Semicolon,
+                CssToken::Eof,
+            ]
+        );
+    }
+
+    #[test]
+    fn hyphenated_ident_not_negative() {
+        // `-webkit-transform` is an ident, not a negative number.
+        let tokens = tokenize("-webkit-transform");
+        assert_eq!(
+            tokens,
+            vec![CssToken::Ident("-webkit-transform".into()), CssToken::Eof,]
+        );
+    }
+
+    #[test]
+    fn negative_decimal_only() {
+        // `-.5px` should tokenize as a negative dimension.
+        let tokens = tokenize("-.5px");
+        assert_eq!(
+            tokens,
+            vec![CssToken::Dimension(-0.5, "px".into()), CssToken::Eof,]
+        );
     }
 }
