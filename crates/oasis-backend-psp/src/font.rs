@@ -46,8 +46,7 @@ impl SystemFont {
         // address is stable for the lifetime of `_font`. The renderer is
         // dropped before _font (struct field declaration order), so the
         // reference remains valid for the entire lifetime of `renderer`.
-        let font_ref: &'static Font =
-            unsafe { &*(font.as_ref().get_ref() as *const Font) };
+        let font_ref: &'static Font = unsafe { &*(font.as_ref().get_ref() as *const Font) };
         let renderer = FontRenderer::new(font_ref, atlas_vram, 12.0);
 
         Some(Self {
@@ -66,16 +65,12 @@ impl SystemFont {
 
     /// Measure the width of a text string in pixels.
     pub fn measure_text(&self, text: &str) -> f32 {
-        self.renderer
-            .as_ref()
-            .map_or(0.0, |r| r.measure_text(text))
+        self.renderer.as_ref().map_or(0.0, |r| r.measure_text(text))
     }
 
     /// Get the line height in pixels.
     pub fn line_height(&self) -> f32 {
-        self.renderer
-            .as_ref()
-            .map_or(12.0, |r| r.line_height())
+        self.renderer.as_ref().map_or(12.0, |r| r.line_height())
     }
 
     /// Submit all queued glyph sprites to the GU.

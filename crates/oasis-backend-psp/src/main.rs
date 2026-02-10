@@ -10,10 +10,10 @@
 #![no_main]
 
 use oasis_backend_psp::{
-    AudioCmd, AudioHandle, Button, Color, FileEntry, InputEvent, IoCmd, IoResponse,
-    PspBackend, SdiBackend, SdiRegistry, SfxId, StatusBarInfo, SystemInfo, TextureId,
-    Trigger, WindowConfig, WindowManager, WindowType, WmEvent, CURSOR_H, CURSOR_W,
-    SCREEN_HEIGHT, SCREEN_WIDTH,
+    AudioCmd, AudioHandle, Button, CURSOR_H, CURSOR_W, Color, FileEntry, InputEvent, IoCmd,
+    IoResponse, PspBackend, SCREEN_HEIGHT, SCREEN_WIDTH, SdiBackend, SdiRegistry, SfxId,
+    StatusBarInfo, SystemInfo, TextureId, Trigger, WindowConfig, WindowManager, WindowType,
+    WmEvent,
 };
 
 mod commands;
@@ -135,7 +135,6 @@ const FM_VISIBLE_ROWS: usize = 18;
 const FM_ROW_H: i32 = 10;
 const FM_START_Y: i32 = CONTENT_TOP as i32 + 14;
 
-
 // ---------------------------------------------------------------------------
 // App entries (matching oasis-core FALLBACK_COLORS)
 // ---------------------------------------------------------------------------
@@ -147,14 +146,46 @@ struct AppEntry {
 }
 
 static APPS: &[AppEntry] = &[
-    AppEntry { id: "filemgr",  title: "File Manager", color: Color::rgb(70, 130, 180) },
-    AppEntry { id: "settings", title: "Settings",     color: Color::rgb(60, 179, 113) },
-    AppEntry { id: "network",  title: "Network",      color: Color::rgb(218, 165, 32) },
-    AppEntry { id: "terminal", title: "Terminal",     color: Color::rgb(178, 102, 178) },
-    AppEntry { id: "music",    title: "Music Player", color: Color::rgb(205, 92, 92) },
-    AppEntry { id: "photos",   title: "Photo Viewer", color: Color::rgb(100, 149, 237) },
-    AppEntry { id: "packages", title: "Package Mgr",  color: Color::rgb(70, 130, 180) },
-    AppEntry { id: "sysmon",   title: "Sys Monitor",  color: Color::rgb(60, 179, 113) },
+    AppEntry {
+        id: "filemgr",
+        title: "File Manager",
+        color: Color::rgb(70, 130, 180),
+    },
+    AppEntry {
+        id: "settings",
+        title: "Settings",
+        color: Color::rgb(60, 179, 113),
+    },
+    AppEntry {
+        id: "network",
+        title: "Network",
+        color: Color::rgb(218, 165, 32),
+    },
+    AppEntry {
+        id: "terminal",
+        title: "Terminal",
+        color: Color::rgb(178, 102, 178),
+    },
+    AppEntry {
+        id: "music",
+        title: "Music Player",
+        color: Color::rgb(205, 92, 92),
+    },
+    AppEntry {
+        id: "photos",
+        title: "Photo Viewer",
+        color: Color::rgb(100, 149, 237),
+    },
+    AppEntry {
+        id: "packages",
+        title: "Package Mgr",
+        color: Color::rgb(70, 130, 180),
+    },
+    AppEntry {
+        id: "sysmon",
+        title: "Sys Monitor",
+        color: Color::rgb(60, 179, 113),
+    },
 ];
 
 // ---------------------------------------------------------------------------
@@ -216,7 +247,12 @@ impl MediaTab {
     }
 
     const LABELS: &[&str] = &["AUDIO", "VIDEO", "IMAGE", "FILE"];
-    const TABS: &[MediaTab] = &[MediaTab::Audio, MediaTab::Video, MediaTab::Image, MediaTab::File];
+    const TABS: &[MediaTab] = &[
+        MediaTab::Audio,
+        MediaTab::Video,
+        MediaTab::Image,
+        MediaTab::File,
+    ];
 }
 
 // ---------------------------------------------------------------------------
@@ -251,12 +287,8 @@ enum ClassicView {
 /// draws progress bar with fill_rects, then renders both text lines in
 /// a **single** SpriteBatch + texture bind to avoid GE state issues on
 /// PPSSPP with multiple sprite draws per frame during init.
-fn show_boot_screen(
-    backend: &mut PspBackend,
-    status: &str,
-    progress: u32,
-) {
-    use oasis_backend_psp::render::{FONT_ATLAS_W, FONT_ATLAS_H};
+fn show_boot_screen(backend: &mut PspBackend, status: &str, progress: u32) {
+    use oasis_backend_psp::render::{FONT_ATLAS_H, FONT_ATLAS_W};
     use psp::gu_ext::SpriteBatch;
 
     let bg = Color::rgba(15, 15, 25, 255);
@@ -269,14 +301,10 @@ fn show_boot_screen(
     let bar_h: u32 = 6;
     let bar_x = (SCREEN_WIDTH as i32 - bar_w as i32) / 2;
     let bar_y = status_y + 20;
-    backend.fill_rect_inner(
-        bar_x, bar_y, bar_w, bar_h, Color::rgba(40, 40, 60, 200),
-    );
+    backend.fill_rect_inner(bar_x, bar_y, bar_w, bar_h, Color::rgba(40, 40, 60, 200));
     let fill_w = (bar_w * progress.min(100)) / 100;
     if fill_w > 0 {
-        backend.fill_rect_inner(
-            bar_x, bar_y, fill_w, bar_h, Color::rgb(80, 140, 220),
-        );
+        backend.fill_rect_inner(bar_x, bar_y, fill_w, bar_h, Color::rgb(80, 140, 220));
     }
 
     // Single SpriteBatch for both title and status text.
@@ -296,7 +324,17 @@ fn show_boot_screen(
         } else {
             (0.0, 0.0)
         };
-        batch.draw_rect(cx, title_y as f32, 8.0, 8.0, u0, v0, u0 + 8.0, v0 + 8.0, white_abgr);
+        batch.draw_rect(
+            cx,
+            title_y as f32,
+            8.0,
+            8.0,
+            u0,
+            v0,
+            u0 + 8.0,
+            v0 + 8.0,
+            white_abgr,
+        );
         cx += 8.0;
     }
 
@@ -311,7 +349,17 @@ fn show_boot_screen(
         } else {
             (0.0, 0.0)
         };
-        batch.draw_rect(cx, status_y as f32, 8.0, 8.0, u0, v0, u0 + 8.0, v0 + 8.0, status_abgr);
+        batch.draw_rect(
+            cx,
+            status_y as f32,
+            8.0,
+            8.0,
+            u0,
+            v0,
+            u0 + 8.0,
+            v0 + 8.0,
+            status_abgr,
+        );
         cx += 8.0;
     }
 
@@ -319,14 +367,12 @@ fn show_boot_screen(
     // SAFETY: Within an active GU display list; font atlas pointer is
     // valid and non-null (set during backend.init()).
     unsafe {
-        use std::ffi::c_void;
         use psp::sys::{
-            self, MipmapLevel, TextureColorComponent, TextureEffect,
-            TexturePixelFormat,
+            self, MipmapLevel, TextureColorComponent, TextureEffect, TexturePixelFormat,
         };
-        let uncached_atlas =
-            psp::cache::UncachedPtr::from_cached_addr(backend.font_atlas())
-                .as_ptr() as *const c_void;
+        use std::ffi::c_void;
+        let uncached_atlas = psp::cache::UncachedPtr::from_cached_addr(backend.font_atlas())
+            .as_ptr() as *const c_void;
         sys::sceGuTexMode(TexturePixelFormat::Psm8888, 0, 0, 0);
         sys::sceGuTexImage(
             MipmapLevel::None,
@@ -335,10 +381,7 @@ fn show_boot_screen(
             FONT_ATLAS_W as i32,
             uncached_atlas,
         );
-        sys::sceGuTexFunc(
-            TextureEffect::Modulate,
-            TextureColorComponent::Rgba,
-        );
+        sys::sceGuTexFunc(TextureEffect::Modulate, TextureColorComponent::Rgba);
         sys::sceGuTexFlush();
         sys::sceGuTexSync();
         batch.flush();
@@ -363,8 +406,8 @@ fn psp_main() {
     show_boot_screen(&mut backend, "Loading config...", 25);
 
     // Load persistent configuration.
-    let mut config = psp::config::Config::load(CONFIG_PATH)
-        .unwrap_or_else(|_| psp::config::Config::new());
+    let mut config =
+        psp::config::Config::load(CONFIG_PATH).unwrap_or_else(|_| psp::config::Config::new());
 
     // Set clock speed from config (default: max 333MHz).
     let clock_mhz = config.get_i32("clock_mhz").unwrap_or(333);
@@ -505,21 +548,23 @@ fn psp_main() {
                         pv_viewing = true;
                         pv_loading = false;
                     }
-                }
+                },
                 IoResponse::Error { path, msg } => {
                     term_lines.push(format!("I/O error: {} - {}", path, msg));
                     pv_loading = false;
-                }
-                IoResponse::FileReady { .. } => {}
-                IoResponse::HttpDone { tag: _, status_code, body } => {
-                    let preview = String::from_utf8_lossy(
-                        &body[..body.len().min(256)],
-                    );
+                },
+                IoResponse::FileReady { .. } => {},
+                IoResponse::HttpDone {
+                    tag: _,
+                    status_code,
+                    body,
+                } => {
+                    let preview = String::from_utf8_lossy(&body[..body.len().min(256)]);
                     term_lines.push(format!(
                         "HTTP {status_code} ({} bytes): {preview}",
                         body.len(),
                     ));
-                }
+                },
             }
         }
 
@@ -543,23 +588,23 @@ fn psp_main() {
                             &mut sdi,
                             page,
                         );
-                    }
+                    },
                     InputEvent::ButtonRelease(Button::Confirm) => {
                         _confirm_held = false;
                         let (cx, cy) = backend.cursor_pos();
                         let ptr_event = InputEvent::PointerRelease { x: cx, y: cy };
                         wm.handle_input(&ptr_event, &mut sdi);
-                    }
+                    },
                     InputEvent::CursorMove { x, y } => {
                         // Always forward cursor moves when in Desktop mode.
                         let move_event = InputEvent::CursorMove { x: *x, y: *y };
                         wm.handle_input(&move_event, &mut sdi);
-                    }
+                    },
                     InputEvent::ButtonPress(Button::Select) => {
                         // Toggle back to Classic mode.
                         app_mode = AppMode::Classic;
                         classic_view = ClassicView::Dashboard;
-                    }
+                    },
                     InputEvent::ButtonPress(Button::Triangle) => {
                         // Open app launcher: cycle through apps and open as windows.
                         let idx = page * ICONS_PER_PAGE + selected;
@@ -567,55 +612,52 @@ fn psp_main() {
                             let app = &APPS[idx];
                             open_app_window(&mut wm, &mut sdi, app.id, app.title);
                         }
-                    }
+                    },
                     InputEvent::ButtonPress(Button::Start) => {
                         // Toggle terminal window.
                         open_app_window(&mut wm, &mut sdi, "terminal", "Terminal");
-                    }
+                    },
                     // Dashboard navigation works in Desktop mode too.
                     InputEvent::ButtonPress(Button::Up) => {
                         if selected >= GRID_COLS {
                             selected -= GRID_COLS;
                             audio.send(AudioCmd::PlaySfx(SfxId::Click));
                         }
-                    }
+                    },
                     InputEvent::ButtonPress(Button::Down) => {
                         let page_start = page * ICONS_PER_PAGE;
-                        let page_count =
-                            APPS.len().saturating_sub(page_start).min(ICONS_PER_PAGE);
+                        let page_count = APPS.len().saturating_sub(page_start).min(ICONS_PER_PAGE);
                         if selected + GRID_COLS < page_count {
                             selected += GRID_COLS;
                             audio.send(AudioCmd::PlaySfx(SfxId::Click));
                         }
-                    }
+                    },
                     InputEvent::ButtonPress(Button::Left) => {
                         let page_start = page * ICONS_PER_PAGE;
-                        let page_count =
-                            APPS.len().saturating_sub(page_start).min(ICONS_PER_PAGE);
+                        let page_count = APPS.len().saturating_sub(page_start).min(ICONS_PER_PAGE);
                         if selected == 0 {
                             selected = if page_count > 0 { page_count - 1 } else { 0 };
                         } else {
                             selected -= 1;
                         }
                         audio.send(AudioCmd::PlaySfx(SfxId::Click));
-                    }
+                    },
                     InputEvent::ButtonPress(Button::Right) => {
                         let page_start = page * ICONS_PER_PAGE;
-                        let page_count =
-                            APPS.len().saturating_sub(page_start).min(ICONS_PER_PAGE);
+                        let page_count = APPS.len().saturating_sub(page_start).min(ICONS_PER_PAGE);
                         selected = (selected + 1) % page_count.max(1);
                         audio.send(AudioCmd::PlaySfx(SfxId::Click));
-                    }
+                    },
                     InputEvent::TriggerPress(Trigger::Left) => {
                         top_tab = top_tab.next();
                         audio.send(AudioCmd::PlaySfx(SfxId::Click));
-                    }
+                    },
                     InputEvent::TriggerPress(Trigger::Right) => {
                         media_tab = media_tab.next();
                         audio.send(AudioCmd::PlaySfx(SfxId::Click));
-                    }
+                    },
                     InputEvent::Quit => return,
-                    _ => {}
+                    _ => {},
                 }
                 continue; // Skip classic input handling.
             }
@@ -632,12 +674,14 @@ fn psp_main() {
                         ClassicView::PhotoViewer => ClassicView::Dashboard,
                         ClassicView::MusicPlayer => ClassicView::Dashboard,
                     };
-                }
+                },
 
-                InputEvent::ButtonPress(Button::Select) if classic_view == ClassicView::Dashboard => {
+                InputEvent::ButtonPress(Button::Select)
+                    if classic_view == ClassicView::Dashboard =>
+                {
                     // Toggle to Desktop mode.
                     app_mode = AppMode::Desktop;
-                }
+                },
 
                 // -- Dashboard input --
                 InputEvent::ButtonPress(Button::Up) if classic_view == ClassicView::Dashboard => {
@@ -645,35 +689,36 @@ fn psp_main() {
                         selected -= GRID_COLS;
                         audio.send(AudioCmd::PlaySfx(SfxId::Click));
                     }
-                }
+                },
                 InputEvent::ButtonPress(Button::Down) if classic_view == ClassicView::Dashboard => {
                     let page_start = page * ICONS_PER_PAGE;
-                    let page_count =
-                        APPS.len().saturating_sub(page_start).min(ICONS_PER_PAGE);
+                    let page_count = APPS.len().saturating_sub(page_start).min(ICONS_PER_PAGE);
                     if selected + GRID_COLS < page_count {
                         selected += GRID_COLS;
                         audio.send(AudioCmd::PlaySfx(SfxId::Click));
                     }
-                }
+                },
                 InputEvent::ButtonPress(Button::Left) if classic_view == ClassicView::Dashboard => {
                     let page_start = page * ICONS_PER_PAGE;
-                    let page_count =
-                        APPS.len().saturating_sub(page_start).min(ICONS_PER_PAGE);
+                    let page_count = APPS.len().saturating_sub(page_start).min(ICONS_PER_PAGE);
                     if selected == 0 {
                         selected = if page_count > 0 { page_count - 1 } else { 0 };
                     } else {
                         selected -= 1;
                     }
                     audio.send(AudioCmd::PlaySfx(SfxId::Click));
-                }
-                InputEvent::ButtonPress(Button::Right) if classic_view == ClassicView::Dashboard => {
+                },
+                InputEvent::ButtonPress(Button::Right)
+                    if classic_view == ClassicView::Dashboard =>
+                {
                     let page_start = page * ICONS_PER_PAGE;
-                    let page_count =
-                        APPS.len().saturating_sub(page_start).min(ICONS_PER_PAGE);
+                    let page_count = APPS.len().saturating_sub(page_start).min(ICONS_PER_PAGE);
                     selected = (selected + 1) % page_count.max(1);
                     audio.send(AudioCmd::PlaySfx(SfxId::Click));
-                }
-                InputEvent::ButtonPress(Button::Confirm) if classic_view == ClassicView::Dashboard => {
+                },
+                InputEvent::ButtonPress(Button::Confirm)
+                    if classic_view == ClassicView::Dashboard =>
+                {
                     audio.send(AudioCmd::PlaySfx(SfxId::Navigate));
                     let idx = page * ICONS_PER_PAGE + selected;
                     if idx < APPS.len() {
@@ -681,42 +726,50 @@ fn psp_main() {
                         match app.title {
                             "Terminal" => {
                                 classic_view = ClassicView::Terminal;
-                            }
+                            },
                             "File Manager" => {
                                 classic_view = ClassicView::FileManager;
                                 fm_loaded = false;
-                            }
+                            },
                             "Photo Viewer" => {
                                 classic_view = ClassicView::PhotoViewer;
                                 pv_viewing = false;
                                 pv_loaded = false;
-                            }
+                            },
                             "Music Player" => {
                                 classic_view = ClassicView::MusicPlayer;
                                 mp_loaded = false;
-                            }
+                            },
                             _ => {
                                 term_lines.push(format!("Launched: {}", app.title));
-                            }
+                            },
                         }
                     }
-                }
-                InputEvent::ButtonPress(Button::Cancel) if classic_view == ClassicView::Dashboard => {
+                },
+                InputEvent::ButtonPress(Button::Cancel)
+                    if classic_view == ClassicView::Dashboard =>
+                {
                     icons_hidden = !icons_hidden;
-                }
+                },
 
                 // Trigger cycling.
-                InputEvent::TriggerPress(Trigger::Left) if classic_view == ClassicView::Dashboard => {
+                InputEvent::TriggerPress(Trigger::Left)
+                    if classic_view == ClassicView::Dashboard =>
+                {
                     top_tab = top_tab.next();
                     audio.send(AudioCmd::PlaySfx(SfxId::Click));
-                }
-                InputEvent::TriggerPress(Trigger::Right) if classic_view == ClassicView::Dashboard => {
+                },
+                InputEvent::TriggerPress(Trigger::Right)
+                    if classic_view == ClassicView::Dashboard =>
+                {
                     media_tab = media_tab.next();
                     audio.send(AudioCmd::PlaySfx(SfxId::Click));
-                }
+                },
 
                 // -- Terminal input --
-                InputEvent::ButtonPress(Button::Confirm) if classic_view == ClassicView::Terminal => {
+                InputEvent::ButtonPress(Button::Confirm)
+                    if classic_view == ClassicView::Terminal =>
+                {
                     let cmd = term_input.clone();
                     term_lines.push(format!("> {}", cmd));
                     // Handle SFX commands via worker thread.
@@ -724,31 +777,27 @@ fn psp_main() {
                         "sfx click" => {
                             audio.send(AudioCmd::PlaySfx(SfxId::Click));
                             vec!["SFX: click".into()]
-                        }
+                        },
                         "sfx nav" => {
                             audio.send(AudioCmd::PlaySfx(SfxId::Navigate));
                             vec!["SFX: navigate".into()]
-                        }
+                        },
                         "sfx error" => {
                             audio.send(AudioCmd::PlaySfx(SfxId::Error));
                             vec!["SFX: error".into()]
-                        }
-                        "save" => {
-                            match commands::save_terminal_history(&term_lines) {
-                                Ok(()) => vec!["State saved.".into()],
-                                Err(e) => vec![format!("Save failed: {e}")],
-                            }
-                        }
-                        "load" => {
-                            match commands::load_terminal_history() {
-                                Ok(lines) => {
-                                    term_lines.clear();
-                                    term_lines.extend(lines);
-                                    vec!["State restored.".into()]
-                                }
-                                Err(e) => vec![format!("Load failed: {e}")],
-                            }
-                        }
+                        },
+                        "save" => match commands::save_terminal_history(&term_lines) {
+                            Ok(()) => vec!["State saved.".into()],
+                            Err(e) => vec![format!("Save failed: {e}")],
+                        },
+                        "load" => match commands::load_terminal_history() {
+                            Ok(lines) => {
+                                term_lines.clear();
+                                term_lines.extend(lines);
+                                vec!["State restored.".into()]
+                            },
+                            Err(e) => vec![format!("Load failed: {e}")],
+                        },
                         "usb mount" => {
                             if usb_storage.is_some() {
                                 vec!["USB storage already active.".into()]
@@ -757,49 +806,62 @@ fn psp_main() {
                                     Ok(()) => match psp::usb::UsbStorageMode::activate() {
                                         Ok(handle) => {
                                             usb_storage = Some(handle);
-                                            vec!["USB storage mode active. Connect cable to PC.".into()]
-                                        }
+                                            vec![
+                                                "USB storage mode active. Connect cable to PC."
+                                                    .into(),
+                                            ]
+                                        },
                                         Err(e) => vec![format!("USB activate failed: {e}")],
                                     },
                                     Err(e) => vec![format!("USB bus start failed: {e}")],
                                 }
                             }
-                        }
+                        },
                         "usb unmount" | "usb eject" => {
                             if usb_storage.take().is_some() {
                                 vec!["USB storage mode deactivated.".into()]
                             } else {
                                 vec!["USB storage not active.".into()]
                             }
-                        }
+                        },
                         "usb" | "usb status" => {
                             let connected = psp::usb::is_connected();
                             let established = psp::usb::is_established();
                             let active = usb_storage.is_some();
                             vec![
-                                format!("USB cable: {}", if connected { "connected" } else { "disconnected" }),
-                                format!("Storage mode: {}", if active { "ACTIVE" } else { "inactive" }),
+                                format!(
+                                    "USB cable: {}",
+                                    if connected {
+                                        "connected"
+                                    } else {
+                                        "disconnected"
+                                    }
+                                ),
+                                format!(
+                                    "Storage mode: {}",
+                                    if active { "ACTIVE" } else { "inactive" }
+                                ),
                                 format!("Host mounted: {}", if established { "yes" } else { "no" }),
                             ]
-                        }
+                        },
                         _ if cmd.trim().starts_with("play ") => {
                             let path = cmd.trim().strip_prefix("play ").unwrap().trim();
                             audio.send(AudioCmd::LoadAndPlay(path.to_string()));
                             mp_file_name = path.to_string();
                             vec![format!("Playing: {}", path)]
-                        }
+                        },
                         "pause" => {
                             audio.send(AudioCmd::Pause);
                             vec!["Paused.".into()]
-                        }
+                        },
                         "resume" => {
                             audio.send(AudioCmd::Resume);
                             vec!["Resumed.".into()]
-                        }
+                        },
                         "stop" => {
                             audio.send(AudioCmd::Stop);
                             vec!["Stopped.".into()]
-                        }
+                        },
                         _ => commands::execute_command(&cmd, &mut config),
                     };
                     for line in output {
@@ -809,8 +871,10 @@ fn psp_main() {
                     while term_lines.len() > 200 {
                         term_lines.remove(0);
                     }
-                }
-                InputEvent::ButtonPress(Button::Square) if classic_view == ClassicView::Terminal => {
+                },
+                InputEvent::ButtonPress(Button::Square)
+                    if classic_view == ClassicView::Terminal =>
+                {
                     // Open PSP on-screen keyboard for command input.
                     match psp::osk::OskBuilder::new("Enter command")
                         .max_chars(256)
@@ -819,24 +883,24 @@ fn psp_main() {
                     {
                         Ok(Some(text)) => {
                             term_input = text;
-                        }
-                        Ok(None) | Err(_) => {} // Cancelled or unsupported (PPSSPP)
+                        },
+                        Ok(None) | Err(_) => {}, // Cancelled or unsupported (PPSSPP)
                     }
-                }
+                },
                 InputEvent::ButtonPress(Button::Up) if classic_view == ClassicView::Terminal => {
                     term_lines.push(String::from("> help"));
                     let output = commands::execute_command("help", &mut config);
                     for line in output {
                         term_lines.push(line);
                     }
-                }
+                },
                 InputEvent::ButtonPress(Button::Down) if classic_view == ClassicView::Terminal => {
                     term_lines.push(String::from("> status"));
                     let output = commands::execute_command("status", &mut config);
                     for line in output {
                         term_lines.push(line);
                     }
-                }
+                },
 
                 // -- File manager input --
                 InputEvent::ButtonPress(Button::Up) if classic_view == ClassicView::FileManager => {
@@ -846,16 +910,20 @@ fn psp_main() {
                             fm_scroll = fm_selected;
                         }
                     }
-                }
-                InputEvent::ButtonPress(Button::Down) if classic_view == ClassicView::FileManager => {
+                },
+                InputEvent::ButtonPress(Button::Down)
+                    if classic_view == ClassicView::FileManager =>
+                {
                     if fm_selected + 1 < fm_entries.len() {
                         fm_selected += 1;
                         if fm_selected >= fm_scroll + FM_VISIBLE_ROWS {
                             fm_scroll = fm_selected - FM_VISIBLE_ROWS + 1;
                         }
                     }
-                }
-                InputEvent::ButtonPress(Button::Confirm) if classic_view == ClassicView::FileManager => {
+                },
+                InputEvent::ButtonPress(Button::Confirm)
+                    if classic_view == ClassicView::FileManager =>
+                {
                     if fm_selected < fm_entries.len() && fm_entries[fm_selected].is_dir {
                         let dir_name = fm_entries[fm_selected].name.clone();
                         if fm_path.ends_with('/') {
@@ -865,8 +933,10 @@ fn psp_main() {
                         }
                         fm_loaded = false;
                     }
-                }
-                InputEvent::ButtonPress(Button::Cancel) if classic_view == ClassicView::FileManager => {
+                },
+                InputEvent::ButtonPress(Button::Cancel)
+                    if classic_view == ClassicView::FileManager =>
+                {
                     if let Some(pos) = fm_path.rfind('/') {
                         if pos > 0 && !fm_path[..pos].ends_with(':') {
                             fm_path.truncate(pos);
@@ -879,8 +949,10 @@ fn psp_main() {
                     } else {
                         classic_view = ClassicView::Dashboard;
                     }
-                }
-                InputEvent::ButtonPress(Button::Square) if classic_view == ClassicView::FileManager => {
+                },
+                InputEvent::ButtonPress(Button::Square)
+                    if classic_view == ClassicView::FileManager =>
+                {
                     // Delete selected file with confirmation dialog.
                     if fm_selected < fm_entries.len() && !fm_entries[fm_selected].is_dir {
                         let name = &fm_entries[fm_selected].name;
@@ -894,44 +966,48 @@ fn psp_main() {
                                 };
                                 match psp::io::remove_file(&full_path) {
                                     Ok(()) => {
-                                        term_lines.push(format!(
-                                            "Deleted: {}", full_path
-                                        ));
+                                        term_lines.push(format!("Deleted: {}", full_path));
                                         fm_loaded = false;
-                                    }
+                                    },
                                     Err(e) => {
-                                        let _ = psp::dialog::error_dialog(
-                                            e.0 as u32,
-                                        );
-                                    }
+                                        let _ = psp::dialog::error_dialog(e.0 as u32);
+                                    },
                                 }
-                            }
-                            _ => {} // Cancelled or closed
+                            },
+                            _ => {}, // Cancelled or closed
                         }
                     }
-                }
-                InputEvent::ButtonPress(Button::Triangle) if classic_view == ClassicView::FileManager => {
+                },
+                InputEvent::ButtonPress(Button::Triangle)
+                    if classic_view == ClassicView::FileManager =>
+                {
                     classic_view = ClassicView::Dashboard;
-                }
+                },
 
                 // -- Photo viewer input --
-                InputEvent::ButtonPress(Button::Up) if classic_view == ClassicView::PhotoViewer && !pv_viewing => {
+                InputEvent::ButtonPress(Button::Up)
+                    if classic_view == ClassicView::PhotoViewer && !pv_viewing =>
+                {
                     if pv_selected > 0 {
                         pv_selected -= 1;
                         if pv_selected < pv_scroll {
                             pv_scroll = pv_selected;
                         }
                     }
-                }
-                InputEvent::ButtonPress(Button::Down) if classic_view == ClassicView::PhotoViewer && !pv_viewing => {
+                },
+                InputEvent::ButtonPress(Button::Down)
+                    if classic_view == ClassicView::PhotoViewer && !pv_viewing =>
+                {
                     if pv_selected + 1 < pv_entries.len() {
                         pv_selected += 1;
                         if pv_selected >= pv_scroll + FM_VISIBLE_ROWS {
                             pv_scroll = pv_selected - FM_VISIBLE_ROWS + 1;
                         }
                     }
-                }
-                InputEvent::ButtonPress(Button::Confirm) if classic_view == ClassicView::PhotoViewer && !pv_viewing => {
+                },
+                InputEvent::ButtonPress(Button::Confirm)
+                    if classic_view == ClassicView::PhotoViewer && !pv_viewing =>
+                {
                     if pv_selected < pv_entries.len() {
                         let entry = &pv_entries[pv_selected];
                         if entry.is_dir {
@@ -957,8 +1033,10 @@ fn psp_main() {
                             pv_loading = true;
                         }
                     }
-                }
-                InputEvent::ButtonPress(Button::Cancel) if classic_view == ClassicView::PhotoViewer => {
+                },
+                InputEvent::ButtonPress(Button::Cancel)
+                    if classic_view == ClassicView::PhotoViewer =>
+                {
                     if pv_viewing {
                         pv_viewing = false;
                     } else if let Some(pos) = pv_path.rfind('/') {
@@ -973,33 +1051,41 @@ fn psp_main() {
                     } else {
                         classic_view = ClassicView::Dashboard;
                     }
-                }
-                InputEvent::ButtonPress(Button::Triangle) if classic_view == ClassicView::PhotoViewer => {
+                },
+                InputEvent::ButtonPress(Button::Triangle)
+                    if classic_view == ClassicView::PhotoViewer =>
+                {
                     if pv_viewing {
                         pv_viewing = false;
                     } else {
                         classic_view = ClassicView::Dashboard;
                     }
-                }
+                },
 
                 // -- Music player input --
-                InputEvent::ButtonPress(Button::Up) if classic_view == ClassicView::MusicPlayer && !audio.is_playing() => {
+                InputEvent::ButtonPress(Button::Up)
+                    if classic_view == ClassicView::MusicPlayer && !audio.is_playing() =>
+                {
                     if mp_selected > 0 {
                         mp_selected -= 1;
                         if mp_selected < mp_scroll {
                             mp_scroll = mp_selected;
                         }
                     }
-                }
-                InputEvent::ButtonPress(Button::Down) if classic_view == ClassicView::MusicPlayer && !audio.is_playing() => {
+                },
+                InputEvent::ButtonPress(Button::Down)
+                    if classic_view == ClassicView::MusicPlayer && !audio.is_playing() =>
+                {
                     if mp_selected + 1 < mp_entries.len() {
                         mp_selected += 1;
                         if mp_selected >= mp_scroll + FM_VISIBLE_ROWS {
                             mp_scroll = mp_selected - FM_VISIBLE_ROWS + 1;
                         }
                     }
-                }
-                InputEvent::ButtonPress(Button::Confirm) if classic_view == ClassicView::MusicPlayer => {
+                },
+                InputEvent::ButtonPress(Button::Confirm)
+                    if classic_view == ClassicView::MusicPlayer =>
+                {
                     if audio.is_playing() {
                         // Toggle pause via background thread.
                         if audio.is_paused() {
@@ -1029,11 +1115,15 @@ fn psp_main() {
                             term_lines.push(format!("Playing: {}", entry.name));
                         }
                     }
-                }
-                InputEvent::ButtonPress(Button::Square) if classic_view == ClassicView::MusicPlayer => {
+                },
+                InputEvent::ButtonPress(Button::Square)
+                    if classic_view == ClassicView::MusicPlayer =>
+                {
                     audio.send(AudioCmd::Stop);
-                }
-                InputEvent::ButtonPress(Button::Cancel) if classic_view == ClassicView::MusicPlayer => {
+                },
+                InputEvent::ButtonPress(Button::Cancel)
+                    if classic_view == ClassicView::MusicPlayer =>
+                {
                     audio.send(AudioCmd::Stop);
                     if let Some(pos) = mp_path.rfind('/') {
                         if pos > 0 && !mp_path[..pos].ends_with(':') {
@@ -1047,13 +1137,15 @@ fn psp_main() {
                     } else {
                         classic_view = ClassicView::Dashboard;
                     }
-                }
-                InputEvent::ButtonPress(Button::Triangle) if classic_view == ClassicView::MusicPlayer => {
+                },
+                InputEvent::ButtonPress(Button::Triangle)
+                    if classic_view == ClassicView::MusicPlayer =>
+                {
                     classic_view = ClassicView::Dashboard;
                     // Audio keeps playing in background.
-                }
+                },
 
-                _ => {}
+                _ => {},
             }
         }
 
@@ -1114,21 +1206,31 @@ fn psp_main() {
                         if !icons_hidden {
                             draw_dashboard(&mut backend, selected, page, viz_frame);
                         }
-                        draw_button_hints(&mut backend, &[
-                            ("X", "Open"), ("O", "Hide"),
-                            ("Start", "Term"), ("Sel", "Desktop"),
-                            ("L/R", "Tabs"),
-                        ]);
-                    }
+                        draw_button_hints(
+                            &mut backend,
+                            &[
+                                ("X", "Open"),
+                                ("O", "Hide"),
+                                ("Start", "Term"),
+                                ("Sel", "Desktop"),
+                                ("L/R", "Tabs"),
+                            ],
+                        );
+                    },
                     ClassicView::Terminal => {
                         backend.force_bitmap_font = true;
                         draw_terminal(&mut backend, &term_lines, &term_input);
                         backend.force_bitmap_font = false;
-                        draw_button_hints(&mut backend, &[
-                            ("X", "Run"), ("[]", "OSK"),
-                            ("Start", "Back"), ("Up", "Help"),
-                        ]);
-                    }
+                        draw_button_hints(
+                            &mut backend,
+                            &[
+                                ("X", "Run"),
+                                ("[]", "OSK"),
+                                ("Start", "Back"),
+                                ("Up", "Help"),
+                            ],
+                        );
+                    },
                     ClassicView::FileManager => {
                         backend.force_bitmap_font = true;
                         draw_file_manager(
@@ -1139,17 +1241,15 @@ fn psp_main() {
                             fm_scroll,
                         );
                         backend.force_bitmap_font = false;
-                        draw_button_hints(&mut backend, &[
-                            ("X", "Open"), ("O", "Back"),
-                            ("[]", "Del"), ("^v", "Nav"),
-                        ]);
-                    }
+                        draw_button_hints(
+                            &mut backend,
+                            &[("X", "Open"), ("O", "Back"), ("[]", "Del"), ("^v", "Nav")],
+                        );
+                    },
                     ClassicView::PhotoViewer => {
                         if pv_viewing {
                             draw_photo_view(&mut backend, pv_tex, pv_img_w, pv_img_h);
-                            draw_button_hints(&mut backend, &[
-                                ("O", "Back"),
-                            ]);
+                            draw_button_hints(&mut backend, &[("O", "Back")]);
                         } else if pv_loading {
                             draw_loading_indicator(&mut backend, "Decoding image...");
                         } else {
@@ -1160,21 +1260,24 @@ fn psp_main() {
                                 pv_selected,
                                 pv_scroll,
                             );
-                            draw_button_hints(&mut backend, &[
-                                ("X", "View"), ("O", "Back"),
-                                ("^v", "Nav"),
-                            ]);
+                            draw_button_hints(
+                                &mut backend,
+                                &[("X", "View"), ("O", "Back"), ("^v", "Nav")],
+                            );
                         }
-                    }
+                    },
                     ClassicView::MusicPlayer => {
                         if audio.is_playing() {
                             draw_music_player_threaded(
-                                &mut backend, &mp_file_name, &audio, viz_frame,
+                                &mut backend,
+                                &mp_file_name,
+                                &audio,
+                                viz_frame,
                             );
-                            draw_button_hints(&mut backend, &[
-                                ("X", "Pause"), ("[]", "Stop"),
-                                ("^v", "Back"),
-                            ]);
+                            draw_button_hints(
+                                &mut backend,
+                                &[("X", "Pause"), ("[]", "Stop"), ("^v", "Back")],
+                            );
                         } else {
                             draw_music_browser(
                                 &mut backend,
@@ -1183,14 +1286,14 @@ fn psp_main() {
                                 mp_selected,
                                 mp_scroll,
                             );
-                            draw_button_hints(&mut backend, &[
-                                ("X", "Play"), ("O", "Back"),
-                                ("^v", "Nav"),
-                            ]);
+                            draw_button_hints(
+                                &mut backend,
+                                &[("X", "Play"), ("O", "Back"), ("^v", "Nav")],
+                            );
                         }
-                    }
+                    },
                 }
-            }
+            },
 
             AppMode::Desktop => {
                 // Draw dashboard icons behind windows.
@@ -1213,61 +1316,60 @@ fn psp_main() {
                 // Draw WM chrome (frames, titlebars) + clipped content.
                 // Use bitmap font for app content (8px vs 12px system font).
                 backend.force_bitmap_font = true;
-                let _ = wm.draw_with_clips(
-                    &sdi,
-                    &mut backend,
-                    |window_id, cx, cy, cw, ch, be| {
-                        // Downcast back to PspBackend for direct calls.
-                        // Since draw_with_clips passes &mut dyn SdiBackend, we use
-                        // the trait methods here (which return Result).
-                        match window_id {
-                            "terminal" => {
-                                draw_terminal_windowed(
-                                    &term_lines, &term_input, cx, cy, cw, ch, be,
-                                )
-                            }
-                            "filemgr" => {
-                                draw_filemgr_windowed(
-                                    &fm_path, &fm_entries, fm_selected, fm_scroll, cx, cy,
-                                    cw, ch, be,
-                                )
-                            }
-                            "photos" => {
-                                draw_photos_windowed(
-                                    pv_tex, pv_img_w, pv_img_h, pv_viewing, cx, cy, cw, ch,
-                                    be,
-                                )
-                            }
-                            "music" => {
-                                draw_music_windowed(
-                                    &mp_file_name, &audio, cx, cy, cw, ch, be,
-                                )
-                            }
-                            "settings" => {
-                                draw_settings_windowed(
-                                    settings_clock, settings_bus, current_vol,
-                                    cx, cy, cw, ch, be,
-                                )
-                            }
-                            "network" => {
-                                draw_network_windowed(
-                                    &status, cx, cy, cw, ch, be,
-                                )
-                            }
-                            "sysmon" => {
-                                draw_sysmon_windowed(
-                                    &status, &sysinfo, fps, free_kb, max_blk_kb,
-                                    current_vol, usb_active,
-                                    cx, cy, cw, ch, be,
-                                )
-                            }
-                            _ => Ok(()),
-                        }
-                    },
-                );
+                let _ = wm.draw_with_clips(&sdi, &mut backend, |window_id, cx, cy, cw, ch, be| {
+                    // Downcast back to PspBackend for direct calls.
+                    // Since draw_with_clips passes &mut dyn SdiBackend, we use
+                    // the trait methods here (which return Result).
+                    match window_id {
+                        "terminal" => {
+                            draw_terminal_windowed(&term_lines, &term_input, cx, cy, cw, ch, be)
+                        },
+                        "filemgr" => draw_filemgr_windowed(
+                            &fm_path,
+                            &fm_entries,
+                            fm_selected,
+                            fm_scroll,
+                            cx,
+                            cy,
+                            cw,
+                            ch,
+                            be,
+                        ),
+                        "photos" => draw_photos_windowed(
+                            pv_tex, pv_img_w, pv_img_h, pv_viewing, cx, cy, cw, ch, be,
+                        ),
+                        "music" => draw_music_windowed(&mp_file_name, &audio, cx, cy, cw, ch, be),
+                        "settings" => draw_settings_windowed(
+                            settings_clock,
+                            settings_bus,
+                            current_vol,
+                            cx,
+                            cy,
+                            cw,
+                            ch,
+                            be,
+                        ),
+                        "network" => draw_network_windowed(&status, cx, cy, cw, ch, be),
+                        "sysmon" => draw_sysmon_windowed(
+                            &status,
+                            &sysinfo,
+                            fps,
+                            free_kb,
+                            max_blk_kb,
+                            current_vol,
+                            usb_active,
+                            cx,
+                            cy,
+                            cw,
+                            ch,
+                            be,
+                        ),
+                        _ => Ok(()),
+                    }
+                });
 
                 backend.force_bitmap_font = false;
-            }
+            },
         }
 
         // Status bar + bottom bar (always visible, drawn on top).
@@ -1279,12 +1381,13 @@ fn psp_main() {
             (_, ClassicView::Terminal) => String::from("SYS://TERMINAL"),
             (_, ClassicView::FileManager) => {
                 let path_part = if fm_path.len() > 14 {
-                    &fm_path[fm_path.len() - 14..]
+                    let start = fm_path.ceil_char_boundary(fm_path.len() - 14);
+                    &fm_path[start..]
                 } else {
                     &fm_path
                 };
                 format!("MSO:/{}", path_part)
-            }
+            },
             (_, ClassicView::PhotoViewer) => String::from("SYS://PHOTOS"),
             (_, ClassicView::MusicPlayer) => {
                 if audio.is_playing() {
@@ -1292,7 +1395,7 @@ fn psp_main() {
                 } else {
                     String::from("SYS://MUSIC")
                 }
-            }
+            },
         };
         let desktop_wm = if app_mode == AppMode::Desktop {
             Some(&wm)
@@ -1300,8 +1403,13 @@ fn psp_main() {
             None
         };
         draw_bottom_bar(
-            &mut backend, media_tab, &audio, viz_frame, &status,
-            &url_text, desktop_wm,
+            &mut backend,
+            media_tab,
+            &audio,
+            viz_frame,
+            &status,
+            &url_text,
+            desktop_wm,
         );
         viz_frame = viz_frame.wrapping_add(1);
 
@@ -1370,18 +1478,18 @@ fn handle_wm_event(
     match event {
         WmEvent::WindowClosed(id) => {
             term_lines.push(format!("[WM] Window closed: {}", id));
-        }
+        },
         WmEvent::ContentClick(id, lx, ly) => {
             term_lines.push(format!("[WM] Click in {}: ({}, {})", id, lx, ly));
-        }
+        },
         WmEvent::DesktopClick(x, y) => {
             if let Some(idx) = hit_test_dashboard_icon(*x, *y, page) {
                 if idx < APPS.len() {
                     open_app_window(wm, sdi, APPS[idx].id, APPS[idx].title);
                 }
             }
-        }
-        _ => {}
+        },
+        _ => {},
     }
 }
 
@@ -1405,10 +1513,7 @@ fn draw_desktop_taskbar_row(backend: &mut PspBackend, wm: &WindowManager) {
             };
             if is_active {
                 let label_w = (app.title.len() as i32 * 8 + 8) as u32;
-                backend.fill_rect_inner(
-                    tx - 2, y, label_w, 12,
-                    Color::rgba(60, 90, 160, 140),
-                );
+                backend.fill_rect_inner(tx - 2, y, label_w, 12, Color::rgba(60, 90, 160, 140));
             }
             backend.draw_text_inner(app.title, tx + 2, y + 1, 8, label_clr);
             tx += app.title.len() as i32 * 8 + 12;
@@ -1456,7 +1561,13 @@ fn draw_terminal_windowed(
     }
 
     let prompt = format!("> {}_", input);
-    be.draw_text(&prompt, cx + 2, cy + ch as i32 - 12, 8, Color::rgb(0, 255, 0))?;
+    be.draw_text(
+        &prompt,
+        cx + 2,
+        cy + ch as i32 - 12,
+        8,
+        Color::rgb(0, 255, 0),
+    )?;
     Ok(())
 }
 
@@ -1481,7 +1592,13 @@ fn draw_filemgr_windowed(
         let row = (i - scroll) as i32;
         let y = cy + 14 + row * FM_ROW_H;
         if i == selected {
-            be.fill_rect(cx, y - 1, cw, FM_ROW_H as u32, Color::rgba(80, 120, 200, 100))?;
+            be.fill_rect(
+                cx,
+                y - 1,
+                cw,
+                FM_ROW_H as u32,
+                Color::rgba(80, 120, 200, 100),
+            )?;
         }
         let (prefix, clr) = if entry.is_dir {
             ("[D]", Color::rgb(255, 220, 80))
@@ -1523,7 +1640,13 @@ fn draw_photos_windowed(
             be.blit(t, dx, dy, dw, dh)?;
         }
     } else {
-        be.draw_text("Select photo from browser", cx + 4, cy + 4, 8, Color::rgb(160, 160, 160))?;
+        be.draw_text(
+            "Select photo from browser",
+            cx + 4,
+            cy + 4,
+            8,
+            Color::rgb(160, 160, 160),
+        )?;
     }
     Ok(())
 }
@@ -1550,7 +1673,11 @@ fn draw_music_windowed(
         );
         let info_x = center_x - (info.len() as i32 * 8) / 2;
         be.draw_text(&info, info_x, cy + 18, 8, Color::rgb(180, 180, 180))?;
-        let status = if audio.is_paused() { "PAUSED" } else { "PLAYING" };
+        let status = if audio.is_paused() {
+            "PAUSED"
+        } else {
+            "PLAYING"
+        };
         let status_clr = if audio.is_paused() {
             Color::rgb(255, 200, 80)
         } else {
@@ -1559,7 +1686,13 @@ fn draw_music_windowed(
         let status_x = center_x - (status.len() as i32 * 8) / 2;
         be.draw_text(status, status_x, cy + ch as i32 / 2, 8, status_clr)?;
     } else {
-        be.draw_text("No track loaded", cx + 4, cy + 4, 8, Color::rgb(160, 160, 160))?;
+        be.draw_text(
+            "No track loaded",
+            cx + 4,
+            cy + 4,
+            8,
+            Color::rgb(160, 160, 160),
+        )?;
     }
     Ok(())
 }
@@ -1663,7 +1796,13 @@ fn draw_network_windowed(
 
     if status.battery_percent >= 0 {
         be.draw_text("Battery:", cx + 4, y, 8, lbl)?;
-        be.draw_text(&format!("{}%", status.battery_percent), vx, y, 8, Color::WHITE)?;
+        be.draw_text(
+            &format!("{}%", status.battery_percent),
+            vx,
+            y,
+            8,
+            Color::WHITE,
+        )?;
     }
 
     Ok(())
@@ -1684,7 +1823,13 @@ fn draw_sysmon_windowed(
     be: &mut dyn SdiBackend,
 ) -> oasis_backend_psp::OasisResult<()> {
     be.fill_rect(cx, cy, cw, ch, Color::rgba(0, 10, 20, 210))?;
-    be.draw_text("SYSTEM MONITOR", cx + 4, cy + 2, 8, Color::rgb(60, 179, 113))?;
+    be.draw_text(
+        "SYSTEM MONITOR",
+        cx + 4,
+        cy + 2,
+        8,
+        Color::rgb(60, 179, 113),
+    )?;
     be.fill_rect(cx, cy + 12, cw, 1, Color::rgba(255, 255, 255, 40))?;
 
     let lbl = Color::rgb(140, 140, 140);
@@ -1706,7 +1851,10 @@ fn draw_sysmon_windowed(
     be.draw_text("CPU/Bus/ME:", cx + 4, y, 8, lbl)?;
     be.draw_text(
         &format!("{}/{}/{}", sysinfo.cpu_mhz, sysinfo.bus_mhz, sysinfo.me_mhz),
-        vx, y, 8, val,
+        vx,
+        y,
+        8,
+        val,
     )?;
     y += 11;
 
@@ -1781,12 +1929,7 @@ fn draw_loading_indicator(backend: &mut PspBackend, msg: &str) {
 // Dashboard rendering
 // ---------------------------------------------------------------------------
 
-fn draw_dashboard(
-    backend: &mut PspBackend,
-    selected: usize,
-    page: usize,
-    viz_frame: u32,
-) {
+fn draw_dashboard(backend: &mut PspBackend, selected: usize, page: usize, viz_frame: u32) {
     let page_start = page * ICONS_PER_PAGE;
     let page_end = (page_start + ICONS_PER_PAGE).min(APPS.len());
     let page_count = page_end - page_start;
@@ -1819,8 +1962,7 @@ fn draw_dashboard(
         let ix = cell_x + (CELL_W - ICON_W as i32) / 2;
         let iy = cell_y + 1;
 
-        let pulse =
-            ((libm::sinf(viz_frame as f32 * 0.08) + 1.0) * 0.5 * 80.0) as u8;
+        let pulse = ((libm::sinf(viz_frame as f32 * 0.08) + 1.0) * 0.5 * 80.0) as u8;
         let sel_clr = Color::rgba(255, 255, 255, 60 + pulse);
         let bx = ix - CURSOR_PAD;
         let by = iy - CURSOR_PAD;
@@ -1869,14 +2011,7 @@ fn draw_icon(backend: &mut PspBackend, app: &AppEntry, ix: i32, iy: i32) {
 }
 
 /// Draw a recognizable per-app symbol inside the icon graphic area.
-fn draw_icon_graphic(
-    backend: &mut PspBackend,
-    app_id: &str,
-    gx: i32,
-    gy: i32,
-    gw: u32,
-    gh: u32,
-) {
+fn draw_icon_graphic(backend: &mut PspBackend, app_id: &str, gx: i32, gy: i32, gw: u32, gh: u32) {
     let s = ICON_SYM_CLR;
     let cx = gx + gw as i32 / 2;
     let cy = gy + gh as i32 / 2;
@@ -1886,7 +2021,7 @@ fn draw_icon_graphic(
             // Folder: body rect + tab on top-left.
             backend.fill_rect_inner(cx - 8, cy - 2, 16, 8, s);
             backend.fill_rect_inner(cx - 8, cy - 5, 7, 3, s);
-        }
+        },
         "settings" => {
             // Gear: 3x3 cross pattern (5 fill_rects).
             backend.fill_rect_inner(cx - 5, cy - 1, 10, 3, s);
@@ -1894,28 +2029,28 @@ fn draw_icon_graphic(
             backend.fill_rect_inner(cx - 4, cy - 4, 3, 3, s);
             backend.fill_rect_inner(cx + 2, cy - 4, 3, 3, s);
             backend.fill_rect_inner(cx - 4, cy + 2, 3, 3, s);
-        }
+        },
         "network" => {
             // WiFi arcs: 3 horizontal bars widening bottom-up.
             backend.fill_rect_inner(cx - 2, cy + 2, 5, 2, s);
             backend.fill_rect_inner(cx - 5, cy - 1, 11, 2, s);
             backend.fill_rect_inner(cx - 8, cy - 4, 17, 2, s);
-        }
+        },
         "terminal" => {
             // >_ prompt text.
             backend.draw_text_inner(">_", cx - 8, cy - 4, 8, s);
-        }
+        },
         "music" => {
             // Music note: stem + filled head.
             backend.fill_rect_inner(cx + 2, cy - 5, 2, 10, s);
             backend.fill_rect_inner(cx - 3, cy + 2, 5, 3, s);
-        }
+        },
         "photos" => {
             // Mountain/landscape: stepped pyramid.
             backend.fill_rect_inner(cx - 8, cy + 2, 17, 2, s);
             backend.fill_rect_inner(cx - 5, cy - 1, 11, 3, s);
             backend.fill_rect_inner(cx - 2, cy - 4, 5, 3, s);
-        }
+        },
         "packages" => {
             // Box/crate: outlined rect + cross divider.
             backend.fill_rect_inner(cx - 7, cy - 5, 15, 1, s);
@@ -1923,14 +2058,14 @@ fn draw_icon_graphic(
             backend.fill_rect_inner(cx - 7, cy - 5, 1, 10, s);
             backend.fill_rect_inner(cx + 7, cy - 5, 1, 10, s);
             backend.fill_rect_inner(cx, cy - 5, 1, 10, s);
-        }
+        },
         "sysmon" => {
             // Bar chart: 3 vertical bars at different heights.
             backend.fill_rect_inner(cx - 6, cy, 4, 5, s);
             backend.fill_rect_inner(cx - 1, cy - 3, 4, 8, s);
             backend.fill_rect_inner(cx + 4, cy - 5, 4, 10, s);
-        }
-        _ => {}
+        },
+        _ => {},
     }
 }
 
@@ -2066,7 +2201,10 @@ fn draw_bottom_bar(
     backend.fill_rect_inner(0, BOTTOMBAR_Y, SCREEN_WIDTH, BOTTOMBAR_H, BAR_BG);
     backend.fill_rect_inner(0, BOTTOMBAR_Y, SCREEN_WIDTH, 1, SEPARATOR);
     backend.fill_rect_inner(
-        0, BOTTOMBAR_Y + 1, SCREEN_WIDTH, 1,
+        0,
+        BOTTOMBAR_Y + 1,
+        SCREEN_WIDTH,
+        1,
         Color::rgba(255, 255, 255, 15),
     );
 
@@ -2081,7 +2219,7 @@ fn draw_bottom_bar(
     // Truncate URL text to fit bezel (max 16 chars).
     let max_url = 16;
     let display_url = if url_text.len() > max_url {
-        &url_text[..max_url]
+        &url_text[..url_text.floor_char_boundary(max_url)]
     } else {
         url_text
     };
@@ -2091,8 +2229,10 @@ fn draw_bottom_bar(
     draw_visualizer(backend, audio, viz_frame);
 
     // Media tabs chrome bezel (right).
-    let labels_w: i32 =
-        MediaTab::LABELS.iter().map(|l| l.len() as i32 * CHAR_W).sum();
+    let labels_w: i32 = MediaTab::LABELS
+        .iter()
+        .map(|l| l.len() as i32 * CHAR_W)
+        .sum();
     let pipes_w = (MediaTab::LABELS.len() as i32 - 1) * (PIPE_GAP * 2 + CHAR_W);
     let total_w = labels_w + pipes_w;
     let tabs_x = SCREEN_WIDTH as i32 - total_w - 8;
@@ -2121,7 +2261,10 @@ fn draw_bottom_bar(
 
     // -- Lower row (y=BOTTOM_LOWER_Y, 16px) --
     backend.fill_rect_inner(
-        0, BOTTOM_LOWER_Y, SCREEN_WIDTH, 1,
+        0,
+        BOTTOM_LOWER_Y,
+        SCREEN_WIDTH,
+        1,
         Color::rgba(255, 255, 255, 20),
     );
 
@@ -2145,11 +2288,7 @@ fn draw_bottom_bar(
 }
 
 /// Draw animated music visualizer bars in center of upper bottom row.
-fn draw_visualizer(
-    backend: &mut PspBackend,
-    audio: &AudioHandle,
-    viz_frame: u32,
-) {
+fn draw_visualizer(backend: &mut PspBackend, audio: &AudioHandle, viz_frame: u32) {
     let total_viz_w = VIZ_BAR_COUNT * (VIZ_BAR_W + VIZ_BAR_GAP) - VIZ_BAR_GAP;
     let viz_x = (SCREEN_WIDTH as i32 - total_viz_w) / 2;
     let viz_base_y = BOTTOM_UPPER_Y + BOTTOM_UPPER_H as i32 - 2;
@@ -2162,8 +2301,8 @@ fn draw_visualizer(
             let freq1 = 0.7 + (i as f32) * 0.3;
             let freq2 = 1.4 + (i as f32) * 0.15;
             let phase = (i as f32) * 1.1;
-            let val = libm::sinf(t * freq1 + phase) * 0.6
-                + libm::sinf(t * freq2 + phase * 0.7) * 0.4;
+            let val =
+                libm::sinf(t * freq1 + phase) * 0.6 + libm::sinf(t * freq2 + phase * 0.7) * 0.4;
             let norm = (val + 1.0) * 0.5;
             VIZ_BAR_MIN_H + ((VIZ_BAR_MAX_H - VIZ_BAR_MIN_H) as f32 * norm) as i32
         } else {
@@ -2218,7 +2357,11 @@ fn draw_transport_controls(backend: &mut PspBackend, audio: &AudioHandle) {
     tx += 20;
 
     // Stop (6x6 filled square, highlighted green when stopped).
-    let stop_clr = if !playing { TRANSPORT_ACTIVE } else { TRANSPORT_CLR };
+    let stop_clr = if !playing {
+        TRANSPORT_ACTIVE
+    } else {
+        TRANSPORT_CLR
+    };
     backend.fill_rect_inner(tx, y + 1, 6, 6, stop_clr);
 }
 
@@ -2232,24 +2375,36 @@ fn draw_battery_bar(backend: &mut PspBackend, status: &StatusBarInfo) {
     // Outline.
     backend.fill_rect_inner(bar_x, bar_y, bar_w, 1, Color::rgba(200, 200, 200, 140));
     backend.fill_rect_inner(
-        bar_x, bar_y + bar_h as i32 - 1, bar_w, 1,
+        bar_x,
+        bar_y + bar_h as i32 - 1,
+        bar_w,
+        1,
         Color::rgba(200, 200, 200, 140),
     );
     backend.fill_rect_inner(bar_x, bar_y, 1, bar_h, Color::rgba(200, 200, 200, 140));
     backend.fill_rect_inner(
-        bar_x + bar_w as i32 - 1, bar_y, 1, bar_h,
+        bar_x + bar_w as i32 - 1,
+        bar_y,
+        1,
+        bar_h,
         Color::rgba(200, 200, 200, 140),
     );
 
     // Dark bg fill.
     backend.fill_rect_inner(
-        bar_x + 1, bar_y + 1, bar_w - 2, bar_h - 2,
+        bar_x + 1,
+        bar_y + 1,
+        bar_w - 2,
+        bar_h - 2,
         Color::rgba(20, 20, 20, 180),
     );
 
     // Battery nub on right side.
     backend.fill_rect_inner(
-        bar_x + bar_w as i32, bar_y + 2, 2, 4,
+        bar_x + bar_w as i32,
+        bar_y + 2,
+        2,
+        4,
         Color::rgba(200, 200, 200, 140),
     );
 
@@ -2290,9 +2445,7 @@ fn draw_chrome_bezel(backend: &mut PspBackend, x: i32, y: i32, w: u32, h: u32) {
 /// Draw contextual button hints at the bottom of the content area.
 fn draw_button_hints(backend: &mut PspBackend, hints: &[(&str, &str)]) {
     let y = BOTTOMBAR_Y - HINT_Y_OFFSET;
-    backend.fill_rect_inner(
-        0, y, SCREEN_WIDTH, HINT_Y_OFFSET as u32, HINT_BG,
-    );
+    backend.fill_rect_inner(0, y, SCREEN_WIDTH, HINT_Y_OFFSET as u32, HINT_BG);
     let mut x = 6i32;
     for (btn, label) in hints {
         backend.draw_text_inner(btn, x, y + 1, 8, HINT_BTN_CLR);
@@ -2303,19 +2456,23 @@ fn draw_button_hints(backend: &mut PspBackend, hints: &[(&str, &str)]) {
 }
 
 /// Draw a consistent view header with colored title and optional path.
-fn draw_view_header(
-    backend: &mut PspBackend,
-    title: &str,
-    title_clr: Color,
-    path: Option<&str>,
-) {
+fn draw_view_header(backend: &mut PspBackend, title: &str, title_clr: Color, path: Option<&str>) {
     backend.draw_text_inner(title, 4, CONTENT_TOP as i32 + 3, 8, title_clr);
     if let Some(p) = path {
         let path_x = 4 + title.len() as i32 * 8 + 8;
-        backend.draw_text_inner(p, path_x, CONTENT_TOP as i32 + 3, 8, Color::rgb(160, 160, 160));
+        backend.draw_text_inner(
+            p,
+            path_x,
+            CONTENT_TOP as i32 + 3,
+            8,
+            Color::rgb(160, 160, 160),
+        );
     }
     backend.fill_rect_inner(
-        0, FM_START_Y - 2, SCREEN_WIDTH, 1,
+        0,
+        FM_START_Y - 2,
+        SCREEN_WIDTH,
+        1,
         Color::rgba(255, 255, 255, 40),
     );
 }
@@ -2361,12 +2518,21 @@ fn draw_file_manager(
 
     draw_view_header(backend, "FILE MGR", Color::rgb(100, 200, 255), Some(path));
     backend.draw_text_inner(
-        "SIZE", 400, CONTENT_TOP as i32 + 3, 8,
+        "SIZE",
+        400,
+        CONTENT_TOP as i32 + 3,
+        8,
         Color::rgb(160, 160, 160),
     );
 
     if entries.is_empty() {
-        backend.draw_text_inner("(empty directory)", 8, FM_START_Y, 8, Color::rgb(140, 140, 140));
+        backend.draw_text_inner(
+            "(empty directory)",
+            8,
+            FM_START_Y,
+            8,
+            Color::rgb(140, 140, 140),
+        );
         return;
     }
 
@@ -2377,7 +2543,13 @@ fn draw_file_manager(
         let y = FM_START_Y + row * FM_ROW_H;
 
         if i == selected {
-            backend.fill_rect_inner(0, y - 1, SCREEN_WIDTH, FM_ROW_H as u32, Color::rgba(80, 120, 200, 100));
+            backend.fill_rect_inner(
+                0,
+                y - 1,
+                SCREEN_WIDTH,
+                FM_ROW_H as u32,
+                Color::rgba(80, 120, 200, 100),
+            );
         }
 
         let (prefix, prefix_clr) = if entry.is_dir {
@@ -2412,7 +2584,13 @@ fn draw_file_manager(
         let ratio = selected as f32 / (entries.len() - 1).max(1) as f32;
         let track_h = CONTENT_H as i32 - 16;
         let dot_y = FM_START_Y + (ratio * track_h as f32) as i32;
-        backend.fill_rect_inner(SCREEN_WIDTH as i32 - 4, dot_y, 3, 8, Color::rgba(255, 255, 255, 120));
+        backend.fill_rect_inner(
+            SCREEN_WIDTH as i32 - 4,
+            dot_y,
+            3,
+            8,
+            Color::rgba(255, 255, 255, 120),
+        );
     }
 }
 
@@ -2430,11 +2608,19 @@ fn draw_photo_browser(
     let bg = Color::rgba(0, 0, 0, 200);
     backend.fill_rect_inner(0, CONTENT_TOP as i32, SCREEN_WIDTH, CONTENT_H, bg);
 
-    draw_view_header(backend, "PHOTO VIEWER", Color::rgb(100, 149, 237), Some(path));
+    draw_view_header(
+        backend,
+        "PHOTO VIEWER",
+        Color::rgb(100, 149, 237),
+        Some(path),
+    );
 
     if entries.is_empty() {
         backend.draw_text_inner(
-            "No images found (.jpg/.jpeg)", 8, FM_START_Y, 8,
+            "No images found (.jpg/.jpeg)",
+            8,
+            FM_START_Y,
+            8,
             Color::rgb(140, 140, 140),
         );
         return;
@@ -2448,7 +2634,10 @@ fn draw_photo_browser(
 
         if i == selected {
             backend.fill_rect_inner(
-                0, y - 1, SCREEN_WIDTH, FM_ROW_H as u32,
+                0,
+                y - 1,
+                SCREEN_WIDTH,
+                FM_ROW_H as u32,
                 Color::rgba(80, 120, 200, 100),
             );
         }
@@ -2487,18 +2676,16 @@ fn draw_photo_browser(
         let track_h = CONTENT_H as i32 - 16;
         let dot_y = FM_START_Y + (ratio * track_h as f32) as i32;
         backend.fill_rect_inner(
-            SCREEN_WIDTH as i32 - 4, dot_y, 3, 8,
+            SCREEN_WIDTH as i32 - 4,
+            dot_y,
+            3,
+            8,
             Color::rgba(255, 255, 255, 120),
         );
     }
 }
 
-fn draw_photo_view(
-    backend: &mut PspBackend,
-    tex: Option<TextureId>,
-    img_w: u32,
-    img_h: u32,
-) {
+fn draw_photo_view(backend: &mut PspBackend, tex: Option<TextureId>, img_w: u32, img_h: u32) {
     backend.fill_rect_inner(0, CONTENT_TOP as i32, SCREEN_WIDTH, CONTENT_H, Color::BLACK);
 
     if let Some(t) = tex {
@@ -2536,7 +2723,10 @@ fn draw_music_browser(
 
     if entries.is_empty() {
         backend.draw_text_inner(
-            "No MP3 files found", 8, FM_START_Y, 8,
+            "No MP3 files found",
+            8,
+            FM_START_Y,
+            8,
             Color::rgb(140, 140, 140),
         );
         return;
@@ -2550,7 +2740,10 @@ fn draw_music_browser(
 
         if i == selected {
             backend.fill_rect_inner(
-                0, y - 1, SCREEN_WIDTH, FM_ROW_H as u32,
+                0,
+                y - 1,
+                SCREEN_WIDTH,
+                FM_ROW_H as u32,
                 Color::rgba(200, 80, 80, 100),
             );
         }
@@ -2589,7 +2782,10 @@ fn draw_music_browser(
         let track_h = CONTENT_H as i32 - 16;
         let dot_y = FM_START_Y + (ratio * track_h as f32) as i32;
         backend.fill_rect_inner(
-            SCREEN_WIDTH as i32 - 4, dot_y, 3, 8,
+            SCREEN_WIDTH as i32 - 4,
+            dot_y,
+            3,
+            8,
             Color::rgba(255, 255, 255, 120),
         );
     }
@@ -2618,7 +2814,10 @@ fn draw_music_player_threaded(
     let art_y = CONTENT_TOP as i32 + 44;
     backend.fill_rect_inner(art_x, art_y, art_size, art_size, Color::rgb(205, 92, 92));
     backend.fill_rect_inner(
-        art_x + 2, art_y + 2, art_size - 4, art_size - 4,
+        art_x + 2,
+        art_y + 2,
+        art_size - 4,
+        art_size - 4,
         Color::rgb(60, 30, 30),
     );
     backend.draw_text_inner("MP3", art_x + 22, art_y + 28, 8, Color::rgb(205, 92, 92));
@@ -2633,7 +2832,11 @@ fn draw_music_player_threaded(
     };
     let name_x = cx - (display_name.len() as i32 * 8) / 2;
     backend.draw_text_inner(
-        &display_name, name_x, art_y + art_size as i32 + 8, 8, title_color,
+        &display_name,
+        name_x,
+        art_y + art_size as i32 + 8,
+        8,
+        title_color,
     );
 
     // Format info from atomic state.
@@ -2659,9 +2862,7 @@ fn draw_music_player_threaded(
     if dur > 0 {
         let fill = ((bar_w as u64 * pos) / dur).min(bar_w as u64) as u32;
         if fill > 0 {
-            backend.fill_rect_inner(
-                bar_x, bar_y, fill, 4, Color::rgb(205, 92, 92),
-            );
+            backend.fill_rect_inner(bar_x, bar_y, fill, 4, Color::rgb(205, 92, 92));
         }
     }
     // Time labels.
@@ -2669,12 +2870,19 @@ fn draw_music_player_threaded(
     let dur_s = (dur / 1000) as u32;
     let time_str = format!(
         "{}:{:02} / {}:{:02}",
-        pos_s / 60, pos_s % 60, dur_s / 60, dur_s % 60,
+        pos_s / 60,
+        pos_s % 60,
+        dur_s / 60,
+        dur_s % 60,
     );
     let time_x = cx - (time_str.len() as i32 * 8) / 2;
     backend.draw_text_inner(&time_str, time_x, bar_y + 6, 8, info_color);
 
-    let status = if audio.is_paused() { "PAUSED" } else { "PLAYING" };
+    let status = if audio.is_paused() {
+        "PAUSED"
+    } else {
+        "PLAYING"
+    };
     let status_clr = if audio.is_paused() {
         Color::rgb(255, 200, 80)
     } else {
@@ -2685,11 +2893,7 @@ fn draw_music_player_threaded(
 }
 
 /// Draw a larger visualizer for the now-playing music player view.
-fn draw_now_playing_visualizer(
-    backend: &mut PspBackend,
-    audio: &AudioHandle,
-    viz_frame: u32,
-) {
+fn draw_now_playing_visualizer(backend: &mut PspBackend, audio: &AudioHandle, viz_frame: u32) {
     let bar_count: i32 = 20;
     let bar_w: i32 = 6;
     let bar_gap: i32 = 2;
@@ -2706,8 +2910,8 @@ fn draw_now_playing_visualizer(
             let freq1 = 0.7 + (i as f32) * 0.25;
             let freq2 = 1.4 + (i as f32) * 0.15;
             let phase = (i as f32) * 1.1;
-            let val = libm::sinf(t * freq1 + phase) * 0.6
-                + libm::sinf(t * freq2 + phase * 0.7) * 0.4;
+            let val =
+                libm::sinf(t * freq1 + phase) * 0.6 + libm::sinf(t * freq2 + phase * 0.7) * 0.4;
             let norm = (val + 1.0) * 0.5;
             min_h + ((max_h - min_h) as f32 * norm) as i32
         } else {

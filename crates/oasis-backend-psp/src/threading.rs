@@ -33,8 +33,7 @@ static IO_RESP_QUEUE: SpscQueue<IoResponse, 16> = SpscQueue::new();
 /// Readable from the main thread and written by the audio thread.
 /// PSP is single-core so SpinMutex has near-zero overhead for short
 /// critical sections.
-static SHARED_AUDIO: SpinMutex<SharedAudioState> =
-    SpinMutex::new(SharedAudioState::new());
+static SHARED_AUDIO: SpinMutex<SharedAudioState> = SpinMutex::new(SharedAudioState::new());
 
 /// Audio state shared between the audio thread and main thread.
 #[derive(Clone)]
@@ -140,8 +139,13 @@ pub enum IoCmd {
         max_w: i32,
         max_h: i32,
     },
-    ReadFile { path: String },
-    HttpGet { url: String, tag: u32 },
+    ReadFile {
+        path: String,
+    },
+    HttpGet {
+        url: String,
+        tag: u32,
+    },
     Shutdown,
 }
 
@@ -153,13 +157,19 @@ pub enum IoResponse {
         height: u32,
         rgba: Vec<u8>,
     },
-    FileReady { path: String, data: Vec<u8> },
+    FileReady {
+        path: String,
+        data: Vec<u8>,
+    },
     HttpDone {
         tag: u32,
         status_code: u16,
         body: Vec<u8>,
     },
-    Error { path: String, msg: String },
+    Error {
+        path: String,
+        msg: String,
+    },
 }
 
 /// Handle to the I/O thread's response queue.
@@ -234,43 +244,43 @@ fn audio_thread_fn() {
                 } else {
                     SHARED_AUDIO.lock().playing = false;
                 }
-            }
+            },
             Some(AudioCmd::LoadAndPlayData(data)) => {
                 if player.load_and_play_data(&data) {
                     publish_audio_state(&player);
                 } else {
                     SHARED_AUDIO.lock().playing = false;
                 }
-            }
+            },
             Some(AudioCmd::Pause) => {
                 if player.is_playing() && !player.is_paused() {
                     player.toggle_pause();
                     SHARED_AUDIO.lock().paused = true;
                 }
-            }
+            },
             Some(AudioCmd::Resume) => {
                 if player.is_playing() && player.is_paused() {
                     player.toggle_pause();
                     SHARED_AUDIO.lock().paused = false;
                 }
-            }
+            },
             Some(AudioCmd::Stop) => {
                 player.stop();
                 let mut state = SHARED_AUDIO.lock();
                 state.playing = false;
                 state.paused = false;
-            }
+            },
             Some(AudioCmd::PlaySfx(id)) => {
                 if let Some(sfx) = &sfx {
                     sfx.play(id);
                 }
-            }
+            },
             Some(AudioCmd::Shutdown) => {
                 player.stop();
                 SHARED_AUDIO.lock().playing = false;
                 break;
-            }
-            None => {}
+            },
+            None => {},
         }
 
         if player.is_playing() && !player.is_paused() {
@@ -319,18 +329,18 @@ fn io_thread_fn() {
         match IO_CMD_QUEUE.pop() {
             Some(IoCmd::LoadTexture { path, max_w, max_h }) => {
                 handle_load_texture(path, max_w, max_h);
-            }
+            },
             Some(IoCmd::ReadFile { path }) => {
                 handle_read_file(path);
-            }
+            },
             Some(IoCmd::HttpGet { url, tag }) => {
                 handle_http_get(url, tag);
-            }
+            },
             Some(IoCmd::Shutdown) => break,
             None => {
                 // Sleep when idle to avoid spinning.
                 psp::thread::sleep_ms(10);
-            }
+            },
         }
     }
 }
@@ -345,20 +355,20 @@ fn handle_load_texture(path: String, max_w: i32, max_h: i32) {
                     height: h,
                     rgba,
                 });
-            }
+            },
             None => {
                 let _ = IO_RESP_QUEUE.push(IoResponse::Error {
                     path,
                     msg: "JPEG decode failed".into(),
                 });
-            }
+            },
         },
         Err(_) => {
             let _ = IO_RESP_QUEUE.push(IoResponse::Error {
                 path,
                 msg: "file read failed".into(),
             });
-        }
+        },
     }
 }
 
@@ -366,13 +376,13 @@ fn handle_read_file(path: String) {
     match psp::io::read_to_vec(&path) {
         Ok(data) => {
             let _ = IO_RESP_QUEUE.push(IoResponse::FileReady { path, data });
-        }
+        },
         Err(_) => {
             let _ = IO_RESP_QUEUE.push(IoResponse::Error {
                 path,
                 msg: "file not found".into(),
             });
-        }
+        },
     }
 }
 
@@ -397,19 +407,19 @@ fn handle_http_get(url: String, tag: u32) {
                     status_code: resp.status_code,
                     body: resp.body,
                 });
-            }
+            },
             Err(e) => {
                 let _ = IO_RESP_QUEUE.push(IoResponse::Error {
                     path: url,
                     msg: format!("HTTP GET: {e}"),
                 });
-            }
+            },
         },
         Err(e) => {
             let _ = IO_RESP_QUEUE.push(IoResponse::Error {
                 path: url,
                 msg: format!("HTTP init: {e}"),
             });
-        }
+        },
     }
 }

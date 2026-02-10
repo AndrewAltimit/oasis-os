@@ -1,6 +1,6 @@
 //! Texture storage and volatile memory management.
 
-use std::alloc::{alloc, dealloc, Layout};
+use std::alloc::{Layout, alloc, dealloc};
 use std::ptr;
 
 use oasis_core::backend::TextureId;
@@ -37,7 +37,11 @@ pub(crate) struct VolatileAllocator {
 impl VolatileAllocator {
     /// Create a new allocator over the given memory region.
     pub(crate) fn new(base: *mut u8, size: usize) -> Self {
-        Self { base, size, offset: 0 }
+        Self {
+            base,
+            size,
+            offset: 0,
+        }
     }
 
     /// Allocate `len` bytes with 16-byte alignment. Returns null on OOM.
@@ -86,19 +90,10 @@ impl PspBackend {
         let buf_size = (buf_w * buf_h * 4) as usize;
 
         // Try volatile memory first, fall back to main heap.
-        let (data, layout, in_volatile) =
-            if let Some(ref mut va) = self.volatile_alloc {
-                let p = va.alloc(buf_size);
-                if !p.is_null() {
-                    (p, Layout::new::<u8>(), true)
-                } else {
-                    let layout = Layout::from_size_align(buf_size, 16).ok()?;
-                    let p = unsafe { alloc(layout) };
-                    if p.is_null() {
-                        return None;
-                    }
-                    (p, layout, false)
-                }
+        let (data, layout, in_volatile) = if let Some(ref mut va) = self.volatile_alloc {
+            let p = va.alloc(buf_size);
+            if !p.is_null() {
+                (p, Layout::new::<u8>(), true)
             } else {
                 let layout = Layout::from_size_align(buf_size, 16).ok()?;
                 let p = unsafe { alloc(layout) };
@@ -106,7 +101,15 @@ impl PspBackend {
                     return None;
                 }
                 (p, layout, false)
-            };
+            }
+        } else {
+            let layout = Layout::from_size_align(buf_size, 16).ok()?;
+            let p = unsafe { alloc(layout) };
+            if p.is_null() {
+                return None;
+            }
+            (p, layout, false)
+        };
 
         // Zero the buffer first (for padding areas).
         // SAFETY: `data` was just allocated with `buf_size` bytes and

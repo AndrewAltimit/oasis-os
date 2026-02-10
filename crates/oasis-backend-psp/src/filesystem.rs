@@ -42,21 +42,13 @@ pub fn list_directory(path: &str) -> Vec<FileEntry> {
         }
 
         let is_dir = entry.is_dir();
-        let size = if is_dir {
-            0
-        } else {
-            entry.stat().st_size
-        };
+        let size = if is_dir { 0 } else { entry.stat().st_size };
 
         entries.push(FileEntry { name, size, is_dir });
     }
 
     // Sort: directories first, then alphabetically.
-    entries.sort_by(|a, b| {
-        b.is_dir
-            .cmp(&a.is_dir)
-            .then_with(|| a.name.cmp(&b.name))
-    });
+    entries.sort_by(|a, b| b.is_dir.cmp(&a.is_dir).then_with(|| a.name.cmp(&b.name)));
 
     entries
 }
@@ -84,11 +76,7 @@ pub fn read_file(path: &str) -> Option<Vec<u8>> {
 /// Returns `(width, height, rgba_pixels)` on success. The output is RGBA8888.
 /// `max_w` and `max_h` set the maximum decode dimensions (use 480, 272 for
 /// screen-sized images).
-pub fn decode_jpeg(
-    jpeg_data: &[u8],
-    max_w: i32,
-    max_h: i32,
-) -> Option<(u32, u32, Vec<u8>)> {
+pub fn decode_jpeg(jpeg_data: &[u8], max_w: i32, max_h: i32) -> Option<(u32, u32, Vec<u8>)> {
     let img = psp::image::decode_jpeg(jpeg_data, max_w, max_h).ok()?;
     Some((img.width, img.height, img.data))
 }

@@ -101,14 +101,14 @@ pub fn generate_cursor_pixels() -> Vec<u8> {
                     data[offset + 1] = 255;
                     data[offset + 2] = 255;
                     data[offset + 3] = 255;
-                }
+                },
                 2 => {
                     data[offset] = 0;
                     data[offset + 1] = 0;
                     data[offset + 2] = 0;
                     data[offset + 3] = 255;
-                }
-                _ => {} // transparent (alpha stays 0)
+                },
+                _ => {}, // transparent (alpha stays 0)
             }
         }
     }

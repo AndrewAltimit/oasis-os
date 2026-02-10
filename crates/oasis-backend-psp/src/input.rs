@@ -68,10 +68,8 @@ impl PspBackend {
         if ax != 0.0 || ay != 0.0 {
             let move_x = (ax * CURSOR_SPEED) as i32;
             let move_y = (ay * CURSOR_SPEED) as i32;
-            self.cursor_x =
-                (self.cursor_x + move_x).clamp(0, self.width as i32 - 1);
-            self.cursor_y =
-                (self.cursor_y + move_y).clamp(0, self.height as i32 - 1);
+            self.cursor_x = (self.cursor_x + move_x).clamp(0, self.width as i32 - 1);
+            self.cursor_y = (self.cursor_y + move_y).clamp(0, self.height as i32 - 1);
             events.push(InputEvent::CursorMove {
                 x: self.cursor_x,
                 y: self.cursor_y,

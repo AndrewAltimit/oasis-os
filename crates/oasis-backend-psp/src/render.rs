@@ -5,8 +5,8 @@ use std::mem::size_of;
 use std::ptr;
 
 use psp::sys::{
-    self, ClearBuffer, GuPrimitive, GuState, MipmapLevel, TextureColorComponent,
-    TextureEffect, TexturePixelFormat, VertexType,
+    self, ClearBuffer, GuPrimitive, GuState, MipmapLevel, TextureColorComponent, TextureEffect,
+    TexturePixelFormat, VertexType,
 };
 
 use oasis_core::backend::Color;
@@ -111,30 +111,20 @@ impl PspBackend {
         // on the current display list. Called within a valid GU frame.
         unsafe {
             sys::sceGuClearColor(color.to_abgr());
-            sys::sceGuClear(
-                ClearBuffer::COLOR_BUFFER_BIT | ClearBuffer::FAST_CLEAR_BIT,
-            );
+            sys::sceGuClear(ClearBuffer::COLOR_BUFFER_BIT | ClearBuffer::FAST_CLEAR_BIT);
         }
     }
 
     /// Draw a filled rectangle.
-    pub fn fill_rect_inner(
-        &mut self,
-        x: i32,
-        y: i32,
-        w: u32,
-        h: u32,
-        color: Color,
-    ) {
+    pub fn fill_rect_inner(&mut self, x: i32, y: i32, w: u32, h: u32, color: Color) {
         // SAFETY: sceGuGetMemory returns a display-list-embedded pointer
         // valid until sceGuFinish. We write exactly 2 ColorVertex structs
         // via ptr::write, then pass them to sceGuDrawArray as Sprites.
         unsafe {
             sys::sceGuDisable(GuState::Texture2D);
 
-            let verts = sys::sceGuGetMemory(
-                (2 * size_of::<ColorVertex>()) as i32,
-            ) as *mut ColorVertex;
+            let verts =
+                sys::sceGuGetMemory((2 * size_of::<ColorVertex>()) as i32) as *mut ColorVertex;
             if verts.is_null() {
                 sys::sceGuEnable(GuState::Texture2D);
                 return;
@@ -148,11 +138,23 @@ impl PspBackend {
 
             ptr::write(
                 verts,
-                ColorVertex { color: abgr, x: x1, y: y1, z: 0, _pad: 0 },
+                ColorVertex {
+                    color: abgr,
+                    x: x1,
+                    y: y1,
+                    z: 0,
+                    _pad: 0,
+                },
             );
             ptr::write(
                 verts.add(1),
-                ColorVertex { color: abgr, x: x2, y: y2, z: 0, _pad: 0 },
+                ColorVertex {
+                    color: abgr,
+                    x: x2,
+                    y: y2,
+                    z: 0,
+                    _pad: 0,
+                },
             );
 
             sys::sceGuDrawArray(
@@ -168,14 +170,7 @@ impl PspBackend {
 
     /// Draw text using system TrueType fonts (if available) or the 8x8
     /// bitmap font as fallback.
-    pub fn draw_text_inner(
-        &mut self,
-        text: &str,
-        x: i32,
-        y: i32,
-        font_size: u16,
-        color: Color,
-    ) {
+    pub fn draw_text_inner(&mut self, text: &str, x: i32, y: i32, font_size: u16, color: Color) {
         if text.is_empty() {
             return;
         }
@@ -183,7 +178,9 @@ impl PspBackend {
         let abgr = color.to_abgr();
 
         // System font path: anti-aliased TrueType via VRAM glyph atlas.
-        if !self.force_bitmap_font && let Some(sf) = &mut self.system_font {
+        if !self.force_bitmap_font
+            && let Some(sf) = &mut self.system_font
+        {
             sf.draw_text(x as f32, y as f32, abgr, text);
             // SAFETY: Within an active GU display list (between
             // sceGuStart and sceGuFinish in the main frame loop).
@@ -196,14 +193,7 @@ impl PspBackend {
     }
 
     /// Draw text using the embedded 8x8 bitmap font via the GU font atlas.
-    fn draw_text_bitmap(
-        &mut self,
-        text: &str,
-        x: i32,
-        y: i32,
-        font_size: u16,
-        abgr: u32,
-    ) {
+    fn draw_text_bitmap(&mut self, text: &str, x: i32, y: i32, font_size: u16, abgr: u32) {
         let scale = if font_size >= 8 {
             (font_size / 8) as f32
         } else {
@@ -226,8 +216,14 @@ impl PspBackend {
             };
 
             batch.draw_rect(
-                cx, y as f32, glyph_w, glyph_h,
-                u0, v0, u0 + 8.0, v0 + 8.0,
+                cx,
+                y as f32,
+                glyph_w,
+                glyph_h,
+                u0,
+                v0,
+                u0 + 8.0,
+                v0 + 8.0,
                 abgr,
             );
             cx += glyph_w;
@@ -237,9 +233,8 @@ impl PspBackend {
         // mirror) and flushes the batched sprites. font_atlas_ptr is
         // checked non-null during init().
         unsafe {
-            let uncached_atlas =
-                psp::cache::UncachedPtr::from_cached_addr(self.font_atlas_ptr)
-                    .as_ptr() as *const c_void;
+            let uncached_atlas = psp::cache::UncachedPtr::from_cached_addr(self.font_atlas_ptr)
+                .as_ptr() as *const c_void;
             sys::sceGuTexMode(TexturePixelFormat::Psm8888, 0, 0, 0);
             sys::sceGuTexImage(
                 MipmapLevel::None,
@@ -248,10 +243,7 @@ impl PspBackend {
                 FONT_ATLAS_W as i32,
                 uncached_atlas,
             );
-            sys::sceGuTexFunc(
-                TextureEffect::Modulate,
-                TextureColorComponent::Rgba,
-            );
+            sys::sceGuTexFunc(TextureEffect::Modulate, TextureColorComponent::Rgba);
             sys::sceGuTexFlush();
             sys::sceGuTexSync();
 
@@ -283,8 +275,7 @@ impl PspBackend {
         // load_texture_inner (allocated and populated before insertion).
         unsafe {
             let uncached_ptr =
-                psp::cache::UncachedPtr::from_cached_addr(data_ptr)
-                    .as_ptr() as *const c_void;
+                psp::cache::UncachedPtr::from_cached_addr(data_ptr).as_ptr() as *const c_void;
             sys::sceGuTexMode(TexturePixelFormat::Psm8888, 0, 0, 0);
             sys::sceGuTexImage(
                 MipmapLevel::None,
@@ -293,16 +284,12 @@ impl PspBackend {
                 buf_w as i32,
                 uncached_ptr,
             );
-            sys::sceGuTexFunc(
-                TextureEffect::Modulate,
-                TextureColorComponent::Rgba,
-            );
+            sys::sceGuTexFunc(TextureEffect::Modulate, TextureColorComponent::Rgba);
             sys::sceGuTexFlush();
             sys::sceGuTexSync();
 
-            let verts = sys::sceGuGetMemory(
-                (2 * size_of::<TexturedColorVertex>()) as i32,
-            ) as *mut TexturedColorVertex;
+            let verts = sys::sceGuGetMemory((2 * size_of::<TexturedColorVertex>()) as i32)
+                as *mut TexturedColorVertex;
             if verts.is_null() {
                 return;
             }

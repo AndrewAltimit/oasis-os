@@ -4,7 +4,7 @@
 //! `execute_command` dispatcher, save/load helpers, benchmarks, and
 //! Media Engine test.
 
-use oasis_backend_psp::{StatusBarInfo, SCREEN_HEIGHT, SCREEN_WIDTH};
+use oasis_backend_psp::{SCREEN_HEIGHT, SCREEN_WIDTH, StatusBarInfo};
 
 use crate::CONFIG_PATH;
 
@@ -91,14 +91,14 @@ pub fn execute_command(cmd: &str, config: &mut psp::config::Config) -> Vec<Strin
                     status.day_of_week, status.hour, status.minute
                 ),
             ]
-        }
+        },
         "clock" => {
             let clk = psp::power::get_clock();
             vec![format!(
                 "Current: CPU {}MHz, Bus {}MHz",
                 clk.cpu_mhz, clk.bus_mhz,
             )]
-        }
+        },
         "clock 333" => set_clock_cmd(config, 333, 166, "max performance"),
         "clock 266" => set_clock_cmd(config, 266, 133, "balanced"),
         "clock 222" => set_clock_cmd(config, 222, 111, "power save"),
@@ -112,7 +112,7 @@ pub fn execute_command(cmd: &str, config: &mut psp::config::Config) -> Vec<Strin
                 Ok(()) => vec![format!("Screenshot saved: {}", path)],
                 Err(e) => vec![format!("Screenshot failed: {:?}", e)],
             }
-        }
+        },
         _ if trimmed.starts_with("ls") => {
             let path = trimmed.strip_prefix("ls").unwrap().trim();
             let dir = if path.is_empty() { "ms0:/" } else { path };
@@ -137,7 +137,7 @@ pub fn execute_command(cmd: &str, config: &mut psp::config::Config) -> Vec<Strin
                 }
                 out
             }
-        }
+        },
         _ if trimmed.starts_with("cat ") => cmd_cat(trimmed),
         _ if trimmed.starts_with("mkdir ") => cmd_mkdir(trimmed),
         _ if trimmed.starts_with("rm ") => cmd_rm(trimmed),
@@ -152,18 +152,13 @@ pub fn execute_command(cmd: &str, config: &mut psp::config::Config) -> Vec<Strin
         ],
         "save" | "load" | "play" | "pause" | "resume" | "stop" => {
             vec![String::from("(handled in main loop)")]
-        }
+        },
         "clear" => vec![],
         _ => vec![format!("Unknown command: {}", trimmed)],
     }
 }
 
-fn set_clock_cmd(
-    config: &mut psp::config::Config,
-    cpu: i32,
-    bus: i32,
-    label: &str,
-) -> Vec<String> {
+fn set_clock_cmd(config: &mut psp::config::Config, cpu: i32, bus: i32, label: &str) -> Vec<String> {
     let ret = oasis_backend_psp::set_clock(cpu, bus);
     if ret >= 0 {
         config.set("clock_mhz", psp::config::ConfigValue::I32(cpu));
@@ -196,10 +191,7 @@ fn cmd_sysinfo() -> Vec<String> {
         ));
     }
     if let Ok(dst) = psp::system_param::daylight_saving() {
-        out.push(format!(
-            "DST: {}",
-            if dst { "enabled" } else { "disabled" }
-        ));
+        out.push(format!("DST: {}", if dst { "enabled" } else { "disabled" }));
     }
     if let Ok(tf) = psp::system_param::time_format() {
         out.push(format!("Time format: {:?}", tf));
@@ -230,14 +222,22 @@ fn cmd_cat(trimmed: &str) -> Vec<String> {
     match psp::io::read_to_vec(path) {
         Ok(data) => {
             let text = String::from_utf8_lossy(&data);
-            let mut lines: Vec<String> = text.lines().take(50).map(|l| {
-                if l.len() > 56 { format!("{}...", &l[..56]) } else { l.to_string() }
-            }).collect();
+            let mut lines: Vec<String> = text
+                .lines()
+                .take(50)
+                .map(|l| {
+                    if l.len() > 56 {
+                        format!("{}...", &l[..l.floor_char_boundary(56)])
+                    } else {
+                        l.to_string()
+                    }
+                })
+                .collect();
             if text.lines().count() > 50 {
                 lines.push(format!("... ({} bytes total)", data.len()));
             }
             lines
-        }
+        },
         Err(e) => vec![format!("cat: {:?}", e)],
     }
 }
@@ -259,12 +259,10 @@ fn cmd_rm(trimmed: &str) -> Vec<String> {
         return vec!["usage: rm <path>".into()];
     }
     match psp::dialog::confirm_dialog(&format!("Delete {}?", path)) {
-        Ok(psp::dialog::DialogResult::Confirm) => {
-            match psp::io::remove_file(path) {
-                Ok(()) => vec![format!("Deleted: {}", path)],
-                Err(e) => vec![format!("rm: {:?}", e)],
-            }
-        }
+        Ok(psp::dialog::DialogResult::Confirm) => match psp::io::remove_file(path) {
+            Ok(()) => vec![format!("Deleted: {}", path)],
+            Err(e) => vec![format!("rm: {:?}", e)],
+        },
         _ => vec!["Cancelled.".into()],
     }
 }
@@ -439,8 +437,7 @@ unsafe extern "C" fn me_sum_task(arg: i32) -> i32 {
 }
 
 fn me_compute_test() -> Result<(i32, u64), String> {
-    let mut executor =
-        psp::me::MeExecutor::new(4096).map_err(|e| format!("ME init: {e}"))?;
+    let mut executor = psp::me::MeExecutor::new(4096).map_err(|e| format!("ME init: {e}"))?;
 
     let start = psp::time::Instant::now();
 

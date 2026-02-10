@@ -48,11 +48,7 @@ pub fn power_tick() {
 
 /// SAFETY: Called by the PSP firmware on power state changes. POWER_RESUMED
 /// is an AtomicBool, so cross-thread access is safe without unsafe.
-unsafe extern "C" fn power_callback(
-    _arg1: i32,
-    power_info: i32,
-    _arg: *mut c_void,
-) -> i32 {
+unsafe extern "C" fn power_callback(_arg1: i32, power_info: i32, _arg: *mut c_void) -> i32 {
     let info = sys::PowerInfo::from_bits_truncate(power_info as u32);
     if info.contains(sys::PowerInfo::RESUME_COMPLETE) {
         psp::dprintln!("OASIS_OS: Resumed from sleep");
@@ -77,10 +73,7 @@ pub fn register_exception_handler() {
 /// Exception handler callback -- prints exception info and halts.
 /// SAFETY: Called by the PSP firmware on unhandled CPU exceptions.
 /// Only reads the exception code; does not dereference the context pointer.
-unsafe extern "C" fn exception_handler(
-    exception: u32,
-    _context: *mut c_void,
-) -> i32 {
+unsafe extern "C" fn exception_handler(exception: u32, _context: *mut c_void) -> i32 {
     let name = match exception {
         0 => "Interrupt",
         1 => "TLB Modification",

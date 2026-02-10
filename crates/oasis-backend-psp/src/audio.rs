@@ -78,7 +78,7 @@ impl AudioPlayer {
             Err(e) => {
                 psp::dprintln!("OASIS_OS: Mp3Decoder failed: {:?}", e);
                 return false;
-            }
+            },
         };
 
         self.sample_rate = decoder.sample_rate();
@@ -96,12 +96,9 @@ impl AudioPlayer {
         let channel = match AudioChannel::reserve(MP3_FRAME_SAMPLES, fmt) {
             Ok(ch) => ch,
             Err(e) => {
-                psp::dprintln!(
-                    "OASIS_OS: AudioChannel::reserve failed: {:?}",
-                    e,
-                );
+                psp::dprintln!("OASIS_OS: AudioChannel::reserve failed: {:?}", e,);
                 return false;
-            }
+            },
         };
 
         self.decoder = Some(decoder);
@@ -124,9 +121,7 @@ impl AudioPlayer {
             return;
         }
 
-        let (Some(decoder), Some(channel)) =
-            (&mut self.decoder, &self.channel)
-        else {
+        let (Some(decoder), Some(channel)) = (&mut self.decoder, &self.channel) else {
             return;
         };
 
@@ -135,11 +130,11 @@ impl AudioPlayer {
                 self.frames_decoded += 1;
                 // output_blocking paces playback to hardware timing.
                 let _ = channel.output_blocking(0x8000, samples);
-            }
+            },
             _ => {
                 // End of stream or decode error.
                 self.playing = false;
-            }
+            },
         }
     }
 
@@ -170,8 +165,7 @@ impl AudioPlayer {
         if self.sample_rate == 0 {
             return 0;
         }
-        (self.frames_decoded as u64 * MP3_FRAME_SAMPLES as u64 * 1000)
-            / self.sample_rate as u64
+        (self.frames_decoded as u64 * MP3_FRAME_SAMPLES as u64 * 1000) / self.sample_rate as u64
     }
 
     /// Estimated total duration in milliseconds (from bitrate + file size).
@@ -229,9 +223,7 @@ impl AudioBackend for PspAudioBackend {
             .tracks
             .get(idx)
             .and_then(|slot| slot.as_ref())
-            .ok_or_else(|| {
-                OasisError::Backend(format!("track {} not loaded", track.0))
-            })?;
+            .ok_or_else(|| OasisError::Backend(format!("track {} not loaded", track.0)))?;
         // Arc::clone is cheap (ref count bump) -- avoids duplicating the
         // entire MP3 buffer on a memory-constrained device.
         send_audio_cmd(AudioCmd::LoadAndPlayData(Arc::clone(data)));

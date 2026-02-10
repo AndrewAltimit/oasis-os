@@ -49,16 +49,12 @@ fn ensure_net_init() -> Result<()> {
     }
 
     // 128 KiB memory pool for the networking stack.
-    psp::net::init(0x20000).map_err(|e| {
-        OasisError::Backend(format!("net init failed: {e}"))
-    })?;
+    psp::net::init(0x20000).map_err(|e| OasisError::Backend(format!("net init failed: {e}")))?;
 
     // Connect to the first stored WiFi profile (30s timeout).
     if let Err(e) = psp::net::connect_ap(1) {
         psp::net::term();
-        return Err(OasisError::Backend(format!(
-            "WiFi connect failed: {e}"
-        )));
+        return Err(OasisError::Backend(format!("WiFi connect failed: {e}")));
     }
 
     NET_INITIALIZED.store(true, Ordering::Release);
@@ -130,14 +126,8 @@ impl NetworkStream for PspNetworkStream {
         }
         // SAFETY: sceNetInetRecv is the PSP inet recv syscall.
         // buf is a valid mutable slice.
-        let ret = unsafe {
-            sys::sceNetInetRecv(
-                self.fd,
-                buf.as_mut_ptr() as *mut c_void,
-                buf.len(),
-                0,
-            )
-        };
+        let ret =
+            unsafe { sys::sceNetInetRecv(self.fd, buf.as_mut_ptr() as *mut c_void, buf.len(), 0) };
         if ret < 0 {
             let errno = unsafe { sys::sceNetInetGetErrno() };
             Err(OasisError::Backend(format!(
@@ -155,14 +145,8 @@ impl NetworkStream for PspNetworkStream {
         }
         // SAFETY: sceNetInetSend is the PSP inet send syscall.
         // data is a valid byte slice.
-        let ret = unsafe {
-            sys::sceNetInetSend(
-                self.fd,
-                data.as_ptr() as *const c_void,
-                data.len(),
-                0,
-            )
-        };
+        let ret =
+            unsafe { sys::sceNetInetSend(self.fd, data.as_ptr() as *const c_void, data.len(), 0) };
         if ret < 0 {
             let errno = unsafe { sys::sceNetInetGetErrno() };
             Err(OasisError::Backend(format!(
@@ -264,13 +248,7 @@ impl NetworkBackend for PspNetworkBackend {
 
         let sa = make_sockaddr_in([0, 0, 0, 0], port);
         // SAFETY: Bind the socket to the given port on all interfaces.
-        let ret = unsafe {
-            sys::sceNetInetBind(
-                fd,
-                &sa,
-                mem::size_of::<sys::sockaddr>() as u32,
-            )
-        };
+        let ret = unsafe { sys::sceNetInetBind(fd, &sa, mem::size_of::<sys::sockaddr>() as u32) };
         if ret < 0 {
             let errno = unsafe { sys::sceNetInetGetErrno() };
             unsafe { sys::sceNetInetClose(fd) };
@@ -310,9 +288,7 @@ impl NetworkBackend for PspNetworkBackend {
 
         // SAFETY: Non-blocking accept. Returns -1 with EAGAIN/EWOULDBLOCK
         // if no connection is pending.
-        let client_fd = unsafe {
-            sys::sceNetInetAccept(self.listener_fd, &mut sa, &mut sa_len)
-        };
+        let client_fd = unsafe { sys::sceNetInetAccept(self.listener_fd, &mut sa, &mut sa_len) };
 
         if client_fd < 0 {
             // EAGAIN / EWOULDBLOCK: no connection pending.
@@ -338,12 +314,8 @@ impl NetworkBackend for PspNetworkBackend {
         let mut host_bytes: Vec<u8> = address.as_bytes().to_vec();
         host_bytes.push(0); // null-terminate for the resolver
 
-        let addr = psp::net::resolve_hostname(&host_bytes).map_err(|e| {
-            OasisError::Backend(format!(
-                "DNS resolve '{}' failed: {e}",
-                address,
-            ))
-        })?;
+        let addr = psp::net::resolve_hostname(&host_bytes)
+            .map_err(|e| OasisError::Backend(format!("DNS resolve '{}' failed: {e}", address,)))?;
 
         // Create TCP socket and connect.
         // SAFETY: AF_INET=2, SOCK_STREAM=1.
@@ -358,13 +330,8 @@ impl NetworkBackend for PspNetworkBackend {
 
         let sa = make_sockaddr_in(addr.0, port);
         // SAFETY: Connect to the resolved address.
-        let ret = unsafe {
-            sys::sceNetInetConnect(
-                fd,
-                &sa,
-                mem::size_of::<sys::sockaddr>() as u32,
-            )
-        };
+        let ret =
+            unsafe { sys::sceNetInetConnect(fd, &sa, mem::size_of::<sys::sockaddr>() as u32) };
         if ret < 0 {
             let errno = unsafe { sys::sceNetInetGetErrno() };
             unsafe { sys::sceNetInetClose(fd) };
@@ -404,13 +371,12 @@ impl NetworkService for PspNetworkService {
         let mut url_bytes: Vec<u8> = url.as_bytes().to_vec();
         url_bytes.push(0);
 
-        let client = psp::http::HttpClient::new().map_err(|e| {
-            OasisError::Backend(format!("HTTP init failed: {e}"))
-        })?;
+        let client = psp::http::HttpClient::new()
+            .map_err(|e| OasisError::Backend(format!("HTTP init failed: {e}")))?;
 
-        let resp = client.get(&url_bytes).map_err(|e| {
-            OasisError::Backend(format!("HTTP GET failed: {e}"))
-        })?;
+        let resp = client
+            .get(&url_bytes)
+            .map_err(|e| OasisError::Backend(format!("HTTP GET failed: {e}")))?;
 
         Ok(HttpResponse {
             status_code: resp.status_code,
@@ -433,13 +399,11 @@ impl NetworkService for PspNetworkService {
         };
 
         let ip_address = if connected {
-            psp::net::get_ip_address()
-                .ok()
-                .and_then(|buf| {
-                    core::str::from_utf8(&buf)
-                        .ok()
-                        .map(|s| s.trim_end_matches('\0').to_string())
-                })
+            psp::net::get_ip_address().ok().and_then(|buf| {
+                core::str::from_utf8(&buf)
+                    .ok()
+                    .map(|s| s.trim_end_matches('\0').to_string())
+            })
         } else {
             None
         };

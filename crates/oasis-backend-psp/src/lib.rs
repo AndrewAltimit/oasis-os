@@ -34,20 +34,15 @@ pub mod threading;
 // ---------------------------------------------------------------------------
 
 pub use audio::PspAudioBackend;
+pub use filesystem::{FileEntry, decode_jpeg, format_size, list_directory, read_file};
 pub use network::{PspNetworkBackend, PspNetworkService};
-pub use filesystem::{list_directory, format_size, read_file, decode_jpeg, FileEntry};
 pub use power::{
-    check_power_resumed, power_tick, register_exception_handler,
-    register_power_callback, set_clock,
+    check_power_resumed, power_tick, register_exception_handler, register_power_callback, set_clock,
 };
-pub use procedural::{
-    generate_cursor_pixels, generate_gradient, CURSOR_H, CURSOR_W,
-};
-pub use status::{StatusBarInfo, SystemInfo};
+pub use procedural::{CURSOR_H, CURSOR_W, generate_cursor_pixels, generate_gradient};
 pub use sfx::SfxId;
-pub use threading::{
-    spawn_workers, AudioCmd, AudioHandle, IoCmd, IoHandle, IoResponse,
-};
+pub use status::{StatusBarInfo, SystemInfo};
+pub use threading::{AudioCmd, AudioHandle, IoCmd, IoHandle, IoResponse, spawn_workers};
 
 // ---------------------------------------------------------------------------
 // Re-exports from oasis-core
@@ -64,14 +59,14 @@ pub use oasis_core::wm::window::{WindowConfig, WindowType, WmTheme};
 // Imports
 // ---------------------------------------------------------------------------
 
-use std::alloc::{alloc, Layout};
+use std::alloc::{Layout, alloc};
 use std::ffi::c_void;
 use std::ptr;
 
 use psp::sys::{
-    self, BlendFactor, BlendOp, DisplayPixelFormat, GuContextType, GuState,
-    GuSyncBehavior, GuSyncMode, MatrixMode, TextureColorComponent,
-    TextureEffect, TextureFilter, TexturePixelFormat,
+    self, BlendFactor, BlendOp, DisplayPixelFormat, GuContextType, GuState, GuSyncBehavior,
+    GuSyncMode, MatrixMode, TextureColorComponent, TextureEffect, TextureFilter,
+    TexturePixelFormat,
 };
 use psp::vram_alloc::get_vram_allocator;
 
@@ -88,10 +83,7 @@ pub trait ColorExt {
 
 impl ColorExt for Color {
     fn to_abgr(&self) -> u32 {
-        (self.a as u32) << 24
-            | (self.b as u32) << 16
-            | (self.g as u32) << 8
-            | self.r as u32
+        (self.a as u32) << 24 | (self.b as u32) << 16 | (self.g as u32) << 8 | self.r as u32
     }
 }
 
@@ -115,8 +107,7 @@ const DISPLAY_LIST_SIZE: usize = 0x40000; // 256 KB
 #[repr(C, align(16))]
 struct Align16<T>(T);
 
-static mut DISPLAY_LIST: Align16<[u8; DISPLAY_LIST_SIZE]> =
-    Align16([0u8; DISPLAY_LIST_SIZE]);
+static mut DISPLAY_LIST: Align16<[u8; DISPLAY_LIST_SIZE]> = Align16([0u8; DISPLAY_LIST_SIZE]);
 
 // ---------------------------------------------------------------------------
 // Backend
@@ -179,49 +170,30 @@ impl PspBackend {
             // VRAM allocation: 2 framebuffers (no depth buffer for 2D).
             let allocator = get_vram_allocator().unwrap();
             let fbp0 = allocator
-                .alloc_texture_pixels(
-                    BUF_WIDTH,
-                    SCREEN_HEIGHT,
-                    TexturePixelFormat::Psm8888,
-                )
+                .alloc_texture_pixels(BUF_WIDTH, SCREEN_HEIGHT, TexturePixelFormat::Psm8888)
                 .unwrap();
             let fbp1 = allocator
-                .alloc_texture_pixels(
-                    BUF_WIDTH,
-                    SCREEN_HEIGHT,
-                    TexturePixelFormat::Psm8888,
-                )
+                .alloc_texture_pixels(BUF_WIDTH, SCREEN_HEIGHT, TexturePixelFormat::Psm8888)
                 .unwrap();
 
             let fbp0_zero = fbp0.as_mut_ptr_from_zero() as *mut c_void;
             let fbp1_zero = fbp1.as_mut_ptr_from_zero() as *mut c_void;
 
             // Font atlas in RAM (16-byte aligned).
-            let atlas_size =
-                (render::FONT_ATLAS_W * render::FONT_ATLAS_H * 4) as usize;
-            let atlas_layout =
-                Layout::from_size_align(atlas_size, 16).unwrap();
+            let atlas_size = (render::FONT_ATLAS_W * render::FONT_ATLAS_H * 4) as usize;
+            let atlas_layout = Layout::from_size_align(atlas_size, 16).unwrap();
             let atlas_ptr = alloc(atlas_layout);
             if atlas_ptr.is_null() {
-                panic!(
-                    "OASIS_OS: FATAL - font atlas allocation failed (OOM)"
-                );
+                panic!("OASIS_OS: FATAL - font atlas allocation failed (OOM)");
             }
             self.font_atlas_ptr = atlas_ptr;
 
             // GU initialization.
             sys::sceGuInit();
-            sys::sceGuStart(
-                GuContextType::Direct,
-                &raw mut DISPLAY_LIST as *mut c_void,
-            );
+            sys::sceGuStart(GuContextType::Direct, &raw mut DISPLAY_LIST as *mut c_void);
 
             // Draw buffer (render target) and display buffer.
-            sys::sceGuDrawBuffer(
-                DisplayPixelFormat::Psm8888,
-                fbp0_zero,
-                BUF_WIDTH as i32,
-            );
+            sys::sceGuDrawBuffer(DisplayPixelFormat::Psm8888, fbp0_zero, BUF_WIDTH as i32);
             sys::sceGuDispBuffer(
                 SCREEN_WIDTH as i32,
                 SCREEN_HEIGHT as i32,
@@ -230,24 +202,11 @@ impl PspBackend {
             );
 
             // Viewport and coordinate setup.
-            sys::sceGuOffset(
-                2048 - (SCREEN_WIDTH / 2),
-                2048 - (SCREEN_HEIGHT / 2),
-            );
-            sys::sceGuViewport(
-                2048,
-                2048,
-                SCREEN_WIDTH as i32,
-                SCREEN_HEIGHT as i32,
-            );
+            sys::sceGuOffset(2048 - (SCREEN_WIDTH / 2), 2048 - (SCREEN_HEIGHT / 2));
+            sys::sceGuViewport(2048, 2048, SCREEN_WIDTH as i32, SCREEN_HEIGHT as i32);
 
             // Scissor (full screen).
-            sys::sceGuScissor(
-                0,
-                0,
-                SCREEN_WIDTH as i32,
-                SCREEN_HEIGHT as i32,
-            );
+            sys::sceGuScissor(0, 0, SCREEN_WIDTH as i32, SCREEN_HEIGHT as i32);
             sys::sceGuEnable(GuState::ScissorTest);
 
             // Alpha blending.
@@ -262,14 +221,8 @@ impl PspBackend {
 
             // Texture state.
             sys::sceGuEnable(GuState::Texture2D);
-            sys::sceGuTexFunc(
-                TextureEffect::Modulate,
-                TextureColorComponent::Rgba,
-            );
-            sys::sceGuTexFilter(
-                TextureFilter::Nearest,
-                TextureFilter::Nearest,
-            );
+            sys::sceGuTexFunc(TextureEffect::Modulate, TextureColorComponent::Rgba);
+            sys::sceGuTexFilter(TextureFilter::Nearest, TextureFilter::Nearest);
 
             // Projection: orthographic 2D.
             sys::sceGumMatrixMode(MatrixMode::Projection);
@@ -300,15 +253,11 @@ impl PspBackend {
 
             // Try to initialize system TrueType fonts (VRAM glyph atlas).
             // Allocate 512x512 T8 (1 byte/pixel) from VRAM for the atlas.
-            let sys_font_atlas = allocator.alloc_texture_pixels(
-                512,
-                512,
-                TexturePixelFormat::PsmT8,
-            );
+            let sys_font_atlas =
+                allocator.alloc_texture_pixels(512, 512, TexturePixelFormat::PsmT8);
             if let Ok(atlas_chunk) = sys_font_atlas {
                 let vram_ptr = atlas_chunk.as_mut_ptr_direct_to_vram();
-                self.system_font =
-                    crate::font::SystemFont::try_init(vram_ptr);
+                self.system_font = crate::font::SystemFont::try_init(vram_ptr);
                 // Silently fall back to bitmap if system fonts unavailable.
             }
 
@@ -328,21 +277,12 @@ impl PspBackend {
             }
 
             // Open the first frame's display list.
-            sys::sceGuStart(
-                GuContextType::Direct,
-                &raw mut DISPLAY_LIST as *mut c_void,
-            );
+            sys::sceGuStart(GuContextType::Direct, &raw mut DISPLAY_LIST as *mut c_void);
         }
     }
 
     /// Set the clipping rectangle via GU scissor.
-    pub fn set_clip_rect_inner(
-        &mut self,
-        x: i32,
-        y: i32,
-        w: u32,
-        h: u32,
-    ) {
+    pub fn set_clip_rect_inner(&mut self, x: i32, y: i32, w: u32, h: u32) {
         // SAFETY: sceGuScissor is a GU FFI call operating on the display list.
         unsafe {
             sys::sceGuScissor(x, y, x + w as i32, y + h as i32);
@@ -353,12 +293,7 @@ impl PspBackend {
     pub fn reset_clip_rect_inner(&mut self) {
         // SAFETY: sceGuScissor is a GU FFI call operating on the display list.
         unsafe {
-            sys::sceGuScissor(
-                0,
-                0,
-                SCREEN_WIDTH as i32,
-                SCREEN_HEIGHT as i32,
-            );
+            sys::sceGuScissor(0, 0, SCREEN_WIDTH as i32, SCREEN_HEIGHT as i32);
         }
     }
 
@@ -372,10 +307,7 @@ impl PspBackend {
             sys::sceGuSync(GuSyncMode::Finish, GuSyncBehavior::Wait);
             sys::sceDisplayWaitVblankStart();
             sys::sceGuSwapBuffers();
-            sys::sceGuStart(
-                GuContextType::Direct,
-                &raw mut DISPLAY_LIST as *mut c_void,
-            );
+            sys::sceGuStart(GuContextType::Direct, &raw mut DISPLAY_LIST as *mut c_void);
         }
     }
 
@@ -419,26 +351,12 @@ impl SdiBackend for PspBackend {
         Ok(())
     }
 
-    fn blit(
-        &mut self,
-        tex: TextureId,
-        x: i32,
-        y: i32,
-        w: u32,
-        h: u32,
-    ) -> OasisResult<()> {
+    fn blit(&mut self, tex: TextureId, x: i32, y: i32, w: u32, h: u32) -> OasisResult<()> {
         self.blit_inner(tex, x, y, w, h);
         Ok(())
     }
 
-    fn fill_rect(
-        &mut self,
-        x: i32,
-        y: i32,
-        w: u32,
-        h: u32,
-        color: Color,
-    ) -> OasisResult<()> {
+    fn fill_rect(&mut self, x: i32, y: i32, w: u32, h: u32, color: Color) -> OasisResult<()> {
         self.fill_rect_inner(x, y, w, h, color);
         Ok(())
     }
@@ -467,9 +385,7 @@ impl SdiBackend for PspBackend {
         rgba_data: &[u8],
     ) -> OasisResult<TextureId> {
         self.load_texture_inner(width, height, rgba_data)
-            .ok_or_else(|| {
-                OasisError::Backend("PSP texture allocation failed".into())
-            })
+            .ok_or_else(|| OasisError::Backend("PSP texture allocation failed".into()))
     }
 
     fn destroy_texture(&mut self, tex: TextureId) -> OasisResult<()> {
@@ -477,13 +393,7 @@ impl SdiBackend for PspBackend {
         Ok(())
     }
 
-    fn set_clip_rect(
-        &mut self,
-        x: i32,
-        y: i32,
-        w: u32,
-        h: u32,
-    ) -> OasisResult<()> {
+    fn set_clip_rect(&mut self, x: i32, y: i32, w: u32, h: u32) -> OasisResult<()> {
         self.set_clip_rect_inner(x, y, w, h);
         Ok(())
     }
@@ -493,13 +403,7 @@ impl SdiBackend for PspBackend {
         Ok(())
     }
 
-    fn read_pixels(
-        &self,
-        _x: i32,
-        _y: i32,
-        _w: u32,
-        _h: u32,
-    ) -> OasisResult<Vec<u8>> {
+    fn read_pixels(&self, _x: i32, _y: i32, _w: u32, _h: u32) -> OasisResult<Vec<u8>> {
         Err(OasisError::Backend(
             "read_pixels not supported on PSP".into(),
         ))
