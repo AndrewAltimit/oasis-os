@@ -28,6 +28,7 @@ pub mod terminal;
 pub mod theme;
 pub mod transfer;
 pub mod transition;
+pub mod ui;
 pub mod update;
 pub mod vfs;
 pub mod wallpaper;
