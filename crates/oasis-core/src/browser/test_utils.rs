@@ -78,6 +78,71 @@ impl MockBackend {
             }
         })
     }
+
+    /// Return text draw calls as `(text, x, y, font_size)` tuples,
+    /// sorted by Y then X position for easy geometric analysis.
+    pub fn text_positions(&self) -> Vec<(&str, i32, i32, u16)> {
+        let mut positions: Vec<_> = self
+            .calls
+            .iter()
+            .filter_map(|c| {
+                if let DrawCall::DrawText {
+                    text,
+                    x,
+                    y,
+                    font_size,
+                    ..
+                } = c
+                {
+                    Some((text.as_str(), *x, *y, *font_size))
+                } else {
+                    None
+                }
+            })
+            .collect();
+        positions.sort_by(|a, b| a.2.cmp(&b.2).then(a.1.cmp(&b.1)));
+        positions
+    }
+
+    /// Find text lines whose vertical ranges overlap other lines.
+    ///
+    /// Groups text by Y coordinate (same line), then checks whether
+    /// distinct lines overlap vertically. Returns `(y_a, y_b)` pairs
+    /// for overlapping lines. Words on the same horizontal line
+    /// (same Y) are not considered overlapping.
+    pub fn find_overlapping_text_lines(&self) -> Vec<(i32, i32)> {
+        let positions = self.text_positions();
+
+        // Collect unique Y lines with their max font sizes.
+        let mut lines: std::collections::BTreeMap<i32, u16> = std::collections::BTreeMap::new();
+        for &(text, _, y, fs) in &positions {
+            // Skip single-char chrome glyphs.
+            if text.len() <= 1 {
+                continue;
+            }
+            let entry = lines.entry(y).or_insert(fs);
+            if fs > *entry {
+                *entry = fs;
+            }
+        }
+
+        let line_vec: Vec<(i32, u16)> = lines.into_iter().collect();
+        let mut overlaps = Vec::new();
+
+        for i in 0..line_vec.len() {
+            let (ya, fs_a) = line_vec[i];
+            let bottom_a = ya + fs_a as i32;
+            for j in (i + 1)..line_vec.len() {
+                let (yb, _) = line_vec[j];
+                if yb < bottom_a {
+                    overlaps.push((ya, yb));
+                } else {
+                    break;
+                }
+            }
+        }
+        overlaps
+    }
 }
 
 impl SdiBackend for MockBackend {

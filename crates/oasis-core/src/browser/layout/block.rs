@@ -366,7 +366,21 @@ fn calculate_block_width(layout_box: &mut LayoutBox, containing_width: f32) {
 }
 
 /// Layout block-level children, stacking them vertically.
+///
+/// If all children are inline-level (no block-level siblings), the
+/// parent establishes an inline formatting context and we delegate
+/// to [`layout_inline`] directly. This handles the common case of
+/// `<p>text</p>` or `<p><a>link</a></p>` where the block box
+/// contains only inline content.
 fn layout_block_children(parent: &mut LayoutBox, measurer: &dyn TextMeasurer) {
+    // If all children are inline, establish an IFC on the parent.
+    let all_inline =
+        !parent.children.is_empty() && parent.children.iter().all(|c| !c.is_block_level());
+    if all_inline {
+        layout_inline(parent, measurer);
+        return;
+    }
+
     let content_x = parent.dimensions.content.x;
     let content_width = parent.dimensions.content.width;
     let mut cursor_y = parent.dimensions.content.y + parent.dimensions.padding.top;
