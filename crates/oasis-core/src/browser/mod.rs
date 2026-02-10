@@ -903,6 +903,16 @@ impl BrowserWidget {
     // Accessors
     // ---------------------------------------------------------------
 
+    /// Get the window X position (set by the WM).
+    pub fn window_x(&self) -> i32 {
+        self.window_x
+    }
+
+    /// Get the window Y position (set by the WM).
+    pub fn window_y(&self) -> i32 {
+        self.window_y
+    }
+
     /// Get the title of the current page.
     pub fn title(&self) -> Option<&str> {
         self.nav.current_title()

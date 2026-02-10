@@ -226,6 +226,19 @@ fn main() -> Result<()> {
                                     mode = Mode::Dashboard;
                                 }
                             },
+                            WmEvent::ContentClick(id, lx, ly) => {
+                                if id == "browser"
+                                    && let Some(ref mut bw) = browser
+                                {
+                                    // Convert content-local coords to absolute.
+                                    let abs_x = bw.window_x() + lx;
+                                    let abs_y = bw.window_y() + ly;
+                                    bw.handle_input(
+                                        &InputEvent::PointerClick { x: abs_x, y: abs_y },
+                                        &vfs,
+                                    );
+                                }
+                            },
                             WmEvent::DesktopClick(_, _) => {
                                 // Click on empty desktop -- return to Dashboard.
                                 if wm.window_count() == 0 {
