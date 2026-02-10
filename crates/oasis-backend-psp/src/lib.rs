@@ -305,11 +305,7 @@ impl PspBackend {
                 let vram_ptr = atlas_chunk.as_mut_ptr_direct_to_vram();
                 self.system_font =
                     crate::font::SystemFont::try_init(vram_ptr);
-                if self.system_font.is_none() {
-                    psp::dprintln!(
-                        "OASIS_OS: System fonts unavailable, using bitmap"
-                    );
-                }
+                // Silently fall back to bitmap if system fonts unavailable.
             }
 
             // Claim volatile memory (extra 4MB on PSP-2000+) for textures.
@@ -325,11 +321,6 @@ impl PspBackend {
                     vol_ptr as *mut u8,
                     vol_size as usize,
                 ));
-                psp::dprintln!(
-                    "OASIS_OS: Volatile mem claimed: {} KB at {:p}",
-                    vol_size / 1024,
-                    vol_ptr,
-                );
             }
 
             // Open the first frame's display list.
@@ -393,6 +384,15 @@ impl PspBackend {
     ///
     /// Returns `(total_bytes, remaining_bytes)` if volatile memory was
     /// claimed, or `None` on PSP-1000 / if already locked.
+    /// Raw pointer to the bitmap font atlas texture in RAM.
+    ///
+    /// The atlas is a 128x64 RGBA8888 image, 16-byte aligned, built during
+    /// `init()`. Use via `psp::cache::UncachedPtr::from_cached_addr` for
+    /// GE texture binding.
+    pub fn font_atlas(&self) -> *mut u8 {
+        self.font_atlas_ptr
+    }
+
     pub fn volatile_mem_info(&self) -> Option<(usize, usize)> {
         self.volatile_alloc
             .as_ref()
@@ -513,7 +513,7 @@ impl SdiBackend for PspBackend {
 /// Create a compact WmTheme tuned for the PSP's 480x272 display.
 pub fn psp_wm_theme() -> WmTheme {
     WmTheme {
-        titlebar_height: 14,
+        titlebar_height: 12,
         border_width: 1,
         titlebar_active_color: Color::rgba(40, 70, 130, 230),
         titlebar_inactive_color: Color::rgba(60, 60, 60, 200),
@@ -523,8 +523,8 @@ pub fn psp_wm_theme() -> WmTheme {
         btn_close_color: Color::rgb(180, 50, 50),
         btn_minimize_color: Color::rgb(180, 160, 50),
         btn_maximize_color: Color::rgb(50, 160, 50),
-        button_size: 10,
-        resize_handle_size: 4,
+        button_size: 8,
+        resize_handle_size: 3,
         titlebar_font_size: 8,
     }
 }

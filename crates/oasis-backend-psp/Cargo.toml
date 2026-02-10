@@ -14,7 +14,7 @@ repository = "https://github.com/AndrewAltimit/oasis-os"
 authors = ["AndrewAltimit"]
 
 [dependencies]
-psp = { git = "https://github.com/AndrewAltimit/rust-psp", branch = "fix/gum-vfpu-context-init", features = ["kernel", "std"] }
+psp = { path = "/home/mikunpc/Documents/repos/rust-psp/psp", features = ["kernel", "std"] }
 oasis-core = { path = "../oasis-core" }
 libm = "0.2"
 

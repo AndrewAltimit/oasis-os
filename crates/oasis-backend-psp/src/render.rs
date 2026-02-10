@@ -59,8 +59,8 @@ pub(crate) const TEXTURED_COLOR_VTYPE: VertexType = VertexType::from_bits_trunca
 // ---------------------------------------------------------------------------
 
 /// Font atlas dimensions.
-pub(crate) const FONT_ATLAS_W: u32 = 128;
-pub(crate) const FONT_ATLAS_H: u32 = 64;
+pub const FONT_ATLAS_W: u32 = 128;
+pub const FONT_ATLAS_H: u32 = 64;
 /// Glyphs per row in the atlas.
 const ATLAS_COLS: u32 = 16;
 

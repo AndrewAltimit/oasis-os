@@ -25,9 +25,9 @@ psp::module_kernel!("OASIS_OS", 1, 0);
 // ---------------------------------------------------------------------------
 
 // Bar geometry.
-const STATUSBAR_H: u32 = 24;
-const TAB_ROW_H: u32 = 18;
-const BOTTOMBAR_H: u32 = 24;
+const STATUSBAR_H: u32 = 18;
+const TAB_ROW_H: u32 = 14;
+const BOTTOMBAR_H: u32 = 18;
 const BOTTOMBAR_Y: i32 = (SCREEN_HEIGHT - BOTTOMBAR_H) as i32;
 const CONTENT_TOP: u32 = STATUSBAR_H + TAB_ROW_H;
 const CONTENT_H: u32 = SCREEN_HEIGHT - CONTENT_TOP - BOTTOMBAR_H;
@@ -38,7 +38,7 @@ const CHAR_W: i32 = 8;
 // Status bar tab layout.
 const TAB_START_X: i32 = 34;
 const TAB_W: i32 = 45;
-const TAB_H: i32 = 16;
+const TAB_H: i32 = 12;
 const TAB_GAP: i32 = 4;
 
 // Bottom bar layout.
@@ -108,11 +108,11 @@ const TERM_INPUT_Y: i32 = BOTTOMBAR_Y - 14;
 
 // File manager.
 const FM_VISIBLE_ROWS: usize = 18;
-const FM_ROW_H: i32 = 11;
+const FM_ROW_H: i32 = 10;
 const FM_START_Y: i32 = CONTENT_TOP as i32 + 14;
 
 // Desktop mode taskbar.
-const TASKBAR_H: u32 = 14;
+const TASKBAR_H: u32 = 12;
 
 // ---------------------------------------------------------------------------
 // App entries (matching oasis-core FALLBACK_COLORS)
@@ -217,6 +217,112 @@ enum ClassicView {
 }
 
 // ---------------------------------------------------------------------------
+// Boot splash screen
+// ---------------------------------------------------------------------------
+
+/// Draw a boot splash screen with title, status text, and progress bar.
+///
+/// Uses fill_rect for the background (bypasses FAST_CLEAR on PPSSPP),
+/// draws progress bar with fill_rects, then renders both text lines in
+/// a **single** SpriteBatch + texture bind to avoid GE state issues on
+/// PPSSPP with multiple sprite draws per frame during init.
+fn show_boot_screen(
+    backend: &mut PspBackend,
+    status: &str,
+    progress: u32,
+) {
+    use oasis_backend_psp::render::{FONT_ATLAS_W, FONT_ATLAS_H};
+    use psp::gu_ext::SpriteBatch;
+
+    let bg = Color::rgba(15, 15, 25, 255);
+    backend.fill_rect_inner(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT, bg);
+
+    // Progress bar (200px wide, centered).
+    let title_y = SCREEN_HEIGHT as i32 / 2 - 30;
+    let status_y = title_y + 16;
+    let bar_w: u32 = 200;
+    let bar_h: u32 = 6;
+    let bar_x = (SCREEN_WIDTH as i32 - bar_w as i32) / 2;
+    let bar_y = status_y + 20;
+    backend.fill_rect_inner(
+        bar_x, bar_y, bar_w, bar_h, Color::rgba(40, 40, 60, 200),
+    );
+    let fill_w = (bar_w * progress.min(100)) / 100;
+    if fill_w > 0 {
+        backend.fill_rect_inner(
+            bar_x, bar_y, fill_w, bar_h, Color::rgb(80, 140, 220),
+        );
+    }
+
+    // Single SpriteBatch for both title and status text.
+    let title = "OASIS_OS";
+    let atlas_cols: u32 = 16;
+    let total_chars = title.len() + status.len();
+    let mut batch = SpriteBatch::new(total_chars);
+
+    let title_w = (title.len() as i32) * CHAR_W;
+    let title_x = (SCREEN_WIDTH as i32 - title_w) / 2;
+    let white_abgr = 0xFFFF_FFFFu32;
+    let mut cx = title_x as f32;
+    for ch in title.chars() {
+        let idx = (ch as u32).wrapping_sub(32);
+        let (u0, v0) = if idx < 95 {
+            ((idx % atlas_cols * 8) as f32, (idx / atlas_cols * 8) as f32)
+        } else {
+            (0.0, 0.0)
+        };
+        batch.draw_rect(cx, title_y as f32, 8.0, 8.0, u0, v0, u0 + 8.0, v0 + 8.0, white_abgr);
+        cx += 8.0;
+    }
+
+    let status_w = (status.len() as i32) * CHAR_W;
+    let status_x = (SCREEN_WIDTH as i32 - status_w) / 2;
+    let status_abgr = 0xFFC8AAA0u32; // Color::rgb(160, 170, 200) in ABGR
+    cx = status_x as f32;
+    for ch in status.chars() {
+        let idx = (ch as u32).wrapping_sub(32);
+        let (u0, v0) = if idx < 95 {
+            ((idx % atlas_cols * 8) as f32, (idx / atlas_cols * 8) as f32)
+        } else {
+            (0.0, 0.0)
+        };
+        batch.draw_rect(cx, status_y as f32, 8.0, 8.0, u0, v0, u0 + 8.0, v0 + 8.0, status_abgr);
+        cx += 8.0;
+    }
+
+    // Single texture bind + single flush for all text.
+    // SAFETY: Within an active GU display list; font atlas pointer is
+    // valid and non-null (set during backend.init()).
+    unsafe {
+        use std::ffi::c_void;
+        use psp::sys::{
+            self, MipmapLevel, TextureColorComponent, TextureEffect,
+            TexturePixelFormat,
+        };
+        let uncached_atlas =
+            psp::cache::UncachedPtr::from_cached_addr(backend.font_atlas())
+                .as_ptr() as *const c_void;
+        sys::sceGuTexMode(TexturePixelFormat::Psm8888, 0, 0, 0);
+        sys::sceGuTexImage(
+            MipmapLevel::None,
+            FONT_ATLAS_W as i32,
+            FONT_ATLAS_H as i32,
+            FONT_ATLAS_W as i32,
+            uncached_atlas,
+        );
+        sys::sceGuTexFunc(
+            TextureEffect::Modulate,
+            TextureColorComponent::Rgba,
+        );
+        sys::sceGuTexFlush();
+        sys::sceGuTexSync();
+        batch.flush();
+    }
+
+    backend.swap_buffers_inner();
+}
+
+// ---------------------------------------------------------------------------
 // Entry point
 // ---------------------------------------------------------------------------
 
@@ -225,9 +331,11 @@ fn psp_main() {
 
     let mut backend = PspBackend::new();
     backend.init();
+    show_boot_screen(&mut backend, "Initializing...", 10);
 
     // Register exception handler (kernel mode) for crash diagnostics.
     oasis_backend_psp::register_exception_handler();
+    show_boot_screen(&mut backend, "Loading config...", 25);
 
     // Load persistent configuration.
     let mut config = psp::config::Config::load(CONFIG_PATH)
@@ -240,6 +348,7 @@ fn psp_main() {
 
     // Query static hardware info (kernel mode, once at startup).
     let sysinfo = SystemInfo::query();
+    show_boot_screen(&mut backend, "Generating textures...", 40);
 
     // Load wallpaper texture.
     let wallpaper_data = oasis_backend_psp::generate_gradient(SCREEN_WIDTH, SCREEN_HEIGHT);
@@ -252,6 +361,7 @@ fn psp_main() {
     let cursor_tex = backend
         .load_texture_inner(CURSOR_W, CURSOR_H, &cursor_data)
         .unwrap_or(TextureId(0));
+    show_boot_screen(&mut backend, "Setting up UI...", 60);
 
     // -- Window Manager (Desktop mode) --
     let psp_theme = oasis_backend_psp::psp_wm_theme();
@@ -332,6 +442,7 @@ fn psp_main() {
     // Single background worker thread handles both audio and file I/O.
     let (audio, io) = oasis_backend_psp::spawn_workers();
     let mut pv_loading = false; // true while waiting for async texture load
+    show_boot_screen(&mut backend, "Starting workers...", 80);
 
     // Confirm button held state for pointer simulation.
     let mut _confirm_held = false;
@@ -341,6 +452,8 @@ fn psp_main() {
 
     // Frame timing via hardware tick counter.
     let mut frame_timer = psp::time::FrameTimer::new();
+    show_boot_screen(&mut backend, "Ready", 100);
+    psp::thread::sleep_ms(400);
 
     loop {
         let _dt = frame_timer.tick();
@@ -1200,7 +1313,7 @@ fn draw_desktop_taskbar(backend: &mut PspBackend, wm: &WindowManager) {
                 let label_w = (app.title.len() as i32 * 8 + 8) as u32;
                 backend.fill_rect_inner(tx - 2, bar_y + 1, label_w, TASKBAR_H - 2, Color::rgba(60, 90, 160, 140));
             }
-            backend.draw_text_inner(app.title, tx + 2, bar_y + 3, 8, label_clr);
+            backend.draw_text_inner(app.title, tx + 2, bar_y + 2, 8, label_clr);
             tx += app.title.len() as i32 * 8 + 12;
         }
     }
@@ -1366,11 +1479,11 @@ fn draw_settings_windowed(
 
     be.draw_text("CPU Clock:", cx + 4, y, 8, lbl)?;
     be.draw_text(&format!("{} MHz", clock_mhz), vx, y, 8, val)?;
-    y += 12;
+    y += 10;
 
     be.draw_text("Bus Clock:", cx + 4, y, 8, lbl)?;
     be.draw_text(&format!("{} MHz", bus_mhz), vx, y, 8, val)?;
-    y += 12;
+    y += 10;
 
     let profile = match clock_mhz {
         333 => "Max Performance",
@@ -1380,11 +1493,11 @@ fn draw_settings_windowed(
     };
     be.draw_text("Profile:", cx + 4, y, 8, lbl)?;
     be.draw_text(profile, vx, y, 8, val)?;
-    y += 12;
+    y += 10;
 
     be.draw_text("Display:", cx + 4, y, 8, lbl)?;
     be.draw_text("480x272 RGBA8888", vx, y, 8, val)?;
-    y += 12;
+    y += 10;
 
     if let Some((total, remaining)) = vol_info {
         let used_kb = (total - remaining) / 1024;
@@ -1422,7 +1535,7 @@ fn draw_network_windowed(
     };
     be.draw_text("WiFi Switch:", cx + 4, y, 8, lbl)?;
     be.draw_text(wifi_str, vx, y, 8, wifi_clr)?;
-    y += 12;
+    y += 10;
 
     let (usb_str, usb_clr) = if status.usb_connected {
         ("Connected", Color::rgb(120, 255, 120))
@@ -1431,7 +1544,7 @@ fn draw_network_windowed(
     };
     be.draw_text("USB Cable:", cx + 4, y, 8, lbl)?;
     be.draw_text(usb_str, vx, y, 8, usb_clr)?;
-    y += 12;
+    y += 10;
 
     let (ac_str, ac_clr) = if status.ac_power {
         ("Connected", Color::rgb(120, 255, 120))
@@ -1440,7 +1553,7 @@ fn draw_network_windowed(
     };
     be.draw_text("AC Power:", cx + 4, y, 8, lbl)?;
     be.draw_text(ac_str, vx, y, 8, ac_clr)?;
-    y += 12;
+    y += 10;
 
     if status.battery_percent >= 0 {
         be.draw_text("Battery:", cx + 4, y, 8, lbl)?;
@@ -1578,9 +1691,11 @@ fn draw_dashboard(backend: &mut PspBackend, selected: usize, page: usize) {
 
         draw_icon(backend, app, ix, iy);
 
-        // Label below icon (left-aligned at cell edge).
+        // Label below icon (centered under cell).
         let label_y = iy + ICON_H as i32 + ICON_LABEL_PAD;
-        backend.draw_text_inner(app.title, cell_x, label_y, 8, LABEL_CLR);
+        let text_width = (app.title.len() as i32) * CHAR_W;
+        let label_x = cell_x + (CELL_W - text_width) / 2;
+        backend.draw_text_inner(app.title, label_x, label_y, 8, LABEL_CLR);
     }
 
     // Cursor highlight around selected icon.
@@ -1659,7 +1774,7 @@ fn draw_status_bar(backend: &mut PspBackend, active_tab: TopTab, status: &Status
     } else {
         BATTERY_CLR
     };
-    backend.draw_text_inner(&bat_label, 6, 7, 8, bat_color);
+    backend.draw_text_inner(&bat_label, 6, 5, 8, bat_color);
 
     let wifi_label = if status.wifi_on { "WiFi" } else { "----" };
     let wifi_color = if status.wifi_on {
@@ -1667,7 +1782,7 @@ fn draw_status_bar(backend: &mut PspBackend, active_tab: TopTab, status: &Status
     } else {
         Color::rgb(100, 100, 100)
     };
-    backend.draw_text_inner(wifi_label, 96, 7, 8, wifi_color);
+    backend.draw_text_inner(wifi_label, 96, 5, 8, wifi_color);
 
     let (usb_label, usb_color) = if usb_active {
         ("USB+", Color::rgb(120, 255, 120))
@@ -1676,13 +1791,13 @@ fn draw_status_bar(backend: &mut PspBackend, active_tab: TopTab, status: &Status
     } else {
         ("USB", Color::rgb(100, 100, 100))
     };
-    backend.draw_text_inner(usb_label, 140, 7, 8, usb_color);
+    backend.draw_text_inner(usb_label, 140, 5, 8, usb_color);
 
     let fps_label = format!("OASIS v0.1  {:.0}fps", fps);
-    backend.draw_text_inner(&fps_label, 200, 7, 8, Color::WHITE);
+    backend.draw_text_inner(&fps_label, 200, 5, 8, Color::WHITE);
 
     let time_label = format!("{} {:02}:{:02}", status.day_of_week, status.hour, status.minute);
-    backend.draw_text_inner(&time_label, 396, 7, 8, Color::WHITE);
+    backend.draw_text_inner(&time_label, 396, 5, 8, Color::WHITE);
 
     backend.draw_text_inner("OSS", 6, STATUSBAR_H as i32 + 3, 8, CATEGORY_CLR);
 
@@ -1715,7 +1830,7 @@ fn draw_status_bar(backend: &mut PspBackend, active_tab: TopTab, status: &Status
         } else {
             Color::rgb(160, 160, 160)
         };
-        backend.draw_text_inner(label, tx.max(x + 2), tab_y + 4, 8, text_color);
+        backend.draw_text_inner(label, tx.max(x + 2), tab_y + 2, 8, text_color);
     }
 }
 
@@ -1740,10 +1855,10 @@ fn draw_bottom_bar(
     let bz_h = BOTTOMBAR_H - 4;
     draw_chrome_bezel(backend, url_bx, bz_y, url_bw, bz_h);
 
-    backend.draw_text_inner("HTTP://OASIS.LOCAL", 8, bar_y + 8, 8, URL_CLR);
+    backend.draw_text_inner("HTTP://OASIS.LOCAL", 8, bar_y + 5, 8, URL_CLR);
 
     let usb_x = url_bx + url_bw as i32 + 14;
-    backend.draw_text_inner("USB", usb_x, bar_y + 8, 8, USB_CLR);
+    backend.draw_text_inner("USB", usb_x, bar_y + 5, 8, USB_CLR);
 
     let dots_x = usb_x + 36;
     let max_dots = 4usize;
@@ -1753,7 +1868,7 @@ fn draw_bottom_bar(
         } else {
             DOT_INACTIVE
         };
-        backend.fill_rect_inner(dots_x + (i as i32) * 12, bar_y + 9, 6, 6, color);
+        backend.fill_rect_inner(dots_x + (i as i32) * 12, bar_y + 6, 6, 6, color);
     }
 
     let labels_w: i32 = MediaTab::LABELS.iter().map(|l| l.len() as i32 * CHAR_W).sum();
@@ -1773,17 +1888,17 @@ fn draw_bottom_bar(
         } else {
             MEDIA_INACTIVE
         };
-        backend.draw_text_inner(label, cx, bar_y + 8, 8, color);
+        backend.draw_text_inner(label, cx, bar_y + 5, 8, color);
         cx += label.len() as i32 * CHAR_W;
 
         if i < MediaTab::LABELS.len() - 1 {
             cx += PIPE_GAP;
-            backend.draw_text_inner("|", cx, bar_y + 8, 8, PIPE_CLR);
+            backend.draw_text_inner("|", cx, bar_y + 5, 8, PIPE_CLR);
             cx += CHAR_W + PIPE_GAP;
         }
     }
 
-    backend.draw_text_inner("R>", SCREEN_WIDTH as i32 - R_HINT_W, bar_y + 8, 8, R_HINT_CLR);
+    backend.draw_text_inner("R>", SCREEN_WIDTH as i32 - R_HINT_W, bar_y + 5, 8, R_HINT_CLR);
 }
 
 /// Draw a chrome/metallic bezel (fill + 4 edges).

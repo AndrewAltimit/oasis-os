@@ -113,7 +113,6 @@ dependencies = [
 [[package]]
 name = "psp"
 version = "0.4.0"
-source = "git+https://github.com/AndrewAltimit/rust-psp?branch=fix%2Fgum-vfpu-context-init#6e7153732dc6986e298b90a5d86d15634df1edeb"
 dependencies = [
  "bitflags",
  "libm",

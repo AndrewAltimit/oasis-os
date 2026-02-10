@@ -43,7 +43,6 @@ impl SystemFont {
             unsafe { &*(font.as_ref() as *const Font) };
         let renderer = FontRenderer::new(font_ref, atlas_vram, 12.0);
 
-        psp::dprintln!("OASIS_OS: System font initialized");
         Some(Self {
             renderer: Some(renderer),
             _font: font,
