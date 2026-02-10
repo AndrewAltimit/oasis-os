@@ -1247,6 +1247,7 @@ fn psp_main() {
                         );
                     },
                     ClassicView::PhotoViewer => {
+                        backend.force_bitmap_font = true;
                         if pv_viewing {
                             draw_photo_view(&mut backend, pv_tex, pv_img_w, pv_img_h);
                             draw_button_hints(&mut backend, &[("O", "Back")]);
@@ -1265,8 +1266,10 @@ fn psp_main() {
                                 &[("X", "View"), ("O", "Back"), ("^v", "Nav")],
                             );
                         }
+                        backend.force_bitmap_font = false;
                     },
                     ClassicView::MusicPlayer => {
+                        backend.force_bitmap_font = true;
                         if audio.is_playing() {
                             draw_music_player_threaded(
                                 &mut backend,
@@ -1291,6 +1294,7 @@ fn psp_main() {
                                 &[("X", "Play"), ("O", "Back"), ("^v", "Nav")],
                             );
                         }
+                        backend.force_bitmap_font = false;
                     },
                 }
             },
