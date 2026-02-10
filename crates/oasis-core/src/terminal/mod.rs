@@ -8,10 +8,12 @@ pub mod agent_commands;
 pub mod audio_commands;
 mod commands;
 mod interpreter;
+pub mod network_commands;
 pub mod plugin_commands;
 
 pub use agent_commands::register_agent_commands;
 pub use audio_commands::register_audio_commands;
 pub use commands::register_builtins;
 pub use interpreter::{Command, CommandOutput, CommandRegistry, Environment};
+pub use network_commands::register_network_commands;
 pub use plugin_commands::register_plugin_commands;

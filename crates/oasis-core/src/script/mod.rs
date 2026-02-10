@@ -297,6 +297,8 @@ mod tests {
             power: None,
             time: None,
             usb: None,
+
+            network: None,
         };
         reg.execute(line, &mut env)
     }
@@ -332,6 +334,8 @@ mod tests {
             power: None,
             time: None,
             usb: None,
+
+            network: None,
         };
         let output = run_script("/tmp/test.sh", &reg, &mut env).unwrap();
         assert_eq!(output, vec!["hello", "world"]);
@@ -348,6 +352,8 @@ mod tests {
             power: None,
             time: None,
             usb: None,
+
+            network: None,
         };
         let output = run_script("/tmp/bad.sh", &reg, &mut env).unwrap();
         assert!(output[0].contains("error at line 1"));
@@ -469,6 +475,8 @@ mod tests {
             power: None,
             time: None,
             usb: None,
+
+            network: None,
         };
         let output = run_startup(&reg, &mut env).unwrap();
         assert!(output[0].contains("no startup"));
@@ -484,6 +492,8 @@ mod tests {
             power: None,
             time: None,
             usb: None,
+
+            network: None,
         };
         let output = run_startup(&reg, &mut env).unwrap();
         assert_eq!(output, vec!["booted"]);
