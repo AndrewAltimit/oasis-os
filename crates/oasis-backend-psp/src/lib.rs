@@ -142,6 +142,9 @@ pub struct PspBackend {
     pub(crate) system_font: Option<crate::font::SystemFont>,
     /// Volatile memory bump allocator (PSP-2000+ extra 4MB).
     pub(crate) volatile_alloc: Option<VolatileAllocator>,
+    /// When true, `draw_text_inner` skips the system font and uses the
+    /// 8x8 bitmap font. Set before drawing content that needs smaller text.
+    pub force_bitmap_font: bool,
 }
 
 impl PspBackend {
@@ -157,6 +160,7 @@ impl PspBackend {
             font_atlas_ptr: ptr::null_mut(),
             system_font: None,
             volatile_alloc: None,
+            force_bitmap_font: false,
         }
     }
 

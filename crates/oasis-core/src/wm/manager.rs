@@ -615,7 +615,7 @@ impl WindowManager {
             if window.sdi_suffixes().contains(&"title_text") {
                 let obj = sdi.create(window.sdi_name("title_text"));
                 obj.x = tx + 4;
-                obj.y = ty + (th as i32 - theme.titlebar_font_size as i32) / 2;
+                obj.y = ty + (th as i32 - theme.titlebar_font_size as i32) / 2 - 1;
                 obj.w = tw.saturating_sub(8);
                 obj.h = th;
                 obj.text = Some(window.title.clone());
@@ -702,7 +702,7 @@ impl WindowManager {
             }
             if let Ok(obj) = sdi.get_mut(&window.sdi_name("title_text")) {
                 obj.x = tx + 4;
-                obj.y = ty + (th as i32 - theme.titlebar_font_size as i32) / 2;
+                obj.y = ty + (th as i32 - theme.titlebar_font_size as i32) / 2 - 1;
                 obj.w = tw.saturating_sub(8);
                 obj.h = th;
             }

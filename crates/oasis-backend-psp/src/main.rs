@@ -1086,9 +1086,12 @@ fn psp_main() {
                         draw_dashboard(&mut backend, selected, page);
                     }
                     ClassicView::Terminal => {
+                        backend.force_bitmap_font = true;
                         draw_terminal(&mut backend, &term_lines, &term_input);
+                        backend.force_bitmap_font = false;
                     }
                     ClassicView::FileManager => {
+                        backend.force_bitmap_font = true;
                         draw_file_manager(
                             &mut backend,
                             &fm_path,
@@ -1096,6 +1099,7 @@ fn psp_main() {
                             fm_selected,
                             fm_scroll,
                         );
+                        backend.force_bitmap_font = false;
                     }
                     ClassicView::PhotoViewer => {
                         if pv_viewing {
@@ -1145,6 +1149,8 @@ fn psp_main() {
                 };
 
                 // Draw WM chrome (frames, titlebars) + clipped content.
+                // Use bitmap font for app content (8px vs 12px system font).
+                backend.force_bitmap_font = true;
                 let _ = wm.draw_with_clips(
                     &sdi,
                     &mut backend,
@@ -1197,6 +1203,8 @@ fn psp_main() {
                         }
                     },
                 );
+
+                backend.force_bitmap_font = false;
 
                 // Desktop mode taskbar at bottom.
                 draw_desktop_taskbar(&mut backend, &wm);
@@ -1310,7 +1318,7 @@ fn draw_desktop_taskbar(backend: &mut PspBackend, wm: &WindowManager) {
                 let label_w = (app.title.len() as i32 * 8 + 8) as u32;
                 backend.fill_rect_inner(tx - 2, bar_y + 1, label_w, TASKBAR_H - 2, Color::rgba(60, 90, 160, 140));
             }
-            backend.draw_text_inner(app.title, tx + 2, bar_y + 1, 8, label_clr);
+            backend.draw_text_inner(app.title, tx + 2, bar_y, 8, label_clr);
             tx += app.title.len() as i32 * 8 + 12;
         }
     }

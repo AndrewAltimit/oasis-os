@@ -14,7 +14,7 @@ use crate::PspBackend;
 const ANALOG_DEADZONE: f32 = 0.31;
 
 /// Cursor speed multiplier for analog stick movement.
-const CURSOR_SPEED: f32 = 8.0;
+const CURSOR_SPEED: f32 = 5.0;
 
 /// Button-to-event mapping table for digital buttons.
 const BUTTON_MAP: &[(CtrlButtons, Button)] = &[

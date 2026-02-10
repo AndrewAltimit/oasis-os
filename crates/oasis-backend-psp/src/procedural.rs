@@ -1,9 +1,9 @@
 //! Procedural generation: wallpaper gradients and cursor sprites.
 
 /// Width of the procedural cursor sprite.
-pub const CURSOR_W: u32 = 12;
+pub const CURSOR_W: u32 = 8;
 /// Height of the procedural cursor sprite.
-pub const CURSOR_H: u32 = 18;
+pub const CURSOR_H: u32 = 12;
 
 /// Generate a PSIX-style gradient wallpaper as RGBA bytes.
 ///
@@ -75,27 +75,21 @@ fn lerp_rgb(a: (u8, u8, u8), b: (u8, u8, u8), t: f32) -> (u8, u8, u8) {
 
 /// Generate a white arrow cursor with black outline as RGBA pixels.
 pub fn generate_cursor_pixels() -> Vec<u8> {
-    // 12x18 arrow cursor bitmap: 1 = white fill, 2 = black outline, 0 = transparent.
+    // 8x12 arrow cursor bitmap: 1 = white fill, 2 = black outline, 0 = transparent.
     #[rustfmt::skip]
-    let bitmap: [[u8; 12]; 18] = [
-        [2,0,0,0,0,0,0,0,0,0,0,0],
-        [2,2,0,0,0,0,0,0,0,0,0,0],
-        [2,1,2,0,0,0,0,0,0,0,0,0],
-        [2,1,1,2,0,0,0,0,0,0,0,0],
-        [2,1,1,1,2,0,0,0,0,0,0,0],
-        [2,1,1,1,1,2,0,0,0,0,0,0],
-        [2,1,1,1,1,1,2,0,0,0,0,0],
-        [2,1,1,1,1,1,1,2,0,0,0,0],
-        [2,1,1,1,1,1,1,1,2,0,0,0],
-        [2,1,1,1,1,1,1,1,1,2,0,0],
-        [2,1,1,1,1,1,1,1,1,1,2,0],
-        [2,1,1,1,1,1,2,2,2,2,2,0],
-        [2,1,1,1,2,1,2,0,0,0,0,0],
-        [2,1,1,2,0,2,1,2,0,0,0,0],
-        [2,1,2,0,0,2,1,2,0,0,0,0],
-        [2,2,0,0,0,0,2,1,2,0,0,0],
-        [2,0,0,0,0,0,2,1,2,0,0,0],
-        [0,0,0,0,0,0,0,2,0,0,0,0],
+    let bitmap: [[u8; 8]; 12] = [
+        [2,0,0,0,0,0,0,0],
+        [2,2,0,0,0,0,0,0],
+        [2,1,2,0,0,0,0,0],
+        [2,1,1,2,0,0,0,0],
+        [2,1,1,1,2,0,0,0],
+        [2,1,1,1,1,2,0,0],
+        [2,1,1,1,1,1,2,0],
+        [2,1,1,1,2,2,2,0],
+        [2,1,2,1,2,0,0,0],
+        [2,2,0,2,1,2,0,0],
+        [2,0,0,0,2,1,2,0],
+        [0,0,0,0,0,2,0,0],
     ];
     let mut data = vec![0u8; (CURSOR_W * CURSOR_H * 4) as usize];
     for (y, row) in bitmap.iter().enumerate() {

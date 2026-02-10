@@ -183,7 +183,7 @@ impl PspBackend {
         let abgr = color.to_abgr();
 
         // System font path: anti-aliased TrueType via VRAM glyph atlas.
-        if let Some(sf) = &mut self.system_font {
+        if !self.force_bitmap_font && let Some(sf) = &mut self.system_font {
             sf.draw_text(x as f32, y as f32, abgr, text);
             // SAFETY: Within an active GU display list (between
             // sceGuStart and sceGuFinish in the main frame loop).
