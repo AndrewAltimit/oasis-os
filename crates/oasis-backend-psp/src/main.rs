@@ -88,7 +88,6 @@ const MEDIA_INACTIVE: Color = Color::rgb(170, 170, 170);
 const PIPE_CLR: Color = Color::rgba(255, 255, 255, 60);
 const R_HINT_CLR: Color = Color::rgba(255, 255, 255, 140);
 // Colors -- visualizer & transport.
-const VIZ_BAR_CLR: Color = Color::rgba(120, 60, 160, 200);
 const VIZ_BAR_PEAK: Color = Color::rgba(180, 100, 220, 230);
 const TRANSPORT_CLR: Color = Color::rgba(220, 220, 220, 200);
 const TRANSPORT_ACTIVE: Color = Color::rgb(120, 255, 120);
@@ -114,7 +113,18 @@ const FOLD_CLR: Color = Color::rgb(210, 210, 205);
 const OUTLINE_CLR: Color = Color::rgba(255, 255, 255, 180);
 const SHADOW_CLR: Color = Color::rgba(0, 0, 0, 70);
 const LABEL_CLR: Color = Color::rgba(255, 255, 255, 230);
-const HIGHLIGHT_CLR: Color = Color::rgba(255, 255, 255, 50);
+
+// Icon graphic symbol colors.
+const ICON_SYM_CLR: Color = Color::rgba(255, 255, 255, 200);
+
+// Label shadow.
+const LABEL_SHADOW: Color = Color::rgba(0, 0, 0, 120);
+
+// Button hints.
+const HINT_BG: Color = Color::rgba(0, 0, 0, 120);
+const HINT_BTN_CLR: Color = Color::rgb(200, 200, 100);
+const HINT_TEXT_CLR: Color = Color::rgb(180, 180, 180);
+const HINT_Y_OFFSET: i32 = 10;
 
 // Terminal.
 const MAX_OUTPUT_LINES: usize = 20;
@@ -125,8 +135,6 @@ const FM_VISIBLE_ROWS: usize = 18;
 const FM_ROW_H: i32 = 10;
 const FM_START_Y: i32 = CONTENT_TOP as i32 + 14;
 
-// Desktop mode taskbar.
-const TASKBAR_H: u32 = 12;
 
 // ---------------------------------------------------------------------------
 // App entries (matching oasis-core FALLBACK_COLORS)
@@ -568,6 +576,7 @@ fn psp_main() {
                     InputEvent::ButtonPress(Button::Up) => {
                         if selected >= GRID_COLS {
                             selected -= GRID_COLS;
+                            audio.send(AudioCmd::PlaySfx(SfxId::Click));
                         }
                     }
                     InputEvent::ButtonPress(Button::Down) => {
@@ -576,6 +585,7 @@ fn psp_main() {
                             APPS.len().saturating_sub(page_start).min(ICONS_PER_PAGE);
                         if selected + GRID_COLS < page_count {
                             selected += GRID_COLS;
+                            audio.send(AudioCmd::PlaySfx(SfxId::Click));
                         }
                     }
                     InputEvent::ButtonPress(Button::Left) => {
@@ -587,18 +597,22 @@ fn psp_main() {
                         } else {
                             selected -= 1;
                         }
+                        audio.send(AudioCmd::PlaySfx(SfxId::Click));
                     }
                     InputEvent::ButtonPress(Button::Right) => {
                         let page_start = page * ICONS_PER_PAGE;
                         let page_count =
                             APPS.len().saturating_sub(page_start).min(ICONS_PER_PAGE);
                         selected = (selected + 1) % page_count.max(1);
+                        audio.send(AudioCmd::PlaySfx(SfxId::Click));
                     }
                     InputEvent::TriggerPress(Trigger::Left) => {
                         top_tab = top_tab.next();
+                        audio.send(AudioCmd::PlaySfx(SfxId::Click));
                     }
                     InputEvent::TriggerPress(Trigger::Right) => {
                         media_tab = media_tab.next();
+                        audio.send(AudioCmd::PlaySfx(SfxId::Click));
                     }
                     InputEvent::Quit => return,
                     _ => {}
@@ -629,6 +643,7 @@ fn psp_main() {
                 InputEvent::ButtonPress(Button::Up) if classic_view == ClassicView::Dashboard => {
                     if selected >= GRID_COLS {
                         selected -= GRID_COLS;
+                        audio.send(AudioCmd::PlaySfx(SfxId::Click));
                     }
                 }
                 InputEvent::ButtonPress(Button::Down) if classic_view == ClassicView::Dashboard => {
@@ -637,6 +652,7 @@ fn psp_main() {
                         APPS.len().saturating_sub(page_start).min(ICONS_PER_PAGE);
                     if selected + GRID_COLS < page_count {
                         selected += GRID_COLS;
+                        audio.send(AudioCmd::PlaySfx(SfxId::Click));
                     }
                 }
                 InputEvent::ButtonPress(Button::Left) if classic_view == ClassicView::Dashboard => {
@@ -648,14 +664,17 @@ fn psp_main() {
                     } else {
                         selected -= 1;
                     }
+                    audio.send(AudioCmd::PlaySfx(SfxId::Click));
                 }
                 InputEvent::ButtonPress(Button::Right) if classic_view == ClassicView::Dashboard => {
                     let page_start = page * ICONS_PER_PAGE;
                     let page_count =
                         APPS.len().saturating_sub(page_start).min(ICONS_PER_PAGE);
                     selected = (selected + 1) % page_count.max(1);
+                    audio.send(AudioCmd::PlaySfx(SfxId::Click));
                 }
                 InputEvent::ButtonPress(Button::Confirm) if classic_view == ClassicView::Dashboard => {
+                    audio.send(AudioCmd::PlaySfx(SfxId::Navigate));
                     let idx = page * ICONS_PER_PAGE + selected;
                     if idx < APPS.len() {
                         let app = &APPS[idx];
@@ -689,9 +708,11 @@ fn psp_main() {
                 // Trigger cycling.
                 InputEvent::TriggerPress(Trigger::Left) if classic_view == ClassicView::Dashboard => {
                     top_tab = top_tab.next();
+                    audio.send(AudioCmd::PlaySfx(SfxId::Click));
                 }
                 InputEvent::TriggerPress(Trigger::Right) if classic_view == ClassicView::Dashboard => {
                     media_tab = media_tab.next();
+                    audio.send(AudioCmd::PlaySfx(SfxId::Click));
                 }
 
                 // -- Terminal input --
@@ -1091,13 +1112,22 @@ fn psp_main() {
                 match classic_view {
                     ClassicView::Dashboard => {
                         if !icons_hidden {
-                            draw_dashboard(&mut backend, selected, page);
+                            draw_dashboard(&mut backend, selected, page, viz_frame);
                         }
+                        draw_button_hints(&mut backend, &[
+                            ("X", "Open"), ("O", "Hide"),
+                            ("Start", "Term"), ("Sel", "Desktop"),
+                            ("L/R", "Tabs"),
+                        ]);
                     }
                     ClassicView::Terminal => {
                         backend.force_bitmap_font = true;
                         draw_terminal(&mut backend, &term_lines, &term_input);
                         backend.force_bitmap_font = false;
+                        draw_button_hints(&mut backend, &[
+                            ("X", "Run"), ("[]", "OSK"),
+                            ("Start", "Back"), ("Up", "Help"),
+                        ]);
                     }
                     ClassicView::FileManager => {
                         backend.force_bitmap_font = true;
@@ -1109,10 +1139,17 @@ fn psp_main() {
                             fm_scroll,
                         );
                         backend.force_bitmap_font = false;
+                        draw_button_hints(&mut backend, &[
+                            ("X", "Open"), ("O", "Back"),
+                            ("[]", "Del"), ("^v", "Nav"),
+                        ]);
                     }
                     ClassicView::PhotoViewer => {
                         if pv_viewing {
                             draw_photo_view(&mut backend, pv_tex, pv_img_w, pv_img_h);
+                            draw_button_hints(&mut backend, &[
+                                ("O", "Back"),
+                            ]);
                         } else if pv_loading {
                             draw_loading_indicator(&mut backend, "Decoding image...");
                         } else {
@@ -1123,11 +1160,21 @@ fn psp_main() {
                                 pv_selected,
                                 pv_scroll,
                             );
+                            draw_button_hints(&mut backend, &[
+                                ("X", "View"), ("O", "Back"),
+                                ("^v", "Nav"),
+                            ]);
                         }
                     }
                     ClassicView::MusicPlayer => {
                         if audio.is_playing() {
-                            draw_music_player_threaded(&mut backend, &mp_file_name, &audio);
+                            draw_music_player_threaded(
+                                &mut backend, &mp_file_name, &audio, viz_frame,
+                            );
+                            draw_button_hints(&mut backend, &[
+                                ("X", "Pause"), ("[]", "Stop"),
+                                ("^v", "Back"),
+                            ]);
                         } else {
                             draw_music_browser(
                                 &mut backend,
@@ -1136,6 +1183,10 @@ fn psp_main() {
                                 mp_selected,
                                 mp_scroll,
                             );
+                            draw_button_hints(&mut backend, &[
+                                ("X", "Play"), ("O", "Back"),
+                                ("^v", "Nav"),
+                            ]);
                         }
                     }
                 }
@@ -1144,7 +1195,7 @@ fn psp_main() {
             AppMode::Desktop => {
                 // Draw dashboard icons behind windows.
                 if !icons_hidden {
-                    draw_dashboard(&mut backend, selected, page);
+                    draw_dashboard(&mut backend, selected, page, viz_frame);
                 }
 
                 // Pre-compute values for windowed app renderers.
@@ -1216,15 +1267,42 @@ fn psp_main() {
                 );
 
                 backend.force_bitmap_font = false;
-
-                // Desktop mode taskbar at bottom.
-                draw_desktop_taskbar(&mut backend, &wm);
             }
         }
 
         // Status bar + bottom bar (always visible, drawn on top).
         draw_status_bar(&mut backend, top_tab, &status, &sysinfo);
-        draw_bottom_bar(&mut backend, media_tab, &audio, viz_frame, &status);
+
+        let url_text = match (app_mode, classic_view) {
+            (AppMode::Desktop, _) => String::from("SYS://DESKTOP"),
+            (_, ClassicView::Dashboard) => String::from("SYS://DASHBOARD"),
+            (_, ClassicView::Terminal) => String::from("SYS://TERMINAL"),
+            (_, ClassicView::FileManager) => {
+                let path_part = if fm_path.len() > 14 {
+                    &fm_path[fm_path.len() - 14..]
+                } else {
+                    &fm_path
+                };
+                format!("MSO:/{}", path_part)
+            }
+            (_, ClassicView::PhotoViewer) => String::from("SYS://PHOTOS"),
+            (_, ClassicView::MusicPlayer) => {
+                if audio.is_playing() {
+                    String::from("SYS://NOW_PLAY")
+                } else {
+                    String::from("SYS://MUSIC")
+                }
+            }
+        };
+        let desktop_wm = if app_mode == AppMode::Desktop {
+            Some(&wm)
+        } else {
+            None
+        };
+        draw_bottom_bar(
+            &mut backend, media_tab, &audio, viz_frame, &status,
+            &url_text, desktop_wm,
+        );
         viz_frame = viz_frame.wrapping_add(1);
 
         // Cursor (always on top).
@@ -1307,14 +1385,15 @@ fn handle_wm_event(
     }
 }
 
-/// Draw the desktop mode taskbar showing open windows.
-fn draw_desktop_taskbar(backend: &mut PspBackend, wm: &WindowManager) {
-    let bar_y = BOTTOMBAR_Y;
-    backend.fill_rect_inner(0, bar_y, SCREEN_WIDTH, TASKBAR_H, Color::rgba(0, 0, 0, 160));
-    backend.fill_rect_inner(0, bar_y, SCREEN_WIDTH, 1, Color::rgba(255, 255, 255, 40));
+/// Draw desktop window tabs in the bottom bar lower row.
+fn draw_desktop_taskbar_row(backend: &mut PspBackend, wm: &WindowManager) {
+    let y = BOTTOM_LOWER_Y + 2;
+
+    // L hint.
+    backend.draw_text_inner("<L", 4, BOTTOM_LOWER_Y + 4, 8, L_HINT_CLR);
 
     let active_id = wm.active_window();
-    let mut tx = 4i32;
+    let mut tx = 24i32;
 
     for app in APPS {
         if wm.get_window(app.id).is_some() {
@@ -1326,12 +1405,24 @@ fn draw_desktop_taskbar(backend: &mut PspBackend, wm: &WindowManager) {
             };
             if is_active {
                 let label_w = (app.title.len() as i32 * 8 + 8) as u32;
-                backend.fill_rect_inner(tx - 2, bar_y + 1, label_w, TASKBAR_H - 2, Color::rgba(60, 90, 160, 140));
+                backend.fill_rect_inner(
+                    tx - 2, y, label_w, 12,
+                    Color::rgba(60, 90, 160, 140),
+                );
             }
-            backend.draw_text_inner(app.title, tx + 2, bar_y, 8, label_clr);
+            backend.draw_text_inner(app.title, tx + 2, y + 1, 8, label_clr);
             tx += app.title.len() as i32 * 8 + 12;
         }
     }
+
+    // R hint.
+    backend.draw_text_inner(
+        "R>",
+        SCREEN_WIDTH as i32 - R_HINT_W,
+        BOTTOM_LOWER_Y + 4,
+        8,
+        R_HINT_CLR,
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -1690,7 +1781,12 @@ fn draw_loading_indicator(backend: &mut PspBackend, msg: &str) {
 // Dashboard rendering
 // ---------------------------------------------------------------------------
 
-fn draw_dashboard(backend: &mut PspBackend, selected: usize, page: usize) {
+fn draw_dashboard(
+    backend: &mut PspBackend,
+    selected: usize,
+    page: usize,
+    viz_frame: u32,
+) {
     let page_start = page * ICONS_PER_PAGE;
     let page_end = (page_start + ICONS_PER_PAGE).min(APPS.len());
     let page_count = page_end - page_start;
@@ -1706,14 +1802,15 @@ fn draw_dashboard(backend: &mut PspBackend, selected: usize, page: usize) {
 
         draw_icon(backend, app, ix, iy);
 
-        // Label below icon (centered under cell).
+        // Label below icon with drop shadow.
         let label_y = iy + ICON_H as i32 + ICON_LABEL_PAD;
         let text_width = (app.title.len() as i32) * CHAR_W;
         let label_x = cell_x + (CELL_W - text_width) / 2;
+        backend.draw_text_inner(app.title, label_x + 1, label_y + 1, 8, LABEL_SHADOW);
         backend.draw_text_inner(app.title, label_x, label_y, 8, LABEL_CLR);
     }
 
-    // Cursor highlight around selected icon.
+    // Pulsing border around selected icon.
     if page_count > 0 && selected < page_count {
         let sel_col = (selected % GRID_COLS) as i32;
         let sel_row = (selected / GRID_COLS) as i32;
@@ -1721,13 +1818,22 @@ fn draw_dashboard(backend: &mut PspBackend, selected: usize, page: usize) {
         let cell_y = CONTENT_TOP as i32 + GRID_PAD_Y + sel_row * CELL_H;
         let ix = cell_x + (CELL_W - ICON_W as i32) / 2;
         let iy = cell_y + 1;
-        backend.fill_rect_inner(
-            ix - CURSOR_PAD,
-            iy - CURSOR_PAD,
-            ICON_W + CURSOR_PAD as u32 * 2,
-            ICON_H + CURSOR_PAD as u32 * 2,
-            HIGHLIGHT_CLR,
-        );
+
+        let pulse =
+            ((libm::sinf(viz_frame as f32 * 0.08) + 1.0) * 0.5 * 80.0) as u8;
+        let sel_clr = Color::rgba(255, 255, 255, 60 + pulse);
+        let bx = ix - CURSOR_PAD;
+        let by = iy - CURSOR_PAD;
+        let bw = ICON_W + CURSOR_PAD as u32 * 2;
+        let bh = ICON_H + CURSOR_PAD as u32 * 2;
+        // Top edge.
+        backend.fill_rect_inner(bx, by, bw, 2, sel_clr);
+        // Bottom edge.
+        backend.fill_rect_inner(bx, by + bh as i32 - 2, bw, 2, sel_clr);
+        // Left edge.
+        backend.fill_rect_inner(bx, by, 2, bh, sel_clr);
+        // Right edge.
+        backend.fill_rect_inner(bx + bw as i32 - 2, by, 2, bh, sel_clr);
     }
 }
 
@@ -1747,6 +1853,8 @@ fn draw_icon(backend: &mut PspBackend, app: &AppEntry, ix: i32, iy: i32) {
     );
 
     let gfx_w = ICON_W - 2 * ICON_GFX_PAD;
+    let gx = ix + ICON_GFX_PAD as i32;
+    let gy = iy + ICON_STRIPE_H as i32 + 3;
     let c = app.color;
     let gfx_color = Color::rgba(
         c.r.saturating_add(30),
@@ -1754,13 +1862,76 @@ fn draw_icon(backend: &mut PspBackend, app: &AppEntry, ix: i32, iy: i32) {
         c.b.saturating_add(30),
         200,
     );
-    backend.fill_rect_inner(
-        ix + ICON_GFX_PAD as i32,
-        iy + ICON_STRIPE_H as i32 + 3,
-        gfx_w,
-        ICON_GFX_H,
-        gfx_color,
-    );
+    backend.fill_rect_inner(gx, gy, gfx_w, ICON_GFX_H, gfx_color);
+
+    // Per-app mini-graphic symbol.
+    draw_icon_graphic(backend, app.id, gx, gy, gfx_w, ICON_GFX_H);
+}
+
+/// Draw a recognizable per-app symbol inside the icon graphic area.
+fn draw_icon_graphic(
+    backend: &mut PspBackend,
+    app_id: &str,
+    gx: i32,
+    gy: i32,
+    gw: u32,
+    gh: u32,
+) {
+    let s = ICON_SYM_CLR;
+    let cx = gx + gw as i32 / 2;
+    let cy = gy + gh as i32 / 2;
+
+    match app_id {
+        "filemgr" => {
+            // Folder: body rect + tab on top-left.
+            backend.fill_rect_inner(cx - 8, cy - 2, 16, 8, s);
+            backend.fill_rect_inner(cx - 8, cy - 5, 7, 3, s);
+        }
+        "settings" => {
+            // Gear: 3x3 cross pattern (5 fill_rects).
+            backend.fill_rect_inner(cx - 5, cy - 1, 10, 3, s);
+            backend.fill_rect_inner(cx - 1, cy - 5, 3, 10, s);
+            backend.fill_rect_inner(cx - 4, cy - 4, 3, 3, s);
+            backend.fill_rect_inner(cx + 2, cy - 4, 3, 3, s);
+            backend.fill_rect_inner(cx - 4, cy + 2, 3, 3, s);
+        }
+        "network" => {
+            // WiFi arcs: 3 horizontal bars widening bottom-up.
+            backend.fill_rect_inner(cx - 2, cy + 2, 5, 2, s);
+            backend.fill_rect_inner(cx - 5, cy - 1, 11, 2, s);
+            backend.fill_rect_inner(cx - 8, cy - 4, 17, 2, s);
+        }
+        "terminal" => {
+            // >_ prompt text.
+            backend.draw_text_inner(">_", cx - 8, cy - 4, 8, s);
+        }
+        "music" => {
+            // Music note: stem + filled head.
+            backend.fill_rect_inner(cx + 2, cy - 5, 2, 10, s);
+            backend.fill_rect_inner(cx - 3, cy + 2, 5, 3, s);
+        }
+        "photos" => {
+            // Mountain/landscape: stepped pyramid.
+            backend.fill_rect_inner(cx - 8, cy + 2, 17, 2, s);
+            backend.fill_rect_inner(cx - 5, cy - 1, 11, 3, s);
+            backend.fill_rect_inner(cx - 2, cy - 4, 5, 3, s);
+        }
+        "packages" => {
+            // Box/crate: outlined rect + cross divider.
+            backend.fill_rect_inner(cx - 7, cy - 5, 15, 1, s);
+            backend.fill_rect_inner(cx - 7, cy + 4, 15, 1, s);
+            backend.fill_rect_inner(cx - 7, cy - 5, 1, 10, s);
+            backend.fill_rect_inner(cx + 7, cy - 5, 1, 10, s);
+            backend.fill_rect_inner(cx, cy - 5, 1, 10, s);
+        }
+        "sysmon" => {
+            // Bar chart: 3 vertical bars at different heights.
+            backend.fill_rect_inner(cx - 6, cy, 4, 5, s);
+            backend.fill_rect_inner(cx - 1, cy - 3, 4, 8, s);
+            backend.fill_rect_inner(cx + 4, cy - 5, 4, 10, s);
+        }
+        _ => {}
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1774,9 +1945,12 @@ fn draw_status_bar(
     sysinfo: &SystemInfo,
 ) {
     backend.fill_rect_inner(0, 0, SCREEN_WIDTH, STATUSBAR_H, STATUSBAR_BG);
+    // Gradient simulation: highlight strips at top.
+    backend.fill_rect_inner(0, 0, SCREEN_WIDTH, 1, Color::rgba(255, 255, 255, 20));
+    backend.fill_rect_inner(0, 1, SCREEN_WIDTH, 1, Color::rgba(255, 255, 255, 10));
     backend.fill_rect_inner(0, STATUSBAR_H as i32 - 1, SCREEN_WIDTH, 1, SEPARATOR);
 
-    // -- Left side: battery percentage + CPU MHz + version --
+    // -- Left side: battery percentage + charging bolt + WiFi + CPU MHz --
 
     // Battery percentage (color-coded).
     let bat_label = if status.battery_percent >= 0 {
@@ -1794,11 +1968,32 @@ fn draw_status_bar(
         BATTERY_CLR
     };
     backend.draw_text_inner(&bat_label, 6, 5, 8, bat_color);
-
-    // CPU MHz with filled-square indicator (matching PSIX reference).
     let bat_w = bat_label.len() as i32 * CHAR_W;
-    let mhz_x = 6 + bat_w + 8;
-    // Draw small filled square indicator (4x4 px).
+
+    // Charging bolt indicator (Z shape) when battery is charging.
+    let mut next_x = 6 + bat_w + 4;
+    if status.battery_charging {
+        let bolt_clr = Color::rgb(255, 220, 60);
+        backend.fill_rect_inner(next_x + 1, 5, 3, 2, bolt_clr);
+        backend.fill_rect_inner(next_x, 7, 3, 2, bolt_clr);
+        backend.fill_rect_inner(next_x - 1, 9, 3, 2, bolt_clr);
+        next_x += 7;
+    }
+
+    // WiFi indicator square.
+    let wifi_x = next_x;
+    if status.wifi_on {
+        backend.fill_rect_inner(wifi_x, 7, 5, 5, Color::rgb(100, 200, 255));
+    } else {
+        let off = Color::rgb(100, 100, 100);
+        backend.fill_rect_inner(wifi_x, 7, 5, 1, off);
+        backend.fill_rect_inner(wifi_x, 11, 5, 1, off);
+        backend.fill_rect_inner(wifi_x, 7, 1, 5, off);
+        backend.fill_rect_inner(wifi_x + 4, 7, 1, 5, off);
+    }
+
+    // CPU MHz with filled-square indicator.
+    let mhz_x = wifi_x + 8;
     backend.fill_rect_inner(mhz_x, 7, 5, 5, Color::WHITE);
     let mhz_label = format!("{} MHZ", sysinfo.cpu_mhz);
     backend.draw_text_inner(&mhz_label, mhz_x + 8, 5, 8, Color::WHITE);
@@ -1809,11 +2004,12 @@ fn draw_status_bar(
     let ver_x = (SCREEN_WIDTH as i32 - ver_w) / 2;
     backend.draw_text_inner(ver_label, ver_x, 5, 8, Color::WHITE);
 
-    // -- Right side: time + full date --
+    // -- Right side: time + day-of-week + full date --
     let date_label = format!(
-        "{:02}:{:02} {} {}, {}",
+        "{:02}:{:02} {} {} {}, {}",
         status.hour,
         status.minute,
+        status.day_of_week,
         status.month_name(),
         status.day,
         status.year,
@@ -1863,10 +2059,16 @@ fn draw_bottom_bar(
     audio: &AudioHandle,
     viz_frame: u32,
     status: &StatusBarInfo,
+    url_text: &str,
+    desktop_wm: Option<&WindowManager>,
 ) {
-    // Full 32px bottom bar background.
+    // Full 32px bottom bar background with gradient simulation.
     backend.fill_rect_inner(0, BOTTOMBAR_Y, SCREEN_WIDTH, BOTTOMBAR_H, BAR_BG);
     backend.fill_rect_inner(0, BOTTOMBAR_Y, SCREEN_WIDTH, 1, SEPARATOR);
+    backend.fill_rect_inner(
+        0, BOTTOMBAR_Y + 1, SCREEN_WIDTH, 1,
+        Color::rgba(255, 255, 255, 15),
+    );
 
     // -- Upper row (y=BOTTOM_UPPER_Y, 16px): URL bezel | Visualizer | Media tabs bezel --
 
@@ -1876,7 +2078,14 @@ fn draw_bottom_bar(
     let ubz_y = BOTTOM_UPPER_Y + 1;
     let ubz_h = BOTTOM_UPPER_H - 2;
     draw_chrome_bezel(backend, url_bx, ubz_y, url_bw, ubz_h);
-    backend.draw_text_inner("HTTP://OASIS.LOCAL", 6, BOTTOM_UPPER_Y + 4, 8, URL_CLR);
+    // Truncate URL text to fit bezel (max 16 chars).
+    let max_url = 16;
+    let display_url = if url_text.len() > max_url {
+        &url_text[..max_url]
+    } else {
+        url_text
+    };
+    backend.draw_text_inner(display_url, 6, BOTTOM_UPPER_Y + 4, 8, URL_CLR);
 
     // Visualizer (center of upper row).
     draw_visualizer(backend, audio, viz_frame);
@@ -1910,28 +2119,29 @@ fn draw_bottom_bar(
         }
     }
 
-    // -- Lower row (y=BOTTOM_LOWER_Y, 16px): L hint | transport | USB | battery bar | R hint --
+    // -- Lower row (y=BOTTOM_LOWER_Y, 16px) --
     backend.fill_rect_inner(
         0, BOTTOM_LOWER_Y, SCREEN_WIDTH, 1,
         Color::rgba(255, 255, 255, 20),
     );
 
-    // L hint.
-    backend.draw_text_inner("<L", 4, BOTTOM_LOWER_Y + 4, 8, L_HINT_CLR);
-
-    // Transport controls.
-    draw_transport_controls(backend, audio);
-
-    // USB label.
-    backend.draw_text_inner("USB", 250, BOTTOM_LOWER_Y + 4, 8, USB_CLR);
-
-    // Battery bar.
-    draw_battery_bar(backend, status);
-
-    // R hint.
-    backend.draw_text_inner(
-        "R>", SCREEN_WIDTH as i32 - R_HINT_W, BOTTOM_LOWER_Y + 4, 8, R_HINT_CLR,
-    );
+    if let Some(wm) = desktop_wm {
+        // Desktop mode: show window tab buttons in lower row.
+        draw_desktop_taskbar_row(backend, wm);
+    } else {
+        // Classic mode: transport | USB | battery bar.
+        backend.draw_text_inner("<L", 4, BOTTOM_LOWER_Y + 4, 8, L_HINT_CLR);
+        draw_transport_controls(backend, audio);
+        backend.draw_text_inner("USB", 250, BOTTOM_LOWER_Y + 4, 8, USB_CLR);
+        draw_battery_bar(backend, status);
+        backend.draw_text_inner(
+            "R>",
+            SCREEN_WIDTH as i32 - R_HINT_W,
+            BOTTOM_LOWER_Y + 4,
+            8,
+            R_HINT_CLR,
+        );
+    }
 }
 
 /// Draw animated music visualizer bars in center of upper bottom row.
@@ -1947,19 +2157,25 @@ fn draw_visualizer(
 
     for i in 0..VIZ_BAR_COUNT {
         let bar_h = if playing {
-            // Animated bars using sinf with different frequencies/phases.
+            // Composite waveform: two sine waves per bar.
             let t = viz_frame as f32 * 0.12;
-            let freq = 0.7 + (i as f32) * 0.3;
+            let freq1 = 0.7 + (i as f32) * 0.3;
+            let freq2 = 1.4 + (i as f32) * 0.15;
             let phase = (i as f32) * 1.1;
-            let val = libm::sinf(t * freq + phase);
-            let norm = (val + 1.0) * 0.5; // 0..1
+            let val = libm::sinf(t * freq1 + phase) * 0.6
+                + libm::sinf(t * freq2 + phase * 0.7) * 0.4;
+            let norm = (val + 1.0) * 0.5;
             VIZ_BAR_MIN_H + ((VIZ_BAR_MAX_H - VIZ_BAR_MIN_H) as f32 * norm) as i32
         } else {
             VIZ_BAR_MIN_H
         };
         let bx = viz_x + i * (VIZ_BAR_W + VIZ_BAR_GAP);
         let by = viz_base_y - bar_h;
-        backend.fill_rect_inner(bx, by, VIZ_BAR_W as u32, bar_h as u32, VIZ_BAR_CLR);
+        // Per-bar color tint for visual interest.
+        let r = (120 + ((i * 4) as u8).min(40)) as u8;
+        let b = (160 + ((i * 3) as u8).min(30)) as u8;
+        let bar_clr = Color::rgba(r, 60, b, 200);
+        backend.fill_rect_inner(bx, by, VIZ_BAR_W as u32, bar_h as u32, bar_clr);
         // Peak highlight (top 1px).
         if bar_h > 1 {
             backend.fill_rect_inner(bx, by, VIZ_BAR_W as u32, 1, VIZ_BAR_PEAK);
@@ -2031,6 +2247,12 @@ fn draw_battery_bar(backend: &mut PspBackend, status: &StatusBarInfo) {
         Color::rgba(20, 20, 20, 180),
     );
 
+    // Battery nub on right side.
+    backend.fill_rect_inner(
+        bar_x + bar_w as i32, bar_y + 2, 2, 4,
+        Color::rgba(200, 200, 200, 140),
+    );
+
     // Colored fill proportional to battery_percent.
     let pct = if status.battery_percent >= 0 {
         status.battery_percent.min(100) as u32
@@ -2050,13 +2272,52 @@ fn draw_battery_bar(backend: &mut PspBackend, status: &StatusBarInfo) {
     }
 }
 
-/// Draw a chrome/metallic bezel (fill + 4 edges).
+/// Draw a chrome/metallic bezel (fill + 4 corner-trimmed edges).
 fn draw_chrome_bezel(backend: &mut PspBackend, x: i32, y: i32, w: u32, h: u32) {
     backend.fill_rect_inner(x, y, w, h, BEZEL_FILL);
-    backend.fill_rect_inner(x, y, w, 1, BEZEL_TOP);
-    backend.fill_rect_inner(x, y + h as i32 - 1, w, 1, BEZEL_BOTTOM);
-    backend.fill_rect_inner(x, y, 1, h, BEZEL_LEFT);
-    backend.fill_rect_inner(x + w as i32 - 1, y, 1, h, BEZEL_RIGHT);
+    // Top/bottom edges trimmed 1px each side for pseudo-rounded corners.
+    backend.fill_rect_inner(x + 1, y, w - 2, 1, BEZEL_TOP);
+    backend.fill_rect_inner(x + 1, y + h as i32 - 1, w - 2, 1, BEZEL_BOTTOM);
+    // Left/right edges trimmed 1px each end.
+    backend.fill_rect_inner(x, y + 1, 1, h - 2, BEZEL_LEFT);
+    backend.fill_rect_inner(x + w as i32 - 1, y + 1, 1, h - 2, BEZEL_RIGHT);
+}
+
+// ---------------------------------------------------------------------------
+// Shared UI helpers (button hints, view headers)
+// ---------------------------------------------------------------------------
+
+/// Draw contextual button hints at the bottom of the content area.
+fn draw_button_hints(backend: &mut PspBackend, hints: &[(&str, &str)]) {
+    let y = BOTTOMBAR_Y - HINT_Y_OFFSET;
+    backend.fill_rect_inner(
+        0, y, SCREEN_WIDTH, HINT_Y_OFFSET as u32, HINT_BG,
+    );
+    let mut x = 6i32;
+    for (btn, label) in hints {
+        backend.draw_text_inner(btn, x, y + 1, 8, HINT_BTN_CLR);
+        x += btn.len() as i32 * 8 + 2;
+        backend.draw_text_inner(label, x, y + 1, 8, HINT_TEXT_CLR);
+        x += label.len() as i32 * 8 + 10;
+    }
+}
+
+/// Draw a consistent view header with colored title and optional path.
+fn draw_view_header(
+    backend: &mut PspBackend,
+    title: &str,
+    title_clr: Color,
+    path: Option<&str>,
+) {
+    backend.draw_text_inner(title, 4, CONTENT_TOP as i32 + 3, 8, title_clr);
+    if let Some(p) = path {
+        let path_x = 4 + title.len() as i32 * 8 + 8;
+        backend.draw_text_inner(p, path_x, CONTENT_TOP as i32 + 3, 8, Color::rgb(160, 160, 160));
+    }
+    backend.fill_rect_inner(
+        0, FM_START_Y - 2, SCREEN_WIDTH, 1,
+        Color::rgba(255, 255, 255, 40),
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -2098,17 +2359,10 @@ fn draw_file_manager(
     let bg = Color::rgba(0, 0, 0, 200);
     backend.fill_rect_inner(0, CONTENT_TOP as i32, SCREEN_WIDTH, CONTENT_H, bg);
 
-    backend.draw_text_inner(path, 4, CONTENT_TOP as i32 + 3, 8, Color::rgb(100, 200, 255));
-
-    let header_y = CONTENT_TOP as i32 + 3;
-    backend.draw_text_inner("SIZE", 400, header_y, 8, Color::rgb(160, 160, 160));
-
-    backend.fill_rect_inner(
-        0,
-        FM_START_Y - 2,
-        SCREEN_WIDTH,
-        1,
-        Color::rgba(255, 255, 255, 40),
+    draw_view_header(backend, "FILE MGR", Color::rgb(100, 200, 255), Some(path));
+    backend.draw_text_inner(
+        "SIZE", 400, CONTENT_TOP as i32 + 3, 8,
+        Color::rgb(160, 160, 160),
     );
 
     if entries.is_empty() {
@@ -2176,13 +2430,13 @@ fn draw_photo_browser(
     let bg = Color::rgba(0, 0, 0, 200);
     backend.fill_rect_inner(0, CONTENT_TOP as i32, SCREEN_WIDTH, CONTENT_H, bg);
 
-    backend.draw_text_inner("PHOTO VIEWER", 4, CONTENT_TOP as i32 + 3, 8, Color::rgb(100, 149, 237));
-    backend.draw_text_inner(path, 110, CONTENT_TOP as i32 + 3, 8, Color::rgb(160, 160, 160));
-
-    backend.fill_rect_inner(0, FM_START_Y - 2, SCREEN_WIDTH, 1, Color::rgba(255, 255, 255, 40));
+    draw_view_header(backend, "PHOTO VIEWER", Color::rgb(100, 149, 237), Some(path));
 
     if entries.is_empty() {
-        backend.draw_text_inner("No images found (.jpg/.jpeg)", 8, FM_START_Y, 8, Color::rgb(140, 140, 140));
+        backend.draw_text_inner(
+            "No images found (.jpg/.jpeg)", 8, FM_START_Y, 8,
+            Color::rgb(140, 140, 140),
+        );
         return;
     }
 
@@ -2193,7 +2447,10 @@ fn draw_photo_browser(
         let y = FM_START_Y + row * FM_ROW_H;
 
         if i == selected {
-            backend.fill_rect_inner(0, y - 1, SCREEN_WIDTH, FM_ROW_H as u32, Color::rgba(80, 120, 200, 100));
+            backend.fill_rect_inner(
+                0, y - 1, SCREEN_WIDTH, FM_ROW_H as u32,
+                Color::rgba(80, 120, 200, 100),
+            );
         }
 
         let (prefix, prefix_clr) = if entry.is_dir {
@@ -2222,6 +2479,17 @@ fn draw_photo_browser(
             let size_x = 480 - (size_str.len() as i32 * 8) - 4;
             backend.draw_text_inner(&size_str, size_x, y, 8, Color::rgb(180, 180, 180));
         }
+    }
+
+    // Scrollbar.
+    if entries.len() > FM_VISIBLE_ROWS {
+        let ratio = selected as f32 / (entries.len() - 1).max(1) as f32;
+        let track_h = CONTENT_H as i32 - 16;
+        let dot_y = FM_START_Y + (ratio * track_h as f32) as i32;
+        backend.fill_rect_inner(
+            SCREEN_WIDTH as i32 - 4, dot_y, 3, 8,
+            Color::rgba(255, 255, 255, 120),
+        );
     }
 }
 
@@ -2264,13 +2532,13 @@ fn draw_music_browser(
     let bg = Color::rgba(0, 0, 0, 200);
     backend.fill_rect_inner(0, CONTENT_TOP as i32, SCREEN_WIDTH, CONTENT_H, bg);
 
-    backend.draw_text_inner("MUSIC PLAYER", 4, CONTENT_TOP as i32 + 3, 8, Color::rgb(205, 92, 92));
-    backend.draw_text_inner(path, 110, CONTENT_TOP as i32 + 3, 8, Color::rgb(160, 160, 160));
-
-    backend.fill_rect_inner(0, FM_START_Y - 2, SCREEN_WIDTH, 1, Color::rgba(255, 255, 255, 40));
+    draw_view_header(backend, "MUSIC PLAYER", Color::rgb(205, 92, 92), Some(path));
 
     if entries.is_empty() {
-        backend.draw_text_inner("No MP3 files found", 8, FM_START_Y, 8, Color::rgb(140, 140, 140));
+        backend.draw_text_inner(
+            "No MP3 files found", 8, FM_START_Y, 8,
+            Color::rgb(140, 140, 140),
+        );
         return;
     }
 
@@ -2281,7 +2549,10 @@ fn draw_music_browser(
         let y = FM_START_Y + row * FM_ROW_H;
 
         if i == selected {
-            backend.fill_rect_inner(0, y - 1, SCREEN_WIDTH, FM_ROW_H as u32, Color::rgba(200, 80, 80, 100));
+            backend.fill_rect_inner(
+                0, y - 1, SCREEN_WIDTH, FM_ROW_H as u32,
+                Color::rgba(200, 80, 80, 100),
+            );
         }
 
         let (prefix, prefix_clr) = if entry.is_dir {
@@ -2311,6 +2582,17 @@ fn draw_music_browser(
             backend.draw_text_inner(&size_str, size_x, y, 8, Color::rgb(180, 180, 180));
         }
     }
+
+    // Scrollbar.
+    if entries.len() > FM_VISIBLE_ROWS {
+        let ratio = selected as f32 / (entries.len() - 1).max(1) as f32;
+        let track_h = CONTENT_H as i32 - 16;
+        let dot_y = FM_START_Y + (ratio * track_h as f32) as i32;
+        backend.fill_rect_inner(
+            SCREEN_WIDTH as i32 - 4, dot_y, 3, 8,
+            Color::rgba(255, 255, 255, 120),
+        );
+    }
 }
 
 /// Draw the now-playing music player UI (using threaded AudioHandle).
@@ -2318,6 +2600,7 @@ fn draw_music_player_threaded(
     backend: &mut PspBackend,
     file_name: &str,
     audio: &AudioHandle,
+    viz_frame: u32,
 ) {
     let bg = Color::rgba(0, 0, 0, 210);
     backend.fill_rect_inner(0, CONTENT_TOP as i32, SCREEN_WIDTH, CONTENT_H, bg);
@@ -2326,13 +2609,19 @@ fn draw_music_player_threaded(
     let title_color = Color::rgb(255, 200, 200);
     let info_color = Color::rgb(180, 180, 180);
 
+    // Now-playing visualizer above album art.
+    draw_now_playing_visualizer(backend, audio, viz_frame);
+
     // Album art placeholder.
-    let art_size: u32 = 80;
+    let art_size: u32 = 70;
     let art_x = cx - art_size as i32 / 2;
-    let art_y = CONTENT_TOP as i32 + 20;
+    let art_y = CONTENT_TOP as i32 + 44;
     backend.fill_rect_inner(art_x, art_y, art_size, art_size, Color::rgb(205, 92, 92));
-    backend.fill_rect_inner(art_x + 2, art_y + 2, art_size - 4, art_size - 4, Color::rgb(60, 30, 30));
-    backend.draw_text_inner("MP3", art_x + 22, art_y + 34, 8, Color::rgb(205, 92, 92));
+    backend.fill_rect_inner(
+        art_x + 2, art_y + 2, art_size - 4, art_size - 4,
+        Color::rgb(60, 30, 30),
+    );
+    backend.draw_text_inner("MP3", art_x + 22, art_y + 28, 8, Color::rgb(205, 92, 92));
 
     // Track name.
     let max_chars = 50;
@@ -2343,7 +2632,9 @@ fn draw_music_player_threaded(
         file_name.to_string()
     };
     let name_x = cx - (display_name.len() as i32 * 8) / 2;
-    backend.draw_text_inner(&display_name, name_x, art_y + art_size as i32 + 12, 8, title_color);
+    backend.draw_text_inner(
+        &display_name, name_x, art_y + art_size as i32 + 8, 8, title_color,
+    );
 
     // Format info from atomic state.
     let info = format!(
@@ -2353,7 +2644,35 @@ fn draw_music_player_threaded(
         audio.channels(),
     );
     let info_x = cx - (info.len() as i32 * 8) / 2;
-    backend.draw_text_inner(&info, info_x, art_y + art_size as i32 + 26, 8, info_color);
+    backend.draw_text_inner(&info, info_x, art_y + art_size as i32 + 20, 8, info_color);
+
+    // Progress bar.
+    let pos = audio.position_ms();
+    let dur = audio.duration_ms();
+    let bar_w: u32 = 260;
+    let bar_x = cx - bar_w as i32 / 2;
+    let bar_y = art_y + art_size as i32 + 32;
+
+    // Track bar outline.
+    backend.fill_rect_inner(bar_x, bar_y, bar_w, 4, Color::rgba(80, 80, 80, 180));
+    // Fill.
+    if dur > 0 {
+        let fill = ((bar_w as u64 * pos) / dur).min(bar_w as u64) as u32;
+        if fill > 0 {
+            backend.fill_rect_inner(
+                bar_x, bar_y, fill, 4, Color::rgb(205, 92, 92),
+            );
+        }
+    }
+    // Time labels.
+    let pos_s = (pos / 1000) as u32;
+    let dur_s = (dur / 1000) as u32;
+    let time_str = format!(
+        "{}:{:02} / {}:{:02}",
+        pos_s / 60, pos_s % 60, dur_s / 60, dur_s % 60,
+    );
+    let time_x = cx - (time_str.len() as i32 * 8) / 2;
+    backend.draw_text_inner(&time_str, time_x, bar_y + 6, 8, info_color);
 
     let status = if audio.is_paused() { "PAUSED" } else { "PLAYING" };
     let status_clr = if audio.is_paused() {
@@ -2362,11 +2681,48 @@ fn draw_music_player_threaded(
         Color::rgb(120, 255, 120)
     };
     let status_x = cx - (status.len() as i32 * 8) / 2;
-    backend.draw_text_inner(status, status_x, art_y + art_size as i32 + 44, 8, status_clr);
+    backend.draw_text_inner(status, status_x, bar_y + 20, 8, status_clr);
+}
 
-    let hint = "X:Pause  []:Stop  O:Back";
-    let hint_x = cx - (hint.len() as i32 * 8) / 2;
-    backend.draw_text_inner(hint, hint_x, BOTTOMBAR_Y - 16, 8, Color::rgb(140, 140, 140));
+/// Draw a larger visualizer for the now-playing music player view.
+fn draw_now_playing_visualizer(
+    backend: &mut PspBackend,
+    audio: &AudioHandle,
+    viz_frame: u32,
+) {
+    let bar_count: i32 = 20;
+    let bar_w: i32 = 6;
+    let bar_gap: i32 = 2;
+    let max_h: i32 = 30;
+    let min_h: i32 = 2;
+    let total_w = bar_count * (bar_w + bar_gap) - bar_gap;
+    let viz_x = (SCREEN_WIDTH as i32 - total_w) / 2;
+    let viz_base_y = CONTENT_TOP as i32 + 40;
+    let playing = audio.is_playing() && !audio.is_paused();
+
+    for i in 0..bar_count {
+        let bar_h = if playing {
+            let t = viz_frame as f32 * 0.12;
+            let freq1 = 0.7 + (i as f32) * 0.25;
+            let freq2 = 1.4 + (i as f32) * 0.15;
+            let phase = (i as f32) * 1.1;
+            let val = libm::sinf(t * freq1 + phase) * 0.6
+                + libm::sinf(t * freq2 + phase * 0.7) * 0.4;
+            let norm = (val + 1.0) * 0.5;
+            min_h + ((max_h - min_h) as f32 * norm) as i32
+        } else {
+            min_h
+        };
+        let bx = viz_x + i * (bar_w + bar_gap);
+        let by = viz_base_y - bar_h;
+        let r = (120 + ((i * 4) as u8).min(40)) as u8;
+        let b = (160 + ((i * 3) as u8).min(30)) as u8;
+        let bar_clr = Color::rgba(r, 60, b, 200);
+        backend.fill_rect_inner(bx, by, bar_w as u32, bar_h as u32, bar_clr);
+        if bar_h > 2 {
+            backend.fill_rect_inner(bx, by, bar_w as u32, 1, VIZ_BAR_PEAK);
+        }
+    }
 }
 
 // Command interpreter and utilities are in commands.rs module.

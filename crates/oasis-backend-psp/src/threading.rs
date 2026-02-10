@@ -274,6 +274,12 @@ fn audio_thread_fn() {
         if player.is_playing() && !player.is_paused() {
             // update() contains the blocking sceAudioOutputBlocking call.
             player.update();
+            // Publish position each frame.
+            {
+                let mut state = SHARED_AUDIO.lock();
+                state.position_ms = player.position_ms();
+                state.duration_ms = player.duration_ms();
+            }
             if !player.is_playing() {
                 SHARED_AUDIO.lock().playing = false;
             }

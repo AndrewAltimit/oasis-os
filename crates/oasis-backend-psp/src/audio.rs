@@ -25,6 +25,10 @@ pub struct AudioPlayer {
     pub sample_rate: u32,
     pub bitrate: u32,
     pub channels: u32,
+    /// Count of decoded MP3 frames (for position tracking).
+    pub frames_decoded: u32,
+    /// Total file size in bytes (for duration estimation).
+    pub data_size: u32,
 }
 
 impl AudioPlayer {
@@ -37,6 +41,8 @@ impl AudioPlayer {
             sample_rate: 0,
             bitrate: 0,
             channels: 0,
+            frames_decoded: 0,
+            data_size: 0,
         }
     }
 
@@ -76,6 +82,8 @@ impl AudioPlayer {
         self.sample_rate = decoder.sample_rate();
         self.bitrate = decoder.bitrate();
         self.channels = decoder.channels() as u32;
+        self.frames_decoded = 0;
+        self.data_size = data.len() as u32;
 
         let fmt = if self.channels == 1 {
             AudioFormat::Mono
@@ -122,6 +130,7 @@ impl AudioPlayer {
 
         match decoder.decode_frame() {
             Ok(samples) if !samples.is_empty() => {
+                self.frames_decoded += 1;
                 // output_blocking paces playback to hardware timing.
                 let _ = channel.output_blocking(0x8000, samples);
             }
@@ -152,6 +161,24 @@ impl AudioPlayer {
 
     pub fn is_paused(&self) -> bool {
         self.paused
+    }
+
+    /// Estimated playback position in milliseconds.
+    pub fn position_ms(&self) -> u64 {
+        if self.sample_rate == 0 {
+            return 0;
+        }
+        (self.frames_decoded as u64 * MP3_FRAME_SAMPLES as u64 * 1000)
+            / self.sample_rate as u64
+    }
+
+    /// Estimated total duration in milliseconds (from bitrate + file size).
+    pub fn duration_ms(&self) -> u64 {
+        if self.bitrate == 0 {
+            return 0;
+        }
+        // bitrate is in kbps, data_size in bytes.
+        (self.data_size as u64 * 8) / self.bitrate as u64
     }
 }
 
