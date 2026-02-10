@@ -70,9 +70,6 @@ fn compute_style(
 
     let parent_font_size = parent_style.map_or(16.0, |p| p.font_size);
 
-    // Apply element-specific default display.
-    apply_element_defaults(doc, node_id, &mut style);
-
     // Collect all matching declarations with their origin info.
     let mut matched = collect_matched_declarations(doc, node_id, stylesheets, inline_styles);
 
@@ -189,172 +186,6 @@ fn matching_specificity(doc: &Document, node_id: NodeId, rule: &Rule) -> Option<
         }
     }
     best
-}
-
-// -----------------------------------------------------------------------
-// Element defaults (user-agent stylesheet equivalent)
-// -----------------------------------------------------------------------
-
-/// Apply default display/margin values based on the HTML tag name.
-///
-/// This acts as a minimal built-in user-agent stylesheet so that block
-/// elements render as blocks and headings have appropriate sizes without
-/// requiring an external stylesheet.
-fn apply_element_defaults(doc: &Document, node_id: NodeId, style: &mut ComputedStyle) {
-    use super::values::{Display, FontWeight, ListStyleType, TextDecoration};
-
-    let elem = match &doc.nodes[node_id].kind {
-        NodeKind::Element(e) => e,
-        _ => return,
-    };
-
-    let tag = elem.tag.as_str();
-    match tag {
-        // Block-level elements.
-        "html" | "body" | "div" | "main" | "section" | "article" | "nav" | "aside" | "header"
-        | "footer" | "figure" | "figcaption" | "address" | "details" | "summary" | "blockquote"
-        | "fieldset" | "form" => {
-            style.display = Display::Block;
-        },
-
-        // Paragraphs.
-        "p" => {
-            style.display = Display::Block;
-            style.margin_top = style.font_size;
-            style.margin_bottom = style.font_size;
-        },
-
-        // Headings.
-        "h1" => {
-            style.display = Display::Block;
-            style.font_size = 32.0;
-            style.font_weight = FontWeight::Bold;
-            style.line_height = style.font_size * 1.2;
-            style.margin_top = 21.44;
-            style.margin_bottom = 21.44;
-        },
-        "h2" => {
-            style.display = Display::Block;
-            style.font_size = 24.0;
-            style.font_weight = FontWeight::Bold;
-            style.line_height = style.font_size * 1.2;
-            style.margin_top = 19.92;
-            style.margin_bottom = 19.92;
-        },
-        "h3" => {
-            style.display = Display::Block;
-            style.font_size = 18.72;
-            style.font_weight = FontWeight::Bold;
-            style.line_height = style.font_size * 1.2;
-            style.margin_top = 18.72;
-            style.margin_bottom = 18.72;
-        },
-        "h4" => {
-            style.display = Display::Block;
-            style.font_size = 16.0;
-            style.font_weight = FontWeight::Bold;
-            style.line_height = style.font_size * 1.2;
-            style.margin_top = 21.28;
-            style.margin_bottom = 21.28;
-        },
-        "h5" => {
-            style.display = Display::Block;
-            style.font_size = 13.28;
-            style.font_weight = FontWeight::Bold;
-            style.line_height = style.font_size * 1.2;
-            style.margin_top = 22.18;
-            style.margin_bottom = 22.18;
-        },
-        "h6" => {
-            style.display = Display::Block;
-            style.font_size = 10.72;
-            style.font_weight = FontWeight::Bold;
-            style.line_height = style.font_size * 1.2;
-            style.margin_top = 24.97;
-            style.margin_bottom = 24.97;
-        },
-
-        // Lists.
-        "ul" | "ol" => {
-            style.display = Display::Block;
-            style.margin_top = style.font_size;
-            style.margin_bottom = style.font_size;
-            style.padding_left = 40.0;
-        },
-        "li" => {
-            style.display = Display::ListItem;
-            style.list_style_type = ListStyleType::Disc;
-        },
-
-        // Preformatted / code.
-        "pre" => {
-            style.display = Display::Block;
-            style.white_space = super::values::WhiteSpace::Pre;
-            style.font_family = super::values::FontFamily::Monospace;
-            style.margin_top = style.font_size;
-            style.margin_bottom = style.font_size;
-        },
-        "code" | "kbd" | "samp" => {
-            style.font_family = super::values::FontFamily::Monospace;
-        },
-
-        // Horizontal rule.
-        "hr" => {
-            style.display = Display::Block;
-            style.margin_top = 8.0;
-            style.margin_bottom = 8.0;
-            style.border_top_width = 1.0;
-            style.border_top_style = super::values::BorderStyle::Solid;
-            style.border_top_color = crate::backend::Color::rgb(128, 128, 128);
-        },
-
-        // Inline emphasis.
-        "b" | "strong" => {
-            style.font_weight = FontWeight::Bold;
-        },
-        "i" | "em" | "cite" => {
-            style.font_style = super::values::FontStyle::Italic;
-        },
-        "u" | "ins" => {
-            style.text_decoration = TextDecoration::Underline;
-        },
-        "s" | "del" => {
-            style.text_decoration = TextDecoration::LineThrough;
-        },
-
-        // Links.
-        "a" => {
-            style.color = crate::backend::Color::rgb(0, 0, 238);
-            style.text_decoration = TextDecoration::Underline;
-        },
-
-        // Table elements.
-        "table" => {
-            style.display = Display::Table;
-        },
-        "tr" => {
-            style.display = Display::TableRow;
-        },
-        "td" | "th" => {
-            style.display = Display::TableCell;
-            if tag == "th" {
-                style.font_weight = FontWeight::Bold;
-                style.text_align = super::values::TextAlign::Center;
-            }
-        },
-
-        // <br>, <img> etc. are inline.
-        "br" | "img" | "input" | "button" | "select" | "textarea" => {
-            style.display = Display::Inline;
-        },
-
-        // Head/script/style are hidden.
-        "head" | "script" | "style" | "link" | "meta" | "title" | "noscript" => {
-            style.display = Display::None;
-        },
-
-        _ => {},
-    }
 }
 
 // -----------------------------------------------------------------------
@@ -490,14 +321,130 @@ fn parent_element(doc: &Document, node_id: NodeId) -> Option<NodeId> {
 // Default (user-agent) stylesheet
 // -----------------------------------------------------------------------
 
-/// Return an empty built-in user-agent stylesheet.
+/// Return the built-in user-agent stylesheet.
 ///
-/// Element defaults are applied via `apply_element_defaults` during
-/// style computation, which is more efficient than parsing CSS text at
-/// runtime.
+/// This is the CSS2.1 default stylesheet for HTML elements. It
+/// participates in the normal cascade so author/skin stylesheets can
+/// override any rule using standard specificity rules.
 pub fn default_stylesheet() -> Stylesheet {
-    Stylesheet { rules: Vec::new() }
+    Stylesheet::parse(UA_CSS)
 }
+
+/// Minimal user-agent stylesheet following CSS 2.1 defaults.
+const UA_CSS: &str = r#"
+html, body, div, main, section, article, nav, aside,
+header, footer, figure, figcaption, address, details,
+summary, blockquote, fieldset, form {
+    display: block;
+}
+
+p {
+    display: block;
+    margin-top: 1em;
+    margin-bottom: 1em;
+}
+
+h1 {
+    display: block;
+    font-size: 2em;
+    font-weight: bold;
+    margin-top: 0.67em;
+    margin-bottom: 0.67em;
+}
+h2 {
+    display: block;
+    font-size: 1.5em;
+    font-weight: bold;
+    margin-top: 0.83em;
+    margin-bottom: 0.83em;
+}
+h3 {
+    display: block;
+    font-size: 1.17em;
+    font-weight: bold;
+    margin-top: 1em;
+    margin-bottom: 1em;
+}
+h4 {
+    display: block;
+    font-size: 1em;
+    font-weight: bold;
+    margin-top: 1.33em;
+    margin-bottom: 1.33em;
+}
+h5 {
+    display: block;
+    font-size: 0.83em;
+    font-weight: bold;
+    margin-top: 1.67em;
+    margin-bottom: 1.67em;
+}
+h6 {
+    display: block;
+    font-size: 0.67em;
+    font-weight: bold;
+    margin-top: 2.33em;
+    margin-bottom: 2.33em;
+}
+
+ul, ol {
+    display: block;
+    margin-top: 1em;
+    margin-bottom: 1em;
+    padding-left: 40px;
+}
+li {
+    display: list-item;
+    list-style-type: disc;
+}
+
+pre {
+    display: block;
+    white-space: pre;
+    font-family: monospace;
+    margin-top: 1em;
+    margin-bottom: 1em;
+}
+code, kbd, samp {
+    font-family: monospace;
+}
+
+hr {
+    display: block;
+    margin-top: 8px;
+    margin-bottom: 8px;
+    border-top-width: 1px;
+    border-top-style: solid;
+    border-top-color: #808080;
+}
+
+b, strong { font-weight: bold; }
+i, em, cite { font-style: italic; }
+u, ins { text-decoration: underline; }
+s, del { text-decoration: line-through; }
+
+a {
+    color: #0000ee;
+    text-decoration: underline;
+}
+
+table { display: table; }
+tr { display: table-row; }
+td { display: table-cell; }
+th {
+    display: table-cell;
+    font-weight: bold;
+    text-align: center;
+}
+
+br, img, input, button, select, textarea {
+    display: inline;
+}
+
+head, script, style, link, meta, title, noscript {
+    display: none;
+}
+"#;
 
 // -----------------------------------------------------------------------
 // Tests
@@ -861,8 +808,8 @@ mod tests {
             (TagName::H1, vec![]),
             (TagName::A, vec![]),
         ]);
-        let empty_sheet = Stylesheet { rules: vec![] };
-        let styles = style_tree(&doc, &[&empty_sheet], &[]);
+        let ua = default_stylesheet();
+        let styles = style_tree(&doc, &[&ua], &[]);
 
         let p_style = styles[3].as_ref().unwrap();
         assert_eq!(p_style.display, Display::Block);

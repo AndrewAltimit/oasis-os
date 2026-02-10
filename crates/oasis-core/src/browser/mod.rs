@@ -277,16 +277,26 @@ impl BrowserWidget {
         // 4. Build link href map from DOM.
         let href_map = Self::build_link_map(&doc);
 
-        // 5. Store results.
+        // 5. Build layout tree.
+        let content_h = self.config.content_height(self.window_h);
+        let layout_root = layout::block::build_layout_tree(
+            &doc,
+            &styles,
+            &SimpleTextMeasurer,
+            self.window_w as f32,
+            content_h as f32,
+        );
+
+        // 6. Store results.
         self.document = Some(doc);
         self.styles = styles;
         self.href_map = href_map;
-        self.layout_root = None; // Layout engine is WIP
+        self.layout_root = Some(layout_root);
         self.link_map.clear();
         self.scroll.reset();
         self.state = LoadingState::Idle;
 
-        // 6. Update navigation.
+        // 7. Update navigation.
         self.nav.navigate(url, &title);
     }
 

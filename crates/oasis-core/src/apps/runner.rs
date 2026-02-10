@@ -131,6 +131,19 @@ impl AppRunner {
                     "No updates available.".to_string(),
                 ];
             },
+            "Browser" => {
+                self.lines = vec![
+                    "Browser".to_string(),
+                    "".to_string(),
+                    "Use the browser widget for web browsing.".to_string(),
+                    "".to_string(),
+                    "The browser supports HTML, CSS, and".to_string(),
+                    "Gemini protocol content.".to_string(),
+                    "".to_string(),
+                    "Launch from the dashboard to open the".to_string(),
+                    "full browser widget.".to_string(),
+                ];
+            },
             "System Monitor" => {
                 self.lines = vec![
                     "System Monitor".to_string(),
