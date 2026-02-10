@@ -300,7 +300,7 @@ impl Default for ComputedStyle {
             text_decoration: TextDecoration::None,
             text_indent: 0.0,
             text_transform: TextTransform::None,
-            line_height: base_font_size * 1.2,
+            line_height: base_font_size * 1.5,
             letter_spacing: 0.0,
             word_spacing: 0.0,
             white_space: WhiteSpace::Normal,
@@ -539,7 +539,7 @@ impl ComputedStyle {
             "font-size" => {
                 self.font_size = resolve_font_size(value, parent_font_size);
                 // Recompute line-height at the default ratio.
-                self.line_height = self.font_size * 1.2;
+                self.line_height = self.font_size * 1.5;
             },
             "font-weight" => {
                 self.font_weight = resolve_font_weight(value);
@@ -860,7 +860,7 @@ fn resolve_font_size(value: &CssValue, parent_font_size: f32) -> f32 {
 ///
 /// - A bare number is treated as a multiplier of the element's font size.
 /// - A length or percentage is resolved normally.
-/// - The keyword `normal` maps to 1.2 * font_size.
+/// - The keyword `normal` maps to 1.5 * font_size (generous for 480x272).
 fn resolve_line_height(value: &CssValue, font_size: f32, parent_font_size: f32) -> f32 {
     match value {
         CssValue::Number(n) => *n * font_size,
@@ -869,8 +869,8 @@ fn resolve_line_height(value: &CssValue, font_size: f32, parent_font_size: f32) 
         CssValue::Length(n, LengthUnit::Rem) => *n * ROOT_FONT_SIZE,
         CssValue::Length(n, LengthUnit::Pt) => *n * 1.333,
         CssValue::Percentage(p) => font_size * (*p / 100.0),
-        CssValue::Keyword(kw) if kw == "normal" => font_size * 1.2,
-        _ => font_size * 1.2,
+        CssValue::Keyword(kw) if kw == "normal" => font_size * 1.5,
+        _ => font_size * 1.5,
     }
 }
 
@@ -892,7 +892,7 @@ mod tests {
         assert_eq!(s.font_weight, FontWeight::Normal);
         assert_eq!(s.font_style, FontStyle::Normal);
         assert_eq!(s.font_family, FontFamily::SansSerif);
-        assert!((s.line_height - ROOT_FONT_SIZE * 1.2).abs() < 0.01);
+        assert!((s.line_height - ROOT_FONT_SIZE * 1.5).abs() < 0.01);
         assert!((s.margin_top).abs() < f32::EPSILON);
         assert!((s.padding_top).abs() < f32::EPSILON);
         assert!((s.border_top_width).abs() < f32::EPSILON);
@@ -983,8 +983,8 @@ mod tests {
         let mut s = ComputedStyle::default();
         s.apply_declaration("font-size", &CssValue::Length(20.0, LengthUnit::Px), 16.0);
         assert!((s.font_size - 20.0).abs() < f32::EPSILON);
-        // Line height should be recomputed: 20 * 1.2 = 24.
-        assert!((s.line_height - 24.0).abs() < 0.01);
+        // Line height should be recomputed: 20 * 1.5 = 30.
+        assert!((s.line_height - 30.0).abs() < 0.01);
     }
 
     #[test]

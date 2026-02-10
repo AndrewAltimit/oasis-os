@@ -287,10 +287,11 @@ impl InlineFragment {
         }
     }
 
-    /// The height of this fragment.
+    /// The height of this fragment (line-height for text, border-box
+    /// for inline boxes).
     pub fn height(&self) -> f32 {
         match self {
-            InlineFragment::Text { style, .. } => style.font_size,
+            InlineFragment::Text { style, .. } => style.line_height,
             InlineFragment::InlineBox { layout_box } => layout_box.dimensions.margin_box().height,
             InlineFragment::ReplacedInline { height, .. } => *height,
         }
