@@ -8,6 +8,11 @@
 use super::parser::{CssColor, CssValue, LengthUnit};
 use crate::backend::Color;
 
+/// Root font size in pixels. Standard CSS uses 16px but the OASIS
+/// native resolution is 480x272 so we use 8px (the bitmap glyph size)
+/// to keep text readable.
+pub const ROOT_FONT_SIZE: f32 = 8.0;
+
 // -----------------------------------------------------------------------
 // Enums
 // -----------------------------------------------------------------------
@@ -251,7 +256,7 @@ pub struct ComputedStyle {
 /// Standard browser defaults (CSS 2.1 initial values).
 impl Default for ComputedStyle {
     fn default() -> Self {
-        let base_font_size: f32 = 16.0;
+        let base_font_size: f32 = ROOT_FONT_SIZE;
         Self {
             // Display
             display: Display::Inline,
@@ -724,7 +729,7 @@ fn resolve_length(value: &CssValue, parent_font_size: f32) -> f32 {
     match value {
         CssValue::Length(n, LengthUnit::Px) => *n,
         CssValue::Length(n, LengthUnit::Em) => *n * parent_font_size,
-        CssValue::Length(n, LengthUnit::Rem) => *n * 16.0,
+        CssValue::Length(n, LengthUnit::Rem) => *n * ROOT_FONT_SIZE,
         CssValue::Length(n, LengthUnit::Pt) => *n * 1.333,
         CssValue::Number(n) => *n,
         _ => 0.0,
@@ -738,7 +743,7 @@ fn resolve_dimension(value: &CssValue, parent_font_size: f32) -> Dimension {
         CssValue::Percentage(p) => Dimension::Percent(*p),
         CssValue::Length(n, LengthUnit::Px) => Dimension::Px(*n),
         CssValue::Length(n, LengthUnit::Em) => Dimension::Px(*n * parent_font_size),
-        CssValue::Length(n, LengthUnit::Rem) => Dimension::Px(*n * 16.0),
+        CssValue::Length(n, LengthUnit::Rem) => Dimension::Px(*n * ROOT_FONT_SIZE),
         CssValue::Length(n, LengthUnit::Pt) => Dimension::Px(*n * 1.333),
         CssValue::Number(n) => Dimension::Px(*n),
         _ => Dimension::Auto,
@@ -831,18 +836,18 @@ fn resolve_font_size(value: &CssValue, parent_font_size: f32) -> f32 {
     match value {
         CssValue::Length(n, LengthUnit::Px) => *n,
         CssValue::Length(n, LengthUnit::Em) => *n * parent_font_size,
-        CssValue::Length(n, LengthUnit::Rem) => *n * 16.0,
+        CssValue::Length(n, LengthUnit::Rem) => *n * ROOT_FONT_SIZE,
         CssValue::Length(n, LengthUnit::Pt) => *n * 1.333,
         CssValue::Percentage(p) => parent_font_size * (*p / 100.0),
         CssValue::Number(n) => *n,
         CssValue::Keyword(kw) => match kw.as_str() {
-            "xx-small" => 9.0,
-            "x-small" => 10.0,
-            "small" => 13.0,
-            "medium" => 16.0,
-            "large" => 18.0,
-            "x-large" => 24.0,
-            "xx-large" => 32.0,
+            "xx-small" => ROOT_FONT_SIZE * 0.5625,
+            "x-small" => ROOT_FONT_SIZE * 0.625,
+            "small" => ROOT_FONT_SIZE * 0.8125,
+            "medium" => ROOT_FONT_SIZE,
+            "large" => ROOT_FONT_SIZE * 1.125,
+            "x-large" => ROOT_FONT_SIZE * 1.5,
+            "xx-large" => ROOT_FONT_SIZE * 2.0,
             "smaller" => parent_font_size * 0.833,
             "larger" => parent_font_size * 1.2,
             _ => parent_font_size,
@@ -861,7 +866,7 @@ fn resolve_line_height(value: &CssValue, font_size: f32, parent_font_size: f32) 
         CssValue::Number(n) => *n * font_size,
         CssValue::Length(n, LengthUnit::Px) => *n,
         CssValue::Length(n, LengthUnit::Em) => *n * parent_font_size,
-        CssValue::Length(n, LengthUnit::Rem) => *n * 16.0,
+        CssValue::Length(n, LengthUnit::Rem) => *n * ROOT_FONT_SIZE,
         CssValue::Length(n, LengthUnit::Pt) => *n * 1.333,
         CssValue::Percentage(p) => font_size * (*p / 100.0),
         CssValue::Keyword(kw) if kw == "normal" => font_size * 1.2,
@@ -883,11 +888,11 @@ mod tests {
         assert_eq!(s.display, Display::Inline);
         assert_eq!(s.visibility, Visibility::Visible);
         assert_eq!(s.color, Color::BLACK);
-        assert!((s.font_size - 16.0).abs() < f32::EPSILON);
+        assert!((s.font_size - ROOT_FONT_SIZE).abs() < f32::EPSILON);
         assert_eq!(s.font_weight, FontWeight::Normal);
         assert_eq!(s.font_style, FontStyle::Normal);
         assert_eq!(s.font_family, FontFamily::SansSerif);
-        assert!((s.line_height - 19.2).abs() < 0.01);
+        assert!((s.line_height - ROOT_FONT_SIZE * 1.2).abs() < 0.01);
         assert!((s.margin_top).abs() < f32::EPSILON);
         assert!((s.padding_top).abs() < f32::EPSILON);
         assert!((s.border_top_width).abs() < f32::EPSILON);
@@ -1049,11 +1054,14 @@ mod tests {
     #[test]
     fn resolve_font_size_keywords() {
         let mut s = ComputedStyle::default();
-        s.apply_declaration("font-size", &CssValue::Keyword("small".into()), 16.0);
-        assert!((s.font_size - 13.0).abs() < f32::EPSILON);
+        let parent = ROOT_FONT_SIZE;
+        s.apply_declaration("font-size", &CssValue::Keyword("small".into()), parent);
+        let expected_small = ROOT_FONT_SIZE * 0.8125;
+        assert!((s.font_size - expected_small).abs() < f32::EPSILON);
 
-        s.apply_declaration("font-size", &CssValue::Keyword("larger".into()), 16.0);
-        assert!((s.font_size - 19.2).abs() < 0.01);
+        s.apply_declaration("font-size", &CssValue::Keyword("larger".into()), parent);
+        let expected_larger = parent * 1.2;
+        assert!((s.font_size - expected_larger).abs() < 0.01);
     }
 
     #[test]

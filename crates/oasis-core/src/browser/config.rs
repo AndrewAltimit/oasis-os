@@ -89,13 +89,13 @@ impl Default for BrowserConfig {
             url_bar_text: Color::rgb(220, 220, 220),
             status_bar_bg: Color::rgb(40, 40, 40),
             status_bar_text: Color::rgb(160, 160, 160),
-            default_font_size: 12.0,
+            default_font_size: 8.0,
             default_text_color: Color::rgb(0, 0, 0),
             default_bg_color: Color::rgb(255, 255, 255),
             default_link_color: Color::rgb(0, 102, 204),
             default_visited_color: Color::rgb(85, 26, 139),
             smooth_scroll: false,
-            scroll_line_px: 24,
+            scroll_line_px: 16,
             max_redirects: 5,
             max_image_dimension: 480,
         }
@@ -134,11 +134,11 @@ mod tests {
         assert_eq!(cfg.url_bar_height, 20);
         assert_eq!(cfg.status_bar_height, 14);
         assert_eq!(cfg.button_width, 20);
-        assert!((cfg.default_font_size - 12.0).abs() < f32::EPSILON);
+        assert!((cfg.default_font_size - 8.0).abs() < f32::EPSILON);
         assert_eq!(cfg.max_redirects, 5);
         assert_eq!(cfg.max_image_dimension, 480);
         assert!(!cfg.smooth_scroll);
-        assert_eq!(cfg.scroll_line_px, 24);
+        assert_eq!(cfg.scroll_line_px, 16);
     }
 
     #[test]

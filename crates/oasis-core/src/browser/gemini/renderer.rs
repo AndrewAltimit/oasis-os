@@ -47,7 +47,7 @@ impl Default for GeminiTheme {
             quote_border: Color::rgb(180, 180, 180),
             pre_background: Color::rgb(240, 240, 240),
             background: Color::rgb(255, 255, 255),
-            font_size: 12.0,
+            font_size: 8.0,
         }
     }
 }

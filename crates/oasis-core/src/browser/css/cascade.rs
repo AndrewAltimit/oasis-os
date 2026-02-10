@@ -68,7 +68,7 @@ fn compute_style(
         None => ComputedStyle::default(),
     };
 
-    let parent_font_size = parent_style.map_or(16.0, |p| p.font_size);
+    let parent_font_size = parent_style.map_or(super::values::ROOT_FONT_SIZE, |p| p.font_size);
 
     // Collect all matching declarations with their origin info.
     let mut matched = collect_matched_declarations(doc, node_id, stylesheets, inline_styles);
@@ -817,7 +817,11 @@ mod tests {
         let h1_style = styles[4].as_ref().unwrap();
         assert_eq!(h1_style.display, Display::Block);
         assert_eq!(h1_style.font_weight, FontWeight::Bold);
-        assert!((h1_style.font_size - 32.0).abs() < f32::EPSILON);
+        // h1 = 2em * ROOT_FONT_SIZE
+        assert!(
+            (h1_style.font_size - crate::browser::css::values::ROOT_FONT_SIZE * 2.0).abs()
+                < f32::EPSILON
+        );
 
         let a_style = styles[5].as_ref().unwrap();
         assert_eq!(a_style.color, Color::rgb(0, 0, 238));
