@@ -14,7 +14,7 @@ repository = "https://github.com/AndrewAltimit/oasis-os"
 authors = ["AndrewAltimit"]
 
 [dependencies]
-psp = { path = "/home/mikunpc/Documents/repos/rust-psp/psp", features = ["kernel", "std"] }
+psp = { git = "https://github.com/AndrewAltimit/rust-psp", branch = "main", features = ["kernel", "std"] }
 oasis-core = { path = "../oasis-core" }
 libm = "0.2"
 
