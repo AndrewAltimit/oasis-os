@@ -55,6 +55,19 @@ cursor_color = "#003399C0"
 icon_border_radius = 3
 cursor_border_radius = 4
 
+[start_menu_overrides]
+panel_bg = "#1F3E7B"
+panel_gradient_top = "#3169C6"
+panel_gradient_bottom = "#0A246A"
+panel_border = "#4080D0"
+item_text = "#FFFFFF"
+item_text_active = "#FFFFFF"
+highlight_color = "#3A6EA580"
+button_bg = "#309E30"
+button_text = "#FFFFFF"
+panel_border_radius = 4
+panel_shadow_level = 1
+
 [browser_overrides]
 chrome_bg = "#D6D2C2"
 chrome_text = "#000000"

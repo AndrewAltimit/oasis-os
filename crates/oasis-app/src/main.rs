@@ -24,6 +24,7 @@ use oasis_core::platform::DesktopPlatform;
 use oasis_core::platform::{PowerService, TimeService};
 use oasis_core::sdi::SdiRegistry;
 use oasis_core::skin::{Skin, resolve_skin};
+use oasis_core::startmenu::{StartMenuAction, StartMenuState};
 use oasis_core::statusbar::StatusBar;
 use oasis_core::terminal::{CommandOutput, CommandRegistry, Environment, register_builtins};
 use oasis_core::transition;
@@ -97,6 +98,7 @@ fn main() -> Result<()> {
     let mut status_bar = StatusBar::new();
     let mut bottom_bar = BottomBar::new();
     bottom_bar.total_pages = dashboard.page_count();
+    let mut start_menu = StartMenuState::new(StartMenuState::default_items());
 
     // Set up command interpreter.
     let mut cmd_reg = CommandRegistry::new();
@@ -412,8 +414,38 @@ fn main() -> Result<()> {
                     }
                 },
 
-                // Pointer click on dashboard: select icon at click position.
+                // Pointer click on dashboard: start menu takes priority.
                 InputEvent::PointerClick { x, y } if mode == Mode::Dashboard => {
+                    // Start button click toggles the menu.
+                    if start_menu.hit_test_button(*x, *y) {
+                        start_menu.toggle();
+                        continue;
+                    }
+                    // If menu is open, check for item clicks or close on outside.
+                    if start_menu.open {
+                        if let Some(action) = start_menu.hit_test_item(*x, *y) {
+                            start_menu.close();
+                            if action == StartMenuAction::Exit {
+                                break 'running;
+                            }
+                            handle_start_action(
+                                &action,
+                                &mut mode,
+                                &dashboard,
+                                &mut wm,
+                                &mut sdi,
+                                &mut open_runners,
+                                &mut browser,
+                                &browser_config,
+                                &vfs,
+                                &config,
+                                &mut active_transition,
+                            );
+                        } else {
+                            start_menu.close();
+                        }
+                        continue;
+                    }
                     if bottom_bar.active_tab == MediaTab::None {
                         let cfg = &dashboard.config;
                         let gx = *x - cfg.grid_x;
@@ -534,6 +566,29 @@ fn main() -> Result<()> {
                 },
                 InputEvent::TriggerRelease(Trigger::Right) => {
                     bottom_bar.r_pressed = false;
+                },
+
+                // Start menu intercepts input when open.
+                InputEvent::ButtonPress(btn) if mode == Mode::Dashboard && start_menu.open => {
+                    let action = start_menu.handle_input(btn);
+                    if action == StartMenuAction::Exit {
+                        break 'running;
+                    }
+                    if action != StartMenuAction::None {
+                        handle_start_action(
+                            &action,
+                            &mut mode,
+                            &dashboard,
+                            &mut wm,
+                            &mut sdi,
+                            &mut open_runners,
+                            &mut browser,
+                            &browser_config,
+                            &vfs,
+                            &config,
+                            &mut active_transition,
+                        );
+                    }
                 },
 
                 // Dashboard input: D-pad navigation.
@@ -804,12 +859,17 @@ fn main() -> Result<()> {
 
                 status_bar.update_sdi(&mut sdi, &active_theme);
                 bottom_bar.update_sdi(&mut sdi, &active_theme);
+                if skin.features.start_menu {
+                    start_menu.update_sdi(&mut sdi, &active_theme);
+                }
             },
             Mode::Terminal => {
                 dashboard.hide_sdi(&mut sdi);
                 AppRunner::hide_sdi(&mut sdi);
                 StatusBar::hide_sdi(&mut sdi);
                 BottomBar::hide_sdi(&mut sdi);
+                start_menu.close();
+                start_menu.hide_sdi(&mut sdi);
                 hide_media_page(&mut sdi);
                 setup_terminal_objects(&mut sdi, &output_lines, &cwd, &input_buf);
             },
@@ -817,6 +877,8 @@ fn main() -> Result<()> {
                 dashboard.hide_sdi(&mut sdi);
                 set_terminal_visible(&mut sdi, false);
                 hide_media_page(&mut sdi);
+                start_menu.close();
+                start_menu.hide_sdi(&mut sdi);
                 // Show bars behind windows in app mode.
                 status_bar.update_sdi(&mut sdi, &active_theme);
                 bottom_bar.update_sdi(&mut sdi, &active_theme);
@@ -829,6 +891,8 @@ fn main() -> Result<()> {
                 AppRunner::hide_sdi(&mut sdi);
                 dashboard.hide_sdi(&mut sdi);
                 hide_media_page(&mut sdi);
+                start_menu.close();
+                start_menu.hide_sdi(&mut sdi);
                 status_bar.update_sdi(&mut sdi, &active_theme);
                 bottom_bar.update_sdi(&mut sdi, &active_theme);
             },
@@ -885,6 +949,89 @@ fn main() -> Result<()> {
     backend.shutdown()?;
     log::info!("OASIS_OS shut down cleanly");
     Ok(())
+}
+
+/// Dispatch a start menu action (launch app, open terminal, exit).
+#[allow(clippy::too_many_arguments)]
+fn handle_start_action(
+    action: &StartMenuAction,
+    mode: &mut Mode,
+    dashboard: &DashboardState,
+    wm: &mut WindowManager,
+    sdi: &mut SdiRegistry,
+    open_runners: &mut Vec<(String, AppRunner)>,
+    browser: &mut Option<BrowserWidget>,
+    browser_config: &BrowserConfig,
+    vfs: &MemoryVfs,
+    config: &OasisConfig,
+    active_transition: &mut Option<transition::TransitionState>,
+) {
+    match action {
+        StartMenuAction::LaunchApp(title) => {
+            // Find matching app in the dashboard's app list.
+            let app = dashboard.apps.iter().find(|a| a.title == *title);
+            if let Some(app) = app {
+                if app.title == "Terminal" {
+                    *mode = Mode::Terminal;
+                } else if app.title == "Browser" {
+                    let win_id = "browser";
+                    if wm.get_window(win_id).is_some() {
+                        let _ = wm.focus_window(win_id, sdi);
+                    } else {
+                        let wc = WindowConfig {
+                            id: win_id.to_string(),
+                            title: "Browser".to_string(),
+                            x: None,
+                            y: None,
+                            width: 380,
+                            height: 220,
+                            window_type: WindowType::AppWindow,
+                        };
+                        let _ = wm.create_window(&wc, sdi);
+                        let mut bw = BrowserWidget::new(browser_config.clone());
+                        bw.set_window(0, 0, 380, 220);
+                        let home = bw.config.features.home_url.clone();
+                        bw.navigate_vfs(&home, vfs);
+                        *browser = Some(bw);
+                    }
+                    *mode = Mode::Desktop;
+                } else {
+                    let win_id = app.title.to_lowercase().replace(' ', "_");
+                    if wm.get_window(&win_id).is_some() {
+                        let _ = wm.focus_window(&win_id, sdi);
+                    } else {
+                        let wc = WindowConfig {
+                            id: win_id.clone(),
+                            title: app.title.clone(),
+                            x: None,
+                            y: None,
+                            width: 380,
+                            height: 220,
+                            window_type: WindowType::AppWindow,
+                        };
+                        let _ = wm.create_window(&wc, sdi);
+                        open_runners.push((win_id, AppRunner::launch(app, vfs)));
+                    }
+                    *mode = Mode::Desktop;
+                }
+                *active_transition = Some(transition::fade_in(
+                    config.screen_width,
+                    config.screen_height,
+                ));
+            }
+        },
+        StartMenuAction::OpenTerminal => {
+            *mode = Mode::Terminal;
+        },
+        StartMenuAction::Exit => {
+            // Signal exit by switching to a terminal + immediate quit isn't
+            // possible from here, so we set a sentinel that the main loop
+            // handles. For simplicity, just switch to terminal with a log.
+            log::info!("Start menu: Exit requested");
+            // We can't break from here, but the caller checks for Exit.
+        },
+        StartMenuAction::RunCommand(_) | StartMenuAction::None => {},
+    }
 }
 
 /// Set up the wallpaper SDI object at z=-1000 (behind everything).

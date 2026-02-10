@@ -80,6 +80,30 @@ pub struct ActiveTheme {
     /// Bottom bar gradient bottom color.
     pub bar_gradient_bottom: Option<Color>,
 
+    // -- Start menu colors --
+    /// Start menu panel background.
+    pub sm_panel_bg: Color,
+    /// Start menu panel gradient top (None = flat fill).
+    pub sm_panel_gradient_top: Option<Color>,
+    /// Start menu panel gradient bottom.
+    pub sm_panel_gradient_bottom: Option<Color>,
+    /// Start menu panel border color.
+    pub sm_panel_border: Color,
+    /// Start menu item text color.
+    pub sm_item_text: Color,
+    /// Start menu active/selected item text color.
+    pub sm_item_text_active: Color,
+    /// Start menu selection highlight color.
+    pub sm_highlight_color: Color,
+    /// Start button background color.
+    pub sm_button_bg: Color,
+    /// Start button text color.
+    pub sm_button_text: Color,
+    /// Start menu panel border radius.
+    pub sm_panel_border_radius: u16,
+    /// Start menu panel shadow level.
+    pub sm_panel_shadow_level: u8,
+
     // -- Icon geometry --
     /// Icon card border radius (pixels).
     pub icon_border_radius: u16,
@@ -116,6 +140,17 @@ impl Default for ActiveTheme {
             statusbar_gradient_bottom: None,
             bar_gradient_top: None,
             bar_gradient_bottom: None,
+            sm_panel_bg: Color::rgba(20, 20, 35, 220),
+            sm_panel_gradient_top: None,
+            sm_panel_gradient_bottom: None,
+            sm_panel_border: Color::rgba(255, 255, 255, 40),
+            sm_item_text: Color::rgb(220, 220, 220),
+            sm_item_text_active: Color::WHITE,
+            sm_highlight_color: Color::rgba(50, 100, 200, 80),
+            sm_button_bg: Color::rgba(50, 100, 200, 200),
+            sm_button_text: Color::WHITE,
+            sm_panel_border_radius: 4,
+            sm_panel_shadow_level: 1,
             icon_body_color: Color::rgb(250, 250, 248),
             icon_fold_color: Color::rgb(210, 210, 205),
             icon_outline_color: Color::rgba(255, 255, 255, 180),
@@ -150,6 +185,7 @@ impl ActiveTheme {
 
         let bar = skin.bar_overrides.as_ref();
         let ico = skin.icon_overrides.as_ref();
+        let sm = skin.start_menu_overrides.as_ref();
 
         Self {
             statusbar_bg: ov(
@@ -201,6 +237,35 @@ impl ActiveTheme {
                 bar.and_then(|b| b.page_dot_inactive.as_ref()),
                 with_alpha(text, 50),
             ),
+            sm_panel_bg: ov(
+                sm.and_then(|s| s.panel_bg.as_ref()),
+                Color::rgba(20, 20, 35, 220),
+            ),
+            sm_panel_gradient_top: sm
+                .and_then(|s| s.panel_gradient_top.as_ref())
+                .and_then(|s| parse_hex_color(s)),
+            sm_panel_gradient_bottom: sm
+                .and_then(|s| s.panel_gradient_bottom.as_ref())
+                .and_then(|s| parse_hex_color(s)),
+            sm_panel_border: ov(
+                sm.and_then(|s| s.panel_border.as_ref()),
+                with_alpha(text, 40),
+            ),
+            sm_item_text: ov(sm.and_then(|s| s.item_text.as_ref()), with_alpha(text, 220)),
+            sm_item_text_active: ov(sm.and_then(|s| s.item_text_active.as_ref()), text),
+            sm_highlight_color: ov(
+                sm.and_then(|s| s.highlight_color.as_ref()),
+                with_alpha(primary, 80),
+            ),
+            sm_button_bg: ov(
+                sm.and_then(|s| s.button_bg.as_ref()),
+                with_alpha(primary, 200),
+            ),
+            sm_button_text: ov(sm.and_then(|s| s.button_text.as_ref()), text),
+            sm_panel_border_radius: sm
+                .and_then(|s| s.panel_border_radius)
+                .unwrap_or_else(|| skin.border_radius.unwrap_or(4)),
+            sm_panel_shadow_level: sm.and_then(|s| s.panel_shadow_level).unwrap_or(1),
             icon_body_color: ov(ico.and_then(|i| i.body_color.as_ref()), text),
             icon_fold_color: ov(ico.and_then(|i| i.fold_color.as_ref()), dim),
             icon_outline_color: ov(

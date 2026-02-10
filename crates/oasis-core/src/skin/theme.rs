@@ -74,6 +74,10 @@ pub struct SkinTheme {
     /// Per-element color overrides for browser chrome.
     #[serde(default)]
     pub browser_overrides: Option<BrowserOverrides>,
+
+    /// Per-element color overrides for the start menu popup.
+    #[serde(default)]
+    pub start_menu_overrides: Option<StartMenuOverrides>,
 }
 
 /// Optional overrides for the window manager theme.
@@ -154,6 +158,22 @@ pub struct IconOverrides {
     pub cursor_stroke_width: Option<u16>,
 }
 
+/// Per-element overrides for the start menu popup and button.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct StartMenuOverrides {
+    pub panel_bg: Option<String>,
+    pub panel_gradient_top: Option<String>,
+    pub panel_gradient_bottom: Option<String>,
+    pub panel_border: Option<String>,
+    pub item_text: Option<String>,
+    pub item_text_active: Option<String>,
+    pub highlight_color: Option<String>,
+    pub button_bg: Option<String>,
+    pub button_text: Option<String>,
+    pub panel_border_radius: Option<u16>,
+    pub panel_shadow_level: Option<u8>,
+}
+
 /// Per-element overrides for browser chrome colors.
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct BrowserOverrides {
@@ -216,6 +236,7 @@ impl Default for SkinTheme {
             bar_overrides: None,
             icon_overrides: None,
             browser_overrides: None,
+            start_menu_overrides: None,
         }
     }
 }

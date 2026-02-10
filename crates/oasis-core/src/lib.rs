@@ -24,6 +24,7 @@ pub mod plugin;
 pub mod script;
 pub mod sdi;
 pub mod skin;
+pub mod startmenu;
 pub mod statusbar;
 pub mod terminal;
 pub mod theme;

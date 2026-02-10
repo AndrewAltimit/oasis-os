@@ -106,6 +106,9 @@ pub struct SkinFeatures {
     /// Available command categories (empty = all).
     #[serde(default)]
     pub command_categories: Vec<String>,
+    /// Whether the start menu popup is available.
+    #[serde(default = "yes")]
+    pub start_menu: bool,
     /// Whether corrupted modifiers are active.
     #[serde(default)]
     pub corrupted: bool,
@@ -140,6 +143,7 @@ impl Default for SkinFeatures {
             grid_cols: 3,
             grid_rows: 2,
             command_categories: Vec::new(),
+            start_menu: true,
             corrupted: false,
         }
     }
