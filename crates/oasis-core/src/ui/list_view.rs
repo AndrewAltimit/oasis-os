@@ -25,7 +25,7 @@ impl<T> ListView<T> {
         Self {
             items,
             scroll_offset: 0,
-            item_height,
+            item_height: item_height.max(1),
             selected: None,
             render_item,
         }

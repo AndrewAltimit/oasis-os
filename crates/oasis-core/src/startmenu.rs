@@ -420,8 +420,8 @@ impl StartMenuState {
             "sm_highlight",
             hl_x,
             hl_y,
-            col_w as u32 - 2,
-            item_row_h as u32 - 2,
+            (col_w as u32).saturating_sub(2),
+            (item_row_h as u32).saturating_sub(2),
             at.sm_highlight_color,
             at.sm_panel_border_radius,
         );

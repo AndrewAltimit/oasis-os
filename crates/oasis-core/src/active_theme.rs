@@ -434,8 +434,7 @@ impl ActiveTheme {
                     with_alpha(text, 230),
                 );
                 // Auto-derive: light labels get a dark shadow for readability.
-                let brightness =
-                    lc.r as u16 * 3 / 10 + lc.g as u16 * 6 / 10 + lc.b as u16 / 10;
+                let brightness = lc.r as u16 * 3 / 10 + lc.g as u16 * 6 / 10 + lc.b as u16 / 10;
                 if brightness > 140 {
                     Some(Color::rgba(0, 0, 0, 120))
                 } else {
