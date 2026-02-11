@@ -41,6 +41,11 @@ sdl2 = "0.37"
 # Image encoding (screenshots)
 png = "0.17"
 
+# TLS (desktop -- feature-gated in oasis-core)
+rustls = { version = "0.23", default-features = false, features = ["ring", "logging", "std", "tls12"] }
+webpki-roots = "1.0"
+rustls-pki-types = "1"
+
 # Internal crates
 oasis-core = { path = "crates/oasis-core" }
 oasis-backend-ue5 = { path = "crates/oasis-backend-ue5" }

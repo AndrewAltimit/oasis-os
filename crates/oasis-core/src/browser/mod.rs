@@ -157,6 +157,9 @@ pub struct BrowserWidget {
     window_y: i32,
     window_w: u32,
     window_h: u32,
+
+    /// Optional TLS provider for HTTPS and Gemini connections.
+    tls: Option<Box<dyn crate::net::tls::TlsProvider>>,
 }
 
 impl BrowserWidget {
@@ -187,7 +190,13 @@ impl BrowserWidget {
             window_y: 0,
             window_w: 480,
             window_h: 272,
+            tls: None,
         }
+    }
+
+    /// Attach a TLS provider for HTTPS and Gemini support.
+    pub fn set_tls_provider(&mut self, provider: Box<dyn crate::net::tls::TlsProvider>) {
+        self.tls = Some(provider);
     }
 
     /// Update the window position and size (called by the WM).
@@ -224,7 +233,7 @@ impl BrowserWidget {
             source,
         };
 
-        match load_resource(vfs, &request) {
+        match load_resource(vfs, &request, self.tls.as_deref()) {
             Ok(response) => {
                 self.process_response(response);
             },
@@ -2651,6 +2660,37 @@ mod tests {
             link_rect.height,
             cx,
             cy,
+        );
+    }
+
+    #[test]
+    fn test_navigate_https_without_tls_shows_error() {
+        let mut bw = make_browser();
+        let vfs = test_vfs();
+        // No TLS provider set -- HTTPS should produce an error page.
+        bw.navigate_vfs("https://example.com/page", &vfs);
+        assert_eq!(bw.state, LoadingState::Idle);
+        // The HTTPS error page should be rendered as HTML in the DOM.
+        let doc = bw.document.as_ref().expect("document should be loaded");
+        let text = doc.text_content(doc.root);
+        assert!(
+            text.contains("HTTPS Required"),
+            "expected 'HTTPS Required' in page text, got: {text}",
+        );
+    }
+
+    #[test]
+    fn test_navigate_gemini_without_tls_shows_error() {
+        let mut bw = make_browser();
+        let vfs = test_vfs();
+        // No TLS provider -- Gemini should show a TLS Required page.
+        bw.navigate_vfs("gemini://example.com/page", &vfs);
+        assert_eq!(bw.state, LoadingState::Idle);
+        let doc = bw.document.as_ref().expect("document should be loaded");
+        let text = doc.text_content(doc.root);
+        assert!(
+            text.contains("TLS Required"),
+            "expected 'TLS Required' in page text, got: {text}",
         );
     }
 }

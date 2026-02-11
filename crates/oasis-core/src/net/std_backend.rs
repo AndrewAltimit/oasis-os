@@ -9,11 +9,17 @@ use crate::error::{OasisError, Result};
 /// Network backend using `std::net` for desktop and Raspberry Pi.
 pub struct StdNetworkBackend {
     listener: Option<TcpListener>,
+    #[cfg(feature = "tls-rustls")]
+    tls: super::tls_rustls::RustlsTlsProvider,
 }
 
 impl StdNetworkBackend {
     pub fn new() -> Self {
-        Self { listener: None }
+        Self {
+            listener: None,
+            #[cfg(feature = "tls-rustls")]
+            tls: super::tls_rustls::RustlsTlsProvider::new(),
+        }
     }
 }
 
@@ -24,6 +30,11 @@ impl Default for StdNetworkBackend {
 }
 
 impl NetworkBackend for StdNetworkBackend {
+    #[cfg(feature = "tls-rustls")]
+    fn tls_provider(&self) -> Option<&dyn super::tls::TlsProvider> {
+        Some(&self.tls)
+    }
+
     fn listen(&mut self, port: u16) -> Result<()> {
         let addr = format!("0.0.0.0:{port}");
         let listener =
@@ -78,17 +89,11 @@ impl StdNetworkStream {
 
 impl NetworkStream for StdNetworkStream {
     fn read(&mut self, buf: &mut [u8]) -> Result<usize> {
-        match self.stream.read(buf) {
-            Ok(n) => Ok(n),
-            Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => Ok(0),
-            Err(e) => Err(OasisError::Backend(format!("read: {e}"))),
-        }
+        self.stream.read(buf).map_err(OasisError::Io)
     }
 
     fn write(&mut self, data: &[u8]) -> Result<usize> {
-        self.stream
-            .write(data)
-            .map_err(|e| OasisError::Backend(format!("write: {e}")))
+        self.stream.write(data).map_err(OasisError::Io)
     }
 
     fn close(&mut self) -> Result<()> {

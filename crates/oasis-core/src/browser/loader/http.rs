@@ -1,13 +1,15 @@
-//! Minimal HTTP/1.1 GET client over `std::net::TcpStream`.
+//! Minimal HTTP/1.1 GET client.
 //!
-//! Supports plain HTTP only -- HTTPS is rejected with a clear error
-//! because TLS is not available in this environment.
+//! Supports plain HTTP over `std::net::TcpStream` and, when a
+//! [`TlsProvider`] is supplied, HTTPS via the backend's TLS stack.
 
-use std::io::{Read, Write};
+use std::io::{self, Read, Write};
 use std::net::TcpStream;
 use std::time::Duration;
 
+use crate::backend::NetworkStream;
 use crate::error::{OasisError, Result};
+use crate::net::tls::TlsProvider;
 
 use super::{ContentType, ResourceResponse, Url};
 
@@ -23,16 +25,17 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 /// TCP read timeout.
 const READ_TIMEOUT: Duration = Duration::from_secs(15);
 
-/// Perform an HTTP GET request for the given URL.
+/// Perform an HTTP(S) GET request for the given URL.
+///
+/// When `tls` is `Some`, HTTPS URLs are supported.  When `None`, HTTPS
+/// URLs produce a user-friendly error page instead.
 ///
 /// Follows redirects (301/302/307/308) up to [`MAX_REDIRECTS`] hops.
-/// Returns an error for HTTPS, unsupported schemes, or network
-/// failures.
-pub fn http_get(url: &Url) -> Result<ResourceResponse> {
-    if url.scheme == "https" {
+pub fn http_get(url: &Url, tls: Option<&dyn TlsProvider>) -> Result<ResourceResponse> {
+    if url.scheme == "https" && tls.is_none() {
         return Ok(https_error_page(url, url));
     }
-    if url.scheme != "http" {
+    if url.scheme != "http" && url.scheme != "https" {
         return Err(OasisError::Backend(format!(
             "unsupported scheme for HTTP client: {}",
             url.scheme,
@@ -41,7 +44,7 @@ pub fn http_get(url: &Url) -> Result<ResourceResponse> {
 
     let mut current_url = url.clone();
     for _ in 0..MAX_REDIRECTS {
-        let resp = do_request(&current_url)?;
+        let resp = do_request(&current_url, tls)?;
 
         if is_redirect(resp.status_code)
             && let Some(location) = find_header(&resp.headers, "location")
@@ -50,7 +53,7 @@ pub fn http_get(url: &Url) -> Result<ResourceResponse> {
             current_url = current_url
                 .resolve(&location)
                 .ok_or_else(|| OasisError::Backend(format!("bad redirect Location: {location}")))?;
-            if current_url.scheme == "https" {
+            if current_url.scheme == "https" && tls.is_none() {
                 return Ok(https_error_page(url, &current_url));
             }
             continue;
@@ -87,15 +90,34 @@ struct HttpResponse {
 // Internals
 // -------------------------------------------------------------------
 
-/// Connect, send GET, read and parse the response.
-fn do_request(url: &Url) -> Result<HttpResponse> {
+/// Connect, optionally upgrade to TLS, send GET, read and parse.
+fn do_request(url: &Url, tls: Option<&dyn TlsProvider>) -> Result<HttpResponse> {
     let host = &url.host;
-    let port = url.port.unwrap_or(80);
+    let is_https = url.scheme == "https";
+    let default_port = if is_https { 443 } else { 80 };
+    let port = url.port.unwrap_or(default_port);
 
-    let mut stream = tcp_connect(host, port)?;
-    send_request(&mut stream, url)?;
-    let raw = read_response(&mut stream)?;
-    parse_response(&raw)
+    let stream = tcp_connect(host, port)?;
+
+    if is_https {
+        let tls_provider =
+            tls.ok_or_else(|| OasisError::Backend("TLS not available".to_string()))?;
+
+        // Wrap the TcpStream as a NetworkStream, then upgrade to TLS.
+        let net_stream: Box<dyn NetworkStream> =
+            Box::new(crate::net::StdNetworkStream::new(stream));
+        let tls_stream = tls_provider.connect_tls(net_stream, host)?;
+
+        let mut adapter = NetworkStreamAdapter(tls_stream);
+        send_request(&mut adapter, url, is_https)?;
+        let raw = read_response(&mut adapter)?;
+        parse_response(&raw)
+    } else {
+        let mut stream = stream;
+        send_request(&mut stream, url, is_https)?;
+        let raw = read_response(&mut stream)?;
+        parse_response(&raw)
+    }
 }
 
 /// Open a TCP connection with a connect timeout.
@@ -119,9 +141,10 @@ fn tcp_connect(host: &str, port: u16) -> Result<TcpStream> {
 }
 
 /// Send an HTTP/1.1 GET request.
-fn send_request(stream: &mut TcpStream, url: &Url) -> Result<()> {
+fn send_request(stream: &mut impl Write, url: &Url, is_https: bool) -> Result<()> {
+    let default_port: u16 = if is_https { 443 } else { 80 };
     let host_header = match url.port {
-        Some(p) if p != 80 => format!("{}:{}", url.host, p),
+        Some(p) if p != default_port => format!("{}:{}", url.host, p),
         _ => url.host.clone(),
     };
 
@@ -148,7 +171,7 @@ fn send_request(stream: &mut TcpStream, url: &Url) -> Result<()> {
 }
 
 /// Read the entire response until EOF or until the read timeout fires.
-fn read_response(stream: &mut TcpStream) -> Result<Vec<u8>> {
+fn read_response(stream: &mut impl Read) -> Result<Vec<u8>> {
     let mut buf = Vec::with_capacity(8192);
     let mut chunk = [0u8; 8192];
     loop {
@@ -161,8 +184,7 @@ fn read_response(stream: &mut TcpStream) -> Result<Vec<u8>> {
                 buf.extend_from_slice(&chunk[..n]);
             },
             Err(e)
-                if e.kind() == std::io::ErrorKind::WouldBlock
-                    || e.kind() == std::io::ErrorKind::TimedOut =>
+                if e.kind() == io::ErrorKind::WouldBlock || e.kind() == io::ErrorKind::TimedOut =>
             {
                 break;
             },
@@ -315,7 +337,40 @@ fn find_subsequence(haystack: &[u8], needle: &[u8]) -> Option<usize> {
 }
 
 // -------------------------------------------------------------------
-// Tests
+// NetworkStream → Read + Write adapter
+// -------------------------------------------------------------------
+
+/// Adapts a `Box<dyn NetworkStream>` to `std::io::Read` + `std::io::Write`
+/// so it can be used with the generic `send_request` / `read_response`.
+pub(super) struct NetworkStreamAdapter(pub(super) Box<dyn NetworkStream>);
+
+impl Read for NetworkStreamAdapter {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        self.0.read(buf).map_err(oasis_err_to_io)
+    }
+}
+
+impl Write for NetworkStreamAdapter {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        self.0.write(buf).map_err(oasis_err_to_io)
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
+/// Convert an [`OasisError`] to [`io::Error`], preserving the original
+/// `io::Error` (and its error kind) when the variant is `OasisError::Io`.
+fn oasis_err_to_io(e: OasisError) -> io::Error {
+    match e {
+        OasisError::Io(io_err) => io_err,
+        other => io::Error::other(other.to_string()),
+    }
+}
+
+// -------------------------------------------------------------------
+// Error pages
 // -------------------------------------------------------------------
 
 /// Generate a user-friendly error page when a site requires HTTPS.
@@ -407,9 +462,9 @@ mod tests {
     }
 
     #[test]
-    fn https_returns_error_page() {
+    fn https_returns_error_page_without_tls() {
         let url = Url::parse("https://example.com/page").unwrap();
-        let resp = http_get(&url).unwrap();
+        let resp = http_get(&url, None).unwrap();
         let body = String::from_utf8(resp.body).unwrap();
         assert!(body.contains("HTTPS Required"));
     }
@@ -417,7 +472,7 @@ mod tests {
     #[test]
     fn unsupported_scheme_rejected() {
         let url = Url::parse("ftp://example.com/file").unwrap();
-        let err = http_get(&url).unwrap_err();
+        let err = http_get(&url, None).unwrap_err();
         let msg = err.to_string();
         assert!(msg.contains("unsupported scheme"));
     }
@@ -488,5 +543,38 @@ mod tests {
             Some(5)
         );
         assert_eq!(find_subsequence(b"no boundary", b"\r\n\r\n"), None);
+    }
+
+    #[test]
+    fn http_to_https_redirect_without_tls() {
+        use std::io::Write as IoWrite;
+        use std::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+
+        let handle = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut buf = [0u8; 2048];
+            let _ = stream.read(&mut buf);
+            let resp = format!(
+                "HTTP/1.1 301 Moved\r\n\
+                 Location: https://127.0.0.1:{port}/secure\r\n\
+                 Content-Length: 0\r\n\
+                 \r\n"
+            );
+            let _ = stream.write_all(resp.as_bytes());
+            let _ = stream.flush();
+        });
+
+        let url = Url::parse(&format!("http://127.0.0.1:{port}/page")).unwrap();
+        // No TLS provider -- redirect to HTTPS should produce error page.
+        let resp = http_get(&url, None).unwrap();
+        let body = String::from_utf8(resp.body).unwrap();
+        assert!(
+            body.contains("HTTPS Required"),
+            "expected HTTPS Required page, got: {body}",
+        );
+        let _ = handle.join();
     }
 }

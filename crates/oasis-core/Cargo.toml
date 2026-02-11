@@ -7,6 +7,10 @@ license.workspace = true
 repository.workspace = true
 authors.workspace = true
 
+[features]
+default = []
+tls-rustls = ["dep:rustls", "dep:webpki-roots", "dep:rustls-pki-types"]
+
 [dependencies]
 serde = { workspace = true }
 serde_json = { workspace = true }
@@ -14,8 +18,14 @@ toml = { workspace = true }
 log = { workspace = true }
 thiserror = { workspace = true }
 
+# TLS (optional, enabled by backends that have TLS support)
+rustls = { workspace = true, optional = true }
+webpki-roots = { workspace = true, optional = true }
+rustls-pki-types = { workspace = true, optional = true }
+
 [dev-dependencies]
 tempfile = "3"
+rcgen = "0.13"
 
 [lints]
 workspace = true

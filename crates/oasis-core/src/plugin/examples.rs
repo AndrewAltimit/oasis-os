@@ -297,6 +297,7 @@ mod tests {
             usb: None,
 
             network: None,
+            tls: None,
         };
         match cmds.execute("hello", &mut env).unwrap() {
             CommandOutput::Text(s) => assert_eq!(s, "Hello, World!"),
@@ -317,6 +318,7 @@ mod tests {
             usb: None,
 
             network: None,
+            tls: None,
         };
         match cmds.execute("hello OASIS", &mut env).unwrap() {
             CommandOutput::Text(s) => assert_eq!(s, "Hello, OASIS!"),
@@ -367,6 +369,7 @@ mod tests {
             usb: None,
 
             network: None,
+            tls: None,
         };
         match cmds.execute("pclock", &mut env).unwrap() {
             CommandOutput::Text(s) => assert!(s.contains("plugin active")),
@@ -394,6 +397,7 @@ mod tests {
             usb: None,
 
             network: None,
+            tls: None,
         };
         // Write a note.
         match cmds
@@ -424,6 +428,7 @@ mod tests {
             usb: None,
 
             network: None,
+            tls: None,
         };
         // Initially empty.
         match cmds.execute("note list", &mut env).unwrap() {
@@ -453,6 +458,7 @@ mod tests {
             usb: None,
 
             network: None,
+            tls: None,
         };
         assert!(cmds.execute("note read nonexistent", &mut env).is_err());
     }
@@ -471,6 +477,7 @@ mod tests {
             usb: None,
 
             network: None,
+            tls: None,
         };
         cmds.execute("note write test Hello", &mut env).unwrap();
 

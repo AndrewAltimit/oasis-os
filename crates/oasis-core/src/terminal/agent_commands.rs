@@ -435,6 +435,7 @@ tools = [
             usb: None,
 
             network: None,
+            tls: None,
         };
         reg.execute(line, &mut env)
     }
