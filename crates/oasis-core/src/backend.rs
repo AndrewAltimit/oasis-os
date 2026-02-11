@@ -661,7 +661,7 @@ pub trait SdiBackend {
     /// Push a rendering region (translate + clip).
     fn push_region(&mut self, x: i32, y: i32, w: u32, h: u32) -> Result<()> {
         self.push_translate(x, y)?;
-        self.push_clip_rect(x, y, w, h)
+        self.push_clip_rect(0, 0, w, h)
     }
 
     /// Pop a previously pushed region.

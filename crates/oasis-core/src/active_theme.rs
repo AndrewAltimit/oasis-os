@@ -391,7 +391,7 @@ impl ActiveTheme {
                 .and_then(|s| s.button_shape.clone())
                 .unwrap_or_else(|| "pill".to_string()),
             sm_panel_width: sm.and_then(|s| s.panel_width).unwrap_or(200),
-            sm_columns: sm.and_then(|s| s.columns).unwrap_or(2),
+            sm_columns: sm.and_then(|s| s.columns).unwrap_or(2).max(1),
             sm_button_gradient_top: sm
                 .and_then(|s| s.button_gradient_top.as_ref())
                 .and_then(|s| parse_hex_color(s)),
@@ -413,7 +413,7 @@ impl ActiveTheme {
             sm_footer_text_color: ov(sm.and_then(|s| s.footer_text_color.as_ref()), text),
             sm_footer_height: sm.and_then(|s| s.footer_height).unwrap_or(0),
             sm_item_icon_size: sm.and_then(|s| s.item_icon_size).unwrap_or(14),
-            sm_item_row_height: sm.and_then(|s| s.item_row_height).unwrap_or(22),
+            sm_item_row_height: sm.and_then(|s| s.item_row_height).unwrap_or(22).max(1),
             icon_body_color: ov(ico.and_then(|i| i.body_color.as_ref()), text),
             icon_fold_color: ov(ico.and_then(|i| i.fold_color.as_ref()), dim),
             icon_outline_color: ov(

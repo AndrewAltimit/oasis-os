@@ -267,11 +267,35 @@ impl SdiRegistry {
             if has_gradient && radius > 0 {
                 let top = obj.gradient_top.unwrap();
                 let bot = obj.gradient_bottom.unwrap();
+                let top = Color::rgba(
+                    top.r,
+                    top.g,
+                    top.b,
+                    ((top.a as u16) * (obj.alpha as u16) / 255) as u8,
+                );
+                let bot = Color::rgba(
+                    bot.r,
+                    bot.g,
+                    bot.b,
+                    ((bot.a as u16) * (obj.alpha as u16) / 255) as u8,
+                );
                 backend
                     .fill_rounded_rect_gradient_v(obj.x, obj.y, obj.w, obj.h, radius, top, bot)?;
             } else if has_gradient {
                 let top = obj.gradient_top.unwrap();
                 let bot = obj.gradient_bottom.unwrap();
+                let top = Color::rgba(
+                    top.r,
+                    top.g,
+                    top.b,
+                    ((top.a as u16) * (obj.alpha as u16) / 255) as u8,
+                );
+                let bot = Color::rgba(
+                    bot.r,
+                    bot.g,
+                    bot.b,
+                    ((bot.a as u16) * (obj.alpha as u16) / 255) as u8,
+                );
                 backend.fill_rect_gradient_v(obj.x, obj.y, obj.w, obj.h, top, bot)?;
             } else if radius > 0 {
                 backend.fill_rounded_rect(obj.x, obj.y, obj.w, obj.h, radius, color)?;

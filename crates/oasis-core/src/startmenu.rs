@@ -242,6 +242,9 @@ impl StartMenuState {
         }
         let cols = self.at.sm_columns.max(1);
         let col_w = (menu_w as i32 - PAD_LEFT * 2) / cols as i32;
+        if col_w <= 0 || self.at.sm_item_row_height <= 0 {
+            return None;
+        }
         let row = rel_y / self.at.sm_item_row_height;
         let col = rel_x / col_w;
         let idx = row as usize * cols + col as usize;
