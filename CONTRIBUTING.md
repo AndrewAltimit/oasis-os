@@ -13,7 +13,7 @@ Feature requests, guidance, consulting, and support are not provided. This polic
 ## What You Can Do
 
 - **Fork it.** Clone the repo and adapt it however you want. This is the recommended path if you need features that don't exist here.
-- **Study it.** The codebase demonstrates an embeddable OS framework in edition 2024 Rust with pluggable rendering backends (SDL2, UE5, PSP hardware), a window manager, virtual filesystem, and command interpreter.
+- **Study it.** The codebase demonstrates an embeddable OS framework in edition 2024 Rust with pluggable rendering backends (SDL2, UE5, PSP hardware), a window manager, HTML/CSS/Gemini browser engine, 9-skin theming system, virtual filesystem, and command interpreter.
 - **Use it.** You are free to use any component under the terms of the [MIT License](LICENSE).
 
 You do so entirely at your own risk and without any expectation of support, maintenance, or acknowledgment from the maintainer.

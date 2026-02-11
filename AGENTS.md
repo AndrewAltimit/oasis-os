@@ -79,18 +79,22 @@ Core code never calls platform APIs directly.
 
 ### Core Modules (oasis-core)
 
-- **sdi** -- Scene Display Interface: named objects with position, size, color, texture, text, z-order. String ID registry.
-- **skin** -- Data-driven TOML skin system (skin.toml + layout.toml + features.toml). See `skins/classic/`.
+- **sdi** -- Scene Display Interface: named objects with position, size, color, texture, text, z-order, gradients, rounded corners, shadows
+- **skin** -- Data-driven TOML skin system with 8 skins (2 external in `skins/`, 7 built-in; xp exists in both forms). Theme derivation from 9 base colors to ~30 UI element colors.
+- **browser** -- Embeddable HTML/CSS/Gemini rendering engine: DOM parser, CSS cascade, block/inline/table layout, link navigation, reader mode, bookmarks
+- **ui** -- 15+ reusable widgets: Button, Card, TabBar, Panel, TextField, ListView, ScrollView, ProgressBar, Toggle, NinePatch, etc.
 - **vfs** -- Virtual file system: `MemoryVfs` (in-RAM), `RealVfs` (disk), `GameAssetVfs` (UE5 with overlay writes)
-- **terminal** -- Command interpreter with builtin command registry
-- **wm** -- Window manager (window configs, hit testing, drag/resize)
-- **apps** -- App runner (file manager, settings, music player, photo viewer)
-- **dashboard** -- Icon grid, discovers apps from VFS
+- **terminal** -- Command interpreter with 30+ commands across 7 modules (core, audio, network, agent, plugin, skin, scripting, transfer, update)
+- **wm** -- Window manager (window configs, hit testing, drag/resize, minimize/maximize/close)
+- **apps** -- App runner with 8 apps (File Manager, Settings, Network, Music Player, Photo Viewer, Package Manager, Browser, System Monitor)
+- **dashboard** -- Icon grid with paginated navigation, discovers apps from VFS
 - **input** -- Platform-agnostic `InputEvent`, `Button`, `Trigger` enums
-- **plugin** -- Plugin traits and manager
+- **plugin** -- Plugin traits, manager, and VFS-based IPC
 - **agent** -- Agent status, MCP integration, tamper detection, health monitoring
-- **net** -- TCP networking with PSK authentication
-- **audio** -- Audio types, manager, playlist
+- **net** -- TCP networking with PSK authentication, remote terminal, FTP transfer
+- **audio** -- Audio manager with playlist, shuffle/repeat modes, MP3 ID3 tag parsing
+- **platform** -- Platform service traits: PowerService, TimeService, UsbService, NetworkService, OskService
+- **script** -- Line-based command scripting, startup scripts, cron-like scheduling
 
 ### FFI Boundary (oasis-ffi)
 
@@ -181,7 +185,10 @@ Configured in `.mcp.json`, all run as Docker containers via `docker compose --pr
 ## Key Files
 
 - `docs/design.md` -- Technical design document v2.3 (~1300 lines)
-- `skins/classic/` -- Skin TOML configs (skin.toml, layout.toml, features.toml)
+- `docs/skin-authoring.md` -- Skin creation guide with full TOML reference
+- `docs/psp-modernization-plan.md` -- PSP backend modernization roadmap (9 phases, 40 steps)
+- `skins/classic/` -- Classic skin TOML configs (skin.toml, layout.toml, features.toml, theme.toml)
+- `skins/xp/` -- XP skin TOML configs (Windows XP Luna-inspired theme with start menu)
 - `clippy.toml` -- Clippy lint thresholds (cognitive complexity 25, too-many-lines 100, too-many-args 7)
 - `rustfmt.toml` -- Formatting rules
 - `deny.toml` -- License and advisory policy
