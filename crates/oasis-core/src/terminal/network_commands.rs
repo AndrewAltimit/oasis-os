@@ -181,6 +181,7 @@ mod tests {
             time: None,
             usb: None,
             network: None,
+            tls: None,
         };
         match reg.execute("wifi", &mut env).unwrap() {
             CommandOutput::Text(s) => assert!(s.contains("no network service")),
@@ -201,6 +202,7 @@ mod tests {
             time: None,
             usb: None,
             network: Some(&platform),
+            tls: None,
         };
         match reg.execute("wifi", &mut env).unwrap() {
             CommandOutput::Text(s) => {
@@ -223,6 +225,7 @@ mod tests {
             time: None,
             usb: None,
             network: None,
+            tls: None,
         };
         assert!(reg.execute("ping", &mut env).is_err());
     }

@@ -705,6 +705,14 @@ pub trait NetworkBackend {
 
     /// Open an outbound TCP connection.
     fn connect(&mut self, address: &str, port: u16) -> Result<Box<dyn NetworkStream>>;
+
+    /// Return the TLS provider for this backend, if available.
+    ///
+    /// When `Some`, the browser can negotiate HTTPS and Gemini connections.
+    /// Backends without TLS support return `None` (the default).
+    fn tls_provider(&self) -> Option<&dyn crate::net::tls::TlsProvider> {
+        None
+    }
 }
 
 /// A bidirectional byte stream (TCP connection).

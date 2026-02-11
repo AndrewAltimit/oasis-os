@@ -2,6 +2,7 @@
 //! orchestration.
 
 pub mod cache;
+pub mod gemini_fetch;
 pub mod http;
 pub mod vfs;
 
@@ -358,28 +359,35 @@ pub fn detect_content_type(url: &Url) -> ContentType {
 /// For `Vfs` requests only the VFS is consulted. For `Network` requests
 /// the HTTP client is used directly. For `VfsThenNetwork` it tries the
 /// VFS first and falls back to the network.
+///
+/// `tls` is forwarded to the HTTP client for HTTPS support.
 pub fn load_resource(
     vfs_backend: &dyn crate::vfs::Vfs,
     request: &ResourceRequest,
+    tls: Option<&dyn crate::net::tls::TlsProvider>,
 ) -> Result<ResourceResponse> {
     match request.source {
         ResourceSource::Vfs => vfs::load_from_vfs(vfs_backend, request),
-        ResourceSource::Network => load_from_network(request),
+        ResourceSource::Network => load_from_network(request, tls),
         ResourceSource::VfsThenNetwork => match vfs::load_from_vfs(vfs_backend, request) {
             Ok(resp) => Ok(resp),
-            Err(_) => load_from_network(request),
+            Err(_) => load_from_network(request, tls),
         },
     }
 }
 
-/// Load a resource over the network (HTTP only).
-fn load_from_network(request: &ResourceRequest) -> Result<ResourceResponse> {
+/// Load a resource over the network (HTTP/HTTPS).
+fn load_from_network(
+    request: &ResourceRequest,
+    tls: Option<&dyn crate::net::tls::TlsProvider>,
+) -> Result<ResourceResponse> {
     let url = Url::parse(&request.url).ok_or_else(|| {
         crate::error::OasisError::Backend(format!("invalid URL: {}", request.url,))
     })?;
 
     match url.scheme.as_str() {
-        "http" | "https" => http::http_get(&url),
+        "http" | "https" => http::http_get(&url, tls),
+        "gemini" => gemini_fetch::gemini_get(&url, tls),
         scheme => Err(crate::error::OasisError::Backend(format!(
             "unsupported network scheme: {scheme}",
         ))),

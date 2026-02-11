@@ -18,6 +18,12 @@ psp = { git = "https://github.com/AndrewAltimit/rust-psp", branch = "main", feat
 oasis-core = { path = "../oasis-core" }
 libm = "0.2"
 
+# TLS for HTTPS/Gemini (pure Rust, no C/asm, works on mipsel-sony-psp)
+embedded-tls = { version = "0.18", default-features = false, features = ["std", "log"] }
+embedded-io = { version = "0.7", features = ["std"] }
+rand_core = { version = "0.9", default-features = false, features = ["os_rng"] }
+webpki = { version = "0.22", default-features = false, features = ["std"] }
+
 # unicode-width workaround for mips target panic.
 [patch.crates-io]
 unicode-width = { git = "https://git.sr.ht/~sajattack/unicode-width" }

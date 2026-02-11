@@ -66,6 +66,7 @@ mod tests {
             time: None,
             usb: None,
             network: None,
+            tls: None,
         }
     }
 

@@ -149,11 +149,11 @@ impl Command for FetchCmd {
             }
         }
 
-        // VFS miss -- try HTTP for http:// URLs.
-        if url.starts_with("http://")
+        // VFS miss -- try HTTP(S) for http:// and https:// URLs.
+        if (url.starts_with("http://") || url.starts_with("https://"))
             && let Some(parsed) = super::loader::Url::parse(url)
         {
-            match super::loader::http::http_get(&parsed) {
+            match super::loader::http::http_get(&parsed, env.tls) {
                 Ok(resp) => {
                     let text = String::from_utf8_lossy(&resp.body);
                     if show_headers {
@@ -186,7 +186,7 @@ impl Command for FetchCmd {
 
         Ok(CommandOutput::Text(format!(
             "[fetch] {} not found in VFS. \
-             Network fetching requires an http:// URL.",
+             Network fetching requires an http:// or https:// URL.",
             url,
         )))
     }
@@ -357,6 +357,7 @@ mod tests {
             time: None,
             usb: None,
             network: None,
+            tls: None,
         };
         reg.execute(line, &mut env)
     }
@@ -565,9 +566,22 @@ mod tests {
     #[test]
     fn fetch_url_not_in_vfs() {
         let (reg, mut vfs) = setup();
-        match exec(&reg, &mut vfs, "fetch https://missing.example.com").unwrap() {
+        // A non-HTTP(S) URL that is not in the VFS triggers the fallback message.
+        match exec(&reg, &mut vfs, "fetch gopher://missing.example.com").unwrap() {
             CommandOutput::Text(s) => {
                 assert!(s.contains("not found in VFS"));
+            },
+            _ => panic!("expected text"),
+        }
+    }
+
+    #[test]
+    fn fetch_https_without_tls_shows_error_page() {
+        let (reg, mut vfs) = setup();
+        // With tls: None, HTTPS URLs return the "HTTPS Required" error page.
+        match exec(&reg, &mut vfs, "fetch https://missing.example.com").unwrap() {
+            CommandOutput::Text(s) => {
+                assert!(s.contains("HTTPS Required"));
             },
             _ => panic!("expected text"),
         }

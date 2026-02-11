@@ -18,7 +18,9 @@ use oasis_core::config::OasisConfig;
 use oasis_core::cursor::{self, CursorState};
 use oasis_core::dashboard::{DashboardConfig, DashboardState, discover_apps};
 use oasis_core::input::{Button, InputEvent, Trigger};
-use oasis_core::net::{ListenerConfig, RemoteClient, RemoteListener, StdNetworkBackend};
+use oasis_core::net::{
+    ListenerConfig, RemoteClient, RemoteListener, RustlsTlsProvider, StdNetworkBackend,
+};
 use oasis_core::osk::{OskConfig, OskState};
 use oasis_core::platform::DesktopPlatform;
 use oasis_core::platform::{PowerService, TimeService};
@@ -135,6 +137,9 @@ fn main() -> Result<()> {
     let mut net_backend = StdNetworkBackend::new();
     let mut listener: Option<RemoteListener> = None;
     let mut remote_client: Option<RemoteClient> = None;
+
+    // TLS provider (independent of net_backend to avoid borrow conflicts).
+    let tls_provider = RustlsTlsProvider::new();
 
     // Set up scene graph and apply skin layout.
     let mut sdi = SdiRegistry::new();
@@ -387,6 +392,7 @@ fn main() -> Result<()> {
                                 };
                                 let _ = wm.create_window(&wc, &mut sdi);
                                 let mut bw = BrowserWidget::new(browser_config.clone());
+                                bw.set_tls_provider(Box::new(RustlsTlsProvider::new()));
                                 bw.set_window(0, 0, 380, 220);
                                 let home = bw.config.features.home_url.clone();
                                 bw.navigate_vfs(&home, &vfs);
@@ -486,6 +492,9 @@ fn main() -> Result<()> {
                                                     let _ = wm.create_window(&wc, &mut sdi);
                                                     let mut bw =
                                                         BrowserWidget::new(browser_config.clone());
+                                                    bw.set_tls_provider(Box::new(
+                                                        RustlsTlsProvider::new(),
+                                                    ));
                                                     bw.set_window(0, 0, 380, 220);
                                                     let home = bw.config.features.home_url.clone();
                                                     bw.navigate_vfs(&home, &vfs);
@@ -641,8 +650,8 @@ fn main() -> Result<()> {
                                 power: Some(&platform),
                                 time: Some(&platform),
                                 usb: Some(&platform),
-
                                 network: None,
+                                tls: Some(&tls_provider),
                             };
                             match cmd_reg.execute(&line, &mut env) {
                                 Ok(CommandOutput::Text(text)) => {
@@ -794,8 +803,8 @@ fn main() -> Result<()> {
                     power: Some(&platform),
                     time: Some(&platform),
                     usb: Some(&platform),
-
                     network: None,
+                    tls: Some(&tls_provider),
                 };
                 let response = match cmd_reg.execute(&cmd_line, &mut env) {
                     Ok(CommandOutput::Text(text)) => text,
@@ -1003,6 +1012,7 @@ fn handle_start_action(
                         };
                         let _ = wm.create_window(&wc, sdi);
                         let mut bw = BrowserWidget::new(browser_config.clone());
+                        bw.set_tls_provider(Box::new(RustlsTlsProvider::new()));
                         bw.set_window(0, 0, 380, 220);
                         let home = bw.config.features.home_url.clone();
                         bw.navigate_vfs(&home, vfs);

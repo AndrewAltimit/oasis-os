@@ -28,6 +28,7 @@ pub mod sfx;
 pub mod status;
 pub mod textures;
 pub mod threading;
+pub mod tls;
 
 // ---------------------------------------------------------------------------
 // Re-exports from submodules (for main.rs and external users)
@@ -36,6 +37,7 @@ pub mod threading;
 pub use audio::PspAudioBackend;
 pub use filesystem::{FileEntry, decode_jpeg, format_size, list_directory, read_file};
 pub use network::{PspNetworkBackend, PspNetworkService};
+pub use tls::PspTlsProvider;
 pub use power::{
     check_power_resumed, power_tick, register_exception_handler, register_power_callback, set_clock,
 };

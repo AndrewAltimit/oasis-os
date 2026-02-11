@@ -57,6 +57,8 @@ pub struct Environment<'a> {
     pub usb: Option<&'a dyn UsbService>,
     /// Network service for WiFi status queries.
     pub network: Option<&'a dyn NetworkService>,
+    /// TLS provider for HTTPS connections.
+    pub tls: Option<&'a dyn crate::net::tls::TlsProvider>,
 }
 
 /// A single executable command.
@@ -159,6 +161,7 @@ mod tests {
             usb: None,
 
             network: None,
+            tls: None,
         };
         match reg.execute("echo hello world", &mut env).unwrap() {
             CommandOutput::Text(s) => assert_eq!(s, "hello world"),
@@ -178,6 +181,7 @@ mod tests {
             usb: None,
 
             network: None,
+            tls: None,
         };
         assert!(reg.execute("nonexistent", &mut env).is_err());
     }
@@ -194,6 +198,7 @@ mod tests {
             usb: None,
 
             network: None,
+            tls: None,
         };
         match reg.execute("", &mut env).unwrap() {
             CommandOutput::None => {},

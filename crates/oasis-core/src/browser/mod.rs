@@ -157,6 +157,9 @@ pub struct BrowserWidget {
     window_y: i32,
     window_w: u32,
     window_h: u32,
+
+    /// Optional TLS provider for HTTPS and Gemini connections.
+    tls: Option<Box<dyn crate::net::tls::TlsProvider>>,
 }
 
 impl BrowserWidget {
@@ -187,7 +190,13 @@ impl BrowserWidget {
             window_y: 0,
             window_w: 480,
             window_h: 272,
+            tls: None,
         }
+    }
+
+    /// Attach a TLS provider for HTTPS and Gemini support.
+    pub fn set_tls_provider(&mut self, provider: Box<dyn crate::net::tls::TlsProvider>) {
+        self.tls = Some(provider);
     }
 
     /// Update the window position and size (called by the WM).
@@ -224,7 +233,7 @@ impl BrowserWidget {
             source,
         };
 
-        match load_resource(vfs, &request) {
+        match load_resource(vfs, &request, self.tls.as_deref()) {
             Ok(response) => {
                 self.process_response(response);
             },

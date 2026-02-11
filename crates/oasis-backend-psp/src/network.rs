@@ -191,15 +191,24 @@ impl Drop for PspNetworkStream {
 pub struct PspNetworkBackend {
     /// Listener socket fd, or -1 if not listening.
     listener_fd: i32,
+    /// TLS provider for HTTPS/Gemini connections.
+    tls: crate::tls::PspTlsProvider,
 }
 
 impl PspNetworkBackend {
     pub fn new() -> Self {
-        Self { listener_fd: -1 }
+        Self {
+            listener_fd: -1,
+            tls: crate::tls::PspTlsProvider::new(),
+        }
     }
 }
 
 impl NetworkBackend for PspNetworkBackend {
+    fn tls_provider(&self) -> Option<&dyn oasis_core::net::tls::TlsProvider> {
+        Some(&self.tls)
+    }
+
     fn listen(&mut self, port: u16) -> Result<()> {
         ensure_net_init()?;
 
