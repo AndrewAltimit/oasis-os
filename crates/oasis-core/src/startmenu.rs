@@ -334,8 +334,8 @@ impl StartMenuState {
     fn update_menu_sdi(&self, sdi: &mut SdiRegistry, at: &ActiveTheme) {
         let menu_w = at.sm_panel_width;
         let cols = at.sm_columns.max(1);
-        let col_w = (menu_w as i32 - PAD_LEFT * 2) / cols as i32;
-        let item_row_h = at.sm_item_row_height;
+        let col_w = ((menu_w as i32 - PAD_LEFT * 2) / cols as i32).max(1);
+        let item_row_h = at.sm_item_row_height.max(1);
         let icon_size = at.sm_item_icon_size;
         let items_top = self.menu_y + self.header_h as i32;
 

@@ -551,19 +551,26 @@ impl BrowserWidget {
             self.config.url_bar_bg
         };
         if themed {
-            backend.fill_rounded_rect(url_x, self.window_y + 2, url_w, h - 4, r, bar_bg)?;
+            backend.fill_rounded_rect(
+                url_x,
+                self.window_y + 2,
+                url_w,
+                h.saturating_sub(4),
+                r,
+                bar_bg,
+            )?;
             // Stroke around URL bar for definition.
             backend.stroke_rounded_rect(
                 url_x,
                 self.window_y + 2,
                 url_w,
-                h - 4,
+                h.saturating_sub(4),
                 r,
                 1,
                 Color::rgba(255, 255, 255, 30),
             )?;
         } else {
-            backend.fill_rect(url_x, self.window_y + 2, url_w, h - 4, bar_bg)?;
+            backend.fill_rect(url_x, self.window_y + 2, url_w, h.saturating_sub(4), bar_bg)?;
         }
 
         // URL text: show the editing buffer when focused, otherwise
@@ -592,7 +599,7 @@ impl BrowserWidget {
                     cursor_px,
                     self.window_y + 3,
                     1,
-                    h - 6,
+                    h.saturating_sub(6),
                     self.config.url_bar_text,
                 )?;
             }
@@ -619,7 +626,7 @@ impl BrowserWidget {
                 home_x,
                 self.window_y + 2,
                 bw,
-                h - 4,
+                h.saturating_sub(4),
                 r,
                 self.config.chrome_button_bg,
             )?;

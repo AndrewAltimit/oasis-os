@@ -26,48 +26,48 @@ impl NinePatch {
         let b = self.bottom as u32;
         let tw = self.tex_width;
         let th = self.tex_height;
-        let mid_w = w.saturating_sub(l + r);
-        let mid_h = h.saturating_sub(t + b);
-        let src_mid_w = tw.saturating_sub(l + r);
-        let src_mid_h = th.saturating_sub(t + b);
+
+        // Skip drawing if margins exceed texture or target dimensions.
+        if l + r > tw || t + b > th || l + r > w || t + b > h {
+            return Ok(());
+        }
+
+        let mid_w = w - (l + r);
+        let mid_h = h - (t + b);
+        let src_mid_w = tw - (l + r);
+        let src_mid_h = th - (t + b);
+        let src_r = tw - r;
+        let src_b = th - b;
+        let dst_r = x + (w - r) as i32;
+        let dst_b = y + (h - b) as i32;
 
         // Corners (fixed size).
         backend.blit_sub(self.texture, 0, 0, l, t, x, y, l, t)?;
-        backend.blit_sub(self.texture, tw - r, 0, r, t, x + (w - r) as i32, y, r, t)?;
-        backend.blit_sub(self.texture, 0, th - b, l, b, x, y + (h - b) as i32, l, b)?;
-        backend.blit_sub(
-            self.texture,
-            tw - r,
-            th - b,
-            r,
-            b,
-            x + (w - r) as i32,
-            y + (h - b) as i32,
-            r,
-            b,
-        )?;
+        backend.blit_sub(self.texture, src_r, 0, r, t, dst_r, y, r, t)?;
+        backend.blit_sub(self.texture, 0, src_b, l, b, x, dst_b, l, b)?;
+        backend.blit_sub(self.texture, src_r, src_b, r, b, dst_r, dst_b, r, b)?;
 
         // Edges (stretched in one dimension).
         backend.blit_sub(self.texture, l, 0, src_mid_w, t, x + l as i32, y, mid_w, t)?;
         backend.blit_sub(
             self.texture,
             l,
-            th - b,
+            src_b,
             src_mid_w,
             b,
             x + l as i32,
-            y + (h - b) as i32,
+            dst_b,
             mid_w,
             b,
         )?;
         backend.blit_sub(self.texture, 0, t, l, src_mid_h, x, y + t as i32, l, mid_h)?;
         backend.blit_sub(
             self.texture,
-            tw - r,
+            src_r,
             t,
             r,
             src_mid_h,
-            x + (w - r) as i32,
+            dst_r,
             y + t as i32,
             r,
             mid_h,
