@@ -40,7 +40,7 @@ OASIS_OS is an embeddable operating system framework written in Rust. It provide
 
 The project originated as a Rust port of a PSP homebrew shell OS written in C circa 2006-2008. The original source archive (`psixpsp.7z`) is preserved at the repository root. The original architecture -- a themed dashboard driven by a custom scene-graph engine called SDI (Simple Display Interface), with platform abstraction via compile-time guards -- turned out to be a natural foundation for something more general. The trait-based backend system designed for cross-platform PSP/SDL/framebuffer portability extends cleanly to a fourth target: rendering onto a texture inside Unreal Engine 5, where in-game computer props become fully interactive systems rather than scripted UI sequences.
 
-The framework supports multiple "skins" -- visual and behavioral personalities that determine what the OS looks like and what it exposes to the user. The Classic skin (implemented) renders a PSIX-style icon grid dashboard with document icons, tabbed bars, and chrome bezels. Planned skins include: a cyberpunk terminal skin with green-on-black CRT text, a military console skin exposing only the command line, and a corrupted OS skin that randomly permutes visual state. All skins share the same core: scene graph, command interpreter, virtual file system, networking, and plugin infrastructure. The skin defines layout, theme, feature gating, and visual style.
+The framework supports multiple "skins" -- visual and behavioral personalities that determine what the OS looks like and what it exposes to the user. Nine skins are implemented: Classic (PSIX-style icon grid dashboard), XP (Windows XP Luna-inspired blue theme with start menu), Terminal (green-on-black CRT), Tactical (military command console), Corrupted (glitched visual effects), Desktop (windowed environment), Agent Terminal (AI agent/MCP console), and Modern (purple accent with rounded corners). External skins are defined as TOML directories in `skins/`; built-in skins are embedded in `oasis-core`. All skins share the same core: scene graph, command interpreter, virtual file system, browser engine, networking, and plugin infrastructure. The skin defines layout, theme, feature gating, and visual style.
 
 Primary deployment targets are: in-game computers in UE5 projects (rendered as interactive props), real PSP hardware running modern custom firmware (6.60/6.61 with ARK-4), and the tamper-responsive briefcase system (`packages/tamper_briefcase/`) where a Raspberry Pi 5 boots directly into OASIS_OS as the field-deployable agent terminal OS. On the briefcase, OASIS_OS is the operator-facing interface for managing AI agents in untrusted environments -- the tamper detection, LUKS encryption, and cryptographic wipe services run alongside it as systemd units. On a PSP connected to infrastructure WiFi, OASIS_OS's remote terminal enables direct command sessions to machines running AI agents, making a 2005 handheld a viable field controller for the agent ecosystem described in `docs/agents/README.md`. The original C codebase (~15,000 lines) provides the proven UI design; the Rust rewrite provides memory safety, cross-platform backends, and the extensibility to support all targets from a single codebase.
 
@@ -116,22 +116,30 @@ packages/oasis_os/
 |   +-- oasis-ffi/                  # C FFI boundary for UE5: exported functions, opaque handles
 |   +-- oasis-app/                  # Binary entry points: desktop app + screenshot tool
 +-- skins/
-|   +-- classic/                    # Icon grid dashboard, status bar, PSIX-style chrome (implemented)
+|   +-- classic/                    # Icon grid dashboard, status bar, PSIX-style chrome
+|   +-- xp/                         # Windows XP Luna-inspired blue theme with start menu
 +-- docs/
 |   +-- design.md                   # This document
+|   +-- skin-authoring.md           # Skin creation guide with full TOML reference
+|   +-- psp-modernization-plan.md   # PSP backend modernization roadmap (9 phases, 40 steps)
 ```
 
 **External dependencies:**
 
 - [rust-psp SDK](https://github.com/AndrewAltimit/rust-psp) (MIT) -- modernized fork with edition 2024, safety fixes, kernel mode support. Referenced as a git dependency from `oasis-backend-psp/Cargo.toml`.
 
+**Built-in skins (embedded in `oasis-core/src/skin/builtin.rs`):**
+
+- `terminal` -- Full-screen CRT command line, monospace layout
+- `tactical` -- Military/tactical: stripped-down command interface
+- `corrupted` -- Glitched OS: randomized layouts, visual artifacts
+- `desktop` -- Window-like panels, taskbar, start menu analog
+- `agent-terminal` -- Briefcase-specific: agent status, MCP tool access
+- `modern` -- Purple accent, rounded corners, gradient fills
+- `xp` -- Windows XP Luna theme (also available as external skin in `skins/xp/`)
+
 **Planned directories (not yet created):**
 
-- `skins/terminal/` -- Full-screen CRT command line, monospace layout
-- `skins/tactical/` -- Military/tactical: stripped-down command interface
-- `skins/corrupted/` -- Glitched OS: randomized layouts, visual artifacts
-- `skins/desktop/` -- Window-like panels, taskbar, start menu analog
-- `skins/agent-terminal/` -- Briefcase-specific: agent status, MCP tool access
 - `ppsspp/` -- PPSSPP Docker container with MCP patches for agent-assisted debugging
 - `asm/` -- Preserved MIPS assembly (me.S, audiolib.S, pspstub.s) from original C codebase
 
@@ -461,14 +469,16 @@ A skin is a data-driven configuration that defines the visual and behavioral per
 
 ### 6.2 Skins
 
-| Skin | Description | Primary Target | Use Case | Status |
+| Skin | Description | Primary Target | Use Case | Source |
 |------|-------------|---------------|----------|--------|
-| Classic | PSIX-style icon grid dashboard with document icons, tabbed status/bottom bars, chrome bezels, wave arc wallpaper | PSP / Pi / Desktop | Homebrew shell OS, the original C codebase experience modernized with PSIX styling | **Implemented** |
-| Terminal | Full-screen command line with CRT visual metadata (scanlines, phosphor glow, screen curvature -- applied by host shader) | UE5 / Desktop | In-game hacking terminals, retro computer props, SSH-style remote access | Planned |
-| Tactical | Stripped-down command interface with status displays, no visual chrome, monospace grid layout | UE5 | Military command consoles, security systems, restricted-access terminals | Planned |
-| Corrupted | Randomized SDI object positions/alpha, garbled command output, visual glitch artifacts, "repair" puzzle hooks | UE5 | Damaged terminals the player must fix, environmental storytelling | Planned |
-| Desktop | Window-like panels, taskbar, start menu analog, multiple "apps" visible simultaneously | UE5 / Pi | Civilian in-game computers, player home terminals | Planned |
-| Agent Terminal | Agent-focused dashboard: agent status panel, MCP tool browser, remote session manager, system health, tamper status indicator | Pi (briefcase) | Briefcase field terminal for AI agent management (see Section 10) | Planned |
+| Classic | PSIX-style icon grid dashboard with document icons, tabbed status/bottom bars, chrome bezels, wave arc wallpaper | PSP / Pi / Desktop | Homebrew shell OS, the original C codebase experience modernized with PSIX styling | External (`skins/classic/`) |
+| XP | Windows XP Luna-inspired blue theme with gradient titlebars, taskbar, and start menu | Desktop / UE5 | Nostalgic desktop experience, in-game civilian computer props | External (`skins/xp/`) + Built-in |
+| Terminal | Full-screen command line with CRT visual metadata (scanlines, phosphor glow, screen curvature -- applied by host shader) | UE5 / Desktop | In-game hacking terminals, retro computer props, SSH-style remote access | Built-in |
+| Tactical | Stripped-down command interface with status displays, no visual chrome, monospace grid layout | UE5 | Military command consoles, security systems, restricted-access terminals | Built-in |
+| Corrupted | Randomized SDI object positions/alpha, garbled command output, visual glitch artifacts, "repair" puzzle hooks | UE5 | Damaged terminals the player must fix, environmental storytelling | Built-in |
+| Desktop | Window-like panels, taskbar, start menu analog, multiple "apps" visible simultaneously | UE5 / Pi | Civilian in-game computers, player home terminals | Built-in |
+| Agent Terminal | Agent-focused dashboard: agent status panel, MCP tool browser, remote session manager, system health, tamper status indicator | Pi (briefcase) | Briefcase field terminal for AI agent management (see Section 10) | Built-in |
+| Modern | Purple accent theme with rounded corners, gradient fills, shadows, and full feature set | Desktop / UE5 | Contemporary aesthetic, feature showcase | Built-in |
 
 ### 6.3 Skin Loading and Switching
 
