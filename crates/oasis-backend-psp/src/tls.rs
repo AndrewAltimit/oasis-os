@@ -56,8 +56,18 @@ impl TlsProvider for PspTlsProvider {
         // certificate pinning for specific hosts.
         let context = TlsContext::new(&config, NoVerify);
 
-        tls.open(context)
-            .map_err(|e| OasisError::Backend(format!("TLS handshake failed: {:?}", e)))?;
+        if let Err(e) = tls.open(context) {
+            // Handshake failed -- drop TLS (releases borrow on buffers)
+            // then reclaim the leaked buffers to avoid a memory leak.
+            drop(tls);
+            // SAFETY: buffers were created via Box::leak above and are
+            // not borrowed after dropping `tls`.
+            unsafe {
+                let _ = Box::from_raw(read_buf as *mut [u8]);
+                let _ = Box::from_raw(write_buf as *mut [u8]);
+            }
+            return Err(OasisError::Backend(format!("TLS handshake failed: {:?}", e)));
+        }
 
         Ok(Box::new(PspTlsStream {
             tls: Some(tls),

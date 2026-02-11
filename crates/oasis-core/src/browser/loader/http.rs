@@ -554,7 +554,7 @@ mod tests {
             let _ = stream.read(&mut buf);
             let resp = format!(
                 "HTTP/1.1 301 Moved\r\n\
-                 Location: https://localhost:{port}/secure\r\n\
+                 Location: https://127.0.0.1:{port}/secure\r\n\
                  Content-Length: 0\r\n\
                  \r\n"
             );
@@ -562,7 +562,7 @@ mod tests {
             let _ = stream.flush();
         });
 
-        let url = Url::parse(&format!("http://localhost:{port}/page")).unwrap();
+        let url = Url::parse(&format!("http://127.0.0.1:{port}/page")).unwrap();
         // No TLS provider -- redirect to HTTPS should produce error page.
         let resp = http_get(&url, None).unwrap();
         let body = String::from_utf8(resp.body).unwrap();

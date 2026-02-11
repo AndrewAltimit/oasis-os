@@ -228,7 +228,7 @@ mod tests {
     #[test]
     fn test_gemini_success_response() {
         let (handle, port) = spawn_gemini_server(b"20 text/gemini\r\n# Hello\nWelcome!".to_vec());
-        let url = Url::parse(&format!("gemini://localhost:{port}/")).unwrap();
+        let url = Url::parse(&format!("gemini://127.0.0.1:{port}/")).unwrap();
         let provider = PassthroughTlsProvider;
         let resp = gemini_get(&url, Some(&provider)).unwrap();
         assert_eq!(resp.content_type, ContentType::GeminiText);
@@ -244,7 +244,7 @@ mod tests {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let port = listener.local_addr().unwrap().port();
         let responses = vec![
-            format!("30 gemini://localhost:{port}/target\r\n").into_bytes(),
+            format!("30 gemini://127.0.0.1:{port}/target\r\n").into_bytes(),
             b"20 text/gemini\r\nRedirected!".to_vec(),
         ];
         let handle = std::thread::spawn(move || {
@@ -257,7 +257,7 @@ mod tests {
                 }
             }
         });
-        let url = Url::parse(&format!("gemini://localhost:{port}/start")).unwrap();
+        let url = Url::parse(&format!("gemini://127.0.0.1:{port}/start")).unwrap();
         let provider = PassthroughTlsProvider;
         let resp = gemini_get(&url, Some(&provider)).unwrap();
         let body = String::from_utf8(resp.body).unwrap();
@@ -279,13 +279,13 @@ mod tests {
                 if let Ok((mut stream, _)) = listener.accept() {
                     let mut buf = [0u8; 2048];
                     let _ = stream.read(&mut buf);
-                    let resp = format!("30 gemini://localhost:{port}/loop\r\n");
+                    let resp = format!("30 gemini://127.0.0.1:{port}/loop\r\n");
                     let _ = stream.write_all(resp.as_bytes());
                     let _ = stream.flush();
                 }
             }
         });
-        let url = Url::parse(&format!("gemini://localhost:{port}/start")).unwrap();
+        let url = Url::parse(&format!("gemini://127.0.0.1:{port}/start")).unwrap();
         let provider = PassthroughTlsProvider;
         let result = gemini_get(&url, Some(&provider));
         assert!(result.is_err());
@@ -296,7 +296,7 @@ mod tests {
     #[test]
     fn test_gemini_error_status() {
         let (handle, port) = spawn_gemini_server(b"51 Not Found\r\n".to_vec());
-        let url = Url::parse(&format!("gemini://localhost:{port}/missing")).unwrap();
+        let url = Url::parse(&format!("gemini://127.0.0.1:{port}/missing")).unwrap();
         let provider = PassthroughTlsProvider;
         let resp = gemini_get(&url, Some(&provider)).unwrap();
         let body = String::from_utf8(resp.body).unwrap();
@@ -310,7 +310,7 @@ mod tests {
     fn test_gemini_content_type_detection() {
         // text/gemini -> GeminiText
         let (h1, p1) = spawn_gemini_server(b"20 text/gemini\r\n# Test".to_vec());
-        let url1 = Url::parse(&format!("gemini://localhost:{p1}/")).unwrap();
+        let url1 = Url::parse(&format!("gemini://127.0.0.1:{p1}/")).unwrap();
         let provider = PassthroughTlsProvider;
         let r1 = gemini_get(&url1, Some(&provider)).unwrap();
         assert_eq!(r1.content_type, ContentType::GeminiText);
@@ -318,14 +318,14 @@ mod tests {
 
         // text/html -> Html
         let (h2, p2) = spawn_gemini_server(b"20 text/html\r\n<html>hi</html>".to_vec());
-        let url2 = Url::parse(&format!("gemini://localhost:{p2}/")).unwrap();
+        let url2 = Url::parse(&format!("gemini://127.0.0.1:{p2}/")).unwrap();
         let r2 = gemini_get(&url2, Some(&provider)).unwrap();
         assert_eq!(r2.content_type, ContentType::Html);
         let _ = h2.join();
 
         // text/plain -> PlainText
         let (h3, p3) = spawn_gemini_server(b"20 text/plain\r\nhello".to_vec());
-        let url3 = Url::parse(&format!("gemini://localhost:{p3}/")).unwrap();
+        let url3 = Url::parse(&format!("gemini://127.0.0.1:{p3}/")).unwrap();
         let r3 = gemini_get(&url3, Some(&provider)).unwrap();
         assert_eq!(r3.content_type, ContentType::PlainText);
         let _ = h3.join();
