@@ -174,3 +174,160 @@ fn tls_required_page(url: &Url) -> ResourceResponse {
         status: 200,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::backend::NetworkStream;
+    use std::io::Write as IoWrite;
+    use std::net::TcpListener;
+
+    /// A TLS provider that passes the stream through unchanged.
+    /// Used to test Gemini protocol over plain TCP.
+    struct PassthroughTlsProvider;
+
+    impl TlsProvider for PassthroughTlsProvider {
+        fn connect_tls(
+            &self,
+            stream: Box<dyn NetworkStream>,
+            _server_name: &str,
+        ) -> crate::error::Result<Box<dyn NetworkStream>> {
+            Ok(stream)
+        }
+    }
+
+    /// Spawn a local TCP server that accepts one connection, reads
+    /// the Gemini request, and sends the given raw response bytes.
+    fn spawn_gemini_server(response: Vec<u8>) -> (std::thread::JoinHandle<()>, u16) {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+
+        let handle = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            // Read the request (URL + CRLF).
+            let mut buf = [0u8; 2048];
+            let _ = stream.read(&mut buf);
+            // Send the response.
+            let _ = stream.write_all(&response);
+            let _ = stream.flush();
+        });
+
+        (handle, port)
+    }
+
+    #[test]
+    fn test_gemini_without_tls_returns_tls_required() {
+        let url = Url::parse("gemini://example.com/page").unwrap();
+        let resp = gemini_get(&url, None).unwrap();
+        let body = String::from_utf8(resp.body).unwrap();
+        assert!(body.contains("TLS Required"));
+        assert!(body.contains("example.com"));
+        assert_eq!(resp.content_type, ContentType::Html);
+    }
+
+    #[test]
+    fn test_gemini_success_response() {
+        let (handle, port) = spawn_gemini_server(b"20 text/gemini\r\n# Hello\nWelcome!".to_vec());
+        let url = Url::parse(&format!("gemini://localhost:{port}/")).unwrap();
+        let provider = PassthroughTlsProvider;
+        let resp = gemini_get(&url, Some(&provider)).unwrap();
+        assert_eq!(resp.content_type, ContentType::GeminiText);
+        let body = String::from_utf8(resp.body).unwrap();
+        assert!(body.contains("Hello"));
+        assert!(body.contains("Welcome!"));
+        let _ = handle.join();
+    }
+
+    #[test]
+    fn test_gemini_redirect_following() {
+        // Need to know port before building responses, so bind first.
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let responses = vec![
+            format!("30 gemini://localhost:{port}/target\r\n").into_bytes(),
+            b"20 text/gemini\r\nRedirected!".to_vec(),
+        ];
+        let handle = std::thread::spawn(move || {
+            for resp in &responses {
+                if let Ok((mut stream, _)) = listener.accept() {
+                    let mut buf = [0u8; 2048];
+                    let _ = stream.read(&mut buf);
+                    let _ = stream.write_all(resp);
+                    let _ = stream.flush();
+                }
+            }
+        });
+        let url = Url::parse(&format!("gemini://localhost:{port}/start")).unwrap();
+        let provider = PassthroughTlsProvider;
+        let resp = gemini_get(&url, Some(&provider)).unwrap();
+        let body = String::from_utf8(resp.body).unwrap();
+        assert!(body.contains("Redirected!"));
+        let _ = handle.join();
+    }
+
+    #[test]
+    fn test_gemini_max_redirects_exceeded() {
+        // Server always redirects.
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+
+        // Server accepts up to MAX_REDIRECTS connections, then stops.
+        // We don't join the thread because the client errors out after
+        // MAX_REDIRECTS and the server may be blocked on accept().
+        std::thread::spawn(move || {
+            for _ in 0..MAX_REDIRECTS + 1 {
+                if let Ok((mut stream, _)) = listener.accept() {
+                    let mut buf = [0u8; 2048];
+                    let _ = stream.read(&mut buf);
+                    let resp = format!("30 gemini://localhost:{port}/loop\r\n");
+                    let _ = stream.write_all(resp.as_bytes());
+                    let _ = stream.flush();
+                }
+            }
+        });
+        let url = Url::parse(&format!("gemini://localhost:{port}/start")).unwrap();
+        let provider = PassthroughTlsProvider;
+        let result = gemini_get(&url, Some(&provider));
+        assert!(result.is_err());
+        let msg = result.unwrap_err().to_string();
+        assert!(msg.contains("too many"));
+    }
+
+    #[test]
+    fn test_gemini_error_status() {
+        let (handle, port) = spawn_gemini_server(b"51 Not Found\r\n".to_vec());
+        let url = Url::parse(&format!("gemini://localhost:{port}/missing")).unwrap();
+        let provider = PassthroughTlsProvider;
+        let resp = gemini_get(&url, Some(&provider)).unwrap();
+        let body = String::from_utf8(resp.body).unwrap();
+        assert!(body.contains("Gemini Error"));
+        assert!(body.contains("Not Found"));
+        assert_eq!(resp.content_type, ContentType::Html);
+        let _ = handle.join();
+    }
+
+    #[test]
+    fn test_gemini_content_type_detection() {
+        // text/gemini -> GeminiText
+        let (h1, p1) = spawn_gemini_server(b"20 text/gemini\r\n# Test".to_vec());
+        let url1 = Url::parse(&format!("gemini://localhost:{p1}/")).unwrap();
+        let provider = PassthroughTlsProvider;
+        let r1 = gemini_get(&url1, Some(&provider)).unwrap();
+        assert_eq!(r1.content_type, ContentType::GeminiText);
+        let _ = h1.join();
+
+        // text/html -> Html
+        let (h2, p2) = spawn_gemini_server(b"20 text/html\r\n<html>hi</html>".to_vec());
+        let url2 = Url::parse(&format!("gemini://localhost:{p2}/")).unwrap();
+        let r2 = gemini_get(&url2, Some(&provider)).unwrap();
+        assert_eq!(r2.content_type, ContentType::Html);
+        let _ = h2.join();
+
+        // text/plain -> PlainText
+        let (h3, p3) = spawn_gemini_server(b"20 text/plain\r\nhello".to_vec());
+        let url3 = Url::parse(&format!("gemini://localhost:{p3}/")).unwrap();
+        let r3 = gemini_get(&url3, Some(&provider)).unwrap();
+        assert_eq!(r3.content_type, ContentType::PlainText);
+        let _ = h3.join();
+    }
+}

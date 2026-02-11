@@ -102,7 +102,12 @@ impl NetworkStream for PspTlsStream<'_> {
     }
 
     fn close(&mut self) -> Result<()> {
-        // Drop the TLS connection (sends close_notify if possible).
+        // embedded-tls does NOT send close_notify on drop.  The PSP
+        // environment is single-core with cooperative scheduling and
+        // typically connects to Gemini capsules over LAN/WAN where an
+        // abrupt TCP close is acceptable.  A proper close_notify would
+        // require an explicit `close_notify()` API that embedded-tls
+        // currently does not expose.
         self.tls.take();
         Ok(())
     }

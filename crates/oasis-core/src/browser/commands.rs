@@ -637,4 +637,35 @@ mod tests {
             _ => panic!("expected text"),
         }
     }
+
+    #[test]
+    fn fetch_gemini_url_not_supported() {
+        let (reg, mut vfs) = setup();
+        // fetch does not handle gemini:// URLs -- they fall through
+        // to the "not found in VFS" message.
+        match exec(&reg, &mut vfs, "fetch gemini://geminispace.info/").unwrap() {
+            CommandOutput::Text(s) => {
+                assert!(
+                    s.contains("not found in VFS"),
+                    "expected VFS fallback message for gemini URL, got: {s}",
+                );
+            },
+            _ => panic!("expected text"),
+        }
+    }
+
+    #[test]
+    fn curl_https_without_tls_shows_error_page() {
+        let (reg, mut vfs) = setup();
+        // curl delegates to fetch, which calls http_get with tls: None.
+        match exec(&reg, &mut vfs, "curl https://missing.example.com").unwrap() {
+            CommandOutput::Text(s) => {
+                assert!(
+                    s.contains("HTTPS Required"),
+                    "expected HTTPS Required page from curl, got: {s}",
+                );
+            },
+            _ => panic!("expected text"),
+        }
+    }
 }

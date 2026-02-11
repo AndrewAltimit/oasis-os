@@ -392,7 +392,7 @@ fn main() -> Result<()> {
                                 };
                                 let _ = wm.create_window(&wc, &mut sdi);
                                 let mut bw = BrowserWidget::new(browser_config.clone());
-                                bw.set_tls_provider(Box::new(RustlsTlsProvider::new()));
+                                bw.set_tls_provider(Box::new(tls_provider.clone()));
                                 bw.set_window(0, 0, 380, 220);
                                 let home = bw.config.features.home_url.clone();
                                 bw.navigate_vfs(&home, &vfs);
@@ -452,6 +452,7 @@ fn main() -> Result<()> {
                                 &vfs,
                                 &config,
                                 &mut active_transition,
+                                &tls_provider,
                             );
                         } else {
                             start_menu.close();
@@ -493,7 +494,7 @@ fn main() -> Result<()> {
                                                     let mut bw =
                                                         BrowserWidget::new(browser_config.clone());
                                                     bw.set_tls_provider(Box::new(
-                                                        RustlsTlsProvider::new(),
+                                                        tls_provider.clone(),
                                                     ));
                                                     bw.set_window(0, 0, 380, 220);
                                                     let home = bw.config.features.home_url.clone();
@@ -604,6 +605,7 @@ fn main() -> Result<()> {
                             &vfs,
                             &config,
                             &mut active_transition,
+                            &tls_provider,
                         );
                     }
                 },
@@ -988,6 +990,7 @@ fn handle_start_action(
     vfs: &MemoryVfs,
     config: &OasisConfig,
     active_transition: &mut Option<transition::TransitionState>,
+    tls_provider: &RustlsTlsProvider,
 ) {
     match action {
         StartMenuAction::LaunchApp(title) => {
@@ -1012,7 +1015,7 @@ fn handle_start_action(
                         };
                         let _ = wm.create_window(&wc, sdi);
                         let mut bw = BrowserWidget::new(browser_config.clone());
-                        bw.set_tls_provider(Box::new(RustlsTlsProvider::new()));
+                        bw.set_tls_provider(Box::new(tls_provider.clone()));
                         bw.set_window(0, 0, 380, 220);
                         let home = bw.config.features.home_url.clone();
                         bw.navigate_vfs(&home, vfs);

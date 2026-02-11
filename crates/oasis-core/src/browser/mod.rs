@@ -2662,4 +2662,35 @@ mod tests {
             cy,
         );
     }
+
+    #[test]
+    fn test_navigate_https_without_tls_shows_error() {
+        let mut bw = make_browser();
+        let vfs = test_vfs();
+        // No TLS provider set -- HTTPS should produce an error page.
+        bw.navigate_vfs("https://example.com/page", &vfs);
+        assert_eq!(bw.state, LoadingState::Idle);
+        // The HTTPS error page should be rendered as HTML in the DOM.
+        let doc = bw.document.as_ref().expect("document should be loaded");
+        let text = doc.text_content(doc.root);
+        assert!(
+            text.contains("HTTPS Required"),
+            "expected 'HTTPS Required' in page text, got: {text}",
+        );
+    }
+
+    #[test]
+    fn test_navigate_gemini_without_tls_shows_error() {
+        let mut bw = make_browser();
+        let vfs = test_vfs();
+        // No TLS provider -- Gemini should show a TLS Required page.
+        bw.navigate_vfs("gemini://example.com/page", &vfs);
+        assert_eq!(bw.state, LoadingState::Idle);
+        let doc = bw.document.as_ref().expect("document should be loaded");
+        let text = doc.text_content(doc.root);
+        assert!(
+            text.contains("TLS Required"),
+            "expected 'TLS Required' in page text, got: {text}",
+        );
+    }
 }

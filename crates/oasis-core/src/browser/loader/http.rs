@@ -539,4 +539,37 @@ mod tests {
         );
         assert_eq!(find_subsequence(b"no boundary", b"\r\n\r\n"), None);
     }
+
+    #[test]
+    fn http_to_https_redirect_without_tls() {
+        use std::io::Write as IoWrite;
+        use std::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+
+        let handle = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut buf = [0u8; 2048];
+            let _ = stream.read(&mut buf);
+            let resp = format!(
+                "HTTP/1.1 301 Moved\r\n\
+                 Location: https://localhost:{port}/secure\r\n\
+                 Content-Length: 0\r\n\
+                 \r\n"
+            );
+            let _ = stream.write_all(resp.as_bytes());
+            let _ = stream.flush();
+        });
+
+        let url = Url::parse(&format!("http://localhost:{port}/page")).unwrap();
+        // No TLS provider -- redirect to HTTPS should produce error page.
+        let resp = http_get(&url, None).unwrap();
+        let body = String::from_utf8(resp.body).unwrap();
+        assert!(
+            body.contains("HTTPS Required"),
+            "expected HTTPS Required page, got: {body}",
+        );
+        let _ = handle.join();
+    }
 }
