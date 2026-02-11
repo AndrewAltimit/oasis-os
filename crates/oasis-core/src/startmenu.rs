@@ -200,9 +200,11 @@ impl StartMenuState {
                 }
             },
             Button::Confirm => {
-                let action = self.items[self.selected].action.clone();
-                self.close();
-                return action;
+                if let Some(item) = self.items.get(self.selected) {
+                    let action = item.action.clone();
+                    self.close();
+                    return action;
+                }
             },
             Button::Cancel => {
                 self.close();

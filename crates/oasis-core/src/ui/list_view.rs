@@ -50,32 +50,40 @@ impl<T> ListView<T> {
     pub fn draw_at(&self, ctx: &mut DrawContext<'_>, x: i32, y: i32, w: u32, h: u32) -> Result<()> {
         ctx.backend.push_clip_rect(x, y, w, h)?;
 
-        let first = (self.scroll_offset / self.item_height as i32).max(0) as usize;
-        let visible = (h / self.item_height + 2) as usize;
-        let last = (first + visible).min(self.items.len());
+        let result = (|| {
+            let first = (self.scroll_offset / self.item_height as i32).max(0) as usize;
+            let visible = (h / self.item_height + 2) as usize;
+            let last = (first + visible).min(self.items.len());
 
-        for i in first..last {
-            let item_y = y + (i as i32 * self.item_height as i32) - self.scroll_offset;
-            let selected = self.selected == Some(i);
+            for i in first..last {
+                let item_y = y + (i as i32 * self.item_height as i32) - self.scroll_offset;
+                let selected = self.selected == Some(i);
 
-            if selected {
-                ctx.backend
-                    .fill_rect(x, item_y, w, self.item_height, ctx.theme.accent_subtle)?;
+                if selected {
+                    ctx.backend.fill_rect(
+                        x,
+                        item_y,
+                        w,
+                        self.item_height,
+                        ctx.theme.accent_subtle,
+                    )?;
+                }
+
+                (self.render_item)(
+                    &self.items[i],
+                    ctx,
+                    x,
+                    item_y,
+                    w,
+                    self.item_height,
+                    selected,
+                )?;
             }
-
-            (self.render_item)(
-                &self.items[i],
-                ctx,
-                x,
-                item_y,
-                w,
-                self.item_height,
-                selected,
-            )?;
-        }
+            Ok(())
+        })();
 
         ctx.backend.pop_clip_rect()?;
-        Ok(())
+        result
     }
 }
 
