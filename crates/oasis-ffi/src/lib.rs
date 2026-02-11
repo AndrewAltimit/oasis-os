@@ -16,6 +16,7 @@ use std::os::raw::c_char;
 use std::sync::Once;
 
 use oasis_backend_ue5::{FfiInputBackend, Ue5Backend};
+use oasis_core::active_theme::ActiveTheme;
 use oasis_core::backend::{InputBackend, SdiBackend};
 use oasis_core::dashboard::{DashboardConfig, DashboardState, discover_apps};
 use oasis_core::input::{Button, InputEvent, Trigger};
@@ -100,6 +101,7 @@ pub struct OasisInstance {
     platform: DesktopPlatform,
     #[allow(dead_code)]
     skin: Option<Skin>,
+    active_theme: ActiveTheme,
     dashboard: Option<DashboardState>,
     cwd: String,
     #[allow(dead_code)]
@@ -214,11 +216,16 @@ pub unsafe extern "C" fn oasis_create(
         _ => None,
     };
 
+    let active_theme = skin
+        .as_ref()
+        .map(|s| ActiveTheme::from_skin(&s.theme))
+        .unwrap_or_default();
+
     // Apply skin layout if available.
     let dashboard = if let Some(ref skin) = skin {
         skin.apply_layout(&mut sdi);
         let apps = discover_apps(&vfs, "/apps", None).unwrap_or_default();
-        let dash_config = DashboardConfig::from_features(&skin.features);
+        let dash_config = DashboardConfig::from_features(&skin.features, &active_theme);
         Some(DashboardState::new(dash_config, apps))
     } else {
         None
@@ -232,6 +239,7 @@ pub unsafe extern "C" fn oasis_create(
         vfs,
         platform,
         skin,
+        active_theme,
         dashboard,
         cwd: "/".to_string(),
         output_lines: Vec::new(),
@@ -315,7 +323,7 @@ pub unsafe extern "C" fn oasis_tick(handle: *mut OasisInstance, _delta_seconds: 
 
     // Update SDI.
     if let Some(ref dashboard) = instance.dashboard {
-        dashboard.update_sdi(&mut instance.sdi);
+        dashboard.update_sdi(&mut instance.sdi, &instance.active_theme);
     }
 
     // Render.
@@ -460,6 +468,9 @@ pub unsafe extern "C" fn oasis_send_command(
         Ok(CommandOutput::BrowserSandbox { enable }) => {
             let state = if enable { "on" } else { "off" };
             format!("Browser sandbox: {state}")
+        },
+        Ok(CommandOutput::SkinSwap { name }) => {
+            format!("Skin swap to '{name}' not available via FFI.")
         },
         Err(e) => format!("error: {e}"),
     };

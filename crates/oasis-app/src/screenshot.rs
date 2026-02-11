@@ -1,22 +1,24 @@
 //! Screenshot capture tool for PSIX visual comparison.
 //!
 //! Renders the OASIS_OS UI in several states and saves PNG screenshots
-//! to `screenshots/` next to the repo root. Compare these against
-//! `Psixpsp.png` to iterate on the visual design.
+//! to `screenshots/{skin_name}/` next to the repo root. Compare these
+//! against `Psixpsp.png` to iterate on the visual design.
 //!
 //! Usage:
-//!   cargo run -p oasis-app --bin oasis-screenshot
+//!   cargo run -p oasis-app --bin oasis-screenshot [skin_name]
+//!   OASIS_SKIN=xp cargo run -p oasis-app --bin oasis-screenshot
 //!
 //! Output:
-//!   screenshots/01_dashboard.png   -- Main dashboard view
-//!   screenshots/02_media_tab.png   -- AUDIO media tab selected
-//!   screenshots/03_mods_tab.png    -- MODS top tab selected
-//!   screenshots/04_terminal.png    -- Terminal mode
+//!   screenshots/{skin}/01_dashboard.png   -- Main dashboard view
+//!   screenshots/{skin}/02_media_tab.png   -- AUDIO media tab selected
+//!   screenshots/{skin}/03_mods_tab.png    -- MODS top tab selected
+//!   screenshots/{skin}/04_terminal.png    -- Terminal mode
 
 use std::fs;
 use std::path::Path;
 
 use oasis_backend_sdl::SdlBackend;
+use oasis_core::active_theme::ActiveTheme;
 use oasis_core::backend::{Color, SdiBackend};
 use oasis_core::bottombar::{BottomBar, MediaTab};
 use oasis_core::config::OasisConfig;
@@ -25,7 +27,8 @@ use oasis_core::dashboard::{DashboardConfig, DashboardState, discover_apps};
 use oasis_core::platform::DesktopPlatform;
 use oasis_core::platform::{PowerService, TimeService};
 use oasis_core::sdi::SdiRegistry;
-use oasis_core::skin::Skin;
+use oasis_core::skin::resolve_skin;
+use oasis_core::startmenu::StartMenuState;
 use oasis_core::statusbar::StatusBar;
 use oasis_core::vfs::MemoryVfs;
 use oasis_core::wallpaper;
@@ -40,29 +43,41 @@ fn main() -> anyhow::Result<()> {
     let mut backend = SdlBackend::new("OASIS Screenshot", w, h)?;
     backend.init(w, h)?;
 
-    let skin = Skin::from_toml(
-        include_str!("../../../skins/classic/skin.toml"),
-        include_str!("../../../skins/classic/layout.toml"),
-        include_str!("../../../skins/classic/features.toml"),
-    )?;
+    let skin_name = std::env::args()
+        .nth(1)
+        .or_else(|| std::env::var("OASIS_SKIN").ok())
+        .unwrap_or_else(|| "classic".to_string());
+    let skin = resolve_skin(&skin_name)?;
 
     let platform = DesktopPlatform::new();
     let mut vfs = MemoryVfs::new();
     populate_demo_vfs(&mut vfs);
 
+    let active_theme = ActiveTheme::from_skin(&skin.theme);
+
     let apps = discover_apps(&vfs, "/apps", Some("OASISOS"))?;
-    let dash_config = DashboardConfig::from_features(&skin.features);
+    let dash_config = DashboardConfig::from_features(&skin.features, &active_theme);
     let dashboard = DashboardState::new(dash_config, apps);
     let mut status_bar = StatusBar::new();
     let mut bottom_bar = BottomBar::new();
     bottom_bar.total_pages = dashboard.page_count();
+
+    // Start menu (when enabled by skin).
+    let start_menu = if skin.features.start_menu {
+        Some(StartMenuState::new_with_theme(
+            StartMenuState::default_items(),
+            &active_theme,
+        ))
+    } else {
+        None
+    };
 
     let mut sdi = SdiRegistry::new();
     skin.apply_layout(&mut sdi);
 
     // Wallpaper.
     let wallpaper_tex = {
-        let wp_data = wallpaper::generate_gradient(w, h);
+        let wp_data = wallpaper::generate_from_config(w, h, &active_theme);
         backend.load_texture(w, h, &wp_data)?
     };
     {
@@ -92,14 +107,17 @@ fn main() -> anyhow::Result<()> {
     let power = platform.power_info().ok();
     status_bar.update_info(time.as_ref(), power.as_ref());
 
-    // Create output directory.
-    let out_dir = Path::new("screenshots");
-    fs::create_dir_all(out_dir)?;
+    // Create skin-specific output directory.
+    let out_dir = Path::new("screenshots").join(&skin_name);
+    fs::create_dir_all(&out_dir)?;
 
     // -- Screenshot 1: Dashboard --
-    dashboard.update_sdi(&mut sdi);
-    status_bar.update_sdi(&mut sdi);
-    bottom_bar.update_sdi(&mut sdi);
+    dashboard.update_sdi(&mut sdi, &active_theme);
+    status_bar.update_sdi(&mut sdi, &active_theme, &skin.features);
+    bottom_bar.update_sdi(&mut sdi, &active_theme, &skin.features);
+    if let Some(ref sm) = start_menu {
+        sm.update_sdi(&mut sdi, &active_theme);
+    }
     mouse_cursor.update_sdi(&mut sdi);
     render_and_save(
         &mut backend,
@@ -113,8 +131,11 @@ fn main() -> anyhow::Result<()> {
     // -- Screenshot 2: AUDIO media tab --
     bottom_bar.active_tab = MediaTab::Audio;
     dashboard.hide_sdi(&mut sdi);
-    status_bar.update_sdi(&mut sdi);
-    bottom_bar.update_sdi(&mut sdi);
+    if let Some(ref sm) = start_menu {
+        sm.hide_sdi(&mut sdi);
+    }
+    status_bar.update_sdi(&mut sdi, &active_theme, &skin.features);
+    bottom_bar.update_sdi(&mut sdi, &active_theme, &skin.features);
     update_media_page(&mut sdi, &bottom_bar);
     mouse_cursor.update_sdi(&mut sdi);
     render_and_save(
@@ -130,9 +151,12 @@ fn main() -> anyhow::Result<()> {
     bottom_bar.active_tab = MediaTab::None;
     status_bar.active_tab = oasis_core::statusbar::TopTab::Mods;
     hide_media_page(&mut sdi);
-    dashboard.update_sdi(&mut sdi);
-    status_bar.update_sdi(&mut sdi);
-    bottom_bar.update_sdi(&mut sdi);
+    dashboard.update_sdi(&mut sdi, &active_theme);
+    status_bar.update_sdi(&mut sdi, &active_theme, &skin.features);
+    bottom_bar.update_sdi(&mut sdi, &active_theme, &skin.features);
+    if let Some(ref sm) = start_menu {
+        sm.update_sdi(&mut sdi, &active_theme);
+    }
     mouse_cursor.update_sdi(&mut sdi);
     render_and_save(
         &mut backend,
@@ -147,6 +171,9 @@ fn main() -> anyhow::Result<()> {
     dashboard.hide_sdi(&mut sdi);
     StatusBar::hide_sdi(&mut sdi);
     BottomBar::hide_sdi(&mut sdi);
+    if let Some(ref sm) = start_menu {
+        sm.hide_sdi(&mut sdi);
+    }
     hide_media_page(&mut sdi);
     setup_terminal_objects(
         &mut sdi,
@@ -172,7 +199,7 @@ fn main() -> anyhow::Result<()> {
 
     backend.shutdown()?;
 
-    println!("Screenshots saved to screenshots/");
+    println!("Screenshots saved to {}/", out_dir.display());
     println!("Compare against Psixpsp.png at the repo root.");
     Ok(())
 }

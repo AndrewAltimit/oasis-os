@@ -73,12 +73,147 @@ pub fn generate_gradient(w: u32, h: u32) -> Vec<u8> {
     buf
 }
 
+/// Generate a wallpaper from the active theme's wallpaper configuration.
+///
+/// Supports "gradient" (multi-stop with optional angle and wave arcs),
+/// "solid" (first stop color fill), and "none" (black fill).
+pub fn generate_from_config(w: u32, h: u32, at: &crate::active_theme::ActiveTheme) -> Vec<u8> {
+    match at.wallpaper_style.as_str() {
+        "solid" => {
+            let c = at
+                .wallpaper_stops
+                .first()
+                .copied()
+                .unwrap_or(crate::backend::Color::BLACK);
+            let mut buf = vec![0u8; (w * h * 4) as usize];
+            for y in 0..h {
+                for x in 0..w {
+                    let offset = ((y * w + x) * 4) as usize;
+                    buf[offset] = c.r;
+                    buf[offset + 1] = c.g;
+                    buf[offset + 2] = c.b;
+                    buf[offset + 3] = 255;
+                }
+            }
+            buf
+        },
+        "none" => {
+            let mut buf = vec![0u8; (w * h * 4) as usize];
+            for i in (0..buf.len()).step_by(4) {
+                buf[i + 3] = 255;
+            }
+            buf
+        },
+        _ => {
+            // "gradient" -- multi-stop gradient with angle and optional wave.
+            generate_gradient_config(
+                w,
+                h,
+                &at.wallpaper_stops,
+                at.wallpaper_angle,
+                at.wallpaper_wave,
+                at.wallpaper_wave_intensity,
+            )
+        },
+    }
+}
+
+/// Multi-stop gradient with configurable angle and optional wave arcs.
+fn generate_gradient_config(
+    w: u32,
+    h: u32,
+    stops: &[crate::backend::Color],
+    angle: f32,
+    wave: bool,
+    wave_intensity: f32,
+) -> Vec<u8> {
+    if stops.is_empty() {
+        return generate_gradient(w, h);
+    }
+    if stops.len() == 1 {
+        let c = stops[0];
+        let mut buf = vec![0u8; (w * h * 4) as usize];
+        for y in 0..h {
+            for x in 0..w {
+                let offset = ((y * w + x) * 4) as usize;
+                buf[offset] = c.r;
+                buf[offset + 1] = c.g;
+                buf[offset + 2] = c.b;
+                buf[offset + 3] = 255;
+            }
+        }
+        return buf;
+    }
+
+    let mut buf = vec![0u8; (w * h * 4) as usize];
+    let angle_rad = angle.to_radians();
+    let cos_a = angle_rad.cos();
+    let sin_a = angle_rad.sin();
+
+    for y in 0..h {
+        for x in 0..w {
+            let offset = ((y * w + x) * 4) as usize;
+
+            let nx = x as f32 / w as f32;
+            let ny = y as f32 / h as f32;
+
+            // Project along the angle direction.
+            let t = (nx * cos_a + ny * sin_a).clamp(0.0, 1.0);
+
+            // Multi-stop interpolation.
+            let (r, g, b) = multi_stop_lerp(stops, t);
+
+            // Vertical brightness variation (only for wave-style wallpapers).
+            let vert = if wave { 1.0 + (0.5 - ny) * 0.18 } else { 1.0 };
+
+            // Optional PSIX-style wave arcs.
+            let wave_factor = if wave && wave_intensity > 0.0 {
+                let dx = nx + 0.05;
+                let dy = ny - 1.3;
+                let dist = (dx * dx + dy * dy).sqrt();
+                let arc1 = (dist * 12.0).sin() * 0.18;
+                let arc2 = (dist * 22.0 + 1.2).sin() * 0.09;
+                let arc3 = (dist * 36.0 + nx * 2.5).sin() * 0.04;
+                let arc_fade = (1.0 - nx * 0.45).clamp(0.0, 1.0);
+                1.0 + (arc1 + arc2 + arc3) * arc_fade * wave_intensity
+            } else {
+                1.0
+            };
+
+            let scale = vert * wave_factor;
+            buf[offset] = (r as f32 * scale).clamp(0.0, 255.0) as u8;
+            buf[offset + 1] = (g as f32 * scale).clamp(0.0, 255.0) as u8;
+            buf[offset + 2] = (b as f32 * scale).clamp(0.0, 255.0) as u8;
+            buf[offset + 3] = 255;
+        }
+    }
+
+    buf
+}
+
+/// Interpolate between multiple color stops.
+fn multi_stop_lerp(stops: &[crate::backend::Color], t: f32) -> (u8, u8, u8) {
+    let n = stops.len();
+    if n == 0 {
+        return (0, 0, 0);
+    }
+    if n == 1 {
+        return (stops[0].r, stops[0].g, stops[0].b);
+    }
+    let segment = t * (n - 1) as f32;
+    let idx = (segment as usize).min(n - 2);
+    let local_t = segment - idx as f32;
+    let a = stops[idx];
+    let b = stops[idx + 1];
+    lerp_rgb((a.r, a.g, a.b), (b.r, b.g, b.b), local_t)
+}
+
 /// Linear interpolation between two RGB colors.
 fn lerp_rgb(a: (u8, u8, u8), b: (u8, u8, u8), t: f32) -> (u8, u8, u8) {
     let r = a.0 as f32 + (b.0 as f32 - a.0 as f32) * t;
     let g = a.1 as f32 + (b.1 as f32 - a.1 as f32) * t;
     let b_val = a.2 as f32 + (b.2 as f32 - a.2 as f32) * t;
-    (r as u8, g as u8, b_val as u8)
+    ((r + 0.5) as u8, (g + 0.5) as u8, (b_val + 0.5) as u8)
 }
 
 #[cfg(test)]

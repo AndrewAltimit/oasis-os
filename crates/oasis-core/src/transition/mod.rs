@@ -195,6 +195,26 @@ pub fn page_slide_right(w: u32, h: u32) -> TransitionState {
     TransitionState::new(TransitionEffect::PageSlideRight, 20, w, h)
 }
 
+/// Fade-in with custom duration.
+pub fn fade_in_custom(w: u32, h: u32, frames: u32) -> TransitionState {
+    TransitionState::new(TransitionEffect::FadeIn, frames, w, h)
+}
+
+/// Fade-out with custom duration.
+pub fn fade_out_custom(w: u32, h: u32, frames: u32) -> TransitionState {
+    TransitionState::new(TransitionEffect::FadeOut, frames, w, h)
+}
+
+/// Page slide left with custom duration.
+pub fn page_slide_left_custom(w: u32, h: u32, frames: u32) -> TransitionState {
+    TransitionState::new(TransitionEffect::PageSlideLeft, frames, w, h)
+}
+
+/// Page slide right with custom duration.
+pub fn page_slide_right_custom(w: u32, h: u32, frames: u32) -> TransitionState {
+    TransitionState::new(TransitionEffect::PageSlideRight, frames, w, h)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

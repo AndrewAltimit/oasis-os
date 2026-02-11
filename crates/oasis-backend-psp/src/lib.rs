@@ -439,6 +439,7 @@ pub fn psp_wm_theme() -> WmTheme {
         button_size: 8,
         resize_handle_size: 3,
         titlebar_font_size: 10,
+        ..WmTheme::default()
     }
 }
 

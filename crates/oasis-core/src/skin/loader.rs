@@ -1,6 +1,7 @@
 //! Skin loading from TOML configuration files.
 
 use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
 
@@ -50,6 +51,19 @@ pub struct SkinObjectDef {
     pub font_size: Option<u16>,
     pub alpha: Option<u8>,
     pub visible: Option<bool>,
+    // Extended visual properties.
+    #[serde(default)]
+    pub border_radius: Option<u16>,
+    #[serde(default)]
+    pub gradient_top: Option<String>,
+    #[serde(default)]
+    pub gradient_bottom: Option<String>,
+    #[serde(default)]
+    pub shadow_level: Option<u8>,
+    #[serde(default)]
+    pub stroke_width: Option<u16>,
+    #[serde(default)]
+    pub stroke_color: Option<String>,
 }
 
 /// Layout: a named collection of SDI object definitions (`layout.toml`).
@@ -92,9 +106,36 @@ pub struct SkinFeatures {
     /// Available command categories (empty = all).
     #[serde(default)]
     pub command_categories: Vec<String>,
+    /// Whether the start menu popup is available.
+    #[serde(default = "yes")]
+    pub start_menu: bool,
     /// Whether corrupted modifiers are active.
     #[serde(default)]
     pub corrupted: bool,
+    /// Whether the battery indicator is shown in the status bar.
+    #[serde(default = "yes")]
+    pub show_battery: bool,
+    /// Whether the clock is shown in the status bar.
+    #[serde(default = "yes")]
+    pub show_clock: bool,
+    /// Whether the version label is shown in the status bar.
+    #[serde(default = "yes")]
+    pub show_version: bool,
+    /// Whether top tabs are shown in the status bar.
+    #[serde(default = "yes")]
+    pub show_tabs: bool,
+    /// Whether media category tabs are shown in the bottom bar.
+    #[serde(default = "yes")]
+    pub show_media_tabs: bool,
+    /// Whether page dots are shown in the bottom bar.
+    #[serde(default = "yes")]
+    pub show_page_dots: bool,
+    /// Custom fade transition duration in frames (default 15).
+    #[serde(default)]
+    pub transition_fade_frames: Option<u32>,
+    /// Custom slide transition duration in frames (default 20).
+    #[serde(default)]
+    pub transition_slide_frames: Option<u32>,
 }
 
 fn yes() -> bool {
@@ -126,7 +167,16 @@ impl Default for SkinFeatures {
             grid_cols: 3,
             grid_rows: 2,
             command_categories: Vec::new(),
+            start_menu: true,
             corrupted: false,
+            show_battery: true,
+            show_clock: true,
+            show_version: true,
+            show_tabs: true,
+            show_media_tabs: true,
+            show_page_dots: true,
+            transition_fade_frames: None,
+            transition_slide_frames: None,
         }
     }
 }
@@ -261,8 +311,79 @@ impl Skin {
                 {
                     obj.text_color = parsed;
                 }
+                // Extended visual properties.
+                if let Some(r) = def.border_radius {
+                    obj.border_radius = Some(r);
+                }
+                if let Some(ref c) = def.gradient_top
+                    && let Some(parsed) = parse_hex_color(c)
+                {
+                    obj.gradient_top = Some(parsed);
+                }
+                if let Some(ref c) = def.gradient_bottom
+                    && let Some(parsed) = parse_hex_color(c)
+                {
+                    obj.gradient_bottom = Some(parsed);
+                }
+                if let Some(s) = def.shadow_level {
+                    obj.shadow_level = Some(s);
+                }
+                if let Some(sw) = def.stroke_width {
+                    obj.stroke_width = Some(sw);
+                }
+                if let Some(ref c) = def.stroke_color
+                    && let Some(parsed) = parse_hex_color(c)
+                {
+                    obj.stroke_color = Some(parsed);
+                }
             }
         }
+    }
+
+    /// Load a skin from a directory containing TOML files.
+    ///
+    /// Requires `skin.toml`, `layout.toml`, and `features.toml`.
+    /// Optional files: `theme.toml`, `strings.toml`, `corrupted.toml`.
+    pub fn from_directory(dir: &Path) -> Result<Self> {
+        let read = |name: &str| -> Result<String> {
+            let p = dir.join(name);
+            std::fs::read_to_string(&p)
+                .map_err(|e| OasisError::Config(format!("{}: {e}", p.display())))
+        };
+        let read_opt =
+            |name: &str| -> String { std::fs::read_to_string(dir.join(name)).unwrap_or_default() };
+
+        let manifest = read("skin.toml")?;
+        let layout = read("layout.toml")?;
+        let features = read("features.toml")?;
+        let theme = read_opt("theme.toml");
+        let strings = read_opt("strings.toml");
+        let corrupted = read_opt("corrupted.toml");
+
+        if corrupted.is_empty() {
+            Self::from_toml_full(&manifest, &layout, &features, &theme, &strings)
+        } else {
+            Self::from_toml_corrupted(&manifest, &layout, &features, &theme, &strings, &corrupted)
+        }
+    }
+
+    /// Scan a directory for skin subdirectories (those containing `skin.toml`).
+    ///
+    /// Returns `(name, path)` pairs sorted by name.
+    pub fn discover_skins(dir: &Path) -> Vec<(String, PathBuf)> {
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return Vec::new();
+        };
+        let mut skins: Vec<(String, PathBuf)> = entries
+            .filter_map(|e| e.ok())
+            .filter(|e| e.path().join("skin.toml").is_file())
+            .map(|e| {
+                let name = e.file_name().to_string_lossy().into_owned();
+                (name, e.path())
+            })
+            .collect();
+        skins.sort_by(|a, b| a.0.cmp(&b.0));
+        skins
     }
 
     /// Tear down the current SDI tree and rebuild from a new skin.

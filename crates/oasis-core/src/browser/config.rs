@@ -1,6 +1,8 @@
 //! Browser configuration and skin feature gates.
 
 use crate::backend::Color;
+use crate::skin::SkinTheme;
+use crate::ui::color::{darken, lighten};
 
 /// Browser feature configuration (from skin features.toml).
 #[derive(Debug, Clone)]
@@ -72,6 +74,9 @@ pub struct BrowserConfig {
     // Limits
     pub max_redirects: u8,
     pub max_image_dimension: u32,
+
+    /// Use themed chrome with rounded rects (true) or legacy flat chrome (false).
+    pub use_themed_chrome: bool,
 }
 
 impl Default for BrowserConfig {
@@ -98,11 +103,47 @@ impl Default for BrowserConfig {
             scroll_line_px: 16,
             max_redirects: 5,
             max_image_dimension: 480,
+            use_themed_chrome: true,
         }
     }
 }
 
 impl BrowserConfig {
+    /// Build a `BrowserConfig` with chrome colors derived from a skin theme.
+    ///
+    /// Fine-grained `browser_overrides` in the skin are checked first,
+    /// falling back to colors derived from the 9 base palette entries.
+    pub fn from_skin_theme(skin: &SkinTheme) -> Self {
+        use crate::skin::theme::parse_hex_color;
+
+        let bg = skin.background_color();
+        let text = skin.text_color();
+        let primary = skin.primary_color();
+        let secondary = skin.secondary_color();
+        let dim = skin.dim_text_color();
+
+        let ov = |opt: Option<&String>, fallback: Color| -> Color {
+            opt.and_then(|s| parse_hex_color(s)).unwrap_or(fallback)
+        };
+        let br = skin.browser_overrides.as_ref();
+
+        Self {
+            chrome_bg: ov(br.and_then(|b| b.chrome_bg.as_ref()), lighten(bg, 0.10)),
+            chrome_text: ov(br.and_then(|b| b.chrome_text.as_ref()), text),
+            chrome_button_bg: ov(br.and_then(|b| b.chrome_button_bg.as_ref()), secondary),
+            chrome_button_hover: lighten(
+                ov(br.and_then(|b| b.chrome_button_bg.as_ref()), secondary),
+                0.15,
+            ),
+            url_bar_bg: ov(br.and_then(|b| b.url_bar_bg.as_ref()), darken(bg, 0.8)),
+            url_bar_text: ov(br.and_then(|b| b.url_bar_text.as_ref()), text),
+            status_bar_bg: ov(br.and_then(|b| b.status_bar_bg.as_ref()), lighten(bg, 0.05)),
+            status_bar_text: ov(br.and_then(|b| b.status_bar_text.as_ref()), dim),
+            default_link_color: ov(br.and_then(|b| b.link_color.as_ref()), primary),
+            ..Self::default()
+        }
+    }
+
     /// Cache size in bytes.
     pub fn cache_size_bytes(&self) -> usize {
         self.features.max_cache_mb * 1024 * 1024

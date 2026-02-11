@@ -9,3 +9,6 @@ y = 24
 w = 480
 h = 224
 color = "#0E0E1C"
+gradient_top = "#121226"
+gradient_bottom = "#0A0A16"
+border_radius = 0

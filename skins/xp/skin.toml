@@ -1,0 +1,6 @@
+name = "xp"
+version = "1.0"
+author = "OASIS_OS"
+description = "Windows XP Luna-inspired blue theme with gradient titlebars and taskbar"
+screen_width = 480
+screen_height = 272

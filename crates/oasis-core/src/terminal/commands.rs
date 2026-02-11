@@ -38,6 +38,8 @@ pub fn register_builtins(reg: &mut CommandRegistry) {
     crate::script::register_script_commands(reg);
     crate::update::register_update_commands(reg);
     crate::transfer::register_transfer_commands(reg);
+    // Skin switching commands.
+    crate::terminal::register_skin_commands(reg);
 }
 
 // ---------------------------------------------------------------------------

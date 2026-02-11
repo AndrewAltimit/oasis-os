@@ -1,0 +1,14 @@
+# XP Luna features
+dashboard = true
+terminal = true
+file_browser = true
+browser = true
+window_manager = true
+dashboard_pages = 2
+icons_per_page = 8
+grid_cols = 4
+grid_rows = 2
+start_menu = true
+show_version = false
+transition_fade_frames = 12
+transition_slide_frames = 16

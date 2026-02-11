@@ -4,6 +4,7 @@
 //! backend abstraction traits, input event pipeline, configuration, and
 //! error types. This crate has zero platform dependencies.
 
+pub mod active_theme;
 pub mod agent;
 pub mod apps;
 pub mod audio;
@@ -23,11 +24,13 @@ pub mod plugin;
 pub mod script;
 pub mod sdi;
 pub mod skin;
+pub mod startmenu;
 pub mod statusbar;
 pub mod terminal;
 pub mod theme;
 pub mod transfer;
 pub mod transition;
+pub mod ui;
 pub mod update;
 pub mod vfs;
 pub mod wallpaper;

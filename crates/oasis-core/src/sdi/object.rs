@@ -40,6 +40,22 @@ pub struct SdiObject {
     /// When true, this object is drawn in the overlay pass (on top of all
     /// base-layer objects). Matches PSIX's two-layer rendering model.
     pub overlay: bool,
+
+    // -- Extended visual properties (all optional, None = legacy behavior) --
+    /// Corner radius for rounded rectangles (pixels).
+    pub border_radius: Option<u16>,
+    /// Vertical gradient top color (used with `gradient_bottom`).
+    pub gradient_top: Option<Color>,
+    /// Vertical gradient bottom color (used with `gradient_top`).
+    pub gradient_bottom: Option<Color>,
+    /// Shadow elevation level (0 = none, 1-3 = increasingly prominent).
+    pub shadow_level: Option<u8>,
+    /// Stroke/outline width in pixels.
+    pub stroke_width: Option<u16>,
+    /// Stroke/outline color.
+    pub stroke_color: Option<Color>,
+    /// Custom shadow color (default: black).
+    pub shadow_color: Option<Color>,
 }
 
 impl SdiObject {
@@ -60,6 +76,13 @@ impl SdiObject {
             font_size: 12,
             text_color: Color::BLACK,
             overlay: false,
+            border_radius: None,
+            gradient_top: None,
+            gradient_bottom: None,
+            shadow_level: None,
+            stroke_width: None,
+            stroke_color: None,
+            shadow_color: None,
         }
     }
 }

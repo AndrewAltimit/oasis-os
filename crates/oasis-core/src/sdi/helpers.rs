@@ -146,6 +146,69 @@ pub fn hide_indexed(sdi: &mut SdiRegistry, prefix: &str, count: usize) {
     }
 }
 
+/// Ensure a rounded filled overlay element exists and is visible.
+///
+/// Sets `border_radius` on the object for rounded rendering.
+#[allow(clippy::too_many_arguments)]
+pub fn ensure_rounded_fill(
+    sdi: &mut SdiRegistry,
+    name: &str,
+    x: i32,
+    y: i32,
+    w: u32,
+    h: u32,
+    color: Color,
+    radius: u16,
+) {
+    if !sdi.contains(name) {
+        let obj = sdi.create(name);
+        obj.overlay = true;
+        obj.z = Z_BORDER;
+    }
+    if let Ok(obj) = sdi.get_mut(name) {
+        obj.x = x;
+        obj.y = y;
+        obj.w = w;
+        obj.h = h;
+        obj.color = color;
+        obj.visible = true;
+        obj.border_radius = Some(radius);
+    }
+}
+
+/// Ensure a pill-shaped tab element (rounded rect with stroke).
+///
+/// Creates a single SDI object with rounded corners and optional stroke.
+/// Active tabs get a filled background; inactive tabs get stroke-only.
+#[allow(clippy::too_many_arguments)]
+pub fn ensure_pill(
+    sdi: &mut SdiRegistry,
+    name: &str,
+    x: i32,
+    y: i32,
+    w: u32,
+    h: u32,
+    fill: Color,
+    stroke_color: Color,
+) {
+    if !sdi.contains(name) {
+        let obj = sdi.create(name);
+        obj.overlay = true;
+        obj.z = Z_BORDER;
+    }
+    if let Ok(obj) = sdi.get_mut(name) {
+        obj.x = x;
+        obj.y = y;
+        obj.w = w;
+        obj.h = h;
+        obj.color = fill;
+        obj.visible = true;
+        obj.border_radius = Some(h as u16 / 2);
+        obj.stroke_width = Some(1);
+        obj.stroke_color = Some(stroke_color);
+    }
+}
+
 /// Hide all bezel-related objects (fill + 4 edges).
 pub fn hide_bezel(sdi: &mut SdiRegistry, name: &str) {
     let names: [String; 5] = [

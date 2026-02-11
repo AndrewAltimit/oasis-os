@@ -317,6 +317,8 @@ y = 568
 w = 800
 h = 32
 color = "#222233"
+gradient_top = "#2A2A44"
+gradient_bottom = "#1A1A33"
 
 [taskbar_separator]
 x = 0
@@ -334,6 +336,7 @@ color = "#3264C8"
 text = "Start"
 font_size = 10
 text_color = "#FFFFFF"
+border_radius = 4
 
 [clock_display]
 x = 730
@@ -363,6 +366,8 @@ status_bar = "#222233"
 prompt = "#00FF00"
 output = "#CCCCCC"
 error = "#FF4444"
+border_radius = 4
+shadow_intensity = 1
 
 [wm_theme]
 titlebar_height = 24
@@ -378,6 +383,10 @@ btn_maximize = "#32C832"
 button_size = 16
 resize_handle_size = 6
 titlebar_font_size = 12
+titlebar_radius = 4
+frame_shadow_level = 1
+frame_border_radius = 2
+button_radius = 8
 "##;
 
 const DESKTOP_STRINGS: &str = r#"
@@ -430,6 +439,281 @@ pub fn corrupted_skin() -> Result<Skin> {
 }
 
 // ---------------------------------------------------------------------------
+// Modern skin: showcases all v2 visual features (rounded, gradients, shadows).
+// ---------------------------------------------------------------------------
+
+const MODERN_MANIFEST: &str = r#"
+name = "modern"
+version = "1.0"
+author = "OASIS_OS"
+description = "Modern UI with rounded corners, gradients, and shadows"
+screen_width = 480
+screen_height = 272
+"#;
+
+const MODERN_LAYOUT: &str = r##"
+[content_bg]
+x = 0
+y = 24
+w = 480
+h = 224
+color = "#14141E"
+gradient_top = "#181828"
+gradient_bottom = "#10101A"
+border_radius = 0
+shadow_level = 0
+"##;
+
+const MODERN_FEATURES: &str = r#"
+dashboard = true
+terminal = true
+file_browser = true
+browser = true
+window_manager = true
+dashboard_pages = 4
+icons_per_page = 4
+grid_cols = 2
+grid_rows = 2
+"#;
+
+const MODERN_THEME: &str = r##"
+background = "#14141E"
+primary = "#6C5CE7"
+secondary = "#3D3852"
+text = "#F0F0FF"
+dim_text = "#7E7A90"
+status_bar = "#1A1A2D"
+prompt = "#A29BFE"
+output = "#DDD6FE"
+error = "#FF6B6B"
+surface = "#1E1E30"
+accent_hover = "#8B7CF7"
+border_radius = 6
+shadow_intensity = 2
+gradient_enabled = true
+
+[wm_theme]
+titlebar_height = 24
+border_width = 1
+titlebar_active = "#6C5CE7"
+titlebar_inactive = "#3D3852"
+titlebar_text = "#F0F0FF"
+frame_color = "#2A2A40"
+content_bg = "#181828"
+btn_close = "#FF6B6B"
+btn_minimize = "#FFD93D"
+btn_maximize = "#6BCB77"
+button_size = 16
+resize_handle_size = 6
+titlebar_font_size = 12
+titlebar_radius = 6
+titlebar_gradient = true
+frame_shadow_level = 2
+frame_border_radius = 4
+button_radius = 8
+"##;
+
+const MODERN_STRINGS: &str = r#"
+boot_text = [
+    "OASIS_OS v2.2 [modern]",
+    "Loading modern interface...",
+    "UI subsystems: active",
+    "Ready.",
+]
+prompt_format = "> "
+title = "OASIS Modern"
+home_label = "Home"
+welcome_message = "Welcome to OASIS Modern. Type 'help' for commands."
+error_prefix = "error: "
+shutdown_message = "Session ended."
+"#;
+
+// ---------------------------------------------------------------------------
+// XP skin: Windows XP Luna blue theme.
+// ---------------------------------------------------------------------------
+
+const XP_MANIFEST: &str = r#"
+name = "xp"
+version = "1.0"
+author = "OASIS_OS"
+description = "Windows XP Luna-inspired blue theme with gradient titlebars and taskbar"
+screen_width = 480
+screen_height = 272
+"#;
+
+const XP_LAYOUT: &str = r##"
+[content_bg]
+x = 0
+y = 24
+w = 480
+h = 224
+color = "#ECE9D8"
+"##;
+
+const XP_FEATURES: &str = r#"
+dashboard = true
+terminal = true
+file_browser = true
+browser = true
+window_manager = true
+dashboard_pages = 2
+icons_per_page = 8
+grid_cols = 4
+grid_rows = 2
+start_menu = true
+show_version = false
+transition_fade_frames = 12
+transition_slide_frames = 16
+"#;
+
+const XP_THEME: &str = r##"
+background = "#003399"
+primary = "#003399"
+secondary = "#1F3E7B"
+text = "#FFFFFF"
+dim_text = "#8899BB"
+status_bar = "#1F3E7B"
+prompt = "#FFFFFF"
+output = "#FFFFFF"
+error = "#FF0000"
+border_radius = 3
+shadow_intensity = 1
+gradient_enabled = true
+
+[wm_theme]
+titlebar_height = 24
+border_width = 1
+titlebar_active = "#0054E3"
+titlebar_inactive = "#7B7B7B"
+titlebar_text = "#FFFFFF"
+frame_color = "#0054E3"
+content_bg = "#ECE9D8"
+btn_close = "#C75050"
+btn_minimize = "#406BBD"
+btn_maximize = "#406BBD"
+button_size = 16
+titlebar_font_size = 12
+titlebar_radius = 4
+titlebar_gradient = true
+titlebar_gradient_top = "#3A6EA5"
+titlebar_gradient_bottom = "#0A246A"
+titlebar_inactive_gradient_top = "#B4B4B4"
+titlebar_inactive_gradient_bottom = "#7B7B7B"
+frame_shadow_level = 1
+frame_border_radius = 3
+button_radius = 2
+button_side = "right"
+glyph_close = "x"
+glyph_minimize = "_"
+glyph_maximize = "o"
+title_align = "left"
+separator_enabled = true
+separator_color = "#0054E340"
+glyph_close_color = "#FFFFFF"
+glyph_minimize_color = "#FFFFFF"
+glyph_maximize_color = "#FFFFFF"
+btn_close_hover = "#E66060"
+btn_minimize_hover = "#5080D0"
+btn_maximize_hover = "#5080D0"
+title_text_shadow = true
+title_text_shadow_color = "#00000060"
+content_stroke_width = 1
+content_stroke_color = "#0054E320"
+maximize_top_inset = 44
+maximize_bottom_inset = 30
+
+[bar_overrides]
+statusbar_bg = "#1F3E7B"
+statusbar_gradient_top = "#3169C6"
+statusbar_gradient_bottom = "#1F3E7B"
+bar_bg = "#1F3E7B"
+bar_gradient_top = "#3169C6"
+bar_gradient_bottom = "#1F3E7B"
+battery_color = "#FFFFFF"
+version_color = "#FFFFFF"
+clock_color = "#FFFFFF"
+separator_color = "#4080D0"
+
+[wallpaper]
+style = "gradient"
+color_stops = ["#003399", "#1F5FC2", "#3A8AE0", "#5BB5FF"]
+wave_enabled = false
+angle = 90
+
+[geometry]
+statusbar_height = 26
+bottombar_height = 30
+icon_width = 24
+icon_height = 28
+
+[icon_overrides]
+body_color = "#ECE9D8"
+fold_color = "#C8C2AD"
+outline_color = "#0054E380"
+label_color = "#000000E6"
+cursor_color = "#003399C0"
+icon_border_radius = 3
+cursor_border_radius = 4
+icon_style = "card"
+cursor_style = "fill"
+
+[start_menu_overrides]
+panel_bg = "#1F3E7B"
+panel_gradient_top = "#3169C6"
+panel_gradient_bottom = "#0A246A"
+panel_border = "#4080D0"
+item_text = "#FFFFFF"
+item_text_active = "#FFFFFF"
+highlight_color = "#3A6EA580"
+button_bg = "#309E30"
+button_text = "#FFFFFF"
+panel_border_radius = 4
+panel_shadow_level = 1
+button_label = "start"
+button_width = 54
+button_height = 22
+button_shape = "rect"
+button_gradient = true
+button_gradient_top = "#4DA54D"
+button_gradient_bottom = "#2D852D"
+panel_width = 240
+columns = 2
+header_text = "User"
+header_bg = "#003399"
+header_text_color = "#FFFFFF"
+header_height = 28
+footer_enabled = true
+footer_bg = "#1F3E7B"
+footer_text_color = "#FFFFFF"
+footer_height = 24
+item_icon_size = 16
+item_row_height = 24
+
+[browser_overrides]
+chrome_bg = "#D6D2C2"
+chrome_text = "#000000"
+chrome_button_bg = "#ECE9D8"
+url_bar_bg = "#FFFFFF"
+url_bar_text = "#000000"
+link_color = "#0066CC"
+"##;
+
+const XP_STRINGS: &str = r#"
+boot_text = [
+    "OASIS_OS v2.2 [xp]",
+    "Loading Windows XP Luna theme...",
+    "Desktop environment: active",
+    "Ready.",
+]
+prompt_format = "C:\\> "
+title = "OASIS XP"
+home_label = "My Computer"
+welcome_message = "Welcome to OASIS XP. Type 'help' for commands."
+error_prefix = "error: "
+shutdown_message = "Windows is shutting down..."
+"#;
+
+// ---------------------------------------------------------------------------
 // Agent Terminal skin: briefcase field terminal for AI agent management.
 // ---------------------------------------------------------------------------
 
@@ -469,6 +753,8 @@ y = 18
 w = 480
 h = 1
 color = "#006666"
+stroke_width = 1
+stroke_color = "#00666640"
 
 [agent_panel]
 x = 0
@@ -479,6 +765,7 @@ color = "#0D1F2D"
 text = "Agents: (loading...)"
 font_size = 8
 text_color = "#00AAAA"
+border_radius = 4
 
 [session_panel]
 x = 240
@@ -489,6 +776,7 @@ color = "#0D1F2D"
 text = "Sessions: (none)"
 font_size = 8
 text_color = "#00AAAA"
+border_radius = 4
 
 [panel_divider]
 x = 239
@@ -496,6 +784,8 @@ y = 19
 w = 1
 h = 80
 color = "#006666"
+stroke_width = 1
+stroke_color = "#00666640"
 
 [separator_mid]
 x = 0
@@ -503,6 +793,8 @@ y = 99
 w = 480
 h = 1
 color = "#006666"
+stroke_width = 1
+stroke_color = "#00666640"
 
 [health_bar]
 x = 0
@@ -513,6 +805,7 @@ color = "#0A1520"
 text = "CPU: -- | MEM: -- | NET: --"
 font_size = 8
 text_color = "#668888"
+border_radius = 4
 
 [separator_term]
 x = 0
@@ -520,6 +813,8 @@ y = 116
 w = 480
 h = 1
 color = "#006666"
+stroke_width = 1
+stroke_color = "#00666640"
 
 [terminal_bg]
 x = 0
@@ -527,6 +822,7 @@ y = 117
 w = 480
 h = 143
 color = "#060D15"
+border_radius = 4
 
 [terminal_output]
 x = 4
@@ -587,6 +883,11 @@ error_prefix = "ERR: "
 shutdown_message = "Agent terminal session ended."
 "#;
 
+/// Load the XP skin.
+pub fn xp_skin() -> Result<Skin> {
+    Skin::from_toml_full(XP_MANIFEST, XP_LAYOUT, XP_FEATURES, XP_THEME, XP_STRINGS)
+}
+
 /// Load the Agent Terminal skin.
 pub fn agent_terminal_skin() -> Result<Skin> {
     Skin::from_toml_full(
@@ -609,6 +910,17 @@ pub fn desktop_skin() -> Result<Skin> {
     )
 }
 
+/// Load the Modern skin.
+pub fn modern_skin() -> Result<Skin> {
+    Skin::from_toml_full(
+        MODERN_MANIFEST,
+        MODERN_LAYOUT,
+        MODERN_FEATURES,
+        MODERN_THEME,
+        MODERN_STRINGS,
+    )
+}
+
 /// Load a built-in skin by name.
 pub fn load_builtin(name: &str) -> Result<Skin> {
     match name {
@@ -617,6 +929,8 @@ pub fn load_builtin(name: &str) -> Result<Skin> {
         "corrupted" => corrupted_skin(),
         "desktop" => desktop_skin(),
         "agent-terminal" => agent_terminal_skin(),
+        "modern" => modern_skin(),
+        "xp" => xp_skin(),
         _ => Err(crate::error::OasisError::Config(format!(
             "unknown built-in skin: {name}"
         ))),
@@ -631,6 +945,8 @@ pub fn builtin_names() -> &'static [&'static str] {
         "corrupted",
         "desktop",
         "agent-terminal",
+        "modern",
+        "xp",
     ]
 }
 
@@ -840,5 +1156,87 @@ mod tests {
         assert!(sdi.contains("agent_panel"));
         assert!(sdi.contains("tamper_indicator"));
         assert!(sdi.contains("health_bar"));
+    }
+
+    #[test]
+    fn modern_skin_loads() {
+        let skin = modern_skin().unwrap();
+        assert_eq!(skin.manifest.name, "modern");
+        assert!(skin.features.dashboard);
+        assert!(skin.features.terminal);
+        assert!(skin.features.window_manager);
+        assert!(skin.features.browser);
+        assert_eq!(skin.manifest.screen_width, 480);
+        assert_eq!(skin.manifest.screen_height, 272);
+    }
+
+    #[test]
+    fn modern_skin_has_wm_theme() {
+        let skin = modern_skin().unwrap();
+        let wm = skin.theme.build_wm_theme();
+        assert_eq!(wm.titlebar_radius, 6);
+        assert!(wm.titlebar_gradient);
+        assert_eq!(wm.frame_shadow_level, 2);
+        assert_eq!(wm.frame_border_radius, 4);
+        assert_eq!(wm.button_radius, 8);
+    }
+
+    #[test]
+    fn modern_skin_has_extended_theme_fields() {
+        let skin = modern_skin().unwrap();
+        assert_eq!(skin.theme.border_radius, Some(6));
+        assert_eq!(skin.theme.shadow_intensity, Some(2));
+        assert_eq!(skin.theme.gradient_enabled, Some(true));
+        assert!(skin.theme.surface.is_some());
+        assert!(skin.theme.accent_hover.is_some());
+    }
+
+    #[test]
+    fn modern_skin_applies_layout() {
+        let skin = modern_skin().unwrap();
+        let mut sdi = SdiRegistry::new();
+        skin.apply_layout(&mut sdi);
+        assert!(sdi.contains("content_bg"));
+    }
+
+    #[test]
+    fn modern_skin_content_bg_has_gradient() {
+        let skin = modern_skin().unwrap();
+        let mut sdi = SdiRegistry::new();
+        skin.apply_layout(&mut sdi);
+        let obj = sdi.get("content_bg").unwrap();
+        assert!(obj.gradient_top.is_some());
+        assert!(obj.gradient_bottom.is_some());
+    }
+
+    #[test]
+    fn desktop_skin_has_extended_wm_fields() {
+        let skin = desktop_skin().unwrap();
+        let wm = skin.theme.build_wm_theme();
+        assert_eq!(wm.titlebar_radius, 4);
+        assert_eq!(wm.frame_shadow_level, 1);
+        assert_eq!(wm.frame_border_radius, 2);
+        assert_eq!(wm.button_radius, 8);
+    }
+
+    #[test]
+    fn desktop_skin_taskbar_has_gradient() {
+        let skin = desktop_skin().unwrap();
+        let mut sdi = SdiRegistry::new();
+        skin.apply_layout(&mut sdi);
+        let obj = sdi.get("taskbar_bg").unwrap();
+        assert!(obj.gradient_top.is_some());
+        assert!(obj.gradient_bottom.is_some());
+    }
+
+    #[test]
+    fn agent_terminal_panels_have_border_radius() {
+        let skin = agent_terminal_skin().unwrap();
+        let mut sdi = SdiRegistry::new();
+        skin.apply_layout(&mut sdi);
+        let panel = sdi.get("agent_panel").unwrap();
+        assert_eq!(panel.border_radius, Some(4));
+        let session = sdi.get("session_panel").unwrap();
+        assert_eq!(session.border_radius, Some(4));
     }
 }

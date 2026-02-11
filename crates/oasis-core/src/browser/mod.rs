@@ -472,15 +472,28 @@ impl BrowserWidget {
     pub fn paint_chrome(&self, backend: &mut dyn SdiBackend) -> Result<()> {
         let h = self.config.url_bar_height;
         let bw = self.config.button_width;
+        let themed = self.config.use_themed_chrome;
+        let r: u16 = 4; // Chrome element border radius.
 
         // Chrome background.
-        backend.fill_rect(
-            self.window_x,
-            self.window_y,
-            self.window_w,
-            h,
-            self.config.chrome_bg,
-        )?;
+        if themed {
+            backend.fill_rounded_rect(
+                self.window_x,
+                self.window_y,
+                self.window_w,
+                h,
+                r,
+                self.config.chrome_bg,
+            )?;
+        } else {
+            backend.fill_rect(
+                self.window_x,
+                self.window_y,
+                self.window_w,
+                h,
+                self.config.chrome_bg,
+            )?;
+        }
 
         // Back button.
         let back_color = if self.nav.can_go_back() {
@@ -488,7 +501,11 @@ impl BrowserWidget {
         } else {
             self.config.chrome_bg
         };
-        backend.fill_rect(self.window_x, self.window_y, bw, h, back_color)?;
+        if themed {
+            backend.fill_rounded_rect(self.window_x, self.window_y, bw, h, r, back_color)?;
+        } else {
+            backend.fill_rect(self.window_x, self.window_y, bw, h, back_color)?;
+        }
         backend.draw_text(
             "<",
             self.window_x + 6,
@@ -503,7 +520,18 @@ impl BrowserWidget {
         } else {
             self.config.chrome_bg
         };
-        backend.fill_rect(self.window_x + bw as i32, self.window_y, bw, h, fwd_color)?;
+        if themed {
+            backend.fill_rounded_rect(
+                self.window_x + bw as i32,
+                self.window_y,
+                bw,
+                h,
+                r,
+                fwd_color,
+            )?;
+        } else {
+            backend.fill_rect(self.window_x + bw as i32, self.window_y, bw, h, fwd_color)?;
+        }
         backend.draw_text(
             ">",
             self.window_x + bw as i32 + 6,
@@ -522,7 +550,28 @@ impl BrowserWidget {
         } else {
             self.config.url_bar_bg
         };
-        backend.fill_rect(url_x, self.window_y + 2, url_w, h - 4, bar_bg)?;
+        if themed {
+            backend.fill_rounded_rect(
+                url_x,
+                self.window_y + 2,
+                url_w,
+                h.saturating_sub(4),
+                r,
+                bar_bg,
+            )?;
+            // Stroke around URL bar for definition.
+            backend.stroke_rounded_rect(
+                url_x,
+                self.window_y + 2,
+                url_w,
+                h.saturating_sub(4),
+                r,
+                1,
+                Color::rgba(255, 255, 255, 30),
+            )?;
+        } else {
+            backend.fill_rect(url_x, self.window_y + 2, url_w, h.saturating_sub(4), bar_bg)?;
+        }
 
         // URL text: show the editing buffer when focused, otherwise
         // the current navigation URL.
@@ -550,7 +599,7 @@ impl BrowserWidget {
                     cursor_px,
                     self.window_y + 3,
                     1,
-                    h - 6,
+                    h.saturating_sub(6),
                     self.config.url_bar_text,
                 )?;
             }
@@ -572,7 +621,18 @@ impl BrowserWidget {
 
         // Home button (rightmost).
         let home_x = self.window_x + self.window_w as i32 - bw as i32;
-        backend.fill_rect(home_x, self.window_y, bw, h, self.config.chrome_button_bg)?;
+        if themed {
+            backend.fill_rounded_rect(
+                home_x,
+                self.window_y + 2,
+                bw,
+                h.saturating_sub(4),
+                r,
+                self.config.chrome_button_bg,
+            )?;
+        } else {
+            backend.fill_rect(home_x, self.window_y, bw, h, self.config.chrome_button_bg)?;
+        }
         backend.draw_text(
             "H",
             home_x + 6,
@@ -2324,7 +2384,7 @@ mod tests {
             // At minimum, verify the link_map was regenerated (it's
             // rebuilt every paint pass).
             assert!(
-                browser.link_map.len() >= 0,
+                !browser.link_map.is_empty(),
                 "link_map should be regenerated after repaint"
             );
         }

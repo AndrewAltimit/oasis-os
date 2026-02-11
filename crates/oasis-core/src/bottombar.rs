@@ -4,9 +4,11 @@
 //! Displays URL label, USB indicator, media category tabs, page dots,
 //! and shoulder button hints.
 
+use crate::active_theme::ActiveTheme;
 use crate::sdi::SdiRegistry;
 use crate::sdi::helpers::{
-    BezelStyle, ensure_border, ensure_chrome_bezel, ensure_text, hide_bezel, hide_objects,
+    BezelStyle, ensure_border, ensure_chrome_bezel, ensure_rounded_fill, ensure_text, hide_bezel,
+    hide_objects,
 };
 use crate::theme;
 
@@ -90,11 +92,23 @@ impl BottomBar {
     }
 
     /// Synchronize SDI objects to reflect current bottom bar state.
-    pub fn update_sdi(&self, sdi: &mut SdiRegistry) {
-        let bar_y = theme::BOTTOMBAR_Y;
-        let bar_h = theme::BOTTOMBAR_H;
+    ///
+    /// Accepts an `ActiveTheme` for skin-driven colors and `SkinFeatures`
+    /// for content visibility toggles. Pass `&ActiveTheme::default()` and
+    /// `&SkinFeatures::default()` for legacy behaviour.
+    pub fn update_sdi(
+        &self,
+        sdi: &mut SdiRegistry,
+        at: &ActiveTheme,
+        features: &crate::skin::SkinFeatures,
+    ) {
+        let bar_y = (theme::SCREEN_H - at.bottombar_height) as i32;
+        let bar_h = at.bottombar_height;
+        let font_small = at.font_small;
         let screen_w = theme::SCREEN_W;
-        let char_w = theme::CHAR_W;
+        let char_w = font_small.max(8) as i32 / 8 * 8;
+        // Vertically center text within the bar.
+        let text_y = bar_y + (bar_h as i32 - font_small as i32) / 2;
 
         // Semi-transparent background bar.
         if !sdi.contains("bar_bottom") {
@@ -103,12 +117,17 @@ impl BottomBar {
             obj.y = bar_y;
             obj.w = screen_w;
             obj.h = bar_h;
-            obj.color = theme::BAR_BG;
+            obj.color = at.bar_bg;
             obj.overlay = true;
             obj.z = 900;
         }
         if let Ok(obj) = sdi.get_mut("bar_bottom") {
+            obj.color = at.bar_bg;
+            obj.y = bar_y;
+            obj.h = bar_h;
             obj.visible = true;
+            obj.gradient_top = at.bar_gradient_top;
+            obj.gradient_bottom = at.bar_gradient_bottom;
         }
 
         // Thin separator line at top of bottom bar.
@@ -119,25 +138,30 @@ impl BottomBar {
             bar_y,
             screen_w,
             1,
-            theme::SEPARATOR_COLOR,
+            at.separator_color,
         );
 
-        // URL label on the left.
+        // URL label -- shift right past the start button when start menu is active.
+        let url_offset = if features.start_menu {
+            at.sm_button_width as i32 + 10
+        } else {
+            0
+        };
         ensure_text(
             sdi,
             "bar_url",
-            8,
-            bar_y + 8,
-            theme::FONT_SMALL,
-            theme::URL_COLOR,
+            8 + url_offset,
+            text_y,
+            font_small,
+            at.url_color,
         );
         if let Ok(obj) = sdi.get_mut("bar_url") {
             obj.text = Some("HTTP://OASIS.LOCAL".to_string());
         }
 
         // Chrome bezel around URL area.
-        let url_bx = 2i32;
-        let url_bw = 190u32;
+        let url_bx = 2i32 + url_offset;
+        let url_bw = (190u32).saturating_sub(url_offset as u32);
         let bz_y = bar_y + 2;
         let bz_h = bar_h - 4;
         ensure_chrome_bezel(
@@ -151,115 +175,128 @@ impl BottomBar {
         );
 
         // Media category tabs (pipe-separated).
-        let tab_labels: Vec<&str> = MediaTab::TABS.iter().map(|t| t.label()).collect();
-        let labels_w: i32 = tab_labels.iter().map(|l| l.len() as i32 * char_w).sum();
-        let pipes_w = (tab_labels.len() as i32 - 1) * (theme::PIPE_GAP * 2 + char_w);
-        let total_w = labels_w + pipes_w;
-        let tabs_x = screen_w as i32 - total_w - theme::R_HINT_W - 8;
+        if features.show_media_tabs {
+            let tab_labels: Vec<&str> = MediaTab::TABS.iter().map(|t| t.label()).collect();
+            let labels_w: i32 = tab_labels.iter().map(|l| l.len() as i32 * char_w).sum();
+            let pipes_w = (tab_labels.len() as i32 - 1) * (theme::PIPE_GAP * 2 + char_w);
+            let total_w = labels_w + pipes_w;
+            let tabs_x = screen_w as i32 - total_w - theme::R_HINT_W - 8;
 
-        // Chrome bezel around tab group.
-        let tab_bx = tabs_x - 6;
-        let tab_bw = (total_w + theme::R_HINT_W + 14) as u32;
-        ensure_chrome_bezel(
-            sdi,
-            "bar_tab_bezel",
-            tab_bx,
-            bz_y,
-            tab_bw,
-            bz_h,
-            &BezelStyle::chrome(),
-        );
+            // Chrome bezel around tab group.
+            let tab_bx = tabs_x - 6;
+            let tab_bw = (total_w + theme::R_HINT_W + 14) as u32;
+            ensure_chrome_bezel(
+                sdi,
+                "bar_tab_bezel",
+                tab_bx,
+                bz_y,
+                tab_bw,
+                bz_h,
+                &BezelStyle::chrome(),
+            );
 
-        let mut cx = tabs_x;
-        for (i, tab) in MediaTab::TABS.iter().enumerate() {
-            let label = tab.label();
-            let name = format!("bar_btab_{i}");
+            let mut cx = tabs_x;
+            for (i, tab) in MediaTab::TABS.iter().enumerate() {
+                let label = tab.label();
+                let name = format!("bar_btab_{i}");
 
-            let color = if *tab == self.active_tab {
-                theme::MEDIA_TAB_ACTIVE
-            } else {
-                theme::MEDIA_TAB_INACTIVE
-            };
-            ensure_text(sdi, &name, cx, bar_y + 8, theme::FONT_SMALL, color);
-            if let Ok(obj) = sdi.get_mut(&name) {
-                obj.text = Some(label.to_string());
-                obj.text_color = color;
-            }
-            cx += label.len() as i32 * char_w;
-
-            // Pipe separator (except after last tab).
-            if i < MediaTab::TABS.len() - 1 {
-                cx += theme::PIPE_GAP;
-                let pipe_name = format!("bar_bpipe_{i}");
-                ensure_text(
-                    sdi,
-                    &pipe_name,
-                    cx,
-                    bar_y + 8,
-                    theme::FONT_SMALL,
-                    theme::PIPE_COLOR,
-                );
-                if let Ok(obj) = sdi.get_mut(&pipe_name) {
-                    obj.text = Some("|".to_string());
+                let color = if *tab == self.active_tab {
+                    at.media_tab_active
+                } else {
+                    at.media_tab_inactive
+                };
+                ensure_text(sdi, &name, cx, text_y, font_small, color);
+                if let Ok(obj) = sdi.get_mut(&name) {
+                    obj.text = Some(label.to_string());
+                    obj.text_color = color;
+                    obj.visible = true;
                 }
-                cx += char_w + theme::PIPE_GAP;
+                cx += label.len() as i32 * char_w;
+
+                // Pipe separator (except after last tab).
+                if i < MediaTab::TABS.len() - 1 {
+                    cx += theme::PIPE_GAP;
+                    let pipe_name = format!("bar_bpipe_{i}");
+                    ensure_text(sdi, &pipe_name, cx, text_y, font_small, at.pipe_color);
+                    if let Ok(obj) = sdi.get_mut(&pipe_name) {
+                        obj.text = Some("|".to_string());
+                    }
+                    cx += char_w + theme::PIPE_GAP;
+                }
             }
+
+            // "R>" shoulder button hint on far right.
+            ensure_text(
+                sdi,
+                "bar_r_hint",
+                screen_w as i32 - theme::R_HINT_W,
+                text_y,
+                font_small,
+                at.r_hint_color,
+            );
+            if let Ok(obj) = sdi.get_mut("bar_r_hint") {
+                obj.text = Some("R>".to_string());
+            }
+        } else {
+            // Hide media tab objects when disabled.
+            for i in 0..MediaTab::TABS.len() {
+                for prefix in &["bar_btab_", "bar_bpipe_"] {
+                    let name = format!("{prefix}{i}");
+                    if let Ok(obj) = sdi.get_mut(&name) {
+                        obj.visible = false;
+                    }
+                }
+            }
+            if let Ok(obj) = sdi.get_mut("bar_r_hint") {
+                obj.visible = false;
+            }
+            hide_bezel(sdi, "bar_tab_bezel");
         }
 
-        // "R>" shoulder button hint on far right.
-        ensure_text(
-            sdi,
-            "bar_r_hint",
-            screen_w as i32 - theme::R_HINT_W,
-            bar_y + 8,
-            theme::FONT_SMALL,
-            theme::R_HINT_COLOR,
-        );
-        if let Ok(obj) = sdi.get_mut("bar_r_hint") {
-            obj.text = Some("R>".to_string());
-        }
-
-        // USB indicator (between bezels).
-        let usb_x = url_bx + url_bw as i32 + 14;
-        ensure_text(
-            sdi,
-            "bar_usb",
-            usb_x,
-            bar_y + 8,
-            theme::FONT_SMALL,
-            theme::USB_COLOR,
-        );
+        // USB indicator (after URL text, not bezel -- avoids overlap).
+        let url_text = "HTTP://OASIS.LOCAL";
+        let url_text_end = 8 + url_offset + url_text.len() as i32 * char_w;
+        let usb_x = url_text_end + 6;
+        ensure_text(sdi, "bar_usb", usb_x, text_y, font_small, at.usb_color);
         if let Ok(obj) = sdi.get_mut("bar_usb") {
             obj.text = Some("USB".to_string());
         }
 
-        // Page dots.
-        let dots_x = usb_x + 36;
-        let max_dots = theme::MAX_PAGE_DOTS;
-        for i in 0..self.total_pages.min(max_dots) {
-            let name = format!("bar_page_{i}");
-            if !sdi.contains(&name) {
-                let obj = sdi.create(&name);
-                obj.overlay = true;
-                obj.z = 901;
-            }
-            if let Ok(obj) = sdi.get_mut(&name) {
-                obj.x = dots_x + (i as i32) * 12;
-                obj.y = bar_y + 9;
-                obj.w = 6;
-                obj.h = 6;
-                obj.visible = true;
-                obj.color = if i == self.current_page {
-                    theme::PAGE_DOT_ACTIVE
+        // Page dots (rounded for circular appearance).
+        if features.show_page_dots {
+            let dots_x = usb_x + 36;
+            let max_dots = theme::MAX_PAGE_DOTS;
+            for i in 0..self.total_pages.min(max_dots) {
+                let name = format!("bar_page_{i}");
+                let dot_color = if i == self.current_page {
+                    at.page_dot_active
                 } else {
-                    theme::PAGE_DOT_INACTIVE
+                    at.page_dot_inactive
                 };
+                ensure_rounded_fill(
+                    sdi,
+                    &name,
+                    dots_x + (i as i32) * 12,
+                    bar_y + (bar_h as i32 - 6) / 2,
+                    6,
+                    6,
+                    dot_color,
+                    3,
+                );
             }
-        }
-        for i in self.total_pages.min(max_dots)..max_dots {
-            let name = format!("bar_page_{i}");
-            if let Ok(obj) = sdi.get_mut(&name) {
-                obj.visible = false;
+            for i in self.total_pages.min(max_dots)..max_dots {
+                let name = format!("bar_page_{i}");
+                if let Ok(obj) = sdi.get_mut(&name) {
+                    obj.visible = false;
+                }
+            }
+        } else {
+            let max_dots = theme::MAX_PAGE_DOTS;
+            for i in 0..max_dots {
+                let name = format!("bar_page_{i}");
+                if let Ok(obj) = sdi.get_mut(&name) {
+                    obj.visible = false;
+                }
             }
         }
     }
@@ -319,7 +356,9 @@ mod tests {
     fn update_sdi_creates_objects() {
         let bar = BottomBar::new();
         let mut sdi = SdiRegistry::new();
-        bar.update_sdi(&mut sdi);
+        let at = crate::active_theme::ActiveTheme::default();
+        let feat = crate::skin::SkinFeatures::default();
+        bar.update_sdi(&mut sdi, &at, &feat);
         assert!(sdi.contains("bar_bottom"));
         assert!(sdi.contains("bar_url"));
         assert!(sdi.contains("bar_btab_0"));
@@ -337,7 +376,9 @@ mod tests {
         bar.total_pages = 3;
         bar.current_page = 1;
         let mut sdi = SdiRegistry::new();
-        bar.update_sdi(&mut sdi);
+        let at = crate::active_theme::ActiveTheme::default();
+        let feat = crate::skin::SkinFeatures::default();
+        bar.update_sdi(&mut sdi, &at, &feat);
 
         assert!(sdi.get("bar_page_0").unwrap().visible);
         assert!(sdi.get("bar_page_1").unwrap().visible);
@@ -348,7 +389,9 @@ mod tests {
     fn bar_is_overlay() {
         let bar = BottomBar::new();
         let mut sdi = SdiRegistry::new();
-        bar.update_sdi(&mut sdi);
+        let at = crate::active_theme::ActiveTheme::default();
+        let feat = crate::skin::SkinFeatures::default();
+        bar.update_sdi(&mut sdi, &at, &feat);
         assert!(sdi.get("bar_bottom").unwrap().overlay);
     }
 }

@@ -2,6 +2,10 @@
 //!
 //! All magic numbers for colors, spacing, and screen layout live here
 //! so they can be changed in one place and stay consistent across modules.
+//!
+//! **Legacy defaults** -- prefer `ActiveTheme` for skin-driven rendering.
+//! These constants remain for PSP backend / FFI consumers that do not
+//! use the skin system.
 
 use crate::backend::Color;
 
@@ -122,7 +126,16 @@ pub const ICON_SHADOW_COLOR: Color = Color::rgba(0, 0, 0, 70);
 /// Icon label text color.
 pub const ICON_LABEL_COLOR: Color = Color::rgba(255, 255, 255, 230);
 /// Cursor highlight color.
-pub const CURSOR_COLOR: Color = Color::rgba(255, 255, 255, 50);
+pub const CURSOR_COLOR: Color = Color::rgba(255, 255, 255, 90);
+
+// -- Modern icon rendering constants -----------------------------------------
+
+/// Border radius for icon card bodies (pixels).
+pub const ICON_BORDER_RADIUS: u16 = 4;
+/// Border radius for cursor highlight frame (pixels).
+pub const CURSOR_BORDER_RADIUS: u16 = 6;
+/// Stroke width for cursor highlight frame (pixels).
+pub const CURSOR_STROKE_WIDTH: u16 = 2;
 
 #[cfg(test)]
 mod tests {
