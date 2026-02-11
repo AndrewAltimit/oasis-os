@@ -155,7 +155,12 @@ impl RustlsStream {
 
             match self.tls.read_tls(&mut adapter) {
                 Ok(0) => return Ok(()), // EOF
-                Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => return Ok(()),
+                Err(ref e)
+                    if e.kind() == io::ErrorKind::WouldBlock
+                        || e.kind() == io::ErrorKind::TimedOut =>
+                {
+                    return Ok(());
+                },
                 Err(e) => {
                     return Err(OasisError::Backend(format!("TLS read_tls: {e}")));
                 },

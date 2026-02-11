@@ -346,21 +346,26 @@ pub(super) struct NetworkStreamAdapter(pub(super) Box<dyn NetworkStream>);
 
 impl Read for NetworkStreamAdapter {
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
-        self.0
-            .read(buf)
-            .map_err(|e| io::Error::other(e.to_string()))
+        self.0.read(buf).map_err(oasis_err_to_io)
     }
 }
 
 impl Write for NetworkStreamAdapter {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        self.0
-            .write(buf)
-            .map_err(|e| io::Error::other(e.to_string()))
+        self.0.write(buf).map_err(oasis_err_to_io)
     }
 
     fn flush(&mut self) -> io::Result<()> {
         Ok(())
+    }
+}
+
+/// Convert an [`OasisError`] to [`io::Error`], preserving the original
+/// `io::Error` (and its error kind) when the variant is `OasisError::Io`.
+fn oasis_err_to_io(e: OasisError) -> io::Error {
+    match e {
+        OasisError::Io(io_err) => io_err,
+        other => io::Error::other(other.to_string()),
     }
 }
 
