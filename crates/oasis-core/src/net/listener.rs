@@ -135,14 +135,15 @@ impl RemoteListener {
             let mut buf = [0u8; 512];
             match conn.stream.read(&mut buf) {
                 Ok(0) => {
-                    // Connection closed or no data (non-blocking).
+                    // Connection closed (EOF).
+                },
+                Err(crate::error::OasisError::Io(ref e))
+                    if e.kind() == std::io::ErrorKind::WouldBlock =>
+                {
+                    // Non-blocking socket has no data yet.
                 },
                 Ok(n) => {
                     conn.read_buf.extend_from_slice(&buf[..n]);
-
-                    // Check for disconnect (0-length read means EOF on blocking,
-                    // but for non-blocking it returns WouldBlock -> mapped to 0).
-                    // We detect actual EOF when the stream errors on write.
 
                     // Process complete lines.
                     while let Some(newline_pos) = conn.read_buf.iter().position(|&b| b == b'\n') {

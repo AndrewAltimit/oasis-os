@@ -89,17 +89,11 @@ impl StdNetworkStream {
 
 impl NetworkStream for StdNetworkStream {
     fn read(&mut self, buf: &mut [u8]) -> Result<usize> {
-        match self.stream.read(buf) {
-            Ok(n) => Ok(n),
-            Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => Ok(0),
-            Err(e) => Err(OasisError::Backend(format!("read: {e}"))),
-        }
+        self.stream.read(buf).map_err(OasisError::Io)
     }
 
     fn write(&mut self, data: &[u8]) -> Result<usize> {
-        self.stream
-            .write(data)
-            .map_err(|e| OasisError::Backend(format!("write: {e}")))
+        self.stream.write(data).map_err(OasisError::Io)
     }
 
     fn close(&mut self) -> Result<()> {

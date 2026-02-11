@@ -115,6 +115,11 @@ impl RemoteClient {
                     }
                 }
             },
+            Err(crate::error::OasisError::Io(ref e))
+                if e.kind() == std::io::ErrorKind::WouldBlock =>
+            {
+                // Non-blocking socket has no data yet.
+            },
             Err(_) => {
                 // Connection likely dropped.
                 self.disconnect();
