@@ -35,7 +35,7 @@ OASIS_OS originated as a Rust port of a PSP homebrew shell OS written in C circa
 
 ### Skins
 
-The framework supports a data-driven **skin system** that controls visual layout, color themes, feature gating, and behavioral personality. Skins are defined in TOML configuration files -- no code changes required. Nine skins are implemented:
+The framework supports a data-driven **skin system** that controls visual layout, color themes, feature gating, and behavioral personality. Skins are defined in TOML configuration files -- no code changes required. Eight skins are implemented:
 
 | Skin | Style | Key Features | Source |
 |------|-------|-------------|--------|
@@ -194,4 +194,4 @@ GitHub Actions workflows run the full pipeline automatically on push to `main` a
 
 ## License
 
-Dual-licensed under [MIT](LICENSE) and [Unlicense](LICENSE).
+Dual-licensed under [MIT](LICENSE-MIT) and [Unlicense](LICENSE).
