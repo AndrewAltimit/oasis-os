@@ -188,6 +188,7 @@ impl DashboardState {
             let label_name = format!("icon_label_{i}");
             let label2_name = format!("icon_label2_{i}");
             let shadow_name = format!("icon_shadow_{i}");
+            let shadow2_name = format!("icon_shadow2_{i}");
 
             for name in [
                 &outline_name,
@@ -198,6 +199,7 @@ impl DashboardState {
                 &label_name,
                 &label2_name,
                 &shadow_name,
+                &shadow2_name,
             ] {
                 if !sdi.contains(name) {
                     sdi.create(name);
@@ -260,6 +262,7 @@ impl DashboardState {
                     &label_name,
                     &label2_name,
                     &shadow_name,
+                    &shadow2_name,
                 ] {
                     if let Ok(obj) = sdi.get_mut(name) {
                         obj.visible = false;
@@ -377,8 +380,9 @@ impl DashboardState {
         let lines = Self::wrap_label(title, max_chars);
         let line_h = glyph_w as i32 + 1; // 1px spacing between lines
 
-        // Label shadow (1px offset, uses icon_shadow_{i} as the SDI object).
+        // Label shadows (1px offset).
         if let Some(shadow_color) = at.icon_label_shadow {
+            // Shadow for line 1.
             if let Ok(obj) = sdi.get_mut(&format!("icon_shadow_{i}")) {
                 if let Some(line) = lines.first() {
                     let tw = line.len() as i32 * glyph_w as i32;
@@ -395,8 +399,30 @@ impl DashboardState {
                     obj.visible = false;
                 }
             }
-        } else if let Ok(obj) = sdi.get_mut(&format!("icon_shadow_{i}")) {
-            obj.visible = false;
+            // Shadow for line 2.
+            if let Ok(obj) = sdi.get_mut(&format!("icon_shadow2_{i}")) {
+                if lines.len() > 1 {
+                    let tw = lines[1].len() as i32 * glyph_w as i32;
+                    obj.x = cell_x + (cell_w as i32 - tw) / 2 + 1;
+                    obj.y = label_y + line_h + 1;
+                    obj.w = 0;
+                    obj.h = 0;
+                    obj.font_size = fs;
+                    obj.text = Some(lines[1].clone());
+                    obj.text_color = shadow_color;
+                    obj.visible = true;
+                    obj.color = Color::rgba(0, 0, 0, 0);
+                } else {
+                    obj.visible = false;
+                }
+            }
+        } else {
+            if let Ok(obj) = sdi.get_mut(&format!("icon_shadow_{i}")) {
+                obj.visible = false;
+            }
+            if let Ok(obj) = sdi.get_mut(&format!("icon_shadow2_{i}")) {
+                obj.visible = false;
+            }
         }
 
         // Line 1.
@@ -627,6 +653,7 @@ impl DashboardState {
                 "icon_fold_",
                 "icon_gfx_",
                 "icon_shadow_",
+                "icon_shadow2_",
             ] {
                 let name = format!("{prefix}{i}");
                 if let Ok(obj) = sdi.get_mut(&name) {

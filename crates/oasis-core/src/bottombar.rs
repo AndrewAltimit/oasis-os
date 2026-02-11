@@ -253,8 +253,10 @@ impl BottomBar {
             hide_bezel(sdi, "bar_tab_bezel");
         }
 
-        // USB indicator (between bezels).
-        let usb_x = url_bx + url_bw as i32 + 14;
+        // USB indicator (after URL text, not bezel -- avoids overlap).
+        let url_text = "HTTP://OASIS.LOCAL";
+        let url_text_end = 8 + url_offset + url_text.len() as i32 * char_w;
+        let usb_x = url_text_end + 6;
         ensure_text(sdi, "bar_usb", usb_x, text_y, font_small, at.usb_color);
         if let Ok(obj) = sdi.get_mut("bar_usb") {
             obj.text = Some("USB".to_string());

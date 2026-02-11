@@ -191,42 +191,51 @@ impl StatusBar {
             obj.visible = false;
         }
 
-        // Version label (center area).
-        if features.show_version {
-            let ver = "Version 0.1";
-            let ver_w = ver.len() as i32 * char_w;
-            let ver_x = (screen_w as i32 - ver_w) / 2;
-            ensure_text(sdi, "bar_version", ver_x, text_y, font_small, at.version_color);
-            if let Ok(obj) = sdi.get_mut("bar_version") {
-                obj.text = Some(ver.to_string());
-                obj.visible = true;
-            }
-        } else if let Ok(obj) = sdi.get_mut("bar_version") {
-            obj.visible = false;
-        }
-
-        // Clock + date (right side, right-aligned).
-        if features.show_clock {
+        // Clock + date (right side, right-aligned).  Compute first so
+        // version can check for overlap.
+        let clock_x = if features.show_clock {
             let clock_str = if self.date_text.is_empty() {
                 self.clock_text.clone()
             } else {
                 format!("{} {}", self.clock_text, self.date_text)
             };
             let clock_w = clock_str.len() as i32 * char_w;
-            let clock_x = screen_w as i32 - clock_w - 6;
-            ensure_text(
-                sdi,
-                "bar_clock",
-                clock_x,
-                text_y,
-                font_small,
-                at.clock_color,
-            );
+            let cx = screen_w as i32 - clock_w - 6;
+            ensure_text(sdi, "bar_clock", cx, text_y, font_small, at.clock_color);
             if let Ok(obj) = sdi.get_mut("bar_clock") {
                 obj.text = Some(clock_str);
                 obj.visible = true;
             }
-        } else if let Ok(obj) = sdi.get_mut("bar_clock") {
+            cx
+        } else {
+            if let Ok(obj) = sdi.get_mut("bar_clock") {
+                obj.visible = false;
+            }
+            screen_w as i32
+        };
+
+        // Version label (center area) -- hidden when it would overlap clock.
+        if features.show_version {
+            let ver = "Version 0.1";
+            let ver_w = ver.len() as i32 * char_w;
+            let ver_x = (screen_w as i32 - ver_w) / 2;
+            if ver_x + ver_w <= clock_x {
+                ensure_text(
+                    sdi,
+                    "bar_version",
+                    ver_x,
+                    text_y,
+                    font_small,
+                    at.version_color,
+                );
+                if let Ok(obj) = sdi.get_mut("bar_version") {
+                    obj.text = Some(ver.to_string());
+                    obj.visible = true;
+                }
+            } else if let Ok(obj) = sdi.get_mut("bar_version") {
+                obj.visible = false;
+            }
+        } else if let Ok(obj) = sdi.get_mut("bar_version") {
             obj.visible = false;
         }
 
