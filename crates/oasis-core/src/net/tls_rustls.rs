@@ -78,11 +78,18 @@ struct RustlsStream {
 }
 
 impl RustlsStream {
+    /// Maximum wall-clock time for the TLS handshake.
+    const HANDSHAKE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
     fn new(mut tls: rustls::ClientConnection, mut inner: Box<dyn NetworkStream>) -> Result<Self> {
         // Perform the TLS handshake eagerly so callers get a ready stream.
         // rustls is lazy -- we pump I/O until the handshake completes.
+        let deadline = std::time::Instant::now() + Self::HANDSHAKE_TIMEOUT;
         let mut adapter = IoAdapter::new(&mut *inner);
         while tls.is_handshaking() {
+            if std::time::Instant::now() > deadline {
+                return Err(OasisError::Backend("TLS handshake timed out".to_string()));
+            }
             if tls.wants_write() {
                 tls.write_tls(&mut adapter)
                     .map_err(|e| OasisError::Backend(format!("TLS handshake write: {e}")))?;

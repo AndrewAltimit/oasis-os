@@ -63,8 +63,8 @@ impl TlsProvider for PspTlsProvider {
             // SAFETY: buffers were created via Box::leak above and are
             // not borrowed after dropping `tls`.
             unsafe {
-                let _ = Box::from_raw(read_buf as *mut [u8]);
-                let _ = Box::from_raw(write_buf as *mut [u8]);
+                let _ = Box::from_raw(read_buf);
+                let _ = Box::from_raw(write_buf);
             }
             return Err(OasisError::Backend(format!("TLS handshake failed: {:?}", e)));
         }
