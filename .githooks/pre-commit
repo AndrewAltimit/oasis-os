@@ -32,7 +32,7 @@ fi
 
 # -- Clippy --------------------------------------------------------------
 # Fail the commit if clippy finds warnings.
-if ! cargo clippy --workspace -- -D warnings 2>&1 | tail -1 | grep -q "Finished"; then
+if ! cargo clippy --workspace -- -D warnings; then
     echo "pre-commit: clippy failed (warnings treated as errors)"
     echo "Run 'cargo clippy --workspace -- -D warnings' to see details."
     exit 1

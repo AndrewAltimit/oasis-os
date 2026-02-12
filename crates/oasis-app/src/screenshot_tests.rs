@@ -910,6 +910,9 @@ fn generate_report(base_dir: &Path, scenarios: &[Scenario]) -> anyhow::Result<()
     let mut current_category = "";
     for scenario in scenarios {
         if scenario.category != current_category {
+            if !current_category.is_empty() {
+                html.push_str("</div>\n");
+            }
             current_category = scenario.category;
             html.push_str(&format!("<h2 class=\"category\">{current_category}</h2>\n"));
             html.push_str("<div class=\"grid\">\n");
@@ -927,7 +930,10 @@ fn generate_report(base_dir: &Path, scenarios: &[Scenario]) -> anyhow::Result<()
             ));
         }
     }
-    html.push_str("</div>\n</body></html>\n");
+    if !current_category.is_empty() {
+        html.push_str("</div>\n");
+    }
+    html.push_str("</body></html>\n");
 
     fs::write(base_dir.join("report.html"), &html)?;
     println!("Report saved to {}/report.html", base_dir.display());
