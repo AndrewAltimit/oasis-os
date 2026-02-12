@@ -11,6 +11,7 @@
 //! Types are imported from `oasis-core` directly.
 
 #![feature(restricted_std)]
+#![feature(asm_experimental_arch)]
 
 // ---------------------------------------------------------------------------
 // Module declarations

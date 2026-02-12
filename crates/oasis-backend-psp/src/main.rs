@@ -7,6 +7,7 @@
 //! Audio playback and file I/O run on background threads to prevent frame drops.
 
 #![feature(restricted_std)]
+#![feature(asm_experimental_arch)]
 #![no_main]
 
 use oasis_backend_psp::{
