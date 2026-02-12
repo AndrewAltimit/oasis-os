@@ -59,6 +59,75 @@ mod tests {
         assert_eq!(b.bg_color.unwrap(), Color::rgb(0, 255, 0));
         assert_eq!(b.text_color.unwrap(), Color::WHITE);
     }
+
+    // -- Draw / measure tests using MockBackend --
+
+    use crate::browser::test_utils::MockBackend;
+    use crate::ui::context::DrawContext;
+    use crate::ui::theme::Theme;
+    use crate::ui::widget::Widget;
+
+    #[test]
+    fn measure_returns_correct_size() {
+        let theme = Theme::dark();
+        let mut backend = MockBackend::new();
+        let ctx = DrawContext::new(&mut backend, &theme);
+        let badge = Badge::new("New");
+        let (w, h) = badge.measure(&ctx, 200, 100);
+        assert!(w > 0);
+        assert!(h > 0);
+    }
+
+    #[test]
+    fn draw_emits_fill_and_text() {
+        let theme = Theme::dark();
+        let mut backend = MockBackend::new();
+        {
+            let mut ctx = DrawContext::new(&mut backend, &theme);
+            let badge = Badge::new("Tag");
+            badge.draw(&mut ctx, 0, 0, 40, 20).unwrap();
+        }
+        assert!(backend.fill_rect_count() > 0);
+        assert!(backend.draw_text_count() > 0);
+    }
+
+    #[test]
+    fn draw_count_badge() {
+        let theme = Theme::dark();
+        let mut backend = MockBackend::new();
+        {
+            let mut ctx = DrawContext::new(&mut backend, &theme);
+            let badge = Badge::count(42);
+            badge.draw(&mut ctx, 0, 0, 40, 20).unwrap();
+        }
+        assert!(backend.has_text("42"));
+    }
+
+    #[test]
+    fn draw_custom_colors_no_panic() {
+        let theme = Theme::dark();
+        let mut backend = MockBackend::new();
+        {
+            let mut ctx = DrawContext::new(&mut backend, &theme);
+            let mut badge = Badge::new("OK");
+            badge.bg_color = Some(Color::rgb(0, 128, 255));
+            badge.draw(&mut ctx, 0, 0, 40, 20).unwrap();
+        }
+        assert!(backend.fill_rect_count() > 0);
+    }
+
+    #[test]
+    fn draw_empty_text() {
+        let theme = Theme::dark();
+        let mut backend = MockBackend::new();
+        {
+            let mut ctx = DrawContext::new(&mut backend, &theme);
+            let badge = Badge::new("");
+            badge.draw(&mut ctx, 0, 0, 20, 20).unwrap();
+        }
+        // Should not panic; background fill still emitted.
+        assert!(backend.fill_rect_count() > 0);
+    }
 }
 
 impl Widget for Badge {

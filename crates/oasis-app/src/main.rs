@@ -1345,3 +1345,123 @@ fn setup_terminal_objects(
         obj.visible = true;
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use oasis_core::vfs::{MemoryVfs, Vfs};
+
+    #[test]
+    fn populate_creates_home_user() {
+        let mut vfs = MemoryVfs::new();
+        super::populate_demo_vfs(&mut vfs);
+        assert!(vfs.readdir("/home/user").is_ok(), "/home/user should exist");
+    }
+
+    #[test]
+    fn populate_creates_etc_hostname() {
+        let mut vfs = MemoryVfs::new();
+        super::populate_demo_vfs(&mut vfs);
+        let data = vfs
+            .read("/etc/hostname")
+            .expect("/etc/hostname should exist");
+        assert_eq!(data, b"oasis");
+    }
+
+    #[test]
+    fn populate_creates_etc_version() {
+        let mut vfs = MemoryVfs::new();
+        super::populate_demo_vfs(&mut vfs);
+        let data = vfs.read("/etc/version").expect("/etc/version should exist");
+        assert_eq!(data, b"0.1.0");
+    }
+
+    #[test]
+    fn populate_creates_all_app_dirs() {
+        let mut vfs = MemoryVfs::new();
+        super::populate_demo_vfs(&mut vfs);
+        let expected = [
+            "File Manager",
+            "Settings",
+            "Network",
+            "Terminal",
+            "Music Player",
+            "Photo Viewer",
+            "Package Manager",
+            "System Monitor",
+            "Browser",
+        ];
+        for name in &expected {
+            let path = format!("/apps/{name}");
+            assert!(vfs.readdir(&path).is_ok(), "app dir should exist: {path}",);
+        }
+    }
+
+    #[test]
+    fn populate_creates_browser_home() {
+        let mut vfs = MemoryVfs::new();
+        super::populate_demo_vfs(&mut vfs);
+        let data = vfs
+            .read("/sites/home/index.html")
+            .expect("/sites/home/index.html should exist");
+        let text = std::str::from_utf8(&data).unwrap();
+        assert!(
+            text.contains("OASIS Browser"),
+            "index.html should contain 'OASIS Browser', got: {text}",
+        );
+    }
+
+    #[test]
+    fn populate_creates_music_dir() {
+        let mut vfs = MemoryVfs::new();
+        super::populate_demo_vfs(&mut vfs);
+        assert!(
+            vfs.readdir("/home/user/music").is_ok(),
+            "/home/user/music should exist",
+        );
+    }
+
+    #[test]
+    fn populate_creates_photos_dir() {
+        let mut vfs = MemoryVfs::new();
+        super::populate_demo_vfs(&mut vfs);
+        assert!(
+            vfs.readdir("/home/user/photos").is_ok(),
+            "/home/user/photos should exist",
+        );
+    }
+
+    #[test]
+    fn populate_creates_scripts() {
+        let mut vfs = MemoryVfs::new();
+        super::populate_demo_vfs(&mut vfs);
+        let data = vfs
+            .read("/home/user/scripts/hello.sh")
+            .expect("/home/user/scripts/hello.sh should exist");
+        let text = std::str::from_utf8(&data).unwrap();
+        assert!(
+            text.contains("echo"),
+            "hello.sh should contain 'echo', got: {text}",
+        );
+    }
+
+    #[test]
+    fn populate_creates_var_audio() {
+        let mut vfs = MemoryVfs::new();
+        super::populate_demo_vfs(&mut vfs);
+        assert!(vfs.readdir("/var/audio").is_ok(), "/var/audio should exist",);
+    }
+
+    #[test]
+    fn populate_creates_hosts_toml() {
+        let mut vfs = MemoryVfs::new();
+        super::populate_demo_vfs(&mut vfs);
+        let data = vfs
+            .read("/etc/hosts.toml")
+            .expect("/etc/hosts.toml should exist");
+        let text = std::str::from_utf8(&data).unwrap();
+        assert!(
+            text.contains("briefcase"),
+            "hosts.toml should contain 'briefcase', got: {text}",
+        );
+    }
+}

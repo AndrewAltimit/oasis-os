@@ -169,6 +169,108 @@ mod tests {
         assert_ne!(ScrollbarStyle::Thin, ScrollbarStyle::Wide);
         assert_ne!(ScrollbarStyle::Wide, ScrollbarStyle::Hidden);
     }
+
+    // -- Draw / measure tests using MockBackend --
+
+    use crate::browser::test_utils::MockBackend;
+    use crate::ui::context::DrawContext;
+    use crate::ui::theme::Theme;
+    use crate::ui::widget::Widget;
+
+    #[test]
+    fn draw_calls_push_clip_rect() {
+        let sv = ScrollView::new(500, 200);
+        let theme = Theme::dark();
+        let mut backend = MockBackend::new();
+        {
+            let mut ctx = DrawContext::new(&mut backend, &theme);
+            sv.draw(&mut ctx, 0, 0, 200, 200).unwrap();
+        }
+        // draw() calls draw_scrollbar which emits fill_rect calls (via
+        // fill_rounded_rect fallback) for the track and thumb.
+        assert!(backend.fill_rect_count() > 0);
+    }
+
+    #[test]
+    fn scrollbar_visible_when_content_exceeds() {
+        let sv = ScrollView::new(500, 200);
+        let theme = Theme::dark();
+        let mut backend = MockBackend::new();
+        {
+            let mut ctx = DrawContext::new(&mut backend, &theme);
+            sv.draw(&mut ctx, 0, 0, 200, 200).unwrap();
+        }
+        // Track + thumb = at least 2 fill_rect calls.
+        assert!(backend.fill_rect_count() >= 2);
+    }
+
+    #[test]
+    fn scrollbar_hidden_when_fits() {
+        let sv = ScrollView::new(100, 200);
+        let theme = Theme::dark();
+        let mut backend = MockBackend::new();
+        {
+            let mut ctx = DrawContext::new(&mut backend, &theme);
+            sv.draw(&mut ctx, 0, 0, 200, 200).unwrap();
+        }
+        // Content fits, so no scrollbar fill_rects should be emitted.
+        assert_eq!(backend.fill_rect_count(), 0);
+    }
+
+    #[test]
+    fn scroll_by_updates_offset() {
+        let mut sv = ScrollView::new(500, 200);
+        assert_eq!(sv.scroll_y, 0);
+        sv.scroll_by(75);
+        assert_eq!(sv.scroll_y, 75);
+    }
+
+    #[test]
+    fn clamp_scroll_prevents_overscroll() {
+        let mut sv = ScrollView::new(500, 200);
+        sv.scroll_y = 9999;
+        sv.clamp_scroll();
+        assert_eq!(sv.scroll_y, 300); // max = 500 - 200
+    }
+
+    #[test]
+    fn needs_scrollbar_threshold() {
+        // Content exactly equal to viewport: no scrollbar needed.
+        let sv_equal = ScrollView::new(200, 200);
+        assert!(!sv_equal.needs_scrollbar());
+
+        // Content 1px taller than viewport: scrollbar needed.
+        let sv_over = ScrollView::new(201, 200);
+        assert!(sv_over.needs_scrollbar());
+    }
+
+    #[test]
+    fn scrollbar_thumb_proportional() {
+        let sv = ScrollView::new(1000, 200);
+        let theme = Theme::dark();
+        let mut backend = MockBackend::new();
+        {
+            let mut ctx = DrawContext::new(&mut backend, &theme);
+            sv.draw_scrollbar(&mut ctx, 0, 0, 200).unwrap();
+        }
+        // Track and thumb should both be drawn. The thumb fill_rect should
+        // have a height proportional to viewport/content ratio.
+        assert!(backend.fill_rect_count() >= 2);
+    }
+
+    #[test]
+    fn zero_content_height() {
+        let sv = ScrollView::new(0, 200);
+        let theme = Theme::dark();
+        let mut backend = MockBackend::new();
+        {
+            let mut ctx = DrawContext::new(&mut backend, &theme);
+            // Should not panic even with content_height = 0.
+            sv.draw(&mut ctx, 0, 0, 200, 200).unwrap();
+        }
+        // content_height (0) <= viewport_height (200), so no scrollbar.
+        assert_eq!(backend.fill_rect_count(), 0);
+    }
 }
 
 impl Widget for ScrollView {

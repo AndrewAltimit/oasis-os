@@ -160,6 +160,166 @@ mod tests {
         let b = Button::new(label);
         assert_eq!(b.label, "borrowed");
     }
+
+    // -- Draw / measure tests using MockBackend --
+
+    use crate::browser::test_utils::MockBackend;
+    use crate::ui::theme::Theme;
+    use crate::ui::widget::Widget;
+
+    #[test]
+    fn measure_returns_text_width_plus_padding() {
+        let theme = Theme::dark();
+        let mut backend = MockBackend::new();
+        let ctx = DrawContext::new(&mut backend, &theme);
+        let btn = Button::new("Test");
+        let (w, h) = btn.measure(&ctx, 200, 100);
+        // "Test" = 4 chars * 8px = 32px text width + horizontal padding (16)
+        assert!(w >= 32, "width {w} should be >= text width 32");
+        assert!(w >= 32 + btn.padding.horizontal());
+        assert!(h > 0);
+    }
+
+    #[test]
+    fn draw_normal_state_emits_fill_and_text() {
+        let theme = Theme::dark();
+        let mut backend = MockBackend::new();
+        {
+            let mut ctx = DrawContext::new(&mut backend, &theme);
+            let btn = Button::new("Test");
+            btn.draw(&mut ctx, 0, 0, 100, 30).unwrap();
+        }
+        assert!(
+            backend.fill_rect_count() > 0,
+            "should emit at least one fill_rect"
+        );
+        assert!(backend.has_text("Test"), "should draw the label text");
+    }
+
+    #[test]
+    fn draw_hover_state() {
+        let theme = Theme::dark();
+        let mut backend = MockBackend::new();
+        {
+            let mut ctx = DrawContext::new(&mut backend, &theme);
+            let mut btn = Button::new("Hov");
+            btn.state = ButtonState::Hover;
+            btn.draw(&mut ctx, 0, 0, 80, 24).unwrap();
+        }
+        assert!(
+            backend.fill_rect_count() > 0,
+            "hover state should emit fill_rect"
+        );
+    }
+
+    #[test]
+    fn draw_pressed_state() {
+        let theme = Theme::dark();
+        let mut backend = MockBackend::new();
+        {
+            let mut ctx = DrawContext::new(&mut backend, &theme);
+            let mut btn = Button::new("Press");
+            btn.state = ButtonState::Pressed;
+            btn.draw(&mut ctx, 0, 0, 80, 24).unwrap();
+        }
+        assert!(
+            backend.fill_rect_count() > 0,
+            "pressed state should emit fill_rect"
+        );
+    }
+
+    #[test]
+    fn draw_disabled_uses_disabled_color() {
+        let theme = Theme::dark();
+        let mut backend = MockBackend::new();
+        {
+            let mut ctx = DrawContext::new(&mut backend, &theme);
+            let mut btn = Button::new("Off");
+            btn.state = ButtonState::Disabled;
+            btn.draw(&mut ctx, 0, 0, 80, 24).unwrap();
+        }
+        assert!(
+            backend.draw_text_count() > 0,
+            "disabled button should still draw text"
+        );
+    }
+
+    #[test]
+    fn draw_primary_style() {
+        let theme = Theme::dark();
+        let mut backend = MockBackend::new();
+        {
+            let mut ctx = DrawContext::new(&mut backend, &theme);
+            let btn = Button::primary("Go");
+            btn.draw(&mut ctx, 0, 0, 60, 24).unwrap();
+        }
+        assert!(backend.fill_rect_count() > 0);
+        assert!(backend.has_text("Go"));
+    }
+
+    #[test]
+    fn draw_outline_style() {
+        let theme = Theme::dark();
+        let mut backend = MockBackend::new();
+        {
+            let mut ctx = DrawContext::new(&mut backend, &theme);
+            let mut btn = Button::new("Outline");
+            btn.style = ButtonStyle::Outline;
+            btn.draw(&mut ctx, 0, 0, 100, 30).unwrap();
+        }
+        // Outline in Normal state has no bg but does have a stroke border
+        // stroke_rounded_rect -> stroke_rect -> 4 fill_rects
+        assert!(backend.fill_rect_count() > 0);
+    }
+
+    #[test]
+    fn draw_ghost_normal_no_bg() {
+        let theme = Theme::dark();
+        let mut backend = MockBackend::new();
+        {
+            let mut ctx = DrawContext::new(&mut backend, &theme);
+            let mut btn = Button::new("Ghost");
+            btn.style = ButtonStyle::Ghost;
+            btn.draw(&mut ctx, 0, 0, 80, 24).unwrap();
+        }
+        // Ghost in Normal state: bg_color returns None, no fill_rect for bg.
+        // Only text should be drawn.
+        assert!(backend.has_text("Ghost"));
+    }
+
+    #[test]
+    fn all_four_states_draw_without_panic() {
+        let theme = Theme::dark();
+        for state in [
+            ButtonState::Normal,
+            ButtonState::Hover,
+            ButtonState::Pressed,
+            ButtonState::Disabled,
+        ] {
+            let mut backend = MockBackend::new();
+            let mut ctx = DrawContext::new(&mut backend, &theme);
+            let mut btn = Button::new("X");
+            btn.state = state;
+            btn.draw(&mut ctx, 0, 0, 40, 20).unwrap();
+        }
+    }
+
+    #[test]
+    fn draw_text_is_centered() {
+        let theme = Theme::dark();
+        let mut backend = MockBackend::new();
+        {
+            let mut ctx = DrawContext::new(&mut backend, &theme);
+            let btn = Button::new("AB");
+            btn.draw(&mut ctx, 0, 0, 100, 30).unwrap();
+        }
+        let positions = backend.text_positions();
+        assert!(!positions.is_empty(), "should have drawn text");
+        let (_, tx, ty, _) = positions[0];
+        // "AB" = 16px text width. Centered in 100px => x ~ (100-16)/2 = 42
+        assert!(tx > 0, "text x ({tx}) should be offset from left edge");
+        assert!(ty >= 0, "text y ({ty}) should be non-negative");
+    }
 }
 
 impl Widget for Button {

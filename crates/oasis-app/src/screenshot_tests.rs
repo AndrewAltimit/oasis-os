@@ -9,9 +9,12 @@
 //!   cargo run -p oasis-app --bin screenshot-tests -- --scenario dashboard_classic
 //!   cargo run -p oasis-app --bin screenshot-tests -- --skin xp
 //!   cargo run -p oasis-app --bin screenshot-tests -- --report
+//!   cargo run -p oasis-app --bin screenshot-tests -- --bless   # save golden baselines
+//!   cargo run -p oasis-app --bin screenshot-tests -- --check   # compare against golden
 //!
 //! Output:
 //!   screenshots/tests/{scenario}/actual.png
+//!   screenshots/tests/{scenario}/golden.png  (with --bless)
 //!   screenshots/tests/report.html            (with --report)
 
 use std::fs;
@@ -48,6 +51,10 @@ struct Args {
     skin_filter: Option<String>,
     /// Generate an HTML comparison report.
     report: bool,
+    /// Compare actual screenshots against golden files (exit 1 on mismatch).
+    check: bool,
+    /// Copy actual screenshots to golden files (first-time baseline).
+    bless: bool,
 }
 
 fn parse_args() -> Args {
@@ -55,28 +62,34 @@ fn parse_args() -> Args {
         scenario_filter: None,
         skin_filter: None,
         report: false,
+        check: false,
+        bless: false,
     };
+    let usage = "Usage: screenshot-tests [--scenario NAME] [--skin NAME] \
+                 [--report] [--check] [--bless]";
     let mut iter = std::env::args().skip(1);
     while let Some(arg) = iter.next() {
         match arg.as_str() {
             "--scenario" => {
                 args.scenario_filter = Some(iter.next().unwrap_or_else(|| {
                     eprintln!("--scenario requires a value");
-                    eprintln!("Usage: screenshot-tests [--scenario NAME] [--skin NAME] [--report]");
+                    eprintln!("{usage}");
                     std::process::exit(1);
                 }));
             },
             "--skin" => {
                 args.skin_filter = Some(iter.next().unwrap_or_else(|| {
                     eprintln!("--skin requires a value");
-                    eprintln!("Usage: screenshot-tests [--scenario NAME] [--skin NAME] [--report]");
+                    eprintln!("{usage}");
                     std::process::exit(1);
                 }));
             },
             "--report" => args.report = true,
+            "--check" => args.check = true,
+            "--bless" => args.bless = true,
             other => {
                 eprintln!("Unknown argument: {other}");
-                eprintln!("Usage: screenshot-tests [--scenario NAME] [--skin NAME] [--report]");
+                eprintln!("{usage}");
                 std::process::exit(1);
             },
         }
@@ -213,6 +226,64 @@ fn save_png(path: &Path, width: u32, height: u32, rgba: &[u8]) -> anyhow::Result
     let mut writer = encoder.write_header()?;
     writer.write_image_data(rgba)?;
     Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Golden file comparison (--check / --bless)
+// ---------------------------------------------------------------------------
+
+/// Read a PNG file and return raw RGBA bytes.
+fn read_png_rgba(path: &Path) -> anyhow::Result<Vec<u8>> {
+    let file = fs::File::open(path)?;
+    let decoder = png::Decoder::new(std::io::BufReader::new(file));
+    let mut reader = decoder.read_info()?;
+    let mut buf = vec![0u8; reader.output_buffer_size()];
+    reader.next_frame(&mut buf)?;
+    let info = reader.info();
+    buf.truncate((info.width * info.height * 4) as usize);
+    Ok(buf)
+}
+
+/// Compute a simple hash of pixel data for fast comparison.
+///
+/// Uses FNV-1a (64-bit) which is trivial to implement and fast on small data.
+fn hash_pixels(data: &[u8]) -> u64 {
+    const FNV_OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
+    const FNV_PRIME: u64 = 0x0100_0000_01b3;
+    let mut hash = FNV_OFFSET;
+    for &byte in data {
+        hash ^= byte as u64;
+        hash = hash.wrapping_mul(FNV_PRIME);
+    }
+    hash
+}
+
+/// Bless a scenario: copy actual.png to golden.png.
+fn bless_golden(out_dir: &Path) -> anyhow::Result<()> {
+    let actual = out_dir.join("actual.png");
+    let golden = out_dir.join("golden.png");
+    if actual.exists() {
+        fs::copy(&actual, &golden)?;
+    }
+    Ok(())
+}
+
+/// Check a scenario: compare actual.png hash against golden.png hash.
+///
+/// Returns `Ok(true)` if they match, `Ok(false)` if they differ,
+/// or `Err` if golden.png doesn't exist.
+fn check_golden(out_dir: &Path) -> anyhow::Result<bool> {
+    let actual = out_dir.join("actual.png");
+    let golden = out_dir.join("golden.png");
+    if !golden.exists() {
+        anyhow::bail!(
+            "golden.png not found (run with --bless first): {}",
+            golden.display()
+        );
+    }
+    let actual_pixels = read_png_rgba(&actual)?;
+    let golden_pixels = read_png_rgba(&golden)?;
+    Ok(hash_pixels(&actual_pixels) == hash_pixels(&golden_pixels))
 }
 
 fn populate_demo_vfs(vfs: &mut MemoryVfs) {
@@ -1038,8 +1109,29 @@ fn main() -> anyhow::Result<()> {
 
         match result {
             Ok(()) => {
-                completed += 1;
-                println!("  OK  {}", scenario.name);
+                if args.bless {
+                    bless_golden(&out_dir)?;
+                    completed += 1;
+                    println!("  BLESS  {}", scenario.name);
+                } else if args.check {
+                    match check_golden(&out_dir) {
+                        Ok(true) => {
+                            completed += 1;
+                            println!("  MATCH  {}", scenario.name);
+                        },
+                        Ok(false) => {
+                            failed += 1;
+                            eprintln!("  MISMATCH  {}", scenario.name);
+                        },
+                        Err(e) => {
+                            failed += 1;
+                            eprintln!("  SKIP  {}: {e}", scenario.name);
+                        },
+                    }
+                } else {
+                    completed += 1;
+                    println!("  OK  {}", scenario.name);
+                }
             },
             Err(e) => {
                 failed += 1;
@@ -1055,9 +1147,19 @@ fn main() -> anyhow::Result<()> {
     backend.shutdown()?;
 
     println!();
-    println!("Screenshot tests: {completed} passed, {failed} failed");
+    if args.check {
+        println!("Screenshot check: {completed} matched, {failed} mismatched/missing");
+    } else if args.bless {
+        println!("Screenshot bless: {completed} golden files updated");
+    } else {
+        println!("Screenshot tests: {completed} passed, {failed} failed");
+    }
     if completed + failed == 0 {
         println!("(No scenarios matched the filter)");
+    }
+
+    if args.check && failed > 0 {
+        std::process::exit(1);
     }
 
     Ok(())

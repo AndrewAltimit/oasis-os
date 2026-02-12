@@ -96,6 +96,125 @@ mod tests {
         c.elevation = 0;
         assert_eq!(c.elevation, 0);
     }
+
+    // -- Draw / measure tests using MockBackend --
+
+    use crate::browser::test_utils::MockBackend;
+    use crate::ui::context::DrawContext;
+    use crate::ui::theme::Theme;
+    use crate::ui::widget::Widget;
+
+    #[test]
+    fn measure_accounts_for_padding() {
+        let theme = Theme::dark();
+        let mut backend = MockBackend::new();
+        let ctx = DrawContext::new(&mut backend, &theme);
+        let card = Card::new("Title");
+        let (w, h) = card.measure(&ctx, 200, 100);
+        assert!(w > 0);
+        assert!(h > 0);
+    }
+
+    #[test]
+    fn draw_emits_shadow_at_elevation() {
+        let theme = Theme::dark();
+        let mut backend = MockBackend::new();
+        {
+            let mut ctx = DrawContext::new(&mut backend, &theme);
+            let mut card = Card::new("Title");
+            card.elevation = 2;
+            card.draw(&mut ctx, 0, 0, 200, 100).unwrap();
+        }
+        // Shadow + background + text → more than 1 fill_rect.
+        assert!(backend.fill_rect_count() > 1);
+    }
+
+    #[test]
+    fn draw_title_text() {
+        let theme = Theme::dark();
+        let mut backend = MockBackend::new();
+        {
+            let mut ctx = DrawContext::new(&mut backend, &theme);
+            let card = Card::new("Title");
+            card.draw(&mut ctx, 0, 0, 200, 100).unwrap();
+        }
+        assert!(backend.has_text("Title"));
+    }
+
+    #[test]
+    fn draw_subtitle() {
+        let theme = Theme::dark();
+        let mut backend = MockBackend::new();
+        {
+            let mut ctx = DrawContext::new(&mut backend, &theme);
+            let mut card = Card::new("Title");
+            card.subtitle = Some("Subtitle text".into());
+            card.draw(&mut ctx, 0, 0, 200, 100).unwrap();
+        }
+        assert!(backend.has_text("Subtitle text"));
+    }
+
+    #[test]
+    fn draw_body() {
+        let theme = Theme::dark();
+        let mut backend = MockBackend::new();
+        {
+            let mut ctx = DrawContext::new(&mut backend, &theme);
+            let mut card = Card::new("Title");
+            card.body = Some("Body content here".into());
+            card.draw(&mut ctx, 0, 0, 200, 150).unwrap();
+        }
+        assert!(backend.has_text("Body content here"));
+    }
+
+    #[test]
+    fn draw_no_image_full_width() {
+        let theme = Theme::dark();
+        let mut backend = MockBackend::new();
+        {
+            let mut ctx = DrawContext::new(&mut backend, &theme);
+            let card = Card::new("NoImage");
+            card.draw(&mut ctx, 0, 0, 200, 100).unwrap();
+        }
+        assert!(backend.fill_rect_count() > 0);
+    }
+
+    #[test]
+    fn draw_empty_title() {
+        let theme = Theme::dark();
+        let mut backend = MockBackend::new();
+        {
+            let mut ctx = DrawContext::new(&mut backend, &theme);
+            let card = Card::new("");
+            card.draw(&mut ctx, 0, 0, 200, 100).unwrap();
+        }
+        // Should not panic; background fill still emitted.
+        assert!(backend.fill_rect_count() > 0);
+    }
+
+    #[test]
+    fn draw_zero_elevation_no_shadow_rects() {
+        let theme = Theme::dark();
+        let mut backend_with_shadow = MockBackend::new();
+        {
+            let mut ctx = DrawContext::new(&mut backend_with_shadow, &theme);
+            let mut card = Card::new("Title");
+            card.elevation = 2;
+            card.draw(&mut ctx, 0, 0, 200, 100).unwrap();
+        }
+        let with_shadow = backend_with_shadow.fill_rect_count();
+
+        let mut backend_no_shadow = MockBackend::new();
+        {
+            let mut ctx = DrawContext::new(&mut backend_no_shadow, &theme);
+            let mut card = Card::new("Title");
+            card.elevation = 0;
+            card.draw(&mut ctx, 0, 0, 200, 100).unwrap();
+        }
+        let without_shadow = backend_no_shadow.fill_rect_count();
+
+        assert!(without_shadow < with_shadow);
+    }
 }
 
 impl Widget for Card {

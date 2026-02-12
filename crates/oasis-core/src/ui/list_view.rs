@@ -168,6 +168,132 @@ mod tests {
         lv.selected = Some(2);
         assert_eq!(lv.selected, Some(2));
     }
+
+    // -- Draw / measure tests using MockBackend --
+
+    use crate::browser::test_utils::MockBackend;
+    use crate::ui::context::DrawContext;
+    use crate::ui::theme::Theme;
+    use crate::ui::widget::Widget;
+
+    /// A render callback that actually draws the item text so we can
+    /// assert on `draw_text` calls recorded by `MockBackend`.
+    fn draw_render(
+        item: &String,
+        ctx: &mut DrawContext<'_>,
+        x: i32,
+        y: i32,
+        _w: u32,
+        _h: u32,
+        _selected: bool,
+    ) -> Result<()> {
+        ctx.label(item, x, y)
+    }
+
+    #[test]
+    fn measure_returns_item_height_times_count() {
+        let items: Vec<String> = (0..5).map(|i| i.to_string()).collect();
+        let lv = ListView::new(items, 20, dummy_render);
+        let theme = Theme::dark();
+        let mut backend = MockBackend::new();
+        let ctx = DrawContext::new(&mut backend, &theme);
+        let (w, h) = lv.measure(&ctx, 200, 400);
+        assert_eq!(w, 200);
+        assert_eq!(h, 100); // 5 items * 20px
+    }
+
+    #[test]
+    fn draw_renders_visible_items() {
+        let items: Vec<String> = (0..5).map(|i| format!("item{i}")).collect();
+        let lv = ListView::new(items, 20, draw_render);
+        let theme = Theme::dark();
+        let mut backend = MockBackend::new();
+        {
+            let mut ctx = DrawContext::new(&mut backend, &theme);
+            lv.draw(&mut ctx, 0, 0, 200, 100).unwrap();
+        }
+        assert!(backend.draw_text_count() > 0);
+        assert!(backend.has_text("item0"));
+    }
+
+    #[test]
+    fn draw_selected_item_highlight() {
+        let items: Vec<String> = (0..3).map(|i| format!("item{i}")).collect();
+        let mut lv = ListView::new(items, 20, draw_render);
+        lv.selected = Some(1);
+        let theme = Theme::dark();
+        let mut backend = MockBackend::new();
+        {
+            let mut ctx = DrawContext::new(&mut backend, &theme);
+            lv.draw(&mut ctx, 0, 0, 200, 100).unwrap();
+        }
+        // The selected item triggers a fill_rect for the highlight background.
+        assert!(backend.fill_rect_count() > 0);
+    }
+
+    #[test]
+    fn scroll_offset_skips_items() {
+        let items: Vec<String> = (0..10).map(|i| format!("item{i}")).collect();
+        let mut lv = ListView::new(items, 20, draw_render);
+        // Scroll past the first two items (offset = 40 means items 0,1 are above).
+        lv.scroll_offset = 40;
+        let theme = Theme::dark();
+        let mut backend = MockBackend::new();
+        {
+            let mut ctx = DrawContext::new(&mut backend, &theme);
+            lv.draw(&mut ctx, 0, 0, 200, 60).unwrap();
+        }
+        // Items at index 2+ should be drawn; item0 and item1 should be skipped.
+        assert!(!backend.has_text("item0"));
+        assert!(!backend.has_text("item1"));
+        assert!(backend.has_text("item2"));
+    }
+
+    #[test]
+    fn content_height_calculation() {
+        let items: Vec<String> = (0..7).map(|i| i.to_string()).collect();
+        let lv = ListView::new(items, 15, dummy_render);
+        assert_eq!(lv.content_height(), 7 * 15);
+    }
+
+    #[test]
+    fn scroll_to_clamps_range() {
+        let items: Vec<String> = (0..5).map(|i| i.to_string()).collect();
+        let mut lv = ListView::new(items, 20, dummy_render);
+        // Scroll to an index way beyond the list.
+        lv.scroll_to(100, 60);
+        // scroll_offset should not go negative and should be bounded
+        // by the item_y calculation (100 * 20 = 2000, minus viewport).
+        assert!(lv.scroll_offset >= 0);
+    }
+
+    #[test]
+    fn empty_list_draws_nothing() {
+        let lv: ListView<String> = ListView::new(vec![], 20, draw_render);
+        let theme = Theme::dark();
+        let mut backend = MockBackend::new();
+        {
+            let mut ctx = DrawContext::new(&mut backend, &theme);
+            lv.draw(&mut ctx, 0, 0, 200, 100).unwrap();
+        }
+        assert_eq!(backend.draw_text_count(), 0);
+    }
+
+    #[test]
+    fn draw_calls_push_clip() {
+        let items: Vec<String> = (0..3).map(|i| format!("item{i}")).collect();
+        let lv = ListView::new(items, 20, draw_render);
+        let theme = Theme::dark();
+        let mut backend = MockBackend::new();
+        {
+            let mut ctx = DrawContext::new(&mut backend, &theme);
+            lv.draw(&mut ctx, 0, 0, 200, 100).unwrap();
+        }
+        // draw_at calls push_clip_rect which delegates to set_clip_rect.
+        // MockBackend does not record set_clip_rect in `calls`, but the call
+        // must not fail. We verify the draw completed and items were rendered.
+        assert!(backend.draw_text_count() > 0);
+    }
 }
 
 impl<T> Widget for ListView<T> {

@@ -1212,6 +1212,192 @@ mod tests {
         assert!(b.calls().is_empty());
     }
 
+    // -- stroke_rect edge tests --
+
+    #[test]
+    fn stroke_rect_bottom_edge() {
+        let mut b = RecordingBackend::new();
+        b.stroke_rect(5, 10, 100, 80, 3, Color::WHITE).unwrap();
+        let calls = b.calls();
+        // Second call is bottom edge: fill_rect(5, 10+80-3=87, 100, 3)
+        assert!(calls[1].starts_with("fill_rect(5,87,100,3,"));
+    }
+
+    #[test]
+    fn stroke_rect_left_right_edges() {
+        let mut b = RecordingBackend::new();
+        b.stroke_rect(5, 10, 100, 80, 3, Color::WHITE).unwrap();
+        let calls = b.calls();
+        // Third call (left edge): fill_rect(5, 13, 3, 74)
+        assert!(calls[2].starts_with("fill_rect(5,13,3,74,"));
+        // Fourth call (right edge): fill_rect(102, 13, 3, 74)
+        assert!(calls[3].starts_with("fill_rect(102,13,3,74,"));
+    }
+
+    #[test]
+    fn stroke_rect_width_saturates() {
+        let mut b = RecordingBackend::new();
+        // stroke_width=50 on a 20px tall rect: h.saturating_sub(100) = 0
+        b.stroke_rect(0, 0, 100, 20, 50, Color::WHITE).unwrap();
+        let calls = b.calls();
+        assert_eq!(calls.len(), 4);
+        // Left/right edges should have height 0 (saturated)
+        assert!(calls[2].contains(",0,"));
+    }
+
+    #[test]
+    fn stroke_rect_1x1() {
+        let mut b = RecordingBackend::new();
+        b.stroke_rect(0, 0, 1, 1, 1, Color::WHITE).unwrap();
+        // Should not panic, emits 4 fill_rect calls
+        assert_eq!(b.calls().len(), 4);
+    }
+
+    #[test]
+    fn stroke_rect_large_stroke_small_rect() {
+        let mut b = RecordingBackend::new();
+        // stroke_width=10 on a 4x4 rect
+        b.stroke_rect(0, 0, 4, 4, 10, Color::WHITE).unwrap();
+        let calls = b.calls();
+        assert_eq!(calls.len(), 4);
+    }
+
+    // -- draw_line reversed coords --
+
+    #[test]
+    fn draw_line_reversed_horizontal() {
+        let mut b = RecordingBackend::new();
+        // x2 < x1 (reversed direction)
+        b.draw_line(100, 50, 10, 50, 2, Color::WHITE).unwrap();
+        let calls = b.calls();
+        assert_eq!(calls.len(), 1);
+        // Should use min(100,10)=10 as x, width=90
+        assert!(calls[0].starts_with("fill_rect(10,50,90,2,"));
+    }
+
+    #[test]
+    fn draw_line_reversed_vertical() {
+        let mut b = RecordingBackend::new();
+        b.draw_line(50, 80, 50, 10, 3, Color::WHITE).unwrap();
+        let calls = b.calls();
+        assert_eq!(calls.len(), 1);
+        assert!(calls[0].starts_with("fill_rect(50,10,3,70,"));
+    }
+
+    // -- draw_text_ellipsis edge cases --
+
+    #[test]
+    fn draw_text_ellipsis_empty_string() {
+        let mut b = RecordingBackend::new();
+        let drawn = b
+            .draw_text_ellipsis("", 0, 0, 8, Color::WHITE, 200)
+            .unwrap();
+        assert_eq!(drawn, 0);
+    }
+
+    #[test]
+    fn draw_text_ellipsis_exact_fit() {
+        let mut b = RecordingBackend::new();
+        // "ABCDE" = 5 chars * 8px = 40px, max_width=40 => no ellipsis
+        let drawn = b
+            .draw_text_ellipsis("ABCDE", 0, 0, 8, Color::WHITE, 40)
+            .unwrap();
+        assert_eq!(drawn, 40);
+        let calls = b.calls();
+        assert_eq!(calls.len(), 1);
+        assert!(calls[0].contains("ABCDE"));
+        assert!(!calls[0].contains("..."));
+    }
+
+    #[test]
+    fn draw_text_ellipsis_utf8_boundary() {
+        let mut b = RecordingBackend::new();
+        // Multi-byte UTF-8: 'é' is 2 bytes, so "aéb" = 4 bytes = 32px in mock.
+        // With max_width=40, it fits entirely without panicking on char boundaries.
+        let drawn = b
+            .draw_text_ellipsis("aéb", 0, 0, 8, Color::WHITE, 40)
+            .unwrap();
+        assert!(drawn <= 40);
+        let calls = b.calls();
+        assert!(!calls[0].contains("..."));
+    }
+
+    // -- draw_text_wrapped edge cases --
+
+    #[test]
+    fn draw_text_wrapped_empty_lines() {
+        let mut b = RecordingBackend::new();
+        // "\n\n".split('\n') yields 3 segments: ["", "", ""]
+        let h = b
+            .draw_text_wrapped("\n\n", 0, 0, 8, Color::WHITE, 200, 10)
+            .unwrap();
+        // Three empty lines = 30px, no draw_text calls (empty words)
+        assert_eq!(h, 30);
+        assert_eq!(b.calls().len(), 0);
+    }
+
+    #[test]
+    fn draw_text_wrapped_long_word_gets_own_line() {
+        let mut b = RecordingBackend::new();
+        // max_width=24 (3 chars). "ABCDEFGH" is 64px, won't fit on any line
+        // but should still be drawn on its own line.
+        let h = b
+            .draw_text_wrapped("ABCDEFGH", 0, 0, 8, Color::WHITE, 24, 10)
+            .unwrap();
+        assert_eq!(h, 10); // Still one line (the word gets its own line)
+        assert!(b.calls().len() >= 1);
+    }
+
+    #[test]
+    fn draw_text_wrapped_y_positions() {
+        let mut b = RecordingBackend::new();
+        let _ = b
+            .draw_text_wrapped("A\nB\nC", 5, 10, 8, Color::WHITE, 200, 15)
+            .unwrap();
+        let calls = b.calls();
+        assert_eq!(calls.len(), 3);
+        // First line at y=10, second at y=25, third at y=40
+        assert!(calls[0].contains(",5,10,"));
+        assert!(calls[1].contains(",5,25,"));
+        assert!(calls[2].contains(",5,40,"));
+    }
+
+    #[test]
+    fn draw_text_wrapped_zero_line_height_uses_default() {
+        let mut b = RecordingBackend::new();
+        // line_height=0 should fall back to measure_text_height
+        let h = b
+            .draw_text_wrapped("A\nB", 0, 0, 10, Color::WHITE, 200, 0)
+            .unwrap();
+        // Default line height for font_size 10 = 12
+        assert_eq!(h, 24);
+    }
+
+    // -- blit_sub_tinted --
+
+    #[test]
+    fn blit_sub_tinted_defaults_to_blit_sub() {
+        let mut b = RecordingBackend::new();
+        let tex = TextureId(9);
+        b.blit_sub_tinted(tex, 0, 0, 16, 16, 10, 20, 32, 32, Color::rgb(255, 0, 0))
+            .unwrap();
+        let calls = b.calls();
+        assert_eq!(calls.len(), 1);
+        // Should ultimately delegate to blit
+        assert!(calls[0].starts_with("blit(9,10,20,32,32)"));
+    }
+
+    // -- push_region / pop_region --
+
+    #[test]
+    fn push_region_translates_and_clips() {
+        let mut b = RecordingBackend::new();
+        b.push_region(50, 60, 200, 150).unwrap();
+        let calls = b.calls();
+        // push_translate is no-op, push_clip_rect calls set_clip
+        assert!(calls.contains(&"set_clip(0,0,200,150)".to_string()));
+    }
+
     // -- AudioTrackId --
 
     #[test]
