@@ -27,6 +27,40 @@ impl Badge {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn new_from_str() {
+        let b = Badge::new("NEW");
+        assert_eq!(b.text, "NEW");
+        assert!(b.bg_color.is_none());
+        assert!(b.text_color.is_none());
+    }
+
+    #[test]
+    fn count_formatting() {
+        let b = Badge::count(42);
+        assert_eq!(b.text, "42");
+    }
+
+    #[test]
+    fn count_zero() {
+        let b = Badge::count(0);
+        assert_eq!(b.text, "0");
+    }
+
+    #[test]
+    fn custom_colors() {
+        let mut b = Badge::new("OK");
+        b.bg_color = Some(Color::rgb(0, 255, 0));
+        b.text_color = Some(Color::WHITE);
+        assert_eq!(b.bg_color.unwrap(), Color::rgb(0, 255, 0));
+        assert_eq!(b.text_color.unwrap(), Color::WHITE);
+    }
+}
+
 impl Widget for Badge {
     fn measure(&self, ctx: &DrawContext<'_>, _available_w: u32, _available_h: u32) -> (u32, u32) {
         let fs = ctx.theme.font_size_xs;

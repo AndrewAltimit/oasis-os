@@ -87,6 +87,89 @@ impl<T> ListView<T> {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn dummy_render(
+        _item: &String,
+        _ctx: &mut DrawContext<'_>,
+        _x: i32,
+        _y: i32,
+        _w: u32,
+        _h: u32,
+        _selected: bool,
+    ) -> Result<()> {
+        Ok(())
+    }
+
+    #[test]
+    fn new_defaults() {
+        let lv = ListView::new(vec!["a".to_string(), "b".to_string()], 20, dummy_render);
+        assert_eq!(lv.items.len(), 2);
+        assert_eq!(lv.item_height, 20);
+        assert_eq!(lv.scroll_offset, 0);
+        assert!(lv.selected.is_none());
+    }
+
+    #[test]
+    fn item_height_minimum_one() {
+        let lv = ListView::new(vec!["x".to_string()], 0, dummy_render);
+        assert_eq!(lv.item_height, 1);
+    }
+
+    #[test]
+    fn content_height_empty() {
+        let lv: ListView<String> = ListView::new(vec![], 20, dummy_render);
+        assert_eq!(lv.content_height(), 0);
+    }
+
+    #[test]
+    fn content_height_multiple() {
+        let items: Vec<String> = (0..5).map(|i| i.to_string()).collect();
+        let lv = ListView::new(items, 30, dummy_render);
+        assert_eq!(lv.content_height(), 150);
+    }
+
+    #[test]
+    fn scroll_to_below_viewport() {
+        let items: Vec<String> = (0..10).map(|i| i.to_string()).collect();
+        let mut lv = ListView::new(items, 20, dummy_render);
+        // Viewport is 60px tall, scroll to item 5 (at y=100).
+        lv.scroll_to(5, 60);
+        // Item 5 bottom = 120, should scroll so it's visible.
+        assert!(lv.scroll_offset > 0);
+        assert!(lv.scroll_offset <= 100);
+    }
+
+    #[test]
+    fn scroll_to_above_viewport() {
+        let items: Vec<String> = (0..10).map(|i| i.to_string()).collect();
+        let mut lv = ListView::new(items, 20, dummy_render);
+        lv.scroll_offset = 100;
+        // Scroll to item 1 (at y=20), which is above current viewport.
+        lv.scroll_to(1, 60);
+        assert_eq!(lv.scroll_offset, 20);
+    }
+
+    #[test]
+    fn scroll_to_already_visible() {
+        let items: Vec<String> = (0..10).map(|i| i.to_string()).collect();
+        let mut lv = ListView::new(items, 20, dummy_render);
+        // Item 0 is at y=0, viewport starts at 0, height 100 -- already visible.
+        lv.scroll_to(0, 100);
+        assert_eq!(lv.scroll_offset, 0);
+    }
+
+    #[test]
+    fn selected_index() {
+        let items: Vec<String> = (0..3).map(|i| i.to_string()).collect();
+        let mut lv = ListView::new(items, 20, dummy_render);
+        lv.selected = Some(2);
+        assert_eq!(lv.selected, Some(2));
+    }
+}
+
 impl<T> Widget for ListView<T> {
     fn measure(&self, _ctx: &DrawContext<'_>, available_w: u32, _available_h: u32) -> (u32, u32) {
         (available_w, self.content_height())

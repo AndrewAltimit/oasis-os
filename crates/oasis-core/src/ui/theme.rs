@@ -226,6 +226,11 @@ impl Theme {
         theme
     }
 
+    #[cfg(test)]
+    fn accent_rgb(&self) -> (u8, u8, u8) {
+        (self.accent.r, self.accent.g, self.accent.b)
+    }
+
     /// High-contrast theme for accessibility.
     pub fn high_contrast() -> Self {
         Self {
@@ -289,5 +294,122 @@ impl Theme {
             shadow_modal: Shadow::elevation(0),
             shadow_tooltip: Shadow::elevation(0),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn dark_has_dark_background() {
+        let t = Theme::dark();
+        // Background should be dark (low RGB values).
+        assert!(t.background.r < 50);
+        assert!(t.background.g < 50);
+        assert!(t.background.b < 50);
+    }
+
+    #[test]
+    fn light_has_light_background() {
+        let t = Theme::light();
+        // Background should be light (high RGB values).
+        assert!(t.background.r > 200);
+        assert!(t.background.g > 200);
+        assert!(t.background.b > 200);
+    }
+
+    #[test]
+    fn classic_uses_orange_accent() {
+        let t = Theme::classic();
+        // Classic accent is orange (high red, medium green, low blue).
+        assert!(t.accent.r > 200);
+        assert!(t.accent.g > 100 && t.accent.g < 200);
+        assert!(t.accent.b < 100);
+    }
+
+    #[test]
+    fn classic_based_on_dark() {
+        let dark = Theme::dark();
+        let classic = Theme::classic();
+        // Classic shares dark's background.
+        assert_eq!(dark.background, classic.background);
+        assert_eq!(dark.surface, classic.surface);
+        // But has different accent.
+        assert_ne!(dark.accent_rgb(), classic.accent_rgb());
+    }
+
+    #[test]
+    fn high_contrast_pure_black_bg() {
+        let t = Theme::high_contrast();
+        assert_eq!(t.background, Color::rgb(0, 0, 0));
+        assert_eq!(t.surface, Color::rgb(0, 0, 0));
+    }
+
+    #[test]
+    fn high_contrast_white_text() {
+        let t = Theme::high_contrast();
+        assert_eq!(t.text_primary, Color::rgb(255, 255, 255));
+    }
+
+    #[test]
+    fn high_contrast_no_rounded_corners() {
+        let t = Theme::high_contrast();
+        assert_eq!(t.border_radius_sm, 0);
+        assert_eq!(t.border_radius_md, 0);
+        assert_eq!(t.border_radius_lg, 0);
+        assert_eq!(t.border_radius_xl, 0);
+    }
+
+    #[test]
+    fn high_contrast_no_shadows() {
+        let t = Theme::high_contrast();
+        assert_eq!(t.shadow_card.layers.len(), 0);
+        assert_eq!(t.shadow_dropdown.layers.len(), 0);
+        assert_eq!(t.shadow_modal.layers.len(), 0);
+        assert_eq!(t.shadow_tooltip.layers.len(), 0);
+    }
+
+    #[test]
+    fn font_sizes_are_ordered() {
+        let t = Theme::dark();
+        assert!(t.font_size_xs <= t.font_size_sm);
+        assert!(t.font_size_sm <= t.font_size_md);
+        assert!(t.font_size_md <= t.font_size_lg);
+        assert!(t.font_size_lg <= t.font_size_xl);
+        assert!(t.font_size_xl <= t.font_size_xxl);
+    }
+
+    #[test]
+    fn spacing_is_ordered() {
+        let t = Theme::dark();
+        assert!(t.spacing_xs <= t.spacing_sm);
+        assert!(t.spacing_sm <= t.spacing_md);
+        assert!(t.spacing_md <= t.spacing_lg);
+        assert!(t.spacing_lg <= t.spacing_xl);
+    }
+
+    #[test]
+    fn border_radius_is_ordered() {
+        let t = Theme::dark();
+        assert!(t.border_radius_sm <= t.border_radius_md);
+        assert!(t.border_radius_md <= t.border_radius_lg);
+        assert!(t.border_radius_lg <= t.border_radius_xl);
+    }
+
+    #[test]
+    fn all_variants_have_consistent_font_sizes() {
+        for theme in [Theme::dark(), Theme::light(), Theme::classic(), Theme::high_contrast()] {
+            assert_eq!(theme.font_size_xs, 8);
+            assert_eq!(theme.font_size_md, 8);
+            assert_eq!(theme.font_size_lg, 16);
+        }
+    }
+
+    #[test]
+    fn dark_has_shadows() {
+        let t = Theme::dark();
+        assert!(!t.shadow_card.layers.is_empty());
+        assert!(!t.shadow_modal.layers.is_empty());
     }
 }

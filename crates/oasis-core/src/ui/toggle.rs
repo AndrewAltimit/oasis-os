@@ -32,6 +32,80 @@ impl Toggle {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn new_on() {
+        let t = Toggle::new(true);
+        assert!(t.on);
+        assert!((t.progress - 1.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn new_off() {
+        let t = Toggle::new(false);
+        assert!(!t.on);
+        assert!((t.progress - 0.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn animate_toward_on() {
+        let mut t = Toggle::new(false);
+        t.on = true;
+        // Progress starts at 0.0, should move toward 1.0.
+        t.animate(75); // 75/150 = 0.5
+        assert!(t.progress > 0.0);
+        assert!(t.progress <= 0.5 + f32::EPSILON);
+    }
+
+    #[test]
+    fn animate_toward_off() {
+        let mut t = Toggle::new(true);
+        t.on = false;
+        // Progress starts at 1.0, should move toward 0.0.
+        t.animate(75);
+        assert!(t.progress < 1.0);
+        assert!(t.progress >= 0.5 - f32::EPSILON);
+    }
+
+    #[test]
+    fn animate_completes() {
+        let mut t = Toggle::new(false);
+        t.on = true;
+        // After enough time, progress should reach 1.0.
+        for _ in 0..20 {
+            t.animate(16);
+        }
+        assert!((t.progress - 1.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn animate_no_overshoot() {
+        let mut t = Toggle::new(false);
+        t.on = true;
+        t.animate(10000); // Huge dt
+        assert!((t.progress - 1.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn animate_zero_dt_no_change() {
+        let mut t = Toggle::new(false);
+        t.on = true;
+        t.animate(0);
+        assert!((t.progress - 0.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn already_at_target() {
+        let mut t = Toggle::new(true);
+        let before = t.progress;
+        t.animate(16);
+        assert!((t.progress - before).abs() < f32::EPSILON);
+    }
+}
+
 impl Widget for Toggle {
     fn measure(&self, _ctx: &DrawContext<'_>, _available_w: u32, _available_h: u32) -> (u32, u32) {
         (28, 16)

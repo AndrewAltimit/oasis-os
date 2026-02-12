@@ -30,6 +30,54 @@ impl ProgressBar {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn new_clamps_value() {
+        let p = ProgressBar::new(0.5);
+        assert!((p.value - 0.5).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn new_clamps_above_one() {
+        let p = ProgressBar::new(1.5);
+        assert!((p.value - 1.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn new_clamps_below_zero() {
+        let p = ProgressBar::new(-0.5);
+        assert!((p.value - 0.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn new_defaults() {
+        let p = ProgressBar::new(0.75);
+        assert_eq!(p.style, ProgressStyle::Bar);
+        assert!(!p.show_label);
+    }
+
+    #[test]
+    fn style_variants() {
+        assert_ne!(ProgressStyle::Bar, ProgressStyle::Circular);
+        assert_ne!(ProgressStyle::Circular, ProgressStyle::Indeterminate);
+    }
+
+    #[test]
+    fn zero_progress() {
+        let p = ProgressBar::new(0.0);
+        assert!((p.value - 0.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn full_progress() {
+        let p = ProgressBar::new(1.0);
+        assert!((p.value - 1.0).abs() < f32::EPSILON);
+    }
+}
+
 impl Widget for ProgressBar {
     fn measure(&self, _ctx: &DrawContext<'_>, available_w: u32, _available_h: u32) -> (u32, u32) {
         match self.style {

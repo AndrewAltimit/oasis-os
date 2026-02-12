@@ -89,6 +89,74 @@ impl Button {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn new_defaults() {
+        let b = Button::new("Click");
+        assert_eq!(b.label, "Click");
+        assert_eq!(b.state, ButtonState::Normal);
+        assert_eq!(b.style, ButtonStyle::Secondary);
+        assert!(b.icon.is_none());
+    }
+
+    #[test]
+    fn primary_style() {
+        let b = Button::primary("OK");
+        assert_eq!(b.style, ButtonStyle::Primary);
+        assert_eq!(b.label, "OK");
+        assert_eq!(b.state, ButtonState::Normal);
+    }
+
+    #[test]
+    fn state_transitions() {
+        let mut b = Button::new("test");
+        assert_eq!(b.state, ButtonState::Normal);
+        b.state = ButtonState::Hover;
+        assert_eq!(b.state, ButtonState::Hover);
+        b.state = ButtonState::Pressed;
+        assert_eq!(b.state, ButtonState::Pressed);
+        b.state = ButtonState::Disabled;
+        assert_eq!(b.state, ButtonState::Disabled);
+    }
+
+    #[test]
+    fn style_variants() {
+        assert_ne!(ButtonStyle::Primary, ButtonStyle::Secondary);
+        assert_ne!(ButtonStyle::Outline, ButtonStyle::Ghost);
+        assert_eq!(ButtonStyle::Primary, ButtonStyle::Primary);
+    }
+
+    #[test]
+    fn state_variants_debug() {
+        for state in [ButtonState::Normal, ButtonState::Hover, ButtonState::Pressed, ButtonState::Disabled] {
+            let _ = format!("{state:?}");
+        }
+    }
+
+    #[test]
+    fn padding_applied() {
+        let b = Button::new("test");
+        assert!(b.padding.horizontal() > 0);
+        assert!(b.padding.vertical() > 0);
+    }
+
+    #[test]
+    fn from_string_type() {
+        let b = Button::new(String::from("dynamic"));
+        assert_eq!(b.label, "dynamic");
+    }
+
+    #[test]
+    fn from_str_ref() {
+        let label = "borrowed";
+        let b = Button::new(label);
+        assert_eq!(b.label, "borrowed");
+    }
+}
+
 impl Widget for Button {
     fn measure(&self, ctx: &DrawContext<'_>, _available_w: u32, _available_h: u32) -> (u32, u32) {
         let text_w = ctx

@@ -30,6 +30,46 @@ impl TabBar {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn new_defaults() {
+        let tabs = vec!["Home".into(), "Settings".into(), "About".into()];
+        let tb = TabBar::new(tabs);
+        assert_eq!(tb.tabs.len(), 3);
+        assert_eq!(tb.active, 0);
+        assert_eq!(tb.style, TabStyle::Underline);
+    }
+
+    #[test]
+    fn active_index_settable() {
+        let mut tb = TabBar::new(vec!["A".into(), "B".into()]);
+        tb.active = 1;
+        assert_eq!(tb.active, 1);
+    }
+
+    #[test]
+    fn style_variants() {
+        assert_ne!(TabStyle::Underline, TabStyle::Filled);
+        assert_ne!(TabStyle::Filled, TabStyle::Pill);
+    }
+
+    #[test]
+    fn empty_tabs() {
+        let tb = TabBar::new(Vec::new());
+        assert!(tb.tabs.is_empty());
+    }
+
+    #[test]
+    fn single_tab() {
+        let tb = TabBar::new(vec!["Only".into()]);
+        assert_eq!(tb.tabs.len(), 1);
+        assert_eq!(tb.active, 0);
+    }
+}
+
 impl Widget for TabBar {
     fn measure(&self, ctx: &DrawContext<'_>, available_w: u32, _available_h: u32) -> (u32, u32) {
         let h = ctx.backend.measure_text_height(ctx.theme.font_size_md) + 8;

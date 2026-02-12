@@ -89,6 +89,88 @@ impl ScrollView {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn new_defaults() {
+        let sv = ScrollView::new(500, 200);
+        assert_eq!(sv.content_height, 500);
+        assert_eq!(sv.viewport_height, 200);
+        assert_eq!(sv.scroll_y, 0);
+        assert_eq!(sv.scrollbar_style, ScrollbarStyle::Thin);
+    }
+
+    #[test]
+    fn needs_scrollbar_when_content_taller() {
+        let sv = ScrollView::new(500, 200);
+        assert!(sv.needs_scrollbar());
+    }
+
+    #[test]
+    fn no_scrollbar_when_content_fits() {
+        let sv = ScrollView::new(100, 200);
+        assert!(!sv.needs_scrollbar());
+    }
+
+    #[test]
+    fn no_scrollbar_when_equal() {
+        let sv = ScrollView::new(200, 200);
+        assert!(!sv.needs_scrollbar());
+    }
+
+    #[test]
+    fn no_scrollbar_when_hidden() {
+        let mut sv = ScrollView::new(500, 200);
+        sv.scrollbar_style = ScrollbarStyle::Hidden;
+        assert!(!sv.needs_scrollbar());
+    }
+
+    #[test]
+    fn scroll_by_positive() {
+        let mut sv = ScrollView::new(500, 200);
+        sv.scroll_by(50);
+        assert_eq!(sv.scroll_y, 50);
+    }
+
+    #[test]
+    fn scroll_by_negative() {
+        let mut sv = ScrollView::new(500, 200);
+        sv.scroll_by(100);
+        sv.scroll_by(-30);
+        assert_eq!(sv.scroll_y, 70);
+    }
+
+    #[test]
+    fn scroll_clamps_at_bottom() {
+        let mut sv = ScrollView::new(500, 200);
+        sv.scroll_by(1000);
+        assert_eq!(sv.scroll_y, 300); // max = 500 - 200
+    }
+
+    #[test]
+    fn scroll_clamps_at_top() {
+        let mut sv = ScrollView::new(500, 200);
+        sv.scroll_by(-100);
+        assert_eq!(sv.scroll_y, 0);
+    }
+
+    #[test]
+    fn clamp_when_content_fits() {
+        let mut sv = ScrollView::new(100, 200);
+        sv.scroll_y = 50;
+        sv.clamp_scroll();
+        assert_eq!(sv.scroll_y, 0);
+    }
+
+    #[test]
+    fn scrollbar_style_variants() {
+        assert_ne!(ScrollbarStyle::Thin, ScrollbarStyle::Wide);
+        assert_ne!(ScrollbarStyle::Wide, ScrollbarStyle::Hidden);
+    }
+}
+
 impl Widget for ScrollView {
     fn measure(&self, _ctx: &DrawContext<'_>, available_w: u32, available_h: u32) -> (u32, u32) {
         (available_w, available_h.min(self.viewport_height))
