@@ -14,12 +14,22 @@ if [ -z "$STAGED_RS" ]; then
 fi
 
 # -- Auto-format --------------------------------------------------------
+# Identify fully-staged files BEFORE formatting. Files with unstaged
+# changes (partial staging) are excluded to avoid pulling unintended
+# hunks into the commit.
+FULLY_STAGED=""
+for file in $STAGED_RS; do
+    if [ -f "$file" ] && git diff --quiet -- "$file" 2>/dev/null; then
+        FULLY_STAGED="$FULLY_STAGED $file"
+    fi
+done
+
 # Run cargo fmt on the whole workspace (fast, idempotent).
 cargo fmt --all 2>/dev/null
 
-# Re-stage any files that were reformatted.
+# Re-stage only files that were fully staged before fmt ran.
 REFORMATTED=0
-for file in $STAGED_RS; do
+for file in $FULLY_STAGED; do
     if [ -f "$file" ] && ! git diff --quiet -- "$file" 2>/dev/null; then
         git add "$file"
         REFORMATTED=1

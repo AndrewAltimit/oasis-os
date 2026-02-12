@@ -504,6 +504,14 @@ fn run_skin_scenario(
         },
     }
 
+    // Clean up textures to avoid resource leaks.
+    backend.destroy_texture(wallpaper_tex)?;
+    if let Ok(obj) = sdi.get_mut("mouse_cursor")
+        && let Some(tex) = obj.texture.take()
+    {
+        backend.destroy_texture(tex)?;
+    }
+
     Ok(())
 }
 
@@ -880,6 +888,10 @@ fn run_wm_scenario(
     }
 
     render_and_save(backend, &mut sdi, w, h, &out_dir.join("actual.png"))?;
+
+    // Clean up textures to avoid resource leaks.
+    backend.destroy_texture(wallpaper_tex)?;
+
     Ok(())
 }
 
@@ -1008,8 +1020,7 @@ fn main() -> anyhow::Result<()> {
             "widget" => run_widget_gallery(&mut backend, &out_dir, w, h),
             "wm" => run_wm_scenario(&mut backend, &scenario.name, &out_dir, w, h),
             _ => {
-                log::warn!("Unknown category: {}", scenario.category);
-                Ok(())
+                anyhow::bail!("Unknown scenario category: {}", scenario.category);
             },
         };
 
