@@ -825,4 +825,167 @@ h = 272
         let result = Skin::from_directory(Path::new("/nonexistent/skin/dir"));
         assert!(result.is_err());
     }
+
+    // -- Robustness / edge cases ----------------------------------------
+
+    #[test]
+    fn completely_invalid_manifest_toml() {
+        let result = Skin::from_toml("{{{{", LAYOUT, FEATURES);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn completely_invalid_layout_toml() {
+        let result = Skin::from_toml(MANIFEST, "{{{{", FEATURES);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn completely_invalid_features_toml() {
+        let result = Skin::from_toml(MANIFEST, LAYOUT, "{{{{");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn empty_manifest_toml() {
+        let result = Skin::from_toml("", LAYOUT, FEATURES);
+        // Empty manifest lacks required `name` -- should fail or use defaults.
+        let _ = result;
+    }
+
+    #[test]
+    fn empty_layout_toml() {
+        let skin = Skin::from_toml(MANIFEST, "", FEATURES).unwrap();
+        assert!(skin.layout.objects.is_empty());
+    }
+
+    #[test]
+    fn empty_features_toml() {
+        let skin = Skin::from_toml(MANIFEST, LAYOUT, "").unwrap();
+        // Empty features should use defaults.
+        let _ = skin.features;
+    }
+
+    #[test]
+    fn manifest_with_extra_fields() {
+        let manifest = r#"
+name = "test"
+version = "1.0"
+future_field = "should be ignored"
+another_unknown = 42
+"#;
+        let skin = Skin::from_toml(manifest, LAYOUT, FEATURES).unwrap();
+        assert_eq!(skin.manifest.name, "test");
+    }
+
+    #[test]
+    fn layout_object_invalid_color() {
+        let layout = r##"
+[obj]
+x = 0
+y = 0
+w = 100
+h = 50
+color = "not_a_color"
+"##;
+        // Invalid color should not crash -- may use fallback or ignore.
+        let skin = Skin::from_toml(MANIFEST, layout, FEATURES).unwrap();
+        assert_eq!(skin.layout.objects.len(), 1);
+    }
+
+    #[test]
+    fn layout_object_empty_color() {
+        let layout = r##"
+[obj]
+x = 0
+y = 0
+w = 100
+h = 50
+color = ""
+"##;
+        let skin = Skin::from_toml(MANIFEST, layout, FEATURES).unwrap();
+        assert_eq!(skin.layout.objects.len(), 1);
+    }
+
+    #[test]
+    fn layout_object_zero_dimensions() {
+        let layout = r##"
+[zero_obj]
+x = 0
+y = 0
+w = 0
+h = 0
+color = "#FF0000"
+"##;
+        let skin = Skin::from_toml(MANIFEST, layout, FEATURES).unwrap();
+        assert_eq!(skin.layout.objects.len(), 1);
+    }
+
+    #[test]
+    fn layout_object_negative_position() {
+        let layout = r##"
+[neg_obj]
+x = -100
+y = -50
+w = 200
+h = 100
+color = "#00FF00"
+"##;
+        let skin = Skin::from_toml(MANIFEST, layout, FEATURES).unwrap();
+        assert_eq!(skin.layout.objects.len(), 1);
+    }
+
+    #[test]
+    fn layout_many_objects() {
+        let mut layout = String::new();
+        for i in 0..100 {
+            layout.push_str(&format!(
+                r##"
+[obj_{i}]
+x = {x}
+y = {y}
+w = 10
+h = 10
+color = "#AABBCC"
+"##,
+                x = (i % 48) * 10,
+                y = (i / 48) * 10,
+            ));
+        }
+        let skin = Skin::from_toml(MANIFEST, &layout, FEATURES).unwrap();
+        assert_eq!(skin.layout.objects.len(), 100);
+    }
+
+    #[test]
+    fn features_boolean_fields() {
+        let features = r#"
+dashboard = false
+terminal = false
+file_browser = false
+browser = false
+window_manager = true
+"#;
+        let skin = Skin::from_toml(MANIFEST, LAYOUT, features).unwrap();
+        assert!(!skin.features.dashboard);
+        assert!(skin.features.window_manager);
+    }
+
+    #[test]
+    fn manifest_unicode_name() {
+        let manifest = r#"
+name = "スキン"
+version = "1.0"
+author = "テスト"
+"#;
+        let skin = Skin::from_toml(manifest, LAYOUT, FEATURES).unwrap();
+        assert_eq!(skin.manifest.name, "スキン");
+    }
+
+    #[test]
+    fn manifest_very_long_name() {
+        let name = "x".repeat(1000);
+        let manifest = format!("name = \"{name}\"");
+        let skin = Skin::from_toml(&manifest, LAYOUT, FEATURES).unwrap();
+        assert_eq!(skin.manifest.name.len(), 1000);
+    }
 }

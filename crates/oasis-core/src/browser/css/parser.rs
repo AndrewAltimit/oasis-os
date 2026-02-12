@@ -1567,4 +1567,167 @@ mod tests {
         let sheet = parse("   \n\t  ");
         assert!(sheet.rules.is_empty());
     }
+
+    // -- robustness / edge cases ----------------------------------------
+
+    #[test]
+    fn unclosed_rule_block() {
+        let sheet = parse("p { color: red;");
+        // Should not panic; may or may not produce a rule.
+        let _ = sheet;
+    }
+
+    #[test]
+    fn unclosed_value() {
+        let sheet = parse("p { color: ");
+        let _ = sheet;
+    }
+
+    #[test]
+    fn missing_colon() {
+        let sheet = parse("p { color red; }");
+        // Malformed declaration -- parser should skip gracefully.
+        let _ = sheet;
+    }
+
+    #[test]
+    fn missing_semicolon_between_declarations() {
+        let sheet = parse("p { color: red background: blue; }");
+        let _ = sheet;
+    }
+
+    #[test]
+    fn empty_selector() {
+        let sheet = parse("{ color: red; }");
+        let _ = sheet;
+    }
+
+    #[test]
+    fn empty_declaration_block() {
+        let sheet = parse("p { }");
+        assert_eq!(sheet.rules.len(), 1);
+        assert!(sheet.rules[0].declarations.is_empty());
+    }
+
+    #[test]
+    fn very_long_property_value() {
+        let val = "x".repeat(10_000);
+        let css = format!("p {{ content: \"{val}\"; }}");
+        let sheet = parse(&css);
+        assert!(!sheet.rules.is_empty());
+    }
+
+    #[test]
+    fn very_long_selector_chain() {
+        // div > div > div > ... (100 levels)
+        let sel: String = (0..100).map(|_| "div").collect::<Vec<_>>().join(" > ");
+        let css = format!("{sel} {{ color: red; }}");
+        let sheet = parse(&css);
+        assert!(!sheet.rules.is_empty());
+    }
+
+    #[test]
+    fn many_rules() {
+        let css: String = (0..500)
+            .map(|i| format!(".c{i} {{ color: red; }}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let sheet = parse(&css);
+        assert_eq!(sheet.rules.len(), 500);
+    }
+
+    #[test]
+    fn nested_braces() {
+        // CSS doesn't normally nest, but parser should handle gracefully.
+        let sheet = parse("p { color: red; { nested: bad; } }");
+        let _ = sheet;
+    }
+
+    #[test]
+    fn unmatched_closing_brace() {
+        let sheet = parse("} p { color: red; }");
+        let _ = sheet;
+    }
+
+    #[test]
+    fn at_rule_unknown() {
+        let sheet = parse("@unknown { p { color: red; } }");
+        let _ = sheet;
+    }
+
+    #[test]
+    fn at_media_rule() {
+        let sheet = parse("@media screen { p { color: red; } }");
+        // We don't support @media but it should not crash.
+        let _ = sheet;
+    }
+
+    #[test]
+    fn comments_in_css() {
+        let sheet = parse("/* comment */ p { color: red; /* inline */ }");
+        assert!(!sheet.rules.is_empty());
+    }
+
+    #[test]
+    fn multiple_selectors_comma_separated() {
+        let sheet = parse("h1, h2, h3 { color: blue; }");
+        assert_eq!(sheet.rules.len(), 1);
+        assert!(sheet.rules[0].selectors.selectors.len() >= 3);
+    }
+
+    #[test]
+    fn selector_with_pseudo_class() {
+        let sheet = parse("a:hover { color: red; }");
+        let _ = sheet; // Should not panic.
+    }
+
+    #[test]
+    fn selector_with_pseudo_element() {
+        let sheet = parse("p::before { content: 'x'; }");
+        let _ = sheet;
+    }
+
+    #[test]
+    fn null_bytes_in_css() {
+        let sheet = parse("p { color: re\0d; }");
+        let _ = sheet;
+    }
+
+    #[test]
+    fn extremely_specific_selector() {
+        // #id.c1.c2.c3...c50
+        let classes: String = (0..50).map(|i| format!(".c{i}")).collect();
+        let css = format!("#id{classes} {{ color: red; }}");
+        let sheet = parse(&css);
+        assert!(!sheet.rules.is_empty());
+    }
+
+    #[test]
+    fn numeric_property_values() {
+        let sheet = parse("p { width: 100px; height: 50%; margin: 0; }");
+        let decls = &sheet.rules[0].declarations;
+        // margin: 0 may be expanded into 4 longhand properties.
+        assert!(decls.len() >= 3);
+    }
+
+    #[test]
+    fn shorthand_property() {
+        let sheet = parse("p { margin: 10px 20px 30px 40px; }");
+        assert!(!sheet.rules.is_empty());
+    }
+
+    #[test]
+    fn color_hex_values() {
+        let sheet = parse(
+            "p { color: #fff; background: #aabbcc; border-color: #12345678; }",
+        );
+        assert_eq!(sheet.rules[0].declarations.len(), 3);
+    }
+
+    #[test]
+    fn trailing_garbage_after_rules() {
+        let sheet = parse("p { color: red; } garbage here");
+        // The first rule should still parse.
+        assert!(!sheet.rules.is_empty());
+    }
 }

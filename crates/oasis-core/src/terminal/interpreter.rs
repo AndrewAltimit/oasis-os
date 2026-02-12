@@ -419,4 +419,136 @@ mod tests {
             _ => panic!("expected text output"),
         }
     }
+
+    // -- Robustness / edge cases ----------------------------------------
+
+    fn make_env(vfs: &mut MemoryVfs) -> Environment<'_> {
+        Environment {
+            cwd: "/".to_string(),
+            vfs,
+            power: None,
+            time: None,
+            usb: None,
+            network: None,
+            tls: None,
+        }
+    }
+
+    #[test]
+    fn very_long_command_name() {
+        let reg = CommandRegistry::new();
+        let mut vfs = MemoryVfs::new();
+        let mut env = make_env(&mut vfs);
+        let long_name = "a".repeat(10_000);
+        assert!(reg.execute(&long_name, &mut env).is_err());
+    }
+
+    #[test]
+    fn very_long_argument() {
+        let mut reg = CommandRegistry::new();
+        reg.register(Box::new(EchoCmd));
+        let mut vfs = MemoryVfs::new();
+        let mut env = make_env(&mut vfs);
+        let long_arg = "x".repeat(50_000);
+        let input = format!("echo {long_arg}");
+        match reg.execute(&input, &mut env).unwrap() {
+            CommandOutput::Text(s) => assert_eq!(s.len(), 50_000),
+            _ => panic!("expected text output"),
+        }
+    }
+
+    #[test]
+    fn null_bytes_in_input() {
+        let mut reg = CommandRegistry::new();
+        reg.register(Box::new(EchoCmd));
+        let mut vfs = MemoryVfs::new();
+        let mut env = make_env(&mut vfs);
+        // Input with null bytes should not panic.
+        let input = "echo hello\0world";
+        let result = reg.execute(input, &mut env);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn tab_separated_args() {
+        let mut reg = CommandRegistry::new();
+        reg.register(Box::new(EchoCmd));
+        let mut vfs = MemoryVfs::new();
+        let mut env = make_env(&mut vfs);
+        match reg.execute("echo\thello\tworld", &mut env).unwrap() {
+            CommandOutput::Text(s) => assert!(s.contains("hello")),
+            _ => panic!("expected text output"),
+        }
+    }
+
+    #[test]
+    fn newline_in_input() {
+        let mut reg = CommandRegistry::new();
+        reg.register(Box::new(EchoCmd));
+        let mut vfs = MemoryVfs::new();
+        let mut env = make_env(&mut vfs);
+        // Newline in input -- might split or include in args.
+        let result = reg.execute("echo line1\nline2", &mut env);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn only_spaces() {
+        let reg = CommandRegistry::new();
+        let mut vfs = MemoryVfs::new();
+        let mut env = make_env(&mut vfs);
+        match reg.execute("     ", &mut env).unwrap() {
+            CommandOutput::None => {}
+            _ => panic!("expected None for whitespace-only"),
+        }
+    }
+
+    #[test]
+    fn command_case_sensitivity() {
+        let mut reg = CommandRegistry::new();
+        reg.register(Box::new(EchoCmd));
+        let mut vfs = MemoryVfs::new();
+        let mut env = make_env(&mut vfs);
+        // Commands are case-sensitive; ECHO should not find echo.
+        let result = reg.execute("ECHO hello", &mut env);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn register_many_commands() {
+        let mut reg = CommandRegistry::new();
+        for _ in 0..100 {
+            reg.register(Box::new(EchoCmd));
+        }
+        // All register to same name "echo" -- last one wins.
+        let cmds = reg.list_commands();
+        assert!(cmds.iter().any(|(name, _)| *name == "echo"));
+    }
+
+    #[test]
+    fn execute_with_special_chars_in_args() {
+        let mut reg = CommandRegistry::new();
+        reg.register(Box::new(EchoCmd));
+        let mut vfs = MemoryVfs::new();
+        let mut env = make_env(&mut vfs);
+        match reg.execute("echo @#$%^&*()!<>", &mut env).unwrap() {
+            CommandOutput::Text(s) => assert!(s.contains("@#$%^&*()!<>")),
+            _ => panic!("expected text output"),
+        }
+    }
+
+    #[test]
+    fn execute_unicode_args() {
+        let mut reg = CommandRegistry::new();
+        reg.register(Box::new(EchoCmd));
+        let mut vfs = MemoryVfs::new();
+        let mut env = make_env(&mut vfs);
+        match reg.execute("echo こんにちは 世界", &mut env).unwrap() {
+            CommandOutput::Text(s) => {
+                assert!(s.contains("こんにちは"));
+                assert!(s.contains("世界"));
+            }
+            _ => panic!("expected text output"),
+        }
+    }
 }
