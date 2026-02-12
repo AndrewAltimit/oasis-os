@@ -1,0 +1,39 @@
+#!/usr/bin/env bash
+# Pre-commit hook: auto-format staged Rust files with cargo fmt,
+# then verify clippy passes.
+#
+# Install: git config core.hooksPath .githooks
+# Skip once: git commit --no-verify
+
+set -e
+
+# Only run if Rust files are staged.
+STAGED_RS=$(git diff --cached --name-only --diff-filter=ACM -- '*.rs')
+if [ -z "$STAGED_RS" ]; then
+    exit 0
+fi
+
+# -- Auto-format --------------------------------------------------------
+# Run cargo fmt on the whole workspace (fast, idempotent).
+cargo fmt --all 2>/dev/null
+
+# Re-stage any files that were reformatted.
+REFORMATTED=0
+for file in $STAGED_RS; do
+    if [ -f "$file" ] && ! git diff --quiet -- "$file" 2>/dev/null; then
+        git add "$file"
+        REFORMATTED=1
+    fi
+done
+
+if [ "$REFORMATTED" -eq 1 ]; then
+    echo "pre-commit: auto-formatted staged Rust files"
+fi
+
+# -- Clippy --------------------------------------------------------------
+# Fail the commit if clippy finds warnings.
+if ! cargo clippy --workspace -- -D warnings 2>&1 | tail -1 | grep -q "Finished"; then
+    echo "pre-commit: clippy failed (warnings treated as errors)"
+    echo "Run 'cargo clippy --workspace -- -D warnings' to see details."
+    exit 1
+fi
