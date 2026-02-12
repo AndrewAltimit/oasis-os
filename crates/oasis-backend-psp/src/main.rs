@@ -49,7 +49,7 @@ mod psp_getrandom_v02 {
 
 /// getrandom 0.3 custom backend (enabled via `--cfg getrandom_backend="custom"`
 /// in `.cargo/config.toml`).
-#[no_mangle]
+#[unsafe(no_mangle)]
 unsafe extern "Rust" fn __getrandom_v03_custom(
     dest: *mut u8,
     len: usize,
