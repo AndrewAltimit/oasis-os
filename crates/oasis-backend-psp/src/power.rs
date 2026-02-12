@@ -62,6 +62,9 @@ unsafe extern "C" fn power_callback(_arg1: i32, power_info: i32, _arg: *mut c_vo
 
 /// Register a default exception handler that prints the exception type
 /// via debug output. Prevents silent crashes on real hardware.
+///
+/// Requires kernel mode (`feature = "kernel-mode"`).
+#[cfg(feature = "kernel-exception")]
 pub fn register_exception_handler() {
     // SAFETY: Registers a static function pointer as the default exception
     // handler. The callback signature matches the PSP SDK contract.
@@ -73,6 +76,7 @@ pub fn register_exception_handler() {
 /// Exception handler callback -- prints exception info and halts.
 /// SAFETY: Called by the PSP firmware on unhandled CPU exceptions.
 /// Only reads the exception code; does not dereference the context pointer.
+#[cfg(feature = "kernel-exception")]
 unsafe extern "C" fn exception_handler(exception: u32, _context: *mut c_void) -> i32 {
     let name = match exception {
         0 => "Interrupt",
