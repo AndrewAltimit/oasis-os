@@ -73,7 +73,10 @@ mod tests {
 
     #[test]
     fn orientation_equality() {
-        assert_eq!(DividerOrientation::Horizontal, DividerOrientation::Horizontal);
+        assert_eq!(
+            DividerOrientation::Horizontal,
+            DividerOrientation::Horizontal
+        );
         assert_ne!(DividerOrientation::Horizontal, DividerOrientation::Vertical);
     }
 

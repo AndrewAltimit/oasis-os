@@ -135,19 +135,23 @@ fn bench_full_pipeline(c: &mut Criterion) {
         let html = generate_mixed_page(n_elements);
         let label = format!("{n_elements}_elements");
 
-        group.bench_with_input(BenchmarkId::new("parse_layout_paint", &label), &html, |b, html| {
-            let mut backend = NullBackend;
-            b.iter(|| {
-                let mut tokenizer = Tokenizer::new(html);
-                let tokens = tokenizer.tokenize();
-                let doc = TreeBuilder::build(tokens);
-                let stylesheet = Stylesheet::parse("");
-                let styles = style_tree(&doc, &[&stylesheet], &[]);
-                let layout = build_layout_tree(&doc, &styles, &measurer, 480.0, 272.0);
-                let link_map: HashMap<usize, String> = HashMap::new();
-                paint::paint(&layout, &mut backend, 0.0, 0, 0, 480.0, 272.0, &link_map)
-            });
-        });
+        group.bench_with_input(
+            BenchmarkId::new("parse_layout_paint", &label),
+            &html,
+            |b, html| {
+                let mut backend = NullBackend;
+                b.iter(|| {
+                    let mut tokenizer = Tokenizer::new(html);
+                    let tokens = tokenizer.tokenize();
+                    let doc = TreeBuilder::build(tokens);
+                    let stylesheet = Stylesheet::parse("");
+                    let styles = style_tree(&doc, &[&stylesheet], &[]);
+                    let layout = build_layout_tree(&doc, &styles, &measurer, 480.0, 272.0);
+                    let link_map: HashMap<usize, String> = HashMap::new();
+                    paint::paint(&layout, &mut backend, 0.0, 0, 0, 480.0, 272.0, &link_map)
+                });
+            },
+        );
     }
 
     group.finish();

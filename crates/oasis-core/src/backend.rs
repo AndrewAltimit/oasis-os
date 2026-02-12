@@ -756,9 +756,10 @@ mod tests {
             Ok(())
         }
         fn clear(&mut self, color: Color) -> Result<()> {
-            self.calls
-                .borrow_mut()
-                .push(format!("clear({},{},{},{})", color.r, color.g, color.b, color.a));
+            self.calls.borrow_mut().push(format!(
+                "clear({},{},{},{})",
+                color.r, color.g, color.b, color.a
+            ));
             Ok(())
         }
         fn blit(&mut self, tex: TextureId, x: i32, y: i32, w: u32, h: u32) -> Result<()> {
@@ -933,7 +934,10 @@ mod tests {
     fn draw_line_diagonal_is_noop() {
         let mut b = RecordingBackend::new();
         b.draw_line(0, 0, 100, 100, 1, Color::WHITE).unwrap();
-        assert!(b.calls().is_empty(), "diagonal lines should be no-op in default impl");
+        assert!(
+            b.calls().is_empty(),
+            "diagonal lines should be no-op in default impl"
+        );
     }
 
     // -- Default: fill_circle falls back to bounding box fill_rect --
@@ -1251,20 +1255,103 @@ mod tests {
     fn draw_command_all_variants_constructible() {
         // Verify all DrawCommand variants can be constructed without panic.
         let _commands = vec![
-            DrawCommand::FillRect { x: 0, y: 0, w: 1, h: 1, color: Color::BLACK },
-            DrawCommand::FillRoundedRect { x: 0, y: 0, w: 1, h: 1, radius: 2, color: Color::BLACK },
-            DrawCommand::StrokeRect { x: 0, y: 0, w: 1, h: 1, stroke_width: 1, color: Color::BLACK },
-            DrawCommand::DrawLine { x1: 0, y1: 0, x2: 1, y2: 1, width: 1, color: Color::BLACK },
-            DrawCommand::FillCircle { cx: 0, cy: 0, radius: 5, color: Color::BLACK },
-            DrawCommand::FillTriangle { points: [(0, 0), (1, 0), (0, 1)], color: Color::BLACK },
-            DrawCommand::GradientV { x: 0, y: 0, w: 1, h: 1, top: Color::BLACK, bottom: Color::WHITE },
-            DrawCommand::GradientH { x: 0, y: 0, w: 1, h: 1, left: Color::BLACK, right: Color::WHITE },
-            DrawCommand::Gradient4 { x: 0, y: 0, w: 1, h: 1, corners: [Color::BLACK; 4] },
-            DrawCommand::DrawText { text: "x".into(), x: 0, y: 0, font_size: 8, color: Color::BLACK },
-            DrawCommand::Blit { tex: TextureId(1), x: 0, y: 0, w: 1, h: 1 },
-            DrawCommand::BlitSub { tex: TextureId(1), src: (0, 0, 1, 1), dst: (0, 0, 1, 1) },
-            DrawCommand::BlitTinted { tex: TextureId(1), x: 0, y: 0, w: 1, h: 1, tint: Color::WHITE },
-            DrawCommand::PushClip { x: 0, y: 0, w: 1, h: 1 },
+            DrawCommand::FillRect {
+                x: 0,
+                y: 0,
+                w: 1,
+                h: 1,
+                color: Color::BLACK,
+            },
+            DrawCommand::FillRoundedRect {
+                x: 0,
+                y: 0,
+                w: 1,
+                h: 1,
+                radius: 2,
+                color: Color::BLACK,
+            },
+            DrawCommand::StrokeRect {
+                x: 0,
+                y: 0,
+                w: 1,
+                h: 1,
+                stroke_width: 1,
+                color: Color::BLACK,
+            },
+            DrawCommand::DrawLine {
+                x1: 0,
+                y1: 0,
+                x2: 1,
+                y2: 1,
+                width: 1,
+                color: Color::BLACK,
+            },
+            DrawCommand::FillCircle {
+                cx: 0,
+                cy: 0,
+                radius: 5,
+                color: Color::BLACK,
+            },
+            DrawCommand::FillTriangle {
+                points: [(0, 0), (1, 0), (0, 1)],
+                color: Color::BLACK,
+            },
+            DrawCommand::GradientV {
+                x: 0,
+                y: 0,
+                w: 1,
+                h: 1,
+                top: Color::BLACK,
+                bottom: Color::WHITE,
+            },
+            DrawCommand::GradientH {
+                x: 0,
+                y: 0,
+                w: 1,
+                h: 1,
+                left: Color::BLACK,
+                right: Color::WHITE,
+            },
+            DrawCommand::Gradient4 {
+                x: 0,
+                y: 0,
+                w: 1,
+                h: 1,
+                corners: [Color::BLACK; 4],
+            },
+            DrawCommand::DrawText {
+                text: "x".into(),
+                x: 0,
+                y: 0,
+                font_size: 8,
+                color: Color::BLACK,
+            },
+            DrawCommand::Blit {
+                tex: TextureId(1),
+                x: 0,
+                y: 0,
+                w: 1,
+                h: 1,
+            },
+            DrawCommand::BlitSub {
+                tex: TextureId(1),
+                src: (0, 0, 1, 1),
+                dst: (0, 0, 1, 1),
+            },
+            DrawCommand::BlitTinted {
+                tex: TextureId(1),
+                x: 0,
+                y: 0,
+                w: 1,
+                h: 1,
+                tint: Color::WHITE,
+            },
+            DrawCommand::PushClip {
+                x: 0,
+                y: 0,
+                w: 1,
+                h: 1,
+            },
             DrawCommand::PopClip,
             DrawCommand::PushTranslate { dx: 1, dy: 2 },
             DrawCommand::PopTranslate,

@@ -1127,7 +1127,10 @@ mod tests {
 
     #[test]
     fn key_down_backspace() {
-        assert_eq!(map_key_down(Keycode::Backspace), Some(InputEvent::Backspace));
+        assert_eq!(
+            map_key_down(Keycode::Backspace),
+            Some(InputEvent::Backspace)
+        );
     }
 
     #[test]
@@ -1442,7 +1445,10 @@ mod tests {
         let r = pixels[0];
         let g = pixels[1];
         let b = pixels[2];
-        assert!(r > 200 || b > 200, "red channel should be dominant: r={r} g={g} b={b}");
+        assert!(
+            r > 200 || b > 200,
+            "red channel should be dominant: r={r} g={g} b={b}"
+        );
     }
 
     #[test]
@@ -1454,9 +1460,7 @@ mod tests {
         };
         // Clear to black, then fill a small rect with white.
         backend.clear(Color::BLACK).unwrap();
-        backend
-            .fill_rect(10, 10, 4, 4, Color::WHITE)
-            .unwrap();
+        backend.fill_rect(10, 10, 4, 4, Color::WHITE).unwrap();
         backend.swap_buffers().unwrap();
 
         // Read the filled area.
@@ -1468,7 +1472,9 @@ mod tests {
 
         // Read an area outside the rect (should be black).
         let outside = backend.read_pixels(0, 0, 4, 4).unwrap();
-        let all_dark = outside.chunks(4).all(|px| px[0] < 50 && px[1] < 50 && px[2] < 50);
+        let all_dark = outside
+            .chunks(4)
+            .all(|px| px[0] < 50 && px[1] < 50 && px[2] < 50);
         assert!(all_dark, "area outside rect should be black");
     }
 
@@ -1504,14 +1510,15 @@ mod tests {
             None => return,
         };
         backend.clear(Color::BLACK).unwrap();
-        backend
-            .draw_text("A", 0, 0, 8, Color::WHITE)
-            .unwrap();
+        backend.draw_text("A", 0, 0, 8, Color::WHITE).unwrap();
         backend.swap_buffers().unwrap();
 
         let pixels = backend.read_pixels(0, 0, 8, 8).unwrap();
         // The letter 'A' should have some white pixels.
-        let white_count = pixels.chunks(4).filter(|px| px[0] > 200 || px[2] > 200).count();
+        let white_count = pixels
+            .chunks(4)
+            .filter(|px| px[0] > 200 || px[2] > 200)
+            .count();
         assert!(
             white_count > 5,
             "letter 'A' should have visible pixels, got {white_count}"
@@ -1552,7 +1559,10 @@ mod tests {
 
         // Inside clip: should be white.
         let inside = backend.read_pixels(0, 0, 16, 16).unwrap();
-        let inside_white = inside.chunks(4).filter(|px| px[0] > 200 || px[2] > 200).count();
+        let inside_white = inside
+            .chunks(4)
+            .filter(|px| px[0] > 200 || px[2] > 200)
+            .count();
         assert!(inside_white > 200, "inside clip should be mostly white");
 
         // Outside clip: should be black.

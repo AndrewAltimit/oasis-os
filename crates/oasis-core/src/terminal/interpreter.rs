@@ -319,18 +319,30 @@ mod tests {
     fn register_replaces_existing_command() {
         struct CmdA;
         impl Command for CmdA {
-            fn name(&self) -> &str { "test" }
-            fn description(&self) -> &str { "version A" }
-            fn usage(&self) -> &str { "test" }
+            fn name(&self) -> &str {
+                "test"
+            }
+            fn description(&self) -> &str {
+                "version A"
+            }
+            fn usage(&self) -> &str {
+                "test"
+            }
             fn execute(&self, _: &[&str], _: &mut Environment<'_>) -> Result<CommandOutput> {
                 Ok(CommandOutput::Text("A".into()))
             }
         }
         struct CmdB;
         impl Command for CmdB {
-            fn name(&self) -> &str { "test" }
-            fn description(&self) -> &str { "version B" }
-            fn usage(&self) -> &str { "test" }
+            fn name(&self) -> &str {
+                "test"
+            }
+            fn description(&self) -> &str {
+                "version B"
+            }
+            fn usage(&self) -> &str {
+                "test"
+            }
             fn execute(&self, _: &[&str], _: &mut Environment<'_>) -> Result<CommandOutput> {
                 Ok(CommandOutput::Text("B".into()))
             }
@@ -349,9 +361,15 @@ mod tests {
     fn list_commands_sorted_multiple() {
         struct Named(&'static str);
         impl Command for Named {
-            fn name(&self) -> &str { self.0 }
-            fn description(&self) -> &str { "desc" }
-            fn usage(&self) -> &str { self.0 }
+            fn name(&self) -> &str {
+                self.0
+            }
+            fn description(&self) -> &str {
+                "desc"
+            }
+            fn usage(&self) -> &str {
+                self.0
+            }
             fn execute(&self, _: &[&str], _: &mut Environment<'_>) -> Result<CommandOutput> {
                 Ok(CommandOutput::None)
             }
@@ -413,7 +431,13 @@ mod tests {
             network: None,
             tls: None,
         };
-        let long_input = format!("echo {}", (0..100).map(|i| i.to_string()).collect::<Vec<_>>().join(" "));
+        let long_input = format!(
+            "echo {}",
+            (0..100)
+                .map(|i| i.to_string())
+                .collect::<Vec<_>>()
+                .join(" ")
+        );
         match reg.execute(&long_input, &mut env).unwrap() {
             CommandOutput::Text(s) => assert!(s.contains("99")),
             _ => panic!("expected text output"),
@@ -498,7 +522,7 @@ mod tests {
         let mut vfs = MemoryVfs::new();
         let mut env = make_env(&mut vfs);
         match reg.execute("     ", &mut env).unwrap() {
-            CommandOutput::None => {}
+            CommandOutput::None => {},
             _ => panic!("expected None for whitespace-only"),
         }
     }
@@ -547,7 +571,7 @@ mod tests {
             CommandOutput::Text(s) => {
                 assert!(s.contains("こんにちは"));
                 assert!(s.contains("世界"));
-            }
+            },
             _ => panic!("expected text output"),
         }
     }

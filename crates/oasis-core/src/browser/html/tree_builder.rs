@@ -1648,13 +1648,7 @@ mod tests {
 
     #[test]
     fn multiple_orphan_end_tags() {
-        let tokens = vec![
-            end("div"),
-            end("span"),
-            end("p"),
-            end("table"),
-            Token::Eof,
-        ];
+        let tokens = vec![end("div"), end("span"), end("p"), end("table"), Token::Eof];
         let doc = TreeBuilder::build(tokens);
         assert!(doc.body().is_some());
     }
@@ -1789,8 +1783,7 @@ mod tests {
         let head = doc.head().unwrap();
         let body = doc.body().unwrap();
         // Script might go to head or body depending on insertion mode.
-        let total_children =
-            doc.get(head).children.len() + doc.get(body).children.len();
+        let total_children = doc.get(head).children.len() + doc.get(body).children.len();
         assert!(total_children >= 1);
     }
 

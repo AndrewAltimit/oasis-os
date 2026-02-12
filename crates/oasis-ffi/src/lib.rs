@@ -902,7 +902,10 @@ mod tests {
         let cmd = CString::new("cat /home/first.txt").unwrap();
         let result = unsafe { oasis_send_command(handle, cmd.as_ptr()) };
         let output = unsafe { CStr::from_ptr(result) }.to_string_lossy();
-        assert!(output.contains("error"), "first.txt should be gone after reset");
+        assert!(
+            output.contains("error"),
+            "first.txt should be gone after reset"
+        );
         unsafe { oasis_free_string(result) };
 
         // second.txt should exist.
@@ -919,16 +922,76 @@ mod tests {
     fn send_input_all_event_types() {
         let handle = create_instance();
         let events = [
-            OasisInputEvent { event_type: OASIS_EVENT_CURSOR_MOVE, x: 100, y: 100, key: 0, character: 0 },
-            OasisInputEvent { event_type: OASIS_EVENT_BUTTON_PRESS, x: 0, y: 0, key: OASIS_BUTTON_UP, character: 0 },
-            OasisInputEvent { event_type: OASIS_EVENT_BUTTON_RELEASE, x: 0, y: 0, key: OASIS_BUTTON_UP, character: 0 },
-            OasisInputEvent { event_type: OASIS_EVENT_TRIGGER_PRESS, x: 0, y: 0, key: OASIS_TRIGGER_LEFT, character: 0 },
-            OasisInputEvent { event_type: OASIS_EVENT_TRIGGER_RELEASE, x: 0, y: 0, key: OASIS_TRIGGER_RIGHT, character: 0 },
-            OasisInputEvent { event_type: OASIS_EVENT_TEXT_INPUT, x: 0, y: 0, key: 0, character: 'Z' as u32 },
-            OasisInputEvent { event_type: OASIS_EVENT_POINTER_CLICK, x: 50, y: 50, key: 0, character: 0 },
-            OasisInputEvent { event_type: OASIS_EVENT_POINTER_RELEASE, x: 50, y: 50, key: 0, character: 0 },
-            OasisInputEvent { event_type: OASIS_EVENT_FOCUS_GAINED, x: 0, y: 0, key: 0, character: 0 },
-            OasisInputEvent { event_type: OASIS_EVENT_FOCUS_LOST, x: 0, y: 0, key: 0, character: 0 },
+            OasisInputEvent {
+                event_type: OASIS_EVENT_CURSOR_MOVE,
+                x: 100,
+                y: 100,
+                key: 0,
+                character: 0,
+            },
+            OasisInputEvent {
+                event_type: OASIS_EVENT_BUTTON_PRESS,
+                x: 0,
+                y: 0,
+                key: OASIS_BUTTON_UP,
+                character: 0,
+            },
+            OasisInputEvent {
+                event_type: OASIS_EVENT_BUTTON_RELEASE,
+                x: 0,
+                y: 0,
+                key: OASIS_BUTTON_UP,
+                character: 0,
+            },
+            OasisInputEvent {
+                event_type: OASIS_EVENT_TRIGGER_PRESS,
+                x: 0,
+                y: 0,
+                key: OASIS_TRIGGER_LEFT,
+                character: 0,
+            },
+            OasisInputEvent {
+                event_type: OASIS_EVENT_TRIGGER_RELEASE,
+                x: 0,
+                y: 0,
+                key: OASIS_TRIGGER_RIGHT,
+                character: 0,
+            },
+            OasisInputEvent {
+                event_type: OASIS_EVENT_TEXT_INPUT,
+                x: 0,
+                y: 0,
+                key: 0,
+                character: 'Z' as u32,
+            },
+            OasisInputEvent {
+                event_type: OASIS_EVENT_POINTER_CLICK,
+                x: 50,
+                y: 50,
+                key: 0,
+                character: 0,
+            },
+            OasisInputEvent {
+                event_type: OASIS_EVENT_POINTER_RELEASE,
+                x: 50,
+                y: 50,
+                key: 0,
+                character: 0,
+            },
+            OasisInputEvent {
+                event_type: OASIS_EVENT_FOCUS_GAINED,
+                x: 0,
+                y: 0,
+                key: 0,
+                character: 0,
+            },
+            OasisInputEvent {
+                event_type: OASIS_EVENT_FOCUS_LOST,
+                x: 0,
+                y: 0,
+                key: 0,
+                character: 0,
+            },
         ];
         for evt in &events {
             unsafe { oasis_send_input(handle, evt) };
@@ -998,9 +1061,15 @@ mod tests {
         assert_eq!(button_from_code(OASIS_BUTTON_DOWN), Some(Button::Down));
         assert_eq!(button_from_code(OASIS_BUTTON_LEFT), Some(Button::Left));
         assert_eq!(button_from_code(OASIS_BUTTON_RIGHT), Some(Button::Right));
-        assert_eq!(button_from_code(OASIS_BUTTON_CONFIRM), Some(Button::Confirm));
+        assert_eq!(
+            button_from_code(OASIS_BUTTON_CONFIRM),
+            Some(Button::Confirm)
+        );
         assert_eq!(button_from_code(OASIS_BUTTON_CANCEL), Some(Button::Cancel));
-        assert_eq!(button_from_code(OASIS_BUTTON_TRIANGLE), Some(Button::Triangle));
+        assert_eq!(
+            button_from_code(OASIS_BUTTON_TRIANGLE),
+            Some(Button::Triangle)
+        );
         assert_eq!(button_from_code(OASIS_BUTTON_SQUARE), Some(Button::Square));
         assert_eq!(button_from_code(OASIS_BUTTON_START), Some(Button::Start));
         assert_eq!(button_from_code(OASIS_BUTTON_SELECT), Some(Button::Select));

@@ -57,13 +57,9 @@ fn bench_tree_builder(c: &mut Criterion) {
         let mut tokenizer = Tokenizer::new(&html);
         let tokens = tokenizer.tokenize();
 
-        group.bench_with_input(
-            BenchmarkId::new("build", &label),
-            &tokens,
-            |b, tokens| {
-                b.iter(|| TreeBuilder::build(tokens.clone()));
-            },
-        );
+        group.bench_with_input(BenchmarkId::new("build", &label), &tokens, |b, tokens| {
+            b.iter(|| TreeBuilder::build(tokens.clone()));
+        });
     }
 
     group.finish();
@@ -76,17 +72,26 @@ fn bench_full_parse(c: &mut Criterion) {
         let html = generate_html(size);
         let label = format!("{size}B");
 
-        group.bench_with_input(BenchmarkId::new("tokenize+build", &label), &html, |b, html| {
-            b.iter(|| {
-                let mut tokenizer = Tokenizer::new(html);
-                let tokens = tokenizer.tokenize();
-                TreeBuilder::build(tokens)
-            });
-        });
+        group.bench_with_input(
+            BenchmarkId::new("tokenize+build", &label),
+            &html,
+            |b, html| {
+                b.iter(|| {
+                    let mut tokenizer = Tokenizer::new(html);
+                    let tokens = tokenizer.tokenize();
+                    TreeBuilder::build(tokens)
+                });
+            },
+        );
     }
 
     group.finish();
 }
 
-criterion_group!(benches, bench_tokenizer, bench_tree_builder, bench_full_parse);
+criterion_group!(
+    benches,
+    bench_tokenizer,
+    bench_tree_builder,
+    bench_full_parse
+);
 criterion_main!(benches);

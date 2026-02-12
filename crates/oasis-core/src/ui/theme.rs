@@ -399,7 +399,12 @@ mod tests {
 
     #[test]
     fn all_variants_have_consistent_font_sizes() {
-        for theme in [Theme::dark(), Theme::light(), Theme::classic(), Theme::high_contrast()] {
+        for theme in [
+            Theme::dark(),
+            Theme::light(),
+            Theme::classic(),
+            Theme::high_contrast(),
+        ] {
             assert_eq!(theme.font_size_xs, 8);
             assert_eq!(theme.font_size_md, 8);
             assert_eq!(theme.font_size_lg, 16);

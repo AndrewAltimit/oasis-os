@@ -131,7 +131,12 @@ mod tests {
 
     #[test]
     fn state_variants_debug() {
-        for state in [ButtonState::Normal, ButtonState::Hover, ButtonState::Pressed, ButtonState::Disabled] {
+        for state in [
+            ButtonState::Normal,
+            ButtonState::Hover,
+            ButtonState::Pressed,
+            ButtonState::Disabled,
+        ] {
             let _ = format!("{state:?}");
         }
     }

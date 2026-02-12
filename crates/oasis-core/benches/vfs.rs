@@ -16,7 +16,9 @@ fn bench_write(c: &mut Criterion) {
         (100, &data_10k, "10KB"),
     ] {
         let label = format!("{n_files}x{data_label}");
-        let paths: Vec<String> = (0..n_files).map(|i| format!("/data/file_{i}.bin")).collect();
+        let paths: Vec<String> = (0..n_files)
+            .map(|i| format!("/data/file_{i}.bin"))
+            .collect();
 
         group.bench_function(BenchmarkId::new("write", &label), |b| {
             b.iter(|| {
@@ -38,7 +40,9 @@ fn bench_read(c: &mut Criterion) {
     for n_files in [100, 1_000] {
         let mut vfs = MemoryVfs::new();
         vfs.mkdir("/data").unwrap();
-        let paths: Vec<String> = (0..n_files).map(|i| format!("/data/file_{i}.bin")).collect();
+        let paths: Vec<String> = (0..n_files)
+            .map(|i| format!("/data/file_{i}.bin"))
+            .collect();
         let data = vec![0xABu8; 1_024];
         for path in &paths {
             vfs.write(path, &data).unwrap();
@@ -97,5 +101,11 @@ fn bench_mkdir_deep(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, bench_write, bench_read, bench_readdir, bench_mkdir_deep);
+criterion_group!(
+    benches,
+    bench_write,
+    bench_read,
+    bench_readdir,
+    bench_mkdir_deep
+);
 criterion_main!(benches);

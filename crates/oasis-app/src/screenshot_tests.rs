@@ -64,11 +64,9 @@ fn parse_args() -> Args {
             "--report" => args.report = true,
             other => {
                 eprintln!("Unknown argument: {other}");
-                eprintln!(
-                    "Usage: screenshot-tests [--scenario NAME] [--skin NAME] [--report]"
-                );
+                eprintln!("Usage: screenshot-tests [--scenario NAME] [--skin NAME] [--report]");
                 std::process::exit(1);
-            }
+            },
         }
     }
     args
@@ -382,7 +380,7 @@ fn run_skin_scenario(
             }
             mouse_cursor.update_sdi(&mut sdi);
             render_and_save(backend, &mut sdi, w, h, &out_dir.join("actual.png"))?;
-        }
+        },
         "terminal" => {
             dashboard.hide_sdi(&mut sdi);
             StatusBar::hide_sdi(&mut sdi);
@@ -406,7 +404,7 @@ fn run_skin_scenario(
             );
             mouse_cursor.update_sdi(&mut sdi);
             render_and_save(backend, &mut sdi, w, h, &out_dir.join("actual.png"))?;
-        }
+        },
         "start_menu" => {
             dashboard.update_sdi(&mut sdi, &active_theme);
             status_bar.update_sdi(&mut sdi, &active_theme, &skin.features);
@@ -418,7 +416,7 @@ fn run_skin_scenario(
             mouse_cursor.set_position(40, 250);
             mouse_cursor.update_sdi(&mut sdi);
             render_and_save(backend, &mut sdi, w, h, &out_dir.join("actual.png"))?;
-        }
+        },
         "windows" => {
             dashboard.hide_sdi(&mut sdi);
             StatusBar::hide_sdi(&mut sdi);
@@ -464,7 +462,7 @@ fn run_skin_scenario(
             mouse_cursor.set_position(250, 130);
             mouse_cursor.update_sdi(&mut sdi);
             render_and_save(backend, &mut sdi, w, h, &out_dir.join("actual.png"))?;
-        }
+        },
         "browser" => {
             dashboard.hide_sdi(&mut sdi);
             StatusBar::hide_sdi(&mut sdi);
@@ -500,10 +498,10 @@ fn run_skin_scenario(
             browser.paint(backend)?;
             let pixels = backend.read_pixels(0, 0, w, h)?;
             save_png(&out_dir.join("actual.png"), w, h, &pixels)?;
-        }
+        },
         _ => {
             log::warn!("Unknown skin view: {view}");
-        }
+        },
     }
 
     Ok(())
@@ -534,17 +532,15 @@ fn run_browser_scenario(
             );
             browser.load_html(&html, "gemini://test/page.gmi");
             String::new() // Already loaded.
-        }
+        },
         _ => {
             let fixture_path = format!("test-fixtures/html/{page_name}.html");
             let content = fs::read_to_string(&fixture_path).unwrap_or_else(|_| {
-                format!(
-                    "<html><body><p>Missing fixture: {fixture_path}</p></body></html>"
-                )
+                format!("<html><body><p>Missing fixture: {fixture_path}</p></body></html>")
             });
             browser.load_html(&content, &format!("file://test/{page_name}.html"));
             content
-        }
+        },
     };
     let _ = html; // Suppress unused warning.
 
@@ -833,7 +829,7 @@ fn run_wm_scenario(
             };
             wm.create_window(&cfg, &mut sdi)?;
             wm.maximize_window("max_win", &mut sdi)?;
-        }
+        },
         "wm_cascaded_windows" => {
             let configs = [
                 ("win_a", "File Manager", 20, 30),
@@ -854,7 +850,7 @@ fn run_wm_scenario(
             }
             // Focus middle window for visual interest.
             wm.focus_window("win_b", &mut sdi)?;
-        }
+        },
         "wm_dialog_overlay" => {
             let app_cfg = WindowConfig {
                 id: "app_win".to_string(),
@@ -877,10 +873,10 @@ fn run_wm_scenario(
                 window_type: WindowType::Dialog,
             };
             wm.create_window(&dlg_cfg, &mut sdi)?;
-        }
+        },
         _ => {
             log::warn!("Unknown WM scenario: {scenario}");
-        }
+        },
     }
 
     render_and_save(backend, &mut sdi, w, h, &out_dir.join("actual.png"))?;
@@ -995,31 +991,31 @@ fn main() -> anyhow::Result<()> {
                     })
                     .unwrap_or(("classic", "dashboard"));
                 run_skin_scenario(&mut backend, skin, view, &out_dir, w, h)
-            }
+            },
             "browser" => {
                 let page = scenario
                     .name
                     .strip_prefix("browser_")
                     .unwrap_or(&scenario.name);
                 run_browser_scenario(&mut backend, page, &out_dir, w, h)
-            }
+            },
             "widget" => run_widget_gallery(&mut backend, &out_dir, w, h),
             "wm" => run_wm_scenario(&mut backend, &scenario.name, &out_dir, w, h),
             _ => {
                 log::warn!("Unknown category: {}", scenario.category);
                 Ok(())
-            }
+            },
         };
 
         match result {
             Ok(()) => {
                 completed += 1;
                 println!("  OK  {}", scenario.name);
-            }
+            },
             Err(e) => {
                 failed += 1;
                 eprintln!("  FAIL  {}: {e}", scenario.name);
-            }
+            },
         }
     }
 

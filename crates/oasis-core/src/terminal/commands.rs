@@ -1261,7 +1261,8 @@ protocol = "raw-tcp"
         assert!(vfs.exists("/projects/myapp/config.txt"));
 
         // Write content via VFS directly, then verify cat reads it.
-        vfs.write("/projects/myapp/config.txt", b"debug=true").unwrap();
+        vfs.write("/projects/myapp/config.txt", b"debug=true")
+            .unwrap();
         match exec(&reg, &mut vfs, &mut cwd, "cat config.txt").unwrap() {
             CommandOutput::Text(s) => assert_eq!(s, "debug=true"),
             _ => panic!("expected text"),
@@ -1391,7 +1392,13 @@ protocol = "raw-tcp"
         }
 
         // cp with relative paths.
-        exec(&reg, &mut vfs, &mut cwd, "cp docs/notes.txt docs/notes2.txt").unwrap();
+        exec(
+            &reg,
+            &mut vfs,
+            &mut cwd,
+            "cp docs/notes.txt docs/notes2.txt",
+        )
+        .unwrap();
         assert!(vfs.exists("/home/user/docs/notes2.txt"));
     }
 

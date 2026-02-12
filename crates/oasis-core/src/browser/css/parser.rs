@@ -1718,9 +1718,7 @@ mod tests {
 
     #[test]
     fn color_hex_values() {
-        let sheet = parse(
-            "p { color: #fff; background: #aabbcc; border-color: #12345678; }",
-        );
+        let sheet = parse("p { color: #fff; background: #aabbcc; border-color: #12345678; }");
         assert_eq!(sheet.rules[0].declarations.len(), 3);
     }
 

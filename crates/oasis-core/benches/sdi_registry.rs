@@ -105,5 +105,11 @@ fn bench_move_to_top(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, bench_create, bench_get, bench_destroy, bench_move_to_top);
+criterion_group!(
+    benches,
+    bench_create,
+    bench_get,
+    bench_destroy,
+    bench_move_to_top
+);
 criterion_main!(benches);
