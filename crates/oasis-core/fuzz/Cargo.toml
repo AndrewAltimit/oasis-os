@@ -1,0 +1,51 @@
+[package]
+name = "oasis-core-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+
+[dependencies.oasis-core]
+path = ".."
+
+# Prevent this from interfering with workspaces.
+[workspace]
+members = ["."]
+
+[profile.release]
+debug = 1
+
+[[bin]]
+name = "html_tokenizer"
+path = "fuzz_targets/html_tokenizer.rs"
+doc = false
+
+[[bin]]
+name = "css_parser"
+path = "fuzz_targets/css_parser.rs"
+doc = false
+
+[[bin]]
+name = "gemini_parser"
+path = "fuzz_targets/gemini_parser.rs"
+doc = false
+
+[[bin]]
+name = "http_response"
+path = "fuzz_targets/http_response.rs"
+doc = false
+
+[[bin]]
+name = "skin_toml"
+path = "fuzz_targets/skin_toml.rs"
+doc = false
+
+[[bin]]
+name = "pbp_parser"
+path = "fuzz_targets/pbp_parser.rs"
+doc = false

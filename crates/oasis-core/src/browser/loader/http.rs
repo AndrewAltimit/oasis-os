@@ -80,10 +80,13 @@ pub fn http_get(url: &Url, tls: Option<&dyn TlsProvider>) -> Result<ResourceResp
 
 /// A raw parsed HTTP response.
 #[derive(Debug)]
-struct HttpResponse {
-    status_code: u16,
-    headers: Vec<(String, String)>,
-    body: Vec<u8>,
+pub struct HttpResponse {
+    /// HTTP status code (e.g. 200, 404).
+    pub status_code: u16,
+    /// Response headers as (name, value) pairs.
+    pub headers: Vec<(String, String)>,
+    /// Response body bytes.
+    pub body: Vec<u8>,
 }
 
 // -------------------------------------------------------------------
@@ -197,7 +200,7 @@ fn read_response(stream: &mut impl Read) -> Result<Vec<u8>> {
 }
 
 /// Parse raw bytes into status code, headers, and body.
-fn parse_response(data: &[u8]) -> Result<HttpResponse> {
+pub fn parse_response(data: &[u8]) -> Result<HttpResponse> {
     // Find the header/body boundary (\r\n\r\n).
     let header_end = find_subsequence(data, b"\r\n\r\n").ok_or_else(|| {
         OasisError::Backend("malformed HTTP response: no header terminator".to_string())
