@@ -726,6 +726,639 @@ pub trait NetworkStream: Send {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct AudioTrackId(pub u64);
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::cell::RefCell;
+
+    /// A test backend that records all draw calls for assertion.
+    struct RecordingBackend {
+        calls: RefCell<Vec<String>>,
+    }
+
+    impl RecordingBackend {
+        fn new() -> Self {
+            Self {
+                calls: RefCell::new(Vec::new()),
+            }
+        }
+        fn calls(&self) -> Vec<String> {
+            self.calls.borrow().clone()
+        }
+        #[allow(dead_code)]
+        fn clear_calls(&self) {
+            self.calls.borrow_mut().clear();
+        }
+    }
+
+    impl SdiBackend for RecordingBackend {
+        fn init(&mut self, _w: u32, _h: u32) -> Result<()> {
+            Ok(())
+        }
+        fn clear(&mut self, color: Color) -> Result<()> {
+            self.calls.borrow_mut().push(format!(
+                "clear({},{},{},{})",
+                color.r, color.g, color.b, color.a
+            ));
+            Ok(())
+        }
+        fn blit(&mut self, tex: TextureId, x: i32, y: i32, w: u32, h: u32) -> Result<()> {
+            self.calls
+                .borrow_mut()
+                .push(format!("blit({},{x},{y},{w},{h})", tex.0));
+            Ok(())
+        }
+        fn fill_rect(&mut self, x: i32, y: i32, w: u32, h: u32, color: Color) -> Result<()> {
+            self.calls.borrow_mut().push(format!(
+                "fill_rect({x},{y},{w},{h},{},{},{},{})",
+                color.r, color.g, color.b, color.a
+            ));
+            Ok(())
+        }
+        fn draw_text(
+            &mut self,
+            text: &str,
+            x: i32,
+            y: i32,
+            font_size: u16,
+            color: Color,
+        ) -> Result<()> {
+            self.calls.borrow_mut().push(format!(
+                "draw_text({text},{x},{y},{font_size},{},{},{},{})",
+                color.r, color.g, color.b, color.a
+            ));
+            Ok(())
+        }
+        fn swap_buffers(&mut self) -> Result<()> {
+            Ok(())
+        }
+        fn load_texture(&mut self, _w: u32, _h: u32, _data: &[u8]) -> Result<TextureId> {
+            Ok(TextureId(1))
+        }
+        fn destroy_texture(&mut self, _tex: TextureId) -> Result<()> {
+            Ok(())
+        }
+        fn set_clip_rect(&mut self, x: i32, y: i32, w: u32, h: u32) -> Result<()> {
+            self.calls
+                .borrow_mut()
+                .push(format!("set_clip({x},{y},{w},{h})"));
+            Ok(())
+        }
+        fn reset_clip_rect(&mut self) -> Result<()> {
+            self.calls.borrow_mut().push("reset_clip".into());
+            Ok(())
+        }
+        fn measure_text(&self, text: &str, _font_size: u16) -> u32 {
+            text.len() as u32 * 8
+        }
+        fn read_pixels(&self, _x: i32, _y: i32, _w: u32, _h: u32) -> Result<Vec<u8>> {
+            Ok(Vec::new())
+        }
+        fn shutdown(&mut self) -> Result<()> {
+            Ok(())
+        }
+    }
+
+    // -- Color tests --
+
+    #[test]
+    fn color_rgb_alpha_255() {
+        let c = Color::rgb(10, 20, 30);
+        assert_eq!(c.a, 255);
+    }
+
+    #[test]
+    fn color_rgba_explicit() {
+        let c = Color::rgba(1, 2, 3, 128);
+        assert_eq!((c.r, c.g, c.b, c.a), (1, 2, 3, 128));
+    }
+
+    #[test]
+    fn color_with_alpha() {
+        let c = Color::rgb(100, 200, 50).with_alpha(64);
+        assert_eq!(c.r, 100);
+        assert_eq!(c.a, 64);
+    }
+
+    #[test]
+    fn color_constants() {
+        assert_eq!(Color::BLACK, Color::rgb(0, 0, 0));
+        assert_eq!(Color::WHITE, Color::rgb(255, 255, 255));
+        assert_eq!(Color::TRANSPARENT, Color::rgba(0, 0, 0, 0));
+    }
+
+    // -- TextureId tests --
+
+    #[test]
+    fn texture_id_equality() {
+        assert_eq!(TextureId(42), TextureId(42));
+        assert_ne!(TextureId(1), TextureId(2));
+    }
+
+    #[test]
+    fn texture_id_hash() {
+        use std::collections::HashSet;
+        let mut set = HashSet::new();
+        set.insert(TextureId(1));
+        set.insert(TextureId(2));
+        set.insert(TextureId(1));
+        assert_eq!(set.len(), 2);
+    }
+
+    // -- Default: fill_rounded_rect falls back to fill_rect --
+
+    #[test]
+    fn fill_rounded_rect_defaults_to_fill_rect() {
+        let mut b = RecordingBackend::new();
+        b.fill_rounded_rect(10, 20, 100, 50, 8, Color::rgb(255, 0, 0))
+            .unwrap();
+        let calls = b.calls();
+        assert_eq!(calls.len(), 1);
+        assert!(calls[0].starts_with("fill_rect(10,20,100,50,"));
+    }
+
+    // -- Default: stroke_rect emits 4 fill_rect calls --
+
+    #[test]
+    fn stroke_rect_emits_four_rects() {
+        let mut b = RecordingBackend::new();
+        b.stroke_rect(0, 0, 100, 80, 2, Color::WHITE).unwrap();
+        let calls = b.calls();
+        assert_eq!(calls.len(), 4, "stroke_rect should emit 4 fill_rect calls");
+        for call in &calls {
+            assert!(call.starts_with("fill_rect("));
+        }
+    }
+
+    #[test]
+    fn stroke_rect_top_edge() {
+        let mut b = RecordingBackend::new();
+        b.stroke_rect(5, 10, 100, 80, 3, Color::WHITE).unwrap();
+        let calls = b.calls();
+        // First call is the top edge: fill_rect(5,10,100,3,...)
+        assert!(calls[0].starts_with("fill_rect(5,10,100,3,"));
+    }
+
+    // -- Default: stroke_rounded_rect falls back to stroke_rect --
+
+    #[test]
+    fn stroke_rounded_rect_defaults_to_stroke_rect() {
+        let mut b = RecordingBackend::new();
+        b.stroke_rounded_rect(0, 0, 50, 50, 5, 1, Color::WHITE)
+            .unwrap();
+        let calls = b.calls();
+        assert_eq!(calls.len(), 4); // Same as stroke_rect
+    }
+
+    // -- Default: draw_line horizontal --
+
+    #[test]
+    fn draw_line_horizontal() {
+        let mut b = RecordingBackend::new();
+        b.draw_line(10, 50, 100, 50, 2, Color::WHITE).unwrap();
+        let calls = b.calls();
+        assert_eq!(calls.len(), 1);
+        assert!(calls[0].starts_with("fill_rect(10,50,90,2,"));
+    }
+
+    #[test]
+    fn draw_line_vertical() {
+        let mut b = RecordingBackend::new();
+        b.draw_line(50, 10, 50, 80, 3, Color::WHITE).unwrap();
+        let calls = b.calls();
+        assert_eq!(calls.len(), 1);
+        assert!(calls[0].starts_with("fill_rect(50,10,3,70,"));
+    }
+
+    #[test]
+    fn draw_line_diagonal_is_noop() {
+        let mut b = RecordingBackend::new();
+        b.draw_line(0, 0, 100, 100, 1, Color::WHITE).unwrap();
+        assert!(
+            b.calls().is_empty(),
+            "diagonal lines should be no-op in default impl"
+        );
+    }
+
+    // -- Default: fill_circle falls back to bounding box fill_rect --
+
+    #[test]
+    fn fill_circle_default() {
+        let mut b = RecordingBackend::new();
+        b.fill_circle(50, 50, 10, Color::rgb(0, 255, 0)).unwrap();
+        let calls = b.calls();
+        assert_eq!(calls.len(), 1);
+        assert!(calls[0].starts_with("fill_rect(40,40,20,20,"));
+    }
+
+    // -- Default: stroke_circle falls back to fill_circle --
+
+    #[test]
+    fn stroke_circle_default() {
+        let mut b = RecordingBackend::new();
+        b.stroke_circle(50, 50, 10, 1, Color::WHITE).unwrap();
+        let calls = b.calls();
+        assert_eq!(calls.len(), 1);
+        assert!(calls[0].starts_with("fill_rect(")); // fill_circle → fill_rect
+    }
+
+    // -- Default: fill_triangle is no-op --
+
+    #[test]
+    fn fill_triangle_default_noop() {
+        let mut b = RecordingBackend::new();
+        b.fill_triangle(0, 0, 10, 0, 5, 10, Color::WHITE).unwrap();
+        assert!(b.calls().is_empty());
+    }
+
+    // -- Gradient defaults --
+
+    #[test]
+    fn gradient_v_defaults_to_fill_rect() {
+        let mut b = RecordingBackend::new();
+        let top = Color::rgb(255, 0, 0);
+        b.fill_rect_gradient_v(0, 0, 100, 50, top, Color::rgb(0, 0, 255))
+            .unwrap();
+        let calls = b.calls();
+        assert_eq!(calls.len(), 1);
+        assert!(calls[0].contains("255,0,0")); // Uses top_color
+    }
+
+    #[test]
+    fn gradient_h_defaults_to_fill_rect() {
+        let mut b = RecordingBackend::new();
+        let left = Color::rgb(0, 255, 0);
+        b.fill_rect_gradient_h(0, 0, 100, 50, left, Color::rgb(0, 0, 255))
+            .unwrap();
+        let calls = b.calls();
+        assert_eq!(calls.len(), 1);
+        assert!(calls[0].contains("0,255,0")); // Uses left_color
+    }
+
+    #[test]
+    fn gradient_4_defaults_to_fill_rect() {
+        let mut b = RecordingBackend::new();
+        let tl = Color::rgb(10, 20, 30);
+        b.fill_rect_gradient_4(0, 0, 100, 50, tl, Color::WHITE, Color::WHITE, Color::WHITE)
+            .unwrap();
+        let calls = b.calls();
+        assert_eq!(calls.len(), 1);
+        assert!(calls[0].contains("10,20,30")); // Uses top_left
+    }
+
+    #[test]
+    fn rounded_rect_gradient_v_default() {
+        let mut b = RecordingBackend::new();
+        let top = Color::rgb(255, 0, 0);
+        b.fill_rounded_rect_gradient_v(0, 0, 100, 50, 5, top, Color::BLACK)
+            .unwrap();
+        let calls = b.calls();
+        assert_eq!(calls.len(), 1);
+        assert!(calls[0].starts_with("fill_rect(")); // Falls to fill_rounded_rect → fill_rect
+    }
+
+    // -- Alpha utilities --
+
+    #[test]
+    fn fill_rect_alpha_overrides() {
+        let mut b = RecordingBackend::new();
+        b.fill_rect_alpha(0, 0, 100, 50, Color::rgb(255, 255, 255), 128)
+            .unwrap();
+        let calls = b.calls();
+        assert_eq!(calls.len(), 1);
+        assert!(calls[0].contains(",128)")); // Alpha applied
+    }
+
+    #[test]
+    fn dim_screen_uses_black_overlay() {
+        let mut b = RecordingBackend::new();
+        b.dim_screen(100).unwrap();
+        let calls = b.calls();
+        assert_eq!(calls.len(), 1);
+        assert!(calls[0].starts_with("fill_rect(0,0,480,272,0,0,0,100)"));
+    }
+
+    // -- Text system defaults --
+
+    #[test]
+    fn measure_text_height_default() {
+        let b = RecordingBackend::new();
+        // font_size 10 → 10 * 1.2 = 12
+        assert_eq!(b.measure_text_height(10), 12);
+    }
+
+    #[test]
+    fn measure_text_extents_default() {
+        let b = RecordingBackend::new();
+        let (w, h) = b.measure_text_extents("ABCD", 10);
+        assert_eq!(w, 32); // 4 chars * 8px
+        assert_eq!(h, 12); // 10 * 1.2
+    }
+
+    #[test]
+    fn font_ascent_default() {
+        let b = RecordingBackend::new();
+        assert_eq!(b.font_ascent(10), 8); // 10 * 0.8
+    }
+
+    #[test]
+    fn draw_text_ellipsis_short_text() {
+        let mut b = RecordingBackend::new();
+        let drawn = b
+            .draw_text_ellipsis("Hi", 0, 0, 8, Color::WHITE, 200)
+            .unwrap();
+        assert_eq!(drawn, 16); // 2 chars * 8px
+        let calls = b.calls();
+        assert_eq!(calls.len(), 1);
+        assert!(calls[0].contains("Hi"));
+    }
+
+    #[test]
+    fn draw_text_ellipsis_truncates() {
+        let mut b = RecordingBackend::new();
+        let long_text = "Hello World This Is Long";
+        let drawn = b
+            .draw_text_ellipsis(long_text, 0, 0, 8, Color::WHITE, 80)
+            .unwrap();
+        assert!(drawn <= 80);
+        let calls = b.calls();
+        assert_eq!(calls.len(), 1);
+        assert!(calls[0].contains("..."));
+    }
+
+    #[test]
+    fn draw_text_weighted_ignores_weight() {
+        let mut b = RecordingBackend::new();
+        b.draw_text_weighted("Bold", 0, 0, 8, 700, Color::WHITE)
+            .unwrap();
+        let calls = b.calls();
+        assert_eq!(calls.len(), 1);
+        assert!(calls[0].contains("Bold"));
+    }
+
+    #[test]
+    fn draw_text_wrapped_single_line() {
+        let mut b = RecordingBackend::new();
+        let h = b
+            .draw_text_wrapped("Short", 0, 0, 8, Color::WHITE, 200, 10)
+            .unwrap();
+        assert_eq!(h, 10); // One line of height 10
+    }
+
+    #[test]
+    fn draw_text_wrapped_wraps_long_line() {
+        let mut b = RecordingBackend::new();
+        // max_width=40 → 5 chars fit per line. "Hello World" should wrap.
+        let h = b
+            .draw_text_wrapped("Hello World", 0, 0, 8, Color::WHITE, 40, 10)
+            .unwrap();
+        assert_eq!(h, 20); // Two lines
+    }
+
+    #[test]
+    fn draw_text_wrapped_newlines() {
+        let mut b = RecordingBackend::new();
+        let h = b
+            .draw_text_wrapped("A\nB\nC", 0, 0, 8, Color::WHITE, 200, 10)
+            .unwrap();
+        assert_eq!(h, 30); // Three lines
+    }
+
+    // -- Texture operation defaults --
+
+    #[test]
+    fn blit_sub_defaults_to_blit() {
+        let mut b = RecordingBackend::new();
+        let tex = TextureId(5);
+        b.blit_sub(tex, 0, 0, 32, 32, 10, 20, 64, 64).unwrap();
+        let calls = b.calls();
+        assert_eq!(calls.len(), 1);
+        assert!(calls[0].starts_with("blit(5,10,20,64,64)"));
+    }
+
+    #[test]
+    fn blit_tinted_defaults_to_blit() {
+        let mut b = RecordingBackend::new();
+        let tex = TextureId(3);
+        b.blit_tinted(tex, 5, 10, 32, 32, Color::rgb(255, 0, 0))
+            .unwrap();
+        let calls = b.calls();
+        assert_eq!(calls.len(), 1);
+        assert!(calls[0].starts_with("blit(3,5,10,32,32)"));
+    }
+
+    #[test]
+    fn blit_flipped_defaults_to_blit() {
+        let mut b = RecordingBackend::new();
+        let tex = TextureId(7);
+        b.blit_flipped(tex, 0, 0, 16, 16, true, false).unwrap();
+        let calls = b.calls();
+        assert_eq!(calls.len(), 1);
+        assert!(calls[0].starts_with("blit(7,"));
+    }
+
+    // -- Clip/transform stack defaults --
+
+    #[test]
+    fn push_pop_clip_rect() {
+        let mut b = RecordingBackend::new();
+        b.push_clip_rect(10, 20, 100, 50).unwrap();
+        b.pop_clip_rect().unwrap();
+        let calls = b.calls();
+        assert_eq!(calls.len(), 2);
+        assert!(calls[0].starts_with("set_clip("));
+        assert_eq!(calls[1], "reset_clip");
+    }
+
+    #[test]
+    fn current_clip_rect_default_none() {
+        let b = RecordingBackend::new();
+        assert!(b.current_clip_rect().is_none());
+    }
+
+    #[test]
+    fn push_pop_translate_noop() {
+        let mut b = RecordingBackend::new();
+        b.push_translate(10, 20).unwrap();
+        b.pop_translate().unwrap();
+        assert!(b.calls().is_empty()); // Default is no-op
+    }
+
+    #[test]
+    fn current_translate_default_zero() {
+        let b = RecordingBackend::new();
+        assert_eq!(b.current_translate(), (0, 0));
+    }
+
+    #[test]
+    fn push_pop_region() {
+        let mut b = RecordingBackend::new();
+        b.push_region(10, 20, 100, 50).unwrap();
+        b.pop_region().unwrap();
+        let calls = b.calls();
+        // push_region: push_translate (no-op) + push_clip_rect (set_clip)
+        // pop_region: pop_clip_rect (reset_clip) + pop_translate (no-op)
+        assert!(calls.contains(&"set_clip(0,0,100,50)".to_string()));
+        assert!(calls.contains(&"reset_clip".to_string()));
+    }
+
+    // -- Batch rendering defaults --
+
+    #[test]
+    fn begin_flush_batch_noop() {
+        let mut b = RecordingBackend::new();
+        b.begin_batch().unwrap();
+        b.flush_batch().unwrap();
+        assert!(b.calls().is_empty());
+    }
+
+    // -- AudioTrackId --
+
+    #[test]
+    fn audio_track_id_equality() {
+        assert_eq!(AudioTrackId(1), AudioTrackId(1));
+        assert_ne!(AudioTrackId(1), AudioTrackId(2));
+    }
+
+    // -- DrawCommand variants --
+
+    #[test]
+    fn draw_command_fill_rect() {
+        let cmd = DrawCommand::FillRect {
+            x: 0,
+            y: 0,
+            w: 10,
+            h: 10,
+            color: Color::WHITE,
+        };
+        // Just verify it can be constructed and debug-printed.
+        let dbg = format!("{cmd:?}");
+        assert!(dbg.contains("FillRect"));
+    }
+
+    #[test]
+    fn draw_command_clone() {
+        let cmd = DrawCommand::DrawText {
+            text: "hello".into(),
+            x: 5,
+            y: 10,
+            font_size: 8,
+            color: Color::BLACK,
+        };
+        let cmd2 = cmd.clone();
+        let dbg1 = format!("{cmd:?}");
+        let dbg2 = format!("{cmd2:?}");
+        assert_eq!(dbg1, dbg2);
+    }
+
+    #[test]
+    fn draw_command_all_variants_constructible() {
+        // Verify all DrawCommand variants can be constructed without panic.
+        let _commands = vec![
+            DrawCommand::FillRect {
+                x: 0,
+                y: 0,
+                w: 1,
+                h: 1,
+                color: Color::BLACK,
+            },
+            DrawCommand::FillRoundedRect {
+                x: 0,
+                y: 0,
+                w: 1,
+                h: 1,
+                radius: 2,
+                color: Color::BLACK,
+            },
+            DrawCommand::StrokeRect {
+                x: 0,
+                y: 0,
+                w: 1,
+                h: 1,
+                stroke_width: 1,
+                color: Color::BLACK,
+            },
+            DrawCommand::DrawLine {
+                x1: 0,
+                y1: 0,
+                x2: 1,
+                y2: 1,
+                width: 1,
+                color: Color::BLACK,
+            },
+            DrawCommand::FillCircle {
+                cx: 0,
+                cy: 0,
+                radius: 5,
+                color: Color::BLACK,
+            },
+            DrawCommand::FillTriangle {
+                points: [(0, 0), (1, 0), (0, 1)],
+                color: Color::BLACK,
+            },
+            DrawCommand::GradientV {
+                x: 0,
+                y: 0,
+                w: 1,
+                h: 1,
+                top: Color::BLACK,
+                bottom: Color::WHITE,
+            },
+            DrawCommand::GradientH {
+                x: 0,
+                y: 0,
+                w: 1,
+                h: 1,
+                left: Color::BLACK,
+                right: Color::WHITE,
+            },
+            DrawCommand::Gradient4 {
+                x: 0,
+                y: 0,
+                w: 1,
+                h: 1,
+                corners: [Color::BLACK; 4],
+            },
+            DrawCommand::DrawText {
+                text: "x".into(),
+                x: 0,
+                y: 0,
+                font_size: 8,
+                color: Color::BLACK,
+            },
+            DrawCommand::Blit {
+                tex: TextureId(1),
+                x: 0,
+                y: 0,
+                w: 1,
+                h: 1,
+            },
+            DrawCommand::BlitSub {
+                tex: TextureId(1),
+                src: (0, 0, 1, 1),
+                dst: (0, 0, 1, 1),
+            },
+            DrawCommand::BlitTinted {
+                tex: TextureId(1),
+                x: 0,
+                y: 0,
+                w: 1,
+                h: 1,
+                tint: Color::WHITE,
+            },
+            DrawCommand::PushClip {
+                x: 0,
+                y: 0,
+                w: 1,
+                h: 1,
+            },
+            DrawCommand::PopClip,
+            DrawCommand::PushTranslate { dx: 1, dy: 2 },
+            DrawCommand::PopTranslate,
+        ];
+    }
+}
+
 /// Audio playback backend trait.
 ///
 /// Two implementations cover all deployment targets: rodio/SDL2_mixer (desktop/Pi)

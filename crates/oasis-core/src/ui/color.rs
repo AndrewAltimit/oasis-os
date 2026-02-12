@@ -74,4 +74,112 @@ mod tests {
         let l = lighten(c, 1.0);
         assert_eq!(l, Color::rgb(255, 255, 255));
     }
+
+    mod prop {
+        use super::*;
+        use proptest::prelude::*;
+
+        fn arb_color() -> impl Strategy<Value = Color> {
+            (any::<u8>(), any::<u8>(), any::<u8>(), any::<u8>())
+                .prop_map(|(r, g, b, a)| Color::rgba(r, g, b, a))
+        }
+
+        proptest! {
+            #[test]
+            fn rgb_roundtrip(r in any::<u8>(), g in any::<u8>(), b in any::<u8>()) {
+                let c = Color::rgb(r, g, b);
+                prop_assert_eq!(c.r, r);
+                prop_assert_eq!(c.g, g);
+                prop_assert_eq!(c.b, b);
+                prop_assert_eq!(c.a, 255);
+            }
+
+            #[test]
+            fn rgba_roundtrip(r in any::<u8>(), g in any::<u8>(), b in any::<u8>(), a in any::<u8>()) {
+                let c = Color::rgba(r, g, b, a);
+                prop_assert_eq!(c.r, r);
+                prop_assert_eq!(c.g, g);
+                prop_assert_eq!(c.b, b);
+                prop_assert_eq!(c.a, a);
+            }
+
+            #[test]
+            fn lerp_at_zero_returns_first(a in arb_color(), b in arb_color()) {
+                let result = lerp_color(a, b, 0.0);
+                prop_assert_eq!(result, a);
+            }
+
+            #[test]
+            fn lerp_at_one_returns_second(a in arb_color(), b in arb_color()) {
+                let result = lerp_color(a, b, 1.0);
+                // Allow +-1 due to floating point rounding.
+                prop_assert!((result.r as i16 - b.r as i16).abs() <= 1);
+                prop_assert!((result.g as i16 - b.g as i16).abs() <= 1);
+                prop_assert!((result.b as i16 - b.b as i16).abs() <= 1);
+                prop_assert!((result.a as i16 - b.a as i16).abs() <= 1);
+            }
+
+            #[test]
+            fn lerp_clamps_above_one(a in arb_color(), b in arb_color(), t in 1.0f32..100.0) {
+                let at_one = lerp_color(a, b, 1.0);
+                let clamped = lerp_color(a, b, t);
+                prop_assert_eq!(at_one, clamped, "t > 1.0 should be clamped to 1.0");
+            }
+
+            #[test]
+            fn lerp_clamps_below_zero(a in arb_color(), b in arb_color(), t in -100.0f32..0.0) {
+                let at_zero = lerp_color(a, b, 0.0);
+                let clamped = lerp_color(a, b, t);
+                prop_assert_eq!(at_zero, clamped, "t < 0.0 should be clamped to 0.0");
+            }
+
+            #[test]
+            fn darken_preserves_alpha(c in arb_color(), f in 0.0f32..=1.0) {
+                let d = darken(c, f);
+                prop_assert_eq!(d.a, c.a, "darken must preserve alpha");
+            }
+
+            #[test]
+            fn darken_zero_is_black(c in arb_color()) {
+                let d = darken(c, 0.0);
+                prop_assert_eq!(d.r, 0);
+                prop_assert_eq!(d.g, 0);
+                prop_assert_eq!(d.b, 0);
+                prop_assert_eq!(d.a, c.a);
+            }
+
+            #[test]
+            fn darken_one_is_unchanged(c in arb_color()) {
+                let d = darken(c, 1.0);
+                // Allow +-1 for float rounding.
+                prop_assert!((d.r as i16 - c.r as i16).abs() <= 1);
+                prop_assert!((d.g as i16 - c.g as i16).abs() <= 1);
+                prop_assert!((d.b as i16 - c.b as i16).abs() <= 1);
+            }
+
+            #[test]
+            fn lighten_zero_is_unchanged(c in arb_color()) {
+                let l = lighten(c, 0.0);
+                prop_assert_eq!(l, c);
+            }
+
+            #[test]
+            fn lighten_one_is_white_rgb(c in arb_color()) {
+                let l = lighten(c, 1.0);
+                // Allow +-1 for float rounding.
+                prop_assert!((l.r as i16 - 255).abs() <= 1);
+                prop_assert!((l.g as i16 - 255).abs() <= 1);
+                prop_assert!((l.b as i16 - 255).abs() <= 1);
+            }
+
+            #[test]
+            fn with_alpha_sets_alpha(c in arb_color(), a in any::<u8>()) {
+                let result = with_alpha(c, a);
+                prop_assert_eq!(result.r, c.r);
+                prop_assert_eq!(result.g, c.g);
+                prop_assert_eq!(result.b, c.b);
+                prop_assert_eq!(result.a, a);
+            }
+        }
+    }
 }

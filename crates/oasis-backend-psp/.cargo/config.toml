@@ -1,0 +1,8 @@
+# Enable getrandom 0.3 custom backend for the PSP target.
+# The PSP has no OS-level entropy source that getrandom recognises,
+# so we provide one via __getrandom_v03_custom in main.rs.
+#
+# cargo-psp generates a custom target spec (mipsel-sony-psp-std.json),
+# so we apply the flag to all targets via [build].
+[build]
+rustflags = ['--cfg', 'getrandom_backend="custom"']

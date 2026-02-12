@@ -35,6 +35,7 @@ services:
     runtime: nvidia
     volumes:
       - ./crates/oasis-backend-psp/target/mipsel-sony-psp-std:/roms
+      - ./screenshots/psp:/screenshots
       - /tmp/.X11-unix:/tmp/.X11-unix:ro
       - ${XAUTHORITY:-~/.Xauthority}:/home/ppsspp/.Xauthority:ro
     environment:

@@ -1,0 +1,11 @@
+# Heading 1
+## Heading 2
+### Heading 3
+Regular text paragraph.
+=> gemini://example.com Link text
+* List item one
+* List item two
+> Blockquote text
+```alt text
+preformatted code
+```

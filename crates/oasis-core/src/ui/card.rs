@@ -38,6 +38,66 @@ impl Card {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn new_defaults() {
+        let c = Card::new("Hello");
+        assert_eq!(c.title, "Hello");
+        assert!(c.image.is_none());
+        assert_eq!(c.image_height, 0);
+        assert!(c.subtitle.is_none());
+        assert!(c.body.is_none());
+        assert_eq!(c.elevation, 1);
+        assert_eq!(c.radius, 0);
+    }
+
+    #[test]
+    fn new_from_string() {
+        let c = Card::new(String::from("World"));
+        assert_eq!(c.title, "World");
+    }
+
+    #[test]
+    fn with_subtitle() {
+        let mut c = Card::new("Title");
+        c.subtitle = Some("Sub".into());
+        assert_eq!(c.subtitle.as_deref(), Some("Sub"));
+    }
+
+    #[test]
+    fn with_body() {
+        let mut c = Card::new("Title");
+        c.body = Some("Body text here".into());
+        assert_eq!(c.body.as_deref(), Some("Body text here"));
+    }
+
+    #[test]
+    fn with_image() {
+        let mut c = Card::new("Title");
+        c.image = Some(TextureId(42));
+        c.image_height = 100;
+        assert_eq!(c.image, Some(TextureId(42)));
+        assert_eq!(c.image_height, 100);
+    }
+
+    #[test]
+    fn custom_elevation() {
+        let mut c = Card::new("Title");
+        c.elevation = 3;
+        assert_eq!(c.elevation, 3);
+    }
+
+    #[test]
+    fn zero_elevation_no_shadow() {
+        let mut c = Card::new("Title");
+        c.elevation = 0;
+        assert_eq!(c.elevation, 0);
+    }
+}
+
 impl Widget for Card {
     fn measure(&self, ctx: &DrawContext<'_>, available_w: u32, _available_h: u32) -> (u32, u32) {
         let padding = ctx.theme.spacing_md as u32;

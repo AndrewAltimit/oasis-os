@@ -809,4 +809,128 @@ font_size = 16
             .collect();
         assert_eq!(text_calls.len(), 5, "should render all 5 text objects");
     }
+
+    mod prop {
+        use super::*;
+        use proptest::prelude::*;
+        use std::collections::HashSet;
+
+        fn arb_names(min: usize, max: usize) -> impl Strategy<Value = Vec<String>> {
+            proptest::collection::hash_set("[a-z]{1,8}", min..max)
+                .prop_map(|s| s.into_iter().collect())
+        }
+
+        proptest! {
+            #[test]
+            fn len_equals_creates_minus_destroys(names in arb_names(1, 20)) {
+                let mut reg = SdiRegistry::new();
+                for name in &names {
+                    reg.create(name);
+                }
+                prop_assert_eq!(reg.len(), names.len());
+
+                // Destroy half.
+                let destroy_count = names.len() / 2;
+                for name in names.iter().take(destroy_count) {
+                    reg.destroy(name).unwrap();
+                }
+                prop_assert_eq!(reg.len(), names.len() - destroy_count);
+            }
+
+            #[test]
+            fn z_orders_are_unique(names in arb_names(2, 20)) {
+                let mut reg = SdiRegistry::new();
+                for name in &names {
+                    reg.create(name);
+                }
+                let zs: Vec<i32> = names.iter().map(|n| reg.get(n).unwrap().z).collect();
+                let unique: HashSet<i32> = zs.iter().copied().collect();
+                prop_assert_eq!(
+                    zs.len(), unique.len(),
+                    "all z-orders must be unique"
+                );
+            }
+
+            #[test]
+            fn move_to_top_gives_highest_z(names in arb_names(2, 10)) {
+                let mut reg = SdiRegistry::new();
+                for name in &names {
+                    reg.create(name);
+                }
+                let target = &names[0];
+                reg.move_to_top(target).unwrap();
+                let target_z = reg.get(target).unwrap().z;
+                for name in &names[1..] {
+                    let z = reg.get(name).unwrap().z;
+                    prop_assert!(
+                        target_z > z,
+                        "move_to_top({target}): z={target_z} should be > {name}.z={z}"
+                    );
+                }
+            }
+
+            #[test]
+            fn move_to_bottom_gives_lowest_z(names in arb_names(2, 10)) {
+                let mut reg = SdiRegistry::new();
+                for name in &names {
+                    reg.create(name);
+                }
+                let target = &names[0];
+                reg.move_to_bottom(target).unwrap();
+                let target_z = reg.get(target).unwrap().z;
+                for name in &names[1..] {
+                    let z = reg.get(name).unwrap().z;
+                    prop_assert!(
+                        target_z < z,
+                        "move_to_bottom({target}): z={target_z} should be < {name}.z={z}"
+                    );
+                }
+            }
+
+            #[test]
+            fn create_then_contains(names in arb_names(1, 20)) {
+                let mut reg = SdiRegistry::new();
+                for name in &names {
+                    reg.create(name);
+                }
+                for name in &names {
+                    prop_assert!(reg.contains(name), "registry should contain {name}");
+                }
+            }
+
+            #[test]
+            fn destroy_then_not_contains(names in arb_names(1, 10)) {
+                let mut reg = SdiRegistry::new();
+                for name in &names {
+                    reg.create(name);
+                }
+                for name in &names {
+                    reg.destroy(name).unwrap();
+                    prop_assert!(!reg.contains(name), "destroyed object should not be contained");
+                }
+                prop_assert!(reg.is_empty());
+            }
+
+            #[test]
+            fn destroy_nonexistent_is_error(name in "[a-z]{1,8}") {
+                let reg = SdiRegistry::new();
+                prop_assert!(reg.get(&name).is_err());
+            }
+
+            #[test]
+            fn z_order_auto_increments_monotonically(n in 2usize..20) {
+                let mut reg = SdiRegistry::new();
+                let mut prev_z = None;
+                for i in 0..n {
+                    let name = format!("obj_{i}");
+                    reg.create(&name);
+                    let z = reg.get(&name).unwrap().z;
+                    if let Some(pz) = prev_z {
+                        prop_assert!(z > pz, "z-order must increase: {z} > {pz}");
+                    }
+                    prev_z = Some(z);
+                }
+            }
+        }
+    }
 }

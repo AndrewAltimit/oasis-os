@@ -1,0 +1,4 @@
+@media screen { p { color: red; } }
+div > p + span ~ a { background: rgba(0,0,0,0.5); }
+*::before { content: ""; display: block; }
+[data-x="y"] { border: 1px solid; }

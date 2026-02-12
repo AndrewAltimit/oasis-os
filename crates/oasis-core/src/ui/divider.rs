@@ -37,6 +37,56 @@ impl Divider {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn horizontal_defaults() {
+        let d = Divider::horizontal();
+        assert_eq!(d.orientation, DividerOrientation::Horizontal);
+        assert!(d.color.is_none());
+        assert_eq!(d.thickness, 1);
+    }
+
+    #[test]
+    fn vertical_defaults() {
+        let d = Divider::vertical();
+        assert_eq!(d.orientation, DividerOrientation::Vertical);
+        assert!(d.color.is_none());
+        assert_eq!(d.thickness, 1);
+    }
+
+    #[test]
+    fn custom_color() {
+        let mut d = Divider::horizontal();
+        d.color = Some(Color::rgb(255, 0, 0));
+        assert_eq!(d.color.unwrap(), Color::rgb(255, 0, 0));
+    }
+
+    #[test]
+    fn custom_thickness() {
+        let mut d = Divider::horizontal();
+        d.thickness = 3;
+        assert_eq!(d.thickness, 3);
+    }
+
+    #[test]
+    fn orientation_equality() {
+        assert_eq!(
+            DividerOrientation::Horizontal,
+            DividerOrientation::Horizontal
+        );
+        assert_ne!(DividerOrientation::Horizontal, DividerOrientation::Vertical);
+    }
+
+    #[test]
+    fn orientation_debug() {
+        let _ = format!("{:?}", DividerOrientation::Horizontal);
+        let _ = format!("{:?}", DividerOrientation::Vertical);
+    }
+}
+
 impl Widget for Divider {
     fn measure(&self, _ctx: &DrawContext<'_>, available_w: u32, available_h: u32) -> (u32, u32) {
         match self.orientation {

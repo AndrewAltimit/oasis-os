@@ -1,0 +1,24 @@
+# Gemini Test Page
+
+Welcome to the Gemini protocol test page.
+
+## Section One
+
+This is a paragraph in Gemini format. Gemini uses a simple line-oriented syntax.
+
+=> gemini://example.com Link to example
+=> gemini://other.host/page Another link
+
+## Section Two
+
+> This is a blockquote in Gemini format.
+
+* List item one
+* List item two
+* List item three
+
+```
+Preformatted text block
+  with preserved spacing
+    and indentation
+```

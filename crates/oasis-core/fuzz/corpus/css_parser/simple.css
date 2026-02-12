@@ -1,0 +1,5 @@
+body { color: red; background: #fff; }
+p { font-size: 14px; margin: 8px 0; }
+.class { color: blue; }
+#id { font-weight: bold; }
+div p { color: green; }

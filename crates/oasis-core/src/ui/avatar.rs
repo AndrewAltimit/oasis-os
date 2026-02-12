@@ -34,6 +34,47 @@ impl Avatar {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn new_defaults() {
+        let a = Avatar::new('A', 32);
+        assert_eq!(a.initial, 'A');
+        assert_eq!(a.size, 32);
+        assert!(a.image.is_none());
+        assert!(a.bg_color.is_none());
+    }
+
+    #[test]
+    fn with_image_constructor() {
+        let a = Avatar::with_image(TextureId(5), 48);
+        assert_eq!(a.image, Some(TextureId(5)));
+        assert_eq!(a.size, 48);
+        assert_eq!(a.initial, ' ');
+    }
+
+    #[test]
+    fn custom_bg_color() {
+        let mut a = Avatar::new('Z', 24);
+        a.bg_color = Some(Color::rgb(100, 200, 50));
+        assert_eq!(a.bg_color.unwrap(), Color::rgb(100, 200, 50));
+    }
+
+    #[test]
+    fn unicode_initial() {
+        let a = Avatar::new('\u{1F600}', 32);
+        assert_eq!(a.initial, '\u{1F600}');
+    }
+
+    #[test]
+    fn zero_size() {
+        let a = Avatar::new('X', 0);
+        assert_eq!(a.size, 0);
+    }
+}
+
 impl Widget for Avatar {
     fn measure(&self, _ctx: &DrawContext<'_>, _available_w: u32, _available_h: u32) -> (u32, u32) {
         (self.size, self.size)

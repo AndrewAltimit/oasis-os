@@ -338,4 +338,246 @@ mod tests {
         vfs.write("/file", b"new content").unwrap();
         assert_eq!(vfs.read("/file").unwrap(), b"new content");
     }
+
+    // -- robustness / edge cases ----------------------------------------
+
+    #[test]
+    fn dotdot_is_not_resolved() {
+        // normalize() does NOT resolve `..` -- this documents the current behavior.
+        let mut vfs = MemoryVfs::new();
+        vfs.mkdir("/a/b").unwrap();
+        // Writing to /a/b/../c creates a literal `..` directory component.
+        let result = vfs.write("/a/b/../c/file", b"data");
+        // Should fail because /a/b/.. is not a real directory.
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn dot_component_in_path() {
+        let mut vfs = MemoryVfs::new();
+        vfs.mkdir("/dir").unwrap();
+        // /dir/./file -- the `.` is kept literally.
+        let result = vfs.write("/dir/./file", b"data");
+        // Should fail (no `./` directory exists as parent).
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn special_characters_in_filename() {
+        let mut vfs = MemoryVfs::new();
+        vfs.write("/file with spaces.txt", b"ok").unwrap();
+        assert_eq!(vfs.read("/file with spaces.txt").unwrap(), b"ok");
+    }
+
+    #[test]
+    fn unicode_in_filename() {
+        let mut vfs = MemoryVfs::new();
+        vfs.write("/\u{1F600}_emoji.txt", b"smiley").unwrap();
+        assert_eq!(vfs.read("/\u{1F600}_emoji.txt").unwrap(), b"smiley");
+    }
+
+    #[test]
+    fn filename_with_dots() {
+        let mut vfs = MemoryVfs::new();
+        vfs.write("/file.tar.gz", b"archive").unwrap();
+        assert_eq!(vfs.read("/file.tar.gz").unwrap(), b"archive");
+    }
+
+    #[test]
+    fn empty_filename_component() {
+        // Path with empty component: /dir//file -> normalize collapses to /dir/file.
+        let mut vfs = MemoryVfs::new();
+        vfs.mkdir("/dir").unwrap();
+        vfs.write("/dir//file", b"data").unwrap();
+        assert_eq!(vfs.read("/dir/file").unwrap(), b"data");
+    }
+
+    #[test]
+    fn write_empty_data() {
+        let mut vfs = MemoryVfs::new();
+        vfs.write("/empty", b"").unwrap();
+        assert_eq!(vfs.read("/empty").unwrap(), b"");
+        assert!(vfs.exists("/empty"));
+    }
+
+    #[test]
+    fn write_large_file() {
+        let mut vfs = MemoryVfs::new();
+        let data = vec![0xFFu8; 1_000_000]; // 1MB
+        vfs.write("/big", &data).unwrap();
+        assert_eq!(vfs.read("/big").unwrap().len(), 1_000_000);
+    }
+
+    #[test]
+    fn readdir_empty_dir() {
+        let mut vfs = MemoryVfs::new();
+        vfs.mkdir("/empty_dir").unwrap();
+        let entries = vfs.readdir("/empty_dir").unwrap();
+        assert!(entries.is_empty());
+    }
+
+    #[test]
+    fn readdir_root() {
+        let vfs = MemoryVfs::new();
+        let entries = vfs.readdir("/").unwrap();
+        // Fresh VFS has no children of root.
+        assert!(entries.is_empty());
+    }
+
+    #[test]
+    fn mkdir_existing_dir_is_ok() {
+        let mut vfs = MemoryVfs::new();
+        vfs.mkdir("/dir").unwrap();
+        // Creating same directory again should be idempotent.
+        vfs.mkdir("/dir").unwrap();
+        assert!(vfs.exists("/dir"));
+    }
+
+    #[test]
+    fn remove_file_then_readd() {
+        let mut vfs = MemoryVfs::new();
+        vfs.write("/file", b"first").unwrap();
+        vfs.remove("/file").unwrap();
+        assert!(!vfs.exists("/file"));
+        vfs.write("/file", b"second").unwrap();
+        assert_eq!(vfs.read("/file").unwrap(), b"second");
+    }
+
+    #[test]
+    fn remove_nonexistent_fails() {
+        let mut vfs = MemoryVfs::new();
+        assert!(vfs.remove("/ghost").is_err());
+    }
+
+    #[test]
+    fn deeply_nested_dirs() {
+        let mut vfs = MemoryVfs::new();
+        let path: String = (0..50).map(|i| format!("/d{i}")).collect();
+        vfs.mkdir(&path).unwrap();
+        assert!(vfs.exists(&path));
+        vfs.write(&format!("{path}/leaf.txt"), b"deep").unwrap();
+        assert_eq!(vfs.read(&format!("{path}/leaf.txt")).unwrap(), b"deep");
+    }
+
+    #[test]
+    fn write_to_dir_path_fails() {
+        let mut vfs = MemoryVfs::new();
+        vfs.mkdir("/dir").unwrap();
+        // Trying to write to a path that is a directory should fail
+        // (or overwrite with file -- depends on impl). Check it doesn't panic.
+        let _ = vfs.write("/dir", b"data");
+    }
+
+    #[test]
+    fn read_dir_as_file_fails() {
+        let mut vfs = MemoryVfs::new();
+        vfs.mkdir("/dir").unwrap();
+        assert!(vfs.read("/dir").is_err());
+    }
+
+    #[test]
+    fn many_files_in_one_dir() {
+        let mut vfs = MemoryVfs::new();
+        vfs.mkdir("/dir").unwrap();
+        for i in 0..200 {
+            vfs.write(&format!("/dir/file_{i}"), b"x").unwrap();
+        }
+        let entries = vfs.readdir("/dir").unwrap();
+        assert_eq!(entries.len(), 200);
+    }
+
+    mod prop {
+        use super::*;
+        use proptest::prelude::*;
+
+        proptest! {
+            #[test]
+            fn normalize_is_idempotent(path in "[/a-z0-9_.]{1,50}") {
+                let once = normalize(&path);
+                let twice = normalize(&once);
+                prop_assert_eq!(&once, &twice, "normalize must be idempotent");
+            }
+
+            #[test]
+            fn normalize_never_has_double_slashes(path in "[/a-z0-9_.]{1,50}") {
+                let normed = normalize(&path);
+                prop_assert!(
+                    !normed.contains("//"),
+                    "normalized path must not contain //: {normed}"
+                );
+            }
+
+            #[test]
+            fn normalize_starts_with_slash(path in "[a-z0-9_./]{0,50}") {
+                let normed = normalize(&path);
+                prop_assert!(
+                    normed.starts_with('/'),
+                    "normalized path must start with /: {normed}"
+                );
+            }
+
+            #[test]
+            fn normalize_no_trailing_slash_unless_root(path in "[/a-z0-9_.]{1,50}") {
+                let normed = normalize(&path);
+                if normed != "/" {
+                    prop_assert!(
+                        !normed.ends_with('/'),
+                        "non-root normalized path must not end with /: {normed}"
+                    );
+                }
+            }
+
+            #[test]
+            fn write_then_read_roundtrips(
+                dir in "[a-z]{1,8}",
+                file in "[a-z]{1,8}",
+                data in proptest::collection::vec(any::<u8>(), 0..256),
+            ) {
+                let mut vfs = MemoryVfs::new();
+                let dir_path = format!("/{dir}");
+                vfs.mkdir(&dir_path).unwrap();
+                let file_path = format!("{dir_path}/{file}");
+                vfs.write(&file_path, &data).unwrap();
+                let read_back = vfs.read(&file_path).unwrap();
+                prop_assert_eq!(data, read_back);
+            }
+
+            #[test]
+            fn exists_after_write(
+                dir in "[a-z]{1,8}",
+                file in "[a-z]{1,8}",
+            ) {
+                let mut vfs = MemoryVfs::new();
+                let dir_path = format!("/{dir}");
+                vfs.mkdir(&dir_path).unwrap();
+                let file_path = format!("{dir_path}/{file}");
+                vfs.write(&file_path, b"x").unwrap();
+                prop_assert!(vfs.exists(&file_path));
+            }
+
+            #[test]
+            fn mkdir_then_exists(segments in proptest::collection::vec("[a-z]{1,6}", 1..5)) {
+                let mut vfs = MemoryVfs::new();
+                let path = format!("/{}", segments.join("/"));
+                vfs.mkdir(&path).unwrap();
+                prop_assert!(vfs.exists(&path));
+                // All parent directories should exist too.
+                let mut partial = String::new();
+                for seg in &segments {
+                    partial.push('/');
+                    partial.push_str(seg);
+                    prop_assert!(vfs.exists(&partial), "missing parent: {partial}");
+                }
+            }
+
+            #[test]
+            fn remove_then_not_exists(name in "[a-z]{1,8}") {
+                let mut vfs = MemoryVfs::new();
+                let path = format!("/{name}");
+                vfs.mkdir(&path).unwrap();
+                vfs.remove(&path).unwrap();
+                prop_assert!(!vfs.exists(&path));
+            }
+        }
+    }
 }

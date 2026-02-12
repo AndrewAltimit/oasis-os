@@ -1618,4 +1618,199 @@ mod tests {
         assert_eq!(builder.mode, InsertionMode::Initial);
         assert!(builder.open_elements.is_empty());
     }
+
+    // ---- Robustness / edge cases ----
+
+    #[test]
+    fn deeply_nested_divs() {
+        // 200 levels of nesting -- should not stack overflow.
+        let mut tokens: Vec<Token> = Vec::new();
+        for _ in 0..200 {
+            tokens.push(start("div"));
+        }
+        tokens.push(text("leaf"));
+        for _ in 0..200 {
+            tokens.push(end("div"));
+        }
+        tokens.push(Token::Eof);
+        let doc = TreeBuilder::build(tokens);
+        let body = doc.body().expect("has body");
+        assert!(!doc.get(body).children.is_empty());
+    }
+
+    #[test]
+    fn orphan_end_tag() {
+        // End tag without matching start should not panic.
+        let tokens = vec![end("span"), Token::Eof];
+        let doc = TreeBuilder::build(tokens);
+        assert!(doc.body().is_some());
+    }
+
+    #[test]
+    fn multiple_orphan_end_tags() {
+        let tokens = vec![end("div"), end("span"), end("p"), end("table"), Token::Eof];
+        let doc = TreeBuilder::build(tokens);
+        assert!(doc.body().is_some());
+    }
+
+    #[test]
+    fn end_tag_before_matching_start() {
+        let tokens = vec![
+            end("div"),
+            start("div"),
+            text("content"),
+            end("div"),
+            Token::Eof,
+        ];
+        let doc = TreeBuilder::build(tokens);
+        let body = doc.body().unwrap();
+        assert!(!doc.get(body).children.is_empty());
+    }
+
+    #[test]
+    fn interleaved_mismatched_tags() {
+        // <b><i></b></i> -- misnested formatting.
+        let tokens = vec![
+            start("b"),
+            start("i"),
+            text("text"),
+            end("b"),
+            end("i"),
+            Token::Eof,
+        ];
+        let doc = TreeBuilder::build(tokens);
+        let body = doc.body().unwrap();
+        assert!(!doc.get(body).children.is_empty());
+    }
+
+    #[test]
+    fn empty_document_eof_only() {
+        let tokens = vec![Token::Eof];
+        let doc = TreeBuilder::build(tokens);
+        // Should still create implicit html/head/body.
+        assert!(doc.body().is_some());
+    }
+
+    #[test]
+    fn text_only_no_tags() {
+        let tokens = vec![text("just plain text"), Token::Eof];
+        let doc = TreeBuilder::build(tokens);
+        let body = doc.body().unwrap();
+        assert_eq!(doc.text_content(body), "just plain text");
+    }
+
+    #[test]
+    fn void_element_with_children_ignored() {
+        // <br> should not contain children even if tokens supply them.
+        let tokens = vec![
+            start("br"),
+            text("should not be child of br"),
+            end("br"),
+            Token::Eof,
+        ];
+        let doc = TreeBuilder::build(tokens);
+        let body = doc.body().unwrap();
+        // br should exist, text should be sibling, not child.
+        assert!(!doc.get(body).children.is_empty());
+    }
+
+    #[test]
+    fn p_inside_p_auto_closes() {
+        let tokens = vec![
+            start("p"),
+            text("A"),
+            start("p"),
+            text("B"),
+            start("p"),
+            text("C"),
+            Token::Eof,
+        ];
+        let doc = TreeBuilder::build(tokens);
+        let body = doc.body().unwrap();
+        let ps: Vec<NodeId> = doc
+            .get(body)
+            .children
+            .iter()
+            .filter(|&&id| tag_at(&doc, id) == Some(&TagName::P))
+            .copied()
+            .collect();
+        assert_eq!(ps.len(), 3);
+    }
+
+    #[test]
+    fn duplicate_html_tag() {
+        let tokens = vec![
+            start("html"),
+            start("html"),
+            start("body"),
+            text("x"),
+            end("body"),
+            end("html"),
+            end("html"),
+            Token::Eof,
+        ];
+        let doc = TreeBuilder::build(tokens);
+        assert!(doc.body().is_some());
+    }
+
+    #[test]
+    fn duplicate_body_tag() {
+        let tokens = vec![
+            start("body"),
+            text("first"),
+            end("body"),
+            start("body"),
+            text("second"),
+            end("body"),
+            Token::Eof,
+        ];
+        let doc = TreeBuilder::build(tokens);
+        let body = doc.body().unwrap();
+        // Content should be preserved, not lost.
+        let tc = doc.text_content(body);
+        assert!(tc.contains("first") || tc.contains("second"));
+    }
+
+    #[test]
+    fn script_content_preserved() {
+        let tokens = vec![
+            start("script"),
+            text("var x = 1;"),
+            end("script"),
+            Token::Eof,
+        ];
+        let doc = TreeBuilder::build(tokens);
+        let head = doc.head().unwrap();
+        let body = doc.body().unwrap();
+        // Script might go to head or body depending on insertion mode.
+        let total_children = doc.get(head).children.len() + doc.get(body).children.len();
+        assert!(total_children >= 1);
+    }
+
+    #[test]
+    fn unknown_tag_names() {
+        let tokens = vec![
+            start("custom-element"),
+            text("content"),
+            end("custom-element"),
+            Token::Eof,
+        ];
+        let doc = TreeBuilder::build(tokens);
+        let body = doc.body().unwrap();
+        assert!(!doc.get(body).children.is_empty());
+    }
+
+    #[test]
+    fn large_number_of_siblings() {
+        let mut tokens: Vec<Token> = Vec::new();
+        for i in 0..500 {
+            tokens.push(start("span"));
+            tokens.push(text(&format!("{i}")));
+            tokens.push(end("span"));
+        }
+        tokens.push(Token::Eof);
+        let doc = TreeBuilder::build(tokens);
+        let body = doc.body().unwrap();
+        assert!(doc.get(body).children.len() >= 500);
+    }
 }

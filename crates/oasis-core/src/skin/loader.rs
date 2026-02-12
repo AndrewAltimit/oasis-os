@@ -593,4 +593,399 @@ intensity = 0.5
         assert_eq!(mods.position_jitter, 5);
         assert!((mods.intensity - 0.5).abs() < f32::EPSILON);
     }
+
+    // -- Malformed TOML tests --
+
+    #[test]
+    fn malformed_manifest_toml() {
+        let bad = "this is [[[not valid";
+        let result = Skin::from_toml(bad, LAYOUT, FEATURES);
+        assert!(result.is_err());
+        let msg = format!("{}", result.unwrap_err());
+        assert!(msg.contains("skin.toml"));
+    }
+
+    #[test]
+    fn malformed_layout_toml() {
+        let bad = "[unclosed";
+        let result = Skin::from_toml(MANIFEST, bad, FEATURES);
+        assert!(result.is_err());
+        let msg = format!("{}", result.unwrap_err());
+        assert!(msg.contains("layout.toml"));
+    }
+
+    #[test]
+    fn malformed_features_toml() {
+        let bad = "dashboard = not_a_bool";
+        let result = Skin::from_toml(MANIFEST, LAYOUT, bad);
+        assert!(result.is_err());
+        let msg = format!("{}", result.unwrap_err());
+        assert!(msg.contains("features.toml"));
+    }
+
+    #[test]
+    fn malformed_theme_toml() {
+        let bad = "color = [invalid";
+        let result = Skin::from_toml_full(MANIFEST, LAYOUT, FEATURES, bad, "");
+        assert!(result.is_err());
+        let msg = format!("{}", result.unwrap_err());
+        assert!(msg.contains("theme.toml"));
+    }
+
+    #[test]
+    fn malformed_strings_toml() {
+        let bad = "prompt_format = [oops";
+        let result = Skin::from_toml_full(MANIFEST, LAYOUT, FEATURES, "", bad);
+        assert!(result.is_err());
+        let msg = format!("{}", result.unwrap_err());
+        assert!(msg.contains("strings.toml"));
+    }
+
+    #[test]
+    fn malformed_corrupted_toml() {
+        let bad = "position_jitter = \"not a number\"";
+        let result = Skin::from_toml_corrupted(MANIFEST, LAYOUT, FEATURES, "", "", bad);
+        assert!(result.is_err());
+        let msg = format!("{}", result.unwrap_err());
+        assert!(msg.contains("corrupted.toml"));
+    }
+
+    // -- Partial / minimal TOML tests --
+
+    #[test]
+    fn minimal_manifest_only_name() {
+        let toml = r#"name = "bare""#;
+        let m: SkinManifest = toml::from_str(toml).unwrap();
+        assert_eq!(m.name, "bare");
+        assert_eq!(m.version, "1.0");
+        assert_eq!(m.author, "");
+        assert_eq!(m.description, "");
+        assert_eq!(m.screen_width, 480);
+        assert_eq!(m.screen_height, 272);
+    }
+
+    #[test]
+    fn empty_layout_produces_no_objects() {
+        let skin = Skin::from_toml(MANIFEST, "", FEATURES).unwrap();
+        assert!(skin.layout.objects.is_empty());
+    }
+
+    #[test]
+    fn empty_features_uses_defaults() {
+        let skin = Skin::from_toml(MANIFEST, LAYOUT, "").unwrap();
+        assert!(skin.features.dashboard);
+        assert!(skin.features.terminal);
+        assert_eq!(skin.features.grid_cols, 3);
+        assert_eq!(skin.features.grid_rows, 2);
+    }
+
+    #[test]
+    fn partial_features_fills_defaults() {
+        let features = r#"
+dashboard = false
+window_manager = true
+"#;
+        let skin = Skin::from_toml(MANIFEST, LAYOUT, features).unwrap();
+        assert!(!skin.features.dashboard);
+        assert!(skin.features.window_manager);
+        // Defaults for unspecified fields:
+        assert!(skin.features.terminal);
+        assert!(skin.features.browser);
+        assert_eq!(skin.features.dashboard_pages, 3);
+    }
+
+    // -- Layout object partial fields --
+
+    #[test]
+    fn layout_object_partial_fields() {
+        let layout = r##"
+[partial_obj]
+x = 10
+color = "#FF0000"
+"##;
+        let skin = Skin::from_toml(MANIFEST, layout, FEATURES).unwrap();
+        let obj = &skin.layout.objects["partial_obj"];
+        assert_eq!(obj.x, Some(10));
+        assert!(obj.y.is_none());
+        assert!(obj.w.is_none());
+        assert!(obj.h.is_none());
+        assert_eq!(obj.color, Some("#FF0000".to_string()));
+    }
+
+    #[test]
+    fn layout_object_extended_visual_properties() {
+        let layout = r##"
+[fancy]
+x = 0
+y = 0
+w = 100
+h = 50
+border_radius = 8
+gradient_top = "#FF0000"
+gradient_bottom = "#0000FF"
+shadow_level = 3
+stroke_width = 2
+stroke_color = "#00FF00"
+"##;
+        let skin = Skin::from_toml(MANIFEST, layout, FEATURES).unwrap();
+        let obj = &skin.layout.objects["fancy"];
+        assert_eq!(obj.border_radius, Some(8));
+        assert_eq!(obj.gradient_top, Some("#FF0000".to_string()));
+        assert_eq!(obj.gradient_bottom, Some("#0000FF".to_string()));
+        assert_eq!(obj.shadow_level, Some(3));
+        assert_eq!(obj.stroke_width, Some(2));
+        assert_eq!(obj.stroke_color, Some("#00FF00".to_string()));
+    }
+
+    #[test]
+    fn apply_layout_extended_properties() {
+        let layout = r##"
+[styled]
+x = 5
+y = 10
+w = 100
+h = 50
+border_radius = 4
+shadow_level = 2
+stroke_width = 1
+stroke_color = "#FFFFFF"
+gradient_top = "#FF0000"
+gradient_bottom = "#0000FF"
+"##;
+        let skin = Skin::from_toml(MANIFEST, layout, FEATURES).unwrap();
+        let mut sdi = SdiRegistry::new();
+        skin.apply_layout(&mut sdi);
+        let obj = sdi.get("styled").unwrap();
+        assert_eq!(obj.border_radius, Some(4));
+        assert_eq!(obj.shadow_level, Some(2));
+        assert_eq!(obj.stroke_width, Some(1));
+    }
+
+    // -- Invalid color strings --
+
+    #[test]
+    fn apply_layout_invalid_color_ignored() {
+        let layout = r##"
+[bad_color]
+x = 0
+y = 0
+color = "not-a-color"
+text_color = "also-bad"
+"##;
+        let skin = Skin::from_toml(MANIFEST, layout, FEATURES).unwrap();
+        let mut sdi = SdiRegistry::new();
+        skin.apply_layout(&mut sdi);
+        // Object created but colors remain default (parse_hex_color returns None)
+        assert!(sdi.contains("bad_color"));
+    }
+
+    // -- Skin swap --
+
+    #[test]
+    fn swap_returns_new_skin() {
+        let skin_a = Skin::from_toml(MANIFEST, LAYOUT, FEATURES).unwrap();
+        let mut sdi = SdiRegistry::new();
+        skin_a.apply_layout(&mut sdi);
+
+        let manifest_b = r#"name = "new_skin""#;
+        let layout_b = r##"
+[new_obj]
+x = 0
+y = 0
+w = 480
+h = 272
+"##;
+        let skin_b = Skin::from_toml(manifest_b, layout_b, FEATURES).unwrap();
+        let result = Skin::swap(&skin_a, skin_b, &mut sdi);
+        assert_eq!(result.manifest.name, "new_skin");
+    }
+
+    // -- Empty corrupted TOML skips modifiers --
+
+    #[test]
+    fn from_toml_corrupted_empty_string() {
+        let skin = Skin::from_toml_corrupted(MANIFEST, LAYOUT, FEATURES, "", "", "").unwrap();
+        // Empty corrupted_toml means no override, but features.corrupted is false
+        // so corrupted_modifiers is None.
+        assert!(skin.corrupted_modifiers.is_none());
+    }
+
+    // -- Discover skins with nonexistent directory --
+
+    #[test]
+    fn discover_skins_nonexistent_dir() {
+        let skins = Skin::discover_skins(Path::new("/nonexistent/path/to/skins"));
+        assert!(skins.is_empty());
+    }
+
+    // -- from_directory with nonexistent dir --
+
+    #[test]
+    fn from_directory_missing_files() {
+        let result = Skin::from_directory(Path::new("/nonexistent/skin/dir"));
+        assert!(result.is_err());
+    }
+
+    // -- Robustness / edge cases ----------------------------------------
+
+    #[test]
+    fn completely_invalid_manifest_toml() {
+        let result = Skin::from_toml("{{{{", LAYOUT, FEATURES);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn completely_invalid_layout_toml() {
+        let result = Skin::from_toml(MANIFEST, "{{{{", FEATURES);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn completely_invalid_features_toml() {
+        let result = Skin::from_toml(MANIFEST, LAYOUT, "{{{{");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn empty_manifest_toml() {
+        let result = Skin::from_toml("", LAYOUT, FEATURES);
+        // Empty manifest lacks required `name` -- should fail or use defaults.
+        let _ = result;
+    }
+
+    #[test]
+    fn empty_layout_toml() {
+        let skin = Skin::from_toml(MANIFEST, "", FEATURES).unwrap();
+        assert!(skin.layout.objects.is_empty());
+    }
+
+    #[test]
+    fn empty_features_toml() {
+        let skin = Skin::from_toml(MANIFEST, LAYOUT, "").unwrap();
+        // Empty features should use defaults.
+        let _ = skin.features;
+    }
+
+    #[test]
+    fn manifest_with_extra_fields() {
+        let manifest = r#"
+name = "test"
+version = "1.0"
+future_field = "should be ignored"
+another_unknown = 42
+"#;
+        let skin = Skin::from_toml(manifest, LAYOUT, FEATURES).unwrap();
+        assert_eq!(skin.manifest.name, "test");
+    }
+
+    #[test]
+    fn layout_object_invalid_color() {
+        let layout = r##"
+[obj]
+x = 0
+y = 0
+w = 100
+h = 50
+color = "not_a_color"
+"##;
+        // Invalid color should not crash -- may use fallback or ignore.
+        let skin = Skin::from_toml(MANIFEST, layout, FEATURES).unwrap();
+        assert_eq!(skin.layout.objects.len(), 1);
+    }
+
+    #[test]
+    fn layout_object_empty_color() {
+        let layout = r##"
+[obj]
+x = 0
+y = 0
+w = 100
+h = 50
+color = ""
+"##;
+        let skin = Skin::from_toml(MANIFEST, layout, FEATURES).unwrap();
+        assert_eq!(skin.layout.objects.len(), 1);
+    }
+
+    #[test]
+    fn layout_object_zero_dimensions() {
+        let layout = r##"
+[zero_obj]
+x = 0
+y = 0
+w = 0
+h = 0
+color = "#FF0000"
+"##;
+        let skin = Skin::from_toml(MANIFEST, layout, FEATURES).unwrap();
+        assert_eq!(skin.layout.objects.len(), 1);
+    }
+
+    #[test]
+    fn layout_object_negative_position() {
+        let layout = r##"
+[neg_obj]
+x = -100
+y = -50
+w = 200
+h = 100
+color = "#00FF00"
+"##;
+        let skin = Skin::from_toml(MANIFEST, layout, FEATURES).unwrap();
+        assert_eq!(skin.layout.objects.len(), 1);
+    }
+
+    #[test]
+    fn layout_many_objects() {
+        let mut layout = String::new();
+        for i in 0..100 {
+            layout.push_str(&format!(
+                r##"
+[obj_{i}]
+x = {x}
+y = {y}
+w = 10
+h = 10
+color = "#AABBCC"
+"##,
+                x = (i % 48) * 10,
+                y = (i / 48) * 10,
+            ));
+        }
+        let skin = Skin::from_toml(MANIFEST, &layout, FEATURES).unwrap();
+        assert_eq!(skin.layout.objects.len(), 100);
+    }
+
+    #[test]
+    fn features_boolean_fields() {
+        let features = r#"
+dashboard = false
+terminal = false
+file_browser = false
+browser = false
+window_manager = true
+"#;
+        let skin = Skin::from_toml(MANIFEST, LAYOUT, features).unwrap();
+        assert!(!skin.features.dashboard);
+        assert!(skin.features.window_manager);
+    }
+
+    #[test]
+    fn manifest_unicode_name() {
+        let manifest = r#"
+name = "スキン"
+version = "1.0"
+author = "テスト"
+"#;
+        let skin = Skin::from_toml(manifest, LAYOUT, FEATURES).unwrap();
+        assert_eq!(skin.manifest.name, "スキン");
+    }
+
+    #[test]
+    fn manifest_very_long_name() {
+        let name = "x".repeat(1000);
+        let manifest = format!("name = \"{name}\"");
+        let skin = Skin::from_toml(&manifest, LAYOUT, FEATURES).unwrap();
+        assert_eq!(skin.manifest.name.len(), 1000);
+    }
 }

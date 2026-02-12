@@ -769,4 +769,327 @@ mod tests {
             oasis_add_vfs_file(null, std::ptr::null(), std::ptr::null(), 0);
         }
     }
+
+    // -- Edge case tests --
+
+    #[test]
+    fn send_command_empty_string() {
+        let handle = create_instance();
+        let cmd = CString::new("").unwrap();
+        let result = unsafe { oasis_send_command(handle, cmd.as_ptr()) };
+        assert!(!result.is_null());
+        // Empty command produces empty output (CommandOutput::None)
+        unsafe { oasis_free_string(result) };
+        unsafe { oasis_destroy(handle) };
+    }
+
+    #[test]
+    fn send_command_null_cmd() {
+        let handle = create_instance();
+        let result = unsafe { oasis_send_command(handle, std::ptr::null()) };
+        assert!(result.is_null());
+        unsafe { oasis_destroy(handle) };
+    }
+
+    #[test]
+    fn tick_large_delta() {
+        let handle = create_instance();
+        // Very large delta should not crash.
+        unsafe { oasis_tick(handle, 1_000_000.0) };
+        unsafe { oasis_destroy(handle) };
+    }
+
+    #[test]
+    fn tick_zero_delta() {
+        let handle = create_instance();
+        unsafe { oasis_tick(handle, 0.0) };
+        unsafe { oasis_destroy(handle) };
+    }
+
+    #[test]
+    fn tick_negative_delta() {
+        let handle = create_instance();
+        unsafe { oasis_tick(handle, -1.0) };
+        unsafe { oasis_destroy(handle) };
+    }
+
+    #[test]
+    fn multiple_ticks() {
+        let handle = create_instance();
+        for _ in 0..100 {
+            unsafe { oasis_tick(handle, 0.016) };
+        }
+        unsafe { oasis_destroy(handle) };
+    }
+
+    #[test]
+    fn add_vfs_file_empty_data() {
+        let handle = create_instance();
+        let path = CString::new("/tmp/empty.txt").unwrap();
+        let data: &[u8] = &[];
+        unsafe { oasis_add_vfs_file(handle, path.as_ptr(), data.as_ptr(), 0) };
+
+        let cmd = CString::new("cat /tmp/empty.txt").unwrap();
+        let result = unsafe { oasis_send_command(handle, cmd.as_ptr()) };
+        assert!(!result.is_null());
+        unsafe { oasis_free_string(result) };
+        unsafe { oasis_destroy(handle) };
+    }
+
+    #[test]
+    fn add_vfs_file_null_data() {
+        let handle = create_instance();
+        let path = CString::new("/tmp/null.txt").unwrap();
+        // Null data pointer should be handled safely.
+        unsafe { oasis_add_vfs_file(handle, path.as_ptr(), std::ptr::null(), 0) };
+        unsafe { oasis_destroy(handle) };
+    }
+
+    #[test]
+    fn add_vfs_file_null_path() {
+        let handle = create_instance();
+        let data = b"hello";
+        // Null path should be handled safely.
+        unsafe { oasis_add_vfs_file(handle, std::ptr::null(), data.as_ptr(), data.len() as u32) };
+        unsafe { oasis_destroy(handle) };
+    }
+
+    #[test]
+    fn get_buffer_null_out_params() {
+        let handle = create_instance();
+        // Null out_width and out_height should be handled.
+        let ptr = unsafe { oasis_get_buffer(handle, std::ptr::null_mut(), std::ptr::null_mut()) };
+        assert!(!ptr.is_null());
+        unsafe { oasis_destroy(handle) };
+    }
+
+    #[test]
+    fn get_buffer_stable_across_ticks() {
+        let handle = create_instance();
+        let mut w1: u32 = 0;
+        let mut h1: u32 = 0;
+        let ptr1 = unsafe { oasis_get_buffer(handle, &mut w1, &mut h1) };
+
+        unsafe { oasis_tick(handle, 0.016) };
+
+        let mut w2: u32 = 0;
+        let mut h2: u32 = 0;
+        let ptr2 = unsafe { oasis_get_buffer(handle, &mut w2, &mut h2) };
+
+        // Dimensions should remain stable.
+        assert_eq!(w1, w2);
+        assert_eq!(h1, h2);
+        // Buffer pointer should be stable (same backing allocation).
+        assert_eq!(ptr1, ptr2);
+        unsafe { oasis_destroy(handle) };
+    }
+
+    #[test]
+    fn set_vfs_root_then_add_file() {
+        let handle = create_instance();
+        // Add a file, reset VFS, add another file.
+        let path1 = CString::new("/home/first.txt").unwrap();
+        let data1 = b"first";
+        unsafe { oasis_add_vfs_file(handle, path1.as_ptr(), data1.as_ptr(), data1.len() as u32) };
+
+        unsafe { oasis_set_vfs_root(handle, std::ptr::null()) };
+
+        let path2 = CString::new("/home/second.txt").unwrap();
+        let data2 = b"second";
+        unsafe { oasis_add_vfs_file(handle, path2.as_ptr(), data2.as_ptr(), data2.len() as u32) };
+
+        // first.txt should be gone after reset.
+        let cmd = CString::new("cat /home/first.txt").unwrap();
+        let result = unsafe { oasis_send_command(handle, cmd.as_ptr()) };
+        let output = unsafe { CStr::from_ptr(result) }.to_string_lossy();
+        assert!(
+            output.contains("error"),
+            "first.txt should be gone after reset"
+        );
+        unsafe { oasis_free_string(result) };
+
+        // second.txt should exist.
+        let cmd = CString::new("cat /home/second.txt").unwrap();
+        let result = unsafe { oasis_send_command(handle, cmd.as_ptr()) };
+        let output = unsafe { CStr::from_ptr(result) }.to_string_lossy();
+        assert!(output.contains("second"));
+        unsafe { oasis_free_string(result) };
+
+        unsafe { oasis_destroy(handle) };
+    }
+
+    #[test]
+    fn send_input_all_event_types() {
+        let handle = create_instance();
+        let events = [
+            OasisInputEvent {
+                event_type: OASIS_EVENT_CURSOR_MOVE,
+                x: 100,
+                y: 100,
+                key: 0,
+                character: 0,
+            },
+            OasisInputEvent {
+                event_type: OASIS_EVENT_BUTTON_PRESS,
+                x: 0,
+                y: 0,
+                key: OASIS_BUTTON_UP,
+                character: 0,
+            },
+            OasisInputEvent {
+                event_type: OASIS_EVENT_BUTTON_RELEASE,
+                x: 0,
+                y: 0,
+                key: OASIS_BUTTON_UP,
+                character: 0,
+            },
+            OasisInputEvent {
+                event_type: OASIS_EVENT_TRIGGER_PRESS,
+                x: 0,
+                y: 0,
+                key: OASIS_TRIGGER_LEFT,
+                character: 0,
+            },
+            OasisInputEvent {
+                event_type: OASIS_EVENT_TRIGGER_RELEASE,
+                x: 0,
+                y: 0,
+                key: OASIS_TRIGGER_RIGHT,
+                character: 0,
+            },
+            OasisInputEvent {
+                event_type: OASIS_EVENT_TEXT_INPUT,
+                x: 0,
+                y: 0,
+                key: 0,
+                character: 'Z' as u32,
+            },
+            OasisInputEvent {
+                event_type: OASIS_EVENT_POINTER_CLICK,
+                x: 50,
+                y: 50,
+                key: 0,
+                character: 0,
+            },
+            OasisInputEvent {
+                event_type: OASIS_EVENT_POINTER_RELEASE,
+                x: 50,
+                y: 50,
+                key: 0,
+                character: 0,
+            },
+            OasisInputEvent {
+                event_type: OASIS_EVENT_FOCUS_GAINED,
+                x: 0,
+                y: 0,
+                key: 0,
+                character: 0,
+            },
+            OasisInputEvent {
+                event_type: OASIS_EVENT_FOCUS_LOST,
+                x: 0,
+                y: 0,
+                key: 0,
+                character: 0,
+            },
+        ];
+        for evt in &events {
+            unsafe { oasis_send_input(handle, evt) };
+        }
+        unsafe { oasis_tick(handle, 0.016) };
+        unsafe { oasis_destroy(handle) };
+    }
+
+    #[test]
+    fn send_input_invalid_button_code() {
+        let handle = create_instance();
+        let evt = OasisInputEvent {
+            event_type: OASIS_EVENT_BUTTON_PRESS,
+            x: 0,
+            y: 0,
+            key: 999, // Invalid button code
+            character: 0,
+        };
+        // Should not crash -- invalid code is silently ignored.
+        unsafe { oasis_send_input(handle, &evt) };
+        unsafe { oasis_tick(handle, 0.016) };
+        unsafe { oasis_destroy(handle) };
+    }
+
+    #[test]
+    fn send_input_invalid_event_type() {
+        let handle = create_instance();
+        let evt = OasisInputEvent {
+            event_type: 999,
+            x: 0,
+            y: 0,
+            key: 0,
+            character: 0,
+        };
+        unsafe { oasis_send_input(handle, &evt) };
+        unsafe { oasis_tick(handle, 0.016) };
+        unsafe { oasis_destroy(handle) };
+    }
+
+    #[test]
+    fn send_input_null_event() {
+        let handle = create_instance();
+        unsafe { oasis_send_input(handle, std::ptr::null()) };
+        unsafe { oasis_destroy(handle) };
+    }
+
+    #[test]
+    fn cwd_persists_across_commands() {
+        let handle = create_instance();
+
+        let cmd = CString::new("cd /home").unwrap();
+        let result = unsafe { oasis_send_command(handle, cmd.as_ptr()) };
+        unsafe { oasis_free_string(result) };
+
+        let cmd = CString::new("pwd").unwrap();
+        let result = unsafe { oasis_send_command(handle, cmd.as_ptr()) };
+        let output = unsafe { CStr::from_ptr(result) }.to_string_lossy();
+        assert!(output.contains("/home"));
+        unsafe { oasis_free_string(result) };
+
+        unsafe { oasis_destroy(handle) };
+    }
+
+    #[test]
+    fn button_from_code_all_valid() {
+        assert_eq!(button_from_code(OASIS_BUTTON_UP), Some(Button::Up));
+        assert_eq!(button_from_code(OASIS_BUTTON_DOWN), Some(Button::Down));
+        assert_eq!(button_from_code(OASIS_BUTTON_LEFT), Some(Button::Left));
+        assert_eq!(button_from_code(OASIS_BUTTON_RIGHT), Some(Button::Right));
+        assert_eq!(
+            button_from_code(OASIS_BUTTON_CONFIRM),
+            Some(Button::Confirm)
+        );
+        assert_eq!(button_from_code(OASIS_BUTTON_CANCEL), Some(Button::Cancel));
+        assert_eq!(
+            button_from_code(OASIS_BUTTON_TRIANGLE),
+            Some(Button::Triangle)
+        );
+        assert_eq!(button_from_code(OASIS_BUTTON_SQUARE), Some(Button::Square));
+        assert_eq!(button_from_code(OASIS_BUTTON_START), Some(Button::Start));
+        assert_eq!(button_from_code(OASIS_BUTTON_SELECT), Some(Button::Select));
+    }
+
+    #[test]
+    fn button_from_code_invalid() {
+        assert_eq!(button_from_code(10), None);
+        assert_eq!(button_from_code(u32::MAX), None);
+    }
+
+    #[test]
+    fn trigger_from_code_all_valid() {
+        assert_eq!(trigger_from_code(OASIS_TRIGGER_LEFT), Some(Trigger::Left));
+        assert_eq!(trigger_from_code(OASIS_TRIGGER_RIGHT), Some(Trigger::Right));
+    }
+
+    #[test]
+    fn trigger_from_code_invalid() {
+        assert_eq!(trigger_from_code(2), None);
+        assert_eq!(trigger_from_code(u32::MAX), None);
+    }
 }

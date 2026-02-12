@@ -60,6 +60,11 @@ impl Shadow {
         self
     }
 
+    #[cfg(test)]
+    fn layer_count(&self) -> usize {
+        self.layers.len()
+    }
+
     /// Predefined elevation levels.
     pub fn elevation(level: u8) -> Self {
         match level {
@@ -140,5 +145,76 @@ impl Shadow {
                 ],
             },
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn none_has_no_layers() {
+        let s = Shadow::none();
+        assert_eq!(s.layer_count(), 0);
+    }
+
+    #[test]
+    fn elevation_0_is_none() {
+        let s = Shadow::elevation(0);
+        assert_eq!(s.layer_count(), 0);
+    }
+
+    #[test]
+    fn elevation_1_has_two_layers() {
+        let s = Shadow::elevation(1);
+        assert_eq!(s.layer_count(), 2);
+    }
+
+    #[test]
+    fn elevation_2_has_three_layers() {
+        let s = Shadow::elevation(2);
+        assert_eq!(s.layer_count(), 3);
+    }
+
+    #[test]
+    fn elevation_3_has_four_layers() {
+        let s = Shadow::elevation(3);
+        assert_eq!(s.layer_count(), 4);
+    }
+
+    #[test]
+    fn elevation_high_same_as_3() {
+        let s = Shadow::elevation(255);
+        assert_eq!(s.layer_count(), 4);
+    }
+
+    #[test]
+    fn with_color_changes_all_layers() {
+        let s = Shadow::elevation(2).with_color(Color::rgb(255, 0, 0));
+        for layer in &s.layers {
+            assert_eq!(layer.color, Color::rgb(255, 0, 0));
+        }
+    }
+
+    #[test]
+    fn higher_elevation_larger_offsets() {
+        let s1 = Shadow::elevation(1);
+        let s3 = Shadow::elevation(3);
+        let max_offset_1 = s1.layers.iter().map(|l| l.offset_y).max().unwrap();
+        let max_offset_3 = s3.layers.iter().map(|l| l.offset_y).max().unwrap();
+        assert!(max_offset_3 > max_offset_1);
+    }
+
+    #[test]
+    fn shadow_is_debug() {
+        let s = Shadow::elevation(1);
+        let _ = format!("{s:?}");
+    }
+
+    #[test]
+    fn shadow_clone() {
+        let s = Shadow::elevation(2);
+        let s2 = s.clone();
+        assert_eq!(s.layer_count(), s2.layer_count());
     }
 }

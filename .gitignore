@@ -46,6 +46,10 @@ node_modules/
 # MCP output
 outputs/
 
+# Screenshot test output (generated, not committed)
+screenshots/tests/
+screenshots/psp/
+
 # Scratch
 scratch/
 .local/

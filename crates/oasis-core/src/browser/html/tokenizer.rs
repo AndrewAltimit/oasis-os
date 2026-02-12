@@ -2049,4 +2049,175 @@ mod tests {
         assert_eq!(tokens.len(), 1);
         assert_eq!(tokens[0], Token::Character("a & b".into()));
     }
+
+    // -- robustness / edge cases ----------------------------------------
+
+    #[test]
+    fn unclosed_tag_at_eof() {
+        // Unclosed start tag should not panic; tokenizer may drop it.
+        let tokens = tok("<div");
+        let _ = tokens;
+    }
+
+    #[test]
+    fn unclosed_attribute_value_at_eof() {
+        // Incomplete attribute value at EOF should not panic.
+        let tokens = tok(r#"<div class="open"#);
+        let _ = tokens;
+    }
+
+    #[test]
+    fn deeply_nested_tags() {
+        // 200 levels of nesting -- tokenizer should handle without stack overflow.
+        let open: String = (0..200).map(|_| "<div>").collect();
+        let close: String = (0..200).map(|_| "</div>").collect();
+        let html = format!("{open}leaf{close}");
+        let tokens = tok(&html);
+        assert!(tokens.len() >= 401); // 200 open + 1 text + 200 close
+    }
+
+    #[test]
+    fn very_long_attribute_value() {
+        let val = "x".repeat(10_000);
+        let html = format!(r#"<div data="{val}"></div>"#);
+        let tokens = tok(&html);
+        assert_eq!(tokens.len(), 2); // start + end
+        if let Token::StartTag(ref tag) = tokens[0] {
+            assert_eq!(tag.attributes[0].value.len(), 10_000);
+        } else {
+            panic!("expected start tag");
+        }
+    }
+
+    #[test]
+    fn very_long_tag_name() {
+        let name = "a".repeat(5_000);
+        let html = format!("<{name}>text</{name}>");
+        let tokens = tok(&html);
+        assert_eq!(tokens.len(), 3);
+    }
+
+    #[test]
+    fn extremely_long_text_content() {
+        let text = "w ".repeat(50_000);
+        let html = format!("<p>{text}</p>");
+        let tokens = tok(&html);
+        assert!(tokens.len() >= 2);
+    }
+
+    #[test]
+    fn null_bytes_in_content() {
+        let tokens = tok("<p>before\0after</p>");
+        assert!(!tokens.is_empty());
+    }
+
+    #[test]
+    fn null_bytes_in_tag_name() {
+        let tokens = tok("<di\0v>text</di\0v>");
+        // Should not panic; exact behavior is implementation-defined.
+        assert!(!tokens.is_empty());
+    }
+
+    #[test]
+    fn many_attributes_same_tag() {
+        let attrs: String = (0..100).map(|i| format!(r#" a{i}="v{i}""#)).collect();
+        let html = format!("<div{attrs}>x</div>");
+        let tokens = tok(&html);
+        if let Token::StartTag(ref tag) = tokens[0] {
+            assert_eq!(tag.attributes.len(), 100);
+        } else {
+            panic!("expected start tag");
+        }
+    }
+
+    #[test]
+    fn unquoted_attribute_value() {
+        let tokens = tok("<div class=foo></div>");
+        if let Token::StartTag(ref tag) = tokens[0] {
+            assert_eq!(tag.attributes[0].value, "foo");
+        } else {
+            panic!("expected start tag");
+        }
+    }
+
+    #[test]
+    fn single_quoted_attribute_edge() {
+        let tokens = tok("<div class='bar'></div>");
+        if let Token::StartTag(ref tag) = tokens[0] {
+            assert_eq!(tag.attributes[0].value, "bar");
+        } else {
+            panic!("expected start tag");
+        }
+    }
+
+    #[test]
+    fn multiple_unclosed_tags() {
+        let tokens = tok("<div><span><b>text");
+        assert!(tokens.len() >= 4); // 3 opens + text
+    }
+
+    #[test]
+    fn mismatched_closing_tags() {
+        // </span> when only <div> is open -- should not panic.
+        let tokens = tok("<div>text</span></div>");
+        assert!(!tokens.is_empty());
+    }
+
+    #[test]
+    fn empty_tag() {
+        let tokens = tok("<>text</>");
+        // Empty tag names -- should not panic.
+        assert!(!tokens.is_empty());
+    }
+
+    #[test]
+    fn angle_brackets_in_text() {
+        let tokens = tok("<p>1 < 2 and 3 > 1</p>");
+        assert!(!tokens.is_empty());
+    }
+
+    #[test]
+    fn only_whitespace() {
+        let tokens = tok("   \n\t\r\n   ");
+        // May produce character tokens or nothing; should not panic.
+        let _ = tokens;
+    }
+
+    #[test]
+    fn empty_input_edge_case() {
+        let tokens = tok("");
+        assert!(tokens.is_empty());
+    }
+
+    #[test]
+    fn cdata_like_content() {
+        let tokens = tok("<p><![CDATA[some data]]></p>");
+        // Not real CDATA in HTML; should not panic.
+        assert!(!tokens.is_empty());
+    }
+
+    #[test]
+    fn nested_comments() {
+        let tokens = tok("<!-- outer <!-- inner --> rest -->");
+        // HTML does not support nested comments; should not panic.
+        assert!(!tokens.is_empty());
+    }
+
+    #[test]
+    fn comment_with_many_dashes() {
+        let tokens = tok("<!-- -- --- ---->");
+        let _ = tokens; // Should not panic.
+    }
+
+    #[test]
+    fn doctype_token() {
+        let tokens = tok("<!DOCTYPE html><html></html>");
+        assert!(!tokens.is_empty());
+    }
+
+    #[test]
+    fn consecutive_self_closing_tags() {
+        let tokens = tok("<br/><hr/><img/>");
+        assert_eq!(tokens.len(), 3);
+    }
 }

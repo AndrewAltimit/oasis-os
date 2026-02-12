@@ -69,6 +69,117 @@ impl InputField {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn new_defaults() {
+        let f = InputField::new();
+        assert!(f.text.is_empty());
+        assert!(f.placeholder.is_empty());
+        assert_eq!(f.cursor_pos, 0);
+        assert!(f.selection.is_none());
+        assert!(!f.focused);
+        assert!(!f.password_mode);
+    }
+
+    #[test]
+    fn insert_char() {
+        let mut f = InputField::new();
+        f.insert('A');
+        assert_eq!(f.text, "A");
+        assert_eq!(f.cursor_pos, 1);
+    }
+
+    #[test]
+    fn insert_multiple_chars() {
+        let mut f = InputField::new();
+        for ch in "Hello".chars() {
+            f.insert(ch);
+        }
+        assert_eq!(f.text, "Hello");
+        assert_eq!(f.cursor_pos, 5);
+    }
+
+    #[test]
+    fn backspace_removes_char() {
+        let mut f = InputField::new();
+        f.insert('A');
+        f.insert('B');
+        f.backspace();
+        assert_eq!(f.text, "A");
+        assert_eq!(f.cursor_pos, 1);
+    }
+
+    #[test]
+    fn backspace_at_start_does_nothing() {
+        let mut f = InputField::new();
+        f.backspace();
+        assert!(f.text.is_empty());
+        assert_eq!(f.cursor_pos, 0);
+    }
+
+    #[test]
+    fn backspace_all_chars() {
+        let mut f = InputField::new();
+        f.insert('X');
+        f.insert('Y');
+        f.backspace();
+        f.backspace();
+        assert!(f.text.is_empty());
+        assert_eq!(f.cursor_pos, 0);
+    }
+
+    #[test]
+    fn insert_unicode() {
+        let mut f = InputField::new();
+        f.insert('\u{00E9}'); // é
+        f.insert('\u{1F600}'); // emoji
+        assert_eq!(f.text.chars().count(), 2);
+        assert_eq!(f.cursor_pos, 2);
+    }
+
+    #[test]
+    fn backspace_unicode() {
+        let mut f = InputField::new();
+        f.insert('\u{00E9}');
+        f.insert('\u{1F600}');
+        f.backspace();
+        assert_eq!(f.text, "\u{00E9}");
+        assert_eq!(f.cursor_pos, 1);
+    }
+
+    #[test]
+    fn password_mode_display() {
+        let mut f = InputField::new();
+        f.password_mode = true;
+        f.insert('s');
+        f.insert('e');
+        f.insert('c');
+        let display = f.display_text();
+        assert_eq!(display, "***");
+    }
+
+    #[test]
+    fn normal_mode_display() {
+        let mut f = InputField::new();
+        f.insert('h');
+        f.insert('i');
+        let display = f.display_text();
+        assert_eq!(display, "hi");
+    }
+
+    #[test]
+    fn default_same_as_new() {
+        let a = InputField::new();
+        let b = InputField::default();
+        assert_eq!(a.text, b.text);
+        assert_eq!(a.cursor_pos, b.cursor_pos);
+        assert_eq!(a.focused, b.focused);
+    }
+}
+
 impl Default for InputField {
     fn default() -> Self {
         Self::new()

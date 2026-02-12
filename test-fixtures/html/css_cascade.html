@@ -1,0 +1,18 @@
+<html>
+<head>
+<style>
+  p { color: blue; }
+  .highlight { color: red; }
+  #special { color: green; }
+  div p { font-size: 10px; }
+</style>
+</head>
+<body>
+<p>Blue paragraph (element selector)</p>
+<p class="highlight">Red paragraph (class selector wins)</p>
+<p id="special" class="highlight">Green paragraph (id selector wins)</p>
+<div>
+  <p>Larger text inside div (descendant selector)</p>
+</div>
+</body>
+</html>

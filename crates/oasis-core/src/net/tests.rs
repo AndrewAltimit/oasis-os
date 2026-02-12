@@ -374,3 +374,158 @@ fn parse_empty_hosts() {
     let hosts = hosts::parse_hosts("").unwrap();
     assert!(hosts.is_empty());
 }
+
+// ---------------------------------------------------------------------------
+// Robustness / edge cases
+// ---------------------------------------------------------------------------
+
+#[test]
+fn parse_hosts_missing_name() {
+    let toml = r#"
+[[host]]
+address = "10.0.0.1"
+"#;
+    // Missing required `name` field -- should fail gracefully.
+    let result = hosts::parse_hosts(toml);
+    assert!(result.is_err());
+}
+
+#[test]
+fn parse_hosts_missing_address() {
+    let toml = r#"
+[[host]]
+name = "test"
+"#;
+    let result = hosts::parse_hosts(toml);
+    assert!(result.is_err());
+}
+
+#[test]
+fn parse_hosts_invalid_toml() {
+    let result = hosts::parse_hosts("{{{{not valid toml}}}}");
+    assert!(result.is_err());
+}
+
+#[test]
+fn parse_hosts_extra_fields_ignored() {
+    let toml = r#"
+[[host]]
+name = "test"
+address = "10.0.0.1"
+unknown_field = "should be ignored"
+"#;
+    // Extra fields should not cause a parse error.
+    let result = hosts::parse_hosts(toml);
+    assert!(result.is_ok());
+}
+
+#[test]
+fn parse_hosts_unicode_name() {
+    let toml = r#"
+[[host]]
+name = "서버"
+address = "10.0.0.1"
+"#;
+    let hosts = hosts::parse_hosts(toml).unwrap();
+    assert_eq!(hosts[0].name, "서버");
+}
+
+#[test]
+fn parse_hosts_port_zero() {
+    let toml = r#"
+[[host]]
+name = "test"
+address = "10.0.0.1"
+port = 0
+"#;
+    let hosts = hosts::parse_hosts(toml).unwrap();
+    assert_eq!(hosts[0].port, 0);
+}
+
+#[test]
+fn parse_hosts_many_entries() {
+    let mut toml = String::new();
+    for i in 0..50 {
+        toml.push_str(&format!(
+            r#"
+[[host]]
+name = "host_{i}"
+address = "10.0.0.{}"
+"#,
+            i % 256
+        ));
+    }
+    let hosts = hosts::parse_hosts(&toml).unwrap();
+    assert_eq!(hosts.len(), 50);
+}
+
+#[test]
+fn parse_hosts_empty_name() {
+    let toml = r#"
+[[host]]
+name = ""
+address = "10.0.0.1"
+"#;
+    // Empty string name is technically valid TOML -- should parse.
+    let hosts = hosts::parse_hosts(toml).unwrap();
+    assert_eq!(hosts[0].name, "");
+}
+
+#[test]
+fn parse_hosts_psk_special_chars() {
+    let toml = r#"
+[[host]]
+name = "secure"
+address = "10.0.0.1"
+psk = "p@ss w0rd!#$%^&*()"
+"#;
+    let hosts = hosts::parse_hosts(toml).unwrap();
+    assert_eq!(hosts[0].psk, Some("p@ss w0rd!#$%^&*()".to_string()));
+}
+
+#[test]
+fn listener_double_stop_is_ok() {
+    let port = free_port();
+    let config = ListenerConfig {
+        port,
+        psk: String::new(),
+        max_connections: 2,
+    };
+    let mut listener = RemoteListener::new(config);
+    let mut backend = StdNetworkBackend::new();
+    listener.start(&mut backend).unwrap();
+    listener.stop();
+    // Double stop should not panic.
+    listener.stop();
+}
+
+#[test]
+fn listener_start_stop_start() {
+    let port1 = free_port();
+    let config1 = ListenerConfig {
+        port: port1,
+        psk: String::new(),
+        max_connections: 2,
+    };
+    let mut listener = RemoteListener::new(config1);
+    let mut backend = StdNetworkBackend::new();
+    listener.start(&mut backend).unwrap();
+    listener.stop();
+
+    let port2 = free_port();
+    let config2 = ListenerConfig {
+        port: port2,
+        psk: String::new(),
+        max_connections: 2,
+    };
+    let mut listener2 = RemoteListener::new(config2);
+    listener2.start(&mut backend).unwrap();
+    assert!(listener2.is_listening());
+    listener2.stop();
+}
+
+#[test]
+fn client_default_not_connected() {
+    let client = RemoteClient::new();
+    assert!(!client.is_connected());
+}

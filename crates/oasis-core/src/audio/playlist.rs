@@ -517,4 +517,146 @@ mod tests {
         assert!(!pl.advance());
         assert!(!pl.go_back());
     }
+
+    mod prop {
+        use super::*;
+        use crate::audio::types::TrackInfo;
+        use proptest::prelude::*;
+
+        fn arb_track() -> impl Strategy<Value = TrackInfo> {
+            ("[a-z]{1,10}", "[a-z]{1,10}", 0u64..600_000).prop_map(|(title, artist, dur)| {
+                TrackInfo::from_path(&format!("/music/{title}.mp3"))
+                    .with_title(&title)
+                    .with_artist(&artist)
+                    .with_duration_ms(dur)
+            })
+        }
+
+        fn arb_tracks(min: usize, max: usize) -> impl Strategy<Value = Vec<TrackInfo>> {
+            proptest::collection::vec(arb_track(), min..max)
+        }
+
+        proptest! {
+            #[test]
+            fn len_equals_added_count(tracks in arb_tracks(0, 20)) {
+                let mut pl = Playlist::new();
+                for t in &tracks {
+                    pl.add(t.clone());
+                }
+                prop_assert_eq!(pl.len(), tracks.len());
+            }
+
+            #[test]
+            fn add_then_remove_restores_len(tracks in arb_tracks(1, 10)) {
+                let mut pl = Playlist::new();
+                let n = tracks.len();
+                for t in tracks {
+                    pl.add(t);
+                }
+                for i in (0..n).rev() {
+                    pl.remove(i);
+                }
+                prop_assert!(pl.is_empty());
+                prop_assert_eq!(pl.len(), 0);
+            }
+
+            #[test]
+            fn set_current_valid_index(tracks in arb_tracks(1, 10), idx_frac in 0.0f64..1.0) {
+                let mut pl = Playlist::new();
+                for t in &tracks {
+                    pl.add(t.clone());
+                }
+                let idx = (idx_frac * tracks.len() as f64) as usize;
+                let idx = idx.min(tracks.len() - 1);
+                prop_assert!(pl.set_current(idx));
+                prop_assert_eq!(pl.current_index(), Some(idx));
+            }
+
+            #[test]
+            fn set_current_invalid_index_fails(tracks in arb_tracks(1, 10)) {
+                let mut pl = Playlist::new();
+                for t in &tracks {
+                    pl.add(t.clone());
+                }
+                prop_assert!(!pl.set_current(tracks.len()));
+                prop_assert!(!pl.set_current(tracks.len() + 100));
+            }
+
+            #[test]
+            fn advance_through_all_with_repeat_all(tracks in arb_tracks(1, 10)) {
+                let mut pl = Playlist::new();
+                for t in &tracks {
+                    pl.add(t.clone());
+                }
+                pl.repeat = RepeatMode::All;
+                // Advance len+1 times -- should wrap around.
+                for _ in 0..=tracks.len() {
+                    prop_assert!(pl.advance());
+                }
+                // After wrapping, current should be a valid index.
+                let idx = pl.current_index().unwrap();
+                prop_assert!(idx < tracks.len());
+            }
+
+            #[test]
+            fn go_back_through_all_with_repeat_all(tracks in arb_tracks(1, 10)) {
+                let mut pl = Playlist::new();
+                for t in &tracks {
+                    pl.add(t.clone());
+                }
+                pl.repeat = RepeatMode::All;
+                pl.set_current(0);
+                // go_back at index 0 with RepeatAll should wrap to last.
+                prop_assert!(pl.go_back());
+                prop_assert_eq!(pl.current_index(), Some(tracks.len() - 1));
+            }
+
+            #[test]
+            fn repeat_one_stays_on_same(tracks in arb_tracks(1, 10), idx_frac in 0.0f64..1.0) {
+                let mut pl = Playlist::new();
+                for t in &tracks {
+                    pl.add(t.clone());
+                }
+                let idx = (idx_frac * tracks.len() as f64).min(tracks.len() as f64 - 1.0) as usize;
+                pl.set_current(idx);
+                pl.repeat = RepeatMode::One;
+                prop_assert!(pl.advance());
+                prop_assert_eq!(pl.current_index(), Some(idx));
+                prop_assert!(pl.go_back());
+                prop_assert_eq!(pl.current_index(), Some(idx));
+            }
+
+            #[test]
+            fn clear_empties_everything(tracks in arb_tracks(1, 10)) {
+                let mut pl = Playlist::new();
+                for t in tracks {
+                    pl.add(t);
+                }
+                pl.set_current(0);
+                pl.clear();
+                prop_assert!(pl.is_empty());
+                prop_assert_eq!(pl.len(), 0);
+                prop_assert!(pl.current_track().is_none());
+            }
+
+            #[test]
+            fn remove_keeps_valid_current(
+                tracks in arb_tracks(2, 10),
+                remove_idx_frac in 0.0f64..1.0,
+            ) {
+                let mut pl = Playlist::new();
+                for t in &tracks {
+                    pl.add(t.clone());
+                }
+                pl.set_current(0);
+                let remove_idx = (remove_idx_frac * tracks.len() as f64)
+                    .min(tracks.len() as f64 - 1.0) as usize;
+                pl.remove(remove_idx);
+                // After removal, current_index (if Some) must be in bounds.
+                if let Some(cur) = pl.current_index() {
+                    prop_assert!(cur < pl.len(), "current index out of bounds: {cur} >= {}", pl.len());
+                }
+            }
+        }
+    }
 }
