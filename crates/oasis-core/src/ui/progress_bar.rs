@@ -76,6 +76,105 @@ mod tests {
         let p = ProgressBar::new(1.0);
         assert!((p.value - 1.0).abs() < f32::EPSILON);
     }
+
+    // -- Draw / measure tests using MockBackend --
+
+    use crate::browser::test_utils::MockBackend;
+    use crate::ui::context::DrawContext;
+    use crate::ui::theme::Theme;
+    use crate::ui::widget::Widget;
+
+    #[test]
+    fn measure_returns_fixed_dimensions() {
+        let p = ProgressBar::new(0.5);
+        let theme = Theme::dark();
+        let mut backend = MockBackend::new();
+        let ctx = DrawContext::new(&mut backend, &theme);
+        let (w, h) = p.measure(&ctx, 200, 100);
+        // Bar style: returns (available_w, 8).
+        assert_eq!(w, 200);
+        assert_eq!(h, 8);
+    }
+
+    #[test]
+    fn draw_bar_fill_proportional() {
+        let p = ProgressBar::new(0.5);
+        let theme = Theme::dark();
+        let mut backend = MockBackend::new();
+        {
+            let mut ctx = DrawContext::new(&mut backend, &theme);
+            p.draw(&mut ctx, 0, 0, 100, 8).unwrap();
+        }
+        // At least 2 fill_rect calls: one for track, one for fill.
+        assert!(backend.fill_rect_count() >= 2);
+    }
+
+    #[test]
+    fn draw_zero_progress() {
+        let p = ProgressBar::new(0.0);
+        let theme = Theme::dark();
+        let mut backend = MockBackend::new();
+        {
+            let mut ctx = DrawContext::new(&mut backend, &theme);
+            p.draw(&mut ctx, 0, 0, 100, 8).unwrap();
+        }
+        // fill_w = 0, so only the track is drawn (1 fill_rect).
+        assert!(backend.fill_rect_count() >= 1);
+    }
+
+    #[test]
+    fn draw_full_progress() {
+        let p = ProgressBar::new(1.0);
+        let theme = Theme::dark();
+        let mut backend = MockBackend::new();
+        {
+            let mut ctx = DrawContext::new(&mut backend, &theme);
+            p.draw(&mut ctx, 0, 0, 100, 8).unwrap();
+        }
+        // Track + full fill bar = at least 2 fill_rect calls.
+        assert!(backend.fill_rect_count() >= 2);
+    }
+
+    #[test]
+    fn value_clamped_below_zero() {
+        let p = ProgressBar::new(-0.5);
+        assert!((p.value - 0.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn value_clamped_above_one() {
+        let p = ProgressBar::new(1.5);
+        assert!((p.value - 1.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn label_shows_percentage() {
+        let mut p = ProgressBar::new(0.75);
+        p.show_label = true;
+        let theme = Theme::dark();
+        let mut backend = MockBackend::new();
+        {
+            let mut ctx = DrawContext::new(&mut backend, &theme);
+            p.draw(&mut ctx, 0, 0, 200, 16).unwrap();
+        }
+        // The label should contain "75%".
+        assert!(backend.has_text("75%"));
+    }
+
+    #[test]
+    fn draw_circular_style() {
+        let mut p = ProgressBar::new(0.5);
+        p.style = ProgressStyle::Circular;
+        let theme = Theme::dark();
+        let mut backend = MockBackend::new();
+        {
+            let mut ctx = DrawContext::new(&mut backend, &theme);
+            // Should not panic for circular style.
+            p.draw(&mut ctx, 0, 0, 24, 24).unwrap();
+        }
+        // stroke_circle falls back to fill_circle then fill_rect in mock.
+        assert!(backend.fill_rect_count() >= 1);
+    }
 }
 
 impl Widget for ProgressBar {

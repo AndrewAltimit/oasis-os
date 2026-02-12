@@ -8,19 +8,29 @@ An embeddable operating system framework in Rust. Renders a skinnable shell inte
 |:---:|:---:|
 | ![Dashboard](screenshots/classic/01_dashboard.png) | ![Terminal](screenshots/classic/04_terminal.png) |
 
-| Media Tab | Mods Tab |
-|:---:|:---:|
-| ![Media](screenshots/classic/02_media_tab.png) | ![Mods](screenshots/classic/03_mods_tab.png) |
-
 ### XP Skin
 
 | Dashboard | Terminal |
 |:---:|:---:|
 | ![Dashboard](screenshots/xp/01_dashboard.png) | ![Terminal](screenshots/xp/04_terminal.png) |
 
-| Media Tab | Mods Tab |
+### Modern Skin
+
+| Dashboard | Terminal |
 |:---:|:---:|
-| ![Media](screenshots/xp/02_media_tab.png) | ![Mods](screenshots/xp/03_mods_tab.png) |
+| ![Dashboard](screenshots/modern/01_dashboard.png) | ![Terminal](screenshots/modern/04_terminal.png) |
+
+### Desktop Skin
+
+| Dashboard | Terminal |
+|:---:|:---:|
+| ![Dashboard](screenshots/desktop/01_dashboard.png) | ![Terminal](screenshots/desktop/04_terminal.png) |
+
+### Terminal Skins
+
+| Terminal | Tactical | Corrupted | Agent Terminal |
+|:---:|:---:|:---:|:---:|
+| ![Terminal](screenshots/terminal/04_terminal.png) | ![Tactical](screenshots/tactical/04_terminal.png) | ![Corrupted](screenshots/corrupted/04_terminal.png) | ![Agent](screenshots/agent-terminal/04_terminal.png) |
 
 ## Overview
 
@@ -136,11 +146,14 @@ Capture screenshots for all skins:
 # Classic skin (default)
 cargo run -p oasis-app --bin oasis-screenshot
 
-# XP skin
+# Any skin by name
 cargo run -p oasis-app --bin oasis-screenshot xp
-
-# Or via environment variable
-OASIS_SKIN=xp cargo run -p oasis-app --bin oasis-screenshot
+cargo run -p oasis-app --bin oasis-screenshot modern
+cargo run -p oasis-app --bin oasis-screenshot desktop
+cargo run -p oasis-app --bin oasis-screenshot terminal
+cargo run -p oasis-app --bin oasis-screenshot tactical
+cargo run -p oasis-app --bin oasis-screenshot corrupted
+cargo run -p oasis-app --bin oasis-screenshot agent-terminal
 ```
 
 ## PSP Testing (PPSSPP)

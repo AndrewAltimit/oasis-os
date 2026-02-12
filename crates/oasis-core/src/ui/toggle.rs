@@ -104,6 +104,121 @@ mod tests {
         t.animate(16);
         assert!((t.progress - before).abs() < f32::EPSILON);
     }
+
+    // -- Draw / measure tests using MockBackend --
+
+    use crate::browser::test_utils::MockBackend;
+    use crate::ui::context::DrawContext;
+    use crate::ui::theme::Theme;
+    use crate::ui::widget::Widget;
+
+    #[test]
+    fn measure_returns_fixed_size() {
+        let theme = Theme::dark();
+        let mut backend = MockBackend::new();
+        let ctx = DrawContext::new(&mut backend, &theme);
+        let t = Toggle::new(false);
+        let (w, h) = t.measure(&ctx, 200, 100);
+        assert_eq!(w, 28);
+        assert_eq!(h, 16);
+    }
+
+    #[test]
+    fn draw_off_state_no_panic() {
+        let theme = Theme::dark();
+        let mut backend = MockBackend::new();
+        {
+            let mut ctx = DrawContext::new(&mut backend, &theme);
+            let t = Toggle::new(false);
+            t.draw(&mut ctx, 0, 0, 28, 16).unwrap();
+        }
+        // Should complete without panic.
+        assert!(backend.calls.len() > 0);
+    }
+
+    #[test]
+    fn draw_on_state_no_panic() {
+        let theme = Theme::dark();
+        let mut backend = MockBackend::new();
+        {
+            let mut ctx = DrawContext::new(&mut backend, &theme);
+            let t = Toggle::new(true);
+            t.draw(&mut ctx, 0, 0, 28, 16).unwrap();
+        }
+        assert!(backend.calls.len() > 0);
+    }
+
+    #[test]
+    fn draw_emits_fill_rects() {
+        let theme = Theme::dark();
+        let mut backend = MockBackend::new();
+        {
+            let mut ctx = DrawContext::new(&mut backend, &theme);
+            let t = Toggle::new(true);
+            t.draw(&mut ctx, 10, 20, 28, 16).unwrap();
+        }
+        // fill_rounded_rect -> fill_rect (track) + fill_circle -> fill_rect (thumb)
+        assert!(
+            backend.fill_rect_count() > 0,
+            "draw should emit fill_rect calls for track and thumb"
+        );
+    }
+
+    #[test]
+    fn draw_animate_toward_on() {
+        let mut t = Toggle::new(false);
+        t.on = true;
+        let before = t.progress;
+        t.animate(50);
+        assert!(
+            t.progress > before,
+            "progress should increase toward on state"
+        );
+    }
+
+    #[test]
+    fn draw_animate_toward_off() {
+        let mut t = Toggle::new(true);
+        t.on = false;
+        let before = t.progress;
+        t.animate(50);
+        assert!(
+            t.progress < before,
+            "progress should decrease toward off state"
+        );
+    }
+
+    #[test]
+    fn progress_clamped() {
+        let mut t = Toggle::new(false);
+        t.on = true;
+        for _ in 0..1000 {
+            t.animate(100);
+        }
+        assert!(t.progress >= 0.0, "progress should not go below 0.0");
+        assert!(t.progress <= 1.0, "progress should not exceed 1.0");
+
+        t.on = false;
+        for _ in 0..1000 {
+            t.animate(100);
+        }
+        assert!(t.progress >= 0.0, "progress should not go below 0.0");
+        assert!(t.progress <= 1.0, "progress should not exceed 1.0");
+    }
+
+    #[test]
+    fn draw_partial_progress() {
+        let theme = Theme::dark();
+        let mut backend = MockBackend::new();
+        {
+            let mut ctx = DrawContext::new(&mut backend, &theme);
+            let mut t = Toggle::new(false);
+            t.progress = 0.5;
+            t.draw(&mut ctx, 0, 0, 28, 16).unwrap();
+        }
+        // Should draw without panic at midpoint progress.
+        assert!(backend.fill_rect_count() > 0);
+    }
 }
 
 impl Widget for Toggle {

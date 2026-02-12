@@ -73,6 +73,75 @@ mod tests {
         let a = Avatar::new('X', 0);
         assert_eq!(a.size, 0);
     }
+
+    // -- Draw / measure tests using MockBackend --
+
+    use crate::browser::test_utils::MockBackend;
+    use crate::ui::context::DrawContext;
+    use crate::ui::theme::Theme;
+    use crate::ui::widget::Widget;
+
+    #[test]
+    fn measure_returns_size() {
+        let theme = Theme::dark();
+        let mut backend = MockBackend::new();
+        let ctx = DrawContext::new(&mut backend, &theme);
+        let avatar = Avatar::new('A', 32);
+        let (w, h) = avatar.measure(&ctx, 200, 200);
+        assert_eq!(w, 32);
+        assert_eq!(h, 32);
+    }
+
+    #[test]
+    fn draw_emits_circle_and_text() {
+        let theme = Theme::dark();
+        let mut backend = MockBackend::new();
+        {
+            let mut ctx = DrawContext::new(&mut backend, &theme);
+            let avatar = Avatar::new('A', 32);
+            avatar.draw(&mut ctx, 0, 0, 32, 32).unwrap();
+        }
+        // fill_circle falls back to fill_rect in the default impl.
+        assert!(backend.fill_rect_count() > 0);
+    }
+
+    #[test]
+    fn draw_with_custom_bg() {
+        let theme = Theme::dark();
+        let mut backend = MockBackend::new();
+        {
+            let mut ctx = DrawContext::new(&mut backend, &theme);
+            let mut avatar = Avatar::new('Z', 32);
+            avatar.bg_color = Some(Color::rgb(100, 200, 50));
+            avatar.draw(&mut ctx, 0, 0, 32, 32).unwrap();
+        }
+        // Should not panic.
+        assert!(backend.fill_rect_count() > 0);
+    }
+
+    #[test]
+    fn draw_zero_size_no_panic() {
+        let theme = Theme::dark();
+        let mut backend = MockBackend::new();
+        {
+            let mut ctx = DrawContext::new(&mut backend, &theme);
+            let avatar = Avatar::new('X', 0);
+            avatar.draw(&mut ctx, 0, 0, 0, 0).unwrap();
+        }
+        // Should not panic (radius=0 circle).
+    }
+
+    #[test]
+    fn draw_initial_char() {
+        let theme = Theme::dark();
+        let mut backend = MockBackend::new();
+        {
+            let mut ctx = DrawContext::new(&mut backend, &theme);
+            let avatar = Avatar::new('M', 32);
+            avatar.draw(&mut ctx, 0, 0, 32, 32).unwrap();
+        }
+        assert!(backend.has_text("M"));
+    }
 }
 
 impl Widget for Avatar {

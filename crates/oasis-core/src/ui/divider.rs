@@ -85,6 +85,77 @@ mod tests {
         let _ = format!("{:?}", DividerOrientation::Horizontal);
         let _ = format!("{:?}", DividerOrientation::Vertical);
     }
+
+    // -- Draw / measure tests using MockBackend --
+
+    use crate::browser::test_utils::MockBackend;
+    use crate::ui::context::DrawContext;
+    use crate::ui::theme::Theme;
+    use crate::ui::widget::Widget;
+
+    #[test]
+    fn measure_horizontal_returns_full_width() {
+        let theme = Theme::dark();
+        let mut backend = MockBackend::new();
+        let ctx = DrawContext::new(&mut backend, &theme);
+        let d = Divider::horizontal();
+        let (w, h) = d.measure(&ctx, 300, 100);
+        assert_eq!(w, 300);
+        assert_eq!(h, d.thickness as u32);
+    }
+
+    #[test]
+    fn draw_horizontal_emits_fill() {
+        let theme = Theme::dark();
+        let mut backend = MockBackend::new();
+        {
+            let mut ctx = DrawContext::new(&mut backend, &theme);
+            let d = Divider::horizontal();
+            d.draw(&mut ctx, 0, 0, 200, 1).unwrap();
+        }
+        // draw_line for horizontal falls back to fill_rect.
+        assert!(backend.fill_rect_count() > 0);
+    }
+
+    #[test]
+    fn draw_vertical_emits_fill() {
+        let theme = Theme::dark();
+        let mut backend = MockBackend::new();
+        {
+            let mut ctx = DrawContext::new(&mut backend, &theme);
+            let d = Divider::vertical();
+            d.draw(&mut ctx, 0, 0, 1, 100).unwrap();
+        }
+        // draw_line for vertical falls back to fill_rect.
+        assert!(backend.fill_rect_count() > 0);
+    }
+
+    #[test]
+    fn draw_custom_thickness() {
+        let theme = Theme::dark();
+        let mut backend = MockBackend::new();
+        {
+            let mut ctx = DrawContext::new(&mut backend, &theme);
+            let mut d = Divider::horizontal();
+            d.thickness = 3;
+            d.draw(&mut ctx, 0, 0, 200, 3).unwrap();
+        }
+        assert!(backend.fill_rect_count() > 0);
+    }
+
+    #[test]
+    fn draw_custom_color() {
+        let theme = Theme::dark();
+        let mut backend = MockBackend::new();
+        {
+            let mut ctx = DrawContext::new(&mut backend, &theme);
+            let mut d = Divider::horizontal();
+            d.color = Some(Color::rgb(255, 0, 0));
+            d.draw(&mut ctx, 0, 0, 200, 1).unwrap();
+        }
+        // Should not panic.
+        assert!(backend.fill_rect_count() > 0);
+    }
 }
 
 impl Widget for Divider {

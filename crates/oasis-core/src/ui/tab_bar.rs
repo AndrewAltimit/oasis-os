@@ -68,6 +68,122 @@ mod tests {
         assert_eq!(tb.tabs.len(), 1);
         assert_eq!(tb.active, 0);
     }
+
+    // -- Draw / measure tests using MockBackend --
+
+    use crate::browser::test_utils::MockBackend;
+    use crate::ui::context::DrawContext;
+    use crate::ui::theme::Theme;
+    use crate::ui::widget::Widget;
+
+    #[test]
+    fn measure_spans_all_tabs() {
+        let theme = Theme::dark();
+        let mut backend = MockBackend::new();
+        let ctx = DrawContext::new(&mut backend, &theme);
+        let tb = TabBar::new(vec!["A".into(), "B".into(), "C".into()]);
+        let (w, h) = tb.measure(&ctx, 300, 100);
+        assert_eq!(w, 300);
+        assert!(h > 0);
+    }
+
+    #[test]
+    fn draw_active_tab_highlight() {
+        let theme = Theme::dark();
+        let mut backend = MockBackend::new();
+        {
+            let mut ctx = DrawContext::new(&mut backend, &theme);
+            let mut tb = TabBar::new(vec!["Home".into(), "Settings".into()]);
+            tb.active = 0;
+            let (_, h) = tb.measure(&ctx, 200, 50);
+            tb.draw(&mut ctx, 0, 0, 200, h).unwrap();
+        }
+        // Underline style draws a fill_rect for the active tab highlight
+        // plus the bottom border line.
+        assert!(backend.fill_rect_count() > 0);
+    }
+
+    #[test]
+    fn draw_underline_style() {
+        let theme = Theme::dark();
+        let mut backend = MockBackend::new();
+        {
+            let mut ctx = DrawContext::new(&mut backend, &theme);
+            let mut tb = TabBar::new(vec!["A".into(), "B".into()]);
+            tb.style = TabStyle::Underline;
+            tb.draw(&mut ctx, 0, 0, 200, 30).unwrap();
+        }
+        // Should not panic.
+        assert!(backend.draw_text_count() > 0);
+    }
+
+    #[test]
+    fn draw_filled_style() {
+        let theme = Theme::dark();
+        let mut backend = MockBackend::new();
+        {
+            let mut ctx = DrawContext::new(&mut backend, &theme);
+            let mut tb = TabBar::new(vec!["A".into(), "B".into()]);
+            tb.style = TabStyle::Filled;
+            tb.draw(&mut ctx, 0, 0, 200, 30).unwrap();
+        }
+        // Should not panic; fill_rect emitted for the filled tab background.
+        assert!(backend.fill_rect_count() > 0);
+    }
+
+    #[test]
+    fn draw_pill_style() {
+        let theme = Theme::dark();
+        let mut backend = MockBackend::new();
+        {
+            let mut ctx = DrawContext::new(&mut backend, &theme);
+            let mut tb = TabBar::new(vec!["A".into(), "B".into()]);
+            tb.style = TabStyle::Pill;
+            tb.draw(&mut ctx, 0, 0, 200, 30).unwrap();
+        }
+        // Should not panic; fill_rect emitted for the pill background.
+        assert!(backend.fill_rect_count() > 0);
+    }
+
+    #[test]
+    fn draw_single_tab_no_panic() {
+        let theme = Theme::dark();
+        let mut backend = MockBackend::new();
+        {
+            let mut ctx = DrawContext::new(&mut backend, &theme);
+            let tb = TabBar::new(vec!["Only".into()]);
+            tb.draw(&mut ctx, 0, 0, 200, 30).unwrap();
+        }
+        assert!(backend.draw_text_count() > 0);
+    }
+
+    #[test]
+    fn draw_empty_tabs_no_panic() {
+        let theme = Theme::dark();
+        let mut backend = MockBackend::new();
+        {
+            let mut ctx = DrawContext::new(&mut backend, &theme);
+            let tb = TabBar::new(Vec::new());
+            tb.draw(&mut ctx, 0, 0, 200, 30).unwrap();
+        }
+        // Empty tabs should produce no draw calls.
+        assert_eq!(backend.fill_rect_count(), 0);
+        assert_eq!(backend.draw_text_count(), 0);
+    }
+
+    #[test]
+    fn draw_tab_labels() {
+        let theme = Theme::dark();
+        let mut backend = MockBackend::new();
+        {
+            let mut ctx = DrawContext::new(&mut backend, &theme);
+            let tb = TabBar::new(vec!["Home".into(), "Settings".into(), "About".into()]);
+            tb.draw(&mut ctx, 0, 0, 300, 30).unwrap();
+        }
+        assert!(backend.has_text("Home"));
+        assert!(backend.has_text("Settings"));
+        assert!(backend.has_text("About"));
+    }
 }
 
 impl Widget for TabBar {

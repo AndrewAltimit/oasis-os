@@ -21,7 +21,6 @@ use oasis_backend_sdl::SdlBackend;
 use oasis_core::active_theme::ActiveTheme;
 use oasis_core::backend::{Color, SdiBackend};
 use oasis_core::bottombar::{BottomBar, MediaTab};
-use oasis_core::config::OasisConfig;
 use oasis_core::cursor::{self, CursorState};
 use oasis_core::dashboard::{DashboardConfig, DashboardState, discover_apps};
 use oasis_core::platform::DesktopPlatform;
@@ -32,22 +31,23 @@ use oasis_core::startmenu::StartMenuState;
 use oasis_core::statusbar::StatusBar;
 use oasis_core::vfs::MemoryVfs;
 use oasis_core::wallpaper;
+use oasis_core::wm::{WindowConfig, WindowManager, WindowType};
 
 fn main() -> anyhow::Result<()> {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
-
-    let config = OasisConfig::default();
-    let w = config.screen_width;
-    let h = config.screen_height;
-
-    let mut backend = SdlBackend::new("OASIS Screenshot", w, h)?;
-    backend.init(w, h)?;
 
     let skin_name = std::env::args()
         .nth(1)
         .or_else(|| std::env::var("OASIS_SKIN").ok())
         .unwrap_or_else(|| "classic".to_string());
     let skin = resolve_skin(&skin_name)?;
+
+    // Use the skin's screen dimensions (e.g. 800x600 for desktop, 480x272 for PSP skins).
+    let w = skin.manifest.screen_width;
+    let h = skin.manifest.screen_height;
+
+    let mut backend = SdlBackend::new("OASIS Screenshot", w, h)?;
+    backend.init(w, h)?;
 
     let platform = DesktopPlatform::new();
     let mut vfs = MemoryVfs::new();
@@ -111,12 +111,51 @@ fn main() -> anyhow::Result<()> {
     let out_dir = Path::new("screenshots").join(&skin_name);
     fs::create_dir_all(&out_dir)?;
 
+    let has_dashboard = skin.features.dashboard;
+    let has_wm = skin.features.window_manager;
+
+    // For WM skins, create demo windows.
+    let mut wm = if has_wm {
+        let wm_theme = skin.theme.build_wm_theme();
+        let mut wm = WindowManager::with_theme(w, h, wm_theme);
+        let term_cfg = WindowConfig {
+            id: "demo_terminal".to_string(),
+            title: "Terminal".to_string(),
+            x: Some(40),
+            y: Some(30),
+            width: 400,
+            height: 260,
+            window_type: WindowType::AppWindow,
+        };
+        wm.create_window(&term_cfg, &mut sdi)?;
+        let fm_cfg = WindowConfig {
+            id: "demo_files".to_string(),
+            title: "File Manager".to_string(),
+            x: Some(200),
+            y: Some(100),
+            width: 350,
+            height: 220,
+            window_type: WindowType::AppWindow,
+        };
+        wm.create_window(&fm_cfg, &mut sdi)?;
+        Some(wm)
+    } else {
+        None
+    };
+
     // -- Screenshot 1: Dashboard --
-    dashboard.update_sdi(&mut sdi, &active_theme);
-    status_bar.update_sdi(&mut sdi, &active_theme, &skin.features);
-    bottom_bar.update_sdi(&mut sdi, &active_theme, &skin.features);
-    if let Some(ref sm) = start_menu {
-        sm.update_sdi(&mut sdi, &active_theme);
+    if has_dashboard {
+        dashboard.update_sdi(&mut sdi, &active_theme);
+        status_bar.update_sdi(&mut sdi, &active_theme, &skin.features);
+        bottom_bar.update_sdi(&mut sdi, &active_theme, &skin.features);
+        if let Some(ref sm) = start_menu {
+            sm.update_sdi(&mut sdi, &active_theme);
+        }
+    } else if has_wm {
+        // WM desktop: windows are already created, show them as-is.
+    } else if skin.features.terminal {
+        // Terminal-only skins: populate the skin's own terminal objects.
+        populate_skin_terminal(&mut sdi, &DEMO_OUTPUT, "/home/user", "ls");
     }
     mouse_cursor.update_sdi(&mut sdi);
     render_and_save(
@@ -129,14 +168,16 @@ fn main() -> anyhow::Result<()> {
     log::info!("Saved 01_dashboard.png");
 
     // -- Screenshot 2: AUDIO media tab --
-    bottom_bar.active_tab = MediaTab::Audio;
-    dashboard.hide_sdi(&mut sdi);
-    if let Some(ref sm) = start_menu {
-        sm.hide_sdi(&mut sdi);
+    if has_dashboard {
+        bottom_bar.active_tab = MediaTab::Audio;
+        dashboard.hide_sdi(&mut sdi);
+        if let Some(ref sm) = start_menu {
+            sm.hide_sdi(&mut sdi);
+        }
+        status_bar.update_sdi(&mut sdi, &active_theme, &skin.features);
+        bottom_bar.update_sdi(&mut sdi, &active_theme, &skin.features);
+        update_media_page(&mut sdi, &bottom_bar);
     }
-    status_bar.update_sdi(&mut sdi, &active_theme, &skin.features);
-    bottom_bar.update_sdi(&mut sdi, &active_theme, &skin.features);
-    update_media_page(&mut sdi, &bottom_bar);
     mouse_cursor.update_sdi(&mut sdi);
     render_and_save(
         &mut backend,
@@ -148,14 +189,16 @@ fn main() -> anyhow::Result<()> {
     log::info!("Saved 02_media_tab.png");
 
     // -- Screenshot 3: MODS top tab --
-    bottom_bar.active_tab = MediaTab::None;
-    status_bar.active_tab = oasis_core::statusbar::TopTab::Mods;
-    hide_media_page(&mut sdi);
-    dashboard.update_sdi(&mut sdi, &active_theme);
-    status_bar.update_sdi(&mut sdi, &active_theme, &skin.features);
-    bottom_bar.update_sdi(&mut sdi, &active_theme, &skin.features);
-    if let Some(ref sm) = start_menu {
-        sm.update_sdi(&mut sdi, &active_theme);
+    if has_dashboard {
+        bottom_bar.active_tab = MediaTab::None;
+        status_bar.active_tab = oasis_core::statusbar::TopTab::Mods;
+        hide_media_page(&mut sdi);
+        dashboard.update_sdi(&mut sdi, &active_theme);
+        status_bar.update_sdi(&mut sdi, &active_theme, &skin.features);
+        bottom_bar.update_sdi(&mut sdi, &active_theme, &skin.features);
+        if let Some(ref sm) = start_menu {
+            sm.update_sdi(&mut sdi, &active_theme);
+        }
     }
     mouse_cursor.update_sdi(&mut sdi);
     render_and_save(
@@ -168,25 +211,20 @@ fn main() -> anyhow::Result<()> {
     log::info!("Saved 03_mods_tab.png");
 
     // -- Screenshot 4: Terminal mode --
-    dashboard.hide_sdi(&mut sdi);
-    StatusBar::hide_sdi(&mut sdi);
-    BottomBar::hide_sdi(&mut sdi);
-    if let Some(ref sm) = start_menu {
-        sm.hide_sdi(&mut sdi);
+    if has_dashboard {
+        dashboard.hide_sdi(&mut sdi);
+        StatusBar::hide_sdi(&mut sdi);
+        BottomBar::hide_sdi(&mut sdi);
+        if let Some(ref sm) = start_menu {
+            sm.hide_sdi(&mut sdi);
+        }
+        hide_media_page(&mut sdi);
+        setup_terminal_objects(&mut sdi, &DEMO_OUTPUT, "/home/user", "ls");
+    } else if let Some(ref mut wm) = wm {
+        // WM desktop: close file manager, keep only terminal window.
+        let _ = wm.close_window("demo_files", &mut sdi);
     }
-    hide_media_page(&mut sdi);
-    setup_terminal_objects(
-        &mut sdi,
-        &[
-            "OASIS_OS v0.1.0 -- Type 'help' for commands".to_string(),
-            "F1=terminal  F2=on-screen keyboard  Escape=quit".to_string(),
-            String::new(),
-            "> status".to_string(),
-            "System: OASIS_OS v0.1.0  CPU: 333MHz  Battery: 75%".to_string(),
-        ],
-        "/home/user",
-        "ls",
-    );
+    // Terminal-only skins already have their terminal populated from screenshot 1.
     mouse_cursor.update_sdi(&mut sdi);
     render_and_save(
         &mut backend,
@@ -237,6 +275,56 @@ fn save_png(path: &Path, width: u32, height: u32, rgba: &[u8]) -> anyhow::Result
     Ok(())
 }
 
+const DEMO_OUTPUT: [&str; 5] = [
+    "OASIS_OS v0.1.0 -- Type 'help' for commands",
+    "F1=terminal  F2=on-screen keyboard  Escape=quit",
+    "",
+    "> status",
+    "System: OASIS_OS v0.1.0  CPU: 333MHz  Battery: 75%",
+];
+
+/// Populate a skin's own terminal layout objects with demo content.
+///
+/// Creates individual line objects within the skin's `terminal_output` area,
+/// since SDI objects render single-line text only.
+fn populate_skin_terminal(sdi: &mut SdiRegistry, lines: &[&str], cwd: &str, input: &str) {
+    // Read position/style from the skin's terminal_output object.
+    let (base_x, base_y, font_size, text_color) = if let Ok(obj) = sdi.get_mut("terminal_output") {
+        let info = (obj.x, obj.y, obj.font_size, obj.text_color);
+        obj.visible = true;
+        info
+    } else {
+        (4, 120, 8, Color::rgb(0, 187, 187))
+    };
+
+    let line_h = (font_size as i32).max(10) + 2;
+    for (i, line) in lines.iter().enumerate() {
+        let name = format!("term_line_{i}");
+        if !sdi.contains(&name) {
+            let obj = sdi.create(&name);
+            obj.x = base_x + 2;
+            obj.y = base_y + 2 + (i as i32) * line_h;
+            obj.font_size = font_size;
+            obj.text_color = text_color;
+            obj.w = 0;
+            obj.h = 0;
+        }
+        if let Ok(obj) = sdi.get_mut(&name) {
+            obj.text = if line.is_empty() {
+                None
+            } else {
+                Some(line.to_string())
+            };
+            obj.visible = true;
+        }
+    }
+
+    if let Ok(obj) = sdi.get_mut("terminal_prompt") {
+        obj.text = Some(format!("{cwd}> {input}_"));
+        obj.visible = true;
+    }
+}
+
 fn update_media_page(sdi: &mut SdiRegistry, bottom_bar: &BottomBar) {
     let page_name = "media_page_text";
     if !sdi.contains(page_name) {
@@ -264,7 +352,7 @@ fn hide_media_page(sdi: &mut SdiRegistry) {
 
 fn setup_terminal_objects(
     sdi: &mut SdiRegistry,
-    output_lines: &[String],
+    output_lines: &[&str],
     cwd: &str,
     input_buf: &str,
 ) {
@@ -293,7 +381,7 @@ fn setup_terminal_objects(
             obj.h = 0;
         }
         if let Ok(obj) = sdi.get_mut(&name) {
-            obj.text = output_lines.get(i).cloned();
+            obj.text = output_lines.get(i).map(|s| s.to_string());
             obj.visible = true;
         }
     }

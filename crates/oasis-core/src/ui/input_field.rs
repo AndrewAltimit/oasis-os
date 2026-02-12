@@ -178,6 +178,149 @@ mod tests {
         assert_eq!(a.cursor_pos, b.cursor_pos);
         assert_eq!(a.focused, b.focused);
     }
+
+    // -- Draw / measure tests using MockBackend --
+
+    use crate::browser::test_utils::MockBackend;
+    use crate::ui::context::DrawContext;
+    use crate::ui::theme::Theme;
+    use crate::ui::widget::Widget;
+
+    #[test]
+    fn measure_returns_width() {
+        let theme = Theme::dark();
+        let mut backend = MockBackend::new();
+        let ctx = DrawContext::new(&mut backend, &theme);
+        let mut f = InputField::new();
+        for ch in "Hello".chars() {
+            f.insert(ch);
+        }
+        let (w, h) = f.measure(&ctx, 200, 100);
+        // measure returns (available_w, text_height + 8)
+        assert_eq!(w, 200);
+        assert!(h > 0, "height should be positive");
+    }
+
+    #[test]
+    fn draw_shows_text() {
+        let theme = Theme::dark();
+        let mut backend = MockBackend::new();
+        {
+            let mut ctx = DrawContext::new(&mut backend, &theme);
+            let mut f = InputField::new();
+            for ch in "Hello".chars() {
+                f.insert(ch);
+            }
+            f.draw(&mut ctx, 0, 0, 200, 24).unwrap();
+        }
+        assert!(backend.has_text("Hello"), "should draw the field text");
+    }
+
+    #[test]
+    fn draw_password_shows_asterisks() {
+        let theme = Theme::dark();
+        let mut backend = MockBackend::new();
+        {
+            let mut ctx = DrawContext::new(&mut backend, &theme);
+            let mut f = InputField::new();
+            f.password_mode = true;
+            for ch in "abc".chars() {
+                f.insert(ch);
+            }
+            f.draw(&mut ctx, 0, 0, 200, 24).unwrap();
+        }
+        assert!(
+            backend.has_text("***"),
+            "password mode should display asterisks"
+        );
+        assert!(
+            !backend.has_text("abc"),
+            "password mode should not show plaintext"
+        );
+    }
+
+    #[test]
+    fn draw_placeholder_when_empty() {
+        let theme = Theme::dark();
+        let mut backend = MockBackend::new();
+        {
+            let mut ctx = DrawContext::new(&mut backend, &theme);
+            let mut f = InputField::new();
+            f.placeholder = "Type here...".to_string();
+            f.draw(&mut ctx, 0, 0, 200, 24).unwrap();
+        }
+        assert!(
+            backend.has_text("Type here..."),
+            "empty field should show placeholder"
+        );
+    }
+
+    #[test]
+    fn draw_cursor_position() {
+        let theme = Theme::dark();
+        let mut backend = MockBackend::new();
+        {
+            let mut ctx = DrawContext::new(&mut backend, &theme);
+            let mut f = InputField::new();
+            f.focused = true;
+            for ch in "AB".chars() {
+                f.insert(ch);
+            }
+            f.draw(&mut ctx, 0, 0, 200, 24).unwrap();
+        }
+        // Cursor is drawn as a 1px-wide fill_rect.
+        // Background (fill_rounded_rect -> fill_rect), border (stroke_rounded_rect ->
+        // 4 fill_rects), and cursor (fill_rect) = at least 6 fill_rects.
+        assert!(
+            backend.fill_rect_count() >= 2,
+            "focused field should draw cursor rect; got {} fill_rects",
+            backend.fill_rect_count()
+        );
+    }
+
+    #[test]
+    fn draw_focused_vs_unfocused() {
+        let theme = Theme::dark();
+        for focused in [true, false] {
+            let mut backend = MockBackend::new();
+            {
+                let mut ctx = DrawContext::new(&mut backend, &theme);
+                let mut f = InputField::new();
+                f.focused = focused;
+                for ch in "X".chars() {
+                    f.insert(ch);
+                }
+                f.draw(&mut ctx, 0, 0, 200, 24).unwrap();
+            }
+            // Both states should render without panic.
+            assert!(backend.fill_rect_count() > 0);
+        }
+    }
+
+    #[test]
+    fn insert_at_middle() {
+        let mut f = InputField::new();
+        for ch in "AC".chars() {
+            f.insert(ch);
+        }
+        // Move cursor to position 1 (between A and C).
+        f.cursor_pos = 1;
+        f.insert('B');
+        assert_eq!(f.text, "ABC");
+        assert_eq!(f.cursor_pos, 2);
+    }
+
+    #[test]
+    fn backspace_at_zero_noop() {
+        let mut f = InputField::new();
+        for ch in "Hi".chars() {
+            f.insert(ch);
+        }
+        f.cursor_pos = 0;
+        f.backspace();
+        assert_eq!(f.text, "Hi", "text should be unchanged");
+        assert_eq!(f.cursor_pos, 0, "cursor should remain at 0");
+    }
 }
 
 impl Default for InputField {
