@@ -1238,4 +1238,243 @@ protocol = "raw-tcp"
             _ => panic!("expected text"),
         }
     }
+
+    // =================================================================
+    // Integration tests: multi-step terminal sessions
+    // =================================================================
+
+    #[test]
+    fn session_mkdir_cd_touch_cat() {
+        let (reg, mut vfs) = setup();
+        let mut cwd = "/".to_string();
+
+        // Create a project directory structure.
+        exec(&reg, &mut vfs, &mut cwd, "mkdir /projects").unwrap();
+        exec(&reg, &mut vfs, &mut cwd, "mkdir /projects/myapp").unwrap();
+
+        // Navigate into it.
+        exec(&reg, &mut vfs, &mut cwd, "cd /projects/myapp").unwrap();
+        assert_eq!(cwd, "/projects/myapp");
+
+        // Create and write a file.
+        exec(&reg, &mut vfs, &mut cwd, "touch config.txt").unwrap();
+        assert!(vfs.exists("/projects/myapp/config.txt"));
+
+        // Write content via VFS directly, then verify cat reads it.
+        vfs.write("/projects/myapp/config.txt", b"debug=true").unwrap();
+        match exec(&reg, &mut vfs, &mut cwd, "cat config.txt").unwrap() {
+            CommandOutput::Text(s) => assert_eq!(s, "debug=true"),
+            _ => panic!("expected text"),
+        }
+
+        // ls should show the file.
+        match exec(&reg, &mut vfs, &mut cwd, "ls").unwrap() {
+            CommandOutput::Text(s) => assert!(s.contains("config.txt")),
+            _ => panic!("expected text"),
+        }
+    }
+
+    #[test]
+    fn session_cp_mv_find_workflow() {
+        let (reg, mut vfs) = setup();
+        let mut cwd = "/".to_string();
+
+        // Start with the file from setup: /home/user/readme.txt
+        // Copy it to a backup.
+        exec(
+            &reg,
+            &mut vfs,
+            &mut cwd,
+            "cp /home/user/readme.txt /home/user/readme.bak",
+        )
+        .unwrap();
+        assert!(vfs.exists("/home/user/readme.bak"));
+        assert!(vfs.exists("/home/user/readme.txt"));
+
+        // Move the original to a new location.
+        exec(&reg, &mut vfs, &mut cwd, "mkdir /archive").unwrap();
+        exec(
+            &reg,
+            &mut vfs,
+            &mut cwd,
+            "mv /home/user/readme.txt /archive/readme.txt",
+        )
+        .unwrap();
+        assert!(!vfs.exists("/home/user/readme.txt"));
+        assert!(vfs.exists("/archive/readme.txt"));
+
+        // Find should locate both copies.
+        match exec(&reg, &mut vfs, &mut cwd, "find / readme").unwrap() {
+            CommandOutput::Text(s) => {
+                assert!(s.contains("/home/user/readme.bak"));
+                assert!(s.contains("/archive/readme.txt"));
+            },
+            _ => panic!("expected text"),
+        }
+    }
+
+    #[test]
+    fn session_cwd_tracking_across_commands() {
+        let (reg, mut vfs) = setup();
+        let mut cwd = "/".to_string();
+
+        // cd to a directory, use relative paths.
+        exec(&reg, &mut vfs, &mut cwd, "cd /home").unwrap();
+        assert_eq!(cwd, "/home");
+
+        exec(&reg, &mut vfs, &mut cwd, "cd user").unwrap();
+        assert_eq!(cwd, "/home/user");
+
+        // pwd should reflect current cwd.
+        match exec(&reg, &mut vfs, &mut cwd, "pwd").unwrap() {
+            CommandOutput::Text(s) => assert_eq!(s, "/home/user"),
+            _ => panic!("expected text"),
+        }
+
+        // Go up with ..
+        exec(&reg, &mut vfs, &mut cwd, "cd ..").unwrap();
+        assert_eq!(cwd, "/home");
+
+        exec(&reg, &mut vfs, &mut cwd, "cd ..").unwrap();
+        assert_eq!(cwd, "/");
+
+        // Verify we can't go above root.
+        exec(&reg, &mut vfs, &mut cwd, "cd ..").unwrap();
+        assert_eq!(cwd, "/");
+    }
+
+    #[test]
+    fn session_file_lifecycle() {
+        let (reg, mut vfs) = setup();
+        let mut cwd = "/".to_string();
+
+        // Create a temp directory and file.
+        exec(&reg, &mut vfs, &mut cwd, "mkdir /tmp").unwrap();
+        exec(&reg, &mut vfs, &mut cwd, "touch /tmp/data.log").unwrap();
+        assert!(vfs.exists("/tmp/data.log"));
+
+        // Write content then cat to verify.
+        vfs.write("/tmp/data.log", b"line 1\nline 2").unwrap();
+        match exec(&reg, &mut vfs, &mut cwd, "cat /tmp/data.log").unwrap() {
+            CommandOutput::Text(s) => {
+                assert!(s.contains("line 1"));
+                assert!(s.contains("line 2"));
+            },
+            _ => panic!("expected text"),
+        }
+
+        // Remove the file.
+        exec(&reg, &mut vfs, &mut cwd, "rm /tmp/data.log").unwrap();
+        assert!(!vfs.exists("/tmp/data.log"));
+
+        // Cat should now fail.
+        assert!(exec(&reg, &mut vfs, &mut cwd, "cat /tmp/data.log").is_err());
+    }
+
+    #[test]
+    fn session_relative_paths_with_cwd() {
+        let (reg, mut vfs) = setup();
+        let mut cwd = "/".to_string();
+
+        // Create structure via relative paths after cd.
+        exec(&reg, &mut vfs, &mut cwd, "cd /home/user").unwrap();
+        exec(&reg, &mut vfs, &mut cwd, "mkdir docs").unwrap();
+        assert!(vfs.exists("/home/user/docs"));
+
+        exec(&reg, &mut vfs, &mut cwd, "touch docs/notes.txt").unwrap();
+        assert!(vfs.exists("/home/user/docs/notes.txt"));
+
+        // ls relative path.
+        match exec(&reg, &mut vfs, &mut cwd, "ls docs").unwrap() {
+            CommandOutput::Text(s) => assert!(s.contains("notes.txt")),
+            _ => panic!("expected text"),
+        }
+
+        // cp with relative paths.
+        exec(&reg, &mut vfs, &mut cwd, "cp docs/notes.txt docs/notes2.txt").unwrap();
+        assert!(vfs.exists("/home/user/docs/notes2.txt"));
+    }
+
+    #[test]
+    fn session_skin_commands() {
+        use crate::terminal::register_skin_commands;
+        let mut reg = CommandRegistry::new();
+        register_builtins(&mut reg);
+        register_skin_commands(&mut reg);
+        let mut vfs = MemoryVfs::new();
+        let mut cwd = "/".to_string();
+
+        // List skins.
+        match exec(&reg, &mut vfs, &mut cwd, "skin list").unwrap() {
+            CommandOutput::Text(s) => {
+                assert!(s.contains("terminal"));
+                assert!(s.contains("modern"));
+            },
+            _ => panic!("expected text from skin list"),
+        }
+
+        // Switch to a skin.
+        match exec(&reg, &mut vfs, &mut cwd, "skin modern").unwrap() {
+            CommandOutput::SkinSwap { name } => assert_eq!(name, "modern"),
+            _ => panic!("expected SkinSwap"),
+        }
+
+        // Switch to another skin.
+        match exec(&reg, &mut vfs, &mut cwd, "skin terminal").unwrap() {
+            CommandOutput::SkinSwap { name } => assert_eq!(name, "terminal"),
+            _ => panic!("expected SkinSwap"),
+        }
+    }
+
+    #[test]
+    fn session_error_recovery() {
+        let (reg, mut vfs) = setup();
+        let mut cwd = "/".to_string();
+
+        // Attempt invalid operations.
+        assert!(exec(&reg, &mut vfs, &mut cwd, "cd /nonexistent").is_err());
+        // CWD should be unchanged after failed cd.
+        assert_eq!(cwd, "/");
+
+        assert!(exec(&reg, &mut vfs, &mut cwd, "cat /no/such/file").is_err());
+        assert!(exec(&reg, &mut vfs, &mut cwd, "rm /no/such/file").is_err());
+
+        // Valid commands should still work after errors.
+        exec(&reg, &mut vfs, &mut cwd, "mkdir /tmp").unwrap();
+        assert!(vfs.exists("/tmp"));
+
+        // CWD still correct.
+        match exec(&reg, &mut vfs, &mut cwd, "pwd").unwrap() {
+            CommandOutput::Text(s) => assert_eq!(s, "/"),
+            _ => panic!("expected text"),
+        }
+    }
+
+    #[test]
+    fn session_nested_directory_creation() {
+        let (reg, mut vfs) = setup();
+        let mut cwd = "/".to_string();
+
+        // Create deeply nested structure.
+        exec(&reg, &mut vfs, &mut cwd, "mkdir /a/b/c/d").unwrap();
+        assert!(vfs.exists("/a"));
+        assert!(vfs.exists("/a/b"));
+        assert!(vfs.exists("/a/b/c"));
+        assert!(vfs.exists("/a/b/c/d"));
+
+        // Navigate through it.
+        exec(&reg, &mut vfs, &mut cwd, "cd /a/b/c/d").unwrap();
+        assert_eq!(cwd, "/a/b/c/d");
+
+        // Create file at the deepest level.
+        exec(&reg, &mut vfs, &mut cwd, "touch leaf.txt").unwrap();
+        assert!(vfs.exists("/a/b/c/d/leaf.txt"));
+
+        // Find the file from root.
+        exec(&reg, &mut vfs, &mut cwd, "cd /").unwrap();
+        match exec(&reg, &mut vfs, &mut cwd, "find / leaf").unwrap() {
+            CommandOutput::Text(s) => assert!(s.contains("/a/b/c/d/leaf.txt")),
+            _ => panic!("expected text"),
+        }
+    }
 }

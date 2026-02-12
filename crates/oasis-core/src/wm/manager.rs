@@ -1470,4 +1470,183 @@ mod tests {
         let wm = WindowManager::with_theme(800, 600, theme);
         assert_eq!(wm.theme().titlebar_height, 32);
     }
+
+    // ---- Multi-window workflow integration tests ----
+
+    #[test]
+    fn workflow_open_three_close_middle_active_correct() {
+        let mut sdi = SdiRegistry::new();
+        let mut wm = WindowManager::new(800, 600);
+        wm.create_window(&app_config("a"), &mut sdi).unwrap();
+        wm.create_window(&app_config("b"), &mut sdi).unwrap();
+        wm.create_window(&app_config("c"), &mut sdi).unwrap();
+        assert_eq!(wm.window_count(), 3);
+        assert_eq!(wm.active_window(), Some("c"));
+
+        // Focus middle window, then close it.
+        wm.focus_window("b", &mut sdi).unwrap();
+        assert_eq!(wm.active_window(), Some("b"));
+
+        wm.close_window("b", &mut sdi).unwrap();
+        assert_eq!(wm.window_count(), 2);
+        // Active should fall to the remaining topmost.
+        assert!(wm.active_window().is_some());
+        let active = wm.active_window().unwrap();
+        assert!(active == "a" || active == "c");
+        // SDI objects for b should be gone.
+        assert!(!sdi.contains("b.frame"));
+        assert!(!sdi.contains("b.content"));
+    }
+
+    #[test]
+    fn workflow_minimize_restore_preserves_geometry() {
+        let mut sdi = SdiRegistry::new();
+        let mut wm = WindowManager::new(800, 600);
+        wm.create_window(&app_config("w"), &mut sdi).unwrap();
+
+        // Move to a known position.
+        wm.move_window("w", 100, 50, &mut sdi).unwrap();
+        let frame_x = sdi.get("w.frame").unwrap().x;
+        let frame_y = sdi.get("w.frame").unwrap().y;
+
+        // Minimize then restore.
+        wm.minimize_window("w", &mut sdi).unwrap();
+        assert_eq!(wm.get_window("w").unwrap().state, WindowState::Minimized);
+
+        wm.restore_window("w", &mut sdi).unwrap();
+        assert_eq!(wm.get_window("w").unwrap().state, WindowState::Normal);
+
+        // Position should be the same after restore.
+        assert_eq!(sdi.get("w.frame").unwrap().x, frame_x);
+        assert_eq!(sdi.get("w.frame").unwrap().y, frame_y);
+    }
+
+    #[test]
+    fn workflow_maximize_restore_preserves_geometry() {
+        let mut sdi = SdiRegistry::new();
+        let mut wm = WindowManager::new(800, 600);
+        wm.create_window(&app_config("w"), &mut sdi).unwrap();
+
+        let orig_w = sdi.get("w.frame").unwrap().w;
+        let orig_h = sdi.get("w.frame").unwrap().h;
+
+        wm.maximize_window("w", &mut sdi).unwrap();
+        assert_eq!(wm.get_window("w").unwrap().state, WindowState::Maximized);
+        // Maximized frame should be larger than original.
+        assert!(sdi.get("w.frame").unwrap().w >= orig_w);
+
+        wm.restore_window("w", &mut sdi).unwrap();
+        assert_eq!(wm.get_window("w").unwrap().state, WindowState::Normal);
+        assert_eq!(sdi.get("w.frame").unwrap().w, orig_w);
+        assert_eq!(sdi.get("w.frame").unwrap().h, orig_h);
+    }
+
+    #[test]
+    fn workflow_focus_cycle_through_windows() {
+        let mut sdi = SdiRegistry::new();
+        let mut wm = WindowManager::new(800, 600);
+        wm.create_window(&app_config("w1"), &mut sdi).unwrap();
+        wm.create_window(&app_config("w2"), &mut sdi).unwrap();
+        wm.create_window(&app_config("w3"), &mut sdi).unwrap();
+
+        // Cycle: w3 (top) -> focus w1 -> focus w2 -> focus w3.
+        assert_eq!(wm.active_window(), Some("w3"));
+
+        wm.focus_window("w1", &mut sdi).unwrap();
+        assert_eq!(wm.active_window(), Some("w1"));
+
+        wm.focus_window("w2", &mut sdi).unwrap();
+        assert_eq!(wm.active_window(), Some("w2"));
+
+        wm.focus_window("w3", &mut sdi).unwrap();
+        assert_eq!(wm.active_window(), Some("w3"));
+
+        // All three still exist.
+        assert_eq!(wm.window_count(), 3);
+    }
+
+    #[test]
+    fn workflow_close_all_windows() {
+        let mut sdi = SdiRegistry::new();
+        let mut wm = WindowManager::new(800, 600);
+        wm.create_window(&app_config("a"), &mut sdi).unwrap();
+        wm.create_window(&app_config("b"), &mut sdi).unwrap();
+        wm.create_window(&app_config("c"), &mut sdi).unwrap();
+
+        wm.close_window("c", &mut sdi).unwrap();
+        wm.close_window("b", &mut sdi).unwrap();
+        wm.close_window("a", &mut sdi).unwrap();
+
+        assert_eq!(wm.window_count(), 0);
+        assert!(wm.active_window().is_none());
+        // All SDI objects should be cleaned up.
+        assert!(!sdi.contains("a.frame"));
+        assert!(!sdi.contains("b.frame"));
+        assert!(!sdi.contains("c.frame"));
+    }
+
+    #[test]
+    fn workflow_minimize_then_focus_other() {
+        let mut sdi = SdiRegistry::new();
+        let mut wm = WindowManager::new(800, 600);
+        wm.create_window(&app_config("w1"), &mut sdi).unwrap();
+        wm.create_window(&app_config("w2"), &mut sdi).unwrap();
+
+        // Minimize w2 (the active one).
+        wm.minimize_window("w2", &mut sdi).unwrap();
+        // After minimizing active, w1 should become active.
+        assert_eq!(wm.active_window(), Some("w1"));
+
+        // Focus w1 explicitly (should be no-op since already active).
+        wm.focus_window("w1", &mut sdi).unwrap();
+        assert_eq!(wm.active_window(), Some("w1"));
+
+        // Restore w2.
+        wm.restore_window("w2", &mut sdi).unwrap();
+        assert_eq!(wm.get_window("w2").unwrap().state, WindowState::Normal);
+    }
+
+    #[test]
+    fn workflow_dialog_with_app_windows() {
+        let mut sdi = SdiRegistry::new();
+        let mut wm = WindowManager::new(800, 600);
+        wm.create_window(&app_config("app1"), &mut sdi).unwrap();
+        wm.create_window(&dialog_config("dlg1"), &mut sdi).unwrap();
+        wm.create_window(&app_config("app2"), &mut sdi).unwrap();
+
+        assert_eq!(wm.window_count(), 3);
+        // Close the dialog.
+        wm.close_window("dlg1", &mut sdi).unwrap();
+        assert_eq!(wm.window_count(), 2);
+        assert!(!sdi.contains("dlg1.frame"));
+        // The remaining windows should be fine.
+        assert!(sdi.contains("app1.frame"));
+        assert!(sdi.contains("app2.frame"));
+    }
+
+    #[test]
+    fn workflow_move_then_resize_then_maximize_restore() {
+        let mut sdi = SdiRegistry::new();
+        let mut wm = WindowManager::new(800, 600);
+        wm.create_window(&app_config("w"), &mut sdi).unwrap();
+
+        // Move.
+        wm.move_window("w", 30, 20, &mut sdi).unwrap();
+        let moved_x = sdi.get("w.frame").unwrap().x;
+        let moved_y = sdi.get("w.frame").unwrap().y;
+
+        // Resize.
+        wm.resize_window("w", 300, 200, &mut sdi).unwrap();
+        let resized_w = sdi.get("w.frame").unwrap().w;
+        let resized_h = sdi.get("w.frame").unwrap().h;
+
+        // Maximize and restore should return to the resized geometry.
+        wm.maximize_window("w", &mut sdi).unwrap();
+        wm.restore_window("w", &mut sdi).unwrap();
+
+        assert_eq!(sdi.get("w.frame").unwrap().x, moved_x);
+        assert_eq!(sdi.get("w.frame").unwrap().y, moved_y);
+        assert_eq!(sdi.get("w.frame").unwrap().w, resized_w);
+        assert_eq!(sdi.get("w.frame").unwrap().h, resized_h);
+    }
 }

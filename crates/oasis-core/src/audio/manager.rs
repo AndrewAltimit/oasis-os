@@ -550,4 +550,101 @@ mod tests {
                 .is_err()
         );
     }
+
+    // ---- Workflow integration tests ----
+
+    #[test]
+    fn workflow_full_playback_lifecycle() {
+        let (mut mgr, mut backend) = setup();
+
+        // Start playing.
+        mgr.play(&mut backend).unwrap();
+        assert_eq!(mgr.state(), PlaybackState::Playing);
+        assert_eq!(mgr.playlist.current_index(), Some(0));
+
+        // Adjust volume.
+        mgr.set_volume(60, &mut backend).unwrap();
+        assert_eq!(mgr.volume(), 60);
+
+        // Next track while playing.
+        mgr.next(&mut backend).unwrap();
+        assert_eq!(mgr.playlist.current_index(), Some(1));
+        assert_eq!(mgr.state(), PlaybackState::Playing);
+
+        // Pause mid-track.
+        mgr.pause(&mut backend).unwrap();
+        assert_eq!(mgr.state(), PlaybackState::Paused);
+
+        // Resume.
+        mgr.resume(&mut backend).unwrap();
+        assert_eq!(mgr.state(), PlaybackState::Playing);
+
+        // Skip to last track.
+        mgr.next(&mut backend).unwrap();
+        assert_eq!(mgr.playlist.current_index(), Some(2));
+
+        // Go back.
+        mgr.prev(&mut backend).unwrap();
+        assert_eq!(mgr.playlist.current_index(), Some(1));
+
+        // Stop.
+        mgr.stop(&mut backend).unwrap();
+        assert_eq!(mgr.state(), PlaybackState::Stopped);
+    }
+
+    #[test]
+    fn workflow_vfs_load_and_play() {
+        let mut mgr = AudioManager::new();
+        let mut backend = StubAudioBackend::new();
+        let mut vfs = MemoryVfs::new();
+        vfs.mkdir("/music").unwrap();
+        vfs.write("/music/track1.mp3", b"data1").unwrap();
+        vfs.write("/music/track2.mp3", b"data2").unwrap();
+
+        mgr.add_track_from_vfs("/music/track1.mp3", &mut vfs, &mut backend)
+            .unwrap();
+        mgr.add_track_from_vfs("/music/track2.mp3", &mut vfs, &mut backend)
+            .unwrap();
+        assert_eq!(mgr.playlist.len(), 2);
+
+        // Play, verify status, publish to VFS.
+        mgr.play(&mut backend).unwrap();
+        let status = mgr.format_status(&backend);
+        assert!(status.contains("playing"));
+
+        vfs.mkdir("/var").unwrap();
+        vfs.mkdir("/var/audio").unwrap();
+        mgr.publish_status(&backend, &mut vfs).unwrap();
+        let data = vfs.read(AUDIO_STATUS_PATH).unwrap();
+        assert!(!data.is_empty());
+    }
+
+    #[test]
+    fn workflow_process_request_sequence() {
+        let (mut mgr, mut backend) = setup();
+
+        // Play via request API.
+        mgr.process_request("play", &mut backend).unwrap();
+        assert_eq!(mgr.state(), PlaybackState::Playing);
+
+        // Set volume via request.
+        mgr.process_request("vol 50", &mut backend).unwrap();
+        assert_eq!(mgr.volume(), 50);
+
+        // Enable repeat via request.
+        mgr.process_request("repeat one", &mut backend).unwrap();
+        assert_eq!(mgr.playlist.repeat, RepeatMode::One);
+
+        // Enable shuffle via request.
+        mgr.process_request("shuffle", &mut backend).unwrap();
+        assert!(mgr.playlist.shuffle);
+
+        // Next via request.
+        mgr.process_request("next", &mut backend).unwrap();
+        assert_eq!(mgr.state(), PlaybackState::Playing);
+
+        // Stop via request.
+        mgr.process_request("stop", &mut backend).unwrap();
+        assert_eq!(mgr.state(), PlaybackState::Stopped);
+    }
 }
