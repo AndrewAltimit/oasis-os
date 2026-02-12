@@ -5,6 +5,15 @@ pub const CURSOR_W: u32 = 8;
 /// Height of the procedural cursor sprite.
 pub const CURSOR_H: u32 = 12;
 
+/// Reduced-resolution wallpaper dimensions for GE-scaled blitting.
+///
+/// A 64x64 texture (16KB RGBA) is scaled up to 480x272 by the GE with
+/// bilinear filtering. This avoids the 1MB uncached RAM read that a
+/// full-resolution wallpaper requires, which was the #1 performance
+/// bottleneck (~41ms/frame GE stall).
+pub const WALLPAPER_TEX_W: u32 = 64;
+pub const WALLPAPER_TEX_H: u32 = 64;
+
 /// Generate a PSIX-style gradient wallpaper as RGBA bytes.
 ///
 /// Produces the characteristic orange-to-green sweep with wave arcs emanating

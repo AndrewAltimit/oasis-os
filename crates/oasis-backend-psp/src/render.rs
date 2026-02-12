@@ -5,7 +5,8 @@ use std::mem::size_of;
 use std::ptr;
 
 use psp::sys::{
-    self, ClearBuffer, GuPrimitive, GuState, MipmapLevel, TextureColorComponent, TextureEffect,
+    self, ClearBuffer, GuPrimitive, MipmapLevel, TextureColorComponent, TextureEffect,
+    TextureFilter,
     TexturePixelFormat, VertexType,
 };
 
@@ -17,24 +18,7 @@ use crate::{ColorExt, PspBackend};
 // Vertex types for 2D GU rendering
 // ---------------------------------------------------------------------------
 
-/// Colored vertex for fill_rect (no texture).
-#[repr(C, align(4))]
-struct ColorVertex {
-    color: u32,
-    x: i16,
-    y: i16,
-    z: i16,
-    _pad: i16,
-}
-
-/// Vertex type flags for ColorVertex.
-const COLOR_VTYPE: VertexType = VertexType::from_bits_truncate(
-    VertexType::COLOR_8888.bits()
-        | VertexType::VERTEX_16BIT.bits()
-        | VertexType::TRANSFORM_2D.bits(),
-);
-
-/// Textured + colored vertex for blit and draw_text.
+/// Textured + colored vertex for blit, draw_text, and fill_rect.
 #[repr(C, align(4))]
 pub(crate) struct TexturedColorVertex {
     u: i16,
@@ -86,6 +70,12 @@ impl PspBackend {
             unsafe { pixels.add(i).write(0u32) };
         }
 
+        // Write a solid white pixel at the bottom-right corner of the atlas.
+        // Used by fill_rect_inner to draw colored rectangles without toggling
+        // Texture2D state (sample white texel * vertex color = fill color).
+        let white_offset = ((FONT_ATLAS_H - 1) * stride + (FONT_ATLAS_W - 1)) as usize;
+        unsafe { pixels.add(white_offset).write(0xFFFF_FFFFu32) };
+
         for idx in 0u32..95 {
             let col = idx % ATLAS_COLS;
             let row = idx / ATLAS_COLS;
@@ -116,42 +106,58 @@ impl PspBackend {
     }
 
     /// Draw a filled rectangle.
+    ///
+    /// Uses a 1x1 white texel instead of toggling Texture2D state, avoiding
+    /// expensive GE state changes on every call.
     pub fn fill_rect_inner(&mut self, x: i32, y: i32, w: u32, h: u32, color: Color) {
         // SAFETY: sceGuGetMemory returns a display-list-embedded pointer
-        // valid until sceGuFinish. We write exactly 2 ColorVertex structs
-        // via ptr::write, then pass them to sceGuDrawArray as Sprites.
+        // valid until sceGuFinish. We write exactly 2 TexturedColorVertex
+        // structs, sampling the solid white texel at the bottom-right corner
+        // of the font atlas. Modulate texfunc: white * vertex_color = fill
+        // color. This avoids toggling Texture2D state on every rectangle.
         unsafe {
-            sys::sceGuDisable(GuState::Texture2D);
-
-            let verts =
-                sys::sceGuGetMemory((2 * size_of::<ColorVertex>()) as i32) as *mut ColorVertex;
+            let verts = sys::sceGuGetMemory((2 * size_of::<TexturedColorVertex>()) as i32)
+                as *mut TexturedColorVertex;
             if verts.is_null() {
-                sys::sceGuEnable(GuState::Texture2D);
                 return;
             }
 
+            // Bind the font atlas; the white texel is at the bottom-right corner.
+            let uncached_atlas = psp::cache::UncachedPtr::from_cached_addr(self.font_atlas_ptr)
+                .as_ptr() as *const c_void;
+            sys::sceGuTexMode(TexturePixelFormat::Psm8888, 0, 0, 0);
+            sys::sceGuTexImage(
+                MipmapLevel::None,
+                FONT_ATLAS_W as i32,
+                FONT_ATLAS_H as i32,
+                FONT_ATLAS_W as i32,
+                uncached_atlas,
+            );
+
             let abgr = color.to_abgr();
-            let x1 = x as i16;
-            let y1 = y as i16;
-            let x2 = (x + w as i32) as i16;
-            let y2 = (y + h as i32) as i16;
+            let white_u = (FONT_ATLAS_W - 1) as i16;
+            let white_v = (FONT_ATLAS_H - 1) as i16;
 
             ptr::write(
                 verts,
-                ColorVertex {
+                TexturedColorVertex {
+                    u: white_u,
+                    v: white_v,
                     color: abgr,
-                    x: x1,
-                    y: y1,
+                    x: x as i16,
+                    y: y as i16,
                     z: 0,
                     _pad: 0,
                 },
             );
             ptr::write(
                 verts.add(1),
-                ColorVertex {
+                TexturedColorVertex {
+                    u: white_u,
+                    v: white_v,
                     color: abgr,
-                    x: x2,
-                    y: y2,
+                    x: (x + w as i32) as i16,
+                    y: (y + h as i32) as i16,
                     z: 0,
                     _pad: 0,
                 },
@@ -159,12 +165,11 @@ impl PspBackend {
 
             sys::sceGuDrawArray(
                 GuPrimitive::Sprites,
-                COLOR_VTYPE,
+                TEXTURED_COLOR_VTYPE,
                 2,
                 ptr::null(),
                 verts as *const c_void,
             );
-            sys::sceGuEnable(GuState::Texture2D);
         }
     }
 
@@ -231,7 +236,8 @@ impl PspBackend {
 
         // SAFETY: Binds the font atlas texture (RAM pointer via uncached
         // mirror) and flushes the batched sprites. font_atlas_ptr is
-        // checked non-null during init().
+        // checked non-null during init(). No TexFlush/TexSync needed --
+        // the atlas is in uncached RAM so the GE always reads current data.
         unsafe {
             let uncached_atlas = psp::cache::UncachedPtr::from_cached_addr(self.font_atlas_ptr)
                 .as_ptr() as *const c_void;
@@ -244,8 +250,6 @@ impl PspBackend {
                 uncached_atlas,
             );
             sys::sceGuTexFunc(TextureEffect::Modulate, TextureColorComponent::Rgba);
-            sys::sceGuTexFlush();
-            sys::sceGuTexSync();
 
             batch.flush();
         }
@@ -273,6 +277,7 @@ impl PspBackend {
         // SAFETY: Binds the texture (RAM pointer via uncached mirror) and
         // draws a Sprites primitive. data_ptr validity is ensured by
         // load_texture_inner (allocated and populated before insertion).
+        // No TexFlush/TexSync -- uncached pointers bypass the GE cache.
         unsafe {
             let uncached_ptr =
                 psp::cache::UncachedPtr::from_cached_addr(data_ptr).as_ptr() as *const c_void;
@@ -285,8 +290,6 @@ impl PspBackend {
                 uncached_ptr,
             );
             sys::sceGuTexFunc(TextureEffect::Modulate, TextureColorComponent::Rgba);
-            sys::sceGuTexFlush();
-            sys::sceGuTexSync();
 
             let verts = sys::sceGuGetMemory((2 * size_of::<TexturedColorVertex>()) as i32)
                 as *mut TexturedColorVertex;
@@ -328,6 +331,90 @@ impl PspBackend {
                 ptr::null(),
                 verts as *const c_void,
             );
+        }
+    }
+
+    /// Blit a texture scaled to the given size with bilinear filtering.
+    ///
+    /// Used for the wallpaper: a small texture (64x64) scaled to fullscreen.
+    /// Bilinear filtering smooths the upscale. Filter state is restored to
+    /// Nearest after the draw for subsequent pixel-art text/icons.
+    pub fn blit_scaled(
+        &mut self,
+        tex: oasis_core::backend::TextureId,
+        x: i32,
+        y: i32,
+        w: u32,
+        h: u32,
+    ) {
+        let idx = tex.0 as usize;
+        let Some(Some(texture)) = self.textures.get(idx) else {
+            return;
+        };
+        let tex_w = texture.width as i16;
+        let tex_h = texture.height as i16;
+        let buf_w = texture.buf_w;
+        let buf_h = texture.buf_h;
+        let data_ptr = texture.data;
+
+        unsafe {
+            let uncached_ptr =
+                psp::cache::UncachedPtr::from_cached_addr(data_ptr).as_ptr() as *const c_void;
+            sys::sceGuTexMode(TexturePixelFormat::Psm8888, 0, 0, 0);
+            sys::sceGuTexImage(
+                MipmapLevel::None,
+                buf_w as i32,
+                buf_h as i32,
+                buf_w as i32,
+                uncached_ptr,
+            );
+            sys::sceGuTexFunc(TextureEffect::Modulate, TextureColorComponent::Rgba);
+            sys::sceGuTexFilter(TextureFilter::Linear, TextureFilter::Linear);
+
+            let verts = sys::sceGuGetMemory((2 * size_of::<TexturedColorVertex>()) as i32)
+                as *mut TexturedColorVertex;
+            if verts.is_null() {
+                sys::sceGuTexFilter(TextureFilter::Nearest, TextureFilter::Nearest);
+                return;
+            }
+
+            let white = 0xFFFF_FFFFu32;
+
+            ptr::write(
+                verts,
+                TexturedColorVertex {
+                    u: 0,
+                    v: 0,
+                    color: white,
+                    x: x as i16,
+                    y: y as i16,
+                    z: 0,
+                    _pad: 0,
+                },
+            );
+            ptr::write(
+                verts.add(1),
+                TexturedColorVertex {
+                    u: tex_w,
+                    v: tex_h,
+                    color: white,
+                    x: (x + w as i32) as i16,
+                    y: (y + h as i32) as i16,
+                    z: 0,
+                    _pad: 0,
+                },
+            );
+
+            sys::sceGuDrawArray(
+                GuPrimitive::Sprites,
+                TEXTURED_COLOR_VTYPE,
+                2,
+                ptr::null(),
+                verts as *const c_void,
+            );
+
+            // Restore nearest filtering for pixel-art text/icons.
+            sys::sceGuTexFilter(TextureFilter::Nearest, TextureFilter::Nearest);
         }
     }
 }

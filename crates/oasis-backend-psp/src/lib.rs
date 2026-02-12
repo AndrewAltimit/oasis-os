@@ -42,7 +42,10 @@ pub use tls::PspTlsProvider;
 pub use power::{check_power_resumed, power_tick, register_power_callback, set_clock};
 #[cfg(feature = "kernel-exception")]
 pub use power::register_exception_handler;
-pub use procedural::{CURSOR_H, CURSOR_W, generate_cursor_pixels, generate_gradient};
+pub use procedural::{
+    CURSOR_H, CURSOR_W, WALLPAPER_TEX_H, WALLPAPER_TEX_W, generate_cursor_pixels,
+    generate_gradient,
+};
 pub use sfx::SfxId;
 pub use status::{StatusBarInfo, SystemInfo};
 pub use threading::{AudioCmd, AudioHandle, IoCmd, IoHandle, IoResponse, spawn_workers};

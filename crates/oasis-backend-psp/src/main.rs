@@ -475,10 +475,15 @@ fn psp_main() {
     let sysinfo = SystemInfo::query();
     show_boot_screen(&mut backend, "Generating textures...", 40);
 
-    // Load wallpaper texture.
-    let wallpaper_data = oasis_backend_psp::generate_gradient(SCREEN_WIDTH, SCREEN_HEIGHT);
+    // Load wallpaper texture at reduced resolution (64x64 = 16KB vs 1MB).
+    // The GE scales it up to 480x272 with bilinear filtering during blit.
+    use oasis_backend_psp::{WALLPAPER_TEX_W, WALLPAPER_TEX_H};
+    let wallpaper_data = oasis_backend_psp::generate_gradient(
+        WALLPAPER_TEX_W,
+        WALLPAPER_TEX_H,
+    );
     let wallpaper_tex = backend
-        .load_texture_inner(SCREEN_WIDTH, SCREEN_HEIGHT, &wallpaper_data)
+        .load_texture_inner(WALLPAPER_TEX_W, WALLPAPER_TEX_H, &wallpaper_data)
         .unwrap_or(TextureId(0));
 
     // Load cursor texture.
@@ -1209,13 +1214,13 @@ fn psp_main() {
 
         // -- Render --
         let status = StatusBarInfo::poll();
+
         let fps = frame_timer.fps();
         let usb_active = usb_storage.is_some();
 
         backend.clear_inner(Color::BLACK);
-
-        // Wallpaper.
-        backend.blit_inner(wallpaper_tex, 0, 0, SCREEN_WIDTH, SCREEN_HEIGHT);
+        // Wallpaper: 64x64 texture scaled to fullscreen by GE (bilinear).
+        backend.blit_scaled(wallpaper_tex, 0, 0, SCREEN_WIDTH, SCREEN_HEIGHT);
 
         match app_mode {
             AppMode::Classic => {
