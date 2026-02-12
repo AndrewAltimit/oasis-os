@@ -338,4 +338,99 @@ mod tests {
         vfs.write("/file", b"new content").unwrap();
         assert_eq!(vfs.read("/file").unwrap(), b"new content");
     }
+
+    mod prop {
+        use super::*;
+        use proptest::prelude::*;
+
+        proptest! {
+            #[test]
+            fn normalize_is_idempotent(path in "[/a-z0-9_.]{1,50}") {
+                let once = normalize(&path);
+                let twice = normalize(&once);
+                prop_assert_eq!(&once, &twice, "normalize must be idempotent");
+            }
+
+            #[test]
+            fn normalize_never_has_double_slashes(path in "[/a-z0-9_.]{1,50}") {
+                let normed = normalize(&path);
+                prop_assert!(
+                    !normed.contains("//"),
+                    "normalized path must not contain //: {normed}"
+                );
+            }
+
+            #[test]
+            fn normalize_starts_with_slash(path in "[a-z0-9_./]{0,50}") {
+                let normed = normalize(&path);
+                prop_assert!(
+                    normed.starts_with('/'),
+                    "normalized path must start with /: {normed}"
+                );
+            }
+
+            #[test]
+            fn normalize_no_trailing_slash_unless_root(path in "[/a-z0-9_.]{1,50}") {
+                let normed = normalize(&path);
+                if normed != "/" {
+                    prop_assert!(
+                        !normed.ends_with('/'),
+                        "non-root normalized path must not end with /: {normed}"
+                    );
+                }
+            }
+
+            #[test]
+            fn write_then_read_roundtrips(
+                dir in "[a-z]{1,8}",
+                file in "[a-z]{1,8}",
+                data in proptest::collection::vec(any::<u8>(), 0..256),
+            ) {
+                let mut vfs = MemoryVfs::new();
+                let dir_path = format!("/{dir}");
+                vfs.mkdir(&dir_path).unwrap();
+                let file_path = format!("{dir_path}/{file}");
+                vfs.write(&file_path, &data).unwrap();
+                let read_back = vfs.read(&file_path).unwrap();
+                prop_assert_eq!(data, read_back);
+            }
+
+            #[test]
+            fn exists_after_write(
+                dir in "[a-z]{1,8}",
+                file in "[a-z]{1,8}",
+            ) {
+                let mut vfs = MemoryVfs::new();
+                let dir_path = format!("/{dir}");
+                vfs.mkdir(&dir_path).unwrap();
+                let file_path = format!("{dir_path}/{file}");
+                vfs.write(&file_path, b"x").unwrap();
+                prop_assert!(vfs.exists(&file_path));
+            }
+
+            #[test]
+            fn mkdir_then_exists(segments in proptest::collection::vec("[a-z]{1,6}", 1..5)) {
+                let mut vfs = MemoryVfs::new();
+                let path = format!("/{}", segments.join("/"));
+                vfs.mkdir(&path).unwrap();
+                prop_assert!(vfs.exists(&path));
+                // All parent directories should exist too.
+                let mut partial = String::new();
+                for seg in &segments {
+                    partial.push('/');
+                    partial.push_str(seg);
+                    prop_assert!(vfs.exists(&partial), "missing parent: {partial}");
+                }
+            }
+
+            #[test]
+            fn remove_then_not_exists(name in "[a-z]{1,8}") {
+                let mut vfs = MemoryVfs::new();
+                let path = format!("/{name}");
+                vfs.mkdir(&path).unwrap();
+                vfs.remove(&path).unwrap();
+                prop_assert!(!vfs.exists(&path));
+            }
+        }
+    }
 }

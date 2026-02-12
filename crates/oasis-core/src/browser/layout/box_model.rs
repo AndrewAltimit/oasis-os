@@ -474,4 +474,159 @@ mod tests {
         };
         assert!(line.try_add(&frag));
     }
+
+    mod prop {
+        use super::*;
+        use proptest::prelude::*;
+
+        fn arb_edge() -> impl Strategy<Value = EdgeSizes> {
+            (0.0f32..100.0, 0.0f32..100.0, 0.0f32..100.0, 0.0f32..100.0)
+                .prop_map(|(t, r, b, l)| EdgeSizes::new(t, r, b, l))
+        }
+
+        fn arb_rect() -> impl Strategy<Value = Rect> {
+            (-500.0f32..500.0, -500.0f32..500.0, 0.0f32..500.0, 0.0f32..500.0)
+                .prop_map(|(x, y, w, h)| Rect::new(x, y, w, h))
+        }
+
+        fn arb_dimensions() -> impl Strategy<Value = Dimensions> {
+            (arb_rect(), arb_edge(), arb_edge(), arb_edge()).prop_map(
+                |(content, padding, border, margin)| Dimensions {
+                    content,
+                    padding,
+                    border,
+                    margin,
+                },
+            )
+        }
+
+        proptest! {
+            #[test]
+            fn padding_box_width_equals_content_plus_padding(d in arb_dimensions()) {
+                let pb = d.padding_box();
+                let expected_w = d.content.width + d.padding.left + d.padding.right;
+                prop_assert!(
+                    (pb.width - expected_w).abs() < 0.001,
+                    "padding_box width: got {}, expected {expected_w}", pb.width
+                );
+            }
+
+            #[test]
+            fn border_box_width_equals_content_plus_padding_plus_border(d in arb_dimensions()) {
+                let bb = d.border_box();
+                let expected_w = d.content.width
+                    + d.padding.left + d.padding.right
+                    + d.border.left + d.border.right;
+                prop_assert!(
+                    (bb.width - expected_w).abs() < 0.01,
+                    "border_box width: got {}, expected {expected_w}", bb.width
+                );
+            }
+
+            #[test]
+            fn margin_box_width_equals_total(d in arb_dimensions()) {
+                let mb = d.margin_box();
+                let expected_w = d.content.width
+                    + d.padding.horizontal()
+                    + d.border.horizontal()
+                    + d.margin.horizontal();
+                prop_assert!(
+                    (mb.width - expected_w).abs() < 0.01,
+                    "margin_box width: got {}, expected {expected_w}", mb.width
+                );
+            }
+
+            #[test]
+            fn margin_box_height_equals_total(d in arb_dimensions()) {
+                let mb = d.margin_box();
+                let expected_h = d.content.height
+                    + d.padding.vertical()
+                    + d.border.vertical()
+                    + d.margin.vertical();
+                prop_assert!(
+                    (mb.height - expected_h).abs() < 0.01,
+                    "margin_box height: got {}, expected {expected_h}", mb.height
+                );
+            }
+
+            #[test]
+            fn boxes_nest_correctly(d in arb_dimensions()) {
+                let pb = d.padding_box();
+                let bb = d.border_box();
+                let mb = d.margin_box();
+                // Each layer's width >= the inner layer's width.
+                prop_assert!(pb.width >= d.content.width - 0.001);
+                prop_assert!(bb.width >= pb.width - 0.001);
+                prop_assert!(mb.width >= bb.width - 0.001);
+                prop_assert!(pb.height >= d.content.height - 0.001);
+                prop_assert!(bb.height >= pb.height - 0.001);
+                prop_assert!(mb.height >= bb.height - 0.001);
+            }
+
+            #[test]
+            fn edge_sizes_horizontal_is_left_plus_right(
+                t in 0.0f32..100.0, r in 0.0f32..100.0,
+                b in 0.0f32..100.0, l in 0.0f32..100.0,
+            ) {
+                let e = EdgeSizes::new(t, r, b, l);
+                prop_assert!((e.horizontal() - (l + r)).abs() < 0.001);
+                prop_assert!((e.vertical() - (t + b)).abs() < 0.001);
+            }
+
+            #[test]
+            fn uniform_edge_all_equal(v in 0.0f32..100.0) {
+                let e = EdgeSizes::uniform(v);
+                prop_assert!((e.top - v).abs() < 0.001);
+                prop_assert!((e.right - v).abs() < 0.001);
+                prop_assert!((e.bottom - v).abs() < 0.001);
+                prop_assert!((e.left - v).abs() < 0.001);
+            }
+
+            #[test]
+            fn rect_union_is_commutative(a in arb_rect(), b in arb_rect()) {
+                let u1 = a.union(&b);
+                let u2 = b.union(&a);
+                prop_assert!((u1.x - u2.x).abs() < 0.001);
+                prop_assert!((u1.y - u2.y).abs() < 0.001);
+                prop_assert!((u1.width - u2.width).abs() < 0.001);
+                prop_assert!((u1.height - u2.height).abs() < 0.001);
+            }
+
+            #[test]
+            fn rect_union_contains_both(a in arb_rect(), b in arb_rect()) {
+                let u = a.union(&b);
+                // Union x,y should be <= both inputs' x,y.
+                prop_assert!(u.x <= a.x + 0.001);
+                prop_assert!(u.x <= b.x + 0.001);
+                prop_assert!(u.y <= a.y + 0.001);
+                prop_assert!(u.y <= b.y + 0.001);
+                // Union right/bottom edge should be >= both inputs'.
+                prop_assert!(u.x + u.width >= a.x + a.width - 0.001);
+                prop_assert!(u.x + u.width >= b.x + b.width - 0.001);
+                prop_assert!(u.y + u.height >= a.y + a.height - 0.001);
+                prop_assert!(u.y + u.height >= b.y + b.height - 0.001);
+            }
+
+            #[test]
+            fn rect_union_with_self_is_identity(r in arb_rect()) {
+                let u = r.union(&r);
+                prop_assert!((u.x - r.x).abs() < 0.001);
+                prop_assert!((u.y - r.y).abs() < 0.001);
+                prop_assert!((u.width - r.width).abs() < 0.001);
+                prop_assert!((u.height - r.height).abs() < 0.001);
+            }
+
+            #[test]
+            fn rect_contains_interior_point(
+                x in -500.0f32..500.0, y in -500.0f32..500.0,
+                w in 1.0f32..500.0, h in 1.0f32..500.0,
+            ) {
+                let r = Rect::new(x, y, w, h);
+                // Midpoint should always be contained.
+                let mid_x = x + w / 2.0;
+                let mid_y = y + h / 2.0;
+                prop_assert!(r.contains(mid_x, mid_y));
+            }
+        }
+    }
 }

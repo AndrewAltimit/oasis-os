@@ -354,4 +354,122 @@ mod tests {
         assert_eq!(history[1].url, "https://b.com");
         assert_eq!(history[2].url, "https://a.com");
     }
+
+    mod prop {
+        use super::*;
+        use proptest::prelude::*;
+
+        fn arb_url() -> impl Strategy<Value = String> {
+            "[a-z]{3,10}".prop_map(|s| format!("https://{s}.com"))
+        }
+
+        fn arb_urls(min: usize, max: usize) -> impl Strategy<Value = Vec<String>> {
+            proptest::collection::vec(arb_url(), min..max)
+        }
+
+        proptest! {
+            #[test]
+            fn current_url_equals_last_navigated(urls in arb_urls(1, 20)) {
+                let mut nav = NavigationController::new("about:home");
+                for url in &urls {
+                    nav.navigate(url, "");
+                }
+                prop_assert_eq!(nav.current_url(), Some(urls.last().unwrap().as_str()));
+            }
+
+            #[test]
+            fn back_then_forward_returns_to_same(urls in arb_urls(2, 10)) {
+                let mut nav = NavigationController::new("about:home");
+                for url in &urls {
+                    nav.navigate(url, "");
+                }
+                let before_back = nav.current_url().unwrap().to_string();
+                nav.go_back().unwrap();
+                nav.go_forward().unwrap();
+                prop_assert_eq!(nav.current_url().unwrap(), before_back.as_str());
+            }
+
+            #[test]
+            fn history_length_equals_navigations(urls in arb_urls(1, 20)) {
+                let mut nav = NavigationController::new("about:home");
+                for url in &urls {
+                    nav.navigate(url, "");
+                }
+                let history = nav.history();
+                prop_assert_eq!(history.len(), urls.len());
+            }
+
+            #[test]
+            fn navigate_clears_forward_stack(urls in arb_urls(3, 10)) {
+                let mut nav = NavigationController::new("about:home");
+                for url in &urls {
+                    nav.navigate(url, "");
+                }
+                nav.go_back();
+                prop_assert!(nav.can_go_forward());
+                nav.navigate("https://new.com", "New");
+                prop_assert!(!nav.can_go_forward());
+            }
+
+            #[test]
+            fn can_go_back_all_the_way(urls in arb_urls(1, 20)) {
+                let mut nav = NavigationController::new("about:home");
+                for url in &urls {
+                    nav.navigate(url, "");
+                }
+                // Go back urls.len()-1 times (first navigate sets current, rest push to back).
+                let mut back_count = 0;
+                while nav.can_go_back() {
+                    nav.go_back();
+                    back_count += 1;
+                }
+                prop_assert_eq!(back_count, urls.len() - 1);
+                // Now current should be the first URL.
+                prop_assert_eq!(nav.current_url().unwrap(), urls[0].as_str());
+            }
+
+            #[test]
+            fn can_go_forward_all_the_way(urls in arb_urls(2, 10)) {
+                let mut nav = NavigationController::new("about:home");
+                for url in &urls {
+                    nav.navigate(url, "");
+                }
+                // Go all the way back.
+                while nav.can_go_back() {
+                    nav.go_back();
+                }
+                // Now go all the way forward.
+                let mut fwd_count = 0;
+                while nav.can_go_forward() {
+                    nav.go_forward();
+                    fwd_count += 1;
+                }
+                prop_assert_eq!(fwd_count, urls.len() - 1);
+                prop_assert_eq!(nav.current_url().unwrap(), urls.last().unwrap().as_str());
+            }
+
+            #[test]
+            fn bookmark_add_is_idempotent(url in arb_url()) {
+                let mut nav = NavigationController::new("about:home");
+                nav.navigate(&url, "Title");
+                nav.add_bookmark();
+                nav.add_bookmark();
+                nav.add_bookmark();
+                prop_assert_eq!(nav.bookmarks().len(), 1);
+            }
+
+            #[test]
+            fn scroll_position_preserved_on_back(
+                urls in arb_urls(2, 5),
+                scroll in 0i32..10000,
+            ) {
+                let mut nav = NavigationController::new("about:home");
+                nav.navigate(&urls[0], "A");
+                nav.update_scroll(scroll);
+                nav.navigate(&urls[1], "B");
+                let entry = nav.go_back().unwrap();
+                prop_assert_eq!(entry.scroll_y, scroll);
+            }
+        }
+    }
 }
