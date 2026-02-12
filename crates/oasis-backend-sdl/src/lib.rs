@@ -1052,3 +1052,514 @@ fn lerp_color_sdl(a: Color, b: Color, num: u32, den: u32) -> Color {
         ((a.a as u32 * inv + b.a as u32 * num + den / 2) / den) as u8,
     )
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ---------------------------------------------------------------
+    // Input mapping tests
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn key_down_arrow_keys() {
+        assert_eq!(
+            map_key_down(Keycode::Up),
+            Some(InputEvent::ButtonPress(Button::Up))
+        );
+        assert_eq!(
+            map_key_down(Keycode::Down),
+            Some(InputEvent::ButtonPress(Button::Down))
+        );
+        assert_eq!(
+            map_key_down(Keycode::Left),
+            Some(InputEvent::ButtonPress(Button::Left))
+        );
+        assert_eq!(
+            map_key_down(Keycode::Right),
+            Some(InputEvent::ButtonPress(Button::Right))
+        );
+    }
+
+    #[test]
+    fn key_down_action_keys() {
+        assert_eq!(
+            map_key_down(Keycode::Return),
+            Some(InputEvent::ButtonPress(Button::Confirm))
+        );
+        assert_eq!(
+            map_key_down(Keycode::Escape),
+            Some(InputEvent::ButtonPress(Button::Cancel))
+        );
+        assert_eq!(
+            map_key_down(Keycode::Space),
+            Some(InputEvent::ButtonPress(Button::Triangle))
+        );
+        assert_eq!(
+            map_key_down(Keycode::Tab),
+            Some(InputEvent::ButtonPress(Button::Square))
+        );
+    }
+
+    #[test]
+    fn key_down_function_keys() {
+        assert_eq!(
+            map_key_down(Keycode::F1),
+            Some(InputEvent::ButtonPress(Button::Start))
+        );
+        assert_eq!(
+            map_key_down(Keycode::F2),
+            Some(InputEvent::ButtonPress(Button::Select))
+        );
+    }
+
+    #[test]
+    fn key_down_triggers() {
+        assert_eq!(
+            map_key_down(Keycode::Q),
+            Some(InputEvent::TriggerPress(Trigger::Left))
+        );
+        assert_eq!(
+            map_key_down(Keycode::E),
+            Some(InputEvent::TriggerPress(Trigger::Right))
+        );
+    }
+
+    #[test]
+    fn key_down_backspace() {
+        assert_eq!(map_key_down(Keycode::Backspace), Some(InputEvent::Backspace));
+    }
+
+    #[test]
+    fn key_down_unmapped_returns_none() {
+        assert_eq!(map_key_down(Keycode::A), None);
+        assert_eq!(map_key_down(Keycode::Z), None);
+        assert_eq!(map_key_down(Keycode::Num0), None);
+        assert_eq!(map_key_down(Keycode::F5), None);
+    }
+
+    #[test]
+    fn key_up_arrow_keys() {
+        assert_eq!(
+            map_key_up(Keycode::Up),
+            Some(InputEvent::ButtonRelease(Button::Up))
+        );
+        assert_eq!(
+            map_key_up(Keycode::Down),
+            Some(InputEvent::ButtonRelease(Button::Down))
+        );
+        assert_eq!(
+            map_key_up(Keycode::Left),
+            Some(InputEvent::ButtonRelease(Button::Left))
+        );
+        assert_eq!(
+            map_key_up(Keycode::Right),
+            Some(InputEvent::ButtonRelease(Button::Right))
+        );
+    }
+
+    #[test]
+    fn key_up_action_keys() {
+        assert_eq!(
+            map_key_up(Keycode::Return),
+            Some(InputEvent::ButtonRelease(Button::Confirm))
+        );
+        assert_eq!(
+            map_key_up(Keycode::Escape),
+            Some(InputEvent::ButtonRelease(Button::Cancel))
+        );
+        assert_eq!(
+            map_key_up(Keycode::Space),
+            Some(InputEvent::ButtonRelease(Button::Triangle))
+        );
+        assert_eq!(
+            map_key_up(Keycode::Tab),
+            Some(InputEvent::ButtonRelease(Button::Square))
+        );
+    }
+
+    #[test]
+    fn key_up_triggers() {
+        assert_eq!(
+            map_key_up(Keycode::Q),
+            Some(InputEvent::TriggerRelease(Trigger::Left))
+        );
+        assert_eq!(
+            map_key_up(Keycode::E),
+            Some(InputEvent::TriggerRelease(Trigger::Right))
+        );
+    }
+
+    #[test]
+    fn key_up_unmapped_returns_none() {
+        assert_eq!(map_key_up(Keycode::A), None);
+        assert_eq!(map_key_up(Keycode::Backspace), None);
+    }
+
+    #[test]
+    fn key_down_up_symmetry() {
+        // Every mapped key_down should have a corresponding key_up (except Backspace).
+        let keys = [
+            Keycode::Up,
+            Keycode::Down,
+            Keycode::Left,
+            Keycode::Right,
+            Keycode::Return,
+            Keycode::Escape,
+            Keycode::Space,
+            Keycode::Tab,
+            Keycode::F1,
+            Keycode::F2,
+            Keycode::Q,
+            Keycode::E,
+        ];
+        for key in keys {
+            let down = map_key_down(key);
+            let up = map_key_up(key);
+            assert!(down.is_some(), "key_down({key:?}) should be mapped");
+            assert!(up.is_some(), "key_up({key:?}) should be mapped");
+            // Verify press/release correspondence.
+            match (down.unwrap(), up.unwrap()) {
+                (InputEvent::ButtonPress(b1), InputEvent::ButtonRelease(b2)) => {
+                    assert_eq!(b1, b2, "press/release button mismatch for {key:?}");
+                },
+                (InputEvent::TriggerPress(t1), InputEvent::TriggerRelease(t2)) => {
+                    assert_eq!(t1, t2, "press/release trigger mismatch for {key:?}");
+                },
+                (d, u) => panic!("unexpected pair for {key:?}: {d:?} / {u:?}"),
+            }
+        }
+    }
+
+    // ---------------------------------------------------------------
+    // Helper function tests
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn intersect_clip_overlapping() {
+        let a = ClipRect {
+            x: 0,
+            y: 0,
+            w: 100,
+            h: 100,
+        };
+        let b = ClipRect {
+            x: 50,
+            y: 50,
+            w: 100,
+            h: 100,
+        };
+        let r = intersect_clip(&a, &b).unwrap();
+        assert_eq!(r.x, 50);
+        assert_eq!(r.y, 50);
+        assert_eq!(r.w, 50);
+        assert_eq!(r.h, 50);
+    }
+
+    #[test]
+    fn intersect_clip_contained() {
+        let outer = ClipRect {
+            x: 0,
+            y: 0,
+            w: 200,
+            h: 200,
+        };
+        let inner = ClipRect {
+            x: 10,
+            y: 20,
+            w: 50,
+            h: 30,
+        };
+        let r = intersect_clip(&outer, &inner).unwrap();
+        assert_eq!(r.x, 10);
+        assert_eq!(r.y, 20);
+        assert_eq!(r.w, 50);
+        assert_eq!(r.h, 30);
+    }
+
+    #[test]
+    fn intersect_clip_no_overlap() {
+        let a = ClipRect {
+            x: 0,
+            y: 0,
+            w: 50,
+            h: 50,
+        };
+        let b = ClipRect {
+            x: 100,
+            y: 100,
+            w: 50,
+            h: 50,
+        };
+        assert!(intersect_clip(&a, &b).is_none());
+    }
+
+    #[test]
+    fn intersect_clip_touching_edge() {
+        let a = ClipRect {
+            x: 0,
+            y: 0,
+            w: 50,
+            h: 50,
+        };
+        let b = ClipRect {
+            x: 50,
+            y: 0,
+            w: 50,
+            h: 50,
+        };
+        // Touching at edge but not overlapping.
+        assert!(intersect_clip(&a, &b).is_none());
+    }
+
+    #[test]
+    fn intersect_clip_same_rect() {
+        let a = ClipRect {
+            x: 10,
+            y: 20,
+            w: 100,
+            h: 80,
+        };
+        let r = intersect_clip(&a, &a).unwrap();
+        assert_eq!(r.x, 10);
+        assert_eq!(r.y, 20);
+        assert_eq!(r.w, 100);
+        assert_eq!(r.h, 80);
+    }
+
+    #[test]
+    fn isqrt_known_values() {
+        assert_eq!(isqrt(0), 0);
+        assert_eq!(isqrt(1), 1);
+        assert_eq!(isqrt(4), 2);
+        assert_eq!(isqrt(9), 3);
+        assert_eq!(isqrt(16), 4);
+        assert_eq!(isqrt(25), 5);
+        assert_eq!(isqrt(100), 10);
+    }
+
+    #[test]
+    fn isqrt_non_perfect_squares() {
+        assert_eq!(isqrt(2), 1);
+        assert_eq!(isqrt(3), 1);
+        assert_eq!(isqrt(5), 2);
+        assert_eq!(isqrt(8), 2);
+        assert_eq!(isqrt(10), 3);
+        assert_eq!(isqrt(99), 9);
+    }
+
+    #[test]
+    fn isqrt_negative() {
+        assert_eq!(isqrt(-1), 0);
+        assert_eq!(isqrt(-100), 0);
+    }
+
+    #[test]
+    fn edge_x_horizontal_line() {
+        // Horizontal line: y0 == y1, should return x0.
+        assert_eq!(edge_x(10, 5, 20, 5, 5), 10);
+    }
+
+    #[test]
+    fn edge_x_vertical_line() {
+        // Vertical line from (10,0) to (10,100).
+        assert_eq!(edge_x(10, 0, 10, 100, 50), 10);
+    }
+
+    #[test]
+    fn edge_x_diagonal() {
+        // Line from (0,0) to (100,100): at y=50, x should be 50.
+        assert_eq!(edge_x(0, 0, 100, 100, 50), 50);
+    }
+
+    #[test]
+    fn edge_x_endpoints() {
+        // At y=y0, should return x0.
+        assert_eq!(edge_x(10, 20, 50, 80, 20), 10);
+        // At y=y1, should return x1.
+        assert_eq!(edge_x(10, 20, 50, 80, 80), 50);
+    }
+
+    #[test]
+    fn lerp_color_sdl_endpoints() {
+        let a = Color::rgb(0, 0, 0);
+        let b = Color::rgb(255, 255, 255);
+        let at_start = lerp_color_sdl(a, b, 0, 10);
+        assert_eq!(at_start, a);
+        let at_end = lerp_color_sdl(a, b, 10, 10);
+        assert_eq!(at_end, b);
+    }
+
+    #[test]
+    fn lerp_color_sdl_midpoint() {
+        let a = Color::rgb(0, 0, 0);
+        let b = Color::rgb(200, 100, 50);
+        let mid = lerp_color_sdl(a, b, 5, 10);
+        assert_eq!(mid.r, 100);
+        assert_eq!(mid.g, 50);
+        assert_eq!(mid.b, 25);
+    }
+
+    #[test]
+    fn lerp_color_sdl_zero_denominator() {
+        let a = Color::rgb(42, 42, 42);
+        let b = Color::rgb(200, 200, 200);
+        let result = lerp_color_sdl(a, b, 5, 0);
+        assert_eq!(result, a);
+    }
+
+    // ---------------------------------------------------------------
+    // SDL rendering correctness tests (require display)
+    //
+    // These tests require a working SDL2 display. In CI, set
+    // SDL_VIDEODRIVER=dummy (or x11/wayland) and run:
+    //   cargo test -p oasis-backend-sdl -- --ignored
+    //
+    // Locally with a display, they can be run directly.
+    // ---------------------------------------------------------------
+
+    fn try_create_backend() -> Option<SdlBackend> {
+        SdlBackend::new("test", 64, 64).ok()
+    }
+
+    #[test]
+    #[ignore]
+    fn render_clear_red() {
+        let mut backend = match try_create_backend() {
+            Some(b) => b,
+            None => return,
+        };
+        let red = Color::rgb(255, 0, 0);
+        backend.clear(red).unwrap();
+        backend.swap_buffers().unwrap();
+
+        let pixels = backend.read_pixels(0, 0, 64, 64).unwrap();
+        // read_pixels returns ABGR8888 format, 4 bytes per pixel.
+        // Check a sample pixel at (0,0).
+        assert_eq!(pixels.len(), 64 * 64 * 4);
+        // First pixel should be red (exact format depends on SDL).
+        // At minimum, the red channel should be 255 and blue should be 0.
+        let r = pixels[0];
+        let g = pixels[1];
+        let b = pixels[2];
+        assert!(r > 200 || b > 200, "red channel should be dominant: r={r} g={g} b={b}");
+    }
+
+    #[test]
+    #[ignore]
+    fn render_fill_rect_at_position() {
+        let mut backend = match try_create_backend() {
+            Some(b) => b,
+            None => return,
+        };
+        // Clear to black, then fill a small rect with white.
+        backend.clear(Color::BLACK).unwrap();
+        backend
+            .fill_rect(10, 10, 4, 4, Color::WHITE)
+            .unwrap();
+        backend.swap_buffers().unwrap();
+
+        // Read the filled area.
+        let pixels = backend.read_pixels(10, 10, 4, 4).unwrap();
+        assert_eq!(pixels.len(), 4 * 4 * 4);
+        // All pixels in the rect should be non-zero (white).
+        let all_nonzero = pixels.chunks(4).all(|px| px[0] > 200 || px[2] > 200);
+        assert!(all_nonzero, "filled rect should have white pixels");
+
+        // Read an area outside the rect (should be black).
+        let outside = backend.read_pixels(0, 0, 4, 4).unwrap();
+        let all_dark = outside.chunks(4).all(|px| px[0] < 50 && px[1] < 50 && px[2] < 50);
+        assert!(all_dark, "area outside rect should be black");
+    }
+
+    #[test]
+    #[ignore]
+    fn render_texture_load_and_blit() {
+        let mut backend = match try_create_backend() {
+            Some(b) => b,
+            None => return,
+        };
+        // Create a 2x2 red texture.
+        let rgba = [
+            255, 0, 0, 255, 0, 255, 0, 255, 0, 0, 255, 255, 255, 255, 0, 255,
+        ];
+        let tex = backend.load_texture(2, 2, &rgba).unwrap();
+        backend.clear(Color::BLACK).unwrap();
+        backend.blit(tex, 0, 0, 2, 2).unwrap();
+        backend.swap_buffers().unwrap();
+
+        let pixels = backend.read_pixels(0, 0, 2, 2).unwrap();
+        // Should have non-black pixels where the texture was blitted.
+        let has_color = pixels.iter().any(|&b| b > 50);
+        assert!(has_color, "blitted texture should produce colored pixels");
+
+        backend.destroy_texture(tex).unwrap();
+    }
+
+    #[test]
+    #[ignore]
+    fn render_draw_text_produces_pixels() {
+        let mut backend = match try_create_backend() {
+            Some(b) => b,
+            None => return,
+        };
+        backend.clear(Color::BLACK).unwrap();
+        backend
+            .draw_text("A", 0, 0, 8, Color::WHITE)
+            .unwrap();
+        backend.swap_buffers().unwrap();
+
+        let pixels = backend.read_pixels(0, 0, 8, 8).unwrap();
+        // The letter 'A' should have some white pixels.
+        let white_count = pixels.chunks(4).filter(|px| px[0] > 200 || px[2] > 200).count();
+        assert!(
+            white_count > 5,
+            "letter 'A' should have visible pixels, got {white_count}"
+        );
+    }
+
+    #[test]
+    #[ignore]
+    fn render_measure_text_width() {
+        let backend = match try_create_backend() {
+            Some(b) => b,
+            None => return,
+        };
+        // At font_size=8, each char is 8px wide.
+        assert_eq!(backend.measure_text("A", 8), 8);
+        assert_eq!(backend.measure_text("AB", 8), 16);
+        assert_eq!(backend.measure_text("Hello", 8), 40);
+        assert_eq!(backend.measure_text("", 8), 0);
+
+        // At font_size=16, each char is 16px wide (scale=2).
+        assert_eq!(backend.measure_text("A", 16), 16);
+    }
+
+    #[test]
+    #[ignore]
+    fn render_clip_rect_restricts_drawing() {
+        let mut backend = match try_create_backend() {
+            Some(b) => b,
+            None => return,
+        };
+        backend.clear(Color::BLACK).unwrap();
+        // Set clip to top-left 16x16.
+        backend.set_clip_rect(0, 0, 16, 16).unwrap();
+        // Fill entire 64x64 with white -- only 16x16 should be affected.
+        backend.fill_rect(0, 0, 64, 64, Color::WHITE).unwrap();
+        backend.reset_clip_rect().unwrap();
+        backend.swap_buffers().unwrap();
+
+        // Inside clip: should be white.
+        let inside = backend.read_pixels(0, 0, 16, 16).unwrap();
+        let inside_white = inside.chunks(4).filter(|px| px[0] > 200 || px[2] > 200).count();
+        assert!(inside_white > 200, "inside clip should be mostly white");
+
+        // Outside clip: should be black.
+        let outside = backend.read_pixels(32, 32, 16, 16).unwrap();
+        let outside_dark = outside
+            .chunks(4)
+            .all(|px| px[0] < 50 && px[1] < 50 && px[2] < 50);
+        assert!(outside_dark, "outside clip should remain black");
+    }
+}

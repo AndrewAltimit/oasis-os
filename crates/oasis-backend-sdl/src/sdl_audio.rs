@@ -303,4 +303,94 @@ mod tests {
         backend.shutdown().unwrap();
         assert!(backend.tracks.is_empty());
     }
+
+    #[test]
+    fn volume_clamps_to_zero() {
+        let mut backend = init_backend();
+        backend.set_volume(0).unwrap();
+        assert_eq!(backend.get_volume(), 0);
+    }
+
+    #[test]
+    fn volume_clamps_to_max() {
+        let mut backend = init_backend();
+        backend.set_volume(255).unwrap();
+        assert_eq!(backend.get_volume(), 100);
+    }
+
+    #[test]
+    fn rapid_play_pause_cycle() {
+        let mut backend = init_backend();
+        let track = backend.load_track(b"data").unwrap();
+
+        for _ in 0..10 {
+            backend.play(track).unwrap();
+            assert!(backend.is_playing());
+            backend.pause().unwrap();
+            assert!(!backend.is_playing());
+            backend.resume().unwrap();
+            assert!(backend.is_playing());
+            backend.stop().unwrap();
+            assert!(!backend.is_playing());
+        }
+    }
+
+    #[test]
+    fn double_stop_is_idempotent() {
+        let mut backend = init_backend();
+        let track = backend.load_track(b"data").unwrap();
+        backend.play(track).unwrap();
+        backend.stop().unwrap();
+        // Second stop should not error.
+        backend.stop().unwrap();
+        assert!(!backend.is_playing());
+    }
+
+    #[test]
+    fn unload_nonexistent_track_is_silent() {
+        let mut backend = init_backend();
+        // Unloading a track that doesn't exist just removes nothing.
+        backend.unload_track(AudioTrackId(999)).unwrap();
+    }
+
+    #[test]
+    fn play_after_unload_fails() {
+        let mut backend = init_backend();
+        let track = backend.load_track(b"data").unwrap();
+        backend.unload_track(track).unwrap();
+        assert!(backend.play(track).is_err());
+    }
+
+    #[test]
+    fn duration_estimate_scales_with_data() {
+        let mut backend = init_backend();
+        let small = backend.load_track(&[0u8; 1_000]).unwrap();
+        backend.play(small).unwrap();
+        let dur_small = backend.duration_ms();
+
+        backend.stop().unwrap();
+        let large = backend.load_track(&[0u8; 10_000]).unwrap();
+        backend.play(large).unwrap();
+        let dur_large = backend.duration_ms();
+
+        assert!(
+            dur_large > dur_small,
+            "larger track should have longer duration: {dur_large} > {dur_small}"
+        );
+    }
+
+    #[test]
+    fn reinit_after_shutdown() {
+        let mut backend = init_backend();
+        backend.load_track(b"data").unwrap();
+        backend.shutdown().unwrap();
+        assert!(!backend.initialized);
+
+        // Re-init should work.
+        backend.init().unwrap();
+        assert!(backend.initialized);
+        let track = backend.load_track(b"new data").unwrap();
+        backend.play(track).unwrap();
+        assert!(backend.is_playing());
+    }
 }
