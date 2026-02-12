@@ -16,6 +16,10 @@ path = "src/main.rs"
 name = "oasis-screenshot"
 path = "src/screenshot.rs"
 
+[[bin]]
+name = "screenshot-tests"
+path = "src/screenshot_tests.rs"
+
 [dependencies]
 oasis-core = { workspace = true }
 oasis-backend-sdl = { path = "../oasis-backend-sdl" }
