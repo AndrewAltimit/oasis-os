@@ -59,8 +59,20 @@ fn parse_args() -> Args {
     let mut iter = std::env::args().skip(1);
     while let Some(arg) = iter.next() {
         match arg.as_str() {
-            "--scenario" => args.scenario_filter = iter.next(),
-            "--skin" => args.skin_filter = iter.next(),
+            "--scenario" => {
+                args.scenario_filter = Some(iter.next().unwrap_or_else(|| {
+                    eprintln!("--scenario requires a value");
+                    eprintln!("Usage: screenshot-tests [--scenario NAME] [--skin NAME] [--report]");
+                    std::process::exit(1);
+                }));
+            },
+            "--skin" => {
+                args.skin_filter = Some(iter.next().unwrap_or_else(|| {
+                    eprintln!("--skin requires a value");
+                    eprintln!("Usage: screenshot-tests [--scenario NAME] [--skin NAME] [--report]");
+                    std::process::exit(1);
+                }));
+            },
             "--report" => args.report = true,
             other => {
                 eprintln!("Unknown argument: {other}");
