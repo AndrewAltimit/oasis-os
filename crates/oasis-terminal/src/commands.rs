@@ -5,6 +5,12 @@ use oasis_vfs::EntryKind;
 
 use crate::interpreter::{Command, CommandOutput, CommandRegistry, Environment};
 
+/// Maximum file size for `cat` display (10 MiB).
+const CAT_MAX_SIZE: usize = 10 * 1024 * 1024;
+
+/// Maximum file size for `cp`/`mv` operations (100 MiB).
+const COPY_MAX_SIZE: usize = 100 * 1024 * 1024;
+
 /// Register all built-in commands into a registry.
 ///
 /// This registers the core commands (fs, system, network) plus audio/network/skin
@@ -177,6 +183,13 @@ impl Command for CatCmd {
             return Err(OasisError::Command("usage: cat <file>".to_string()));
         }
         let path = resolve_path(&env.cwd, args[0]);
+        let meta = env.vfs.stat(&path)?;
+        if meta.size as usize > CAT_MAX_SIZE {
+            return Err(OasisError::Command(format!(
+                "file too large ({} bytes, max {})",
+                meta.size, CAT_MAX_SIZE
+            )));
+        }
         let data = env.vfs.read(&path)?;
         let text = String::from_utf8_lossy(&data).into_owned();
         Ok(CommandOutput::Text(text))
@@ -349,6 +362,13 @@ impl Command for CpCmd {
         }
         let src = resolve_path(&env.cwd, args[0]);
         let dst = resolve_path(&env.cwd, args[1]);
+        let meta = env.vfs.stat(&src)?;
+        if meta.size as usize > COPY_MAX_SIZE {
+            return Err(OasisError::Command(format!(
+                "file too large ({} bytes, max {})",
+                meta.size, COPY_MAX_SIZE
+            )));
+        }
         let data = env.vfs.read(&src)?;
         env.vfs.write(&dst, &data)?;
         Ok(CommandOutput::None)
@@ -376,6 +396,13 @@ impl Command for MvCmd {
         }
         let src = resolve_path(&env.cwd, args[0]);
         let dst = resolve_path(&env.cwd, args[1]);
+        let meta = env.vfs.stat(&src)?;
+        if meta.size as usize > COPY_MAX_SIZE {
+            return Err(OasisError::Command(format!(
+                "file too large ({} bytes, max {})",
+                meta.size, COPY_MAX_SIZE
+            )));
+        }
         let data = env.vfs.read(&src)?;
         env.vfs.write(&dst, &data)?;
         env.vfs.remove(&src)?;

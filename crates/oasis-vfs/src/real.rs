@@ -14,6 +14,7 @@ use crate::{EntryKind, Vfs, VfsEntry, VfsMetadata};
 /// A VFS backed by the real filesystem, rooted at a configurable directory.
 #[derive(Debug)]
 pub struct RealVfs {
+    /// Canonical absolute path to the VFS root on the real filesystem.
     root: PathBuf,
 }
 

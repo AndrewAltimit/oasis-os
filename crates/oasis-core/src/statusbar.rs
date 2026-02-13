@@ -468,4 +468,304 @@ mod tests {
         bar.update_sdi(&mut sdi, &at, &feat);
         assert!(sdi.get("bar_top").unwrap().overlay);
     }
+
+    #[test]
+    fn toptab_labels() {
+        assert_eq!(TopTab::Apps.label(), "APPS");
+        assert_eq!(TopTab::Mods.label(), "MODS");
+        assert_eq!(TopTab::Net.label(), "NET");
+    }
+
+    #[test]
+    fn toptab_next_from_apps() {
+        assert_eq!(TopTab::Apps.next(), TopTab::Mods);
+    }
+
+    #[test]
+    fn toptab_next_from_net_wraps() {
+        assert_eq!(TopTab::Net.next(), TopTab::Apps);
+    }
+
+    #[test]
+    fn statusbar_default_state() {
+        let bar = StatusBar::new();
+        assert_eq!(bar.active_tab, TopTab::Apps);
+        assert_eq!(bar.clock_text, "00:00");
+        assert!(bar.date_text.is_empty());
+        assert!(bar.battery_text.is_empty());
+        assert!(bar.cpu_text.is_empty());
+    }
+
+    #[test]
+    fn statusbar_default_trait() {
+        let bar = StatusBar::default();
+        assert_eq!(bar.active_tab, TopTab::Apps);
+    }
+
+    #[test]
+    fn update_info_date_formatting() {
+        let mut bar = StatusBar::new();
+        let time = SystemTime {
+            year: 2025,
+            month: 12,
+            day: 25,
+            hour: 0,
+            minute: 0,
+            second: 0,
+        };
+        bar.update_info(Some(&time), None);
+        assert_eq!(bar.date_text, "December 25, 2025");
+    }
+
+    #[test]
+    fn update_info_invalid_month() {
+        let mut bar = StatusBar::new();
+        let time = SystemTime {
+            year: 2025,
+            month: 13,
+            day: 1,
+            hour: 0,
+            minute: 0,
+            second: 0,
+        };
+        bar.update_info(Some(&time), None);
+        assert!(bar.date_text.contains("???"));
+    }
+
+    #[test]
+    fn update_info_battery_low() {
+        let mut bar = StatusBar::new();
+        let power = PowerInfo {
+            battery_percent: Some(10),
+            battery_minutes: None,
+            state: BatteryState::Discharging,
+            cpu: crate::platform::CpuClock {
+                current_mhz: 0,
+                max_mhz: 0,
+            },
+        };
+        bar.update_info(None, Some(&power));
+        assert!(bar.battery_text.contains("10%"));
+        assert!(bar.battery_text.contains("[|    ]"));
+    }
+
+    #[test]
+    fn update_info_battery_full_state() {
+        let mut bar = StatusBar::new();
+        let power = PowerInfo {
+            battery_percent: Some(100),
+            battery_minutes: None,
+            state: BatteryState::Full,
+            cpu: crate::platform::CpuClock {
+                current_mhz: 0,
+                max_mhz: 0,
+            },
+        };
+        bar.update_info(None, Some(&power));
+        assert_eq!(bar.battery_text, "FULL");
+    }
+
+    #[test]
+    fn update_info_battery_icons() {
+        let mut bar = StatusBar::new();
+        // Test different battery percentage ranges.
+        for (pct, expected_icon) in &[
+            (5, "[|    ]"),
+            (25, "[||   ]"),
+            (50, "[|||  ]"),
+            (70, "[|||| ]"),
+            (95, "[|||||]"),
+        ] {
+            let power = PowerInfo {
+                battery_percent: Some(*pct),
+                battery_minutes: None,
+                state: BatteryState::Discharging,
+                cpu: crate::platform::CpuClock {
+                    current_mhz: 0,
+                    max_mhz: 0,
+                },
+            };
+            bar.update_info(None, Some(&power));
+            assert!(bar.battery_text.contains(expected_icon));
+        }
+    }
+
+    #[test]
+    fn update_info_cpu_text() {
+        let mut bar = StatusBar::new();
+        let power = PowerInfo {
+            battery_percent: Some(50),
+            battery_minutes: None,
+            state: BatteryState::Discharging,
+            cpu: crate::platform::CpuClock {
+                current_mhz: 222,
+                max_mhz: 333,
+            },
+        };
+        bar.update_info(None, Some(&power));
+        assert_eq!(bar.cpu_text, "222MHz");
+    }
+
+    #[test]
+    fn update_info_cpu_zero_clears() {
+        let mut bar = StatusBar::new();
+        bar.cpu_text = "333MHz".to_string();
+        let power = PowerInfo {
+            battery_percent: Some(50),
+            battery_minutes: None,
+            state: BatteryState::Discharging,
+            cpu: crate::platform::CpuClock {
+                current_mhz: 0,
+                max_mhz: 333,
+            },
+        };
+        bar.update_info(None, Some(&power));
+        assert!(bar.cpu_text.is_empty());
+    }
+
+    #[test]
+    fn hide_sdi_hides_all_objects() {
+        let bar = StatusBar::new();
+        let mut sdi = SdiRegistry::new();
+        let at = crate::active_theme::ActiveTheme::default();
+        let feat = crate::skin::SkinFeatures::default();
+        bar.update_sdi(&mut sdi, &at, &feat);
+
+        StatusBar::hide_sdi(&mut sdi);
+
+        assert!(!sdi.get("bar_top").unwrap().visible);
+        assert!(!sdi.get("bar_version").unwrap().visible);
+        assert!(!sdi.get("bar_clock").unwrap().visible);
+        assert!(!sdi.get("bar_battery").unwrap().visible);
+    }
+
+    #[test]
+    fn tabs_hidden_when_disabled() {
+        let bar = StatusBar::new();
+        let mut sdi = SdiRegistry::new();
+        let at = crate::active_theme::ActiveTheme::default();
+
+        // First enable to create objects.
+        let mut feat = crate::skin::SkinFeatures::default();
+        bar.update_sdi(&mut sdi, &at, &feat);
+
+        // Now disable and verify they're hidden.
+        feat.show_tabs = false;
+        bar.update_sdi(&mut sdi, &at, &feat);
+
+        assert!(!sdi.get("bar_tab_0").unwrap().visible);
+        assert!(!sdi.get("bar_mso").unwrap().visible);
+    }
+
+    #[test]
+    fn battery_hidden_when_disabled() {
+        let bar = StatusBar::new();
+        let mut sdi = SdiRegistry::new();
+        let at = crate::active_theme::ActiveTheme::default();
+
+        // First enable to create objects.
+        let mut feat = crate::skin::SkinFeatures::default();
+        bar.update_sdi(&mut sdi, &at, &feat);
+
+        // Now disable and verify they're hidden.
+        feat.show_battery = false;
+        bar.update_sdi(&mut sdi, &at, &feat);
+
+        assert!(!sdi.get("bar_battery").unwrap().visible);
+    }
+
+    #[test]
+    fn clock_hidden_when_disabled() {
+        let bar = StatusBar::new();
+        let mut sdi = SdiRegistry::new();
+        let at = crate::active_theme::ActiveTheme::default();
+
+        // First enable to create objects.
+        let mut feat = crate::skin::SkinFeatures::default();
+        bar.update_sdi(&mut sdi, &at, &feat);
+
+        // Now disable and verify they're hidden.
+        feat.show_clock = false;
+        bar.update_sdi(&mut sdi, &at, &feat);
+
+        assert!(!sdi.get("bar_clock").unwrap().visible);
+    }
+
+    #[test]
+    fn version_hidden_when_disabled() {
+        let bar = StatusBar::new();
+        let mut sdi = SdiRegistry::new();
+        let at = crate::active_theme::ActiveTheme::default();
+
+        // First enable to create objects.
+        let mut feat = crate::skin::SkinFeatures::default();
+        bar.update_sdi(&mut sdi, &at, &feat);
+
+        // Now disable and verify they're hidden.
+        feat.show_version = false;
+        bar.update_sdi(&mut sdi, &at, &feat);
+
+        assert!(!sdi.get("bar_version").unwrap().visible);
+    }
+
+    #[test]
+    fn active_tab_has_different_color() {
+        let mut bar = StatusBar::new();
+        bar.active_tab = TopTab::Apps;
+        let mut sdi = SdiRegistry::new();
+        let at = crate::active_theme::ActiveTheme::default();
+        let feat = crate::skin::SkinFeatures::default();
+        bar.update_sdi(&mut sdi, &at, &feat);
+
+        let apps_tab = sdi.get("bar_tab_0").unwrap();
+        let mods_tab = sdi.get("bar_tab_1").unwrap();
+        assert_ne!(apps_tab.text_color, mods_tab.text_color);
+    }
+
+    #[test]
+    fn clock_includes_date_when_present() {
+        let mut bar = StatusBar::new();
+        let time = SystemTime {
+            year: 2025,
+            month: 6,
+            day: 15,
+            hour: 14,
+            minute: 30,
+            second: 0,
+        };
+        bar.update_info(Some(&time), None);
+        let mut sdi = SdiRegistry::new();
+        let at = crate::active_theme::ActiveTheme::default();
+        let feat = crate::skin::SkinFeatures::default();
+        bar.update_sdi(&mut sdi, &at, &feat);
+
+        let clock_obj = sdi.get("bar_clock").unwrap();
+        let clock_str = clock_obj.text.as_ref().unwrap();
+        assert!(clock_str.contains("14:30"));
+        assert!(clock_str.contains("June"));
+    }
+
+    #[test]
+    fn battery_merges_with_cpu() {
+        let mut bar = StatusBar::new();
+        let power = PowerInfo {
+            battery_percent: Some(75),
+            battery_minutes: None,
+            state: BatteryState::Discharging,
+            cpu: crate::platform::CpuClock {
+                current_mhz: 222,
+                max_mhz: 333,
+            },
+        };
+        bar.update_info(None, Some(&power));
+        let mut sdi = SdiRegistry::new();
+        let at = crate::active_theme::ActiveTheme::default();
+        let feat = crate::skin::SkinFeatures::default();
+        bar.update_sdi(&mut sdi, &at, &feat);
+
+        let battery_obj = sdi.get("bar_battery").unwrap();
+        let text = battery_obj.text.as_ref().unwrap();
+        assert!(text.contains("75%"));
+        assert!(text.contains("222MHz"));
+    }
 }

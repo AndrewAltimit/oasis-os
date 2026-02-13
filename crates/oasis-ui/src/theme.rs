@@ -5,74 +5,114 @@ use oasis_types::backend::Color;
 
 /// Complete visual theme for the UI toolkit.
 pub struct Theme {
-    // Surface colors.
+    /// Main background color.
     pub background: Color,
+    /// Surface/panel background color.
     pub surface: Color,
+    /// Variant surface color for depth.
     pub surface_variant: Color,
+    /// Overlay/modal backdrop color.
     pub overlay: Color,
 
-    // Content colors.
+    /// Primary text color.
     pub text_primary: Color,
+    /// Secondary/muted text color.
     pub text_secondary: Color,
+    /// Disabled text color.
     pub text_disabled: Color,
+    /// Text on accent-colored backgrounds.
     pub text_on_accent: Color,
 
-    // Accent colors.
+    /// Primary accent color.
     pub accent: Color,
+    /// Accent color on hover.
     pub accent_hover: Color,
+    /// Accent color when pressed.
     pub accent_pressed: Color,
+    /// Subtle/transparent accent.
     pub accent_subtle: Color,
 
-    // Semantic colors.
+    /// Success/positive color.
     pub success: Color,
+    /// Warning/caution color.
     pub warning: Color,
+    /// Error/danger color.
     pub error: Color,
+    /// Info/neutral color.
     pub info: Color,
 
-    // Border colors.
+    /// Default border color.
     pub border: Color,
+    /// Subtle/faint border color.
     pub border_subtle: Color,
+    /// Strong/emphasized border color.
     pub border_strong: Color,
 
-    // Component specifics.
+    /// Button background color.
     pub button_bg: Color,
+    /// Button background on hover.
     pub button_bg_hover: Color,
+    /// Button background when pressed.
     pub button_bg_pressed: Color,
+    /// Disabled button background.
     pub button_bg_disabled: Color,
+    /// Input field background.
     pub input_bg: Color,
+    /// Input field border.
     pub input_border: Color,
+    /// Input field border when focused.
     pub input_border_focus: Color,
+    /// Scrollbar track background.
     pub scrollbar_track: Color,
+    /// Scrollbar thumb color.
     pub scrollbar_thumb: Color,
+    /// Scrollbar thumb on hover.
     pub scrollbar_thumb_hover: Color,
+    /// Tooltip background.
     pub tooltip_bg: Color,
+    /// Tooltip text color.
     pub tooltip_text: Color,
 
-    // Typography.
+    /// Extra-small font size.
     pub font_size_xs: u16,
+    /// Small font size.
     pub font_size_sm: u16,
+    /// Medium/default font size.
     pub font_size_md: u16,
+    /// Large font size.
     pub font_size_lg: u16,
+    /// Extra-large font size.
     pub font_size_xl: u16,
+    /// Double extra-large font size.
     pub font_size_xxl: u16,
 
-    // Spacing.
+    /// Extra-small spacing.
     pub spacing_xs: u16,
+    /// Small spacing.
     pub spacing_sm: u16,
+    /// Medium spacing.
     pub spacing_md: u16,
+    /// Large spacing.
     pub spacing_lg: u16,
+    /// Extra-large spacing.
     pub spacing_xl: u16,
 
-    // Geometry.
+    /// Small border radius.
     pub border_radius_sm: u16,
+    /// Medium border radius.
     pub border_radius_md: u16,
+    /// Large border radius.
     pub border_radius_lg: u16,
+    /// Extra-large border radius.
     pub border_radius_xl: u16,
 
-    // Elevation.
+    /// Card elevation shadow.
     pub shadow_card: Shadow,
+    /// Dropdown elevation shadow.
     pub shadow_dropdown: Shadow,
+    /// Modal elevation shadow.
     pub shadow_modal: Shadow,
+    /// Tooltip elevation shadow.
     pub shadow_tooltip: Shadow,
 }
 

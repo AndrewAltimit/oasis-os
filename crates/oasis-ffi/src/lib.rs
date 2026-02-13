@@ -133,7 +133,13 @@ unsafe fn c_str_to_str<'a>(ptr: *const c_char) -> Option<&'a str> {
         return None;
     }
     // SAFETY: caller guarantees valid null-terminated string.
-    unsafe { CStr::from_ptr(ptr) }.to_str().ok()
+    match unsafe { CStr::from_ptr(ptr) }.to_str() {
+        Ok(s) => Some(s),
+        Err(e) => {
+            log::warn!("FFI: invalid UTF-8 in C string: {e}");
+            None
+        },
+    }
 }
 
 fn button_from_code(code: u32) -> Option<Button> {

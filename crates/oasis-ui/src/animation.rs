@@ -7,20 +7,24 @@ use oasis_types::backend::Color;
 ///
 /// Input `t` is clamped to `[0.0, 1.0]`. Output is the eased value.
 pub mod easing {
+    /// Linear easing (no acceleration).
     pub fn linear(t: f32) -> f32 {
         t.clamp(0.0, 1.0)
     }
 
+    /// Quadratic ease-in (slow start).
     pub fn ease_in_quad(t: f32) -> f32 {
         let t = t.clamp(0.0, 1.0);
         t * t
     }
 
+    /// Quadratic ease-out (slow end).
     pub fn ease_out_quad(t: f32) -> f32 {
         let t = t.clamp(0.0, 1.0);
         t * (2.0 - t)
     }
 
+    /// Quadratic ease-in-out (slow start and end).
     pub fn ease_in_out_quad(t: f32) -> f32 {
         let t = t.clamp(0.0, 1.0);
         if t < 0.5 {
@@ -30,12 +34,14 @@ pub mod easing {
         }
     }
 
+    /// Cubic ease-out (slow end, sharper than quad).
     pub fn ease_out_cubic(t: f32) -> f32 {
         let t = t.clamp(0.0, 1.0);
         let t1 = t - 1.0;
         t1 * t1 * t1 + 1.0
     }
 
+    /// Cubic ease-in-out (smooth start and end).
     pub fn ease_in_out_cubic(t: f32) -> f32 {
         let t = t.clamp(0.0, 1.0);
         if t < 0.5 {
@@ -45,6 +51,7 @@ pub mod easing {
         }
     }
 
+    /// Elastic ease-out (bounces past target then settles).
     pub fn ease_out_elastic(t: f32) -> f32 {
         let t = t.clamp(0.0, 1.0);
         if t == 0.0 || t == 1.0 {
@@ -54,6 +61,7 @@ pub mod easing {
         (2.0_f32.powf(-10.0 * t) * ((t - p / 4.0) * (2.0 * core::f32::consts::PI / p)).sin()) + 1.0
     }
 
+    /// Bounce ease-out (bounces multiple times before settling).
     pub fn ease_out_bounce(t: f32) -> f32 {
         let t = t.clamp(0.0, 1.0);
         if t < 1.0 / 2.75 {
@@ -73,14 +81,20 @@ pub mod easing {
 
 /// A running animation that interpolates between two values.
 pub struct Tween {
+    /// Starting value.
     pub start: f32,
+    /// Target value.
     pub end: f32,
+    /// Total duration in milliseconds.
     pub duration_ms: u32,
+    /// Elapsed time in milliseconds.
     pub elapsed_ms: u32,
+    /// Easing function to apply.
     pub easing: fn(f32) -> f32,
 }
 
 impl Tween {
+    /// Create a new tween animation.
     pub fn new(start: f32, end: f32, duration_ms: u32, easing: fn(f32) -> f32) -> Self {
         Self {
             start,
@@ -103,6 +117,7 @@ impl Tween {
         self.start + (self.end - self.start) * eased
     }
 
+    /// Check if the animation has completed.
     pub fn is_finished(&self) -> bool {
         self.elapsed_ms >= self.duration_ms
     }
@@ -121,12 +136,15 @@ impl Tween {
 
 /// Tween between two colors over time.
 pub struct ColorTween {
+    /// Starting color.
     pub start: Color,
+    /// Target color.
     pub end: Color,
     tween: Tween,
 }
 
 impl ColorTween {
+    /// Create a new color tween animation.
     pub fn new(start: Color, end: Color, duration_ms: u32, easing: fn(f32) -> f32) -> Self {
         Self {
             start,
@@ -135,11 +153,13 @@ impl ColorTween {
         }
     }
 
+    /// Advance by `dt_ms` and return the current interpolated color.
     pub fn tick(&mut self, dt_ms: u32) -> Color {
         let t = self.tween.tick(dt_ms);
         lerp_color(self.start, self.end, t)
     }
 
+    /// Check if the animation has completed.
     pub fn is_finished(&self) -> bool {
         self.tween.is_finished()
     }

@@ -7,12 +7,14 @@ use oasis_types::error::Result;
 
 /// An on/off toggle switch.
 pub struct Toggle {
+    /// Whether the toggle is on.
     pub on: bool,
     /// Animation progress (0.0 = off, 1.0 = on).
     pub progress: f32,
 }
 
 impl Toggle {
+    /// Create a new toggle in the given state.
     pub fn new(on: bool) -> Self {
         Self {
             on,

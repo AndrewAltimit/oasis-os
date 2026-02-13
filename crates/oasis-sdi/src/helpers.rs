@@ -107,10 +107,15 @@ pub fn ensure_chrome_bezel(
 
 /// Style parameters for a chrome bezel.
 pub struct BezelStyle {
+    /// Fill color for the bezel interior.
     pub fill: Color,
+    /// Color for the top edge highlight.
     pub top: Color,
+    /// Color for the bottom edge shadow.
     pub bottom: Color,
+    /// Color for the left edge highlight.
     pub left: Color,
+    /// Color for the right edge shadow.
     pub right: Color,
 }
 

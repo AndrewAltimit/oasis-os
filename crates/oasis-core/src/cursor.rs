@@ -197,4 +197,135 @@ mod tests {
         assert_eq!(pixels[offset + 2], 255); // B
         assert_eq!(pixels[offset + 3], 255); // A
     }
+
+    #[test]
+    fn cursor_set_position() {
+        let mut cursor = CursorState::new(480, 272);
+        cursor.set_position(100, 200);
+        assert_eq!(cursor.x, 100);
+        assert_eq!(cursor.y, 200);
+    }
+
+    #[test]
+    fn cursor_default_trait() {
+        let cursor = CursorState::default();
+        assert_eq!(cursor.x, 240);
+        assert_eq!(cursor.y, 136);
+    }
+
+    #[test]
+    fn cursor_visible_after_move() {
+        let mut cursor = CursorState::new(480, 272);
+        cursor.visible = false;
+        cursor.handle_input(&InputEvent::CursorMove { x: 100, y: 50 });
+        assert!(cursor.visible);
+    }
+
+    #[test]
+    fn cursor_sdi_updates_position() {
+        let mut cursor = CursorState::new(480, 272);
+        let mut sdi = SdiRegistry::new();
+        cursor.update_sdi(&mut sdi);
+        cursor.x = 100;
+        cursor.y = 200;
+        cursor.update_sdi(&mut sdi);
+        let obj = sdi.get(CURSOR_SDI_NAME).unwrap();
+        assert_eq!(obj.x, 100);
+        assert_eq!(obj.y, 200);
+    }
+
+    #[test]
+    fn cursor_sdi_sets_size() {
+        let cursor = CursorState::new(480, 272);
+        let mut sdi = SdiRegistry::new();
+        cursor.update_sdi(&mut sdi);
+        let obj = sdi.get(CURSOR_SDI_NAME).unwrap();
+        assert_eq!(obj.w, CURSOR_W);
+        assert_eq!(obj.h, CURSOR_H);
+    }
+
+    #[test]
+    fn cursor_sdi_is_always_on_top() {
+        let cursor = CursorState::new(480, 272);
+        let mut sdi = SdiRegistry::new();
+        cursor.update_sdi(&mut sdi);
+        let obj = sdi.get(CURSOR_SDI_NAME).unwrap();
+        assert_eq!(obj.z, 10000);
+    }
+
+    #[test]
+    fn cursor_hide_sdi_hides_cursor() {
+        let cursor = CursorState::new(480, 272);
+        let mut sdi = SdiRegistry::new();
+        cursor.update_sdi(&mut sdi);
+        assert!(sdi.get(CURSOR_SDI_NAME).unwrap().visible);
+        CursorState::hide_sdi(&mut sdi);
+        assert!(!sdi.get(CURSOR_SDI_NAME).unwrap().visible);
+    }
+
+    #[test]
+    fn cursor_respects_visibility_flag() {
+        let mut cursor = CursorState::new(480, 272);
+        cursor.visible = false;
+        let mut sdi = SdiRegistry::new();
+        cursor.update_sdi(&mut sdi);
+        let obj = sdi.get(CURSOR_SDI_NAME).unwrap();
+        assert!(!obj.visible);
+    }
+
+    #[test]
+    fn generate_cursor_has_transparent_pixels() {
+        let (pixels, w, _) = generate_cursor_pixels();
+        // Pixel at (5,0) should be transparent.
+        let offset = (0 * w + 5) as usize * 4;
+        assert_eq!(pixels[offset + 3], 0); // Alpha = 0
+    }
+
+    #[test]
+    fn generate_cursor_has_black_outline() {
+        let (pixels, w, _) = generate_cursor_pixels();
+        // Pixel at (1,1) should be black outline.
+        let offset = (1 * w + 1) as usize * 4;
+        assert_eq!(pixels[offset], 0);
+        assert_eq!(pixels[offset + 1], 0);
+        assert_eq!(pixels[offset + 2], 0);
+        assert_eq!(pixels[offset + 3], 255);
+    }
+
+    #[test]
+    fn cursor_button_press_ignored() {
+        let mut cursor = CursorState::new(480, 272);
+        let original_x = cursor.x;
+        let original_y = cursor.y;
+        cursor.handle_input(&InputEvent::ButtonPress(crate::input::Button::Confirm));
+        assert_eq!(cursor.x, original_x);
+        assert_eq!(cursor.y, original_y);
+    }
+
+    #[test]
+    fn cursor_multiple_moves() {
+        let mut cursor = CursorState::new(480, 272);
+        cursor.handle_input(&InputEvent::CursorMove { x: 10, y: 20 });
+        assert_eq!(cursor.x, 10);
+        assert_eq!(cursor.y, 20);
+        cursor.handle_input(&InputEvent::CursorMove { x: 30, y: 40 });
+        assert_eq!(cursor.x, 30);
+        assert_eq!(cursor.y, 40);
+    }
+
+    #[test]
+    fn cursor_negative_coordinates() {
+        let mut cursor = CursorState::new(480, 272);
+        cursor.set_position(-10, -20);
+        assert_eq!(cursor.x, -10);
+        assert_eq!(cursor.y, -20);
+    }
+
+    #[test]
+    fn cursor_large_coordinates() {
+        let mut cursor = CursorState::new(480, 272);
+        cursor.set_position(10000, 10000);
+        assert_eq!(cursor.x, 10000);
+        assert_eq!(cursor.y, 10000);
+    }
 }

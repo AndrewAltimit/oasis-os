@@ -20,6 +20,11 @@ pub struct SdiRegistry {
     objects: HashMap<String, SdiObject>,
     /// Monotonically increasing counter for assigning z-order to new objects.
     next_z: i32,
+    /// Pre-sorted list of object names in z-order (ascending). Rebuilt on
+    /// mutation rather than on every `draw()` call.
+    z_sorted_names: Vec<String>,
+    /// Whether `z_sorted_names` needs rebuilding before next draw.
+    z_dirty: bool,
 }
 
 impl SdiRegistry {
@@ -28,6 +33,8 @@ impl SdiRegistry {
         Self {
             objects: HashMap::new(),
             next_z: 0,
+            z_sorted_names: Vec::new(),
+            z_dirty: false,
         }
     }
 
@@ -41,7 +48,12 @@ impl SdiRegistry {
         obj.z = self.next_z;
         self.next_z += 1;
         self.objects.insert(name.clone(), obj);
-        self.objects.get_mut(&name).unwrap()
+        self.z_dirty = true;
+        // SAFETY (logical): We just inserted with this key on the line above,
+        // so the entry is guaranteed to exist.
+        self.objects
+            .get_mut(&name)
+            .expect("just-inserted key missing")
     }
 
     /// Get a shared reference to an object by name.
@@ -62,7 +74,9 @@ impl SdiRegistry {
     pub fn destroy(&mut self, name: &str) -> Result<()> {
         self.objects
             .remove(name)
-            .map(|_| ())
+            .map(|_| {
+                self.z_dirty = true;
+            })
             .ok_or_else(|| OasisError::Sdi(format!("object not found: {name}")))
     }
 
@@ -72,6 +86,7 @@ impl SdiRegistry {
         self.next_z += 1;
         let obj = self.get_mut(name)?;
         obj.z = new_z;
+        self.z_dirty = true;
         Ok(())
     }
 
@@ -80,6 +95,7 @@ impl SdiRegistry {
         let min_z = self.objects.values().map(|o| o.z).min().unwrap_or(0) - 1;
         let obj = self.get_mut(name)?;
         obj.z = min_z;
+        self.z_dirty = true;
         Ok(())
     }
 
@@ -204,15 +220,25 @@ impl SdiRegistry {
         self.objects.keys().map(String::as_str)
     }
 
+    /// Rebuild the cached z-order index if it is dirty.
+    fn ensure_z_sorted(&mut self) {
+        if !self.z_dirty {
+            return;
+        }
+        self.z_sorted_names = self.objects.keys().cloned().collect();
+        self.z_sorted_names.sort_by_key(|name| self.objects[name].z);
+        self.z_dirty = false;
+    }
+
     /// Draw all visible objects to the backend, sorted by z-order (ascending).
     /// Uses PSIX-style two-pass rendering: base-layer objects first, then
     /// overlay objects on top.
-    pub fn draw(&self, backend: &mut dyn SdiBackend) -> Result<()> {
-        let mut sorted: Vec<&SdiObject> = self.objects.values().collect();
-        sorted.sort_by_key(|o| o.z);
+    pub fn draw(&mut self, backend: &mut dyn SdiBackend) -> Result<()> {
+        self.ensure_z_sorted();
 
         // Pass 1: base layer (overlay == false).
-        for obj in &sorted {
+        for name in &self.z_sorted_names {
+            let obj = &self.objects[name];
             if obj.overlay || !obj.visible || obj.alpha == 0 {
                 continue;
             }
@@ -220,7 +246,8 @@ impl SdiRegistry {
         }
 
         // Pass 2: overlay layer (overlay == true).
-        for obj in &sorted {
+        for name in &self.z_sorted_names {
+            let obj = &self.objects[name];
             if !obj.overlay || !obj.visible || obj.alpha == 0 {
                 continue;
             }
@@ -263,41 +290,26 @@ impl SdiRegistry {
             let a = ((obj.color.a as u16) * (obj.alpha as u16) / 255) as u8;
             let color = Color::rgba(obj.color.r, obj.color.g, obj.color.b, a);
 
-            let has_gradient = obj.gradient_top.is_some() && obj.gradient_bottom.is_some();
-
-            if has_gradient && radius > 0 {
-                let top = obj.gradient_top.unwrap();
-                let bot = obj.gradient_bottom.unwrap();
+            if let (Some(gt), Some(gb)) = (obj.gradient_top, obj.gradient_bottom) {
                 let top = Color::rgba(
-                    top.r,
-                    top.g,
-                    top.b,
-                    ((top.a as u16) * (obj.alpha as u16) / 255) as u8,
+                    gt.r,
+                    gt.g,
+                    gt.b,
+                    ((gt.a as u16) * (obj.alpha as u16) / 255) as u8,
                 );
                 let bot = Color::rgba(
-                    bot.r,
-                    bot.g,
-                    bot.b,
-                    ((bot.a as u16) * (obj.alpha as u16) / 255) as u8,
+                    gb.r,
+                    gb.g,
+                    gb.b,
+                    ((gb.a as u16) * (obj.alpha as u16) / 255) as u8,
                 );
-                backend
-                    .fill_rounded_rect_gradient_v(obj.x, obj.y, obj.w, obj.h, radius, top, bot)?;
-            } else if has_gradient {
-                let top = obj.gradient_top.unwrap();
-                let bot = obj.gradient_bottom.unwrap();
-                let top = Color::rgba(
-                    top.r,
-                    top.g,
-                    top.b,
-                    ((top.a as u16) * (obj.alpha as u16) / 255) as u8,
-                );
-                let bot = Color::rgba(
-                    bot.r,
-                    bot.g,
-                    bot.b,
-                    ((bot.a as u16) * (obj.alpha as u16) / 255) as u8,
-                );
-                backend.fill_rect_gradient_v(obj.x, obj.y, obj.w, obj.h, top, bot)?;
+                if radius > 0 {
+                    backend.fill_rounded_rect_gradient_v(
+                        obj.x, obj.y, obj.w, obj.h, radius, top, bot,
+                    )?;
+                } else {
+                    backend.fill_rect_gradient_v(obj.x, obj.y, obj.w, obj.h, top, bot)?;
+                }
             } else if radius > 0 {
                 backend.fill_rounded_rect(obj.x, obj.y, obj.w, obj.h, radius, color)?;
             } else {
@@ -329,24 +341,42 @@ impl SdiRegistry {
 /// Deserialization helper for theme TOML entries.
 #[derive(Debug, Deserialize)]
 struct ThemeEntry {
+    /// X position in virtual screen coordinates.
     x: Option<i32>,
+    /// Y position in virtual screen coordinates.
     y: Option<i32>,
+    /// Width in pixels.
     w: Option<u32>,
+    /// Height in pixels.
     h: Option<u32>,
+    /// Alpha (0 = fully transparent, 255 = fully opaque).
     alpha: Option<u8>,
+    /// Whether this object is drawn.
     visible: Option<bool>,
+    /// Text content.
     text: Option<String>,
+    /// Font size in pixels.
     font_size: Option<u16>,
+    /// Fill color as hex string ("#RRGGBB" or "#RRGGBBAA").
     color: Option<String>,
+    /// Text color as hex string.
     text_color: Option<String>,
+    /// Render in overlay pass (on top of base layer).
     overlay: Option<bool>,
     // Extended visual properties.
+    /// Corner radius for rounded rectangles (pixels).
     border_radius: Option<u16>,
+    /// Gradient top color as hex string.
     gradient_top: Option<String>,
+    /// Gradient bottom color as hex string.
     gradient_bottom: Option<String>,
+    /// Shadow elevation level (0 = none, 1-3 = increasingly prominent).
     shadow_level: Option<u8>,
+    /// Stroke/outline width in pixels.
     stroke_width: Option<u16>,
+    /// Stroke/outline color as hex string.
     stroke_color: Option<String>,
+    /// Shadow color as hex string (default: black).
     shadow_color: Option<String>,
 }
 

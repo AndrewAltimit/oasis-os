@@ -8,18 +8,24 @@ use oasis_types::error::Result;
 /// Orientation of the divider.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DividerOrientation {
+    /// Horizontal line (left to right).
     Horizontal,
+    /// Vertical line (top to bottom).
     Vertical,
 }
 
 /// A separator line.
 pub struct Divider {
+    /// Line orientation.
     pub orientation: DividerOrientation,
+    /// Optional color override.
     pub color: Option<Color>,
+    /// Line thickness in pixels.
     pub thickness: u16,
 }
 
 impl Divider {
+    /// Create a horizontal divider.
     pub fn horizontal() -> Self {
         Self {
             orientation: DividerOrientation::Horizontal,
@@ -28,6 +34,7 @@ impl Divider {
         }
     }
 
+    /// Create a vertical divider.
     pub fn vertical() -> Self {
         Self {
             orientation: DividerOrientation::Vertical,

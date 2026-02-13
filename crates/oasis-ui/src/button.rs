@@ -10,31 +10,45 @@ use oasis_types::error::Result;
 /// Button visual state.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ButtonState {
+    /// Default state.
     Normal,
+    /// Mouse/cursor is over the button.
     Hover,
+    /// Button is being pressed.
     Pressed,
+    /// Button is disabled and non-interactive.
     Disabled,
 }
 
 /// Button visual style.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ButtonStyle {
+    /// Filled button with accent color.
     Primary,
+    /// Filled button with neutral color.
     Secondary,
+    /// Button with border only, no fill.
     Outline,
+    /// Button with no background or border until hovered.
     Ghost,
 }
 
 /// A clickable button with label and optional icon.
 pub struct Button {
+    /// Button text label.
     pub label: String,
+    /// Optional icon to display.
     pub icon: Option<Icon>,
+    /// Current visual state.
     pub state: ButtonState,
+    /// Visual style variant.
     pub style: ButtonStyle,
+    /// Internal padding around label.
     pub padding: Padding,
 }
 
 impl Button {
+    /// Create a new secondary button.
     pub fn new(label: impl Into<String>) -> Self {
         Self {
             label: label.into(),
@@ -45,6 +59,7 @@ impl Button {
         }
     }
 
+    /// Create a new primary (accent-colored) button.
     pub fn primary(label: impl Into<String>) -> Self {
         Self {
             style: ButtonStyle::Primary,

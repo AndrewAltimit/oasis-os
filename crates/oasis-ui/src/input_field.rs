@@ -7,15 +7,22 @@ use oasis_types::error::Result;
 
 /// Text input field with cursor and optional placeholder.
 pub struct InputField {
+    /// Current text content.
     pub text: String,
+    /// Placeholder text shown when empty.
     pub placeholder: String,
+    /// Cursor position as character index.
     pub cursor_pos: usize,
+    /// Optional text selection range (start, end).
     pub selection: Option<(usize, usize)>,
+    /// Whether the field has focus.
     pub focused: bool,
+    /// If true, display text as asterisks.
     pub password_mode: bool,
 }
 
 impl InputField {
+    /// Create a new empty input field.
     pub fn new() -> Self {
         Self {
             text: String::new(),

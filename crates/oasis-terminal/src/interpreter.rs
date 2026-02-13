@@ -69,7 +69,7 @@ pub trait Command {
     /// One-line description for `help`.
     fn description(&self) -> &str;
 
-    /// Usage string (e.g. "ls [path]").
+    /// Usage string (e.g. "ls \[path\]").
     fn usage(&self) -> &str;
 
     /// Execute the command with the given arguments and environment.
@@ -82,6 +82,7 @@ pub struct CommandRegistry {
 }
 
 impl CommandRegistry {
+    /// Create an empty command registry.
     pub fn new() -> Self {
         Self {
             commands: HashMap::new(),

@@ -7,20 +7,28 @@ use oasis_types::error::Result;
 /// Scrollbar visual style.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ScrollbarStyle {
+    /// Narrow scrollbar.
     Thin,
+    /// Wide scrollbar.
     Wide,
+    /// No scrollbar shown.
     Hidden,
 }
 
 /// A scrollable content region with a scrollbar.
 pub struct ScrollView {
+    /// Total height of scrollable content.
     pub content_height: u32,
+    /// Current vertical scroll position.
     pub scroll_y: i32,
+    /// Height of visible viewport.
     pub viewport_height: u32,
+    /// Scrollbar visual style.
     pub scrollbar_style: ScrollbarStyle,
 }
 
 impl ScrollView {
+    /// Create a new scroll view.
     pub fn new(content_height: u32, viewport_height: u32) -> Self {
         Self {
             content_height,

@@ -8,19 +8,26 @@ use oasis_types::error::Result;
 /// Tab visual style.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TabStyle {
+    /// Active tab has bottom underline.
     Underline,
+    /// Active tab is filled with background.
     Filled,
+    /// Pill-shaped tabs.
     Pill,
 }
 
 /// A horizontal tab strip.
 pub struct TabBar {
+    /// Tab labels.
     pub tabs: Vec<String>,
+    /// Index of active tab.
     pub active: usize,
+    /// Visual style variant.
     pub style: TabStyle,
 }
 
 impl TabBar {
+    /// Create a new tab bar.
     pub fn new(tabs: Vec<String>) -> Self {
         Self {
             tabs,

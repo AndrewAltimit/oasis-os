@@ -15,6 +15,7 @@ pub fn register_network_commands(reg: &mut CommandRegistry) {
 // wifi
 // ---------------------------------------------------------------------------
 
+/// Terminal command for displaying WiFi status (hardware, connection, IP, MAC).
 struct WifiCmd;
 impl Command for WifiCmd {
     fn name(&self) -> &str {
@@ -79,6 +80,7 @@ fn wifi_status(env: &mut Environment<'_>) -> Result<CommandOutput> {
 // ping (connectivity test via DNS resolve)
 // ---------------------------------------------------------------------------
 
+/// Terminal command for testing network connectivity via DNS resolution.
 struct PingCmd;
 impl Command for PingCmd {
     fn name(&self) -> &str {
@@ -116,6 +118,7 @@ impl Command for PingCmd {
 // http (HTTP GET via platform network service)
 // ---------------------------------------------------------------------------
 
+/// Terminal command for performing HTTP GET requests via platform network service.
 struct HttpCmd;
 impl Command for HttpCmd {
     fn name(&self) -> &str {

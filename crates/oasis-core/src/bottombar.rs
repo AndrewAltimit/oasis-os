@@ -394,4 +394,163 @@ mod tests {
         bar.update_sdi(&mut sdi, &at, &feat);
         assert!(sdi.get("bar_bottom").unwrap().overlay);
     }
+
+    #[test]
+    fn media_tab_labels() {
+        assert_eq!(MediaTab::None.label(), "");
+        assert_eq!(MediaTab::Audio.label(), "AUDIO");
+        assert_eq!(MediaTab::Video.label(), "VIDEO");
+        assert_eq!(MediaTab::Image.label(), "IMAGE");
+        assert_eq!(MediaTab::File.label(), "FILE");
+    }
+
+    #[test]
+    fn media_tab_next_from_none() {
+        assert_eq!(MediaTab::None.next(), MediaTab::Audio);
+    }
+
+    #[test]
+    fn media_tab_next_from_file_wraps() {
+        assert_eq!(MediaTab::File.next(), MediaTab::None);
+    }
+
+    #[test]
+    fn bottombar_default_state() {
+        let bar = BottomBar::new();
+        assert_eq!(bar.active_tab, MediaTab::None);
+        assert_eq!(bar.current_page, 0);
+        assert_eq!(bar.total_pages, 1);
+        assert!(!bar.l_pressed);
+        assert!(!bar.r_pressed);
+    }
+
+    #[test]
+    fn bottombar_default_trait() {
+        let bar = BottomBar::default();
+        assert_eq!(bar.active_tab, MediaTab::None);
+    }
+
+    #[test]
+    fn next_tab_cycles_correctly() {
+        let mut bar = BottomBar::new();
+        bar.next_tab();
+        assert_eq!(bar.active_tab, MediaTab::Audio);
+        bar.next_tab();
+        assert_eq!(bar.active_tab, MediaTab::Video);
+        bar.next_tab();
+        assert_eq!(bar.active_tab, MediaTab::Image);
+        bar.next_tab();
+        assert_eq!(bar.active_tab, MediaTab::File);
+        bar.next_tab();
+        assert_eq!(bar.active_tab, MediaTab::None);
+    }
+
+    #[test]
+    fn page_dots_hidden_when_disabled() {
+        let mut bar = BottomBar::new();
+        bar.total_pages = 3;
+        let mut sdi = SdiRegistry::new();
+        let at = crate::active_theme::ActiveTheme::default();
+
+        // First enable to create objects.
+        let mut feat = crate::skin::SkinFeatures::default();
+        bar.update_sdi(&mut sdi, &at, &feat);
+
+        // Now disable and verify they're hidden.
+        feat.show_page_dots = false;
+        bar.update_sdi(&mut sdi, &at, &feat);
+
+        assert!(!sdi.get("bar_page_0").unwrap().visible);
+        assert!(!sdi.get("bar_page_1").unwrap().visible);
+        assert!(!sdi.get("bar_page_2").unwrap().visible);
+    }
+
+    #[test]
+    fn media_tabs_hidden_when_disabled() {
+        let bar = BottomBar::new();
+        let mut sdi = SdiRegistry::new();
+        let at = crate::active_theme::ActiveTheme::default();
+
+        // First enable to create objects.
+        let mut feat = crate::skin::SkinFeatures::default();
+        bar.update_sdi(&mut sdi, &at, &feat);
+
+        // Now disable and verify they're hidden.
+        feat.show_media_tabs = false;
+        bar.update_sdi(&mut sdi, &at, &feat);
+
+        assert!(!sdi.get("bar_btab_0").unwrap().visible);
+        assert!(!sdi.get("bar_r_hint").unwrap().visible);
+    }
+
+    #[test]
+    fn hide_sdi_hides_all_objects() {
+        let bar = BottomBar::new();
+        let mut sdi = SdiRegistry::new();
+        let at = crate::active_theme::ActiveTheme::default();
+        let feat = crate::skin::SkinFeatures::default();
+        bar.update_sdi(&mut sdi, &at, &feat);
+
+        BottomBar::hide_sdi(&mut sdi);
+
+        assert!(!sdi.get("bar_bottom").unwrap().visible);
+        assert!(!sdi.get("bar_url").unwrap().visible);
+        assert!(!sdi.get("bar_usb").unwrap().visible);
+    }
+
+    #[test]
+    fn active_tab_color_differs_from_inactive() {
+        let mut bar = BottomBar::new();
+        bar.active_tab = MediaTab::Audio;
+        let mut sdi = SdiRegistry::new();
+        let at = crate::active_theme::ActiveTheme::default();
+        let feat = crate::skin::SkinFeatures::default();
+        bar.update_sdi(&mut sdi, &at, &feat);
+
+        let audio_tab = sdi.get("bar_btab_0").unwrap();
+        let video_tab = sdi.get("bar_btab_1").unwrap();
+        assert_ne!(audio_tab.text_color, video_tab.text_color);
+    }
+
+    #[test]
+    fn url_label_is_created() {
+        let bar = BottomBar::new();
+        let mut sdi = SdiRegistry::new();
+        let at = crate::active_theme::ActiveTheme::default();
+        let feat = crate::skin::SkinFeatures::default();
+        bar.update_sdi(&mut sdi, &at, &feat);
+
+        let url = sdi.get("bar_url").unwrap();
+        assert_eq!(url.text, Some("HTTP://OASIS.LOCAL".to_string()));
+    }
+
+    #[test]
+    fn usb_indicator_is_created() {
+        let bar = BottomBar::new();
+        let mut sdi = SdiRegistry::new();
+        let at = crate::active_theme::ActiveTheme::default();
+        let feat = crate::skin::SkinFeatures::default();
+        bar.update_sdi(&mut sdi, &at, &feat);
+
+        let usb = sdi.get("bar_usb").unwrap();
+        assert_eq!(usb.text, Some("USB".to_string()));
+    }
+
+    #[test]
+    fn page_dot_count_limited_to_max() {
+        let mut bar = BottomBar::new();
+        bar.total_pages = 20; // More than MAX_PAGE_DOTS.
+        let mut sdi = SdiRegistry::new();
+        let at = crate::active_theme::ActiveTheme::default();
+        let feat = crate::skin::SkinFeatures::default();
+        bar.update_sdi(&mut sdi, &at, &feat);
+
+        // Only MAX_PAGE_DOTS (typically 8) should be visible.
+        let max_dots = theme::MAX_PAGE_DOTS;
+        assert!(
+            sdi.get(&format!("bar_page_{}", max_dots - 1))
+                .unwrap()
+                .visible
+        );
+    }
 }

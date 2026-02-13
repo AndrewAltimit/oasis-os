@@ -8,12 +8,16 @@ use oasis_types::error::Result;
 
 /// A small colored tag or counter indicator.
 pub struct Badge {
+    /// Badge text content.
     pub text: String,
+    /// Optional background color override.
     pub bg_color: Option<Color>,
+    /// Optional text color override.
     pub text_color: Option<Color>,
 }
 
 impl Badge {
+    /// Create a new badge with text.
     pub fn new(text: impl Into<String>) -> Self {
         Self {
             text: text.into(),
@@ -22,6 +26,7 @@ impl Badge {
         }
     }
 
+    /// Create a numeric counter badge.
     pub fn count(n: u32) -> Self {
         Self::new(n.to_string())
     }

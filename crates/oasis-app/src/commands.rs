@@ -51,6 +51,7 @@ pub fn process_command_output(
                     port,
                     psk: String::new(),
                     max_connections: 4,
+                    ..ListenerConfig::default()
                 };
                 let mut l = RemoteListener::new(cfg);
                 match l.start(&mut state.net_backend) {

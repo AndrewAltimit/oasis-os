@@ -224,7 +224,7 @@ fn main() -> Result<()> {
         if state.mode == Mode::Desktop && state.wm.window_count() > 0 {
             state
                 .wm
-                .draw_with_clips(&sdi, &mut backend, |window_id, cx, cy, cw, ch, be| {
+                .draw_with_clips(&mut sdi, &mut backend, |window_id, cx, cy, cw, ch, be| {
                     if window_id == "browser" {
                         if let Some(ref mut bw) = state.browser {
                             bw.set_window(cx, cy, cw, ch);

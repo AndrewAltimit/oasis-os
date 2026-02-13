@@ -9,6 +9,7 @@ use oasis_types::error::{OasisError, Result};
 
 use crate::{Command, CommandOutput, Environment};
 
+/// Terminal command for controlling audio playback via VFS-based IPC.
 pub struct MusicCmd;
 impl Command for MusicCmd {
     fn name(&self) -> &str {

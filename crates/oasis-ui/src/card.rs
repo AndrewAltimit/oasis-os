@@ -8,16 +8,24 @@ use oasis_types::error::Result;
 
 /// A content card combining image, title, subtitle, and body text.
 pub struct Card {
+    /// Optional header image texture.
     pub image: Option<TextureId>,
+    /// Height of the header image in pixels.
     pub image_height: u32,
+    /// Card title text.
     pub title: String,
+    /// Optional subtitle text.
     pub subtitle: Option<String>,
+    /// Optional body text.
     pub body: Option<String>,
+    /// Shadow elevation level (0 = no shadow).
     pub elevation: u8,
+    /// Corner radius in pixels.
     pub radius: u16,
 }
 
 impl Card {
+    /// Create a new card with default styling.
     pub fn new(title: impl Into<String>) -> Self {
         Self {
             image: None,
@@ -30,6 +38,7 @@ impl Card {
         }
     }
 
+    /// Create a new card using theme border radius.
     pub fn themed(title: impl Into<String>, ctx: &DrawContext<'_>) -> Self {
         Self {
             radius: ctx.theme.border_radius_lg,
