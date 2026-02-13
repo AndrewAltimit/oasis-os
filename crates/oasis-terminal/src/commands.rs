@@ -183,14 +183,14 @@ impl Command for CatCmd {
             return Err(OasisError::Command("usage: cat <file>".to_string()));
         }
         let path = resolve_path(&env.cwd, args[0]);
-        let data = env.vfs.read(&path)?;
-        if data.len() > CAT_MAX_SIZE {
+        let meta = env.vfs.stat(&path)?;
+        if meta.size as usize > CAT_MAX_SIZE {
             return Err(OasisError::Command(format!(
                 "file too large ({} bytes, max {})",
-                data.len(),
-                CAT_MAX_SIZE
+                meta.size, CAT_MAX_SIZE
             )));
         }
+        let data = env.vfs.read(&path)?;
         let text = String::from_utf8_lossy(&data).into_owned();
         Ok(CommandOutput::Text(text))
     }
@@ -362,14 +362,14 @@ impl Command for CpCmd {
         }
         let src = resolve_path(&env.cwd, args[0]);
         let dst = resolve_path(&env.cwd, args[1]);
-        let data = env.vfs.read(&src)?;
-        if data.len() > COPY_MAX_SIZE {
+        let meta = env.vfs.stat(&src)?;
+        if meta.size as usize > COPY_MAX_SIZE {
             return Err(OasisError::Command(format!(
                 "file too large ({} bytes, max {})",
-                data.len(),
-                COPY_MAX_SIZE
+                meta.size, COPY_MAX_SIZE
             )));
         }
+        let data = env.vfs.read(&src)?;
         env.vfs.write(&dst, &data)?;
         Ok(CommandOutput::None)
     }
@@ -396,14 +396,14 @@ impl Command for MvCmd {
         }
         let src = resolve_path(&env.cwd, args[0]);
         let dst = resolve_path(&env.cwd, args[1]);
-        let data = env.vfs.read(&src)?;
-        if data.len() > COPY_MAX_SIZE {
+        let meta = env.vfs.stat(&src)?;
+        if meta.size as usize > COPY_MAX_SIZE {
             return Err(OasisError::Command(format!(
                 "file too large ({} bytes, max {})",
-                data.len(),
-                COPY_MAX_SIZE
+                meta.size, COPY_MAX_SIZE
             )));
         }
+        let data = env.vfs.read(&src)?;
         env.vfs.write(&dst, &data)?;
         env.vfs.remove(&src)?;
         Ok(CommandOutput::None)
