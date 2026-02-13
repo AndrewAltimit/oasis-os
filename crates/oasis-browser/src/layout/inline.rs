@@ -377,12 +377,12 @@ mod tests {
     use super::*;
     use crate::css::values::{Display, WhiteSpace};
 
-    /// Fixed-width text measurer: 8 pixels per character.
+    /// Fixed-width text measurer: each character is 8 pixels wide.
     struct FixedMeasurer;
 
     impl TextMeasurer for FixedMeasurer {
         fn measure_text(&self, text: &str, _font_size: u16) -> u32 {
-            text.len() as u32 * 8
+            text.len() as u32 * oasis_types::backend::BITMAP_GLYPH_WIDTH
         }
     }
 

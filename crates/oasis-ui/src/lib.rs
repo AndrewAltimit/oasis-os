@@ -12,6 +12,7 @@ pub mod card;
 pub use oasis_types::color;
 pub mod context;
 pub mod divider;
+pub mod flex;
 pub mod icon;
 pub mod input_field;
 pub mod layout;

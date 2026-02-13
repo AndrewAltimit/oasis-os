@@ -74,7 +74,7 @@ pub struct SimpleTextMeasurer;
 
 impl layout::block::TextMeasurer for SimpleTextMeasurer {
     fn measure_text(&self, text: &str, _font_size: u16) -> u32 {
-        text.len() as u32 * 8
+        text.len() as u32 * oasis_types::backend::BITMAP_GLYPH_WIDTH
     }
 }
 
@@ -690,7 +690,7 @@ impl BrowserWidget {
         let frac = self.scroll.scroll_fraction();
         let pct = (frac * 100.0) as u32;
         let scroll_text = format!("{}%", pct);
-        let text_w = scroll_text.len() as i32 * 8;
+        let text_w = oasis_types::backend::bitmap_measure_text(&scroll_text, 10) as i32;
         backend.draw_text(
             &scroll_text,
             self.window_x + self.window_w as i32 - text_w - 4,
