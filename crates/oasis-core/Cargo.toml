@@ -14,6 +14,7 @@ tls-rustls = ["dep:rustls", "dep:webpki-roots", "dep:rustls-pki-types"]
 [dependencies]
 oasis-types = { workspace = true }
 oasis-vfs = { workspace = true }
+oasis-platform = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 toml = { workspace = true }

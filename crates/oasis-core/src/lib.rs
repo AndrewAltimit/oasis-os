@@ -24,7 +24,7 @@ pub mod cursor;
 pub mod dashboard;
 pub mod net;
 pub mod osk;
-pub mod platform;
+pub use oasis_platform as platform;
 pub mod plugin;
 pub mod script;
 pub mod sdi;

@@ -1,6 +1,6 @@
 //! Platform service traits and desktop implementation.
 
-use crate::error::Result;
+use oasis_types::error::Result;
 
 // ---------------------------------------------------------------------------
 // Power service
@@ -189,7 +189,7 @@ pub trait NetworkService {
     /// Returns the status code and response body. Default implementation
     /// returns an error (platform does not support HTTP).
     fn http_get(&self, _url: &str) -> Result<HttpResponse> {
-        Err(crate::error::OasisError::Backend(
+        Err(oasis_types::error::OasisError::Backend(
             "HTTP not supported on this platform".into(),
         ))
     }

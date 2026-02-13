@@ -583,6 +583,7 @@ version = "0.1.0"
 dependencies = [
  "criterion",
  "log",
+ "oasis-platform",
  "oasis-types",
  "oasis-vfs",
  "proptest",
@@ -605,6 +606,13 @@ dependencies = [
  "log",
  "oasis-backend-ue5",
  "oasis-core",
+]
+
+[[package]]
+name = "oasis-platform"
+version = "0.1.0"
+dependencies = [
+ "oasis-types",
 ]
 
 [[package]]

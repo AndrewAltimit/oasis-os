@@ -154,8 +154,7 @@ fn days_to_ymd_far_future() {
     // Compute day count for 2100-01-01.
     // Count leap years from 1970 to 2099: leap if (div4 && !div100) || div400.
     // Leap years: 1972,1976,...,2096 (not 2100). That's (2096-1972)/4 + 1 = 32 leap years.
-    // Total days = 130*365 + 32 = 47482 + 32 = 47482 + 32? Let me compute:
-    // 130 years * 365 = 47450, plus 32 leap days = 47482.
+    // Total days = 130*365 + 32 = 47482 + 32 = 47482.
     let (y, m, d) = services::days_to_ymd(47482);
     assert_eq!((y, m, d), (2100, 1, 1));
 }
