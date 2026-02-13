@@ -23,9 +23,15 @@ impl SystemInfo {
     /// requires kernel mode (raw syscall, no high-level wrapper).
     pub fn query() -> Self {
         let clock = psp::power::get_clock();
-        // SAFETY: scePowerGetMeClockFrequency is a firmware FFI returning
-        // a scalar value. No high-level wrapper exists for ME clock.
-        let me_mhz = unsafe { sys::scePowerGetMeClockFrequency() };
+        // ME clock frequency requires kernel mode.
+        #[cfg(feature = "kernel-me-clock")]
+        let me_mhz = {
+            // SAFETY: scePowerGetMeClockFrequency is a firmware FFI returning
+            // a scalar value. No high-level wrapper exists for ME clock.
+            unsafe { sys::scePowerGetMeClockFrequency() }
+        };
+        #[cfg(not(feature = "kernel-me-clock"))]
+        let me_mhz = 0;
 
         Self {
             cpu_mhz: clock.cpu_mhz,

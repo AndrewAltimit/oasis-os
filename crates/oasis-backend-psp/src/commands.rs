@@ -104,7 +104,12 @@ pub fn execute_command(cmd: &str, config: &mut psp::config::Config) -> Vec<Strin
         "clock 222" => set_clock_cmd(config, 222, 111, "power save"),
         "benchmark" | "bench" => run_benchmark(),
         "sysinfo" => cmd_sysinfo(),
-        "me test" => cmd_me_test(),
+        "me test" => {
+            #[cfg(feature = "kernel-me")]
+            { cmd_me_test() }
+            #[cfg(not(feature = "kernel-me"))]
+            { vec!["ME test requires kernel mode.".into()] }
+        }
         "screenshot" | "ss" => {
             let bmp = psp::screenshot_bmp();
             let path = "ms0:/PSP/PHOTO/screenshot.bmp";
@@ -316,6 +321,7 @@ fn cmd_config(trimmed: &str, config: &mut psp::config::Config) -> Vec<String> {
     }
 }
 
+#[cfg(feature = "kernel-me")]
 fn cmd_me_test() -> Vec<String> {
     match me_compute_test() {
         Ok((result, us)) => vec![
@@ -426,6 +432,7 @@ fn run_benchmark() -> Vec<String> {
 /// ME task: sum integers 1..=arg on the ME core (pure integer math).
 ///
 /// SAFETY: Runs on ME core. No syscalls, no cached memory, no heap.
+#[cfg(feature = "kernel-me")]
 unsafe extern "C" fn me_sum_task(arg: i32) -> i32 {
     let mut sum: i32 = 0;
     let mut i: i32 = 1;
@@ -436,6 +443,7 @@ unsafe extern "C" fn me_sum_task(arg: i32) -> i32 {
     sum
 }
 
+#[cfg(feature = "kernel-me")]
 fn me_compute_test() -> Result<(i32, u64), String> {
     let mut executor = psp::me::MeExecutor::new(4096).map_err(|e| format!("ME init: {e}"))?;
 

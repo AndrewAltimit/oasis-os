@@ -19,7 +19,10 @@ use oasis_backend_psp::{
 
 mod commands;
 
-psp::module_kernel!("OASIS_OS", 1, 0);
+// Always use user-mode module flag (0x0000). PRO-C CFW allows user-mode
+// modules to call kernel syscalls, and module_kernel! (0x1000) fails to
+// load on PSP-3000 + 6.20 PRO-C.
+psp::module!("OASIS_OS", 1, 0);
 
 // ---------------------------------------------------------------------------
 // Custom getrandom backends for PSP (no native OS entropy source).
@@ -454,7 +457,8 @@ fn psp_main() {
     backend.init();
     show_boot_screen(&mut backend, "Initializing...", 10);
 
-    // Register exception handler (kernel mode) for crash diagnostics.
+    // Register exception handler (kernel mode only) for crash diagnostics.
+    #[cfg(feature = "kernel-exception")]
     oasis_backend_psp::register_exception_handler();
     show_boot_screen(&mut backend, "Loading config...", 25);
 
@@ -467,14 +471,19 @@ fn psp_main() {
     let bus_mhz = config.get_i32("bus_mhz").unwrap_or(166);
     oasis_backend_psp::set_clock(clock_mhz, bus_mhz);
 
-    // Query static hardware info (kernel mode, once at startup).
+    // Query static hardware info.
     let sysinfo = SystemInfo::query();
     show_boot_screen(&mut backend, "Generating textures...", 40);
 
-    // Load wallpaper texture.
-    let wallpaper_data = oasis_backend_psp::generate_gradient(SCREEN_WIDTH, SCREEN_HEIGHT);
+    // Load wallpaper texture at reduced resolution (64x64 = 16KB vs 1MB).
+    // The GE scales it up to 480x272 with bilinear filtering during blit.
+    use oasis_backend_psp::{WALLPAPER_TEX_W, WALLPAPER_TEX_H};
+    let wallpaper_data = oasis_backend_psp::generate_gradient(
+        WALLPAPER_TEX_W,
+        WALLPAPER_TEX_H,
+    );
     let wallpaper_tex = backend
-        .load_texture_inner(SCREEN_WIDTH, SCREEN_HEIGHT, &wallpaper_data)
+        .load_texture_inner(WALLPAPER_TEX_W, WALLPAPER_TEX_H, &wallpaper_data)
         .unwrap_or(TextureId(0));
 
     // Load cursor texture.
@@ -502,8 +511,9 @@ fn psp_main() {
 
     // Terminal state.
     let vol_info = backend.volatile_mem_info();
+    let mode_label = if cfg!(feature = "kernel-mode") { "kernel" } else { "user" };
     let mut term_lines: Vec<String> = vec![
-        String::from("OASIS_OS v0.1.0 [PSP] (kernel mode)"),
+        format!("OASIS_OS v0.1.0 [PSP] ({mode_label} mode)"),
         format!(
             "CPU: {}MHz  Bus: {}MHz  ME: {}MHz",
             sysinfo.cpu_mhz, sysinfo.bus_mhz, sysinfo.me_mhz,
@@ -1204,13 +1214,13 @@ fn psp_main() {
 
         // -- Render --
         let status = StatusBarInfo::poll();
+
         let fps = frame_timer.fps();
         let usb_active = usb_storage.is_some();
 
         backend.clear_inner(Color::BLACK);
-
-        // Wallpaper.
-        backend.blit_inner(wallpaper_tex, 0, 0, SCREEN_WIDTH, SCREEN_HEIGHT);
+        // Wallpaper: 64x64 texture scaled to fullscreen by GE (bilinear).
+        backend.blit_scaled(wallpaper_tex, 0, 0, SCREEN_WIDTH, SCREEN_HEIGHT);
 
         match app_mode {
             AppMode::Classic => {

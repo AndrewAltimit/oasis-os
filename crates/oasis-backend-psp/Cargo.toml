@@ -13,8 +13,17 @@ license = "MIT"
 repository = "https://github.com/AndrewAltimit/oasis-os"
 authors = ["AndrewAltimit"]
 
+[features]
+default = ["kernel-mode"]
+kernel-mode = ["psp/kernel", "kernel-volatile", "kernel-me-clock", "kernel-me"]
+# Granular kernel sub-features:
+kernel-exception = ["psp/kernel"]    # sceKernelRegisterDefaultExceptionHandler (broken on PSP-3000 + 6.20 PRO-C)
+kernel-volatile = ["psp/kernel"]     # sceKernelVolatileMemTryLock (extra 4MB)
+kernel-me-clock = ["psp/kernel"]     # scePowerGetMeClockFrequency
+kernel-me = ["psp/kernel"]           # ME coprocessor (me test command)
+
 [dependencies]
-psp = { git = "https://github.com/AndrewAltimit/rust-psp", branch = "main", features = ["kernel", "std"] }
+psp = { git = "https://github.com/AndrewAltimit/rust-psp", branch = "main", features = ["std"] }
 oasis-core = { path = "../oasis-core" }
 libm = "0.2"
 
