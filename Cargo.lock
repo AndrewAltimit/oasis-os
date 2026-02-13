@@ -583,6 +583,7 @@ version = "0.1.0"
 dependencies = [
  "criterion",
  "log",
+ "oasis-types",
  "proptest",
  "rcgen",
  "rustls",
@@ -603,6 +604,18 @@ dependencies = [
  "log",
  "oasis-backend-ue5",
  "oasis-core",
+]
+
+[[package]]
+name = "oasis-types"
+version = "0.1.0"
+dependencies = [
+ "log",
+ "proptest",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "toml",
 ]
 
 [[package]]

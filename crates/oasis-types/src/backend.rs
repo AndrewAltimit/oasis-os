@@ -710,7 +710,7 @@ pub trait NetworkBackend {
     ///
     /// When `Some`, the browser can negotiate HTTPS and Gemini connections.
     /// Backends without TLS support return `None` (the default).
-    fn tls_provider(&self) -> Option<&dyn crate::net::tls::TlsProvider> {
+    fn tls_provider(&self) -> Option<&dyn crate::tls::TlsProvider> {
         None
     }
 }
@@ -725,6 +725,53 @@ pub trait NetworkStream: Send {
 /// Opaque handle to a loaded audio track in the backend.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct AudioTrackId(pub u64);
+
+/// Audio playback backend trait.
+///
+/// Two implementations cover all deployment targets: rodio/SDL2_mixer (desktop/Pi)
+/// and Media Engine offloading (PSP via PRX stubs).
+pub trait AudioBackend {
+    /// Initialize the audio subsystem (open device, set sample rate).
+    fn init(&mut self) -> Result<()>;
+
+    /// Load an audio file from raw bytes (MP3, WAV, OGG).
+    /// Returns a handle for playback control.
+    fn load_track(&mut self, data: &[u8]) -> Result<AudioTrackId>;
+
+    /// Start playing a loaded track from the beginning.
+    fn play(&mut self, track: AudioTrackId) -> Result<()>;
+
+    /// Pause the currently playing track.
+    fn pause(&mut self) -> Result<()>;
+
+    /// Resume a paused track.
+    fn resume(&mut self) -> Result<()>;
+
+    /// Stop playback and reset position to the beginning.
+    fn stop(&mut self) -> Result<()>;
+
+    /// Set volume (0 = silent, 100 = full).
+    fn set_volume(&mut self, volume: u8) -> Result<()>;
+
+    /// Get the current volume (0-100).
+    fn get_volume(&self) -> u8;
+
+    /// Return `true` if audio is currently playing.
+    fn is_playing(&self) -> bool;
+
+    /// Get the current playback position in milliseconds.
+    fn position_ms(&self) -> u64;
+
+    /// Get the total duration of the current track in milliseconds.
+    /// Returns 0 if no track is loaded.
+    fn duration_ms(&self) -> u64;
+
+    /// Unload a previously loaded track and free its resources.
+    fn unload_track(&mut self, track: AudioTrackId) -> Result<()>;
+
+    /// Shut down the audio subsystem and release all resources.
+    fn shutdown(&mut self) -> Result<()>;
+}
 
 #[cfg(test)]
 mod tests {
@@ -959,7 +1006,7 @@ mod tests {
         b.stroke_circle(50, 50, 10, 1, Color::WHITE).unwrap();
         let calls = b.calls();
         assert_eq!(calls.len(), 1);
-        assert!(calls[0].starts_with("fill_rect(")); // fill_circle → fill_rect
+        assert!(calls[0].starts_with("fill_rect(")); // fill_circle -> fill_rect
     }
 
     // -- Default: fill_triangle is no-op --
@@ -1014,7 +1061,7 @@ mod tests {
             .unwrap();
         let calls = b.calls();
         assert_eq!(calls.len(), 1);
-        assert!(calls[0].starts_with("fill_rect(")); // Falls to fill_rounded_rect → fill_rect
+        assert!(calls[0].starts_with("fill_rect(")); // Falls to fill_rounded_rect -> fill_rect
     }
 
     // -- Alpha utilities --
@@ -1043,7 +1090,7 @@ mod tests {
     #[test]
     fn measure_text_height_default() {
         let b = RecordingBackend::new();
-        // font_size 10 → 10 * 1.2 = 12
+        // font_size 10 -> 10 * 1.2 = 12
         assert_eq!(b.measure_text_height(10), 12);
     }
 
@@ -1108,7 +1155,7 @@ mod tests {
     #[test]
     fn draw_text_wrapped_wraps_long_line() {
         let mut b = RecordingBackend::new();
-        // max_width=40 → 5 chars fit per line. "Hello World" should wrap.
+        // max_width=40 -> 5 chars fit per line. "Hello World" should wrap.
         let h = b
             .draw_text_wrapped("Hello World", 0, 0, 8, Color::WHITE, 40, 10)
             .unwrap();
@@ -1312,10 +1359,10 @@ mod tests {
     #[test]
     fn draw_text_ellipsis_utf8_boundary() {
         let mut b = RecordingBackend::new();
-        // Multi-byte UTF-8: 'é' is 2 bytes, so "aéb" = 4 bytes = 32px in mock.
+        // Multi-byte UTF-8: 'e' is 2 bytes, so "aeb" = 4 bytes = 32px in mock.
         // With max_width=40, it fits entirely without panicking on char boundaries.
         let drawn = b
-            .draw_text_ellipsis("aéb", 0, 0, 8, Color::WHITE, 40)
+            .draw_text_ellipsis("a\u{00e9}b", 0, 0, 8, Color::WHITE, 40)
             .unwrap();
         assert!(drawn <= 40);
         let calls = b.calls();
@@ -1543,51 +1590,4 @@ mod tests {
             DrawCommand::PopTranslate,
         ];
     }
-}
-
-/// Audio playback backend trait.
-///
-/// Two implementations cover all deployment targets: rodio/SDL2_mixer (desktop/Pi)
-/// and Media Engine offloading (PSP via PRX stubs).
-pub trait AudioBackend {
-    /// Initialize the audio subsystem (open device, set sample rate).
-    fn init(&mut self) -> Result<()>;
-
-    /// Load an audio file from raw bytes (MP3, WAV, OGG).
-    /// Returns a handle for playback control.
-    fn load_track(&mut self, data: &[u8]) -> Result<AudioTrackId>;
-
-    /// Start playing a loaded track from the beginning.
-    fn play(&mut self, track: AudioTrackId) -> Result<()>;
-
-    /// Pause the currently playing track.
-    fn pause(&mut self) -> Result<()>;
-
-    /// Resume a paused track.
-    fn resume(&mut self) -> Result<()>;
-
-    /// Stop playback and reset position to the beginning.
-    fn stop(&mut self) -> Result<()>;
-
-    /// Set volume (0 = silent, 100 = full).
-    fn set_volume(&mut self, volume: u8) -> Result<()>;
-
-    /// Get the current volume (0-100).
-    fn get_volume(&self) -> u8;
-
-    /// Return `true` if audio is currently playing.
-    fn is_playing(&self) -> bool;
-
-    /// Get the current playback position in milliseconds.
-    fn position_ms(&self) -> u64;
-
-    /// Get the total duration of the current track in milliseconds.
-    /// Returns 0 if no track is loaded.
-    fn duration_ms(&self) -> u64;
-
-    /// Unload a previously loaded track and free its resources.
-    fn unload_track(&mut self, track: AudioTrackId) -> Result<()>;
-
-    /// Shut down the audio subsystem and release all resources.
-    fn shutdown(&mut self) -> Result<()>;
 }

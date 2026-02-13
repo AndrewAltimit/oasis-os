@@ -854,9 +854,9 @@ gradient_enabled = true
     }
 
     #[test]
-    fn from_skin_theme_roundtrip() {
+    fn to_ui_theme_roundtrip() {
         let skin = SkinTheme::default();
-        let ui = crate::ui::theme::Theme::from_skin_theme(&skin);
+        let ui = skin.to_ui_theme();
         assert_eq!(ui.accent, skin.primary_color());
     }
 }

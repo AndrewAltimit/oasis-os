@@ -1,6 +1,7 @@
 [workspace]
 resolver = "2"
 members = [
+    "crates/oasis-types",
     "crates/oasis-core",
     "crates/oasis-backend-sdl",
     "crates/oasis-backend-ue5",
@@ -47,6 +48,7 @@ webpki-roots = "1.0"
 rustls-pki-types = "1"
 
 # Internal crates
+oasis-types = { path = "crates/oasis-types" }
 oasis-core = { path = "crates/oasis-core" }
 oasis-backend-ue5 = { path = "crates/oasis-backend-ue5" }
 
