@@ -157,18 +157,19 @@ impl SdiBackend for SdlBackend {
         } else {
             1
         };
-        let glyph_w = (font::GLYPH_WIDTH as i32) * scale;
         let sdl_color = sdl2::pixels::Color::RGBA(color.r, color.g, color.b, color.a);
         self.canvas.set_draw_color(sdl_color);
 
         let mut cx = tx;
         for ch in text.chars() {
             let glyph_data = font::glyph(ch);
+            let (left_pad, advance) = font::glyph_metrics(ch);
+            let left_pad = left_pad as i32;
             for row in 0..8i32 {
                 let bits = glyph_data[row as usize];
                 for col in 0..8i32 {
                     if bits & (0x80 >> col) != 0 {
-                        let px = cx + col * scale;
+                        let px = cx + (col - left_pad) * scale;
                         let py = ty + row * scale;
                         if scale == 1 {
                             let _ = self.canvas.draw_point(sdl2::rect::Point::new(px, py));
@@ -183,7 +184,7 @@ impl SdiBackend for SdlBackend {
                     }
                 }
             }
-            cx += glyph_w;
+            cx += advance as i32 * scale;
         }
         Ok(())
     }

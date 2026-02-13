@@ -189,9 +189,10 @@ mod tests {
         let ctx = DrawContext::new(&mut backend, &theme);
         let btn = Button::new("Test");
         let (w, h) = btn.measure(&ctx, 200, 100);
-        // "Test" = 4 chars * 8px = 32px text width + horizontal padding (16)
-        assert!(w >= 32, "width {w} should be >= text width 32");
-        assert!(w >= 32 + btn.padding.horizontal());
+        // "Test" proportional: T(7)+e(7)+s(7)+t(7) = 28px + horizontal padding
+        let text_w = 28;
+        assert!(w >= text_w, "width {w} should be >= text width {text_w}");
+        assert!(w >= text_w + btn.padding.horizontal());
         assert!(h > 0);
     }
 

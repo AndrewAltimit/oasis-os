@@ -73,8 +73,8 @@ pub enum LoadingState {
 pub struct SimpleTextMeasurer;
 
 impl layout::block::TextMeasurer for SimpleTextMeasurer {
-    fn measure_text(&self, text: &str, _font_size: u16) -> u32 {
-        text.len() as u32 * oasis_types::backend::BITMAP_GLYPH_WIDTH
+    fn measure_text(&self, text: &str, font_size: u16) -> u32 {
+        oasis_types::backend::bitmap_measure_text(text, font_size)
     }
 }
 
@@ -1210,20 +1210,23 @@ mod tests {
     #[test]
     fn simple_text_measurer() {
         let m = SimpleTextMeasurer;
+        // Proportional: h(7)+e(7)+l(5)+l(5)+o(7) = 31, scale=1 at font_size 12
         assert_eq!(
             layout::block::TextMeasurer::measure_text(&m, "hello", 12,),
-            40
+            31
         );
         assert_eq!(layout::block::TextMeasurer::measure_text(&m, "", 12,), 0);
-        assert_eq!(layout::block::TextMeasurer::measure_text(&m, "a", 16,), 8);
-        // Width is character count * 8, independent of font size.
+        // 'a' advance=7, scale=2 at font_size 16
+        assert_eq!(layout::block::TextMeasurer::measure_text(&m, "a", 16,), 14);
+        // t(7)+e(7)+s(7)+t(7) = 28, scale=1 at font_size 8
         assert_eq!(
             layout::block::TextMeasurer::measure_text(&m, "test", 8,),
-            32
+            28
         );
+        // Same base=28, scale=3 at font_size 24
         assert_eq!(
             layout::block::TextMeasurer::measure_text(&m, "test", 24,),
-            32
+            84
         );
     }
 
