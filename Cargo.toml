@@ -5,6 +5,7 @@ members = [
     "crates/oasis-vfs",
     "crates/oasis-platform",
     "crates/oasis-sdi",
+    "crates/oasis-net",
     "crates/oasis-core",
     "crates/oasis-backend-sdl",
     "crates/oasis-backend-ue5",
@@ -55,6 +56,7 @@ oasis-types = { path = "crates/oasis-types" }
 oasis-vfs = { path = "crates/oasis-vfs" }
 oasis-platform = { path = "crates/oasis-platform" }
 oasis-sdi = { path = "crates/oasis-sdi" }
+oasis-net = { path = "crates/oasis-net" }
 oasis-core = { path = "crates/oasis-core" }
 oasis-backend-ue5 = { path = "crates/oasis-backend-ue5" }
 

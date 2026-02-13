@@ -583,20 +583,17 @@ version = "0.1.0"
 dependencies = [
  "criterion",
  "log",
+ "oasis-net",
  "oasis-platform",
  "oasis-sdi",
  "oasis-types",
  "oasis-vfs",
  "proptest",
- "rcgen",
- "rustls",
- "rustls-pki-types",
  "serde",
  "serde_json",
  "tempfile",
  "thiserror",
  "toml",
- "webpki-roots",
 ]
 
 [[package]]
@@ -607,6 +604,20 @@ dependencies = [
  "log",
  "oasis-backend-ue5",
  "oasis-core",
+]
+
+[[package]]
+name = "oasis-net"
+version = "0.1.0"
+dependencies = [
+ "log",
+ "oasis-types",
+ "rcgen",
+ "rustls",
+ "rustls-pki-types",
+ "serde",
+ "toml",
+ "webpki-roots",
 ]
 
 [[package]]

@@ -3,7 +3,7 @@
 use std::io::{Read, Write};
 use std::net::TcpStream;
 
-use crate::backend::NetworkBackend;
+use oasis_types::backend::NetworkBackend;
 
 use super::*;
 

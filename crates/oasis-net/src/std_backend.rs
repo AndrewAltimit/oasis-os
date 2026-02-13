@@ -3,8 +3,8 @@
 use std::io::{self, Read, Write};
 use std::net::{TcpListener, TcpStream};
 
-use crate::backend::{NetworkBackend, NetworkStream};
-use crate::error::{OasisError, Result};
+use oasis_types::backend::{NetworkBackend, NetworkStream};
+use oasis_types::error::{OasisError, Result};
 
 /// Network backend using `std::net` for desktop and Raspberry Pi.
 pub struct StdNetworkBackend {

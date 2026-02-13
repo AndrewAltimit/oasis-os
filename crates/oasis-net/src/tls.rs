@@ -11,7 +11,7 @@ mod tests {
     #[cfg(feature = "tls-rustls")]
     #[test]
     fn rustls_provider_is_constructible() {
-        let provider = crate::net::RustlsTlsProvider::new();
+        let provider = crate::tls_rustls::RustlsTlsProvider::new();
         let _: &dyn TlsProvider = &provider;
     }
 }

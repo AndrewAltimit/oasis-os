@@ -3,8 +3,8 @@
 //! Connects to a remote OASIS_OS instance (or any TCP text service),
 //! sends commands, and receives output. Designed for non-blocking polling.
 
-use crate::backend::{NetworkBackend, NetworkStream};
-use crate::error::{OasisError, Result};
+use oasis_types::backend::{NetworkBackend, NetworkStream};
+use oasis_types::error::{OasisError, Result};
 
 /// State of the remote client connection.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -115,7 +115,7 @@ impl RemoteClient {
                     }
                 }
             },
-            Err(crate::error::OasisError::Io(ref e))
+            Err(oasis_types::error::OasisError::Io(ref e))
                 if e.kind() == std::io::ErrorKind::WouldBlock =>
             {
                 // Non-blocking socket has no data yet.

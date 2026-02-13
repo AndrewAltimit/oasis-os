@@ -22,7 +22,7 @@ pub mod bottombar;
 pub mod browser;
 pub mod cursor;
 pub mod dashboard;
-pub mod net;
+pub use oasis_net as net;
 pub mod osk;
 pub use oasis_platform as platform;
 pub mod plugin;

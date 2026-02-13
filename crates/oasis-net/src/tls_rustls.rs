@@ -10,8 +10,8 @@ use std::sync::Arc;
 use rustls::ClientConfig;
 use rustls::pki_types::ServerName;
 
-use crate::backend::NetworkStream;
-use crate::error::{OasisError, Result};
+use oasis_types::backend::NetworkStream;
+use oasis_types::error::{OasisError, Result};
 
 use super::tls::TlsProvider;
 

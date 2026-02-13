@@ -4,8 +4,8 @@
 //! and feeds received command lines into the command interpreter.
 //! Designed for non-blocking polling from the main loop.
 
-use crate::backend::{NetworkBackend, NetworkStream};
-use crate::error::{OasisError, Result};
+use oasis_types::backend::{NetworkBackend, NetworkStream};
+use oasis_types::error::{OasisError, Result};
 
 /// Maximum number of simultaneous remote connections.
 const DEFAULT_MAX_CONNECTIONS: usize = 4;
@@ -137,7 +137,7 @@ impl RemoteListener {
                 Ok(0) => {
                     // Connection closed (EOF).
                 },
-                Err(crate::error::OasisError::Io(ref e))
+                Err(oasis_types::error::OasisError::Io(ref e))
                     if e.kind() == std::io::ErrorKind::WouldBlock =>
                 {
                     // Non-blocking socket has no data yet.
