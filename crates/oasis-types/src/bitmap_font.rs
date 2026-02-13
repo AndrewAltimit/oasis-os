@@ -132,6 +132,92 @@ pub fn glyph(ch: char) -> &'static [u8; 8] {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Proportional glyph metrics
+// ---------------------------------------------------------------------------
+
+/// Compute `(left_pad, advance)` for a single glyph from its bitmap data.
+///
+/// - `left_pad`: leftmost column containing ink (0-7).
+/// - `advance`: horizontal distance to the next glyph (`ink_width + 1`, clamped to \[3, 8\]).
+///
+/// Space (all-zero bitmap) returns `(0, 4)`.
+const fn compute_metrics(data: &[u8; 8]) -> (u8, u8) {
+    let mut leftmost: u8 = 8;
+    let mut rightmost: u8 = 0;
+    let mut has_ink = false;
+
+    let mut row = 0;
+    while row < 8 {
+        let bits = data[row];
+        if bits != 0 {
+            let mut col: u8 = 0;
+            while col < 8 {
+                if bits & (0x80 >> col) != 0 {
+                    if col < leftmost {
+                        leftmost = col;
+                    }
+                    if col > rightmost || !has_ink {
+                        rightmost = col;
+                    }
+                    has_ink = true;
+                }
+                col += 1;
+            }
+        }
+        row += 1;
+    }
+
+    if !has_ink {
+        // Space or blank glyph.
+        return (0, 4);
+    }
+
+    let ink_width = rightmost - leftmost + 1;
+    let mut advance = ink_width + 1;
+    if advance < 3 {
+        advance = 3;
+    }
+    if advance > 8 {
+        advance = 8;
+    }
+    (leftmost, advance)
+}
+
+/// Compute metrics for all 95 printable ASCII glyphs at compile time.
+const fn compute_all_metrics() -> [(u8, u8); 95] {
+    let mut table = [(0u8, 8u8); 95];
+    let mut i = 0;
+    while i < 95 {
+        table[i] = compute_metrics(&FONT_DATA[i]);
+        i += 1;
+    }
+    table
+}
+
+/// Pre-computed `(left_pad, advance)` for ASCII 0x20..=0x7E.
+static GLYPH_METRICS: [(u8, u8); 95] = compute_all_metrics();
+
+/// Return `(left_pad, advance)` for a character.
+///
+/// - `left_pad`: first column with ink (used to shift rendering).
+/// - `advance`: horizontal pixels consumed (including 1px inter-glyph gap).
+///
+/// Non-printable / out-of-range characters return `(0, 8)` (full-width).
+pub fn glyph_metrics(ch: char) -> (u8, u8) {
+    let code = ch as u32;
+    if code >= FIRST_CHAR as u32 && code <= LAST_CHAR as u32 {
+        GLYPH_METRICS[(code - FIRST_CHAR as u32) as usize]
+    } else {
+        (0, 8)
+    }
+}
+
+/// Return the proportional advance width for a character (in pixels at scale 1).
+pub fn glyph_advance(ch: char) -> u32 {
+    glyph_metrics(ch).1 as u32
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -168,5 +254,73 @@ mod tests {
             let g = glyph(ch);
             assert_eq!(g.len(), 8);
         }
+    }
+
+    // -- Proportional metrics tests --
+
+    #[test]
+    fn space_advance_is_4() {
+        assert_eq!(glyph_advance(' '), 4);
+    }
+
+    #[test]
+    fn narrow_chars_less_than_8() {
+        assert!(glyph_advance('i') < 8);
+        assert!(glyph_advance('!') < 8);
+        assert!(glyph_advance('.') < 8);
+        assert!(glyph_advance('l') < 8);
+    }
+
+    #[test]
+    fn wide_chars_are_8() {
+        assert_eq!(glyph_advance('M'), 8);
+        assert_eq!(glyph_advance('W'), 8);
+    }
+
+    #[test]
+    fn advance_clamped_min_3() {
+        for code in 0x20u8..=0x7E {
+            let adv = glyph_advance(code as char);
+            assert!(adv >= 3, "char {:?} advance {} < 3", code as char, adv);
+        }
+    }
+
+    #[test]
+    fn advance_clamped_max_8() {
+        for code in 0x20u8..=0x7E {
+            let adv = glyph_advance(code as char);
+            assert!(adv <= 8, "char {:?} advance {} > 8", code as char, adv);
+        }
+    }
+
+    #[test]
+    fn fallback_advance_is_8() {
+        assert_eq!(glyph_advance('\x01'), 8);
+        assert_eq!(glyph_advance('\u{0100}'), 8);
+    }
+
+    #[test]
+    fn metrics_left_pad_within_bounds() {
+        for code in 0x20u8..=0x7E {
+            let (left_pad, _) = glyph_metrics(code as char);
+            assert!(
+                left_pad <= 7,
+                "char {:?} left_pad {} > 7",
+                code as char,
+                left_pad
+            );
+        }
+    }
+
+    #[test]
+    fn specific_advances() {
+        // '!' has thin vertical stroke: cols 3-4, ink_width=2, advance=3
+        assert_eq!(glyph_advance('!'), 3);
+        // '.' has two rows of 0x18: cols 3-4, ink_width=2, advance=3
+        assert_eq!(glyph_advance('.'), 3);
+        // 'i' extends cols 2-5, ink_width=4, advance=5
+        assert_eq!(glyph_advance('i'), 5);
+        // 'A' extends cols 1-6, ink_width=6, advance=7
+        assert_eq!(glyph_advance('A'), 7);
     }
 }

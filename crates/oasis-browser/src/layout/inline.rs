@@ -381,8 +381,8 @@ mod tests {
     struct FixedMeasurer;
 
     impl TextMeasurer for FixedMeasurer {
-        fn measure_text(&self, text: &str, _font_size: u16) -> u32 {
-            text.len() as u32 * oasis_types::backend::BITMAP_GLYPH_WIDTH
+        fn measure_text(&self, text: &str, font_size: u16) -> u32 {
+            oasis_types::backend::bitmap_measure_text(text, font_size)
         }
     }
 
@@ -510,8 +510,8 @@ mod tests {
         position_fragments_on_line(&mut line, 200.0, TextAlign::Right, false, 0.0);
 
         if let InlineFragment::Text { x, .. } = &line.fragments[0] {
-            // Right-aligned: x = 200 - 40 = 160
-            assert_eq!(*x, 160.0);
+            // Right-aligned: x = 200 - 62 = 138 (proportional "hello"@16 = 31*2 = 62)
+            assert_eq!(*x, 138.0);
         }
     }
 
@@ -519,7 +519,7 @@ mod tests {
     fn text_align_center() {
         let m = FixedMeasurer;
         let style = inline_style();
-        // "hello" = 5*8 = 40px
+        // Proportional "hello"@16 = 31*2 = 62px
         let frags = make_text_fragments("hello", &style, None, &m);
 
         let mut line = LineBox::new(200.0);
@@ -530,8 +530,8 @@ mod tests {
         position_fragments_on_line(&mut line, 200.0, TextAlign::Center, false, 0.0);
 
         if let InlineFragment::Text { x, .. } = &line.fragments[0] {
-            // Centered: x = (200 - 40) / 2 = 80
-            assert_eq!(*x, 80.0);
+            // Centered: x = (200 - 62) / 2 = 69
+            assert_eq!(*x, 69.0);
         }
     }
 

@@ -237,24 +237,29 @@ impl SdiBackend for Ue5Backend {
         } else {
             1
         };
-        let glyph_w = (font::GLYPH_WIDTH as i32) * scale;
 
         let mut cx = tx;
         for ch in text.chars() {
             let glyph_data = font::glyph(ch);
+            let (left_pad, advance) = font::glyph_metrics(ch);
+            let left_pad = left_pad as i32;
             for row in 0..8i32 {
                 let bits = glyph_data[row as usize];
                 for col in 0..8i32 {
                     if bits & (0x80 >> col) != 0 {
                         for sy in 0..scale {
                             for sx in 0..scale {
-                                self.set_pixel(cx + col * scale + sx, ty + row * scale + sy, color);
+                                self.set_pixel(
+                                    cx + (col - left_pad) * scale + sx,
+                                    ty + row * scale + sy,
+                                    color,
+                                );
                             }
                         }
                     }
                 }
             }
-            cx += glyph_w;
+            cx += advance as i32 * scale;
         }
         self.dirty = true;
         Ok(())
@@ -1380,7 +1385,7 @@ mod tests {
         assert_eq!(backend.measure_text_height(16), 16);
         assert_eq!(backend.font_ascent(8), 8);
         let (w, h) = backend.measure_text_extents("AB", 8);
-        assert_eq!(w, 16); // 2 chars * 8px
+        assert_eq!(w, 14); // proportional: A(7)+B(7) = 14
         assert_eq!(h, 8);
     }
 }

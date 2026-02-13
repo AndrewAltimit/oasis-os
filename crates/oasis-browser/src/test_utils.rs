@@ -202,8 +202,8 @@ impl SdiBackend for MockBackend {
         Ok(())
     }
 
-    fn measure_text(&self, text: &str, _font_size: u16) -> u32 {
-        text.len() as u32 * oasis_types::backend::BITMAP_GLYPH_WIDTH
+    fn measure_text(&self, text: &str, font_size: u16) -> u32 {
+        oasis_types::backend::bitmap_measure_text(text, font_size)
     }
 
     fn read_pixels(&self, _x: i32, _y: i32, _w: u32, _h: u32) -> Result<Vec<u8>> {

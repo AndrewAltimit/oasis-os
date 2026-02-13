@@ -211,8 +211,8 @@ mod tests {
     struct StubMeasurer;
 
     impl TextMeasurer for StubMeasurer {
-        fn measure_text(&self, text: &str, _font_size: u16) -> u32 {
-            text.len() as u32 * oasis_types::backend::BITMAP_GLYPH_WIDTH
+        fn measure_text(&self, text: &str, font_size: u16) -> u32 {
+            oasis_types::backend::bitmap_measure_text(text, font_size)
         }
     }
 
@@ -348,8 +348,8 @@ mod tests {
     fn measure_word_stub() {
         let m = StubMeasurer;
         let w = measure_word("hello", 16.0, &m);
-        // 5 chars * 8px = 40
-        assert_eq!(w, 40.0);
+        // Proportional: h(7)+e(7)+l(5)+l(5)+o(7) = 31, scale=2 at font_size 16 => 62
+        assert_eq!(w, 62.0);
     }
 
     #[test]

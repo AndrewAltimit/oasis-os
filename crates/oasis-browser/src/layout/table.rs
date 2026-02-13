@@ -837,8 +837,8 @@ mod tests {
     struct FixedMeasurer;
 
     impl TextMeasurer for FixedMeasurer {
-        fn measure_text(&self, text: &str, _font_size: u16) -> u32 {
-            text.len() as u32 * oasis_types::backend::BITMAP_GLYPH_WIDTH
+        fn measure_text(&self, text: &str, font_size: u16) -> u32 {
+            oasis_types::backend::bitmap_measure_text(text, font_size)
         }
     }
 

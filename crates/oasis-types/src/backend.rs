@@ -17,17 +17,19 @@ pub const BITMAP_GLYPH_WIDTH: u32 = 8;
 /// Height of a single glyph in the bitmap font system.
 pub const BITMAP_GLYPH_HEIGHT: u32 = 8;
 
-/// Measure text width using the bitmap font approximation.
+/// Measure text width using proportional bitmap font metrics.
 ///
-/// All backends use 8px fixed-width glyphs, optionally scaled by font size.
-/// Centralizing this avoids the 17+ locations that hardcode `text.len() * 8`.
+/// Sums per-character advance widths derived from the actual glyph ink bounds,
+/// then scales by the font-size multiplier. This produces tighter text than
+/// the old fixed `8 * len` calculation.
 pub fn bitmap_measure_text(text: &str, font_size: u16) -> u32 {
     let scale = if font_size >= BITMAP_GLYPH_WIDTH as u16 {
         (font_size / BITMAP_GLYPH_WIDTH as u16) as u32
     } else {
         1
     };
-    text.len() as u32 * BITMAP_GLYPH_WIDTH * scale
+    let width: u32 = text.chars().map(crate::bitmap_font::glyph_advance).sum();
+    width * scale
 }
 
 /// A color in RGBA format (0-255 per channel).
@@ -1117,7 +1119,7 @@ mod tests {
     fn measure_text_extents_default() {
         let b = RecordingBackend::new();
         let (w, h) = b.measure_text_extents("ABCD", 10);
-        assert_eq!(w, 32); // 4 chars * 8px
+        assert_eq!(w, 28); // proportional: A(7)+B(7)+C(7)+D(7) = 28
         assert_eq!(h, 12); // 10 * 1.2
     }
 
@@ -1133,7 +1135,7 @@ mod tests {
         let drawn = b
             .draw_text_ellipsis("Hi", 0, 0, 8, Color::WHITE, 200)
             .unwrap();
-        assert_eq!(drawn, 16); // 2 chars * 8px
+        assert_eq!(drawn, 12); // proportional: H(7)+i(5) = 12
         let calls = b.calls();
         assert_eq!(calls.len(), 1);
         assert!(calls[0].contains("Hi"));
@@ -1364,11 +1366,11 @@ mod tests {
     #[test]
     fn draw_text_ellipsis_exact_fit() {
         let mut b = RecordingBackend::new();
-        // "ABCDE" = 5 chars * 8px = 40px, max_width=40 => no ellipsis
+        // "ABCDE" proportional: A(7)+B(7)+C(7)+D(7)+E(7) = 35px, max_width=35 => no ellipsis
         let drawn = b
-            .draw_text_ellipsis("ABCDE", 0, 0, 8, Color::WHITE, 40)
+            .draw_text_ellipsis("ABCDE", 0, 0, 8, Color::WHITE, 35)
             .unwrap();
-        assert_eq!(drawn, 40);
+        assert_eq!(drawn, 35);
         let calls = b.calls();
         assert_eq!(calls.len(), 1);
         assert!(calls[0].contains("ABCDE"));
