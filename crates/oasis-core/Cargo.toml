@@ -19,6 +19,7 @@ oasis-sdi = { workspace = true }
 oasis-net = { workspace = true }
 oasis-audio = { workspace = true }
 oasis-ui = { workspace = true }
+oasis-wm = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 toml = { workspace = true }

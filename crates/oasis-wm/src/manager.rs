@@ -4,10 +4,10 @@
 //! interfaces. It is a consumer of the SDI API -- SDI remains a flat scene
 //! graph with no concept of grouping or hierarchy.
 
-use crate::backend::SdiBackend;
-use crate::error::{OasisError, Result};
-use crate::input::InputEvent;
-use crate::sdi::SdiRegistry;
+use oasis_sdi::SdiRegistry;
+use oasis_types::backend::SdiBackend;
+use oasis_types::error::{OasisError, Result};
+use oasis_types::input::InputEvent;
 
 use super::hit_test::{ButtonKind, HitRegion, ResizeEdge, hit_test};
 use super::window::{Geometry, Window, WindowConfig, WindowId, WindowState, WmTheme};
@@ -596,7 +596,7 @@ impl WindowManager {
                 obj.color = color;
                 // Update gradient colors on focus change.
                 if self.theme.titlebar_gradient {
-                    use crate::ui::color::lighten;
+                    use oasis_types::color::lighten;
                     if is_active {
                         obj.gradient_top = Some(
                             self.theme
@@ -666,7 +666,7 @@ impl WindowManager {
                     obj.border_radius = Some(theme.titlebar_radius);
                 }
                 if theme.titlebar_gradient {
-                    use crate::ui::color::lighten;
+                    use oasis_types::color::lighten;
                     obj.gradient_top = Some(
                         theme
                             .titlebar_gradient_top
@@ -1044,12 +1044,12 @@ fn compute_resize(
     (x, y, w, h)
 }
 
-use crate::backend::Color;
+use oasis_types::backend::Color;
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::wm::window::WindowType;
+    use crate::window::WindowType;
 
     fn app_config(id: &str) -> WindowConfig {
         WindowConfig {

@@ -176,7 +176,7 @@ pub fn hit_test(windows: &[Window], x: i32, y: i32, theme: &WmTheme) -> HitRegio
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::wm::window::{WindowConfig, WindowType};
+    use crate::window::{WindowConfig, WindowType};
 
     fn make_window(id: &str, x: i32, y: i32, w: u32, h: u32) -> Window {
         let config = WindowConfig {

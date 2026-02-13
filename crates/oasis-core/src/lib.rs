@@ -39,4 +39,4 @@ pub use oasis_ui as ui;
 pub mod update;
 pub use oasis_vfs as vfs;
 pub mod wallpaper;
-pub mod wm;
+pub use oasis_wm as wm;

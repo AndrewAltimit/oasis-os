@@ -8,6 +8,7 @@ members = [
     "crates/oasis-net",
     "crates/oasis-audio",
     "crates/oasis-ui",
+    "crates/oasis-wm",
     "crates/oasis-core",
     "crates/oasis-backend-sdl",
     "crates/oasis-backend-ue5",
@@ -61,6 +62,7 @@ oasis-sdi = { path = "crates/oasis-sdi" }
 oasis-net = { path = "crates/oasis-net" }
 oasis-audio = { path = "crates/oasis-audio" }
 oasis-ui = { path = "crates/oasis-ui" }
+oasis-wm = { path = "crates/oasis-wm" }
 oasis-core = { path = "crates/oasis-core" }
 oasis-backend-ue5 = { path = "crates/oasis-backend-ue5" }
 

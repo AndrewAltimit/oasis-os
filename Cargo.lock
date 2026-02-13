@@ -601,6 +601,7 @@ dependencies = [
  "oasis-types",
  "oasis-ui",
  "oasis-vfs",
+ "oasis-wm",
  "proptest",
  "serde",
  "serde_json",
@@ -679,6 +680,15 @@ dependencies = [
  "oasis-types",
  "proptest",
  "tempfile",
+]
+
+[[package]]
+name = "oasis-wm"
+version = "0.1.0"
+dependencies = [
+ "log",
+ "oasis-sdi",
+ "oasis-types",
 ]
 
 [[package]]

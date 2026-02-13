@@ -4,7 +4,7 @@
 //! objects identified by a naming convention: `"{id}.frame"`, `"{id}.titlebar"`,
 //! etc. The WM handles behavior; the skin handles appearance.
 
-use crate::backend::Color;
+use oasis_types::backend::Color;
 
 /// Unique window identifier (also the SDI object name prefix).
 pub type WindowId = String;
