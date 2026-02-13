@@ -35,11 +35,13 @@ pub fn handle_osk_input(
                 osk_state.handle_input(btn);
                 if let Some(text) = osk_state.confirmed_text() {
                     state.output_lines.push(format!("[OSK] Input: {text}"));
+                    commands::trim_output(&mut state.output_lines);
                     osk_state.hide_sdi(sdi);
                     state.osk = None;
                     state.mode = Mode::Dashboard;
                 } else if osk_state.is_cancelled() {
                     state.output_lines.push("[OSK] Cancelled".to_string());
+                    commands::trim_output(&mut state.output_lines);
                     osk_state.hide_sdi(sdi);
                     state.osk = None;
                     state.mode = Mode::Dashboard;
