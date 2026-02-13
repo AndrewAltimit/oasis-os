@@ -1,0 +1,23 @@
+[package]
+name = "oasis-vfs"
+description = "Virtual file system abstraction for OASIS_OS"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+oasis-types = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3"
+proptest = "1"
+criterion = { version = "0.5", features = ["html_reports"] }
+
+[[bench]]
+name = "vfs"
+harness = false
+
+[lints]
+workspace = true

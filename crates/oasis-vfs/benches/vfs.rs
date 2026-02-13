@@ -1,8 +1,8 @@
 //! Benchmarks for VFS (MemoryVfs) operations.
 
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
-use oasis_core::vfs::MemoryVfs;
-use oasis_core::vfs::Vfs;
+use oasis_vfs::MemoryVfs;
+use oasis_vfs::Vfs;
 
 fn bench_write(c: &mut Criterion) {
     let mut group = c.benchmark_group("vfs_write");

@@ -7,8 +7,9 @@
 use std::fs;
 use std::path::PathBuf;
 
-use crate::error::{OasisError, Result};
-use crate::vfs::{EntryKind, Vfs, VfsEntry, VfsMetadata};
+use oasis_types::error::{OasisError, Result};
+
+use crate::{EntryKind, Vfs, VfsEntry, VfsMetadata};
 
 /// A VFS backed by the real filesystem, rooted at a configurable directory.
 #[derive(Debug)]

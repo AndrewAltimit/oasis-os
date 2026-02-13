@@ -37,6 +37,6 @@ pub mod transfer;
 pub mod transition;
 pub mod ui;
 pub mod update;
-pub mod vfs;
+pub use oasis_vfs as vfs;
 pub mod wallpaper;
 pub mod wm;

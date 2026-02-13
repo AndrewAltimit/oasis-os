@@ -584,6 +584,7 @@ dependencies = [
  "criterion",
  "log",
  "oasis-types",
+ "oasis-vfs",
  "proptest",
  "rcgen",
  "rustls",
@@ -616,6 +617,16 @@ dependencies = [
  "serde_json",
  "thiserror",
  "toml",
+]
+
+[[package]]
+name = "oasis-vfs"
+version = "0.1.0"
+dependencies = [
+ "criterion",
+ "oasis-types",
+ "proptest",
+ "tempfile",
 ]
 
 [[package]]

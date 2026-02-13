@@ -13,7 +13,7 @@ pub use game_asset::GameAssetVfs;
 pub use memory::MemoryVfs;
 pub use real::RealVfs;
 
-use crate::error::Result;
+use oasis_types::error::Result;
 
 /// Type of a VFS entry.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

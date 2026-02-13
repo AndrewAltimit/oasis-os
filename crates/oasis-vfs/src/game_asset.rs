@@ -6,8 +6,9 @@
 
 use std::collections::{HashMap, HashSet};
 
-use crate::error::{OasisError, Result};
-use crate::vfs::{EntryKind, Vfs, VfsEntry, VfsMetadata};
+use oasis_types::error::{OasisError, Result};
+
+use crate::{EntryKind, Vfs, VfsEntry, VfsMetadata};
 
 /// An entry in the game asset VFS.
 #[derive(Debug, Clone)]

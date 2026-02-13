@@ -5,8 +5,9 @@
 
 use std::collections::HashMap;
 
-use crate::error::{OasisError, Result};
-use crate::vfs::{EntryKind, Vfs, VfsEntry, VfsMetadata};
+use oasis_types::error::{OasisError, Result};
+
+use crate::{EntryKind, Vfs, VfsEntry, VfsMetadata};
 
 #[derive(Debug, Clone)]
 enum Node {
