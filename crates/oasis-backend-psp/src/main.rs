@@ -1387,7 +1387,7 @@ fn psp_main() {
                 // Draw WM chrome (frames, titlebars) + clipped content.
                 // Use bitmap font for app content (8px vs 12px system font).
                 backend.force_bitmap_font = true;
-                let _ = wm.draw_with_clips(&sdi, &mut backend, |window_id, cx, cy, cw, ch, be| {
+                let _ = wm.draw_with_clips(&mut sdi, &mut backend, |window_id, cx, cy, cw, ch, be| {
                     // Downcast back to PspBackend for direct calls.
                     // Since draw_with_clips passes &mut dyn SdiBackend, we use
                     // the trait methods here (which return Result).
