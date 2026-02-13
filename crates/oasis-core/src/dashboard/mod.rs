@@ -13,6 +13,8 @@ use crate::input::Button;
 use crate::sdi::SdiRegistry;
 use crate::skin::SkinFeatures;
 use crate::theme;
+use crate::ui::flex::GridLayout;
+use crate::ui::layout::Padding;
 
 /// Dashboard configuration derived from the skin's feature gates.
 #[derive(Debug, Clone)]
@@ -28,6 +30,12 @@ pub struct DashboardConfig {
     pub cell_h: u32,
     /// Cursor highlight size offset (drawn slightly larger than the icon).
     pub cursor_pad: i32,
+    /// Grid layout helper for computing cell positions.
+    pub grid_layout: GridLayout,
+    /// Total grid area width (for `GridLayout::cell_rect`).
+    pub grid_w: u32,
+    /// Total grid area height (for `GridLayout::cell_rect`).
+    pub grid_h: u32,
 }
 
 impl DashboardConfig {
@@ -38,22 +46,32 @@ impl DashboardConfig {
         let rows = features.grid_rows;
         let content_top = at.statusbar_height + at.tab_row_height;
         let content_h = theme::SCREEN_H - content_top - at.bottombar_height;
-        let grid_padding_x = 16u32;
-        let grid_padding_y = 6u32;
+        let grid_padding_x = 16u16;
+        let grid_padding_y = 6u16;
+        let grid_x = grid_padding_x as i32;
+        let grid_y = (content_top + grid_padding_y as u32) as i32;
+        let grid_w = theme::SCREEN_W - 2 * grid_padding_x as u32;
+        let grid_h = content_h - 2 * grid_padding_y as u32;
+
         // Size cells to fill available space evenly.
-        let avail_w = theme::SCREEN_W - 2 * grid_padding_x;
-        let cell_w = avail_w / cols;
-        let cell_h = (content_h - 2 * grid_padding_y) / rows;
+        let cell_w = grid_w / cols;
+        let cell_h = grid_h / rows;
+
+        let grid_layout = GridLayout::new(cols).with_padding(Padding::ZERO);
+
         Self {
             grid_cols: cols,
             grid_rows: rows,
             icons_per_page: features.icons_per_page,
             max_pages: features.dashboard_pages,
-            grid_x: grid_padding_x as i32,
-            grid_y: (content_top + grid_padding_y) as i32,
+            grid_x,
+            grid_y,
             cell_w,
             cell_h,
             cursor_pad: 3,
+            grid_layout,
+            grid_w,
+            grid_h,
         }
     }
 }
@@ -206,10 +224,18 @@ impl DashboardState {
                 }
             }
 
-            let col = (i % cols) as i32;
-            let row = (i / cols) as i32;
-            let cell_x = self.config.grid_x + col * self.config.cell_w as i32;
-            let cell_y = self.config.grid_y + row * self.config.cell_h as i32;
+            let cell = self.config.grid_layout.cell_rect(
+                i,
+                self.config.grid_x,
+                self.config.grid_y,
+                self.config.grid_w,
+                self.config.grid_h,
+                per_page,
+            );
+            let (cell_x, cell_y) = match cell {
+                Some(r) => (r.x, r.y),
+                None => continue,
+            };
             let ix = cell_x + (self.config.cell_w as i32 - icon_w as i32) / 2;
             let iy = cell_y + (self.config.cell_h as i32 - icon_h as i32) / 4;
 
@@ -682,6 +708,9 @@ mod tests {
             cell_w: 110,
             cell_h: 95,
             cursor_pad: 4,
+            grid_layout: GridLayout::new(2),
+            grid_w: 220,
+            grid_h: 190,
         }
     }
 

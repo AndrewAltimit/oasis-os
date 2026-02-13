@@ -251,12 +251,7 @@ impl SdiBackend for SdlBackend {
     }
 
     fn measure_text(&self, text: &str, font_size: u16) -> u32 {
-        let scale = if font_size >= 8 {
-            (font_size / 8) as u32
-        } else {
-            1
-        };
-        text.len() as u32 * 8 * scale
+        oasis_core::backend::bitmap_measure_text(text, font_size)
     }
 
     fn read_pixels(&self, x: i32, y: i32, w: u32, h: u32) -> Result<Vec<u8>> {

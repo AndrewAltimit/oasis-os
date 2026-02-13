@@ -207,13 +207,12 @@ fn capitalize_words(text: &str) -> String {
 mod tests {
     use super::*;
 
-    /// Stub measurer: each character is 8 pixels wide (matching the
-    /// 8x8 bitmap font used by OASIS backends).
+    /// Stub measurer: each character is 8 pixels wide.
     struct StubMeasurer;
 
     impl TextMeasurer for StubMeasurer {
         fn measure_text(&self, text: &str, _font_size: u16) -> u32 {
-            (text.len() as u32) * 8
+            text.len() as u32 * oasis_types::backend::BITMAP_GLYPH_WIDTH
         }
     }
 

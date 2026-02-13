@@ -203,7 +203,7 @@ impl SdiBackend for MockBackend {
     }
 
     fn measure_text(&self, text: &str, _font_size: u16) -> u32 {
-        text.len() as u32 * 8
+        text.len() as u32 * oasis_types::backend::BITMAP_GLYPH_WIDTH
     }
 
     fn read_pixels(&self, _x: i32, _y: i32, _w: u32, _h: u32) -> Result<Vec<u8>> {

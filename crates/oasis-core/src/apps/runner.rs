@@ -4,6 +4,7 @@ use crate::backend::{Color, SdiBackend};
 use crate::dashboard::AppEntry;
 use crate::input::Button;
 use crate::sdi::SdiRegistry;
+use crate::ui::flex;
 use crate::vfs::{EntryKind, Vfs};
 
 /// Maximum lines visible in the app content area.
@@ -429,7 +430,8 @@ impl AppRunner {
         }
 
         // Content lines.
-        for i in 0..MAX_VISIBLE_LINES {
+        let line_rects = flex::vertical_list(8, 26, 464, 18, 0, MAX_VISIBLE_LINES);
+        for (i, rect) in line_rects.iter().enumerate() {
             let name = format!("app_line_{i}");
             if !sdi.contains(&name) {
                 sdi.create(&name);
@@ -444,8 +446,8 @@ impl AppRunner {
                     obj.text = None;
                     obj.visible = false;
                 }
-                obj.x = 8;
-                obj.y = 26 + (i as i32) * 18;
+                obj.x = rect.x;
+                obj.y = rect.y;
                 obj.font_size = 12;
                 obj.text_color = if i == self.cursor {
                     Color::rgb(100, 200, 255)

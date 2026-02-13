@@ -11,6 +11,25 @@
 use crate::error::Result;
 use crate::input::InputEvent;
 
+/// Width of a single glyph in the bitmap font system.
+pub const BITMAP_GLYPH_WIDTH: u32 = 8;
+
+/// Height of a single glyph in the bitmap font system.
+pub const BITMAP_GLYPH_HEIGHT: u32 = 8;
+
+/// Measure text width using the bitmap font approximation.
+///
+/// All backends use 8px fixed-width glyphs, optionally scaled by font size.
+/// Centralizing this avoids the 17+ locations that hardcode `text.len() * 8`.
+pub fn bitmap_measure_text(text: &str, font_size: u16) -> u32 {
+    let scale = if font_size >= BITMAP_GLYPH_WIDTH as u16 {
+        (font_size / BITMAP_GLYPH_WIDTH as u16) as u32
+    } else {
+        1
+    };
+    text.len() as u32 * BITMAP_GLYPH_WIDTH * scale
+}
+
 /// A color in RGBA format (0-255 per channel).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Color {
@@ -855,8 +874,8 @@ mod tests {
             self.calls.borrow_mut().push("reset_clip".into());
             Ok(())
         }
-        fn measure_text(&self, text: &str, _font_size: u16) -> u32 {
-            text.len() as u32 * 8
+        fn measure_text(&self, text: &str, font_size: u16) -> u32 {
+            bitmap_measure_text(text, font_size)
         }
         fn read_pixels(&self, _x: i32, _y: i32, _w: u32, _h: u32) -> Result<Vec<u8>> {
             Ok(Vec::new())

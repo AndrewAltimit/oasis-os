@@ -7,6 +7,8 @@
 //! gradients, sub-rect blits, clip/transform stacks) are software-rasterized
 //! into the pixel buffer.
 
+use std::rc::Rc;
+
 use oasis_core::backend::{Color, SdiBackend, TextureId};
 use oasis_core::error::{OasisError, Result};
 
@@ -16,7 +18,7 @@ use crate::font;
 struct Texture {
     width: u32,
     height: u32,
-    data: Vec<u8>,
+    data: Rc<Vec<u8>>,
 }
 
 /// Software RGBA framebuffer renderer for UE5 integration.
@@ -178,15 +180,15 @@ impl Ue5Backend {
         }
     }
 
-    /// Get texture data, returning cloned data to avoid borrow issues.
-    fn get_texture_data(&self, tex: TextureId) -> Result<(u32, u32, Vec<u8>)> {
+    /// Get texture data via `Rc::clone` (O(1) refcount bump, no data copy).
+    fn get_texture_data(&self, tex: TextureId) -> Result<(u32, u32, Rc<Vec<u8>>)> {
         let idx = tex.0 as usize;
         let texture = self
             .textures
             .get(idx)
             .and_then(|t| t.as_ref())
             .ok_or_else(|| OasisError::Backend(format!("invalid texture id: {}", tex.0)))?;
-        Ok((texture.width, texture.height, texture.data.clone()))
+        Ok((texture.width, texture.height, Rc::clone(&texture.data)))
     }
 }
 
@@ -297,7 +299,7 @@ impl SdiBackend for Ue5Backend {
         let texture = Texture {
             width,
             height,
-            data: rgba_data.to_vec(),
+            data: Rc::new(rgba_data.to_vec()),
         };
 
         for (i, slot) in self.textures.iter_mut().enumerate() {
@@ -330,12 +332,7 @@ impl SdiBackend for Ue5Backend {
     }
 
     fn measure_text(&self, text: &str, font_size: u16) -> u32 {
-        let scale = if font_size >= 8 {
-            (font_size / 8) as u32
-        } else {
-            1
-        };
-        text.len() as u32 * 8 * scale
+        oasis_core::backend::bitmap_measure_text(text, font_size)
     }
 
     fn read_pixels(&self, x: i32, y: i32, w: u32, h: u32) -> Result<Vec<u8>> {
