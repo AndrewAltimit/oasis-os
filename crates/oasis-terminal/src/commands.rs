@@ -1,10 +1,15 @@
 //! Built-in commands for the OASIS_OS terminal.
 
-use crate::error::{OasisError, Result};
-use crate::terminal::interpreter::{Command, CommandOutput, CommandRegistry, Environment};
-use crate::vfs::EntryKind;
+use oasis_types::error::{OasisError, Result};
+use oasis_vfs::EntryKind;
+
+use crate::interpreter::{Command, CommandOutput, CommandRegistry, Environment};
 
 /// Register all built-in commands into a registry.
+///
+/// This registers the core commands (fs, system, network) plus audio/network/skin
+/// command modules. Additional command modules (agent, plugin, script, transfer,
+/// update) are registered by `oasis-core` via `register_all_commands`.
 pub fn register_builtins(reg: &mut CommandRegistry) {
     reg.register(Box::new(HelpCmd));
     reg.register(Box::new(LsCmd));
@@ -31,15 +36,11 @@ pub fn register_builtins(reg: &mut CommandRegistry) {
     reg.register(Box::new(RemoteCmd));
     reg.register(Box::new(HostsCmd));
     // Phase 6: network commands.
-    crate::terminal::register_network_commands(reg);
+    crate::register_network_commands(reg);
     // Phase 11: audio commands.
-    crate::terminal::register_audio_commands(reg);
-    // Phase 12: scripting, update, and transfer commands.
-    crate::script::register_script_commands(reg);
-    crate::update::register_update_commands(reg);
-    crate::transfer::register_transfer_commands(reg);
+    crate::register_audio_commands(reg);
     // Skin switching commands.
-    crate::terminal::register_skin_commands(reg);
+    crate::register_skin_commands(reg);
 }
 
 // ---------------------------------------------------------------------------
@@ -419,7 +420,7 @@ impl Command for FindCmd {
 
 /// Recursively search for files matching a simple substring pattern.
 fn find_recursive(
-    vfs: &mut dyn crate::vfs::Vfs,
+    vfs: &mut dyn oasis_vfs::Vfs,
     dir: &str,
     pattern: &str,
     results: &mut Vec<String>,
@@ -647,7 +648,7 @@ impl Command for RemoteCmd {
         if env.vfs.exists(hosts_path) {
             let data = env.vfs.read(hosts_path)?;
             let toml_str = String::from_utf8_lossy(&data);
-            if let Ok(hosts) = crate::net::parse_hosts(&toml_str) {
+            if let Ok(hosts) = oasis_net::parse_hosts(&toml_str) {
                 for host in &hosts {
                     if host.name == target {
                         return Ok(CommandOutput::RemoteConnect {
@@ -690,7 +691,7 @@ impl Command for HostsCmd {
         }
         let data = env.vfs.read(hosts_path)?;
         let toml_str = String::from_utf8_lossy(&data);
-        let hosts = crate::net::parse_hosts(&toml_str)?;
+        let hosts = oasis_net::parse_hosts(&toml_str)?;
         if hosts.is_empty() {
             return Ok(CommandOutput::Text("(no hosts defined)".to_string()));
         }
@@ -746,7 +747,7 @@ fn resolve_path(cwd: &str, input: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::vfs::{MemoryVfs, Vfs};
+    use oasis_vfs::{MemoryVfs, Vfs};
 
     fn setup() -> (CommandRegistry, MemoryVfs) {
         let mut reg = CommandRegistry::new();
@@ -1020,7 +1021,7 @@ mod tests {
     #[test]
     fn power_with_platform() {
         let (reg, mut vfs) = setup();
-        let platform = crate::platform::DesktopPlatform::new();
+        let platform = oasis_platform::DesktopPlatform::new();
         let mut env = Environment {
             cwd: "/".to_string(),
             vfs: &mut vfs,
@@ -1050,7 +1051,7 @@ mod tests {
     #[test]
     fn clock_with_platform() {
         let (reg, mut vfs) = setup();
-        let platform = crate::platform::DesktopPlatform::new();
+        let platform = oasis_platform::DesktopPlatform::new();
         let mut env = Environment {
             cwd: "/".to_string(),
             vfs: &mut vfs,
@@ -1093,7 +1094,7 @@ mod tests {
     #[test]
     fn usb_with_platform() {
         let (reg, mut vfs) = setup();
-        let platform = crate::platform::DesktopPlatform::new();
+        let platform = oasis_platform::DesktopPlatform::new();
         let mut env = Environment {
             cwd: "/".to_string(),
             vfs: &mut vfs,
@@ -1159,7 +1160,7 @@ mod tests {
     #[test]
     fn remote_saved_host() {
         let (reg, mut vfs) = setup();
-        use crate::vfs::Vfs;
+        use oasis_vfs::Vfs;
         vfs.mkdir("/etc").unwrap();
         vfs.write(
             "/etc/hosts.toml",
@@ -1210,7 +1211,7 @@ psk = "secret"
     #[test]
     fn hosts_with_config() {
         let (reg, mut vfs) = setup();
-        use crate::vfs::Vfs;
+        use oasis_vfs::Vfs;
         vfs.mkdir("/etc").unwrap();
         vfs.write(
             "/etc/hosts.toml",
@@ -1404,7 +1405,7 @@ protocol = "raw-tcp"
 
     #[test]
     fn session_skin_commands() {
-        use crate::terminal::register_skin_commands;
+        use crate::register_skin_commands;
         let mut reg = CommandRegistry::new();
         register_builtins(&mut reg);
         register_skin_commands(&mut reg);

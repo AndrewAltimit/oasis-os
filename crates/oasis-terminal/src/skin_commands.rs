@@ -1,9 +1,10 @@
 //! Terminal commands for skin management.
 
-use crate::error::Result;
-use crate::skin::Skin;
-use crate::skin::builtin;
-use crate::terminal::interpreter::{Command, CommandOutput, CommandRegistry, Environment};
+use oasis_skin::Skin;
+use oasis_skin::builtin;
+use oasis_types::error::Result;
+
+use crate::{Command, CommandOutput, CommandRegistry, Environment};
 
 /// Register skin-related commands.
 pub fn register_skin_commands(reg: &mut CommandRegistry) {
@@ -56,7 +57,7 @@ impl Command for SkinCmd {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::vfs::MemoryVfs;
+    use oasis_vfs::MemoryVfs;
 
     fn make_env(vfs: &mut MemoryVfs) -> Environment<'_> {
         Environment {

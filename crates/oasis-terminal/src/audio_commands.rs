@@ -4,9 +4,10 @@
 //! playback. Uses VFS-based IPC: reads status from `/var/audio/status`
 //! and writes requests to `/var/audio/request`.
 
-use crate::audio::{AUDIO_REQUEST_PATH, AUDIO_STATUS_PATH};
-use crate::error::{OasisError, Result};
-use crate::terminal::{Command, CommandOutput, Environment};
+use oasis_audio::{AUDIO_REQUEST_PATH, AUDIO_STATUS_PATH};
+use oasis_types::error::{OasisError, Result};
+
+use crate::{Command, CommandOutput, Environment};
 
 pub struct MusicCmd;
 impl Command for MusicCmd {
@@ -114,15 +115,15 @@ impl Command for MusicCmd {
 }
 
 /// Register audio commands into a registry.
-pub fn register_audio_commands(reg: &mut crate::terminal::CommandRegistry) {
+pub fn register_audio_commands(reg: &mut crate::CommandRegistry) {
     reg.register(Box::new(MusicCmd));
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::terminal::{CommandOutput, CommandRegistry, Environment};
-    use crate::vfs::{MemoryVfs, Vfs};
+    use crate::{CommandOutput, CommandRegistry, Environment};
+    use oasis_vfs::{MemoryVfs, Vfs};
 
     fn setup() -> (CommandRegistry, MemoryVfs) {
         let mut reg = CommandRegistry::new();

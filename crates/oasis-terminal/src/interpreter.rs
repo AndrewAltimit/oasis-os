@@ -2,9 +2,9 @@
 
 use std::collections::HashMap;
 
-use crate::error::{OasisError, Result};
-use crate::platform::{NetworkService, PowerService, TimeService, UsbService};
-use crate::vfs::Vfs;
+use oasis_platform::{NetworkService, PowerService, TimeService, UsbService};
+use oasis_types::error::{OasisError, Result};
+use oasis_vfs::Vfs;
 
 /// Output produced by a command.
 #[derive(Debug, Clone)]
@@ -58,7 +58,7 @@ pub struct Environment<'a> {
     /// Network service for WiFi status queries.
     pub network: Option<&'a dyn NetworkService>,
     /// TLS provider for HTTPS connections.
-    pub tls: Option<&'a dyn crate::net::tls::TlsProvider>,
+    pub tls: Option<&'a dyn oasis_net::tls::TlsProvider>,
 }
 
 /// A single executable command.
@@ -129,7 +129,7 @@ impl Default for CommandRegistry {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::vfs::MemoryVfs;
+    use oasis_vfs::MemoryVfs;
 
     struct EchoCmd;
     impl Command for EchoCmd {

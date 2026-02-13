@@ -1,7 +1,8 @@
 //! WiFi / network terminal commands.
 
-use crate::error::{OasisError, Result};
-use crate::terminal::{Command, CommandOutput, CommandRegistry, Environment};
+use oasis_types::error::{OasisError, Result};
+
+use crate::{Command, CommandOutput, CommandRegistry, Environment};
 
 /// Register network-related terminal commands.
 pub fn register_network_commands(reg: &mut CommandRegistry) {
@@ -165,9 +166,10 @@ impl Command for HttpCmd {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::platform::DesktopPlatform;
-    use crate::terminal::Environment;
-    use crate::vfs::MemoryVfs;
+    use oasis_platform::DesktopPlatform;
+
+    use crate::Environment;
+    use oasis_vfs::MemoryVfs;
 
     #[test]
     fn wifi_no_service() {

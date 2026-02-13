@@ -21,6 +21,7 @@ oasis-audio = { workspace = true }
 oasis-ui = { workspace = true }
 oasis-wm = { workspace = true }
 oasis-skin = { workspace = true }
+oasis-terminal = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 toml = { workspace = true }
