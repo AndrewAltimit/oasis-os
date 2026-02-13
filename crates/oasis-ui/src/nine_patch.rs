@@ -1,7 +1,7 @@
 //! Nine-patch (9-slice) rendering for scalable themed borders.
 
-use crate::backend::{SdiBackend, TextureId};
-use crate::error::Result;
+use oasis_types::backend::{SdiBackend, TextureId};
+use oasis_types::error::Result;
 
 /// Nine-patch definition for a texture.
 ///

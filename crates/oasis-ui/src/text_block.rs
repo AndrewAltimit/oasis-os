@@ -1,10 +1,10 @@
 //! Text block widget: multiline text with wrapping, truncation, alignment.
 
-use crate::backend::Color;
-use crate::error::Result;
-use crate::ui::context::DrawContext;
-use crate::ui::layout::HAlign;
-use crate::ui::widget::Widget;
+use crate::context::DrawContext;
+use crate::layout::HAlign;
+use crate::widget::Widget;
+use oasis_types::backend::Color;
+use oasis_types::error::Result;
 
 /// A block of text with optional wrapping and alignment.
 pub struct TextBlock {

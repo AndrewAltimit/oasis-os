@@ -1,9 +1,9 @@
 //! Divider widget: horizontal or vertical separator line.
 
-use crate::backend::Color;
-use crate::error::Result;
-use crate::ui::context::DrawContext;
-use crate::ui::widget::Widget;
+use crate::context::DrawContext;
+use crate::widget::Widget;
+use oasis_types::backend::Color;
+use oasis_types::error::Result;
 
 /// Orientation of the divider.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -88,10 +88,10 @@ mod tests {
 
     // -- Draw / measure tests using MockBackend --
 
-    use crate::browser::test_utils::MockBackend;
-    use crate::ui::context::DrawContext;
-    use crate::ui::theme::Theme;
-    use crate::ui::widget::Widget;
+    use crate::context::DrawContext;
+    use crate::test_utils::MockBackend;
+    use crate::theme::Theme;
+    use crate::widget::Widget;
 
     #[test]
     fn measure_horizontal_returns_full_width() {

@@ -1,9 +1,9 @@
 //! Toggle switch widget.
 
-use crate::error::Result;
-use crate::ui::color::lerp_color;
-use crate::ui::context::DrawContext;
-use crate::ui::widget::Widget;
+use crate::color::lerp_color;
+use crate::context::DrawContext;
+use crate::widget::Widget;
+use oasis_types::error::Result;
 
 /// An on/off toggle switch.
 pub struct Toggle {
@@ -107,10 +107,10 @@ mod tests {
 
     // -- Draw / measure tests using MockBackend --
 
-    use crate::browser::test_utils::MockBackend;
-    use crate::ui::context::DrawContext;
-    use crate::ui::theme::Theme;
-    use crate::ui::widget::Widget;
+    use crate::context::DrawContext;
+    use crate::test_utils::MockBackend;
+    use crate::theme::Theme;
+    use crate::widget::Widget;
 
     #[test]
     fn measure_returns_fixed_size() {

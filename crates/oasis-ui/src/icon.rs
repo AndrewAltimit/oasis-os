@@ -4,8 +4,8 @@
 //! all UI symbols. Icons are grayscale with alpha; theme colors are applied
 //! via `blit_sub_tinted`.
 
-use crate::backend::{Color, SdiBackend, TextureId};
-use crate::error::Result;
+use oasis_types::backend::{Color, SdiBackend, TextureId};
+use oasis_types::error::Result;
 
 /// Well-known icon identifiers.
 ///

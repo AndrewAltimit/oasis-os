@@ -1,7 +1,7 @@
 //! Theme system for consistent UI styling.
 
-use crate::backend::Color;
-use crate::ui::shadow::Shadow;
+use crate::shadow::Shadow;
+use oasis_types::backend::Color;
 
 /// Complete visual theme for the UI toolkit.
 pub struct Theme {

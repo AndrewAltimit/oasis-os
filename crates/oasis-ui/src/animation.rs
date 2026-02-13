@@ -1,7 +1,7 @@
 //! Animation primitives: easing functions and tweens.
 
-use crate::backend::Color;
-use crate::ui::color::lerp_color;
+use crate::color::lerp_color;
+use oasis_types::backend::Color;
 
 /// Standard easing functions.
 ///

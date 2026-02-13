@@ -3,11 +3,11 @@
 //! All oasis-ui widgets render through `DrawContext`, which wraps a
 //! `&mut dyn SdiBackend` and provides access to the active theme.
 
-use crate::backend::{Color, SdiBackend, TextureId};
-use crate::error::Result;
-use crate::ui::layout::Padding;
-use crate::ui::shadow::Shadow;
-use crate::ui::theme::Theme;
+use crate::layout::Padding;
+use crate::shadow::Shadow;
+use crate::theme::Theme;
+use oasis_types::backend::{Color, SdiBackend, TextureId};
+use oasis_types::error::Result;
 
 /// Drawing context wrapping a backend and theme.
 pub struct DrawContext<'a> {

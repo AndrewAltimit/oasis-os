@@ -1,10 +1,10 @@
 //! Badge widget: small colored tag/indicator.
 
-use crate::backend::Color;
-use crate::error::Result;
-use crate::ui::context::DrawContext;
-use crate::ui::layout;
-use crate::ui::widget::Widget;
+use crate::context::DrawContext;
+use crate::layout;
+use crate::widget::Widget;
+use oasis_types::backend::Color;
+use oasis_types::error::Result;
 
 /// A small colored tag or counter indicator.
 pub struct Badge {
@@ -62,10 +62,10 @@ mod tests {
 
     // -- Draw / measure tests using MockBackend --
 
-    use crate::browser::test_utils::MockBackend;
-    use crate::ui::context::DrawContext;
-    use crate::ui::theme::Theme;
-    use crate::ui::widget::Widget;
+    use crate::context::DrawContext;
+    use crate::test_utils::MockBackend;
+    use crate::theme::Theme;
+    use crate::widget::Widget;
 
     #[test]
     fn measure_returns_correct_size() {

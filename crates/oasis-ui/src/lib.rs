@@ -27,6 +27,9 @@ pub mod theme;
 pub mod toggle;
 pub mod widget;
 
+#[cfg(test)]
+pub(crate) mod test_utils;
+
 pub use context::DrawContext;
 pub use layout::Padding;
 pub use theme::Theme;

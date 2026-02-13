@@ -1,11 +1,11 @@
 //! Panel widget: container with background, border, shadow, rounded corners.
 
-use crate::backend::Color;
-use crate::error::Result;
-use crate::ui::context::DrawContext;
-use crate::ui::layout::Padding;
-use crate::ui::shadow::Shadow;
-use crate::ui::widget::Widget;
+use crate::context::DrawContext;
+use crate::layout::Padding;
+use crate::shadow::Shadow;
+use crate::widget::Widget;
+use oasis_types::backend::Color;
+use oasis_types::error::Result;
 
 /// A container with background, optional border, shadow, and rounded corners.
 pub struct Panel {
@@ -62,10 +62,10 @@ impl Panel {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::browser::test_utils::MockBackend;
-    use crate::ui::context::DrawContext;
-    use crate::ui::theme::Theme;
-    use crate::ui::widget::Widget;
+    use crate::context::DrawContext;
+    use crate::test_utils::MockBackend;
+    use crate::theme::Theme;
+    use crate::widget::Widget;
 
     #[test]
     fn measure_returns_available_size() {

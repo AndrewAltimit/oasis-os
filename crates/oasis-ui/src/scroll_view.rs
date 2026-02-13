@@ -1,8 +1,8 @@
 //! ScrollView widget: scrollable content region with scrollbar.
 
-use crate::error::Result;
-use crate::ui::context::DrawContext;
-use crate::ui::widget::Widget;
+use crate::context::DrawContext;
+use crate::widget::Widget;
+use oasis_types::error::Result;
 
 /// Scrollbar visual style.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -172,10 +172,10 @@ mod tests {
 
     // -- Draw / measure tests using MockBackend --
 
-    use crate::browser::test_utils::MockBackend;
-    use crate::ui::context::DrawContext;
-    use crate::ui::theme::Theme;
-    use crate::ui::widget::Widget;
+    use crate::context::DrawContext;
+    use crate::test_utils::MockBackend;
+    use crate::theme::Theme;
+    use crate::widget::Widget;
 
     #[test]
     fn draw_calls_push_clip_rect() {

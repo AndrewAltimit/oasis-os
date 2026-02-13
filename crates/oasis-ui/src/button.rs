@@ -1,11 +1,11 @@
 //! Button widget.
 
-use crate::backend::Color;
-use crate::error::Result;
-use crate::ui::context::DrawContext;
-use crate::ui::icon::Icon;
-use crate::ui::layout::{self, Padding};
-use crate::ui::widget::Widget;
+use crate::context::DrawContext;
+use crate::icon::Icon;
+use crate::layout::{self, Padding};
+use crate::widget::Widget;
+use oasis_types::backend::Color;
+use oasis_types::error::Result;
 
 /// Button visual state.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -52,7 +52,7 @@ impl Button {
         }
     }
 
-    fn bg_color(&self, theme: &crate::ui::theme::Theme) -> Option<Color> {
+    fn bg_color(&self, theme: &crate::theme::Theme) -> Option<Color> {
         match self.style {
             ButtonStyle::Primary => Some(match self.state {
                 ButtonState::Pressed => theme.accent_pressed,
@@ -78,7 +78,7 @@ impl Button {
         }
     }
 
-    fn text_color(&self, theme: &crate::ui::theme::Theme) -> Color {
+    fn text_color(&self, theme: &crate::theme::Theme) -> Color {
         if self.state == ButtonState::Disabled {
             return theme.text_disabled;
         }
@@ -163,9 +163,9 @@ mod tests {
 
     // -- Draw / measure tests using MockBackend --
 
-    use crate::browser::test_utils::MockBackend;
-    use crate::ui::theme::Theme;
-    use crate::ui::widget::Widget;
+    use crate::test_utils::MockBackend;
+    use crate::theme::Theme;
+    use crate::widget::Widget;
 
     #[test]
     fn measure_returns_text_width_plus_padding() {

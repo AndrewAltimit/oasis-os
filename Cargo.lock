@@ -599,6 +599,7 @@ dependencies = [
  "oasis-platform",
  "oasis-sdi",
  "oasis-types",
+ "oasis-ui",
  "oasis-vfs",
  "proptest",
  "serde",
@@ -661,6 +662,13 @@ dependencies = [
  "serde_json",
  "thiserror",
  "toml",
+]
+
+[[package]]
+name = "oasis-ui"
+version = "0.1.0"
+dependencies = [
+ "oasis-types",
 ]
 
 [[package]]

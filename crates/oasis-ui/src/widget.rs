@@ -1,7 +1,7 @@
 //! Widget trait definition.
 
-use crate::error::Result;
-use crate::ui::context::DrawContext;
+use crate::context::DrawContext;
+use oasis_types::error::Result;
 
 /// Minimum interface for a renderable UI element.
 pub trait Widget {

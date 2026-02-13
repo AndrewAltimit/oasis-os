@@ -35,7 +35,7 @@ pub mod terminal;
 pub mod theme;
 pub mod transfer;
 pub mod transition;
-pub mod ui;
+pub use oasis_ui as ui;
 pub mod update;
 pub use oasis_vfs as vfs;
 pub mod wallpaper;

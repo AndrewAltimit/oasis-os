@@ -1,8 +1,8 @@
 //! ListView widget: scrollable list with virtualized item rendering.
 
-use crate::error::Result;
-use crate::ui::context::DrawContext;
-use crate::ui::widget::Widget;
+use crate::context::DrawContext;
+use crate::widget::Widget;
+use oasis_types::error::Result;
 
 /// A scrollable list with virtualized rendering.
 ///
@@ -171,10 +171,10 @@ mod tests {
 
     // -- Draw / measure tests using MockBackend --
 
-    use crate::browser::test_utils::MockBackend;
-    use crate::ui::context::DrawContext;
-    use crate::ui::theme::Theme;
-    use crate::ui::widget::Widget;
+    use crate::context::DrawContext;
+    use crate::test_utils::MockBackend;
+    use crate::theme::Theme;
+    use crate::widget::Widget;
 
     /// A render callback that actually draws the item text so we can
     /// assert on `draw_text` calls recorded by `MockBackend`.

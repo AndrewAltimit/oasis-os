@@ -1,9 +1,9 @@
 //! InputField widget: text input with cursor.
 
-use crate::error::Result;
-use crate::ui::context::DrawContext;
-use crate::ui::layout;
-use crate::ui::widget::Widget;
+use crate::context::DrawContext;
+use crate::layout;
+use crate::widget::Widget;
+use oasis_types::error::Result;
 
 /// Text input field with cursor and optional placeholder.
 pub struct InputField {
@@ -181,10 +181,10 @@ mod tests {
 
     // -- Draw / measure tests using MockBackend --
 
-    use crate::browser::test_utils::MockBackend;
-    use crate::ui::context::DrawContext;
-    use crate::ui::theme::Theme;
-    use crate::ui::widget::Widget;
+    use crate::context::DrawContext;
+    use crate::test_utils::MockBackend;
+    use crate::theme::Theme;
+    use crate::widget::Widget;
 
     #[test]
     fn measure_returns_width() {

@@ -1,10 +1,10 @@
 //! Card widget: content card with optional image, title, subtitle, body.
 
-use crate::backend::TextureId;
-use crate::error::Result;
-use crate::ui::context::DrawContext;
-use crate::ui::shadow::Shadow;
-use crate::ui::widget::Widget;
+use crate::context::DrawContext;
+use crate::shadow::Shadow;
+use crate::widget::Widget;
+use oasis_types::backend::TextureId;
+use oasis_types::error::Result;
 
 /// A content card combining image, title, subtitle, and body text.
 pub struct Card {
@@ -99,10 +99,10 @@ mod tests {
 
     // -- Draw / measure tests using MockBackend --
 
-    use crate::browser::test_utils::MockBackend;
-    use crate::ui::context::DrawContext;
-    use crate::ui::theme::Theme;
-    use crate::ui::widget::Widget;
+    use crate::context::DrawContext;
+    use crate::test_utils::MockBackend;
+    use crate::theme::Theme;
+    use crate::widget::Widget;
 
     #[test]
     fn measure_accounts_for_padding() {
