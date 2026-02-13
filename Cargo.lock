@@ -589,12 +589,27 @@ dependencies = [
 ]
 
 [[package]]
-name = "oasis-core"
+name = "oasis-browser"
 version = "0.1.0"
 dependencies = [
  "criterion",
  "log",
+ "oasis-net",
+ "oasis-skin",
+ "oasis-terminal",
+ "oasis-types",
+ "oasis-vfs",
+ "proptest",
+ "serde",
+]
+
+[[package]]
+name = "oasis-core"
+version = "0.1.0"
+dependencies = [
+ "log",
  "oasis-audio",
+ "oasis-browser",
  "oasis-net",
  "oasis-platform",
  "oasis-sdi",

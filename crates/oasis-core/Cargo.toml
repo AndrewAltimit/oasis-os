@@ -22,6 +22,7 @@ oasis-ui = { workspace = true }
 oasis-wm = { workspace = true }
 oasis-skin = { workspace = true }
 oasis-terminal = { workspace = true }
+oasis-browser = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 toml = { workspace = true }
@@ -31,23 +32,6 @@ thiserror = { workspace = true }
 [dev-dependencies]
 tempfile = "3"
 proptest = "1"
-criterion = { version = "0.5", features = ["html_reports"] }
-
-[[bench]]
-name = "html_parsing"
-harness = false
-
-[[bench]]
-name = "css_cascade"
-harness = false
-
-[[bench]]
-name = "layout_engine"
-harness = false
-
-[[bench]]
-name = "paint"
-harness = false
 
 [lints]
 workspace = true

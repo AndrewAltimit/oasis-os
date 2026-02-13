@@ -11,6 +11,7 @@ members = [
     "crates/oasis-wm",
     "crates/oasis-skin",
     "crates/oasis-terminal",
+    "crates/oasis-browser",
     "crates/oasis-core",
     "crates/oasis-backend-sdl",
     "crates/oasis-backend-ue5",
@@ -67,6 +68,7 @@ oasis-ui = { path = "crates/oasis-ui" }
 oasis-wm = { path = "crates/oasis-wm" }
 oasis-skin = { path = "crates/oasis-skin" }
 oasis-terminal = { path = "crates/oasis-terminal" }
+oasis-browser = { path = "crates/oasis-browser" }
 oasis-core = { path = "crates/oasis-core" }
 oasis-backend-ue5 = { path = "crates/oasis-backend-ue5" }
 

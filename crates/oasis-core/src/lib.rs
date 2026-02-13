@@ -19,7 +19,7 @@ pub mod agent;
 pub mod apps;
 pub use oasis_audio as audio;
 pub mod bottombar;
-pub mod browser;
+pub use oasis_browser as browser;
 pub mod cursor;
 pub mod dashboard;
 pub use oasis_net as net;
