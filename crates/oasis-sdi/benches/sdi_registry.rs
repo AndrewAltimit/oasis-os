@@ -1,7 +1,7 @@
 //! Benchmarks for SDI registry operations.
 
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
-use oasis_core::sdi::registry::SdiRegistry;
+use oasis_sdi::registry::SdiRegistry;
 
 fn bench_create(c: &mut Criterion) {
     let mut group = c.benchmark_group("sdi_create");

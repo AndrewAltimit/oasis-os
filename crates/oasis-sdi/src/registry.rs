@@ -8,10 +8,11 @@ use std::collections::HashMap;
 
 use serde::Deserialize;
 
-use crate::backend::{Color, SdiBackend};
-use crate::error::{OasisError, Result};
-use crate::sdi::object::SdiObject;
-use crate::ui::shadow::Shadow;
+use oasis_types::backend::{Color, SdiBackend};
+use oasis_types::error::{OasisError, Result};
+use oasis_types::shadow::Shadow;
+
+use crate::object::SdiObject;
 
 /// The SDI scene graph: a flat, named registry of blittable objects.
 #[derive(Debug)]
@@ -377,7 +378,7 @@ impl Default for SdiRegistry {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::backend::TextureId;
+    use oasis_types::backend::TextureId;
 
     #[test]
     fn create_and_get() {

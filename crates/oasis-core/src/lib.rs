@@ -27,7 +27,7 @@ pub mod osk;
 pub use oasis_platform as platform;
 pub mod plugin;
 pub mod script;
-pub mod sdi;
+pub use oasis_sdi as sdi;
 pub mod skin;
 pub mod startmenu;
 pub mod statusbar;

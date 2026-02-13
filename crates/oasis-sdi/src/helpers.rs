@@ -4,7 +4,7 @@
 //! common UI elements: text labels, thin borders, and metallic bezels.
 
 use super::SdiRegistry;
-use crate::backend::Color;
+use oasis_types::backend::Color;
 
 /// Z-order constants for overlay layers.
 pub const Z_BAR: i32 = 900;

@@ -4,6 +4,7 @@ members = [
     "crates/oasis-types",
     "crates/oasis-vfs",
     "crates/oasis-platform",
+    "crates/oasis-sdi",
     "crates/oasis-core",
     "crates/oasis-backend-sdl",
     "crates/oasis-backend-ue5",
@@ -53,6 +54,7 @@ rustls-pki-types = "1"
 oasis-types = { path = "crates/oasis-types" }
 oasis-vfs = { path = "crates/oasis-vfs" }
 oasis-platform = { path = "crates/oasis-platform" }
+oasis-sdi = { path = "crates/oasis-sdi" }
 oasis-core = { path = "crates/oasis-core" }
 oasis-backend-ue5 = { path = "crates/oasis-backend-ue5" }
 

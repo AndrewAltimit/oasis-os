@@ -1,0 +1,25 @@
+[package]
+name = "oasis-sdi"
+description = "Simple Display Interface scene graph for OASIS_OS"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+oasis-types = { workspace = true }
+serde = { workspace = true }
+toml = { workspace = true }
+log = { workspace = true }
+
+[dev-dependencies]
+proptest = "1"
+criterion = { version = "0.5", features = ["html_reports"] }
+
+[[bench]]
+name = "sdi_registry"
+harness = false
+
+[lints]
+workspace = true

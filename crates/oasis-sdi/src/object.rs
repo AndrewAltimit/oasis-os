@@ -5,7 +5,7 @@
 //! grouping. The window manager (when present) simulates hierarchy via
 //! naming conventions.
 
-use crate::backend::{Color, TextureId};
+use oasis_types::backend::{Color, TextureId};
 
 /// A single object in the SDI scene graph.
 #[derive(Debug, Clone)]

@@ -584,6 +584,7 @@ dependencies = [
  "criterion",
  "log",
  "oasis-platform",
+ "oasis-sdi",
  "oasis-types",
  "oasis-vfs",
  "proptest",
@@ -613,6 +614,18 @@ name = "oasis-platform"
 version = "0.1.0"
 dependencies = [
  "oasis-types",
+]
+
+[[package]]
+name = "oasis-sdi"
+version = "0.1.0"
+dependencies = [
+ "criterion",
+ "log",
+ "oasis-types",
+ "proptest",
+ "serde",
+ "toml",
 ]
 
 [[package]]
