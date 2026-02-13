@@ -17,6 +17,7 @@ oasis-vfs = { workspace = true }
 oasis-platform = { workspace = true }
 oasis-sdi = { workspace = true }
 oasis-net = { workspace = true }
+oasis-audio = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 toml = { workspace = true }

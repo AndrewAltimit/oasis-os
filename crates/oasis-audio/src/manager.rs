@@ -3,9 +3,9 @@
 //! Wraps an `AudioBackend` with playlist management, volume control,
 //! and VFS-based status publishing for the terminal to read.
 
-use crate::backend::AudioBackend;
-use crate::error::{OasisError, Result};
-use crate::vfs::Vfs;
+use oasis_types::backend::AudioBackend;
+use oasis_types::error::{OasisError, Result};
+use oasis_vfs::Vfs;
 
 use super::playlist::{Playlist, format_duration};
 use super::types::{PlaybackState, RepeatMode, TrackInfo};
@@ -80,7 +80,7 @@ impl AudioManager {
         // In a full implementation, we'd load the track data via VFS here.
         // For now, we update state and let the backend handle playback.
         let idx = self.playlist.current_index().unwrap_or(0);
-        let track_id = crate::backend::AudioTrackId(idx as u64);
+        let track_id = oasis_types::backend::AudioTrackId(idx as u64);
         backend.play(track_id)?;
         self.state = PlaybackState::Playing;
         Ok(())
@@ -276,9 +276,9 @@ impl Default for AudioManager {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::backend::AudioTrackId;
-    use crate::error::Result;
-    use crate::vfs::MemoryVfs;
+    use oasis_types::backend::AudioTrackId;
+    use oasis_types::error::Result;
+    use oasis_vfs::MemoryVfs;
 
     /// Stub audio backend for testing.
     struct StubAudioBackend {

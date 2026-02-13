@@ -308,7 +308,7 @@ pub fn format_duration(ms: u64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::audio::types::TrackInfo;
+    use crate::types::TrackInfo;
 
     fn make_tracks(n: usize) -> Vec<TrackInfo> {
         (0..n)
@@ -520,7 +520,7 @@ mod tests {
 
     mod prop {
         use super::*;
-        use crate::audio::types::TrackInfo;
+        use crate::types::TrackInfo;
         use proptest::prelude::*;
 
         fn arb_track() -> impl Strategy<Value = TrackInfo> {

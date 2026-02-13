@@ -17,7 +17,7 @@ pub use oasis_types::tls;
 pub mod active_theme;
 pub mod agent;
 pub mod apps;
-pub mod audio;
+pub use oasis_audio as audio;
 pub mod bottombar;
 pub mod browser;
 pub mod cursor;

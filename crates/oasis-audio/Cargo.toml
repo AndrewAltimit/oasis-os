@@ -1,0 +1,20 @@
+[package]
+name = "oasis-audio"
+description = "Audio subsystem: playlist management, playback state, manager for OASIS_OS"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+oasis-types = { workspace = true }
+oasis-vfs = { workspace = true }
+serde = { workspace = true }
+log = { workspace = true }
+
+[dev-dependencies]
+proptest = "1"
+
+[lints]
+workspace = true

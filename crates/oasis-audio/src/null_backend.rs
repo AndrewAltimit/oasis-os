@@ -4,8 +4,8 @@
 //! CI environments without audio hardware, and the UE5 backend
 //! (which handles audio through the game engine).
 
-use crate::backend::{AudioBackend, AudioTrackId};
-use crate::error::{OasisError, Result};
+use oasis_types::backend::{AudioBackend, AudioTrackId};
+use oasis_types::error::{OasisError, Result};
 
 /// No-op audio backend.
 ///

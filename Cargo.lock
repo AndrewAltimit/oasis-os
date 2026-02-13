@@ -561,6 +561,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "oasis-audio"
+version = "0.1.0"
+dependencies = [
+ "log",
+ "oasis-types",
+ "oasis-vfs",
+ "proptest",
+ "serde",
+]
+
+[[package]]
 name = "oasis-backend-sdl"
 version = "0.1.0"
 dependencies = [
@@ -583,6 +594,7 @@ version = "0.1.0"
 dependencies = [
  "criterion",
  "log",
+ "oasis-audio",
  "oasis-net",
  "oasis-platform",
  "oasis-sdi",
