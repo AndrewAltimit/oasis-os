@@ -4,34 +4,39 @@
 //! backend abstraction traits, input event pipeline, configuration, and
 //! error types. This crate has zero platform dependencies.
 
-pub mod active_theme;
+// Re-exports from oasis-types (foundation types and traits).
+pub use oasis_types::backend;
+pub use oasis_types::color;
+pub use oasis_types::config;
+pub use oasis_types::error;
+pub use oasis_types::input;
+pub use oasis_types::pbp;
+pub use oasis_types::shadow;
+pub use oasis_types::tls;
+
+pub use oasis_skin::active_theme;
 pub mod agent;
 pub mod apps;
-pub mod audio;
-pub mod backend;
+pub use oasis_audio as audio;
 pub mod bottombar;
-pub mod browser;
-pub mod config;
+pub use oasis_browser as browser;
 pub mod cursor;
 pub mod dashboard;
-pub mod error;
-pub mod input;
-pub mod net;
+pub use oasis_net as net;
 pub mod osk;
-pub mod pbp;
-pub mod platform;
+pub use oasis_platform as platform;
 pub mod plugin;
 pub mod script;
-pub mod sdi;
-pub mod skin;
+pub use oasis_sdi as sdi;
+pub use oasis_skin as skin;
 pub mod startmenu;
 pub mod statusbar;
 pub mod terminal;
-pub mod theme;
+pub use oasis_skin::legacy_theme as theme;
 pub mod transfer;
 pub mod transition;
-pub mod ui;
+pub use oasis_ui as ui;
 pub mod update;
-pub mod vfs;
+pub use oasis_vfs as vfs;
 pub mod wallpaper;
-pub mod wm;
+pub use oasis_wm as wm;

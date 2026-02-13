@@ -1,6 +1,17 @@
 [workspace]
 resolver = "2"
 members = [
+    "crates/oasis-types",
+    "crates/oasis-vfs",
+    "crates/oasis-platform",
+    "crates/oasis-sdi",
+    "crates/oasis-net",
+    "crates/oasis-audio",
+    "crates/oasis-ui",
+    "crates/oasis-wm",
+    "crates/oasis-skin",
+    "crates/oasis-terminal",
+    "crates/oasis-browser",
     "crates/oasis-core",
     "crates/oasis-backend-sdl",
     "crates/oasis-backend-ue5",
@@ -47,6 +58,17 @@ webpki-roots = "1.0"
 rustls-pki-types = "1"
 
 # Internal crates
+oasis-types = { path = "crates/oasis-types" }
+oasis-vfs = { path = "crates/oasis-vfs" }
+oasis-platform = { path = "crates/oasis-platform" }
+oasis-sdi = { path = "crates/oasis-sdi" }
+oasis-net = { path = "crates/oasis-net" }
+oasis-audio = { path = "crates/oasis-audio" }
+oasis-ui = { path = "crates/oasis-ui" }
+oasis-wm = { path = "crates/oasis-wm" }
+oasis-skin = { path = "crates/oasis-skin" }
+oasis-terminal = { path = "crates/oasis-terminal" }
+oasis-browser = { path = "crates/oasis-browser" }
 oasis-core = { path = "crates/oasis-core" }
 oasis-backend-ue5 = { path = "crates/oasis-backend-ue5" }
 

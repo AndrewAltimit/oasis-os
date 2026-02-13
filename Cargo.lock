@@ -561,6 +561,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "oasis-audio"
+version = "0.1.0"
+dependencies = [
+ "log",
+ "oasis-types",
+ "oasis-vfs",
+ "proptest",
+ "serde",
+]
+
+[[package]]
 name = "oasis-backend-sdl"
 version = "0.1.0"
 dependencies = [
@@ -578,21 +589,42 @@ dependencies = [
 ]
 
 [[package]]
-name = "oasis-core"
+name = "oasis-browser"
 version = "0.1.0"
 dependencies = [
  "criterion",
  "log",
+ "oasis-net",
+ "oasis-skin",
+ "oasis-terminal",
+ "oasis-types",
+ "oasis-vfs",
  "proptest",
- "rcgen",
- "rustls",
- "rustls-pki-types",
+ "serde",
+]
+
+[[package]]
+name = "oasis-core"
+version = "0.1.0"
+dependencies = [
+ "log",
+ "oasis-audio",
+ "oasis-browser",
+ "oasis-net",
+ "oasis-platform",
+ "oasis-sdi",
+ "oasis-skin",
+ "oasis-terminal",
+ "oasis-types",
+ "oasis-ui",
+ "oasis-vfs",
+ "oasis-wm",
+ "proptest",
  "serde",
  "serde_json",
  "tempfile",
  "thiserror",
  "toml",
- "webpki-roots",
 ]
 
 [[package]]
@@ -603,6 +635,103 @@ dependencies = [
  "log",
  "oasis-backend-ue5",
  "oasis-core",
+]
+
+[[package]]
+name = "oasis-net"
+version = "0.1.0"
+dependencies = [
+ "log",
+ "oasis-types",
+ "rcgen",
+ "rustls",
+ "rustls-pki-types",
+ "serde",
+ "toml",
+ "webpki-roots",
+]
+
+[[package]]
+name = "oasis-platform"
+version = "0.1.0"
+dependencies = [
+ "oasis-types",
+]
+
+[[package]]
+name = "oasis-sdi"
+version = "0.1.0"
+dependencies = [
+ "criterion",
+ "log",
+ "oasis-types",
+ "proptest",
+ "serde",
+ "toml",
+]
+
+[[package]]
+name = "oasis-skin"
+version = "0.1.0"
+dependencies = [
+ "log",
+ "oasis-sdi",
+ "oasis-types",
+ "oasis-ui",
+ "oasis-wm",
+ "serde",
+ "toml",
+]
+
+[[package]]
+name = "oasis-terminal"
+version = "0.1.0"
+dependencies = [
+ "log",
+ "oasis-audio",
+ "oasis-net",
+ "oasis-platform",
+ "oasis-skin",
+ "oasis-types",
+ "oasis-vfs",
+]
+
+[[package]]
+name = "oasis-types"
+version = "0.1.0"
+dependencies = [
+ "log",
+ "proptest",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "toml",
+]
+
+[[package]]
+name = "oasis-ui"
+version = "0.1.0"
+dependencies = [
+ "oasis-types",
+]
+
+[[package]]
+name = "oasis-vfs"
+version = "0.1.0"
+dependencies = [
+ "criterion",
+ "oasis-types",
+ "proptest",
+ "tempfile",
+]
+
+[[package]]
+name = "oasis-wm"
+version = "0.1.0"
+dependencies = [
+ "log",
+ "oasis-sdi",
+ "oasis-types",
 ]
 
 [[package]]

@@ -1,0 +1,14 @@
+[package]
+name = "oasis-ui"
+description = "UI widget toolkit for OASIS_OS: buttons, cards, panels, lists, animations, themes"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+oasis-types = { workspace = true }
+
+[lints]
+workspace = true

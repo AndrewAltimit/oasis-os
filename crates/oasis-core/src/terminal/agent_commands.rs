@@ -10,7 +10,7 @@ use crate::agent::mcp::McpRegistry;
 use crate::agent::status::AgentRegistry;
 use crate::agent::tamper;
 use crate::error::{OasisError, Result};
-use crate::terminal::interpreter::{Command, CommandOutput, Environment};
+use crate::terminal::{Command, CommandOutput, Environment};
 
 // ---------------------------------------------------------------------------
 // agent -- list/query AI agent status
@@ -378,7 +378,7 @@ pub fn register_agent_commands(reg: &mut crate::terminal::CommandRegistry) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::terminal::interpreter::{CommandRegistry, Environment};
+    use crate::terminal::{CommandRegistry, Environment};
     use crate::vfs::{MemoryVfs, Vfs};
 
     fn setup_agent_env() -> (CommandRegistry, MemoryVfs) {

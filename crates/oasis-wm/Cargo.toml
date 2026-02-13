@@ -1,0 +1,16 @@
+[package]
+name = "oasis-wm"
+description = "Window manager for OASIS_OS: window configs, hit testing, drag/resize"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+oasis-types = { workspace = true }
+oasis-sdi = { workspace = true }
+log = { workspace = true }
+
+[lints]
+workspace = true

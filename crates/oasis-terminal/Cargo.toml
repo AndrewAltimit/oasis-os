@@ -1,0 +1,20 @@
+[package]
+name = "oasis-terminal"
+description = "Command interpreter and terminal for OASIS_OS: command registry, builtins, audio/network/skin commands"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+oasis-types = { workspace = true }
+oasis-vfs = { workspace = true }
+oasis-platform = { workspace = true }
+oasis-audio = { workspace = true }
+oasis-skin = { workspace = true }
+oasis-net = { workspace = true }
+log = { workspace = true }
+
+[lints]
+workspace = true

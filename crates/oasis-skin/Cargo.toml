@@ -1,0 +1,20 @@
+[package]
+name = "oasis-skin"
+description = "Skin system for OASIS_OS: data-driven TOML skins, themes, effects, active theme"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+oasis-types = { workspace = true }
+oasis-sdi = { workspace = true }
+oasis-ui = { workspace = true }
+oasis-wm = { workspace = true }
+serde = { workspace = true }
+toml = { workspace = true }
+log = { workspace = true }
+
+[lints]
+workspace = true

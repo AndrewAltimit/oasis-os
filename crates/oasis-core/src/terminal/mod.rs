@@ -1,21 +1,14 @@
 //! Command interpreter and terminal subsystem.
 //!
-//! The terminal is a registry-based dispatch system. Commands implement the
-//! `Command` trait and are registered by name. The interpreter parses input
-//! lines, resolves the command name, and dispatches `execute()`.
+//! Core command types, registry, and built-in commands are provided by
+//! the `oasis-terminal` crate. Agent and plugin commands remain here
+//! because they depend on oasis-core modules (agent, plugin).
 
 pub mod agent_commands;
-pub mod audio_commands;
-mod commands;
-mod interpreter;
-pub mod network_commands;
 pub mod plugin_commands;
-pub mod skin_commands;
+
+// Re-export everything from the oasis-terminal crate.
+pub use oasis_terminal::*;
 
 pub use agent_commands::register_agent_commands;
-pub use audio_commands::register_audio_commands;
-pub use commands::register_builtins;
-pub use interpreter::{Command, CommandOutput, CommandRegistry, Environment};
-pub use network_commands::register_network_commands;
 pub use plugin_commands::register_plugin_commands;
-pub use skin_commands::register_skin_commands;

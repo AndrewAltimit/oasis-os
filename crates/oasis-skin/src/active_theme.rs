@@ -1,0 +1,659 @@
+//! Runtime theme derived from the active skin.
+//!
+//! `ActiveTheme` replaces the hardcoded constants in `theme.rs` with a runtime
+//! struct whose fields are derived from the skin's 9 base colors. Consumers
+//! receive `&ActiveTheme` instead of reading `theme::CONST` directly, allowing
+//! skins to actually drive the UI appearance.
+
+use oasis_types::backend::Color;
+use oasis_types::color::{lighten, with_alpha};
+
+use crate::SkinTheme;
+use crate::theme::parse_hex_color;
+
+/// Runtime theme derived from the active skin's color palette.
+///
+/// All fields default to the same values as the legacy `theme.rs` constants.
+/// `from_skin()` derives them from the skin's 9 base colors instead.
+#[derive(Debug, Clone)]
+pub struct ActiveTheme {
+    // -- Bar colors --
+    /// Status bar background.
+    pub statusbar_bg: Color,
+    /// Bottom bar background.
+    pub bar_bg: Color,
+    /// Separator line color.
+    pub separator_color: Color,
+    /// Battery/power text color.
+    pub battery_color: Color,
+    /// Version label color.
+    pub version_color: Color,
+    /// Clock text color.
+    pub clock_color: Color,
+    /// URL label color.
+    pub url_color: Color,
+    /// USB indicator color.
+    pub usb_color: Color,
+    /// Active tab fill color.
+    pub tab_active_fill: Color,
+    /// Inactive tab fill color.
+    pub tab_inactive_fill: Color,
+    /// Active tab border alpha.
+    pub tab_active_alpha: u8,
+    /// Inactive tab border alpha.
+    pub tab_inactive_alpha: u8,
+    /// Active media tab text color.
+    pub media_tab_active: Color,
+    /// Inactive media tab text color.
+    pub media_tab_inactive: Color,
+    /// Pipe separator color.
+    pub pipe_color: Color,
+    /// R-shoulder hint color.
+    pub r_hint_color: Color,
+    /// Category label color.
+    pub category_label_color: Color,
+    /// Active page dot color.
+    pub page_dot_active: Color,
+    /// Inactive page dot color.
+    pub page_dot_inactive: Color,
+
+    // -- Icon colors --
+    /// Document body color (white paper).
+    pub icon_body_color: Color,
+    /// Folded corner color.
+    pub icon_fold_color: Color,
+    /// Icon outline color.
+    pub icon_outline_color: Color,
+    /// Icon shadow color.
+    pub icon_shadow_color: Color,
+    /// Icon label text color.
+    pub icon_label_color: Color,
+    /// Icon label text shadow color (None = no shadow).
+    pub icon_label_shadow: Option<Color>,
+    /// Cursor highlight stroke color.
+    pub cursor_color: Color,
+
+    // -- Bar gradients --
+    /// Status bar gradient top color (None = flat fill).
+    pub statusbar_gradient_top: Option<Color>,
+    /// Status bar gradient bottom color.
+    pub statusbar_gradient_bottom: Option<Color>,
+    /// Bottom bar gradient top color (None = flat fill).
+    pub bar_gradient_top: Option<Color>,
+    /// Bottom bar gradient bottom color.
+    pub bar_gradient_bottom: Option<Color>,
+
+    // -- Start menu colors --
+    /// Start menu panel background.
+    pub sm_panel_bg: Color,
+    /// Start menu panel gradient top (None = flat fill).
+    pub sm_panel_gradient_top: Option<Color>,
+    /// Start menu panel gradient bottom.
+    pub sm_panel_gradient_bottom: Option<Color>,
+    /// Start menu panel border color.
+    pub sm_panel_border: Color,
+    /// Start menu item text color.
+    pub sm_item_text: Color,
+    /// Start menu active/selected item text color.
+    pub sm_item_text_active: Color,
+    /// Start menu selection highlight color.
+    pub sm_highlight_color: Color,
+    /// Start button background color.
+    pub sm_button_bg: Color,
+    /// Start button text color.
+    pub sm_button_text: Color,
+    /// Start menu panel border radius.
+    pub sm_panel_border_radius: u16,
+    /// Start menu panel shadow level.
+    pub sm_panel_shadow_level: u8,
+
+    // -- Start menu layout --
+    /// Layout mode: "grid" or "list".
+    pub sm_layout_mode: String,
+    /// Start button label text.
+    pub sm_button_label: String,
+    /// Start button width.
+    pub sm_button_width: u32,
+    /// Start button height.
+    pub sm_button_height: u32,
+    /// Start button shape: "pill" or "rect".
+    pub sm_button_shape: String,
+    /// Start menu panel width.
+    pub sm_panel_width: u32,
+    /// Number of columns in the menu grid.
+    pub sm_columns: usize,
+    /// Start button gradient top color (None = flat fill).
+    pub sm_button_gradient_top: Option<Color>,
+    /// Start button gradient bottom color.
+    pub sm_button_gradient_bottom: Option<Color>,
+    /// Header text (None = no header).
+    pub sm_header_text: Option<String>,
+    /// Header background color.
+    pub sm_header_bg: Color,
+    /// Header text color.
+    pub sm_header_text_color: Color,
+    /// Header height.
+    pub sm_header_height: u32,
+    /// Whether footer is enabled.
+    pub sm_footer_enabled: bool,
+    /// Footer background color.
+    pub sm_footer_bg: Color,
+    /// Footer text color.
+    pub sm_footer_text_color: Color,
+    /// Footer height.
+    pub sm_footer_height: u32,
+    /// Item icon size.
+    pub sm_item_icon_size: u32,
+    /// Item row height.
+    pub sm_item_row_height: i32,
+
+    // -- Icon geometry --
+    /// Icon card border radius (pixels).
+    pub icon_border_radius: u16,
+    /// Cursor highlight border radius (pixels).
+    pub cursor_border_radius: u16,
+    /// Cursor highlight stroke width (pixels).
+    pub cursor_stroke_width: u16,
+
+    // -- Icon/cursor style --
+    /// Icon style variant: "document" (default), "card", or "circle".
+    pub icon_style: String,
+    /// Cursor style variant: "stroke" (default), "fill", or "underline".
+    pub cursor_style: String,
+
+    // -- Geometry overrides --
+    /// Status bar height (default 24).
+    pub statusbar_height: u32,
+    /// Bottom bar height (default 24).
+    pub bottombar_height: u32,
+    /// Tab row height (default 18).
+    pub tab_row_height: u32,
+    /// Icon width (default 42).
+    pub icon_width: u32,
+    /// Icon height (default 52).
+    pub icon_height: u32,
+    /// Small font size (default 8).
+    pub font_small: u16,
+
+    // -- Wallpaper config --
+    /// Wallpaper style: "gradient" (default), "solid", or "none".
+    pub wallpaper_style: String,
+    /// Wallpaper gradient color stops (default: PSIX 5-stop palette).
+    pub wallpaper_stops: Vec<Color>,
+    /// Whether PSIX arc ripple waves are enabled.
+    pub wallpaper_wave: bool,
+    /// Wave intensity 0.0-1.0.
+    pub wallpaper_wave_intensity: f32,
+    /// Gradient angle in degrees.
+    pub wallpaper_angle: f32,
+}
+
+impl Default for ActiveTheme {
+    /// Returns legacy defaults identical to `theme.rs` constants.
+    fn default() -> Self {
+        Self {
+            statusbar_bg: Color::rgba(0, 0, 0, 80),
+            bar_bg: Color::rgba(0, 0, 0, 90),
+            separator_color: Color::rgba(255, 255, 255, 50),
+            battery_color: Color::rgb(120, 255, 120),
+            version_color: Color::WHITE,
+            clock_color: Color::WHITE,
+            url_color: Color::rgb(200, 200, 200),
+            usb_color: Color::rgb(140, 140, 140),
+            tab_active_fill: Color::rgba(255, 255, 255, 30),
+            tab_inactive_fill: Color::rgba(0, 0, 0, 0),
+            tab_active_alpha: 180,
+            tab_inactive_alpha: 60,
+            media_tab_active: Color::WHITE,
+            media_tab_inactive: Color::rgb(170, 170, 170),
+            pipe_color: Color::rgba(255, 255, 255, 60),
+            r_hint_color: Color::rgba(255, 255, 255, 140),
+            category_label_color: Color::rgb(220, 220, 220),
+            page_dot_active: Color::rgba(255, 255, 255, 200),
+            page_dot_inactive: Color::rgba(255, 255, 255, 50),
+            statusbar_gradient_top: None,
+            statusbar_gradient_bottom: None,
+            bar_gradient_top: None,
+            bar_gradient_bottom: None,
+            sm_panel_bg: Color::rgba(20, 20, 35, 220),
+            sm_panel_gradient_top: None,
+            sm_panel_gradient_bottom: None,
+            sm_panel_border: Color::rgba(255, 255, 255, 40),
+            sm_item_text: Color::rgb(220, 220, 220),
+            sm_item_text_active: Color::WHITE,
+            sm_highlight_color: Color::rgba(50, 100, 200, 80),
+            sm_button_bg: Color::rgba(50, 100, 200, 200),
+            sm_button_text: Color::WHITE,
+            sm_panel_border_radius: 4,
+            sm_panel_shadow_level: 1,
+            sm_layout_mode: "grid".to_string(),
+            sm_button_label: "START".to_string(),
+            sm_button_width: 48,
+            sm_button_height: 18,
+            sm_button_shape: "pill".to_string(),
+            sm_panel_width: 200,
+            sm_columns: 2,
+            sm_button_gradient_top: None,
+            sm_button_gradient_bottom: None,
+            sm_header_text: None,
+            sm_header_bg: Color::rgba(30, 30, 50, 240),
+            sm_header_text_color: Color::WHITE,
+            sm_header_height: 0,
+            sm_footer_enabled: false,
+            sm_footer_bg: Color::rgba(30, 30, 50, 240),
+            sm_footer_text_color: Color::WHITE,
+            sm_footer_height: 0,
+            sm_item_icon_size: 14,
+            sm_item_row_height: 22,
+            icon_body_color: Color::rgb(250, 250, 248),
+            icon_fold_color: Color::rgb(210, 210, 205),
+            icon_outline_color: Color::rgba(255, 255, 255, 180),
+            icon_shadow_color: Color::rgba(0, 0, 0, 70),
+            icon_label_color: Color::rgba(255, 255, 255, 230),
+            icon_label_shadow: Some(Color::rgba(0, 0, 0, 120)),
+            cursor_color: Color::rgba(255, 255, 255, 90),
+            icon_border_radius: 4,
+            cursor_border_radius: 6,
+            cursor_stroke_width: 2,
+            icon_style: "document".to_string(),
+            cursor_style: "stroke".to_string(),
+            statusbar_height: 24,
+            bottombar_height: 24,
+            tab_row_height: 18,
+            icon_width: 42,
+            icon_height: 52,
+            font_small: 8,
+            wallpaper_style: "gradient".to_string(),
+            wallpaper_stops: vec![
+                Color::rgb(245, 110, 15),
+                Color::rgb(255, 230, 30),
+                Color::rgb(230, 245, 40),
+                Color::rgb(140, 235, 50),
+                Color::rgb(200, 252, 130),
+            ],
+            wallpaper_wave: true,
+            wallpaper_wave_intensity: 1.0,
+            wallpaper_angle: 0.0,
+        }
+    }
+}
+
+impl ActiveTheme {
+    /// Derive an `ActiveTheme` from the skin's base color palette.
+    ///
+    /// The 9 base colors (background, primary, secondary, text, dim_text,
+    /// status_bar, prompt, output, error) drive all UI element colors.
+    /// Fine-grained overrides (Phase 5) are checked first.
+    pub fn from_skin(skin: &SkinTheme) -> Self {
+        let status_bar_color =
+            parse_hex_color(&skin.status_bar).unwrap_or(Color::rgba(0, 0, 0, 80));
+        let primary = skin.primary_color();
+        let secondary = skin.secondary_color();
+        let text = skin.text_color();
+        let dim = skin.dim_text_color();
+
+        // Helper: parse an optional hex color override.
+        let ov = |opt: Option<&String>, fallback: Color| -> Color {
+            opt.and_then(|s| parse_hex_color(s)).unwrap_or(fallback)
+        };
+
+        let bar = skin.bar_overrides.as_ref();
+        let ico = skin.icon_overrides.as_ref();
+        let sm = skin.start_menu_overrides.as_ref();
+
+        Self {
+            statusbar_bg: ov(
+                bar.and_then(|b| b.statusbar_bg.as_ref()),
+                with_alpha(status_bar_color, 80),
+            ),
+            bar_bg: ov(
+                bar.and_then(|b| b.bar_bg.as_ref()),
+                with_alpha(status_bar_color, 90),
+            ),
+            separator_color: ov(
+                bar.and_then(|b| b.separator_color.as_ref()),
+                with_alpha(secondary, 50),
+            ),
+            battery_color: ov(
+                bar.and_then(|b| b.battery_color.as_ref()),
+                lighten(primary, 0.3),
+            ),
+            version_color: ov(bar.and_then(|b| b.version_color.as_ref()), text),
+            clock_color: ov(bar.and_then(|b| b.clock_color.as_ref()), text),
+            url_color: ov(bar.and_then(|b| b.url_color.as_ref()), dim),
+            usb_color: ov(bar.and_then(|b| b.usb_color.as_ref()), dim),
+            tab_active_fill: ov(
+                bar.and_then(|b| b.tab_active_fill.as_ref()),
+                with_alpha(primary, 30),
+            ),
+            tab_inactive_fill: Color::rgba(0, 0, 0, 0),
+            tab_active_alpha: bar.and_then(|b| b.tab_active_alpha).unwrap_or(180),
+            tab_inactive_alpha: bar.and_then(|b| b.tab_inactive_alpha).unwrap_or(60),
+            media_tab_active: ov(bar.and_then(|b| b.media_tab_active.as_ref()), text),
+            media_tab_inactive: ov(bar.and_then(|b| b.media_tab_inactive.as_ref()), dim),
+            pipe_color: ov(
+                bar.and_then(|b| b.pipe_color.as_ref()),
+                with_alpha(text, 60),
+            ),
+            r_hint_color: ov(
+                bar.and_then(|b| b.r_hint_color.as_ref()),
+                with_alpha(text, 140),
+            ),
+            category_label_color: ov(
+                bar.and_then(|b| b.category_label_color.as_ref()),
+                with_alpha(text, 220),
+            ),
+            page_dot_active: ov(
+                bar.and_then(|b| b.page_dot_active.as_ref()),
+                with_alpha(text, 200),
+            ),
+            page_dot_inactive: ov(
+                bar.and_then(|b| b.page_dot_inactive.as_ref()),
+                with_alpha(text, 50),
+            ),
+            sm_panel_bg: ov(
+                sm.and_then(|s| s.panel_bg.as_ref()),
+                Color::rgba(20, 20, 35, 220),
+            ),
+            sm_panel_gradient_top: sm
+                .and_then(|s| s.panel_gradient_top.as_ref())
+                .and_then(|s| parse_hex_color(s)),
+            sm_panel_gradient_bottom: sm
+                .and_then(|s| s.panel_gradient_bottom.as_ref())
+                .and_then(|s| parse_hex_color(s)),
+            sm_panel_border: ov(
+                sm.and_then(|s| s.panel_border.as_ref()),
+                with_alpha(text, 40),
+            ),
+            sm_item_text: ov(sm.and_then(|s| s.item_text.as_ref()), with_alpha(text, 220)),
+            sm_item_text_active: ov(sm.and_then(|s| s.item_text_active.as_ref()), text),
+            sm_highlight_color: ov(
+                sm.and_then(|s| s.highlight_color.as_ref()),
+                with_alpha(primary, 80),
+            ),
+            sm_button_bg: ov(
+                sm.and_then(|s| s.button_bg.as_ref()),
+                with_alpha(primary, 200),
+            ),
+            sm_button_text: ov(sm.and_then(|s| s.button_text.as_ref()), text),
+            sm_panel_border_radius: sm
+                .and_then(|s| s.panel_border_radius)
+                .unwrap_or_else(|| skin.border_radius.unwrap_or(4)),
+            sm_panel_shadow_level: sm.and_then(|s| s.panel_shadow_level).unwrap_or(1),
+            sm_layout_mode: sm
+                .and_then(|s| s.layout_mode.clone())
+                .unwrap_or_else(|| "grid".to_string()),
+            sm_button_label: sm
+                .and_then(|s| s.button_label.clone())
+                .unwrap_or_else(|| "START".to_string()),
+            sm_button_width: sm.and_then(|s| s.button_width).unwrap_or(48),
+            sm_button_height: sm.and_then(|s| s.button_height).unwrap_or(18),
+            sm_button_shape: sm
+                .and_then(|s| s.button_shape.clone())
+                .unwrap_or_else(|| "pill".to_string()),
+            sm_panel_width: sm.and_then(|s| s.panel_width).unwrap_or(200),
+            sm_columns: sm.and_then(|s| s.columns).unwrap_or(2).max(1),
+            sm_button_gradient_top: sm
+                .and_then(|s| s.button_gradient_top.as_ref())
+                .and_then(|s| parse_hex_color(s)),
+            sm_button_gradient_bottom: sm
+                .and_then(|s| s.button_gradient_bottom.as_ref())
+                .and_then(|s| parse_hex_color(s)),
+            sm_header_text: sm.and_then(|s| s.header_text.clone()),
+            sm_header_bg: ov(
+                sm.and_then(|s| s.header_bg.as_ref()),
+                Color::rgba(30, 30, 50, 240),
+            ),
+            sm_header_text_color: ov(sm.and_then(|s| s.header_text_color.as_ref()), text),
+            sm_header_height: sm.and_then(|s| s.header_height).unwrap_or(0),
+            sm_footer_enabled: sm.and_then(|s| s.footer_enabled).unwrap_or(false),
+            sm_footer_bg: ov(
+                sm.and_then(|s| s.footer_bg.as_ref()),
+                Color::rgba(30, 30, 50, 240),
+            ),
+            sm_footer_text_color: ov(sm.and_then(|s| s.footer_text_color.as_ref()), text),
+            sm_footer_height: sm.and_then(|s| s.footer_height).unwrap_or(0),
+            sm_item_icon_size: sm.and_then(|s| s.item_icon_size).unwrap_or(14),
+            sm_item_row_height: sm.and_then(|s| s.item_row_height).unwrap_or(22).max(1),
+            icon_body_color: ov(ico.and_then(|i| i.body_color.as_ref()), text),
+            icon_fold_color: ov(ico.and_then(|i| i.fold_color.as_ref()), dim),
+            icon_outline_color: ov(
+                ico.and_then(|i| i.outline_color.as_ref()),
+                with_alpha(text, 180),
+            ),
+            icon_shadow_color: ov(
+                ico.and_then(|i| i.shadow_color.as_ref()),
+                Color::rgba(0, 0, 0, 70),
+            ),
+            icon_label_color: ov(
+                ico.and_then(|i| i.label_color.as_ref()),
+                with_alpha(text, 230),
+            ),
+            icon_label_shadow: {
+                let lc = ov(
+                    ico.and_then(|i| i.label_color.as_ref()),
+                    with_alpha(text, 230),
+                );
+                // Auto-derive: light labels get a dark shadow for readability.
+                let brightness = lc.r as u16 * 3 / 10 + lc.g as u16 * 6 / 10 + lc.b as u16 / 10;
+                if brightness > 140 {
+                    Some(Color::rgba(0, 0, 0, 120))
+                } else {
+                    None
+                }
+            },
+            cursor_color: ov(
+                ico.and_then(|i| i.cursor_color.as_ref()),
+                with_alpha(primary, 80),
+            ),
+            icon_border_radius: ico
+                .and_then(|i| i.icon_border_radius)
+                .unwrap_or_else(|| skin.border_radius.unwrap_or(4)),
+            cursor_border_radius: ico
+                .and_then(|i| i.cursor_border_radius)
+                .unwrap_or_else(|| skin.border_radius.map(|r| r + 2).unwrap_or(6)),
+            cursor_stroke_width: ico.and_then(|i| i.cursor_stroke_width).unwrap_or(2),
+            icon_style: ico
+                .and_then(|i| i.icon_style.clone())
+                .unwrap_or_else(|| "document".to_string()),
+            cursor_style: ico
+                .and_then(|i| i.cursor_style.clone())
+                .unwrap_or_else(|| "stroke".to_string()),
+            statusbar_height: skin
+                .geometry
+                .as_ref()
+                .and_then(|g| g.statusbar_height)
+                .unwrap_or(24),
+            bottombar_height: skin
+                .geometry
+                .as_ref()
+                .and_then(|g| g.bottombar_height)
+                .unwrap_or(24),
+            tab_row_height: skin
+                .geometry
+                .as_ref()
+                .and_then(|g| g.tab_row_height)
+                .unwrap_or(18),
+            icon_width: skin
+                .geometry
+                .as_ref()
+                .and_then(|g| g.icon_width)
+                .unwrap_or(42),
+            icon_height: skin
+                .geometry
+                .as_ref()
+                .and_then(|g| g.icon_height)
+                .unwrap_or(52),
+            font_small: skin
+                .geometry
+                .as_ref()
+                .and_then(|g| g.font_small)
+                .unwrap_or(8),
+            wallpaper_style: skin
+                .wallpaper
+                .as_ref()
+                .and_then(|w| w.style.clone())
+                .unwrap_or_else(|| "gradient".to_string()),
+            wallpaper_stops: skin
+                .wallpaper
+                .as_ref()
+                .and_then(|w| {
+                    w.color_stops.as_ref().map(|stops| {
+                        stops
+                            .iter()
+                            .filter_map(|s| parse_hex_color(s))
+                            .collect::<Vec<_>>()
+                    })
+                })
+                .filter(|v| !v.is_empty())
+                .unwrap_or_else(|| {
+                    vec![
+                        Color::rgb(245, 110, 15),
+                        Color::rgb(255, 230, 30),
+                        Color::rgb(230, 245, 40),
+                        Color::rgb(140, 235, 50),
+                        Color::rgb(200, 252, 130),
+                    ]
+                }),
+            wallpaper_wave: skin
+                .wallpaper
+                .as_ref()
+                .and_then(|w| w.wave_enabled)
+                .unwrap_or(true),
+            wallpaper_wave_intensity: skin
+                .wallpaper
+                .as_ref()
+                .and_then(|w| w.wave_intensity)
+                .unwrap_or(1.0),
+            wallpaper_angle: skin.wallpaper.as_ref().and_then(|w| w.angle).unwrap_or(0.0),
+            statusbar_gradient_top: Self::bar_gradient_pair(
+                skin,
+                bar.and_then(|b| b.statusbar_gradient_top.as_ref()),
+                bar.and_then(|b| b.statusbar_gradient_bottom.as_ref()),
+                status_bar_color,
+            )
+            .map(|(t, _)| t),
+            statusbar_gradient_bottom: Self::bar_gradient_pair(
+                skin,
+                bar.and_then(|b| b.statusbar_gradient_top.as_ref()),
+                bar.and_then(|b| b.statusbar_gradient_bottom.as_ref()),
+                status_bar_color,
+            )
+            .map(|(_, b)| b),
+            bar_gradient_top: Self::bar_gradient_pair(
+                skin,
+                bar.and_then(|b| b.bar_gradient_top.as_ref()),
+                bar.and_then(|b| b.bar_gradient_bottom.as_ref()),
+                status_bar_color,
+            )
+            .map(|(t, _)| t),
+            bar_gradient_bottom: Self::bar_gradient_pair(
+                skin,
+                bar.and_then(|b| b.bar_gradient_top.as_ref()),
+                bar.and_then(|b| b.bar_gradient_bottom.as_ref()),
+                status_bar_color,
+            )
+            .map(|(_, b)| b),
+        }
+    }
+
+    /// Derive a gradient pair for a bar element.
+    ///
+    /// Returns `Some((top, bottom))` if gradient is enabled (either via explicit
+    /// overrides or via `gradient_enabled`), or `None` for flat fill.
+    fn bar_gradient_pair(
+        skin: &SkinTheme,
+        top_override: Option<&String>,
+        bot_override: Option<&String>,
+        base: Color,
+    ) -> Option<(Color, Color)> {
+        // Explicit overrides always win.
+        if let (Some(t), Some(b)) = (
+            top_override.and_then(|s| parse_hex_color(s)),
+            bot_override.and_then(|s| parse_hex_color(s)),
+        ) {
+            return Some((t, b));
+        }
+        // Auto-derive when gradient_enabled is set.
+        if skin.gradient_enabled == Some(true) {
+            return Some((lighten(base, 0.15), base));
+        }
+        None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn default_matches_legacy_theme() {
+        let at = ActiveTheme::default();
+        assert_eq!(at.statusbar_bg, Color::rgba(0, 0, 0, 80));
+        assert_eq!(at.bar_bg, Color::rgba(0, 0, 0, 90));
+        assert_eq!(at.battery_color, Color::rgb(120, 255, 120));
+        assert_eq!(at.icon_border_radius, 4);
+        assert_eq!(at.cursor_border_radius, 6);
+    }
+
+    #[test]
+    fn from_skin_derives_colors() {
+        let skin = SkinTheme::default();
+        let at = ActiveTheme::from_skin(&skin);
+        // Primary is #3264C8 -- tab_active_fill should use primary with alpha 30.
+        assert_eq!(at.tab_active_fill.a, 30);
+        // Cursor color should use primary with alpha 80.
+        assert_eq!(at.cursor_color.a, 80);
+        // Text color drives version/clock.
+        assert_eq!(at.version_color, skin.text_color());
+        assert_eq!(at.clock_color, skin.text_color());
+    }
+
+    #[test]
+    fn from_skin_respects_bar_overrides() {
+        let toml = r##"
+background = "#000000"
+primary = "#FF0000"
+[bar_overrides]
+battery_color = "#00FF00"
+tab_active_alpha = 200
+"##;
+        let skin: SkinTheme = toml::from_str(toml).unwrap();
+        let at = ActiveTheme::from_skin(&skin);
+        assert_eq!(at.battery_color, Color::rgb(0, 255, 0));
+        assert_eq!(at.tab_active_alpha, 200);
+    }
+
+    #[test]
+    fn from_skin_respects_icon_overrides() {
+        let toml = r##"
+[icon_overrides]
+body_color = "#AABBCC"
+cursor_border_radius = 10
+"##;
+        let skin: SkinTheme = toml::from_str(toml).unwrap();
+        let at = ActiveTheme::from_skin(&skin);
+        assert_eq!(at.icon_body_color, Color::rgb(0xAA, 0xBB, 0xCC));
+        assert_eq!(at.cursor_border_radius, 10);
+    }
+
+    #[test]
+    fn from_skin_custom_theme() {
+        let toml = r##"
+background = "#000000"
+primary = "#FF0000"
+secondary = "#333333"
+text = "#00FF00"
+dim_text = "#006600"
+status_bar = "#111111"
+prompt = "#00FF00"
+output = "#00CC00"
+error = "#FF0000"
+"##;
+        let skin: SkinTheme = toml::from_str(toml).unwrap();
+        let at = ActiveTheme::from_skin(&skin);
+        // Text-derived fields should be green.
+        assert_eq!(at.clock_color, Color::rgb(0, 255, 0));
+        assert_eq!(at.media_tab_active, Color::rgb(0, 255, 0));
+    }
+}
