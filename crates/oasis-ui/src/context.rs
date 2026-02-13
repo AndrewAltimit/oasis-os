@@ -11,11 +11,14 @@ use oasis_types::error::Result;
 
 /// Drawing context wrapping a backend and theme.
 pub struct DrawContext<'a> {
+    /// Backend for rendering operations.
     pub backend: &'a mut dyn SdiBackend,
+    /// Theme for UI styling.
     pub theme: &'a Theme,
 }
 
 impl<'a> DrawContext<'a> {
+    /// Create a new drawing context.
     pub fn new(backend: &'a mut dyn SdiBackend, theme: &'a Theme) -> Self {
         Self { backend, theme }
     }
@@ -156,7 +159,9 @@ impl<'a> DrawContext<'a> {
 /// the sub-region. When the guard is dropped, the region is popped
 /// automatically.
 pub struct Region<'a> {
+    /// Backend for rendering operations within the region.
     pub backend: &'a mut dyn SdiBackend,
+    /// Theme for UI styling.
     pub theme: &'a Theme,
 }
 

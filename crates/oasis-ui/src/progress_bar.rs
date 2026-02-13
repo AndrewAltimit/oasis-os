@@ -8,19 +8,26 @@ use oasis_types::error::Result;
 /// Progress bar visual style.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProgressStyle {
+    /// Horizontal bar.
     Bar,
+    /// Circular/radial indicator.
     Circular,
+    /// Animated indeterminate progress.
     Indeterminate,
 }
 
 /// A progress indicator.
 pub struct ProgressBar {
+    /// Progress value (0.0 to 1.0).
     pub value: f32,
+    /// Visual style variant.
     pub style: ProgressStyle,
+    /// Whether to show percentage label.
     pub show_label: bool,
 }
 
 impl ProgressBar {
+    /// Create a new progress bar (value clamped to 0.0-1.0).
     pub fn new(value: f32) -> Self {
         Self {
             value: value.clamp(0.0, 1.0),

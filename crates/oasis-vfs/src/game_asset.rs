@@ -28,8 +28,11 @@ enum Node {
 /// - Writable directories where the player can create files to solve puzzles
 /// - "Hacking" scenarios where the player edits config files (overlay captures edits)
 pub struct GameAssetVfs {
+    /// Immutable layer containing game-authored content.
     base: HashMap<String, Node>,
+    /// Writable layer capturing player modifications.
     overlay: HashMap<String, Node>,
+    /// Paths marked as deleted (hides base entries).
     deleted: HashSet<String>,
 }
 

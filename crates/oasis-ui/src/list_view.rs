@@ -9,14 +9,20 @@ use oasis_types::error::Result;
 /// Only items visible within the viewport are drawn. The `render_item`
 /// callback draws each visible item.
 pub struct ListView<T> {
+    /// List items.
     pub items: Vec<T>,
+    /// Vertical scroll offset in pixels.
     pub scroll_offset: i32,
+    /// Height of each item in pixels.
     pub item_height: u32,
+    /// Currently selected item index.
     pub selected: Option<usize>,
+    /// Callback to render a single item.
     pub render_item: fn(&T, &mut DrawContext<'_>, i32, i32, u32, u32, bool) -> Result<()>,
 }
 
 impl<T> ListView<T> {
+    /// Create a new list view.
     pub fn new(
         items: Vec<T>,
         item_height: u32,

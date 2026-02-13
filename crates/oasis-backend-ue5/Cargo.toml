@@ -9,6 +9,7 @@ description = "OASIS_OS UE5 render target backend -- software RGBA framebuffer a
 
 [dependencies]
 oasis-core.workspace = true
+oasis-types.workspace = true
 log.workspace = true
 
 [lints]

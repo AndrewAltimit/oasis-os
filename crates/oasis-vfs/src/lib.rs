@@ -18,22 +18,29 @@ use oasis_types::error::Result;
 /// Type of a VFS entry.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EntryKind {
+    /// Regular file.
     File,
+    /// Directory.
     Directory,
 }
 
 /// A single entry returned by `readdir`.
 #[derive(Debug, Clone)]
 pub struct VfsEntry {
+    /// Name of the file or directory (basename, not full path).
     pub name: String,
+    /// Whether this entry is a file or directory.
     pub kind: EntryKind,
+    /// Size in bytes (0 for directories).
     pub size: u64,
 }
 
 /// Metadata about a file or directory.
 #[derive(Debug, Clone)]
 pub struct VfsMetadata {
+    /// Whether this is a file or directory.
     pub kind: EntryKind,
+    /// Size in bytes (0 for directories).
     pub size: u64,
 }
 

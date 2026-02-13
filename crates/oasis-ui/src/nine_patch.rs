@@ -8,12 +8,19 @@ use oasis_types::error::Result;
 /// The texture is divided into a 3x3 grid. Corners render at fixed size,
 /// edges stretch in one dimension, and the center stretches in both.
 pub struct NinePatch {
+    /// Source texture.
     pub texture: TextureId,
+    /// Total texture width in pixels.
     pub tex_width: u32,
+    /// Total texture height in pixels.
     pub tex_height: u32,
+    /// Left edge margin in pixels.
     pub left: u16,
+    /// Right edge margin in pixels.
     pub right: u16,
+    /// Top edge margin in pixels.
     pub top: u16,
+    /// Bottom edge margin in pixels.
     pub bottom: u16,
 }
 

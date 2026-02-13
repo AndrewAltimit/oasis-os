@@ -3,7 +3,8 @@
 //! Useful for unit tests and ephemeral terminals. The entire file tree lives
 //! in a `HashMap<String, Node>` where keys are normalized absolute paths.
 
-use std::collections::HashMap;
+use std::borrow::Cow;
+use std::collections::BTreeMap;
 
 use oasis_types::error::{OasisError, Result};
 
@@ -18,12 +19,14 @@ enum Node {
 /// A fully in-memory virtual file system.
 #[derive(Debug)]
 pub struct MemoryVfs {
-    nodes: HashMap<String, Node>,
+    /// Map of normalized paths to file/directory nodes.
+    nodes: BTreeMap<String, Node>,
 }
 
 impl MemoryVfs {
+    /// Create a new in-memory VFS with only the root directory.
     pub fn new() -> Self {
-        let mut nodes = HashMap::new();
+        let mut nodes = BTreeMap::new();
         nodes.insert("/".to_string(), Node::Dir);
         Self { nodes }
     }
@@ -35,18 +38,34 @@ impl Default for MemoryVfs {
     }
 }
 
+/// Check whether a path is already in normal form (starts with `/`, no `//`,
+/// no trailing `/` unless root).
+fn is_normalized(path: &str) -> bool {
+    if !path.starts_with('/') {
+        return false;
+    }
+    if path.len() > 1 && path.ends_with('/') {
+        return false;
+    }
+    !path.contains("//")
+}
+
 /// Normalize a path: ensure leading `/`, collapse `//`, strip trailing `/`
-/// (except for root).
-fn normalize(path: &str) -> String {
-    let path = if path.starts_with('/') {
-        path.to_string()
+/// (except for root). Returns the input unchanged (zero-alloc) when already
+/// in normal form.
+fn normalize(path: &str) -> Cow<'_, str> {
+    if is_normalized(path) {
+        return Cow::Borrowed(path);
+    }
+    let path_str = if path.starts_with('/') {
+        Cow::Borrowed(path)
     } else {
-        format!("/{path}")
+        Cow::Owned(format!("/{path}"))
     };
     // Collapse repeated slashes.
-    let mut result = String::with_capacity(path.len());
+    let mut result = String::with_capacity(path_str.len());
     let mut prev_slash = false;
-    for ch in path.chars() {
+    for ch in path_str.chars() {
         if ch == '/' {
             if !prev_slash {
                 result.push(ch);
@@ -61,7 +80,7 @@ fn normalize(path: &str) -> String {
     if result.len() > 1 && result.ends_with('/') {
         result.pop();
     }
-    result
+    Cow::Owned(result)
 }
 
 /// Return the parent of a normalized path.
@@ -79,7 +98,7 @@ fn parent(path: &str) -> &str {
 impl Vfs for MemoryVfs {
     fn readdir(&self, path: &str) -> Result<Vec<VfsEntry>> {
         let path = normalize(path);
-        match self.nodes.get(&path) {
+        match self.nodes.get(path.as_ref()) {
             Some(Node::Dir) => {},
             Some(Node::File(_)) => {
                 return Err(OasisError::Vfs(format!("not a directory: {path}")));
@@ -89,22 +108,24 @@ impl Vfs for MemoryVfs {
             },
         }
 
-        let prefix = if path == "/" {
-            "/".to_string()
+        let prefix = if path.as_ref() == "/" {
+            Cow::Borrowed("/")
         } else {
-            format!("{path}/")
+            Cow::Owned(format!("{path}/"))
         };
 
+        // BTreeMap iteration is already sorted by key, so entries come out
+        // in lexicographic order. We can use range to narrow the scan.
+        let prefix_str = prefix.as_ref().to_string();
         let mut entries = Vec::new();
-        for (key, node) in &self.nodes {
-            if key == &path {
-                continue;
+        for (key, node) in self.nodes.range(prefix_str.clone()..) {
+            // Stop once we've passed the prefix.
+            if !key.starts_with(&prefix_str) {
+                break;
             }
-            // Must start with prefix and not have another `/` after it
-            // (i.e. direct child only).
-            if let Some(rest) = key.strip_prefix(&prefix)
-                && !rest.contains('/')
-            {
+            // Direct child only: non-empty name with no `/` after the prefix.
+            let rest = &key[prefix_str.len()..];
+            if !rest.is_empty() && !rest.contains('/') {
                 entries.push(VfsEntry {
                     name: rest.to_string(),
                     kind: match node {
@@ -118,13 +139,14 @@ impl Vfs for MemoryVfs {
                 });
             }
         }
-        entries.sort_by(|a, b| a.name.cmp(&b.name));
+        // BTreeMap gives us sorted keys, but child names are sorted by full
+        // path which is the same as sorting by name when they share a prefix.
         Ok(entries)
     }
 
     fn read(&self, path: &str) -> Result<Vec<u8>> {
         let path = normalize(path);
-        match self.nodes.get(&path) {
+        match self.nodes.get(path.as_ref()) {
             Some(Node::File(data)) => Ok(data.clone()),
             Some(Node::Dir) => Err(OasisError::Vfs(format!("is a directory: {path}"))),
             None => Err(OasisError::Vfs(format!("no such file: {path}"))),
@@ -134,19 +156,20 @@ impl Vfs for MemoryVfs {
     fn write(&mut self, path: &str, data: &[u8]) -> Result<()> {
         let path = normalize(path);
         // Ensure parent directory exists.
-        let par = parent(&path).to_string();
-        if !self.nodes.contains_key(&par) {
+        let par = parent(&path);
+        if !self.nodes.contains_key(par) {
             return Err(OasisError::Vfs(format!(
                 "parent directory does not exist: {par}"
             )));
         }
-        self.nodes.insert(path, Node::File(data.to_vec()));
+        self.nodes
+            .insert(path.into_owned(), Node::File(data.to_vec()));
         Ok(())
     }
 
     fn stat(&self, path: &str) -> Result<VfsMetadata> {
         let path = normalize(path);
-        match self.nodes.get(&path) {
+        match self.nodes.get(path.as_ref()) {
             Some(Node::File(data)) => Ok(VfsMetadata {
                 kind: EntryKind::File,
                 size: data.len() as u64,
@@ -161,28 +184,32 @@ impl Vfs for MemoryVfs {
 
     fn mkdir(&mut self, path: &str) -> Result<()> {
         let path = normalize(path);
-        if self.nodes.contains_key(&path) {
+        if self.nodes.contains_key(path.as_ref()) {
             return Ok(()); // Already exists, no error.
         }
         // Ensure parent exists (create parents recursively).
         let par = parent(&path).to_string();
-        if par != path && !self.nodes.contains_key(&par) {
+        if par != path.as_ref() && !self.nodes.contains_key(&par) {
             self.mkdir(&par)?;
         }
-        self.nodes.insert(path, Node::Dir);
+        self.nodes.insert(path.into_owned(), Node::Dir);
         Ok(())
     }
 
     fn remove(&mut self, path: &str) -> Result<()> {
         let path = normalize(path);
-        if path == "/" {
+        if path.as_ref() == "/" {
             return Err(OasisError::Vfs("cannot remove root".to_string()));
         }
-        match self.nodes.get(&path) {
+        match self.nodes.get(path.as_ref()) {
             Some(Node::Dir) => {
-                // Check that directory is empty.
+                // Check that directory is empty using BTreeMap range scan.
                 let prefix = format!("{path}/");
-                let has_children = self.nodes.keys().any(|k| k.starts_with(&prefix));
+                let has_children = self
+                    .nodes
+                    .range(prefix.clone()..)
+                    .next()
+                    .is_some_and(|(k, _)| k.starts_with(&prefix));
                 if has_children {
                     return Err(OasisError::Vfs(format!("directory not empty: {path}")));
                 }
@@ -192,13 +219,13 @@ impl Vfs for MemoryVfs {
                 return Err(OasisError::Vfs(format!("no such path: {path}")));
             },
         }
-        self.nodes.remove(&path);
+        self.nodes.remove(path.as_ref());
         Ok(())
     }
 
     fn exists(&self, path: &str) -> bool {
         let path = normalize(path);
-        self.nodes.contains_key(&path)
+        self.nodes.contains_key(path.as_ref())
     }
 }
 

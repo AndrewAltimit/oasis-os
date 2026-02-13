@@ -105,6 +105,7 @@ fn listener_start_and_stop() {
         port,
         psk: String::new(),
         max_connections: 2,
+        ..ListenerConfig::default()
     };
     let mut listener = RemoteListener::new(config);
     let mut backend = StdNetworkBackend::new();
@@ -121,6 +122,7 @@ fn listener_accept_no_auth() {
         port,
         psk: String::new(),
         max_connections: 2,
+        ..ListenerConfig::default()
     };
     let mut listener = RemoteListener::new(config);
     let mut backend = StdNetworkBackend::new();
@@ -167,6 +169,7 @@ fn listener_psk_auth() {
         port,
         psk: "secret123".to_string(),
         max_connections: 2,
+        ..ListenerConfig::default()
     };
     let mut listener = RemoteListener::new(config);
     let mut backend = StdNetworkBackend::new();
@@ -212,6 +215,7 @@ fn listener_psk_auth_failure() {
         port,
         psk: "correct_key".to_string(),
         max_connections: 2,
+        ..ListenerConfig::default()
     };
     let mut listener = RemoteListener::new(config);
     let mut backend = StdNetworkBackend::new();
@@ -244,6 +248,7 @@ fn listener_quit_command() {
         port,
         psk: String::new(),
         max_connections: 2,
+        ..ListenerConfig::default()
     };
     let mut listener = RemoteListener::new(config);
     let mut backend = StdNetworkBackend::new();
@@ -490,6 +495,7 @@ fn listener_double_stop_is_ok() {
         port,
         psk: String::new(),
         max_connections: 2,
+        ..ListenerConfig::default()
     };
     let mut listener = RemoteListener::new(config);
     let mut backend = StdNetworkBackend::new();
@@ -506,6 +512,7 @@ fn listener_start_stop_start() {
         port: port1,
         psk: String::new(),
         max_connections: 2,
+        ..ListenerConfig::default()
     };
     let mut listener = RemoteListener::new(config1);
     let mut backend = StdNetworkBackend::new();
@@ -517,6 +524,7 @@ fn listener_start_stop_start() {
         port: port2,
         psk: String::new(),
         max_connections: 2,
+        ..ListenerConfig::default()
     };
     let mut listener2 = RemoteListener::new(config2);
     listener2.start(&mut backend).unwrap();

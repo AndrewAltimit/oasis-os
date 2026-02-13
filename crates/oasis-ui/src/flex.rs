@@ -9,7 +9,9 @@ use crate::layout::{HAlign, Padding, VAlign, align_y};
 /// Direction of flex layout.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FlexDirection {
+    /// Horizontal layout (left to right).
     Row,
+    /// Vertical layout (top to bottom).
     Column,
 }
 
@@ -28,13 +30,16 @@ pub enum FlexSize {
 /// A child in a flex container.
 #[derive(Debug, Clone)]
 pub struct FlexChild {
+    /// How this child is sized along the main axis.
     pub size: FlexSize,
     /// Cross-axis override for this child.
     pub align_self: Option<VAlign>,
+    /// Margin around this child.
     pub margin: Padding,
 }
 
 impl FlexChild {
+    /// Create a child with fixed pixel size.
     pub fn fixed(size: u32) -> Self {
         Self {
             size: FlexSize::Fixed(size),
@@ -43,6 +48,7 @@ impl FlexChild {
         }
     }
 
+    /// Create a child that fills remaining space with given weight.
     pub fn flex(weight: u32) -> Self {
         Self {
             size: FlexSize::Flex(weight),
@@ -51,6 +57,7 @@ impl FlexChild {
         }
     }
 
+    /// Create a child sized as percentage of parent.
     pub fn percent(pct: f32) -> Self {
         Self {
             size: FlexSize::Percent(pct),
@@ -59,11 +66,13 @@ impl FlexChild {
         }
     }
 
+    /// Add margin to this child.
     pub fn with_margin(mut self, margin: Padding) -> Self {
         self.margin = margin;
         self
     }
 
+    /// Set cross-axis alignment for this child.
     pub fn with_align(mut self, align: VAlign) -> Self {
         self.align_self = Some(align);
         self
@@ -73,16 +82,22 @@ impl FlexChild {
 /// Computed position for a child.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ComputedRect {
+    /// X coordinate.
     pub x: i32,
+    /// Y coordinate.
     pub y: i32,
+    /// Width in pixels.
     pub w: u32,
+    /// Height in pixels.
     pub h: u32,
 }
 
 /// A flex container that computes child positions along a main axis.
 #[derive(Debug, Clone)]
 pub struct FlexLayout {
+    /// Layout direction (row or column).
     pub direction: FlexDirection,
+    /// Gap between items in pixels.
     pub gap: u32,
     /// Cross-axis default alignment.
     pub align_items: VAlign,
@@ -102,10 +117,12 @@ impl Default for FlexLayout {
 }
 
 impl FlexLayout {
+    /// Create a horizontal flex layout.
     pub fn row() -> Self {
         Self::default()
     }
 
+    /// Create a vertical flex layout.
     pub fn column() -> Self {
         Self {
             direction: FlexDirection::Column,
@@ -113,16 +130,19 @@ impl FlexLayout {
         }
     }
 
+    /// Set gap between items.
     pub fn with_gap(mut self, gap: u32) -> Self {
         self.gap = gap;
         self
     }
 
+    /// Set cross-axis alignment for all items.
     pub fn with_align_items(mut self, align: VAlign) -> Self {
         self.align_items = align;
         self
     }
 
+    /// Set main-axis justification.
     pub fn with_justify(mut self, justify: HAlign) -> Self {
         self.justify = justify;
         self
@@ -266,13 +286,18 @@ impl FlexLayout {
 /// A grid layout helper that computes cell positions for a uniform grid.
 #[derive(Debug, Clone)]
 pub struct GridLayout {
+    /// Number of columns.
     pub cols: u32,
+    /// Gap between rows in pixels.
     pub row_gap: u32,
+    /// Gap between columns in pixels.
     pub col_gap: u32,
+    /// Padding around the grid.
     pub padding: Padding,
 }
 
 impl GridLayout {
+    /// Create a new grid layout with specified column count.
     pub fn new(cols: u32) -> Self {
         Self {
             cols,
@@ -282,12 +307,14 @@ impl GridLayout {
         }
     }
 
+    /// Set gaps between cells.
     pub fn with_gap(mut self, row_gap: u32, col_gap: u32) -> Self {
         self.row_gap = row_gap;
         self.col_gap = col_gap;
         self
     }
 
+    /// Set padding around the grid.
     pub fn with_padding(mut self, padding: Padding) -> Self {
         self.padding = padding;
         self

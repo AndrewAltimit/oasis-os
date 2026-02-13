@@ -8,13 +8,18 @@ use oasis_types::error::Result;
 
 /// A circular avatar with either an image or a text initial.
 pub struct Avatar {
+    /// Optional image texture to display.
     pub image: Option<TextureId>,
+    /// Fallback character when no image is set.
     pub initial: char,
+    /// Optional background color override.
     pub bg_color: Option<Color>,
+    /// Avatar diameter in pixels.
     pub size: u32,
 }
 
 impl Avatar {
+    /// Create an avatar with a text initial.
     pub fn new(initial: char, size: u32) -> Self {
         Self {
             image: None,
@@ -24,6 +29,7 @@ impl Avatar {
         }
     }
 
+    /// Create an avatar with an image texture.
     pub fn with_image(image: TextureId, size: u32) -> Self {
         Self {
             image: Some(image),

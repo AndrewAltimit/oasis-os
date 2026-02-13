@@ -101,8 +101,11 @@ pub enum Icon {
 
 /// Renderer for an icon atlas texture.
 pub struct IconAtlas {
+    /// Atlas texture containing all icons.
     pub texture: TextureId,
+    /// Size of each icon in pixels.
     pub icon_size: u32,
+    /// Number of columns in the atlas grid.
     pub cols: u32,
 }
 

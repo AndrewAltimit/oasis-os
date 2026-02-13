@@ -389,7 +389,7 @@ impl WindowManager {
     /// and resets them after.
     pub fn draw_with_clips<F>(
         &self,
-        sdi: &SdiRegistry,
+        sdi: &mut SdiRegistry,
         backend: &mut dyn SdiBackend,
         mut draw_content: F,
     ) -> Result<()>

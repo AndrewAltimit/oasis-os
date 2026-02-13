@@ -9,10 +9,15 @@ use oasis_types::error::Result;
 
 /// A container with background, optional border, shadow, and rounded corners.
 pub struct Panel {
+    /// Optional background color.
     pub background: Option<Color>,
+    /// Optional border (thickness, color).
     pub border: Option<(u16, Color)>,
+    /// Corner radius in pixels.
     pub radius: u16,
+    /// Shadow elevation level (0 = no shadow).
     pub elevation: u8,
+    /// Internal padding.
     pub padding: Padding,
 }
 
@@ -29,6 +34,7 @@ impl Default for Panel {
 }
 
 impl Panel {
+    /// Create a panel with theme defaults.
     pub fn themed(ctx: &DrawContext<'_>) -> Self {
         Self {
             background: Some(ctx.theme.surface),

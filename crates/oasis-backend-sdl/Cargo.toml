@@ -9,6 +9,7 @@ authors.workspace = true
 
 [dependencies]
 oasis-core = { workspace = true, features = ["tls-rustls"] }
+oasis-types = { workspace = true }
 sdl2 = { workspace = true }
 log = { workspace = true }
 

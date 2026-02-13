@@ -11,6 +11,7 @@ pub fn register_skin_commands(reg: &mut CommandRegistry) {
     reg.register(Box::new(SkinCmd));
 }
 
+/// Terminal command for listing, showing, or switching UI skins.
 struct SkinCmd;
 
 impl Command for SkinCmd {

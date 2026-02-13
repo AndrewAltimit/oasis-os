@@ -8,15 +8,22 @@ use oasis_types::error::Result;
 
 /// A block of text with optional wrapping and alignment.
 pub struct TextBlock {
+    /// Text content.
     pub text: String,
+    /// Font size (0 = use theme default).
     pub font_size: u16,
+    /// Optional text color override.
     pub color: Option<Color>,
+    /// Maximum lines before truncation.
     pub max_lines: Option<u32>,
+    /// Horizontal text alignment.
     pub align: HAlign,
+    /// Line height in pixels (0 = use font height).
     pub line_height: u32,
 }
 
 impl TextBlock {
+    /// Create a new text block.
     pub fn new(text: impl Into<String>) -> Self {
         Self {
             text: text.into(),

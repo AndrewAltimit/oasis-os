@@ -47,9 +47,10 @@ fn style_subtree(
         styles[node_id] = Some(style);
     }
 
-    // Recurse into children.
-    let children: Vec<NodeId> = doc.nodes[node_id].children.clone();
-    for child_id in children {
+    // Recurse into children. Iterate by index to avoid cloning the Vec.
+    let num_children = doc.nodes[node_id].children.len();
+    for i in 0..num_children {
+        let child_id = doc.nodes[node_id].children[i];
         style_subtree(doc, child_id, stylesheets, inline_styles, styles);
     }
 }

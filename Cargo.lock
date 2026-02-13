@@ -577,6 +577,7 @@ version = "0.1.0"
 dependencies = [
  "log",
  "oasis-core",
+ "oasis-types",
  "sdl2",
 ]
 
@@ -586,6 +587,7 @@ version = "0.1.0"
 dependencies = [
  "log",
  "oasis-core",
+ "oasis-types",
 ]
 
 [[package]]

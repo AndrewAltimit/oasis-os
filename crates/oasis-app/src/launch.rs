@@ -90,3 +90,85 @@ pub fn apply_launch(result: LaunchResult, mode: &mut Mode) {
         LaunchResult::Desktop => *mode = Mode::Desktop,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_launch_result_variants_exist() {
+        // Ensure both LaunchResult variants can be constructed.
+        let _terminal = LaunchResult::Terminal;
+        let _desktop = LaunchResult::Desktop;
+    }
+
+    #[test]
+    fn test_apply_launch_terminal() {
+        let mut mode = Mode::Dashboard;
+        apply_launch(LaunchResult::Terminal, &mut mode);
+        assert_eq!(mode, Mode::Terminal);
+    }
+
+    #[test]
+    fn test_apply_launch_desktop() {
+        let mut mode = Mode::Terminal;
+        apply_launch(LaunchResult::Desktop, &mut mode);
+        assert_eq!(mode, Mode::Desktop);
+    }
+
+    #[test]
+    fn test_apply_launch_preserves_other_modes() {
+        // Verify apply_launch correctly overwrites any starting mode.
+        let mut mode = Mode::App;
+        apply_launch(LaunchResult::Terminal, &mut mode);
+        assert_eq!(mode, Mode::Terminal);
+
+        let mut mode = Mode::Osk;
+        apply_launch(LaunchResult::Desktop, &mut mode);
+        assert_eq!(mode, Mode::Desktop);
+    }
+
+    #[test]
+    fn test_make_transition_returns_transition_state() {
+        // Verify make_transition produces a valid TransitionState.
+        let transition = make_transition(480, 272, 30);
+        // TransitionState is opaque, but we can verify it was created.
+        let _ = transition;
+    }
+
+    #[test]
+    fn test_make_transition_with_different_dimensions() {
+        // Ensure make_transition works with various dimensions.
+        let _t1 = make_transition(640, 480, 60);
+        let _t2 = make_transition(1920, 1080, 120);
+        let _t3 = make_transition(100, 100, 10);
+    }
+
+    #[test]
+    fn test_launch_result_pattern_matching() {
+        let result = LaunchResult::Terminal;
+        match result {
+            LaunchResult::Terminal => {},
+            _ => panic!("Expected Terminal"),
+        }
+
+        let result = LaunchResult::Desktop;
+        match result {
+            LaunchResult::Desktop => {},
+            _ => panic!("Expected Desktop"),
+        }
+    }
+
+    // NOTE: The `launch_app_window` function is heavily coupled to multiple mutable state
+    // parameters (WindowManager, SdiRegistry, Vec, Option, etc.) and requires complex
+    // setup including VFS and TLS providers. Unit testing this function would require
+    // extensive mocking that provides little value compared to integration tests.
+    //
+    // The function's logic is primarily:
+    // 1. String matching on app.title
+    // 2. Window creation/focus delegation to WindowManager
+    // 3. Browser/AppRunner initialization
+    //
+    // These behaviors are better validated through integration tests that exercise
+    // the full application flow with a real or test backend.
+}

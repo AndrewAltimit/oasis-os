@@ -3,15 +3,21 @@
 /// Padding specification for all four sides.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Padding {
+    /// Top padding in pixels.
     pub top: u16,
+    /// Right padding in pixels.
     pub right: u16,
+    /// Bottom padding in pixels.
     pub bottom: u16,
+    /// Left padding in pixels.
     pub left: u16,
 }
 
 impl Padding {
+    /// Zero padding on all sides.
     pub const ZERO: Self = Self::uniform(0);
 
+    /// Create uniform padding on all sides.
     pub const fn uniform(p: u16) -> Self {
         Self {
             top: p,
@@ -21,6 +27,7 @@ impl Padding {
         }
     }
 
+    /// Create symmetric padding (horizontal and vertical).
     pub const fn symmetric(h: u16, v: u16) -> Self {
         Self {
             top: v,
@@ -30,6 +37,7 @@ impl Padding {
         }
     }
 
+    /// Create padding with individual side values.
     pub const fn new(top: u16, right: u16, bottom: u16, left: u16) -> Self {
         Self {
             top,
@@ -87,16 +95,22 @@ pub fn distribute(total: u32, n: u32, gap: u32) -> (u32, Vec<i32>) {
 /// Horizontal alignment.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HAlign {
+    /// Align to the left edge.
     Left,
+    /// Align to the center.
     Center,
+    /// Align to the right edge.
     Right,
 }
 
 /// Vertical alignment.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum VAlign {
+    /// Align to the top edge.
     Top,
+    /// Align to the center.
     Center,
+    /// Align to the bottom edge.
     Bottom,
 }
 
