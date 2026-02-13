@@ -6,8 +6,9 @@
 
 use std::fmt::Debug;
 
-use crate::sdi::SdiRegistry;
-use crate::skin::corrupted::{CorruptedModifiers, SimpleRng};
+use oasis_sdi::SdiRegistry;
+
+use crate::corrupted::{CorruptedModifiers, SimpleRng};
 
 /// A pluggable visual effect that modifies the SDI scene each frame.
 pub trait SkinEffect: Debug {
@@ -127,7 +128,7 @@ impl SkinEffect for ScanlineEffect {
                     obj.y = y as i32;
                     obj.w = screen_w;
                     obj.h = 1;
-                    obj.color = crate::backend::Color::rgba(0, 0, 0, 0);
+                    obj.color = oasis_types::backend::Color::rgba(0, 0, 0, 0);
                     obj.overlay = true;
                     obj.z = 950;
                 }
@@ -142,7 +143,7 @@ impl SkinEffect for ScanlineEffect {
             let name = format!("{}{i}", Self::PREFIX);
             if let Ok(obj) = sdi.get_mut(&name) {
                 obj.visible = true;
-                obj.color = crate::backend::Color::rgba(0, 0, 0, alpha);
+                obj.color = oasis_types::backend::Color::rgba(0, 0, 0, alpha);
             }
         }
     }

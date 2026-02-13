@@ -6,7 +6,7 @@
 
 use serde::Deserialize;
 
-use crate::sdi::SdiRegistry;
+use oasis_sdi::SdiRegistry;
 
 /// Configuration for corrupted visual modifiers.
 #[derive(Debug, Clone, Deserialize)]

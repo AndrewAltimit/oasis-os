@@ -3,7 +3,7 @@
 //! Each skin is defined as embedded TOML constants. These provide functional
 //! skins out of the box without requiring external skin directories.
 
-use crate::error::Result;
+use oasis_types::error::Result;
 
 use super::loader::Skin;
 
@@ -931,7 +931,7 @@ pub fn load_builtin(name: &str) -> Result<Skin> {
         "agent-terminal" => agent_terminal_skin(),
         "modern" => modern_skin(),
         "xp" => xp_skin(),
-        _ => Err(crate::error::OasisError::Config(format!(
+        _ => Err(oasis_types::error::OasisError::Config(format!(
             "unknown built-in skin: {name}"
         ))),
     }
@@ -953,7 +953,7 @@ pub fn builtin_names() -> &'static [&'static str] {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::sdi::SdiRegistry;
+    use oasis_sdi::SdiRegistry;
 
     #[test]
     fn terminal_skin_loads() {

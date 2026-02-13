@@ -7,7 +7,7 @@
 //! These constants remain for PSP backend / FFI consumers that do not
 //! use the skin system.
 
-use crate::backend::Color;
+use oasis_types::backend::Color;
 
 // -- Screen geometry ----------------------------------------------------------
 

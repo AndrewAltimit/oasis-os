@@ -5,10 +5,11 @@
 //! receive `&ActiveTheme` instead of reading `theme::CONST` directly, allowing
 //! skins to actually drive the UI appearance.
 
-use crate::backend::Color;
-use crate::skin::SkinTheme;
-use crate::skin::theme::parse_hex_color;
-use crate::ui::color::{lighten, with_alpha};
+use oasis_types::backend::Color;
+use oasis_types::color::{lighten, with_alpha};
+
+use crate::SkinTheme;
+use crate::theme::parse_hex_color;
 
 /// Runtime theme derived from the active skin's color palette.
 ///

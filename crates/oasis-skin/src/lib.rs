@@ -4,13 +4,16 @@
 //! feature flags, strings, and optional corrupted modifiers. The core
 //! framework interprets skins at runtime. Skins can be hot-swapped.
 
+pub mod active_theme;
 pub mod builtin;
 pub mod corrupted;
 pub mod effects;
+pub mod legacy_theme;
 mod loader;
 pub mod strings;
 pub mod theme;
 
+pub use active_theme::ActiveTheme;
 pub use corrupted::{CorruptedModifiers, SimpleRng};
 pub use effects::{CorruptedEffect, ScanlineEffect, SkinEffect};
 pub use loader::{Skin, SkinFeatures, SkinLayout, SkinManifest, SkinObjectDef};
@@ -19,7 +22,7 @@ pub use theme::{BarOverrides, BrowserOverrides, IconOverrides, SkinTheme, WmThem
 
 use std::path::Path;
 
-use crate::error::Result;
+use oasis_types::error::Result;
 
 /// Resolve a skin by name or path.
 ///
@@ -49,8 +52,8 @@ pub fn resolve_skin(name_or_path: &str) -> Result<Skin> {
     // 4. Fallback to classic embedded skin.
     log::warn!("Skin '{name_or_path}' not found -- falling back to classic");
     Skin::from_toml(
-        include_str!("../../../../skins/classic/skin.toml"),
-        include_str!("../../../../skins/classic/layout.toml"),
-        include_str!("../../../../skins/classic/features.toml"),
+        include_str!("../../../skins/classic/skin.toml"),
+        include_str!("../../../skins/classic/layout.toml"),
+        include_str!("../../../skins/classic/features.toml"),
     )
 }

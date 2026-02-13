@@ -5,11 +5,11 @@
 
 use serde::Deserialize;
 
-use crate::backend::Color;
-use crate::ui::color::{darken, lighten, with_alpha};
-use crate::ui::shadow::Shadow;
-use crate::ui::theme::Theme;
-use crate::wm::WmTheme;
+use oasis_types::backend::Color;
+use oasis_types::color::{darken, lighten, with_alpha};
+use oasis_types::shadow::Shadow;
+use oasis_ui::theme::Theme;
+use oasis_wm::WmTheme;
 
 /// Color scheme for a skin.
 #[derive(Debug, Clone, Deserialize)]

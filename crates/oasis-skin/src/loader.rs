@@ -5,8 +5,8 @@ use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
 
-use crate::error::{OasisError, Result};
-use crate::sdi::SdiRegistry;
+use oasis_sdi::SdiRegistry;
+use oasis_types::error::{OasisError, Result};
 
 use super::corrupted::CorruptedModifiers;
 use super::strings::SkinStrings;
@@ -516,7 +516,7 @@ boot_text = ["Initializing..."]
         assert_eq!(skin.strings.title, "HACKER TERM");
         assert_eq!(
             skin.theme.background_color(),
-            crate::backend::Color::rgb(0, 0, 0)
+            oasis_types::backend::Color::rgb(0, 0, 0)
         );
         assert!(skin.corrupted_modifiers.is_none());
     }

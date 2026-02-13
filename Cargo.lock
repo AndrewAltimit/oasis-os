@@ -598,6 +598,7 @@ dependencies = [
  "oasis-net",
  "oasis-platform",
  "oasis-sdi",
+ "oasis-skin",
  "oasis-types",
  "oasis-ui",
  "oasis-vfs",
@@ -649,6 +650,19 @@ dependencies = [
  "log",
  "oasis-types",
  "proptest",
+ "serde",
+ "toml",
+]
+
+[[package]]
+name = "oasis-skin"
+version = "0.1.0"
+dependencies = [
+ "log",
+ "oasis-sdi",
+ "oasis-types",
+ "oasis-ui",
+ "oasis-wm",
  "serde",
  "toml",
 ]
