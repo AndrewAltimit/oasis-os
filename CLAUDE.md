@@ -61,12 +61,23 @@ All steps run via `docker compose --profile ci run --rm rust-ci`.
 ### Crate Dependency Graph
 
 ```
-oasis-core  (platform-agnostic core, zero internal deps)
-├── oasis-backend-sdl  (SDL2 desktop/Pi rendering + input + audio)
-│   └── oasis-app      (binary entry points: oasis-app, oasis-screenshot)
-├── oasis-backend-ue5  (software RGBA framebuffer for Unreal Engine 5)
-│   └── oasis-ffi      (cdylib C-ABI for UE5 integration)
-└── oasis-backend-psp  (EXCLUDED from workspace, PSP hardware via sceGu)
+oasis-types     (foundation: Color, Button, InputEvent, backend traits, error types)
+├── oasis-vfs        (virtual file system: MemoryVfs, RealVfs, GameAssetVfs)
+├── oasis-platform   (platform service traits: Power, Time, USB, Network, OSK)
+├── oasis-sdi        (scene display interface: named object registry, z-order)
+├── oasis-net        (TCP networking, PSK auth, remote terminal, FTP)
+├── oasis-audio      (audio manager, playlist, MP3 ID3 parsing)
+├── oasis-ui         (15+ widgets: Button, Card, TabBar, ListView, flex layout)
+├── oasis-wm         (window manager: drag/resize, hit testing, decorations)
+├── oasis-skin       (TOML skin engine, 8 skins, theme derivation)
+├── oasis-terminal   (80+ commands across 14 modules, shell features)
+├── oasis-browser    (HTML/CSS/Gemini: DOM, CSS cascade, layout engine)
+└── oasis-core       (coordination: apps, dashboard, agent, plugin, script)
+    ├── oasis-backend-sdl  (SDL2 desktop/Pi rendering + input + audio)
+    │   └── oasis-app      (binary entry points: oasis-app, oasis-screenshot)
+    ├── oasis-backend-ue5  (software RGBA framebuffer for Unreal Engine 5)
+    │   └── oasis-ffi      (cdylib C-ABI for UE5 integration)
+    └── oasis-backend-psp  (excluded from workspace, PSP hardware via sceGu)
 ```
 
 ### Key Abstraction: Backend Traits
@@ -79,28 +90,26 @@ oasis-core  (platform-agnostic core, zero internal deps)
 
 Core code never calls platform APIs directly. All platform interaction goes through these traits.
 
-### Core Modules (oasis-core)
+### Core Modules
 
-- **sdi** -- Scene Display Interface: named objects with position, size, color, texture, text, z-order, gradients, rounded corners, shadows
-- **skin** -- Data-driven TOML skin system with 8 skins (2 external in `skins/`, 7 built-in; xp exists in both forms). Theme derivation from 9 base colors.
-- **browser** -- Embeddable HTML/CSS/Gemini rendering engine: DOM parser, CSS cascade, block/inline/table layout, link navigation, reader mode
-- **ui** -- 15+ reusable widgets: Button, Card, TabBar, Panel, TextField, ListView, ScrollView, ProgressBar, Toggle, NinePatch, etc.
-- **vfs** -- Virtual file system: `MemoryVfs` (in-RAM), `RealVfs` (disk), `GameAssetVfs` (UE5 with overlay writes)
-- **terminal** -- Command interpreter with 30+ commands across 7 modules (core, audio, network, agent, plugin, skin, scripting, transfer, update)
-- **wm** -- Window manager (window configs, hit testing, drag/resize, minimize/maximize/close)
-- **apps** -- App runner with 8 apps (File Manager, Settings, Network, Music Player, Photo Viewer, Package Manager, Browser, System Monitor)
-- **dashboard** -- Icon grid with paginated navigation, discovers apps from VFS
-- **input** -- Platform-agnostic `InputEvent`, `Button`, `Trigger` enums
-- **plugin** -- Plugin traits, manager, and VFS-based IPC
-- **agent** -- Agent status, MCP integration, tamper detection, health monitoring
-- **net** -- TCP networking with PSK authentication, remote terminal, FTP transfer
-- **audio** -- Audio manager with playlist, shuffle/repeat modes, MP3 ID3 tag parsing
-- **platform** -- Platform service traits: PowerService, TimeService, UsbService, NetworkService, OskService
-- **script** -- Line-based command scripting, startup scripts, cron-like scheduling
+The framework is split into 16 workspace crates. Each module below is its own crate (previously all in oasis-core):
+
+- **oasis-types** -- Foundation types: `Color`, `Button`, `InputEvent`, backend traits (`SdiBackend`, `InputBackend`, `NetworkBackend`, `AudioBackend`), error types, TLS, bitmap font metrics
+- **oasis-sdi** -- Scene Display Interface: named objects with position, size, color, texture, text, z-order, gradients, rounded corners, shadows
+- **oasis-skin** -- Data-driven TOML skin system with 8 skins (2 external in `skins/`, 7 built-in; xp exists in both forms). Theme derivation from 9 base colors.
+- **oasis-browser** -- Embeddable HTML/CSS/Gemini rendering engine: DOM parser, CSS cascade, block/inline/table layout, link navigation, reader mode
+- **oasis-ui** -- 15+ reusable widgets: Button, Card, TabBar, Panel, TextField, ListView, ScrollView, ProgressBar, Toggle, NinePatch, flex layout
+- **oasis-vfs** -- Virtual file system: `MemoryVfs` (in-RAM), `RealVfs` (disk), `GameAssetVfs` (UE5 with overlay writes)
+- **oasis-terminal** -- Command interpreter with 80+ commands across 14 modules (core, text, file, system, dev, fun, security, doc, audio, network, skin, UI, plus agent/plugin/script/transfer/update registered by oasis-core). Shell features: variable expansion, glob expansion, aliases, history, piping
+- **oasis-wm** -- Window manager (window configs, hit testing, drag/resize, minimize/maximize/close)
+- **oasis-net** -- TCP networking with PSK authentication, remote terminal, FTP transfer
+- **oasis-audio** -- Audio manager with playlist, shuffle/repeat modes, MP3 ID3 tag parsing
+- **oasis-platform** -- Platform service traits: PowerService, TimeService, UsbService, NetworkService, OskService
+- **oasis-core** -- Coordination layer: app runner with 8 apps (File Manager with dual-panel, Settings, Network, Music Player, Photo Viewer, Package Manager, Browser, System Monitor), dashboard, agent/MCP, plugin, scripting, status/bottom bars
 
 ### Font Rendering
 
-Each backend implements its own 8x8 bitmap font via glyph tables in `font.rs` files. No external font dependencies.
+Proportional bitmap font rendering from glyph ink bounds. `oasis-types` provides `glyph_advance()` with variable per-character widths (3-8px). Each backend has its own glyph table in `font.rs`. The PSP backend additionally uses system TrueType fonts via `psp::font` with a VRAM glyph atlas. No external font dependencies for desktop/UE5.
 
 ### FFI Boundary (oasis-ffi)
 

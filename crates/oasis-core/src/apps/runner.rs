@@ -10,6 +10,106 @@ use crate::vfs::{EntryKind, Vfs};
 /// Maximum lines visible in the app content area.
 const MAX_VISIBLE_LINES: usize = 13;
 
+/// Maximum lines visible per panel in dual-panel mode.
+const PANEL_VISIBLE_LINES: usize = 13;
+
+/// Per-panel state for dual-panel file browsing.
+#[derive(Debug)]
+struct FilePanel {
+    browse_dir: String,
+    lines: Vec<String>,
+    scroll: usize,
+    cursor: usize,
+}
+
+impl FilePanel {
+    fn new(dir: &str, vfs: &dyn Vfs) -> Self {
+        let lines = list_directory(vfs, dir);
+        Self {
+            browse_dir: dir.to_string(),
+            lines,
+            scroll: 0,
+            cursor: 0,
+        }
+    }
+
+    fn visible_count(&self) -> usize {
+        let remaining = self.lines.len().saturating_sub(self.scroll);
+        remaining.min(PANEL_VISIBLE_LINES)
+    }
+
+    fn navigate_up(&mut self) {
+        if self.cursor > 0 {
+            self.cursor -= 1;
+        } else if self.scroll > 0 {
+            self.scroll -= 1;
+        }
+    }
+
+    fn navigate_down(&mut self) {
+        let visible = self.visible_count();
+        if self.cursor + 1 < visible {
+            self.cursor += 1;
+        } else if self.scroll + PANEL_VISIBLE_LINES < self.lines.len() {
+            self.scroll += 1;
+        }
+    }
+
+    fn enter_selected(&mut self, vfs: &dyn Vfs) {
+        let abs_idx = self.scroll + self.cursor;
+        let Some(line) = self.lines.get(abs_idx) else {
+            return;
+        };
+        let line = line.trim().to_string();
+
+        if line == ".." {
+            let parent = if self.browse_dir == "/" {
+                "/".to_string()
+            } else {
+                let trimmed = self.browse_dir.trim_end_matches('/');
+                match trimmed.rfind('/') {
+                    Some(0) => "/".to_string(),
+                    Some(pos) => trimmed[..pos].to_string(),
+                    None => "/".to_string(),
+                }
+            };
+            self.browse_dir = parent.clone();
+            self.lines = list_directory(vfs, &parent);
+            self.scroll = 0;
+            self.cursor = 0;
+        } else if line.ends_with('/') {
+            let name = &line[..line.len() - 1];
+            let new_dir = if self.browse_dir == "/" {
+                format!("/{name}")
+            } else {
+                format!("{}/{name}", self.browse_dir)
+            };
+            self.browse_dir = new_dir.clone();
+            self.lines = list_directory(vfs, &new_dir);
+            self.scroll = 0;
+            self.cursor = 0;
+        }
+        // Files are not opened by panel navigation (only File Manager does that).
+    }
+
+    fn enter_selected_parent(&mut self, vfs: &dyn Vfs) {
+        let parent = if self.browse_dir == "/" {
+            "/".to_string()
+        } else {
+            let trimmed = self.browse_dir.trim_end_matches('/');
+            match trimmed.rfind('/') {
+                Some(0) => "/".to_string(),
+                Some(pos) => trimmed[..pos].to_string(),
+                None => "/".to_string(),
+            }
+        };
+        self.browse_dir = parent.clone();
+        self.lines = list_directory(vfs, &parent);
+        self.scroll = 0;
+        self.cursor = 0;
+    }
+}
+
 /// Action returned by the app after handling input.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AppAction {
@@ -38,6 +138,10 @@ pub struct AppRunner {
     pub viewing_file: Option<String>,
     /// Selected line index (relative to visible area).
     pub cursor: usize,
+    /// Dual panels for file manager mode (`None` for non-browsing apps).
+    panels: Option<[FilePanel; 2]>,
+    /// Which panel is active (0 = left, 1 = right).
+    active_panel: usize,
 }
 
 impl AppRunner {
@@ -53,6 +157,8 @@ impl AppRunner {
             browse_dir: None,
             viewing_file: None,
             cursor: 0,
+            panels: None,
+            active_panel: 0,
         };
         runner.init_content(&title, vfs);
         runner
@@ -64,6 +170,8 @@ impl AppRunner {
             "File Manager" => {
                 self.browse_dir = Some("/".to_string());
                 self.lines = list_directory(vfs, "/");
+                self.panels = Some([FilePanel::new("/", vfs), FilePanel::new("/", vfs)]);
+                self.active_panel = 0;
             },
             "Settings" => {
                 self.lines = vec![
@@ -171,6 +279,11 @@ impl AppRunner {
 
     /// Handle input while the app is active.
     pub fn handle_input(&mut self, button: &Button, vfs: &dyn Vfs) -> AppAction {
+        // Dual-panel mode (File Manager only).
+        if self.panels.is_some() && self.viewing_file.is_none() {
+            return self.handle_dual_panel_input(button, vfs);
+        }
+
         match button {
             Button::Cancel => {
                 // If viewing a file, go back to directory listing.
@@ -178,8 +291,12 @@ impl AppRunner {
                     self.viewing_file = None;
                     self.scroll = 0;
                     self.cursor = 0;
-                    // Refresh directory listing.
-                    if let Some(ref dir) = self.browse_dir {
+                    // Refresh directory listing from active panel.
+                    if let Some(ref mut panels) = self.panels {
+                        let p = &panels[self.active_panel];
+                        self.browse_dir = Some(p.browse_dir.clone());
+                        self.lines = p.lines.clone();
+                    } else if let Some(ref dir) = self.browse_dir {
                         self.lines = list_directory(vfs, dir);
                     }
                     return AppAction::None;
@@ -218,6 +335,62 @@ impl AppRunner {
         }
     }
 
+    /// Handle input in dual-panel mode.
+    fn handle_dual_panel_input(&mut self, button: &Button, vfs: &dyn Vfs) -> AppAction {
+        let panels = self.panels.as_mut().unwrap();
+        match button {
+            Button::Left | Button::Right => {
+                self.active_panel = 1 - self.active_panel;
+                // Sync browse_dir with active panel.
+                self.browse_dir = Some(panels[self.active_panel].browse_dir.clone());
+                AppAction::None
+            },
+            Button::Up => {
+                panels[self.active_panel].navigate_up();
+                AppAction::None
+            },
+            Button::Down => {
+                panels[self.active_panel].navigate_down();
+                AppAction::None
+            },
+            Button::Confirm => {
+                let p = &mut panels[self.active_panel];
+                let abs_idx = p.scroll + p.cursor;
+                let is_file = p.lines.get(abs_idx).is_some_and(|line| {
+                    let l = line.trim();
+                    l != ".." && !l.ends_with('/')
+                });
+                if is_file {
+                    // Open file in viewer mode -- extract path.
+                    let line = p.lines[abs_idx].trim().to_string();
+                    let file_name = line.split("  (").next().unwrap_or(&line);
+                    let dir = &p.browse_dir;
+                    let file_path = if dir == "/" {
+                        format!("/{file_name}")
+                    } else {
+                        format!("{dir}/{file_name}")
+                    };
+                    self.open_file(vfs, &file_path);
+                } else {
+                    p.enter_selected(vfs);
+                    self.browse_dir = Some(p.browse_dir.clone());
+                }
+                AppAction::None
+            },
+            Button::Cancel => {
+                let p = &panels[self.active_panel];
+                if p.browse_dir == "/" {
+                    AppAction::Exit
+                } else {
+                    panels[self.active_panel].enter_selected_parent(vfs);
+                    self.browse_dir = Some(panels[self.active_panel].browse_dir.clone());
+                    AppAction::None
+                }
+            },
+            _ => AppAction::None,
+        }
+    }
+
     /// Render app content directly into a windowed content area.
     ///
     /// Unlike `update_sdi()` which creates named SDI objects for full-screen
@@ -233,6 +406,12 @@ impl AppRunner {
     ) -> crate::error::Result<()> {
         // Content background.
         backend.fill_rect(cx, cy, cw, ch, Color::rgb(12, 12, 20))?;
+
+        if let Some(ref panels) = self.panels
+            && self.viewing_file.is_none()
+        {
+            return self.draw_windowed_dual(cx, cy, cw, ch, backend, panels);
+        }
 
         // Title row with dir/file suffix.
         let dir_suffix = if let Some(ref file) = self.viewing_file {
@@ -279,6 +458,88 @@ impl AppRunner {
         let scroll_y = cy + ch as i32 - 14;
         backend.draw_text(
             &scroll_text,
+            cx + 4,
+            scroll_y,
+            10,
+            Color::rgb(100, 100, 130),
+        )?;
+
+        Ok(())
+    }
+
+    /// Draw dual-panel file manager layout.
+    fn draw_windowed_dual(
+        &self,
+        cx: i32,
+        cy: i32,
+        cw: u32,
+        ch: u32,
+        backend: &mut dyn SdiBackend,
+        panels: &[FilePanel; 2],
+    ) -> crate::error::Result<()> {
+        let half_w = (cw / 2).saturating_sub(1);
+        let divider_x = cx + half_w as i32;
+
+        // Title bar with both panel paths.
+        let title = format!(
+            "File Manager  [L: {}]  [R: {}]",
+            panels[0].browse_dir, panels[1].browse_dir,
+        );
+        backend.draw_text(&title, cx + 4, cy + 2, 12, Color::WHITE)?;
+        backend.fill_rect(cx, cy + 18, cw, 1, Color::rgb(60, 60, 80))?;
+
+        // Vertical divider.
+        let content_y = cy + 20;
+        let content_h = ch.saturating_sub(34);
+        backend.fill_rect(divider_x, content_y, 1, content_h, Color::rgb(60, 60, 80))?;
+
+        // Draw each panel.
+        let max_lines = ((content_h as i32) / 16).max(0) as usize;
+        for (pi, panel) in panels.iter().enumerate() {
+            let px = if pi == 0 { cx } else { divider_x + 1 };
+            let pw = if pi == 0 { half_w } else { cw - half_w - 1 };
+            let is_active = pi == self.active_panel;
+
+            // Active panel indicator (subtle highlight strip at top).
+            if is_active {
+                backend.fill_rect(px, content_y, pw, 1, Color::rgb(100, 200, 255))?;
+            }
+
+            let visible = panel
+                .lines
+                .len()
+                .saturating_sub(panel.scroll)
+                .min(max_lines);
+            for i in 0..visible {
+                let line_idx = panel.scroll + i;
+                let line = &panel.lines[line_idx];
+                let prefix = if is_active && i == panel.cursor {
+                    "> "
+                } else {
+                    "  "
+                };
+                // Truncate line to fit panel width (~chars = pw/8 - 2).
+                let max_chars = (pw as usize / 8).saturating_sub(2);
+                let display = if line.len() > max_chars {
+                    &line[..line.floor_char_boundary(max_chars)]
+                } else {
+                    line.as_str()
+                };
+                let text = format!("{prefix}{display}");
+                let text_color = if is_active && i == panel.cursor {
+                    Color::rgb(100, 200, 255)
+                } else {
+                    Color::rgb(180, 180, 200)
+                };
+                let y = content_y + 2 + i as i32 * 16;
+                backend.draw_text(&text, px + 2, y, 12, text_color)?;
+            }
+        }
+
+        // Bottom hints.
+        let scroll_y = cy + ch as i32 - 14;
+        backend.draw_text(
+            "L/R=panel  Cancel=back",
             cx + 4,
             scroll_y,
             10,
@@ -409,6 +670,15 @@ impl AppRunner {
         if !sdi.contains("app_title_text") {
             sdi.create("app_title_text");
         }
+
+        // Dual-panel SDI rendering.
+        if let Some(ref panels) = self.panels
+            && self.viewing_file.is_none()
+        {
+            self.update_sdi_dual(sdi, panels);
+            return;
+        }
+
         if let Ok(obj) = sdi.get_mut("app_title_text") {
             let dir_suffix = if let Some(ref file) = self.viewing_file {
                 format!("  [{file}]")
@@ -485,9 +755,146 @@ impl AppRunner {
         }
     }
 
+    /// Render dual-panel layout to SDI objects.
+    fn update_sdi_dual(&self, sdi: &mut SdiRegistry, panels: &[FilePanel; 2]) {
+        // Title with both panel paths.
+        if let Ok(obj) = sdi.get_mut("app_title_text") {
+            obj.text = Some(format!(
+                "File Manager  [L: {}]  [R: {}]",
+                panels[0].browse_dir, panels[1].browse_dir,
+            ));
+            obj.x = 8;
+            obj.y = 4;
+            obj.font_size = 12;
+            obj.text_color = Color::WHITE;
+            obj.w = 0;
+            obj.h = 0;
+            obj.visible = true;
+            obj.z = 102;
+        }
+
+        // Vertical divider.
+        if !sdi.contains("app_divider") {
+            sdi.create("app_divider");
+        }
+        if let Ok(obj) = sdi.get_mut("app_divider") {
+            obj.x = 240;
+            obj.y = 24;
+            obj.w = 1;
+            obj.h = 232;
+            obj.color = Color::rgb(60, 60, 80);
+            obj.visible = true;
+            obj.z = 102;
+        }
+
+        // Left panel lines (x=8, w=224).
+        let lp_rects = flex::vertical_list(8, 26, 224, 18, 0, PANEL_VISIBLE_LINES);
+        for (i, rect) in lp_rects.iter().enumerate() {
+            let name = format!("app_lp_line_{i}");
+            if !sdi.contains(&name) {
+                sdi.create(&name);
+            }
+            if let Ok(obj) = sdi.get_mut(&name) {
+                let p = &panels[0];
+                let line_idx = p.scroll + i;
+                let is_active = self.active_panel == 0;
+                if line_idx < p.lines.len() {
+                    let prefix = if is_active && i == p.cursor {
+                        "> "
+                    } else {
+                        "  "
+                    };
+                    obj.text = Some(format!("{prefix}{}", p.lines[line_idx]));
+                    obj.visible = true;
+                } else {
+                    obj.text = None;
+                    obj.visible = false;
+                }
+                obj.x = rect.x;
+                obj.y = rect.y;
+                obj.font_size = 12;
+                obj.text_color = if is_active && i == p.cursor {
+                    Color::rgb(100, 200, 255)
+                } else {
+                    Color::rgb(180, 180, 200)
+                };
+                obj.w = 0;
+                obj.h = 0;
+                obj.z = 102;
+            }
+        }
+
+        // Right panel lines (x=248, w=224).
+        let rp_rects = flex::vertical_list(248, 26, 224, 18, 0, PANEL_VISIBLE_LINES);
+        for (i, rect) in rp_rects.iter().enumerate() {
+            let name = format!("app_rp_line_{i}");
+            if !sdi.contains(&name) {
+                sdi.create(&name);
+            }
+            if let Ok(obj) = sdi.get_mut(&name) {
+                let p = &panels[1];
+                let line_idx = p.scroll + i;
+                let is_active = self.active_panel == 1;
+                if line_idx < p.lines.len() {
+                    let prefix = if is_active && i == p.cursor {
+                        "> "
+                    } else {
+                        "  "
+                    };
+                    obj.text = Some(format!("{prefix}{}", p.lines[line_idx]));
+                    obj.visible = true;
+                } else {
+                    obj.text = None;
+                    obj.visible = false;
+                }
+                obj.x = rect.x;
+                obj.y = rect.y;
+                obj.font_size = 12;
+                obj.text_color = if is_active && i == p.cursor {
+                    Color::rgb(100, 200, 255)
+                } else {
+                    Color::rgb(180, 180, 200)
+                };
+                obj.w = 0;
+                obj.h = 0;
+                obj.z = 102;
+            }
+        }
+
+        // Scroll indicator.
+        if !sdi.contains("app_scroll") {
+            sdi.create("app_scroll");
+        }
+        if let Ok(obj) = sdi.get_mut("app_scroll") {
+            obj.text = Some("L/R=panel  Cancel=back".to_string());
+            obj.x = 8;
+            obj.y = 258;
+            obj.font_size = 10;
+            obj.text_color = Color::rgb(100, 100, 130);
+            obj.w = 0;
+            obj.h = 0;
+            obj.visible = true;
+            obj.z = 102;
+        }
+
+        // Hide single-panel lines (in case they were visible before).
+        for i in 0..MAX_VISIBLE_LINES {
+            let name = format!("app_line_{i}");
+            if let Ok(obj) = sdi.get_mut(&name) {
+                obj.visible = false;
+            }
+        }
+    }
+
     /// Hide all app-related SDI objects.
     pub fn hide_sdi(sdi: &mut SdiRegistry) {
-        let fixed = ["app_bg", "app_title_bg", "app_title_text", "app_scroll"];
+        let fixed = [
+            "app_bg",
+            "app_title_bg",
+            "app_title_text",
+            "app_scroll",
+            "app_divider",
+        ];
         for name in &fixed {
             if let Ok(obj) = sdi.get_mut(name) {
                 obj.visible = false;
@@ -496,6 +903,16 @@ impl AppRunner {
         for i in 0..MAX_VISIBLE_LINES {
             let name = format!("app_line_{i}");
             if let Ok(obj) = sdi.get_mut(&name) {
+                obj.visible = false;
+            }
+        }
+        for i in 0..PANEL_VISIBLE_LINES {
+            let lp = format!("app_lp_line_{i}");
+            let rp = format!("app_rp_line_{i}");
+            if let Ok(obj) = sdi.get_mut(&lp) {
+                obj.visible = false;
+            }
+            if let Ok(obj) = sdi.get_mut(&rp) {
                 obj.visible = false;
             }
         }
@@ -860,25 +1277,30 @@ mod tests {
     fn file_manager_navigate_down() {
         let vfs = setup_vfs();
         let mut runner = AppRunner::launch(&make_app("File Manager"), &vfs);
-        assert_eq!(runner.cursor, 0);
+        let panel_cursor = runner.panels.as_ref().unwrap()[0].cursor;
+        assert_eq!(panel_cursor, 0);
         runner.handle_input(&Button::Down, &vfs);
-        assert_eq!(runner.cursor, 1);
+        let panel_cursor = runner.panels.as_ref().unwrap()[0].cursor;
+        assert_eq!(panel_cursor, 1);
     }
 
     #[test]
     fn file_manager_enter_directory() {
         let vfs = setup_vfs();
         let mut runner = AppRunner::launch(&make_app("File Manager"), &vfs);
-        // Find the "home/" entry and navigate to it.
-        let home_idx = runner
+        // Find the "home/" entry and navigate to it via Down presses.
+        let home_idx = runner.panels.as_ref().unwrap()[0]
             .lines
             .iter()
             .position(|l| l.starts_with("home"))
             .expect("home/ should be in listing");
-        runner.cursor = home_idx;
+        for _ in 0..home_idx {
+            runner.handle_input(&Button::Down, &vfs);
+        }
         runner.handle_input(&Button::Confirm, &vfs);
         assert_eq!(runner.browse_dir.as_deref(), Some("/home"));
-        assert!(runner.lines.iter().any(|l| l.contains("user")));
+        let panel = &runner.panels.as_ref().unwrap()[0];
+        assert!(panel.lines.iter().any(|l| l.contains("user")));
     }
 
     #[test]
@@ -886,18 +1308,19 @@ mod tests {
         let vfs = setup_vfs();
         let mut runner = AppRunner::launch(&make_app("File Manager"), &vfs);
         // Enter /home first.
-        let home_idx = runner
+        let home_idx = runner.panels.as_ref().unwrap()[0]
             .lines
             .iter()
             .position(|l| l.starts_with("home"))
             .expect("home/ should be in listing");
-        runner.cursor = home_idx;
+        for _ in 0..home_idx {
+            runner.handle_input(&Button::Down, &vfs);
+        }
         runner.handle_input(&Button::Confirm, &vfs);
         assert_eq!(runner.browse_dir.as_deref(), Some("/home"));
 
-        // Now go back up via ".."
-        runner.cursor = 0; // ".." is always first line in non-root.
-        runner.handle_input(&Button::Confirm, &vfs);
+        // Now go back up via Cancel.
+        runner.handle_input(&Button::Cancel, &vfs);
         assert_eq!(runner.browse_dir.as_deref(), Some("/"));
     }
 
@@ -982,32 +1405,41 @@ mod tests {
         );
     }
 
+    /// Helper: navigate active panel cursor to a specific entry index.
+    fn navigate_panel_to(runner: &mut AppRunner, idx: usize, vfs: &dyn Vfs) {
+        // Reset cursor to 0 first (go up until we can't).
+        for _ in 0..20 {
+            runner.handle_input(&Button::Up, vfs);
+        }
+        for _ in 0..idx {
+            runner.handle_input(&Button::Down, vfs);
+        }
+    }
+
+    /// Helper: find entry index in active panel lines.
+    fn find_panel_entry(runner: &AppRunner, needle: &str) -> usize {
+        let panels = runner.panels.as_ref().unwrap();
+        let p = &panels[runner.active_panel];
+        p.lines
+            .iter()
+            .position(|l| l.contains(needle))
+            .unwrap_or_else(|| panic!("{needle} not found in panel lines"))
+    }
+
     #[test]
     fn file_manager_open_file() {
         let vfs = setup_vfs();
         let mut runner = AppRunner::launch(&make_app("File Manager"), &vfs);
-        // Navigate to /home/user.
-        let home_idx = runner
-            .lines
-            .iter()
-            .position(|l| l.starts_with("home"))
-            .unwrap();
-        runner.cursor = home_idx;
+        // Navigate to /home/user via dual panel.
+        let home_idx = find_panel_entry(&runner, "home");
+        navigate_panel_to(&mut runner, home_idx, &vfs);
         runner.handle_input(&Button::Confirm, &vfs);
-        let user_idx = runner
-            .lines
-            .iter()
-            .position(|l| l.starts_with("user"))
-            .unwrap();
-        runner.cursor = user_idx;
+        let user_idx = find_panel_entry(&runner, "user");
+        navigate_panel_to(&mut runner, user_idx, &vfs);
         runner.handle_input(&Button::Confirm, &vfs);
         // Now select readme.txt.
-        let file_idx = runner
-            .lines
-            .iter()
-            .position(|l| l.contains("readme.txt"))
-            .unwrap();
-        runner.cursor = file_idx;
+        let file_idx = find_panel_entry(&runner, "readme.txt");
+        navigate_panel_to(&mut runner, file_idx, &vfs);
         runner.handle_input(&Button::Confirm, &vfs);
         // Should be in file viewer mode.
         assert!(runner.viewing_file.is_some());
@@ -1019,33 +1451,22 @@ mod tests {
         let vfs = setup_vfs();
         let mut runner = AppRunner::launch(&make_app("File Manager"), &vfs);
         // Navigate to /home/user and open readme.txt.
-        let home_idx = runner
-            .lines
-            .iter()
-            .position(|l| l.starts_with("home"))
-            .unwrap();
-        runner.cursor = home_idx;
+        let home_idx = find_panel_entry(&runner, "home");
+        navigate_panel_to(&mut runner, home_idx, &vfs);
         runner.handle_input(&Button::Confirm, &vfs);
-        let user_idx = runner
-            .lines
-            .iter()
-            .position(|l| l.starts_with("user"))
-            .unwrap();
-        runner.cursor = user_idx;
+        let user_idx = find_panel_entry(&runner, "user");
+        navigate_panel_to(&mut runner, user_idx, &vfs);
         runner.handle_input(&Button::Confirm, &vfs);
-        let file_idx = runner
-            .lines
-            .iter()
-            .position(|l| l.contains("readme.txt"))
-            .unwrap();
-        runner.cursor = file_idx;
+        let file_idx = find_panel_entry(&runner, "readme.txt");
+        navigate_panel_to(&mut runner, file_idx, &vfs);
         runner.handle_input(&Button::Confirm, &vfs);
         assert!(runner.viewing_file.is_some());
         // Cancel should return to directory, not exit app.
         let action = runner.handle_input(&Button::Cancel, &vfs);
         assert_eq!(action, AppAction::None);
         assert!(runner.viewing_file.is_none());
-        assert!(runner.lines.iter().any(|l| l.contains("readme.txt")));
+        let panel = &runner.panels.as_ref().unwrap()[0];
+        assert!(panel.lines.iter().any(|l| l.contains("readme.txt")));
     }
 
     #[test]
@@ -1055,14 +1476,15 @@ mod tests {
         vfs.write("/home/user/data.bin", &[0x00, 0x01, 0xFF, 0xFE, 0x80])
             .unwrap();
         let mut runner = AppRunner::launch(&make_app("File Manager"), &vfs);
-        runner.browse_dir = Some("/home/user".to_string());
-        runner.lines = list_directory(&vfs, "/home/user");
-        let file_idx = runner
-            .lines
-            .iter()
-            .position(|l| l.contains("data.bin"))
-            .unwrap();
-        runner.cursor = file_idx;
+        // Navigate to /home/user via dual panel.
+        let home_idx = find_panel_entry(&runner, "home");
+        navigate_panel_to(&mut runner, home_idx, &vfs);
+        runner.handle_input(&Button::Confirm, &vfs);
+        let user_idx = find_panel_entry(&runner, "user");
+        navigate_panel_to(&mut runner, user_idx, &vfs);
+        runner.handle_input(&Button::Confirm, &vfs);
+        let file_idx = find_panel_entry(&runner, "data.bin");
+        navigate_panel_to(&mut runner, file_idx, &vfs);
         runner.handle_input(&Button::Confirm, &vfs);
         assert!(runner.viewing_file.is_some());
         // Generic viewer shows hex dump for binary.
@@ -1246,5 +1668,110 @@ mod tests {
         runner.open_file(&vfs, "/does/not/exist.txt");
         // Should not switch to viewer mode.
         assert!(runner.viewing_file.is_none());
+    }
+
+    #[test]
+    fn dual_panel_switch_active() {
+        let vfs = setup_vfs();
+        let mut runner = AppRunner::launch(&make_app("File Manager"), &vfs);
+        assert!(runner.panels.is_some());
+        assert_eq!(runner.active_panel, 0);
+
+        // Right switches to panel 1.
+        runner.handle_input(&Button::Right, &vfs);
+        assert_eq!(runner.active_panel, 1);
+
+        // Left switches back to panel 0.
+        runner.handle_input(&Button::Left, &vfs);
+        assert_eq!(runner.active_panel, 0);
+    }
+
+    #[test]
+    fn dual_panel_independent_navigation() {
+        let vfs = setup_vfs();
+        let mut runner = AppRunner::launch(&make_app("File Manager"), &vfs);
+
+        // Navigate down in left panel (panel 0).
+        runner.handle_input(&Button::Down, &vfs);
+        let left_cursor = runner.panels.as_ref().unwrap()[0].cursor;
+        assert_eq!(left_cursor, 1);
+
+        // Switch to right panel.
+        runner.handle_input(&Button::Right, &vfs);
+        assert_eq!(runner.active_panel, 1);
+
+        // Right panel cursor should still be at 0.
+        let right_cursor = runner.panels.as_ref().unwrap()[1].cursor;
+        assert_eq!(right_cursor, 0);
+
+        // Navigate down in right panel.
+        runner.handle_input(&Button::Down, &vfs);
+        let right_cursor = runner.panels.as_ref().unwrap()[1].cursor;
+        assert_eq!(right_cursor, 1);
+
+        // Left panel cursor should still be at 1.
+        let left_cursor = runner.panels.as_ref().unwrap()[0].cursor;
+        assert_eq!(left_cursor, 1);
+    }
+
+    #[test]
+    fn dual_panel_enter_directory() {
+        let vfs = setup_vfs();
+        let mut runner = AppRunner::launch(&make_app("File Manager"), &vfs);
+
+        // Find "home/" and navigate into it on left panel.
+        let home_idx = runner.panels.as_ref().unwrap()[0]
+            .lines
+            .iter()
+            .position(|l| l.starts_with("home"))
+            .expect("home/ should be in listing");
+        // Move cursor to home entry.
+        for _ in 0..home_idx {
+            runner.handle_input(&Button::Down, &vfs);
+        }
+        runner.handle_input(&Button::Confirm, &vfs);
+        assert_eq!(runner.panels.as_ref().unwrap()[0].browse_dir, "/home");
+        // Right panel should still be at root.
+        assert_eq!(runner.panels.as_ref().unwrap()[1].browse_dir, "/");
+    }
+
+    #[test]
+    fn dual_panel_sdi_objects() {
+        let vfs = setup_vfs();
+        let runner = AppRunner::launch(&make_app("File Manager"), &vfs);
+        let mut sdi = SdiRegistry::new();
+        runner.update_sdi(&mut sdi);
+        assert!(sdi.contains("app_bg"));
+        assert!(sdi.contains("app_divider"));
+        assert!(sdi.contains("app_lp_line_0"));
+        assert!(sdi.contains("app_rp_line_0"));
+        assert!(sdi.contains("app_scroll"));
+    }
+
+    #[test]
+    fn dual_panel_hide_sdi() {
+        let vfs = setup_vfs();
+        let runner = AppRunner::launch(&make_app("File Manager"), &vfs);
+        let mut sdi = SdiRegistry::new();
+        runner.update_sdi(&mut sdi);
+        AppRunner::hide_sdi(&mut sdi);
+        assert!(!sdi.get("app_bg").unwrap().visible);
+        assert!(!sdi.get("app_divider").unwrap().visible);
+        assert!(!sdi.get("app_lp_line_0").unwrap().visible);
+        assert!(!sdi.get("app_rp_line_0").unwrap().visible);
+    }
+
+    #[test]
+    fn dual_panel_not_for_music() {
+        let vfs = setup_vfs();
+        let runner = AppRunner::launch(&make_app("Music Player"), &vfs);
+        assert!(runner.panels.is_none());
+    }
+
+    #[test]
+    fn dual_panel_not_for_settings() {
+        let vfs = setup_vfs();
+        let runner = AppRunner::launch(&make_app("Settings"), &vfs);
+        assert!(runner.panels.is_none());
     }
 }

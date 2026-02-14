@@ -45,6 +45,7 @@ pub fn execute_command(cmd: &str, config: &mut psp::config::Config) -> Vec<Strin
             String::from("  config K=V - Set/get persistent config"),
             String::from("  play PATH  - Play MP3 file"),
             String::from("  pause/resume/stop - Audio control"),
+            String::from("  umd        - UMD disc info"),
             String::from("  save/load  - Terminal history"),
             String::from("  clear      - Clear terminal"),
             String::new(),
@@ -149,6 +150,7 @@ pub fn execute_command(cmd: &str, config: &mut psp::config::Config) -> Vec<Strin
         "date" => cmd_date(),
         "mem" => cmd_mem(),
         _ if trimmed.starts_with("config ") => cmd_config(trimmed, config),
+        "umd" | "umdinfo" => cmd_umd(),
         "version" => vec![String::from("OASIS_OS v0.1.0")],
         "about" => vec![
             String::from("OASIS_OS -- Embeddable OS Framework"),
@@ -291,6 +293,56 @@ fn cmd_mem() -> Vec<String> {
     let max_block = unsafe { psp::sys::sceKernelMaxFreeMemSize() };
     out.push(format!("Free RAM: {} KB", free / 1024));
     out.push(format!("Largest block: {} KB", max_block / 1024));
+    out
+}
+
+fn cmd_umd() -> Vec<String> {
+    let mut out = Vec::new();
+    // SAFETY: PSP UMD syscalls with no side effects.
+    unsafe {
+        let present = psp::sys::sceUmdCheckMedium() != 0;
+        out.push(format!(
+            "Disc: {}",
+            if present { "inserted" } else { "not present" }
+        ));
+
+        let state = psp::sys::sceUmdGetDriveStat();
+        let flags = psp::sys::UmdStateFlags::from_bits_truncate(state);
+        let mut state_parts = Vec::new();
+        if flags.contains(psp::sys::UmdStateFlags::READY) {
+            state_parts.push("READY");
+        }
+        if flags.contains(psp::sys::UmdStateFlags::INITED) {
+            state_parts.push("INITED");
+        }
+        if flags.contains(psp::sys::UmdStateFlags::INITING) {
+            state_parts.push("INITING");
+        }
+        if flags.contains(psp::sys::UmdStateFlags::NOT_PRESENT) {
+            state_parts.push("NOT_PRESENT");
+        }
+        if state_parts.is_empty() {
+            out.push(format!("Drive state: 0x{:02x}", state));
+        } else {
+            out.push(format!("Drive state: {}", state_parts.join(" | ")));
+        }
+
+        if present {
+            let mut info = psp::sys::UmdInfo {
+                size: core::mem::size_of::<psp::sys::UmdInfo>() as u32,
+                type_: psp::sys::UmdType::Game,
+            };
+            let ret = psp::sys::sceUmdGetDiscInfo(&mut info);
+            if ret >= 0 {
+                let type_name = match info.type_ {
+                    psp::sys::UmdType::Game => "Game",
+                    psp::sys::UmdType::Video => "Video",
+                    psp::sys::UmdType::Audio => "Audio",
+                };
+                out.push(format!("Disc type: {}", type_name));
+            }
+        }
+    }
     out
 }
 

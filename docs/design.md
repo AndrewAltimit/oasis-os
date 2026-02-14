@@ -3,7 +3,7 @@
 ## An Embeddable Operating System Framework in Rust
 
 **Technical Design Document**
-Version 2.3 -- February 2026
+Version 2.4 -- February 2026
 Author: Andrew
 Classification: Personal Project -- Open Source
 
@@ -93,35 +93,33 @@ The project is organized as a Cargo workspace under `packages/oasis_os/`, follow
 The rust-psp SDK is an external dependency hosted at [github.com/AndrewAltimit/rust-psp](https://github.com/AndrewAltimit/rust-psp) and referenced as a git dependency. The PSP backend crate is excluded from the workspace because it requires the `mipsel-sony-psp` target and is built separately with `cargo psp`.
 
 ```
-packages/oasis_os/
-+-- Cargo.toml                     # Workspace root (resolver="2", edition 2024)
+oasis-os/
++-- Cargo.toml                      # Workspace root (resolver="2", edition 2024, 16 members)
 +-- crates/
-|   +-- oasis-core/                 # Platform-agnostic framework (requires std)
-|   |   +-- src/
-|   |       +-- sdi/               # Scene graph: named registry, z-order, alpha, layout, theming
-|   |       +-- terminal/          # Command interpreter, command trait, registry, remote listener
-|   |       +-- vfs/               # Virtual file system: trait-based I/O
-|   |       +-- dashboard/         # Application grid discovery and state
-|   |       +-- skin/              # Skin loading and management
-|   |       +-- wm/                # Window manager: lifecycle, drag/resize, hit testing, clipping
-|   |       +-- plugin/            # Plugin loading interface, lifecycle, host API
-|   |       +-- agent/             # Agent terminal integration
-|   |       +-- audio/             # Audio subsystem with playlist support
-|   |       +-- apps/              # Application launcher and runner
-|   |       +-- platform/          # Platform services (time, power, USB)
-|   |       +-- (and more modules: bottombar, statusbar, cursor, osk, pbp, theme, wallpaper, ...)
-|   +-- oasis-backend-sdl/          # SDL2 rendering and input (desktop dev + Raspberry Pi)
-|   +-- oasis-backend-ue5/          # UE5 render target, software RGBA framebuffer, FFI input queue
-|   +-- oasis-backend-psp/          # [EXCLUDED] GU hardware rendering, PSP controller input (std via rust-psp)
-|   +-- oasis-ffi/                  # C FFI boundary for UE5: exported functions, opaque handles
-|   +-- oasis-app/                  # Binary entry points: desktop app + screenshot tool
+|   +-- oasis-types/                 # Foundation types: Color, Button, InputEvent, backend traits, errors
+|   +-- oasis-vfs/                   # Virtual file system: MemoryVfs, RealVfs, GameAssetVfs
+|   +-- oasis-platform/              # Platform service traits: Power, Time, USB, Network, OSK
+|   +-- oasis-sdi/                   # Scene graph: named registry, z-order, alpha, layout, theming
+|   +-- oasis-net/                   # TCP networking, PSK auth, remote terminal, FTP transfer
+|   +-- oasis-audio/                 # Audio manager, playlist, shuffle/repeat, MP3 ID3 parsing
+|   +-- oasis-ui/                    # 15+ widgets: Button, Card, TabBar, ListView, flex layout
+|   +-- oasis-wm/                    # Window manager: lifecycle, drag/resize, hit testing, clipping
+|   +-- oasis-skin/                  # TOML skin engine, 8 skins, theme derivation from 9 base colors
+|   +-- oasis-terminal/              # 80+ commands across 14 modules, shell features
+|   +-- oasis-browser/               # HTML/CSS/Gemini: DOM, CSS cascade, block/inline/table layout
+|   +-- oasis-core/                  # Coordination: apps (dual-panel FM), dashboard, agent, plugin, script
+|   +-- oasis-backend-sdl/           # SDL2 rendering and input (desktop dev + Raspberry Pi)
+|   +-- oasis-backend-ue5/           # UE5 render target, software RGBA framebuffer, FFI input queue
+|   +-- oasis-backend-psp/           # [excluded from workspace] sceGu rendering, PSP controller, UMD browsing
+|   +-- oasis-ffi/                   # C FFI boundary for UE5: exported functions, opaque handles
+|   +-- oasis-app/                   # Binary entry points: desktop app + screenshot tool
 +-- skins/
-|   +-- classic/                    # Icon grid dashboard, status bar, PSIX-style chrome
-|   +-- xp/                         # Windows XP Luna-inspired blue theme with start menu
+|   +-- classic/                     # Icon grid dashboard, status bar, PSIX-style chrome
+|   +-- xp/                          # Windows XP Luna-inspired blue theme with start menu
 +-- docs/
-|   +-- design.md                   # This document
-|   +-- skin-authoring.md           # Skin creation guide with full TOML reference
-|   +-- psp-modernization-plan.md   # PSP backend modernization roadmap (9 phases, 40 steps)
+|   +-- design.md                    # This document
+|   +-- skin-authoring.md            # Skin creation guide with full TOML reference
+|   +-- psp-modernization-plan.md    # PSP backend modernization roadmap (9 phases, 40 steps)
 ```
 
 **External dependencies:**
@@ -155,6 +153,17 @@ packages/oasis_os/
 [workspace]
 resolver = "2"
 members = [
+    "crates/oasis-types",
+    "crates/oasis-vfs",
+    "crates/oasis-platform",
+    "crates/oasis-sdi",
+    "crates/oasis-net",
+    "crates/oasis-audio",
+    "crates/oasis-ui",
+    "crates/oasis-wm",
+    "crates/oasis-skin",
+    "crates/oasis-terminal",
+    "crates/oasis-browser",
     "crates/oasis-core",
     "crates/oasis-backend-sdl",
     "crates/oasis-backend-ue5",
@@ -195,7 +204,23 @@ sdl2 = "0.37"
 # Image encoding (screenshots)
 png = "0.17"
 
-# Internal crates
+# TLS (desktop -- feature-gated in oasis-core)
+rustls = { version = "0.23", default-features = false, features = ["ring", "logging", "std", "tls12"] }
+webpki-roots = "1.0"
+rustls-pki-types = "1"
+
+# Internal crates (all 12 library crates)
+oasis-types = { path = "crates/oasis-types" }
+oasis-vfs = { path = "crates/oasis-vfs" }
+oasis-platform = { path = "crates/oasis-platform" }
+oasis-sdi = { path = "crates/oasis-sdi" }
+oasis-net = { path = "crates/oasis-net" }
+oasis-audio = { path = "crates/oasis-audio" }
+oasis-ui = { path = "crates/oasis-ui" }
+oasis-wm = { path = "crates/oasis-wm" }
+oasis-skin = { path = "crates/oasis-skin" }
+oasis-terminal = { path = "crates/oasis-terminal" }
+oasis-browser = { path = "crates/oasis-browser" }
 oasis-core = { path = "crates/oasis-core" }
 oasis-backend-ue5 = { path = "crates/oasis-backend-ue5" }
 
@@ -270,20 +295,26 @@ SDI is deliberately simple. It is not a DOM, not a layout engine, and not a reta
 
 ### 4.2 Command Interpreter
 
-The command interpreter is a registry-based dispatch system. Commands implement a `Command` trait with an `execute()` method returning structured output. Skins control which commands are registered -- a terminal skin exposes everything, a locked-down kiosk skin exposes only approved commands, a corrupted skin registers broken versions of standard commands that produce garbled output. The agent-terminal skin adds commands for remote agent interaction (see Section 11).
+The command interpreter is a registry-based dispatch system in the `oasis-terminal` crate. Commands implement a `Command` trait with an `execute()` method returning structured output. The interpreter includes full shell features: variable expansion (`$VAR`, `${VAR}`), glob expansion, aliases, history (`!!`, `!n`), piping, and command chaining. Skins control which commands are registered -- a terminal skin exposes everything, a locked-down kiosk skin exposes only approved commands, a corrupted skin registers broken versions of standard commands that produce garbled output. The agent-terminal skin adds commands for remote agent interaction (see Section 11).
 
-| Command Category | Examples | Description |
-|-----------------|----------|-------------|
-| System | status, power, clock, memory, threads | Hardware/host queries and system state |
-| File | ls, cd, cp, mv, rm, cat, find | Virtual file system operations |
-| Network | ifconfig, ping, netstat, scan | Network status and diagnostics (where available) |
-| Dashboard | apps, launch \<n\>, kill, refresh | Application management (skin-dependent) |
-| Settings | theme, brightness, volume, wifi | Device/instance configuration |
-| Plugin | plugin list, plugin load \<n\>, plugin unload | Plugin lifecycle management |
-| Script | run \<script\>, cron, startup | Script execution and scheduling |
-| Transfer | ftp start, http start, push, pull | File transfer services (real-network platforms only) |
-| Game | query, trade, deck, inbox | Game-specific commands (UE5 skin only) |
-| Agent | agent list, agent status, remote \<host\>, mcp \<tool\> | AI agent interaction (agent-terminal and terminal skins) |
+80+ commands across 14 modules:
+
+| Command Module | Examples | Description |
+|----------------|----------|-------------|
+| Core (21) | ls, cd, pwd, cat, cp, mv, rm, mkdir, touch, find, echo, clear, status, power, clock, memory, usb, listen, remote, hosts | File system operations, system queries, remote terminal |
+| Text Processing (10) | head, tail, wc, grep, sort, uniq, tee, tr, cut, diff | Text filtering and transformation |
+| File Utilities (7) | write, append, tree, du, stat, xxd, checksum | File creation, disk usage, hex dump, hashing |
+| System (6) | uptime, hostname, uname, whoami, date, sleep | System information and timing |
+| Dev Tools (7) | base64, json, uuid, seq, expr, test, xargs | Encoding, parsing, testing, scripting utilities |
+| Fun/Utility (7) | cal, fortune, banner, matrix, yes, watch, time | Calendars, ASCII art, command timing |
+| Security (4) | chmod, chown, passwd, audit | Permission management and auditing |
+| Documentation (3) | man, tutorial, motd | Manual pages, tutorials, message of the day |
+| Network (3) | wifi, ping, http | WiFi control, connectivity, HTTP requests |
+| Audio (1) | music | Playlist control, playback, volume |
+| Skin (1) | skin | Skin switching and listing |
+| UI (5) | screenshot, sdi, theme, notify, wm | UI inspection, notifications, window management |
+| Shell Built-ins (9) | help, run, history, set, unset, env, alias, unalias, which | Shell introspection and configuration |
+| Registered by oasis-core | agent, plugin, script, transfer, update | Agent/MCP, plugin management, scripting, FTP, updates |
 
 ### 4.3 Input Pipeline
 
@@ -1172,17 +1203,18 @@ Plugins interact with OASIS_OS through a stable, versioned API providing access 
 
 ### 16.2 CI Pipeline Integration
 
-OASIS_OS integrates with the existing CI system via Docker-based execution (container-first philosophy):
+OASIS_OS uses Docker-based CI execution (container-first philosophy). All CI stages run automatically on push to `main` and on pull requests via GitHub Actions:
 
 ```bash
-# Docker-based execution (current approach)
-docker compose run --rm -w /app/packages/oasis_os rust-ci cargo fmt --check --all
-docker compose run --rm -w /app/packages/oasis_os rust-ci cargo clippy --workspace -- -D warnings
-docker compose run --rm -w /app/packages/oasis_os rust-ci cargo test --workspace
-docker compose run --rm -w /app/packages/oasis_os rust-ci cargo build --release --workspace
+# Docker-based execution
+docker compose --profile ci run --rm rust-ci cargo fmt --all -- --check
+docker compose --profile ci run --rm rust-ci cargo clippy --workspace -- -D warnings
+docker compose --profile ci run --rm rust-ci cargo test --workspace
+docker compose --profile ci run --rm rust-ci cargo build --workspace --release
+docker compose --profile ci run --rm rust-ci cargo deny check
 ```
 
-> **Status:** Dedicated `oasis-*` CI stages (e.g., `automation-cli ci run oasis-full`) are planned but not yet registered in `automation-cli` or `run-ci.sh`. Currently, CI checks for the oasis_os workspace are run manually via the Docker commands above. The PSP backend is built separately on the host with `cargo +nightly psp --release` (requires the nightly toolchain and `cargo-psp`).
+The CI pipeline also includes PSP EBOOT build, PPSSPP headless testing, AI code review (Gemini + Codex), and automated fix agents.
 
 **Planned CI stages** (to be added to `automation-cli`):
 
