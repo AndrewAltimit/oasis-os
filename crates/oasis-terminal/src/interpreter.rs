@@ -1424,10 +1424,16 @@ fn expand_one_glob(pattern: &str, vfs: &mut dyn Vfs, cwd: &str) -> Vec<String> {
 fn glob_match(pattern: &str, text: &str) -> bool {
     let p: Vec<char> = pattern.chars().collect();
     let t: Vec<char> = text.chars().collect();
-    glob_match_inner(&p, &t, 0, 0)
+    glob_match_inner(&p, &t, 0, 0, 0)
 }
 
-fn glob_match_inner(p: &[char], t: &[char], pi: usize, ti: usize) -> bool {
+/// Maximum recursion depth for glob matching to prevent stack overflow.
+const GLOB_MAX_DEPTH: usize = 256;
+
+fn glob_match_inner(p: &[char], t: &[char], pi: usize, ti: usize, depth: usize) -> bool {
+    if depth >= GLOB_MAX_DEPTH {
+        return false;
+    }
     if pi == p.len() && ti == t.len() {
         return true;
     }
@@ -1437,13 +1443,13 @@ fn glob_match_inner(p: &[char], t: &[char], pi: usize, ti: usize) -> bool {
     if p[pi] == '*' {
         // Try matching zero or more chars.
         for skip in 0..=(t.len() - ti) {
-            if glob_match_inner(p, t, pi + 1, ti + skip) {
+            if glob_match_inner(p, t, pi + 1, ti + skip, depth + 1) {
                 return true;
             }
         }
         false
     } else if ti < t.len() && (p[pi] == '?' || p[pi] == t[ti]) {
-        glob_match_inner(p, t, pi + 1, ti + 1)
+        glob_match_inner(p, t, pi + 1, ti + 1, depth + 1)
     } else {
         false
     }

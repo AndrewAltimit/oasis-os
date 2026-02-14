@@ -66,7 +66,7 @@ impl Command for DfCmd {
     }
     fn execute(&self, _args: &[&str], env: &mut Environment<'_>) -> Result<CommandOutput> {
         // Count entries recursively to approximate usage.
-        let (dirs, files, total_bytes) = count_vfs_recursive(env, "/")?;
+        let (dirs, files, total_bytes) = count_vfs_recursive(env, "/", 0)?;
         let mut lines = Vec::new();
         lines.push("Filesystem      Files  Dirs  Size".to_string());
         lines.push(format!(
@@ -76,7 +76,17 @@ impl Command for DfCmd {
     }
 }
 
-fn count_vfs_recursive(env: &mut Environment<'_>, dir: &str) -> Result<(u32, u32, u64)> {
+/// Maximum recursion depth for VFS traversal to prevent stack overflow.
+const MAX_DEPTH: usize = 64;
+
+fn count_vfs_recursive(
+    env: &mut Environment<'_>,
+    dir: &str,
+    depth: usize,
+) -> Result<(u32, u32, u64)> {
+    if depth >= MAX_DEPTH {
+        return Ok((0, 0, 0));
+    }
     let entries = env.vfs.readdir(dir)?;
     let mut dirs = 0u32;
     let mut files = 0u32;
@@ -89,7 +99,7 @@ fn count_vfs_recursive(env: &mut Environment<'_>, dir: &str) -> Result<(u32, u32
         };
         if entry.kind == oasis_vfs::EntryKind::Directory {
             dirs += 1;
-            let (d, f, b) = count_vfs_recursive(env, &path)?;
+            let (d, f, b) = count_vfs_recursive(env, &path, depth + 1)?;
             dirs += d;
             files += f;
             bytes += b;
