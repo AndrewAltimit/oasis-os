@@ -816,17 +816,25 @@ fn psp_main() {
                                     // SAFETY: PSP UMD syscalls with valid args.
                                     unsafe {
                                         if psp::sys::sceUmdCheckMedium() != 0 {
-                                            psp::sys::sceUmdActivate(
+                                            let act_ret = psp::sys::sceUmdActivate(
                                                 1,
                                                 b"disc0:\0".as_ptr(),
                                             );
-                                            let _ =
+                                            let wait_ret =
                                                 psp::sys::sceUmdWaitDriveStatWithTimer(
                                                     psp::sys::UmdStateFlags::READY,
                                                     5_000_000,
                                                 );
-                                            fm_path = String::from("disc0:/");
-                                            umd_activated = true;
+                                            if act_ret >= 0 && wait_ret >= 0 {
+                                                fm_path = String::from("disc0:/");
+                                                umd_activated = true;
+                                            } else {
+                                                term_lines.push(
+                                                    "UMD activation failed."
+                                                        .into(),
+                                                );
+                                                fm_path = String::from("ms0:/");
+                                            }
                                         } else {
                                             term_lines
                                                 .push("No UMD disc inserted.".into());
