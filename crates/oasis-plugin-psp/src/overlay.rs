@@ -230,24 +230,9 @@ unsafe fn execute_menu_action(item: u8) {
     }
 }
 
-/// Cycle CPU clock between 333/266/222 MHz.
+/// Cycle CPU clock (stub -- scePower imports removed).
 fn cycle_cpu_clock() {
-    // SAFETY: Power syscalls.
-    let current = unsafe { psp::sys::scePowerGetCpuClockFrequency() };
-    let (cpu, bus) = match current {
-        333 => (266, 133),
-        266 => (222, 111),
-        _ => (333, 166),
-    };
-    // SAFETY: Setting CPU/bus frequency.
-    unsafe {
-        psp::sys::scePowerSetClockFrequency(cpu, cpu, bus);
-    }
-    show_osd(match cpu {
-        333 => b"CPU: 333 MHz (max)",
-        266 => b"CPU: 266 MHz (balanced)",
-        _ => b"CPU: 222 MHz (power save)",
-    });
+    show_osd(b"CPU clock: not available");
 }
 
 /// Draw the full menu overlay.
@@ -300,72 +285,28 @@ unsafe fn draw_menu(fb: *mut u32, stride: u32) {
     }
 }
 
-/// Draw the status line (battery, CPU, time).
+/// Draw the status line (static text -- power/RTC imports removed).
 ///
 /// # Safety
 /// `fb` must be valid.
 unsafe fn draw_status_line(fb: *mut u32, stride: u32) {
-    let mut buf = [0u8; 64];
-    let mut pos = 0usize;
-
-    // Battery
-    // SAFETY: Power syscalls, no side effects.
-    let bat = unsafe { psp::sys::scePowerGetBatteryLifePercent() };
-    let charging = unsafe { psp::sys::scePowerIsBatteryCharging() } != 0;
-    pos = write_str(&mut buf, pos, b"Bat:");
-    pos = write_u32(&mut buf, pos, bat as u32);
-    pos = write_str(&mut buf, pos, b"%");
-    if charging {
-        pos = write_str(&mut buf, pos, b"+");
-    }
-    pos = write_str(&mut buf, pos, b"  CPU:");
-
-    // CPU clock
-    let cpu = unsafe { psp::sys::scePowerGetCpuClockFrequency() };
-    pos = write_u32(&mut buf, pos, cpu as u32);
-    pos = write_str(&mut buf, pos, b"MHz  ");
-
-    // Time
-    // SAFETY: ScePspDateTime is repr(C), zeroed is valid.
-    let mut dt = unsafe { core::mem::zeroed::<psp::sys::ScePspDateTime>() };
-    if unsafe { psp::sys::sceRtcGetCurrentClockLocalTime(&mut dt) } >= 0 {
-        pos = write_u32_pad2(&mut buf, pos, dt.hour as u32);
-        pos = write_str(&mut buf, pos, b":");
-        pos = write_u32_pad2(&mut buf, pos, dt.minutes as u32);
-    }
-
-    // SAFETY: buf is valid, render functions check bounds.
+    // SAFETY: render functions check bounds.
     unsafe {
-        render::draw_string(fb, stride, OVERLAY_X + 8, STATUS_Y, &buf[..pos], colors::GREEN);
+        render::draw_string(
+            fb, stride,
+            OVERLAY_X + 8, STATUS_Y,
+            b"OASIS Plugin v0.1",
+            colors::GREEN,
+        );
     }
 }
 
-/// Draw the now-playing track name.
+/// Draw the now-playing track name (stub).
 ///
 /// # Safety
 /// `fb` must be valid.
-unsafe fn draw_now_playing(fb: *mut u32, stride: u32) {
-    let track = audio::current_track_name();
-    if track[0] != 0 {
-        let mut buf = [0u8; 56];
-        let mut pos = write_str(&mut buf, 0, b"Now: ");
-        // Copy track name (truncated)
-        let mut i = 0;
-        while i < track.len() && track[i] != 0 && pos < buf.len() - 1 {
-            buf[pos] = track[i];
-            pos += 1;
-            i += 1;
-        }
-        // SAFETY: render functions check bounds.
-        unsafe {
-            render::draw_string(
-                fb, stride,
-                OVERLAY_X + 8, STATUS_Y + 16,
-                &buf[..pos],
-                colors::YELLOW,
-            );
-        }
-    }
+unsafe fn draw_now_playing(_fb: *mut u32, _stride: u32) {
+    // No-op: audio module is stubbed out.
 }
 
 /// Write a byte string into a buffer. Returns new position.
