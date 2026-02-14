@@ -31,6 +31,10 @@ impl Command for BrowseCmd {
          browse back | browse forward | browse reader | browse sandbox <url>"
     }
 
+    fn category(&self) -> &str {
+        "browser"
+    }
+
     fn execute(&self, args: &[&str], _env: &mut Environment<'_>) -> Result<CommandOutput> {
         if args.is_empty() {
             return Ok(CommandOutput::Text(
@@ -92,6 +96,10 @@ impl Command for FetchCmd {
 
     fn usage(&self) -> &str {
         "fetch <url> | fetch headers <url>"
+    }
+
+    fn category(&self) -> &str {
+        "browser"
     }
 
     fn execute(&self, args: &[&str], env: &mut Environment<'_>) -> Result<CommandOutput> {
@@ -259,6 +267,10 @@ impl Command for GeminiCmd {
         "gemini <url>"
     }
 
+    fn category(&self) -> &str {
+        "browser"
+    }
+
     fn execute(&self, args: &[&str], _env: &mut Environment<'_>) -> Result<CommandOutput> {
         if args.is_empty() {
             return Ok(CommandOutput::Text(
@@ -300,6 +312,10 @@ impl Command for CurlCmd {
         "curl <url>"
     }
 
+    fn category(&self) -> &str {
+        "browser"
+    }
+
     fn execute(&self, args: &[&str], env: &mut Environment<'_>) -> Result<CommandOutput> {
         FetchCmd.execute(args, env)
     }
@@ -321,6 +337,10 @@ impl Command for SandboxCmd {
 
     fn usage(&self) -> &str {
         "sandbox on | sandbox off"
+    }
+
+    fn category(&self) -> &str {
+        "browser"
     }
 
     fn execute(&self, args: &[&str], _env: &mut Environment<'_>) -> Result<CommandOutput> {
@@ -358,6 +378,7 @@ mod tests {
             usb: None,
             network: None,
             tls: None,
+            stdin: None,
         };
         reg.execute(line, &mut env)
     }

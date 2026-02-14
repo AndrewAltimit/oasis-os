@@ -47,6 +47,22 @@ pub fn register_builtins(reg: &mut CommandRegistry) {
     crate::register_audio_commands(reg);
     // Skin switching commands.
     crate::register_skin_commands(reg);
+    // Text processing commands.
+    crate::register_text_commands(reg);
+    // File utility commands.
+    crate::register_file_commands(reg);
+    // System commands.
+    crate::register_system_commands(reg);
+    // Developer tool commands.
+    crate::register_dev_commands(reg);
+    // Fun/utility commands.
+    crate::register_fun_commands(reg);
+    // UI control commands.
+    crate::register_ui_commands(reg);
+    // Security commands.
+    crate::register_security_commands(reg);
+    // Documentation commands (man, tutorial, motd).
+    crate::register_doc_commands(reg);
 }
 
 // ---------------------------------------------------------------------------
@@ -89,6 +105,9 @@ impl Command for LsCmd {
     fn usage(&self) -> &str {
         "ls [path]"
     }
+    fn category(&self) -> &str {
+        "filesystem"
+    }
     fn execute(&self, args: &[&str], env: &mut Environment<'_>) -> Result<CommandOutput> {
         let path = if args.is_empty() {
             env.cwd.clone()
@@ -127,6 +146,9 @@ impl Command for CdCmd {
     fn usage(&self) -> &str {
         "cd <path>"
     }
+    fn category(&self) -> &str {
+        "filesystem"
+    }
     fn execute(&self, args: &[&str], env: &mut Environment<'_>) -> Result<CommandOutput> {
         let target = if args.is_empty() {
             "/".to_string()
@@ -158,6 +180,9 @@ impl Command for PwdCmd {
     fn usage(&self) -> &str {
         "pwd"
     }
+    fn category(&self) -> &str {
+        "filesystem"
+    }
     fn execute(&self, _args: &[&str], env: &mut Environment<'_>) -> Result<CommandOutput> {
         Ok(CommandOutput::Text(env.cwd.clone()))
     }
@@ -177,6 +202,9 @@ impl Command for CatCmd {
     }
     fn usage(&self) -> &str {
         "cat <file>"
+    }
+    fn category(&self) -> &str {
+        "filesystem"
     }
     fn execute(&self, args: &[&str], env: &mut Environment<'_>) -> Result<CommandOutput> {
         if args.is_empty() {
@@ -211,6 +239,9 @@ impl Command for MkdirCmd {
     fn usage(&self) -> &str {
         "mkdir <path>"
     }
+    fn category(&self) -> &str {
+        "filesystem"
+    }
     fn execute(&self, args: &[&str], env: &mut Environment<'_>) -> Result<CommandOutput> {
         if args.is_empty() {
             return Err(OasisError::Command("usage: mkdir <path>".to_string()));
@@ -235,6 +266,9 @@ impl Command for RmCmd {
     }
     fn usage(&self) -> &str {
         "rm <path>"
+    }
+    fn category(&self) -> &str {
+        "filesystem"
     }
     fn execute(&self, args: &[&str], env: &mut Environment<'_>) -> Result<CommandOutput> {
         if args.is_empty() {
@@ -329,6 +363,9 @@ impl Command for TouchCmd {
     fn usage(&self) -> &str {
         "touch <file>"
     }
+    fn category(&self) -> &str {
+        "filesystem"
+    }
     fn execute(&self, args: &[&str], env: &mut Environment<'_>) -> Result<CommandOutput> {
         if args.is_empty() {
             return Err(OasisError::Command("usage: touch <file>".to_string()));
@@ -355,6 +392,9 @@ impl Command for CpCmd {
     }
     fn usage(&self) -> &str {
         "cp <src> <dst>"
+    }
+    fn category(&self) -> &str {
+        "filesystem"
     }
     fn execute(&self, args: &[&str], env: &mut Environment<'_>) -> Result<CommandOutput> {
         if args.len() < 2 {
@@ -390,6 +430,9 @@ impl Command for MvCmd {
     fn usage(&self) -> &str {
         "mv <src> <dst>"
     }
+    fn category(&self) -> &str {
+        "filesystem"
+    }
     fn execute(&self, args: &[&str], env: &mut Environment<'_>) -> Result<CommandOutput> {
         if args.len() < 2 {
             return Err(OasisError::Command("usage: mv <src> <dst>".to_string()));
@@ -424,6 +467,9 @@ impl Command for FindCmd {
     }
     fn usage(&self) -> &str {
         "find [path] <pattern>"
+    }
+    fn category(&self) -> &str {
+        "filesystem"
     }
     fn execute(&self, args: &[&str], env: &mut Environment<'_>) -> Result<CommandOutput> {
         let (root, pattern) = match args.len() {
@@ -484,6 +530,9 @@ impl Command for PowerCmd {
     fn usage(&self) -> &str {
         "power"
     }
+    fn category(&self) -> &str {
+        "system"
+    }
     fn execute(&self, _args: &[&str], env: &mut Environment<'_>) -> Result<CommandOutput> {
         let Some(power) = env.power else {
             return Ok(CommandOutput::Text(
@@ -525,6 +574,9 @@ impl Command for ClockCmd {
     fn usage(&self) -> &str {
         "clock"
     }
+    fn category(&self) -> &str {
+        "system"
+    }
     fn execute(&self, _args: &[&str], env: &mut Environment<'_>) -> Result<CommandOutput> {
         let Some(time) = env.time else {
             return Ok(CommandOutput::Text(
@@ -557,6 +609,9 @@ impl Command for MemoryCmd {
     }
     fn usage(&self) -> &str {
         "memory"
+    }
+    fn category(&self) -> &str {
+        "system"
     }
     fn execute(&self, _args: &[&str], _env: &mut Environment<'_>) -> Result<CommandOutput> {
         // On desktop/Pi, report process RSS if /proc/self/status is readable.
@@ -596,6 +651,9 @@ impl Command for UsbCmd {
     fn usage(&self) -> &str {
         "usb"
     }
+    fn category(&self) -> &str {
+        "system"
+    }
     fn execute(&self, _args: &[&str], env: &mut Environment<'_>) -> Result<CommandOutput> {
         let Some(usb) = env.usb else {
             return Ok(CommandOutput::Text(
@@ -621,6 +679,9 @@ impl Command for ListenCmd {
     }
     fn usage(&self) -> &str {
         "listen [port|stop]"
+    }
+    fn category(&self) -> &str {
+        "network"
     }
     fn execute(&self, args: &[&str], _env: &mut Environment<'_>) -> Result<CommandOutput> {
         if args.is_empty() {
@@ -650,6 +711,9 @@ impl Command for RemoteCmd {
     }
     fn usage(&self) -> &str {
         "remote <host|addr:port>"
+    }
+    fn category(&self) -> &str {
+        "network"
     }
     fn execute(&self, args: &[&str], env: &mut Environment<'_>) -> Result<CommandOutput> {
         if args.is_empty() {
@@ -709,6 +773,9 @@ impl Command for HostsCmd {
     fn usage(&self) -> &str {
         "hosts"
     }
+    fn category(&self) -> &str {
+        "network"
+    }
     fn execute(&self, _args: &[&str], env: &mut Environment<'_>) -> Result<CommandOutput> {
         let hosts_path = "/etc/hosts.toml";
         if !env.vfs.exists(hosts_path) {
@@ -736,40 +803,8 @@ impl Command for HostsCmd {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Path resolution helper
-// ---------------------------------------------------------------------------
-
-/// Resolve a possibly-relative path against the current working directory.
-/// Absolute paths (starting with `/`) are returned as-is. Relative paths are
-/// joined to `cwd`. `..` and `.` components are resolved.
-fn resolve_path(cwd: &str, input: &str) -> String {
-    let raw = if input.starts_with('/') {
-        input.to_string()
-    } else if cwd == "/" {
-        format!("/{input}")
-    } else {
-        format!("{cwd}/{input}")
-    };
-
-    // Resolve `.` and `..` components.
-    let mut parts: Vec<&str> = Vec::new();
-    for component in raw.split('/') {
-        match component {
-            "" | "." => {},
-            ".." => {
-                parts.pop();
-            },
-            other => parts.push(other),
-        }
-    }
-
-    if parts.is_empty() {
-        "/".to_string()
-    } else {
-        format!("/{}", parts.join("/"))
-    }
-}
+// Use the path resolver from the interpreter module.
+use crate::interpreter::resolve_path;
 
 #[cfg(test)]
 mod tests {
@@ -801,6 +836,7 @@ mod tests {
 
             network: None,
             tls: None,
+            stdin: None,
         };
         let result = reg.execute(line, &mut env);
         *cwd = env.cwd;
@@ -937,26 +973,6 @@ mod tests {
         assert_eq!(vfs.read("/tmp/new.txt").unwrap(), b"");
     }
 
-    #[test]
-    fn resolve_path_absolute() {
-        assert_eq!(resolve_path("/any", "/foo/bar"), "/foo/bar");
-    }
-
-    #[test]
-    fn resolve_path_relative() {
-        assert_eq!(resolve_path("/home", "user"), "/home/user");
-    }
-
-    #[test]
-    fn resolve_path_dotdot() {
-        assert_eq!(resolve_path("/a/b/c", "../../x"), "/a/x");
-    }
-
-    #[test]
-    fn resolve_path_root_relative() {
-        assert_eq!(resolve_path("/", "foo"), "/foo");
-    }
-
     // --- Phase 4: file browser commands ---
 
     #[test]
@@ -1058,6 +1074,7 @@ mod tests {
 
             network: None,
             tls: None,
+            stdin: None,
         };
         match reg.execute("power", &mut env).unwrap() {
             CommandOutput::Text(s) => assert!(s.contains("NoBattery")),
@@ -1088,6 +1105,7 @@ mod tests {
 
             network: None,
             tls: None,
+            stdin: None,
         };
         match reg.execute("clock", &mut env).unwrap() {
             CommandOutput::Text(s) => {
@@ -1131,6 +1149,7 @@ mod tests {
 
             network: None,
             tls: None,
+            stdin: None,
         };
         match reg.execute("usb", &mut env).unwrap() {
             CommandOutput::Text(s) => assert!(s.contains("unsupported")),

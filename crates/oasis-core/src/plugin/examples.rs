@@ -50,6 +50,9 @@ impl Command for HelloCmd {
     fn usage(&self) -> &str {
         "hello [name]"
     }
+    fn category(&self) -> &str {
+        "plugin"
+    }
     fn execute(&self, args: &[&str], _env: &mut Environment<'_>) -> Result<CommandOutput> {
         let name = if args.is_empty() { "World" } else { args[0] };
         Ok(CommandOutput::Text(format!("Hello, {name}!")))
@@ -141,6 +144,9 @@ impl Command for PclockCmd {
     fn usage(&self) -> &str {
         "pclock [show|hide]"
     }
+    fn category(&self) -> &str {
+        "plugin"
+    }
     fn execute(&self, args: &[&str], _env: &mut Environment<'_>) -> Result<CommandOutput> {
         let subcmd = args.first().copied().unwrap_or("status");
         match subcmd {
@@ -203,6 +209,9 @@ impl Command for NoteCmd {
     }
     fn usage(&self) -> &str {
         "note [list|read <name>|write <name> <text>]"
+    }
+    fn category(&self) -> &str {
+        "plugin"
     }
     fn execute(&self, args: &[&str], env: &mut Environment<'_>) -> Result<CommandOutput> {
         let subcmd = args.first().copied().unwrap_or("list");
@@ -298,6 +307,7 @@ mod tests {
 
             network: None,
             tls: None,
+            stdin: None,
         };
         match cmds.execute("hello", &mut env).unwrap() {
             CommandOutput::Text(s) => assert_eq!(s, "Hello, World!"),
@@ -319,6 +329,7 @@ mod tests {
 
             network: None,
             tls: None,
+            stdin: None,
         };
         match cmds.execute("hello OASIS", &mut env).unwrap() {
             CommandOutput::Text(s) => assert_eq!(s, "Hello, OASIS!"),
@@ -370,6 +381,7 @@ mod tests {
 
             network: None,
             tls: None,
+            stdin: None,
         };
         match cmds.execute("pclock", &mut env).unwrap() {
             CommandOutput::Text(s) => assert!(s.contains("plugin active")),
@@ -398,6 +410,7 @@ mod tests {
 
             network: None,
             tls: None,
+            stdin: None,
         };
         // Write a note.
         match cmds
@@ -429,6 +442,7 @@ mod tests {
 
             network: None,
             tls: None,
+            stdin: None,
         };
         // Initially empty.
         match cmds.execute("note list", &mut env).unwrap() {
@@ -459,6 +473,7 @@ mod tests {
 
             network: None,
             tls: None,
+            stdin: None,
         };
         assert!(cmds.execute("note read nonexistent", &mut env).is_err());
     }
@@ -478,6 +493,7 @@ mod tests {
 
             network: None,
             tls: None,
+            stdin: None,
         };
         cmds.execute("note write test Hello", &mut env).unwrap();
 

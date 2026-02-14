@@ -59,6 +59,28 @@ pub fn run_script(
             Ok(CommandOutput::SkinSwap { name }) => {
                 output.push(format!("(skin swap to '{name}' skipped in script)"));
             },
+            Ok(CommandOutput::Multi(outputs)) => {
+                for sub in outputs {
+                    match sub {
+                        CommandOutput::Text(text) => {
+                            for l in text.lines() {
+                                output.push(l.to_string());
+                            }
+                        },
+                        CommandOutput::Table { headers, rows } => {
+                            output.push(headers.join(" | "));
+                            for row in &rows {
+                                output.push(row.join(" | "));
+                            }
+                        },
+                        CommandOutput::Clear => output.push("(clear)".to_string()),
+                        CommandOutput::None | CommandOutput::Multi(_) => {},
+                        _ => {
+                            output.push("(signal command skipped in script)".to_string());
+                        },
+                    }
+                }
+            },
             Err(e) => {
                 output.push(format!("error at line {}: {e}", i + 1));
             },
@@ -92,6 +114,9 @@ impl Command for RunCmd {
     }
     fn usage(&self) -> &str {
         "run <path>"
+    }
+    fn category(&self) -> &str {
+        "scripting"
     }
     fn execute(&self, args: &[&str], env: &mut Environment<'_>) -> Result<CommandOutput> {
         let path = args
@@ -148,6 +173,9 @@ impl Command for CronCmd {
     }
     fn usage(&self) -> &str {
         "cron [list|add <name> <path>|remove <name>]"
+    }
+    fn category(&self) -> &str {
+        "scripting"
     }
     fn execute(&self, args: &[&str], env: &mut Environment<'_>) -> Result<CommandOutput> {
         let subcmd = args.first().copied().unwrap_or("list");
@@ -222,6 +250,9 @@ impl Command for StartupCmd {
     }
     fn usage(&self) -> &str {
         "startup [show|set <path>|clear]"
+    }
+    fn category(&self) -> &str {
+        "scripting"
     }
     fn execute(&self, args: &[&str], env: &mut Environment<'_>) -> Result<CommandOutput> {
         let subcmd = args.first().copied().unwrap_or("show");
@@ -307,6 +338,7 @@ mod tests {
 
             network: None,
             tls: None,
+            stdin: None,
         };
         reg.execute(line, &mut env)
     }
@@ -345,6 +377,7 @@ mod tests {
 
             network: None,
             tls: None,
+            stdin: None,
         };
         let output = run_script("/tmp/test.sh", &reg, &mut env).unwrap();
         assert_eq!(output, vec!["hello", "world"]);
@@ -364,6 +397,7 @@ mod tests {
 
             network: None,
             tls: None,
+            stdin: None,
         };
         let output = run_script("/tmp/bad.sh", &reg, &mut env).unwrap();
         assert!(output[0].contains("error at line 1"));
@@ -383,13 +417,14 @@ mod tests {
     }
 
     #[test]
-    fn run_cmd_shows_listing() {
+    fn run_cmd_executes_script() {
         let (reg, mut vfs) = setup();
-        vfs.write("/tmp/demo.sh", b"echo hello\nls\n").unwrap();
+        vfs.write("/tmp/demo.sh", b"echo hello\necho world\n")
+            .unwrap();
         match exec(&reg, &mut vfs, "run /tmp/demo.sh").unwrap() {
             CommandOutput::Text(s) => {
-                assert!(s.contains("2 commands"));
-                assert!(s.contains("echo hello"));
+                assert!(s.contains("hello"));
+                assert!(s.contains("world"));
             },
             _ => panic!("expected text"),
         }
@@ -488,6 +523,7 @@ mod tests {
 
             network: None,
             tls: None,
+            stdin: None,
         };
         let output = run_startup(&reg, &mut env).unwrap();
         assert!(output[0].contains("no startup"));
@@ -506,6 +542,7 @@ mod tests {
 
             network: None,
             tls: None,
+            stdin: None,
         };
         let output = run_startup(&reg, &mut env).unwrap();
         assert_eq!(output, vec!["booted"]);
