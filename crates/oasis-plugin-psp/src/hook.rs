@@ -92,6 +92,21 @@ pub fn install_display_hook() -> bool {
         return true;
     }
 
+    // Check if sctrlHENFindFunction import was resolved properly.
+    // If the stub wasn't patched by CFW, the pointer will be 0 or garbage.
+    let fn_addr = psp::sys::sctrlHENFindFunction as usize;
+    {
+        let mut buf = [0u8; 48];
+        let mut pos = write_log_bytes(&mut buf, 0, b"[OASIS] FindFunc addr=0x");
+        pos = write_log_hex(&mut buf, pos, fn_addr as u32);
+        crate::debug_log(&buf[..pos]);
+    }
+
+    if fn_addr == 0 || fn_addr < 0x08000000 {
+        crate::debug_log(b"[OASIS] hook: sctrlHEN import NOT resolved!");
+        return false;
+    }
+
     crate::debug_log(b"[OASIS] hook: calling sctrlHENFindFunction...");
 
     // SAFETY: We are in kernel mode (module_kernel!). Try each name combo.
