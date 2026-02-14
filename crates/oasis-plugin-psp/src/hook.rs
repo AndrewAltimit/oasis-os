@@ -107,14 +107,26 @@ pub fn install_display_hook() -> bool {
         return false;
     }
 
-    crate::debug_log(b"[OASIS] hook: calling sctrlHENFindFunction...");
+    // Flush dcache to ensure our string data is visible to kernel functions.
+    // Freshly loaded PRX data may still be in dcache on MIPS.
+    unsafe {
+        psp::sys::sceKernelDcacheWritebackAll();
+    }
+
+    crate::debug_log(b"[OASIS] hook: dcache flushed, calling FindFunc...");
 
     // SAFETY: We are in kernel mode (module_kernel!). Try each name combo.
     unsafe {
-        // First, just test if sctrlHENFindFunction works at all
+        // Build module/library strings on the stack (avoids .rodata cache issues)
+        let mod_name: [u8; 19] = *b"sceDisplay_Service\0";
+        let lib_name: [u8; 11] = *b"sceDisplay\0";
+
+        // Flush these stack variables too
+        psp::sys::sceKernelDcacheWritebackAll();
+
         let test_ptr = psp::sys::sctrlHENFindFunction(
-            b"sceDisplay_Service\0".as_ptr(),
-            b"sceDisplay\0".as_ptr(),
+            mod_name.as_ptr(),
+            lib_name.as_ptr(),
             NID_SCE_DISPLAY_SET_FRAME_BUF,
         );
         if test_ptr.is_null() {
