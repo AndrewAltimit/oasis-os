@@ -30,14 +30,17 @@ unsafe extern "C" {
 
 /// Check if the SystemCtrlForKernel import stubs were resolved by firmware.
 ///
-/// A resolved stub starts with `jr $ra` (0x03E00008). An unresolved stub
-/// contains the raw `Stub` struct data (two pointers to lib entry and NID).
+/// User-mode stubs are patched to `jr $ra; syscall N` (first word 0x03E00008).
+/// Kernel-mode stubs are patched to `j target; nop` (first word opcode = 2).
+/// An unresolved stub contains the raw `Stub` struct data (two pointers).
 fn is_sctrl_resolved() -> bool {
     // SAFETY: Reading the stub bytes to check if they were patched.
     // The symbol is valid as long as the psp crate is linked.
     unsafe {
         let first_word = core::ptr::read_volatile(&raw const FIND_FUNC_STUB as *const u32);
-        first_word == 0x03E00008 // jr $ra
+        // User-mode: jr $ra (0x03E00008)
+        // Kernel-mode: j target (opcode field bits 31-26 == 2)
+        first_word == 0x03E00008 || (first_word >> 26) == 2
     }
 }
 
