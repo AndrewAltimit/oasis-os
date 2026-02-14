@@ -37,43 +37,74 @@ const NID_SCE_DISPLAY_SET_FRAME_BUF: u32 = 0x289D82FE;
 const NID_SCE_CTRL_PEEK_BUF_POS: u32 = 0x3A622550;
 
 /// Resolved kernel-mode sceCtrlPeekBufferPositive function pointer.
-/// The user-mode import doesn't work from the display hook context,
-/// so we resolve the driver version via sctrlHENFindFunction.
 static mut CTRL_PEEK_FN: Option<unsafe extern "C" fn(*mut u8, i32) -> i32> = None;
 
-/// One-shot flag: log the first non-zero controller read for diagnostics.
-static mut CTRL_LOGGED: bool = false;
+/// Current button state, updated by the controller polling thread.
+/// The display hook reads this atomically -- no API calls needed.
+static CURRENT_BUTTONS: core::sync::atomic::AtomicU32 =
+    core::sync::atomic::AtomicU32::new(0);
 
-/// Poll controller buttons using the kernel-mode driver function.
-///
-/// Returns the raw button bitmask, or 0 if unavailable.
+/// Poll controller buttons. Reads the value set by the ctrl thread.
 pub fn poll_buttons() -> u32 {
-    // SAFETY: CTRL_PEEK_FN is set once during init and read-only after.
-    // SceCtrlData layout: [u32 timestamp, u32 buttons, u8 lx, u8 ly, u8[6] rsrv]
-    unsafe {
-        let peek = core::ptr::read_volatile(&raw const CTRL_PEEK_FN);
-        if let Some(peek) = peek {
-            let mut data = [0u32; 4]; // 16 bytes as u32 array
-            let ret = peek(data.as_mut_ptr() as *mut u8, 1);
-            let timestamp = core::ptr::read_volatile(&raw const data[0]);
-            let buttons = core::ptr::read_volatile(&raw const data[1]);
+    CURRENT_BUTTONS.load(Ordering::Relaxed)
+}
 
-            // One-time diagnostic: log first poll result.
-            if !core::ptr::read_volatile(&raw const CTRL_LOGGED) {
-                core::ptr::write_volatile(&raw mut CTRL_LOGGED, true);
+/// Controller polling thread entry point.
+///
+/// Runs in a normal kernel thread context where all APIs work.
+/// Polls sceCtrlPeekBufferPositive at ~60Hz and stores the result
+/// in CURRENT_BUTTONS for the display hook to read.
+unsafe extern "C" fn ctrl_thread_entry(
+    _args: usize,
+    _argp: *mut core::ffi::c_void,
+) -> i32 {
+    // Brief delay to let the game fully start.
+    unsafe { psp::sys::sceKernelDelayThread(500_000) };
+
+    let mut logged = false;
+
+    loop {
+        // SAFETY: CTRL_PEEK_FN is set once before this thread starts.
+        let peek = unsafe { core::ptr::read_volatile(&raw const CTRL_PEEK_FN) };
+        if let Some(peek) = peek {
+            let mut data = [0u32; 4]; // SceCtrlData = 16 bytes
+            unsafe { peek(data.as_mut_ptr() as *mut u8, 1) };
+            let buttons = unsafe { core::ptr::read_volatile(&raw const data[1]) };
+            CURRENT_BUTTONS.store(buttons, Ordering::Relaxed);
+
+            // One-time diagnostic (file I/O works from thread context).
+            if !logged {
+                logged = true;
+                let ts = unsafe { core::ptr::read_volatile(&raw const data[0]) };
                 let mut buf = [0u8; 64];
-                let mut pos = write_log_bytes(&mut buf, 0, b"[OASIS] ctrl ret=");
-                pos = write_log_hex(&mut buf, pos, ret as u32);
-                pos = write_log_bytes(&mut buf, pos, b" ts=");
-                pos = write_log_hex(&mut buf, pos, timestamp);
+                let mut pos = write_log_bytes(&mut buf, 0, b"[OASIS] ctrl ts=");
+                pos = write_log_hex(&mut buf, pos, ts);
                 pos = write_log_bytes(&mut buf, pos, b" btn=");
                 pos = write_log_hex(&mut buf, pos, buttons);
                 crate::debug_log(&buf[..pos]);
             }
+        }
+        unsafe { psp::sys::sceKernelDelayThread(16_000) }; // ~60fps
+    }
+}
 
-            buttons
+/// Start the controller polling thread.
+unsafe fn start_ctrl_thread() {
+    // SAFETY: Creating a kernel thread for controller polling.
+    unsafe {
+        let thid = psp::sys::sceKernelCreateThread(
+            b"OasisCtrl\0".as_ptr(),
+            ctrl_thread_entry,
+            0x18, // priority
+            0x1000, // 4KB stack
+            psp::sys::ThreadAttributes::empty(), // kernel thread
+            core::ptr::null_mut(),
+        );
+        if thid.0 >= 0 {
+            psp::sys::sceKernelStartThread(thid, 0, core::ptr::null_mut());
+            crate::debug_log(b"[OASIS] ctrl thread started");
         } else {
-            0
+            crate::debug_log(b"[OASIS] ctrl thread FAILED");
         }
     }
 }
@@ -141,19 +172,13 @@ unsafe extern "C" fn hooked_set_frame_buf(
     pixel_format: u32,
     sync: u32,
 ) -> u32 {
-    // Call original first so the game's frame is displayed
-    // SAFETY: ORIGINAL_SET_FRAME_BUF is set before the hook is active.
-    let result = unsafe {
-        if let Some(original) = ORIGINAL_SET_FRAME_BUF {
-            original(top_addr, buffer_width, pixel_format, sync)
-        } else {
-            0
-        }
-    };
-
-    // Only draw overlay on 32-bit ABGR framebuffers (pixel_format == 3)
+    // Draw overlay BEFORE calling original so the buffer is fully
+    // composited when the display hardware starts scanning it out.
+    // Use uncached pointer (| 0x40000000) so writes go directly to
+    // physical memory, bypassing the data cache. This eliminates
+    // horizontal striping from stale cache lines.
     if !top_addr.is_null() && pixel_format == 3 {
-        let fb = top_addr as *mut u32;
+        let fb = (top_addr as u32 | 0x4000_0000) as *mut u32;
         let stride = buffer_width as u32;
 
         // Debug beacon: 2x2 green dot at (1,1) confirms the hook is running.
@@ -165,13 +190,21 @@ unsafe extern "C" fn hooked_set_frame_buf(
             *fb.add((2 * stride + 2) as usize) = 0xFF00FF00;
         }
 
-        // SAFETY: fb is a valid framebuffer pointer provided by the OS.
+        // SAFETY: fb is a valid uncached framebuffer pointer.
         unsafe {
             overlay::on_frame(fb, stride);
         }
     }
 
-    result
+    // Call original to submit the buffer to the display hardware.
+    // SAFETY: ORIGINAL_SET_FRAME_BUF is set before the hook is active.
+    unsafe {
+        if let Some(original) = ORIGINAL_SET_FRAME_BUF {
+            original(top_addr, buffer_width, pixel_format, sync)
+        } else {
+            0
+        }
+    }
 }
 
 /// Module/library name pairs to try for finding sceDisplaySetFrameBuf.
@@ -418,11 +451,17 @@ pub fn install_display_hook() -> bool {
                 set_mode(1); // 1 = analog mode
                 crate::debug_log(b"[OASIS] ctrl sampling initialized");
             }
+
+            // Start the controller polling thread. Runs in normal kernel
+            // context where sceCtrl APIs actually work (unlike the display
+            // hook context which can't make syscalls).
+            start_ctrl_thread();
         }
 
         HOOK_INSTALLED.store(true, Ordering::Release);
     }
 
+    crate::debug_log(b"[OASIS] hook installed OK");
     true
 }
 

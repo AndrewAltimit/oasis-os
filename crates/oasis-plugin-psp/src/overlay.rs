@@ -155,13 +155,9 @@ pub unsafe fn on_frame(fb: *mut u32, stride: u32) {
         }
     }
 
-    // Flush dcache for the overlay region
-    if state != OverlayState::Hidden {
-        // SAFETY: Valid framebuffer region.
-        unsafe {
-            render::flush_framebuffer(fb, stride, OVERLAY_Y, OVERLAY_H);
-        }
-    }
+    // No dcache flush needed -- the hook passes an uncached framebuffer
+    // pointer (addr | 0x40000000), so all writes go directly to physical
+    // memory and are immediately visible to the display hardware.
 }
 
 impl OverlayState {
