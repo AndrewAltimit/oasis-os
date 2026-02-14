@@ -92,31 +92,41 @@ pub fn install_display_hook() -> bool {
         return true;
     }
 
-    // SAFETY: We are in kernel mode (module_kernel!). Try multiple
-    // module/library name combinations for compatibility across CFW versions.
+    crate::debug_log(b"[OASIS] hook: calling sctrlHENFindFunction...");
+
+    // SAFETY: We are in kernel mode (module_kernel!). Try each name combo.
     unsafe {
-        for &(module, library) in DISPLAY_MODULE_NAMES {
-            let hook = psp::hook::SyscallHook::install(
-                module.as_ptr(),
-                library.as_ptr(),
-                NID_SCE_DISPLAY_SET_FRAME_BUF,
+        // First, just test if sctrlHENFindFunction works at all
+        let test_ptr = psp::sys::sctrlHENFindFunction(
+            b"sceDisplay_Service\0".as_ptr(),
+            b"sceDisplay\0".as_ptr(),
+            NID_SCE_DISPLAY_SET_FRAME_BUF,
+        );
+        if test_ptr.is_null() {
+            crate::debug_log(b"[OASIS] hook: FindFunction returned NULL");
+        } else {
+            crate::debug_log(b"[OASIS] hook: FindFunction returned non-NULL");
+        }
+
+        crate::debug_log(b"[OASIS] hook: calling PatchSyscall...");
+        if !test_ptr.is_null() {
+            let ret = psp::sys::sctrlHENPatchSyscall(
+                test_ptr,
                 hooked_set_frame_buf as *mut u8,
             );
+            if ret < 0 {
+                crate::debug_log(b"[OASIS] hook: PatchSyscall FAILED");
+            } else {
+                crate::debug_log(b"[OASIS] hook: PatchSyscall OK");
 
-            match hook {
-                Some(h) => {
-                    // Store the original function pointer for the trampoline
-                    ORIGINAL_SET_FRAME_BUF =
-                        Some(core::mem::transmute(h.original_ptr()));
+                ORIGINAL_SET_FRAME_BUF =
+                    Some(core::mem::transmute(test_ptr));
 
-                    // Flush caches to ensure the patched syscall is visible
-                    psp::sys::sceKernelIcacheInvalidateAll();
-                    psp::sys::sceKernelDcacheWritebackAll();
+                psp::sys::sceKernelIcacheInvalidateAll();
+                psp::sys::sceKernelDcacheWritebackAll();
 
-                    HOOK_INSTALLED.store(true, Ordering::Release);
-                    return true;
-                }
-                None => continue,
+                HOOK_INSTALLED.store(true, Ordering::Release);
+                return true;
             }
         }
     }
