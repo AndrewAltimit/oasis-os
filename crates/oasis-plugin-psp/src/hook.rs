@@ -72,6 +72,17 @@ unsafe extern "C" fn hooked_set_frame_buf(
     result
 }
 
+/// Module/library name pairs to try for finding sceDisplaySetFrameBuf.
+///
+/// Different CFW versions and firmware versions expose the display driver
+/// under different module names. We try them in order until one works.
+const DISPLAY_MODULE_NAMES: &[(&[u8], &[u8])] = &[
+    (b"sceDisplay_Service\0", b"sceDisplay\0"),
+    (b"sceDisplay\0", b"sceDisplay\0"),
+    (b"sceDisplay_Service\0", b"sceDisplay_driver\0"),
+    (b"sceDisplay\0", b"sceDisplay_driver\0"),
+];
+
 /// Install the `sceDisplaySetFrameBuf` hook.
 ///
 /// Returns `true` on success. Must be called from kernel mode during plugin
@@ -81,29 +92,113 @@ pub fn install_display_hook() -> bool {
         return true;
     }
 
-    // SAFETY: We are in kernel mode (module_kernel!). The hook module/library
-    // names and NID are well-known constants for the PSP display driver.
+    // SAFETY: We are in kernel mode (module_kernel!). Try multiple
+    // module/library name combinations for compatibility across CFW versions.
     unsafe {
-        let hook = psp::hook::SyscallHook::install(
-            b"sceDisplay_Service\0".as_ptr(),
-            b"sceDisplay\0".as_ptr(),
-            NID_SCE_DISPLAY_SET_FRAME_BUF,
-            hooked_set_frame_buf as *mut u8,
-        );
+        for &(module, library) in DISPLAY_MODULE_NAMES {
+            let hook = psp::hook::SyscallHook::install(
+                module.as_ptr(),
+                library.as_ptr(),
+                NID_SCE_DISPLAY_SET_FRAME_BUF,
+                hooked_set_frame_buf as *mut u8,
+            );
 
-        match hook {
-            Some(h) => {
-                // Store the original function pointer for the trampoline
-                ORIGINAL_SET_FRAME_BUF = Some(core::mem::transmute(h.original_ptr()));
+            match hook {
+                Some(h) => {
+                    // Store the original function pointer for the trampoline
+                    ORIGINAL_SET_FRAME_BUF =
+                        Some(core::mem::transmute(h.original_ptr()));
 
-                // Flush caches to ensure the patched syscall is visible
-                psp::sys::sceKernelIcacheInvalidateAll();
-                psp::sys::sceKernelDcacheWritebackAll();
+                    // Flush caches to ensure the patched syscall is visible
+                    psp::sys::sceKernelIcacheInvalidateAll();
+                    psp::sys::sceKernelDcacheWritebackAll();
 
-                HOOK_INSTALLED.store(true, Ordering::Release);
-                true
+                    HOOK_INSTALLED.store(true, Ordering::Release);
+                    return true;
+                }
+                None => continue,
             }
-            None => false,
         }
     }
+
+    false
+}
+
+/// Log diagnostic info about sctrlHENFindFunction results.
+///
+/// Tries all known module/library name combinations and logs which ones
+/// return a valid pointer vs null. Writes to the debug log file.
+pub fn log_find_function_result() {
+    // SAFETY: sctrlHENFindFunction is safe to call from kernel mode.
+    // It just looks up function pointers without side effects.
+    unsafe {
+        for &(module, library) in DISPLAY_MODULE_NAMES {
+            let ptr = psp::sys::sctrlHENFindFunction(
+                module.as_ptr(),
+                library.as_ptr(),
+                NID_SCE_DISPLAY_SET_FRAME_BUF,
+            );
+
+            // Build log message: "[OASIS] FindFunc mod=X lib=Y -> 0xADDR"
+            let mut buf = [0u8; 96];
+            let mut pos = 0usize;
+            pos = write_log_bytes(&mut buf, pos, b"[OASIS] FindFunc mod=");
+            // Copy module name (without null terminator)
+            pos = write_log_cstr(&mut buf, pos, module);
+            pos = write_log_bytes(&mut buf, pos, b" lib=");
+            pos = write_log_cstr(&mut buf, pos, library);
+            pos = write_log_bytes(&mut buf, pos, b" -> ");
+            if ptr.is_null() {
+                pos = write_log_bytes(&mut buf, pos, b"NULL");
+            } else {
+                pos = write_log_bytes(&mut buf, pos, b"0x");
+                pos = write_log_hex(&mut buf, pos, ptr as u32);
+            }
+            crate::debug_log(&buf[..pos]);
+        }
+    }
+}
+
+/// Write bytes into a log buffer. Returns new position.
+fn write_log_bytes(buf: &mut [u8], pos: usize, s: &[u8]) -> usize {
+    let mut p = pos;
+    for &b in s {
+        if p >= buf.len() {
+            break;
+        }
+        buf[p] = b;
+        p += 1;
+    }
+    p
+}
+
+/// Write a null-terminated C string (without the null) into a log buffer.
+fn write_log_cstr(buf: &mut [u8], pos: usize, s: &[u8]) -> usize {
+    let mut p = pos;
+    for &b in s {
+        if b == 0 || p >= buf.len() {
+            break;
+        }
+        buf[p] = b;
+        p += 1;
+    }
+    p
+}
+
+/// Write a u32 as hexadecimal into a log buffer.
+fn write_log_hex(buf: &mut [u8], pos: usize, val: u32) -> usize {
+    let mut p = pos;
+    let hex = b"0123456789ABCDEF";
+    // Write 8 hex digits
+    let mut i = 0;
+    while i < 8 {
+        if p >= buf.len() {
+            break;
+        }
+        let nibble = (val >> (28 - i * 4)) & 0xF;
+        buf[p] = hex[nibble as usize];
+        p += 1;
+        i += 1;
+    }
+    p
 }
