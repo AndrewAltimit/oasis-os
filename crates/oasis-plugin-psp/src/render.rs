@@ -155,7 +155,8 @@ pub unsafe fn fill_rect(fb: *mut u32, stride: u32, x: u32, y: u32, w: u32, h: u3
 /// # Safety
 /// `fb` must point to a valid memory region.
 pub unsafe fn flush_framebuffer(fb: *mut u32, stride: u32, y: u32, h: u32) {
-    let start = fb.add((y * stride) as usize) as *const u8;
+    // SAFETY: Pointer arithmetic within valid framebuffer region.
+    let start = unsafe { fb.add((y * stride) as usize) } as *const u8;
     let size = (h * stride * 4) as u32;
     // SAFETY: Valid memory range within framebuffer.
     unsafe {

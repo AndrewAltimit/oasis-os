@@ -19,7 +19,7 @@
 //! Target: <64KB total (code + data). No heap allocator -- stack + static
 //! buffers only.
 
-#![no_std]
+#![feature(restricted_std)]
 #![no_main]
 #![feature(asm_experimental_arch)]
 

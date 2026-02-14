@@ -136,7 +136,7 @@ pub fn start_audio_thread() {
     let cfg = crate::config::get_config();
     // SAFETY: Single-threaded init.
     unsafe {
-        let len = cfg.music_dir_len.min(MUSIC_DIR.len() - 1);
+        let len = cfg.music_dir_len.min(63);
         let mut i = 0;
         while i < len {
             MUSIC_DIR[i] = cfg.music_dir[i];
@@ -166,7 +166,7 @@ pub fn start_audio_thread() {
             psp::sys::ThreadAttributes::empty(),
             core::ptr::null_mut(),
         );
-        if tid >= 0 {
+        if tid >= psp::sys::SceUid(0) {
             RUNNING.store(true, Ordering::Release);
             psp::sys::sceKernelStartThread(tid, 0, core::ptr::null_mut());
         }
@@ -181,7 +181,7 @@ fn scan_playlist() {
 
     // SAFETY: sceIoDopen with null-terminated path.
     let dfd = unsafe { psp::sys::sceIoDopen(dir_path.as_ptr()) };
-    if dfd < 0 {
+    if dfd < psp::sys::SceUid(0) {
         return;
     }
 
@@ -318,7 +318,7 @@ unsafe extern "C" fn audio_thread_entry(_args: usize, _argp: *mut c_void) -> i32
                 0,
             )
         };
-        if fd < 0 {
+        if fd < psp::sys::SceUid(0) {
             // Skip to next track on error
             advance_track();
             continue;
@@ -350,9 +350,9 @@ unsafe extern "C" fn audio_thread_entry(_args: usize, _argp: *mut c_void) -> i32
             unk1: 0,
             mp3_stream_end: file_size,
             unk2: 0,
-            mp3_buf: unsafe { MP3_BUF.as_mut_ptr() as *mut c_void },
+            mp3_buf: (&raw mut MP3_BUF) as *mut c_void,
             mp3_buf_size: MP3_BUF_SIZE as i32,
-            pcm_buf: unsafe { PCM_BUF.as_mut_ptr() as *mut c_void },
+            pcm_buf: (&raw mut PCM_BUF) as *mut c_void,
             pcm_buf_size: (PCM_BUF_SIZE * 2) as i32,
         };
 
@@ -369,7 +369,7 @@ unsafe extern "C" fn audio_thread_entry(_args: usize, _argp: *mut c_void) -> i32
 
         // Feed initial data from file
         // SAFETY: Static buffers, fd is valid.
-        let feed_ok = unsafe { feed_mp3_from_file(handle, fd, &mut FILE_BUF) };
+        let feed_ok = unsafe { feed_mp3_from_file(handle, fd, &raw mut FILE_BUF) };
         if !feed_ok {
             unsafe {
                 psp::sys::sceMp3ReleaseMp3Handle(handle);
@@ -413,7 +413,7 @@ unsafe extern "C" fn audio_thread_entry(_args: usize, _argp: *mut c_void) -> i32
             // SAFETY: handle and fd are valid.
             unsafe {
                 if psp::sys::sceMp3CheckStreamDataNeeded(handle) > 0 {
-                    if !feed_mp3_from_file(handle, fd, &mut FILE_BUF) {
+                    if !feed_mp3_from_file(handle, fd, &raw mut FILE_BUF) {
                         break; // EOF or error
                     }
                 }
@@ -459,11 +459,11 @@ unsafe extern "C" fn audio_thread_entry(_args: usize, _argp: *mut c_void) -> i32
 ///
 /// # Safety
 /// `handle` must be a valid MP3 handle, `fd` a valid file descriptor,
-/// `file_buf` must be a valid mutable buffer.
+/// `file_buf` must be a valid pointer to a `[u8; FILE_BUF_SIZE]` buffer.
 unsafe fn feed_mp3_from_file(
     handle: psp::sys::Mp3Handle,
     fd: psp::sys::SceUid,
-    file_buf: &mut [u8; FILE_BUF_SIZE],
+    file_buf: *mut [u8; FILE_BUF_SIZE],
 ) -> bool {
     let mut dst_ptr: *mut u8 = core::ptr::null_mut();
     let mut to_write: i32 = 0;
@@ -477,7 +477,6 @@ unsafe fn feed_mp3_from_file(
         return false;
     }
 
-    // Seek to the position the decoder wants
     // SAFETY: fd is valid.
     unsafe {
         psp::sys::sceIoLseek(fd, src_pos as i64, psp::sys::IoWhence::Set);
@@ -489,18 +488,18 @@ unsafe fn feed_mp3_from_file(
         let chunk = ((to_write - total_read) as usize).min(FILE_BUF_SIZE);
         // SAFETY: file_buf is valid, fd is valid.
         let bytes_read = unsafe {
-            psp::sys::sceIoRead(fd, file_buf.as_mut_ptr() as *mut _, chunk as u32)
+            psp::sys::sceIoRead(fd, file_buf as *mut _, chunk as u32)
         };
         if bytes_read <= 0 {
             break;
         }
 
         // Copy to decoder buffer
-        // SAFETY: dst_ptr is valid memory from sceMp3GetInfoToAddStreamData.
+        // SAFETY: dst_ptr is valid, file_buf is valid, bounds checked.
         let mut i = 0;
         while i < bytes_read as usize {
             unsafe {
-                *dst_ptr.add(total_read as usize + i) = file_buf[i];
+                *dst_ptr.add(total_read as usize + i) = (*file_buf)[i];
             }
             i += 1;
         }

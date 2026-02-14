@@ -7,7 +7,7 @@
 
 use crate::audio;
 use crate::config;
-use crate::render::{self, colors, SCREEN_HEIGHT, SCREEN_WIDTH};
+use crate::render::{self, colors, SCREEN_WIDTH};
 
 use core::sync::atomic::{AtomicU8, Ordering};
 
@@ -77,8 +77,8 @@ const BTN_CROSS: u32 = 0x4000;
 /// `stride * 272` pixels. Called from the display thread context.
 pub unsafe fn on_frame(fb: *mut u32, stride: u32) {
     // Poll controller (non-blocking)
-    let mut pad = core::mem::zeroed::<psp::sys::SceCtrlData>();
     // SAFETY: SceCtrlData is repr(C), zeroed is valid.
+    let mut pad = unsafe { core::mem::zeroed::<psp::sys::SceCtrlData>() };
     unsafe {
         psp::sys::sceCtrlPeekBufferPositive(&mut pad, 1);
     }
@@ -157,7 +157,7 @@ impl OverlayState {
 pub fn show_osd(msg: &[u8]) {
     // SAFETY: Called from single-threaded context (audio thread or menu action).
     unsafe {
-        let len = msg.len().min(OSD_MSG.len() - 1);
+        let len = msg.len().min(47);
         let mut i = 0;
         while i < len {
             OSD_MSG[i] = msg[i];
@@ -317,8 +317,8 @@ unsafe fn draw_status_line(fb: *mut u32, stride: u32) {
     pos = write_str(&mut buf, pos, b"MHz  ");
 
     // Time
-    let mut dt = core::mem::zeroed::<psp::sys::ScePspDateTime>();
-    // SAFETY: dt is a valid zeroed struct.
+    // SAFETY: ScePspDateTime is repr(C), zeroed is valid.
+    let mut dt = unsafe { core::mem::zeroed::<psp::sys::ScePspDateTime>() };
     if unsafe { psp::sys::sceRtcGetCurrentClockLocalTime(&mut dt) } >= 0 {
         pos = write_u32_pad2(&mut buf, pos, dt.hour as u32);
         pos = write_str(&mut buf, pos, b":");

@@ -114,7 +114,7 @@ pub fn load_config() {
             0,
         )
     };
-    if fd < 0 {
+    if fd < psp::sys::SceUid(0) {
         return; // File doesn't exist, use defaults.
     }
 
@@ -133,7 +133,7 @@ pub fn load_config() {
 
     // SAFETY: Single-threaded init, CONFIG not yet shared.
     unsafe {
-        parse_config(data, &mut CONFIG);
+        parse_config(data, &mut *(&raw mut CONFIG));
         OPACITY.store(CONFIG.opacity, Ordering::Relaxed);
     }
 }

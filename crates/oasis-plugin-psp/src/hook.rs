@@ -84,7 +84,7 @@ pub fn install_display_hook() -> bool {
                 ORIGINAL_SET_FRAME_BUF = Some(core::mem::transmute(h.original_ptr()));
 
                 // Flush caches to ensure the patched syscall is visible
-                psp::sys::sceKernelIcacheClearAll();
+                psp::sys::sceKernelIcacheInvalidateAll();
                 psp::sys::sceKernelDcacheWritebackAll();
 
                 HOOK_INSTALLED.store(true, Ordering::Release);
