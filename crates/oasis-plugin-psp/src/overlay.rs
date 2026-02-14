@@ -66,6 +66,9 @@ const MENU_START_Y: u32 = OVERLAY_Y + 48;
 const BTN_UP: u32 = 0x10;
 const BTN_DOWN: u32 = 0x40;
 const BTN_CROSS: u32 = 0x4000;
+const BTN_L_TRIGGER: u32 = 0x100;
+const BTN_R_TRIGGER: u32 = 0x200;
+const BTN_START: u32 = 0x8;
 
 /// Called every frame from the display hook.
 ///
@@ -94,9 +97,15 @@ pub unsafe fn on_frame(fb: *mut u32, stride: u32) {
     let trigger = config::get_config().trigger_mask();
     let state = OverlayState::from_u8(STATE.load(Ordering::Relaxed));
 
+    // Accept either the config trigger button (NOTE/SCREEN) or L+R+START combo.
+    // CFW often intercepts NOTE for its own menu, so the combo is a fallback.
+    let combo = BTN_L_TRIGGER | BTN_R_TRIGGER | BTN_START;
+    let combo_triggered = (buttons & combo) == combo && (prev & combo) != combo;
+    let triggered = (pressed & trigger != 0) || combo_triggered;
+
     match state {
         OverlayState::Hidden => {
-            if pressed & trigger != 0 {
+            if triggered {
                 STATE.store(OverlayState::Menu as u8, Ordering::Relaxed);
                 unsafe {
                     CURSOR = 0;
@@ -114,7 +123,7 @@ pub unsafe fn on_frame(fb: *mut u32, stride: u32) {
                     STATE.store(OverlayState::Hidden as u8, Ordering::Relaxed);
                 }
             }
-            if pressed & trigger != 0 {
+            if triggered {
                 STATE.store(OverlayState::Menu as u8, Ordering::Relaxed);
                 unsafe {
                     CURSOR = 0;
@@ -122,7 +131,7 @@ pub unsafe fn on_frame(fb: *mut u32, stride: u32) {
             }
         }
         OverlayState::Menu => {
-            if pressed & trigger != 0 {
+            if triggered {
                 STATE.store(OverlayState::Hidden as u8, Ordering::Relaxed);
             } else {
                 // SAFETY: CURSOR only modified in display hook.

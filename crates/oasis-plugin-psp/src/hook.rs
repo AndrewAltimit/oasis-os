@@ -48,11 +48,24 @@ unsafe extern "C" fn hooked_set_frame_buf(
     // Only draw overlay on 32-bit ABGR framebuffers (pixel_format == 3)
     // and valid framebuffer pointers
     if !top_addr.is_null() && pixel_format == 3 {
-        // SAFETY: top_addr is a valid framebuffer pointer provided by the OS.
-        // buffer_width is the stride in pixels. We only write within
+        let fb = top_addr as *mut u32;
+        let stride = buffer_width as u32;
+
+        // Debug beacon: 2x2 green dot at (1,1) confirms the hook is running.
+        // Remove once overlay is confirmed working.
+        // SAFETY: Writing within screen bounds to valid framebuffer.
+        unsafe {
+            *fb.add((1 * stride + 1) as usize) = 0xFF00FF00;
+            *fb.add((1 * stride + 2) as usize) = 0xFF00FF00;
+            *fb.add((2 * stride + 1) as usize) = 0xFF00FF00;
+            *fb.add((2 * stride + 2) as usize) = 0xFF00FF00;
+        }
+
+        // SAFETY: fb is a valid framebuffer pointer provided by the OS.
+        // stride is the buffer width in pixels. We only write within
         // screen bounds (480x272).
         unsafe {
-            overlay::on_frame(top_addr as *mut u32, buffer_width as u32);
+            overlay::on_frame(fb, stride);
         }
     }
 
