@@ -41,18 +41,37 @@ const NID_SCE_CTRL_PEEK_BUF_POS: u32 = 0x3A622550;
 /// so we resolve the driver version via sctrlHENFindFunction.
 static mut CTRL_PEEK_FN: Option<unsafe extern "C" fn(*mut u8, i32) -> i32> = None;
 
+/// One-shot flag: log the first non-zero controller read for diagnostics.
+static mut CTRL_LOGGED: bool = false;
+
 /// Poll controller buttons using the kernel-mode driver function.
 ///
 /// Returns the raw button bitmask, or 0 if unavailable.
 pub fn poll_buttons() -> u32 {
     // SAFETY: CTRL_PEEK_FN is set once during init and read-only after.
-    // SceCtrlData layout: [timestamp: u32, buttons: u32, lx: u8, ly: u8, rsrv: [u8; 6]]
+    // SceCtrlData layout: [u32 timestamp, u32 buttons, u8 lx, u8 ly, u8[6] rsrv]
     unsafe {
-        if let Some(peek) = CTRL_PEEK_FN {
-            let mut buf = [0u8; 16];
-            peek(buf.as_mut_ptr(), 1);
-            // buttons is at offset 4, little-endian u32
-            u32::from_le_bytes([buf[4], buf[5], buf[6], buf[7]])
+        let peek = core::ptr::read_volatile(&raw const CTRL_PEEK_FN);
+        if let Some(peek) = peek {
+            let mut data = [0u32; 4]; // 16 bytes as u32 array
+            let ret = peek(data.as_mut_ptr() as *mut u8, 1);
+            let timestamp = core::ptr::read_volatile(&raw const data[0]);
+            let buttons = core::ptr::read_volatile(&raw const data[1]);
+
+            // One-time diagnostic: log first poll result.
+            if !core::ptr::read_volatile(&raw const CTRL_LOGGED) {
+                core::ptr::write_volatile(&raw mut CTRL_LOGGED, true);
+                let mut buf = [0u8; 64];
+                let mut pos = write_log_bytes(&mut buf, 0, b"[OASIS] ctrl ret=");
+                pos = write_log_hex(&mut buf, pos, ret as u32);
+                pos = write_log_bytes(&mut buf, pos, b" ts=");
+                pos = write_log_hex(&mut buf, pos, timestamp);
+                pos = write_log_bytes(&mut buf, pos, b" btn=");
+                pos = write_log_hex(&mut buf, pos, buttons);
+                crate::debug_log(&buf[..pos]);
+            }
+
+            buttons
         } else {
             0
         }
@@ -374,6 +393,31 @@ pub fn install_display_hook() -> bool {
         }
         if core::ptr::read_volatile(&raw const CTRL_PEEK_FN).is_none() {
             crate::debug_log(b"[OASIS] ctrl driver NOT found");
+        } else {
+            // Initialize controller sampling via kernel driver.
+            // The game's user-mode init may not apply to kernel-mode reads.
+            let set_cycle_ptr = sctrl_find_function(
+                b"sceController_Service\0".as_ptr(),
+                b"sceCtrl_driver\0".as_ptr(),
+                0x6A2774F3, // sceCtrlSetSamplingCycle
+            );
+            if !set_cycle_ptr.is_null() {
+                let set_cycle: unsafe extern "C" fn(i32) -> i32 =
+                    core::mem::transmute(set_cycle_ptr);
+                set_cycle(0); // 0 = VBlank sampling
+            }
+
+            let set_mode_ptr = sctrl_find_function(
+                b"sceController_Service\0".as_ptr(),
+                b"sceCtrl_driver\0".as_ptr(),
+                0x1F4011E6, // sceCtrlSetSamplingMode
+            );
+            if !set_mode_ptr.is_null() {
+                let set_mode: unsafe extern "C" fn(i32) -> i32 =
+                    core::mem::transmute(set_mode_ptr);
+                set_mode(1); // 1 = analog mode
+                crate::debug_log(b"[OASIS] ctrl sampling initialized");
+            }
         }
 
         HOOK_INSTALLED.store(true, Ordering::Release);
