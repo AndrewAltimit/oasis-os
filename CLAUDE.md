@@ -43,6 +43,9 @@ cargo deny check
 # Build PSP backend (excluded from workspace, requires nightly + cargo-psp)
 cd crates/oasis-backend-psp && RUST_PSP_BUILD_STD=1 cargo +nightly psp --release
 
+# Build PSP overlay plugin PRX (excluded from workspace, kernel mode)
+cd crates/oasis-plugin-psp && RUST_PSP_BUILD_STD=1 cargo +nightly psp --release
+
 # Build UE5 FFI shared library
 cargo build --release -p oasis-ffi
 
@@ -77,8 +80,17 @@ oasis-types     (foundation: Color, Button, InputEvent, backend traits, error ty
     │   └── oasis-app      (binary entry points: oasis-app, oasis-screenshot)
     ├── oasis-backend-ue5  (software RGBA framebuffer for Unreal Engine 5)
     │   └── oasis-ffi      (cdylib C-ABI for UE5 integration)
-    └── oasis-backend-psp  (excluded from workspace, PSP hardware via sceGu)
+    ├── oasis-backend-psp  (excluded from workspace, PSP hardware via sceGu)
+    └── oasis-plugin-psp   (excluded from workspace, kernel-mode PRX overlay)
 ```
+
+### PSP Two-Binary Architecture
+
+The PSP deployment uses two binaries:
+- **`oasis-backend-psp`** (EBOOT.PBP) -- the full shell application, runs standalone
+- **`oasis-plugin-psp`** (PRX) -- lightweight companion module loaded by CFW (ARK-4/PRO) via `PLUGINS.TXT`, stays resident in kernel memory alongside games
+
+The PRX hooks `sceDisplaySetFrameBuf` to draw overlay UI into the game's framebuffer and claims a PSP audio channel for background MP3 playback. No dependency on oasis-core -- direct framebuffer rendering only (<64KB binary).
 
 ### Key Abstraction: Backend Traits
 

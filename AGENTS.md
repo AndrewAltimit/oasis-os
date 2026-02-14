@@ -39,6 +39,9 @@ cargo deny check
 # PSP backend (excluded from workspace, requires nightly + cargo-psp)
 cd crates/oasis-backend-psp && RUST_PSP_BUILD_STD=1 cargo +nightly psp --release
 
+# PSP overlay plugin PRX (excluded from workspace, kernel mode)
+cd crates/oasis-plugin-psp && RUST_PSP_BUILD_STD=1 cargo +nightly psp --release
+
 # UE5 FFI shared library
 cargo build --release -p oasis-ffi
 
@@ -75,7 +78,8 @@ oasis-types     (foundation: Color, Button, InputEvent, backend traits, error ty
     │   └── oasis-app      (binary entry points: oasis-app, oasis-screenshot)
     ├── oasis-backend-ue5  (software RGBA framebuffer for Unreal Engine 5)
     │   └── oasis-ffi      (cdylib C-ABI for UE5 integration)
-    └── oasis-backend-psp  (excluded from workspace, PSP hardware via sceGu)
+    ├── oasis-backend-psp  (excluded from workspace, PSP hardware via sceGu)
+    └── oasis-plugin-psp   (excluded from workspace, kernel-mode PRX overlay)
 ```
 
 ### Backend Trait Boundary

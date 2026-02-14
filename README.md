@@ -80,7 +80,7 @@ Native virtual resolution is 480x272 (PSP native) across all backends.
 
 ## Crates
 
-The framework is split into 16 workspace crates plus 1 excluded PSP backend:
+The framework is split into 16 workspace crates plus 2 excluded PSP crates:
 
 ```
 oasis-os/
@@ -101,6 +101,7 @@ oasis-os/
 |   +-- oasis-backend-sdl/            # SDL2 rendering and input (desktop + Pi)
 |   +-- oasis-backend-ue5/            # UE5 software framebuffer + FFI input queue
 |   +-- oasis-backend-psp/            # [excluded from workspace] sceGu hardware rendering, PSP controller, UMD browsing
+|   +-- oasis-plugin-psp/            # [excluded from workspace] kernel-mode PRX: in-game overlay + background music
 |   +-- oasis-ffi/                    # C FFI boundary for UE5 integration
 |   +-- oasis-app/                    # Binary entry points: desktop app + screenshot tool
 +-- skins/
@@ -129,10 +130,11 @@ oasis-os/
 | `oasis-backend-sdl` | SDL2 rendering and input backend for desktop and Raspberry Pi |
 | `oasis-backend-ue5` | UE5 render target backend -- software RGBA framebuffer and FFI input queue |
 | `oasis-backend-psp` | PSP hardware backend -- sceGu sprite rendering, PSP controller input, dual-panel file manager, UMD disc browsing, std via [rust-psp](https://github.com/AndrewAltimit/rust-psp) SDK |
+| `oasis-plugin-psp` | PSP overlay plugin PRX -- kernel-mode companion module for in-game overlay UI and background MP3 playback |
 | `oasis-ffi` | C-ABI FFI boundary (`cdylib`) for UE5 and external integrations |
 | `oasis-app` | Desktop entry point (SDL2) and screenshot capture tool |
 
-The PSP backend is excluded from the workspace (requires `mipsel-sony-psp` target) and depends on the standalone [rust-psp SDK](https://github.com/AndrewAltimit/rust-psp) via git dependency.
+The PSP crates are excluded from the workspace (require `mipsel-sony-psp` target) and depend on the standalone [rust-psp SDK](https://github.com/AndrewAltimit/rust-psp) via git dependency. The backend compiles to an EBOOT.PBP (standalone application), while the plugin compiles to a kernel-mode PRX (resident overlay module loaded by CFW via `PLUGINS.TXT`).
 
 ## Building
 
@@ -155,6 +157,16 @@ cd crates/oasis-backend-psp
 RUST_PSP_BUILD_STD=1 cargo +nightly psp --release
 # Output: target/mipsel-sony-psp-std/release/EBOOT.PBP
 ```
+
+### PSP Overlay Plugin (PRX)
+
+```bash
+cd crates/oasis-plugin-psp
+RUST_PSP_BUILD_STD=1 cargo +nightly psp --release
+# Output: target/mipsel-sony-psp-std/release/oasis_plugin.prx
+```
+
+See [PSP Plugin Guide](docs/psp-plugin.md) for installation and usage.
 
 ### UE5 (FFI Library)
 
@@ -229,6 +241,7 @@ GitHub Actions workflows run the full pipeline automatically on push to `main` a
 - [Technical Design Document](docs/design.md) -- architecture, backends, skins, UE5 integration, PSP implementation, VFS, plugin system, security considerations, migration strategy (v2.4, 1300+ lines)
 - [Skin Authoring Guide](docs/skin-authoring.md) -- creating custom skins, TOML file reference, theme derivation, effect system, runtime switching
 - [PSP Modernization Plan](docs/psp-modernization-plan.md) -- 9-phase, 40-step roadmap for PSP backend modernization using the rust-psp SDK
+- [PSP Plugin Guide](docs/psp-plugin.md) -- installation, controls, and configuration for the in-game overlay PRX
 
 ## License
 

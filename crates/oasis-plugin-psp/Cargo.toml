@@ -1,0 +1,32 @@
+# Standalone crate -- excluded from the oasis_os workspace because it
+# requires the mipsel-sony-psp target and the rust-psp SDK.
+#
+# Builds a kernel-mode PRX plugin that stays resident alongside games,
+# providing in-game overlay UI and background MP3 playback.
+#
+# Build with: RUST_PSP_BUILD_STD=1 cargo +nightly psp --release
+
+[workspace]
+
+[package]
+name = "oasis-plugin-psp"
+description = "PSP overlay plugin PRX: in-game overlay + background music for OASIS_OS"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+repository = "https://github.com/AndrewAltimit/oasis-os"
+authors = ["AndrewAltimit"]
+
+[dependencies]
+psp = { git = "https://github.com/AndrewAltimit/rust-psp", branch = "main", features = ["kernel", "std"] }
+
+# unicode-width workaround for mips target panic.
+[patch.crates-io]
+unicode-width = { git = "https://git.sr.ht/~sajattack/unicode-width" }
+
+[profile.release]
+opt-level = "z"        # minimize size (<64KB target)
+lto = true
+codegen-units = 1
+panic = "abort"
+# Do NOT set strip = true -- it conflicts with --emit-relocs needed by prxgen.

@@ -702,6 +702,25 @@ The firmware modernization dramatically simplifies the dashboard's application d
 
 No KXploit handling, no '%' directory pairing, no title watermark stripping, no firmware-version-specific icon selection. The code reduction is approximately 60% in the discovery module alone.
 
+#### 8.4.5 Overlay Plugin PRX Architecture
+
+OASIS uses a two-binary design on PSP, inspired by IRShell and similar PSP shells that shipped companion PRX modules for in-game functionality:
+
+| Binary | Crate | Format | Mode | Purpose |
+|--------|-------|--------|------|---------|
+| EBOOT.PBP | `oasis-backend-psp` | Standalone executable | User | Full shell (dashboard, terminal, browser, apps) |
+| PRX | `oasis-plugin-psp` | Relocatable module | Kernel | Lightweight overlay + background music |
+
+The PRX is loaded by custom firmware at boot time via a `PLUGINS.TXT` entry and stays resident in kernel memory when games launch. The EBOOT is replaced by the game, but the PRX persists.
+
+**Hook mechanism:** The PRX patches `sceDisplaySetFrameBuf` via `sctrlHENPatchSyscall` (a CFW-provided API for syscall table manipulation). After the game renders each frame, the hook draws overlay UI elements directly into the framebuffer using alpha-blended pixel writes.
+
+**Memory budget:** <64KB total (code + static data). No heap allocator for the core overlay path. The plugin uses static buffers for MP3 decode, PCM output, playlist storage, and overlay rendering. Atomics provide thread-safe state sharing between the display hook (game thread) and audio thread.
+
+**Background audio:** A dedicated kernel thread streams MP3 files from `ms0:/MUSIC/` through the PSP's hardware MP3 decoder (`sceMp3*`) to a reserved audio channel. File data is streamed in chunks rather than loaded entirely into memory.
+
+**Integration:** The EBOOT includes terminal commands (`plugin install`, `plugin remove`, `plugin status`) to manage the PRX installation, PLUGINS.TXT registration, and configuration file (`ms0:/seplugins/oasis.ini`).
+
 ---
 
 ## 9. Linux / Raspberry Pi Platform

@@ -47,6 +47,9 @@ pub fn execute_command(cmd: &str, config: &mut psp::config::Config) -> Vec<Strin
             String::from("  pause/resume/stop - Audio control"),
             String::from("  umd        - UMD disc info"),
             String::from("  save/load  - Terminal history"),
+            String::from("  plugin install - Install overlay PRX"),
+            String::from("  plugin remove  - Remove overlay PRX"),
+            String::from("  plugin status  - Plugin load status"),
             String::from("  clear      - Clear terminal"),
             String::new(),
             String::from("[Square] Open keyboard  [X] Execute"),
@@ -151,6 +154,15 @@ pub fn execute_command(cmd: &str, config: &mut psp::config::Config) -> Vec<Strin
         "mem" => cmd_mem(),
         _ if trimmed.starts_with("config ") => cmd_config(trimmed, config),
         "umd" | "umdinfo" => cmd_umd(),
+        "plugin install" => cmd_plugin_install(),
+        "plugin remove" => cmd_plugin_remove(),
+        "plugin status" => cmd_plugin_status(),
+        "plugin" => vec![
+            String::from("Usage:"),
+            String::from("  plugin install - Install overlay PRX"),
+            String::from("  plugin remove  - Remove overlay PRX"),
+            String::from("  plugin status  - Show load status"),
+        ],
         "version" => vec![String::from("OASIS_OS v0.1.0")],
         "about" => vec![
             String::from("OASIS_OS -- Embeddable OS Framework"),
@@ -493,6 +505,150 @@ unsafe extern "C" fn me_sum_task(arg: i32) -> i32 {
         i += 1;
     }
     sum
+}
+
+// ---------------------------------------------------------------------------
+// Plugin management
+// ---------------------------------------------------------------------------
+
+/// PRX source path (bundled alongside EBOOT in the GAME directory).
+const PLUGIN_SRC: &str = "oasis_plugin.prx";
+/// PRX install destination on Memory Stick.
+const PLUGIN_DST: &str = "ms0:/seplugins/oasis_plugin.prx";
+/// PLUGINS.TXT path.
+const PLUGINS_TXT: &str = "ms0:/seplugins/PLUGINS.TXT";
+/// Line to add/remove in PLUGINS.TXT.
+const PLUGIN_LINE: &str = "game, ms0:/seplugins/oasis_plugin.prx, on";
+/// Default oasis.ini content.
+const DEFAULT_INI: &str = "\
+# OASIS OS Overlay Plugin Configuration\n\
+# Trigger button: note or screen\n\
+trigger = note\n\
+# Music directory\n\
+music_dir = ms0:/MUSIC/\n\
+# Overlay opacity (0-255)\n\
+opacity = 180\n\
+# Auto-start music on game launch\n\
+autoplay = false\n";
+
+fn cmd_plugin_install() -> Vec<String> {
+    let mut out = Vec::new();
+
+    // Ensure seplugins directory exists
+    let _ = psp::io::create_dir("ms0:/seplugins");
+
+    // Copy PRX file
+    match psp::io::read_to_vec(PLUGIN_SRC) {
+        Ok(data) => match psp::io::write_bytes(PLUGIN_DST, &data) {
+            Ok(()) => out.push(format!("Copied PRX to {}", PLUGIN_DST)),
+            Err(e) => {
+                out.push(format!("Failed to write PRX: {:?}", e));
+                return out;
+            }
+        },
+        Err(e) => {
+            out.push(format!("PRX not found ({}): {:?}", PLUGIN_SRC, e));
+            out.push(String::from("Place oasis_plugin.prx next to EBOOT.PBP"));
+            return out;
+        }
+    }
+
+    // Add to PLUGINS.TXT (if not already present)
+    let existing = psp::io::read_to_vec(PLUGINS_TXT).unwrap_or_default();
+    let text = String::from_utf8_lossy(&existing);
+    if !text.contains("oasis_plugin.prx") {
+        let mut new_text = text.to_string();
+        if !new_text.is_empty() && !new_text.ends_with('\n') {
+            new_text.push('\n');
+        }
+        new_text.push_str(PLUGIN_LINE);
+        new_text.push('\n');
+        match psp::io::write_bytes(PLUGINS_TXT, new_text.as_bytes()) {
+            Ok(()) => out.push(String::from("Added to PLUGINS.TXT")),
+            Err(e) => out.push(format!("Failed to update PLUGINS.TXT: {:?}", e)),
+        }
+    } else {
+        out.push(String::from("Already in PLUGINS.TXT"));
+    }
+
+    // Write default config if it doesn't exist
+    let ini_path = "ms0:/seplugins/oasis.ini";
+    if psp::io::read_to_vec(ini_path).is_err() {
+        let _ = psp::io::write_bytes(ini_path, DEFAULT_INI.as_bytes());
+        out.push(String::from("Created oasis.ini with defaults"));
+    }
+
+    out.push(String::from("Plugin installed. Reboot to activate."));
+    out
+}
+
+fn cmd_plugin_remove() -> Vec<String> {
+    let mut out = Vec::new();
+
+    // Remove PRX file
+    match psp::io::remove_file(PLUGIN_DST) {
+        Ok(()) => out.push(format!("Removed {}", PLUGIN_DST)),
+        Err(e) => out.push(format!("PRX not found or remove failed: {:?}", e)),
+    }
+
+    // Remove from PLUGINS.TXT
+    match psp::io::read_to_vec(PLUGINS_TXT) {
+        Ok(data) => {
+            let text = String::from_utf8_lossy(&data);
+            let filtered: Vec<&str> = text
+                .lines()
+                .filter(|l| !l.contains("oasis_plugin.prx"))
+                .collect();
+            let new_text = filtered.join("\n") + "\n";
+            match psp::io::write_bytes(PLUGINS_TXT, new_text.as_bytes()) {
+                Ok(()) => out.push(String::from("Removed from PLUGINS.TXT")),
+                Err(e) => out.push(format!("Failed to update PLUGINS.TXT: {:?}", e)),
+            }
+        }
+        Err(_) => out.push(String::from("PLUGINS.TXT not found")),
+    }
+
+    out.push(String::from("Plugin removed. Reboot to deactivate."));
+    out
+}
+
+fn cmd_plugin_status() -> Vec<String> {
+    let mut out = Vec::new();
+
+    // Check if PRX exists on Memory Stick
+    let prx_exists = psp::io::read_to_vec(PLUGIN_DST).is_ok();
+    out.push(format!(
+        "PRX file: {}",
+        if prx_exists { "installed" } else { "not found" }
+    ));
+
+    // Check PLUGINS.TXT
+    match psp::io::read_to_vec(PLUGINS_TXT) {
+        Ok(data) => {
+            let text = String::from_utf8_lossy(&data);
+            let entry = text.lines().find(|l| l.contains("oasis_plugin.prx"));
+            match entry {
+                Some(line) => {
+                    let enabled = line.contains(", on");
+                    out.push(format!(
+                        "PLUGINS.TXT: {}",
+                        if enabled { "enabled" } else { "disabled" }
+                    ));
+                }
+                None => out.push(String::from("PLUGINS.TXT: not registered")),
+            }
+        }
+        Err(_) => out.push(String::from("PLUGINS.TXT: not found")),
+    }
+
+    // Check if config exists
+    let ini_exists = psp::io::read_to_vec("ms0:/seplugins/oasis.ini").is_ok();
+    out.push(format!(
+        "Config: {}",
+        if ini_exists { "oasis.ini found" } else { "no config" }
+    ));
+
+    out
 }
 
 #[cfg(feature = "kernel-me")]
