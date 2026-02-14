@@ -107,11 +107,14 @@ impl Command for TreeCmd {
         let mut lines = vec![root.clone()];
         let mut dirs = 0u32;
         let mut files = 0u32;
-        tree_recursive(env, &root, "", &mut lines, &mut dirs, &mut files)?;
+        tree_recursive(env, &root, "", &mut lines, &mut dirs, &mut files, 0)?;
         lines.push(format!("\n{dirs} directories, {files} files"));
         Ok(CommandOutput::Text(lines.join("\n")))
     }
 }
+
+/// Maximum recursion depth for tree/du to prevent stack overflow.
+const MAX_DEPTH: usize = 64;
 
 fn tree_recursive(
     env: &mut Environment<'_>,
@@ -120,7 +123,12 @@ fn tree_recursive(
     lines: &mut Vec<String>,
     dirs: &mut u32,
     files: &mut u32,
+    depth: usize,
 ) -> Result<()> {
+    if depth >= MAX_DEPTH {
+        lines.push(format!("{prefix}... (max depth reached)"));
+        return Ok(());
+    }
     let entries = env.vfs.readdir(dir)?;
     let count = entries.len();
     for (i, entry) in entries.iter().enumerate() {
@@ -145,7 +153,15 @@ fn tree_recursive(
             } else {
                 format!("{prefix}│   ")
             };
-            tree_recursive(env, &child_path, &child_prefix, lines, dirs, files)?;
+            tree_recursive(
+                env,
+                &child_path,
+                &child_prefix,
+                lines,
+                dirs,
+                files,
+                depth + 1,
+            )?;
         } else {
             *files += 1;
         }
@@ -185,13 +201,21 @@ impl Command for DuCmd {
             )));
         }
         let mut lines = Vec::new();
-        let total = du_recursive(env, &root, &mut lines)?;
+        let total = du_recursive(env, &root, &mut lines, 0)?;
         lines.push(format!("{:>8}  {root} (total)", format_size(total)));
         Ok(CommandOutput::Text(lines.join("\n")))
     }
 }
 
-fn du_recursive(env: &mut Environment<'_>, dir: &str, lines: &mut Vec<String>) -> Result<u64> {
+fn du_recursive(
+    env: &mut Environment<'_>,
+    dir: &str,
+    lines: &mut Vec<String>,
+    depth: usize,
+) -> Result<u64> {
+    if depth >= MAX_DEPTH {
+        return Ok(0);
+    }
     let entries = env.vfs.readdir(dir)?;
     let mut total = 0u64;
     for entry in &entries {
@@ -201,7 +225,7 @@ fn du_recursive(env: &mut Environment<'_>, dir: &str, lines: &mut Vec<String>) -
             format!("{}/{}", dir, entry.name)
         };
         if entry.kind == EntryKind::Directory {
-            let sub_total = du_recursive(env, &path, lines)?;
+            let sub_total = du_recursive(env, &path, lines, depth + 1)?;
             total += sub_total;
         } else {
             total += entry.size;

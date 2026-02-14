@@ -215,6 +215,10 @@ impl CommandRegistry {
         let single_command = segments.len() == 1;
         let mut combined_output = Vec::new();
         let mut last_signal: Option<CommandOutput> = None;
+        // Track text output produced after the most recent signal command so
+        // that `echo hi ; clear ; echo bye` returns "bye" instead of the
+        // Clear signal (which would silently discard the post-clear text).
+        let mut output_after_signal = Vec::new();
 
         for segment in &segments {
             // Check chain condition.
@@ -235,6 +239,9 @@ impl CommandRegistry {
                         CommandOutput::Text(ref text) => {
                             if !text.is_empty() {
                                 combined_output.push(text.clone());
+                                if last_signal.is_some() {
+                                    output_after_signal.push(text.clone());
+                                }
                             }
                         },
                         CommandOutput::Table { .. }
@@ -244,6 +251,7 @@ impl CommandRegistry {
                         | CommandOutput::BrowserSandbox { .. }
                         | CommandOutput::SkinSwap { .. } => {
                             last_signal = Some(output);
+                            output_after_signal.clear();
                         },
                         CommandOutput::None => {},
                     }
@@ -256,13 +264,21 @@ impl CommandRegistry {
                         return Err(e);
                     }
                     combined_output.push(format!("error: {e}"));
+                    if last_signal.is_some() {
+                        output_after_signal.push(format!("error: {e}"));
+                    }
                 },
             }
         }
 
-        // Prefer returning the last signal output if any.
+        // If the last signal was followed by text output, return the text
+        // (the signal effect is conceptually consumed by subsequent output).
+        // Otherwise return the signal itself.
         if let Some(signal) = last_signal {
-            return Ok(signal);
+            if output_after_signal.is_empty() {
+                return Ok(signal);
+            }
+            return Ok(CommandOutput::Text(output_after_signal.join("\n")));
         }
 
         if combined_output.is_empty() {
@@ -669,6 +685,12 @@ impl CommandRegistry {
                         let mut sub_pos = 0;
                         self.execute_script_block(&body, &mut sub_pos, env, output);
                         iterations += 1;
+                    }
+                    if iterations >= MAX_ITERATIONS {
+                        output.push(format!(
+                            "warning: while loop terminated after \
+                             {MAX_ITERATIONS} iterations (limit reached)"
+                        ));
                     }
                 },
                 "for" => {
