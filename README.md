@@ -67,43 +67,68 @@ Native virtual resolution is 480x272 (PSP native) across all backends.
 - **Scene Graph (SDI)** -- Named object registry with position, size, color, texture, text, z-order, alpha, gradients, rounded corners, shadows
 - **Browser Engine** -- Embedded HTML/CSS/Gemini renderer with DOM parsing, CSS cascade, block/inline/table layout, link navigation, reader mode, bookmarks
 - **Window Manager** -- Movable, resizable, overlapping windows with titlebars, minimize/maximize/close, hit testing, and themed decorations
-- **UI Widget Toolkit** -- 15+ reusable widgets: Button, Card, TabBar, Panel, TextField, ListView, ScrollView, ProgressBar, Toggle, NinePatch, and more
-- **30+ Terminal Commands** -- File operations, networking (wifi, ping, http), audio control, agent/MCP tools, plugin management, skin switching, scripting, transfer (FTP), system updates
+- **UI Widget Toolkit** -- 15+ reusable widgets: Button, Card, TabBar, Panel, TextField, ListView, ScrollView, ProgressBar, Toggle, NinePatch, flex layout, and more
+- **Proportional Bitmap Font** -- Variable-width glyph rendering from ink bounds with per-character advance values (not fixed-width 8x8)
+- **80+ Terminal Commands** -- 14 command modules: core (fs/system), text processing (head, tail, grep, sort, uniq, tr, cut, diff), file utilities (write, tree, du, stat, xxd, checksum), dev tools (base64, json, uuid, seq, expr), fun (cal, fortune, banner, matrix), security (chmod, chown, passwd, audit), documentation (man, tutorial, motd), networking (wifi, ping, http), audio, UI, skin switching, scripting, transfer (FTP), system updates. Shell features include variable expansion, glob expansion, aliases, history (!!/!n), piping, and command chaining
 - **Audio System** -- Playlist management, MP3/WAV playback, ID3 tag parsing, shuffle/repeat modes, volume control
 - **Plugin System** -- Runtime-extensible via `Plugin` trait, VFS-based IPC, manifest-driven discovery
 - **Virtual File System** -- `MemoryVfs` (in-RAM), `RealVfs` (disk), `GameAssetVfs` (UE5 with overlay writes)
 - **Remote Terminal** -- TCP listener with PSK authentication for headless device management
 - **Agent/MCP Integration** -- Agent status tracking, MCP tool browsing/invocation, tamper detection, system health dashboard
 - **Scripting** -- Line-based command scripts, startup scripts, cron-like scheduling
-- **8 Built-in Apps** -- File Manager, Settings, Network, Music Player, Photo Viewer, Package Manager, Browser, System Monitor
+- **8 Built-in Apps** -- File Manager (dual-panel Norton Commander-style), Settings, Network, Music Player, Photo Viewer, Package Manager, Browser, System Monitor
 
 ## Crates
+
+The framework is split into 16 workspace crates plus 1 excluded PSP backend:
 
 ```
 oasis-os/
 +-- Cargo.toml                        # Workspace root (resolver="2", edition 2024)
 +-- crates/
-|   +-- oasis-core/                   # Platform-agnostic framework (SDI, VFS, commands, skins, WM, browser, UI)
+|   +-- oasis-types/                  # Foundation types: Color, Button, InputEvent, backend traits, error types
+|   +-- oasis-vfs/                    # Virtual file system: MemoryVfs, RealVfs, GameAssetVfs
+|   +-- oasis-platform/              # Platform service traits: Power, Time, USB, Network, OSK
+|   +-- oasis-sdi/                    # Scene Display Interface: named object registry, z-order, rendering
+|   +-- oasis-net/                    # TCP networking, PSK authentication, remote terminal, FTP transfer
+|   +-- oasis-audio/                  # Audio manager, playlist, shuffle/repeat, MP3 ID3 parsing
+|   +-- oasis-ui/                     # 15+ widgets: Button, Card, TabBar, Panel, TextField, ListView, etc.
+|   +-- oasis-wm/                     # Window manager: drag/resize, hit testing, minimize/maximize/close
+|   +-- oasis-skin/                   # TOML skin engine, 8 skins, theme derivation from 9 base colors
+|   +-- oasis-terminal/              # Command interpreter: 80+ commands across 14 modules, shell features
+|   +-- oasis-browser/               # HTML/CSS/Gemini browser: DOM, CSS cascade, block/inline/table layout
+|   +-- oasis-core/                   # Coordination layer: apps, dashboard, agent, plugin, script, etc.
 |   +-- oasis-backend-sdl/            # SDL2 rendering and input (desktop + Pi)
 |   +-- oasis-backend-ue5/            # UE5 software framebuffer + FFI input queue
-|   +-- oasis-backend-psp/            # [EXCLUDED] sceGu hardware rendering, PSP controller (std via rust-psp)
+|   +-- oasis-backend-psp/            # [excluded from workspace] sceGu hardware rendering, PSP controller, UMD browsing
 |   +-- oasis-ffi/                    # C FFI boundary for UE5 integration
 |   +-- oasis-app/                    # Binary entry points: desktop app + screenshot tool
 +-- skins/
 |   +-- classic/                      # PSIX-style icon grid dashboard
 |   +-- xp/                           # Windows XP Luna-inspired theme with start menu
 +-- docs/
-    +-- design.md                     # Technical design document (v2.3)
+    +-- design.md                     # Technical design document (v2.4)
     +-- skin-authoring.md             # Skin creation guide with full TOML reference
     +-- psp-modernization-plan.md     # PSP backend modernization roadmap (9 phases, 40 steps)
 ```
 
 | Crate | Description |
 |-------|-------------|
-| `oasis-core` | Platform-agnostic core: scene graph (SDI), backend traits, input pipeline, skin engine, browser (HTML/CSS/Gemini), window manager, UI widgets, virtual file system, command interpreter, audio manager, agent/MCP integration, plugin interface, scripting engine |
+| `oasis-types` | Foundation types and traits: `Color`, `Button`, `InputEvent`, `SdiBackend`, `InputBackend`, `NetworkBackend`, `AudioBackend`, error types, TLS |
+| `oasis-vfs` | Virtual file system: `MemoryVfs` (in-RAM), `RealVfs` (disk), `GameAssetVfs` (UE5 with overlay writes) |
+| `oasis-platform` | Platform service traits: `PowerService`, `TimeService`, `UsbService`, `NetworkService`, `OskService` |
+| `oasis-sdi` | Scene Display Interface: named object registry with position, size, color, texture, text, z-order, gradients, shadows |
+| `oasis-net` | TCP networking with PSK authentication, remote terminal, FTP transfer |
+| `oasis-audio` | Audio manager with playlist, shuffle/repeat modes, MP3 ID3 tag parsing |
+| `oasis-ui` | 15+ reusable widgets: Button, Card, TabBar, Panel, TextField, ListView, ScrollView, ProgressBar, Toggle, NinePatch, flex layout |
+| `oasis-wm` | Window manager: movable/resizable windows, titlebar buttons, hit testing, themed decorations |
+| `oasis-skin` | Data-driven TOML skin system with 8 skins, theme derivation from 9 base colors to ~30 UI element colors |
+| `oasis-terminal` | Command interpreter with 80+ commands across 14 modules, shell features (variables, globs, aliases, history, piping) |
+| `oasis-browser` | Embeddable HTML/CSS/Gemini rendering engine: DOM parser, CSS cascade, block/inline/table layout, reader mode |
+| `oasis-core` | Coordination layer: app runner (dual-panel file manager), dashboard, agent/MCP, plugin, scripting, status/bottom bars |
 | `oasis-backend-sdl` | SDL2 rendering and input backend for desktop and Raspberry Pi |
 | `oasis-backend-ue5` | UE5 render target backend -- software RGBA framebuffer and FFI input queue |
-| `oasis-backend-psp` | PSP hardware backend -- sceGu sprite rendering, PSP controller input, std via [rust-psp](https://github.com/AndrewAltimit/rust-psp) SDK |
+| `oasis-backend-psp` | PSP hardware backend -- sceGu sprite rendering, PSP controller input, dual-panel file manager, UMD disc browsing, std via [rust-psp](https://github.com/AndrewAltimit/rust-psp) SDK |
 | `oasis-ffi` | C-ABI FFI boundary (`cdylib`) for UE5 and external integrations |
 | `oasis-app` | Desktop entry point (SDL2) and screenshot capture tool |
 
@@ -201,7 +226,7 @@ GitHub Actions workflows run the full pipeline automatically on push to `main` a
 
 ## Documentation
 
-- [Technical Design Document](docs/design.md) -- architecture, backends, skins, UE5 integration, PSP implementation, VFS, plugin system, security considerations, migration strategy (v2.3, 1300+ lines)
+- [Technical Design Document](docs/design.md) -- architecture, backends, skins, UE5 integration, PSP implementation, VFS, plugin system, security considerations, migration strategy (v2.4, 1300+ lines)
 - [Skin Authoring Guide](docs/skin-authoring.md) -- creating custom skins, TOML file reference, theme derivation, effect system, runtime switching
 - [PSP Modernization Plan](docs/psp-modernization-plan.md) -- 9-phase, 40-step roadmap for PSP backend modernization using the rust-psp SDK
 
