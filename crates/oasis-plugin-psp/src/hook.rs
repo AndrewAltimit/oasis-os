@@ -107,33 +107,39 @@ pub fn install_display_hook() -> bool {
         return false;
     }
 
-    // Flush dcache to ensure our string data is visible to kernel functions.
-    // Freshly loaded PRX data may still be in dcache on MIPS.
     unsafe {
         psp::sys::sceKernelDcacheWritebackAll();
     }
 
-    crate::debug_log(b"[OASIS] hook: dcache flushed");
-
-    // SAFETY: We are in kernel mode (module_kernel!).
+    // Read the actual MIPS instructions at the import stub to see what
+    // the firmware patched it to (j addr, syscall, jr $ra, etc.)
     unsafe {
-        // Test 1: call with a known kernel module to see if the function
-        // works at all. sceKernelDelayThread NID=0xCEAB00D2 from
-        // sceThreadManager / ThreadManForKernel.
-        crate::debug_log(b"[OASIS] hook: test FindFunc(ThreadMan)...");
-        let test1 = psp::sys::sctrlHENFindFunction(
-            b"sceThreadManager\0".as_ptr(),
-            b"ThreadManForKernel\0".as_ptr(),
-            0xCEAB00D2_u32, // sceKernelDelayThread
-        );
-        if test1.is_null() {
-            crate::debug_log(b"[OASIS] hook: ThreadMan -> NULL");
-        } else {
-            crate::debug_log(b"[OASIS] hook: ThreadMan -> found!");
-        }
+        let stub = fn_addr as *const u32;
+        let word0 = *stub;         // First instruction
+        let word1 = *stub.add(1);  // Second instruction
+        let mut buf = [0u8; 64];
+        let mut pos = write_log_bytes(&mut buf, 0, b"[OASIS] stub: ");
+        pos = write_log_hex(&mut buf, pos, word0);
+        pos = write_log_bytes(&mut buf, pos, b" ");
+        pos = write_log_hex(&mut buf, pos, word1);
+        crate::debug_log(&buf[..pos]);
 
-        // Test 2: try the display module
-        crate::debug_log(b"[OASIS] hook: test FindFunc(Display)...");
+        // Also read PatchSyscall stub
+        let fn2_addr = psp::sys::sctrlHENPatchSyscall as usize;
+        let stub2 = fn2_addr as *const u32;
+        let w0 = *stub2;
+        let w1 = *stub2.add(1);
+        let mut buf2 = [0u8; 64];
+        let mut pos2 = write_log_bytes(&mut buf2, 0, b"[OASIS] stub2: ");
+        pos2 = write_log_hex(&mut buf2, pos2, w0);
+        pos2 = write_log_bytes(&mut buf2, pos2, b" ");
+        pos2 = write_log_hex(&mut buf2, pos2, w1);
+        crate::debug_log(&buf2[..pos2]);
+    }
+
+    // Now try calling FindFunction
+    crate::debug_log(b"[OASIS] hook: calling FindFunc...");
+    unsafe {
         let test_ptr = psp::sys::sctrlHENFindFunction(
             b"sceDisplay_Service\0".as_ptr(),
             b"sceDisplay\0".as_ptr(),
