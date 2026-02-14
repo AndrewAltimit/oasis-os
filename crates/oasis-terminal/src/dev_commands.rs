@@ -430,11 +430,14 @@ impl Command for ExprCmd {
     }
 }
 
+/// Maximum nesting depth for parenthesised sub-expressions.
+const EXPR_MAX_DEPTH: usize = 64;
+
 /// Simple arithmetic expression evaluator supporting +, -, *, /, %, ().
 fn eval_expr(input: &str) -> std::result::Result<f64, String> {
     let tokens = tokenize_expr(input)?;
     let mut pos = 0;
-    let result = parse_add_sub(&tokens, &mut pos)?;
+    let result = parse_add_sub(&tokens, &mut pos, 0)?;
     if pos < tokens.len() {
         return Err(format!("unexpected token: {}", tokens[pos]));
     }
@@ -468,12 +471,16 @@ fn tokenize_expr(input: &str) -> std::result::Result<Vec<String>, String> {
     Ok(tokens)
 }
 
-fn parse_add_sub(tokens: &[String], pos: &mut usize) -> std::result::Result<f64, String> {
-    let mut left = parse_mul_div(tokens, pos)?;
+fn parse_add_sub(
+    tokens: &[String],
+    pos: &mut usize,
+    depth: usize,
+) -> std::result::Result<f64, String> {
+    let mut left = parse_mul_div(tokens, pos, depth)?;
     while *pos < tokens.len() && (tokens[*pos] == "+" || tokens[*pos] == "-") {
         let op = tokens[*pos].clone();
         *pos += 1;
-        let right = parse_mul_div(tokens, pos)?;
+        let right = parse_mul_div(tokens, pos, depth)?;
         if op == "+" {
             left += right;
         } else {
@@ -483,13 +490,17 @@ fn parse_add_sub(tokens: &[String], pos: &mut usize) -> std::result::Result<f64,
     Ok(left)
 }
 
-fn parse_mul_div(tokens: &[String], pos: &mut usize) -> std::result::Result<f64, String> {
-    let mut left = parse_unary(tokens, pos)?;
+fn parse_mul_div(
+    tokens: &[String],
+    pos: &mut usize,
+    depth: usize,
+) -> std::result::Result<f64, String> {
+    let mut left = parse_unary(tokens, pos, depth)?;
     while *pos < tokens.len() && (tokens[*pos] == "*" || tokens[*pos] == "/" || tokens[*pos] == "%")
     {
         let op = tokens[*pos].clone();
         *pos += 1;
-        let right = parse_unary(tokens, pos)?;
+        let right = parse_unary(tokens, pos, depth)?;
         match op.as_str() {
             "*" => left *= right,
             "/" => {
@@ -510,23 +521,34 @@ fn parse_mul_div(tokens: &[String], pos: &mut usize) -> std::result::Result<f64,
     Ok(left)
 }
 
-fn parse_unary(tokens: &[String], pos: &mut usize) -> std::result::Result<f64, String> {
+fn parse_unary(
+    tokens: &[String],
+    pos: &mut usize,
+    depth: usize,
+) -> std::result::Result<f64, String> {
     if *pos < tokens.len() && tokens[*pos] == "-" {
         *pos += 1;
-        let val = parse_primary(tokens, pos)?;
+        let val = parse_primary(tokens, pos, depth)?;
         Ok(-val)
     } else {
-        parse_primary(tokens, pos)
+        parse_primary(tokens, pos, depth)
     }
 }
 
-fn parse_primary(tokens: &[String], pos: &mut usize) -> std::result::Result<f64, String> {
+fn parse_primary(
+    tokens: &[String],
+    pos: &mut usize,
+    depth: usize,
+) -> std::result::Result<f64, String> {
     if *pos >= tokens.len() {
         return Err("unexpected end of expression".to_string());
     }
     if tokens[*pos] == "(" {
+        if depth >= EXPR_MAX_DEPTH {
+            return Err("expression too deeply nested".to_string());
+        }
         *pos += 1;
-        let val = parse_add_sub(tokens, pos)?;
+        let val = parse_add_sub(tokens, pos, depth + 1)?;
         if *pos >= tokens.len() || tokens[*pos] != ")" {
             return Err("missing closing parenthesis".to_string());
         }
