@@ -18,7 +18,7 @@ repository = "https://github.com/AndrewAltimit/oasis-os"
 authors = ["AndrewAltimit"]
 
 [dependencies]
-psp = { git = "https://github.com/AndrewAltimit/rust-psp", branch = "fix/osk-dialog-gu-frame", features = ["kernel", "std"] }
+psp = { git = "https://github.com/AndrewAltimit/rust-psp", branch = "fix/osk-dialog-gu-frame", features = ["kernel"] }
 
 # unicode-width workaround for mips target panic.
 [patch.crates-io]
