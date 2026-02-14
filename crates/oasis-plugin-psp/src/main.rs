@@ -75,9 +75,6 @@ fn psp_main() {
         debug_log(b"[OASIS] hook install FAILED");
     }
 
-    // Also log what sctrlHENFindFunction returns for diagnostics
-    hook::log_find_function_result();
-
     // Keep the plugin thread alive (it does nothing after setup --
     // all work happens in the display hook and audio thread).
     loop {

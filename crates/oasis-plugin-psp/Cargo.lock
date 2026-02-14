@@ -60,7 +60,7 @@ dependencies = [
 [[package]]
 name = "psp"
 version = "0.4.0"
-source = "git+https://github.com/AndrewAltimit/rust-psp?branch=fix%2Fosk-dialog-gu-frame#7030322b95a269a017908a73e5c1e2ee15ead4cc"
+source = "git+https://github.com/AndrewAltimit/rust-psp?branch=fix%2Fosk-dialog-gu-frame#598e8c1dc9797e4596061551f7611b303c1eed6c"
 dependencies = [
  "bitflags",
  "libm",
