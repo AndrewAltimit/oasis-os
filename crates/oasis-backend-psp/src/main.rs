@@ -544,6 +544,9 @@ fn psp_main() {
     let mut fm_scroll: usize = 0;
     let mut fm_loaded = false;
 
+    // UMD drive state.
+    let mut umd_activated = false;
+
     // USB storage mode handle (RAII: drop exits storage mode).
     let mut usb_storage: Option<psp::usb::UsbStorageMode> = None;
 
@@ -730,6 +733,13 @@ fn psp_main() {
                 InputEvent::Quit => return,
 
                 InputEvent::ButtonPress(Button::Start) => {
+                    if classic_view == ClassicView::FileManager && umd_activated {
+                        // SAFETY: deactivate UMD drive on exit.
+                        unsafe {
+                            psp::sys::sceUmdDeactivate(1, b"disc0:\0".as_ptr());
+                        }
+                        umd_activated = false;
+                    }
                     classic_view = match classic_view {
                         ClassicView::Dashboard => ClassicView::Terminal,
                         ClassicView::Terminal => ClassicView::Dashboard,
@@ -792,6 +802,31 @@ fn psp_main() {
                             },
                             "File Manager" => {
                                 classic_view = ClassicView::FileManager;
+                                if top_tab == TopTab::Umd {
+                                    // Try to activate UMD drive.
+                                    // SAFETY: PSP UMD syscalls with valid args.
+                                    unsafe {
+                                        if psp::sys::sceUmdCheckMedium() != 0 {
+                                            psp::sys::sceUmdActivate(
+                                                1,
+                                                b"disc0:\0".as_ptr(),
+                                            );
+                                            let _ =
+                                                psp::sys::sceUmdWaitDriveStatWithTimer(
+                                                    psp::sys::UmdStateFlags::READY,
+                                                    5_000_000,
+                                                );
+                                            fm_path = String::from("disc0:/");
+                                            umd_activated = true;
+                                        } else {
+                                            term_lines
+                                                .push("No UMD disc inserted.".into());
+                                            fm_path = String::from("ms0:/");
+                                        }
+                                    }
+                                } else {
+                                    fm_path = String::from("ms0:/");
+                                }
                                 fm_loaded = false;
                             },
                             "Photo Viewer" => {
@@ -1006,18 +1041,42 @@ fn psp_main() {
                         } else if fm_path.len() > pos + 1 {
                             fm_path.truncate(pos + 1);
                         } else {
+                            if umd_activated {
+                                // SAFETY: deactivate UMD drive on exit.
+                                unsafe {
+                                    psp::sys::sceUmdDeactivate(
+                                        1,
+                                        b"disc0:\0".as_ptr(),
+                                    );
+                                }
+                                umd_activated = false;
+                            }
                             classic_view = ClassicView::Dashboard;
                         }
                         fm_loaded = false;
                     } else {
+                        if umd_activated {
+                            // SAFETY: deactivate UMD drive on exit.
+                            unsafe {
+                                psp::sys::sceUmdDeactivate(
+                                    1,
+                                    b"disc0:\0".as_ptr(),
+                                );
+                            }
+                            umd_activated = false;
+                        }
                         classic_view = ClassicView::Dashboard;
                     }
                 },
                 InputEvent::ButtonPress(Button::Square)
                     if classic_view == ClassicView::FileManager =>
                 {
-                    // Delete selected file with confirmation dialog.
-                    if fm_selected < fm_entries.len() && !fm_entries[fm_selected].is_dir {
+                    // UMD is read-only, skip delete.
+                    if fm_path.starts_with("disc0:") {
+                        term_lines.push("UMD is read-only.".into());
+                    } else if fm_selected < fm_entries.len()
+                        && !fm_entries[fm_selected].is_dir
+                    {
                         let name = &fm_entries[fm_selected].name;
                         let msg = format!("Delete {}?", name);
                         match psp::dialog::confirm_dialog(&msg) {
@@ -1044,6 +1103,13 @@ fn psp_main() {
                 InputEvent::ButtonPress(Button::Triangle)
                     if classic_view == ClassicView::FileManager =>
                 {
+                    if umd_activated {
+                        // SAFETY: deactivate UMD drive on exit.
+                        unsafe {
+                            psp::sys::sceUmdDeactivate(1, b"disc0:\0".as_ptr());
+                        }
+                        umd_activated = false;
+                    }
                     classic_view = ClassicView::Dashboard;
                 },
 
@@ -1453,13 +1519,23 @@ fn psp_main() {
             (_, ClassicView::Dashboard) => String::from("SYS://DASHBOARD"),
             (_, ClassicView::Terminal) => String::from("SYS://TERMINAL"),
             (_, ClassicView::FileManager) => {
-                let path_part = if fm_path.len() > 14 {
-                    let start = fm_path.ceil_char_boundary(fm_path.len() - 14);
-                    &fm_path[start..]
+                if umd_activated {
+                    let path_part = if fm_path.len() > 14 {
+                        let start = fm_path.ceil_char_boundary(fm_path.len() - 14);
+                        &fm_path[start..]
+                    } else {
+                        &fm_path
+                    };
+                    format!("UMD:{}", path_part)
                 } else {
-                    &fm_path
-                };
-                format!("MSO:/{}", path_part)
+                    let path_part = if fm_path.len() > 14 {
+                        let start = fm_path.ceil_char_boundary(fm_path.len() - 14);
+                        &fm_path[start..]
+                    } else {
+                        &fm_path
+                    };
+                    format!("MSO:/{}", path_part)
+                }
             },
             (_, ClassicView::PhotoViewer) => String::from("SYS://PHOTOS"),
             (_, ClassicView::MusicPlayer) => {
