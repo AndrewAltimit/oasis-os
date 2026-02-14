@@ -113,15 +113,6 @@ unsafe extern "C" fn hooked_set_frame_buf(
         let fb = (top_addr as u32 | 0x4000_0000) as *mut u32;
         let stride = buffer_width as u32;
 
-        // Debug beacon: 2x2 green dot at (1,1) confirms the hook is running.
-        // SAFETY: Writing within screen bounds to valid framebuffer.
-        unsafe {
-            *fb.add((1 * stride + 1) as usize) = 0xFF00FF00;
-            *fb.add((1 * stride + 2) as usize) = 0xFF00FF00;
-            *fb.add((2 * stride + 1) as usize) = 0xFF00FF00;
-            *fb.add((2 * stride + 2) as usize) = 0xFF00FF00;
-        }
-
         // SAFETY: fb is a valid uncached framebuffer pointer.
         unsafe {
             overlay::on_frame(fb, stride);

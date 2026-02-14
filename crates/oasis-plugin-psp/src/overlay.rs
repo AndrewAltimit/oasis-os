@@ -89,23 +89,6 @@ pub unsafe fn on_frame(fb: *mut u32, stride: u32) {
         PREV_BUTTONS = buttons;
     }
 
-    // Debug: 2x2 button-state indicator at (5,5).
-    // Green = idle, Red = L held, Blue = R held, White = L+R+START.
-    let combo = BTN_L_TRIGGER | BTN_R_TRIGGER | BTN_START;
-    let dbg_color = if (buttons & combo) == combo {
-        0xFFFFFFFF // white -- full combo
-    } else if buttons != 0 {
-        0xFF0000FF // red -- some button pressed
-    } else {
-        0xFF00FF00 // green -- idle
-    };
-    unsafe {
-        *fb.add((5 * stride + 5) as usize) = dbg_color;
-        *fb.add((5 * stride + 6) as usize) = dbg_color;
-        *fb.add((6 * stride + 5) as usize) = dbg_color;
-        *fb.add((6 * stride + 6) as usize) = dbg_color;
-    }
-
     let trigger = config::get_config().trigger_mask();
     let state = OverlayState::from_u8(STATE.load(Ordering::Relaxed));
 
