@@ -537,12 +537,21 @@ fn psp_main() {
         }
     }
 
-    // File manager state.
+    // File manager dual-panel state.
     let mut fm_path = String::from("ms0:/");
     let mut fm_entries: Vec<FileEntry> = Vec::new();
     let mut fm_selected: usize = 0;
     let mut fm_scroll: usize = 0;
     let mut fm_loaded = false;
+
+    let mut fm2_path = String::from("ms0:/");
+    let mut fm2_entries: Vec<FileEntry> = Vec::new();
+    let mut fm2_selected: usize = 0;
+    let mut fm2_scroll: usize = 0;
+    let mut fm2_loaded = false;
+
+    // 0 = left panel, 1 = right panel.
+    let mut fm_active_panel: usize = 0;
 
     // UMD drive state.
     let mut umd_activated = false;
@@ -828,6 +837,9 @@ fn psp_main() {
                                     fm_path = String::from("ms0:/");
                                 }
                                 fm_loaded = false;
+                                fm2_path = fm_path.clone();
+                                fm2_loaded = false;
+                                fm_active_panel = 0;
                             },
                             "Photo Viewer" => {
                                 classic_view = ClassicView::PhotoViewer;
@@ -1000,46 +1012,78 @@ fn psp_main() {
                     }
                 },
 
-                // -- File manager input --
+                // -- File manager input (dual-panel) --
+                InputEvent::ButtonPress(Button::Left)
+                    if classic_view == ClassicView::FileManager =>
+                {
+                    fm_active_panel = 0;
+                    audio.send(AudioCmd::PlaySfx(SfxId::Click));
+                },
+                InputEvent::ButtonPress(Button::Right)
+                    if classic_view == ClassicView::FileManager =>
+                {
+                    fm_active_panel = 1;
+                    audio.send(AudioCmd::PlaySfx(SfxId::Click));
+                },
                 InputEvent::ButtonPress(Button::Up) if classic_view == ClassicView::FileManager => {
-                    if fm_selected > 0 {
-                        fm_selected -= 1;
-                        if fm_selected < fm_scroll {
-                            fm_scroll = fm_selected;
+                    let (sel, scr) = if fm_active_panel == 0 {
+                        (&mut fm_selected, &mut fm_scroll)
+                    } else {
+                        (&mut fm2_selected, &mut fm2_scroll)
+                    };
+                    if *sel > 0 {
+                        *sel -= 1;
+                        if *sel < *scr {
+                            *scr = *sel;
                         }
                     }
                 },
                 InputEvent::ButtonPress(Button::Down)
                     if classic_view == ClassicView::FileManager =>
                 {
-                    if fm_selected + 1 < fm_entries.len() {
-                        fm_selected += 1;
-                        if fm_selected >= fm_scroll + FM_VISIBLE_ROWS {
-                            fm_scroll = fm_selected - FM_VISIBLE_ROWS + 1;
+                    let (sel, scr, entries) = if fm_active_panel == 0 {
+                        (&mut fm_selected, &mut fm_scroll, &fm_entries)
+                    } else {
+                        (&mut fm2_selected, &mut fm2_scroll, &fm2_entries)
+                    };
+                    if *sel + 1 < entries.len() {
+                        *sel += 1;
+                        if *sel >= *scr + FM_VISIBLE_ROWS {
+                            *scr = *sel - FM_VISIBLE_ROWS + 1;
                         }
                     }
                 },
                 InputEvent::ButtonPress(Button::Confirm)
                     if classic_view == ClassicView::FileManager =>
                 {
-                    if fm_selected < fm_entries.len() && fm_entries[fm_selected].is_dir {
-                        let dir_name = fm_entries[fm_selected].name.clone();
-                        if fm_path.ends_with('/') {
-                            fm_path = format!("{}{}", fm_path, dir_name);
+                    let (path, entries, sel, loaded) = if fm_active_panel == 0 {
+                        (&mut fm_path, &fm_entries, fm_selected, &mut fm_loaded)
+                    } else {
+                        (&mut fm2_path, &fm2_entries, fm2_selected, &mut fm2_loaded)
+                    };
+                    if sel < entries.len() && entries[sel].is_dir {
+                        let dir_name = entries[sel].name.clone();
+                        if path.ends_with('/') {
+                            *path = format!("{}{}", path, dir_name);
                         } else {
-                            fm_path = format!("{}/{}", fm_path, dir_name);
+                            *path = format!("{}/{}", path, dir_name);
                         }
-                        fm_loaded = false;
+                        *loaded = false;
                     }
                 },
                 InputEvent::ButtonPress(Button::Cancel)
                     if classic_view == ClassicView::FileManager =>
                 {
-                    if let Some(pos) = fm_path.rfind('/') {
-                        if pos > 0 && !fm_path[..pos].ends_with(':') {
-                            fm_path.truncate(pos);
-                        } else if fm_path.len() > pos + 1 {
-                            fm_path.truncate(pos + 1);
+                    let (path, loaded) = if fm_active_panel == 0 {
+                        (&mut fm_path, &mut fm_loaded)
+                    } else {
+                        (&mut fm2_path, &mut fm2_loaded)
+                    };
+                    if let Some(pos) = path.rfind('/') {
+                        if pos > 0 && !path[..pos].ends_with(':') {
+                            path.truncate(pos);
+                        } else if path.len() > pos + 1 {
+                            path.truncate(pos + 1);
                         } else {
                             if umd_activated {
                                 // SAFETY: deactivate UMD drive on exit.
@@ -1053,7 +1097,7 @@ fn psp_main() {
                             }
                             classic_view = ClassicView::Dashboard;
                         }
-                        fm_loaded = false;
+                        *loaded = false;
                     } else {
                         if umd_activated {
                             // SAFETY: deactivate UMD drive on exit.
@@ -1071,25 +1115,28 @@ fn psp_main() {
                 InputEvent::ButtonPress(Button::Square)
                     if classic_view == ClassicView::FileManager =>
                 {
+                    let (path, entries, sel, loaded) = if fm_active_panel == 0 {
+                        (&fm_path, &fm_entries, fm_selected, &mut fm_loaded)
+                    } else {
+                        (&fm2_path, &fm2_entries, fm2_selected, &mut fm2_loaded)
+                    };
                     // UMD is read-only, skip delete.
-                    if fm_path.starts_with("disc0:") {
+                    if path.starts_with("disc0:") {
                         term_lines.push("UMD is read-only.".into());
-                    } else if fm_selected < fm_entries.len()
-                        && !fm_entries[fm_selected].is_dir
-                    {
-                        let name = &fm_entries[fm_selected].name;
+                    } else if sel < entries.len() && !entries[sel].is_dir {
+                        let name = &entries[sel].name;
                         let msg = format!("Delete {}?", name);
                         match psp::dialog::confirm_dialog(&msg) {
                             Ok(psp::dialog::DialogResult::Confirm) => {
-                                let full_path = if fm_path.ends_with('/') {
-                                    format!("{}{}", fm_path, name)
+                                let full_path = if path.ends_with('/') {
+                                    format!("{}{}", path, name)
                                 } else {
-                                    format!("{}/{}", fm_path, name)
+                                    format!("{}/{}", path, name)
                                 };
                                 match psp::io::remove_file(&full_path) {
                                     Ok(()) => {
                                         term_lines.push(format!("Deleted: {}", full_path));
-                                        fm_loaded = false;
+                                        *loaded = false;
                                     },
                                     Err(e) => {
                                         let _ = psp::dialog::error_dialog(e.0 as u32);
@@ -1297,6 +1344,12 @@ fn psp_main() {
                     fm_scroll = 0;
                     fm_loaded = true;
                 }
+                if classic_view == ClassicView::FileManager && !fm2_loaded {
+                    fm2_entries = oasis_backend_psp::list_directory(&fm2_path);
+                    fm2_selected = 0;
+                    fm2_scroll = 0;
+                    fm2_loaded = true;
+                }
                 if classic_view == ClassicView::PhotoViewer && !pv_loaded && !pv_viewing {
                     let all = oasis_backend_psp::list_directory(&pv_path);
                     pv_entries = all
@@ -1364,16 +1417,21 @@ fn psp_main() {
                     },
                     ClassicView::FileManager => {
                         backend.force_bitmap_font = true;
-                        draw_file_manager(
+                        draw_file_manager_dual(
                             &mut backend,
                             &fm_path,
                             &fm_entries,
                             fm_selected,
                             fm_scroll,
+                            &fm2_path,
+                            &fm2_entries,
+                            fm2_selected,
+                            fm2_scroll,
+                            fm_active_panel,
                         );
                         draw_button_hints(
                             &mut backend,
-                            &[("X", "Open"), ("O", "Back"), ("[]", "Del"), ("^v", "Nav")],
+                            &[("X", "Open"), ("O", "Back"), ("<>", "Panel"), ("^v", "Nav")],
                         );
                         backend.force_bitmap_font = false;
                     },
@@ -1466,6 +1524,11 @@ fn psp_main() {
                             &fm_entries,
                             fm_selected,
                             fm_scroll,
+                            &fm2_path,
+                            &fm2_entries,
+                            fm2_selected,
+                            fm2_scroll,
+                            fm_active_panel,
                             cx,
                             cy,
                             cw,
@@ -1519,21 +1582,20 @@ fn psp_main() {
             (_, ClassicView::Dashboard) => String::from("SYS://DASHBOARD"),
             (_, ClassicView::Terminal) => String::from("SYS://TERMINAL"),
             (_, ClassicView::FileManager) => {
+                let active_path = if fm_active_panel == 0 {
+                    &fm_path
+                } else {
+                    &fm2_path
+                };
+                let path_part = if active_path.len() > 14 {
+                    let start = active_path.ceil_char_boundary(active_path.len() - 14);
+                    &active_path[start..]
+                } else {
+                    active_path.as_str()
+                };
                 if umd_activated {
-                    let path_part = if fm_path.len() > 14 {
-                        let start = fm_path.ceil_char_boundary(fm_path.len() - 14);
-                        &fm_path[start..]
-                    } else {
-                        &fm_path
-                    };
                     format!("UMD:{}", path_part)
                 } else {
-                    let path_part = if fm_path.len() > 14 {
-                        let start = fm_path.ceil_char_boundary(fm_path.len() - 14);
-                        &fm_path[start..]
-                    } else {
-                        &fm_path
-                    };
                     format!("MSO:/{}", path_part)
                 }
             },
@@ -1722,10 +1784,15 @@ fn draw_terminal_windowed(
 }
 
 fn draw_filemgr_windowed(
-    path: &str,
-    entries: &[FileEntry],
-    selected: usize,
-    scroll: usize,
+    path_l: &str,
+    entries_l: &[FileEntry],
+    selected_l: usize,
+    scroll_l: usize,
+    path_r: &str,
+    entries_r: &[FileEntry],
+    selected_r: usize,
+    scroll_r: usize,
+    active_panel: usize,
     cx: i32,
     cy: i32,
     cw: u32,
@@ -1733,35 +1800,62 @@ fn draw_filemgr_windowed(
     be: &mut dyn SdiBackend,
 ) -> oasis_backend_psp::OasisResult<()> {
     be.fill_rect(cx, cy, cw, ch, Color::rgba(0, 0, 0, 200))?;
-    be.draw_text(path, cx + 2, cy + 2, 8, Color::rgb(100, 200, 255))?;
 
+    let half_w = cw / 2;
+    let div_x = cx + half_w as i32;
+
+    // Panel path headers.
+    let l_clr = if active_panel == 0 {
+        Color::rgb(100, 200, 255)
+    } else {
+        Color::rgb(140, 140, 140)
+    };
+    let r_clr = if active_panel == 1 {
+        Color::rgb(100, 200, 255)
+    } else {
+        Color::rgb(140, 140, 140)
+    };
+    be.draw_text(path_l, cx + 2, cy + 2, 8, l_clr)?;
+    be.draw_text(path_r, div_x + 2, cy + 2, 8, r_clr)?;
+
+    // Vertical divider.
+    be.fill_rect(div_x, cy + 12, 1, ch - 12, Color::rgba(100, 200, 255, 80))?;
+
+    // Draw each panel.
+    let panels: [(&[FileEntry], usize, usize, i32, u32, bool); 2] = [
+        (entries_l, selected_l, scroll_l, cx, half_w - 1, active_panel == 0),
+        (entries_r, selected_r, scroll_r, div_x + 1, cw - half_w, active_panel == 1),
+    ];
     let max_rows = ((ch as i32 - 14) / FM_ROW_H) as usize;
-    let end = (scroll + max_rows).min(entries.len());
-    for i in scroll..end {
-        let entry = &entries[i];
-        let row = (i - scroll) as i32;
-        let y = cy + 14 + row * FM_ROW_H;
-        if i == selected {
-            be.fill_rect(
-                cx,
-                y - 1,
-                cw,
-                FM_ROW_H as u32,
-                Color::rgba(80, 120, 200, 100),
-            )?;
+
+    for &(entries, selected, scroll, px, _pw, is_active) in &panels {
+        let end = (scroll + max_rows).min(entries.len());
+        for i in scroll..end {
+            let entry = &entries[i];
+            let row = (i - scroll) as i32;
+            let y = cy + 14 + row * FM_ROW_H;
+            if i == selected && is_active {
+                be.fill_rect(
+                    px,
+                    y - 1,
+                    half_w,
+                    FM_ROW_H as u32,
+                    Color::rgba(80, 120, 200, 100),
+                )?;
+            }
+            let (prefix, clr) = if entry.is_dir {
+                ("[D]", Color::rgb(255, 220, 80))
+            } else {
+                ("[F]", Color::rgb(180, 180, 180))
+            };
+            be.draw_text(prefix, px + 2, y, 8, clr)?;
+            let name_clr = if entry.is_dir {
+                Color::rgb(120, 220, 255)
+            } else {
+                Color::WHITE
+            };
+            be.draw_text(&entry.name, px + 28, y, 8, name_clr)?;
         }
-        let (prefix, clr) = if entry.is_dir {
-            ("[D]", Color::rgb(255, 220, 80))
-        } else {
-            ("[F]", Color::rgb(180, 180, 180))
-        };
-        be.draw_text(prefix, cx + 2, y, 8, clr)?;
-        let name_clr = if entry.is_dir {
-            Color::rgb(120, 220, 255)
-        } else {
-            Color::WHITE
-        };
-        be.draw_text(&entry.name, cx + 28, y, 8, name_clr)?;
     }
     Ok(())
 }
@@ -2656,91 +2750,123 @@ fn draw_terminal(backend: &mut PspBackend, lines: &[String], input: &str) {
 // File manager rendering (classic full-screen)
 // ---------------------------------------------------------------------------
 
-fn draw_file_manager(
+fn draw_file_manager_dual(
     backend: &mut PspBackend,
-    path: &str,
-    entries: &[FileEntry],
-    selected: usize,
-    scroll: usize,
+    path_l: &str,
+    entries_l: &[FileEntry],
+    selected_l: usize,
+    scroll_l: usize,
+    path_r: &str,
+    entries_r: &[FileEntry],
+    selected_r: usize,
+    scroll_r: usize,
+    active_panel: usize,
 ) {
     let bg = Color::rgba(0, 0, 0, 200);
     backend.fill_rect_inner(0, CONTENT_TOP as i32, SCREEN_WIDTH, CONTENT_H, bg);
 
-    draw_view_header(backend, "FILE MGR", Color::rgb(100, 200, 255), Some(path));
-    backend.draw_text_inner(
-        "SIZE",
-        400,
-        CONTENT_TOP as i32 + 3,
-        8,
-        Color::rgb(160, 160, 160),
+    // Header with both panel paths.
+    let header = if active_panel == 0 {
+        format!("[L] {}  |  {}", path_l, path_r)
+    } else {
+        format!("{}  |  [R] {}", path_l, path_r)
+    };
+    draw_view_header(backend, "FILE MGR", Color::rgb(100, 200, 255), Some(&header));
+
+    // Vertical divider.
+    let half_w = SCREEN_WIDTH / 2;
+    let div_x = half_w as i32;
+    backend.fill_rect_inner(
+        div_x,
+        CONTENT_TOP as i32 + 12,
+        1,
+        CONTENT_H - 12,
+        Color::rgba(100, 200, 255, 80),
     );
 
-    if entries.is_empty() {
-        backend.draw_text_inner(
-            "(empty directory)",
-            8,
-            FM_START_Y,
-            8,
-            Color::rgb(140, 140, 140),
-        );
-        return;
-    }
+    // Active panel indicator (bright line at top of active panel).
+    let indicator_x = if active_panel == 0 { 0 } else { div_x + 1 };
+    let indicator_w = if active_panel == 0 {
+        half_w - 1
+    } else {
+        half_w
+    };
+    backend.fill_rect_inner(
+        indicator_x,
+        CONTENT_TOP as i32 + 12,
+        indicator_w,
+        1,
+        Color::rgb(100, 200, 255),
+    );
 
-    let end = (scroll + FM_VISIBLE_ROWS).min(entries.len());
-    for i in scroll..end {
-        let entry = &entries[i];
-        let row = (i - scroll) as i32;
-        let y = FM_START_Y + row * FM_ROW_H;
+    // Draw each panel.
+    let panels: [(&[FileEntry], usize, usize, i32, u32, bool); 2] = [
+        (entries_l, selected_l, scroll_l, 0, half_w - 1, active_panel == 0),
+        (entries_r, selected_r, scroll_r, div_x + 1, half_w, active_panel == 1),
+    ];
+    // Half the visible rows since panels are narrower but same height.
+    let panel_rows = FM_VISIBLE_ROWS;
 
-        if i == selected {
-            backend.fill_rect_inner(
-                0,
-                y - 1,
-                SCREEN_WIDTH,
-                FM_ROW_H as u32,
-                Color::rgba(80, 120, 200, 100),
+    for &(entries, selected, scroll, px, pw, is_active) in &panels {
+        if entries.is_empty() {
+            backend.draw_text_inner(
+                "(empty)",
+                px + 4,
+                FM_START_Y,
+                8,
+                Color::rgb(140, 140, 140),
             );
+            continue;
         }
 
-        let (prefix, prefix_clr) = if entry.is_dir {
-            ("[D]", Color::rgb(255, 220, 80))
-        } else {
-            ("[F]", Color::rgb(180, 180, 180))
-        };
-        backend.draw_text_inner(prefix, 4, y, 8, prefix_clr);
+        let end = (scroll + panel_rows).min(entries.len());
+        for i in scroll..end {
+            let entry = &entries[i];
+            let row = (i - scroll) as i32;
+            let y = FM_START_Y + row * FM_ROW_H;
 
-        let name_color = if entry.is_dir {
-            Color::rgb(120, 220, 255)
-        } else {
-            Color::WHITE
-        };
-        let max_name_chars = 44;
-        let display_name = if entry.name.len() > max_name_chars {
-            let truncated: String = entry.name.chars().take(max_name_chars - 2).collect();
-            format!("{}..", truncated)
-        } else {
-            entry.name.clone()
-        };
-        backend.draw_text_inner(&display_name, 32, y, 8, name_color);
+            if i == selected && is_active {
+                backend.fill_rect_inner(
+                    px,
+                    y - 1,
+                    pw,
+                    FM_ROW_H as u32,
+                    Color::rgba(80, 120, 200, 100),
+                );
+            }
 
-        if !entry.is_dir {
-            let size_str = oasis_backend_psp::format_size(entry.size);
-            let size_x = 480 - (size_str.len() as i32 * 8) - 4;
-            backend.draw_text_inner(&size_str, size_x, y, 8, Color::rgb(180, 180, 180));
+            let (prefix, prefix_clr) = if entry.is_dir {
+                ("[D]", Color::rgb(255, 220, 80))
+            } else {
+                ("[F]", Color::rgb(180, 180, 180))
+            };
+            backend.draw_text_inner(prefix, px + 2, y, 8, prefix_clr);
+
+            let name_color = if entry.is_dir {
+                Color::rgb(120, 220, 255)
+            } else {
+                Color::WHITE
+            };
+            // Max chars for half-width panel (~28 chars at 8px each).
+            let max_name_chars = ((pw as i32 - 32) / CHAR_W).max(4) as usize;
+            let display_name = if entry.name.len() > max_name_chars {
+                let truncated: String =
+                    entry.name.chars().take(max_name_chars - 2).collect();
+                format!("{}..", truncated)
+            } else {
+                entry.name.clone()
+            };
+            backend.draw_text_inner(&display_name, px + 28, y, 8, name_color);
         }
-    }
 
-    if entries.len() > FM_VISIBLE_ROWS {
-        let ratio = selected as f32 / (entries.len() - 1).max(1) as f32;
-        let track_h = CONTENT_H as i32 - 16;
-        let dot_y = FM_START_Y + (ratio * track_h as f32) as i32;
-        backend.fill_rect_inner(
-            SCREEN_WIDTH as i32 - 4,
-            dot_y,
-            3,
-            8,
-            Color::rgba(255, 255, 255, 120),
-        );
+        // Scroll indicator per panel.
+        if entries.len() > panel_rows {
+            let ratio = selected as f32 / (entries.len() - 1).max(1) as f32;
+            let track_h = CONTENT_H as i32 - 16;
+            let dot_y = FM_START_Y + (ratio * track_h as f32) as i32;
+            let dot_x = px + pw as i32 - 4;
+            backend.fill_rect_inner(dot_x, dot_y, 3, 8, Color::rgba(255, 255, 255, 120));
+        }
     }
 }
 
