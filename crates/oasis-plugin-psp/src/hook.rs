@@ -113,20 +113,30 @@ pub fn install_display_hook() -> bool {
         psp::sys::sceKernelDcacheWritebackAll();
     }
 
-    crate::debug_log(b"[OASIS] hook: dcache flushed, calling FindFunc...");
+    crate::debug_log(b"[OASIS] hook: dcache flushed");
 
-    // SAFETY: We are in kernel mode (module_kernel!). Try each name combo.
+    // SAFETY: We are in kernel mode (module_kernel!).
     unsafe {
-        // Build module/library strings on the stack (avoids .rodata cache issues)
-        let mod_name: [u8; 19] = *b"sceDisplay_Service\0";
-        let lib_name: [u8; 11] = *b"sceDisplay\0";
+        // Test 1: call with a known kernel module to see if the function
+        // works at all. sceKernelDelayThread NID=0xCEAB00D2 from
+        // sceThreadManager / ThreadManForKernel.
+        crate::debug_log(b"[OASIS] hook: test FindFunc(ThreadMan)...");
+        let test1 = psp::sys::sctrlHENFindFunction(
+            b"sceThreadManager\0".as_ptr(),
+            b"ThreadManForKernel\0".as_ptr(),
+            0xCEAB00D2_u32, // sceKernelDelayThread
+        );
+        if test1.is_null() {
+            crate::debug_log(b"[OASIS] hook: ThreadMan -> NULL");
+        } else {
+            crate::debug_log(b"[OASIS] hook: ThreadMan -> found!");
+        }
 
-        // Flush these stack variables too
-        psp::sys::sceKernelDcacheWritebackAll();
-
+        // Test 2: try the display module
+        crate::debug_log(b"[OASIS] hook: test FindFunc(Display)...");
         let test_ptr = psp::sys::sctrlHENFindFunction(
-            mod_name.as_ptr(),
-            lib_name.as_ptr(),
+            b"sceDisplay_Service\0".as_ptr(),
+            b"sceDisplay\0".as_ptr(),
             NID_SCE_DISPLAY_SET_FRAME_BUF,
         );
         if test_ptr.is_null() {
