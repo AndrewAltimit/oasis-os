@@ -321,6 +321,25 @@ impl PspBackend {
         }
     }
 
+    /// Re-open the GU display list after a utility dialog closed it.
+    ///
+    /// SDK utility dialogs (`psp::osk`, `psp::dialog`) close the caller's
+    /// open GU list to render their own UI. Call this after any dialog
+    /// returns to restore the GU state for the render phase.
+    ///
+    /// Harmless when no dialog was shown -- `sceGuStart` on an
+    /// already-open list just restarts it from scratch.
+    pub fn reinit_gu_frame(&self) {
+        // SAFETY: Restores the GU display list state after a dialog.
+        // DISPLAY_LIST is exclusively accessed from the main loop.
+        unsafe {
+            sys::sceGuStart(
+                GuContextType::Direct,
+                &raw mut DISPLAY_LIST as *mut c_void,
+            );
+        }
+    }
+
     /// Current cursor position (for rendering the cursor sprite).
     pub fn cursor_pos(&self) -> (i32, i32) {
         (self.cursor_x, self.cursor_y)

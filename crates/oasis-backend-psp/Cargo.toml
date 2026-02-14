@@ -23,7 +23,7 @@ kernel-me-clock = ["psp/kernel"]     # scePowerGetMeClockFrequency
 kernel-me = ["psp/kernel"]           # ME coprocessor (me test command)
 
 [dependencies]
-psp = { git = "https://github.com/AndrewAltimit/rust-psp", branch = "main", features = ["std"] }
+psp = { git = "https://github.com/AndrewAltimit/rust-psp", branch = "fix/osk-dialog-gu-frame", features = ["std"] }
 oasis-core = { path = "../oasis-core" }
 libm = "0.2"
 
