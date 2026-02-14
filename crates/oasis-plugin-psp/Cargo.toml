@@ -28,5 +28,5 @@ unicode-width = { git = "https://git.sr.ht/~sajattack/unicode-width" }
 opt-level = "z"        # minimize size (<64KB target)
 lto = true
 codegen-units = 1
-panic = "abort"
+panic = "unwind"
 # Do NOT set strip = true -- it conflicts with --emit-relocs needed by prxgen.
