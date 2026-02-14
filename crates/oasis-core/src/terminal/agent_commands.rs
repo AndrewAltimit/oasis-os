@@ -27,6 +27,9 @@ impl Command for AgentCmd {
     fn usage(&self) -> &str {
         "agent [list|status <name>]"
     }
+    fn category(&self) -> &str {
+        "agent"
+    }
     fn execute(&self, args: &[&str], env: &mut Environment<'_>) -> Result<CommandOutput> {
         let agents_path = "/etc/agents.toml";
         let registry = if env.vfs.exists(agents_path) {
@@ -92,6 +95,9 @@ impl Command for McpCmd {
     }
     fn usage(&self) -> &str {
         "mcp [list|<server> <tool> [args...]]"
+    }
+    fn category(&self) -> &str {
+        "agent"
     }
     fn execute(&self, args: &[&str], env: &mut Environment<'_>) -> Result<CommandOutput> {
         let mcp_path = "/etc/mcp.toml";
@@ -193,6 +199,9 @@ impl Command for TamperCmd {
     fn usage(&self) -> &str {
         "tamper [status|arm|disarm]"
     }
+    fn category(&self) -> &str {
+        "agent"
+    }
     fn execute(&self, args: &[&str], env: &mut Environment<'_>) -> Result<CommandOutput> {
         let subcmd = args.first().copied().unwrap_or("status");
 
@@ -246,6 +255,9 @@ impl Command for BoardCmd {
     }
     fn usage(&self) -> &str {
         "board [query|claim <n>|release <n>]"
+    }
+    fn category(&self) -> &str {
+        "agent"
     }
     fn execute(&self, args: &[&str], env: &mut Environment<'_>) -> Result<CommandOutput> {
         let subcmd = args.first().copied().unwrap_or("query");
@@ -323,6 +335,9 @@ impl Command for CiCmd {
     fn usage(&self) -> &str {
         "ci run <stage>"
     }
+    fn category(&self) -> &str {
+        "agent"
+    }
     fn execute(&self, args: &[&str], env: &mut Environment<'_>) -> Result<CommandOutput> {
         if args.first().copied() != Some("run") {
             return Err(OasisError::Command("usage: ci run <stage>".to_string()));
@@ -355,6 +370,9 @@ impl Command for HealthCmd {
     }
     fn usage(&self) -> &str {
         "health"
+    }
+    fn category(&self) -> &str {
+        "agent"
     }
     fn execute(&self, _args: &[&str], _env: &mut Environment<'_>) -> Result<CommandOutput> {
         let health = SystemHealth::collect();
@@ -436,6 +454,7 @@ tools = [
 
             network: None,
             tls: None,
+            stdin: None,
         };
         reg.execute(line, &mut env)
     }

@@ -27,6 +27,10 @@ impl Command for SkinCmd {
         "skin [list|current|<name>]"
     }
 
+    fn category(&self) -> &str {
+        "ui"
+    }
+
     fn execute(&self, args: &[&str], _env: &mut Environment<'_>) -> Result<CommandOutput> {
         match args.first().copied() {
             None | Some("list") => {
@@ -69,6 +73,7 @@ mod tests {
             usb: None,
             network: None,
             tls: None,
+            stdin: None,
         }
     }
 

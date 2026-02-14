@@ -93,6 +93,9 @@ impl Command for RunCmd {
     fn usage(&self) -> &str {
         "run <path>"
     }
+    fn category(&self) -> &str {
+        "scripting"
+    }
     fn execute(&self, args: &[&str], env: &mut Environment<'_>) -> Result<CommandOutput> {
         let path = args
             .first()
@@ -148,6 +151,9 @@ impl Command for CronCmd {
     }
     fn usage(&self) -> &str {
         "cron [list|add <name> <path>|remove <name>]"
+    }
+    fn category(&self) -> &str {
+        "scripting"
     }
     fn execute(&self, args: &[&str], env: &mut Environment<'_>) -> Result<CommandOutput> {
         let subcmd = args.first().copied().unwrap_or("list");
@@ -222,6 +228,9 @@ impl Command for StartupCmd {
     }
     fn usage(&self) -> &str {
         "startup [show|set <path>|clear]"
+    }
+    fn category(&self) -> &str {
+        "scripting"
     }
     fn execute(&self, args: &[&str], env: &mut Environment<'_>) -> Result<CommandOutput> {
         let subcmd = args.first().copied().unwrap_or("show");
@@ -307,6 +316,7 @@ mod tests {
 
             network: None,
             tls: None,
+            stdin: None,
         };
         reg.execute(line, &mut env)
     }
@@ -345,6 +355,7 @@ mod tests {
 
             network: None,
             tls: None,
+            stdin: None,
         };
         let output = run_script("/tmp/test.sh", &reg, &mut env).unwrap();
         assert_eq!(output, vec!["hello", "world"]);
@@ -364,6 +375,7 @@ mod tests {
 
             network: None,
             tls: None,
+            stdin: None,
         };
         let output = run_script("/tmp/bad.sh", &reg, &mut env).unwrap();
         assert!(output[0].contains("error at line 1"));
@@ -383,13 +395,14 @@ mod tests {
     }
 
     #[test]
-    fn run_cmd_shows_listing() {
+    fn run_cmd_executes_script() {
         let (reg, mut vfs) = setup();
-        vfs.write("/tmp/demo.sh", b"echo hello\nls\n").unwrap();
+        vfs.write("/tmp/demo.sh", b"echo hello\necho world\n")
+            .unwrap();
         match exec(&reg, &mut vfs, "run /tmp/demo.sh").unwrap() {
             CommandOutput::Text(s) => {
-                assert!(s.contains("2 commands"));
-                assert!(s.contains("echo hello"));
+                assert!(s.contains("hello"));
+                assert!(s.contains("world"));
             },
             _ => panic!("expected text"),
         }
@@ -488,6 +501,7 @@ mod tests {
 
             network: None,
             tls: None,
+            stdin: None,
         };
         let output = run_startup(&reg, &mut env).unwrap();
         assert!(output[0].contains("no startup"));
@@ -506,6 +520,7 @@ mod tests {
 
             network: None,
             tls: None,
+            stdin: None,
         };
         let output = run_startup(&reg, &mut env).unwrap();
         assert_eq!(output, vec!["booted"]);

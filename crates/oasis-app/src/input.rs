@@ -392,6 +392,7 @@ pub fn handle_default_input(
                         usb: Some(&state.platform),
                         network: None,
                         tls: Some(&state.tls_provider),
+                        stdin: None,
                     };
                     let result = state.cmd_reg.execute(&line, &mut env);
                     state.cwd = env.cwd;

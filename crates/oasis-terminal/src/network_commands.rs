@@ -27,6 +27,9 @@ impl Command for WifiCmd {
     fn usage(&self) -> &str {
         "wifi [status]"
     }
+    fn category(&self) -> &str {
+        "network"
+    }
     fn execute(&self, args: &[&str], env: &mut Environment<'_>) -> Result<CommandOutput> {
         let subcmd = args.first().copied().unwrap_or("status");
         match subcmd {
@@ -92,6 +95,9 @@ impl Command for PingCmd {
     fn usage(&self) -> &str {
         "ping <hostname>"
     }
+    fn category(&self) -> &str {
+        "network"
+    }
     fn execute(&self, args: &[&str], env: &mut Environment<'_>) -> Result<CommandOutput> {
         if args.is_empty() {
             return Err(OasisError::Command("usage: ping <hostname>".to_string()));
@@ -129,6 +135,9 @@ impl Command for HttpCmd {
     }
     fn usage(&self) -> &str {
         "http <url>"
+    }
+    fn category(&self) -> &str {
+        "network"
     }
     fn execute(&self, args: &[&str], env: &mut Environment<'_>) -> Result<CommandOutput> {
         if args.is_empty() {
@@ -187,6 +196,7 @@ mod tests {
             usb: None,
             network: None,
             tls: None,
+            stdin: None,
         };
         match reg.execute("wifi", &mut env).unwrap() {
             CommandOutput::Text(s) => assert!(s.contains("no network service")),
@@ -208,6 +218,7 @@ mod tests {
             usb: None,
             network: Some(&platform),
             tls: None,
+            stdin: None,
         };
         match reg.execute("wifi", &mut env).unwrap() {
             CommandOutput::Text(s) => {
@@ -231,6 +242,7 @@ mod tests {
             usb: None,
             network: None,
             tls: None,
+            stdin: None,
         };
         assert!(reg.execute("ping", &mut env).is_err());
     }

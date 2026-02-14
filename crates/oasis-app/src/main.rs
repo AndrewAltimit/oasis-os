@@ -32,7 +32,9 @@ use oasis_core::sdi::SdiRegistry;
 use oasis_core::skin::resolve_skin;
 use oasis_core::startmenu::StartMenuState;
 use oasis_core::statusbar::StatusBar;
-use oasis_core::terminal::{CommandRegistry, register_builtins};
+use oasis_core::terminal::{
+    CommandRegistry, register_agent_commands, register_builtins, register_plugin_commands,
+};
 use oasis_core::transition;
 use oasis_core::vfs::MemoryVfs;
 use oasis_core::wallpaper;
@@ -78,6 +80,11 @@ fn main() -> Result<()> {
     let mut vfs = MemoryVfs::new();
     vfs_setup::populate_demo_vfs(&mut vfs);
 
+    // Populate terminal documentation and shell profile in VFS.
+    oasis_core::terminal::populate_man_pages(&mut vfs);
+    oasis_core::terminal::populate_motd(&mut vfs);
+    oasis_core::terminal::populate_profile(&mut vfs);
+
     // Discover apps.
     let apps = discover_apps(&vfs, "/apps", Some("OASISOS"))?;
     log::info!("Discovered {} apps", apps.len());
@@ -93,6 +100,13 @@ fn main() -> Result<()> {
     // Set up command interpreter.
     let mut cmd_reg = CommandRegistry::new();
     register_builtins(&mut cmd_reg);
+    // Register additional command modules (script, transfer, update, plugin, agent, browser).
+    oasis_core::script::register_script_commands(&mut cmd_reg);
+    oasis_core::transfer::register_transfer_commands(&mut cmd_reg);
+    oasis_core::update::register_update_commands(&mut cmd_reg);
+    register_plugin_commands(&mut cmd_reg);
+    register_agent_commands(&mut cmd_reg);
+    oasis_core::browser::commands::register_browser_commands(&mut cmd_reg);
 
     // Window manager state (Desktop mode).
     let wm = WindowManager::with_theme(

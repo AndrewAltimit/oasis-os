@@ -133,6 +133,9 @@ impl Command for FtpCmd {
     fn usage(&self) -> &str {
         "ftp [start [port]|stop|status]"
     }
+    fn category(&self) -> &str {
+        "transfer"
+    }
     fn execute(&self, args: &[&str], env: &mut Environment<'_>) -> Result<CommandOutput> {
         let subcmd = args.first().copied().unwrap_or("status");
 
@@ -191,6 +194,9 @@ impl Command for PushCmd {
     fn usage(&self) -> &str {
         "push <source> <dest>"
     }
+    fn category(&self) -> &str {
+        "transfer"
+    }
     fn execute(&self, args: &[&str], env: &mut Environment<'_>) -> Result<CommandOutput> {
         let src = args
             .first()
@@ -222,6 +228,9 @@ impl Command for PullCmd {
     }
     fn usage(&self) -> &str {
         "pull <source> <dest>"
+    }
+    fn category(&self) -> &str {
+        "transfer"
     }
     fn execute(&self, args: &[&str], env: &mut Environment<'_>) -> Result<CommandOutput> {
         let src = args
@@ -277,6 +286,7 @@ mod tests {
 
             network: None,
             tls: None,
+            stdin: None,
         };
         reg.execute(line, &mut env)
     }

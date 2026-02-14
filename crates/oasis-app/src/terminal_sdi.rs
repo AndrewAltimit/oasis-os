@@ -2,8 +2,11 @@ use oasis_core::backend::{Color, TextureId};
 use oasis_core::bottombar::BottomBar;
 use oasis_core::sdi::SdiRegistry;
 
-/// Maximum lines visible in the terminal output area.
-pub const MAX_OUTPUT_LINES: usize = 12;
+/// Maximum lines visible in the terminal output area (display limit).
+pub const VISIBLE_OUTPUT_LINES: usize = 12;
+
+/// Maximum lines retained in the scrollback buffer.
+pub const MAX_OUTPUT_LINES: usize = 200;
 
 /// Set up the wallpaper SDI object at z=-1000 (behind everything).
 pub fn setup_wallpaper(sdi: &mut SdiRegistry, tex: TextureId, w: u32, h: u32) {
@@ -63,7 +66,7 @@ pub fn set_terminal_visible(sdi: &mut SdiRegistry, visible: bool) {
     if let Ok(obj) = sdi.get_mut("terminal_bg") {
         obj.visible = visible;
     }
-    for i in 0..MAX_OUTPUT_LINES {
+    for i in 0..VISIBLE_OUTPUT_LINES {
         let name = format!("term_line_{i}");
         if let Ok(obj) = sdi.get_mut(&name) {
             obj.visible = visible;
@@ -99,7 +102,9 @@ pub fn setup_terminal_objects(
         obj.visible = true;
     }
 
-    for i in 0..MAX_OUTPUT_LINES {
+    // Show the last VISIBLE_OUTPUT_LINES from the scrollback buffer.
+    let start = output_lines.len().saturating_sub(VISIBLE_OUTPUT_LINES);
+    for i in 0..VISIBLE_OUTPUT_LINES {
         let name = format!("term_line_{i}");
         if !sdi.contains(&name) {
             let obj = sdi.create(&name);
@@ -111,7 +116,7 @@ pub fn setup_terminal_objects(
             obj.h = 0;
         }
         if let Ok(obj) = sdi.get_mut(&name) {
-            obj.text = output_lines.get(i).cloned();
+            obj.text = output_lines.get(start + i).cloned();
             obj.visible = true;
         }
     }

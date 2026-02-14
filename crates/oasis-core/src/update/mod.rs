@@ -110,6 +110,9 @@ impl Command for UpdateCmd {
     fn usage(&self) -> &str {
         "update [check|status|log]"
     }
+    fn category(&self) -> &str {
+        "system"
+    }
     fn execute(&self, args: &[&str], env: &mut Environment<'_>) -> Result<CommandOutput> {
         let subcmd = args.first().copied().unwrap_or("check");
 
@@ -171,6 +174,7 @@ mod tests {
 
             network: None,
             tls: None,
+            stdin: None,
         };
         reg.execute(line, &mut env)
     }

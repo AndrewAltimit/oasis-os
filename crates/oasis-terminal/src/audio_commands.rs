@@ -21,6 +21,9 @@ impl Command for MusicCmd {
     fn usage(&self) -> &str {
         "music [status|play|pause|resume|stop|next|prev|vol <0-100>|list|repeat <off|all|one>|shuffle]"
     }
+    fn category(&self) -> &str {
+        "audio"
+    }
     fn execute(&self, args: &[&str], env: &mut Environment<'_>) -> Result<CommandOutput> {
         let subcmd = args.first().copied().unwrap_or("status");
 
@@ -145,6 +148,7 @@ mod tests {
 
             network: None,
             tls: None,
+            stdin: None,
         };
         reg.execute(line, &mut env)
     }

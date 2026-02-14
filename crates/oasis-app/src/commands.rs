@@ -221,6 +221,7 @@ pub fn poll_remote_listener(state: &mut AppState, sdi: &mut SdiRegistry, vfs: &m
             usb: Some(platform),
             network: None,
             tls: Some(tls_provider),
+            stdin: None,
         };
         let result = cmd_reg.execute(&cmd_line, &mut env);
         *cwd = env.cwd;

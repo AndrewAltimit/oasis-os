@@ -24,6 +24,9 @@ impl Command for PluginCmd {
     fn usage(&self) -> &str {
         "plugin [list|load <name>|unload <name>]"
     }
+    fn category(&self) -> &str {
+        "plugin"
+    }
     fn execute(&self, args: &[&str], env: &mut Environment<'_>) -> Result<CommandOutput> {
         let subcmd = args.first().copied().unwrap_or("list");
 
@@ -104,6 +107,7 @@ mod tests {
 
             network: None,
             tls: None,
+            stdin: None,
         };
         reg.execute(line, &mut env)
     }
