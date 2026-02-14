@@ -303,16 +303,12 @@ impl CommandRegistry {
 
         // Pipeline: chain stdout -> stdin.
         let mut stdin: Option<String> = env.stdin.take();
-        let last_idx = pipe_segments.len() - 1;
 
-        for (i, segment) in pipe_segments.iter().enumerate() {
+        for segment in &pipe_segments {
             env.stdin = stdin.take();
-            let result = if i == last_idx {
-                // Last command gets redirection.
-                self.execute_with_redirect(segment, env)?
-            } else {
-                self.execute_single_cmd(segment, env)?
-            };
+            // All segments get redirection parsing so `>` / `>>` is
+            // stripped instead of being passed as literal arguments.
+            let result = self.execute_with_redirect(segment, env)?;
 
             stdin = match result {
                 CommandOutput::Text(text) => Some(text),
@@ -1303,13 +1299,18 @@ struct Redirect<'a> {
     append: bool,
 }
 
-/// Parse `>` and `>>` from the end of a command string.
+/// Parse `>` and `>>` from a command string.
+///
+/// The command part is everything before the *first* unquoted `>`. The
+/// redirect target is determined by the *last* unquoted `>` / `>>`, so
+/// `echo a > file1 > file2` correctly yields command `echo a` with
+/// redirection to `file2`.
 fn parse_redirect(input: &str) -> (&str, Option<Redirect<'_>>) {
-    // Search for unquoted > or >>.
     let bytes = input.as_bytes();
     let mut in_single = false;
     let mut in_double = false;
     let mut i = 0;
+    let mut first_redirect_pos: Option<usize> = None;
     let mut last_redirect: Option<(usize, bool)> = None;
 
     while i < bytes.len() {
@@ -1329,6 +1330,9 @@ fn parse_redirect(input: &str) -> (&str, Option<Redirect<'_>>) {
                 b'\'' => in_single = true,
                 b'"' => in_double = true,
                 b'>' => {
+                    if first_redirect_pos.is_none() {
+                        first_redirect_pos = Some(i);
+                    }
                     if i + 1 < bytes.len() && bytes[i + 1] == b'>' {
                         last_redirect = Some((i, true));
                         i += 1;
@@ -1342,14 +1346,14 @@ fn parse_redirect(input: &str) -> (&str, Option<Redirect<'_>>) {
         i += 1;
     }
 
-    match last_redirect {
-        Some((pos, append)) => {
+    match (first_redirect_pos, last_redirect) {
+        (Some(first_pos), Some((last_pos, append))) => {
             let skip = if append { 2 } else { 1 };
-            let cmd_part = &input[..pos];
-            let path = &input[pos + skip..];
+            let cmd_part = &input[..first_pos];
+            let path = &input[last_pos + skip..];
             (cmd_part, Some(Redirect { path, append }))
         },
-        None => (input, None),
+        _ => (input, None),
     }
 }
 
