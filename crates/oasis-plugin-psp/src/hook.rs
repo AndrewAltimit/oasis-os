@@ -33,6 +33,32 @@ static mut ORIGINAL_SET_FRAME_BUF: Option<
 /// NID for sceDisplaySetFrameBuf.
 const NID_SCE_DISPLAY_SET_FRAME_BUF: u32 = 0x289D82FE;
 
+/// NID for sceCtrlPeekBufferPositive.
+const NID_SCE_CTRL_PEEK_BUF_POS: u32 = 0x3A622550;
+
+/// Resolved kernel-mode sceCtrlPeekBufferPositive function pointer.
+/// The user-mode import doesn't work from the display hook context,
+/// so we resolve the driver version via sctrlHENFindFunction.
+static mut CTRL_PEEK_FN: Option<unsafe extern "C" fn(*mut u8, i32) -> i32> = None;
+
+/// Poll controller buttons using the kernel-mode driver function.
+///
+/// Returns the raw button bitmask, or 0 if unavailable.
+pub fn poll_buttons() -> u32 {
+    // SAFETY: CTRL_PEEK_FN is set once during init and read-only after.
+    // SceCtrlData layout: [timestamp: u32, buttons: u32, lx: u8, ly: u8, rsrv: [u8; 6]]
+    unsafe {
+        if let Some(peek) = CTRL_PEEK_FN {
+            let mut buf = [0u8; 16];
+            peek(buf.as_mut_ptr(), 1);
+            // buttons is at offset 4, little-endian u32
+            u32::from_le_bytes([buf[4], buf[5], buf[6], buf[7]])
+        } else {
+            0
+        }
+    }
+}
+
 /// Trampoline for calling the original function after inline hooking.
 /// Layout: [saved_instr1, saved_instr2, j_original_plus_8, nop]
 /// Must be 16-byte aligned for cache coherency.
@@ -324,6 +350,31 @@ pub fn install_display_hook() -> bool {
 
         psp::sys::sceKernelIcacheInvalidateAll();
         psp::sys::sceKernelDcacheWritebackAll();
+
+        // Resolve sceCtrlPeekBufferPositive from the kernel driver.
+        // The user-mode import doesn't work from the display hook context.
+        let ctrl_names: &[(&[u8], &[u8])] = &[
+            (b"sceController_Service\0", b"sceCtrl_driver\0"),
+            (b"sceController_Service\0", b"sceCtrl\0"),
+        ];
+        for &(module, library) in ctrl_names {
+            let ptr = sctrl_find_function(
+                module.as_ptr(),
+                library.as_ptr(),
+                NID_SCE_CTRL_PEEK_BUF_POS,
+            );
+            if !ptr.is_null() {
+                CTRL_PEEK_FN = Some(core::mem::transmute(ptr));
+                let mut buf = [0u8; 48];
+                let mut pos = write_log_bytes(&mut buf, 0, b"[OASIS] ctrl=0x");
+                pos = write_log_hex(&mut buf, pos, ptr as u32);
+                crate::debug_log(&buf[..pos]);
+                break;
+            }
+        }
+        if core::ptr::read_volatile(&raw const CTRL_PEEK_FN).is_none() {
+            crate::debug_log(b"[OASIS] ctrl driver NOT found");
+        }
 
         HOOK_INSTALLED.store(true, Ordering::Release);
     }

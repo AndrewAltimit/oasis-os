@@ -79,14 +79,9 @@ const BTN_START: u32 = 0x8;
 /// `fb` must be a valid 32-bit ABGR framebuffer pointer with at least
 /// `stride * 272` pixels. Called from the display thread context.
 pub unsafe fn on_frame(fb: *mut u32, stride: u32) {
-    // Poll controller (non-blocking)
-    // SAFETY: SceCtrlData is repr(C), zeroed is valid.
-    let mut pad = unsafe { core::mem::zeroed::<psp::sys::SceCtrlData>() };
-    unsafe {
-        psp::sys::sceCtrlPeekBufferPositive(&mut pad, 1);
-    }
-
-    let buttons = pad.buttons.bits();
+    // Poll controller via kernel-mode driver (user-mode API doesn't work
+    // from the display hook context).
+    let buttons = crate::hook::poll_buttons();
     // SAFETY: Single-threaded access from display hook context.
     let prev = unsafe { PREV_BUTTONS };
     let pressed = buttons & !prev; // Rising edge
