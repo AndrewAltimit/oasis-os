@@ -59,6 +59,28 @@ pub fn run_script(
             Ok(CommandOutput::SkinSwap { name }) => {
                 output.push(format!("(skin swap to '{name}' skipped in script)"));
             },
+            Ok(CommandOutput::Multi(outputs)) => {
+                for sub in outputs {
+                    match sub {
+                        CommandOutput::Text(text) => {
+                            for l in text.lines() {
+                                output.push(l.to_string());
+                            }
+                        },
+                        CommandOutput::Table { headers, rows } => {
+                            output.push(headers.join(" | "));
+                            for row in &rows {
+                                output.push(row.join(" | "));
+                            }
+                        },
+                        CommandOutput::Clear => output.push("(clear)".to_string()),
+                        CommandOutput::None | CommandOutput::Multi(_) => {},
+                        _ => {
+                            output.push("(signal command skipped in script)".to_string());
+                        },
+                    }
+                }
+            },
             Err(e) => {
                 output.push(format!("error at line {}: {e}", i + 1));
             },

@@ -45,6 +45,9 @@ pub enum CommandOutput {
         /// Skin name or path to load.
         name: String,
     },
+    /// Multiple outputs from a chained command (e.g. `skin xp ; echo Done`).
+    /// Each inner output is processed in order by the app layer.
+    Multi(Vec<CommandOutput>),
 }
 
 /// Shared mutable environment passed to every command.
@@ -213,12 +216,7 @@ impl CommandRegistry {
         // Split into chained segments (;, &&, ||).
         let segments = split_chains(&line)?;
         let single_command = segments.len() == 1;
-        let mut combined_output = Vec::new();
-        let mut last_signal: Option<CommandOutput> = None;
-        // Track text output produced after the most recent signal command so
-        // that `echo hi ; clear ; echo bye` returns "bye" instead of the
-        // Clear signal (which would silently discard the post-clear text).
-        let mut output_after_signal = Vec::new();
+        let mut all_outputs: Vec<CommandOutput> = Vec::new();
 
         for segment in &segments {
             // Check chain condition.
@@ -236,24 +234,8 @@ impl CommandRegistry {
                     self.last_exit_code.set(0);
                     self.set_variable("?", "0");
                     match output {
-                        CommandOutput::Text(ref text) => {
-                            if !text.is_empty() {
-                                combined_output.push(text.clone());
-                                if last_signal.is_some() {
-                                    output_after_signal.push(text.clone());
-                                }
-                            }
-                        },
-                        CommandOutput::Table { .. }
-                        | CommandOutput::Clear
-                        | CommandOutput::ListenToggle { .. }
-                        | CommandOutput::RemoteConnect { .. }
-                        | CommandOutput::BrowserSandbox { .. }
-                        | CommandOutput::SkinSwap { .. } => {
-                            last_signal = Some(output);
-                            output_after_signal.clear();
-                        },
                         CommandOutput::None => {},
+                        other => all_outputs.push(other),
                     }
                 },
                 Err(e) => {
@@ -263,28 +245,36 @@ impl CommandRegistry {
                     if single_command {
                         return Err(e);
                     }
-                    combined_output.push(format!("error: {e}"));
-                    if last_signal.is_some() {
-                        output_after_signal.push(format!("error: {e}"));
-                    }
+                    all_outputs.push(CommandOutput::Text(format!("error: {e}")));
                 },
             }
         }
 
-        // If the last signal was followed by text output, return the text
-        // (the signal effect is conceptually consumed by subsequent output).
-        // Otherwise return the signal itself.
-        if let Some(signal) = last_signal {
-            if output_after_signal.is_empty() {
-                return Ok(signal);
-            }
-            return Ok(CommandOutput::Text(output_after_signal.join("\n")));
-        }
-
-        if combined_output.is_empty() {
+        // Flatten: if only one output, return it directly. If multiple,
+        // merge consecutive text outputs and wrap in Multi so signals
+        // are preserved alongside text.
+        if all_outputs.is_empty() {
             Ok(CommandOutput::None)
+        } else if all_outputs.len() == 1 {
+            Ok(all_outputs.into_iter().next().unwrap())
         } else {
-            Ok(CommandOutput::Text(combined_output.join("\n")))
+            // Merge consecutive Text entries to reduce Multi size.
+            let mut merged: Vec<CommandOutput> = Vec::new();
+            for output in all_outputs {
+                if let CommandOutput::Text(ref new_text) = output
+                    && let Some(CommandOutput::Text(prev)) = merged.last_mut()
+                {
+                    prev.push('\n');
+                    prev.push_str(new_text);
+                    continue;
+                }
+                merged.push(output);
+            }
+            if merged.len() == 1 {
+                Ok(merged.into_iter().next().unwrap())
+            } else {
+                Ok(CommandOutput::Multi(merged))
+            }
         }
     }
 
@@ -2147,6 +2137,96 @@ mod tests {
                 assert!(s.contains("fallback"));
             },
             _ => panic!("expected text output"),
+        }
+    }
+
+    // -- Chain preserves signals alongside text --
+
+    #[test]
+    fn chain_signal_then_text_produces_multi() {
+        let mut reg = CommandRegistry::new();
+        reg.register(Box::new(EchoCmd));
+        // ClearCmd for a signal output.
+        struct ClearCmd;
+        impl Command for ClearCmd {
+            fn name(&self) -> &str {
+                "clear"
+            }
+            fn description(&self) -> &str {
+                "Clear"
+            }
+            fn usage(&self) -> &str {
+                "clear"
+            }
+            fn execute(&self, _: &[&str], _: &mut Environment<'_>) -> Result<CommandOutput> {
+                Ok(CommandOutput::Clear)
+            }
+        }
+        reg.register(Box::new(ClearCmd));
+
+        let mut vfs = MemoryVfs::new();
+        let mut env = make_env(&mut vfs);
+        // `clear ; echo Done` should produce Multi with both outputs.
+        match reg.execute("clear ; echo Done", &mut env).unwrap() {
+            CommandOutput::Multi(outputs) => {
+                assert_eq!(outputs.len(), 2);
+                assert!(matches!(outputs[0], CommandOutput::Clear));
+                assert!(matches!(outputs[1], CommandOutput::Text(_)));
+                if let CommandOutput::Text(ref s) = outputs[1] {
+                    assert_eq!(s, "Done");
+                }
+            },
+            _ => panic!("expected Multi output"),
+        }
+    }
+
+    #[test]
+    fn chain_text_then_signal_produces_multi() {
+        let mut reg = CommandRegistry::new();
+        reg.register(Box::new(EchoCmd));
+        struct ClearCmd;
+        impl Command for ClearCmd {
+            fn name(&self) -> &str {
+                "clear"
+            }
+            fn description(&self) -> &str {
+                "Clear"
+            }
+            fn usage(&self) -> &str {
+                "clear"
+            }
+            fn execute(&self, _: &[&str], _: &mut Environment<'_>) -> Result<CommandOutput> {
+                Ok(CommandOutput::Clear)
+            }
+        }
+        reg.register(Box::new(ClearCmd));
+
+        let mut vfs = MemoryVfs::new();
+        let mut env = make_env(&mut vfs);
+        // `echo Hello ; clear` should produce Multi.
+        match reg.execute("echo Hello ; clear", &mut env).unwrap() {
+            CommandOutput::Multi(outputs) => {
+                assert_eq!(outputs.len(), 2);
+                assert!(matches!(outputs[0], CommandOutput::Text(_)));
+                assert!(matches!(outputs[1], CommandOutput::Clear));
+            },
+            _ => panic!("expected Multi output"),
+        }
+    }
+
+    #[test]
+    fn chain_text_only_merges_to_single() {
+        let mut reg = CommandRegistry::new();
+        reg.register(Box::new(EchoCmd));
+        let mut vfs = MemoryVfs::new();
+        let mut env = make_env(&mut vfs);
+        // Two text commands should merge into a single Text, not Multi.
+        match reg.execute("echo hello ; echo world", &mut env).unwrap() {
+            CommandOutput::Text(s) => {
+                assert!(s.contains("hello"));
+                assert!(s.contains("world"));
+            },
+            _ => panic!("expected merged Text output"),
         }
     }
 

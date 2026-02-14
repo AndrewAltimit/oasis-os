@@ -101,6 +101,16 @@ pub fn process_command_output(
         Ok(CommandOutput::SkinSwap { name }) => {
             return Some(name);
         },
+        Ok(CommandOutput::Multi(outputs)) => {
+            let mut skin_swap = None;
+            for output in outputs {
+                let result = process_command_output(Ok(output), state);
+                if result.is_some() {
+                    skin_swap = result;
+                }
+            }
+            return skin_swap;
+        },
         Err(e) => {
             state.output_lines.push(format!("error: {e}"));
         },
@@ -185,6 +195,24 @@ fn format_remote_response(
                 msg
             },
             Err(e) => format!("Skin error: {e}"),
+        },
+        Ok(CommandOutput::Multi(outputs)) => {
+            let mut parts = Vec::new();
+            for output in outputs {
+                let resp = format_remote_response(
+                    Ok(output),
+                    browser,
+                    skin,
+                    active_theme,
+                    browser_config,
+                    wm,
+                    sdi,
+                );
+                if !resp.is_empty() {
+                    parts.push(resp);
+                }
+            }
+            parts.join("\n")
         },
         Err(e) => format!("error: {e}"),
     }

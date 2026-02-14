@@ -480,6 +480,36 @@ pub unsafe extern "C" fn oasis_send_command(
         Ok(CommandOutput::SkinSwap { name }) => {
             format!("Skin swap to '{name}' not available via FFI.")
         },
+        Ok(CommandOutput::Multi(outputs)) => {
+            let mut parts = Vec::new();
+            for output in outputs {
+                let text = match output {
+                    CommandOutput::Text(t) => t,
+                    CommandOutput::Table { headers, rows } => {
+                        let mut out = headers.join(" | ");
+                        for row in &rows {
+                            out.push('\n');
+                            out.push_str(&row.join(" | "));
+                        }
+                        out
+                    },
+                    CommandOutput::Clear | CommandOutput::None => continue,
+                    CommandOutput::SkinSwap { name } => {
+                        format!("Skin swap to '{name}' not available via FFI.")
+                    },
+                    CommandOutput::ListenToggle { .. } | CommandOutput::RemoteConnect { .. } => {
+                        "Not available via FFI.".to_string()
+                    },
+                    CommandOutput::BrowserSandbox { enable } => {
+                        let state = if enable { "on" } else { "off" };
+                        format!("Browser sandbox: {state}")
+                    },
+                    CommandOutput::Multi(_) => continue,
+                };
+                parts.push(text);
+            }
+            parts.join("\n")
+        },
         Err(e) => format!("error: {e}"),
     };
 
