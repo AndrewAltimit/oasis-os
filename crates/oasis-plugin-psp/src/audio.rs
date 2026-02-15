@@ -2052,10 +2052,12 @@ unsafe fn play_track_codec(path: &[u8], channel: i32) -> i32 {
             continue;
         }
 
-        // Refill buffer when running low.
-        if buf_valid - buf_pos < 2048 && file_pos < file_size {
+        // Compact + stream-refill: when half the buffer is consumed,
+        // shift remaining data to the front and top up in small chunks
+        // (4KB) to avoid a single large blocking read that stalls audio.
+        if buf_pos > READ_BUF_SIZE / 2 && file_pos < file_size {
             let remaining = buf_valid - buf_pos;
-            if remaining > 0 && buf_pos > 0 {
+            if remaining > 0 {
                 unsafe {
                     let mut i = 0;
                     while i < remaining {
@@ -2066,19 +2068,21 @@ unsafe fn play_track_codec(path: &[u8], channel: i32) -> i32 {
             }
             buf_valid = remaining;
             buf_pos = 0;
-            let to_read = READ_BUF_SIZE - buf_valid;
-            if to_read > 0 {
-                let read = unsafe {
-                    psp::sys::sceIoRead(
-                        fd,
-                        read_buf.add(buf_valid) as *mut _,
-                        to_read as u32,
-                    )
-                };
-                if read > 0 {
-                    buf_valid += read as usize;
-                    file_pos += read as usize;
-                }
+        }
+        // Top up buffer if there's room (small reads to avoid stalls).
+        if buf_valid < READ_BUF_SIZE && file_pos < file_size {
+            let room = READ_BUF_SIZE - buf_valid;
+            let chunk = if room > 4096 { 4096 } else { room };
+            let read = unsafe {
+                psp::sys::sceIoRead(
+                    fd,
+                    read_buf.add(buf_valid) as *mut _,
+                    chunk as u32,
+                )
+            };
+            if read > 0 {
+                buf_valid += read as usize;
+                file_pos += read as usize;
             }
         }
 
