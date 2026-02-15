@@ -2030,6 +2030,7 @@ unsafe fn play_track_codec(path: &[u8], channel: i32) -> i32 {
 
     let mut result = 0i32;
     let mut frame_count: u32 = 0;
+    let mut zero_consumed: u32 = 0;
 
     loop {
         let cmd = AUDIO_CMD.load(Ordering::Relaxed);
@@ -2125,9 +2126,17 @@ unsafe fn play_track_codec(path: &[u8], channel: i32) -> i32 {
 
         let consumed = unsafe { *codec.add(7) } as usize;
         if consumed == 0 {
+            zero_consumed += 1;
+            if zero_consumed > 100 {
+                crate::debug_log(
+                    b"[OASIS] too many zero-consumed decodes",
+                );
+                break;
+            }
             buf_pos += 1;
             continue;
         }
+        zero_consumed = 0;
         buf_pos += consumed;
 
         let vol = (AUDIO_VOLUME.load(Ordering::Relaxed) as i32 * 0x8000)
