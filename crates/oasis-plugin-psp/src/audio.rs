@@ -1280,36 +1280,17 @@ unsafe fn init_audio_drivers() -> bool {
         crate::debug_log(b"[OASIS] audio driver resolved");
     }
 
-    // Step 2: Load AV modules via sceUtilityLoadModule (or fallback).
-    unsafe { load_av_modules() };
-
-    // Step 3: Enumerate all loaded modules to find MP3/codec modules.
-    // sctrlHENFindFunction only searches kernel modules, so we use
-    // sceKernelGetModuleIdList + sceKernelQueryModuleInfo to find
-    // user-mode modules loaded by sceUtilityLoadModule, get their
-    // text_addr, and walk their export tables manually.
-    unsafe { init_module_enum() };
-    unsafe { enumerate_modules() };
-
-    // Step 4: Try sceMp3 first (preferred -- streaming API).
-    if unsafe { try_resolve_mp3() } {
-        unsafe { core::ptr::write_volatile(&raw mut DECODER_BACKEND, 1) };
-        crate::debug_log(b"[OASIS] using sceMp3 backend");
-        return true;
-    }
-    crate::debug_log(b"[OASIS] sceMp3 NOT found, trying sceAudiocodec");
-
-    // Step 5: Try sceAudiocodec (fallback -- frame-by-frame).
+    // Step 2: Try sceAudiocodec FIRST via sctrlHENFindFunction.
+    // This resolves kernel-side codec functions without loading any
+    // extra modules, so it cannot interfere with the game.
     if unsafe { try_resolve_codec() } {
         unsafe { core::ptr::write_volatile(&raw mut DECODER_BACKEND, 2) };
         crate::debug_log(b"[OASIS] using sceAudiocodec backend");
         return true;
     }
-    crate::debug_log(b"[OASIS] NO decoder backend available");
+    crate::debug_log(b"[OASIS] sceAudiocodec not found directly");
 
-    // Step 6: Try extracting sceAudiocodec from game's import stubs.
-    // Fast scan (~0.1s): finds the game's resolved import stubs
-    // and extracts function addresses from MIPS J-instructions.
+    // Step 3: Try extracting sceAudiocodec from game's import stubs.
     if unsafe { try_codec_stub_extraction() } {
         unsafe {
             core::ptr::write_volatile(&raw mut DECODER_BACKEND, 2);
@@ -1317,6 +1298,20 @@ unsafe fn init_audio_drivers() -> bool {
         crate::debug_log(
             b"[OASIS] sceAudiocodec via stub extraction!",
         );
+        return true;
+    }
+
+    // Step 4: Only as last resort, load AV modules and try sceMp3.
+    // NOTE: sceUtilityLoadModule can interfere with games that load
+    // the same modules themselves, so we only do this if nothing
+    // else worked.
+    unsafe { load_av_modules() };
+    unsafe { init_module_enum() };
+    unsafe { enumerate_modules() };
+
+    if unsafe { try_resolve_mp3() } {
+        unsafe { core::ptr::write_volatile(&raw mut DECODER_BACKEND, 1) };
+        crate::debug_log(b"[OASIS] using sceMp3 backend");
         return true;
     }
 
@@ -1920,6 +1915,7 @@ unsafe fn play_track_codec(path: &[u8], channel: i32) -> i32 {
         }
     }
 
+    let mut edram_allocated = false;
     unsafe {
         if let Some(f) =
             core::ptr::read_volatile(&raw const CODEC_CHECK_NEED_MEM_FN)
@@ -1929,29 +1925,48 @@ unsafe fn play_track_codec(path: &[u8], channel: i32) -> i32 {
         } else {
             crate::debug_log(b"[OASIS] no CheckNeedMem fn");
         }
-        // Instead of sceAudiocodecGetEDRAM (which steals shared eDRAM from
-        // the game's GE/media engine), point codec[5] at our own working
-        // buffer allocated from user RAM.
-        let work = core::ptr::read_volatile(&raw const UMEM_WORK);
-        if work.is_null() {
-            crate::debug_log(b"[OASIS] no work buf");
+        if let Some(f) =
+            core::ptr::read_volatile(&raw const CODEC_GET_EDRAM_FN)
+        {
+            let ret = f(codec, CODEC_TYPE_MP3);
+            log_i32(b"[OASIS] GetEDRAM=", ret);
+            if ret >= 0 {
+                edram_allocated = true;
+            } else {
+                crate::debug_log(b"[OASIS] GetEDRAM failed");
+                psp::sys::sceIoClose(fd);
+                return -1;
+            }
+        } else {
+            crate::debug_log(b"[OASIS] no GetEDRAM fn");
             psp::sys::sceIoClose(fd);
             return -1;
         }
-        *codec.add(5) = work as u32;
-        log_i32(b"[OASIS] work_buf @", work as i32);
-
         if let Some(f) =
             core::ptr::read_volatile(&raw const CODEC_INIT_FN)
         {
             let ret = f(codec, CODEC_TYPE_MP3);
             log_i32(b"[OASIS] CodecInit=", ret);
             if ret < 0 {
+                if edram_allocated {
+                    if let Some(rel) = core::ptr::read_volatile(
+                        &raw const CODEC_RELEASE_EDRAM_FN,
+                    ) {
+                        rel(codec);
+                    }
+                }
                 psp::sys::sceIoClose(fd);
                 return -1;
             }
         } else {
             crate::debug_log(b"[OASIS] no CodecInit fn");
+            if edram_allocated {
+                if let Some(rel) = core::ptr::read_volatile(
+                    &raw const CODEC_RELEASE_EDRAM_FN,
+                ) {
+                    rel(codec);
+                }
+            }
             psp::sys::sceIoClose(fd);
             return -1;
         }
@@ -1965,7 +1980,16 @@ unsafe fn play_track_codec(path: &[u8], channel: i32) -> i32 {
         psp::sys::sceIoRead(fd, read_buf as *mut _, READ_BUF_SIZE as u32)
     };
     if initial_read <= 0 {
-        unsafe { psp::sys::sceIoClose(fd) };
+        unsafe {
+            if edram_allocated {
+                if let Some(f) = core::ptr::read_volatile(
+                    &raw const CODEC_RELEASE_EDRAM_FN,
+                ) {
+                    f(codec);
+                }
+            }
+            psp::sys::sceIoClose(fd);
+        }
         return -1;
     }
     buf_valid = initial_read as usize;
@@ -1996,6 +2020,13 @@ unsafe fn play_track_codec(path: &[u8], channel: i32) -> i32 {
         match core::ptr::read_volatile(&raw const CODEC_DECODE_FN) {
             Some(f) => f,
             None => {
+                if edram_allocated {
+                    if let Some(rel) = core::ptr::read_volatile(
+                        &raw const CODEC_RELEASE_EDRAM_FN,
+                    ) {
+                        rel(codec);
+                    }
+                }
                 psp::sys::sceIoClose(fd);
                 return -1;
             }
@@ -2163,7 +2194,16 @@ unsafe fn play_track_codec(path: &[u8], channel: i32) -> i32 {
         frame_count += 1;
     }
 
-    unsafe { psp::sys::sceIoClose(fd) };
+    unsafe {
+        if edram_allocated {
+            if let Some(f) = core::ptr::read_volatile(
+                &raw const CODEC_RELEASE_EDRAM_FN,
+            ) {
+                f(codec);
+            }
+        }
+        psp::sys::sceIoClose(fd);
+    }
     result
 }
 
