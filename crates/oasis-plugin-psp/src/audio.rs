@@ -99,6 +99,40 @@ const CODEC_MODULES: &[(&[u8], &[u8])] = &[
 const CODEC_TYPE_MP3: i32 = 0x1002;
 
 // ---------------------------------------------------------------------------
+// Manual export walking (bypasses sctrlHENFindFunction kernel-only limitation)
+// ---------------------------------------------------------------------------
+
+/// sceKernelFindModuleByName -- kernel API that finds ANY loaded module
+/// (both user-mode and kernel-mode), unlike sctrlHENFindFunction.
+const NID_FIND_MODULE_BY_NAME: u32 = 0xD8B73127;
+
+/// Module/library pairs for ModuleMgrForKernel.
+const MOD_MGR_MODULES: &[(&[u8], &[u8])] = &[
+    (b"sceModuleManager\0", b"ModuleMgrForKernel\0"),
+    (b"ModuleMgrForKernel\0", b"ModuleMgrForKernel\0"),
+];
+
+/// Internal module names to try when searching for sceMp3 via
+/// sceKernelFindModuleByName (after sceUtilityLoadModule loads it).
+const MP3_FIND_NAMES: &[&[u8]] = &[
+    b"sceMp3\0",
+    b"sceMp3_Library\0",
+    b"libmp3\0",
+];
+
+/// Internal module names to try for sceAudiocodec.
+const CODEC_FIND_NAMES: &[&[u8]] = &[
+    b"sceAudiocodec\0",
+    b"avcodec\0",
+    b"sceAVcodec_driver\0",
+];
+
+/// SceModule struct offsets (PSP 6.xx kernel struct).
+/// ent_top = pointer to export table, ent_size = size in bytes.
+const SCEMOD_ENT_TOP: usize = 0x58;
+const SCEMOD_ENT_SIZE: usize = 0x5C;
+
+// ---------------------------------------------------------------------------
 // Resolved function pointers
 // ---------------------------------------------------------------------------
 
@@ -154,6 +188,11 @@ static mut CODEC_GET_EDRAM_FN: Option<
 > = None;
 static mut CODEC_RELEASE_EDRAM_FN: Option<
     unsafe extern "C" fn(*mut u32) -> i32,
+> = None;
+
+// sceKernelFindModuleByName function pointer (resolved from ModuleMgrForKernel)
+static mut FIND_MODULE_FN: Option<
+    unsafe extern "C" fn(*const u8) -> *mut u8,
 > = None;
 
 // ---------------------------------------------------------------------------
@@ -317,6 +356,181 @@ unsafe fn resolve_nid_logged(
 }
 
 // ---------------------------------------------------------------------------
+// Manual export table walking
+// ---------------------------------------------------------------------------
+
+/// Resolve sceKernelFindModuleByName from ModuleMgrForKernel.
+unsafe fn init_module_finder() -> bool {
+    unsafe {
+        if let Some(ptr) =
+            resolve_nid(MOD_MGR_MODULES, NID_FIND_MODULE_BY_NAME)
+        {
+            core::ptr::write_volatile(
+                &raw mut FIND_MODULE_FN,
+                Some(core::mem::transmute(ptr)),
+            );
+            crate::debug_log(b"[OASIS] FindModuleByName resolved");
+            return true;
+        }
+    }
+    crate::debug_log(b"[OASIS] FindModuleByName NOT found");
+    false
+}
+
+/// Walk a SceModule's export table to find a function pointer by NID.
+///
+/// # Safety
+/// `scemod` must be a valid pointer to a PSP SceModule kernel struct.
+unsafe fn find_export_in_module(
+    scemod: *const u8,
+    nid: u32,
+) -> Option<*mut u8> {
+    unsafe {
+        let ent_top =
+            *(scemod.add(SCEMOD_ENT_TOP) as *const u32) as *const u8;
+        let ent_size =
+            *(scemod.add(SCEMOD_ENT_SIZE) as *const u32) as usize;
+
+        if ent_top.is_null() || ent_size == 0 {
+            return None;
+        }
+
+        let mut offset = 0usize;
+        while offset < ent_size {
+            let entry = ent_top.add(offset);
+
+            // SceLibraryEntryTable layout (16 bytes / 4 words):
+            //   +0x00: name (char*)
+            //   +0x04: version (u16) | attribute (u16)
+            //   +0x08: entLen (u8) | varCount (u8) | funcCount (u16)
+            //   +0x0C: entrytable (u32*)
+            let ent_len = *entry.add(8) as usize; // in 32-bit words
+            if ent_len < 4 {
+                // Minimum valid size; stop if malformed.
+                break;
+            }
+
+            let var_count = *entry.add(9) as usize;
+            let func_count =
+                *(entry.add(10) as *const u16) as usize;
+            let entrytable =
+                *(entry.add(12) as *const u32) as *const u32;
+
+            if !entrytable.is_null() && func_count > 0 {
+                let mut i = 0;
+                while i < func_count {
+                    let entry_nid = *entrytable.add(i);
+                    if entry_nid == nid {
+                        // Function pointer at
+                        // entrytable[funcCount + varCount + i]
+                        let func_ptr = *entrytable
+                            .add(func_count + var_count + i);
+                        return Some(func_ptr as *mut u8);
+                    }
+                    i += 1;
+                }
+            }
+
+            offset += ent_len * 4;
+        }
+    }
+    None
+}
+
+/// Find a function export by walking user-mode module export tables.
+///
+/// Tries each module name with sceKernelFindModuleByName, then walks
+/// the SceModule's export entries looking for the requested NID.
+///
+/// # Safety
+/// Requires FIND_MODULE_FN to be resolved first.
+unsafe fn find_user_export(
+    module_names: &[&[u8]],
+    nid: u32,
+) -> Option<*mut u8> {
+    unsafe {
+        let find_fn = match core::ptr::read_volatile(
+            &raw const FIND_MODULE_FN,
+        ) {
+            Some(f) => f,
+            None => return None,
+        };
+
+        for &name in module_names {
+            let scemod = find_fn(name.as_ptr());
+            if !scemod.is_null() {
+                if let Some(ptr) =
+                    find_export_in_module(scemod, nid)
+                {
+                    return Some(ptr);
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Resolve a NID by trying sctrlHENFindFunction first (kernel modules),
+/// then falling back to manual export table walking (user modules).
+unsafe fn resolve_nid_any(
+    modules: &[(&[u8], &[u8])],
+    find_names: &[&[u8]],
+    nid: u32,
+) -> Option<*mut u8> {
+    // Fast path: sctrlHENFindFunction (works for kernel modules).
+    if let Some(ptr) = unsafe { resolve_nid(modules, nid) } {
+        return Some(ptr);
+    }
+    // Slow path: walk user-mode module export tables.
+    unsafe { find_user_export(find_names, nid) }
+}
+
+/// Log which module names are findable (diagnostic).
+unsafe fn log_findable_modules(names: &[&[u8]], label: &[u8]) {
+    unsafe {
+        let find_fn = match core::ptr::read_volatile(
+            &raw const FIND_MODULE_FN,
+        ) {
+            Some(f) => f,
+            None => return,
+        };
+        for &name in names {
+            let scemod = find_fn(name.as_ptr());
+            if !scemod.is_null() {
+                let mut buf = [0u8; 80];
+                let mut p = copy_bytes(&mut buf, 0, b"[OASIS] found ");
+                p = copy_bytes(&mut buf, p, label);
+                p = copy_bytes(&mut buf, p, b" as ");
+                // Copy module name (without null terminator).
+                let mut k = 0;
+                while k < name.len() && name[k] != 0 && p < buf.len()
+                {
+                    buf[p] = name[k];
+                    p += 1;
+                    k += 1;
+                }
+                p = copy_bytes(&mut buf, p, b" @");
+                p = write_hex32(&mut buf, p, scemod as u32);
+                crate::debug_log(&buf[..p]);
+
+                // Log ent_top and ent_size for debugging.
+                let ent_top = *(scemod.add(SCEMOD_ENT_TOP)
+                    as *const u32);
+                let ent_size = *(scemod.add(SCEMOD_ENT_SIZE)
+                    as *const u32);
+                let mut buf2 = [0u8; 64];
+                let mut q =
+                    copy_bytes(&mut buf2, 0, b"[OASIS]   ent=");
+                q = write_hex32(&mut buf2, q, ent_top);
+                q = copy_bytes(&mut buf2, q, b" sz=");
+                q = write_hex32(&mut buf2, q, ent_size);
+                crate::debug_log(&buf2[..q]);
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Init
 // ---------------------------------------------------------------------------
 
@@ -375,59 +589,86 @@ unsafe fn load_av_modules() {
     }
 }
 
-/// Try to resolve sceMp3 function pointers. Returns true if all critical
-/// functions were found.
+/// Try to resolve sceMp3 function pointers. Uses sctrlHENFindFunction
+/// first, then falls back to manual export table walking for user-mode
+/// modules.
 unsafe fn try_resolve_mp3() -> bool {
     unsafe {
-        if let Some(ptr) = resolve_nid(MP3_MODULES, NID_MP3_INIT_RESOURCE) {
+        if let Some(ptr) = resolve_nid_any(
+            MP3_MODULES,
+            MP3_FIND_NAMES,
+            NID_MP3_INIT_RESOURCE,
+        ) {
             core::ptr::write_volatile(
                 &raw mut MP3_INIT_RESOURCE_FN,
                 Some(core::mem::transmute(ptr)),
             );
         }
-        if let Some(ptr) = resolve_nid(MP3_MODULES, NID_MP3_RESERVE_HANDLE) {
+        if let Some(ptr) = resolve_nid_any(
+            MP3_MODULES,
+            MP3_FIND_NAMES,
+            NID_MP3_RESERVE_HANDLE,
+        ) {
             core::ptr::write_volatile(
                 &raw mut MP3_RESERVE_HANDLE_FN,
                 Some(core::mem::transmute(ptr)),
             );
         }
-        if let Some(ptr) = resolve_nid(MP3_MODULES, NID_MP3_RELEASE_HANDLE) {
+        if let Some(ptr) = resolve_nid_any(
+            MP3_MODULES,
+            MP3_FIND_NAMES,
+            NID_MP3_RELEASE_HANDLE,
+        ) {
             core::ptr::write_volatile(
                 &raw mut MP3_RELEASE_HANDLE_FN,
                 Some(core::mem::transmute(ptr)),
             );
         }
-        if let Some(ptr) = resolve_nid(MP3_MODULES, NID_MP3_INIT) {
+        if let Some(ptr) = resolve_nid_any(
+            MP3_MODULES,
+            MP3_FIND_NAMES,
+            NID_MP3_INIT,
+        ) {
             core::ptr::write_volatile(
                 &raw mut MP3_INIT_FN,
                 Some(core::mem::transmute(ptr)),
             );
         }
-        if let Some(ptr) = resolve_nid(MP3_MODULES, NID_MP3_DECODE) {
+        if let Some(ptr) = resolve_nid_any(
+            MP3_MODULES,
+            MP3_FIND_NAMES,
+            NID_MP3_DECODE,
+        ) {
             core::ptr::write_volatile(
                 &raw mut MP3_DECODE_FN,
                 Some(core::mem::transmute(ptr)),
             );
         }
-        if let Some(ptr) =
-            resolve_nid(MP3_MODULES, NID_MP3_CHECK_NEED_DATA)
-        {
+        if let Some(ptr) = resolve_nid_any(
+            MP3_MODULES,
+            MP3_FIND_NAMES,
+            NID_MP3_CHECK_NEED_DATA,
+        ) {
             core::ptr::write_volatile(
                 &raw mut MP3_CHECK_NEED_DATA_FN,
                 Some(core::mem::transmute(ptr)),
             );
         }
-        if let Some(ptr) =
-            resolve_nid(MP3_MODULES, NID_MP3_GET_INFO_TO_ADD)
-        {
+        if let Some(ptr) = resolve_nid_any(
+            MP3_MODULES,
+            MP3_FIND_NAMES,
+            NID_MP3_GET_INFO_TO_ADD,
+        ) {
             core::ptr::write_volatile(
                 &raw mut MP3_GET_INFO_TO_ADD_FN,
                 Some(core::mem::transmute(ptr)),
             );
         }
-        if let Some(ptr) =
-            resolve_nid(MP3_MODULES, NID_MP3_NOTIFY_ADD_DATA)
-        {
+        if let Some(ptr) = resolve_nid_any(
+            MP3_MODULES,
+            MP3_FIND_NAMES,
+            NID_MP3_NOTIFY_ADD_DATA,
+        ) {
             core::ptr::write_volatile(
                 &raw mut MP3_NOTIFY_ADD_DATA_FN,
                 Some(core::mem::transmute(ptr)),
@@ -435,80 +676,93 @@ unsafe fn try_resolve_mp3() -> bool {
         }
 
         // Check critical functions.
-        core::ptr::read_volatile(&raw const MP3_INIT_RESOURCE_FN).is_some()
-            && core::ptr::read_volatile(&raw const MP3_RESERVE_HANDLE_FN)
+        core::ptr::read_volatile(&raw const MP3_INIT_RESOURCE_FN)
+            .is_some()
+            && core::ptr::read_volatile(
+                &raw const MP3_RESERVE_HANDLE_FN,
+            )
+            .is_some()
+            && core::ptr::read_volatile(&raw const MP3_DECODE_FN)
                 .is_some()
-            && core::ptr::read_volatile(&raw const MP3_DECODE_FN).is_some()
-            && core::ptr::read_volatile(&raw const MP3_GET_INFO_TO_ADD_FN)
-                .is_some()
-            && core::ptr::read_volatile(&raw const MP3_NOTIFY_ADD_DATA_FN)
-                .is_some()
+            && core::ptr::read_volatile(
+                &raw const MP3_GET_INFO_TO_ADD_FN,
+            )
+            .is_some()
+            && core::ptr::read_volatile(
+                &raw const MP3_NOTIFY_ADD_DATA_FN,
+            )
+            .is_some()
     }
 }
 
-/// Try to resolve sceAudiocodec function pointers. Returns true if all
-/// critical functions were found.
+/// Try to resolve sceAudiocodec function pointers. Uses combined
+/// resolution (sctrlHENFindFunction + export table walking).
 unsafe fn try_resolve_codec() -> bool {
     unsafe {
-        if let Some(ptr) =
-            resolve_nid_logged(
-                CODEC_MODULES,
-                NID_CODEC_CHECK_NEED_MEM,
-                b"CheckNeedMem",
-            )
-        {
+        if let Some(ptr) = resolve_nid_any(
+            CODEC_MODULES,
+            CODEC_FIND_NAMES,
+            NID_CODEC_CHECK_NEED_MEM,
+        ) {
             core::ptr::write_volatile(
                 &raw mut CODEC_CHECK_NEED_MEM_FN,
                 Some(core::mem::transmute(ptr)),
             );
+        } else {
+            crate::debug_log(b"[OASIS] NID miss: CheckNeedMem");
         }
-        if let Some(ptr) =
-            resolve_nid_logged(CODEC_MODULES, NID_CODEC_INIT, b"CodecInit")
-        {
+        if let Some(ptr) = resolve_nid_any(
+            CODEC_MODULES,
+            CODEC_FIND_NAMES,
+            NID_CODEC_INIT,
+        ) {
             core::ptr::write_volatile(
                 &raw mut CODEC_INIT_FN,
                 Some(core::mem::transmute(ptr)),
             );
+        } else {
+            crate::debug_log(b"[OASIS] NID miss: CodecInit");
         }
-        if let Some(ptr) =
-            resolve_nid_logged(
-                CODEC_MODULES,
-                NID_CODEC_DECODE,
-                b"CodecDecode",
-            )
-        {
+        if let Some(ptr) = resolve_nid_any(
+            CODEC_MODULES,
+            CODEC_FIND_NAMES,
+            NID_CODEC_DECODE,
+        ) {
             core::ptr::write_volatile(
                 &raw mut CODEC_DECODE_FN,
                 Some(core::mem::transmute(ptr)),
             );
+        } else {
+            crate::debug_log(b"[OASIS] NID miss: CodecDecode");
         }
-        if let Some(ptr) =
-            resolve_nid_logged(
-                CODEC_MODULES,
-                NID_CODEC_GET_EDRAM,
-                b"GetEDRAM",
-            )
-        {
+        if let Some(ptr) = resolve_nid_any(
+            CODEC_MODULES,
+            CODEC_FIND_NAMES,
+            NID_CODEC_GET_EDRAM,
+        ) {
             core::ptr::write_volatile(
                 &raw mut CODEC_GET_EDRAM_FN,
                 Some(core::mem::transmute(ptr)),
             );
+        } else {
+            crate::debug_log(b"[OASIS] NID miss: GetEDRAM");
         }
-        if let Some(ptr) =
-            resolve_nid_logged(
-                CODEC_MODULES,
-                NID_CODEC_RELEASE_EDRAM,
-                b"RelEDRAM",
-            )
-        {
+        if let Some(ptr) = resolve_nid_any(
+            CODEC_MODULES,
+            CODEC_FIND_NAMES,
+            NID_CODEC_RELEASE_EDRAM,
+        ) {
             core::ptr::write_volatile(
                 &raw mut CODEC_RELEASE_EDRAM_FN,
                 Some(core::mem::transmute(ptr)),
             );
+        } else {
+            crate::debug_log(b"[OASIS] NID miss: RelEDRAM");
         }
 
         core::ptr::read_volatile(&raw const CODEC_INIT_FN).is_some()
-            && core::ptr::read_volatile(&raw const CODEC_DECODE_FN).is_some()
+            && core::ptr::read_volatile(&raw const CODEC_DECODE_FN)
+                .is_some()
     }
 }
 
@@ -558,7 +812,19 @@ unsafe fn init_audio_drivers() -> bool {
     // Step 2: Load AV modules via sceUtilityLoadModule (or fallback).
     unsafe { load_av_modules() };
 
-    // Step 3: Try sceMp3 first (preferred -- streaming API).
+    // Step 3: Resolve sceKernelFindModuleByName for export walking.
+    // sctrlHENFindFunction only searches kernel modules, so we need
+    // manual export table walking to find user-mode module functions
+    // (sceMp3, sceAudiocodec) that were loaded via sceUtilityLoadModule.
+    unsafe { init_module_finder() };
+
+    // Log which modules are findable (diagnostic).
+    unsafe {
+        log_findable_modules(MP3_FIND_NAMES, b"mp3");
+        log_findable_modules(CODEC_FIND_NAMES, b"codec");
+    }
+
+    // Step 4: Try sceMp3 first (preferred -- streaming API).
     if unsafe { try_resolve_mp3() } {
         unsafe { core::ptr::write_volatile(&raw mut DECODER_BACKEND, 1) };
         crate::debug_log(b"[OASIS] using sceMp3 backend");
@@ -566,7 +832,7 @@ unsafe fn init_audio_drivers() -> bool {
     }
     crate::debug_log(b"[OASIS] sceMp3 NOT found, trying sceAudiocodec");
 
-    // Step 4: Try sceAudiocodec (fallback -- frame-by-frame).
+    // Step 5: Try sceAudiocodec (fallback -- frame-by-frame).
     if unsafe { try_resolve_codec() } {
         unsafe { core::ptr::write_volatile(&raw mut DECODER_BACKEND, 2) };
         crate::debug_log(b"[OASIS] using sceAudiocodec backend");
@@ -1405,6 +1671,19 @@ fn write_u32_decimal(buf: &mut [u8], pos: usize, val: u32) -> usize {
         }
         buf[p] = digits[count];
         p += 1;
+    }
+    p
+}
+
+fn write_hex32(buf: &mut [u8], pos: usize, val: u32) -> usize {
+    let hex = b"0123456789ABCDEF";
+    let mut p = pos;
+    let mut i = 0;
+    while i < 8 && p < buf.len() {
+        let nibble = (val >> (28 - i * 4)) & 0xF;
+        buf[p] = hex[nibble as usize];
+        p += 1;
+        i += 1;
     }
     p
 }
