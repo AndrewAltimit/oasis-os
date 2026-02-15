@@ -1282,11 +1282,12 @@ unsafe fn init_audio_drivers() -> bool {
 
     // Step 2: Wait for the game to load AVCODEC modules during its own
     // init, then piggyback on them.  This avoids sceUtilityLoadModule
-    // conflicts.  Retry every 2s for up to 60s before falling back to
-    // loading modules ourselves.
+    // conflicts.  Check every 15s for up to 45s (3 attempts) before
+    // falling back to loading modules ourselves.  Kept infrequent to
+    // minimise stutter from the NID scan + stub extraction.
     {
         let mut attempt = 0u32;
-        while attempt < 30 {
+        while attempt < 3 {
             if unsafe { try_resolve_codec() } {
                 unsafe {
                     core::ptr::write_volatile(&raw mut DECODER_BACKEND, 2);
@@ -1304,8 +1305,8 @@ unsafe fn init_audio_drivers() -> bool {
                 return true;
             }
             attempt += 1;
-            if attempt < 30 {
-                unsafe { psp::sys::sceKernelDelayThread(2_000_000) };
+            if attempt < 3 {
+                unsafe { psp::sys::sceKernelDelayThread(15_000_000) };
             }
         }
     }
