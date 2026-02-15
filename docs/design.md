@@ -102,15 +102,16 @@ oasis-os/
 |   +-- oasis-sdi/                   # Scene graph: named registry, z-order, alpha, layout, theming
 |   +-- oasis-net/                   # TCP networking, PSK auth, remote terminal, FTP transfer
 |   +-- oasis-audio/                 # Audio manager, playlist, shuffle/repeat, MP3 ID3 parsing
-|   +-- oasis-ui/                    # 15+ widgets: Button, Card, TabBar, ListView, flex layout
+|   +-- oasis-ui/                    # 20+ widgets: Button, Card, TabBar, ListView, flex layout
 |   +-- oasis-wm/                    # Window manager: lifecycle, drag/resize, hit testing, clipping
 |   +-- oasis-skin/                  # TOML skin engine, 8 skins, theme derivation from 9 base colors
-|   +-- oasis-terminal/              # 80+ commands across 14 modules, shell features
+|   +-- oasis-terminal/              # 90+ commands across 17 modules, shell features
 |   +-- oasis-browser/               # HTML/CSS/Gemini: DOM, CSS cascade, block/inline/table layout
 |   +-- oasis-core/                  # Coordination: apps (dual-panel FM), dashboard, agent, plugin, script
 |   +-- oasis-backend-sdl/           # SDL2 rendering and input (desktop dev + Raspberry Pi)
 |   +-- oasis-backend-ue5/           # UE5 render target, software RGBA framebuffer, FFI input queue
 |   +-- oasis-backend-psp/           # [excluded from workspace] sceGu rendering, PSP controller, UMD browsing
+|   +-- oasis-plugin-psp/           # [excluded from workspace] kernel-mode PRX: in-game overlay + background music
 |   +-- oasis-ffi/                   # C FFI boundary for UE5: exported functions, opaque handles
 |   +-- oasis-app/                   # Binary entry points: desktop app + screenshot tool
 +-- skins/
@@ -297,7 +298,7 @@ SDI is deliberately simple. It is not a DOM, not a layout engine, and not a reta
 
 The command interpreter is a registry-based dispatch system in the `oasis-terminal` crate. Commands implement a `Command` trait with an `execute()` method returning structured output. The interpreter includes full shell features: variable expansion (`$VAR`, `${VAR}`), glob expansion, aliases, history (`!!`, `!n`), piping, and command chaining. Skins control which commands are registered -- a terminal skin exposes everything, a locked-down kiosk skin exposes only approved commands, a corrupted skin registers broken versions of standard commands that produce garbled output. The agent-terminal skin adds commands for remote agent interaction (see Section 11).
 
-80+ commands across 14 modules:
+90+ commands across 17 modules:
 
 | Command Module | Examples | Description |
 |----------------|----------|-------------|
@@ -701,6 +702,25 @@ The firmware modernization dramatically simplifies the dashboard's application d
 - Register discovered applications with the dashboard grid
 
 No KXploit handling, no '%' directory pairing, no title watermark stripping, no firmware-version-specific icon selection. The code reduction is approximately 60% in the discovery module alone.
+
+#### 8.4.5 Overlay Plugin PRX Architecture
+
+OASIS uses a two-binary design on PSP, inspired by IRShell and similar PSP shells that shipped companion PRX modules for in-game functionality:
+
+| Binary | Crate | Format | Mode | Purpose |
+|--------|-------|--------|------|---------|
+| EBOOT.PBP | `oasis-backend-psp` | Standalone executable | User | Full shell (dashboard, terminal, browser, apps) |
+| PRX | `oasis-plugin-psp` | Relocatable module | Kernel | Lightweight overlay + background music |
+
+The PRX is loaded by custom firmware at boot time via a `PLUGINS.TXT` entry and stays resident in kernel memory when games launch. The EBOOT is replaced by the game, but the PRX persists.
+
+**Hook mechanism:** The PRX patches `sceDisplaySetFrameBuf` via `sctrlHENPatchSyscall` (a CFW-provided API for syscall table manipulation). After the game renders each frame, the hook draws overlay UI elements directly into the framebuffer using alpha-blended pixel writes.
+
+**Memory budget:** <64KB total (code + static data). No heap allocator for the core overlay path. The plugin uses static buffers for MP3 decode, PCM output, playlist storage, and overlay rendering. Atomics provide thread-safe state sharing between the display hook (game thread) and audio thread.
+
+**Background audio:** A dedicated kernel thread streams MP3 files from `ms0:/MUSIC/` through the PSP's hardware MP3 decoder (`sceMp3*`) to a reserved audio channel. File data is streamed in chunks rather than loaded entirely into memory.
+
+**Integration:** The EBOOT includes terminal commands (`plugin install`, `plugin remove`, `plugin status`) to manage the PRX installation, PLUGINS.TXT registration, and configuration file (`ms0:/seplugins/oasis.ini`).
 
 ---
 

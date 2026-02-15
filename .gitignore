@@ -17,6 +17,7 @@ Thumbs.db
 *.SFO
 *.PRX
 psp_output_file.log
+rust-std-src
 
 # Secrets
 *.key

@@ -43,6 +43,9 @@ cargo deny check
 # Build PSP backend (excluded from workspace, requires nightly + cargo-psp)
 cd crates/oasis-backend-psp && RUST_PSP_BUILD_STD=1 cargo +nightly psp --release
 
+# Build PSP overlay plugin PRX (excluded from workspace, kernel mode)
+cd crates/oasis-plugin-psp && RUST_PSP_BUILD_STD=1 cargo +nightly psp --release
+
 # Build UE5 FFI shared library
 cargo build --release -p oasis-ffi
 
@@ -67,18 +70,27 @@ oasis-types     (foundation: Color, Button, InputEvent, backend traits, error ty
 ├── oasis-sdi        (scene display interface: named object registry, z-order)
 ├── oasis-net        (TCP networking, PSK auth, remote terminal, FTP)
 ├── oasis-audio      (audio manager, playlist, MP3 ID3 parsing)
-├── oasis-ui         (15+ widgets: Button, Card, TabBar, ListView, flex layout)
+├── oasis-ui         (20+ widgets: Button, Card, TabBar, ListView, flex layout)
 ├── oasis-wm         (window manager: drag/resize, hit testing, decorations)
 ├── oasis-skin       (TOML skin engine, 8 skins, theme derivation)
-├── oasis-terminal   (80+ commands across 14 modules, shell features)
+├── oasis-terminal   (90+ commands across 17 modules, shell features)
 ├── oasis-browser    (HTML/CSS/Gemini: DOM, CSS cascade, layout engine)
 └── oasis-core       (coordination: apps, dashboard, agent, plugin, script)
     ├── oasis-backend-sdl  (SDL2 desktop/Pi rendering + input + audio)
     │   └── oasis-app      (binary entry points: oasis-app, oasis-screenshot)
     ├── oasis-backend-ue5  (software RGBA framebuffer for Unreal Engine 5)
     │   └── oasis-ffi      (cdylib C-ABI for UE5 integration)
-    └── oasis-backend-psp  (excluded from workspace, PSP hardware via sceGu)
+    ├── oasis-backend-psp  (excluded from workspace, PSP hardware via sceGu)
+    └── oasis-plugin-psp   (excluded from workspace, kernel-mode PRX overlay)
 ```
+
+### PSP Two-Binary Architecture
+
+The PSP deployment uses two binaries:
+- **`oasis-backend-psp`** (EBOOT.PBP) -- the full shell application, runs standalone
+- **`oasis-plugin-psp`** (PRX) -- lightweight companion module loaded by CFW (ARK-4/PRO) via `PLUGINS.TXT`, stays resident in kernel memory alongside games
+
+The PRX hooks `sceDisplaySetFrameBuf` to draw overlay UI into the game's framebuffer and claims a PSP audio channel for background MP3 playback. No dependency on oasis-core -- direct framebuffer rendering only (<64KB binary).
 
 ### Key Abstraction: Backend Traits
 
@@ -98,9 +110,9 @@ The framework is split into 16 workspace crates. Each module below is its own cr
 - **oasis-sdi** -- Scene Display Interface: named objects with position, size, color, texture, text, z-order, gradients, rounded corners, shadows
 - **oasis-skin** -- Data-driven TOML skin system with 8 skins (2 external in `skins/`, 7 built-in; xp exists in both forms). Theme derivation from 9 base colors.
 - **oasis-browser** -- Embeddable HTML/CSS/Gemini rendering engine: DOM parser, CSS cascade, block/inline/table layout, link navigation, reader mode
-- **oasis-ui** -- 15+ reusable widgets: Button, Card, TabBar, Panel, TextField, ListView, ScrollView, ProgressBar, Toggle, NinePatch, flex layout
+- **oasis-ui** -- 20+ reusable widgets: Button, Card, TabBar, Panel, TextField, ListView, ScrollView, ProgressBar, Toggle, NinePatch, flex layout
 - **oasis-vfs** -- Virtual file system: `MemoryVfs` (in-RAM), `RealVfs` (disk), `GameAssetVfs` (UE5 with overlay writes)
-- **oasis-terminal** -- Command interpreter with 80+ commands across 14 modules (core, text, file, system, dev, fun, security, doc, audio, network, skin, UI, plus agent/plugin/script/transfer/update registered by oasis-core). Shell features: variable expansion, glob expansion, aliases, history, piping
+- **oasis-terminal** -- Command interpreter with 90+ commands across 17 modules (core, text, file, system, dev, fun, security, doc, audio, network, skin, UI, plus agent/plugin/script/transfer/update registered by oasis-core). Shell features: variable expansion, glob expansion, aliases, history, piping
 - **oasis-wm** -- Window manager (window configs, hit testing, drag/resize, minimize/maximize/close)
 - **oasis-net** -- TCP networking with PSK authentication, remote terminal, FTP transfer
 - **oasis-audio** -- Audio manager with playlist, shuffle/repeat modes, MP3 ID3 tag parsing

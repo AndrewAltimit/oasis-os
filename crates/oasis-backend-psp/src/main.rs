@@ -982,6 +982,9 @@ fn psp_main() {
                         },
                         _ => commands::execute_command(&cmd, &mut config),
                     };
+                    // Commands like `rm` may invoke confirm_dialog which
+                    // closes the GU display list. Re-open it for rendering.
+                    backend.reinit_gu_frame();
                     for line in output {
                         term_lines.push(line);
                     }
@@ -1004,6 +1007,8 @@ fn psp_main() {
                         },
                         Ok(None) | Err(_) => {}, // Cancelled or unsupported (PPSSPP)
                     }
+                    // OSK closes the GU display list. Re-open for rendering.
+                    backend.reinit_gu_frame();
                 },
                 InputEvent::ButtonPress(Button::Up) if classic_view == ClassicView::Terminal => {
                     term_lines.push(String::from("> help"));
@@ -1153,6 +1158,8 @@ fn psp_main() {
                             },
                             _ => {}, // Cancelled or closed
                         }
+                        // confirm_dialog/error_dialog close the GU list.
+                        backend.reinit_gu_frame();
                     }
                 },
                 InputEvent::ButtonPress(Button::Triangle)
