@@ -24,8 +24,10 @@ const NID_AUDIO_SET_CH_VOL: u32 = 0xB7E1D8E7;
 
 /// Module/library pairs for sceAudio driver.
 const AUDIO_MODULES: &[(&[u8], &[u8])] = &[
-    (b"sceAudio_Driver\0", b"sceAudio\0"),
     (b"sceAudio_Driver\0", b"sceAudio_driver\0"),
+    (b"sceAudio_Driver\0", b"sceAudio\0"),
+    (b"sceAudio_Service\0", b"sceAudio_driver\0"),
+    (b"sceAudio_Service\0", b"sceAudio\0"),
 ];
 
 // ---------------------------------------------------------------------------
@@ -49,12 +51,13 @@ const NID_MP3_CHECK_NEED_DATA: u32 = 0xD8F54A51;
 /// sceMp3GetInfoToAddStreamData(handle, dst, to_write, src_pos) -> 0
 const NID_MP3_GET_INFO_TO_ADD: u32 = 0x732B042A;
 /// sceMp3NotifyAddStreamData(handle, size) -> 0
-const NID_MP3_NOTIFY_ADD_DATA: u32 = 0x0DB149F4;
+const NID_MP3_NOTIFY_ADD_DATA: u32 = 0x29BFF3EC;
 
 /// Module/library pairs for sceMp3 driver.
 const MP3_MODULES: &[(&[u8], &[u8])] = &[
-    (b"sceMp3_Library\0", b"sceMp3\0"),
     (b"sceMp3\0", b"sceMp3\0"),
+    (b"sceMp3_Library\0", b"sceMp3\0"),
+    (b"libmp3\0", b"sceMp3\0"),
 ];
 
 // ---------------------------------------------------------------------------
@@ -395,10 +398,11 @@ unsafe fn init_audio_drivers() -> bool {
         if core::ptr::read_volatile(&raw const MP3_INIT_RESOURCE_FN)
             .is_none()
         {
-            // Try loading MP3 modules explicitly.
+            // Try loading MP3 modules explicitly (dependency order).
             let modules: &[&[u8]] = &[
-                b"flash0:/kd/mpeg.prx\0",
                 b"flash0:/kd/mpegbase.prx\0",
+                b"flash0:/kd/mpeg.prx\0",
+                b"flash0:/kd/mpeg_vsh.prx\0",
                 b"flash0:/kd/libmp3.prx\0",
             ];
             for path in modules {
