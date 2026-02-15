@@ -1448,15 +1448,9 @@ unsafe fn init_audio_drivers() -> bool {
     }
     crate::debug_log(b"[OASIS] NO decoder backend available");
 
-    // Step 6: Brute-force NID memory scan for diagnostics.
-    // Scans user + kernel memory for known NID values and writes
-    // results to ms0:/seplugins/oasis_memdump.txt for analysis.
-    crate::debug_log(b"[OASIS] starting NID memory scan...");
-    unsafe { nid_memory_scan() };
-
-    // Step 7: Try extracting sceAudiocodec from game's import stubs.
-    // If the game imports sceAudiocodec, its stubs are already
-    // resolved with real function addresses.
+    // Step 6: Try extracting sceAudiocodec from game's import stubs.
+    // Fast scan (~0.1s): finds the game's resolved import stubs
+    // and extracts function addresses from MIPS J-instructions.
     if unsafe { try_codec_stub_extraction() } {
         unsafe {
             core::ptr::write_volatile(&raw mut DECODER_BACKEND, 2);
@@ -1466,6 +1460,11 @@ unsafe fn init_audio_drivers() -> bool {
         );
         return true;
     }
+
+    // Step 7: Diagnostic NID memory scan (slow, writes dump file).
+    // Only runs if everything else failed.
+    crate::debug_log(b"[OASIS] starting NID memory scan...");
+    unsafe { nid_memory_scan() };
 
     false
 }
