@@ -1992,22 +1992,32 @@ unsafe fn play_track_codec(path: &[u8], channel: i32) -> i32 {
             break;
         }
 
+        let avail = buf_valid - buf_pos;
         unsafe {
             *codec.add(6) = read_buf.add(buf_pos) as u32;
+            *codec.add(7) = avail as u32;
             *codec.add(8) = pcm_buf as u32;
+            *codec.add(9) = (1152 * 2 * 2) as u32;
         }
 
         let ret = unsafe { decode_fn(codec, CODEC_TYPE_MP3) };
-        if frame_count < 3 {
+        if frame_count < 5 {
             log_i32(b"[OASIS] decode ret=", ret);
+            log_i32(b"[OASIS] avail=", avail as i32);
         }
         if ret < 0 {
+            // Limit consecutive failures to avoid infinite spin.
+            frame_count += 1;
+            if frame_count > 100 {
+                crate::debug_log(b"[OASIS] too many decode errors");
+                break;
+            }
             buf_pos += 1;
             continue;
         }
 
         let consumed = unsafe { *codec.add(7) } as usize;
-        if frame_count < 3 {
+        if frame_count < 5 {
             log_i32(b"[OASIS] consumed=", consumed as i32);
         }
         if consumed == 0 {
