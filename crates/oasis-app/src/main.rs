@@ -153,6 +153,7 @@ fn main() -> Result<()> {
         browser: None,
         net_backend: StdNetworkBackend::new(),
         listener: None,
+        ftp_server: None,
         remote_client: None,
         tls_provider: RustlsTlsProvider::new(),
         mouse_cursor,
@@ -226,6 +227,9 @@ fn main() -> Result<()> {
 
         // Poll remote listener for incoming commands.
         commands::poll_remote_listener(&mut state, &mut sdi, &mut vfs);
+
+        // Poll FTP server for incoming connections.
+        commands::poll_ftp_server(&mut state, &mut vfs);
 
         // Poll remote client for received data.
         commands::poll_remote_client(&mut state);

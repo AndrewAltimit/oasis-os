@@ -45,6 +45,11 @@ pub enum CommandOutput {
         /// Skin name or path to load.
         name: String,
     },
+    /// Signal to the app to start/stop the FTP file server.
+    FtpToggle {
+        /// Port to listen on (0 = stop).
+        port: u16,
+    },
     /// Multiple outputs from a chained command (e.g. `skin xp ; echo Done`).
     /// Each inner output is processed in order by the app layer.
     Multi(Vec<CommandOutput>),
@@ -1726,6 +1731,7 @@ mod tests {
             },
             CommandOutput::BrowserSandbox { enable: true },
             CommandOutput::SkinSwap { name: "xp".into() },
+            CommandOutput::FtpToggle { port: 2121 },
         ];
         for o in &outputs {
             let _ = format!("{o:?}");

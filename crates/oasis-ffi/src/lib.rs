@@ -470,9 +470,9 @@ pub unsafe extern "C" fn oasis_send_command(
         },
         Ok(CommandOutput::Clear) => String::new(),
         Ok(CommandOutput::None) => String::new(),
-        Ok(CommandOutput::ListenToggle { .. }) | Ok(CommandOutput::RemoteConnect { .. }) => {
-            "Not available via FFI.".to_string()
-        },
+        Ok(CommandOutput::ListenToggle { .. })
+        | Ok(CommandOutput::RemoteConnect { .. })
+        | Ok(CommandOutput::FtpToggle { .. }) => "Not available via FFI.".to_string(),
         Ok(CommandOutput::BrowserSandbox { enable }) => {
             let state = if enable { "on" } else { "off" };
             format!("Browser sandbox: {state}")
@@ -497,9 +497,9 @@ pub unsafe extern "C" fn oasis_send_command(
                     CommandOutput::SkinSwap { name } => {
                         format!("Skin swap to '{name}' not available via FFI.")
                     },
-                    CommandOutput::ListenToggle { .. } | CommandOutput::RemoteConnect { .. } => {
-                        "Not available via FFI.".to_string()
-                    },
+                    CommandOutput::ListenToggle { .. }
+                    | CommandOutput::RemoteConnect { .. }
+                    | CommandOutput::FtpToggle { .. } => "Not available via FFI.".to_string(),
                     CommandOutput::BrowserSandbox { enable } => {
                         let state = if enable { "on" } else { "off" };
                         format!("Browser sandbox: {state}")

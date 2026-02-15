@@ -6,6 +6,7 @@ use oasis_core::sdi::SdiRegistry;
 use oasis_core::skin::{Skin, resolve_skin};
 use oasis_core::startmenu::StartMenuState;
 use oasis_core::terminal::{CommandOutput, Environment};
+use oasis_core::transfer::FtpServer;
 use oasis_core::vfs::MemoryVfs;
 
 use crate::app_state::AppState;
@@ -98,6 +99,36 @@ pub fn process_command_output(
             };
             state.output_lines.push(format!("Browser sandbox: {st}"));
         },
+        Ok(CommandOutput::FtpToggle { port }) => {
+            if port == 0 {
+                if let Some(ref mut f) = state.ftp_server {
+                    f.stop();
+                    state.ftp_server = None;
+                    state.output_lines.push("FTP server stopped.".to_string());
+                } else {
+                    state
+                        .output_lines
+                        .push("No FTP server running.".to_string());
+                }
+            } else if state.ftp_server.is_some() {
+                state
+                    .output_lines
+                    .push("FTP server already running. Use 'ftp stop' first.".to_string());
+            } else {
+                let mut server = FtpServer::new(port);
+                match server.start(&mut state.net_backend) {
+                    Ok(()) => {
+                        state
+                            .output_lines
+                            .push(format!("FTP server listening on port {port}."));
+                        state.ftp_server = Some(server);
+                    },
+                    Err(e) => {
+                        state.output_lines.push(format!("FTP server error: {e}"));
+                    },
+                }
+            }
+        },
         Ok(CommandOutput::SkinSwap { name }) => {
             return Some(name);
         },
@@ -170,9 +201,9 @@ fn format_remote_response(
         },
         Ok(CommandOutput::Clear) => "OK".to_string(),
         Ok(CommandOutput::None) => "OK".to_string(),
-        Ok(CommandOutput::ListenToggle { .. }) | Ok(CommandOutput::RemoteConnect { .. }) => {
-            "Not available via remote.".to_string()
-        },
+        Ok(CommandOutput::ListenToggle { .. })
+        | Ok(CommandOutput::RemoteConnect { .. })
+        | Ok(CommandOutput::FtpToggle { .. }) => "Not available via remote.".to_string(),
         Ok(CommandOutput::BrowserSandbox { enable }) => {
             if let Some(bw) = browser {
                 bw.config.features.sandbox_only = enable;
@@ -256,6 +287,21 @@ pub fn poll_remote_listener(state: &mut AppState, sdi: &mut SdiRegistry, vfs: &m
         let response =
             format_remote_response(result, browser, skin, active_theme, browser_config, wm, sdi);
         let _ = l.send_response(conn_idx, &response);
+    }
+}
+
+/// Poll the FTP server for incoming connections and commands.
+pub fn poll_ftp_server(state: &mut AppState, vfs: &mut MemoryVfs) {
+    let AppState {
+        ref mut ftp_server,
+        ref mut net_backend,
+        ..
+    } = *state;
+
+    let Some(server) = ftp_server else { return };
+
+    if let Err(e) = server.poll(net_backend, vfs) {
+        log::warn!("FTP server poll error: {e}");
     }
 }
 
