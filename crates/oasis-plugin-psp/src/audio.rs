@@ -766,11 +766,15 @@ unsafe fn try_codec_stub_extraction() -> bool {
         return false;
     }
 
-    // Step 4: Extract syscall numbers from codec stubs.
-    // All stubs are syscall format: jr $ra (0x03E00008) + syscall N.
-    // The syscall number is (insn1 >> 6) & 0xFFFFF.
-    let mut codec_syscalls: [(u32, u32); 8] = [(0, 0); 8]; // (nid, sc_num)
-    let mut sc_count = 0u32;
+    // Step 4: Use the game's import stubs as function pointers.
+    //
+    // Each stub is `jr $ra; syscall N` (8 bytes). When called, the
+    // CPU executes the syscall in the delay slot, which traps to the
+    // kernel's syscall handler. The handler dispatches to the actual
+    // codec function and returns to our caller. This works from
+    // kernel mode because the PSP syscall mechanism doesn't require
+    // user-mode context.
+    let mut resolved = 0u32;
     let mut i = 0u32;
     while i < entry_count {
         let nid = unsafe {
@@ -788,108 +792,32 @@ unsafe fn try_codec_stub_extraction() -> bool {
             )
         };
 
-        // Check for syscall stub: jr $ra + syscall N
-        if insn0 == 0x03E0_0008 && (insn1 & 0x3F) == 0x0C {
-            let sc_num = (insn1 >> 6) & 0xF_FFFF;
-            if (sc_count as usize) < codec_syscalls.len() {
-                codec_syscalls[sc_count as usize] = (nid, sc_num);
-                sc_count += 1;
-            }
-            let mut buf = [0u8; 64];
-            let mut p = copy_bytes(&mut buf, 0, b"[OASIS] sc ");
-            p = write_hex32(&mut buf, p, nid);
-            p = copy_bytes(&mut buf, p, b" #");
-            p = write_hex32(&mut buf, p, sc_num);
-            crate::debug_log(&buf[..p]);
-        }
-        i += 1;
-    }
-
-    if sc_count == 0 {
-        crate::debug_log(b"[OASIS] no syscall stubs found");
-        return false;
-    }
-    log_i32(b"[OASIS] codec syscalls: ", sc_count as i32);
-
-    // Step 5: Find sceAudio import stubs in user memory to get a
-    // reference syscall number. Search near the codec NID table.
-    let audio_sc = unsafe {
-        find_audio_syscall(table_start)
-    };
-    if audio_sc == 0 {
-        crate::debug_log(b"[OASIS] audio syscall NOT found");
-        return false;
-    }
-
-    // Step 6: Compute syscall table base.
-    // We already resolved sceAudioChReserve via sctrlHENFindFunction
-    // (stored in AUDIO_CH_RESERVE_FN). The syscall table is:
-    //   table[syscall_num] = kernel_function_ptr (4 bytes each)
-    // So: table_base = kernel_ptr - syscall_num * 4
-    let audio_kern_ptr = unsafe {
-        match core::ptr::read_volatile(
-            &raw const AUDIO_CH_RESERVE_FN,
-        ) {
-            Some(f) => f as *const u8 as u32,
-            None => {
-                crate::debug_log(
-                    b"[OASIS] no audio kern ptr",
-                );
-                return false;
-            }
-        }
-    };
-
-    let table_base = audio_kern_ptr
-        .wrapping_sub(audio_sc.wrapping_mul(4));
-    {
-        let mut buf = [0u8; 64];
-        let mut p = copy_bytes(&mut buf, 0, b"[OASIS] sc table ");
-        p = write_hex32(&mut buf, p, table_base);
-        p = copy_bytes(&mut buf, p, b" audio@");
-        p = write_hex32(&mut buf, p, audio_kern_ptr);
-        crate::debug_log(&buf[..p]);
-    }
-
-    // Validate: table_base should be in kernel memory.
-    if table_base < 0x8800_0000 || table_base > 0x8C00_0000 {
-        crate::debug_log(b"[OASIS] sc table base invalid");
-        return false;
-    }
-
-    // Step 7: Look up codec kernel function pointers from the table.
-    let mut resolved = 0u32;
-    let mut j = 0u32;
-    while j < sc_count {
-        let (nid, sc_num) = codec_syscalls[j as usize];
-        let entry_addr = table_base.wrapping_add(sc_num * 4);
-        let func_ptr = unsafe {
-            core::ptr::read_volatile(entry_addr as *const u32)
-        };
-
-        {
-            let mut buf = [0u8; 80];
-            let mut p =
-                copy_bytes(&mut buf, 0, b"[OASIS] sc[");
-            p = write_hex32(&mut buf, p, sc_num);
-            p = copy_bytes(&mut buf, p, b"]=");
-            p = write_hex32(&mut buf, p, func_ptr);
-            crate::debug_log(&buf[..p]);
-        }
-
-        // Validate: function pointer should be in kernel space.
-        if func_ptr < 0x8800_0000 || func_ptr > 0x8C00_0000 {
-            j += 1;
+        // Only accept syscall stubs (jr $ra + syscall N).
+        let is_syscall =
+            insn0 == 0x03E0_0008 && (insn1 & 0x3F) == 0x0C;
+        if !is_syscall {
+            i += 1;
             continue;
         }
 
+        {
+            let mut buf = [0u8; 64];
+            let mut p = copy_bytes(&mut buf, 0, b"[OASIS] stub ");
+            p = write_hex32(&mut buf, p, nid);
+            p = copy_bytes(&mut buf, p, b" @");
+            p = write_hex32(&mut buf, p, stub_addr);
+            crate::debug_log(&buf[..p]);
+        }
+
+        // Use the stub address as the function pointer. When called,
+        // jr $ra + syscall N trampolines through the kernel.
         unsafe {
             match nid {
                 NID_CODEC_CHECK_NEED_MEM => {
                     core::ptr::write_volatile(
                         &raw mut CODEC_CHECK_NEED_MEM_FN,
                         Some(core::mem::transmute(
-                            func_ptr as usize,
+                            stub_addr as usize,
                         )),
                     );
                     resolved += 1;
@@ -898,7 +826,7 @@ unsafe fn try_codec_stub_extraction() -> bool {
                     core::ptr::write_volatile(
                         &raw mut CODEC_INIT_FN,
                         Some(core::mem::transmute(
-                            func_ptr as usize,
+                            stub_addr as usize,
                         )),
                     );
                     resolved += 1;
@@ -907,7 +835,7 @@ unsafe fn try_codec_stub_extraction() -> bool {
                     core::ptr::write_volatile(
                         &raw mut CODEC_DECODE_FN,
                         Some(core::mem::transmute(
-                            func_ptr as usize,
+                            stub_addr as usize,
                         )),
                     );
                     resolved += 1;
@@ -916,7 +844,7 @@ unsafe fn try_codec_stub_extraction() -> bool {
                     core::ptr::write_volatile(
                         &raw mut CODEC_GET_EDRAM_FN,
                         Some(core::mem::transmute(
-                            func_ptr as usize,
+                            stub_addr as usize,
                         )),
                     );
                     resolved += 1;
@@ -925,7 +853,7 @@ unsafe fn try_codec_stub_extraction() -> bool {
                     core::ptr::write_volatile(
                         &raw mut CODEC_RELEASE_EDRAM_FN,
                         Some(core::mem::transmute(
-                            func_ptr as usize,
+                            stub_addr as usize,
                         )),
                     );
                     resolved += 1;
@@ -933,158 +861,11 @@ unsafe fn try_codec_stub_extraction() -> bool {
                 _ => {}
             }
         }
-        j += 1;
+        i += 1;
     }
 
-    log_i32(b"[OASIS] codec via sc table: ", resolved as i32);
+    log_i32(b"[OASIS] codec stubs resolved: ", resolved as i32);
     resolved >= 2
-}
-
-/// Find sceAudioChReserve's syscall number from the game's import
-/// stubs. Searches all user memory for the sceAudio NID cluster,
-/// then extracts the syscall number.
-///
-/// Returns the syscall number, or 0 if not found.
-unsafe fn find_audio_syscall(_near_addr: u32) -> u32 {
-    crate::debug_log(b"[OASIS] searching audio stubs...");
-
-    // Search all user memory for sceAudioChReserve NID.
-    // Audio and codec imports can be far apart in the game binary.
-    let search_lo: u32 = 0x0880_0000;
-    let search_hi: u32 = 0x0A00_0000 - 4;
-
-    let mut audio_nid_addr: u32 = 0;
-    let mut addr = search_lo;
-    while addr <= search_hi {
-        let val = unsafe {
-            core::ptr::read_volatile(addr as *const u32)
-        };
-        if val == NID_AUDIO_CH_RESERVE {
-            // Verify: at least 1 other audio NID within 32 bytes.
-            let mut nearby = 0u32;
-            let c_lo = addr.saturating_sub(32);
-            let c_hi = (addr + 32).min(0x0A00_0000 - 4);
-            let mut c = c_lo;
-            while c <= c_hi {
-                let v = unsafe {
-                    core::ptr::read_volatile(c as *const u32)
-                };
-                if v == NID_AUDIO_OUTPUT_BLOCKING
-                    || v == NID_AUDIO_CH_RELEASE
-                    || v == NID_AUDIO_SET_CH_VOL
-                {
-                    nearby += 1;
-                }
-                c += 4;
-            }
-            if nearby >= 1 {
-                audio_nid_addr = addr;
-                break;
-            }
-        }
-        addr += 4;
-    }
-
-    if audio_nid_addr == 0 {
-        crate::debug_log(b"[OASIS] audio NIDs not in range");
-        return 0;
-    }
-    log_hex(b"[OASIS] audio NID @", audio_nid_addr);
-
-    // Find the NID table start (walk backwards through sorted NIDs).
-    let mut tbl_start = audio_nid_addr;
-    while tbl_start > search_lo + 4 {
-        let prev = unsafe {
-            core::ptr::read_volatile(
-                (tbl_start - 4) as *const u32,
-            )
-        };
-        let cur = unsafe {
-            core::ptr::read_volatile(tbl_start as *const u32)
-        };
-        if prev < cur && prev > 0x0100_0000 {
-            tbl_start -= 4;
-        } else {
-            break;
-        }
-    }
-
-    // Find the NID table end.
-    let mut tbl_end = tbl_start;
-    let mut prev_val = 0u32;
-    while tbl_end < audio_nid_addr + 64 {
-        let val = unsafe {
-            core::ptr::read_volatile(tbl_end as *const u32)
-        };
-        if val > prev_val || tbl_end == tbl_start {
-            prev_val = val;
-            tbl_end += 4;
-        } else {
-            break;
-        }
-    }
-    let nid_count = (tbl_end - tbl_start) / 4;
-
-    // Find the stub table by searching near the NID table for a
-    // pointer to tbl_start. The SceLibraryStubTable is always close
-    // to its NID table (within a few KB in the same ELF section).
-    let mut stub_tbl: u32 = 0;
-    let stb_lo = tbl_start.saturating_sub(0x4000) & !3;
-    let stb_hi = (tbl_start + 0x4000).min(search_hi);
-    addr = stb_lo;
-    while addr <= stb_hi - 8 {
-        let val = unsafe {
-            core::ptr::read_volatile(addr as *const u32)
-        };
-        if val == tbl_start {
-            let next = unsafe {
-                core::ptr::read_volatile(
-                    (addr + 4) as *const u32,
-                )
-            };
-            if is_valid_ptr(next) && (next & 3) == 0 {
-                stub_tbl = next;
-                break;
-            }
-        }
-        addr += 4;
-    }
-
-    if stub_tbl == 0 {
-        crate::debug_log(b"[OASIS] audio stub table not found");
-        return 0;
-    }
-
-    // Find the index of NID_AUDIO_CH_RESERVE in the NID table.
-    let mut idx = 0u32;
-    while idx < nid_count {
-        let nid = unsafe {
-            core::ptr::read_volatile(
-                (tbl_start + idx * 4) as *const u32,
-            )
-        };
-        if nid == NID_AUDIO_CH_RESERVE {
-            // Read the stub at this index.
-            let s_addr = stub_tbl + idx * 8;
-            let insn0 = unsafe {
-                core::ptr::read_volatile(s_addr as *const u32)
-            };
-            let insn1 = unsafe {
-                core::ptr::read_volatile(
-                    (s_addr + 4) as *const u32,
-                )
-            };
-            if insn0 == 0x03E0_0008 && (insn1 & 0x3F) == 0x0C {
-                let sc = (insn1 >> 6) & 0xF_FFFF;
-                log_hex(b"[OASIS] audio sc#", sc);
-                return sc;
-            }
-        }
-        idx += 1;
-    }
-
-    crate::debug_log(b"[OASIS] audio ChReserve stub err");
-    0
 }
 
 fn log_hex(prefix: &[u8], val: u32) {
