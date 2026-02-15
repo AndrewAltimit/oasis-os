@@ -194,7 +194,7 @@ impl AudioPlayer {
 /// PSP audio backend that delegates to the audio worker thread.
 ///
 /// Stores loaded track data locally and sends it to the audio thread
-/// on `play()`. Reads playback state from the shared `SpinMutex` via
+/// on `play()`. Reads playback state from shared atomics via
 /// `AudioHandle`.
 pub struct PspAudioBackend {
     audio: AudioHandle,
@@ -270,11 +270,11 @@ impl AudioBackend for PspAudioBackend {
     }
 
     fn position_ms(&self) -> u64 {
-        self.audio.state().position_ms
+        self.audio.position_ms()
     }
 
     fn duration_ms(&self) -> u64 {
-        self.audio.state().duration_ms
+        self.audio.duration_ms()
     }
 
     fn unload_track(&mut self, track: AudioTrackId) -> Result<()> {
