@@ -67,10 +67,9 @@ fn psp_main() {
         PLUGIN_ACTIVE.store(true, Ordering::Release);
         debug_log(b"[OASIS] hook installed OK");
 
-        // Start background audio thread if autoplay is enabled
-        if config::get_config().autoplay {
-            audio::start_audio_thread();
-        }
+        // Start background audio thread (always -- handles on-demand
+        // playback from the overlay menu even when autoplay is off).
+        audio::start_audio_thread();
     } else {
         debug_log(b"[OASIS] hook install FAILED");
     }
