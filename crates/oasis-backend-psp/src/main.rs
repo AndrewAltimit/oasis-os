@@ -578,6 +578,16 @@ fn psp_main() {
     let mut mp_loaded = false;
     let mut mp_file_name = String::new();
 
+    // Load AV codec modules so the PRX overlay can piggyback on them
+    // immediately (avoids repeated NID scan stutter).  Errors are
+    // non-fatal -- the EBOOT uses sceMp3 directly via static imports.
+    unsafe {
+        use psp::sys::{sceUtilityLoadModule, Module};
+        let _ = sceUtilityLoadModule(Module::AvCodec);
+        let _ = sceUtilityLoadModule(Module::AvMpegBase);
+        let _ = sceUtilityLoadModule(Module::AvMp3);
+    }
+
     // Single background worker thread handles both audio and file I/O.
     let (audio, io) = oasis_backend_psp::spawn_workers();
     let mut pv_loading = false; // true while waiting for async texture load
