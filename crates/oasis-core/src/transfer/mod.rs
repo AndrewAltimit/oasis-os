@@ -130,6 +130,9 @@ const MAX_FTP_CONNECTIONS: usize = 4;
 /// Maximum bytes in a single FTP input line.
 const MAX_FTP_LINE_LEN: usize = 1024;
 
+/// Maximum commands to process per connection per poll cycle.
+const MAX_CMDS_PER_POLL: usize = 16;
+
 /// Idle connection timeout in seconds.
 const FTP_IDLE_TIMEOUT_SECS: u64 = 300;
 
@@ -233,8 +236,13 @@ impl FtpServer {
                     conn.last_activity = Instant::now();
                     conn.read_buf.extend_from_slice(&buf[..n]);
 
-                    // Process complete lines.
-                    while let Some(pos) = conn.read_buf.iter().position(|&b| b == b'\n') {
+                    // Process complete lines (capped per poll cycle).
+                    let mut cmds_processed = 0usize;
+                    while cmds_processed < MAX_CMDS_PER_POLL {
+                        let Some(pos) = conn.read_buf.iter().position(|&b| b == b'\n') else {
+                            break;
+                        };
+                        cmds_processed += 1;
                         let line_bytes: Vec<u8> = conn.read_buf.drain(..=pos).collect();
                         let line = String::from_utf8_lossy(&line_bytes).trim().to_string();
 
