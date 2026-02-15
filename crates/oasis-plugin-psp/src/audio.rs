@@ -141,10 +141,13 @@ const AUDIO_FORMAT_STEREO: i32 = 0;
 const MP3_SAMPLES_PER_FRAME: i32 = 1152;
 
 /// Maximum playlist size.
-const MAX_PLAYLIST: usize = 16;
+const MAX_PLAYLIST: usize = 32;
 
 /// Maximum filename length including path.
-const MAX_FILENAME: usize = 80;
+const MAX_FILENAME: usize = 128;
+
+/// Maximum recursion depth for directory scanning.
+const MAX_SCAN_DEPTH: usize = 4;
 
 /// MP3 stream buffer size (64KB).
 const MP3_BUF_SIZE: usize = 64 * 1024;
@@ -547,87 +550,21 @@ unsafe fn resolve_mp3_fns() {
 }
 
 /// Scan the music directory for .mp3 files and populate the playlist.
+/// Recursively descends into subdirectories up to `MAX_SCAN_DEPTH` levels.
 ///
 /// # Safety
 /// Must be called from a thread context where sceIo calls work.
 unsafe fn scan_playlist() {
     let config = crate::config::get_config();
-    let dir_path = config.music_dir_str();
-
-    // SAFETY: sceIoDopen with valid null-terminated path.
-    let dfd = unsafe {
-        psp::sys::sceIoDopen(dir_path.as_ptr())
-    };
-    if dfd.0 < 0 {
-        crate::debug_log(b"[OASIS] music dir not found");
-        return;
-    }
 
     // SAFETY: PLAYLIST is only written during single-threaded init.
     unsafe {
         core::ptr::write_volatile(&raw mut PLAYLIST_LEN, 0);
-        let mut dirent = core::mem::zeroed::<psp::sys::SceIoDirent>();
-        loop {
-            let ret = psp::sys::sceIoDread(dfd, &mut dirent);
-            if ret <= 0 {
-                break;
-            }
-            let pl_len =
-                core::ptr::read_volatile(&raw const PLAYLIST_LEN);
-            if pl_len >= MAX_PLAYLIST {
-                break;
-            }
+    }
 
-            // Check if filename ends with ".mp3" (case-insensitive).
-            let name_ptr = dirent.d_name.as_ptr() as *const u8;
-            let mut name_len = 0usize;
-            while name_len < 256 {
-                if *name_ptr.add(name_len) == 0 {
-                    break;
-                }
-                name_len += 1;
-            }
-            if name_len < 5 {
-                continue;
-            }
-
-            let ext_start = name_len - 4;
-            let c1 = *name_ptr.add(ext_start);
-            let c2 = (*name_ptr.add(ext_start + 1)).to_ascii_lowercase();
-            let c3 = (*name_ptr.add(ext_start + 2)).to_ascii_lowercase();
-            let c4 = (*name_ptr.add(ext_start + 3)).to_ascii_lowercase();
-            if c1 != b'.' || c2 != b'm' || c3 != b'p' || c4 != b'3' {
-                continue;
-            }
-
-            // Build full path: music_dir + filename
-            let dir_len = config.music_dir_len;
-            let total_len = dir_len + name_len;
-            if total_len >= MAX_FILENAME - 1 {
-                continue;
-            }
-
-            let entry = &mut (*(&raw mut PLAYLIST))[pl_len];
-            // Copy directory path (without null).
-            let mut j = 0;
-            while j < dir_len {
-                entry[j] = config.music_dir[j];
-                j += 1;
-            }
-            // Copy filename.
-            let mut k = 0;
-            while k < name_len {
-                entry[j + k] = *name_ptr.add(k);
-                k += 1;
-            }
-            entry[j + k] = 0; // null terminate
-
-            core::ptr::write_volatile(
-                &raw mut PLAYLIST_LEN,
-                pl_len + 1,
-            );
-        }
-        psp::sys::sceIoDclose(dfd);
+    // Start recursive scan from the music directory.
+    unsafe {
+        scan_dir_recursive(&config.music_dir, config.music_dir_len, 0);
     }
 
     let mut log_buf = [0u8; 48];
@@ -653,6 +590,153 @@ unsafe fn scan_playlist() {
         i += 1;
     }
     crate::debug_log(&log_buf[..p]);
+}
+
+/// Recursively scan a directory for .mp3 files.
+///
+/// `dir_path` is the directory path (null-terminated in the backing array).
+/// `dir_len` is the length of the path NOT including null, but INCLUDING
+/// the trailing `/`.
+///
+/// # Safety
+/// Requires sceIo APIs to be available (thread context).
+unsafe fn scan_dir_recursive(dir_path: &[u8], dir_len: usize, depth: usize) {
+    if depth > MAX_SCAN_DEPTH {
+        return;
+    }
+
+    let pl_len = unsafe {
+        core::ptr::read_volatile(&raw const PLAYLIST_LEN)
+    };
+    if pl_len >= MAX_PLAYLIST {
+        return;
+    }
+
+    // SAFETY: sceIoDopen with null-terminated path.
+    let dfd = unsafe {
+        psp::sys::sceIoDopen(dir_path.as_ptr())
+    };
+    if dfd.0 < 0 {
+        if depth == 0 {
+            crate::debug_log(b"[OASIS] music dir not found");
+        }
+        return;
+    }
+
+    unsafe {
+        let mut dirent = core::mem::zeroed::<psp::sys::SceIoDirent>();
+        loop {
+            let ret = psp::sys::sceIoDread(dfd, &mut dirent);
+            if ret <= 0 {
+                break;
+            }
+
+            let pl_len =
+                core::ptr::read_volatile(&raw const PLAYLIST_LEN);
+            if pl_len >= MAX_PLAYLIST {
+                break;
+            }
+
+            // Get filename and length.
+            let name_ptr = dirent.d_name.as_ptr() as *const u8;
+            let mut name_len = 0usize;
+            while name_len < 256 {
+                if *name_ptr.add(name_len) == 0 {
+                    break;
+                }
+                name_len += 1;
+            }
+            if name_len == 0 {
+                continue;
+            }
+
+            // Skip "." and ".."
+            if name_len == 1 && *name_ptr == b'.' {
+                continue;
+            }
+            if name_len == 2
+                && *name_ptr == b'.'
+                && *name_ptr.add(1) == b'.'
+            {
+                continue;
+            }
+
+            // Check if this entry is a directory (st_attr bit 0x0010).
+            let is_dir =
+                (dirent.d_stat.st_attr.bits() & 0x0010) != 0;
+
+            if is_dir {
+                // Build subdirectory path: dir + name + '/' + '\0'
+                // Need dir_len + name_len + 1 (slash) + 1 (null)
+                let sub_len = dir_len + name_len + 1;
+                if sub_len + 1 > MAX_FILENAME {
+                    continue;
+                }
+                let mut sub_path = [0u8; MAX_FILENAME];
+                let mut j = 0;
+                while j < dir_len {
+                    sub_path[j] = dir_path[j];
+                    j += 1;
+                }
+                let mut k = 0;
+                while k < name_len {
+                    sub_path[j + k] = *name_ptr.add(k);
+                    k += 1;
+                }
+                sub_path[j + name_len] = b'/';
+                sub_path[j + name_len + 1] = 0;
+
+                // Recurse into subdirectory.
+                scan_dir_recursive(&sub_path, sub_len, depth + 1);
+            } else {
+                // Check if filename ends with ".mp3" (case-insensitive).
+                if name_len < 5 {
+                    continue;
+                }
+                let ext_start = name_len - 4;
+                let c1 = *name_ptr.add(ext_start);
+                let c2 = (*name_ptr.add(ext_start + 1))
+                    .to_ascii_lowercase();
+                let c3 = (*name_ptr.add(ext_start + 2))
+                    .to_ascii_lowercase();
+                let c4 = (*name_ptr.add(ext_start + 3))
+                    .to_ascii_lowercase();
+                if c1 != b'.'
+                    || c2 != b'm'
+                    || c3 != b'p'
+                    || c4 != b'3'
+                {
+                    continue;
+                }
+
+                // Build full path: dir + filename + '\0'
+                let total_len = dir_len + name_len;
+                if total_len + 1 > MAX_FILENAME {
+                    continue;
+                }
+
+                let entry =
+                    &mut (*(&raw mut PLAYLIST))[pl_len];
+                let mut j = 0;
+                while j < dir_len {
+                    entry[j] = dir_path[j];
+                    j += 1;
+                }
+                let mut k = 0;
+                while k < name_len {
+                    entry[j + k] = *name_ptr.add(k);
+                    k += 1;
+                }
+                entry[j + k] = 0; // null terminate
+
+                core::ptr::write_volatile(
+                    &raw mut PLAYLIST_LEN,
+                    pl_len + 1,
+                );
+            }
+        }
+        psp::sys::sceIoDclose(dfd);
+    }
 }
 
 /// Set the track name display from a full file path.
