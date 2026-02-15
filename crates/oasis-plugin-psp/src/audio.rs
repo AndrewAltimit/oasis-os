@@ -102,14 +102,25 @@ const CODEC_TYPE_MP3: i32 = 0x1002;
 // Manual export walking (bypasses sctrlHENFindFunction kernel-only limitation)
 // ---------------------------------------------------------------------------
 
-/// sceKernelFindModuleByName -- kernel API that finds ANY loaded module
-/// (both user-mode and kernel-mode), unlike sctrlHENFindFunction.
+/// sceKernelFindModuleByName (ModuleMgrForKernel) -- returns SceModule*.
 const NID_FIND_MODULE_BY_NAME: u32 = 0xD8B73127;
+
+/// sceKernelSearchModuleByName (LoadCoreForKernel) -- alternative.
+const NID_SEARCH_MODULE_BY_NAME: u32 = 0xF0CAB543;
+
+/// sceKernelFindModuleByUID (ModuleMgrForKernel) -- convert UID to ptr.
+const NID_FIND_MODULE_BY_UID: u32 = 0xAFF947D4;
 
 /// Module/library pairs for ModuleMgrForKernel.
 const MOD_MGR_MODULES: &[(&[u8], &[u8])] = &[
     (b"sceModuleManager\0", b"ModuleMgrForKernel\0"),
     (b"ModuleMgrForKernel\0", b"ModuleMgrForKernel\0"),
+];
+
+/// Module/library pairs for LoadCoreForKernel.
+const LOADCORE_MODULES: &[(&[u8], &[u8])] = &[
+    (b"sceLoaderCore\0", b"LoadCoreForKernel\0"),
+    (b"LoadCoreForKernel\0", b"LoadCoreForKernel\0"),
 ];
 
 /// Internal module names to try when searching for sceMp3 via
@@ -127,10 +138,13 @@ const CODEC_FIND_NAMES: &[&[u8]] = &[
     b"sceAVcodec_driver\0",
 ];
 
-/// SceModule struct offsets (PSP 6.xx kernel struct).
-/// ent_top = pointer to export table, ent_size = size in bytes.
-const SCEMOD_ENT_TOP: usize = 0x58;
-const SCEMOD_ENT_SIZE: usize = 0x5C;
+/// SceModule struct offset pairs to try for ent_top/ent_size.
+/// Firmware 6.xx uses 0x58/0x5C, older firmware used 0x40/0x44.
+const ENT_OFFSET_PAIRS: &[(usize, usize)] = &[
+    (0x58, 0x5C), // 6.xx SceModule (full kernel struct)
+    (0x40, 0x44), // Older SceModule layout
+    (0x24, 0x28), // SceModuleInfo (embedded in binary)
+];
 
 // ---------------------------------------------------------------------------
 // Resolved function pointers
@@ -190,9 +204,13 @@ static mut CODEC_RELEASE_EDRAM_FN: Option<
     unsafe extern "C" fn(*mut u32) -> i32,
 > = None;
 
-// sceKernelFindModuleByName function pointer (resolved from ModuleMgrForKernel)
+// sceKernelFindModuleByName / sceKernelSearchModuleByName
 static mut FIND_MODULE_FN: Option<
     unsafe extern "C" fn(*const u8) -> *mut u8,
+> = None;
+// sceKernelFindModuleByUID (convert UID -> SceModule*)
+static mut FIND_MODULE_BY_UID_FN: Option<
+    unsafe extern "C" fn(i32) -> *mut u8,
 > = None;
 
 // ---------------------------------------------------------------------------
@@ -359,9 +377,16 @@ unsafe fn resolve_nid_logged(
 // Manual export table walking
 // ---------------------------------------------------------------------------
 
-/// Resolve sceKernelFindModuleByName from ModuleMgrForKernel.
+/// Resolve module-finding kernel functions.
+///
+/// Tries multiple APIs:
+/// 1. sceKernelFindModuleByName from ModuleMgrForKernel
+/// 2. sceKernelSearchModuleByName from LoadCoreForKernel
+/// 3. sceKernelFindModuleByUID (for UID->ptr conversion)
 unsafe fn init_module_finder() -> bool {
+    let mut found_any = false;
     unsafe {
+        // Try sceKernelFindModuleByName (ModuleMgrForKernel).
         if let Some(ptr) =
             resolve_nid(MOD_MGR_MODULES, NID_FIND_MODULE_BY_NAME)
         {
@@ -370,33 +395,165 @@ unsafe fn init_module_finder() -> bool {
                 Some(core::mem::transmute(ptr)),
             );
             crate::debug_log(b"[OASIS] FindModuleByName resolved");
-            return true;
+            found_any = true;
+        }
+        // Also try sceKernelSearchModuleByName (LoadCoreForKernel).
+        // If this succeeds AND FindModuleByName returned garbage last
+        // time, prefer this one.
+        if let Some(ptr) =
+            resolve_nid(LOADCORE_MODULES, NID_SEARCH_MODULE_BY_NAME)
+        {
+            // Only overwrite if the first one wasn't found, or store
+            // as secondary. For simplicity, always prefer LoadCore
+            // version since it's more likely to return proper ptrs.
+            core::ptr::write_volatile(
+                &raw mut FIND_MODULE_FN,
+                Some(core::mem::transmute(ptr)),
+            );
+            crate::debug_log(b"[OASIS] SearchModuleByName resolved");
+            found_any = true;
+        }
+        // Resolve sceKernelFindModuleByUID for UID->ptr fallback.
+        if let Some(ptr) =
+            resolve_nid(MOD_MGR_MODULES, NID_FIND_MODULE_BY_UID)
+        {
+            core::ptr::write_volatile(
+                &raw mut FIND_MODULE_BY_UID_FN,
+                Some(core::mem::transmute(ptr)),
+            );
+            crate::debug_log(b"[OASIS] FindModuleByUID resolved");
         }
     }
-    crate::debug_log(b"[OASIS] FindModuleByName NOT found");
-    false
+    if !found_any {
+        crate::debug_log(b"[OASIS] NO module finder resolved");
+    }
+    found_any
+}
+
+/// Check if a pointer looks like a valid PSP kernel/user struct ptr.
+/// Must be 4-byte aligned and in a known memory region.
+fn is_valid_module_ptr(ptr: *const u8) -> bool {
+    let addr = ptr as u32;
+    // Must be 4-byte aligned.
+    if addr & 3 != 0 {
+        return false;
+    }
+    // Must be non-null and in a plausible memory range:
+    // Kernel KSEG0 cached:  0x80000000 - 0x8BFFFFFF
+    // Kernel KSEG1 uncached: 0xA0000000 - 0xABFFFFFF
+    // User space cached:     0x08800000 - 0x0BFFFFFF
+    // User space uncached:   0x48800000 - 0x4BFFFFFF
+    if addr == 0 {
+        return false;
+    }
+    (addr >= 0x0800_0000 && addr < 0x0C00_0000)
+        || (addr >= 0x4800_0000 && addr < 0x4C00_0000)
+        || (addr >= 0x8000_0000 && addr < 0x8C00_0000)
+        || (addr >= 0xA000_0000 && addr < 0xAC00_0000)
+}
+
+/// Try to get a valid SceModule pointer for a given module name.
+///
+/// Attempts:
+/// 1. Call FindModuleByName/SearchModuleByName, validate result
+/// 2. If result looks like a UID (small integer), try FindModuleByUID
+unsafe fn find_module_ptr(name: *const u8) -> *mut u8 {
+    unsafe {
+        let find_fn = match core::ptr::read_volatile(
+            &raw const FIND_MODULE_FN,
+        ) {
+            Some(f) => f,
+            None => return core::ptr::null_mut(),
+        };
+
+        let raw_result = find_fn(name);
+
+        // Log the raw return value.
+        let mut buf = [0u8; 64];
+        let mut p = copy_bytes(&mut buf, 0, b"[OASIS] FindMod raw=");
+        p = write_hex32(&mut buf, p, raw_result as u32);
+        crate::debug_log(&buf[..p]);
+
+        // Check if the result is a valid pointer.
+        if is_valid_module_ptr(raw_result) {
+            return raw_result;
+        }
+
+        // Result might be a SceUID -- try converting with
+        // FindModuleByUID.
+        let uid = raw_result as u32 as i32;
+        if uid > 0 {
+            if let Some(uid_fn) = core::ptr::read_volatile(
+                &raw const FIND_MODULE_BY_UID_FN,
+            ) {
+                let ptr = uid_fn(uid);
+                let mut buf2 = [0u8; 64];
+                let mut q = copy_bytes(
+                    &mut buf2,
+                    0,
+                    b"[OASIS] ByUID(",
+                );
+                q = write_hex32(&mut buf2, q, uid as u32);
+                q = copy_bytes(&mut buf2, q, b")=");
+                q = write_hex32(&mut buf2, q, ptr as u32);
+                crate::debug_log(&buf2[..q]);
+
+                if is_valid_module_ptr(ptr) {
+                    return ptr;
+                }
+            }
+        }
+    }
+    core::ptr::null_mut()
 }
 
 /// Walk a SceModule's export table to find a function pointer by NID.
 ///
+/// Tries multiple offset pairs since the SceModule struct layout
+/// varies across firmware versions.
+///
 /// # Safety
-/// `scemod` must be a valid pointer to a PSP SceModule kernel struct.
+/// `scemod` must be a validated, aligned pointer.
 unsafe fn find_export_in_module(
     scemod: *const u8,
     nid: u32,
 ) -> Option<*mut u8> {
-    unsafe {
-        let ent_top =
-            *(scemod.add(SCEMOD_ENT_TOP) as *const u32) as *const u8;
-        let ent_size =
-            *(scemod.add(SCEMOD_ENT_SIZE) as *const u32) as usize;
+    // Try each known ent_top/ent_size offset pair.
+    for &(ent_off, size_off) in ENT_OFFSET_PAIRS {
+        if let Some(ptr) = unsafe {
+            try_walk_exports(scemod, ent_off, size_off, nid)
+        } {
+            return Some(ptr);
+        }
+    }
+    None
+}
 
-        if ent_top.is_null() || ent_size == 0 {
+/// Try to walk exports at a specific offset pair.
+unsafe fn try_walk_exports(
+    scemod: *const u8,
+    ent_top_off: usize,
+    ent_size_off: usize,
+    nid: u32,
+) -> Option<*mut u8> {
+    unsafe {
+        let ent_top_val =
+            *(scemod.add(ent_top_off) as *const u32);
+        let ent_size_val =
+            *(scemod.add(ent_size_off) as *const u32) as usize;
+
+        let ent_top = ent_top_val as *const u8;
+
+        // Validate ent_top pointer and size.
+        if !is_valid_module_ptr(ent_top) {
+            return None;
+        }
+        if ent_size_val == 0 || ent_size_val > 0x10000 {
             return None;
         }
 
         let mut offset = 0usize;
-        while offset < ent_size {
+        while offset < ent_size_val {
             let entry = ent_top.add(offset);
 
             // SceLibraryEntryTable layout (16 bytes / 4 words):
@@ -404,9 +561,8 @@ unsafe fn find_export_in_module(
             //   +0x04: version (u16) | attribute (u16)
             //   +0x08: entLen (u8) | varCount (u8) | funcCount (u16)
             //   +0x0C: entrytable (u32*)
-            let ent_len = *entry.add(8) as usize; // in 32-bit words
-            if ent_len < 4 {
-                // Minimum valid size; stop if malformed.
+            let ent_len = *entry.add(8) as usize;
+            if ent_len < 4 || ent_len > 16 {
                 break;
             }
 
@@ -416,16 +572,20 @@ unsafe fn find_export_in_module(
             let entrytable =
                 *(entry.add(12) as *const u32) as *const u32;
 
-            if !entrytable.is_null() && func_count > 0 {
+            if !entrytable.is_null()
+                && func_count > 0
+                && func_count < 256
+                && is_valid_module_ptr(entrytable as *const u8)
+            {
                 let mut i = 0;
                 while i < func_count {
                     let entry_nid = *entrytable.add(i);
                     if entry_nid == nid {
-                        // Function pointer at
-                        // entrytable[funcCount + varCount + i]
                         let func_ptr = *entrytable
                             .add(func_count + var_count + i);
-                        return Some(func_ptr as *mut u8);
+                        if func_ptr != 0 {
+                            return Some(func_ptr as *mut u8);
+                        }
                     }
                     i += 1;
                 }
@@ -438,32 +598,17 @@ unsafe fn find_export_in_module(
 }
 
 /// Find a function export by walking user-mode module export tables.
-///
-/// Tries each module name with sceKernelFindModuleByName, then walks
-/// the SceModule's export entries looking for the requested NID.
-///
-/// # Safety
-/// Requires FIND_MODULE_FN to be resolved first.
 unsafe fn find_user_export(
     module_names: &[&[u8]],
     nid: u32,
 ) -> Option<*mut u8> {
-    unsafe {
-        let find_fn = match core::ptr::read_volatile(
-            &raw const FIND_MODULE_FN,
-        ) {
-            Some(f) => f,
-            None => return None,
-        };
-
-        for &name in module_names {
-            let scemod = find_fn(name.as_ptr());
-            if !scemod.is_null() {
-                if let Some(ptr) =
-                    find_export_in_module(scemod, nid)
-                {
-                    return Some(ptr);
-                }
+    for &name in module_names {
+        let scemod = unsafe { find_module_ptr(name.as_ptr()) };
+        if !scemod.is_null() {
+            if let Some(ptr) = unsafe {
+                find_export_in_module(scemod, nid)
+            } {
+                return Some(ptr);
             }
         }
     }
@@ -485,48 +630,92 @@ unsafe fn resolve_nid_any(
     unsafe { find_user_export(find_names, nid) }
 }
 
-/// Log which module names are findable (diagnostic).
+/// Log which module names are findable and dump struct info.
 unsafe fn log_findable_modules(names: &[&[u8]], label: &[u8]) {
-    unsafe {
-        let find_fn = match core::ptr::read_volatile(
-            &raw const FIND_MODULE_FN,
-        ) {
-            Some(f) => f,
-            None => return,
-        };
-        for &name in names {
-            let scemod = find_fn(name.as_ptr());
-            if !scemod.is_null() {
-                let mut buf = [0u8; 80];
-                let mut p = copy_bytes(&mut buf, 0, b"[OASIS] found ");
-                p = copy_bytes(&mut buf, p, label);
-                p = copy_bytes(&mut buf, p, b" as ");
-                // Copy module name (without null terminator).
-                let mut k = 0;
-                while k < name.len() && name[k] != 0 && p < buf.len()
-                {
-                    buf[p] = name[k];
-                    p += 1;
-                    k += 1;
-                }
-                p = copy_bytes(&mut buf, p, b" @");
-                p = write_hex32(&mut buf, p, scemod as u32);
-                crate::debug_log(&buf[..p]);
+    for &name in names {
+        let scemod = unsafe { find_module_ptr(name.as_ptr()) };
+        if scemod.is_null() {
+            continue;
+        }
 
-                // Log ent_top and ent_size for debugging.
-                let ent_top = *(scemod.add(SCEMOD_ENT_TOP)
-                    as *const u32);
-                let ent_size = *(scemod.add(SCEMOD_ENT_SIZE)
-                    as *const u32);
+        let mut buf = [0u8; 80];
+        let mut p = copy_bytes(&mut buf, 0, b"[OASIS] found ");
+        p = copy_bytes(&mut buf, p, label);
+        p = copy_bytes(&mut buf, p, b" as ");
+        let mut k = 0;
+        while k < name.len() && name[k] != 0 && p < buf.len() {
+            buf[p] = name[k];
+            p += 1;
+            k += 1;
+        }
+        p = copy_bytes(&mut buf, p, b" @");
+        p = write_hex32(&mut buf, p, scemod as u32);
+        crate::debug_log(&buf[..p]);
+
+        // Dump first 32 bytes of struct for diagnosis.
+        unsafe {
+            dump_struct_bytes(scemod, 0, 32);
+            // Also dump bytes at the offset regions we care about.
+            dump_struct_bytes(scemod, 0x20, 16);
+            dump_struct_bytes(scemod, 0x40, 16);
+            dump_struct_bytes(scemod, 0x58, 16);
+        }
+
+        // Try each export offset pair and log what we find.
+        for &(ent_off, size_off) in ENT_OFFSET_PAIRS {
+            unsafe {
+                let ent_val =
+                    *(scemod.add(ent_off) as *const u32);
+                let sz_val =
+                    *(scemod.add(size_off) as *const u32);
                 let mut buf2 = [0u8; 64];
-                let mut q =
-                    copy_bytes(&mut buf2, 0, b"[OASIS]   ent=");
-                q = write_hex32(&mut buf2, q, ent_top);
+                let mut q = copy_bytes(
+                    &mut buf2,
+                    0,
+                    b"[OASIS]   @",
+                );
+                q = write_hex32(&mut buf2, q, ent_off as u32);
+                q = copy_bytes(&mut buf2, q, b": ent=");
+                q = write_hex32(&mut buf2, q, ent_val);
                 q = copy_bytes(&mut buf2, q, b" sz=");
-                q = write_hex32(&mut buf2, q, ent_size);
+                q = write_hex32(&mut buf2, q, sz_val);
+                let valid = is_valid_module_ptr(
+                    ent_val as *const u8,
+                );
+                if valid {
+                    q = copy_bytes(&mut buf2, q, b" OK");
+                }
                 crate::debug_log(&buf2[..q]);
             }
         }
+    }
+}
+
+/// Dump `len` bytes starting at `base + off` as hex to debug log.
+unsafe fn dump_struct_bytes(
+    base: *const u8,
+    off: usize,
+    len: usize,
+) {
+    unsafe {
+        let mut buf = [0u8; 90];
+        let mut p = copy_bytes(&mut buf, 0, b"[OASIS]  +");
+        p = write_hex32(&mut buf, p, off as u32);
+        p = copy_bytes(&mut buf, p, b": ");
+        let mut i = 0;
+        while i < len && p + 2 < buf.len() {
+            let b = *base.add(off + i);
+            let hex = b"0123456789ABCDEF";
+            buf[p] = hex[(b >> 4) as usize];
+            buf[p + 1] = hex[(b & 0xF) as usize];
+            p += 2;
+            if (i & 3) == 3 && i + 1 < len && p < buf.len() {
+                buf[p] = b' ';
+                p += 1;
+            }
+            i += 1;
+        }
+        crate::debug_log(&buf[..p]);
     }
 }
 
