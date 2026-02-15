@@ -243,7 +243,7 @@ const PCM_BUF_SIZE: usize = MP3_SAMPLES_PER_FRAME as usize * 4 * 4;
 /// sceAudiocodec read buffer (32KB).
 const READ_BUF_SIZE: usize = 32 * 1024;
 /// sceAudiocodec codec buffer (128 bytes = 32 u32).
-const CODEC_BUF_WORDS: usize = 32;
+const CODEC_BUF_WORDS: usize = 65;
 
 // ---------------------------------------------------------------------------
 // Playlist data
@@ -1410,12 +1410,22 @@ unsafe extern "C" fn audio_thread_entry(
         }
     }
 
-    // Reserve audio channel.
+    // Reserve a specific high audio channel to avoid stealing game channels.
+    // PSP has 8 channels (0-7); games typically use 0-3.  Channel 7 is
+    // the least likely to conflict.  If 7 fails, try 6, then fall back
+    // to auto-select (-1) as a last resort.
     let channel = unsafe {
         if let Some(f) =
             core::ptr::read_volatile(&raw const AUDIO_CH_RESERVE_FN)
         {
-            f(-1, MP3_SAMPLES_PER_FRAME, AUDIO_FORMAT_STEREO)
+            let mut ch = f(7, MP3_SAMPLES_PER_FRAME, AUDIO_FORMAT_STEREO);
+            if ch < 0 {
+                ch = f(6, MP3_SAMPLES_PER_FRAME, AUDIO_FORMAT_STEREO);
+            }
+            if ch < 0 {
+                ch = f(-1, MP3_SAMPLES_PER_FRAME, AUDIO_FORMAT_STEREO);
+            }
+            ch
         } else {
             return 1;
         }
@@ -1424,7 +1434,7 @@ unsafe extern "C" fn audio_thread_entry(
         crate::debug_log(b"[OASIS] audio channel reserve failed");
         return 1;
     }
-    crate::debug_log(b"[OASIS] audio channel reserved");
+    log_i32(b"[OASIS] audio ch=", channel);
 
     let autoplay = crate::config::get_config().autoplay;
     if autoplay {
@@ -1714,6 +1724,7 @@ unsafe fn play_track_codec(path: &[u8], channel: i32) -> i32 {
         psp::sys::sceIoLseek(fd, 0, psp::sys::IoWhence::End)
     } as usize;
     unsafe { psp::sys::sceIoLseek(fd, 0, psp::sys::IoWhence::Set) };
+    log_i32(b"[OASIS] file_size=", file_size as i32);
     if file_size == 0 {
         unsafe { psp::sys::sceIoClose(fd) };
         return -1;
@@ -1737,19 +1748,34 @@ unsafe fn play_track_codec(path: &[u8], channel: i32) -> i32 {
         if let Some(f) =
             core::ptr::read_volatile(&raw const CODEC_CHECK_NEED_MEM_FN)
         {
-            f(codec, CODEC_TYPE_MP3);
+            let ret = f(codec, CODEC_TYPE_MP3);
+            log_i32(b"[OASIS] CheckNeedMem=", ret);
+        } else {
+            crate::debug_log(b"[OASIS] no CheckNeedMem fn");
         }
         if let Some(f) =
             core::ptr::read_volatile(&raw const CODEC_GET_EDRAM_FN)
         {
-            if f(codec, CODEC_TYPE_MP3) >= 0 {
+            let ret = f(codec, CODEC_TYPE_MP3);
+            log_i32(b"[OASIS] GetEDRAM=", ret);
+            if ret >= 0 {
                 edram_allocated = true;
+            } else {
+                crate::debug_log(b"[OASIS] GetEDRAM failed, no EDRAM");
+                psp::sys::sceIoClose(fd);
+                return -1;
             }
+        } else {
+            crate::debug_log(b"[OASIS] no GetEDRAM fn");
+            psp::sys::sceIoClose(fd);
+            return -1;
         }
         if let Some(f) =
             core::ptr::read_volatile(&raw const CODEC_INIT_FN)
         {
-            if f(codec, CODEC_TYPE_MP3) < 0 {
+            let ret = f(codec, CODEC_TYPE_MP3);
+            log_i32(b"[OASIS] CodecInit=", ret);
+            if ret < 0 {
                 if edram_allocated {
                     if let Some(rel) = core::ptr::read_volatile(
                         &raw const CODEC_RELEASE_EDRAM_FN,
@@ -1761,6 +1787,7 @@ unsafe fn play_track_codec(path: &[u8], channel: i32) -> i32 {
                 return -1;
             }
         } else {
+            crate::debug_log(b"[OASIS] no CodecInit fn");
             psp::sys::sceIoClose(fd);
             return -1;
         }
@@ -1818,6 +1845,7 @@ unsafe fn play_track_codec(path: &[u8], channel: i32) -> i32 {
     };
 
     let mut result = 0i32;
+    let mut frame_count: u32 = 0;
 
     loop {
         let cmd = AUDIO_CMD.load(Ordering::Relaxed);
@@ -1892,12 +1920,18 @@ unsafe fn play_track_codec(path: &[u8], channel: i32) -> i32 {
         }
 
         let ret = unsafe { decode_fn(codec, CODEC_TYPE_MP3) };
+        if frame_count < 3 {
+            log_i32(b"[OASIS] decode ret=", ret);
+        }
         if ret < 0 {
             buf_pos += 1;
             continue;
         }
 
         let consumed = unsafe { *codec.add(7) } as usize;
+        if frame_count < 3 {
+            log_i32(b"[OASIS] consumed=", consumed as i32);
+        }
         if consumed == 0 {
             buf_pos += 1;
             continue;
@@ -1916,12 +1950,16 @@ unsafe fn play_track_codec(path: &[u8], channel: i32) -> i32 {
                 &raw const AUDIO_OUTPUT_BLOCKING_FN,
             ) {
                 let ret = f(channel, vol, pcm_buf as *const u8);
+                if frame_count < 3 {
+                    log_i32(b"[OASIS] audioOut=", ret);
+                }
                 if ret < 0 {
                     result = ret;
                     break;
                 }
             }
         }
+        frame_count += 1;
     }
 
     unsafe {
