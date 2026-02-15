@@ -2,11 +2,12 @@
 //!
 //! Uses `psp::thread::ThreadBuilder` for native PSP kernel threads with
 //! priority tuning. Communication uses lock-free `SpscQueue` for commands
-//! and `SpinMutex` for shared state readable from the main thread.
+//! and bare atomics for shared state (lock-free to avoid priority inversion
+//! on single-core PSP where a high-priority audio thread could starve the
+//! main thread if both contend on a spinlock).
 
-use std::sync::Arc;
-
-use psp::sync::{SpinMutex, SpscQueue};
+use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use psp::sync::SpscQueue;
 use psp::thread::ThreadBuilder;
 
 use crate::audio::AudioPlayer;
@@ -25,45 +26,17 @@ static IO_CMD_QUEUE: SpscQueue<IoCmd, 16> = SpscQueue::new();
 static IO_RESP_QUEUE: SpscQueue<IoResponse, 16> = SpscQueue::new();
 
 // ---------------------------------------------------------------------------
-// Shared audio state (SpinMutex for richer state than bare atomics)
+// Shared audio state (lock-free atomics -- no priority inversion)
 // ---------------------------------------------------------------------------
 
-/// Shared audio state protected by a spinlock.
-///
-/// Readable from the main thread and written by the audio thread.
-/// PSP is single-core so SpinMutex has near-zero overhead for short
-/// critical sections.
-static SHARED_AUDIO: SpinMutex<SharedAudioState> = SpinMutex::new(SharedAudioState::new());
-
-/// Audio state shared between the audio thread and main thread.
-#[derive(Clone)]
-pub struct SharedAudioState {
-    pub playing: bool,
-    pub paused: bool,
-    pub sample_rate: u32,
-    pub bitrate: u32,
-    pub channels: u32,
-    pub position_ms: u64,
-    pub duration_ms: u64,
-    pub track_name: [u8; 64],
-    pub track_name_len: usize,
-}
-
-impl SharedAudioState {
-    const fn new() -> Self {
-        Self {
-            playing: false,
-            paused: false,
-            sample_rate: 0,
-            bitrate: 0,
-            channels: 0,
-            position_ms: 0,
-            duration_ms: 0,
-            track_name: [0u8; 64],
-            track_name_len: 0,
-        }
-    }
-}
+static AUDIO_PLAYING: AtomicBool = AtomicBool::new(false);
+static AUDIO_PAUSED: AtomicBool = AtomicBool::new(false);
+static AUDIO_SAMPLE_RATE: AtomicU32 = AtomicU32::new(0);
+static AUDIO_BITRATE: AtomicU32 = AtomicU32::new(0);
+static AUDIO_CHANNELS: AtomicU32 = AtomicU32::new(0);
+// Position/duration stored as u32 milliseconds (max ~49 days, plenty).
+static AUDIO_POSITION_MS: AtomicU32 = AtomicU32::new(0);
+static AUDIO_DURATION_MS: AtomicU32 = AtomicU32::new(0);
 
 // ---------------------------------------------------------------------------
 // Audio commands
@@ -72,7 +45,7 @@ impl SharedAudioState {
 /// Commands for the dedicated audio thread.
 pub enum AudioCmd {
     LoadAndPlay(String),
-    LoadAndPlayData(Arc<Vec<u8>>),
+    LoadAndPlayData(Vec<u8>),
     Pause,
     Resume,
     Stop,
@@ -81,7 +54,7 @@ pub enum AudioCmd {
     Shutdown,
 }
 
-/// Handle to the background audio thread (reads from SHARED_AUDIO).
+/// Handle to the background audio thread (reads shared atomics).
 pub struct AudioHandle;
 
 impl AudioHandle {
@@ -90,37 +63,32 @@ impl AudioHandle {
         let _ = AUDIO_QUEUE.push(cmd);
     }
 
-    /// Snapshot the current audio state (short spinlock hold).
-    pub fn state(&self) -> SharedAudioState {
-        SHARED_AUDIO.lock().clone()
-    }
-
     pub fn is_playing(&self) -> bool {
-        SHARED_AUDIO.lock().playing
+        AUDIO_PLAYING.load(Ordering::Relaxed)
     }
 
     pub fn is_paused(&self) -> bool {
-        SHARED_AUDIO.lock().paused
+        AUDIO_PAUSED.load(Ordering::Relaxed)
     }
 
     pub fn sample_rate(&self) -> u32 {
-        SHARED_AUDIO.lock().sample_rate
+        AUDIO_SAMPLE_RATE.load(Ordering::Relaxed)
     }
 
     pub fn bitrate(&self) -> u32 {
-        SHARED_AUDIO.lock().bitrate
+        AUDIO_BITRATE.load(Ordering::Relaxed)
     }
 
     pub fn channels(&self) -> u32 {
-        SHARED_AUDIO.lock().channels
+        AUDIO_CHANNELS.load(Ordering::Relaxed)
     }
 
     pub fn position_ms(&self) -> u64 {
-        SHARED_AUDIO.lock().position_ms
+        AUDIO_POSITION_MS.load(Ordering::Relaxed) as u64
     }
 
     pub fn duration_ms(&self) -> u64 {
-        SHARED_AUDIO.lock().duration_ms
+        AUDIO_DURATION_MS.load(Ordering::Relaxed) as u64
     }
 }
 
@@ -194,28 +162,31 @@ impl IoHandle {
 
 /// Spawn the background audio and I/O threads.
 ///
-/// Returns handles for audio state and I/O responses.
+/// Returns handles for audio state and I/O responses. The `JoinHandle`s
+/// are leaked intentionally — the worker threads run for the lifetime of
+/// the process, and dropping a `JoinHandle` terminates its thread.
 pub fn spawn_workers() -> (AudioHandle, IoHandle) {
     // Audio thread: high priority (16) for low-latency playback.
-    let audio_result = ThreadBuilder::new(b"oasis_audio\0")
+    if let Ok(handle) = ThreadBuilder::new(b"oasis_audio\0")
         .priority(16)
         .spawn(move || {
             audio_thread_fn();
             0
-        });
-    if let Err(e) = &audio_result {
-        psp::dprintln!("OASIS_OS: Failed to spawn audio thread: {:?}", e);
+        })
+    {
+        // Leak the JoinHandle so the thread isn't killed on drop.
+        core::mem::forget(handle);
     }
 
     // I/O thread: normal priority (32) for file operations.
-    let io_result = ThreadBuilder::new(b"oasis_io\0")
+    if let Ok(handle) = ThreadBuilder::new(b"oasis_io\0")
         .priority(32)
         .spawn(move || {
             io_thread_fn();
             0
-        });
-    if let Err(e) = &io_result {
-        psp::dprintln!("OASIS_OS: Failed to spawn I/O thread: {:?}", e);
+        })
+    {
+        core::mem::forget(handle);
     }
 
     (AudioHandle, IoHandle)
@@ -228,14 +199,9 @@ pub fn spawn_workers() -> (AudioHandle, IoHandle) {
 /// Dedicated audio thread: MP3 playback + SFX mixing.
 fn audio_thread_fn() {
     let mut player = AudioPlayer::new();
-    if !player.init() {
-        psp::dprintln!("OASIS_OS: Audio thread init failed");
-    }
+    player.init();
 
     let mut sfx = SfxEngine::new();
-    if sfx.is_none() {
-        psp::dprintln!("OASIS_OS: SFX engine init failed (non-fatal)");
-    }
 
     loop {
         match AUDIO_QUEUE.pop() {
@@ -243,33 +209,32 @@ fn audio_thread_fn() {
                 if player.load_and_play(&path) {
                     publish_audio_state(&player);
                 } else {
-                    SHARED_AUDIO.lock().playing = false;
+                    AUDIO_PLAYING.store(false, Ordering::Relaxed);
                 }
             },
             Some(AudioCmd::LoadAndPlayData(data)) => {
-                if player.load_and_play_data(&data) {
+                if player.load_and_play_owned(data) {
                     publish_audio_state(&player);
                 } else {
-                    SHARED_AUDIO.lock().playing = false;
+                    AUDIO_PLAYING.store(false, Ordering::Relaxed);
                 }
             },
             Some(AudioCmd::Pause) => {
                 if player.is_playing() && !player.is_paused() {
                     player.toggle_pause();
-                    SHARED_AUDIO.lock().paused = true;
+                    AUDIO_PAUSED.store(true, Ordering::Relaxed);
                 }
             },
             Some(AudioCmd::Resume) => {
                 if player.is_playing() && player.is_paused() {
                     player.toggle_pause();
-                    SHARED_AUDIO.lock().paused = false;
+                    AUDIO_PAUSED.store(false, Ordering::Relaxed);
                 }
             },
             Some(AudioCmd::Stop) => {
                 player.stop();
-                let mut state = SHARED_AUDIO.lock();
-                state.playing = false;
-                state.paused = false;
+                AUDIO_PLAYING.store(false, Ordering::Relaxed);
+                AUDIO_PAUSED.store(false, Ordering::Relaxed);
             },
             Some(AudioCmd::SetVolume(v)) => {
                 player.set_volume(v);
@@ -281,27 +246,21 @@ fn audio_thread_fn() {
             },
             Some(AudioCmd::Shutdown) => {
                 player.stop();
-                SHARED_AUDIO.lock().playing = false;
+                AUDIO_PLAYING.store(false, Ordering::Relaxed);
                 break;
             },
             None => {},
         }
 
         if player.is_playing() && !player.is_paused() {
-            // update() contains the blocking sceAudioOutputBlocking call.
             player.update();
-            // Publish position each frame.
-            {
-                let mut state = SHARED_AUDIO.lock();
-                state.position_ms = player.position_ms();
-                state.duration_ms = player.duration_ms();
-            }
+            AUDIO_POSITION_MS.store(player.position_ms() as u32, Ordering::Relaxed);
+            AUDIO_DURATION_MS.store(player.duration_ms() as u32, Ordering::Relaxed);
             if !player.is_playing() {
-                SHARED_AUDIO.lock().playing = false;
+                AUDIO_PLAYING.store(false, Ordering::Relaxed);
             }
         } else {
-            // Sleep when idle to avoid spinning.
-            psp::thread::sleep_ms(10);
+            unsafe { psp::sys::sceKernelDelayThread(10_000) };
         }
 
         // Pump SFX mixer (separate hardware channel, short blocking).
@@ -311,16 +270,16 @@ fn audio_thread_fn() {
     }
 }
 
-/// Publish audio player state to the shared spinlock after a load_and_play.
+/// Publish audio player state to shared atomics after a load_and_play.
 fn publish_audio_state(player: &AudioPlayer) {
-    let mut state = SHARED_AUDIO.lock();
-    state.playing = true;
-    state.paused = false;
-    state.sample_rate = player.sample_rate;
-    state.bitrate = player.bitrate;
-    state.channels = player.channels;
-    state.position_ms = 0;
-    state.duration_ms = 0;
+    AUDIO_SAMPLE_RATE.store(player.sample_rate, Ordering::Relaxed);
+    AUDIO_BITRATE.store(player.bitrate, Ordering::Relaxed);
+    AUDIO_CHANNELS.store(player.channels, Ordering::Relaxed);
+    AUDIO_POSITION_MS.store(0, Ordering::Relaxed);
+    AUDIO_DURATION_MS.store(0, Ordering::Relaxed);
+    AUDIO_PAUSED.store(false, Ordering::Relaxed);
+    // Set playing LAST so readers see consistent metadata first.
+    AUDIO_PLAYING.store(true, Ordering::Relaxed);
 }
 
 // ---------------------------------------------------------------------------

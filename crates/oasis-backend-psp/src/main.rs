@@ -578,6 +578,11 @@ fn psp_main() {
     let mut mp_loaded = false;
     let mut mp_file_name = String::new();
 
+    // AV codec modules (AvCodec, AvMpegBase, AvMp3) are loaded lazily
+    // by the audio thread on first play. Loading them here at startup
+    // would conflict with the PRX overlay's sceAudiocodec if the PRX
+    // initialized before the EBOOT was launched.
+
     // Single background worker thread handles both audio and file I/O.
     let (audio, io) = oasis_backend_psp::spawn_workers();
     let mut pv_loading = false; // true while waiting for async texture load
