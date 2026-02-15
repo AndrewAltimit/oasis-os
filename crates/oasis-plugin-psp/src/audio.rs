@@ -1280,35 +1280,53 @@ unsafe fn init_audio_drivers() -> bool {
         crate::debug_log(b"[OASIS] audio driver resolved");
     }
 
-    // Step 2: Try sceAudiocodec FIRST via sctrlHENFindFunction.
-    // This resolves kernel-side codec functions without loading any
-    // extra modules, so it cannot interfere with the game.
+    // Step 2: Wait for the game to load AVCODEC modules during its own
+    // init, then piggyback on them.  This avoids sceUtilityLoadModule
+    // conflicts.  Retry every 2s for up to 15s before falling back to
+    // loading modules ourselves.
+    {
+        let mut attempt = 0u32;
+        while attempt < 8 {
+            if unsafe { try_resolve_codec() } {
+                unsafe {
+                    core::ptr::write_volatile(&raw mut DECODER_BACKEND, 2);
+                }
+                crate::debug_log(b"[OASIS] using sceAudiocodec backend");
+                return true;
+            }
+            if unsafe { try_codec_stub_extraction() } {
+                unsafe {
+                    core::ptr::write_volatile(&raw mut DECODER_BACKEND, 2);
+                }
+                crate::debug_log(
+                    b"[OASIS] sceAudiocodec via stubs!",
+                );
+                return true;
+            }
+            attempt += 1;
+            if attempt < 8 {
+                log_i32(b"[OASIS] codec not yet, retry ", attempt as i32);
+                unsafe { psp::sys::sceKernelDelayThread(2_000_000) };
+            }
+        }
+    }
+
+    // Step 3: Game didn't load AVCODEC -- load modules ourselves and
+    // retry.  This game likely doesn't use audio codecs, so the
+    // conflict risk is low.
+    crate::debug_log(b"[OASIS] loading AV modules (fallback)");
+    unsafe { load_av_modules() };
+
+    // Retry sceAudiocodec after module load.
     if unsafe { try_resolve_codec() } {
         unsafe { core::ptr::write_volatile(&raw mut DECODER_BACKEND, 2) };
         crate::debug_log(b"[OASIS] using sceAudiocodec backend");
         return true;
     }
-    crate::debug_log(b"[OASIS] sceAudiocodec not found directly");
 
-    // Step 3: Try extracting sceAudiocodec from game's import stubs.
-    if unsafe { try_codec_stub_extraction() } {
-        unsafe {
-            core::ptr::write_volatile(&raw mut DECODER_BACKEND, 2);
-        }
-        crate::debug_log(
-            b"[OASIS] sceAudiocodec via stub extraction!",
-        );
-        return true;
-    }
-
-    // Step 4: Only as last resort, load AV modules and try sceMp3.
-    // NOTE: sceUtilityLoadModule can interfere with games that load
-    // the same modules themselves, so we only do this if nothing
-    // else worked.
-    unsafe { load_av_modules() };
+    // Try sceMp3 as last resort.
     unsafe { init_module_enum() };
     unsafe { enumerate_modules() };
-
     if unsafe { try_resolve_mp3() } {
         unsafe { core::ptr::write_volatile(&raw mut DECODER_BACKEND, 1) };
         crate::debug_log(b"[OASIS] using sceMp3 backend");
@@ -1496,7 +1514,8 @@ unsafe extern "C" fn audio_thread_entry(
     _args: usize,
     _argp: *mut core::ffi::c_void,
 ) -> i32 {
-    unsafe { psp::sys::sceKernelDelayThread(1_000_000) };
+    // Wait for game to initialize before probing for audio modules.
+    unsafe { psp::sys::sceKernelDelayThread(3_000_000) };
 
     if !unsafe { init_audio_drivers() } {
         crate::debug_log(b"[OASIS] audio init failed");
