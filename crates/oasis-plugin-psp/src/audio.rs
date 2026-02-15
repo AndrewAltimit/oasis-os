@@ -1994,6 +1994,19 @@ unsafe fn play_track_codec(path: &[u8], channel: i32) -> i32 {
         buf_pos = id3_skip;
     }
 
+    // Dump codec buffer after init (first 16 words) for debugging.
+    unsafe {
+        let mut i = 0u32;
+        while i < 16 {
+            let val = *codec.add(i as usize);
+            if val != 0 {
+                log_i32(b"[OASIS] cb[", i as i32);
+                log_i32(b"]=", val as i32);
+            }
+            i += 1;
+        }
+    }
+
     let decode_fn = unsafe {
         match core::ptr::read_volatile(&raw const CODEC_DECODE_FN) {
             Some(f) => f,
@@ -2086,7 +2099,20 @@ unsafe fn play_track_codec(path: &[u8], channel: i32) -> i32 {
             *codec.add(6) = read_buf.add(buf_pos) as u32;
             *codec.add(7) = avail as u32;
             *codec.add(8) = pcm_buf as u32;
-            *codec.add(9) = (1152 * 2 * 2) as u32;
+            *codec.add(9) = (1152 * 4) as u32;
+            *codec.add(10) = avail as u32;
+        }
+
+        // Log first 4 bytes of source data on first frame.
+        if frame_count == 0 {
+            let b0 = unsafe { *read_buf.add(buf_pos) } as i32;
+            let b1 = unsafe { *read_buf.add(buf_pos + 1) } as i32;
+            let b2 = unsafe { *read_buf.add(buf_pos + 2) } as i32;
+            let b3 = unsafe { *read_buf.add(buf_pos + 3) } as i32;
+            log_i32(b"[OASIS] hdr0=", b0);
+            log_i32(b"[OASIS] hdr1=", b1);
+            log_i32(b"[OASIS] hdr2=", b2);
+            log_i32(b"[OASIS] hdr3=", b3);
         }
 
         let ret = unsafe { decode_fn(codec, CODEC_TYPE_MP3) };
