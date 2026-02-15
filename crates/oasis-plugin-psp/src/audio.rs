@@ -261,8 +261,8 @@ const MAX_SCAN_DEPTH: usize = 4;
 const MP3_BUF_SIZE: usize = 64 * 1024;
 /// sceMp3 PCM decode buffer.
 const PCM_BUF_SIZE: usize = MP3_SAMPLES_PER_FRAME as usize * 4 * 4;
-/// sceAudiocodec read buffer (32KB).
-const READ_BUF_SIZE: usize = 32 * 1024;
+/// sceAudiocodec read buffer (64KB for fewer I/O stalls).
+const READ_BUF_SIZE: usize = 64 * 1024;
 /// sceAudiocodec codec buffer (65 u32 = 260 bytes, must be 64-byte aligned).
 const CODEC_BUF_WORDS: usize = 65;
 /// sceAudiocodec working memory size (CheckNeedMem reports ~15208, round up).
@@ -1908,7 +1908,6 @@ unsafe fn play_track_codec(path: &[u8], channel: i32) -> i32 {
         psp::sys::sceIoLseek(fd, 0, psp::sys::IoWhence::End)
     } as usize;
     unsafe { psp::sys::sceIoLseek(fd, 0, psp::sys::IoWhence::Set) };
-    log_i32(b"[OASIS] file_size=", file_size as i32);
     if file_size == 0 {
         unsafe { psp::sys::sceIoClose(fd) };
         return -1;
@@ -1923,8 +1922,6 @@ unsafe fn play_track_codec(path: &[u8], channel: i32) -> i32 {
         unsafe { psp::sys::sceIoClose(fd) };
         return -1;
     }
-    log_i32(b"[OASIS] codec_buf @", codec as i32);
-
     // Zero the codec buffer.
     unsafe {
         let mut i = 0;
@@ -1939,25 +1936,19 @@ unsafe fn play_track_codec(path: &[u8], channel: i32) -> i32 {
         if let Some(f) =
             core::ptr::read_volatile(&raw const CODEC_CHECK_NEED_MEM_FN)
         {
-            let ret = f(codec, CODEC_TYPE_MP3);
-            log_i32(b"[OASIS] CheckNeedMem=", ret);
-        } else {
-            crate::debug_log(b"[OASIS] no CheckNeedMem fn");
+            f(codec, CODEC_TYPE_MP3);
         }
         if let Some(f) =
             core::ptr::read_volatile(&raw const CODEC_GET_EDRAM_FN)
         {
             let ret = f(codec, CODEC_TYPE_MP3);
-            log_i32(b"[OASIS] GetEDRAM=", ret);
             if ret >= 0 {
                 edram_allocated = true;
             } else {
-                crate::debug_log(b"[OASIS] GetEDRAM failed");
                 psp::sys::sceIoClose(fd);
                 return -1;
             }
         } else {
-            crate::debug_log(b"[OASIS] no GetEDRAM fn");
             psp::sys::sceIoClose(fd);
             return -1;
         }
@@ -1965,7 +1956,6 @@ unsafe fn play_track_codec(path: &[u8], channel: i32) -> i32 {
             core::ptr::read_volatile(&raw const CODEC_INIT_FN)
         {
             let ret = f(codec, CODEC_TYPE_MP3);
-            log_i32(b"[OASIS] CodecInit=", ret);
             if ret < 0 {
                 if edram_allocated {
                     if let Some(rel) = core::ptr::read_volatile(
@@ -2020,19 +2010,6 @@ unsafe fn play_track_codec(path: &[u8], channel: i32) -> i32 {
     let id3_skip = skip_id3v2(slice);
     if id3_skip > 0 && id3_skip < buf_valid {
         buf_pos = id3_skip;
-    }
-
-    // Dump codec buffer after init (first 16 words) for debugging.
-    unsafe {
-        let mut i = 0u32;
-        while i < 16 {
-            let val = *codec.add(i as usize);
-            if val != 0 {
-                log_i32(b"[OASIS] cb[", i as i32);
-                log_i32(b"]=", val as i32);
-            }
-            i += 1;
-        }
     }
 
     let decode_fn = unsafe {
@@ -2131,23 +2108,7 @@ unsafe fn play_track_codec(path: &[u8], channel: i32) -> i32 {
             *codec.add(10) = avail as u32;
         }
 
-        // Log first 4 bytes of source data on first frame.
-        if frame_count == 0 {
-            let b0 = unsafe { *read_buf.add(buf_pos) } as i32;
-            let b1 = unsafe { *read_buf.add(buf_pos + 1) } as i32;
-            let b2 = unsafe { *read_buf.add(buf_pos + 2) } as i32;
-            let b3 = unsafe { *read_buf.add(buf_pos + 3) } as i32;
-            log_i32(b"[OASIS] hdr0=", b0);
-            log_i32(b"[OASIS] hdr1=", b1);
-            log_i32(b"[OASIS] hdr2=", b2);
-            log_i32(b"[OASIS] hdr3=", b3);
-        }
-
         let ret = unsafe { decode_fn(codec, CODEC_TYPE_MP3) };
-        if frame_count < 5 {
-            log_i32(b"[OASIS] decode ret=", ret);
-            log_i32(b"[OASIS] avail=", avail as i32);
-        }
         if ret < 0 {
             // Limit consecutive failures to avoid infinite spin.
             frame_count += 1;
@@ -2160,9 +2121,6 @@ unsafe fn play_track_codec(path: &[u8], channel: i32) -> i32 {
         }
 
         let consumed = unsafe { *codec.add(7) } as usize;
-        if frame_count < 5 {
-            log_i32(b"[OASIS] consumed=", consumed as i32);
-        }
         if consumed == 0 {
             buf_pos += 1;
             continue;
@@ -2181,9 +2139,6 @@ unsafe fn play_track_codec(path: &[u8], channel: i32) -> i32 {
                     &raw const AUDIO_SRC_OUTPUT_FN,
                 ) {
                     let ret = f(vol, pcm_buf as *const u8);
-                    if frame_count < 5 {
-                        log_i32(b"[OASIS] srcOut=", ret);
-                    }
                     if ret < 0 {
                         result = ret;
                         break;
@@ -2200,9 +2155,6 @@ unsafe fn play_track_codec(path: &[u8], channel: i32) -> i32 {
                     &raw const AUDIO_OUTPUT_BLOCKING_FN,
                 ) {
                     let ret = f(channel, vol, pcm_buf as *const u8);
-                    if frame_count < 5 {
-                        log_i32(b"[OASIS] audioOut=", ret);
-                    }
                     if ret < 0 {
                         result = ret;
                         break;
@@ -2266,7 +2218,7 @@ pub fn start_audio_thread() {
         let thid = psp::sys::sceKernelCreateThread(
             b"OasisAudio\0".as_ptr(),
             audio_thread_entry,
-            0x1E,
+            0x18, // priority 24: above default (30) for smooth playback
             0x4000,
             psp::sys::ThreadAttributes::empty(),
             core::ptr::null_mut(),
