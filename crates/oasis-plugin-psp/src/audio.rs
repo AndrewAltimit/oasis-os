@@ -636,32 +636,22 @@ unsafe fn resolve_nid_any(
 }
 
 // ---------------------------------------------------------------------------
-// Memory NID scan (diagnostic dump to ms0:/seplugins/oasis_memdump.txt)
+// Full memory dump (raw binary to ms0 for offline analysis)
 // ---------------------------------------------------------------------------
 
-/// NIDs to search for during memory scan.
-const SCAN_NIDS: &[(u32, &[u8])] = &[
-    (0x35750070, b"Mp3InitRes"),
-    (0x7F2A1880, b"Mp3Reserve"),
-    (0x44E07129, b"Mp3Init"),
-    (0xD021C0FB, b"Mp3Decode"),
-    (0xD8F54A51, b"Mp3ChkData"),
-    (0x732B042A, b"Mp3GetInfo"),
-    (0x29BFF3EC, b"Mp3Notify"),
-    (0x0DB149F4, b"Mp3Release"),
-    (0x9D3F790C, b"CdcChkMem"),
-    (0x5B37EB1D, b"CdcInit"),
-    (0x70A703F8, b"CdcDecode"),
-    (0x3A20A200, b"CdcGetEdram"),
-    (0x29681260, b"CdcRelEdram"),
-];
+/// Chunk size for memory dump writes (64KB).
+const DUMP_CHUNK_SIZE: usize = 64 * 1024;
 
-/// Scan user and kernel memory for known NIDs, write results to file.
-/// Called as a last resort when all standard resolution methods fail.
-unsafe fn nid_memory_scan() {
+/// Dump a memory range to a file as raw binary. Writes in 64KB chunks.
+/// Returns bytes written or -1 on error.
+unsafe fn dump_memory_range(
+    path: &[u8],
+    start: u32,
+    size: u32,
+) -> i32 {
     let fd = unsafe {
         psp::sys::sceIoOpen(
-            b"ms0:/seplugins/oasis_memdump.txt\0".as_ptr(),
+            path.as_ptr(),
             psp::sys::IoOpenFlags::CREAT
                 | psp::sys::IoOpenFlags::WR_ONLY
                 | psp::sys::IoOpenFlags::TRUNC,
@@ -669,205 +659,96 @@ unsafe fn nid_memory_scan() {
         )
     };
     if fd < psp::sys::SceUid(0) {
-        crate::debug_log(b"[OASIS] memdump: can't open file");
-        return;
+        return -1;
     }
 
-    dump_line(fd, b"=== OASIS NID Memory Scan ===");
+    let mut written: u32 = 0;
+    while written < size {
+        let remaining = size - written;
+        let chunk = if remaining > DUMP_CHUNK_SIZE as u32 {
+            DUMP_CHUNK_SIZE as u32
+        } else {
+            remaining
+        };
+        let addr = start + written;
 
-    // Scan user memory (24MB).
-    dump_line(fd, b"--- User Memory 08800000-0A000000 ---");
-    let uhits =
-        unsafe { scan_range_nids(fd, 0x0880_0000, 0x0A00_0000) };
+        let ret = unsafe {
+            psp::sys::sceIoWrite(
+                fd,
+                addr as *const core::ffi::c_void,
+                chunk as usize,
+            )
+        };
+        if ret <= 0 {
+            // Write error -- log and stop.
+            let mut buf = [0u8; 48];
+            let mut p = copy_bytes(&mut buf, 0, b"[OASIS] dump err @");
+            p = write_hex32(&mut buf, p, addr);
+            crate::debug_log(&buf[..p]);
+            break;
+        }
+        written += ret as u32;
 
-    // Scan kernel memory (8MB).
-    dump_line(fd, b"--- Kernel Memory 88000000-88800000 ---");
-    let khits =
-        unsafe { scan_range_nids(fd, 0x8800_0000, 0x8880_0000) };
-
-    // String scan for module names.
-    dump_line(fd, b"--- String Scan ---");
-    let strings: &[&[u8]] =
-        &[b"sceMp3", b"sceAudiocodec", b"libmp3", b"avcodec"];
-    for s in strings {
-        unsafe {
-            scan_string_range(fd, 0x0880_0000, 0x0A00_0000, s);
-            scan_string_range(fd, 0x8800_0000, 0x8880_0000, s);
+        // Progress every 1MB.
+        if written % 0x10_0000 == 0 {
+            let mut buf = [0u8; 48];
+            let mut p = copy_bytes(&mut buf, 0, b"[OASIS] dump ");
+            p = write_u32_decimal(&mut buf, p, written / 1024);
+            p = copy_bytes(&mut buf, p, b"KB");
+            crate::debug_log(&buf[..p]);
         }
     }
-
-    // Summary.
-    let mut buf = [0u8; 64];
-    let mut p = copy_bytes(&mut buf, 0, b"Total: user=");
-    p = write_u32_decimal(&mut buf, p, uhits);
-    p = copy_bytes(&mut buf, p, b" kernel=");
-    p = write_u32_decimal(&mut buf, p, khits);
-    dump_line(fd, &buf[..p]);
-    dump_line(fd, b"=== End ===");
 
     unsafe { psp::sys::sceIoClose(fd) };
-    crate::debug_log(b"[OASIS] memdump written to ms0");
+    written as i32
 }
 
-/// Scan a memory range for all known NIDs. Returns hit count.
-unsafe fn scan_range_nids(
-    fd: psp::sys::SceUid,
-    start: u32,
-    end: u32,
-) -> u32 {
-    let mut hits = 0u32;
-    let mut addr = start;
-    let mut last_progress = start;
+/// Dump full user + kernel memory to binary files on ms0.
+///
+/// Creates:
+/// - `ms0:/seplugins/oasis_user.bin`  (24MB, 0x08800000-0x0A000000)
+/// - `ms0:/seplugins/oasis_kern.bin`  (8MB,  0x88000000-0x88800000)
+///
+/// Analyze offline with Python/hex editor to find the syscall table,
+/// import stubs, and module structures.
+unsafe fn full_memory_dump() {
+    crate::debug_log(b"[OASIS] starting full memory dump...");
 
-    while addr < end.saturating_sub(4) {
-        // Progress log every 4MB.
-        if addr - last_progress >= 0x0040_0000 {
-            let mut buf = [0u8; 32];
-            let mut p = copy_bytes(&mut buf, 0, b"  scan @");
-            p = write_hex32(&mut buf, p, addr);
-            dump_line(fd, &buf[..p]);
-            last_progress = addr;
-        }
-
-        let val =
-            unsafe { core::ptr::read_volatile(addr as *const u32) };
-
-        let mut ni = 0;
-        while ni < SCAN_NIDS.len() {
-            if val == SCAN_NIDS[ni].0 {
-                hits += 1;
-                let mut buf = [0u8; 80];
-                let mut p = copy_bytes(&mut buf, 0, b"HIT ");
-                p = copy_bytes(&mut buf, p, SCAN_NIDS[ni].1);
-                p = copy_bytes(&mut buf, p, b" (");
-                p = write_hex32(&mut buf, p, val);
-                p = copy_bytes(&mut buf, p, b") @");
-                p = write_hex32(&mut buf, p, addr);
-                dump_line(fd, &buf[..p]);
-                // Context: 8 words before, 8 words after.
-                unsafe {
-                    dump_hex_words(
-                        fd,
-                        addr.saturating_sub(32),
-                        16,
-                    );
-                }
-            }
-            ni += 1;
-        }
-        addr += 4;
-    }
-    hits
-}
-
-/// Write hex dump of N 32-bit words, 8 words per line.
-unsafe fn dump_hex_words(
-    fd: psp::sys::SceUid,
-    start: u32,
-    nwords: usize,
-) {
-    let mut i = 0;
-    while i < nwords {
-        let row_addr = start + (i as u32) * 4;
-        let mut buf = [0u8; 96];
-        let mut p = copy_bytes(&mut buf, 0, b"  ");
-        p = write_hex32(&mut buf, p, row_addr);
-        p = copy_bytes(&mut buf, p, b":");
-        let row_end = (i + 8).min(nwords);
-        let mut j = i;
-        while j < row_end {
-            let a = start + (j as u32) * 4;
-            let val = unsafe {
-                core::ptr::read_volatile(a as *const u32)
-            };
-            p = copy_bytes(&mut buf, p, b" ");
-            p = write_hex32(&mut buf, p, val);
-            j += 1;
-        }
-        dump_line(fd, &buf[..p]);
-        i = row_end;
-    }
-}
-
-/// Scan a memory range for a string pattern (byte-by-byte).
-unsafe fn scan_string_range(
-    fd: psp::sys::SceUid,
-    start: u32,
-    end: u32,
-    pattern: &[u8],
-) {
-    if pattern.is_empty() {
-        return;
-    }
-    let limit = end.saturating_sub(pattern.len() as u32);
-    let mut addr = start;
-    let mut found = 0u32;
-
-    while addr < limit {
-        // Quick check first byte before full compare.
-        let first = unsafe {
-            core::ptr::read_volatile(addr as *const u8)
-        };
-        if first == pattern[0] {
-            let mut matched = true;
-            let mut k = 1;
-            while k < pattern.len() {
-                let b = unsafe {
-                    core::ptr::read_volatile(
-                        (addr + k as u32) as *const u8,
-                    )
-                };
-                if b != pattern[k] {
-                    matched = false;
-                    break;
-                }
-                k += 1;
-            }
-            if matched {
-                found += 1;
-                if found <= 8 {
-                    let mut buf = [0u8; 80];
-                    let mut p =
-                        copy_bytes(&mut buf, 0, b"STR \"");
-                    p = copy_bytes(&mut buf, p, pattern);
-                    p = copy_bytes(&mut buf, p, b"\" @");
-                    p = write_hex32(&mut buf, p, addr);
-                    dump_line(fd, &buf[..p]);
-                }
-            }
-        }
-        addr += 1;
+    // User memory: 24MB.
+    crate::debug_log(b"[OASIS] dumping user memory (24MB)...");
+    let uw = unsafe {
+        dump_memory_range(
+            b"ms0:/seplugins/oasis_user.bin\0",
+            0x0880_0000,
+            0x0180_0000, // 24MB
+        )
+    };
+    {
+        let mut buf = [0u8; 48];
+        let mut p = copy_bytes(&mut buf, 0, b"[OASIS] user dump: ");
+        p = write_u32_decimal(&mut buf, p, (uw / 1024) as u32);
+        p = copy_bytes(&mut buf, p, b"KB");
+        crate::debug_log(&buf[..p]);
     }
 
-    if found > 8 {
-        let mut buf = [0u8; 64];
-        let mut p = copy_bytes(&mut buf, 0, b"  (");
-        p = write_u32_decimal(&mut buf, p, found);
-        p = copy_bytes(&mut buf, p, b" total hits for \"");
-        p = copy_bytes(&mut buf, p, pattern);
-        p = copy_bytes(&mut buf, p, b"\")");
-        dump_line(fd, &buf[..p]);
+    // Kernel memory: 8MB.
+    crate::debug_log(b"[OASIS] dumping kernel memory (8MB)...");
+    let kw = unsafe {
+        dump_memory_range(
+            b"ms0:/seplugins/oasis_kern.bin\0",
+            0x8800_0000,
+            0x0080_0000, // 8MB
+        )
+    };
+    {
+        let mut buf = [0u8; 48];
+        let mut p = copy_bytes(&mut buf, 0, b"[OASIS] kern dump: ");
+        p = write_u32_decimal(&mut buf, p, (kw / 1024) as u32);
+        p = copy_bytes(&mut buf, p, b"KB");
+        crate::debug_log(&buf[..p]);
     }
-}
 
-/// Write a line to the dump file (appends newline).
-fn dump_line(fd: psp::sys::SceUid, data: &[u8]) {
-    if fd < psp::sys::SceUid(0) {
-        return;
-    }
-    // SAFETY: sceIoWrite with valid buffer.
-    unsafe {
-        psp::sys::sceIoWrite(
-            fd,
-            data.as_ptr() as *const _,
-            data.len(),
-        );
-        psp::sys::sceIoWrite(
-            fd,
-            b"\n".as_ptr() as *const _,
-            1,
-        );
-    }
+    crate::debug_log(b"[OASIS] memory dump complete!");
 }
 
 // ---------------------------------------------------------------------------
@@ -1461,10 +1342,9 @@ unsafe fn init_audio_drivers() -> bool {
         return true;
     }
 
-    // Step 7: Diagnostic NID memory scan (slow, writes dump file).
-    // Only runs if everything else failed.
-    crate::debug_log(b"[OASIS] starting NID memory scan...");
-    unsafe { nid_memory_scan() };
+    // Step 7: Full binary memory dump for offline analysis.
+    // Writes raw user+kernel memory to ms0 for PC-side analysis.
+    unsafe { full_memory_dump() };
 
     false
 }
