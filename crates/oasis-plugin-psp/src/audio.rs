@@ -89,6 +89,8 @@ const NID_CODEC_GET_EDRAM: u32 = 0x3A20A200;
 const NID_CODEC_RELEASE_EDRAM: u32 = 0x29681260;
 
 const CODEC_MODULES: &[(&[u8], &[u8])] = &[
+    // mp3play.prx uses this exact module/library pair:
+    (b"sceAvcodec_wrapper\0", b"sceAudiocodec\0"),
     (b"sceAVcodec_driver\0", b"sceAudiocodec\0"),
     (b"sceAvcodec_driver\0", b"sceAudiocodec\0"),
     (b"sceAudiocodec_Driver\0", b"sceAudiocodec\0"),
@@ -242,8 +244,68 @@ const MP3_BUF_SIZE: usize = 64 * 1024;
 const PCM_BUF_SIZE: usize = MP3_SAMPLES_PER_FRAME as usize * 4 * 4;
 /// sceAudiocodec read buffer (32KB).
 const READ_BUF_SIZE: usize = 32 * 1024;
-/// sceAudiocodec codec buffer (128 bytes = 32 u32).
+/// sceAudiocodec codec buffer (65 u32 = 260 bytes, must be 64-byte aligned).
 const CODEC_BUF_WORDS: usize = 65;
+
+/// Total user-memory allocation for codec buffers.
+/// Layout: [64-byte pad] [codec: 260] [pcm: 4608] [read: 32768]
+const UMEM_CODEC_SIZE: usize = 64 + (CODEC_BUF_WORDS * 4) + (1152 * 2 * 2) + READ_BUF_SIZE;
+
+/// UID of user-memory block, 0 = not allocated.
+static mut UMEM_BLOCK_ID: psp::sys::SceUid = psp::sys::SceUid(0);
+/// Pointer to codec buffer in user memory (64-byte aligned).
+static mut UMEM_CODEC: *mut u32 = core::ptr::null_mut();
+/// Pointer to PCM buffer in user memory.
+static mut UMEM_PCM: *mut i16 = core::ptr::null_mut();
+/// Pointer to read buffer in user memory.
+static mut UMEM_READ: *mut u8 = core::ptr::null_mut();
+
+/// Allocate codec buffers in user memory partition (partition 2).
+/// Required because syscall stubs validate that pointers are in user range.
+unsafe fn alloc_codec_user_mem() -> bool {
+    let block = unsafe {
+        psp::sys::sceKernelAllocPartitionMemory(
+            psp::sys::SceSysMemPartitionId::SceKernelPrimaryUserPartition,
+            b"oasis_codec\0".as_ptr(),
+            psp::sys::SceSysMemBlockTypes::Low,
+            UMEM_CODEC_SIZE as u32,
+            core::ptr::null_mut(),
+        )
+    };
+    if block < psp::sys::SceUid(0) {
+        crate::debug_log(b"[OASIS] user mem alloc failed");
+        return false;
+    }
+    let base = unsafe {
+        psp::sys::sceKernelGetBlockHeadAddr(block)
+    } as *mut u8;
+    if base.is_null() {
+        crate::debug_log(b"[OASIS] user mem addr null");
+        return false;
+    }
+    unsafe {
+        UMEM_BLOCK_ID = block;
+        // Align codec buffer to 64 bytes.
+        let codec_off = (64 - (base as usize % 64)) % 64;
+        UMEM_CODEC = base.add(codec_off) as *mut u32;
+        let pcm_off = codec_off + CODEC_BUF_WORDS * 4;
+        UMEM_PCM = base.add(pcm_off) as *mut i16;
+        let read_off = pcm_off + 1152 * 2 * 2;
+        UMEM_READ = base.add(read_off) as *mut u8;
+    }
+    log_i32(b"[OASIS] user mem @", base as i32);
+    true
+}
+
+/// Free user-memory block if allocated.
+unsafe fn free_codec_user_mem() {
+    unsafe {
+        if UMEM_BLOCK_ID >= psp::sys::SceUid(0) && UMEM_BLOCK_ID != psp::sys::SceUid(0) {
+            psp::sys::sceKernelFreePartitionMemory(UMEM_BLOCK_ID);
+            UMEM_BLOCK_ID = psp::sys::SceUid(0);
+        }
+    }
+}
 
 // ---------------------------------------------------------------------------
 // Playlist data
@@ -1410,6 +1472,18 @@ unsafe extern "C" fn audio_thread_entry(
         }
     }
 
+    // Allocate user-memory buffers for sceAudiocodec backend.
+    // Codec functions called through syscall stubs validate that pointers
+    // are in user memory (0x08800000-0x0A000000), so kernel-space statics
+    // get rejected.  Even when resolved via sctrlHENFindFunction, the
+    // kernel functions may still do pointer validation.
+    if backend == 2 {
+        if !unsafe { alloc_codec_user_mem() } {
+            crate::debug_log(b"[OASIS] codec user mem failed");
+            return 1;
+        }
+    }
+
     // Reserve a specific high audio channel to avoid stealing game channels.
     // PSP has 8 channels (0-7); games typically use 0-3.  Channel 7 is
     // the least likely to conflict.  If 7 fails, try 6, then fall back
@@ -1730,11 +1804,18 @@ unsafe fn play_track_codec(path: &[u8], channel: i32) -> i32 {
         return -1;
     }
 
-    static mut READ_BUF: [u8; READ_BUF_SIZE] = [0u8; READ_BUF_SIZE];
-    static mut C_PCM_BUF: [i16; 1152 * 2] = [0i16; 1152 * 2];
-    static mut CODEC_BUF: [u32; CODEC_BUF_WORDS] = [0u32; CODEC_BUF_WORDS];
+    // Use user-memory buffers (allocated in audio_thread_entry).
+    let codec = unsafe { core::ptr::read_volatile(&raw const UMEM_CODEC) };
+    let pcm_buf = unsafe { core::ptr::read_volatile(&raw const UMEM_PCM) };
+    let read_buf = unsafe { core::ptr::read_volatile(&raw const UMEM_READ) };
+    if codec.is_null() || pcm_buf.is_null() || read_buf.is_null() {
+        crate::debug_log(b"[OASIS] codec bufs null");
+        unsafe { psp::sys::sceIoClose(fd) };
+        return -1;
+    }
+    log_i32(b"[OASIS] codec_buf @", codec as i32);
 
-    let codec = unsafe { (*(&raw mut CODEC_BUF)).as_mut_ptr() };
+    // Zero the codec buffer.
     unsafe {
         let mut i = 0;
         while i < CODEC_BUF_WORDS {
@@ -1792,9 +1873,6 @@ unsafe fn play_track_codec(path: &[u8], channel: i32) -> i32 {
             return -1;
         }
     }
-
-    let read_buf = unsafe { (*(&raw mut READ_BUF)).as_mut_ptr() };
-    let pcm_buf = unsafe { (*(&raw mut C_PCM_BUF)).as_mut_ptr() };
 
     let mut file_pos: usize;
     let mut buf_valid: usize;
