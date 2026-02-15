@@ -14,7 +14,7 @@ repository = "https://github.com/AndrewAltimit/oasis-os"
 authors = ["AndrewAltimit"]
 
 [features]
-default = ["kernel-mode"]
+default = []
 kernel-mode = ["psp/kernel", "kernel-volatile", "kernel-me-clock", "kernel-me"]
 # Granular kernel sub-features:
 kernel-exception = ["psp/kernel"]    # sceKernelRegisterDefaultExceptionHandler (broken on PSP-3000 + 6.20 PRO-C)
