@@ -10,6 +10,10 @@
 //!
 //! Also provides terminal commands: `ftp start/stop`, `push`, `pull`.
 
+use std::time::Instant;
+
+use oasis_types::backend::{NetworkBackend, NetworkStream};
+
 use crate::error::{OasisError, Result};
 use crate::terminal::{Command, CommandOutput, Environment};
 use crate::vfs::Vfs;
@@ -117,6 +121,182 @@ pub fn process_ftp_request(line: &str, vfs: &mut dyn Vfs) -> String {
 }
 
 // ---------------------------------------------------------------------------
+// FTP Server
+// ---------------------------------------------------------------------------
+
+/// Maximum simultaneous FTP connections.
+const MAX_FTP_CONNECTIONS: usize = 4;
+
+/// Maximum bytes in a single FTP input line.
+const MAX_FTP_LINE_LEN: usize = 1024;
+
+/// Maximum commands to process per connection per poll cycle.
+const MAX_CMDS_PER_POLL: usize = 16;
+
+/// Idle connection timeout in seconds.
+const FTP_IDLE_TIMEOUT_SECS: u64 = 300;
+
+/// A single FTP client connection.
+struct FtpConnection {
+    stream: Box<dyn NetworkStream>,
+    read_buf: Vec<u8>,
+    last_activity: Instant,
+}
+
+impl FtpConnection {
+    fn new(stream: Box<dyn NetworkStream>) -> Self {
+        Self {
+            stream,
+            read_buf: Vec::with_capacity(256),
+            last_activity: Instant::now(),
+        }
+    }
+}
+
+/// Poll-based FTP file server.
+///
+/// Accepts TCP connections and processes FTP protocol commands against
+/// the VFS. Designed for non-blocking polling from the main loop,
+/// following the same pattern as `RemoteListener`.
+pub struct FtpServer {
+    port: u16,
+    connections: Vec<FtpConnection>,
+    listening: bool,
+}
+
+impl FtpServer {
+    /// Create a new FTP server on the given port.
+    pub fn new(port: u16) -> Self {
+        Self {
+            port,
+            connections: Vec::new(),
+            listening: false,
+        }
+    }
+
+    /// Start listening on the configured port.
+    pub fn start(&mut self, backend: &mut dyn NetworkBackend) -> Result<()> {
+        backend.listen(self.port)?;
+        self.listening = true;
+        Ok(())
+    }
+
+    /// Whether the server is active.
+    pub fn is_listening(&self) -> bool {
+        self.listening
+    }
+
+    /// Number of active connections.
+    pub fn connection_count(&self) -> usize {
+        self.connections.len()
+    }
+
+    /// Poll for new connections and process FTP commands.
+    ///
+    /// Call from the main loop each frame. Commands are executed
+    /// immediately against the provided VFS.
+    pub fn poll(&mut self, backend: &mut dyn NetworkBackend, vfs: &mut dyn Vfs) -> Result<()> {
+        if !self.listening {
+            return Ok(());
+        }
+
+        let idle_timeout = std::time::Duration::from_secs(FTP_IDLE_TIMEOUT_SECS);
+
+        // Accept new connections.
+        if self.connections.len() < MAX_FTP_CONNECTIONS {
+            match backend.accept() {
+                Ok(Some(stream)) => {
+                    let mut conn = FtpConnection::new(stream);
+                    let _ = conn.stream.write(b"220 OASIS FTP server ready\r\n");
+                    self.connections.push(conn);
+                },
+                Ok(None) => {},
+                Err(e) => log::warn!("FTP accept error: {e}"),
+            }
+        }
+
+        // Read from all connections.
+        let mut to_remove = Vec::new();
+
+        for (idx, conn) in self.connections.iter_mut().enumerate() {
+            // Check idle timeout.
+            if conn.last_activity.elapsed() > idle_timeout {
+                let _ = conn.stream.write(b"421 Idle timeout\r\n");
+                to_remove.push(idx);
+                continue;
+            }
+
+            let mut buf = [0u8; 512];
+            match conn.stream.read(&mut buf) {
+                Ok(0) => {},
+                Err(OasisError::Io(ref e)) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                    // No data yet.
+                },
+                Ok(n) => {
+                    conn.last_activity = Instant::now();
+                    conn.read_buf.extend_from_slice(&buf[..n]);
+
+                    // Process complete lines (capped per poll cycle).
+                    let mut cmds_processed = 0usize;
+                    while cmds_processed < MAX_CMDS_PER_POLL {
+                        let Some(pos) = conn.read_buf.iter().position(|&b| b == b'\n') else {
+                            break;
+                        };
+                        cmds_processed += 1;
+                        let line_bytes: Vec<u8> = conn.read_buf.drain(..=pos).collect();
+                        let line = String::from_utf8_lossy(&line_bytes).trim().to_string();
+
+                        if line.is_empty() {
+                            continue;
+                        }
+
+                        // Check for QUIT.
+                        if line.eq_ignore_ascii_case("QUIT") {
+                            let _ = conn.stream.write(b"200 goodbye\r\n");
+                            to_remove.push(idx);
+                            break;
+                        }
+
+                        // Process command against VFS.
+                        let response = process_ftp_request(&line, vfs);
+                        let _ = conn.stream.write(response.as_bytes());
+                    }
+
+                    // Guard against overlong lines.
+                    if conn.read_buf.len() > MAX_FTP_LINE_LEN {
+                        conn.read_buf.clear();
+                        let _ = conn.stream.write(b"500 line too long\r\n");
+                    }
+                },
+                Err(_) => {
+                    to_remove.push(idx);
+                },
+            }
+        }
+
+        // Remove closed connections (in reverse to preserve indices).
+        to_remove.sort_unstable();
+        to_remove.dedup();
+        for idx in to_remove.into_iter().rev() {
+            let mut conn = self.connections.remove(idx);
+            let _ = conn.stream.close();
+        }
+
+        Ok(())
+    }
+
+    /// Shut down all connections and stop listening.
+    pub fn stop(&mut self) {
+        for conn in &mut self.connections {
+            let _ = conn.stream.write(b"421 Server shutting down\r\n");
+            let _ = conn.stream.close();
+        }
+        self.connections.clear();
+        self.listening = false;
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Terminal commands
 // ---------------------------------------------------------------------------
 
@@ -145,25 +325,9 @@ impl Command for FtpCmd {
                     .get(1)
                     .and_then(|s| s.parse::<u16>().ok())
                     .unwrap_or(DEFAULT_FTP_PORT);
-
-                // Signal the FTP server to start via VFS IPC.
-                if !env.vfs.exists("/var/ftp") {
-                    env.vfs.mkdir("/var").ok();
-                    env.vfs.mkdir("/var/ftp").ok();
-                }
-                let request = format!("start {port}");
-                env.vfs.write(FTP_REQUEST_PATH, request.as_bytes())?;
-                let status = format!("active port={port}");
-                env.vfs.write(FTP_STATUS_PATH, status.as_bytes())?;
-                Ok(CommandOutput::Text(format!(
-                    "FTP server starting on port {port}"
-                )))
+                Ok(CommandOutput::FtpToggle { port })
             },
-            "stop" => {
-                env.vfs.write(FTP_REQUEST_PATH, b"stop")?;
-                env.vfs.write(FTP_STATUS_PATH, b"inactive")?;
-                Ok(CommandOutput::Text("FTP server stopping".to_string()))
-            },
+            "stop" => Ok(CommandOutput::FtpToggle { port: 0 }),
             "status" => {
                 if env.vfs.exists(FTP_STATUS_PATH) {
                     let data = env.vfs.read(FTP_STATUS_PATH)?;
@@ -419,22 +583,28 @@ mod tests {
     fn ftp_cmd_start() {
         let (reg, mut vfs) = setup();
         match exec(&reg, &mut vfs, "ftp start 8021").unwrap() {
-            CommandOutput::Text(s) => assert!(s.contains("8021")),
-            _ => panic!("expected text"),
+            CommandOutput::FtpToggle { port } => assert_eq!(port, 8021),
+            other => panic!("expected FtpToggle, got {other:?}"),
         }
-        let data = vfs.read(FTP_STATUS_PATH).unwrap();
-        let text = String::from_utf8_lossy(&data);
-        assert!(text.contains("active"));
-        assert!(text.contains("8021"));
+    }
+
+    #[test]
+    fn ftp_cmd_start_default_port() {
+        let (reg, mut vfs) = setup();
+        match exec(&reg, &mut vfs, "ftp start").unwrap() {
+            CommandOutput::FtpToggle { port } => {
+                assert_eq!(port, DEFAULT_FTP_PORT);
+            },
+            other => panic!("expected FtpToggle, got {other:?}"),
+        }
     }
 
     #[test]
     fn ftp_cmd_stop() {
         let (reg, mut vfs) = setup();
-        exec(&reg, &mut vfs, "ftp start").unwrap();
         match exec(&reg, &mut vfs, "ftp stop").unwrap() {
-            CommandOutput::Text(s) => assert!(s.contains("stopping")),
-            _ => panic!("expected text"),
+            CommandOutput::FtpToggle { port } => assert_eq!(port, 0),
+            other => panic!("expected FtpToggle stop, got {other:?}"),
         }
     }
 

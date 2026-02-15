@@ -13,6 +13,7 @@ use oasis_core::skin::Skin;
 use oasis_core::startmenu::StartMenuState;
 use oasis_core::statusbar::StatusBar;
 use oasis_core::terminal::CommandRegistry;
+use oasis_core::transfer::FtpServer;
 use oasis_core::transition;
 use oasis_core::wm::manager::WindowManager;
 
@@ -50,6 +51,7 @@ pub struct AppState {
     pub browser: Option<BrowserWidget>,
     pub net_backend: StdNetworkBackend,
     pub listener: Option<RemoteListener>,
+    pub ftp_server: Option<FtpServer>,
     pub remote_client: Option<RemoteClient>,
     pub tls_provider: RustlsTlsProvider,
     pub mouse_cursor: CursorState,

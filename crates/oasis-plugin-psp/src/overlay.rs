@@ -221,9 +221,33 @@ unsafe fn execute_menu_action(item: u8) {
     }
 }
 
-/// Cycle CPU clock (stub -- scePower imports removed).
+/// CPU clock preset index.
+static mut CLOCK_INDEX: u8 = 0;
+
+/// Clock presets: (PLL, CPU, Bus) in MHz.
+const CLOCK_PRESETS: [(i32, i32, i32); 4] = [
+    (333, 333, 166), // Max
+    (266, 266, 133), // High
+    (222, 222, 111), // Medium
+    (133, 133, 66),  // Low (battery saver)
+];
+
+/// Cycle through CPU clock presets via scePower driver.
 fn cycle_cpu_clock() {
-    show_osd(b"CPU clock: not available");
+    // SAFETY: CLOCK_INDEX only modified from display hook (single-threaded).
+    unsafe {
+        CLOCK_INDEX = (CLOCK_INDEX + 1) % 4;
+        let (pll, cpu, bus) = CLOCK_PRESETS[CLOCK_INDEX as usize];
+        if crate::hook::set_clock(pll, cpu, bus) {
+            let mut buf = [0u8; 32];
+            let mut p = write_str(&mut buf, 0, b"CPU: ");
+            p = write_u32(&mut buf, p, cpu as u32);
+            p = write_str(&mut buf, p, b"MHz");
+            show_osd(&buf[..p]);
+        } else {
+            show_osd(b"CPU clock: not available");
+        }
+    }
 }
 
 /// Draw the full menu overlay.
@@ -276,28 +300,77 @@ unsafe fn draw_menu(fb: *mut u32, stride: u32) {
     }
 }
 
-/// Draw the status line (static text -- power/RTC imports removed).
+/// Draw the status line with CPU clock and battery info.
 ///
 /// # Safety
 /// `fb` must be valid.
 unsafe fn draw_status_line(fb: *mut u32, stride: u32) {
     // SAFETY: render functions check bounds.
     unsafe {
+        let mut buf = [0u8; 48];
+        let mut p = write_str(&mut buf, 0, b"OASIS  ");
+
+        let cpu_mhz = crate::hook::get_cpu_clock();
+        if cpu_mhz > 0 {
+            p = write_u32(&mut buf, p, cpu_mhz as u32);
+            p = write_str(&mut buf, p, b"MHz  ");
+        }
+
+        let batt = crate::hook::get_battery_percent();
+        if batt >= 0 {
+            p = write_str(&mut buf, p, b"Batt:");
+            p = write_u32(&mut buf, p, batt as u32);
+            p = write_str(&mut buf, p, b"%");
+        }
+
         render::draw_string(
             fb, stride,
             OVERLAY_X + 8, STATUS_Y,
-            b"OASIS Plugin v0.1",
+            &buf[..p],
             colors::GREEN,
         );
     }
 }
 
-/// Draw the now-playing track name (stub).
+/// Draw the now-playing track name and playback state.
 ///
 /// # Safety
 /// `fb` must be valid.
-unsafe fn draw_now_playing(_fb: *mut u32, _stride: u32) {
-    // No-op: audio module is stubbed out.
+unsafe fn draw_now_playing(fb: *mut u32, stride: u32) {
+    let state = audio::audio_state();
+    if state == 0 {
+        return; // Audio not active.
+    }
+
+    let track = audio::current_track_name();
+    // Find length (up to null terminator).
+    let mut name_len = 0;
+    while name_len < track.len() && track[name_len] != 0 {
+        name_len += 1;
+    }
+    if name_len == 0 {
+        return;
+    }
+
+    // Draw play/pause indicator + track name.
+    let y = OVERLAY_Y + 24;
+    let icon = if state == 1 { b"> " } else { b"||" };
+
+    // SAFETY: render functions check bounds.
+    unsafe {
+        render::draw_string(
+            fb, stride,
+            OVERLAY_X + 8, y,
+            icon,
+            colors::ACCENT,
+        );
+        render::draw_string(
+            fb, stride,
+            OVERLAY_X + 24, y,
+            &track[..name_len],
+            colors::YELLOW,
+        );
+    }
 }
 
 /// Write a byte string into a buffer. Returns new position.

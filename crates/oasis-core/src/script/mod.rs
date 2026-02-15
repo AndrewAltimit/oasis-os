@@ -49,7 +49,11 @@ pub fn run_script(
             },
             Ok(CommandOutput::Clear) => output.push("(clear)".to_string()),
             Ok(CommandOutput::None) => {},
-            Ok(CommandOutput::ListenToggle { .. } | CommandOutput::RemoteConnect { .. }) => {
+            Ok(
+                CommandOutput::ListenToggle { .. }
+                | CommandOutput::RemoteConnect { .. }
+                | CommandOutput::FtpToggle { .. },
+            ) => {
                 output.push("(network command skipped in script)".to_string());
             },
             Ok(CommandOutput::BrowserSandbox { enable }) => {

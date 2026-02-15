@@ -24,6 +24,26 @@ const NID_SCE_CTRL_PEEK_BUF_POS: u32 = 0x3A622550;
 /// Resolved kernel-mode sceCtrlPeekBufferPositive function pointer.
 static mut CTRL_PEEK_FN: Option<unsafe extern "C" fn(*mut u8, i32) -> i32> = None;
 
+// -- scePower driver NIDs --
+
+/// scePowerSetClockFrequency(pll, cpu, bus)
+const NID_POWER_SET_CLOCK: u32 = 0x545A7F3C;
+/// scePowerGetCpuClockFrequency() -> i32
+const NID_POWER_GET_CPU_CLOCK: u32 = 0xFEE03A2F;
+/// scePowerGetBatteryLifePercent() -> i32
+const NID_POWER_GET_BATTERY: u32 = 0x2085D15D;
+
+/// Module/library pairs for scePower driver.
+const POWER_MODULES: &[(&[u8], &[u8])] = &[
+    (b"scePower_Service\0", b"scePower_driver\0"),
+    (b"scePower_Service\0", b"scePower\0"),
+];
+
+/// Resolved scePower function pointers.
+static mut POWER_SET_CLOCK_FN: Option<unsafe extern "C" fn(i32, i32, i32) -> i32> = None;
+static mut POWER_GET_CPU_CLOCK_FN: Option<unsafe extern "C" fn() -> i32> = None;
+static mut POWER_GET_BATTERY_FN: Option<unsafe extern "C" fn() -> i32> = None;
+
 /// Current button state, updated by the controller polling thread.
 /// The display hook reads this atomically -- no API calls needed.
 static CURRENT_BUTTONS: core::sync::atomic::AtomicU32 =
@@ -232,9 +252,97 @@ pub fn install_display_hook() -> bool {
         }
     }
 
+    // Resolve scePower driver functions for CPU clock and battery.
+    unsafe {
+        for &(module, library) in POWER_MODULES {
+            if core::ptr::read_volatile(&raw const POWER_SET_CLOCK_FN).is_none() {
+                if let Some(ptr) = psp::hook::find_function(
+                    module.as_ptr(),
+                    library.as_ptr(),
+                    NID_POWER_SET_CLOCK,
+                ) {
+                    core::ptr::write_volatile(
+                        &raw mut POWER_SET_CLOCK_FN,
+                        Some(core::mem::transmute(ptr)),
+                    );
+                }
+            }
+            if core::ptr::read_volatile(&raw const POWER_GET_CPU_CLOCK_FN).is_none() {
+                if let Some(ptr) = psp::hook::find_function(
+                    module.as_ptr(),
+                    library.as_ptr(),
+                    NID_POWER_GET_CPU_CLOCK,
+                ) {
+                    core::ptr::write_volatile(
+                        &raw mut POWER_GET_CPU_CLOCK_FN,
+                        Some(core::mem::transmute(ptr)),
+                    );
+                }
+            }
+            if core::ptr::read_volatile(&raw const POWER_GET_BATTERY_FN).is_none() {
+                if let Some(ptr) = psp::hook::find_function(
+                    module.as_ptr(),
+                    library.as_ptr(),
+                    NID_POWER_GET_BATTERY,
+                ) {
+                    core::ptr::write_volatile(
+                        &raw mut POWER_GET_BATTERY_FN,
+                        Some(core::mem::transmute(ptr)),
+                    );
+                }
+            }
+        }
+
+        if core::ptr::read_volatile(&raw const POWER_SET_CLOCK_FN).is_some() {
+            crate::debug_log(b"[OASIS] power driver resolved");
+        } else {
+            crate::debug_log(b"[OASIS] power driver NOT found");
+        }
+    }
+
     HOOK_INSTALLED.store(true, Ordering::Release);
     crate::debug_log(b"[OASIS] hook installed OK");
     true
+}
+
+/// Set CPU/bus clock frequencies.
+///
+/// # Safety
+/// Must only be called after `install_display_hook()`.
+pub unsafe fn set_clock(pll: i32, cpu: i32, bus: i32) -> bool {
+    // SAFETY: POWER_SET_CLOCK_FN is set once during init.
+    unsafe {
+        if let Some(f) = core::ptr::read_volatile(&raw const POWER_SET_CLOCK_FN) {
+            f(pll, cpu, bus);
+            true
+        } else {
+            false
+        }
+    }
+}
+
+/// Get current CPU clock frequency in MHz. Returns 0 if unavailable.
+pub fn get_cpu_clock() -> i32 {
+    // SAFETY: POWER_GET_CPU_CLOCK_FN is set once during init.
+    unsafe {
+        if let Some(f) = core::ptr::read_volatile(&raw const POWER_GET_CPU_CLOCK_FN) {
+            f()
+        } else {
+            0
+        }
+    }
+}
+
+/// Get battery life percentage. Returns -1 if unavailable.
+pub fn get_battery_percent() -> i32 {
+    // SAFETY: POWER_GET_BATTERY_FN is set once during init.
+    unsafe {
+        if let Some(f) = core::ptr::read_volatile(&raw const POWER_GET_BATTERY_FN) {
+            f()
+        } else {
+            -1
+        }
+    }
 }
 
 fn write_log_bytes(buf: &mut [u8], pos: usize, s: &[u8]) -> usize {
