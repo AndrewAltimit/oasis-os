@@ -29,6 +29,12 @@ const NID_AUDIO_OUTPUT_BLOCKING: u32 = 0x136CAF51;
 const NID_AUDIO_CH_RELEASE: u32 = 0x6FC46853;
 const NID_AUDIO_SET_CH_VOL: u32 = 0xB7E1D8E7;
 
+// SRC (Sample Rate Conversion) channel -- separate output that
+// does NOT conflict with the 8 regular PCM channels games use.
+const NID_AUDIO_SRC_CH_RESERVE: u32 = 0x01562BA3;
+const NID_AUDIO_SRC_OUTPUT_BLOCKING: u32 = 0xE0727056;
+const NID_AUDIO_SRC_CH_RELEASE: u32 = 0x5C37C0AE;
+
 const AUDIO_MODULES: &[(&[u8], &[u8])] = &[
     (b"sceAudio_Driver\0", b"sceAudio_driver\0"),
     (b"sceAudio_Driver\0", b"sceAudio\0"),
@@ -150,6 +156,19 @@ static mut AUDIO_CH_RELEASE_FN: Option<unsafe extern "C" fn(i32) -> i32> =
 static mut AUDIO_SET_CH_VOL_FN: Option<
     unsafe extern "C" fn(i32, i32, i32) -> i32,
 > = None;
+
+// SRC channel function pointers (preferred -- no conflict with games)
+static mut AUDIO_SRC_RESERVE_FN: Option<
+    unsafe extern "C" fn(i32, i32, i32) -> i32,
+> = None;
+static mut AUDIO_SRC_OUTPUT_FN: Option<
+    unsafe extern "C" fn(i32, *const u8) -> i32,
+> = None;
+#[allow(dead_code)]
+static mut AUDIO_SRC_RELEASE_FN: Option<unsafe extern "C" fn() -> i32> =
+    None;
+/// Whether we use SRC output (true) or regular channel (false).
+static mut USE_SRC_OUTPUT: bool = false;
 
 // Which decoder backend is active: 0=none, 1=sceMp3, 2=sceAudiocodec
 static mut DECODER_BACKEND: u8 = 0;
@@ -1207,7 +1226,42 @@ unsafe fn init_audio_drivers() -> bool {
             );
         }
 
-        if core::ptr::read_volatile(&raw const AUDIO_CH_RESERVE_FN).is_none()
+        // Also resolve SRC channel functions (preferred for plugin audio).
+        if let Some(ptr) =
+            resolve_nid(AUDIO_MODULES, NID_AUDIO_SRC_CH_RESERVE)
+        {
+            core::ptr::write_volatile(
+                &raw mut AUDIO_SRC_RESERVE_FN,
+                Some(core::mem::transmute(ptr)),
+            );
+        }
+        if let Some(ptr) =
+            resolve_nid(AUDIO_MODULES, NID_AUDIO_SRC_OUTPUT_BLOCKING)
+        {
+            core::ptr::write_volatile(
+                &raw mut AUDIO_SRC_OUTPUT_FN,
+                Some(core::mem::transmute(ptr)),
+            );
+        }
+        if let Some(ptr) =
+            resolve_nid(AUDIO_MODULES, NID_AUDIO_SRC_CH_RELEASE)
+        {
+            core::ptr::write_volatile(
+                &raw mut AUDIO_SRC_RELEASE_FN,
+                Some(core::mem::transmute(ptr)),
+            );
+        }
+
+        // Prefer SRC output if both SRC reserve and output are available.
+        if core::ptr::read_volatile(&raw const AUDIO_SRC_RESERVE_FN)
+            .is_some()
+            && core::ptr::read_volatile(&raw const AUDIO_SRC_OUTPUT_FN)
+                .is_some()
+        {
+            core::ptr::write_volatile(&raw mut USE_SRC_OUTPUT, true);
+            crate::debug_log(b"[OASIS] audio SRC driver resolved");
+        } else if core::ptr::read_volatile(&raw const AUDIO_CH_RESERVE_FN)
+            .is_none()
             || core::ptr::read_volatile(
                 &raw const AUDIO_OUTPUT_BLOCKING_FN,
             )
@@ -1484,31 +1538,51 @@ unsafe extern "C" fn audio_thread_entry(
         }
     }
 
-    // Reserve a specific high audio channel to avoid stealing game channels.
-    // PSP has 8 channels (0-7); games typically use 0-3.  Channel 7 is
-    // the least likely to conflict.  If 7 fails, try 6, then fall back
-    // to auto-select (-1) as a last resort.
-    let channel = unsafe {
-        if let Some(f) =
-            core::ptr::read_volatile(&raw const AUDIO_CH_RESERVE_FN)
-        {
-            let mut ch = f(7, MP3_SAMPLES_PER_FRAME, AUDIO_FORMAT_STEREO);
-            if ch < 0 {
-                ch = f(6, MP3_SAMPLES_PER_FRAME, AUDIO_FORMAT_STEREO);
+    // Reserve audio output.  Prefer the SRC (Sample Rate Conversion)
+    // channel which is a dedicated output path that does NOT conflict
+    // with the 8 regular PCM channels games use.
+    let use_src = unsafe { core::ptr::read_volatile(&raw const USE_SRC_OUTPUT) };
+    let channel: i32;
+    if use_src {
+        let ret = unsafe {
+            if let Some(f) =
+                core::ptr::read_volatile(&raw const AUDIO_SRC_RESERVE_FN)
+            {
+                // sceAudioSRCChReserve(sample_count, sample_rate, channels)
+                // channels: 2 = stereo
+                f(MP3_SAMPLES_PER_FRAME, 44100, 2)
+            } else {
+                -1
             }
-            if ch < 0 {
-                ch = f(-1, MP3_SAMPLES_PER_FRAME, AUDIO_FORMAT_STEREO);
-            }
-            ch
-        } else {
+        };
+        if ret < 0 {
+            crate::debug_log(b"[OASIS] SRC reserve failed");
             return 1;
         }
-    };
-    if channel < 0 {
-        crate::debug_log(b"[OASIS] audio channel reserve failed");
-        return 1;
+        channel = -1; // SRC doesn't use channel numbers
+        crate::debug_log(b"[OASIS] audio SRC reserved");
+    } else {
+        // Fallback to regular channel (less desirable).
+        channel = unsafe {
+            if let Some(f) =
+                core::ptr::read_volatile(&raw const AUDIO_CH_RESERVE_FN)
+            {
+                let mut ch =
+                    f(7, MP3_SAMPLES_PER_FRAME, AUDIO_FORMAT_STEREO);
+                if ch < 0 {
+                    ch = f(6, MP3_SAMPLES_PER_FRAME, AUDIO_FORMAT_STEREO);
+                }
+                ch
+            } else {
+                return 1;
+            }
+        };
+        if channel < 0 {
+            crate::debug_log(b"[OASIS] audio ch reserve failed");
+            return 1;
+        }
+        log_i32(b"[OASIS] audio ch=", channel);
     }
-    log_i32(b"[OASIS] audio ch=", channel);
 
     let autoplay = crate::config::get_config().autoplay;
     if autoplay {
@@ -1714,19 +1788,34 @@ unsafe fn play_track_mp3(path: &[u8], channel: i32) -> i32 {
 
         let vol = (AUDIO_VOLUME.load(Ordering::Relaxed) as i32 * 0x8000)
             / 255;
+        let use_src = unsafe {
+            core::ptr::read_volatile(&raw const USE_SRC_OUTPUT)
+        };
         unsafe {
-            if let Some(f) =
-                core::ptr::read_volatile(&raw const AUDIO_SET_CH_VOL_FN)
-            {
-                f(channel, vol, vol);
-            }
-            if let Some(f) = core::ptr::read_volatile(
-                &raw const AUDIO_OUTPUT_BLOCKING_FN,
-            ) {
-                let ret = f(channel, vol, pcm_out as *const u8);
-                if ret < 0 {
-                    result = ret;
-                    break;
+            if use_src {
+                if let Some(f) = core::ptr::read_volatile(
+                    &raw const AUDIO_SRC_OUTPUT_FN,
+                ) {
+                    let ret = f(vol, pcm_out as *const u8);
+                    if ret < 0 {
+                        result = ret;
+                        break;
+                    }
+                }
+            } else {
+                if let Some(f) = core::ptr::read_volatile(
+                    &raw const AUDIO_SET_CH_VOL_FN,
+                ) {
+                    f(channel, vol, vol);
+                }
+                if let Some(f) = core::ptr::read_volatile(
+                    &raw const AUDIO_OUTPUT_BLOCKING_FN,
+                ) {
+                    let ret = f(channel, vol, pcm_out as *const u8);
+                    if ret < 0 {
+                        result = ret;
+                        break;
+                    }
                 }
             }
         }
@@ -2028,22 +2117,42 @@ unsafe fn play_track_codec(path: &[u8], channel: i32) -> i32 {
 
         let vol = (AUDIO_VOLUME.load(Ordering::Relaxed) as i32 * 0x8000)
             / 255;
+        let use_src = unsafe {
+            core::ptr::read_volatile(&raw const USE_SRC_OUTPUT)
+        };
         unsafe {
-            if let Some(f) =
-                core::ptr::read_volatile(&raw const AUDIO_SET_CH_VOL_FN)
-            {
-                f(channel, vol, vol);
-            }
-            if let Some(f) = core::ptr::read_volatile(
-                &raw const AUDIO_OUTPUT_BLOCKING_FN,
-            ) {
-                let ret = f(channel, vol, pcm_buf as *const u8);
-                if frame_count < 3 {
-                    log_i32(b"[OASIS] audioOut=", ret);
+            if use_src {
+                // SRC output: sceAudioSRCOutputBlocking(volume, buffer)
+                if let Some(f) = core::ptr::read_volatile(
+                    &raw const AUDIO_SRC_OUTPUT_FN,
+                ) {
+                    let ret = f(vol, pcm_buf as *const u8);
+                    if frame_count < 5 {
+                        log_i32(b"[OASIS] srcOut=", ret);
+                    }
+                    if ret < 0 {
+                        result = ret;
+                        break;
+                    }
                 }
-                if ret < 0 {
-                    result = ret;
-                    break;
+            } else {
+                // Regular channel output.
+                if let Some(f) =
+                    core::ptr::read_volatile(&raw const AUDIO_SET_CH_VOL_FN)
+                {
+                    f(channel, vol, vol);
+                }
+                if let Some(f) = core::ptr::read_volatile(
+                    &raw const AUDIO_OUTPUT_BLOCKING_FN,
+                ) {
+                    let ret = f(channel, vol, pcm_buf as *const u8);
+                    if frame_count < 5 {
+                        log_i32(b"[OASIS] audioOut=", ret);
+                    }
+                    if ret < 0 {
+                        result = ret;
+                        break;
+                    }
                 }
             }
         }
