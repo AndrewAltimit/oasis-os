@@ -164,28 +164,31 @@ impl IoHandle {
 
 /// Spawn the background audio and I/O threads.
 ///
-/// Returns handles for audio state and I/O responses.
+/// Returns handles for audio state and I/O responses. The `JoinHandle`s
+/// are leaked intentionally — the worker threads run for the lifetime of
+/// the process, and dropping a `JoinHandle` terminates its thread.
 pub fn spawn_workers() -> (AudioHandle, IoHandle) {
     // Audio thread: high priority (16) for low-latency playback.
-    let audio_result = ThreadBuilder::new(b"oasis_audio\0")
+    if let Ok(handle) = ThreadBuilder::new(b"oasis_audio\0")
         .priority(16)
         .spawn(move || {
             audio_thread_fn();
             0
-        });
-    if let Err(e) = &audio_result {
-        psp::dprintln!("OASIS_OS: Failed to spawn audio thread: {:?}", e);
+        })
+    {
+        // Leak the JoinHandle so the thread isn't killed on drop.
+        core::mem::forget(handle);
     }
 
     // I/O thread: normal priority (32) for file operations.
-    let io_result = ThreadBuilder::new(b"oasis_io\0")
+    if let Ok(handle) = ThreadBuilder::new(b"oasis_io\0")
         .priority(32)
         .spawn(move || {
             io_thread_fn();
             0
-        });
-    if let Err(e) = &io_result {
-        psp::dprintln!("OASIS_OS: Failed to spawn I/O thread: {:?}", e);
+        })
+    {
+        core::mem::forget(handle);
     }
 
     (AudioHandle, IoHandle)
@@ -198,14 +201,9 @@ pub fn spawn_workers() -> (AudioHandle, IoHandle) {
 /// Dedicated audio thread: MP3 playback + SFX mixing.
 fn audio_thread_fn() {
     let mut player = AudioPlayer::new();
-    if !player.init() {
-        psp::dprintln!("OASIS_OS: Audio thread init failed");
-    }
+    player.init();
 
     let mut sfx = SfxEngine::new();
-    if sfx.is_none() {
-        psp::dprintln!("OASIS_OS: SFX engine init failed (non-fatal)");
-    }
 
     loop {
         match AUDIO_QUEUE.pop() {
@@ -257,17 +255,14 @@ fn audio_thread_fn() {
         }
 
         if player.is_playing() && !player.is_paused() {
-            // update() contains the blocking sceAudioOutputBlocking call.
             player.update();
-            // Publish position each frame (lock-free atomic stores).
             AUDIO_POSITION_MS.store(player.position_ms() as u32, Ordering::Relaxed);
             AUDIO_DURATION_MS.store(player.duration_ms() as u32, Ordering::Relaxed);
             if !player.is_playing() {
                 AUDIO_PLAYING.store(false, Ordering::Relaxed);
             }
         } else {
-            // Sleep when idle to avoid spinning.
-            psp::thread::sleep_ms(10);
+            unsafe { psp::sys::sceKernelDelayThread(10_000) };
         }
 
         // Pump SFX mixer (separate hardware channel, short blocking).

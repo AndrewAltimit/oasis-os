@@ -13,6 +13,21 @@ use crate::threading::{AudioCmd, AudioHandle, send_audio_cmd};
 /// Standard MP3 frame size (MPEG1 Layer 3).
 const MP3_FRAME_SAMPLES: i32 = 1152;
 
+/// Load AV codec modules once (idempotent). Called lazily on first play
+/// to avoid conflicts with the PRX overlay at boot time.
+fn load_av_modules_once() {
+    use core::sync::atomic::{AtomicBool, Ordering};
+    static LOADED: AtomicBool = AtomicBool::new(false);
+    if LOADED.swap(true, Ordering::Relaxed) {
+        return; // Already loaded.
+    }
+    unsafe {
+        psp::sys::sceUtilityLoadModule(psp::sys::Module::AvCodec);
+        psp::sys::sceUtilityLoadModule(psp::sys::Module::AvMpegBase);
+        psp::sys::sceUtilityLoadModule(psp::sys::Module::AvMp3);
+    }
+}
+
 /// MP3 playback engine using the PSP's hardware MP3 decoder.
 ///
 /// Uses RAII wrappers from `psp::mp3::Mp3Decoder` and
@@ -76,12 +91,13 @@ impl AudioPlayer {
             return false;
         }
 
+        // Lazily load AV codec modules on first play. This avoids
+        // conflicts with the PRX overlay's sceAudiocodec at boot time.
+        load_av_modules_once();
+
         let decoder = match Mp3Decoder::new(data) {
             Ok(d) => d,
-            Err(e) => {
-                psp::dprintln!("OASIS_OS: Mp3Decoder failed: {:?}", e);
-                return false;
-            },
+            Err(_) => return false,
         };
 
         self.sample_rate = decoder.sample_rate();
@@ -98,23 +114,13 @@ impl AudioPlayer {
 
         let channel = match AudioChannel::reserve(MP3_FRAME_SAMPLES, fmt) {
             Ok(ch) => ch,
-            Err(e) => {
-                psp::dprintln!("OASIS_OS: AudioChannel::reserve failed: {:?}", e,);
-                return false;
-            },
+            Err(_) => return false,
         };
 
         self.decoder = Some(decoder);
         self.channel = Some(channel);
         self.playing = true;
         self.paused = false;
-
-        psp::dprintln!(
-            "OASIS_OS: MP3 loaded - {}Hz, {}kbps, {}ch",
-            self.sample_rate,
-            self.bitrate,
-            self.channels,
-        );
         true
     }
 
