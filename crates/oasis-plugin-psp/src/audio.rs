@@ -1282,7 +1282,7 @@ unsafe fn init_audio_drivers() -> bool {
 
     // Step 2: Wait for the game to load AVCODEC modules during its own
     // init, then piggyback on them.  This avoids sceUtilityLoadModule
-    // conflicts.  Check every 15s for up to 45s (3 attempts) before
+    // conflicts.  Check every 15s for up to 30s (3 attempts) before
     // falling back to loading modules ourselves.  Kept infrequent to
     // minimise stutter from the NID scan + stub extraction.
     {

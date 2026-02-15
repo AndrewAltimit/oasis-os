@@ -44,10 +44,10 @@ fn load_av_modules_once() {
 // ---------------------------------------------------------------------------
 
 /// MPEG version bitrate tables (kbps). Index: bitrate_index (1..14).
-const BITRATES_V1_L3: [u32; 15] =
-    [0, 32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320];
-const BITRATES_V2_L3: [u32; 15] =
-    [0, 8, 16, 24, 32, 40, 48, 56, 64, 80, 96, 112, 128, 144, 160];
+const BITRATES_V1_L3: [u32; 15] = [
+    0, 32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320,
+];
+const BITRATES_V2_L3: [u32; 15] = [0, 8, 16, 24, 32, 40, 48, 56, 64, 80, 96, 112, 128, 144, 160];
 
 /// Sample rates by MPEG version. [version_index][srate_index]
 const SAMPLE_RATES: [[u32; 3]; 4] = [
@@ -82,7 +82,10 @@ fn parse_mp3_header(data: &[u8]) -> Option<Mp3FrameHeader> {
     let srate_idx = (b2 >> 2) & 0x03;
     let channel_mode = (b3 >> 6) & 0x03;
 
-    if version_bits == 1 || layer_bits == 0 || bitrate_idx == 0 || bitrate_idx == 15
+    if version_bits == 1
+        || layer_bits == 0
+        || bitrate_idx == 0
+        || bitrate_idx == 15
         || srate_idx == 3
     {
         return None;
@@ -104,7 +107,11 @@ fn parse_mp3_header(data: &[u8]) -> Option<Mp3FrameHeader> {
     }
     let channels = if channel_mode == 3 { 1 } else { 2 };
 
-    Some(Mp3FrameHeader { sample_rate, bitrate, channels })
+    Some(Mp3FrameHeader {
+        sample_rate,
+        bitrate,
+        channels,
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -200,21 +207,14 @@ impl AudioPlayer {
         // Open file.
         let mut path_bytes: Vec<u8> = path.as_bytes().to_vec();
         path_bytes.push(0); // null-terminate
-        let fd = unsafe {
-            psp::sys::sceIoOpen(
-                path_bytes.as_ptr(),
-                psp::sys::IoOpenFlags::RD_ONLY,
-                0,
-            )
-        };
+        let fd =
+            unsafe { psp::sys::sceIoOpen(path_bytes.as_ptr(), psp::sys::IoOpenFlags::RD_ONLY, 0) };
         if fd < psp::sys::SceUid(0) {
             return false;
         }
 
         // Get file size.
-        let size = unsafe {
-            psp::sys::sceIoLseek(fd, 0, psp::sys::IoWhence::End)
-        } as usize;
+        let size = unsafe { psp::sys::sceIoLseek(fd, 0, psp::sys::IoWhence::End) } as usize;
         unsafe { psp::sys::sceIoLseek(fd, 0, psp::sys::IoWhence::Set) };
         if size == 0 {
             unsafe { psp::sys::sceIoClose(fd) };
@@ -242,10 +242,36 @@ impl AudioPlayer {
         self.buf_pos = 0;
         self.file_pos = self.buf_valid;
 
-        // Skip ID3v2 tag.
+        // Skip ID3v2 tag. If the tag is larger than the read buffer
+        // (common with embedded album art), seek past it in the file
+        // and re-read from the first audio frame.
         let id3_skip = skip_id3v2(&self.read_buf[..self.buf_valid]);
-        if id3_skip > 0 && id3_skip < self.buf_valid {
-            self.buf_pos = id3_skip;
+        if id3_skip > 0 {
+            // Adjust data_size to exclude the tag for duration estimation.
+            self.data_size = self.data_size.saturating_sub(id3_skip as u32);
+            if id3_skip < self.buf_valid {
+                self.buf_pos = id3_skip;
+            } else {
+                // Tag exceeds buffer — seek past it in the file.
+                unsafe {
+                    psp::sys::sceIoLseek(self.fd, id3_skip as i64, psp::sys::IoWhence::Set);
+                }
+                self.file_pos = id3_skip;
+                let re_read = unsafe {
+                    psp::sys::sceIoRead(
+                        self.fd,
+                        self.read_buf.as_mut_ptr() as *mut _,
+                        READ_BUF_SIZE as u32,
+                    )
+                };
+                if re_read <= 0 {
+                    self.close_file();
+                    return false;
+                }
+                self.buf_valid = re_read as usize;
+                self.buf_pos = 0;
+                self.file_pos = id3_skip + self.buf_valid;
+            }
         }
 
         // Parse first frame header for metadata.
@@ -310,9 +336,7 @@ impl AudioPlayer {
         if fd < psp::sys::SceUid(0) {
             return false;
         }
-        let written = unsafe {
-            psp::sys::sceIoWrite(fd, data.as_ptr() as *const _, data.len())
-        };
+        let written = unsafe { psp::sys::sceIoWrite(fd, data.as_ptr() as *const _, data.len()) };
         unsafe { psp::sys::sceIoClose(fd) };
 
         // Free the input data immediately — we don't need it anymore.
@@ -413,10 +437,7 @@ impl AudioPlayer {
         let decoder = self.decoder.as_mut().unwrap();
         let buf_pos = self.buf_pos;
         let buf_valid = self.buf_valid;
-        let result = decoder.decode(
-            &self.read_buf[buf_pos..buf_valid],
-            &mut self.pcm_buf,
-        );
+        let result = decoder.decode(&self.read_buf[buf_pos..buf_valid], &mut self.pcm_buf);
 
         match result {
             Ok(consumed) => {
@@ -477,8 +498,7 @@ impl AudioPlayer {
         if self.sample_rate == 0 {
             return 0;
         }
-        (self.frames_decoded as u64 * MP3_FRAME_SAMPLES as u64 * 1000)
-            / self.sample_rate as u64
+        (self.frames_decoded as u64 * MP3_FRAME_SAMPLES as u64 * 1000) / self.sample_rate as u64
     }
 
     /// Estimated total duration in milliseconds (from bitrate + file size).
