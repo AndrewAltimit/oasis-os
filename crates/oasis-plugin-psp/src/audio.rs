@@ -871,6 +871,275 @@ fn dump_line(fd: psp::sys::SceUid, data: &[u8]) {
 }
 
 // ---------------------------------------------------------------------------
+// Import stub extraction (resolve via game's resolved import stubs)
+// ---------------------------------------------------------------------------
+
+/// Try to resolve sceAudiocodec functions by finding the game's
+/// resolved import stubs. The game imports sceAudiocodec, so its
+/// import stubs contain the real function addresses.
+///
+/// Strategy:
+/// 1. Scan user memory for a cluster of known sceAudiocodec NIDs
+/// 2. Find the SceLibraryStubTable entry referencing the NID table
+/// 3. Read the stubs and decode MIPS instructions for function addrs
+unsafe fn try_codec_stub_extraction() -> bool {
+    crate::debug_log(b"[OASIS] trying codec stub extraction...");
+
+    // Step 1: Find a known codec NID in user memory.
+    let mut nid_addr: u32 = 0;
+    let mut addr: u32 = 0x0880_0000;
+
+    while addr < 0x0A00_0000 - 4 {
+        let val = unsafe {
+            core::ptr::read_volatile(addr as *const u32)
+        };
+        if val == NID_CODEC_DECODE {
+            // Verify: at least 2 other known codec NIDs within 24 bytes.
+            let mut nearby = 0u32;
+            let check_lo = addr.saturating_sub(24);
+            let check_hi = (addr + 24).min(0x0A00_0000 - 4);
+            let mut c = check_lo;
+            while c <= check_hi {
+                let v = unsafe {
+                    core::ptr::read_volatile(c as *const u32)
+                };
+                if v == NID_CODEC_INIT
+                    || v == NID_CODEC_CHECK_NEED_MEM
+                    || v == NID_CODEC_GET_EDRAM
+                    || v == NID_CODEC_RELEASE_EDRAM
+                {
+                    nearby += 1;
+                }
+                c += 4;
+            }
+            if nearby >= 2 {
+                nid_addr = addr;
+                break;
+            }
+        }
+        addr += 4;
+    }
+
+    if nid_addr == 0 {
+        crate::debug_log(
+            b"[OASIS] no codec NID cluster in user mem",
+        );
+        return false;
+    }
+    log_hex(b"[OASIS] codec NID found @", nid_addr);
+
+    // Step 2: Walk backwards to find the NID table start (sorted
+    // ascending).
+    let mut table_start = nid_addr;
+    while table_start > 0x0880_0004 {
+        let prev = unsafe {
+            core::ptr::read_volatile(
+                (table_start - 4) as *const u32,
+            )
+        };
+        let first = unsafe {
+            core::ptr::read_volatile(table_start as *const u32)
+        };
+        if prev < first && prev > 0x0100_0000 {
+            table_start -= 4;
+        } else {
+            break;
+        }
+    }
+
+    // Walk forward to count entries.
+    let mut table_end = table_start;
+    let mut prev_val = 0u32;
+    while table_end < nid_addr + 64 {
+        let val = unsafe {
+            core::ptr::read_volatile(table_end as *const u32)
+        };
+        if val > prev_val || table_end == table_start {
+            prev_val = val;
+            table_end += 4;
+        } else {
+            break;
+        }
+    }
+    let entry_count = (table_end - table_start) / 4;
+
+    log_hex(b"[OASIS] codec NID table @", table_start);
+    log_i32(b"[OASIS] codec NID count=", entry_count as i32);
+
+    if entry_count < 3 || entry_count > 32 {
+        return false;
+    }
+
+    // Step 3: Scan user memory for a pointer to table_start.
+    // This finds the SceLibraryStubTable's nid_table field (+0x0C).
+    let mut stub_table_ptr: u32 = 0;
+    addr = 0x0880_0000;
+    while addr < 0x0A00_0000 - 8 {
+        let val = unsafe {
+            core::ptr::read_volatile(addr as *const u32)
+        };
+        if val == table_start {
+            // Next word should be the stub_table pointer (valid addr).
+            let next = unsafe {
+                core::ptr::read_volatile((addr + 4) as *const u32)
+            };
+            if is_valid_ptr(next) && (next & 3) == 0 {
+                stub_table_ptr = next;
+                log_hex(b"[OASIS] stub entry ref @", addr);
+                log_hex(b"[OASIS] stub table @", stub_table_ptr);
+                break;
+            }
+        }
+        addr += 4;
+    }
+
+    if stub_table_ptr == 0 {
+        crate::debug_log(b"[OASIS] stub table NOT found");
+        return false;
+    }
+
+    // Step 4: Read stubs and extract function addresses.
+    let mut resolved = 0u32;
+    let mut i = 0u32;
+    while i < entry_count {
+        let nid = unsafe {
+            core::ptr::read_volatile(
+                (table_start + i * 4) as *const u32,
+            )
+        };
+        let stub_addr = stub_table_ptr + i * 8;
+        let insn0 = unsafe {
+            core::ptr::read_volatile(stub_addr as *const u32)
+        };
+        let insn1 = unsafe {
+            core::ptr::read_volatile(
+                (stub_addr + 4) as *const u32,
+            )
+        };
+
+        let func_addr = decode_mips_stub(insn0, insn1, stub_addr);
+
+        // Log stub details.
+        {
+            let mut buf = [0u8; 80];
+            let mut p = copy_bytes(&mut buf, 0, b"[OASIS] stub ");
+            p = write_hex32(&mut buf, p, nid);
+            p = copy_bytes(&mut buf, p, b" i0=");
+            p = write_hex32(&mut buf, p, insn0);
+            p = copy_bytes(&mut buf, p, b" i1=");
+            p = write_hex32(&mut buf, p, insn1);
+            p = copy_bytes(&mut buf, p, b" ->");
+            p = write_hex32(&mut buf, p, func_addr);
+            crate::debug_log(&buf[..p]);
+        }
+
+        if func_addr != 0 {
+            unsafe {
+                match nid {
+                    NID_CODEC_CHECK_NEED_MEM => {
+                        core::ptr::write_volatile(
+                            &raw mut CODEC_CHECK_NEED_MEM_FN,
+                            Some(core::mem::transmute(
+                                func_addr as usize,
+                            )),
+                        );
+                        resolved += 1;
+                    }
+                    NID_CODEC_INIT => {
+                        core::ptr::write_volatile(
+                            &raw mut CODEC_INIT_FN,
+                            Some(core::mem::transmute(
+                                func_addr as usize,
+                            )),
+                        );
+                        resolved += 1;
+                    }
+                    NID_CODEC_DECODE => {
+                        core::ptr::write_volatile(
+                            &raw mut CODEC_DECODE_FN,
+                            Some(core::mem::transmute(
+                                func_addr as usize,
+                            )),
+                        );
+                        resolved += 1;
+                    }
+                    NID_CODEC_GET_EDRAM => {
+                        core::ptr::write_volatile(
+                            &raw mut CODEC_GET_EDRAM_FN,
+                            Some(core::mem::transmute(
+                                func_addr as usize,
+                            )),
+                        );
+                        resolved += 1;
+                    }
+                    NID_CODEC_RELEASE_EDRAM => {
+                        core::ptr::write_volatile(
+                            &raw mut CODEC_RELEASE_EDRAM_FN,
+                            Some(core::mem::transmute(
+                                func_addr as usize,
+                            )),
+                        );
+                        resolved += 1;
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        i += 1;
+    }
+
+    log_i32(b"[OASIS] codec stubs resolved: ", resolved as i32);
+    // Need at least Init + Decode.
+    resolved >= 2
+}
+
+/// Decode a MIPS import stub (2 instructions) to extract the target
+/// function address.
+///
+/// Format 1: `j <addr>; nop` (user-to-user module call)
+///   -> target = (insn0 & 0x03FFFFFF) << 2 | (PC+4)[31:28]
+///
+/// Format 2: `jr $ra; syscall N` (user-to-kernel syscall)
+///   -> returns 0 (syscall needs separate handling)
+fn decode_mips_stub(insn0: u32, insn1: u32, stub_addr: u32) -> u32 {
+    let opcode = insn0 >> 26;
+
+    // J instruction (opcode = 0b000010 = 2)
+    if opcode == 2 {
+        let target_low = (insn0 & 0x03FF_FFFF) << 2;
+        let pc_high = (stub_addr + 4) & 0xF000_0000;
+        return pc_high | target_low;
+    }
+
+    // JR $ra (0x03E00008) + syscall (opcode 0, funct 0x0C)
+    if insn0 == 0x03E0_0008 && (insn1 & 0x3F) == 0x0C {
+        // Syscall stub. The syscall number is (insn1 >> 6).
+        // Can't directly extract function address without the
+        // syscall table. Return 0 for now.
+        return 0;
+    }
+
+    // LUI + J pattern (some firmware versions)
+    // lui $t7, hi16  = 0x3C0F_xxxx
+    // j <addr>       = 0x08xx_xxxx
+    if (insn0 >> 16) == 0x3C0F && (insn1 >> 26) == 2 {
+        let target_low = (insn1 & 0x03FF_FFFF) << 2;
+        let pc_high = (stub_addr + 8) & 0xF000_0000;
+        return pc_high | target_low;
+    }
+
+    0
+}
+
+fn log_hex(prefix: &[u8], val: u32) {
+    let mut buf = [0u8; 64];
+    let mut p = copy_bytes(&mut buf, 0, prefix);
+    p = write_hex32(&mut buf, p, val);
+    crate::debug_log(&buf[..p]);
+}
+
+// ---------------------------------------------------------------------------
 // Init
 // ---------------------------------------------------------------------------
 
@@ -1184,6 +1453,19 @@ unsafe fn init_audio_drivers() -> bool {
     // results to ms0:/seplugins/oasis_memdump.txt for analysis.
     crate::debug_log(b"[OASIS] starting NID memory scan...");
     unsafe { nid_memory_scan() };
+
+    // Step 7: Try extracting sceAudiocodec from game's import stubs.
+    // If the game imports sceAudiocodec, its stubs are already
+    // resolved with real function addresses.
+    if unsafe { try_codec_stub_extraction() } {
+        unsafe {
+            core::ptr::write_volatile(&raw mut DECODER_BACKEND, 2);
+        }
+        crate::debug_log(
+            b"[OASIS] sceAudiocodec via stub extraction!",
+        );
+        return true;
+    }
 
     false
 }
