@@ -265,10 +265,13 @@ const PCM_BUF_SIZE: usize = MP3_SAMPLES_PER_FRAME as usize * 4 * 4;
 const READ_BUF_SIZE: usize = 32 * 1024;
 /// sceAudiocodec codec buffer (65 u32 = 260 bytes, must be 64-byte aligned).
 const CODEC_BUF_WORDS: usize = 65;
+/// sceAudiocodec working memory size (CheckNeedMem reports ~15208, round up).
+const CODEC_WORK_SIZE: usize = 16 * 1024;
 
 /// Total user-memory allocation for codec buffers.
-/// Layout: [64-byte pad] [codec: 260] [pcm: 4608] [read: 32768]
-const UMEM_CODEC_SIZE: usize = 64 + (CODEC_BUF_WORDS * 4) + (1152 * 2 * 2) + READ_BUF_SIZE;
+/// Layout: [64-byte pad] [codec: 260] [pcm: 4608] [work: 16384] [read: 32768]
+const UMEM_CODEC_SIZE: usize =
+    64 + (CODEC_BUF_WORDS * 4) + (1152 * 2 * 2) + CODEC_WORK_SIZE + READ_BUF_SIZE;
 
 /// UID of user-memory block, 0 = not allocated.
 static mut UMEM_BLOCK_ID: psp::sys::SceUid = psp::sys::SceUid(0);
@@ -276,6 +279,8 @@ static mut UMEM_BLOCK_ID: psp::sys::SceUid = psp::sys::SceUid(0);
 static mut UMEM_CODEC: *mut u32 = core::ptr::null_mut();
 /// Pointer to PCM buffer in user memory.
 static mut UMEM_PCM: *mut i16 = core::ptr::null_mut();
+/// Pointer to codec working memory (replaces sceAudiocodecGetEDRAM).
+static mut UMEM_WORK: *mut u8 = core::ptr::null_mut();
 /// Pointer to read buffer in user memory.
 static mut UMEM_READ: *mut u8 = core::ptr::null_mut();
 
@@ -309,7 +314,9 @@ unsafe fn alloc_codec_user_mem() -> bool {
         UMEM_CODEC = base.add(codec_off) as *mut u32;
         let pcm_off = codec_off + CODEC_BUF_WORDS * 4;
         UMEM_PCM = base.add(pcm_off) as *mut i16;
-        let read_off = pcm_off + 1152 * 2 * 2;
+        let work_off = pcm_off + 1152 * 2 * 2;
+        UMEM_WORK = base.add(work_off) as *mut u8;
+        let read_off = work_off + CODEC_WORK_SIZE;
         UMEM_READ = base.add(read_off) as *mut u8;
     }
     log_i32(b"[OASIS] user mem @", base as i32);
@@ -1913,7 +1920,6 @@ unsafe fn play_track_codec(path: &[u8], channel: i32) -> i32 {
         }
     }
 
-    let mut edram_allocated = false;
     unsafe {
         if let Some(f) =
             core::ptr::read_volatile(&raw const CODEC_CHECK_NEED_MEM_FN)
@@ -1923,36 +1929,24 @@ unsafe fn play_track_codec(path: &[u8], channel: i32) -> i32 {
         } else {
             crate::debug_log(b"[OASIS] no CheckNeedMem fn");
         }
-        if let Some(f) =
-            core::ptr::read_volatile(&raw const CODEC_GET_EDRAM_FN)
-        {
-            let ret = f(codec, CODEC_TYPE_MP3);
-            log_i32(b"[OASIS] GetEDRAM=", ret);
-            if ret >= 0 {
-                edram_allocated = true;
-            } else {
-                crate::debug_log(b"[OASIS] GetEDRAM failed, no EDRAM");
-                psp::sys::sceIoClose(fd);
-                return -1;
-            }
-        } else {
-            crate::debug_log(b"[OASIS] no GetEDRAM fn");
+        // Instead of sceAudiocodecGetEDRAM (which steals shared eDRAM from
+        // the game's GE/media engine), point codec[5] at our own working
+        // buffer allocated from user RAM.
+        let work = core::ptr::read_volatile(&raw const UMEM_WORK);
+        if work.is_null() {
+            crate::debug_log(b"[OASIS] no work buf");
             psp::sys::sceIoClose(fd);
             return -1;
         }
+        *codec.add(5) = work as u32;
+        log_i32(b"[OASIS] work_buf @", work as i32);
+
         if let Some(f) =
             core::ptr::read_volatile(&raw const CODEC_INIT_FN)
         {
             let ret = f(codec, CODEC_TYPE_MP3);
             log_i32(b"[OASIS] CodecInit=", ret);
             if ret < 0 {
-                if edram_allocated {
-                    if let Some(rel) = core::ptr::read_volatile(
-                        &raw const CODEC_RELEASE_EDRAM_FN,
-                    ) {
-                        rel(codec);
-                    }
-                }
                 psp::sys::sceIoClose(fd);
                 return -1;
             }
@@ -1971,16 +1965,7 @@ unsafe fn play_track_codec(path: &[u8], channel: i32) -> i32 {
         psp::sys::sceIoRead(fd, read_buf as *mut _, READ_BUF_SIZE as u32)
     };
     if initial_read <= 0 {
-        unsafe {
-            if edram_allocated {
-                if let Some(f) = core::ptr::read_volatile(
-                    &raw const CODEC_RELEASE_EDRAM_FN,
-                ) {
-                    f(codec);
-                }
-            }
-            psp::sys::sceIoClose(fd);
-        }
+        unsafe { psp::sys::sceIoClose(fd) };
         return -1;
     }
     buf_valid = initial_read as usize;
@@ -2011,13 +1996,6 @@ unsafe fn play_track_codec(path: &[u8], channel: i32) -> i32 {
         match core::ptr::read_volatile(&raw const CODEC_DECODE_FN) {
             Some(f) => f,
             None => {
-                if edram_allocated {
-                    if let Some(rel) = core::ptr::read_volatile(
-                        &raw const CODEC_RELEASE_EDRAM_FN,
-                    ) {
-                        rel(codec);
-                    }
-                }
                 psp::sys::sceIoClose(fd);
                 return -1;
             }
@@ -2185,16 +2163,7 @@ unsafe fn play_track_codec(path: &[u8], channel: i32) -> i32 {
         frame_count += 1;
     }
 
-    unsafe {
-        if edram_allocated {
-            if let Some(f) = core::ptr::read_volatile(
-                &raw const CODEC_RELEASE_EDRAM_FN,
-            ) {
-                f(codec);
-            }
-        }
-        psp::sys::sceIoClose(fd);
-    }
+    unsafe { psp::sys::sceIoClose(fd) };
     result
 }
 
