@@ -6,8 +6,6 @@
 //! on single-core PSP where a high-priority audio thread could starve the
 //! main thread if both contend on a spinlock).
 
-use std::sync::Arc;
-
 use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use psp::sync::SpscQueue;
 use psp::thread::ThreadBuilder;
@@ -47,7 +45,7 @@ static AUDIO_DURATION_MS: AtomicU32 = AtomicU32::new(0);
 /// Commands for the dedicated audio thread.
 pub enum AudioCmd {
     LoadAndPlay(String),
-    LoadAndPlayData(Arc<Vec<u8>>),
+    LoadAndPlayData(Vec<u8>),
     Pause,
     Resume,
     Stop,
@@ -215,7 +213,7 @@ fn audio_thread_fn() {
                 }
             },
             Some(AudioCmd::LoadAndPlayData(data)) => {
-                if player.load_and_play_data(&data) {
+                if player.load_and_play_owned(data) {
                     publish_audio_state(&player);
                 } else {
                     AUDIO_PLAYING.store(false, Ordering::Relaxed);
