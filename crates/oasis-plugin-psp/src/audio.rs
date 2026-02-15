@@ -941,16 +941,17 @@ unsafe fn try_codec_stub_extraction() -> bool {
 }
 
 /// Find sceAudioChReserve's syscall number from the game's import
-/// stubs. Searches user memory near the codec NID table for the
-/// sceAudio NID cluster, then extracts the syscall number.
+/// stubs. Searches all user memory for the sceAudio NID cluster,
+/// then extracts the syscall number.
 ///
 /// Returns the syscall number, or 0 if not found.
-unsafe fn find_audio_syscall(near_addr: u32) -> u32 {
+unsafe fn find_audio_syscall(_near_addr: u32) -> u32 {
     crate::debug_log(b"[OASIS] searching audio stubs...");
 
-    // Search ±64KB around the codec NID table for sceAudioChReserve NID.
-    let search_lo = near_addr.saturating_sub(0x10000) & !3;
-    let search_hi = (near_addr + 0x10000).min(0x0A00_0000 - 4);
+    // Search all user memory for sceAudioChReserve NID.
+    // Audio and codec imports can be far apart in the game binary.
+    let search_lo: u32 = 0x0880_0000;
+    let search_hi: u32 = 0x0A00_0000 - 4;
 
     let mut audio_nid_addr: u32 = 0;
     let mut addr = search_lo;
@@ -1024,10 +1025,14 @@ unsafe fn find_audio_syscall(near_addr: u32) -> u32 {
     }
     let nid_count = (tbl_end - tbl_start) / 4;
 
-    // Find the stub table by searching for a pointer to tbl_start.
+    // Find the stub table by searching near the NID table for a
+    // pointer to tbl_start. The SceLibraryStubTable is always close
+    // to its NID table (within a few KB in the same ELF section).
     let mut stub_tbl: u32 = 0;
-    addr = search_lo;
-    while addr <= search_hi - 8 {
+    let stb_lo = tbl_start.saturating_sub(0x4000) & !3;
+    let stb_hi = (tbl_start + 0x4000).min(search_hi);
+    addr = stb_lo;
+    while addr <= stb_hi - 8 {
         let val = unsafe {
             core::ptr::read_volatile(addr as *const u32)
         };
