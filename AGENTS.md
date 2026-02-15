@@ -68,10 +68,10 @@ oasis-types     (foundation: Color, Button, InputEvent, backend traits, error ty
 ├── oasis-sdi        (scene display interface: named object registry, z-order)
 ├── oasis-net        (TCP networking, PSK auth, remote terminal, FTP)
 ├── oasis-audio      (audio manager, playlist, MP3 ID3 parsing)
-├── oasis-ui         (15+ widgets: Button, Card, TabBar, ListView, flex layout)
+├── oasis-ui         (20+ widgets: Button, Card, TabBar, ListView, flex layout)
 ├── oasis-wm         (window manager: drag/resize, hit testing, decorations)
 ├── oasis-skin       (TOML skin engine, 8 skins, theme derivation)
-├── oasis-terminal   (80+ commands across 14 modules, shell features)
+├── oasis-terminal   (90+ commands across 17 modules, shell features)
 ├── oasis-browser    (HTML/CSS/Gemini: DOM, CSS cascade, layout engine)
 └── oasis-core       (coordination: apps, dashboard, agent, plugin, script)
     ├── oasis-backend-sdl  (SDL2 desktop/Pi rendering + input + audio)
@@ -100,9 +100,9 @@ The framework is split into 16 workspace crates. Each module below is its own cr
 - **oasis-sdi** -- Scene Display Interface: named objects with position, size, color, texture, text, z-order, gradients, rounded corners, shadows
 - **oasis-skin** -- Data-driven TOML skin system with 8 skins (2 external in `skins/`, 7 built-in; xp exists in both forms). Theme derivation from 9 base colors to ~30 UI element colors.
 - **oasis-browser** -- Embeddable HTML/CSS/Gemini rendering engine: DOM parser, CSS cascade, block/inline/table layout, link navigation, reader mode, bookmarks
-- **oasis-ui** -- 15+ reusable widgets: Button, Card, TabBar, Panel, TextField, ListView, ScrollView, ProgressBar, Toggle, NinePatch, flex layout
+- **oasis-ui** -- 20+ reusable widgets: Button, Card, TabBar, Panel, TextField, ListView, ScrollView, ProgressBar, Toggle, NinePatch, flex layout
 - **oasis-vfs** -- Virtual file system: `MemoryVfs` (in-RAM), `RealVfs` (disk), `GameAssetVfs` (UE5 with overlay writes)
-- **oasis-terminal** -- Command interpreter with 80+ commands across 14 modules (core, text, file, system, dev, fun, security, doc, audio, network, skin, UI, plus agent/plugin/script/transfer/update registered by oasis-core). Shell features: variable expansion, glob expansion, aliases, history, piping
+- **oasis-terminal** -- Command interpreter with 90+ commands across 17 modules (core, text, file, system, dev, fun, security, doc, audio, network, skin, UI, plus agent/plugin/script/transfer/update registered by oasis-core). Shell features: variable expansion, glob expansion, aliases, history, piping
 - **oasis-wm** -- Window manager (window configs, hit testing, drag/resize, minimize/maximize/close)
 - **oasis-net** -- TCP networking with PSK authentication, remote terminal, FTP transfer
 - **oasis-audio** -- Audio manager with playlist, shuffle/repeat modes, MP3 ID3 tag parsing

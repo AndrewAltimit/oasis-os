@@ -67,9 +67,9 @@ Native virtual resolution is 480x272 (PSP native) across all backends.
 - **Scene Graph (SDI)** -- Named object registry with position, size, color, texture, text, z-order, alpha, gradients, rounded corners, shadows
 - **Browser Engine** -- Embedded HTML/CSS/Gemini renderer with DOM parsing, CSS cascade, block/inline/table layout, link navigation, reader mode, bookmarks
 - **Window Manager** -- Movable, resizable, overlapping windows with titlebars, minimize/maximize/close, hit testing, and themed decorations
-- **UI Widget Toolkit** -- 15+ reusable widgets: Button, Card, TabBar, Panel, TextField, ListView, ScrollView, ProgressBar, Toggle, NinePatch, flex layout, and more
+- **UI Widget Toolkit** -- 20+ reusable widgets: Button, Card, TabBar, Panel, TextField, ListView, ScrollView, ProgressBar, Toggle, NinePatch, flex layout, and more
 - **Proportional Bitmap Font** -- Variable-width glyph rendering from ink bounds with per-character advance values (not fixed-width 8x8)
-- **80+ Terminal Commands** -- 14 command modules: core (fs/system), text processing (head, tail, grep, sort, uniq, tr, cut, diff), file utilities (write, tree, du, stat, xxd, checksum), dev tools (base64, json, uuid, seq, expr), fun (cal, fortune, banner, matrix), security (chmod, chown, passwd, audit), documentation (man, tutorial, motd), networking (wifi, ping, http), audio, UI, skin switching, scripting, transfer (FTP), system updates. Shell features include variable expansion, glob expansion, aliases, history (!!/!n), piping, and command chaining
+- **90+ Terminal Commands** -- 17 command modules: core (fs/system), text processing (head, tail, grep, sort, uniq, tr, cut, diff), file utilities (write, tree, du, stat, xxd, checksum), dev tools (base64, json, uuid, seq, expr), fun (cal, fortune, banner, matrix), security (chmod, chown, passwd, audit), documentation (man, tutorial, motd), networking (wifi, ping, http), audio, UI, skin switching, scripting, transfer (FTP), system updates. Shell features include variable expansion, glob expansion, aliases, history (!!/!n), piping, and command chaining
 - **Audio System** -- Playlist management, MP3/WAV playback, ID3 tag parsing, shuffle/repeat modes, volume control
 - **Plugin System** -- Runtime-extensible via `Plugin` trait, VFS-based IPC, manifest-driven discovery
 - **Virtual File System** -- `MemoryVfs` (in-RAM), `RealVfs` (disk), `GameAssetVfs` (UE5 with overlay writes)
@@ -92,10 +92,10 @@ oasis-os/
 |   +-- oasis-sdi/                    # Scene Display Interface: named object registry, z-order, rendering
 |   +-- oasis-net/                    # TCP networking, PSK authentication, remote terminal, FTP transfer
 |   +-- oasis-audio/                  # Audio manager, playlist, shuffle/repeat, MP3 ID3 parsing
-|   +-- oasis-ui/                     # 15+ widgets: Button, Card, TabBar, Panel, TextField, ListView, etc.
+|   +-- oasis-ui/                     # 20+ widgets: Button, Card, TabBar, Panel, TextField, ListView, etc.
 |   +-- oasis-wm/                     # Window manager: drag/resize, hit testing, minimize/maximize/close
 |   +-- oasis-skin/                   # TOML skin engine, 8 skins, theme derivation from 9 base colors
-|   +-- oasis-terminal/              # Command interpreter: 80+ commands across 14 modules, shell features
+|   +-- oasis-terminal/              # Command interpreter: 90+ commands across 17 modules, shell features
 |   +-- oasis-browser/               # HTML/CSS/Gemini browser: DOM, CSS cascade, block/inline/table layout
 |   +-- oasis-core/                   # Coordination layer: apps, dashboard, agent, plugin, script, etc.
 |   +-- oasis-backend-sdl/            # SDL2 rendering and input (desktop + Pi)
@@ -121,10 +121,10 @@ oasis-os/
 | `oasis-sdi` | Scene Display Interface: named object registry with position, size, color, texture, text, z-order, gradients, shadows |
 | `oasis-net` | TCP networking with PSK authentication, remote terminal, FTP transfer |
 | `oasis-audio` | Audio manager with playlist, shuffle/repeat modes, MP3 ID3 tag parsing |
-| `oasis-ui` | 15+ reusable widgets: Button, Card, TabBar, Panel, TextField, ListView, ScrollView, ProgressBar, Toggle, NinePatch, flex layout |
+| `oasis-ui` | 20+ reusable widgets: Button, Card, TabBar, Panel, TextField, ListView, ScrollView, ProgressBar, Toggle, NinePatch, flex layout |
 | `oasis-wm` | Window manager: movable/resizable windows, titlebar buttons, hit testing, themed decorations |
 | `oasis-skin` | Data-driven TOML skin system with 8 skins, theme derivation from 9 base colors to ~30 UI element colors |
-| `oasis-terminal` | Command interpreter with 80+ commands across 14 modules, shell features (variables, globs, aliases, history, piping) |
+| `oasis-terminal` | Command interpreter with 90+ commands across 17 modules, shell features (variables, globs, aliases, history, piping) |
 | `oasis-browser` | Embeddable HTML/CSS/Gemini rendering engine: DOM parser, CSS cascade, block/inline/table layout, reader mode |
 | `oasis-core` | Coordination layer: app runner (dual-panel file manager), dashboard, agent/MCP, plugin, scripting, status/bottom bars |
 | `oasis-backend-sdl` | SDL2 rendering and input backend for desktop and Raspberry Pi |
@@ -163,7 +163,7 @@ RUST_PSP_BUILD_STD=1 cargo +nightly psp --release
 ```bash
 cd crates/oasis-plugin-psp
 RUST_PSP_BUILD_STD=1 cargo +nightly psp --release
-# Output: target/mipsel-sony-psp-std/release/oasis_plugin.prx
+# Output: target/mipsel-sony-psp-std/release/oasis-plugin-psp.prx
 ```
 
 See [PSP Plugin Guide](docs/psp-plugin.md) for installation and usage.
