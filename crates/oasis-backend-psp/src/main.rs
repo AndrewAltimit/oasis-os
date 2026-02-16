@@ -10,6 +10,8 @@
 #![feature(asm_experimental_arch)]
 #![no_main]
 
+use psp::sys::CtrlButtons;
+
 use oasis_backend_psp::{
     AudioCmd, AudioHandle, Button, CURSOR_H, CURSOR_W, Color, FileEntry, InputEvent, IoCmd,
     IoResponse, PspBackend, SCREEN_HEIGHT, SCREEN_WIDTH, SdiBackend, SdiRegistry, SfxId,
@@ -77,10 +79,9 @@ unsafe extern "Rust" fn __getrandom_v03_custom(
 
 // Bar geometry.
 const STATUSBAR_H: u32 = 18;
-const TAB_ROW_H: u32 = 14;
 const BOTTOMBAR_H: u32 = 32;
 const BOTTOMBAR_Y: i32 = (SCREEN_HEIGHT - BOTTOMBAR_H) as i32;
-const CONTENT_TOP: u32 = STATUSBAR_H + TAB_ROW_H;
+const CONTENT_TOP: u32 = STATUSBAR_H;
 const CONTENT_H: u32 = SCREEN_HEIGHT - CONTENT_TOP - BOTTOMBAR_H;
 
 // Two-layer bottom bar row constants.
@@ -91,14 +92,7 @@ const BOTTOM_LOWER_Y: i32 = BOTTOMBAR_Y + BOTTOM_UPPER_H as i32;
 // Font metrics.
 const CHAR_W: i32 = 8;
 
-// Status bar tab layout (4 beveled chrome tabs).
-const TAB_START_X: i32 = 34;
-const TAB_W: i32 = 40;
-const TAB_H: i32 = 12;
-const TAB_GAP: i32 = 3;
-
 // Bottom bar layout.
-const PIPE_GAP: i32 = 5;
 const R_HINT_W: i32 = 28;
 
 // Icon theme (compact to fit 4 rows).
@@ -130,13 +124,9 @@ const SEPARATOR: Color = Color::rgba(180, 220, 180, 80);
 
 // Colors -- status bar.
 const BATTERY_CLR: Color = Color::rgb(120, 255, 120);
-const CATEGORY_CLR: Color = Color::rgb(220, 220, 220);
 // Colors -- bottom bar.
 const URL_CLR: Color = Color::rgb(200, 200, 200);
 const USB_CLR: Color = Color::rgb(140, 140, 140);
-const MEDIA_ACTIVE: Color = Color::WHITE;
-const MEDIA_INACTIVE: Color = Color::rgb(170, 170, 170);
-const PIPE_CLR: Color = Color::rgba(255, 255, 255, 60);
 const R_HINT_CLR: Color = Color::rgba(255, 255, 255, 140);
 // Colors -- visualizer & transport.
 const VIZ_BAR_PEAK: Color = Color::rgba(180, 100, 220, 230);
@@ -243,73 +233,6 @@ static APPS: &[AppEntry] = &[
         color: Color::rgb(50, 120, 200),
     },
 ];
-
-// ---------------------------------------------------------------------------
-// Top tabs (cycled with L trigger)
-// ---------------------------------------------------------------------------
-
-#[derive(Clone, Copy, PartialEq)]
-enum TopTab {
-    Mso,
-    Umd,
-    Mod,
-    Net,
-}
-
-impl TopTab {
-    fn label(self) -> &'static str {
-        match self {
-            Self::Mso => "MSO",
-            Self::Umd => "UMD",
-            Self::Mod => "MOD",
-            Self::Net => "NET",
-        }
-    }
-
-    fn next(self) -> Self {
-        match self {
-            Self::Mso => Self::Umd,
-            Self::Umd => Self::Mod,
-            Self::Mod => Self::Net,
-            Self::Net => Self::Mso,
-        }
-    }
-
-    const ALL: &[TopTab] = &[TopTab::Mso, TopTab::Umd, TopTab::Mod, TopTab::Net];
-}
-
-// ---------------------------------------------------------------------------
-// Media tabs (cycled with R trigger)
-// ---------------------------------------------------------------------------
-
-#[derive(Clone, Copy, PartialEq)]
-enum MediaTab {
-    None,
-    Audio,
-    Video,
-    Image,
-    File,
-}
-
-impl MediaTab {
-    fn next(self) -> Self {
-        match self {
-            Self::None => Self::Audio,
-            Self::Audio => Self::Video,
-            Self::Video => Self::Image,
-            Self::Image => Self::File,
-            Self::File => Self::None,
-        }
-    }
-
-    const LABELS: &[&str] = &["AUDIO", "VIDEO", "IMAGE", "FILE"];
-    const TABS: &[MediaTab] = &[
-        MediaTab::Audio,
-        MediaTab::Video,
-        MediaTab::Image,
-        MediaTab::File,
-    ];
-}
 
 // ---------------------------------------------------------------------------
 // App modes (Classic = full-screen, Desktop = windowed WM)
@@ -504,8 +427,6 @@ fn psp_main() {
 
     let mut selected: usize = 0;
     let page: usize = 0;
-    let mut top_tab = TopTab::Mso;
-    let mut media_tab = MediaTab::None;
     let mut icons_hidden: bool = false;
     let mut viz_frame: u32 = 0;
 
@@ -756,12 +677,25 @@ fn psp_main() {
                         audio.send(AudioCmd::PlaySfx(SfxId::Click));
                     },
                     InputEvent::TriggerPress(Trigger::Left) => {
-                        top_tab = top_tab.next();
-                        audio.send(AudioCmd::PlaySfx(SfxId::Click));
+                        // Both triggers held = close all windows.
+                        if backend.is_button_held(CtrlButtons::RTRIGGER) {
+                            wm.close_all(&mut sdi);
+                        } else {
+                            // Cycle selection left (wrap around).
+                            let count = APPS.len().max(1);
+                            selected = if selected == 0 { count - 1 } else { selected - 1 };
+                            audio.send(AudioCmd::PlaySfx(SfxId::Click));
+                        }
                     },
                     InputEvent::TriggerPress(Trigger::Right) => {
-                        media_tab = media_tab.next();
-                        audio.send(AudioCmd::PlaySfx(SfxId::Click));
+                        // Both triggers held = close all windows.
+                        if backend.is_button_held(CtrlButtons::LTRIGGER) {
+                            wm.close_all(&mut sdi);
+                        } else {
+                            // Cycle selection right (wrap around).
+                            selected = (selected + 1) % APPS.len().max(1);
+                            audio.send(AudioCmd::PlaySfx(SfxId::Click));
+                        }
                     },
                     InputEvent::Quit => return,
                     _ => {},
@@ -843,39 +777,7 @@ fn psp_main() {
                             },
                             "File Manager" => {
                                 classic_view = ClassicView::FileManager;
-                                if top_tab == TopTab::Umd {
-                                    // Try to activate UMD drive.
-                                    // SAFETY: PSP UMD syscalls with valid args.
-                                    unsafe {
-                                        if psp::sys::sceUmdCheckMedium() != 0 {
-                                            let act_ret = psp::sys::sceUmdActivate(
-                                                1,
-                                                b"disc0:\0".as_ptr(),
-                                            );
-                                            let wait_ret =
-                                                psp::sys::sceUmdWaitDriveStatWithTimer(
-                                                    psp::sys::UmdStateFlags::READY,
-                                                    5_000_000,
-                                                );
-                                            if act_ret >= 0 && wait_ret >= 0 {
-                                                fm_path = String::from("disc0:/");
-                                                umd_activated = true;
-                                            } else {
-                                                term_lines.push(
-                                                    "UMD activation failed."
-                                                        .into(),
-                                                );
-                                                fm_path = String::from("ms0:/");
-                                            }
-                                        } else {
-                                            term_lines
-                                                .push("No UMD disc inserted.".into());
-                                            fm_path = String::from("ms0:/");
-                                        }
-                                    }
-                                } else {
-                                    fm_path = String::from("ms0:/");
-                                }
+                                fm_path = String::from("ms0:/");
                                 fm_loaded = false;
                                 fm2_path = fm_path.clone();
                                 fm2_loaded = false;
@@ -902,17 +804,18 @@ fn psp_main() {
                     icons_hidden = !icons_hidden;
                 },
 
-                // Trigger cycling.
+                // Trigger cycling through app icons (with wraparound).
                 InputEvent::TriggerPress(Trigger::Left)
                     if classic_view == ClassicView::Dashboard =>
                 {
-                    top_tab = top_tab.next();
+                    let count = APPS.len().max(1);
+                    selected = if selected == 0 { count - 1 } else { selected - 1 };
                     audio.send(AudioCmd::PlaySfx(SfxId::Click));
                 },
                 InputEvent::TriggerPress(Trigger::Right)
                     if classic_view == ClassicView::Dashboard =>
                 {
-                    media_tab = media_tab.next();
+                    selected = (selected + 1) % APPS.len().max(1);
                     audio.send(AudioCmd::PlaySfx(SfxId::Click));
                 },
 
@@ -1456,10 +1359,9 @@ fn psp_main() {
                             &mut backend,
                             &[
                                 ("X", "Open"),
-                                ("O", "Hide"),
+                                ("L/R", "Cycle"),
                                 ("Start", "Term"),
                                 ("Sel", "Desktop"),
-                                ("L/R", "Tabs"),
                             ],
                         );
                         backend.force_bitmap_font = false;
@@ -1638,7 +1540,7 @@ fn psp_main() {
         // Status bar + bottom bar (always visible, drawn on top).
         // Force bitmap font: all bar layouts use `len() * 8` fixed-width metrics.
         backend.force_bitmap_font = true;
-        draw_status_bar(&mut backend, top_tab, &status, &sysinfo);
+        draw_status_bar(&mut backend, &status, &sysinfo);
 
         let url_text = match (app_mode, classic_view) {
             (AppMode::Desktop, _) => String::from("SYS://DESKTOP"),
@@ -1678,7 +1580,6 @@ fn psp_main() {
         };
         draw_bottom_bar(
             &mut backend,
-            media_tab,
             &audio,
             viz_frame,
             &status,
@@ -1732,7 +1633,7 @@ fn open_app_window(wm: &mut WindowManager, sdi: &mut SdiRegistry, app_id: &str, 
         id: app_id.to_string(),
         title: title.to_string(),
         x: None,
-        y: Some(STATUSBAR_H as i32 + TAB_ROW_H as i32 + 2),
+        y: Some(STATUSBAR_H as i32 + 2),
         width: 300,
         height: 180,
         window_type: WindowType::AppWindow,
@@ -2382,7 +2283,6 @@ fn draw_icon_graphic(backend: &mut PspBackend, app_id: &str, gx: i32, gy: i32, g
 
 fn draw_status_bar(
     backend: &mut PspBackend,
-    active_tab: TopTab,
     status: &StatusBarInfo,
     sysinfo: &SystemInfo,
 ) {
@@ -2459,36 +2359,6 @@ fn draw_status_bar(
     let date_w = date_label.len() as i32 * CHAR_W;
     let date_x = SCREEN_WIDTH as i32 - date_w - 6;
     backend.draw_text_inner(&date_label, date_x, 5, 8, Color::WHITE);
-
-    // -- Tab row --
-    backend.draw_text_inner("OSS", 6, STATUSBAR_H as i32 + 3, 8, CATEGORY_CLR);
-
-    let tab_y = STATUSBAR_H as i32;
-    for (i, tab) in TopTab::ALL.iter().enumerate() {
-        let x = TAB_START_X + (i as i32) * (TAB_W + TAB_GAP);
-
-        if *tab == active_tab {
-            // Beveled 3D chrome bezel for active tab.
-            draw_chrome_bezel(backend, x, tab_y, TAB_W as u32, TAB_H as u32);
-        } else {
-            // Subtle border-only for inactive tabs.
-            let border = Color::rgba(200, 255, 200, 60);
-            backend.fill_rect_inner(x, tab_y, TAB_W as u32, 1, border);
-            backend.fill_rect_inner(x, tab_y + TAB_H - 1, TAB_W as u32, 1, border);
-            backend.fill_rect_inner(x, tab_y, 1, TAB_H as u32, border);
-            backend.fill_rect_inner(x + TAB_W - 1, tab_y, 1, TAB_H as u32, border);
-        }
-
-        let label = tab.label();
-        let text_w = label.len() as i32 * CHAR_W;
-        let tx = x + (TAB_W - text_w) / 2;
-        let text_color = if *tab == active_tab {
-            Color::WHITE
-        } else {
-            Color::rgb(160, 160, 160)
-        };
-        backend.draw_text_inner(label, tx.max(x + 2), tab_y + 2, 8, text_color);
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -2497,7 +2367,6 @@ fn draw_status_bar(
 
 fn draw_bottom_bar(
     backend: &mut PspBackend,
-    active_media: MediaTab,
     audio: &AudioHandle,
     viz_frame: u32,
     status: &StatusBarInfo,
@@ -2515,7 +2384,7 @@ fn draw_bottom_bar(
         Color::rgba(255, 255, 255, 15),
     );
 
-    // -- Upper row (y=BOTTOM_UPPER_Y, 16px): URL bezel | Visualizer | Media tabs bezel --
+    // -- Upper row (y=BOTTOM_UPPER_Y, 16px): URL bezel | Visualizer --
 
     // URL chrome bezel (left, 140px).
     let url_bx = 2i32;
@@ -2534,37 +2403,6 @@ fn draw_bottom_bar(
 
     // Visualizer (center of upper row).
     draw_visualizer(backend, audio, viz_frame);
-
-    // Media tabs chrome bezel (right).
-    let labels_w: i32 = MediaTab::LABELS
-        .iter()
-        .map(|l| l.len() as i32 * CHAR_W)
-        .sum();
-    let pipes_w = (MediaTab::LABELS.len() as i32 - 1) * (PIPE_GAP * 2 + CHAR_W);
-    let total_w = labels_w + pipes_w;
-    let tabs_x = SCREEN_WIDTH as i32 - total_w - 8;
-
-    let tab_bx = tabs_x - 4;
-    let tab_bw = (total_w + 10) as u32;
-    draw_chrome_bezel(backend, tab_bx, ubz_y, tab_bw, ubz_h);
-
-    let mut cx = tabs_x;
-    for (i, label) in MediaTab::LABELS.iter().enumerate() {
-        let tab = MediaTab::TABS[i];
-        let color = if tab == active_media {
-            MEDIA_ACTIVE
-        } else {
-            MEDIA_INACTIVE
-        };
-        backend.draw_text_inner(label, cx, BOTTOM_UPPER_Y + 4, 8, color);
-        cx += label.len() as i32 * CHAR_W;
-
-        if i < MediaTab::LABELS.len() - 1 {
-            cx += PIPE_GAP;
-            backend.draw_text_inner("|", cx, BOTTOM_UPPER_Y + 4, 8, PIPE_CLR);
-            cx += CHAR_W + PIPE_GAP;
-        }
-    }
 
     // -- Lower row (y=BOTTOM_LOWER_Y, 16px) --
     backend.fill_rect_inner(

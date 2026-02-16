@@ -386,6 +386,11 @@ impl PspBackend {
         (self.cursor_x, self.cursor_y)
     }
 
+    /// Check if a controller button is currently held down.
+    pub fn is_button_held(&self, button: psp::sys::CtrlButtons) -> bool {
+        self.controller.is_held(button)
+    }
+
     /// Query volatile memory cache status.
     ///
     /// Returns `(total_bytes, remaining_bytes)` if volatile memory was

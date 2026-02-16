@@ -177,6 +177,19 @@ impl WindowManager {
     }
 
     /// Close a window, destroying all its SDI objects.
+    /// Close all open windows.
+    pub fn close_all(&mut self, sdi: &mut SdiRegistry) {
+        let windows = std::mem::take(&mut self.windows);
+        for window in &windows {
+            for suffix in window.sdi_suffixes() {
+                let name = window.sdi_name(suffix);
+                let _ = sdi.destroy(&name);
+            }
+        }
+        self.drag = None;
+        self.active_window = None;
+    }
+
     pub fn close_window(&mut self, id: &str, sdi: &mut SdiRegistry) -> Result<()> {
         let idx = self
             .windows
