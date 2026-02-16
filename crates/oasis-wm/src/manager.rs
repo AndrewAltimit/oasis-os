@@ -176,7 +176,6 @@ impl WindowManager {
         Ok(id)
     }
 
-    /// Close a window, destroying all its SDI objects.
     /// Cycle focus to the next or previous window in z-order.
     /// `forward=true` brings the bottom-most visible window to the top.
     /// `forward=false` sends the top-most visible window to the bottom.
@@ -236,6 +235,7 @@ impl WindowManager {
         self.active_window = None;
     }
 
+    /// Close a window, destroying all its SDI objects.
     pub fn close_window(&mut self, id: &str, sdi: &mut SdiRegistry) -> Result<()> {
         let idx = self
             .windows
