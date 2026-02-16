@@ -681,9 +681,8 @@ fn psp_main() {
                         if backend.is_button_held(CtrlButtons::RTRIGGER) {
                             wm.close_all(&mut sdi);
                         } else {
-                            // Cycle selection left (wrap around).
-                            let count = APPS.len().max(1);
-                            selected = if selected == 0 { count - 1 } else { selected - 1 };
+                            // Cycle window focus backward.
+                            wm.cycle_focus(true, &mut sdi);
                             audio.send(AudioCmd::PlaySfx(SfxId::Click));
                         }
                     },
@@ -692,8 +691,8 @@ fn psp_main() {
                         if backend.is_button_held(CtrlButtons::LTRIGGER) {
                             wm.close_all(&mut sdi);
                         } else {
-                            // Cycle selection right (wrap around).
-                            selected = (selected + 1) % APPS.len().max(1);
+                            // Cycle window focus forward.
+                            wm.cycle_focus(false, &mut sdi);
                             audio.send(AudioCmd::PlaySfx(SfxId::Click));
                         }
                     },
@@ -804,18 +803,17 @@ fn psp_main() {
                     icons_hidden = !icons_hidden;
                 },
 
-                // Trigger cycling through app icons (with wraparound).
+                // Trigger cycling through open windows (z-order).
                 InputEvent::TriggerPress(Trigger::Left)
                     if classic_view == ClassicView::Dashboard =>
                 {
-                    let count = APPS.len().max(1);
-                    selected = if selected == 0 { count - 1 } else { selected - 1 };
+                    wm.cycle_focus(true, &mut sdi);
                     audio.send(AudioCmd::PlaySfx(SfxId::Click));
                 },
                 InputEvent::TriggerPress(Trigger::Right)
                     if classic_view == ClassicView::Dashboard =>
                 {
-                    selected = (selected + 1) % APPS.len().max(1);
+                    wm.cycle_focus(false, &mut sdi);
                     audio.send(AudioCmd::PlaySfx(SfxId::Click));
                 },
 
@@ -1359,7 +1357,7 @@ fn psp_main() {
                             &mut backend,
                             &[
                                 ("X", "Open"),
-                                ("L/R", "Cycle"),
+                                ("L/R", "Window"),
                                 ("Start", "Term"),
                                 ("Sel", "Desktop"),
                             ],

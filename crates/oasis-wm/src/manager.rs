@@ -177,6 +177,41 @@ impl WindowManager {
     }
 
     /// Close a window, destroying all its SDI objects.
+    /// Cycle focus to the next or previous window in z-order.
+    /// `forward=true` moves focus to the window below the current top (like
+    /// Alt-Tab), `forward=false` moves in the reverse direction. Skips
+    /// minimized windows. Returns the newly focused window id, if any.
+    pub fn cycle_focus(&mut self, forward: bool, sdi: &mut SdiRegistry) -> Option<String> {
+        let visible: Vec<usize> = self
+            .windows
+            .iter()
+            .enumerate()
+            .filter(|(_, w)| w.state != WindowState::Minimized)
+            .map(|(i, _)| i)
+            .collect();
+        if visible.len() < 2 {
+            return self.active_window.clone();
+        }
+        // Current active is the last visible in z-order.
+        let active_idx = self
+            .active_window
+            .as_ref()
+            .and_then(|id| visible.iter().position(|&i| self.windows[i].id == *id));
+        let next = match active_idx {
+            Some(pos) => {
+                if forward {
+                    visible[(pos + visible.len() - 1) % visible.len()]
+                } else {
+                    visible[(pos + 1) % visible.len()]
+                }
+            },
+            None => *visible.last().unwrap(),
+        };
+        let id = self.windows[next].id.clone();
+        self.focus_window_internal(&id, sdi);
+        Some(id)
+    }
+
     /// Close all open windows.
     pub fn close_all(&mut self, sdi: &mut SdiRegistry) {
         let windows = std::mem::take(&mut self.windows);
