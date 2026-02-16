@@ -176,6 +176,65 @@ impl WindowManager {
         Ok(id)
     }
 
+    /// Cycle focus to the next or previous window in z-order.
+    /// `forward=true` brings the bottom-most visible window to the top.
+    /// `forward=false` sends the top-most visible window to the bottom.
+    /// Skips minimized windows. Returns the newly focused window id, if any.
+    pub fn cycle_focus(&mut self, forward: bool, sdi: &mut SdiRegistry) -> Option<String> {
+        let visible_count = self
+            .windows
+            .iter()
+            .filter(|w| w.state != WindowState::Minimized)
+            .count();
+        if visible_count < 2 {
+            return self.active_window.clone();
+        }
+        if forward {
+            // Bring the bottom-most visible window to the top.
+            let idx = self
+                .windows
+                .iter()
+                .position(|w| w.state != WindowState::Minimized)?;
+            let id = self.windows[idx].id.clone();
+            self.focus_window_internal(&id, sdi);
+            Some(id)
+        } else {
+            // Send top-most visible to bottom, then focus the new top.
+            let top_idx = self
+                .windows
+                .iter()
+                .rposition(|w| w.state != WindowState::Minimized)?;
+            let window = self.windows.remove(top_idx);
+            let insert_pos = self
+                .windows
+                .iter()
+                .position(|w| w.state != WindowState::Minimized)
+                .unwrap_or(0);
+            self.windows.insert(insert_pos, window);
+            // Focus the new top-most visible window.
+            let new_top = self
+                .windows
+                .iter()
+                .rposition(|w| w.state != WindowState::Minimized)?;
+            let id = self.windows[new_top].id.clone();
+            self.focus_window_internal(&id, sdi);
+            Some(id)
+        }
+    }
+
+    /// Close all open windows.
+    pub fn close_all(&mut self, sdi: &mut SdiRegistry) {
+        let windows = std::mem::take(&mut self.windows);
+        for window in &windows {
+            for suffix in window.sdi_suffixes() {
+                let name = window.sdi_name(suffix);
+                let _ = sdi.destroy(&name);
+            }
+        }
+        self.drag = None;
+        self.active_window = None;
+    }
+
     /// Close a window, destroying all its SDI objects.
     pub fn close_window(&mut self, id: &str, sdi: &mut SdiRegistry) -> Result<()> {
         let idx = self

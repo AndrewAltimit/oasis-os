@@ -321,28 +321,74 @@ impl PspBackend {
         }
     }
 
-    /// Re-open the GU display list after a utility dialog closed it.
+    /// Restore the full GU rendering state after a utility dialog.
     ///
-    /// SDK utility dialogs (`psp::osk`, `psp::dialog`) close the caller's
-    /// open GU list to render their own UI. Call this after any dialog
-    /// returns to restore the GU state for the render phase.
-    ///
-    /// Harmless when no dialog was shown -- `sceGuStart` on an
-    /// already-open list just restarts it from scratch.
+    /// PSP utility dialogs (`psp::osk`, `psp::dialog`) run their own GU
+    /// frames with different blend, texture, scissor, viewport, and matrix
+    /// settings. They do **not** restore the caller's GE state on exit.
+    /// This method re-opens the display list AND re-applies every GU state
+    /// that `init()` configures, so subsequent rendering works correctly.
     pub fn reinit_gu_frame(&self) {
-        // SAFETY: Restores the GU display list state after a dialog.
-        // DISPLAY_LIST is exclusively accessed from the main loop.
+        // SAFETY: Restores the GU display list and GE rendering state
+        // after a utility dialog. DISPLAY_LIST is exclusively accessed
+        // from the main loop. All sceGu/sceGum calls match init().
         unsafe {
             sys::sceGuStart(
                 GuContextType::Direct,
                 &raw mut DISPLAY_LIST as *mut c_void,
             );
+
+            // Viewport and coordinate setup (matches init).
+            sys::sceGuOffset(2048 - (SCREEN_WIDTH / 2), 2048 - (SCREEN_HEIGHT / 2));
+            sys::sceGuViewport(2048, 2048, SCREEN_WIDTH as i32, SCREEN_HEIGHT as i32);
+
+            // Scissor (full screen).
+            sys::sceGuScissor(0, 0, SCREEN_WIDTH as i32, SCREEN_HEIGHT as i32);
+            sys::sceGuEnable(GuState::ScissorTest);
+
+            // Alpha blending.
+            sys::sceGuEnable(GuState::Blend);
+            sys::sceGuBlendFunc(
+                BlendOp::Add,
+                BlendFactor::SrcAlpha,
+                BlendFactor::OneMinusSrcAlpha,
+                0,
+                0,
+            );
+
+            // Texture state.
+            sys::sceGuEnable(GuState::Texture2D);
+            sys::sceGuTexFunc(TextureEffect::Modulate, TextureColorComponent::Rgba);
+            sys::sceGuTexFilter(TextureFilter::Nearest, TextureFilter::Nearest);
+
+            // Projection: orthographic 2D.
+            sys::sceGumMatrixMode(MatrixMode::Projection);
+            sys::sceGumLoadIdentity();
+            sys::sceGumOrtho(
+                0.0,
+                SCREEN_WIDTH as f32,
+                SCREEN_HEIGHT as f32,
+                0.0,
+                -1.0,
+                1.0,
+            );
+
+            // View and model: identity.
+            sys::sceGumMatrixMode(MatrixMode::View);
+            sys::sceGumLoadIdentity();
+            sys::sceGumMatrixMode(MatrixMode::Model);
+            sys::sceGumLoadIdentity();
         }
     }
 
     /// Current cursor position (for rendering the cursor sprite).
     pub fn cursor_pos(&self) -> (i32, i32) {
         (self.cursor_x, self.cursor_y)
+    }
+
+    /// Check if a controller button is currently held down.
+    pub fn is_button_held(&self, button: psp::sys::CtrlButtons) -> bool {
+        self.controller.is_held(button)
     }
 
     /// Query volatile memory cache status.
