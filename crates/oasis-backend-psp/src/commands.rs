@@ -92,7 +92,7 @@ pub fn execute_command(cmd: &str, config: &mut psp::config::Config) -> CommandRe
             String::from("  clear      - Clear terminal"),
             String::new(),
             String::from("[Square] Open keyboard  [X] Execute"),
-            String::from("[Up] help  [Down] status"),
+            String::from("[Up/Down] Scroll history"),
         ],
         "status" => {
             let status = StatusBarInfo::poll();

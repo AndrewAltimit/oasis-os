@@ -523,10 +523,13 @@ fn psp_main() {
         } else {
             String::from("Texture cache: main heap only (PSP-1000)")
         },
-        String::from("Type 'help' for commands. Start=terminal, Select=desktop."),
+        String::from("Type 'help' for commands. []=OSK, Up/Down=scroll."),
         String::new(),
     ];
     let mut term_input = String::new();
+    // Scroll offset: 0 means "show latest lines" (auto-scroll).
+    // Positive values scroll back into history.
+    let mut term_scroll: usize = 0;
 
     // Try to restore previous terminal history from save data (silent).
     if let Ok(saved) = commands::load_terminal_history() {
@@ -1033,6 +1036,7 @@ fn psp_main() {
                         term_lines.push(line);
                     }
                     term_input.clear();
+                    term_scroll = 0; // Auto-scroll to bottom on new output.
                     while term_lines.len() > 200 {
                         term_lines.remove(0);
                     }
@@ -1055,14 +1059,18 @@ fn psp_main() {
                     backend.reinit_gu_frame();
                 },
                 InputEvent::ButtonPress(Button::Up) if classic_view == ClassicView::Terminal => {
-                    term_lines.push(String::from("> help"));
-                    let r = commands::execute_command("help", &mut config);
-                    term_lines.extend(r.lines);
+                    // Scroll up through terminal history.
+                    let max_scroll = term_lines.len().saturating_sub(MAX_OUTPUT_LINES);
+                    if term_scroll < max_scroll {
+                        term_scroll += 3;
+                        if term_scroll > max_scroll {
+                            term_scroll = max_scroll;
+                        }
+                    }
                 },
                 InputEvent::ButtonPress(Button::Down) if classic_view == ClassicView::Terminal => {
-                    term_lines.push(String::from("> status"));
-                    let r = commands::execute_command("status", &mut config);
-                    term_lines.extend(r.lines);
+                    // Scroll down (towards latest output).
+                    term_scroll = term_scroll.saturating_sub(3);
                 },
 
                 // -- File manager input (dual-panel) --
@@ -1458,14 +1466,14 @@ fn psp_main() {
                     },
                     ClassicView::Terminal => {
                         backend.force_bitmap_font = true;
-                        draw_terminal(&mut backend, &term_lines, &term_input);
+                        draw_terminal(&mut backend, &term_lines, &term_input, term_scroll);
                         draw_button_hints(
                             &mut backend,
                             &[
                                 ("X", "Run"),
                                 ("[]", "OSK"),
+                                ("Up/Dn", "Scroll"),
                                 ("Start", "Back"),
-                                ("Up", "Help"),
                             ],
                         );
                         backend.force_bitmap_font = false;
@@ -2780,21 +2788,36 @@ fn draw_view_header(backend: &mut PspBackend, title: &str, title_clr: Color, pat
 // Terminal rendering (classic full-screen)
 // ---------------------------------------------------------------------------
 
-fn draw_terminal(backend: &mut PspBackend, lines: &[String], input: &str) {
+fn draw_terminal(
+    backend: &mut PspBackend,
+    lines: &[String],
+    input: &str,
+    scroll_back: usize,
+) {
     let bg = Color::rgba(0, 0, 0, 180);
     backend.fill_rect_inner(0, CONTENT_TOP as i32, SCREEN_WIDTH, CONTENT_H, bg);
 
-    let visible_start = if lines.len() > MAX_OUTPUT_LINES {
-        lines.len() - MAX_OUTPUT_LINES
-    } else {
-        0
-    };
-    for (i, line) in lines[visible_start..].iter().enumerate() {
+    // Compute visible window: scroll_back=0 means show the latest lines.
+    let end = lines.len().saturating_sub(scroll_back);
+    let start = end.saturating_sub(MAX_OUTPUT_LINES);
+    for (i, line) in lines[start..end].iter().enumerate() {
         let y = CONTENT_TOP as i32 + 4 + i as i32 * 9;
         if y > TERM_INPUT_Y - 12 {
             break;
         }
         backend.draw_text_inner(line, 4, y, 8, Color::rgb(0, 255, 0));
+    }
+
+    // Scroll indicator when not at bottom.
+    if scroll_back > 0 {
+        let indicator = format!("-- scroll: +{} --", scroll_back);
+        backend.draw_text_inner(
+            &indicator,
+            SCREEN_WIDTH as i32 - indicator.len() as i32 * 8 - 4,
+            TERM_INPUT_Y - 10,
+            8,
+            Color::rgb(180, 180, 0),
+        );
     }
 
     let prompt = format!("> {}_", input);
