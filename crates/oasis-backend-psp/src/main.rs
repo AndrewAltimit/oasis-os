@@ -681,8 +681,8 @@ fn psp_main() {
                         if backend.is_button_held(CtrlButtons::RTRIGGER) {
                             wm.close_all(&mut sdi);
                         } else {
-                            // Cycle window focus backward.
-                            wm.cycle_focus(true, &mut sdi);
+                            // Cycle window focus backward (send top to bottom).
+                            wm.cycle_focus(false, &mut sdi);
                             audio.send(AudioCmd::PlaySfx(SfxId::Click));
                         }
                     },
@@ -691,8 +691,8 @@ fn psp_main() {
                         if backend.is_button_held(CtrlButtons::LTRIGGER) {
                             wm.close_all(&mut sdi);
                         } else {
-                            // Cycle window focus forward.
-                            wm.cycle_focus(false, &mut sdi);
+                            // Cycle window focus forward (bring bottom to top).
+                            wm.cycle_focus(true, &mut sdi);
                             audio.send(AudioCmd::PlaySfx(SfxId::Click));
                         }
                     },
@@ -807,13 +807,13 @@ fn psp_main() {
                 InputEvent::TriggerPress(Trigger::Left)
                     if classic_view == ClassicView::Dashboard =>
                 {
-                    wm.cycle_focus(true, &mut sdi);
+                    wm.cycle_focus(false, &mut sdi);
                     audio.send(AudioCmd::PlaySfx(SfxId::Click));
                 },
                 InputEvent::TriggerPress(Trigger::Right)
                     if classic_view == ClassicView::Dashboard =>
                 {
-                    wm.cycle_focus(false, &mut sdi);
+                    wm.cycle_focus(true, &mut sdi);
                     audio.send(AudioCmd::PlaySfx(SfxId::Click));
                 },
 
@@ -2337,12 +2337,6 @@ fn draw_status_bar(
     backend.fill_rect_inner(mhz_x, 7, 5, 5, Color::WHITE);
     let mhz_label = format!("{} MHZ", sysinfo.cpu_mhz);
     backend.draw_text_inner(&mhz_label, mhz_x + 8, 5, 8, Color::WHITE);
-
-    // Version string (centered-ish).
-    let ver_label = "Version 0.1 Public";
-    let ver_w = ver_label.len() as i32 * CHAR_W;
-    let ver_x = (SCREEN_WIDTH as i32 - ver_w) / 2;
-    backend.draw_text_inner(ver_label, ver_x, 5, 8, Color::WHITE);
 
     // -- Right side: time + day-of-week + full date --
     let date_label = format!(
