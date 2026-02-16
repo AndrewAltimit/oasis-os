@@ -1,27 +1,65 @@
 //! Terminal command interpreter and utility commands.
 //!
 //! Extracted from main.rs to reduce monolithic file size. Contains the
-//! `execute_command` dispatcher, save/load helpers, benchmarks, and
-//! Media Engine test.
+//! `execute_command` dispatcher, save/load helpers, benchmarks, selftest
+//! harness, and Media Engine test.
 
 use oasis_backend_psp::{SCREEN_HEIGHT, SCREEN_WIDTH, StatusBarInfo};
 
 use crate::CONFIG_PATH;
 
 // ---------------------------------------------------------------------------
+// Command result
+// ---------------------------------------------------------------------------
+
+/// Result of executing a terminal command.
+///
+/// `used_dialog` is `true` when the command invoked a PSP utility dialog
+/// (e.g. `confirm_dialog`, `error_dialog`) which closes the GU display
+/// list. The caller must call `reinit_gu_frame()` only when this flag is
+/// set -- calling it unconditionally freezes real PSP hardware because
+/// `sceGuStart` is issued on an already-open display list.
+pub struct CommandResult {
+    pub lines: Vec<String>,
+    pub used_dialog: bool,
+}
+
+impl CommandResult {
+    /// Create a result for a pure-text command (no dialog shown).
+    pub fn text(lines: Vec<String>) -> Self {
+        Self { lines, used_dialog: false }
+    }
+
+    /// Create a result for a command that showed a GU dialog.
+    pub fn dialog(lines: Vec<String>) -> Self {
+        Self { lines, used_dialog: true }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Selftest sentinel
+// ---------------------------------------------------------------------------
+
+/// Sentinel file: when present at boot, triggers the self-test suite.
+pub const SELFTEST_SENTINEL: &str = "ms0:/SELFTEST";
+
+/// Log output path for the self-test results.
+const SELFTEST_LOG: &str = "ms0:/PSP/GAME/OASISOS/selftest.log";
+
+// ---------------------------------------------------------------------------
 // Command interpreter
 // ---------------------------------------------------------------------------
 
-/// Execute a terminal command and return output lines.
+/// Execute a terminal command and return a [`CommandResult`].
 ///
 /// Commands that need access to main-loop state (save, load, usb, sfx)
 /// return placeholder text and are handled by the caller.
-pub fn execute_command(cmd: &str, config: &mut psp::config::Config) -> Vec<String> {
+pub fn execute_command(cmd: &str, config: &mut psp::config::Config) -> CommandResult {
     let trimmed = cmd.trim();
     if trimmed.is_empty() {
-        return vec![];
+        return CommandResult::text(vec![]);
     }
-    match trimmed {
+    let lines = match trimmed {
         "help" => vec![
             String::from("Available commands:"),
             String::from("  help       - Show this message"),
@@ -50,6 +88,7 @@ pub fn execute_command(cmd: &str, config: &mut psp::config::Config) -> Vec<Strin
             String::from("  plugin install - Install overlay PRX"),
             String::from("  plugin remove  - Remove overlay PRX"),
             String::from("  plugin status  - Plugin load status"),
+            String::from("  selftest   - Run built-in test suite"),
             String::from("  clear      - Clear terminal"),
             String::new(),
             String::from("[Square] Open keyboard  [X] Execute"),
@@ -149,7 +188,12 @@ pub fn execute_command(cmd: &str, config: &mut psp::config::Config) -> Vec<Strin
         },
         _ if trimmed.starts_with("cat ") => cmd_cat(trimmed),
         _ if trimmed.starts_with("mkdir ") => cmd_mkdir(trimmed),
-        _ if trimmed.starts_with("rm ") => cmd_rm(trimmed),
+        _ if trimmed.starts_with("rm ") => {
+            return CommandResult::dialog(cmd_rm(trimmed));
+        },
+        "selftest" => {
+            return CommandResult::text(run_selftest(config));
+        },
         "date" => cmd_date(),
         "mem" => cmd_mem(),
         _ if trimmed.starts_with("config ") => cmd_config(trimmed, config),
@@ -174,7 +218,8 @@ pub fn execute_command(cmd: &str, config: &mut psp::config::Config) -> Vec<Strin
         },
         "clear" => vec![],
         _ => vec![format!("Unknown command: {}", trimmed)],
-    }
+    };
+    CommandResult::text(lines)
 }
 
 fn set_clock_cmd(config: &mut psp::config::Config, cpu: i32, bus: i32, label: &str) -> Vec<String> {
@@ -395,6 +440,168 @@ fn cmd_me_test() -> Vec<String> {
         ],
         Err(e) => vec![format!("ME test failed: {}", e)],
     }
+}
+
+// ---------------------------------------------------------------------------
+// Self-test harness
+// ---------------------------------------------------------------------------
+
+/// Run the built-in self-test suite, writing results to `selftest.log`.
+///
+/// Each test produces a `[PASS]` or `[FAIL]` line with timing info.
+/// The log ends with `EXIT_CODE: 0` (all pass) or `EXIT_CODE: 1`.
+pub fn run_selftest(config: &mut psp::config::Config) -> Vec<String> {
+    let mut log = Vec::new();
+    let mut pass = 0u32;
+    let mut fail = 0u32;
+    let suite_start = psp::time::Instant::now();
+
+    log.push(String::from("=== OASIS OS Self-Test ==="));
+    log.push(String::new());
+
+    // -- 1. Command execution tests --
+    let cmds = [
+        "help", "status", "ls", "clock", "sysinfo", "date", "mem",
+        "umd", "version", "about", "config test_key", "plugin status",
+    ];
+    for cmd_name in &cmds {
+        let start = psp::time::Instant::now();
+        let result = execute_command(cmd_name, config);
+        let elapsed_us = start.elapsed().as_micros();
+        if result.lines.is_empty() {
+            log.push(format!("[FAIL] cmd '{}': empty output ({}us)", cmd_name, elapsed_us));
+            fail += 1;
+        } else {
+            log.push(format!(
+                "[PASS] cmd '{}': {} lines ({}us)",
+                cmd_name,
+                result.lines.len(),
+                elapsed_us,
+            ));
+            pass += 1;
+        }
+    }
+
+    // -- 2. File I/O tests --
+    let test_dir = "ms0:/PSP/GAME/OASISOS/selftest_tmp";
+    let test_file = "ms0:/PSP/GAME/OASISOS/selftest_tmp/test.txt";
+    let test_data = b"OASIS selftest data 12345";
+
+    // mkdir
+    let start = psp::time::Instant::now();
+    match psp::io::create_dir(test_dir) {
+        Ok(()) => {
+            log.push(format!("[PASS] mkdir ({}us)", start.elapsed().as_micros()));
+            pass += 1;
+        },
+        Err(e) => {
+            log.push(format!("[FAIL] mkdir: {:?} ({}us)", e, start.elapsed().as_micros()));
+            fail += 1;
+        },
+    }
+
+    // write + read + verify
+    let start = psp::time::Instant::now();
+    match psp::io::write_bytes(test_file, test_data) {
+        Ok(()) => {
+            let write_us = start.elapsed().as_micros();
+            match psp::io::read_to_vec(test_file) {
+                Ok(data) if data == test_data => {
+                    log.push(format!(
+                        "[PASS] file write+read+verify ({}us)",
+                        start.elapsed().as_micros(),
+                    ));
+                    pass += 1;
+                },
+                Ok(data) => {
+                    log.push(format!(
+                        "[FAIL] file verify: expected {} bytes, got {} (write {}us)",
+                        test_data.len(), data.len(), write_us,
+                    ));
+                    fail += 1;
+                },
+                Err(e) => {
+                    log.push(format!("[FAIL] file read: {:?} (write {}us)", e, write_us));
+                    fail += 1;
+                },
+            }
+        },
+        Err(e) => {
+            log.push(format!("[FAIL] file write: {:?} ({}us)", e, start.elapsed().as_micros()));
+            fail += 1;
+        },
+    }
+
+    // delete file + rmdir
+    let _ = psp::io::remove_file(test_file);
+    let _ = psp::io::remove_dir(test_dir);
+
+    // -- 3. Config persistence --
+    let start = psp::time::Instant::now();
+    config.set("_selftest", psp::config::ConfigValue::I32(42));
+    let readback = config.get_i32("_selftest");
+    if readback == Some(42) {
+        log.push(format!("[PASS] config set+get ({}us)", start.elapsed().as_micros()));
+        pass += 1;
+    } else {
+        log.push(format!(
+            "[FAIL] config readback: expected 42, got {:?} ({}us)",
+            readback,
+            start.elapsed().as_micros(),
+        ));
+        fail += 1;
+    }
+    config.remove("_selftest");
+
+    // -- 4. Memory allocation --
+    let start = psp::time::Instant::now();
+    let mut buf: Vec<u8> = vec![0xA5u8; 65536];
+    let all_correct = buf.iter().all(|&b| b == 0xA5);
+    // Touch the buffer to prevent optimization.
+    buf[0] = 0;
+    std::hint::black_box(&buf);
+    if all_correct {
+        log.push(format!("[PASS] alloc 64KB + verify ({}us)", start.elapsed().as_micros()));
+        pass += 1;
+    } else {
+        log.push(format!("[FAIL] alloc 64KB: data mismatch ({}us)", start.elapsed().as_micros()));
+        fail += 1;
+    }
+
+    // -- 5. StatusBarInfo::poll sanity --
+    let start = psp::time::Instant::now();
+    let info = StatusBarInfo::poll();
+    let elapsed = start.elapsed().as_micros();
+    if info.hour < 24 && info.minute < 60 {
+        log.push(format!(
+            "[PASS] StatusBarInfo::poll: {:02}:{:02} ({}us)",
+            info.hour, info.minute, elapsed,
+        ));
+        pass += 1;
+    } else {
+        log.push(format!(
+            "[FAIL] StatusBarInfo::poll: hour={} min={} ({}us)",
+            info.hour, info.minute, elapsed,
+        ));
+        fail += 1;
+    }
+
+    // -- Summary --
+    let total_us = suite_start.elapsed().as_micros();
+    let total = pass + fail;
+    log.push(String::new());
+    log.push(format!(
+        "Results: {}/{} passed, {} failed ({} us total)",
+        pass, total, fail, total_us,
+    ));
+    let exit_code = if fail == 0 { 0 } else { 1 };
+    log.push(format!("EXIT_CODE: {}", exit_code));
+
+    // Write log to file.
+    let log_text = log.join("\n") + "\n";
+    let _ = psp::io::write_bytes(SELFTEST_LOG, log_text.as_bytes());
+
+    log
 }
 
 // ---------------------------------------------------------------------------

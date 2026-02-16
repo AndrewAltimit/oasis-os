@@ -537,6 +537,30 @@ fn psp_main() {
         }
     }
 
+    // Boot-time self-test: if sentinel file exists, run test suite,
+    // write results to selftest.log, delete sentinel, then exit.
+    if psp::io::stat(commands::SELFTEST_SENTINEL).is_ok() {
+        show_boot_screen(&mut backend, "Running self-test...", 90);
+        let results = commands::run_selftest(&mut config);
+        // Delete the sentinel so next boot is normal.
+        let _ = psp::io::remove_file(commands::SELFTEST_SENTINEL);
+        // Show results briefly on screen, then exit.
+        for line in &results {
+            term_lines.push(line.clone());
+        }
+        // Render one frame so the results are visible in screenshots.
+        backend.clear_inner(Color::rgb(0, 0, 0));
+        let y_start = 4i32;
+        for (i, line) in results.iter().enumerate().take(30) {
+            backend.draw_text_inner(line, 4, y_start + (i as i32 * 9), 8, Color::WHITE);
+        }
+        backend.swap_buffers_inner();
+        // Wait a moment for screenshot capture, then exit.
+        psp::thread::sleep_ms(2000);
+        // SAFETY: sceKernelExitGame terminates the running application.
+        unsafe { psp::sys::sceKernelExitGame() };
+    }
+
     // File manager dual-panel state.
     let mut fm_path = String::from("ms0:/");
     let mut fm_entries: Vec<FileEntry> = Vec::new();
@@ -895,63 +919,68 @@ fn psp_main() {
                 {
                     let cmd = term_input.clone();
                     term_lines.push(format!("> {}", cmd));
-                    // Handle SFX commands via worker thread.
-                    let output = match cmd.trim() {
+                    // Handle commands that need main-loop state first;
+                    // fall through to execute_command for everything else.
+                    let (output, used_dialog) = match cmd.trim() {
                         "sfx click" => {
                             audio.send(AudioCmd::PlaySfx(SfxId::Click));
-                            vec!["SFX: click".into()]
+                            (vec!["SFX: click".into()], false)
                         },
                         "sfx nav" => {
                             audio.send(AudioCmd::PlaySfx(SfxId::Navigate));
-                            vec!["SFX: navigate".into()]
+                            (vec!["SFX: navigate".into()], false)
                         },
                         "sfx error" => {
                             audio.send(AudioCmd::PlaySfx(SfxId::Error));
-                            vec!["SFX: error".into()]
+                            (vec!["SFX: error".into()], false)
                         },
                         "save" => match commands::save_terminal_history(&term_lines) {
-                            Ok(()) => vec!["State saved.".into()],
-                            Err(e) => vec![format!("Save failed: {e}")],
+                            Ok(()) => (vec!["State saved.".into()], true),
+                            Err(e) => (vec![format!("Save failed: {e}")], true),
                         },
                         "load" => match commands::load_terminal_history() {
                             Ok(lines) => {
                                 term_lines.clear();
                                 term_lines.extend(lines);
-                                vec!["State restored.".into()]
+                                (vec!["State restored.".into()], true)
                             },
-                            Err(e) => vec![format!("Load failed: {e}")],
+                            Err(e) => (vec![format!("Load failed: {e}")], true),
                         },
                         "usb mount" => {
                             if usb_storage.is_some() {
-                                vec!["USB storage already active.".into()]
+                                (vec!["USB storage already active.".into()], false)
                             } else {
                                 match psp::usb::start_bus() {
                                     Ok(()) => match psp::usb::UsbStorageMode::activate() {
                                         Ok(handle) => {
                                             usb_storage = Some(handle);
-                                            vec![
+                                            (vec![
                                                 "USB storage mode active. Connect cable to PC."
                                                     .into(),
-                                            ]
+                                            ], false)
                                         },
-                                        Err(e) => vec![format!("USB activate failed: {e}")],
+                                        Err(e) => {
+                                            (vec![format!("USB activate failed: {e}")], false)
+                                        },
                                     },
-                                    Err(e) => vec![format!("USB bus start failed: {e}")],
+                                    Err(e) => {
+                                        (vec![format!("USB bus start failed: {e}")], false)
+                                    },
                                 }
                             }
                         },
                         "usb unmount" | "usb eject" => {
                             if usb_storage.take().is_some() {
-                                vec!["USB storage mode deactivated.".into()]
+                                (vec!["USB storage mode deactivated.".into()], false)
                             } else {
-                                vec!["USB storage not active.".into()]
+                                (vec!["USB storage not active.".into()], false)
                             }
                         },
                         "usb" | "usb status" => {
                             let connected = psp::usb::is_connected();
                             let established = psp::usb::is_established();
                             let active = usb_storage.is_some();
-                            vec![
+                            (vec![
                                 format!(
                                     "USB cable: {}",
                                     if connected {
@@ -964,32 +993,42 @@ fn psp_main() {
                                     "Storage mode: {}",
                                     if active { "ACTIVE" } else { "inactive" }
                                 ),
-                                format!("Host mounted: {}", if established { "yes" } else { "no" }),
-                            ]
+                                format!(
+                                    "Host mounted: {}",
+                                    if established { "yes" } else { "no" },
+                                ),
+                            ], false)
                         },
                         _ if cmd.trim().starts_with("play ") => {
                             let path = cmd.trim().strip_prefix("play ").unwrap().trim();
                             audio.send(AudioCmd::LoadAndPlay(path.to_string()));
                             mp_file_name = path.to_string();
-                            vec![format!("Playing: {}", path)]
+                            (vec![format!("Playing: {}", path)], false)
                         },
                         "pause" => {
                             audio.send(AudioCmd::Pause);
-                            vec!["Paused.".into()]
+                            (vec!["Paused.".into()], false)
                         },
                         "resume" => {
                             audio.send(AudioCmd::Resume);
-                            vec!["Resumed.".into()]
+                            (vec!["Resumed.".into()], false)
                         },
                         "stop" => {
                             audio.send(AudioCmd::Stop);
-                            vec!["Stopped.".into()]
+                            (vec!["Stopped.".into()], false)
                         },
-                        _ => commands::execute_command(&cmd, &mut config),
+                        _ => {
+                            let r = commands::execute_command(&cmd, &mut config);
+                            (r.lines, r.used_dialog)
+                        },
                     };
-                    // Commands like `rm` may invoke confirm_dialog which
-                    // closes the GU display list. Re-open it for rendering.
-                    backend.reinit_gu_frame();
+                    // Only reinit GU when a dialog was shown (e.g. `rm`,
+                    // `save`, `load`). Calling reinit unconditionally
+                    // freezes real PSP hardware because sceGuStart is
+                    // issued on an already-open display list.
+                    if used_dialog {
+                        backend.reinit_gu_frame();
+                    }
                     for line in output {
                         term_lines.push(line);
                     }
@@ -1017,17 +1056,13 @@ fn psp_main() {
                 },
                 InputEvent::ButtonPress(Button::Up) if classic_view == ClassicView::Terminal => {
                     term_lines.push(String::from("> help"));
-                    let output = commands::execute_command("help", &mut config);
-                    for line in output {
-                        term_lines.push(line);
-                    }
+                    let r = commands::execute_command("help", &mut config);
+                    term_lines.extend(r.lines);
                 },
                 InputEvent::ButtonPress(Button::Down) if classic_view == ClassicView::Terminal => {
                     term_lines.push(String::from("> status"));
-                    let output = commands::execute_command("status", &mut config);
-                    for line in output {
-                        term_lines.push(line);
-                    }
+                    let r = commands::execute_command("status", &mut config);
+                    term_lines.extend(r.lines);
                 },
 
                 // -- File manager input (dual-panel) --
