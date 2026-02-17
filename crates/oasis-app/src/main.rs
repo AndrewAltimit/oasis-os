@@ -17,9 +17,11 @@ mod vfs_setup;
 use anyhow::Result;
 
 use app_state::{AppState, Mode};
+use oasis_audio::RadioManager;
+use oasis_backend_sdl::SdlAudioBackend;
 use oasis_backend_sdl::SdlBackend;
 use oasis_core::active_theme::ActiveTheme;
-use oasis_core::backend::{Color, InputBackend, SdiBackend};
+use oasis_core::backend::{AudioBackend, Color, InputBackend, NetworkBackend, SdiBackend};
 use oasis_core::bottombar::BottomBar;
 use oasis_core::browser::BrowserConfig;
 use oasis_core::config::OasisConfig;
@@ -36,7 +38,7 @@ use oasis_core::terminal::{
     CommandRegistry, register_agent_commands, register_builtins, register_plugin_commands,
 };
 use oasis_core::transition;
-use oasis_core::vfs::MemoryVfs;
+use oasis_core::vfs::{MemoryVfs, Vfs};
 use oasis_core::wallpaper;
 use oasis_core::wm::manager::WindowManager;
 
@@ -161,7 +163,20 @@ fn main() -> Result<()> {
         bg_color: Color::rgb(10, 10, 18),
         active_transition,
         frame_counter: 0,
+        radio_manager: RadioManager::new(),
+        radio_source: None,
+        audio_backend: {
+            let mut ab = SdlAudioBackend::new();
+            ab.init().ok();
+            ab
+        },
     };
+
+    // Load radio stations from VFS.
+    state
+        .radio_manager
+        .load_stations(&vfs, "/etc/radio/stations.toml")
+        .ok();
 
     // Set up scene graph and apply skin layout.
     let mut sdi = SdiRegistry::new();
@@ -234,6 +249,103 @@ fn main() -> Result<()> {
         // Poll remote client for received data.
         commands::poll_remote_client(&mut state);
 
+        // Process pending VFS requests from app runners (e.g. radio tune).
+        {
+            let mut pending = None;
+            if let Some(ref mut runner) = state.app_runner {
+                pending = runner.take_pending_request();
+            }
+            if pending.is_none() {
+                for (_, runner) in &mut state.open_runners {
+                    if let Some(req) = runner.take_pending_request() {
+                        pending = Some(req);
+                        break;
+                    }
+                }
+            }
+            if let Some((path, data)) = pending {
+                let _ = vfs.write(&path, data.as_bytes());
+            }
+        }
+
+        // Tick radio manager: process VFS requests and drive streaming.
+        {
+            use oasis_audio::RADIO_REQUEST_PATH;
+
+            if vfs.exists(RADIO_REQUEST_PATH)
+                && let Ok(data) = vfs.read(RADIO_REQUEST_PATH)
+            {
+                let request = String::from_utf8_lossy(&data).to_string();
+                if !request.is_empty() {
+                    // Clear the request immediately.
+                    let _ = vfs.write(RADIO_REQUEST_PATH, b"");
+
+                    if let Some(target) = request.strip_prefix("tune ") {
+                        // Resolve station by index or case-insensitive name.
+                        let station = if let Ok(idx) = target.parse::<usize>() {
+                            state.radio_manager.registry.stations.get(idx).cloned()
+                        } else {
+                            state
+                                .radio_manager
+                                .registry
+                                .stations
+                                .iter()
+                                .find(|s| s.name.eq_ignore_ascii_case(target.trim()))
+                                .cloned()
+                        };
+                        if let Some(station) = station {
+                            let _ = state.radio_manager.tune(
+                                &station.name,
+                                station.bitrate,
+                                &mut state.audio_backend,
+                            );
+                            if let Some((host, port, path)) = parse_stream_url(&station.url) {
+                                match state.net_backend.connect(&host, port) {
+                                    Ok(stream) => {
+                                        let source = oasis_audio::radio::IcecastSource::new(
+                                            stream, &host, &path,
+                                        );
+                                        state.radio_source = Some(Box::new(source));
+                                    },
+                                    Err(e) => {
+                                        state.radio_manager.set_error(&format!("connect: {e}"));
+                                    },
+                                }
+                            } else {
+                                state.radio_manager.set_error("invalid stream URL");
+                            }
+                        } else {
+                            state
+                                .radio_manager
+                                .set_error(&format!("station not found: {target}"));
+                        }
+                    } else {
+                        let _ = state
+                            .radio_manager
+                            .process_request(&request, &mut state.audio_backend);
+                    }
+                }
+            }
+
+            // Drive the radio state machine.
+            let _ = state
+                .radio_manager
+                .tick(&mut state.radio_source, &mut state.audio_backend);
+
+            // Publish radio status periodically (~4 times per second).
+            if state.frame_counter.is_multiple_of(15) {
+                let _ = state.radio_manager.publish_status(&mut vfs);
+            }
+
+            // Refresh radio app display if visible.
+            if let Some(ref mut runner) = state.app_runner {
+                runner.refresh_radio(&vfs);
+            }
+            for (_, runner) in &mut state.open_runners {
+                runner.refresh_radio(&vfs);
+            }
+        }
+
         // Update SDI scene graph for the active mode.
         render::update_sdi(&mut state, &mut sdi);
 
@@ -277,4 +389,21 @@ fn main() -> Result<()> {
     backend.shutdown()?;
     log::info!("OASIS_OS shut down cleanly");
     Ok(())
+}
+
+/// Parse an HTTP stream URL into (host, port, path).
+fn parse_stream_url(url: &str) -> Option<(String, u16, String)> {
+    let url = url.strip_prefix("http://")?;
+    let (host_port, path) = if let Some(idx) = url.find('/') {
+        (&url[..idx], url[idx..].to_string())
+    } else {
+        (url, "/".to_string())
+    };
+    let (host, port) = if let Some(idx) = host_port.rfind(':') {
+        let port: u16 = host_port[idx + 1..].parse().ok()?;
+        (host_port[..idx].to_string(), port)
+    } else {
+        (host_port.to_string(), 80)
+    };
+    Some((host, port, path))
 }

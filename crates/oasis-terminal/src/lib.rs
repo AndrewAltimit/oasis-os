@@ -12,6 +12,7 @@ pub mod file_commands;
 pub mod fun_commands;
 mod interpreter;
 pub mod network_commands;
+pub mod radio_commands;
 pub mod security_commands;
 pub mod skin_commands;
 pub mod system_commands;
@@ -46,6 +47,8 @@ pub use interpreter::CommandRegistry;
 pub use interpreter::Environment;
 /// Register network commands (wifi, ping, http) into a registry.
 pub use network_commands::register_network_commands;
+/// Register internet radio commands (radio) into a registry.
+pub use radio_commands::register_radio_commands;
 /// Register security commands (chmod, chown, passwd, audit).
 pub use security_commands::register_security_commands;
 /// Register skin management commands (skin list/switch) into a registry.

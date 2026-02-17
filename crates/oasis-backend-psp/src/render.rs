@@ -6,8 +6,7 @@ use std::ptr;
 
 use psp::sys::{
     self, ClearBuffer, GuPrimitive, MipmapLevel, TextureColorComponent, TextureEffect,
-    TextureFilter,
-    TexturePixelFormat, VertexType,
+    TextureFilter, TexturePixelFormat, VertexType,
 };
 
 use oasis_core::backend::Color;

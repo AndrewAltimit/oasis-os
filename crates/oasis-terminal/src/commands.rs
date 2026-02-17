@@ -45,6 +45,8 @@ pub fn register_builtins(reg: &mut CommandRegistry) {
     crate::register_network_commands(reg);
     // Phase 11: audio commands.
     crate::register_audio_commands(reg);
+    // Internet radio commands.
+    crate::register_radio_commands(reg);
     // Skin switching commands.
     crate::register_skin_commands(reg);
     // Text processing commands.

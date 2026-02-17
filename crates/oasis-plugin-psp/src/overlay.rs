@@ -7,7 +7,7 @@
 
 use crate::audio;
 use crate::config;
-use crate::render::{self, colors, SCREEN_WIDTH};
+use crate::render::{self, SCREEN_WIDTH, colors};
 
 use core::sync::atomic::{AtomicU8, Ordering};
 
@@ -40,15 +40,17 @@ static mut OSD_MSG_LEN: usize = 0;
 static mut PREV_BUTTONS: u32 = 0;
 
 /// Number of menu items.
-const MENU_ITEMS: u8 = 7;
+const MENU_ITEMS: u8 = 9;
 
 /// Menu item labels.
-const MENU_LABELS: [&[u8]; 7] = [
+const MENU_LABELS: [&[u8]; 9] = [
     b"  Play / Pause",
-    b"  Next Track",
-    b"  Prev Track",
+    b"  Next",
+    b"  Prev",
     b"  Volume Up",
     b"  Volume Down",
+    b"  Radio On/Off",
+    b"  Tune Station",
     b"  CPU Clock",
     b"  Hide Overlay",
 ];
@@ -57,7 +59,7 @@ const MENU_LABELS: [&[u8]; 7] = [
 const OVERLAY_X: u32 = 80;
 const OVERLAY_Y: u32 = 40;
 const OVERLAY_W: u32 = 320;
-const OVERLAY_H: u32 = 192;
+const OVERLAY_H: u32 = 212;
 const ITEM_H: u32 = 16;
 const STATUS_Y: u32 = OVERLAY_Y + 8;
 const MENU_START_Y: u32 = OVERLAY_Y + 48;
@@ -106,7 +108,7 @@ pub unsafe fn on_frame(fb: *mut u32, stride: u32) {
                     CURSOR = 0;
                 }
             }
-        }
+        },
         OverlayState::Osd => {
             // SAFETY: OSD state accessed only from display hook.
             unsafe {
@@ -124,7 +126,7 @@ pub unsafe fn on_frame(fb: *mut u32, stride: u32) {
                     CURSOR = 0;
                 }
             }
-        }
+        },
         OverlayState::Menu => {
             if triggered {
                 STATE.store(OverlayState::Hidden as u8, Ordering::Relaxed);
@@ -135,7 +137,7 @@ pub unsafe fn on_frame(fb: *mut u32, stride: u32) {
                     draw_menu(fb, stride);
                 }
             }
-        }
+        },
     }
 
     // No dcache flush needed -- the hook passes an uncached framebuffer
@@ -215,9 +217,15 @@ unsafe fn execute_menu_action(item: u8) {
         2 => audio::prev_track(),
         3 => audio::volume_up(),
         4 => audio::volume_down(),
-        5 => cycle_cpu_clock(),
-        6 => STATE.store(OverlayState::Hidden as u8, Ordering::Relaxed),
-        _ => {}
+        5 => audio::toggle_radio(),
+        6 => {
+            if audio::is_radio_active() {
+                audio::next_station();
+            }
+        },
+        7 => cycle_cpu_clock(),
+        8 => STATE.store(OverlayState::Hidden as u8, Ordering::Relaxed),
+        _ => {},
     }
 }
 
@@ -258,11 +266,34 @@ unsafe fn draw_menu(fb: *mut u32, stride: u32) {
     // SAFETY: All render functions check bounds.
     unsafe {
         // Background
-        render::fill_rect_alpha(fb, stride, OVERLAY_X, OVERLAY_Y, OVERLAY_W, OVERLAY_H, colors::OVERLAY_BG);
+        render::fill_rect_alpha(
+            fb,
+            stride,
+            OVERLAY_X,
+            OVERLAY_Y,
+            OVERLAY_W,
+            OVERLAY_H,
+            colors::OVERLAY_BG,
+        );
 
         // Title bar
-        render::fill_rect(fb, stride, OVERLAY_X, OVERLAY_Y, OVERLAY_W, 12, colors::ACCENT);
-        render::draw_string(fb, stride, OVERLAY_X + 4, OVERLAY_Y + 2, b"OASIS OVERLAY", colors::BLACK);
+        render::fill_rect(
+            fb,
+            stride,
+            OVERLAY_X,
+            OVERLAY_Y,
+            OVERLAY_W,
+            12,
+            colors::ACCENT,
+        );
+        render::draw_string(
+            fb,
+            stride,
+            OVERLAY_X + 4,
+            OVERLAY_Y + 2,
+            b"OASIS OVERLAY",
+            colors::BLACK,
+        );
 
         // Status line
         draw_status_line(fb, stride);
@@ -277,23 +308,27 @@ unsafe fn draw_menu(fb: *mut u32, stride: u32) {
             let item_y = MENU_START_Y + (i as u32 * ITEM_H);
             if i == cursor {
                 render::fill_rect_alpha(
-                    fb, stride,
-                    OVERLAY_X + 4, item_y,
-                    OVERLAY_W - 8, ITEM_H - 2,
+                    fb,
+                    stride,
+                    OVERLAY_X + 4,
+                    item_y,
+                    OVERLAY_W - 8,
+                    ITEM_H - 2,
                     colors::HIGHLIGHT,
                 );
-                render::draw_string(
-                    fb, stride,
-                    OVERLAY_X + 8, item_y + 4,
-                    b">",
-                    colors::ACCENT,
-                );
+                render::draw_string(fb, stride, OVERLAY_X + 8, item_y + 4, b">", colors::ACCENT);
             }
             render::draw_string(
-                fb, stride,
-                OVERLAY_X + 16, item_y + 4,
+                fb,
+                stride,
+                OVERLAY_X + 16,
+                item_y + 4,
                 MENU_LABELS[i as usize],
-                if i == cursor { colors::WHITE } else { colors::GRAY },
+                if i == cursor {
+                    colors::WHITE
+                } else {
+                    colors::GRAY
+                },
             );
             i += 1;
         }
@@ -324,20 +359,58 @@ unsafe fn draw_status_line(fb: *mut u32, stride: u32) {
         }
 
         render::draw_string(
-            fb, stride,
-            OVERLAY_X + 8, STATUS_Y,
+            fb,
+            stride,
+            OVERLAY_X + 8,
+            STATUS_Y,
             &buf[..p],
             colors::GREEN,
         );
     }
 }
 
-/// Draw the now-playing track name and playback state.
+/// Draw the now-playing info: radio station + ICY metadata, or track name.
 ///
 /// # Safety
 /// `fb` must be valid.
 unsafe fn draw_now_playing(fb: *mut u32, stride: u32) {
     let state = audio::audio_state();
+    let y = OVERLAY_Y + 24;
+
+    if audio::is_radio_active() {
+        // Radio mode: show station name and ICY metadata.
+        let station = audio::radio_station_name();
+        let icon = if state == 1 { b">" } else { b"|" };
+
+        // SAFETY: render functions check bounds.
+        unsafe {
+            render::draw_string(fb, stride, OVERLAY_X + 8, y, b"RADIO", colors::GREEN);
+            render::draw_string(fb, stride, OVERLAY_X + 56, y, icon, colors::ACCENT);
+            render::draw_string(fb, stride, OVERLAY_X + 68, y, station, colors::YELLOW);
+
+            // ICY metadata (second line).
+            let meta = audio::radio_meta();
+            let mut meta_len = 0;
+            while meta_len < meta.len() && meta[meta_len] != 0 {
+                meta_len += 1;
+            }
+            if meta_len > 0 {
+                // Truncate to fit overlay width.
+                let max_chars = ((OVERLAY_W - 16) / 8) as usize;
+                let show = meta_len.min(max_chars);
+                render::draw_string(
+                    fb,
+                    stride,
+                    OVERLAY_X + 8,
+                    y + 10,
+                    &meta[..show],
+                    colors::GRAY,
+                );
+            }
+        }
+        return;
+    }
+
     if state == 0 {
         return; // Audio not active.
     }
@@ -353,20 +426,16 @@ unsafe fn draw_now_playing(fb: *mut u32, stride: u32) {
     }
 
     // Draw play/pause indicator + track name.
-    let y = OVERLAY_Y + 24;
     let icon = if state == 1 { b"> " } else { b"||" };
 
     // SAFETY: render functions check bounds.
     unsafe {
+        render::draw_string(fb, stride, OVERLAY_X + 8, y, icon, colors::ACCENT);
         render::draw_string(
-            fb, stride,
-            OVERLAY_X + 8, y,
-            icon,
-            colors::ACCENT,
-        );
-        render::draw_string(
-            fb, stride,
-            OVERLAY_X + 24, y,
+            fb,
+            stride,
+            OVERLAY_X + 24,
+            y,
             &track[..name_len],
             colors::YELLOW,
         );

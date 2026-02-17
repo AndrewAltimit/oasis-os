@@ -8,7 +8,7 @@
 //! the "Extended Primitives" section for shape, gradient, text, texture, clip,
 //! and batch methods that backends can progressively override.
 
-use crate::error::Result;
+use crate::error::{OasisError, Result};
 use crate::input::InputEvent;
 
 /// Width of a single glyph in the bitmap font system.
@@ -792,6 +792,18 @@ pub trait AudioBackend {
 
     /// Shut down the audio subsystem and release all resources.
     fn shutdown(&mut self) -> Result<()>;
+
+    /// Begin a streaming audio session. Returns a track handle for feeding
+    /// data incrementally via `feed_data()`.
+    fn load_streaming(&mut self) -> Result<AudioTrackId> {
+        Err(OasisError::Backend("streaming not supported".into()))
+    }
+
+    /// Feed a chunk of streaming audio data to an active streaming track.
+    fn feed_data(&mut self, track: AudioTrackId, data: &[u8]) -> Result<()> {
+        let _ = (track, data);
+        Err(OasisError::Backend("streaming not supported".into()))
+    }
 }
 
 #[cfg(test)]

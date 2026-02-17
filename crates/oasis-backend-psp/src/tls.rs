@@ -60,16 +60,12 @@ impl rand_core::RngCore for PspRng {
         // SAFETY: ctx was initialized in new().
         unsafe {
             for byte in dest.iter_mut() {
-                *byte =
-                    (psp::sys::sceKernelUtilsMt19937UInt(&mut self.ctx) & 0xFF) as u8;
+                *byte = (psp::sys::sceKernelUtilsMt19937UInt(&mut self.ctx) & 0xFF) as u8;
             }
         }
     }
 
-    fn try_fill_bytes(
-        &mut self,
-        dest: &mut [u8],
-    ) -> core::result::Result<(), rand_core::Error> {
+    fn try_fill_bytes(&mut self, dest: &mut [u8]) -> core::result::Result<(), rand_core::Error> {
         self.fill_bytes(dest);
         Ok(())
     }
@@ -133,16 +129,14 @@ impl TlsProvider for PspTlsProvider {
         stream: Box<dyn NetworkStream>,
         server_name: &str,
     ) -> Result<Box<dyn NetworkStream>> {
-        use embedded_tls::blocking::{Aes128GcmSha256, TlsConfig, TlsConnection, TlsContext};
         use embedded_tls::UnsecureProvider;
+        use embedded_tls::blocking::{Aes128GcmSha256, TlsConfig, TlsConnection, TlsContext};
 
         let adapter = IoAdapter(stream);
 
         // Pin buffers to the heap so they outlive the TlsConnection.
-        let read_buf =
-            Box::leak(vec![0u8; RECORD_BUF_SIZE].into_boxed_slice());
-        let write_buf =
-            Box::leak(vec![0u8; RECORD_BUF_SIZE].into_boxed_slice());
+        let read_buf = Box::leak(vec![0u8; RECORD_BUF_SIZE].into_boxed_slice());
+        let write_buf = Box::leak(vec![0u8; RECORD_BUF_SIZE].into_boxed_slice());
 
         // Save raw pointers before TlsConnection borrows the slices.
         let read_ptr: *mut [u8] = read_buf;
@@ -211,17 +205,19 @@ unsafe impl Send for PspTlsStream<'_> {}
 
 impl NetworkStream for PspTlsStream<'_> {
     fn read(&mut self, buf: &mut [u8]) -> Result<usize> {
-        let tls = self.tls.as_mut().ok_or_else(|| {
-            OasisError::Backend("TLS connection closed".to_string())
-        })?;
+        let tls = self
+            .tls
+            .as_mut()
+            .ok_or_else(|| OasisError::Backend("TLS connection closed".to_string()))?;
         embedded_io::Read::read(tls, buf)
             .map_err(|e| OasisError::Backend(format!("TLS read: {:?}", e)))
     }
 
     fn write(&mut self, data: &[u8]) -> Result<usize> {
-        let tls = self.tls.as_mut().ok_or_else(|| {
-            OasisError::Backend("TLS connection closed".to_string())
-        })?;
+        let tls = self
+            .tls
+            .as_mut()
+            .ok_or_else(|| OasisError::Backend("TLS connection closed".to_string()))?;
         embedded_io::Write::write(tls, data)
             .map_err(|e| OasisError::Backend(format!("TLS write: {:?}", e)))
     }

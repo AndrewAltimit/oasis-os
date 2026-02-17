@@ -555,6 +555,7 @@ dependencies = [
  "anyhow",
  "env_logger",
  "log",
+ "oasis-audio",
  "oasis-backend-sdl",
  "oasis-core",
  "png",
@@ -569,6 +570,7 @@ dependencies = [
  "oasis-vfs",
  "proptest",
  "serde",
+ "toml",
 ]
 
 [[package]]

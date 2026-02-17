@@ -142,6 +142,8 @@ pub struct AppRunner {
     panels: Option<[FilePanel; 2]>,
     /// Which panel is active (0 = left, 1 = right).
     active_panel: usize,
+    /// Pending VFS IPC request from radio app (path, data).
+    pending_vfs_request: Option<(String, String)>,
 }
 
 impl AppRunner {
@@ -159,6 +161,7 @@ impl AppRunner {
             cursor: 0,
             panels: None,
             active_panel: 0,
+            pending_vfs_request: None,
         };
         runner.init_content(&title, vfs);
         runner
@@ -253,6 +256,11 @@ impl AppRunner {
                     "full browser widget.".to_string(),
                 ];
             },
+            "Internet Radio" => {
+                self.lines = Self::radio_content(vfs);
+                // Use cursor for station selection.
+                self.cursor = 0;
+            },
             "System Monitor" => {
                 self.lines = vec![
                     "System Monitor".to_string(),
@@ -282,6 +290,11 @@ impl AppRunner {
         // Dual-panel mode (File Manager only).
         if self.panels.is_some() && self.viewing_file.is_none() {
             return self.handle_dual_panel_input(button, vfs);
+        }
+
+        // Internet Radio mode.
+        if self.title == "Internet Radio" {
+            return self.handle_radio_input(button, vfs);
         }
 
         match button {
@@ -605,6 +618,152 @@ impl AppRunner {
             };
             self.open_file(vfs, &file_path);
         }
+    }
+
+    // ---------------------------------------------------------------
+    // Internet Radio helpers
+    // ---------------------------------------------------------------
+
+    /// Generate content lines for the Internet Radio app.
+    fn radio_content(vfs: &dyn Vfs) -> Vec<String> {
+        use oasis_audio::radio::station::StationRegistry;
+        use oasis_audio::{RADIO_REQUEST_PATH, RADIO_STATUS_PATH};
+
+        let mut lines = Vec::new();
+        lines.push("=== Internet Radio ===".to_string());
+        lines.push(String::new());
+
+        // Read status from VFS if available.
+        let (state, station, now_playing) = if vfs.exists(RADIO_STATUS_PATH) {
+            let data = vfs.read(RADIO_STATUS_PATH).unwrap_or_default();
+            let text = String::from_utf8_lossy(&data);
+            let mut st = "Stopped".to_string();
+            let mut stn = "--".to_string();
+            let mut np = "--".to_string();
+            for line in text.lines() {
+                if let Some(v) = line.strip_prefix("State: ") {
+                    st = v.to_string();
+                } else if let Some(v) = line.strip_prefix("Station: ") {
+                    stn = v.to_string();
+                } else if let Some(v) = line.strip_prefix("Now Playing: ") {
+                    np = v.to_string();
+                }
+            }
+            (st, stn, np)
+        } else {
+            ("Stopped".to_string(), "--".to_string(), "--".to_string())
+        };
+
+        lines.push(format!("Status: {state}"));
+        lines.push(format!("Station: {station}"));
+        lines.push(format!("Now Playing: {now_playing}"));
+        lines.push(String::new());
+        lines.push("--- Stations ---".to_string());
+
+        // Load stations from VFS.
+        let registry = if vfs.exists("/etc/radio/stations.toml") {
+            let data = vfs.read("/etc/radio/stations.toml").unwrap_or_default();
+            let text = String::from_utf8_lossy(&data);
+            StationRegistry::from_toml(&text).unwrap_or_else(|_| StationRegistry::defaults())
+        } else {
+            StationRegistry::defaults()
+        };
+
+        // Check for pending request (to avoid re-sending).
+        let _ = RADIO_REQUEST_PATH;
+
+        for (i, s) in registry.stations.iter().enumerate() {
+            let fav = if s.favorite { "*" } else { " " };
+            let bitrate = if s.bitrate > 0 {
+                format!("{}k", s.bitrate)
+            } else {
+                "?".to_string()
+            };
+            lines.push(format!(
+                "  [{fav}] {:<26} {:<12} {bitrate}",
+                s.name, s.genre
+            ));
+            // Store index as hidden data (used by input handler).
+            let _ = i;
+        }
+
+        lines.push(String::new());
+        lines.push("Confirm=Tune  Triangle=Fav  Cancel=Exit".to_string());
+
+        lines
+    }
+
+    /// Handle input for the Internet Radio app.
+    fn handle_radio_input(&mut self, button: &Button, _vfs: &dyn Vfs) -> AppAction {
+        use oasis_audio::RADIO_REQUEST_PATH;
+
+        // The station list starts at line 7 (after header + status lines).
+        let station_header_lines = 7;
+        let station_count = self.lines.len().saturating_sub(station_header_lines + 2);
+        // 2 = blank line + help line at bottom.
+
+        match button {
+            Button::Cancel => AppAction::Exit,
+            Button::Up => {
+                if self.cursor > 0 {
+                    self.cursor -= 1;
+                } else if self.scroll > 0 {
+                    self.scroll -= 1;
+                }
+                AppAction::None
+            },
+            Button::Down => {
+                let visible = self.visible_count();
+                if self.cursor + 1 < visible {
+                    self.cursor += 1;
+                } else if self.scroll + MAX_VISIBLE_LINES < self.lines.len() {
+                    self.scroll += 1;
+                }
+                AppAction::None
+            },
+            Button::Confirm => {
+                // Determine which station is selected.
+                let abs_idx = self.scroll + self.cursor;
+                if abs_idx >= station_header_lines && abs_idx < station_header_lines + station_count
+                {
+                    let station_idx = abs_idx - station_header_lines;
+                    self.pending_vfs_request = Some((
+                        RADIO_REQUEST_PATH.to_string(),
+                        format!("tune {station_idx}"),
+                    ));
+                }
+                AppAction::None
+            },
+            Button::Triangle => {
+                // Triangle = toggle favorite.
+                let abs_idx = self.scroll + self.cursor;
+                if abs_idx >= station_header_lines && abs_idx < station_header_lines + station_count
+                {
+                    let station_idx = abs_idx - station_header_lines;
+                    self.pending_vfs_request =
+                        Some((RADIO_REQUEST_PATH.to_string(), format!("fav {station_idx}")));
+                }
+                AppAction::None
+            },
+            _ => AppAction::None,
+        }
+    }
+
+    /// Take any pending VFS IPC request (returns path and data if present).
+    pub fn take_pending_request(&mut self) -> Option<(String, String)> {
+        self.pending_vfs_request.take()
+    }
+
+    /// Refresh radio display from VFS status (called each frame when visible).
+    pub fn refresh_radio(&mut self, vfs: &dyn Vfs) {
+        if self.title != "Internet Radio" {
+            return;
+        }
+        let old_cursor = self.cursor;
+        let old_scroll = self.scroll;
+        self.lines = Self::radio_content(vfs);
+        self.cursor = old_cursor;
+        self.scroll = old_scroll;
     }
 
     /// Open a file and display its contents.

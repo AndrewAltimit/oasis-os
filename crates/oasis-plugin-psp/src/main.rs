@@ -43,7 +43,9 @@ fn debug_log(msg: &[u8]) {
     unsafe {
         let fd = psp::sys::sceIoOpen(
             b"ms0:/seplugins/oasis_debug.txt\0".as_ptr(),
-            psp::sys::IoOpenFlags::APPEND | psp::sys::IoOpenFlags::CREAT | psp::sys::IoOpenFlags::WR_ONLY,
+            psp::sys::IoOpenFlags::APPEND
+                | psp::sys::IoOpenFlags::CREAT
+                | psp::sys::IoOpenFlags::WR_ONLY,
             0o777,
         );
         if fd >= psp::sys::SceUid(0) {

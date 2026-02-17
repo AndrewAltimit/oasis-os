@@ -27,12 +27,18 @@ pub struct CommandResult {
 impl CommandResult {
     /// Create a result for a pure-text command (no dialog shown).
     pub fn text(lines: Vec<String>) -> Self {
-        Self { lines, used_dialog: false }
+        Self {
+            lines,
+            used_dialog: false,
+        }
     }
 
     /// Create a result for a command that showed a GU dialog.
     pub fn dialog(lines: Vec<String>) -> Self {
-        Self { lines, used_dialog: true }
+        Self {
+            lines,
+            used_dialog: true,
+        }
     }
 }
 
@@ -149,10 +155,14 @@ pub fn execute_command(cmd: &str, config: &mut psp::config::Config) -> CommandRe
         "sysinfo" => cmd_sysinfo(),
         "me test" => {
             #[cfg(feature = "kernel-me")]
-            { cmd_me_test() }
+            {
+                cmd_me_test()
+            }
             #[cfg(not(feature = "kernel-me"))]
-            { vec!["ME test requires kernel mode.".into()] }
-        }
+            {
+                vec!["ME test requires kernel mode.".into()]
+            }
+        },
         "screenshot" | "ss" => {
             let bmp = psp::screenshot_bmp();
             let path = "ms0:/PSP/PHOTO/screenshot.bmp";
@@ -461,15 +471,28 @@ pub fn run_selftest(config: &mut psp::config::Config) -> Vec<String> {
 
     // -- 1. Command execution tests --
     let cmds = [
-        "help", "status", "ls", "clock", "sysinfo", "date", "mem",
-        "umd", "version", "about", "config test_key", "plugin status",
+        "help",
+        "status",
+        "ls",
+        "clock",
+        "sysinfo",
+        "date",
+        "mem",
+        "umd",
+        "version",
+        "about",
+        "config test_key",
+        "plugin status",
     ];
     for cmd_name in &cmds {
         let start = psp::time::Instant::now();
         let result = execute_command(cmd_name, config);
         let elapsed_us = start.elapsed().as_micros();
         if result.lines.is_empty() {
-            log.push(format!("[FAIL] cmd '{}': empty output ({}us)", cmd_name, elapsed_us));
+            log.push(format!(
+                "[FAIL] cmd '{}': empty output ({}us)",
+                cmd_name, elapsed_us
+            ));
             fail += 1;
         } else {
             log.push(format!(
@@ -495,7 +518,11 @@ pub fn run_selftest(config: &mut psp::config::Config) -> Vec<String> {
             pass += 1;
         },
         Err(e) => {
-            log.push(format!("[FAIL] mkdir: {:?} ({}us)", e, start.elapsed().as_micros()));
+            log.push(format!(
+                "[FAIL] mkdir: {:?} ({}us)",
+                e,
+                start.elapsed().as_micros()
+            ));
             fail += 1;
         },
     }
@@ -516,7 +543,9 @@ pub fn run_selftest(config: &mut psp::config::Config) -> Vec<String> {
                 Ok(data) => {
                     log.push(format!(
                         "[FAIL] file verify: expected {} bytes, got {} (write {}us)",
-                        test_data.len(), data.len(), write_us,
+                        test_data.len(),
+                        data.len(),
+                        write_us,
                     ));
                     fail += 1;
                 },
@@ -527,7 +556,11 @@ pub fn run_selftest(config: &mut psp::config::Config) -> Vec<String> {
             }
         },
         Err(e) => {
-            log.push(format!("[FAIL] file write: {:?} ({}us)", e, start.elapsed().as_micros()));
+            log.push(format!(
+                "[FAIL] file write: {:?} ({}us)",
+                e,
+                start.elapsed().as_micros()
+            ));
             fail += 1;
         },
     }
@@ -541,7 +574,10 @@ pub fn run_selftest(config: &mut psp::config::Config) -> Vec<String> {
     config.set("_selftest", psp::config::ConfigValue::I32(42));
     let readback = config.get_i32("_selftest");
     if readback == Some(42) {
-        log.push(format!("[PASS] config set+get ({}us)", start.elapsed().as_micros()));
+        log.push(format!(
+            "[PASS] config set+get ({}us)",
+            start.elapsed().as_micros()
+        ));
         pass += 1;
     } else {
         log.push(format!(
@@ -561,10 +597,16 @@ pub fn run_selftest(config: &mut psp::config::Config) -> Vec<String> {
     buf[0] = 0;
     std::hint::black_box(&buf);
     if all_correct {
-        log.push(format!("[PASS] alloc 64KB + verify ({}us)", start.elapsed().as_micros()));
+        log.push(format!(
+            "[PASS] alloc 64KB + verify ({}us)",
+            start.elapsed().as_micros()
+        ));
         pass += 1;
     } else {
-        log.push(format!("[FAIL] alloc 64KB: data mismatch ({}us)", start.elapsed().as_micros()));
+        log.push(format!(
+            "[FAIL] alloc 64KB: data mismatch ({}us)",
+            start.elapsed().as_micros()
+        ));
         fail += 1;
     }
 
@@ -751,13 +793,13 @@ fn cmd_plugin_install() -> Vec<String> {
             Err(e) => {
                 out.push(format!("Failed to write PRX: {:?}", e));
                 return out;
-            }
+            },
         },
         Err(e) => {
             out.push(format!("PRX not found ({}): {:?}", PLUGIN_SRC, e));
             out.push(String::from("Place oasis_plugin.prx next to EBOOT.PBP"));
             return out;
-        }
+        },
     }
 
     // Add to PLUGINS.TXT (if not already present)
@@ -811,7 +853,7 @@ fn cmd_plugin_remove() -> Vec<String> {
                 Ok(()) => out.push(String::from("Removed from PLUGINS.TXT")),
                 Err(e) => out.push(format!("Failed to update PLUGINS.TXT: {:?}", e)),
             }
-        }
+        },
         Err(_) => out.push(String::from("PLUGINS.TXT not found")),
     }
 
@@ -841,10 +883,10 @@ fn cmd_plugin_status() -> Vec<String> {
                         "PLUGINS.TXT: {}",
                         if enabled { "enabled" } else { "disabled" }
                     ));
-                }
+                },
                 None => out.push(String::from("PLUGINS.TXT: not registered")),
             }
-        }
+        },
         Err(_) => out.push(String::from("PLUGINS.TXT: not found")),
     }
 
@@ -852,7 +894,11 @@ fn cmd_plugin_status() -> Vec<String> {
     let ini_exists = psp::io::read_to_vec("ms0:/seplugins/oasis.ini").is_ok();
     out.push(format!(
         "Config: {}",
-        if ini_exists { "oasis.ini found" } else { "no config" }
+        if ini_exists {
+            "oasis.ini found"
+        } else {
+            "no config"
+        }
     ));
 
     out

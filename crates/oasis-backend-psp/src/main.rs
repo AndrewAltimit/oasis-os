@@ -104,12 +104,12 @@ const ICON_GFX_H: u32 = 16;
 const ICON_GFX_PAD: u32 = 3;
 const ICON_LABEL_PAD: i32 = 1;
 
-// Dashboard grid (2 columns, 4 rows = 8 icons, no pagination).
-const GRID_COLS: usize = 2;
+// Dashboard grid (3 columns, 4 rows = 12 icons per page, L/R pagination).
+const GRID_COLS: usize = 3;
 const GRID_ROWS: usize = 4;
-const GRID_PAD_X: i32 = 16;
+const GRID_PAD_X: i32 = 15;
 const GRID_PAD_Y: i32 = 2;
-const CELL_W: i32 = 110;
+const CELL_W: i32 = 150;
 const CELL_H: i32 = (CONTENT_H as i32 - 2 * GRID_PAD_Y) / GRID_ROWS as i32;
 const ICONS_PER_PAGE: usize = GRID_COLS * GRID_ROWS;
 const CURSOR_PAD: i32 = 3;
@@ -232,6 +232,11 @@ static APPS: &[AppEntry] = &[
         title: "Browser",
         color: Color::rgb(50, 120, 200),
     },
+    AppEntry {
+        id: "radio",
+        title: "Radio",
+        color: Color::rgb(255, 140, 60),
+    },
 ];
 
 // ---------------------------------------------------------------------------
@@ -254,6 +259,79 @@ enum ClassicView {
     FileManager,
     PhotoViewer,
     MusicPlayer,
+    Browser,
+    Radio,
+}
+
+// ---------------------------------------------------------------------------
+// Radio station list and status
+// ---------------------------------------------------------------------------
+
+struct RadioStation {
+    name: &'static str,
+    genre: &'static str,
+    url: &'static str,
+    bitrate: u32,
+}
+
+static RADIO_STATIONS: &[RadioStation] = &[
+    RadioStation {
+        name: "Drone Zone",
+        genre: "ambient",
+        url: "http://ice2.somafm.com/dronezone-128-mp3",
+        bitrate: 128,
+    },
+    RadioStation {
+        name: "DEF CON Radio",
+        genre: "hacker",
+        url: "http://ice2.somafm.com/defcon-128-mp3",
+        bitrate: 128,
+    },
+    RadioStation {
+        name: "Groove Salad",
+        genre: "chill",
+        url: "http://ice2.somafm.com/groovesalad-128-mp3",
+        bitrate: 128,
+    },
+    RadioStation {
+        name: "Space Station",
+        genre: "space",
+        url: "http://ice2.somafm.com/spacestation-128-mp3",
+        bitrate: 128,
+    },
+    RadioStation {
+        name: "Secret Agent",
+        genre: "lounge",
+        url: "http://ice2.somafm.com/secretagent-128-mp3",
+        bitrate: 128,
+    },
+    RadioStation {
+        name: "Lush",
+        genre: "female vocal",
+        url: "http://ice2.somafm.com/lush-128-mp3",
+        bitrate: 128,
+    },
+    RadioStation {
+        name: "Metal Detector",
+        genre: "metal",
+        url: "http://ice2.somafm.com/metal-128-mp3",
+        bitrate: 128,
+    },
+    RadioStation {
+        name: "Boot Liquor",
+        genre: "americana",
+        url: "http://ice2.somafm.com/bootliquor-128-mp3",
+        bitrate: 128,
+    },
+];
+
+#[derive(Clone, Copy, PartialEq)]
+enum RadioStatus {
+    Stopped,
+    Connecting,
+    Buffering,
+    Playing,
+    Error,
 }
 
 // ---------------------------------------------------------------------------
@@ -400,11 +478,8 @@ fn psp_main() {
 
     // Load wallpaper texture at reduced resolution (64x64 = 16KB vs 1MB).
     // The GE scales it up to 480x272 with bilinear filtering during blit.
-    use oasis_backend_psp::{WALLPAPER_TEX_W, WALLPAPER_TEX_H};
-    let wallpaper_data = oasis_backend_psp::generate_gradient(
-        WALLPAPER_TEX_W,
-        WALLPAPER_TEX_H,
-    );
+    use oasis_backend_psp::{WALLPAPER_TEX_H, WALLPAPER_TEX_W};
+    let wallpaper_data = oasis_backend_psp::generate_gradient(WALLPAPER_TEX_W, WALLPAPER_TEX_H);
     let wallpaper_tex = backend
         .load_texture_inner(WALLPAPER_TEX_W, WALLPAPER_TEX_H, &wallpaper_data)
         .unwrap_or(TextureId(0));
@@ -432,7 +507,11 @@ fn psp_main() {
 
     // Terminal state.
     let vol_info = backend.volatile_mem_info();
-    let mode_label = if cfg!(feature = "kernel-mode") { "kernel" } else { "user" };
+    let mode_label = if cfg!(feature = "kernel-mode") {
+        "kernel"
+    } else {
+        "user"
+    };
     let mut term_lines: Vec<String> = vec![
         format!("OASIS_OS v0.1.0 [PSP] ({mode_label} mode)"),
         format!(
@@ -526,6 +605,21 @@ fn psp_main() {
     let mut mp_loaded = false;
     let mut mp_file_name = String::new();
 
+    // Browser state.
+    let mut br_url = String::from("http://info.cern.ch");
+    let mut br_content_lines: Vec<String> = Vec::new();
+    let mut br_scroll: usize = 0;
+    let mut br_loading = false;
+    let mut br_status_msg = String::from("Press [] to enter URL");
+
+    // Radio state.
+    let mut radio_selected: usize = 0;
+    let mut radio_scroll: usize = 0;
+    let mut radio_status = RadioStatus::Stopped;
+    let mut radio_station_name = String::new();
+    let mut radio_now_playing = String::new();
+    let mut radio_error_msg = String::new();
+
     // AV codec modules (AvCodec, AvMpegBase, AvMp3) are loaded lazily
     // by the audio thread on first play. Loading them here at startup
     // would conflict with the PRX overlay's sceAudiocodec if the PRX
@@ -580,19 +674,64 @@ fn psp_main() {
                 IoResponse::Error { path, msg } => {
                     term_lines.push(format!("I/O error: {} - {}", path, msg));
                     pv_loading = false;
+                    if br_loading {
+                        br_loading = false;
+                        br_status_msg = format!("Error: {}", msg);
+                    }
                 },
                 IoResponse::FileReady { .. } => {},
                 IoResponse::HttpDone {
-                    tag: _,
+                    tag,
                     status_code,
                     body,
                 } => {
-                    let preview = String::from_utf8_lossy(&body[..body.len().min(256)]);
-                    term_lines.push(format!(
-                        "HTTP {status_code} ({} bytes): {preview}",
-                        body.len(),
-                    ));
+                    if tag == 0xBEEF {
+                        // Browser response.
+                        let html = String::from_utf8_lossy(&body);
+                        let text = strip_html(&html);
+                        br_content_lines = wrap_text(&text, 58);
+                        br_scroll = 0;
+                        br_loading = false;
+                        br_status_msg = format!("HTTP {} - {} bytes", status_code, body.len(),);
+                    } else {
+                        let preview = String::from_utf8_lossy(&body[..body.len().min(256)]);
+                        term_lines.push(format!(
+                            "HTTP {status_code} ({} bytes): {preview}",
+                            body.len(),
+                        ));
+                    }
                 },
+                IoResponse::RadioConnected {
+                    fd,
+                    icy_metaint,
+                    initial_data,
+                } => {
+                    radio_status = RadioStatus::Buffering;
+                    audio.send(AudioCmd::RadioStreamFromFd {
+                        fd,
+                        icy_metaint,
+                        initial_data,
+                    });
+                },
+                IoResponse::RadioError { msg } => {
+                    radio_status = RadioStatus::Error;
+                    radio_error_msg = msg;
+                },
+            }
+        }
+
+        // Poll radio streaming state from audio thread atomics.
+        if radio_status == RadioStatus::Buffering || radio_status == RadioStatus::Playing {
+            if !audio.is_radio_streaming() {
+                radio_status = RadioStatus::Stopped;
+                radio_now_playing.clear();
+            } else if audio.is_radio_buffering() {
+                radio_status = RadioStatus::Buffering;
+            } else {
+                radio_status = RadioStatus::Playing;
+            }
+            if let Some(meta) = audio.poll_radio_meta() {
+                radio_now_playing = meta;
             }
         }
 
@@ -720,6 +859,8 @@ fn psp_main() {
                         ClassicView::FileManager => ClassicView::Dashboard,
                         ClassicView::PhotoViewer => ClassicView::Dashboard,
                         ClassicView::MusicPlayer => ClassicView::Dashboard,
+                        ClassicView::Browser => ClassicView::Dashboard,
+                        ClassicView::Radio => ClassicView::Dashboard,
                     };
                 },
 
@@ -791,8 +932,23 @@ fn psp_main() {
                                 classic_view = ClassicView::MusicPlayer;
                                 mp_loaded = false;
                             },
+                            "Browser" => {
+                                classic_view = ClassicView::Browser;
+                                br_content_lines.clear();
+                                br_scroll = 0;
+                                br_loading = false;
+                                br_status_msg = String::from("Press [] to enter URL");
+                            },
+                            "Radio" => {
+                                classic_view = ClassicView::Radio;
+                                radio_selected = 0;
+                                radio_scroll = 0;
+                                // Keep radio_status if already playing.
+                            },
                             _ => {
-                                term_lines.push(format!("Launched: {}", app.title));
+                                // Apps without a Classic view: open in Desktop mode.
+                                app_mode = AppMode::Desktop;
+                                open_app_window(&mut wm, &mut sdi, app.id, app.title);
                             },
                         }
                     }
@@ -858,18 +1014,19 @@ fn psp_main() {
                                     Ok(()) => match psp::usb::UsbStorageMode::activate() {
                                         Ok(handle) => {
                                             usb_storage = Some(handle);
-                                            (vec![
-                                                "USB storage mode active. Connect cable to PC."
-                                                    .into(),
-                                            ], false)
+                                            (
+                                                vec![
+                                                    "USB storage mode active. Connect cable to PC."
+                                                        .into(),
+                                                ],
+                                                false,
+                                            )
                                         },
                                         Err(e) => {
                                             (vec![format!("USB activate failed: {e}")], false)
                                         },
                                     },
-                                    Err(e) => {
-                                        (vec![format!("USB bus start failed: {e}")], false)
-                                    },
+                                    Err(e) => (vec![format!("USB bus start failed: {e}")], false),
                                 }
                             }
                         },
@@ -884,24 +1041,27 @@ fn psp_main() {
                             let connected = psp::usb::is_connected();
                             let established = psp::usb::is_established();
                             let active = usb_storage.is_some();
-                            (vec![
-                                format!(
-                                    "USB cable: {}",
-                                    if connected {
-                                        "connected"
-                                    } else {
-                                        "disconnected"
-                                    }
-                                ),
-                                format!(
-                                    "Storage mode: {}",
-                                    if active { "ACTIVE" } else { "inactive" }
-                                ),
-                                format!(
-                                    "Host mounted: {}",
-                                    if established { "yes" } else { "no" },
-                                ),
-                            ], false)
+                            (
+                                vec![
+                                    format!(
+                                        "USB cable: {}",
+                                        if connected {
+                                            "connected"
+                                        } else {
+                                            "disconnected"
+                                        }
+                                    ),
+                                    format!(
+                                        "Storage mode: {}",
+                                        if active { "ACTIVE" } else { "inactive" }
+                                    ),
+                                    format!(
+                                        "Host mounted: {}",
+                                        if established { "yes" } else { "no" },
+                                    ),
+                                ],
+                                false,
+                            )
                         },
                         _ if cmd.trim().starts_with("play ") => {
                             let path = cmd.trim().strip_prefix("play ").unwrap().trim();
@@ -1050,10 +1210,7 @@ fn psp_main() {
                             if umd_activated {
                                 // SAFETY: deactivate UMD drive on exit.
                                 unsafe {
-                                    psp::sys::sceUmdDeactivate(
-                                        1,
-                                        b"disc0:\0".as_ptr(),
-                                    );
+                                    psp::sys::sceUmdDeactivate(1, b"disc0:\0".as_ptr());
                                 }
                                 umd_activated = false;
                             }
@@ -1064,10 +1221,7 @@ fn psp_main() {
                         if umd_activated {
                             // SAFETY: deactivate UMD drive on exit.
                             unsafe {
-                                psp::sys::sceUmdDeactivate(
-                                    1,
-                                    b"disc0:\0".as_ptr(),
-                                );
+                                psp::sys::sceUmdDeactivate(1, b"disc0:\0".as_ptr());
                             }
                             umd_activated = false;
                         }
@@ -1285,6 +1439,126 @@ fn psp_main() {
                     // Audio keeps playing in background.
                 },
 
+                // -- Browser input --
+                InputEvent::ButtonPress(Button::Square) if classic_view == ClassicView::Browser => {
+                    // Open PSP OSK for URL input.
+                    match psp::osk::OskBuilder::new("Enter URL")
+                        .max_chars(256)
+                        .initial_text(&br_url)
+                        .show()
+                    {
+                        Ok(Some(text)) => {
+                            br_url = text;
+                            br_status_msg = String::from("Press X to load");
+                        },
+                        Ok(None) | Err(_) => {},
+                    }
+                    backend.reinit_gu_frame();
+                },
+                InputEvent::ButtonPress(Button::Confirm)
+                    if classic_view == ClassicView::Browser =>
+                {
+                    // Init network on main thread (WiFi dialog needs GU).
+                    if !oasis_backend_psp::network::is_net_initialized() {
+                        if let Err(e) = oasis_backend_psp::network::ensure_net_init_pub() {
+                            br_status_msg = format!("Net error: {e}");
+                            backend.reinit_gu_frame();
+                            continue;
+                        }
+                        backend.reinit_gu_frame();
+                    }
+                    br_loading = true;
+                    br_status_msg = String::from("Loading...");
+                    br_content_lines.clear();
+                    io.send(IoCmd::HttpGet {
+                        url: br_url.clone(),
+                        tag: 0xBEEF,
+                    });
+                },
+                InputEvent::ButtonPress(Button::Up) if classic_view == ClassicView::Browser => {
+                    br_scroll = br_scroll.saturating_sub(3);
+                },
+                InputEvent::ButtonPress(Button::Down) if classic_view == ClassicView::Browser => {
+                    if br_scroll + 3 < br_content_lines.len() {
+                        br_scroll += 3;
+                    }
+                },
+                InputEvent::ButtonPress(Button::Triangle)
+                    if classic_view == ClassicView::Browser =>
+                {
+                    classic_view = ClassicView::Dashboard;
+                },
+                InputEvent::ButtonPress(Button::Cancel) if classic_view == ClassicView::Browser => {
+                    classic_view = ClassicView::Dashboard;
+                },
+
+                // -- Radio input --
+                InputEvent::ButtonPress(Button::Up)
+                    if classic_view == ClassicView::Radio
+                        && radio_status == RadioStatus::Stopped =>
+                {
+                    if radio_selected > 0 {
+                        radio_selected -= 1;
+                        if radio_selected < radio_scroll {
+                            radio_scroll = radio_selected;
+                        }
+                    }
+                },
+                InputEvent::ButtonPress(Button::Down)
+                    if classic_view == ClassicView::Radio
+                        && radio_status == RadioStatus::Stopped =>
+                {
+                    if radio_selected + 1 < RADIO_STATIONS.len() {
+                        radio_selected += 1;
+                        if radio_selected >= radio_scroll + FM_VISIBLE_ROWS {
+                            radio_scroll = radio_selected - FM_VISIBLE_ROWS + 1;
+                        }
+                    }
+                },
+                InputEvent::ButtonPress(Button::Confirm) if classic_view == ClassicView::Radio => {
+                    if radio_status == RadioStatus::Stopped || radio_status == RadioStatus::Error {
+                        if radio_selected < RADIO_STATIONS.len() {
+                            // Init network on main thread (WiFi dialog needs GU).
+                            if !oasis_backend_psp::network::is_net_initialized() {
+                                if let Err(e) = oasis_backend_psp::network::ensure_net_init_pub() {
+                                    radio_error_msg = format!("Net error: {e}");
+                                    radio_status = RadioStatus::Error;
+                                    backend.reinit_gu_frame();
+                                    continue;
+                                }
+                                backend.reinit_gu_frame();
+                            }
+                            let station = &RADIO_STATIONS[radio_selected];
+                            radio_station_name = String::from(station.name);
+                            radio_now_playing.clear();
+                            radio_status = RadioStatus::Connecting;
+                            io.send(IoCmd::RadioConnect {
+                                url: String::from(station.url),
+                            });
+                        }
+                    }
+                },
+                InputEvent::ButtonPress(Button::Square) if classic_view == ClassicView::Radio => {
+                    if radio_status != RadioStatus::Stopped {
+                        audio.send(AudioCmd::RadioStop);
+                        radio_status = RadioStatus::Stopped;
+                        radio_now_playing.clear();
+                    }
+                },
+                InputEvent::ButtonPress(Button::Triangle) if classic_view == ClassicView::Radio => {
+                    // Back to dashboard (radio keeps playing).
+                    classic_view = ClassicView::Dashboard;
+                },
+                InputEvent::ButtonPress(Button::Cancel) if classic_view == ClassicView::Radio => {
+                    // Stop + back.
+                    if radio_status != RadioStatus::Stopped {
+                        audio.send(AudioCmd::RadioStop);
+                        radio_status = RadioStatus::Stopped;
+                        radio_now_playing.clear();
+                    }
+                    classic_view = ClassicView::Dashboard;
+                },
+
                 _ => {},
             }
         }
@@ -1448,6 +1722,64 @@ fn psp_main() {
                         }
                         backend.force_bitmap_font = false;
                     },
+                    ClassicView::Browser => {
+                        backend.force_bitmap_font = true;
+                        if br_loading {
+                            draw_loading_indicator(&mut backend, "Loading page...");
+                        } else {
+                            draw_browser_view(
+                                &mut backend,
+                                &br_url,
+                                &br_content_lines,
+                                br_scroll,
+                                &br_status_msg,
+                            );
+                        }
+                        draw_button_hints(
+                            &mut backend,
+                            &[
+                                ("[]", "URL"),
+                                ("X", "Load"),
+                                ("^v", "Scroll"),
+                                ("O", "Back"),
+                            ],
+                        );
+                        backend.force_bitmap_font = false;
+                    },
+                    ClassicView::Radio => {
+                        backend.force_bitmap_font = true;
+                        match radio_status {
+                            RadioStatus::Stopped => {
+                                draw_radio_stations(&mut backend, radio_selected, radio_scroll);
+                                draw_button_hints(
+                                    &mut backend,
+                                    &[("X", "Tune"), ("^v", "Nav"), ("O", "Back")],
+                                );
+                            },
+                            RadioStatus::Connecting => {
+                                draw_loading_indicator(&mut backend, "Connecting...");
+                            },
+                            RadioStatus::Buffering | RadioStatus::Playing => {
+                                draw_radio_playing(
+                                    &mut backend,
+                                    &radio_station_name,
+                                    &radio_now_playing,
+                                    radio_status == RadioStatus::Buffering,
+                                    &audio,
+                                    viz_frame,
+                                );
+                                draw_button_hints(
+                                    &mut backend,
+                                    &[("[]", "Stop"), ("^", "Back"), ("O", "Stop+Back")],
+                                );
+                            },
+                            RadioStatus::Error => {
+                                draw_radio_error(&mut backend, &radio_error_msg);
+                                draw_button_hints(&mut backend, &[("X", "Retry"), ("O", "Back")]);
+                            },
+                        }
+                        backend.force_bitmap_font = false;
+                    },
                 }
             },
 
@@ -1474,62 +1806,68 @@ fn psp_main() {
                 // Draw WM chrome (frames, titlebars) + clipped content.
                 // Use bitmap font for app content (8px vs 12px system font).
                 backend.force_bitmap_font = true;
-                let _ = wm.draw_with_clips(&mut sdi, &mut backend, |window_id, cx, cy, cw, ch, be| {
-                    // Downcast back to PspBackend for direct calls.
-                    // Since draw_with_clips passes &mut dyn SdiBackend, we use
-                    // the trait methods here (which return Result).
-                    match window_id {
-                        "terminal" => {
-                            draw_terminal_windowed(&term_lines, &term_input, cx, cy, cw, ch, be)
-                        },
-                        "filemgr" => draw_filemgr_windowed(
-                            &fm_path,
-                            &fm_entries,
-                            fm_selected,
-                            fm_scroll,
-                            &fm2_path,
-                            &fm2_entries,
-                            fm2_selected,
-                            fm2_scroll,
-                            fm_active_panel,
-                            cx,
-                            cy,
-                            cw,
-                            ch,
-                            be,
-                        ),
-                        "photos" => draw_photos_windowed(
-                            pv_tex, pv_img_w, pv_img_h, pv_viewing, cx, cy, cw, ch, be,
-                        ),
-                        "music" => draw_music_windowed(&mp_file_name, &audio, cx, cy, cw, ch, be),
-                        "settings" => draw_settings_windowed(
-                            settings_clock,
-                            settings_bus,
-                            current_vol,
-                            cx,
-                            cy,
-                            cw,
-                            ch,
-                            be,
-                        ),
-                        "network" => draw_network_windowed(&status, cx, cy, cw, ch, be),
-                        "sysmon" => draw_sysmon_windowed(
-                            &status,
-                            &sysinfo,
-                            fps,
-                            free_kb,
-                            max_blk_kb,
-                            current_vol,
-                            usb_active,
-                            cx,
-                            cy,
-                            cw,
-                            ch,
-                            be,
-                        ),
-                        _ => Ok(()),
-                    }
-                });
+                let _ =
+                    wm.draw_with_clips(&mut sdi, &mut backend, |window_id, cx, cy, cw, ch, be| {
+                        // Downcast back to PspBackend for direct calls.
+                        // Since draw_with_clips passes &mut dyn SdiBackend, we use
+                        // the trait methods here (which return Result).
+                        match window_id {
+                            "terminal" => {
+                                draw_terminal_windowed(&term_lines, &term_input, cx, cy, cw, ch, be)
+                            },
+                            "filemgr" => draw_filemgr_windowed(
+                                &fm_path,
+                                &fm_entries,
+                                fm_selected,
+                                fm_scroll,
+                                &fm2_path,
+                                &fm2_entries,
+                                fm2_selected,
+                                fm2_scroll,
+                                fm_active_panel,
+                                cx,
+                                cy,
+                                cw,
+                                ch,
+                                be,
+                            ),
+                            "photos" => draw_photos_windowed(
+                                pv_tex, pv_img_w, pv_img_h, pv_viewing, cx, cy, cw, ch, be,
+                            ),
+                            "music" => {
+                                draw_music_windowed(&mp_file_name, &audio, cx, cy, cw, ch, be)
+                            },
+                            "settings" => draw_settings_windowed(
+                                settings_clock,
+                                settings_bus,
+                                current_vol,
+                                cx,
+                                cy,
+                                cw,
+                                ch,
+                                be,
+                            ),
+                            "network" => draw_network_windowed(&status, cx, cy, cw, ch, be),
+                            "sysmon" => draw_sysmon_windowed(
+                                &status,
+                                &sysinfo,
+                                fps,
+                                free_kb,
+                                max_blk_kb,
+                                current_vol,
+                                usb_active,
+                                cx,
+                                cy,
+                                cw,
+                                ch,
+                                be,
+                            ),
+                            "browser" => draw_browser_windowed(cx, cy, cw, ch, be),
+                            "packages" => draw_packages_windowed(cx, cy, cw, ch, be),
+                            "radio" => draw_radio_windowed(&audio, cx, cy, cw, ch, be),
+                            _ => Ok(()),
+                        }
+                    });
 
                 backend.force_bitmap_font = false;
             },
@@ -1568,6 +1906,14 @@ fn psp_main() {
                     String::from("SYS://NOW_PLAY")
                 } else {
                     String::from("SYS://MUSIC")
+                }
+            },
+            (_, ClassicView::Browser) => String::from("SYS://BROWSER"),
+            (_, ClassicView::Radio) => {
+                if audio.is_radio_streaming() {
+                    String::from("SYS://RADIO_ON")
+                } else {
+                    String::from("SYS://RADIO")
                 }
             },
         };
@@ -1785,8 +2131,22 @@ fn draw_filemgr_windowed(
 
     // Draw each panel.
     let panels: [(&[FileEntry], usize, usize, i32, u32, bool); 2] = [
-        (entries_l, selected_l, scroll_l, cx, half_w - 1, active_panel == 0),
-        (entries_r, selected_r, scroll_r, div_x + 1, cw - half_w, active_panel == 1),
+        (
+            entries_l,
+            selected_l,
+            scroll_l,
+            cx,
+            half_w - 1,
+            active_panel == 0,
+        ),
+        (
+            entries_r,
+            selected_r,
+            scroll_r,
+            div_x + 1,
+            cw - half_w,
+            active_panel == 1,
+        ),
     ];
     let max_rows = ((ch as i32 - 14) / FM_ROW_H) as usize;
 
@@ -2118,6 +2478,94 @@ fn draw_sysmon_windowed(
     Ok(())
 }
 
+fn draw_browser_windowed(
+    cx: i32,
+    cy: i32,
+    cw: u32,
+    ch: u32,
+    be: &mut dyn SdiBackend,
+) -> oasis_backend_psp::OasisResult<()> {
+    be.fill_rect(cx, cy, cw, ch, Color::rgba(5, 10, 25, 210))?;
+    be.draw_text("BROWSER", cx + 4, cy + 2, 8, Color::rgb(50, 120, 200))?;
+    be.fill_rect(cx, cy + 12, cw, 1, Color::rgba(255, 255, 255, 40))?;
+
+    let lbl = Color::rgb(160, 160, 160);
+    let mut y = cy + 20;
+    be.draw_text("Web browser for PSP.", cx + 4, y, 8, lbl)?;
+    y += 14;
+    be.draw_text("Use Terminal to browse:", cx + 4, y, 8, lbl)?;
+    y += 12;
+    be.draw_text("  open <url>", cx + 4, y, 8, Color::rgb(120, 200, 255))?;
+    y += 12;
+    be.draw_text("  gemini <url>", cx + 4, y, 8, Color::rgb(120, 200, 255))?;
+    y += 14;
+    be.draw_text("Supports HTML, CSS, Gemini.", cx + 4, y, 8, lbl)?;
+    Ok(())
+}
+
+fn draw_packages_windowed(
+    cx: i32,
+    cy: i32,
+    cw: u32,
+    ch: u32,
+    be: &mut dyn SdiBackend,
+) -> oasis_backend_psp::OasisResult<()> {
+    be.fill_rect(cx, cy, cw, ch, Color::rgba(5, 10, 20, 210))?;
+    be.draw_text("PACKAGE MGR", cx + 4, cy + 2, 8, Color::rgb(70, 130, 180))?;
+    be.fill_rect(cx, cy + 12, cw, 1, Color::rgba(255, 255, 255, 40))?;
+
+    let lbl = Color::rgb(160, 160, 160);
+    let mut y = cy + 20;
+    be.draw_text("Manage homebrew packages.", cx + 4, y, 8, lbl)?;
+    y += 14;
+    be.draw_text("Use Terminal commands:", cx + 4, y, 8, lbl)?;
+    y += 12;
+    be.draw_text("  pkg list", cx + 4, y, 8, Color::rgb(120, 200, 255))?;
+    y += 12;
+    be.draw_text(
+        "  pkg install <name>",
+        cx + 4,
+        y,
+        8,
+        Color::rgb(120, 200, 255),
+    )?;
+    Ok(())
+}
+
+fn draw_radio_windowed(
+    _audio: &AudioHandle,
+    cx: i32,
+    cy: i32,
+    cw: u32,
+    ch: u32,
+    be: &mut dyn SdiBackend,
+) -> oasis_backend_psp::OasisResult<()> {
+    be.fill_rect(cx, cy, cw, ch, Color::rgba(20, 10, 0, 210))?;
+    be.draw_text("RADIO", cx + 4, cy + 2, 8, Color::rgb(255, 140, 60))?;
+    be.fill_rect(cx, cy + 12, cw, 1, Color::rgba(255, 255, 255, 40))?;
+
+    let lbl = Color::rgb(160, 160, 160);
+    let hi = Color::rgb(120, 200, 255);
+    let mut y = cy + 20;
+
+    be.draw_text(
+        "Internet Radio Streaming",
+        cx + 4,
+        y,
+        8,
+        Color::rgb(255, 200, 80),
+    )?;
+    y += 14;
+    be.draw_text("Stations: SomaFM (8 presets)", cx + 4, y, 8, lbl)?;
+    y += 14;
+    be.draw_text("In-game: L+R+Start to open", cx + 4, y, 8, hi)?;
+    y += 12;
+    be.draw_text("overlay and toggle radio.", cx + 4, y, 8, hi)?;
+    y += 14;
+    be.draw_text("Requires WiFi connection.", cx + 4, y, 8, lbl)?;
+    Ok(())
+}
+
 // ---------------------------------------------------------------------------
 // Loading indicator
 // ---------------------------------------------------------------------------
@@ -2271,6 +2719,23 @@ fn draw_icon_graphic(backend: &mut PspBackend, app_id: &str, gx: i32, gy: i32, g
             backend.fill_rect_inner(cx - 1, cy - 3, 4, 8, s);
             backend.fill_rect_inner(cx + 4, cy - 5, 4, 10, s);
         },
+        "browser" => {
+            // Globe: circle outline approximation (H cross + V cross).
+            backend.fill_rect_inner(cx - 7, cy - 1, 15, 2, s);
+            backend.fill_rect_inner(cx - 1, cy - 7, 2, 14, s);
+            backend.fill_rect_inner(cx - 6, cy - 5, 1, 10, s);
+            backend.fill_rect_inner(cx + 6, cy - 5, 1, 10, s);
+            backend.fill_rect_inner(cx - 5, cy - 6, 10, 1, s);
+            backend.fill_rect_inner(cx - 5, cy + 6, 10, 1, s);
+        },
+        "radio" => {
+            // Radio waves: antenna dot + arcs.
+            backend.fill_rect_inner(cx - 1, cy + 2, 3, 3, s);
+            backend.fill_rect_inner(cx - 4, cy - 1, 2, 4, s);
+            backend.fill_rect_inner(cx + 3, cy - 1, 2, 4, s);
+            backend.fill_rect_inner(cx - 7, cy - 4, 2, 6, s);
+            backend.fill_rect_inner(cx + 6, cy - 4, 2, 6, s);
+        },
         _ => {},
     }
 }
@@ -2279,11 +2744,7 @@ fn draw_icon_graphic(backend: &mut PspBackend, app_id: &str, gx: i32, gy: i32, g
 // Status bar rendering
 // ---------------------------------------------------------------------------
 
-fn draw_status_bar(
-    backend: &mut PspBackend,
-    status: &StatusBarInfo,
-    sysinfo: &SystemInfo,
-) {
+fn draw_status_bar(backend: &mut PspBackend, status: &StatusBarInfo, sysinfo: &SystemInfo) {
     backend.fill_rect_inner(0, 0, SCREEN_WIDTH, STATUSBAR_H, STATUSBAR_BG);
     // Gradient simulation: highlight strips at top.
     backend.fill_rect_inner(0, 0, SCREEN_WIDTH, 1, Color::rgba(255, 255, 255, 20));
@@ -2618,12 +3079,7 @@ fn draw_view_header(backend: &mut PspBackend, title: &str, title_clr: Color, pat
 // Terminal rendering (classic full-screen)
 // ---------------------------------------------------------------------------
 
-fn draw_terminal(
-    backend: &mut PspBackend,
-    lines: &[String],
-    input: &str,
-    scroll_back: usize,
-) {
+fn draw_terminal(backend: &mut PspBackend, lines: &[String], input: &str, scroll_back: usize) {
     let bg = Color::rgba(0, 0, 0, 180);
     backend.fill_rect_inner(0, CONTENT_TOP as i32, SCREEN_WIDTH, CONTENT_H, bg);
 
@@ -2679,7 +3135,12 @@ fn draw_file_manager_dual(
     } else {
         format!("{}  |  [R] {}", path_l, path_r)
     };
-    draw_view_header(backend, "FILE MGR", Color::rgb(100, 200, 255), Some(&header));
+    draw_view_header(
+        backend,
+        "FILE MGR",
+        Color::rgb(100, 200, 255),
+        Some(&header),
+    );
 
     // Vertical divider.
     let half_w = SCREEN_WIDTH / 2;
@@ -2709,21 +3170,29 @@ fn draw_file_manager_dual(
 
     // Draw each panel.
     let panels: [(&[FileEntry], usize, usize, i32, u32, bool); 2] = [
-        (entries_l, selected_l, scroll_l, 0, half_w - 1, active_panel == 0),
-        (entries_r, selected_r, scroll_r, div_x + 1, half_w, active_panel == 1),
+        (
+            entries_l,
+            selected_l,
+            scroll_l,
+            0,
+            half_w - 1,
+            active_panel == 0,
+        ),
+        (
+            entries_r,
+            selected_r,
+            scroll_r,
+            div_x + 1,
+            half_w,
+            active_panel == 1,
+        ),
     ];
     // Half the visible rows since panels are narrower but same height.
     let panel_rows = FM_VISIBLE_ROWS;
 
     for &(entries, selected, scroll, px, pw, is_active) in &panels {
         if entries.is_empty() {
-            backend.draw_text_inner(
-                "(empty)",
-                px + 4,
-                FM_START_Y,
-                8,
-                Color::rgb(140, 140, 140),
-            );
+            backend.draw_text_inner("(empty)", px + 4, FM_START_Y, 8, Color::rgb(140, 140, 140));
             continue;
         }
 
@@ -2758,8 +3227,7 @@ fn draw_file_manager_dual(
             // Max chars for half-width panel (~28 chars at 8px each).
             let max_name_chars = ((pw as i32 - 32) / CHAR_W).max(4) as usize;
             let display_name = if entry.name.len() > max_name_chars {
-                let truncated: String =
-                    entry.name.chars().take(max_name_chars - 2).collect();
+                let truncated: String = entry.name.chars().take(max_name_chars - 2).collect();
                 format!("{}..", truncated)
             } else {
                 entry.name.clone()
@@ -3086,7 +3554,8 @@ fn draw_now_playing_visualizer(backend: &mut PspBackend, audio: &AudioHandle, vi
     let total_w = bar_count * (bar_w + bar_gap) - bar_gap;
     let viz_x = (SCREEN_WIDTH as i32 - total_w) / 2;
     let viz_base_y = CONTENT_TOP as i32 + 40;
-    let playing = audio.is_playing() && !audio.is_paused();
+    let playing = (audio.is_playing() && !audio.is_paused())
+        || (audio.is_radio_streaming() && !audio.is_radio_buffering());
 
     for i in 0..bar_count {
         let bar_h = if playing {
@@ -3111,6 +3580,398 @@ fn draw_now_playing_visualizer(backend: &mut PspBackend, audio: &AudioHandle, vi
             backend.fill_rect_inner(bx, by, bar_w as u32, 1, VIZ_BAR_PEAK);
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// Browser rendering (classic full-screen)
+// ---------------------------------------------------------------------------
+
+/// Strip HTML tags and decode common entities.
+fn strip_html(html: &str) -> String {
+    let mut out = String::with_capacity(html.len());
+    let mut in_tag = false;
+    let mut in_script = false;
+    let mut in_style = false;
+    let mut i = 0;
+    let bytes = html.as_bytes();
+
+    while i < bytes.len() {
+        if in_script {
+            // Look for </script>.
+            if i + 8 < bytes.len() {
+                let window: &[u8] = &bytes[i..i + 9];
+                let lower: Vec<u8> = window.iter().map(|b| b.to_ascii_lowercase()).collect();
+                if lower == b"</script>" {
+                    in_script = false;
+                    i += 9;
+                    continue;
+                }
+            }
+            i += 1;
+            continue;
+        }
+        if in_style {
+            if i + 7 < bytes.len() {
+                let window: &[u8] = &bytes[i..i + 8];
+                let lower: Vec<u8> = window.iter().map(|b| b.to_ascii_lowercase()).collect();
+                if lower == b"</style>" {
+                    in_style = false;
+                    i += 8;
+                    continue;
+                }
+            }
+            i += 1;
+            continue;
+        }
+        if bytes[i] == b'<' {
+            // Check for <script or <style.
+            if i + 7 < bytes.len() {
+                let peek: Vec<u8> = bytes[i + 1..i + 7]
+                    .iter()
+                    .map(|b| b.to_ascii_lowercase())
+                    .collect();
+                if peek == b"script" {
+                    in_script = true;
+                    in_tag = true;
+                    i += 1;
+                    continue;
+                }
+                if peek.starts_with(b"style") {
+                    in_style = true;
+                    in_tag = true;
+                    i += 1;
+                    continue;
+                }
+            }
+            in_tag = true;
+            // Insert newline for block elements.
+            if i + 2 < bytes.len() {
+                let next = bytes[i + 1].to_ascii_lowercase();
+                if next == b'p'
+                    || next == b'h'
+                    || (next == b'b'
+                        && i + 3 < bytes.len()
+                        && bytes[i + 2].to_ascii_lowercase() == b'r')
+                    || (next == b'd'
+                        && i + 3 < bytes.len()
+                        && bytes[i + 2].to_ascii_lowercase() == b'i')
+                    || (next == b'l'
+                        && i + 3 < bytes.len()
+                        && bytes[i + 2].to_ascii_lowercase() == b'i')
+                {
+                    out.push('\n');
+                }
+            }
+            i += 1;
+            continue;
+        }
+        if bytes[i] == b'>' {
+            in_tag = false;
+            i += 1;
+            continue;
+        }
+        if in_tag {
+            i += 1;
+            continue;
+        }
+        // Decode entities.
+        if bytes[i] == b'&' {
+            if i + 4 < bytes.len() && &bytes[i..i + 4] == b"&lt;" {
+                out.push('<');
+                i += 4;
+                continue;
+            }
+            if i + 4 < bytes.len() && &bytes[i..i + 4] == b"&gt;" {
+                out.push('>');
+                i += 4;
+                continue;
+            }
+            if i + 5 < bytes.len() && &bytes[i..i + 5] == b"&amp;" {
+                out.push('&');
+                i += 5;
+                continue;
+            }
+            if i + 6 < bytes.len() && &bytes[i..i + 6] == b"&nbsp;" {
+                out.push(' ');
+                i += 6;
+                continue;
+            }
+            if i + 6 < bytes.len() && &bytes[i..i + 6] == b"&quot;" {
+                out.push('"');
+                i += 6;
+                continue;
+            }
+        }
+        out.push(bytes[i] as char);
+        i += 1;
+    }
+    out
+}
+
+/// Word-wrap text to `max_chars` columns.
+fn wrap_text(text: &str, max_chars: usize) -> Vec<String> {
+    let mut lines = Vec::new();
+    for paragraph in text.split('\n') {
+        let trimmed = paragraph.trim();
+        if trimmed.is_empty() {
+            if lines.last().map_or(true, |l: &String| !l.is_empty()) {
+                lines.push(String::new());
+            }
+            continue;
+        }
+        let words: Vec<&str> = trimmed.split_whitespace().collect();
+        let mut line = String::new();
+        for word in &words {
+            if line.is_empty() {
+                line = word.to_string();
+            } else if line.len() + 1 + word.len() <= max_chars {
+                line.push(' ');
+                line.push_str(word);
+            } else {
+                lines.push(line);
+                line = word.to_string();
+            }
+        }
+        if !line.is_empty() {
+            lines.push(line);
+        }
+    }
+    lines
+}
+
+fn draw_browser_view(
+    backend: &mut PspBackend,
+    url: &str,
+    lines: &[String],
+    scroll: usize,
+    status_msg: &str,
+) {
+    let bg = Color::rgba(0, 0, 0, 200);
+    backend.fill_rect_inner(0, CONTENT_TOP as i32, SCREEN_WIDTH, CONTENT_H, bg);
+
+    draw_view_header(backend, "BROWSER", Color::rgb(50, 120, 200), None);
+
+    // URL bar.
+    let url_y = CONTENT_TOP as i32 + 3;
+    let url_x = 4 + 7 * CHAR_W + 8;
+    let display_url = if url.len() > 45 {
+        let trunc: String = url.chars().take(43).collect();
+        format!("{}..", trunc)
+    } else {
+        url.to_string()
+    };
+    backend.draw_text_inner(&display_url, url_x, url_y, 8, Color::rgb(120, 180, 255));
+
+    // Status line.
+    backend.draw_text_inner(status_msg, 4, FM_START_Y - 1, 8, Color::rgb(160, 160, 160));
+
+    // Content area.
+    let text_start_y = FM_START_Y + 10;
+    let visible_rows = ((BOTTOMBAR_Y - HINT_Y_OFFSET - text_start_y) / 9) as usize;
+    let end = (scroll + visible_rows).min(lines.len());
+    for i in scroll..end {
+        let row = (i - scroll) as i32;
+        let y = text_start_y + row * 9;
+        backend.draw_text_inner(&lines[i], 4, y, 8, Color::rgb(220, 220, 220));
+    }
+
+    // Scroll indicator.
+    if lines.len() > visible_rows && !lines.is_empty() {
+        let ratio = scroll as f32 / (lines.len() - 1).max(1) as f32;
+        let track_h = CONTENT_H as i32 - 30;
+        let dot_y = text_start_y + (ratio * track_h as f32) as i32;
+        backend.fill_rect_inner(
+            SCREEN_WIDTH as i32 - 4,
+            dot_y,
+            3,
+            8,
+            Color::rgba(255, 255, 255, 120),
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Radio rendering (classic full-screen)
+// ---------------------------------------------------------------------------
+
+fn draw_radio_stations(backend: &mut PspBackend, selected: usize, scroll: usize) {
+    let bg = Color::rgba(0, 0, 0, 200);
+    backend.fill_rect_inner(0, CONTENT_TOP as i32, SCREEN_WIDTH, CONTENT_H, bg);
+
+    draw_view_header(backend, "RADIO", Color::rgb(255, 140, 60), None);
+
+    if RADIO_STATIONS.is_empty() {
+        backend.draw_text_inner("No stations", 8, FM_START_Y, 8, Color::rgb(140, 140, 140));
+        return;
+    }
+
+    let end = (scroll + FM_VISIBLE_ROWS).min(RADIO_STATIONS.len());
+    for i in scroll..end {
+        let station = &RADIO_STATIONS[i];
+        let row = (i - scroll) as i32;
+        let y = FM_START_Y + row * FM_ROW_H;
+
+        if i == selected {
+            backend.fill_rect_inner(
+                0,
+                y - 1,
+                SCREEN_WIDTH,
+                FM_ROW_H as u32,
+                Color::rgba(255, 140, 60, 100),
+            );
+        }
+
+        // Radio icon.
+        backend.draw_text_inner("[R]", 4, y, 8, Color::rgb(255, 140, 60));
+
+        // Station name.
+        backend.draw_text_inner(station.name, 32, y, 8, Color::WHITE);
+
+        // Genre.
+        let genre_x = 230;
+        backend.draw_text_inner(station.genre, genre_x, y, 8, Color::rgb(160, 160, 160));
+
+        // Bitrate.
+        let br_str = format!("{}k", station.bitrate);
+        let br_x = 480 - (br_str.len() as i32 * 8) - 4;
+        backend.draw_text_inner(&br_str, br_x, y, 8, Color::rgb(140, 140, 140));
+    }
+
+    // Scrollbar.
+    if RADIO_STATIONS.len() > FM_VISIBLE_ROWS {
+        let ratio = selected as f32 / (RADIO_STATIONS.len() - 1).max(1) as f32;
+        let track_h = CONTENT_H as i32 - 16;
+        let dot_y = FM_START_Y + (ratio * track_h as f32) as i32;
+        backend.fill_rect_inner(
+            SCREEN_WIDTH as i32 - 4,
+            dot_y,
+            3,
+            8,
+            Color::rgba(255, 255, 255, 120),
+        );
+    }
+}
+
+fn draw_radio_playing(
+    backend: &mut PspBackend,
+    station_name: &str,
+    now_playing: &str,
+    is_buffering: bool,
+    audio: &AudioHandle,
+    viz_frame: u32,
+) {
+    let bg = Color::rgba(0, 0, 0, 210);
+    backend.fill_rect_inner(0, CONTENT_TOP as i32, SCREEN_WIDTH, CONTENT_H, bg);
+
+    let cx = SCREEN_WIDTH as i32 / 2;
+
+    // Visualizer (reuse music player's).
+    draw_now_playing_visualizer(backend, audio, viz_frame);
+
+    // Radio icon placeholder.
+    let art_size: u32 = 70;
+    let art_x = cx - art_size as i32 / 2;
+    let art_y = CONTENT_TOP as i32 + 44;
+    backend.fill_rect_inner(art_x, art_y, art_size, art_size, Color::rgb(255, 140, 60));
+    backend.fill_rect_inner(
+        art_x + 2,
+        art_y + 2,
+        art_size - 4,
+        art_size - 4,
+        Color::rgb(60, 40, 15),
+    );
+    backend.draw_text_inner("RADIO", art_x + 12, art_y + 28, 8, Color::rgb(255, 140, 60));
+
+    // Station name.
+    let max_chars = 50;
+    let display_name = if station_name.len() > max_chars {
+        let trunc: String = station_name.chars().take(max_chars - 2).collect();
+        format!("{}..", trunc)
+    } else {
+        station_name.to_string()
+    };
+    let name_x = cx - (display_name.len() as i32 * 8) / 2;
+    backend.draw_text_inner(
+        &display_name,
+        name_x,
+        art_y + art_size as i32 + 8,
+        8,
+        Color::rgb(255, 200, 150),
+    );
+
+    // Now playing (ICY metadata).
+    if !now_playing.is_empty() {
+        let np_display = if now_playing.len() > max_chars {
+            let trunc: String = now_playing.chars().take(max_chars - 2).collect();
+            format!("{}..", trunc)
+        } else {
+            now_playing.to_string()
+        };
+        let np_x = cx - (np_display.len() as i32 * 8) / 2;
+        backend.draw_text_inner(
+            &np_display,
+            np_x,
+            art_y + art_size as i32 + 20,
+            8,
+            Color::rgb(180, 180, 180),
+        );
+    }
+
+    // Status.
+    let status = if is_buffering {
+        "BUFFERING"
+    } else {
+        "STREAMING"
+    };
+    let status_clr = if is_buffering {
+        Color::rgb(255, 200, 80)
+    } else {
+        Color::rgb(120, 255, 120)
+    };
+    let status_x = cx - (status.len() as i32 * 8) / 2;
+    backend.draw_text_inner(
+        status,
+        status_x,
+        art_y + art_size as i32 + 36,
+        8,
+        status_clr,
+    );
+}
+
+fn draw_radio_error(backend: &mut PspBackend, error_msg: &str) {
+    let bg = Color::rgba(0, 0, 0, 200);
+    backend.fill_rect_inner(0, CONTENT_TOP as i32, SCREEN_WIDTH, CONTENT_H, bg);
+
+    draw_view_header(backend, "RADIO", Color::rgb(255, 140, 60), None);
+
+    let cx = SCREEN_WIDTH as i32 / 2;
+    let cy = CONTENT_TOP as i32 + CONTENT_H as i32 / 2;
+
+    backend.draw_text_inner(
+        "Connection Error",
+        cx - 8 * 8,
+        cy - 12,
+        8,
+        Color::rgb(255, 80, 80),
+    );
+
+    let max_chars = 55;
+    let display_msg = if error_msg.len() > max_chars {
+        let trunc: String = error_msg.chars().take(max_chars - 2).collect();
+        format!("{}..", trunc)
+    } else {
+        error_msg.to_string()
+    };
+    let msg_x = cx - (display_msg.len() as i32 * 8) / 2;
+    backend.draw_text_inner(&display_msg, msg_x, cy + 4, 8, Color::rgb(200, 200, 200));
+
+    backend.draw_text_inner(
+        "Press X to retry or O to go back",
+        cx - 16 * 8,
+        cy + 20,
+        8,
+        Color::rgb(140, 140, 140),
+    );
 }
 
 // Command interpreter and utilities are in commands.rs module.

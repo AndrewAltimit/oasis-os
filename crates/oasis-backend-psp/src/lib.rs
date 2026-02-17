@@ -38,17 +38,16 @@ pub mod tls;
 pub use audio::PspAudioBackend;
 pub use filesystem::{FileEntry, decode_jpeg, format_size, list_directory, read_file};
 pub use network::{PspNetworkBackend, PspNetworkService};
-pub use tls::PspTlsProvider;
-pub use power::{check_power_resumed, power_tick, register_power_callback, set_clock};
 #[cfg(feature = "kernel-exception")]
 pub use power::register_exception_handler;
+pub use power::{check_power_resumed, power_tick, register_power_callback, set_clock};
 pub use procedural::{
-    CURSOR_H, CURSOR_W, WALLPAPER_TEX_H, WALLPAPER_TEX_W, generate_cursor_pixels,
-    generate_gradient,
+    CURSOR_H, CURSOR_W, WALLPAPER_TEX_H, WALLPAPER_TEX_W, generate_cursor_pixels, generate_gradient,
 };
 pub use sfx::SfxId;
 pub use status::{StatusBarInfo, SystemInfo};
 pub use threading::{AudioCmd, AudioHandle, IoCmd, IoHandle, IoResponse, spawn_workers};
+pub use tls::PspTlsProvider;
 
 // ---------------------------------------------------------------------------
 // Re-exports from oasis-core
@@ -333,10 +332,7 @@ impl PspBackend {
         // after a utility dialog. DISPLAY_LIST is exclusively accessed
         // from the main loop. All sceGu/sceGum calls match init().
         unsafe {
-            sys::sceGuStart(
-                GuContextType::Direct,
-                &raw mut DISPLAY_LIST as *mut c_void,
-            );
+            sys::sceGuStart(GuContextType::Direct, &raw mut DISPLAY_LIST as *mut c_void);
 
             // Viewport and coordinate setup (matches init).
             sys::sceGuOffset(2048 - (SCREEN_WIDTH / 2), 2048 - (SCREEN_HEIGHT / 2));

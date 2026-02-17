@@ -86,9 +86,12 @@ ARG GROUP_ID=1000
 RUN groupadd -g ${GROUP_ID} ppsspp || true && \
     useradd -m -u ${USER_ID} -g ${GROUP_ID} ppsspp || true
 
-# Create PSP directory structure for the user
+# Create PSP directory structure for the user.
+# PPSSPPSDL uses ~/.config/ppsspp/PSP/ while PPSSPPHeadless uses ~/.ppsspp/PSP/.
+# Symlink so both use the same path (docker-compose mounts to .config).
 RUN mkdir -p /home/ppsspp/.config/ppsspp/PSP/GAME && \
-    chown -R ${USER_ID}:${GROUP_ID} /home/ppsspp/.config
+    ln -sf /home/ppsspp/.config/ppsspp /home/ppsspp/.ppsspp && \
+    chown -R ${USER_ID}:${GROUP_ID} /home/ppsspp/.config /home/ppsspp/.ppsspp
 
 # Entrypoint selects headless vs GUI
 COPY docker/ppsspp-entrypoint.sh /usr/local/bin/ppsspp-entrypoint.sh

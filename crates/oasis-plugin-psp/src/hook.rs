@@ -46,8 +46,7 @@ static mut POWER_GET_BATTERY_FN: Option<unsafe extern "C" fn() -> i32> = None;
 
 /// Current button state, updated by the controller polling thread.
 /// The display hook reads this atomically -- no API calls needed.
-static CURRENT_BUTTONS: core::sync::atomic::AtomicU32 =
-    core::sync::atomic::AtomicU32::new(0);
+static CURRENT_BUTTONS: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
 
 /// Poll controller buttons. Reads the value set by the ctrl thread.
 pub fn poll_buttons() -> u32 {
@@ -59,10 +58,7 @@ pub fn poll_buttons() -> u32 {
 /// Runs in a normal kernel thread context where all APIs work.
 /// Polls sceCtrlPeekBufferPositive at ~60Hz and stores the result
 /// in CURRENT_BUTTONS for the display hook to read.
-unsafe extern "C" fn ctrl_thread_entry(
-    _args: usize,
-    _argp: *mut core::ffi::c_void,
-) -> i32 {
+unsafe extern "C" fn ctrl_thread_entry(_args: usize, _argp: *mut core::ffi::c_void) -> i32 {
     // Brief delay to let the game fully start.
     unsafe { psp::sys::sceKernelDelayThread(500_000) };
 
@@ -100,8 +96,8 @@ unsafe fn start_ctrl_thread() {
         let thid = psp::sys::sceKernelCreateThread(
             b"OasisCtrl\0".as_ptr(),
             ctrl_thread_entry,
-            0x18, // priority
-            0x1000, // 4KB stack
+            0x18,                                // priority
+            0x1000,                              // 4KB stack
             psp::sys::ThreadAttributes::empty(), // kernel thread
             core::ptr::null_mut(),
         );
@@ -256,11 +252,9 @@ pub fn install_display_hook() -> bool {
     unsafe {
         for &(module, library) in POWER_MODULES {
             if core::ptr::read_volatile(&raw const POWER_SET_CLOCK_FN).is_none() {
-                if let Some(ptr) = psp::hook::find_function(
-                    module.as_ptr(),
-                    library.as_ptr(),
-                    NID_POWER_SET_CLOCK,
-                ) {
+                if let Some(ptr) =
+                    psp::hook::find_function(module.as_ptr(), library.as_ptr(), NID_POWER_SET_CLOCK)
+                {
                     core::ptr::write_volatile(
                         &raw mut POWER_SET_CLOCK_FN,
                         Some(core::mem::transmute(ptr)),
