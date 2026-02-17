@@ -637,7 +637,9 @@ impl RadioStreamer {
                 )
             };
             if n > 0 {
-                self.buf_valid += n as usize;
+                // Clamp to prevent overflow if recv returns more than asked.
+                self.buf_valid =
+                    (self.buf_valid + n as usize).min(Self::BUF_SIZE);
                 self.recv_fail_count = 0;
             } else if n == 0 {
                 // EOF: server closed the connection.
@@ -673,6 +675,18 @@ impl RadioStreamer {
                 let mut i = 0;
                 while i < received {
                     if self.icy_in_meta {
+                        if self.icy_meta_remaining == 0 {
+                            // Read the metadata length byte.
+                            let meta_len = tmp[i] as usize * 16;
+                            i += 1;
+                            if meta_len == 0 {
+                                // Empty metadata block.
+                                self.icy_in_meta = false;
+                                continue;
+                            }
+                            self.icy_meta_remaining = meta_len;
+                            self.icy_meta_buf.clear();
+                        }
                         // Consuming metadata bytes.
                         let avail = received - i;
                         let take = avail.min(self.icy_meta_remaining);
@@ -701,15 +715,12 @@ impl RadioStreamer {
                         self.icy_audio_count += take;
                         i += take;
                         if self.icy_audio_count >= self.icy_metaint {
+                            // Enter metadata mode; the length byte will
+                            // be consumed by the meta branch (handles
+                            // both inline and cross-recv boundaries).
                             self.icy_audio_count = 0;
-                            if i < received {
-                                let meta_len = tmp[i] as usize * 16;
-                                i += 1;
-                                if meta_len > 0 {
-                                    self.icy_in_meta = true;
-                                    self.icy_meta_remaining = meta_len;
-                                }
-                            }
+                            self.icy_in_meta = true;
+                            self.icy_meta_remaining = 0;
                         }
                     }
                 }
