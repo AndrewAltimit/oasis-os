@@ -1048,8 +1048,48 @@ unsafe fn init_mpeg_decoder(filepath: &[u8]) -> bool {
     }
     crate::debug_log(b"[VIDEO] ringbuf constructed OK");
 
+    // Flush data cache so the ME and sceMpeg see the PSMF header we
+    // wrote to MPEG_BUF via sceIoRead DMA, and the ringbuffer struct.
+    // SAFETY: cache maintenance.
+    unsafe {
+        psp::sys::sceKernelDcacheWritebackInvalidateAll();
+    }
+
+    // Query stream info BEFORE Create (standard PSP example order).
+    // sceMpegQueryStreamOffset may initialize the SceMpeg handle's
+    // internal PSMF header fields that sceMpegCreate validates.
+    unsafe {
+        let mut offset = 0u32;
+        let mut size = 0u32;
+        if let Some(f) = core::ptr::read_volatile(&raw const MPEG_QUERY_STREAM_OFFSET_FN) {
+            let r = f(MPEG_HANDLE as *mut u32, MPEG_BUF, &mut offset);
+            log_i32(b"[VIDEO] QStreamOffset ret=", r);
+        }
+        if let Some(f) = core::ptr::read_volatile(&raw const MPEG_QUERY_STREAM_SIZE_FN) {
+            let r = f(MPEG_BUF, &mut size);
+            log_i32(b"[VIDEO] QStreamSize ret=", r);
+        }
+        STREAM_OFFSET = offset;
+        STREAM_SIZE = size;
+        log_u32(b"[VIDEO] stream offset=", offset);
+        log_u32(b"[VIDEO] stream size=", size);
+    }
+
+    // Brief delay to let ME hardware settle after stream queries.
+    // SAFETY: kernel delay.
+    unsafe {
+        psp::sys::sceKernelDelayThread(50_000);
+    }
+
+    // Log all parameters before the call for diagnostics.
+    log_hex(b"[VIDEO] Create: hdl=", unsafe { MPEG_HANDLE } as u32);
+    log_hex(b"[VIDEO] Create: buf=", unsafe { MPEG_BUF } as u32);
+    log_i32(b"[VIDEO] Create: sz=", mpeg_mem_size);
+    log_hex(b"[VIDEO] Create: rb=", unsafe { RINGBUF } as u32);
+    crate::debug_log(b"[VIDEO] calling sceMpegCreate...");
+
     // Create sceMpeg handle.
-    // SAFETY: All buffers allocated and aligned.
+    // SAFETY: All buffers allocated, aligned, and cache-flushed.
     let ret = unsafe {
         if let Some(f) = core::ptr::read_volatile(&raw const MPEG_CREATE_FN) {
             f(
@@ -1072,24 +1112,6 @@ unsafe fn init_mpeg_decoder(filepath: &[u8]) -> bool {
         return false;
     }
     crate::debug_log(b"[VIDEO] sceMpegCreate OK");
-
-    // Query stream offset and size from the PSMF header in MPEG_BUF.
-    unsafe {
-        let mut offset = 0u32;
-        let mut size = 0u32;
-        if let Some(f) = core::ptr::read_volatile(&raw const MPEG_QUERY_STREAM_OFFSET_FN) {
-            let r = f(MPEG_HANDLE as *mut u32, MPEG_BUF, &mut offset);
-            log_i32(b"[VIDEO] QStreamOffset ret=", r);
-        }
-        if let Some(f) = core::ptr::read_volatile(&raw const MPEG_QUERY_STREAM_SIZE_FN) {
-            let r = f(MPEG_BUF, &mut size);
-            log_i32(b"[VIDEO] QStreamSize ret=", r);
-        }
-        STREAM_OFFSET = offset;
-        STREAM_SIZE = size;
-        log_u32(b"[VIDEO] stream offset=", offset);
-        log_u32(b"[VIDEO] stream size=", size);
-    }
 
     // Seek to stream data start.
     // SAFETY: Valid fd.
