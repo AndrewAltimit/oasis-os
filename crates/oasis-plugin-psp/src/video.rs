@@ -1910,9 +1910,7 @@ pub fn start_video_thread() {
             video_thread_entry,
             0x1A, // Priority 26 (below audio at 24).
             0x4000, // 16KB stack.
-            // USER mode: sceMpeg is a user-mode library and validates
-            // the caller's thread context. Kernel threads get 0x80628001.
-            psp::sys::ThreadAttributes::USER,
+            psp::sys::ThreadAttributes::empty(), // kernel thread
             core::ptr::null_mut(),
         );
         if thid.0 >= 0 {
