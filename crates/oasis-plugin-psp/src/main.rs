@@ -75,8 +75,8 @@ fn psp_main() {
         // playback from the overlay menu even when autoplay is off).
         audio::start_audio_thread();
 
-        // Start video thread for PIP playback.
-        video::start_video_thread();
+        // Video thread starts lazily on first PIP menu command --
+        // no boot-time thread creation or AV module loading.
     } else {
         debug_log(b"[OASIS] hook install FAILED");
     }

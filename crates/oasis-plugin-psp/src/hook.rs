@@ -294,11 +294,6 @@ pub fn install_display_hook() -> bool {
         }
     }
 
-    // Resolve sceMpeg NIDs for PIP video playback.
-    unsafe {
-        crate::video::try_resolve_mpeg();
-    }
-
     HOOK_INSTALLED.store(true, Ordering::Release);
     crate::debug_log(b"[OASIS] hook installed OK");
     true

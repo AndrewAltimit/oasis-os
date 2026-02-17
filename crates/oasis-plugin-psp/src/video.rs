@@ -70,7 +70,10 @@ const MPEG_MODULES: &[(&[u8], &[u8])] = &[
     (b"sceMpeg_library\0", b"sceMpeg\0"),
     (b"sceMpeg\0", b"sceMpeg\0"),
     (b"sceMpeg_Library\0", b"sceMpeg\0"),
+    (b"sceMPEG_library\0", b"sceMpeg\0"),
     (b"mpeg_vsh\0", b"sceMpeg\0"),
+    (b"mpeg.prx\0", b"sceMpeg\0"),
+    (b"sceMpeg_library\0", b"sceMpeg_library\0"),
 ];
 
 const MPEG_BASE_MODULES: &[(&[u8], &[u8])] = &[
@@ -78,6 +81,8 @@ const MPEG_BASE_MODULES: &[(&[u8], &[u8])] = &[
     (b"sceMpegbase\0", b"sceMpegbase\0"),
     (b"sceMpegBase_Driver\0", b"sceMpegbase\0"),
     (b"mpeg_vsh\0", b"sceMpegbase\0"),
+    (b"mpegbase.prx\0", b"sceMpegbase\0"),
+    (b"sceMpegbase_Driver\0", b"sceMpegbase_driver\0"),
 ];
 
 // sceUtility for loading AV modules
@@ -227,19 +232,22 @@ static FRAME_INDEX: AtomicU8 = AtomicU8::new(0);
 /// Whether the video subsystem is available (sceMpeg resolved).
 static VIDEO_AVAILABLE: AtomicU8 = AtomicU8::new(0);
 
+/// Whether the video thread has been launched.
+static VIDEO_THREAD_STARTED: AtomicU8 = AtomicU8::new(0);
+
 // ---------------------------------------------------------------------------
 // Static buffers and state
 // ---------------------------------------------------------------------------
 
-/// Video file playlist.
+/// Video file playlist (small, stays in BSS -- 1280 bytes).
 static mut VIDEO_LIST: [[u8; MAX_FILENAME]; MAX_VIDEOS] = [[0u8; MAX_FILENAME]; MAX_VIDEOS];
 static mut VIDEO_COUNT: usize = 0;
 static mut CURRENT_VIDEO: usize = 0;
 
-/// Video filename being played (for OSD display).
+/// Video filename being played (for OSD display, 48 bytes).
 static mut VIDEO_NAME: [u8; 48] = [0u8; 48];
 
-/// sceMpeg handle (pointer-sized).
+/// sceMpeg handle (64 bytes).
 static mut MPEG_HANDLE: [u32; 16] = [0u32; 16];
 
 /// Video stream and audio stream handles.
@@ -249,28 +257,35 @@ static mut AUDIO_STREAM: *mut u8 = core::ptr::null_mut();
 /// AVC ES buffer.
 static mut AVC_ES_BUF: *mut u8 = core::ptr::null_mut();
 
-/// AU (Access Unit) structs for video and audio.
+/// AU (Access Unit) structs for video and audio (128 bytes total).
 static mut VIDEO_AU: [u8; 64] = [0u8; 64];
 static mut AUDIO_AU: [u8; 64] = [0u8; 64];
 
-/// Double-buffered RGB frames for PIP display.
-/// Each frame is PIP_W * PIP_H * 4 bytes = 57600 bytes.
-static mut PIP_FRAME_A: [u8; (PIP_W * PIP_H * 4) as usize] =
-    [0u8; (PIP_W * PIP_H * 4) as usize];
-static mut PIP_FRAME_B: [u8; (PIP_W * PIP_H * 4) as usize] =
-    [0u8; (PIP_W * PIP_H * 4) as usize];
+/// sceMpeg ringbuffer struct (128 bytes).
+static mut RINGBUF: [u8; 128] = [0u8; 128];
 
-/// Allocated buffer pointers (from user memory partition 2).
+/// Allocated buffer pointers (all from user-memory partition 2, on-demand).
 static mut MPEG_BUF: *mut u8 = core::ptr::null_mut();
 static mut RINGBUF_DATA: *mut u8 = core::ptr::null_mut();
-static mut RINGBUF: [u8; 128] = [0u8; 128]; // SceMpegRingbuffer struct
 
-/// File read buffer for ringbuffer callback.
+/// On-demand buffers allocated from partition 2 (NOT static arrays).
+/// These pointers are set by alloc_pip_buffers() on first PIP activation.
+static mut PIP_FRAME_A: *mut u8 = core::ptr::null_mut();
+static mut PIP_FRAME_B: *mut u8 = core::ptr::null_mut();
+static mut FILE_READ_BUF: *mut u8 = core::ptr::null_mut();
+static mut PCM_BUF: *mut u8 = core::ptr::null_mut();
+
+/// Sizes for on-demand buffers.
+const PIP_FRAME_SIZE: usize = (PIP_W * PIP_H * 4) as usize; // 57600
 const FILE_READ_BUF_LEN: usize = 16384;
-static mut FILE_READ_BUF: [u8; FILE_READ_BUF_LEN] = [0u8; FILE_READ_BUF_LEN];
+const PCM_BUF_SIZE: usize = ATRAC_SAMPLES as usize * 4; // 8192
 
-/// PCM audio output buffer (ATRAC decode output).
-static mut PCM_BUF: [u8; ATRAC_SAMPLES as usize * 4] = [0u8; ATRAC_SAMPLES as usize * 4];
+/// Total on-demand allocation: 2 PIP frames + file read + PCM + padding.
+const PIP_ALLOC_SIZE: u32 =
+    (PIP_FRAME_SIZE * 2 + FILE_READ_BUF_LEN + PCM_BUF_SIZE + 64) as u32;
+
+/// Memory block ID for PIP buffers (partition 2).
+static mut PIP_BUF_BLOCK: i32 = -1;
 
 /// File descriptor for current video file.
 static mut VIDEO_FD: i32 = -1;
@@ -332,12 +347,73 @@ unsafe fn load_mpeg_modules() {
     }
 }
 
+/// Allocate PIP frame buffers and I/O buffers from user-memory partition 2.
+/// Returns true on success.
+unsafe fn alloc_pip_buffers() -> bool {
+    if unsafe { PIP_BUF_BLOCK } >= 0 {
+        return true; // Already allocated.
+    }
+
+    let block_id = unsafe {
+        psp::sys::sceKernelAllocPartitionMemory(
+            psp::sys::SceSysMemPartitionId::SceKernelPrimaryUserPartition,
+            b"OasisPIP\0".as_ptr(),
+            psp::sys::SceSysMemBlockTypes::Low,
+            PIP_ALLOC_SIZE,
+            core::ptr::null_mut(),
+        )
+    };
+    if block_id < psp::sys::SceUid(0) {
+        crate::debug_log(b"[VIDEO] PIP buf alloc failed");
+        return false;
+    }
+
+    let base = unsafe { psp::sys::sceKernelGetBlockHeadAddr(block_id) } as *mut u8;
+    let aligned = ((base as u32 + 15) & !15) as *mut u8;
+
+    unsafe {
+        PIP_FRAME_A = aligned;
+        PIP_FRAME_B = aligned.add(PIP_FRAME_SIZE);
+        FILE_READ_BUF = aligned.add(PIP_FRAME_SIZE * 2);
+        PCM_BUF = aligned.add(PIP_FRAME_SIZE * 2 + FILE_READ_BUF_LEN);
+        PIP_BUF_BLOCK = block_id.0;
+
+        // Zero the frame buffers.
+        let mut i = 0;
+        while i < PIP_FRAME_SIZE {
+            *PIP_FRAME_A.add(i) = 0;
+            *PIP_FRAME_B.add(i) = 0;
+            i += 1;
+        }
+    }
+
+    log_i32(b"[VIDEO] PIP bufs allocated, block=", block_id.0);
+    true
+}
+
+/// Free PIP frame buffers.
+unsafe fn free_pip_buffers() {
+    let block = unsafe { PIP_BUF_BLOCK };
+    if block >= 0 {
+        unsafe {
+            psp::sys::sceKernelFreePartitionMemory(psp::sys::SceUid(block));
+            PIP_BUF_BLOCK = -1;
+            PIP_FRAME_A = core::ptr::null_mut();
+            PIP_FRAME_B = core::ptr::null_mut();
+            FILE_READ_BUF = core::ptr::null_mut();
+            PCM_BUF = core::ptr::null_mut();
+        }
+        crate::debug_log(b"[VIDEO] PIP bufs freed");
+    }
+}
+
 /// Try to resolve all sceMpeg NIDs. Returns true if core functions resolved.
-pub unsafe fn try_resolve_mpeg() -> bool {
+unsafe fn try_resolve_mpeg() -> bool {
     // Load required AV modules first.
     unsafe {
         load_mpeg_modules();
-        psp::sys::sceKernelDelayThread(100_000); // Let modules register
+        // Give loaded modules time to register their exports.
+        psp::sys::sceKernelDelayThread(500_000);
     }
 
     let mut ok = true;
@@ -578,13 +654,16 @@ unsafe extern "C" fn ringbuf_callback(
     let mut total_read: u32 = 0;
 
     while total_read < bytes_to_read {
-        // SAFETY: Single-threaded access; FILE_READ_BUF only used by this callback.
+        let read_buf = unsafe { core::ptr::read_volatile(&raw const FILE_READ_BUF) };
+        if read_buf.is_null() {
+            break;
+        }
         let chunk = (bytes_to_read - total_read).min(FILE_READ_BUF_LEN as u32);
         // SAFETY: sceIoRead with valid fd and buffer.
         let ret = unsafe {
             psp::sys::sceIoRead(
                 psp::sys::SceUid(fd),
-                (&raw mut FILE_READ_BUF).cast::<u8>() as *mut _,
+                read_buf as *mut _,
                 chunk,
             )
         };
@@ -713,7 +792,8 @@ unsafe fn init_mpeg_decoder(filepath: &[u8]) -> bool {
     };
     if ret < 0 {
         log_i32(b"[VIDEO] ringbuf construct failed=", ret);
-        cleanup_mpeg(block_id);
+        // SAFETY: Cleaning up partially-initialized mpeg state.
+        unsafe { cleanup_mpeg(block_id) };
         return false;
     }
 
@@ -736,7 +816,8 @@ unsafe fn init_mpeg_decoder(filepath: &[u8]) -> bool {
     };
     if ret < 0 {
         log_i32(b"[VIDEO] sceMpegCreate failed=", ret);
-        cleanup_mpeg(block_id);
+        // SAFETY: Cleaning up partially-initialized mpeg state.
+        unsafe { cleanup_mpeg(block_id) };
         return false;
     }
 
@@ -977,11 +1058,15 @@ unsafe fn convert_ycrcb_to_rgb(ycrcb: *mut u8) {
     // sceMpegBaseCscVme converts YCrCb to ABGR8888.
     // The output goes to the back buffer of our double buffer.
     let idx = FRAME_INDEX.load(Ordering::Relaxed);
+    // Write to the back buffer (opposite of what display hook reads).
     let dst = if idx == 0 {
-        unsafe { (&raw mut PIP_FRAME_B).cast::<u8>() }
+        unsafe { core::ptr::read_volatile(&raw const PIP_FRAME_B) }
     } else {
-        unsafe { (&raw mut PIP_FRAME_A).cast::<u8>() }
+        unsafe { core::ptr::read_volatile(&raw const PIP_FRAME_A) }
     };
+    if dst.is_null() {
+        return;
+    }
 
     unsafe {
         if let Some(f) = core::ptr::read_volatile(&raw const MPEG_BASE_CSC_VME_FN) {
@@ -1029,12 +1114,16 @@ unsafe fn decode_audio_frame() {
     }
 
     // Decode ATRAC to PCM.
+    let pcm = unsafe { core::ptr::read_volatile(&raw const PCM_BUF) };
+    if pcm.is_null() {
+        return;
+    }
     let ret = unsafe {
         if let Some(f) = core::ptr::read_volatile(&raw const MPEG_ATRAC_DECODE_FN) {
             f(
                 (&raw mut MPEG_HANDLE).cast::<u32>(),
                 (&raw mut AUDIO_AU).cast::<u8>(),
-                (&raw mut PCM_BUF).cast::<u8>(),
+                pcm,
                 0, // Padding
             )
         } else {
@@ -1048,7 +1137,7 @@ unsafe fn decode_audio_frame() {
     // Output PCM to audio channel.
     unsafe {
         if let Some(f) = core::ptr::read_volatile(&raw const VID_AUDIO_OUTPUT_FN) {
-            f(AUDIO_CH_HANDLE, 0x8000, (&raw const PCM_BUF).cast::<u8>()); // 0x8000 = max volume
+            f(AUDIO_CH_HANDLE, 0x8000, pcm); // 0x8000 = max volume
         }
     }
 }
@@ -1099,12 +1188,33 @@ unsafe fn check_av_sync() {
 // ---------------------------------------------------------------------------
 
 /// Video thread entry point.
+///
+/// This thread is started lazily on first PIP command (not at boot).
+/// It handles NID resolution, buffer allocation, file scanning, and
+/// the decode loop.
 unsafe extern "C" fn video_thread_entry(_args: usize, _argp: *mut core::ffi::c_void) -> i32 {
-    crate::debug_log(b"[VIDEO] thread started");
+    crate::debug_log(b"[VIDEO] thread started, resolving NIDs...");
 
-    // Wait for system to stabilize.
+    // Wait for game to fully initialize before touching AV modules.
     unsafe {
-        psp::sys::sceKernelDelayThread(3_000_000);
+        psp::sys::sceKernelDelayThread(2_000_000);
+    }
+
+    // Resolve sceMpeg NIDs (deferred from boot to avoid ME conflicts).
+    let resolved = unsafe { try_resolve_mpeg() };
+    if !resolved {
+        // Retry once after a longer delay -- game may still be loading.
+        crate::debug_log(b"[VIDEO] NID retry in 3s...");
+        unsafe {
+            psp::sys::sceKernelDelayThread(3_000_000);
+        }
+        unsafe { try_resolve_mpeg() };
+    }
+
+    // Allocate PIP frame buffers from user-memory partition 2.
+    if !unsafe { alloc_pip_buffers() } {
+        crate::debug_log(b"[VIDEO] PIP alloc failed, thread exiting");
+        return 1;
     }
 
     // Scan for video files.
@@ -1230,6 +1340,12 @@ fn start_playback(mem_block_id: &mut psp::sys::SceUid) {
         return;
     }
 
+    // Allocate PIP frame buffers on demand.
+    if !unsafe { alloc_pip_buffers() } {
+        overlay::show_osd(b"PIP: out of memory");
+        return;
+    }
+
     let idx = unsafe { CURRENT_VIDEO };
     let count = unsafe { VIDEO_COUNT };
     if idx >= count {
@@ -1281,11 +1397,16 @@ fn start_playback(mem_block_id: &mut psp::sys::SceUid) {
 fn stop_playback(mem_block_id: &mut psp::sys::SceUid) {
     PIP_ACTIVE.store(0, Ordering::Relaxed);
 
-    // Clean up decoder.
+    // Clean up decoder (frees MPEG buffers).
     unsafe {
         cleanup_mpeg(*mem_block_id);
     }
     *mem_block_id = psp::sys::SceUid(-1);
+
+    // Free PIP frame buffers (returns ~140KB to user partition).
+    unsafe {
+        free_pip_buffers();
+    }
 
     // Resume background MP3 audio.
     crate::audio::resume_after_video();
@@ -1297,10 +1418,20 @@ fn stop_playback(mem_block_id: &mut psp::sys::SceUid) {
 // Public API
 // ---------------------------------------------------------------------------
 
-/// Start the video thread.
-pub fn start_video_thread() {
-    crate::debug_log(b"[VIDEO] starting video thread...");
+/// Ensure the video thread is running (lazy start on first PIP command).
+fn ensure_video_thread() {
+    if VIDEO_THREAD_STARTED.load(Ordering::Relaxed) != 0 {
+        return;
+    }
+    // CAS to prevent double-start.
+    if VIDEO_THREAD_STARTED
+        .compare_exchange(0, 1, Ordering::SeqCst, Ordering::Relaxed)
+        .is_err()
+    {
+        return;
+    }
 
+    crate::debug_log(b"[VIDEO] starting video thread...");
     unsafe {
         let thid = psp::sys::sceKernelCreateThread(
             b"OasisVideo\0".as_ptr(),
@@ -1312,28 +1443,22 @@ pub fn start_video_thread() {
         );
         if thid.0 >= 0 {
             psp::sys::sceKernelStartThread(thid, 0, core::ptr::null_mut());
-            crate::debug_log(b"[VIDEO] thread started");
         } else {
             crate::debug_log(b"[VIDEO] thread create FAILED");
+            VIDEO_THREAD_STARTED.store(0, Ordering::Relaxed);
         }
     }
 }
 
 /// Toggle PIP on/off.
 pub fn toggle_pip() {
-    if VIDEO_AVAILABLE.load(Ordering::Relaxed) == 0 {
-        overlay::show_osd(b"Video: not available");
-        return;
-    }
+    ensure_video_thread();
     VIDEO_CMD.store(1, Ordering::Relaxed);
 }
 
 /// Advance to next video.
 pub fn next_video() {
-    if VIDEO_AVAILABLE.load(Ordering::Relaxed) == 0 {
-        overlay::show_osd(b"Video: not available");
-        return;
-    }
+    ensure_video_thread();
     VIDEO_CMD.store(2, Ordering::Relaxed);
 }
 
@@ -1343,13 +1468,14 @@ pub fn is_pip_active() -> bool {
 }
 
 /// Get a pointer to the current display frame (front buffer).
-/// Returns (ptr, width, height).
+/// Returns (ptr, width, height). ptr may be null if buffers not allocated.
 pub fn pip_frame() -> (*const u8, u32, u32) {
     let idx = FRAME_INDEX.load(Ordering::Relaxed);
+    // SAFETY: PIP_FRAME_A/B are either null or valid allocated pointers.
     let ptr = if idx == 0 {
-        (&raw const PIP_FRAME_A).cast::<u8>()
+        unsafe { core::ptr::read_volatile(&raw const PIP_FRAME_A) }
     } else {
-        (&raw const PIP_FRAME_B).cast::<u8>()
+        unsafe { core::ptr::read_volatile(&raw const PIP_FRAME_B) }
     };
     (ptr, PIP_W, PIP_H)
 }
