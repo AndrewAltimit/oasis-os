@@ -1059,6 +1059,18 @@ unsafe fn init_mpeg_decoder(filepath: &[u8]) -> bool {
     }
     crate::debug_log(b"[VIDEO] ringbuf constructed OK");
 
+    // Dump ringbuffer struct for diagnostics (callback addr, gp, etc).
+    unsafe {
+        // SceMpegRingbuffer layout: packets(0), unk0-5(4-24), data(28),
+        // cbParam(32), cbFunc(36), dummy(40), gp(44).
+        let rb = RINGBUF as *const u32;
+        log_i32(b"[VIDEO] rb.packets=", *rb as i32);
+        log_hex(b"[VIDEO] rb.data=", *rb.add(7));
+        log_hex(b"[VIDEO] rb.cbFunc=", *rb.add(9));
+        log_hex(b"[VIDEO] rb.gp=", *rb.add(11));
+    }
+    log_hex(b"[VIDEO] our cb addr=", ringbuf_callback as *const () as u32);
+
     // Flush data cache so sceMpeg sees zeroed MPEG_BUF and the
     // constructed ringbuffer struct in physical memory.
     // SAFETY: cache maintenance.
@@ -1898,7 +1910,9 @@ pub fn start_video_thread() {
             video_thread_entry,
             0x1A, // Priority 26 (below audio at 24).
             0x4000, // 16KB stack.
-            psp::sys::ThreadAttributes::empty(),
+            // USER mode: sceMpeg is a user-mode library and validates
+            // the caller's thread context. Kernel threads get 0x80628001.
+            psp::sys::ThreadAttributes::USER,
             core::ptr::null_mut(),
         );
         if thid.0 >= 0 {
