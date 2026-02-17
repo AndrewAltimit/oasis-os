@@ -328,11 +328,12 @@ static mut CSC_BUF: *mut u8 = core::ptr::null_mut();
 /// Sizes for on-demand buffers.
 const PIP_FRAME_SIZE: usize = (PIP_W * PIP_H * 4) as usize; // 57600
 const PCM_BUF_SIZE: usize = ATRAC_SAMPLES as usize * 4; // 8192
-const CSC_BUF_SIZE: usize = (DECODE_W * DECODE_H * 4) as usize; // 522240
 
-/// Total on-demand allocation: 2 PIP frames + PCM + CSC + padding.
+/// Total on-demand allocation: 2 PIP frames + PCM + padding.
+/// CSC_BUF (522KB) is only needed for hardware CscVme which is never
+/// available from kernel PRX. Software CSC decodes directly to PIP size.
 const PIP_ALLOC_SIZE: u32 =
-    (PIP_FRAME_SIZE * 2 + PCM_BUF_SIZE + CSC_BUF_SIZE + 64) as u32;
+    (PIP_FRAME_SIZE * 2 + PCM_BUF_SIZE + 64) as u32;
 
 /// Memory block ID for PIP buffers (partition 2).
 static mut PIP_BUF_BLOCK: i32 = -1;
@@ -494,7 +495,6 @@ unsafe fn alloc_pip_buffers() -> bool {
         PIP_FRAME_A = aligned;
         PIP_FRAME_B = aligned.add(PIP_FRAME_SIZE);
         PCM_BUF = aligned.add(PIP_FRAME_SIZE * 2);
-        CSC_BUF = aligned.add(PIP_FRAME_SIZE * 2 + PCM_BUF_SIZE);
         PIP_BUF_BLOCK = block_id.0;
 
         // Zero the frame buffers.
@@ -509,7 +509,6 @@ unsafe fn alloc_pip_buffers() -> bool {
     log_hex(b"[VIDEO] PIP_FRAME_A=", unsafe { PIP_FRAME_A } as u32);
     log_hex(b"[VIDEO] PIP_FRAME_B=", unsafe { PIP_FRAME_B } as u32);
     log_hex(b"[VIDEO] PCM_BUF=", unsafe { PCM_BUF } as u32);
-    log_hex(b"[VIDEO] CSC_BUF=", unsafe { CSC_BUF } as u32);
     log_i32(b"[VIDEO] PIP bufs allocated, block=", block_id.0);
     true
 }
@@ -524,7 +523,6 @@ unsafe fn free_pip_buffers() {
             PIP_FRAME_A = core::ptr::null_mut();
             PIP_FRAME_B = core::ptr::null_mut();
             PCM_BUF = core::ptr::null_mut();
-            CSC_BUF = core::ptr::null_mut();
         }
         crate::debug_log(b"[VIDEO] PIP bufs freed");
     }
@@ -891,63 +889,29 @@ unsafe fn init_mpeg_decoder(filepath: &[u8]) -> bool {
     // buffer. Reading into a stack variable caused 0x80628001 errors.
 
     // Try sceMpegInit. If the game has MPEG active, it returns
-    // ALREADY_INIT (0x80618005). In that case, retry periodically --
-    // many games init MPEG for opening cutscenes then release it.
-    // Without calling Init, sceMpegCreate crashes (no internal state).
+    // Try sceMpegInit once. ALREADY_INIT (0x80618005) is expected
+    // when a game has MPEG active -- proceed anyway (Create will fail
+    // gracefully with 0x80628001). Without calling Init at all,
+    // sceMpegCreate crashes (no internal state).
     const MPEG_ALREADY_INIT: i32 = 0x80618005_u32 as i32;
     let init_fn = unsafe { core::ptr::read_volatile(&raw const MPEG_INIT_FN) };
-    let mut mpeg_inited_fresh = false;
     if let Some(f) = init_fn {
-        // Try up to 10 times (30s total) waiting for MPEG to become free.
-        let mut attempt = 0;
-        loop {
-            let r = unsafe { f() };
-            if r == 0 {
-                crate::debug_log(b"[VIDEO] sceMpegInit OK (fresh)");
-                mpeg_inited_fresh = true;
-                break;
-            } else if r == MPEG_ALREADY_INIT {
-                if attempt == 0 {
-                    crate::debug_log(b"[VIDEO] MPEG busy, will retry...");
-                }
-                attempt += 1;
-                if attempt >= 10 {
-                    log_i32(b"[VIDEO] MPEG still busy after retries=", attempt);
-                    // Proceed anyway with ALREADY_INIT state.
-                    break;
-                }
-                // Wait 3 seconds between retries.
-                unsafe { psp::sys::sceKernelDelayThread(3_000_000) };
-            } else {
-                log_i32(b"[VIDEO] sceMpegInit err=", r);
-                unsafe {
-                    psp::sys::sceIoClose(fd);
-                    VIDEO_FD = -1;
-                }
-                return false;
+        let r = unsafe { f() };
+        log_i32(b"[VIDEO] sceMpegInit=", r);
+        if r == 0 {
+            crate::debug_log(b"[VIDEO] MPEG init fresh OK");
+        } else if r == MPEG_ALREADY_INIT {
+            crate::debug_log(b"[VIDEO] MPEG busy (game has it)");
+        } else {
+            unsafe {
+                psp::sys::sceIoClose(fd);
+                VIDEO_FD = -1;
             }
+            return false;
         }
     } else {
         crate::debug_log(b"[VIDEO] sceMpegInit FN missing");
         return false;
-    }
-
-    // If still ALREADY_INIT, try aggressive Finish+Init as last resort.
-    if !mpeg_inited_fresh {
-        unsafe {
-            if let Some(fin) = core::ptr::read_volatile(&raw const MPEG_FINISH_FN) {
-                let rf = fin();
-                log_i32(b"[VIDEO] last-resort Finish=", rf);
-            }
-            if let Some(f) = core::ptr::read_volatile(&raw const MPEG_INIT_FN) {
-                let r = f();
-                log_i32(b"[VIDEO] last-resort Init=", r);
-                if r == 0 {
-                    mpeg_inited_fresh = true;
-                    crate::debug_log(b"[VIDEO] MPEG freed after Finish!");
-                }
-            }
-        }
     }
 
     // Query memory sizes.
@@ -1094,28 +1058,6 @@ unsafe fn init_mpeg_decoder(filepath: &[u8]) -> bool {
         return false;
     }
     crate::debug_log(b"[VIDEO] ringbuf constructed OK");
-
-    // Dump full ringbuffer struct (16 u32 words = 64 bytes).
-    unsafe {
-        let rb = RINGBUF as *mut u32;
-        // Log first 12 fields to find callback/gp/data positions.
-        let mut i = 0;
-        while i < 12 {
-            let mut buf = [0u8; 32];
-            let mut p = copy_bytes(&mut buf, 0, b"[VIDEO] rb[");
-            if i >= 10 {
-                buf[p] = b'0' + (i / 10) as u8;
-                p += 1;
-            }
-            buf[p] = b'0' + (i % 10) as u8;
-            p += 1;
-            p = copy_bytes(&mut buf, p, b"]=");
-            p = write_hex32(&mut buf, p, *rb.add(i));
-            crate::debug_log(&buf[..p]);
-            i += 1;
-        }
-    }
-    log_hex(b"[VIDEO] our cb addr=", ringbuf_callback as *const () as u32);
 
     // Patch kernel-space addresses (KSEG0: 0x8xxxxxxx) in the
     // ringbuffer struct to their KUSEG equivalents (0x0xxxxxxx).
