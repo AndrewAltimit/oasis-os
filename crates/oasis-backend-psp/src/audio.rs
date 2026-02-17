@@ -552,6 +552,8 @@ pub struct RadioStreamer {
     hw_volume: i32,
     /// Consecutive decode errors.
     error_count: u32,
+    /// Consecutive recv failures (negative returns).
+    recv_fail_count: u32,
 }
 
 impl RadioStreamer {
@@ -576,6 +578,7 @@ impl RadioStreamer {
             buffering: true,
             hw_volume: 0x8000,
             error_count: 0,
+            recv_fail_count: 0,
         }
     }
 
@@ -635,9 +638,17 @@ impl RadioStreamer {
             };
             if n > 0 {
                 self.buf_valid += n as usize;
+                self.recv_fail_count = 0;
             } else if n == 0 {
                 // EOF: server closed the connection.
                 self.error_count = 201;
+            } else {
+                // Negative: EAGAIN (no data) or fatal error.
+                // Track consecutive failures to detect dead connections.
+                self.recv_fail_count += 1;
+                if self.recv_fail_count > 3000 {
+                    self.error_count = 201;
+                }
             }
         } else {
             // ICY metadata enabled: receive into temp buffer, demux.
@@ -650,7 +661,14 @@ impl RadioStreamer {
             if n == 0 {
                 // EOF: server closed the connection.
                 self.error_count = 201;
-            } else if n > 0 {
+            } else if n < 0 {
+                // Negative: EAGAIN (no data) or fatal error.
+                self.recv_fail_count += 1;
+                if self.recv_fail_count > 3000 {
+                    self.error_count = 201;
+                }
+            } else {
+                self.recv_fail_count = 0;
                 let received = n as usize;
                 let mut i = 0;
                 while i < received {

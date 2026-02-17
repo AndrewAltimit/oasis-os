@@ -646,24 +646,29 @@ fn handle_radio_connect(url: String) {
         }
     }
 
-    if hdr_len == 0 {
+    // Validate that we received a complete header (with \r\n\r\n terminator).
+    let header_end = if hdr_len > 0 {
+        find_header_end(&hdr_buf[..hdr_len])
+    } else {
+        None
+    };
+
+    if header_end.is_none() {
         unsafe { psp::sys::sceNetInetClose(fd) };
         let _ = IO_RESP_QUEUE.push(IoResponse::RadioError {
-            msg: "no response".into(),
+            msg: "incomplete headers".into(),
         });
         return;
     }
+
+    let header_end = header_end.unwrap();
 
     // Parse icy-metaint from headers.
     let hdr_str = String::from_utf8_lossy(&hdr_buf[..hdr_len]);
     let icy_metaint = parse_icy_metaint(&hdr_str);
 
     // Extract any leftover audio data after the header boundary.
-    let initial_data = if let Some(end) = find_header_end(&hdr_buf[..hdr_len]) {
-        hdr_buf[end..hdr_len].to_vec()
-    } else {
-        Vec::new()
-    };
+    let initial_data = hdr_buf[header_end..hdr_len].to_vec();
 
     // Set non-blocking for streaming.
     let nb: i32 = 1;
