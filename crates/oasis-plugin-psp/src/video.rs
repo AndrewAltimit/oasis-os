@@ -734,22 +734,16 @@ unsafe fn scan_video_dir() {
     }
 
     loop {
-        // SceIoDirent is 0x148 bytes on PSP.
-        let mut dirent = [0u8; 0x148];
-        // SAFETY: sceIoDread with valid fd and buffer.
-        let ret = unsafe {
-            psp::sys::sceIoDread(
-                psp::sys::SceUid(dfd.0),
-                &mut dirent as *mut _ as *mut psp::sys::SceIoDirent,
-            )
-        };
+        // SAFETY: SceIoDirent is repr(C), zero-initialized is valid.
+        let mut dirent = unsafe { core::mem::zeroed::<psp::sys::SceIoDirent>() };
+        // SAFETY: sceIoDread with valid fd and properly-sized struct.
+        let ret = unsafe { psp::sys::sceIoDread(dfd, &mut dirent) };
         if ret <= 0 {
             break;
         }
 
-        // Filename is at offset 0x104 in SceIoDirent (d_name, 256 bytes).
-        let name_offset = 0x104;
-        let name = &dirent[name_offset..];
+        // Access d_name directly from the struct (not a hardcoded offset).
+        let name = &dirent.d_name;
 
         // Find name length.
         let mut name_len = 0;
