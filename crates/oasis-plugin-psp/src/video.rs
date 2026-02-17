@@ -890,29 +890,11 @@ unsafe fn init_mpeg_decoder(filepath: &[u8]) -> bool {
     // sceMpegCreate expects the PSMF header at the start of its decoder
     // buffer. Reading into a stack variable caused 0x80628001 errors.
 
-    // Initialize sceMpeg.
-    // ALREADY_INIT (0x80618005) is expected when a game has sceMpeg active.
-    // We can still create our own handle within the initialized subsystem.
-    // Attempting Finish+re-Init fails (0x80618009) because we don't own
-    // the game's MPEG context.
-    const MPEG_ALREADY_INIT: i32 = 0x80618005_u32 as i32;
-    let init_fn = unsafe { core::ptr::read_volatile(&raw const MPEG_INIT_FN) };
-    if let Some(f) = init_fn {
-        let r = unsafe { f() };
-        log_i32(b"[VIDEO] sceMpegInit=", r);
-        if r == MPEG_ALREADY_INIT {
-            crate::debug_log(b"[VIDEO] already init (OK, using game ctx)");
-        } else if r < 0 {
-            unsafe {
-                psp::sys::sceIoClose(fd);
-                VIDEO_FD = -1;
-            }
-            return false;
-        }
-    } else {
-        crate::debug_log(b"[VIDEO] sceMpegInit FN missing");
-        return false;
-    }
+    // Skip sceMpegInit entirely. The game already initialized the MPEG
+    // subsystem (calling Init returns ALREADY_INIT 0x80618005). Calling
+    // Init from a kernel thread may set internal kernel-mode flags that
+    // poison subsequent sceMpegCreate calls. The subsystem is ready.
+    crate::debug_log(b"[VIDEO] skipping sceMpegInit (game has it)");
 
     // Query memory sizes.
     let mpeg_mem_size = unsafe {
