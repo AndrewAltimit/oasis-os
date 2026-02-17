@@ -121,11 +121,14 @@ const MODULE_MGR_MODULES: &[(&[u8], &[u8])] = &[
 ];
 
 /// Flash0 paths to try for loading the mpegbase PRX.
+/// IMPORTANT: Do NOT include mpeg_vsh.prx or avcodec.prx here --
+/// those are the sceMpeg module (already loaded), and reloading them
+/// double-initializes hardware and crashes.
 const MPEGBASE_FLASH_PATHS: &[&[u8]] = &[
     b"flash0:/kd/mpegbase.prx\0",
-    b"flash0:/kd/mpeg_vsh.prx\0",
-    b"flash0:/kd/avcodec.prx\0",
+    b"flash0:/kd/libmpegbase.prx\0",
     b"flash0:/vsh/module/mpegbase.prx\0",
+    b"flash0:/kd/codec/mpegbase.prx\0",
 ];
 
 // sceAudio for video ATRAC audio output
