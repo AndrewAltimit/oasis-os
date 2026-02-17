@@ -75,8 +75,11 @@ fn psp_main() {
         // playback from the overlay menu even when autoplay is off).
         audio::start_audio_thread();
 
-        // Video thread starts lazily on first PIP menu command --
-        // no boot-time thread creation or AV module loading.
+        // Start video thread (idles until first PIP menu command,
+        // then initializes sceMpeg and enters decode loop).
+        // Must be created here in psp_main where kernel syscalls work --
+        // the display hook context does not support sceKernelCreateThread.
+        video::start_video_thread();
     } else {
         debug_log(b"[OASIS] hook install FAILED");
     }

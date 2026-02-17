@@ -237,9 +237,6 @@ static FRAME_INDEX: AtomicU8 = AtomicU8::new(0);
 /// Whether the video subsystem is available (sceMpeg resolved).
 static VIDEO_AVAILABLE: AtomicU8 = AtomicU8::new(0);
 
-/// Whether the video thread has been launched.
-static VIDEO_THREAD_STARTED: AtomicU8 = AtomicU8::new(0);
-
 /// Decode frame counter (for periodic logging).
 static DECODE_FRAME_COUNT: core::sync::atomic::AtomicU32 =
     core::sync::atomic::AtomicU32::new(0);
@@ -1387,25 +1384,46 @@ unsafe fn check_av_sync() {
 // Video thread
 // ---------------------------------------------------------------------------
 
+/// Whether the video subsystem has been initialized (NIDs + scan done).
+static INIT_DONE: AtomicU8 = AtomicU8::new(0);
+
 /// Video thread entry point.
 ///
-/// This thread is started lazily on first PIP command (not at boot).
-/// It handles NID resolution, buffer allocation, file scanning, and
-/// the decode loop.
+/// Started at boot from psp_main() (where kernel syscalls work).
+/// Idles until the first VIDEO_CMD arrives, then initializes sceMpeg
+/// NIDs, scans for video files, and enters the decode loop.
+///
+/// We CANNOT create this thread from the display hook context because
+/// no kernel syscalls (sceKernelCreateThread, sceIoOpen, etc.) work
+/// in the sceDisplaySetFrameBuf hook callback.
 unsafe extern "C" fn video_thread_entry(_args: usize, _argp: *mut core::ffi::c_void) -> i32 {
-    crate::debug_log(b"[VIDEO] thread started");
+    crate::debug_log(b"[VIDEO] thread started, waiting for cmd...");
 
-    // Wait for game to fully initialize before touching AV modules.
-    crate::debug_log(b"[VIDEO] waiting 2s for game init...");
-    unsafe {
-        psp::sys::sceKernelDelayThread(2_000_000);
+    // Idle loop: wait for first PIP command before doing any heavy init.
+    // This avoids loading AV modules at boot which can conflict with games.
+    loop {
+        let cmd = VIDEO_CMD.load(Ordering::Relaxed);
+        if cmd != 0 {
+            crate::debug_log(b"[VIDEO] first cmd received, initializing...");
+            // Don't consume the command yet -- let the main loop handle it.
+            break;
+        }
+        unsafe {
+            psp::sys::sceKernelDelayThread(100_000); // 100ms idle poll
+        }
     }
 
-    // Resolve sceMpeg NIDs (deferred from boot to avoid ME conflicts).
+    // Wait for game to be fully running before touching AV modules.
+    crate::debug_log(b"[VIDEO] waiting 1s for game stability...");
+    unsafe {
+        psp::sys::sceKernelDelayThread(1_000_000);
+    }
+
+    // Resolve sceMpeg NIDs.
     crate::debug_log(b"[VIDEO] resolving NIDs (attempt 1)...");
     let resolved = unsafe { try_resolve_mpeg() };
     if !resolved {
-        // Retry once after a longer delay -- game may still be loading.
+        // Retry once after a longer delay.
         crate::debug_log(b"[VIDEO] NID retry in 3s...");
         unsafe {
             psp::sys::sceKernelDelayThread(3_000_000);
@@ -1414,14 +1432,6 @@ unsafe extern "C" fn video_thread_entry(_args: usize, _argp: *mut core::ffi::c_v
         let resolved2 = unsafe { try_resolve_mpeg() };
         if !resolved2 {
             crate::debug_log(b"[VIDEO] NIDs failed, thread stays for cmds");
-            // Don't exit -- stay alive to show OSD on commands.
-        }
-    }
-
-    // Allocate PIP frame buffers from user-memory partition 2.
-    if VIDEO_AVAILABLE.load(Ordering::Relaxed) != 0 {
-        if !unsafe { alloc_pip_buffers() } {
-            crate::debug_log(b"[VIDEO] PIP alloc failed");
         }
     }
 
@@ -1439,6 +1449,8 @@ unsafe extern "C" fn video_thread_entry(_args: usize, _argp: *mut core::ffi::c_v
     p = copy_bytes(&mut buf, p, b" vids=");
     p = write_decimal(&mut buf, p, count as u32);
     crate::debug_log(&buf[..p]);
+
+    INIT_DONE.store(1, Ordering::Release);
 
     // Main decode loop.
     loop {
@@ -1636,20 +1648,13 @@ fn stop_playback() {
 // Public API
 // ---------------------------------------------------------------------------
 
-/// Ensure the video thread is running (lazy start on first PIP command).
-fn ensure_video_thread() {
-    if VIDEO_THREAD_STARTED.load(Ordering::Relaxed) != 0 {
-        return;
-    }
-    // CAS to prevent double-start.
-    if VIDEO_THREAD_STARTED
-        .compare_exchange(0, 1, Ordering::SeqCst, Ordering::Relaxed)
-        .is_err()
-    {
-        return;
-    }
-
-    crate::debug_log(b"[VIDEO] launching video thread...");
+/// Start the video thread. Must be called from psp_main() or another
+/// context where kernel syscalls work (NOT the display hook).
+///
+/// The thread idles until it receives its first VIDEO_CMD, then
+/// initializes sceMpeg and enters the decode loop.
+pub fn start_video_thread() {
+    crate::debug_log(b"[VIDEO] creating video thread...");
     unsafe {
         let thid = psp::sys::sceKernelCreateThread(
             b"OasisVideo\0".as_ptr(),
@@ -1664,22 +1669,18 @@ fn ensure_video_thread() {
             log_i32(b"[VIDEO] thread id=", thid.0);
         } else {
             log_i32(b"[VIDEO] thread create FAILED=", thid.0);
-            VIDEO_THREAD_STARTED.store(0, Ordering::Relaxed);
         }
     }
 }
 
-/// Toggle PIP on/off.
+/// Toggle PIP on/off. Safe to call from display hook context
+/// (only touches atomics, no syscalls).
 pub fn toggle_pip() {
-    crate::debug_log(b"[VIDEO] toggle_pip called");
-    ensure_video_thread();
     VIDEO_CMD.store(1, Ordering::Relaxed);
 }
 
-/// Advance to next video.
+/// Advance to next video. Safe to call from display hook context.
 pub fn next_video() {
-    crate::debug_log(b"[VIDEO] next_video called");
-    ensure_video_thread();
     VIDEO_CMD.store(2, Ordering::Relaxed);
 }
 
