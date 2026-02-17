@@ -645,10 +645,17 @@ impl RadioStreamer {
                 // EOF: server closed the connection.
                 self.error_count = 201;
             } else {
-                // Negative: EAGAIN (no data) or fatal error.
-                // Track consecutive failures to detect dead connections.
-                self.recv_fail_count += 1;
-                if self.recv_fail_count > 3000 {
+                // Negative: check errno to distinguish EAGAIN from fatal.
+                // SAFETY: sceNetInetGetErrno returns the last socket error.
+                let errno = unsafe { psp::sys::sceNetInetGetErrno() };
+                // EAGAIN = 0x0B (11) on PSP: no data available yet.
+                if errno == 0x0B || errno == 35 {
+                    self.recv_fail_count += 1;
+                    if self.recv_fail_count > 3000 {
+                        self.error_count = 201;
+                    }
+                } else {
+                    // Fatal socket error (ECONNRESET, ENOTCONN, etc.).
                     self.error_count = 201;
                 }
             }
@@ -664,9 +671,16 @@ impl RadioStreamer {
                 // EOF: server closed the connection.
                 self.error_count = 201;
             } else if n < 0 {
-                // Negative: EAGAIN (no data) or fatal error.
-                self.recv_fail_count += 1;
-                if self.recv_fail_count > 3000 {
+                // SAFETY: sceNetInetGetErrno returns the last socket error.
+                let errno = unsafe { psp::sys::sceNetInetGetErrno() };
+                if errno == 0x0B || errno == 35 {
+                    // EAGAIN: no data available yet.
+                    self.recv_fail_count += 1;
+                    if self.recv_fail_count > 3000 {
+                        self.error_count = 201;
+                    }
+                } else {
+                    // Fatal socket error.
                     self.error_count = 201;
                 }
             } else {
