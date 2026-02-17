@@ -281,30 +281,43 @@ fn main() -> Result<()> {
                     let _ = vfs.write(RADIO_REQUEST_PATH, b"");
 
                     if let Some(target) = request.strip_prefix("tune ") {
-                        if let Ok(idx) = target.parse::<usize>() {
-                            let station = state.radio_manager.registry.stations.get(idx).cloned();
-                            if let Some(station) = station {
-                                let _ = state.radio_manager.tune(
-                                    &station.name,
-                                    station.bitrate,
-                                    &mut state.audio_backend,
-                                );
-                                if let Some((host, port, path)) = parse_stream_url(&station.url) {
-                                    match state.net_backend.connect(&host, port) {
-                                        Ok(stream) => {
-                                            let source = oasis_audio::radio::IcecastSource::new(
-                                                stream, &host, &path,
-                                            );
-                                            state.radio_source = Some(Box::new(source));
-                                        },
-                                        Err(e) => {
-                                            state.radio_manager.set_error(&format!("connect: {e}"));
-                                        },
-                                    }
-                                } else {
-                                    state.radio_manager.set_error("invalid stream URL");
+                        // Resolve station by index or case-insensitive name.
+                        let station = if let Ok(idx) = target.parse::<usize>() {
+                            state.radio_manager.registry.stations.get(idx).cloned()
+                        } else {
+                            state
+                                .radio_manager
+                                .registry
+                                .stations
+                                .iter()
+                                .find(|s| s.name.eq_ignore_ascii_case(target.trim()))
+                                .cloned()
+                        };
+                        if let Some(station) = station {
+                            let _ = state.radio_manager.tune(
+                                &station.name,
+                                station.bitrate,
+                                &mut state.audio_backend,
+                            );
+                            if let Some((host, port, path)) = parse_stream_url(&station.url) {
+                                match state.net_backend.connect(&host, port) {
+                                    Ok(stream) => {
+                                        let source = oasis_audio::radio::IcecastSource::new(
+                                            stream, &host, &path,
+                                        );
+                                        state.radio_source = Some(Box::new(source));
+                                    },
+                                    Err(e) => {
+                                        state.radio_manager.set_error(&format!("connect: {e}"));
+                                    },
                                 }
+                            } else {
+                                state.radio_manager.set_error("invalid stream URL");
                             }
+                        } else {
+                            state
+                                .radio_manager
+                                .set_error(&format!("station not found: {target}"));
                         }
                     } else {
                         let _ = state

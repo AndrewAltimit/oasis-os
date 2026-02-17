@@ -579,6 +579,17 @@ impl RadioStreamer {
         }
     }
 
+    /// Seed the read buffer with initial data received during header parsing.
+    pub fn seed_buffer(&mut self, data: &[u8]) {
+        let n = data.len().min(Self::BUF_SIZE);
+        // SAFETY: Manual byte copy to avoid LLVM memcpy recursion on MIPS.
+        let ptr = self.read_buf.as_mut_ptr();
+        for i in 0..n {
+            unsafe { *ptr.add(i) = data[i] };
+        }
+        self.buf_valid = n;
+    }
+
     /// Set volume (0..=100) mapped to PSP hardware range.
     pub fn set_volume(&mut self, volume: u8) {
         let v = volume.min(100) as i32;
@@ -624,6 +635,9 @@ impl RadioStreamer {
             };
             if n > 0 {
                 self.buf_valid += n as usize;
+            } else if n == 0 {
+                // EOF: server closed the connection.
+                self.error_count = 201;
             }
         } else {
             // ICY metadata enabled: receive into temp buffer, demux.
@@ -633,7 +647,10 @@ impl RadioStreamer {
             let n = unsafe {
                 psp::sys::sceNetInetRecv(self.socket_fd, tmp.as_mut_ptr() as *mut _, chunk, 0x80)
             };
-            if n > 0 {
+            if n == 0 {
+                // EOF: server closed the connection.
+                self.error_count = 201;
+            } else if n > 0 {
                 let received = n as usize;
                 let mut i = 0;
                 while i < received {

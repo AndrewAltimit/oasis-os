@@ -64,6 +64,7 @@ pub enum AudioCmd {
     RadioStreamFromFd {
         fd: i32,
         icy_metaint: usize,
+        initial_data: Vec<u8>,
     },
     /// Stop radio streaming and close the socket.
     RadioStop,
@@ -172,6 +173,7 @@ pub enum IoResponse {
     RadioConnected {
         fd: i32,
         icy_metaint: usize,
+        initial_data: Vec<u8>,
     },
     /// Radio connection failed.
     RadioError {
@@ -307,7 +309,11 @@ fn audio_thread_fn() {
                     sfx.play(id);
                 }
             },
-            Some(AudioCmd::RadioStreamFromFd { fd, icy_metaint }) => {
+            Some(AudioCmd::RadioStreamFromFd {
+                fd,
+                icy_metaint,
+                initial_data,
+            }) => {
                 // Stop file player first.
                 player.stop();
                 AUDIO_PLAYING.store(false, Ordering::Relaxed);
@@ -316,8 +322,11 @@ fn audio_thread_fn() {
                 if let Some(mut r) = radio.take() {
                     r.stop();
                 }
-                // Create new radio streamer.
-                let streamer = RadioStreamer::new(fd, icy_metaint);
+                // Create new radio streamer with any leftover header data.
+                let mut streamer = RadioStreamer::new(fd, icy_metaint);
+                if !initial_data.is_empty() {
+                    streamer.seed_buffer(&initial_data);
+                }
                 RADIO_BUFFERING.store(true, Ordering::Relaxed);
                 RADIO_STREAMING.store(true, Ordering::Relaxed);
                 radio = Some(streamer);
@@ -649,11 +658,12 @@ fn handle_radio_connect(url: String) {
     let hdr_str = String::from_utf8_lossy(&hdr_buf[..hdr_len]);
     let icy_metaint = parse_icy_metaint(&hdr_str);
 
-    // Find end of headers to determine leftover audio data position.
-    // The audio thread will start reading from the socket directly,
-    // but we need to pass any leftover data after the headers.
-    // For simplicity, we set the socket to non-blocking and let the
-    // audio thread handle buffering from the start of the audio data.
+    // Extract any leftover audio data after the header boundary.
+    let initial_data = if let Some(end) = find_header_end(&hdr_buf[..hdr_len]) {
+        hdr_buf[end..hdr_len].to_vec()
+    } else {
+        Vec::new()
+    };
 
     // Set non-blocking for streaming.
     let nb: i32 = 1;
@@ -668,7 +678,11 @@ fn handle_radio_connect(url: String) {
         );
     }
 
-    let _ = IO_RESP_QUEUE.push(IoResponse::RadioConnected { fd, icy_metaint });
+    let _ = IO_RESP_QUEUE.push(IoResponse::RadioConnected {
+        fd,
+        icy_metaint,
+        initial_data,
+    });
 }
 
 /// Find `\r\n\r\n` in a byte slice, return offset past it.

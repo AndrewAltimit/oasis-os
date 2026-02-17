@@ -181,6 +181,17 @@ impl RadioManager {
     pub fn start_playback(&mut self, backend: &mut dyn AudioBackend) -> Result<()> {
         let track = backend.load_streaming()?;
         self.stream_track = Some(track);
+
+        // Drain buffered audio into the backend before starting playback.
+        let mut tmp = [0u8; 4096];
+        loop {
+            let n = self.audio_buf.read(&mut tmp);
+            if n == 0 {
+                break;
+            }
+            backend.feed_data(track, &tmp[..n])?;
+        }
+
         backend.play(track)?;
         backend.set_volume(self.volume)?;
         self.state = RadioState::Playing;
@@ -259,6 +270,12 @@ impl RadioManager {
                     }
                 },
                 Err(e) => {
+                    // Clean up the streaming track before entering error state.
+                    if let Some(track) = self.stream_track.take() {
+                        let _ = backend.stop();
+                        let _ = backend.unload_track(track);
+                    }
+                    self.audio_buf.clear();
                     self.set_error(&format!("{e}"));
                     *source = None;
                 },

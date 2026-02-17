@@ -701,9 +701,17 @@ fn psp_main() {
                         ));
                     }
                 },
-                IoResponse::RadioConnected { fd, icy_metaint } => {
+                IoResponse::RadioConnected {
+                    fd,
+                    icy_metaint,
+                    initial_data,
+                } => {
                     radio_status = RadioStatus::Buffering;
-                    audio.send(AudioCmd::RadioStreamFromFd { fd, icy_metaint });
+                    audio.send(AudioCmd::RadioStreamFromFd {
+                        fd,
+                        icy_metaint,
+                        initial_data,
+                    });
                 },
                 IoResponse::RadioError { msg } => {
                     radio_status = RadioStatus::Error;
