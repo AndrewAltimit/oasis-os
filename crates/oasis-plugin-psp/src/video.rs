@@ -84,6 +84,14 @@ const MPEG_BASE_MODULES: &[(&[u8], &[u8])] = &[
     (b"mpeg_vsh\0", b"sceMpegbase\0"),
     (b"mpegbase.prx\0", b"sceMpegbase\0"),
     (b"sceMpegbase_Driver\0", b"sceMpegbase_driver\0"),
+    // Some firmware merges sceMpeg + sceMpegbase in one PRX.
+    (b"sceMpeg_library\0", b"sceMpegbase\0"),
+    (b"sceMpeg\0", b"sceMpegbase\0"),
+    (b"mpeg.prx\0", b"sceMpegbase\0"),
+    // Alternate library name capitalisation.
+    (b"sceMpegbase_Driver\0", b"sceMpegBase\0"),
+    (b"sceMpegbase\0", b"sceMpegBase\0"),
+    (b"sceMpegbase_Driver\0", b"sceMpegbase_library\0"),
 ];
 
 // sceUtility for loading AV modules
@@ -99,6 +107,26 @@ const UTILITY_MODULES: &[(&[u8], &[u8])] = &[
 /// PSP optional module IDs.
 const PSP_MODULE_AV_AVCODEC: i32 = 0x0300;
 const PSP_MODULE_AV_MPEGBASE: i32 = 0x0301;
+
+// sceKernelLoadModule / sceKernelStartModule for kernel-mode PRX loading.
+// sceUtilityLoadModule is user-mode only (returns 0x80111112 from kernel PRX),
+// so we fall back to kernel module manager to load mpegbase from flash0.
+const NID_LOAD_MODULE: u32 = 0x977DE386;
+const NID_START_MODULE: u32 = 0x50F0C1EC;
+
+const MODULE_MGR_MODULES: &[(&[u8], &[u8])] = &[
+    (b"sceModuleManager\0", b"ModuleMgrForKernel\0"),
+    (b"sceModuleManager\0", b"ModuleMgrForUser\0"),
+    (b"sceModuleManager\0", b"sceModuleManager\0"),
+];
+
+/// Flash0 paths to try for loading the mpegbase PRX.
+const MPEGBASE_FLASH_PATHS: &[&[u8]] = &[
+    b"flash0:/kd/mpegbase.prx\0",
+    b"flash0:/kd/mpeg_vsh.prx\0",
+    b"flash0:/kd/avcodec.prx\0",
+    b"flash0:/vsh/module/mpegbase.prx\0",
+];
 
 // sceAudio for video ATRAC audio output
 const NID_AUDIO_CH_RESERVE: u32 = 0x5EC81C55;
@@ -237,6 +265,10 @@ static FRAME_INDEX: AtomicU8 = AtomicU8::new(0);
 /// Whether the video subsystem is available (sceMpeg resolved).
 static VIDEO_AVAILABLE: AtomicU8 = AtomicU8::new(0);
 
+/// Whether to use software CSC fallback (sceMpegBaseCscVme unavailable).
+/// 0 = hardware CscVme, 1 = software I420→RGB.
+static USE_SW_CSC: AtomicU8 = AtomicU8::new(0);
+
 /// Decode frame counter (for periodic logging).
 static DECODE_FRAME_COUNT: core::sync::atomic::AtomicU32 =
     core::sync::atomic::AtomicU32::new(0);
@@ -343,20 +375,86 @@ unsafe fn resolve_nid(modules: &[(&[u8], &[u8])], nid: u32) -> Option<*mut u8> {
 // Module loading
 // ---------------------------------------------------------------------------
 
-/// Load MPEG AV modules via sceUtilityLoadModule.
+/// Load MPEG AV modules.
+///
+/// Strategy 1: sceUtilityLoadModule (user-mode, may fail from kernel PRX).
+/// Strategy 2: sceKernelLoadModule from flash0 (kernel-mode fallback).
 unsafe fn load_mpeg_modules() {
-    let load_fn: Option<unsafe extern "C" fn(i32) -> i32> = unsafe {
+    // --- Strategy 1: sceUtilityLoadModule ---
+    let utility_load: Option<unsafe extern "C" fn(i32) -> i32> = unsafe {
         resolve_nid(UTILITY_MODULES, NID_UTILITY_LOAD_MODULE).map(|ptr| core::mem::transmute(ptr))
     };
 
-    if let Some(load) = load_fn {
+    let mut mpegbase_loaded = false;
+
+    if let Some(load) = utility_load {
         crate::debug_log(b"[VIDEO] sceUtilityLoadModule resolved");
         let r1 = unsafe { load(PSP_MODULE_AV_AVCODEC) };
         log_i32(b"[VIDEO] LoadModule AVCODEC=", r1);
         let r2 = unsafe { load(PSP_MODULE_AV_MPEGBASE) };
         log_i32(b"[VIDEO] LoadModule MPEGBASE=", r2);
+        if r2 >= 0 {
+            mpegbase_loaded = true;
+        }
     } else {
         crate::debug_log(b"[VIDEO] sceUtilityLoadModule NOT found");
+    }
+
+    if mpegbase_loaded {
+        return;
+    }
+
+    // --- Strategy 2: kernel-mode module loading from flash0 ---
+    // sceUtilityLoadModule fails from kernel PRX (0x80111112). Use
+    // sceKernelLoadModule + sceKernelStartModule to load mpegbase.prx
+    // directly from flash0.
+    crate::debug_log(b"[VIDEO] trying kernel module load...");
+
+    let load_fn: Option<unsafe extern "C" fn(*const u8, u32, *mut u8) -> i32> = unsafe {
+        resolve_nid(MODULE_MGR_MODULES, NID_LOAD_MODULE).map(|ptr| core::mem::transmute(ptr))
+    };
+    let start_fn: Option<unsafe extern "C" fn(i32, u32, *mut u8, *mut i32, *mut u8) -> i32> =
+        unsafe {
+            resolve_nid(MODULE_MGR_MODULES, NID_START_MODULE)
+                .map(|ptr| core::mem::transmute(ptr))
+        };
+
+    if load_fn.is_none() {
+        crate::debug_log(b"[VIDEO] sceKernelLoadModule NOT found");
+    }
+    if start_fn.is_none() {
+        crate::debug_log(b"[VIDEO] sceKernelStartModule NOT found");
+    }
+
+    if let (Some(load), Some(start)) = (load_fn, start_fn) {
+        for &path in MPEGBASE_FLASH_PATHS {
+            let mod_id = unsafe { load(path.as_ptr(), 0, core::ptr::null_mut()) };
+            if mod_id >= 0 {
+                log_i32(b"[VIDEO] kmod loaded id=", mod_id);
+                let mut status = 0i32;
+                let ret = unsafe {
+                    start(
+                        mod_id,
+                        0,
+                        core::ptr::null_mut(),
+                        &mut status,
+                        core::ptr::null_mut(),
+                    )
+                };
+                log_i32(b"[VIDEO] kmod start=", ret);
+                if ret >= 0 {
+                    crate::debug_log(b"[VIDEO] mpegbase loaded from flash0");
+                    // Give module time to register its library exports.
+                    unsafe {
+                        psp::sys::sceKernelDelayThread(200_000);
+                    }
+                    return;
+                }
+            } else {
+                log_i32(b"[VIDEO] kmod load=", mod_id);
+            }
+        }
+        crate::debug_log(b"[VIDEO] all flash0 paths failed");
     }
 }
 
@@ -546,9 +644,9 @@ unsafe fn try_resolve_mpeg() -> bool {
     resolve!(MPEG_GET_ATRAC_AU_FN, MPEG_MODULES, NID_MPEG_GET_ATRAC_AU, b"GetAtracAu", false);
     resolve!(MPEG_ATRAC_DECODE_FN, MPEG_MODULES, NID_MPEG_ATRAC_DECODE, b"AtracDec", false);
 
-    // sceMpegbase CSC (required for YCrCb→RGB conversion)
-    resolve!(MPEG_BASE_CSC_INIT_FN, MPEG_BASE_MODULES, NID_MPEG_BASE_CSC_INIT, b"CscInit", true);
-    resolve!(MPEG_BASE_CSC_VME_FN, MPEG_BASE_MODULES, NID_MPEG_BASE_CSC_VME, b"CscVme", true);
+    // sceMpegbase CSC (optional -- software fallback if unavailable)
+    resolve!(MPEG_BASE_CSC_INIT_FN, MPEG_BASE_MODULES, NID_MPEG_BASE_CSC_INIT, b"CscInit", false);
+    resolve!(MPEG_BASE_CSC_VME_FN, MPEG_BASE_MODULES, NID_MPEG_BASE_CSC_VME, b"CscVme", false);
 
     // Audio output for video ATRAC (optional)
     unsafe {
@@ -586,6 +684,18 @@ unsafe fn try_resolve_mpeg() -> bool {
         p = copy_bytes(&mut buf, p, b" MISSING");
     }
     crate::debug_log(&buf[..p]);
+
+    // Check if CscVme is available; if not, use software CSC fallback.
+    let has_csc = unsafe {
+        core::ptr::read_volatile(&raw const MPEG_BASE_CSC_VME_FN).is_some()
+    };
+    if !has_csc {
+        USE_SW_CSC.store(1, Ordering::Relaxed);
+        crate::debug_log(b"[VIDEO] CscVme missing -> software CSC");
+    } else {
+        USE_SW_CSC.store(0, Ordering::Relaxed);
+        crate::debug_log(b"[VIDEO] CscVme available -> hardware CSC");
+    }
 
     if core_ok {
         VIDEO_AVAILABLE.store(1, Ordering::Relaxed);
@@ -1180,8 +1290,8 @@ unsafe fn decode_video_frame() -> bool {
                 if count == 0 {
                     log_hex(b"[VIDEO] 1st frame ycrcb=", ycrcb_ptr as u32);
                 }
-                // Convert YCrCb to RGB via sceMpegBaseCscVme, then downscale.
-                unsafe { convert_ycrcb_to_rgb(ycrcb_ptr) };
+                // Convert YCrCb to RGB via CscVme or software, then downscale.
+                convert_ycrcb_to_rgb(ycrcb_ptr);
             } else if r >= 0 && got_frame == 0 {
                 let count = DECODE_FRAME_COUNT.load(Ordering::Relaxed);
                 if count < 3 {
@@ -1204,48 +1314,12 @@ unsafe fn decode_video_frame() -> bool {
     ret >= 0 && got_frame != 0
 }
 
-/// Convert YCrCb data to RGB at full resolution, then downscale to PIP.
+/// Convert YCrCb data to RGB and downscale to PIP.
 ///
-/// Uses sceMpegBaseCscVme to convert the full 480x272 decoded frame to
-/// ABGR8888 in CSC_BUF, then nearest-neighbor downscales to 160x90 PIP.
+/// Two paths:
+/// - Hardware: sceMpegBaseCscVme → full 480x272 ABGR8888 → downscale
+/// - Software: I420 planar YCbCr → direct downscale+convert to 160x90
 unsafe fn convert_ycrcb_to_rgb(ycrcb: *mut u8) {
-    let csc_buf = unsafe { core::ptr::read_volatile(&raw const CSC_BUF) };
-    if csc_buf.is_null() {
-        crate::debug_log(b"[VIDEO] CSC_BUF null!");
-        return;
-    }
-
-    // CscVme converts full 480x272 YCrCb to ABGR8888.
-    let csc_ok = unsafe {
-        if let Some(f) = core::ptr::read_volatile(&raw const MPEG_BASE_CSC_VME_FN) {
-            // Config: [x, y, width, height, ...]
-            let mut params: [i32; 8] = [
-                0,
-                0,
-                DECODE_W as i32,
-                DECODE_H as i32,
-                0,
-                0,
-                0,
-                0,
-            ];
-            let r = f(csc_buf, ycrcb, DECODE_W as i32, params.as_mut_ptr());
-            // Log first CscVme result.
-            let count = DECODE_FRAME_COUNT.load(Ordering::Relaxed);
-            if count <= 1 {
-                log_i32(b"[VIDEO] CscVme=", r);
-            }
-            r >= 0
-        } else {
-            false
-        }
-    };
-
-    if !csc_ok {
-        return;
-    }
-
-    // Downscale 480x272 → 160x90 using nearest-neighbor sampling.
     let idx = FRAME_INDEX.load(Ordering::Relaxed);
     // Write to the back buffer (opposite of what display hook reads).
     let dst = if idx == 0 {
@@ -1257,28 +1331,125 @@ unsafe fn convert_ycrcb_to_rgb(ycrcb: *mut u8) {
         return;
     }
 
-    let src = csc_buf as *const u32;
-    let dst = dst as *mut u32;
+    if USE_SW_CSC.load(Ordering::Relaxed) != 0 {
+        // Software YCbCr→RGB with integrated downscaling.
+        unsafe { convert_ycrcb_sw(ycrcb, dst as *mut u32) };
+    } else {
+        // Hardware CSC path.
+        let csc_buf = unsafe { core::ptr::read_volatile(&raw const CSC_BUF) };
+        if csc_buf.is_null() {
+            crate::debug_log(b"[VIDEO] CSC_BUF null!");
+            return;
+        }
 
-    // SAFETY: src points to DECODE_W*DECODE_H pixels, dst to PIP_W*PIP_H pixels.
-    unsafe {
-        let mut py = 0u32;
-        while py < PIP_H {
-            let src_y = py * DECODE_H / PIP_H;
-            let mut px = 0u32;
-            while px < PIP_W {
-                let src_x = px * DECODE_W / PIP_W;
-                let pixel = *src.add((src_y * DECODE_W + src_x) as usize);
-                *dst.add((py * PIP_W + px) as usize) = pixel;
-                px += 1;
+        // CscVme converts full 480x272 YCrCb to ABGR8888.
+        let csc_ok = unsafe {
+            if let Some(f) = core::ptr::read_volatile(&raw const MPEG_BASE_CSC_VME_FN) {
+                let mut params: [i32; 8] = [0, 0, DECODE_W as i32, DECODE_H as i32, 0, 0, 0, 0];
+                let r = f(csc_buf, ycrcb, DECODE_W as i32, params.as_mut_ptr());
+                let count = DECODE_FRAME_COUNT.load(Ordering::Relaxed);
+                if count <= 1 {
+                    log_i32(b"[VIDEO] CscVme=", r);
+                }
+                r >= 0
+            } else {
+                false
             }
-            py += 1;
+        };
+
+        if !csc_ok {
+            return;
+        }
+
+        // Downscale 480x272 → 160x90 using nearest-neighbor sampling.
+        let src = csc_buf as *const u32;
+        let dst = dst as *mut u32;
+        unsafe {
+            let mut py = 0u32;
+            while py < PIP_H {
+                let src_y = py * DECODE_H / PIP_H;
+                let mut px = 0u32;
+                while px < PIP_W {
+                    let src_x = px * DECODE_W / PIP_W;
+                    let pixel = *src.add((src_y * DECODE_W + src_x) as usize);
+                    *dst.add((py * PIP_W + px) as usize) = pixel;
+                    px += 1;
+                }
+                py += 1;
+            }
         }
     }
 
     // Flip double buffer index.
     let new_idx = if idx == 0 { 1 } else { 0 };
     FRAME_INDEX.store(new_idx, Ordering::Relaxed);
+}
+
+/// Software YCbCr (I420 planar) → ABGR8888 conversion with integrated
+/// nearest-neighbor downscaling from 480x272 to 160x90.
+///
+/// Assumes the ME output is standard I420 planar:
+/// - Y  plane: offset 0, stride = DECODE_W, size = DECODE_W * DECODE_H
+/// - Cb plane: after Y, stride = DECODE_W/2, size = DECODE_W/2 * DECODE_H/2
+/// - Cr plane: after Cb, stride = DECODE_W/2, size = DECODE_W/2 * DECODE_H/2
+///
+/// Fixed-point YCbCr→RGB (BT.601):
+///   R = Y + 1.402*(Cr-128) ≈ Y + (359*(Cr-128)) >> 8
+///   G = Y - 0.344*(Cb-128) - 0.714*(Cr-128) ≈ Y - (88*(Cb-128) + 183*(Cr-128)) >> 8
+///   B = Y + 1.772*(Cb-128) ≈ Y + (454*(Cb-128)) >> 8
+///
+/// Only converts the ~14400 pixels needed for PIP, not the full frame.
+unsafe fn convert_ycrcb_sw(ycrcb: *mut u8, dst: *mut u32) {
+    let y_plane = ycrcb;
+    // SAFETY: Pointer arithmetic within the ME decode buffer (I420 layout).
+    let cb_plane = unsafe { ycrcb.add((DECODE_W * DECODE_H) as usize) };
+    let cr_plane = unsafe { cb_plane.add(((DECODE_W / 2) * (DECODE_H / 2)) as usize) };
+    let y_stride = DECODE_W as usize;
+    let c_stride = (DECODE_W / 2) as usize;
+
+    let count = DECODE_FRAME_COUNT.load(Ordering::Relaxed);
+    if count == 1 {
+        crate::debug_log(b"[VIDEO] SW CSC: 1st frame converting");
+    }
+
+    unsafe {
+        let mut py = 0u32;
+        while py < PIP_H {
+            let src_y = (py * DECODE_H / PIP_H) as usize;
+            let c_y = src_y / 2;
+            let mut px = 0u32;
+            while px < PIP_W {
+                let src_x = (px * DECODE_W / PIP_W) as usize;
+                let c_x = src_x / 2;
+
+                let y_val = *y_plane.add(src_y * y_stride + src_x) as i32;
+                let cb_val = *cb_plane.add(c_y * c_stride + c_x) as i32;
+                let cr_val = *cr_plane.add(c_y * c_stride + c_x) as i32;
+
+                let cb_off = cb_val - 128;
+                let cr_off = cr_val - 128;
+
+                let mut r = y_val + ((359 * cr_off) >> 8);
+                let mut g = y_val - ((88 * cb_off + 183 * cr_off) >> 8);
+                let mut b = y_val + ((454 * cb_off) >> 8);
+
+                // Clamp to 0-255.
+                if r < 0 { r = 0; } else if r > 255 { r = 255; }
+                if g < 0 { g = 0; } else if g > 255 { g = 255; }
+                if b < 0 { b = 0; } else if b > 255 { b = 255; }
+
+                // ABGR8888: A=0xFF, B, G, R (PSP pixel format).
+                let pixel = 0xFF00_0000
+                    | ((b as u32) << 16)
+                    | ((g as u32) << 8)
+                    | (r as u32);
+                *dst.add((py * PIP_W + px) as usize) = pixel;
+
+                px += 1;
+            }
+            py += 1;
+        }
+    }
 }
 
 /// Decode one ATRAC audio frame and output to audio channel.
