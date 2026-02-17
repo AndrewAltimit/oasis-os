@@ -230,8 +230,8 @@ const PIP_Y: u32 = 172;
 /// PIP border width.
 const PIP_BORDER: u32 = 2;
 
-/// Ringbuffer packet count.
-const RINGBUF_PACKETS: i32 = 512;
+/// Ringbuffer packet count (32 packets * 2048 bytes = 64KB).
+const RINGBUF_PACKETS: i32 = 32;
 
 /// Maximum number of video files in playlist.
 const MAX_VIDEOS: usize = 16;
@@ -288,8 +288,9 @@ static mut CURRENT_VIDEO: usize = 0;
 /// Video filename being played (for OSD display, 48 bytes).
 static mut VIDEO_NAME: [u8; 48] = [0u8; 48];
 
-/// sceMpeg handle (64 bytes).
-static mut MPEG_HANDLE: [u32; 16] = [0u32; 16];
+/// sceMpeg handle -- pointer to 64 bytes in user-memory partition 2.
+/// Must be in user memory (not kernel BSS) for the Media Engine to access.
+static mut MPEG_HANDLE: *mut u8 = core::ptr::null_mut();
 
 /// Video stream and audio stream handles.
 static mut VIDEO_STREAM: *mut u8 = core::ptr::null_mut();
@@ -302,8 +303,9 @@ static mut AVC_ES_BUF: *mut u8 = core::ptr::null_mut();
 static mut VIDEO_AU: [u8; 64] = [0u8; 64];
 static mut AUDIO_AU: [u8; 64] = [0u8; 64];
 
-/// sceMpeg ringbuffer struct (128 bytes).
-static mut RINGBUF: [u8; 128] = [0u8; 128];
+/// sceMpeg ringbuffer struct -- pointer to 128 bytes in user-memory partition 2.
+/// Must be in user memory (not kernel BSS) for the Media Engine to access.
+static mut RINGBUF: *mut u8 = core::ptr::null_mut();
 
 /// Allocated buffer pointers for MPEG decoder (from user partition 2).
 static mut MPEG_BUF: *mut u8 = core::ptr::null_mut();
@@ -953,7 +955,12 @@ unsafe fn init_mpeg_decoder(filepath: &[u8]) -> bool {
     log_i32(b"[VIDEO] ringbuf mem=", ringbuf_mem_size);
 
     // Allocate from user memory partition 2.
-    let total_alloc = mpeg_mem_size + ringbuf_mem_size + 64;
+    // Layout (64-byte aligned): [HANDLE 64B][RINGBUF 128B][pad][MPEG_BUF][RINGBUF_DATA]
+    // MPEG_HANDLE and RINGBUF MUST be in user memory (not kernel BSS)
+    // because the Media Engine hardware can only access user address space.
+    const HANDLE_SIZE: i32 = 64;
+    const RINGBUF_STRUCT_SIZE: i32 = 128;
+    let total_alloc = HANDLE_SIZE + RINGBUF_STRUCT_SIZE + mpeg_mem_size + ringbuf_mem_size + 128;
     log_i32(b"[VIDEO] decoder alloc=", total_alloc);
     // SAFETY: sceKernelAllocPartitionMemory for user partition.
     let block_id = unsafe {
@@ -983,14 +990,34 @@ unsafe fn init_mpeg_decoder(filepath: &[u8]) -> bool {
         MPEG_BLOCK_ID = block_id.0;
     }
 
-    // SAFETY: Get block address.
+    // SAFETY: Get block address and 64-byte align.
     let base = unsafe { psp::sys::sceKernelGetBlockHeadAddr(block_id) } as *mut u8;
-    // 16-byte align.
-    let aligned = ((base as u32 + 15) & !15) as *mut u8;
+    let aligned = ((base as u32 + 63) & !63) as *mut u8;
     unsafe {
-        MPEG_BUF = aligned;
-        RINGBUF_DATA = aligned.add(mpeg_mem_size as usize);
+        // MPEG handle: 64 bytes at start (64-byte aligned).
+        MPEG_HANDLE = aligned;
+        // Zero the handle area.
+        let mut zi = 0;
+        while zi < HANDLE_SIZE as usize {
+            *aligned.add(zi) = 0;
+            zi += 1;
+        }
+        // Ringbuffer struct: 128 bytes after handle.
+        RINGBUF = aligned.add(HANDLE_SIZE as usize);
+        // Zero the ringbuf struct area.
+        zi = 0;
+        while zi < RINGBUF_STRUCT_SIZE as usize {
+            *RINGBUF.add(zi) = 0;
+            zi += 1;
+        }
+        // MPEG decoder buffer: 64-byte aligned after ringbuf struct.
+        let mpeg_start = aligned.add((HANDLE_SIZE + RINGBUF_STRUCT_SIZE) as usize);
+        let mpeg_aligned = ((mpeg_start as u32 + 63) & !63) as *mut u8;
+        MPEG_BUF = mpeg_aligned;
+        RINGBUF_DATA = mpeg_aligned.add(mpeg_mem_size as usize);
     }
+    log_hex(b"[VIDEO] MPEG_HANDLE=", unsafe { MPEG_HANDLE } as u32);
+    log_hex(b"[VIDEO] RINGBUF=", unsafe { RINGBUF } as u32);
     log_hex(b"[VIDEO] MPEG_BUF=", unsafe { MPEG_BUF } as u32);
 
     // Construct ringbuffer.
@@ -998,7 +1025,7 @@ unsafe fn init_mpeg_decoder(filepath: &[u8]) -> bool {
     let ret = unsafe {
         if let Some(f) = core::ptr::read_volatile(&raw const MPEG_RINGBUF_CONSTRUCT_FN) {
             f(
-                (&raw mut RINGBUF).cast::<u8>(),
+                RINGBUF,
                 RINGBUF_PACKETS,
                 RINGBUF_DATA,
                 ringbuf_mem_size,
@@ -1022,11 +1049,11 @@ unsafe fn init_mpeg_decoder(filepath: &[u8]) -> bool {
     let ret = unsafe {
         if let Some(f) = core::ptr::read_volatile(&raw const MPEG_CREATE_FN) {
             f(
-                (&raw mut MPEG_HANDLE).cast::<u32>(),
+                MPEG_HANDLE as *mut u32,
                 MPEG_BUF,
                 mpeg_mem_size,
-                (&raw mut RINGBUF).cast::<u8>() as *mut u32,
-                DECODE_W as i32, // Video width (PSP native)
+                RINGBUF as *mut u32,
+                512,             // frameWidth (power-of-2 stride, >= 480)
                 0,               // Mode
                 0,               // Reserved
             )
@@ -1047,7 +1074,7 @@ unsafe fn init_mpeg_decoder(filepath: &[u8]) -> bool {
         let mut offset = 0u32;
         let mut size = 0u32;
         if let Some(f) = core::ptr::read_volatile(&raw const MPEG_QUERY_STREAM_OFFSET_FN) {
-            let r = f((&raw mut MPEG_HANDLE).cast::<u32>(), header.as_mut_ptr(), &mut offset);
+            let r = f(MPEG_HANDLE as *mut u32, header.as_mut_ptr(), &mut offset);
             log_i32(b"[VIDEO] QStreamOffset ret=", r);
         }
         if let Some(f) = core::ptr::read_volatile(&raw const MPEG_QUERY_STREAM_SIZE_FN) {
@@ -1069,8 +1096,8 @@ unsafe fn init_mpeg_decoder(filepath: &[u8]) -> bool {
     // Register video (AVC) and audio (ATRAC) streams.
     unsafe {
         if let Some(f) = core::ptr::read_volatile(&raw const MPEG_REGIST_STREAM_FN) {
-            VIDEO_STREAM = f((&raw mut MPEG_HANDLE).cast::<u32>(), PSMF_AVC_STREAM, 0);
-            AUDIO_STREAM = f((&raw mut MPEG_HANDLE).cast::<u32>(), PSMF_ATRAC_STREAM, 0);
+            VIDEO_STREAM = f(MPEG_HANDLE as *mut u32, PSMF_AVC_STREAM, 0);
+            AUDIO_STREAM = f(MPEG_HANDLE as *mut u32, PSMF_ATRAC_STREAM, 0);
         }
         log_hex(b"[VIDEO] VIDEO_STREAM=", VIDEO_STREAM as u32);
         log_hex(b"[VIDEO] AUDIO_STREAM=", AUDIO_STREAM as u32);
@@ -1086,7 +1113,7 @@ unsafe fn init_mpeg_decoder(filepath: &[u8]) -> bool {
     unsafe {
         if let Some(f) = core::ptr::read_volatile(&raw const MPEG_AVC_DECODE_MODE_FN) {
             let mut mode = [-1i32, DECODE_PIXEL_MODE];
-            let r = f((&raw mut MPEG_HANDLE).cast::<u32>(), mode.as_mut_ptr());
+            let r = f(MPEG_HANDLE as *mut u32, mode.as_mut_ptr());
             log_i32(b"[VIDEO] AvcDecodeMode=", r);
         }
     }
@@ -1094,7 +1121,7 @@ unsafe fn init_mpeg_decoder(filepath: &[u8]) -> bool {
     // Allocate AVC ES buffer.
     unsafe {
         if let Some(f) = core::ptr::read_volatile(&raw const MPEG_MALLOC_AVC_ES_BUF_N) {
-            AVC_ES_BUF = f((&raw mut MPEG_HANDLE).cast::<u32>());
+            AVC_ES_BUF = f(MPEG_HANDLE as *mut u32);
         }
         log_hex(b"[VIDEO] AVC_ES_BUF=", AVC_ES_BUF as u32);
         if AVC_ES_BUF.is_null() {
@@ -1108,14 +1135,14 @@ unsafe fn init_mpeg_decoder(filepath: &[u8]) -> bool {
     unsafe {
         if let Some(f) = core::ptr::read_volatile(&raw const MPEG_INIT_AU_FN) {
             let r1 = f(
-                (&raw mut MPEG_HANDLE).cast::<u32>(),
+                MPEG_HANDLE as *mut u32,
                 AVC_ES_BUF,
                 (&raw mut VIDEO_AU).cast::<u8>(),
             );
             log_i32(b"[VIDEO] InitAu video=", r1);
             if !AUDIO_STREAM.is_null() {
                 let r2 = f(
-                    (&raw mut MPEG_HANDLE).cast::<u32>(),
+                    MPEG_HANDLE as *mut u32,
                     AVC_ES_BUF, // Reuse ES buf for AU init
                     (&raw mut AUDIO_AU).cast::<u8>(),
                 );
@@ -1167,7 +1194,7 @@ unsafe fn cleanup_mpeg() {
         // Free AVC ES buffer.
         if !AVC_ES_BUF.is_null() {
             if let Some(f) = core::ptr::read_volatile(&raw const MPEG_FREE_AVC_ES_BUF_FN) {
-                f((&raw mut MPEG_HANDLE).cast::<u32>(), AVC_ES_BUF);
+                f(MPEG_HANDLE as *mut u32, AVC_ES_BUF);
             }
             AVC_ES_BUF = core::ptr::null_mut();
         }
@@ -1175,25 +1202,29 @@ unsafe fn cleanup_mpeg() {
         // Unregister streams.
         if !VIDEO_STREAM.is_null() {
             if let Some(f) = core::ptr::read_volatile(&raw const MPEG_UNREGIST_STREAM_FN) {
-                f((&raw mut MPEG_HANDLE).cast::<u32>(), VIDEO_STREAM);
+                f(MPEG_HANDLE as *mut u32, VIDEO_STREAM);
             }
             VIDEO_STREAM = core::ptr::null_mut();
         }
         if !AUDIO_STREAM.is_null() {
             if let Some(f) = core::ptr::read_volatile(&raw const MPEG_UNREGIST_STREAM_FN) {
-                f((&raw mut MPEG_HANDLE).cast::<u32>(), AUDIO_STREAM);
+                f(MPEG_HANDLE as *mut u32, AUDIO_STREAM);
             }
             AUDIO_STREAM = core::ptr::null_mut();
         }
 
         // Delete sceMpeg handle.
-        if let Some(f) = core::ptr::read_volatile(&raw const MPEG_DELETE_FN) {
-            f((&raw mut MPEG_HANDLE).cast::<u32>());
+        if !MPEG_HANDLE.is_null() {
+            if let Some(f) = core::ptr::read_volatile(&raw const MPEG_DELETE_FN) {
+                f(MPEG_HANDLE as *mut u32);
+            }
         }
 
         // Destruct ringbuffer.
-        if let Some(f) = core::ptr::read_volatile(&raw const MPEG_RINGBUF_DESTRUCT_FN) {
-            f((&raw mut RINGBUF).cast::<u8>());
+        if !RINGBUF.is_null() {
+            if let Some(f) = core::ptr::read_volatile(&raw const MPEG_RINGBUF_DESTRUCT_FN) {
+                f(RINGBUF);
+            }
         }
 
         // Finish sceMpeg.
@@ -1224,6 +1255,8 @@ unsafe fn cleanup_mpeg() {
         }
         MPEG_BUF = core::ptr::null_mut();
         RINGBUF_DATA = core::ptr::null_mut();
+        MPEG_HANDLE = core::ptr::null_mut();
+        RINGBUF = core::ptr::null_mut();
     }
     crate::debug_log(b"[VIDEO] cleanup done");
 }
@@ -1236,7 +1269,7 @@ unsafe fn cleanup_mpeg() {
 unsafe fn fill_ringbuffer() -> i32 {
     let ret = unsafe {
         if let Some(f) = core::ptr::read_volatile(&raw const MPEG_RINGBUF_PUT_FN) {
-            f((&raw mut RINGBUF).cast::<u8>(), RINGBUF_PACKETS, 0)
+            f(RINGBUF, RINGBUF_PACKETS, 0)
         } else {
             -1
         }
@@ -1252,7 +1285,7 @@ unsafe fn decode_video_frame() -> bool {
     let ret = unsafe {
         if let Some(f) = core::ptr::read_volatile(&raw const MPEG_GET_AVC_AU_FN) {
             f(
-                (&raw mut MPEG_HANDLE).cast::<u32>(),
+                MPEG_HANDLE as *mut u32,
                 VIDEO_STREAM,
                 (&raw mut VIDEO_AU).cast::<u8>(),
                 &mut pts_out,
@@ -1281,7 +1314,7 @@ unsafe fn decode_video_frame() -> bool {
             // The output pointer (4th param) receives the decoded YCrCb data pointer.
             let mut ycrcb_ptr: *mut u8 = core::ptr::null_mut();
             let r = f(
-                (&raw mut MPEG_HANDLE).cast::<u32>(),
+                MPEG_HANDLE as *mut u32,
                 (&raw mut VIDEO_AU).cast::<u8>(),
                 DECODE_W as i32, // Frame width
                 &mut ycrcb_ptr as *mut *mut u8 as *mut u8,
@@ -1467,7 +1500,7 @@ unsafe fn decode_audio_frame() {
     let ret = unsafe {
         if let Some(f) = core::ptr::read_volatile(&raw const MPEG_GET_ATRAC_AU_FN) {
             f(
-                (&raw mut MPEG_HANDLE).cast::<u32>(),
+                MPEG_HANDLE as *mut u32,
                 AUDIO_STREAM,
                 (&raw mut AUDIO_AU).cast::<u8>(),
                 &mut pts_out,
@@ -1492,7 +1525,7 @@ unsafe fn decode_audio_frame() {
     let ret = unsafe {
         if let Some(f) = core::ptr::read_volatile(&raw const MPEG_ATRAC_DECODE_FN) {
             f(
-                (&raw mut MPEG_HANDLE).cast::<u32>(),
+                MPEG_HANDLE as *mut u32,
                 (&raw mut AUDIO_AU).cast::<u8>(),
                 pcm,
                 0, // Padding
@@ -1548,7 +1581,7 @@ unsafe fn check_av_sync() {
         crate::debug_log(b"[VIDEO] A/V drift >1s, flushing");
         unsafe {
             if let Some(f) = core::ptr::read_volatile(&raw const MPEG_FLUSH_ALL_STREAM_FN) {
-                f((&raw mut MPEG_HANDLE).cast::<u32>());
+                f(MPEG_HANDLE as *mut u32);
             }
         }
     }
