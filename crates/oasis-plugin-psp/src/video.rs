@@ -891,33 +891,17 @@ unsafe fn init_mpeg_decoder(filepath: &[u8]) -> bool {
     // buffer. Reading into a stack variable caused 0x80628001 errors.
 
     // Initialize sceMpeg.
-    // If the game already initialized it, we Finish + re-Init to get a
-    // clean context. Sharing the game's MPEG state causes sceMpegCreate
-    // to fail with 0x80628001 due to conflicting internal state.
+    // ALREADY_INIT (0x80618005) is expected when a game has sceMpeg active.
+    // We can still create our own handle within the initialized subsystem.
+    // Attempting Finish+re-Init fails (0x80618009) because we don't own
+    // the game's MPEG context.
     const MPEG_ALREADY_INIT: i32 = 0x80618005_u32 as i32;
     let init_fn = unsafe { core::ptr::read_volatile(&raw const MPEG_INIT_FN) };
     if let Some(f) = init_fn {
         let r = unsafe { f() };
         log_i32(b"[VIDEO] sceMpegInit=", r);
         if r == MPEG_ALREADY_INIT {
-            crate::debug_log(b"[VIDEO] already init -> reset");
-            // Tear down existing MPEG context so we get a fresh one.
-            unsafe {
-                if let Some(fin) = core::ptr::read_volatile(&raw const MPEG_FINISH_FN) {
-                    let rf = fin();
-                    log_i32(b"[VIDEO] sceMpegFinish=", rf);
-                }
-            }
-            // Re-init fresh.
-            let r2 = unsafe { f() };
-            log_i32(b"[VIDEO] sceMpegInit(2)=", r2);
-            if r2 < 0 {
-                unsafe {
-                    psp::sys::sceIoClose(fd);
-                    VIDEO_FD = -1;
-                }
-                return false;
-            }
+            crate::debug_log(b"[VIDEO] already init (OK, using game ctx)");
         } else if r < 0 {
             unsafe {
                 psp::sys::sceIoClose(fd);
