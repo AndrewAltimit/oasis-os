@@ -886,29 +886,9 @@ unsafe fn init_mpeg_decoder(filepath: &[u8]) -> bool {
         VIDEO_FD = fd.0;
     }
 
-    // Read PSMF header (first 2048 bytes).
-    let mut header = [0u8; 2048];
-    // SAFETY: Valid fd and buffer.
-    let ret = unsafe {
-        psp::sys::sceIoRead(fd, header.as_mut_ptr() as *mut _, 2048)
-    };
-    if ret < 2048 {
-        log_i32(b"[VIDEO] header read only=", ret);
-        unsafe {
-            psp::sys::sceIoClose(fd);
-            VIDEO_FD = -1;
-        }
-        return false;
-    }
-
-    // Log PSMF magic bytes for validation.
-    let mut magic_buf = [0u8; 32];
-    let mut mp = copy_bytes(&mut magic_buf, 0, b"[VIDEO] magic=");
-    mp = write_hex_byte(&mut magic_buf, mp, header[0]);
-    mp = write_hex_byte(&mut magic_buf, mp, header[1]);
-    mp = write_hex_byte(&mut magic_buf, mp, header[2]);
-    mp = write_hex_byte(&mut magic_buf, mp, header[3]);
-    crate::debug_log(&magic_buf[..mp]);
+    // NOTE: PSMF header is read AFTER allocation, directly into MPEG_BUF.
+    // sceMpegCreate expects the PSMF header at the start of its decoder
+    // buffer. Reading into a stack variable caused 0x80628001 errors.
 
     // Initialize sceMpeg.
     // If the game already initialized it, we Finish + re-Init to get a
@@ -1037,6 +1017,29 @@ unsafe fn init_mpeg_decoder(filepath: &[u8]) -> bool {
     log_hex(b"[VIDEO] RINGBUF=", unsafe { RINGBUF } as u32);
     log_hex(b"[VIDEO] MPEG_BUF=", unsafe { MPEG_BUF } as u32);
 
+    // Read PSMF header (first 2048 bytes) directly into MPEG_BUF.
+    // sceMpegCreate expects the PSMF header at the start of its decoder
+    // buffer. The file position is at 0 (just opened).
+    // SAFETY: MPEG_BUF is valid, allocated above, fd is valid.
+    let ret = unsafe {
+        psp::sys::sceIoRead(fd, MPEG_BUF as *mut _, 2048)
+    };
+    if ret < 2048 {
+        log_i32(b"[VIDEO] header read only=", ret);
+        unsafe { cleanup_mpeg() };
+        return false;
+    }
+    // Log PSMF magic bytes for validation.
+    unsafe {
+        let mut magic_buf = [0u8; 32];
+        let mut mp = copy_bytes(&mut magic_buf, 0, b"[VIDEO] magic=");
+        mp = write_hex_byte(&mut magic_buf, mp, *MPEG_BUF);
+        mp = write_hex_byte(&mut magic_buf, mp, *MPEG_BUF.add(1));
+        mp = write_hex_byte(&mut magic_buf, mp, *MPEG_BUF.add(2));
+        mp = write_hex_byte(&mut magic_buf, mp, *MPEG_BUF.add(3));
+        crate::debug_log(&magic_buf[..mp]);
+    }
+
     // Construct ringbuffer.
     // SAFETY: All pointers valid, callback is safe.
     let ret = unsafe {
@@ -1086,16 +1089,16 @@ unsafe fn init_mpeg_decoder(filepath: &[u8]) -> bool {
     }
     crate::debug_log(b"[VIDEO] sceMpegCreate OK");
 
-    // Query stream offset and size from header.
+    // Query stream offset and size from the PSMF header in MPEG_BUF.
     unsafe {
         let mut offset = 0u32;
         let mut size = 0u32;
         if let Some(f) = core::ptr::read_volatile(&raw const MPEG_QUERY_STREAM_OFFSET_FN) {
-            let r = f(MPEG_HANDLE as *mut u32, header.as_mut_ptr(), &mut offset);
+            let r = f(MPEG_HANDLE as *mut u32, MPEG_BUF, &mut offset);
             log_i32(b"[VIDEO] QStreamOffset ret=", r);
         }
         if let Some(f) = core::ptr::read_volatile(&raw const MPEG_QUERY_STREAM_SIZE_FN) {
-            let r = f(header.as_mut_ptr(), &mut size);
+            let r = f(MPEG_BUF, &mut size);
             log_i32(b"[VIDEO] QStreamSize ret=", r);
         }
         STREAM_OFFSET = offset;
