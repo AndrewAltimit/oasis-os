@@ -911,22 +911,39 @@ unsafe fn init_mpeg_decoder(filepath: &[u8]) -> bool {
     crate::debug_log(&magic_buf[..mp]);
 
     // Initialize sceMpeg.
-    // 0x80618005 = SCE_MPEG_ERROR_ALREADY_INIT -- the game already
-    // initialized the MPEG subsystem, so we share it.
+    // If the game already initialized it, we Finish + re-Init to get a
+    // clean context. Sharing the game's MPEG state causes sceMpegCreate
+    // to fail with 0x80628001 due to conflicting internal state.
     const MPEG_ALREADY_INIT: i32 = 0x80618005_u32 as i32;
     let init_fn = unsafe { core::ptr::read_volatile(&raw const MPEG_INIT_FN) };
     if let Some(f) = init_fn {
         let r = unsafe { f() };
         log_i32(b"[VIDEO] sceMpegInit=", r);
-        if r < 0 && r != MPEG_ALREADY_INIT {
+        if r == MPEG_ALREADY_INIT {
+            crate::debug_log(b"[VIDEO] already init -> reset");
+            // Tear down existing MPEG context so we get a fresh one.
+            unsafe {
+                if let Some(fin) = core::ptr::read_volatile(&raw const MPEG_FINISH_FN) {
+                    let rf = fin();
+                    log_i32(b"[VIDEO] sceMpegFinish=", rf);
+                }
+            }
+            // Re-init fresh.
+            let r2 = unsafe { f() };
+            log_i32(b"[VIDEO] sceMpegInit(2)=", r2);
+            if r2 < 0 {
+                unsafe {
+                    psp::sys::sceIoClose(fd);
+                    VIDEO_FD = -1;
+                }
+                return false;
+            }
+        } else if r < 0 {
             unsafe {
                 psp::sys::sceIoClose(fd);
                 VIDEO_FD = -1;
             }
             return false;
-        }
-        if r == MPEG_ALREADY_INIT {
-            crate::debug_log(b"[VIDEO] sceMpeg already init (shared)");
         }
     } else {
         crate::debug_log(b"[VIDEO] sceMpegInit FN missing");
