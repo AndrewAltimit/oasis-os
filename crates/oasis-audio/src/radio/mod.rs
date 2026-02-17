@@ -263,7 +263,12 @@ impl RadioManager {
                     *source = None;
                 },
             },
-            _ => {},
+            RadioState::Stopped | RadioState::Error => {
+                // Clean up the source if radio was stopped or errored.
+                if let Some(mut src) = source.take() {
+                    src.disconnect();
+                }
+            },
         }
 
         Ok(())

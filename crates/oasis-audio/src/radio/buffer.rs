@@ -41,10 +41,15 @@ impl StreamBuffer {
     pub fn write(&mut self, data: &[u8]) -> usize {
         let free = self.free_space();
         let to_write = data.len().min(free);
-        for &byte in &data[..to_write] {
-            self.buf[self.head] = byte;
-            self.head = (self.head + 1) % self.capacity;
+        if to_write == 0 {
+            return 0;
         }
+        let first = to_write.min(self.capacity - self.head);
+        self.buf[self.head..self.head + first].copy_from_slice(&data[..first]);
+        if first < to_write {
+            self.buf[..to_write - first].copy_from_slice(&data[first..to_write]);
+        }
+        self.head = (self.head + to_write) % self.capacity;
         self.len += to_write;
         to_write
     }
@@ -53,10 +58,15 @@ impl StreamBuffer {
     /// bytes actually read.
     pub fn read(&mut self, dst: &mut [u8]) -> usize {
         let to_read = dst.len().min(self.len);
-        for byte in dst.iter_mut().take(to_read) {
-            *byte = self.buf[self.tail];
-            self.tail = (self.tail + 1) % self.capacity;
+        if to_read == 0 {
+            return 0;
         }
+        let first = to_read.min(self.capacity - self.tail);
+        dst[..first].copy_from_slice(&self.buf[self.tail..self.tail + first]);
+        if first < to_read {
+            dst[first..to_read].copy_from_slice(&self.buf[..to_read - first]);
+        }
+        self.tail = (self.tail + to_read) % self.capacity;
         self.len -= to_read;
         to_read
     }

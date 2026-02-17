@@ -19,7 +19,10 @@ pub fn parse_icy_metaint(headers: &str) -> Option<usize> {
         let lower = line.to_ascii_lowercase();
         if lower.starts_with("icy-metaint:") {
             let val = line.split_once(':')?.1.trim();
-            return val.parse().ok();
+            return match val.parse().ok()? {
+                0 => None,
+                n => Some(n),
+            };
         }
     }
     None
@@ -153,6 +156,12 @@ mod tests {
     #[test]
     fn parse_metaint_absent() {
         let headers = "HTTP/1.0 200 OK\r\nContent-Type:audio/mpeg\r\n";
+        assert_eq!(parse_icy_metaint(headers), None);
+    }
+
+    #[test]
+    fn parse_metaint_zero_treated_as_absent() {
+        let headers = "ICY 200 OK\r\nicy-metaint:0\r\n";
         assert_eq!(parse_icy_metaint(headers), None);
     }
 
