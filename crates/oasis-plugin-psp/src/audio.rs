@@ -673,6 +673,27 @@ pub fn radio_meta() -> &'static [u8] {
     unsafe { core::slice::from_raw_parts((&raw const RADIO_META).cast::<u8>(), 48) }
 }
 
+/// Whether audio was playing before PIP video paused it.
+static VIDEO_PAUSED_AUDIO: core::sync::atomic::AtomicBool =
+    core::sync::atomic::AtomicBool::new(false);
+
+/// Pause audio playback for PIP video (so ATRAC can use the audio hardware).
+pub fn pause_for_video() {
+    if AUDIO_STATE.load(Ordering::Relaxed) == 1 {
+        // Currently playing -- pause it.
+        VIDEO_PAUSED_AUDIO.store(true, Ordering::Relaxed);
+        AUDIO_CMD.store(1, Ordering::Relaxed); // toggle = pause
+    }
+}
+
+/// Resume audio playback after PIP video stops.
+pub fn resume_after_video() {
+    if VIDEO_PAUSED_AUDIO.load(Ordering::Relaxed) {
+        VIDEO_PAUSED_AUDIO.store(false, Ordering::Relaxed);
+        AUDIO_CMD.store(1, Ordering::Relaxed); // toggle = resume
+    }
+}
+
 // ---------------------------------------------------------------------------
 // NID resolution helpers
 // ---------------------------------------------------------------------------

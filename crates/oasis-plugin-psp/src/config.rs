@@ -49,6 +49,12 @@ pub struct PluginConfig {
     pub radio_station: u8,
     /// Start in radio mode on plugin load.
     pub radio_mode: bool,
+    /// Video directory path (null-terminated).
+    pub video_dir: [u8; MAX_PATH],
+    /// Video directory path length (excluding null).
+    pub video_dir_len: usize,
+    /// Enable PIP video on plugin load.
+    pub pip_enabled: bool,
 }
 
 impl PluginConfig {
@@ -61,6 +67,14 @@ impl PluginConfig {
             dir[i] = src[i];
             i += 1;
         }
+        // "ms0:/VIDEO/" as bytes
+        let mut vdir = [0u8; MAX_PATH];
+        let vsrc = b"ms0:/VIDEO/";
+        let mut j = 0;
+        while j < vsrc.len() {
+            vdir[j] = vsrc[j];
+            j += 1;
+        }
         Self {
             trigger: TriggerButton::Note,
             music_dir: dir,
@@ -69,12 +83,20 @@ impl PluginConfig {
             autoplay: false,
             radio_station: 0,
             radio_mode: false,
+            video_dir: vdir,
+            video_dir_len: 11,
+            pip_enabled: false,
         }
     }
 
     /// Get music directory as a byte slice (with null terminator).
     pub fn music_dir_str(&self) -> &[u8] {
         &self.music_dir[..self.music_dir_len + 1]
+    }
+
+    /// Get video directory as a byte slice (with null terminator).
+    pub fn video_dir_str(&self) -> &[u8] {
+        &self.video_dir[..self.video_dir_len + 1]
     }
 
     /// Get the trigger button mask for controller polling.
@@ -198,6 +220,18 @@ fn parse_config(data: &[u8], config: &mut PluginConfig) {
                 }
             } else if bytes_eq_ci(key, b"radio_mode") {
                 config.radio_mode =
+                    bytes_eq_ci(val, b"true") || bytes_eq_ci(val, b"1") || bytes_eq_ci(val, b"yes");
+            } else if bytes_eq_ci(key, b"video_dir") {
+                let len = val.len().min(MAX_PATH - 1);
+                let mut i = 0;
+                while i < len {
+                    config.video_dir[i] = val[i];
+                    i += 1;
+                }
+                config.video_dir[len] = 0;
+                config.video_dir_len = len;
+            } else if bytes_eq_ci(key, b"pip_enabled") {
+                config.pip_enabled =
                     bytes_eq_ci(val, b"true") || bytes_eq_ci(val, b"1") || bytes_eq_ci(val, b"yes");
             }
         }

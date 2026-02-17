@@ -16,8 +16,9 @@
 //!
 //! ## Memory Budget
 //!
-//! Target: <64KB total (code + data). No heap allocator -- stack + static
-//! buffers only.
+//! Target: <72KB total (code + data). No heap allocator -- stack + static
+//! buffers only. PIP video buffers (~174KB) allocated on-demand from
+//! user-memory partition 2.
 
 #![no_std]
 #![no_main]
@@ -31,6 +32,7 @@ mod font;
 mod hook;
 mod overlay;
 mod render;
+mod video;
 
 use core::sync::atomic::{AtomicBool, Ordering};
 
@@ -72,6 +74,9 @@ fn psp_main() {
         // Start background audio thread (always -- handles on-demand
         // playback from the overlay menu even when autoplay is off).
         audio::start_audio_thread();
+
+        // Start video thread for PIP playback.
+        video::start_video_thread();
     } else {
         debug_log(b"[OASIS] hook install FAILED");
     }

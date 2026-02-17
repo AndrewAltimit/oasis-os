@@ -60,7 +60,7 @@ dependencies = [
 [[package]]
 name = "psp"
 version = "0.4.0"
-source = "git+https://github.com/AndrewAltimit/rust-psp#b44a1c2c0780f5052a33f7c8e23e0b04b0f6acc2"
+source = "git+https://github.com/AndrewAltimit/rust-psp?branch=feat%2Fnetconf-dialog#be617d89e6920ccf257d55e945b8bdd4c2ebd72b"
 dependencies = [
  "bitflags",
  "libm",
