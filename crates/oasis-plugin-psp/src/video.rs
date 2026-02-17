@@ -1059,20 +1059,52 @@ unsafe fn init_mpeg_decoder(filepath: &[u8]) -> bool {
     }
     crate::debug_log(b"[VIDEO] ringbuf constructed OK");
 
-    // Dump ringbuffer struct for diagnostics (callback addr, gp, etc).
+    // Dump full ringbuffer struct (16 u32 words = 64 bytes).
     unsafe {
-        // SceMpegRingbuffer layout: packets(0), unk0-5(4-24), data(28),
-        // cbParam(32), cbFunc(36), dummy(40), gp(44).
-        let rb = RINGBUF as *const u32;
-        log_i32(b"[VIDEO] rb.packets=", *rb as i32);
-        log_hex(b"[VIDEO] rb.data=", *rb.add(7));
-        log_hex(b"[VIDEO] rb.cbFunc=", *rb.add(9));
-        log_hex(b"[VIDEO] rb.gp=", *rb.add(11));
+        let rb = RINGBUF as *mut u32;
+        // Log first 12 fields to find callback/gp/data positions.
+        let mut i = 0;
+        while i < 12 {
+            let mut buf = [0u8; 32];
+            let mut p = copy_bytes(&mut buf, 0, b"[VIDEO] rb[");
+            if i >= 10 {
+                buf[p] = b'0' + (i / 10) as u8;
+                p += 1;
+            }
+            buf[p] = b'0' + (i % 10) as u8;
+            p += 1;
+            p = copy_bytes(&mut buf, p, b"]=");
+            p = write_hex32(&mut buf, p, *rb.add(i));
+            crate::debug_log(&buf[..p]);
+            i += 1;
+        }
     }
     log_hex(b"[VIDEO] our cb addr=", ringbuf_callback as *const () as u32);
 
+    // Patch kernel-space addresses (KSEG0: 0x8xxxxxxx) in the
+    // ringbuffer struct to their KUSEG equivalents (0x0xxxxxxx).
+    // sceMpegCreate validates that addresses are in user space.
+    // KSEG0 and KUSEG map to the same physical memory on MIPS.
+    unsafe {
+        let rb = RINGBUF as *mut u32;
+        let mut patched = 0u32;
+        let mut i = 0;
+        while i < 16 {
+            let val = *rb.add(i);
+            // Only patch KSEG0 addresses (0x80000000-0x9FFFFFFF)
+            // that look like code/data pointers (not small values).
+            if val >= 0x80000000 && val < 0xA0000000 && val > 0x80010000 {
+                let user_val = val & 0x7FFFFFFF;
+                *rb.add(i) = user_val;
+                patched += 1;
+            }
+            i += 1;
+        }
+        log_i32(b"[VIDEO] rb patched fields=", patched as i32);
+    }
+
     // Flush data cache so sceMpeg sees zeroed MPEG_BUF and the
-    // constructed ringbuffer struct in physical memory.
+    // patched ringbuffer struct in physical memory.
     // SAFETY: cache maintenance.
     unsafe {
         psp::sys::sceKernelDcacheWritebackInvalidateAll();
