@@ -890,11 +890,65 @@ unsafe fn init_mpeg_decoder(filepath: &[u8]) -> bool {
     // sceMpegCreate expects the PSMF header at the start of its decoder
     // buffer. Reading into a stack variable caused 0x80628001 errors.
 
-    // Skip sceMpegInit entirely. The game already initialized the MPEG
-    // subsystem (calling Init returns ALREADY_INIT 0x80618005). Calling
-    // Init from a kernel thread may set internal kernel-mode flags that
-    // poison subsequent sceMpegCreate calls. The subsystem is ready.
-    crate::debug_log(b"[VIDEO] skipping sceMpegInit (game has it)");
+    // Try sceMpegInit. If the game has MPEG active, it returns
+    // ALREADY_INIT (0x80618005). In that case, retry periodically --
+    // many games init MPEG for opening cutscenes then release it.
+    // Without calling Init, sceMpegCreate crashes (no internal state).
+    const MPEG_ALREADY_INIT: i32 = 0x80618005_u32 as i32;
+    let init_fn = unsafe { core::ptr::read_volatile(&raw const MPEG_INIT_FN) };
+    let mut mpeg_inited_fresh = false;
+    if let Some(f) = init_fn {
+        // Try up to 10 times (30s total) waiting for MPEG to become free.
+        let mut attempt = 0;
+        loop {
+            let r = unsafe { f() };
+            if r == 0 {
+                crate::debug_log(b"[VIDEO] sceMpegInit OK (fresh)");
+                mpeg_inited_fresh = true;
+                break;
+            } else if r == MPEG_ALREADY_INIT {
+                if attempt == 0 {
+                    crate::debug_log(b"[VIDEO] MPEG busy, will retry...");
+                }
+                attempt += 1;
+                if attempt >= 10 {
+                    log_i32(b"[VIDEO] MPEG still busy after retries=", attempt);
+                    // Proceed anyway with ALREADY_INIT state.
+                    break;
+                }
+                // Wait 3 seconds between retries.
+                unsafe { psp::sys::sceKernelDelayThread(3_000_000) };
+            } else {
+                log_i32(b"[VIDEO] sceMpegInit err=", r);
+                unsafe {
+                    psp::sys::sceIoClose(fd);
+                    VIDEO_FD = -1;
+                }
+                return false;
+            }
+        }
+    } else {
+        crate::debug_log(b"[VIDEO] sceMpegInit FN missing");
+        return false;
+    }
+
+    // If still ALREADY_INIT, try aggressive Finish+Init as last resort.
+    if !mpeg_inited_fresh {
+        unsafe {
+            if let Some(fin) = core::ptr::read_volatile(&raw const MPEG_FINISH_FN) {
+                let rf = fin();
+                log_i32(b"[VIDEO] last-resort Finish=", rf);
+            }
+            if let Some(f) = core::ptr::read_volatile(&raw const MPEG_INIT_FN) {
+                let r = f();
+                log_i32(b"[VIDEO] last-resort Init=", r);
+                if r == 0 {
+                    mpeg_inited_fresh = true;
+                    crate::debug_log(b"[VIDEO] MPEG freed after Finish!");
+                }
+            }
+        }
+    }
 
     // Query memory sizes.
     let mpeg_mem_size = unsafe {
