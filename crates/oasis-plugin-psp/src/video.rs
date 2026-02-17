@@ -909,16 +909,22 @@ unsafe fn init_mpeg_decoder(filepath: &[u8]) -> bool {
     crate::debug_log(&magic_buf[..mp]);
 
     // Initialize sceMpeg.
+    // 0x80618005 = SCE_MPEG_ERROR_ALREADY_INIT -- the game already
+    // initialized the MPEG subsystem, so we share it.
+    const MPEG_ALREADY_INIT: i32 = 0x80618005_u32 as i32;
     let init_fn = unsafe { core::ptr::read_volatile(&raw const MPEG_INIT_FN) };
     if let Some(f) = init_fn {
         let r = unsafe { f() };
         log_i32(b"[VIDEO] sceMpegInit=", r);
-        if r < 0 {
+        if r < 0 && r != MPEG_ALREADY_INIT {
             unsafe {
                 psp::sys::sceIoClose(fd);
                 VIDEO_FD = -1;
             }
             return false;
+        }
+        if r == MPEG_ALREADY_INIT {
+            crate::debug_log(b"[VIDEO] sceMpeg already init (shared)");
         }
     } else {
         crate::debug_log(b"[VIDEO] sceMpegInit FN missing");
