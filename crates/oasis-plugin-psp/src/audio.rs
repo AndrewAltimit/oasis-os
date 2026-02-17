@@ -678,6 +678,7 @@ static VIDEO_PAUSED_AUDIO: core::sync::atomic::AtomicBool =
     core::sync::atomic::AtomicBool::new(false);
 
 /// Pause audio playback for PIP video (so ATRAC can use the audio hardware).
+#[allow(dead_code)]
 pub fn pause_for_video() {
     if AUDIO_STATE.load(Ordering::Relaxed) == 1 {
         // Currently playing -- pause it.
@@ -687,6 +688,7 @@ pub fn pause_for_video() {
 }
 
 /// Resume audio playback after PIP video stops.
+#[allow(dead_code)]
 pub fn resume_after_video() {
     if VIDEO_PAUSED_AUDIO.load(Ordering::Relaxed) {
         VIDEO_PAUSED_AUDIO.store(false, Ordering::Relaxed);
