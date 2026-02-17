@@ -12,7 +12,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 MEMSTICK="$PROJECT_DIR/crates/oasis-backend-psp/target/psp-memstick"
-GAME_DIR="$MEMSTICK/GAME/OASISOS"
+GAME_DIR="$MEMSTICK/PSP/GAME/OASISOS"
 SENTINEL="$MEMSTICK/SELFTEST"
 LOG_FILE="$GAME_DIR/selftest.log"
 TIMEOUT="${PPSSPP_TIMEOUT:-60}"

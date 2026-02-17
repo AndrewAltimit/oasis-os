@@ -176,6 +176,39 @@ impl AudioBackend for SdlAudioBackend {
         log::info!("SDL2 audio backend shut down");
         Ok(())
     }
+
+    fn load_streaming(&mut self) -> Result<AudioTrackId> {
+        if !self.initialized {
+            return Err(OasisError::Backend("audio not initialized".into()));
+        }
+        let id = self.next_id;
+        self.next_id += 1;
+        // Store an empty track for the streaming session.
+        self.tracks.insert(id, Vec::new());
+        log::debug!("Created streaming audio track {id}");
+        Ok(AudioTrackId(id))
+    }
+
+    fn feed_data(&mut self, track: AudioTrackId, data: &[u8]) -> Result<()> {
+        // Cap streaming buffer at 128KB to prevent unbounded growth.
+        // When a real SDL audio callback consumes data, this limit
+        // ensures memory stays bounded even if consumption stalls.
+        const MAX_STREAMING_BUF: usize = 128 * 1024;
+
+        if let Some(buf) = self.tracks.get_mut(&track.0) {
+            buf.extend_from_slice(data);
+            if buf.len() > MAX_STREAMING_BUF {
+                let drain = buf.len() - MAX_STREAMING_BUF;
+                buf.drain(..drain);
+            }
+            Ok(())
+        } else {
+            Err(OasisError::Backend(format!(
+                "streaming track {} not found",
+                track.0
+            )))
+        }
+    }
 }
 
 #[cfg(test)]
@@ -377,6 +410,41 @@ mod tests {
             dur_large > dur_small,
             "larger track should have longer duration: {dur_large} > {dur_small}"
         );
+    }
+
+    #[test]
+    fn streaming_lifecycle() {
+        let mut backend = init_backend();
+        let track = backend.load_streaming().unwrap();
+        backend.feed_data(track, b"chunk 1").unwrap();
+        backend.feed_data(track, b"chunk 2").unwrap();
+        // Data should have accumulated.
+        assert_eq!(backend.tracks[&track.0].len(), 14);
+        backend.unload_track(track).unwrap();
+    }
+
+    #[test]
+    fn streaming_buffer_is_bounded() {
+        let mut backend = init_backend();
+        let track = backend.load_streaming().unwrap();
+        // Feed more than 128KB to verify the buffer is capped.
+        for _ in 0..40 {
+            backend.feed_data(track, &[0xAA; 4096]).unwrap();
+        }
+        // 40 * 4096 = 160KB, should be capped to 128KB.
+        assert!(backend.tracks[&track.0].len() <= 128 * 1024);
+    }
+
+    #[test]
+    fn streaming_without_init_fails() {
+        let mut backend = SdlAudioBackend::new();
+        assert!(backend.load_streaming().is_err());
+    }
+
+    #[test]
+    fn feed_data_invalid_track_fails() {
+        let mut backend = init_backend();
+        assert!(backend.feed_data(AudioTrackId(999), b"data").is_err());
     }
 
     #[test]

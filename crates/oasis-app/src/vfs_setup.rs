@@ -28,12 +28,22 @@ pub fn populate_demo_vfs(vfs: &mut MemoryVfs) {
         "Network",
         "Terminal",
         "Music Player",
+        "Internet Radio",
         "Photo Viewer",
         "Package Manager",
         "System Monitor",
         "Browser",
     ] {
         vfs.mkdir(&format!("/apps/{name}")).unwrap();
+    }
+
+    // Radio configuration directory and default station list.
+    vfs.mkdir("/etc/radio").unwrap();
+    vfs.mkdir("/var/radio").unwrap();
+    let default_stations = oasis_audio::radio::station::StationRegistry::defaults();
+    if let Ok(toml_data) = default_stations.to_toml() {
+        vfs.write("/etc/radio/stations.toml", toml_data.as_bytes())
+            .unwrap();
     }
 
     // Browser home page content.
@@ -184,6 +194,7 @@ mod tests {
             "Network",
             "Terminal",
             "Music Player",
+            "Internet Radio",
             "Photo Viewer",
             "Package Manager",
             "System Monitor",
@@ -241,6 +252,27 @@ mod tests {
             text.contains("echo"),
             "hello.sh should contain 'echo', got: {text}",
         );
+    }
+
+    #[test]
+    fn populate_creates_radio_config() {
+        let mut vfs = MemoryVfs::new();
+        super::populate_demo_vfs(&mut vfs);
+        let data = vfs
+            .read("/etc/radio/stations.toml")
+            .expect("/etc/radio/stations.toml should exist");
+        let text = std::str::from_utf8(&data).unwrap();
+        assert!(
+            text.contains("SomaFM"),
+            "stations.toml should contain 'SomaFM', got: {text}",
+        );
+    }
+
+    #[test]
+    fn populate_creates_var_radio() {
+        let mut vfs = MemoryVfs::new();
+        super::populate_demo_vfs(&mut vfs);
+        assert!(vfs.readdir("/var/radio").is_ok(), "/var/radio should exist",);
     }
 
     #[test]

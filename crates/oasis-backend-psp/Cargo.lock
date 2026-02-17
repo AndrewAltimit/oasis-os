@@ -534,6 +534,7 @@ dependencies = [
  "oasis-types",
  "oasis-vfs",
  "serde",
+ "toml",
 ]
 
 [[package]]
@@ -748,7 +749,7 @@ dependencies = [
 [[package]]
 name = "psp"
 version = "0.4.0"
-source = "git+https://github.com/AndrewAltimit/rust-psp#d9d5ab2536e8488cfabc5661cf6edfde2c46c2bd"
+source = "git+https://github.com/AndrewAltimit/rust-psp?branch=feat%2Fnetconf-dialog#be617d89e6920ccf257d55e945b8bdd4c2ebd72b"
 dependencies = [
  "bitflags",
  "libm",

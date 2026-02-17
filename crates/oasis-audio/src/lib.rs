@@ -9,9 +9,11 @@
 pub mod manager;
 pub mod null_backend;
 pub mod playlist;
+pub mod radio;
 pub mod types;
 
 pub use manager::{AUDIO_REQUEST_PATH, AUDIO_STATUS_PATH, AudioManager};
 pub use null_backend::NullAudioBackend;
 pub use playlist::{Playlist, format_duration, format_playlist};
+pub use radio::{RADIO_REQUEST_PATH, RADIO_STATUS_PATH, RadioManager};
 pub use types::{PlaybackState, RepeatMode, TrackInfo};

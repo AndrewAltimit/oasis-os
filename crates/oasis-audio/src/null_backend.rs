@@ -116,6 +116,17 @@ impl AudioBackend for NullAudioBackend {
         self.loaded_count = 0;
         Ok(())
     }
+
+    fn load_streaming(&mut self) -> Result<AudioTrackId> {
+        let id = self.next_id;
+        self.next_id += 1;
+        self.loaded_count += 1;
+        Ok(AudioTrackId(id))
+    }
+
+    fn feed_data(&mut self, _track: AudioTrackId, _data: &[u8]) -> Result<()> {
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -169,5 +180,13 @@ mod tests {
         let backend = NullAudioBackend::new();
         assert_eq!(backend.position_ms(), 0);
         assert_eq!(backend.duration_ms(), 0);
+    }
+
+    #[test]
+    fn null_backend_streaming() {
+        let mut backend = NullAudioBackend::new();
+        let track = backend.load_streaming().unwrap();
+        assert_eq!(backend.loaded_count(), 1);
+        backend.feed_data(track, b"streaming data").unwrap();
     }
 }

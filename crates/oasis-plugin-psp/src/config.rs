@@ -45,6 +45,10 @@ pub struct PluginConfig {
     pub opacity: u8,
     /// Auto-start music playback on plugin load.
     pub autoplay: bool,
+    /// Initial radio station index (0-7).
+    pub radio_station: u8,
+    /// Start in radio mode on plugin load.
+    pub radio_mode: bool,
 }
 
 impl PluginConfig {
@@ -63,6 +67,8 @@ impl PluginConfig {
             music_dir_len: 11,
             opacity: 180,
             autoplay: false,
+            radio_station: 0,
+            radio_mode: false,
         }
     }
 
@@ -107,13 +113,8 @@ pub fn load_config() {
     let mut buf = [0u8; 512];
 
     // SAFETY: sceIoOpen with read-only flags, null-terminated path.
-    let fd = unsafe {
-        psp::sys::sceIoOpen(
-            CONFIG_PATH.as_ptr(),
-            psp::sys::IoOpenFlags::RD_ONLY,
-            0,
-        )
-    };
+    let fd =
+        unsafe { psp::sys::sceIoOpen(CONFIG_PATH.as_ptr(), psp::sys::IoOpenFlags::RD_ONLY, 0) };
     if fd < psp::sys::SceUid(0) {
         return; // File doesn't exist, use defaults.
     }
@@ -188,6 +189,15 @@ fn parse_config(data: &[u8], config: &mut PluginConfig) {
                 }
             } else if bytes_eq_ci(key, b"autoplay") {
                 config.autoplay =
+                    bytes_eq_ci(val, b"true") || bytes_eq_ci(val, b"1") || bytes_eq_ci(val, b"yes");
+            } else if bytes_eq_ci(key, b"radio_station") {
+                if let Some(n) = parse_u8(val) {
+                    if n < 8 {
+                        config.radio_station = n;
+                    }
+                }
+            } else if bytes_eq_ci(key, b"radio_mode") {
+                config.radio_mode =
                     bytes_eq_ci(val, b"true") || bytes_eq_ci(val, b"1") || bytes_eq_ci(val, b"yes");
             }
         }

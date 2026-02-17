@@ -28,9 +28,36 @@ const SO_NONBLOCK: i32 = 0x0080;
 /// Whether the network subsystem has been initialized.
 static NET_INITIALIZED: AtomicBool = AtomicBool::new(false);
 
-/// Public wrapper for use from the I/O thread.
-pub(crate) fn ensure_net_init_pub() -> Result<()> {
+/// Public wrapper — call from main thread (shows WiFi dialog with GU rendering).
+pub fn ensure_net_init_pub() -> Result<()> {
     ensure_net_init()
+}
+
+/// Returns `true` if the network stack has already been initialized.
+pub fn is_net_initialized() -> bool {
+    NET_INITIALIZED.load(Ordering::Acquire)
+}
+
+/// Load PSP network kernel modules (idempotent).
+///
+/// Must be called before `psp::net::init()` — the net syscalls
+/// (`sceNetInit`, `sceNetInetInit`, etc.) require the kernel modules
+/// to be resident, unlike PPSSPP which stubs them automatically.
+fn load_net_modules_once() {
+    use std::sync::atomic::AtomicBool;
+    static LOADED: AtomicBool = AtomicBool::new(false);
+    if LOADED.swap(true, Ordering::Relaxed) {
+        return;
+    }
+    // SAFETY: sceUtilityLoadModule loads firmware modules into memory.
+    // NetCommon and NetInet are required for sceNetInit/sceNetInetInit.
+    // NetParseUri and NetHttp are required for psp::http::HttpClient.
+    unsafe {
+        sys::sceUtilityLoadModule(sys::Module::NetCommon);
+        sys::sceUtilityLoadModule(sys::Module::NetInet);
+        sys::sceUtilityLoadModule(sys::Module::NetParseUri);
+        sys::sceUtilityLoadModule(sys::Module::NetHttp);
+    }
 }
 
 /// Initialize the PSP network stack and connect to WiFi access point 1.
@@ -48,11 +75,17 @@ fn ensure_net_init() -> Result<()> {
         ));
     }
 
+    // Load kernel modules before initializing the network stack.
+    load_net_modules_once();
+
     // 128 KiB memory pool for the networking stack.
     psp::net::init(0x20000).map_err(|e| OasisError::Backend(format!("net init failed: {e}")))?;
 
-    // Connect to the first stored WiFi profile (30s timeout).
-    if let Err(e) = psp::net::connect_ap(1) {
+    // Show the PSP's built-in WiFi connection dialog.
+    // This is the standard approach used by PSP games — it lets the user
+    // select a stored WiFi profile and handles scan/auth/DHCP. Works on
+    // both real hardware and PPSSPP.
+    if let Err(e) = psp::net::connect_dialog() {
         psp::net::term();
         return Err(OasisError::Backend(format!("WiFi connect failed: {e}")));
     }
@@ -72,6 +105,11 @@ fn ensure_net_init() -> Result<()> {
 // ---------------------------------------------------------------------------
 // Raw sockaddr_in helper (mirrors psp::net internal make_sockaddr_in)
 // ---------------------------------------------------------------------------
+
+/// Public wrapper for use from the I/O thread (radio connect).
+pub(crate) fn make_sockaddr_in_pub(ip: [u8; 4], port: u16) -> sys::sockaddr {
+    make_sockaddr_in(ip, port)
+}
 
 fn make_sockaddr_in(ip: [u8; 4], port: u16) -> sys::sockaddr {
     let mut sa = sys::sockaddr {

@@ -10,7 +10,7 @@ use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use psp::sync::SpscQueue;
 use psp::thread::ThreadBuilder;
 
-use crate::audio::AudioPlayer;
+use crate::audio::{AudioPlayer, RadioStreamer};
 use crate::filesystem::decode_jpeg;
 use crate::sfx::{SfxEngine, SfxId};
 
@@ -39,6 +39,15 @@ static AUDIO_POSITION_MS: AtomicU32 = AtomicU32::new(0);
 static AUDIO_DURATION_MS: AtomicU32 = AtomicU32::new(0);
 
 // ---------------------------------------------------------------------------
+// Radio streaming state (atomics: audio thread -> main thread)
+// ---------------------------------------------------------------------------
+
+static RADIO_STREAMING: AtomicBool = AtomicBool::new(false);
+static RADIO_BUFFERING: AtomicBool = AtomicBool::new(false);
+/// ICY metadata titles from audio thread -> main thread.
+static RADIO_META_QUEUE: SpscQueue<String, 4> = SpscQueue::new();
+
+// ---------------------------------------------------------------------------
 // Audio commands
 // ---------------------------------------------------------------------------
 
@@ -51,6 +60,13 @@ pub enum AudioCmd {
     Stop,
     SetVolume(u8),
     PlaySfx(SfxId),
+    /// Start radio streaming from a connected socket fd.
+    RadioStreamFromFd {
+        fd: i32,
+        icy_metaint: usize,
+    },
+    /// Stop radio streaming and close the socket.
+    RadioStop,
     Shutdown,
 }
 
@@ -90,6 +106,19 @@ impl AudioHandle {
     pub fn duration_ms(&self) -> u64 {
         AUDIO_DURATION_MS.load(Ordering::Relaxed) as u64
     }
+
+    pub fn is_radio_streaming(&self) -> bool {
+        RADIO_STREAMING.load(Ordering::Relaxed)
+    }
+
+    pub fn is_radio_buffering(&self) -> bool {
+        RADIO_BUFFERING.load(Ordering::Relaxed)
+    }
+
+    /// Poll for the latest ICY metadata title (non-blocking).
+    pub fn poll_radio_meta(&self) -> Option<String> {
+        RADIO_META_QUEUE.pop()
+    }
 }
 
 /// Send an audio command from any context.
@@ -115,6 +144,10 @@ pub enum IoCmd {
         url: String,
         tag: u32,
     },
+    /// Connect to an internet radio stream (raw TCP + HTTP).
+    RadioConnect {
+        url: String,
+    },
     Shutdown,
 }
 
@@ -134,6 +167,15 @@ pub enum IoResponse {
         tag: u32,
         status_code: u16,
         body: Vec<u8>,
+    },
+    /// Radio socket connected and HTTP headers parsed.
+    RadioConnected {
+        fd: i32,
+        icy_metaint: usize,
+    },
+    /// Radio connection failed.
+    RadioError {
+        msg: String,
     },
     Error {
         path: String,
@@ -196,16 +238,23 @@ pub fn spawn_workers() -> (AudioHandle, IoHandle) {
 // Audio thread
 // ---------------------------------------------------------------------------
 
-/// Dedicated audio thread: MP3 playback + SFX mixing.
+/// Dedicated audio thread: MP3 playback + SFX mixing + radio streaming.
 fn audio_thread_fn() {
     let mut player = AudioPlayer::new();
     player.init();
 
     let mut sfx = SfxEngine::new();
+    let mut radio: Option<RadioStreamer> = None;
 
     loop {
         match AUDIO_QUEUE.pop() {
             Some(AudioCmd::LoadAndPlay(path)) => {
+                // Stop radio if active.
+                if let Some(mut r) = radio.take() {
+                    r.stop();
+                    RADIO_STREAMING.store(false, Ordering::Relaxed);
+                    RADIO_BUFFERING.store(false, Ordering::Relaxed);
+                }
                 if player.load_and_play(&path) {
                     publish_audio_state(&player);
                 } else {
@@ -213,6 +262,11 @@ fn audio_thread_fn() {
                 }
             },
             Some(AudioCmd::LoadAndPlayData(data)) => {
+                if let Some(mut r) = radio.take() {
+                    r.stop();
+                    RADIO_STREAMING.store(false, Ordering::Relaxed);
+                    RADIO_BUFFERING.store(false, Ordering::Relaxed);
+                }
                 if player.load_and_play_owned(data) {
                     publish_audio_state(&player);
                 } else {
@@ -235,18 +289,54 @@ fn audio_thread_fn() {
                 player.stop();
                 AUDIO_PLAYING.store(false, Ordering::Relaxed);
                 AUDIO_PAUSED.store(false, Ordering::Relaxed);
+                // Also stop radio if active.
+                if let Some(mut r) = radio.take() {
+                    r.stop();
+                    RADIO_STREAMING.store(false, Ordering::Relaxed);
+                    RADIO_BUFFERING.store(false, Ordering::Relaxed);
+                }
             },
             Some(AudioCmd::SetVolume(v)) => {
                 player.set_volume(v);
+                if let Some(r) = &mut radio {
+                    r.set_volume(v);
+                }
             },
             Some(AudioCmd::PlaySfx(id)) => {
                 if let Some(sfx) = &sfx {
                     sfx.play(id);
                 }
             },
+            Some(AudioCmd::RadioStreamFromFd { fd, icy_metaint }) => {
+                // Stop file player first.
+                player.stop();
+                AUDIO_PLAYING.store(false, Ordering::Relaxed);
+                AUDIO_PAUSED.store(false, Ordering::Relaxed);
+                // Stop any existing radio stream.
+                if let Some(mut r) = radio.take() {
+                    r.stop();
+                }
+                // Create new radio streamer.
+                let streamer = RadioStreamer::new(fd, icy_metaint);
+                RADIO_BUFFERING.store(true, Ordering::Relaxed);
+                RADIO_STREAMING.store(true, Ordering::Relaxed);
+                radio = Some(streamer);
+            },
+            Some(AudioCmd::RadioStop) => {
+                if let Some(mut r) = radio.take() {
+                    r.stop();
+                }
+                RADIO_STREAMING.store(false, Ordering::Relaxed);
+                RADIO_BUFFERING.store(false, Ordering::Relaxed);
+            },
             Some(AudioCmd::Shutdown) => {
                 player.stop();
                 AUDIO_PLAYING.store(false, Ordering::Relaxed);
+                if let Some(mut r) = radio.take() {
+                    r.stop();
+                }
+                RADIO_STREAMING.store(false, Ordering::Relaxed);
+                RADIO_BUFFERING.store(false, Ordering::Relaxed);
                 break;
             },
             None => {},
@@ -259,7 +349,28 @@ fn audio_thread_fn() {
             if !player.is_playing() {
                 AUDIO_PLAYING.store(false, Ordering::Relaxed);
             }
+        } else if let Some(r) = &mut radio {
+            // Radio streaming: recv data and decode.
+            r.recv_data();
+            if r.buffering && r.buf_valid >= RadioStreamer::BUFFER_THRESHOLD {
+                r.buffering = false;
+                RADIO_BUFFERING.store(false, Ordering::Relaxed);
+            }
+            if !r.buffering {
+                r.update(&mut player);
+                // Push ICY metadata to main thread.
+                if let Some(title) = r.take_meta() {
+                    let _ = RADIO_META_QUEUE.push(title);
+                }
+            }
+            if r.is_error() {
+                let _ = RADIO_META_QUEUE.push(String::from("[Stream error]"));
+                radio = None;
+                RADIO_STREAMING.store(false, Ordering::Relaxed);
+                RADIO_BUFFERING.store(false, Ordering::Relaxed);
+            }
         } else {
+            // SAFETY: sceKernelDelayThread sleeps the current thread.
             unsafe { psp::sys::sceKernelDelayThread(10_000) };
         }
 
@@ -286,7 +397,7 @@ fn publish_audio_state(player: &AudioPlayer) {
 // I/O thread
 // ---------------------------------------------------------------------------
 
-/// Dedicated I/O thread: file reads and JPEG decoding.
+/// Dedicated I/O thread: file reads, JPEG decoding, and radio connections.
 fn io_thread_fn() {
     loop {
         match IO_CMD_QUEUE.pop() {
@@ -298,6 +409,9 @@ fn io_thread_fn() {
             },
             Some(IoCmd::HttpGet { url, tag }) => {
                 handle_http_get(url, tag);
+            },
+            Some(IoCmd::RadioConnect { url }) => {
+                handle_radio_connect(url);
             },
             Some(IoCmd::Shutdown) => break,
             None => {
@@ -385,4 +499,198 @@ fn handle_http_get(url: String, tag: u32) {
             });
         },
     }
+}
+
+// ---------------------------------------------------------------------------
+// Radio connection handler (I/O thread)
+// ---------------------------------------------------------------------------
+
+/// Parse an HTTP URL into (host, port, path).
+fn parse_radio_url(url: &str) -> Option<(String, u16, String)> {
+    let stripped = url.strip_prefix("http://")?;
+    let (host_port, path) = match stripped.find('/') {
+        Some(i) => (&stripped[..i], &stripped[i..]),
+        None => (stripped, "/"),
+    };
+    let (host, port) = match host_port.find(':') {
+        Some(i) => (&host_port[..i], host_port[i + 1..].parse::<u16>().ok()?),
+        None => (host_port, 80),
+    };
+    Some((host.to_string(), port, path.to_string()))
+}
+
+/// Connect to an internet radio stream via raw TCP + HTTP.
+///
+/// Sends an HTTP GET with `Icy-MetaData: 1`, reads headers to extract
+/// `icy-metaint`, then passes the connected socket fd to the audio thread.
+fn handle_radio_connect(url: String) {
+    use std::ffi::c_void;
+
+    // Initialize network.
+    if let Err(e) = crate::network::ensure_net_init_pub() {
+        let _ = IO_RESP_QUEUE.push(IoResponse::RadioError {
+            msg: format!("net init: {e}"),
+        });
+        return;
+    }
+
+    // Parse URL.
+    let (host, port, path) = match parse_radio_url(&url) {
+        Some(v) => v,
+        None => {
+            let _ = IO_RESP_QUEUE.push(IoResponse::RadioError {
+                msg: format!("bad URL: {url}"),
+            });
+            return;
+        },
+    };
+
+    // DNS resolve.
+    let mut host_bytes: Vec<u8> = host.as_bytes().to_vec();
+    host_bytes.push(0);
+    let addr = match psp::net::resolve_hostname(&host_bytes) {
+        Ok(a) => a,
+        Err(e) => {
+            let _ = IO_RESP_QUEUE.push(IoResponse::RadioError {
+                msg: format!("DNS: {e}"),
+            });
+            return;
+        },
+    };
+
+    // Create TCP socket.
+    // SAFETY: AF_INET=2, SOCK_STREAM=1, protocol=0.
+    let fd = unsafe { psp::sys::sceNetInetSocket(2, 1, 0) };
+    if fd < 0 {
+        let _ = IO_RESP_QUEUE.push(IoResponse::RadioError {
+            msg: "socket() failed".into(),
+        });
+        return;
+    }
+
+    // Connect.
+    let sa = crate::network::make_sockaddr_in_pub(addr.0, port);
+    // SAFETY: Connect to the resolved address.
+    let ret = unsafe {
+        psp::sys::sceNetInetConnect(fd, &sa, core::mem::size_of::<psp::sys::sockaddr>() as u32)
+    };
+    if ret < 0 {
+        unsafe { psp::sys::sceNetInetClose(fd) };
+        let _ = IO_RESP_QUEUE.push(IoResponse::RadioError {
+            msg: format!("connect {}:{} failed", host, port),
+        });
+        return;
+    }
+
+    // Send HTTP GET with ICY metadata request.
+    let request = format!(
+        "GET {} HTTP/1.0\r\nHost: {}\r\nIcy-MetaData: 1\r\n\
+         User-Agent: OASIS_OS/1.0\r\nAccept: */*\r\n\r\n",
+        path, host,
+    );
+    let req_bytes = request.as_bytes();
+    // SAFETY: Send the HTTP request over the connected socket.
+    let sent = unsafe {
+        psp::sys::sceNetInetSend(fd, req_bytes.as_ptr() as *const c_void, req_bytes.len(), 0)
+    };
+    if sent <= 0 {
+        unsafe { psp::sys::sceNetInetClose(fd) };
+        let _ = IO_RESP_QUEUE.push(IoResponse::RadioError {
+            msg: "send failed".into(),
+        });
+        return;
+    }
+
+    // Read response headers (up to 4KB).
+    let mut hdr_buf = vec![0u8; 4096];
+    let mut hdr_len = 0usize;
+    let mut attempts = 0;
+    while hdr_len < hdr_buf.len() && attempts < 200 {
+        // SAFETY: Blocking recv for header data.
+        let n = unsafe {
+            psp::sys::sceNetInetRecv(
+                fd,
+                hdr_buf.as_mut_ptr().add(hdr_len) as *mut c_void,
+                (hdr_buf.len() - hdr_len).min(512),
+                0,
+            )
+        };
+        if n > 0 {
+            hdr_len += n as usize;
+            // Check for end of headers.
+            if hdr_len >= 4 {
+                let search_start = if hdr_len > n as usize + 3 {
+                    hdr_len - n as usize - 3
+                } else {
+                    0
+                };
+                let haystack = &hdr_buf[search_start..hdr_len];
+                if find_header_end(haystack).is_some() {
+                    break;
+                }
+            }
+        } else if n == 0 {
+            break; // Connection closed.
+        } else {
+            attempts += 1;
+            psp::thread::sleep_ms(20);
+        }
+    }
+
+    if hdr_len == 0 {
+        unsafe { psp::sys::sceNetInetClose(fd) };
+        let _ = IO_RESP_QUEUE.push(IoResponse::RadioError {
+            msg: "no response".into(),
+        });
+        return;
+    }
+
+    // Parse icy-metaint from headers.
+    let hdr_str = String::from_utf8_lossy(&hdr_buf[..hdr_len]);
+    let icy_metaint = parse_icy_metaint(&hdr_str);
+
+    // Find end of headers to determine leftover audio data position.
+    // The audio thread will start reading from the socket directly,
+    // but we need to pass any leftover data after the headers.
+    // For simplicity, we set the socket to non-blocking and let the
+    // audio thread handle buffering from the start of the audio data.
+
+    // Set non-blocking for streaming.
+    let nb: i32 = 1;
+    // SAFETY: SO_NONBLOCK is a PSP-specific socket option.
+    unsafe {
+        psp::sys::sceNetInetSetsockopt(
+            fd,
+            0xFFFF, // SOL_SOCKET
+            0x0080, // SO_NONBLOCK
+            &nb as *const i32 as *const c_void,
+            core::mem::size_of::<i32>() as u32,
+        );
+    }
+
+    let _ = IO_RESP_QUEUE.push(IoResponse::RadioConnected { fd, icy_metaint });
+}
+
+/// Find `\r\n\r\n` in a byte slice, return offset past it.
+fn find_header_end(data: &[u8]) -> Option<usize> {
+    for i in 0..data.len().saturating_sub(3) {
+        if data[i] == b'\r' && data[i + 1] == b'\n' && data[i + 2] == b'\r' && data[i + 3] == b'\n'
+        {
+            return Some(i + 4);
+        }
+    }
+    None
+}
+
+/// Parse `icy-metaint:` value from HTTP response headers.
+fn parse_icy_metaint(headers: &str) -> usize {
+    for line in headers.split('\n') {
+        let lower: String = line.chars().map(|c| c.to_ascii_lowercase()).collect();
+        if let Some(rest) = lower.strip_prefix("icy-metaint:") {
+            if let Ok(v) = rest.trim().parse::<usize>() {
+                return v;
+            }
+        }
+    }
+    0
 }

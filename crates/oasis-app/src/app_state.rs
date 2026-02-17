@@ -1,3 +1,6 @@
+use oasis_audio::RadioManager;
+use oasis_audio::radio::source::RadioSource;
+use oasis_backend_sdl::SdlAudioBackend;
 use oasis_core::active_theme::ActiveTheme;
 use oasis_core::apps::AppRunner;
 use oasis_core::backend::Color;
@@ -59,6 +62,9 @@ pub struct AppState {
     pub bg_color: Color,
     pub active_transition: Option<transition::TransitionState>,
     pub frame_counter: u64,
+    pub radio_manager: RadioManager,
+    pub radio_source: Option<Box<dyn RadioSource>>,
+    pub audio_backend: SdlAudioBackend,
 }
 
 #[cfg(test)]

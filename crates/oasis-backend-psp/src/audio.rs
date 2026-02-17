@@ -127,8 +127,8 @@ fn parse_mp3_header(data: &[u8]) -> Option<Mp3FrameHeader> {
 /// The `AudiocodecDecoder` and `AudioChannel` are created once and reused
 /// across all songs.
 pub struct AudioPlayer {
-    decoder: Option<AudiocodecDecoder>,
-    channel: Option<AudioChannel>,
+    pub(crate) decoder: Option<AudiocodecDecoder>,
+    pub(crate) channel: Option<AudioChannel>,
     /// Fixed read buffer for streaming MP3 data from file.
     read_buf: Vec<u8>,
     /// Number of valid bytes in `read_buf`.
@@ -146,7 +146,7 @@ pub struct AudioPlayer {
     /// Hardware volume (0x0000..=0x8000).
     hw_volume: i32,
     /// PCM decode buffer (stereo: 1152 * 2 samples).
-    pcm_buf: Vec<i16>,
+    pub(crate) pcm_buf: Vec<i16>,
     /// Cached MP3 info from first frame header.
     pub sample_rate: u32,
     pub bitrate: u32,
@@ -513,6 +513,279 @@ impl AudioPlayer {
 impl Drop for AudioPlayer {
     fn drop(&mut self) {
         self.close_file();
+    }
+}
+
+// ---------------------------------------------------------------------------
+// RadioStreamer — internet radio via raw TCP socket + ICY protocol
+// ---------------------------------------------------------------------------
+
+/// Internet radio streamer that reads MP3 data from a connected TCP socket.
+///
+/// Handles ICY metadata demuxing inline: every `icy_metaint` bytes of audio
+/// data, a metadata block appears (1-byte length * 16 = metadata bytes).
+/// Decoded titles are buffered for the main thread to poll.
+///
+/// Shares the `AudiocodecDecoder` and `AudioChannel` from `AudioPlayer`
+/// (only one active at a time).
+pub struct RadioStreamer {
+    socket_fd: i32,
+    read_buf: Vec<u8>,
+    /// Number of valid bytes in the read buffer.
+    pub buf_valid: usize,
+    buf_pos: usize,
+    /// ICY metadata interval (0 = no metadata).
+    icy_metaint: usize,
+    /// Bytes of audio data since last metadata block.
+    icy_audio_count: usize,
+    /// Whether we're currently inside a metadata block.
+    icy_in_meta: bool,
+    /// Remaining bytes in the current metadata block.
+    icy_meta_remaining: usize,
+    /// Accumulated metadata bytes for current block.
+    icy_meta_buf: Vec<u8>,
+    /// Latest ICY title extracted from metadata.
+    pending_meta: Option<String>,
+    /// Whether the stream is still buffering initial data.
+    pub buffering: bool,
+    /// Hardware volume (0x0000..=0x8000).
+    hw_volume: i32,
+    /// Consecutive decode errors.
+    error_count: u32,
+}
+
+impl RadioStreamer {
+    /// Minimum bytes buffered before starting decode (32KB).
+    pub const BUFFER_THRESHOLD: usize = 32 * 1024;
+    /// Read buffer size (64KB for network streaming).
+    const BUF_SIZE: usize = 64 * 1024;
+
+    pub fn new(socket_fd: i32, icy_metaint: usize) -> Self {
+        load_av_modules_once();
+        Self {
+            socket_fd,
+            read_buf: vec![0u8; Self::BUF_SIZE],
+            buf_valid: 0,
+            buf_pos: 0,
+            icy_metaint,
+            icy_audio_count: 0,
+            icy_in_meta: false,
+            icy_meta_remaining: 0,
+            icy_meta_buf: Vec::with_capacity(256),
+            pending_meta: None,
+            buffering: true,
+            hw_volume: 0x8000,
+            error_count: 0,
+        }
+    }
+
+    /// Set volume (0..=100) mapped to PSP hardware range.
+    pub fn set_volume(&mut self, volume: u8) {
+        let v = volume.min(100) as i32;
+        self.hw_volume = v * 0x8000 / 100;
+    }
+
+    /// Non-blocking receive from the socket into the read buffer.
+    ///
+    /// Handles ICY metadata demuxing inline: receives into a temporary
+    /// buffer, then copies only audio bytes (stripping metadata blocks)
+    /// into the main read buffer.
+    pub fn recv_data(&mut self) {
+        // Compact buffer if more than half consumed.
+        if self.buf_pos > Self::BUF_SIZE / 2 {
+            let remaining = self.buf_valid - self.buf_pos;
+            if remaining > 0 {
+                // SAFETY: Manual byte copy to avoid LLVM memcpy recursion on MIPS.
+                let ptr = self.read_buf.as_mut_ptr();
+                for i in 0..remaining {
+                    unsafe { *ptr.add(i) = *ptr.add(self.buf_pos + i) };
+                }
+            }
+            self.buf_valid = remaining;
+            self.buf_pos = 0;
+        }
+
+        let room = Self::BUF_SIZE - self.buf_valid;
+        if room == 0 {
+            return;
+        }
+
+        if self.icy_metaint == 0 {
+            // No ICY metadata: receive directly into read buffer.
+            let chunk = room.min(4096);
+            // SAFETY: Non-blocking recv (MSG_DONTWAIT = 0x80 on PSP).
+            let n = unsafe {
+                psp::sys::sceNetInetRecv(
+                    self.socket_fd,
+                    self.read_buf.as_mut_ptr().add(self.buf_valid) as *mut _,
+                    chunk,
+                    0x80,
+                )
+            };
+            if n > 0 {
+                self.buf_valid += n as usize;
+            }
+        } else {
+            // ICY metadata enabled: receive into temp buffer, demux.
+            let mut tmp = [0u8; 4096];
+            let chunk = room.min(tmp.len());
+            // SAFETY: Non-blocking recv into temp buffer.
+            let n = unsafe {
+                psp::sys::sceNetInetRecv(self.socket_fd, tmp.as_mut_ptr() as *mut _, chunk, 0x80)
+            };
+            if n > 0 {
+                let received = n as usize;
+                let mut i = 0;
+                while i < received {
+                    if self.icy_in_meta {
+                        // Consuming metadata bytes.
+                        let avail = received - i;
+                        let take = avail.min(self.icy_meta_remaining);
+                        for j in 0..take {
+                            self.icy_meta_buf.push(tmp[i + j]);
+                        }
+                        i += take;
+                        self.icy_meta_remaining -= take;
+                        if self.icy_meta_remaining == 0 {
+                            self.parse_icy_meta();
+                            self.icy_meta_buf.clear();
+                            self.icy_in_meta = false;
+                        }
+                    } else {
+                        let until_meta = self.icy_metaint - self.icy_audio_count;
+                        let avail = received - i;
+                        let take = avail.min(until_meta).min(Self::BUF_SIZE - self.buf_valid);
+                        if take == 0 {
+                            break; // Buffer full.
+                        }
+                        // Copy audio bytes into read buffer.
+                        for j in 0..take {
+                            self.read_buf[self.buf_valid + j] = tmp[i + j];
+                        }
+                        self.buf_valid += take;
+                        self.icy_audio_count += take;
+                        i += take;
+                        if self.icy_audio_count >= self.icy_metaint {
+                            self.icy_audio_count = 0;
+                            if i < received {
+                                let meta_len = tmp[i] as usize * 16;
+                                i += 1;
+                                if meta_len > 0 {
+                                    self.icy_in_meta = true;
+                                    self.icy_meta_remaining = meta_len;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// Extract `StreamTitle='...'` from ICY metadata.
+    fn parse_icy_meta(&mut self) {
+        let meta_str = String::from_utf8_lossy(&self.icy_meta_buf);
+        if let Some(start) = meta_str.find("StreamTitle='") {
+            let rest = &meta_str[start + 13..];
+            if let Some(end) = rest.find('\'') {
+                let title = rest[..end].to_string();
+                if !title.is_empty() {
+                    self.pending_meta = Some(title);
+                }
+            }
+        }
+    }
+
+    /// Take the latest ICY metadata title (if any).
+    pub fn take_meta(&mut self) -> Option<String> {
+        self.pending_meta.take()
+    }
+
+    /// Decode one MP3 frame from the buffer and output to audio channel.
+    ///
+    /// Borrows the `AudioPlayer`'s decoder and channel (only one source
+    /// is active at a time).
+    pub fn update(&mut self, player: &mut AudioPlayer) {
+        // Ensure decoder and channel exist.
+        if player.decoder.is_none() {
+            match AudiocodecDecoder::new(CodecType::Mp3) {
+                Ok(dec) => player.decoder = Some(dec),
+                Err(_) => return,
+            }
+        }
+        if player.channel.is_none() {
+            match AudioChannel::reserve(MP3_FRAME_SAMPLES, AudioFormat::Stereo) {
+                Ok(ch) => player.channel = Some(ch),
+                Err(_) => return,
+            }
+        }
+
+        let avail = self.buf_valid - self.buf_pos;
+        if avail < 4 {
+            return; // Need more data.
+        }
+
+        // Find next sync.
+        let sync_pos = match find_sync(&self.read_buf[..self.buf_valid], self.buf_pos) {
+            Some(p) => p,
+            None => {
+                self.buf_pos = self.buf_valid;
+                return;
+            },
+        };
+        self.buf_pos = sync_pos;
+
+        if self.buf_valid - self.buf_pos < 8 {
+            return;
+        }
+
+        // Decode one frame.
+        for s in &mut player.pcm_buf {
+            *s = 0;
+        }
+
+        let decoder = player.decoder.as_mut().unwrap();
+        let buf_pos = self.buf_pos;
+        let buf_valid = self.buf_valid;
+        let result = decoder.decode(&self.read_buf[buf_pos..buf_valid], &mut player.pcm_buf);
+
+        match result {
+            Ok(consumed) => {
+                if consumed == 0 {
+                    self.error_count += 1;
+                    self.buf_pos += 1;
+                    return;
+                }
+                self.error_count = 0;
+                self.buf_pos += consumed;
+                let channel = player.channel.as_ref().unwrap();
+                let _ = channel.output_blocking(self.hw_volume, &player.pcm_buf);
+            },
+            Err(_) => {
+                self.error_count += 1;
+                self.buf_pos += 1;
+            },
+        }
+    }
+
+    /// Check if the stream has hit too many consecutive errors.
+    pub fn is_error(&self) -> bool {
+        self.error_count > 200
+    }
+
+    /// Stop streaming and close the socket.
+    pub fn stop(&mut self) {
+        if self.socket_fd >= 0 {
+            // SAFETY: Close the radio streaming socket.
+            unsafe { psp::sys::sceNetInetClose(self.socket_fd) };
+            self.socket_fd = -1;
+        }
+    }
+}
+
+impl Drop for RadioStreamer {
+    fn drop(&mut self) {
+        self.stop();
     }
 }
 
