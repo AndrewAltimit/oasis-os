@@ -164,6 +164,47 @@ pub unsafe fn flush_framebuffer(fb: *mut u32, stride: u32, y: u32, h: u32) {
     }
 }
 
+/// Blit an ABGR8888 source rectangle onto the framebuffer.
+///
+/// Copies `src_w * src_h` pixels from `src` to `(dst_x, dst_y)` in the
+/// framebuffer, with bounds checking.
+///
+/// # Safety
+/// `fb` must point to a valid framebuffer. `src` must point to at least
+/// `src_w * src_h * 4` bytes of ABGR8888 pixel data.
+pub unsafe fn blit_rgb_rect(
+    fb: *mut u32,
+    stride: u32,
+    dst_x: u32,
+    dst_y: u32,
+    src: *const u32,
+    src_w: u32,
+    src_h: u32,
+) {
+    let mut row = 0u32;
+    while row < src_h {
+        let py = dst_y + row;
+        if py >= SCREEN_HEIGHT {
+            break;
+        }
+        let mut col = 0u32;
+        while col < src_w {
+            let px = dst_x + col;
+            if px >= SCREEN_WIDTH {
+                break;
+            }
+            let src_offset = (row * src_w + col) as usize;
+            let dst_offset = (py * stride + px) as usize;
+            // SAFETY: Bounds checked above; src valid per contract.
+            unsafe {
+                *fb.add(dst_offset) = *src.add(src_offset);
+            }
+            col += 1;
+        }
+        row += 1;
+    }
+}
+
 /// Color constants (ABGR 8888).
 pub mod colors {
     /// White.

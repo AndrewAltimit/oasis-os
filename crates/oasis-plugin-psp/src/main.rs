@@ -16,8 +16,9 @@
 //!
 //! ## Memory Budget
 //!
-//! Target: <64KB total (code + data). No heap allocator -- stack + static
-//! buffers only.
+//! Target: <72KB total (code + data). No heap allocator -- stack + static
+//! buffers only. PIP video buffers (~113KB) allocated on-demand from
+//! user-memory partition 2.
 
 #![no_std]
 #![no_main]
@@ -31,6 +32,7 @@ mod font;
 mod hook;
 mod overlay;
 mod render;
+mod video;
 
 use core::sync::atomic::{AtomicBool, Ordering};
 
@@ -72,6 +74,19 @@ fn psp_main() {
         // Start background audio thread (always -- handles on-demand
         // playback from the overlay menu even when autoplay is off).
         audio::start_audio_thread();
+
+        // Start video thread (idles until first PIP menu command,
+        // then scans for .rgb files and enters playback loop).
+        // Must be created here in psp_main where kernel syscalls work --
+        // the display hook context does not support sceKernelCreateThread.
+        video::start_video_thread();
+
+        // If pip_enabled is set in config, send the initial toggle command
+        // so PIP starts automatically.
+        let cfg = config::get_config();
+        if cfg.pip_enabled {
+            video::toggle_pip();
+        }
     } else {
         debug_log(b"[OASIS] hook install FAILED");
     }

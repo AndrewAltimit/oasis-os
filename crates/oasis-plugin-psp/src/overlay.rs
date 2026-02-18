@@ -8,6 +8,7 @@
 use crate::audio;
 use crate::config;
 use crate::render::{self, SCREEN_WIDTH, colors};
+use crate::video;
 
 use core::sync::atomic::{AtomicU8, Ordering};
 
@@ -40,10 +41,10 @@ static mut OSD_MSG_LEN: usize = 0;
 static mut PREV_BUTTONS: u32 = 0;
 
 /// Number of menu items.
-const MENU_ITEMS: u8 = 9;
+const MENU_ITEMS: u8 = 11;
 
 /// Menu item labels.
-const MENU_LABELS: [&[u8]; 9] = [
+const MENU_LABELS: [&[u8]; 11] = [
     b"  Play / Pause",
     b"  Next",
     b"  Prev",
@@ -52,6 +53,8 @@ const MENU_LABELS: [&[u8]; 9] = [
     b"  Radio On/Off",
     b"  Tune Station",
     b"  CPU Clock",
+    b"  PIP Play/Stop",
+    b"  PIP Next",
     b"  Hide Overlay",
 ];
 
@@ -60,7 +63,7 @@ const OVERLAY_X: u32 = 80;
 const OVERLAY_Y: u32 = 40;
 const OVERLAY_W: u32 = 320;
 const OVERLAY_H: u32 = 212;
-const ITEM_H: u32 = 16;
+const ITEM_H: u32 = 14;
 const STATUS_Y: u32 = OVERLAY_Y + 8;
 const MENU_START_Y: u32 = OVERLAY_Y + 48;
 
@@ -138,6 +141,14 @@ pub unsafe fn on_frame(fb: *mut u32, stride: u32) {
                 }
             }
         },
+    }
+
+    // Draw PIP video frame if active (before overlay UI so menu draws on top).
+    if video::is_pip_active() {
+        // SAFETY: fb and stride are valid; pip_frame returns valid pointer.
+        unsafe {
+            draw_pip(fb, stride);
+        }
     }
 
     // No dcache flush needed -- the hook passes an uncached framebuffer
@@ -224,7 +235,9 @@ unsafe fn execute_menu_action(item: u8) {
             }
         },
         7 => cycle_cpu_clock(),
-        8 => STATE.store(OverlayState::Hidden as u8, Ordering::Relaxed),
+        8 => video::toggle_pip(),
+        9 => video::next_video(),
+        10 => STATE.store(OverlayState::Hidden as u8, Ordering::Relaxed),
         _ => {},
     }
 }
@@ -439,6 +452,38 @@ unsafe fn draw_now_playing(fb: *mut u32, stride: u32) {
             &track[..name_len],
             colors::YELLOW,
         );
+    }
+}
+
+/// Draw the PIP video frame at the bottom-right corner with accent border.
+///
+/// # Safety
+/// `fb` must be valid. Called from display hook when PIP is active.
+unsafe fn draw_pip(fb: *mut u32, stride: u32) {
+    let (pip_x, pip_y, pip_w, pip_h) = video::pip_rect();
+    let border = video::pip_border();
+
+    // Draw accent border around PIP window.
+    // SAFETY: render functions check bounds.
+    unsafe {
+        render::fill_rect(
+            fb,
+            stride,
+            pip_x - border,
+            pip_y - border,
+            pip_w + border * 2,
+            pip_h + border * 2,
+            colors::ACCENT,
+        );
+    }
+
+    // Blit the decoded video frame.
+    let (frame_ptr, w, h) = video::pip_frame();
+    if !frame_ptr.is_null() {
+        // SAFETY: frame_ptr is a valid PIP_W*PIP_H ABGR8888 buffer.
+        unsafe {
+            render::blit_rgb_rect(fb, stride, pip_x, pip_y, frame_ptr as *const u32, w, h);
+        }
     }
 }
 
