@@ -481,6 +481,9 @@ fn start_playback() {
     PIP_ACTIVE.store(1, Ordering::Relaxed);
     crate::debug_log(b"[VIDEO] PIP ACTIVE");
 
+    // Check for companion .mp3 file (same name, .mp3 extension).
+    try_play_companion_mp3(filepath);
+
     // Show OSD with filename.
     let mut buf = [0u8; 48];
     let p = copy_bytes(&mut buf, 0, b"PIP: ");
@@ -499,6 +502,9 @@ fn stop_playback() {
     }
     PIP_ACTIVE.store(0, Ordering::Relaxed);
     crate::debug_log(b"[VIDEO] stopping...");
+
+    // Stop companion MP3 audio (resumes normal music playlist).
+    crate::audio::stop_video_mp3();
 
     // Close file.
     let fd = unsafe { VIDEO_FD };
@@ -586,6 +592,55 @@ pub const fn pip_border() -> u32 {
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+/// Try to find and play a companion .mp3 file for the given .rgb path.
+/// Replaces ".rgb" with ".mp3" and checks if the file exists.
+fn try_play_companion_mp3(rgb_path: &[u8]) {
+    // Find path length (up to null terminator).
+    let mut path_len = 0;
+    while path_len < rgb_path.len() && rgb_path[path_len] != 0 {
+        path_len += 1;
+    }
+
+    // Need at least ".rgb" (4 chars) at the end.
+    if path_len < 5 {
+        return;
+    }
+
+    // Build the .mp3 path by replacing the last 4 bytes.
+    let mut mp3_path = [0u8; MAX_FILENAME];
+    if path_len >= MAX_FILENAME {
+        return;
+    }
+    let mut i = 0;
+    while i < path_len - 4 {
+        mp3_path[i] = rgb_path[i];
+        i += 1;
+    }
+    mp3_path[i] = b'.';
+    mp3_path[i + 1] = b'm';
+    mp3_path[i + 2] = b'p';
+    mp3_path[i + 3] = b'3';
+    mp3_path[i + 4] = 0;
+
+    // Check if the .mp3 file exists by trying to open it.
+    // SAFETY: sceIoOpen with valid null-terminated path.
+    let fd = unsafe {
+        psp::sys::sceIoOpen(mp3_path.as_ptr(), psp::sys::IoOpenFlags::RD_ONLY, 0)
+    };
+    if fd < psp::sys::SceUid(0) {
+        crate::debug_log(b"[VIDEO] no companion .mp3");
+        return;
+    }
+    // File exists -- close it and tell audio to play it.
+    // SAFETY: Valid fd.
+    unsafe {
+        psp::sys::sceIoClose(fd);
+    }
+
+    crate::debug_log(b"[VIDEO] companion .mp3 found");
+    crate::audio::play_video_mp3(&mp3_path[..i + 5]);
+}
 
 /// Extract filename from full path and set VIDEO_NAME.
 unsafe fn set_video_name(path: &[u8]) {

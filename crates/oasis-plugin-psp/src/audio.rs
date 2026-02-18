@@ -673,27 +673,39 @@ pub fn radio_meta() -> &'static [u8] {
     unsafe { core::slice::from_raw_parts((&raw const RADIO_META).cast::<u8>(), 48) }
 }
 
-/// Whether audio was playing before PIP video paused it.
-static VIDEO_PAUSED_AUDIO: core::sync::atomic::AtomicBool =
-    core::sync::atomic::AtomicBool::new(false);
+/// Path to companion MP3 for PIP video (set by video module).
+static mut VIDEO_MP3_PATH: [u8; 128] = [0u8; 128];
 
-/// Pause audio playback for PIP video (so ATRAC can use the audio hardware).
-#[allow(dead_code)]
-pub fn pause_for_video() {
-    if AUDIO_STATE.load(Ordering::Relaxed) == 1 {
-        // Currently playing -- pause it.
-        VIDEO_PAUSED_AUDIO.store(true, Ordering::Relaxed);
-        AUDIO_CMD.store(1, Ordering::Relaxed); // toggle = pause
+/// Whether PIP video audio is active (video module sets, audio thread reads).
+static VIDEO_MP3_ACTIVE: AtomicBool = AtomicBool::new(false);
+
+/// Start playing a companion MP3 for PIP video.
+/// Interrupts current playback and switches to the video's audio track.
+/// When the MP3 finishes, it loops until `stop_video_mp3()` is called.
+pub fn play_video_mp3(path: &[u8]) {
+    // Copy path to shared buffer.
+    unsafe {
+        let dst = (&raw mut VIDEO_MP3_PATH).cast::<u8>();
+        let len = path.len().min(127);
+        let mut i = 0;
+        while i < len {
+            *dst.add(i) = path[i];
+            i += 1;
+        }
+        *dst.add(len) = 0;
     }
+    VIDEO_MP3_ACTIVE.store(true, Ordering::Relaxed);
+    // Ensure audio is in "playing" state so the thread picks it up.
+    AUDIO_STATE.store(1, Ordering::Relaxed);
+    // Cmd 7 interrupts any current decode loop without advancing the playlist.
+    AUDIO_CMD.store(7, Ordering::Relaxed);
 }
 
-/// Resume audio playback after PIP video stops.
-#[allow(dead_code)]
-pub fn resume_after_video() {
-    if VIDEO_PAUSED_AUDIO.load(Ordering::Relaxed) {
-        VIDEO_PAUSED_AUDIO.store(false, Ordering::Relaxed);
-        AUDIO_CMD.store(1, Ordering::Relaxed); // toggle = resume
-    }
+/// Stop PIP video audio and resume normal playlist playback.
+pub fn stop_video_mp3() {
+    VIDEO_MP3_ACTIVE.store(false, Ordering::Relaxed);
+    // Cmd 7 interrupts the video MP3 decode loop.
+    AUDIO_CMD.store(7, Ordering::Relaxed);
 }
 
 // ---------------------------------------------------------------------------
@@ -2147,6 +2159,10 @@ unsafe extern "C" fn audio_thread_entry(_args: usize, _argp: *mut core::ffi::c_v
                 };
                 RADIO_STATION_IDX.store(new, Ordering::Relaxed);
             },
+            7 => {
+                // Video MP3 interrupt -- just break out of current decode.
+                // No playlist advancement needed.
+            },
             _ => {},
         }
 
@@ -2173,6 +2189,23 @@ unsafe extern "C" fn audio_thread_entry(_args: usize, _argp: *mut core::ffi::c_v
             } else {
                 radio_failures = 0;
             }
+            continue;
+        }
+
+        // PIP video companion MP3 branch.
+        // When active, play the video's audio track on loop instead of
+        // the normal playlist. Does not touch CURRENT_TRACK.
+        if VIDEO_MP3_ACTIVE.load(Ordering::Relaxed) {
+            let vpath = unsafe { &*(&raw const VIDEO_MP3_PATH) };
+            unsafe { set_track_name(vpath) };
+            let backend = unsafe { core::ptr::read_volatile(&raw const DECODER_BACKEND) };
+            let _result = match backend {
+                1 => unsafe { play_track_mp3(vpath, channel) },
+                2 => unsafe { play_track_codec(vpath, channel) },
+                _ => -1,
+            };
+            // Loop back -- if VIDEO_MP3_ACTIVE is still true, replay.
+            // If false, fall through to normal playlist next iteration.
             continue;
         }
 
@@ -2274,7 +2307,7 @@ unsafe fn play_track_mp3(path: &[u8], channel: i32) -> i32 {
     let mut result = 0i32;
     loop {
         let cmd = AUDIO_CMD.load(Ordering::Relaxed);
-        if cmd == 2 || cmd == 3 {
+        if cmd == 2 || cmd == 3 || cmd == 7 {
             break;
         }
         if cmd == 1 {
@@ -2504,7 +2537,7 @@ unsafe fn play_track_codec(path: &[u8], channel: i32) -> i32 {
 
     loop {
         let cmd = AUDIO_CMD.load(Ordering::Relaxed);
-        if cmd == 2 || cmd == 3 {
+        if cmd == 2 || cmd == 3 || cmd == 7 {
             break;
         }
         if cmd == 1 {
