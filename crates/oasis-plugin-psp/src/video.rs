@@ -142,6 +142,7 @@ unsafe fn alloc_pip_buffers() -> bool {
 }
 
 /// Free PIP frame buffers.
+#[allow(dead_code)]
 unsafe fn free_pip_buffers() {
     let block = unsafe { PIP_BUF_BLOCK };
     if block >= 0 {
@@ -516,10 +517,9 @@ fn stop_playback() {
         }
     }
 
-    // Free PIP frame buffers.
-    unsafe {
-        free_pip_buffers();
-    }
+    // Keep PIP frame buffers allocated -- the display hook may still be
+    // mid-blit after checking is_pip_active(). Buffers are reused on
+    // next start_playback() (alloc_pip_buffers is idempotent).
 
     overlay::show_osd(b"PIP stopped");
 }

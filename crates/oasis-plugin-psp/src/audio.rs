@@ -694,7 +694,9 @@ pub fn play_video_mp3(path: &[u8]) {
         }
         *dst.add(len) = 0;
     }
-    VIDEO_MP3_ACTIVE.store(true, Ordering::Relaxed);
+    // Release ensures VIDEO_MP3_PATH writes above are visible before the
+    // audio thread observes the flag via Acquire.
+    VIDEO_MP3_ACTIVE.store(true, Ordering::Release);
     // Ensure audio is in "playing" state so the thread picks it up.
     AUDIO_STATE.store(1, Ordering::Relaxed);
     // Cmd 7 interrupts any current decode loop without advancing the playlist.
@@ -2195,7 +2197,7 @@ unsafe extern "C" fn audio_thread_entry(_args: usize, _argp: *mut core::ffi::c_v
         // PIP video companion MP3 branch.
         // When active, play the video's audio track on loop instead of
         // the normal playlist. Does not touch CURRENT_TRACK.
-        if VIDEO_MP3_ACTIVE.load(Ordering::Relaxed) {
+        if VIDEO_MP3_ACTIVE.load(Ordering::Acquire) {
             let vpath = unsafe { &*(&raw const VIDEO_MP3_PATH) };
             unsafe { set_track_name(vpath) };
             let backend = unsafe { core::ptr::read_volatile(&raw const DECODER_BACKEND) };
@@ -2230,10 +2232,13 @@ unsafe extern "C" fn audio_thread_entry(_args: usize, _argp: *mut core::ffi::c_v
             crate::debug_log(b"[OASIS] track playback error");
         }
 
-        // Advance to next track.
-        unsafe {
-            let cur = core::ptr::read_volatile(&raw const CURRENT_TRACK);
-            core::ptr::write_volatile(&raw mut CURRENT_TRACK, (cur + 1) % pl_len);
+        // Advance to next track -- but not if interrupted by cmd 7 (video
+        // MP3 takeover), which should resume from the same track later.
+        if AUDIO_CMD.load(Ordering::Relaxed) != 7 {
+            unsafe {
+                let cur = core::ptr::read_volatile(&raw const CURRENT_TRACK);
+                core::ptr::write_volatile(&raw mut CURRENT_TRACK, (cur + 1) % pl_len);
+            }
         }
     }
 }
