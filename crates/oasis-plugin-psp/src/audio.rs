@@ -704,10 +704,14 @@ pub fn play_video_mp3(path: &[u8]) {
 }
 
 /// Stop PIP video audio and resume normal playlist playback.
+///
+/// Only interrupts the audio thread if a video MP3 was actually active;
+/// otherwise this is a no-op so normal music is not disturbed.
 pub fn stop_video_mp3() {
-    VIDEO_MP3_ACTIVE.store(false, Ordering::Relaxed);
-    // Cmd 7 interrupts the video MP3 decode loop.
-    AUDIO_CMD.store(7, Ordering::Relaxed);
+    if VIDEO_MP3_ACTIVE.swap(false, Ordering::AcqRel) {
+        // Cmd 7 interrupts the video MP3 decode loop.
+        AUDIO_CMD.store(7, Ordering::Relaxed);
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -2201,11 +2205,17 @@ unsafe extern "C" fn audio_thread_entry(_args: usize, _argp: *mut core::ffi::c_v
             let vpath = unsafe { &*(&raw const VIDEO_MP3_PATH) };
             unsafe { set_track_name(vpath) };
             let backend = unsafe { core::ptr::read_volatile(&raw const DECODER_BACKEND) };
-            let _result = match backend {
+            let result = match backend {
                 1 => unsafe { play_track_mp3(vpath, channel) },
                 2 => unsafe { play_track_codec(vpath, channel) },
                 _ => -1,
             };
+            if result < 0 {
+                crate::debug_log(b"[OASIS] video mp3 error");
+                VIDEO_MP3_ACTIVE.store(false, Ordering::Release);
+                // Brief delay before resuming normal playback.
+                unsafe { psp::sys::sceKernelDelayThread(50_000) };
+            }
             // Loop back -- if VIDEO_MP3_ACTIVE is still true, replay.
             // If false, fall through to normal playlist next iteration.
             continue;
