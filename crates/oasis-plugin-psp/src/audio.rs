@@ -2232,9 +2232,11 @@ unsafe extern "C" fn audio_thread_entry(_args: usize, _argp: *mut core::ffi::c_v
             crate::debug_log(b"[OASIS] track playback error");
         }
 
-        // Advance to next track -- but not if interrupted by cmd 7 (video
-        // MP3 takeover), which should resume from the same track later.
-        if AUDIO_CMD.load(Ordering::Relaxed) != 7 {
+        // Advance to next track only on natural completion.  Skip when
+        // interrupted by any command (2=next, 3=prev, 7=video MP3) -- those
+        // are handled explicitly at the top of the main loop.
+        let pending = AUDIO_CMD.load(Ordering::Relaxed);
+        if pending != 2 && pending != 3 && pending != 7 {
             unsafe {
                 let cur = core::ptr::read_volatile(&raw const CURRENT_TRACK);
                 core::ptr::write_volatile(&raw mut CURRENT_TRACK, (cur + 1) % pl_len);
