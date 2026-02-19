@@ -197,6 +197,7 @@ mod tests {
             network: None,
             tls: None,
             stdin: None,
+            stderr: String::new(),
         };
         match reg.execute("wifi", &mut env).unwrap() {
             CommandOutput::Text(s) => assert!(s.contains("no network service")),
@@ -219,6 +220,7 @@ mod tests {
             network: Some(&platform),
             tls: None,
             stdin: None,
+            stderr: String::new(),
         };
         match reg.execute("wifi", &mut env).unwrap() {
             CommandOutput::Text(s) => {
@@ -243,6 +245,7 @@ mod tests {
             network: None,
             tls: None,
             stdin: None,
+            stderr: String::new(),
         };
         assert!(reg.execute("ping", &mut env).is_err());
     }

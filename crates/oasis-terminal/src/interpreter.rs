@@ -73,6 +73,9 @@ pub struct Environment<'a> {
     pub tls: Option<&'a dyn oasis_net::tls::TlsProvider>,
     /// Piped input from a previous command in a pipeline.
     pub stdin: Option<String>,
+    /// Accumulated stderr output from the most recent command.
+    /// Commands append error messages here. Cleared before each command.
+    pub stderr: String,
 }
 
 /// A single executable command.
@@ -98,6 +101,16 @@ pub trait Command {
 /// Maximum number of history entries to retain.
 const MAX_HISTORY: usize = 100;
 
+/// Maximum shell function call depth (prevents infinite recursion).
+const MAX_CALL_DEPTH: usize = 64;
+
+/// A user-defined shell function.
+#[derive(Clone, Debug)]
+struct ShellFunction {
+    /// Function body lines (semicolon-separated or newline-separated).
+    body: String,
+}
+
 /// Registry of available commands with dispatch.
 ///
 /// Also holds persistent shell state: variables, aliases, and history.
@@ -107,6 +120,10 @@ pub struct CommandRegistry {
     aliases: RefCell<HashMap<String, String>>,
     history: RefCell<Vec<String>>,
     last_exit_code: Cell<i32>,
+    /// User-defined shell functions.
+    functions: RefCell<HashMap<String, ShellFunction>>,
+    /// Current function call depth (for recursion limiting).
+    call_depth: Cell<usize>,
 }
 
 impl CommandRegistry {
@@ -122,6 +139,8 @@ impl CommandRegistry {
             aliases: RefCell::new(HashMap::new()),
             history: RefCell::new(Vec::new()),
             last_exit_code: Cell::new(0),
+            functions: RefCell::new(HashMap::new()),
+            call_depth: Cell::new(0),
         }
     }
 
@@ -171,6 +190,89 @@ impl CommandRegistry {
     /// Remove a command alias.
     pub fn unset_alias(&self, name: &str) {
         self.aliases.borrow_mut().remove(name);
+    }
+
+    // -- Function API --
+
+    /// Define a shell function.
+    fn define_function(&self, name: &str, body: &str) {
+        self.functions.borrow_mut().insert(
+            name.to_string(),
+            ShellFunction {
+                body: body.to_string(),
+            },
+        );
+    }
+
+    /// List all defined functions.
+    fn list_functions(&self) -> Vec<(String, String)> {
+        self.functions
+            .borrow()
+            .iter()
+            .map(|(k, v)| (k.clone(), v.body.clone()))
+            .collect()
+    }
+
+    /// Call a shell function by name with positional arguments.
+    fn call_function(
+        &self,
+        name: &str,
+        args: &[&str],
+        env: &mut Environment<'_>,
+    ) -> Result<CommandOutput> {
+        let func = self
+            .functions
+            .borrow()
+            .get(name)
+            .cloned()
+            .ok_or_else(|| OasisError::Command(format!("unknown function: {name}")))?;
+
+        // Check recursion depth.
+        let depth = self.call_depth.get();
+        if depth >= MAX_CALL_DEPTH {
+            return Err(OasisError::Command(format!(
+                "{name}: maximum recursion depth ({MAX_CALL_DEPTH}) exceeded"
+            )));
+        }
+        self.call_depth.set(depth + 1);
+
+        // Save current positional args and set new ones.
+        let saved_args: Vec<(String, Option<String>)> = (0..=args.len())
+            .map(|i| {
+                let key = i.to_string();
+                let old = self.get_variable(&key);
+                (key, old)
+            })
+            .collect();
+        // Also save $# (arg count).
+        let saved_argc = self.get_variable("#");
+
+        // Set positional args: $0 = function name, $1..$n = args.
+        self.set_variable("0", name);
+        for (i, arg) in args.iter().enumerate() {
+            self.set_variable(&(i + 1).to_string(), arg);
+        }
+        self.set_variable("#", &args.len().to_string());
+
+        // Execute body as a chain of commands.
+        let result = self.execute(func.body.trim(), env);
+
+        // Restore previous positional args.
+        for (key, old_val) in saved_args {
+            match old_val {
+                Some(v) => self.set_variable(&key, &v),
+                None => self.unset_variable(&key),
+            }
+        }
+        match saved_argc {
+            Some(v) => self.set_variable("#", &v),
+            None => self.unset_variable("#"),
+        }
+
+        // Restore call depth.
+        self.call_depth.set(depth);
+
+        result
     }
 
     // -- History API --
@@ -234,10 +336,17 @@ impl CommandRegistry {
                 continue;
             }
 
+            // Save exit code before pipeline (to detect if redirect set it).
+            let code_before = self.last_exit_code.get();
             match self.execute_pipeline(&segment.command, env) {
                 Ok(output) => {
-                    self.last_exit_code.set(0);
-                    self.set_variable("?", "0");
+                    // If the exit code changed during the pipeline (e.g.
+                    // a stderr redirect captured an error), preserve it.
+                    // Otherwise, set success.
+                    if self.last_exit_code.get() == code_before {
+                        self.last_exit_code.set(0);
+                        self.set_variable("?", "0");
+                    }
                     match output {
                         CommandOutput::None => {},
                         other => all_outputs.push(other),
@@ -326,52 +435,93 @@ impl CommandRegistry {
         }
     }
 
-    /// Execute a command, handling output redirection (`>` and `>>`).
+    /// Execute a command, handling output redirection (`>`, `>>`, `2>`,
+    /// `2>>`, `2>&1`).
     fn execute_with_redirect(
         &self,
         cmd_str: &str,
         env: &mut Environment<'_>,
     ) -> Result<CommandOutput> {
-        let (cmd_part, redirect) = parse_redirect(cmd_str);
+        let (cmd_part, redirections) = parse_redirect(cmd_str);
+        let has_stderr_handling = redirections.stderr.is_some() || redirections.stderr_to_stdout;
 
-        let result = self.execute_single_cmd(cmd_part.trim(), env)?;
+        // Clear stderr before each command.
+        env.stderr.clear();
 
-        if let Some(redir) = redirect {
-            // Write output to file.
-            let text = match &result {
-                CommandOutput::Text(t) => t.clone(),
-                CommandOutput::Table { headers, rows } => {
-                    let mut out = headers.join(" | ");
-                    for row in rows {
-                        out.push('\n');
-                        out.push_str(&row.join(" | "));
-                    }
-                    out
-                },
-                _ => String::new(),
-            };
+        let result = self.execute_single_cmd(cmd_part.trim(), env);
 
-            let path = resolve_path(&env.cwd, redir.path.trim());
-            if redir.append {
-                let existing = if env.vfs.exists(&path) {
-                    let data = env.vfs.read(&path)?;
-                    String::from_utf8_lossy(&data).into_owned()
-                } else {
-                    String::new()
-                };
-                let combined = if existing.is_empty() {
-                    text
-                } else {
-                    format!("{existing}\n{text}")
-                };
-                env.vfs.write(&path, combined.as_bytes())?;
-            } else {
-                env.vfs.write(&path, text.as_bytes())?;
+        // If no stderr redirect/merge, propagate errors normally.
+        if !has_stderr_handling {
+            let result = result?;
+            if let Some(redir) = redirections.stdout {
+                let text = output_to_text(&result);
+                write_redirect(&text, redir.path, redir.append, &env.cwd, env.vfs)?;
+                return Ok(CommandOutput::None);
             }
-            Ok(CommandOutput::None)
-        } else {
-            Ok(result)
+            return Ok(result);
         }
+
+        // Capture error messages into stderr.
+        let (result, captured_stderr, was_error) = match result {
+            Ok(output) => (output, std::mem::take(&mut env.stderr), false),
+            Err(e) => {
+                let mut stderr_text = std::mem::take(&mut env.stderr);
+                if !stderr_text.is_empty() {
+                    stderr_text.push('\n');
+                }
+                stderr_text.push_str(&e.to_string());
+                (CommandOutput::None, stderr_text, true)
+            },
+        };
+
+        // If 2>&1, merge stderr into stdout.
+        let (result, captured_stderr) = if redirections.stderr_to_stdout {
+            if captured_stderr.is_empty() {
+                (result, String::new())
+            } else {
+                let merged = match result {
+                    CommandOutput::Text(t) if !t.is_empty() => {
+                        CommandOutput::Text(format!("{t}\n{captured_stderr}"))
+                    },
+                    CommandOutput::Text(_) | CommandOutput::None => {
+                        CommandOutput::Text(captured_stderr)
+                    },
+                    other => other,
+                };
+                (merged, String::new())
+            }
+        } else {
+            (result, captured_stderr)
+        };
+
+        // Handle stdout redirect.
+        let result = if let Some(redir) = redirections.stdout {
+            let text = output_to_text(&result);
+            write_redirect(&text, redir.path, redir.append, &env.cwd, env.vfs)?;
+            CommandOutput::None
+        } else {
+            result
+        };
+
+        // Handle stderr redirect.
+        if let Some(redir) = redirections.stderr {
+            write_redirect(
+                &captured_stderr,
+                redir.path,
+                redir.append,
+                &env.cwd,
+                env.vfs,
+            )?;
+        }
+
+        // Preserve exit code: if command errored, keep it as exit code 1
+        // even though we captured the error text.
+        if was_error {
+            self.last_exit_code.set(1);
+            self.set_variable("?", "1");
+        }
+
+        Ok(result)
     }
 
     /// Execute a single command (after chaining, piping, and redirection).
@@ -383,6 +533,16 @@ impl CommandRegistry {
         let trimmed = cmd_str.trim();
         if trimmed.is_empty() {
             return Ok(CommandOutput::None);
+        }
+
+        // Intercept `function` before variable expansion so the body
+        // is stored literally (variables expand at call time).
+        if trimmed.starts_with("function ")
+            || trimmed.starts_with("function\t")
+            || trimmed == "function"
+        {
+            let rest = trimmed.strip_prefix("function").unwrap().trim();
+            return self.execute_function_def_raw(rest);
         }
 
         // Expand variables.
@@ -399,6 +559,9 @@ impl CommandRegistry {
         if tokens.is_empty() {
             return Ok(CommandOutput::None);
         }
+
+        // Expand braces ({a,b,c}).
+        let tokens = expand_braces(&tokens);
 
         // Expand globs.
         let tokens = expand_globs(&tokens, env.vfs, &env.cwd);
@@ -418,16 +581,24 @@ impl CommandRegistry {
             "alias" => return self.execute_alias(&args),
             "unalias" => return self.execute_unalias(&args),
             "which" => return self.execute_which(&args),
+            "return" => return self.execute_return(&args),
             _ => {},
         }
 
-        match self.commands.get(name_lower.as_str()) {
-            Some(cmd) => cmd.execute(&args, env),
-            None => Err(OasisError::Command(format!(
-                "unknown command: {}",
-                tokens[0]
-            ))),
+        // Check registered commands first, then user-defined functions.
+        if let Some(cmd) = self.commands.get(name_lower.as_str()) {
+            return cmd.execute(&args, env);
         }
+
+        // Check user-defined functions.
+        if self.functions.borrow().contains_key(name_lower.as_str()) {
+            return self.call_function(&name_lower, &args, env);
+        }
+
+        Err(OasisError::Command(format!(
+            "unknown command: {}",
+            tokens[0]
+        )))
     }
 
     // -- History expansion --
@@ -462,9 +633,11 @@ impl CommandRegistry {
 
         while i < chars.len() {
             if chars[i] == '$' && i + 1 < chars.len() {
-                // Check for $? (last exit code).
-                if chars[i + 1] == '?' {
-                    result.push_str(&self.last_exit_code.get().to_string());
+                // Check for $? (last exit code) and $# (arg count).
+                if chars[i + 1] == '?' || chars[i + 1] == '#' {
+                    let name = chars[i + 1].to_string();
+                    let value = self.resolve_var(&name, &vars, cwd);
+                    result.push_str(&value);
                     i += 2;
                     continue;
                 }
@@ -865,6 +1038,7 @@ impl CommandRegistry {
         // Check intercepted commands first.
         let intercepted = [
             "help", "run", "history", "set", "unset", "env", "alias", "unalias", "which",
+            "function", "return",
         ];
         if intercepted.contains(&name.as_str()) {
             return Ok(CommandOutput::Text(format!("{name}: shell built-in")));
@@ -884,10 +1058,91 @@ impl CommandRegistry {
                         "{name}: aliased to '{expansion}'"
                     )))
                 } else {
-                    Err(OasisError::Command(format!("{name}: not found")))
+                    // Check functions.
+                    let funcs = self.functions.borrow();
+                    if funcs.contains_key(&name) {
+                        Ok(CommandOutput::Text(format!("{name}: shell function")))
+                    } else {
+                        Err(OasisError::Command(format!("{name}: not found")))
+                    }
                 }
             },
         }
+    }
+
+    /// Built-in `function` command: define a shell function.
+    ///
+    /// Syntax: `function name() { body }` or `function name { body }`
+    /// Body commands are separated by `;` or run as a chain.
+    ///
+    /// Takes the raw string *after* the `function` keyword, before
+    /// variable expansion, to preserve `$1`, `$2`, etc. literally.
+    fn execute_function_def_raw(&self, raw: &str) -> Result<CommandOutput> {
+        if raw.is_empty() {
+            // List all defined functions.
+            let funcs = self.list_functions();
+            if funcs.is_empty() {
+                return Ok(CommandOutput::Text("No functions defined.".to_string()));
+            }
+            let mut lines = Vec::new();
+            for (name, body) in &funcs {
+                lines.push(format!("function {name}() {{ {body} }}"));
+            }
+            lines.sort();
+            return Ok(CommandOutput::Text(lines.join("\n")));
+        }
+
+        // Extract function name (strip optional `()` suffix).
+        let (name, rest) = if let Some(paren_pos) = raw.find('(') {
+            let name = raw[..paren_pos].trim();
+            let after = raw[paren_pos..].trim();
+            let rest = after.strip_prefix("()").unwrap_or(after);
+            (name, rest.trim())
+        } else if let Some(brace_pos) = raw.find('{') {
+            let name = raw[..brace_pos].trim();
+            let rest = &raw[brace_pos..];
+            (name, rest.trim())
+        } else {
+            return Err(OasisError::Command(
+                "usage: function name() { body }".to_string(),
+            ));
+        };
+
+        if name.is_empty() {
+            return Err(OasisError::Command(
+                "function name cannot be empty".to_string(),
+            ));
+        }
+
+        // Extract body between { and }.
+        let rest = rest
+            .strip_prefix('{')
+            .ok_or_else(|| OasisError::Command("expected '{' after function name".to_string()))?;
+        let body = rest
+            .strip_suffix('}')
+            .ok_or_else(|| OasisError::Command("expected '}' at end of function".to_string()))?;
+        let body = body.trim();
+
+        if body.is_empty() {
+            return Err(OasisError::Command(
+                "function body cannot be empty".to_string(),
+            ));
+        }
+
+        self.define_function(&name.to_ascii_lowercase(), body);
+        Ok(CommandOutput::None)
+    }
+
+    /// Built-in `return` command: set exit code from within a function.
+    fn execute_return(&self, args: &[&str]) -> Result<CommandOutput> {
+        let code: i32 = if let Some(s) = args.first() {
+            s.parse().unwrap_or(1)
+        } else {
+            0
+        };
+        self.last_exit_code.set(code);
+        self.set_variable("?", &code.to_string());
+        Ok(CommandOutput::None)
     }
 
     /// Built-in `history` command.
@@ -1020,11 +1275,19 @@ impl CommandRegistry {
     /// Return completions for a partial command name.
     pub fn completions(&self, partial: &str) -> Vec<String> {
         let lower = partial.to_ascii_lowercase();
-        self.commands
+        let mut matches: Vec<String> = self
+            .commands
             .keys()
             .filter(|name| name.starts_with(&lower))
             .cloned()
-            .collect()
+            .collect();
+        // Also include user-defined functions.
+        for name in self.functions.borrow().keys() {
+            if name.starts_with(&lower) {
+                matches.push(name.clone());
+            }
+        }
+        matches
     }
 }
 
@@ -1136,6 +1399,7 @@ fn split_chains(input: &str) -> Result<Vec<ChainSegment>> {
     let mut chars = input.chars().peekable();
     let mut in_single = false;
     let mut in_double = false;
+    let mut brace_depth: usize = 0;
 
     while let Some(ch) = chars.next() {
         if in_single {
@@ -1172,6 +1436,18 @@ fn split_chains(input: &str) -> Result<Vec<ChainSegment>> {
                     current.push(next);
                 }
             },
+            '{' => {
+                brace_depth += 1;
+                current.push(ch);
+            },
+            '}' => {
+                brace_depth = brace_depth.saturating_sub(1);
+                current.push(ch);
+            },
+            ';' if brace_depth > 0 => {
+                // Inside braces: don't split, keep as part of the body.
+                current.push(ch);
+            },
             ';' => {
                 let cmd = current.trim().to_string();
                 if !cmd.is_empty() {
@@ -1183,6 +1459,7 @@ fn split_chains(input: &str) -> Result<Vec<ChainSegment>> {
                 current.clear();
                 chain_op = ChainOp::Always;
             },
+            '&' if brace_depth > 0 => current.push(ch),
             '&' if chars.peek() == Some(&'&') => {
                 chars.next(); // consume second &
                 let cmd = current.trim().to_string();
@@ -1194,6 +1471,10 @@ fn split_chains(input: &str) -> Result<Vec<ChainSegment>> {
                 }
                 current.clear();
                 chain_op = ChainOp::And;
+            },
+            '|' if brace_depth > 0 && chars.peek() == Some(&'|') => {
+                current.push(ch);
+                current.push(chars.next().unwrap());
             },
             '|' if chars.peek() == Some(&'|') => {
                 chars.next(); // consume second |
@@ -1289,24 +1570,41 @@ fn split_pipes(input: &str) -> Result<Vec<String>> {
 // Redirection parsing
 // ---------------------------------------------------------------------------
 
+/// A single output redirection.
 struct Redirect<'a> {
     path: &'a str,
     append: bool,
 }
 
-/// Parse `>` and `>>` from a command string.
+/// Parsed redirections for a command.
+struct Redirections<'a> {
+    /// Stdout redirect (`>` / `>>`).
+    stdout: Option<Redirect<'a>>,
+    /// Stderr redirect (`2>` / `2>>`).
+    stderr: Option<Redirect<'a>>,
+    /// Merge stderr into stdout (`2>&1`).
+    stderr_to_stdout: bool,
+}
+
+/// Parse redirect operators from a command string.
 ///
-/// The command part is everything before the *first* unquoted `>`. The
-/// redirect target is determined by the *last* unquoted `>` / `>>`, so
-/// `echo a > file1 > file2` correctly yields command `echo a` with
-/// redirection to `file2`.
-fn parse_redirect(input: &str) -> (&str, Option<Redirect<'_>>) {
+/// Supports:
+/// - `> file` / `>> file`   (stdout)
+/// - `2> file` / `2>> file` (stderr)
+/// - `2>&1`                 (merge stderr into stdout)
+///
+/// Returns `(command_part, redirections)`.
+fn parse_redirect(input: &str) -> (&str, Redirections<'_>) {
     let bytes = input.as_bytes();
     let mut in_single = false;
     let mut in_double = false;
     let mut i = 0;
     let mut first_redirect_pos: Option<usize> = None;
-    let mut last_redirect: Option<(usize, bool)> = None;
+
+    // Collected redirect entries: (position, fd, append, merge_target).
+    // fd: 1 = stdout, 2 = stderr.
+    // merge_target: Some("1") for `2>&1`.
+    let mut redirects: Vec<(usize, u8, bool, bool)> = Vec::new();
 
     while i < bytes.len() {
         let b = bytes[i];
@@ -1324,15 +1622,34 @@ fn parse_redirect(input: &str) -> (&str, Option<Redirect<'_>>) {
             match b {
                 b'\'' => in_single = true,
                 b'"' => in_double = true,
+                b'2' if i + 1 < bytes.len() && bytes[i + 1] == b'>' => {
+                    if first_redirect_pos.is_none() {
+                        first_redirect_pos = Some(i);
+                    }
+                    // Check for 2>> or 2>&1.
+                    if i + 3 < bytes.len() && bytes[i + 2] == b'&' && bytes[i + 3] == b'1' {
+                        // 2>&1 -- merge stderr into stdout.
+                        redirects.push((i, 2, false, true));
+                        i += 3;
+                    } else if i + 2 < bytes.len() && bytes[i + 2] == b'>' {
+                        // 2>>
+                        redirects.push((i, 2, true, false));
+                        i += 2;
+                    } else {
+                        // 2>
+                        redirects.push((i, 2, false, false));
+                        i += 1;
+                    }
+                },
                 b'>' => {
                     if first_redirect_pos.is_none() {
                         first_redirect_pos = Some(i);
                     }
                     if i + 1 < bytes.len() && bytes[i + 1] == b'>' {
-                        last_redirect = Some((i, true));
+                        redirects.push((i, 1, true, false));
                         i += 1;
                     } else {
-                        last_redirect = Some((i, false));
+                        redirects.push((i, 1, false, false));
                     }
                 },
                 _ => {},
@@ -1341,26 +1658,163 @@ fn parse_redirect(input: &str) -> (&str, Option<Redirect<'_>>) {
         i += 1;
     }
 
-    match (first_redirect_pos, last_redirect) {
-        (Some(first_pos), Some((last_pos, append))) => {
-            let skip = if append { 2 } else { 1 };
-            let cmd_part = &input[..first_pos];
-            let path = &input[last_pos + skip..];
-            (cmd_part, Some(Redirect { path, append }))
-        },
-        _ => (input, None),
+    if redirects.is_empty() {
+        return (
+            input,
+            Redirections {
+                stdout: None,
+                stderr: None,
+                stderr_to_stdout: false,
+            },
+        );
     }
+
+    let cmd_part = &input[..first_redirect_pos.unwrap_or(input.len())];
+
+    let mut stdout_redirect: Option<Redirect<'_>> = None;
+    let mut stderr_redirect: Option<Redirect<'_>> = None;
+    let mut stderr_to_stdout = false;
+
+    for (idx, &(pos, fd, append, merge)) in redirects.iter().enumerate() {
+        if merge {
+            stderr_to_stdout = true;
+            continue;
+        }
+
+        // Path is everything from after the operator to the next redirect
+        // or end of string.
+        let op_len = if fd == 2 {
+            if append { 3 } else { 2 } // "2>>" = 3, "2>" = 2
+        } else if append {
+            2
+        } else {
+            1
+        }; // ">>" = 2, ">" = 1
+
+        let path_start = pos + op_len;
+        let path_end = if idx + 1 < redirects.len() {
+            redirects[idx + 1].0
+        } else {
+            input.len()
+        };
+        let path = input[path_start..path_end].trim();
+
+        let redir = Redirect { path, append };
+        if fd == 2 {
+            stderr_redirect = Some(redir);
+        } else {
+            stdout_redirect = Some(redir);
+        }
+    }
+
+    (
+        cmd_part,
+        Redirections {
+            stdout: stdout_redirect,
+            stderr: stderr_redirect,
+            stderr_to_stdout,
+        },
+    )
+}
+
+/// Extract text content from a `CommandOutput`.
+fn output_to_text(output: &CommandOutput) -> String {
+    match output {
+        CommandOutput::Text(t) => t.clone(),
+        CommandOutput::Table { headers, rows } => {
+            let mut out = headers.join(" | ");
+            for row in rows {
+                out.push('\n');
+                out.push_str(&row.join(" | "));
+            }
+            out
+        },
+        _ => String::new(),
+    }
+}
+
+/// Write text to a VFS file, handling append mode.
+fn write_redirect(
+    text: &str,
+    raw_path: &str,
+    append: bool,
+    cwd: &str,
+    vfs: &mut dyn Vfs,
+) -> Result<()> {
+    let path = resolve_path(cwd, raw_path.trim());
+    if append {
+        let existing = if vfs.exists(&path) {
+            let data = vfs.read(&path)?;
+            String::from_utf8_lossy(&data).into_owned()
+        } else {
+            String::new()
+        };
+        let combined = if existing.is_empty() {
+            text.to_string()
+        } else {
+            format!("{existing}\n{text}")
+        };
+        vfs.write(&path, combined.as_bytes())?;
+    } else {
+        vfs.write(&path, text.as_bytes())?;
+    }
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
 // Glob expansion
 // ---------------------------------------------------------------------------
 
-/// Expand glob patterns (`*` and `?`) in tokens against VFS.
+/// Expand brace patterns (`{a,b,c}`) in tokens.
+///
+/// A token like `file.{rs,toml}` expands to `["file.rs", "file.toml"]`.
+/// Nested braces are not supported. If the token contains no braces or
+/// the braces are malformed, it is returned as-is.
+fn expand_braces(tokens: &[String]) -> Vec<String> {
+    let mut result = Vec::new();
+    for token in tokens {
+        if let Some(expanded) = expand_one_brace(token) {
+            result.extend(expanded);
+        } else {
+            result.push(token.clone());
+        }
+    }
+    result
+}
+
+/// Expand a single brace expression. Returns `None` if no valid brace
+/// pattern is found.
+fn expand_one_brace(token: &str) -> Option<Vec<String>> {
+    let open = token.find('{')?;
+    let close = token[open..].find('}').map(|i| i + open)?;
+    let prefix = &token[..open];
+    let suffix = &token[close + 1..];
+    let alternatives = &token[open + 1..close];
+
+    // Must contain at least one comma to be a brace expansion.
+    if !alternatives.contains(',') {
+        return None;
+    }
+
+    let parts: Vec<&str> = alternatives.split(',').collect();
+    let mut result = Vec::with_capacity(parts.len());
+    for part in parts {
+        let expanded = format!("{prefix}{part}{suffix}");
+        // Recursively expand nested braces in the suffix.
+        if let Some(nested) = expand_one_brace(&expanded) {
+            result.extend(nested);
+        } else {
+            result.push(expanded);
+        }
+    }
+    Some(result)
+}
+
+/// Expand glob patterns (`*`, `?`, `[...]`) in tokens against VFS.
 fn expand_globs(tokens: &[String], vfs: &mut dyn Vfs, cwd: &str) -> Vec<String> {
     let mut result = Vec::new();
     for token in tokens {
-        if token.contains('*') || token.contains('?') {
+        if token.contains('*') || token.contains('?') || token.contains('[') {
             let expanded = expand_one_glob(token, vfs, cwd);
             if expanded.is_empty() {
                 // No matches: pass the pattern through as-is.
@@ -1419,7 +1873,9 @@ fn expand_one_glob(pattern: &str, vfs: &mut dyn Vfs, cwd: &str) -> Vec<String> {
     matches
 }
 
-/// Simple glob matching: `*` matches any string, `?` matches one char.
+/// Glob matching: `*` matches any string, `?` matches one char,
+/// `[abc]` matches one of the listed chars, `[a-z]` matches a range,
+/// `[!abc]` or `[^abc]` matches any char NOT in the set.
 fn glob_match(pattern: &str, text: &str) -> bool {
     let p: Vec<char> = pattern.chars().collect();
     let t: Vec<char> = text.chars().collect();
@@ -1447,10 +1903,80 @@ fn glob_match_inner(p: &[char], t: &[char], pi: usize, ti: usize, depth: usize) 
             }
         }
         false
+    } else if p[pi] == '[' {
+        // Character class: [abc], [a-z], [!abc], [^abc].
+        if ti >= t.len() {
+            return false;
+        }
+        match parse_char_class(p, pi) {
+            Some((negate, chars, end_pi)) => {
+                let found = chars.contains(&t[ti]);
+                let matched = if negate { !found } else { found };
+                if matched {
+                    glob_match_inner(p, t, end_pi, ti + 1, depth + 1)
+                } else {
+                    false
+                }
+            },
+            None => {
+                // Malformed bracket: treat '[' as literal.
+                if ti < t.len() && p[pi] == t[ti] {
+                    glob_match_inner(p, t, pi + 1, ti + 1, depth + 1)
+                } else {
+                    false
+                }
+            },
+        }
     } else if ti < t.len() && (p[pi] == '?' || p[pi] == t[ti]) {
         glob_match_inner(p, t, pi + 1, ti + 1, depth + 1)
     } else {
         false
+    }
+}
+
+/// Parse a character class starting at `p[pi]` which is `[`.
+///
+/// Returns `(negate, chars, end_index)` where `end_index` is the
+/// position after the closing `]`. Returns `None` if malformed.
+fn parse_char_class(p: &[char], pi: usize) -> Option<(bool, Vec<char>, usize)> {
+    debug_assert!(p[pi] == '[');
+    let mut i = pi + 1;
+    if i >= p.len() {
+        return None;
+    }
+
+    // Check for negation.
+    let negate = p[i] == '!' || p[i] == '^';
+    if negate {
+        i += 1;
+    }
+
+    let mut chars = Vec::new();
+
+    while i < p.len() && p[i] != ']' {
+        if i + 2 < p.len() && p[i + 1] == '-' && p[i + 2] != ']' {
+            // Range: a-z.
+            let start = p[i];
+            let end = p[i + 2];
+            let (lo, hi) = if start <= end {
+                (start, end)
+            } else {
+                (end, start)
+            };
+            for c in lo..=hi {
+                chars.push(c);
+            }
+            i += 3;
+        } else {
+            chars.push(p[i]);
+            i += 1;
+        }
+    }
+
+    if i < p.len() && p[i] == ']' {
+        Some((negate, chars, i + 1))
+    } else {
+        None // No closing bracket.
     }
 }
 
@@ -1523,6 +2049,7 @@ mod tests {
             network: None,
             tls: None,
             stdin: None,
+            stderr: String::new(),
         }
     }
 
@@ -2263,6 +2790,135 @@ mod tests {
         assert!(content.contains("line2"));
     }
 
+    // -- Stderr redirect tests --
+
+    #[test]
+    fn stderr_redirect_captures_error() {
+        let reg = CommandRegistry::new();
+        let mut vfs = MemoryVfs::new();
+        vfs.mkdir("/tmp").unwrap();
+        let mut env = make_env(&mut vfs);
+        // Unknown command produces an error; 2> captures it.
+        reg.execute("nosuchcmd 2> /tmp/err.txt", &mut env).unwrap();
+        let content = String::from_utf8_lossy(&env.vfs.read("/tmp/err.txt").unwrap()).into_owned();
+        assert!(content.contains("nosuchcmd"));
+    }
+
+    #[test]
+    fn stderr_redirect_append() {
+        let reg = CommandRegistry::new();
+        let mut vfs = MemoryVfs::new();
+        vfs.mkdir("/tmp").unwrap();
+        let mut env = make_env(&mut vfs);
+        reg.execute("nosuchcmd1 2> /tmp/err.txt", &mut env).unwrap();
+        reg.execute("nosuchcmd2 2>> /tmp/err.txt", &mut env)
+            .unwrap();
+        let content = String::from_utf8_lossy(&env.vfs.read("/tmp/err.txt").unwrap()).into_owned();
+        assert!(content.contains("nosuchcmd1"));
+        assert!(content.contains("nosuchcmd2"));
+    }
+
+    #[test]
+    fn stderr_to_stdout_merge() {
+        let mut reg = CommandRegistry::new();
+        reg.register(Box::new(EchoCmd));
+        let mut vfs = MemoryVfs::new();
+        vfs.mkdir("/tmp").unwrap();
+        let mut env = make_env(&mut vfs);
+        // Unknown command with 2>&1 should merge error into stdout.
+        match reg.execute("nosuchcmd 2>&1", &mut env) {
+            Ok(CommandOutput::Text(s)) => {
+                assert!(s.contains("nosuchcmd"));
+            },
+            other => panic!("expected Text with error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn stderr_to_stdout_with_redirect() {
+        let mut reg = CommandRegistry::new();
+        reg.register(Box::new(EchoCmd));
+        let mut vfs = MemoryVfs::new();
+        vfs.mkdir("/tmp").unwrap();
+        let mut env = make_env(&mut vfs);
+        // 2>&1 > file should capture merged output to file.
+        reg.execute("nosuchcmd 2>&1 > /tmp/out.txt", &mut env)
+            .unwrap();
+        let content = String::from_utf8_lossy(&env.vfs.read("/tmp/out.txt").unwrap()).into_owned();
+        assert!(content.contains("nosuchcmd"));
+    }
+
+    #[test]
+    fn stdout_and_stderr_separate_redirects() {
+        let mut reg = CommandRegistry::new();
+        reg.register(Box::new(EchoCmd));
+        let mut vfs = MemoryVfs::new();
+        vfs.mkdir("/tmp").unwrap();
+        let mut env = make_env(&mut vfs);
+        // Successful command: stdout goes to file, stderr empty.
+        reg.execute("echo hello > /tmp/out.txt 2> /tmp/err.txt", &mut env)
+            .unwrap();
+        assert_eq!(env.vfs.read("/tmp/out.txt").unwrap(), b"hello");
+        let err = String::from_utf8_lossy(&env.vfs.read("/tmp/err.txt").unwrap()).into_owned();
+        assert!(err.is_empty());
+    }
+
+    #[test]
+    fn stderr_preserved_in_env_without_redirect() {
+        let reg = CommandRegistry::new();
+        let mut vfs = MemoryVfs::new();
+        let mut env = make_env(&mut vfs);
+        // Without 2>, error propagates normally (Err result).
+        let result = reg.execute("nosuchcmd", &mut env);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn stderr_redirect_sets_exit_code() {
+        let reg = CommandRegistry::new();
+        let mut vfs = MemoryVfs::new();
+        vfs.mkdir("/tmp").unwrap();
+        let mut env = make_env(&mut vfs);
+        reg.execute("nosuchcmd 2> /tmp/err.txt", &mut env).unwrap();
+        // Exit code should be 1 even though error was captured.
+        assert_eq!(reg.last_exit_code.get(), 1);
+    }
+
+    #[test]
+    fn parse_redirect_2_to_file() {
+        let (cmd, redirections) = parse_redirect("echo hello 2> /tmp/e.txt");
+        assert_eq!(cmd, "echo hello ");
+        assert!(redirections.stderr.is_some());
+        assert_eq!(redirections.stderr.unwrap().path, "/tmp/e.txt");
+        assert!(!redirections.stderr_to_stdout);
+    }
+
+    #[test]
+    fn parse_redirect_2_append() {
+        let (cmd, redirections) = parse_redirect("cmd 2>> /tmp/e.txt");
+        assert_eq!(cmd, "cmd ");
+        let redir = redirections.stderr.unwrap();
+        assert!(redir.append);
+        assert_eq!(redir.path, "/tmp/e.txt");
+    }
+
+    #[test]
+    fn parse_redirect_2_to_1() {
+        let (cmd, redirections) = parse_redirect("cmd 2>&1");
+        assert_eq!(cmd, "cmd ");
+        assert!(redirections.stderr_to_stdout);
+        assert!(redirections.stderr.is_none());
+    }
+
+    #[test]
+    fn parse_redirect_stdout_only() {
+        let (cmd, redirections) = parse_redirect("echo hi > /tmp/out.txt");
+        assert_eq!(cmd, "echo hi ");
+        assert!(redirections.stdout.is_some());
+        assert!(redirections.stderr.is_none());
+        assert!(!redirections.stderr_to_stdout);
+    }
+
     // -- Glob tests --
 
     #[test]
@@ -2296,6 +2952,116 @@ mod tests {
         }
     }
 
+    // -- Brace expansion tests --
+
+    #[test]
+    fn brace_expansion_basic() {
+        let tokens = vec!["file.{txt,md,rs}".to_string()];
+        let expanded = expand_braces(&tokens);
+        assert_eq!(expanded, vec!["file.txt", "file.md", "file.rs"]);
+    }
+
+    #[test]
+    fn brace_expansion_with_prefix_suffix() {
+        let tokens = vec!["src/{main,lib}.rs".to_string()];
+        let expanded = expand_braces(&tokens);
+        assert_eq!(expanded, vec!["src/main.rs", "src/lib.rs"]);
+    }
+
+    #[test]
+    fn brace_no_comma_passthrough() {
+        let tokens = vec!["{solo}".to_string()];
+        let expanded = expand_braces(&tokens);
+        assert_eq!(expanded, vec!["{solo}"]);
+    }
+
+    #[test]
+    fn brace_expansion_no_braces_passthrough() {
+        let tokens = vec!["plain.txt".to_string()];
+        let expanded = expand_braces(&tokens);
+        assert_eq!(expanded, vec!["plain.txt"]);
+    }
+
+    #[test]
+    fn brace_expansion_multiple_tokens() {
+        let tokens = vec!["a.{x,y}".to_string(), "b.txt".to_string()];
+        let expanded = expand_braces(&tokens);
+        assert_eq!(expanded, vec!["a.x", "a.y", "b.txt"]);
+    }
+
+    #[test]
+    fn brace_expansion_in_command() {
+        let mut reg = CommandRegistry::new();
+        reg.register(Box::new(EchoCmd));
+        let mut vfs = MemoryVfs::new();
+        let mut env = make_env(&mut vfs);
+        match reg.execute("echo file.{txt,md}", &mut env).unwrap() {
+            CommandOutput::Text(s) => {
+                assert_eq!(s, "file.txt file.md");
+            },
+            _ => panic!("expected text output"),
+        }
+    }
+
+    // -- Character class tests --
+
+    #[test]
+    fn glob_char_class_list() {
+        assert!(glob_match("[abc]", "a"));
+        assert!(glob_match("[abc]", "b"));
+        assert!(glob_match("[abc]", "c"));
+        assert!(!glob_match("[abc]", "d"));
+    }
+
+    #[test]
+    fn glob_char_class_range() {
+        assert!(glob_match("[a-z]", "m"));
+        assert!(glob_match("[0-9]", "5"));
+        assert!(!glob_match("[a-z]", "A"));
+        assert!(!glob_match("[0-9]", "x"));
+    }
+
+    #[test]
+    fn glob_char_class_negation() {
+        assert!(!glob_match("[!abc]", "a"));
+        assert!(glob_match("[!abc]", "d"));
+        assert!(!glob_match("[^0-9]", "5"));
+        assert!(glob_match("[^0-9]", "x"));
+    }
+
+    #[test]
+    fn glob_char_class_in_pattern() {
+        assert!(glob_match("file[12].txt", "file1.txt"));
+        assert!(glob_match("file[12].txt", "file2.txt"));
+        assert!(!glob_match("file[12].txt", "file3.txt"));
+    }
+
+    #[test]
+    fn glob_char_class_with_star() {
+        assert!(glob_match("*.[ch]", "main.c"));
+        assert!(glob_match("*.[ch]", "main.h"));
+        assert!(!glob_match("*.[ch]", "main.o"));
+    }
+
+    #[test]
+    fn glob_char_class_in_command() {
+        let mut reg = CommandRegistry::new();
+        reg.register(Box::new(EchoCmd));
+        let mut vfs = MemoryVfs::new();
+        vfs.write("/file1.txt", b"a").unwrap();
+        vfs.write("/file2.txt", b"b").unwrap();
+        vfs.write("/file3.txt", b"c").unwrap();
+        let mut env = make_env(&mut vfs);
+        match reg.execute("echo /file[12].txt", &mut env).unwrap() {
+            CommandOutput::Text(s) => {
+                assert!(s.contains("/file1.txt"));
+                assert!(s.contains("/file2.txt"));
+                assert!(!s.contains("file3.txt"));
+            },
+            _ => panic!("expected text output"),
+        }
+    }
+
     // -- Alias tests --
 
     #[test]
@@ -2324,6 +3090,168 @@ mod tests {
             },
             _ => panic!("expected text output"),
         }
+    }
+
+    // -- Shell function tests --
+
+    #[test]
+    fn function_define_and_call() {
+        let mut reg = CommandRegistry::new();
+        reg.register(Box::new(EchoCmd));
+        let mut vfs = MemoryVfs::new();
+        let mut env = make_env(&mut vfs);
+        reg.execute("function greet() { echo hello }", &mut env)
+            .unwrap();
+        match reg.execute("greet", &mut env).unwrap() {
+            CommandOutput::Text(s) => assert_eq!(s, "hello"),
+            _ => panic!("expected text output"),
+        }
+    }
+
+    #[test]
+    fn function_with_args() {
+        let mut reg = CommandRegistry::new();
+        reg.register(Box::new(EchoCmd));
+        let mut vfs = MemoryVfs::new();
+        let mut env = make_env(&mut vfs);
+        reg.execute("function say() { echo $1 $2 }", &mut env)
+            .unwrap();
+        match reg.execute("say hello world", &mut env).unwrap() {
+            CommandOutput::Text(s) => assert_eq!(s, "hello world"),
+            _ => panic!("expected text output"),
+        }
+    }
+
+    #[test]
+    fn function_arg_count() {
+        let mut reg = CommandRegistry::new();
+        reg.register(Box::new(EchoCmd));
+        let mut vfs = MemoryVfs::new();
+        let mut env = make_env(&mut vfs);
+        reg.execute("function argc() { echo $# }", &mut env)
+            .unwrap();
+        match reg.execute("argc a b c", &mut env).unwrap() {
+            CommandOutput::Text(s) => assert_eq!(s, "3"),
+            _ => panic!("expected text output"),
+        }
+    }
+
+    #[test]
+    fn function_no_parens_syntax() {
+        let mut reg = CommandRegistry::new();
+        reg.register(Box::new(EchoCmd));
+        let mut vfs = MemoryVfs::new();
+        let mut env = make_env(&mut vfs);
+        reg.execute("function hi { echo hi }", &mut env).unwrap();
+        match reg.execute("hi", &mut env).unwrap() {
+            CommandOutput::Text(s) => assert_eq!(s, "hi"),
+            _ => panic!("expected text output"),
+        }
+    }
+
+    #[test]
+    fn function_list() {
+        let reg = CommandRegistry::new();
+        let mut vfs = MemoryVfs::new();
+        let mut env = make_env(&mut vfs);
+        match reg.execute("function", &mut env).unwrap() {
+            CommandOutput::Text(s) => assert!(s.contains("No functions")),
+            _ => panic!("expected text output"),
+        }
+    }
+
+    #[test]
+    fn function_list_after_define() {
+        let mut reg = CommandRegistry::new();
+        reg.register(Box::new(EchoCmd));
+        let mut vfs = MemoryVfs::new();
+        let mut env = make_env(&mut vfs);
+        reg.execute("function foo() { echo bar }", &mut env)
+            .unwrap();
+        match reg.execute("function", &mut env).unwrap() {
+            CommandOutput::Text(s) => {
+                assert!(s.contains("foo"));
+                assert!(s.contains("echo bar"));
+            },
+            _ => panic!("expected text output"),
+        }
+    }
+
+    #[test]
+    fn function_multi_command_body() {
+        let mut reg = CommandRegistry::new();
+        reg.register(Box::new(EchoCmd));
+        let mut vfs = MemoryVfs::new();
+        let mut env = make_env(&mut vfs);
+        reg.execute("function both() { echo one ; echo two }", &mut env)
+            .unwrap();
+        match reg.execute("both", &mut env).unwrap() {
+            CommandOutput::Text(s) => {
+                assert!(s.contains("one"));
+                assert!(s.contains("two"));
+            },
+            _ => panic!("expected text output"),
+        }
+    }
+
+    #[test]
+    fn function_return_sets_exit_code() {
+        let reg = CommandRegistry::new();
+        let mut vfs = MemoryVfs::new();
+        let mut env = make_env(&mut vfs);
+        reg.execute("function fail() { return 42 }", &mut env)
+            .unwrap();
+        reg.execute("fail", &mut env).unwrap();
+        assert_eq!(reg.last_exit_code.get(), 42);
+    }
+
+    #[test]
+    fn function_recursion_depth_limit() {
+        let mut reg = CommandRegistry::new();
+        reg.register(Box::new(EchoCmd));
+        let mut vfs = MemoryVfs::new();
+        let mut env = make_env(&mut vfs);
+        // Define a function that calls itself infinitely.
+        reg.execute("function inf() { inf }", &mut env).unwrap();
+        let result = reg.execute("inf", &mut env);
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("recursion depth"));
+    }
+
+    #[test]
+    fn function_restores_args() {
+        let mut reg = CommandRegistry::new();
+        reg.register(Box::new(EchoCmd));
+        let mut vfs = MemoryVfs::new();
+        let mut env = make_env(&mut vfs);
+        reg.set_variable("1", "original");
+        reg.execute("function f() { echo $1 }", &mut env).unwrap();
+        reg.execute("f override", &mut env).unwrap();
+        // After function returns, $1 should be restored.
+        assert_eq!(reg.get_variable("1").unwrap(), "original");
+    }
+
+    #[test]
+    fn function_which() {
+        let reg = CommandRegistry::new();
+        let mut vfs = MemoryVfs::new();
+        let mut env = make_env(&mut vfs);
+        reg.execute("function myfn() { echo hi }", &mut env)
+            .unwrap();
+        match reg.execute("which myfn", &mut env).unwrap() {
+            CommandOutput::Text(s) => assert!(s.contains("shell function")),
+            _ => panic!("expected text output"),
+        }
+    }
+
+    #[test]
+    fn function_empty_body_rejected() {
+        let reg = CommandRegistry::new();
+        let mut vfs = MemoryVfs::new();
+        let mut env = make_env(&mut vfs);
+        let result = reg.execute("function bad() { }", &mut env);
+        assert!(result.is_err());
     }
 
     // -- Set/env tests --

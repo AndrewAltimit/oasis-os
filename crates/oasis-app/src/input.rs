@@ -393,6 +393,7 @@ pub fn handle_default_input(
                         network: None,
                         tls: Some(&state.tls_provider),
                         stdin: None,
+                        stderr: String::new(),
                     };
                     let result = state.cmd_reg.execute(&line, &mut env);
                     state.cwd = env.cwd;

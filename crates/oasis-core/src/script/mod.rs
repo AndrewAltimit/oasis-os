@@ -343,6 +343,7 @@ mod tests {
             network: None,
             tls: None,
             stdin: None,
+            stderr: String::new(),
         };
         reg.execute(line, &mut env)
     }
@@ -382,6 +383,7 @@ mod tests {
             network: None,
             tls: None,
             stdin: None,
+            stderr: String::new(),
         };
         let output = run_script("/tmp/test.sh", &reg, &mut env).unwrap();
         assert_eq!(output, vec!["hello", "world"]);
@@ -402,6 +404,7 @@ mod tests {
             network: None,
             tls: None,
             stdin: None,
+            stderr: String::new(),
         };
         let output = run_script("/tmp/bad.sh", &reg, &mut env).unwrap();
         assert!(output[0].contains("error at line 1"));
@@ -528,6 +531,7 @@ mod tests {
             network: None,
             tls: None,
             stdin: None,
+            stderr: String::new(),
         };
         let output = run_startup(&reg, &mut env).unwrap();
         assert!(output[0].contains("no startup"));
@@ -547,6 +551,7 @@ mod tests {
             network: None,
             tls: None,
             stdin: None,
+            stderr: String::new(),
         };
         let output = run_startup(&reg, &mut env).unwrap();
         assert_eq!(output, vec!["booted"]);

@@ -633,6 +633,7 @@ mod tests {
             network: None,
             tls: None,
             stdin: None,
+            stderr: String::new(),
         };
         reg.execute(line, &mut env)
     }
@@ -856,6 +857,7 @@ mod tests {
             network: None,
             tls: None,
             stdin: Some("hello".to_string()),
+            stderr: String::new(),
         };
         match reg.execute("tr elo ELO", &mut env).unwrap() {
             CommandOutput::Text(s) => assert_eq!(s, "hELLO"),
@@ -877,6 +879,7 @@ mod tests {
             network: None,
             tls: None,
             stdin: Some("hello world".to_string()),
+            stderr: String::new(),
         };
         match reg.execute("tr -d lo", &mut env).unwrap() {
             CommandOutput::Text(s) => assert_eq!(s, "he wrd"),

@@ -192,6 +192,7 @@ mod tests {
             network: None,
             tls: None,
             stdin: None,
+            stderr: String::new(),
         };
         reg.execute(line, &mut env)
     }
