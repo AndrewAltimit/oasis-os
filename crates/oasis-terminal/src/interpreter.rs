@@ -3554,4 +3554,230 @@ mod tests {
             _ => panic!("expected text"),
         }
     }
+
+    // ===================================================================
+    // Property-based tests
+    // ===================================================================
+
+    mod prop {
+        use super::*;
+        use proptest::prelude::*;
+
+        proptest! {
+            // -- tokenize -----------------------------------------------
+
+            /// Tokenizing a single unquoted word returns exactly that word.
+            #[test]
+            fn tokenize_single_word(w in "[a-zA-Z0-9_]{1,30}") {
+                let tokens = tokenize(&w).unwrap();
+                prop_assert_eq!(tokens, vec![w]);
+            }
+
+            /// Tokenizing two words separated by space returns two tokens.
+            #[test]
+            fn tokenize_two_words(
+                a in "[a-zA-Z]{1,15}",
+                b in "[a-zA-Z]{1,15}",
+            ) {
+                let input = format!("{a} {b}");
+                let tokens = tokenize(&input).unwrap();
+                prop_assert_eq!(tokens.len(), 2);
+                prop_assert_eq!(&tokens[0], &a);
+                prop_assert_eq!(&tokens[1], &b);
+            }
+
+            /// Single-quoted strings preserve all content literally.
+            #[test]
+            fn tokenize_single_quoted_preserves(
+                s in "[a-zA-Z0-9 \\$\\\\]{1,30}",
+            ) {
+                let input = format!("'{s}'");
+                let tokens = tokenize(&input).unwrap();
+                prop_assert_eq!(tokens, vec![s]);
+            }
+
+            /// Double-quoted strings produce a single token.
+            #[test]
+            fn tokenize_double_quoted_single_token(
+                s in "[a-zA-Z0-9 ]{1,30}",
+            ) {
+                let input = format!("\"{s}\"");
+                let tokens = tokenize(&input).unwrap();
+                prop_assert_eq!(tokens.len(), 1);
+                prop_assert_eq!(&tokens[0], &s);
+            }
+
+            /// Tokenize never panics on arbitrary ASCII input.
+            #[test]
+            fn tokenize_never_panics(s in "[ -~]{0,80}") {
+                let _ = tokenize(&s);
+            }
+
+            /// Empty input yields empty tokens.
+            #[test]
+            fn tokenize_whitespace_only(n in 1usize..20) {
+                let input = " ".repeat(n);
+                let tokens = tokenize(&input).unwrap();
+                prop_assert!(tokens.is_empty());
+            }
+
+            // -- glob_match ----------------------------------------------
+
+            /// Any text matches the `*` pattern.
+            #[test]
+            fn glob_star_matches_everything(s in "[a-z]{0,20}") {
+                prop_assert!(glob_match("*", &s));
+            }
+
+            /// `?` matches exactly one character.
+            #[test]
+            fn glob_question_matches_single_char(c in "[a-z]") {
+                prop_assert!(glob_match("?", &c));
+            }
+
+            /// `?` does NOT match empty string.
+            #[test]
+            fn glob_question_no_empty(_dummy in 0..1i32) {
+                prop_assert!(!glob_match("?", ""));
+            }
+
+            /// A literal pattern matches only itself.
+            #[test]
+            fn glob_literal_exact(s in "[a-z]{1,20}") {
+                prop_assert!(glob_match(&s, &s));
+            }
+
+            /// A literal pattern does not match a different string.
+            #[test]
+            fn glob_literal_no_mismatch(
+                a in "[a-z]{1,10}",
+                b in "[a-z]{1,10}",
+            ) {
+                if a != b {
+                    prop_assert!(!glob_match(&a, &b));
+                }
+            }
+
+            /// `*` at end matches any suffix.
+            #[test]
+            fn glob_star_suffix(
+                prefix in "[a-z]{1,10}",
+                suffix in "[a-z]{0,10}",
+            ) {
+                let text = format!("{prefix}{suffix}");
+                let pattern = format!("{prefix}*");
+                prop_assert!(glob_match(&pattern, &text));
+            }
+
+            /// Character class [a-z] matches lowercase chars.
+            #[test]
+            fn glob_char_class_range(c in "[a-z]") {
+                prop_assert!(glob_match("[a-z]", &c));
+            }
+
+            /// Negated class [!a-z] does NOT match lowercase chars.
+            #[test]
+            fn glob_negated_class_range(c in "[a-z]") {
+                prop_assert!(!glob_match("[!a-z]", &c));
+            }
+
+            // -- resolve_path -------------------------------------------
+
+            /// resolve_path always returns a string starting with '/'.
+            #[test]
+            fn resolve_path_starts_with_slash(
+                cwd in "/[a-z]{1,10}(/[a-z]{1,5}){0,3}",
+                input in "[a-z./]{0,20}",
+            ) {
+                let result = resolve_path(&cwd, &input);
+                prop_assert!(
+                    result.starts_with('/'),
+                    "expected '/' prefix, got: {result}",
+                );
+            }
+
+            /// resolve_path is idempotent when input is absolute.
+            #[test]
+            fn resolve_path_absolute_idempotent(
+                path in "/[a-z]{1,10}(/[a-z]{1,5}){0,3}",
+            ) {
+                let first = resolve_path("/", &path);
+                let second = resolve_path("/", &first);
+                prop_assert_eq!(first, second);
+            }
+
+            /// resolve_path never contains `..` in output.
+            #[test]
+            fn resolve_path_no_dotdot(
+                cwd in "/[a-z]{1,10}",
+                input in "(\\.\\./){0,5}[a-z]{0,10}",
+            ) {
+                let result = resolve_path(&cwd, &input);
+                prop_assert!(
+                    !result.contains(".."),
+                    "result should not contain '..': {result}",
+                );
+            }
+
+            /// resolve_path never contains double slashes.
+            #[test]
+            fn resolve_path_no_double_slashes(
+                cwd in "/[a-z]{1,5}",
+                input in "[a-z./]{0,15}",
+            ) {
+                let result = resolve_path(&cwd, &input);
+                prop_assert!(
+                    !result.contains("//"),
+                    "result should not contain '//': {result}",
+                );
+            }
+
+            // -- expand_braces -------------------------------------------
+
+            /// Brace expansion with N alternatives produces N tokens.
+            #[test]
+            fn brace_expansion_count(
+                prefix in "[a-z]{0,5}",
+                a in "[a-z]{1,5}",
+                b in "[a-z]{1,5}",
+                c in "[a-z]{1,5}",
+            ) {
+                let input = format!("{prefix}{{{a},{b},{c}}}");
+                let tokens = vec![input];
+                let expanded = expand_braces(&tokens);
+                prop_assert!(
+                    expanded.len() == 3,
+                    "expected 3 tokens from brace expansion, got: {:?}",
+                    expanded,
+                );
+            }
+
+            /// Brace expansion preserves prefix and suffix.
+            #[test]
+            fn brace_expansion_preserves_affix(
+                prefix in "[a-z]{1,5}",
+                suffix in "[a-z]{1,5}",
+                a in "[a-z]{1,3}",
+                b in "[a-z]{1,3}",
+            ) {
+                let input = format!("{prefix}{{{a},{b}}}{suffix}");
+                let tokens = vec![input];
+                let expanded = expand_braces(&tokens);
+                for tok in &expanded {
+                    prop_assert!(
+                        tok.starts_with(&prefix) && tok.ends_with(&suffix),
+                        "token '{tok}' should have prefix '{prefix}' and suffix '{suffix}'",
+                    );
+                }
+            }
+
+            /// A token without braces passes through unchanged.
+            #[test]
+            fn brace_expansion_passthrough(s in "[a-z]{1,20}") {
+                let tokens = vec![s.clone()];
+                let expanded = expand_braces(&tokens);
+                prop_assert_eq!(expanded, vec![s]);
+            }
+        }
+    }
 }

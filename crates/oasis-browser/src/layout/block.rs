@@ -264,6 +264,7 @@ fn make_anonymous_block(children: Vec<LayoutBox>) -> LayoutBox {
             ..ComputedStyle::default()
         },
         text: None,
+        dirty: true,
     }
 }
 

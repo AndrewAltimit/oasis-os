@@ -126,6 +126,8 @@ fn main() -> anyhow::Result<()> {
             width: 400,
             height: 260,
             window_type: WindowType::AppWindow,
+            always_on_top: false,
+            modal: false,
         };
         wm.create_window(&term_cfg, &mut sdi)?;
         let fm_cfg = WindowConfig {
@@ -136,6 +138,8 @@ fn main() -> anyhow::Result<()> {
             width: 350,
             height: 220,
             window_type: WindowType::AppWindow,
+            always_on_top: false,
+            modal: false,
         };
         wm.create_window(&fm_cfg, &mut sdi)?;
         Some(wm)

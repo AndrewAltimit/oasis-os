@@ -5,7 +5,7 @@
 //! graph with no concept of grouping or hierarchy.
 
 use oasis_sdi::SdiRegistry;
-use oasis_types::backend::SdiBackend;
+use oasis_types::backend::{Color, SdiBackend};
 use oasis_types::error::{OasisError, Result};
 use oasis_types::input::InputEvent;
 
@@ -65,6 +65,18 @@ const MIN_WINDOW_SIZE: u32 = 40;
 
 /// Cascade offset between newly created windows.
 const CASCADE_OFFSET: i32 = 24;
+
+/// Distance in pixels for edge snapping during drag.
+const SNAP_DISTANCE: i32 = 8;
+
+/// Minimum visible pixels of a window at screen edges.
+const MIN_VISIBLE: i32 = 40;
+
+/// SDI object name for the semi-transparent modal backdrop.
+const MODAL_OVERLAY_ID: &str = "__wm_modal_overlay";
+
+/// Color of the modal backdrop overlay.
+const MODAL_OVERLAY_COLOR: Color = Color::rgba(0, 0, 0, 100);
 
 /// The window manager.
 ///
@@ -128,6 +140,20 @@ impl WindowManager {
         self.windows.len()
     }
 
+    /// Returns `true` if any open window has `modal == true`.
+    pub fn has_modal(&self) -> bool {
+        self.windows.iter().any(|w| w.modal)
+    }
+
+    /// Returns the id of the topmost modal window, if any.
+    pub fn topmost_modal(&self) -> Option<&str> {
+        self.windows
+            .iter()
+            .rev()
+            .find(|w| w.modal)
+            .map(|w| w.id.as_str())
+    }
+
     /// Get the active (focused) window id.
     pub fn active_window(&self) -> Option<&str> {
         self.active_window.as_deref()
@@ -163,6 +189,12 @@ impl WindowManager {
         };
 
         let window = Window::new(config, x, y, &self.theme);
+        let is_modal = window.modal;
+
+        // Create modal overlay before the window if this is a modal window.
+        if is_modal {
+            self.show_modal_overlay(sdi);
+        }
 
         // Create SDI objects for each component.
         self.create_sdi_objects(&window, sdi);
@@ -170,7 +202,7 @@ impl WindowManager {
         let id = window.id.clone();
         self.windows.push(window);
 
-        // Focus the new window.
+        // Focus the new window (will respect z-order groups).
         self.focus_window_internal(&id, sdi);
 
         Ok(id)
@@ -233,6 +265,7 @@ impl WindowManager {
         }
         self.drag = None;
         self.active_window = None;
+        self.hide_modal_overlay(sdi);
     }
 
     /// Close a window, destroying all its SDI objects.
@@ -243,6 +276,7 @@ impl WindowManager {
             .position(|w| w.id == id)
             .ok_or_else(|| OasisError::Wm(format!("window not found: {id}")))?;
 
+        let was_modal = self.windows[idx].modal;
         let window = &self.windows[idx];
         self.destroy_sdi_objects(window, sdi);
         self.windows.remove(idx);
@@ -263,26 +297,41 @@ impl WindowManager {
             self.active_window = self.windows.last().map(|w| w.id.clone());
         }
 
+        // Hide modal overlay if no more modal windows remain.
+        if was_modal && !self.has_modal() {
+            self.hide_modal_overlay(sdi);
+        }
+
         Ok(())
     }
 
     /// Move a window by a delta. Updates all SDI object positions.
+    /// The final position is clamped to keep the titlebar visible on screen.
     pub fn move_window(&mut self, id: &str, dx: i32, dy: i32, sdi: &mut SdiRegistry) -> Result<()> {
+        let sw = self.screen_w;
+        let sh = self.screen_h;
+        let tb_h = self.theme.titlebar_height;
+
         let window = self
             .windows
             .iter_mut()
             .find(|w| w.id == id)
             .ok_or_else(|| OasisError::Wm(format!("window not found: {id}")))?;
 
-        window.x += dx;
-        window.y += dy;
+        let raw_x = window.x + dx;
+        let raw_y = window.y + dy;
+        let (cx, cy) = clamp_position(raw_x, raw_y, window.outer_w, sw, sh, tb_h);
+        let actual_dx = cx - window.x;
+        let actual_dy = cy - window.y;
+        window.x = cx;
+        window.y = cy;
 
         // Update all SDI objects.
         for suffix in window.sdi_suffixes() {
             let name = window.sdi_name(suffix);
             if let Ok(obj) = sdi.get_mut(&name) {
-                obj.x += dx;
-                obj.y += dy;
+                obj.x += actual_dx;
+                obj.y += actual_dy;
             }
         }
 
@@ -480,6 +529,20 @@ impl WindowManager {
     fn handle_click(&mut self, x: i32, y: i32, sdi: &mut SdiRegistry) -> WmEvent {
         let region = hit_test(&self.windows, x, y, &self.theme);
 
+        // If a modal window exists, only allow clicks on the topmost modal.
+        if let Some(modal_id) = self.topmost_modal().map(String::from) {
+            let hit_id = match &region {
+                HitRegion::TitlebarButton(id, _)
+                | HitRegion::Titlebar(id)
+                | HitRegion::ResizeHandle(id, _)
+                | HitRegion::Content(id, _, _) => Some(id.as_str()),
+                HitRegion::Desktop => None,
+            };
+            if hit_id != Some(&modal_id) {
+                return WmEvent::None;
+            }
+        }
+
         match region {
             HitRegion::TitlebarButton(id, ButtonKind::Close) => {
                 let _ = self.close_window(&id, sdi);
@@ -570,20 +633,40 @@ impl WindowManager {
                 start_win_x,
                 start_win_y,
             } => {
-                let new_x = start_win_x + (x - start_cursor_x);
-                let new_y = start_win_y + (y - start_cursor_y);
+                let raw_x = start_win_x + (x - start_cursor_x);
+                let raw_y = start_win_y + (y - start_cursor_y);
 
-                if let Some(window) = self.windows.iter_mut().find(|w| w.id == *window_id) {
-                    let dx = new_x - window.x;
-                    let dy = new_y - window.y;
-                    window.x = new_x;
-                    window.y = new_y;
+                // Get dimensions for snap/clamp before mutable borrow.
+                let dims = self
+                    .windows
+                    .iter()
+                    .find(|w| w.id == *window_id)
+                    .map(|w| (w.outer_w, w.outer_h));
 
-                    for suffix in window.sdi_suffixes() {
-                        let name = window.sdi_name(suffix);
-                        if let Ok(obj) = sdi.get_mut(&name) {
-                            obj.x += dx;
-                            obj.y += dy;
+                if let Some((outer_w, outer_h)) = dims {
+                    let (sx, sy) =
+                        snap_to_edges(raw_x, raw_y, outer_w, outer_h, self.screen_w, self.screen_h);
+                    let (cx, cy) = clamp_position(
+                        sx,
+                        sy,
+                        outer_w,
+                        self.screen_w,
+                        self.screen_h,
+                        self.theme.titlebar_height,
+                    );
+
+                    if let Some(window) = self.windows.iter_mut().find(|w| w.id == *window_id) {
+                        let dx = cx - window.x;
+                        let dy = cy - window.y;
+                        window.x = cx;
+                        window.y = cy;
+
+                        for suffix in window.sdi_suffixes() {
+                            let name = window.sdi_name(suffix);
+                            if let Ok(obj) = sdi.get_mut(&name) {
+                                obj.x += dx;
+                                obj.y += dy;
+                            }
                         }
                     }
                 }
@@ -599,8 +682,26 @@ impl WindowManager {
                 let dx = x - start_cursor_x;
                 let dy = y - start_cursor_y;
 
-                let (new_x, new_y, new_w, new_h) =
+                let (mut new_x, mut new_y, mut new_w, mut new_h) =
                     compute_resize(start_geometry, edge, dx, dy, &self.theme);
+
+                // Clamp resize to screen bounds.
+                let sw = self.screen_w as i32;
+                let sh = self.screen_h as i32;
+                if new_x < 0 {
+                    new_w = new_w.saturating_sub((-new_x) as u32);
+                    new_x = 0;
+                }
+                if new_y < 0 {
+                    new_h = new_h.saturating_sub((-new_y) as u32);
+                    new_y = 0;
+                }
+                if new_x + new_w as i32 > sw {
+                    new_w = (sw - new_x) as u32;
+                }
+                if new_y + new_h as i32 > sh {
+                    new_h = (sh - new_y) as u32;
+                }
 
                 if let Some(window) = self.windows.iter_mut().find(|w| w.id == *window_id) {
                     window.x = new_x;
@@ -627,15 +728,23 @@ impl WindowManager {
         WmEvent::None
     }
 
-    /// Move a window to the top of the z-order list and update SDI z-ordering.
+    /// Move a window to the top of its z-order group and update SDI z-ordering.
+    /// Groups: normal < always_on_top < modal.
     fn focus_window_internal(&mut self, id: &str, sdi: &mut SdiRegistry) {
         if let Some(idx) = self.windows.iter().position(|w| w.id == id) {
             let window = self.windows.remove(idx);
-            self.windows.push(window);
+            let insert_at = self.z_insert_index(&window);
+            self.windows.insert(insert_at, window);
         }
 
-        // Update SDI z-ordering: move all objects of this window to top.
-        if let Some(window) = self.windows.last() {
+        // Re-establish SDI z-ordering for the entire window stack.
+        // This ensures groups (normal < always_on_top < modal) are correct
+        // and the modal overlay sits between non-modal and modal windows.
+        for window in &self.windows {
+            // Place modal overlay just before the first modal window's objects.
+            if window.modal && sdi.contains(MODAL_OVERLAY_ID) {
+                let _ = sdi.move_to_top(MODAL_OVERLAY_ID);
+            }
             for suffix in window.sdi_suffixes() {
                 let name = window.sdi_name(suffix);
                 let _ = sdi.move_to_top(&name);
@@ -643,8 +752,8 @@ impl WindowManager {
         }
 
         // Update titlebar colors for all windows.
-        for (i, window) in self.windows.iter().enumerate() {
-            let is_active = i == self.windows.len() - 1;
+        for window in &self.windows {
+            let is_active = window.id == id;
             let color = if is_active {
                 self.theme.titlebar_active_color
             } else {
@@ -1039,6 +1148,45 @@ impl WindowManager {
             self.next_cascade_y = CASCADE_OFFSET;
         }
     }
+
+    /// Compute the insertion index for a window based on z-order groups.
+    /// Groups: normal < always_on_top < modal.
+    fn z_insert_index(&self, window: &Window) -> usize {
+        if window.modal {
+            // Modal windows go to the absolute top.
+            self.windows.len()
+        } else if window.always_on_top {
+            // Above normal windows, below modal windows.
+            self.windows
+                .iter()
+                .position(|w| w.modal)
+                .unwrap_or(self.windows.len())
+        } else {
+            // Normal windows: below always_on_top and modal.
+            self.windows
+                .iter()
+                .position(|w| w.always_on_top || w.modal)
+                .unwrap_or(self.windows.len())
+        }
+    }
+
+    /// Show the semi-transparent overlay behind modal windows.
+    fn show_modal_overlay(&self, sdi: &mut SdiRegistry) {
+        if sdi.contains(MODAL_OVERLAY_ID) {
+            return;
+        }
+        let obj = sdi.create(MODAL_OVERLAY_ID.to_string());
+        obj.x = 0;
+        obj.y = 0;
+        obj.w = self.screen_w;
+        obj.h = self.screen_h;
+        obj.color = MODAL_OVERLAY_COLOR;
+    }
+
+    /// Hide and destroy the modal overlay.
+    fn hide_modal_overlay(&self, sdi: &mut SdiRegistry) {
+        let _ = sdi.destroy(MODAL_OVERLAY_ID);
+    }
 }
 
 /// Compute new geometry after a resize drag.
@@ -1103,7 +1251,48 @@ fn compute_resize(
     (x, y, w, h)
 }
 
-use oasis_types::backend::Color;
+/// Clamp a window position to keep the titlebar partially visible on screen.
+fn clamp_position(
+    x: i32,
+    y: i32,
+    outer_w: u32,
+    screen_w: u32,
+    screen_h: u32,
+    titlebar_height: u32,
+) -> (i32, i32) {
+    let sw = screen_w as i32;
+    let sh = screen_h as i32;
+    let tb_h = titlebar_height as i32;
+    let cx = x.max(MIN_VISIBLE - outer_w as i32).min(sw - MIN_VISIBLE);
+    let cy = y.max(0).min(sh - tb_h);
+    (cx, cy)
+}
+
+/// Snap position to screen edges if within [`SNAP_DISTANCE`].
+fn snap_to_edges(
+    x: i32,
+    y: i32,
+    outer_w: u32,
+    outer_h: u32,
+    screen_w: u32,
+    screen_h: u32,
+) -> (i32, i32) {
+    let sw = screen_w as i32;
+    let sh = screen_h as i32;
+    let mut sx = x;
+    let mut sy = y;
+    if sx.abs() < SNAP_DISTANCE {
+        sx = 0;
+    } else if (sx + outer_w as i32 - sw).abs() < SNAP_DISTANCE {
+        sx = sw - outer_w as i32;
+    }
+    if sy.abs() < SNAP_DISTANCE {
+        sy = 0;
+    } else if (sy + outer_h as i32 - sh).abs() < SNAP_DISTANCE {
+        sy = sh - outer_h as i32;
+    }
+    (sx, sy)
+}
 
 #[cfg(test)]
 mod tests {
@@ -1119,6 +1308,8 @@ mod tests {
             width: 200,
             height: 150,
             window_type: WindowType::AppWindow,
+            always_on_top: false,
+            modal: false,
         }
     }
 
@@ -1131,6 +1322,8 @@ mod tests {
             width: 200,
             height: 100,
             window_type: WindowType::Dialog,
+            always_on_top: false,
+            modal: false,
         }
     }
 
@@ -1403,6 +1596,8 @@ mod tests {
             width: 100,
             height: 80,
             window_type: WindowType::AppWindow,
+            always_on_top: false,
+            modal: false,
         };
         let config2 = WindowConfig {
             id: "b".to_string(),
@@ -1412,6 +1607,8 @@ mod tests {
             width: 100,
             height: 80,
             window_type: WindowType::AppWindow,
+            always_on_top: false,
+            modal: false,
         };
 
         wm.create_window(&config1, &mut sdi).unwrap();
@@ -1495,6 +1692,8 @@ mod tests {
             width: 800,
             height: 600,
             window_type: WindowType::Fullscreen,
+            always_on_top: false,
+            modal: false,
         };
         wm.create_window(&config, &mut sdi).unwrap();
 
@@ -1707,5 +1906,566 @@ mod tests {
         assert_eq!(sdi.get("w.frame").unwrap().y, moved_y);
         assert_eq!(sdi.get("w.frame").unwrap().w, resized_w);
         assert_eq!(sdi.get("w.frame").unwrap().h, resized_h);
+    }
+
+    // ---- Screen bounds enforcement tests ----
+
+    #[test]
+    fn clamp_position_keeps_titlebar_visible() {
+        let tb_h = WmTheme::default().titlebar_height;
+        // Far left: at least MIN_VISIBLE px visible.
+        let (cx, _) = clamp_position(-500, 100, 200, 480, 272, tb_h);
+        assert_eq!(cx, MIN_VISIBLE - 200);
+        // Far right.
+        let (cx, _) = clamp_position(500, 100, 200, 480, 272, tb_h);
+        assert_eq!(cx, 480 - MIN_VISIBLE);
+        // Above screen.
+        let (_, cy) = clamp_position(100, -100, 200, 480, 272, tb_h);
+        assert_eq!(cy, 0);
+        // Below screen.
+        let (_, cy) = clamp_position(100, 500, 200, 480, 272, tb_h);
+        assert_eq!(cy, 272 - tb_h as i32);
+    }
+
+    #[test]
+    fn snap_to_edges_near_left() {
+        let (sx, _) = snap_to_edges(5, 100, 200, 150, 480, 272);
+        assert_eq!(sx, 0);
+    }
+
+    #[test]
+    fn snap_to_edges_near_top() {
+        let (_, sy) = snap_to_edges(100, 5, 200, 150, 480, 272);
+        assert_eq!(sy, 0);
+    }
+
+    #[test]
+    fn snap_to_edges_near_right() {
+        // Right edge = 275 + 200 = 475. Screen = 480. Diff = 5 < 8.
+        let (sx, _) = snap_to_edges(275, 100, 200, 150, 480, 272);
+        assert_eq!(sx, 280); // 480 - 200
+    }
+
+    #[test]
+    fn snap_to_edges_near_bottom() {
+        // Bottom edge = 119 + 150 = 269. Screen = 272. Diff = 3 < 8.
+        let (_, sy) = snap_to_edges(100, 119, 200, 150, 480, 272);
+        assert_eq!(sy, 122); // 272 - 150
+    }
+
+    #[test]
+    fn snap_to_edges_no_snap_when_far() {
+        let (sx, sy) = snap_to_edges(100, 50, 200, 150, 480, 272);
+        assert_eq!(sx, 100);
+        assert_eq!(sy, 50);
+    }
+
+    #[test]
+    fn drag_clamps_to_screen_top() {
+        let mut sdi = SdiRegistry::new();
+        let mut wm = WindowManager::new(480, 272);
+        wm.create_window(&app_config("w1"), &mut sdi).unwrap();
+
+        let win = wm.get_window("w1").unwrap();
+        let (tx, ty, _tw, th) = win.titlebar_rect(&wm.theme).unwrap();
+
+        wm.handle_input(
+            &InputEvent::PointerClick {
+                x: tx + 30,
+                y: ty + th as i32 / 2,
+            },
+            &mut sdi,
+        );
+        wm.handle_input(
+            &InputEvent::CursorMove {
+                x: tx + 30,
+                y: -500,
+            },
+            &mut sdi,
+        );
+
+        let win = wm.get_window("w1").unwrap();
+        assert!(win.y >= 0, "window y={} should be >= 0", win.y);
+    }
+
+    #[test]
+    fn drag_clamps_to_screen_bottom() {
+        let mut sdi = SdiRegistry::new();
+        let mut wm = WindowManager::new(480, 272);
+        wm.create_window(&app_config("w1"), &mut sdi).unwrap();
+
+        let win = wm.get_window("w1").unwrap();
+        let (tx, ty, _tw, th) = win.titlebar_rect(&wm.theme).unwrap();
+
+        wm.handle_input(
+            &InputEvent::PointerClick {
+                x: tx + 30,
+                y: ty + th as i32 / 2,
+            },
+            &mut sdi,
+        );
+        wm.handle_input(&InputEvent::CursorMove { x: tx + 30, y: 800 }, &mut sdi);
+
+        let win = wm.get_window("w1").unwrap();
+        let max_y = 272 - wm.theme().titlebar_height as i32;
+        assert!(win.y <= max_y, "window y={} should be <= {}", win.y, max_y);
+    }
+
+    #[test]
+    fn drag_clamps_to_screen_left() {
+        let mut sdi = SdiRegistry::new();
+        let mut wm = WindowManager::new(480, 272);
+        wm.create_window(&app_config("w1"), &mut sdi).unwrap();
+
+        let win = wm.get_window("w1").unwrap();
+        let outer_w = win.outer_w;
+        let (tx, ty, _tw, th) = win.titlebar_rect(&wm.theme).unwrap();
+
+        wm.handle_input(
+            &InputEvent::PointerClick {
+                x: tx + 30,
+                y: ty + th as i32 / 2,
+            },
+            &mut sdi,
+        );
+        wm.handle_input(
+            &InputEvent::CursorMove {
+                x: -1000,
+                y: ty + th as i32 / 2,
+            },
+            &mut sdi,
+        );
+
+        let win = wm.get_window("w1").unwrap();
+        let min_x = MIN_VISIBLE - outer_w as i32;
+        assert!(win.x >= min_x, "window x={} should be >= {}", win.x, min_x);
+    }
+
+    #[test]
+    fn drag_clamps_to_screen_right() {
+        let mut sdi = SdiRegistry::new();
+        let mut wm = WindowManager::new(480, 272);
+        wm.create_window(&app_config("w1"), &mut sdi).unwrap();
+
+        let win = wm.get_window("w1").unwrap();
+        let (tx, ty, _tw, th) = win.titlebar_rect(&wm.theme).unwrap();
+
+        wm.handle_input(
+            &InputEvent::PointerClick {
+                x: tx + 30,
+                y: ty + th as i32 / 2,
+            },
+            &mut sdi,
+        );
+        wm.handle_input(
+            &InputEvent::CursorMove {
+                x: 2000,
+                y: ty + th as i32 / 2,
+            },
+            &mut sdi,
+        );
+
+        let win = wm.get_window("w1").unwrap();
+        let max_x = 480 - MIN_VISIBLE;
+        assert!(win.x <= max_x, "window x={} should be <= {}", win.x, max_x);
+    }
+
+    #[test]
+    fn move_window_clamps_to_bounds() {
+        let mut sdi = SdiRegistry::new();
+        let mut wm = WindowManager::new(480, 272);
+        wm.create_window(&app_config("w1"), &mut sdi).unwrap();
+
+        wm.move_window("w1", 2000, 2000, &mut sdi).unwrap();
+
+        let win = wm.get_window("w1").unwrap();
+        assert!(win.x <= 480 - MIN_VISIBLE);
+        let max_y = 272 - wm.theme().titlebar_height as i32;
+        assert!(win.y <= max_y);
+    }
+
+    #[test]
+    fn move_window_clamps_negative() {
+        let mut sdi = SdiRegistry::new();
+        let mut wm = WindowManager::new(480, 272);
+        wm.create_window(&app_config("w1"), &mut sdi).unwrap();
+
+        wm.move_window("w1", -2000, -2000, &mut sdi).unwrap();
+
+        let win = wm.get_window("w1").unwrap();
+        assert!(win.y >= 0);
+        assert!(win.x >= MIN_VISIBLE - win.outer_w as i32);
+    }
+
+    #[test]
+    fn resize_clamps_east_to_screen() {
+        let mut sdi = SdiRegistry::new();
+        let mut wm = WindowManager::new(480, 272);
+        wm.create_window(&app_config("w1"), &mut sdi).unwrap();
+
+        let win = wm.get_window("w1").unwrap();
+        let right_edge = win.x + win.outer_w as i32 - 2;
+        let mid_y = win.y + win.outer_h as i32 / 2;
+
+        wm.handle_input(
+            &InputEvent::PointerClick {
+                x: right_edge,
+                y: mid_y,
+            },
+            &mut sdi,
+        );
+        wm.handle_input(&InputEvent::CursorMove { x: 1000, y: mid_y }, &mut sdi);
+
+        let win = wm.get_window("w1").unwrap();
+        assert!(
+            win.x + win.outer_w as i32 <= 480,
+            "right edge {} should be <= 480",
+            win.x + win.outer_w as i32,
+        );
+    }
+
+    #[test]
+    fn resize_clamps_south_to_screen() {
+        let mut sdi = SdiRegistry::new();
+        let mut wm = WindowManager::new(480, 272);
+        wm.create_window(&app_config("w1"), &mut sdi).unwrap();
+
+        let win = wm.get_window("w1").unwrap();
+        let bottom_edge = win.y + win.outer_h as i32 - 2;
+        let mid_x = win.x + win.outer_w as i32 / 2;
+
+        wm.handle_input(
+            &InputEvent::PointerClick {
+                x: mid_x,
+                y: bottom_edge,
+            },
+            &mut sdi,
+        );
+        wm.handle_input(&InputEvent::CursorMove { x: mid_x, y: 1000 }, &mut sdi);
+
+        let win = wm.get_window("w1").unwrap();
+        assert!(
+            win.y + win.outer_h as i32 <= 272,
+            "bottom edge {} should be <= 272",
+            win.y + win.outer_h as i32,
+        );
+    }
+
+    // ---- Titlebar gradient tests ----
+
+    #[test]
+    fn gradient_set_on_creation() {
+        let mut sdi = SdiRegistry::new();
+        let theme = WmTheme {
+            titlebar_gradient: true,
+            titlebar_gradient_top: Some(Color::rgb(100, 100, 200)),
+            titlebar_gradient_bottom: Some(Color::rgb(50, 50, 100)),
+            ..WmTheme::default()
+        };
+        let mut wm = WindowManager::with_theme(800, 600, theme);
+        wm.create_window(&app_config("w1"), &mut sdi).unwrap();
+
+        let tb = sdi.get("w1.titlebar").unwrap();
+        assert_eq!(tb.gradient_top, Some(Color::rgb(100, 100, 200)));
+        assert_eq!(tb.gradient_bottom, Some(Color::rgb(50, 50, 100)));
+    }
+
+    #[test]
+    fn gradient_switches_on_focus_change() {
+        let mut sdi = SdiRegistry::new();
+        let theme = WmTheme {
+            titlebar_gradient: true,
+            titlebar_gradient_top: Some(Color::rgb(100, 100, 200)),
+            titlebar_gradient_bottom: Some(Color::rgb(50, 50, 100)),
+            titlebar_inactive_gradient_top: Some(Color::rgb(80, 80, 80)),
+            titlebar_inactive_gradient_bottom: Some(Color::rgb(40, 40, 40)),
+            ..WmTheme::default()
+        };
+        let mut wm = WindowManager::with_theme(800, 600, theme);
+        wm.create_window(&app_config("w1"), &mut sdi).unwrap();
+        wm.create_window(&app_config("w2"), &mut sdi).unwrap();
+
+        // w2 is active, w1 is inactive.
+        let w1_tb = sdi.get("w1.titlebar").unwrap();
+        assert_eq!(w1_tb.gradient_top, Some(Color::rgb(80, 80, 80)));
+        assert_eq!(w1_tb.gradient_bottom, Some(Color::rgb(40, 40, 40)));
+
+        let w2_tb = sdi.get("w2.titlebar").unwrap();
+        assert_eq!(w2_tb.gradient_top, Some(Color::rgb(100, 100, 200)));
+        assert_eq!(w2_tb.gradient_bottom, Some(Color::rgb(50, 50, 100)));
+
+        // Focus w1.
+        wm.focus_window("w1", &mut sdi).unwrap();
+        let w1_tb = sdi.get("w1.titlebar").unwrap();
+        assert_eq!(w1_tb.gradient_top, Some(Color::rgb(100, 100, 200)));
+        let w2_tb = sdi.get("w2.titlebar").unwrap();
+        assert_eq!(w2_tb.gradient_top, Some(Color::rgb(80, 80, 80)));
+    }
+
+    #[test]
+    fn no_gradient_when_disabled() {
+        let mut sdi = SdiRegistry::new();
+        let theme = WmTheme {
+            titlebar_gradient: false,
+            ..WmTheme::default()
+        };
+        let mut wm = WindowManager::with_theme(800, 600, theme);
+        wm.create_window(&app_config("w1"), &mut sdi).unwrap();
+
+        let tb = sdi.get("w1.titlebar").unwrap();
+        assert_eq!(tb.gradient_top, None);
+        assert_eq!(tb.gradient_bottom, None);
+    }
+
+    #[test]
+    fn gradient_auto_derives_from_base_color() {
+        let mut sdi = SdiRegistry::new();
+        let theme = WmTheme {
+            titlebar_gradient: true,
+            titlebar_gradient_top: None, // Will auto-derive.
+            titlebar_gradient_bottom: None,
+            ..WmTheme::default()
+        };
+        let mut wm = WindowManager::with_theme(800, 600, theme);
+        wm.create_window(&app_config("w1"), &mut sdi).unwrap();
+
+        let tb = sdi.get("w1.titlebar").unwrap();
+        // Auto-derived: top = lighten(active_color, 0.1), bottom = active_color.
+        assert!(tb.gradient_top.is_some());
+        assert!(tb.gradient_bottom.is_some());
+        assert_eq!(tb.gradient_bottom, Some(wm.theme().titlebar_active_color));
+    }
+
+    #[test]
+    fn gradient_cleared_on_focus_when_disabled() {
+        let mut sdi = SdiRegistry::new();
+        let theme = WmTheme {
+            titlebar_gradient: false,
+            ..WmTheme::default()
+        };
+        let mut wm = WindowManager::with_theme(800, 600, theme);
+        wm.create_window(&app_config("w1"), &mut sdi).unwrap();
+        wm.create_window(&app_config("w2"), &mut sdi).unwrap();
+
+        // Focus w1 -- gradients should remain None.
+        wm.focus_window("w1", &mut sdi).unwrap();
+        let w1_tb = sdi.get("w1.titlebar").unwrap();
+        assert_eq!(w1_tb.gradient_top, None);
+        let w2_tb = sdi.get("w2.titlebar").unwrap();
+        assert_eq!(w2_tb.gradient_top, None);
+    }
+
+    // ---- Always-on-top and modal tests ----
+
+    fn aot_config(id: &str) -> WindowConfig {
+        WindowConfig {
+            id: id.to_string(),
+            title: id.to_string(),
+            x: Some(10),
+            y: Some(10),
+            width: 200,
+            height: 150,
+            window_type: WindowType::AppWindow,
+            always_on_top: true,
+            modal: false,
+        }
+    }
+
+    fn modal_config(id: &str) -> WindowConfig {
+        WindowConfig {
+            id: id.to_string(),
+            title: id.to_string(),
+            x: Some(50),
+            y: Some(50),
+            width: 200,
+            height: 100,
+            window_type: WindowType::Dialog,
+            always_on_top: false,
+            modal: true,
+        }
+    }
+
+    #[test]
+    fn always_on_top_stays_above_normal() {
+        let mut sdi = SdiRegistry::new();
+        let mut wm = WindowManager::new(800, 600);
+        wm.create_window(&aot_config("aot"), &mut sdi).unwrap();
+        wm.create_window(&app_config("normal"), &mut sdi).unwrap();
+
+        // Even though 'normal' was created after 'aot', 'aot' should be above.
+        let aot_idx = wm.windows.iter().position(|w| w.id == "aot").unwrap();
+        let normal_idx = wm.windows.iter().position(|w| w.id == "normal").unwrap();
+        assert!(
+            aot_idx > normal_idx,
+            "always_on_top should be above normal: aot={aot_idx}, normal={normal_idx}"
+        );
+    }
+
+    #[test]
+    fn focus_normal_stays_below_always_on_top() {
+        let mut sdi = SdiRegistry::new();
+        let mut wm = WindowManager::new(800, 600);
+        wm.create_window(&app_config("n1"), &mut sdi).unwrap();
+        wm.create_window(&aot_config("aot"), &mut sdi).unwrap();
+        wm.create_window(&app_config("n2"), &mut sdi).unwrap();
+
+        // Focus n1 -- it should move to the top of normal group, but below aot.
+        wm.focus_window("n1", &mut sdi).unwrap();
+        let aot_idx = wm.windows.iter().position(|w| w.id == "aot").unwrap();
+        let n1_idx = wm.windows.iter().position(|w| w.id == "n1").unwrap();
+        assert!(
+            n1_idx < aot_idx,
+            "normal window should stay below always_on_top: n1={n1_idx}, aot={aot_idx}"
+        );
+    }
+
+    #[test]
+    fn modal_stays_above_always_on_top() {
+        let mut sdi = SdiRegistry::new();
+        let mut wm = WindowManager::new(800, 600);
+        wm.create_window(&app_config("normal"), &mut sdi).unwrap();
+        wm.create_window(&aot_config("aot"), &mut sdi).unwrap();
+        wm.create_window(&modal_config("modal"), &mut sdi).unwrap();
+
+        let modal_idx = wm.windows.iter().position(|w| w.id == "modal").unwrap();
+        let aot_idx = wm.windows.iter().position(|w| w.id == "aot").unwrap();
+        assert!(
+            modal_idx > aot_idx,
+            "modal should be above always_on_top: modal={modal_idx}, aot={aot_idx}"
+        );
+    }
+
+    #[test]
+    fn modal_creates_overlay() {
+        let mut sdi = SdiRegistry::new();
+        let mut wm = WindowManager::new(800, 600);
+        wm.create_window(&app_config("bg"), &mut sdi).unwrap();
+        assert!(!sdi.contains(MODAL_OVERLAY_ID));
+
+        wm.create_window(&modal_config("dlg"), &mut sdi).unwrap();
+        assert!(sdi.contains(MODAL_OVERLAY_ID));
+    }
+
+    #[test]
+    fn modal_overlay_removed_on_close() {
+        let mut sdi = SdiRegistry::new();
+        let mut wm = WindowManager::new(800, 600);
+        wm.create_window(&app_config("bg"), &mut sdi).unwrap();
+        wm.create_window(&modal_config("dlg"), &mut sdi).unwrap();
+        assert!(sdi.contains(MODAL_OVERLAY_ID));
+
+        wm.close_window("dlg", &mut sdi).unwrap();
+        assert!(!sdi.contains(MODAL_OVERLAY_ID));
+    }
+
+    #[test]
+    fn modal_blocks_click_on_normal_window() {
+        let mut sdi = SdiRegistry::new();
+        let mut wm = WindowManager::new(800, 600);
+        wm.create_window(&app_config("bg"), &mut sdi).unwrap();
+        wm.create_window(&modal_config("dlg"), &mut sdi).unwrap();
+
+        // Click on the background window's content area.
+        let bg = wm.get_window("bg").unwrap();
+        let (cx, cy, _cw, _ch) = bg.content_rect(wm.theme());
+        let event = InputEvent::PointerClick {
+            x: cx + 10,
+            y: cy + 10,
+        };
+        let result = wm.handle_input(&event, &mut sdi);
+        assert_eq!(
+            result,
+            WmEvent::None,
+            "click on non-modal should be blocked"
+        );
+    }
+
+    #[test]
+    fn modal_allows_click_on_itself() {
+        let mut sdi = SdiRegistry::new();
+        let mut wm = WindowManager::new(800, 600);
+        wm.create_window(&app_config("bg"), &mut sdi).unwrap();
+        wm.create_window(&modal_config("dlg"), &mut sdi).unwrap();
+
+        // Click on the modal window's content area.
+        let dlg = wm.get_window("dlg").unwrap();
+        let (cx, cy, _cw, _ch) = dlg.content_rect(wm.theme());
+        let event = InputEvent::PointerClick {
+            x: cx + 10,
+            y: cy + 10,
+        };
+        let result = wm.handle_input(&event, &mut sdi);
+        assert!(
+            matches!(result, WmEvent::ContentClick(ref id, _, _) if id == "dlg"),
+            "click on modal should go through, got {result:?}"
+        );
+    }
+
+    #[test]
+    fn modal_blocks_desktop_click() {
+        let mut sdi = SdiRegistry::new();
+        let mut wm = WindowManager::new(800, 600);
+        wm.create_window(&modal_config("dlg"), &mut sdi).unwrap();
+
+        let event = InputEvent::PointerClick { x: 700, y: 500 };
+        let result = wm.handle_input(&event, &mut sdi);
+        assert_eq!(result, WmEvent::None, "desktop click should be blocked");
+    }
+
+    #[test]
+    fn has_modal_tracks_state() {
+        let mut sdi = SdiRegistry::new();
+        let mut wm = WindowManager::new(800, 600);
+        assert!(!wm.has_modal());
+
+        wm.create_window(&modal_config("m1"), &mut sdi).unwrap();
+        assert!(wm.has_modal());
+
+        wm.close_window("m1", &mut sdi).unwrap();
+        assert!(!wm.has_modal());
+    }
+
+    #[test]
+    fn topmost_modal_returns_correct_window() {
+        let mut sdi = SdiRegistry::new();
+        let mut wm = WindowManager::new(800, 600);
+        assert_eq!(wm.topmost_modal(), None);
+
+        wm.create_window(&modal_config("m1"), &mut sdi).unwrap();
+        assert_eq!(wm.topmost_modal(), Some("m1"));
+
+        wm.create_window(&modal_config("m2"), &mut sdi).unwrap();
+        assert_eq!(wm.topmost_modal(), Some("m2"));
+
+        wm.close_window("m2", &mut sdi).unwrap();
+        assert_eq!(wm.topmost_modal(), Some("m1"));
+    }
+
+    #[test]
+    fn modal_overlay_persists_with_multiple_modals() {
+        let mut sdi = SdiRegistry::new();
+        let mut wm = WindowManager::new(800, 600);
+        wm.create_window(&modal_config("m1"), &mut sdi).unwrap();
+        wm.create_window(&modal_config("m2"), &mut sdi).unwrap();
+
+        // Close one modal -- overlay should persist.
+        wm.close_window("m1", &mut sdi).unwrap();
+        assert!(sdi.contains(MODAL_OVERLAY_ID));
+
+        // Close last modal -- overlay removed.
+        wm.close_window("m2", &mut sdi).unwrap();
+        assert!(!sdi.contains(MODAL_OVERLAY_ID));
+    }
+
+    #[test]
+    fn close_all_removes_modal_overlay() {
+        let mut sdi = SdiRegistry::new();
+        let mut wm = WindowManager::new(800, 600);
+        wm.create_window(&app_config("bg"), &mut sdi).unwrap();
+        wm.create_window(&modal_config("m"), &mut sdi).unwrap();
+        assert!(sdi.contains(MODAL_OVERLAY_ID));
+
+        wm.close_all(&mut sdi);
+        assert!(!sdi.contains(MODAL_OVERLAY_ID));
     }
 }

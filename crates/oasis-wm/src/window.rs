@@ -49,6 +49,10 @@ pub struct WindowConfig {
     pub height: u32,
     /// Window type (determines available operations).
     pub window_type: WindowType,
+    /// Pin this window above normal windows in z-order.
+    pub always_on_top: bool,
+    /// Block input to all windows below this one.
+    pub modal: bool,
 }
 
 /// Visual theme parameters for window rendering.
@@ -233,6 +237,10 @@ pub struct Window {
     pub outer_h: u32,
     /// Saved geometry for restoring from maximized state.
     pub saved_geometry: Option<Geometry>,
+    /// Pin this window above normal windows in z-order.
+    pub always_on_top: bool,
+    /// Block input to all windows below this one.
+    pub modal: bool,
 }
 
 impl Window {
@@ -264,6 +272,8 @@ impl Window {
             outer_w,
             outer_h,
             saved_geometry: None,
+            always_on_top: config.always_on_top,
+            modal: config.modal,
         }
     }
 
@@ -488,6 +498,8 @@ mod tests {
             width: 200,
             height: 150,
             window_type: WindowType::AppWindow,
+            always_on_top: false,
+            modal: false,
         }
     }
 
@@ -516,6 +528,8 @@ mod tests {
             width: 480,
             height: 272,
             window_type: WindowType::Fullscreen,
+            always_on_top: false,
+            modal: false,
         };
         let win = Window::new(&config, 0, 0, &theme);
         assert_eq!(win.outer_w, 480);
@@ -573,6 +587,8 @@ mod tests {
             width: 300,
             height: 100,
             window_type: WindowType::Dialog,
+            always_on_top: false,
+            modal: false,
         };
         let win = Window::new(&config, 0, 0, &theme);
         assert!(win.has_close_button());
@@ -592,6 +608,8 @@ mod tests {
             width: 80,
             height: 40,
             window_type: WindowType::FloatingWidget,
+            always_on_top: false,
+            modal: false,
         };
         let win = Window::new(&config, 0, 0, &theme);
         assert!(win.is_draggable());
@@ -633,6 +651,8 @@ mod tests {
             width: 480,
             height: 32,
             window_type: WindowType::Panel,
+            always_on_top: false,
+            modal: false,
         };
         let theme = WmTheme::default();
         let win = Window::new(&config, 0, 0, &theme);

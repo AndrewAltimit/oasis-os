@@ -710,6 +710,7 @@ dependencies = [
  "oasis-skin",
  "oasis-types",
  "oasis-vfs",
+ "proptest",
 ]
 
 [[package]]

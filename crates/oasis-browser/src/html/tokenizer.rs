@@ -2220,4 +2220,120 @@ mod tests {
         let tokens = tok("<br/><hr/><img/>");
         assert_eq!(tokens.len(), 3);
     }
+
+    mod prop {
+        use super::*;
+        use proptest::prelude::*;
+
+        proptest! {
+            /// Tokenizing arbitrary ASCII input never panics.
+            #[test]
+            fn tokenize_never_panics(input in "[ -~]{0,120}") {
+                let mut t = Tokenizer::new(&input);
+                let _ = t.tokenize();
+            }
+
+            /// Tokenizing arbitrary UTF-8 input never panics.
+            #[test]
+            fn tokenize_unicode_never_panics(input in ".{0,60}") {
+                let mut t = Tokenizer::new(&input);
+                let _ = t.tokenize();
+            }
+
+            /// A plain text input produces at least one Character token.
+            #[test]
+            fn plain_text_produces_character_token(
+                s in "[a-zA-Z0-9 ]{1,40}",
+            ) {
+                let mut t = Tokenizer::new(&s);
+                let tokens = t.tokenize();
+                let has_char = tokens.iter().any(|tok| {
+                    matches!(tok, Token::Character(txt) if !txt.is_empty())
+                });
+                prop_assert!(
+                    has_char,
+                    "plain text should produce a Character token",
+                );
+            }
+
+            /// A simple open tag tokenizes to at least one StartTag.
+            #[test]
+            fn simple_tag_produces_start_tag(
+                tag in "[a-z]{1,10}",
+            ) {
+                let html = format!("<{tag}>");
+                let mut t = Tokenizer::new(&html);
+                let tokens = t.tokenize();
+                let has_start = tokens.iter().any(|tok| match tok {
+                    Token::StartTag(st) => st.name == tag,
+                    _ => false,
+                });
+                prop_assert!(
+                    has_start,
+                    "should produce a StartTag for the tag name",
+                );
+            }
+
+            /// Matching open/close tags produce both start and end tokens.
+            #[test]
+            fn matching_tags_produce_both(
+                tag in "[a-z]{1,8}",
+            ) {
+                let html = format!("<{tag}></{tag}>");
+                let mut t = Tokenizer::new(&html);
+                let tokens = t.tokenize();
+                let has_start = tokens.iter().any(|tok| match tok {
+                    Token::StartTag(st) => st.name == tag,
+                    _ => false,
+                });
+                let has_end = tokens.iter().any(|tok| match tok {
+                    Token::EndTag(et) => et.name == tag,
+                    _ => false,
+                });
+                prop_assert!(has_start, "should have StartTag");
+                prop_assert!(has_end, "should have EndTag");
+            }
+
+            /// Numeric character references produce Character tokens.
+            #[test]
+            fn numeric_char_ref(codepoint in 32u32..127) {
+                let html = format!("&#{codepoint};");
+                let mut t = Tokenizer::new(&html);
+                let tokens = t.tokenize();
+                let has_char = tokens.iter().any(|tok| {
+                    matches!(tok, Token::Character(txt) if !txt.is_empty())
+                });
+                prop_assert!(
+                    has_char,
+                    "numeric ref should produce a Character token",
+                );
+            }
+
+            /// Deeply nested tags don't panic.
+            #[test]
+            fn deep_nesting_no_panic(depth in 1usize..30) {
+                let open: String = (0..depth).map(|_| "<div>").collect();
+                let close: String = (0..depth).map(|_| "</div>").collect();
+                let html = format!("{open}text{close}");
+                let mut t = Tokenizer::new(&html);
+                let _ = t.tokenize();
+            }
+
+            /// Self-closing tags produce a StartTag with self_closing set.
+            #[test]
+            fn self_closing_tag(tag in "[a-z]{1,8}") {
+                let html = format!("<{tag}/>");
+                let mut t = Tokenizer::new(&html);
+                let tokens = t.tokenize();
+                let has_self_closing = tokens.iter().any(|tok| match tok {
+                    Token::StartTag(st) => st.name == tag && st.self_closing,
+                    _ => false,
+                });
+                prop_assert!(
+                    has_self_closing,
+                    "should produce a self-closing StartTag",
+                );
+            }
+        }
+    }
 }

@@ -1981,6 +1981,8 @@ fn open_app_window(wm: &mut WindowManager, sdi: &mut SdiRegistry, app_id: &str, 
         width: 300,
         height: 180,
         window_type: WindowType::AppWindow,
+        always_on_top: false,
+        modal: false,
     };
     let _ = wm.create_window(&config, sdi);
 }

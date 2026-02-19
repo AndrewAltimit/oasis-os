@@ -1960,4 +1960,95 @@ mod tests {
         // The first rule should still parse.
         assert!(!sheet.rules.is_empty());
     }
+
+    mod prop {
+        use super::*;
+        use proptest::prelude::*;
+
+        proptest! {
+            /// Parsing arbitrary CSS never panics.
+            #[test]
+            fn parse_never_panics(input in "[ -~]{0,120}") {
+                let _ = Stylesheet::parse(&input);
+            }
+
+            /// Parsing inline styles never panics.
+            #[test]
+            fn parse_inline_never_panics(input in "[ -~]{0,80}") {
+                let _ = parse_inline_style(&input);
+            }
+
+            /// Valid 3-digit hex colors parse successfully.
+            #[test]
+            fn hex_color_3_digit(
+                r in "[0-9a-fA-F]",
+                g in "[0-9a-fA-F]",
+                b in "[0-9a-fA-F]",
+            ) {
+                let hex = format!("#{r}{g}{b}");
+                let color = parse_hex_color(&hex);
+                prop_assert!(
+                    color.is_some(),
+                    "valid 3-digit hex '{hex}' should parse",
+                );
+            }
+
+            /// Valid 6-digit hex colors parse successfully.
+            #[test]
+            fn hex_color_6_digit(
+                r in "[0-9a-fA-F]{2}",
+                g in "[0-9a-fA-F]{2}",
+                b in "[0-9a-fA-F]{2}",
+            ) {
+                let hex = format!("#{r}{g}{b}");
+                let color = parse_hex_color(&hex);
+                prop_assert!(
+                    color.is_some(),
+                    "valid 6-digit hex '{hex}' should parse",
+                );
+            }
+
+            /// Invalid hex strings (wrong length) return None.
+            #[test]
+            fn hex_color_bad_length(
+                s in "[0-9a-f]{1,2}|[0-9a-f]{5}|[0-9a-f]{7}|[0-9a-f]{9,12}",
+            ) {
+                let hex = format!("#{s}");
+                prop_assert!(
+                    parse_hex_color(&hex).is_none(),
+                    "invalid-length hex '{hex}' should not parse",
+                );
+            }
+
+            /// Named color lookup is case-insensitive.
+            #[test]
+            fn named_color_case_insensitive(
+                name in proptest::sample::select(vec![
+                    "red".to_string(), "Red".to_string(), "RED".to_string(),
+                    "blue".to_string(), "Blue".to_string(), "BLUE".to_string(),
+                    "green".to_string(), "Green".to_string(), "GREEN".to_string(),
+                    "white".to_string(), "White".to_string(),
+                    "black".to_string(), "Black".to_string(), "BLACK".to_string(),
+                ]),
+            ) {
+                prop_assert!(
+                    named_color(&name).is_some(),
+                    "named color '{}' should be recognized", name,
+                );
+            }
+
+            /// A valid rule with random property name parses without panic.
+            #[test]
+            fn rule_with_random_property(
+                prop_name in "[a-z\\-]{1,20}",
+                value in "[a-z0-9]{1,10}",
+            ) {
+                let css = format!("p {{ {prop_name}: {value}; }}");
+                let sheet = Stylesheet::parse(&css);
+                // Should parse the rule (property may not be recognized,
+                // but shouldn't panic).
+                prop_assert!(!sheet.rules.is_empty());
+            }
+        }
+    }
 }

@@ -184,6 +184,8 @@ pub struct LayoutBox {
     pub style: ComputedStyle,
     /// Text content for inline leaf boxes representing DOM text nodes.
     pub text: Option<String>,
+    /// Whether this box or any descendant needs relayout.
+    pub dirty: bool,
 }
 
 impl LayoutBox {
@@ -196,6 +198,7 @@ impl LayoutBox {
             node,
             style,
             text: None,
+            dirty: true,
         }
     }
 
@@ -214,6 +217,19 @@ impl LayoutBox {
     /// Returns true if this box is inline-level.
     pub fn is_inline_level(&self) -> bool {
         matches!(self.box_type, BoxType::Inline | BoxType::InlineBlock)
+    }
+
+    /// Mark this box and all descendants as clean (layout complete).
+    pub fn mark_clean(&mut self) {
+        self.dirty = false;
+        for child in &mut self.children {
+            child.mark_clean();
+        }
+    }
+
+    /// Mark this box as needing relayout.
+    pub fn mark_dirty(&mut self) {
+        self.dirty = true;
     }
 }
 

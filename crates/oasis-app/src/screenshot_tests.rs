@@ -519,6 +519,8 @@ fn run_skin_scenario(
                     width: 200,
                     height: 150,
                     window_type: WindowType::AppWindow,
+                    always_on_top: false,
+                    modal: false,
                 },
                 WindowConfig {
                     id: "win2".to_string(),
@@ -528,6 +530,8 @@ fn run_skin_scenario(
                     width: 180,
                     height: 130,
                     window_type: WindowType::AppWindow,
+                    always_on_top: false,
+                    modal: false,
                 },
                 WindowConfig {
                     id: "win3".to_string(),
@@ -537,6 +541,8 @@ fn run_skin_scenario(
                     width: 220,
                     height: 140,
                     window_type: WindowType::AppWindow,
+                    always_on_top: false,
+                    modal: false,
                 },
             ];
             for cfg in &configs {
@@ -917,6 +923,8 @@ fn run_wm_scenario(
                 width: 200,
                 height: 150,
                 window_type: WindowType::AppWindow,
+                always_on_top: false,
+                modal: false,
             };
             wm.create_window(&cfg, &mut sdi)?;
             wm.maximize_window("max_win", &mut sdi)?;
@@ -936,6 +944,8 @@ fn run_wm_scenario(
                     width: 200,
                     height: 140,
                     window_type: WindowType::AppWindow,
+                    always_on_top: false,
+                    modal: false,
                 };
                 wm.create_window(&cfg, &mut sdi)?;
             }
@@ -951,6 +961,8 @@ fn run_wm_scenario(
                 width: 260,
                 height: 180,
                 window_type: WindowType::AppWindow,
+                always_on_top: false,
+                modal: false,
             };
             wm.create_window(&app_cfg, &mut sdi)?;
 
@@ -962,6 +974,8 @@ fn run_wm_scenario(
                 width: 180,
                 height: 100,
                 window_type: WindowType::Dialog,
+                always_on_top: false,
+                modal: false,
             };
             wm.create_window(&dlg_cfg, &mut sdi)?;
         },

@@ -1358,4 +1358,82 @@ mod tests {
         };
         assert!(matches_selector(&doc, 3, &sel));
     }
+
+    mod prop {
+        use super::*;
+        use proptest::prelude::*;
+
+        proptest! {
+            /// "odd" parses to (2, 1) and "even" parses to (2, 0).
+            #[test]
+            fn an_plus_b_odd_even(
+                input in proptest::sample::select(vec![
+                    "odd".to_string(), "ODD".to_string(), "Odd".to_string(),
+                    "even".to_string(), "EVEN".to_string(), "Even".to_string(),
+                ]),
+            ) {
+                let (a, b) = parse_an_plus_b(&input);
+                let lower = input.to_ascii_lowercase();
+                if lower == "odd" {
+                    prop_assert_eq!((a, b), (2, 1));
+                } else {
+                    prop_assert_eq!((a, b), (2, 0));
+                }
+            }
+
+            /// A plain positive integer parses as (0, n).
+            #[test]
+            fn an_plus_b_plain_number(n in 1i32..100) {
+                let (a, b) = parse_an_plus_b(&n.to_string());
+                prop_assert_eq!(a, 0);
+                prop_assert_eq!(b, n);
+            }
+
+            /// "An" form parses as (A, 0).
+            #[test]
+            fn an_plus_b_an_form(coeff in 1i32..20) {
+                let input = format!("{coeff}n");
+                let (a, b) = parse_an_plus_b(&input);
+                prop_assert_eq!(a, coeff);
+                prop_assert_eq!(b, 0);
+            }
+
+            /// "An+B" form parses correctly.
+            #[test]
+            fn an_plus_b_full_form(
+                coeff in 1i32..20,
+                offset in 0i32..20,
+            ) {
+                let input = format!("{coeff}n+{offset}");
+                let (a, b) = parse_an_plus_b(&input);
+                prop_assert_eq!(a, coeff);
+                prop_assert_eq!(b, offset);
+            }
+
+            /// matches_an_plus_b: if a==0, only index==b matches.
+            #[test]
+            fn matches_an_plus_b_a_zero(b in 1i32..50, index in 1i32..50) {
+                let result = matches_an_plus_b(0, b, index);
+                prop_assert_eq!(result, index == b);
+            }
+
+            /// matches_an_plus_b: index == a*1 + b always matches.
+            #[test]
+            fn matches_an_plus_b_first_match(a in 1i32..20, b in 0i32..10) {
+                let index = a + b;
+                if index > 0 {
+                    prop_assert!(
+                        matches_an_plus_b(a, b, index),
+                        "{a}n+{b} should match index {index}",
+                    );
+                }
+            }
+
+            /// parse_an_plus_b never panics on arbitrary ASCII.
+            #[test]
+            fn an_plus_b_never_panics(input in "[ -~]{0,30}") {
+                let _ = parse_an_plus_b(&input);
+            }
+        }
+    }
 }

@@ -556,4 +556,69 @@ mod tests {
         let output = run_startup(&reg, &mut env).unwrap();
         assert_eq!(output, vec!["booted"]);
     }
+
+    mod prop {
+        use super::*;
+        use proptest::prelude::*;
+
+        proptest! {
+            /// parse_script is idempotent: parsing the output joined by
+            /// newlines yields the same result.
+            #[test]
+            fn parse_script_idempotent(src in ".{0,200}") {
+                let first = parse_script(&src);
+                let rejoined = first.join("\n");
+                let second = parse_script(&rejoined);
+                prop_assert_eq!(first, second);
+            }
+
+            /// No output line starts with '#'.
+            #[test]
+            fn parse_script_no_comments(src in ".{0,200}") {
+                let lines = parse_script(&src);
+                for line in &lines {
+                    prop_assert!(
+                        !line.starts_with('#'),
+                        "output line should not start with '#': {line}",
+                    );
+                }
+            }
+
+            /// No output line is empty or whitespace-only.
+            #[test]
+            fn parse_script_no_blanks(src in ".{0,200}") {
+                let lines = parse_script(&src);
+                for line in &lines {
+                    prop_assert!(
+                        !line.trim().is_empty(),
+                        "output line should not be blank: '{line}'",
+                    );
+                }
+            }
+
+            /// All output lines are trimmed (no leading/trailing whitespace).
+            #[test]
+            fn parse_script_trimmed(src in ".{0,200}") {
+                let lines = parse_script(&src);
+                for line in &lines {
+                    prop_assert_eq!(
+                        line.as_str(),
+                        line.trim(),
+                        "output line should be trimmed",
+                    );
+                }
+            }
+
+            /// Output line count <= input line count.
+            #[test]
+            fn parse_script_count_bounded(src in ".{0,200}") {
+                let input_lines = src.lines().count();
+                let output_lines = parse_script(&src).len();
+                prop_assert!(
+                    output_lines <= input_lines,
+                    "output lines ({output_lines}) should be <= input lines ({input_lines})",
+                );
+            }
+        }
+    }
 }

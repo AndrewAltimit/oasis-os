@@ -1,0 +1,85 @@
+---
+name: Fuzz
+
+on:
+  schedule:
+    # Run nightly at 03:00 UTC.
+    - cron: "0 3 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: fuzz-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  fuzz:
+    name: Fuzz (${{ matrix.target }})
+    runs-on: self-hosted
+    timeout-minutes: 20
+
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - html_tokenizer
+          - css_parser
+          - gemini_parser
+          - http_response
+          - skin_toml
+          - pbp_parser
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install cargo-fuzz
+        run: |
+          cargo install cargo-fuzz --locked 2>/dev/null || true
+
+      - name: Run fuzzer (${{ matrix.target }})
+        working-directory: crates/oasis-core/fuzz
+        run: |
+          cargo +nightly fuzz run ${{ matrix.target }} -- \
+            -max_total_time=60 \
+            -max_len=4096 \
+            2>&1 | tee fuzz_output.txt
+
+      - name: Check for crashes
+        if: always()
+        working-directory: crates/oasis-core/fuzz
+        run: |
+          CRASH_DIR="artifacts/${{ matrix.target }}"
+          if [ -d "$CRASH_DIR" ] && [ "$(ls -A "$CRASH_DIR" 2>/dev/null)" ]; then
+            echo "::error::Fuzzer found crashes in ${{ matrix.target }}"
+            ls -la "$CRASH_DIR"
+            for f in "$CRASH_DIR"/*; do
+              echo "--- $f ---"
+              xxd "$f" | head -20
+            done
+            exit 1
+          else
+            echo "No crashes found for ${{ matrix.target }}"
+          fi
+
+      - name: Upload crash artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-crashes-${{ matrix.target }}
+          path: crates/oasis-core/fuzz/artifacts/
+          retention-days: 30
+
+      - name: Fuzz summary
+        if: always()
+        working-directory: crates/oasis-core/fuzz
+        run: |
+          echo "### Fuzz: ${{ matrix.target }}" >> $GITHUB_STEP_SUMMARY
+          if [ -f fuzz_output.txt ]; then
+            RUNS=$(grep -oP 'stat::number_of_executed_units:\s*\K\d+' fuzz_output.txt || echo "?")
+            echo "- Executed units: $RUNS" >> $GITHUB_STEP_SUMMARY
+          fi
+          CORPUS_DIR="corpus/${{ matrix.target }}"
+          if [ -d "$CORPUS_DIR" ]; then
+            COUNT=$(ls "$CORPUS_DIR" | wc -l)
+            echo "- Corpus size: $COUNT entries" >> $GITHUB_STEP_SUMMARY
+          fi
