@@ -2,6 +2,10 @@
 
 use oasis_types::backend::Color;
 
+/// Maximum image dimension (width or height) we allow to decode.
+/// Anything larger is rejected to prevent OOM from malformed headers.
+const MAX_IMAGE_DIMENSION: u32 = 4096;
+
 /// Decoded image data (RGBA pixels).
 #[derive(Debug, Clone)]
 pub struct DecodedImage {
@@ -124,6 +128,10 @@ fn decode_bmp(data: &[u8]) -> Option<DecodedImage> {
 fn decode_png(data: &[u8]) -> Option<DecodedImage> {
     let decoder = png::Decoder::new(data);
     let mut reader = decoder.read_info().ok()?;
+    let info_header = reader.info();
+    if info_header.width > MAX_IMAGE_DIMENSION || info_header.height > MAX_IMAGE_DIMENSION {
+        return None;
+    }
     let mut buf = vec![0u8; reader.output_buffer_size()];
     let info = reader.next_frame(&mut buf).ok()?;
     let bytes = &buf[..info.buffer_size()];
@@ -172,6 +180,11 @@ fn decode_png(data: &[u8]) -> Option<DecodedImage> {
 /// Decode a JPEG image using the `jpeg-decoder` crate.
 fn decode_jpeg(data: &[u8]) -> Option<DecodedImage> {
     let mut decoder = jpeg_decoder::Decoder::new(data);
+    decoder.read_info().ok()?;
+    let info = decoder.info()?;
+    if (info.width as u32) > MAX_IMAGE_DIMENSION || (info.height as u32) > MAX_IMAGE_DIMENSION {
+        return None;
+    }
     let pixels_raw = decoder.decode().ok()?;
     let info = decoder.info()?;
     let w = info.width as u32;

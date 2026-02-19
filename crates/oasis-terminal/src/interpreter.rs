@@ -124,6 +124,8 @@ pub struct CommandRegistry {
     functions: RefCell<HashMap<String, ShellFunction>>,
     /// Current function call depth (for recursion limiting).
     call_depth: Cell<usize>,
+    /// Set by `return` to signal early exit from a function body.
+    return_flag: Cell<bool>,
 }
 
 impl CommandRegistry {
@@ -141,6 +143,7 @@ impl CommandRegistry {
             last_exit_code: Cell::new(0),
             functions: RefCell::new(HashMap::new()),
             call_depth: Cell::new(0),
+            return_flag: Cell::new(false),
         }
     }
 
@@ -237,25 +240,37 @@ impl CommandRegistry {
         self.call_depth.set(depth + 1);
 
         // Save current positional args and set new ones.
-        let saved_args: Vec<(String, Option<String>)> = (0..=args.len())
+        // Determine prior arg count so we save/restore the full range.
+        let saved_argc = self.get_variable("#");
+        let prior_count: usize = saved_argc
+            .as_deref()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(0);
+        let save_range = prior_count.max(args.len());
+        let saved_args: Vec<(String, Option<String>)> = (0..=save_range)
             .map(|i| {
                 let key = i.to_string();
                 let old = self.get_variable(&key);
                 (key, old)
             })
             .collect();
-        // Also save $# (arg count).
-        let saved_argc = self.get_variable("#");
 
         // Set positional args: $0 = function name, $1..$n = args.
+        // Unset any prior positional args beyond the new arg count.
         self.set_variable("0", name);
         for (i, arg) in args.iter().enumerate() {
             self.set_variable(&(i + 1).to_string(), arg);
+        }
+        for i in (args.len() + 1)..=prior_count {
+            self.unset_variable(&i.to_string());
         }
         self.set_variable("#", &args.len().to_string());
 
         // Execute body as a chain of commands.
         let result = self.execute(func.body.trim(), env);
+
+        // Clear the return flag so it doesn't propagate to the caller.
+        self.return_flag.set(false);
 
         // Restore previous positional args.
         for (key, old_val) in saved_args {
@@ -350,6 +365,10 @@ impl CommandRegistry {
                     match output {
                         CommandOutput::None => {},
                         other => all_outputs.push(other),
+                    }
+                    // Stop executing further segments if `return` was called.
+                    if self.return_flag.get() {
+                        break;
                     }
                 },
                 Err(e) => {
@@ -1142,6 +1161,7 @@ impl CommandRegistry {
         };
         self.last_exit_code.set(code);
         self.set_variable("?", &code.to_string());
+        self.return_flag.set(true);
         Ok(CommandOutput::None)
     }
 

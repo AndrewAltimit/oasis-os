@@ -231,18 +231,34 @@ impl WindowManager {
             self.focus_window_internal(&id, sdi);
             Some(id)
         } else {
-            // Send top-most visible to bottom, then focus the new top.
+            // Send top-most visible to bottom of its z-group, then focus
+            // the new top. Use group-aware insertion to preserve
+            // normal < always_on_top < modal ordering.
             let top_idx = self
                 .windows
                 .iter()
                 .rposition(|w| w.state != WindowState::Minimized)?;
             let window = self.windows.remove(top_idx);
-            let insert_pos = self
-                .windows
-                .iter()
-                .position(|w| w.state != WindowState::Minimized)
-                .unwrap_or(0);
-            self.windows.insert(insert_pos, window);
+            let group_start = if window.modal {
+                // Bottom of modal group.
+                self.windows
+                    .iter()
+                    .position(|w| w.modal)
+                    .unwrap_or(self.windows.len())
+            } else if window.always_on_top {
+                // Bottom of always_on_top group.
+                self.windows
+                    .iter()
+                    .position(|w| w.always_on_top || w.modal)
+                    .unwrap_or(self.windows.len())
+            } else {
+                // Bottom of normal windows (index 0 or first visible).
+                self.windows
+                    .iter()
+                    .position(|w| w.state != WindowState::Minimized)
+                    .unwrap_or(0)
+            };
+            self.windows.insert(group_start, window);
             // Focus the new top-most visible window.
             let new_top = self
                 .windows

@@ -212,7 +212,7 @@ impl BrowserWidget {
     /// Marks layout dirty if the viewport width changed, since layout
     /// depends on the available width for line breaking and block sizing.
     pub fn set_window(&mut self, x: i32, y: i32, w: u32, h: u32) {
-        if w != self.window_w {
+        if w != self.window_w || h != self.window_h {
             self.layout_dirty = true;
         }
         self.window_x = x;
@@ -2797,18 +2797,18 @@ mod tests {
     }
 
     #[test]
-    fn layout_not_dirty_after_height_only_change() {
+    fn layout_dirty_after_height_only_change() {
         let vfs = test_vfs();
         let mut browser = make_browser();
         browser.set_window(0, 0, 480, 272);
         browser.navigate_vfs("vfs://sites/home/index.html", &vfs);
 
-        // Change height only -> should NOT mark dirty (layout depends
-        // on width, not height).
+        // Change height only -> should mark dirty because viewport
+        // height is used for CSS positioned elements (fixed/absolute).
         browser.set_window(0, 0, 480, 300);
         assert!(
-            !browser.is_layout_dirty(),
-            "layout should not be dirty after height-only change"
+            browser.is_layout_dirty(),
+            "layout should be dirty after height change"
         );
     }
 
