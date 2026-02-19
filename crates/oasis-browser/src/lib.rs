@@ -473,6 +473,9 @@ impl BrowserWidget {
     /// Draws chrome (URL bar, navigation buttons, status bar) and
     /// the page content viewport.
     pub fn paint(&mut self, backend: &mut dyn SdiBackend) -> Result<()> {
+        // Rebuild layout if the viewport was resized since last paint.
+        self.relayout_if_dirty();
+
         // Set clip to our window area.
         backend.set_clip_rect(self.window_x, self.window_y, self.window_w, self.window_h)?;
 

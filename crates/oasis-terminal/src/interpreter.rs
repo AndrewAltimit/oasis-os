@@ -1782,9 +1782,19 @@ fn expand_braces(tokens: &[String]) -> Vec<String> {
     result
 }
 
+/// Maximum nesting depth for brace expansion to prevent stack overflow.
+const MAX_BRACE_DEPTH: usize = 16;
+
 /// Expand a single brace expression. Returns `None` if no valid brace
 /// pattern is found.
 fn expand_one_brace(token: &str) -> Option<Vec<String>> {
+    expand_one_brace_inner(token, 0)
+}
+
+fn expand_one_brace_inner(token: &str, depth: usize) -> Option<Vec<String>> {
+    if depth >= MAX_BRACE_DEPTH {
+        return None;
+    }
     let open = token.find('{')?;
     let close = token[open..].find('}').map(|i| i + open)?;
     let prefix = &token[..open];
@@ -1801,7 +1811,7 @@ fn expand_one_brace(token: &str) -> Option<Vec<String>> {
     for part in parts {
         let expanded = format!("{prefix}{part}{suffix}");
         // Recursively expand nested braces in the suffix.
-        if let Some(nested) = expand_one_brace(&expanded) {
+        if let Some(nested) = expand_one_brace_inner(&expanded, depth + 1) {
             result.extend(nested);
         } else {
             result.push(expanded);
@@ -1963,6 +1973,12 @@ fn parse_char_class(p: &[char], pi: usize) -> Option<(bool, Vec<char>, usize)> {
             } else {
                 (end, start)
             };
+            // Cap range expansion to prevent huge allocations from
+            // broad Unicode ranges (e.g. [\0-\u{10FFFF}]).
+            let range_len = (hi as u32).saturating_sub(lo as u32) + 1;
+            if range_len > 256 {
+                return None;
+            }
             for c in lo..=hi {
                 chars.push(c);
             }

@@ -356,7 +356,7 @@ fn compute_justification(
         },
         JustifyContent::SpaceAround => {
             let per = free_space / count as f32;
-            (per / 2.0, per / 2.0)
+            (per / 2.0, per)
         },
         JustifyContent::SpaceEvenly => {
             let per = free_space / (count as f32 + 1.0);

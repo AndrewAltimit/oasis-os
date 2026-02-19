@@ -697,10 +697,10 @@ impl WindowManager {
                     new_y = 0;
                 }
                 if new_x + new_w as i32 > sw {
-                    new_w = (sw - new_x) as u32;
+                    new_w = (sw - new_x).max(0) as u32;
                 }
                 if new_y + new_h as i32 > sh {
-                    new_h = (sh - new_y) as u32;
+                    new_h = (sh - new_y).max(0) as u32;
                 }
 
                 if let Some(window) = self.windows.iter_mut().find(|w| w.id == *window_id) {
