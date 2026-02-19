@@ -740,10 +740,12 @@ impl WindowManager {
         // Re-establish SDI z-ordering for the entire window stack.
         // This ensures groups (normal < always_on_top < modal) are correct
         // and the modal overlay sits between non-modal and modal windows.
+        let mut overlay_moved = false;
         for window in &self.windows {
-            // Place modal overlay just before the first modal window's objects.
-            if window.modal && sdi.contains(MODAL_OVERLAY_ID) {
+            // Place modal overlay once, just before the first modal window.
+            if window.modal && !overlay_moved && sdi.contains(MODAL_OVERLAY_ID) {
                 let _ = sdi.move_to_top(MODAL_OVERLAY_ID);
+                overlay_moved = true;
             }
             for suffix in window.sdi_suffixes() {
                 let name = window.sdi_name(suffix);

@@ -1514,6 +1514,7 @@ fn split_pipes(input: &str) -> Result<Vec<String>> {
     let mut chars = input.chars().peekable();
     let mut in_single = false;
     let mut in_double = false;
+    let mut brace_depth: usize = 0;
 
     while let Some(ch) = chars.next() {
         if in_single {
@@ -1550,7 +1551,15 @@ fn split_pipes(input: &str) -> Result<Vec<String>> {
                     current.push(next);
                 }
             },
-            '|' if chars.peek() != Some(&'|') => {
+            '{' => {
+                brace_depth += 1;
+                current.push(ch);
+            },
+            '}' => {
+                brace_depth = brace_depth.saturating_sub(1);
+                current.push(ch);
+            },
+            '|' if brace_depth == 0 && chars.peek() != Some(&'|') => {
                 segments.push(current.trim().to_string());
                 current.clear();
             },
@@ -1598,6 +1607,7 @@ fn parse_redirect(input: &str) -> (&str, Redirections<'_>) {
     let bytes = input.as_bytes();
     let mut in_single = false;
     let mut in_double = false;
+    let mut brace_depth: usize = 0;
     let mut i = 0;
     let mut first_redirect_pos: Option<usize> = None;
 
@@ -1622,7 +1632,9 @@ fn parse_redirect(input: &str) -> (&str, Redirections<'_>) {
             match b {
                 b'\'' => in_single = true,
                 b'"' => in_double = true,
-                b'2' if i + 1 < bytes.len() && bytes[i + 1] == b'>' => {
+                b'{' => brace_depth += 1,
+                b'}' => brace_depth = brace_depth.saturating_sub(1),
+                b'2' if brace_depth == 0 && i + 1 < bytes.len() && bytes[i + 1] == b'>' => {
                     if first_redirect_pos.is_none() {
                         first_redirect_pos = Some(i);
                     }
@@ -1641,7 +1653,7 @@ fn parse_redirect(input: &str) -> (&str, Redirections<'_>) {
                         i += 1;
                     }
                 },
-                b'>' => {
+                b'>' if brace_depth == 0 => {
                     if first_redirect_pos.is_none() {
                         first_redirect_pos = Some(i);
                     }
@@ -3268,6 +3280,33 @@ mod tests {
         let mut env = make_env(&mut vfs);
         let result = reg.execute("function bad() { }", &mut env);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn function_body_with_pipe() {
+        let mut reg = CommandRegistry::new();
+        reg.register(Box::new(EchoCmd));
+        let mut vfs = MemoryVfs::new();
+        let mut env = make_env(&mut vfs);
+        // Pipe inside braces should be part of the body, not split
+        // as a pipeline operator.
+        reg.execute("function piped() { echo hello | echo world }", &mut env)
+            .unwrap();
+        let funcs = reg.list_functions();
+        assert!(funcs.iter().any(|(n, b)| n == "piped" && b.contains('|')));
+    }
+
+    #[test]
+    fn function_body_with_redirect() {
+        let reg = CommandRegistry::new();
+        let mut vfs = MemoryVfs::new();
+        let mut env = make_env(&mut vfs);
+        // Redirect inside braces should be part of the body, not
+        // parsed as a top-level redirect.
+        reg.execute("function redir() { echo hello > /tmp/out }", &mut env)
+            .unwrap();
+        let funcs = reg.list_functions();
+        assert!(funcs.iter().any(|(n, b)| n == "redir" && b.contains('>')));
     }
 
     // -- Set/env tests --
