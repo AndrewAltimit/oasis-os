@@ -456,3 +456,362 @@ fn handle_start_menu_action(
         StartMenuAction::RunCommand(_) | StartMenuAction::None => {},
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn input_result_variants() {
+        let cont = InputResult::Continue;
+        let quit = InputResult::Quit;
+        assert_ne!(cont, quit);
+    }
+
+    #[test]
+    fn input_result_equality() {
+        assert_eq!(InputResult::Continue, InputResult::Continue);
+        assert_eq!(InputResult::Quit, InputResult::Quit);
+    }
+
+    #[test]
+    fn input_result_debug() {
+        assert_eq!(format!("{:?}", InputResult::Continue), "Continue");
+        assert_eq!(format!("{:?}", InputResult::Quit), "Quit");
+    }
+
+    #[test]
+    fn input_result_clone() {
+        let a = InputResult::Continue;
+        let b = a;
+        assert_eq!(a, b);
+    }
+
+    #[test]
+    fn input_result_copy() {
+        let a = InputResult::Quit;
+        let b = a;
+        // Both usable after copy.
+        assert_eq!(a, InputResult::Quit);
+        assert_eq!(b, InputResult::Quit);
+    }
+
+    // Integration tests using make_test_state from commands::tests.
+    // These test the actual input handlers with real AppState.
+
+    fn make_test_state() -> (AppState, SdiRegistry, MemoryVfs) {
+        use oasis_audio::RadioManager;
+        use oasis_backend_sdl::SdlAudioBackend;
+        use oasis_core::active_theme::ActiveTheme;
+        use oasis_core::bottombar::BottomBar;
+        use oasis_core::browser::BrowserConfig;
+        use oasis_core::config::OasisConfig;
+        use oasis_core::cursor::CursorState;
+        use oasis_core::dashboard::{DashboardConfig, DashboardState};
+        use oasis_core::net::{RustlsTlsProvider, StdNetworkBackend};
+        use oasis_core::platform::DesktopPlatform;
+        use oasis_core::skin::SkinFeatures;
+        use oasis_core::skin::builtin::load_builtin;
+        use oasis_core::startmenu::StartMenuState;
+        use oasis_core::statusbar::StatusBar;
+        use oasis_core::terminal::CommandRegistry;
+        use oasis_core::wm::manager::WindowManager;
+
+        let skin = load_builtin("terminal").unwrap();
+        let active_theme = ActiveTheme::from_skin(&skin.theme);
+        let dash_cfg = DashboardConfig::from_features(&SkinFeatures::default(), &active_theme);
+
+        let state = AppState {
+            config: OasisConfig::default(),
+            skin,
+            active_theme: active_theme.clone(),
+            browser_config: BrowserConfig::default(),
+            platform: DesktopPlatform::new(),
+            dashboard: DashboardState::new(dash_cfg, vec![]),
+            status_bar: StatusBar::new(),
+            bottom_bar: BottomBar::new(),
+            start_menu: StartMenuState::new(StartMenuState::default_items()),
+            cmd_reg: CommandRegistry::new(),
+            cwd: "/".to_string(),
+            input_buf: String::new(),
+            output_lines: Vec::new(),
+            osk: None,
+            app_runner: None,
+            wm: WindowManager::new(480, 272),
+            open_runners: Vec::new(),
+            browser: None,
+            net_backend: StdNetworkBackend::new(),
+            listener: None,
+            ftp_server: None,
+            remote_client: None,
+            tls_provider: RustlsTlsProvider::new(),
+            mouse_cursor: CursorState::default(),
+            mode: Mode::Dashboard,
+            bg_color: oasis_core::backend::Color::rgb(0, 0, 0),
+            active_transition: None,
+            frame_counter: 0,
+            radio_manager: RadioManager::new(),
+            radio_source: None,
+            audio_backend: SdlAudioBackend::new(),
+        };
+        let sdi = SdiRegistry::new();
+        let vfs = MemoryVfs::new();
+        (state, sdi, vfs)
+    }
+
+    // -- handle_default_input --
+
+    #[test]
+    fn quit_event_returns_quit() {
+        let (mut state, mut sdi, mut vfs) = make_test_state();
+        let result = handle_default_input(&InputEvent::Quit, &mut state, &mut sdi, &mut vfs);
+        assert_eq!(result, InputResult::Quit);
+    }
+
+    #[test]
+    fn cancel_in_dashboard_returns_quit() {
+        let (mut state, mut sdi, mut vfs) = make_test_state();
+        state.mode = Mode::Dashboard;
+        let result = handle_default_input(
+            &InputEvent::ButtonPress(Button::Cancel),
+            &mut state,
+            &mut sdi,
+            &mut vfs,
+        );
+        assert_eq!(result, InputResult::Quit);
+    }
+
+    #[test]
+    fn start_toggles_dashboard_terminal() {
+        let (mut state, mut sdi, mut vfs) = make_test_state();
+        state.mode = Mode::Dashboard;
+        let result = handle_default_input(
+            &InputEvent::ButtonPress(Button::Start),
+            &mut state,
+            &mut sdi,
+            &mut vfs,
+        );
+        assert_eq!(result, InputResult::Continue);
+        assert_eq!(state.mode, Mode::Terminal);
+
+        let result = handle_default_input(
+            &InputEvent::ButtonPress(Button::Start),
+            &mut state,
+            &mut sdi,
+            &mut vfs,
+        );
+        assert_eq!(result, InputResult::Continue);
+        assert_eq!(state.mode, Mode::Dashboard);
+    }
+
+    #[test]
+    fn select_opens_osk() {
+        let (mut state, mut sdi, mut vfs) = make_test_state();
+        state.mode = Mode::Dashboard;
+        let result = handle_default_input(
+            &InputEvent::ButtonPress(Button::Select),
+            &mut state,
+            &mut sdi,
+            &mut vfs,
+        );
+        assert_eq!(result, InputResult::Continue);
+        assert_eq!(state.mode, Mode::Osk);
+        assert!(state.osk.is_some());
+    }
+
+    #[test]
+    fn terminal_text_input() {
+        let (mut state, mut sdi, mut vfs) = make_test_state();
+        state.mode = Mode::Terminal;
+        handle_default_input(&InputEvent::TextInput('h'), &mut state, &mut sdi, &mut vfs);
+        handle_default_input(&InputEvent::TextInput('i'), &mut state, &mut sdi, &mut vfs);
+        assert_eq!(state.input_buf, "hi");
+    }
+
+    #[test]
+    fn terminal_backspace() {
+        let (mut state, mut sdi, mut vfs) = make_test_state();
+        state.mode = Mode::Terminal;
+        state.input_buf = "abc".to_string();
+        handle_default_input(&InputEvent::Backspace, &mut state, &mut sdi, &mut vfs);
+        assert_eq!(state.input_buf, "ab");
+    }
+
+    #[test]
+    fn terminal_confirm_executes_command() {
+        let (mut state, mut sdi, mut vfs) = make_test_state();
+        state.mode = Mode::Terminal;
+        state.input_buf = "echo hello".to_string();
+        handle_default_input(
+            &InputEvent::ButtonPress(Button::Confirm),
+            &mut state,
+            &mut sdi,
+            &mut vfs,
+        );
+        // Input buffer should be cleared.
+        assert!(state.input_buf.is_empty());
+        // The command prompt should be in output.
+        assert!(
+            state
+                .output_lines
+                .iter()
+                .any(|l| l.contains("> echo hello"))
+        );
+    }
+
+    #[test]
+    fn terminal_confirm_empty_noop() {
+        let (mut state, mut sdi, mut vfs) = make_test_state();
+        state.mode = Mode::Terminal;
+        state.input_buf.clear();
+        handle_default_input(
+            &InputEvent::ButtonPress(Button::Confirm),
+            &mut state,
+            &mut sdi,
+            &mut vfs,
+        );
+        // Empty command should not add to output.
+        assert!(state.output_lines.is_empty());
+    }
+
+    #[test]
+    fn terminal_cancel_returns_to_dashboard() {
+        let (mut state, mut sdi, mut vfs) = make_test_state();
+        state.mode = Mode::Terminal;
+        // First create terminal objects so set_terminal_visible can hide them.
+        terminal_sdi::setup_terminal_objects(&mut sdi, &[], "/", "");
+        handle_default_input(
+            &InputEvent::ButtonPress(Button::Cancel),
+            &mut state,
+            &mut sdi,
+            &mut vfs,
+        );
+        assert_eq!(state.mode, Mode::Dashboard);
+    }
+
+    #[test]
+    fn terminal_square_deletes_char() {
+        let (mut state, mut sdi, mut vfs) = make_test_state();
+        state.mode = Mode::Terminal;
+        state.input_buf = "xyz".to_string();
+        handle_default_input(
+            &InputEvent::ButtonPress(Button::Square),
+            &mut state,
+            &mut sdi,
+            &mut vfs,
+        );
+        assert_eq!(state.input_buf, "xy");
+    }
+
+    // -- handle_osk_input --
+
+    #[test]
+    fn osk_quit_returns_quit() {
+        let (mut state, mut sdi, _vfs) = make_test_state();
+        state.mode = Mode::Osk;
+        state.osk = Some(OskState::new(OskConfig::default(), ""));
+        let result = handle_osk_input(&InputEvent::Quit, &mut state, &mut sdi);
+        assert_eq!(result, InputResult::Quit);
+    }
+
+    #[test]
+    fn osk_backspace_removes_char() {
+        let (mut state, mut sdi, _vfs) = make_test_state();
+        state.mode = Mode::Osk;
+        let mut osk = OskState::new(OskConfig::default(), "");
+        osk.buffer = "abc".to_string();
+        state.osk = Some(osk);
+        handle_osk_input(&InputEvent::Backspace, &mut state, &mut sdi);
+        assert_eq!(state.osk.as_ref().unwrap().buffer, "ab");
+    }
+
+    // -- handle_app_input --
+
+    #[test]
+    fn app_no_runner_continues() {
+        let (mut state, mut sdi, vfs) = make_test_state();
+        state.mode = Mode::App;
+        state.app_runner = None;
+        // Without a runner, all events (including Quit) are no-ops.
+        let result = handle_app_input(
+            &InputEvent::ButtonPress(Button::Confirm),
+            &mut state,
+            &mut sdi,
+            &vfs,
+        );
+        assert_eq!(result, InputResult::Continue);
+        let result = handle_app_input(&InputEvent::Quit, &mut state, &mut sdi, &vfs);
+        assert_eq!(result, InputResult::Continue);
+    }
+
+    // -- handle_desktop_input --
+
+    #[test]
+    fn desktop_quit_returns_quit() {
+        let (mut state, mut sdi, vfs) = make_test_state();
+        state.mode = Mode::Desktop;
+        let result = handle_desktop_input(&InputEvent::Quit, &mut state, &mut sdi, &vfs);
+        assert_eq!(result, InputResult::Quit);
+    }
+
+    #[test]
+    fn desktop_start_switches_to_terminal() {
+        let (mut state, mut sdi, vfs) = make_test_state();
+        state.mode = Mode::Desktop;
+        handle_desktop_input(
+            &InputEvent::ButtonPress(Button::Start),
+            &mut state,
+            &mut sdi,
+            &vfs,
+        );
+        assert_eq!(state.mode, Mode::Terminal);
+    }
+
+    #[test]
+    fn desktop_cancel_no_windows_returns_to_dashboard() {
+        let (mut state, mut sdi, vfs) = make_test_state();
+        state.mode = Mode::Desktop;
+        // No windows open.
+        handle_desktop_input(
+            &InputEvent::ButtonPress(Button::Cancel),
+            &mut state,
+            &mut sdi,
+            &vfs,
+        );
+        assert_eq!(state.mode, Mode::Dashboard);
+    }
+
+    // -- dashboard d-pad navigation --
+
+    #[test]
+    fn dashboard_dpad_navigation() {
+        let (mut state, mut sdi, mut vfs) = make_test_state();
+        state.mode = Mode::Dashboard;
+        // These shouldn't panic even with empty app list.
+        handle_default_input(
+            &InputEvent::ButtonPress(Button::Right),
+            &mut state,
+            &mut sdi,
+            &mut vfs,
+        );
+        handle_default_input(
+            &InputEvent::ButtonPress(Button::Down),
+            &mut state,
+            &mut sdi,
+            &mut vfs,
+        );
+        handle_default_input(
+            &InputEvent::ButtonPress(Button::Left),
+            &mut state,
+            &mut sdi,
+            &mut vfs,
+        );
+        handle_default_input(
+            &InputEvent::ButtonPress(Button::Up),
+            &mut state,
+            &mut sdi,
+            &mut vfs,
+        );
+        assert_eq!(state.mode, Mode::Dashboard);
+    }
+}

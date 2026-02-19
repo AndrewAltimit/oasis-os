@@ -588,6 +588,7 @@ name = "oasis-backend-ue5"
 version = "0.1.0"
 dependencies = [
  "log",
+ "oasis-audio",
  "oasis-core",
  "oasis-types",
 ]

@@ -69,8 +69,15 @@ impl Padding {
 }
 
 /// Compute centered position of a child within a parent.
+///
+/// Uses round-up division so that on odd remainders the child is biased
+/// toward the visual center rather than the top-left edge.
 pub fn center(parent_size: u32, child_size: u32) -> i32 {
-    ((parent_size as i32 - child_size as i32) / 2).max(0)
+    let diff = parent_size as i32 - child_size as i32;
+    if diff <= 0 {
+        return 0;
+    }
+    (diff + 1) / 2
 }
 
 /// Compute vertical center for text within a given height.
@@ -147,6 +154,9 @@ mod tests {
     fn center_calculation() {
         assert_eq!(center(100, 20), 40);
         assert_eq!(center(10, 20), 0); // Child larger than parent.
+        // Odd remainder rounds up for better visual centering.
+        assert_eq!(center(101, 20), 41); // (101-20+1)/2 = 41
+        assert_eq!(center(31, 10), 11); // (31-10+1)/2 = 11
     }
 
     #[test]

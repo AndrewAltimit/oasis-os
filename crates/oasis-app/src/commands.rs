@@ -329,3 +329,263 @@ pub fn trim_output(output_lines: &mut Vec<String>) {
         output_lines.remove(0);
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use oasis_core::terminal::CommandOutput;
+
+    // -- trim_output --
+
+    #[test]
+    fn trim_output_noop_under_limit() {
+        let mut lines: Vec<String> = (0..10).map(|i| format!("line{i}")).collect();
+        trim_output(&mut lines);
+        assert_eq!(lines.len(), 10);
+        assert_eq!(lines[0], "line0");
+    }
+
+    #[test]
+    fn trim_output_noop_at_limit() {
+        let mut lines: Vec<String> = (0..terminal_sdi::MAX_OUTPUT_LINES)
+            .map(|i| format!("line{i}"))
+            .collect();
+        trim_output(&mut lines);
+        assert_eq!(lines.len(), terminal_sdi::MAX_OUTPUT_LINES);
+    }
+
+    #[test]
+    fn trim_output_trims_excess() {
+        let count = terminal_sdi::MAX_OUTPUT_LINES + 50;
+        let mut lines: Vec<String> = (0..count).map(|i| format!("line{i}")).collect();
+        trim_output(&mut lines);
+        assert_eq!(lines.len(), terminal_sdi::MAX_OUTPUT_LINES);
+        // Oldest lines should have been removed.
+        assert_eq!(lines[0], "line50");
+        assert_eq!(lines.last().unwrap(), &format!("line{}", count - 1));
+    }
+
+    #[test]
+    fn trim_output_empty() {
+        let mut lines: Vec<String> = vec![];
+        trim_output(&mut lines);
+        assert!(lines.is_empty());
+    }
+
+    // -- process_command_output (using a real AppState) --
+
+    fn make_test_state() -> AppState {
+        use oasis_audio::RadioManager;
+        use oasis_backend_sdl::SdlAudioBackend;
+        use oasis_core::active_theme::ActiveTheme;
+        use oasis_core::backend::Color;
+        use oasis_core::bottombar::BottomBar;
+        use oasis_core::browser::BrowserConfig;
+        use oasis_core::config::OasisConfig;
+        use oasis_core::cursor::CursorState;
+        use oasis_core::dashboard::{DashboardConfig, DashboardState};
+        use oasis_core::net::{RustlsTlsProvider, StdNetworkBackend};
+        use oasis_core::platform::DesktopPlatform;
+        use oasis_core::skin::SkinFeatures;
+        use oasis_core::skin::builtin::load_builtin;
+        use oasis_core::startmenu::StartMenuState;
+        use oasis_core::statusbar::StatusBar;
+        use oasis_core::terminal::CommandRegistry;
+        use oasis_core::wm::manager::WindowManager;
+
+        let skin = load_builtin("terminal").unwrap();
+        let active_theme = ActiveTheme::from_skin(&skin.theme);
+        let dash_cfg = DashboardConfig::from_features(&SkinFeatures::default(), &active_theme);
+
+        AppState {
+            config: OasisConfig::default(),
+            skin,
+            active_theme: active_theme.clone(),
+            browser_config: BrowserConfig::default(),
+            platform: DesktopPlatform::new(),
+            dashboard: DashboardState::new(dash_cfg, vec![]),
+            status_bar: StatusBar::new(),
+            bottom_bar: BottomBar::new(),
+            start_menu: StartMenuState::new(StartMenuState::default_items()),
+            cmd_reg: CommandRegistry::new(),
+            cwd: "/".to_string(),
+            input_buf: String::new(),
+            output_lines: Vec::new(),
+            osk: None,
+            app_runner: None,
+            wm: WindowManager::new(480, 272),
+            open_runners: Vec::new(),
+            browser: None,
+            net_backend: StdNetworkBackend::new(),
+            listener: None,
+            ftp_server: None,
+            remote_client: None,
+            tls_provider: RustlsTlsProvider::new(),
+            mouse_cursor: CursorState::default(),
+            mode: crate::app_state::Mode::Dashboard,
+            bg_color: Color::rgb(0, 0, 0),
+            active_transition: None,
+            frame_counter: 0,
+            radio_manager: RadioManager::new(),
+            radio_source: None,
+            audio_backend: SdlAudioBackend::new(),
+        }
+    }
+
+    #[test]
+    fn process_text_output() {
+        let mut state = make_test_state();
+        let result = process_command_output(
+            Ok(CommandOutput::Text("hello\nworld".to_string())),
+            &mut state,
+        );
+        assert!(result.is_none());
+        assert_eq!(state.output_lines, vec!["hello", "world"]);
+    }
+
+    #[test]
+    fn process_table_output() {
+        let mut state = make_test_state();
+        let result = process_command_output(
+            Ok(CommandOutput::Table {
+                headers: vec!["Name".into(), "Size".into()],
+                rows: vec![vec!["foo.txt".into(), "42".into()]],
+            }),
+            &mut state,
+        );
+        assert!(result.is_none());
+        assert_eq!(state.output_lines.len(), 2);
+        assert_eq!(state.output_lines[0], "Name | Size");
+        assert_eq!(state.output_lines[1], "foo.txt | 42");
+    }
+
+    #[test]
+    fn process_clear_output() {
+        let mut state = make_test_state();
+        state.output_lines.push("existing".to_string());
+        let result = process_command_output(Ok(CommandOutput::Clear), &mut state);
+        assert!(result.is_none());
+        assert!(state.output_lines.is_empty());
+    }
+
+    #[test]
+    fn process_none_output() {
+        let mut state = make_test_state();
+        let result = process_command_output(Ok(CommandOutput::None), &mut state);
+        assert!(result.is_none());
+        assert!(state.output_lines.is_empty());
+    }
+
+    #[test]
+    fn process_skin_swap_returns_name() {
+        let mut state = make_test_state();
+        let result = process_command_output(
+            Ok(CommandOutput::SkinSwap {
+                name: "tactical".to_string(),
+            }),
+            &mut state,
+        );
+        assert_eq!(result, Some("tactical".to_string()));
+    }
+
+    #[test]
+    fn process_error_output() {
+        let mut state = make_test_state();
+        let err = oasis_core::error::OasisError::Command("test error".into());
+        let result = process_command_output(Err(err), &mut state);
+        assert!(result.is_none());
+        assert_eq!(state.output_lines.len(), 1);
+        assert!(state.output_lines[0].starts_with("error:"));
+    }
+
+    #[test]
+    fn process_multi_output() {
+        let mut state = make_test_state();
+        let result = process_command_output(
+            Ok(CommandOutput::Multi(vec![
+                CommandOutput::Text("first".to_string()),
+                CommandOutput::Text("second".to_string()),
+            ])),
+            &mut state,
+        );
+        assert!(result.is_none());
+        assert_eq!(state.output_lines, vec!["first", "second"]);
+    }
+
+    #[test]
+    fn process_multi_with_skin_swap() {
+        let mut state = make_test_state();
+        let result = process_command_output(
+            Ok(CommandOutput::Multi(vec![
+                CommandOutput::Text("before".to_string()),
+                CommandOutput::SkinSwap {
+                    name: "corrupted".to_string(),
+                },
+            ])),
+            &mut state,
+        );
+        assert_eq!(result, Some("corrupted".to_string()));
+        assert_eq!(state.output_lines, vec!["before"]);
+    }
+
+    #[test]
+    fn process_browser_sandbox_on() {
+        let mut state = make_test_state();
+        let result = process_command_output(
+            Ok(CommandOutput::BrowserSandbox { enable: true }),
+            &mut state,
+        );
+        assert!(result.is_none());
+        assert_eq!(state.output_lines.len(), 1);
+        assert!(state.output_lines[0].contains("sandbox"));
+        assert!(state.output_lines[0].contains("on"));
+    }
+
+    #[test]
+    fn process_browser_sandbox_off() {
+        let mut state = make_test_state();
+        let result = process_command_output(
+            Ok(CommandOutput::BrowserSandbox { enable: false }),
+            &mut state,
+        );
+        assert!(result.is_none());
+        assert!(state.output_lines[0].contains("off"));
+    }
+
+    #[test]
+    fn process_listen_stop_no_listener() {
+        let mut state = make_test_state();
+        let result =
+            process_command_output(Ok(CommandOutput::ListenToggle { port: 0 }), &mut state);
+        assert!(result.is_none());
+        assert_eq!(state.output_lines[0], "No listener running.");
+    }
+
+    #[test]
+    fn process_ftp_stop_no_server() {
+        let mut state = make_test_state();
+        let result = process_command_output(Ok(CommandOutput::FtpToggle { port: 0 }), &mut state);
+        assert!(result.is_none());
+        assert_eq!(state.output_lines[0], "No FTP server running.");
+    }
+
+    #[test]
+    fn process_remote_connect_already_connected() {
+        let mut state = make_test_state();
+        // Simulate an existing client.
+        state.remote_client = Some(oasis_core::net::RemoteClient::new());
+        let result = process_command_output(
+            Ok(CommandOutput::RemoteConnect {
+                address: "127.0.0.1".into(),
+                port: 9999,
+                psk: None,
+            }),
+            &mut state,
+        );
+        assert!(result.is_none());
+        assert_eq!(
+            state.output_lines[0],
+            "Already connected. Disconnect first."
+        );
+    }
+}

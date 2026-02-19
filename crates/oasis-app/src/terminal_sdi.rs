@@ -148,3 +148,254 @@ pub fn setup_terminal_objects(
         obj.visible = true;
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn constants() {
+        assert_eq!(VISIBLE_OUTPUT_LINES, 12);
+        assert_eq!(MAX_OUTPUT_LINES, 200);
+        assert!(VISIBLE_OUTPUT_LINES < MAX_OUTPUT_LINES);
+    }
+
+    // -- setup_wallpaper --
+
+    #[test]
+    fn setup_wallpaper_creates_object() {
+        let mut sdi = SdiRegistry::new();
+        setup_wallpaper(&mut sdi, TextureId(42), 480, 272);
+        assert!(sdi.contains("wallpaper"));
+        let obj = sdi.get("wallpaper").unwrap();
+        assert_eq!(obj.x, 0);
+        assert_eq!(obj.y, 0);
+        assert_eq!(obj.w, 480);
+        assert_eq!(obj.h, 272);
+        assert_eq!(obj.texture, Some(TextureId(42)));
+        assert_eq!(obj.z, -1000);
+    }
+
+    #[test]
+    fn setup_wallpaper_custom_dimensions() {
+        let mut sdi = SdiRegistry::new();
+        setup_wallpaper(&mut sdi, TextureId(1), 1920, 1080);
+        let obj = sdi.get("wallpaper").unwrap();
+        assert_eq!(obj.w, 1920);
+        assert_eq!(obj.h, 1080);
+    }
+
+    // -- update_media_page --
+
+    #[test]
+    fn update_media_page_creates_objects() {
+        let mut sdi = SdiRegistry::new();
+        let bb = BottomBar::new();
+        update_media_page(&mut sdi, &bb);
+
+        assert!(sdi.contains("media_page_text"));
+        assert!(sdi.contains("media_page_hint"));
+
+        let text_obj = sdi.get("media_page_text").unwrap();
+        assert_eq!(text_obj.x, 160);
+        assert_eq!(text_obj.y, 120);
+        assert!(text_obj.visible);
+        assert!(text_obj.text.as_ref().unwrap().contains("Page"));
+
+        let hint_obj = sdi.get("media_page_hint").unwrap();
+        assert_eq!(hint_obj.x, 130);
+        assert_eq!(hint_obj.y, 145);
+        assert!(hint_obj.visible);
+        assert_eq!(
+            hint_obj.text.as_deref(),
+            Some("Press R to cycle categories")
+        );
+    }
+
+    #[test]
+    fn update_media_page_idempotent() {
+        let mut sdi = SdiRegistry::new();
+        let bb = BottomBar::new();
+        update_media_page(&mut sdi, &bb);
+        update_media_page(&mut sdi, &bb);
+        // Should not panic or duplicate objects.
+        assert!(sdi.contains("media_page_text"));
+        assert!(sdi.contains("media_page_hint"));
+    }
+
+    // -- hide_media_page --
+
+    #[test]
+    fn hide_media_page_hides_objects() {
+        let mut sdi = SdiRegistry::new();
+        let bb = BottomBar::new();
+        update_media_page(&mut sdi, &bb);
+
+        // Objects should be visible after update.
+        assert!(sdi.get("media_page_text").unwrap().visible);
+        assert!(sdi.get("media_page_hint").unwrap().visible);
+
+        hide_media_page(&mut sdi);
+
+        assert!(!sdi.get("media_page_text").unwrap().visible);
+        assert!(!sdi.get("media_page_hint").unwrap().visible);
+    }
+
+    #[test]
+    fn hide_media_page_noop_when_missing() {
+        let mut sdi = SdiRegistry::new();
+        // Should not panic when objects don't exist.
+        hide_media_page(&mut sdi);
+    }
+
+    // -- set_terminal_visible --
+
+    #[test]
+    fn set_terminal_visible_toggles() {
+        let mut sdi = SdiRegistry::new();
+        let lines: Vec<String> = vec!["hello".to_string()];
+        setup_terminal_objects(&mut sdi, &lines, "/home", "ls");
+
+        // All objects should be visible after setup.
+        assert!(sdi.get("terminal_bg").unwrap().visible);
+        assert!(sdi.get("term_prompt").unwrap().visible);
+
+        set_terminal_visible(&mut sdi, false);
+        assert!(!sdi.get("terminal_bg").unwrap().visible);
+        assert!(!sdi.get("term_prompt").unwrap().visible);
+        assert!(!sdi.get("term_input_bg").unwrap().visible);
+        for i in 0..VISIBLE_OUTPUT_LINES {
+            let name = format!("term_line_{i}");
+            assert!(!sdi.get(&name).unwrap().visible);
+        }
+
+        set_terminal_visible(&mut sdi, true);
+        assert!(sdi.get("terminal_bg").unwrap().visible);
+        assert!(sdi.get("term_prompt").unwrap().visible);
+    }
+
+    #[test]
+    fn set_terminal_visible_noop_when_missing() {
+        let mut sdi = SdiRegistry::new();
+        // Should not panic when objects don't exist.
+        set_terminal_visible(&mut sdi, false);
+        set_terminal_visible(&mut sdi, true);
+    }
+
+    // -- setup_terminal_objects --
+
+    #[test]
+    fn setup_terminal_objects_creates_all() {
+        let mut sdi = SdiRegistry::new();
+        let lines: Vec<String> = vec![];
+        setup_terminal_objects(&mut sdi, &lines, "/", "");
+
+        assert!(sdi.contains("terminal_bg"));
+        assert!(sdi.contains("term_input_bg"));
+        assert!(sdi.contains("term_prompt"));
+        for i in 0..VISIBLE_OUTPUT_LINES {
+            assert!(sdi.contains(&format!("term_line_{i}")));
+        }
+    }
+
+    #[test]
+    fn setup_terminal_objects_prompt_format() {
+        let mut sdi = SdiRegistry::new();
+        setup_terminal_objects(&mut sdi, &[], "/home/user", "cat foo.txt");
+
+        let prompt = sdi.get("term_prompt").unwrap();
+        assert_eq!(prompt.text.as_deref(), Some("/home/user> cat foo.txt_"));
+    }
+
+    #[test]
+    fn setup_terminal_objects_scrollback_few_lines() {
+        let mut sdi = SdiRegistry::new();
+        let lines: Vec<String> = (0..3).map(|i| format!("line{i}")).collect();
+        setup_terminal_objects(&mut sdi, &lines, "/", "");
+
+        // With 3 lines and VISIBLE=12, start=0. Lines 0-2 have text, rest None.
+        assert_eq!(
+            sdi.get("term_line_0").unwrap().text.as_deref(),
+            Some("line0")
+        );
+        assert_eq!(
+            sdi.get("term_line_2").unwrap().text.as_deref(),
+            Some("line2")
+        );
+        assert!(sdi.get("term_line_3").unwrap().text.is_none());
+    }
+
+    #[test]
+    fn setup_terminal_objects_scrollback_overflow() {
+        let mut sdi = SdiRegistry::new();
+        // 20 lines -- only last 12 should be visible.
+        let lines: Vec<String> = (0..20).map(|i| format!("line{i}")).collect();
+        setup_terminal_objects(&mut sdi, &lines, "/", "");
+
+        // start = 20 - 12 = 8, so term_line_0 = lines[8]
+        assert_eq!(
+            sdi.get("term_line_0").unwrap().text.as_deref(),
+            Some("line8")
+        );
+        assert_eq!(
+            sdi.get("term_line_11").unwrap().text.as_deref(),
+            Some("line19")
+        );
+    }
+
+    #[test]
+    fn setup_terminal_objects_idempotent() {
+        let mut sdi = SdiRegistry::new();
+        let lines = vec!["first".to_string()];
+        setup_terminal_objects(&mut sdi, &lines, "/", "a");
+
+        let lines2 = vec!["second".to_string()];
+        setup_terminal_objects(&mut sdi, &lines2, "/tmp", "b");
+
+        // Should update text, not create duplicates.
+        assert_eq!(
+            sdi.get("term_line_0").unwrap().text.as_deref(),
+            Some("second")
+        );
+        assert_eq!(
+            sdi.get("term_prompt").unwrap().text.as_deref(),
+            Some("/tmp> b_")
+        );
+    }
+
+    #[test]
+    fn setup_terminal_objects_bg_properties() {
+        let mut sdi = SdiRegistry::new();
+        setup_terminal_objects(&mut sdi, &[], "/", "");
+
+        let bg = sdi.get("terminal_bg").unwrap();
+        assert_eq!(bg.x, 4);
+        assert_eq!(bg.y, 26);
+        assert_eq!(bg.w, 472);
+        assert_eq!(bg.h, 220);
+        assert_eq!(bg.border_radius, Some(4));
+        assert_eq!(bg.stroke_width, Some(1));
+    }
+
+    #[test]
+    fn setup_terminal_objects_line_positions() {
+        let mut sdi = SdiRegistry::new();
+        setup_terminal_objects(&mut sdi, &[], "/", "");
+
+        for i in 0..VISIBLE_OUTPUT_LINES {
+            let obj = sdi.get(&format!("term_line_{i}")).unwrap();
+            assert_eq!(obj.x, 8);
+            assert_eq!(obj.y, 28 + (i as i32) * 16);
+            assert_eq!(obj.font_size, 12);
+        }
+    }
+
+    #[test]
+    fn setup_terminal_objects_empty_input() {
+        let mut sdi = SdiRegistry::new();
+        setup_terminal_objects(&mut sdi, &[], "/", "");
+
+        let prompt = sdi.get("term_prompt").unwrap();
+        assert_eq!(prompt.text.as_deref(), Some("/> _"));
+    }
+}
