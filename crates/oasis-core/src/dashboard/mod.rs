@@ -12,7 +12,6 @@ use crate::backend::Color;
 use crate::input::Button;
 use crate::sdi::SdiRegistry;
 use crate::skin::SkinFeatures;
-use crate::theme;
 use crate::ui::flex::GridLayout;
 use crate::ui::layout::Padding;
 
@@ -45,12 +44,12 @@ impl DashboardConfig {
         let cols = features.grid_cols;
         let rows = features.grid_rows;
         let content_top = at.statusbar_height + at.tab_row_height;
-        let content_h = theme::SCREEN_H - content_top - at.bottombar_height;
+        let content_h = at.screen_h - content_top - at.bottombar_height;
         let grid_padding_x = 16u16;
         let grid_padding_y = 6u16;
         let grid_x = grid_padding_x as i32;
         let grid_y = (content_top + grid_padding_y as u32) as i32;
-        let grid_w = theme::SCREEN_W - 2 * grid_padding_x as u32;
+        let grid_w = at.screen_w - 2 * grid_padding_x as u32;
         let grid_h = content_h - 2 * grid_padding_y as u32;
 
         // Size cells to fill available space evenly.
@@ -194,7 +193,7 @@ impl DashboardState {
 
         let icon_w = at.icon_width;
         let icon_h = at.icon_height;
-        let text_pad = theme::ICON_LABEL_PAD;
+        let text_pad = at.icon_label_pad;
 
         let per_page = self.config.icons_per_page as usize;
         for i in 0..per_page {
@@ -500,11 +499,11 @@ impl DashboardState {
         app: &AppEntry,
         text_pad: i32,
     ) {
-        let stripe_h = theme::ICON_STRIPE_H;
-        let fold_size = theme::ICON_FOLD_SIZE;
-        let gfx_pad = theme::ICON_GFX_PAD;
+        let stripe_h = at.icon_stripe_h;
+        let fold_size = at.icon_fold_size;
+        let gfx_pad = at.icon_gfx_pad;
         let gfx_w = icon_w - 2 * gfx_pad;
-        let gfx_h = theme::ICON_GFX_H;
+        let gfx_h = at.icon_gfx_h;
 
         if let Ok(obj) = sdi.get_mut(&format!("icon_outline_{i}")) {
             obj.x = ix - 1;
@@ -574,7 +573,7 @@ impl DashboardState {
         );
     }
 
-    /// Draw a "card" style icon (flat rounded rect with accent fill, centered label).
+    /// Draw a "card" style icon (rounded rect with gradient fill and outline).
     #[allow(clippy::too_many_arguments)]
     fn draw_card_icon(
         &self,
@@ -589,13 +588,29 @@ impl DashboardState {
         app: &AppEntry,
         text_pad: i32,
     ) {
-        // Hide document-specific sub-objects.
-        for prefix in &["icon_outline_", "icon_stripe_", "icon_fold_", "icon_gfx_"] {
+        use oasis_types::color::{darken, lighten};
+
+        // Hide document-specific sub-objects (stripe, fold, gfx).
+        for prefix in &["icon_stripe_", "icon_fold_", "icon_gfx_"] {
             if let Ok(obj) = sdi.get_mut(&format!("{prefix}{i}")) {
                 obj.visible = false;
             }
         }
-        // Card body: full-bleed accent color.
+        // Subtle outline for visual depth.
+        if let Ok(obj) = sdi.get_mut(&format!("icon_outline_{i}")) {
+            obj.x = ix - 1;
+            obj.y = iy - 1;
+            obj.w = icon_w + 2;
+            obj.h = icon_h + 2;
+            obj.visible = true;
+            obj.color = Color::rgba(0, 0, 0, 0);
+            obj.text = None;
+            obj.border_radius = Some(at.icon_border_radius + 1);
+            obj.stroke_width = Some(1);
+            let darker = darken(app.color, 0.25);
+            obj.stroke_color = Some(Color::rgba(darker.r, darker.g, darker.b, 100));
+        }
+        // Card body: vertical gradient from lightened top to darkened bottom.
         if let Ok(obj) = sdi.get_mut(&format!("icon_{i}")) {
             obj.x = ix;
             obj.y = iy;
@@ -603,6 +618,8 @@ impl DashboardState {
             obj.h = icon_h;
             obj.visible = true;
             obj.color = app.color;
+            obj.gradient_top = Some(lighten(app.color, 0.3));
+            obj.gradient_bottom = Some(darken(app.color, 0.15));
             obj.text = None;
             obj.border_radius = Some(at.icon_border_radius);
             obj.shadow_level = Some(1);

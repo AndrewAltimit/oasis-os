@@ -5,7 +5,7 @@
 //! source order, then apply declarations to produce computed styles.
 
 use super::parser::{
-    Combinator, CompoundSelector, CssValue, Declaration, Rule, SimpleSelector, Specificity,
+    AttrOp, Combinator, CompoundSelector, CssValue, Declaration, Rule, SimpleSelector, Specificity,
     Stylesheet,
 };
 use super::values::ComputedStyle;
@@ -225,6 +225,28 @@ fn matches_selector(doc: &Document, node_id: NodeId, selector: &super::parser::S
                 },
                 _ => return false,
             },
+            Some(Combinator::AdjacentSibling) => match previous_sibling_element(doc, current) {
+                Some(sid) if matches_compound(doc, sid, compound) => {
+                    current = sid;
+                },
+                _ => return false,
+            },
+            Some(Combinator::GeneralSibling) => {
+                // Walk previous siblings until one matches.
+                let mut found = false;
+                let mut sib = previous_sibling_element(doc, current);
+                while let Some(sid) = sib {
+                    if matches_compound(doc, sid, compound) {
+                        current = sid;
+                        found = true;
+                        break;
+                    }
+                    sib = previous_sibling_element(doc, sid);
+                }
+                if !found {
+                    return false;
+                }
+            },
             Some(Combinator::Descendant) | None => {
                 // Walk up ancestors until one matches.
                 let mut found = false;
@@ -268,6 +290,13 @@ fn matches_simple(doc: &Document, node_id: NodeId, simple: &SimpleSelector) -> b
         SimpleSelector::Class(cls) => elem.has_class(cls),
         SimpleSelector::Id(id) => elem.get_attribute("id").is_some_and(|v| v == id),
         SimpleSelector::PseudoClass(pseudo) => match_pseudo_class(doc, node_id, elem, pseudo),
+        SimpleSelector::PseudoClassFn(name, arg) => {
+            match_pseudo_class_fn(doc, node_id, elem, name, arg)
+        },
+        SimpleSelector::Not(inner) => !matches_compound(doc, node_id, inner),
+        SimpleSelector::Attribute { name, op, value } => {
+            match_attribute(elem, name, op, value.as_deref())
+        },
     }
 }
 
@@ -296,10 +325,153 @@ fn match_pseudo_class(doc: &Document, node_id: NodeId, _elem: &ElementData, pseu
             }
             false
         },
+        "only-child" => {
+            if let Some(pid) = doc.nodes[node_id].parent {
+                let siblings = &doc.nodes[pid].children;
+                let element_count = siblings
+                    .iter()
+                    .filter(|&&sid| matches!(doc.nodes[sid].kind, NodeKind::Element(_)))
+                    .count();
+                element_count == 1
+            } else {
+                false
+            }
+        },
+        "empty" => {
+            // :empty matches if the node has no element or text children.
+            doc.nodes[node_id]
+                .children
+                .iter()
+                .all(|&cid| matches!(doc.nodes[cid].kind, NodeKind::Comment(_)))
+        },
         // Stateful pseudo-classes (:hover, :focus, :visited) are not
         // handled during static cascade. Return false.
         _ => false,
     }
+}
+
+/// Match functional pseudo-classes like `:nth-child(An+B)`.
+fn match_pseudo_class_fn(
+    doc: &Document,
+    node_id: NodeId,
+    _elem: &ElementData,
+    name: &str,
+    arg: &str,
+) -> bool {
+    match name {
+        "nth-child" => {
+            let (a, b) = parse_an_plus_b(arg);
+            let index = element_index_in_parent(doc, node_id);
+            matches_an_plus_b(a, b, index)
+        },
+        "nth-last-child" => {
+            let (a, b) = parse_an_plus_b(arg);
+            let index = element_last_index_in_parent(doc, node_id);
+            matches_an_plus_b(a, b, index)
+        },
+        _ => false,
+    }
+}
+
+/// Match an attribute selector against an element.
+fn match_attribute(elem: &ElementData, name: &str, op: &AttrOp, value: Option<&str>) -> bool {
+    let attr_val = match elem.get_attribute(name) {
+        Some(v) => v,
+        None => return false,
+    };
+
+    match op {
+        AttrOp::Exists => true,
+        AttrOp::Equals => value.is_some_and(|v| attr_val == v),
+        AttrOp::Includes => {
+            value.is_some_and(|v| attr_val.split_whitespace().any(|word| word == v))
+        },
+        AttrOp::DashMatch => {
+            value.is_some_and(|v| attr_val == v || attr_val.starts_with(&format!("{v}-")))
+        },
+        AttrOp::Prefix => value.is_some_and(|v| attr_val.starts_with(v)),
+        AttrOp::Suffix => value.is_some_and(|v| attr_val.ends_with(v)),
+        AttrOp::Substring => value.is_some_and(|v| attr_val.contains(v)),
+    }
+}
+
+/// Parse `An+B` notation (e.g. "2n+1", "odd", "even", "3").
+fn parse_an_plus_b(arg: &str) -> (i32, i32) {
+    let s = arg.trim().to_ascii_lowercase();
+    if s == "odd" {
+        return (2, 1);
+    }
+    if s == "even" {
+        return (2, 0);
+    }
+    // Try "An+B", "An-B", "An", "B", "-n+B", "n+B"
+    if let Some(n_pos) = s.find('n') {
+        let a_str = &s[..n_pos].trim();
+        let a = if a_str.is_empty() || *a_str == "+" {
+            1
+        } else if *a_str == "-" {
+            -1
+        } else {
+            a_str.parse::<i32>().unwrap_or(1)
+        };
+        let rest = s[n_pos + 1..].trim().to_string();
+        let b = if rest.is_empty() {
+            0
+        } else {
+            rest.replace(' ', "").parse::<i32>().unwrap_or(0)
+        };
+        (a, b)
+    } else {
+        // Just a number.
+        (0, s.parse::<i32>().unwrap_or(0))
+    }
+}
+
+/// Check if `index` (1-based) matches the `An+B` formula.
+fn matches_an_plus_b(a: i32, b: i32, index: i32) -> bool {
+    if a == 0 {
+        return index == b;
+    }
+    let diff = index - b;
+    if a > 0 {
+        diff >= 0 && diff % a == 0
+    } else {
+        diff <= 0 && diff % a == 0
+    }
+}
+
+/// Get the 1-based index of a node among its element siblings.
+fn element_index_in_parent(doc: &Document, node_id: NodeId) -> i32 {
+    if let Some(pid) = doc.nodes[node_id].parent {
+        let siblings = &doc.nodes[pid].children;
+        let mut idx = 0;
+        for &sid in siblings {
+            if matches!(doc.nodes[sid].kind, NodeKind::Element(_)) {
+                idx += 1;
+                if sid == node_id {
+                    return idx;
+                }
+            }
+        }
+    }
+    0
+}
+
+/// Get the 1-based index counting from the last element sibling.
+fn element_last_index_in_parent(doc: &Document, node_id: NodeId) -> i32 {
+    if let Some(pid) = doc.nodes[node_id].parent {
+        let siblings = &doc.nodes[pid].children;
+        let mut idx = 0;
+        for &sid in siblings.iter().rev() {
+            if matches!(doc.nodes[sid].kind, NodeKind::Element(_)) {
+                idx += 1;
+                if sid == node_id {
+                    return idx;
+                }
+            }
+        }
+    }
+    0
 }
 
 // -----------------------------------------------------------------------
@@ -314,6 +486,22 @@ fn parent_element(doc: &Document, node_id: NodeId) -> Option<NodeId> {
             return Some(pid);
         }
         current = doc.nodes[pid].parent;
+    }
+    None
+}
+
+/// Find the previous sibling that is an element node.
+fn previous_sibling_element(doc: &Document, node_id: NodeId) -> Option<NodeId> {
+    let parent = doc.nodes[node_id].parent?;
+    let siblings = &doc.nodes[parent].children;
+    let mut prev_elem = None;
+    for &sid in siblings {
+        if sid == node_id {
+            return prev_elem;
+        }
+        if matches!(doc.nodes[sid].kind, NodeKind::Element(_)) {
+            prev_elem = Some(sid);
+        }
     }
     None
 }
@@ -454,7 +642,7 @@ head, script, style, link, meta, title, noscript {
 #[cfg(test)]
 mod tests {
     use super::super::parser::{
-        Combinator, CompoundSelector, CssValue, Declaration, Rule, Selector, SelectorList,
+        AttrOp, Combinator, CompoundSelector, CssValue, Declaration, Rule, Selector, SelectorList,
         SimpleSelector, Stylesheet,
     };
     use super::super::values::{Display, FontWeight};
@@ -859,5 +1047,393 @@ mod tests {
         assert!(styles[0].is_none(), "Document node");
         assert!(styles[1].is_some(), "html element");
         assert!(styles[2].is_none(), "Text node");
+    }
+
+    // -- New selector tests (Phase 4.3) ---------------------------------
+
+    #[test]
+    fn attribute_exists_selector() {
+        let doc = make_doc(vec![
+            (
+                TagName::Div,
+                vec![Attribute {
+                    name: "data-x".to_string(),
+                    value: "1".to_string(),
+                }],
+            ),
+            (TagName::Div, vec![]),
+        ]);
+        let sel = Selector {
+            parts: vec![(
+                CompoundSelector {
+                    parts: vec![SimpleSelector::Attribute {
+                        name: "data-x".to_string(),
+                        op: AttrOp::Exists,
+                        value: None,
+                    }],
+                },
+                None,
+            )],
+        };
+        assert!(matches_selector(&doc, 3, &sel));
+        assert!(!matches_selector(&doc, 4, &sel));
+    }
+
+    #[test]
+    fn attribute_equals_selector() {
+        let doc = make_doc(vec![(
+            TagName::Div,
+            vec![Attribute {
+                name: "lang".to_string(),
+                value: "en".to_string(),
+            }],
+        )]);
+        let sel = Selector {
+            parts: vec![(
+                CompoundSelector {
+                    parts: vec![SimpleSelector::Attribute {
+                        name: "lang".to_string(),
+                        op: AttrOp::Equals,
+                        value: Some("en".to_string()),
+                    }],
+                },
+                None,
+            )],
+        };
+        assert!(matches_selector(&doc, 3, &sel));
+
+        let wrong = Selector {
+            parts: vec![(
+                CompoundSelector {
+                    parts: vec![SimpleSelector::Attribute {
+                        name: "lang".to_string(),
+                        op: AttrOp::Equals,
+                        value: Some("fr".to_string()),
+                    }],
+                },
+                None,
+            )],
+        };
+        assert!(!matches_selector(&doc, 3, &wrong));
+    }
+
+    #[test]
+    fn attribute_prefix_selector() {
+        let doc = make_doc(vec![(
+            TagName::A,
+            vec![Attribute {
+                name: "href".to_string(),
+                value: "https://example.com".to_string(),
+            }],
+        )]);
+        let sel = Selector {
+            parts: vec![(
+                CompoundSelector {
+                    parts: vec![SimpleSelector::Attribute {
+                        name: "href".to_string(),
+                        op: AttrOp::Prefix,
+                        value: Some("https".to_string()),
+                    }],
+                },
+                None,
+            )],
+        };
+        assert!(matches_selector(&doc, 3, &sel));
+    }
+
+    #[test]
+    fn attribute_substring_selector() {
+        let doc = make_doc(vec![(
+            TagName::Div,
+            vec![Attribute {
+                name: "class".to_string(),
+                value: "my-widget-box".to_string(),
+            }],
+        )]);
+        let sel = Selector {
+            parts: vec![(
+                CompoundSelector {
+                    parts: vec![SimpleSelector::Attribute {
+                        name: "class".to_string(),
+                        op: AttrOp::Substring,
+                        value: Some("widget".to_string()),
+                    }],
+                },
+                None,
+            )],
+        };
+        assert!(matches_selector(&doc, 3, &sel));
+    }
+
+    #[test]
+    fn not_selector() {
+        let doc = make_doc(vec![(TagName::P, vec![]), (TagName::Div, vec![])]);
+        let sel = Selector {
+            parts: vec![(
+                CompoundSelector {
+                    parts: vec![SimpleSelector::Not(Box::new(CompoundSelector {
+                        parts: vec![SimpleSelector::Type("div".to_string())],
+                    }))],
+                },
+                None,
+            )],
+        };
+        // <p> is not <div>, so it matches :not(div).
+        assert!(matches_selector(&doc, 3, &sel));
+        // <div> is <div>, so it does NOT match :not(div).
+        assert!(!matches_selector(&doc, 4, &sel));
+    }
+
+    #[test]
+    fn adjacent_sibling_selector() {
+        // <body> has three children: <h1>, <p>, <div>
+        let doc = make_doc(vec![
+            (TagName::H1, vec![]),
+            (TagName::P, vec![]),
+            (TagName::Div, vec![]),
+        ]);
+        // h1 + p should match the <p> (node 4).
+        let sel = Selector {
+            parts: vec![
+                (
+                    CompoundSelector {
+                        parts: vec![SimpleSelector::Type("h1".to_string())],
+                    },
+                    None,
+                ),
+                (
+                    CompoundSelector {
+                        parts: vec![SimpleSelector::Type("p".to_string())],
+                    },
+                    Some(Combinator::AdjacentSibling),
+                ),
+            ],
+        };
+        assert!(matches_selector(&doc, 4, &sel));
+        // <div> (node 5) is not immediately after <h1>.
+        assert!(!matches_selector(&doc, 5, &sel));
+    }
+
+    #[test]
+    fn general_sibling_selector() {
+        let doc = make_doc(vec![
+            (TagName::H1, vec![]),
+            (TagName::P, vec![]),
+            (TagName::Div, vec![]),
+        ]);
+        // h1 ~ div should match <div> (node 5) because <h1> precedes it.
+        let sel = Selector {
+            parts: vec![
+                (
+                    CompoundSelector {
+                        parts: vec![SimpleSelector::Type("h1".to_string())],
+                    },
+                    None,
+                ),
+                (
+                    CompoundSelector {
+                        parts: vec![SimpleSelector::Type("div".to_string())],
+                    },
+                    Some(Combinator::GeneralSibling),
+                ),
+            ],
+        };
+        assert!(matches_selector(&doc, 5, &sel));
+    }
+
+    #[test]
+    fn nth_child_matching() {
+        assert!(matches_an_plus_b(2, 1, 1)); // odd: 1
+        assert!(!matches_an_plus_b(2, 1, 2)); // odd: 2 is even
+        assert!(matches_an_plus_b(2, 1, 3)); // odd: 3
+        assert!(matches_an_plus_b(2, 0, 2)); // even: 2
+        assert!(!matches_an_plus_b(2, 0, 1)); // even: 1 is odd
+        assert!(matches_an_plus_b(0, 3, 3)); // exactly 3
+        assert!(!matches_an_plus_b(0, 3, 4)); // not 3
+        assert!(matches_an_plus_b(3, 0, 6)); // 3n: 6
+    }
+
+    #[test]
+    fn parse_an_plus_b_cases() {
+        assert_eq!(parse_an_plus_b("odd"), (2, 1));
+        assert_eq!(parse_an_plus_b("even"), (2, 0));
+        assert_eq!(parse_an_plus_b("3"), (0, 3));
+        assert_eq!(parse_an_plus_b("2n+1"), (2, 1));
+        assert_eq!(parse_an_plus_b("2n"), (2, 0));
+        assert_eq!(parse_an_plus_b("n+3"), (1, 3));
+        assert_eq!(parse_an_plus_b("-n+3"), (-1, 3));
+    }
+
+    #[test]
+    fn only_child_pseudo_class() {
+        // Single child.
+        let doc = make_doc(vec![(TagName::P, vec![])]);
+        assert!(match_pseudo_class(
+            &doc,
+            3,
+            match &doc.nodes[3].kind {
+                NodeKind::Element(e) => e,
+                _ => panic!(),
+            },
+            "only-child"
+        ));
+
+        // Multiple children.
+        let doc2 = make_doc(vec![(TagName::P, vec![]), (TagName::Div, vec![])]);
+        assert!(!match_pseudo_class(
+            &doc2,
+            3,
+            match &doc2.nodes[3].kind {
+                NodeKind::Element(e) => e,
+                _ => panic!(),
+            },
+            "only-child"
+        ));
+    }
+
+    #[test]
+    fn selector_parsing_attribute() {
+        let sheet = Stylesheet::parse("[type=text] { color: red; }");
+        assert!(!sheet.rules.is_empty());
+        let rule = &sheet.rules[0];
+        let sel = &rule.selectors.selectors[0];
+        let compound = &sel.parts[0].0;
+        assert!(matches!(
+            &compound.parts[0],
+            SimpleSelector::Attribute {
+                name,
+                op: AttrOp::Equals,
+                value: Some(val),
+            } if name == "type" && val == "text"
+        ));
+    }
+
+    #[test]
+    fn selector_parsing_not() {
+        let sheet = Stylesheet::parse(":not(.hidden) { display: block; }");
+        assert!(!sheet.rules.is_empty());
+        let sel = &sheet.rules[0].selectors.selectors[0];
+        let compound = &sel.parts[0].0;
+        assert!(matches!(&compound.parts[0], SimpleSelector::Not(_)));
+    }
+
+    #[test]
+    fn selector_parsing_adjacent_sibling() {
+        let sheet = Stylesheet::parse("h1 + p { color: red; }");
+        assert!(!sheet.rules.is_empty());
+        let sel = &sheet.rules[0].selectors.selectors[0];
+        assert_eq!(sel.parts.len(), 2);
+        assert_eq!(sel.parts[1].1, Some(Combinator::AdjacentSibling));
+    }
+
+    #[test]
+    fn selector_parsing_general_sibling() {
+        let sheet = Stylesheet::parse("h1 ~ p { color: red; }");
+        assert!(!sheet.rules.is_empty());
+        let sel = &sheet.rules[0].selectors.selectors[0];
+        assert_eq!(sel.parts.len(), 2);
+        assert_eq!(sel.parts[1].1, Some(Combinator::GeneralSibling));
+    }
+
+    #[test]
+    fn attribute_includes_selector() {
+        let doc = make_doc(vec![(
+            TagName::Div,
+            vec![Attribute {
+                name: "class".to_string(),
+                value: "foo bar baz".to_string(),
+            }],
+        )]);
+        let sel = Selector {
+            parts: vec![(
+                CompoundSelector {
+                    parts: vec![SimpleSelector::Attribute {
+                        name: "class".to_string(),
+                        op: AttrOp::Includes,
+                        value: Some("bar".to_string()),
+                    }],
+                },
+                None,
+            )],
+        };
+        assert!(matches_selector(&doc, 3, &sel));
+    }
+
+    mod prop {
+        use super::*;
+        use proptest::prelude::*;
+
+        proptest! {
+            /// "odd" parses to (2, 1) and "even" parses to (2, 0).
+            #[test]
+            fn an_plus_b_odd_even(
+                input in proptest::sample::select(vec![
+                    "odd".to_string(), "ODD".to_string(), "Odd".to_string(),
+                    "even".to_string(), "EVEN".to_string(), "Even".to_string(),
+                ]),
+            ) {
+                let (a, b) = parse_an_plus_b(&input);
+                let lower = input.to_ascii_lowercase();
+                if lower == "odd" {
+                    prop_assert_eq!((a, b), (2, 1));
+                } else {
+                    prop_assert_eq!((a, b), (2, 0));
+                }
+            }
+
+            /// A plain positive integer parses as (0, n).
+            #[test]
+            fn an_plus_b_plain_number(n in 1i32..100) {
+                let (a, b) = parse_an_plus_b(&n.to_string());
+                prop_assert_eq!(a, 0);
+                prop_assert_eq!(b, n);
+            }
+
+            /// "An" form parses as (A, 0).
+            #[test]
+            fn an_plus_b_an_form(coeff in 1i32..20) {
+                let input = format!("{coeff}n");
+                let (a, b) = parse_an_plus_b(&input);
+                prop_assert_eq!(a, coeff);
+                prop_assert_eq!(b, 0);
+            }
+
+            /// "An+B" form parses correctly.
+            #[test]
+            fn an_plus_b_full_form(
+                coeff in 1i32..20,
+                offset in 0i32..20,
+            ) {
+                let input = format!("{coeff}n+{offset}");
+                let (a, b) = parse_an_plus_b(&input);
+                prop_assert_eq!(a, coeff);
+                prop_assert_eq!(b, offset);
+            }
+
+            /// matches_an_plus_b: if a==0, only index==b matches.
+            #[test]
+            fn matches_an_plus_b_a_zero(b in 1i32..50, index in 1i32..50) {
+                let result = matches_an_plus_b(0, b, index);
+                prop_assert_eq!(result, index == b);
+            }
+
+            /// matches_an_plus_b: index == a*1 + b always matches.
+            #[test]
+            fn matches_an_plus_b_first_match(a in 1i32..20, b in 0i32..10) {
+                let index = a + b;
+                if index > 0 {
+                    prop_assert!(
+                        matches_an_plus_b(a, b, index),
+                        "{a}n+{b} should match index {index}",
+                    );
+                }
+            }
+
+            /// parse_an_plus_b never panics on arbitrary ASCII.
+            #[test]
+            fn an_plus_b_never_panics(input in "[ -~]{0,30}") {
+                let _ = parse_an_plus_b(&input);
+            }
+        }
     }
 }

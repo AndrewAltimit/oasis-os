@@ -80,8 +80,10 @@ impl ScrollView {
         let ratio = self.viewport_height as f32 / self.content_height as f32;
         let thumb_h = ((h as f32 * ratio).max(bar_w as f32)) as u32;
         let scroll_range = self.content_height - self.viewport_height;
+        let max_thumb_y = (h - thumb_h) as i32;
         let thumb_y = if scroll_range > 0 {
-            ((h - thumb_h) as f32 * self.scroll_y as f32 / scroll_range as f32) as i32
+            let raw = ((h - thumb_h) as f32 * self.scroll_y as f32 / scroll_range as f32) as i32;
+            raw.clamp(0, max_thumb_y)
         } else {
             0
         };
@@ -263,6 +265,20 @@ mod tests {
         }
         // Track and thumb should both be drawn. The thumb fill_rect should
         // have a height proportional to viewport/content ratio.
+        assert!(backend.fill_rect_count() >= 2);
+    }
+
+    #[test]
+    fn scrollbar_thumb_clamped_at_max_scroll() {
+        let mut sv = ScrollView::new(500, 200);
+        sv.scroll_y = 300; // max scroll
+        let theme = Theme::dark();
+        let mut backend = MockBackend::new();
+        {
+            let mut ctx = DrawContext::new(&mut backend, &theme);
+            // Should not panic and thumb should stay within track bounds.
+            sv.draw_scrollbar(&mut ctx, 0, 0, 200).unwrap();
+        }
         assert!(backend.fill_rect_count() >= 2);
     }
 

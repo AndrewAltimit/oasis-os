@@ -16,5 +16,8 @@ oasis-skin = { workspace = true }
 oasis-net = { workspace = true }
 log = { workspace = true }
 
+[dev-dependencies]
+proptest = "1"
+
 [lints]
 workspace = true

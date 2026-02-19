@@ -23,11 +23,50 @@ pub enum Display {
     Block,
     Inline,
     InlineBlock,
+    Flex,
     ListItem,
     Table,
     TableRow,
     TableCell,
     None,
+}
+
+/// CSS `flex-direction` property.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FlexDirection {
+    Row,
+    RowReverse,
+    Column,
+    ColumnReverse,
+}
+
+/// CSS `justify-content` property (main axis alignment).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum JustifyContent {
+    FlexStart,
+    FlexEnd,
+    Center,
+    SpaceBetween,
+    SpaceAround,
+    SpaceEvenly,
+}
+
+/// CSS `align-items` property (cross axis alignment).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AlignItems {
+    FlexStart,
+    FlexEnd,
+    Center,
+    Stretch,
+    Baseline,
+}
+
+/// CSS `flex-wrap` property.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FlexWrap {
+    NoWrap,
+    Wrap,
+    WrapReverse,
 }
 
 /// CSS `visibility` property.
@@ -157,6 +196,15 @@ pub enum Clear {
     Both,
 }
 
+/// CSS `position` property.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Position {
+    Static,
+    Relative,
+    Absolute,
+    Fixed,
+}
+
 /// CSS `overflow` property.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Overflow {
@@ -251,6 +299,24 @@ pub struct ComputedStyle {
 
     // -- Overflow ---------------------------------------------------
     pub overflow: Overflow,
+
+    // -- Positioning ------------------------------------------------
+    pub position: Position,
+    pub top: Dimension,
+    pub right: Dimension,
+    pub bottom: Dimension,
+    pub left: Dimension,
+    pub z_index: i32,
+
+    // -- Flexbox properties --
+    pub flex_direction: FlexDirection,
+    pub flex_wrap: FlexWrap,
+    pub justify_content: JustifyContent,
+    pub align_items: AlignItems,
+    pub flex_grow: f32,
+    pub flex_shrink: f32,
+    pub flex_basis: Dimension,
+    pub gap: f32,
 }
 
 /// Standard browser defaults (CSS 2.1 initial values).
@@ -322,6 +388,23 @@ impl Default for ComputedStyle {
 
             // Overflow
             overflow: Overflow::Visible,
+
+            // Positioning
+            position: Position::Static,
+            top: Dimension::Auto,
+            right: Dimension::Auto,
+            bottom: Dimension::Auto,
+            left: Dimension::Auto,
+            z_index: 0,
+
+            flex_direction: FlexDirection::Row,
+            flex_wrap: FlexWrap::NoWrap,
+            justify_content: JustifyContent::FlexStart,
+            align_items: AlignItems::Stretch,
+            flex_grow: 0.0,
+            flex_shrink: 1.0,
+            flex_basis: Dimension::Auto,
+            gap: 0.0,
         }
     }
 }
@@ -376,6 +459,7 @@ impl ComputedStyle {
                         "table" => Display::Table,
                         "table-row" => Display::TableRow,
                         "table-cell" => Display::TableCell,
+                        "flex" => Display::Flex,
                         "none" => Display::None,
                         _ => return,
                     };
@@ -707,6 +791,100 @@ impl ComputedStyle {
                         _ => return,
                     };
                 }
+            },
+
+            // -- Positioning --------------------------------------------
+            "position" => {
+                if let Some(kw) = as_keyword(value) {
+                    self.position = match kw {
+                        "static" => Position::Static,
+                        "relative" => Position::Relative,
+                        "absolute" => Position::Absolute,
+                        "fixed" => Position::Fixed,
+                        _ => return,
+                    };
+                }
+            },
+            "top" => {
+                self.top = resolve_dimension(value, parent_font_size);
+            },
+            "right" => {
+                self.right = resolve_dimension(value, parent_font_size);
+            },
+            "bottom" => {
+                self.bottom = resolve_dimension(value, parent_font_size);
+            },
+            "left" => {
+                self.left = resolve_dimension(value, parent_font_size);
+            },
+            "z-index" => {
+                if let CssValue::Number(n) = value {
+                    self.z_index = *n as i32;
+                }
+            },
+
+            // -- Flexbox properties --
+            "flex-direction" => {
+                if let Some(kw) = as_keyword(value) {
+                    self.flex_direction = match kw {
+                        "row" => FlexDirection::Row,
+                        "row-reverse" => FlexDirection::RowReverse,
+                        "column" => FlexDirection::Column,
+                        "column-reverse" => FlexDirection::ColumnReverse,
+                        _ => return,
+                    };
+                }
+            },
+            "flex-wrap" => {
+                if let Some(kw) = as_keyword(value) {
+                    self.flex_wrap = match kw {
+                        "nowrap" => FlexWrap::NoWrap,
+                        "wrap" => FlexWrap::Wrap,
+                        "wrap-reverse" => FlexWrap::WrapReverse,
+                        _ => return,
+                    };
+                }
+            },
+            "justify-content" => {
+                if let Some(kw) = as_keyword(value) {
+                    self.justify_content = match kw {
+                        "flex-start" | "start" => JustifyContent::FlexStart,
+                        "flex-end" | "end" => JustifyContent::FlexEnd,
+                        "center" => JustifyContent::Center,
+                        "space-between" => JustifyContent::SpaceBetween,
+                        "space-around" => JustifyContent::SpaceAround,
+                        "space-evenly" => JustifyContent::SpaceEvenly,
+                        _ => return,
+                    };
+                }
+            },
+            "align-items" => {
+                if let Some(kw) = as_keyword(value) {
+                    self.align_items = match kw {
+                        "flex-start" | "start" => AlignItems::FlexStart,
+                        "flex-end" | "end" => AlignItems::FlexEnd,
+                        "center" => AlignItems::Center,
+                        "stretch" => AlignItems::Stretch,
+                        "baseline" => AlignItems::Baseline,
+                        _ => return,
+                    };
+                }
+            },
+            "flex-grow" => {
+                if let CssValue::Number(n) = value {
+                    self.flex_grow = *n;
+                }
+            },
+            "flex-shrink" => {
+                if let CssValue::Number(n) = value {
+                    self.flex_shrink = *n;
+                }
+            },
+            "flex-basis" => {
+                self.flex_basis = resolve_dimension(value, parent_font_size);
+            },
+            "gap" | "row-gap" | "column-gap" => {
+                self.gap = resolve_length(value, parent_font_size);
             },
 
             // Unknown properties are silently ignored (per CSS spec).

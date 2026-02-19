@@ -47,6 +47,8 @@ pub fn launch_app_window(
                 width: 380,
                 height: 220,
                 window_type: WindowType::AppWindow,
+                always_on_top: false,
+                modal: false,
             };
             let _ = wm.create_window(&wc, sdi);
             let mut bw = BrowserWidget::new(browser_config.clone());
@@ -71,6 +73,8 @@ pub fn launch_app_window(
             width: 380,
             height: 220,
             window_type: WindowType::AppWindow,
+            always_on_top: false,
+            modal: false,
         };
         let _ = wm.create_window(&wc, sdi);
         open_runners.push((win_id, AppRunner::launch(app, vfs)));

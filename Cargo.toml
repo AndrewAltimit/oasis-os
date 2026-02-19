@@ -49,8 +49,9 @@ anyhow = "1.0"
 # Graphics (desktop / Pi)
 sdl2 = "0.37"
 
-# Image encoding (screenshots)
+# Image encoding/decoding
 png = "0.17"
+jpeg-decoder = "0.3"
 
 # TLS (desktop -- feature-gated in oasis-core)
 rustls = { version = "0.23", default-features = false, features = ["ring", "logging", "std", "tls12"] }

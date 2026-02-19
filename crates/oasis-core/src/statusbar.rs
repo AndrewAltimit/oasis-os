@@ -8,7 +8,6 @@ use crate::backend::Color;
 use crate::platform::{BatteryState, PowerInfo, SystemTime};
 use crate::sdi::SdiRegistry;
 use crate::sdi::helpers::{ensure_border, ensure_pill, ensure_text, hide_objects};
-use crate::theme;
 
 /// Top-level tabs (cycled with L trigger).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -140,7 +139,7 @@ impl StatusBar {
     ) {
         let bar_h = at.statusbar_height;
         let font_small = at.font_small;
-        let screen_w = theme::SCREEN_W;
+        let screen_w = at.screen_w;
 
         // Semi-transparent background bar.
         if !sdi.contains("bar_top") {
@@ -241,7 +240,7 @@ impl StatusBar {
 
         // Category label before tabs (PSIX: "MSO").
         if features.show_tabs {
-            let mso_y = bar_h as i32 + (theme::TAB_H - font_small as i32) / 2;
+            let mso_y = bar_h as i32 + (at.tab_h - font_small as i32) / 2;
             ensure_text(
                 sdi,
                 "bar_mso",
@@ -274,9 +273,9 @@ impl StatusBar {
                 continue;
             }
 
-            let x = theme::TAB_START_X + (i as i32) * (theme::TAB_W + theme::TAB_GAP);
-            let tw = theme::TAB_W as u32;
-            let th = theme::TAB_H as u32;
+            let x = at.tab_start_x + (i as i32) * (at.tab_w + at.tab_gap);
+            let tw = at.tab_w as u32;
+            let th = at.tab_h as u32;
 
             let is_active = *tab == self.active_tab;
 
@@ -315,8 +314,8 @@ impl StatusBar {
             }
 
             // Tab text (centered in tab).
-            let tx = x + (theme::TAB_W - (tab.label().len() as i32 * char_w)) / 2;
-            let tab_text_y = tab_y + (theme::TAB_H - font_small as i32) / 2;
+            let tx = x + (at.tab_w - (tab.label().len() as i32 * char_w)) / 2;
+            let tab_text_y = tab_y + (at.tab_h - font_small as i32) / 2;
             ensure_text(
                 sdi,
                 &name,

@@ -160,6 +160,12 @@ pub struct BrowserWidget {
 
     /// Optional TLS provider for HTTPS and Gemini connections.
     tls: Option<Box<dyn oasis_net::tls::TlsProvider>>,
+
+    /// Whether the layout tree needs rebuilding.
+    layout_dirty: bool,
+
+    /// Viewport width used for the most recent layout pass.
+    last_layout_w: u32,
 }
 
 impl BrowserWidget {
@@ -191,6 +197,8 @@ impl BrowserWidget {
             window_w: 480,
             window_h: 272,
             tls: None,
+            layout_dirty: false,
+            last_layout_w: 480,
         }
     }
 
@@ -200,13 +208,52 @@ impl BrowserWidget {
     }
 
     /// Update the window position and size (called by the WM).
+    ///
+    /// Marks layout dirty if the viewport width changed, since layout
+    /// depends on the available width for line breaking and block sizing.
     pub fn set_window(&mut self, x: i32, y: i32, w: u32, h: u32) {
+        if w != self.window_w || h != self.window_h {
+            self.layout_dirty = true;
+        }
         self.window_x = x;
         self.window_y = y;
         self.window_w = w;
         self.window_h = h;
         let vh = self.config.content_height(h) as i32;
         self.scroll.set_viewport_height(vh);
+    }
+
+    /// Returns whether the layout tree needs rebuilding.
+    pub fn is_layout_dirty(&self) -> bool {
+        self.layout_dirty
+    }
+
+    /// Rebuild layout from cached DOM/styles if the viewport changed.
+    /// Returns `true` if relayout was performed, `false` if skipped.
+    pub fn relayout_if_dirty(&mut self) -> bool {
+        if !self.layout_dirty {
+            return false;
+        }
+        if self.document.is_none() || self.styles.is_empty() {
+            self.layout_dirty = false;
+            return false;
+        }
+
+        let doc = self.document.as_ref().unwrap();
+        let content_h = self.config.content_height(self.window_h);
+        let layout_root = layout::block::build_layout_tree(
+            doc,
+            &self.styles,
+            &SimpleTextMeasurer,
+            self.window_w as f32,
+            content_h as f32,
+        );
+
+        self.layout_root = Some(layout_root);
+        self.link_map.clear();
+        self.last_layout_w = self.window_w;
+        self.layout_dirty = false;
+        true
     }
 
     // ---------------------------------------------------------------
@@ -332,6 +379,8 @@ impl BrowserWidget {
         self.link_map.clear();
         self.scroll.reset();
         self.state = LoadingState::Idle;
+        self.layout_dirty = false;
+        self.last_layout_w = self.window_w;
 
         // 7. Update navigation.
         self.nav.navigate(url, &title);
@@ -424,6 +473,9 @@ impl BrowserWidget {
     /// Draws chrome (URL bar, navigation buttons, status bar) and
     /// the page content viewport.
     pub fn paint(&mut self, backend: &mut dyn SdiBackend) -> Result<()> {
+        // Rebuild layout if the viewport was resized since last paint.
+        self.relayout_if_dirty();
+
         // Set clip to our window area.
         backend.set_clip_rect(self.window_x, self.window_y, self.window_w, self.window_h)?;
 
@@ -2695,5 +2747,174 @@ mod tests {
             text.contains("TLS Required"),
             "expected 'TLS Required' in page text, got: {text}",
         );
+    }
+
+    // ===============================================================
+    // Incremental Layout / Dirty Flag Tests
+    // ===============================================================
+
+    #[test]
+    fn layout_not_dirty_after_load() {
+        let vfs = test_vfs();
+        let mut browser = make_browser();
+        browser.set_window(0, 0, 480, 272);
+        browser.navigate_vfs("vfs://sites/home/index.html", &vfs);
+
+        assert!(
+            !browser.is_layout_dirty(),
+            "layout should not be dirty immediately after load_html"
+        );
+    }
+
+    #[test]
+    fn layout_dirty_after_width_change() {
+        let vfs = test_vfs();
+        let mut browser = make_browser();
+        browser.set_window(0, 0, 480, 272);
+        browser.navigate_vfs("vfs://sites/home/index.html", &vfs);
+
+        // Change width -> should mark dirty.
+        browser.set_window(0, 0, 320, 272);
+        assert!(
+            browser.is_layout_dirty(),
+            "layout should be dirty after viewport width change"
+        );
+    }
+
+    #[test]
+    fn layout_not_dirty_after_position_only_change() {
+        let vfs = test_vfs();
+        let mut browser = make_browser();
+        browser.set_window(0, 0, 480, 272);
+        browser.navigate_vfs("vfs://sites/home/index.html", &vfs);
+
+        // Move window (same size) -> should NOT mark dirty.
+        browser.set_window(10, 20, 480, 272);
+        assert!(
+            !browser.is_layout_dirty(),
+            "layout should not be dirty after position-only change"
+        );
+    }
+
+    #[test]
+    fn layout_dirty_after_height_only_change() {
+        let vfs = test_vfs();
+        let mut browser = make_browser();
+        browser.set_window(0, 0, 480, 272);
+        browser.navigate_vfs("vfs://sites/home/index.html", &vfs);
+
+        // Change height only -> should mark dirty because viewport
+        // height is used for CSS positioned elements (fixed/absolute).
+        browser.set_window(0, 0, 480, 300);
+        assert!(
+            browser.is_layout_dirty(),
+            "layout should be dirty after height change"
+        );
+    }
+
+    #[test]
+    fn relayout_if_dirty_skips_when_clean() {
+        let vfs = test_vfs();
+        let mut browser = make_browser();
+        browser.set_window(0, 0, 480, 272);
+        browser.navigate_vfs("vfs://sites/home/index.html", &vfs);
+
+        // Layout is clean after load.
+        assert!(
+            !browser.relayout_if_dirty(),
+            "should skip relayout when clean"
+        );
+    }
+
+    #[test]
+    fn relayout_if_dirty_rebuilds_on_width_change() {
+        let vfs = test_vfs();
+        let mut browser = make_browser();
+        browser.set_window(0, 0, 480, 272);
+        browser.navigate_vfs("vfs://sites/home/index.html", &vfs);
+
+        // Change width to mark dirty.
+        browser.set_window(0, 0, 320, 272);
+        assert!(browser.is_layout_dirty());
+
+        // Relayout should run and clear dirty flag.
+        assert!(
+            browser.relayout_if_dirty(),
+            "should perform relayout on dirty"
+        );
+        assert!(
+            !browser.is_layout_dirty(),
+            "dirty flag should be cleared after relayout"
+        );
+        assert!(
+            browser.layout_root.is_some(),
+            "layout_root should exist after relayout"
+        );
+    }
+
+    #[test]
+    fn relayout_if_dirty_skips_without_document() {
+        let mut browser = make_browser();
+        browser.set_window(0, 0, 480, 272);
+
+        // No page loaded -- force dirty.
+        browser.set_window(0, 0, 320, 272);
+
+        // Should skip (no document/styles).
+        assert!(
+            !browser.relayout_if_dirty(),
+            "should skip relayout without a loaded document"
+        );
+        assert!(
+            !browser.is_layout_dirty(),
+            "dirty flag should be cleared even without document"
+        );
+    }
+
+    #[test]
+    fn layout_box_dirty_field_defaults_true() {
+        let lb = layout::box_model::LayoutBox::new(
+            layout::box_model::BoxType::Block,
+            css::values::ComputedStyle::default(),
+            None,
+        );
+        assert!(lb.dirty, "new LayoutBox should have dirty=true");
+    }
+
+    #[test]
+    fn layout_box_mark_clean_propagates() {
+        let mut parent = layout::box_model::LayoutBox::new(
+            layout::box_model::BoxType::Block,
+            css::values::ComputedStyle::default(),
+            None,
+        );
+        let child = layout::box_model::LayoutBox::new(
+            layout::box_model::BoxType::Inline,
+            css::values::ComputedStyle::default(),
+            None,
+        );
+        parent.children.push(child);
+
+        assert!(parent.dirty);
+        assert!(parent.children[0].dirty);
+
+        parent.mark_clean();
+
+        assert!(!parent.dirty, "parent should be clean");
+        assert!(!parent.children[0].dirty, "child should be clean");
+    }
+
+    #[test]
+    fn layout_box_mark_dirty_sets_flag() {
+        let mut lb = layout::box_model::LayoutBox::new(
+            layout::box_model::BoxType::Block,
+            css::values::ComputedStyle::default(),
+            None,
+        );
+        lb.mark_clean();
+        assert!(!lb.dirty);
+
+        lb.mark_dirty();
+        assert!(lb.dirty, "mark_dirty should set dirty flag");
     }
 }

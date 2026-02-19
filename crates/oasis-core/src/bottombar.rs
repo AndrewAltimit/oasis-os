@@ -102,10 +102,10 @@ impl BottomBar {
         at: &ActiveTheme,
         features: &crate::skin::SkinFeatures,
     ) {
-        let bar_y = (theme::SCREEN_H - at.bottombar_height) as i32;
+        let bar_y = (at.screen_h - at.bottombar_height) as i32;
         let bar_h = at.bottombar_height;
         let font_small = at.font_small;
-        let screen_w = theme::SCREEN_W;
+        let screen_w = at.screen_w;
         let char_w = font_small.max(8) as i32 / 8 * 8;
         // Vertically center text within the bar.
         let text_y = bar_y + (bar_h as i32 - font_small as i32) / 2;
@@ -178,13 +178,13 @@ impl BottomBar {
         if features.show_media_tabs {
             let tab_labels: Vec<&str> = MediaTab::TABS.iter().map(|t| t.label()).collect();
             let labels_w: i32 = tab_labels.iter().map(|l| l.len() as i32 * char_w).sum();
-            let pipes_w = (tab_labels.len() as i32 - 1) * (theme::PIPE_GAP * 2 + char_w);
+            let pipes_w = (tab_labels.len() as i32 - 1) * (at.pipe_gap * 2 + char_w);
             let total_w = labels_w + pipes_w;
-            let tabs_x = screen_w as i32 - total_w - theme::R_HINT_W - 8;
+            let tabs_x = screen_w as i32 - total_w - at.r_hint_w - 8;
 
             // Chrome bezel around tab group.
             let tab_bx = tabs_x - 6;
-            let tab_bw = (total_w + theme::R_HINT_W + 14) as u32;
+            let tab_bw = (total_w + at.r_hint_w + 14) as u32;
             ensure_chrome_bezel(
                 sdi,
                 "bar_tab_bezel",
@@ -215,13 +215,13 @@ impl BottomBar {
 
                 // Pipe separator (except after last tab).
                 if i < MediaTab::TABS.len() - 1 {
-                    cx += theme::PIPE_GAP;
+                    cx += at.pipe_gap;
                     let pipe_name = format!("bar_bpipe_{i}");
                     ensure_text(sdi, &pipe_name, cx, text_y, font_small, at.pipe_color);
                     if let Ok(obj) = sdi.get_mut(&pipe_name) {
                         obj.text = Some("|".to_string());
                     }
-                    cx += char_w + theme::PIPE_GAP;
+                    cx += char_w + at.pipe_gap;
                 }
             }
 
@@ -229,7 +229,7 @@ impl BottomBar {
             ensure_text(
                 sdi,
                 "bar_r_hint",
-                screen_w as i32 - theme::R_HINT_W,
+                screen_w as i32 - at.r_hint_w,
                 text_y,
                 font_small,
                 at.r_hint_color,

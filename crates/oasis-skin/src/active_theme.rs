@@ -175,6 +175,36 @@ pub struct ActiveTheme {
     /// Small font size (default 8).
     pub font_small: u16,
 
+    // -- Scaled layout constants (proportional to screen_w / 480) --
+    /// Top tab width (base 45 at 480px).
+    pub tab_w: i32,
+    /// Top tab height (base 16 at 480px).
+    pub tab_h: i32,
+    /// Gap between top tabs (base 4 at 480px).
+    pub tab_gap: i32,
+    /// X offset where top tabs start (base 34 at 480px).
+    pub tab_start_x: i32,
+    /// Pipe gap between media tab labels (base 5 at 480px).
+    pub pipe_gap: i32,
+    /// Width reserved for "R>" hint (base 28 at 480px).
+    pub r_hint_w: i32,
+    /// Colored stripe height at top of document icon (base 12 at 480px).
+    pub icon_stripe_h: u32,
+    /// Folded corner size on document icon (base 10 at 480px).
+    pub icon_fold_size: u32,
+    /// App graphic height on document body (base 22 at 480px).
+    pub icon_gfx_h: u32,
+    /// App graphic horizontal padding inside icon (base 4 at 480px).
+    pub icon_gfx_pad: u32,
+    /// Gap between icon bottom and label text (base 4 at 480px).
+    pub icon_label_pad: i32,
+
+    // -- Screen dimensions --
+    /// Screen width (default 480, PSP native).
+    pub screen_w: u32,
+    /// Screen height (default 272, PSP native).
+    pub screen_h: u32,
+
     // -- Wallpaper config --
     /// Wallpaper style: "gradient" (default), "solid", or "none".
     pub wallpaper_style: String,
@@ -263,6 +293,19 @@ impl Default for ActiveTheme {
             icon_width: 42,
             icon_height: 52,
             font_small: 8,
+            tab_w: 45,
+            tab_h: 16,
+            tab_gap: 4,
+            tab_start_x: 34,
+            pipe_gap: 5,
+            r_hint_w: 28,
+            icon_stripe_h: 12,
+            icon_fold_size: 10,
+            icon_gfx_h: 22,
+            icon_gfx_pad: 4,
+            icon_label_pad: 4,
+            screen_w: 480,
+            screen_h: 272,
             wallpaper_style: "gradient".to_string(),
             wallpaper_stops: vec![
                 Color::rgb(245, 110, 15),
@@ -489,6 +532,17 @@ impl ActiveTheme {
                 .as_ref()
                 .and_then(|g| g.font_small)
                 .unwrap_or(8),
+            tab_w: 45,
+            tab_h: 16,
+            tab_gap: 4,
+            tab_start_x: 34,
+            pipe_gap: 5,
+            r_hint_w: 28,
+            icon_stripe_h: 12,
+            icon_fold_size: 10,
+            icon_gfx_h: 22,
+            icon_gfx_pad: 4,
+            icon_label_pad: 4,
             wallpaper_style: skin
                 .wallpaper
                 .as_ref()
@@ -526,6 +580,8 @@ impl ActiveTheme {
                 .and_then(|w| w.wave_intensity)
                 .unwrap_or(1.0),
             wallpaper_angle: skin.wallpaper.as_ref().and_then(|w| w.angle).unwrap_or(0.0),
+            screen_w: 480,
+            screen_h: 272,
             statusbar_gradient_top: Self::bar_gradient_pair(
                 skin,
                 bar.and_then(|b| b.statusbar_gradient_top.as_ref()),
@@ -555,6 +611,33 @@ impl ActiveTheme {
             )
             .map(|(_, b)| b),
         }
+    }
+
+    /// Set the screen dimensions and scale layout constants (builder pattern).
+    ///
+    /// Layout constants scale proportionally to `screen_w / 480`. At the PSP
+    /// native resolution (480px) the base values are returned unchanged.
+    pub fn with_screen_size(mut self, w: u32, h: u32) -> Self {
+        self.screen_w = w;
+        self.screen_h = h;
+
+        // Scale layout constants proportionally to screen width.
+        let scale = |base: i32| -> i32 { (base * w as i32 + 240) / 480 };
+        let scale_u = |base: u32| -> u32 { (base * w + 240) / 480 };
+
+        self.tab_w = scale(45);
+        self.tab_h = scale(16);
+        self.tab_gap = scale(4);
+        self.tab_start_x = scale(34);
+        self.pipe_gap = scale(5);
+        self.r_hint_w = scale(28);
+        self.icon_stripe_h = scale_u(12);
+        self.icon_fold_size = scale_u(10);
+        self.icon_gfx_h = scale_u(22);
+        self.icon_gfx_pad = scale_u(4);
+        self.icon_label_pad = scale(4);
+
+        self
     }
 
     /// Derive a gradient pair for a bar element.

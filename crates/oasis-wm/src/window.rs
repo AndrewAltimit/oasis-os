@@ -49,6 +49,10 @@ pub struct WindowConfig {
     pub height: u32,
     /// Window type (determines available operations).
     pub window_type: WindowType,
+    /// Pin this window above normal windows in z-order.
+    pub always_on_top: bool,
+    /// Block input to all windows below this one.
+    pub modal: bool,
 }
 
 /// Visual theme parameters for window rendering.
@@ -233,6 +237,10 @@ pub struct Window {
     pub outer_h: u32,
     /// Saved geometry for restoring from maximized state.
     pub saved_geometry: Option<Geometry>,
+    /// Pin this window above normal windows in z-order.
+    pub always_on_top: bool,
+    /// Block input to all windows below this one.
+    pub modal: bool,
 }
 
 impl Window {
@@ -264,6 +272,8 @@ impl Window {
             outer_w,
             outer_h,
             saved_geometry: None,
+            always_on_top: config.always_on_top,
+            modal: config.modal,
         }
     }
 
@@ -304,14 +314,17 @@ impl Window {
         Some((tx, ty, tw, th))
     }
 
+    /// Inset from the titlebar edge for window buttons.
+    const BUTTON_INSET: i32 = 2;
+
     /// Compute a button's X position given its index (0=close, 1=minimize, 2=maximize).
     fn button_x(&self, theme: &WmTheme, tx: i32, tw: u32, idx: i32) -> i32 {
         let btn_size = theme.button_size.min(theme.titlebar_height) as i32;
         let sp = theme.button_spacing;
         if theme.button_side == "left" {
-            tx + 2 + idx * (btn_size + sp)
+            tx + Self::BUTTON_INSET + idx * (btn_size + sp)
         } else {
-            tx + tw as i32 - (idx + 1) * btn_size - idx * sp - 2
+            tx + tw as i32 - (idx + 1) * btn_size - idx * sp - Self::BUTTON_INSET
         }
     }
 
@@ -365,18 +378,19 @@ impl Window {
         .iter()
         .filter(|&&v| v)
         .count() as i32;
+        let text_inset = Self::BUTTON_INSET * 2; // padding on each side of title text
         let buttons_w = if btn_count > 0 {
-            btn_count * btn_size + (btn_count - 1) * sp + 4
+            btn_count * btn_size + (btn_count - 1) * sp + text_inset
         } else {
             0
         };
+        let margin = buttons_w as u32 + text_inset as u32 * 2;
         let (text_x, avail_w) = if theme.title_align == "center" {
-            // Center in available space.
-            (tx + 4, tw.saturating_sub(buttons_w as u32 + 8))
+            (tx + text_inset, tw.saturating_sub(margin))
         } else if theme.button_side == "left" {
-            (tx + buttons_w + 4, tw.saturating_sub(buttons_w as u32 + 8))
+            (tx + buttons_w + text_inset, tw.saturating_sub(margin))
         } else {
-            (tx + 4, tw.saturating_sub(buttons_w as u32 + 8))
+            (tx + text_inset, tw.saturating_sub(margin))
         };
         Some((text_x, avail_w))
     }
@@ -484,6 +498,8 @@ mod tests {
             width: 200,
             height: 150,
             window_type: WindowType::AppWindow,
+            always_on_top: false,
+            modal: false,
         }
     }
 
@@ -512,6 +528,8 @@ mod tests {
             width: 480,
             height: 272,
             window_type: WindowType::Fullscreen,
+            always_on_top: false,
+            modal: false,
         };
         let win = Window::new(&config, 0, 0, &theme);
         assert_eq!(win.outer_w, 480);
@@ -569,6 +587,8 @@ mod tests {
             width: 300,
             height: 100,
             window_type: WindowType::Dialog,
+            always_on_top: false,
+            modal: false,
         };
         let win = Window::new(&config, 0, 0, &theme);
         assert!(win.has_close_button());
@@ -588,6 +608,8 @@ mod tests {
             width: 80,
             height: 40,
             window_type: WindowType::FloatingWidget,
+            always_on_top: false,
+            modal: false,
         };
         let win = Window::new(&config, 0, 0, &theme);
         assert!(win.is_draggable());
@@ -629,6 +651,8 @@ mod tests {
             width: 480,
             height: 32,
             window_type: WindowType::Panel,
+            always_on_top: false,
+            modal: false,
         };
         let theme = WmTheme::default();
         let win = Window::new(&config, 0, 0, &theme);

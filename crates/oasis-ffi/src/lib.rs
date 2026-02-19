@@ -15,9 +15,9 @@ use std::ffi::{CStr, CString};
 use std::os::raw::c_char;
 use std::sync::Once;
 
-use oasis_backend_ue5::{FfiInputBackend, Ue5Backend};
+use oasis_backend_ue5::{FfiInputBackend, Ue5AudioBackend, Ue5Backend};
 use oasis_core::active_theme::ActiveTheme;
-use oasis_core::backend::{InputBackend, SdiBackend};
+use oasis_core::backend::{AudioBackend, InputBackend, SdiBackend};
 use oasis_core::dashboard::{DashboardConfig, DashboardState, discover_apps};
 use oasis_core::input::{Button, InputEvent, Trigger};
 use oasis_core::platform::DesktopPlatform;
@@ -95,6 +95,7 @@ pub type OasisCallback = extern "C" fn(event: u32, detail: *const c_char);
 pub struct OasisInstance {
     backend: Ue5Backend,
     input: FfiInputBackend,
+    audio: Ue5AudioBackend,
     sdi: SdiRegistry,
     cmd_reg: CommandRegistry,
     vfs: GameAssetVfs,
@@ -205,6 +206,9 @@ pub unsafe extern "C" fn oasis_create(
     }
 
     let input = FfiInputBackend::new();
+
+    let mut audio = Ue5AudioBackend::new();
+    let _ = audio.init();
     let mut sdi = SdiRegistry::new();
     let mut cmd_reg = CommandRegistry::new();
     register_builtins(&mut cmd_reg);
@@ -240,6 +244,7 @@ pub unsafe extern "C" fn oasis_create(
     let instance = OasisInstance {
         backend,
         input,
+        audio,
         sdi,
         cmd_reg,
         vfs,
@@ -267,6 +272,7 @@ pub unsafe extern "C" fn oasis_create(
 pub unsafe extern "C" fn oasis_destroy(handle: *mut OasisInstance) {
     if !handle.is_null() {
         let mut instance = unsafe { Box::from_raw(handle) };
+        let _ = instance.audio.shutdown();
         let _ = instance.backend.shutdown();
         drop(instance);
     }
@@ -456,6 +462,7 @@ pub unsafe extern "C" fn oasis_send_command(
         network: None,
         tls: None,
         stdin: None,
+        stderr: String::new(),
     };
 
     let output = match instance.cmd_reg.execute(cmd_str, &mut env) {
@@ -603,6 +610,152 @@ pub unsafe extern "C" fn oasis_add_vfs_file(
     }
     let slice = unsafe { std::slice::from_raw_parts(data, data_len as usize) };
     instance.vfs.add_base_file(path_str, slice);
+}
+
+// ---------------------------------------------------------------------------
+// Audio FFI functions
+// ---------------------------------------------------------------------------
+
+/// Audio event callback type.
+///
+/// Parameters: event type (AudioEvent), track ID (0 if N/A), extra value.
+pub type OasisAudioCallback = extern "C" fn(event: u32, track_id: u64, value: u32);
+
+/// Register an audio event callback.
+///
+/// The callback fires on play, pause, stop, volume changes, and track load/unload.
+/// This lets the UE5 host handle actual audio output.
+///
+/// # Safety
+///
+/// `handle` must be valid. `cb` must be a valid function pointer.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn oasis_set_audio_callback(
+    handle: *mut OasisInstance,
+    cb: OasisAudioCallback,
+) {
+    let Some(instance) = (unsafe { handle.as_mut() }) else {
+        return;
+    };
+    instance.audio.set_callback(cb);
+}
+
+/// Load audio data and return a track ID. Returns `u64::MAX` on failure.
+///
+/// # Safety
+///
+/// `handle` must be valid. `data` must point to `data_len` readable bytes.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn oasis_audio_load(
+    handle: *mut OasisInstance,
+    data: *const u8,
+    data_len: u32,
+) -> u64 {
+    let Some(instance) = (unsafe { handle.as_mut() }) else {
+        return u64::MAX;
+    };
+    if data.is_null() || data_len == 0 {
+        return u64::MAX;
+    }
+    let slice = unsafe { std::slice::from_raw_parts(data, data_len as usize) };
+    match instance.audio.load_track(slice) {
+        Ok(id) => id.0,
+        Err(_) => u64::MAX,
+    }
+}
+
+/// Start playing a loaded audio track. Returns true on success.
+///
+/// # Safety
+///
+/// `handle` must be valid.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn oasis_audio_play(handle: *mut OasisInstance, track_id: u64) -> bool {
+    let Some(instance) = (unsafe { handle.as_mut() }) else {
+        return false;
+    };
+    instance
+        .audio
+        .play(oasis_core::backend::AudioTrackId(track_id))
+        .is_ok()
+}
+
+/// Pause audio playback. Returns true on success.
+///
+/// # Safety
+///
+/// `handle` must be valid.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn oasis_audio_pause(handle: *mut OasisInstance) -> bool {
+    let Some(instance) = (unsafe { handle.as_mut() }) else {
+        return false;
+    };
+    instance.audio.pause().is_ok()
+}
+
+/// Resume audio playback. Returns true on success.
+///
+/// # Safety
+///
+/// `handle` must be valid.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn oasis_audio_resume(handle: *mut OasisInstance) -> bool {
+    let Some(instance) = (unsafe { handle.as_mut() }) else {
+        return false;
+    };
+    instance.audio.resume().is_ok()
+}
+
+/// Stop audio playback. Returns true on success.
+///
+/// # Safety
+///
+/// `handle` must be valid.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn oasis_audio_stop(handle: *mut OasisInstance) -> bool {
+    let Some(instance) = (unsafe { handle.as_mut() }) else {
+        return false;
+    };
+    instance.audio.stop().is_ok()
+}
+
+/// Set audio volume (0-100). Returns true on success.
+///
+/// # Safety
+///
+/// `handle` must be valid.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn oasis_audio_set_volume(handle: *mut OasisInstance, volume: u8) -> bool {
+    let Some(instance) = (unsafe { handle.as_mut() }) else {
+        return false;
+    };
+    instance.audio.set_volume(volume).is_ok()
+}
+
+/// Get the current audio volume (0-100).
+///
+/// # Safety
+///
+/// `handle` must be valid.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn oasis_audio_get_volume(handle: *mut OasisInstance) -> u8 {
+    let Some(instance) = (unsafe { handle.as_ref() }) else {
+        return 0;
+    };
+    instance.audio.get_volume()
+}
+
+/// Check if audio is currently playing.
+///
+/// # Safety
+///
+/// `handle` must be valid.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn oasis_audio_is_playing(handle: *mut OasisInstance) -> bool {
+    let Some(instance) = (unsafe { handle.as_ref() }) else {
+        return false;
+    };
+    instance.audio.is_playing()
 }
 
 // ---------------------------------------------------------------------------
@@ -1128,5 +1281,107 @@ mod tests {
     fn trigger_from_code_invalid() {
         assert_eq!(trigger_from_code(2), None);
         assert_eq!(trigger_from_code(u32::MAX), None);
+    }
+
+    // -- Audio FFI tests --
+
+    #[test]
+    fn audio_load_and_play() {
+        let handle = create_instance();
+        let data = b"fake audio data";
+        let track_id = unsafe { oasis_audio_load(handle, data.as_ptr(), data.len() as u32) };
+        assert_ne!(track_id, u64::MAX);
+        assert!(unsafe { oasis_audio_play(handle, track_id) });
+        assert!(unsafe { oasis_audio_is_playing(handle) });
+        unsafe { oasis_destroy(handle) };
+    }
+
+    #[test]
+    fn audio_pause_resume_stop() {
+        let handle = create_instance();
+        let data = b"data";
+        let track_id = unsafe { oasis_audio_load(handle, data.as_ptr(), data.len() as u32) };
+        unsafe { oasis_audio_play(handle, track_id) };
+
+        assert!(unsafe { oasis_audio_pause(handle) });
+        assert!(!unsafe { oasis_audio_is_playing(handle) });
+
+        assert!(unsafe { oasis_audio_resume(handle) });
+        assert!(unsafe { oasis_audio_is_playing(handle) });
+
+        assert!(unsafe { oasis_audio_stop(handle) });
+        assert!(!unsafe { oasis_audio_is_playing(handle) });
+
+        unsafe { oasis_destroy(handle) };
+    }
+
+    #[test]
+    fn audio_volume() {
+        let handle = create_instance();
+        assert!(unsafe { oasis_audio_set_volume(handle, 42) });
+        assert_eq!(unsafe { oasis_audio_get_volume(handle) }, 42);
+        unsafe { oasis_destroy(handle) };
+    }
+
+    #[test]
+    fn audio_load_null_data() {
+        let handle = create_instance();
+        let id = unsafe { oasis_audio_load(handle, std::ptr::null(), 100) };
+        assert_eq!(id, u64::MAX);
+        unsafe { oasis_destroy(handle) };
+    }
+
+    #[test]
+    fn audio_load_zero_len() {
+        let handle = create_instance();
+        let data = b"x";
+        let id = unsafe { oasis_audio_load(handle, data.as_ptr(), 0) };
+        assert_eq!(id, u64::MAX);
+        unsafe { oasis_destroy(handle) };
+    }
+
+    #[test]
+    fn audio_play_invalid_track() {
+        let handle = create_instance();
+        assert!(!unsafe { oasis_audio_play(handle, 999) });
+        unsafe { oasis_destroy(handle) };
+    }
+
+    #[test]
+    fn audio_null_handle_is_safe() {
+        let null = std::ptr::null_mut();
+        unsafe {
+            oasis_audio_load(null, std::ptr::null(), 0);
+            oasis_audio_play(null, 0);
+            oasis_audio_pause(null);
+            oasis_audio_resume(null);
+            oasis_audio_stop(null);
+            oasis_audio_set_volume(null, 50);
+            assert_eq!(oasis_audio_get_volume(null), 0);
+            assert!(!oasis_audio_is_playing(null));
+        }
+    }
+
+    #[test]
+    fn audio_callback_fires() {
+        use std::sync::atomic::{AtomicU32, Ordering};
+        static AUDIO_EVENTS: AtomicU32 = AtomicU32::new(0);
+
+        extern "C" fn audio_cb(_event: u32, _track_id: u64, _value: u32) {
+            AUDIO_EVENTS.fetch_add(1, Ordering::SeqCst);
+        }
+
+        let handle = create_instance();
+        AUDIO_EVENTS.store(0, Ordering::SeqCst);
+        unsafe { oasis_set_audio_callback(handle, audio_cb) };
+
+        let data = b"audio";
+        let track_id = unsafe { oasis_audio_load(handle, data.as_ptr(), data.len() as u32) };
+        unsafe { oasis_audio_play(handle, track_id) };
+        unsafe { oasis_audio_stop(handle) };
+
+        // At least: TrackLoaded + Play + Stop = 3 events.
+        assert!(AUDIO_EVENTS.load(Ordering::SeqCst) >= 3);
+        unsafe { oasis_destroy(handle) };
     }
 }

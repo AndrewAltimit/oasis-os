@@ -2,6 +2,10 @@
 
 use oasis_types::backend::Color;
 
+/// Maximum image dimension (width or height) we allow to decode.
+/// Anything larger is rejected to prevent OOM from malformed headers.
+const MAX_IMAGE_DIMENSION: u32 = 4096;
+
 /// Decoded image data (RGBA pixels).
 #[derive(Debug, Clone)]
 pub struct DecodedImage {
@@ -49,9 +53,9 @@ pub fn detect_format(data: &[u8]) -> ImageFormat {
 pub fn decode_image(data: &[u8]) -> Option<DecodedImage> {
     match detect_format(data) {
         ImageFormat::Bmp => decode_bmp(data),
-        ImageFormat::Png => None,  // Requires `png` crate
-        ImageFormat::Jpeg => None, // Requires `jpeg-decoder` crate
-        ImageFormat::Gif => None,  // Requires `gif` crate
+        ImageFormat::Png => decode_png(data),
+        ImageFormat::Jpeg => decode_jpeg(data),
+        ImageFormat::Gif => None, // Requires `gif` crate
         ImageFormat::Unknown => None,
     }
 }
@@ -116,6 +120,119 @@ fn decode_bmp(data: &[u8]) -> Option<DecodedImage> {
     Some(DecodedImage {
         width: w,
         height: abs_h,
+        pixels,
+    })
+}
+
+/// Decode a PNG image using the `png` crate.
+fn decode_png(data: &[u8]) -> Option<DecodedImage> {
+    let decoder = png::Decoder::new(data);
+    let mut reader = decoder.read_info().ok()?;
+    let info_header = reader.info();
+    if info_header.width > MAX_IMAGE_DIMENSION || info_header.height > MAX_IMAGE_DIMENSION {
+        return None;
+    }
+    let mut buf = vec![0u8; reader.output_buffer_size()];
+    let info = reader.next_frame(&mut buf).ok()?;
+    let bytes = &buf[..info.buffer_size()];
+
+    let w = info.width;
+    let h = info.height;
+
+    let pixels = match info.color_type {
+        png::ColorType::Rgba => bytes.to_vec(),
+        png::ColorType::Rgb => {
+            let mut rgba = Vec::with_capacity((w * h * 4) as usize);
+            for chunk in bytes.chunks_exact(3) {
+                rgba.extend_from_slice(chunk);
+                rgba.push(255);
+            }
+            rgba
+        },
+        png::ColorType::GrayscaleAlpha => {
+            let mut rgba = Vec::with_capacity((w * h * 4) as usize);
+            for chunk in bytes.chunks_exact(2) {
+                let g = chunk[0];
+                rgba.extend_from_slice(&[g, g, g, chunk[1]]);
+            }
+            rgba
+        },
+        png::ColorType::Grayscale => {
+            let mut rgba = Vec::with_capacity((w * h * 4) as usize);
+            for &g in bytes {
+                rgba.extend_from_slice(&[g, g, g, 255]);
+            }
+            rgba
+        },
+        png::ColorType::Indexed => {
+            // Indexed color requires palette expansion -- not common for web.
+            return None;
+        },
+    };
+
+    Some(DecodedImage {
+        width: w,
+        height: h,
+        pixels,
+    })
+}
+
+/// Decode a JPEG image using the `jpeg-decoder` crate.
+fn decode_jpeg(data: &[u8]) -> Option<DecodedImage> {
+    let mut decoder = jpeg_decoder::Decoder::new(data);
+    decoder.read_info().ok()?;
+    let info = decoder.info()?;
+    if (info.width as u32) > MAX_IMAGE_DIMENSION || (info.height as u32) > MAX_IMAGE_DIMENSION {
+        return None;
+    }
+    let pixels_raw = decoder.decode().ok()?;
+    let info = decoder.info()?;
+    let w = info.width as u32;
+    let h = info.height as u32;
+
+    let pixels = match info.pixel_format {
+        jpeg_decoder::PixelFormat::RGB24 => {
+            let mut rgba = Vec::with_capacity((w * h * 4) as usize);
+            for chunk in pixels_raw.chunks_exact(3) {
+                rgba.extend_from_slice(chunk);
+                rgba.push(255);
+            }
+            rgba
+        },
+        jpeg_decoder::PixelFormat::L8 => {
+            let mut rgba = Vec::with_capacity((w * h * 4) as usize);
+            for &g in &pixels_raw {
+                rgba.extend_from_slice(&[g, g, g, 255]);
+            }
+            rgba
+        },
+        jpeg_decoder::PixelFormat::L16 => {
+            let mut rgba = Vec::with_capacity((w * h * 4) as usize);
+            for chunk in pixels_raw.chunks_exact(2) {
+                let g = chunk[0]; // High byte of 16-bit grayscale
+                rgba.extend_from_slice(&[g, g, g, 255]);
+            }
+            rgba
+        },
+        jpeg_decoder::PixelFormat::CMYK32 => {
+            let mut rgba = Vec::with_capacity((w * h * 4) as usize);
+            for chunk in pixels_raw.chunks_exact(4) {
+                let c = chunk[0] as f32 / 255.0;
+                let m = chunk[1] as f32 / 255.0;
+                let y = chunk[2] as f32 / 255.0;
+                let k = chunk[3] as f32 / 255.0;
+                let r = (255.0 * (1.0 - c) * (1.0 - k)) as u8;
+                let g = (255.0 * (1.0 - m) * (1.0 - k)) as u8;
+                let b = (255.0 * (1.0 - y) * (1.0 - k)) as u8;
+                rgba.extend_from_slice(&[r, g, b, 255]);
+            }
+            rgba
+        },
+    };
+
+    Some(DecodedImage {
+        width: w,
+        height: h,
         pixels,
     })
 }
@@ -425,9 +542,76 @@ mod tests {
     }
 
     #[test]
-    fn decode_image_returns_none_for_png() {
-        // PNG magic followed by garbage.
+    fn decode_image_returns_none_for_truncated_png() {
+        // PNG magic followed by garbage -- should fail gracefully.
         let data = [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
+        assert!(decode_image(&data).is_none());
+    }
+
+    /// Build a minimal valid 1x1 red PNG in memory.
+    fn make_test_png_1x1_red() -> Vec<u8> {
+        let mut buf = Vec::new();
+        {
+            let mut encoder = png::Encoder::new(&mut buf, 1, 1);
+            encoder.set_color(png::ColorType::Rgba);
+            encoder.set_depth(png::BitDepth::Eight);
+            let mut writer = encoder.write_header().unwrap();
+            // 1x1 RGBA: red pixel
+            writer.write_image_data(&[255, 0, 0, 255]).unwrap();
+        }
+        buf
+    }
+
+    #[test]
+    fn decode_png_1x1_red() {
+        let data = make_test_png_1x1_red();
+        let img = decode_image(&data).expect("should decode PNG");
+        assert_eq!(img.width, 1);
+        assert_eq!(img.height, 1);
+        assert_eq!(img.pixels.len(), 4);
+        assert_eq!(img.pixels[0], 255); // R
+        assert_eq!(img.pixels[1], 0); // G
+        assert_eq!(img.pixels[2], 0); // B
+        assert_eq!(img.pixels[3], 255); // A
+    }
+
+    #[test]
+    fn decode_png_rgb_format() {
+        let mut buf = Vec::new();
+        {
+            let mut encoder = png::Encoder::new(&mut buf, 2, 1);
+            encoder.set_color(png::ColorType::Rgb);
+            encoder.set_depth(png::BitDepth::Eight);
+            let mut writer = encoder.write_header().unwrap();
+            writer.write_image_data(&[255, 0, 0, 0, 255, 0]).unwrap();
+        }
+        let img = decode_image(&buf).expect("should decode RGB PNG");
+        assert_eq!(img.width, 2);
+        assert_eq!(img.height, 1);
+        assert_eq!(img.pixels.len(), 8);
+        // Pixel 0: red (RGB expanded to RGBA)
+        assert_eq!(&img.pixels[0..4], &[255, 0, 0, 255]);
+        // Pixel 1: green
+        assert_eq!(&img.pixels[4..8], &[0, 255, 0, 255]);
+    }
+
+    #[test]
+    fn decode_png_grayscale() {
+        let mut buf = Vec::new();
+        {
+            let mut encoder = png::Encoder::new(&mut buf, 1, 1);
+            encoder.set_color(png::ColorType::Grayscale);
+            encoder.set_depth(png::BitDepth::Eight);
+            let mut writer = encoder.write_header().unwrap();
+            writer.write_image_data(&[128]).unwrap();
+        }
+        let img = decode_image(&buf).expect("should decode grayscale PNG");
+        assert_eq!(img.pixels, &[128, 128, 128, 255]);
+    }
+
+    #[test]
+    fn decode_jpeg_returns_none_for_truncated() {
+        let data = [0xFF, 0xD8, 0xFF, 0xE0, 0x00];
         assert!(decode_image(&data).is_none());
     }
 

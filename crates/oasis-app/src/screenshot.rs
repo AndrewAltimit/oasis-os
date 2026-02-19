@@ -53,7 +53,7 @@ fn main() -> anyhow::Result<()> {
     let mut vfs = MemoryVfs::new();
     populate_demo_vfs(&mut vfs);
 
-    let active_theme = ActiveTheme::from_skin(&skin.theme);
+    let active_theme = ActiveTheme::from_skin(&skin.theme).with_screen_size(w, h);
 
     let apps = discover_apps(&vfs, "/apps", Some("OASISOS"))?;
     let dash_config = DashboardConfig::from_features(&skin.features, &active_theme);
@@ -114,30 +114,17 @@ fn main() -> anyhow::Result<()> {
     let has_dashboard = skin.features.dashboard;
     let has_wm = skin.features.window_manager;
 
-    // For WM skins, create demo windows.
+    // For WM skins, create the window manager.
+    // For WM-only skins (no dashboard), create demo windows immediately.
+    // For dashboard+WM skins, defer window creation to screenshot 4 so
+    // dashboard screenshots 1-3 don't have overlapping windows.
     let mut wm = if has_wm {
         let wm_theme = skin.theme.build_wm_theme();
         let mut wm = WindowManager::with_theme(w, h, wm_theme);
-        let term_cfg = WindowConfig {
-            id: "demo_terminal".to_string(),
-            title: "Terminal".to_string(),
-            x: Some(40),
-            y: Some(30),
-            width: 400,
-            height: 260,
-            window_type: WindowType::AppWindow,
-        };
-        wm.create_window(&term_cfg, &mut sdi)?;
-        let fm_cfg = WindowConfig {
-            id: "demo_files".to_string(),
-            title: "File Manager".to_string(),
-            x: Some(200),
-            y: Some(100),
-            width: 350,
-            height: 220,
-            window_type: WindowType::AppWindow,
-        };
-        wm.create_window(&fm_cfg, &mut sdi)?;
+        if !has_dashboard {
+            // WM-only (e.g. desktop): show windows in all screenshots.
+            create_demo_windows(&mut wm, &mut sdi)?;
+        }
         Some(wm)
     } else {
         None
@@ -219,7 +206,25 @@ fn main() -> anyhow::Result<()> {
             sm.hide_sdi(&mut sdi);
         }
         hide_media_page(&mut sdi);
-        setup_terminal_objects(&mut sdi, &DEMO_OUTPUT, "/home/user", "ls");
+        if has_wm {
+            // Dashboard+WM skins: now create a single terminal window.
+            if let Some(ref mut wm) = wm {
+                let term_cfg = WindowConfig {
+                    id: "demo_terminal".to_string(),
+                    title: "Terminal".to_string(),
+                    x: Some(40),
+                    y: Some(30),
+                    width: (w as i32 - 80).max(300) as u32,
+                    height: (h as i32 - 60).max(200) as u32,
+                    window_type: WindowType::AppWindow,
+                    always_on_top: false,
+                    modal: false,
+                };
+                wm.create_window(&term_cfg, &mut sdi)?;
+            }
+        } else {
+            setup_terminal_objects(&mut sdi, &DEMO_OUTPUT, "/home/user", "ls");
+        }
     } else if let Some(ref mut wm) = wm {
         // WM desktop: close file manager, keep only terminal window.
         let _ = wm.close_window("demo_files", &mut sdi);
@@ -239,6 +244,35 @@ fn main() -> anyhow::Result<()> {
 
     println!("Screenshots saved to {}/", out_dir.display());
     println!("Compare against Psixpsp.png at the repo root.");
+    Ok(())
+}
+
+/// Create demo windows (terminal + file manager) for WM-only skins.
+fn create_demo_windows(wm: &mut WindowManager, sdi: &mut SdiRegistry) -> anyhow::Result<()> {
+    let term_cfg = WindowConfig {
+        id: "demo_terminal".to_string(),
+        title: "Terminal".to_string(),
+        x: Some(40),
+        y: Some(30),
+        width: 400,
+        height: 260,
+        window_type: WindowType::AppWindow,
+        always_on_top: false,
+        modal: false,
+    };
+    wm.create_window(&term_cfg, sdi)?;
+    let fm_cfg = WindowConfig {
+        id: "demo_files".to_string(),
+        title: "File Manager".to_string(),
+        x: Some(200),
+        y: Some(100),
+        width: 350,
+        height: 220,
+        window_type: WindowType::AppWindow,
+        always_on_top: false,
+        modal: false,
+    };
+    wm.create_window(&fm_cfg, sdi)?;
     Ok(())
 }
 

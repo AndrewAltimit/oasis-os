@@ -5,7 +5,9 @@
 //! containing block and heights are determined by content.
 
 use super::box_model::*;
+use super::flex::layout_flex;
 use super::inline::layout_inline;
+use super::positioning::apply_positioning;
 use crate::css::values::{ComputedStyle, Dimension, Display, ListStyleType};
 use crate::html::dom::{Document, ElementData, NodeId, NodeKind, TagName};
 
@@ -60,6 +62,10 @@ pub fn build_layout_tree(
     root.dimensions.content.x = 0.0;
     root.dimensions.content.y = 0.0;
     layout_block(&mut root, viewport_width, measurer);
+
+    // Apply CSS positioning (relative/absolute/fixed) as a post-pass.
+    let viewport_rect = Rect::new(0.0, 0.0, viewport_width, _viewport_height);
+    apply_positioning(&mut root, viewport_rect);
 
     root
 }
@@ -137,6 +143,7 @@ fn box_type_for_element(_elem: &ElementData, style: &ComputedStyle) -> BoxType {
         Display::Block => BoxType::Block,
         Display::Inline => BoxType::Inline,
         Display::InlineBlock => BoxType::InlineBlock,
+        Display::Flex => BoxType::Flex,
         Display::ListItem => {
             let marker = resolve_list_marker(style);
             BoxType::ListItem { marker }
@@ -257,6 +264,7 @@ fn make_anonymous_block(children: Vec<LayoutBox>) -> LayoutBox {
             ..ComputedStyle::default()
         },
         text: None,
+        dirty: true,
     }
 }
 
@@ -281,15 +289,18 @@ pub fn layout_block(
     calculate_block_width(layout_box, containing_width);
 
     // 3. Layout children.
-    layout_block_children(layout_box, measurer);
-
-    // 4. Calculate height.
-    calculate_block_height(layout_box);
+    if matches!(layout_box.box_type, BoxType::Flex) {
+        layout_flex(layout_box, containing_width, measurer);
+    } else {
+        layout_block_children(layout_box, measurer);
+        // 4. Calculate height.
+        calculate_block_height(layout_box);
+    }
 }
 
 /// Resolve padding, border, and margin from the computed style into
 /// the layout box's dimensions.
-fn resolve_edge_sizes(layout_box: &mut LayoutBox, _containing_width: f32) {
+pub fn resolve_edge_sizes(layout_box: &mut LayoutBox, _containing_width: f32) {
     let s = &layout_box.style;
 
     layout_box.dimensions.padding = EdgeSizes {

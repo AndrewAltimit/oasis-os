@@ -187,6 +187,8 @@ mod tests {
             width: w,
             height: h,
             window_type: WindowType::AppWindow,
+            always_on_top: false,
+            modal: false,
         };
         Window::new(&config, x, y, &WmTheme::default())
     }
@@ -323,6 +325,8 @@ mod tests {
             width: 480,
             height: 272,
             window_type: WindowType::Fullscreen,
+            always_on_top: false,
+            modal: false,
         };
         let win = Window::new(&config, 0, 0, &theme);
         // Click anywhere should be content (no titlebar, no resize).
@@ -341,6 +345,8 @@ mod tests {
             width: 200,
             height: 100,
             window_type: WindowType::Dialog,
+            always_on_top: false,
+            modal: false,
         };
         let win = Window::new(&config, 0, 0, &theme);
         // Click on bottom-right corner -- should NOT be a resize handle.

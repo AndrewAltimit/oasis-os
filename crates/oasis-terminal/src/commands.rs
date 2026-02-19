@@ -839,6 +839,7 @@ mod tests {
             network: None,
             tls: None,
             stdin: None,
+            stderr: String::new(),
         };
         let result = reg.execute(line, &mut env);
         *cwd = env.cwd;
@@ -1077,6 +1078,7 @@ mod tests {
             network: None,
             tls: None,
             stdin: None,
+            stderr: String::new(),
         };
         match reg.execute("power", &mut env).unwrap() {
             CommandOutput::Text(s) => assert!(s.contains("NoBattery")),
@@ -1108,6 +1110,7 @@ mod tests {
             network: None,
             tls: None,
             stdin: None,
+            stderr: String::new(),
         };
         match reg.execute("clock", &mut env).unwrap() {
             CommandOutput::Text(s) => {
@@ -1152,6 +1155,7 @@ mod tests {
             network: None,
             tls: None,
             stdin: None,
+            stderr: String::new(),
         };
         match reg.execute("usb", &mut env).unwrap() {
             CommandOutput::Text(s) => assert!(s.contains("unsupported")),

@@ -203,19 +203,29 @@ impl Widget for TabBar {
         if self.tabs.is_empty() {
             return Ok(());
         }
-        let tab_w = w / self.tabs.len() as u32;
+        let n = self.tabs.len() as u32;
+        let tab_w = w / n;
+        let remainder = w % n;
         let fs = ctx.theme.font_size_md;
         let text_h = ctx.backend.measure_text_height(fs);
 
         for (i, tab) in self.tabs.iter().enumerate() {
-            let tx = x + (i as u32 * tab_w) as i32;
+            // Distribute remainder pixels across the first N tabs.
+            let extra_before: u32 = (i as u32).min(remainder);
+            let this_tab_w = tab_w + if (i as u32) < remainder { 1 } else { 0 };
+            let tx = x + (i as u32 * tab_w + extra_before) as i32;
             let active = i == self.active;
 
             match self.style {
                 TabStyle::Underline => {
                     if active {
-                        ctx.backend
-                            .fill_rect(tx, y + h as i32 - 2, tab_w, 2, ctx.theme.accent)?;
+                        ctx.backend.fill_rect(
+                            tx,
+                            y + h as i32 - 2,
+                            this_tab_w,
+                            2,
+                            ctx.theme.accent,
+                        )?;
                     }
                 },
                 TabStyle::Filled => {
@@ -223,7 +233,7 @@ impl Widget for TabBar {
                         ctx.backend.fill_rounded_rect(
                             tx + 2,
                             y + 2,
-                            tab_w - 4,
+                            this_tab_w.saturating_sub(4),
                             h - 4,
                             ctx.theme.border_radius_sm,
                             ctx.theme.accent,
@@ -235,7 +245,7 @@ impl Widget for TabBar {
                         ctx.backend.fill_rounded_rect(
                             tx + 2,
                             y + 2,
-                            tab_w - 4,
+                            this_tab_w.saturating_sub(4),
                             h - 4,
                             (h - 4) as u16 / 2,
                             ctx.theme.accent,
@@ -245,7 +255,7 @@ impl Widget for TabBar {
             }
 
             let text_w = ctx.backend.measure_text(tab, fs);
-            let label_x = tx + layout::center(tab_w, text_w);
+            let label_x = tx + layout::center(this_tab_w, text_w);
             let label_y = y + layout::center(h, text_h);
             let color = if active {
                 match self.style {

@@ -167,6 +167,7 @@ fn paint_box(
     // 3-6. Children / inline content / replaced / markers
     match &layout_box.box_type {
         BoxType::Block
+        | BoxType::Flex
         | BoxType::Anonymous
         | BoxType::TableWrapper
         | BoxType::TableRow
