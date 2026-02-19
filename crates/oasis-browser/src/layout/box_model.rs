@@ -141,6 +141,7 @@ pub enum BoxType {
     Block,
     Inline,
     InlineBlock,
+    Flex,
     TableWrapper,
     TableRow,
     TableCell,
@@ -202,7 +203,11 @@ impl LayoutBox {
     pub fn is_block_level(&self) -> bool {
         matches!(
             self.box_type,
-            BoxType::Block | BoxType::ListItem { .. } | BoxType::TableWrapper | BoxType::Anonymous
+            BoxType::Block
+                | BoxType::Flex
+                | BoxType::ListItem { .. }
+                | BoxType::TableWrapper
+                | BoxType::Anonymous
         )
     }
 

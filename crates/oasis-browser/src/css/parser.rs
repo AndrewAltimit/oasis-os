@@ -10,6 +10,25 @@ use super::tokenizer::{CssToken, CssTokenizer};
 // Selector types
 // -------------------------------------------------------------------
 
+/// Attribute selector match operator.
+#[derive(Debug, Clone, PartialEq)]
+pub enum AttrOp {
+    /// `[attr]` -- attribute exists.
+    Exists,
+    /// `[attr=val]` -- exact match.
+    Equals,
+    /// `[attr~=val]` -- space-separated word match.
+    Includes,
+    /// `[attr|=val]` -- exact or prefix with hyphen.
+    DashMatch,
+    /// `[attr^=val]` -- starts with.
+    Prefix,
+    /// `[attr$=val]` -- ends with.
+    Suffix,
+    /// `[attr*=val]` -- substring match.
+    Substring,
+}
+
 /// A single, atomic selector component.
 #[derive(Debug, Clone, PartialEq)]
 pub enum SimpleSelector {
@@ -23,6 +42,16 @@ pub enum SimpleSelector {
     Universal,
     /// Pseudo-class: `:hover`, `:first-child`.
     PseudoClass(String),
+    /// Functional pseudo-class with argument: `:nth-child(2n+1)`.
+    PseudoClassFn(String, String),
+    /// Negation: `:not(selector)`.
+    Not(Box<CompoundSelector>),
+    /// Attribute selector: `[attr]`, `[attr=val]`, etc.
+    Attribute {
+        name: String,
+        op: AttrOp,
+        value: Option<String>,
+    },
 }
 
 /// Combinator linking two compound selectors.
@@ -32,6 +61,10 @@ pub enum Combinator {
     Descendant,
     /// Child: `div > p`.
     Child,
+    /// Adjacent sibling: `h1 + p`.
+    AdjacentSibling,
+    /// General sibling: `h1 ~ p`.
+    GeneralSibling,
 }
 
 /// A compound selector is a sequence of simple selectors applied to the
@@ -86,8 +119,31 @@ impl Selector {
                     SimpleSelector::Id(_) => {
                         ids = ids.saturating_add(1);
                     },
-                    SimpleSelector::Class(_) | SimpleSelector::PseudoClass(_) => {
+                    SimpleSelector::Class(_)
+                    | SimpleSelector::PseudoClass(_)
+                    | SimpleSelector::PseudoClassFn(_, _)
+                    | SimpleSelector::Attribute { .. } => {
                         classes = classes.saturating_add(1);
+                    },
+                    SimpleSelector::Not(inner) => {
+                        // :not() itself doesn't count, but its argument does.
+                        for inner_simple in &inner.parts {
+                            match inner_simple {
+                                SimpleSelector::Id(_) => {
+                                    ids = ids.saturating_add(1);
+                                },
+                                SimpleSelector::Class(_)
+                                | SimpleSelector::PseudoClass(_)
+                                | SimpleSelector::PseudoClassFn(_, _)
+                                | SimpleSelector::Attribute { .. } => {
+                                    classes = classes.saturating_add(1);
+                                },
+                                SimpleSelector::Type(_) => {
+                                    types = types.saturating_add(1);
+                                },
+                                _ => {},
+                            }
+                        }
                     },
                     SimpleSelector::Type(_) => {
                         types = types.saturating_add(1);
@@ -379,10 +435,14 @@ impl CssParser {
                     Some(Combinator::Child)
                 },
                 CssToken::Plus => {
-                    // Consume but treat as descendant for our simple model.
                     self.advance();
                     self.skip_whitespace();
-                    Some(Combinator::Descendant)
+                    Some(Combinator::AdjacentSibling)
+                },
+                CssToken::Delim('~') => {
+                    self.advance();
+                    self.skip_whitespace();
+                    Some(Combinator::GeneralSibling)
                 },
                 _ if has_ws => {
                     // Could be descendant combinator or end of selector.
@@ -440,9 +500,37 @@ impl CssParser {
                 },
                 CssToken::Colon => {
                     self.advance();
-                    if let CssToken::Ident(name) = self.peek().clone() {
-                        self.advance();
-                        parts.push(SimpleSelector::PseudoClass(name));
+                    match self.peek().clone() {
+                        CssToken::Ident(name) => {
+                            self.advance();
+                            parts.push(SimpleSelector::PseudoClass(name));
+                        },
+                        CssToken::Function(name) => {
+                            self.advance();
+                            let lc = name.to_ascii_lowercase();
+                            if lc == "not" {
+                                // Parse :not(compound)
+                                self.skip_whitespace();
+                                if let Some(inner) = self.parse_compound_selector() {
+                                    parts.push(SimpleSelector::Not(Box::new(inner)));
+                                }
+                                self.skip_whitespace();
+                                if self.peek() == &CssToken::CloseParen {
+                                    self.advance();
+                                }
+                            } else {
+                                // Functional pseudo-class like :nth-child(2n+1)
+                                let arg = self.consume_until_close_paren();
+                                parts.push(SimpleSelector::PseudoClassFn(lc, arg));
+                            }
+                        },
+                        _ => {},
+                    }
+                },
+                CssToken::OpenBracket => {
+                    self.advance();
+                    if let Some(attr_sel) = self.parse_attribute_selector() {
+                        parts.push(attr_sel);
                     }
                 },
                 _ => break,
@@ -453,6 +541,150 @@ impl CssParser {
         } else {
             Some(CompoundSelector { parts })
         }
+    }
+
+    // -- attribute selector / pseudo-class helpers ---------------------
+
+    /// Consume tokens until `)`, collecting them as a trimmed string.
+    fn consume_until_close_paren(&mut self) -> String {
+        let mut arg = String::new();
+        loop {
+            match self.peek() {
+                CssToken::CloseParen | CssToken::Eof => {
+                    if self.peek() == &CssToken::CloseParen {
+                        self.advance();
+                    }
+                    break;
+                },
+                _ => {
+                    let tok = self.peek().clone();
+                    self.advance();
+                    match tok {
+                        CssToken::Ident(s) => arg.push_str(&s),
+                        CssToken::Number(n) => arg.push_str(&format!("{n}")),
+                        CssToken::Plus => arg.push('+'),
+                        CssToken::Whitespace => arg.push(' '),
+                        CssToken::Delim(c) => arg.push(c),
+                        _ => {},
+                    }
+                },
+            }
+        }
+        arg.trim().to_string()
+    }
+
+    /// Parse an attribute selector after `[` has been consumed.
+    /// Returns `SimpleSelector::Attribute { .. }`.
+    fn parse_attribute_selector(&mut self) -> Option<SimpleSelector> {
+        self.skip_whitespace();
+        let name = match self.peek().clone() {
+            CssToken::Ident(n) => {
+                self.advance();
+                n
+            },
+            _ => {
+                // Skip to `]`.
+                while self.peek() != &CssToken::CloseBracket && self.peek() != &CssToken::Eof {
+                    self.advance();
+                }
+                if self.peek() == &CssToken::CloseBracket {
+                    self.advance();
+                }
+                return None;
+            },
+        };
+
+        self.skip_whitespace();
+
+        // Check for operator or `]`.
+        if self.peek() == &CssToken::CloseBracket {
+            self.advance();
+            return Some(SimpleSelector::Attribute {
+                name,
+                op: AttrOp::Exists,
+                value: None,
+            });
+        }
+
+        // Parse operator: =, ~=, |=, ^=, $=, *=
+        let op = match self.peek().clone() {
+            CssToken::Delim('=') => {
+                self.advance();
+                AttrOp::Equals
+            },
+            CssToken::Delim('~') => {
+                self.advance();
+                // Expect `=`.
+                if self.peek() == &CssToken::Delim('=') {
+                    self.advance();
+                }
+                AttrOp::Includes
+            },
+            CssToken::Delim('|') => {
+                self.advance();
+                if self.peek() == &CssToken::Delim('=') {
+                    self.advance();
+                }
+                AttrOp::DashMatch
+            },
+            CssToken::Delim('^') => {
+                self.advance();
+                if self.peek() == &CssToken::Delim('=') {
+                    self.advance();
+                }
+                AttrOp::Prefix
+            },
+            CssToken::Delim('$') => {
+                self.advance();
+                if self.peek() == &CssToken::Delim('=') {
+                    self.advance();
+                }
+                AttrOp::Suffix
+            },
+            CssToken::Star => {
+                self.advance();
+                if self.peek() == &CssToken::Delim('=') {
+                    self.advance();
+                }
+                AttrOp::Substring
+            },
+            _ => {
+                // Unknown operator, skip to `]`.
+                while self.peek() != &CssToken::CloseBracket && self.peek() != &CssToken::Eof {
+                    self.advance();
+                }
+                if self.peek() == &CssToken::CloseBracket {
+                    self.advance();
+                }
+                return Some(SimpleSelector::Attribute {
+                    name,
+                    op: AttrOp::Exists,
+                    value: None,
+                });
+            },
+        };
+
+        self.skip_whitespace();
+
+        // Parse value (ident or string).
+        let value = match self.peek().clone() {
+            CssToken::Ident(v) => {
+                self.advance();
+                Some(v)
+            },
+            CssToken::String(v) => {
+                self.advance();
+                Some(v)
+            },
+            _ => None,
+        };
+
+        self.skip_whitespace();
+        if self.peek() == &CssToken::CloseBracket {
+            self.advance();
+        }
+
+        Some(SimpleSelector::Attribute { name, op, value })
     }
 
     // -- declarations ------------------------------------------------

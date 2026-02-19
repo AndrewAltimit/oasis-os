@@ -7,7 +7,9 @@
 
 pub mod block;
 pub mod box_model;
+pub mod flex;
 pub mod float;
 pub mod inline;
+pub mod positioning;
 pub mod table;
 pub mod text;
