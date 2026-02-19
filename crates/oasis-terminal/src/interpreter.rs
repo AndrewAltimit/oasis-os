@@ -351,17 +351,13 @@ impl CommandRegistry {
                 continue;
             }
 
-            // Save exit code before pipeline (to detect if redirect set it).
-            let code_before = self.last_exit_code.get();
+            // Reset exit code before pipeline so we can detect if the
+            // pipeline sets a non-zero code (e.g. redirect capturing an
+            // error via was_error).
+            self.last_exit_code.set(0);
+            self.set_variable("?", "0");
             match self.execute_pipeline(&segment.command, env) {
                 Ok(output) => {
-                    // If the exit code changed during the pipeline (e.g.
-                    // a stderr redirect captured an error), preserve it.
-                    // Otherwise, set success.
-                    if self.last_exit_code.get() == code_before {
-                        self.last_exit_code.set(0);
-                        self.set_variable("?", "0");
-                    }
                     match output {
                         CommandOutput::None => {},
                         other => all_outputs.push(other),
@@ -1673,7 +1669,11 @@ fn parse_redirect(input: &str) -> (&str, Redirections<'_>) {
                 b'"' => in_double = true,
                 b'{' => brace_depth += 1,
                 b'}' => brace_depth = brace_depth.saturating_sub(1),
-                b'2' if brace_depth == 0 && i + 1 < bytes.len() && bytes[i + 1] == b'>' => {
+                b'2' if brace_depth == 0
+                    && i + 1 < bytes.len()
+                    && bytes[i + 1] == b'>'
+                    && (i == 0 || bytes[i - 1].is_ascii_whitespace()) =>
+                {
                     if first_redirect_pos.is_none() {
                         first_redirect_pos = Some(i);
                     }
