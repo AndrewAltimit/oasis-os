@@ -1112,19 +1112,33 @@ impl CommandRegistry {
         }
 
         // Extract function name (strip optional `()` suffix).
-        let (name, rest) = if let Some(paren_pos) = raw.find('(') {
-            let name = raw[..paren_pos].trim();
-            let after = raw[paren_pos..].trim();
-            let rest = after.strip_prefix("()").unwrap_or(after);
-            (name, rest.trim())
-        } else if let Some(brace_pos) = raw.find('{') {
-            let name = raw[..brace_pos].trim();
-            let rest = &raw[brace_pos..];
-            (name, rest.trim())
-        } else {
-            return Err(OasisError::Command(
-                "usage: function name() { body }".to_string(),
-            ));
+        // Check which delimiter comes first to avoid misparsing `(`
+        // that appears inside the function body.
+        let paren_pos = raw.find('(');
+        let brace_pos = raw.find('{');
+        let (name, rest) = match (paren_pos, brace_pos) {
+            (Some(p), Some(b)) if p < b => {
+                let name = raw[..p].trim();
+                let after = raw[p..].trim();
+                let rest = after.strip_prefix("()").unwrap_or(after);
+                (name, rest.trim())
+            },
+            (_, Some(b)) => {
+                let name = raw[..b].trim();
+                let rest = &raw[b..];
+                (name, rest.trim())
+            },
+            (Some(p), None) => {
+                let name = raw[..p].trim();
+                let after = raw[p..].trim();
+                let rest = after.strip_prefix("()").unwrap_or(after);
+                (name, rest.trim())
+            },
+            (None, None) => {
+                return Err(OasisError::Command(
+                    "usage: function name() { body }".to_string(),
+                ));
+            },
         };
 
         if name.is_empty() {
@@ -1154,6 +1168,11 @@ impl CommandRegistry {
 
     /// Built-in `return` command: set exit code from within a function.
     fn execute_return(&self, args: &[&str]) -> Result<CommandOutput> {
+        if self.call_depth.get() == 0 {
+            return Err(OasisError::Command(
+                "return: can only be used inside a function".to_string(),
+            ));
+        }
         let code: i32 = if let Some(s) = args.first() {
             s.parse().unwrap_or(1)
         } else {
