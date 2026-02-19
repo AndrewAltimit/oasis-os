@@ -310,6 +310,8 @@ y = 0
 w = 800
 h = 600
 color = "#1A1A2D"
+gradient_top = "#22223A"
+gradient_bottom = "#121220"
 
 [taskbar_bg]
 x = 0
@@ -337,6 +339,13 @@ text = "Start"
 font_size = 10
 text_color = "#FFFFFF"
 border_radius = 4
+
+[task_area]
+x = 68
+y = 572
+w = 658
+h = 24
+color = "#1E1E3060"
 
 [clock_display]
 x = 730
@@ -537,16 +546,16 @@ name = "xp"
 version = "1.0"
 author = "OASIS_OS"
 description = "Windows XP Luna-inspired blue theme with gradient titlebars and taskbar"
-screen_width = 480
-screen_height = 272
+screen_width = 1024
+screen_height = 768
 "#;
 
 const XP_LAYOUT: &str = r##"
 [content_bg]
 x = 0
-y = 24
-w = 480
-h = 224
+y = 30
+w = 1024
+h = 698
 color = "#ECE9D8"
 "##;
 
@@ -557,9 +566,9 @@ file_browser = true
 browser = true
 window_manager = true
 dashboard_pages = 2
-icons_per_page = 8
-grid_cols = 4
-grid_rows = 2
+icons_per_page = 15
+grid_cols = 5
+grid_rows = 3
 start_menu = true
 show_version = false
 transition_fade_frames = 12
@@ -581,7 +590,7 @@ shadow_intensity = 1
 gradient_enabled = true
 
 [wm_theme]
-titlebar_height = 24
+titlebar_height = 30
 border_width = 1
 titlebar_active = "#0054E3"
 titlebar_inactive = "#7B7B7B"
@@ -591,8 +600,8 @@ content_bg = "#ECE9D8"
 btn_close = "#C75050"
 btn_minimize = "#406BBD"
 btn_maximize = "#406BBD"
-button_size = 16
-titlebar_font_size = 12
+button_size = 20
+titlebar_font_size = 14
 titlebar_radius = 4
 titlebar_gradient = true
 titlebar_gradient_top = "#3A6EA5"
@@ -619,8 +628,8 @@ title_text_shadow = true
 title_text_shadow_color = "#00000060"
 content_stroke_width = 1
 content_stroke_color = "#0054E320"
-maximize_top_inset = 44
-maximize_bottom_inset = 30
+maximize_top_inset = 52
+maximize_bottom_inset = 40
 
 [bar_overrides]
 statusbar_bg = "#1F3E7B"
@@ -641,21 +650,24 @@ wave_enabled = false
 angle = 90
 
 [geometry]
-statusbar_height = 26
-bottombar_height = 30
-icon_width = 24
-icon_height = 28
+statusbar_height = 30
+bottombar_height = 40
+icon_width = 48
+icon_height = 56
+font_small = 12
+tab_row_height = 22
 
 [icon_overrides]
 body_color = "#ECE9D8"
 fold_color = "#C8C2AD"
 outline_color = "#0054E380"
 label_color = "#000000E6"
-cursor_color = "#003399C0"
+cursor_color = "#5B9BD5A0"
+cursor_stroke_width = 2
 icon_border_radius = 3
-cursor_border_radius = 4
+cursor_border_radius = 5
 icon_style = "card"
-cursor_style = "fill"
+cursor_style = "stroke"
 
 [start_menu_overrides]
 panel_bg = "#1F3E7B"
@@ -670,24 +682,24 @@ button_text = "#FFFFFF"
 panel_border_radius = 4
 panel_shadow_level = 1
 button_label = "start"
-button_width = 54
-button_height = 22
+button_width = 80
+button_height = 30
 button_shape = "rect"
 button_gradient = true
 button_gradient_top = "#4DA54D"
 button_gradient_bottom = "#2D852D"
-panel_width = 240
+panel_width = 360
 columns = 2
 header_text = "User"
 header_bg = "#003399"
 header_text_color = "#FFFFFF"
-header_height = 28
+header_height = 36
 footer_enabled = true
 footer_bg = "#1F3E7B"
 footer_text_color = "#FFFFFF"
-footer_height = 24
-item_icon_size = 16
-item_row_height = 24
+footer_height = 30
+item_icon_size = 24
+item_row_height = 32
 
 [browser_overrides]
 chrome_bg = "#D6D2C2"
