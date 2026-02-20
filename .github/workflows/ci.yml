@@ -41,6 +41,9 @@ jobs:
           echo "USER_ID=$(id -u)" >> $GITHUB_ENV
           echo "GROUP_ID=$(id -g)" >> $GITHUB_ENV
 
+      - name: Build CI Docker image
+        run: docker compose --profile ci build rust-ci
+
       # -- Formatting -------------------------------------------------------
       - name: Format check
         run: docker compose --profile ci run --rm rust-ci cargo fmt --all -- --check
@@ -51,7 +54,10 @@ jobs:
 
       # -- Tests -------------------------------------------------------------
       - name: Test
-        run: docker compose --profile ci run --rm rust-ci cargo test --workspace
+        run: |
+          set -o pipefail
+          docker compose --profile ci run --rm rust-ci \
+            cargo test --workspace 2>&1 | tee test_output.txt
 
       # -- Build -------------------------------------------------------------
       - name: Build (release)
@@ -59,9 +65,11 @@ jobs:
 
       # -- Screenshot Regression Tests ----------------------------------------
       - name: Screenshot tests (generate)
+        timeout-minutes: 5
         run: |
-          docker compose --profile ci run --rm rust-ci \
-            bash -c 'xvfb-run -a cargo run -p oasis-app --bin screenshot-tests --release'
+          docker compose --profile ci run --rm \
+            -e SDL_VIDEODRIVER=dummy -e SDL_RENDER_DRIVER=software \
+            rust-ci cargo run -p oasis-app --bin screenshot-tests --release
 
       - name: Upload screenshot report
         if: always()
@@ -78,6 +86,7 @@ jobs:
       # -- Benchmarks --------------------------------------------------------
       - name: Benchmarks
         run: |
+          set -o pipefail
           docker compose --profile ci run --rm rust-ci \
             cargo bench --workspace 2>&1 | tee bench_results.txt
           echo "::group::Benchmark Results"
@@ -96,9 +105,12 @@ jobs:
       - name: Test metrics summary
         if: always()
         run: |
-          # Re-run tests capturing output for summary (quick -- already compiled).
-          docker compose --profile ci run --rm rust-ci \
-            cargo test --workspace 2>&1 | tee test_output.txt || true
+          if [ ! -f test_output.txt ]; then
+            echo "No test output captured (test step may have been skipped)."
+            echo "### Test Summary" >> $GITHUB_STEP_SUMMARY
+            echo "No test output available." >> $GITHUB_STEP_SUMMARY
+            exit 0
+          fi
           PASS=$(grep -c '\.\.\.  *ok$' test_output.txt 2>/dev/null) || PASS=0
           FAIL=$(grep -c 'FAILED$' test_output.txt 2>/dev/null) || FAIL=0
           TOTAL=$((PASS + FAIL))

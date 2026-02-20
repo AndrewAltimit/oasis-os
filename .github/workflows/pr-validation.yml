@@ -61,6 +61,9 @@ jobs:
           echo "USER_ID=$(id -u)" >> $GITHUB_ENV
           echo "GROUP_ID=$(id -g)" >> $GITHUB_ENV
 
+      - name: Build CI Docker image
+        run: docker compose --profile ci build rust-ci
+
       # -- Formatting -------------------------------------------------------
       - name: Format check
         run: docker compose --profile ci run --rm rust-ci cargo fmt --all -- --check
@@ -71,15 +74,72 @@ jobs:
 
       # -- Tests -------------------------------------------------------------
       - name: Test
-        run: docker compose --profile ci run --rm rust-ci cargo test --workspace
+        run: |
+          set -o pipefail
+          docker compose --profile ci run --rm rust-ci \
+            cargo test --workspace 2>&1 | tee test_output.txt
 
       # -- Build -------------------------------------------------------------
       - name: Build (release)
         run: docker compose --profile ci run --rm rust-ci cargo build --workspace --release
 
+      # -- Screenshot Regression Tests ----------------------------------------
+      - name: Screenshot tests (generate)
+        timeout-minutes: 5
+        run: |
+          docker compose --profile ci run --rm \
+            -e SDL_VIDEODRIVER=dummy -e SDL_RENDER_DRIVER=software \
+            rust-ci cargo run -p oasis-app --bin screenshot-tests --release
+
+      - name: Upload screenshot report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: screenshot-report
+          path: screenshots/tests/
+          retention-days: 14
+
       # -- License / Advisory ------------------------------------------------
       - name: cargo-deny
         run: docker compose --profile ci run --rm rust-ci cargo deny check
+
+      # -- Benchmarks --------------------------------------------------------
+      - name: Benchmarks
+        run: |
+          set -o pipefail
+          docker compose --profile ci run --rm rust-ci \
+            cargo bench --workspace 2>&1 | tee bench_results.txt
+          echo "::group::Benchmark Results"
+          grep -E '(time:|bench)' bench_results.txt || true
+          echo "::endgroup::"
+
+      - name: Upload benchmark results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-results
+          path: bench_results.txt
+          retention-days: 30
+
+      # -- Test Metrics -------------------------------------------------------
+      - name: Test metrics summary
+        if: always()
+        run: |
+          if [ ! -f test_output.txt ]; then
+            echo "No test output captured (test step may have been skipped)."
+            echo "### Test Summary" >> $GITHUB_STEP_SUMMARY
+            echo "No test output available." >> $GITHUB_STEP_SUMMARY
+            exit 0
+          fi
+          PASS=$(grep -c '\.\.\.  *ok$' test_output.txt 2>/dev/null) || PASS=0
+          FAIL=$(grep -c 'FAILED$' test_output.txt 2>/dev/null) || FAIL=0
+          TOTAL=$((PASS + FAIL))
+          echo "### Test Summary" >> $GITHUB_STEP_SUMMARY
+          echo "| Metric | Count |" >> $GITHUB_STEP_SUMMARY
+          echo "|--------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Passed | $PASS |" >> $GITHUB_STEP_SUMMARY
+          echo "| Failed | $FAIL |" >> $GITHUB_STEP_SUMMARY
+          echo "| Total  | $TOTAL |" >> $GITHUB_STEP_SUMMARY
 
       # -- PSP Backend Build -------------------------------------------------
       - name: Setup PSP SDK
