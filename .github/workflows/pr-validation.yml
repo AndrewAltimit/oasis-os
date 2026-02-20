@@ -87,8 +87,9 @@ jobs:
       - name: Screenshot tests (generate)
         timeout-minutes: 5
         run: |
-          docker compose --profile ci run --rm rust-ci \
-            bash -c 'SDL_RENDER_DRIVER=software xvfb-run -a cargo run -p oasis-app --bin screenshot-tests --release'
+          docker compose --profile ci run --rm \
+            -e SDL_VIDEODRIVER=dummy -e SDL_RENDER_DRIVER=software \
+            rust-ci cargo run -p oasis-app --bin screenshot-tests --release
 
       - name: Upload screenshot report
         if: always()
