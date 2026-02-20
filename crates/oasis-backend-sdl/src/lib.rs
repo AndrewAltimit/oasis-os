@@ -70,10 +70,13 @@ impl SdlBackend {
             .position_centered()
             .build()
             .map_err(|e| OasisError::Backend(e.to_string()))?;
-        let canvas = window
-            .into_canvas()
-            .accelerated()
-            .present_vsync()
+        let headless =
+            std::env::var("SDL_RENDER_DRIVER").is_ok_and(|v| v.eq_ignore_ascii_case("software"));
+        let mut builder = window.into_canvas();
+        if !headless {
+            builder = builder.accelerated().present_vsync();
+        }
+        let canvas = builder
             .build()
             .map_err(|e| OasisError::Backend(e.to_string()))?;
         let texture_creator = canvas.texture_creator();
