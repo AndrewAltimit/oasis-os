@@ -61,7 +61,7 @@ jobs:
       - name: Screenshot tests (generate)
         run: |
           docker compose --profile ci run --rm rust-ci \
-            xvfb-run -a cargo run -p oasis-app --bin screenshot-tests --release
+            bash -c 'xvfb-run -a cargo run -p oasis-app --bin screenshot-tests --release'
 
       - name: Upload screenshot report
         if: always()
@@ -99,8 +99,8 @@ jobs:
           # Re-run tests capturing output for summary (quick -- already compiled).
           docker compose --profile ci run --rm rust-ci \
             cargo test --workspace 2>&1 | tee test_output.txt || true
-          PASS=$(grep -c '\.\.\.  *ok$' test_output.txt || echo 0)
-          FAIL=$(grep -c 'FAILED$' test_output.txt || echo 0)
+          PASS=$(grep -c '\.\.\.  *ok$' test_output.txt 2>/dev/null) || PASS=0
+          FAIL=$(grep -c 'FAILED$' test_output.txt 2>/dev/null) || FAIL=0
           TOTAL=$((PASS + FAIL))
           echo "### Test Summary" >> $GITHUB_STEP_SUMMARY
           echo "| Metric | Count |" >> $GITHUB_STEP_SUMMARY
