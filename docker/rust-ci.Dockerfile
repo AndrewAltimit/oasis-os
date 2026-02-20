@@ -13,6 +13,7 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     libsdl2-dev \
     libsdl2-mixer-dev \
     xvfb \
+    xauth \
     && rm -rf /var/lib/apt/lists/*
 
 # Install nightly toolchain (for format checking with edition 2024)
