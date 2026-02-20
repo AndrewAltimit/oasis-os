@@ -41,6 +41,9 @@ jobs:
           echo "USER_ID=$(id -u)" >> $GITHUB_ENV
           echo "GROUP_ID=$(id -g)" >> $GITHUB_ENV
 
+      - name: Build CI Docker image
+        run: docker compose --profile ci build rust-ci
+
       # -- Formatting -------------------------------------------------------
       - name: Format check
         run: docker compose --profile ci run --rm rust-ci cargo fmt --all -- --check
