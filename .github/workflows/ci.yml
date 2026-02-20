@@ -54,7 +54,10 @@ jobs:
 
       # -- Tests -------------------------------------------------------------
       - name: Test
-        run: docker compose --profile ci run --rm rust-ci cargo test --workspace
+        run: |
+          set -o pipefail
+          docker compose --profile ci run --rm rust-ci \
+            cargo test --workspace 2>&1 | tee test_output.txt
 
       # -- Build -------------------------------------------------------------
       - name: Build (release)
@@ -81,6 +84,7 @@ jobs:
       # -- Benchmarks --------------------------------------------------------
       - name: Benchmarks
         run: |
+          set -o pipefail
           docker compose --profile ci run --rm rust-ci \
             cargo bench --workspace 2>&1 | tee bench_results.txt
           echo "::group::Benchmark Results"
@@ -99,9 +103,12 @@ jobs:
       - name: Test metrics summary
         if: always()
         run: |
-          # Re-run tests capturing output for summary (quick -- already compiled).
-          docker compose --profile ci run --rm rust-ci \
-            cargo test --workspace 2>&1 | tee test_output.txt || true
+          if [ ! -f test_output.txt ]; then
+            echo "No test output captured (test step may have been skipped)."
+            echo "### Test Summary" >> $GITHUB_STEP_SUMMARY
+            echo "No test output available." >> $GITHUB_STEP_SUMMARY
+            exit 0
+          fi
           PASS=$(grep -c '\.\.\.  *ok$' test_output.txt 2>/dev/null) || PASS=0
           FAIL=$(grep -c 'FAILED$' test_output.txt 2>/dev/null) || FAIL=0
           TOTAL=$((PASS + FAIL))
