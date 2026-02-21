@@ -76,14 +76,14 @@ impl ScrollView {
             ctx.theme.scrollbar_track,
         )?;
 
-        // Thumb.
+        // Thumb: ensure it fits within the track.
         let ratio = self.viewport_height as f32 / self.content_height as f32;
-        let thumb_h = ((h as f32 * ratio).max(bar_w as f32)) as u32;
-        let scroll_range = self.content_height - self.viewport_height;
-        let max_thumb_y = (h - thumb_h) as i32;
+        let thumb_h = ((h as f32 * ratio).max(bar_w as f32) as u32).min(h);
+        let scroll_range = self.content_height.saturating_sub(self.viewport_height);
+        let track_remaining = h.saturating_sub(thumb_h);
         let thumb_y = if scroll_range > 0 {
-            let raw = ((h - thumb_h) as f32 * self.scroll_y as f32 / scroll_range as f32) as i32;
-            raw.clamp(0, max_thumb_y)
+            let raw = (track_remaining as f32 * self.scroll_y as f32 / scroll_range as f32) as i32;
+            raw.clamp(0, track_remaining as i32)
         } else {
             0
         };

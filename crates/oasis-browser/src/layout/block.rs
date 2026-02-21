@@ -3,6 +3,15 @@
 //! Implements CSS 2.1 block formatting context (BFC) layout. Block
 //! boxes are stacked vertically; their widths expand to fill the
 //! containing block and heights are determined by content.
+//!
+//! ## Incremental layout
+//!
+//! Each [`LayoutBox`] carries a `dirty` flag. When only a subtree
+//! changes, callers can mark individual boxes dirty via
+//! [`LayoutBox::mark_dirty`] and then call [`layout_block_incremental`]
+//! to relayout only the dirty subtree while preserving previously
+//! computed dimensions for clean branches. A [`StyleCache`] avoids
+//! redundant style computations during incremental passes.
 
 use super::box_model::*;
 use super::flex::layout_flex;
@@ -10,6 +19,8 @@ use super::inline::layout_inline;
 use super::positioning::apply_positioning;
 use crate::css::values::{ComputedStyle, Dimension, Display, ListStyleType};
 use crate::html::dom::{Document, ElementData, NodeId, NodeKind, TagName};
+
+use std::collections::HashMap;
 
 // -------------------------------------------------------------------
 // TextMeasurer trait
@@ -68,6 +79,219 @@ pub fn build_layout_tree(
     apply_positioning(&mut root, viewport_rect);
 
     root
+}
+
+// -------------------------------------------------------------------
+// Style cache
+// -------------------------------------------------------------------
+
+/// Cache of computed edge sizes (padding/border/margin) keyed by DOM
+/// node ID. Avoids re-resolving edge sizes for nodes whose styles have
+/// not changed between incremental layout passes.
+#[derive(Debug, Default)]
+pub struct StyleCache {
+    edges: HashMap<NodeId, CachedEdges>,
+}
+
+/// Cached resolved edge sizes for a single layout box.
+#[derive(Debug, Clone)]
+struct CachedEdges {
+    padding: EdgeSizes,
+    border: EdgeSizes,
+    margin: EdgeSizes,
+}
+
+impl StyleCache {
+    /// Create an empty style cache.
+    pub fn new() -> Self {
+        Self {
+            edges: HashMap::new(),
+        }
+    }
+
+    /// Store resolved edge sizes for a node.
+    pub fn insert_edges(
+        &mut self,
+        node: NodeId,
+        padding: EdgeSizes,
+        border: EdgeSizes,
+        margin: EdgeSizes,
+    ) {
+        self.edges.insert(
+            node,
+            CachedEdges {
+                padding,
+                border,
+                margin,
+            },
+        );
+    }
+
+    /// Retrieve cached edges for a node. Returns `None` on cache miss.
+    pub fn get_edges(&self, node: NodeId) -> Option<(&EdgeSizes, &EdgeSizes, &EdgeSizes)> {
+        self.edges
+            .get(&node)
+            .map(|c| (&c.padding, &c.border, &c.margin))
+    }
+
+    /// Number of cached entries (useful for benchmarking).
+    pub fn len(&self) -> usize {
+        self.edges.len()
+    }
+
+    /// Whether the cache is empty.
+    pub fn is_empty(&self) -> bool {
+        self.edges.is_empty()
+    }
+
+    /// Clear all cached entries.
+    pub fn clear(&mut self) {
+        self.edges.clear();
+    }
+}
+
+// -------------------------------------------------------------------
+// Incremental layout
+// -------------------------------------------------------------------
+
+/// Perform incremental layout on a previously-built layout tree.
+///
+/// Only re-lays-out subtrees where at least one box has its `dirty`
+/// flag set. Clean subtrees are skipped entirely. After layout
+/// completes, all boxes are marked clean. The optional `cache` stores
+/// resolved edge sizes to avoid redundant recomputation.
+///
+/// This is an additive optimisation -- when the entire tree is dirty
+/// (e.g. initial layout), the result is identical to a full
+/// [`layout_block`] pass.
+pub fn layout_block_incremental(
+    layout_box: &mut LayoutBox,
+    containing_width: f32,
+    measurer: &dyn TextMeasurer,
+    cache: &mut StyleCache,
+) {
+    if !layout_box.dirty && !any_child_dirty(layout_box) {
+        return;
+    }
+
+    // Resolve edge sizes, using cache when available.
+    resolve_edge_sizes_cached(layout_box, containing_width, cache);
+
+    calculate_block_width(layout_box, containing_width);
+
+    if matches!(layout_box.box_type, BoxType::Flex) {
+        layout_flex(layout_box, containing_width, measurer);
+    } else {
+        layout_children_incremental(layout_box, measurer, cache);
+        calculate_block_height(layout_box);
+    }
+
+    layout_box.dirty = false;
+}
+
+/// Check whether any child (or deeper descendant) is dirty.
+fn any_child_dirty(layout_box: &LayoutBox) -> bool {
+    for child in &layout_box.children {
+        if child.dirty || any_child_dirty(child) {
+            return true;
+        }
+    }
+    false
+}
+
+/// Resolve edge sizes with caching. If the box has a DOM node and a
+/// cache hit, the cached values are used directly. Otherwise the
+/// values are resolved from the style and stored in the cache.
+fn resolve_edge_sizes_cached(
+    layout_box: &mut LayoutBox,
+    containing_width: f32,
+    cache: &mut StyleCache,
+) {
+    if let Some(node) = layout_box.node
+        && !layout_box.dirty
+        && let Some((p, b, m)) = cache.get_edges(node)
+    {
+        layout_box.dimensions.padding = *p;
+        layout_box.dimensions.border = *b;
+        layout_box.dimensions.margin = *m;
+        return;
+    }
+
+    resolve_edge_sizes(layout_box, containing_width);
+
+    if let Some(node) = layout_box.node {
+        cache.insert_edges(
+            node,
+            layout_box.dimensions.padding,
+            layout_box.dimensions.border,
+            layout_box.dimensions.margin,
+        );
+    }
+}
+
+/// Incremental version of [`layout_block_children`]. Skips clean
+/// children whose subtrees are also clean.
+fn layout_children_incremental(
+    parent: &mut LayoutBox,
+    measurer: &dyn TextMeasurer,
+    cache: &mut StyleCache,
+) {
+    let all_inline =
+        !parent.children.is_empty() && parent.children.iter().all(|c| !c.is_block_level());
+    if all_inline {
+        // Inline formatting context -- relayout fully when dirty.
+        if parent.dirty || any_child_dirty(parent) {
+            layout_inline(parent, measurer);
+        }
+        return;
+    }
+
+    let content_x = parent.dimensions.content.x;
+    let content_width = parent.dimensions.content.width;
+    let mut cursor_y = parent.dimensions.content.y + parent.dimensions.padding.top;
+    let mut prev_margin_bottom: f32 = 0.0;
+
+    for child in &mut parent.children {
+        match child.box_type {
+            BoxType::Block | BoxType::ListItem { .. } | BoxType::TableWrapper => {
+                resolve_edge_sizes_cached(child, content_width, cache);
+
+                let child_margin_top = child.dimensions.margin.top;
+                let collapsed = collapse_margins(prev_margin_bottom, child_margin_top);
+
+                child.dimensions.content.x = content_x
+                    + parent.dimensions.padding.left
+                    + child.dimensions.margin.left
+                    + child.dimensions.border.left
+                    + child.dimensions.padding.left;
+                child.dimensions.content.y = cursor_y
+                    + collapsed
+                    + child.dimensions.border.top
+                    + child.dimensions.padding.top;
+
+                if child.dirty || any_child_dirty(child) {
+                    layout_block_incremental(child, content_width, measurer, cache);
+                }
+
+                let bb = child.dimensions.border_box();
+                cursor_y = bb.y + bb.height;
+                prev_margin_bottom = child.dimensions.margin.bottom;
+            },
+            BoxType::Anonymous => {
+                child.dimensions.content.x = content_x + parent.dimensions.padding.left;
+                child.dimensions.content.y = cursor_y;
+                child.dimensions.content.width = content_width;
+
+                if child.dirty || any_child_dirty(child) {
+                    layout_inline(child, measurer);
+                }
+
+                cursor_y += child.dimensions.content.height;
+                prev_margin_bottom = 0.0;
+            },
+            _ => {},
+        }
+    }
 }
 
 /// Recursively build child layout boxes for a list of DOM node IDs.
@@ -719,5 +943,142 @@ mod tests {
         // No wrapping needed (all inline).
         assert_eq!(wrapped.len(), 2);
         assert!(matches!(wrapped[0].box_type, BoxType::Inline));
+    }
+
+    // -- incremental layout -------------------------------------------
+
+    #[test]
+    fn incremental_layout_matches_full_layout() {
+        let m = FixedMeasurer;
+        let mut parent = LayoutBox::new(BoxType::Block, block_style(), None);
+        let mut s1 = block_style();
+        s1.height = Dimension::Px(30.0);
+        let mut s2 = block_style();
+        s2.height = Dimension::Px(50.0);
+        parent.children = vec![
+            LayoutBox::new(BoxType::Block, s1, None),
+            LayoutBox::new(BoxType::Block, s2, None),
+        ];
+        parent.dimensions.content.x = 0.0;
+        parent.dimensions.content.y = 0.0;
+
+        // Full layout.
+        let mut full = parent.clone();
+        layout_block(&mut full, 480.0, &m);
+
+        // Incremental layout (all dirty initially).
+        let mut cache = StyleCache::new();
+        layout_block_incremental(&mut parent, 480.0, &m, &mut cache);
+
+        assert_eq!(
+            parent.dimensions.content.height,
+            full.dimensions.content.height,
+        );
+        assert_eq!(
+            parent.dimensions.content.width,
+            full.dimensions.content.width,
+        );
+    }
+
+    #[test]
+    fn clean_subtree_skipped_in_incremental() {
+        let m = FixedMeasurer;
+        let mut parent = LayoutBox::new(BoxType::Block, block_style(), None);
+        let mut s1 = block_style();
+        s1.height = Dimension::Px(30.0);
+        parent.children = vec![LayoutBox::new(BoxType::Block, s1, None)];
+        parent.dimensions.content.x = 0.0;
+        parent.dimensions.content.y = 0.0;
+
+        // First pass: full incremental layout.
+        let mut cache = StyleCache::new();
+        layout_block_incremental(&mut parent, 480.0, &m, &mut cache);
+
+        // Mark everything clean, then call again -- should be no-op.
+        parent.mark_clean();
+        let old_height = parent.dimensions.content.height;
+        layout_block_incremental(&mut parent, 480.0, &m, &mut cache);
+        assert_eq!(parent.dimensions.content.height, old_height);
+    }
+
+    #[test]
+    fn dirty_child_triggers_relayout() {
+        let m = FixedMeasurer;
+        let mut parent = LayoutBox::new(BoxType::Block, block_style(), None);
+        let mut s1 = block_style();
+        s1.height = Dimension::Px(30.0);
+        parent.children = vec![LayoutBox::new(BoxType::Block, s1, Some(1))];
+        parent.dimensions.content.x = 0.0;
+        parent.dimensions.content.y = 0.0;
+
+        let mut cache = StyleCache::new();
+        layout_block_incremental(&mut parent, 480.0, &m, &mut cache);
+        parent.mark_clean();
+
+        // Dirty the child and change its height.
+        parent.children[0].dirty = true;
+        parent.dirty = true;
+        parent.children[0].style.height = Dimension::Px(60.0);
+        layout_block_incremental(&mut parent, 480.0, &m, &mut cache);
+
+        assert_eq!(parent.dimensions.content.height, 60.0);
+    }
+
+    // -- style cache --------------------------------------------------
+
+    #[test]
+    fn style_cache_insert_and_get() {
+        let mut cache = StyleCache::new();
+        assert!(cache.is_empty());
+        let pad = EdgeSizes::new(1.0, 2.0, 3.0, 4.0);
+        let bdr = EdgeSizes::new(5.0, 6.0, 7.0, 8.0);
+        let mar = EdgeSizes::new(9.0, 10.0, 11.0, 12.0);
+        cache.insert_edges(42, pad, bdr, mar);
+        assert_eq!(cache.len(), 1);
+        let (p, b, m) = cache.get_edges(42).expect("cache hit");
+        assert_eq!(*p, pad);
+        assert_eq!(*b, bdr);
+        assert_eq!(*m, mar);
+    }
+
+    #[test]
+    fn style_cache_miss() {
+        let cache = StyleCache::new();
+        assert!(cache.get_edges(99).is_none());
+    }
+
+    #[test]
+    fn style_cache_clear() {
+        let mut cache = StyleCache::new();
+        cache.insert_edges(
+            1,
+            EdgeSizes::default(),
+            EdgeSizes::default(),
+            EdgeSizes::default(),
+        );
+        cache.clear();
+        assert!(cache.is_empty());
+    }
+
+    #[test]
+    fn mark_dirty_propagation() {
+        let mut lb = LayoutBox::new(BoxType::Block, block_style(), None);
+        lb.mark_clean();
+        assert!(!lb.dirty);
+        lb.mark_dirty();
+        assert!(lb.dirty);
+    }
+
+    #[test]
+    fn any_child_dirty_detection() {
+        let mut parent = LayoutBox::new(BoxType::Block, block_style(), None);
+        let mut child = LayoutBox::new(BoxType::Block, block_style(), None);
+        child.dirty = false;
+        parent.children = vec![child];
+        parent.dirty = false;
+        assert!(!any_child_dirty(&parent));
+
+        parent.children[0].dirty = true;
+        assert!(any_child_dirty(&parent));
     }
 }

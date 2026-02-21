@@ -4,12 +4,9 @@ use std::collections::HashMap;
 
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use oasis_browser::SimpleTextMeasurer;
-use oasis_browser::css::cascade::style_tree;
-use oasis_browser::css::parser::Stylesheet;
-use oasis_browser::html::tokenizer::Tokenizer;
-use oasis_browser::html::tree_builder::TreeBuilder;
-use oasis_browser::layout::block::build_layout_tree;
-use oasis_browser::paint;
+use oasis_browser::internals::{
+    Stylesheet, Tokenizer, TreeBuilder, build_layout_tree, paint_page, style_tree,
+};
 use oasis_types::backend::{Color, SdiBackend, TextureId};
 use oasis_types::error::Result;
 
@@ -118,7 +115,7 @@ fn bench_paint(c: &mut Criterion) {
             &(&layout, &link_map),
             |b, (layout, link_map)| {
                 let mut backend = NullBackend;
-                b.iter(|| paint::paint(layout, &mut backend, 0.0, 0, 0, 480.0, 272.0, link_map));
+                b.iter(|| paint_page(layout, &mut backend, 0.0, 0, 0, 480.0, 272.0, link_map));
             },
         );
     }
@@ -148,7 +145,7 @@ fn bench_full_pipeline(c: &mut Criterion) {
                     let styles = style_tree(&doc, &[&stylesheet], &[]);
                     let layout = build_layout_tree(&doc, &styles, &measurer, 480.0, 272.0);
                     let link_map: HashMap<usize, String> = HashMap::new();
-                    paint::paint(&layout, &mut backend, 0.0, 0, 0, 480.0, 272.0, &link_map)
+                    paint_page(&layout, &mut backend, 0.0, 0, 0, 480.0, 272.0, &link_map)
                 });
             },
         );

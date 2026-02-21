@@ -303,12 +303,13 @@ impl SdiRegistry {
                     gb.b,
                     ((gb.a as u16) * (obj.alpha as u16) / 255) as u8,
                 );
+                let gradient = oasis_types::backend::GradientStyle::Vertical { top, bottom: bot };
                 if radius > 0 {
-                    backend.fill_rounded_rect_gradient_v(
-                        obj.x, obj.y, obj.w, obj.h, radius, top, bot,
+                    backend.fill_rounded_rect_gradient(
+                        obj.x, obj.y, obj.w, obj.h, radius, &gradient,
                     )?;
                 } else {
-                    backend.fill_rect_gradient_v(obj.x, obj.y, obj.w, obj.h, top, bot)?;
+                    backend.fill_rect_gradient(obj.x, obj.y, obj.w, obj.h, &gradient)?;
                 }
             } else if radius > 0 {
                 backend.fill_rounded_rect(obj.x, obj.y, obj.w, obj.h, radius, color)?;

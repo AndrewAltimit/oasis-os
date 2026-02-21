@@ -6,7 +6,12 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 authors.workspace = true
+documentation = "https://docs.rs/oasis-net"
 
+# Feature flags:
+# - tls-rustls: Enable TLS 1.3 support via rustls for HTTPS and Gemini connections.
+#   Pulls in rustls, webpki-roots (Mozilla CA bundle), and rustls-pki-types.
+#   Without this feature, all connections are plaintext TCP only.
 [features]
 default = []
 tls-rustls = ["dep:rustls", "dep:webpki-roots", "dep:rustls-pki-types"]

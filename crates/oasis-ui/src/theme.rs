@@ -114,9 +114,29 @@ pub struct Theme {
     pub shadow_modal: Shadow,
     /// Tooltip elevation shadow.
     pub shadow_tooltip: Shadow,
+
+    /// Whether to reduce or skip animations for accessibility.
+    ///
+    /// When `true`, animated widgets should snap to their target state
+    /// instead of interpolating over time.
+    pub reduced_motion: bool,
+
+    /// Global font scale multiplier (default 1.0).
+    ///
+    /// Applied on top of the base font sizes. A value of 1.5 would
+    /// make all text 50% larger. Clamped to `0.5..=3.0`.
+    pub font_scale: f32,
 }
 
 impl Theme {
+    /// Return a font size scaled by `font_scale`.
+    ///
+    /// The result is clamped to at least 1 and at most `u16::MAX`.
+    pub fn scaled_font_size(&self, base: u16) -> u16 {
+        let scaled = (base as f32 * self.font_scale.clamp(0.5, 3.0)).round();
+        (scaled as u32).clamp(1, u16::MAX as u32) as u16
+    }
+
     /// Dark theme matching the OASIS cyberpunk aesthetic.
     pub fn dark() -> Self {
         Self {
@@ -179,6 +199,9 @@ impl Theme {
             shadow_dropdown: Shadow::elevation(2),
             shadow_modal: Shadow::elevation(3),
             shadow_tooltip: Shadow::elevation(2),
+
+            reduced_motion: false,
+            font_scale: 1.0,
         }
     }
 
@@ -244,6 +267,9 @@ impl Theme {
             shadow_dropdown: Shadow::elevation(2),
             shadow_modal: Shadow::elevation(3),
             shadow_tooltip: Shadow::elevation(2),
+
+            reduced_motion: false,
+            font_scale: 1.0,
         }
     }
 
@@ -326,6 +352,89 @@ impl Theme {
             shadow_dropdown: Shadow::elevation(0),
             shadow_modal: Shadow::elevation(0),
             shadow_tooltip: Shadow::elevation(0),
+
+            reduced_motion: false,
+            font_scale: 1.0,
+        }
+    }
+
+    /// Color-blind friendly theme optimized for deuteranopia.
+    ///
+    /// Replaces the standard success/warning/error color scheme with
+    /// alternatives that are distinguishable by people with red-green
+    /// color blindness:
+    /// - Success: blue (instead of green)
+    /// - Warning: orange (instead of amber)
+    /// - Error: magenta (instead of red)
+    pub fn colorblind() -> Self {
+        Self {
+            background: Color::rgb(18, 18, 24),
+            surface: Color::rgb(30, 30, 40),
+            surface_variant: Color::rgb(40, 40, 55),
+            overlay: Color::rgba(0, 0, 0, 180),
+
+            text_primary: Color::rgb(230, 230, 240),
+            text_secondary: Color::rgb(160, 160, 180),
+            text_disabled: Color::rgb(100, 100, 120),
+            text_on_accent: Color::rgb(255, 255, 255),
+
+            accent: Color::rgb(80, 160, 255),
+            accent_hover: Color::rgb(110, 180, 255),
+            accent_pressed: Color::rgb(60, 130, 220),
+            accent_subtle: Color::rgba(80, 160, 255, 30),
+
+            // Deuteranopia-safe status colors:
+            // Blue for success (clearly distinct from orange/magenta).
+            success: Color::rgb(60, 140, 255),
+            // Orange for warning (high luminance, distinct hue).
+            warning: Color::rgb(255, 160, 40),
+            // Magenta for error (distinct from blue and orange).
+            error: Color::rgb(220, 60, 220),
+            // Cyan for info.
+            info: Color::rgb(0, 200, 220),
+
+            border: Color::rgb(60, 60, 80),
+            border_subtle: Color::rgb(45, 45, 60),
+            border_strong: Color::rgb(80, 160, 255),
+
+            button_bg: Color::rgb(50, 50, 70),
+            button_bg_hover: Color::rgb(65, 65, 90),
+            button_bg_pressed: Color::rgb(40, 40, 55),
+            button_bg_disabled: Color::rgb(35, 35, 45),
+            input_bg: Color::rgb(25, 25, 35),
+            input_border: Color::rgb(60, 60, 80),
+            input_border_focus: Color::rgb(80, 160, 255),
+            scrollbar_track: Color::rgba(255, 255, 255, 10),
+            scrollbar_thumb: Color::rgba(255, 255, 255, 40),
+            scrollbar_thumb_hover: Color::rgba(255, 255, 255, 80),
+            tooltip_bg: Color::rgb(50, 50, 65),
+            tooltip_text: Color::rgb(220, 220, 230),
+
+            font_size_xs: 8,
+            font_size_sm: 8,
+            font_size_md: 8,
+            font_size_lg: 16,
+            font_size_xl: 16,
+            font_size_xxl: 24,
+
+            spacing_xs: 2,
+            spacing_sm: 4,
+            spacing_md: 8,
+            spacing_lg: 12,
+            spacing_xl: 16,
+
+            border_radius_sm: 2,
+            border_radius_md: 4,
+            border_radius_lg: 8,
+            border_radius_xl: 12,
+
+            shadow_card: Shadow::elevation(1),
+            shadow_dropdown: Shadow::elevation(2),
+            shadow_modal: Shadow::elevation(3),
+            shadow_tooltip: Shadow::elevation(2),
+
+            reduced_motion: false,
+            font_scale: 1.0,
         }
     }
 }
@@ -437,6 +546,7 @@ mod tests {
             Theme::light(),
             Theme::classic(),
             Theme::high_contrast(),
+            Theme::colorblind(),
         ] {
             assert_eq!(theme.font_size_xs, 8);
             assert_eq!(theme.font_size_md, 8);
@@ -449,5 +559,133 @@ mod tests {
         let t = Theme::dark();
         assert!(!t.shadow_card.layers.is_empty());
         assert!(!t.shadow_modal.layers.is_empty());
+    }
+
+    // -- Reduced-motion tests --
+
+    #[test]
+    fn default_reduced_motion_is_false() {
+        assert!(!Theme::dark().reduced_motion);
+        assert!(!Theme::light().reduced_motion);
+        assert!(!Theme::classic().reduced_motion);
+        assert!(!Theme::high_contrast().reduced_motion);
+        assert!(!Theme::colorblind().reduced_motion);
+    }
+
+    #[test]
+    fn reduced_motion_can_be_enabled() {
+        let mut t = Theme::dark();
+        t.reduced_motion = true;
+        assert!(t.reduced_motion);
+    }
+
+    // -- Font scale tests --
+
+    #[test]
+    fn default_font_scale_is_one() {
+        assert!((Theme::dark().font_scale - 1.0).abs() < f32::EPSILON);
+        assert!((Theme::colorblind().font_scale - 1.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn scaled_font_size_identity() {
+        let t = Theme::dark();
+        assert_eq!(t.scaled_font_size(8), 8);
+        assert_eq!(t.scaled_font_size(16), 16);
+    }
+
+    #[test]
+    fn scaled_font_size_double() {
+        let mut t = Theme::dark();
+        t.font_scale = 2.0;
+        assert_eq!(t.scaled_font_size(8), 16);
+        assert_eq!(t.scaled_font_size(16), 32);
+    }
+
+    #[test]
+    fn scaled_font_size_fractional() {
+        let mut t = Theme::dark();
+        t.font_scale = 1.5;
+        assert_eq!(t.scaled_font_size(8), 12);
+        assert_eq!(t.scaled_font_size(16), 24);
+    }
+
+    #[test]
+    fn scaled_font_size_clamped_low() {
+        let mut t = Theme::dark();
+        t.font_scale = 0.01; // Below minimum 0.5
+        // 8 * 0.5 = 4 (clamped to 0.5)
+        assert_eq!(t.scaled_font_size(8), 4);
+    }
+
+    #[test]
+    fn scaled_font_size_clamped_high() {
+        let mut t = Theme::dark();
+        t.font_scale = 10.0; // Above maximum 3.0
+        // 8 * 3.0 = 24 (clamped to 3.0)
+        assert_eq!(t.scaled_font_size(8), 24);
+    }
+
+    #[test]
+    fn scaled_font_size_minimum_one() {
+        let mut t = Theme::dark();
+        t.font_scale = 0.5;
+        // Even with small base, result is at least 1.
+        assert!(t.scaled_font_size(1) >= 1);
+    }
+
+    // -- Color-blind theme tests --
+
+    #[test]
+    fn colorblind_has_distinct_status_colors() {
+        let t = Theme::colorblind();
+        // All four status colors should be different.
+        assert_ne!(t.success, t.warning);
+        assert_ne!(t.success, t.error);
+        assert_ne!(t.warning, t.error);
+        assert_ne!(t.success, t.info);
+    }
+
+    #[test]
+    fn colorblind_success_is_blue() {
+        let t = Theme::colorblind();
+        // Success should be blue-dominant (high blue, low-ish red).
+        assert!(t.success.b > t.success.r);
+        assert!(t.success.b > 200);
+    }
+
+    #[test]
+    fn colorblind_error_is_magenta() {
+        let t = Theme::colorblind();
+        // Error should be magenta (high red + high blue, low green).
+        assert!(t.error.r > 200);
+        assert!(t.error.b > 200);
+        assert!(t.error.g < 100);
+    }
+
+    #[test]
+    fn colorblind_warning_is_orange() {
+        let t = Theme::colorblind();
+        // Warning should be orange (high red, medium green, low blue).
+        assert!(t.warning.r > 200);
+        assert!(t.warning.g > 100 && t.warning.g < 200);
+        assert!(t.warning.b < 100);
+    }
+
+    #[test]
+    fn colorblind_shares_dark_base_colors() {
+        let dark = Theme::dark();
+        let cb = Theme::colorblind();
+        assert_eq!(dark.background, cb.background);
+        assert_eq!(dark.surface, cb.surface);
+        assert_eq!(dark.text_primary, cb.text_primary);
+    }
+
+    #[test]
+    fn colorblind_has_dark_background() {
+        let t = Theme::colorblind();
+        assert!(t.background.r < 50);
+        assert!(t.background.g < 50);
+        assert!(t.background.b < 50);
     }
 }

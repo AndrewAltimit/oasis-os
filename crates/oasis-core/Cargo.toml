@@ -6,7 +6,12 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 authors.workspace = true
+documentation = "https://docs.rs/oasis-core"
 
+# Feature flags:
+# - tls-rustls: Propagates the tls-rustls feature to oasis-net, enabling TLS 1.3
+#   support via rustls for the SDL desktop backend. The PSP backend uses embedded-tls
+#   instead (pure Rust, no C/asm, works on mipsel-sony-psp).
 [features]
 default = []
 tls-rustls = ["oasis-net/tls-rustls"]

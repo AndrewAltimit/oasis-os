@@ -60,8 +60,11 @@ enum DragState {
     },
 }
 
-/// Minimum window content size during resize.
-const MIN_WINDOW_SIZE: u32 = 40;
+/// Minimum window content width during resize.
+const MIN_RESIZE_W: u32 = 80;
+
+/// Minimum window content height during resize.
+const MIN_RESIZE_H: u32 = 60;
 
 /// Cascade offset between newly created windows.
 const CASCADE_OFFSET: i32 = 24;
@@ -69,8 +72,10 @@ const CASCADE_OFFSET: i32 = 24;
 /// Distance in pixels for edge snapping during drag.
 const SNAP_DISTANCE: i32 = 8;
 
-/// Minimum visible pixels of a window at screen edges.
-const MIN_VISIBLE: i32 = 40;
+/// Minimum visible pixels of a window titlebar at screen edges.
+/// At least 20px of the titlebar must remain on-screen so the user
+/// can always grab and drag the window back.
+const MIN_VISIBLE: i32 = 20;
 
 /// SDI object name for the semi-transparent modal backdrop.
 const MODAL_OVERLAY_ID: &str = "__wm_modal_overlay";
@@ -212,7 +217,7 @@ impl WindowManager {
     /// `forward=true` brings the bottom-most visible window to the top.
     /// `forward=false` sends the top-most visible window to the bottom.
     /// Skips minimized windows. Returns the newly focused window id, if any.
-    pub fn cycle_focus(&mut self, forward: bool, sdi: &mut SdiRegistry) -> Option<String> {
+    pub fn cycle_focus(&mut self, forward: bool, sdi: &mut SdiRegistry) -> Option<WindowId> {
         let visible_count = self
             .windows
             .iter()
@@ -372,8 +377,7 @@ impl WindowManager {
         window.outer_h = new_outer_h;
 
         // Reposition all SDI objects based on new geometry.
-        let win_id = id.to_string();
-        self.update_sdi_positions(win_id, sdi);
+        self.update_sdi_positions(id, sdi);
 
         Ok(())
     }
@@ -460,7 +464,7 @@ impl WindowManager {
             self.screen_h - self.theme.maximize_top_inset - self.theme.maximize_bottom_inset;
         window.state = WindowState::Maximized;
 
-        self.update_sdi_positions(id.to_string(), sdi);
+        self.update_sdi_positions(id, sdi);
 
         Ok(())
     }
@@ -493,7 +497,7 @@ impl WindowManager {
             }
         }
 
-        self.update_sdi_positions(id.to_string(), sdi);
+        self.update_sdi_positions(id, sdi);
 
         Ok(())
     }
@@ -546,7 +550,7 @@ impl WindowManager {
         let region = hit_test(&self.windows, x, y, &self.theme);
 
         // If a modal window exists, only allow clicks on the topmost modal.
-        if let Some(modal_id) = self.topmost_modal().map(String::from) {
+        if let Some(modal_id) = self.topmost_modal() {
             let hit_id = match &region {
                 HitRegion::TitlebarButton(id, _)
                 | HitRegion::Titlebar(id)
@@ -554,7 +558,7 @@ impl WindowManager {
                 | HitRegion::Content(id, _, _) => Some(id.as_str()),
                 HitRegion::Desktop => None,
             };
-            if hit_id != Some(&modal_id) {
+            if hit_id != Some(modal_id) {
                 return WmEvent::None;
             }
         }
@@ -726,7 +730,7 @@ impl WindowManager {
                     window.outer_h = new_h;
                 }
 
-                self.update_sdi_positions(window_id.clone(), sdi);
+                self.update_sdi_positions(window_id.as_str(), sdi);
                 WmEvent::WindowResized(window_id.clone())
             },
         }
@@ -810,7 +814,7 @@ impl WindowManager {
             }
         }
 
-        self.active_window = Some(id.to_string());
+        self.active_window = Some(WindowId::from(id));
     }
 
     /// Create all SDI objects for a window.
@@ -1008,7 +1012,7 @@ impl WindowManager {
     }
 
     /// Reposition all SDI objects based on window's current geometry.
-    fn update_sdi_positions(&self, id: WindowId, sdi: &mut SdiRegistry) {
+    fn update_sdi_positions(&self, id: &str, sdi: &mut SdiRegistry) {
         let window = match self.windows.iter().find(|w| w.id == id) {
             Some(w) => w,
             None => return,
@@ -1215,8 +1219,8 @@ fn compute_resize(
     dy: i32,
     theme: &WmTheme,
 ) -> (i32, i32, u32, u32) {
-    let min_w = MIN_WINDOW_SIZE + theme.border_width * 2;
-    let min_h = MIN_WINDOW_SIZE + theme.titlebar_height + theme.border_width * 2;
+    let min_w = MIN_RESIZE_W + theme.border_width * 2;
+    let min_h = MIN_RESIZE_H + theme.titlebar_height + theme.border_width * 2;
 
     let mut x = start.x;
     let mut y = start.y;
@@ -1497,7 +1501,7 @@ mod tests {
             y: cy + 20,
         };
         let result = wm.handle_input(&event, &mut sdi);
-        assert_eq!(result, WmEvent::ContentClick("w1".to_string(), 10, 20));
+        assert_eq!(result, WmEvent::ContentClick(WindowId::from("w1"), 10, 20));
     }
 
     #[test]
@@ -1524,7 +1528,7 @@ mod tests {
             y: by + bh as i32 / 2,
         };
         let result = wm.handle_input(&event, &mut sdi);
-        assert_eq!(result, WmEvent::WindowClosed("w1".to_string()));
+        assert_eq!(result, WmEvent::WindowClosed(WindowId::from("w1")));
         assert_eq!(wm.window_count(), 0);
     }
 
@@ -1726,13 +1730,13 @@ mod tests {
         let start = Geometry {
             x: 0,
             y: 0,
-            w: 100,
-            h: 100,
+            w: 200,
+            h: 200,
         };
         // Try shrinking way past minimum.
-        let (_, _, w, h) = compute_resize(start, ResizeEdge::SouthEast, -200, -200, &theme);
-        let min_w = MIN_WINDOW_SIZE + theme.border_width * 2;
-        let min_h = MIN_WINDOW_SIZE + theme.titlebar_height + theme.border_width * 2;
+        let (_, _, w, h) = compute_resize(start, ResizeEdge::SouthEast, -400, -400, &theme);
+        let min_w = MIN_RESIZE_W + theme.border_width * 2;
+        let min_h = MIN_RESIZE_H + theme.titlebar_height + theme.border_width * 2;
         assert_eq!(w, min_w);
         assert_eq!(h, min_h);
     }
@@ -2485,5 +2489,345 @@ mod tests {
 
         wm.close_all(&mut sdi);
         assert!(!sdi.contains(MODAL_OVERLAY_ID));
+    }
+
+    // ---- Additional cascading / tiling tests ----
+
+    #[test]
+    fn cascade_wraps_when_near_edge() {
+        let mut sdi = SdiRegistry::new();
+        let mut wm = WindowManager::new(200, 200);
+        // Create enough windows to trigger cascade wrapping.
+        for i in 0..10 {
+            let config = WindowConfig {
+                id: format!("w{i}"),
+                title: format!("W{i}"),
+                x: None,
+                y: None,
+                width: 50,
+                height: 30,
+                window_type: WindowType::AppWindow,
+                always_on_top: false,
+                modal: false,
+            };
+            wm.create_window(&config, &mut sdi).unwrap();
+        }
+        // All windows should exist and be within screen bounds.
+        assert_eq!(wm.window_count(), 10);
+        for i in 0..10 {
+            let win = wm.get_window(&format!("w{i}")).unwrap();
+            assert!(win.x >= 0);
+            assert!(win.y >= 0);
+        }
+    }
+
+    #[test]
+    fn explicit_position_overrides_cascade() {
+        let mut sdi = SdiRegistry::new();
+        let mut wm = WindowManager::new(800, 600);
+        let config = WindowConfig {
+            id: "fixed".to_string(),
+            title: "Fixed".to_string(),
+            x: Some(100),
+            y: Some(200),
+            width: 150,
+            height: 100,
+            window_type: WindowType::AppWindow,
+            always_on_top: false,
+            modal: false,
+        };
+        wm.create_window(&config, &mut sdi).unwrap();
+        let win = wm.get_window("fixed").unwrap();
+        assert_eq!(win.x, 100);
+        assert_eq!(win.y, 200);
+    }
+
+    #[test]
+    fn close_all_empties_wm() {
+        let mut sdi = SdiRegistry::new();
+        let mut wm = WindowManager::new(800, 600);
+        wm.create_window(&app_config("a"), &mut sdi).unwrap();
+        wm.create_window(&app_config("b"), &mut sdi).unwrap();
+        wm.create_window(&app_config("c"), &mut sdi).unwrap();
+        wm.close_all(&mut sdi);
+        assert_eq!(wm.window_count(), 0);
+        assert!(wm.active_window().is_none());
+    }
+
+    #[test]
+    fn close_all_clears_drag_state() {
+        let mut sdi = SdiRegistry::new();
+        let mut wm = WindowManager::new(800, 600);
+        wm.create_window(&app_config("w"), &mut sdi).unwrap();
+        // Start a drag.
+        let win = wm.get_window("w").unwrap();
+        let (tx, ty, _tw, th) = win.titlebar_rect(&wm.theme).unwrap();
+        wm.handle_input(
+            &InputEvent::PointerClick {
+                x: tx + 5,
+                y: ty + th as i32 / 2,
+            },
+            &mut sdi,
+        );
+        wm.close_all(&mut sdi);
+        assert!(wm.drag.is_none());
+    }
+
+    // ---- Edge snapping tests ----
+
+    #[test]
+    fn snap_exact_edge() {
+        let (sx, sy) = snap_to_edges(0, 0, 200, 150, 480, 272);
+        assert_eq!(sx, 0);
+        assert_eq!(sy, 0);
+    }
+
+    #[test]
+    fn snap_within_threshold() {
+        // 7px from left edge.
+        let (sx, _) = snap_to_edges(7, 50, 200, 150, 480, 272);
+        assert_eq!(sx, 0);
+    }
+
+    #[test]
+    fn no_snap_just_outside_threshold() {
+        // 9px from left edge -- just outside 8px threshold.
+        let (sx, _) = snap_to_edges(9, 50, 200, 150, 480, 272);
+        assert_eq!(sx, 9);
+    }
+
+    // ---- State transition tests ----
+
+    #[test]
+    fn maximize_then_minimize_then_restore() {
+        let mut sdi = SdiRegistry::new();
+        let mut wm = WindowManager::new(800, 600);
+        wm.create_window(&app_config("w"), &mut sdi).unwrap();
+
+        let orig_w = wm.get_window("w").unwrap().outer_w;
+
+        wm.maximize_window("w", &mut sdi).unwrap();
+        assert_eq!(wm.get_window("w").unwrap().state, WindowState::Maximized);
+
+        // Minimize from maximized.
+        wm.minimize_window("w", &mut sdi).unwrap();
+        assert_eq!(wm.get_window("w").unwrap().state, WindowState::Minimized);
+
+        // Restore should go back to pre-maximize geometry.
+        wm.restore_window("w", &mut sdi).unwrap();
+        assert_eq!(wm.get_window("w").unwrap().state, WindowState::Normal);
+        assert_eq!(wm.get_window("w").unwrap().outer_w, orig_w);
+    }
+
+    #[test]
+    fn double_maximize_is_idempotent() {
+        let mut sdi = SdiRegistry::new();
+        let mut wm = WindowManager::new(800, 600);
+        wm.create_window(&app_config("w"), &mut sdi).unwrap();
+
+        wm.maximize_window("w", &mut sdi).unwrap();
+        let first_w = wm.get_window("w").unwrap().outer_w;
+        let first_h = wm.get_window("w").unwrap().outer_h;
+
+        wm.maximize_window("w", &mut sdi).unwrap();
+        assert_eq!(wm.get_window("w").unwrap().outer_w, first_w);
+        assert_eq!(wm.get_window("w").unwrap().outer_h, first_h);
+    }
+
+    #[test]
+    fn restore_normal_window_is_noop() {
+        let mut sdi = SdiRegistry::new();
+        let mut wm = WindowManager::new(800, 600);
+        wm.create_window(&app_config("w"), &mut sdi).unwrap();
+
+        let orig_x = wm.get_window("w").unwrap().x;
+        let orig_y = wm.get_window("w").unwrap().y;
+
+        // Restore on a normal window should not change anything.
+        wm.restore_window("w", &mut sdi).unwrap();
+        assert_eq!(wm.get_window("w").unwrap().x, orig_x);
+        assert_eq!(wm.get_window("w").unwrap().y, orig_y);
+        assert_eq!(wm.get_window("w").unwrap().state, WindowState::Normal);
+    }
+
+    #[test]
+    fn move_nonexistent_window_fails() {
+        let mut sdi = SdiRegistry::new();
+        let mut wm = WindowManager::new(800, 600);
+        assert!(wm.move_window("nope", 10, 10, &mut sdi).is_err());
+    }
+
+    #[test]
+    fn resize_nonexistent_window_fails() {
+        let mut sdi = SdiRegistry::new();
+        let mut wm = WindowManager::new(800, 600);
+        assert!(wm.resize_window("nope", 100, 100, &mut sdi).is_err());
+    }
+
+    #[test]
+    fn focus_nonexistent_window_fails() {
+        let mut sdi = SdiRegistry::new();
+        let mut wm = WindowManager::new(800, 600);
+        assert!(wm.focus_window("nope", &mut sdi).is_err());
+    }
+
+    #[test]
+    fn minimize_nonexistent_window_fails() {
+        let mut sdi = SdiRegistry::new();
+        let mut wm = WindowManager::new(800, 600);
+        assert!(wm.minimize_window("nope", &mut sdi).is_err());
+    }
+
+    #[test]
+    fn maximize_nonexistent_window_fails() {
+        let mut sdi = SdiRegistry::new();
+        let mut wm = WindowManager::new(800, 600);
+        assert!(wm.maximize_window("nope", &mut sdi).is_err());
+    }
+
+    #[test]
+    fn restore_nonexistent_window_fails() {
+        let mut sdi = SdiRegistry::new();
+        let mut wm = WindowManager::new(800, 600);
+        assert!(wm.restore_window("nope", &mut sdi).is_err());
+    }
+
+    #[test]
+    fn set_theme_replaces_theme() {
+        let mut wm = WindowManager::new(800, 600);
+        let new_theme = WmTheme {
+            titlebar_height: 40,
+            ..WmTheme::default()
+        };
+        wm.set_theme(new_theme);
+        assert_eq!(wm.theme().titlebar_height, 40);
+    }
+
+    #[test]
+    fn release_without_drag_returns_none() {
+        let mut sdi = SdiRegistry::new();
+        let mut wm = WindowManager::new(800, 600);
+        let event = wm.handle_input(&InputEvent::PointerRelease { x: 0, y: 0 }, &mut sdi);
+        assert_eq!(event, WmEvent::None);
+    }
+
+    #[test]
+    fn cursor_move_without_drag_returns_none() {
+        let mut sdi = SdiRegistry::new();
+        let mut wm = WindowManager::new(800, 600);
+        let event = wm.handle_input(&InputEvent::CursorMove { x: 50, y: 50 }, &mut sdi);
+        assert_eq!(event, WmEvent::None);
+    }
+
+    #[test]
+    fn button_press_returns_none() {
+        let mut sdi = SdiRegistry::new();
+        let mut wm = WindowManager::new(800, 600);
+        let event = wm.handle_input(
+            &InputEvent::ButtonPress(oasis_types::input::Button::Confirm),
+            &mut sdi,
+        );
+        assert_eq!(event, WmEvent::None);
+    }
+
+    #[test]
+    fn resize_all_edges() {
+        let theme = WmTheme::default();
+        let start = Geometry {
+            x: 50,
+            y: 50,
+            w: 200,
+            h: 200,
+        };
+        // East
+        let (_, _, w, _) = compute_resize(start, ResizeEdge::East, 30, 0, &theme);
+        assert_eq!(w, 230);
+        // West: x moves left, w grows
+        let (x, _, w, _) = compute_resize(start, ResizeEdge::West, -20, 0, &theme);
+        assert_eq!(w, 220);
+        assert_eq!(x, 30);
+        // South
+        let (_, _, _, h) = compute_resize(start, ResizeEdge::South, 0, 40, &theme);
+        assert_eq!(h, 240);
+        // North: y moves up, h grows
+        let (_, y, _, h) = compute_resize(start, ResizeEdge::North, 0, -10, &theme);
+        assert_eq!(h, 210);
+        assert_eq!(y, 40);
+        // NorthEast
+        let (_, y, w, h) = compute_resize(start, ResizeEdge::NorthEast, 20, -10, &theme);
+        assert_eq!(w, 220);
+        assert_eq!(h, 210);
+        assert_eq!(y, 40);
+        // NorthWest
+        let (x, y, w, h) = compute_resize(start, ResizeEdge::NorthWest, -15, -10, &theme);
+        assert_eq!(w, 215);
+        assert_eq!(h, 210);
+        assert_eq!(x, 35);
+        assert_eq!(y, 40);
+        // SouthWest
+        let (x, _, w, h) = compute_resize(start, ResizeEdge::SouthWest, -20, 30, &theme);
+        assert_eq!(w, 220);
+        assert_eq!(h, 230);
+        assert_eq!(x, 30);
+    }
+
+    #[test]
+    fn cycle_focus_forward() {
+        let mut sdi = SdiRegistry::new();
+        let mut wm = WindowManager::new(800, 600);
+        wm.create_window(&app_config("w1"), &mut sdi).unwrap();
+        wm.create_window(&app_config("w2"), &mut sdi).unwrap();
+        wm.create_window(&app_config("w3"), &mut sdi).unwrap();
+        // w3 is on top. Cycling forward brings w1 to top.
+        let focused = wm.cycle_focus(true, &mut sdi);
+        assert!(focused.is_some());
+    }
+
+    #[test]
+    fn cycle_focus_backward() {
+        let mut sdi = SdiRegistry::new();
+        let mut wm = WindowManager::new(800, 600);
+        wm.create_window(&app_config("w1"), &mut sdi).unwrap();
+        wm.create_window(&app_config("w2"), &mut sdi).unwrap();
+        wm.create_window(&app_config("w3"), &mut sdi).unwrap();
+        let focused = wm.cycle_focus(false, &mut sdi);
+        assert!(focused.is_some());
+    }
+
+    #[test]
+    fn cycle_focus_single_window() {
+        let mut sdi = SdiRegistry::new();
+        let mut wm = WindowManager::new(800, 600);
+        wm.create_window(&app_config("w1"), &mut sdi).unwrap();
+        // With one window, cycle should return the same window.
+        let focused = wm.cycle_focus(true, &mut sdi);
+        assert_eq!(focused.as_deref(), Some("w1"));
+    }
+
+    #[test]
+    fn cycle_focus_no_windows() {
+        let mut sdi = SdiRegistry::new();
+        let mut wm = WindowManager::new(800, 600);
+        let focused = wm.cycle_focus(true, &mut sdi);
+        assert!(focused.is_none());
+    }
+
+    #[test]
+    fn maximize_with_insets() {
+        let mut sdi = SdiRegistry::new();
+        let theme = WmTheme {
+            maximize_top_inset: 20,
+            maximize_bottom_inset: 30,
+            ..WmTheme::default()
+        };
+        let mut wm = WindowManager::with_theme(800, 600, theme);
+        wm.create_window(&app_config("w"), &mut sdi).unwrap();
+        wm.maximize_window("w", &mut sdi).unwrap();
+
+        let win = wm.get_window("w").unwrap();
+        assert_eq!(win.x, 0);
+        assert_eq!(win.y, 20);
+        assert_eq!(win.outer_w, 800);
+        assert_eq!(win.outer_h, 550); // 600 - 20 - 30
     }
 }

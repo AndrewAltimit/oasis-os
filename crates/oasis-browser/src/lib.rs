@@ -8,14 +8,14 @@
 
 pub mod commands;
 pub mod config;
-pub mod css;
+pub(crate) mod css;
 pub mod gemini;
-pub mod html;
+pub(crate) mod html;
 pub mod image;
-pub mod layout;
+pub(crate) mod layout;
 pub mod loader;
 pub mod nav;
-pub mod paint;
+pub(crate) mod paint;
 pub mod plugin;
 pub mod reader;
 pub mod scroll;
@@ -32,6 +32,27 @@ pub use config::BrowserConfig;
 pub use loader::{ContentType, ResourceResponse, ResourceSource, Url};
 pub use nav::{Bookmark, HistoryEntry, NavigationController};
 pub use scroll::ScrollState;
+
+// -----------------------------------------------------------------------
+// Bench/fuzz re-exports (not part of public API)
+// -----------------------------------------------------------------------
+
+/// Internal types exposed for benchmarks and fuzz targets.
+///
+/// These are implementation details and may change without notice.
+#[doc(hidden)]
+pub mod internals {
+    pub use crate::css::cascade::style_tree;
+    pub use crate::css::parser::{Stylesheet, parse_inline_style};
+    pub use crate::css::values::ComputedStyle;
+    pub use crate::html::dom::Document;
+    pub use crate::html::tokenizer::Tokenizer;
+    pub use crate::html::tree_builder::TreeBuilder;
+    pub use crate::layout::block::{
+        StyleCache, TextMeasurer, build_layout_tree, layout_block_incremental,
+    };
+    pub use crate::paint::paint as paint_page;
+}
 
 // -----------------------------------------------------------------------
 // Imports

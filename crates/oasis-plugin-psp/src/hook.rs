@@ -339,30 +339,32 @@ pub fn get_battery_percent() -> i32 {
     }
 }
 
+/// Bounded write helper for fixed-size log buffers. Appends `s` to
+/// `buf` starting at `pos`, clamping to the buffer length via
+/// `saturating_add`. Returns the new write position (never exceeds
+/// `buf.len()`).
 fn write_log_bytes(buf: &mut [u8], pos: usize, s: &[u8]) -> usize {
-    let mut p = pos;
-    for &b in s {
-        if p >= buf.len() {
-            break;
-        }
-        buf[p] = b;
-        p += 1;
+    let end = pos.saturating_add(s.len()).min(buf.len());
+    let count = end.saturating_sub(pos);
+    if count > 0 {
+        buf[pos..end].copy_from_slice(&s[..count]);
     }
-    p
+    end
 }
 
+/// Bounded hex-format helper. Writes up to 8 hex digits of `val` into
+/// `buf` starting at `pos`, clamping to the buffer length via
+/// `saturating_add`. Returns the new write position.
 fn write_log_hex(buf: &mut [u8], pos: usize, val: u32) -> usize {
-    let mut p = pos;
     let hex = b"0123456789ABCDEF";
+    let needed = 8usize;
+    let end = pos.saturating_add(needed).min(buf.len());
+    let count = end.saturating_sub(pos);
     let mut i = 0;
-    while i < 8 {
-        if p >= buf.len() {
-            break;
-        }
+    while i < count {
         let nibble = (val >> (28 - i * 4)) & 0xF;
-        buf[p] = hex[nibble as usize];
-        p += 1;
+        buf[pos + i] = hex[nibble as usize];
         i += 1;
     }
-    p
+    end
 }

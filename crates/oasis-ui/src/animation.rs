@@ -117,6 +117,20 @@ impl Tween {
         self.start + (self.end - self.start) * eased
     }
 
+    /// Advance by `dt_ms` and return the current interpolated value,
+    /// respecting reduced-motion preference.
+    ///
+    /// When `reduced_motion` is `true`, the tween immediately completes
+    /// and returns the end value.
+    pub fn tick_reduced(&mut self, dt_ms: u32, reduced_motion: bool) -> f32 {
+        if reduced_motion {
+            self.elapsed_ms = self.duration_ms;
+            self.end
+        } else {
+            self.tick(dt_ms)
+        }
+    }
+
     /// Check if the animation has completed.
     pub fn is_finished(&self) -> bool {
         self.elapsed_ms >= self.duration_ms
@@ -194,6 +208,22 @@ mod tests {
         assert_eq!(easing::ease_out_quad(1.0), 1.0);
         assert_eq!(easing::ease_out_cubic(1.0), 1.0);
         assert_eq!(easing::ease_in_out_cubic(0.0), 0.0);
+    }
+
+    #[test]
+    fn tween_reduced_motion_snaps() {
+        let mut tw = Tween::new(0.0, 100.0, 1000, easing::linear);
+        let v = tw.tick_reduced(1, true);
+        assert!((v - 100.0).abs() < f32::EPSILON);
+        assert!(tw.is_finished());
+    }
+
+    #[test]
+    fn tween_reduced_motion_false_is_normal() {
+        let mut tw = Tween::new(0.0, 100.0, 100, easing::linear);
+        let v = tw.tick_reduced(50, false);
+        assert!((v - 50.0).abs() < f32::EPSILON);
+        assert!(!tw.is_finished());
     }
 
     #[test]

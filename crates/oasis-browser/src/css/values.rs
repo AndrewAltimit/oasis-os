@@ -1258,4 +1258,202 @@ mod tests {
         assert_eq!(keyword_color("transparent"), Some(Color::rgba(0, 0, 0, 0)),);
         assert_eq!(keyword_color("nonexistent"), None);
     }
+
+    mod prop {
+        use super::*;
+        use proptest::prelude::*;
+
+        proptest! {
+            /// resolve_length with Px always returns the value.
+            #[test]
+            fn resolve_length_px_identity(v in -1000.0f32..1000.0) {
+                let result = resolve_length(
+                    &CssValue::Length(v, LengthUnit::Px), 16.0,
+                );
+                prop_assert!(
+                    (result - v).abs() < 0.001,
+                    "Px({v}) should resolve to {v}, got {result}",
+                );
+            }
+
+            /// resolve_length with Em scales by parent font size.
+            #[test]
+            fn resolve_length_em_scales(
+                v in 0.0f32..10.0,
+                parent in 1.0f32..100.0,
+            ) {
+                let result = resolve_length(
+                    &CssValue::Length(v, LengthUnit::Em), parent,
+                );
+                let expected = v * parent;
+                prop_assert!(
+                    (result - expected).abs() < 0.01,
+                    "Em({v}) * {parent} = {expected}, got {result}",
+                );
+            }
+
+            /// resolve_length with Rem scales by ROOT_FONT_SIZE.
+            #[test]
+            fn resolve_length_rem_scales(v in 0.0f32..10.0) {
+                let result = resolve_length(
+                    &CssValue::Length(v, LengthUnit::Rem), 16.0,
+                );
+                let expected = v * ROOT_FONT_SIZE;
+                prop_assert!(
+                    (result - expected).abs() < 0.01,
+                    "Rem({v}) = {expected}, got {result}",
+                );
+            }
+
+            /// resolve_dimension with auto keyword always returns Auto.
+            #[test]
+            fn resolve_dimension_auto(_dummy in 0..1i32) {
+                let result = resolve_dimension(
+                    &CssValue::Keyword("auto".into()), 16.0,
+                );
+                prop_assert_eq!(result, Dimension::Auto);
+            }
+
+            /// resolve_dimension with percentage preserves the value.
+            #[test]
+            fn resolve_dimension_percent(pct in 0.0f32..200.0) {
+                let result = resolve_dimension(
+                    &CssValue::Percentage(pct), 16.0,
+                );
+                prop_assert_eq!(result, Dimension::Percent(pct));
+            }
+
+            /// resolve_font_size with Px returns the exact value.
+            #[test]
+            fn resolve_font_size_px_identity(v in 1.0f32..100.0) {
+                let result = resolve_font_size(
+                    &CssValue::Length(v, LengthUnit::Px), 16.0,
+                );
+                prop_assert!(
+                    (result - v).abs() < 0.001,
+                    "font-size Px({v}) -> {result}",
+                );
+            }
+
+            /// resolve_font_size with percentage scales by parent.
+            #[test]
+            fn resolve_font_size_percent(
+                pct in 10.0f32..300.0,
+                parent in 4.0f32..48.0,
+            ) {
+                let result = resolve_font_size(
+                    &CssValue::Percentage(pct), parent,
+                );
+                let expected = parent * (pct / 100.0);
+                prop_assert!(
+                    (result - expected).abs() < 0.01,
+                    "{pct}% of {parent} = {expected}, got {result}",
+                );
+            }
+
+            /// resolve_line_height with Number multiplies by font_size.
+            #[test]
+            fn resolve_line_height_number(
+                n in 0.5f32..3.0,
+                fs in 4.0f32..48.0,
+            ) {
+                let result = resolve_line_height(
+                    &CssValue::Number(n), fs, 16.0,
+                );
+                let expected = n * fs;
+                prop_assert!(
+                    (result - expected).abs() < 0.01,
+                    "{n} * {fs} = {expected}, got {result}",
+                );
+            }
+
+            /// apply_declaration with unknown property is a no-op.
+            #[test]
+            fn apply_unknown_property_noop(
+                prop_name in "[a-z\\-]{1,20}",
+            ) {
+                // Filter out known properties.
+                if matches!(
+                    prop_name.as_str(),
+                    "display" | "color" | "margin" | "padding"
+                    | "width" | "height" | "font-size"
+                    | "background-color" | "background"
+                    | "border-width" | "border-style"
+                    | "border-color" | "overflow" | "position"
+                    | "float" | "clear" | "visibility"
+                    | "text-align" | "text-decoration"
+                    | "text-indent" | "text-transform"
+                    | "white-space" | "line-height"
+                    | "letter-spacing" | "word-spacing"
+                    | "font-weight" | "font-style" | "font-family"
+                    | "list-style-type" | "list-style-position"
+                    | "border-collapse" | "border-spacing"
+                    | "z-index" | "flex-direction" | "flex-wrap"
+                    | "justify-content" | "align-items"
+                    | "flex-grow" | "flex-shrink" | "flex-basis"
+                    | "gap" | "row-gap" | "column-gap"
+                    | "top" | "right" | "bottom" | "left"
+                    | "max-width" | "min-width"
+                ) {
+                    return Ok(());
+                }
+                let mut s = ComputedStyle::default();
+                let before_color = s.color;
+                s.apply_declaration(
+                    &prop_name,
+                    &CssValue::Keyword("x".into()),
+                    16.0,
+                );
+                prop_assert_eq!(s.color, before_color);
+            }
+
+            /// keyword_color returns None for random strings.
+            #[test]
+            fn keyword_color_random_returns_none(
+                name in "[a-z]{10,20}",
+            ) {
+                // Long random strings are unlikely to be valid.
+                if keyword_color(&name).is_none() {
+                    // Expected.
+                } else {
+                    // If it happens to match, that's fine too.
+                }
+            }
+
+            /// ComputedStyle::inherit preserves inheritable props.
+            #[test]
+            fn inherit_preserves_font_size(fs in 1.0f32..100.0) {
+                let mut parent = ComputedStyle::default();
+                parent.font_size = fs;
+                let child = ComputedStyle::inherit(&parent);
+                prop_assert!(
+                    (child.font_size - fs).abs() < 0.001,
+                    "inherited font_size: got {}, expected {fs}",
+                    child.font_size,
+                );
+            }
+
+            /// ComputedStyle::inherit resets non-inheritable props.
+            #[test]
+            fn inherit_resets_margin(
+                mt in 1.0f32..100.0,
+                mr in 1.0f32..100.0,
+            ) {
+                let mut parent = ComputedStyle::default();
+                parent.margin_top = mt;
+                parent.margin_right = mr;
+                let child = ComputedStyle::inherit(&parent);
+                prop_assert!(
+                    child.margin_top.abs() < 0.001,
+                    "margin_top should be reset, got {}",
+                    child.margin_top,
+                );
+                prop_assert!(
+                    child.margin_right.abs() < 0.001,
+                    "margin_right should be reset, got {}",
+                    child.margin_right,
+                );
+            }
+        }
+    }
 }

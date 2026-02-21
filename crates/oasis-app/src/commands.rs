@@ -589,4 +589,127 @@ mod tests {
             "Already connected. Disconnect first."
         );
     }
+
+    // -- Additional command handler tests --
+
+    #[test]
+    fn process_listen_already_running() {
+        let mut state = make_test_state();
+        // Start a listener first.
+        let port = 0; // Cannot actually bind, but simulate the state.
+        let cfg = oasis_core::net::ListenerConfig {
+            port: 19999,
+            psk: String::new(),
+            max_connections: 1,
+            ..oasis_core::net::ListenerConfig::default()
+        };
+        state.listener = Some(oasis_core::net::RemoteListener::new(cfg));
+        let result =
+            process_command_output(Ok(CommandOutput::ListenToggle { port: 8080 }), &mut state);
+        assert!(result.is_none());
+        assert!(state.output_lines[0].contains("already running"));
+    }
+
+    #[test]
+    fn process_ftp_already_running() {
+        let mut state = make_test_state();
+        state.ftp_server = Some(oasis_core::transfer::FtpServer::new(19000));
+        let result = process_command_output(Ok(CommandOutput::FtpToggle { port: 21 }), &mut state);
+        assert!(result.is_none());
+        assert!(state.output_lines[0].contains("already running"));
+    }
+
+    #[test]
+    fn process_multi_empty_list() {
+        let mut state = make_test_state();
+        let result = process_command_output(Ok(CommandOutput::Multi(vec![])), &mut state);
+        assert!(result.is_none());
+        assert!(state.output_lines.is_empty());
+    }
+
+    #[test]
+    fn process_multi_preserves_order() {
+        let mut state = make_test_state();
+        let result = process_command_output(
+            Ok(CommandOutput::Multi(vec![
+                CommandOutput::Text("alpha".to_string()),
+                CommandOutput::Text("beta".to_string()),
+                CommandOutput::Text("gamma".to_string()),
+            ])),
+            &mut state,
+        );
+        assert!(result.is_none());
+        assert_eq!(state.output_lines.len(), 3);
+        assert_eq!(state.output_lines[0], "alpha");
+        assert_eq!(state.output_lines[1], "beta");
+        assert_eq!(state.output_lines[2], "gamma");
+    }
+
+    #[test]
+    fn process_multi_last_skin_swap_wins() {
+        let mut state = make_test_state();
+        let result = process_command_output(
+            Ok(CommandOutput::Multi(vec![
+                CommandOutput::SkinSwap {
+                    name: "first".to_string(),
+                },
+                CommandOutput::SkinSwap {
+                    name: "second".to_string(),
+                },
+            ])),
+            &mut state,
+        );
+        assert_eq!(result, Some("second".to_string()));
+    }
+
+    #[test]
+    fn process_table_empty_rows() {
+        let mut state = make_test_state();
+        let result = process_command_output(
+            Ok(CommandOutput::Table {
+                headers: vec!["Col1".into(), "Col2".into()],
+                rows: vec![],
+            }),
+            &mut state,
+        );
+        assert!(result.is_none());
+        assert_eq!(state.output_lines.len(), 1);
+        assert_eq!(state.output_lines[0], "Col1 | Col2");
+    }
+
+    #[test]
+    fn process_text_multiline() {
+        let mut state = make_test_state();
+        let text = "line1\nline2\nline3\nline4";
+        let result = process_command_output(Ok(CommandOutput::Text(text.to_string())), &mut state);
+        assert!(result.is_none());
+        assert_eq!(state.output_lines.len(), 4);
+    }
+
+    #[test]
+    fn process_clear_empties_all() {
+        let mut state = make_test_state();
+        state.output_lines = vec!["a".to_string(), "b".to_string(), "c".to_string()];
+        let result = process_command_output(Ok(CommandOutput::Clear), &mut state);
+        assert!(result.is_none());
+        assert!(state.output_lines.is_empty());
+    }
+
+    #[test]
+    fn trim_output_single_excess() {
+        let count = terminal_sdi::MAX_OUTPUT_LINES + 1;
+        let mut lines: Vec<String> = (0..count).map(|i| format!("line{i}")).collect();
+        trim_output(&mut lines);
+        assert_eq!(lines.len(), terminal_sdi::MAX_OUTPUT_LINES);
+        assert_eq!(lines[0], "line1");
+    }
+
+    #[test]
+    fn process_error_format() {
+        let mut state = make_test_state();
+        let err = oasis_core::error::OasisError::Vfs("file not found".into());
+        process_command_output(Err(err), &mut state);
+        assert!(state.output_lines[0].contains("error:"));
+        assert!(state.output_lines[0].contains("file not found"));
+    }
 }

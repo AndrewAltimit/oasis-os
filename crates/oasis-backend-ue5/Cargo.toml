@@ -6,6 +6,7 @@ license.workspace = true
 repository.workspace = true
 authors.workspace = true
 description = "OASIS_OS UE5 render target backend -- software RGBA framebuffer and FFI input"
+documentation = "https://docs.rs/oasis-backend-ue5"
 
 [dependencies]
 oasis-core.workspace = true

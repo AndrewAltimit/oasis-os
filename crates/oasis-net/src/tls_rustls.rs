@@ -629,4 +629,311 @@ mod tests {
         let p2 = p1.clone();
         assert!(Arc::ptr_eq(&p1.config, &p2.config));
     }
+
+    // -- Phase 3.5: TLS certificate validation & edge-case tests --
+
+    #[test]
+    fn test_default_provider() {
+        let p = RustlsTlsProvider::default();
+        // default() should produce a valid provider identical to new().
+        assert!(!Arc::ptr_eq(&p.config, &RustlsTlsProvider::new().config));
+    }
+
+    #[test]
+    fn test_invalid_server_name_rejected() {
+        let provider = RustlsTlsProvider::new();
+        let mock: Box<dyn NetworkStream> = Box::new(MockNetworkStream::empty());
+        // An empty server name is invalid for SNI.
+        let result = provider.connect_tls(mock, "");
+        assert!(result.is_err());
+        let msg = result.err().unwrap().to_string();
+        assert!(
+            msg.contains("invalid server name"),
+            "expected 'invalid server name' in: {msg}",
+        );
+    }
+
+    #[test]
+    fn test_untrusted_self_signed_rejected() {
+        // A server with a self-signed cert should be rejected by a
+        // client that only trusts Mozilla roots.
+        let (server_cfg, _cert_key) = make_server_config();
+        let provider = RustlsTlsProvider::new(); // trusts Mozilla roots
+        let (handle, port) = spawn_server(server_cfg, Vec::new());
+
+        let result = connect_to(&provider, port);
+        assert!(
+            result.is_err(),
+            "self-signed cert should be rejected by default provider",
+        );
+
+        let _ = handle.join();
+    }
+
+    #[test]
+    fn test_sni_mismatch_rejected() {
+        // Server cert is for "localhost" but client connects with
+        // "not-localhost" -- handshake should fail.
+        let (server_cfg, cert_key) = make_server_config();
+        let provider = make_client_config(&cert_key);
+        let (handle, port) = spawn_server(server_cfg, Vec::new());
+
+        let tcp = TcpStream::connect(format!("127.0.0.1:{port}")).unwrap();
+        tcp.set_read_timeout(Some(std::time::Duration::from_secs(5)))
+            .unwrap();
+        let net: Box<dyn NetworkStream> = Box::new(TcpNetworkStream(tcp));
+        let result = provider.connect_tls(net, "not-localhost");
+        assert!(result.is_err(), "SNI mismatch should fail handshake",);
+
+        let _ = handle.join();
+    }
+
+    #[test]
+    fn test_expired_cert_rejected() {
+        // Generate a certificate that expired in the past.
+        let mut params = rcgen::CertificateParams::new(vec!["localhost".to_string()]).unwrap();
+        params.not_before = rcgen::date_time_ymd(2020, 1, 1);
+        params.not_after = rcgen::date_time_ymd(2020, 1, 2);
+
+        let key_pair = rcgen::KeyPair::generate().unwrap();
+        let cert = params.self_signed(&key_pair).unwrap();
+        let certified_key = rcgen::CertifiedKey { cert, key_pair };
+
+        let cert_der = rustls::pki_types::CertificateDer::from(certified_key.cert.der().to_vec());
+        let key_der =
+            rustls::pki_types::PrivateKeyDer::try_from(certified_key.key_pair.serialize_der())
+                .unwrap();
+
+        let server_config = rustls::ServerConfig::builder()
+            .with_no_client_auth()
+            .with_single_cert(vec![cert_der], key_der)
+            .unwrap();
+        let server_cfg = Arc::new(server_config);
+
+        let provider = make_client_config(&certified_key);
+        let (handle, port) = spawn_server(server_cfg, Vec::new());
+
+        let result = connect_to(&provider, port);
+        assert!(result.is_err(), "expired certificate should be rejected",);
+
+        let _ = handle.join();
+    }
+
+    #[test]
+    fn test_not_yet_valid_cert_rejected() {
+        // Generate a certificate that is not yet valid.
+        let mut params = rcgen::CertificateParams::new(vec!["localhost".to_string()]).unwrap();
+        params.not_before = rcgen::date_time_ymd(2099, 1, 1);
+        params.not_after = rcgen::date_time_ymd(2100, 1, 1);
+
+        let key_pair = rcgen::KeyPair::generate().unwrap();
+        let cert = params.self_signed(&key_pair).unwrap();
+        let certified_key = rcgen::CertifiedKey { cert, key_pair };
+
+        let cert_der = rustls::pki_types::CertificateDer::from(certified_key.cert.der().to_vec());
+        let key_der =
+            rustls::pki_types::PrivateKeyDer::try_from(certified_key.key_pair.serialize_der())
+                .unwrap();
+
+        let server_config = rustls::ServerConfig::builder()
+            .with_no_client_auth()
+            .with_single_cert(vec![cert_der], key_der)
+            .unwrap();
+        let server_cfg = Arc::new(server_config);
+
+        let provider = make_client_config(&certified_key);
+        let (handle, port) = spawn_server(server_cfg, Vec::new());
+
+        let result = connect_to(&provider, port);
+        assert!(
+            result.is_err(),
+            "not-yet-valid certificate should be rejected",
+        );
+
+        let _ = handle.join();
+    }
+
+    #[test]
+    fn test_read_zero_length_buffer() {
+        let (server_cfg, cert_key) = make_server_config();
+        let provider = make_client_config(&cert_key);
+        let (handle, port) = spawn_server(server_cfg, b"data".to_vec());
+        let mut stream = connect_to(&provider, port).unwrap();
+
+        // Reading into a zero-length buffer should return 0.
+        let mut buf = [0u8; 0];
+        let n = stream.read(&mut buf).unwrap();
+        assert_eq!(n, 0);
+
+        let _ = stream.close();
+        let _ = handle.join();
+    }
+
+    #[test]
+    fn test_write_empty_data() {
+        let (server_cfg, cert_key) = make_server_config();
+        let provider = make_client_config(&cert_key);
+        let (handle, port) = spawn_server(server_cfg, Vec::new());
+        let mut stream = connect_to(&provider, port).unwrap();
+
+        // Writing empty data should succeed with 0 bytes.
+        let n = stream.write(b"").unwrap();
+        assert_eq!(n, 0);
+
+        let _ = stream.close();
+        let _ = handle.join();
+    }
+
+    #[test]
+    fn test_multiple_writes_and_reads() {
+        let (server_cfg, cert_key) = make_server_config();
+        let provider = make_client_config(&cert_key);
+        let payload = b"chunked data stream test".to_vec();
+        let (handle, port) = spawn_server(server_cfg, payload.clone());
+        let mut stream = connect_to(&provider, port).unwrap();
+
+        // Read the payload in small chunks.
+        let mut received = Vec::new();
+        let mut buf = [0u8; 4];
+        while received.len() < payload.len() {
+            match stream.read(&mut buf) {
+                Ok(0) => break,
+                Ok(n) => {
+                    received.extend_from_slice(&buf[..n]);
+                },
+                Err(_) => break,
+            }
+        }
+        assert_eq!(received, payload);
+
+        let _ = stream.close();
+        let _ = handle.join();
+    }
+
+    #[test]
+    fn test_drain_deque_front_only() {
+        let mut deque = VecDeque::from(vec![1, 2, 3, 4, 5]);
+        let mut buf = [0u8; 3];
+        drain_deque(&mut deque, &mut buf);
+        assert_eq!(buf, [1, 2, 3]);
+        assert_eq!(deque.len(), 2);
+    }
+
+    #[test]
+    fn test_drain_deque_wrapping() {
+        // Force the deque to wrap around internally.
+        let mut deque = VecDeque::with_capacity(4);
+        deque.push_back(10);
+        deque.push_back(20);
+        deque.push_back(30);
+        // Pop from front so that subsequent pushes wrap.
+        let _ = deque.pop_front();
+        let _ = deque.pop_front();
+        deque.push_back(40);
+        deque.push_back(50);
+        deque.push_back(60);
+        // Deque now has [30, 40, 50, 60] but internally wrapped.
+        let mut buf = [0u8; 4];
+        drain_deque(&mut deque, &mut buf);
+        assert_eq!(buf, [30, 40, 50, 60]);
+        assert!(deque.is_empty());
+    }
+
+    #[test]
+    fn test_drain_deque_exact_front_size() {
+        let mut deque = VecDeque::from(vec![1, 2, 3]);
+        let mut buf = [0u8; 3];
+        drain_deque(&mut deque, &mut buf);
+        assert_eq!(buf, [1, 2, 3]);
+        assert!(deque.is_empty());
+    }
+
+    #[test]
+    fn test_oasis_err_to_io_preserves_io_error() {
+        let io_err = io::Error::new(io::ErrorKind::WouldBlock, "test block");
+        let oasis_err = OasisError::Io(io_err);
+        let converted = oasis_err_to_io(oasis_err);
+        assert_eq!(converted.kind(), io::ErrorKind::WouldBlock);
+    }
+
+    #[test]
+    fn test_oasis_err_to_io_converts_other() {
+        let oasis_err = OasisError::Backend("some error".to_string());
+        let converted = oasis_err_to_io(oasis_err);
+        assert_eq!(converted.kind(), io::ErrorKind::Other);
+        assert!(
+            converted.to_string().contains("some error"),
+            "error message should be preserved",
+        );
+    }
+
+    #[test]
+    fn test_io_adapter_read_eof() {
+        let mut mock = MockNetworkStream::empty();
+        let mut adapter = IoAdapter::new(&mut mock);
+        let mut buf = [0u8; 16];
+        let n = io::Read::read(&mut adapter, &mut buf).unwrap();
+        assert_eq!(n, 0);
+    }
+
+    #[test]
+    fn test_io_adapter_write_and_flush() {
+        let mut mock = MockNetworkStream::empty();
+        {
+            let mut adapter = IoAdapter::new(&mut mock);
+            let n = io::Write::write(&mut adapter, b"hello").unwrap();
+            assert_eq!(n, 5);
+            // flush is a no-op.
+            assert!(io::Write::flush(&mut adapter).is_ok());
+        }
+        assert_eq!(mock.written, b"hello");
+    }
+
+    #[test]
+    fn test_bidirectional_data() {
+        // Client writes data, server echoes it back.
+        let (server_cfg, cert_key) = make_server_config();
+        let provider = make_client_config(&cert_key);
+
+        // Spawn an echo server.
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let handle = std::thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            let conn = rustls::ServerConnection::new(server_cfg).unwrap();
+            let mut tls = rustls::StreamOwned::new(conn, stream);
+            tls.sock
+                .set_read_timeout(Some(std::time::Duration::from_secs(2)))
+                .ok();
+            let mut buf = [0u8; 256];
+            match io::Read::read(&mut tls, &mut buf) {
+                Ok(n) if n > 0 => {
+                    let _ = io::Write::write_all(&mut tls, &buf[..n]);
+                    let _ = io::Write::flush(&mut tls);
+                },
+                _ => {},
+            }
+            // Brief sleep so client can read echo.
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        });
+
+        let mut stream = connect_to(&provider, port).unwrap();
+        stream.write(b"echo me").unwrap();
+
+        // Read the echoed data.
+        let mut buf = [0u8; 64];
+        let mut total = 0;
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+        while total < 7 && std::time::Instant::now() < deadline {
+            match stream.read(&mut buf[total..]) {
+                Ok(0) => break,
+                Ok(n) => total += n,
+                Err(_) => break,
+            }
+        }
+        assert_eq!(&buf[..total], b"echo me");
+
+        let _ = stream.close();
+        let _ = handle.join();
+    }
 }

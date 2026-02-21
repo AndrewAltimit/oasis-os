@@ -117,28 +117,12 @@ pub enum DrawCommand {
         points: [(i32, i32); 3],
         color: Color,
     },
-    GradientV {
+    Gradient {
         x: i32,
         y: i32,
         w: u32,
         h: u32,
-        top: Color,
-        bottom: Color,
-    },
-    GradientH {
-        x: i32,
-        y: i32,
-        w: u32,
-        h: u32,
-        left: Color,
-        right: Color,
-    },
-    Gradient4 {
-        x: i32,
-        y: i32,
-        w: u32,
-        h: u32,
-        corners: [Color; 4],
+        style: GradientStyle,
     },
     DrawText {
         text: String,
@@ -179,6 +163,44 @@ pub enum DrawCommand {
         dy: i32,
     },
     PopTranslate,
+}
+
+/// Measured dimensions and baseline metrics for a text string.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TextMetrics {
+    /// Width of the text string in pixels.
+    pub width: u32,
+    /// Total line height (ascent + descent + leading) in pixels.
+    pub height: u32,
+    /// Distance from the baseline to the top of the tallest glyph, in pixels.
+    pub ascent: u32,
+}
+
+/// Gradient direction and associated colors for gradient fill operations.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum GradientStyle {
+    /// Vertical gradient from top to bottom.
+    Vertical { top: Color, bottom: Color },
+    /// Horizontal gradient from left to right.
+    Horizontal { left: Color, right: Color },
+    /// Four-corner bilinear gradient.
+    FourCorner {
+        top_left: Color,
+        top_right: Color,
+        bottom_left: Color,
+        bottom_right: Color,
+    },
+}
+
+impl GradientStyle {
+    /// Return the dominant / start color for fallback rendering.
+    pub const fn primary_color(&self) -> Color {
+        match *self {
+            Self::Vertical { top, .. } => top,
+            Self::Horizontal { left, .. } => left,
+            Self::FourCorner { top_left, .. } => top_left,
+        }
+    }
 }
 
 /// Rendering backend trait.
@@ -372,63 +394,31 @@ pub trait SdiBackend {
     // Extended: Gradient Fills (Phase 2)
     // -----------------------------------------------------------------------
 
-    /// Draw a filled rectangle with a vertical gradient (top to bottom).
-    fn fill_rect_gradient_v(
+    /// Draw a filled rectangle with a gradient.
+    ///
+    /// The [`GradientStyle`] enum specifies direction and colors.
+    fn fill_rect_gradient(
         &mut self,
         x: i32,
         y: i32,
         w: u32,
         h: u32,
-        top_color: Color,
-        bottom_color: Color,
+        gradient: &GradientStyle,
     ) -> Result<()> {
-        let _ = bottom_color;
-        self.fill_rect(x, y, w, h, top_color)
+        self.fill_rect(x, y, w, h, gradient.primary_color())
     }
 
-    /// Draw a filled rectangle with a horizontal gradient (left to right).
-    fn fill_rect_gradient_h(
-        &mut self,
-        x: i32,
-        y: i32,
-        w: u32,
-        h: u32,
-        left_color: Color,
-        right_color: Color,
-    ) -> Result<()> {
-        let _ = right_color;
-        self.fill_rect(x, y, w, h, left_color)
-    }
-
-    /// Draw a filled rectangle with a four-corner gradient.
-    fn fill_rect_gradient_4(
-        &mut self,
-        x: i32,
-        y: i32,
-        w: u32,
-        h: u32,
-        top_left: Color,
-        top_right: Color,
-        bottom_left: Color,
-        bottom_right: Color,
-    ) -> Result<()> {
-        let _ = (top_right, bottom_left, bottom_right);
-        self.fill_rect(x, y, w, h, top_left)
-    }
-
-    /// Draw a rounded rectangle with a vertical gradient.
-    fn fill_rounded_rect_gradient_v(
+    /// Draw a filled rounded rectangle with a gradient.
+    fn fill_rounded_rect_gradient(
         &mut self,
         x: i32,
         y: i32,
         w: u32,
         h: u32,
         radius: u16,
-        top_color: Color,
-        bottom_color: Color,
+        gradient: &GradientStyle,
     ) -> Result<()> {
-        let _ = bottom_color;
-        self.fill_rounded_rect(x, y, w, h, radius, top_color)
+        self.fill_rounded_rect(x, y, w, h, radius, gradient.primary_color())
     }
 
     // -----------------------------------------------------------------------
@@ -458,21 +448,40 @@ pub trait SdiBackend {
     // -----------------------------------------------------------------------
 
     /// Measure the height of text at the given font size.
+    ///
+    /// The default uses `ceil(font_size * 1.2)`. Backends with their own
+    /// font system should override this.
     fn measure_text_height(&self, font_size: u16) -> u32 {
-        (font_size as f32 * 1.2) as u32
+        let fs = font_size as u32;
+        (fs * 6).div_ceil(5) // ceil(fs * 1.2)
+    }
+
+    /// Measure the font's ascent (baseline to top of tallest glyph).
+    ///
+    /// The default uses `ceil(font_size * 0.85)`, which is coordinated with
+    /// `measure_text_height` so that `ascent < height` always holds.
+    fn font_ascent(&self, font_size: u16) -> u32 {
+        let fs = font_size as u32;
+        (fs * 17).div_ceil(20) // ceil(fs * 0.85)
+    }
+
+    /// Return full text metrics (width, height, ascent) for a string.
+    ///
+    /// The default delegates to `measure_text`, `measure_text_height`, and
+    /// `font_ascent`. Backends that override any of those individual methods
+    /// get correct results automatically.
+    fn text_metrics(&self, text: &str, font_size: u16) -> TextMetrics {
+        TextMetrics {
+            width: self.measure_text(text, font_size),
+            height: self.measure_text_height(font_size),
+            ascent: self.font_ascent(font_size),
+        }
     }
 
     /// Measure both width and height of a text string.
     fn measure_text_extents(&self, text: &str, font_size: u16) -> (u32, u32) {
-        (
-            self.measure_text(text, font_size),
-            self.measure_text_height(font_size),
-        )
-    }
-
-    /// Measure the font's ascent (baseline to top of tallest glyph).
-    fn font_ascent(&self, font_size: u16) -> u32 {
-        (font_size as f32 * 0.8) as u32
+        let m = self.text_metrics(text, font_size);
+        (m.width, m.height)
     }
 
     /// Draw text truncated with "..." if it exceeds `max_width`.
@@ -1056,41 +1065,52 @@ mod tests {
     #[test]
     fn gradient_v_defaults_to_fill_rect() {
         let mut b = RecordingBackend::new();
-        let top = Color::rgb(255, 0, 0);
-        b.fill_rect_gradient_v(0, 0, 100, 50, top, Color::rgb(0, 0, 255))
-            .unwrap();
+        let grad = GradientStyle::Vertical {
+            top: Color::rgb(255, 0, 0),
+            bottom: Color::rgb(0, 0, 255),
+        };
+        b.fill_rect_gradient(0, 0, 100, 50, &grad).unwrap();
         let calls = b.calls();
         assert_eq!(calls.len(), 1);
-        assert!(calls[0].contains("255,0,0")); // Uses top_color
+        assert!(calls[0].contains("255,0,0")); // Uses top color
     }
 
     #[test]
     fn gradient_h_defaults_to_fill_rect() {
         let mut b = RecordingBackend::new();
-        let left = Color::rgb(0, 255, 0);
-        b.fill_rect_gradient_h(0, 0, 100, 50, left, Color::rgb(0, 0, 255))
-            .unwrap();
+        let grad = GradientStyle::Horizontal {
+            left: Color::rgb(0, 255, 0),
+            right: Color::rgb(0, 0, 255),
+        };
+        b.fill_rect_gradient(0, 0, 100, 50, &grad).unwrap();
         let calls = b.calls();
         assert_eq!(calls.len(), 1);
-        assert!(calls[0].contains("0,255,0")); // Uses left_color
+        assert!(calls[0].contains("0,255,0")); // Uses left color
     }
 
     #[test]
     fn gradient_4_defaults_to_fill_rect() {
         let mut b = RecordingBackend::new();
-        let tl = Color::rgb(10, 20, 30);
-        b.fill_rect_gradient_4(0, 0, 100, 50, tl, Color::WHITE, Color::WHITE, Color::WHITE)
-            .unwrap();
+        let grad = GradientStyle::FourCorner {
+            top_left: Color::rgb(10, 20, 30),
+            top_right: Color::WHITE,
+            bottom_left: Color::WHITE,
+            bottom_right: Color::WHITE,
+        };
+        b.fill_rect_gradient(0, 0, 100, 50, &grad).unwrap();
         let calls = b.calls();
         assert_eq!(calls.len(), 1);
         assert!(calls[0].contains("10,20,30")); // Uses top_left
     }
 
     #[test]
-    fn rounded_rect_gradient_v_default() {
+    fn rounded_rect_gradient_default() {
         let mut b = RecordingBackend::new();
-        let top = Color::rgb(255, 0, 0);
-        b.fill_rounded_rect_gradient_v(0, 0, 100, 50, 5, top, Color::BLACK)
+        let grad = GradientStyle::Vertical {
+            top: Color::rgb(255, 0, 0),
+            bottom: Color::BLACK,
+        };
+        b.fill_rounded_rect_gradient(0, 0, 100, 50, 5, &grad)
             .unwrap();
         let calls = b.calls();
         assert_eq!(calls.len(), 1);
@@ -1138,7 +1158,7 @@ mod tests {
     #[test]
     fn font_ascent_default() {
         let b = RecordingBackend::new();
-        assert_eq!(b.font_ascent(10), 8); // 10 * 0.8
+        assert_eq!(b.font_ascent(10), 9); // ceil(10 * 0.85)
     }
 
     #[test]
@@ -1562,28 +1582,37 @@ mod tests {
                 points: [(0, 0), (1, 0), (0, 1)],
                 color: Color::BLACK,
             },
-            DrawCommand::GradientV {
+            DrawCommand::Gradient {
                 x: 0,
                 y: 0,
                 w: 1,
                 h: 1,
-                top: Color::BLACK,
-                bottom: Color::WHITE,
+                style: GradientStyle::Vertical {
+                    top: Color::BLACK,
+                    bottom: Color::WHITE,
+                },
             },
-            DrawCommand::GradientH {
+            DrawCommand::Gradient {
                 x: 0,
                 y: 0,
                 w: 1,
                 h: 1,
-                left: Color::BLACK,
-                right: Color::WHITE,
+                style: GradientStyle::Horizontal {
+                    left: Color::BLACK,
+                    right: Color::WHITE,
+                },
             },
-            DrawCommand::Gradient4 {
+            DrawCommand::Gradient {
                 x: 0,
                 y: 0,
                 w: 1,
                 h: 1,
-                corners: [Color::BLACK; 4],
+                style: GradientStyle::FourCorner {
+                    top_left: Color::BLACK,
+                    top_right: Color::BLACK,
+                    bottom_left: Color::BLACK,
+                    bottom_right: Color::BLACK,
+                },
             },
             DrawCommand::DrawText {
                 text: "x".into(),

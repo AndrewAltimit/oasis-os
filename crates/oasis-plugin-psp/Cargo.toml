@@ -18,11 +18,13 @@ repository = "https://github.com/AndrewAltimit/oasis-os"
 authors = ["AndrewAltimit"]
 
 [dependencies]
-psp = { git = "https://github.com/AndrewAltimit/rust-psp", features = ["kernel"] }
+# Pinned to specific commit for reproducible builds.
+psp = { git = "https://github.com/AndrewAltimit/rust-psp", rev = "4c47345", features = ["kernel"] }
 
-# unicode-width workaround for mips target panic.
+# unicode-width fork: the upstream crate panics on mipsel-sony-psp due to
+# a lookup table issue. This fork patches the panic for the MIPS target.
 [patch.crates-io]
-unicode-width = { git = "https://git.sr.ht/~sajattack/unicode-width" }
+unicode-width = { git = "https://git.sr.ht/~sajattack/unicode-width", rev = "114ac47" }
 
 [profile.release]
 opt-level = "z"        # minimize size (<64KB target)

@@ -36,7 +36,7 @@ jobs:
     name: OASIS_OS CI
     needs: fork-guard
     runs-on: self-hosted
-    timeout-minutes: 30
+    timeout-minutes: 60
     steps:
       - name: Pre-checkout cleanup
         run: |

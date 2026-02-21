@@ -1,10 +1,7 @@
 //! Benchmarks for CSS parsing and cascade matching.
 
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
-use oasis_browser::css::cascade::style_tree;
-use oasis_browser::css::parser::Stylesheet;
-use oasis_browser::html::tokenizer::Tokenizer;
-use oasis_browser::html::tree_builder::TreeBuilder;
+use oasis_browser::internals::{Stylesheet, Tokenizer, TreeBuilder, style_tree};
 
 /// Generate a CSS stylesheet with `n` rules.
 fn generate_css(n: usize) -> String {

@@ -815,4 +815,252 @@ mod tests {
         );
         assert_eq!(state.mode, Mode::Dashboard);
     }
+
+    // -- Additional input dispatch tests --
+
+    #[test]
+    fn start_in_app_mode_stays_in_app() {
+        let (mut state, mut sdi, mut vfs) = make_test_state();
+        state.mode = Mode::App;
+        handle_default_input(
+            &InputEvent::ButtonPress(Button::Start),
+            &mut state,
+            &mut sdi,
+            &mut vfs,
+        );
+        assert_eq!(state.mode, Mode::App);
+    }
+
+    #[test]
+    fn start_in_osk_mode_stays_in_osk() {
+        let (mut state, mut sdi, mut vfs) = make_test_state();
+        state.mode = Mode::Osk;
+        handle_default_input(
+            &InputEvent::ButtonPress(Button::Start),
+            &mut state,
+            &mut sdi,
+            &mut vfs,
+        );
+        assert_eq!(state.mode, Mode::Osk);
+    }
+
+    #[test]
+    fn start_in_desktop_mode_stays_in_desktop() {
+        let (mut state, mut sdi, mut vfs) = make_test_state();
+        state.mode = Mode::Desktop;
+        handle_default_input(
+            &InputEvent::ButtonPress(Button::Start),
+            &mut state,
+            &mut sdi,
+            &mut vfs,
+        );
+        assert_eq!(state.mode, Mode::Desktop);
+    }
+
+    #[test]
+    fn select_in_osk_mode_does_not_reopen() {
+        let (mut state, mut sdi, mut vfs) = make_test_state();
+        state.mode = Mode::Osk;
+        state.osk = Some(OskState::new(OskConfig::default(), ""));
+        handle_default_input(
+            &InputEvent::ButtonPress(Button::Select),
+            &mut state,
+            &mut sdi,
+            &mut vfs,
+        );
+        // Should still be in OSK mode, not open a second one.
+        assert_eq!(state.mode, Mode::Osk);
+    }
+
+    #[test]
+    fn terminal_text_builds_input_buffer() {
+        let (mut state, mut sdi, mut vfs) = make_test_state();
+        state.mode = Mode::Terminal;
+        for ch in "hello world".chars() {
+            handle_default_input(&InputEvent::TextInput(ch), &mut state, &mut sdi, &mut vfs);
+        }
+        assert_eq!(state.input_buf, "hello world");
+    }
+
+    #[test]
+    fn terminal_backspace_on_empty_is_noop() {
+        let (mut state, mut sdi, mut vfs) = make_test_state();
+        state.mode = Mode::Terminal;
+        state.input_buf.clear();
+        handle_default_input(&InputEvent::Backspace, &mut state, &mut sdi, &mut vfs);
+        assert!(state.input_buf.is_empty());
+    }
+
+    #[test]
+    fn terminal_square_on_empty_is_noop() {
+        let (mut state, mut sdi, mut vfs) = make_test_state();
+        state.mode = Mode::Terminal;
+        state.input_buf.clear();
+        handle_default_input(
+            &InputEvent::ButtonPress(Button::Square),
+            &mut state,
+            &mut sdi,
+            &mut vfs,
+        );
+        assert!(state.input_buf.is_empty());
+    }
+
+    #[test]
+    fn dashboard_triangle_next_page() {
+        let (mut state, mut sdi, mut vfs) = make_test_state();
+        state.mode = Mode::Dashboard;
+        // Should not panic even with zero pages.
+        handle_default_input(
+            &InputEvent::ButtonPress(Button::Triangle),
+            &mut state,
+            &mut sdi,
+            &mut vfs,
+        );
+        assert_eq!(state.mode, Mode::Dashboard);
+    }
+
+    #[test]
+    fn dashboard_square_prev_page() {
+        let (mut state, mut sdi, mut vfs) = make_test_state();
+        state.mode = Mode::Dashboard;
+        handle_default_input(
+            &InputEvent::ButtonPress(Button::Square),
+            &mut state,
+            &mut sdi,
+            &mut vfs,
+        );
+        assert_eq!(state.mode, Mode::Dashboard);
+    }
+
+    #[test]
+    fn trigger_left_cycles_status_tab() {
+        let (mut state, mut sdi, mut vfs) = make_test_state();
+        state.mode = Mode::Dashboard;
+        handle_default_input(
+            &InputEvent::TriggerPress(Trigger::Left),
+            &mut state,
+            &mut sdi,
+            &mut vfs,
+        );
+        assert!(state.bottom_bar.l_pressed);
+        handle_default_input(
+            &InputEvent::TriggerRelease(Trigger::Left),
+            &mut state,
+            &mut sdi,
+            &mut vfs,
+        );
+        assert!(!state.bottom_bar.l_pressed);
+    }
+
+    #[test]
+    fn trigger_right_cycles_media_tab() {
+        let (mut state, mut sdi, mut vfs) = make_test_state();
+        state.mode = Mode::Dashboard;
+        handle_default_input(
+            &InputEvent::TriggerPress(Trigger::Right),
+            &mut state,
+            &mut sdi,
+            &mut vfs,
+        );
+        assert!(state.bottom_bar.r_pressed);
+        assert!(state.active_transition.is_some());
+        handle_default_input(
+            &InputEvent::TriggerRelease(Trigger::Right),
+            &mut state,
+            &mut sdi,
+            &mut vfs,
+        );
+        assert!(!state.bottom_bar.r_pressed);
+    }
+
+    #[test]
+    fn osk_no_state_is_noop() {
+        let (mut state, mut sdi, _vfs) = make_test_state();
+        state.mode = Mode::Osk;
+        state.osk = None;
+        let result = handle_osk_input(&InputEvent::Backspace, &mut state, &mut sdi);
+        assert_eq!(result, InputResult::Continue);
+    }
+
+    #[test]
+    fn osk_button_press_without_confirm_stays() {
+        let (mut state, mut sdi, _vfs) = make_test_state();
+        state.mode = Mode::Osk;
+        state.osk = Some(OskState::new(OskConfig::default(), ""));
+        let result = handle_osk_input(&InputEvent::ButtonPress(Button::Up), &mut state, &mut sdi);
+        assert_eq!(result, InputResult::Continue);
+        assert!(state.osk.is_some());
+    }
+
+    #[test]
+    fn desktop_cursor_move_does_not_change_mode() {
+        let (mut state, mut sdi, vfs) = make_test_state();
+        state.mode = Mode::Desktop;
+        let result = handle_desktop_input(
+            &InputEvent::CursorMove { x: 100, y: 50 },
+            &mut state,
+            &mut sdi,
+            &vfs,
+        );
+        assert_eq!(result, InputResult::Continue);
+        assert_eq!(state.mode, Mode::Desktop);
+    }
+
+    #[test]
+    fn desktop_pointer_release_does_not_change_mode() {
+        let (mut state, mut sdi, vfs) = make_test_state();
+        state.mode = Mode::Desktop;
+        let result = handle_desktop_input(
+            &InputEvent::PointerRelease { x: 100, y: 50 },
+            &mut state,
+            &mut sdi,
+            &vfs,
+        );
+        assert_eq!(result, InputResult::Continue);
+    }
+
+    #[test]
+    fn desktop_click_no_windows_returns_to_dashboard() {
+        let (mut state, mut sdi, vfs) = make_test_state();
+        state.mode = Mode::Desktop;
+        let result = handle_desktop_input(
+            &InputEvent::PointerClick { x: 100, y: 50 },
+            &mut state,
+            &mut sdi,
+            &vfs,
+        );
+        assert_eq!(result, InputResult::Continue);
+        assert_eq!(state.mode, Mode::Dashboard);
+    }
+
+    #[test]
+    fn desktop_text_input_without_browser_is_noop() {
+        let (mut state, mut sdi, vfs) = make_test_state();
+        state.mode = Mode::Desktop;
+        state.browser = None;
+        let result = handle_desktop_input(&InputEvent::TextInput('a'), &mut state, &mut sdi, &vfs);
+        assert_eq!(result, InputResult::Continue);
+    }
+
+    #[test]
+    fn desktop_backspace_without_browser_is_noop() {
+        let (mut state, mut sdi, vfs) = make_test_state();
+        state.mode = Mode::Desktop;
+        state.browser = None;
+        let result = handle_desktop_input(&InputEvent::Backspace, &mut state, &mut sdi, &vfs);
+        assert_eq!(result, InputResult::Continue);
+    }
+
+    #[test]
+    fn unhandled_event_returns_continue() {
+        let (mut state, mut sdi, mut vfs) = make_test_state();
+        state.mode = Mode::Dashboard;
+        let result = handle_default_input(
+            &InputEvent::CursorMove { x: 0, y: 0 },
+            &mut state,
+            &mut sdi,
+            &mut vfs,
+        );
+        assert_eq!(result, InputResult::Continue);
+    }
 }

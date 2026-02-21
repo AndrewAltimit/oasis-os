@@ -696,4 +696,239 @@ mod tests {
             }
         );
     }
+
+    // -- Additional flex layout tests --
+
+    #[test]
+    fn column_flex_distributes_vertically() {
+        let layout = FlexLayout::column();
+        let children = vec![FlexChild::flex(1), FlexChild::flex(3)];
+        let rects = layout.compute(0, 0, 100, 200, &children);
+        assert_eq!(rects[0].h, 50);
+        assert_eq!(rects[1].h, 150);
+        assert_eq!(rects[0].w, 100); // cross-axis full
+        assert_eq!(rects[1].w, 100);
+    }
+
+    #[test]
+    fn column_percent_sizing() {
+        let layout = FlexLayout::column();
+        let children = vec![FlexChild::percent(30.0), FlexChild::percent(70.0)];
+        let rects = layout.compute(0, 0, 100, 200, &children);
+        assert_eq!(rects[0].h, 60); // 30% of 200
+        assert_eq!(rects[1].h, 140); // 70% of 200
+    }
+
+    #[test]
+    fn column_mixed_fixed_and_flex() {
+        let layout = FlexLayout::column();
+        let children = vec![FlexChild::fixed(20), FlexChild::flex(1)];
+        let rects = layout.compute(0, 0, 100, 100, &children);
+        assert_eq!(rects[0].h, 20);
+        assert_eq!(rects[1].h, 80);
+    }
+
+    #[test]
+    fn column_justify_center() {
+        let layout = FlexLayout::column().with_justify(HAlign::Center);
+        let children = vec![FlexChild::fixed(20)];
+        let rects = layout.compute(0, 0, 100, 100, &children);
+        assert_eq!(rects[0].y, 40);
+    }
+
+    #[test]
+    fn column_justify_right() {
+        let layout = FlexLayout::column().with_justify(HAlign::Right);
+        let children = vec![FlexChild::fixed(20)];
+        let rects = layout.compute(0, 0, 100, 100, &children);
+        assert_eq!(rects[0].y, 80);
+    }
+
+    #[test]
+    fn row_with_margin() {
+        let layout = FlexLayout::row();
+        let children = vec![FlexChild::fixed(40).with_margin(Padding::uniform(5))];
+        let rects = layout.compute(0, 0, 200, 50, &children);
+        assert_eq!(rects[0].x, 5); // left margin
+        assert_eq!(rects[0].w, 40);
+    }
+
+    #[test]
+    fn column_with_margin() {
+        let layout = FlexLayout::column();
+        let children = vec![FlexChild::fixed(30).with_margin(Padding::new(10, 0, 0, 0))];
+        let rects = layout.compute(0, 0, 100, 200, &children);
+        assert_eq!(rects[0].y, 10); // top margin
+        assert_eq!(rects[0].h, 30);
+    }
+
+    #[test]
+    fn row_three_flex_equal_weight() {
+        let layout = FlexLayout::row();
+        let children = vec![FlexChild::flex(1), FlexChild::flex(1), FlexChild::flex(1)];
+        let rects = layout.compute(0, 0, 300, 50, &children);
+        assert_eq!(rects[0].w, 100);
+        assert_eq!(rects[1].w, 100);
+        assert_eq!(rects[2].w, 100);
+    }
+
+    #[test]
+    fn row_with_gap_positions() {
+        let layout = FlexLayout::row().with_gap(10);
+        let children = vec![FlexChild::fixed(50), FlexChild::fixed(50)];
+        let rects = layout.compute(0, 0, 200, 40, &children);
+        assert_eq!(rects[0].x, 0);
+        assert_eq!(rects[1].x, 60); // 50 + 10 gap
+    }
+
+    #[test]
+    fn column_with_gap_positions() {
+        let layout = FlexLayout::column().with_gap(5);
+        let children = vec![
+            FlexChild::fixed(20),
+            FlexChild::fixed(20),
+            FlexChild::fixed(20),
+        ];
+        let rects = layout.compute(0, 0, 100, 200, &children);
+        assert_eq!(rects[0].y, 0);
+        assert_eq!(rects[1].y, 25); // 20 + 5
+        assert_eq!(rects[2].y, 50); // 20 + 5 + 20 + 5
+    }
+
+    #[test]
+    fn parent_offset_applied() {
+        let layout = FlexLayout::row();
+        let children = vec![FlexChild::fixed(30)];
+        let rects = layout.compute(100, 200, 300, 50, &children);
+        assert_eq!(rects[0].x, 100);
+        assert_eq!(rects[0].y, 200);
+    }
+
+    #[test]
+    fn zero_size_parent() {
+        let layout = FlexLayout::row();
+        let children = vec![FlexChild::flex(1)];
+        let rects = layout.compute(0, 0, 0, 0, &children);
+        assert_eq!(rects[0].w, 0);
+        assert_eq!(rects[0].h, 0);
+    }
+
+    #[test]
+    fn flex_child_with_align_self() {
+        let child = FlexChild::fixed(20).with_align(VAlign::Bottom);
+        assert_eq!(child.align_self, Some(VAlign::Bottom));
+    }
+
+    #[test]
+    fn flex_child_default_margin() {
+        let child = FlexChild::fixed(50);
+        assert_eq!(child.margin, Padding::ZERO);
+    }
+
+    #[test]
+    fn flex_direction_debug() {
+        assert_eq!(format!("{:?}", FlexDirection::Row), "Row");
+        assert_eq!(format!("{:?}", FlexDirection::Column), "Column");
+    }
+
+    #[test]
+    fn grid_large_index() {
+        let grid = GridLayout::new(3);
+        let rect = grid.cell_rect(5, 0, 0, 90, 60, 6).unwrap();
+        // Index 5: col=2, row=1
+        assert_eq!(rect.x, 60); // col 2 * 30
+        assert_eq!(rect.y, 30); // row 1 * 30
+    }
+
+    #[test]
+    fn grid_one_col() {
+        let grid = GridLayout::new(1);
+        let cells = grid.all_cells(0, 0, 100, 100, 3);
+        assert_eq!(cells.len(), 3);
+        // Each cell should be full width.
+        for cell in &cells {
+            assert_eq!(cell.w, 100);
+        }
+    }
+
+    #[test]
+    fn grid_with_both_gaps_and_padding() {
+        let grid = GridLayout::new(2)
+            .with_gap(4, 4)
+            .with_padding(Padding::uniform(5));
+        let rect = grid.cell_rect(0, 0, 0, 100, 100, 4).unwrap();
+        assert_eq!(rect.x, 5); // padding left
+        assert_eq!(rect.y, 5); // padding top
+    }
+
+    #[test]
+    fn grid_zero_total_returns_none() {
+        let grid = GridLayout::new(3);
+        // zero total items => rows=0 => returns None
+        assert!(grid.cell_rect(0, 0, 0, 90, 60, 0).is_none());
+    }
+
+    #[test]
+    fn grid_all_cells_consistent_with_cell_rect() {
+        let grid = GridLayout::new(3).with_gap(2, 2);
+        let cells = grid.all_cells(10, 20, 200, 100, 6);
+        for i in 0..6 {
+            let single = grid.cell_rect(i, 10, 20, 200, 100, 6).unwrap();
+            assert_eq!(cells[i], single);
+        }
+    }
+
+    #[test]
+    fn vertical_list_empty() {
+        let rects = vertical_list(0, 0, 100, 20, 0, 0);
+        assert!(rects.is_empty());
+    }
+
+    #[test]
+    fn vertical_list_single_item() {
+        let rects = vertical_list(5, 10, 80, 20, 0, 1);
+        assert_eq!(rects.len(), 1);
+        assert_eq!(
+            rects[0],
+            ComputedRect {
+                x: 5,
+                y: 10,
+                w: 80,
+                h: 20,
+            }
+        );
+    }
+
+    #[test]
+    fn computed_rect_debug() {
+        let r = ComputedRect {
+            x: 1,
+            y: 2,
+            w: 3,
+            h: 4,
+        };
+        let dbg = format!("{r:?}");
+        assert!(dbg.contains("ComputedRect"));
+    }
+
+    #[test]
+    fn computed_rect_clone_and_eq() {
+        let a = ComputedRect {
+            x: 10,
+            y: 20,
+            w: 30,
+            h: 40,
+        };
+        let b = a;
+        assert_eq!(a, b);
+    }
+
+    #[test]
+    fn flex_layout_default_is_row() {
+        let layout = FlexLayout::default();
+        assert_eq!(layout.direction, FlexDirection::Row);
+        assert_eq!(layout.gap, 0);
+        assert_eq!(layout.align_items, VAlign::Top);
+        assert_eq!(layout.justify, HAlign::Left);
+    }
 }
