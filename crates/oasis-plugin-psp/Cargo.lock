@@ -37,7 +37,7 @@ dependencies = [
 
 [[package]]
 name = "oasis-plugin-psp"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "psp",
 ]
@@ -60,7 +60,7 @@ dependencies = [
 [[package]]
 name = "psp"
 version = "0.4.0"
-source = "git+https://github.com/AndrewAltimit/rust-psp#f43f811986bb8e0b1373b361cf419046f95a9869"
+source = "git+https://github.com/AndrewAltimit/rust-psp?rev=4c47345#4c47345bd8d2d5e225d91944ec81027c9a222e8d"
 dependencies = [
  "bitflags",
  "libm",
@@ -111,4 +111,4 @@ checksum = "9612d66420ead229348915b911ad9689e79dfc347fe7a876a82551c8eab36b5e"
 [[patch.unused]]
 name = "unicode-width"
 version = "0.2.0"
-source = "git+https://git.sr.ht/~sajattack/unicode-width#114ac4742ac29a7b69be8e0e7b1e45af43ed6d83"
+source = "git+https://git.sr.ht/~sajattack/unicode-width?rev=114ac47#114ac4742ac29a7b69be8e0e7b1e45af43ed6d83"
