@@ -140,11 +140,12 @@ impl FocusStyle {
     /// Compute the focus indicator rectangle given a widget rect.
     pub fn indicator_rect(&self, x: i32, y: i32, w: u32, h: u32) -> (i32, i32, u32, u32) {
         let off = self.offset;
+        let delta = off.saturating_mul(2);
         (
-            x - off,
-            y - off,
-            w.saturating_add_signed(off * 2),
-            h.saturating_add_signed(off * 2),
+            x.saturating_sub(off),
+            y.saturating_sub(off),
+            w.saturating_add_signed(delta),
+            h.saturating_add_signed(delta),
         )
     }
 
