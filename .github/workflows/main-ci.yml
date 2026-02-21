@@ -27,7 +27,7 @@ jobs:
   ci:
     name: OASIS_OS CI
     runs-on: self-hosted
-    timeout-minutes: 30
+    timeout-minutes: 60
     steps:
       - name: Pre-checkout cleanup
         run: |
