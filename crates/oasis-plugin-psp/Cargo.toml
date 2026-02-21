@@ -11,7 +11,7 @@
 [package]
 name = "oasis-plugin-psp"
 description = "PSP overlay plugin PRX: in-game overlay + background music for OASIS_OS"
-version = "0.1.0"
+version = "1.0.0"
 edition = "2024"
 license = "MIT"
 repository = "https://github.com/AndrewAltimit/oasis-os"
