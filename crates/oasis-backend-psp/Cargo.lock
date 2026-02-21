@@ -618,7 +618,7 @@ dependencies = [
 
 [[package]]
 name = "oasis-audio"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "log",
  "oasis-types",
@@ -629,7 +629,7 @@ dependencies = [
 
 [[package]]
 name = "oasis-backend-psp"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "embedded-io",
  "embedded-tls",
@@ -644,7 +644,7 @@ dependencies = [
 
 [[package]]
 name = "oasis-browser"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "jpeg-decoder",
  "log",
@@ -659,7 +659,7 @@ dependencies = [
 
 [[package]]
 name = "oasis-core"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "log",
  "oasis-audio",
@@ -681,7 +681,7 @@ dependencies = [
 
 [[package]]
 name = "oasis-net"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "log",
  "oasis-types",
@@ -691,14 +691,14 @@ dependencies = [
 
 [[package]]
 name = "oasis-platform"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "oasis-types",
 ]
 
 [[package]]
 name = "oasis-sdi"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "log",
  "oasis-types",
@@ -708,7 +708,7 @@ dependencies = [
 
 [[package]]
 name = "oasis-skin"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "log",
  "oasis-sdi",
@@ -721,7 +721,7 @@ dependencies = [
 
 [[package]]
 name = "oasis-terminal"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "log",
  "oasis-audio",
@@ -734,7 +734,7 @@ dependencies = [
 
 [[package]]
 name = "oasis-types"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "log",
  "serde",
@@ -745,21 +745,21 @@ dependencies = [
 
 [[package]]
 name = "oasis-ui"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "oasis-types",
 ]
 
 [[package]]
 name = "oasis-vfs"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "oasis-types",
 ]
 
 [[package]]
 name = "oasis-wm"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "log",
  "oasis-sdi",
