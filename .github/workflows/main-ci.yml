@@ -86,6 +86,7 @@ jobs:
         with:
           name: screenshot-report
           path: screenshots/tests/
+          if-no-files-found: ignore
           retention-days: 14
 
       # -- License / Advisory ------------------------------------------------
@@ -108,6 +109,7 @@ jobs:
         with:
           name: benchmark-results
           path: bench_results.txt
+          if-no-files-found: ignore
           retention-days: 30
 
       # -- Test Metrics -------------------------------------------------------
