@@ -151,6 +151,11 @@ impl AudioBackend for Ue5AudioBackend {
 mod tests {
     use super::*;
     use std::sync::atomic::{AtomicU32, Ordering};
+    use std::sync::{Mutex, MutexGuard};
+
+    /// Serializes tests that use the shared global callback atomics.
+    /// Without this, parallel tests race on `LAST_EVENT`/`LAST_TRACK`/`LAST_VALUE`.
+    static TEST_LOCK: Mutex<()> = Mutex::new(());
 
     static LAST_EVENT: AtomicU32 = AtomicU32::new(u32::MAX);
     static LAST_TRACK: AtomicU32 = AtomicU32::new(u32::MAX);
@@ -168,12 +173,13 @@ mod tests {
         LAST_VALUE.store(u32::MAX, Ordering::SeqCst);
     }
 
-    fn init_backend() -> Ue5AudioBackend {
+    fn init_backend() -> (MutexGuard<'static, ()>, Ue5AudioBackend) {
+        let guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let mut b = Ue5AudioBackend::new();
         b.init().unwrap();
         b.set_callback(test_cb);
         reset_globals();
-        b
+        (guard, b)
     }
 
     #[test]
@@ -187,7 +193,7 @@ mod tests {
 
     #[test]
     fn play_fires_callback() {
-        let mut b = init_backend();
+        let (_guard, mut b) = init_backend();
         let track = b.load_track(b"data").unwrap();
         reset_globals();
         b.play(track).unwrap();
@@ -197,7 +203,7 @@ mod tests {
 
     #[test]
     fn pause_fires_callback() {
-        let mut b = init_backend();
+        let (_guard, mut b) = init_backend();
         let track = b.load_track(b"data").unwrap();
         b.play(track).unwrap();
         reset_globals();
@@ -207,7 +213,7 @@ mod tests {
 
     #[test]
     fn resume_fires_callback() {
-        let mut b = init_backend();
+        let (_guard, mut b) = init_backend();
         let track = b.load_track(b"data").unwrap();
         b.play(track).unwrap();
         b.pause().unwrap();
@@ -218,7 +224,7 @@ mod tests {
 
     #[test]
     fn stop_fires_callback() {
-        let mut b = init_backend();
+        let (_guard, mut b) = init_backend();
         let track = b.load_track(b"data").unwrap();
         b.play(track).unwrap();
         reset_globals();
@@ -228,7 +234,7 @@ mod tests {
 
     #[test]
     fn volume_fires_callback() {
-        let mut b = init_backend();
+        let (_guard, mut b) = init_backend();
         b.set_volume(42).unwrap();
         assert_eq!(
             LAST_EVENT.load(Ordering::SeqCst),
@@ -240,7 +246,7 @@ mod tests {
 
     #[test]
     fn load_track_fires_callback() {
-        let mut b = init_backend();
+        let (_guard, mut b) = init_backend();
         let data = b"fake audio";
         let track = b.load_track(data).unwrap();
         assert_eq!(
@@ -253,7 +259,7 @@ mod tests {
 
     #[test]
     fn unload_track_fires_callback() {
-        let mut b = init_backend();
+        let (_guard, mut b) = init_backend();
         let track = b.load_track(b"data").unwrap();
         reset_globals();
         b.unload_track(track).unwrap();
@@ -266,7 +272,7 @@ mod tests {
 
     #[test]
     fn shutdown_fires_callback() {
-        let mut b = init_backend();
+        let (_guard, mut b) = init_backend();
         b.shutdown().unwrap();
         assert_eq!(
             LAST_EVENT.load(Ordering::SeqCst),
@@ -290,20 +296,20 @@ mod tests {
 
     #[test]
     fn streaming_works() {
-        let mut b = init_backend();
+        let (_guard, mut b) = init_backend();
         let track = b.load_streaming().unwrap();
         b.feed_data(track, b"streaming chunk").unwrap();
     }
 
     #[test]
     fn play_missing_track_fails() {
-        let mut b = init_backend();
+        let (_guard, mut b) = init_backend();
         assert!(b.play(AudioTrackId(999)).is_err());
     }
 
     #[test]
     fn lifecycle() {
-        let mut b = init_backend();
+        let (_guard, mut b) = init_backend();
         let t = b.load_track(b"mp3 data").unwrap();
         b.play(t).unwrap();
         assert!(b.is_playing());
@@ -338,14 +344,14 @@ mod tests {
 
     #[test]
     fn stop_without_play_succeeds() {
-        let mut b = init_backend();
+        let (_guard, mut b) = init_backend();
         // Stopping when nothing is playing should succeed gracefully.
         assert!(b.stop().is_ok());
     }
 
     #[test]
     fn position_always_zero() {
-        let mut b = init_backend();
+        let (_guard, mut b) = init_backend();
         assert_eq!(b.position_ms(), 0);
         let t = b.load_track(b"data").unwrap();
         b.play(t).unwrap();
@@ -354,7 +360,7 @@ mod tests {
 
     #[test]
     fn duration_always_zero() {
-        let mut b = init_backend();
+        let (_guard, mut b) = init_backend();
         assert_eq!(b.duration_ms(), 0);
         let t = b.load_track(b"data").unwrap();
         b.play(t).unwrap();
@@ -363,7 +369,7 @@ mod tests {
 
     #[test]
     fn multiple_tracks_load_and_unload() {
-        let mut b = init_backend();
+        let (_guard, mut b) = init_backend();
         let t1 = b.load_track(b"track1").unwrap();
         let t2 = b.load_track(b"track2").unwrap();
         let t3 = b.load_track(b"track3").unwrap();
@@ -379,7 +385,7 @@ mod tests {
 
     #[test]
     fn streaming_feed_data_succeeds() {
-        let mut b = init_backend();
+        let (_guard, mut b) = init_backend();
         let t = b.load_streaming().unwrap();
         assert!(b.feed_data(t, b"chunk 1").is_ok());
         assert!(b.feed_data(t, b"chunk 2").is_ok());
