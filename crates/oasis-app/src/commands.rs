@@ -596,7 +596,6 @@ mod tests {
     fn process_listen_already_running() {
         let mut state = make_test_state();
         // Start a listener first.
-        let _port = 0; // Cannot actually bind, but simulate the state.
         let cfg = oasis_core::net::ListenerConfig {
             port: 19999,
             psk: String::new(),
