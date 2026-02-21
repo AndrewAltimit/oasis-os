@@ -161,16 +161,26 @@ impl Widget for Spinner {
             SpinnerStyle::Bar => {
                 let bar_h = 4u32.min(h);
                 let bar_y = y + layout::center(h, bar_h);
-                let bar_w = w.saturating_sub(4);
+                let label_w = if let Some(ref label) = self.label {
+                    let lw = ctx.backend.measure_text(label, fs);
+                    let lx = x + 2;
+                    ctx.backend
+                        .draw_text(label, lx, ty, fs, ctx.theme.text_secondary)?;
+                    lw + 6
+                } else {
+                    0
+                };
+                let bar_w = w.saturating_sub(4 + label_w);
+                let bar_x = x + 2 + label_w as i32;
 
                 // Track.
                 ctx.backend
-                    .fill_rect(x + 2, bar_y, bar_w, bar_h, ctx.theme.scrollbar_track)?;
+                    .fill_rect(bar_x, bar_y, bar_w, bar_h, ctx.theme.scrollbar_track)?;
 
                 if ctx.theme.reduced_motion {
                     // Static 25% fill in the center.
                     let fill_w = bar_w / 4;
-                    let fill_x = x + 2 + ((bar_w - fill_w) / 2) as i32;
+                    let fill_x = bar_x + ((bar_w - fill_w) / 2) as i32;
                     ctx.backend
                         .fill_rect(fill_x, bar_y, fill_w, bar_h, ctx.theme.accent)?;
                 } else {
@@ -185,7 +195,7 @@ impl Widget for Spinner {
                         0
                     };
                     ctx.backend.fill_rect(
-                        x + 2 + pos as i32,
+                        bar_x + pos as i32,
                         bar_y,
                         fill_w,
                         bar_h,
@@ -475,6 +485,21 @@ mod tests {
             s.tick(300); // Advance 2 frames.
             s.draw(&mut ctx, 0, 0, 100, 20).unwrap();
         }
+        assert!(backend.fill_rect_count() >= 2);
+    }
+
+    #[test]
+    fn draw_bar_with_label() {
+        let theme = Theme::dark();
+        let mut backend = MockBackend::new();
+        {
+            let mut ctx = DrawContext::new(&mut backend, &theme);
+            let mut s = Spinner::with_label("Loading");
+            s.style = SpinnerStyle::Bar;
+            s.draw(&mut ctx, 0, 0, 150, 20).unwrap();
+        }
+        assert!(backend.has_text("Loading"));
+        // Track + fill = at least 2 fill_rect calls.
         assert!(backend.fill_rect_count() >= 2);
     }
 }
