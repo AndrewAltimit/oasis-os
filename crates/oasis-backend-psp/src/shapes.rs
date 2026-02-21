@@ -583,16 +583,19 @@ unsafe fn write_color_vert(
     x: i32,
     y: i32,
 ) {
-    ptr::write(
-        verts.add(index),
-        ColorVertex {
-            color,
-            x: x as i16,
-            y: y as i16,
-            z: 0,
-            _pad: 0,
-        },
-    );
+    // SAFETY: Caller guarantees `verts.add(index)` is within the allocated sceGuGetMemory buffer.
+    unsafe {
+        ptr::write(
+            verts.add(index),
+            ColorVertex {
+                color,
+                x: x as i16,
+                y: y as i16,
+                z: 0,
+                _pad: 0,
+            },
+        );
+    }
 }
 
 /// Integer square root (floor) for positive i32 values.
