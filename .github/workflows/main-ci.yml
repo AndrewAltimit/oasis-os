@@ -132,6 +132,35 @@ jobs:
           echo "| Failed | $FAIL |" >> $GITHUB_STEP_SUMMARY
           echo "| Total  | $TOTAL |" >> $GITHUB_STEP_SUMMARY
 
+      # -- Coverage Metrics ----------------------------------------------------
+      - name: Coverage (cargo-llvm-cov)
+        continue-on-error: true
+        run: |
+          docker compose --profile ci run --rm rust-ci bash -c "
+            rustup component add llvm-tools-preview 2>/dev/null || true
+            cargo install cargo-llvm-cov --locked 2>/dev/null || true
+            if command -v cargo-llvm-cov &>/dev/null; then
+              cargo llvm-cov --workspace --no-fail-fast \
+                --ignore-filename-regex '(tests?\.rs|benches?\.rs|main\.rs)' \
+                2>&1 | tee /app/coverage_output.txt
+            else
+              echo 'cargo-llvm-cov not available, skipping coverage'
+            fi
+          "
+
+      - name: Coverage summary
+        if: always()
+        run: |
+          if [ ! -f coverage_output.txt ]; then
+            echo "### Coverage" >> $GITHUB_STEP_SUMMARY
+            echo "Coverage step was skipped or unavailable." >> $GITHUB_STEP_SUMMARY
+            exit 0
+          fi
+          echo "### Coverage" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          tail -20 coverage_output.txt >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+
       # -- PSP Backend Build -------------------------------------------------
       - name: Setup PSP SDK
         run: |

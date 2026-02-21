@@ -512,4 +512,456 @@ auto_load = true
         mgr.shutdown_all(&mut sdi, &mut vfs, &mut cmds).unwrap();
         assert_eq!(mgr.active_count(), 0);
     }
+
+    // -- Phase 3.6: Plugin adversarial & edge-case tests --
+
+    /// Plugin that fails during init.
+    struct FailInitPlugin;
+    impl Plugin for FailInitPlugin {
+        fn info(&self) -> PluginInfo {
+            PluginInfo::new("fail-init", "1.0.0")
+        }
+        fn init(&mut self, _host: &mut PluginHost<'_>) -> Result<()> {
+            Err(OasisError::Plugin("init explosion".to_string()))
+        }
+        fn update(&mut self, _host: &mut PluginHost<'_>) -> Result<()> {
+            Ok(())
+        }
+        fn shutdown(&mut self, _host: &mut PluginHost<'_>) -> Result<()> {
+            Ok(())
+        }
+    }
+
+    /// Plugin that fails during update.
+    struct FailUpdatePlugin {
+        update_count: u32,
+    }
+    impl FailUpdatePlugin {
+        fn new() -> Self {
+            Self { update_count: 0 }
+        }
+    }
+    impl Plugin for FailUpdatePlugin {
+        fn info(&self) -> PluginInfo {
+            PluginInfo::new("fail-update", "1.0.0")
+        }
+        fn init(&mut self, _host: &mut PluginHost<'_>) -> Result<()> {
+            Ok(())
+        }
+        fn update(&mut self, _host: &mut PluginHost<'_>) -> Result<()> {
+            self.update_count += 1;
+            Err(OasisError::Plugin("update explosion".to_string()))
+        }
+        fn shutdown(&mut self, _host: &mut PluginHost<'_>) -> Result<()> {
+            Ok(())
+        }
+    }
+
+    /// Plugin that fails during shutdown.
+    struct FailShutdownPlugin;
+    impl Plugin for FailShutdownPlugin {
+        fn info(&self) -> PluginInfo {
+            PluginInfo::new("fail-shutdown", "1.0.0")
+        }
+        fn init(&mut self, _host: &mut PluginHost<'_>) -> Result<()> {
+            Ok(())
+        }
+        fn update(&mut self, _host: &mut PluginHost<'_>) -> Result<()> {
+            Ok(())
+        }
+        fn shutdown(&mut self, _host: &mut PluginHost<'_>) -> Result<()> {
+            Err(OasisError::Plugin("shutdown explosion".to_string()))
+        }
+    }
+
+    /// Plugin with a duplicate name.
+    struct DuplicatePlugin;
+    impl Plugin for DuplicatePlugin {
+        fn info(&self) -> PluginInfo {
+            PluginInfo::new("test-plugin", "2.0.0")
+        }
+        fn init(&mut self, _host: &mut PluginHost<'_>) -> Result<()> {
+            Ok(())
+        }
+        fn update(&mut self, _host: &mut PluginHost<'_>) -> Result<()> {
+            Ok(())
+        }
+        fn shutdown(&mut self, _host: &mut PluginHost<'_>) -> Result<()> {
+            Ok(())
+        }
+    }
+
+    /// Plugin that writes a VFS file during init and reads it
+    /// during update.
+    struct VfsPlugin {
+        read_data: Option<Vec<u8>>,
+    }
+    impl VfsPlugin {
+        fn new() -> Self {
+            Self { read_data: None }
+        }
+    }
+    impl Plugin for VfsPlugin {
+        fn info(&self) -> PluginInfo {
+            PluginInfo::new("vfs-plugin", "1.0.0")
+        }
+        fn init(&mut self, host: &mut PluginHost<'_>) -> Result<()> {
+            host.vfs.write("/plugin_data.txt", b"hello vfs")?;
+            Ok(())
+        }
+        fn update(&mut self, host: &mut PluginHost<'_>) -> Result<()> {
+            self.read_data = Some(host.vfs.read("/plugin_data.txt")?);
+            Ok(())
+        }
+        fn shutdown(&mut self, host: &mut PluginHost<'_>) -> Result<()> {
+            host.vfs.remove("/plugin_data.txt")?;
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn init_all_stops_on_first_error() {
+        let mut mgr = PluginManager::new();
+        mgr.register_static(Box::new(FailInitPlugin));
+        mgr.register_static(Box::new(TestPlugin::new()));
+
+        let mut sdi = SdiRegistry::new();
+        let mut vfs = MemoryVfs::new();
+        let mut cmds = CommandRegistry::new();
+
+        let result = mgr.init_all(&mut sdi, &mut vfs, &mut cmds);
+        assert!(result.is_err());
+        let msg = result.unwrap_err().to_string();
+        assert!(
+            msg.contains("init explosion"),
+            "expected 'init explosion' in: {msg}",
+        );
+        // FailInitPlugin stays Registered, TestPlugin
+        // never reaches Active.
+        assert_eq!(mgr.active_count(), 0);
+    }
+
+    #[test]
+    fn init_plugin_not_found() {
+        let mut mgr = PluginManager::new();
+        let mut sdi = SdiRegistry::new();
+        let mut vfs = MemoryVfs::new();
+        let mut cmds = CommandRegistry::new();
+
+        let result = mgr.init_plugin("ghost", &mut sdi, &mut vfs, &mut cmds);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("plugin not found"),);
+    }
+
+    #[test]
+    fn init_stopped_plugin_fails() {
+        let mut mgr = PluginManager::new();
+        mgr.register_static(Box::new(TestPlugin::new()));
+
+        let mut sdi = SdiRegistry::new();
+        let mut vfs = MemoryVfs::new();
+        let mut cmds = CommandRegistry::new();
+
+        mgr.init_all(&mut sdi, &mut vfs, &mut cmds).unwrap();
+        mgr.shutdown_all(&mut sdi, &mut vfs, &mut cmds).unwrap();
+
+        // Plugin is now Stopped -- re-init should fail.
+        let result = mgr.init_plugin("test-plugin", &mut sdi, &mut vfs, &mut cmds);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("stopped"),);
+    }
+
+    #[test]
+    fn update_all_propagates_error() {
+        let mut mgr = PluginManager::new();
+        mgr.register_static(Box::new(FailUpdatePlugin::new()));
+
+        let mut sdi = SdiRegistry::new();
+        let mut vfs = MemoryVfs::new();
+        let mut cmds = CommandRegistry::new();
+
+        mgr.init_all(&mut sdi, &mut vfs, &mut cmds).unwrap();
+        let result = mgr.update_all(&mut sdi, &mut vfs, &mut cmds);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("update explosion"),);
+    }
+
+    #[test]
+    fn shutdown_all_propagates_error() {
+        let mut mgr = PluginManager::new();
+        mgr.register_static(Box::new(FailShutdownPlugin));
+
+        let mut sdi = SdiRegistry::new();
+        let mut vfs = MemoryVfs::new();
+        let mut cmds = CommandRegistry::new();
+
+        mgr.init_all(&mut sdi, &mut vfs, &mut cmds).unwrap();
+        let result = mgr.shutdown_all(&mut sdi, &mut vfs, &mut cmds);
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("shutdown explosion"),
+        );
+    }
+
+    #[test]
+    fn unload_shutdown_error_propagates() {
+        let mut mgr = PluginManager::new();
+        mgr.register_static(Box::new(FailShutdownPlugin));
+
+        let mut sdi = SdiRegistry::new();
+        let mut vfs = MemoryVfs::new();
+        let mut cmds = CommandRegistry::new();
+
+        mgr.init_all(&mut sdi, &mut vfs, &mut cmds).unwrap();
+        let result = mgr.unload("fail-shutdown", &mut sdi, &mut vfs, &mut cmds);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn unload_registered_plugin_no_shutdown() {
+        // Unloading a Registered (never initialized) plugin
+        // should not call shutdown.
+        let mut mgr = PluginManager::new();
+        mgr.register_static(Box::new(FailShutdownPlugin));
+
+        let mut sdi = SdiRegistry::new();
+        let mut vfs = MemoryVfs::new();
+        let mut cmds = CommandRegistry::new();
+
+        // Do NOT init -- unload should succeed because
+        // shutdown is only called on Active plugins.
+        let result = mgr.unload("fail-shutdown", &mut sdi, &mut vfs, &mut cmds);
+        assert!(result.is_ok());
+        assert_eq!(mgr.count(), 0);
+    }
+
+    #[test]
+    fn duplicate_name_both_registered() {
+        let mut mgr = PluginManager::new();
+        mgr.register_static(Box::new(TestPlugin::new()));
+        mgr.register_static(Box::new(DuplicatePlugin));
+        assert_eq!(mgr.count(), 2);
+
+        // Both have name "test-plugin".
+        // init_plugin finds the first one.
+        let mut sdi = SdiRegistry::new();
+        let mut vfs = MemoryVfs::new();
+        let mut cmds = CommandRegistry::new();
+
+        mgr.init_plugin("test-plugin", &mut sdi, &mut vfs, &mut cmds)
+            .unwrap();
+        assert_eq!(mgr.active_count(), 1);
+
+        // Second init of same name should fail (first is Active).
+        let result = mgr.init_plugin("test-plugin", &mut sdi, &mut vfs, &mut cmds);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("already active"),);
+    }
+
+    #[test]
+    fn update_skips_non_active_plugins() {
+        let mut mgr = PluginManager::new();
+        // Register but do not init -- update should be a no-op.
+        mgr.register_static(Box::new(FailUpdatePlugin::new()));
+
+        let mut sdi = SdiRegistry::new();
+        let mut vfs = MemoryVfs::new();
+        let mut cmds = CommandRegistry::new();
+
+        // update_all should succeed because FailUpdatePlugin
+        // is in Registered state, not Active.
+        let result = mgr.update_all(&mut sdi, &mut vfs, &mut cmds);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn shutdown_skips_non_active_plugins() {
+        let mut mgr = PluginManager::new();
+        mgr.register_static(Box::new(FailShutdownPlugin));
+
+        let mut sdi = SdiRegistry::new();
+        let mut vfs = MemoryVfs::new();
+        let mut cmds = CommandRegistry::new();
+
+        // Plugin is Registered, not Active -- shutdown is
+        // a no-op.
+        let result = mgr.shutdown_all(&mut sdi, &mut vfs, &mut cmds);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn empty_manager_operations() {
+        let mut mgr = PluginManager::new();
+        assert_eq!(mgr.count(), 0);
+        assert_eq!(mgr.active_count(), 0);
+        assert!(!mgr.is_loaded("anything"));
+        assert!(mgr.list().is_empty());
+
+        let mut sdi = SdiRegistry::new();
+        let mut vfs = MemoryVfs::new();
+        let mut cmds = CommandRegistry::new();
+
+        // All lifecycle ops on empty manager should succeed.
+        assert!(mgr.init_all(&mut sdi, &mut vfs, &mut cmds).is_ok());
+        assert!(mgr.update_all(&mut sdi, &mut vfs, &mut cmds).is_ok());
+        assert!(mgr.shutdown_all(&mut sdi, &mut vfs, &mut cmds).is_ok());
+    }
+
+    #[test]
+    fn plugin_vfs_interaction() {
+        let mut mgr = PluginManager::new();
+        mgr.register_static(Box::new(VfsPlugin::new()));
+
+        let mut sdi = SdiRegistry::new();
+        let mut vfs = MemoryVfs::new();
+        let mut cmds = CommandRegistry::new();
+
+        mgr.init_all(&mut sdi, &mut vfs, &mut cmds).unwrap();
+
+        // VfsPlugin wrote a file during init -- verify.
+        assert!(vfs.exists("/plugin_data.txt"));
+        let data = vfs.read("/plugin_data.txt").unwrap();
+        assert_eq!(data, b"hello vfs");
+
+        mgr.update_all(&mut sdi, &mut vfs, &mut cmds).unwrap();
+
+        // Shutdown should clean up the VFS file.
+        mgr.shutdown_all(&mut sdi, &mut vfs, &mut cmds).unwrap();
+        assert!(!vfs.exists("/plugin_data.txt"));
+    }
+
+    #[test]
+    fn plugin_default_manager() {
+        let mgr = PluginManager::default();
+        assert_eq!(mgr.count(), 0);
+    }
+
+    #[test]
+    fn discover_invalid_toml_ignored() {
+        let mut vfs = MemoryVfs::new();
+        vfs.mkdir("/etc").unwrap();
+        vfs.mkdir("/etc/oasis-os").unwrap();
+        vfs.mkdir("/etc/oasis-os/plugins").unwrap();
+        vfs.mkdir("/etc/oasis-os/plugins/bad").unwrap();
+        vfs.write(
+            "/etc/oasis-os/plugins/bad/plugin.toml",
+            b"this is {{{ not valid toml !!!",
+        )
+        .unwrap();
+
+        let manifests = PluginManager::discover_manifests(&mut vfs);
+        assert!(
+            manifests.is_empty(),
+            "invalid TOML should be silently skipped",
+        );
+    }
+
+    #[test]
+    fn discover_skips_files_in_plugin_dir() {
+        let mut vfs = MemoryVfs::new();
+        vfs.mkdir("/etc").unwrap();
+        vfs.mkdir("/etc/oasis-os").unwrap();
+        vfs.mkdir("/etc/oasis-os/plugins").unwrap();
+        // Write a file (not a directory) directly in plugins/.
+        vfs.write("/etc/oasis-os/plugins/stray.txt", b"not a plugin")
+            .unwrap();
+
+        let manifests = PluginManager::discover_manifests(&mut vfs);
+        assert!(manifests.is_empty());
+    }
+
+    #[test]
+    fn discover_multiple_manifests() {
+        let mut vfs = MemoryVfs::new();
+        vfs.mkdir("/etc").unwrap();
+        vfs.mkdir("/etc/oasis-os").unwrap();
+        vfs.mkdir("/etc/oasis-os/plugins").unwrap();
+
+        for name in &["alpha", "beta", "gamma"] {
+            let dir = format!("/etc/oasis-os/plugins/{name}");
+            vfs.mkdir(&dir).unwrap();
+            let toml = format!("name = \"{name}\"\nversion = \"1.0\"\n");
+            vfs.write(&format!("{dir}/plugin.toml"), toml.as_bytes())
+                .unwrap();
+        }
+
+        let manifests = PluginManager::discover_manifests(&mut vfs);
+        assert_eq!(manifests.len(), 3);
+
+        let names: Vec<&str> = manifests.iter().map(|m| m.name.as_str()).collect();
+        assert!(names.contains(&"alpha"));
+        assert!(names.contains(&"beta"));
+        assert!(names.contains(&"gamma"));
+    }
+
+    #[test]
+    fn manifest_missing_optional_fields() {
+        let mut vfs = MemoryVfs::new();
+        vfs.mkdir("/etc").unwrap();
+        vfs.mkdir("/etc/oasis-os").unwrap();
+        vfs.mkdir("/etc/oasis-os/plugins").unwrap();
+        vfs.mkdir("/etc/oasis-os/plugins/minimal").unwrap();
+        // Only required field is `name`.
+        vfs.write(
+            "/etc/oasis-os/plugins/minimal/plugin.toml",
+            b"name = \"minimal\"\n",
+        )
+        .unwrap();
+
+        let manifests = PluginManager::discover_manifests(&mut vfs);
+        assert_eq!(manifests.len(), 1);
+        assert_eq!(manifests[0].name, "minimal");
+        assert!(manifests[0].version.is_empty());
+        assert!(manifests[0].author.is_empty());
+        assert!(manifests[0].description.is_empty());
+        assert!(manifests[0].library.is_empty());
+        assert!(!manifests[0].auto_load);
+    }
+
+    #[test]
+    fn is_loaded_after_unload() {
+        let mut mgr = PluginManager::new();
+        mgr.register_static(Box::new(TestPlugin::new()));
+        assert!(mgr.is_loaded("test-plugin"));
+
+        let mut sdi = SdiRegistry::new();
+        let mut vfs = MemoryVfs::new();
+        let mut cmds = CommandRegistry::new();
+        mgr.unload("test-plugin", &mut sdi, &mut vfs, &mut cmds)
+            .unwrap();
+        assert!(!mgr.is_loaded("test-plugin"));
+    }
+
+    #[test]
+    fn list_shows_correct_states() {
+        let mut mgr = PluginManager::new();
+        mgr.register_static(Box::new(TestPlugin::new()));
+        mgr.register_static(Box::new(SdiPlugin));
+
+        let mut sdi = SdiRegistry::new();
+        let mut vfs = MemoryVfs::new();
+        let mut cmds = CommandRegistry::new();
+
+        // Init only one plugin.
+        mgr.init_plugin("sdi-plugin", &mut sdi, &mut vfs, &mut cmds)
+            .unwrap();
+
+        let list = mgr.list();
+        assert_eq!(list.len(), 2);
+        // test-plugin should still be Registered.
+        let tp = list
+            .iter()
+            .find(|(info, _)| info.name == "test-plugin")
+            .unwrap();
+        assert_eq!(tp.1, PluginState::Registered);
+        // sdi-plugin should be Active.
+        let sp = list
+            .iter()
+            .find(|(info, _)| info.name == "sdi-plugin")
+            .unwrap();
+        assert_eq!(sp.1, PluginState::Active);
+    }
 }

@@ -165,4 +165,158 @@ mod tests {
         assert_eq!(size, 22);
         assert_eq!(pos, vec![0, 26, 52, 78]);
     }
+
+    // -- Additional layout tests --
+
+    #[test]
+    fn padding_zero_is_identity() {
+        let p = Padding::ZERO;
+        let (x, y, w, h) = p.inner_rect(10, 20, 100, 50);
+        assert_eq!((x, y, w, h), (10, 20, 100, 50));
+    }
+
+    #[test]
+    fn padding_symmetric() {
+        let p = Padding::symmetric(10, 5);
+        assert_eq!(p.left, 10);
+        assert_eq!(p.right, 10);
+        assert_eq!(p.top, 5);
+        assert_eq!(p.bottom, 5);
+        assert_eq!(p.horizontal(), 20);
+        assert_eq!(p.vertical(), 10);
+    }
+
+    #[test]
+    fn padding_individual_sides() {
+        let p = Padding::new(1, 2, 3, 4);
+        assert_eq!(p.top, 1);
+        assert_eq!(p.right, 2);
+        assert_eq!(p.bottom, 3);
+        assert_eq!(p.left, 4);
+        assert_eq!(p.horizontal(), 6);
+        assert_eq!(p.vertical(), 4);
+    }
+
+    #[test]
+    fn padding_inner_rect_larger_than_container() {
+        let p = Padding::uniform(100);
+        let (x, y, w, h) = p.inner_rect(0, 0, 50, 50);
+        assert_eq!(x, 100);
+        assert_eq!(y, 100);
+        assert_eq!(w, 0); // saturating_sub
+        assert_eq!(h, 0);
+    }
+
+    #[test]
+    fn center_zero_parent() {
+        assert_eq!(center(0, 10), 0);
+    }
+
+    #[test]
+    fn center_zero_child() {
+        assert_eq!(center(100, 0), 50);
+    }
+
+    #[test]
+    fn center_equal_sizes() {
+        assert_eq!(center(50, 50), 0);
+    }
+
+    #[test]
+    fn center_text_y_basic() {
+        let y = center_text_y(24, 12, 10);
+        assert_eq!(y, 16); // (24-12)/2 + 10
+    }
+
+    #[test]
+    fn distribute_zero_items() {
+        let (size, pos) = distribute(100, 0, 4);
+        assert_eq!(size, 0);
+        assert!(pos.is_empty());
+    }
+
+    #[test]
+    fn distribute_one_item() {
+        let (size, pos) = distribute(100, 1, 0);
+        assert_eq!(size, 100);
+        assert_eq!(pos, vec![0]);
+    }
+
+    #[test]
+    fn distribute_no_gap() {
+        let (size, pos) = distribute(100, 5, 0);
+        assert_eq!(size, 20);
+        assert_eq!(pos, vec![0, 20, 40, 60, 80]);
+    }
+
+    #[test]
+    fn distribute_large_gap_saturates() {
+        let (size, pos) = distribute(10, 4, 100);
+        // total_gap = 300, but total = 10 so saturating_sub = 0
+        assert_eq!(size, 0);
+        assert_eq!(pos.len(), 4);
+    }
+
+    #[test]
+    fn align_x_left() {
+        assert_eq!(align_x(200, 50, HAlign::Left), 0);
+    }
+
+    #[test]
+    fn align_x_center() {
+        let x = align_x(200, 50, HAlign::Center);
+        assert_eq!(x, center(200, 50));
+    }
+
+    #[test]
+    fn align_x_right() {
+        assert_eq!(align_x(200, 50, HAlign::Right), 150);
+    }
+
+    #[test]
+    fn align_x_right_child_larger() {
+        assert_eq!(align_x(50, 200, HAlign::Right), 0);
+    }
+
+    #[test]
+    fn align_y_top() {
+        assert_eq!(align_y(100, 20, VAlign::Top), 0);
+    }
+
+    #[test]
+    fn align_y_center() {
+        let y = align_y(100, 20, VAlign::Center);
+        assert_eq!(y, center(100, 20));
+    }
+
+    #[test]
+    fn align_y_bottom() {
+        assert_eq!(align_y(100, 20, VAlign::Bottom), 80);
+    }
+
+    #[test]
+    fn align_y_bottom_child_larger() {
+        assert_eq!(align_y(20, 100, VAlign::Bottom), 0);
+    }
+
+    #[test]
+    fn halign_debug() {
+        assert_eq!(format!("{:?}", HAlign::Left), "Left");
+        assert_eq!(format!("{:?}", HAlign::Center), "Center");
+        assert_eq!(format!("{:?}", HAlign::Right), "Right");
+    }
+
+    #[test]
+    fn valign_debug() {
+        assert_eq!(format!("{:?}", VAlign::Top), "Top");
+        assert_eq!(format!("{:?}", VAlign::Center), "Center");
+        assert_eq!(format!("{:?}", VAlign::Bottom), "Bottom");
+    }
+
+    #[test]
+    fn padding_clone_and_eq() {
+        let a = Padding::uniform(8);
+        let b = a;
+        assert_eq!(a, b);
+    }
 }

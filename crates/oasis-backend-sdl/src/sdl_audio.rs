@@ -461,4 +461,113 @@ mod tests {
         backend.play(track).unwrap();
         assert!(backend.is_playing());
     }
+
+    // ---------------------------------------------------------------
+    // Additional streaming tests
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn streaming_starts_empty() {
+        let mut backend = init_backend();
+        let track = backend.load_streaming().unwrap();
+        assert_eq!(backend.tracks[&track.0].len(), 0);
+    }
+
+    #[test]
+    fn streaming_multiple_tracks() {
+        let mut backend = init_backend();
+        let t1 = backend.load_streaming().unwrap();
+        let t2 = backend.load_streaming().unwrap();
+        assert_ne!(t1, t2);
+
+        backend.feed_data(t1, b"track1").unwrap();
+        backend.feed_data(t2, b"track2_data").unwrap();
+
+        assert_eq!(backend.tracks[&t1.0].len(), 6);
+        assert_eq!(backend.tracks[&t2.0].len(), 11);
+    }
+
+    #[test]
+    fn streaming_play_after_feed() {
+        let mut backend = init_backend();
+        let track = backend.load_streaming().unwrap();
+        backend.feed_data(track, b"audio data").unwrap();
+        // Should be able to play a streaming track.
+        backend.play(track).unwrap();
+        assert!(backend.is_playing());
+    }
+
+    #[test]
+    fn streaming_unload_stops_playback() {
+        let mut backend = init_backend();
+        let track = backend.load_streaming().unwrap();
+        backend.feed_data(track, b"data").unwrap();
+        backend.play(track).unwrap();
+        assert!(backend.is_playing());
+        backend.unload_track(track).unwrap();
+        assert!(!backend.is_playing());
+        assert!(!backend.tracks.contains_key(&track.0));
+    }
+
+    #[test]
+    fn streaming_feed_empty_data() {
+        let mut backend = init_backend();
+        let track = backend.load_streaming().unwrap();
+        backend.feed_data(track, b"").unwrap();
+        assert_eq!(backend.tracks[&track.0].len(), 0);
+    }
+
+    #[test]
+    fn streaming_buffer_exact_limit() {
+        let mut backend = init_backend();
+        let track = backend.load_streaming().unwrap();
+        // Feed exactly 128KB.
+        let chunk = vec![0xBBu8; 128 * 1024];
+        backend.feed_data(track, &chunk).unwrap();
+        assert_eq!(backend.tracks[&track.0].len(), 128 * 1024);
+    }
+
+    #[test]
+    fn streaming_buffer_drains_oldest_data() {
+        let mut backend = init_backend();
+        let track = backend.load_streaming().unwrap();
+        // Fill with 0xAA, then overflow with 0xBB.
+        let first = vec![0xAAu8; 128 * 1024];
+        backend.feed_data(track, &first).unwrap();
+        backend.feed_data(track, &[0xBBu8; 100]).unwrap();
+        // Buffer should be exactly 128KB.
+        assert_eq!(backend.tracks[&track.0].len(), 128 * 1024);
+        // Last bytes should be 0xBB (the new data).
+        let buf = &backend.tracks[&track.0];
+        assert_eq!(buf[buf.len() - 1], 0xBB);
+        assert_eq!(buf[buf.len() - 100], 0xBB);
+    }
+
+    #[test]
+    fn streaming_shutdown_clears_streaming_tracks() {
+        let mut backend = init_backend();
+        let t1 = backend.load_streaming().unwrap();
+        backend.feed_data(t1, b"data").unwrap();
+        let _t2 = backend.load_streaming().unwrap();
+        backend.shutdown().unwrap();
+        assert!(backend.tracks.is_empty());
+    }
+
+    #[test]
+    fn streaming_feed_after_unload_fails() {
+        let mut backend = init_backend();
+        let track = backend.load_streaming().unwrap();
+        backend.unload_track(track).unwrap();
+        assert!(backend.feed_data(track, b"data").is_err());
+    }
+
+    #[test]
+    fn streaming_incremental_growth() {
+        let mut backend = init_backend();
+        let track = backend.load_streaming().unwrap();
+        for i in 0..10 {
+            backend.feed_data(track, &[i as u8; 100]).unwrap();
+        }
+        assert_eq!(backend.tracks[&track.0].len(), 1000);
+    }
 }

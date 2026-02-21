@@ -48,6 +48,15 @@ impl Ue5AudioBackend {
         self.callback = Some(cb);
     }
 
+    /// Return whether this backend can produce audio output.
+    ///
+    /// Always returns `false` because the UE5 backend delegates
+    /// audio to the host engine via callbacks. OASIS_OS itself does
+    /// not drive audio hardware in this configuration.
+    pub fn has_audio(&self) -> bool {
+        false
+    }
+
     fn fire(&self, event: AudioEvent, track_id: u64, value: u32) {
         if let Some(cb) = self.callback {
             cb(event as u32, track_id, value);
@@ -306,5 +315,81 @@ mod tests {
         assert!(!b.is_playing());
         b.unload_track(t).unwrap();
         b.shutdown().unwrap();
+    }
+
+    #[test]
+    fn has_audio_returns_false() {
+        let b = Ue5AudioBackend::new();
+        assert!(!b.has_audio());
+    }
+
+    #[test]
+    fn has_audio_false_after_init() {
+        let mut b = Ue5AudioBackend::new();
+        b.init().unwrap();
+        assert!(!b.has_audio());
+    }
+
+    #[test]
+    fn init_succeeds_gracefully() {
+        let mut b = Ue5AudioBackend::new();
+        assert!(b.init().is_ok());
+    }
+
+    #[test]
+    fn stop_without_play_succeeds() {
+        let mut b = init_backend();
+        // Stopping when nothing is playing should succeed gracefully.
+        assert!(b.stop().is_ok());
+    }
+
+    #[test]
+    fn position_always_zero() {
+        let mut b = init_backend();
+        assert_eq!(b.position_ms(), 0);
+        let t = b.load_track(b"data").unwrap();
+        b.play(t).unwrap();
+        assert_eq!(b.position_ms(), 0);
+    }
+
+    #[test]
+    fn duration_always_zero() {
+        let mut b = init_backend();
+        assert_eq!(b.duration_ms(), 0);
+        let t = b.load_track(b"data").unwrap();
+        b.play(t).unwrap();
+        assert_eq!(b.duration_ms(), 0);
+    }
+
+    #[test]
+    fn multiple_tracks_load_and_unload() {
+        let mut b = init_backend();
+        let t1 = b.load_track(b"track1").unwrap();
+        let t2 = b.load_track(b"track2").unwrap();
+        let t3 = b.load_track(b"track3").unwrap();
+        assert_ne!(t1, t2);
+        assert_ne!(t2, t3);
+
+        b.unload_track(t2).unwrap();
+        // t1 and t3 should still be playable.
+        b.play(t1).unwrap();
+        b.stop().unwrap();
+        b.play(t3).unwrap();
+    }
+
+    #[test]
+    fn streaming_feed_data_succeeds() {
+        let mut b = init_backend();
+        let t = b.load_streaming().unwrap();
+        assert!(b.feed_data(t, b"chunk 1").is_ok());
+        assert!(b.feed_data(t, b"chunk 2").is_ok());
+    }
+
+    #[test]
+    fn double_init_succeeds() {
+        let mut b = Ue5AudioBackend::new();
+        b.init().unwrap();
+        // Double init should succeed gracefully.
+        b.init().unwrap();
     }
 }

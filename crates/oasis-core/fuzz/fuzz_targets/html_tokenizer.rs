@@ -1,7 +1,7 @@
 #![no_main]
 
 use libfuzzer_sys::fuzz_target;
-use oasis_core::browser::html::tokenizer::Tokenizer;
+use oasis_core::browser::internals::Tokenizer;
 
 fuzz_target!(|data: &[u8]| {
     if let Ok(input) = std::str::from_utf8(data) {

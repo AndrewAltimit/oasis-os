@@ -982,7 +982,28 @@ impl CommandRegistry {
 
     /// Built-in help with access to the registry.
     fn execute_help(&self, args: &[&str]) -> Result<CommandOutput> {
-        if let Some(&name) = args.first() {
+        // Parse optional --category / -c filter.
+        let mut filter_cat: Option<&str> = None;
+        let mut positional: Vec<&str> = Vec::new();
+        let mut i = 0;
+        while i < args.len() {
+            match args[i] {
+                "--category" | "-c" => {
+                    if let Some(&cat) = args.get(i + 1) {
+                        filter_cat = Some(cat);
+                        i += 2;
+                        continue;
+                    }
+                    return Err(OasisError::Command(
+                        "usage: help [--category <cat>] [command]".into(),
+                    ));
+                },
+                other => positional.push(other),
+            }
+            i += 1;
+        }
+
+        if let Some(&name) = positional.first() {
             let name_lower = name.to_ascii_lowercase();
             match self.commands.get(name_lower.as_str()) {
                 Some(cmd) => {
@@ -1024,7 +1045,20 @@ impl CommandRegistry {
             let mut cats: Vec<&str> = categories.keys().copied().collect();
             cats.sort();
 
-            let total: usize = categories.values().map(|v| v.len()).sum();
+            // Apply category filter if specified.
+            if let Some(fc) = filter_cat {
+                let fc_lower = fc.to_ascii_lowercase();
+                cats.retain(|c| c.to_ascii_lowercase().contains(&fc_lower));
+                if cats.is_empty() {
+                    return Err(OasisError::Command(format!("no category matching '{fc}'")));
+                }
+            }
+
+            let total: usize = cats
+                .iter()
+                .filter_map(|c| categories.get(c))
+                .map(|v| v.len())
+                .sum();
             let mut out = format!("Commands ({total}):\n");
             for cat in &cats {
                 let cmds = categories.get(cat).unwrap();

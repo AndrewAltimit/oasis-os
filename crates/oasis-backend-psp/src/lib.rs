@@ -26,6 +26,7 @@ pub mod power;
 pub mod procedural;
 pub mod render;
 pub mod sfx;
+pub mod shapes;
 pub mod status;
 pub mod textures;
 pub mod threading;
@@ -486,6 +487,68 @@ impl SdiBackend for PspBackend {
     }
 
     fn shutdown(&mut self) -> OasisResult<()> {
+        Ok(())
+    }
+
+    // -------------------------------------------------------------------
+    // Extended: Shape Primitives (GU-accelerated)
+    // -------------------------------------------------------------------
+
+    fn fill_rounded_rect(
+        &mut self,
+        x: i32,
+        y: i32,
+        w: u32,
+        h: u32,
+        radius: u16,
+        color: Color,
+    ) -> OasisResult<()> {
+        self.fill_rounded_rect_inner(x, y, w, h, radius, color);
+        Ok(())
+    }
+
+    fn fill_circle(
+        &mut self,
+        cx: i32,
+        cy: i32,
+        radius: u16,
+        color: Color,
+    ) -> OasisResult<()> {
+        self.fill_circle_inner(cx, cy, radius, color);
+        Ok(())
+    }
+
+    fn draw_line(
+        &mut self,
+        x1: i32,
+        y1: i32,
+        x2: i32,
+        y2: i32,
+        width: u16,
+        color: Color,
+    ) -> OasisResult<()> {
+        self.draw_line_inner(x1, y1, x2, y2, width, color);
+        Ok(())
+    }
+
+    // -------------------------------------------------------------------
+    // Extended: Gradient Fills (GU vertex-color interpolation)
+    // -------------------------------------------------------------------
+
+    fn fill_rect_gradient(
+        &mut self,
+        x: i32,
+        y: i32,
+        w: u32,
+        h: u32,
+        gradient: &oasis_core::backend::GradientStyle,
+    ) -> OasisResult<()> {
+        self.fill_rect_gradient_inner(x, y, w, h, gradient);
+        Ok(())
+    }
+
+    fn dim_screen(&mut self, alpha: u8) -> OasisResult<()> {
+        self.dim_screen_inner(alpha);
         Ok(())
     }
 }

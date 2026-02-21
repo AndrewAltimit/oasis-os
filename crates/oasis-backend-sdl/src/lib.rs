@@ -8,6 +8,7 @@
 //! SDL2 renderer API calls and software rasterization helpers.
 
 mod font;
+pub mod network;
 mod sdl_audio;
 
 use std::collections::HashMap;
@@ -20,10 +21,11 @@ use sdl2::rect::Rect;
 use sdl2::render::{Canvas, Texture, TextureCreator};
 use sdl2::video::{Window, WindowContext};
 
-use oasis_core::backend::{Color, SdiBackend, TextureId};
+use oasis_core::backend::{Color, GradientStyle, SdiBackend, TextureId};
 use oasis_core::error::{OasisError, Result};
 use oasis_core::input::{Button, InputEvent, Trigger};
 
+pub use network::SdlNetworkBackend;
 pub use sdl_audio::SdlAudioBackend;
 
 /// Stored clip rectangle.
@@ -514,40 +516,50 @@ impl SdiBackend for SdlBackend {
     // Extended: Gradient Fills
     // -------------------------------------------------------------------
 
-    fn fill_rect_gradient_v(
+    fn fill_rect_gradient(
         &mut self,
         x: i32,
         y: i32,
         w: u32,
         h: u32,
-        top_color: Color,
-        bottom_color: Color,
+        gradient: &GradientStyle,
     ) -> Result<()> {
         let (tx, ty) = self.translate(x, y);
-        let h_max = h.saturating_sub(1).max(1);
-        for dy in 0..h as i32 {
-            let color = lerp_color_sdl(top_color, bottom_color, dy as u32, h_max);
-            self.set_color(color);
-            let _ = self.canvas.fill_rect(Rect::new(tx, ty + dy, w, 1));
-        }
-        Ok(())
-    }
-
-    fn fill_rect_gradient_h(
-        &mut self,
-        x: i32,
-        y: i32,
-        w: u32,
-        h: u32,
-        left_color: Color,
-        right_color: Color,
-    ) -> Result<()> {
-        let (tx, ty) = self.translate(x, y);
-        let w_max = w.saturating_sub(1).max(1);
-        for dx in 0..w as i32 {
-            let color = lerp_color_sdl(left_color, right_color, dx as u32, w_max);
-            self.set_color(color);
-            let _ = self.canvas.fill_rect(Rect::new(tx + dx, ty, 1, h));
+        match *gradient {
+            GradientStyle::Vertical { top, bottom } => {
+                let h_max = h.saturating_sub(1).max(1);
+                for dy in 0..h as i32 {
+                    let color = lerp_color_sdl(top, bottom, dy as u32, h_max);
+                    self.set_color(color);
+                    let _ = self.canvas.fill_rect(Rect::new(tx, ty + dy, w, 1));
+                }
+            },
+            GradientStyle::Horizontal { left, right } => {
+                let w_max = w.saturating_sub(1).max(1);
+                for dx in 0..w as i32 {
+                    let color = lerp_color_sdl(left, right, dx as u32, w_max);
+                    self.set_color(color);
+                    let _ = self.canvas.fill_rect(Rect::new(tx + dx, ty, 1, h));
+                }
+            },
+            GradientStyle::FourCorner {
+                top_left,
+                top_right,
+                bottom_left,
+                bottom_right,
+            } => {
+                let h_max = h.saturating_sub(1).max(1);
+                let w_max = w.saturating_sub(1).max(1);
+                for dy in 0..h as i32 {
+                    let left = lerp_color_sdl(top_left, bottom_left, dy as u32, h_max);
+                    let right = lerp_color_sdl(top_right, bottom_right, dy as u32, h_max);
+                    for dx in 0..w as i32 {
+                        let color = lerp_color_sdl(left, right, dx as u32, w_max);
+                        self.set_color(color);
+                        let _ = self.canvas.fill_rect(Rect::new(tx + dx, ty + dy, 1, 1));
+                    }
+                }
+            },
         }
         Ok(())
     }
@@ -656,19 +668,24 @@ impl SdiBackend for SdlBackend {
         Ok(())
     }
 
-    fn fill_rounded_rect_gradient_v(
+    fn fill_rounded_rect_gradient(
         &mut self,
         x: i32,
         y: i32,
         w: u32,
         h: u32,
         radius: u16,
-        top_color: Color,
-        bottom_color: Color,
+        gradient: &GradientStyle,
     ) -> Result<()> {
         if radius == 0 || w == 0 || h == 0 {
-            return self.fill_rect_gradient_v(x, y, w, h, top_color, bottom_color);
+            return self.fill_rect_gradient(x, y, w, h, gradient);
         }
+        // Currently only Vertical gradients get rounded-rect acceleration;
+        // other styles fall back to the sharp-cornered implementation.
+        let (top_color, bottom_color) = match *gradient {
+            GradientStyle::Vertical { top, bottom } => (top, bottom),
+            _ => return self.fill_rect_gradient(x, y, w, h, gradient),
+        };
         let (tx, ty) = self.translate(x, y);
         let r = (radius as i32).min(w as i32 / 2).min(h as i32 / 2);
         let h_max = (h as i32 - 1).max(1);

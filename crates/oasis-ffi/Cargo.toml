@@ -6,6 +6,7 @@ license.workspace = true
 repository.workspace = true
 authors.workspace = true
 description = "OASIS_OS C-ABI FFI boundary for UE5 and external integrations"
+documentation = "https://docs.rs/oasis-ffi"
 
 [lib]
 crate-type = ["cdylib", "rlib"]

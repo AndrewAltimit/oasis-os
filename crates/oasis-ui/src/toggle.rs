@@ -32,6 +32,18 @@ impl Toggle {
             self.progress = (self.progress - speed).max(0.0);
         }
     }
+
+    /// Animate toward the current `on` state, respecting reduced-motion.
+    ///
+    /// When `reduced_motion` is `true`, the toggle snaps instantly to
+    /// its target state instead of interpolating.
+    pub fn animate_reduced(&mut self, dt_ms: u32, reduced_motion: bool) {
+        if reduced_motion {
+            self.progress = if self.on { 1.0 } else { 0.0 };
+        } else {
+            self.animate(dt_ms);
+        }
+    }
 }
 
 #[cfg(test)]
@@ -105,6 +117,34 @@ mod tests {
         let before = t.progress;
         t.animate(16);
         assert!((t.progress - before).abs() < f32::EPSILON);
+    }
+
+    // -- Reduced-motion tests --
+
+    #[test]
+    fn animate_reduced_snaps_to_on() {
+        let mut t = Toggle::new(false);
+        t.on = true;
+        t.animate_reduced(1, true);
+        assert!((t.progress - 1.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn animate_reduced_snaps_to_off() {
+        let mut t = Toggle::new(true);
+        t.on = false;
+        t.animate_reduced(1, true);
+        assert!((t.progress - 0.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn animate_reduced_false_is_normal() {
+        let mut t = Toggle::new(false);
+        t.on = true;
+        t.animate_reduced(75, false);
+        // Should behave like normal animate: partial progress.
+        assert!(t.progress > 0.0);
+        assert!(t.progress < 1.0);
     }
 
     // -- Draw / measure tests using MockBackend --

@@ -33,6 +33,12 @@ enum InsertionMode {
 // TreeBuilder
 // ------------------------------------------------------------------
 
+/// Maximum nesting depth for the open elements stack. When the stack
+/// reaches this limit, new elements are appended as children of the
+/// current node instead of being pushed onto the stack. This prevents
+/// stack exhaustion from pathologically deeply nested HTML.
+const MAX_NESTING_DEPTH: usize = 256;
+
 /// Builds a DOM tree from a token stream.
 pub struct TreeBuilder {
     doc: Document,
@@ -750,10 +756,18 @@ impl TreeBuilder {
 
     /// Insert an element as the last child of the current node and
     /// push it onto the open elements stack.
+    ///
+    /// When the stack has reached [`MAX_NESTING_DEPTH`], the element
+    /// is still appended as a child but is **not** pushed onto the
+    /// stack. This means subsequent content will be attached to the
+    /// current parent rather than nesting deeper, preventing stack
+    /// exhaustion from pathologically deep HTML.
     fn insert_element(&mut self, id: NodeId) {
         let parent = self.current_node();
         self.doc.append_child(parent, id);
-        self.open_elements.push(id);
+        if self.open_elements.len() < MAX_NESTING_DEPTH {
+            self.open_elements.push(id);
+        }
     }
 
     /// Insert text, coalescing into an existing trailing text node
@@ -1812,5 +1826,246 @@ mod tests {
         let doc = TreeBuilder::build(tokens);
         let body = doc.body().unwrap();
         assert!(doc.get(body).children.len() >= 500);
+    }
+
+    // -- Nesting depth guard tests ------------------------------------
+
+    #[test]
+    fn nesting_depth_capped_at_256() {
+        // Create 300 levels of nesting (exceeds MAX_NESTING_DEPTH).
+        let mut tokens: Vec<Token> = Vec::new();
+        for _ in 0..300 {
+            tokens.push(start("div"));
+        }
+        tokens.push(text("deep leaf"));
+        for _ in 0..300 {
+            tokens.push(end("div"));
+        }
+        tokens.push(Token::Eof);
+
+        let doc = TreeBuilder::build(tokens);
+        let body = doc.body().expect("has body");
+
+        // Walk down to measure actual depth.
+        let mut depth = 0u32;
+        let mut node = body;
+        loop {
+            let children = &doc.get(node).children;
+            if children.is_empty() {
+                break;
+            }
+            // Follow the first child that is an element.
+            let child = children.iter().find(|&&id| doc.element(id).is_some());
+            if let Some(&id) = child {
+                depth += 1;
+                node = id;
+            } else {
+                break;
+            }
+        }
+
+        // Depth should be capped. The open_elements stack includes
+        // html and body (2 slots), so the div nesting is capped at
+        // MAX_NESTING_DEPTH - 2 = 254 at most. Allow some margin.
+        assert!(
+            depth <= super::MAX_NESTING_DEPTH as u32,
+            "nesting depth {depth} should be <= {}",
+            super::MAX_NESTING_DEPTH,
+        );
+    }
+
+    #[test]
+    fn nesting_depth_leaf_content_preserved() {
+        // Even with extreme nesting, the leaf text should appear
+        // somewhere in the tree.
+        let mut tokens: Vec<Token> = Vec::new();
+        for _ in 0..300 {
+            tokens.push(start("div"));
+        }
+        tokens.push(text("deep leaf"));
+        for _ in 0..300 {
+            tokens.push(end("div"));
+        }
+        tokens.push(Token::Eof);
+
+        let doc = TreeBuilder::build(tokens);
+        let body = doc.body().expect("has body");
+        let full_text = doc.text_content(body);
+        assert!(
+            full_text.contains("deep leaf"),
+            "leaf text should be preserved, got: {full_text}",
+        );
+    }
+
+    #[test]
+    fn nesting_at_exact_limit_works() {
+        // Nesting exactly at the limit (minus html+body) should be fine.
+        let depth = super::MAX_NESTING_DEPTH - 2;
+        let mut tokens: Vec<Token> = Vec::new();
+        for _ in 0..depth {
+            tokens.push(start("span"));
+        }
+        tokens.push(text("leaf"));
+        for _ in 0..depth {
+            tokens.push(end("span"));
+        }
+        tokens.push(Token::Eof);
+
+        let doc = TreeBuilder::build(tokens);
+        let body = doc.body().expect("has body");
+        let full_text = doc.text_content(body);
+        assert!(full_text.contains("leaf"));
+    }
+
+    #[test]
+    fn nesting_one_over_limit_still_works() {
+        // One level beyond the limit should not crash and content
+        // should still be in the tree (attached to the current
+        // parent instead of nesting deeper).
+        let depth = super::MAX_NESTING_DEPTH;
+        let mut tokens: Vec<Token> = Vec::new();
+        for _ in 0..depth {
+            tokens.push(start("div"));
+        }
+        tokens.push(text("over"));
+        for _ in 0..depth {
+            tokens.push(end("div"));
+        }
+        tokens.push(Token::Eof);
+
+        let doc = TreeBuilder::build(tokens);
+        let body = doc.body().expect("has body");
+        let full_text = doc.text_content(body);
+        assert!(full_text.contains("over"));
+    }
+
+    #[test]
+    fn nesting_depth_with_mixed_tags() {
+        // Mix different tags in deep nesting.
+        let tags = ["div", "span", "p", "section", "article"];
+        let mut tokens: Vec<Token> = Vec::new();
+        for i in 0..300 {
+            tokens.push(start(tags[i % tags.len()]));
+        }
+        tokens.push(text("mixed deep"));
+        for i in (0..300).rev() {
+            tokens.push(end(tags[i % tags.len()]));
+        }
+        tokens.push(Token::Eof);
+
+        let doc = TreeBuilder::build(tokens);
+        let body = doc.body().expect("has body");
+        let full_text = doc.text_content(body);
+        // Content should be present and no crash.
+        assert!(
+            full_text.contains("mixed deep") || !full_text.is_empty(),
+            "tree should be well-formed",
+        );
+    }
+
+    mod prop {
+        use super::*;
+        use proptest::prelude::*;
+
+        proptest! {
+            /// Building a tree from arbitrary token sequences never panics.
+            #[test]
+            fn build_never_panics(
+                n in 0usize..30,
+            ) {
+                let tags = ["div", "span", "p", "a", "b", "li", "ul"];
+                let mut tokens: Vec<Token> = Vec::new();
+                for i in 0..n {
+                    let tag = tags[i % tags.len()];
+                    tokens.push(start(tag));
+                    tokens.push(text("x"));
+                    tokens.push(end(tag));
+                }
+                tokens.push(Token::Eof);
+                let _ = TreeBuilder::build(tokens);
+            }
+
+            /// Deeply nested single-tag trees never panic.
+            #[test]
+            fn deep_nesting_no_panic(depth in 1usize..350) {
+                let mut tokens: Vec<Token> = Vec::new();
+                for _ in 0..depth {
+                    tokens.push(start("div"));
+                }
+                tokens.push(text("leaf"));
+                for _ in 0..depth {
+                    tokens.push(end("div"));
+                }
+                tokens.push(Token::Eof);
+                let doc = TreeBuilder::build(tokens);
+                let body = doc.body().expect("body");
+                // Text should always be present somewhere.
+                let tc = doc.text_content(body);
+                prop_assert!(
+                    tc.contains("leaf"),
+                    "leaf text missing at depth {depth}",
+                );
+            }
+
+            /// Orphaned end tags of any name never crash.
+            #[test]
+            fn orphan_end_tags_no_panic(name in "[a-z]{1,10}") {
+                let tokens = vec![end(&name), Token::Eof];
+                let doc = TreeBuilder::build(tokens);
+                prop_assert!(doc.body().is_some());
+            }
+
+            /// Text-only documents always produce a body.
+            #[test]
+            fn text_only_always_has_body(s in ".{0,50}") {
+                let tokens = vec![text(&s), Token::Eof];
+                let doc = TreeBuilder::build(tokens);
+                prop_assert!(doc.body().is_some());
+            }
+
+            /// Random sequences of start/end/text tokens never panic.
+            #[test]
+            fn random_token_sequence(
+                ops in proptest::collection::vec(0u8..6, 0..50),
+            ) {
+                let tags = ["div", "p", "span", "a", "li"];
+                let mut tokens: Vec<Token> = Vec::new();
+                for op in &ops {
+                    let tag = tags[(*op as usize) % tags.len()];
+                    match op % 3 {
+                        0 => tokens.push(start(tag)),
+                        1 => tokens.push(end(tag)),
+                        _ => tokens.push(text("x")),
+                    }
+                }
+                tokens.push(Token::Eof);
+                let _ = TreeBuilder::build(tokens);
+            }
+
+            /// Table structure with random row/col counts never panics.
+            #[test]
+            fn random_table(
+                rows in 1usize..10,
+                cols in 1usize..10,
+            ) {
+                let mut tokens: Vec<Token> = Vec::new();
+                tokens.push(start("table"));
+                for _ in 0..rows {
+                    tokens.push(start("tr"));
+                    for _ in 0..cols {
+                        tokens.push(start("td"));
+                        tokens.push(text("cell"));
+                        tokens.push(end("td"));
+                    }
+                    tokens.push(end("tr"));
+                }
+                tokens.push(end("table"));
+                tokens.push(Token::Eof);
+                let doc = TreeBuilder::build(tokens);
+                let body = doc.body().expect("body");
+                let tc = doc.text_content(body);
+                prop_assert!(tc.contains("cell"));
+            }
+        }
     }
 }

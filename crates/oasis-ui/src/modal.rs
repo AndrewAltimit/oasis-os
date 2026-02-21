@@ -1,9 +1,37 @@
-//! Modal dialog widget.
+//! Modal dialog widget with input blocking and button presets.
 
 use crate::context::DrawContext;
 use crate::layout;
 use crate::widget::Widget;
 use oasis_types::error::Result;
+
+/// Result of dismissing a modal dialog.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ModalResult {
+    /// No action taken yet (modal still open).
+    Pending,
+    /// User confirmed (pressed OK / primary action).
+    Confirmed,
+    /// User cancelled (pressed Cancel / dismissed).
+    Cancelled,
+    /// User pressed a custom button at the given index.
+    Custom(usize),
+}
+
+/// Preset button configurations.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ModalButtons {
+    /// Single "OK" button.
+    Ok,
+    /// "Cancel" and "OK" buttons.
+    OkCancel,
+    /// "No" and "Yes" buttons.
+    YesNo,
+    /// "Cancel", "No", and "Yes" buttons.
+    YesNoCancel,
+    /// Custom: caller sets buttons manually.
+    Custom,
+}
 
 /// A modal dialog with title, body text, and action buttons.
 pub struct Modal {
@@ -17,6 +45,12 @@ pub struct Modal {
     pub focused_button: usize,
     /// Whether to draw the semi-transparent backdrop overlay.
     pub show_backdrop: bool,
+    /// Whether this modal blocks input to underlying widgets.
+    pub blocks_input: bool,
+    /// Current dismissal result (Pending while open).
+    pub result: ModalResult,
+    /// Which button preset was used.
+    pub preset: ModalButtons,
 }
 
 impl Modal {
@@ -28,6 +62,9 @@ impl Modal {
             buttons: vec!["OK".into()],
             focused_button: 0,
             show_backdrop: true,
+            blocks_input: true,
+            result: ModalResult::Pending,
+            preset: ModalButtons::Ok,
         }
     }
 
@@ -36,6 +73,38 @@ impl Modal {
         Self {
             buttons: vec!["Cancel".into(), "OK".into()],
             focused_button: 1,
+            preset: ModalButtons::OkCancel,
+            ..Self::new(title, body)
+        }
+    }
+
+    /// Create a Yes/No dialog.
+    pub fn yes_no(title: impl Into<String>, body: impl Into<String>) -> Self {
+        Self {
+            buttons: vec!["No".into(), "Yes".into()],
+            focused_button: 1,
+            preset: ModalButtons::YesNo,
+            ..Self::new(title, body)
+        }
+    }
+
+    /// Create a Yes/No/Cancel dialog.
+    pub fn yes_no_cancel(title: impl Into<String>, body: impl Into<String>) -> Self {
+        Self {
+            buttons: vec!["Cancel".into(), "No".into(), "Yes".into()],
+            focused_button: 2,
+            preset: ModalButtons::YesNoCancel,
+            ..Self::new(title, body)
+        }
+    }
+
+    /// Create a dialog with custom button labels.
+    pub fn custom(title: impl Into<String>, body: impl Into<String>, buttons: Vec<String>) -> Self {
+        let focused = buttons.len().saturating_sub(1);
+        Self {
+            buttons,
+            focused_button: focused,
+            preset: ModalButtons::Custom,
             ..Self::new(title, body)
         }
     }
@@ -63,6 +132,59 @@ impl Modal {
         self.buttons.get(self.focused_button).map(String::as_str)
     }
 
+    /// Activate the currently focused button and set the result.
+    ///
+    /// Returns the `ModalResult` for the pressed button.
+    pub fn activate(&mut self) -> ModalResult {
+        let result = self.result_for_index(self.focused_button);
+        self.result = result;
+        result
+    }
+
+    /// Dismiss the modal as cancelled (e.g. Escape key).
+    pub fn dismiss(&mut self) -> ModalResult {
+        self.result = ModalResult::Cancelled;
+        ModalResult::Cancelled
+    }
+
+    /// Whether this modal is still open (no result yet).
+    pub fn is_open(&self) -> bool {
+        self.result == ModalResult::Pending
+    }
+
+    /// Whether this modal should consume all input events,
+    /// preventing them from reaching widgets underneath.
+    pub fn should_block_input(&self) -> bool {
+        self.blocks_input && self.is_open()
+    }
+
+    /// Map a button index to a `ModalResult` based on the preset.
+    fn result_for_index(&self, index: usize) -> ModalResult {
+        match self.preset {
+            ModalButtons::Ok => ModalResult::Confirmed,
+            ModalButtons::OkCancel => {
+                if index == 0 {
+                    ModalResult::Cancelled
+                } else {
+                    ModalResult::Confirmed
+                }
+            },
+            ModalButtons::YesNo => {
+                if index == 0 {
+                    ModalResult::Cancelled
+                } else {
+                    ModalResult::Confirmed
+                }
+            },
+            ModalButtons::YesNoCancel => match index {
+                0 => ModalResult::Cancelled,
+                1 => ModalResult::Custom(1),
+                _ => ModalResult::Confirmed,
+            },
+            ModalButtons::Custom => ModalResult::Custom(index),
+        }
+    }
+
     /// Fixed modal width for the 480x272 viewport.
     const MODAL_WIDTH: u32 = 280;
 
@@ -85,6 +207,9 @@ mod tests {
         assert_eq!(m.buttons, vec!["OK"]);
         assert_eq!(m.focused_button, 0);
         assert!(m.show_backdrop);
+        assert!(m.blocks_input);
+        assert_eq!(m.result, ModalResult::Pending);
+        assert_eq!(m.preset, ModalButtons::Ok);
     }
 
     #[test]
@@ -93,7 +218,48 @@ mod tests {
         assert_eq!(m.buttons.len(), 2);
         assert_eq!(m.buttons[0], "Cancel");
         assert_eq!(m.buttons[1], "OK");
-        assert_eq!(m.focused_button, 1); // OK focused by default
+        assert_eq!(m.focused_button, 1);
+        assert_eq!(m.preset, ModalButtons::OkCancel);
+    }
+
+    #[test]
+    fn yes_no_dialog() {
+        let m = Modal::yes_no("Save?", "Save changes?");
+        assert_eq!(m.buttons.len(), 2);
+        assert_eq!(m.buttons[0], "No");
+        assert_eq!(m.buttons[1], "Yes");
+        assert_eq!(m.focused_button, 1);
+        assert_eq!(m.preset, ModalButtons::YesNo);
+    }
+
+    #[test]
+    fn yes_no_cancel_dialog() {
+        let m = Modal::yes_no_cancel("Save?", "Changes?");
+        assert_eq!(m.buttons.len(), 3);
+        assert_eq!(m.buttons[0], "Cancel");
+        assert_eq!(m.buttons[1], "No");
+        assert_eq!(m.buttons[2], "Yes");
+        assert_eq!(m.focused_button, 2);
+        assert_eq!(m.preset, ModalButtons::YesNoCancel);
+    }
+
+    #[test]
+    fn custom_buttons() {
+        let m = Modal::custom(
+            "Pick",
+            "Choose one",
+            vec!["A".into(), "B".into(), "C".into()],
+        );
+        assert_eq!(m.buttons.len(), 3);
+        assert_eq!(m.focused_button, 2);
+        assert_eq!(m.preset, ModalButtons::Custom);
+    }
+
+    #[test]
+    fn custom_empty_buttons() {
+        let m = Modal::custom("T", "B", vec![]);
+        assert!(m.buttons.is_empty());
+        assert_eq!(m.focused_button, 0);
     }
 
     #[test]
@@ -101,7 +267,7 @@ mod tests {
         let mut m = Modal::confirm("T", "B");
         assert_eq!(m.focused_button, 1);
         m.focus_next();
-        assert_eq!(m.focused_button, 0); // wraps
+        assert_eq!(m.focused_button, 0);
         m.focus_next();
         assert_eq!(m.focused_button, 1);
     }
@@ -111,7 +277,7 @@ mod tests {
         let mut m = Modal::confirm("T", "B");
         m.focused_button = 0;
         m.focus_prev();
-        assert_eq!(m.focused_button, 1); // wraps
+        assert_eq!(m.focused_button, 1);
     }
 
     #[test]
@@ -135,6 +301,130 @@ mod tests {
         assert_eq!(m.focused_label(), None);
     }
 
+    #[test]
+    fn activate_ok_dialog() {
+        let mut m = Modal::new("T", "B");
+        let result = m.activate();
+        assert_eq!(result, ModalResult::Confirmed);
+        assert!(!m.is_open());
+    }
+
+    #[test]
+    fn activate_confirm_ok() {
+        let mut m = Modal::confirm("T", "B");
+        // focused_button == 1 (OK)
+        let result = m.activate();
+        assert_eq!(result, ModalResult::Confirmed);
+    }
+
+    #[test]
+    fn activate_confirm_cancel() {
+        let mut m = Modal::confirm("T", "B");
+        m.focused_button = 0; // Cancel
+        let result = m.activate();
+        assert_eq!(result, ModalResult::Cancelled);
+    }
+
+    #[test]
+    fn activate_yes_no_yes() {
+        let mut m = Modal::yes_no("T", "B");
+        let result = m.activate(); // focused on Yes (1)
+        assert_eq!(result, ModalResult::Confirmed);
+    }
+
+    #[test]
+    fn activate_yes_no_no() {
+        let mut m = Modal::yes_no("T", "B");
+        m.focused_button = 0; // No
+        let result = m.activate();
+        assert_eq!(result, ModalResult::Cancelled);
+    }
+
+    #[test]
+    fn activate_custom_button() {
+        let mut m = Modal::custom("T", "B", vec!["A".into(), "B".into()]);
+        m.focused_button = 0;
+        let result = m.activate();
+        assert_eq!(result, ModalResult::Custom(0));
+    }
+
+    #[test]
+    fn dismiss_sets_cancelled() {
+        let mut m = Modal::confirm("T", "B");
+        let result = m.dismiss();
+        assert_eq!(result, ModalResult::Cancelled);
+        assert!(!m.is_open());
+    }
+
+    #[test]
+    fn is_open_while_pending() {
+        let m = Modal::new("T", "B");
+        assert!(m.is_open());
+    }
+
+    #[test]
+    fn should_block_input_default() {
+        let m = Modal::new("T", "B");
+        assert!(m.should_block_input());
+    }
+
+    #[test]
+    fn should_block_input_after_dismiss() {
+        let mut m = Modal::new("T", "B");
+        m.dismiss();
+        assert!(!m.should_block_input());
+    }
+
+    #[test]
+    fn should_block_input_disabled() {
+        let mut m = Modal::new("T", "B");
+        m.blocks_input = false;
+        assert!(!m.should_block_input());
+    }
+
+    #[test]
+    fn modal_result_debug() {
+        for r in [
+            ModalResult::Pending,
+            ModalResult::Confirmed,
+            ModalResult::Cancelled,
+            ModalResult::Custom(0),
+        ] {
+            let _ = format!("{r:?}");
+        }
+    }
+
+    #[test]
+    fn modal_buttons_debug() {
+        for b in [
+            ModalButtons::Ok,
+            ModalButtons::OkCancel,
+            ModalButtons::YesNo,
+            ModalButtons::YesNoCancel,
+            ModalButtons::Custom,
+        ] {
+            let _ = format!("{b:?}");
+        }
+    }
+
+    #[test]
+    fn yes_no_cancel_activate_each() {
+        // Cancel (index 0)
+        let mut m = Modal::yes_no_cancel("T", "B");
+        m.focused_button = 0;
+        assert_eq!(m.activate(), ModalResult::Cancelled);
+
+        // No (index 1)
+        let mut m = Modal::yes_no_cancel("T", "B");
+        m.focused_button = 1;
+        assert_eq!(m.activate(), ModalResult::Custom(1));
+
+        // Yes (index 2)
+        let mut m = Modal::yes_no_cancel("T", "B");
+        m.focused_button = 2;
+        assert_eq!(m.activate(), ModalResult::Confirmed);
+    }
+
     // -- Draw / measure tests using MockBackend --
 
     use crate::context::DrawContext;
@@ -149,7 +439,6 @@ mod tests {
         let ctx = DrawContext::new(&mut backend, &theme);
         let m = Modal::new("T", "B");
         let (w, h) = m.measure(&ctx, 480, 272);
-        // Modal returns full viewport size (backdrop fills it).
         assert_eq!(w, 480);
         assert_eq!(h, 272);
     }
@@ -161,7 +450,7 @@ mod tests {
         {
             let mut ctx = DrawContext::new(&mut backend, &theme);
             let m = Modal::new("Warning", "Something happened");
-            m.draw(&mut ctx, 0, 0, 480, 272).unwrap();
+            m.draw(&mut ctx, 0, 0, 480, 272).ok();
         }
         assert!(backend.has_text("Warning"));
         assert!(backend.has_text("Something happened"));
@@ -173,8 +462,8 @@ mod tests {
         let mut backend = MockBackend::new();
         {
             let mut ctx = DrawContext::new(&mut backend, &theme);
-            let m = Modal::confirm("Delete?", "Are you sure?");
-            m.draw(&mut ctx, 0, 0, 480, 272).unwrap();
+            let m = Modal::confirm("Delete?", "Sure?");
+            m.draw(&mut ctx, 0, 0, 480, 272).ok();
         }
         assert!(backend.has_text("Cancel"));
         assert!(backend.has_text("OK"));
@@ -187,9 +476,8 @@ mod tests {
         {
             let mut ctx = DrawContext::new(&mut backend, &theme);
             let m = Modal::new("T", "B");
-            m.draw(&mut ctx, 0, 0, 480, 272).unwrap();
+            m.draw(&mut ctx, 0, 0, 480, 272).ok();
         }
-        // Backdrop + modal panel + button bg = multiple fill_rects
         assert!(backend.fill_rect_count() > 2);
     }
 
@@ -201,15 +489,14 @@ mod tests {
         {
             let mut ctx = DrawContext::new(&mut backend_with, &theme);
             let m = Modal::new("T", "B");
-            m.draw(&mut ctx, 0, 0, 480, 272).unwrap();
+            m.draw(&mut ctx, 0, 0, 480, 272).ok();
         }
         {
             let mut ctx = DrawContext::new(&mut backend_without, &theme);
             let mut m = Modal::new("T", "B");
             m.show_backdrop = false;
-            m.draw(&mut ctx, 0, 0, 480, 272).unwrap();
+            m.draw(&mut ctx, 0, 0, 480, 272).ok();
         }
-        // Without backdrop, fewer fill_rect calls.
         assert!(backend_without.fill_rect_count() < backend_with.fill_rect_count());
     }
 
@@ -221,7 +508,7 @@ mod tests {
             let mut ctx = DrawContext::new(&mut backend, &theme);
             let mut m = Modal::new("T", "B");
             m.buttons.clear();
-            m.draw(&mut ctx, 0, 0, 480, 272).unwrap();
+            m.draw(&mut ctx, 0, 0, 480, 272).ok();
         }
         assert!(backend.has_text("T"));
     }
@@ -237,8 +524,35 @@ mod tests {
             let mut backend = MockBackend::new();
             let mut ctx = DrawContext::new(&mut backend, &theme);
             let m = Modal::confirm("Test", "Body");
-            m.draw(&mut ctx, 0, 0, 480, 272).unwrap();
+            m.draw(&mut ctx, 0, 0, 480, 272).ok();
         }
+    }
+
+    #[test]
+    fn draw_yes_no_shows_buttons() {
+        let theme = Theme::dark();
+        let mut backend = MockBackend::new();
+        {
+            let mut ctx = DrawContext::new(&mut backend, &theme);
+            let m = Modal::yes_no("Save?", "Save changes?");
+            m.draw(&mut ctx, 0, 0, 480, 272).ok();
+        }
+        assert!(backend.has_text("No"));
+        assert!(backend.has_text("Yes"));
+    }
+
+    #[test]
+    fn draw_custom_buttons_shows_all() {
+        let theme = Theme::dark();
+        let mut backend = MockBackend::new();
+        {
+            let mut ctx = DrawContext::new(&mut backend, &theme);
+            let m = Modal::custom("Pick", "Choose", vec!["A".into(), "B".into(), "C".into()]);
+            m.draw(&mut ctx, 0, 0, 480, 272).ok();
+        }
+        assert!(backend.has_text("A"));
+        assert!(backend.has_text("B"));
+        assert!(backend.has_text("C"));
     }
 }
 

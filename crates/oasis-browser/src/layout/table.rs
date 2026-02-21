@@ -1,3 +1,7 @@
+// WIP: automatic table layout has separate entry points. Some functions are
+// unused pending full integration with the main layout engine.
+#![allow(dead_code)]
+
 //! CSS 2.1 automatic table layout algorithm.
 //!
 //! Parses table structure (`<table>` -> `<tr>` -> `<td>`/`<th>`),

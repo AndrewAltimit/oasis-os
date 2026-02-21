@@ -4,10 +4,116 @@
 //! objects identified by a naming convention: `"{id}.frame"`, `"{id}.titlebar"`,
 //! etc. The WM handles behavior; the skin handles appearance.
 
+use std::fmt;
+use std::hash::{Hash, Hasher};
+use std::rc::Rc;
+
 use oasis_types::backend::Color;
 
-/// Unique window identifier (also the SDI object name prefix).
-pub type WindowId = String;
+/// Shared, reference-counted window identifier.
+///
+/// Wraps `Rc<str>` for cheap cloning at 60fps. Compares equal with
+/// `&str`, `String`, and other `WindowId` values, so existing call
+/// sites that do `id == "browser"` keep working.
+#[derive(Clone, Eq)]
+pub struct WindowId(Rc<str>);
+
+impl WindowId {
+    /// Create a new window id from any string-like value.
+    pub fn new(s: impl Into<Rc<str>>) -> Self {
+        Self(s.into())
+    }
+
+    /// Borrow the inner string slice.
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::ops::Deref for WindowId {
+    type Target = str;
+    fn deref(&self) -> &str {
+        &self.0
+    }
+}
+
+impl AsRef<str> for WindowId {
+    fn as_ref(&self) -> &str {
+        &self.0
+    }
+}
+
+impl fmt::Debug for WindowId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{:?}", &*self.0)
+    }
+}
+
+impl fmt::Display for WindowId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl Hash for WindowId {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        (*self.0).hash(state);
+    }
+}
+
+impl PartialEq for WindowId {
+    fn eq(&self, other: &Self) -> bool {
+        *self.0 == *other.0
+    }
+}
+
+impl PartialEq<str> for WindowId {
+    fn eq(&self, other: &str) -> bool {
+        &*self.0 == other
+    }
+}
+
+impl PartialEq<&str> for WindowId {
+    fn eq(&self, other: &&str) -> bool {
+        &*self.0 == *other
+    }
+}
+
+impl PartialEq<String> for WindowId {
+    fn eq(&self, other: &String) -> bool {
+        &*self.0 == other.as_str()
+    }
+}
+
+impl PartialEq<WindowId> for str {
+    fn eq(&self, other: &WindowId) -> bool {
+        self == &*other.0
+    }
+}
+
+impl PartialEq<WindowId> for &str {
+    fn eq(&self, other: &WindowId) -> bool {
+        *self == &*other.0
+    }
+}
+
+impl PartialEq<WindowId> for String {
+    fn eq(&self, other: &WindowId) -> bool {
+        self.as_str() == &*other.0
+    }
+}
+
+impl From<String> for WindowId {
+    fn from(s: String) -> Self {
+        Self(Rc::from(s))
+    }
+}
+
+impl From<&str> for WindowId {
+    fn from(s: &str) -> Self {
+        Self(Rc::from(s))
+    }
+}
 
 /// The behavioral template of a window.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -263,7 +369,7 @@ impl Window {
         let outer_h = config.height + titlebar_h + border * 2;
 
         Self {
-            id: config.id.clone(),
+            id: WindowId::from(config.id.as_str()),
             title: config.title.clone(),
             window_type: config.window_type,
             state: WindowState::Normal,
@@ -314,17 +420,22 @@ impl Window {
         Some((tx, ty, tw, th))
     }
 
-    /// Inset from the titlebar edge for window buttons.
-    const BUTTON_INSET: i32 = 2;
+    /// Compute button inset from the titlebar edge, derived from
+    /// the titlebar height so buttons stay proportional.
+    fn button_inset(theme: &WmTheme) -> i32 {
+        (theme.titlebar_height as i32 / 8).max(1)
+    }
 
-    /// Compute a button's X position given its index (0=close, 1=minimize, 2=maximize).
+    /// Compute a button's X position given its index
+    /// (0=close, 1=minimize, 2=maximize).
     fn button_x(&self, theme: &WmTheme, tx: i32, tw: u32, idx: i32) -> i32 {
         let btn_size = theme.button_size.min(theme.titlebar_height) as i32;
         let sp = theme.button_spacing;
+        let inset = Self::button_inset(theme);
         if theme.button_side == "left" {
-            tx + Self::BUTTON_INSET + idx * (btn_size + sp)
+            tx + inset + idx * (btn_size + sp)
         } else {
-            tx + tw as i32 - (idx + 1) * btn_size - idx * sp - Self::BUTTON_INSET
+            tx + tw as i32 - (idx + 1) * btn_size - idx * sp - inset
         }
     }
 
@@ -378,7 +489,8 @@ impl Window {
         .iter()
         .filter(|&&v| v)
         .count() as i32;
-        let text_inset = Self::BUTTON_INSET * 2; // padding on each side of title text
+        let inset = Self::button_inset(theme);
+        let text_inset = inset * 2; // padding on each side
         let buttons_w = if btn_count > 0 {
             btn_count * btn_size + (btn_count - 1) * sp + text_inset
         } else {

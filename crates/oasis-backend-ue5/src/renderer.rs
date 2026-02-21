@@ -9,7 +9,7 @@
 
 use std::rc::Rc;
 
-use oasis_core::backend::{Color, SdiBackend, TextureId};
+use oasis_core::backend::{Color, GradientStyle, SdiBackend, TextureId};
 use oasis_core::error::{OasisError, Result};
 
 use crate::font;
@@ -656,77 +656,51 @@ impl SdiBackend for Ue5Backend {
     // Extended: Gradient Fills
     // -------------------------------------------------------------------
 
-    fn fill_rect_gradient_v(
+    fn fill_rect_gradient(
         &mut self,
         x: i32,
         y: i32,
         w: u32,
         h: u32,
-        top_color: Color,
-        bottom_color: Color,
+        gradient: &GradientStyle,
     ) -> Result<()> {
         let (tx, ty) = self.translate(x, y);
-        for dy in 0..h as i32 {
-            let color = lerp_color(
-                top_color,
-                bottom_color,
-                dy as u32,
-                h.saturating_sub(1).max(1),
-            );
-            for dx in 0..w as i32 {
-                self.set_pixel(tx + dx, ty + dy, color);
-            }
-        }
-        self.dirty = true;
-        Ok(())
-    }
-
-    fn fill_rect_gradient_h(
-        &mut self,
-        x: i32,
-        y: i32,
-        w: u32,
-        h: u32,
-        left_color: Color,
-        right_color: Color,
-    ) -> Result<()> {
-        let (tx, ty) = self.translate(x, y);
-        for dx in 0..w as i32 {
-            let color = lerp_color(
-                left_color,
-                right_color,
-                dx as u32,
-                w.saturating_sub(1).max(1),
-            );
-            for dy in 0..h as i32 {
-                self.set_pixel(tx + dx, ty + dy, color);
-            }
-        }
-        self.dirty = true;
-        Ok(())
-    }
-
-    fn fill_rect_gradient_4(
-        &mut self,
-        x: i32,
-        y: i32,
-        w: u32,
-        h: u32,
-        top_left: Color,
-        top_right: Color,
-        bottom_left: Color,
-        bottom_right: Color,
-    ) -> Result<()> {
-        let (tx, ty) = self.translate(x, y);
-        let h_max = h.saturating_sub(1).max(1);
-        let w_max = w.saturating_sub(1).max(1);
-        for dy in 0..h as i32 {
-            let left = lerp_color(top_left, bottom_left, dy as u32, h_max);
-            let right = lerp_color(top_right, bottom_right, dy as u32, h_max);
-            for dx in 0..w as i32 {
-                let color = lerp_color(left, right, dx as u32, w_max);
-                self.set_pixel(tx + dx, ty + dy, color);
-            }
+        match *gradient {
+            GradientStyle::Vertical { top, bottom } => {
+                let h_max = h.saturating_sub(1).max(1);
+                for dy in 0..h as i32 {
+                    let color = lerp_color(top, bottom, dy as u32, h_max);
+                    for dx in 0..w as i32 {
+                        self.set_pixel(tx + dx, ty + dy, color);
+                    }
+                }
+            },
+            GradientStyle::Horizontal { left, right } => {
+                let w_max = w.saturating_sub(1).max(1);
+                for dx in 0..w as i32 {
+                    let color = lerp_color(left, right, dx as u32, w_max);
+                    for dy in 0..h as i32 {
+                        self.set_pixel(tx + dx, ty + dy, color);
+                    }
+                }
+            },
+            GradientStyle::FourCorner {
+                top_left,
+                top_right,
+                bottom_left,
+                bottom_right,
+            } => {
+                let h_max = h.saturating_sub(1).max(1);
+                let w_max = w.saturating_sub(1).max(1);
+                for dy in 0..h as i32 {
+                    let left = lerp_color(top_left, bottom_left, dy as u32, h_max);
+                    let right = lerp_color(top_right, bottom_right, dy as u32, h_max);
+                    for dx in 0..w as i32 {
+                        let color = lerp_color(left, right, dx as u32, w_max);
+                        self.set_pixel(tx + dx, ty + dy, color);
+                    }
+                }
+            },
         }
         self.dirty = true;
         Ok(())
@@ -1215,7 +1189,16 @@ mod tests {
         let mut backend = Ue5Backend::new(10, 10);
         backend.clear(Color::BLACK).unwrap();
         backend
-            .fill_rect_gradient_v(0, 0, 10, 10, Color::WHITE, Color::BLACK)
+            .fill_rect_gradient(
+                0,
+                0,
+                10,
+                10,
+                &GradientStyle::Vertical {
+                    top: Color::WHITE,
+                    bottom: Color::BLACK,
+                },
+            )
             .unwrap();
         // Top pixel should be white.
         assert_eq!(backend.buffer()[0], 255);
@@ -1229,7 +1212,16 @@ mod tests {
         let mut backend = Ue5Backend::new(10, 10);
         backend.clear(Color::BLACK).unwrap();
         backend
-            .fill_rect_gradient_h(0, 0, 10, 10, Color::WHITE, Color::BLACK)
+            .fill_rect_gradient(
+                0,
+                0,
+                10,
+                10,
+                &GradientStyle::Horizontal {
+                    left: Color::WHITE,
+                    right: Color::BLACK,
+                },
+            )
             .unwrap();
         // Left pixel should be white.
         assert_eq!(backend.buffer()[0], 255);

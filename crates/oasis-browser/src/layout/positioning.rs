@@ -1,3 +1,6 @@
+// WIP: positioned layout is implemented but not yet wired into the main layout engine.
+#![allow(dead_code)]
+
 //! CSS positioned layout.
 //!
 //! Implements `position: relative`, `position: absolute`, and

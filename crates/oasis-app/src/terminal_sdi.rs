@@ -6,7 +6,7 @@ use oasis_core::sdi::SdiRegistry;
 pub const VISIBLE_OUTPUT_LINES: usize = 12;
 
 /// Maximum lines retained in the scrollback buffer.
-pub const MAX_OUTPUT_LINES: usize = 200;
+pub const MAX_OUTPUT_LINES: usize = 2000;
 
 /// Set up the wallpaper SDI object at z=-1000 (behind everything).
 pub fn setup_wallpaper(sdi: &mut SdiRegistry, tex: TextureId, w: u32, h: u32) {
@@ -156,7 +156,7 @@ mod tests {
     #[test]
     fn constants() {
         assert_eq!(VISIBLE_OUTPUT_LINES, 12);
-        assert_eq!(MAX_OUTPUT_LINES, 200);
+        assert_eq!(MAX_OUTPUT_LINES, 2000);
         assert!(VISIBLE_OUTPUT_LINES < MAX_OUTPUT_LINES);
     }
 

@@ -58,9 +58,10 @@ impl<T> ListView<T> {
 
         let result = (|| {
             let first = (self.scroll_offset / self.item_height as i32).max(0) as usize;
-            // Ceiling division + 1 to cover partially visible first/last items.
-            let visible = (h.div_ceil(self.item_height) + 1) as usize;
-            let last = (first + visible).min(self.items.len());
+            // Exact visible count: items that fit plus one for
+            // a partially visible trailing item.
+            let visible = h / self.item_height + u32::from(!h.is_multiple_of(self.item_height)) + 1;
+            let last = (first + visible as usize).min(self.items.len());
 
             for i in first..last {
                 let item_y = y + (i as i32 * self.item_height as i32) - self.scroll_offset;

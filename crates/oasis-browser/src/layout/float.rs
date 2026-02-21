@@ -1,3 +1,6 @@
+// WIP: float layout is implemented but not yet wired into the main layout engine.
+#![allow(dead_code)]
+
 //! CSS 2.1 float layout.
 //!
 //! Implements `float: left`, `float: right`, and `clear: left/right/both`.

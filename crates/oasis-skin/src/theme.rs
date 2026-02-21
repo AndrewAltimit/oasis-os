@@ -505,6 +505,9 @@ impl SkinTheme {
             shadow_dropdown: Shadow::elevation(shadow_level.min(2)),
             shadow_modal: Shadow::elevation(shadow_level.min(3)),
             shadow_tooltip: Shadow::elevation(shadow_level.min(2)),
+
+            reduced_motion: false,
+            font_scale: 1.0,
         }
     }
 

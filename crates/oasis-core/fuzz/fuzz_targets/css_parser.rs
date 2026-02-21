@@ -1,7 +1,7 @@
 #![no_main]
 
 use libfuzzer_sys::fuzz_target;
-use oasis_core::browser::css::parser::{Stylesheet, parse_inline_style};
+use oasis_core::browser::internals::{Stylesheet, parse_inline_style};
 
 fuzz_target!(|data: &[u8]| {
     if let Ok(input) = std::str::from_utf8(data) {

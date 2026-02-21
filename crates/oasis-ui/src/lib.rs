@@ -27,10 +27,12 @@ pub mod progress_bar;
 pub mod scroll_view;
 pub use oasis_types::shadow;
 pub mod radio;
+pub mod spinner;
 pub mod tab_bar;
 pub mod text_block;
 pub mod theme;
 pub mod toggle;
+pub mod tooltip;
 pub mod widget;
 
 #[cfg(test)]

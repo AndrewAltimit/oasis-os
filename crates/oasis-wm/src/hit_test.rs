@@ -214,7 +214,7 @@ mod tests {
         let (cx, cy, _cw, _ch) = win.content_rect(&theme);
         // Click in the center of content.
         let result = hit_test(&[win], cx + 50, cy + 50, &theme);
-        assert_eq!(result, HitRegion::Content("w1".to_string(), 50, 50));
+        assert_eq!(result, HitRegion::Content(WindowId::from("w1"), 50, 50));
     }
 
     #[test]
@@ -224,7 +224,7 @@ mod tests {
         let (tx, ty, _tw, _th) = win.titlebar_rect(&theme).unwrap();
         // Click in the left side of the titlebar (away from buttons).
         let result = hit_test(&[win], tx + 5, ty + 5, &theme);
-        assert_eq!(result, HitRegion::Titlebar("w1".to_string()));
+        assert_eq!(result, HitRegion::Titlebar(WindowId::from("w1")));
     }
 
     #[test]
@@ -235,7 +235,7 @@ mod tests {
         let result = hit_test(&[win], bx + bw as i32 / 2, by + bh as i32 / 2, &theme);
         assert_eq!(
             result,
-            HitRegion::TitlebarButton("w1".to_string(), ButtonKind::Close)
+            HitRegion::TitlebarButton(WindowId::from("w1"), ButtonKind::Close)
         );
     }
 
@@ -247,7 +247,7 @@ mod tests {
         let result = hit_test(&[win], bx + bw as i32 / 2, by + bh as i32 / 2, &theme);
         assert_eq!(
             result,
-            HitRegion::TitlebarButton("w1".to_string(), ButtonKind::Minimize)
+            HitRegion::TitlebarButton(WindowId::from("w1"), ButtonKind::Minimize)
         );
     }
 
@@ -259,7 +259,7 @@ mod tests {
         let result = hit_test(&[win], bx + bw as i32 / 2, by + bh as i32 / 2, &theme);
         assert_eq!(
             result,
-            HitRegion::TitlebarButton("w1".to_string(), ButtonKind::Maximize)
+            HitRegion::TitlebarButton(WindowId::from("w1"), ButtonKind::Maximize)
         );
     }
 
@@ -287,7 +287,7 @@ mod tests {
         let result = hit_test(&[win], x, y, &theme);
         assert_eq!(
             result,
-            HitRegion::ResizeHandle("w1".to_string(), ResizeEdge::SouthEast)
+            HitRegion::ResizeHandle(WindowId::from("w1"), ResizeEdge::SouthEast)
         );
     }
 
@@ -301,7 +301,7 @@ mod tests {
         let result = hit_test(&[win], 100, 0, &theme);
         assert_eq!(
             result,
-            HitRegion::ResizeHandle("w1".to_string(), ResizeEdge::North)
+            HitRegion::ResizeHandle(WindowId::from("w1"), ResizeEdge::North)
         );
     }
 
@@ -331,7 +331,7 @@ mod tests {
         let win = Window::new(&config, 0, 0, &theme);
         // Click anywhere should be content (no titlebar, no resize).
         let result = hit_test(&[win], 100, 100, &theme);
-        assert_eq!(result, HitRegion::Content("fs".to_string(), 100, 100));
+        assert_eq!(result, HitRegion::Content(WindowId::from("fs"), 100, 100));
     }
 
     #[test]

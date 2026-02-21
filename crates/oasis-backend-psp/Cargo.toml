@@ -13,19 +13,37 @@ license = "MIT"
 repository = "https://github.com/AndrewAltimit/oasis-os"
 authors = ["AndrewAltimit"]
 
+# Feature flags for PSP hardware capabilities:
+#
+# - kernel-mode: Meta-feature that enables all stable kernel sub-features.
+#   Bundles kernel-volatile, kernel-me-clock, and kernel-me. Intentionally
+#   excludes kernel-exception which is broken on PSP-3000 + 6.20 PRO-C.
+#   All kernel features gate psp/kernel for kernel-mode syscall access.
+#
+# - kernel-exception: Register a default exception handler via
+#   sceKernelRegisterDefaultExceptionHandler. Broken on PSP-3000 + 6.20 PRO-C --
+#   excluded from kernel-mode for safety.
+#
+# - kernel-volatile: Access volatile memory (extra 4MB) via
+#   sceKernelVolatileMemTryLock. Useful for large texture/audio buffers.
+#
+# - kernel-me-clock: Read Media Engine clock frequency via
+#   scePowerGetMeClockFrequency. Informational only.
+#
+# - kernel-me: Enable Media Engine coprocessor offloading. Provides the
+#   `me test` command for benchmarking. The ME core has no syscalls, no cached
+#   memory, and no heap -- pure integer/float math only.
 [features]
 default = []
-# kernel-mode bundles all kernel sub-features EXCEPT kernel-exception
-# (intentionally excluded: broken on PSP-3000 + 6.20 PRO-C).
 kernel-mode = ["psp/kernel", "kernel-volatile", "kernel-me-clock", "kernel-me"]
-# Granular kernel sub-features (each enables psp/kernel independently):
-kernel-exception = ["psp/kernel"]    # sceKernelRegisterDefaultExceptionHandler (broken on PSP-3000 + 6.20 PRO-C)
-kernel-volatile = ["psp/kernel"]     # sceKernelVolatileMemTryLock (extra 4MB)
-kernel-me-clock = ["psp/kernel"]     # scePowerGetMeClockFrequency
-kernel-me = ["psp/kernel"]           # ME coprocessor (me test command)
+kernel-exception = ["psp/kernel"]
+kernel-volatile = ["psp/kernel"]
+kernel-me-clock = ["psp/kernel"]
+kernel-me = ["psp/kernel"]
 
 [dependencies]
-psp = { git = "https://github.com/AndrewAltimit/rust-psp", features = ["std"] }
+# Pinned to specific commit for reproducible builds.
+psp = { git = "https://github.com/AndrewAltimit/rust-psp", rev = "4c47345", features = ["std"] }
 oasis-core = { path = "../oasis-core" }
 libm = "0.2"
 
@@ -42,9 +60,10 @@ webpki = { version = "0.22", default-features = false, features = ["std"] }
 getrandom_02 = { package = "getrandom", version = "0.2", features = ["custom"] }
 getrandom = "0.3"
 
-# unicode-width workaround for mips target panic.
+# unicode-width fork: the upstream crate panics on mipsel-sony-psp due to
+# a lookup table issue. This fork patches the panic for the MIPS target.
 [patch.crates-io]
-unicode-width = { git = "https://git.sr.ht/~sajattack/unicode-width" }
+unicode-width = { git = "https://git.sr.ht/~sajattack/unicode-width", rev = "114ac47" }
 
 [profile.release]
 lto = true
