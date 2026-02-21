@@ -353,8 +353,8 @@ impl PspBackend {
                 let dx = (x2 - x1) as f32;
                 let dy = (y2 - y1) as f32;
                 let len = libm::sqrtf(dx * dx + dy * dy).max(1.0);
-                let nx = (-dy / len) as i32;
-                let ny = (dx / len) as i32;
+                let nx = -dy / len;
+                let ny = dx / len;
                 let half = w / 2;
                 let line_count = w as usize;
 
@@ -368,8 +368,8 @@ impl PspBackend {
 
                 for i in 0..line_count {
                     let offset = i as i32 - half;
-                    let ox = nx * offset;
-                    let oy = ny * offset;
+                    let ox = (nx * offset as f32) as i32;
+                    let oy = (ny * offset as f32) as i32;
                     ptr::write(
                         verts.add(i * 2),
                         ColorVertex {

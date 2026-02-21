@@ -681,10 +681,10 @@ impl SdiBackend for SdlBackend {
             return self.fill_rect_gradient(x, y, w, h, gradient);
         }
         // Currently only Vertical gradients get rounded-rect acceleration;
-        // other styles fall back to the sharp-cornered implementation.
+        // other styles fall back to a flat rounded rect to preserve shape.
         let (top_color, bottom_color) = match *gradient {
             GradientStyle::Vertical { top, bottom } => (top, bottom),
-            _ => return self.fill_rect_gradient(x, y, w, h, gradient),
+            _ => return self.fill_rounded_rect(x, y, w, h, radius, gradient.primary_color()),
         };
         let (tx, ty) = self.translate(x, y);
         let r = (radius as i32).min(w as i32 / 2).min(h as i32 / 2);
