@@ -73,7 +73,8 @@ pub fn build_layout_tree(
 
     let mut root = LayoutBox::new(BoxType::Block, style, Some(start_node));
 
-    // Recursively build children.
+    // Collect child IDs to avoid holding a borrow on the node while
+    // recursing into `build_children` (which also borrows `doc`).
     let children = doc.get(start_node).children.clone();
     let child_boxes = build_children(doc, &children, styles, base_url, image_info);
     root.children = wrap_anonymous(child_boxes, &root.style);
@@ -410,7 +411,8 @@ fn build_box_for_node(
                 }
             }
 
-            // Recursively build children.
+            // Collect child IDs to avoid holding a borrow on `node`
+            // while recursing into `build_children`.
             let child_ids = node.children.clone();
             let mut child_boxes = build_children(doc, &child_ids, styles, base_url, image_info);
 

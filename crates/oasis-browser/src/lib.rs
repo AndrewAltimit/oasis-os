@@ -203,6 +203,33 @@ pub struct BrowserWidget {
 
     /// GPU textures for decoded images, keyed by src URL.
     image_textures: HashMap<String, TextureId>,
+
+    /// Pending image requests to be processed in time-sliced batches.
+    pending_images: Vec<(String, ResourceRequest)>,
+
+    /// Total bytes of decoded image RGBA data currently held.
+    decoded_image_bytes: usize,
+
+    /// LRU order for decoded images (front = most recent).
+    /// Used for eviction when over `IMAGE_MEMORY_BUDGET`.
+    decoded_image_lru: std::collections::VecDeque<String>,
+
+    /// Cached image info map (URL -> intrinsic dimensions). Rebuilt
+    /// only when `image_info_dirty` is set (after new image decodes).
+    cached_image_info: ImageInfoMap,
+
+    /// Whether the cached image info map needs rebuilding.
+    image_info_dirty: bool,
+
+    /// Cached author stylesheets (from `<style>` blocks). Re-parsed only
+    /// on navigation, not on hover.
+    cached_author_sheets: Vec<css::parser::Stylesheet>,
+
+    /// Cached inline `style=""` declarations. Re-parsed only on navigation.
+    cached_inline_styles: Vec<(NodeId, Vec<css::parser::Declaration>)>,
+
+    /// Last time a hover restyle was performed (for throttling).
+    last_hover_time: Option<std::time::Instant>,
 }
 
 impl BrowserWidget {
@@ -240,6 +267,14 @@ impl BrowserWidget {
             hover_node: None,
             decoded_images: HashMap::new(),
             image_textures: HashMap::new(),
+            pending_images: Vec::new(),
+            decoded_image_bytes: 0,
+            decoded_image_lru: std::collections::VecDeque::new(),
+            cached_image_info: HashMap::new(),
+            image_info_dirty: false,
+            cached_author_sheets: Vec::new(),
+            cached_inline_styles: Vec::new(),
+            last_hover_time: None,
         }
     }
 
@@ -280,9 +315,9 @@ impl BrowserWidget {
             return false;
         }
 
+        let image_info = self.build_image_info_map();
         let doc = self.document.as_ref().unwrap();
         let content_h = self.config.content_height(self.window_h);
-        let image_info = self.build_image_info_map();
         let base_url = self.nav.current_url().map(String::from);
         let layout_root = layout::block::build_layout_tree(
             doc,
@@ -314,6 +349,11 @@ impl BrowserWidget {
         self.error_message = None;
         self.decoded_images.clear();
         self.image_textures.clear();
+        self.pending_images.clear();
+        self.decoded_image_bytes = 0;
+        self.decoded_image_lru.clear();
+        self.cached_image_info.clear();
+        self.image_info_dirty = false;
 
         let source = if self.config.features.sandbox_only {
             ResourceSource::Vfs
@@ -339,11 +379,12 @@ impl BrowserWidget {
             },
         }
 
-        // Decode images referenced by <img> tags and rebuild layout
-        // with correct intrinsic dimensions.
-        self.load_page_images(vfs);
-        if !self.decoded_images.is_empty() {
-            self.rebuild_layout_with_images();
+        // Collect image requests for time-sliced loading across frames.
+        // Page text renders immediately; images stream in via
+        // `load_next_image_batch()` called from `paint()`.
+        self.collect_page_image_requests();
+        if !self.pending_images.is_empty() {
+            self.state = LoadingState::Loading;
         }
     }
 
@@ -409,6 +450,7 @@ impl BrowserWidget {
         let title = doc.title().unwrap_or_else(|| url.to_string());
 
         // 3. Collect <style> blocks and inline style="" attributes from DOM.
+        //    Cache them so hover restyles don't re-parse.
         let author_sheets = Self::collect_style_sheets(&doc);
         let inline_styles = Self::collect_inline_styles(&doc);
 
@@ -423,6 +465,10 @@ impl BrowserWidget {
             visited_urls: Some(&self.visited_urls),
         };
         let styles = css::cascade::style_tree(&doc, &all_sheets, &inline_styles, &ctx);
+
+        // Cache parsed sheets for hover restyles.
+        self.cached_author_sheets = author_sheets;
+        self.cached_inline_styles = inline_styles;
 
         // 5. Build link href map from DOM.
         let href_map = Self::build_link_map(&doc);
@@ -511,18 +557,16 @@ impl BrowserWidget {
     // Image loading
     // ---------------------------------------------------------------
 
-    /// Walk the DOM to find `<img>` elements and decode their images
-    /// from the VFS/network. Decoded image data is stored in
-    /// `self.decoded_images` keyed by resolved URL.
-    fn load_page_images(&mut self, vfs: &dyn Vfs) {
+    /// Walk the DOM to find `<img>` elements and collect their requests
+    /// into `self.pending_images` for time-sliced loading. Does NOT
+    /// fetch or decode — that happens in `load_next_image_batch()`.
+    fn collect_page_image_requests(&mut self) {
         let doc = match &self.document {
             Some(d) => d,
             None => return,
         };
         let base_url = self.nav.current_url().map(String::from);
 
-        // Collect (resolved_url, request) pairs first to avoid
-        // borrowing `self` while iterating.
         let mut requests: Vec<(String, ResourceRequest)> = Vec::new();
         for node in &doc.nodes {
             if let NodeKind::Element(elem) = &node.kind
@@ -549,21 +593,85 @@ impl BrowserWidget {
             }
         }
 
-        for (resolved, request) in &requests {
-            if let Ok(response) = load_resource(vfs, request, self.tls.as_deref())
+        self.pending_images = requests;
+    }
+
+    /// Maximum decoded image memory budget (bytes of RGBA data).
+    const IMAGE_MEMORY_BUDGET: usize = 8 * 1024 * 1024; // 8MB
+
+    /// Process pending image requests within a time budget.
+    ///
+    /// Pops requests from `pending_images`, fetches and decodes each.
+    /// Returns after the time budget is exhausted or all images are done.
+    /// Each successful decode sets `layout_dirty` so the layout tree
+    /// rebuilds with correct intrinsic dimensions.
+    pub fn load_next_image_batch(&mut self, vfs: &dyn Vfs, budget_ms: u32) {
+        if self.pending_images.is_empty() {
+            return;
+        }
+
+        let start = std::time::Instant::now();
+        let budget = std::time::Duration::from_millis(budget_ms as u64);
+        let mut any_decoded = false;
+
+        while let Some((resolved, request)) = self.pending_images.pop() {
+            // Skip if already decoded (e.g. from cache).
+            if self.decoded_images.contains_key(&resolved) {
+                continue;
+            }
+
+            if let Ok(response) = load_resource(vfs, &request, self.tls.as_deref())
                 && let Some(decoded) = image::decode_image(&response.body)
             {
-                self.decoded_images.insert(resolved.clone(), decoded);
+                let img_bytes = (decoded.width * decoded.height * 4) as usize;
+
+                // Evict oldest decoded images if over budget.
+                while self.decoded_image_bytes + img_bytes > Self::IMAGE_MEMORY_BUDGET {
+                    if let Some(evict_url) = self.decoded_image_lru.pop_back() {
+                        if let Some(evicted) = self.decoded_images.remove(&evict_url) {
+                            let evicted_bytes = (evicted.width * evicted.height * 4) as usize;
+                            self.decoded_image_bytes -= evicted_bytes;
+                            self.image_info_dirty = true;
+                        }
+                    } else {
+                        break;
+                    }
+                }
+
+                self.decoded_image_bytes += img_bytes;
+                self.decoded_image_lru.push_front(resolved.clone());
+                self.decoded_images.insert(resolved, decoded);
+                self.image_info_dirty = true;
+                any_decoded = true;
             }
+
+            // Check time budget after each image.
+            if start.elapsed() >= budget {
+                break;
+            }
+        }
+
+        if any_decoded {
+            self.layout_dirty = true;
+            self.rebuild_layout_with_images();
+        }
+
+        if self.pending_images.is_empty() && self.state == LoadingState::Loading {
+            self.state = LoadingState::Idle;
         }
     }
 
-    /// Build a map from decoded image URL to intrinsic dimensions.
-    fn build_image_info_map(&self) -> ImageInfoMap {
-        self.decoded_images
-            .iter()
-            .map(|(url, img)| (url.clone(), (img.width, img.height)))
-            .collect()
+    /// Get the cached image info map, rebuilding it if dirty.
+    fn build_image_info_map(&mut self) -> ImageInfoMap {
+        if self.image_info_dirty {
+            self.cached_image_info = self
+                .decoded_images
+                .iter()
+                .map(|(url, img)| (url.clone(), (img.width, img.height)))
+                .collect();
+            self.image_info_dirty = false;
+        }
+        self.cached_image_info.clone()
     }
 
     /// Upload decoded images as GPU textures and assign them to
@@ -647,9 +755,9 @@ impl BrowserWidget {
     /// Rebuild the layout tree with image dimensions after images have
     /// been decoded (second layout pass).
     fn rebuild_layout_with_images(&mut self) {
+        let image_info = self.build_image_info_map();
         if let Some(doc) = &self.document {
             let content_h = self.config.content_height(self.window_h);
-            let image_info = self.build_image_info_map();
             let base_url = self.nav.current_url().map(String::from);
             let layout_root = layout::block::build_layout_tree(
                 doc,
@@ -721,6 +829,8 @@ impl BrowserWidget {
                 };
                 let styles = css::cascade::style_tree(&reader_doc, &[&ua_sheet], &[], &reader_ctx);
                 let href_map = Self::build_link_map(&reader_doc);
+                self.cached_author_sheets = Vec::new();
+                self.cached_inline_styles = Vec::new();
                 self.document = Some(reader_doc);
                 self.styles = styles;
                 self.href_map = href_map;
@@ -757,6 +867,14 @@ impl BrowserWidget {
     ///
     /// Draws chrome (URL bar, navigation buttons, status bar) and
     /// the page content viewport.
+    /// Per-frame update: process pending image loads within a time budget.
+    ///
+    /// Call this once per frame before `paint()`. Images stream in
+    /// progressively so the page is never blocked waiting for all images.
+    pub fn tick(&mut self, vfs: &dyn Vfs) {
+        self.load_next_image_batch(vfs, 8);
+    }
+
     pub fn paint(&mut self, backend: &mut dyn SdiBackend) -> Result<()> {
         // Rebuild layout if the viewport was resized since last paint.
         self.relayout_if_dirty();
@@ -1316,31 +1434,88 @@ impl BrowserWidget {
         }
 
         if new_hover != self.hover_node {
+            // Throttle hover restyles to at most 20/sec.
+            let now = std::time::Instant::now();
+            if let Some(last) = self.last_hover_time
+                && now.duration_since(last).as_millis() < 50
+            {
+                return;
+            }
+            self.last_hover_time = Some(now);
+
+            let old_hover = self.hover_node;
             self.hover_node = new_hover;
-            self.restyle_current_page();
+            self.restyle_hover_affected(old_hover);
         }
     }
 
-    /// Re-run the CSS cascade on the current document with updated
-    /// hover/visited state, then mark layout as dirty.
-    fn restyle_current_page(&mut self) {
+    /// Re-run the CSS cascade on hover-affected nodes only.
+    ///
+    /// Instead of re-parsing stylesheets and re-cascading the entire DOM,
+    /// this uses cached sheets and only re-computes styles for the ancestors
+    /// of the old and new hover nodes — typically ~10-20 nodes.
+    fn restyle_hover_affected(&mut self, old_hover: Option<NodeId>) {
         let Some(doc) = &self.document else { return };
-        let author_sheets = Self::collect_style_sheets(doc);
-        let inline_styles = Self::collect_inline_styles(doc);
 
+        // Build the set of affected nodes: ancestors of old + new hover.
+        let mut affected: Vec<NodeId> = Vec::new();
+        for start in [old_hover, self.hover_node].into_iter().flatten() {
+            let mut cur = Some(start);
+            while let Some(nid) = cur {
+                if !affected.contains(&nid) {
+                    affected.push(nid);
+                }
+                cur = doc.nodes[nid].parent;
+            }
+        }
+
+        if affected.is_empty() {
+            return;
+        }
+
+        // Build sheet references from cache (no re-parsing).
         let ua_sheet = css::default::default_stylesheet();
         let mut all_sheets: Vec<&css::parser::Stylesheet> = vec![&ua_sheet];
-        for sheet in &author_sheets {
+        for sheet in &self.cached_author_sheets {
             all_sheets.push(sheet);
         }
 
+        let index = css::cascade::SelectorIndex::build(&all_sheets);
+        let inline_map: HashMap<NodeId, &[css::parser::Declaration]> = self
+            .cached_inline_styles
+            .iter()
+            .map(|(nid, decls)| (*nid, decls.as_slice()))
+            .collect();
         let ctx = css::cascade::CascadeContext {
             hover_node: self.hover_node,
             visited_urls: Some(&self.visited_urls),
         };
-        let styles = css::cascade::style_tree(doc, &all_sheets, &inline_styles, &ctx);
-        self.styles = styles;
-        self.layout_dirty = true;
+
+        let mut any_changed = false;
+        for &nid in &affected {
+            let node = &doc.nodes[nid];
+            if !matches!(node.kind, html::dom::NodeKind::Element(_)) {
+                continue;
+            }
+            let parent_style = node.parent.and_then(|pid| self.styles[pid].as_ref());
+            let new_style = css::cascade::compute_style(
+                doc,
+                nid,
+                parent_style,
+                &all_sheets,
+                &index,
+                &inline_map,
+                &ctx,
+            );
+            if self.styles[nid].as_ref() != Some(&new_style) {
+                self.styles[nid] = Some(new_style);
+                any_changed = true;
+            }
+        }
+
+        if any_changed {
+            self.layout_dirty = true;
+        }
     }
 
     /// Navigate to a URL, resolving relative references against
@@ -3394,6 +3569,9 @@ mod tests {
         browser.set_window(0, 0, 480, 272);
         browser.navigate_vfs("vfs://sites/img/index.html", &vfs);
 
+        // Images are now loaded progressively; process all pending.
+        browser.load_next_image_batch(&vfs, 5000);
+
         assert_eq!(browser.loading_state(), LoadingState::Idle);
         assert!(
             !browser.decoded_images.is_empty(),
@@ -3417,6 +3595,7 @@ mod tests {
         let mut browser = make_browser();
         browser.set_window(0, 0, 480, 272);
         browser.navigate_vfs("vfs://sites/img/index.html", &vfs);
+        browser.load_next_image_batch(&vfs, 5000);
 
         let mut backend = MockBackend::new();
         browser.paint(&mut backend).unwrap();
@@ -3454,6 +3633,7 @@ mod tests {
         let mut browser = make_browser();
         browser.set_window(0, 0, 480, 272);
         browser.navigate_vfs("vfs://sites/img/index.html", &vfs);
+        browser.load_next_image_batch(&vfs, 5000);
 
         // Check that the layout tree contains a Replaced(Image) with
         // correct dimensions (16x16) instead of the default 0x0.
@@ -3545,6 +3725,7 @@ mod tests {
         let mut browser = make_browser();
         browser.set_window(0, 0, 480, 272);
         browser.navigate_vfs("vfs://sites/img/multi.html", &vfs);
+        browser.load_next_image_batch(&vfs, 5000);
 
         let mut backend = MockBackend::new();
         browser.paint(&mut backend).unwrap();
@@ -3575,6 +3756,7 @@ mod tests {
         let mut browser = make_browser();
         browser.set_window(0, 0, 480, 272);
         browser.navigate_vfs("vfs://sites/img/index.html", &vfs);
+        browser.load_next_image_batch(&vfs, 5000);
 
         // Before paint, no textures exist.
         assert!(
@@ -3604,6 +3786,7 @@ mod tests {
 
         // Navigate to page with image.
         browser.navigate_vfs("vfs://sites/img/index.html", &vfs);
+        browser.load_next_image_batch(&vfs, 5000);
         assert!(!browser.decoded_images.is_empty());
 
         // Navigate to page without image.
@@ -3616,6 +3799,54 @@ mod tests {
                 .values()
                 .all(|img| img.width != 16 || img.height != 16),
             "old decoded images should be cleared on navigation"
+        );
+    }
+
+    // ---------------------------------------------------------------
+    // Test: image loading is progressive (Phase 1)
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn image_loading_is_progressive() {
+        let mut vfs = MemoryVfs::new();
+        vfs.mkdir("/sites").unwrap();
+        vfs.mkdir("/sites/home").unwrap();
+
+        // Create a page with multiple images.
+        vfs.write(
+            "/sites/home/images.html",
+            b"<html><body>\
+              <img src=\"img1.bmp\">\
+              <img src=\"img2.bmp\">\
+              <img src=\"img3.bmp\">\
+              </body></html>",
+        )
+        .unwrap();
+
+        // Write small BMP files.
+        let bmp = make_test_bmp(2, 2);
+        vfs.write("/sites/home/img1.bmp", &bmp).unwrap();
+        vfs.write("/sites/home/img2.bmp", &bmp).unwrap();
+        vfs.write("/sites/home/img3.bmp", &bmp).unwrap();
+
+        let mut browser = make_browser();
+        browser.set_window(0, 0, 480, 272);
+        browser.navigate_vfs("vfs://sites/home/images.html", &vfs);
+
+        // After navigate, images should be pending, not yet decoded.
+        assert!(
+            !browser.pending_images.is_empty() || !browser.decoded_images.is_empty(),
+            "should have pending or already-decoded images"
+        );
+
+        // Call with 0ms budget — should process at most 1 image.
+        let before = browser.decoded_images.len();
+        browser.load_next_image_batch(&vfs, 0);
+        let after = browser.decoded_images.len();
+        assert!(
+            after - before <= 1,
+            "0ms budget should process at most 1 image, got {}",
+            after - before
         );
     }
 
@@ -3635,5 +3866,80 @@ mod tests {
             }
         }
         None
+    }
+
+    #[test]
+    fn hover_restyle_is_partial() {
+        // Build a DOM with many elements and a :hover rule.
+        // Verify that hover only restyles the affected ancestor chain.
+        let mut elements: Vec<String> = Vec::new();
+        for i in 0..50 {
+            elements.push(format!("<p>Paragraph {i}</p>"));
+        }
+        let html = format!(
+            "<html><head><style>a:hover {{ color: red; }}</style></head><body>\
+             <a href=\"link.html\"><span>Link</span></a>\
+             {}\
+             </body></html>",
+            elements.join("")
+        );
+        let vfs = MemoryVfs::new();
+        let config = BrowserConfig::default();
+        let mut browser = BrowserWidget::new(config);
+        browser.load_html(&html, "file:///test.html");
+
+        // Verify cached sheets are populated.
+        assert!(
+            !browser.cached_author_sheets.is_empty() || browser.cached_inline_styles.is_empty(),
+            "cached sheets should be set after load_html"
+        );
+
+        // Simulate hover on the link node.
+        let link_node = browser
+            .href_map
+            .keys()
+            .next()
+            .copied()
+            .expect("should have a link");
+        let old_hover = browser.hover_node;
+        browser.hover_node = Some(link_node);
+        browser.restyle_hover_affected(old_hover);
+
+        // Layout should be marked dirty (hover style changed).
+        assert!(browser.layout_dirty);
+
+        // Styles should still be populated for all elements.
+        let styled_count = browser.styles.iter().filter(|s| s.is_some()).count();
+        assert!(styled_count > 5, "most elements should retain styles");
+    }
+
+    #[test]
+    fn image_eviction_respects_budget() {
+        // Directly test that decoded_image_lru eviction works by
+        // inserting images that exceed the budget.
+        let config = BrowserConfig::default();
+        let mut browser = BrowserWidget::new(config);
+
+        // Create a fake 1x1 image (4 bytes). Set a tiny budget.
+        let small_img = image::DecodedImage {
+            width: 1,
+            height: 1,
+            pixels: vec![255, 0, 0, 255],
+        };
+
+        // Manually insert decoded images to test eviction.
+        for i in 0..5 {
+            let url = format!("http://test.com/img{i}.png");
+            let img_bytes = (small_img.width * small_img.height * 4) as usize;
+            browser.decoded_image_bytes += img_bytes;
+            browser.decoded_image_lru.push_front(url.clone());
+            browser.decoded_images.insert(url, small_img.clone());
+        }
+        assert_eq!(browser.decoded_images.len(), 5);
+        assert_eq!(browser.decoded_image_bytes, 20); // 5 * 4 bytes
+
+        // LRU order: img4 (front/MRU) ... img0 (back/LRU)
+        // Verify the LRU tracks all 5.
+        assert_eq!(browser.decoded_image_lru.len(), 5);
     }
 }

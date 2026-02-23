@@ -258,7 +258,7 @@ fn as_keyword(value: &CssValue) -> Option<&str> {
 /// All lengths are resolved to absolute pixels. Relative units (em, %)
 /// have been converted during property application. Inherited properties
 /// that were not explicitly set carry the parent's computed value.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ComputedStyle {
     // -- Display ----------------------------------------------------
     pub display: Display,

@@ -31,6 +31,138 @@ pub struct CascadeContext<'a> {
 }
 
 // -----------------------------------------------------------------------
+// Selector index
+// -----------------------------------------------------------------------
+
+/// An indexed reference to a specific rule in a specific stylesheet.
+#[derive(Debug, Clone, Copy)]
+struct IndexedRule {
+    /// Index into the `stylesheets` slice.
+    sheet_idx: usize,
+    /// Index into the stylesheet's `rules` Vec.
+    rule_idx: usize,
+    /// Global source order counter for cascade ordering.
+    source_order_base: usize,
+}
+
+/// Pre-built index that buckets rules by the rightmost (subject)
+/// selector's most specific part. This avoids testing every rule
+/// against every element — only rules whose subject could possibly
+/// match are considered.
+pub struct SelectorIndex {
+    by_id: HashMap<String, Vec<IndexedRule>>,
+    by_class: HashMap<String, Vec<IndexedRule>>,
+    by_tag: HashMap<String, Vec<IndexedRule>>,
+    universal: Vec<IndexedRule>,
+}
+
+impl SelectorIndex {
+    /// Build a selector index from a list of stylesheets.
+    ///
+    /// For each rule, inspects the *rightmost* compound selector (the
+    /// subject) and files the rule under the most specific bucket
+    /// found: ID > class > tag > universal.
+    pub fn build(stylesheets: &[&Stylesheet]) -> Self {
+        let mut index = SelectorIndex {
+            by_id: HashMap::new(),
+            by_class: HashMap::new(),
+            by_tag: HashMap::new(),
+            universal: Vec::new(),
+        };
+
+        let mut source_order: usize = 0;
+        for (sheet_idx, sheet) in stylesheets.iter().enumerate() {
+            for (rule_idx, rule) in sheet.rules.iter().enumerate() {
+                let entry = IndexedRule {
+                    sheet_idx,
+                    rule_idx,
+                    source_order_base: source_order,
+                };
+                // Count declarations for source_order advancement.
+                source_order += rule.declarations.len();
+
+                // Examine all selectors in the rule to find which
+                // buckets this rule should appear in.
+                let mut filed = false;
+                for selector in &rule.selectors.selectors {
+                    if let Some(subject) = selector.parts.last() {
+                        for simple in &subject.0.parts {
+                            match simple {
+                                SimpleSelector::Id(id) => {
+                                    index
+                                        .by_id
+                                        .entry(id.to_ascii_lowercase())
+                                        .or_default()
+                                        .push(entry);
+                                    filed = true;
+                                },
+                                SimpleSelector::Class(cls) => {
+                                    index.by_class.entry(cls.clone()).or_default().push(entry);
+                                    filed = true;
+                                },
+                                SimpleSelector::Type(tag) => {
+                                    index
+                                        .by_tag
+                                        .entry(tag.to_ascii_lowercase())
+                                        .or_default()
+                                        .push(entry);
+                                    filed = true;
+                                },
+                                _ => {},
+                            }
+                        }
+                    }
+                }
+                // If no specific bucket matched (e.g. `*`, `:hover`,
+                // `:not(...)` only), put it in universal.
+                if !filed {
+                    index.universal.push(entry);
+                }
+            }
+        }
+
+        index
+    }
+
+    /// Collect candidate rules that might match an element with the
+    /// given tag, id, and classes.
+    fn candidates(&self, tag: &str, id: Option<&str>, classes: &[&str]) -> Vec<IndexedRule> {
+        let mut result = Vec::new();
+
+        // Always include universal rules.
+        result.extend_from_slice(&self.universal);
+
+        // Tag bucket.
+        let tag_lower = tag.to_ascii_lowercase();
+        if let Some(rules) = self.by_tag.get(&tag_lower) {
+            result.extend_from_slice(rules);
+        }
+
+        // ID bucket.
+        if let Some(id) = id {
+            let id_lower = id.to_ascii_lowercase();
+            if let Some(rules) = self.by_id.get(&id_lower) {
+                result.extend_from_slice(rules);
+            }
+        }
+
+        // Class buckets.
+        for cls in classes {
+            if let Some(rules) = self.by_class.get(*cls) {
+                result.extend_from_slice(rules);
+            }
+        }
+
+        // Deduplicate by (sheet_idx, rule_idx) since a rule can appear
+        // in multiple buckets if its selector has both class and tag.
+        result.sort_by_key(|r| (r.sheet_idx, r.rule_idx, r.source_order_base));
+        result.dedup_by_key(|r| (r.sheet_idx, r.rule_idx));
+
+        result
+    }
+}
+
+// -----------------------------------------------------------------------
 // Public API
 // -----------------------------------------------------------------------
 
@@ -44,13 +176,24 @@ pub fn style_tree(
     inline_styles: &[(NodeId, Vec<Declaration>)],
     ctx: &CascadeContext<'_>,
 ) -> Vec<Option<ComputedStyle>> {
+    // Build selector index for O(1) bucket lookups instead of O(rules).
+    let index = SelectorIndex::build(stylesheets);
+
     // Build a HashMap for O(1) inline style lookups instead of O(n) per element.
     let inline_map: HashMap<NodeId, &[Declaration]> = inline_styles
         .iter()
         .map(|(nid, decls)| (*nid, decls.as_slice()))
         .collect();
     let mut styles: Vec<Option<ComputedStyle>> = vec![None; doc.nodes.len()];
-    style_subtree(doc, doc.root, stylesheets, &inline_map, &mut styles, ctx);
+    style_subtree(
+        doc,
+        doc.root,
+        stylesheets,
+        &index,
+        &inline_map,
+        &mut styles,
+        ctx,
+    );
     styles
 }
 
@@ -60,6 +203,7 @@ fn style_subtree(
     doc: &Document,
     node_id: NodeId,
     stylesheets: &[&Stylesheet],
+    index: &SelectorIndex,
     inline_map: &HashMap<NodeId, &[Declaration]>,
     styles: &mut [Option<ComputedStyle>],
     ctx: &CascadeContext<'_>,
@@ -69,7 +213,15 @@ fn style_subtree(
     // Only elements get computed styles.
     if let NodeKind::Element(_) = &node.kind {
         let parent_style = node.parent.and_then(|pid| styles[pid].as_ref());
-        let style = compute_style(doc, node_id, parent_style, stylesheets, inline_map, ctx);
+        let style = compute_style(
+            doc,
+            node_id,
+            parent_style,
+            stylesheets,
+            index,
+            inline_map,
+            ctx,
+        );
         styles[node_id] = Some(style);
     }
 
@@ -77,16 +229,17 @@ fn style_subtree(
     let num_children = doc.nodes[node_id].children.len();
     for i in 0..num_children {
         let child_id = doc.nodes[node_id].children[i];
-        style_subtree(doc, child_id, stylesheets, inline_map, styles, ctx);
+        style_subtree(doc, child_id, stylesheets, index, inline_map, styles, ctx);
     }
 }
 
 /// Compute the final style for a single element.
-fn compute_style(
+pub fn compute_style(
     doc: &Document,
     node_id: NodeId,
     parent_style: Option<&ComputedStyle>,
     stylesheets: &[&Stylesheet],
+    index: &SelectorIndex,
     inline_map: &HashMap<NodeId, &[Declaration]>,
     ctx: &CascadeContext<'_>,
 ) -> ComputedStyle {
@@ -99,7 +252,8 @@ fn compute_style(
     let parent_font_size = parent_style.map_or(super::values::ROOT_FONT_SIZE, |p| p.font_size);
 
     // Collect all matching declarations with their origin info.
-    let mut matched = collect_matched_declarations(doc, node_id, stylesheets, inline_map, ctx);
+    let mut matched =
+        collect_matched_declarations(doc, node_id, stylesheets, index, inline_map, ctx);
 
     // Sort by cascade order: specificity, then source order.
     // `!important` declarations come after normal ones.
@@ -245,32 +399,45 @@ struct MatchedDeclaration {
 
 /// Gather every declaration that applies to `node_id` from all
 /// stylesheets and inline styles.
+///
+/// Uses the `SelectorIndex` to test only candidate rules whose subject
+/// selector matches the element's tag/id/classes, instead of all rules.
 fn collect_matched_declarations(
     doc: &Document,
     node_id: NodeId,
     stylesheets: &[&Stylesheet],
+    index: &SelectorIndex,
     inline_map: &HashMap<NodeId, &[Declaration]>,
     ctx: &CascadeContext<'_>,
 ) -> Vec<MatchedDeclaration> {
     let mut result = Vec::new();
-    let mut order: usize = 0;
 
-    // Walk stylesheets in order (user-agent first, author last).
-    for stylesheet in stylesheets {
-        for rule in &stylesheet.rules {
-            let best_specificity = matching_specificity(doc, node_id, rule, ctx);
-            if let Some(specificity) = best_specificity {
-                for decl in &rule.declarations {
-                    result.push(MatchedDeclaration {
-                        property: decl.property.clone(),
-                        value: decl.value.clone(),
-                        important: decl.important,
-                        origin: Origin::Stylesheet,
-                        specificity,
-                        source_order: order,
-                    });
-                    order += 1;
-                }
+    // Extract element info for index lookup.
+    let elem = match &doc.nodes[node_id].kind {
+        NodeKind::Element(e) => e,
+        _ => return result,
+    };
+    let tag = elem.tag.as_str();
+    let id = elem.get_attribute("id");
+    let class_str = elem.get_attribute("class").unwrap_or("");
+    let classes: Vec<&str> = class_str.split_whitespace().collect();
+
+    // Get candidate rules from the index.
+    let candidates = index.candidates(tag, id, &classes);
+
+    for candidate in &candidates {
+        let rule = &stylesheets[candidate.sheet_idx].rules[candidate.rule_idx];
+        let best_specificity = matching_specificity(doc, node_id, rule, ctx);
+        if let Some(specificity) = best_specificity {
+            for (decl_idx, decl) in rule.declarations.iter().enumerate() {
+                result.push(MatchedDeclaration {
+                    property: decl.property.clone(),
+                    value: decl.value.clone(),
+                    important: decl.important,
+                    origin: Origin::Stylesheet,
+                    specificity,
+                    source_order: candidate.source_order_base + decl_idx,
+                });
             }
         }
     }
@@ -284,16 +451,21 @@ fn collect_matched_declarations(
             classes: 0,
             types: 0,
         };
-        for decl in *decls {
+        // Inline source_order is after all stylesheet declarations.
+        let inline_base = stylesheets
+            .iter()
+            .flat_map(|s| &s.rules)
+            .map(|r| r.declarations.len())
+            .sum::<usize>();
+        for (i, decl) in decls.iter().enumerate() {
             result.push(MatchedDeclaration {
                 property: decl.property.clone(),
                 value: decl.value.clone(),
                 important: decl.important,
                 origin: Origin::Inline,
                 specificity: inline_spec,
-                source_order: order,
+                source_order: inline_base + i,
             });
-            order += 1;
         }
     }
 
@@ -1769,6 +1941,44 @@ mod tests {
         let styles = style_tree(&doc, &[&sheet], &[], &vctx);
         let style = styles[3].as_ref().expect("a should have style");
         assert_eq!(style.color, Color::rgb(128, 0, 128));
+    }
+
+    // -- Selector index tests (Phase 2) ----------------------------------
+
+    #[test]
+    fn selector_index_reduces_comparisons() {
+        // Build a stylesheet with 3 rules: .foo, .bar, p
+        let sheet = Stylesheet::parse(
+            ".foo { color: red; } .bar { color: blue; } p { font-weight: bold; }",
+        );
+        let index = SelectorIndex::build(&[&sheet]);
+
+        // An element with class "foo" and tag "p" should only get
+        // candidates from .foo and p buckets (not .bar).
+        let candidates = index.candidates("p", None, &["foo"]);
+        assert!(
+            candidates.len() == 2,
+            "should get 2 candidates (.foo and p), got {}",
+            candidates.len()
+        );
+
+        // An element with class "bar" tag "div" should only get .bar.
+        let candidates = index.candidates("div", None, &["bar"]);
+        assert_eq!(candidates.len(), 1, "should get 1 candidate (.bar)");
+    }
+
+    #[test]
+    fn selector_index_universal_rules() {
+        let sheet = Stylesheet::parse("* { margin: 0; } .cls { color: red; }");
+        let index = SelectorIndex::build(&[&sheet]);
+
+        // Any element should get the universal rule.
+        let candidates = index.candidates("div", None, &[]);
+        assert_eq!(candidates.len(), 1, "universal rule");
+
+        // Element with class "cls" gets universal + .cls.
+        let candidates = index.candidates("div", None, &["cls"]);
+        assert_eq!(candidates.len(), 2, "universal + class");
     }
 
     mod prop {
