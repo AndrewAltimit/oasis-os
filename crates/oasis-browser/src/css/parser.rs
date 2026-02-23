@@ -192,6 +192,8 @@ pub enum CssValue {
     Multiple(Vec<CssValue>),
     /// A quoted string value.
     String(String),
+    /// A `var(--name)` or `var(--name, fallback)` reference.
+    Var(String, Option<String>),
 }
 
 /// Supported CSS length units.
@@ -833,7 +835,12 @@ impl CssParser {
         } else {
             raw_values
         };
-        let value = self.parse_value(&property, &values);
+        // Custom properties (--*) store value as raw CSS text.
+        let value = if property.starts_with("--") {
+            CssValue::String(tokens_to_css_text(&values))
+        } else {
+            self.parse_value(&property, &values)
+        };
         // Consume trailing semicolon if present.
         self.skip_whitespace();
         if self.peek() == &CssToken::Semicolon {
@@ -944,7 +951,7 @@ impl CssParser {
 // Value parsing helpers
 // -------------------------------------------------------------------
 
-fn parse_value_list(tokens: &[CssToken]) -> Vec<CssValue> {
+pub(crate) fn parse_value_list(tokens: &[CssToken]) -> Vec<CssValue> {
     let mut out = Vec::new();
     let mut i = 0;
     while i < tokens.len() {
@@ -984,14 +991,42 @@ fn parse_value_list(tokens: &[CssToken]) -> Vec<CssValue> {
                 i += 1;
                 while i < tokens.len() && depth > 0 {
                     match &tokens[i] {
-                        CssToken::OpenParen => depth += 1,
+                        CssToken::OpenParen | CssToken::Function(_) => depth += 1,
                         CssToken::CloseParen => depth -= 1,
                         _ => {},
                     }
                     i += 1;
                 }
                 let inner = &tokens[start..i];
-                if let Some(c) = try_parse_color(inner) {
+                if name.eq_ignore_ascii_case("var") {
+                    // Parse var(--name) or var(--name, fallback).
+                    let args = &inner[1..]; // skip Function token
+                    let args = match args.last() {
+                        Some(CssToken::CloseParen) => &args[..args.len() - 1],
+                        _ => args,
+                    };
+                    let mut prop_name = None;
+                    let mut comma_pos = None;
+                    for (j, tok) in args.iter().enumerate() {
+                        match tok {
+                            CssToken::Ident(id) if prop_name.is_none() => {
+                                if id.starts_with("--") {
+                                    prop_name = Some(id.to_ascii_lowercase());
+                                }
+                            },
+                            CssToken::Comma if prop_name.is_some() && comma_pos.is_none() => {
+                                comma_pos = Some(j);
+                            },
+                            _ => {},
+                        }
+                    }
+                    if let Some(pname) = prop_name {
+                        let fallback = comma_pos.map(|cp| tokens_to_css_text(&args[cp + 1..]));
+                        out.push(CssValue::Var(pname, fallback));
+                    } else {
+                        out.push(CssValue::Keyword("var()".into()));
+                    }
+                } else if let Some(c) = try_parse_color(inner) {
                     out.push(CssValue::Color(c));
                 } else {
                     out.push(CssValue::Keyword(format!("{}()", name)));
@@ -1279,6 +1314,67 @@ fn parse_px_value(s: &str) -> f32 {
 }
 
 // -------------------------------------------------------------------
+// CSS text reconstruction
+// -------------------------------------------------------------------
+
+/// Reconstruct CSS text from a token stream.
+///
+/// Used to store custom property values and `var()` fallback text as
+/// raw strings that can be re-tokenized later during cascade resolution.
+fn tokens_to_css_text(tokens: &[CssToken]) -> String {
+    let mut out = String::new();
+    for tok in tokens {
+        match tok {
+            CssToken::Ident(s) => out.push_str(s),
+            CssToken::Hash(s) => {
+                out.push('#');
+                out.push_str(s);
+            },
+            CssToken::String(s) => {
+                out.push('"');
+                out.push_str(s);
+                out.push('"');
+            },
+            CssToken::Number(n) => out.push_str(&format!("{n}")),
+            CssToken::Percentage(n) => {
+                out.push_str(&format!("{n}"));
+                out.push('%');
+            },
+            CssToken::Dimension(n, u) => {
+                out.push_str(&format!("{n}"));
+                out.push_str(u);
+            },
+            CssToken::Colon => out.push(':'),
+            CssToken::Semicolon => out.push(';'),
+            CssToken::Comma => out.push(','),
+            CssToken::OpenBrace => out.push('{'),
+            CssToken::CloseBrace => out.push('}'),
+            CssToken::OpenParen => out.push('('),
+            CssToken::CloseParen => out.push(')'),
+            CssToken::OpenBracket => out.push('['),
+            CssToken::CloseBracket => out.push(']'),
+            CssToken::Dot => out.push('.'),
+            CssToken::Greater => out.push('>'),
+            CssToken::Plus => out.push('+'),
+            CssToken::Star => out.push('*'),
+            CssToken::Slash => out.push('/'),
+            CssToken::Delim(c) => out.push(*c),
+            CssToken::Whitespace => out.push(' '),
+            CssToken::AtKeyword(s) => {
+                out.push('@');
+                out.push_str(s);
+            },
+            CssToken::Function(s) => {
+                out.push_str(s);
+                out.push('(');
+            },
+            CssToken::Eof => {},
+        }
+    }
+    out.trim().to_string()
+}
+
+// -------------------------------------------------------------------
 // Shorthand expansion
 // -------------------------------------------------------------------
 
@@ -1387,6 +1483,10 @@ fn expand_border(value: &CssValue, important: bool) -> Vec<Declaration> {
                     style = v.clone();
                 }
             },
+            CssValue::Var(..) => {
+                // Unresolved var() -- most likely a color reference.
+                color = v.clone();
+            },
             _ => {},
         }
     }
@@ -1429,7 +1529,7 @@ fn is_border_style(s: &str) -> bool {
 fn expand_background(value: &CssValue, important: bool) -> Vec<Declaration> {
     // Simple heuristic: if the value is a color, set background-color.
     match value {
-        CssValue::Color(_) => {
+        CssValue::Color(_) | CssValue::Var(..) => {
             vec![Declaration {
                 property: "background-color".into(),
                 value: value.clone(),
@@ -1437,9 +1537,9 @@ fn expand_background(value: &CssValue, important: bool) -> Vec<Declaration> {
             }]
         },
         CssValue::Multiple(vs) => {
-            // If any value is a colour, use it.
+            // If any value is a colour or var(), use it.
             for v in vs {
-                if matches!(v, CssValue::Color(_)) {
+                if matches!(v, CssValue::Color(_) | CssValue::Var(..)) {
                     return vec![Declaration {
                         property: "background-color".into(),
                         value: v.clone(),
@@ -2146,6 +2246,60 @@ mod tests {
         let sheet = parse("p { color: red; } garbage here");
         // The first rule should still parse.
         assert!(!sheet.rules.is_empty());
+    }
+
+    // -- CSS custom properties / var() parsing tests ----------------------
+
+    #[test]
+    fn var_function_parsed() {
+        let decls = first_decls("p { color: var(--my-color); }");
+        assert_eq!(decls[0].property, "color");
+        assert_eq!(decls[0].value, CssValue::Var("--my-color".into(), None));
+    }
+
+    #[test]
+    fn var_function_with_fallback() {
+        let decls = first_decls("p { color: var(--my-color, blue); }");
+        assert_eq!(
+            decls[0].value,
+            CssValue::Var("--my-color".into(), Some("blue".into()))
+        );
+    }
+
+    #[test]
+    fn var_function_with_hex_fallback() {
+        let decls = first_decls("p { color: var(--my-color, #202122); }");
+        assert_eq!(
+            decls[0].value,
+            CssValue::Var("--my-color".into(), Some("#202122".into()))
+        );
+    }
+
+    #[test]
+    fn custom_property_stored_as_raw_text() {
+        let decls = first_decls(":root { --color: #202122; }");
+        assert_eq!(decls[0].property, "--color");
+        assert_eq!(decls[0].value, CssValue::String("#202122".into()));
+    }
+
+    #[test]
+    fn custom_property_complex_value() {
+        let decls = first_decls(":root { --border: 1px solid red; }");
+        assert_eq!(decls[0].property, "--border");
+        assert_eq!(decls[0].value, CssValue::String("1px solid red".into()));
+    }
+
+    #[test]
+    fn var_in_multiple_value_property() {
+        let decls = first_decls("p { border: 1px solid var(--color); }");
+        // The border shorthand should expand, and var() should end up
+        // in border-color.
+        let bc = decls.iter().find(|d| d.property == "border-color");
+        assert!(bc.is_some(), "border-color should exist");
+        assert!(
+            matches!(&bc.unwrap().value, CssValue::Var(name, None) if name == "--color"),
+            "border-color should be var(--color)"
+        );
     }
 
     mod prop {

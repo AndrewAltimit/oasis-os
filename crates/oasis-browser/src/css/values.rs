@@ -5,6 +5,8 @@
 //! single canonical representation (e.g. all lengths are resolved to `f32`
 //! pixels, all colors to `Color`).
 
+use std::collections::HashMap;
+
 use super::parser::{CssColor, CssValue, LengthUnit};
 use oasis_types::backend::Color;
 
@@ -364,6 +366,9 @@ pub struct ComputedStyle {
     pub flex_shrink: f32,
     pub flex_basis: Dimension,
     pub gap: f32,
+
+    // -- CSS custom properties (--*) ------------------------------------
+    pub custom_properties: HashMap<String, String>,
 }
 
 /// Standard browser defaults (CSS 2.1 initial values).
@@ -473,6 +478,8 @@ impl Default for ComputedStyle {
             flex_shrink: 1.0,
             flex_basis: Dimension::Auto,
             gap: 0.0,
+
+            custom_properties: HashMap::new(),
         }
     }
 }
@@ -505,6 +512,8 @@ impl ComputedStyle {
             // Inherited table properties.
             border_collapse: parent.border_collapse,
             border_spacing: parent.border_spacing,
+            // CSS custom properties always inherit.
+            custom_properties: parent.custom_properties.clone(),
             // Non-inherited properties keep CSS initial values.
             ..ComputedStyle::default()
         }
@@ -515,6 +524,15 @@ impl ComputedStyle {
     /// Resolves relative units (`em`, `%`) against the parent font size
     /// so the resulting computed value is in absolute pixels.
     pub fn apply_declaration(&mut self, property: &str, value: &CssValue, parent_font_size: f32) {
+        // Custom properties (--*) are stored in the properties map.
+        if property.starts_with("--") {
+            if let CssValue::String(ref raw) = *value {
+                self.custom_properties
+                    .insert(property.to_string(), raw.clone());
+            }
+            return;
+        }
+
         // Handle `inherit` and `initial` keywords for any property.
         if let Some(kw) = as_keyword(value) {
             if kw == "initial" {

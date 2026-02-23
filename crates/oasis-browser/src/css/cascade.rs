@@ -8,8 +8,9 @@ use std::collections::{HashMap, HashSet};
 
 use super::parser::{
     AttrOp, Combinator, CompoundSelector, CssValue, Declaration, Rule, SimpleSelector, Specificity,
-    Stylesheet,
+    Stylesheet, parse_value_list,
 };
+use super::tokenizer::CssTokenizer;
 use super::values::ComputedStyle;
 use crate::html::dom::{Document, ElementData, NodeId, NodeKind};
 
@@ -265,9 +266,21 @@ pub fn compute_style(
             .then_with(|| a.source_order.cmp(&b.source_order))
     });
 
-    // Apply in sorted order (lowest priority first, last wins).
+    // Pass 1: Apply custom property declarations (--*) to build the
+    // properties map before resolving any var() references.
     for entry in &matched {
-        style.apply_declaration(&entry.property, &entry.value, parent_font_size);
+        if entry.property.starts_with("--") {
+            style.apply_declaration(&entry.property, &entry.value, parent_font_size);
+        }
+    }
+
+    // Pass 2: Resolve var() references and apply normal declarations.
+    for entry in &matched {
+        if entry.property.starts_with("--") {
+            continue;
+        }
+        let resolved = resolve_css_var(&entry.value, &style.custom_properties);
+        style.apply_declaration(&entry.property, &resolved, parent_font_size);
     }
 
     // Resolve ::before and ::after pseudo-element content.
@@ -728,6 +741,15 @@ fn match_pseudo_class(
             }
             false
         },
+        "root" => {
+            // :root matches the document root element (<html>), whose
+            // parent is the Document node, not another Element.
+            if let Some(pid) = doc.nodes[node_id].parent {
+                !matches!(doc.nodes[pid].kind, NodeKind::Element(_))
+            } else {
+                true
+            }
+        },
         _ => false,
     }
 }
@@ -886,6 +908,53 @@ fn previous_sibling_element(doc: &Document, node_id: NodeId) -> Option<NodeId> {
         }
     }
     None
+}
+
+// -----------------------------------------------------------------------
+// CSS custom property (var()) resolution
+// -----------------------------------------------------------------------
+
+/// Recursively resolve `CssValue::Var` references using the element's
+/// custom property map.
+///
+/// If the custom property exists, its raw CSS text is re-tokenized and
+/// re-parsed. If not, the fallback value is used. If neither exists,
+/// an empty keyword is returned (property will be silently ignored).
+fn resolve_css_var(value: &CssValue, props: &HashMap<String, String>) -> CssValue {
+    match value {
+        CssValue::Var(name, fallback) => {
+            let raw = props
+                .get(name.as_str())
+                .map(|s| s.as_str())
+                .or(fallback.as_deref());
+            if let Some(css_text) = raw {
+                let tokens = CssTokenizer::new(css_text).tokenize();
+                let parsed = parse_value_list(&tokens);
+                match parsed.len() {
+                    0 => CssValue::Keyword(String::new()),
+                    1 => {
+                        let v = parsed.into_iter().next().expect("len checked");
+                        // Handle chained var() references.
+                        resolve_css_var(&v, props)
+                    },
+                    _ => {
+                        let resolved: Vec<CssValue> = parsed
+                            .into_iter()
+                            .map(|v| resolve_css_var(&v, props))
+                            .collect();
+                        CssValue::Multiple(resolved)
+                    },
+                }
+            } else {
+                CssValue::Keyword(String::new())
+            }
+        },
+        CssValue::Multiple(parts) => {
+            let resolved: Vec<CssValue> = parts.iter().map(|p| resolve_css_var(p, props)).collect();
+            CssValue::Multiple(resolved)
+        },
+        other => other.clone(),
+    }
 }
 
 // -----------------------------------------------------------------------
@@ -1945,6 +2014,130 @@ mod tests {
         let styles = style_tree(&doc, &[&sheet], &[], &vctx);
         let style = styles[3].as_ref().expect("a should have style");
         assert_eq!(style.color, Color::rgb(128, 0, 128));
+    }
+
+    // -- CSS custom properties / var() tests (var support) ----------------
+
+    #[test]
+    fn root_pseudo_class_matches_html() {
+        let doc = make_doc(vec![(TagName::P, vec![])]);
+        let html_elem = match &doc.nodes[1].kind {
+            NodeKind::Element(e) => e,
+            _ => panic!("node 1 should be <html>"),
+        };
+        // <html> (node 1) has parent Document (node 0) → matches :root.
+        assert!(match_pseudo_class(&doc, 1, html_elem, "root", &ctx()));
+
+        // <body> (node 2) has parent <html> (element) → does NOT match :root.
+        let body_elem = match &doc.nodes[2].kind {
+            NodeKind::Element(e) => e,
+            _ => panic!("node 2 should be <body>"),
+        };
+        assert!(!match_pseudo_class(&doc, 2, body_elem, "root", &ctx()));
+    }
+
+    #[test]
+    fn custom_property_stored_and_inherited() {
+        // :root { --color: red } p { color: var(--color) }
+        let doc = make_doc(vec![(TagName::P, vec![])]);
+        let css = ":root { --color: red; } p { color: var(--color); }";
+        let sheet = Stylesheet::parse(css);
+        let styles = style_tree(&doc, &[&sheet], &[], &ctx());
+
+        let p_style = styles[3].as_ref().expect("p should have style");
+        // var(--color) should resolve to "red" → Color(255,0,0).
+        assert_eq!(p_style.color, Color::rgb(255, 0, 0));
+    }
+
+    #[test]
+    fn var_with_fallback() {
+        // No --missing defined, fallback value should be used.
+        let doc = make_doc(vec![(TagName::P, vec![])]);
+        let css = "p { color: var(--missing, blue); }";
+        let sheet = Stylesheet::parse(css);
+        let styles = style_tree(&doc, &[&sheet], &[], &ctx());
+
+        let p_style = styles[3].as_ref().expect("p should have style");
+        assert_eq!(p_style.color, Color::rgb(0, 0, 255));
+    }
+
+    #[test]
+    fn var_with_hex_fallback() {
+        let doc = make_doc(vec![(TagName::P, vec![])]);
+        let css = "p { color: var(--missing, #202122); }";
+        let sheet = Stylesheet::parse(css);
+        let styles = style_tree(&doc, &[&sheet], &[], &ctx());
+
+        let p_style = styles[3].as_ref().expect("p should have style");
+        assert_eq!(p_style.color, Color::rgb(0x20, 0x21, 0x22));
+    }
+
+    #[test]
+    fn chained_variables() {
+        // --a references --b, which holds a concrete value.
+        let doc = make_doc(vec![(TagName::P, vec![])]);
+        let css = ":root { --b: green; --a: var(--b); } p { color: var(--a); }";
+        let sheet = Stylesheet::parse(css);
+        let styles = style_tree(&doc, &[&sheet], &[], &ctx());
+
+        let p_style = styles[3].as_ref().expect("p should have style");
+        assert_eq!(p_style.color, Color::rgb(0, 128, 0));
+    }
+
+    #[test]
+    fn var_in_border_shorthand() {
+        let doc = make_doc(vec![(TagName::P, vec![])]);
+        let css = ":root { --bc: red; } p { border: 1px solid var(--bc); }";
+        let sheet = Stylesheet::parse(css);
+        let styles = style_tree(&doc, &[&sheet], &[], &ctx());
+
+        let p_style = styles[3].as_ref().expect("p should have style");
+        assert_eq!(p_style.border_top_color, Color::rgb(255, 0, 0));
+    }
+
+    #[test]
+    fn var_in_background() {
+        let doc = make_doc(vec![(TagName::P, vec![])]);
+        let css = ":root { --bg: #ff0000; } p { background: var(--bg); }";
+        let sheet = Stylesheet::parse(css);
+        let styles = style_tree(&doc, &[&sheet], &[], &ctx());
+
+        let p_style = styles[3].as_ref().expect("p should have style");
+        assert_eq!(p_style.background_color, Color::rgb(255, 0, 0));
+    }
+
+    #[test]
+    fn var_margin_property() {
+        let doc = make_doc(vec![(TagName::P, vec![])]);
+        let css = ":root { --sp: 10px; } p { margin-top: var(--sp); }";
+        let sheet = Stylesheet::parse(css);
+        let styles = style_tree(&doc, &[&sheet], &[], &ctx());
+
+        let p_style = styles[3].as_ref().expect("p should have style");
+        assert!((p_style.margin_top - 10.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn custom_props_inherit_to_descendants() {
+        // <body> > <div> (node 3) > <p> (node 4)
+        let mut doc = make_doc(vec![(TagName::Div, vec![])]);
+        let p_id = doc.nodes.len();
+        doc.nodes.push(Node {
+            kind: NodeKind::Element(ElementData {
+                tag: TagName::P,
+                attributes: vec![],
+            }),
+            parent: Some(3),
+            children: vec![],
+        });
+        doc.nodes[3].children.push(p_id);
+
+        let css = ":root { --text-color: purple; } p { color: var(--text-color); }";
+        let sheet = Stylesheet::parse(css);
+        let styles = style_tree(&doc, &[&sheet], &[], &ctx());
+
+        let p_style = styles[p_id].as_ref().expect("p should have style");
+        assert_eq!(p_style.color, Color::rgb(128, 0, 128));
     }
 
     // -- Selector index tests (Phase 2) ----------------------------------
