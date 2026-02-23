@@ -195,6 +195,9 @@ pub struct LayoutBox {
     pub text: Option<String>,
     /// Whether this box or any descendant needs relayout.
     pub dirty: bool,
+    /// GPU texture for CSS `background-image`, assigned during the
+    /// texture resolution pass.
+    pub background_texture: Option<TextureId>,
 }
 
 impl LayoutBox {
@@ -208,6 +211,7 @@ impl LayoutBox {
             style,
             text: None,
             dirty: true,
+            background_texture: None,
         }
     }
 

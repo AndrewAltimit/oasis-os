@@ -119,15 +119,23 @@ static FONT_DATA: [[u8; 8]; 95] = [
     [0x76, 0xDC, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00], // ~ (126)
 ];
 
+/// Returns `true` if the bitmap font has a glyph for `ch`.
+///
+/// Only printable ASCII (0x20-0x7E) is covered.
+pub fn has_glyph(ch: char) -> bool {
+    let code = ch as u32;
+    code >= FIRST_CHAR as u32 && code <= LAST_CHAR as u32
+}
+
 /// Look up glyph data for a character. Returns 8 bytes (one per row).
-/// Non-printable or out-of-range characters get a filled-block fallback.
+/// Non-printable or out-of-range characters get an outlined "tofu" box fallback.
 pub fn glyph(ch: char) -> &'static [u8; 8] {
     let code = ch as u32;
     if code >= FIRST_CHAR as u32 && code <= LAST_CHAR as u32 {
         &FONT_DATA[(code - FIRST_CHAR as u32) as usize]
     } else {
-        // Fallback: filled block.
-        static FALLBACK: [u8; 8] = [0xFE, 0xFE, 0xFE, 0xFE, 0xFE, 0xFE, 0xFE, 0x00];
+        // Fallback: outlined tofu box (empty rectangle).
+        static FALLBACK: [u8; 8] = [0x7E, 0x42, 0x42, 0x42, 0x42, 0x42, 0x7E, 0x00];
         &FALLBACK
     }
 }
@@ -238,7 +246,8 @@ mod tests {
     #[test]
     fn fallback_for_nonprintable() {
         let g = glyph('\x01');
-        assert_eq!(g[0], 0xFE);
+        // Tofu outline box: top row is 0x7E.
+        assert_eq!(g[0], 0x7E);
     }
 
     #[test]

@@ -709,6 +709,31 @@ impl BrowserWidget {
             }
         }
 
+        // Also collect background-image URLs from styles.
+        for style_opt in &self.styles {
+            if let Some(style) = style_opt
+                && let css::values::BackgroundImage::Url(ref url) = style.background_image
+            {
+                let resolved = Self::resolve_src(&base_url, url);
+                if !self.image_textures.contains_key(&resolved)
+                    && self.decoded_images.contains_key(&resolved)
+                    && !pending.contains(&resolved)
+                {
+                    pending.push(resolved);
+                }
+            }
+        }
+
+        // Create textures.
+        for resolved in &pending {
+            if let Some(decoded) = self.decoded_images.get(resolved)
+                && let Ok(tex) =
+                    backend.load_texture(decoded.width, decoded.height, &decoded.pixels)
+            {
+                self.image_textures.insert(resolved.clone(), tex);
+            }
+        }
+
         // Walk layout tree and assign textures.
         if let Some(layout) = &mut self.layout_root {
             Self::assign_textures_recursive(
@@ -721,7 +746,7 @@ impl BrowserWidget {
     }
 
     /// Recursively walk the layout tree and assign GPU textures to
-    /// `ReplacedContent::Image` nodes.
+    /// `ReplacedContent::Image` nodes and `background-image` styles.
     fn assign_textures_recursive(
         layout_box: &mut layout::box_model::LayoutBox,
         doc: &Option<html::dom::Document>,
@@ -744,6 +769,16 @@ impl BrowserWidget {
                 if let Some(&tex) = textures.get(&resolved) {
                     *texture = Some(tex);
                 }
+            }
+        }
+
+        // Assign background-image texture.
+        if layout_box.background_texture.is_none()
+            && let css::values::BackgroundImage::Url(ref url) = layout_box.style.background_image
+        {
+            let resolved = Self::resolve_src(base_url, url);
+            if let Some(&tex) = textures.get(&resolved) {
+                layout_box.background_texture = Some(tex);
             }
         }
 

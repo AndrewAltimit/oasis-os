@@ -7,9 +7,10 @@
 use super::block::{TextMeasurer, layout_block};
 use super::box_model::*;
 use super::text::{
-    apply_text_transform, collapse_whitespace, measure_space, measure_word, split_into_words,
+    apply_text_transform, collapse_whitespace, measure_space, measure_word, replace_unrenderable,
+    split_into_words,
 };
-use crate::css::values::{ComputedStyle, Dimension, TextAlign, WhiteSpace};
+use crate::css::values::{ComputedStyle, Dimension, TextAlign, VerticalAlign, WhiteSpace};
 use crate::html::dom::NodeId;
 
 // -------------------------------------------------------------------
@@ -309,12 +310,14 @@ fn replaced_dimensions(replaced: &ReplacedContent) -> (f32, f32) {
         ReplacedContent::HorizontalRule => (0.0, 2.0),
         ReplacedContent::LineBreak => (0.0, 0.0),
         ReplacedContent::TextInput { size, .. } => {
-            // Each character ≈ 8px wide, height ≈ line height + padding.
-            (*size as f32 * 6.0 + 8.0, 18.0)
+            // Use bitmap measurement for 'M' width as the per-character size.
+            let char_w = oasis_types::backend::bitmap_measure_text("M", 8) as f32;
+            (*size as f32 * char_w + 8.0, 18.0)
         },
         ReplacedContent::SubmitButton { label } => {
-            // Width based on label length + padding, height for a button.
-            (label.len() as f32 * 6.0 + 16.0, 20.0)
+            // Use bitmap measurement for accurate label width.
+            let text_w = oasis_types::backend::bitmap_measure_text(label, 10) as f32;
+            (text_w + 16.0, 20.0)
         },
     }
 }
@@ -334,7 +337,8 @@ pub fn make_text_fragments(
 ) -> Vec<InlineFragment> {
     let transformed = apply_text_transform(text, style.text_transform);
     let collapsed = collapse_whitespace(&transformed, style.white_space);
-    let words = split_into_words(&collapsed, style.white_space);
+    let renderable = replace_unrenderable(&collapsed);
+    let words = split_into_words(&renderable, style.white_space);
 
     let font_size = style.font_size;
     let letter_spacing = style.letter_spacing;
@@ -547,6 +551,15 @@ fn offset_subtree_y(lb: &mut LayoutBox, dy: f32) {
 /// Converts all fragments (text, inline boxes, replaced) into
 /// positioned `LayoutBox` children so the paint pass can render
 /// text and record link hit regions.
+/// Compute the vertical offset for a fragment based on `vertical-align`.
+fn align_vertically(va: VerticalAlign, frag_height: f32, line_height: f32) -> f32 {
+    match va {
+        VerticalAlign::Top | VerticalAlign::TextTop | VerticalAlign::Baseline => 0.0,
+        VerticalAlign::Middle => (line_height - frag_height) / 2.0,
+        VerticalAlign::Bottom | VerticalAlign::TextBottom => line_height - frag_height,
+    }
+}
+
 fn lines_to_children(lines: Vec<LineBox>, line_positions: &[f32]) -> Vec<LayoutBox> {
     let mut children = Vec::new();
     for (line, &line_y) in lines.into_iter().zip(line_positions.iter()) {
@@ -569,11 +582,14 @@ fn lines_to_children(lines: Vec<LineBox>, line_positions: &[f32]) -> Vec<LayoutB
                     children.push(lb);
                 },
                 InlineFragment::InlineBox { mut layout_box } => {
+                    let va = layout_box.style.vertical_align;
+                    let frag_h = layout_box.dimensions.margin_box().height;
+                    let va_offset = align_vertically(va, frag_h, line_height);
                     // Offset the entire InlineBlock subtree to its
                     // final line position. The block was laid out at
                     // y=0; the x was set by position_fragments_on_line.
                     let old_y = layout_box.dimensions.content.y;
-                    let dy = line_y - old_y;
+                    let dy = line_y + va_offset - old_y;
                     if dy.abs() > 0.001 {
                         offset_subtree_y(&mut layout_box, dy);
                     }
@@ -587,9 +603,10 @@ fn lines_to_children(lines: Vec<LineBox>, line_positions: &[f32]) -> Vec<LayoutB
                     style,
                     node,
                 } => {
+                    let va_offset = align_vertically(style.vertical_align, height, line_height);
                     let mut lb = LayoutBox::new(BoxType::Replaced(replaced), style, node);
                     lb.dimensions.content.x = x;
-                    lb.dimensions.content.y = line_y;
+                    lb.dimensions.content.y = line_y + va_offset;
                     lb.dimensions.content.width = width;
                     lb.dimensions.content.height = height;
                     children.push(lb);

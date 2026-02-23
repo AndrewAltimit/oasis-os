@@ -7,6 +7,26 @@ use super::block::TextMeasurer;
 use crate::css::values::{TextTransform, WhiteSpace};
 
 // -------------------------------------------------------------------
+// Unicode fallback
+// -------------------------------------------------------------------
+
+/// Replace characters that have no bitmap font glyph with `?`.
+///
+/// This prevents filled-block rendering for non-ASCII characters like
+/// `©`, Cyrillic, CJK, etc.
+pub fn replace_unrenderable(text: &str) -> String {
+    text.chars()
+        .map(|ch| {
+            if oasis_types::bitmap_font::has_glyph(ch) {
+                ch
+            } else {
+                '?'
+            }
+        })
+        .collect()
+}
+
+// -------------------------------------------------------------------
 // Text word
 // -------------------------------------------------------------------
 

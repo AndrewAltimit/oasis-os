@@ -229,6 +229,31 @@ pub enum OverflowWrap {
     Anywhere,
 }
 
+/// CSS `box-sizing` property.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BoxSizing {
+    ContentBox,
+    BorderBox,
+}
+
+/// CSS `vertical-align` property (subset for inline replaced elements).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VerticalAlign {
+    Baseline,
+    Top,
+    Middle,
+    Bottom,
+    TextTop,
+    TextBottom,
+}
+
+/// CSS `background-image` property.
+#[derive(Debug, Clone, PartialEq)]
+pub enum BackgroundImage {
+    None,
+    Url(String),
+}
+
 /// CSS `box-shadow` value.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct BoxShadow {
@@ -342,9 +367,18 @@ pub struct ComputedStyle {
     pub box_shadow: Option<BoxShadow>,
     pub opacity: f32,
 
+    // -- Box sizing -----------------------------------------------------
+    pub box_sizing: BoxSizing,
+
     // -- Text overflow --------------------------------------------------
     pub word_break: WordBreak,
     pub overflow_wrap: OverflowWrap,
+
+    // -- Vertical alignment ---------------------------------------------
+    pub vertical_align: VerticalAlign,
+
+    // -- Background image -----------------------------------------------
+    pub background_image: BackgroundImage,
 
     // -- Generated content (::before/::after) ---------------------------
     pub content: Option<String>,
@@ -456,9 +490,18 @@ impl Default for ComputedStyle {
             box_shadow: None,
             opacity: 1.0,
 
+            // Box sizing
+            box_sizing: BoxSizing::ContentBox,
+
             // Text overflow
             word_break: WordBreak::Normal,
             overflow_wrap: OverflowWrap::Normal,
+
+            // Vertical alignment
+            vertical_align: VerticalAlign::Baseline,
+
+            // Background image
+            background_image: BackgroundImage::None,
 
             // Generated content
             content: None,
@@ -1054,6 +1097,43 @@ impl ComputedStyle {
                 }
                 // Complex box-shadow values are parsed from the raw
                 // declaration list in the cascade.
+            },
+
+            // -- Box sizing ---------------------------------------------
+            "box-sizing" => {
+                if let Some(kw) = as_keyword(value) {
+                    self.box_sizing = match kw {
+                        "content-box" => BoxSizing::ContentBox,
+                        "border-box" => BoxSizing::BorderBox,
+                        _ => return,
+                    };
+                }
+            },
+
+            // -- Vertical alignment -------------------------------------
+            "vertical-align" => {
+                if let Some(kw) = as_keyword(value) {
+                    self.vertical_align = match kw {
+                        "baseline" => VerticalAlign::Baseline,
+                        "top" => VerticalAlign::Top,
+                        "middle" => VerticalAlign::Middle,
+                        "bottom" => VerticalAlign::Bottom,
+                        "text-top" => VerticalAlign::TextTop,
+                        "text-bottom" => VerticalAlign::TextBottom,
+                        _ => return,
+                    };
+                }
+            },
+
+            // -- Background image ---------------------------------------
+            "background-image" => {
+                if let Some(kw) = as_keyword(value) {
+                    if kw == "none" {
+                        self.background_image = BackgroundImage::None;
+                    }
+                } else if let CssValue::Url(ref url) = *value {
+                    self.background_image = BackgroundImage::Url(url.clone());
+                }
             },
 
             // -- Text overflow ------------------------------------------

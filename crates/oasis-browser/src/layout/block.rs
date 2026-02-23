@@ -19,7 +19,9 @@ use super::float::{ClearSide, FloatContext, FloatSide};
 use super::inline::layout_inline;
 use super::positioning::apply_positioning;
 use super::table::layout_table;
-use crate::css::values::{Clear, ComputedStyle, Dimension, Display, Float, ListStyleType};
+use crate::css::values::{
+    BoxSizing, Clear, ComputedStyle, Dimension, Display, Float, ListStyleType,
+};
 use crate::html::dom::{Document, ElementData, NodeId, NodeKind, TagName};
 use oasis_types::backend::Color;
 
@@ -739,6 +741,7 @@ fn make_anonymous_block(children: Vec<LayoutBox>, parent_style: &ComputedStyle) 
         style,
         text: None,
         dirty: true,
+        background_texture: None,
     }
 }
 
@@ -850,10 +853,17 @@ fn calculate_block_width(layout_box: &mut LayoutBox, containing_width: f32) {
     let ml_auto = layout_box.style.margin_left_auto;
     let mr_auto = layout_box.style.margin_right_auto;
 
+    let is_border_box = layout_box.style.box_sizing == BoxSizing::BorderBox;
+
     match layout_box.style.width {
         Dimension::Px(w) => {
-            layout_box.dimensions.content.width = w;
-            let available_for_margins = containing_width - w - pad_h - bdr_h;
+            let content_w = if is_border_box {
+                (w - pad_h - bdr_h).max(0.0)
+            } else {
+                w
+            };
+            layout_box.dimensions.content.width = content_w;
+            let available_for_margins = containing_width - content_w - pad_h - bdr_h;
             if ml_auto && mr_auto {
                 let half = available_for_margins.max(0.0) / 2.0;
                 layout_box.dimensions.margin.left = half;
@@ -871,9 +881,14 @@ fn calculate_block_width(layout_box: &mut LayoutBox, containing_width: f32) {
             }
         },
         Dimension::Percent(pct) => {
-            let w = containing_width * (pct / 100.0);
-            layout_box.dimensions.content.width = w;
-            let available_for_margins = containing_width - w - pad_h - bdr_h;
+            let declared_w = containing_width * (pct / 100.0);
+            let content_w = if is_border_box {
+                (declared_w - pad_h - bdr_h).max(0.0)
+            } else {
+                declared_w
+            };
+            layout_box.dimensions.content.width = content_w;
+            let available_for_margins = containing_width - content_w - pad_h - bdr_h;
             if ml_auto && mr_auto {
                 let half = available_for_margins.max(0.0) / 2.0;
                 layout_box.dimensions.margin.left = half;
@@ -894,17 +909,30 @@ fn calculate_block_width(layout_box: &mut LayoutBox, containing_width: f32) {
     }
 
     // Apply min-width / max-width constraints.
-    if let Dimension::Px(min) = layout_box.style.min_width
-        && layout_box.dimensions.content.width < min
-    {
-        layout_box.dimensions.content.width = min;
+    match layout_box.style.min_width {
+        Dimension::Px(min) if layout_box.dimensions.content.width < min => {
+            layout_box.dimensions.content.width = min;
+        },
+        Dimension::Percent(pct) => {
+            let min = containing_width * (pct / 100.0);
+            if layout_box.dimensions.content.width < min {
+                layout_box.dimensions.content.width = min;
+            }
+        },
+        _ => {},
     }
-    if let Dimension::Px(max) = layout_box.style.max_width
-        && max < 999.0
-        && layout_box.dimensions.content.width > max
-    {
-        // Don't clamp table rowspan/colspan encoding values (>= 1000).
-        layout_box.dimensions.content.width = max;
+    match layout_box.style.max_width {
+        Dimension::Px(max) if max < 999.0 && layout_box.dimensions.content.width > max => {
+            // Don't clamp table rowspan/colspan encoding values (>= 1000).
+            layout_box.dimensions.content.width = max;
+        },
+        Dimension::Percent(pct) => {
+            let max = containing_width * (pct / 100.0);
+            if layout_box.dimensions.content.width > max {
+                layout_box.dimensions.content.width = max;
+            }
+        },
+        _ => {},
     }
 }
 
@@ -1109,13 +1137,28 @@ fn layout_block_children(parent: &mut LayoutBox, measurer: &dyn TextMeasurer) {
 /// margin box. Percentage heights resolve against `containing_height`
 /// when available.
 fn calculate_block_height(layout_box: &mut LayoutBox, containing_height: Option<f32>) {
+    let is_border_box = layout_box.style.box_sizing == BoxSizing::BorderBox;
+    let pad_v = layout_box.dimensions.padding.vertical();
+    let bdr_v = layout_box.dimensions.border.vertical();
+
     match layout_box.style.height {
         Dimension::Px(h) => {
-            layout_box.dimensions.content.height = h;
+            let content_h = if is_border_box {
+                (h - pad_v - bdr_v).max(0.0)
+            } else {
+                h
+            };
+            layout_box.dimensions.content.height = content_h;
         },
         Dimension::Percent(pct) => {
             if let Some(ch) = containing_height {
-                layout_box.dimensions.content.height = ch * (pct / 100.0);
+                let declared_h = ch * (pct / 100.0);
+                let content_h = if is_border_box {
+                    (declared_h - pad_v - bdr_v).max(0.0)
+                } else {
+                    declared_h
+                };
+                layout_box.dimensions.content.height = content_h;
             } else {
                 // No definite containing height: treat as auto (CSS spec).
                 calculate_auto_height(layout_box);
@@ -1127,11 +1170,31 @@ fn calculate_block_height(layout_box: &mut LayoutBox, containing_height: Option<
     }
 
     // Apply min-height / max-height constraints.
-    if let Dimension::Px(min) = layout_box.style.min_height {
-        layout_box.dimensions.content.height = layout_box.dimensions.content.height.max(min);
+    match layout_box.style.min_height {
+        Dimension::Px(min) => {
+            layout_box.dimensions.content.height = layout_box.dimensions.content.height.max(min);
+        },
+        Dimension::Percent(pct) => {
+            if let Some(ch) = containing_height {
+                let min = ch * (pct / 100.0);
+                layout_box.dimensions.content.height =
+                    layout_box.dimensions.content.height.max(min);
+            }
+        },
+        Dimension::Auto => {},
     }
-    if let Dimension::Px(max) = layout_box.style.max_height {
-        layout_box.dimensions.content.height = layout_box.dimensions.content.height.min(max);
+    match layout_box.style.max_height {
+        Dimension::Px(max) => {
+            layout_box.dimensions.content.height = layout_box.dimensions.content.height.min(max);
+        },
+        Dimension::Percent(pct) => {
+            if let Some(ch) = containing_height {
+                let max = ch * (pct / 100.0);
+                layout_box.dimensions.content.height =
+                    layout_box.dimensions.content.height.min(max);
+            }
+        },
+        Dimension::Auto => {},
     }
 }
 

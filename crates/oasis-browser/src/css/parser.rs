@@ -194,6 +194,8 @@ pub enum CssValue {
     String(String),
     /// A `var(--name)` or `var(--name, fallback)` reference.
     Var(String, Option<String>),
+    /// A `url(...)` value.
+    Url(String),
 }
 
 /// Supported CSS length units.
@@ -1026,6 +1028,23 @@ pub(crate) fn parse_value_list(tokens: &[CssToken]) -> Vec<CssValue> {
                     } else {
                         out.push(CssValue::Keyword("var()".into()));
                     }
+                } else if name.eq_ignore_ascii_case("url") {
+                    // Parse url(...) function.
+                    let args = &inner[1..]; // skip Function token
+                    let args = match args.last() {
+                        Some(CssToken::CloseParen) => &args[..args.len() - 1],
+                        _ => args,
+                    };
+                    let url_str = args
+                        .iter()
+                        .filter_map(|t| match t {
+                            CssToken::String(s) => Some(s.as_str()),
+                            CssToken::Ident(s) => Some(s.as_str()),
+                            _ => None,
+                        })
+                        .collect::<Vec<_>>()
+                        .join("");
+                    out.push(CssValue::Url(url_str));
                 } else if let Some(c) = try_parse_color(inner) {
                     out.push(CssValue::Color(c));
                 } else {
@@ -1741,7 +1760,15 @@ fn is_border_style(s: &str) -> bool {
 
 fn expand_background(value: &CssValue, important: bool) -> Vec<Declaration> {
     // Simple heuristic: if the value is a color, set background-color.
+    // If the value is a url(), set background-image.
     match value {
+        CssValue::Url(_) => {
+            vec![Declaration {
+                property: "background-image".into(),
+                value: value.clone(),
+                important,
+            }]
+        },
         CssValue::Color(_) | CssValue::Var(..) => {
             vec![Declaration {
                 property: "background-color".into(),
@@ -1750,21 +1777,30 @@ fn expand_background(value: &CssValue, important: bool) -> Vec<Declaration> {
             }]
         },
         CssValue::Multiple(vs) => {
-            // If any value is a colour or var(), use it.
+            let mut decls = Vec::new();
             for v in vs {
-                if matches!(v, CssValue::Color(_) | CssValue::Var(..)) {
-                    return vec![Declaration {
+                if matches!(v, CssValue::Url(_)) {
+                    decls.push(Declaration {
+                        property: "background-image".into(),
+                        value: v.clone(),
+                        important,
+                    });
+                } else if matches!(v, CssValue::Color(_) | CssValue::Var(..)) {
+                    decls.push(Declaration {
                         property: "background-color".into(),
                         value: v.clone(),
                         important,
-                    }];
+                    });
                 }
             }
-            vec![Declaration {
-                property: "background".into(),
-                value: value.clone(),
-                important,
-            }]
+            if decls.is_empty() {
+                decls.push(Declaration {
+                    property: "background".into(),
+                    value: value.clone(),
+                    important,
+                });
+            }
+            decls
         },
         CssValue::Keyword(name) => {
             if name.eq_ignore_ascii_case("transparent") || name.eq_ignore_ascii_case("none") {

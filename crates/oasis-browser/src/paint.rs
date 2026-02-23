@@ -274,22 +274,27 @@ fn paint_background(
     offset_y: i32,
     ctx: &PaintContext,
 ) -> Result<()> {
-    let bg = apply_opacity(layout_box.style.background_color, layout_box.style.opacity);
-    if bg.a == 0 {
-        return Ok(());
-    }
-
     let padding = layout_box.dimensions.padding_box();
     let x = (padding.x + offset_x as f32) as i32;
     let y = (padding.y - ctx.scroll_y + offset_y as f32) as i32;
     let w = padding.width as u32;
     let h = padding.height as u32;
 
-    if layout_box.style.border_radius > 0.0 {
-        backend.fill_rounded_rect(x, y, w, h, layout_box.style.border_radius as u16, bg)?;
-    } else {
-        backend.fill_rect(x, y, w, h, bg)?;
+    // Paint background color.
+    let bg = apply_opacity(layout_box.style.background_color, layout_box.style.opacity);
+    if bg.a > 0 {
+        if layout_box.style.border_radius > 0.0 {
+            backend.fill_rounded_rect(x, y, w, h, layout_box.style.border_radius as u16, bg)?;
+        } else {
+            backend.fill_rect(x, y, w, h, bg)?;
+        }
     }
+
+    // Paint background image (if texture has been resolved).
+    if let Some(tex) = layout_box.background_texture {
+        backend.blit(tex, x, y, w, h)?;
+    }
+
     Ok(())
 }
 
@@ -618,44 +623,104 @@ fn paint_replaced(
             backend.draw_text(label, x + 2, y + 2, 8, color)?;
         },
         ReplacedContent::HorizontalRule => {
+            let style = &layout_box.style;
             let w = content.width as u32;
-            let color = layout_box.style.border_top_color;
-            backend.fill_rect(x, y, w, 1, color)?;
+            if style.border_top_style != BorderStyle::None && style.border_top_width > 0.0 {
+                // Use CSS border-top properties.
+                paint_border_edge(
+                    backend,
+                    x,
+                    y,
+                    w,
+                    style.border_top_width as u32,
+                    style.border_top_color,
+                    style.border_top_style,
+                    true,
+                )?;
+            } else {
+                // Fallback: 1px solid gray.
+                backend.fill_rect(x, y, w, 1, Color::rgb(128, 128, 128))?;
+            }
         },
         ReplacedContent::LineBreak => {
             // Nothing to paint.
         },
         ReplacedContent::TextInput { value, .. } => {
+            let style = &layout_box.style;
             let w = content.width as u32;
             let h = content.height as u32;
-            // White background.
-            backend.fill_rect(x, y, w, h, Color::rgb(255, 255, 255))?;
-            // Border.
-            let border_color = Color::rgb(118, 118, 118);
-            backend.fill_rect(x, y, w, 1, border_color)?;
-            backend.fill_rect(x, y + h as i32 - 1, w, 1, border_color)?;
-            backend.fill_rect(x, y, 1, h, border_color)?;
-            backend.fill_rect(x + w as i32 - 1, y, 1, h, border_color)?;
-            // Value text.
+            // Background: use CSS background-color, fallback to white.
+            let bg = if style.background_color.a > 0 {
+                style.background_color
+            } else {
+                Color::rgb(255, 255, 255)
+            };
+            if style.border_radius > 0.0 {
+                backend.fill_rounded_rect(x, y, w, h, style.border_radius as u16, bg)?;
+            } else {
+                backend.fill_rect(x, y, w, h, bg)?;
+            }
+            // Border: use CSS border properties, fallback to 1px gray.
+            let bw = if style.border_top_style != BorderStyle::None {
+                style.border_top_width.max(1.0) as u32
+            } else {
+                1
+            };
+            let border_color = if style.border_top_style != BorderStyle::None {
+                style.border_top_color
+            } else {
+                Color::rgb(118, 118, 118)
+            };
+            backend.fill_rect(x, y, w, bw, border_color)?;
+            backend.fill_rect(x, y + h as i32 - bw as i32, w, bw, border_color)?;
+            backend.fill_rect(x, y, bw, h, border_color)?;
+            backend.fill_rect(x + w as i32 - bw as i32, y, bw, h, border_color)?;
+            // Value text: use CSS color and font-size.
             if !value.is_empty() {
-                backend.draw_text(value, x + 3, y + 3, 10, Color::rgb(0, 0, 0))?;
+                let text_color = style.color;
+                let font_size = style.font_size as u16;
+                let pad = style.padding_left.max(3.0) as i32;
+                let pad_top = style.padding_top.max(3.0) as i32;
+                backend.draw_text(value, x + pad, y + pad_top, font_size, text_color)?;
             }
         },
         ReplacedContent::SubmitButton { label } => {
+            let style = &layout_box.style;
             let w = content.width as u32;
             let h = content.height as u32;
-            // Button background (light gray gradient effect).
-            backend.fill_rect(x, y, w, h, Color::rgb(239, 239, 239))?;
-            // Border.
-            let border_color = Color::rgb(118, 118, 118);
-            backend.fill_rect(x, y, w, 1, border_color)?;
-            backend.fill_rect(x, y + h as i32 - 1, w, 1, border_color)?;
-            backend.fill_rect(x, y, 1, h, border_color)?;
-            backend.fill_rect(x + w as i32 - 1, y, 1, h, border_color)?;
-            // Label text centered.
-            let text_x = x + (w as i32 - label.len() as i32 * 6) / 2;
-            let text_y = y + (h as i32 - 10) / 2;
-            backend.draw_text(label, text_x, text_y, 10, Color::rgb(0, 0, 0))?;
+            // Button background: use CSS background-color, fallback light gray.
+            let bg = if style.background_color.a > 0 {
+                style.background_color
+            } else {
+                Color::rgb(239, 239, 239)
+            };
+            if style.border_radius > 0.0 {
+                backend.fill_rounded_rect(x, y, w, h, style.border_radius as u16, bg)?;
+            } else {
+                backend.fill_rect(x, y, w, h, bg)?;
+            }
+            // Border: use CSS border properties, fallback to 1px gray.
+            let bw = if style.border_top_style != BorderStyle::None {
+                style.border_top_width.max(1.0) as u32
+            } else {
+                1
+            };
+            let border_color = if style.border_top_style != BorderStyle::None {
+                style.border_top_color
+            } else {
+                Color::rgb(118, 118, 118)
+            };
+            backend.fill_rect(x, y, w, bw, border_color)?;
+            backend.fill_rect(x, y + h as i32 - bw as i32, w, bw, border_color)?;
+            backend.fill_rect(x, y, bw, h, border_color)?;
+            backend.fill_rect(x + w as i32 - bw as i32, y, bw, h, border_color)?;
+            // Label text centered using bitmap measurement.
+            let font_size = style.font_size as u16;
+            let text_color = style.color;
+            let text_w = oasis_types::backend::bitmap_measure_text(label, font_size);
+            let text_x = x + (w as i32 - text_w as i32) / 2;
+            let text_y = y + (h as i32 - font_size as i32) / 2;
+            backend.draw_text(label, text_x, text_y, font_size, text_color)?;
         },
     }
 
