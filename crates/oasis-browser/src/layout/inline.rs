@@ -168,7 +168,30 @@ fn collect_inline_fragments(
                 });
             },
             BoxType::Replaced(replaced) => {
-                let (w, h) = replaced_dimensions(replaced);
+                let (intrinsic_w, intrinsic_h) = replaced_dimensions(replaced);
+                // Apply CSS width/height if set, falling back to intrinsic.
+                let w = match child.style.width {
+                    crate::css::values::Dimension::Px(px) => px,
+                    _ => intrinsic_w,
+                };
+                let h = match child.style.height {
+                    crate::css::values::Dimension::Px(px) => px,
+                    _ => intrinsic_h,
+                };
+                // Preserve aspect ratio when only one dimension is set.
+                let (w, h) = if child.style.width != crate::css::values::Dimension::Auto
+                    && child.style.height == crate::css::values::Dimension::Auto
+                    && intrinsic_h > 0.0
+                {
+                    (w, w * intrinsic_h / intrinsic_w.max(1.0))
+                } else if child.style.height != crate::css::values::Dimension::Auto
+                    && child.style.width == crate::css::values::Dimension::Auto
+                    && intrinsic_w > 0.0
+                {
+                    (h * intrinsic_w / intrinsic_h.max(1.0), h)
+                } else {
+                    (w, h)
+                };
                 fragments.push(InlineFragment::ReplacedInline {
                     replaced: replaced.clone(),
                     x: 0.0,
@@ -316,7 +339,6 @@ fn break_word_fragment(
         text, style, node, ..
     } = fragment
     {
-        let font_size = style.font_size as u16;
         let chars: Vec<char> = text.chars().collect();
         let mut pieces = Vec::new();
         let mut start = 0;
@@ -334,7 +356,8 @@ fn break_word_fragment(
             }
             // end is now one past the last character that fits.
             let piece_text: String = chars[start..end].iter().collect();
-            let piece_width = measurer.measure_text(&piece_text, font_size) as f32;
+            let piece_width =
+                measure_word(&piece_text, style.font_size, style.letter_spacing, measurer);
             pieces.push(InlineFragment::Text {
                 text: piece_text,
                 x: 0.0,
@@ -780,5 +803,109 @@ mod tests {
             (first_x - 20.0).abs() < 0.01,
             "first line should be indented by 20, got {first_x}",
         );
+    }
+
+    // -- emergency break includes letter_spacing ----------------------
+
+    #[test]
+    fn test_emergency_break_includes_letter_spacing() {
+        let m = FixedMeasurer;
+        let mut style = inline_style();
+        style.letter_spacing = 4.0;
+
+        // "ab" without letter_spacing: measure_word gives bitmap width.
+        // With letter_spacing=4, measure_word adds 4*(2-1) = 4 extra px.
+        let frag = InlineFragment::Text {
+            text: "abcd".to_string(),
+            x: 0.0,
+            width: 999.0, // will be recomputed by break_word_fragment
+            style: style.clone(),
+            node: None,
+        };
+
+        // Break into pieces at a narrow width that forces splitting.
+        let pieces = break_word_fragment(&frag, 30.0, &m);
+        assert!(pieces.len() > 1, "should have broken word into pieces");
+
+        // Each piece width should include letter_spacing via measure_word.
+        for piece in &pieces {
+            if let InlineFragment::Text { text, width, .. } = piece {
+                let expected = super::super::text::measure_word(
+                    text,
+                    style.font_size,
+                    style.letter_spacing,
+                    &m,
+                );
+                assert!(
+                    (*width - expected).abs() < 0.01,
+                    "piece '{text}' width {width} should match measure_word {expected}",
+                );
+            }
+        }
+    }
+
+    // -- replaced element CSS dimensions override intrinsic -----------
+
+    #[test]
+    fn test_image_css_dimensions_override_intrinsic() {
+        use crate::css::values::Dimension;
+
+        let m = FixedMeasurer;
+        let mut style = inline_style();
+        style.width = Dimension::Px(50.0);
+        style.height = Dimension::Px(30.0);
+
+        let replaced = ReplacedContent::Image {
+            width: 100,
+            height: 80,
+            texture: None,
+            alt: String::new(),
+        };
+
+        let child = LayoutBox::new(BoxType::Replaced(replaced), style, None);
+        let frags = collect_inline_fragments(&[child], &m);
+
+        assert_eq!(frags.len(), 1);
+        if let InlineFragment::ReplacedInline { width, height, .. } = &frags[0] {
+            assert!(
+                (*width - 50.0).abs() < 0.01,
+                "CSS width should override intrinsic, got {width}",
+            );
+            assert!(
+                (*height - 30.0).abs() < 0.01,
+                "CSS height should override intrinsic, got {height}",
+            );
+        } else {
+            panic!("expected ReplacedInline fragment");
+        }
+    }
+
+    #[test]
+    fn test_image_css_width_preserves_aspect_ratio() {
+        use crate::css::values::Dimension;
+
+        let m = FixedMeasurer;
+        let mut style = inline_style();
+        style.width = Dimension::Px(50.0);
+        // height stays Auto
+
+        let replaced = ReplacedContent::Image {
+            width: 100,
+            height: 80,
+            texture: None,
+            alt: String::new(),
+        };
+
+        let child = LayoutBox::new(BoxType::Replaced(replaced), style, None);
+        let frags = collect_inline_fragments(&[child], &m);
+
+        if let InlineFragment::ReplacedInline { width, height, .. } = &frags[0] {
+            assert!((*width - 50.0).abs() < 0.01);
+            // 50 * (80/100) = 40
+            assert!(
+                (*height - 40.0).abs() < 0.01,
+                "height should preserve aspect ratio: expected 40, got {height}",
+            );
+        }
     }
 }

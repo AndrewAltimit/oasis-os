@@ -17,9 +17,7 @@ use std::collections::HashMap;
 
 use crate::css::values::{BorderStyle, Overflow, TextDecoration};
 use crate::html::dom::NodeId;
-use crate::layout::box_model::{
-    BoxType, InlineFragment, LayoutBox, LineBox, ListMarker, Rect, ReplacedContent,
-};
+use crate::layout::box_model::{BoxType, LayoutBox, ListMarker, Rect, ReplacedContent};
 use oasis_types::backend::{Color, SdiBackend};
 use oasis_types::error::Result;
 
@@ -60,6 +58,8 @@ struct PaintContext {
     scroll_y: f32,
     /// Viewport height for offscreen culling.
     viewport_height: f32,
+    /// Active clipping rectangle from ancestor `overflow: hidden` boxes.
+    clip_rect: Option<Rect>,
 }
 
 // -------------------------------------------------------------------
@@ -88,6 +88,7 @@ pub fn paint(
         current_link: None,
         scroll_y,
         viewport_height,
+        clip_rect: None,
     };
 
     paint_box(layout, backend, viewport_x, viewport_y, &mut ctx, link_map)?;
@@ -167,13 +168,16 @@ fn paint_box(
     // 2. Borders
     paint_borders(layout_box, backend, offset_x, offset_y, ctx)?;
 
-    // Check overflow:hidden clipping -- if this box clips, we'll
-    // filter children that fall entirely outside the content box.
-    let clip_rect = if layout_box.style.overflow == Overflow::Hidden {
-        Some(layout_box.dimensions.content)
-    } else {
-        None
-    };
+    // Check overflow:hidden clipping -- if this box clips, intersect
+    // with any existing clip from an ancestor.
+    let prev_clip = ctx.clip_rect;
+    if layout_box.style.overflow == Overflow::Hidden {
+        let new_clip = layout_box.dimensions.content;
+        ctx.clip_rect = Some(match ctx.clip_rect {
+            Some(existing) => intersect_rects(existing, new_clip),
+            None => new_clip,
+        });
+    }
 
     // 3-6. Children / inline content / replaced / markers
     match &layout_box.box_type {
@@ -186,7 +190,7 @@ fn paint_box(
         | BoxType::InlineBlock => {
             for child in &layout_box.children {
                 // Skip children entirely outside clip rect.
-                if let Some(clip) = &clip_rect {
+                if let Some(clip) = &ctx.clip_rect {
                     let cb = child.dimensions.border_box();
                     if cb.y + cb.height < clip.y
                         || cb.y > clip.y + clip.height
@@ -212,6 +216,9 @@ fn paint_box(
             paint_replaced(replaced, layout_box, backend, offset_x, offset_y, ctx)?;
         },
     }
+
+    // Restore previous clip rect.
+    ctx.clip_rect = prev_clip;
 
     // Record a link hit region when leaving a link element.
     if let Some((ref href, link_node)) = ctx.current_link
@@ -491,18 +498,25 @@ fn paint_text(
     let color = apply_opacity(style.color, style.opacity);
     backend.draw_text(text, sx, sy, style.font_size as u16, color)?;
 
-    // Measure actual text width using the proportional bitmap font.
-    let text_width = oasis_types::backend::bitmap_measure_text(text, style.font_size as u16);
+    // Measure actual text width including letter-spacing.
+    let mut text_w = oasis_types::backend::bitmap_measure_text(text, style.font_size as u16) as f32;
+    if style.letter_spacing != 0.0 {
+        let chars = text.chars().count();
+        if chars > 1 {
+            text_w += style.letter_spacing * (chars - 1) as f32;
+        }
+    }
+    let text_width = text_w.max(0.0) as u32;
 
-    // Underline decoration
+    // Underline decoration: just below baseline (~85% of font-size).
     if style.text_decoration == TextDecoration::Underline {
-        let underline_y = sy + style.font_size as i32;
+        let underline_y = sy + (style.font_size * 0.85) as i32;
         backend.fill_rect(sx, underline_y, text_width, 1, color)?;
     }
 
-    // Line-through decoration
+    // Line-through decoration: at x-height (~40% of font-size).
     if style.text_decoration == TextDecoration::LineThrough {
-        let strike_y = sy + (style.font_size as i32 / 2);
+        let strike_y = sy + (style.font_size * 0.4) as i32;
         backend.fill_rect(sx, strike_y, text_width, 1, color)?;
     }
 
@@ -511,64 +525,6 @@ fn paint_text(
         backend.fill_rect(sx, sy, text_width, 1, color)?;
     }
 
-    Ok(())
-}
-
-/// Paint the fragments of a line box.
-///
-/// Will be called from the inline formatting context paint path once
-/// the layout engine produces [`LineBox`] data.
-#[allow(dead_code)]
-fn paint_line_box(
-    line: &LineBox,
-    backend: &mut dyn SdiBackend,
-    offset_x: i32,
-    offset_y: i32,
-    line_y: f32,
-    ctx: &PaintContext,
-) -> Result<()> {
-    for frag in &line.fragments {
-        match frag {
-            InlineFragment::Text { text, x, style, .. } => {
-                paint_text(text, *x, line_y, style, backend, offset_x, offset_y, ctx)?;
-            },
-            InlineFragment::InlineBox { layout_box } => {
-                let content = &layout_box.dimensions.content;
-                let sx = (content.x + offset_x as f32) as i32;
-                let sy = (content.y - ctx.scroll_y + offset_y as f32) as i32;
-                backend.draw_text(
-                    "",
-                    sx,
-                    sy,
-                    layout_box.style.font_size as u16,
-                    layout_box.style.color,
-                )?;
-            },
-            InlineFragment::ReplacedInline {
-                replaced,
-                x,
-                width,
-                height,
-                style,
-                ..
-            } => {
-                let sx = (*x + offset_x as f32) as i32;
-                let sy = (line_y - ctx.scroll_y + offset_y as f32) as i32;
-                match replaced {
-                    ReplacedContent::Image {
-                        texture: Some(tex), ..
-                    } => {
-                        backend.blit(*tex, sx, sy, *width as u32, *height as u32)?;
-                    },
-                    ReplacedContent::Image { alt, .. } => {
-                        let label = if alt.is_empty() { "\u{00D7}" } else { alt };
-                        backend.draw_text(label, sx + 2, sy + 2, 8, style.color)?;
-                    },
-                    _ => {},
-                }
-            },
-        }
-    }
     Ok(())
 }
 
@@ -720,6 +676,20 @@ fn has_text_content(layout_box: &LayoutBox) -> bool {
     match &layout_box.box_type {
         BoxType::Inline => true,
         _ => layout_box.children.iter().any(has_text_content),
+    }
+}
+
+/// Compute the intersection of two rectangles.
+fn intersect_rects(a: Rect, b: Rect) -> Rect {
+    let x = a.x.max(b.x);
+    let y = a.y.max(b.y);
+    let right = (a.x + a.width).min(b.x + b.width);
+    let bottom = (a.y + a.height).min(b.y + b.height);
+    Rect {
+        x,
+        y,
+        width: (right - x).max(0.0),
+        height: (bottom - y).max(0.0),
     }
 }
 

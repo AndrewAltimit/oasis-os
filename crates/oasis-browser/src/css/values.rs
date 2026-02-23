@@ -291,6 +291,8 @@ pub struct ComputedStyle {
     pub height: Dimension,
     pub max_width: Dimension,
     pub min_width: Dimension,
+    pub max_height: Dimension,
+    pub min_height: Dimension,
 
     // -- Text -------------------------------------------------------
     pub color: Color,
@@ -350,6 +352,8 @@ pub struct ComputedStyle {
     // -- Margin auto flags (for block centering) -------------------------
     pub margin_left_auto: bool,
     pub margin_right_auto: bool,
+    pub margin_top_auto: bool,
+    pub margin_bottom_auto: bool,
 
     // -- Flexbox properties --
     pub flex_direction: FlexDirection,
@@ -398,6 +402,8 @@ impl Default for ComputedStyle {
             height: Dimension::Auto,
             max_width: Dimension::Auto,
             min_width: Dimension::Px(0.0),
+            max_height: Dimension::Auto,
+            min_height: Dimension::Auto,
 
             // Text
             color: Color::BLACK,
@@ -456,6 +462,8 @@ impl Default for ComputedStyle {
 
             margin_left_auto: false,
             margin_right_auto: false,
+            margin_top_auto: false,
+            margin_bottom_auto: false,
 
             flex_direction: FlexDirection::Row,
             flex_wrap: FlexWrap::NoWrap,
@@ -564,6 +572,8 @@ impl ComputedStyle {
                     self.margin_left = 0.0;
                     self.margin_left_auto = true;
                     self.margin_right_auto = true;
+                    self.margin_top_auto = true;
+                    self.margin_bottom_auto = true;
                 } else {
                     let px = resolve_length(value, parent_font_size);
                     self.margin_top = px;
@@ -572,10 +582,17 @@ impl ComputedStyle {
                     self.margin_left = px;
                     self.margin_left_auto = false;
                     self.margin_right_auto = false;
+                    self.margin_top_auto = false;
+                    self.margin_bottom_auto = false;
                 }
             },
             "margin-top" => {
-                self.margin_top = resolve_length(value, parent_font_size);
+                if as_keyword(value) == Some("auto") {
+                    self.margin_top = 0.0;
+                    self.margin_top_auto = true;
+                } else {
+                    self.margin_top = resolve_length(value, parent_font_size);
+                }
             },
             "margin-right" => {
                 if as_keyword(value) == Some("auto") {
@@ -587,7 +604,12 @@ impl ComputedStyle {
                 }
             },
             "margin-bottom" => {
-                self.margin_bottom = resolve_length(value, parent_font_size);
+                if as_keyword(value) == Some("auto") {
+                    self.margin_bottom = 0.0;
+                    self.margin_bottom_auto = true;
+                } else {
+                    self.margin_bottom = resolve_length(value, parent_font_size);
+                }
             },
             "margin-left" => {
                 if as_keyword(value) == Some("auto") {
@@ -643,7 +665,8 @@ impl ComputedStyle {
 
             // -- Border color -------------------------------------------
             "border-color" => {
-                if let Some(c) = resolve_color(value) {
+                let c = resolve_color_or_current(value, self.color);
+                if let Some(c) = c {
                     self.border_top_color = c;
                     self.border_right_color = c;
                     self.border_bottom_color = c;
@@ -651,22 +674,22 @@ impl ComputedStyle {
                 }
             },
             "border-top-color" => {
-                if let Some(c) = resolve_color(value) {
+                if let Some(c) = resolve_color_or_current(value, self.color) {
                     self.border_top_color = c;
                 }
             },
             "border-right-color" => {
-                if let Some(c) = resolve_color(value) {
+                if let Some(c) = resolve_color_or_current(value, self.color) {
                     self.border_right_color = c;
                 }
             },
             "border-bottom-color" => {
-                if let Some(c) = resolve_color(value) {
+                if let Some(c) = resolve_color_or_current(value, self.color) {
                     self.border_bottom_color = c;
                 }
             },
             "border-left-color" => {
-                if let Some(c) = resolve_color(value) {
+                if let Some(c) = resolve_color_or_current(value, self.color) {
                     self.border_left_color = c;
                 }
             },
@@ -713,6 +736,12 @@ impl ComputedStyle {
             },
             "min-width" => {
                 self.min_width = resolve_dimension(value, parent_font_size);
+            },
+            "max-height" => {
+                self.max_height = resolve_dimension(value, parent_font_size);
+            },
+            "min-height" => {
+                self.min_height = resolve_dimension(value, parent_font_size);
             },
 
             // -- Color --------------------------------------------------
@@ -1128,6 +1157,16 @@ fn resolve_color(value: &CssValue) -> Option<Color> {
     }
 }
 
+/// Resolve a color value, treating `currentcolor` as the element's `color`.
+fn resolve_color_or_current(value: &CssValue, current_color: Color) -> Option<Color> {
+    if let CssValue::Keyword(name) = value
+        && name.eq_ignore_ascii_case("currentcolor")
+    {
+        return Some(current_color);
+    }
+    resolve_color(value)
+}
+
 /// Convert a parser `CssColor` to the backend `Color`.
 fn css_color_to_backend(c: &CssColor) -> Color {
     Color::rgba(c.r, c.g, c.b, c.a)
@@ -1450,6 +1489,57 @@ mod tests {
         assert_eq!(keyword_color("nonexistent"), None);
     }
 
+    #[test]
+    fn test_margin_auto_vertical_flags() {
+        let mut s = ComputedStyle::default();
+        s.apply_declaration("margin-top", &CssValue::Keyword("auto".into()), 16.0);
+        assert!(s.margin_top_auto, "margin-top: auto should set flag");
+        assert_eq!(s.margin_top, 0.0);
+
+        s.apply_declaration("margin-bottom", &CssValue::Keyword("auto".into()), 16.0);
+        assert!(s.margin_bottom_auto, "margin-bottom: auto should set flag");
+        assert_eq!(s.margin_bottom, 0.0);
+    }
+
+    #[test]
+    fn test_margin_shorthand_preserves_auto() {
+        use crate::css::parser::LengthUnit;
+
+        let mut s = ComputedStyle::default();
+        // margin: 0 auto => top/bottom=0, left/right=auto
+        // The shorthand is expanded by the parser, but here we test
+        // individual property application after expansion.
+        s.apply_declaration("margin-top", &CssValue::Length(0.0, LengthUnit::Px), 16.0);
+        s.apply_declaration("margin-right", &CssValue::Keyword("auto".into()), 16.0);
+        s.apply_declaration(
+            "margin-bottom",
+            &CssValue::Length(0.0, LengthUnit::Px),
+            16.0,
+        );
+        s.apply_declaration("margin-left", &CssValue::Keyword("auto".into()), 16.0);
+
+        assert!(s.margin_left_auto);
+        assert!(s.margin_right_auto);
+        assert!(!s.margin_top_auto);
+        assert!(!s.margin_bottom_auto);
+    }
+
+    #[test]
+    fn test_currentcolor_resolves_to_element_color() {
+        let mut s = ComputedStyle::default();
+        s.color = Color::rgb(255, 0, 0);
+        s.apply_declaration(
+            "border-top-color",
+            &CssValue::Keyword("currentcolor".into()),
+            16.0,
+        );
+        assert_eq!(
+            s.border_top_color,
+            Color::rgb(255, 0, 0),
+            "currentcolor should resolve to element's color",
+        );
+    }
+
     mod prop {
         use super::*;
         use proptest::prelude::*;
@@ -1585,6 +1675,7 @@ mod tests {
                     | "gap" | "row-gap" | "column-gap"
                     | "top" | "right" | "bottom" | "left"
                     | "max-width" | "min-width"
+                    | "max-height" | "min-height"
                 ) {
                     return Ok(());
                 }

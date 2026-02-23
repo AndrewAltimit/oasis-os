@@ -167,7 +167,7 @@ pub fn measure_word(
     if letter_spacing != 0.0 {
         let chars = word.chars().count();
         if chars > 1 {
-            return base + letter_spacing * (chars - 1) as f32;
+            return (base + letter_spacing * (chars - 1) as f32).max(0.0);
         }
     }
     base
@@ -388,5 +388,18 @@ mod tests {
         let m = StubMeasurer;
         let w = measure_space(16.0, 3.0, &m);
         assert_eq!(w, 11.0);
+    }
+
+    #[test]
+    fn test_negative_letter_spacing_no_negative_width() {
+        let m = StubMeasurer;
+        // "ab" base width = 16 (8*2 at font_size 16 via StubMeasurer)
+        // letter_spacing = -100 => 16 + (-100 * 1) = -84
+        // Should be clamped to 0.
+        let w = measure_word("ab", 16.0, -100.0, &m);
+        assert!(
+            w >= 0.0,
+            "negative letter-spacing should not produce negative width, got {w}",
+        );
     }
 }

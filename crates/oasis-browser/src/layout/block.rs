@@ -82,7 +82,7 @@ pub fn build_layout_tree(
     // Layout from the root.
     root.dimensions.content.x = 0.0;
     root.dimensions.content.y = 0.0;
-    layout_block(&mut root, viewport_width, measurer);
+    layout_block_with_height(&mut root, viewport_width, Some(_viewport_height), measurer);
 
     // Shift root content origin to include root's own box-model edges.
     // layout_block_children no longer adds parent padding to children,
@@ -205,7 +205,7 @@ pub fn layout_block_incremental(
         layout_table_children(layout_box, measurer);
     } else {
         layout_children_incremental(layout_box, measurer, cache);
-        calculate_block_height(layout_box);
+        calculate_block_height(layout_box, None);
     }
 
     layout_box.dirty = false;
@@ -721,6 +721,17 @@ pub fn layout_block(
     containing_width: f32,
     measurer: &dyn TextMeasurer,
 ) {
+    layout_block_with_height(layout_box, containing_width, None, measurer);
+}
+
+/// Internal layout with optional containing height for percentage
+/// height resolution.
+fn layout_block_with_height(
+    layout_box: &mut LayoutBox,
+    containing_width: f32,
+    containing_height: Option<f32>,
+    measurer: &dyn TextMeasurer,
+) {
     // 1. Resolve padding, border, and margin from the computed style.
     resolve_edge_sizes(layout_box, containing_width);
 
@@ -735,7 +746,7 @@ pub fn layout_block(
     } else {
         layout_block_children(layout_box, measurer);
         // 4. Calculate height.
-        calculate_block_height(layout_box);
+        calculate_block_height(layout_box, containing_height);
     }
 }
 
@@ -827,6 +838,20 @@ fn calculate_block_width(layout_box: &mut LayoutBox, containing_width: f32) {
             let w = (containing_width - total_extra).max(0.0);
             layout_box.dimensions.content.width = w;
         },
+    }
+
+    // Apply min-width / max-width constraints.
+    if let Dimension::Px(min) = layout_box.style.min_width
+        && layout_box.dimensions.content.width < min
+    {
+        layout_box.dimensions.content.width = min;
+    }
+    if let Dimension::Px(max) = layout_box.style.max_width
+        && max < 999.0
+        && layout_box.dimensions.content.width > max
+    {
+        // Don't clamp table rowspan/colspan encoding values (>= 1000).
+        layout_box.dimensions.content.width = max;
     }
 }
 
@@ -1028,28 +1053,49 @@ fn layout_block_children(parent: &mut LayoutBox, measurer: &dyn TextMeasurer) {
 ///
 /// If `height` is explicit, use it. Otherwise, height is the distance
 /// from the top of the content area to the bottom of the last child's
-/// margin box.
-fn calculate_block_height(layout_box: &mut LayoutBox) {
+/// margin box. Percentage heights resolve against `containing_height`
+/// when available.
+fn calculate_block_height(layout_box: &mut LayoutBox, containing_height: Option<f32>) {
     match layout_box.style.height {
         Dimension::Px(h) => {
             layout_box.dimensions.content.height = h;
         },
-        _ => {
-            // Auto height: sum of children's occupied space.
-            let content_top = layout_box.dimensions.content.y;
-            let mut bottom = content_top;
-
-            for child in &layout_box.children {
-                let child_mb = child.dimensions.margin_box();
-                let child_bottom = child_mb.y + child_mb.height;
-                if child_bottom > bottom {
-                    bottom = child_bottom;
-                }
+        Dimension::Percent(pct) => {
+            if let Some(ch) = containing_height {
+                layout_box.dimensions.content.height = ch * (pct / 100.0);
+            } else {
+                // No definite containing height: treat as auto (CSS spec).
+                calculate_auto_height(layout_box);
             }
-
-            layout_box.dimensions.content.height = (bottom - content_top).max(0.0);
+        },
+        Dimension::Auto => {
+            calculate_auto_height(layout_box);
         },
     }
+
+    // Apply min-height / max-height constraints.
+    if let Dimension::Px(min) = layout_box.style.min_height {
+        layout_box.dimensions.content.height = layout_box.dimensions.content.height.max(min);
+    }
+    if let Dimension::Px(max) = layout_box.style.max_height {
+        layout_box.dimensions.content.height = layout_box.dimensions.content.height.min(max);
+    }
+}
+
+/// Compute auto height from children's occupied space.
+fn calculate_auto_height(layout_box: &mut LayoutBox) {
+    let content_top = layout_box.dimensions.content.y;
+    let mut bottom = content_top;
+
+    for child in &layout_box.children {
+        let child_mb = child.dimensions.margin_box();
+        let child_bottom = child_mb.y + child_mb.height;
+        if child_bottom > bottom {
+            bottom = child_bottom;
+        }
+    }
+
+    layout_box.dimensions.content.height = (bottom - content_top).max(0.0);
 }
 
 // -------------------------------------------------------------------
@@ -1564,6 +1610,97 @@ mod tests {
             (parent.dimensions.margin.top - 10.0).abs() < 0.01,
             "parent margin-top should stay 10 with padding, got {}",
             parent.dimensions.margin.top,
+        );
+    }
+
+    // -- percentage height resolution ---------------------------------
+
+    #[test]
+    fn test_percentage_height_resolves() {
+        let m = FixedMeasurer;
+        let mut style = block_style();
+        style.height = Dimension::Percent(50.0);
+
+        let mut lb = LayoutBox::new(BoxType::Block, style, None);
+        lb.dimensions.content.x = 0.0;
+        lb.dimensions.content.y = 0.0;
+
+        // Use layout_block_with_height to pass containing height.
+        layout_block_with_height(&mut lb, 480.0, Some(200.0), &m);
+
+        assert!(
+            (lb.dimensions.content.height - 100.0).abs() < 0.01,
+            "50% of 200px containing height should be 100, got {}",
+            lb.dimensions.content.height,
+        );
+    }
+
+    // -- min/max height clamping --------------------------------------
+
+    #[test]
+    fn test_min_max_height_clamps() {
+        let m = FixedMeasurer;
+
+        // min-height enforced when content is smaller.
+        let mut style = block_style();
+        style.min_height = Dimension::Px(50.0);
+        let mut lb = LayoutBox::new(BoxType::Block, style, None);
+        lb.dimensions.content.x = 0.0;
+        lb.dimensions.content.y = 0.0;
+        layout_block(&mut lb, 480.0, &m);
+        assert!(
+            lb.dimensions.content.height >= 50.0,
+            "min-height 50 should enforce minimum, got {}",
+            lb.dimensions.content.height,
+        );
+
+        // max-height caps growth.
+        let mut style2 = block_style();
+        style2.height = Dimension::Px(200.0);
+        style2.max_height = Dimension::Px(80.0);
+        let mut lb2 = LayoutBox::new(BoxType::Block, style2, None);
+        lb2.dimensions.content.x = 0.0;
+        lb2.dimensions.content.y = 0.0;
+        layout_block(&mut lb2, 480.0, &m);
+        assert!(
+            (lb2.dimensions.content.height - 80.0).abs() < 0.01,
+            "max-height 80 should cap height 200, got {}",
+            lb2.dimensions.content.height,
+        );
+    }
+
+    // -- min/max width applied ----------------------------------------
+
+    #[test]
+    fn test_min_max_width_applied() {
+        let m = FixedMeasurer;
+
+        // min-width enforced.
+        let mut style = block_style();
+        style.width = Dimension::Auto;
+        style.min_width = Dimension::Px(200.0);
+        let mut lb = LayoutBox::new(BoxType::Block, style, None);
+        lb.dimensions.content.x = 0.0;
+        lb.dimensions.content.y = 0.0;
+        layout_block(&mut lb, 100.0, &m);
+        assert!(
+            lb.dimensions.content.width >= 200.0,
+            "min-width 200 should override auto width in 100px container, got {}",
+            lb.dimensions.content.width,
+        );
+
+        // max-width caps.
+        let mut style2 = block_style();
+        style2.width = Dimension::Auto;
+        style2.max_width = Dimension::Px(150.0);
+        let mut lb2 = LayoutBox::new(BoxType::Block, style2, None);
+        lb2.dimensions.content.x = 0.0;
+        lb2.dimensions.content.y = 0.0;
+        layout_block(&mut lb2, 400.0, &m);
+        assert!(
+            (lb2.dimensions.content.width - 150.0).abs() < 0.01,
+            "max-width 150 should cap auto width in 400px container, got {}",
+            lb2.dimensions.content.width,
         );
     }
 }

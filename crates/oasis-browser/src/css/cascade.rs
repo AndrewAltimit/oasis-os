@@ -909,6 +909,10 @@ header, footer, figure, figcaption, address, fieldset, form {
     display: block;
 }
 
+body {
+    margin: 8px;
+}
+
 p {
     display: block;
     margin-top: 1em;
@@ -1979,6 +1983,27 @@ mod tests {
         // Element with class "cls" gets universal + .cls.
         let candidates = index.candidates("div", None, &["cls"]);
         assert_eq!(candidates.len(), 2, "universal + class");
+    }
+
+    #[test]
+    fn test_body_has_default_margin() {
+        let ua = default_stylesheet();
+        let doc = make_doc(vec![]);
+        let body_id = 2; // body is node 2 in make_doc
+        let ctx = ctx();
+        let index = SelectorIndex::build(&[&ua]);
+        let inline_map = std::collections::HashMap::new();
+        let style = compute_style(&doc, body_id, None, &[&ua], &index, &inline_map, &ctx);
+        assert!(
+            (style.margin_top - 8.0).abs() < 0.01,
+            "body should have 8px top margin, got {}",
+            style.margin_top,
+        );
+        assert!(
+            (style.margin_left - 8.0).abs() < 0.01,
+            "body should have 8px left margin, got {}",
+            style.margin_left,
+        );
     }
 
     mod prop {
