@@ -15,9 +15,11 @@
 
 use super::box_model::*;
 use super::flex::layout_flex;
+use super::float::{ClearSide, FloatContext, FloatSide};
 use super::inline::layout_inline;
 use super::positioning::apply_positioning;
-use crate::css::values::{ComputedStyle, Dimension, Display, ListStyleType};
+use super::table::layout_table;
+use crate::css::values::{Clear, ComputedStyle, Dimension, Display, Float, ListStyleType};
 use crate::html::dom::{Document, ElementData, NodeId, NodeKind, TagName};
 
 use std::collections::HashMap;
@@ -181,6 +183,8 @@ pub fn layout_block_incremental(
 
     if matches!(layout_box.box_type, BoxType::Flex) {
         layout_flex(layout_box, containing_width, measurer);
+    } else if matches!(layout_box.box_type, BoxType::TableWrapper) {
+        layout_table_children(layout_box, measurer);
     } else {
         layout_children_incremental(layout_box, measurer, cache);
         calculate_block_height(layout_box);
@@ -336,6 +340,25 @@ fn build_box_for_node(
             }
 
             let mut lb = LayoutBox::new(box_type, style, Some(node_id));
+
+            // For table cells, encode colspan/rowspan in the style
+            // using the convention expected by the table layout engine.
+            if matches!(lb.box_type, BoxType::TableCell) {
+                if let Some(cs) = elem
+                    .get_attribute("colspan")
+                    .and_then(|v| v.parse::<usize>().ok())
+                    .filter(|&cs| cs > 1)
+                {
+                    lb.style.min_width = Dimension::Px(cs as f32 * 1000.0);
+                }
+                if let Some(rs) = elem
+                    .get_attribute("rowspan")
+                    .and_then(|v| v.parse::<usize>().ok())
+                    .filter(|&rs| rs > 1)
+                {
+                    lb.style.max_width = Dimension::Px(rs as f32 * 1000.0);
+                }
+            }
 
             // Recursively build children.
             let child_ids = node.children.clone();
@@ -515,6 +538,8 @@ pub fn layout_block(
     // 3. Layout children.
     if matches!(layout_box.box_type, BoxType::Flex) {
         layout_flex(layout_box, containing_width, measurer);
+    } else if matches!(layout_box.box_type, BoxType::TableWrapper) {
+        layout_table_children(layout_box, measurer);
     } else {
         layout_block_children(layout_box, measurer);
         // 4. Calculate height.
@@ -600,6 +625,38 @@ fn calculate_block_width(layout_box: &mut LayoutBox, containing_width: f32) {
     }
 }
 
+/// Lay out a table wrapper's children using the table layout algorithm.
+///
+/// Delegates to [`layout_table`] which computes column widths, row heights,
+/// and positions cells. The results are copied back into the table's layout
+/// box and offset into the table's content coordinate space.
+fn layout_table_children(layout_box: &mut LayoutBox, measurer: &dyn TextMeasurer) {
+    let content_width = layout_box.dimensions.content.width;
+    let result = layout_table(
+        &layout_box.children,
+        &layout_box.style,
+        content_width,
+        measurer,
+    );
+    let offset_x = layout_box.dimensions.content.x;
+    let offset_y = layout_box.dimensions.content.y;
+    layout_box.dimensions.content.height = result.dimensions.content.height;
+    layout_box.children = result.children;
+    // Offset all children into the table's content coordinate space.
+    for child in &mut layout_box.children {
+        offset_descendant(child, offset_x, offset_y);
+    }
+}
+
+/// Recursively offset a layout box and its descendants by `(dx, dy)`.
+fn offset_descendant(layout_box: &mut LayoutBox, dx: f32, dy: f32) {
+    layout_box.dimensions.content.x += dx;
+    layout_box.dimensions.content.y += dy;
+    for child in &mut layout_box.children {
+        offset_descendant(child, dx, dy);
+    }
+}
+
 /// Layout block-level children, stacking them vertically.
 ///
 /// If all children are inline-level (no block-level siblings), the
@@ -621,8 +678,50 @@ fn layout_block_children(parent: &mut LayoutBox, measurer: &dyn TextMeasurer) {
     let mut cursor_y = parent.dimensions.content.y + parent.dimensions.padding.top;
 
     let mut prev_margin_bottom: f32 = 0.0;
+    let mut float_ctx = FloatContext::new();
 
     for child in &mut parent.children {
+        // Handle clear property: advance cursor below cleared floats.
+        let clear_y = match child.style.clear {
+            Clear::Left => float_ctx.clear_y(ClearSide::Left),
+            Clear::Right => float_ctx.clear_y(ClearSide::Right),
+            Clear::Both => float_ctx.clear_y(ClearSide::Both),
+            Clear::None => 0.0,
+        };
+        if child.style.clear != Clear::None && clear_y > cursor_y {
+            cursor_y = clear_y;
+            prev_margin_bottom = 0.0;
+        }
+
+        // Handle floated children: position via float context.
+        if child.style.float != Float::None {
+            resolve_edge_sizes(child, content_width);
+            layout_block(child, content_width, measurer);
+            let margin_box = child.dimensions.margin_box();
+            let side = match child.style.float {
+                Float::Left => FloatSide::Left,
+                Float::Right => FloatSide::Right,
+                Float::None => unreachable!(),
+            };
+            let float_box = float_ctx.place_float(
+                side,
+                margin_box.width,
+                margin_box.height,
+                cursor_y,
+                content_width,
+            );
+            // Position the child at the float's placed position.
+            child.dimensions.content.x = float_box.rect.x
+                + child.dimensions.margin.left
+                + child.dimensions.border.left
+                + child.dimensions.padding.left;
+            child.dimensions.content.y = float_box.rect.y
+                + child.dimensions.margin.top
+                + child.dimensions.border.top
+                + child.dimensions.padding.top;
+            continue;
+        }
+
         match child.box_type {
             BoxType::Block | BoxType::ListItem { .. } | BoxType::TableWrapper => {
                 // Resolve child's edge sizes first so we can read
@@ -675,6 +774,15 @@ fn layout_block_children(parent: &mut LayoutBox, measurer: &dyn TextMeasurer) {
                 // have been wrapped in anonymous boxes. If we get here,
                 // just skip.
             },
+        }
+    }
+
+    // Clearfix: ensure the parent's height includes all floats.
+    if !float_ctx.is_empty() {
+        let float_bottom = float_ctx.clear_y(ClearSide::Both);
+        if float_bottom > cursor_y {
+            // Extend content height to encompass floated children.
+            parent.dimensions.content.height = parent.dimensions.content.height.max(float_bottom);
         }
     }
 }

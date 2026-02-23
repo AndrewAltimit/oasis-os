@@ -375,14 +375,22 @@ impl BrowserWidget {
         // 2. Extract page title.
         let title = doc.title().unwrap_or_else(|| url.to_string());
 
-        // 3. CSS cascade with default stylesheet.
-        let ua_sheet = css::default::default_stylesheet();
-        let styles = css::cascade::style_tree(&doc, &[&ua_sheet], &[]);
+        // 3. Collect <style> blocks and inline style="" attributes from DOM.
+        let author_sheets = Self::collect_style_sheets(&doc);
+        let inline_styles = Self::collect_inline_styles(&doc);
 
-        // 4. Build link href map from DOM.
+        // 4. CSS cascade: user-agent + author stylesheets + inline styles.
+        let ua_sheet = css::default::default_stylesheet();
+        let mut all_sheets: Vec<&css::parser::Stylesheet> = vec![&ua_sheet];
+        for sheet in &author_sheets {
+            all_sheets.push(sheet);
+        }
+        let styles = css::cascade::style_tree(&doc, &all_sheets, &inline_styles);
+
+        // 5. Build link href map from DOM.
         let href_map = Self::build_link_map(&doc);
 
-        // 5. Build layout tree.
+        // 6. Build layout tree.
         let content_h = self.config.content_height(self.window_h);
         let layout_root = layout::block::build_layout_tree(
             &doc,
@@ -392,7 +400,7 @@ impl BrowserWidget {
             content_h as f32,
         );
 
-        // 6. Store results.
+        // 7. Store results.
         self.document = Some(doc);
         self.styles = styles;
         self.href_map = href_map;
@@ -403,7 +411,7 @@ impl BrowserWidget {
         self.layout_dirty = false;
         self.last_layout_w = self.window_w;
 
-        // 7. Update navigation.
+        // 8. Update navigation.
         self.nav.navigate(url, &title);
     }
 
@@ -420,6 +428,43 @@ impl BrowserWidget {
             }
         }
         map
+    }
+
+    /// Walk the DOM to collect text from `<style>` elements and parse
+    /// each into a `Stylesheet`. Both `<head>` and `<body>` style blocks
+    /// are included.
+    fn collect_style_sheets(doc: &html::dom::Document) -> Vec<css::parser::Stylesheet> {
+        let mut sheets = Vec::new();
+        for (id, node) in doc.nodes.iter().enumerate() {
+            if let html::dom::NodeKind::Element(elem) = &node.kind
+                && elem.tag == html::dom::TagName::Style
+            {
+                let css_text = doc.text_content(id);
+                if !css_text.is_empty() {
+                    sheets.push(css::parser::Stylesheet::parse(&css_text));
+                }
+            }
+        }
+        sheets
+    }
+
+    /// Walk the DOM to collect inline `style=""` attributes and parse
+    /// each into a list of declarations keyed by NodeId.
+    fn collect_inline_styles(
+        doc: &html::dom::Document,
+    ) -> Vec<(NodeId, Vec<css::parser::Declaration>)> {
+        let mut result = Vec::new();
+        for (id, node) in doc.nodes.iter().enumerate() {
+            if let html::dom::NodeKind::Element(elem) = &node.kind
+                && let Some(style_attr) = elem.get_attribute("style")
+            {
+                let decls = css::parser::parse_inline_style(style_attr);
+                if !decls.is_empty() {
+                    result.push((id, decls));
+                }
+            }
+        }
+        result
     }
 
     /// Load and render a Gemini document.

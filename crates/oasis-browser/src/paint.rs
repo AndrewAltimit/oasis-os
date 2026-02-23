@@ -15,7 +15,7 @@
 
 use std::collections::HashMap;
 
-use crate::css::values::{BorderStyle, TextDecoration};
+use crate::css::values::{BorderStyle, Overflow, TextDecoration};
 use crate::html::dom::NodeId;
 use crate::layout::box_model::{
     BoxType, InlineFragment, LayoutBox, LineBox, ListMarker, Rect, ReplacedContent,
@@ -164,6 +164,14 @@ fn paint_box(
     // 2. Borders
     paint_borders(layout_box, backend, offset_x, offset_y, ctx)?;
 
+    // Check overflow:hidden clipping -- if this box clips, we'll
+    // filter children that fall entirely outside the content box.
+    let clip_rect = if layout_box.style.overflow == Overflow::Hidden {
+        Some(layout_box.dimensions.content)
+    } else {
+        None
+    };
+
     // 3-6. Children / inline content / replaced / markers
     match &layout_box.box_type {
         BoxType::Block
@@ -174,6 +182,17 @@ fn paint_box(
         | BoxType::TableCell
         | BoxType::InlineBlock => {
             for child in &layout_box.children {
+                // Skip children entirely outside clip rect.
+                if let Some(clip) = &clip_rect {
+                    let cb = child.dimensions.border_box();
+                    if cb.y + cb.height < clip.y
+                        || cb.y > clip.y + clip.height
+                        || cb.x + cb.width < clip.x
+                        || cb.x > clip.x + clip.width
+                    {
+                        continue;
+                    }
+                }
                 paint_box(child, backend, offset_x, offset_y, ctx, link_map)?;
             }
         },
@@ -265,33 +284,130 @@ fn paint_borders(
 
     // Top
     if d.border.top > 0.0 && style.border_top_style != BorderStyle::None {
-        backend.fill_rect(bx, by, bw, d.border.top as u32, style.border_top_color)?;
+        paint_border_edge(
+            backend,
+            bx,
+            by,
+            bw,
+            d.border.top as u32,
+            style.border_top_color,
+            style.border_top_style,
+            true,
+        )?;
     }
     // Right
     if d.border.right > 0.0 && style.border_right_style != BorderStyle::None {
-        backend.fill_rect(
+        paint_border_edge(
+            backend,
             bx + bw as i32 - d.border.right as i32,
             by,
             d.border.right as u32,
             bh,
             style.border_right_color,
+            style.border_right_style,
+            false,
         )?;
     }
     // Bottom
     if d.border.bottom > 0.0 && style.border_bottom_style != BorderStyle::None {
-        backend.fill_rect(
+        paint_border_edge(
+            backend,
             bx,
             by + bh as i32 - d.border.bottom as i32,
             bw,
             d.border.bottom as u32,
             style.border_bottom_color,
+            style.border_bottom_style,
+            true,
         )?;
     }
     // Left
     if d.border.left > 0.0 && style.border_left_style != BorderStyle::None {
-        backend.fill_rect(bx, by, d.border.left as u32, bh, style.border_left_color)?;
+        paint_border_edge(
+            backend,
+            bx,
+            by,
+            d.border.left as u32,
+            bh,
+            style.border_left_color,
+            style.border_left_style,
+            false,
+        )?;
     }
 
+    Ok(())
+}
+
+/// Paint a single border edge with the appropriate style.
+///
+/// For `Solid`, draws a filled rectangle. For `Dashed`, draws
+/// alternating filled/empty segments. For `Dotted`, draws small
+/// square dots. For `Double`, draws two parallel lines.
+#[allow(clippy::too_many_arguments)]
+fn paint_border_edge(
+    backend: &mut dyn SdiBackend,
+    x: i32,
+    y: i32,
+    w: u32,
+    h: u32,
+    color: Color,
+    style: BorderStyle,
+    horizontal: bool,
+) -> Result<()> {
+    match style {
+        BorderStyle::Solid => {
+            backend.fill_rect(x, y, w, h, color)?;
+        },
+        BorderStyle::Dashed => {
+            // Alternating filled/empty segments along the edge.
+            let length = if horizontal { w } else { h };
+            let thickness = if horizontal { h } else { w };
+            let dash_len = (thickness * 3).max(4);
+            let mut pos = 0u32;
+            let mut draw = true;
+            while pos < length {
+                let seg = dash_len.min(length - pos);
+                if draw {
+                    if horizontal {
+                        backend.fill_rect(x + pos as i32, y, seg, thickness, color)?;
+                    } else {
+                        backend.fill_rect(x, y + pos as i32, thickness, seg, color)?;
+                    }
+                }
+                pos += seg;
+                draw = !draw;
+            }
+        },
+        BorderStyle::Dotted => {
+            // Small square dots along the edge.
+            let length = if horizontal { w } else { h };
+            let thickness = if horizontal { h } else { w };
+            let dot_size = thickness.max(1);
+            let mut pos = 0u32;
+            while pos < length {
+                if horizontal {
+                    backend.fill_rect(x + pos as i32, y, dot_size, thickness, color)?;
+                } else {
+                    backend.fill_rect(x, y + pos as i32, thickness, dot_size, color)?;
+                }
+                pos += dot_size * 2;
+            }
+        },
+        BorderStyle::Double => {
+            // Two parallel lines separated by a gap.
+            let thickness = if horizontal { h } else { w };
+            let line = (thickness / 3).max(1);
+            let gap = thickness.saturating_sub(line * 2);
+            if horizontal {
+                backend.fill_rect(x, y, w, line, color)?;
+                backend.fill_rect(x, y + (line + gap) as i32, w, line, color)?;
+            } else {
+                backend.fill_rect(x, y, line, h, color)?;
+                backend.fill_rect(x + (line + gap) as i32, y, line, h, color)?;
+            }
+        },
+        BorderStyle::None => {},
+    }
     Ok(())
 }
 
@@ -348,9 +464,8 @@ fn paint_text(
 
     backend.draw_text(text, sx, sy, style.font_size as u16, style.color)?;
 
-    // Approximate text width: each glyph is roughly half the font size
-    // wide (matching the 8x8 bitmap font scaled up).
-    let text_width = text.len() as u32 * (style.font_size as u32 / 2);
+    // Measure actual text width using the proportional bitmap font.
+    let text_width = oasis_types::backend::bitmap_measure_text(text, style.font_size as u16);
 
     // Underline decoration
     if style.text_decoration == TextDecoration::Underline {
@@ -362,6 +477,11 @@ fn paint_text(
     if style.text_decoration == TextDecoration::LineThrough {
         let strike_y = sy + (style.font_size as i32 / 2);
         backend.fill_rect(sx, strike_y, text_width, 1, style.color)?;
+    }
+
+    // Overline decoration
+    if style.text_decoration == TextDecoration::Overline {
+        backend.fill_rect(sx, sy, text_width, 1, style.color)?;
     }
 
     Ok(())

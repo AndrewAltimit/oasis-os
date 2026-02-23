@@ -306,9 +306,16 @@ impl CssParser {
             if self.at_eof() {
                 break;
             }
-            // At-rules: consume and discard.
-            if matches!(self.peek(), CssToken::AtKeyword(_)) {
-                self.skip_at_rule();
+            if let CssToken::AtKeyword(ref name) = self.peek().clone() {
+                let lc = name.to_ascii_lowercase();
+                if lc == "media" {
+                    // Parse @media rules and include matching ones.
+                    let media_rules = self.parse_media_rule();
+                    rules.extend(media_rules);
+                } else {
+                    // Other at-rules: skip.
+                    self.skip_at_rule();
+                }
                 continue;
             }
             match self.try_parse_rule() {
@@ -348,6 +355,71 @@ impl CssParser {
                     self.advance();
                 },
             }
+        }
+    }
+
+    /// Parse an `@media` rule. Evaluates the media query against the
+    /// OASIS viewport (480x272, screen). If it matches, the inner rules
+    /// are returned; otherwise they are discarded.
+    fn parse_media_rule(&mut self) -> Vec<Rule> {
+        self.advance(); // consume @media token
+        self.skip_whitespace();
+
+        // Collect the media query condition tokens up to the opening brace.
+        let mut condition = String::new();
+        loop {
+            match self.peek() {
+                CssToken::OpenBrace | CssToken::Eof => break,
+                _ => {
+                    let tok = self.peek().clone();
+                    self.advance();
+                    match tok {
+                        CssToken::Ident(s) => condition.push_str(&s),
+                        CssToken::Number(n) => condition.push_str(&format!("{n}")),
+                        CssToken::Dimension(n, unit) => {
+                            condition.push_str(&format!("{n}{unit}"));
+                        },
+                        CssToken::Whitespace => condition.push(' '),
+                        CssToken::OpenParen => condition.push('('),
+                        CssToken::CloseParen => condition.push(')'),
+                        CssToken::Colon => condition.push(':'),
+                        CssToken::Comma => condition.push(','),
+                        CssToken::Delim(c) => condition.push(c),
+                        _ => {},
+                    }
+                },
+            }
+        }
+
+        // Consume the opening brace.
+        if !self.expect(&CssToken::OpenBrace) {
+            return Vec::new();
+        }
+
+        // Parse inner rules.
+        let mut inner_rules = Vec::new();
+        loop {
+            self.skip_whitespace();
+            if self.at_eof() || self.peek() == &CssToken::CloseBrace {
+                break;
+            }
+            if matches!(self.peek(), CssToken::AtKeyword(_)) {
+                self.skip_at_rule();
+                continue;
+            }
+            if let Some(rule) = self.try_parse_rule() {
+                inner_rules.push(rule);
+            } else {
+                self.advance();
+            }
+        }
+        self.expect(&CssToken::CloseBrace);
+
+        // Evaluate the media condition.
+        if eval_media_query(&condition) {
+            inner_rules
+        } else {
+            Vec::new()
         }
     }
 
@@ -1117,6 +1189,78 @@ fn named_color(name: &str) -> Option<CssColor> {
 }
 
 // -------------------------------------------------------------------
+// Media query evaluation
+// -------------------------------------------------------------------
+
+/// Evaluate a simplified media query against the OASIS viewport.
+///
+/// Supports: `screen`, `all`, `not print`, `(max-width: Xpx)`,
+/// `(min-width: Xpx)`, and comma-separated alternatives.
+/// The viewport is hardcoded to 480x272 (PSP native resolution).
+fn eval_media_query(query: &str) -> bool {
+    const VIEWPORT_WIDTH: f32 = 480.0;
+
+    let query = query.trim();
+    if query.is_empty() {
+        return true;
+    }
+
+    // Comma-separated: any match means true.
+    for part in query.split(',') {
+        if eval_single_media_query(part.trim(), VIEWPORT_WIDTH) {
+            return true;
+        }
+    }
+    false
+}
+
+fn eval_single_media_query(query: &str, viewport_width: f32) -> bool {
+    let query = query.trim();
+    if query.is_empty() || query == "all" || query == "screen" {
+        return true;
+    }
+    if query == "print" || query == "not screen" {
+        return false;
+    }
+    if let Some(rest) = query.strip_prefix("not ") {
+        return !eval_single_media_query(rest, viewport_width);
+    }
+    // Handle compound conditions like "screen and (max-width: 600px)".
+    // Split on " and " and evaluate each part.
+    let parts: Vec<&str> = query.split(" and ").collect();
+    for part in &parts {
+        let p = part.trim();
+        if p == "screen" || p == "all" || p.is_empty() {
+            continue;
+        }
+        if p == "print" {
+            return false;
+        }
+        // Parenthesized feature: (max-width: 600px), (min-width: 320px)
+        let inner = p.trim_start_matches('(').trim_end_matches(')').trim();
+        if let Some(rest) = inner.strip_prefix("max-width:") {
+            let px = parse_px_value(rest.trim());
+            if viewport_width > px {
+                return false;
+            }
+        } else if let Some(rest) = inner.strip_prefix("min-width:") {
+            let px = parse_px_value(rest.trim());
+            if viewport_width < px {
+                return false;
+            }
+        }
+        // Unknown features: ignore (treat as matching).
+    }
+    true
+}
+
+/// Parse a pixel value like "600px" or "600" from a media query.
+fn parse_px_value(s: &str) -> f32 {
+    let s = s.trim().trim_end_matches("px");
+    s.parse::<f32>().unwrap_or(0.0)
+}
+
+// -------------------------------------------------------------------
 // Shorthand expansion
 // -------------------------------------------------------------------
 
@@ -1756,12 +1900,37 @@ mod tests {
     }
 
     #[test]
-    fn at_media_skipped() {
+    fn at_media_screen_parsed() {
         let sheet = parse(
             "@media screen { body { color: red; } } \
              p { color: blue; }",
         );
+        // @media screen matches, so body rule is included alongside p rule.
+        assert_eq!(sheet.rules.len(), 2);
+    }
+
+    #[test]
+    fn at_media_print_skipped() {
+        let sheet = parse(
+            "@media print { body { color: red; } } \
+             p { color: blue; }",
+        );
+        // @media print does not match screen, so only p rule remains.
         assert_eq!(sheet.rules.len(), 1);
+    }
+
+    #[test]
+    fn at_media_max_width_match() {
+        // 480 <= 600, so this should match.
+        let sheet = parse("@media (max-width: 600px) { p { color: red; } }");
+        assert_eq!(sheet.rules.len(), 1);
+    }
+
+    #[test]
+    fn at_media_max_width_no_match() {
+        // 480 > 320, so this should NOT match.
+        let sheet = parse("@media (max-width: 320px) { p { color: red; } }");
+        assert_eq!(sheet.rules.len(), 0);
     }
 
     // -- pseudo-class ------------------------------------------------
@@ -1890,8 +2059,8 @@ mod tests {
     #[test]
     fn at_media_rule() {
         let sheet = parse("@media screen { p { color: red; } }");
-        // We don't support @media but it should not crash.
-        let _ = sheet;
+        // @media screen matches, inner rules are extracted.
+        assert_eq!(sheet.rules.len(), 1);
     }
 
     #[test]

@@ -1,7 +1,3 @@
-// WIP: automatic table layout has separate entry points. Some functions are
-// unused pending full integration with the main layout engine.
-#![allow(dead_code)]
-
 //! CSS 2.1 automatic table layout algorithm.
 //!
 //! Parses table structure (`<table>` -> `<tr>` -> `<td>`/`<th>`),
@@ -9,7 +5,6 @@
 //! widths, distributes available width proportionally, and positions
 //! each cell as a block formatting context. Supports `colspan`,
 //! `rowspan`, `border-collapse`, and `border-spacing`.
-#![allow(clippy::field_reassign_with_default)]
 
 use super::block::TextMeasurer;
 use super::box_model::*;
@@ -620,6 +615,7 @@ fn resolve_rowspan_heights(tl: &mut TableLayout) {
 
 /// Build the positioned table layout box tree from the computed
 /// geometry.
+#[allow(clippy::field_reassign_with_default)]
 fn build_table_box(tl: &TableLayout, style: &ComputedStyle, containing_width: f32) -> LayoutBox {
     let spacing = tl.border_spacing;
     let collapse = tl.border_collapse;
@@ -809,6 +805,7 @@ fn make_empty_table(style: &ComputedStyle) -> LayoutBox {
 ///
 /// `colspan` is encoded as `min_width: Px(colspan * 1000.0)`.
 /// `rowspan` is encoded as `max_width: Px(rowspan * 1000.0)`.
+#[allow(dead_code)]
 pub fn make_cell_with_spans(
     style: &ComputedStyle,
     colspan: usize,

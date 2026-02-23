@@ -4,6 +4,8 @@
 //! collect matching rules from all stylesheets, sort by specificity and
 //! source order, then apply declarations to produce computed styles.
 
+use std::collections::HashMap;
+
 use super::parser::{
     AttrOp, Combinator, CompoundSelector, CssValue, Declaration, Rule, SimpleSelector, Specificity,
     Stylesheet,
@@ -24,8 +26,13 @@ pub fn style_tree(
     stylesheets: &[&Stylesheet],
     inline_styles: &[(NodeId, Vec<Declaration>)],
 ) -> Vec<Option<ComputedStyle>> {
+    // Build a HashMap for O(1) inline style lookups instead of O(n) per element.
+    let inline_map: HashMap<NodeId, &[Declaration]> = inline_styles
+        .iter()
+        .map(|(nid, decls)| (*nid, decls.as_slice()))
+        .collect();
     let mut styles: Vec<Option<ComputedStyle>> = vec![None; doc.nodes.len()];
-    style_subtree(doc, doc.root, stylesheets, inline_styles, &mut styles);
+    style_subtree(doc, doc.root, stylesheets, &inline_map, &mut styles);
     styles
 }
 
@@ -35,7 +42,7 @@ fn style_subtree(
     doc: &Document,
     node_id: NodeId,
     stylesheets: &[&Stylesheet],
-    inline_styles: &[(NodeId, Vec<Declaration>)],
+    inline_map: &HashMap<NodeId, &[Declaration]>,
     styles: &mut [Option<ComputedStyle>],
 ) {
     let node = &doc.nodes[node_id];
@@ -43,7 +50,7 @@ fn style_subtree(
     // Only elements get computed styles.
     if let NodeKind::Element(_) = &node.kind {
         let parent_style = node.parent.and_then(|pid| styles[pid].as_ref());
-        let style = compute_style(doc, node_id, parent_style, stylesheets, inline_styles);
+        let style = compute_style(doc, node_id, parent_style, stylesheets, inline_map);
         styles[node_id] = Some(style);
     }
 
@@ -51,7 +58,7 @@ fn style_subtree(
     let num_children = doc.nodes[node_id].children.len();
     for i in 0..num_children {
         let child_id = doc.nodes[node_id].children[i];
-        style_subtree(doc, child_id, stylesheets, inline_styles, styles);
+        style_subtree(doc, child_id, stylesheets, inline_map, styles);
     }
 }
 
@@ -61,7 +68,7 @@ fn compute_style(
     node_id: NodeId,
     parent_style: Option<&ComputedStyle>,
     stylesheets: &[&Stylesheet],
-    inline_styles: &[(NodeId, Vec<Declaration>)],
+    inline_map: &HashMap<NodeId, &[Declaration]>,
 ) -> ComputedStyle {
     // Start from inherited values if we have a parent, else defaults.
     let mut style = match parent_style {
@@ -72,7 +79,7 @@ fn compute_style(
     let parent_font_size = parent_style.map_or(super::values::ROOT_FONT_SIZE, |p| p.font_size);
 
     // Collect all matching declarations with their origin info.
-    let mut matched = collect_matched_declarations(doc, node_id, stylesheets, inline_styles);
+    let mut matched = collect_matched_declarations(doc, node_id, stylesheets, inline_map);
 
     // Sort by cascade order: specificity, then source order.
     // `!important` declarations come after normal ones.
@@ -122,7 +129,7 @@ fn collect_matched_declarations(
     doc: &Document,
     node_id: NodeId,
     stylesheets: &[&Stylesheet],
-    inline_styles: &[(NodeId, Vec<Declaration>)],
+    inline_map: &HashMap<NodeId, &[Declaration]>,
 ) -> Vec<MatchedDeclaration> {
     let mut result = Vec::new();
     let mut order: usize = 0;
@@ -148,25 +155,24 @@ fn collect_matched_declarations(
     }
 
     // Inline styles have the highest non-important specificity.
-    let inline_spec = Specificity {
-        inline: 1,
-        ids: 0,
-        classes: 0,
-        types: 0,
-    };
-    for (nid, decls) in inline_styles {
-        if *nid == node_id {
-            for decl in decls {
-                result.push(MatchedDeclaration {
-                    property: decl.property.clone(),
-                    value: decl.value.clone(),
-                    important: decl.important,
-                    origin: Origin::Inline,
-                    specificity: inline_spec,
-                    source_order: order,
-                });
-                order += 1;
-            }
+    // O(1) lookup via HashMap instead of linear scan.
+    if let Some(decls) = inline_map.get(&node_id) {
+        let inline_spec = Specificity {
+            inline: 1,
+            ids: 0,
+            classes: 0,
+            types: 0,
+        };
+        for decl in *decls {
+            result.push(MatchedDeclaration {
+                property: decl.property.clone(),
+                value: decl.value.clone(),
+                important: decl.important,
+                origin: Origin::Inline,
+                specificity: inline_spec,
+                source_order: order,
+            });
+            order += 1;
         }
     }
 

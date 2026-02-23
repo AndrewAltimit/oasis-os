@@ -447,6 +447,26 @@ impl ComputedStyle {
     /// Resolves relative units (`em`, `%`) against the parent font size
     /// so the resulting computed value is in absolute pixels.
     pub fn apply_declaration(&mut self, property: &str, value: &CssValue, parent_font_size: f32) {
+        // Handle `inherit` and `initial` keywords for any property.
+        if let Some(kw) = as_keyword(value) {
+            if kw == "initial" {
+                self.apply_initial(property);
+                return;
+            }
+            if kw == "inherit" {
+                // The caller has already set up `self` via `inherit(parent)`,
+                // so inherited properties already carry the parent value.
+                // For non-inherited properties, we need the parent's computed
+                // value. Since we don't have the parent here, we rely on the
+                // cascade having called `inherit(parent)` beforehand -- the
+                // parent_font_size parameter gives us the parent font context.
+                // For properties that are already inherited (color, font-*, etc.)
+                // the current value is already correct. For non-inherited
+                // properties, `inherit` is rare; do nothing extra here.
+                return;
+            }
+        }
+
         match property {
             // -- Display ------------------------------------------------
             "display" => {
@@ -888,6 +908,45 @@ impl ComputedStyle {
             },
 
             // Unknown properties are silently ignored (per CSS spec).
+            _ => {},
+        }
+    }
+
+    /// Reset a single property to its CSS initial value.
+    fn apply_initial(&mut self, property: &str) {
+        let initial = ComputedStyle::default();
+        match property {
+            "display" => self.display = initial.display,
+            "visibility" => self.visibility = initial.visibility,
+            "margin" | "margin-top" => self.margin_top = 0.0,
+            "margin-right" => self.margin_right = 0.0,
+            "margin-bottom" => self.margin_bottom = 0.0,
+            "margin-left" => self.margin_left = 0.0,
+            "padding" | "padding-top" => self.padding_top = 0.0,
+            "padding-right" => self.padding_right = 0.0,
+            "padding-bottom" => self.padding_bottom = 0.0,
+            "padding-left" => self.padding_left = 0.0,
+            "color" => self.color = initial.color,
+            "background-color" | "background" => self.background_color = initial.background_color,
+            "font-size" => {
+                self.font_size = initial.font_size;
+                self.line_height = initial.line_height;
+            },
+            "font-weight" => self.font_weight = initial.font_weight,
+            "font-style" => self.font_style = initial.font_style,
+            "font-family" => self.font_family = initial.font_family,
+            "text-align" => self.text_align = initial.text_align,
+            "text-decoration" => self.text_decoration = initial.text_decoration,
+            "text-transform" => self.text_transform = initial.text_transform,
+            "white-space" => self.white_space = initial.white_space,
+            "line-height" => self.line_height = initial.line_height,
+            "float" => self.float = initial.float,
+            "clear" => self.clear = initial.clear,
+            "position" => self.position = initial.position,
+            "overflow" => self.overflow = initial.overflow,
+            "width" => self.width = initial.width,
+            "height" => self.height = initial.height,
+            "border-collapse" => self.border_collapse = initial.border_collapse,
             _ => {},
         }
     }

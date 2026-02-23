@@ -1,6 +1,3 @@
-// WIP: float layout is implemented but not yet wired into the main layout engine.
-#![allow(dead_code)]
-
 //! CSS 2.1 float layout.
 //!
 //! Implements `float: left`, `float: right`, and `clear: left/right/both`.
@@ -43,6 +40,7 @@ pub enum ClearSide {
 /// The `rect` describes the margin box of the float in the coordinate
 /// space of its containing block.
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct FloatBox {
     /// Whether this is a left or right float.
     pub side: FloatSide,
@@ -132,6 +130,7 @@ impl FloatContext {
     /// Returns `(left_offset, available_width)` where `left_offset`
     /// is the x coordinate where inline content may start and
     /// `available_width` is the horizontal space remaining.
+    #[allow(dead_code)]
     pub fn available_width(&self, y: f32, height: f32, containing_width: f32) -> (f32, f32) {
         let left = self.left_offset(y, height);
         let right = self.right_edge_at(y, height, containing_width);
@@ -144,6 +143,7 @@ impl FloatContext {
     ///
     /// This is the rightmost right-edge among all left floats that
     /// overlap the band, or 0.0 if no left floats are active there.
+    #[allow(dead_code)]
     pub fn left_offset(&self, y: f32, height: f32) -> f32 {
         self.left_edge_at(y, height)
     }
@@ -178,6 +178,7 @@ impl FloatContext {
     ///
     /// This can be used to prune floats that are no longer relevant
     /// as layout progresses downward.
+    #[allow(dead_code)]
     pub fn remove_expired(&mut self, y: f32) {
         self.left_floats.retain(|f| f.rect.y + f.rect.height > y);
         self.right_floats.retain(|f| f.rect.y + f.rect.height > y);
@@ -189,6 +190,7 @@ impl FloatContext {
     }
 
     /// Total number of active floats (left + right).
+    #[allow(dead_code)]
     pub fn len(&self) -> usize {
         self.left_floats.len() + self.right_floats.len()
     }
