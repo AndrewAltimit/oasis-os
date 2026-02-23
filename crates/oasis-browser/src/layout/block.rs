@@ -21,6 +21,7 @@ use super::positioning::apply_positioning;
 use super::table::layout_table;
 use crate::css::values::{Clear, ComputedStyle, Dimension, Display, Float, ListStyleType};
 use crate::html::dom::{Document, ElementData, NodeId, NodeKind, TagName};
+use oasis_types::backend::Color;
 
 use std::collections::HashMap;
 
@@ -69,7 +70,7 @@ pub fn build_layout_tree(
     // Recursively build children.
     let children = doc.get(start_node).children.clone();
     let child_boxes = build_children(doc, &children, styles);
-    root.children = wrap_anonymous(child_boxes);
+    root.children = wrap_anonymous(child_boxes, &root.style);
 
     // Layout from the root.
     root.dimensions.content.x = 0.0;
@@ -339,7 +340,37 @@ fn build_box_for_node(
                 return Some(lb);
             }
 
-            let mut lb = LayoutBox::new(box_type, style, Some(node_id));
+            let mut lb = LayoutBox::new(box_type, style.clone(), Some(node_id));
+
+            // Generate ::before pseudo-element content.
+            let before_box = if let Some(ref text) = style.before_content {
+                if !text.is_empty() {
+                    let mut pseudo_style = style.clone();
+                    pseudo_style.display = Display::Inline;
+                    let mut pb = LayoutBox::new(BoxType::Inline, pseudo_style, None);
+                    pb.text = Some(text.clone());
+                    Some(pb)
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
+
+            // Generate ::after pseudo-element content.
+            let after_box = if let Some(ref text) = style.after_content {
+                if !text.is_empty() {
+                    let mut pseudo_style = style.clone();
+                    pseudo_style.display = Display::Inline;
+                    let mut pb = LayoutBox::new(BoxType::Inline, pseudo_style, None);
+                    pb.text = Some(text.clone());
+                    Some(pb)
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
 
             // For table cells, encode colspan/rowspan in the style
             // using the convention expected by the table layout engine.
@@ -362,15 +393,31 @@ fn build_box_for_node(
 
             // Recursively build children.
             let child_ids = node.children.clone();
-            let child_boxes = build_children(doc, &child_ids, styles);
-            lb.children = wrap_anonymous(child_boxes);
+            let mut child_boxes = build_children(doc, &child_ids, styles);
+
+            // Insert ::before and ::after pseudo-element boxes.
+            if let Some(before) = before_box {
+                child_boxes.insert(0, before);
+            }
+            if let Some(after) = after_box {
+                child_boxes.push(after);
+            }
+
+            lb.children = wrap_anonymous(child_boxes, &lb.style);
 
             Some(lb)
         },
         NodeKind::Text(text) => {
-            // Skip whitespace-only text nodes.
+            // Skip whitespace-only text nodes that are between
+            // block-level siblings (insignificant whitespace). Keep
+            // them when they're between inline siblings so that
+            // `<em>hello</em> <strong>world</strong>` preserves
+            // the space.
             if text.trim().is_empty() {
-                return None;
+                let dominated_by_blocks = has_block_sibling(doc, node_id);
+                if dominated_by_blocks {
+                    return None;
+                }
             }
             let style = find_inherited_style(doc, node_id, styles);
             let mut inline_style = style;
@@ -439,6 +486,68 @@ fn replaced_content(elem: &ElementData) -> Option<ReplacedContent> {
     }
 }
 
+/// Check if a text node's siblings include block-level elements.
+///
+/// When whitespace text sits between block elements (e.g.
+/// `<div>\n<p>text</p>\n</div>`), the whitespace is insignificant
+/// and should be dropped. When it sits between inline elements
+/// (e.g. `<em>a</em> <strong>b</strong>`), the space is significant.
+fn has_block_sibling(doc: &Document, node_id: NodeId) -> bool {
+    let parent_id = match doc.get(node_id).parent {
+        Some(p) => p,
+        None => return true,
+    };
+    let siblings = &doc.get(parent_id).children;
+    for &sib in siblings {
+        if sib == node_id {
+            continue;
+        }
+        if let NodeKind::Element(elem) = &doc.get(sib).kind
+            && is_block_tag(&elem.tag)
+        {
+            return true;
+        }
+    }
+    false
+}
+
+/// Returns true if the tag is normally block-level.
+fn is_block_tag(tag: &TagName) -> bool {
+    matches!(
+        tag,
+        TagName::Div
+            | TagName::P
+            | TagName::H1
+            | TagName::H2
+            | TagName::H3
+            | TagName::H4
+            | TagName::H5
+            | TagName::H6
+            | TagName::Ul
+            | TagName::Ol
+            | TagName::Li
+            | TagName::Table
+            | TagName::Blockquote
+            | TagName::Pre
+            | TagName::Hr
+            | TagName::Section
+            | TagName::Article
+            | TagName::Nav
+            | TagName::Aside
+            | TagName::Header
+            | TagName::Footer
+            | TagName::Main
+            | TagName::Form
+            | TagName::Dl
+            | TagName::Dt
+            | TagName::Dd
+            | TagName::Figure
+            | TagName::Figcaption
+            | TagName::Details
+            | TagName::Summary
+    )
+}
+
 /// Walk up the DOM to find an inherited style for a text node.
 fn find_inherited_style(
     doc: &Document,
@@ -462,7 +571,7 @@ fn find_inherited_style(
 ///
 /// This ensures the block formatting context only contains block-level
 /// boxes, as required by CSS 2.1.
-fn wrap_anonymous(children: Vec<LayoutBox>) -> Vec<LayoutBox> {
+fn wrap_anonymous(children: Vec<LayoutBox>, parent_style: &ComputedStyle) -> Vec<LayoutBox> {
     if children.is_empty() {
         return children;
     }
@@ -482,7 +591,7 @@ fn wrap_anonymous(children: Vec<LayoutBox>) -> Vec<LayoutBox> {
     for child in children {
         if child.is_block_level() {
             if !inline_run.is_empty() {
-                let anon = make_anonymous_block(std::mem::take(&mut inline_run));
+                let anon = make_anonymous_block(std::mem::take(&mut inline_run), parent_style);
                 result.push(anon);
             }
             result.push(child);
@@ -493,23 +602,42 @@ fn wrap_anonymous(children: Vec<LayoutBox>) -> Vec<LayoutBox> {
 
     // Flush any trailing inline run.
     if !inline_run.is_empty() {
-        result.push(make_anonymous_block(inline_run));
+        result.push(make_anonymous_block(inline_run, parent_style));
     }
 
     result
 }
 
 /// Create an anonymous block box wrapping the given inline children.
-fn make_anonymous_block(children: Vec<LayoutBox>) -> LayoutBox {
+///
+/// Inherits text-related properties from the parent so that inline
+/// content inside the anonymous block retains the correct font-size,
+/// color, line-height, text-align, etc.
+fn make_anonymous_block(children: Vec<LayoutBox>, parent_style: &ComputedStyle) -> LayoutBox {
+    let mut style = parent_style.clone();
+    // Override display to Block and reset non-inherited box properties.
+    style.display = Display::Block;
+    style.margin_top = 0.0;
+    style.margin_right = 0.0;
+    style.margin_bottom = 0.0;
+    style.margin_left = 0.0;
+    style.padding_top = 0.0;
+    style.padding_right = 0.0;
+    style.padding_bottom = 0.0;
+    style.padding_left = 0.0;
+    style.border_top_width = 0.0;
+    style.border_right_width = 0.0;
+    style.border_bottom_width = 0.0;
+    style.border_left_width = 0.0;
+    style.background_color = Color::rgba(0, 0, 0, 0);
+    style.width = Dimension::Auto;
+    style.height = Dimension::Auto;
     LayoutBox {
         box_type: BoxType::Anonymous,
         dimensions: Dimensions::default(),
         children,
         node: None,
-        style: ComputedStyle {
-            display: Display::Block,
-            ..ComputedStyle::default()
-        },
+        style,
         text: None,
         dirty: true,
     }
@@ -679,8 +807,16 @@ fn layout_block_children(parent: &mut LayoutBox, measurer: &dyn TextMeasurer) {
 
     let mut prev_margin_bottom: f32 = 0.0;
     let mut float_ctx = FloatContext::new();
+    let mut list_counter: usize = 1;
 
     for child in &mut parent.children {
+        // Assign sequential numbers to ordered list items.
+        if let BoxType::ListItem { ref mut marker } = child.box_type
+            && let ListMarker::Decimal(_) = marker
+        {
+            *marker = ListMarker::Decimal(list_counter);
+            list_counter += 1;
+        }
         // Handle clear property: advance cursor below cleared floats.
         let clear_y = match child.style.clear {
             Clear::Left => float_ctx.clear_y(ClearSide::Left),
@@ -1023,7 +1159,8 @@ mod tests {
         let block_box = LayoutBox::new(BoxType::Block, block_style(), None);
         let inline_box2 = LayoutBox::new(BoxType::Inline, ComputedStyle::default(), None);
 
-        let wrapped = wrap_anonymous(vec![inline_box, block_box, inline_box2]);
+        let ps = block_style();
+        let wrapped = wrap_anonymous(vec![inline_box, block_box, inline_box2], &ps);
 
         // Should be: anon(inline), block, anon(inline)
         assert_eq!(wrapped.len(), 3);
@@ -1036,7 +1173,8 @@ mod tests {
     fn wrap_anonymous_all_blocks() {
         let b1 = LayoutBox::new(BoxType::Block, block_style(), None);
         let b2 = LayoutBox::new(BoxType::Block, block_style(), None);
-        let wrapped = wrap_anonymous(vec![b1, b2]);
+        let ps = block_style();
+        let wrapped = wrap_anonymous(vec![b1, b2], &ps);
         // No wrapping needed.
         assert_eq!(wrapped.len(), 2);
         assert!(matches!(wrapped[0].box_type, BoxType::Block));
@@ -1047,7 +1185,8 @@ mod tests {
     fn wrap_anonymous_all_inline() {
         let i1 = LayoutBox::new(BoxType::Inline, ComputedStyle::default(), None);
         let i2 = LayoutBox::new(BoxType::Inline, ComputedStyle::default(), None);
-        let wrapped = wrap_anonymous(vec![i1, i2]);
+        let ps = ComputedStyle::default();
+        let wrapped = wrap_anonymous(vec![i1, i2], &ps);
         // No wrapping needed (all inline).
         assert_eq!(wrapped.len(), 2);
         assert!(matches!(wrapped[0].box_type, BoxType::Inline));

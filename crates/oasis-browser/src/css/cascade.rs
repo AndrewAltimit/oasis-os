@@ -4,7 +4,7 @@
 //! collect matching rules from all stylesheets, sort by specificity and
 //! source order, then apply declarations to produce computed styles.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use super::parser::{
     AttrOp, Combinator, CompoundSelector, CssValue, Declaration, Rule, SimpleSelector, Specificity,
@@ -12,6 +12,23 @@ use super::parser::{
 };
 use super::values::ComputedStyle;
 use crate::html::dom::{Document, ElementData, NodeId, NodeKind};
+
+// -----------------------------------------------------------------------
+// Cascade context (stateful pseudo-class state)
+// -----------------------------------------------------------------------
+
+/// Context for stateful pseudo-class matching during cascade.
+///
+/// Carries the current hover target and set of visited URLs so that
+/// `:hover`, `:visited`, and `:link` pseudo-classes can be evaluated.
+#[derive(Default)]
+pub struct CascadeContext<'a> {
+    /// The DOM node currently under the cursor (for `:hover`).
+    /// `:hover` matches this node and all its ancestors.
+    pub hover_node: Option<NodeId>,
+    /// Set of visited URLs (for `:visited` / `:link` on `<a>` elements).
+    pub visited_urls: Option<&'a HashSet<String>>,
+}
 
 // -----------------------------------------------------------------------
 // Public API
@@ -25,6 +42,7 @@ pub fn style_tree(
     doc: &Document,
     stylesheets: &[&Stylesheet],
     inline_styles: &[(NodeId, Vec<Declaration>)],
+    ctx: &CascadeContext<'_>,
 ) -> Vec<Option<ComputedStyle>> {
     // Build a HashMap for O(1) inline style lookups instead of O(n) per element.
     let inline_map: HashMap<NodeId, &[Declaration]> = inline_styles
@@ -32,7 +50,7 @@ pub fn style_tree(
         .map(|(nid, decls)| (*nid, decls.as_slice()))
         .collect();
     let mut styles: Vec<Option<ComputedStyle>> = vec![None; doc.nodes.len()];
-    style_subtree(doc, doc.root, stylesheets, &inline_map, &mut styles);
+    style_subtree(doc, doc.root, stylesheets, &inline_map, &mut styles, ctx);
     styles
 }
 
@@ -44,13 +62,14 @@ fn style_subtree(
     stylesheets: &[&Stylesheet],
     inline_map: &HashMap<NodeId, &[Declaration]>,
     styles: &mut [Option<ComputedStyle>],
+    ctx: &CascadeContext<'_>,
 ) {
     let node = &doc.nodes[node_id];
 
     // Only elements get computed styles.
     if let NodeKind::Element(_) = &node.kind {
         let parent_style = node.parent.and_then(|pid| styles[pid].as_ref());
-        let style = compute_style(doc, node_id, parent_style, stylesheets, inline_map);
+        let style = compute_style(doc, node_id, parent_style, stylesheets, inline_map, ctx);
         styles[node_id] = Some(style);
     }
 
@@ -58,7 +77,7 @@ fn style_subtree(
     let num_children = doc.nodes[node_id].children.len();
     for i in 0..num_children {
         let child_id = doc.nodes[node_id].children[i];
-        style_subtree(doc, child_id, stylesheets, inline_map, styles);
+        style_subtree(doc, child_id, stylesheets, inline_map, styles, ctx);
     }
 }
 
@@ -69,6 +88,7 @@ fn compute_style(
     parent_style: Option<&ComputedStyle>,
     stylesheets: &[&Stylesheet],
     inline_map: &HashMap<NodeId, &[Declaration]>,
+    ctx: &CascadeContext<'_>,
 ) -> ComputedStyle {
     // Start from inherited values if we have a parent, else defaults.
     let mut style = match parent_style {
@@ -79,7 +99,7 @@ fn compute_style(
     let parent_font_size = parent_style.map_or(super::values::ROOT_FONT_SIZE, |p| p.font_size);
 
     // Collect all matching declarations with their origin info.
-    let mut matched = collect_matched_declarations(doc, node_id, stylesheets, inline_map);
+    let mut matched = collect_matched_declarations(doc, node_id, stylesheets, inline_map, ctx);
 
     // Sort by cascade order: specificity, then source order.
     // `!important` declarations come after normal ones.
@@ -96,7 +116,107 @@ fn compute_style(
         style.apply_declaration(&entry.property, &entry.value, parent_font_size);
     }
 
+    // Resolve ::before and ::after pseudo-element content.
+    style.before_content = resolve_pseudo_content(doc, node_id, "before", stylesheets, ctx);
+    style.after_content = resolve_pseudo_content(doc, node_id, "after", stylesheets, ctx);
+
     style
+}
+
+/// Find the `content` property value from matching ::before or ::after
+/// rules for a given element.
+fn resolve_pseudo_content(
+    doc: &Document,
+    node_id: NodeId,
+    pseudo: &str,
+    stylesheets: &[&Stylesheet],
+    ctx: &CascadeContext<'_>,
+) -> Option<String> {
+    let mut content: Option<String> = None;
+
+    for stylesheet in stylesheets {
+        for rule in &stylesheet.rules {
+            for selector in &rule.selectors.selectors {
+                if selector_pseudo_element(selector) != Some(pseudo) {
+                    continue;
+                }
+                // Check if the non-pseudo part of the selector matches.
+                if matches_selector_ignoring_pseudo(doc, node_id, selector, ctx) {
+                    // Extract the `content` declaration.
+                    for decl in &rule.declarations {
+                        if decl.property == "content" {
+                            match &decl.value {
+                                CssValue::String(s) => {
+                                    content = Some(s.clone());
+                                },
+                                CssValue::Keyword(kw) if kw == "none" || kw == "normal" => {
+                                    content = None;
+                                },
+                                _ => {},
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    content
+}
+
+/// Match a selector against a node, ignoring any pseudo-element part.
+///
+/// For `p::before`, this checks whether `p` matches the node.
+fn matches_selector_ignoring_pseudo(
+    doc: &Document,
+    node_id: NodeId,
+    selector: &super::parser::Selector,
+    ctx: &CascadeContext<'_>,
+) -> bool {
+    // Build a temporary selector without the pseudo-element simple selectors.
+    let parts = &selector.parts;
+    if parts.is_empty() {
+        return false;
+    }
+
+    // The pseudo-element is in the last compound selector. Strip it.
+    let last_idx = parts.len() - 1;
+    let last_compound = &parts[last_idx].0;
+    let filtered_parts: Vec<SimpleSelector> = last_compound
+        .parts
+        .iter()
+        .filter(|s| !matches!(s, SimpleSelector::PseudoElement(_)))
+        .cloned()
+        .collect();
+
+    if filtered_parts.is_empty() && last_idx == 0 {
+        // Selector was just `::before` with no element part -- matches any element.
+        return true;
+    }
+
+    let filtered_compound = CompoundSelector {
+        parts: filtered_parts,
+    };
+
+    // If the filtered compound is empty, match against the previous compound.
+    if filtered_compound.parts.is_empty() {
+        // The pseudo-element was the only part of the last compound.
+        // Match using only the preceding compounds.
+        if last_idx == 0 {
+            return true;
+        }
+        // Create a shorter selector without the last compound.
+        let shorter = super::parser::Selector {
+            parts: parts[..last_idx].to_vec(),
+        };
+        return matches_selector(doc, node_id, &shorter, ctx);
+    }
+
+    // Replace the last compound with the filtered version.
+    let mut new_parts = parts.clone();
+    new_parts[last_idx].0 = filtered_compound;
+    let temp_selector = super::parser::Selector { parts: new_parts };
+    matches_selector(doc, node_id, &temp_selector, ctx)
 }
 
 // -----------------------------------------------------------------------
@@ -130,6 +250,7 @@ fn collect_matched_declarations(
     node_id: NodeId,
     stylesheets: &[&Stylesheet],
     inline_map: &HashMap<NodeId, &[Declaration]>,
+    ctx: &CascadeContext<'_>,
 ) -> Vec<MatchedDeclaration> {
     let mut result = Vec::new();
     let mut order: usize = 0;
@@ -137,7 +258,7 @@ fn collect_matched_declarations(
     // Walk stylesheets in order (user-agent first, author last).
     for stylesheet in stylesheets {
         for rule in &stylesheet.rules {
-            let best_specificity = matching_specificity(doc, node_id, rule);
+            let best_specificity = matching_specificity(doc, node_id, rule, ctx);
             if let Some(specificity) = best_specificity {
                 for decl in &rule.declarations {
                     result.push(MatchedDeclaration {
@@ -181,10 +302,19 @@ fn collect_matched_declarations(
 
 /// Return the highest specificity among the rule's selectors that match
 /// `node_id`, or `None` if no selector matches.
-fn matching_specificity(doc: &Document, node_id: NodeId, rule: &Rule) -> Option<Specificity> {
+/// Skips selectors that target pseudo-elements (::before, ::after).
+fn matching_specificity(
+    doc: &Document,
+    node_id: NodeId,
+    rule: &Rule,
+    ctx: &CascadeContext<'_>,
+) -> Option<Specificity> {
     let mut best: Option<Specificity> = None;
     for selector in &rule.selectors.selectors {
-        if matches_selector(doc, node_id, selector) {
+        if selector_pseudo_element(selector).is_some() {
+            continue; // Skip pseudo-element selectors in normal matching.
+        }
+        if matches_selector(doc, node_id, selector, ctx) {
             let spec = selector.specificity();
             best = Some(match best {
                 Some(prev) if prev >= spec => prev,
@@ -193,6 +323,21 @@ fn matching_specificity(doc: &Document, node_id: NodeId, rule: &Rule) -> Option<
         }
     }
     best
+}
+
+/// Check if a selector targets a pseudo-element and return its name.
+fn selector_pseudo_element(selector: &super::parser::Selector) -> Option<&str> {
+    let parts = &selector.parts;
+    if parts.is_empty() {
+        return None;
+    }
+    let last_compound = &parts[parts.len() - 1].0;
+    for simple in &last_compound.parts {
+        if let SimpleSelector::PseudoElement(name) = simple {
+            return Some(name.as_str());
+        }
+    }
+    None
 }
 
 // -----------------------------------------------------------------------
@@ -205,7 +350,12 @@ fn matching_specificity(doc: &Document, node_id: NodeId, rule: &Rule) -> Option<
 /// the leftmost in the source, and the last compound is the *subject*
 /// (the element being tested). Combinators link compounds and are
 /// stored as `Option<Combinator>` where `None` marks the first entry.
-fn matches_selector(doc: &Document, node_id: NodeId, selector: &super::parser::Selector) -> bool {
+fn matches_selector(
+    doc: &Document,
+    node_id: NodeId,
+    selector: &super::parser::Selector,
+    ctx: &CascadeContext<'_>,
+) -> bool {
     let parts = &selector.parts;
     if parts.is_empty() {
         return false;
@@ -213,7 +363,7 @@ fn matches_selector(doc: &Document, node_id: NodeId, selector: &super::parser::S
 
     // The last compound is the subject -- it must match node_id.
     let last_idx = parts.len() - 1;
-    if !matches_compound(doc, node_id, &parts[last_idx].0) {
+    if !matches_compound(doc, node_id, &parts[last_idx].0, ctx) {
         return false;
     }
 
@@ -226,13 +376,13 @@ fn matches_selector(doc: &Document, node_id: NodeId, selector: &super::parser::S
         let combinator = parts[i + 1].1.as_ref();
         match combinator {
             Some(Combinator::Child) => match parent_element(doc, current) {
-                Some(pid) if matches_compound(doc, pid, compound) => {
+                Some(pid) if matches_compound(doc, pid, compound, ctx) => {
                     current = pid;
                 },
                 _ => return false,
             },
             Some(Combinator::AdjacentSibling) => match previous_sibling_element(doc, current) {
-                Some(sid) if matches_compound(doc, sid, compound) => {
+                Some(sid) if matches_compound(doc, sid, compound, ctx) => {
                     current = sid;
                 },
                 _ => return false,
@@ -242,7 +392,7 @@ fn matches_selector(doc: &Document, node_id: NodeId, selector: &super::parser::S
                 let mut found = false;
                 let mut sib = previous_sibling_element(doc, current);
                 while let Some(sid) = sib {
-                    if matches_compound(doc, sid, compound) {
+                    if matches_compound(doc, sid, compound, ctx) {
                         current = sid;
                         found = true;
                         break;
@@ -258,7 +408,7 @@ fn matches_selector(doc: &Document, node_id: NodeId, selector: &super::parser::S
                 let mut found = false;
                 let mut ancestor = parent_element(doc, current);
                 while let Some(anc_id) = ancestor {
-                    if matches_compound(doc, anc_id, compound) {
+                    if matches_compound(doc, anc_id, compound, ctx) {
                         current = anc_id;
                         found = true;
                         break;
@@ -276,15 +426,25 @@ fn matches_selector(doc: &Document, node_id: NodeId, selector: &super::parser::S
 }
 
 /// Check if a compound selector matches a given node.
-fn matches_compound(doc: &Document, node_id: NodeId, compound: &CompoundSelector) -> bool {
+fn matches_compound(
+    doc: &Document,
+    node_id: NodeId,
+    compound: &CompoundSelector,
+    ctx: &CascadeContext<'_>,
+) -> bool {
     compound
         .parts
         .iter()
-        .all(|simple| matches_simple(doc, node_id, simple))
+        .all(|simple| matches_simple(doc, node_id, simple, ctx))
 }
 
 /// Check if a single simple selector matches a node.
-fn matches_simple(doc: &Document, node_id: NodeId, simple: &SimpleSelector) -> bool {
+fn matches_simple(
+    doc: &Document,
+    node_id: NodeId,
+    simple: &SimpleSelector,
+    ctx: &CascadeContext<'_>,
+) -> bool {
     let elem = match &doc.nodes[node_id].kind {
         NodeKind::Element(e) => e,
         _ => return false,
@@ -295,19 +455,30 @@ fn matches_simple(doc: &Document, node_id: NodeId, simple: &SimpleSelector) -> b
         SimpleSelector::Type(tag_name) => elem.tag.as_str().eq_ignore_ascii_case(tag_name),
         SimpleSelector::Class(cls) => elem.has_class(cls),
         SimpleSelector::Id(id) => elem.get_attribute("id").is_some_and(|v| v == id),
-        SimpleSelector::PseudoClass(pseudo) => match_pseudo_class(doc, node_id, elem, pseudo),
+        SimpleSelector::PseudoClass(pseudo) => match_pseudo_class(doc, node_id, elem, pseudo, ctx),
         SimpleSelector::PseudoClassFn(name, arg) => {
             match_pseudo_class_fn(doc, node_id, elem, name, arg)
         },
-        SimpleSelector::Not(inner) => !matches_compound(doc, node_id, inner),
+        SimpleSelector::Not(inner) => !matches_compound(doc, node_id, inner, ctx),
         SimpleSelector::Attribute { name, op, value } => {
             match_attribute(elem, name, op, value.as_deref())
+        },
+        SimpleSelector::PseudoElement(_) => {
+            // Pseudo-elements don't match real elements directly.
+            // They are handled separately by resolve_pseudo_content.
+            false
         },
     }
 }
 
 /// Match structural pseudo-classes.
-fn match_pseudo_class(doc: &Document, node_id: NodeId, _elem: &ElementData, pseudo: &str) -> bool {
+fn match_pseudo_class(
+    doc: &Document,
+    node_id: NodeId,
+    elem: &ElementData,
+    pseudo: &str,
+    ctx: &CascadeContext<'_>,
+) -> bool {
     match pseudo {
         "first-child" => {
             if let Some(pid) = doc.nodes[node_id].parent {
@@ -350,8 +521,41 @@ fn match_pseudo_class(doc: &Document, node_id: NodeId, _elem: &ElementData, pseu
                 .iter()
                 .all(|&cid| matches!(doc.nodes[cid].kind, NodeKind::Comment(_)))
         },
-        // Stateful pseudo-classes (:hover, :focus, :visited) are not
-        // handled during static cascade. Return false.
+        "hover" => {
+            // :hover matches the hovered node and all its ancestors.
+            if let Some(hover_nid) = ctx.hover_node {
+                let mut current = Some(hover_nid);
+                while let Some(nid) = current {
+                    if nid == node_id {
+                        return true;
+                    }
+                    current = doc.nodes[nid].parent;
+                }
+            }
+            false
+        },
+        "visited" => {
+            // :visited matches <a> elements whose href is in the visited set.
+            if elem.tag.as_str().eq_ignore_ascii_case("a")
+                && let Some(href) = elem.get_attribute("href")
+                && let Some(visited) = ctx.visited_urls
+            {
+                return visited.contains(href);
+            }
+            false
+        },
+        "link" => {
+            // :link matches <a> elements with href that have NOT been visited.
+            if elem.tag.as_str().eq_ignore_ascii_case("a")
+                && let Some(href) = elem.get_attribute("href")
+            {
+                if let Some(visited) = ctx.visited_urls {
+                    return !visited.contains(href);
+                }
+                return true; // No visited info = treat as unvisited.
+            }
+            false
+        },
         _ => false,
     }
 }
@@ -525,11 +729,11 @@ pub fn default_stylesheet() -> Stylesheet {
     Stylesheet::parse(UA_CSS)
 }
 
-/// Minimal user-agent stylesheet following CSS 2.1 defaults.
+/// User-agent stylesheet following CSS 2.1 defaults with visual styling
+/// for semantic elements.
 const UA_CSS: &str = r#"
 html, body, div, main, section, article, nav, aside,
-header, footer, figure, figcaption, address, details,
-summary, blockquote, fieldset, form {
+header, footer, figure, figcaption, address, fieldset, form {
     display: block;
 }
 
@@ -588,9 +792,34 @@ ul, ol {
     margin-bottom: 1em;
     padding-left: 40px;
 }
-li {
+ul li {
     display: list-item;
     list-style-type: disc;
+}
+ol li {
+    display: list-item;
+    list-style-type: decimal;
+}
+li {
+    display: list-item;
+}
+dl {
+    display: block;
+    margin-top: 1em;
+    margin-bottom: 1em;
+}
+dt { display: block; font-weight: bold; }
+dd { display: block; margin-left: 40px; }
+
+blockquote {
+    display: block;
+    margin-top: 1em;
+    margin-bottom: 1em;
+    margin-left: 10px;
+    padding-left: 10px;
+    border-left-width: 3px;
+    border-left-style: solid;
+    border-left-color: #808080;
 }
 
 pre {
@@ -599,9 +828,34 @@ pre {
     font-family: monospace;
     margin-top: 1em;
     margin-bottom: 1em;
+    padding-top: 6px;
+    padding-bottom: 6px;
+    padding-left: 8px;
+    padding-right: 8px;
+    background-color: rgba(128, 128, 128, 25);
+    border-width: 1px;
+    border-style: solid;
+    border-color: rgba(128, 128, 128, 50);
 }
 code, kbd, samp {
     font-family: monospace;
+    background-color: rgba(128, 128, 128, 25);
+}
+
+mark {
+    background-color: rgba(255, 255, 0, 128);
+    color: #000000;
+}
+small { font-size: 0.83em; }
+
+details {
+    display: block;
+    margin-top: 1em;
+    margin-bottom: 1em;
+}
+summary {
+    display: block;
+    font-weight: bold;
 }
 
 hr {
@@ -619,17 +873,30 @@ u, ins { text-decoration: underline; }
 s, del { text-decoration: line-through; }
 
 a {
-    color: #0000ee;
+    color: #0066cc;
     text-decoration: underline;
 }
 
-table { display: table; }
+table {
+    display: table;
+    border-collapse: collapse;
+}
 tr { display: table-row; }
-td { display: table-cell; }
+td {
+    display: table-cell;
+    padding-top: 2px;
+    padding-bottom: 2px;
+    padding-left: 4px;
+    padding-right: 4px;
+}
 th {
     display: table-cell;
     font-weight: bold;
     text-align: center;
+    padding-top: 2px;
+    padding-bottom: 2px;
+    padding-left: 4px;
+    padding-right: 4px;
 }
 
 br, img, input, button, select, textarea {
@@ -655,6 +922,11 @@ mod tests {
     use super::*;
     use crate::html::dom::{Attribute, Document, ElementData, Node, NodeKind, TagName};
     use oasis_types::backend::Color;
+
+    /// Default cascade context for tests (no hover, no visited URLs).
+    fn ctx() -> CascadeContext<'static> {
+        CascadeContext::default()
+    }
 
     // -- Test DOM helpers -----------------------------------------------
 
@@ -784,8 +1056,8 @@ mod tests {
         let doc = make_doc(vec![(TagName::P, vec![]), (TagName::Div, vec![])]);
         let sel = simple_type_selector("p");
         // Node 3 is <p>, node 4 is <div>.
-        assert!(matches_selector(&doc, 3, &sel));
-        assert!(!matches_selector(&doc, 4, &sel));
+        assert!(matches_selector(&doc, 3, &sel, &ctx()));
+        assert!(!matches_selector(&doc, 4, &sel, &ctx()));
     }
 
     #[test]
@@ -801,8 +1073,8 @@ mod tests {
             (TagName::P, vec![]),
         ]);
         let sel = simple_class_selector("highlight");
-        assert!(matches_selector(&doc, 3, &sel));
-        assert!(!matches_selector(&doc, 4, &sel));
+        assert!(matches_selector(&doc, 3, &sel, &ctx()));
+        assert!(!matches_selector(&doc, 4, &sel, &ctx()));
     }
 
     #[test]
@@ -815,10 +1087,10 @@ mod tests {
             }],
         )]);
         let sel = simple_id_selector("main");
-        assert!(matches_selector(&doc, 3, &sel));
+        assert!(matches_selector(&doc, 3, &sel, &ctx()));
 
         let wrong = simple_id_selector("other");
-        assert!(!matches_selector(&doc, 3, &wrong));
+        assert!(!matches_selector(&doc, 3, &wrong, &ctx()));
     }
 
     #[test]
@@ -839,14 +1111,14 @@ mod tests {
 
         let sel = descendant_selector("div", "p");
         assert!(
-            matches_selector(&doc, p_id, &sel),
+            matches_selector(&doc, p_id, &sel, &ctx()),
             "p inside div should match `div p`"
         );
 
         // <p> directly in <body> should NOT match `div p`.
         let doc2 = make_doc(vec![(TagName::P, vec![])]);
         assert!(
-            !matches_selector(&doc2, 3, &sel),
+            !matches_selector(&doc2, 3, &sel, &ctx()),
             "p in body should not match `div p`"
         );
     }
@@ -881,7 +1153,7 @@ mod tests {
         let sheet = Stylesheet {
             rules: vec![rule_class, rule_id],
         };
-        let styles = style_tree(&doc, &[&sheet], &[]);
+        let styles = style_tree(&doc, &[&sheet], &[], &ctx());
 
         let style = styles[3].as_ref().expect("div should have style");
         // Blue wins because #main has higher specificity.
@@ -912,7 +1184,7 @@ mod tests {
             ],
         );
         let sheet = Stylesheet { rules: vec![rule] };
-        let styles = style_tree(&doc, &[&sheet], &[]);
+        let styles = style_tree(&doc, &[&sheet], &[], &ctx());
 
         let p_style = styles[p_id].as_ref().expect("p should have style");
         assert_eq!(p_style.color, Color::rgb(255, 0, 0));
@@ -943,7 +1215,7 @@ mod tests {
         let sheet = Stylesheet {
             rules: vec![rule_id, rule_type],
         };
-        let styles = style_tree(&doc, &[&sheet], &[]);
+        let styles = style_tree(&doc, &[&sheet], &[], &ctx());
         let style = styles[3].as_ref().expect("div should have style");
         // Green wins because !important beats higher specificity.
         assert_eq!(style.color, Color::rgb(0, 128, 0));
@@ -966,7 +1238,7 @@ mod tests {
             )],
         };
 
-        let styles = style_tree(&doc, &[&sheet1, &sheet2], &[]);
+        let styles = style_tree(&doc, &[&sheet1, &sheet2], &[], &ctx());
         let style = styles[3].as_ref().expect("p should have style");
         assert_eq!(style.color, Color::rgb(255, 0, 0));
         assert_eq!(style.font_weight, FontWeight::Bold);
@@ -990,7 +1262,7 @@ mod tests {
             vec![decl("color", CssValue::Keyword("blue".to_string()), false)],
         )];
 
-        let styles = style_tree(&doc, &[&sheet], &inline);
+        let styles = style_tree(&doc, &[&sheet], &inline, &ctx());
         let style = styles[3].as_ref().expect("p should have style");
         // Inline wins over stylesheet.
         assert_eq!(style.color, Color::rgb(0, 0, 255));
@@ -1004,7 +1276,7 @@ mod tests {
             (TagName::A, vec![]),
         ]);
         let ua = default_stylesheet();
-        let styles = style_tree(&doc, &[&ua], &[]);
+        let styles = style_tree(&doc, &[&ua], &[], &ctx());
 
         let p_style = styles[3].as_ref().unwrap();
         assert_eq!(p_style.display, Display::Block);
@@ -1018,7 +1290,7 @@ mod tests {
         );
 
         let a_style = styles[5].as_ref().unwrap();
-        assert_eq!(a_style.color, Color::rgb(0, 0, 238));
+        assert_eq!(a_style.color, Color::rgb(0, 0x66, 0xcc));
     }
 
     #[test]
@@ -1048,7 +1320,7 @@ mod tests {
 
         let doc = Document { nodes, root: 0 };
         let sheet = Stylesheet { rules: vec![] };
-        let styles = style_tree(&doc, &[&sheet], &[]);
+        let styles = style_tree(&doc, &[&sheet], &[], &ctx());
 
         assert!(styles[0].is_none(), "Document node");
         assert!(styles[1].is_some(), "html element");
@@ -1081,8 +1353,8 @@ mod tests {
                 None,
             )],
         };
-        assert!(matches_selector(&doc, 3, &sel));
-        assert!(!matches_selector(&doc, 4, &sel));
+        assert!(matches_selector(&doc, 3, &sel, &ctx()));
+        assert!(!matches_selector(&doc, 4, &sel, &ctx()));
     }
 
     #[test]
@@ -1106,7 +1378,7 @@ mod tests {
                 None,
             )],
         };
-        assert!(matches_selector(&doc, 3, &sel));
+        assert!(matches_selector(&doc, 3, &sel, &ctx()));
 
         let wrong = Selector {
             parts: vec![(
@@ -1120,7 +1392,7 @@ mod tests {
                 None,
             )],
         };
-        assert!(!matches_selector(&doc, 3, &wrong));
+        assert!(!matches_selector(&doc, 3, &wrong, &ctx()));
     }
 
     #[test]
@@ -1144,7 +1416,7 @@ mod tests {
                 None,
             )],
         };
-        assert!(matches_selector(&doc, 3, &sel));
+        assert!(matches_selector(&doc, 3, &sel, &ctx()));
     }
 
     #[test]
@@ -1168,7 +1440,7 @@ mod tests {
                 None,
             )],
         };
-        assert!(matches_selector(&doc, 3, &sel));
+        assert!(matches_selector(&doc, 3, &sel, &ctx()));
     }
 
     #[test]
@@ -1185,9 +1457,9 @@ mod tests {
             )],
         };
         // <p> is not <div>, so it matches :not(div).
-        assert!(matches_selector(&doc, 3, &sel));
+        assert!(matches_selector(&doc, 3, &sel, &ctx()));
         // <div> is <div>, so it does NOT match :not(div).
-        assert!(!matches_selector(&doc, 4, &sel));
+        assert!(!matches_selector(&doc, 4, &sel, &ctx()));
     }
 
     #[test]
@@ -1215,9 +1487,9 @@ mod tests {
                 ),
             ],
         };
-        assert!(matches_selector(&doc, 4, &sel));
+        assert!(matches_selector(&doc, 4, &sel, &ctx()));
         // <div> (node 5) is not immediately after <h1>.
-        assert!(!matches_selector(&doc, 5, &sel));
+        assert!(!matches_selector(&doc, 5, &sel, &ctx()));
     }
 
     #[test]
@@ -1244,7 +1516,7 @@ mod tests {
                 ),
             ],
         };
-        assert!(matches_selector(&doc, 5, &sel));
+        assert!(matches_selector(&doc, 5, &sel, &ctx()));
     }
 
     #[test]
@@ -1281,7 +1553,8 @@ mod tests {
                 NodeKind::Element(e) => e,
                 _ => panic!(),
             },
-            "only-child"
+            "only-child",
+            &ctx(),
         ));
 
         // Multiple children.
@@ -1293,7 +1566,8 @@ mod tests {
                 NodeKind::Element(e) => e,
                 _ => panic!(),
             },
-            "only-child"
+            "only-child",
+            &ctx(),
         ));
     }
 
@@ -1362,7 +1636,139 @@ mod tests {
                 None,
             )],
         };
-        assert!(matches_selector(&doc, 3, &sel));
+        assert!(matches_selector(&doc, 3, &sel, &ctx()));
+    }
+
+    // -- Stateful pseudo-class tests (Phase 10) ---------------------------
+
+    #[test]
+    fn hover_matches_hovered_node() {
+        let doc = make_doc(vec![(TagName::P, vec![])]);
+        let hctx = CascadeContext {
+            hover_node: Some(3),
+            visited_urls: None,
+        };
+        let elem = match &doc.nodes[3].kind {
+            NodeKind::Element(e) => e,
+            _ => panic!(),
+        };
+        assert!(match_pseudo_class(&doc, 3, elem, "hover", &hctx));
+        assert!(!match_pseudo_class(&doc, 3, elem, "hover", &ctx()));
+    }
+
+    #[test]
+    fn hover_matches_ancestor_of_hovered_node() {
+        // <body> (2) > <div> (3) > <p> (4)
+        let mut doc = make_doc(vec![(TagName::Div, vec![])]);
+        let p_id = doc.nodes.len();
+        doc.nodes.push(Node {
+            kind: NodeKind::Element(ElementData {
+                tag: TagName::P,
+                attributes: vec![],
+            }),
+            parent: Some(3),
+            children: vec![],
+        });
+        doc.nodes[3].children.push(p_id);
+
+        // Hover is on the <p> (inner element).
+        let hctx = CascadeContext {
+            hover_node: Some(p_id),
+            visited_urls: None,
+        };
+        // <div> (ancestor) should also match :hover.
+        let div_elem = match &doc.nodes[3].kind {
+            NodeKind::Element(e) => e,
+            _ => panic!(),
+        };
+        assert!(match_pseudo_class(&doc, 3, div_elem, "hover", &hctx));
+    }
+
+    #[test]
+    fn visited_matches_with_visited_url() {
+        let mut visited = std::collections::HashSet::new();
+        visited.insert("/page1".to_string());
+
+        let doc = make_doc(vec![(
+            TagName::A,
+            vec![Attribute {
+                name: "href".to_string(),
+                value: "/page1".to_string(),
+            }],
+        )]);
+        let vctx = CascadeContext {
+            hover_node: None,
+            visited_urls: Some(&visited),
+        };
+        let elem = match &doc.nodes[3].kind {
+            NodeKind::Element(e) => e,
+            _ => panic!(),
+        };
+        assert!(match_pseudo_class(&doc, 3, elem, "visited", &vctx));
+        assert!(!match_pseudo_class(&doc, 3, elem, "link", &vctx));
+    }
+
+    #[test]
+    fn link_matches_unvisited_anchor() {
+        let visited = std::collections::HashSet::new();
+
+        let doc = make_doc(vec![(
+            TagName::A,
+            vec![Attribute {
+                name: "href".to_string(),
+                value: "/page2".to_string(),
+            }],
+        )]);
+        let vctx = CascadeContext {
+            hover_node: None,
+            visited_urls: Some(&visited),
+        };
+        let elem = match &doc.nodes[3].kind {
+            NodeKind::Element(e) => e,
+            _ => panic!(),
+        };
+        assert!(match_pseudo_class(&doc, 3, elem, "link", &vctx));
+        assert!(!match_pseudo_class(&doc, 3, elem, "visited", &vctx));
+    }
+
+    #[test]
+    fn hover_style_applied_via_cascade() {
+        let doc = make_doc(vec![(TagName::P, vec![])]);
+        let sheet = Stylesheet::parse("p:hover { color: red; }");
+        let hctx = CascadeContext {
+            hover_node: Some(3),
+            visited_urls: None,
+        };
+        let styles = style_tree(&doc, &[&sheet], &[], &hctx);
+        let style = styles[3].as_ref().expect("p should have style");
+        assert_eq!(style.color, Color::rgb(255, 0, 0));
+
+        // Without hover, color should be inherited default (white).
+        let styles_no_hover = style_tree(&doc, &[&sheet], &[], &ctx());
+        let style_no = styles_no_hover[3].as_ref().unwrap();
+        assert_ne!(style_no.color, Color::rgb(255, 0, 0));
+    }
+
+    #[test]
+    fn visited_style_applied_via_cascade() {
+        let mut visited = std::collections::HashSet::new();
+        visited.insert("/page1".to_string());
+
+        let doc = make_doc(vec![(
+            TagName::A,
+            vec![Attribute {
+                name: "href".to_string(),
+                value: "/page1".to_string(),
+            }],
+        )]);
+        let sheet = Stylesheet::parse("a:visited { color: purple; }");
+        let vctx = CascadeContext {
+            hover_node: None,
+            visited_urls: Some(&visited),
+        };
+        let styles = style_tree(&doc, &[&sheet], &[], &vctx);
+        let style = styles[3].as_ref().expect("a should have style");
+        assert_eq!(style.color, Color::rgb(128, 0, 128));
     }
 
     mod prop {

@@ -44,6 +44,8 @@ pub enum SimpleSelector {
     PseudoClass(String),
     /// Functional pseudo-class with argument: `:nth-child(2n+1)`.
     PseudoClassFn(String, String),
+    /// Pseudo-element: `::before`, `::after`.
+    PseudoElement(String),
     /// Negation: `:not(selector)`.
     Not(Box<CompoundSelector>),
     /// Attribute selector: `[attr]`, `[attr=val]`, etc.
@@ -145,7 +147,7 @@ impl Selector {
                             }
                         }
                     },
-                    SimpleSelector::Type(_) => {
+                    SimpleSelector::Type(_) | SimpleSelector::PseudoElement(_) => {
                         types = types.saturating_add(1);
                     },
                     SimpleSelector::Universal => {},
@@ -572,10 +574,26 @@ impl CssParser {
                 },
                 CssToken::Colon => {
                     self.advance();
+                    // Check for double-colon `::` pseudo-element.
+                    if self.peek() == &CssToken::Colon {
+                        self.advance();
+                        if let CssToken::Ident(name) = self.peek().clone() {
+                            self.advance();
+                            let lc = name.to_ascii_lowercase();
+                            parts.push(SimpleSelector::PseudoElement(lc));
+                        }
+                        continue;
+                    }
                     match self.peek().clone() {
                         CssToken::Ident(name) => {
                             self.advance();
-                            parts.push(SimpleSelector::PseudoClass(name));
+                            // Legacy single-colon pseudo-elements.
+                            let lc = name.to_ascii_lowercase();
+                            if lc == "before" || lc == "after" {
+                                parts.push(SimpleSelector::PseudoElement(lc));
+                            } else {
+                                parts.push(SimpleSelector::PseudoClass(name));
+                            }
                         },
                         CssToken::Function(name) => {
                             self.advance();

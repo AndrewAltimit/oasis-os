@@ -212,6 +212,31 @@ pub enum Overflow {
     Hidden,
 }
 
+/// CSS `word-break` property.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WordBreak {
+    Normal,
+    BreakAll,
+}
+
+/// CSS `overflow-wrap` property.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OverflowWrap {
+    Normal,
+    BreakWord,
+    Anywhere,
+}
+
+/// CSS `box-shadow` value.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct BoxShadow {
+    pub offset_x: f32,
+    pub offset_y: f32,
+    pub blur: f32,
+    pub spread: f32,
+    pub color: Color,
+}
+
 // -----------------------------------------------------------------------
 // CssValue helper
 // -----------------------------------------------------------------------
@@ -308,6 +333,20 @@ pub struct ComputedStyle {
     pub left: Dimension,
     pub z_index: i32,
 
+    // -- Visual effects -----------------------------------------------
+    pub border_radius: f32,
+    pub box_shadow: Option<BoxShadow>,
+    pub opacity: f32,
+
+    // -- Text overflow --------------------------------------------------
+    pub word_break: WordBreak,
+    pub overflow_wrap: OverflowWrap,
+
+    // -- Generated content (::before/::after) ---------------------------
+    pub content: Option<String>,
+    pub before_content: Option<String>,
+    pub after_content: Option<String>,
+
     // -- Flexbox properties --
     pub flex_direction: FlexDirection,
     pub flex_wrap: FlexWrap,
@@ -396,6 +435,20 @@ impl Default for ComputedStyle {
             bottom: Dimension::Auto,
             left: Dimension::Auto,
             z_index: 0,
+
+            // Visual effects
+            border_radius: 0.0,
+            box_shadow: None,
+            opacity: 1.0,
+
+            // Text overflow
+            word_break: WordBreak::Normal,
+            overflow_wrap: OverflowWrap::Normal,
+
+            // Generated content
+            content: None,
+            before_content: None,
+            after_content: None,
 
             flex_direction: FlexDirection::Row,
             flex_wrap: FlexWrap::NoWrap,
@@ -905,6 +958,55 @@ impl ComputedStyle {
             },
             "gap" | "row-gap" | "column-gap" => {
                 self.gap = resolve_length(value, parent_font_size);
+            },
+
+            // -- Visual effects -----------------------------------------
+            "border-radius" => {
+                self.border_radius = resolve_length(value, parent_font_size);
+            },
+            "opacity" => {
+                if let CssValue::Number(n) = value {
+                    self.opacity = n.clamp(0.0, 1.0);
+                }
+            },
+            "box-shadow" => {
+                if let Some(kw) = as_keyword(value)
+                    && kw == "none"
+                {
+                    self.box_shadow = None;
+                }
+                // Complex box-shadow values are parsed from the raw
+                // declaration list in the cascade.
+            },
+
+            // -- Text overflow ------------------------------------------
+            "word-break" => {
+                if let Some(kw) = as_keyword(value) {
+                    self.word_break = match kw {
+                        "break-all" => WordBreak::BreakAll,
+                        _ => WordBreak::Normal,
+                    };
+                }
+            },
+            "overflow-wrap" | "word-wrap" => {
+                if let Some(kw) = as_keyword(value) {
+                    self.overflow_wrap = match kw {
+                        "break-word" => OverflowWrap::BreakWord,
+                        "anywhere" => OverflowWrap::Anywhere,
+                        _ => OverflowWrap::Normal,
+                    };
+                }
+            },
+
+            // -- Generated content --------------------------------------
+            "content" => match value {
+                CssValue::String(s) => {
+                    self.content = Some(s.clone());
+                },
+                CssValue::Keyword(kw) if kw == "none" || kw == "normal" => {
+                    self.content = None;
+                },
+                _ => {},
             },
 
             // Unknown properties are silently ignored (per CSS spec).

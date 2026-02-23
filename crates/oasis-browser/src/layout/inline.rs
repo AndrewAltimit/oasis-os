@@ -32,10 +32,33 @@ pub fn layout_inline(parent: &mut LayoutBox, measurer: &dyn TextMeasurer) {
 
     for fragment in &fragments {
         if !current_line.try_add(fragment) {
+            // If the fragment doesn't fit on an empty line, break it
+            // character-by-character (emergency word breaking).
+            if current_line.is_empty() {
+                let pieces = break_word_fragment(fragment, available_width, measurer);
+                for piece in &pieces {
+                    if !current_line.try_add(piece) {
+                        lines.push(current_line);
+                        current_line = LineBox::new(available_width);
+                        current_line.try_add(piece);
+                    }
+                }
+                continue;
+            }
             lines.push(current_line);
             current_line = LineBox::new(available_width);
             // The fragment that did not fit starts the new line.
-            current_line.try_add(fragment);
+            if !current_line.try_add(fragment) && current_line.is_empty() {
+                // Still doesn't fit: emergency break.
+                let pieces = break_word_fragment(fragment, available_width, measurer);
+                for piece in &pieces {
+                    if !current_line.try_add(piece) {
+                        lines.push(current_line);
+                        current_line = LineBox::new(available_width);
+                        current_line.try_add(piece);
+                    }
+                }
+            }
         }
     }
     if !current_line.is_empty() {
@@ -61,7 +84,8 @@ pub fn layout_inline(parent: &mut LayoutBox, measurer: &dyn TextMeasurer) {
         } else {
             parent.style.line_height
         };
-        line.baseline = line.height * 0.8; // simple approximation
+        // Baseline: bitmap font ascender is ~75% of em square.
+        line.baseline = line.height * 0.75;
 
         // Position fragments horizontally.
         let is_last_line = i == last_line_idx;
@@ -240,6 +264,60 @@ pub fn make_text_fragments(
     }
 
     fragments
+}
+
+// -------------------------------------------------------------------
+// Emergency word breaking
+// -------------------------------------------------------------------
+
+/// Break a text fragment at the available width boundary, producing
+/// multiple sub-fragments that each fit within the given width.
+fn break_word_fragment(
+    fragment: &InlineFragment,
+    available_width: f32,
+    measurer: &dyn TextMeasurer,
+) -> Vec<InlineFragment> {
+    if let InlineFragment::Text {
+        text, style, node, ..
+    } = fragment
+    {
+        let font_size = style.font_size as u16;
+        let chars: Vec<char> = text.chars().collect();
+        let mut pieces = Vec::new();
+        let mut start = 0;
+
+        while start < chars.len() {
+            let mut end = start + 1;
+            // Greedily extend until the piece exceeds available width.
+            while end < chars.len() {
+                let candidate: String = chars[start..=end].iter().collect();
+                let w = measure_word(&candidate, style.font_size, measurer);
+                if w > available_width && end > start + 1 {
+                    break;
+                }
+                end += 1;
+            }
+            // end is now one past the last character that fits.
+            let piece_text: String = chars[start..end].iter().collect();
+            let piece_width = measurer.measure_text(&piece_text, font_size) as f32;
+            pieces.push(InlineFragment::Text {
+                text: piece_text,
+                x: 0.0,
+                width: piece_width,
+                style: style.clone(),
+                node: *node,
+            });
+            start = end;
+        }
+
+        if pieces.is_empty() {
+            // Fallback: return the original fragment.
+            pieces.push(fragment.clone());
+        }
+        pieces
+    } else {
+        vec![fragment.clone()]
+    }
 }
 
 // -------------------------------------------------------------------

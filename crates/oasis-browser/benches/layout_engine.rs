@@ -2,7 +2,9 @@
 
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use oasis_browser::SimpleTextMeasurer;
-use oasis_browser::internals::{Stylesheet, Tokenizer, TreeBuilder, build_layout_tree, style_tree};
+use oasis_browser::internals::{
+    CascadeContext, Stylesheet, Tokenizer, TreeBuilder, build_layout_tree, style_tree,
+};
 
 /// Generate HTML with `n` block-level divs.
 fn generate_blocks(n: usize) -> String {
@@ -42,7 +44,7 @@ fn prepare_for_layout(
     let tokens = tokenizer.tokenize();
     let doc = TreeBuilder::build(tokens);
     let stylesheet = Stylesheet::parse(css);
-    let styles = style_tree(&doc, &[&stylesheet], &[]);
+    let styles = style_tree(&doc, &[&stylesheet], &[], &CascadeContext::default());
     (doc, styles)
 }
 

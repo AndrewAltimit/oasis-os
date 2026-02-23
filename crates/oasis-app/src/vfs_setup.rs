@@ -51,22 +51,96 @@ pub fn populate_demo_vfs(vfs: &mut MemoryVfs) {
     vfs.mkdir("/sites/home").unwrap();
     vfs.write(
         "/sites/home/index.html",
-        b"<html><head><title>OASIS Home</title></head><body>\
-          <h1>Welcome to OASIS Browser</h1>\
-          <p>A lightweight HTML/CSS browser for OASIS_OS.</p>\
-          <ul>\
-          <li><a href=\"/sites/home/about.html\">About OASIS Browser</a></li>\
-          </ul>\
-          </body></html>",
+        br#"<html><head><title>OASIS Home</title>
+<style>
+body { color: #e0e0e0; background-color: #1a1a2e; }
+h1 { color: #64c8ff; }
+h2 { color: #80d0a0; }
+a { color: #64c8ff; }
+code { background-color: rgba(100,200,255,30); }
+pre { background-color: rgba(100,200,255,15); border: 1px solid rgba(100,200,255,30); }
+blockquote { border-left-color: #64c8ff; color: #a0a0c0; }
+table { border-collapse: collapse; }
+th { background-color: rgba(100,200,255,20); border: 1px solid rgba(255,255,255,30); }
+td { border: 1px solid rgba(255,255,255,20); }
+</style>
+</head><body>
+<h1>Welcome to OASIS Browser</h1>
+<p>A lightweight <strong>HTML/CSS</strong> rendering engine for
+<em>OASIS_OS</em>. Supports block, inline, flex, and table layout.</p>
+
+<h2>Features</h2>
+<ul>
+<li>CSS cascade with <code>specificity</code></li>
+<li>Block, inline, flex, and table layout</li>
+<li>Text wrapping and decoration</li>
+<li>Smooth scrolling with mouse wheel</li>
+</ul>
+
+<h2>Shortcuts</h2>
+<table>
+<tr><th>Key</th><th>Action</th></tr>
+<tr><td>Tab</td><td>Focus URL bar</td></tr>
+<tr><td>Left/Right</td><td>Navigate links</td></tr>
+<tr><td>Up/Down</td><td>Scroll page</td></tr>
+</table>
+
+<blockquote>Originally ported from a PSP homebrew shell (2006-2008).</blockquote>
+
+<h2>Links</h2>
+<ol>
+<li><a href="/sites/home/about.html">About OASIS Browser</a></li>
+<li><a href="/sites/home/features.html">CSS Feature Test</a></li>
+</ol>
+</body></html>"#,
     )
     .unwrap();
     vfs.write(
         "/sites/home/about.html",
-        b"<html><head><title>About</title></head><body>\
-          <h1>About OASIS Browser</h1>\
-          <p>Supports HTML, CSS, and Gemini protocol.</p>\
-          <p><a href=\"/sites/home/index.html\">Back to home</a></p>\
-          </body></html>",
+        br#"<html><head><title>About OASIS Browser</title>
+<style>
+body { color: #e0e0e0; background-color: #1a1a2e; }
+h1 { color: #64c8ff; }
+a { color: #64c8ff; }
+</style>
+</head><body>
+<h1>About OASIS Browser</h1>
+<p>A lightweight HTML/CSS engine for embedded systems:</p>
+<ul>
+<li><strong>HTML</strong> -- WHATWG tokenizer, 70+ tags</li>
+<li><strong>CSS</strong> -- cascade, specificity, media queries</li>
+<li><strong>Layout</strong> -- block, inline, flex, table, float</li>
+<li><strong>Gemini</strong> -- lightweight text protocol</li>
+</ul>
+<p><a href="/sites/home/index.html">Back to home</a></p>
+</body></html>"#,
+    )
+    .unwrap();
+    vfs.write(
+        "/sites/home/features.html",
+        br#"<html><head><title>CSS Features</title>
+<style>
+body { color: #e0e0e0; background-color: #1a1a2e; }
+h1 { color: #64c8ff; }
+h2 { color: #80d0a0; font-size: 1.2em; }
+a { color: #64c8ff; }
+</style>
+</head><body>
+<h1>CSS Feature Test</h1>
+<h2>Text Formatting</h2>
+<p><strong>Bold</strong>, <em>italic</em>, <u>underline</u>,
+<s>strikethrough</s>, <code>inline code</code>,
+<mark>highlighted</mark>, <small>small</small>.</p>
+<h2>Blockquote</h2>
+<blockquote>Blockquote with left border.</blockquote>
+<h2>Ordered List</h2>
+<ol><li>First</li><li>Second</li><li>Third</li></ol>
+<h2>Preformatted</h2>
+<pre>fn main() {
+    println!("Hello!");
+}</pre>
+<p><a href="/sites/home/index.html">Back to home</a></p>
+</body></html>"#,
     )
     .unwrap();
 

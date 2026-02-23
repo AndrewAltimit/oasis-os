@@ -42,7 +42,7 @@ pub use scroll::ScrollState;
 /// These are implementation details and may change without notice.
 #[doc(hidden)]
 pub mod internals {
-    pub use crate::css::cascade::style_tree;
+    pub use crate::css::cascade::{CascadeContext, style_tree};
     pub use crate::css::parser::{Stylesheet, parse_inline_style};
     pub use crate::css::values::ComputedStyle;
     pub use crate::html::dom::Document;
@@ -58,7 +58,7 @@ pub mod internals {
 // Imports
 // -----------------------------------------------------------------------
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use oasis_types::backend::{Color, SdiBackend};
 use oasis_types::error::Result;
@@ -187,6 +187,12 @@ pub struct BrowserWidget {
 
     /// Viewport width used for the most recent layout pass.
     last_layout_w: u32,
+
+    /// Set of URLs that have been navigated to (for `:visited`).
+    visited_urls: HashSet<String>,
+
+    /// DOM node currently under the cursor (for `:hover`).
+    hover_node: Option<NodeId>,
 }
 
 impl BrowserWidget {
@@ -220,6 +226,8 @@ impl BrowserWidget {
             tls: None,
             layout_dirty: false,
             last_layout_w: 480,
+            visited_urls: HashSet::new(),
+            hover_node: None,
         }
     }
 
@@ -385,7 +393,11 @@ impl BrowserWidget {
         for sheet in &author_sheets {
             all_sheets.push(sheet);
         }
-        let styles = css::cascade::style_tree(&doc, &all_sheets, &inline_styles);
+        let ctx = css::cascade::CascadeContext {
+            hover_node: self.hover_node,
+            visited_urls: Some(&self.visited_urls),
+        };
+        let styles = css::cascade::style_tree(&doc, &all_sheets, &inline_styles, &ctx);
 
         // 5. Build link href map from DOM.
         let href_map = Self::build_link_map(&doc);
@@ -500,7 +512,11 @@ impl BrowserWidget {
                 let tokens = html::tokenizer::Tokenizer::new(&article.html).tokenize();
                 let reader_doc = html::tree_builder::TreeBuilder::build(tokens);
                 let ua_sheet = css::default::default_stylesheet();
-                let styles = css::cascade::style_tree(&reader_doc, &[&ua_sheet], &[]);
+                let reader_ctx = css::cascade::CascadeContext {
+                    hover_node: None,
+                    visited_urls: Some(&self.visited_urls),
+                };
+                let styles = css::cascade::style_tree(&reader_doc, &[&ua_sheet], &[], &reader_ctx);
                 let href_map = Self::build_link_map(&reader_doc);
                 self.document = Some(reader_doc);
                 self.styles = styles;
@@ -963,6 +979,10 @@ impl BrowserWidget {
                 self.scroll.wheel_scroll(*delta);
                 true
             },
+            InputEvent::CursorMove { x, y } => {
+                self.handle_cursor_move(*x, *y);
+                true
+            },
             InputEvent::PointerClick { x, y } => {
                 self.handle_click(*x, *y, vfs);
                 true
@@ -1069,6 +1089,53 @@ impl BrowserWidget {
         }
     }
 
+    /// Handle a cursor move at window-relative coordinates.
+    ///
+    /// Hit-tests link regions to determine the hover target. If the
+    /// hovered node changes, re-runs the CSS cascade so `:hover` rules
+    /// take effect.
+    fn handle_cursor_move(&mut self, x: i32, y: i32) {
+        let mut new_hover: Option<NodeId> = None;
+        for link in &self.link_map {
+            let lx = link.rect.x;
+            let ly = link.rect.y;
+            let lw = link.rect.width;
+            let lh = link.rect.height;
+            if (x as f32) >= lx && (x as f32) < lx + lw && (y as f32) >= ly && (y as f32) < ly + lh
+            {
+                new_hover = Some(link.node);
+                break;
+            }
+        }
+
+        if new_hover != self.hover_node {
+            self.hover_node = new_hover;
+            self.restyle_current_page();
+        }
+    }
+
+    /// Re-run the CSS cascade on the current document with updated
+    /// hover/visited state, then mark layout as dirty.
+    fn restyle_current_page(&mut self) {
+        let Some(doc) = &self.document else { return };
+        let author_sheets = Self::collect_style_sheets(doc);
+        let inline_styles = Self::collect_inline_styles(doc);
+
+        let ua_sheet = css::default::default_stylesheet();
+        let mut all_sheets: Vec<&css::parser::Stylesheet> = vec![&ua_sheet];
+        for sheet in &author_sheets {
+            all_sheets.push(sheet);
+        }
+
+        let ctx = css::cascade::CascadeContext {
+            hover_node: self.hover_node,
+            visited_urls: Some(&self.visited_urls),
+        };
+        let styles = css::cascade::style_tree(doc, &all_sheets, &inline_styles, &ctx);
+        self.styles = styles;
+        self.layout_dirty = true;
+    }
+
     /// Navigate to a URL, resolving relative references against
     /// the current page.
     pub fn navigate_to(&mut self, href: &str, vfs: &dyn Vfs) {
@@ -1084,6 +1151,8 @@ impl BrowserWidget {
             href.to_string()
         };
 
+        // Track this URL as visited for :visited pseudo-class.
+        self.visited_urls.insert(resolved.clone());
         self.navigate_vfs(&resolved, vfs);
     }
 

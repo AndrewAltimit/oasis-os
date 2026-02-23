@@ -158,6 +158,9 @@ fn paint_box(
         false
     };
 
+    // 0. Box shadow (behind background).
+    paint_box_shadow(layout_box, backend, offset_x, offset_y, ctx)?;
+
     // 1. Background
     paint_background(layout_box, backend, offset_x, offset_y, ctx)?;
 
@@ -252,7 +255,7 @@ fn paint_background(
     offset_y: i32,
     ctx: &PaintContext,
 ) -> Result<()> {
-    let bg = layout_box.style.background_color;
+    let bg = apply_opacity(layout_box.style.background_color, layout_box.style.opacity);
     if bg.a == 0 {
         return Ok(());
     }
@@ -260,7 +263,15 @@ fn paint_background(
     let padding = layout_box.dimensions.padding_box();
     let x = (padding.x + offset_x as f32) as i32;
     let y = (padding.y - ctx.scroll_y + offset_y as f32) as i32;
-    backend.fill_rect(x, y, padding.width as u32, padding.height as u32, bg)
+    let w = padding.width as u32;
+    let h = padding.height as u32;
+
+    if layout_box.style.border_radius > 0.0 {
+        backend.fill_rounded_rect(x, y, w, h, layout_box.style.border_radius as u16, bg)?;
+    } else {
+        backend.fill_rect(x, y, w, h, bg)?;
+    }
+    Ok(())
 }
 
 // -------------------------------------------------------------------
@@ -423,6 +434,23 @@ fn paint_inline_content(
     ctx: &mut PaintContext,
     link_map: &HashMap<NodeId, String>,
 ) -> Result<()> {
+    // Paint inline background if non-transparent.
+    let bg = layout_box.style.background_color;
+    if bg.a > 0 {
+        let content = &layout_box.dimensions.content;
+        let pad_h: i32 = 2;
+        let pad_v: i32 = 1;
+        let x = (content.x + offset_x as f32) as i32 - pad_h;
+        let y = (content.y - ctx.scroll_y + offset_y as f32) as i32 - pad_v;
+        let w = content.width as u32 + pad_h as u32 * 2;
+        let h = content.height as u32 + pad_v as u32 * 2;
+        if layout_box.style.border_radius > 0.0 {
+            backend.fill_rounded_rect(x, y, w, h, layout_box.style.border_radius as u16, bg)?;
+        } else {
+            backend.fill_rect(x, y, w, h, bg)?;
+        }
+    }
+
     // If this inline box carries text content, render it directly.
     if let Some(ref text) = layout_box.text {
         let content = &layout_box.dimensions.content;
@@ -462,7 +490,8 @@ fn paint_text(
     let sx = (x + offset_x as f32) as i32;
     let sy = (y - ctx.scroll_y + offset_y as f32) as i32;
 
-    backend.draw_text(text, sx, sy, style.font_size as u16, style.color)?;
+    let color = apply_opacity(style.color, style.opacity);
+    backend.draw_text(text, sx, sy, style.font_size as u16, color)?;
 
     // Measure actual text width using the proportional bitmap font.
     let text_width = oasis_types::backend::bitmap_measure_text(text, style.font_size as u16);
@@ -470,18 +499,18 @@ fn paint_text(
     // Underline decoration
     if style.text_decoration == TextDecoration::Underline {
         let underline_y = sy + style.font_size as i32;
-        backend.fill_rect(sx, underline_y, text_width, 1, style.color)?;
+        backend.fill_rect(sx, underline_y, text_width, 1, color)?;
     }
 
     // Line-through decoration
     if style.text_decoration == TextDecoration::LineThrough {
         let strike_y = sy + (style.font_size as i32 / 2);
-        backend.fill_rect(sx, strike_y, text_width, 1, style.color)?;
+        backend.fill_rect(sx, strike_y, text_width, 1, color)?;
     }
 
     // Overline decoration
     if style.text_decoration == TextDecoration::Overline {
-        backend.fill_rect(sx, sy, text_width, 1, style.color)?;
+        backend.fill_rect(sx, sy, text_width, 1, color)?;
     }
 
     Ok(())
@@ -638,6 +667,54 @@ fn paint_replaced(
 // -------------------------------------------------------------------
 // Helpers
 // -------------------------------------------------------------------
+
+/// Scale a color's alpha channel by an opacity factor.
+fn apply_opacity(color: Color, opacity: f32) -> Color {
+    if opacity >= 1.0 {
+        return color;
+    }
+    Color::rgba(color.r, color.g, color.b, (color.a as f32 * opacity) as u8)
+}
+
+/// Paint a box shadow behind the element.
+fn paint_box_shadow(
+    layout_box: &LayoutBox,
+    backend: &mut dyn SdiBackend,
+    offset_x: i32,
+    offset_y: i32,
+    ctx: &PaintContext,
+) -> Result<()> {
+    let shadow = match layout_box.style.box_shadow {
+        Some(ref s) => s,
+        None => return Ok(()),
+    };
+
+    let border = layout_box.dimensions.border_box();
+    let bx = (border.x + offset_x as f32 + shadow.offset_x) as i32;
+    let by = (border.y - ctx.scroll_y + offset_y as f32 + shadow.offset_y) as i32;
+    let bw = (border.width + shadow.spread * 2.0) as u32;
+    let bh = (border.height + shadow.spread * 2.0) as u32;
+
+    // Approximate blur with concentric rectangles at decreasing opacity.
+    let steps = (shadow.blur as i32).max(1);
+    for i in (0..steps).rev() {
+        let t = i as f32 / steps as f32;
+        let alpha = ((shadow.color.a as f32) * (1.0 - t) * 0.4) as u8;
+        if alpha == 0 {
+            continue;
+        }
+        let expand = i;
+        let color = Color::rgba(shadow.color.r, shadow.color.g, shadow.color.b, alpha);
+        backend.fill_rect(
+            bx - expand,
+            by - expand,
+            bw + expand as u32 * 2,
+            bh + expand as u32 * 2,
+            color,
+        )?;
+    }
+    Ok(())
+}
 
 /// Returns `true` if the layout box or any of its descendants is an
 /// inline box or contains inline fragments that carry text.
