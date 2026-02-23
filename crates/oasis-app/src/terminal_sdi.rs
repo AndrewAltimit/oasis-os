@@ -86,6 +86,7 @@ pub fn setup_terminal_objects(
     output_lines: &[String],
     cwd: &str,
     input_buf: &str,
+    scroll_offset: usize,
 ) {
     if !sdi.contains("terminal_bg") {
         let obj = sdi.create("terminal_bg");
@@ -102,8 +103,9 @@ pub fn setup_terminal_objects(
         obj.visible = true;
     }
 
-    // Show the last VISIBLE_OUTPUT_LINES from the scrollback buffer.
-    let start = output_lines.len().saturating_sub(VISIBLE_OUTPUT_LINES);
+    // Show VISIBLE_OUTPUT_LINES from the scrollback buffer, offset by scroll.
+    let end = output_lines.len().saturating_sub(scroll_offset);
+    let start = end.saturating_sub(VISIBLE_OUTPUT_LINES);
     for i in 0..VISIBLE_OUTPUT_LINES {
         let name = format!("term_line_{i}");
         if !sdi.contains(&name) {
@@ -147,6 +149,53 @@ pub fn setup_terminal_objects(
         obj.text = Some(format!("{cwd}> {input_buf}_"));
         obj.visible = true;
     }
+}
+
+/// Paint a scrollbar on the right edge of the terminal background area.
+///
+/// Uses `fill_rect` directly on the backend. The terminal background is at
+/// (4, 26, 472, 220). The scrollbar sits on the right edge.
+pub fn paint_terminal_scrollbar(
+    backend: &mut dyn oasis_core::backend::SdiBackend,
+    total_lines: usize,
+    scroll_offset: usize,
+) -> oasis_core::error::Result<()> {
+    if total_lines <= VISIBLE_OUTPUT_LINES {
+        return Ok(());
+    }
+    let sb_w: u32 = 6;
+    let track_x: i32 = 4 + 472 - sb_w as i32 - 1;
+    let track_y: i32 = 26;
+    let track_h: u32 = 220;
+
+    // Track.
+    backend.fill_rect(
+        track_x,
+        track_y,
+        sb_w,
+        track_h,
+        Color::rgba(255, 255, 255, 20),
+    )?;
+
+    // Thumb: proportional to visible/total ratio.
+    let ratio = VISIBLE_OUTPUT_LINES as f32 / total_lines as f32;
+    let thumb_h = ((track_h as f32 * ratio) as u32).max(12).min(track_h);
+    let scrollable = track_h - thumb_h;
+    let max_offset = total_lines - VISIBLE_OUTPUT_LINES;
+    let frac = if max_offset > 0 {
+        1.0 - (scroll_offset as f32 / max_offset as f32)
+    } else {
+        1.0
+    };
+    let thumb_y = track_y + (scrollable as f32 * frac) as i32;
+    backend.fill_rect(
+        track_x,
+        thumb_y,
+        sb_w,
+        thumb_h,
+        Color::rgba(255, 255, 255, 100),
+    )?;
+    Ok(())
 }
 
 #[cfg(test)]
@@ -254,7 +303,7 @@ mod tests {
     fn set_terminal_visible_toggles() {
         let mut sdi = SdiRegistry::new();
         let lines: Vec<String> = vec!["hello".to_string()];
-        setup_terminal_objects(&mut sdi, &lines, "/home", "ls");
+        setup_terminal_objects(&mut sdi, &lines, "/home", "ls", 0);
 
         // All objects should be visible after setup.
         assert!(sdi.get("terminal_bg").unwrap().visible);
@@ -288,7 +337,7 @@ mod tests {
     fn setup_terminal_objects_creates_all() {
         let mut sdi = SdiRegistry::new();
         let lines: Vec<String> = vec![];
-        setup_terminal_objects(&mut sdi, &lines, "/", "");
+        setup_terminal_objects(&mut sdi, &lines, "/", "", 0);
 
         assert!(sdi.contains("terminal_bg"));
         assert!(sdi.contains("term_input_bg"));
@@ -301,7 +350,7 @@ mod tests {
     #[test]
     fn setup_terminal_objects_prompt_format() {
         let mut sdi = SdiRegistry::new();
-        setup_terminal_objects(&mut sdi, &[], "/home/user", "cat foo.txt");
+        setup_terminal_objects(&mut sdi, &[], "/home/user", "cat foo.txt", 0);
 
         let prompt = sdi.get("term_prompt").unwrap();
         assert_eq!(prompt.text.as_deref(), Some("/home/user> cat foo.txt_"));
@@ -311,7 +360,7 @@ mod tests {
     fn setup_terminal_objects_scrollback_few_lines() {
         let mut sdi = SdiRegistry::new();
         let lines: Vec<String> = (0..3).map(|i| format!("line{i}")).collect();
-        setup_terminal_objects(&mut sdi, &lines, "/", "");
+        setup_terminal_objects(&mut sdi, &lines, "/", "", 0);
 
         // With 3 lines and VISIBLE=12, start=0. Lines 0-2 have text, rest None.
         assert_eq!(
@@ -330,7 +379,7 @@ mod tests {
         let mut sdi = SdiRegistry::new();
         // 20 lines -- only last 12 should be visible.
         let lines: Vec<String> = (0..20).map(|i| format!("line{i}")).collect();
-        setup_terminal_objects(&mut sdi, &lines, "/", "");
+        setup_terminal_objects(&mut sdi, &lines, "/", "", 0);
 
         // start = 20 - 12 = 8, so term_line_0 = lines[8]
         assert_eq!(
@@ -347,10 +396,10 @@ mod tests {
     fn setup_terminal_objects_idempotent() {
         let mut sdi = SdiRegistry::new();
         let lines = vec!["first".to_string()];
-        setup_terminal_objects(&mut sdi, &lines, "/", "a");
+        setup_terminal_objects(&mut sdi, &lines, "/", "a", 0);
 
         let lines2 = vec!["second".to_string()];
-        setup_terminal_objects(&mut sdi, &lines2, "/tmp", "b");
+        setup_terminal_objects(&mut sdi, &lines2, "/tmp", "b", 0);
 
         // Should update text, not create duplicates.
         assert_eq!(
@@ -366,7 +415,7 @@ mod tests {
     #[test]
     fn setup_terminal_objects_bg_properties() {
         let mut sdi = SdiRegistry::new();
-        setup_terminal_objects(&mut sdi, &[], "/", "");
+        setup_terminal_objects(&mut sdi, &[], "/", "", 0);
 
         let bg = sdi.get("terminal_bg").unwrap();
         assert_eq!(bg.x, 4);
@@ -380,7 +429,7 @@ mod tests {
     #[test]
     fn setup_terminal_objects_line_positions() {
         let mut sdi = SdiRegistry::new();
-        setup_terminal_objects(&mut sdi, &[], "/", "");
+        setup_terminal_objects(&mut sdi, &[], "/", "", 0);
 
         for i in 0..VISIBLE_OUTPUT_LINES {
             let obj = sdi.get(&format!("term_line_{i}")).unwrap();
@@ -393,7 +442,7 @@ mod tests {
     #[test]
     fn setup_terminal_objects_empty_input() {
         let mut sdi = SdiRegistry::new();
-        setup_terminal_objects(&mut sdi, &[], "/", "");
+        setup_terminal_objects(&mut sdi, &[], "/", "", 0);
 
         let prompt = sdi.get("term_prompt").unwrap();
         assert_eq!(prompt.text.as_deref(), Some("/> _"));

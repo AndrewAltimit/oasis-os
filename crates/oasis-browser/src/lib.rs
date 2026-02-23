@@ -588,6 +588,31 @@ impl BrowserWidget {
             }
         }
 
+        // Paint scrollbar when content overflows viewport.
+        if self.scroll.max_scroll() > 0 {
+            let sb_w: u32 = 6;
+            let sb_x = self.window_x + self.window_w as i32 - sb_w as i32 - 1;
+            let track_y = content_y;
+            let track_h = content_h;
+
+            // Track.
+            backend.fill_rect(sb_x, track_y, sb_w, track_h, Color::rgba(255, 255, 255, 20))?;
+
+            // Thumb: proportional to viewport/content ratio.
+            let ratio = self.scroll.viewport_height as f32 / self.scroll.content_height as f32;
+            let thumb_h = ((track_h as f32 * ratio) as u32).max(12).min(track_h);
+            let scrollable = track_h - thumb_h;
+            let frac = self.scroll.scroll_fraction();
+            let thumb_y = track_y + (scrollable as f32 * frac) as i32;
+            backend.fill_rect(
+                sb_x,
+                thumb_y,
+                sb_w,
+                thumb_h,
+                Color::rgba(255, 255, 255, 100),
+            )?;
+        }
+
         // Paint status bar.
         self.paint_status_bar(backend)?;
 
@@ -932,6 +957,10 @@ impl BrowserWidget {
             },
             InputEvent::TriggerPress(Trigger::Right) => {
                 self.scroll.page_down();
+                true
+            },
+            InputEvent::MouseWheel { delta } => {
+                self.scroll.wheel_scroll(*delta);
                 true
             },
             InputEvent::PointerClick { x, y } => {

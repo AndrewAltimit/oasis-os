@@ -170,6 +170,7 @@ fn main() -> Result<()> {
             ab.init().ok();
             ab
         },
+        terminal_scroll_offset: 0,
     };
 
     // Load radio stations from VFS.
@@ -372,6 +373,15 @@ fn main() -> Result<()> {
                 })?;
         } else {
             sdi.draw(&mut backend)?;
+        }
+
+        // Paint terminal scrollbar when in terminal mode.
+        if state.mode == Mode::Terminal {
+            terminal_sdi::paint_terminal_scrollbar(
+                &mut backend,
+                state.output_lines.len(),
+                state.terminal_scroll_offset,
+            )?;
         }
 
         // Draw transition overlay if active.

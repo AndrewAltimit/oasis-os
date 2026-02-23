@@ -959,6 +959,7 @@ fn map_sdl_event(event: Event) -> Option<InputEvent> {
         Event::MouseMotion { x, y, .. } => Some(InputEvent::CursorMove { x, y }),
         Event::MouseButtonDown { x, y, .. } => Some(InputEvent::PointerClick { x, y }),
         Event::MouseButtonUp { x, y, .. } => Some(InputEvent::PointerRelease { x, y }),
+        Event::MouseWheel { y, .. } => Some(InputEvent::MouseWheel { delta: -y }),
         Event::Window {
             win_event: sdl2::event::WindowEvent::FocusGained,
             ..

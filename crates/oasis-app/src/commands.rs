@@ -430,6 +430,7 @@ mod tests {
             radio_manager: RadioManager::new(),
             radio_source: None,
             audio_backend: SdlAudioBackend::new(),
+            terminal_scroll_offset: 0,
         }
     }
 
