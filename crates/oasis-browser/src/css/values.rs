@@ -347,6 +347,10 @@ pub struct ComputedStyle {
     pub before_content: Option<String>,
     pub after_content: Option<String>,
 
+    // -- Margin auto flags (for block centering) -------------------------
+    pub margin_left_auto: bool,
+    pub margin_right_auto: bool,
+
     // -- Flexbox properties --
     pub flex_direction: FlexDirection,
     pub flex_wrap: FlexWrap,
@@ -450,6 +454,9 @@ impl Default for ComputedStyle {
             before_content: None,
             after_content: None,
 
+            margin_left_auto: false,
+            margin_right_auto: false,
+
             flex_direction: FlexDirection::Row,
             flex_wrap: FlexWrap::NoWrap,
             justify_content: JustifyContent::FlexStart,
@@ -550,23 +557,46 @@ impl ComputedStyle {
 
             // -- Margins ------------------------------------------------
             "margin" => {
-                let px = resolve_length(value, parent_font_size);
-                self.margin_top = px;
-                self.margin_right = px;
-                self.margin_bottom = px;
-                self.margin_left = px;
+                if as_keyword(value) == Some("auto") {
+                    self.margin_top = 0.0;
+                    self.margin_right = 0.0;
+                    self.margin_bottom = 0.0;
+                    self.margin_left = 0.0;
+                    self.margin_left_auto = true;
+                    self.margin_right_auto = true;
+                } else {
+                    let px = resolve_length(value, parent_font_size);
+                    self.margin_top = px;
+                    self.margin_right = px;
+                    self.margin_bottom = px;
+                    self.margin_left = px;
+                    self.margin_left_auto = false;
+                    self.margin_right_auto = false;
+                }
             },
             "margin-top" => {
                 self.margin_top = resolve_length(value, parent_font_size);
             },
             "margin-right" => {
-                self.margin_right = resolve_length(value, parent_font_size);
+                if as_keyword(value) == Some("auto") {
+                    self.margin_right = 0.0;
+                    self.margin_right_auto = true;
+                } else {
+                    self.margin_right = resolve_length(value, parent_font_size);
+                    self.margin_right_auto = false;
+                }
             },
             "margin-bottom" => {
                 self.margin_bottom = resolve_length(value, parent_font_size);
             },
             "margin-left" => {
-                self.margin_left = resolve_length(value, parent_font_size);
+                if as_keyword(value) == Some("auto") {
+                    self.margin_left = 0.0;
+                    self.margin_left_auto = true;
+                } else {
+                    self.margin_left = resolve_length(value, parent_font_size);
+                    self.margin_left_auto = false;
+                }
             },
 
             // -- Padding ------------------------------------------------

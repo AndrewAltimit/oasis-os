@@ -437,13 +437,11 @@ fn paint_inline_content(
     // Paint inline background if non-transparent.
     let bg = layout_box.style.background_color;
     if bg.a > 0 {
-        let content = &layout_box.dimensions.content;
-        let pad_h: i32 = 2;
-        let pad_v: i32 = 1;
-        let x = (content.x + offset_x as f32) as i32 - pad_h;
-        let y = (content.y - ctx.scroll_y + offset_y as f32) as i32 - pad_v;
-        let w = content.width as u32 + pad_h as u32 * 2;
-        let h = content.height as u32 + pad_v as u32 * 2;
+        let pb = layout_box.dimensions.padding_box();
+        let x = (pb.x + offset_x as f32) as i32;
+        let y = (pb.y - ctx.scroll_y + offset_y as f32) as i32;
+        let w = pb.width as u32;
+        let h = pb.height as u32;
         if layout_box.style.border_radius > 0.0 {
             backend.fill_rounded_rect(x, y, w, h, layout_box.style.border_radius as u16, bg)?;
         } else {

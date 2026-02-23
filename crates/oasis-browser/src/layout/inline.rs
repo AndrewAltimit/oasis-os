@@ -9,7 +9,7 @@ use super::box_model::*;
 use super::text::{
     apply_text_transform, collapse_whitespace, measure_space, measure_word, split_into_words,
 };
-use crate::css::values::{ComputedStyle, TextAlign};
+use crate::css::values::{ComputedStyle, TextAlign, WhiteSpace};
 use crate::html::dom::NodeId;
 
 // -------------------------------------------------------------------
@@ -28,9 +28,36 @@ pub fn layout_inline(parent: &mut LayoutBox, measurer: &dyn TextMeasurer) {
 
     // Break fragments into line boxes.
     let mut lines: Vec<LineBox> = Vec::new();
-    let mut current_line = LineBox::new(available_width);
+    let text_indent = parent.style.text_indent;
+    let first_line_width = (available_width - text_indent).max(0.0);
+    let mut current_line = LineBox::new(first_line_width);
+    let nowrap = parent.style.white_space == WhiteSpace::NoWrap;
 
     for fragment in &fragments {
+        // Check for line break fragments (<br> or "\n" in pre mode).
+        let is_line_break = match fragment {
+            InlineFragment::ReplacedInline {
+                replaced: ReplacedContent::LineBreak,
+                ..
+            } => true,
+            InlineFragment::Text { text, .. } if text == "\n" => true,
+            _ => false,
+        };
+
+        if is_line_break {
+            // Push current line (even if empty, to create blank lines
+            // for consecutive <br>s).
+            lines.push(current_line);
+            current_line = LineBox::new(available_width);
+            continue;
+        }
+
+        // white-space: nowrap -- force-add without breaking.
+        if nowrap {
+            current_line.fragments.push(fragment.clone());
+            continue;
+        }
+
         if !current_line.try_add(fragment) {
             // If the fragment doesn't fit on an empty line, break it
             // character-by-character (emergency word breaking).
@@ -88,13 +115,19 @@ pub fn layout_inline(parent: &mut LayoutBox, measurer: &dyn TextMeasurer) {
         line.baseline = line.height * 0.75;
 
         // Position fragments horizontally.
+        // First line gets text-indent offset and reduced available width.
         let is_last_line = i == last_line_idx;
+        let (line_avail, line_offset) = if i == 0 && text_indent != 0.0 {
+            (first_line_width, text_indent)
+        } else {
+            (available_width, 0.0)
+        };
         position_fragments_on_line(
             line,
-            available_width,
+            line_avail,
             text_align,
             is_last_line,
-            parent.dimensions.content.x,
+            parent.dimensions.content.x + line_offset,
         );
 
         line_positions.push(cursor_y);
@@ -224,7 +257,9 @@ pub fn make_text_fragments(
     let words = split_into_words(&collapsed, style.white_space);
 
     let font_size = style.font_size;
-    let space_width = measure_space(font_size, measurer);
+    let letter_spacing = style.letter_spacing;
+    let word_spacing = style.word_spacing;
+    let space_width = measure_space(font_size, word_spacing, measurer);
     let mut fragments = Vec::new();
 
     for word in &words {
@@ -241,7 +276,7 @@ pub fn make_text_fragments(
             continue;
         }
 
-        let word_width = measure_word(&word.text, font_size, measurer);
+        let word_width = measure_word(&word.text, font_size, letter_spacing, measurer);
         let total_width = if word.trailing_space {
             word_width + space_width
         } else {
@@ -291,7 +326,7 @@ fn break_word_fragment(
             // Greedily extend until the piece exceeds available width.
             while end < chars.len() {
                 let candidate: String = chars[start..=end].iter().collect();
-                let w = measure_word(&candidate, style.font_size, measurer);
+                let w = measure_word(&candidate, style.font_size, style.letter_spacing, measurer);
                 if w > available_width && end > start + 1 {
                     break;
                 }
@@ -647,5 +682,103 @@ mod tests {
 
         // Verify words were produced (whitespace still collapses).
         assert!(frags.len() > 1, "should have multiple word fragments",);
+    }
+
+    // -- nowrap via layout_inline -------------------------------------
+
+    #[test]
+    fn nowrap_layout_produces_single_line() {
+        let m = FixedMeasurer;
+        let mut style = ComputedStyle::default();
+        style.display = Display::Block;
+        style.white_space = WhiteSpace::NoWrap;
+        style.font_size = 16.0;
+        style.line_height = 20.0;
+
+        let mut parent = LayoutBox::new(BoxType::Anonymous, style.clone(), None);
+        parent.dimensions.content.width = 50.0; // very narrow
+        parent.dimensions.content.x = 0.0;
+        parent.dimensions.content.y = 0.0;
+
+        // Create inline children with text that exceeds 50px.
+        let mut child = LayoutBox::new(BoxType::Inline, style, None);
+        child.text = Some("hello world test".to_string());
+        parent.children = vec![child];
+
+        layout_inline(&mut parent, &m);
+
+        // With nowrap, content height should be a single line height.
+        assert!(
+            parent.dimensions.content.height <= 20.0 + 0.01,
+            "nowrap should produce single line, got height {}",
+            parent.dimensions.content.height,
+        );
+    }
+
+    // -- <br> causes line break ---------------------------------------
+
+    #[test]
+    fn br_causes_line_break() {
+        let m = FixedMeasurer;
+        let mut style = inline_style();
+        style.display = Display::Block;
+
+        let mut parent = LayoutBox::new(BoxType::Anonymous, style.clone(), None);
+        parent.dimensions.content.width = 480.0;
+        parent.dimensions.content.x = 0.0;
+        parent.dimensions.content.y = 0.0;
+
+        // "hello" inline, then <br>, then "world" inline.
+        let mut hello = LayoutBox::new(BoxType::Inline, style.clone(), None);
+        hello.text = Some("hello".to_string());
+
+        let br = LayoutBox::new(
+            BoxType::Replaced(ReplacedContent::LineBreak),
+            style.clone(),
+            None,
+        );
+
+        let mut world = LayoutBox::new(BoxType::Inline, style, None);
+        world.text = Some("world".to_string());
+
+        parent.children = vec![hello, br, world];
+
+        layout_inline(&mut parent, &m);
+
+        // Should produce 2 lines worth of height.
+        assert!(
+            parent.dimensions.content.height > 20.0,
+            "br should cause two lines, got height {}",
+            parent.dimensions.content.height,
+        );
+    }
+
+    // -- text-indent on first line ------------------------------------
+
+    #[test]
+    fn text_indent_applied_to_first_line() {
+        let m = FixedMeasurer;
+        let mut style = inline_style();
+        style.display = Display::Block;
+        style.text_indent = 20.0;
+
+        let mut parent = LayoutBox::new(BoxType::Anonymous, style.clone(), None);
+        parent.dimensions.content.width = 480.0;
+        parent.dimensions.content.x = 0.0;
+        parent.dimensions.content.y = 0.0;
+
+        let mut child = LayoutBox::new(BoxType::Inline, style, None);
+        child.text = Some("hello".to_string());
+        parent.children = vec![child];
+
+        layout_inline(&mut parent, &m);
+
+        // The first (and only) text child should be indented by 20px.
+        assert!(!parent.children.is_empty());
+        let first_x = parent.children[0].dimensions.content.x;
+        assert!(
+            (first_x - 20.0).abs() < 0.01,
+            "first line should be indented by 20, got {first_x}",
+        );
     }
 }

@@ -83,6 +83,16 @@ pub fn build_layout_tree(
     root.dimensions.content.y = 0.0;
     layout_block(&mut root, viewport_width, measurer);
 
+    // Shift root content origin to include root's own box-model edges.
+    // layout_block_children no longer adds parent padding to children,
+    // so the root's edges must be baked into content.x/y.
+    let dx =
+        root.dimensions.margin.left + root.dimensions.border.left + root.dimensions.padding.left;
+    let dy = root.dimensions.margin.top + root.dimensions.border.top + root.dimensions.padding.top;
+    if dx != 0.0 || dy != 0.0 {
+        offset_descendant(&mut root, dx, dy);
+    }
+
     // Apply CSS positioning (relative/absolute/fixed) as a post-pass.
     let viewport_rect = Rect::new(0.0, 0.0, viewport_width, _viewport_height);
     apply_positioning(&mut root, viewport_rect);
@@ -259,7 +269,7 @@ fn layout_children_incremental(
 
     let content_x = parent.dimensions.content.x;
     let content_width = parent.dimensions.content.width;
-    let mut cursor_y = parent.dimensions.content.y + parent.dimensions.padding.top;
+    let mut cursor_y = parent.dimensions.content.y;
     let mut prev_margin_bottom: f32 = 0.0;
 
     for child in &mut parent.children {
@@ -271,7 +281,6 @@ fn layout_children_incremental(
                 let collapsed = collapse_margins(prev_margin_bottom, child_margin_top);
 
                 child.dimensions.content.x = content_x
-                    + parent.dimensions.padding.left
                     + child.dimensions.margin.left
                     + child.dimensions.border.left
                     + child.dimensions.padding.left;
@@ -289,7 +298,7 @@ fn layout_children_incremental(
                 prev_margin_bottom = child.dimensions.margin.bottom;
             },
             BoxType::Anonymous => {
-                child.dimensions.content.x = content_x + parent.dimensions.padding.left;
+                child.dimensions.content.x = content_x;
                 child.dimensions.content.y = cursor_y;
                 child.dimensions.content.width = content_width;
 
@@ -672,6 +681,8 @@ fn make_anonymous_block(children: Vec<LayoutBox>, parent_style: &ComputedStyle) 
     style.margin_right = 0.0;
     style.margin_bottom = 0.0;
     style.margin_left = 0.0;
+    style.margin_left_auto = false;
+    style.margin_right_auto = false;
     style.padding_top = 0.0;
     style.padding_right = 0.0;
     style.padding_bottom = 0.0;
@@ -768,32 +779,45 @@ fn calculate_block_width(layout_box: &mut LayoutBox, containing_width: f32) {
     let pad_h = layout_box.dimensions.padding.horizontal();
     let bdr_h = layout_box.dimensions.border.horizontal();
     let mar_h = layout_box.dimensions.margin.horizontal();
-    let mar_l = layout_box.dimensions.margin.left;
     let total_extra = pad_h + bdr_h + mar_h;
+
+    let ml_auto = layout_box.style.margin_left_auto;
+    let mr_auto = layout_box.style.margin_right_auto;
 
     match layout_box.style.width {
         Dimension::Px(w) => {
             layout_box.dimensions.content.width = w;
-            // Check if margins are auto for centering.
-            let remaining = containing_width - w - total_extra + mar_h;
-            if remaining > 0.0 {
-                // Both margins auto => center.
-                let half = remaining / 2.0;
+            let available_for_margins = containing_width - w - pad_h - bdr_h;
+            if ml_auto && mr_auto {
+                let half = available_for_margins.max(0.0) / 2.0;
                 layout_box.dimensions.margin.left = half;
                 layout_box.dimensions.margin.right = half;
+            } else if ml_auto {
+                layout_box.dimensions.margin.left =
+                    (available_for_margins - layout_box.dimensions.margin.right).max(0.0);
+            } else if mr_auto {
+                layout_box.dimensions.margin.right =
+                    (available_for_margins - layout_box.dimensions.margin.left).max(0.0);
             } else {
                 // Over-constrained: margin-right absorbs overflow.
-                layout_box.dimensions.margin.right = containing_width - w - pad_h - bdr_h - mar_l;
+                layout_box.dimensions.margin.right =
+                    available_for_margins - layout_box.dimensions.margin.left;
             }
         },
         Dimension::Percent(pct) => {
             let w = containing_width * (pct / 100.0);
             layout_box.dimensions.content.width = w;
-            let remaining = containing_width - w - total_extra + mar_h;
-            if remaining > 0.0 {
-                let half = remaining / 2.0;
+            let available_for_margins = containing_width - w - pad_h - bdr_h;
+            if ml_auto && mr_auto {
+                let half = available_for_margins.max(0.0) / 2.0;
                 layout_box.dimensions.margin.left = half;
                 layout_box.dimensions.margin.right = half;
+            } else if ml_auto {
+                layout_box.dimensions.margin.left =
+                    (available_for_margins - layout_box.dimensions.margin.right).max(0.0);
+            } else if mr_auto {
+                layout_box.dimensions.margin.right =
+                    (available_for_margins - layout_box.dimensions.margin.left).max(0.0);
             }
         },
         Dimension::Auto => {
@@ -854,7 +878,7 @@ fn layout_block_children(parent: &mut LayoutBox, measurer: &dyn TextMeasurer) {
 
     let content_x = parent.dimensions.content.x;
     let content_width = parent.dimensions.content.width;
-    let mut cursor_y = parent.dimensions.content.y + parent.dimensions.padding.top;
+    let mut cursor_y = parent.dimensions.content.y;
 
     let mut prev_margin_bottom: f32 = 0.0;
     let mut float_ctx = FloatContext::new();
@@ -926,7 +950,6 @@ fn layout_block_children(parent: &mut LayoutBox, measurer: &dyn TextMeasurer) {
 
                 // Position child's content area.
                 child.dimensions.content.x = content_x
-                    + parent.dimensions.padding.left
                     + child.dimensions.margin.left
                     + child.dimensions.border.left
                     + child.dimensions.padding.left;
@@ -946,7 +969,7 @@ fn layout_block_children(parent: &mut LayoutBox, measurer: &dyn TextMeasurer) {
             },
             BoxType::Anonymous => {
                 // Anonymous box wrapping inline content.
-                child.dimensions.content.x = content_x + parent.dimensions.padding.left;
+                child.dimensions.content.x = content_x;
                 child.dimensions.content.y = cursor_y;
                 child.dimensions.content.width = content_width;
 
@@ -962,6 +985,31 @@ fn layout_block_children(parent: &mut LayoutBox, measurer: &dyn TextMeasurer) {
                 // just skip.
             },
         }
+    }
+
+    // Parent-child margin collapsing (CSS 2.1 §8.3.1).
+    // When no padding or border separates parent from its first/last
+    // block child, the parent's margin collapses with the child's.
+    if parent.dimensions.padding.top == 0.0
+        && parent.dimensions.border.top == 0.0
+        && let Some(first) = parent.children.first()
+        && first.is_block_level()
+        && !matches!(first.box_type, BoxType::Anonymous)
+        && first.dimensions.margin.top > 0.0
+    {
+        let parent_mt = parent.dimensions.margin.top;
+        parent.dimensions.margin.top = collapse_margins(parent_mt, first.dimensions.margin.top);
+    }
+    if parent.dimensions.padding.bottom == 0.0
+        && parent.dimensions.border.bottom == 0.0
+        && let Some(last) = parent.children.last()
+        && last.is_block_level()
+        && !matches!(last.box_type, BoxType::Anonymous)
+        && last.dimensions.margin.bottom > 0.0
+    {
+        let parent_mb = parent.dimensions.margin.bottom;
+        parent.dimensions.margin.bottom =
+            collapse_margins(parent_mb, last.dimensions.margin.bottom);
     }
 
     // Clearfix: ensure the parent's height includes all floats.
@@ -1075,6 +1123,8 @@ mod tests {
         let m = FixedMeasurer;
         let mut style = block_style();
         style.width = Dimension::Px(200.0);
+        style.margin_left_auto = true;
+        style.margin_right_auto = true;
         let mut lb = LayoutBox::new(BoxType::Block, style, None);
         lb.dimensions.content.x = 0.0;
         lb.dimensions.content.y = 0.0;
@@ -1090,6 +1140,29 @@ mod tests {
         assert!(
             (ml - 140.0).abs() < f32::EPSILON,
             "margin should be 140, got {ml}",
+        );
+    }
+
+    #[test]
+    fn explicit_width_no_auto_margins_left_aligned() {
+        let m = FixedMeasurer;
+        let mut style = block_style();
+        style.width = Dimension::Px(200.0);
+        // No auto margins -- should NOT be centered.
+        let mut lb = LayoutBox::new(BoxType::Block, style, None);
+        lb.dimensions.content.x = 0.0;
+        lb.dimensions.content.y = 0.0;
+        layout_block(&mut lb, 480.0, &m);
+        assert_eq!(lb.dimensions.content.width, 200.0);
+        assert!(
+            lb.dimensions.margin.left.abs() < f32::EPSILON,
+            "left margin should be 0 (left-aligned), got {}",
+            lb.dimensions.margin.left,
+        );
+        assert!(
+            (lb.dimensions.margin.right - 280.0).abs() < f32::EPSILON,
+            "right margin should absorb remaining space: got {}",
+            lb.dimensions.margin.right,
         );
     }
 
@@ -1378,5 +1451,117 @@ mod tests {
 
         parent.children[0].dirty = true;
         assert!(any_child_dirty(&parent));
+    }
+
+    // -- BUG 1: nested padding not double-counted ---------------------
+
+    #[test]
+    fn nested_padding_not_double_counted() {
+        let m = FixedMeasurer;
+
+        // Grandparent with padding 10.
+        let mut gp_style = block_style();
+        gp_style.padding_left = 10.0;
+        gp_style.padding_top = 10.0;
+        let mut grandparent = LayoutBox::new(BoxType::Block, gp_style, None);
+
+        // Parent with padding 5.
+        let mut p_style = block_style();
+        p_style.padding_left = 5.0;
+        p_style.padding_top = 5.0;
+        p_style.height = Dimension::Px(20.0);
+        let mut parent = LayoutBox::new(BoxType::Block, p_style, None);
+
+        // Leaf child with no padding.
+        let mut c_style = block_style();
+        c_style.height = Dimension::Px(10.0);
+        let child = LayoutBox::new(BoxType::Block, c_style, None);
+
+        parent.children = vec![child];
+        grandparent.children = vec![parent];
+        grandparent.dimensions.content.x = 0.0;
+        grandparent.dimensions.content.y = 0.0;
+        layout_block(&mut grandparent, 480.0, &m);
+
+        // Apply root offset (same as build_layout_tree does).
+        let dx = grandparent.dimensions.margin.left
+            + grandparent.dimensions.border.left
+            + grandparent.dimensions.padding.left;
+        let dy = grandparent.dimensions.margin.top
+            + grandparent.dimensions.border.top
+            + grandparent.dimensions.padding.top;
+        offset_descendant(&mut grandparent, dx, dy);
+
+        // Leaf should be at grandparent_padding(10) + parent_padding(5)
+        // = 15, NOT grandparent_padding + 2*parent_padding = 20.
+        let leaf = &grandparent.children[0].children[0];
+        assert!(
+            (leaf.dimensions.content.x - 15.0).abs() < 0.01,
+            "leaf x should be 15 (10+5), got {}",
+            leaf.dimensions.content.x,
+        );
+        assert!(
+            (leaf.dimensions.content.y - 15.0).abs() < 0.01,
+            "leaf y should be 15 (10+5), got {}",
+            leaf.dimensions.content.y,
+        );
+    }
+
+    // -- BUG 7: parent-child margin collapsing ------------------------
+
+    #[test]
+    fn parent_child_margin_collapsing() {
+        let m = FixedMeasurer;
+
+        // Parent with margin-top 10, no padding/border.
+        let mut p_style = block_style();
+        p_style.margin_top = 10.0;
+        let mut parent = LayoutBox::new(BoxType::Block, p_style, None);
+
+        // Child with margin-top 20.
+        let mut c_style = block_style();
+        c_style.margin_top = 20.0;
+        c_style.height = Dimension::Px(30.0);
+        let child = LayoutBox::new(BoxType::Block, c_style, None);
+
+        parent.children = vec![child];
+        parent.dimensions.content.x = 0.0;
+        parent.dimensions.content.y = 0.0;
+        layout_block(&mut parent, 480.0, &m);
+
+        // Parent margin-top should collapse with child: max(10, 20) = 20.
+        assert!(
+            (parent.dimensions.margin.top - 20.0).abs() < 0.01,
+            "collapsed parent margin-top should be 20, got {}",
+            parent.dimensions.margin.top,
+        );
+    }
+
+    #[test]
+    fn parent_child_margin_no_collapse_with_padding() {
+        let m = FixedMeasurer;
+
+        // Parent with padding-top (separates margins).
+        let mut p_style = block_style();
+        p_style.margin_top = 10.0;
+        p_style.padding_top = 1.0;
+        let mut parent = LayoutBox::new(BoxType::Block, p_style, None);
+
+        let mut c_style = block_style();
+        c_style.margin_top = 20.0;
+        c_style.height = Dimension::Px(30.0);
+        let child = LayoutBox::new(BoxType::Block, c_style, None);
+
+        parent.children = vec![child];
+        parent.dimensions.content.x = 0.0;
+        parent.dimensions.content.y = 0.0;
+        layout_block(&mut parent, 480.0, &m);
+
+        // With padding, no collapsing: parent margin stays 10.
+        assert!(
+            (parent.dimensions.margin.top - 10.0).abs() < 0.01,
+            "parent margin-top should stay 10 with padding, got {}",
+            parent.dimensions.margin.top,
+        );
     }
 }

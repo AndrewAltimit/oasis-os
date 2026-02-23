@@ -155,14 +155,30 @@ fn split_line_into_words(line: &str, out: &mut Vec<TextWord>) {
 // -------------------------------------------------------------------
 
 /// Measure a word's pixel width using the backend text measurer.
-pub fn measure_word(word: &str, font_size: f32, measurer: &dyn TextMeasurer) -> f32 {
-    measurer.measure_text(word, font_size as u16) as f32
+///
+/// Adds `letter_spacing` between each pair of characters.
+pub fn measure_word(
+    word: &str,
+    font_size: f32,
+    letter_spacing: f32,
+    measurer: &dyn TextMeasurer,
+) -> f32 {
+    let base = measurer.measure_text(word, font_size as u16) as f32;
+    if letter_spacing != 0.0 {
+        let chars = word.chars().count();
+        if chars > 1 {
+            return base + letter_spacing * (chars - 1) as f32;
+        }
+    }
+    base
 }
 
 /// Measure the width of a single space character at the given font
 /// size.
-pub fn measure_space(font_size: f32, measurer: &dyn TextMeasurer) -> f32 {
-    measurer.measure_text(" ", font_size as u16) as f32
+///
+/// Adds `word_spacing` to the natural space width.
+pub fn measure_space(font_size: f32, word_spacing: f32, measurer: &dyn TextMeasurer) -> f32 {
+    measurer.measure_text(" ", font_size as u16) as f32 + word_spacing
 }
 
 // -------------------------------------------------------------------
@@ -347,15 +363,30 @@ mod tests {
     #[test]
     fn measure_word_stub() {
         let m = StubMeasurer;
-        let w = measure_word("hello", 16.0, &m);
+        let w = measure_word("hello", 16.0, 0.0, &m);
         // Proportional: h(7)+e(7)+l(5)+l(5)+o(7) = 31, scale=2 at font_size 16 => 62
         assert_eq!(w, 62.0);
     }
 
     #[test]
+    fn measure_word_with_letter_spacing() {
+        let m = StubMeasurer;
+        // "hello" = 62px base, 5 chars, letter_spacing 2.0 => 62 + 2*(5-1) = 70
+        let w = measure_word("hello", 16.0, 2.0, &m);
+        assert_eq!(w, 70.0);
+    }
+
+    #[test]
     fn measure_space_stub() {
         let m = StubMeasurer;
-        let w = measure_space(16.0, &m);
+        let w = measure_space(16.0, 0.0, &m);
         assert_eq!(w, 8.0);
+    }
+
+    #[test]
+    fn measure_space_with_word_spacing() {
+        let m = StubMeasurer;
+        let w = measure_space(16.0, 3.0, &m);
+        assert_eq!(w, 11.0);
     }
 }
