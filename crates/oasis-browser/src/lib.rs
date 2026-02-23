@@ -3288,4 +3288,352 @@ mod tests {
         lb.mark_dirty();
         assert!(lb.dirty, "mark_dirty should set dirty flag");
     }
+
+    // ===============================================================
+    // Image rendering tests
+    // ===============================================================
+
+    /// Build a minimal valid 24-bit BMP of given dimensions (solid red).
+    fn make_test_bmp(w: u32, h: u32) -> Vec<u8> {
+        let bpp: u16 = 24;
+        let row_bytes = (w * 3).div_ceil(4) * 4;
+        let pixel_data_size = row_bytes * h;
+        let file_size = 54 + pixel_data_size;
+
+        let mut bmp = vec![0u8; file_size as usize];
+        bmp[0] = b'B';
+        bmp[1] = b'M';
+        bmp[2..6].copy_from_slice(&file_size.to_le_bytes());
+        bmp[10..14].copy_from_slice(&54u32.to_le_bytes());
+        bmp[14..18].copy_from_slice(&40u32.to_le_bytes());
+        bmp[18..22].copy_from_slice(&(w as i32).to_le_bytes());
+        bmp[22..26].copy_from_slice(&(h as i32).to_le_bytes());
+        bmp[26..28].copy_from_slice(&1u16.to_le_bytes());
+        bmp[28..30].copy_from_slice(&bpp.to_le_bytes());
+        bmp[30..34].copy_from_slice(&0u32.to_le_bytes());
+
+        // Fill with solid red (BGR = 0,0,255).
+        for row in 0..h {
+            for col in 0..w {
+                let off = 54 + (row * row_bytes + col * 3) as usize;
+                if off + 2 < bmp.len() {
+                    bmp[off] = 0; // B
+                    bmp[off + 1] = 0; // G
+                    bmp[off + 2] = 255; // R
+                }
+            }
+        }
+        bmp
+    }
+
+    /// Create a VFS with an image file and an HTML page referencing it.
+    fn test_vfs_with_image() -> MemoryVfs {
+        let mut vfs = MemoryVfs::new();
+        vfs.mkdir("/sites").unwrap();
+        vfs.mkdir("/sites/img").unwrap();
+
+        let bmp_data = make_test_bmp(16, 16);
+        vfs.write("/sites/img/red.bmp", &bmp_data).unwrap();
+
+        vfs.write(
+            "/sites/img/index.html",
+            b"<html><body>\
+              <h1>Image Test</h1>\
+              <img src=\"red.bmp\" alt=\"Red square\">\
+              </body></html>",
+        )
+        .unwrap();
+
+        vfs.write(
+            "/sites/img/with_dims.html",
+            b"<html><body>\
+              <img src=\"red.bmp\" width=\"32\" height=\"32\" alt=\"Scaled\">\
+              </body></html>",
+        )
+        .unwrap();
+
+        vfs.write(
+            "/sites/img/broken.html",
+            b"<html><body>\
+              <img src=\"nonexistent.bmp\" alt=\"Missing image\">\
+              </body></html>",
+        )
+        .unwrap();
+
+        vfs.write(
+            "/sites/img/no_alt.html",
+            b"<html><body>\
+              <img src=\"nonexistent.bmp\">\
+              </body></html>",
+        )
+        .unwrap();
+
+        vfs.write(
+            "/sites/img/multi.html",
+            b"<html><body>\
+              <p>Before</p>\
+              <img src=\"red.bmp\" alt=\"First\">\
+              <p>Middle</p>\
+              <img src=\"red.bmp\" alt=\"Second\">\
+              <p>After</p>\
+              </body></html>",
+        )
+        .unwrap();
+
+        vfs
+    }
+
+    // ---------------------------------------------------------------
+    // Test: image decoded from VFS during navigation
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn image_decoded_from_vfs_during_navigation() {
+        let vfs = test_vfs_with_image();
+        let mut browser = make_browser();
+        browser.set_window(0, 0, 480, 272);
+        browser.navigate_vfs("vfs://sites/img/index.html", &vfs);
+
+        assert_eq!(browser.loading_state(), LoadingState::Idle);
+        assert!(
+            !browser.decoded_images.is_empty(),
+            "should have decoded at least one image"
+        );
+
+        let has_red = browser
+            .decoded_images
+            .values()
+            .any(|img| img.width == 16 && img.height == 16);
+        assert!(has_red, "decoded image should be 16x16");
+    }
+
+    // ---------------------------------------------------------------
+    // Test: image renders as blit call (not placeholder)
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn image_renders_as_blit() {
+        let vfs = test_vfs_with_image();
+        let mut browser = make_browser();
+        browser.set_window(0, 0, 480, 272);
+        browser.navigate_vfs("vfs://sites/img/index.html", &vfs);
+
+        let mut backend = MockBackend::new();
+        browser.paint(&mut backend).unwrap();
+
+        assert!(
+            backend.blit_count() > 0,
+            "should have at least one blit call for the image"
+        );
+
+        // Verify the blit has correct dimensions (16x16 from intrinsic).
+        let blits: Vec<_> = backend
+            .calls
+            .iter()
+            .filter_map(|c| {
+                if let crate::test_utils::DrawCall::Blit { w, h, .. } = c {
+                    Some((*w, *h))
+                } else {
+                    None
+                }
+            })
+            .collect();
+        assert!(
+            blits.iter().any(|&(w, h)| w == 16 && h == 16),
+            "should blit at 16x16 (intrinsic dimensions), got: {blits:?}"
+        );
+    }
+
+    // ---------------------------------------------------------------
+    // Test: image uses intrinsic dimensions in layout
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn image_uses_intrinsic_dimensions_in_layout() {
+        let vfs = test_vfs_with_image();
+        let mut browser = make_browser();
+        browser.set_window(0, 0, 480, 272);
+        browser.navigate_vfs("vfs://sites/img/index.html", &vfs);
+
+        // Check that the layout tree contains a Replaced(Image) with
+        // correct dimensions (16x16) instead of the default 0x0.
+        let layout = browser.layout_root.as_ref().expect("should have layout");
+        let img_box = find_image_box(layout);
+        assert!(img_box.is_some(), "layout tree should contain an image box");
+        let (w, h) = img_box.unwrap();
+        assert_eq!(w, 16, "image layout width should be 16");
+        assert_eq!(h, 16, "image layout height should be 16");
+    }
+
+    // ---------------------------------------------------------------
+    // Test: HTML width/height attributes override intrinsic
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn image_html_attrs_override_intrinsic() {
+        let vfs = test_vfs_with_image();
+        let mut browser = make_browser();
+        browser.set_window(0, 0, 480, 272);
+        browser.navigate_vfs("vfs://sites/img/with_dims.html", &vfs);
+
+        let layout = browser.layout_root.as_ref().expect("should have layout");
+        let img_box = find_image_box(layout);
+        assert!(img_box.is_some(), "layout tree should contain an image box");
+        let (w, h) = img_box.unwrap();
+        assert_eq!(w, 32, "image width should be 32 (from HTML attr)");
+        assert_eq!(h, 32, "image height should be 32 (from HTML attr)");
+    }
+
+    // ---------------------------------------------------------------
+    // Test: broken image shows placeholder (no blit)
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn broken_image_shows_placeholder() {
+        let vfs = test_vfs_with_image();
+        let mut browser = make_browser();
+        browser.set_window(0, 0, 480, 272);
+        browser.navigate_vfs("vfs://sites/img/broken.html", &vfs);
+
+        let mut backend = MockBackend::new();
+        browser.paint(&mut backend).unwrap();
+
+        assert_eq!(
+            backend.blit_count(),
+            0,
+            "should not blit for a broken image"
+        );
+        assert!(
+            backend.has_text("Missing"),
+            "should render alt text for broken image"
+        );
+    }
+
+    // ---------------------------------------------------------------
+    // Test: broken image without alt shows multiplication sign
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn broken_image_no_alt_shows_placeholder_symbol() {
+        let vfs = test_vfs_with_image();
+        let mut browser = make_browser();
+        browser.set_window(0, 0, 480, 272);
+        browser.navigate_vfs("vfs://sites/img/no_alt.html", &vfs);
+
+        let mut backend = MockBackend::new();
+        browser.paint(&mut backend).unwrap();
+
+        assert_eq!(
+            backend.blit_count(),
+            0,
+            "should not blit for a broken image"
+        );
+        // Should show the multiplication sign placeholder.
+        assert!(
+            backend.has_text("\u{00D7}"),
+            "should render multiplication sign for broken image without alt"
+        );
+    }
+
+    // ---------------------------------------------------------------
+    // Test: multiple images on same page
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn multiple_images_same_page() {
+        let vfs = test_vfs_with_image();
+        let mut browser = make_browser();
+        browser.set_window(0, 0, 480, 272);
+        browser.navigate_vfs("vfs://sites/img/multi.html", &vfs);
+
+        let mut backend = MockBackend::new();
+        browser.paint(&mut backend).unwrap();
+
+        // Both images reference the same BMP, so only one decoded entry
+        // but two blit calls (one per <img> tag).
+        assert_eq!(
+            browser.decoded_images.len(),
+            1,
+            "should deduplicate same-URL images"
+        );
+        assert!(
+            backend.blit_count() >= 2,
+            "should blit twice for two <img> tags, got {}",
+            backend.blit_count()
+        );
+        assert!(backend.has_text("Before"), "should render surrounding text");
+        assert!(backend.has_text("After"), "should render surrounding text");
+    }
+
+    // ---------------------------------------------------------------
+    // Test: textures created during paint
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn textures_created_during_paint() {
+        let vfs = test_vfs_with_image();
+        let mut browser = make_browser();
+        browser.set_window(0, 0, 480, 272);
+        browser.navigate_vfs("vfs://sites/img/index.html", &vfs);
+
+        // Before paint, no textures exist.
+        assert!(
+            browser.image_textures.is_empty(),
+            "textures should not exist before paint"
+        );
+
+        let mut backend = MockBackend::new();
+        browser.paint(&mut backend).unwrap();
+
+        // After paint, texture should be created.
+        assert!(
+            !browser.image_textures.is_empty(),
+            "textures should exist after paint"
+        );
+    }
+
+    // ---------------------------------------------------------------
+    // Test: navigating clears old image state
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn navigation_clears_image_state() {
+        let vfs = test_vfs_with_image();
+        let mut browser = make_browser();
+        browser.set_window(0, 0, 480, 272);
+
+        // Navigate to page with image.
+        browser.navigate_vfs("vfs://sites/img/index.html", &vfs);
+        assert!(!browser.decoded_images.is_empty());
+
+        // Navigate to page without image.
+        browser.navigate_vfs("vfs://sites/img/broken.html", &vfs);
+        // decoded_images should have been cleared and only repopulated
+        // for the new page (which has no decodable images).
+        assert!(
+            browser
+                .decoded_images
+                .values()
+                .all(|img| img.width != 16 || img.height != 16),
+            "old decoded images should be cleared on navigation"
+        );
+    }
+
+    /// Recursively find a Replaced(Image) box and return its (width, height).
+    fn find_image_box(layout_box: &layout::box_model::LayoutBox) -> Option<(u32, u32)> {
+        if let layout::box_model::BoxType::Replaced(layout::box_model::ReplacedContent::Image {
+            width,
+            height,
+            ..
+        }) = &layout_box.box_type
+        {
+            return Some((*width, *height));
+        }
+        for child in &layout_box.children {
+            if let Some(result) = find_image_box(child) {
+                return Some(result);
+            }
+        }
+        None
+    }
 }

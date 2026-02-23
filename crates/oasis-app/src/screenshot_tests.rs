@@ -136,6 +136,7 @@ fn all_scenarios() -> Vec<Scenario> {
         "error_page",
         "empty_page",
         "gemini_page",
+        "images",
     ];
     for page in &pages {
         scenarios.push(Scenario {
@@ -630,6 +631,12 @@ fn run_browser_scenario(
             browser.load_html(&html, "gemini://test/page.gmi");
             String::new() // Already loaded.
         },
+        "images" => {
+            // Use navigate_vfs so images are decoded from VFS.
+            let vfs = make_image_test_vfs();
+            browser.navigate_vfs("vfs://test/images.html", &vfs);
+            String::new() // Already loaded.
+        },
         _ => {
             let fixture_path = format!("test-fixtures/html/{page_name}.html");
             let content = fs::read_to_string(&fixture_path).unwrap_or_else(|_| {
@@ -643,6 +650,59 @@ fn run_browser_scenario(
 
     render_browser_and_save(backend, &mut browser, w, h, &out_dir.join("actual.png"))?;
     Ok(())
+}
+
+/// Build a VFS for the images screenshot test with an inline BMP and
+/// the HTML fixture from test-fixtures/html/images.html.
+fn make_image_test_vfs() -> MemoryVfs {
+    let mut vfs = MemoryVfs::new();
+    vfs.mkdir("/test").ok();
+
+    // Read the fixture HTML.
+    let html = fs::read_to_string("test-fixtures/html/images.html")
+        .unwrap_or_else(|_| "<html><body><p>Missing images.html fixture</p></body></html>".into());
+    vfs.write("/test/images.html", html.as_bytes()).unwrap();
+
+    // Create a minimal 16x16 24-bit BMP (solid red).
+    let bmp = make_test_bmp_16x16();
+    vfs.write("/test/red_16x16.bmp", &bmp).unwrap();
+
+    vfs
+}
+
+/// Build a minimal 16x16 solid-red 24-bit BMP for image testing.
+fn make_test_bmp_16x16() -> Vec<u8> {
+    let w: u32 = 16;
+    let h: u32 = 16;
+    let bpp: u16 = 24;
+    let row_bytes = (w * 3).div_ceil(4) * 4;
+    let pixel_data_size = row_bytes * h;
+    let file_size = 54 + pixel_data_size;
+
+    let mut bmp = vec![0u8; file_size as usize];
+    bmp[0] = b'B';
+    bmp[1] = b'M';
+    bmp[2..6].copy_from_slice(&file_size.to_le_bytes());
+    bmp[10..14].copy_from_slice(&54u32.to_le_bytes());
+    bmp[14..18].copy_from_slice(&40u32.to_le_bytes());
+    bmp[18..22].copy_from_slice(&(w as i32).to_le_bytes());
+    bmp[22..26].copy_from_slice(&(h as i32).to_le_bytes());
+    bmp[26..28].copy_from_slice(&1u16.to_le_bytes());
+    bmp[28..30].copy_from_slice(&bpp.to_le_bytes());
+    bmp[30..34].copy_from_slice(&0u32.to_le_bytes());
+
+    // Fill with solid red (BGR = 0,0,255).
+    for row in 0..h {
+        for col in 0..w {
+            let off = 54 + (row * row_bytes + col * 3) as usize;
+            if off + 2 < bmp.len() {
+                bmp[off] = 0;
+                bmp[off + 1] = 0;
+                bmp[off + 2] = 255;
+            }
+        }
+    }
+    bmp
 }
 
 // ---------------------------------------------------------------------------
