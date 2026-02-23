@@ -741,6 +741,15 @@ fn build_table_box(tl: &TableLayout, style: &ComputedStyle, containing_width: f3
             };
         }
 
+        // Cell content was laid out at origin (0,0). Now that the
+        // cell's content.x/y are set, offset all descendants so they
+        // render at the correct table position.
+        let dx = cell_box.dimensions.content.x;
+        let dy = cell_box.dimensions.content.y;
+        for child in &mut cell_box.children {
+            offset_descendants(child, dx, dy);
+        }
+
         if cell.row < row_boxes.len() {
             row_boxes[cell.row].children.push(cell_box);
         }
@@ -748,6 +757,15 @@ fn build_table_box(tl: &TableLayout, style: &ComputedStyle, containing_width: f3
 
     table_box.children = row_boxes;
     table_box
+}
+
+/// Recursively offset a layout box and all descendants by `(dx, dy)`.
+fn offset_descendants(lb: &mut LayoutBox, dx: f32, dy: f32) {
+    lb.dimensions.content.x += dx;
+    lb.dimensions.content.y += dy;
+    for child in &mut lb.children {
+        offset_descendants(child, dx, dy);
+    }
 }
 
 /// Compute the x-offset for each column.
@@ -1199,7 +1217,59 @@ mod tests {
     }
 
     // ---------------------------------------------------------------
-    // Test 10: make_cell_with_spans encodes correctly
+    // Test 10: Cell content is positioned at cell origin
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn table_cell_content_positioned() {
+        let m = FixedMeasurer;
+        let style = table_style();
+
+        // Build cells with block children so they have measurable
+        // positions after layout.
+        let mut c_style = ComputedStyle::default();
+        c_style.display = Display::TableCell;
+        c_style.width = Dimension::Px(50.0);
+        c_style.height = Dimension::Px(20.0);
+        let mut cell_1 = LayoutBox::new(BoxType::TableCell, c_style.clone(), None);
+        let mut inner_style = ComputedStyle::default();
+        inner_style.display = Display::Block;
+        inner_style.height = Dimension::Px(10.0);
+        cell_1.children = vec![LayoutBox::new(BoxType::Block, inner_style.clone(), None)];
+
+        let mut cell_2 = LayoutBox::new(BoxType::TableCell, c_style, None);
+        cell_2.children = vec![LayoutBox::new(BoxType::Block, inner_style, None)];
+
+        let row1 = make_row(vec![cell_1]);
+        let row2 = make_row(vec![cell_2]);
+        let result = layout_table(&[row1, row2], &style, 200.0, &m);
+
+        // Row 1's cell child should have y > 0 (matching the row's
+        // position, not stuck at origin).
+        let row1_cell = &result.children[0].children[0];
+        let child_y = row1_cell.children[0].dimensions.content.y;
+        let cell_y = row1_cell.dimensions.content.y;
+        assert!(
+            child_y >= cell_y,
+            "cell child y ({child_y}) should be >= cell content y ({cell_y})"
+        );
+
+        // Row 2's cell children should be below row 1.
+        if result.children.len() > 1 && !result.children[1].children.is_empty() {
+            let row2_cell = &result.children[1].children[0];
+            if !row2_cell.children.is_empty() {
+                let r2_child_y = row2_cell.children[0].dimensions.content.y;
+                assert!(
+                    r2_child_y > child_y,
+                    "row 2 cell child y ({r2_child_y}) should be below \
+                     row 1 cell child y ({child_y})"
+                );
+            }
+        }
+    }
+
+    // ---------------------------------------------------------------
+    // Test 11: make_cell_with_spans encodes correctly
     // ---------------------------------------------------------------
 
     #[test]

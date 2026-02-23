@@ -35,6 +35,8 @@ pub fn replace_unrenderable(text: &str) -> String {
 pub struct TextWord {
     /// The actual word content.
     pub text: String,
+    /// Whether this word had leading whitespace in the source text.
+    pub leading_space: bool,
     /// Whether this word had trailing whitespace in the source text.
     pub trailing_space: bool,
 }
@@ -54,7 +56,7 @@ pub fn collapse_whitespace(text: &str, white_space: WhiteSpace) -> String {
     match white_space {
         WhiteSpace::Normal | WhiteSpace::NoWrap => {
             let mut result = String::with_capacity(text.len());
-            let mut in_space = true; // treat leading ws as collapsible
+            let mut in_space = false;
             for ch in text.chars() {
                 if ch.is_ascii_whitespace() {
                     if !in_space {
@@ -65,10 +67,6 @@ pub fn collapse_whitespace(text: &str, white_space: WhiteSpace) -> String {
                     result.push(ch);
                     in_space = false;
                 }
-            }
-            // Strip trailing space.
-            if result.ends_with(' ') {
-                result.pop();
             }
             result
         },
@@ -119,12 +117,14 @@ pub fn split_into_words(text: &str, white_space: WhiteSpace) -> Vec<TextWord> {
                 if i > 0 {
                     words.push(TextWord {
                         text: "\n".to_string(),
+                        leading_space: false,
                         trailing_space: false,
                     });
                 }
                 if !line.is_empty() {
                     words.push(TextWord {
                         text: line.to_string(),
+                        leading_space: false,
                         trailing_space: false,
                     });
                 }
@@ -138,6 +138,7 @@ pub fn split_into_words(text: &str, white_space: WhiteSpace) -> Vec<TextWord> {
                 if i > 0 {
                     words.push(TextWord {
                         text: "\n".to_string(),
+                        leading_space: false,
                         trailing_space: false,
                     });
                 }
@@ -159,14 +160,18 @@ pub fn split_into_words(text: &str, white_space: WhiteSpace) -> Vec<TextWord> {
 fn split_line_into_words(line: &str, out: &mut Vec<TextWord>) {
     let parts: Vec<&str> = line.split(' ').collect();
     let last_idx = parts.len().saturating_sub(1);
+    let mut saw_empty = false;
     for (i, part) in parts.iter().enumerate() {
         if part.is_empty() {
+            saw_empty = true;
             continue;
         }
         out.push(TextWord {
             text: (*part).to_string(),
+            leading_space: saw_empty,
             trailing_space: i < last_idx,
         });
+        saw_empty = false;
     }
 }
 
@@ -262,8 +267,10 @@ mod tests {
 
     #[test]
     fn collapse_normal_leading_trailing() {
+        // Leading/trailing whitespace is now preserved as single
+        // spaces (trimmed at line boundaries, not text-node boundaries).
         let result = collapse_whitespace("  hello  ", WhiteSpace::Normal);
-        assert_eq!(result, "hello");
+        assert_eq!(result, " hello ");
     }
 
     #[test]
@@ -275,7 +282,7 @@ mod tests {
     #[test]
     fn collapse_nowrap_same_as_normal() {
         let result = collapse_whitespace("  a   b  ", WhiteSpace::NoWrap);
-        assert_eq!(result, "a b");
+        assert_eq!(result, " a b ");
     }
 
     #[test]
@@ -315,7 +322,15 @@ mod tests {
         let words = split_into_words("  hello   world  ", WhiteSpace::Normal);
         assert_eq!(words.len(), 2);
         assert_eq!(words[0].text, "hello");
+        assert!(
+            words[0].leading_space,
+            "leading space from collapsed leading ws"
+        );
         assert_eq!(words[1].text, "world");
+        assert!(
+            words[1].trailing_space,
+            "trailing space from collapsed trailing ws"
+        );
     }
 
     #[test]
@@ -334,6 +349,23 @@ mod tests {
         assert_eq!(words[0].text, "line1");
         assert_eq!(words[1].text, "\n");
         assert_eq!(words[2].text, "line2");
+    }
+
+    #[test]
+    fn collapse_preserves_inter_element_space() {
+        // " and " between inline elements should become " and "
+        let result = collapse_whitespace(" and ", WhiteSpace::Normal);
+        assert_eq!(result, " and ");
+    }
+
+    #[test]
+    fn split_inter_element_space() {
+        // " and " → one word "and" with leading_space=true, trailing_space=true
+        let words = split_into_words(" and ", WhiteSpace::Normal);
+        assert_eq!(words.len(), 1);
+        assert_eq!(words[0].text, "and");
+        assert!(words[0].leading_space);
+        assert!(words[0].trailing_space);
     }
 
     // -- text transform -----------------------------------------------

@@ -224,6 +224,7 @@ impl LayoutBox {
                 | BoxType::ListItem { .. }
                 | BoxType::TableWrapper
                 | BoxType::Anonymous
+                | BoxType::Replaced(ReplacedContent::HorizontalRule)
         )
     }
 

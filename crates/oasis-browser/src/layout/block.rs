@@ -312,6 +312,53 @@ fn layout_children_incremental(
                 cursor_y += child.dimensions.content.height;
                 prev_margin_bottom = 0.0;
             },
+            BoxType::Replaced(_) => {
+                // Block-level replaced elements in incremental layout.
+                resolve_edge_sizes_cached(child, content_width, cache);
+                let pad_h = child.dimensions.padding.horizontal();
+                let bdr_h = child.dimensions.border.horizontal();
+                let mar_h = child.dimensions.margin.horizontal();
+
+                let child_margin_top = child.dimensions.margin.top;
+                let collapsed = collapse_margins(prev_margin_bottom, child_margin_top);
+
+                child.dimensions.content.x = content_x
+                    + child.dimensions.margin.left
+                    + child.dimensions.border.left
+                    + child.dimensions.padding.left;
+                child.dimensions.content.y = cursor_y
+                    + collapsed
+                    + child.dimensions.border.top
+                    + child.dimensions.padding.top;
+
+                let mut w = (content_width - pad_h - bdr_h - mar_h).max(0.0);
+                if let Dimension::Px(max) = child.style.max_width
+                    && max < 999.0
+                {
+                    w = w.min(max);
+                }
+                child.dimensions.content.width = w;
+
+                let h = match child.style.height {
+                    Dimension::Px(h) => h,
+                    _ => {
+                        if let BoxType::Replaced(ref rc) = child.box_type {
+                            match rc {
+                                ReplacedContent::HorizontalRule => 2.0,
+                                ReplacedContent::Image { height, .. } => *height as f32,
+                                _ => 0.0,
+                            }
+                        } else {
+                            0.0
+                        }
+                    },
+                };
+                child.dimensions.content.height = h;
+
+                let bb = child.dimensions.border_box();
+                cursor_y = bb.y + bb.height;
+                prev_margin_bottom = child.dimensions.margin.bottom;
+            },
             _ => {},
         }
     }
@@ -1087,6 +1134,59 @@ fn layout_block_children(parent: &mut LayoutBox, measurer: &dyn TextMeasurer) {
                 cursor_y += child.dimensions.content.height;
                 prev_margin_bottom = 0.0;
             },
+            BoxType::Replaced(_) => {
+                // Block-level replaced elements (e.g. <hr>) need to
+                // participate in the block flow. They stretch to the
+                // containing width and advance the cursor.
+                resolve_edge_sizes(child, content_width);
+                let pad_h = child.dimensions.padding.horizontal();
+                let bdr_h = child.dimensions.border.horizontal();
+                let mar_h = child.dimensions.margin.horizontal();
+
+                let child_margin_top = child.dimensions.margin.top;
+                let collapsed = collapse_margins(prev_margin_bottom, child_margin_top);
+
+                child.dimensions.content.x = content_x
+                    + child.dimensions.margin.left
+                    + child.dimensions.border.left
+                    + child.dimensions.padding.left;
+                child.dimensions.content.y = cursor_y
+                    + collapsed
+                    + child.dimensions.border.top
+                    + child.dimensions.padding.top;
+
+                // Width: stretch to container (like a block), minus
+                // edges. Respect max-width if set.
+                let mut w = (content_width - pad_h - bdr_h - mar_h).max(0.0);
+                if let Dimension::Px(max) = child.style.max_width
+                    && max < 999.0
+                {
+                    w = w.min(max);
+                }
+                child.dimensions.content.width = w;
+
+                // Height: use explicit CSS height or intrinsic height.
+                let h = match child.style.height {
+                    Dimension::Px(h) => h,
+                    _ => {
+                        // Intrinsic height for replaced content.
+                        if let BoxType::Replaced(ref rc) = child.box_type {
+                            match rc {
+                                ReplacedContent::HorizontalRule => 2.0,
+                                ReplacedContent::Image { height, .. } => *height as f32,
+                                _ => 0.0,
+                            }
+                        } else {
+                            0.0
+                        }
+                    },
+                };
+                child.dimensions.content.height = h;
+
+                let bb = child.dimensions.border_box();
+                cursor_y = bb.y + bb.height;
+                prev_margin_bottom = child.dimensions.margin.bottom;
+            },
             _ => {
                 // Inline-level boxes inside a block context should
                 // have been wrapped in anonymous boxes. If we get here,
@@ -1817,6 +1917,49 @@ mod tests {
             (lb2.dimensions.content.width - 150.0).abs() < 0.01,
             "max-width 150 should cap auto width in 400px container, got {}",
             lb2.dimensions.content.width,
+        );
+    }
+
+    // -- block-level replaced elements --------------------------------
+
+    #[test]
+    fn hr_gets_container_width() {
+        let m = FixedMeasurer;
+        let mut parent = LayoutBox::new(BoxType::Block, block_style(), None);
+        let hr_style = block_style();
+        let hr = LayoutBox::new(
+            BoxType::Replaced(ReplacedContent::HorizontalRule),
+            hr_style,
+            None,
+        );
+        parent.children = vec![hr];
+        parent.dimensions.content.x = 0.0;
+        parent.dimensions.content.y = 0.0;
+        layout_block(&mut parent, 200.0, &m);
+
+        let hr_box = &parent.children[0];
+        assert!(
+            hr_box.dimensions.content.width > 100.0,
+            "HR should stretch to near container width, got {}",
+            hr_box.dimensions.content.width,
+        );
+        assert!(
+            hr_box.dimensions.content.height > 0.0,
+            "HR should have positive height, got {}",
+            hr_box.dimensions.content.height,
+        );
+    }
+
+    #[test]
+    fn hr_is_block_level() {
+        let hr = LayoutBox::new(
+            BoxType::Replaced(ReplacedContent::HorizontalRule),
+            block_style(),
+            None,
+        );
+        assert!(
+            hr.is_block_level(),
+            "HorizontalRule replaced box should be block-level"
         );
     }
 }
