@@ -161,7 +161,7 @@ pub enum ListMarker {
     None,
 }
 
-/// Content for replaced elements (img, hr, br).
+/// Content for replaced elements (img, hr, br, input, button).
 #[derive(Debug, Clone)]
 pub enum ReplacedContent {
     Image {
@@ -172,6 +172,15 @@ pub enum ReplacedContent {
     },
     HorizontalRule,
     LineBreak,
+    /// A text input field.
+    TextInput {
+        value: String,
+        size: u32,
+    },
+    /// A submit/button input.
+    SubmitButton {
+        label: String,
+    },
 }
 
 /// A single box in the layout tree.

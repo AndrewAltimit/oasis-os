@@ -1283,6 +1283,8 @@ fn eval_single_media_query(query: &str, viewport_width: f32) -> bool {
     let parts: Vec<&str> = query.split(" and ").collect();
     for part in &parts {
         let p = part.trim();
+        // "only" is a CSS3 modifier for backwards compat; strip it.
+        let p = p.strip_prefix("only ").unwrap_or(p);
         if p == "screen" || p == "all" || p.is_empty() {
             continue;
         }
@@ -1301,8 +1303,15 @@ fn eval_single_media_query(query: &str, viewport_width: f32) -> bool {
             if viewport_width < px {
                 return false;
             }
+        } else if let Some(rest) = inner.strip_prefix("prefers-color-scheme:") {
+            // We always use light mode.
+            if rest.trim() != "light" {
+                return false;
+            }
+        } else {
+            // Unknown features: treat as NOT matching (safe default).
+            return false;
         }
-        // Unknown features: ignore (treat as matching).
     }
     true
 }
@@ -1391,8 +1400,161 @@ fn expand_shorthands(decls: Vec<Declaration>) -> Vec<Declaration> {
             "border" => {
                 out.extend(expand_border(&decl.value, decl.important));
             },
+            "border-top" | "border-right" | "border-bottom" | "border-left" => {
+                out.extend(expand_border_side(
+                    &decl.property,
+                    &decl.value,
+                    decl.important,
+                ));
+            },
             "background" => {
                 out.extend(expand_background(&decl.value, decl.important));
+            },
+            "list-style" => {
+                out.extend(expand_list_style(&decl.value, decl.important));
+            },
+            "border-width" => {
+                let vals = match &decl.value {
+                    CssValue::Multiple(vs) => vs.clone(),
+                    other => vec![other.clone()],
+                };
+                let (t, r, b, l) = match vals.len() {
+                    1 => (
+                        vals[0].clone(),
+                        vals[0].clone(),
+                        vals[0].clone(),
+                        vals[0].clone(),
+                    ),
+                    2 => (
+                        vals[0].clone(),
+                        vals[1].clone(),
+                        vals[0].clone(),
+                        vals[1].clone(),
+                    ),
+                    3 => (
+                        vals[0].clone(),
+                        vals[1].clone(),
+                        vals[2].clone(),
+                        vals[1].clone(),
+                    ),
+                    _ => (
+                        vals[0].clone(),
+                        vals.get(1).cloned().unwrap_or(vals[0].clone()),
+                        vals.get(2).cloned().unwrap_or(vals[0].clone()),
+                        vals.get(3).cloned().unwrap_or(vals[0].clone()),
+                    ),
+                };
+                for (prop, val) in [
+                    ("border-top-width", t),
+                    ("border-right-width", r),
+                    ("border-bottom-width", b),
+                    ("border-left-width", l),
+                ] {
+                    out.push(Declaration {
+                        property: prop.into(),
+                        value: val,
+                        important: decl.important,
+                    });
+                }
+            },
+            "border-style" => {
+                let vals = match &decl.value {
+                    CssValue::Multiple(vs) => vs.clone(),
+                    other => vec![other.clone()],
+                };
+                let (t, r, b, l) = match vals.len() {
+                    1 => (
+                        vals[0].clone(),
+                        vals[0].clone(),
+                        vals[0].clone(),
+                        vals[0].clone(),
+                    ),
+                    2 => (
+                        vals[0].clone(),
+                        vals[1].clone(),
+                        vals[0].clone(),
+                        vals[1].clone(),
+                    ),
+                    3 => (
+                        vals[0].clone(),
+                        vals[1].clone(),
+                        vals[2].clone(),
+                        vals[1].clone(),
+                    ),
+                    _ => (
+                        vals[0].clone(),
+                        vals.get(1).cloned().unwrap_or(vals[0].clone()),
+                        vals.get(2).cloned().unwrap_or(vals[0].clone()),
+                        vals.get(3).cloned().unwrap_or(vals[0].clone()),
+                    ),
+                };
+                for (prop, val) in [
+                    ("border-top-style", t),
+                    ("border-right-style", r),
+                    ("border-bottom-style", b),
+                    ("border-left-style", l),
+                ] {
+                    out.push(Declaration {
+                        property: prop.into(),
+                        value: val,
+                        important: decl.important,
+                    });
+                }
+            },
+            "border-color" => {
+                let vals = match &decl.value {
+                    CssValue::Multiple(vs) => vs.clone(),
+                    other => vec![other.clone()],
+                };
+                let (t, r, b, l) = match vals.len() {
+                    1 => (
+                        vals[0].clone(),
+                        vals[0].clone(),
+                        vals[0].clone(),
+                        vals[0].clone(),
+                    ),
+                    2 => (
+                        vals[0].clone(),
+                        vals[1].clone(),
+                        vals[0].clone(),
+                        vals[1].clone(),
+                    ),
+                    3 => (
+                        vals[0].clone(),
+                        vals[1].clone(),
+                        vals[2].clone(),
+                        vals[1].clone(),
+                    ),
+                    _ => (
+                        vals[0].clone(),
+                        vals.get(1).cloned().unwrap_or(vals[0].clone()),
+                        vals.get(2).cloned().unwrap_or(vals[0].clone()),
+                        vals.get(3).cloned().unwrap_or(vals[0].clone()),
+                    ),
+                };
+                for (prop, val) in [
+                    ("border-top-color", t),
+                    ("border-right-color", r),
+                    ("border-bottom-color", b),
+                    ("border-left-color", l),
+                ] {
+                    out.push(Declaration {
+                        property: prop.into(),
+                        value: val,
+                        important: decl.important,
+                    });
+                }
+            },
+            "flex" => {
+                out.extend(expand_flex(&decl.value, decl.important));
+            },
+            "font" => {
+                out.extend(expand_font(&decl.value, decl.important));
+            },
+            "overflow" => {
+                // `overflow` shorthand sets both overflow-x and overflow-y.
+                // We only support a single overflow property, so just pass through.
+                out.push(decl);
             },
             _ => out.push(decl),
         }
@@ -1510,6 +1672,57 @@ fn expand_border(value: &CssValue, important: bool) -> Vec<Declaration> {
     ]
 }
 
+/// Expand `border-top`, `border-right`, `border-bottom`, `border-left`
+/// shorthands into their `*-width`, `*-style`, `*-color` longhands.
+fn expand_border_side(property: &str, value: &CssValue, important: bool) -> Vec<Declaration> {
+    let values = match value {
+        CssValue::Multiple(vs) => vs.clone(),
+        other => vec![other.clone()],
+    };
+
+    let mut width = CssValue::Keyword("medium".into());
+    let mut style = CssValue::Keyword("none".into());
+    let mut color = CssValue::Keyword("currentcolor".into());
+
+    for v in &values {
+        match v {
+            CssValue::Length(..) | CssValue::Number(_) => width = v.clone(),
+            CssValue::Color(_) => color = v.clone(),
+            CssValue::Keyword(kw) => {
+                let lower = kw.to_ascii_lowercase();
+                if is_border_style(&lower) {
+                    style = v.clone();
+                } else if let Some(c) = named_color(&lower) {
+                    color = CssValue::Color(c);
+                } else {
+                    style = v.clone();
+                }
+            },
+            CssValue::Var(..) => color = v.clone(),
+            _ => {},
+        }
+    }
+
+    // side = "border-top" → prefix for longhands: "border-top-width", etc.
+    vec![
+        Declaration {
+            property: format!("{property}-width"),
+            value: width,
+            important,
+        },
+        Declaration {
+            property: format!("{property}-style"),
+            value: style,
+            important,
+        },
+        Declaration {
+            property: format!("{property}-color"),
+            value: color,
+            important,
+        },
+    ]
+}
+
 fn is_border_style(s: &str) -> bool {
     matches!(
         s,
@@ -1554,7 +1767,13 @@ fn expand_background(value: &CssValue, important: bool) -> Vec<Declaration> {
             }]
         },
         CssValue::Keyword(name) => {
-            if let Some(c) = named_color(name) {
+            if name.eq_ignore_ascii_case("transparent") || name.eq_ignore_ascii_case("none") {
+                vec![Declaration {
+                    property: "background-color".into(),
+                    value: CssValue::Color(CssColor::new(0, 0, 0, 0)),
+                    important,
+                }]
+            } else if let Some(c) = named_color(name) {
                 vec![Declaration {
                     property: "background-color".into(),
                     value: CssValue::Color(c),
@@ -1576,6 +1795,199 @@ fn expand_background(value: &CssValue, important: bool) -> Vec<Declaration> {
             }]
         },
     }
+}
+
+fn expand_list_style(value: &CssValue, important: bool) -> Vec<Declaration> {
+    let values = match value {
+        CssValue::Multiple(vs) => vs.clone(),
+        other => vec![other.clone()],
+    };
+
+    let mut result = Vec::new();
+    for v in &values {
+        if let CssValue::Keyword(kw) = v {
+            let kw_lower = kw.to_ascii_lowercase();
+            match kw_lower.as_str() {
+                "none"
+                | "disc"
+                | "circle"
+                | "square"
+                | "decimal"
+                | "decimal-leading-zero"
+                | "lower-roman"
+                | "upper-roman"
+                | "lower-alpha"
+                | "upper-alpha"
+                | "lower-latin"
+                | "upper-latin" => {
+                    result.push(Declaration {
+                        property: "list-style-type".into(),
+                        value: CssValue::Keyword(kw_lower),
+                        important,
+                    });
+                },
+                "inside" | "outside" => {
+                    result.push(Declaration {
+                        property: "list-style-position".into(),
+                        value: CssValue::Keyword(kw_lower),
+                        important,
+                    });
+                },
+                _ => {},
+            }
+        }
+    }
+
+    // If "none" was the only value, also reset list-style-type.
+    if result.is_empty() {
+        result.push(Declaration {
+            property: "list-style-type".into(),
+            value: CssValue::Keyword("none".into()),
+            important,
+        });
+    }
+
+    result
+}
+
+fn expand_flex(value: &CssValue, important: bool) -> Vec<Declaration> {
+    let values = match value {
+        CssValue::Multiple(vs) => vs.clone(),
+        other => vec![other.clone()],
+    };
+
+    match values.len() {
+        1 => match &values[0] {
+            CssValue::Keyword(kw) if kw == "none" => {
+                vec![
+                    Declaration {
+                        property: "flex-grow".into(),
+                        value: CssValue::Number(0.0),
+                        important,
+                    },
+                    Declaration {
+                        property: "flex-shrink".into(),
+                        value: CssValue::Number(0.0),
+                        important,
+                    },
+                    Declaration {
+                        property: "flex-basis".into(),
+                        value: CssValue::Keyword("auto".into()),
+                        important,
+                    },
+                ]
+            },
+            CssValue::Number(n) => {
+                vec![
+                    Declaration {
+                        property: "flex-grow".into(),
+                        value: CssValue::Number(*n),
+                        important,
+                    },
+                    Declaration {
+                        property: "flex-shrink".into(),
+                        value: CssValue::Number(1.0),
+                        important,
+                    },
+                    Declaration {
+                        property: "flex-basis".into(),
+                        value: CssValue::Length(0.0, LengthUnit::Px),
+                        important,
+                    },
+                ]
+            },
+            _ => vec![Declaration {
+                property: "flex".into(),
+                value: value.clone(),
+                important,
+            }],
+        },
+        _ => vec![Declaration {
+            property: "flex".into(),
+            value: value.clone(),
+            important,
+        }],
+    }
+}
+
+fn expand_font(value: &CssValue, important: bool) -> Vec<Declaration> {
+    let values = match value {
+        CssValue::Multiple(vs) => vs.clone(),
+        other => vec![other.clone()],
+    };
+
+    let mut result = Vec::new();
+
+    for v in &values {
+        match v {
+            CssValue::Length(_, _) | CssValue::Percentage(_) => {
+                // This is likely the font-size.
+                result.push(Declaration {
+                    property: "font-size".into(),
+                    value: v.clone(),
+                    important,
+                });
+            },
+            CssValue::Number(n) if *n > 0.0 => {
+                // Could be line-height if we already have font-size, or font-weight.
+                if result.iter().any(|d| d.property == "font-size") {
+                    result.push(Declaration {
+                        property: "line-height".into(),
+                        value: v.clone(),
+                        important,
+                    });
+                } else if *n >= 100.0 {
+                    result.push(Declaration {
+                        property: "font-weight".into(),
+                        value: v.clone(),
+                        important,
+                    });
+                }
+            },
+            CssValue::Keyword(kw) => {
+                let kw_lower = kw.to_ascii_lowercase();
+                match kw_lower.as_str() {
+                    "bold" => {
+                        result.push(Declaration {
+                            property: "font-weight".into(),
+                            value: CssValue::Keyword("bold".into()),
+                            important,
+                        });
+                    },
+                    "normal" => {
+                        // Could be font-weight or font-style — skip ambiguous.
+                    },
+                    "italic" | "oblique" => {
+                        result.push(Declaration {
+                            property: "font-style".into(),
+                            value: CssValue::Keyword(kw_lower),
+                            important,
+                        });
+                    },
+                    "serif" | "sans-serif" | "monospace" | "cursive" | "fantasy" => {
+                        result.push(Declaration {
+                            property: "font-family".into(),
+                            value: CssValue::Keyword(kw_lower),
+                            important,
+                        });
+                    },
+                    _ => {},
+                }
+            },
+            _ => {},
+        }
+    }
+
+    if result.is_empty() {
+        // Pass through as-is if we couldn't extract anything.
+        result.push(Declaration {
+            property: "font".into(),
+            value: value.clone(),
+            important,
+        });
+    }
+
+    result
 }
 
 // -------------------------------------------------------------------
@@ -2238,7 +2650,8 @@ mod tests {
     #[test]
     fn color_hex_values() {
         let sheet = parse("p { color: #fff; background: #aabbcc; border-color: #12345678; }");
-        assert_eq!(sheet.rules[0].declarations.len(), 3);
+        // border-color is expanded into 4 longhand properties.
+        assert_eq!(sheet.rules[0].declarations.len(), 6);
     }
 
     #[test]

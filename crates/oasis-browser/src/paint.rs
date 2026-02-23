@@ -15,7 +15,7 @@
 
 use std::collections::HashMap;
 
-use crate::css::values::{BorderStyle, Overflow, TextDecoration};
+use crate::css::values::{BorderStyle, Overflow, TextDecoration, Visibility};
 use crate::html::dom::NodeId;
 use crate::layout::box_model::{BoxType, LayoutBox, ListMarker, Rect, ReplacedContent};
 use oasis_types::backend::{Color, SdiBackend};
@@ -147,6 +147,8 @@ fn paint_box(
         return Ok(());
     }
 
+    let is_visible = layout_box.style.visibility == Visibility::Visible;
+
     // Track whether we just entered a link element.
     let entered_link = if let Some(node_id) = layout_box.node {
         if let Some(href) = link_map.get(&node_id) {
@@ -159,14 +161,18 @@ fn paint_box(
         false
     };
 
-    // 0. Box shadow (behind background).
-    paint_box_shadow(layout_box, backend, offset_x, offset_y, ctx)?;
+    // visibility:hidden skips painting this box's own background/borders/content
+    // but children may override visibility and still paint.
+    if is_visible {
+        // 0. Box shadow (behind background).
+        paint_box_shadow(layout_box, backend, offset_x, offset_y, ctx)?;
 
-    // 1. Background
-    paint_background(layout_box, backend, offset_x, offset_y, ctx)?;
+        // 1. Background
+        paint_background(layout_box, backend, offset_x, offset_y, ctx)?;
 
-    // 2. Borders
-    paint_borders(layout_box, backend, offset_x, offset_y, ctx)?;
+        // 2. Borders
+        paint_borders(layout_box, backend, offset_x, offset_y, ctx)?;
+    }
 
     // Check overflow:hidden clipping -- if this box clips, intersect
     // with any existing clip from an ancestor.
@@ -204,16 +210,22 @@ fn paint_box(
             }
         },
         BoxType::Inline => {
-            paint_inline_content(layout_box, backend, offset_x, offset_y, ctx, link_map)?;
+            if is_visible {
+                paint_inline_content(layout_box, backend, offset_x, offset_y, ctx, link_map)?;
+            }
         },
         BoxType::ListItem { marker } => {
-            paint_list_marker(marker, layout_box, backend, offset_x, offset_y, ctx)?;
+            if is_visible {
+                paint_list_marker(marker, layout_box, backend, offset_x, offset_y, ctx)?;
+            }
             for child in &layout_box.children {
                 paint_box(child, backend, offset_x, offset_y, ctx, link_map)?;
             }
         },
         BoxType::Replaced(replaced) => {
-            paint_replaced(replaced, layout_box, backend, offset_x, offset_y, ctx)?;
+            if is_visible {
+                paint_replaced(replaced, layout_box, backend, offset_x, offset_y, ctx)?;
+            }
         },
     }
 
@@ -612,6 +624,38 @@ fn paint_replaced(
         },
         ReplacedContent::LineBreak => {
             // Nothing to paint.
+        },
+        ReplacedContent::TextInput { value, .. } => {
+            let w = content.width as u32;
+            let h = content.height as u32;
+            // White background.
+            backend.fill_rect(x, y, w, h, Color::rgb(255, 255, 255))?;
+            // Border.
+            let border_color = Color::rgb(118, 118, 118);
+            backend.fill_rect(x, y, w, 1, border_color)?;
+            backend.fill_rect(x, y + h as i32 - 1, w, 1, border_color)?;
+            backend.fill_rect(x, y, 1, h, border_color)?;
+            backend.fill_rect(x + w as i32 - 1, y, 1, h, border_color)?;
+            // Value text.
+            if !value.is_empty() {
+                backend.draw_text(value, x + 3, y + 3, 10, Color::rgb(0, 0, 0))?;
+            }
+        },
+        ReplacedContent::SubmitButton { label } => {
+            let w = content.width as u32;
+            let h = content.height as u32;
+            // Button background (light gray gradient effect).
+            backend.fill_rect(x, y, w, h, Color::rgb(239, 239, 239))?;
+            // Border.
+            let border_color = Color::rgb(118, 118, 118);
+            backend.fill_rect(x, y, w, 1, border_color)?;
+            backend.fill_rect(x, y + h as i32 - 1, w, 1, border_color)?;
+            backend.fill_rect(x, y, 1, h, border_color)?;
+            backend.fill_rect(x + w as i32 - 1, y, 1, h, border_color)?;
+            // Label text centered.
+            let text_x = x + (w as i32 - label.len() as i32 * 6) / 2;
+            let text_y = y + (h as i32 - 10) / 2;
+            backend.draw_text(label, text_x, text_y, 10, Color::rgb(0, 0, 0))?;
         },
     }
 

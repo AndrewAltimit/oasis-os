@@ -4,12 +4,12 @@
 //! boxes flow horizontally and wrap into line boxes when the available
 //! width is exhausted.
 
-use super::block::TextMeasurer;
+use super::block::{TextMeasurer, layout_block};
 use super::box_model::*;
 use super::text::{
     apply_text_transform, collapse_whitespace, measure_space, measure_word, split_into_words,
 };
-use crate::css::values::{ComputedStyle, TextAlign, WhiteSpace};
+use crate::css::values::{ComputedStyle, Dimension, TextAlign, WhiteSpace};
 use crate::html::dom::NodeId;
 
 // -------------------------------------------------------------------
@@ -163,9 +163,40 @@ fn collect_inline_fragments(
                 fragments.extend(text_fragments_for_inline(child, measurer));
             },
             BoxType::InlineBlock => {
-                fragments.push(InlineFragment::InlineBox {
-                    layout_box: child.clone(),
-                });
+                // InlineBlock boxes participate in inline flow but
+                // establish their own block formatting context. We
+                // must lay them out now so dimensions are known.
+                let mut lb = child.clone();
+                // Use a large containing width so auto margins
+                // resolve to zero and explicit widths work.
+                let large_avail = 10000.0;
+                layout_block(&mut lb, large_avail, measurer);
+                if matches!(lb.style.width, Dimension::Auto) {
+                    // Shrink content width to actual children extent.
+                    let max_child_right = lb
+                        .children
+                        .iter()
+                        .map(|c| {
+                            let bb = c.dimensions.border_box();
+                            bb.x + bb.width - lb.dimensions.content.x
+                        })
+                        .fold(0.0_f32, f32::max);
+                    lb.dimensions.content.width = max_child_right;
+                }
+                // InlineBlock margins must not be inflated by the
+                // block-level over-constrained rule. Reset to declared
+                // values (auto margins resolve to zero for inline-block).
+                lb.dimensions.margin.left = if lb.style.margin_left_auto {
+                    0.0
+                } else {
+                    lb.style.margin_left
+                };
+                lb.dimensions.margin.right = if lb.style.margin_right_auto {
+                    0.0
+                } else {
+                    lb.style.margin_right
+                };
+                fragments.push(InlineFragment::InlineBox { layout_box: lb });
             },
             BoxType::Replaced(replaced) => {
                 let (intrinsic_w, intrinsic_h) = replaced_dimensions(replaced);
@@ -250,6 +281,24 @@ fn text_fragments_for_inline(
         }
     }
 
+    // Apply inline-level horizontal margins: left margin adds space
+    // before the first fragment, right margin after the last.
+    let ml = style.margin_left;
+    let mr = style.margin_right;
+    if !frags.is_empty() {
+        if ml > 0.0
+            && let InlineFragment::Text { width, .. } = &mut frags[0]
+        {
+            *width += ml;
+        }
+        let last = frags.len() - 1;
+        if mr > 0.0
+            && let InlineFragment::Text { width, .. } = &mut frags[last]
+        {
+            *width += mr;
+        }
+    }
+
     frags
 }
 
@@ -259,6 +308,14 @@ fn replaced_dimensions(replaced: &ReplacedContent) -> (f32, f32) {
         ReplacedContent::Image { width, height, .. } => (*width as f32, *height as f32),
         ReplacedContent::HorizontalRule => (0.0, 2.0),
         ReplacedContent::LineBreak => (0.0, 0.0),
+        ReplacedContent::TextInput { size, .. } => {
+            // Each character ≈ 8px wide, height ≈ line height + padding.
+            (*size as f32 * 6.0 + 8.0, 18.0)
+        },
+        ReplacedContent::SubmitButton { label } => {
+            // Width based on label length + padding, height for a button.
+            (label.len() as f32 * 6.0 + 16.0, 20.0)
+        },
     }
 }
 
@@ -444,9 +501,40 @@ fn set_fragment_x(frag: &mut InlineFragment, x: f32) {
     match frag {
         InlineFragment::Text { x: fx, .. } => *fx = x,
         InlineFragment::InlineBox { layout_box } => {
-            layout_box.dimensions.content.x = x;
+            // x is the start of the margin box on the line.
+            // Content.x must account for margin + border + padding.
+            let content_x = x
+                + layout_box.dimensions.margin.left
+                + layout_box.dimensions.border.left
+                + layout_box.dimensions.padding.left;
+            let old_x = layout_box.dimensions.content.x;
+            let dx = content_x - old_x;
+            layout_box.dimensions.content.x = content_x;
+            // Offset all descendants by the delta so they stay
+            // positioned correctly relative to the InlineBlock.
+            if dx.abs() > 0.001 {
+                for child in &mut layout_box.children {
+                    offset_subtree_x(child, dx);
+                }
+            }
         },
         InlineFragment::ReplacedInline { x: fx, .. } => *fx = x,
+    }
+}
+
+/// Recursively offset a layout box and all descendants in the x axis.
+fn offset_subtree_x(lb: &mut LayoutBox, dx: f32) {
+    lb.dimensions.content.x += dx;
+    for child in &mut lb.children {
+        offset_subtree_x(child, dx);
+    }
+}
+
+/// Recursively offset a layout box and all descendants in the y axis.
+fn offset_subtree_y(lb: &mut LayoutBox, dy: f32) {
+    lb.dimensions.content.y += dy;
+    for child in &mut lb.children {
+        offset_subtree_y(child, dy);
     }
 }
 
@@ -480,7 +568,15 @@ fn lines_to_children(lines: Vec<LineBox>, line_positions: &[f32]) -> Vec<LayoutB
                     lb.dimensions.content.height = line_height;
                     children.push(lb);
                 },
-                InlineFragment::InlineBox { layout_box } => {
+                InlineFragment::InlineBox { mut layout_box } => {
+                    // Offset the entire InlineBlock subtree to its
+                    // final line position. The block was laid out at
+                    // y=0; the x was set by position_fragments_on_line.
+                    let old_y = layout_box.dimensions.content.y;
+                    let dy = line_y - old_y;
+                    if dy.abs() > 0.001 {
+                        offset_subtree_y(&mut layout_box, dy);
+                    }
                     children.push(layout_box);
                 },
                 InlineFragment::ReplacedInline {

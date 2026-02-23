@@ -1,0 +1,175 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Wikipedia</title>
+<style>
+:root {
+    --color-base: #202122;
+    --color-subtle: #54595d;
+    --color-progressive: #36c;
+    --color-progressive--hover: #3056a9;
+    --background-color-base: #fff;
+    --background-color-interactive-subtle: #f8f9fa;
+    --border-color-base: #a2a9b1;
+    --border-color-subtle: #c8ccd1;
+    --font-size-medium: 14px;
+    --font-size-small: 12px;
+    --font-size-x-small: 11px;
+}
+body {
+    margin: 0;
+    font-family: sans-serif;
+    font-size: var(--font-size-medium);
+    background-color: var(--background-color-base);
+    color: var(--color-base);
+}
+a {
+    color: var(--color-progressive);
+    text-decoration: none;
+}
+a:hover {
+    text-decoration: underline;
+}
+/* Centered portal layout */
+.portal {
+    text-align: center;
+    padding: 8px;
+}
+/* Logo area */
+.logo-area {
+    margin: 8px auto 4px;
+}
+.logo-text {
+    font-size: 20px;
+    font-weight: normal;
+    margin: 0 0 2px;
+    color: var(--color-base);
+}
+.slogan {
+    font-size: var(--font-size-small);
+    color: var(--color-subtle);
+    margin: 0 0 6px;
+}
+/* Search box */
+.search-area {
+    margin: 0 auto 8px;
+    display: inline-block;
+    width: 280px;
+}
+.search-input {
+    width: 270px;
+    height: 18px;
+    padding: 3px 6px;
+    font-size: var(--font-size-medium);
+    border: 1px solid var(--border-color-base);
+    border-radius: 2px;
+    background-color: var(--background-color-base);
+    color: var(--color-base);
+}
+.search-btn {
+    display: inline-block;
+    background-color: var(--color-progressive);
+    color: #fff;
+    border: 1px solid var(--color-progressive);
+    padding: 4px 12px;
+    font-size: var(--font-size-small);
+    margin-top: 4px;
+    cursor: pointer;
+}
+/* Language columns */
+.lang-section {
+    margin: 6px auto 0;
+    text-align: center;
+    max-width: 440px;
+}
+.lang-major {
+    font-size: var(--font-size-medium);
+    margin-bottom: 4px;
+}
+.lang-major a {
+    margin: 0 6px;
+}
+.lang-minor {
+    font-size: var(--font-size-x-small);
+    color: var(--color-subtle);
+}
+.lang-minor a {
+    color: var(--color-subtle);
+    margin: 0 3px;
+}
+.lang-count {
+    font-size: 9px;
+    color: var(--color-subtle);
+}
+.divider {
+    border: none;
+    border-top: 1px solid var(--border-color-subtle);
+    margin: 6px auto;
+    max-width: 400px;
+}
+/* Footer */
+.footer {
+    text-align: center;
+    font-size: var(--font-size-x-small);
+    color: var(--color-subtle);
+    margin-top: 6px;
+}
+.footer a {
+    color: var(--color-subtle);
+    margin: 0 4px;
+}
+</style>
+</head>
+<body>
+<div class="portal">
+    <!-- Logo -->
+    <div class="logo-area">
+        <h1 class="logo-text">Wikipedia</h1>
+        <p class="slogan">The Free Encyclopedia</p>
+    </div>
+
+    <!-- Search -->
+    <div class="search-area">
+        <input class="search-input" type="text" name="search" placeholder="Search Wikipedia">
+        <div>
+            <input type="submit" class="search-btn" value="Search Wikipedia">
+        </div>
+    </div>
+
+    <hr class="divider">
+
+    <!-- Major languages (10M+ articles) -->
+    <div class="lang-section">
+        <div class="lang-major">
+            <a href="#">English <span class="lang-count">6M+</span></a>
+            <a href="#">Cebuano <span class="lang-count">6M+</span></a>
+            <a href="#">Deutsch <span class="lang-count">2M+</span></a>
+        </div>
+        <div class="lang-major">
+            <a href="#">Svenska <span class="lang-count">2M+</span></a>
+            <a href="#">Francais <span class="lang-count">2M+</span></a>
+            <a href="#">Nederlands <span class="lang-count">2M+</span></a>
+        </div>
+
+        <hr class="divider">
+
+        <!-- Minor languages -->
+        <div class="lang-minor">
+            <a href="#">Русский <span class="lang-count">1M+</span></a>
+            <a href="#">Espanol <span class="lang-count">1M+</span></a>
+            <a href="#">Italiano <span class="lang-count">1M+</span></a>
+            <a href="#">Portugues <span class="lang-count">1M+</span></a>
+            <a href="#">Bahasa <span class="lang-count">600K+</span></a>
+        </div>
+    </div>
+
+    <!-- Footer -->
+    <div class="footer">
+        <a href="#">Other languages</a> |
+        <a href="#">Privacy policy</a> |
+        <a href="#">Terms of Use</a>
+    </div>
+</div>
+</body>
+</html>

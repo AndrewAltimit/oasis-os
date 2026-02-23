@@ -527,6 +527,41 @@ fn replaced_content(
         },
         TagName::Hr => Some(ReplacedContent::HorizontalRule),
         TagName::Br => Some(ReplacedContent::LineBreak),
+        TagName::Input => {
+            let input_type = elem
+                .get_attribute("type")
+                .unwrap_or("text")
+                .to_ascii_lowercase();
+            match input_type.as_str() {
+                "hidden" => None,
+                "submit" | "button" | "reset" => {
+                    let label = elem
+                        .get_attribute("value")
+                        .unwrap_or(if input_type == "submit" {
+                            "Submit"
+                        } else if input_type == "reset" {
+                            "Reset"
+                        } else {
+                            "Button"
+                        })
+                        .to_string();
+                    Some(ReplacedContent::SubmitButton { label })
+                },
+                _ => {
+                    // text, password, search, etc.
+                    let value = elem.get_attribute("value").unwrap_or("").to_string();
+                    let size = elem
+                        .get_attribute("size")
+                        .and_then(|v| v.parse::<u32>().ok())
+                        .unwrap_or(20);
+                    Some(ReplacedContent::TextInput { value, size })
+                },
+            }
+        },
+        TagName::Button => {
+            let label = elem.get_attribute("value").unwrap_or("Button").to_string();
+            Some(ReplacedContent::SubmitButton { label })
+        },
         _ => None,
     }
 }
@@ -762,11 +797,29 @@ pub fn resolve_edge_sizes(layout_box: &mut LayoutBox, _containing_width: f32) {
         left: s.padding_left,
     };
 
+    // Per CSS spec, border-style:none/hidden → border-width computes to 0.
+    use crate::css::values::BorderStyle;
     layout_box.dimensions.border = EdgeSizes {
-        top: s.border_top_width,
-        right: s.border_right_width,
-        bottom: s.border_bottom_width,
-        left: s.border_left_width,
+        top: if s.border_top_style == BorderStyle::None {
+            0.0
+        } else {
+            s.border_top_width
+        },
+        right: if s.border_right_style == BorderStyle::None {
+            0.0
+        } else {
+            s.border_right_width
+        },
+        bottom: if s.border_bottom_style == BorderStyle::None {
+            0.0
+        } else {
+            s.border_bottom_width
+        },
+        left: if s.border_left_style == BorderStyle::None {
+            0.0
+        } else {
+            s.border_left_width
+        },
     };
 
     layout_box.dimensions.margin = EdgeSizes {

@@ -7,8 +7,8 @@
 use std::collections::{HashMap, HashSet};
 
 use super::parser::{
-    AttrOp, Combinator, CompoundSelector, CssValue, Declaration, Rule, SimpleSelector, Specificity,
-    Stylesheet, parse_value_list,
+    AttrOp, Combinator, CompoundSelector, CssColor, CssValue, Declaration, LengthUnit, Rule,
+    SimpleSelector, Specificity, Stylesheet, parse_value_list,
 };
 use super::tokenizer::CssTokenizer;
 use super::values::ComputedStyle;
@@ -393,6 +393,8 @@ fn matches_selector_ignoring_pseudo(
 /// The origin of a declaration for cascade ordering.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 enum Origin {
+    /// From an HTML presentational attribute (lowest priority author style).
+    Presentational,
     /// From a `<link>` or `<style>` stylesheet.
     Stylesheet,
     /// From the element's `style=""` attribute.
@@ -455,6 +457,10 @@ fn collect_matched_declarations(
         }
     }
 
+    // Presentational HTML attributes (bgcolor, width, height, align, etc.)
+    // have lowest author-origin priority (overridden by any CSS rule).
+    collect_presentational_attrs(elem, &mut result);
+
     // Inline styles have the highest non-important specificity.
     // O(1) lookup via HashMap instead of linear scan.
     if let Some(decls) = inline_map.get(&node_id) {
@@ -483,6 +489,166 @@ fn collect_matched_declarations(
     }
 
     result
+}
+
+/// Inject synthetic CSS declarations from HTML presentational attributes.
+///
+/// Per the CSS spec, presentational attributes act as author-origin rules
+/// with zero specificity — overridden by any CSS rule. We use
+/// `Origin::Presentational` which sorts before `Origin::Stylesheet`.
+fn collect_presentational_attrs(elem: &ElementData, result: &mut Vec<MatchedDeclaration>) {
+    use crate::html::dom::TagName;
+
+    let zero_spec = Specificity {
+        inline: 0,
+        ids: 0,
+        classes: 0,
+        types: 0,
+    };
+
+    let mut push = |property: &str, value: CssValue| {
+        result.push(MatchedDeclaration {
+            property: property.to_string(),
+            value,
+            important: false,
+            origin: Origin::Presentational,
+            specificity: zero_spec,
+            source_order: 0,
+        });
+    };
+
+    // bgcolor → background-color
+    if let Some(color_str) = elem.get_attribute("bgcolor")
+        && let Some((r, g, b, a)) = parse_html_color(color_str)
+    {
+        push("background-color", CssValue::Color(CssColor { r, g, b, a }));
+    }
+
+    // width attribute → width (on img, table, td, th, input)
+    if matches!(
+        elem.tag,
+        TagName::Img | TagName::Table | TagName::Td | TagName::Th | TagName::Input
+    ) && let Some(val) = elem.get_attribute("width")
+        && let Some(css_val) = parse_html_dimension(val)
+    {
+        push("width", css_val);
+    }
+
+    // height attribute → height (on img, table, td, th, input)
+    if matches!(
+        elem.tag,
+        TagName::Img | TagName::Table | TagName::Td | TagName::Th | TagName::Input
+    ) && let Some(val) = elem.get_attribute("height")
+        && let Some(css_val) = parse_html_dimension(val)
+    {
+        push("height", css_val);
+    }
+
+    // align attribute → text-align (on td, th, p, div, center, tr)
+    if matches!(
+        elem.tag,
+        TagName::Td | TagName::Th | TagName::P | TagName::Div | TagName::Center | TagName::Tr
+    ) && let Some(val) = elem.get_attribute("align")
+    {
+        let align = val.to_ascii_lowercase();
+        if matches!(align.as_str(), "left" | "center" | "right" | "justify") {
+            push("text-align", CssValue::Keyword(align));
+        }
+    }
+
+    // nowrap attribute → white-space: nowrap (on td, th)
+    if matches!(elem.tag, TagName::Td | TagName::Th) && elem.get_attribute("nowrap").is_some() {
+        push("white-space", CssValue::Keyword("nowrap".into()));
+    }
+
+    // cellspacing attribute on table → border-spacing
+    if elem.tag == TagName::Table
+        && let Some(val) = elem.get_attribute("cellspacing")
+        && let Ok(n) = val.parse::<f32>()
+    {
+        push("border-spacing", CssValue::Length(n, LengthUnit::Px));
+    }
+
+    // cellpadding attribute on table → padding on descendant cells
+    // (This is applied on the table and will be propagated separately in
+    // the layout engine or by querying the parent table. For now, skip --
+    // author CSS can override.)
+
+    // border attribute on table
+    if elem.tag == TagName::Table
+        && let Some(val) = elem.get_attribute("border")
+        && let Ok(n) = val.parse::<f32>()
+        && n > 0.0
+    {
+        push("border-top-width", CssValue::Length(n, LengthUnit::Px));
+        push("border-right-width", CssValue::Length(n, LengthUnit::Px));
+        push("border-bottom-width", CssValue::Length(n, LengthUnit::Px));
+        push("border-left-width", CssValue::Length(n, LengthUnit::Px));
+        push("border-top-style", CssValue::Keyword("solid".into()));
+        push("border-right-style", CssValue::Keyword("solid".into()));
+        push("border-bottom-style", CssValue::Keyword("solid".into()));
+        push("border-left-style", CssValue::Keyword("solid".into()));
+    }
+
+    // size attribute on input → width (approximate)
+    if elem.tag == TagName::Input
+        && let Some(val) = elem.get_attribute("size")
+        && let Ok(n) = val.parse::<f32>()
+    {
+        // Each character ≈ 8px in our bitmap font.
+        push("width", CssValue::Length(n * 8.0, LengthUnit::Px));
+    }
+}
+
+/// Parse an HTML color attribute value (e.g., "#fff", "#ffffff", "red").
+fn parse_html_color(s: &str) -> Option<(u8, u8, u8, u8)> {
+    let s = s.trim();
+    if let Some(hex) = s.strip_prefix('#') {
+        match hex.len() {
+            3 => {
+                let r = u8::from_str_radix(&hex[0..1], 16).ok()? * 17;
+                let g = u8::from_str_radix(&hex[1..2], 16).ok()? * 17;
+                let b = u8::from_str_radix(&hex[2..3], 16).ok()? * 17;
+                Some((r, g, b, 255))
+            },
+            6 => {
+                let r = u8::from_str_radix(&hex[0..2], 16).ok()?;
+                let g = u8::from_str_radix(&hex[2..4], 16).ok()?;
+                let b = u8::from_str_radix(&hex[4..6], 16).ok()?;
+                Some((r, g, b, 255))
+            },
+            _ => None,
+        }
+    } else {
+        // Named color lookup (common ones).
+        match s.to_ascii_lowercase().as_str() {
+            "white" => Some((255, 255, 255, 255)),
+            "black" => Some((0, 0, 0, 255)),
+            "red" => Some((255, 0, 0, 255)),
+            "green" => Some((0, 128, 0, 255)),
+            "blue" => Some((0, 0, 255, 255)),
+            "yellow" => Some((255, 255, 0, 255)),
+            "gray" | "grey" => Some((128, 128, 128, 255)),
+            "silver" => Some((192, 192, 192, 255)),
+            _ => None,
+        }
+    }
+}
+
+/// Parse an HTML dimension attribute value (e.g., "25%", "200", "200px").
+fn parse_html_dimension(s: &str) -> Option<CssValue> {
+    let s = s.trim();
+    if let Some(pct) = s.strip_suffix('%') {
+        pct.parse::<f32>().ok().map(CssValue::Percentage)
+    } else if let Some(px) = s.strip_suffix("px") {
+        px.parse::<f32>()
+            .ok()
+            .map(|n| CssValue::Length(n, LengthUnit::Px))
+    } else {
+        s.parse::<f32>()
+            .ok()
+            .map(|n| CssValue::Length(n, LengthUnit::Px))
+    }
 }
 
 /// Return the highest specificity among the rule's selectors that match
@@ -1148,7 +1314,16 @@ br, img, input, button, select, textarea {
     display: inline;
 }
 
+center {
+    display: block;
+    text-align: center;
+}
+
 head, script, style, link, meta, title, noscript {
+    display: none;
+}
+
+input[type="hidden"] {
     display: none;
 }
 "#;
@@ -2138,6 +2313,49 @@ mod tests {
 
         let p_style = styles[p_id].as_ref().expect("p should have style");
         assert_eq!(p_style.color, Color::rgb(128, 0, 128));
+    }
+
+    #[test]
+    fn var_background_color_from_root() {
+        // Wikipedia-style pattern: :root { --bg: #fff } body { background-color: var(--bg) }
+        let doc = make_doc(vec![(TagName::P, vec![])]);
+        let css = ":root { --background-color-base: #fff; } \
+                   body { background-color: var(--background-color-base); color: var(--background-color-base); }";
+        let sheet = Stylesheet::parse(css);
+        let styles = style_tree(&doc, &[&sheet], &[], &ctx());
+
+        // Node 1 = <html>, node 2 = <body>
+        let body_style = styles[2].as_ref().expect("body should have style");
+        assert_eq!(
+            body_style.background_color,
+            Color::rgb(255, 255, 255),
+            "body bg should be white from var(--background-color-base), got {:?}",
+            body_style.background_color
+        );
+        assert_eq!(
+            body_style.color,
+            Color::rgb(255, 255, 255),
+            "body color should be white from var(--background-color-base), got {:?}",
+            body_style.color
+        );
+    }
+
+    #[test]
+    fn prefers_color_scheme_dark_rejected() {
+        // @media (prefers-color-scheme: dark) should NOT match.
+        let doc = make_doc(vec![(TagName::P, vec![])]);
+        let css = ":root { --bg: #ffffff; } \
+                   @media (prefers-color-scheme: dark) { :root { --bg: #000000; } } \
+                   body { background-color: var(--bg); }";
+        let sheet = Stylesheet::parse(css);
+        let styles = style_tree(&doc, &[&sheet], &[], &ctx());
+        let body_style = styles[2].as_ref().expect("body should have style");
+        assert_eq!(
+            body_style.background_color,
+            Color::rgb(255, 255, 255),
+            "dark mode should not apply; expected white, got {:?}",
+            body_style.background_color
+        );
     }
 
     // -- Selector index tests (Phase 2) ----------------------------------

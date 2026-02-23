@@ -137,6 +137,8 @@ fn all_scenarios() -> Vec<Scenario> {
         "empty_page",
         "gemini_page",
         "images",
+        "wikipedia",
+        "google",
     ];
     for page in &pages {
         scenarios.push(Scenario {
