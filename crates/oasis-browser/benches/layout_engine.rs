@@ -63,7 +63,17 @@ fn bench_block_layout(c: &mut Criterion) {
             BenchmarkId::new("build_layout_tree", &label),
             &(&doc, &styles),
             |b, (doc, styles)| {
-                b.iter(|| build_layout_tree(doc, styles, &measurer, 480.0, 272.0));
+                b.iter(|| {
+                    build_layout_tree(
+                        doc,
+                        styles,
+                        &measurer,
+                        480.0,
+                        272.0,
+                        None,
+                        &std::collections::HashMap::new(),
+                    )
+                });
             },
         );
     }
@@ -86,7 +96,17 @@ fn bench_table_layout(c: &mut Criterion) {
             BenchmarkId::new("build_layout_tree", &label),
             &(&doc, &styles),
             |b, (doc, styles)| {
-                b.iter(|| build_layout_tree(doc, styles, &measurer, 480.0, 272.0));
+                b.iter(|| {
+                    build_layout_tree(
+                        doc,
+                        styles,
+                        &measurer,
+                        480.0,
+                        272.0,
+                        None,
+                        &std::collections::HashMap::new(),
+                    )
+                });
             },
         );
     }

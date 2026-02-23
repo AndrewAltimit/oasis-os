@@ -49,12 +49,18 @@ pub trait TextMeasurer {
 /// Starts from the `<body>` element (or the document root if no body
 /// is found). The returned `LayoutBox` is the root block box with its
 /// dimensions laid out to fit the given viewport.
+///
+/// `base_url` and `image_info` are used to resolve `<img>` elements to
+/// their intrinsic dimensions from decoded images. Pass `None` and an
+/// empty map when image data is not available.
 pub fn build_layout_tree(
     doc: &Document,
     styles: &[Option<ComputedStyle>],
     measurer: &dyn TextMeasurer,
     viewport_width: f32,
     _viewport_height: f32,
+    base_url: Option<&str>,
+    image_info: &HashMap<String, (u32, u32)>,
 ) -> LayoutBox {
     let start_node = doc.body().unwrap_or(doc.root);
     let style = styles
@@ -69,7 +75,7 @@ pub fn build_layout_tree(
 
     // Recursively build children.
     let children = doc.get(start_node).children.clone();
-    let child_boxes = build_children(doc, &children, styles);
+    let child_boxes = build_children(doc, &children, styles, base_url, image_info);
     root.children = wrap_anonymous(child_boxes, &root.style);
 
     // Layout from the root.
@@ -304,10 +310,12 @@ fn build_children(
     doc: &Document,
     children: &[NodeId],
     styles: &[Option<ComputedStyle>],
+    base_url: Option<&str>,
+    image_info: &HashMap<String, (u32, u32)>,
 ) -> Vec<LayoutBox> {
     let mut boxes = Vec::new();
     for &child_id in children {
-        if let Some(lb) = build_box_for_node(doc, child_id, styles) {
+        if let Some(lb) = build_box_for_node(doc, child_id, styles, base_url, image_info) {
             boxes.push(lb);
         }
     }
@@ -320,6 +328,8 @@ fn build_box_for_node(
     doc: &Document,
     node_id: NodeId,
     styles: &[Option<ComputedStyle>],
+    base_url: Option<&str>,
+    image_info: &HashMap<String, (u32, u32)>,
 ) -> Option<LayoutBox> {
     let node = doc.get(node_id);
 
@@ -334,7 +344,7 @@ fn build_box_for_node(
             let box_type = box_type_for_element(elem, &style);
 
             // Handle replaced elements.
-            if let Some(replaced) = replaced_content(elem) {
+            if let Some(replaced) = replaced_content(elem, base_url, image_info) {
                 let mut lb = LayoutBox::new(BoxType::Replaced(replaced), style, Some(node_id));
                 lb.children = Vec::new();
                 return Some(lb);
@@ -393,7 +403,7 @@ fn build_box_for_node(
 
             // Recursively build children.
             let child_ids = node.children.clone();
-            let mut child_boxes = build_children(doc, &child_ids, styles);
+            let mut child_boxes = build_children(doc, &child_ids, styles, base_url, image_info);
 
             // Insert ::before and ::after pseudo-element boxes.
             if let Some(before) = before_box {
@@ -461,18 +471,42 @@ fn resolve_list_marker(style: &ComputedStyle) -> ListMarker {
 }
 
 /// Check if an element is a replaced element and return its content.
-fn replaced_content(elem: &ElementData) -> Option<ReplacedContent> {
+///
+/// For `<img>` elements, uses decoded image intrinsic dimensions when
+/// HTML width/height attributes are missing.
+fn replaced_content(
+    elem: &ElementData,
+    base_url: Option<&str>,
+    image_info: &HashMap<String, (u32, u32)>,
+) -> Option<ReplacedContent> {
     match elem.tag {
         TagName::Img => {
-            let width = elem
+            let mut width = elem
                 .get_attribute("width")
                 .and_then(|v| v.parse::<u32>().ok())
                 .unwrap_or(0);
-            let height = elem
+            let mut height = elem
                 .get_attribute("height")
                 .and_then(|v| v.parse::<u32>().ok())
                 .unwrap_or(0);
             let alt = elem.get_attribute("alt").unwrap_or("").to_string();
+
+            // Use intrinsic dimensions from decoded image if HTML attrs
+            // are missing.
+            if let Some(src) = elem.src() {
+                let resolved = resolve_img_src(base_url, src);
+                if let Some(&(iw, ih)) = image_info.get(&resolved) {
+                    if width == 0 && height == 0 {
+                        width = iw;
+                        height = ih;
+                    } else if width == 0 && ih > 0 {
+                        width = (iw as f32 * height as f32 / ih as f32) as u32;
+                    } else if height == 0 && iw > 0 {
+                        height = (ih as f32 * width as f32 / iw as f32) as u32;
+                    }
+                }
+            }
+
             Some(ReplacedContent::Image {
                 width,
                 height,
@@ -483,6 +517,23 @@ fn replaced_content(elem: &ElementData) -> Option<ReplacedContent> {
         TagName::Hr => Some(ReplacedContent::HorizontalRule),
         TagName::Br => Some(ReplacedContent::LineBreak),
         _ => None,
+    }
+}
+
+/// Resolve an `<img src>` attribute against a base URL.
+fn resolve_img_src(base_url: Option<&str>, src: &str) -> String {
+    match base_url {
+        Some(base) => {
+            if let Some(base_parsed) = crate::loader::Url::parse(base) {
+                base_parsed
+                    .resolve(src)
+                    .map(|u| u.to_string())
+                    .unwrap_or_else(|| src.to_string())
+            } else {
+                src.to_string()
+            }
+        },
+        None => src.to_string(),
     }
 }
 

@@ -105,7 +105,15 @@ fn bench_paint(c: &mut Criterion) {
         let doc = TreeBuilder::build(tokens);
         let stylesheet = Stylesheet::parse(css);
         let styles = style_tree(&doc, &[&stylesheet], &[], &CascadeContext::default());
-        let layout = build_layout_tree(&doc, &styles, &measurer, 480.0, 272.0);
+        let layout = build_layout_tree(
+            &doc,
+            &styles,
+            &measurer,
+            480.0,
+            272.0,
+            None,
+            &std::collections::HashMap::new(),
+        );
 
         let link_map: HashMap<usize, String> = HashMap::new();
         let label = format!("{n_elements}_elements");
@@ -143,7 +151,15 @@ fn bench_full_pipeline(c: &mut Criterion) {
                     let doc = TreeBuilder::build(tokens);
                     let stylesheet = Stylesheet::parse("");
                     let styles = style_tree(&doc, &[&stylesheet], &[], &CascadeContext::default());
-                    let layout = build_layout_tree(&doc, &styles, &measurer, 480.0, 272.0);
+                    let layout = build_layout_tree(
+                        &doc,
+                        &styles,
+                        &measurer,
+                        480.0,
+                        272.0,
+                        None,
+                        &std::collections::HashMap::new(),
+                    );
                     let link_map: HashMap<usize, String> = HashMap::new();
                     paint_page(&layout, &mut backend, 0.0, 0, 0, 480.0, 272.0, &link_map)
                 });

@@ -33,6 +33,9 @@ pub use loader::{ContentType, ResourceResponse, ResourceSource, Url};
 pub use nav::{Bookmark, HistoryEntry, NavigationController};
 pub use scroll::ScrollState;
 
+/// Map from img src URL -> (intrinsic_width, intrinsic_height) for decoded images.
+pub type ImageInfoMap = HashMap<String, (u32, u32)>;
+
 // -----------------------------------------------------------------------
 // Bench/fuzz re-exports (not part of public API)
 // -----------------------------------------------------------------------
@@ -65,9 +68,10 @@ use oasis_types::error::Result;
 use oasis_types::input::{Button, InputEvent, Trigger};
 use oasis_vfs::Vfs;
 
-use html::dom::NodeId;
+use html::dom::{NodeId, NodeKind, TagName};
 use loader::cache::{CacheEntry, ResourceCache};
 use loader::{ResourceRequest, load_resource};
+use oasis_types::backend::TextureId;
 use paint::LinkRegion;
 
 // -----------------------------------------------------------------------
@@ -193,6 +197,12 @@ pub struct BrowserWidget {
 
     /// DOM node currently under the cursor (for `:hover`).
     hover_node: Option<NodeId>,
+
+    /// Decoded image data keyed by resolved src URL.
+    decoded_images: HashMap<String, image::DecodedImage>,
+
+    /// GPU textures for decoded images, keyed by src URL.
+    image_textures: HashMap<String, TextureId>,
 }
 
 impl BrowserWidget {
@@ -228,6 +238,8 @@ impl BrowserWidget {
             last_layout_w: 480,
             visited_urls: HashSet::new(),
             hover_node: None,
+            decoded_images: HashMap::new(),
+            image_textures: HashMap::new(),
         }
     }
 
@@ -270,12 +282,16 @@ impl BrowserWidget {
 
         let doc = self.document.as_ref().unwrap();
         let content_h = self.config.content_height(self.window_h);
+        let image_info = self.build_image_info_map();
+        let base_url = self.nav.current_url().map(String::from);
         let layout_root = layout::block::build_layout_tree(
             doc,
             &self.styles,
             &SimpleTextMeasurer,
             self.window_w as f32,
             content_h as f32,
+            base_url.as_deref(),
+            &image_info,
         );
 
         self.layout_root = Some(layout_root);
@@ -296,6 +312,8 @@ impl BrowserWidget {
         self.reader_mode = false;
         self.reader_html = None;
         self.error_message = None;
+        self.decoded_images.clear();
+        self.image_textures.clear();
 
         let source = if self.config.features.sandbox_only {
             ResourceSource::Vfs
@@ -319,6 +337,13 @@ impl BrowserWidget {
                 self.state = LoadingState::Error;
                 self.error_message = Some(e.to_string());
             },
+        }
+
+        // Decode images referenced by <img> tags and rebuild layout
+        // with correct intrinsic dimensions.
+        self.load_page_images(vfs);
+        if !self.decoded_images.is_empty() {
+            self.rebuild_layout_with_images();
         }
     }
 
@@ -404,12 +429,15 @@ impl BrowserWidget {
 
         // 6. Build layout tree.
         let content_h = self.config.content_height(self.window_h);
+        let image_info = self.build_image_info_map();
         let layout_root = layout::block::build_layout_tree(
             &doc,
             &styles,
             &SimpleTextMeasurer,
             self.window_w as f32,
             content_h as f32,
+            Some(url),
+            &image_info,
         );
 
         // 7. Store results.
@@ -477,6 +505,181 @@ impl BrowserWidget {
             }
         }
         result
+    }
+
+    // ---------------------------------------------------------------
+    // Image loading
+    // ---------------------------------------------------------------
+
+    /// Walk the DOM to find `<img>` elements and decode their images
+    /// from the VFS/network. Decoded image data is stored in
+    /// `self.decoded_images` keyed by resolved URL.
+    fn load_page_images(&mut self, vfs: &dyn Vfs) {
+        let doc = match &self.document {
+            Some(d) => d,
+            None => return,
+        };
+        let base_url = self.nav.current_url().map(String::from);
+
+        // Collect (resolved_url, request) pairs first to avoid
+        // borrowing `self` while iterating.
+        let mut requests: Vec<(String, ResourceRequest)> = Vec::new();
+        for node in &doc.nodes {
+            if let NodeKind::Element(elem) = &node.kind
+                && elem.tag == TagName::Img
+                && let Some(src) = elem.src()
+            {
+                let resolved = Self::resolve_src(&base_url, src);
+                if self.decoded_images.contains_key(&resolved) {
+                    continue;
+                }
+                let source = if self.config.features.sandbox_only {
+                    ResourceSource::Vfs
+                } else {
+                    ResourceSource::VfsThenNetwork
+                };
+                requests.push((
+                    resolved.clone(),
+                    ResourceRequest {
+                        url: resolved,
+                        base_url: base_url.clone(),
+                        source,
+                    },
+                ));
+            }
+        }
+
+        for (resolved, request) in &requests {
+            if let Ok(response) = load_resource(vfs, request, self.tls.as_deref())
+                && let Some(decoded) = image::decode_image(&response.body)
+            {
+                self.decoded_images.insert(resolved.clone(), decoded);
+            }
+        }
+    }
+
+    /// Build a map from decoded image URL to intrinsic dimensions.
+    fn build_image_info_map(&self) -> ImageInfoMap {
+        self.decoded_images
+            .iter()
+            .map(|(url, img)| (url.clone(), (img.width, img.height)))
+            .collect()
+    }
+
+    /// Upload decoded images as GPU textures and assign them to
+    /// `ReplacedContent::Image` nodes in the layout tree.
+    fn ensure_image_textures(&mut self, backend: &mut dyn SdiBackend) {
+        let doc = match &self.document {
+            Some(d) => d,
+            None => return,
+        };
+        let base_url = self.nav.current_url().map(String::from);
+
+        // Collect URLs that need texture creation.
+        let mut pending: Vec<String> = Vec::new();
+        for node in &doc.nodes {
+            if let NodeKind::Element(elem) = &node.kind
+                && elem.tag == TagName::Img
+                && let Some(src) = elem.src()
+            {
+                let resolved = Self::resolve_src(&base_url, src);
+                if !self.image_textures.contains_key(&resolved)
+                    && self.decoded_images.contains_key(&resolved)
+                {
+                    pending.push(resolved);
+                }
+            }
+        }
+
+        // Create textures.
+        for resolved in &pending {
+            if let Some(decoded) = self.decoded_images.get(resolved)
+                && let Ok(tex) =
+                    backend.load_texture(decoded.width, decoded.height, &decoded.pixels)
+            {
+                self.image_textures.insert(resolved.clone(), tex);
+            }
+        }
+
+        // Walk layout tree and assign textures.
+        if let Some(layout) = &mut self.layout_root {
+            Self::assign_textures_recursive(
+                layout,
+                &self.document,
+                &base_url,
+                &self.image_textures,
+            );
+        }
+    }
+
+    /// Recursively walk the layout tree and assign GPU textures to
+    /// `ReplacedContent::Image` nodes.
+    fn assign_textures_recursive(
+        layout_box: &mut layout::box_model::LayoutBox,
+        doc: &Option<html::dom::Document>,
+        base_url: &Option<String>,
+        textures: &HashMap<String, TextureId>,
+    ) {
+        if let layout::box_model::BoxType::Replaced(layout::box_model::ReplacedContent::Image {
+            ref mut texture,
+            ..
+        }) = layout_box.box_type
+            && texture.is_none()
+            && let Some(node_id) = layout_box.node
+            && let Some(doc) = doc
+        {
+            let node = doc.get(node_id);
+            if let NodeKind::Element(elem) = &node.kind
+                && let Some(src) = elem.src()
+            {
+                let resolved = Self::resolve_src(base_url, src);
+                if let Some(&tex) = textures.get(&resolved) {
+                    *texture = Some(tex);
+                }
+            }
+        }
+
+        for child in &mut layout_box.children {
+            Self::assign_textures_recursive(child, doc, base_url, textures);
+        }
+    }
+
+    /// Rebuild the layout tree with image dimensions after images have
+    /// been decoded (second layout pass).
+    fn rebuild_layout_with_images(&mut self) {
+        if let Some(doc) = &self.document {
+            let content_h = self.config.content_height(self.window_h);
+            let image_info = self.build_image_info_map();
+            let base_url = self.nav.current_url().map(String::from);
+            let layout_root = layout::block::build_layout_tree(
+                doc,
+                &self.styles,
+                &SimpleTextMeasurer,
+                self.window_w as f32,
+                content_h as f32,
+                base_url.as_deref(),
+                &image_info,
+            );
+            self.layout_root = Some(layout_root);
+            self.link_map.clear();
+        }
+    }
+
+    /// Resolve an img `src` attribute against a base URL.
+    fn resolve_src(base_url: &Option<String>, src: &str) -> String {
+        match base_url {
+            Some(base) => {
+                if let Some(base_parsed) = loader::Url::parse(base) {
+                    base_parsed
+                        .resolve(src)
+                        .map(|u| u.to_string())
+                        .unwrap_or_else(|| src.to_string())
+                } else {
+                    src.to_string()
+                }
+            },
+            None => src.to_string(),
+        }
     }
 
     /// Load and render a Gemini document.
@@ -578,6 +781,10 @@ impl BrowserWidget {
             content_h,
             self.config.default_bg_color,
         )?;
+
+        // Upload decoded images as GPU textures and assign to layout
+        // nodes (first paint after navigation).
+        self.ensure_image_textures(backend);
 
         // Paint layout tree if available.
         if let Some(layout) = &self.layout_root {
