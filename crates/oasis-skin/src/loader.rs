@@ -1,6 +1,7 @@
 //! Skin loading from TOML configuration files.
 
 use std::collections::HashMap;
+#[cfg(not(target_arch = "wasm32"))]
 use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
@@ -344,6 +345,7 @@ impl Skin {
     ///
     /// Requires `skin.toml`, `layout.toml`, and `features.toml`.
     /// Optional files: `theme.toml`, `strings.toml`, `corrupted.toml`.
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn from_directory(dir: &Path) -> Result<Self> {
         let read = |name: &str| -> Result<String> {
             let p = dir.join(name);
@@ -370,6 +372,7 @@ impl Skin {
     /// Scan a directory for skin subdirectories (those containing `skin.toml`).
     ///
     /// Returns `(name, path)` pairs sorted by name.
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn discover_skins(dir: &Path) -> Vec<(String, PathBuf)> {
         let Ok(entries) = std::fs::read_dir(dir) else {
             return Vec::new();

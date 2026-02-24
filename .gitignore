@@ -51,6 +51,9 @@ outputs/
 screenshots/tests/
 screenshots/psp/
 
+# WASM build output
+pkg/
+
 # Scratch
 scratch/
 .local/

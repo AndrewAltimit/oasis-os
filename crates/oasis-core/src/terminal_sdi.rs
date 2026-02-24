@@ -1,6 +1,6 @@
-use oasis_core::backend::{Color, TextureId};
-use oasis_core::bottombar::BottomBar;
-use oasis_core::sdi::SdiRegistry;
+use crate::backend::{Color, TextureId};
+use crate::bottombar::BottomBar;
+use crate::sdi::SdiRegistry;
 
 /// Maximum lines visible in the terminal output area (display limit).
 pub const VISIBLE_OUTPUT_LINES: usize = 12;
@@ -156,10 +156,10 @@ pub fn setup_terminal_objects(
 /// Uses `fill_rect` directly on the backend. The terminal background is at
 /// (4, 26, 472, 220). The scrollbar sits on the right edge.
 pub fn paint_terminal_scrollbar(
-    backend: &mut dyn oasis_core::backend::SdiBackend,
+    backend: &mut dyn crate::backend::SdiBackend,
     total_lines: usize,
     scroll_offset: usize,
-) -> oasis_core::error::Result<()> {
+) -> crate::error::Result<()> {
     if total_lines <= VISIBLE_OUTPUT_LINES {
         return Ok(());
     }

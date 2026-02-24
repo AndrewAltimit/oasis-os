@@ -20,6 +20,7 @@ pub use loader::{Skin, SkinFeatures, SkinLayout, SkinManifest, SkinObjectDef};
 pub use strings::SkinStrings;
 pub use theme::{BarOverrides, BrowserOverrides, IconOverrides, SkinTheme, WmThemeOverrides};
 
+#[cfg(not(target_arch = "wasm32"))]
 use std::path::Path;
 
 use oasis_types::error::Result;
@@ -31,6 +32,7 @@ use oasis_types::error::Result;
 /// 2. Path containing `skin.toml` (e.g. "skins/classic")
 /// 3. Subdirectory under `./skins/{name}/`
 /// 4. Fallback to "classic" built-in skin with a warning
+#[cfg(not(target_arch = "wasm32"))]
 pub fn resolve_skin(name_or_path: &str) -> Result<Skin> {
     // 1. Try built-in name.
     if let Ok(skin) = builtin::load_builtin(name_or_path) {
@@ -50,6 +52,25 @@ pub fn resolve_skin(name_or_path: &str) -> Result<Skin> {
     }
 
     // 4. Fallback to classic embedded skin.
+    log::warn!("Skin '{name_or_path}' not found -- falling back to classic");
+    Skin::from_toml(
+        include_str!("../../../skins/classic/skin.toml"),
+        include_str!("../../../skins/classic/layout.toml"),
+        include_str!("../../../skins/classic/features.toml"),
+    )
+}
+
+/// Resolve a skin by name (WASM -- no filesystem, built-in skins only).
+///
+/// Tries built-in name match, then falls back to "classic".
+#[cfg(target_arch = "wasm32")]
+pub fn resolve_skin(name_or_path: &str) -> Result<Skin> {
+    // 1. Try built-in name.
+    if let Ok(skin) = builtin::load_builtin(name_or_path) {
+        return Ok(skin);
+    }
+
+    // 2. Fallback to classic embedded skin.
     log::warn!("Skin '{name_or_path}' not found -- falling back to classic");
     Skin::from_toml(
         include_str!("../../../skins/classic/skin.toml"),

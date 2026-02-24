@@ -1,0 +1,15 @@
+{
+  "name": "oasis-wasm-screenshot-tests",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Playwright-based screenshot tests for the OASIS_OS WASM backend",
+  "scripts": {
+    "test": "node screenshot-test.mjs",
+    "serve": "node serve.mjs"
+  },
+  "dependencies": {
+    "playwright": "^1.50.0",
+    "pngjs": "^7.0.0"
+  }
+}

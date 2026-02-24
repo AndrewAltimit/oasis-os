@@ -920,6 +920,9 @@ impl BrowserWidget {
         // Paint chrome (URL bar + buttons).
         self.paint_chrome(backend)?;
 
+        // Close the window clip before opening a tighter content clip.
+        backend.reset_clip_rect()?;
+
         // Content viewport.
         let content_y = self.window_y + self.config.url_bar_height as i32;
         let content_h = self.config.content_height(self.window_h);
@@ -992,6 +995,16 @@ impl BrowserWidget {
         // Paint status bar.
         self.paint_status_bar(backend)?;
 
+        backend.reset_clip_rect()?;
+        Ok(())
+    }
+
+    /// Paint only the browser chrome (URL bar + status bar), skipping page
+    /// content. Used when an external iframe is rendering the page.
+    pub fn paint_chrome_only(&mut self, backend: &mut dyn SdiBackend) -> Result<()> {
+        backend.set_clip_rect(self.window_x, self.window_y, self.window_w, self.window_h)?;
+        self.paint_chrome(backend)?;
+        self.paint_status_bar(backend)?;
         backend.reset_clip_rect()?;
         Ok(())
     }
@@ -1616,6 +1629,16 @@ impl BrowserWidget {
     /// Get the window Y position (set by the WM).
     pub fn window_y(&self) -> i32 {
         self.window_y
+    }
+
+    /// Get the window width (set by the WM).
+    pub fn window_w(&self) -> u32 {
+        self.window_w
+    }
+
+    /// Get the window height (set by the WM).
+    pub fn window_h(&self) -> u32 {
+        self.window_h
     }
 
     /// Get the title of the current page.

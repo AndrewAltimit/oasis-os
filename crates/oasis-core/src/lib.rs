@@ -60,6 +60,7 @@ pub mod script;
 pub mod startmenu;
 pub mod statusbar;
 pub mod terminal;
+pub mod terminal_sdi;
 pub mod transfer;
 pub mod transition;
 pub mod update;

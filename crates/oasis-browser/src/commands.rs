@@ -158,6 +158,7 @@ impl Command for FetchCmd {
         }
 
         // VFS miss -- try HTTP(S) for http:// and https:// URLs.
+        #[cfg(not(target_arch = "wasm32"))]
         if (url.starts_with("http://") || url.starts_with("https://"))
             && let Some(parsed) = super::loader::Url::parse(url)
         {

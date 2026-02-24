@@ -9,7 +9,6 @@ use crate::backend::Color;
 use crate::input::Button;
 use crate::sdi::SdiRegistry;
 use crate::sdi::helpers::{ensure_rounded_fill, ensure_text, hide_objects};
-use crate::theme;
 
 // -- Layout constants ---------------------------------------------------------
 
@@ -101,7 +100,7 @@ impl StartMenuState {
         let menu_h = header_h
             + (PAD_TOP + rows as i32 * at.sm_item_row_height + PAD_BOTTOM) as u32
             + footer_h;
-        let bar_y = (theme::SCREEN_H - at.bottombar_height) as i32;
+        let bar_y = (at.screen_h - at.bottombar_height) as i32;
         let btn_y = bar_y + 3;
         let menu_y = bar_y - menu_h as i32 - 2;
         Self {
@@ -669,7 +668,7 @@ mod tests {
         // 6 items in 2 cols = 3 rows, default item_row_height = 22.
         let expected_h = (PAD_TOP + 3 * at.sm_item_row_height + PAD_BOTTOM) as u32;
         assert_eq!(sm.menu_h, expected_h);
-        let bar_y = (theme::SCREEN_H - at.bottombar_height) as i32;
+        let bar_y = (at.screen_h - at.bottombar_height) as i32;
         assert!(sm.menu_y < bar_y);
     }
 }

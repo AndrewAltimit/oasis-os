@@ -1,0 +1,43 @@
+/* OASIS_OS browser shell */
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+body {
+  background: #0a0a12;
+  color: #c8c8d0;
+  font-family: "Courier New", Courier, monospace;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  min-height: 100vh;
+  overflow: hidden;
+}
+
+#container {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  width: 100%;
+  height: 100vh;
+  padding: 0;
+  gap: 0;
+}
+
+/* Canvas — scales to fill viewport while preserving aspect ratio */
+#oasis {
+  width: 100%;
+  height: 100vh;
+  object-fit: contain;
+  image-rendering: pixelated;
+  image-rendering: crisp-edges;
+  border: none;
+  border-radius: 0;
+  background: #000;
+  cursor: none;
+  outline: none;
+}

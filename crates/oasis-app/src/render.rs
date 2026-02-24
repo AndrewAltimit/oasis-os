@@ -4,7 +4,7 @@ use oasis_core::sdi::SdiRegistry;
 use oasis_core::statusbar::StatusBar;
 
 use crate::app_state::{AppState, Mode};
-use crate::terminal_sdi;
+use oasis_core::terminal_sdi;
 
 /// Update the SDI scene graph based on the current mode.
 ///

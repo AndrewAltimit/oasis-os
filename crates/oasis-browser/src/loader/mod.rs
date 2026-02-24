@@ -2,7 +2,9 @@
 //! orchestration.
 
 pub mod cache;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod gemini_fetch;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod http;
 pub mod vfs;
 
@@ -377,6 +379,7 @@ pub fn load_resource(
 }
 
 /// Load a resource over the network (HTTP/HTTPS).
+#[cfg(not(target_arch = "wasm32"))]
 fn load_from_network(
     request: &ResourceRequest,
     tls: Option<&dyn oasis_net::tls::TlsProvider>,
@@ -392,6 +395,18 @@ fn load_from_network(
             "unsupported network scheme: {scheme}",
         ))),
     }
+}
+
+/// Stub network loader for WASM builds (no TCP sockets in browsers).
+#[cfg(target_arch = "wasm32")]
+fn load_from_network(
+    request: &ResourceRequest,
+    _tls: Option<&dyn oasis_net::tls::TlsProvider>,
+) -> Result<ResourceResponse> {
+    Err(oasis_types::error::OasisError::Backend(format!(
+        "network loading not available in browser: {}",
+        request.url,
+    )))
 }
 
 // ---------------------------------------------------------------------------
