@@ -82,10 +82,14 @@ impl SelectorIndex {
                 // Count declarations for source_order advancement.
                 source_order += rule.declarations.len();
 
-                // Examine all selectors in the rule to find which
-                // buckets this rule should appear in.
-                let mut filed = false;
+                // Examine each selector individually. If a selector's
+                // subject has an id/class/tag key, file the rule in
+                // that bucket. If any selector has NO such key (e.g.
+                // `*:hover`), the rule must also go into `universal`
+                // so non-keyed elements can still match it.
+                let mut needs_universal = false;
                 for selector in &rule.selectors.selectors {
+                    let mut selector_filed = false;
                     if let Some(subject) = selector.parts.last() {
                         for simple in &subject.0.parts {
                             match simple {
@@ -95,11 +99,15 @@ impl SelectorIndex {
                                         .entry(id.to_ascii_lowercase())
                                         .or_default()
                                         .push(entry);
-                                    filed = true;
+                                    selector_filed = true;
                                 },
                                 SimpleSelector::Class(cls) => {
-                                    index.by_class.entry(cls.clone()).or_default().push(entry);
-                                    filed = true;
+                                    index
+                                        .by_class
+                                        .entry(cls.clone())
+                                        .or_default()
+                                        .push(entry);
+                                    selector_filed = true;
                                 },
                                 SimpleSelector::Type(tag) => {
                                     index
@@ -107,16 +115,19 @@ impl SelectorIndex {
                                         .entry(tag.to_ascii_lowercase())
                                         .or_default()
                                         .push(entry);
-                                    filed = true;
+                                    selector_filed = true;
                                 },
                                 _ => {},
                             }
                         }
                     }
+                    if !selector_filed {
+                        needs_universal = true;
+                    }
                 }
-                // If no specific bucket matched (e.g. `*`, `:hover`,
-                // `:not(...)` only), put it in universal.
-                if !filed {
+                // If any selector had no id/class/tag key (e.g. `*`,
+                // `:hover`, `:not(...)` only), put it in universal.
+                if needs_universal {
                     index.universal.push(entry);
                 }
             }
@@ -303,7 +314,9 @@ pub fn compute_style(
 }
 
 /// Find the `content` property value from matching ::before or ::after
-/// rules for a given element.
+/// rules for a given element. Respects cascade ordering (important,
+/// specificity, source order) so that higher-specificity rules win
+/// regardless of source order.
 fn resolve_pseudo_content(
     doc: &Document,
     node_id: NodeId,
@@ -311,36 +324,50 @@ fn resolve_pseudo_content(
     stylesheets: &[&Stylesheet],
     ctx: &CascadeContext<'_>,
 ) -> Option<String> {
-    let mut content: Option<String> = None;
+    // Collect all matching content declarations with cascade metadata.
+    let mut matched: Vec<(bool, Specificity, usize, CssValue)> = Vec::new();
+    let mut source_order: usize = 0;
 
     for stylesheet in stylesheets {
         for rule in &stylesheet.rules {
+            let decl_base = source_order;
+            source_order += rule.declarations.len();
+
             for selector in &rule.selectors.selectors {
                 if selector_pseudo_element(selector) != Some(pseudo) {
                     continue;
                 }
-                // Check if the non-pseudo part of the selector matches.
-                if matches_selector_ignoring_pseudo(doc, node_id, selector, ctx) {
-                    // Extract the `content` declaration.
-                    for decl in &rule.declarations {
-                        if decl.property == "content" {
-                            match &decl.value {
-                                CssValue::String(s) => {
-                                    content = Some(s.clone());
-                                },
-                                CssValue::Keyword(kw) if kw == "none" || kw == "normal" => {
-                                    content = None;
-                                },
-                                _ => {},
-                            }
-                        }
+                if !matches_selector_ignoring_pseudo(doc, node_id, selector, ctx) {
+                    continue;
+                }
+                let specificity = selector.specificity();
+                for (i, decl) in rule.declarations.iter().enumerate() {
+                    if decl.property == "content" {
+                        matched.push((
+                            decl.important,
+                            specificity,
+                            decl_base + i,
+                            decl.value.clone(),
+                        ));
                     }
                 }
             }
         }
     }
 
-    content
+    // Sort by cascade order: !important, then specificity, then source order.
+    matched.sort_by(|a, b| {
+        a.0.cmp(&b.0)
+            .then_with(|| a.1.cmp(&b.1))
+            .then_with(|| a.2.cmp(&b.2))
+    });
+
+    // The last entry after sorting wins.
+    matched.last().and_then(|(_, _, _, value)| match value {
+        CssValue::String(s) => Some(s.clone()),
+        CssValue::Keyword(kw) if kw == "none" || kw == "normal" => None,
+        _ => None,
+    })
 }
 
 /// Match a selector against a node, ignoring any pseudo-element part.
@@ -2505,6 +2532,57 @@ mod tests {
         // Element with class "cls" gets universal + .cls.
         let candidates = index.candidates("div", None, &["cls"]);
         assert_eq!(candidates.len(), 2, "universal + class");
+    }
+
+    #[test]
+    fn selector_index_mixed_selector_list() {
+        // A rule with both a keyed selector (.foo) and a non-keyed
+        // selector (*) must appear in universal so that non-.foo
+        // elements still match via the `*` selector.
+        let sheet = Stylesheet::parse("*, .foo { color: red; }");
+        let index = SelectorIndex::build(&[&sheet]);
+
+        // Element without class "foo" should still get the rule via universal.
+        let candidates = index.candidates("div", None, &[]);
+        assert_eq!(
+            candidates.len(),
+            1,
+            "non-.foo element should match via universal bucket"
+        );
+
+        // Element with class "foo" gets the rule via both .foo bucket
+        // and universal, but dedup should give exactly 1.
+        let candidates = index.candidates("div", None, &["foo"]);
+        assert_eq!(
+            candidates.len(),
+            1,
+            "dedup should collapse .foo + universal into 1"
+        );
+    }
+
+    #[test]
+    fn pseudo_content_respects_specificity() {
+        // Higher-specificity rule (.special::before) should win even
+        // when it appears before a lower-specificity rule (p::before).
+        let sheet = Stylesheet::parse(
+            ".special::before { content: \"B\"; } p::before { content: \"A\"; }",
+        );
+        // Build a <p class="special"> element (node 3 in make_doc).
+        let doc = make_doc(vec![(
+            TagName::P,
+            vec![Attribute {
+                name: "class".into(),
+                value: "special".into(),
+            }],
+        )]);
+        let ctx = ctx();
+        let p_id = 3; // first body child in make_doc
+        let result = resolve_pseudo_content(&doc, p_id, "before", &[&sheet], &ctx);
+        assert_eq!(
+            result,
+            Some("B".to_string()),
+            ".special::before (higher specificity) should beat p::before",
+        );
     }
 
     #[test]
