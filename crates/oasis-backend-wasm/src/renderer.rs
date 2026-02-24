@@ -26,6 +26,15 @@ fn js_err<E: std::fmt::Debug>(e: E) -> OasisError {
     OasisError::Backend(format!("{e:?}"))
 }
 
+fn get_2d_context(canvas: &HtmlCanvasElement) -> Result<CanvasRenderingContext2d> {
+    canvas
+        .get_context("2d")
+        .map_err(js_err)?
+        .ok_or_else(|| OasisError::Backend("no 2d context".into()))?
+        .dyn_into::<CanvasRenderingContext2d>()
+        .map_err(js_err)
+}
+
 // ---------------------------------------------------------------------------
 // Texture storage
 // ---------------------------------------------------------------------------
@@ -102,6 +111,19 @@ impl WasmBackend {
         let (tx, ty) = self.cumulative_translate;
         ((x + tx) as f64, (y + ty) as f64)
     }
+
+    /// Create an offscreen `<canvas>` for texture operations.
+    fn make_offscreen(&self, w: u32, h: u32) -> Result<HtmlCanvasElement> {
+        let doc = web_sys::window()
+            .ok_or_else(|| OasisError::Backend("no window".into()))?
+            .document()
+            .ok_or_else(|| OasisError::Backend("no document".into()))?;
+        let el = doc.create_element("canvas").map_err(js_err)?;
+        let c = el.dyn_into::<HtmlCanvasElement>().map_err(js_err)?;
+        c.set_width(w);
+        c.set_height(h);
+        Ok(c)
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -148,36 +170,59 @@ impl SdiBackend for WasmBackend {
         font_size: u16,
         color: Color,
     ) -> Result<()> {
+        self.draw_text_styled(text, x, y, font_size, color, false, false)
+    }
+
+    fn draw_text_styled(
+        &mut self,
+        text: &str,
+        x: i32,
+        y: i32,
+        font_size: u16,
+        color: Color,
+        bold: bool,
+        italic: bool,
+    ) -> Result<()> {
         if text.is_empty() || color.a == 0 || font_size == 0 {
             return Ok(());
         }
         let (tx, ty) = self.translate(x, y);
-
-        // Use bitmap font rasteriser for pixel-perfect consistency with other
-        // backends. Each glyph is an 8x8 bitmap scaled by font_size/8.
-        let scale = f64::from(font_size) / 8.0;
+        let fs = font_size.max(1) as i32;
         self.ctx.set_fill_style_str(&color_to_css(color));
 
-        let mut cx = tx;
+        let mut cx = tx as i32;
         for ch in text.chars() {
             let glyph = font::glyph(ch);
-            let (left, _advance) = font::glyph_metrics(ch);
-            cx += f64::from(left) * scale;
-
-            for row in 0..8u8 {
+            let (left_pad, _advance) = font::glyph_metrics(ch);
+            let left_pad = left_pad as i32;
+            for row in 0..8i32 {
                 let bits = glyph[row as usize];
-                for col in 0..8u8 {
-                    if bits & (1 << (7 - col)) != 0 {
-                        self.ctx.fill_rect(
-                            cx + f64::from(col) * scale,
-                            ty + f64::from(row) * scale,
-                            scale.ceil(),
-                            scale.ceil(),
-                        );
+                if bits == 0 {
+                    continue;
+                }
+                let oy0 = row * fs / 8;
+                let oy1 = (row + 1) * fs / 8;
+                let rh = (oy1 - oy0).max(1);
+                // Faux-italic: shift top rows rightward (~12-degree).
+                let italic_offset = if italic { (7 - row) * fs / 32 } else { 0 };
+                for col in 0..8i32 {
+                    if bits & (0x80 >> col) != 0 {
+                        let src_col = col - left_pad;
+                        let ox0 = src_col * fs / 8;
+                        let ox1 = (src_col + 1) * fs / 8;
+                        let rw = (ox1 - ox0).max(1);
+                        let px = cx + ox0 + italic_offset;
+                        let py = ty as i32 + oy0;
+                        self.ctx
+                            .fill_rect(px as f64, py as f64, rw as f64, rh as f64);
+                        if bold {
+                            self.ctx
+                                .fill_rect((px + 1) as f64, py as f64, 1.0, rh as f64);
+                        }
                     }
                 }
             }
-            cx += font::glyph_advance_scaled(ch, font_size) as f64;
+            cx += font::glyph_advance_scaled(ch, font_size) as i32;
         }
         Ok(())
     }
@@ -204,23 +249,8 @@ impl SdiBackend for WasmBackend {
                 .map_err(js_err)?;
         } else {
             // Create an offscreen canvas for scaling.
-            let doc = web_sys::window()
-                .ok_or_else(|| OasisError::Backend("no window".into()))?
-                .document()
-                .ok_or_else(|| OasisError::Backend("no document".into()))?;
-            let offscreen = doc
-                .create_element("canvas")
-                .map_err(js_err)?
-                .dyn_into::<HtmlCanvasElement>()
-                .map_err(js_err)?;
-            offscreen.set_width(td.width);
-            offscreen.set_height(td.height);
-            let off_ctx = offscreen
-                .get_context("2d")
-                .map_err(js_err)?
-                .ok_or_else(|| OasisError::Backend("offscreen ctx".into()))?
-                .dyn_into::<CanvasRenderingContext2d>()
-                .map_err(js_err)?;
+            let offscreen = self.make_offscreen(td.width, td.height)?;
+            let off_ctx = get_2d_context(&offscreen)?;
             off_ctx
                 .put_image_data(&image_data, 0.0, 0.0)
                 .map_err(js_err)?;
@@ -680,6 +710,105 @@ impl SdiBackend for WasmBackend {
     // -------------------------------------------------------------------
     // Extended: texture operations
     // -------------------------------------------------------------------
+
+    fn blit_sub(
+        &mut self,
+        tex: TextureId,
+        src_x: u32,
+        src_y: u32,
+        src_w: u32,
+        src_h: u32,
+        dst_x: i32,
+        dst_y: i32,
+        dst_w: u32,
+        dst_h: u32,
+    ) -> Result<()> {
+        let td = self
+            .textures
+            .get(&tex.0)
+            .ok_or_else(|| OasisError::Backend(format!("texture {} not found", tex.0)))?;
+
+        let image_data = ImageData::new_with_u8_clamped_array_and_sh(
+            wasm_bindgen::Clamped(&td.data),
+            td.width,
+            td.height,
+        )
+        .map_err(js_err)?;
+
+        let (tx, ty) = self.translate(dst_x, dst_y);
+
+        // Use an offscreen canvas so we can use the 9-argument drawImage for
+        // sub-rect rendering.
+        let offscreen = self.make_offscreen(td.width, td.height)?;
+        let off_ctx = get_2d_context(&offscreen)?;
+        off_ctx
+            .put_image_data(&image_data, 0.0, 0.0)
+            .map_err(js_err)?;
+        self.ctx
+            .draw_image_with_html_canvas_element_and_sw_and_sh_and_dx_and_dy_and_dw_and_dh(
+                &offscreen,
+                src_x as f64,
+                src_y as f64,
+                src_w as f64,
+                src_h as f64,
+                tx,
+                ty,
+                dst_w as f64,
+                dst_h as f64,
+            )
+            .map_err(js_err)?;
+        Ok(())
+    }
+
+    fn blit_flipped(
+        &mut self,
+        tex: TextureId,
+        x: i32,
+        y: i32,
+        w: u32,
+        h: u32,
+        flip_h: bool,
+        flip_v: bool,
+    ) -> Result<()> {
+        if !flip_h && !flip_v {
+            return self.blit(tex, x, y, w, h);
+        }
+
+        let td = self
+            .textures
+            .get(&tex.0)
+            .ok_or_else(|| OasisError::Backend(format!("texture {} not found", tex.0)))?;
+
+        let image_data = ImageData::new_with_u8_clamped_array_and_sh(
+            wasm_bindgen::Clamped(&td.data),
+            td.width,
+            td.height,
+        )
+        .map_err(js_err)?;
+
+        let (tx, ty) = self.translate(x, y);
+        let fw = w as f64;
+        let fh = h as f64;
+
+        let offscreen = self.make_offscreen(td.width, td.height)?;
+        let off_ctx = get_2d_context(&offscreen)?;
+        off_ctx
+            .put_image_data(&image_data, 0.0, 0.0)
+            .map_err(js_err)?;
+
+        // Apply flip via scale transform.
+        self.ctx.save();
+        let sx = if flip_h { -1.0 } else { 1.0 };
+        let sy = if flip_v { -1.0 } else { 1.0 };
+        let dx = if flip_h { -(tx + fw) } else { tx };
+        let dy = if flip_v { -(ty + fh) } else { ty };
+        self.ctx.scale(sx, sy).map_err(js_err)?;
+        self.ctx
+            .draw_image_with_html_canvas_element_and_dw_and_dh(&offscreen, dx, dy, fw, fh)
+            .map_err(js_err)?;
+        self.ctx.restore();
+        Ok(())
+    }
 
     fn blit_tinted(
         &mut self,

@@ -249,6 +249,16 @@ impl OasisWasm {
         result
     }
 
+    /// Read the current framebuffer as RGBA pixel data.
+    ///
+    /// Returns a flat `Vec<u8>` of length `width * height * 4` in RGBA order.
+    /// Useful for screenshot capture from JavaScript (e.g. Playwright tests).
+    pub fn read_pixels(&self) -> Vec<u8> {
+        self.backend
+            .read_pixels(0, 0, self.width, self.height)
+            .unwrap_or_default()
+    }
+
     /// Add a file to the in-memory VFS.
     pub fn add_vfs_file(&mut self, path: &str, data: &[u8]) {
         let _ = self.vfs.write(path, data);

@@ -17,6 +17,10 @@ async function boot() {
   const skinParam = new URLSearchParams(window.location.search).get("skin");
   oasis = new OasisWasm("oasis", skinParam || undefined);
 
+  // Expose instance globally for automated tests (e.g. Playwright).
+  window.__oasis = oasis;
+  window.__oasisReady = true;
+
   setupTerminal();
   requestAnimationFrame(tick);
 }
