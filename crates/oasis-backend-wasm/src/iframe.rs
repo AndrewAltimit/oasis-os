@@ -110,15 +110,29 @@ impl IframeOverlay {
     }
 
     /// Map canvas-pixel coordinates to CSS viewport coordinates and apply.
+    ///
+    /// The canvas uses `object-fit: contain`, so the rendered content is
+    /// letterboxed inside the element. We must compute the actual content
+    /// rect (excluding black bars) before mapping coordinates.
     fn apply_position(&self, cx: i32, cy: i32, cw: u32, ch: u32) {
         let rect = self.canvas.get_bounding_client_rect();
-        let scale_x = rect.width() / self.canvas.width() as f64;
-        let scale_y = rect.height() / self.canvas.height() as f64;
+        let elem_w = rect.width();
+        let elem_h = rect.height();
+        let canvas_w = self.canvas.width() as f64;
+        let canvas_h = self.canvas.height() as f64;
 
-        let left = rect.left() + cx as f64 * scale_x;
-        let top = rect.top() + cy as f64 * scale_y;
-        let width = cw as f64 * scale_x;
-        let height = ch as f64 * scale_y;
+        // Compute the rendered content rect inside the element, accounting
+        // for object-fit: contain letterboxing.
+        let scale = (elem_w / canvas_w).min(elem_h / canvas_h);
+        let rendered_w = canvas_w * scale;
+        let rendered_h = canvas_h * scale;
+        let offset_x = (elem_w - rendered_w) / 2.0;
+        let offset_y = (elem_h - rendered_h) / 2.0;
+
+        let left = rect.left() + offset_x + cx as f64 * scale;
+        let top = rect.top() + offset_y + cy as f64 * scale;
+        let width = cw as f64 * scale;
+        let height = ch as f64 * scale;
 
         let style = self.iframe.style();
         let _ = style.set_property("left", &format!("{left:.1}px"));

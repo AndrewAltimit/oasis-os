@@ -185,7 +185,9 @@ impl OasisWasm {
         populate_wasm_vfs(&mut vfs);
 
         let active_theme = ActiveTheme::from_skin(&skin.theme).with_screen_size(width, height);
-        let browser_config = BrowserConfig::from_skin_theme(&skin.theme);
+        let mut browser_config = BrowserConfig::from_skin_theme(&skin.theme);
+        // In WASM mode, use Google's iframe-compatible search page as home.
+        browser_config.features.home_url = "https://www.google.com/webhp?igu=1".to_string();
 
         // Apply skin layout and discover apps.
         skin.apply_layout(&mut sdi);
