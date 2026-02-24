@@ -14,14 +14,6 @@ use crate::font;
 // Helpers
 // ---------------------------------------------------------------------------
 
-fn color_to_css(c: Color) -> String {
-    if c.a == 255 {
-        format!("rgb({},{},{})", c.r, c.g, c.b)
-    } else {
-        format!("rgba({},{},{},{})", c.r, c.g, c.b, f64::from(c.a) / 255.0)
-    }
-}
-
 fn js_err<E: std::fmt::Debug>(e: E) -> OasisError {
     OasisError::Backend(format!("{e:?}"))
 }
@@ -35,14 +27,67 @@ fn get_2d_context(canvas: &HtmlCanvasElement) -> Result<CanvasRenderingContext2d
         .map_err(js_err)
 }
 
+/// Return cached CSS color string, allocating only on first use per color.
+fn cached_css_color(cache: &mut HashMap<u32, String>, c: Color) -> &str {
+    let key = (c.r as u32) << 24 | (c.g as u32) << 16 | (c.b as u32) << 8 | c.a as u32;
+    cache.entry(key).or_insert_with(|| {
+        if c.a == 255 {
+            format!("rgb({},{},{})", c.r, c.g, c.b)
+        } else {
+            format!("rgba({},{},{},{})", c.r, c.g, c.b, f64::from(c.a) / 255.0)
+        }
+    })
+}
+
 // ---------------------------------------------------------------------------
 // Texture storage
 // ---------------------------------------------------------------------------
 
 struct TextureData {
-    data: Vec<u8>,
-    width: u32,
-    height: u32,
+    canvas: HtmlCanvasElement,
+}
+
+// ---------------------------------------------------------------------------
+// Glyph cache key
+// ---------------------------------------------------------------------------
+
+/// Packs `(char, font_size, rgba, bold, italic)` into a `u64` for hashing.
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+struct GlyphCacheKey(u64);
+
+impl GlyphCacheKey {
+    fn new(ch: char, font_size: u16, color: Color, bold: bool, italic: bool) -> Self {
+        // char: 21 bits, font_size: 16 bits, rgba: 25 bits (r5 g5 b5 a8 + 2 flags)
+        // Total ≤ 64 bits.
+        let c = ch as u64 & 0x1F_FFFF; // 21 bits
+        let fs = (font_size as u64) & 0xFFFF; // 16 bits
+        let r5 = (color.r as u64 >> 3) & 0x1F; // 5 bits
+        let g5 = (color.g as u64 >> 3) & 0x1F; // 5 bits
+        let b5 = (color.b as u64 >> 3) & 0x1F; // 5 bits
+        let a = color.a as u64; // 8 bits
+        let flags = (bold as u64) | ((italic as u64) << 1); // 2 bits
+        Self(c | (fs << 21) | (r5 << 37) | (g5 << 42) | (b5 << 47) | (a << 52) | (flags << 60))
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Gradient cache key
+// ---------------------------------------------------------------------------
+
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+struct GradientCacheKey {
+    kind: u8,
+    x: i32,
+    y: i32,
+    extent: u32,
+    color_a: u32,
+    color_b: u32,
+}
+
+impl GradientCacheKey {
+    fn pack_color(c: Color) -> u32 {
+        (c.r as u32) << 24 | (c.g as u32) << 16 | (c.b as u32) << 8 | c.a as u32
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -71,6 +116,9 @@ pub struct WasmBackend {
     clip_stack: Vec<ClipRect>,
     translate_stack: Vec<(i32, i32)>,
     cumulative_translate: (i32, i32),
+    color_cache: HashMap<u32, String>,
+    glyph_cache: HashMap<GlyphCacheKey, HtmlCanvasElement>,
+    gradient_cache: HashMap<GradientCacheKey, web_sys::CanvasGradient>,
 }
 
 impl WasmBackend {
@@ -99,6 +147,9 @@ impl WasmBackend {
             clip_stack: Vec::new(),
             translate_stack: Vec::new(),
             cumulative_translate: (0, 0),
+            color_cache: HashMap::new(),
+            glyph_cache: HashMap::new(),
+            gradient_cache: HashMap::new(),
         })
     }
 
@@ -124,6 +175,83 @@ impl WasmBackend {
         c.set_height(h);
         Ok(c)
     }
+
+    /// Pre-render RGBA data onto an offscreen canvas (used at load_texture time).
+    fn rgba_to_offscreen(&self, width: u32, height: u32, rgba: &[u8]) -> Result<HtmlCanvasElement> {
+        let offscreen = self.make_offscreen(width, height)?;
+        let off_ctx = get_2d_context(&offscreen)?;
+        let image_data =
+            ImageData::new_with_u8_clamped_array_and_sh(wasm_bindgen::Clamped(rgba), width, height)
+                .map_err(js_err)?;
+        off_ctx
+            .put_image_data(&image_data, 0.0, 0.0)
+            .map_err(js_err)?;
+        Ok(offscreen)
+    }
+
+    /// Render a single glyph character to an offscreen canvas.
+    fn render_glyph_to_canvas(
+        &self,
+        ch: char,
+        font_size: u16,
+        color: Color,
+        bold: bool,
+        italic: bool,
+    ) -> Result<HtmlCanvasElement> {
+        let fs = font_size.max(1) as i32;
+        // Canvas size: character advance width + italic extra + bold extra.
+        let advance = font::glyph_advance_scaled(ch, font_size);
+        let italic_extra = if italic { fs as u32 / 4 } else { 0 };
+        let bold_extra = if bold { 1 } else { 0 };
+        let cw = (advance + italic_extra + bold_extra).max(1);
+        let ch_height = fs as u32;
+
+        let offscreen = self.make_offscreen(cw, ch_height)?;
+        let off_ctx = get_2d_context(&offscreen)?;
+
+        let css = if color.a == 255 {
+            format!("rgb({},{},{})", color.r, color.g, color.b)
+        } else {
+            format!(
+                "rgba({},{},{},{})",
+                color.r,
+                color.g,
+                color.b,
+                f64::from(color.a) / 255.0
+            )
+        };
+        off_ctx.set_fill_style_str(&css);
+
+        let glyph = font::glyph(ch);
+        let (left_pad, _) = font::glyph_metrics(ch);
+        let left_pad = left_pad as i32;
+
+        for row in 0..8i32 {
+            let bits = glyph[row as usize];
+            if bits == 0 {
+                continue;
+            }
+            let oy0 = row * fs / 8;
+            let oy1 = (row + 1) * fs / 8;
+            let rh = (oy1 - oy0).max(1);
+            let italic_offset = if italic { (7 - row) * fs / 32 } else { 0 };
+            for col in 0..8i32 {
+                if bits & (0x80 >> col) != 0 {
+                    let src_col = col - left_pad;
+                    let ox0 = src_col * fs / 8;
+                    let ox1 = (src_col + 1) * fs / 8;
+                    let rw = (ox1 - ox0).max(1);
+                    let px = ox0 + italic_offset;
+                    let py = oy0;
+                    off_ctx.fill_rect(px as f64, py as f64, rw as f64, rh as f64);
+                    if bold {
+                        off_ctx.fill_rect((px + 1) as f64, py as f64, 1.0, rh as f64);
+                    }
+                }
+            }
+        }
+        Ok(offscreen)
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -137,13 +265,18 @@ impl SdiBackend for WasmBackend {
         self.canvas.set_width(width);
         self.canvas.set_height(height);
         self.ctx.set_image_smoothing_enabled(false);
+        self.glyph_cache.clear();
+        self.color_cache.clear();
+        self.gradient_cache.clear();
         Ok(())
     }
 
     fn clear(&mut self, color: Color) -> Result<()> {
-        self.ctx.set_fill_style_str(&color_to_css(color));
+        let css = cached_css_color(&mut self.color_cache, color);
+        self.ctx.set_fill_style_str(css);
         self.ctx
             .fill_rect(0.0, 0.0, self.width as f64, self.height as f64);
+        self.gradient_cache.clear();
         Ok(())
     }
 
@@ -157,7 +290,8 @@ impl SdiBackend for WasmBackend {
             return Ok(());
         }
         let (tx, ty) = self.translate(x, y);
-        self.ctx.set_fill_style_str(&color_to_css(color));
+        let css = cached_css_color(&mut self.color_cache, color);
+        self.ctx.set_fill_style_str(css);
         self.ctx.fill_rect(tx, ty, w as f64, h as f64);
         Ok(())
     }
@@ -187,41 +321,18 @@ impl SdiBackend for WasmBackend {
             return Ok(());
         }
         let (tx, ty) = self.translate(x, y);
-        let fs = font_size.max(1) as i32;
-        self.ctx.set_fill_style_str(&color_to_css(color));
-
         let mut cx = tx as i32;
+
         for ch in text.chars() {
-            let glyph = font::glyph(ch);
-            let (left_pad, _advance) = font::glyph_metrics(ch);
-            let left_pad = left_pad as i32;
-            for row in 0..8i32 {
-                let bits = glyph[row as usize];
-                if bits == 0 {
-                    continue;
-                }
-                let oy0 = row * fs / 8;
-                let oy1 = (row + 1) * fs / 8;
-                let rh = (oy1 - oy0).max(1);
-                // Faux-italic: shift top rows rightward (~12-degree).
-                let italic_offset = if italic { (7 - row) * fs / 32 } else { 0 };
-                for col in 0..8i32 {
-                    if bits & (0x80 >> col) != 0 {
-                        let src_col = col - left_pad;
-                        let ox0 = src_col * fs / 8;
-                        let ox1 = (src_col + 1) * fs / 8;
-                        let rw = (ox1 - ox0).max(1);
-                        let px = cx + ox0 + italic_offset;
-                        let py = ty as i32 + oy0;
-                        self.ctx
-                            .fill_rect(px as f64, py as f64, rw as f64, rh as f64);
-                        if bold {
-                            self.ctx
-                                .fill_rect((px + 1) as f64, py as f64, 1.0, rh as f64);
-                        }
-                    }
-                }
+            let key = GlyphCacheKey::new(ch, font_size, color, bold, italic);
+            if !self.glyph_cache.contains_key(&key) {
+                let canvas = self.render_glyph_to_canvas(ch, font_size, color, bold, italic)?;
+                self.glyph_cache.insert(key, canvas);
             }
+            let glyph_canvas = &self.glyph_cache[&key];
+            self.ctx
+                .draw_image_with_html_canvas_element(glyph_canvas, cx as f64, ty)
+                .map_err(js_err)?;
             cx += font::glyph_advance_scaled(ch, font_size) as i32;
         }
         Ok(())
@@ -232,34 +343,12 @@ impl SdiBackend for WasmBackend {
             .textures
             .get(&tex.0)
             .ok_or_else(|| OasisError::Backend(format!("texture {} not found", tex.0)))?;
-
-        let image_data = ImageData::new_with_u8_clamped_array_and_sh(
-            wasm_bindgen::Clamped(&td.data),
-            td.width,
-            td.height,
-        )
-        .map_err(js_err)?;
-
         let (tx, ty) = self.translate(x, y);
-
-        // If destination size matches source, use putImageData for speed.
-        if w == td.width && h == td.height {
-            self.ctx
-                .put_image_data(&image_data, tx, ty)
-                .map_err(js_err)?;
-        } else {
-            // Create an offscreen canvas for scaling.
-            let offscreen = self.make_offscreen(td.width, td.height)?;
-            let off_ctx = get_2d_context(&offscreen)?;
-            off_ctx
-                .put_image_data(&image_data, 0.0, 0.0)
-                .map_err(js_err)?;
-            self.ctx
-                .draw_image_with_html_canvas_element_and_dw_and_dh(
-                    &offscreen, tx, ty, w as f64, h as f64,
-                )
-                .map_err(js_err)?;
-        }
+        self.ctx
+            .draw_image_with_html_canvas_element_and_dw_and_dh(
+                &td.canvas, tx, ty, w as f64, h as f64,
+            )
+            .map_err(js_err)?;
         Ok(())
     }
 
@@ -271,16 +360,10 @@ impl SdiBackend for WasmBackend {
                 rgba_data.len()
             )));
         }
+        let canvas = self.rgba_to_offscreen(width, height, rgba_data)?;
         let id = self.next_texture_id;
         self.next_texture_id += 1;
-        self.textures.insert(
-            id,
-            TextureData {
-                data: rgba_data.to_vec(),
-                width,
-                height,
-            },
-        );
+        self.textures.insert(id, TextureData { canvas });
         Ok(TextureId(id))
     }
 
@@ -317,6 +400,9 @@ impl SdiBackend for WasmBackend {
 
     fn shutdown(&mut self) -> Result<()> {
         self.textures.clear();
+        self.glyph_cache.clear();
+        self.color_cache.clear();
+        self.gradient_cache.clear();
         Ok(())
     }
 
@@ -358,7 +444,8 @@ impl SdiBackend for WasmBackend {
         self.ctx.line_to(tx, ty + r);
         self.ctx.arc_to(tx, ty, tx + r, ty, r).map_err(js_err)?;
         self.ctx.close_path();
-        self.ctx.set_fill_style_str(&color_to_css(color));
+        let css = cached_css_color(&mut self.color_cache, color);
+        self.ctx.set_fill_style_str(css);
         self.ctx.fill();
         Ok(())
     }
@@ -376,7 +463,8 @@ impl SdiBackend for WasmBackend {
             return Ok(());
         }
         let (tx, ty) = self.translate(x, y);
-        self.ctx.set_stroke_style_str(&color_to_css(color));
+        let css = cached_css_color(&mut self.color_cache, color);
+        self.ctx.set_stroke_style_str(css);
         self.ctx.set_line_width(f64::from(stroke_width));
         let offset = f64::from(stroke_width) / 2.0;
         self.ctx.stroke_rect(
@@ -427,7 +515,8 @@ impl SdiBackend for WasmBackend {
         self.ctx.line_to(bx, by + r);
         self.ctx.arc_to(bx, by, bx + r, by, r).map_err(js_err)?;
         self.ctx.close_path();
-        self.ctx.set_stroke_style_str(&color_to_css(color));
+        let css = cached_css_color(&mut self.color_cache, color);
+        self.ctx.set_stroke_style_str(css);
         self.ctx.set_line_width(sw);
         self.ctx.stroke();
         Ok(())
@@ -450,7 +539,8 @@ impl SdiBackend for WasmBackend {
         self.ctx.begin_path();
         self.ctx.move_to(tx1, ty1);
         self.ctx.line_to(tx2, ty2);
-        self.ctx.set_stroke_style_str(&color_to_css(color));
+        let css = cached_css_color(&mut self.color_cache, color);
+        self.ctx.set_stroke_style_str(css);
         self.ctx.set_line_width(f64::from(width));
         self.ctx.stroke();
         Ok(())
@@ -465,7 +555,8 @@ impl SdiBackend for WasmBackend {
         self.ctx
             .arc(tx, ty, f64::from(radius), 0.0, std::f64::consts::TAU)
             .map_err(js_err)?;
-        self.ctx.set_fill_style_str(&color_to_css(color));
+        let css = cached_css_color(&mut self.color_cache, color);
+        self.ctx.set_fill_style_str(css);
         self.ctx.fill();
         Ok(())
     }
@@ -486,7 +577,8 @@ impl SdiBackend for WasmBackend {
         self.ctx
             .arc(tx, ty, f64::from(radius), 0.0, std::f64::consts::TAU)
             .map_err(js_err)?;
-        self.ctx.set_stroke_style_str(&color_to_css(color));
+        let css = cached_css_color(&mut self.color_cache, color);
+        self.ctx.set_stroke_style_str(css);
         self.ctx.set_line_width(f64::from(stroke_width));
         self.ctx.stroke();
         Ok(())
@@ -513,7 +605,8 @@ impl SdiBackend for WasmBackend {
         self.ctx.line_to(tx2, ty2);
         self.ctx.line_to(tx3, ty3);
         self.ctx.close_path();
-        self.ctx.set_fill_style_str(&color_to_css(color));
+        let css = cached_css_color(&mut self.color_cache, color);
+        self.ctx.set_fill_style_str(css);
         self.ctx.fill();
         Ok(())
     }
@@ -539,21 +632,45 @@ impl SdiBackend for WasmBackend {
 
         match gradient {
             GradientStyle::Vertical { top, bottom } => {
-                let grad = self.ctx.create_linear_gradient(tx, ty, tx, ty + fh);
-                grad.add_color_stop(0.0, &color_to_css(*top))
-                    .map_err(js_err)?;
-                grad.add_color_stop(1.0, &color_to_css(*bottom))
-                    .map_err(js_err)?;
-                self.ctx.set_fill_style_canvas_gradient(&grad);
+                let cache_key = GradientCacheKey {
+                    kind: 0,
+                    x: tx as i32,
+                    y: ty as i32,
+                    extent: h,
+                    color_a: GradientCacheKey::pack_color(*top),
+                    color_b: GradientCacheKey::pack_color(*bottom),
+                };
+                if !self.gradient_cache.contains_key(&cache_key) {
+                    let grad = self.ctx.create_linear_gradient(tx, ty, tx, ty + fh);
+                    let css_top = cached_css_color(&mut self.color_cache, *top).to_owned();
+                    let css_bot = cached_css_color(&mut self.color_cache, *bottom).to_owned();
+                    grad.add_color_stop(0.0, &css_top).map_err(js_err)?;
+                    grad.add_color_stop(1.0, &css_bot).map_err(js_err)?;
+                    self.gradient_cache.insert(cache_key, grad);
+                }
+                let grad = &self.gradient_cache[&cache_key];
+                self.ctx.set_fill_style_canvas_gradient(grad);
                 self.ctx.fill_rect(tx, ty, fw, fh);
             },
             GradientStyle::Horizontal { left, right } => {
-                let grad = self.ctx.create_linear_gradient(tx, ty, tx + fw, ty);
-                grad.add_color_stop(0.0, &color_to_css(*left))
-                    .map_err(js_err)?;
-                grad.add_color_stop(1.0, &color_to_css(*right))
-                    .map_err(js_err)?;
-                self.ctx.set_fill_style_canvas_gradient(&grad);
+                let cache_key = GradientCacheKey {
+                    kind: 1,
+                    x: tx as i32,
+                    y: ty as i32,
+                    extent: w,
+                    color_a: GradientCacheKey::pack_color(*left),
+                    color_b: GradientCacheKey::pack_color(*right),
+                };
+                if !self.gradient_cache.contains_key(&cache_key) {
+                    let grad = self.ctx.create_linear_gradient(tx, ty, tx + fw, ty);
+                    let css_left = cached_css_color(&mut self.color_cache, *left).to_owned();
+                    let css_right = cached_css_color(&mut self.color_cache, *right).to_owned();
+                    grad.add_color_stop(0.0, &css_left).map_err(js_err)?;
+                    grad.add_color_stop(1.0, &css_right).map_err(js_err)?;
+                    self.gradient_cache.insert(cache_key, grad);
+                }
+                let grad = &self.gradient_cache[&cache_key];
+                self.ctx.set_fill_style_canvas_gradient(grad);
                 self.ctx.fill_rect(tx, ty, fw, fh);
             },
             GradientStyle::FourCorner {
@@ -567,25 +684,21 @@ impl SdiBackend for WasmBackend {
                 let prev_alpha = self.ctx.global_alpha();
 
                 // First pass: vertical gradient (top_left → bottom_left).
+                let css_tl = cached_css_color(&mut self.color_cache, *top_left).to_owned();
+                let css_bl = cached_css_color(&mut self.color_cache, *bottom_left).to_owned();
                 let grad_v = self.ctx.create_linear_gradient(tx, ty, tx, ty + fh);
-                grad_v
-                    .add_color_stop(0.0, &color_to_css(*top_left))
-                    .map_err(js_err)?;
-                grad_v
-                    .add_color_stop(1.0, &color_to_css(*bottom_left))
-                    .map_err(js_err)?;
+                grad_v.add_color_stop(0.0, &css_tl).map_err(js_err)?;
+                grad_v.add_color_stop(1.0, &css_bl).map_err(js_err)?;
                 self.ctx.set_fill_style_canvas_gradient(&grad_v);
                 self.ctx.fill_rect(tx, ty, fw, fh);
 
                 // Second pass: horizontal gradient with half alpha for blending.
                 self.ctx.set_global_alpha(0.5);
+                let css_tl2 = cached_css_color(&mut self.color_cache, *top_left).to_owned();
+                let css_tr = cached_css_color(&mut self.color_cache, *top_right).to_owned();
                 let grad_h = self.ctx.create_linear_gradient(tx, ty, tx + fw, ty);
-                grad_h
-                    .add_color_stop(0.0, &color_to_css(*top_left))
-                    .map_err(js_err)?;
-                grad_h
-                    .add_color_stop(1.0, &color_to_css(*top_right))
-                    .map_err(js_err)?;
+                grad_h.add_color_stop(0.0, &css_tl2).map_err(js_err)?;
+                grad_h.add_color_stop(1.0, &css_tr).map_err(js_err)?;
                 self.ctx.set_fill_style_canvas_gradient(&grad_h);
                 self.ctx.fill_rect(tx, ty, fw, fh);
 
@@ -640,23 +753,25 @@ impl SdiBackend for WasmBackend {
         let grad = match gradient {
             GradientStyle::Vertical { top, bottom } => {
                 let g = self.ctx.create_linear_gradient(tx, ty, tx, ty + fh);
-                g.add_color_stop(0.0, &color_to_css(*top)).map_err(js_err)?;
-                g.add_color_stop(1.0, &color_to_css(*bottom))
-                    .map_err(js_err)?;
+                let css_top = cached_css_color(&mut self.color_cache, *top).to_owned();
+                let css_bot = cached_css_color(&mut self.color_cache, *bottom).to_owned();
+                g.add_color_stop(0.0, &css_top).map_err(js_err)?;
+                g.add_color_stop(1.0, &css_bot).map_err(js_err)?;
                 g
             },
             GradientStyle::Horizontal { left, right } => {
                 let g = self.ctx.create_linear_gradient(tx, ty, tx + fw, ty);
-                g.add_color_stop(0.0, &color_to_css(*left))
-                    .map_err(js_err)?;
-                g.add_color_stop(1.0, &color_to_css(*right))
-                    .map_err(js_err)?;
+                let css_left = cached_css_color(&mut self.color_cache, *left).to_owned();
+                let css_right = cached_css_color(&mut self.color_cache, *right).to_owned();
+                g.add_color_stop(0.0, &css_left).map_err(js_err)?;
+                g.add_color_stop(1.0, &css_right).map_err(js_err)?;
                 g
             },
             _ => {
                 // Four-corner: fallback to primary color.
                 let c = gradient.primary_color();
-                self.ctx.set_fill_style_str(&color_to_css(c));
+                let css = cached_css_color(&mut self.color_cache, c);
+                self.ctx.set_fill_style_str(css);
                 self.ctx.fill();
                 return Ok(());
             },
@@ -727,26 +842,10 @@ impl SdiBackend for WasmBackend {
             .textures
             .get(&tex.0)
             .ok_or_else(|| OasisError::Backend(format!("texture {} not found", tex.0)))?;
-
-        let image_data = ImageData::new_with_u8_clamped_array_and_sh(
-            wasm_bindgen::Clamped(&td.data),
-            td.width,
-            td.height,
-        )
-        .map_err(js_err)?;
-
         let (tx, ty) = self.translate(dst_x, dst_y);
-
-        // Use an offscreen canvas so we can use the 9-argument drawImage for
-        // sub-rect rendering.
-        let offscreen = self.make_offscreen(td.width, td.height)?;
-        let off_ctx = get_2d_context(&offscreen)?;
-        off_ctx
-            .put_image_data(&image_data, 0.0, 0.0)
-            .map_err(js_err)?;
         self.ctx
             .draw_image_with_html_canvas_element_and_sw_and_sh_and_dx_and_dy_and_dw_and_dh(
-                &offscreen,
+                &td.canvas,
                 src_x as f64,
                 src_y as f64,
                 src_w as f64,
@@ -779,22 +878,9 @@ impl SdiBackend for WasmBackend {
             .get(&tex.0)
             .ok_or_else(|| OasisError::Backend(format!("texture {} not found", tex.0)))?;
 
-        let image_data = ImageData::new_with_u8_clamped_array_and_sh(
-            wasm_bindgen::Clamped(&td.data),
-            td.width,
-            td.height,
-        )
-        .map_err(js_err)?;
-
         let (tx, ty) = self.translate(x, y);
         let fw = w as f64;
         let fh = h as f64;
-
-        let offscreen = self.make_offscreen(td.width, td.height)?;
-        let off_ctx = get_2d_context(&offscreen)?;
-        off_ctx
-            .put_image_data(&image_data, 0.0, 0.0)
-            .map_err(js_err)?;
 
         // Apply flip via scale transform.
         self.ctx.save();
@@ -804,7 +890,7 @@ impl SdiBackend for WasmBackend {
         let dy = if flip_v { -(ty + fh) } else { ty };
         self.ctx.scale(sx, sy).map_err(js_err)?;
         self.ctx
-            .draw_image_with_html_canvas_element_and_dw_and_dh(&offscreen, dx, dy, fw, fh)
+            .draw_image_with_html_canvas_element_and_dw_and_dh(&td.canvas, dx, dy, fw, fh)
             .map_err(js_err)?;
         self.ctx.restore();
         Ok(())
@@ -829,7 +915,8 @@ impl SdiBackend for WasmBackend {
             .global_composite_operation()
             .unwrap_or_else(|_| "source-over".to_string());
         let _ = self.ctx.set_global_composite_operation("multiply");
-        self.ctx.set_fill_style_str(&color_to_css(tint));
+        let css = cached_css_color(&mut self.color_cache, tint);
+        self.ctx.set_fill_style_str(css);
         self.ctx.fill_rect(tx, ty, w as f64, h as f64);
         let _ = self.ctx.set_global_composite_operation(&prev_op);
         Ok(())
