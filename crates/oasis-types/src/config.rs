@@ -1,6 +1,8 @@
 //! Configuration types for OASIS_OS instances.
 
-use std::path::{Path, PathBuf};
+#[cfg(not(target_arch = "wasm32"))]
+use std::path::Path;
+use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
@@ -33,6 +35,7 @@ impl Default for OasisConfig {
 
 impl OasisConfig {
     /// Load configuration from a TOML file, falling back to defaults on error.
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn load(path: &Path) -> Self {
         match std::fs::read_to_string(path) {
             Ok(contents) => match toml::from_str(&contents) {
@@ -47,6 +50,17 @@ impl OasisConfig {
             },
             Err(_) => {
                 log::info!("No config file at {} -- using defaults", path.display());
+                Self::default()
+            },
+        }
+    }
+
+    /// Parse configuration from a TOML string, falling back to defaults on error.
+    pub fn from_toml(contents: &str) -> Self {
+        match toml::from_str(contents) {
+            Ok(config) => config,
+            Err(e) => {
+                log::warn!("Failed to parse config: {e} -- using defaults");
                 Self::default()
             },
         }

@@ -1,5 +1,6 @@
 //! Terminal commands for skin management.
 
+#[cfg(not(target_arch = "wasm32"))]
 use oasis_skin::Skin;
 use oasis_skin::builtin;
 use oasis_types::error::Result;
@@ -39,11 +40,14 @@ impl Command for SkinCmd {
                     lines.push_str(&format!("  {name}\n"));
                 }
 
-                let discovered = Skin::discover_skins(std::path::Path::new("skins"));
-                if !discovered.is_empty() {
-                    lines.push_str("\nExternal skins:\n");
-                    for (name, path) in &discovered {
-                        lines.push_str(&format!("  {name}  ({})\n", path.display()));
+                #[cfg(not(target_arch = "wasm32"))]
+                {
+                    let discovered = Skin::discover_skins(std::path::Path::new("skins"));
+                    if !discovered.is_empty() {
+                        lines.push_str("\nExternal skins:\n");
+                        for (name, path) in &discovered {
+                            lines.push_str(&format!("  {name}  ({})\n", path.display()));
+                        }
                     }
                 }
 

@@ -1,0 +1,93 @@
+/* OASIS_OS browser shell */
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+body {
+  background: #0a0a12;
+  color: #c8c8d0;
+  font-family: "Courier New", Courier, monospace;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  min-height: 100vh;
+}
+
+#container {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  max-width: 960px;
+  width: 100%;
+  padding: 16px;
+}
+
+/* Canvas — pixel-perfect scaling, 2x default */
+#oasis {
+  width: 960px;
+  height: 544px;
+  image-rendering: pixelated;
+  image-rendering: crisp-edges;
+  border: 2px solid #333;
+  border-radius: 4px;
+  background: #000;
+  cursor: default;
+  outline: none;
+}
+
+/* Terminal panel below the canvas */
+#terminal {
+  width: 960px;
+  background: #111118;
+  border: 1px solid #333;
+  border-radius: 4px;
+  padding: 8px;
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+#output {
+  max-height: 200px;
+  overflow-y: auto;
+  white-space: pre-wrap;
+  word-break: break-all;
+  margin-bottom: 4px;
+}
+
+#input-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+#prompt {
+  color: #6a6;
+  flex-shrink: 0;
+}
+
+#cmd {
+  flex: 1;
+  background: transparent;
+  border: none;
+  outline: none;
+  color: #c8c8d0;
+  font-family: inherit;
+  font-size: inherit;
+  caret-color: #6a6;
+}
+
+/* Responsive: shrink canvas on small screens */
+@media (max-width: 976px) {
+  #oasis {
+    width: 100%;
+    height: auto;
+    aspect-ratio: 480 / 272;
+  }
+  #terminal {
+    width: 100%;
+  }
+}

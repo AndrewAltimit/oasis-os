@@ -1,0 +1,24 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>OASIS_OS</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div id="container">
+    <canvas id="oasis" width="480" height="272"></canvas>
+    <div id="terminal">
+      <div id="output"></div>
+      <div id="input-row">
+        <span id="prompt">oasis&gt;</span>
+        <input id="cmd" type="text" autocomplete="off" spellcheck="false"
+               placeholder="Type a command...">
+      </div>
+    </div>
+  </div>
+  <noscript>OASIS_OS requires JavaScript and WebAssembly.</noscript>
+  <script type="module" src="index.js"></script>
+</body>
+</html>

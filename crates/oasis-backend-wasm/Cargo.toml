@@ -1,0 +1,44 @@
+[package]
+name = "oasis-backend-wasm"
+description = "WebAssembly backend for OASIS_OS: Canvas 2D rendering, DOM input, Web Audio"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+oasis-core = { workspace = true }
+oasis-types = { workspace = true }
+oasis-vfs = { workspace = true }
+oasis-sdi = { workspace = true }
+oasis-skin = { workspace = true }
+oasis-platform = { workspace = true }
+oasis-audio = { workspace = true }
+oasis-terminal = { workspace = true }
+oasis-browser = { workspace = true }
+oasis-net = { workspace = true }
+oasis-wm = { workspace = true }
+oasis-ui = { workspace = true }
+log = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+toml = { workspace = true }
+wasm-bindgen = { workspace = true }
+web-sys = { workspace = true }
+js-sys = { workspace = true }
+wasm-bindgen-futures = { workspace = true }
+
+[lints]
+workspace = true
+
+[package.metadata.wasm-pack.profile.release]
+# Disable wasm-opt: Rust LTO handles optimization; avoids version-mismatch
+# errors with bulk-memory and nontrapping-float-to-int instructions.
+wasm-opt = false
+
+[package.metadata.wasm-pack.profile.dev]
+wasm-opt = false

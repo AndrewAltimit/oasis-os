@@ -15,6 +15,7 @@ members = [
     "crates/oasis-core",
     "crates/oasis-backend-sdl",
     "crates/oasis-backend-ue5",
+    "crates/oasis-backend-wasm",
     "crates/oasis-ffi",
     "crates/oasis-app",
 ]
@@ -62,6 +63,22 @@ rustls-pki-types = "1"
 proptest = "1"
 criterion = { version = "0.5", features = ["html_reports"] }
 
+# WASM
+wasm-bindgen = "0.2"
+web-sys = { version = "0.3", features = [
+    "Window", "Document", "Element", "HtmlCanvasElement",
+    "CanvasRenderingContext2d", "CanvasGradient", "ImageData", "DomRect",
+    "KeyboardEvent", "MouseEvent", "WheelEvent", "FocusEvent",
+    "TouchEvent", "Touch", "TouchList",
+    "EventTarget",
+    "AudioContext", "AudioBuffer", "AudioBufferSourceNode",
+    "GainNode", "AudioParam", "AudioDestinationNode",
+    "BaseAudioContext",
+    "console",
+] }
+js-sys = "0.3"
+wasm-bindgen-futures = "0.4"
+
 # Internal crates
 oasis-types = { path = "crates/oasis-types" }
 oasis-vfs = { path = "crates/oasis-vfs" }
@@ -76,6 +93,7 @@ oasis-terminal = { path = "crates/oasis-terminal" }
 oasis-browser = { path = "crates/oasis-browser" }
 oasis-core = { path = "crates/oasis-core" }
 oasis-backend-ue5 = { path = "crates/oasis-backend-ue5" }
+oasis-backend-wasm = { path = "crates/oasis-backend-wasm" }
 
 [workspace.lints.clippy]
 clone_on_ref_ptr = "warn"

@@ -7,10 +7,12 @@
 
 mod game_asset;
 mod memory;
+#[cfg(not(target_arch = "wasm32"))]
 mod real;
 
 pub use game_asset::GameAssetVfs;
 pub use memory::MemoryVfs;
+#[cfg(not(target_arch = "wasm32"))]
 pub use real::RealVfs;
 
 use oasis_types::error::Result;
