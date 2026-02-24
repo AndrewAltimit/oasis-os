@@ -10,7 +10,7 @@ use oasis_core::transfer::FtpServer;
 use oasis_core::vfs::MemoryVfs;
 
 use crate::app_state::AppState;
-use crate::terminal_sdi;
+use oasis_core::terminal_sdi;
 
 /// Process a local terminal command result. Returns a pending skin swap name
 /// if the command was `SkinSwap`.

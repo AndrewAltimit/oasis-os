@@ -21,7 +21,10 @@ async function boot() {
   window.__oasis = oasis;
   window.__oasisReady = true;
 
-  setupTerminal();
+  // Focus canvas for keyboard input.
+  const canvas = document.getElementById("oasis");
+  if (canvas) canvas.focus();
+
   requestAnimationFrame(tick);
 }
 
@@ -38,48 +41,9 @@ function tick(now) {
 }
 
 // -----------------------------------------------------------------------
-// Terminal UI
-// -----------------------------------------------------------------------
-
-function setupTerminal() {
-  const outputEl = document.getElementById("output");
-  const cmdEl = document.getElementById("cmd");
-
-  // Print welcome message.
-  appendOutput("OASIS_OS [WASM]  —  type 'help' for commands\n");
-
-  cmdEl.addEventListener("keydown", (e) => {
-    if (e.key === "Enter") {
-      const cmd = cmdEl.value.trim();
-      if (!cmd) return;
-
-      appendOutput(`oasis> ${cmd}\n`);
-      cmdEl.value = "";
-
-      const result = oasis.send_command(cmd);
-      if (result) {
-        appendOutput(result.endsWith("\n") ? result : result + "\n");
-      }
-    }
-  });
-
-  // Focus the terminal input on page load.
-  cmdEl.focus();
-
-  function appendOutput(text) {
-    outputEl.textContent += text;
-    outputEl.scrollTop = outputEl.scrollHeight;
-  }
-}
-
-// -----------------------------------------------------------------------
 // Start
 // -----------------------------------------------------------------------
 
 boot().catch((err) => {
   console.error("OASIS_OS boot failed:", err);
-  const outputEl = document.getElementById("output");
-  if (outputEl) {
-    outputEl.textContent = `Boot error: ${err}\n`;
-  }
 });

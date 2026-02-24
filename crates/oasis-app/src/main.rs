@@ -11,7 +11,7 @@ mod commands;
 mod input;
 mod launch;
 mod render;
-mod terminal_sdi;
+use oasis_core::terminal_sdi;
 mod vfs_setup;
 
 use anyhow::Result;

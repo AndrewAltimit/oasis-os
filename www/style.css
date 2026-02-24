@@ -35,49 +35,8 @@ body {
   border: 2px solid #333;
   border-radius: 4px;
   background: #000;
-  cursor: default;
+  cursor: none;
   outline: none;
-}
-
-/* Terminal panel below the canvas */
-#terminal {
-  width: 960px;
-  background: #111118;
-  border: 1px solid #333;
-  border-radius: 4px;
-  padding: 8px;
-  font-size: 13px;
-  line-height: 1.4;
-}
-
-#output {
-  max-height: 200px;
-  overflow-y: auto;
-  white-space: pre-wrap;
-  word-break: break-all;
-  margin-bottom: 4px;
-}
-
-#input-row {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-}
-
-#prompt {
-  color: #6a6;
-  flex-shrink: 0;
-}
-
-#cmd {
-  flex: 1;
-  background: transparent;
-  border: none;
-  outline: none;
-  color: #c8c8d0;
-  font-family: inherit;
-  font-size: inherit;
-  caret-color: #6a6;
 }
 
 /* Responsive: shrink canvas on small screens */
@@ -86,8 +45,5 @@ body {
     width: 100%;
     height: auto;
     aspect-ratio: 480 / 272;
-  }
-  #terminal {
-    width: 100%;
   }
 }

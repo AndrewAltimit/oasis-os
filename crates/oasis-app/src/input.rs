@@ -10,7 +10,9 @@ use oasis_core::vfs::MemoryVfs;
 use oasis_core::wm::manager::WmEvent;
 
 use crate::app_state::{AppState, Mode};
-use crate::{commands, launch, terminal_sdi};
+use oasis_core::terminal_sdi;
+
+use crate::{commands, launch};
 
 /// Result of handling a single input event.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
