@@ -1099,6 +1099,21 @@ fn previous_sibling_element(doc: &Document, node_id: NodeId) -> Option<NodeId> {
 /// re-parsed. If not, the fallback value is used. If neither exists,
 /// an empty keyword is returned (property will be silently ignored).
 fn resolve_css_var(value: &CssValue, props: &HashMap<String, String>) -> CssValue {
+    resolve_css_var_depth(value, props, 0)
+}
+
+/// Maximum recursion depth for `var()` resolution. Prevents stack overflow
+/// on cyclic custom properties like `--a: var(--a)`.
+const MAX_VAR_DEPTH: u32 = 16;
+
+fn resolve_css_var_depth(
+    value: &CssValue,
+    props: &HashMap<String, String>,
+    depth: u32,
+) -> CssValue {
+    if depth >= MAX_VAR_DEPTH {
+        return CssValue::Keyword(String::new());
+    }
     match value {
         CssValue::Var(name, fallback) => {
             let raw = props
@@ -1113,12 +1128,12 @@ fn resolve_css_var(value: &CssValue, props: &HashMap<String, String>) -> CssValu
                     1 => {
                         let v = parsed.into_iter().next().expect("len checked");
                         // Handle chained var() references.
-                        resolve_css_var(&v, props)
+                        resolve_css_var_depth(&v, props, depth + 1)
                     },
                     _ => {
                         let resolved: Vec<CssValue> = parsed
                             .into_iter()
-                            .map(|v| resolve_css_var(&v, props))
+                            .map(|v| resolve_css_var_depth(&v, props, depth + 1))
                             .collect();
                         CssValue::Multiple(resolved)
                     },
@@ -1128,7 +1143,8 @@ fn resolve_css_var(value: &CssValue, props: &HashMap<String, String>) -> CssValu
             }
         },
         CssValue::Multiple(parts) => {
-            let resolved: Vec<CssValue> = parts.iter().map(|p| resolve_css_var(p, props)).collect();
+            let resolved: Vec<CssValue> =
+                parts.iter().map(|p| resolve_css_var_depth(p, props, depth + 1)).collect();
             CssValue::Multiple(resolved)
         },
         other => other.clone(),
@@ -2430,6 +2446,27 @@ mod tests {
             "dark mode should not apply; expected white, got {:?}",
             body_style.background_color
         );
+    }
+
+    #[test]
+    fn cyclic_var_does_not_stack_overflow() {
+        // `--a` references itself — should resolve to empty (not crash).
+        let mut props = HashMap::new();
+        props.insert("--a".to_string(), "var(--a)".to_string());
+        let val = CssValue::Var("--a".to_string(), None);
+        let resolved = resolve_css_var(&val, &props);
+        assert_eq!(resolved, CssValue::Keyword(String::new()));
+    }
+
+    #[test]
+    fn indirect_cyclic_var_does_not_stack_overflow() {
+        // `--a` -> `var(--b)`, `--b` -> `var(--a)` — indirect cycle.
+        let mut props = HashMap::new();
+        props.insert("--a".to_string(), "var(--b)".to_string());
+        props.insert("--b".to_string(), "var(--a)".to_string());
+        let val = CssValue::Var("--a".to_string(), None);
+        let resolved = resolve_css_var(&val, &props);
+        assert_eq!(resolved, CssValue::Keyword(String::new()));
     }
 
     // -- Selector index tests (Phase 2) ----------------------------------

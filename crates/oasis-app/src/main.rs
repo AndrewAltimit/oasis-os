@@ -350,6 +350,11 @@ fn main() -> Result<()> {
         // Update SDI scene graph for the active mode.
         render::update_sdi(&mut state, &mut sdi);
 
+        // Drive browser image streaming (progressive loading).
+        if let Some(ref mut bw) = state.browser {
+            bw.tick(&vfs);
+        }
+
         // -- Render --
         backend.clear(state.bg_color)?;
         if state.mode == Mode::Desktop && state.wm.window_count() > 0 {
