@@ -444,6 +444,29 @@ fn build_box_for_node(
             // Determine box type.
             let box_type = box_type_for_element(elem, &style);
 
+            // Handle <select> specially: find selected/first <option> text.
+            if elem.tag == TagName::Select {
+                let label = find_select_label(doc, node_id);
+                let replaced = ReplacedContent::SelectBox { label };
+                let mut lb = LayoutBox::new(BoxType::Replaced(replaced), style, Some(node_id));
+                lb.children = Vec::new();
+                return Some(lb);
+            }
+
+            // Handle <button> specially: collect child text for label.
+            if elem.tag == TagName::Button {
+                let text = collect_text_content(doc, node_id);
+                let label = if !text.trim().is_empty() {
+                    text.trim().to_string()
+                } else {
+                    elem.get_attribute("value").unwrap_or("Button").to_string()
+                };
+                let replaced = ReplacedContent::SubmitButton { label };
+                let mut lb = LayoutBox::new(BoxType::Replaced(replaced), style, Some(node_id));
+                lb.children = Vec::new();
+                return Some(lb);
+            }
+
             // Handle replaced elements.
             if let Some(replaced) = replaced_content(elem, base_url, image_info) {
                 let mut lb = LayoutBox::new(BoxType::Replaced(replaced), style, Some(node_id));
@@ -654,12 +677,57 @@ fn replaced_content(
                 },
             }
         },
-        TagName::Button => {
-            let label = elem.get_attribute("value").unwrap_or("Button").to_string();
-            Some(ReplacedContent::SubmitButton { label })
-        },
+        // TagName::Button is handled in build_box_for_node before this
+        // function is called, so child text content is used for the label.
         _ => None,
     }
+}
+
+/// Find the display label for a `<select>` element.
+///
+/// Searches for the first `<option>` with a `selected` attribute, or
+/// falls back to the first `<option>`. Returns the option's text content.
+fn find_select_label(doc: &Document, select_id: NodeId) -> String {
+    let mut first_option: Option<NodeId> = None;
+    let mut selected_option: Option<NodeId> = None;
+    for &child_id in &doc.get(select_id).children {
+        if let NodeKind::Element(ref elem) = doc.get(child_id).kind
+            && elem.tag == TagName::Option
+        {
+            if first_option.is_none() {
+                first_option = Some(child_id);
+            }
+            if elem.get_attribute("selected").is_some() {
+                selected_option = Some(child_id);
+            }
+        }
+    }
+    let option_id = selected_option.or(first_option);
+    match option_id {
+        Some(id) => {
+            let text = collect_text_content(doc, id);
+            let trimmed = text.trim();
+            if trimmed.is_empty() {
+                "Select".to_string()
+            } else {
+                trimmed.to_string()
+            }
+        },
+        None => "Select".to_string(),
+    }
+}
+
+/// Recursively collect text content from a DOM node and its descendants.
+fn collect_text_content(doc: &Document, node_id: NodeId) -> String {
+    let mut text = String::new();
+    for &child_id in &doc.get(node_id).children {
+        match &doc.get(child_id).kind {
+            NodeKind::Text(t) => text.push_str(t),
+            NodeKind::Element(_) => text.push_str(&collect_text_content(doc, child_id)),
+            _ => {},
+        }
+    }
+    text
 }
 
 /// Resolve an `<img src>` attribute against a base URL.
@@ -883,15 +951,25 @@ fn layout_block_with_height(
 }
 
 /// Resolve padding, border, and margin from the computed style into
-/// the layout box's dimensions.
-pub fn resolve_edge_sizes(layout_box: &mut LayoutBox, _containing_width: f32) {
+/// the layout box's dimensions. Percentage padding/margin resolves
+/// against the containing block's width (per CSS spec, even for
+/// vertical padding/margin).
+pub fn resolve_edge_sizes(layout_box: &mut LayoutBox, containing_width: f32) {
     let s = &layout_box.style;
 
     layout_box.dimensions.padding = EdgeSizes {
-        top: s.padding_top,
-        right: s.padding_right,
-        bottom: s.padding_bottom,
-        left: s.padding_left,
+        top: s
+            .padding_top_pct
+            .map_or(s.padding_top, |p| containing_width * p / 100.0),
+        right: s
+            .padding_right_pct
+            .map_or(s.padding_right, |p| containing_width * p / 100.0),
+        bottom: s
+            .padding_bottom_pct
+            .map_or(s.padding_bottom, |p| containing_width * p / 100.0),
+        left: s
+            .padding_left_pct
+            .map_or(s.padding_left, |p| containing_width * p / 100.0),
     };
 
     // Per CSS spec, border-style:none/hidden → border-width computes to 0.
@@ -920,10 +998,18 @@ pub fn resolve_edge_sizes(layout_box: &mut LayoutBox, _containing_width: f32) {
     };
 
     layout_box.dimensions.margin = EdgeSizes {
-        top: s.margin_top,
-        right: s.margin_right,
-        bottom: s.margin_bottom,
-        left: s.margin_left,
+        top: s
+            .margin_top_pct
+            .map_or(s.margin_top, |p| containing_width * p / 100.0),
+        right: s
+            .margin_right_pct
+            .map_or(s.margin_right, |p| containing_width * p / 100.0),
+        bottom: s
+            .margin_bottom_pct
+            .map_or(s.margin_bottom, |p| containing_width * p / 100.0),
+        left: s
+            .margin_left_pct
+            .map_or(s.margin_left, |p| containing_width * p / 100.0),
     };
 }
 

@@ -142,6 +142,7 @@ fn all_scenarios() -> Vec<Scenario> {
         "gemini_page",
         "images",
         "wikipedia",
+        "wikipedia_real",
         "google",
         "wiki_article",
         "news_article",

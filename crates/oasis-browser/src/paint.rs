@@ -890,6 +890,32 @@ fn paint_replaced(
                 backend.draw_text(placeholder, x + pad, y + pad_top, font_size, gray)?;
             }
         },
+        ReplacedContent::SelectBox { label } => {
+            let style = &layout_box.style;
+            let w = content.width as u32;
+            let h = content.height as u32;
+            // White background with border.
+            let bg = if style.background_color.a > 0 {
+                style.background_color
+            } else {
+                Color::rgb(255, 255, 255)
+            };
+            backend.fill_rect(x, y, w, h, bg)?;
+            // Border
+            let border_color = Color::rgb(118, 118, 118);
+            backend.fill_rect(x, y, w, 1, border_color)?;
+            backend.fill_rect(x, y + h as i32 - 1, w, 1, border_color)?;
+            backend.fill_rect(x, y, 1, h, border_color)?;
+            backend.fill_rect(x + w as i32 - 1, y, 1, h, border_color)?;
+            // Label text
+            let font_size = style.font_size as u16;
+            let text_color = style.color;
+            let pad_top = ((h as i32 - font_size as i32) / 2).max(1);
+            backend.draw_text(label, x + 3, y + pad_top, font_size, text_color)?;
+            // Dropdown arrow "v" on the right
+            let arrow_x = x + w as i32 - 10;
+            backend.draw_text("v", arrow_x, y + pad_top, font_size, text_color)?;
+        },
         ReplacedContent::SubmitButton { label } => {
             let style = &layout_box.style;
             let w = content.width as u32;

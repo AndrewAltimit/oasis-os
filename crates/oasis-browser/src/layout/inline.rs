@@ -27,7 +27,7 @@ pub fn layout_inline(parent: &mut LayoutBox, measurer: &dyn TextMeasurer) {
     let text_align = parent.style.text_align;
 
     // Collect all inline fragments from the children.
-    let fragments = collect_inline_fragments(&parent.children, measurer);
+    let fragments = collect_inline_fragments(&parent.children, available_width, measurer);
 
     // Break fragments into line boxes.
     let mut lines: Vec<LineBox> = Vec::new();
@@ -190,9 +190,12 @@ pub fn layout_inline(parent: &mut LayoutBox, measurer: &dyn TextMeasurer) {
 /// Collect inline fragments from a list of layout box children.
 ///
 /// Text nodes are split into word-level fragments for line breaking.
-/// Inline boxes are kept as single fragments.
+/// Inline boxes are kept as single fragments. `available_width` is the
+/// containing block's content width, used for inline-block percentage
+/// resolution.
 fn collect_inline_fragments(
     children: &[LayoutBox],
+    available_width: f32,
     measurer: &dyn TextMeasurer,
 ) -> Vec<InlineFragment> {
     let mut fragments = Vec::new();
@@ -202,17 +205,14 @@ fn collect_inline_fragments(
             BoxType::Inline => {
                 // Check if this is a text node (has a node id and
                 // the style says inline). We produce text fragments.
-                fragments.extend(text_fragments_for_inline(child, measurer));
+                fragments.extend(text_fragments_for_inline(child, available_width, measurer));
             },
             BoxType::InlineBlock => {
                 // InlineBlock boxes participate in inline flow but
                 // establish their own block formatting context. We
                 // must lay them out now so dimensions are known.
                 let mut lb = child.clone();
-                // Use a large containing width so auto margins
-                // resolve to zero and explicit widths work.
-                let large_avail = 10000.0;
-                layout_block(&mut lb, large_avail, measurer);
+                layout_block(&mut lb, available_width, measurer);
                 if matches!(lb.style.width, Dimension::Auto) {
                     // Shrink content width to actual children extent.
                     let max_child_right = lb
@@ -277,7 +277,11 @@ fn collect_inline_fragments(
             _ => {
                 // Nested children (shouldn't happen in a well-formed
                 // anonymous box, but handle gracefully).
-                fragments.extend(collect_inline_fragments(&child.children, measurer));
+                fragments.extend(collect_inline_fragments(
+                    &child.children,
+                    available_width,
+                    measurer,
+                ));
             },
         }
     }
@@ -289,6 +293,7 @@ fn collect_inline_fragments(
 /// boundaries for line breaking).
 fn text_fragments_for_inline(
     layout_box: &LayoutBox,
+    available_width: f32,
     measurer: &dyn TextMeasurer,
 ) -> Vec<InlineFragment> {
     let style = &layout_box.style;
@@ -311,7 +316,7 @@ fn text_fragments_for_inline(
     }
 
     // Recurse into children.
-    let mut frags = collect_inline_fragments(&layout_box.children, measurer);
+    let mut frags = collect_inline_fragments(&layout_box.children, available_width, measurer);
 
     // Propagate this element's node ID to child fragments so that
     // link elements (<a>) are tracked through the paint pass.
@@ -359,6 +364,10 @@ fn replaced_dimensions(replaced: &ReplacedContent) -> (f32, f32) {
             // Use bitmap measurement for accurate label width.
             let text_w = oasis_types::backend::bitmap_measure_text(label, 10) as f32;
             (text_w + 16.0, 20.0)
+        },
+        ReplacedContent::SelectBox { label } => {
+            let text_w = oasis_types::backend::bitmap_measure_text(label, 10) as f32;
+            (text_w + 20.0, 18.0) // extra space for dropdown arrow
         },
     }
 }
@@ -1057,7 +1066,7 @@ mod tests {
         };
 
         let child = LayoutBox::new(BoxType::Replaced(replaced), style, None);
-        let frags = collect_inline_fragments(&[child], &m);
+        let frags = collect_inline_fragments(&[child], 480.0, &m);
 
         assert_eq!(frags.len(), 1);
         if let InlineFragment::ReplacedInline { width, height, .. } = &frags[0] {
@@ -1091,7 +1100,7 @@ mod tests {
         };
 
         let child = LayoutBox::new(BoxType::Replaced(replaced), style, None);
-        let frags = collect_inline_fragments(&[child], &m);
+        let frags = collect_inline_fragments(&[child], 480.0, &m);
 
         if let InlineFragment::ReplacedInline { width, height, .. } = &frags[0] {
             assert!((*width - 50.0).abs() < 0.01);

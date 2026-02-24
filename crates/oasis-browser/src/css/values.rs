@@ -446,6 +446,17 @@ pub struct ComputedStyle {
     pub flex_basis: Dimension,
     pub gap: f32,
 
+    // -- Percentage padding/margin (resolved against containing width) ---
+    /// When `Some(pct)`, padding-top was specified as a percentage.
+    pub padding_top_pct: Option<f32>,
+    pub padding_right_pct: Option<f32>,
+    pub padding_bottom_pct: Option<f32>,
+    pub padding_left_pct: Option<f32>,
+    pub margin_top_pct: Option<f32>,
+    pub margin_right_pct: Option<f32>,
+    pub margin_bottom_pct: Option<f32>,
+    pub margin_left_pct: Option<f32>,
+
     // -- CSS custom properties (--*) ------------------------------------
     pub custom_properties: HashMap<String, String>,
 }
@@ -569,6 +580,15 @@ impl Default for ComputedStyle {
             flex_basis: Dimension::Auto,
             gap: 0.0,
 
+            padding_top_pct: None,
+            padding_right_pct: None,
+            padding_bottom_pct: None,
+            padding_left_pct: None,
+            margin_top_pct: None,
+            margin_right_pct: None,
+            margin_bottom_pct: None,
+            margin_left_pct: None,
+
             custom_properties: HashMap::new(),
         }
     }
@@ -684,6 +704,23 @@ impl ComputedStyle {
                     self.margin_right_auto = true;
                     self.margin_top_auto = true;
                     self.margin_bottom_auto = true;
+                    self.margin_top_pct = None;
+                    self.margin_right_pct = None;
+                    self.margin_bottom_pct = None;
+                    self.margin_left_pct = None;
+                } else if let CssValue::Percentage(p) = value {
+                    self.margin_top_pct = Some(*p);
+                    self.margin_right_pct = Some(*p);
+                    self.margin_bottom_pct = Some(*p);
+                    self.margin_left_pct = Some(*p);
+                    self.margin_top = 0.0;
+                    self.margin_right = 0.0;
+                    self.margin_bottom = 0.0;
+                    self.margin_left = 0.0;
+                    self.margin_left_auto = false;
+                    self.margin_right_auto = false;
+                    self.margin_top_auto = false;
+                    self.margin_bottom_auto = false;
                 } else {
                     let px = resolve_length(value, parent_font_size);
                     self.margin_top = px;
@@ -694,62 +731,127 @@ impl ComputedStyle {
                     self.margin_right_auto = false;
                     self.margin_top_auto = false;
                     self.margin_bottom_auto = false;
+                    self.margin_top_pct = None;
+                    self.margin_right_pct = None;
+                    self.margin_bottom_pct = None;
+                    self.margin_left_pct = None;
                 }
             },
             "margin-top" => {
                 if as_keyword(value) == Some("auto") {
                     self.margin_top = 0.0;
                     self.margin_top_auto = true;
+                    self.margin_top_pct = None;
+                } else if let CssValue::Percentage(p) = value {
+                    self.margin_top_pct = Some(*p);
+                    self.margin_top = 0.0;
                 } else {
                     self.margin_top = resolve_length(value, parent_font_size);
+                    self.margin_top_pct = None;
                 }
             },
             "margin-right" => {
                 if as_keyword(value) == Some("auto") {
                     self.margin_right = 0.0;
                     self.margin_right_auto = true;
+                    self.margin_right_pct = None;
+                } else if let CssValue::Percentage(p) = value {
+                    self.margin_right_pct = Some(*p);
+                    self.margin_right = 0.0;
+                    self.margin_right_auto = false;
                 } else {
                     self.margin_right = resolve_length(value, parent_font_size);
                     self.margin_right_auto = false;
+                    self.margin_right_pct = None;
                 }
             },
             "margin-bottom" => {
                 if as_keyword(value) == Some("auto") {
                     self.margin_bottom = 0.0;
                     self.margin_bottom_auto = true;
+                    self.margin_bottom_pct = None;
+                } else if let CssValue::Percentage(p) = value {
+                    self.margin_bottom_pct = Some(*p);
+                    self.margin_bottom = 0.0;
                 } else {
                     self.margin_bottom = resolve_length(value, parent_font_size);
+                    self.margin_bottom_pct = None;
                 }
             },
             "margin-left" => {
                 if as_keyword(value) == Some("auto") {
                     self.margin_left = 0.0;
                     self.margin_left_auto = true;
+                    self.margin_left_pct = None;
+                } else if let CssValue::Percentage(p) = value {
+                    self.margin_left_pct = Some(*p);
+                    self.margin_left = 0.0;
+                    self.margin_left_auto = false;
                 } else {
                     self.margin_left = resolve_length(value, parent_font_size);
                     self.margin_left_auto = false;
+                    self.margin_left_pct = None;
                 }
             },
 
             // -- Padding ------------------------------------------------
             "padding" => {
-                let px = resolve_length(value, parent_font_size);
-                self.padding_top = px;
-                self.padding_right = px;
-                self.padding_bottom = px;
-                self.padding_left = px;
+                if let CssValue::Percentage(p) = value {
+                    self.padding_top_pct = Some(*p);
+                    self.padding_right_pct = Some(*p);
+                    self.padding_bottom_pct = Some(*p);
+                    self.padding_left_pct = Some(*p);
+                    self.padding_top = 0.0;
+                    self.padding_right = 0.0;
+                    self.padding_bottom = 0.0;
+                    self.padding_left = 0.0;
+                } else {
+                    let px = resolve_length(value, parent_font_size);
+                    self.padding_top = px;
+                    self.padding_right = px;
+                    self.padding_bottom = px;
+                    self.padding_left = px;
+                    self.padding_top_pct = None;
+                    self.padding_right_pct = None;
+                    self.padding_bottom_pct = None;
+                    self.padding_left_pct = None;
+                }
             },
             "padding-top" => {
-                self.padding_top = resolve_length(value, parent_font_size);
+                if let CssValue::Percentage(p) = value {
+                    self.padding_top_pct = Some(*p);
+                    self.padding_top = 0.0;
+                } else {
+                    self.padding_top = resolve_length(value, parent_font_size);
+                    self.padding_top_pct = None;
+                }
             },
             "padding-right" => {
-                self.padding_right = resolve_length(value, parent_font_size);
+                if let CssValue::Percentage(p) = value {
+                    self.padding_right_pct = Some(*p);
+                    self.padding_right = 0.0;
+                } else {
+                    self.padding_right = resolve_length(value, parent_font_size);
+                    self.padding_right_pct = None;
+                }
             },
             "padding-bottom" => {
-                self.padding_bottom = resolve_length(value, parent_font_size);
+                if let CssValue::Percentage(p) = value {
+                    self.padding_bottom_pct = Some(*p);
+                    self.padding_bottom = 0.0;
+                } else {
+                    self.padding_bottom = resolve_length(value, parent_font_size);
+                    self.padding_bottom_pct = None;
+                }
             },
             "padding-left" => {
-                self.padding_left = resolve_length(value, parent_font_size);
+                if let CssValue::Percentage(p) = value {
+                    self.padding_left_pct = Some(*p);
+                    self.padding_left = 0.0;
+                } else {
+                    self.padding_left = resolve_length(value, parent_font_size);
+                    self.padding_left_pct = None;
+                }
             },
 
             // -- Border width -------------------------------------------

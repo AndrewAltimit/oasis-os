@@ -1,0 +1,370 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Wikipedia</title>
+<style>
+/* Reset based on real Wikipedia portal CSS */
+*, *::before, *::after {
+    box-sizing: border-box;
+}
+:root {
+    --color-base: #202122;
+    --color-subtle: #54595d;
+    --color-progressive: #36c;
+    --color-progressive--hover: #3056a9;
+    --background-color-base: #fff;
+    --border-color-base: #a2a9b1;
+    --border-color-subtle: #c8ccd1;
+}
+body {
+    margin: 0;
+    padding: 0;
+    font-family: sans-serif;
+    font-size: 14px;
+    color: var(--color-base);
+    background: var(--background-color-base);
+    text-align: center;
+}
+a { color: var(--color-progressive); text-decoration: none; }
+a:hover { text-decoration: underline; }
+
+/* Central logo area */
+.central-textlogo {
+    margin-top: 12px;
+}
+.central-textlogo h1 {
+    font-size: 22px;
+    font-weight: normal;
+    margin: 0 0 2px;
+    color: var(--color-base);
+}
+.central-textlogo strong {
+    display: block;
+    font-size: 11px;
+    font-weight: normal;
+    color: var(--color-subtle);
+    margin: 0 0 8px;
+}
+
+/* Search box */
+.search-container {
+    margin: 0 auto 10px;
+    padding: 0 20px;
+}
+.search-container fieldset {
+    border: none;
+    padding: 0;
+    margin: 0;
+}
+.search-container input[type="search"],
+.search-container input[type="text"] {
+    width: 240px;
+    height: 20px;
+    padding: 2px 6px;
+    font-size: 12px;
+    border: 1px solid var(--border-color-base);
+    border-radius: 2px;
+}
+.search-container button {
+    display: inline-block;
+    background-color: var(--color-progressive);
+    color: #fff;
+    border: 1px solid var(--color-progressive);
+    padding: 4px 14px;
+    font-size: 11px;
+    margin-top: 4px;
+}
+
+/* Language grid - main 10 languages */
+.central-featured {
+    margin: 10px auto;
+    max-width: 460px;
+    position: relative;
+    min-height: 180px;
+}
+.central-featured-lang {
+    display: inline-block;
+    width: 140px;
+    padding: 4px 2px;
+    vertical-align: top;
+    text-align: center;
+}
+.central-featured-lang strong {
+    display: block;
+    font-size: 14px;
+    color: var(--color-base);
+}
+.central-featured-lang small {
+    font-size: 9px;
+    color: var(--color-subtle);
+}
+.central-featured-lang a {
+    text-decoration: none;
+    color: inherit;
+}
+
+/* Language lists below main grid */
+.lang-list-container {
+    margin: 0 auto;
+    max-width: 440px;
+    padding: 0 8px;
+}
+.lang-list-large {
+    font-size: 12px;
+    margin-bottom: 4px;
+    line-height: 1.8;
+}
+.lang-list-large a {
+    margin: 0 6px;
+    white-space: nowrap;
+}
+.lang-list-medium {
+    font-size: 10px;
+    color: var(--color-subtle);
+    margin-bottom: 4px;
+    line-height: 1.8;
+}
+.lang-list-medium a {
+    color: var(--color-subtle);
+    margin: 0 4px;
+    white-space: nowrap;
+}
+.lang-list-small {
+    font-size: 9px;
+    color: var(--color-subtle);
+    line-height: 1.8;
+}
+.lang-list-small a {
+    color: var(--color-subtle);
+    margin: 0 3px;
+    white-space: nowrap;
+}
+.article-count {
+    font-size: 8px;
+    color: var(--color-subtle);
+}
+.divider {
+    border: none;
+    border-top: 1px solid var(--border-color-subtle);
+    margin: 6px auto;
+    max-width: 420px;
+}
+/* Other projects section */
+.other-projects {
+    margin: 10px auto;
+    max-width: 440px;
+    text-align: center;
+}
+.other-projects h2 {
+    font-size: 12px;
+    font-weight: normal;
+    color: var(--color-subtle);
+    margin: 0 0 6px;
+    border-bottom: 1px solid var(--border-color-subtle);
+    padding-bottom: 4px;
+}
+.project-item {
+    display: inline-block;
+    width: 100px;
+    padding: 4px;
+    vertical-align: top;
+    text-align: center;
+    font-size: 9px;
+    color: var(--color-subtle);
+}
+.project-item strong {
+    display: block;
+    font-size: 10px;
+    color: var(--color-base);
+}
+/* Footer */
+.footer-sidebar {
+    margin: 8px auto;
+    max-width: 440px;
+    text-align: center;
+    font-size: 10px;
+    color: var(--color-subtle);
+}
+.footer-sidebar a {
+    color: var(--color-subtle);
+    margin: 0 4px;
+}
+</style>
+</head>
+<body>
+<main>
+    <!-- Central logo -->
+    <div class="central-textlogo">
+        <h1>Wikipedia</h1>
+        <strong>The Free Encyclopedia</strong>
+    </div>
+
+    <!-- Search -->
+    <div class="search-container">
+        <form>
+            <fieldset>
+                <input type="search" placeholder="Search Wikipedia">
+                <select>
+                    <option value="en" selected>English</option>
+                    <option value="de">Deutsch</option>
+                    <option value="fr">Francais</option>
+                </select>
+                <div><button type="submit">Search</button></div>
+            </fieldset>
+        </form>
+    </div>
+
+    <!-- Top 10 languages in a grid -->
+    <nav class="central-featured">
+        <div class="central-featured-lang">
+            <a href="#"><strong>English</strong>
+            <small>7,141,000+ articles</small></a>
+        </div>
+        <div class="central-featured-lang">
+            <a href="#"><strong>Deutsch</strong>
+            <small>2,989,000+ Artikel</small></a>
+        </div>
+        <div class="central-featured-lang">
+            <a href="#"><strong>Francais</strong>
+            <small>2,740,000+ articles</small></a>
+        </div>
+        <div class="central-featured-lang">
+            <a href="#"><strong>Espanol</strong>
+            <small>2,095,000+ articulos</small></a>
+        </div>
+        <div class="central-featured-lang">
+            <a href="#"><strong>Italiano</strong>
+            <small>1,957,000+ voci</small></a>
+        </div>
+        <div class="central-featured-lang">
+            <a href="#"><strong>Nederlands</strong>
+            <small>2,185,000+ artikelen</small></a>
+        </div>
+        <div class="central-featured-lang">
+            <a href="#"><strong>Polski</strong>
+            <small>1,685,000+ hasel</small></a>
+        </div>
+        <div class="central-featured-lang">
+            <a href="#"><strong>Portugues</strong>
+            <small>1,165,000+ artigos</small></a>
+        </div>
+        <div class="central-featured-lang">
+            <a href="#"><strong>Svenska</strong>
+            <small>2,633,000+ artiklar</small></a>
+        </div>
+    </nav>
+
+    <hr class="divider">
+
+    <!-- 100,000+ articles languages -->
+    <div class="lang-list-container">
+        <div class="lang-list-large">
+            <a href="#">Cebuano <span class="article-count">6M+</span></a>
+            <a href="#">Waray <span class="article-count">1M+</span></a>
+            <a href="#">Svenska <span class="article-count">2M+</span></a>
+            <a href="#">Deutsch <span class="article-count">2M+</span></a>
+            <a href="#">Nederlands <span class="article-count">2M+</span></a>
+            <a href="#">Francais <span class="article-count">2M+</span></a>
+        </div>
+
+        <hr class="divider">
+
+        <div class="lang-list-medium">
+            <a href="#">Bahasa Indonesia</a>
+            <a href="#">Bahasa Melayu</a>
+            <a href="#">Catala</a>
+            <a href="#">Cestina</a>
+            <a href="#">Dansk</a>
+            <a href="#">Esperanto</a>
+            <a href="#">Euskara</a>
+            <a href="#">Galego</a>
+            <a href="#">Hrvatski</a>
+            <a href="#">Lietuviu</a>
+            <a href="#">Magyar</a>
+            <a href="#">Norsk</a>
+            <a href="#">Romana</a>
+            <a href="#">Slovenscina</a>
+            <a href="#">Srpski</a>
+            <a href="#">Suomi</a>
+            <a href="#">Turkce</a>
+            <a href="#">Tieng Viet</a>
+        </div>
+
+        <hr class="divider">
+
+        <div class="lang-list-small">
+            <a href="#">Asturianu</a>
+            <a href="#">Bosanski</a>
+            <a href="#">Eesti</a>
+            <a href="#">Ido</a>
+            <a href="#">Latina</a>
+            <a href="#">Latviesi</a>
+            <a href="#">Macedonski</a>
+            <a href="#">Shqip</a>
+            <a href="#">Sicilianu</a>
+            <a href="#">Slovencina</a>
+            <a href="#">Cymraeg</a>
+        </div>
+    </div>
+
+    <hr class="divider">
+
+    <!-- Sister projects -->
+    <div class="other-projects">
+        <h2>Wikipedia is hosted by the Wikimedia Foundation, a non-profit that also hosts other projects:</h2>
+        <div class="project-item">
+            <strong>Commons</strong>
+            Free media
+        </div>
+        <div class="project-item">
+            <strong>Wiktionary</strong>
+            Dictionary
+        </div>
+        <div class="project-item">
+            <strong>Wikibooks</strong>
+            Textbooks
+        </div>
+        <div class="project-item">
+            <strong>Wikiquote</strong>
+            Quotations
+        </div>
+        <div class="project-item">
+            <strong>Wikisource</strong>
+            Source texts
+        </div>
+        <div class="project-item">
+            <strong>Wikinews</strong>
+            Free news
+        </div>
+        <div class="project-item">
+            <strong>Wikidata</strong>
+            Knowledge base
+        </div>
+        <div class="project-item">
+            <strong>Wikivoyage</strong>
+            Travel guide
+        </div>
+    </div>
+
+    <!-- Percentage padding test -->
+    <div style="padding: 2%; background-color: #f0f0f0; margin: 4px auto; max-width: 440px;">
+        This container has 2% padding on all sides.
+    </div>
+
+    <!-- Inline-block percentage width test -->
+    <div style="max-width: 440px; margin: 4px auto; text-align: center;">
+        <div style="display: inline-block; width: 30%; background-color: #e8e8e8; padding: 4px;">Col 1</div>
+        <div style="display: inline-block; width: 30%; background-color: #d8d8d8; padding: 4px;">Col 2</div>
+        <div style="display: inline-block; width: 30%; background-color: #e8e8e8; padding: 4px;">Col 3</div>
+    </div>
+
+    <!-- Footer -->
+    <div class="footer-sidebar">
+        <a href="#">Privacy policy</a> |
+        <a href="#">Terms of Use</a> |
+        <a href="#">Desktop</a>
+    </div>
+</main>
+</body>
+</html>

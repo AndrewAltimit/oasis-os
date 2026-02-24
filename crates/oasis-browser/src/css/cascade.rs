@@ -1362,6 +1362,9 @@ th {
 br, img, input, button, select, textarea {
     display: inline;
 }
+option {
+    display: none;
+}
 fieldset {
     display: block;
     margin-top: 0;

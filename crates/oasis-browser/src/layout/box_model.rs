@@ -161,7 +161,7 @@ pub enum ListMarker {
     None,
 }
 
-/// Content for replaced elements (img, hr, br, input, button).
+/// Content for replaced elements (img, hr, br, input, button, select).
 #[derive(Debug, Clone)]
 pub enum ReplacedContent {
     Image {
@@ -180,6 +180,10 @@ pub enum ReplacedContent {
     },
     /// A submit/button input.
     SubmitButton {
+        label: String,
+    },
+    /// A `<select>` dropdown box.
+    SelectBox {
         label: String,
     },
 }
