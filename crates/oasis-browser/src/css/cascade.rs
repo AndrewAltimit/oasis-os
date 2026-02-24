@@ -102,11 +102,7 @@ impl SelectorIndex {
                                     selector_filed = true;
                                 },
                                 SimpleSelector::Class(cls) => {
-                                    index
-                                        .by_class
-                                        .entry(cls.clone())
-                                        .or_default()
-                                        .push(entry);
+                                    index.by_class.entry(cls.clone()).or_default().push(entry);
                                     selector_filed = true;
                                 },
                                 SimpleSelector::Type(tag) => {
@@ -1170,8 +1166,10 @@ fn resolve_css_var_depth(
             }
         },
         CssValue::Multiple(parts) => {
-            let resolved: Vec<CssValue> =
-                parts.iter().map(|p| resolve_css_var_depth(p, props, depth + 1)).collect();
+            let resolved: Vec<CssValue> = parts
+                .iter()
+                .map(|p| resolve_css_var_depth(p, props, depth + 1))
+                .collect();
             CssValue::Multiple(resolved)
         },
         other => other.clone(),
@@ -2564,9 +2562,8 @@ mod tests {
     fn pseudo_content_respects_specificity() {
         // Higher-specificity rule (.special::before) should win even
         // when it appears before a lower-specificity rule (p::before).
-        let sheet = Stylesheet::parse(
-            ".special::before { content: \"B\"; } p::before { content: \"A\"; }",
-        );
+        let sheet =
+            Stylesheet::parse(".special::before { content: \"B\"; } p::before { content: \"A\"; }");
         // Build a <p class="special"> element (node 3 in make_doc).
         let doc = make_doc(vec![(
             TagName::P,
