@@ -196,6 +196,8 @@ pub enum CssValue {
     Var(String, Option<String>),
     /// A `url(...)` value.
     Url(String),
+    /// A parsed `linear-gradient(...)` value.
+    Gradient(crate::css::values::LinearGradient),
 }
 
 /// Supported CSS length units.
@@ -1047,6 +1049,12 @@ pub(crate) fn parse_value_list(tokens: &[CssToken]) -> Vec<CssValue> {
                     out.push(CssValue::Url(url_str));
                 } else if let Some(c) = try_parse_color(inner) {
                     out.push(CssValue::Color(c));
+                } else if name.eq_ignore_ascii_case("linear-gradient") {
+                    if let Some(grad) = parse_linear_gradient(inner) {
+                        out.push(CssValue::Gradient(grad));
+                    } else {
+                        out.push(CssValue::Keyword(format!("{}()", name)));
+                    }
                 } else {
                     out.push(CssValue::Keyword(format!("{}()", name)));
                 }
@@ -1232,7 +1240,7 @@ fn parse_rgb_function(tokens: &[&CssToken]) -> Option<CssColor> {
     }
 }
 
-fn named_color(name: &str) -> Option<CssColor> {
+pub(crate) fn named_color(name: &str) -> Option<CssColor> {
     match name.to_ascii_lowercase().as_str() {
         "black" => Some(CssColor::new(0, 0, 0, 255)),
         "white" => Some(CssColor::new(255, 255, 255, 255)),
@@ -1762,7 +1770,7 @@ fn expand_background(value: &CssValue, important: bool) -> Vec<Declaration> {
     // Simple heuristic: if the value is a color, set background-color.
     // If the value is a url(), set background-image.
     match value {
-        CssValue::Url(_) => {
+        CssValue::Url(_) | CssValue::Gradient(_) => {
             vec![Declaration {
                 property: "background-image".into(),
                 value: value.clone(),
@@ -1779,7 +1787,7 @@ fn expand_background(value: &CssValue, important: bool) -> Vec<Declaration> {
         CssValue::Multiple(vs) => {
             let mut decls = Vec::new();
             for v in vs {
-                if matches!(v, CssValue::Url(_)) {
+                if matches!(v, CssValue::Url(_) | CssValue::Gradient(_)) {
                     decls.push(Declaration {
                         property: "background-image".into(),
                         value: v.clone(),
@@ -2024,6 +2032,135 @@ fn expand_font(value: &CssValue, important: bool) -> Vec<Declaration> {
     }
 
     result
+}
+
+// -------------------------------------------------------------------
+// Linear gradient parser
+// -------------------------------------------------------------------
+
+/// Parse the inner tokens of a `linear-gradient(...)` function call.
+///
+/// Supports:
+/// - Direction keywords: `to top`, `to right`, `to bottom`, `to left`
+/// - Angle values: `180deg`, `0.5turn`
+/// - Color stops with optional positions: `red 0%`, `#fff 50%`, `blue`
+fn parse_linear_gradient(inner_tokens: &[CssToken]) -> Option<crate::css::values::LinearGradient> {
+    use crate::css::values::{GradientStop, LinearGradient};
+
+    // Skip the Function token and trailing CloseParen.
+    let args = match inner_tokens.first() {
+        Some(CssToken::Function(_)) => &inner_tokens[1..],
+        _ => inner_tokens,
+    };
+    let args = match args.last() {
+        Some(CssToken::CloseParen) => &args[..args.len() - 1],
+        _ => args,
+    };
+
+    // Split by commas into argument groups.
+    let mut groups: Vec<Vec<&CssToken>> = Vec::new();
+    let mut current: Vec<&CssToken> = Vec::new();
+    for tok in args {
+        if matches!(tok, CssToken::Comma) {
+            if !current.is_empty() {
+                groups.push(std::mem::take(&mut current));
+            }
+        } else if !matches!(tok, CssToken::Whitespace) {
+            current.push(tok);
+        }
+    }
+    if !current.is_empty() {
+        groups.push(current);
+    }
+
+    if groups.len() < 2 {
+        return None;
+    }
+
+    // Try to parse direction from first group.
+    let (direction, color_start) = parse_gradient_direction(&groups[0]);
+    let color_groups = &groups[color_start..];
+
+    if color_groups.len() < 2 {
+        return None;
+    }
+
+    // Parse color stops.
+    let mut stops = Vec::new();
+    for (i, group) in color_groups.iter().enumerate() {
+        let (color, position) = parse_gradient_stop(group)?;
+        let pos = position.unwrap_or_else(|| {
+            if color_groups.len() <= 1 {
+                0.0
+            } else {
+                i as f32 / (color_groups.len() - 1) as f32
+            }
+        });
+        stops.push(GradientStop {
+            color: oasis_types::backend::Color::rgba(color.r, color.g, color.b, color.a),
+            position: pos,
+        });
+    }
+
+    Some(LinearGradient { direction, stops })
+}
+
+fn parse_gradient_direction(group: &[&CssToken]) -> (crate::css::values::GradientDirection, usize) {
+    use crate::css::values::GradientDirection;
+
+    // Check for "to <side>" keyword.
+    if group.len() >= 2
+        && let CssToken::Ident(first) = group[0]
+        && first.eq_ignore_ascii_case("to")
+        && let CssToken::Ident(side) = group[1]
+    {
+        let dir = match side.to_ascii_lowercase().as_str() {
+            "top" => GradientDirection::ToTop,
+            "right" => GradientDirection::ToRight,
+            "bottom" => GradientDirection::ToBottom,
+            "left" => GradientDirection::ToLeft,
+            _ => return (GradientDirection::ToBottom, 0),
+        };
+        return (dir, 1); // skip first group (direction)
+    }
+
+    // Check for angle value (e.g. "180deg", "0.5turn").
+    if group.len() == 1
+        && let CssToken::Dimension(val, unit) = group[0]
+    {
+        let angle = match unit.to_ascii_lowercase().as_str() {
+            "deg" => *val,
+            "rad" => val * 180.0 / std::f32::consts::PI,
+            "turn" => val * 360.0,
+            "grad" => val * 0.9,
+            _ => return (GradientDirection::ToBottom, 0),
+        };
+        return (GradientDirection::Angle(angle), 1);
+    }
+
+    // Default direction: to bottom.
+    (GradientDirection::ToBottom, 0)
+}
+
+fn parse_gradient_stop(group: &[&CssToken]) -> Option<(CssColor, Option<f32>)> {
+    // Try to parse the color from the tokens.
+    let color_tokens: Vec<CssToken> = group.iter().map(|t| (*t).clone()).collect();
+
+    // Try to get color from first token(s).
+    let color = try_parse_color(&color_tokens)?;
+
+    // Check for position (percentage or length) in remaining tokens.
+    let position = group.iter().find_map(|tok| match tok {
+        CssToken::Percentage(p) => Some(*p / 100.0),
+        CssToken::Dimension(v, unit) if unit.eq_ignore_ascii_case("px") => {
+            // Position in px — can't resolve without knowing box size,
+            // treat as percentage of a typical box (approximate).
+            Some((*v / 100.0).clamp(0.0, 1.0))
+        },
+        _ => None,
+    });
+
+    Some((color, position))
 }
 
 // -------------------------------------------------------------------
@@ -2749,6 +2886,42 @@ mod tests {
             matches!(&bc.unwrap().value, CssValue::Var(name, None) if name == "--color"),
             "border-color should be var(--color)"
         );
+    }
+
+    #[test]
+    fn linear_gradient_to_right() {
+        let css = "div { background: linear-gradient(to right, red, blue); }";
+        let sheet = parse(css);
+        let decls = &sheet.rules[0].declarations;
+        let bg_image = decls
+            .iter()
+            .find(|d| d.property == "background-image")
+            .expect("should have background-image");
+        assert!(
+            matches!(&bg_image.value, CssValue::Gradient(_)),
+            "should parse as gradient"
+        );
+        if let CssValue::Gradient(ref g) = bg_image.value {
+            assert_eq!(g.direction, crate::css::values::GradientDirection::ToRight);
+            assert_eq!(g.stops.len(), 2);
+        }
+    }
+
+    #[test]
+    fn linear_gradient_default_direction() {
+        let css = "div { background-image: linear-gradient(red, blue); }";
+        let sheet = parse(css);
+        let decls = &sheet.rules[0].declarations;
+        let bg_image = decls
+            .iter()
+            .find(|d| d.property == "background-image")
+            .expect("should have background-image");
+        if let CssValue::Gradient(ref g) = bg_image.value {
+            assert_eq!(g.direction, crate::css::values::GradientDirection::ToBottom);
+            assert_eq!(g.stops.len(), 2);
+        } else {
+            panic!("expected gradient");
+        }
     }
 
     mod prop {

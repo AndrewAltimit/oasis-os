@@ -1,0 +1,212 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Rust (programming language) - Wikipedia</title>
+<style>
+body {
+    margin: 0;
+    font-family: sans-serif;
+    font-size: 14px;
+    background: #fff;
+    color: #202122;
+}
+a { color: #36c; text-decoration: none; }
+a:hover { text-decoration: underline; }
+/* Page layout */
+.header {
+    background: #fff;
+    border-bottom: 1px solid #a7d7f9;
+    padding: 4px 8px;
+    font-size: 12px;
+}
+.header a { margin-right: 10px; }
+.content {
+    max-width: 460px;
+    margin: 0 auto;
+    padding: 0 8px;
+}
+h1 {
+    font-size: 24px;
+    font-weight: normal;
+    border-bottom: 1px solid #a2a9b1;
+    padding-bottom: 2px;
+    margin: 8px 0 4px;
+}
+h2 {
+    font-size: 18px;
+    font-weight: bold;
+    border-bottom: 1px solid #a2a9b1;
+    padding-bottom: 2px;
+    margin: 16px 0 4px;
+}
+h3 {
+    font-size: 15px;
+    font-weight: bold;
+    margin: 12px 0 4px;
+}
+p { margin: 4px 0 8px; line-height: 1.6; }
+/* Infobox */
+.infobox {
+    float: right;
+    width: 180px;
+    margin: 0 0 8px 8px;
+    border: 1px solid #a2a9b1;
+    background: #f8f9fa;
+    font-size: 12px;
+    border-collapse: collapse;
+}
+.infobox caption {
+    font-weight: bold;
+    font-size: 14px;
+    padding: 4px;
+    background: #ddd;
+}
+.infobox th {
+    text-align: left;
+    padding: 2px 4px;
+    background: #e8e8e8;
+    border: 1px solid #a2a9b1;
+    font-weight: bold;
+}
+.infobox td {
+    padding: 2px 4px;
+    border: 1px solid #a2a9b1;
+}
+/* Table of contents */
+.toc {
+    background: #f8f9fa;
+    border: 1px solid #a2a9b1;
+    padding: 4px 8px;
+    margin: 8px 0;
+    display: inline-block;
+}
+.toc-title { font-weight: bold; margin-bottom: 4px; }
+.toc ol { margin: 0; padding-left: 20px; }
+.toc li { margin: 2px 0; }
+/* Code */
+code {
+    background: #f8f9fa;
+    padding: 1px 4px;
+    border: 1px solid #eaecf0;
+    font-size: 13px;
+}
+pre {
+    background: #f8f9fa;
+    border: 1px solid #eaecf0;
+    padding: 8px;
+    overflow: hidden;
+    font-size: 13px;
+}
+/* References */
+.references {
+    font-size: 11px;
+    color: #54595d;
+}
+.references ol { padding-left: 20px; }
+/* Categories */
+.categories {
+    border-top: 1px solid #a2a9b1;
+    margin-top: 16px;
+    padding-top: 4px;
+    font-size: 12px;
+    color: #54595d;
+}
+</style>
+</head>
+<body>
+<!-- Header -->
+<div class="header">
+    <a href="#">Main page</a>
+    <a href="#">Contents</a>
+    <a href="#">Current events</a>
+    <a href="#">Random article</a>
+    <a href="#">About Wikipedia</a>
+</div>
+
+<div class="content">
+<h1>Rust (programming language)</h1>
+
+<!-- Infobox -->
+<table class="infobox">
+    <caption>Rust</caption>
+    <tr><th>Paradigm</th><td>Multi-paradigm</td></tr>
+    <tr><th>Designed by</th><td>Graydon Hoare</td></tr>
+    <tr><th>Developer</th><td>Rust Foundation</td></tr>
+    <tr><th>First appeared</th><td>July 7, 2010</td></tr>
+    <tr><th>Stable release</th><td>1.84.0</td></tr>
+    <tr><th>Typing</th><td>Static, strong, inferred</td></tr>
+    <tr><th>License</th><td>MIT or Apache 2.0</td></tr>
+    <tr><th>Website</th><td><a href="#">rust-lang.org</a></td></tr>
+</table>
+
+<p><b>Rust</b> is a general-purpose programming language emphasizing performance,
+type safety, and concurrency. It enforces memory safety without a garbage collector.
+Rust was originally designed by Graydon Hoare at Mozilla Research.</p>
+
+<!-- TOC -->
+<div class="toc">
+    <div class="toc-title">Contents</div>
+    <ol>
+        <li><a href="#history">History</a></li>
+        <li><a href="#features">Features</a></li>
+        <li><a href="#syntax">Syntax and semantics</a></li>
+        <li><a href="#references">References</a></li>
+    </ol>
+</div>
+
+<h2 id="history">History</h2>
+<p>Rust grew out of a personal project begun in 2006 by Mozilla Research employee
+Graydon Hoare. Mozilla began sponsoring the project in 2009. The first stable
+release, <b>Rust 1.0</b>, was announced on May 15, 2015.</p>
+
+<p>In 2021, the <a href="#">Rust Foundation</a> was established as an independent
+non-profit organization to steward the language. Founding members included
+<a href="#">AWS</a>, <a href="#">Google</a>, <a href="#">Huawei</a>,
+<a href="#">Microsoft</a>, and <a href="#">Mozilla</a>.</p>
+
+<h2 id="features">Features</h2>
+
+<h3>Memory safety</h3>
+<p>Rust's ownership system ensures memory safety at compile time without needing a
+garbage collector. Each value has a single <i>owner</i>, and the compiler checks
+that references (<code>&amp;T</code> and <code>&amp;mut T</code>) follow
+strict borrowing rules.</p>
+
+<h3>Concurrency</h3>
+<p>The type system prevents data races at compile time. Traits like <code>Send</code>
+and <code>Sync</code> control which types can be shared across threads.</p>
+
+<h2 id="syntax">Syntax and semantics</h2>
+<p>A simple "Hello, World!" program in Rust:</p>
+<pre>fn main() {
+    println!("Hello, World!");
+}</pre>
+
+<p>Rust uses pattern matching extensively:</p>
+<pre>match value {
+    1 => println!("one"),
+    2 | 3 => println!("two or three"),
+    _ => println!("other"),
+}</pre>
+
+<h2 id="references">References</h2>
+<div class="references">
+    <ol>
+        <li>Hoare, Graydon. "Rust." Personal blog, 2010.</li>
+        <li>"Announcing Rust 1.0." The Rust Blog, May 2015.</li>
+        <li>"Rust Foundation." rust-lang.org, February 2021.</li>
+        <li>Matsakis, Niko. "Ownership and borrowing." 2014.</li>
+    </ol>
+</div>
+
+<div class="categories">
+    <b>Categories:</b>
+    <a href="#">Programming languages</a> |
+    <a href="#">Systems programming languages</a> |
+    <a href="#">Mozilla</a> |
+    <a href="#">Free compilers</a>
+</div>
+</div>
+</body>
+</html>

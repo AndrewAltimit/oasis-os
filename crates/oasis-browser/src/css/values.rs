@@ -229,6 +229,13 @@ pub enum OverflowWrap {
     Anywhere,
 }
 
+/// CSS `text-overflow` property.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TextOverflow {
+    Clip,
+    Ellipsis,
+}
+
 /// CSS `box-sizing` property.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BoxSizing {
@@ -247,11 +254,47 @@ pub enum VerticalAlign {
     TextBottom,
 }
 
+/// A color stop in a CSS gradient.
+#[derive(Debug, Clone, PartialEq)]
+pub struct GradientStop {
+    pub color: Color,
+    /// Position as a fraction 0.0 ..= 1.0.
+    pub position: f32,
+}
+
+/// CSS linear-gradient direction.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum GradientDirection {
+    /// Angle in degrees (0 = to top, 90 = to right).
+    Angle(f32),
+    ToTop,
+    ToRight,
+    ToBottom,
+    ToLeft,
+}
+
+/// A parsed CSS `linear-gradient(...)` value.
+#[derive(Debug, Clone, PartialEq)]
+pub struct LinearGradient {
+    pub direction: GradientDirection,
+    pub stops: Vec<GradientStop>,
+}
+
 /// CSS `background-image` property.
 #[derive(Debug, Clone, PartialEq)]
 pub enum BackgroundImage {
     None,
     Url(String),
+    Gradient(LinearGradient),
+}
+
+/// CSS `text-shadow` value.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct TextShadow {
+    pub offset_x: f32,
+    pub offset_y: f32,
+    pub blur: f32,
+    pub color: Color,
 }
 
 /// CSS `box-shadow` value.
@@ -365,6 +408,7 @@ pub struct ComputedStyle {
     // -- Visual effects -----------------------------------------------
     pub border_radius: f32,
     pub box_shadow: Option<BoxShadow>,
+    pub text_shadow: Option<TextShadow>,
     pub opacity: f32,
 
     // -- Box sizing -----------------------------------------------------
@@ -373,6 +417,7 @@ pub struct ComputedStyle {
     // -- Text overflow --------------------------------------------------
     pub word_break: WordBreak,
     pub overflow_wrap: OverflowWrap,
+    pub text_overflow: TextOverflow,
 
     // -- Vertical alignment ---------------------------------------------
     pub vertical_align: VerticalAlign,
@@ -488,6 +533,7 @@ impl Default for ComputedStyle {
             // Visual effects
             border_radius: 0.0,
             box_shadow: None,
+            text_shadow: None,
             opacity: 1.0,
 
             // Box sizing
@@ -496,6 +542,7 @@ impl Default for ComputedStyle {
             // Text overflow
             word_break: WordBreak::Normal,
             overflow_wrap: OverflowWrap::Normal,
+            text_overflow: TextOverflow::Clip,
 
             // Vertical alignment
             vertical_align: VerticalAlign::Baseline,
@@ -547,6 +594,8 @@ impl ComputedStyle {
             letter_spacing: parent.letter_spacing,
             word_spacing: parent.word_spacing,
             white_space: parent.white_space,
+            // Inherited text shadow.
+            text_shadow: parent.text_shadow,
             // Inherited visibility.
             visibility: parent.visibility,
             // Inherited list properties.
@@ -1098,6 +1147,39 @@ impl ComputedStyle {
                 // Complex box-shadow values are parsed from the raw
                 // declaration list in the cascade.
             },
+            "text-shadow" => {
+                if let Some(kw) = as_keyword(value) {
+                    if kw == "none" {
+                        self.text_shadow = None;
+                    }
+                } else if let CssValue::Multiple(vs) = value {
+                    // text-shadow: <offset-x> <offset-y> [blur] [color]
+                    let mut nums = Vec::new();
+                    let mut color = None;
+                    for v in vs {
+                        match v {
+                            CssValue::Length(n, _) | CssValue::Number(n) => nums.push(*n),
+                            CssValue::Color(c) => {
+                                color = Some(Color::rgba(c.r, c.g, c.b, c.a));
+                            },
+                            CssValue::Keyword(kw) => {
+                                if let Some(c) = crate::css::parser::named_color(kw) {
+                                    color = Some(Color::rgba(c.r, c.g, c.b, c.a));
+                                }
+                            },
+                            _ => {},
+                        }
+                    }
+                    if nums.len() >= 2 {
+                        self.text_shadow = Some(TextShadow {
+                            offset_x: nums[0],
+                            offset_y: nums[1],
+                            blur: nums.get(2).copied().unwrap_or(0.0),
+                            color: color.unwrap_or(Color::rgba(0, 0, 0, 255)),
+                        });
+                    }
+                }
+            },
 
             // -- Box sizing ---------------------------------------------
             "box-sizing" => {
@@ -1133,6 +1215,8 @@ impl ComputedStyle {
                     }
                 } else if let CssValue::Url(ref url) = *value {
                     self.background_image = BackgroundImage::Url(url.clone());
+                } else if let CssValue::Gradient(ref grad) = *value {
+                    self.background_image = BackgroundImage::Gradient(grad.clone());
                 }
             },
 
@@ -1151,6 +1235,14 @@ impl ComputedStyle {
                         "break-word" => OverflowWrap::BreakWord,
                         "anywhere" => OverflowWrap::Anywhere,
                         _ => OverflowWrap::Normal,
+                    };
+                }
+            },
+            "text-overflow" => {
+                if let Some(kw) = as_keyword(value) {
+                    self.text_overflow = match kw {
+                        "ellipsis" => TextOverflow::Ellipsis,
+                        _ => TextOverflow::Clip,
                     };
                 }
             },
@@ -1636,6 +1728,63 @@ mod tests {
             Color::rgb(255, 0, 0),
             "currentcolor should resolve to element's color",
         );
+    }
+
+    #[test]
+    fn text_shadow_parsed() {
+        let mut s = ComputedStyle::default();
+        let value = CssValue::Multiple(vec![
+            CssValue::Length(2.0, LengthUnit::Px),
+            CssValue::Length(3.0, LengthUnit::Px),
+            CssValue::Length(1.0, LengthUnit::Px),
+            CssValue::Color(CssColor {
+                r: 0,
+                g: 0,
+                b: 0,
+                a: 255,
+            }),
+        ]);
+        s.apply_declaration("text-shadow", &value, 16.0);
+        let ts = s.text_shadow.expect("should parse text-shadow");
+        assert_eq!(ts.offset_x, 2.0);
+        assert_eq!(ts.offset_y, 3.0);
+        assert_eq!(ts.blur, 1.0);
+        assert_eq!(ts.color, Color::rgba(0, 0, 0, 255));
+    }
+
+    #[test]
+    fn text_shadow_none() {
+        let mut s = ComputedStyle::default();
+        s.text_shadow = Some(TextShadow {
+            offset_x: 1.0,
+            offset_y: 1.0,
+            blur: 0.0,
+            color: Color::rgb(0, 0, 0),
+        });
+        let value = CssValue::Keyword("none".into());
+        s.apply_declaration("text-shadow", &value, 16.0);
+        assert!(s.text_shadow.is_none());
+    }
+
+    #[test]
+    fn gradient_background_image_applied() {
+        let mut s = ComputedStyle::default();
+        let grad = LinearGradient {
+            direction: GradientDirection::ToRight,
+            stops: vec![
+                GradientStop {
+                    color: Color::rgb(255, 0, 0),
+                    position: 0.0,
+                },
+                GradientStop {
+                    color: Color::rgb(0, 0, 255),
+                    position: 1.0,
+                },
+            ],
+        };
+        let value = CssValue::Gradient(grad.clone());
+        s.apply_declaration("background-image", &value, 16.0);
+        assert_eq!(s.background_image, BackgroundImage::Gradient(grad));
     }
 
     mod prop {

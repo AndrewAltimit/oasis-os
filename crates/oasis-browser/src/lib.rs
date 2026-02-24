@@ -1843,15 +1843,16 @@ mod tests {
     #[test]
     fn simple_text_measurer() {
         let m = SimpleTextMeasurer;
-        // Proportional: h(7)+e(7)+l(5)+l(5)+o(7) = 31, scale=1 at font_size 12
+        // Sub-pixel: h(7*12/8)+e(7*12/8)+l(5*12/8)+l(5*12/8)+o(7*12/8)
+        //          = 10+10+7+7+10 = 44
         assert_eq!(
             layout::block::TextMeasurer::measure_text(&m, "hello", 12,),
-            31
+            44
         );
         assert_eq!(layout::block::TextMeasurer::measure_text(&m, "", 12,), 0);
-        // 'a' advance=7, scale=2 at font_size 16
+        // 'a' advance=7, 7*16/8 = 14
         assert_eq!(layout::block::TextMeasurer::measure_text(&m, "a", 16,), 14);
-        // t(7)+e(7)+s(7)+t(7) = 28, scale=1 at font_size 8
+        // t(7)+e(7)+s(7)+t(7): 7*8/8 * 4 = 28
         assert_eq!(
             layout::block::TextMeasurer::measure_text(&m, "test", 8,),
             28

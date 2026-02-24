@@ -156,40 +156,64 @@ impl SdiBackend for SdlBackend {
         font_size: u16,
         color: Color,
     ) -> Result<()> {
+        self.draw_text_styled(text, x, y, font_size, color, false, false)
+    }
+
+    fn draw_text_styled(
+        &mut self,
+        text: &str,
+        x: i32,
+        y: i32,
+        font_size: u16,
+        color: Color,
+        bold: bool,
+        italic: bool,
+    ) -> Result<()> {
         let (tx, ty) = self.translate(x, y);
-        let scale = if font_size >= 8 {
-            (font_size / 8) as i32
-        } else {
-            1
-        };
+        let fs = font_size.max(1) as i32;
         let sdl_color = sdl2::pixels::Color::RGBA(color.r, color.g, color.b, color.a);
         self.canvas.set_draw_color(sdl_color);
 
         let mut cx = tx;
         for ch in text.chars() {
             let glyph_data = font::glyph(ch);
-            let (left_pad, advance) = font::glyph_metrics(ch);
+            let (left_pad, _advance) = font::glyph_metrics(ch);
             let left_pad = left_pad as i32;
             for row in 0..8i32 {
                 let bits = glyph_data[row as usize];
+                if bits == 0 {
+                    continue;
+                }
+                let oy0 = row * fs / 8;
+                let oy1 = (row + 1) * fs / 8;
+                let rh = (oy1 - oy0).max(1);
+                // Faux-italic: shift top rows rightward (~12-degree).
+                let italic_offset = if italic { (7 - row) * fs / 32 } else { 0 };
                 for col in 0..8i32 {
                     if bits & (0x80 >> col) != 0 {
-                        let px = cx + (col - left_pad) * scale;
-                        let py = ty + row * scale;
-                        if scale == 1 {
+                        let src_col = col - left_pad;
+                        let ox0 = src_col * fs / 8;
+                        let ox1 = (src_col + 1) * fs / 8;
+                        let rw = (ox1 - ox0).max(1);
+                        let px = cx + ox0 + italic_offset;
+                        let py = ty + oy0;
+                        if rw == 1 && rh == 1 {
                             let _ = self.canvas.draw_point(sdl2::rect::Point::new(px, py));
                         } else {
-                            let _ = self.canvas.fill_rect(Rect::new(
-                                px,
-                                py,
-                                scale as u32,
-                                scale as u32,
-                            ));
+                            let _ = self
+                                .canvas
+                                .fill_rect(Rect::new(px, py, rw as u32, rh as u32));
+                        }
+                        if bold {
+                            let _ = self.canvas.draw_point(sdl2::rect::Point::new(px + 1, py));
+                            if rh > 1 {
+                                let _ = self.canvas.fill_rect(Rect::new(px + 1, py, 1, rh as u32));
+                            }
                         }
                     }
                 }
             }
-            cx += advance as i32 * scale;
+            cx += oasis_types::bitmap_font::glyph_advance_scaled(ch, font_size) as i32;
         }
         Ok(())
     }

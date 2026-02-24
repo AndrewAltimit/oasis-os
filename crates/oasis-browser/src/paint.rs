@@ -15,7 +15,7 @@
 
 use std::collections::HashMap;
 
-use crate::css::values::{BorderStyle, Overflow, TextDecoration, Visibility};
+use crate::css::values::{BorderStyle, Overflow, TextDecoration, TextOverflow, Visibility};
 use crate::html::dom::NodeId;
 use crate::layout::box_model::{BoxType, LayoutBox, ListMarker, Rect, ReplacedContent};
 use oasis_types::backend::{Color, SdiBackend};
@@ -60,6 +60,8 @@ struct PaintContext {
     viewport_height: f32,
     /// Active clipping rectangle from ancestor `overflow: hidden` boxes.
     clip_rect: Option<Rect>,
+    /// When true, text overflowing the clip rect gets "..." appended.
+    text_overflow_ellipsis: bool,
 }
 
 // -------------------------------------------------------------------
@@ -89,6 +91,7 @@ pub fn paint(
         scroll_y,
         viewport_height,
         clip_rect: None,
+        text_overflow_ellipsis: false,
     };
 
     paint_box(layout, backend, viewport_x, viewport_y, &mut ctx, link_map)?;
@@ -177,12 +180,14 @@ fn paint_box(
     // Check overflow:hidden clipping -- if this box clips, intersect
     // with any existing clip from an ancestor.
     let prev_clip = ctx.clip_rect;
+    let prev_ellipsis = ctx.text_overflow_ellipsis;
     if layout_box.style.overflow == Overflow::Hidden {
         let new_clip = layout_box.dimensions.content;
         ctx.clip_rect = Some(match ctx.clip_rect {
             Some(existing) => intersect_rects(existing, new_clip),
             None => new_clip,
         });
+        ctx.text_overflow_ellipsis = layout_box.style.text_overflow == TextOverflow::Ellipsis;
     }
 
     // 3-6. Children / inline content / replaced / markers
@@ -229,8 +234,9 @@ fn paint_box(
         },
     }
 
-    // Restore previous clip rect.
+    // Restore previous clip rect and ellipsis flag.
     ctx.clip_rect = prev_clip;
+    ctx.text_overflow_ellipsis = prev_ellipsis;
 
     // Record a link hit region when leaving a link element.
     if let Some((ref href, link_node)) = ctx.current_link
@@ -290,9 +296,143 @@ fn paint_background(
         }
     }
 
+    // Paint linear gradient background.
+    if let crate::css::values::BackgroundImage::Gradient(ref grad) =
+        layout_box.style.background_image
+    {
+        paint_linear_gradient(backend, x, y, w, h, grad, layout_box.style.opacity)?;
+    }
+
     // Paint background image (if texture has been resolved).
     if let Some(tex) = layout_box.background_texture {
         backend.blit(tex, x, y, w, h)?;
+    }
+
+    Ok(())
+}
+
+/// Render a CSS `linear-gradient(...)` using the backend's gradient fill.
+fn paint_linear_gradient(
+    backend: &mut dyn SdiBackend,
+    x: i32,
+    y: i32,
+    w: u32,
+    h: u32,
+    grad: &crate::css::values::LinearGradient,
+    opacity: f32,
+) -> Result<()> {
+    use crate::css::values::GradientDirection;
+    use oasis_types::backend::GradientStyle;
+
+    if grad.stops.len() < 2 || w == 0 || h == 0 {
+        return Ok(());
+    }
+
+    let first = apply_opacity(grad.stops[0].color, opacity);
+    let last = apply_opacity(grad.stops[grad.stops.len() - 1].color, opacity);
+
+    match grad.direction {
+        GradientDirection::ToBottom | GradientDirection::Angle(180.0) => {
+            backend.fill_rect_gradient(
+                x,
+                y,
+                w,
+                h,
+                &GradientStyle::Vertical {
+                    top: first,
+                    bottom: last,
+                },
+            )?;
+        },
+        GradientDirection::ToTop | GradientDirection::Angle(0.0) => {
+            backend.fill_rect_gradient(
+                x,
+                y,
+                w,
+                h,
+                &GradientStyle::Vertical {
+                    top: last,
+                    bottom: first,
+                },
+            )?;
+        },
+        GradientDirection::ToRight | GradientDirection::Angle(90.0) => {
+            backend.fill_rect_gradient(
+                x,
+                y,
+                w,
+                h,
+                &GradientStyle::Horizontal {
+                    left: first,
+                    right: last,
+                },
+            )?;
+        },
+        GradientDirection::ToLeft | GradientDirection::Angle(270.0) => {
+            backend.fill_rect_gradient(
+                x,
+                y,
+                w,
+                h,
+                &GradientStyle::Horizontal {
+                    left: last,
+                    right: first,
+                },
+            )?;
+        },
+        GradientDirection::Angle(deg) => {
+            // For arbitrary angles, approximate with the closest axis.
+            let norm = ((deg % 360.0) + 360.0) % 360.0;
+            if !(45.0..315.0).contains(&norm) {
+                // ~to top
+                backend.fill_rect_gradient(
+                    x,
+                    y,
+                    w,
+                    h,
+                    &GradientStyle::Vertical {
+                        top: last,
+                        bottom: first,
+                    },
+                )?;
+            } else if norm < 135.0 {
+                // ~to right
+                backend.fill_rect_gradient(
+                    x,
+                    y,
+                    w,
+                    h,
+                    &GradientStyle::Horizontal {
+                        left: first,
+                        right: last,
+                    },
+                )?;
+            } else if norm < 225.0 {
+                // ~to bottom
+                backend.fill_rect_gradient(
+                    x,
+                    y,
+                    w,
+                    h,
+                    &GradientStyle::Vertical {
+                        top: first,
+                        bottom: last,
+                    },
+                )?;
+            } else {
+                // ~to left
+                backend.fill_rect_gradient(
+                    x,
+                    y,
+                    w,
+                    h,
+                    &GradientStyle::Horizontal {
+                        left: last,
+                        right: first,
+                    },
+                )?;
+            }
+        },
     }
 
     Ok(())
@@ -513,12 +653,68 @@ fn paint_text(
     let sy = (y - ctx.scroll_y + offset_y as f32) as i32;
 
     let color = apply_opacity(style.color, style.opacity);
-    backend.draw_text(text, sx, sy, style.font_size as u16, color)?;
+    let bold = style.font_weight == crate::css::values::FontWeight::Bold;
+    let italic = style.font_style == crate::css::values::FontStyle::Italic;
+    let font_size = style.font_size as u16;
+
+    // text-overflow: ellipsis — truncate text that overflows the clip
+    // rect's right edge and append "…".
+    let display_text: std::borrow::Cow<'_, str>;
+    if ctx.text_overflow_ellipsis {
+        if let Some(clip) = &ctx.clip_rect {
+            let max_x = (clip.x + clip.width) as i32 - offset_x;
+            let avail = (max_x - sx).max(0) as u32;
+            let text_w = oasis_types::backend::bitmap_measure_text(text, font_size);
+            if text_w > avail {
+                let ellipsis = "\u{2026}";
+                let ew = oasis_types::backend::bitmap_measure_text(ellipsis, font_size);
+                let target = avail.saturating_sub(ew);
+                let mut accum = 0u32;
+                let mut cut = 0;
+                for (i, ch) in text.char_indices() {
+                    let cw = oasis_types::bitmap_font::glyph_advance_scaled(ch, font_size);
+                    if accum + cw > target {
+                        cut = i;
+                        break;
+                    }
+                    accum += cw;
+                    cut = i + ch.len_utf8();
+                }
+                let mut truncated = text[..cut].to_string();
+                truncated.push_str(ellipsis);
+                display_text = std::borrow::Cow::Owned(truncated);
+            } else {
+                display_text = std::borrow::Cow::Borrowed(text);
+            }
+        } else {
+            display_text = std::borrow::Cow::Borrowed(text);
+        }
+    } else {
+        display_text = std::borrow::Cow::Borrowed(text);
+    }
+
+    // Draw text shadow first (behind the main text).
+    if let Some(ref shadow) = style.text_shadow {
+        let shadow_color = apply_opacity(shadow.color, style.opacity);
+        let shx = sx + shadow.offset_x as i32;
+        let shy = sy + shadow.offset_y as i32;
+        backend.draw_text_styled(
+            &display_text,
+            shx,
+            shy,
+            font_size,
+            shadow_color,
+            bold,
+            italic,
+        )?;
+    }
+
+    backend.draw_text_styled(&display_text, sx, sy, font_size, color, bold, italic)?;
 
     // Measure actual text width including letter-spacing.
-    let mut text_w = oasis_types::backend::bitmap_measure_text(text, style.font_size as u16) as f32;
+    let mut text_w = oasis_types::backend::bitmap_measure_text(&display_text, font_size) as f32;
     if style.letter_spacing != 0.0 {
-        let chars = text.chars().count();
+        let chars = display_text.chars().count();
         if chars > 1 {
             text_w += style.letter_spacing * (chars - 1) as f32;
         }
@@ -645,7 +841,9 @@ fn paint_replaced(
         ReplacedContent::LineBreak => {
             // Nothing to paint.
         },
-        ReplacedContent::TextInput { value, .. } => {
+        ReplacedContent::TextInput {
+            value, placeholder, ..
+        } => {
             let style = &layout_box.style;
             let w = content.width as u32;
             let h = content.height as u32;
@@ -660,28 +858,36 @@ fn paint_replaced(
             } else {
                 backend.fill_rect(x, y, w, h, bg)?;
             }
-            // Border: use CSS border properties, fallback to 1px gray.
-            let bw = if style.border_top_style != BorderStyle::None {
-                style.border_top_width.max(1.0) as u32
+            // Border: use CSS border properties, or default 3D inset.
+            let has_css_border = style.border_top_style != BorderStyle::None;
+            if has_css_border {
+                let bw = style.border_top_width.max(1.0) as u32;
+                let bc = style.border_top_color;
+                backend.fill_rect(x, y, w, bw, bc)?;
+                let bc_b = style.border_bottom_color;
+                backend.fill_rect(x, y + h as i32 - bw as i32, w, bw, bc_b)?;
+                let bc_l = style.border_left_color;
+                backend.fill_rect(x, y, bw, h, bc_l)?;
+                let bc_r = style.border_right_color;
+                backend.fill_rect(x + w as i32 - bw as i32, y, bw, h, bc_r)?;
             } else {
-                1
-            };
-            let border_color = if style.border_top_style != BorderStyle::None {
-                style.border_top_color
-            } else {
-                Color::rgb(118, 118, 118)
-            };
-            backend.fill_rect(x, y, w, bw, border_color)?;
-            backend.fill_rect(x, y + h as i32 - bw as i32, w, bw, border_color)?;
-            backend.fill_rect(x, y, bw, h, border_color)?;
-            backend.fill_rect(x + w as i32 - bw as i32, y, bw, h, border_color)?;
-            // Value text: use CSS color and font-size.
+                // 3D inset appearance: dark top/left, light bottom/right.
+                let dark = Color::rgb(118, 118, 118);
+                let light = Color::rgb(200, 200, 200);
+                backend.fill_rect(x, y, w, 1, dark)?;
+                backend.fill_rect(x, y, 1, h, dark)?;
+                backend.fill_rect(x, y + h as i32 - 1, w, 1, light)?;
+                backend.fill_rect(x + w as i32 - 1, y, 1, h, light)?;
+            }
+            let font_size = style.font_size as u16;
+            let pad = style.padding_left.max(3.0) as i32;
+            let pad_top = ((h as i32 - font_size as i32) / 2).max(1);
+            // Show value text, or placeholder if empty.
             if !value.is_empty() {
-                let text_color = style.color;
-                let font_size = style.font_size as u16;
-                let pad = style.padding_left.max(3.0) as i32;
-                let pad_top = style.padding_top.max(3.0) as i32;
-                backend.draw_text(value, x + pad, y + pad_top, font_size, text_color)?;
+                backend.draw_text(value, x + pad, y + pad_top, font_size, style.color)?;
+            } else if !placeholder.is_empty() {
+                let gray = Color::rgb(160, 160, 160);
+                backend.draw_text(placeholder, x + pad, y + pad_top, font_size, gray)?;
             }
         },
         ReplacedContent::SubmitButton { label } => {
@@ -699,21 +905,27 @@ fn paint_replaced(
             } else {
                 backend.fill_rect(x, y, w, h, bg)?;
             }
-            // Border: use CSS border properties, fallback to 1px gray.
-            let bw = if style.border_top_style != BorderStyle::None {
-                style.border_top_width.max(1.0) as u32
+            // Border: use CSS border properties, or default 3D raised.
+            let has_css_border = style.border_top_style != BorderStyle::None;
+            if has_css_border {
+                let bw = style.border_top_width.max(1.0) as u32;
+                let bc = style.border_top_color;
+                backend.fill_rect(x, y, w, bw, bc)?;
+                let bc_b = style.border_bottom_color;
+                backend.fill_rect(x, y + h as i32 - bw as i32, w, bw, bc_b)?;
+                let bc_l = style.border_left_color;
+                backend.fill_rect(x, y, bw, h, bc_l)?;
+                let bc_r = style.border_right_color;
+                backend.fill_rect(x + w as i32 - bw as i32, y, bw, h, bc_r)?;
             } else {
-                1
-            };
-            let border_color = if style.border_top_style != BorderStyle::None {
-                style.border_top_color
-            } else {
-                Color::rgb(118, 118, 118)
-            };
-            backend.fill_rect(x, y, w, bw, border_color)?;
-            backend.fill_rect(x, y + h as i32 - bw as i32, w, bw, border_color)?;
-            backend.fill_rect(x, y, bw, h, border_color)?;
-            backend.fill_rect(x + w as i32 - bw as i32, y, bw, h, border_color)?;
+                // 3D raised appearance: light top/left, dark bottom/right.
+                let light = Color::rgb(255, 255, 255);
+                let dark = Color::rgb(160, 160, 160);
+                backend.fill_rect(x, y, w, 1, light)?;
+                backend.fill_rect(x, y, 1, h, light)?;
+                backend.fill_rect(x, y + h as i32 - 1, w, 1, dark)?;
+                backend.fill_rect(x + w as i32 - 1, y, 1, h, dark)?;
+            }
             // Label text centered using bitmap measurement.
             let font_size = style.font_size as u16;
             let text_color = style.color;

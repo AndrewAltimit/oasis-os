@@ -10,7 +10,9 @@ use super::text::{
     apply_text_transform, collapse_whitespace, measure_space, measure_word, replace_unrenderable,
     split_into_words,
 };
-use crate::css::values::{ComputedStyle, Dimension, TextAlign, VerticalAlign, WhiteSpace};
+use crate::css::values::{
+    ComputedStyle, Dimension, OverflowWrap, TextAlign, VerticalAlign, WhiteSpace, WordBreak,
+};
 use crate::html::dom::NodeId;
 
 // -------------------------------------------------------------------
@@ -33,6 +35,9 @@ pub fn layout_inline(parent: &mut LayoutBox, measurer: &dyn TextMeasurer) {
     let first_line_width = (available_width - text_indent).max(0.0);
     let mut current_line = LineBox::new(first_line_width);
     let nowrap = parent.style.white_space == WhiteSpace::NoWrap;
+    let break_all = parent.style.word_break == WordBreak::BreakAll;
+    let break_word = parent.style.overflow_wrap == OverflowWrap::BreakWord
+        || parent.style.overflow_wrap == OverflowWrap::Anywhere;
 
     for fragment in &fragments {
         // Check for line break fragments (<br> or "\n" in pre mode).
@@ -59,16 +64,47 @@ pub fn layout_inline(parent: &mut LayoutBox, measurer: &dyn TextMeasurer) {
             continue;
         }
 
+        // word-break: break-all — always break at character boundaries.
+        if break_all {
+            let pieces = break_word_fragment(fragment, available_width, measurer);
+            for piece in &pieces {
+                if !current_line.try_add(piece) {
+                    lines.push(current_line);
+                    current_line = LineBox::new(available_width);
+                    current_line.try_add(piece);
+                }
+            }
+            continue;
+        }
+
         if !current_line.try_add(fragment) {
             // If the fragment doesn't fit on an empty line, break it
-            // character-by-character (emergency word breaking).
-            if current_line.is_empty() {
-                let pieces = break_word_fragment(fragment, available_width, measurer);
-                for piece in &pieces {
-                    if !current_line.try_add(piece) {
-                        lines.push(current_line);
-                        current_line = LineBox::new(available_width);
-                        current_line.try_add(piece);
+            // character-by-character (emergency word breaking, or
+            // overflow-wrap: break-word).
+            if current_line.is_empty() || break_word {
+                if current_line.is_empty() {
+                    let pieces = break_word_fragment(fragment, available_width, measurer);
+                    for piece in &pieces {
+                        if !current_line.try_add(piece) {
+                            lines.push(current_line);
+                            current_line = LineBox::new(available_width);
+                            current_line.try_add(piece);
+                        }
+                    }
+                    continue;
+                }
+                // break-word with non-empty line: wrap to next line first,
+                // then break if still doesn't fit.
+                lines.push(current_line);
+                current_line = LineBox::new(available_width);
+                if !current_line.try_add(fragment) && current_line.is_empty() {
+                    let pieces = break_word_fragment(fragment, available_width, measurer);
+                    for piece in &pieces {
+                        if !current_line.try_add(piece) {
+                            lines.push(current_line);
+                            current_line = LineBox::new(available_width);
+                            current_line.try_add(piece);
+                        }
                     }
                 }
                 continue;

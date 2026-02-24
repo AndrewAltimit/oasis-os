@@ -20,7 +20,7 @@ use super::inline::layout_inline;
 use super::positioning::apply_positioning;
 use super::table::layout_table;
 use crate::css::values::{
-    BoxSizing, Clear, ComputedStyle, Dimension, Display, Float, ListStyleType,
+    BoxSizing, Clear, ComputedStyle, Dimension, Display, Float, ListStyleType, Overflow, Position,
 };
 use crate::html::dom::{Document, ElementData, NodeId, NodeKind, TagName};
 use oasis_types::backend::Color;
@@ -275,13 +275,31 @@ fn layout_children_incremental(
     let mut cursor_y = parent.dimensions.content.y;
     let mut prev_margin_bottom: f32 = 0.0;
 
+    let parent_bfc = establishes_bfc(&parent.style);
+    let can_collapse_top =
+        !parent_bfc && parent.dimensions.padding.top == 0.0 && parent.dimensions.border.top == 0.0;
+    let can_collapse_bottom = !parent_bfc
+        && parent.dimensions.padding.bottom == 0.0
+        && parent.dimensions.border.bottom == 0.0
+        && parent.style.height == Dimension::Auto;
+
+    let mut is_first_in_flow = true;
+
     for child in &mut parent.children {
         match child.box_type {
             BoxType::Block | BoxType::ListItem { .. } | BoxType::TableWrapper => {
                 resolve_edge_sizes_cached(child, content_width, cache);
 
                 let child_margin_top = child.dimensions.margin.top;
-                let collapsed = collapse_margins(prev_margin_bottom, child_margin_top);
+                let collapsed = if is_first_in_flow && can_collapse_top {
+                    let parent_mt = parent.dimensions.margin.top;
+                    parent.dimensions.margin.top = collapse_margins(parent_mt, child_margin_top);
+                    child.dimensions.margin.top = 0.0;
+                    0.0
+                } else {
+                    collapse_margins(prev_margin_bottom, child_margin_top)
+                };
+                is_first_in_flow = false;
 
                 child.dimensions.content.x = content_x
                     + child.dimensions.margin.left
@@ -301,6 +319,7 @@ fn layout_children_incremental(
                 prev_margin_bottom = child.dimensions.margin.bottom;
             },
             BoxType::Anonymous => {
+                is_first_in_flow = false;
                 child.dimensions.content.x = content_x;
                 child.dimensions.content.y = cursor_y;
                 child.dimensions.content.width = content_width;
@@ -313,14 +332,21 @@ fn layout_children_incremental(
                 prev_margin_bottom = 0.0;
             },
             BoxType::Replaced(_) => {
-                // Block-level replaced elements in incremental layout.
                 resolve_edge_sizes_cached(child, content_width, cache);
                 let pad_h = child.dimensions.padding.horizontal();
                 let bdr_h = child.dimensions.border.horizontal();
                 let mar_h = child.dimensions.margin.horizontal();
 
                 let child_margin_top = child.dimensions.margin.top;
-                let collapsed = collapse_margins(prev_margin_bottom, child_margin_top);
+                let collapsed = if is_first_in_flow && can_collapse_top {
+                    let parent_mt = parent.dimensions.margin.top;
+                    parent.dimensions.margin.top = collapse_margins(parent_mt, child_margin_top);
+                    child.dimensions.margin.top = 0.0;
+                    0.0
+                } else {
+                    collapse_margins(prev_margin_bottom, child_margin_top)
+                };
+                is_first_in_flow = false;
 
                 child.dimensions.content.x = content_x
                     + child.dimensions.margin.left
@@ -360,6 +386,22 @@ fn layout_children_incremental(
                 prev_margin_bottom = child.dimensions.margin.bottom;
             },
             _ => {},
+        }
+    }
+
+    // Parent-last-child bottom margin collapsing.
+    if can_collapse_bottom {
+        let last_block = parent
+            .children
+            .iter()
+            .rposition(|c| c.is_block_level() && !matches!(c.box_type, BoxType::Anonymous));
+        if let Some(idx) = last_block {
+            let child_mb = parent.children[idx].dimensions.margin.bottom;
+            if child_mb > 0.0 {
+                let parent_mb = parent.dimensions.margin.bottom;
+                parent.dimensions.margin.bottom = collapse_margins(parent_mb, child_mb);
+                parent.children[idx].dimensions.margin.bottom = 0.0;
+            }
         }
     }
 }
@@ -599,11 +641,16 @@ fn replaced_content(
                 _ => {
                     // text, password, search, etc.
                     let value = elem.get_attribute("value").unwrap_or("").to_string();
+                    let placeholder = elem.get_attribute("placeholder").unwrap_or("").to_string();
                     let size = elem
                         .get_attribute("size")
                         .and_then(|v| v.parse::<u32>().ok())
                         .unwrap_or(20);
-                    Some(ReplacedContent::TextInput { value, size })
+                    Some(ReplacedContent::TextInput {
+                        value,
+                        placeholder,
+                        size,
+                    })
                 },
             }
         },
@@ -1015,6 +1062,15 @@ fn offset_descendant(layout_box: &mut LayoutBox, dx: f32, dy: f32) {
     }
 }
 
+/// Returns true if the parent establishes a new block formatting
+/// context (BFC), which inhibits margin collapsing with children.
+fn establishes_bfc(style: &ComputedStyle) -> bool {
+    style.overflow != Overflow::Visible
+        || style.float != Float::None
+        || matches!(style.position, Position::Absolute | Position::Fixed)
+        || matches!(style.display, Display::InlineBlock | Display::Flex)
+}
+
 /// Layout block-level children, stacking them vertically.
 ///
 /// If all children are inline-level (no block-level siblings), the
@@ -1038,6 +1094,19 @@ fn layout_block_children(parent: &mut LayoutBox, measurer: &dyn TextMeasurer) {
     let mut prev_margin_bottom: f32 = 0.0;
     let mut float_ctx = FloatContext::new();
     let mut list_counter: usize = 1;
+
+    // Parent-child margin collapsing (CSS 2.1 §8.3.1):
+    // Margins collapse when there's no padding, border, or BFC
+    // between parent and first/last child.
+    let parent_bfc = establishes_bfc(&parent.style);
+    let can_collapse_top =
+        !parent_bfc && parent.dimensions.padding.top == 0.0 && parent.dimensions.border.top == 0.0;
+    let can_collapse_bottom = !parent_bfc
+        && parent.dimensions.padding.bottom == 0.0
+        && parent.dimensions.border.bottom == 0.0
+        && parent.style.height == Dimension::Auto;
+
+    let mut is_first_in_flow = true;
 
     for child in &mut parent.children {
         // Assign sequential numbers to ordered list items.
@@ -1094,14 +1163,25 @@ fn layout_block_children(parent: &mut LayoutBox, measurer: &dyn TextMeasurer) {
                 // margins for positioning.
                 resolve_edge_sizes(child, content_width);
 
-                // Margin collapsing between siblings: the collapsed
-                // margin replaces both the previous bottom and the
-                // current top margin. Since cursor_y tracks the end
-                // of the previous child's border box, we add the
-                // collapsed margin to get this child's margin-box
-                // start, then offset by its own top edges.
                 let child_margin_top = child.dimensions.margin.top;
-                let collapsed = collapse_margins(prev_margin_bottom, child_margin_top);
+
+                // Parent-first-child top margin collapsing:
+                // When this is the first in-flow block child and
+                // there's no padding/border/BFC separating parent
+                // from child, their top margins collapse. The
+                // child's margin is absorbed into the parent.
+                let did_collapse_top = is_first_in_flow && can_collapse_top;
+                let collapsed = if did_collapse_top {
+                    let parent_mt = parent.dimensions.margin.top;
+                    parent.dimensions.margin.top = collapse_margins(parent_mt, child_margin_top);
+                    0.0
+                } else {
+                    // Sibling margin collapsing: the collapsed
+                    // margin replaces both the previous bottom and
+                    // the current top margin.
+                    collapse_margins(prev_margin_bottom, child_margin_top)
+                };
+                is_first_in_flow = false;
 
                 // Position child's content area.
                 child.dimensions.content.x = content_x
@@ -1115,15 +1195,44 @@ fn layout_block_children(parent: &mut LayoutBox, measurer: &dyn TextMeasurer) {
 
                 layout_block(child, content_width, measurer);
 
-                // Advance cursor_y to this child's border-box
-                // bottom (not margin-box). Margin collapsing will
-                // be handled when positioning the next sibling.
-                let bb = child.dimensions.border_box();
-                cursor_y = bb.y + bb.height;
-                prev_margin_bottom = child.dimensions.margin.bottom;
+                // layout_block re-resolves edge sizes from the
+                // style, so re-zero the top margin that was
+                // absorbed into the parent.
+                if did_collapse_top {
+                    child.dimensions.margin.top = 0.0;
+                }
+
+                // Empty block self-collapsing: if a block has zero
+                // content height, no padding, and no border, its own
+                // top and bottom margins collapse into one margin.
+                let is_empty = child.dimensions.content.height == 0.0
+                    && child.dimensions.padding.vertical() == 0.0
+                    && child.dimensions.border.vertical() == 0.0
+                    && child.children.is_empty();
+
+                if is_empty {
+                    let self_collapsed = collapse_margins(
+                        child.dimensions.margin.top,
+                        child.dimensions.margin.bottom,
+                    );
+                    prev_margin_bottom = collapse_margins(prev_margin_bottom, self_collapsed);
+                    // Empty block takes no vertical space beyond
+                    // its collapsed margin.
+                } else {
+                    // Advance cursor_y to this child's border-box
+                    // bottom (not margin-box). Margin collapsing
+                    // will be handled when positioning the next
+                    // sibling.
+                    let bb = child.dimensions.border_box();
+                    cursor_y = bb.y + bb.height;
+                    prev_margin_bottom = child.dimensions.margin.bottom;
+                }
             },
             BoxType::Anonymous => {
-                // Anonymous box wrapping inline content.
+                // Anonymous box wrapping inline content -- prevents
+                // parent-child margin collapsing with later siblings.
+                is_first_in_flow = false;
+
                 child.dimensions.content.x = content_x;
                 child.dimensions.content.y = cursor_y;
                 child.dimensions.content.width = content_width;
@@ -1144,7 +1253,17 @@ fn layout_block_children(parent: &mut LayoutBox, measurer: &dyn TextMeasurer) {
                 let mar_h = child.dimensions.margin.horizontal();
 
                 let child_margin_top = child.dimensions.margin.top;
-                let collapsed = collapse_margins(prev_margin_bottom, child_margin_top);
+
+                // Parent-first-child collapsing for replaced elements.
+                let collapsed = if is_first_in_flow && can_collapse_top {
+                    let parent_mt = parent.dimensions.margin.top;
+                    parent.dimensions.margin.top = collapse_margins(parent_mt, child_margin_top);
+                    child.dimensions.margin.top = 0.0;
+                    0.0
+                } else {
+                    collapse_margins(prev_margin_bottom, child_margin_top)
+                };
+                is_first_in_flow = false;
 
                 child.dimensions.content.x = content_x
                     + child.dimensions.margin.left
@@ -1195,29 +1314,24 @@ fn layout_block_children(parent: &mut LayoutBox, measurer: &dyn TextMeasurer) {
         }
     }
 
-    // Parent-child margin collapsing (CSS 2.1 §8.3.1).
-    // When no padding or border separates parent from its first/last
-    // block child, the parent's margin collapses with the child's.
-    if parent.dimensions.padding.top == 0.0
-        && parent.dimensions.border.top == 0.0
-        && let Some(first) = parent.children.first()
-        && first.is_block_level()
-        && !matches!(first.box_type, BoxType::Anonymous)
-        && first.dimensions.margin.top > 0.0
-    {
-        let parent_mt = parent.dimensions.margin.top;
-        parent.dimensions.margin.top = collapse_margins(parent_mt, first.dimensions.margin.top);
-    }
-    if parent.dimensions.padding.bottom == 0.0
-        && parent.dimensions.border.bottom == 0.0
-        && let Some(last) = parent.children.last()
-        && last.is_block_level()
-        && !matches!(last.box_type, BoxType::Anonymous)
-        && last.dimensions.margin.bottom > 0.0
-    {
-        let parent_mb = parent.dimensions.margin.bottom;
-        parent.dimensions.margin.bottom =
-            collapse_margins(parent_mb, last.dimensions.margin.bottom);
+    // Parent-last-child bottom margin collapsing (CSS 2.1 §8.3.1):
+    // When height is auto and no padding/border separates parent
+    // from its last in-flow block child, their bottom margins
+    // collapse. The child's bottom margin is absorbed into the
+    // parent's.
+    if can_collapse_bottom {
+        let last_block = parent
+            .children
+            .iter()
+            .rposition(|c| c.is_block_level() && !matches!(c.box_type, BoxType::Anonymous));
+        if let Some(idx) = last_block {
+            let child_mb = parent.children[idx].dimensions.margin.bottom;
+            if child_mb > 0.0 {
+                let parent_mb = parent.dimensions.margin.bottom;
+                parent.dimensions.margin.bottom = collapse_margins(parent_mb, child_mb);
+                parent.children[idx].dimensions.margin.bottom = 0.0;
+            }
+        }
     }
 
     // Clearfix: ensure the parent's height includes all floats.
@@ -1365,8 +1479,9 @@ mod tests {
     #[test]
     fn fixed_measurer_returns_expected_width() {
         let m = FixedMeasurer;
-        // Proportional: h(7)+e(7)+l(5)+l(5)+o(7) = 31
-        assert_eq!(m.measure_text("hello", 12), 31);
+        // Sub-pixel: h(7*12/8)+e(7*12/8)+l(5*12/8)+l(5*12/8)+o(7*12/8)
+        //          = 10+10+7+7+10 = 44
+        assert_eq!(m.measure_text("hello", 12), 44);
         assert_eq!(m.measure_text("", 12), 0);
     }
 
@@ -1799,6 +1914,22 @@ mod tests {
             "collapsed parent margin-top should be 20, got {}",
             parent.dimensions.margin.top,
         );
+
+        // Child's margin was absorbed into parent: child sits at
+        // parent's content.y without extra gap.
+        assert!(
+            parent.children[0].dimensions.margin.top.abs() < 0.01,
+            "child margin-top should be 0 (absorbed), got {}",
+            parent.children[0].dimensions.margin.top,
+        );
+
+        // Parent height should be just the child's content (30px),
+        // not child content + child margin (50px).
+        assert!(
+            (parent.dimensions.content.height - 30.0).abs() < 0.01,
+            "parent height should be 30 (child only), got {}",
+            parent.dimensions.content.height,
+        );
     }
 
     #[test]
@@ -1960,6 +2091,128 @@ mod tests {
         assert!(
             hr.is_block_level(),
             "HorizontalRule replaced box should be block-level"
+        );
+    }
+
+    // -- empty block self-collapsing -----------------------------------
+
+    #[test]
+    fn empty_block_collapses_own_margins() {
+        let m = FixedMeasurer;
+        let mut parent = LayoutBox::new(BoxType::Block, block_style(), None);
+
+        // First child: 20px tall.
+        let mut s1 = block_style();
+        s1.height = Dimension::Px(20.0);
+        s1.margin_bottom = 15.0;
+
+        // Empty block between siblings: margins 10 top, 10 bottom.
+        // Should self-collapse to 10, then collapse with siblings.
+        let mut s_empty = block_style();
+        s_empty.margin_top = 10.0;
+        s_empty.margin_bottom = 10.0;
+
+        // Third child: 20px tall.
+        let mut s3 = block_style();
+        s3.height = Dimension::Px(20.0);
+        s3.margin_top = 5.0;
+
+        parent.children = vec![
+            LayoutBox::new(BoxType::Block, s1, None),
+            LayoutBox::new(BoxType::Block, s_empty, None),
+            LayoutBox::new(BoxType::Block, s3, None),
+        ];
+        parent.dimensions.content.x = 0.0;
+        parent.dimensions.content.y = 0.0;
+        layout_block(&mut parent, 480.0, &m);
+
+        // The empty block self-collapses: max(10, 10) = 10.
+        // Collapsing chain: prev_margin_bottom(15) vs empty(10) vs
+        // next_top(5) → the whole chain collapses to max(15, 10, 5) = 15.
+        let c0_bb = parent.children[0].dimensions.border_box();
+        let c0_bottom = c0_bb.y + c0_bb.height;
+        let c2_bb = parent.children[2].dimensions.border_box();
+        let c2_top = c2_bb.y;
+        let gap = c2_top - c0_bottom;
+
+        assert!(
+            (gap - 15.0).abs() < 0.01,
+            "gap through empty block should be 15 (collapsed chain), got {gap}",
+        );
+    }
+
+    // -- BFC inhibits parent-child collapsing -------------------------
+
+    #[test]
+    fn overflow_hidden_inhibits_parent_child_collapsing() {
+        let m = FixedMeasurer;
+
+        // Parent with overflow:hidden creates a new BFC.
+        let mut p_style = block_style();
+        p_style.margin_top = 10.0;
+        p_style.overflow = Overflow::Hidden;
+        let mut parent = LayoutBox::new(BoxType::Block, p_style, None);
+
+        // Child with margin-top 20.
+        let mut c_style = block_style();
+        c_style.margin_top = 20.0;
+        c_style.height = Dimension::Px(30.0);
+        let child = LayoutBox::new(BoxType::Block, c_style, None);
+
+        parent.children = vec![child];
+        parent.dimensions.content.x = 0.0;
+        parent.dimensions.content.y = 0.0;
+        layout_block(&mut parent, 480.0, &m);
+
+        // With overflow:hidden, margins should NOT collapse.
+        assert!(
+            (parent.dimensions.margin.top - 10.0).abs() < 0.01,
+            "parent margin-top should stay 10 with overflow:hidden, got {}",
+            parent.dimensions.margin.top,
+        );
+
+        // Child keeps its own margin inside the parent.
+        assert!(
+            (parent.children[0].dimensions.margin.top - 20.0).abs() < 0.01,
+            "child margin-top should stay 20 (no collapsing), got {}",
+            parent.children[0].dimensions.margin.top,
+        );
+    }
+
+    // -- parent-last-child bottom margin collapsing --------------------
+
+    #[test]
+    fn parent_child_bottom_margin_collapsing() {
+        let m = FixedMeasurer;
+
+        // Parent with margin-bottom 10, no padding/border, height auto.
+        let mut p_style = block_style();
+        p_style.margin_bottom = 10.0;
+        let mut parent = LayoutBox::new(BoxType::Block, p_style, None);
+
+        // Child with margin-bottom 25.
+        let mut c_style = block_style();
+        c_style.margin_bottom = 25.0;
+        c_style.height = Dimension::Px(30.0);
+        let child = LayoutBox::new(BoxType::Block, c_style, None);
+
+        parent.children = vec![child];
+        parent.dimensions.content.x = 0.0;
+        parent.dimensions.content.y = 0.0;
+        layout_block(&mut parent, 480.0, &m);
+
+        // Parent bottom margin should collapse with child: max(10, 25) = 25.
+        assert!(
+            (parent.dimensions.margin.bottom - 25.0).abs() < 0.01,
+            "collapsed parent margin-bottom should be 25, got {}",
+            parent.dimensions.margin.bottom,
+        );
+
+        // Child's bottom margin was absorbed into parent.
+        assert!(
+            parent.children[0].dimensions.margin.bottom.abs() < 0.01,
+            "child margin-bottom should be 0 (absorbed), got {}",
+            parent.children[0].dimensions.margin.bottom,
         );
     }
 }

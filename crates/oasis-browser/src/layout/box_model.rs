@@ -175,6 +175,7 @@ pub enum ReplacedContent {
     /// A text input field.
     TextInput {
         value: String,
+        placeholder: String,
         size: u32,
     },
     /// A submit/button input.

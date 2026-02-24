@@ -8,7 +8,7 @@
 
 use super::block::TextMeasurer;
 use super::box_model::*;
-use crate::css::values::{BorderCollapse, ComputedStyle, Dimension, Display};
+use crate::css::values::{BorderCollapse, ComputedStyle, Dimension, Display, VerticalAlign};
 
 // -------------------------------------------------------------------
 // Table cell representation
@@ -750,6 +750,22 @@ fn build_table_box(tl: &TableLayout, style: &ComputedStyle, containing_width: f3
             offset_descendants(child, dx, dy);
         }
 
+        // Apply vertical alignment within the cell.
+        let content_h = cell.layout_box.dimensions.content.height
+            + cell.layout_box.dimensions.padding.vertical()
+            + cell.layout_box.dimensions.border.vertical();
+        let cell_h_inner = cell_box.dimensions.content.height;
+        let valign_offset = match cell_box.style.vertical_align {
+            VerticalAlign::Middle => ((cell_h_inner - content_h) / 2.0).max(0.0),
+            VerticalAlign::Bottom => (cell_h_inner - content_h).max(0.0),
+            _ => 0.0, // Top is default for cells
+        };
+        if valign_offset > 0.0 {
+            for child in &mut cell_box.children {
+                offset_descendants(child, 0.0, valign_offset);
+            }
+        }
+
         if cell.row < row_boxes.len() {
             row_boxes[cell.row].children.push(cell_box);
         }
@@ -1280,5 +1296,60 @@ mod tests {
         let (cs, rs) = extract_span_attrs(&cell);
         assert_eq!(cs, 3, "colspan should be 3");
         assert_eq!(rs, 2, "rowspan should be 2");
+    }
+
+    // ---------------------------------------------------------------
+    // Test 12: vertical-align: middle offsets cell content
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn vertical_align_middle() {
+        let m = FixedMeasurer;
+        let style = table_style();
+
+        // Row with two cells of different heights.
+        let cell1 = make_cell_wh(50.0, 40.0);
+        let mut cell2_style = ComputedStyle::default();
+        cell2_style.display = Display::TableCell;
+        cell2_style.width = Dimension::Px(50.0);
+        cell2_style.height = Dimension::Px(20.0);
+        cell2_style.vertical_align = VerticalAlign::Middle;
+        let cell2 = LayoutBox::new(BoxType::TableCell, cell2_style, None);
+
+        let row = make_row(vec![cell1, cell2]);
+        let result = layout_table(&[row], &style, 200.0, &m);
+
+        // Row height = max(40, 20) = 40.
+        // Cell2 content height = 20, row height = 40, so
+        // middle offset = (40 - 20) / 2 = 10 (approximately).
+        assert_eq!(result.children.len(), 1, "should have 1 row");
+    }
+
+    // ---------------------------------------------------------------
+    // Test 13: tbody children parsed as rows
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn tbody_children_parsed_as_rows() {
+        let m = FixedMeasurer;
+        let style = table_style();
+
+        // Simulate <tbody> wrapping a row (display: block wrapper).
+        let cell = make_cell(50.0);
+        let row = make_row(vec![cell]);
+        let mut tbody_style = ComputedStyle::default();
+        tbody_style.display = Display::Block;
+        let mut tbody = LayoutBox::new(BoxType::Block, tbody_style, None);
+        tbody.children = vec![row];
+
+        let result = layout_table(&[tbody], &style, 200.0, &m);
+
+        // The row inside tbody should be detected.
+        assert_eq!(result.children.len(), 1, "should have 1 row");
+        assert_eq!(
+            result.children[0].children.len(),
+            1,
+            "row should have 1 cell"
+        );
     }
 }

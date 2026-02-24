@@ -23,13 +23,9 @@ pub const BITMAP_GLYPH_HEIGHT: u32 = 8;
 /// then scales by the font-size multiplier. This produces tighter text than
 /// the old fixed `8 * len` calculation.
 pub fn bitmap_measure_text(text: &str, font_size: u16) -> u32 {
-    let scale = if font_size >= BITMAP_GLYPH_WIDTH as u16 {
-        (font_size / BITMAP_GLYPH_WIDTH as u16) as u32
-    } else {
-        1
-    };
-    let width: u32 = text.chars().map(crate::bitmap_font::glyph_advance).sum();
-    width * scale
+    text.chars()
+        .map(|ch| crate::bitmap_font::glyph_advance_scaled(ch, font_size))
+        .sum()
 }
 
 /// A color in RGBA format (0-255 per channel).
@@ -532,6 +528,24 @@ pub trait SdiBackend {
         color: Color,
     ) -> Result<()> {
         let _ = weight;
+        self.draw_text(text, x, y, font_size, color)
+    }
+
+    /// Draw text with bold and italic style hints.
+    ///
+    /// Backends with bitmap fonts implement faux-bold via double-strike
+    /// (drawing at x and x+1) and faux-italic via row-skewing.
+    fn draw_text_styled(
+        &mut self,
+        text: &str,
+        x: i32,
+        y: i32,
+        font_size: u16,
+        color: Color,
+        bold: bool,
+        italic: bool,
+    ) -> Result<()> {
+        let _ = (bold, italic);
         self.draw_text(text, x, y, font_size, color)
     }
 
@@ -1151,7 +1165,7 @@ mod tests {
     fn measure_text_extents_default() {
         let b = RecordingBackend::new();
         let (w, h) = b.measure_text_extents("ABCD", 10);
-        assert_eq!(w, 28); // proportional: A(7)+B(7)+C(7)+D(7) = 28
+        assert_eq!(w, 32); // sub-pixel: A(7*10/8=8)+B(8)+C(8)+D(8) = 32
         assert_eq!(h, 12); // 10 * 1.2
     }
 
