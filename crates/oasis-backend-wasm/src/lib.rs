@@ -503,12 +503,14 @@ impl OasisWasm {
                 AppRunner::hide_sdi(&mut self.sdi);
                 self.dashboard.hide_sdi(&mut self.sdi);
                 terminal_sdi::hide_media_page(&mut self.sdi);
-                self.start_menu.close();
-                self.start_menu.hide_sdi(&mut self.sdi);
                 self.status_bar
                     .update_sdi(&mut self.sdi, &self.active_theme, &self.skin.features);
                 self.bottom_bar
                     .update_sdi(&mut self.sdi, &self.active_theme, &self.skin.features);
+                if self.skin.features.start_menu {
+                    self.start_menu
+                        .update_sdi(&mut self.sdi, &self.active_theme);
+                }
             },
             Mode::Osk => {
                 if let Some(ref osk_state) = self.osk {
@@ -708,6 +710,21 @@ impl OasisWasm {
     fn handle_desktop_input(&mut self, event: &InputEvent) {
         match event {
             InputEvent::PointerClick { x, y } => {
+                // Start menu takes priority over window manager.
+                if self.start_menu.hit_test_button(*x, *y) {
+                    self.start_menu.toggle();
+                    return;
+                }
+                if self.start_menu.open {
+                    if let Some(action) = self.start_menu.hit_test_item(*x, *y) {
+                        self.start_menu.close();
+                        self.handle_start_menu_action(&action);
+                    } else {
+                        self.start_menu.close();
+                    }
+                    return;
+                }
+
                 let wm_event = self
                     .wm
                     .handle_input(&InputEvent::PointerClick { x: *x, y: *y }, &mut self.sdi);
@@ -990,10 +1007,10 @@ impl OasisWasm {
             let mut env = Environment {
                 cwd: self.cwd.clone(),
                 vfs: &mut self.vfs,
-                power: None,
-                time: None,
-                usb: None,
-                network: None,
+                power: Some(&self.platform),
+                time: Some(&self.platform),
+                usb: Some(&self.platform),
+                network: Some(&self.platform),
                 tls: None,
                 stdin: None,
                 stderr: String::new(),
@@ -1110,10 +1127,10 @@ impl OasisWasm {
         let mut env = Environment {
             cwd: self.cwd.clone(),
             vfs: &mut self.vfs,
-            power: None,
-            time: None,
-            usb: None,
-            network: None,
+            power: Some(&self.platform),
+            time: Some(&self.platform),
+            usb: Some(&self.platform),
+            network: Some(&self.platform),
             tls: None,
             stdin: None,
             stderr: String::new(),
