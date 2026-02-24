@@ -145,6 +145,8 @@ pub enum TagName {
     Canvas,
     // Scripting
     Noscript,
+    // Deprecated but still common
+    Center,
     // Anything else
     Unknown(String),
 }
@@ -229,6 +231,7 @@ impl TagName {
             "source" => Self::Source,
             "canvas" => Self::Canvas,
             "noscript" => Self::Noscript,
+            "center" => Self::Center,
             other => Self::Unknown(other.to_string()),
         }
     }
@@ -311,6 +314,7 @@ impl TagName {
             Self::Source => "source",
             Self::Canvas => "canvas",
             Self::Noscript => "noscript",
+            Self::Center => "center",
             Self::Unknown(s) => s.as_str(),
         }
     }
@@ -368,6 +372,7 @@ impl TagName {
                 | Self::Details
                 | Self::Summary
                 | Self::Hr
+                | Self::Center
         )
     }
 

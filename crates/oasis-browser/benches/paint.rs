@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use oasis_browser::SimpleTextMeasurer;
 use oasis_browser::internals::{
-    Stylesheet, Tokenizer, TreeBuilder, build_layout_tree, paint_page, style_tree,
+    CascadeContext, Stylesheet, Tokenizer, TreeBuilder, build_layout_tree, paint_page, style_tree,
 };
 use oasis_types::backend::{Color, SdiBackend, TextureId};
 use oasis_types::error::Result;
@@ -104,8 +104,16 @@ fn bench_paint(c: &mut Criterion) {
         let tokens = tokenizer.tokenize();
         let doc = TreeBuilder::build(tokens);
         let stylesheet = Stylesheet::parse(css);
-        let styles = style_tree(&doc, &[&stylesheet], &[]);
-        let layout = build_layout_tree(&doc, &styles, &measurer, 480.0, 272.0);
+        let styles = style_tree(&doc, &[&stylesheet], &[], &CascadeContext::default());
+        let layout = build_layout_tree(
+            &doc,
+            &styles,
+            &measurer,
+            480.0,
+            272.0,
+            None,
+            &std::collections::HashMap::new(),
+        );
 
         let link_map: HashMap<usize, String> = HashMap::new();
         let label = format!("{n_elements}_elements");
@@ -142,8 +150,16 @@ fn bench_full_pipeline(c: &mut Criterion) {
                     let tokens = tokenizer.tokenize();
                     let doc = TreeBuilder::build(tokens);
                     let stylesheet = Stylesheet::parse("");
-                    let styles = style_tree(&doc, &[&stylesheet], &[]);
-                    let layout = build_layout_tree(&doc, &styles, &measurer, 480.0, 272.0);
+                    let styles = style_tree(&doc, &[&stylesheet], &[], &CascadeContext::default());
+                    let layout = build_layout_tree(
+                        &doc,
+                        &styles,
+                        &measurer,
+                        480.0,
+                        272.0,
+                        None,
+                        &std::collections::HashMap::new(),
+                    );
                     let link_map: HashMap<usize, String> = HashMap::new();
                     paint_page(&layout, &mut backend, 0.0, 0, 0, 480.0, 272.0, &link_map)
                 });

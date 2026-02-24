@@ -65,6 +65,7 @@ pub struct AppState {
     pub radio_manager: RadioManager,
     pub radio_source: Option<Box<dyn RadioSource>>,
     pub audio_backend: SdlAudioBackend,
+    pub terminal_scroll_offset: usize,
 }
 
 #[cfg(test)]

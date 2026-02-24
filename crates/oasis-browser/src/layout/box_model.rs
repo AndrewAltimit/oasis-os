@@ -161,7 +161,7 @@ pub enum ListMarker {
     None,
 }
 
-/// Content for replaced elements (img, hr, br).
+/// Content for replaced elements (img, hr, br, input, button, select).
 #[derive(Debug, Clone)]
 pub enum ReplacedContent {
     Image {
@@ -172,6 +172,20 @@ pub enum ReplacedContent {
     },
     HorizontalRule,
     LineBreak,
+    /// A text input field.
+    TextInput {
+        value: String,
+        placeholder: String,
+        size: u32,
+    },
+    /// A submit/button input.
+    SubmitButton {
+        label: String,
+    },
+    /// A `<select>` dropdown box.
+    SelectBox {
+        label: String,
+    },
 }
 
 /// A single box in the layout tree.
@@ -186,6 +200,9 @@ pub struct LayoutBox {
     pub text: Option<String>,
     /// Whether this box or any descendant needs relayout.
     pub dirty: bool,
+    /// GPU texture for CSS `background-image`, assigned during the
+    /// texture resolution pass.
+    pub background_texture: Option<TextureId>,
 }
 
 impl LayoutBox {
@@ -199,6 +216,7 @@ impl LayoutBox {
             style,
             text: None,
             dirty: true,
+            background_texture: None,
         }
     }
 
@@ -211,6 +229,7 @@ impl LayoutBox {
                 | BoxType::ListItem { .. }
                 | BoxType::TableWrapper
                 | BoxType::Anonymous
+                | BoxType::Replaced(ReplacedContent::HorizontalRule)
         )
     }
 

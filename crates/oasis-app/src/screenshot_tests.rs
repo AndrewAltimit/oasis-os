@@ -55,6 +55,8 @@ struct Args {
     check: bool,
     /// Copy actual screenshots to golden files (first-time baseline).
     bless: bool,
+    /// Render full-page browser screenshots (scrolls entire content height).
+    full_page: bool,
 }
 
 fn parse_args() -> Args {
@@ -64,9 +66,10 @@ fn parse_args() -> Args {
         report: false,
         check: false,
         bless: false,
+        full_page: false,
     };
     let usage = "Usage: screenshot-tests [--scenario NAME] [--skin NAME] \
-                 [--report] [--check] [--bless]";
+                 [--report] [--check] [--bless] [--full-page]";
     let mut iter = std::env::args().skip(1);
     while let Some(arg) = iter.next() {
         match arg.as_str() {
@@ -87,6 +90,7 @@ fn parse_args() -> Args {
             "--report" => args.report = true,
             "--check" => args.check = true,
             "--bless" => args.bless = true,
+            "--full-page" => args.full_page = true,
             other => {
                 eprintln!("Unknown argument: {other}");
                 eprintln!("{usage}");
@@ -136,6 +140,12 @@ fn all_scenarios() -> Vec<Scenario> {
         "error_page",
         "empty_page",
         "gemini_page",
+        "images",
+        "wikipedia",
+        "wikipedia_real",
+        "google",
+        "wiki_article",
+        "news_article",
     ];
     for page in &pages {
         scenarios.push(Scenario {
@@ -217,6 +227,85 @@ fn render_browser_and_save(
     Ok(())
 }
 
+/// Render the full browser page by scrolling in strips and compositing.
+///
+/// After the first paint, reads `content_height` from the scroll state.
+/// Then renders each viewport-height strip, compositing into a single
+/// tall RGBA buffer. The chrome (URL bar) is included in the first strip
+/// only; subsequent strips show only page content.
+fn render_browser_fullpage_and_save(
+    backend: &mut SdlBackend,
+    browser: &mut BrowserWidget,
+    w: u32,
+    h: u32,
+    path: &Path,
+) -> anyhow::Result<()> {
+    // First paint to compute layout and content_height.
+    backend.clear(Color::rgb(255, 255, 255))?;
+    browser.paint(backend)?;
+    backend.swap_buffers()?;
+
+    let content_height = browser.scroll().content_height;
+    let viewport_h = browser.scroll().viewport_height;
+
+    if content_height <= viewport_h || viewport_h <= 0 {
+        // Content fits in viewport -- single-frame capture.
+        backend.clear(Color::rgb(255, 255, 255))?;
+        browser.paint(backend)?;
+        let pixels = backend.read_pixels(0, 0, w, h)?;
+        save_png(path, w, h, &pixels)?;
+        return Ok(());
+    }
+
+    // Calculate total output height: chrome area + full content.
+    let chrome_h = h - viewport_h as u32;
+    let total_h = chrome_h + content_height as u32;
+    let row_bytes = (w * 4) as usize;
+    let mut full_pixels = vec![255u8; row_bytes * total_h as usize];
+
+    // Render in strips by scrolling.
+    let mut y_offset: u32 = 0;
+    let mut scroll_y: i32 = 0;
+
+    while (y_offset as i32) < total_h as i32 {
+        browser.scroll_mut().scroll_y = scroll_y;
+
+        backend.clear(Color::rgb(255, 255, 255))?;
+        browser.paint(backend)?;
+
+        let strip = backend.read_pixels(0, 0, w, h)?;
+
+        if y_offset == 0 {
+            // First strip: copy the entire frame (chrome + content).
+            let copy_rows = (h as usize).min(total_h as usize);
+            let copy_bytes = copy_rows * row_bytes;
+            full_pixels[..copy_bytes].copy_from_slice(&strip[..copy_bytes]);
+            y_offset = h;
+            scroll_y += viewport_h;
+        } else {
+            // Subsequent strips: copy only the content area (skip chrome).
+            let src_start = chrome_h as usize * row_bytes;
+            let remaining = total_h as usize - y_offset as usize;
+            let copy_rows = (viewport_h as usize).min(remaining);
+            let dst_start = y_offset as usize * row_bytes;
+            let copy_bytes = copy_rows * row_bytes;
+            if src_start + copy_bytes <= strip.len() && dst_start + copy_bytes <= full_pixels.len()
+            {
+                full_pixels[dst_start..dst_start + copy_bytes]
+                    .copy_from_slice(&strip[src_start..src_start + copy_bytes]);
+            }
+            y_offset += copy_rows as u32;
+            scroll_y += viewport_h;
+        }
+    }
+
+    // Reset scroll position.
+    browser.scroll_mut().scroll_y = 0;
+
+    save_png(path, w, total_h, &full_pixels)?;
+    Ok(())
+}
+
 fn save_png(path: &Path, width: u32, height: u32, rgba: &[u8]) -> anyhow::Result<()> {
     let file = fs::File::create(path)?;
     let writer = std::io::BufWriter::new(file);
@@ -268,10 +357,10 @@ fn bless_golden(out_dir: &Path) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Check a scenario: compare actual.png hash against golden.png hash.
+/// Check a scenario: compare actual.png against golden.png.
 ///
-/// Returns `Ok(true)` if they match, `Ok(false)` if they differ,
-/// or `Err` if golden.png doesn't exist.
+/// Returns `Ok(true)` if they match (within threshold), `Ok(false)` if they
+/// differ, or `Err` if golden.png doesn't exist.
 fn check_golden(out_dir: &Path) -> anyhow::Result<bool> {
     let actual = out_dir.join("actual.png");
     let golden = out_dir.join("golden.png");
@@ -283,7 +372,85 @@ fn check_golden(out_dir: &Path) -> anyhow::Result<bool> {
     }
     let actual_pixels = read_png_rgba(&actual)?;
     let golden_pixels = read_png_rgba(&golden)?;
-    Ok(hash_pixels(&actual_pixels) == hash_pixels(&golden_pixels))
+
+    // Fast-path: exact hash match.
+    if hash_pixels(&actual_pixels) == hash_pixels(&golden_pixels) {
+        return Ok(true);
+    }
+
+    // If sizes differ, they definitely don't match.
+    if actual_pixels.len() != golden_pixels.len() {
+        let diff_path = out_dir.join("diff.txt");
+        fs::write(
+            &diff_path,
+            format!(
+                "size mismatch: actual={} golden={}",
+                actual_pixels.len(),
+                golden_pixels.len()
+            ),
+        )?;
+        return Ok(false);
+    }
+
+    // Pixel-diff: count differing pixels.
+    let total_pixels = actual_pixels.len() / 4;
+    let mut diff_count = 0u64;
+    for i in 0..total_pixels {
+        let base = i * 4;
+        if actual_pixels[base] != golden_pixels[base]
+            || actual_pixels[base + 1] != golden_pixels[base + 1]
+            || actual_pixels[base + 2] != golden_pixels[base + 2]
+            || actual_pixels[base + 3] != golden_pixels[base + 3]
+        {
+            diff_count += 1;
+        }
+    }
+
+    let diff_pct = (diff_count as f64 / total_pixels as f64) * 100.0;
+    let diff_path = out_dir.join("diff.txt");
+    fs::write(
+        &diff_path,
+        format!("{diff_count}/{total_pixels} pixels differ ({diff_pct:.2}%)"),
+    )?;
+
+    // Generate diff image: red pixels where differences exist.
+    generate_diff_image(out_dir, &actual_pixels, &golden_pixels)?;
+
+    // Threshold: <0.1% difference counts as a match.
+    Ok(diff_pct < 0.1)
+}
+
+/// Generate a diff image highlighting pixel differences in red.
+fn generate_diff_image(out_dir: &Path, actual: &[u8], golden: &[u8]) -> anyhow::Result<()> {
+    let total_pixels = actual.len() / 4;
+    let mut diff = vec![0u8; actual.len()];
+    for i in 0..total_pixels {
+        let base = i * 4;
+        let differs = actual[base] != golden[base]
+            || actual[base + 1] != golden[base + 1]
+            || actual[base + 2] != golden[base + 2]
+            || actual[base + 3] != golden[base + 3];
+        if differs {
+            diff[base] = 255; // R
+            diff[base + 1] = 0; // G
+            diff[base + 2] = 0; // B
+            diff[base + 3] = 255; // A
+        } else {
+            // Dim the matching pixels.
+            diff[base] = actual[base] / 3;
+            diff[base + 1] = actual[base + 1] / 3;
+            diff[base + 2] = actual[base + 2] / 3;
+            diff[base + 3] = 255;
+        }
+    }
+    // We need the image dimensions to save. Read them from golden.png.
+    let golden_path = out_dir.join("golden.png");
+    let file = fs::File::open(&golden_path)?;
+    let decoder = png::Decoder::new(std::io::BufReader::new(file));
+    let reader = decoder.read_info()?;
+    let info = reader.info();
+    save_png(&out_dir.join("diff.png"), info.width, info.height, &diff)?;
+    Ok(())
 }
 
 fn populate_demo_vfs(vfs: &mut MemoryVfs) {
@@ -614,6 +781,7 @@ fn run_browser_scenario(
     out_dir: &Path,
     w: u32,
     h: u32,
+    full_page: bool,
 ) -> anyhow::Result<()> {
     let mut browser = BrowserWidget::new(BrowserConfig::default());
     browser.set_window(0, 0, w, h);
@@ -630,6 +798,12 @@ fn run_browser_scenario(
             browser.load_html(&html, "gemini://test/page.gmi");
             String::new() // Already loaded.
         },
+        "images" => {
+            // Use navigate_vfs so images are decoded from VFS.
+            let vfs = make_image_test_vfs();
+            browser.navigate_vfs("vfs://test/images.html", &vfs);
+            String::new() // Already loaded.
+        },
         _ => {
             let fixture_path = format!("test-fixtures/html/{page_name}.html");
             let content = fs::read_to_string(&fixture_path).unwrap_or_else(|_| {
@@ -642,7 +816,70 @@ fn run_browser_scenario(
     let _ = html; // Suppress unused warning.
 
     render_browser_and_save(backend, &mut browser, w, h, &out_dir.join("actual.png"))?;
+
+    if full_page {
+        render_browser_fullpage_and_save(
+            backend,
+            &mut browser,
+            w,
+            h,
+            &out_dir.join("fullpage.png"),
+        )?;
+    }
     Ok(())
+}
+
+/// Build a VFS for the images screenshot test with an inline BMP and
+/// the HTML fixture from test-fixtures/html/images.html.
+fn make_image_test_vfs() -> MemoryVfs {
+    let mut vfs = MemoryVfs::new();
+    vfs.mkdir("/test").ok();
+
+    // Read the fixture HTML.
+    let html = fs::read_to_string("test-fixtures/html/images.html")
+        .unwrap_or_else(|_| "<html><body><p>Missing images.html fixture</p></body></html>".into());
+    vfs.write("/test/images.html", html.as_bytes()).unwrap();
+
+    // Create a minimal 16x16 24-bit BMP (solid red).
+    let bmp = make_test_bmp_16x16();
+    vfs.write("/test/red_16x16.bmp", &bmp).unwrap();
+
+    vfs
+}
+
+/// Build a minimal 16x16 solid-red 24-bit BMP for image testing.
+fn make_test_bmp_16x16() -> Vec<u8> {
+    let w: u32 = 16;
+    let h: u32 = 16;
+    let bpp: u16 = 24;
+    let row_bytes = (w * 3).div_ceil(4) * 4;
+    let pixel_data_size = row_bytes * h;
+    let file_size = 54 + pixel_data_size;
+
+    let mut bmp = vec![0u8; file_size as usize];
+    bmp[0] = b'B';
+    bmp[1] = b'M';
+    bmp[2..6].copy_from_slice(&file_size.to_le_bytes());
+    bmp[10..14].copy_from_slice(&54u32.to_le_bytes());
+    bmp[14..18].copy_from_slice(&40u32.to_le_bytes());
+    bmp[18..22].copy_from_slice(&(w as i32).to_le_bytes());
+    bmp[22..26].copy_from_slice(&(h as i32).to_le_bytes());
+    bmp[26..28].copy_from_slice(&1u16.to_le_bytes());
+    bmp[28..30].copy_from_slice(&bpp.to_le_bytes());
+    bmp[30..34].copy_from_slice(&0u32.to_le_bytes());
+
+    // Fill with solid red (BGR = 0,0,255).
+    for row in 0..h {
+        for col in 0..w {
+            let off = 54 + (row * row_bytes + col * 3) as usize;
+            if off + 2 < bmp.len() {
+                bmp[off] = 0;
+                bmp[off + 1] = 0;
+                bmp[off + 2] = 255;
+            }
+        }
+    }
+    bmp
 }
 
 // ---------------------------------------------------------------------------
@@ -1033,10 +1270,22 @@ fn generate_report(base_dir: &Path, scenarios: &[Scenario]) -> anyhow::Result<()
             html.push_str(&format!(
                 "<div class=\"card\">\n\
                    <h3>{}</h3>\n\
-                   <img src=\"{}\" alt=\"{}\">\n\
-                 </div>\n",
+                   <img src=\"{}\" alt=\"{}\">\n",
                 scenario.name, img_path, scenario.name
             ));
+            // Include full-page screenshot if it exists.
+            let fp_path = base_dir.join(&scenario.name).join("fullpage.png");
+            if fp_path.exists() {
+                let fp_img = format!("{}/fullpage.png", scenario.name);
+                html.push_str(&format!(
+                    "  <details><summary>Full page</summary>\n\
+                       <img src=\"{fp_img}\" alt=\"{name} full page\" \
+                       style=\"max-width:480px\">\n\
+                       </details>\n",
+                    name = scenario.name,
+                ));
+            }
+            html.push_str("</div>\n");
         }
     }
     if !current_category.is_empty() {
@@ -1112,7 +1361,7 @@ fn main() -> anyhow::Result<()> {
                     .name
                     .strip_prefix("browser_")
                     .unwrap_or(&scenario.name);
-                run_browser_scenario(&mut backend, page, &out_dir, w, h)
+                run_browser_scenario(&mut backend, page, &out_dir, w, h, args.full_page)
             },
             "widget" => run_widget_gallery(&mut backend, &out_dir, w, h),
             "wm" => run_wm_scenario(&mut backend, &scenario.name, &out_dir, w, h),

@@ -4,12 +4,15 @@
 //! boxes flow horizontally and wrap into line boxes when the available
 //! width is exhausted.
 
-use super::block::TextMeasurer;
+use super::block::{TextMeasurer, layout_block};
 use super::box_model::*;
 use super::text::{
-    apply_text_transform, collapse_whitespace, measure_space, measure_word, split_into_words,
+    apply_text_transform, collapse_whitespace, measure_space, measure_word, replace_unrenderable,
+    split_into_words,
 };
-use crate::css::values::{ComputedStyle, TextAlign};
+use crate::css::values::{
+    ComputedStyle, Dimension, OverflowWrap, TextAlign, VerticalAlign, WhiteSpace, WordBreak,
+};
 use crate::html::dom::NodeId;
 
 // -------------------------------------------------------------------
@@ -24,22 +27,111 @@ pub fn layout_inline(parent: &mut LayoutBox, measurer: &dyn TextMeasurer) {
     let text_align = parent.style.text_align;
 
     // Collect all inline fragments from the children.
-    let fragments = collect_inline_fragments(&parent.children, measurer);
+    let fragments = collect_inline_fragments(&parent.children, available_width, measurer);
 
     // Break fragments into line boxes.
     let mut lines: Vec<LineBox> = Vec::new();
-    let mut current_line = LineBox::new(available_width);
+    let text_indent = parent.style.text_indent;
+    let first_line_width = (available_width - text_indent).max(0.0);
+    let mut current_line = LineBox::new(first_line_width);
+    let nowrap = parent.style.white_space == WhiteSpace::NoWrap;
+    let break_all = parent.style.word_break == WordBreak::BreakAll;
+    let break_word = parent.style.overflow_wrap == OverflowWrap::BreakWord
+        || parent.style.overflow_wrap == OverflowWrap::Anywhere;
 
     for fragment in &fragments {
+        // Check for line break fragments (<br> or "\n" in pre mode).
+        let is_line_break = match fragment {
+            InlineFragment::ReplacedInline {
+                replaced: ReplacedContent::LineBreak,
+                ..
+            } => true,
+            InlineFragment::Text { text, .. } if text == "\n" => true,
+            _ => false,
+        };
+
+        if is_line_break {
+            // Push current line (even if empty, to create blank lines
+            // for consecutive <br>s).
+            lines.push(current_line);
+            current_line = LineBox::new(available_width);
+            continue;
+        }
+
+        // white-space: nowrap -- force-add without breaking.
+        if nowrap {
+            current_line.fragments.push(fragment.clone());
+            continue;
+        }
+
+        // word-break: break-all — always break at character boundaries.
+        if break_all {
+            let pieces = break_word_fragment(fragment, available_width, measurer);
+            for piece in &pieces {
+                if !current_line.try_add(piece) {
+                    lines.push(current_line);
+                    current_line = LineBox::new(available_width);
+                    current_line.try_add(piece);
+                }
+            }
+            continue;
+        }
+
         if !current_line.try_add(fragment) {
+            // If the fragment doesn't fit on an empty line, break it
+            // character-by-character (emergency word breaking, or
+            // overflow-wrap: break-word).
+            if current_line.is_empty() || break_word {
+                if current_line.is_empty() {
+                    let pieces = break_word_fragment(fragment, available_width, measurer);
+                    for piece in &pieces {
+                        if !current_line.try_add(piece) {
+                            lines.push(current_line);
+                            current_line = LineBox::new(available_width);
+                            current_line.try_add(piece);
+                        }
+                    }
+                    continue;
+                }
+                // break-word with non-empty line: wrap to next line first,
+                // then break if still doesn't fit.
+                lines.push(current_line);
+                current_line = LineBox::new(available_width);
+                if !current_line.try_add(fragment) && current_line.is_empty() {
+                    let pieces = break_word_fragment(fragment, available_width, measurer);
+                    for piece in &pieces {
+                        if !current_line.try_add(piece) {
+                            lines.push(current_line);
+                            current_line = LineBox::new(available_width);
+                            current_line.try_add(piece);
+                        }
+                    }
+                }
+                continue;
+            }
             lines.push(current_line);
             current_line = LineBox::new(available_width);
             // The fragment that did not fit starts the new line.
-            current_line.try_add(fragment);
+            if !current_line.try_add(fragment) && current_line.is_empty() {
+                // Still doesn't fit: emergency break.
+                let pieces = break_word_fragment(fragment, available_width, measurer);
+                for piece in &pieces {
+                    if !current_line.try_add(piece) {
+                        lines.push(current_line);
+                        current_line = LineBox::new(available_width);
+                        current_line.try_add(piece);
+                    }
+                }
+            }
         }
     }
     if !current_line.is_empty() {
         lines.push(current_line);
+    }
+
+    // CSS 2.1 §16.6.1: strip spaces at line boundaries.
+    for line in &mut lines {
+        trim_line_boundary_spaces(line, measurer);
     }
 
     // Position line boxes vertically and apply text alignment.
@@ -61,16 +153,23 @@ pub fn layout_inline(parent: &mut LayoutBox, measurer: &dyn TextMeasurer) {
         } else {
             parent.style.line_height
         };
-        line.baseline = line.height * 0.8; // simple approximation
+        // Baseline: bitmap font ascender is ~75% of em square.
+        line.baseline = line.height * 0.75;
 
         // Position fragments horizontally.
+        // First line gets text-indent offset and reduced available width.
         let is_last_line = i == last_line_idx;
+        let (line_avail, line_offset) = if i == 0 && text_indent != 0.0 {
+            (first_line_width, text_indent)
+        } else {
+            (available_width, 0.0)
+        };
         position_fragments_on_line(
             line,
-            available_width,
+            line_avail,
             text_align,
             is_last_line,
-            parent.dimensions.content.x,
+            parent.dimensions.content.x + line_offset,
         );
 
         line_positions.push(cursor_y);
@@ -91,9 +190,12 @@ pub fn layout_inline(parent: &mut LayoutBox, measurer: &dyn TextMeasurer) {
 /// Collect inline fragments from a list of layout box children.
 ///
 /// Text nodes are split into word-level fragments for line breaking.
-/// Inline boxes are kept as single fragments.
+/// Inline boxes are kept as single fragments. `available_width` is the
+/// containing block's content width, used for inline-block percentage
+/// resolution.
 fn collect_inline_fragments(
     children: &[LayoutBox],
+    available_width: f32,
     measurer: &dyn TextMeasurer,
 ) -> Vec<InlineFragment> {
     let mut fragments = Vec::new();
@@ -103,15 +205,66 @@ fn collect_inline_fragments(
             BoxType::Inline => {
                 // Check if this is a text node (has a node id and
                 // the style says inline). We produce text fragments.
-                fragments.extend(text_fragments_for_inline(child, measurer));
+                fragments.extend(text_fragments_for_inline(child, available_width, measurer));
             },
             BoxType::InlineBlock => {
-                fragments.push(InlineFragment::InlineBox {
-                    layout_box: child.clone(),
-                });
+                // InlineBlock boxes participate in inline flow but
+                // establish their own block formatting context. We
+                // must lay them out now so dimensions are known.
+                let mut lb = child.clone();
+                layout_block(&mut lb, available_width, measurer);
+                if matches!(lb.style.width, Dimension::Auto) {
+                    // Shrink content width to actual children extent.
+                    let max_child_right = lb
+                        .children
+                        .iter()
+                        .map(|c| {
+                            let bb = c.dimensions.border_box();
+                            bb.x + bb.width - lb.dimensions.content.x
+                        })
+                        .fold(0.0_f32, f32::max);
+                    lb.dimensions.content.width = max_child_right;
+                }
+                // InlineBlock margins must not be inflated by the
+                // block-level over-constrained rule. Reset to declared
+                // values (auto margins resolve to zero for inline-block).
+                lb.dimensions.margin.left = if lb.style.margin_left_auto {
+                    0.0
+                } else {
+                    lb.style.margin_left
+                };
+                lb.dimensions.margin.right = if lb.style.margin_right_auto {
+                    0.0
+                } else {
+                    lb.style.margin_right
+                };
+                fragments.push(InlineFragment::InlineBox { layout_box: lb });
             },
             BoxType::Replaced(replaced) => {
-                let (w, h) = replaced_dimensions(replaced);
+                let (intrinsic_w, intrinsic_h) = replaced_dimensions(replaced);
+                // Apply CSS width/height if set, falling back to intrinsic.
+                let w = match child.style.width {
+                    crate::css::values::Dimension::Px(px) => px,
+                    _ => intrinsic_w,
+                };
+                let h = match child.style.height {
+                    crate::css::values::Dimension::Px(px) => px,
+                    _ => intrinsic_h,
+                };
+                // Preserve aspect ratio when only one dimension is set.
+                let (w, h) = if child.style.width != crate::css::values::Dimension::Auto
+                    && child.style.height == crate::css::values::Dimension::Auto
+                    && intrinsic_h > 0.0
+                {
+                    (w, w * intrinsic_h / intrinsic_w.max(1.0))
+                } else if child.style.height != crate::css::values::Dimension::Auto
+                    && child.style.width == crate::css::values::Dimension::Auto
+                    && intrinsic_w > 0.0
+                {
+                    (h * intrinsic_w / intrinsic_h.max(1.0), h)
+                } else {
+                    (w, h)
+                };
                 fragments.push(InlineFragment::ReplacedInline {
                     replaced: replaced.clone(),
                     x: 0.0,
@@ -124,7 +277,11 @@ fn collect_inline_fragments(
             _ => {
                 // Nested children (shouldn't happen in a well-formed
                 // anonymous box, but handle gracefully).
-                fragments.extend(collect_inline_fragments(&child.children, measurer));
+                fragments.extend(collect_inline_fragments(
+                    &child.children,
+                    available_width,
+                    measurer,
+                ));
             },
         }
     }
@@ -136,6 +293,7 @@ fn collect_inline_fragments(
 /// boundaries for line breaking).
 fn text_fragments_for_inline(
     layout_box: &LayoutBox,
+    available_width: f32,
     measurer: &dyn TextMeasurer,
 ) -> Vec<InlineFragment> {
     let style = &layout_box.style;
@@ -158,7 +316,7 @@ fn text_fragments_for_inline(
     }
 
     // Recurse into children.
-    let mut frags = collect_inline_fragments(&layout_box.children, measurer);
+    let mut frags = collect_inline_fragments(&layout_box.children, available_width, measurer);
 
     // Propagate this element's node ID to child fragments so that
     // link elements (<a>) are tracked through the paint pass.
@@ -167,6 +325,24 @@ fn text_fragments_for_inline(
             if let InlineFragment::Text { node, .. } = frag {
                 *node = Some(node_id);
             }
+        }
+    }
+
+    // Apply inline-level horizontal margins: left margin adds space
+    // before the first fragment, right margin after the last.
+    let ml = style.margin_left;
+    let mr = style.margin_right;
+    if !frags.is_empty() {
+        if ml > 0.0
+            && let InlineFragment::Text { width, .. } = &mut frags[0]
+        {
+            *width += ml;
+        }
+        let last = frags.len() - 1;
+        if mr > 0.0
+            && let InlineFragment::Text { width, .. } = &mut frags[last]
+        {
+            *width += mr;
         }
     }
 
@@ -179,6 +355,20 @@ fn replaced_dimensions(replaced: &ReplacedContent) -> (f32, f32) {
         ReplacedContent::Image { width, height, .. } => (*width as f32, *height as f32),
         ReplacedContent::HorizontalRule => (0.0, 2.0),
         ReplacedContent::LineBreak => (0.0, 0.0),
+        ReplacedContent::TextInput { size, .. } => {
+            // Use bitmap measurement for 'M' width as the per-character size.
+            let char_w = oasis_types::backend::bitmap_measure_text("M", 8) as f32;
+            (*size as f32 * char_w + 8.0, 18.0)
+        },
+        ReplacedContent::SubmitButton { label } => {
+            // Use bitmap measurement for accurate label width.
+            let text_w = oasis_types::backend::bitmap_measure_text(label, 10) as f32;
+            (text_w + 16.0, 20.0)
+        },
+        ReplacedContent::SelectBox { label } => {
+            let text_w = oasis_types::backend::bitmap_measure_text(label, 10) as f32;
+            (text_w + 20.0, 18.0) // extra space for dropdown arrow
+        },
     }
 }
 
@@ -197,10 +387,13 @@ pub fn make_text_fragments(
 ) -> Vec<InlineFragment> {
     let transformed = apply_text_transform(text, style.text_transform);
     let collapsed = collapse_whitespace(&transformed, style.white_space);
-    let words = split_into_words(&collapsed, style.white_space);
+    let renderable = replace_unrenderable(&collapsed);
+    let words = split_into_words(&renderable, style.white_space);
 
     let font_size = style.font_size;
-    let space_width = measure_space(font_size, measurer);
+    let letter_spacing = style.letter_spacing;
+    let word_spacing = style.word_spacing;
+    let space_width = measure_space(font_size, word_spacing, measurer);
     let mut fragments = Vec::new();
 
     for word in &words {
@@ -217,18 +410,23 @@ pub fn make_text_fragments(
             continue;
         }
 
-        let word_width = measure_word(&word.text, font_size, measurer);
-        let total_width = if word.trailing_space {
-            word_width + space_width
-        } else {
-            word_width
-        };
+        let word_width = measure_word(&word.text, font_size, letter_spacing, measurer);
+        let mut total_width = word_width;
+        let mut display_text = word.text.clone();
 
-        let display_text = if word.trailing_space {
-            format!("{} ", word.text)
-        } else {
-            word.text.clone()
-        };
+        // Prepend space when the source text had whitespace before
+        // this word (inter-element whitespace preservation).
+        if word.leading_space {
+            display_text.insert(0, ' ');
+            total_width += space_width;
+        }
+
+        // Append space when the source text had whitespace after
+        // this word.
+        if word.trailing_space {
+            display_text.push(' ');
+            total_width += space_width;
+        }
 
         fragments.push(InlineFragment::Text {
             text: display_text,
@@ -240,6 +438,91 @@ pub fn make_text_fragments(
     }
 
     fragments
+}
+
+// -------------------------------------------------------------------
+// Emergency word breaking
+// -------------------------------------------------------------------
+
+/// Break a text fragment at the available width boundary, producing
+/// multiple sub-fragments that each fit within the given width.
+fn break_word_fragment(
+    fragment: &InlineFragment,
+    available_width: f32,
+    measurer: &dyn TextMeasurer,
+) -> Vec<InlineFragment> {
+    if let InlineFragment::Text {
+        text, style, node, ..
+    } = fragment
+    {
+        let chars: Vec<char> = text.chars().collect();
+        let mut pieces = Vec::new();
+        let mut start = 0;
+
+        while start < chars.len() {
+            let mut end = start + 1;
+            // Greedily extend until the piece exceeds available width.
+            while end < chars.len() {
+                let candidate: String = chars[start..=end].iter().collect();
+                let w = measure_word(&candidate, style.font_size, style.letter_spacing, measurer);
+                if w > available_width && end > start + 1 {
+                    break;
+                }
+                end += 1;
+            }
+            // end is now one past the last character that fits.
+            let piece_text: String = chars[start..end].iter().collect();
+            let piece_width =
+                measure_word(&piece_text, style.font_size, style.letter_spacing, measurer);
+            pieces.push(InlineFragment::Text {
+                text: piece_text,
+                x: 0.0,
+                width: piece_width,
+                style: style.clone(),
+                node: *node,
+            });
+            start = end;
+        }
+
+        if pieces.is_empty() {
+            // Fallback: return the original fragment.
+            pieces.push(fragment.clone());
+        }
+        pieces
+    } else {
+        vec![fragment.clone()]
+    }
+}
+
+// -------------------------------------------------------------------
+// Line boundary whitespace trimming (CSS 2.1 §16.6.1)
+// -------------------------------------------------------------------
+
+/// Strip leading whitespace from the first fragment and trailing
+/// whitespace from the last fragment on a line. This implements the
+/// CSS rule that spaces at line boundaries are removed.
+fn trim_line_boundary_spaces(line: &mut LineBox, measurer: &dyn TextMeasurer) {
+    // Trim leading space from first text fragment.
+    if let Some(InlineFragment::Text {
+        text, width, style, ..
+    }) = line.fragments.first_mut()
+        && text.starts_with(' ')
+    {
+        *text = text[1..].to_string();
+        let sw = measure_space(style.font_size, style.word_spacing, measurer);
+        *width = (*width - sw).max(0.0);
+    }
+
+    // Trim trailing space from last text fragment.
+    if let Some(InlineFragment::Text {
+        text, width, style, ..
+    }) = line.fragments.last_mut()
+        && text.ends_with(' ')
+    {
+        text.pop();
+        let sw = measure_space(style.font_size, style.word_spacing, measurer);
+        *width = (*width - sw).max(0.0);
+    }
 }
 
 // -------------------------------------------------------------------
@@ -308,9 +591,40 @@ fn set_fragment_x(frag: &mut InlineFragment, x: f32) {
     match frag {
         InlineFragment::Text { x: fx, .. } => *fx = x,
         InlineFragment::InlineBox { layout_box } => {
-            layout_box.dimensions.content.x = x;
+            // x is the start of the margin box on the line.
+            // Content.x must account for margin + border + padding.
+            let content_x = x
+                + layout_box.dimensions.margin.left
+                + layout_box.dimensions.border.left
+                + layout_box.dimensions.padding.left;
+            let old_x = layout_box.dimensions.content.x;
+            let dx = content_x - old_x;
+            layout_box.dimensions.content.x = content_x;
+            // Offset all descendants by the delta so they stay
+            // positioned correctly relative to the InlineBlock.
+            if dx.abs() > 0.001 {
+                for child in &mut layout_box.children {
+                    offset_subtree_x(child, dx);
+                }
+            }
         },
         InlineFragment::ReplacedInline { x: fx, .. } => *fx = x,
+    }
+}
+
+/// Recursively offset a layout box and all descendants in the x axis.
+fn offset_subtree_x(lb: &mut LayoutBox, dx: f32) {
+    lb.dimensions.content.x += dx;
+    for child in &mut lb.children {
+        offset_subtree_x(child, dx);
+    }
+}
+
+/// Recursively offset a layout box and all descendants in the y axis.
+fn offset_subtree_y(lb: &mut LayoutBox, dy: f32) {
+    lb.dimensions.content.y += dy;
+    for child in &mut lb.children {
+        offset_subtree_y(child, dy);
     }
 }
 
@@ -323,6 +637,15 @@ fn set_fragment_x(frag: &mut InlineFragment, x: f32) {
 /// Converts all fragments (text, inline boxes, replaced) into
 /// positioned `LayoutBox` children so the paint pass can render
 /// text and record link hit regions.
+/// Compute the vertical offset for a fragment based on `vertical-align`.
+fn align_vertically(va: VerticalAlign, frag_height: f32, line_height: f32) -> f32 {
+    match va {
+        VerticalAlign::Top | VerticalAlign::TextTop | VerticalAlign::Baseline => 0.0,
+        VerticalAlign::Middle => (line_height - frag_height) / 2.0,
+        VerticalAlign::Bottom | VerticalAlign::TextBottom => line_height - frag_height,
+    }
+}
+
 fn lines_to_children(lines: Vec<LineBox>, line_positions: &[f32]) -> Vec<LayoutBox> {
     let mut children = Vec::new();
     for (line, &line_y) in lines.into_iter().zip(line_positions.iter()) {
@@ -344,7 +667,18 @@ fn lines_to_children(lines: Vec<LineBox>, line_positions: &[f32]) -> Vec<LayoutB
                     lb.dimensions.content.height = line_height;
                     children.push(lb);
                 },
-                InlineFragment::InlineBox { layout_box } => {
+                InlineFragment::InlineBox { mut layout_box } => {
+                    let va = layout_box.style.vertical_align;
+                    let frag_h = layout_box.dimensions.margin_box().height;
+                    let va_offset = align_vertically(va, frag_h, line_height);
+                    // Offset the entire InlineBlock subtree to its
+                    // final line position. The block was laid out at
+                    // y=0; the x was set by position_fragments_on_line.
+                    let old_y = layout_box.dimensions.content.y;
+                    let dy = line_y + va_offset - old_y;
+                    if dy.abs() > 0.001 {
+                        offset_subtree_y(&mut layout_box, dy);
+                    }
                     children.push(layout_box);
                 },
                 InlineFragment::ReplacedInline {
@@ -355,9 +689,10 @@ fn lines_to_children(lines: Vec<LineBox>, line_positions: &[f32]) -> Vec<LayoutB
                     style,
                     node,
                 } => {
+                    let va_offset = align_vertically(style.vertical_align, height, line_height);
                     let mut lb = LayoutBox::new(BoxType::Replaced(replaced), style, node);
                     lb.dimensions.content.x = x;
-                    lb.dimensions.content.y = line_y;
+                    lb.dimensions.content.y = line_y + va_offset;
                     lb.dimensions.content.width = width;
                     lb.dimensions.content.height = height;
                     children.push(lb);
@@ -569,5 +904,207 @@ mod tests {
 
         // Verify words were produced (whitespace still collapses).
         assert!(frags.len() > 1, "should have multiple word fragments",);
+    }
+
+    // -- nowrap via layout_inline -------------------------------------
+
+    #[test]
+    fn nowrap_layout_produces_single_line() {
+        let m = FixedMeasurer;
+        let mut style = ComputedStyle::default();
+        style.display = Display::Block;
+        style.white_space = WhiteSpace::NoWrap;
+        style.font_size = 16.0;
+        style.line_height = 20.0;
+
+        let mut parent = LayoutBox::new(BoxType::Anonymous, style.clone(), None);
+        parent.dimensions.content.width = 50.0; // very narrow
+        parent.dimensions.content.x = 0.0;
+        parent.dimensions.content.y = 0.0;
+
+        // Create inline children with text that exceeds 50px.
+        let mut child = LayoutBox::new(BoxType::Inline, style, None);
+        child.text = Some("hello world test".to_string());
+        parent.children = vec![child];
+
+        layout_inline(&mut parent, &m);
+
+        // With nowrap, content height should be a single line height.
+        assert!(
+            parent.dimensions.content.height <= 20.0 + 0.01,
+            "nowrap should produce single line, got height {}",
+            parent.dimensions.content.height,
+        );
+    }
+
+    // -- <br> causes line break ---------------------------------------
+
+    #[test]
+    fn br_causes_line_break() {
+        let m = FixedMeasurer;
+        let mut style = inline_style();
+        style.display = Display::Block;
+
+        let mut parent = LayoutBox::new(BoxType::Anonymous, style.clone(), None);
+        parent.dimensions.content.width = 480.0;
+        parent.dimensions.content.x = 0.0;
+        parent.dimensions.content.y = 0.0;
+
+        // "hello" inline, then <br>, then "world" inline.
+        let mut hello = LayoutBox::new(BoxType::Inline, style.clone(), None);
+        hello.text = Some("hello".to_string());
+
+        let br = LayoutBox::new(
+            BoxType::Replaced(ReplacedContent::LineBreak),
+            style.clone(),
+            None,
+        );
+
+        let mut world = LayoutBox::new(BoxType::Inline, style, None);
+        world.text = Some("world".to_string());
+
+        parent.children = vec![hello, br, world];
+
+        layout_inline(&mut parent, &m);
+
+        // Should produce 2 lines worth of height.
+        assert!(
+            parent.dimensions.content.height > 20.0,
+            "br should cause two lines, got height {}",
+            parent.dimensions.content.height,
+        );
+    }
+
+    // -- text-indent on first line ------------------------------------
+
+    #[test]
+    fn text_indent_applied_to_first_line() {
+        let m = FixedMeasurer;
+        let mut style = inline_style();
+        style.display = Display::Block;
+        style.text_indent = 20.0;
+
+        let mut parent = LayoutBox::new(BoxType::Anonymous, style.clone(), None);
+        parent.dimensions.content.width = 480.0;
+        parent.dimensions.content.x = 0.0;
+        parent.dimensions.content.y = 0.0;
+
+        let mut child = LayoutBox::new(BoxType::Inline, style, None);
+        child.text = Some("hello".to_string());
+        parent.children = vec![child];
+
+        layout_inline(&mut parent, &m);
+
+        // The first (and only) text child should be indented by 20px.
+        assert!(!parent.children.is_empty());
+        let first_x = parent.children[0].dimensions.content.x;
+        assert!(
+            (first_x - 20.0).abs() < 0.01,
+            "first line should be indented by 20, got {first_x}",
+        );
+    }
+
+    // -- emergency break includes letter_spacing ----------------------
+
+    #[test]
+    fn test_emergency_break_includes_letter_spacing() {
+        let m = FixedMeasurer;
+        let mut style = inline_style();
+        style.letter_spacing = 4.0;
+
+        // "ab" without letter_spacing: measure_word gives bitmap width.
+        // With letter_spacing=4, measure_word adds 4*(2-1) = 4 extra px.
+        let frag = InlineFragment::Text {
+            text: "abcd".to_string(),
+            x: 0.0,
+            width: 999.0, // will be recomputed by break_word_fragment
+            style: style.clone(),
+            node: None,
+        };
+
+        // Break into pieces at a narrow width that forces splitting.
+        let pieces = break_word_fragment(&frag, 30.0, &m);
+        assert!(pieces.len() > 1, "should have broken word into pieces");
+
+        // Each piece width should include letter_spacing via measure_word.
+        for piece in &pieces {
+            if let InlineFragment::Text { text, width, .. } = piece {
+                let expected = super::super::text::measure_word(
+                    text,
+                    style.font_size,
+                    style.letter_spacing,
+                    &m,
+                );
+                assert!(
+                    (*width - expected).abs() < 0.01,
+                    "piece '{text}' width {width} should match measure_word {expected}",
+                );
+            }
+        }
+    }
+
+    // -- replaced element CSS dimensions override intrinsic -----------
+
+    #[test]
+    fn test_image_css_dimensions_override_intrinsic() {
+        use crate::css::values::Dimension;
+
+        let m = FixedMeasurer;
+        let mut style = inline_style();
+        style.width = Dimension::Px(50.0);
+        style.height = Dimension::Px(30.0);
+
+        let replaced = ReplacedContent::Image {
+            width: 100,
+            height: 80,
+            texture: None,
+            alt: String::new(),
+        };
+
+        let child = LayoutBox::new(BoxType::Replaced(replaced), style, None);
+        let frags = collect_inline_fragments(&[child], 480.0, &m);
+
+        assert_eq!(frags.len(), 1);
+        if let InlineFragment::ReplacedInline { width, height, .. } = &frags[0] {
+            assert!(
+                (*width - 50.0).abs() < 0.01,
+                "CSS width should override intrinsic, got {width}",
+            );
+            assert!(
+                (*height - 30.0).abs() < 0.01,
+                "CSS height should override intrinsic, got {height}",
+            );
+        } else {
+            panic!("expected ReplacedInline fragment");
+        }
+    }
+
+    #[test]
+    fn test_image_css_width_preserves_aspect_ratio() {
+        use crate::css::values::Dimension;
+
+        let m = FixedMeasurer;
+        let mut style = inline_style();
+        style.width = Dimension::Px(50.0);
+        // height stays Auto
+
+        let replaced = ReplacedContent::Image {
+            width: 100,
+            height: 80,
+            texture: None,
+            alt: String::new(),
+        };
+
+        let child = LayoutBox::new(BoxType::Replaced(replaced), style, None);
+        let frags = collect_inline_fragments(&[child], 480.0, &m);
+
+        if let InlineFragment::ReplacedInline { width, height, .. } = &frags[0] {
+            assert!((*width - 50.0).abs() < 0.01);
+            // 50 * (80/100) = 40
+            assert!(
+                (*height - 40.0).abs() < 0.01,
+                "height should preserve aspect ratio: expected 40, got {height}",
+            );
+        }
     }
 }

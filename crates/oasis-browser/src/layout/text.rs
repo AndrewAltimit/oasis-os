@@ -7,6 +7,26 @@ use super::block::TextMeasurer;
 use crate::css::values::{TextTransform, WhiteSpace};
 
 // -------------------------------------------------------------------
+// Unicode fallback
+// -------------------------------------------------------------------
+
+/// Replace characters that have no bitmap font glyph with `?`.
+///
+/// This prevents filled-block rendering for non-ASCII characters like
+/// `©`, Cyrillic, CJK, etc.
+pub fn replace_unrenderable(text: &str) -> String {
+    text.chars()
+        .map(|ch| {
+            if oasis_types::bitmap_font::has_glyph(ch) {
+                ch
+            } else {
+                '?'
+            }
+        })
+        .collect()
+}
+
+// -------------------------------------------------------------------
 // Text word
 // -------------------------------------------------------------------
 
@@ -15,6 +35,8 @@ use crate::css::values::{TextTransform, WhiteSpace};
 pub struct TextWord {
     /// The actual word content.
     pub text: String,
+    /// Whether this word had leading whitespace in the source text.
+    pub leading_space: bool,
     /// Whether this word had trailing whitespace in the source text.
     pub trailing_space: bool,
 }
@@ -34,7 +56,7 @@ pub fn collapse_whitespace(text: &str, white_space: WhiteSpace) -> String {
     match white_space {
         WhiteSpace::Normal | WhiteSpace::NoWrap => {
             let mut result = String::with_capacity(text.len());
-            let mut in_space = true; // treat leading ws as collapsible
+            let mut in_space = false;
             for ch in text.chars() {
                 if ch.is_ascii_whitespace() {
                     if !in_space {
@@ -45,10 +67,6 @@ pub fn collapse_whitespace(text: &str, white_space: WhiteSpace) -> String {
                     result.push(ch);
                     in_space = false;
                 }
-            }
-            // Strip trailing space.
-            if result.ends_with(' ') {
-                result.pop();
             }
             result
         },
@@ -99,12 +117,14 @@ pub fn split_into_words(text: &str, white_space: WhiteSpace) -> Vec<TextWord> {
                 if i > 0 {
                     words.push(TextWord {
                         text: "\n".to_string(),
+                        leading_space: false,
                         trailing_space: false,
                     });
                 }
                 if !line.is_empty() {
                     words.push(TextWord {
                         text: line.to_string(),
+                        leading_space: false,
                         trailing_space: false,
                     });
                 }
@@ -118,6 +138,7 @@ pub fn split_into_words(text: &str, white_space: WhiteSpace) -> Vec<TextWord> {
                 if i > 0 {
                     words.push(TextWord {
                         text: "\n".to_string(),
+                        leading_space: false,
                         trailing_space: false,
                     });
                 }
@@ -139,14 +160,18 @@ pub fn split_into_words(text: &str, white_space: WhiteSpace) -> Vec<TextWord> {
 fn split_line_into_words(line: &str, out: &mut Vec<TextWord>) {
     let parts: Vec<&str> = line.split(' ').collect();
     let last_idx = parts.len().saturating_sub(1);
+    let mut saw_empty = false;
     for (i, part) in parts.iter().enumerate() {
         if part.is_empty() {
+            saw_empty = true;
             continue;
         }
         out.push(TextWord {
             text: (*part).to_string(),
+            leading_space: saw_empty,
             trailing_space: i < last_idx,
         });
+        saw_empty = false;
     }
 }
 
@@ -155,14 +180,30 @@ fn split_line_into_words(line: &str, out: &mut Vec<TextWord>) {
 // -------------------------------------------------------------------
 
 /// Measure a word's pixel width using the backend text measurer.
-pub fn measure_word(word: &str, font_size: f32, measurer: &dyn TextMeasurer) -> f32 {
-    measurer.measure_text(word, font_size as u16) as f32
+///
+/// Adds `letter_spacing` between each pair of characters.
+pub fn measure_word(
+    word: &str,
+    font_size: f32,
+    letter_spacing: f32,
+    measurer: &dyn TextMeasurer,
+) -> f32 {
+    let base = measurer.measure_text(word, font_size as u16) as f32;
+    if letter_spacing != 0.0 {
+        let chars = word.chars().count();
+        if chars > 1 {
+            return (base + letter_spacing * (chars - 1) as f32).max(0.0);
+        }
+    }
+    base
 }
 
 /// Measure the width of a single space character at the given font
 /// size.
-pub fn measure_space(font_size: f32, measurer: &dyn TextMeasurer) -> f32 {
-    measurer.measure_text(" ", font_size as u16) as f32
+///
+/// Adds `word_spacing` to the natural space width.
+pub fn measure_space(font_size: f32, word_spacing: f32, measurer: &dyn TextMeasurer) -> f32 {
+    measurer.measure_text(" ", font_size as u16) as f32 + word_spacing
 }
 
 // -------------------------------------------------------------------
@@ -226,8 +267,10 @@ mod tests {
 
     #[test]
     fn collapse_normal_leading_trailing() {
+        // Leading/trailing whitespace is now preserved as single
+        // spaces (trimmed at line boundaries, not text-node boundaries).
         let result = collapse_whitespace("  hello  ", WhiteSpace::Normal);
-        assert_eq!(result, "hello");
+        assert_eq!(result, " hello ");
     }
 
     #[test]
@@ -239,7 +282,7 @@ mod tests {
     #[test]
     fn collapse_nowrap_same_as_normal() {
         let result = collapse_whitespace("  a   b  ", WhiteSpace::NoWrap);
-        assert_eq!(result, "a b");
+        assert_eq!(result, " a b ");
     }
 
     #[test]
@@ -279,7 +322,15 @@ mod tests {
         let words = split_into_words("  hello   world  ", WhiteSpace::Normal);
         assert_eq!(words.len(), 2);
         assert_eq!(words[0].text, "hello");
+        assert!(
+            words[0].leading_space,
+            "leading space from collapsed leading ws"
+        );
         assert_eq!(words[1].text, "world");
+        assert!(
+            words[1].trailing_space,
+            "trailing space from collapsed trailing ws"
+        );
     }
 
     #[test]
@@ -298,6 +349,23 @@ mod tests {
         assert_eq!(words[0].text, "line1");
         assert_eq!(words[1].text, "\n");
         assert_eq!(words[2].text, "line2");
+    }
+
+    #[test]
+    fn collapse_preserves_inter_element_space() {
+        // " and " between inline elements should become " and "
+        let result = collapse_whitespace(" and ", WhiteSpace::Normal);
+        assert_eq!(result, " and ");
+    }
+
+    #[test]
+    fn split_inter_element_space() {
+        // " and " → one word "and" with leading_space=true, trailing_space=true
+        let words = split_into_words(" and ", WhiteSpace::Normal);
+        assert_eq!(words.len(), 1);
+        assert_eq!(words[0].text, "and");
+        assert!(words[0].leading_space);
+        assert!(words[0].trailing_space);
     }
 
     // -- text transform -----------------------------------------------
@@ -347,15 +415,43 @@ mod tests {
     #[test]
     fn measure_word_stub() {
         let m = StubMeasurer;
-        let w = measure_word("hello", 16.0, &m);
+        let w = measure_word("hello", 16.0, 0.0, &m);
         // Proportional: h(7)+e(7)+l(5)+l(5)+o(7) = 31, scale=2 at font_size 16 => 62
         assert_eq!(w, 62.0);
     }
 
     #[test]
+    fn measure_word_with_letter_spacing() {
+        let m = StubMeasurer;
+        // "hello" = 62px base, 5 chars, letter_spacing 2.0 => 62 + 2*(5-1) = 70
+        let w = measure_word("hello", 16.0, 2.0, &m);
+        assert_eq!(w, 70.0);
+    }
+
+    #[test]
     fn measure_space_stub() {
         let m = StubMeasurer;
-        let w = measure_space(16.0, &m);
+        let w = measure_space(16.0, 0.0, &m);
         assert_eq!(w, 8.0);
+    }
+
+    #[test]
+    fn measure_space_with_word_spacing() {
+        let m = StubMeasurer;
+        let w = measure_space(16.0, 3.0, &m);
+        assert_eq!(w, 11.0);
+    }
+
+    #[test]
+    fn test_negative_letter_spacing_no_negative_width() {
+        let m = StubMeasurer;
+        // "ab" base width = 16 (8*2 at font_size 16 via StubMeasurer)
+        // letter_spacing = -100 => 16 + (-100 * 1) = -84
+        // Should be clamped to 0.
+        let w = measure_word("ab", 16.0, -100.0, &m);
+        assert!(
+            w >= 0.0,
+            "negative letter-spacing should not produce negative width, got {w}",
+        );
     }
 }

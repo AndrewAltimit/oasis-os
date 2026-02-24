@@ -5,6 +5,8 @@
 //! single canonical representation (e.g. all lengths are resolved to `f32`
 //! pixels, all colors to `Color`).
 
+use std::collections::HashMap;
+
 use super::parser::{CssColor, CssValue, LengthUnit};
 use oasis_types::backend::Color;
 
@@ -212,6 +214,99 @@ pub enum Overflow {
     Hidden,
 }
 
+/// CSS `word-break` property.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WordBreak {
+    Normal,
+    BreakAll,
+}
+
+/// CSS `overflow-wrap` property.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OverflowWrap {
+    Normal,
+    BreakWord,
+    Anywhere,
+}
+
+/// CSS `text-overflow` property.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TextOverflow {
+    Clip,
+    Ellipsis,
+}
+
+/// CSS `box-sizing` property.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BoxSizing {
+    ContentBox,
+    BorderBox,
+}
+
+/// CSS `vertical-align` property (subset for inline replaced elements).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VerticalAlign {
+    Baseline,
+    Top,
+    Middle,
+    Bottom,
+    TextTop,
+    TextBottom,
+}
+
+/// A color stop in a CSS gradient.
+#[derive(Debug, Clone, PartialEq)]
+pub struct GradientStop {
+    pub color: Color,
+    /// Position as a fraction 0.0 ..= 1.0.
+    pub position: f32,
+}
+
+/// CSS linear-gradient direction.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum GradientDirection {
+    /// Angle in degrees (0 = to top, 90 = to right).
+    Angle(f32),
+    ToTop,
+    ToRight,
+    ToBottom,
+    ToLeft,
+}
+
+/// A parsed CSS `linear-gradient(...)` value.
+#[derive(Debug, Clone, PartialEq)]
+pub struct LinearGradient {
+    pub direction: GradientDirection,
+    pub stops: Vec<GradientStop>,
+}
+
+/// CSS `background-image` property.
+#[derive(Debug, Clone, PartialEq)]
+pub enum BackgroundImage {
+    None,
+    Url(String),
+    Gradient(LinearGradient),
+}
+
+/// CSS `text-shadow` value.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct TextShadow {
+    pub offset_x: f32,
+    pub offset_y: f32,
+    pub blur: f32,
+    pub color: Color,
+}
+
+/// CSS `box-shadow` value.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct BoxShadow {
+    pub offset_x: f32,
+    pub offset_y: f32,
+    pub blur: f32,
+    pub spread: f32,
+    pub color: Color,
+}
+
 // -----------------------------------------------------------------------
 // CssValue helper
 // -----------------------------------------------------------------------
@@ -233,7 +328,7 @@ fn as_keyword(value: &CssValue) -> Option<&str> {
 /// All lengths are resolved to absolute pixels. Relative units (em, %)
 /// have been converted during property application. Inherited properties
 /// that were not explicitly set carry the parent's computed value.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ComputedStyle {
     // -- Display ----------------------------------------------------
     pub display: Display,
@@ -266,6 +361,8 @@ pub struct ComputedStyle {
     pub height: Dimension,
     pub max_width: Dimension,
     pub min_width: Dimension,
+    pub max_height: Dimension,
+    pub min_height: Dimension,
 
     // -- Text -------------------------------------------------------
     pub color: Color,
@@ -308,6 +405,37 @@ pub struct ComputedStyle {
     pub left: Dimension,
     pub z_index: i32,
 
+    // -- Visual effects -----------------------------------------------
+    pub border_radius: f32,
+    pub box_shadow: Option<BoxShadow>,
+    pub text_shadow: Option<TextShadow>,
+    pub opacity: f32,
+
+    // -- Box sizing -----------------------------------------------------
+    pub box_sizing: BoxSizing,
+
+    // -- Text overflow --------------------------------------------------
+    pub word_break: WordBreak,
+    pub overflow_wrap: OverflowWrap,
+    pub text_overflow: TextOverflow,
+
+    // -- Vertical alignment ---------------------------------------------
+    pub vertical_align: VerticalAlign,
+
+    // -- Background image -----------------------------------------------
+    pub background_image: BackgroundImage,
+
+    // -- Generated content (::before/::after) ---------------------------
+    pub content: Option<String>,
+    pub before_content: Option<String>,
+    pub after_content: Option<String>,
+
+    // -- Margin auto flags (for block centering) -------------------------
+    pub margin_left_auto: bool,
+    pub margin_right_auto: bool,
+    pub margin_top_auto: bool,
+    pub margin_bottom_auto: bool,
+
     // -- Flexbox properties --
     pub flex_direction: FlexDirection,
     pub flex_wrap: FlexWrap,
@@ -317,6 +445,20 @@ pub struct ComputedStyle {
     pub flex_shrink: f32,
     pub flex_basis: Dimension,
     pub gap: f32,
+
+    // -- Percentage padding/margin (resolved against containing width) ---
+    /// When `Some(pct)`, padding-top was specified as a percentage.
+    pub padding_top_pct: Option<f32>,
+    pub padding_right_pct: Option<f32>,
+    pub padding_bottom_pct: Option<f32>,
+    pub padding_left_pct: Option<f32>,
+    pub margin_top_pct: Option<f32>,
+    pub margin_right_pct: Option<f32>,
+    pub margin_bottom_pct: Option<f32>,
+    pub margin_left_pct: Option<f32>,
+
+    // -- CSS custom properties (--*) ------------------------------------
+    pub custom_properties: HashMap<String, String>,
 }
 
 /// Standard browser defaults (CSS 2.1 initial values).
@@ -355,6 +497,8 @@ impl Default for ComputedStyle {
             height: Dimension::Auto,
             max_width: Dimension::Auto,
             min_width: Dimension::Px(0.0),
+            max_height: Dimension::Auto,
+            min_height: Dimension::Auto,
 
             // Text
             color: Color::BLACK,
@@ -397,6 +541,36 @@ impl Default for ComputedStyle {
             left: Dimension::Auto,
             z_index: 0,
 
+            // Visual effects
+            border_radius: 0.0,
+            box_shadow: None,
+            text_shadow: None,
+            opacity: 1.0,
+
+            // Box sizing
+            box_sizing: BoxSizing::ContentBox,
+
+            // Text overflow
+            word_break: WordBreak::Normal,
+            overflow_wrap: OverflowWrap::Normal,
+            text_overflow: TextOverflow::Clip,
+
+            // Vertical alignment
+            vertical_align: VerticalAlign::Baseline,
+
+            // Background image
+            background_image: BackgroundImage::None,
+
+            // Generated content
+            content: None,
+            before_content: None,
+            after_content: None,
+
+            margin_left_auto: false,
+            margin_right_auto: false,
+            margin_top_auto: false,
+            margin_bottom_auto: false,
+
             flex_direction: FlexDirection::Row,
             flex_wrap: FlexWrap::NoWrap,
             justify_content: JustifyContent::FlexStart,
@@ -405,6 +579,17 @@ impl Default for ComputedStyle {
             flex_shrink: 1.0,
             flex_basis: Dimension::Auto,
             gap: 0.0,
+
+            padding_top_pct: None,
+            padding_right_pct: None,
+            padding_bottom_pct: None,
+            padding_left_pct: None,
+            margin_top_pct: None,
+            margin_right_pct: None,
+            margin_bottom_pct: None,
+            margin_left_pct: None,
+
+            custom_properties: HashMap::new(),
         }
     }
 }
@@ -429,6 +614,8 @@ impl ComputedStyle {
             letter_spacing: parent.letter_spacing,
             word_spacing: parent.word_spacing,
             white_space: parent.white_space,
+            // Inherited text shadow.
+            text_shadow: parent.text_shadow,
             // Inherited visibility.
             visibility: parent.visibility,
             // Inherited list properties.
@@ -437,6 +624,8 @@ impl ComputedStyle {
             // Inherited table properties.
             border_collapse: parent.border_collapse,
             border_spacing: parent.border_spacing,
+            // CSS custom properties always inherit.
+            custom_properties: parent.custom_properties.clone(),
             // Non-inherited properties keep CSS initial values.
             ..ComputedStyle::default()
         }
@@ -447,6 +636,35 @@ impl ComputedStyle {
     /// Resolves relative units (`em`, `%`) against the parent font size
     /// so the resulting computed value is in absolute pixels.
     pub fn apply_declaration(&mut self, property: &str, value: &CssValue, parent_font_size: f32) {
+        // Custom properties (--*) are stored in the properties map.
+        if property.starts_with("--") {
+            if let CssValue::String(ref raw) = *value {
+                self.custom_properties
+                    .insert(property.to_string(), raw.clone());
+            }
+            return;
+        }
+
+        // Handle `inherit` and `initial` keywords for any property.
+        if let Some(kw) = as_keyword(value) {
+            if kw == "initial" {
+                self.apply_initial(property);
+                return;
+            }
+            if kw == "inherit" {
+                // The caller has already set up `self` via `inherit(parent)`,
+                // so inherited properties already carry the parent value.
+                // For non-inherited properties, we need the parent's computed
+                // value. Since we don't have the parent here, we rely on the
+                // cascade having called `inherit(parent)` beforehand -- the
+                // parent_font_size parameter gives us the parent font context.
+                // For properties that are already inherited (color, font-*, etc.)
+                // the current value is already correct. For non-inherited
+                // properties, `inherit` is rare; do nothing extra here.
+                return;
+            }
+        }
+
         match property {
             // -- Display ------------------------------------------------
             "display" => {
@@ -477,44 +695,163 @@ impl ComputedStyle {
 
             // -- Margins ------------------------------------------------
             "margin" => {
-                let px = resolve_length(value, parent_font_size);
-                self.margin_top = px;
-                self.margin_right = px;
-                self.margin_bottom = px;
-                self.margin_left = px;
+                if as_keyword(value) == Some("auto") {
+                    self.margin_top = 0.0;
+                    self.margin_right = 0.0;
+                    self.margin_bottom = 0.0;
+                    self.margin_left = 0.0;
+                    self.margin_left_auto = true;
+                    self.margin_right_auto = true;
+                    self.margin_top_auto = true;
+                    self.margin_bottom_auto = true;
+                    self.margin_top_pct = None;
+                    self.margin_right_pct = None;
+                    self.margin_bottom_pct = None;
+                    self.margin_left_pct = None;
+                } else if let CssValue::Percentage(p) = value {
+                    self.margin_top_pct = Some(*p);
+                    self.margin_right_pct = Some(*p);
+                    self.margin_bottom_pct = Some(*p);
+                    self.margin_left_pct = Some(*p);
+                    self.margin_top = 0.0;
+                    self.margin_right = 0.0;
+                    self.margin_bottom = 0.0;
+                    self.margin_left = 0.0;
+                    self.margin_left_auto = false;
+                    self.margin_right_auto = false;
+                    self.margin_top_auto = false;
+                    self.margin_bottom_auto = false;
+                } else {
+                    let px = resolve_length(value, parent_font_size);
+                    self.margin_top = px;
+                    self.margin_right = px;
+                    self.margin_bottom = px;
+                    self.margin_left = px;
+                    self.margin_left_auto = false;
+                    self.margin_right_auto = false;
+                    self.margin_top_auto = false;
+                    self.margin_bottom_auto = false;
+                    self.margin_top_pct = None;
+                    self.margin_right_pct = None;
+                    self.margin_bottom_pct = None;
+                    self.margin_left_pct = None;
+                }
             },
             "margin-top" => {
-                self.margin_top = resolve_length(value, parent_font_size);
+                if as_keyword(value) == Some("auto") {
+                    self.margin_top = 0.0;
+                    self.margin_top_auto = true;
+                    self.margin_top_pct = None;
+                } else if let CssValue::Percentage(p) = value {
+                    self.margin_top_pct = Some(*p);
+                    self.margin_top = 0.0;
+                } else {
+                    self.margin_top = resolve_length(value, parent_font_size);
+                    self.margin_top_pct = None;
+                }
             },
             "margin-right" => {
-                self.margin_right = resolve_length(value, parent_font_size);
+                if as_keyword(value) == Some("auto") {
+                    self.margin_right = 0.0;
+                    self.margin_right_auto = true;
+                    self.margin_right_pct = None;
+                } else if let CssValue::Percentage(p) = value {
+                    self.margin_right_pct = Some(*p);
+                    self.margin_right = 0.0;
+                    self.margin_right_auto = false;
+                } else {
+                    self.margin_right = resolve_length(value, parent_font_size);
+                    self.margin_right_auto = false;
+                    self.margin_right_pct = None;
+                }
             },
             "margin-bottom" => {
-                self.margin_bottom = resolve_length(value, parent_font_size);
+                if as_keyword(value) == Some("auto") {
+                    self.margin_bottom = 0.0;
+                    self.margin_bottom_auto = true;
+                    self.margin_bottom_pct = None;
+                } else if let CssValue::Percentage(p) = value {
+                    self.margin_bottom_pct = Some(*p);
+                    self.margin_bottom = 0.0;
+                } else {
+                    self.margin_bottom = resolve_length(value, parent_font_size);
+                    self.margin_bottom_pct = None;
+                }
             },
             "margin-left" => {
-                self.margin_left = resolve_length(value, parent_font_size);
+                if as_keyword(value) == Some("auto") {
+                    self.margin_left = 0.0;
+                    self.margin_left_auto = true;
+                    self.margin_left_pct = None;
+                } else if let CssValue::Percentage(p) = value {
+                    self.margin_left_pct = Some(*p);
+                    self.margin_left = 0.0;
+                    self.margin_left_auto = false;
+                } else {
+                    self.margin_left = resolve_length(value, parent_font_size);
+                    self.margin_left_auto = false;
+                    self.margin_left_pct = None;
+                }
             },
 
             // -- Padding ------------------------------------------------
             "padding" => {
-                let px = resolve_length(value, parent_font_size);
-                self.padding_top = px;
-                self.padding_right = px;
-                self.padding_bottom = px;
-                self.padding_left = px;
+                if let CssValue::Percentage(p) = value {
+                    self.padding_top_pct = Some(*p);
+                    self.padding_right_pct = Some(*p);
+                    self.padding_bottom_pct = Some(*p);
+                    self.padding_left_pct = Some(*p);
+                    self.padding_top = 0.0;
+                    self.padding_right = 0.0;
+                    self.padding_bottom = 0.0;
+                    self.padding_left = 0.0;
+                } else {
+                    let px = resolve_length(value, parent_font_size);
+                    self.padding_top = px;
+                    self.padding_right = px;
+                    self.padding_bottom = px;
+                    self.padding_left = px;
+                    self.padding_top_pct = None;
+                    self.padding_right_pct = None;
+                    self.padding_bottom_pct = None;
+                    self.padding_left_pct = None;
+                }
             },
             "padding-top" => {
-                self.padding_top = resolve_length(value, parent_font_size);
+                if let CssValue::Percentage(p) = value {
+                    self.padding_top_pct = Some(*p);
+                    self.padding_top = 0.0;
+                } else {
+                    self.padding_top = resolve_length(value, parent_font_size);
+                    self.padding_top_pct = None;
+                }
             },
             "padding-right" => {
-                self.padding_right = resolve_length(value, parent_font_size);
+                if let CssValue::Percentage(p) = value {
+                    self.padding_right_pct = Some(*p);
+                    self.padding_right = 0.0;
+                } else {
+                    self.padding_right = resolve_length(value, parent_font_size);
+                    self.padding_right_pct = None;
+                }
             },
             "padding-bottom" => {
-                self.padding_bottom = resolve_length(value, parent_font_size);
+                if let CssValue::Percentage(p) = value {
+                    self.padding_bottom_pct = Some(*p);
+                    self.padding_bottom = 0.0;
+                } else {
+                    self.padding_bottom = resolve_length(value, parent_font_size);
+                    self.padding_bottom_pct = None;
+                }
             },
             "padding-left" => {
-                self.padding_left = resolve_length(value, parent_font_size);
+                if let CssValue::Percentage(p) = value {
+                    self.padding_left_pct = Some(*p);
+                    self.padding_left = 0.0;
+                } else {
+                    self.padding_left = resolve_length(value, parent_font_size);
+                    self.padding_left_pct = None;
+                }
             },
 
             // -- Border width -------------------------------------------
@@ -540,7 +877,8 @@ impl ComputedStyle {
 
             // -- Border color -------------------------------------------
             "border-color" => {
-                if let Some(c) = resolve_color(value) {
+                let c = resolve_color_or_current(value, self.color);
+                if let Some(c) = c {
                     self.border_top_color = c;
                     self.border_right_color = c;
                     self.border_bottom_color = c;
@@ -548,22 +886,22 @@ impl ComputedStyle {
                 }
             },
             "border-top-color" => {
-                if let Some(c) = resolve_color(value) {
+                if let Some(c) = resolve_color_or_current(value, self.color) {
                     self.border_top_color = c;
                 }
             },
             "border-right-color" => {
-                if let Some(c) = resolve_color(value) {
+                if let Some(c) = resolve_color_or_current(value, self.color) {
                     self.border_right_color = c;
                 }
             },
             "border-bottom-color" => {
-                if let Some(c) = resolve_color(value) {
+                if let Some(c) = resolve_color_or_current(value, self.color) {
                     self.border_bottom_color = c;
                 }
             },
             "border-left-color" => {
-                if let Some(c) = resolve_color(value) {
+                if let Some(c) = resolve_color_or_current(value, self.color) {
                     self.border_left_color = c;
                 }
             },
@@ -610,6 +948,12 @@ impl ComputedStyle {
             },
             "min-width" => {
                 self.min_width = resolve_dimension(value, parent_font_size);
+            },
+            "max-height" => {
+                self.max_height = resolve_dimension(value, parent_font_size);
+            },
+            "min-height" => {
+                self.min_height = resolve_dimension(value, parent_font_size);
             },
 
             // -- Color --------------------------------------------------
@@ -887,7 +1231,175 @@ impl ComputedStyle {
                 self.gap = resolve_length(value, parent_font_size);
             },
 
+            // -- Visual effects -----------------------------------------
+            "border-radius" => {
+                self.border_radius = resolve_length(value, parent_font_size);
+            },
+            "opacity" => {
+                if let CssValue::Number(n) = value {
+                    self.opacity = n.clamp(0.0, 1.0);
+                }
+            },
+            "box-shadow" => {
+                if let Some(kw) = as_keyword(value)
+                    && kw == "none"
+                {
+                    self.box_shadow = None;
+                }
+                // Complex box-shadow values are parsed from the raw
+                // declaration list in the cascade.
+            },
+            "text-shadow" => {
+                if let Some(kw) = as_keyword(value) {
+                    if kw == "none" {
+                        self.text_shadow = None;
+                    }
+                } else if let CssValue::Multiple(vs) = value {
+                    // text-shadow: <offset-x> <offset-y> [blur] [color]
+                    let mut nums = Vec::new();
+                    let mut color = None;
+                    for v in vs {
+                        match v {
+                            CssValue::Length(n, _) | CssValue::Number(n) => nums.push(*n),
+                            CssValue::Color(c) => {
+                                color = Some(Color::rgba(c.r, c.g, c.b, c.a));
+                            },
+                            CssValue::Keyword(kw) => {
+                                if let Some(c) = crate::css::parser::named_color(kw) {
+                                    color = Some(Color::rgba(c.r, c.g, c.b, c.a));
+                                }
+                            },
+                            _ => {},
+                        }
+                    }
+                    if nums.len() >= 2 {
+                        self.text_shadow = Some(TextShadow {
+                            offset_x: nums[0],
+                            offset_y: nums[1],
+                            blur: nums.get(2).copied().unwrap_or(0.0),
+                            color: color.unwrap_or(Color::rgba(0, 0, 0, 255)),
+                        });
+                    }
+                }
+            },
+
+            // -- Box sizing ---------------------------------------------
+            "box-sizing" => {
+                if let Some(kw) = as_keyword(value) {
+                    self.box_sizing = match kw {
+                        "content-box" => BoxSizing::ContentBox,
+                        "border-box" => BoxSizing::BorderBox,
+                        _ => return,
+                    };
+                }
+            },
+
+            // -- Vertical alignment -------------------------------------
+            "vertical-align" => {
+                if let Some(kw) = as_keyword(value) {
+                    self.vertical_align = match kw {
+                        "baseline" => VerticalAlign::Baseline,
+                        "top" => VerticalAlign::Top,
+                        "middle" => VerticalAlign::Middle,
+                        "bottom" => VerticalAlign::Bottom,
+                        "text-top" => VerticalAlign::TextTop,
+                        "text-bottom" => VerticalAlign::TextBottom,
+                        _ => return,
+                    };
+                }
+            },
+
+            // -- Background image ---------------------------------------
+            "background-image" => {
+                if let Some(kw) = as_keyword(value) {
+                    if kw == "none" {
+                        self.background_image = BackgroundImage::None;
+                    }
+                } else if let CssValue::Url(ref url) = *value {
+                    self.background_image = BackgroundImage::Url(url.clone());
+                } else if let CssValue::Gradient(ref grad) = *value {
+                    self.background_image = BackgroundImage::Gradient(grad.clone());
+                }
+            },
+
+            // -- Text overflow ------------------------------------------
+            "word-break" => {
+                if let Some(kw) = as_keyword(value) {
+                    self.word_break = match kw {
+                        "break-all" => WordBreak::BreakAll,
+                        _ => WordBreak::Normal,
+                    };
+                }
+            },
+            "overflow-wrap" | "word-wrap" => {
+                if let Some(kw) = as_keyword(value) {
+                    self.overflow_wrap = match kw {
+                        "break-word" => OverflowWrap::BreakWord,
+                        "anywhere" => OverflowWrap::Anywhere,
+                        _ => OverflowWrap::Normal,
+                    };
+                }
+            },
+            "text-overflow" => {
+                if let Some(kw) = as_keyword(value) {
+                    self.text_overflow = match kw {
+                        "ellipsis" => TextOverflow::Ellipsis,
+                        _ => TextOverflow::Clip,
+                    };
+                }
+            },
+
+            // -- Generated content --------------------------------------
+            "content" => match value {
+                CssValue::String(s) => {
+                    self.content = Some(s.clone());
+                },
+                CssValue::Keyword(kw) if kw == "none" || kw == "normal" => {
+                    self.content = None;
+                },
+                _ => {},
+            },
+
             // Unknown properties are silently ignored (per CSS spec).
+            _ => {},
+        }
+    }
+
+    /// Reset a single property to its CSS initial value.
+    fn apply_initial(&mut self, property: &str) {
+        let initial = ComputedStyle::default();
+        match property {
+            "display" => self.display = initial.display,
+            "visibility" => self.visibility = initial.visibility,
+            "margin" | "margin-top" => self.margin_top = 0.0,
+            "margin-right" => self.margin_right = 0.0,
+            "margin-bottom" => self.margin_bottom = 0.0,
+            "margin-left" => self.margin_left = 0.0,
+            "padding" | "padding-top" => self.padding_top = 0.0,
+            "padding-right" => self.padding_right = 0.0,
+            "padding-bottom" => self.padding_bottom = 0.0,
+            "padding-left" => self.padding_left = 0.0,
+            "color" => self.color = initial.color,
+            "background-color" | "background" => self.background_color = initial.background_color,
+            "font-size" => {
+                self.font_size = initial.font_size;
+                self.line_height = initial.line_height;
+            },
+            "font-weight" => self.font_weight = initial.font_weight,
+            "font-style" => self.font_style = initial.font_style,
+            "font-family" => self.font_family = initial.font_family,
+            "text-align" => self.text_align = initial.text_align,
+            "text-decoration" => self.text_decoration = initial.text_decoration,
+            "text-transform" => self.text_transform = initial.text_transform,
+            "white-space" => self.white_space = initial.white_space,
+            "line-height" => self.line_height = initial.line_height,
+            "float" => self.float = initial.float,
+            "clear" => self.clear = initial.clear,
+            "position" => self.position = initial.position,
+            "overflow" => self.overflow = initial.overflow,
+            "width" => self.width = initial.width,
+            "height" => self.height = initial.height,
+            "border-collapse" => self.border_collapse = initial.border_collapse,
             _ => {},
         }
     }
@@ -935,6 +1447,16 @@ fn resolve_color(value: &CssValue) -> Option<Color> {
         CssValue::Keyword(name) => keyword_color(name),
         _ => None,
     }
+}
+
+/// Resolve a color value, treating `currentcolor` as the element's `color`.
+fn resolve_color_or_current(value: &CssValue, current_color: Color) -> Option<Color> {
+    if let CssValue::Keyword(name) = value
+        && name.eq_ignore_ascii_case("currentcolor")
+    {
+        return Some(current_color);
+    }
+    resolve_color(value)
 }
 
 /// Convert a parser `CssColor` to the backend `Color`.
@@ -1259,6 +1781,114 @@ mod tests {
         assert_eq!(keyword_color("nonexistent"), None);
     }
 
+    #[test]
+    fn test_margin_auto_vertical_flags() {
+        let mut s = ComputedStyle::default();
+        s.apply_declaration("margin-top", &CssValue::Keyword("auto".into()), 16.0);
+        assert!(s.margin_top_auto, "margin-top: auto should set flag");
+        assert_eq!(s.margin_top, 0.0);
+
+        s.apply_declaration("margin-bottom", &CssValue::Keyword("auto".into()), 16.0);
+        assert!(s.margin_bottom_auto, "margin-bottom: auto should set flag");
+        assert_eq!(s.margin_bottom, 0.0);
+    }
+
+    #[test]
+    fn test_margin_shorthand_preserves_auto() {
+        use crate::css::parser::LengthUnit;
+
+        let mut s = ComputedStyle::default();
+        // margin: 0 auto => top/bottom=0, left/right=auto
+        // The shorthand is expanded by the parser, but here we test
+        // individual property application after expansion.
+        s.apply_declaration("margin-top", &CssValue::Length(0.0, LengthUnit::Px), 16.0);
+        s.apply_declaration("margin-right", &CssValue::Keyword("auto".into()), 16.0);
+        s.apply_declaration(
+            "margin-bottom",
+            &CssValue::Length(0.0, LengthUnit::Px),
+            16.0,
+        );
+        s.apply_declaration("margin-left", &CssValue::Keyword("auto".into()), 16.0);
+
+        assert!(s.margin_left_auto);
+        assert!(s.margin_right_auto);
+        assert!(!s.margin_top_auto);
+        assert!(!s.margin_bottom_auto);
+    }
+
+    #[test]
+    fn test_currentcolor_resolves_to_element_color() {
+        let mut s = ComputedStyle::default();
+        s.color = Color::rgb(255, 0, 0);
+        s.apply_declaration(
+            "border-top-color",
+            &CssValue::Keyword("currentcolor".into()),
+            16.0,
+        );
+        assert_eq!(
+            s.border_top_color,
+            Color::rgb(255, 0, 0),
+            "currentcolor should resolve to element's color",
+        );
+    }
+
+    #[test]
+    fn text_shadow_parsed() {
+        let mut s = ComputedStyle::default();
+        let value = CssValue::Multiple(vec![
+            CssValue::Length(2.0, LengthUnit::Px),
+            CssValue::Length(3.0, LengthUnit::Px),
+            CssValue::Length(1.0, LengthUnit::Px),
+            CssValue::Color(CssColor {
+                r: 0,
+                g: 0,
+                b: 0,
+                a: 255,
+            }),
+        ]);
+        s.apply_declaration("text-shadow", &value, 16.0);
+        let ts = s.text_shadow.expect("should parse text-shadow");
+        assert_eq!(ts.offset_x, 2.0);
+        assert_eq!(ts.offset_y, 3.0);
+        assert_eq!(ts.blur, 1.0);
+        assert_eq!(ts.color, Color::rgba(0, 0, 0, 255));
+    }
+
+    #[test]
+    fn text_shadow_none() {
+        let mut s = ComputedStyle::default();
+        s.text_shadow = Some(TextShadow {
+            offset_x: 1.0,
+            offset_y: 1.0,
+            blur: 0.0,
+            color: Color::rgb(0, 0, 0),
+        });
+        let value = CssValue::Keyword("none".into());
+        s.apply_declaration("text-shadow", &value, 16.0);
+        assert!(s.text_shadow.is_none());
+    }
+
+    #[test]
+    fn gradient_background_image_applied() {
+        let mut s = ComputedStyle::default();
+        let grad = LinearGradient {
+            direction: GradientDirection::ToRight,
+            stops: vec![
+                GradientStop {
+                    color: Color::rgb(255, 0, 0),
+                    position: 0.0,
+                },
+                GradientStop {
+                    color: Color::rgb(0, 0, 255),
+                    position: 1.0,
+                },
+            ],
+        };
+        let value = CssValue::Gradient(grad.clone());
+        s.apply_declaration("background-image", &value, 16.0);
+        assert_eq!(s.background_image, BackgroundImage::Gradient(grad));
+    }
+
     mod prop {
         use super::*;
         use proptest::prelude::*;
@@ -1394,6 +2024,7 @@ mod tests {
                     | "gap" | "row-gap" | "column-gap"
                     | "top" | "right" | "bottom" | "left"
                     | "max-width" | "min-width"
+                    | "max-height" | "min-height"
                 ) {
                     return Ok(());
                 }

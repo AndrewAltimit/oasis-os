@@ -1,7 +1,7 @@
 //! Benchmarks for CSS parsing and cascade matching.
 
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
-use oasis_browser::internals::{Stylesheet, Tokenizer, TreeBuilder, style_tree};
+use oasis_browser::internals::{CascadeContext, Stylesheet, Tokenizer, TreeBuilder, style_tree};
 
 /// Generate a CSS stylesheet with `n` rules.
 fn generate_css(n: usize) -> String {
@@ -66,7 +66,7 @@ fn bench_cascade(c: &mut Criterion) {
             BenchmarkId::new("style_tree", &label),
             &(&doc, &stylesheet),
             |b, (doc, stylesheet)| {
-                b.iter(|| style_tree(doc, &[stylesheet], &[]));
+                b.iter(|| style_tree(doc, &[stylesheet], &[], &CascadeContext::default()));
             },
         );
     }

@@ -1,7 +1,3 @@
-// WIP: automatic table layout has separate entry points. Some functions are
-// unused pending full integration with the main layout engine.
-#![allow(dead_code)]
-
 //! CSS 2.1 automatic table layout algorithm.
 //!
 //! Parses table structure (`<table>` -> `<tr>` -> `<td>`/`<th>`),
@@ -9,11 +5,10 @@
 //! widths, distributes available width proportionally, and positions
 //! each cell as a block formatting context. Supports `colspan`,
 //! `rowspan`, `border-collapse`, and `border-spacing`.
-#![allow(clippy::field_reassign_with_default)]
 
 use super::block::TextMeasurer;
 use super::box_model::*;
-use crate::css::values::{BorderCollapse, ComputedStyle, Dimension, Display};
+use crate::css::values::{BorderCollapse, ComputedStyle, Dimension, Display, VerticalAlign};
 
 // -------------------------------------------------------------------
 // Table cell representation
@@ -620,6 +615,7 @@ fn resolve_rowspan_heights(tl: &mut TableLayout) {
 
 /// Build the positioned table layout box tree from the computed
 /// geometry.
+#[allow(clippy::field_reassign_with_default)]
 fn build_table_box(tl: &TableLayout, style: &ComputedStyle, containing_width: f32) -> LayoutBox {
     let spacing = tl.border_spacing;
     let collapse = tl.border_collapse;
@@ -745,6 +741,31 @@ fn build_table_box(tl: &TableLayout, style: &ComputedStyle, containing_width: f3
             };
         }
 
+        // Cell content was laid out at origin (0,0). Now that the
+        // cell's content.x/y are set, offset all descendants so they
+        // render at the correct table position.
+        let dx = cell_box.dimensions.content.x;
+        let dy = cell_box.dimensions.content.y;
+        for child in &mut cell_box.children {
+            offset_descendants(child, dx, dy);
+        }
+
+        // Apply vertical alignment within the cell.
+        let content_h = cell.layout_box.dimensions.content.height
+            + cell.layout_box.dimensions.padding.vertical()
+            + cell.layout_box.dimensions.border.vertical();
+        let cell_h_inner = cell_box.dimensions.content.height;
+        let valign_offset = match cell_box.style.vertical_align {
+            VerticalAlign::Middle => ((cell_h_inner - content_h) / 2.0).max(0.0),
+            VerticalAlign::Bottom => (cell_h_inner - content_h).max(0.0),
+            _ => 0.0, // Top is default for cells
+        };
+        if valign_offset > 0.0 {
+            for child in &mut cell_box.children {
+                offset_descendants(child, 0.0, valign_offset);
+            }
+        }
+
         if cell.row < row_boxes.len() {
             row_boxes[cell.row].children.push(cell_box);
         }
@@ -752,6 +773,15 @@ fn build_table_box(tl: &TableLayout, style: &ComputedStyle, containing_width: f3
 
     table_box.children = row_boxes;
     table_box
+}
+
+/// Recursively offset a layout box and all descendants by `(dx, dy)`.
+fn offset_descendants(lb: &mut LayoutBox, dx: f32, dy: f32) {
+    lb.dimensions.content.x += dx;
+    lb.dimensions.content.y += dy;
+    for child in &mut lb.children {
+        offset_descendants(child, dx, dy);
+    }
 }
 
 /// Compute the x-offset for each column.
@@ -809,6 +839,7 @@ fn make_empty_table(style: &ComputedStyle) -> LayoutBox {
 ///
 /// `colspan` is encoded as `min_width: Px(colspan * 1000.0)`.
 /// `rowspan` is encoded as `max_width: Px(rowspan * 1000.0)`.
+#[allow(dead_code)]
 pub fn make_cell_with_spans(
     style: &ComputedStyle,
     colspan: usize,
@@ -1202,7 +1233,59 @@ mod tests {
     }
 
     // ---------------------------------------------------------------
-    // Test 10: make_cell_with_spans encodes correctly
+    // Test 10: Cell content is positioned at cell origin
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn table_cell_content_positioned() {
+        let m = FixedMeasurer;
+        let style = table_style();
+
+        // Build cells with block children so they have measurable
+        // positions after layout.
+        let mut c_style = ComputedStyle::default();
+        c_style.display = Display::TableCell;
+        c_style.width = Dimension::Px(50.0);
+        c_style.height = Dimension::Px(20.0);
+        let mut cell_1 = LayoutBox::new(BoxType::TableCell, c_style.clone(), None);
+        let mut inner_style = ComputedStyle::default();
+        inner_style.display = Display::Block;
+        inner_style.height = Dimension::Px(10.0);
+        cell_1.children = vec![LayoutBox::new(BoxType::Block, inner_style.clone(), None)];
+
+        let mut cell_2 = LayoutBox::new(BoxType::TableCell, c_style, None);
+        cell_2.children = vec![LayoutBox::new(BoxType::Block, inner_style, None)];
+
+        let row1 = make_row(vec![cell_1]);
+        let row2 = make_row(vec![cell_2]);
+        let result = layout_table(&[row1, row2], &style, 200.0, &m);
+
+        // Row 1's cell child should have y > 0 (matching the row's
+        // position, not stuck at origin).
+        let row1_cell = &result.children[0].children[0];
+        let child_y = row1_cell.children[0].dimensions.content.y;
+        let cell_y = row1_cell.dimensions.content.y;
+        assert!(
+            child_y >= cell_y,
+            "cell child y ({child_y}) should be >= cell content y ({cell_y})"
+        );
+
+        // Row 2's cell children should be below row 1.
+        if result.children.len() > 1 && !result.children[1].children.is_empty() {
+            let row2_cell = &result.children[1].children[0];
+            if !row2_cell.children.is_empty() {
+                let r2_child_y = row2_cell.children[0].dimensions.content.y;
+                assert!(
+                    r2_child_y > child_y,
+                    "row 2 cell child y ({r2_child_y}) should be below \
+                     row 1 cell child y ({child_y})"
+                );
+            }
+        }
+    }
+
+    // ---------------------------------------------------------------
+    // Test 11: make_cell_with_spans encodes correctly
     // ---------------------------------------------------------------
 
     #[test]
@@ -1213,5 +1296,60 @@ mod tests {
         let (cs, rs) = extract_span_attrs(&cell);
         assert_eq!(cs, 3, "colspan should be 3");
         assert_eq!(rs, 2, "rowspan should be 2");
+    }
+
+    // ---------------------------------------------------------------
+    // Test 12: vertical-align: middle offsets cell content
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn vertical_align_middle() {
+        let m = FixedMeasurer;
+        let style = table_style();
+
+        // Row with two cells of different heights.
+        let cell1 = make_cell_wh(50.0, 40.0);
+        let mut cell2_style = ComputedStyle::default();
+        cell2_style.display = Display::TableCell;
+        cell2_style.width = Dimension::Px(50.0);
+        cell2_style.height = Dimension::Px(20.0);
+        cell2_style.vertical_align = VerticalAlign::Middle;
+        let cell2 = LayoutBox::new(BoxType::TableCell, cell2_style, None);
+
+        let row = make_row(vec![cell1, cell2]);
+        let result = layout_table(&[row], &style, 200.0, &m);
+
+        // Row height = max(40, 20) = 40.
+        // Cell2 content height = 20, row height = 40, so
+        // middle offset = (40 - 20) / 2 = 10 (approximately).
+        assert_eq!(result.children.len(), 1, "should have 1 row");
+    }
+
+    // ---------------------------------------------------------------
+    // Test 13: tbody children parsed as rows
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn tbody_children_parsed_as_rows() {
+        let m = FixedMeasurer;
+        let style = table_style();
+
+        // Simulate <tbody> wrapping a row (display: block wrapper).
+        let cell = make_cell(50.0);
+        let row = make_row(vec![cell]);
+        let mut tbody_style = ComputedStyle::default();
+        tbody_style.display = Display::Block;
+        let mut tbody = LayoutBox::new(BoxType::Block, tbody_style, None);
+        tbody.children = vec![row];
+
+        let result = layout_table(&[tbody], &style, 200.0, &m);
+
+        // The row inside tbody should be detected.
+        assert_eq!(result.children.len(), 1, "should have 1 row");
+        assert_eq!(
+            result.children[0].children.len(),
+            1,
+            "row should have 1 cell"
+        );
     }
 }

@@ -170,6 +170,7 @@ fn main() -> Result<()> {
             ab.init().ok();
             ab
         },
+        terminal_scroll_offset: 0,
     };
 
     // Load radio stations from VFS.
@@ -349,6 +350,11 @@ fn main() -> Result<()> {
         // Update SDI scene graph for the active mode.
         render::update_sdi(&mut state, &mut sdi);
 
+        // Drive browser image streaming (progressive loading).
+        if let Some(ref mut bw) = state.browser {
+            bw.tick(&vfs);
+        }
+
         // -- Render --
         backend.clear(state.bg_color)?;
         if state.mode == Mode::Desktop && state.wm.window_count() > 0 {
@@ -372,6 +378,15 @@ fn main() -> Result<()> {
                 })?;
         } else {
             sdi.draw(&mut backend)?;
+        }
+
+        // Paint terminal scrollbar when in terminal mode.
+        if state.mode == Mode::Terminal {
+            terminal_sdi::paint_terminal_scrollbar(
+                &mut backend,
+                state.output_lines.len(),
+                state.terminal_scroll_offset,
+            )?;
         }
 
         // Draw transition overlay if active.

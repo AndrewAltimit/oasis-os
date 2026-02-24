@@ -134,6 +134,13 @@ pub fn handle_desktop_input(
                 bw.handle_input(&InputEvent::Backspace, vfs);
             }
         },
+        InputEvent::MouseWheel { delta } => {
+            if state.wm.active_window() == Some("browser")
+                && let Some(ref mut bw) = state.browser
+            {
+                bw.handle_input(&InputEvent::MouseWheel { delta: *delta }, vfs);
+            }
+        },
         InputEvent::ButtonPress(btn) => {
             if let Some(active_id) = state.wm.active_window().map(|s| s.to_string()) {
                 if active_id == "browser" {
@@ -380,6 +387,7 @@ pub fn handle_default_input(
         InputEvent::ButtonPress(Button::Confirm) if state.mode == Mode::Terminal => {
             let line = state.input_buf.clone();
             state.input_buf.clear();
+            state.terminal_scroll_offset = 0;
             if !line.is_empty() {
                 state.output_lines.push(format!("> {line}"));
                 let pending_skin_swap;
@@ -411,6 +419,24 @@ pub fn handle_default_input(
         InputEvent::ButtonPress(Button::Cancel) if state.mode == Mode::Terminal => {
             terminal_sdi::set_terminal_visible(sdi, false);
             state.mode = Mode::Dashboard;
+        },
+
+        InputEvent::MouseWheel { delta } if state.mode == Mode::Terminal => {
+            let len = state.output_lines.len();
+            let max_visible = terminal_sdi::VISIBLE_OUTPUT_LINES;
+            if len > max_visible {
+                let max_offset = len - max_visible;
+                if *delta < 0 {
+                    // Scroll up (show older lines).
+                    state.terminal_scroll_offset =
+                        (state.terminal_scroll_offset + (-*delta as usize) * 3).min(max_offset);
+                } else {
+                    // Scroll down (show newer lines).
+                    state.terminal_scroll_offset = state
+                        .terminal_scroll_offset
+                        .saturating_sub(*delta as usize * 3);
+                }
+            }
         },
 
         _ => {},
@@ -554,6 +580,7 @@ mod tests {
             radio_manager: RadioManager::new(),
             radio_source: None,
             audio_backend: SdlAudioBackend::new(),
+            terminal_scroll_offset: 0,
         };
         let sdi = SdiRegistry::new();
         let vfs = MemoryVfs::new();
@@ -680,7 +707,7 @@ mod tests {
         let (mut state, mut sdi, mut vfs) = make_test_state();
         state.mode = Mode::Terminal;
         // First create terminal objects so set_terminal_visible can hide them.
-        terminal_sdi::setup_terminal_objects(&mut sdi, &[], "/", "");
+        terminal_sdi::setup_terminal_objects(&mut sdi, &[], "/", "", 0);
         handle_default_input(
             &InputEvent::ButtonPress(Button::Cancel),
             &mut state,

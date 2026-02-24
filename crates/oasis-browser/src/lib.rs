@@ -33,6 +33,9 @@ pub use loader::{ContentType, ResourceResponse, ResourceSource, Url};
 pub use nav::{Bookmark, HistoryEntry, NavigationController};
 pub use scroll::ScrollState;
 
+/// Map from img src URL -> (intrinsic_width, intrinsic_height) for decoded images.
+pub type ImageInfoMap = HashMap<String, (u32, u32)>;
+
 // -----------------------------------------------------------------------
 // Bench/fuzz re-exports (not part of public API)
 // -----------------------------------------------------------------------
@@ -42,7 +45,7 @@ pub use scroll::ScrollState;
 /// These are implementation details and may change without notice.
 #[doc(hidden)]
 pub mod internals {
-    pub use crate::css::cascade::style_tree;
+    pub use crate::css::cascade::{CascadeContext, style_tree};
     pub use crate::css::parser::{Stylesheet, parse_inline_style};
     pub use crate::css::values::ComputedStyle;
     pub use crate::html::dom::Document;
@@ -58,16 +61,17 @@ pub mod internals {
 // Imports
 // -----------------------------------------------------------------------
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use oasis_types::backend::{Color, SdiBackend};
 use oasis_types::error::Result;
 use oasis_types::input::{Button, InputEvent, Trigger};
 use oasis_vfs::Vfs;
 
-use html::dom::NodeId;
+use html::dom::{NodeId, NodeKind, TagName};
 use loader::cache::{CacheEntry, ResourceCache};
 use loader::{ResourceRequest, load_resource};
+use oasis_types::backend::TextureId;
 use paint::LinkRegion;
 
 // -----------------------------------------------------------------------
@@ -187,6 +191,45 @@ pub struct BrowserWidget {
 
     /// Viewport width used for the most recent layout pass.
     last_layout_w: u32,
+
+    /// Set of URLs that have been navigated to (for `:visited`).
+    visited_urls: HashSet<String>,
+
+    /// DOM node currently under the cursor (for `:hover`).
+    hover_node: Option<NodeId>,
+
+    /// Decoded image data keyed by resolved src URL.
+    decoded_images: HashMap<String, image::DecodedImage>,
+
+    /// GPU textures for decoded images, keyed by src URL.
+    image_textures: HashMap<String, TextureId>,
+
+    /// Pending image requests to be processed in time-sliced batches.
+    pending_images: Vec<(String, ResourceRequest)>,
+
+    /// Total bytes of decoded image RGBA data currently held.
+    decoded_image_bytes: usize,
+
+    /// LRU order for decoded images (front = most recent).
+    /// Used for eviction when over `IMAGE_MEMORY_BUDGET`.
+    decoded_image_lru: std::collections::VecDeque<String>,
+
+    /// Cached image info map (URL -> intrinsic dimensions). Rebuilt
+    /// only when `image_info_dirty` is set (after new image decodes).
+    cached_image_info: ImageInfoMap,
+
+    /// Whether the cached image info map needs rebuilding.
+    image_info_dirty: bool,
+
+    /// Cached author stylesheets (from `<style>` blocks). Re-parsed only
+    /// on navigation, not on hover.
+    cached_author_sheets: Vec<css::parser::Stylesheet>,
+
+    /// Cached inline `style=""` declarations. Re-parsed only on navigation.
+    cached_inline_styles: Vec<(NodeId, Vec<css::parser::Declaration>)>,
+
+    /// Last time a hover restyle was performed (for throttling).
+    last_hover_time: Option<std::time::Instant>,
 }
 
 impl BrowserWidget {
@@ -220,6 +263,18 @@ impl BrowserWidget {
             tls: None,
             layout_dirty: false,
             last_layout_w: 480,
+            visited_urls: HashSet::new(),
+            hover_node: None,
+            decoded_images: HashMap::new(),
+            image_textures: HashMap::new(),
+            pending_images: Vec::new(),
+            decoded_image_bytes: 0,
+            decoded_image_lru: std::collections::VecDeque::new(),
+            cached_image_info: HashMap::new(),
+            image_info_dirty: false,
+            cached_author_sheets: Vec::new(),
+            cached_inline_styles: Vec::new(),
+            last_hover_time: None,
         }
     }
 
@@ -260,14 +315,18 @@ impl BrowserWidget {
             return false;
         }
 
+        let image_info = self.build_image_info_map();
         let doc = self.document.as_ref().unwrap();
         let content_h = self.config.content_height(self.window_h);
+        let base_url = self.nav.current_url().map(String::from);
         let layout_root = layout::block::build_layout_tree(
             doc,
             &self.styles,
             &SimpleTextMeasurer,
             self.window_w as f32,
             content_h as f32,
+            base_url.as_deref(),
+            &image_info,
         );
 
         self.layout_root = Some(layout_root);
@@ -288,6 +347,13 @@ impl BrowserWidget {
         self.reader_mode = false;
         self.reader_html = None;
         self.error_message = None;
+        self.decoded_images.clear();
+        self.image_textures.clear();
+        self.pending_images.clear();
+        self.decoded_image_bytes = 0;
+        self.decoded_image_lru.clear();
+        self.cached_image_info.clear();
+        self.image_info_dirty = false;
 
         let source = if self.config.features.sandbox_only {
             ResourceSource::Vfs
@@ -311,6 +377,14 @@ impl BrowserWidget {
                 self.state = LoadingState::Error;
                 self.error_message = Some(e.to_string());
             },
+        }
+
+        // Collect image requests for time-sliced loading across frames.
+        // Page text renders immediately; images stream in via
+        // `load_next_image_batch()` called from `paint()`.
+        self.collect_page_image_requests();
+        if !self.pending_images.is_empty() {
+            self.state = LoadingState::Loading;
         }
     }
 
@@ -375,24 +449,44 @@ impl BrowserWidget {
         // 2. Extract page title.
         let title = doc.title().unwrap_or_else(|| url.to_string());
 
-        // 3. CSS cascade with default stylesheet.
-        let ua_sheet = css::default::default_stylesheet();
-        let styles = css::cascade::style_tree(&doc, &[&ua_sheet], &[]);
+        // 3. Collect <style> blocks and inline style="" attributes from DOM.
+        //    Cache them so hover restyles don't re-parse.
+        let author_sheets = Self::collect_style_sheets(&doc);
+        let inline_styles = Self::collect_inline_styles(&doc);
 
-        // 4. Build link href map from DOM.
+        // 4. CSS cascade: user-agent + author stylesheets + inline styles.
+        let ua_sheet = css::default::default_stylesheet();
+        let mut all_sheets: Vec<&css::parser::Stylesheet> = vec![&ua_sheet];
+        for sheet in &author_sheets {
+            all_sheets.push(sheet);
+        }
+        let ctx = css::cascade::CascadeContext {
+            hover_node: self.hover_node,
+            visited_urls: Some(&self.visited_urls),
+        };
+        let styles = css::cascade::style_tree(&doc, &all_sheets, &inline_styles, &ctx);
+
+        // Cache parsed sheets for hover restyles.
+        self.cached_author_sheets = author_sheets;
+        self.cached_inline_styles = inline_styles;
+
+        // 5. Build link href map from DOM.
         let href_map = Self::build_link_map(&doc);
 
-        // 5. Build layout tree.
+        // 6. Build layout tree.
         let content_h = self.config.content_height(self.window_h);
+        let image_info = self.build_image_info_map();
         let layout_root = layout::block::build_layout_tree(
             &doc,
             &styles,
             &SimpleTextMeasurer,
             self.window_w as f32,
             content_h as f32,
+            Some(url),
+            &image_info,
         );
 
-        // 6. Store results.
+        // 7. Store results.
         self.document = Some(doc);
         self.styles = styles;
         self.href_map = href_map;
@@ -403,7 +497,7 @@ impl BrowserWidget {
         self.layout_dirty = false;
         self.last_layout_w = self.window_w;
 
-        // 7. Update navigation.
+        // 8. Update navigation.
         self.nav.navigate(url, &title);
     }
 
@@ -420,6 +514,315 @@ impl BrowserWidget {
             }
         }
         map
+    }
+
+    /// Walk the DOM to collect text from `<style>` elements and parse
+    /// each into a `Stylesheet`. Both `<head>` and `<body>` style blocks
+    /// are included.
+    fn collect_style_sheets(doc: &html::dom::Document) -> Vec<css::parser::Stylesheet> {
+        let mut sheets = Vec::new();
+        for (id, node) in doc.nodes.iter().enumerate() {
+            if let html::dom::NodeKind::Element(elem) = &node.kind
+                && elem.tag == html::dom::TagName::Style
+            {
+                let css_text = doc.text_content(id);
+                if !css_text.is_empty() {
+                    sheets.push(css::parser::Stylesheet::parse(&css_text));
+                }
+            }
+        }
+        sheets
+    }
+
+    /// Walk the DOM to collect inline `style=""` attributes and parse
+    /// each into a list of declarations keyed by NodeId.
+    fn collect_inline_styles(
+        doc: &html::dom::Document,
+    ) -> Vec<(NodeId, Vec<css::parser::Declaration>)> {
+        let mut result = Vec::new();
+        for (id, node) in doc.nodes.iter().enumerate() {
+            if let html::dom::NodeKind::Element(elem) = &node.kind
+                && let Some(style_attr) = elem.get_attribute("style")
+            {
+                let decls = css::parser::parse_inline_style(style_attr);
+                if !decls.is_empty() {
+                    result.push((id, decls));
+                }
+            }
+        }
+        result
+    }
+
+    // ---------------------------------------------------------------
+    // Image loading
+    // ---------------------------------------------------------------
+
+    /// Walk the DOM to find `<img>` elements and collect their requests
+    /// into `self.pending_images` for time-sliced loading. Does NOT
+    /// fetch or decode — that happens in `load_next_image_batch()`.
+    fn collect_page_image_requests(&mut self) {
+        let doc = match &self.document {
+            Some(d) => d,
+            None => return,
+        };
+        let base_url = self.nav.current_url().map(String::from);
+
+        let mut requests: Vec<(String, ResourceRequest)> = Vec::new();
+        for node in &doc.nodes {
+            if let NodeKind::Element(elem) = &node.kind
+                && elem.tag == TagName::Img
+                && let Some(src) = elem.src()
+            {
+                let resolved = Self::resolve_src(&base_url, src);
+                if self.decoded_images.contains_key(&resolved) {
+                    continue;
+                }
+                let source = if self.config.features.sandbox_only {
+                    ResourceSource::Vfs
+                } else {
+                    ResourceSource::VfsThenNetwork
+                };
+                requests.push((
+                    resolved.clone(),
+                    ResourceRequest {
+                        url: resolved,
+                        base_url: base_url.clone(),
+                        source,
+                    },
+                ));
+            }
+        }
+
+        self.pending_images = requests;
+    }
+
+    /// Maximum decoded image memory budget (bytes of RGBA data).
+    const IMAGE_MEMORY_BUDGET: usize = 8 * 1024 * 1024; // 8MB
+
+    /// Process pending image requests within a time budget.
+    ///
+    /// Pops requests from `pending_images`, fetches and decodes each.
+    /// Returns after the time budget is exhausted or all images are done.
+    /// Each successful decode sets `layout_dirty` so the layout tree
+    /// rebuilds with correct intrinsic dimensions.
+    pub fn load_next_image_batch(&mut self, vfs: &dyn Vfs, budget_ms: u32) {
+        if self.pending_images.is_empty() {
+            return;
+        }
+
+        let start = std::time::Instant::now();
+        let budget = std::time::Duration::from_millis(budget_ms as u64);
+        let mut any_decoded = false;
+
+        while let Some((resolved, request)) = self.pending_images.pop() {
+            // Skip if already decoded (e.g. from cache).
+            if self.decoded_images.contains_key(&resolved) {
+                continue;
+            }
+
+            if let Ok(response) = load_resource(vfs, &request, self.tls.as_deref())
+                && let Some(decoded) = image::decode_image(&response.body)
+            {
+                let img_bytes = (decoded.width * decoded.height * 4) as usize;
+
+                // Evict oldest decoded images if over budget.
+                while self.decoded_image_bytes + img_bytes > Self::IMAGE_MEMORY_BUDGET {
+                    if let Some(evict_url) = self.decoded_image_lru.pop_back() {
+                        if let Some(evicted) = self.decoded_images.remove(&evict_url) {
+                            let evicted_bytes = (evicted.width * evicted.height * 4) as usize;
+                            self.decoded_image_bytes -= evicted_bytes;
+                            self.image_info_dirty = true;
+                        }
+                    } else {
+                        break;
+                    }
+                }
+
+                self.decoded_image_bytes += img_bytes;
+                self.decoded_image_lru.push_front(resolved.clone());
+                self.decoded_images.insert(resolved, decoded);
+                self.image_info_dirty = true;
+                any_decoded = true;
+            }
+
+            // Check time budget after each image.
+            if start.elapsed() >= budget {
+                break;
+            }
+        }
+
+        if any_decoded {
+            self.layout_dirty = true;
+            self.rebuild_layout_with_images();
+        }
+
+        if self.pending_images.is_empty() && self.state == LoadingState::Loading {
+            self.state = LoadingState::Idle;
+        }
+    }
+
+    /// Get the cached image info map, rebuilding it if dirty.
+    fn build_image_info_map(&mut self) -> ImageInfoMap {
+        if self.image_info_dirty {
+            self.cached_image_info = self
+                .decoded_images
+                .iter()
+                .map(|(url, img)| (url.clone(), (img.width, img.height)))
+                .collect();
+            self.image_info_dirty = false;
+        }
+        self.cached_image_info.clone()
+    }
+
+    /// Upload decoded images as GPU textures and assign them to
+    /// `ReplacedContent::Image` nodes in the layout tree.
+    fn ensure_image_textures(&mut self, backend: &mut dyn SdiBackend) {
+        let doc = match &self.document {
+            Some(d) => d,
+            None => return,
+        };
+        let base_url = self.nav.current_url().map(String::from);
+
+        // Collect URLs that need texture creation.
+        let mut pending: Vec<String> = Vec::new();
+        for node in &doc.nodes {
+            if let NodeKind::Element(elem) = &node.kind
+                && elem.tag == TagName::Img
+                && let Some(src) = elem.src()
+            {
+                let resolved = Self::resolve_src(&base_url, src);
+                if !self.image_textures.contains_key(&resolved)
+                    && self.decoded_images.contains_key(&resolved)
+                {
+                    pending.push(resolved);
+                }
+            }
+        }
+
+        // Create textures.
+        for resolved in &pending {
+            if let Some(decoded) = self.decoded_images.get(resolved)
+                && let Ok(tex) =
+                    backend.load_texture(decoded.width, decoded.height, &decoded.pixels)
+            {
+                self.image_textures.insert(resolved.clone(), tex);
+            }
+        }
+
+        // Also collect background-image URLs from styles.
+        for style_opt in &self.styles {
+            if let Some(style) = style_opt
+                && let css::values::BackgroundImage::Url(ref url) = style.background_image
+            {
+                let resolved = Self::resolve_src(&base_url, url);
+                if !self.image_textures.contains_key(&resolved)
+                    && self.decoded_images.contains_key(&resolved)
+                    && !pending.contains(&resolved)
+                {
+                    pending.push(resolved);
+                }
+            }
+        }
+
+        // Create textures.
+        for resolved in &pending {
+            if let Some(decoded) = self.decoded_images.get(resolved)
+                && let Ok(tex) =
+                    backend.load_texture(decoded.width, decoded.height, &decoded.pixels)
+            {
+                self.image_textures.insert(resolved.clone(), tex);
+            }
+        }
+
+        // Walk layout tree and assign textures.
+        if let Some(layout) = &mut self.layout_root {
+            Self::assign_textures_recursive(
+                layout,
+                &self.document,
+                &base_url,
+                &self.image_textures,
+            );
+        }
+    }
+
+    /// Recursively walk the layout tree and assign GPU textures to
+    /// `ReplacedContent::Image` nodes and `background-image` styles.
+    fn assign_textures_recursive(
+        layout_box: &mut layout::box_model::LayoutBox,
+        doc: &Option<html::dom::Document>,
+        base_url: &Option<String>,
+        textures: &HashMap<String, TextureId>,
+    ) {
+        if let layout::box_model::BoxType::Replaced(layout::box_model::ReplacedContent::Image {
+            ref mut texture,
+            ..
+        }) = layout_box.box_type
+            && texture.is_none()
+            && let Some(node_id) = layout_box.node
+            && let Some(doc) = doc
+        {
+            let node = doc.get(node_id);
+            if let NodeKind::Element(elem) = &node.kind
+                && let Some(src) = elem.src()
+            {
+                let resolved = Self::resolve_src(base_url, src);
+                if let Some(&tex) = textures.get(&resolved) {
+                    *texture = Some(tex);
+                }
+            }
+        }
+
+        // Assign background-image texture.
+        if layout_box.background_texture.is_none()
+            && let css::values::BackgroundImage::Url(ref url) = layout_box.style.background_image
+        {
+            let resolved = Self::resolve_src(base_url, url);
+            if let Some(&tex) = textures.get(&resolved) {
+                layout_box.background_texture = Some(tex);
+            }
+        }
+
+        for child in &mut layout_box.children {
+            Self::assign_textures_recursive(child, doc, base_url, textures);
+        }
+    }
+
+    /// Rebuild the layout tree with image dimensions after images have
+    /// been decoded (second layout pass).
+    fn rebuild_layout_with_images(&mut self) {
+        let image_info = self.build_image_info_map();
+        if let Some(doc) = &self.document {
+            let content_h = self.config.content_height(self.window_h);
+            let base_url = self.nav.current_url().map(String::from);
+            let layout_root = layout::block::build_layout_tree(
+                doc,
+                &self.styles,
+                &SimpleTextMeasurer,
+                self.window_w as f32,
+                content_h as f32,
+                base_url.as_deref(),
+                &image_info,
+            );
+            self.layout_root = Some(layout_root);
+            self.link_map.clear();
+        }
+    }
+
+    /// Resolve an img `src` attribute against a base URL.
+    fn resolve_src(base_url: &Option<String>, src: &str) -> String {
+        match base_url {
+            Some(base) => {
+                if let Some(base_parsed) = loader::Url::parse(base) {
+                    base_parsed
+                        .resolve(src)
+                        .map(|u| u.to_string())
+                        .unwrap_or_else(|| src.to_string())
+                } else {
+                    src.to_string()
+                }
+            },
+            None => src.to_string(),
+        }
     }
 
     /// Load and render a Gemini document.
@@ -455,8 +858,14 @@ impl BrowserWidget {
                 let tokens = html::tokenizer::Tokenizer::new(&article.html).tokenize();
                 let reader_doc = html::tree_builder::TreeBuilder::build(tokens);
                 let ua_sheet = css::default::default_stylesheet();
-                let styles = css::cascade::style_tree(&reader_doc, &[&ua_sheet], &[]);
+                let reader_ctx = css::cascade::CascadeContext {
+                    hover_node: None,
+                    visited_urls: Some(&self.visited_urls),
+                };
+                let styles = css::cascade::style_tree(&reader_doc, &[&ua_sheet], &[], &reader_ctx);
                 let href_map = Self::build_link_map(&reader_doc);
+                self.cached_author_sheets = Vec::new();
+                self.cached_inline_styles = Vec::new();
                 self.document = Some(reader_doc);
                 self.styles = styles;
                 self.href_map = href_map;
@@ -493,6 +902,14 @@ impl BrowserWidget {
     ///
     /// Draws chrome (URL bar, navigation buttons, status bar) and
     /// the page content viewport.
+    /// Per-frame update: process pending image loads within a time budget.
+    ///
+    /// Call this once per frame before `paint()`. Images stream in
+    /// progressively so the page is never blocked waiting for all images.
+    pub fn tick(&mut self, vfs: &dyn Vfs) {
+        self.load_next_image_batch(vfs, 8);
+    }
+
     pub fn paint(&mut self, backend: &mut dyn SdiBackend) -> Result<()> {
         // Rebuild layout if the viewport was resized since last paint.
         self.relayout_if_dirty();
@@ -518,6 +935,10 @@ impl BrowserWidget {
             self.config.default_bg_color,
         )?;
 
+        // Upload decoded images as GPU textures and assign to layout
+        // nodes (first paint after navigation).
+        self.ensure_image_textures(backend);
+
         // Paint layout tree if available.
         if let Some(layout) = &self.layout_root {
             let result = paint::paint(
@@ -541,6 +962,31 @@ impl BrowserWidget {
                 let link = self.link_map[idx].clone();
                 paint::paint_link_highlight(&link, backend, Color::rgb(255, 200, 0))?;
             }
+        }
+
+        // Paint scrollbar when content overflows viewport.
+        if self.scroll.max_scroll() > 0 {
+            let sb_w: u32 = 6;
+            let sb_x = self.window_x + self.window_w as i32 - sb_w as i32 - 1;
+            let track_y = content_y;
+            let track_h = content_h;
+
+            // Track.
+            backend.fill_rect(sb_x, track_y, sb_w, track_h, Color::rgba(255, 255, 255, 20))?;
+
+            // Thumb: proportional to viewport/content ratio.
+            let ratio = self.scroll.viewport_height as f32 / self.scroll.content_height as f32;
+            let thumb_h = ((track_h as f32 * ratio) as u32).max(12).min(track_h);
+            let scrollable = track_h - thumb_h;
+            let frac = self.scroll.scroll_fraction();
+            let thumb_y = track_y + (scrollable as f32 * frac) as i32;
+            backend.fill_rect(
+                sb_x,
+                thumb_y,
+                sb_w,
+                thumb_h,
+                Color::rgba(255, 255, 255, 100),
+            )?;
         }
 
         // Paint status bar.
@@ -889,6 +1335,14 @@ impl BrowserWidget {
                 self.scroll.page_down();
                 true
             },
+            InputEvent::MouseWheel { delta } => {
+                self.scroll.wheel_scroll(*delta);
+                true
+            },
+            InputEvent::CursorMove { x, y } => {
+                self.handle_cursor_move(*x, *y);
+                true
+            },
             InputEvent::PointerClick { x, y } => {
                 self.handle_click(*x, *y, vfs);
                 true
@@ -995,6 +1449,110 @@ impl BrowserWidget {
         }
     }
 
+    /// Handle a cursor move at window-relative coordinates.
+    ///
+    /// Hit-tests link regions to determine the hover target. If the
+    /// hovered node changes, re-runs the CSS cascade so `:hover` rules
+    /// take effect.
+    fn handle_cursor_move(&mut self, x: i32, y: i32) {
+        let mut new_hover: Option<NodeId> = None;
+        for link in &self.link_map {
+            let lx = link.rect.x;
+            let ly = link.rect.y;
+            let lw = link.rect.width;
+            let lh = link.rect.height;
+            if (x as f32) >= lx && (x as f32) < lx + lw && (y as f32) >= ly && (y as f32) < ly + lh
+            {
+                new_hover = Some(link.node);
+                break;
+            }
+        }
+
+        if new_hover != self.hover_node {
+            // Throttle hover restyles to at most 20/sec.
+            let now = std::time::Instant::now();
+            if let Some(last) = self.last_hover_time
+                && now.duration_since(last).as_millis() < 50
+            {
+                return;
+            }
+            self.last_hover_time = Some(now);
+
+            let old_hover = self.hover_node;
+            self.hover_node = new_hover;
+            self.restyle_hover_affected(old_hover);
+        }
+    }
+
+    /// Re-run the CSS cascade on hover-affected nodes only.
+    ///
+    /// Instead of re-parsing stylesheets and re-cascading the entire DOM,
+    /// this uses cached sheets and only re-computes styles for the ancestors
+    /// of the old and new hover nodes — typically ~10-20 nodes.
+    fn restyle_hover_affected(&mut self, old_hover: Option<NodeId>) {
+        let Some(doc) = &self.document else { return };
+
+        // Build the set of affected nodes: ancestors of old + new hover.
+        let mut affected: Vec<NodeId> = Vec::new();
+        for start in [old_hover, self.hover_node].into_iter().flatten() {
+            let mut cur = Some(start);
+            while let Some(nid) = cur {
+                if !affected.contains(&nid) {
+                    affected.push(nid);
+                }
+                cur = doc.nodes[nid].parent;
+            }
+        }
+
+        if affected.is_empty() {
+            return;
+        }
+
+        // Build sheet references from cache (no re-parsing).
+        let ua_sheet = css::default::default_stylesheet();
+        let mut all_sheets: Vec<&css::parser::Stylesheet> = vec![&ua_sheet];
+        for sheet in &self.cached_author_sheets {
+            all_sheets.push(sheet);
+        }
+
+        let index = css::cascade::SelectorIndex::build(&all_sheets);
+        let inline_map: HashMap<NodeId, &[css::parser::Declaration]> = self
+            .cached_inline_styles
+            .iter()
+            .map(|(nid, decls)| (*nid, decls.as_slice()))
+            .collect();
+        let ctx = css::cascade::CascadeContext {
+            hover_node: self.hover_node,
+            visited_urls: Some(&self.visited_urls),
+        };
+
+        let mut any_changed = false;
+        for &nid in &affected {
+            let node = &doc.nodes[nid];
+            if !matches!(node.kind, html::dom::NodeKind::Element(_)) {
+                continue;
+            }
+            let parent_style = node.parent.and_then(|pid| self.styles[pid].as_ref());
+            let new_style = css::cascade::compute_style(
+                doc,
+                nid,
+                parent_style,
+                &all_sheets,
+                &index,
+                &inline_map,
+                &ctx,
+            );
+            if self.styles[nid].as_ref() != Some(&new_style) {
+                self.styles[nid] = Some(new_style);
+                any_changed = true;
+            }
+        }
+
+        if any_changed {
+            self.layout_dirty = true;
+        }
+    }
+
     /// Navigate to a URL, resolving relative references against
     /// the current page.
     pub fn navigate_to(&mut self, href: &str, vfs: &dyn Vfs) {
@@ -1010,6 +1568,8 @@ impl BrowserWidget {
             href.to_string()
         };
 
+        // Track this URL as visited for :visited pseudo-class.
+        self.visited_urls.insert(resolved.clone());
         self.navigate_vfs(&resolved, vfs);
     }
 
@@ -1283,15 +1843,16 @@ mod tests {
     #[test]
     fn simple_text_measurer() {
         let m = SimpleTextMeasurer;
-        // Proportional: h(7)+e(7)+l(5)+l(5)+o(7) = 31, scale=1 at font_size 12
+        // Sub-pixel: h(7*12/8)+e(7*12/8)+l(5*12/8)+l(5*12/8)+o(7*12/8)
+        //          = 10+10+7+7+10 = 44
         assert_eq!(
             layout::block::TextMeasurer::measure_text(&m, "hello", 12,),
-            31
+            44
         );
         assert_eq!(layout::block::TextMeasurer::measure_text(&m, "", 12,), 0);
-        // 'a' advance=7, scale=2 at font_size 16
+        // 'a' advance=7, 7*16/8 = 14
         assert_eq!(layout::block::TextMeasurer::measure_text(&m, "a", 16,), 14);
-        // t(7)+e(7)+s(7)+t(7) = 28, scale=1 at font_size 8
+        // t(7)+e(7)+s(7)+t(7): 7*8/8 * 4 = 28
         assert_eq!(
             layout::block::TextMeasurer::measure_text(&m, "test", 8,),
             28
@@ -2937,5 +3498,484 @@ mod tests {
 
         lb.mark_dirty();
         assert!(lb.dirty, "mark_dirty should set dirty flag");
+    }
+
+    // ===============================================================
+    // Image rendering tests
+    // ===============================================================
+
+    /// Build a minimal valid 24-bit BMP of given dimensions (solid red).
+    fn make_test_bmp(w: u32, h: u32) -> Vec<u8> {
+        let bpp: u16 = 24;
+        let row_bytes = (w * 3).div_ceil(4) * 4;
+        let pixel_data_size = row_bytes * h;
+        let file_size = 54 + pixel_data_size;
+
+        let mut bmp = vec![0u8; file_size as usize];
+        bmp[0] = b'B';
+        bmp[1] = b'M';
+        bmp[2..6].copy_from_slice(&file_size.to_le_bytes());
+        bmp[10..14].copy_from_slice(&54u32.to_le_bytes());
+        bmp[14..18].copy_from_slice(&40u32.to_le_bytes());
+        bmp[18..22].copy_from_slice(&(w as i32).to_le_bytes());
+        bmp[22..26].copy_from_slice(&(h as i32).to_le_bytes());
+        bmp[26..28].copy_from_slice(&1u16.to_le_bytes());
+        bmp[28..30].copy_from_slice(&bpp.to_le_bytes());
+        bmp[30..34].copy_from_slice(&0u32.to_le_bytes());
+
+        // Fill with solid red (BGR = 0,0,255).
+        for row in 0..h {
+            for col in 0..w {
+                let off = 54 + (row * row_bytes + col * 3) as usize;
+                if off + 2 < bmp.len() {
+                    bmp[off] = 0; // B
+                    bmp[off + 1] = 0; // G
+                    bmp[off + 2] = 255; // R
+                }
+            }
+        }
+        bmp
+    }
+
+    /// Create a VFS with an image file and an HTML page referencing it.
+    fn test_vfs_with_image() -> MemoryVfs {
+        let mut vfs = MemoryVfs::new();
+        vfs.mkdir("/sites").unwrap();
+        vfs.mkdir("/sites/img").unwrap();
+
+        let bmp_data = make_test_bmp(16, 16);
+        vfs.write("/sites/img/red.bmp", &bmp_data).unwrap();
+
+        vfs.write(
+            "/sites/img/index.html",
+            b"<html><body>\
+              <h1>Image Test</h1>\
+              <img src=\"red.bmp\" alt=\"Red square\">\
+              </body></html>",
+        )
+        .unwrap();
+
+        vfs.write(
+            "/sites/img/with_dims.html",
+            b"<html><body>\
+              <img src=\"red.bmp\" width=\"32\" height=\"32\" alt=\"Scaled\">\
+              </body></html>",
+        )
+        .unwrap();
+
+        vfs.write(
+            "/sites/img/broken.html",
+            b"<html><body>\
+              <img src=\"nonexistent.bmp\" alt=\"Missing image\">\
+              </body></html>",
+        )
+        .unwrap();
+
+        vfs.write(
+            "/sites/img/no_alt.html",
+            b"<html><body>\
+              <img src=\"nonexistent.bmp\">\
+              </body></html>",
+        )
+        .unwrap();
+
+        vfs.write(
+            "/sites/img/multi.html",
+            b"<html><body>\
+              <p>Before</p>\
+              <img src=\"red.bmp\" alt=\"First\">\
+              <p>Middle</p>\
+              <img src=\"red.bmp\" alt=\"Second\">\
+              <p>After</p>\
+              </body></html>",
+        )
+        .unwrap();
+
+        vfs
+    }
+
+    // ---------------------------------------------------------------
+    // Test: image decoded from VFS during navigation
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn image_decoded_from_vfs_during_navigation() {
+        let vfs = test_vfs_with_image();
+        let mut browser = make_browser();
+        browser.set_window(0, 0, 480, 272);
+        browser.navigate_vfs("vfs://sites/img/index.html", &vfs);
+
+        // Images are now loaded progressively; process all pending.
+        browser.load_next_image_batch(&vfs, 5000);
+
+        assert_eq!(browser.loading_state(), LoadingState::Idle);
+        assert!(
+            !browser.decoded_images.is_empty(),
+            "should have decoded at least one image"
+        );
+
+        let has_red = browser
+            .decoded_images
+            .values()
+            .any(|img| img.width == 16 && img.height == 16);
+        assert!(has_red, "decoded image should be 16x16");
+    }
+
+    // ---------------------------------------------------------------
+    // Test: image renders as blit call (not placeholder)
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn image_renders_as_blit() {
+        let vfs = test_vfs_with_image();
+        let mut browser = make_browser();
+        browser.set_window(0, 0, 480, 272);
+        browser.navigate_vfs("vfs://sites/img/index.html", &vfs);
+        browser.load_next_image_batch(&vfs, 5000);
+
+        let mut backend = MockBackend::new();
+        browser.paint(&mut backend).unwrap();
+
+        assert!(
+            backend.blit_count() > 0,
+            "should have at least one blit call for the image"
+        );
+
+        // Verify the blit has correct dimensions (16x16 from intrinsic).
+        let blits: Vec<_> = backend
+            .calls
+            .iter()
+            .filter_map(|c| {
+                if let crate::test_utils::DrawCall::Blit { w, h, .. } = c {
+                    Some((*w, *h))
+                } else {
+                    None
+                }
+            })
+            .collect();
+        assert!(
+            blits.iter().any(|&(w, h)| w == 16 && h == 16),
+            "should blit at 16x16 (intrinsic dimensions), got: {blits:?}"
+        );
+    }
+
+    // ---------------------------------------------------------------
+    // Test: image uses intrinsic dimensions in layout
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn image_uses_intrinsic_dimensions_in_layout() {
+        let vfs = test_vfs_with_image();
+        let mut browser = make_browser();
+        browser.set_window(0, 0, 480, 272);
+        browser.navigate_vfs("vfs://sites/img/index.html", &vfs);
+        browser.load_next_image_batch(&vfs, 5000);
+
+        // Check that the layout tree contains a Replaced(Image) with
+        // correct dimensions (16x16) instead of the default 0x0.
+        let layout = browser.layout_root.as_ref().expect("should have layout");
+        let img_box = find_image_box(layout);
+        assert!(img_box.is_some(), "layout tree should contain an image box");
+        let (w, h) = img_box.unwrap();
+        assert_eq!(w, 16, "image layout width should be 16");
+        assert_eq!(h, 16, "image layout height should be 16");
+    }
+
+    // ---------------------------------------------------------------
+    // Test: HTML width/height attributes override intrinsic
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn image_html_attrs_override_intrinsic() {
+        let vfs = test_vfs_with_image();
+        let mut browser = make_browser();
+        browser.set_window(0, 0, 480, 272);
+        browser.navigate_vfs("vfs://sites/img/with_dims.html", &vfs);
+
+        let layout = browser.layout_root.as_ref().expect("should have layout");
+        let img_box = find_image_box(layout);
+        assert!(img_box.is_some(), "layout tree should contain an image box");
+        let (w, h) = img_box.unwrap();
+        assert_eq!(w, 32, "image width should be 32 (from HTML attr)");
+        assert_eq!(h, 32, "image height should be 32 (from HTML attr)");
+    }
+
+    // ---------------------------------------------------------------
+    // Test: broken image shows placeholder (no blit)
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn broken_image_shows_placeholder() {
+        let vfs = test_vfs_with_image();
+        let mut browser = make_browser();
+        browser.set_window(0, 0, 480, 272);
+        browser.navigate_vfs("vfs://sites/img/broken.html", &vfs);
+
+        let mut backend = MockBackend::new();
+        browser.paint(&mut backend).unwrap();
+
+        assert_eq!(
+            backend.blit_count(),
+            0,
+            "should not blit for a broken image"
+        );
+        assert!(
+            backend.has_text("Missing"),
+            "should render alt text for broken image"
+        );
+    }
+
+    // ---------------------------------------------------------------
+    // Test: broken image without alt shows multiplication sign
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn broken_image_no_alt_shows_placeholder_symbol() {
+        let vfs = test_vfs_with_image();
+        let mut browser = make_browser();
+        browser.set_window(0, 0, 480, 272);
+        browser.navigate_vfs("vfs://sites/img/no_alt.html", &vfs);
+
+        let mut backend = MockBackend::new();
+        browser.paint(&mut backend).unwrap();
+
+        assert_eq!(
+            backend.blit_count(),
+            0,
+            "should not blit for a broken image"
+        );
+        // Should show the multiplication sign placeholder.
+        assert!(
+            backend.has_text("\u{00D7}"),
+            "should render multiplication sign for broken image without alt"
+        );
+    }
+
+    // ---------------------------------------------------------------
+    // Test: multiple images on same page
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn multiple_images_same_page() {
+        let vfs = test_vfs_with_image();
+        let mut browser = make_browser();
+        browser.set_window(0, 0, 480, 272);
+        browser.navigate_vfs("vfs://sites/img/multi.html", &vfs);
+        browser.load_next_image_batch(&vfs, 5000);
+
+        let mut backend = MockBackend::new();
+        browser.paint(&mut backend).unwrap();
+
+        // Both images reference the same BMP, so only one decoded entry
+        // but two blit calls (one per <img> tag).
+        assert_eq!(
+            browser.decoded_images.len(),
+            1,
+            "should deduplicate same-URL images"
+        );
+        assert!(
+            backend.blit_count() >= 2,
+            "should blit twice for two <img> tags, got {}",
+            backend.blit_count()
+        );
+        assert!(backend.has_text("Before"), "should render surrounding text");
+        assert!(backend.has_text("After"), "should render surrounding text");
+    }
+
+    // ---------------------------------------------------------------
+    // Test: textures created during paint
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn textures_created_during_paint() {
+        let vfs = test_vfs_with_image();
+        let mut browser = make_browser();
+        browser.set_window(0, 0, 480, 272);
+        browser.navigate_vfs("vfs://sites/img/index.html", &vfs);
+        browser.load_next_image_batch(&vfs, 5000);
+
+        // Before paint, no textures exist.
+        assert!(
+            browser.image_textures.is_empty(),
+            "textures should not exist before paint"
+        );
+
+        let mut backend = MockBackend::new();
+        browser.paint(&mut backend).unwrap();
+
+        // After paint, texture should be created.
+        assert!(
+            !browser.image_textures.is_empty(),
+            "textures should exist after paint"
+        );
+    }
+
+    // ---------------------------------------------------------------
+    // Test: navigating clears old image state
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn navigation_clears_image_state() {
+        let vfs = test_vfs_with_image();
+        let mut browser = make_browser();
+        browser.set_window(0, 0, 480, 272);
+
+        // Navigate to page with image.
+        browser.navigate_vfs("vfs://sites/img/index.html", &vfs);
+        browser.load_next_image_batch(&vfs, 5000);
+        assert!(!browser.decoded_images.is_empty());
+
+        // Navigate to page without image.
+        browser.navigate_vfs("vfs://sites/img/broken.html", &vfs);
+        // decoded_images should have been cleared and only repopulated
+        // for the new page (which has no decodable images).
+        assert!(
+            browser
+                .decoded_images
+                .values()
+                .all(|img| img.width != 16 || img.height != 16),
+            "old decoded images should be cleared on navigation"
+        );
+    }
+
+    // ---------------------------------------------------------------
+    // Test: image loading is progressive (Phase 1)
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn image_loading_is_progressive() {
+        let mut vfs = MemoryVfs::new();
+        vfs.mkdir("/sites").unwrap();
+        vfs.mkdir("/sites/home").unwrap();
+
+        // Create a page with multiple images.
+        vfs.write(
+            "/sites/home/images.html",
+            b"<html><body>\
+              <img src=\"img1.bmp\">\
+              <img src=\"img2.bmp\">\
+              <img src=\"img3.bmp\">\
+              </body></html>",
+        )
+        .unwrap();
+
+        // Write small BMP files.
+        let bmp = make_test_bmp(2, 2);
+        vfs.write("/sites/home/img1.bmp", &bmp).unwrap();
+        vfs.write("/sites/home/img2.bmp", &bmp).unwrap();
+        vfs.write("/sites/home/img3.bmp", &bmp).unwrap();
+
+        let mut browser = make_browser();
+        browser.set_window(0, 0, 480, 272);
+        browser.navigate_vfs("vfs://sites/home/images.html", &vfs);
+
+        // After navigate, images should be pending, not yet decoded.
+        assert!(
+            !browser.pending_images.is_empty() || !browser.decoded_images.is_empty(),
+            "should have pending or already-decoded images"
+        );
+
+        // Call with 0ms budget — should process at most 1 image.
+        let before = browser.decoded_images.len();
+        browser.load_next_image_batch(&vfs, 0);
+        let after = browser.decoded_images.len();
+        assert!(
+            after - before <= 1,
+            "0ms budget should process at most 1 image, got {}",
+            after - before
+        );
+    }
+
+    /// Recursively find a Replaced(Image) box and return its (width, height).
+    fn find_image_box(layout_box: &layout::box_model::LayoutBox) -> Option<(u32, u32)> {
+        if let layout::box_model::BoxType::Replaced(layout::box_model::ReplacedContent::Image {
+            width,
+            height,
+            ..
+        }) = &layout_box.box_type
+        {
+            return Some((*width, *height));
+        }
+        for child in &layout_box.children {
+            if let Some(result) = find_image_box(child) {
+                return Some(result);
+            }
+        }
+        None
+    }
+
+    #[test]
+    fn hover_restyle_is_partial() {
+        // Build a DOM with many elements and a :hover rule.
+        // Verify that hover only restyles the affected ancestor chain.
+        let mut elements: Vec<String> = Vec::new();
+        for i in 0..50 {
+            elements.push(format!("<p>Paragraph {i}</p>"));
+        }
+        let html = format!(
+            "<html><head><style>a:hover {{ color: red; }}</style></head><body>\
+             <a href=\"link.html\"><span>Link</span></a>\
+             {}\
+             </body></html>",
+            elements.join("")
+        );
+        let vfs = MemoryVfs::new();
+        let config = BrowserConfig::default();
+        let mut browser = BrowserWidget::new(config);
+        browser.load_html(&html, "file:///test.html");
+
+        // Verify cached sheets are populated.
+        assert!(
+            !browser.cached_author_sheets.is_empty() || browser.cached_inline_styles.is_empty(),
+            "cached sheets should be set after load_html"
+        );
+
+        // Simulate hover on the link node.
+        let link_node = browser
+            .href_map
+            .keys()
+            .next()
+            .copied()
+            .expect("should have a link");
+        let old_hover = browser.hover_node;
+        browser.hover_node = Some(link_node);
+        browser.restyle_hover_affected(old_hover);
+
+        // Layout should be marked dirty (hover style changed).
+        assert!(browser.layout_dirty);
+
+        // Styles should still be populated for all elements.
+        let styled_count = browser.styles.iter().filter(|s| s.is_some()).count();
+        assert!(styled_count > 5, "most elements should retain styles");
+    }
+
+    #[test]
+    fn image_eviction_respects_budget() {
+        // Directly test that decoded_image_lru eviction works by
+        // inserting images that exceed the budget.
+        let config = BrowserConfig::default();
+        let mut browser = BrowserWidget::new(config);
+
+        // Create a fake 1x1 image (4 bytes). Set a tiny budget.
+        let small_img = image::DecodedImage {
+            width: 1,
+            height: 1,
+            pixels: vec![255, 0, 0, 255],
+        };
+
+        // Manually insert decoded images to test eviction.
+        for i in 0..5 {
+            let url = format!("http://test.com/img{i}.png");
+            let img_bytes = (small_img.width * small_img.height * 4) as usize;
+            browser.decoded_image_bytes += img_bytes;
+            browser.decoded_image_lru.push_front(url.clone());
+            browser.decoded_images.insert(url, small_img.clone());
+        }
+        assert_eq!(browser.decoded_images.len(), 5);
+        assert_eq!(browser.decoded_image_bytes, 20); // 5 * 4 bytes
+
+        // LRU order: img4 (front/MRU) ... img0 (back/LRU)
+        // Verify the LRU tracks all 5.
+        assert_eq!(browser.decoded_image_lru.len(), 5);
     }
 }

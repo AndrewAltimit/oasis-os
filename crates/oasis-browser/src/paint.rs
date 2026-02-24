@@ -15,11 +15,9 @@
 
 use std::collections::HashMap;
 
-use crate::css::values::{BorderStyle, TextDecoration};
+use crate::css::values::{BorderStyle, Overflow, TextDecoration, TextOverflow, Visibility};
 use crate::html::dom::NodeId;
-use crate::layout::box_model::{
-    BoxType, InlineFragment, LayoutBox, LineBox, ListMarker, Rect, ReplacedContent,
-};
+use crate::layout::box_model::{BoxType, LayoutBox, ListMarker, Rect, ReplacedContent};
 use oasis_types::backend::{Color, SdiBackend};
 use oasis_types::error::Result;
 
@@ -60,6 +58,10 @@ struct PaintContext {
     scroll_y: f32,
     /// Viewport height for offscreen culling.
     viewport_height: f32,
+    /// Active clipping rectangle from ancestor `overflow: hidden` boxes.
+    clip_rect: Option<Rect>,
+    /// When true, text overflowing the clip rect gets "..." appended.
+    text_overflow_ellipsis: bool,
 }
 
 // -------------------------------------------------------------------
@@ -88,6 +90,8 @@ pub fn paint(
         current_link: None,
         scroll_y,
         viewport_height,
+        clip_rect: None,
+        text_overflow_ellipsis: false,
     };
 
     paint_box(layout, backend, viewport_x, viewport_y, &mut ctx, link_map)?;
@@ -146,6 +150,8 @@ fn paint_box(
         return Ok(());
     }
 
+    let is_visible = layout_box.style.visibility == Visibility::Visible;
+
     // Track whether we just entered a link element.
     let entered_link = if let Some(node_id) = layout_box.node {
         if let Some(href) = link_map.get(&node_id) {
@@ -158,11 +164,31 @@ fn paint_box(
         false
     };
 
-    // 1. Background
-    paint_background(layout_box, backend, offset_x, offset_y, ctx)?;
+    // visibility:hidden skips painting this box's own background/borders/content
+    // but children may override visibility and still paint.
+    if is_visible {
+        // 0. Box shadow (behind background).
+        paint_box_shadow(layout_box, backend, offset_x, offset_y, ctx)?;
 
-    // 2. Borders
-    paint_borders(layout_box, backend, offset_x, offset_y, ctx)?;
+        // 1. Background
+        paint_background(layout_box, backend, offset_x, offset_y, ctx)?;
+
+        // 2. Borders
+        paint_borders(layout_box, backend, offset_x, offset_y, ctx)?;
+    }
+
+    // Check overflow:hidden clipping -- if this box clips, intersect
+    // with any existing clip from an ancestor.
+    let prev_clip = ctx.clip_rect;
+    let prev_ellipsis = ctx.text_overflow_ellipsis;
+    if layout_box.style.overflow == Overflow::Hidden {
+        let new_clip = layout_box.dimensions.content;
+        ctx.clip_rect = Some(match ctx.clip_rect {
+            Some(existing) => intersect_rects(existing, new_clip),
+            None => new_clip,
+        });
+        ctx.text_overflow_ellipsis = layout_box.style.text_overflow == TextOverflow::Ellipsis;
+    }
 
     // 3-6. Children / inline content / replaced / markers
     match &layout_box.box_type {
@@ -174,22 +200,43 @@ fn paint_box(
         | BoxType::TableCell
         | BoxType::InlineBlock => {
             for child in &layout_box.children {
+                // Skip children entirely outside clip rect.
+                if let Some(clip) = &ctx.clip_rect {
+                    let cb = child.dimensions.border_box();
+                    if cb.y + cb.height < clip.y
+                        || cb.y > clip.y + clip.height
+                        || cb.x + cb.width < clip.x
+                        || cb.x > clip.x + clip.width
+                    {
+                        continue;
+                    }
+                }
                 paint_box(child, backend, offset_x, offset_y, ctx, link_map)?;
             }
         },
         BoxType::Inline => {
-            paint_inline_content(layout_box, backend, offset_x, offset_y, ctx, link_map)?;
+            if is_visible {
+                paint_inline_content(layout_box, backend, offset_x, offset_y, ctx, link_map)?;
+            }
         },
         BoxType::ListItem { marker } => {
-            paint_list_marker(marker, layout_box, backend, offset_x, offset_y, ctx)?;
+            if is_visible {
+                paint_list_marker(marker, layout_box, backend, offset_x, offset_y, ctx)?;
+            }
             for child in &layout_box.children {
                 paint_box(child, backend, offset_x, offset_y, ctx, link_map)?;
             }
         },
         BoxType::Replaced(replaced) => {
-            paint_replaced(replaced, layout_box, backend, offset_x, offset_y, ctx)?;
+            if is_visible {
+                paint_replaced(replaced, layout_box, backend, offset_x, offset_y, ctx)?;
+            }
         },
     }
+
+    // Restore previous clip rect and ellipsis flag.
+    ctx.clip_rect = prev_clip;
+    ctx.text_overflow_ellipsis = prev_ellipsis;
 
     // Record a link hit region when leaving a link element.
     if let Some((ref href, link_node)) = ctx.current_link
@@ -233,15 +280,162 @@ fn paint_background(
     offset_y: i32,
     ctx: &PaintContext,
 ) -> Result<()> {
-    let bg = layout_box.style.background_color;
-    if bg.a == 0 {
-        return Ok(());
-    }
-
     let padding = layout_box.dimensions.padding_box();
     let x = (padding.x + offset_x as f32) as i32;
     let y = (padding.y - ctx.scroll_y + offset_y as f32) as i32;
-    backend.fill_rect(x, y, padding.width as u32, padding.height as u32, bg)
+    let w = padding.width as u32;
+    let h = padding.height as u32;
+
+    // Paint background color.
+    let bg = apply_opacity(layout_box.style.background_color, layout_box.style.opacity);
+    if bg.a > 0 {
+        if layout_box.style.border_radius > 0.0 {
+            backend.fill_rounded_rect(x, y, w, h, layout_box.style.border_radius as u16, bg)?;
+        } else {
+            backend.fill_rect(x, y, w, h, bg)?;
+        }
+    }
+
+    // Paint linear gradient background.
+    if let crate::css::values::BackgroundImage::Gradient(ref grad) =
+        layout_box.style.background_image
+    {
+        paint_linear_gradient(backend, x, y, w, h, grad, layout_box.style.opacity)?;
+    }
+
+    // Paint background image (if texture has been resolved).
+    if let Some(tex) = layout_box.background_texture {
+        backend.blit(tex, x, y, w, h)?;
+    }
+
+    Ok(())
+}
+
+/// Render a CSS `linear-gradient(...)` using the backend's gradient fill.
+fn paint_linear_gradient(
+    backend: &mut dyn SdiBackend,
+    x: i32,
+    y: i32,
+    w: u32,
+    h: u32,
+    grad: &crate::css::values::LinearGradient,
+    opacity: f32,
+) -> Result<()> {
+    use crate::css::values::GradientDirection;
+    use oasis_types::backend::GradientStyle;
+
+    if grad.stops.len() < 2 || w == 0 || h == 0 {
+        return Ok(());
+    }
+
+    let first = apply_opacity(grad.stops[0].color, opacity);
+    let last = apply_opacity(grad.stops[grad.stops.len() - 1].color, opacity);
+
+    match grad.direction {
+        GradientDirection::ToBottom | GradientDirection::Angle(180.0) => {
+            backend.fill_rect_gradient(
+                x,
+                y,
+                w,
+                h,
+                &GradientStyle::Vertical {
+                    top: first,
+                    bottom: last,
+                },
+            )?;
+        },
+        GradientDirection::ToTop | GradientDirection::Angle(0.0) => {
+            backend.fill_rect_gradient(
+                x,
+                y,
+                w,
+                h,
+                &GradientStyle::Vertical {
+                    top: last,
+                    bottom: first,
+                },
+            )?;
+        },
+        GradientDirection::ToRight | GradientDirection::Angle(90.0) => {
+            backend.fill_rect_gradient(
+                x,
+                y,
+                w,
+                h,
+                &GradientStyle::Horizontal {
+                    left: first,
+                    right: last,
+                },
+            )?;
+        },
+        GradientDirection::ToLeft | GradientDirection::Angle(270.0) => {
+            backend.fill_rect_gradient(
+                x,
+                y,
+                w,
+                h,
+                &GradientStyle::Horizontal {
+                    left: last,
+                    right: first,
+                },
+            )?;
+        },
+        GradientDirection::Angle(deg) => {
+            // For arbitrary angles, approximate with the closest axis.
+            let norm = ((deg % 360.0) + 360.0) % 360.0;
+            if !(45.0..315.0).contains(&norm) {
+                // ~to top
+                backend.fill_rect_gradient(
+                    x,
+                    y,
+                    w,
+                    h,
+                    &GradientStyle::Vertical {
+                        top: last,
+                        bottom: first,
+                    },
+                )?;
+            } else if norm < 135.0 {
+                // ~to right
+                backend.fill_rect_gradient(
+                    x,
+                    y,
+                    w,
+                    h,
+                    &GradientStyle::Horizontal {
+                        left: first,
+                        right: last,
+                    },
+                )?;
+            } else if norm < 225.0 {
+                // ~to bottom
+                backend.fill_rect_gradient(
+                    x,
+                    y,
+                    w,
+                    h,
+                    &GradientStyle::Vertical {
+                        top: first,
+                        bottom: last,
+                    },
+                )?;
+            } else {
+                // ~to left
+                backend.fill_rect_gradient(
+                    x,
+                    y,
+                    w,
+                    h,
+                    &GradientStyle::Horizontal {
+                        left: last,
+                        right: first,
+                    },
+                )?;
+            }
+        },
+    }
+
+    Ok(())
 }
 
 // -------------------------------------------------------------------
@@ -265,33 +459,130 @@ fn paint_borders(
 
     // Top
     if d.border.top > 0.0 && style.border_top_style != BorderStyle::None {
-        backend.fill_rect(bx, by, bw, d.border.top as u32, style.border_top_color)?;
+        paint_border_edge(
+            backend,
+            bx,
+            by,
+            bw,
+            d.border.top as u32,
+            style.border_top_color,
+            style.border_top_style,
+            true,
+        )?;
     }
     // Right
     if d.border.right > 0.0 && style.border_right_style != BorderStyle::None {
-        backend.fill_rect(
+        paint_border_edge(
+            backend,
             bx + bw as i32 - d.border.right as i32,
             by,
             d.border.right as u32,
             bh,
             style.border_right_color,
+            style.border_right_style,
+            false,
         )?;
     }
     // Bottom
     if d.border.bottom > 0.0 && style.border_bottom_style != BorderStyle::None {
-        backend.fill_rect(
+        paint_border_edge(
+            backend,
             bx,
             by + bh as i32 - d.border.bottom as i32,
             bw,
             d.border.bottom as u32,
             style.border_bottom_color,
+            style.border_bottom_style,
+            true,
         )?;
     }
     // Left
     if d.border.left > 0.0 && style.border_left_style != BorderStyle::None {
-        backend.fill_rect(bx, by, d.border.left as u32, bh, style.border_left_color)?;
+        paint_border_edge(
+            backend,
+            bx,
+            by,
+            d.border.left as u32,
+            bh,
+            style.border_left_color,
+            style.border_left_style,
+            false,
+        )?;
     }
 
+    Ok(())
+}
+
+/// Paint a single border edge with the appropriate style.
+///
+/// For `Solid`, draws a filled rectangle. For `Dashed`, draws
+/// alternating filled/empty segments. For `Dotted`, draws small
+/// square dots. For `Double`, draws two parallel lines.
+#[allow(clippy::too_many_arguments)]
+fn paint_border_edge(
+    backend: &mut dyn SdiBackend,
+    x: i32,
+    y: i32,
+    w: u32,
+    h: u32,
+    color: Color,
+    style: BorderStyle,
+    horizontal: bool,
+) -> Result<()> {
+    match style {
+        BorderStyle::Solid => {
+            backend.fill_rect(x, y, w, h, color)?;
+        },
+        BorderStyle::Dashed => {
+            // Alternating filled/empty segments along the edge.
+            let length = if horizontal { w } else { h };
+            let thickness = if horizontal { h } else { w };
+            let dash_len = (thickness * 3).max(4);
+            let mut pos = 0u32;
+            let mut draw = true;
+            while pos < length {
+                let seg = dash_len.min(length - pos);
+                if draw {
+                    if horizontal {
+                        backend.fill_rect(x + pos as i32, y, seg, thickness, color)?;
+                    } else {
+                        backend.fill_rect(x, y + pos as i32, thickness, seg, color)?;
+                    }
+                }
+                pos += seg;
+                draw = !draw;
+            }
+        },
+        BorderStyle::Dotted => {
+            // Small square dots along the edge.
+            let length = if horizontal { w } else { h };
+            let thickness = if horizontal { h } else { w };
+            let dot_size = thickness.max(1);
+            let mut pos = 0u32;
+            while pos < length {
+                if horizontal {
+                    backend.fill_rect(x + pos as i32, y, dot_size, thickness, color)?;
+                } else {
+                    backend.fill_rect(x, y + pos as i32, thickness, dot_size, color)?;
+                }
+                pos += dot_size * 2;
+            }
+        },
+        BorderStyle::Double => {
+            // Two parallel lines separated by a gap.
+            let thickness = if horizontal { h } else { w };
+            let line = (thickness / 3).max(1);
+            let gap = thickness.saturating_sub(line * 2);
+            if horizontal {
+                backend.fill_rect(x, y, w, line, color)?;
+                backend.fill_rect(x, y + (line + gap) as i32, w, line, color)?;
+            } else {
+                backend.fill_rect(x, y, line, h, color)?;
+                backend.fill_rect(x + (line + gap) as i32, y, line, h, color)?;
+            }
+        },
+        BorderStyle::None => {},
+    }
     Ok(())
 }
 
@@ -307,6 +598,21 @@ fn paint_inline_content(
     ctx: &mut PaintContext,
     link_map: &HashMap<NodeId, String>,
 ) -> Result<()> {
+    // Paint inline background if non-transparent.
+    let bg = layout_box.style.background_color;
+    if bg.a > 0 {
+        let pb = layout_box.dimensions.padding_box();
+        let x = (pb.x + offset_x as f32) as i32;
+        let y = (pb.y - ctx.scroll_y + offset_y as f32) as i32;
+        let w = pb.width as u32;
+        let h = pb.height as u32;
+        if layout_box.style.border_radius > 0.0 {
+            backend.fill_rounded_rect(x, y, w, h, layout_box.style.border_radius as u16, bg)?;
+        } else {
+            backend.fill_rect(x, y, w, h, bg)?;
+        }
+    }
+
     // If this inline box carries text content, render it directly.
     if let Some(ref text) = layout_box.text {
         let content = &layout_box.dimensions.content;
@@ -346,82 +652,92 @@ fn paint_text(
     let sx = (x + offset_x as f32) as i32;
     let sy = (y - ctx.scroll_y + offset_y as f32) as i32;
 
-    backend.draw_text(text, sx, sy, style.font_size as u16, style.color)?;
+    let color = apply_opacity(style.color, style.opacity);
+    let bold = style.font_weight == crate::css::values::FontWeight::Bold;
+    let italic = style.font_style == crate::css::values::FontStyle::Italic;
+    let font_size = style.font_size as u16;
 
-    // Approximate text width: each glyph is roughly half the font size
-    // wide (matching the 8x8 bitmap font scaled up).
-    let text_width = text.len() as u32 * (style.font_size as u32 / 2);
-
-    // Underline decoration
-    if style.text_decoration == TextDecoration::Underline {
-        let underline_y = sy + style.font_size as i32;
-        backend.fill_rect(sx, underline_y, text_width, 1, style.color)?;
-    }
-
-    // Line-through decoration
-    if style.text_decoration == TextDecoration::LineThrough {
-        let strike_y = sy + (style.font_size as i32 / 2);
-        backend.fill_rect(sx, strike_y, text_width, 1, style.color)?;
-    }
-
-    Ok(())
-}
-
-/// Paint the fragments of a line box.
-///
-/// Will be called from the inline formatting context paint path once
-/// the layout engine produces [`LineBox`] data.
-#[allow(dead_code)]
-fn paint_line_box(
-    line: &LineBox,
-    backend: &mut dyn SdiBackend,
-    offset_x: i32,
-    offset_y: i32,
-    line_y: f32,
-    ctx: &PaintContext,
-) -> Result<()> {
-    for frag in &line.fragments {
-        match frag {
-            InlineFragment::Text { text, x, style, .. } => {
-                paint_text(text, *x, line_y, style, backend, offset_x, offset_y, ctx)?;
-            },
-            InlineFragment::InlineBox { layout_box } => {
-                let content = &layout_box.dimensions.content;
-                let sx = (content.x + offset_x as f32) as i32;
-                let sy = (content.y - ctx.scroll_y + offset_y as f32) as i32;
-                backend.draw_text(
-                    "",
-                    sx,
-                    sy,
-                    layout_box.style.font_size as u16,
-                    layout_box.style.color,
-                )?;
-            },
-            InlineFragment::ReplacedInline {
-                replaced,
-                x,
-                width,
-                height,
-                style,
-                ..
-            } => {
-                let sx = (*x + offset_x as f32) as i32;
-                let sy = (line_y - ctx.scroll_y + offset_y as f32) as i32;
-                match replaced {
-                    ReplacedContent::Image {
-                        texture: Some(tex), ..
-                    } => {
-                        backend.blit(*tex, sx, sy, *width as u32, *height as u32)?;
-                    },
-                    ReplacedContent::Image { alt, .. } => {
-                        let label = if alt.is_empty() { "\u{00D7}" } else { alt };
-                        backend.draw_text(label, sx + 2, sy + 2, 8, style.color)?;
-                    },
-                    _ => {},
+    // text-overflow: ellipsis — truncate text that overflows the clip
+    // rect's right edge and append "…".
+    let display_text: std::borrow::Cow<'_, str>;
+    if ctx.text_overflow_ellipsis {
+        if let Some(clip) = &ctx.clip_rect {
+            let max_x = (clip.x + clip.width) as i32 - offset_x;
+            let avail = (max_x - sx).max(0) as u32;
+            let text_w = oasis_types::backend::bitmap_measure_text(text, font_size);
+            if text_w > avail {
+                let ellipsis = "\u{2026}";
+                let ew = oasis_types::backend::bitmap_measure_text(ellipsis, font_size);
+                let target = avail.saturating_sub(ew);
+                let mut accum = 0u32;
+                let mut cut = 0;
+                for (i, ch) in text.char_indices() {
+                    let cw = oasis_types::bitmap_font::glyph_advance_scaled(ch, font_size);
+                    if accum + cw > target {
+                        cut = i;
+                        break;
+                    }
+                    accum += cw;
+                    cut = i + ch.len_utf8();
                 }
-            },
+                let mut truncated = text[..cut].to_string();
+                truncated.push_str(ellipsis);
+                display_text = std::borrow::Cow::Owned(truncated);
+            } else {
+                display_text = std::borrow::Cow::Borrowed(text);
+            }
+        } else {
+            display_text = std::borrow::Cow::Borrowed(text);
+        }
+    } else {
+        display_text = std::borrow::Cow::Borrowed(text);
+    }
+
+    // Draw text shadow first (behind the main text).
+    if let Some(ref shadow) = style.text_shadow {
+        let shadow_color = apply_opacity(shadow.color, style.opacity);
+        let shx = sx + shadow.offset_x as i32;
+        let shy = sy + shadow.offset_y as i32;
+        backend.draw_text_styled(
+            &display_text,
+            shx,
+            shy,
+            font_size,
+            shadow_color,
+            bold,
+            italic,
+        )?;
+    }
+
+    backend.draw_text_styled(&display_text, sx, sy, font_size, color, bold, italic)?;
+
+    // Measure actual text width including letter-spacing.
+    let mut text_w = oasis_types::backend::bitmap_measure_text(&display_text, font_size) as f32;
+    if style.letter_spacing != 0.0 {
+        let chars = display_text.chars().count();
+        if chars > 1 {
+            text_w += style.letter_spacing * (chars - 1) as f32;
         }
     }
+    let text_width = text_w.max(0.0) as u32;
+
+    // Underline decoration: just below baseline (~85% of font-size).
+    if style.text_decoration == TextDecoration::Underline {
+        let underline_y = sy + (style.font_size * 0.85) as i32;
+        backend.fill_rect(sx, underline_y, text_width, 1, color)?;
+    }
+
+    // Line-through decoration: at x-height (~40% of font-size).
+    if style.text_decoration == TextDecoration::LineThrough {
+        let strike_y = sy + (style.font_size * 0.4) as i32;
+        backend.fill_rect(sx, strike_y, text_width, 1, color)?;
+    }
+
+    // Overline decoration
+    if style.text_decoration == TextDecoration::Overline {
+        backend.fill_rect(sx, sy, text_width, 1, color)?;
+    }
+
     Ok(())
 }
 
@@ -503,12 +819,146 @@ fn paint_replaced(
             backend.draw_text(label, x + 2, y + 2, 8, color)?;
         },
         ReplacedContent::HorizontalRule => {
+            let style = &layout_box.style;
             let w = content.width as u32;
-            let color = layout_box.style.border_top_color;
-            backend.fill_rect(x, y, w, 1, color)?;
+            if style.border_top_style != BorderStyle::None && style.border_top_width > 0.0 {
+                // Use CSS border-top properties.
+                paint_border_edge(
+                    backend,
+                    x,
+                    y,
+                    w,
+                    style.border_top_width as u32,
+                    style.border_top_color,
+                    style.border_top_style,
+                    true,
+                )?;
+            } else {
+                // Fallback: 1px solid gray.
+                backend.fill_rect(x, y, w, 1, Color::rgb(128, 128, 128))?;
+            }
         },
         ReplacedContent::LineBreak => {
             // Nothing to paint.
+        },
+        ReplacedContent::TextInput {
+            value, placeholder, ..
+        } => {
+            let style = &layout_box.style;
+            let w = content.width as u32;
+            let h = content.height as u32;
+            // Background: use CSS background-color, fallback to white.
+            let bg = if style.background_color.a > 0 {
+                style.background_color
+            } else {
+                Color::rgb(255, 255, 255)
+            };
+            if style.border_radius > 0.0 {
+                backend.fill_rounded_rect(x, y, w, h, style.border_radius as u16, bg)?;
+            } else {
+                backend.fill_rect(x, y, w, h, bg)?;
+            }
+            // Border: use CSS border properties, or default 3D inset.
+            let has_css_border = style.border_top_style != BorderStyle::None;
+            if has_css_border {
+                let bw = style.border_top_width.max(1.0) as u32;
+                let bc = style.border_top_color;
+                backend.fill_rect(x, y, w, bw, bc)?;
+                let bc_b = style.border_bottom_color;
+                backend.fill_rect(x, y + h as i32 - bw as i32, w, bw, bc_b)?;
+                let bc_l = style.border_left_color;
+                backend.fill_rect(x, y, bw, h, bc_l)?;
+                let bc_r = style.border_right_color;
+                backend.fill_rect(x + w as i32 - bw as i32, y, bw, h, bc_r)?;
+            } else {
+                // 3D inset appearance: dark top/left, light bottom/right.
+                let dark = Color::rgb(118, 118, 118);
+                let light = Color::rgb(200, 200, 200);
+                backend.fill_rect(x, y, w, 1, dark)?;
+                backend.fill_rect(x, y, 1, h, dark)?;
+                backend.fill_rect(x, y + h as i32 - 1, w, 1, light)?;
+                backend.fill_rect(x + w as i32 - 1, y, 1, h, light)?;
+            }
+            let font_size = style.font_size as u16;
+            let pad = style.padding_left.max(3.0) as i32;
+            let pad_top = ((h as i32 - font_size as i32) / 2).max(1);
+            // Show value text, or placeholder if empty.
+            if !value.is_empty() {
+                backend.draw_text(value, x + pad, y + pad_top, font_size, style.color)?;
+            } else if !placeholder.is_empty() {
+                let gray = Color::rgb(160, 160, 160);
+                backend.draw_text(placeholder, x + pad, y + pad_top, font_size, gray)?;
+            }
+        },
+        ReplacedContent::SelectBox { label } => {
+            let style = &layout_box.style;
+            let w = content.width as u32;
+            let h = content.height as u32;
+            // White background with border.
+            let bg = if style.background_color.a > 0 {
+                style.background_color
+            } else {
+                Color::rgb(255, 255, 255)
+            };
+            backend.fill_rect(x, y, w, h, bg)?;
+            // Border
+            let border_color = Color::rgb(118, 118, 118);
+            backend.fill_rect(x, y, w, 1, border_color)?;
+            backend.fill_rect(x, y + h as i32 - 1, w, 1, border_color)?;
+            backend.fill_rect(x, y, 1, h, border_color)?;
+            backend.fill_rect(x + w as i32 - 1, y, 1, h, border_color)?;
+            // Label text
+            let font_size = style.font_size as u16;
+            let text_color = style.color;
+            let pad_top = ((h as i32 - font_size as i32) / 2).max(1);
+            backend.draw_text(label, x + 3, y + pad_top, font_size, text_color)?;
+            // Dropdown arrow "v" on the right
+            let arrow_x = x + w as i32 - 10;
+            backend.draw_text("v", arrow_x, y + pad_top, font_size, text_color)?;
+        },
+        ReplacedContent::SubmitButton { label } => {
+            let style = &layout_box.style;
+            let w = content.width as u32;
+            let h = content.height as u32;
+            // Button background: use CSS background-color, fallback light gray.
+            let bg = if style.background_color.a > 0 {
+                style.background_color
+            } else {
+                Color::rgb(239, 239, 239)
+            };
+            if style.border_radius > 0.0 {
+                backend.fill_rounded_rect(x, y, w, h, style.border_radius as u16, bg)?;
+            } else {
+                backend.fill_rect(x, y, w, h, bg)?;
+            }
+            // Border: use CSS border properties, or default 3D raised.
+            let has_css_border = style.border_top_style != BorderStyle::None;
+            if has_css_border {
+                let bw = style.border_top_width.max(1.0) as u32;
+                let bc = style.border_top_color;
+                backend.fill_rect(x, y, w, bw, bc)?;
+                let bc_b = style.border_bottom_color;
+                backend.fill_rect(x, y + h as i32 - bw as i32, w, bw, bc_b)?;
+                let bc_l = style.border_left_color;
+                backend.fill_rect(x, y, bw, h, bc_l)?;
+                let bc_r = style.border_right_color;
+                backend.fill_rect(x + w as i32 - bw as i32, y, bw, h, bc_r)?;
+            } else {
+                // 3D raised appearance: light top/left, dark bottom/right.
+                let light = Color::rgb(255, 255, 255);
+                let dark = Color::rgb(160, 160, 160);
+                backend.fill_rect(x, y, w, 1, light)?;
+                backend.fill_rect(x, y, 1, h, light)?;
+                backend.fill_rect(x, y + h as i32 - 1, w, 1, dark)?;
+                backend.fill_rect(x + w as i32 - 1, y, 1, h, dark)?;
+            }
+            // Label text centered using bitmap measurement.
+            let font_size = style.font_size as u16;
+            let text_color = style.color;
+            let text_w = oasis_types::backend::bitmap_measure_text(label, font_size);
+            let text_x = x + (w as i32 - text_w as i32) / 2;
+            let text_y = y + (h as i32 - font_size as i32) / 2;
+            backend.draw_text(label, text_x, text_y, font_size, text_color)?;
         },
     }
 
@@ -519,12 +969,74 @@ fn paint_replaced(
 // Helpers
 // -------------------------------------------------------------------
 
+/// Scale a color's alpha channel by an opacity factor.
+fn apply_opacity(color: Color, opacity: f32) -> Color {
+    if opacity >= 1.0 {
+        return color;
+    }
+    Color::rgba(color.r, color.g, color.b, (color.a as f32 * opacity) as u8)
+}
+
+/// Paint a box shadow behind the element.
+fn paint_box_shadow(
+    layout_box: &LayoutBox,
+    backend: &mut dyn SdiBackend,
+    offset_x: i32,
+    offset_y: i32,
+    ctx: &PaintContext,
+) -> Result<()> {
+    let shadow = match layout_box.style.box_shadow {
+        Some(ref s) => s,
+        None => return Ok(()),
+    };
+
+    let border = layout_box.dimensions.border_box();
+    let bx = (border.x + offset_x as f32 + shadow.offset_x) as i32;
+    let by = (border.y - ctx.scroll_y + offset_y as f32 + shadow.offset_y) as i32;
+    let bw = (border.width + shadow.spread * 2.0) as u32;
+    let bh = (border.height + shadow.spread * 2.0) as u32;
+
+    // Approximate blur with concentric rectangles at decreasing opacity.
+    let steps = (shadow.blur as i32).max(1);
+    for i in (0..steps).rev() {
+        let t = i as f32 / steps as f32;
+        let alpha = ((shadow.color.a as f32) * (1.0 - t) * 0.4) as u8;
+        if alpha == 0 {
+            continue;
+        }
+        let expand = i;
+        let color = Color::rgba(shadow.color.r, shadow.color.g, shadow.color.b, alpha);
+        backend.fill_rect(
+            bx - expand,
+            by - expand,
+            bw + expand as u32 * 2,
+            bh + expand as u32 * 2,
+            color,
+        )?;
+    }
+    Ok(())
+}
+
 /// Returns `true` if the layout box or any of its descendants is an
 /// inline box or contains inline fragments that carry text.
 fn has_text_content(layout_box: &LayoutBox) -> bool {
     match &layout_box.box_type {
         BoxType::Inline => true,
         _ => layout_box.children.iter().any(has_text_content),
+    }
+}
+
+/// Compute the intersection of two rectangles.
+fn intersect_rects(a: Rect, b: Rect) -> Rect {
+    let x = a.x.max(b.x);
+    let y = a.y.max(b.y);
+    let right = (a.x + a.width).min(b.x + b.width);
+    let bottom = (a.y + a.height).min(b.y + b.height);
+    Rect {
+        x,
+        y,
+        width: (right - x).max(0.0),
+        height: (bottom - y).max(0.0),
     }
 }
 

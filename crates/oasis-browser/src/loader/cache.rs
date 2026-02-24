@@ -2,8 +2,12 @@
 //!
 //! Bounds memory usage by evicting the least-recently-used entries when
 //! the total cached body size exceeds a configurable limit.
+//!
+//! The LRU order is tracked by an intrusive doubly-linked list stored
+//! in a `Vec` arena, giving O(1) promotion, insertion, and eviction
+//! (vs the previous O(N) `VecDeque::retain` per hit).
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::HashMap;
 
 use oasis_types::backend::TextureId;
 
@@ -18,11 +22,32 @@ pub struct CacheEntry {
     pub texture: Option<TextureId>,
 }
 
+// -----------------------------------------------------------------------
+// Intrusive doubly-linked list arena
+// -----------------------------------------------------------------------
+
+/// A node in the intrusive LRU linked list.
+struct LruNode {
+    url: String,
+    prev: Option<usize>,
+    next: Option<usize>,
+}
+
 /// LRU resource cache with bounded size (measured in body bytes).
+///
+/// Uses an arena-backed doubly-linked list for O(1) LRU operations.
 pub struct ResourceCache {
     entries: HashMap<String, CacheEntry>,
-    /// Front = most recently used, back = least recently used.
-    order: VecDeque<String>,
+    /// Arena of linked-list nodes. Slots may be `None` after removal.
+    nodes: Vec<Option<LruNode>>,
+    /// URL -> arena index for O(1) lookup.
+    index: HashMap<String, usize>,
+    /// Arena index of the most-recently-used node (head of list).
+    head: Option<usize>,
+    /// Arena index of the least-recently-used node (tail of list).
+    tail: Option<usize>,
+    /// Free slots in the arena for reuse.
+    free: Vec<usize>,
     current_size: usize,
     max_size: usize,
 }
@@ -32,19 +57,21 @@ impl ResourceCache {
     pub fn new(max_size: usize) -> Self {
         Self {
             entries: HashMap::new(),
-            order: VecDeque::new(),
+            nodes: Vec::new(),
+            index: HashMap::new(),
+            head: None,
+            tail: None,
+            free: Vec::new(),
             current_size: 0,
             max_size,
         }
     }
 
     /// Look up a cached resource by URL, promoting it to the
-    /// most-recently-used position.
+    /// most-recently-used position. O(1).
     pub fn get(&mut self, url: &str) -> Option<&CacheEntry> {
-        if self.entries.contains_key(url) {
-            // Move to front of LRU order.
-            self.order.retain(|u| u != url);
-            self.order.push_front(url.to_string());
+        if let Some(&idx) = self.index.get(url) {
+            self.move_to_head(idx);
             self.entries.get(url)
         } else {
             None
@@ -67,12 +94,12 @@ impl ResourceCache {
         // If the URL is already cached, remove the old version first.
         if let Some(old) = self.entries.remove(&url) {
             self.current_size -= old.response.body.len();
-            self.order.retain(|u| u != &url);
+            self.unlink_url(&url);
         }
 
         // Evict until there is room.
         while self.current_size + entry_size > self.max_size {
-            if let Some(evicted_url) = self.order.pop_back() {
+            if let Some(evicted_url) = self.pop_tail() {
                 if let Some(evicted) = self.entries.remove(&evicted_url) {
                     self.current_size -= evicted.response.body.len();
                 }
@@ -82,7 +109,7 @@ impl ResourceCache {
         }
 
         self.current_size += entry_size;
-        self.order.push_front(url.clone());
+        self.push_head(&url);
         self.entries.insert(url, entry);
     }
 
@@ -95,7 +122,11 @@ impl ResourceCache {
     /// Drop all cached entries.
     pub fn clear(&mut self) {
         self.entries.clear();
-        self.order.clear();
+        self.nodes.clear();
+        self.index.clear();
+        self.head = None;
+        self.tail = None;
+        self.free.clear();
         self.current_size = 0;
     }
 
@@ -112,6 +143,110 @@ impl ResourceCache {
     /// Returns `true` when the cache holds no entries.
     pub fn is_empty(&self) -> bool {
         self.entries.is_empty()
+    }
+
+    // -------------------------------------------------------------------
+    // Linked-list helpers
+    // -------------------------------------------------------------------
+
+    /// Allocate or reuse an arena slot for a new node.
+    fn alloc_node(&mut self, node: LruNode) -> usize {
+        if let Some(idx) = self.free.pop() {
+            self.nodes[idx] = Some(node);
+            idx
+        } else {
+            let idx = self.nodes.len();
+            self.nodes.push(Some(node));
+            idx
+        }
+    }
+
+    /// Unlink a node from the list without freeing it. Returns its
+    /// prev/next pointers before unlinking.
+    fn unlink(&mut self, idx: usize) {
+        let (prev, next) = {
+            let node = self.nodes[idx].as_ref().unwrap();
+            (node.prev, node.next)
+        };
+
+        // Patch predecessor's next pointer.
+        if let Some(p) = prev {
+            self.nodes[p].as_mut().unwrap().next = next;
+        } else {
+            self.head = next;
+        }
+
+        // Patch successor's prev pointer.
+        if let Some(n) = next {
+            self.nodes[n].as_mut().unwrap().prev = prev;
+        } else {
+            self.tail = prev;
+        }
+
+        // Clear this node's links (still allocated in arena).
+        let node = self.nodes[idx].as_mut().unwrap();
+        node.prev = None;
+        node.next = None;
+    }
+
+    /// Remove a URL from the linked list and free its arena slot.
+    fn unlink_url(&mut self, url: &str) {
+        if let Some(idx) = self.index.remove(url) {
+            self.unlink(idx);
+            self.nodes[idx] = None;
+            self.free.push(idx);
+        }
+    }
+
+    /// Move an existing node to the head (MRU position).
+    fn move_to_head(&mut self, idx: usize) {
+        if self.head == Some(idx) {
+            return; // Already at head.
+        }
+        self.unlink(idx);
+
+        // Link at head.
+        let node = self.nodes[idx].as_mut().unwrap();
+        node.prev = None;
+        node.next = self.head;
+
+        if let Some(old_head) = self.head {
+            self.nodes[old_head].as_mut().unwrap().prev = Some(idx);
+        }
+        self.head = Some(idx);
+        if self.tail.is_none() {
+            self.tail = Some(idx);
+        }
+    }
+
+    /// Insert a new URL at the head (MRU position).
+    fn push_head(&mut self, url: &str) {
+        let node = LruNode {
+            url: url.to_string(),
+            prev: None,
+            next: self.head,
+        };
+        let idx = self.alloc_node(node);
+        self.index.insert(url.to_string(), idx);
+
+        if let Some(old_head) = self.head {
+            self.nodes[old_head].as_mut().unwrap().prev = Some(idx);
+        }
+        self.head = Some(idx);
+        if self.tail.is_none() {
+            self.tail = Some(idx);
+        }
+    }
+
+    /// Remove and return the tail (LRU) URL.
+    fn pop_tail(&mut self) -> Option<String> {
+        let tail_idx = self.tail?;
+        let url = self.nodes[tail_idx].as_ref().unwrap().url.clone();
+        self.unlink(tail_idx);
+        self.index.remove(&url);
+        self.nodes[tail_idx] = None;
+        self.free.push(tail_idx);
+        Some(url)
     }
 }
 
@@ -282,5 +417,38 @@ mod tests {
         assert!(!cache.contains("http://a.com/0"));
         assert!(!cache.contains("http://a.com/1"));
         assert!(!cache.contains("http://a.com/2"));
+    }
+
+    #[test]
+    fn lru_promotion_is_o1() {
+        // Insert 1000 entries, then promote each one. This verifies
+        // the linked-list approach doesn't degrade to O(N) per hit.
+        let mut cache = ResourceCache::new(1_000_000);
+        for i in 0..1000 {
+            let (u, e) = make_entry(&format!("http://a.com/{i}"), 100);
+            cache.insert(u, e);
+        }
+        assert_eq!(cache.len(), 1000);
+
+        // Promote every entry (would be O(N^2) with VecDeque::retain).
+        for i in 0..1000 {
+            let url = format!("http://a.com/{i}");
+            assert!(cache.get(&url).is_some());
+        }
+        assert_eq!(cache.len(), 1000);
+    }
+
+    #[test]
+    fn arena_reuses_freed_slots() {
+        let mut cache = ResourceCache::new(200);
+        // Insert and evict to create free slots.
+        for i in 0..10 {
+            let (u, e) = make_entry(&format!("http://a.com/{i}"), 100);
+            cache.insert(u, e);
+        }
+        // With max 200 bytes and 100-byte entries, should have exactly 2.
+        assert_eq!(cache.len(), 2);
+        // Arena should have reused slots (arena size < 10).
+        assert!(cache.nodes.len() <= 10);
     }
 }

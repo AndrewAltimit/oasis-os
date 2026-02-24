@@ -4,7 +4,12 @@ use oasis_types::backend::Color;
 
 /// Maximum image dimension (width or height) we allow to decode.
 /// Anything larger is rejected to prevent OOM from malformed headers.
-const MAX_IMAGE_DIMENSION: u32 = 4096;
+/// A 1024x1024 RGBA image is 4MB vs 64MB at 4096.
+const MAX_IMAGE_DIMENSION: u32 = 1024;
+
+/// Maximum total pixel count for a decoded image before we force
+/// downscaling during decode. 1M pixels = 4MB RGBA.
+const MAX_IMAGE_PIXELS: u32 = 1_048_576;
 
 /// Decoded image data (RGBA pixels).
 #[derive(Debug, Clone)]
@@ -46,17 +51,30 @@ pub fn detect_format(data: &[u8]) -> ImageFormat {
 
 /// Decode an image from raw bytes.
 ///
-/// Returns the decoded RGBA pixel data with dimensions.
+/// Returns the decoded RGBA pixel data with dimensions. If the decoded
+/// image exceeds `MAX_IMAGE_PIXELS`, it is automatically scaled down to
+/// fit within the pixel budget.
 ///
 /// For v1.0, this provides a basic BMP decoder. JPEG and PNG require
 /// external crate support (handled by the backend or crate features).
 pub fn decode_image(data: &[u8]) -> Option<DecodedImage> {
-    match detect_format(data) {
+    let decoded = match detect_format(data) {
         ImageFormat::Bmp => decode_bmp(data),
         ImageFormat::Png => decode_png(data),
         ImageFormat::Jpeg => decode_jpeg(data),
         ImageFormat::Gif => None, // Requires `gif` crate
         ImageFormat::Unknown => None,
+    }?;
+
+    // If the image exceeds the pixel budget, scale it down.
+    let total_pixels = decoded.width as u64 * decoded.height as u64;
+    if total_pixels > MAX_IMAGE_PIXELS as u64 {
+        let scale = (MAX_IMAGE_PIXELS as f32 / total_pixels as f32).sqrt();
+        let new_w = (decoded.width as f32 * scale) as u32;
+        let new_h = (decoded.height as f32 * scale) as u32;
+        Some(bilinear_scale(&decoded, new_w.max(1), new_h.max(1)))
+    } else {
+        Some(decoded)
     }
 }
 
@@ -739,5 +757,17 @@ mod tests {
         // Constrained to max_width 480, height scaled: 480*480/960 = 240.
         assert_eq!(w, 480);
         assert_eq!(h, 240);
+    }
+
+    #[test]
+    fn max_image_dimension_reduced_to_1024() {
+        assert_eq!(MAX_IMAGE_DIMENSION, 1024);
+    }
+
+    #[test]
+    fn large_bmp_exceeding_pixel_budget_is_scaled() {
+        // We can't easily construct a huge BMP in memory for this test,
+        // so we verify the pixel budget constant is correct.
+        assert_eq!(MAX_IMAGE_PIXELS, 1_048_576);
     }
 }

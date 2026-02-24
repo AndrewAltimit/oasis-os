@@ -47,6 +47,7 @@ pub fn update_sdi(state: &mut AppState, sdi: &mut SdiRegistry) {
                 &state.output_lines,
                 &state.cwd,
                 &state.input_buf,
+                state.terminal_scroll_offset,
             );
         },
         Mode::App => {

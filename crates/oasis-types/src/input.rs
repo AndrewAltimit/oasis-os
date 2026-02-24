@@ -30,6 +30,8 @@ pub enum InputEvent {
     FocusGained,
     /// The OS instance lost focus.
     FocusLost,
+    /// Mouse scroll wheel. Positive = scroll down, negative = scroll up.
+    MouseWheel { delta: i32 },
     /// User requested quit (window close, etc.).
     Quit,
 }
@@ -249,6 +251,7 @@ mod tests {
             InputEvent::Backspace,
             InputEvent::PointerClick { x: 0, y: 0 },
             InputEvent::PointerRelease { x: 0, y: 0 },
+            InputEvent::MouseWheel { delta: 1 },
             InputEvent::FocusGained,
             InputEvent::FocusLost,
             InputEvent::Quit,

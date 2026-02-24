@@ -36,11 +36,15 @@ pub enum DrawCall {
 /// A mock backend that records all draw calls for test assertions.
 pub struct MockBackend {
     pub calls: Vec<DrawCall>,
+    next_texture_id: u64,
 }
 
 impl MockBackend {
     pub fn new() -> Self {
-        Self { calls: Vec::new() }
+        Self {
+            calls: Vec::new(),
+            next_texture_id: 1,
+        }
     }
 
     /// Count of `FillRect` calls.
@@ -57,6 +61,23 @@ impl MockBackend {
             .iter()
             .filter(|c| matches!(c, DrawCall::DrawText { .. }))
             .count()
+    }
+
+    /// Count of `Blit` calls (texture draws, e.g. images).
+    pub fn blit_count(&self) -> usize {
+        self.calls
+            .iter()
+            .filter(|c| matches!(c, DrawCall::Blit { .. }))
+            .count()
+    }
+
+    /// Return only the `Blit` entries.
+    #[allow(dead_code)]
+    pub fn blit_calls(&self) -> Vec<&DrawCall> {
+        self.calls
+            .iter()
+            .filter(|c| matches!(c, DrawCall::Blit { .. }))
+            .collect()
     }
 
     /// Return only the `DrawText` entries.
@@ -187,7 +208,9 @@ impl SdiBackend for MockBackend {
     }
 
     fn load_texture(&mut self, _width: u32, _height: u32, _rgba_data: &[u8]) -> Result<TextureId> {
-        Ok(TextureId(0))
+        let id = self.next_texture_id;
+        self.next_texture_id += 1;
+        Ok(TextureId(id))
     }
 
     fn destroy_texture(&mut self, _tex: TextureId) -> Result<()> {

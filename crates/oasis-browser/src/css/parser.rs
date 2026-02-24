@@ -44,6 +44,8 @@ pub enum SimpleSelector {
     PseudoClass(String),
     /// Functional pseudo-class with argument: `:nth-child(2n+1)`.
     PseudoClassFn(String, String),
+    /// Pseudo-element: `::before`, `::after`.
+    PseudoElement(String),
     /// Negation: `:not(selector)`.
     Not(Box<CompoundSelector>),
     /// Attribute selector: `[attr]`, `[attr=val]`, etc.
@@ -145,7 +147,7 @@ impl Selector {
                             }
                         }
                     },
-                    SimpleSelector::Type(_) => {
+                    SimpleSelector::Type(_) | SimpleSelector::PseudoElement(_) => {
                         types = types.saturating_add(1);
                     },
                     SimpleSelector::Universal => {},
@@ -190,6 +192,12 @@ pub enum CssValue {
     Multiple(Vec<CssValue>),
     /// A quoted string value.
     String(String),
+    /// A `var(--name)` or `var(--name, fallback)` reference.
+    Var(String, Option<String>),
+    /// A `url(...)` value.
+    Url(String),
+    /// A parsed `linear-gradient(...)` value.
+    Gradient(crate::css::values::LinearGradient),
 }
 
 /// Supported CSS length units.
@@ -306,9 +314,16 @@ impl CssParser {
             if self.at_eof() {
                 break;
             }
-            // At-rules: consume and discard.
-            if matches!(self.peek(), CssToken::AtKeyword(_)) {
-                self.skip_at_rule();
+            if let CssToken::AtKeyword(ref name) = self.peek().clone() {
+                let lc = name.to_ascii_lowercase();
+                if lc == "media" {
+                    // Parse @media rules and include matching ones.
+                    let media_rules = self.parse_media_rule();
+                    rules.extend(media_rules);
+                } else {
+                    // Other at-rules: skip.
+                    self.skip_at_rule();
+                }
                 continue;
             }
             match self.try_parse_rule() {
@@ -348,6 +363,71 @@ impl CssParser {
                     self.advance();
                 },
             }
+        }
+    }
+
+    /// Parse an `@media` rule. Evaluates the media query against the
+    /// OASIS viewport (480x272, screen). If it matches, the inner rules
+    /// are returned; otherwise they are discarded.
+    fn parse_media_rule(&mut self) -> Vec<Rule> {
+        self.advance(); // consume @media token
+        self.skip_whitespace();
+
+        // Collect the media query condition tokens up to the opening brace.
+        let mut condition = String::new();
+        loop {
+            match self.peek() {
+                CssToken::OpenBrace | CssToken::Eof => break,
+                _ => {
+                    let tok = self.peek().clone();
+                    self.advance();
+                    match tok {
+                        CssToken::Ident(s) => condition.push_str(&s),
+                        CssToken::Number(n) => condition.push_str(&format!("{n}")),
+                        CssToken::Dimension(n, unit) => {
+                            condition.push_str(&format!("{n}{unit}"));
+                        },
+                        CssToken::Whitespace => condition.push(' '),
+                        CssToken::OpenParen => condition.push('('),
+                        CssToken::CloseParen => condition.push(')'),
+                        CssToken::Colon => condition.push(':'),
+                        CssToken::Comma => condition.push(','),
+                        CssToken::Delim(c) => condition.push(c),
+                        _ => {},
+                    }
+                },
+            }
+        }
+
+        // Consume the opening brace.
+        if !self.expect(&CssToken::OpenBrace) {
+            return Vec::new();
+        }
+
+        // Parse inner rules.
+        let mut inner_rules = Vec::new();
+        loop {
+            self.skip_whitespace();
+            if self.at_eof() || self.peek() == &CssToken::CloseBrace {
+                break;
+            }
+            if matches!(self.peek(), CssToken::AtKeyword(_)) {
+                self.skip_at_rule();
+                continue;
+            }
+            if let Some(rule) = self.try_parse_rule() {
+                inner_rules.push(rule);
+            } else {
+                self.advance();
+            }
+        }
+        self.expect(&CssToken::CloseBrace);
+
+        // Evaluate the media condition.
+        if eval_media_query(&condition) {
+            inner_rules
+        } else {
+            Vec::new()
         }
     }
 
@@ -500,10 +580,26 @@ impl CssParser {
                 },
                 CssToken::Colon => {
                     self.advance();
+                    // Check for double-colon `::` pseudo-element.
+                    if self.peek() == &CssToken::Colon {
+                        self.advance();
+                        if let CssToken::Ident(name) = self.peek().clone() {
+                            self.advance();
+                            let lc = name.to_ascii_lowercase();
+                            parts.push(SimpleSelector::PseudoElement(lc));
+                        }
+                        continue;
+                    }
                     match self.peek().clone() {
                         CssToken::Ident(name) => {
                             self.advance();
-                            parts.push(SimpleSelector::PseudoClass(name));
+                            // Legacy single-colon pseudo-elements.
+                            let lc = name.to_ascii_lowercase();
+                            if lc == "before" || lc == "after" {
+                                parts.push(SimpleSelector::PseudoElement(lc));
+                            } else {
+                                parts.push(SimpleSelector::PseudoClass(name));
+                            }
                         },
                         CssToken::Function(name) => {
                             self.advance();
@@ -743,7 +839,12 @@ impl CssParser {
         } else {
             raw_values
         };
-        let value = self.parse_value(&property, &values);
+        // Custom properties (--*) store value as raw CSS text.
+        let value = if property.starts_with("--") {
+            CssValue::String(tokens_to_css_text(&values))
+        } else {
+            self.parse_value(&property, &values)
+        };
         // Consume trailing semicolon if present.
         self.skip_whitespace();
         if self.peek() == &CssToken::Semicolon {
@@ -854,7 +955,7 @@ impl CssParser {
 // Value parsing helpers
 // -------------------------------------------------------------------
 
-fn parse_value_list(tokens: &[CssToken]) -> Vec<CssValue> {
+pub(crate) fn parse_value_list(tokens: &[CssToken]) -> Vec<CssValue> {
     let mut out = Vec::new();
     let mut i = 0;
     while i < tokens.len() {
@@ -894,15 +995,66 @@ fn parse_value_list(tokens: &[CssToken]) -> Vec<CssValue> {
                 i += 1;
                 while i < tokens.len() && depth > 0 {
                     match &tokens[i] {
-                        CssToken::OpenParen => depth += 1,
+                        CssToken::OpenParen | CssToken::Function(_) => depth += 1,
                         CssToken::CloseParen => depth -= 1,
                         _ => {},
                     }
                     i += 1;
                 }
                 let inner = &tokens[start..i];
-                if let Some(c) = try_parse_color(inner) {
+                if name.eq_ignore_ascii_case("var") {
+                    // Parse var(--name) or var(--name, fallback).
+                    let args = &inner[1..]; // skip Function token
+                    let args = match args.last() {
+                        Some(CssToken::CloseParen) => &args[..args.len() - 1],
+                        _ => args,
+                    };
+                    let mut prop_name = None;
+                    let mut comma_pos = None;
+                    for (j, tok) in args.iter().enumerate() {
+                        match tok {
+                            CssToken::Ident(id) if prop_name.is_none() => {
+                                if id.starts_with("--") {
+                                    prop_name = Some(id.to_ascii_lowercase());
+                                }
+                            },
+                            CssToken::Comma if prop_name.is_some() && comma_pos.is_none() => {
+                                comma_pos = Some(j);
+                            },
+                            _ => {},
+                        }
+                    }
+                    if let Some(pname) = prop_name {
+                        let fallback = comma_pos.map(|cp| tokens_to_css_text(&args[cp + 1..]));
+                        out.push(CssValue::Var(pname, fallback));
+                    } else {
+                        out.push(CssValue::Keyword("var()".into()));
+                    }
+                } else if name.eq_ignore_ascii_case("url") {
+                    // Parse url(...) function.
+                    let args = &inner[1..]; // skip Function token
+                    let args = match args.last() {
+                        Some(CssToken::CloseParen) => &args[..args.len() - 1],
+                        _ => args,
+                    };
+                    let url_str = args
+                        .iter()
+                        .filter_map(|t| match t {
+                            CssToken::String(s) => Some(s.as_str()),
+                            CssToken::Ident(s) => Some(s.as_str()),
+                            _ => None,
+                        })
+                        .collect::<Vec<_>>()
+                        .join("");
+                    out.push(CssValue::Url(url_str));
+                } else if let Some(c) = try_parse_color(inner) {
                     out.push(CssValue::Color(c));
+                } else if name.eq_ignore_ascii_case("linear-gradient") {
+                    if let Some(grad) = parse_linear_gradient(inner) {
+                        out.push(CssValue::Gradient(grad));
+                    } else {
+                        out.push(CssValue::Keyword(format!("{}()", name)));
+                    }
                 } else {
                     out.push(CssValue::Keyword(format!("{}()", name)));
                 }
@@ -1088,7 +1240,7 @@ fn parse_rgb_function(tokens: &[&CssToken]) -> Option<CssColor> {
     }
 }
 
-fn named_color(name: &str) -> Option<CssColor> {
+pub(crate) fn named_color(name: &str) -> Option<CssColor> {
     match name.to_ascii_lowercase().as_str() {
         "black" => Some(CssColor::new(0, 0, 0, 255)),
         "white" => Some(CssColor::new(255, 255, 255, 255)),
@@ -1117,6 +1269,148 @@ fn named_color(name: &str) -> Option<CssColor> {
 }
 
 // -------------------------------------------------------------------
+// Media query evaluation
+// -------------------------------------------------------------------
+
+/// Evaluate a simplified media query against the OASIS viewport.
+///
+/// Supports: `screen`, `all`, `not print`, `(max-width: Xpx)`,
+/// `(min-width: Xpx)`, and comma-separated alternatives.
+/// The viewport is hardcoded to 480x272 (PSP native resolution).
+fn eval_media_query(query: &str) -> bool {
+    const VIEWPORT_WIDTH: f32 = 480.0;
+
+    let query = query.trim();
+    if query.is_empty() {
+        return true;
+    }
+
+    // Comma-separated: any match means true.
+    for part in query.split(',') {
+        if eval_single_media_query(part.trim(), VIEWPORT_WIDTH) {
+            return true;
+        }
+    }
+    false
+}
+
+fn eval_single_media_query(query: &str, viewport_width: f32) -> bool {
+    let query = query.trim();
+    if query.is_empty() || query == "all" || query == "screen" {
+        return true;
+    }
+    if query == "print" || query == "not screen" {
+        return false;
+    }
+    if let Some(rest) = query.strip_prefix("not ") {
+        return !eval_single_media_query(rest, viewport_width);
+    }
+    // Handle compound conditions like "screen and (max-width: 600px)".
+    // Split on " and " and evaluate each part.
+    let parts: Vec<&str> = query.split(" and ").collect();
+    for part in &parts {
+        let p = part.trim();
+        // "only" is a CSS3 modifier for backwards compat; strip it.
+        let p = p.strip_prefix("only ").unwrap_or(p);
+        if p == "screen" || p == "all" || p.is_empty() {
+            continue;
+        }
+        if p == "print" {
+            return false;
+        }
+        // Parenthesized feature: (max-width: 600px), (min-width: 320px)
+        let inner = p.trim_start_matches('(').trim_end_matches(')').trim();
+        if let Some(rest) = inner.strip_prefix("max-width:") {
+            let px = parse_px_value(rest.trim());
+            if viewport_width > px {
+                return false;
+            }
+        } else if let Some(rest) = inner.strip_prefix("min-width:") {
+            let px = parse_px_value(rest.trim());
+            if viewport_width < px {
+                return false;
+            }
+        } else if let Some(rest) = inner.strip_prefix("prefers-color-scheme:") {
+            // We always use light mode.
+            if rest.trim() != "light" {
+                return false;
+            }
+        } else {
+            // Unknown features: treat as NOT matching (safe default).
+            return false;
+        }
+    }
+    true
+}
+
+/// Parse a pixel value like "600px" or "600" from a media query.
+fn parse_px_value(s: &str) -> f32 {
+    let s = s.trim().trim_end_matches("px");
+    s.parse::<f32>().unwrap_or(0.0)
+}
+
+// -------------------------------------------------------------------
+// CSS text reconstruction
+// -------------------------------------------------------------------
+
+/// Reconstruct CSS text from a token stream.
+///
+/// Used to store custom property values and `var()` fallback text as
+/// raw strings that can be re-tokenized later during cascade resolution.
+fn tokens_to_css_text(tokens: &[CssToken]) -> String {
+    let mut out = String::new();
+    for tok in tokens {
+        match tok {
+            CssToken::Ident(s) => out.push_str(s),
+            CssToken::Hash(s) => {
+                out.push('#');
+                out.push_str(s);
+            },
+            CssToken::String(s) => {
+                out.push('"');
+                out.push_str(s);
+                out.push('"');
+            },
+            CssToken::Number(n) => out.push_str(&format!("{n}")),
+            CssToken::Percentage(n) => {
+                out.push_str(&format!("{n}"));
+                out.push('%');
+            },
+            CssToken::Dimension(n, u) => {
+                out.push_str(&format!("{n}"));
+                out.push_str(u);
+            },
+            CssToken::Colon => out.push(':'),
+            CssToken::Semicolon => out.push(';'),
+            CssToken::Comma => out.push(','),
+            CssToken::OpenBrace => out.push('{'),
+            CssToken::CloseBrace => out.push('}'),
+            CssToken::OpenParen => out.push('('),
+            CssToken::CloseParen => out.push(')'),
+            CssToken::OpenBracket => out.push('['),
+            CssToken::CloseBracket => out.push(']'),
+            CssToken::Dot => out.push('.'),
+            CssToken::Greater => out.push('>'),
+            CssToken::Plus => out.push('+'),
+            CssToken::Star => out.push('*'),
+            CssToken::Slash => out.push('/'),
+            CssToken::Delim(c) => out.push(*c),
+            CssToken::Whitespace => out.push(' '),
+            CssToken::AtKeyword(s) => {
+                out.push('@');
+                out.push_str(s);
+            },
+            CssToken::Function(s) => {
+                out.push_str(s);
+                out.push('(');
+            },
+            CssToken::Eof => {},
+        }
+    }
+    out.trim().to_string()
+}
+
+// -------------------------------------------------------------------
 // Shorthand expansion
 // -------------------------------------------------------------------
 
@@ -1133,8 +1427,161 @@ fn expand_shorthands(decls: Vec<Declaration>) -> Vec<Declaration> {
             "border" => {
                 out.extend(expand_border(&decl.value, decl.important));
             },
+            "border-top" | "border-right" | "border-bottom" | "border-left" => {
+                out.extend(expand_border_side(
+                    &decl.property,
+                    &decl.value,
+                    decl.important,
+                ));
+            },
             "background" => {
                 out.extend(expand_background(&decl.value, decl.important));
+            },
+            "list-style" => {
+                out.extend(expand_list_style(&decl.value, decl.important));
+            },
+            "border-width" => {
+                let vals = match &decl.value {
+                    CssValue::Multiple(vs) => vs.clone(),
+                    other => vec![other.clone()],
+                };
+                let (t, r, b, l) = match vals.len() {
+                    1 => (
+                        vals[0].clone(),
+                        vals[0].clone(),
+                        vals[0].clone(),
+                        vals[0].clone(),
+                    ),
+                    2 => (
+                        vals[0].clone(),
+                        vals[1].clone(),
+                        vals[0].clone(),
+                        vals[1].clone(),
+                    ),
+                    3 => (
+                        vals[0].clone(),
+                        vals[1].clone(),
+                        vals[2].clone(),
+                        vals[1].clone(),
+                    ),
+                    _ => (
+                        vals[0].clone(),
+                        vals.get(1).cloned().unwrap_or(vals[0].clone()),
+                        vals.get(2).cloned().unwrap_or(vals[0].clone()),
+                        vals.get(3).cloned().unwrap_or(vals[0].clone()),
+                    ),
+                };
+                for (prop, val) in [
+                    ("border-top-width", t),
+                    ("border-right-width", r),
+                    ("border-bottom-width", b),
+                    ("border-left-width", l),
+                ] {
+                    out.push(Declaration {
+                        property: prop.into(),
+                        value: val,
+                        important: decl.important,
+                    });
+                }
+            },
+            "border-style" => {
+                let vals = match &decl.value {
+                    CssValue::Multiple(vs) => vs.clone(),
+                    other => vec![other.clone()],
+                };
+                let (t, r, b, l) = match vals.len() {
+                    1 => (
+                        vals[0].clone(),
+                        vals[0].clone(),
+                        vals[0].clone(),
+                        vals[0].clone(),
+                    ),
+                    2 => (
+                        vals[0].clone(),
+                        vals[1].clone(),
+                        vals[0].clone(),
+                        vals[1].clone(),
+                    ),
+                    3 => (
+                        vals[0].clone(),
+                        vals[1].clone(),
+                        vals[2].clone(),
+                        vals[1].clone(),
+                    ),
+                    _ => (
+                        vals[0].clone(),
+                        vals.get(1).cloned().unwrap_or(vals[0].clone()),
+                        vals.get(2).cloned().unwrap_or(vals[0].clone()),
+                        vals.get(3).cloned().unwrap_or(vals[0].clone()),
+                    ),
+                };
+                for (prop, val) in [
+                    ("border-top-style", t),
+                    ("border-right-style", r),
+                    ("border-bottom-style", b),
+                    ("border-left-style", l),
+                ] {
+                    out.push(Declaration {
+                        property: prop.into(),
+                        value: val,
+                        important: decl.important,
+                    });
+                }
+            },
+            "border-color" => {
+                let vals = match &decl.value {
+                    CssValue::Multiple(vs) => vs.clone(),
+                    other => vec![other.clone()],
+                };
+                let (t, r, b, l) = match vals.len() {
+                    1 => (
+                        vals[0].clone(),
+                        vals[0].clone(),
+                        vals[0].clone(),
+                        vals[0].clone(),
+                    ),
+                    2 => (
+                        vals[0].clone(),
+                        vals[1].clone(),
+                        vals[0].clone(),
+                        vals[1].clone(),
+                    ),
+                    3 => (
+                        vals[0].clone(),
+                        vals[1].clone(),
+                        vals[2].clone(),
+                        vals[1].clone(),
+                    ),
+                    _ => (
+                        vals[0].clone(),
+                        vals.get(1).cloned().unwrap_or(vals[0].clone()),
+                        vals.get(2).cloned().unwrap_or(vals[0].clone()),
+                        vals.get(3).cloned().unwrap_or(vals[0].clone()),
+                    ),
+                };
+                for (prop, val) in [
+                    ("border-top-color", t),
+                    ("border-right-color", r),
+                    ("border-bottom-color", b),
+                    ("border-left-color", l),
+                ] {
+                    out.push(Declaration {
+                        property: prop.into(),
+                        value: val,
+                        important: decl.important,
+                    });
+                }
+            },
+            "flex" => {
+                out.extend(expand_flex(&decl.value, decl.important));
+            },
+            "font" => {
+                out.extend(expand_font(&decl.value, decl.important));
+            },
+            "overflow" => {
+                // `overflow` shorthand sets both overflow-x and overflow-y.
+                // We only support a single overflow property, so just pass through.
+                out.push(decl);
             },
             _ => out.push(decl),
         }
@@ -1225,6 +1672,10 @@ fn expand_border(value: &CssValue, important: bool) -> Vec<Declaration> {
                     style = v.clone();
                 }
             },
+            CssValue::Var(..) => {
+                // Unresolved var() -- most likely a color reference.
+                color = v.clone();
+            },
             _ => {},
         }
     }
@@ -1242,6 +1693,57 @@ fn expand_border(value: &CssValue, important: bool) -> Vec<Declaration> {
         },
         Declaration {
             property: "border-color".into(),
+            value: color,
+            important,
+        },
+    ]
+}
+
+/// Expand `border-top`, `border-right`, `border-bottom`, `border-left`
+/// shorthands into their `*-width`, `*-style`, `*-color` longhands.
+fn expand_border_side(property: &str, value: &CssValue, important: bool) -> Vec<Declaration> {
+    let values = match value {
+        CssValue::Multiple(vs) => vs.clone(),
+        other => vec![other.clone()],
+    };
+
+    let mut width = CssValue::Keyword("medium".into());
+    let mut style = CssValue::Keyword("none".into());
+    let mut color = CssValue::Keyword("currentcolor".into());
+
+    for v in &values {
+        match v {
+            CssValue::Length(..) | CssValue::Number(_) => width = v.clone(),
+            CssValue::Color(_) => color = v.clone(),
+            CssValue::Keyword(kw) => {
+                let lower = kw.to_ascii_lowercase();
+                if is_border_style(&lower) {
+                    style = v.clone();
+                } else if let Some(c) = named_color(&lower) {
+                    color = CssValue::Color(c);
+                } else {
+                    color = v.clone();
+                }
+            },
+            CssValue::Var(..) => color = v.clone(),
+            _ => {},
+        }
+    }
+
+    // side = "border-top" → prefix for longhands: "border-top-width", etc.
+    vec![
+        Declaration {
+            property: format!("{property}-width"),
+            value: width,
+            important,
+        },
+        Declaration {
+            property: format!("{property}-style"),
+            value: style,
+            important,
+        },
+        Declaration {
+            property: format!("{property}-color"),
             value: color,
             important,
         },
@@ -1266,8 +1768,16 @@ fn is_border_style(s: &str) -> bool {
 
 fn expand_background(value: &CssValue, important: bool) -> Vec<Declaration> {
     // Simple heuristic: if the value is a color, set background-color.
+    // If the value is a url(), set background-image.
     match value {
-        CssValue::Color(_) => {
+        CssValue::Url(_) | CssValue::Gradient(_) => {
+            vec![Declaration {
+                property: "background-image".into(),
+                value: value.clone(),
+                important,
+            }]
+        },
+        CssValue::Color(_) | CssValue::Var(..) => {
             vec![Declaration {
                 property: "background-color".into(),
                 value: value.clone(),
@@ -1275,24 +1785,39 @@ fn expand_background(value: &CssValue, important: bool) -> Vec<Declaration> {
             }]
         },
         CssValue::Multiple(vs) => {
-            // If any value is a colour, use it.
+            let mut decls = Vec::new();
             for v in vs {
-                if matches!(v, CssValue::Color(_)) {
-                    return vec![Declaration {
+                if matches!(v, CssValue::Url(_) | CssValue::Gradient(_)) {
+                    decls.push(Declaration {
+                        property: "background-image".into(),
+                        value: v.clone(),
+                        important,
+                    });
+                } else if matches!(v, CssValue::Color(_) | CssValue::Var(..)) {
+                    decls.push(Declaration {
                         property: "background-color".into(),
                         value: v.clone(),
                         important,
-                    }];
+                    });
                 }
             }
-            vec![Declaration {
-                property: "background".into(),
-                value: value.clone(),
-                important,
-            }]
+            if decls.is_empty() {
+                decls.push(Declaration {
+                    property: "background".into(),
+                    value: value.clone(),
+                    important,
+                });
+            }
+            decls
         },
         CssValue::Keyword(name) => {
-            if let Some(c) = named_color(name) {
+            if name.eq_ignore_ascii_case("transparent") || name.eq_ignore_ascii_case("none") {
+                vec![Declaration {
+                    property: "background-color".into(),
+                    value: CssValue::Color(CssColor::new(0, 0, 0, 0)),
+                    important,
+                }]
+            } else if let Some(c) = named_color(name) {
                 vec![Declaration {
                     property: "background-color".into(),
                     value: CssValue::Color(c),
@@ -1314,6 +1839,328 @@ fn expand_background(value: &CssValue, important: bool) -> Vec<Declaration> {
             }]
         },
     }
+}
+
+fn expand_list_style(value: &CssValue, important: bool) -> Vec<Declaration> {
+    let values = match value {
+        CssValue::Multiple(vs) => vs.clone(),
+        other => vec![other.clone()],
+    };
+
+    let mut result = Vec::new();
+    for v in &values {
+        if let CssValue::Keyword(kw) = v {
+            let kw_lower = kw.to_ascii_lowercase();
+            match kw_lower.as_str() {
+                "none"
+                | "disc"
+                | "circle"
+                | "square"
+                | "decimal"
+                | "decimal-leading-zero"
+                | "lower-roman"
+                | "upper-roman"
+                | "lower-alpha"
+                | "upper-alpha"
+                | "lower-latin"
+                | "upper-latin" => {
+                    result.push(Declaration {
+                        property: "list-style-type".into(),
+                        value: CssValue::Keyword(kw_lower),
+                        important,
+                    });
+                },
+                "inside" | "outside" => {
+                    result.push(Declaration {
+                        property: "list-style-position".into(),
+                        value: CssValue::Keyword(kw_lower),
+                        important,
+                    });
+                },
+                _ => {},
+            }
+        }
+    }
+
+    // If "none" was the only value, also reset list-style-type.
+    if result.is_empty() {
+        result.push(Declaration {
+            property: "list-style-type".into(),
+            value: CssValue::Keyword("none".into()),
+            important,
+        });
+    }
+
+    result
+}
+
+fn expand_flex(value: &CssValue, important: bool) -> Vec<Declaration> {
+    let values = match value {
+        CssValue::Multiple(vs) => vs.clone(),
+        other => vec![other.clone()],
+    };
+
+    match values.len() {
+        1 => match &values[0] {
+            CssValue::Keyword(kw) if kw == "none" => {
+                vec![
+                    Declaration {
+                        property: "flex-grow".into(),
+                        value: CssValue::Number(0.0),
+                        important,
+                    },
+                    Declaration {
+                        property: "flex-shrink".into(),
+                        value: CssValue::Number(0.0),
+                        important,
+                    },
+                    Declaration {
+                        property: "flex-basis".into(),
+                        value: CssValue::Keyword("auto".into()),
+                        important,
+                    },
+                ]
+            },
+            CssValue::Number(n) => {
+                vec![
+                    Declaration {
+                        property: "flex-grow".into(),
+                        value: CssValue::Number(*n),
+                        important,
+                    },
+                    Declaration {
+                        property: "flex-shrink".into(),
+                        value: CssValue::Number(1.0),
+                        important,
+                    },
+                    Declaration {
+                        property: "flex-basis".into(),
+                        value: CssValue::Length(0.0, LengthUnit::Px),
+                        important,
+                    },
+                ]
+            },
+            _ => vec![Declaration {
+                property: "flex".into(),
+                value: value.clone(),
+                important,
+            }],
+        },
+        _ => vec![Declaration {
+            property: "flex".into(),
+            value: value.clone(),
+            important,
+        }],
+    }
+}
+
+fn expand_font(value: &CssValue, important: bool) -> Vec<Declaration> {
+    let values = match value {
+        CssValue::Multiple(vs) => vs.clone(),
+        other => vec![other.clone()],
+    };
+
+    let mut result = Vec::new();
+
+    for v in &values {
+        match v {
+            CssValue::Length(_, _) | CssValue::Percentage(_) => {
+                // This is likely the font-size.
+                result.push(Declaration {
+                    property: "font-size".into(),
+                    value: v.clone(),
+                    important,
+                });
+            },
+            CssValue::Number(n) if *n > 0.0 => {
+                // Could be line-height if we already have font-size, or font-weight.
+                if result.iter().any(|d| d.property == "font-size") {
+                    result.push(Declaration {
+                        property: "line-height".into(),
+                        value: v.clone(),
+                        important,
+                    });
+                } else if *n >= 100.0 {
+                    result.push(Declaration {
+                        property: "font-weight".into(),
+                        value: v.clone(),
+                        important,
+                    });
+                }
+            },
+            CssValue::Keyword(kw) => {
+                let kw_lower = kw.to_ascii_lowercase();
+                match kw_lower.as_str() {
+                    "bold" => {
+                        result.push(Declaration {
+                            property: "font-weight".into(),
+                            value: CssValue::Keyword("bold".into()),
+                            important,
+                        });
+                    },
+                    "normal" => {
+                        // Could be font-weight or font-style — skip ambiguous.
+                    },
+                    "italic" | "oblique" => {
+                        result.push(Declaration {
+                            property: "font-style".into(),
+                            value: CssValue::Keyword(kw_lower),
+                            important,
+                        });
+                    },
+                    "serif" | "sans-serif" | "monospace" | "cursive" | "fantasy" => {
+                        result.push(Declaration {
+                            property: "font-family".into(),
+                            value: CssValue::Keyword(kw_lower),
+                            important,
+                        });
+                    },
+                    _ => {},
+                }
+            },
+            _ => {},
+        }
+    }
+
+    if result.is_empty() {
+        // Pass through as-is if we couldn't extract anything.
+        result.push(Declaration {
+            property: "font".into(),
+            value: value.clone(),
+            important,
+        });
+    }
+
+    result
+}
+
+// -------------------------------------------------------------------
+// Linear gradient parser
+// -------------------------------------------------------------------
+
+/// Parse the inner tokens of a `linear-gradient(...)` function call.
+///
+/// Supports:
+/// - Direction keywords: `to top`, `to right`, `to bottom`, `to left`
+/// - Angle values: `180deg`, `0.5turn`
+/// - Color stops with optional positions: `red 0%`, `#fff 50%`, `blue`
+fn parse_linear_gradient(inner_tokens: &[CssToken]) -> Option<crate::css::values::LinearGradient> {
+    use crate::css::values::{GradientStop, LinearGradient};
+
+    // Skip the Function token and trailing CloseParen.
+    let args = match inner_tokens.first() {
+        Some(CssToken::Function(_)) => &inner_tokens[1..],
+        _ => inner_tokens,
+    };
+    let args = match args.last() {
+        Some(CssToken::CloseParen) => &args[..args.len() - 1],
+        _ => args,
+    };
+
+    // Split by commas into argument groups.
+    let mut groups: Vec<Vec<&CssToken>> = Vec::new();
+    let mut current: Vec<&CssToken> = Vec::new();
+    for tok in args {
+        if matches!(tok, CssToken::Comma) {
+            if !current.is_empty() {
+                groups.push(std::mem::take(&mut current));
+            }
+        } else if !matches!(tok, CssToken::Whitespace) {
+            current.push(tok);
+        }
+    }
+    if !current.is_empty() {
+        groups.push(current);
+    }
+
+    if groups.len() < 2 {
+        return None;
+    }
+
+    // Try to parse direction from first group.
+    let (direction, color_start) = parse_gradient_direction(&groups[0]);
+    let color_groups = &groups[color_start..];
+
+    if color_groups.len() < 2 {
+        return None;
+    }
+
+    // Parse color stops.
+    let mut stops = Vec::new();
+    for (i, group) in color_groups.iter().enumerate() {
+        let (color, position) = parse_gradient_stop(group)?;
+        let pos = position.unwrap_or_else(|| {
+            if color_groups.len() <= 1 {
+                0.0
+            } else {
+                i as f32 / (color_groups.len() - 1) as f32
+            }
+        });
+        stops.push(GradientStop {
+            color: oasis_types::backend::Color::rgba(color.r, color.g, color.b, color.a),
+            position: pos,
+        });
+    }
+
+    Some(LinearGradient { direction, stops })
+}
+
+fn parse_gradient_direction(group: &[&CssToken]) -> (crate::css::values::GradientDirection, usize) {
+    use crate::css::values::GradientDirection;
+
+    // Check for "to <side>" keyword.
+    if group.len() >= 2
+        && let CssToken::Ident(first) = group[0]
+        && first.eq_ignore_ascii_case("to")
+        && let CssToken::Ident(side) = group[1]
+    {
+        let dir = match side.to_ascii_lowercase().as_str() {
+            "top" => GradientDirection::ToTop,
+            "right" => GradientDirection::ToRight,
+            "bottom" => GradientDirection::ToBottom,
+            "left" => GradientDirection::ToLeft,
+            _ => return (GradientDirection::ToBottom, 0),
+        };
+        return (dir, 1); // skip first group (direction)
+    }
+
+    // Check for angle value (e.g. "180deg", "0.5turn").
+    if group.len() == 1
+        && let CssToken::Dimension(val, unit) = group[0]
+    {
+        let angle = match unit.to_ascii_lowercase().as_str() {
+            "deg" => *val,
+            "rad" => val * 180.0 / std::f32::consts::PI,
+            "turn" => val * 360.0,
+            "grad" => val * 0.9,
+            _ => return (GradientDirection::ToBottom, 0),
+        };
+        return (GradientDirection::Angle(angle), 1);
+    }
+
+    // Default direction: to bottom.
+    (GradientDirection::ToBottom, 0)
+}
+
+fn parse_gradient_stop(group: &[&CssToken]) -> Option<(CssColor, Option<f32>)> {
+    // Try to parse the color from the tokens.
+    let color_tokens: Vec<CssToken> = group.iter().map(|t| (*t).clone()).collect();
+
+    // Try to get color from first token(s).
+    let color = try_parse_color(&color_tokens)?;
+
+    // Check for position (percentage or length) in remaining tokens.
+    let position = group.iter().find_map(|tok| match tok {
+        CssToken::Percentage(p) => Some(*p / 100.0),
+        CssToken::Dimension(v, unit) if unit.eq_ignore_ascii_case("px") => {
+            // Position in px — can't resolve without knowing box size,
+            // treat as percentage of a typical box (approximate).
+            Some((*v / 100.0).clamp(0.0, 1.0))
+        },
+        _ => None,
+    });
+
+    Some((color, position))
 }
 
 // -------------------------------------------------------------------
@@ -1756,12 +2603,37 @@ mod tests {
     }
 
     #[test]
-    fn at_media_skipped() {
+    fn at_media_screen_parsed() {
         let sheet = parse(
             "@media screen { body { color: red; } } \
              p { color: blue; }",
         );
+        // @media screen matches, so body rule is included alongside p rule.
+        assert_eq!(sheet.rules.len(), 2);
+    }
+
+    #[test]
+    fn at_media_print_skipped() {
+        let sheet = parse(
+            "@media print { body { color: red; } } \
+             p { color: blue; }",
+        );
+        // @media print does not match screen, so only p rule remains.
         assert_eq!(sheet.rules.len(), 1);
+    }
+
+    #[test]
+    fn at_media_max_width_match() {
+        // 480 <= 600, so this should match.
+        let sheet = parse("@media (max-width: 600px) { p { color: red; } }");
+        assert_eq!(sheet.rules.len(), 1);
+    }
+
+    #[test]
+    fn at_media_max_width_no_match() {
+        // 480 > 320, so this should NOT match.
+        let sheet = parse("@media (max-width: 320px) { p { color: red; } }");
+        assert_eq!(sheet.rules.len(), 0);
     }
 
     // -- pseudo-class ------------------------------------------------
@@ -1890,8 +2762,8 @@ mod tests {
     #[test]
     fn at_media_rule() {
         let sheet = parse("@media screen { p { color: red; } }");
-        // We don't support @media but it should not crash.
-        let _ = sheet;
+        // @media screen matches, inner rules are extracted.
+        assert_eq!(sheet.rules.len(), 1);
     }
 
     #[test]
@@ -1951,7 +2823,8 @@ mod tests {
     #[test]
     fn color_hex_values() {
         let sheet = parse("p { color: #fff; background: #aabbcc; border-color: #12345678; }");
-        assert_eq!(sheet.rules[0].declarations.len(), 3);
+        // border-color is expanded into 4 longhand properties.
+        assert_eq!(sheet.rules[0].declarations.len(), 6);
     }
 
     #[test]
@@ -1959,6 +2832,96 @@ mod tests {
         let sheet = parse("p { color: red; } garbage here");
         // The first rule should still parse.
         assert!(!sheet.rules.is_empty());
+    }
+
+    // -- CSS custom properties / var() parsing tests ----------------------
+
+    #[test]
+    fn var_function_parsed() {
+        let decls = first_decls("p { color: var(--my-color); }");
+        assert_eq!(decls[0].property, "color");
+        assert_eq!(decls[0].value, CssValue::Var("--my-color".into(), None));
+    }
+
+    #[test]
+    fn var_function_with_fallback() {
+        let decls = first_decls("p { color: var(--my-color, blue); }");
+        assert_eq!(
+            decls[0].value,
+            CssValue::Var("--my-color".into(), Some("blue".into()))
+        );
+    }
+
+    #[test]
+    fn var_function_with_hex_fallback() {
+        let decls = first_decls("p { color: var(--my-color, #202122); }");
+        assert_eq!(
+            decls[0].value,
+            CssValue::Var("--my-color".into(), Some("#202122".into()))
+        );
+    }
+
+    #[test]
+    fn custom_property_stored_as_raw_text() {
+        let decls = first_decls(":root { --color: #202122; }");
+        assert_eq!(decls[0].property, "--color");
+        assert_eq!(decls[0].value, CssValue::String("#202122".into()));
+    }
+
+    #[test]
+    fn custom_property_complex_value() {
+        let decls = first_decls(":root { --border: 1px solid red; }");
+        assert_eq!(decls[0].property, "--border");
+        assert_eq!(decls[0].value, CssValue::String("1px solid red".into()));
+    }
+
+    #[test]
+    fn var_in_multiple_value_property() {
+        let decls = first_decls("p { border: 1px solid var(--color); }");
+        // The border shorthand should expand, and var() should end up
+        // in border-color.
+        let bc = decls.iter().find(|d| d.property == "border-color");
+        assert!(bc.is_some(), "border-color should exist");
+        assert!(
+            matches!(&bc.unwrap().value, CssValue::Var(name, None) if name == "--color"),
+            "border-color should be var(--color)"
+        );
+    }
+
+    #[test]
+    fn linear_gradient_to_right() {
+        let css = "div { background: linear-gradient(to right, red, blue); }";
+        let sheet = parse(css);
+        let decls = &sheet.rules[0].declarations;
+        let bg_image = decls
+            .iter()
+            .find(|d| d.property == "background-image")
+            .expect("should have background-image");
+        assert!(
+            matches!(&bg_image.value, CssValue::Gradient(_)),
+            "should parse as gradient"
+        );
+        if let CssValue::Gradient(ref g) = bg_image.value {
+            assert_eq!(g.direction, crate::css::values::GradientDirection::ToRight);
+            assert_eq!(g.stops.len(), 2);
+        }
+    }
+
+    #[test]
+    fn linear_gradient_default_direction() {
+        let css = "div { background-image: linear-gradient(red, blue); }";
+        let sheet = parse(css);
+        let decls = &sheet.rules[0].declarations;
+        let bg_image = decls
+            .iter()
+            .find(|d| d.property == "background-image")
+            .expect("should have background-image");
+        if let CssValue::Gradient(ref g) = bg_image.value {
+            assert_eq!(g.direction, crate::css::values::GradientDirection::ToBottom);
+            assert_eq!(g.stops.len(), 2);
+        } else {
+            panic!("expected gradient");
+        }
     }
 
     mod prop {
