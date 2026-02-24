@@ -1137,7 +1137,10 @@ impl OasisWasm {
             _ => String::new(),
         };
 
-        self.process_command_output(result);
+        let pending_skin_swap = self.process_command_output(result);
+        if let Some(name) = pending_skin_swap {
+            self.apply_skin_swap(&name);
+        }
         trim_output(&mut self.output_lines);
         output
     }
