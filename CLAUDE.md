@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 OASIS_OS is an embeddable operating system framework in Rust (edition 2024). It provides a skinnable shell with a scene-graph UI, command interpreter, virtual file system, browser engine (HTML/CSS/Gemini), plugin system, and remote terminal. It renders to any pixel buffer + input stream. Originally ported from a PSP homebrew shell (2006-2008). Eight skins are implemented (2 external TOML skins, 7 built-in; xp exists in both forms).
 
-Native virtual resolution is 480x272 (PSP native) across all backends.
+Default virtual resolution is 480x272 (PSP native). Skins may override this (e.g. modern=800x600, xp=1024x768); the backend canvas/window scales to match.
 
 ## Build Commands
 
@@ -49,6 +49,11 @@ cd crates/oasis-plugin-psp && RUST_PSP_BUILD_STD=1 cargo +nightly psp --release
 # Build UE5 FFI shared library
 cargo build --release -p oasis-ffi
 
+# Build WASM backend (requires wasm-pack)
+./scripts/build-wasm.sh          # debug build
+./scripts/build-wasm.sh --release # release (smaller + faster)
+# Serve: python3 -m http.server 8080 → http://localhost:8080/www/
+
 # Take screenshots
 cargo run -p oasis-app --bin oasis-screenshot
 ```
@@ -78,6 +83,7 @@ oasis-types     (foundation: Color, Button, InputEvent, backend traits, error ty
 └── oasis-core       (coordination: apps, dashboard, agent, plugin, script)
     ├── oasis-backend-sdl  (SDL2 desktop/Pi rendering + input + audio)
     │   └── oasis-app      (binary entry points: oasis-app, oasis-screenshot)
+    ├── oasis-backend-wasm (Canvas 2D + DOM input + Web Audio, iframe overlay)
     ├── oasis-backend-ue5  (software RGBA framebuffer for Unreal Engine 5)
     │   └── oasis-ffi      (cdylib C-ABI for UE5 integration)
     ├── oasis-backend-psp  (excluded from workspace, PSP hardware via sceGu)
@@ -104,7 +110,7 @@ Core code never calls platform APIs directly. All platform interaction goes thro
 
 ### Core Modules
 
-The framework is split into 16 workspace crates. Each module below is its own crate (previously all in oasis-core):
+The framework is split into 17 workspace crates. Each module below is its own crate (previously all in oasis-core):
 
 - **oasis-types** -- Foundation types: `Color`, `Button`, `InputEvent`, backend traits (`SdiBackend`, `InputBackend`, `NetworkBackend`, `AudioBackend`), error types, TLS, bitmap font metrics
 - **oasis-sdi** -- Scene Display Interface: named objects with position, size, color, texture, text, z-order, gradients, rounded corners, shadows

@@ -39,6 +39,7 @@ OASIS_OS originated as a Rust port of a PSP homebrew shell OS written in C circa
 | Target | Backend | Renderer | Input | Status |
 |--------|---------|----------|-------|--------|
 | Desktop / Raspberry Pi | `oasis-backend-sdl` | SDL2 window | Keyboard, mouse, gamepad | Implemented |
+| WebAssembly (Browser) | `oasis-backend-wasm` | Canvas 2D API | DOM events (keyboard, mouse, touch) | Implemented |
 | PSP / PPSSPP | `oasis-backend-psp` | sceGu hardware sprites | PSP controller | Implemented |
 | Unreal Engine 5 | `oasis-backend-ue5` | Software RGBA framebuffer | FFI input queue | Implemented |
 | Framebuffer (headless Pi) | Planned | `/dev/fb0` direct writes | evdev | Planned |
@@ -60,7 +61,7 @@ The framework supports a data-driven **skin system** that controls visual layout
 
 All skins share the same core: scene graph, command interpreter, virtual file system, networking, and plugin infrastructure. See the [Skin Authoring Guide](docs/skin-authoring.md) for creating custom skins.
 
-Native virtual resolution is 480x272 (PSP native) across all backends.
+Default virtual resolution is 480x272 (PSP native). Skins may override this (e.g. modern=800x600, xp=1024x768); the backend canvas/window scales to match.
 
 ### Key Features
 
@@ -80,7 +81,7 @@ Native virtual resolution is 480x272 (PSP native) across all backends.
 
 ## Crates
 
-The framework is split into 16 workspace crates plus 2 excluded PSP crates:
+The framework is split into 17 workspace crates plus 2 excluded PSP crates:
 
 ```
 oasis-os/
@@ -99,11 +100,13 @@ oasis-os/
 |   +-- oasis-browser/               # HTML/CSS/Gemini browser: DOM, CSS cascade, block/inline/table layout
 |   +-- oasis-core/                   # Coordination layer: apps, dashboard, agent, plugin, script, etc.
 |   +-- oasis-backend-sdl/            # SDL2 rendering and input (desktop + Pi)
+|   +-- oasis-backend-wasm/           # Canvas 2D rendering, DOM input, Web Audio (browser)
 |   +-- oasis-backend-ue5/            # UE5 software framebuffer + FFI input queue
 |   +-- oasis-backend-psp/            # [excluded from workspace] sceGu hardware rendering, PSP controller, UMD browsing
 |   +-- oasis-plugin-psp/            # [excluded from workspace] kernel-mode PRX: in-game overlay + background music
 |   +-- oasis-ffi/                    # C FFI boundary for UE5 integration
 |   +-- oasis-app/                    # Binary entry points: desktop app + screenshot tool
++-- www/                              # WASM web shell: index.html, index.js, style.css
 +-- skins/
 |   +-- classic/                      # PSIX-style icon grid dashboard
 |   +-- xp/                           # Windows XP Luna-inspired theme with start menu
@@ -128,13 +131,14 @@ oasis-os/
 | `oasis-browser` | Embeddable HTML/CSS/Gemini rendering engine: DOM parser, CSS cascade, block/inline/table layout, reader mode |
 | `oasis-core` | Coordination layer: app runner (dual-panel file manager), dashboard, agent/MCP, plugin, scripting, status/bottom bars |
 | `oasis-backend-sdl` | SDL2 rendering and input backend for desktop and Raspberry Pi |
+| `oasis-backend-wasm` | WebAssembly backend -- Canvas 2D rendering, DOM event input, Web Audio, iframe overlay for real web pages |
 | `oasis-backend-ue5` | UE5 render target backend -- software RGBA framebuffer and FFI input queue |
 | `oasis-backend-psp` | PSP hardware backend -- sceGu sprite rendering, PSP controller input, dual-panel file manager, UMD disc browsing, std via [rust-psp](https://github.com/AndrewAltimit/rust-psp) SDK |
 | `oasis-plugin-psp` | PSP overlay plugin PRX -- kernel-mode companion module for in-game overlay UI and background MP3 playback |
 | `oasis-ffi` | C-ABI FFI boundary (`cdylib`) for UE5 and external integrations |
 | `oasis-app` | Desktop entry point (SDL2) and screenshot capture tool |
 
-The PSP crates are excluded from the workspace (require `mipsel-sony-psp` target) and depend on the standalone [rust-psp SDK](https://github.com/AndrewAltimit/rust-psp) via git dependency. The backend compiles to an EBOOT.PBP (standalone application), while the plugin compiles to a kernel-mode PRX (resident overlay module loaded by CFW via `PLUGINS.TXT`).
+The PSP crates are excluded from the workspace (require `mipsel-sony-psp` target) and depend on the standalone [rust-psp SDK](https://github.com/AndrewAltimit/rust-psp) via git dependency. The backend compiles to an EBOOT.PBP (standalone application), while the plugin compiles to a kernel-mode PRX (resident overlay module loaded by CFW via `PLUGINS.TXT`). The WASM backend compiles to a `cdylib` via `wasm-pack` and runs in any modern browser.
 
 ## Building
 
@@ -147,6 +151,24 @@ docker compose --profile ci run --rm rust-ci cargo build --release -p oasis-app
 # Or natively (requires libsdl2-dev, libsdl2-mixer-dev)
 cargo build --release -p oasis-app
 ```
+
+### WebAssembly (Browser)
+
+Requires [wasm-pack](https://rustwasm.github.io/wasm-pack/):
+
+```bash
+# Debug build
+./scripts/build-wasm.sh
+
+# Release build (smaller + faster)
+./scripts/build-wasm.sh --release
+
+# Serve locally
+python3 -m http.server 8080
+# Open http://localhost:8080/www/
+```
+
+Output goes to `pkg/`; `www/index.html` imports from `../pkg/`.
 
 ### PSP (EBOOT.PBP)
 
@@ -242,6 +264,7 @@ GitHub Actions workflows run the full pipeline automatically on push to `main` a
 - [Skin Authoring Guide](docs/skin-authoring.md) -- creating custom skins, TOML file reference, theme derivation, effect system, runtime switching
 - [PSP Modernization Plan](docs/psp-modernization-plan.md) -- 9-phase, 40-step roadmap for PSP backend modernization using the rust-psp SDK
 - [PSP Plugin Guide](docs/psp-plugin.md) -- installation, controls, and configuration for the in-game overlay PRX
+- [WASM Backend Plan](docs/wasm-backend-plan.md) -- WebAssembly backend design: Canvas 2D rendering, DOM input mapping, iframe overlay for real web pages
 
 ## License
 

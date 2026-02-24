@@ -36,9 +36,21 @@ impl WasmInputBackend {
             let ev = Rc::clone(&events);
             let closure = Closure::wrap(Box::new(move |e: web_sys::Event| {
                 let ke: KeyboardEvent = e.dyn_into().unwrap();
-                if let Some(input) = map_keydown(&ke) {
+                let mapped = map_keydown(&ke);
+                if mapped.is_some() {
                     ke.prevent_default();
-                    ev.borrow_mut().push(input);
+                }
+                let mut q = ev.borrow_mut();
+                if let Some(input) = mapped {
+                    q.push(input);
+                }
+                // SDL fires TextInput separately from KeyDown, so a key
+                // like "e" generates both TriggerPress and TextInput.
+                // Replicate that here for printable characters.
+                let key = ke.key();
+                let chars: Vec<char> = key.chars().collect();
+                if chars.len() == 1 && !ke.ctrl_key() && !ke.alt_key() && !ke.meta_key() {
+                    q.push(InputEvent::TextInput(chars[0]));
                 }
             }) as Box<dyn FnMut(web_sys::Event)>);
             win_target
@@ -270,15 +282,7 @@ fn map_keydown(ke: &KeyboardEvent) -> Option<InputEvent> {
         "q" | "Q" => Some(InputEvent::TriggerPress(Trigger::Left)),
         "e" | "E" => Some(InputEvent::TriggerPress(Trigger::Right)),
         "Backspace" => Some(InputEvent::Backspace),
-        _ => {
-            // Single printable character → TextInput.
-            let chars: Vec<char> = key.chars().collect();
-            if chars.len() == 1 && !ke.ctrl_key() && !ke.alt_key() && !ke.meta_key() {
-                Some(InputEvent::TextInput(chars[0]))
-            } else {
-                None
-            }
-        },
+        _ => None,
     }
 }
 

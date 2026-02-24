@@ -5,6 +5,7 @@
 
 pub mod audio;
 pub mod font;
+pub mod iframe;
 pub mod input;
 pub mod network;
 pub mod platform;
@@ -15,7 +16,7 @@ use web_sys::HtmlCanvasElement;
 
 use oasis_core::active_theme::ActiveTheme;
 use oasis_core::apps::{AppAction, AppRunner};
-use oasis_core::backend::{AudioBackend, Color, InputBackend, SdiBackend};
+use oasis_core::backend::{AudioBackend, Color, InputBackend, SdiBackend, TextureId};
 use oasis_core::bottombar::{BottomBar, MediaTab};
 use oasis_core::browser::{BrowserConfig, BrowserWidget};
 use oasis_core::cursor::{self, CursorState};
@@ -38,6 +39,7 @@ use oasis_core::wm::manager::{WindowManager, WmEvent};
 use oasis_core::wm::window::{WindowConfig, WindowType};
 
 use audio::WasmAudioBackend;
+use iframe::IframeOverlay;
 use input::WasmInputBackend;
 use network::WasmNetworkBackend;
 use platform::WasmPlatform;
@@ -99,10 +101,12 @@ pub struct OasisWasm {
     bottom_bar: BottomBar,
     start_menu: StartMenuState,
     mouse_cursor: CursorState,
+    cursor_texture: Option<TextureId>,
     wm: WindowManager,
     app_runner: Option<AppRunner>,
     open_runners: Vec<(String, AppRunner)>,
     browser: Option<BrowserWidget>,
+    iframe: IframeOverlay,
     osk: Option<OskState>,
     active_transition: Option<TransitionState>,
     mode: Mode,
@@ -136,8 +140,19 @@ impl OasisWasm {
             .dyn_into::<HtmlCanvasElement>()
             .map_err(|_| JsValue::from_str("element is not a canvas"))?;
 
-        let width = 480;
-        let height = 272;
+        // Resolve skin first so we can use its declared resolution.
+        let skin_ref = skin_name.as_deref().unwrap_or("xp");
+        let skin = oasis_skin::resolve_skin(skin_ref)
+            .map_err(|e| JsValue::from_str(&format!("skin: {e}")))?;
+
+        // Use the skin's declared resolution (e.g. classic=480x272,
+        // modern=800x600, xp=1024x768) so the WASM build matches the
+        // desktop SDL version for each skin.
+        let width = skin.manifest.screen_width;
+        let height = skin.manifest.screen_height;
+
+        // Resize the canvas to the skin's resolution. CSS handles the
+        // visual scaling to fill the viewport.
         canvas.set_width(width);
         canvas.set_height(height);
 
@@ -156,6 +171,10 @@ impl OasisWasm {
         let network = WasmNetworkBackend::new();
         let platform = WasmPlatform::new();
 
+        // Iframe overlay for real web page rendering.
+        let iframe = IframeOverlay::new(&canvas)
+            .map_err(|e| JsValue::from_str(&format!("iframe overlay: {e:?}")))?;
+
         // Scene graph and commands.
         let mut sdi = SdiRegistry::new();
         let mut cmd_reg = CommandRegistry::new();
@@ -165,12 +184,7 @@ impl OasisWasm {
         let mut vfs = MemoryVfs::new();
         populate_wasm_vfs(&mut vfs);
 
-        // Resolve skin.
-        let skin_ref = skin_name.as_deref().unwrap_or("classic");
-        let skin = oasis_skin::resolve_skin(skin_ref)
-            .map_err(|e| JsValue::from_str(&format!("skin: {e}")))?;
-
-        let active_theme = ActiveTheme::from_skin(&skin.theme);
+        let active_theme = ActiveTheme::from_skin(&skin.theme).with_screen_size(width, height);
         let browser_config = BrowserConfig::from_skin_theme(&skin.theme);
 
         // Apply skin layout and discover apps.
@@ -197,11 +211,13 @@ impl OasisWasm {
 
         // Mouse cursor texture.
         let mouse_cursor = CursorState::new(width, height);
+        let cursor_texture;
         {
             let (cursor_pixels, cw, ch) = cursor::generate_cursor_pixels();
             let cursor_tex = backend
                 .load_texture(cw, ch, &cursor_pixels)
                 .map_err(|e| JsValue::from_str(&format!("cursor: {e}")))?;
+            cursor_texture = Some(cursor_tex);
             mouse_cursor.update_sdi(&mut sdi);
             if let Ok(obj) = sdi.get_mut("mouse_cursor") {
                 obj.texture = Some(cursor_tex);
@@ -236,10 +252,12 @@ impl OasisWasm {
             bottom_bar,
             start_menu,
             mouse_cursor,
+            cursor_texture,
             wm,
             app_runner: None,
             open_runners: Vec::new(),
             browser: None,
+            iframe,
             osk: None,
             active_transition,
             mode: Mode::Dashboard,
@@ -316,19 +334,47 @@ impl OasisWasm {
         }
 
         // -- Render --
-        let _ = self.backend.clear(self.bg_color);
+        // Hide cursor from SDI so window content doesn't draw under it;
+        // we blit the cursor manually after all rendering.
+        CursorState::hide_sdi(&mut self.sdi);
+
+        if let Err(e) = self.backend.clear(self.bg_color) {
+            console_log!("clear error: {e}");
+        }
         if self.mode == Mode::Desktop && self.wm.window_count() > 0 {
             let browser = &mut self.browser;
+            let iframe_ref = &mut self.iframe;
             let open_runners = &self.open_runners;
-            let _ = self.wm.draw_with_clips(
+            if let Err(e) = self.wm.draw_with_clips(
                 &mut self.sdi,
                 &mut self.backend,
                 |window_id, cx, cy, cw, ch, be| {
-                    if window_id == "browser" {
+                    let result = if window_id == "browser" {
                         if let Some(ref mut bw) = *browser {
                             bw.set_window(cx, cy, cw, ch);
-                            bw.paint(be)
+                            let url = bw.current_url().map(|s| s.to_string());
+                            let is_http = url.as_ref().is_some_and(|u| {
+                                u.starts_with("http://") || u.starts_with("https://")
+                            });
+                            if is_http {
+                                let url_bar_h = bw.config.url_bar_height;
+                                let status_bar_h = bw.config.status_bar_height;
+                                let content_y = cy + url_bar_h as i32;
+                                let content_h = ch.saturating_sub(url_bar_h + status_bar_h);
+                                iframe_ref.show(
+                                    url.as_ref().unwrap(),
+                                    cx,
+                                    content_y,
+                                    cw,
+                                    content_h,
+                                );
+                                bw.paint_chrome_only(be)
+                            } else {
+                                iframe_ref.hide();
+                                bw.paint(be)
+                            }
                         } else {
+                            iframe_ref.hide();
                             Ok(())
                         }
                     } else if let Some((_, runner)) =
@@ -337,32 +383,61 @@ impl OasisWasm {
                         runner.draw_windowed(cx, cy, cw, ch, be)
                     } else {
                         Ok(())
+                    };
+                    if let Err(ref e) = result {
+                        web_sys::console::error_1(
+                            &format!("window '{window_id}' content error: {e}").into(),
+                        );
                     }
+                    result
                 },
-            );
+            ) {
+                console_log!("draw_with_clips error: {e}");
+            }
         } else {
-            let _ = self.sdi.draw(&mut self.backend);
+            // Not in desktop mode or no windows — hide iframe.
+            self.iframe.hide();
+            if let Err(e) = self.sdi.draw(&mut self.backend) {
+                console_log!("sdi draw error: {e}");
+            }
         }
 
         // Paint terminal scrollbar when in terminal mode.
-        if self.mode == Mode::Terminal {
-            let _ = terminal_sdi::paint_terminal_scrollbar(
+        if self.mode == Mode::Terminal
+            && let Err(e) = terminal_sdi::paint_terminal_scrollbar(
                 &mut self.backend,
                 self.output_lines.len(),
                 self.terminal_scroll_offset,
-            );
+            )
+        {
+            console_log!("terminal scrollbar error: {e}");
         }
 
         // Draw transition overlay if active.
         if let Some(ref mut trans) = self.active_transition {
-            let _ = trans.draw_overlay(&mut self.backend);
+            if let Err(e) = trans.draw_overlay(&mut self.backend) {
+                console_log!("transition overlay error: {e}");
+            }
             trans.tick();
             if trans.is_done() {
                 self.active_transition = None;
             }
         }
 
-        let _ = self.backend.swap_buffers();
+        // Draw cursor on top of everything (after windows, scrollbar,
+        // transition overlay).
+        if self.mouse_cursor.visible
+            && let Some(tex) = self.cursor_texture
+            && let Err(e) = self
+                .backend
+                .blit(tex, self.mouse_cursor.x, self.mouse_cursor.y, 12, 18)
+        {
+            console_log!("cursor blit error: {e}");
+        }
+
+        if let Err(e) = self.backend.swap_buffers() {
+            console_log!("swap_buffers error: {e}");
+        }
     }
 
     // -----------------------------------------------------------------------
@@ -639,6 +714,7 @@ impl OasisWasm {
                         self.open_runners.retain(|(rid, _)| *rid != id);
                         if id == "browser" {
                             self.browser = None;
+                            self.iframe.hide();
                         }
                         if self.wm.window_count() == 0 {
                             self.mode = Mode::Dashboard;
@@ -648,12 +724,19 @@ impl OasisWasm {
                         if id == "browser"
                             && let Some(ref mut bw) = self.browser
                         {
-                            let abs_x = bw.window_x() + lx;
-                            let abs_y = bw.window_y() + ly;
-                            bw.handle_input(
-                                &InputEvent::PointerClick { x: abs_x, y: abs_y },
-                                &self.vfs,
-                            );
+                            // When the iframe is showing a real web page,
+                            // only forward clicks in the URL bar area to
+                            // the browser widget — the iframe handles its
+                            // own content input natively.
+                            let in_url_bar = ly < bw.config.url_bar_height as i32;
+                            if in_url_bar || !self.iframe.is_visible() {
+                                let abs_x = bw.window_x() + lx;
+                                let abs_y = bw.window_y() + ly;
+                                bw.handle_input(
+                                    &InputEvent::PointerClick { x: abs_x, y: abs_y },
+                                    &self.vfs,
+                                );
+                            }
                         }
                     },
                     WmEvent::DesktopClick(_, _) => {
@@ -678,6 +761,7 @@ impl OasisWasm {
                     self.open_runners.retain(|(rid, _)| *rid != active_id);
                     if active_id == "browser" {
                         self.browser = None;
+                        self.iframe.hide();
                     }
                     if self.wm.window_count() == 0 {
                         self.mode = Mode::Dashboard;
@@ -807,6 +891,10 @@ impl OasisWasm {
             return;
         }
 
+        // Scale window dimensions proportionally to screen resolution.
+        let win_w = (self.width * 380 + 240) / 480;
+        let win_h = (self.height * 220 + 136) / 272;
+
         if app.title == "Browser" {
             let win_id = "browser";
             if self.wm.get_window(win_id).is_some() {
@@ -817,15 +905,15 @@ impl OasisWasm {
                     title: "Browser".to_string(),
                     x: None,
                     y: None,
-                    width: 380,
-                    height: 220,
+                    width: win_w,
+                    height: win_h,
                     window_type: WindowType::AppWindow,
                     always_on_top: false,
                     modal: false,
                 };
                 let _ = self.wm.create_window(&wc, &mut self.sdi);
                 let mut bw = BrowserWidget::new(self.browser_config.clone());
-                bw.set_window(0, 0, 380, 220);
+                bw.set_window(0, 0, win_w, win_h);
                 let home = bw.config.features.home_url.clone();
                 bw.navigate_vfs(&home, &self.vfs);
                 self.browser = Some(bw);
@@ -844,8 +932,8 @@ impl OasisWasm {
                 title: app.title.clone(),
                 x: None,
                 y: None,
-                width: 380,
-                height: 220,
+                width: win_w,
+                height: win_h,
                 window_type: WindowType::AppWindow,
                 always_on_top: false,
                 modal: false,
@@ -1136,12 +1224,108 @@ fn populate_wasm_vfs(vfs: &mut MemoryVfs) {
     );
 
     // Demo app directories (discovered by the dashboard).
+    // Names must match the title strings in AppRunner::init_content().
     let _ = vfs.mkdir("/apps");
-    let _ = vfs.mkdir("/apps/file_manager");
-    let _ = vfs.mkdir("/apps/settings");
-    let _ = vfs.mkdir("/apps/browser");
-    let _ = vfs.mkdir("/apps/music_player");
-    let _ = vfs.mkdir("/apps/terminal");
+    let _ = vfs.mkdir("/apps/File Manager");
+    let _ = vfs.mkdir("/apps/Settings");
+    let _ = vfs.mkdir("/apps/Browser");
+    let _ = vfs.mkdir("/apps/Music Player");
+    let _ = vfs.mkdir("/apps/Terminal");
+
+    // Browser home page content.
+    let _ = vfs.mkdir("/sites");
+    let _ = vfs.mkdir("/sites/home");
+    let _ = vfs.write(
+        "/sites/home/index.html",
+        br#"<html><head><title>OASIS Home</title>
+<style>
+body { color: #e0e0e0; background-color: #1a1a2e; }
+h1 { color: #64c8ff; }
+h2 { color: #80d0a0; }
+a { color: #64c8ff; }
+code { background-color: rgba(100,200,255,30); }
+pre { background-color: rgba(100,200,255,15); border: 1px solid rgba(100,200,255,30); }
+blockquote { border-left-color: #64c8ff; color: #a0a0c0; }
+table { border-collapse: collapse; }
+th { background-color: rgba(100,200,255,20); border: 1px solid rgba(255,255,255,30); }
+td { border: 1px solid rgba(255,255,255,20); }
+</style>
+</head><body>
+<h1>Welcome to OASIS Browser</h1>
+<p>A lightweight <strong>HTML/CSS</strong> rendering engine for
+<em>OASIS_OS</em>. Supports block, inline, flex, and table layout.</p>
+
+<h2>Features</h2>
+<ul>
+<li>CSS cascade with <code>specificity</code></li>
+<li>Block, inline, flex, and table layout</li>
+<li>Text wrapping and decoration</li>
+<li>Smooth scrolling with mouse wheel</li>
+</ul>
+
+<h2>Shortcuts</h2>
+<table>
+<tr><th>Key</th><th>Action</th></tr>
+<tr><td>Tab</td><td>Focus URL bar</td></tr>
+<tr><td>Left/Right</td><td>Navigate links</td></tr>
+<tr><td>Up/Down</td><td>Scroll page</td></tr>
+</table>
+
+<blockquote>Originally ported from a PSP homebrew shell (2006-2008).</blockquote>
+
+<h2>Links</h2>
+<ol>
+<li><a href="/sites/home/about.html">About OASIS Browser</a></li>
+<li><a href="/sites/home/features.html">CSS Feature Test</a></li>
+</ol>
+</body></html>"#,
+    );
+    let _ = vfs.write(
+        "/sites/home/about.html",
+        br#"<html><head><title>About OASIS Browser</title>
+<style>
+body { color: #e0e0e0; background-color: #1a1a2e; }
+h1 { color: #64c8ff; }
+a { color: #64c8ff; }
+</style>
+</head><body>
+<h1>About OASIS Browser</h1>
+<p>A lightweight HTML/CSS engine for embedded systems:</p>
+<ul>
+<li><strong>HTML</strong> -- WHATWG tokenizer, 70+ tags</li>
+<li><strong>CSS</strong> -- cascade, specificity, media queries</li>
+<li><strong>Layout</strong> -- block, inline, flex, table, float</li>
+<li><strong>Gemini</strong> -- lightweight text protocol</li>
+</ul>
+<p><a href="/sites/home/index.html">Back to home</a></p>
+</body></html>"#,
+    );
+    let _ = vfs.write(
+        "/sites/home/features.html",
+        br#"<html><head><title>CSS Features</title>
+<style>
+body { color: #e0e0e0; background-color: #1a1a2e; }
+h1 { color: #64c8ff; }
+h2 { color: #80d0a0; font-size: 1.2em; }
+a { color: #64c8ff; }
+</style>
+</head><body>
+<h1>CSS Feature Test</h1>
+<h2>Text Formatting</h2>
+<p><strong>Bold</strong>, <em>italic</em>, <u>underline</u>,
+<s>strikethrough</s>, <code>inline code</code>,
+<mark>highlighted</mark>, <small>small</small>.</p>
+<h2>Blockquote</h2>
+<blockquote>Blockquote with left border.</blockquote>
+<h2>Ordered List</h2>
+<ol><li>First</li><li>Second</li><li>Third</li></ol>
+<h2>Preformatted</h2>
+<pre>fn main() {
+    println!("Hello!");
+}</pre>
+<p><a href="/sites/home/index.html">Back to home</a></p>
+</body></html>"#,
+    );
 
     // Demo startup script.
     let _ = vfs.write(
