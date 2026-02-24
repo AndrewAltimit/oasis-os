@@ -502,8 +502,6 @@ fn break_word_fragment(
 /// whitespace from the last fragment on a line. This implements the
 /// CSS rule that spaces at line boundaries are removed.
 fn trim_line_boundary_spaces(line: &mut LineBox, measurer: &dyn TextMeasurer) {
-    let len = line.fragments.len();
-
     // Trim leading space from first text fragment.
     if let Some(InlineFragment::Text {
         text, width, style, ..
@@ -516,11 +514,9 @@ fn trim_line_boundary_spaces(line: &mut LineBox, measurer: &dyn TextMeasurer) {
     }
 
     // Trim trailing space from last text fragment.
-    // When there's only one fragment, it was already handled above.
-    if len > 1
-        && let Some(InlineFragment::Text {
-            text, width, style, ..
-        }) = line.fragments.last_mut()
+    if let Some(InlineFragment::Text {
+        text, width, style, ..
+    }) = line.fragments.last_mut()
         && text.ends_with(' ')
     {
         text.pop();

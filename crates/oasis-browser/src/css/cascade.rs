@@ -400,18 +400,24 @@ fn matches_selector_ignoring_pseudo(
         parts: filtered_parts,
     };
 
-    // If the filtered compound is empty, match against the previous compound.
+    // If the filtered compound is empty, the pseudo-element was the
+    // only part of that compound.  Replace it with a universal selector
+    // so the combinator is preserved (e.g. `div ::before` should match
+    // descendants of `div`, not `div` itself).
     if filtered_compound.parts.is_empty() {
-        // The pseudo-element was the only part of the last compound.
-        // Match using only the preceding compounds.
         if last_idx == 0 {
+            // Selector was just `::before` / `::after` -- matches any element.
             return true;
         }
-        // Create a shorter selector without the last compound.
-        let shorter = super::parser::Selector {
-            parts: parts[..last_idx].to_vec(),
-        };
-        return matches_selector(doc, node_id, &shorter, ctx);
+        let mut new_parts = parts[..last_idx].to_vec();
+        new_parts.push((
+            CompoundSelector {
+                parts: vec![SimpleSelector::Universal],
+            },
+            parts[last_idx].1.clone(),
+        ));
+        let adjusted = super::parser::Selector { parts: new_parts };
+        return matches_selector(doc, node_id, &adjusted, ctx);
     }
 
     // Replace the last compound with the filtered version.

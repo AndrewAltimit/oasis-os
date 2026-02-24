@@ -1722,7 +1722,7 @@ fn expand_border_side(property: &str, value: &CssValue, important: bool) -> Vec<
                 } else if let Some(c) = named_color(&lower) {
                     color = CssValue::Color(c);
                 } else {
-                    style = v.clone();
+                    color = v.clone();
                 }
             },
             CssValue::Var(..) => color = v.clone(),
