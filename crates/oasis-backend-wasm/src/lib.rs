@@ -1074,7 +1074,8 @@ impl OasisWasm {
         match oasis_skin::resolve_skin(name) {
             Ok(new_skin) => {
                 let swapped = Skin::swap(&self.skin, new_skin, &mut self.sdi);
-                self.active_theme = ActiveTheme::from_skin(&swapped.theme);
+                self.active_theme = ActiveTheme::from_skin(&swapped.theme)
+                    .with_screen_size(self.width, self.height);
                 self.browser_config = BrowserConfig::from_skin_theme(&swapped.theme);
                 self.wm.set_theme(swapped.theme.build_wm_theme());
                 let dash_config =

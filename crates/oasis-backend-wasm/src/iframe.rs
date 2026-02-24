@@ -129,8 +129,20 @@ impl IframeOverlay {
         let offset_x = (elem_w - rendered_w) / 2.0;
         let offset_y = (elem_h - rendered_h) / 2.0;
 
-        let left = rect.left() + offset_x + cx as f64 * scale;
-        let top = rect.top() + offset_y + cy as f64 * scale;
+        // The iframe uses `position: absolute`, which positions relative to
+        // the nearest positioned ancestor (the #container). Subtract the
+        // parent's viewport offset so coordinates are parent-relative.
+        let (parent_left, parent_top) = self
+            .canvas
+            .parent_element()
+            .map(|p| {
+                let pr = p.get_bounding_client_rect();
+                (pr.left(), pr.top())
+            })
+            .unwrap_or((0.0, 0.0));
+
+        let left = rect.left() - parent_left + offset_x + cx as f64 * scale;
+        let top = rect.top() - parent_top + offset_y + cy as f64 * scale;
         let width = cw as f64 * scale;
         let height = ch as f64 * scale;
 

@@ -244,22 +244,48 @@ impl InputBackend for WasmInputBackend {
 // Coordinate scaling
 // ---------------------------------------------------------------------------
 
-fn scale_mouse(canvas: &HtmlCanvasElement, me: &MouseEvent, cw: u32, ch: u32) -> (i32, i32) {
+/// Map a viewport-relative point to virtual canvas coordinates, accounting
+/// for `object-fit: contain` letterboxing.
+fn scale_point(
+    canvas: &HtmlCanvasElement,
+    client_x: f64,
+    client_y: f64,
+    cw: u32,
+    ch: u32,
+) -> (i32, i32) {
     let rect = canvas.get_bounding_client_rect();
-    let scale_x = cw as f64 / rect.width();
-    let scale_y = ch as f64 / rect.height();
-    let x = ((me.client_x() as f64 - rect.left()) * scale_x) as i32;
-    let y = ((me.client_y() as f64 - rect.top()) * scale_y) as i32;
+    let elem_w = rect.width();
+    let elem_h = rect.height();
+    let canvas_w = cw as f64;
+    let canvas_h = ch as f64;
+
+    // Compute rendered content rect inside the element (object-fit: contain).
+    let scale = (elem_w / canvas_w).min(elem_h / canvas_h);
+    let rendered_w = canvas_w * scale;
+    let rendered_h = canvas_h * scale;
+    let offset_x = (elem_w - rendered_w) / 2.0;
+    let offset_y = (elem_h - rendered_h) / 2.0;
+
+    // Map from viewport to the rendered content area, then to virtual coords.
+    let rel_x = client_x - rect.left() - offset_x;
+    let rel_y = client_y - rect.top() - offset_y;
+    let x = (rel_x / scale) as i32;
+    let y = (rel_y / scale) as i32;
     (x.clamp(0, cw as i32 - 1), y.clamp(0, ch as i32 - 1))
 }
 
+fn scale_mouse(canvas: &HtmlCanvasElement, me: &MouseEvent, cw: u32, ch: u32) -> (i32, i32) {
+    scale_point(canvas, me.client_x() as f64, me.client_y() as f64, cw, ch)
+}
+
 fn scale_touch(canvas: &HtmlCanvasElement, touch: &web_sys::Touch, cw: u32, ch: u32) -> (i32, i32) {
-    let rect = canvas.get_bounding_client_rect();
-    let scale_x = cw as f64 / rect.width();
-    let scale_y = ch as f64 / rect.height();
-    let x = ((touch.client_x() as f64 - rect.left()) * scale_x) as i32;
-    let y = ((touch.client_y() as f64 - rect.top()) * scale_y) as i32;
-    (x.clamp(0, cw as i32 - 1), y.clamp(0, ch as i32 - 1))
+    scale_point(
+        canvas,
+        touch.client_x() as f64,
+        touch.client_y() as f64,
+        cw,
+        ch,
+    )
 }
 
 // ---------------------------------------------------------------------------

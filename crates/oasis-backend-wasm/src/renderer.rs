@@ -378,10 +378,17 @@ impl SdiBackend for WasmBackend {
         self.ctx.begin_path();
         self.ctx.rect(tx, ty, w as f64, h as f64);
         self.ctx.clip();
+        self.clip_stack.push(ClipRect {
+            x: tx as i32,
+            y: ty as i32,
+            w,
+            h,
+        });
         Ok(())
     }
 
     fn reset_clip_rect(&mut self) -> Result<()> {
+        self.clip_stack.pop();
         self.ctx.restore();
         Ok(())
     }
