@@ -53,11 +53,13 @@
       justify-content: center;
       align-items: center;
       position: relative;
+      overflow: hidden;
     }
+    /* JS sizes the canvas to fill the container while preserving aspect
+       ratio. We avoid object-fit: contain because Firefox does not
+       reliably apply it to <canvas> elements on desktop. */
     #oasis {
-      width: 100%;
-      height: 100%;
-      object-fit: contain;
+      display: block;
       image-rendering: pixelated;
       image-rendering: crisp-edges;
       background: #000;
