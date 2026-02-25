@@ -16,6 +16,7 @@ on:
 
 permissions:
   contents: write
+  issues: write
   pages: write
   id-token: write
 
@@ -433,6 +434,7 @@ jobs:
 
       - name: Assemble site
         run: |
+          rm -rf _site
           mkdir -p _site/demo
           rsync -a --exclude screenshots site/ _site/
           cp -r screenshots/ _site/screenshots/
