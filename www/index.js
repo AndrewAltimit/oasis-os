@@ -34,6 +34,11 @@ function fitCanvas() {
 // -----------------------------------------------------------------------
 
 async function boot() {
+  // Size canvas immediately so it fills the viewport during WASM download
+  // instead of appearing at its small intrinsic resolution.
+  fitCanvas();
+  window.addEventListener("resize", fitCanvas);
+
   await init();
 
   const skinParam = new URLSearchParams(window.location.search).get("skin");
@@ -43,9 +48,8 @@ async function boot() {
   window.__oasis = oasis;
   window.__oasisReady = true;
 
-  // Size canvas to fit viewport, maintaining aspect ratio.
+  // Re-fit in case the skin changed the canvas buffer dimensions.
   fitCanvas();
-  window.addEventListener("resize", fitCanvas);
 
   // Focus canvas for keyboard input.
   const canvas = document.getElementById("oasis");
