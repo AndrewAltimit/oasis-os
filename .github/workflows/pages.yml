@@ -28,7 +28,7 @@ jobs:
       - name: Assemble site
         run: |
           mkdir -p _site/demo
-          cp -r site/* _site/
+          rsync -a --exclude screenshots site/ _site/
           cp -r screenshots/ _site/screenshots/
           cp -r pkg/ _site/pkg/
           cp www/index.js _site/demo/index.js
