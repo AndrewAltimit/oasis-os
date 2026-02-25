@@ -20,19 +20,20 @@ body {
 #container {
   position: relative;
   display: flex;
-  flex-direction: column;
   align-items: center;
+  justify-content: center;
   width: 100%;
   height: 100vh;
   padding: 0;
   gap: 0;
+  overflow: hidden;
 }
 
-/* Canvas — scales to fill viewport while preserving aspect ratio */
+/* Canvas — JS sizes it to fill viewport while preserving aspect ratio.
+   We avoid object-fit: contain because Firefox does not reliably apply it
+   to <canvas> elements, which causes a "zoomed-in" view on desktop. */
 #oasis {
-  width: 100%;
-  height: 100vh;
-  object-fit: contain;
+  display: block;
   image-rendering: pixelated;
   image-rendering: crisp-edges;
   border: none;

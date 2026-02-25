@@ -8,6 +8,28 @@ let oasis = null;
 let lastTime = 0;
 
 // -----------------------------------------------------------------------
+// Canvas sizing — replaces CSS object-fit: contain which Firefox does not
+// reliably apply to <canvas> elements on desktop.
+// -----------------------------------------------------------------------
+
+function fitCanvas() {
+  const canvas = document.getElementById("oasis");
+  const container = document.getElementById("container");
+  if (!canvas || !container) return;
+
+  const bufW = canvas.width;
+  const bufH = canvas.height;
+  if (bufW === 0 || bufH === 0) return;
+
+  const availW = container.clientWidth;
+  const availH = container.clientHeight;
+
+  const scale = Math.min(availW / bufW, availH / bufH);
+  canvas.style.width = Math.floor(bufW * scale) + "px";
+  canvas.style.height = Math.floor(bufH * scale) + "px";
+}
+
+// -----------------------------------------------------------------------
 // Boot
 // -----------------------------------------------------------------------
 
@@ -20,6 +42,10 @@ async function boot() {
   // Expose instance globally for automated tests (e.g. Playwright).
   window.__oasis = oasis;
   window.__oasisReady = true;
+
+  // Size canvas to fit viewport, maintaining aspect ratio.
+  fitCanvas();
+  window.addEventListener("resize", fitCanvas);
 
   // Focus canvas for keyboard input.
   const canvas = document.getElementById("oasis");
