@@ -835,8 +835,11 @@ impl AppRunner {
             obj.x = 0;
             obj.y = 0;
             obj.w = at.screen_w;
-            obj.h = 22;
+            obj.h = at.app_title_bar_height;
             obj.color = at.app_title_bar_bg;
+            obj.gradient_top = at.app_title_bar_gradient_top;
+            obj.gradient_bottom = at.app_title_bar_gradient_bottom;
+            obj.shadow_level = Some(1);
             obj.visible = true;
             obj.z = 101;
         }

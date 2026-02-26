@@ -376,6 +376,36 @@ pub struct ActiveTheme {
     /// Toast time-to-live in frames.
     pub toast_ttl: u32,
 
+    // -- Bar text shadows --
+    /// Whether bar text elements have drop shadows.
+    pub bar_text_shadow: bool,
+    /// Bar text shadow color.
+    pub bar_text_shadow_color: Color,
+    /// Whether toast text has drop shadows.
+    pub toast_text_shadow: bool,
+
+    // -- Title bar gradients --
+    /// App title bar gradient top color (None = flat fill).
+    pub app_title_bar_gradient_top: Option<Color>,
+    /// App title bar gradient bottom color.
+    pub app_title_bar_gradient_bottom: Option<Color>,
+
+    // -- Visual depth --
+    /// Toast notification shadow level.
+    pub toast_shadow_level: u8,
+
+    // -- Animation durations --
+    /// Cursor lerp speed (0.0-1.0, default 0.18).
+    pub cursor_lerp_speed: f32,
+    /// Page slide animation duration in frames (default 12).
+    pub page_slide_duration: u32,
+    /// Start menu open/close animation speed (default 0.15).
+    pub start_menu_anim_speed: f32,
+    /// Toast fade in/out duration in frames (default 10).
+    pub toast_fade_frames: u32,
+    /// Press flash duration in frames (default 6).
+    pub press_flash_duration: u32,
+
     // -- UI toolkit theme --
     /// Unified UI theme derived from the skin palette.
     ///
@@ -551,6 +581,17 @@ impl Default for ActiveTheme {
             toast_text_color: Color::WHITE,
             toast_border_radius: 4,
             toast_ttl: 180,
+            bar_text_shadow: false,
+            bar_text_shadow_color: Color::rgba(0, 0, 0, 128),
+            toast_text_shadow: false,
+            app_title_bar_gradient_top: None,
+            app_title_bar_gradient_bottom: None,
+            toast_shadow_level: 1,
+            cursor_lerp_speed: 0.18,
+            page_slide_duration: 12,
+            start_menu_anim_speed: 0.15,
+            toast_fade_frames: 10,
+            press_flash_duration: 6,
             ui_theme: oasis_ui::theme::Theme::dark(),
         }
     }
@@ -1120,6 +1161,70 @@ impl ActiveTheme {
                 .and_then(|g| g.terminal_border_radius)
                 .unwrap_or(4),
             toast_ttl: 180,
+            // -- 5B: Bar text shadows --
+            bar_text_shadow: bar
+                .and_then(|b| b.text_shadow)
+                .unwrap_or(skin.gradient_enabled == Some(true)),
+            bar_text_shadow_color: ov(
+                bar.and_then(|b| b.text_shadow_color.as_ref()),
+                Color::rgba(0, 0, 0, 128),
+            ),
+            toast_text_shadow: skin.gradient_enabled == Some(true),
+            // -- 5C: Title bar gradients --
+            app_title_bar_gradient_top: {
+                let ap = skin.app_overrides.as_ref();
+                Self::bar_gradient_pair(
+                    skin,
+                    ap.and_then(|a| a.title_bar_gradient_top.as_ref()),
+                    ap.and_then(|a| a.title_bar_gradient_bottom.as_ref()),
+                    ov(
+                        ap.and_then(|a| a.title_bar_bg.as_ref()),
+                        darken(status_bar_color, 0.8),
+                    ),
+                )
+                .map(|(t, _)| t)
+            },
+            app_title_bar_gradient_bottom: {
+                let ap = skin.app_overrides.as_ref();
+                Self::bar_gradient_pair(
+                    skin,
+                    ap.and_then(|a| a.title_bar_gradient_top.as_ref()),
+                    ap.and_then(|a| a.title_bar_gradient_bottom.as_ref()),
+                    ov(
+                        ap.and_then(|a| a.title_bar_bg.as_ref()),
+                        darken(status_bar_color, 0.8),
+                    ),
+                )
+                .map(|(_, b)| b)
+            },
+            // -- 5D: Visual depth --
+            toast_shadow_level: 1,
+            // -- 5E: Animation durations --
+            cursor_lerp_speed: skin
+                .geometry
+                .as_ref()
+                .and_then(|g| g.cursor_lerp_speed)
+                .unwrap_or(0.18),
+            page_slide_duration: skin
+                .geometry
+                .as_ref()
+                .and_then(|g| g.page_slide_duration)
+                .unwrap_or(12),
+            start_menu_anim_speed: skin
+                .geometry
+                .as_ref()
+                .and_then(|g| g.start_menu_anim_speed)
+                .unwrap_or(0.15),
+            toast_fade_frames: skin
+                .geometry
+                .as_ref()
+                .and_then(|g| g.toast_fade_frames)
+                .unwrap_or(10),
+            press_flash_duration: skin
+                .geometry
+                .as_ref()
+                .and_then(|g| g.press_flash_duration)
+                .unwrap_or(6),
             ui_theme: skin.to_ui_theme(),
         }
     }

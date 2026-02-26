@@ -193,7 +193,7 @@ impl StartMenuState {
         if diff.abs() < 0.01 {
             self.anim_progress = target;
         } else {
-            self.anim_progress += diff * 0.15;
+            self.anim_progress += diff * self.at.start_menu_anim_speed;
         }
         // When fully closed, mark as not open.
         if !self.anim_target_open && self.anim_progress <= 0.01 {

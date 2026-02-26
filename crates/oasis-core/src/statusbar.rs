@@ -184,6 +184,10 @@ impl StatusBar {
                 }
                 obj.text = Some(info);
                 obj.visible = true;
+                if at.bar_text_shadow {
+                    obj.text_shadow_offset = Some((1, 1));
+                    obj.text_shadow_color = Some(at.bar_text_shadow_color);
+                }
             }
         } else if let Ok(obj) = sdi.get_mut("bar_battery") {
             obj.visible = false;
@@ -203,6 +207,10 @@ impl StatusBar {
             if let Ok(obj) = sdi.get_mut("bar_clock") {
                 obj.text = Some(clock_str);
                 obj.visible = true;
+                if at.bar_text_shadow {
+                    obj.text_shadow_offset = Some((1, 1));
+                    obj.text_shadow_color = Some(at.bar_text_shadow_color);
+                }
             }
             cx
         } else {
@@ -229,6 +237,10 @@ impl StatusBar {
                 if let Ok(obj) = sdi.get_mut("bar_version") {
                     obj.text = Some(ver.to_string());
                     obj.visible = true;
+                    if at.bar_text_shadow {
+                        obj.text_shadow_offset = Some((1, 1));
+                        obj.text_shadow_color = Some(at.bar_text_shadow_color);
+                    }
                 }
             } else if let Ok(obj) = sdi.get_mut("bar_version") {
                 obj.visible = false;

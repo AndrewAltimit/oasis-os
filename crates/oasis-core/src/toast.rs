@@ -12,8 +12,6 @@ use crate::sdi::SdiRegistry;
 
 /// Maximum number of visible toasts.
 const MAX_VISIBLE: usize = 4;
-/// Fade duration in frames.
-const FADE_FRAMES: u32 = 10;
 
 /// Toast severity level.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -37,15 +35,16 @@ pub struct Toast {
 
 impl Toast {
     /// Current alpha (0..255) based on fade-in / fade-out progress.
-    fn alpha(&self) -> u8 {
+    fn alpha(&self, fade_frames: u32) -> u8 {
+        let ff = fade_frames.max(1);
         let elapsed = self.total_ttl.saturating_sub(self.ttl);
-        let fade_in = if elapsed < FADE_FRAMES {
-            elapsed as f32 / FADE_FRAMES as f32
+        let fade_in = if elapsed < ff {
+            elapsed as f32 / ff as f32
         } else {
             1.0
         };
-        let fade_out = if self.ttl < FADE_FRAMES {
-            self.ttl as f32 / FADE_FRAMES as f32
+        let fade_out = if self.ttl < ff {
+            self.ttl as f32 / ff as f32
         } else {
             1.0
         };
@@ -131,7 +130,7 @@ impl ToastManager {
             }
 
             if let Some(toast) = visible.get(i) {
-                let alpha = toast.alpha();
+                let alpha = toast.alpha(at.toast_fade_frames);
                 let slot = (visible.len() - 1 - i) as i32;
                 let x = at.screen_w as i32 - toast_w as i32 - margin;
                 let y = at.screen_h as i32
@@ -154,6 +153,7 @@ impl ToastManager {
                     obj.color =
                         with_alpha(bg_color, (bg_color.a as u16 * alpha as u16 / 255) as u8);
                     obj.border_radius = Some(at.toast_border_radius);
+                    obj.shadow_level = Some(at.toast_shadow_level);
                     obj.visible = true;
                 }
                 if let Ok(obj) = sdi.get_mut(&text_name) {
@@ -165,6 +165,10 @@ impl ToastManager {
                     obj.text = Some(toast.message.clone());
                     obj.text_color = with_alpha(at.toast_text_color, alpha);
                     obj.visible = true;
+                    if at.toast_text_shadow {
+                        obj.text_shadow_offset = Some((1, 1));
+                        obj.text_shadow_color = Some(at.bar_text_shadow_color);
+                    }
                 }
             } else {
                 if let Ok(obj) = sdi.get_mut(&bg_name) {
@@ -214,7 +218,7 @@ mod tests {
             total_ttl: 60,
         };
         // Near end of life -- should be fading out.
-        assert!(t.alpha() < 255);
+        assert!(t.alpha(10) < 255);
 
         let t2 = Toast {
             message: "test".to_string(),
@@ -223,7 +227,7 @@ mod tests {
             total_ttl: 60,
         };
         // Near start -- should be fading in.
-        assert!(t2.alpha() < 255);
+        assert!(t2.alpha(10) < 255);
     }
 
     #[test]

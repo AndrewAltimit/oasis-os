@@ -14,6 +14,10 @@ border_radius = 4
 shadow_intensity = 1
 gradient_enabled = true
 
+[bar_overrides]
+text_shadow = true
+text_shadow_color = "#00000080"
+
 [geometry]
 font_body = 12
 font_hint = 10

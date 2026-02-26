@@ -214,6 +214,12 @@ pub struct BarOverrides {
     pub statusbar_gradient_bottom: Option<String>,
     pub bar_gradient_top: Option<String>,
     pub bar_gradient_bottom: Option<String>,
+    /// Whether text shadow is enabled on bar text elements.
+    #[serde(default)]
+    pub text_shadow: Option<bool>,
+    /// Text shadow color (hex, default: "#00000080").
+    #[serde(default)]
+    pub text_shadow_color: Option<String>,
     /// Version label text (default: "Version 0.1").
     #[serde(default)]
     pub version_text: Option<String>,
@@ -323,6 +329,21 @@ pub struct GeometryOverrides {
     /// Terminal cursor blink rate in frames (default 30; 0 = no blink).
     #[serde(default)]
     pub cursor_blink_rate: Option<u32>,
+    /// Cursor lerp speed (0.0-1.0, default 0.18).
+    #[serde(default)]
+    pub cursor_lerp_speed: Option<f32>,
+    /// Page slide animation duration in frames (default 12).
+    #[serde(default)]
+    pub page_slide_duration: Option<u32>,
+    /// Start menu open/close animation speed (default 0.15).
+    #[serde(default)]
+    pub start_menu_anim_speed: Option<f32>,
+    /// Toast fade in/out duration in frames (default 10).
+    #[serde(default)]
+    pub toast_fade_frames: Option<u32>,
+    /// Press flash duration in frames (default 6; 0 = disabled).
+    #[serde(default)]
+    pub press_flash_duration: Option<u32>,
 }
 
 /// Per-element overrides for the start menu popup and button.
@@ -429,6 +450,12 @@ pub struct AppOverrides {
     /// Selection left-accent color (hex, default: with_alpha(primary, 128)).
     #[serde(default)]
     pub selection_accent_color: Option<String>,
+    /// Title bar gradient top color (hex).
+    #[serde(default)]
+    pub title_bar_gradient_top: Option<String>,
+    /// Title bar gradient bottom color (hex).
+    #[serde(default)]
+    pub title_bar_gradient_bottom: Option<String>,
 }
 
 /// Per-element color overrides for the on-screen keyboard.

@@ -65,6 +65,14 @@ pub struct SkinObjectDef {
     pub stroke_width: Option<u16>,
     #[serde(default)]
     pub stroke_color: Option<String>,
+    #[serde(default)]
+    pub text_shadow_dx: Option<i32>,
+    #[serde(default)]
+    pub text_shadow_dy: Option<i32>,
+    #[serde(default)]
+    pub text_shadow_color: Option<String>,
+    #[serde(default)]
+    pub shadow_color: Option<String>,
 }
 
 /// Layout: a named collection of SDI object definitions (`layout.toml`).
@@ -336,6 +344,22 @@ impl Skin {
                     && let Some(parsed) = parse_hex_color(c)
                 {
                     obj.stroke_color = Some(parsed);
+                }
+                if def.text_shadow_dx.is_some() || def.text_shadow_dy.is_some() {
+                    obj.text_shadow_offset = Some((
+                        def.text_shadow_dx.unwrap_or(1),
+                        def.text_shadow_dy.unwrap_or(1),
+                    ));
+                }
+                if let Some(ref c) = def.text_shadow_color
+                    && let Some(parsed) = parse_hex_color(c)
+                {
+                    obj.text_shadow_color = Some(parsed);
+                }
+                if let Some(ref c) = def.shadow_color
+                    && let Some(parsed) = parse_hex_color(c)
+                {
+                    obj.shadow_color = Some(parsed);
                 }
             }
         }
@@ -738,6 +762,70 @@ stroke_color = "#00FF00"
         assert_eq!(obj.shadow_level, Some(3));
         assert_eq!(obj.stroke_width, Some(2));
         assert_eq!(obj.stroke_color, Some("#00FF00".to_string()));
+    }
+
+    #[test]
+    fn layout_object_text_shadow_properties() {
+        let layout = r##"
+[shadowed]
+x = 0
+y = 0
+w = 100
+h = 50
+text_shadow_dx = 2
+text_shadow_dy = 3
+text_shadow_color = "#00000080"
+shadow_color = "#FF000040"
+"##;
+        let skin = Skin::from_toml(MANIFEST, layout, FEATURES).unwrap();
+        let obj = &skin.layout.objects["shadowed"];
+        assert_eq!(obj.text_shadow_dx, Some(2));
+        assert_eq!(obj.text_shadow_dy, Some(3));
+        assert_eq!(obj.text_shadow_color, Some("#00000080".to_string()));
+        assert_eq!(obj.shadow_color, Some("#FF000040".to_string()));
+    }
+
+    #[test]
+    fn apply_layout_text_shadow_properties() {
+        let layout = r##"
+[shadow_obj]
+x = 0
+y = 0
+w = 100
+h = 50
+text_shadow_dx = 1
+text_shadow_dy = 2
+text_shadow_color = "#00000080"
+shadow_color = "#FF000040"
+"##;
+        let skin = Skin::from_toml(MANIFEST, layout, FEATURES).unwrap();
+        let mut sdi = SdiRegistry::new();
+        skin.apply_layout(&mut sdi);
+        let obj = sdi.get("shadow_obj").unwrap();
+        assert_eq!(obj.text_shadow_offset, Some((1, 2)));
+        assert_eq!(
+            obj.text_shadow_color,
+            Some(oasis_types::backend::Color::rgba(0, 0, 0, 128))
+        );
+        assert_eq!(
+            obj.shadow_color,
+            Some(oasis_types::backend::Color::rgba(255, 0, 0, 64))
+        );
+    }
+
+    #[test]
+    fn apply_layout_text_shadow_defaults_dy() {
+        let layout = r##"
+[shadow_dx_only]
+x = 0
+y = 0
+text_shadow_dx = 3
+"##;
+        let skin = Skin::from_toml(MANIFEST, layout, FEATURES).unwrap();
+        let mut sdi = SdiRegistry::new();
+        skin.apply_layout(&mut sdi);
+        let obj = sdi.get("shadow_dx_only").unwrap();
+        assert_eq!(obj.text_shadow_offset, Some((3, 1)));
     }
 
     #[test]

@@ -65,6 +65,7 @@ battery_color = "#FFFFFF"
 version_color = "#FFFFFF"
 clock_color = "#FFFFFF"
 separator_color = "#4080D0"
+text_shadow = true
 
 [wallpaper]
 style = "gradient"
@@ -81,6 +82,9 @@ font_body = 14
 font_hint = 12
 font_heading = 16
 cursor_blink_rate = 25
+cursor_lerp_speed = 0.22
+page_slide_duration = 10
+press_flash_duration = 8
 
 [app_overrides]
 selection_accent_color = "#0054E380"

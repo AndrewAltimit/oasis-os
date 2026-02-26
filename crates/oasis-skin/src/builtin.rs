@@ -67,6 +67,9 @@ prompt = "#00FF00"
 output = "#00CC00"
 error = "#FF3333"
 
+[geometry]
+cursor_blink_rate = 20
+
 [wallpaper]
 style = "scanlines"
 "##;
@@ -183,6 +186,9 @@ status_bar = "#1A1A1A"
 prompt = "#CC8800"
 output = "#AAAAAA"
 error = "#CC3333"
+
+[geometry]
+press_flash_duration = 0
 
 [wallpaper]
 style = "dots"
@@ -386,6 +392,9 @@ error = "#FF4444"
 border_radius = 4
 shadow_intensity = 1
 
+[bar_overrides]
+text_shadow = true
+
 [wm_theme]
 titlebar_height = 24
 border_width = 1
@@ -509,10 +518,15 @@ border_radius = 6
 shadow_intensity = 2
 gradient_enabled = true
 
+[bar_overrides]
+text_shadow = true
+
 [geometry]
 font_body = 12
 font_hint = 10
 font_heading = 14
+cursor_lerp_speed = 0.15
+start_menu_anim_speed = 0.12
 
 [app_overrides]
 selection_accent_color = "#6C5CE780"
@@ -660,6 +674,7 @@ battery_color = "#FFFFFF"
 version_color = "#FFFFFF"
 clock_color = "#FFFFFF"
 separator_color = "#4080D0"
+text_shadow = true
 
 [wallpaper]
 style = "gradient"

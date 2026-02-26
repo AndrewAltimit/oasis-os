@@ -35,6 +35,12 @@ pub struct DashboardConfig {
     pub grid_w: u32,
     /// Total grid area height (for `GridLayout::cell_rect`).
     pub grid_h: u32,
+    /// Cursor lerp speed (0.0-1.0).
+    pub cursor_lerp_speed: f32,
+    /// Page slide animation duration in frames.
+    pub page_slide_duration: u32,
+    /// Press flash duration in frames (0 = disabled).
+    pub press_flash_duration: u32,
 }
 
 impl DashboardConfig {
@@ -71,6 +77,9 @@ impl DashboardConfig {
             grid_layout,
             grid_w,
             grid_h,
+            cursor_lerp_speed: at.cursor_lerp_speed,
+            page_slide_duration: at.page_slide_duration,
+            press_flash_duration: at.press_flash_duration,
         }
     }
 }
@@ -186,7 +195,7 @@ impl DashboardState {
 
     /// Trigger an icon press flash on the currently selected icon.
     pub fn trigger_press_flash(&mut self) {
-        self.press_flash_frame = 6;
+        self.press_flash_frame = self.config.press_flash_duration;
         self.press_flash_index = self.selected;
     }
 
@@ -202,7 +211,7 @@ impl DashboardState {
         self.page_anim = Some(PageSlideAnim {
             from_page: from,
             frame: 0,
-            duration: 12,
+            duration: self.config.page_slide_duration,
             direction: -1, // slide left (next)
         });
     }
@@ -223,7 +232,7 @@ impl DashboardState {
         self.page_anim = Some(PageSlideAnim {
             from_page: from,
             frame: 0,
-            duration: 12,
+            duration: self.config.page_slide_duration,
             direction: 1, // slide right (prev)
         });
     }
@@ -394,7 +403,7 @@ impl DashboardState {
                 self.cursor_visual_y = target_y;
                 self.cursor_initialized = true;
             } else {
-                let lerp_factor = 0.18;
+                let lerp_factor = self.config.cursor_lerp_speed;
                 self.cursor_visual_x += (target_x - self.cursor_visual_x) * lerp_factor;
                 self.cursor_visual_y += (target_y - self.cursor_visual_y) * lerp_factor;
             }
@@ -819,6 +828,9 @@ mod tests {
             grid_layout: GridLayout::new(2),
             grid_w: 220,
             grid_h: 190,
+            cursor_lerp_speed: 0.18,
+            page_slide_duration: 12,
+            press_flash_duration: 6,
         }
     }
 

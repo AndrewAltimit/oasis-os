@@ -157,6 +157,10 @@ impl BottomBar {
         );
         if let Ok(obj) = sdi.get_mut("bar_url") {
             obj.text = Some(at.bar_url_text.clone());
+            if at.bar_text_shadow {
+                obj.text_shadow_offset = Some((1, 1));
+                obj.text_shadow_color = Some(at.bar_text_shadow_color);
+            }
         }
 
         // Chrome bezel around URL area.
@@ -210,6 +214,10 @@ impl BottomBar {
                     obj.text = Some(label.to_string());
                     obj.text_color = color;
                     obj.visible = true;
+                    if at.bar_text_shadow {
+                        obj.text_shadow_offset = Some((1, 1));
+                        obj.text_shadow_color = Some(at.bar_text_shadow_color);
+                    }
                 }
                 cx += label.len() as i32 * char_w;
 
@@ -236,6 +244,10 @@ impl BottomBar {
             );
             if let Ok(obj) = sdi.get_mut("bar_r_hint") {
                 obj.text = Some("R>".to_string());
+                if at.bar_text_shadow {
+                    obj.text_shadow_offset = Some((1, 1));
+                    obj.text_shadow_color = Some(at.bar_text_shadow_color);
+                }
             }
         } else {
             // Hide media tab objects when disabled.
@@ -259,6 +271,10 @@ impl BottomBar {
         ensure_text(sdi, "bar_usb", usb_x, text_y, font_small, at.usb_color);
         if let Ok(obj) = sdi.get_mut("bar_usb") {
             obj.text = Some("USB".to_string());
+            if at.bar_text_shadow {
+                obj.text_shadow_offset = Some((1, 1));
+                obj.text_shadow_color = Some(at.bar_text_shadow_color);
+            }
         }
 
         // Page dots (rounded for circular appearance).

@@ -113,6 +113,8 @@ pub fn generate_from_config_with_phase(
         "scanlines" => generate_scanlines(w, h, at),
         "noise" => generate_noise(w, h, at),
         "dots" => generate_dots(w, h, at),
+        "stripes" => generate_stripes(w, h, at),
+        "checkerboard" => generate_checkerboard(w, h, at),
         _ => {
             // "gradient" -- multi-stop gradient with angle and optional wave.
             generate_gradient_config(
@@ -257,6 +259,74 @@ fn generate_dots(w: u32, h: u32, at: &crate::active_theme::ActiveTheme) -> Vec<u
             cx += spacing;
         }
         cy += spacing;
+    }
+    buf
+}
+
+/// Alternating diagonal color bands.
+///
+/// Uses `wallpaper_angle` for band direction and `wallpaper_grid_spacing` for
+/// band width. Colors from first two `wallpaper_stops`.
+fn generate_stripes(w: u32, h: u32, at: &crate::active_theme::ActiveTheme) -> Vec<u8> {
+    let c0 = at
+        .wallpaper_stops
+        .first()
+        .copied()
+        .unwrap_or(crate::backend::Color::BLACK);
+    let c1 = at
+        .wallpaper_stops
+        .get(1)
+        .copied()
+        .unwrap_or(crate::backend::Color::rgb(40, 40, 40));
+    let spacing = at.wallpaper_grid_spacing.max(2) as f32;
+    let angle_rad = at.wallpaper_angle.to_radians();
+    let cos_a = angle_rad.cos();
+    let sin_a = angle_rad.sin();
+
+    let mut buf = vec![0u8; (w * h * 4) as usize];
+    for y in 0..h {
+        for x in 0..w {
+            let offset = ((y * w + x) * 4) as usize;
+            let proj = x as f32 * cos_a + y as f32 * sin_a;
+            let band = (proj / spacing) as i32;
+            let c = if band % 2 == 0 { c0 } else { c1 };
+            buf[offset] = c.r;
+            buf[offset + 1] = c.g;
+            buf[offset + 2] = c.b;
+            buf[offset + 3] = 255;
+        }
+    }
+    buf
+}
+
+/// Grid of alternating-color cells (checkerboard pattern).
+///
+/// Uses first two `wallpaper_stops` and `wallpaper_grid_spacing` for cell size.
+fn generate_checkerboard(w: u32, h: u32, at: &crate::active_theme::ActiveTheme) -> Vec<u8> {
+    let c0 = at
+        .wallpaper_stops
+        .first()
+        .copied()
+        .unwrap_or(crate::backend::Color::BLACK);
+    let c1 = at
+        .wallpaper_stops
+        .get(1)
+        .copied()
+        .unwrap_or(crate::backend::Color::rgb(40, 40, 40));
+    let spacing = at.wallpaper_grid_spacing.max(2);
+
+    let mut buf = vec![0u8; (w * h * 4) as usize];
+    for y in 0..h {
+        for x in 0..w {
+            let offset = ((y * w + x) * 4) as usize;
+            let cx = x / spacing;
+            let cy = y / spacing;
+            let c = if (cx + cy).is_multiple_of(2) { c0 } else { c1 };
+            buf[offset] = c.r;
+            buf[offset + 1] = c.g;
+            buf[offset + 2] = c.b;
+            buf[offset + 3] = 255;
+        }
     }
     buf
 }
@@ -444,6 +514,49 @@ mod tests {
         let at = at_with_style("dots");
         let buf = generate_from_config(64, 64, &at);
         assert_eq!(buf.len(), 64 * 64 * 4);
+    }
+
+    #[test]
+    fn stripes_correct_size() {
+        let at = at_with_style("stripes");
+        let buf = generate_from_config(64, 64, &at);
+        assert_eq!(buf.len(), 64 * 64 * 4);
+    }
+
+    #[test]
+    fn stripes_all_opaque() {
+        let at = at_with_style("stripes");
+        let buf = generate_from_config(32, 32, &at);
+        for i in (3..buf.len()).step_by(4) {
+            assert_eq!(buf[i], 255);
+        }
+    }
+
+    #[test]
+    fn checkerboard_correct_size() {
+        let at = at_with_style("checkerboard");
+        let buf = generate_from_config(64, 64, &at);
+        assert_eq!(buf.len(), 64 * 64 * 4);
+    }
+
+    #[test]
+    fn checkerboard_alternates() {
+        let mut at = at_with_style("checkerboard");
+        at.wallpaper_grid_spacing = 16;
+        at.wallpaper_stops = vec![
+            crate::backend::Color::rgb(255, 0, 0),
+            crate::backend::Color::rgb(0, 0, 255),
+        ];
+        let buf = generate_from_config(32, 32, &at);
+        // Cell (0,0) should be color 0, cell (1,0) should be color 1.
+        let p00 = (buf[0], buf[1], buf[2]); // x=0,y=0
+        let p16 = (
+            (16 * 4) as usize,
+            (16 * 4 + 1) as usize,
+            (16 * 4 + 2) as usize,
+        );
+        let p16_val = (buf[p16.0], buf[p16.1], buf[p16.2]); // x=16,y=0
+        assert_ne!(p00, p16_val);
     }
 
     #[test]
