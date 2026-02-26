@@ -41,7 +41,7 @@ pub fn update_media_page(sdi: &mut SdiRegistry, bottom_bar: &BottomBar, at: &Act
     let page_name = "media_page_text";
     if !sdi.contains(page_name) {
         let obj = sdi.create(page_name);
-        obj.font_size = 14;
+        obj.font_size = at.font_heading;
         obj.text_color = oasis_types::color::with_alpha(at.app_text, 200);
         obj.w = 0;
         obj.h = 0;
@@ -56,7 +56,7 @@ pub fn update_media_page(sdi: &mut SdiRegistry, bottom_bar: &BottomBar, at: &Act
     let hint_name = "media_page_hint";
     if !sdi.contains(hint_name) {
         let obj = sdi.create(hint_name);
-        obj.font_size = 10;
+        obj.font_size = at.font_hint;
         obj.text_color = at.app_dim_text;
         obj.w = 0;
         obj.h = 0;
@@ -109,6 +109,7 @@ pub fn setup_terminal_objects(
     input_buf: &str,
     scroll_offset: usize,
     at: &ActiveTheme,
+    cursor_visible: bool,
 ) {
     let margin = 4i32;
     let top_y = at.statusbar_height as i32 + 2;
@@ -143,7 +144,7 @@ pub fn setup_terminal_objects(
             let obj = sdi.create(&name);
             obj.x = margin + 4;
             obj.y = top_y + 2 + (i as i32) * at.terminal_line_height as i32;
-            obj.font_size = 12;
+            obj.font_size = at.font_body;
             obj.text_color = output_color;
             obj.w = 0;
             obj.h = 0;
@@ -174,13 +175,14 @@ pub fn setup_terminal_objects(
         let obj = sdi.create("term_prompt");
         obj.x = margin + 4;
         obj.y = input_y + 2;
-        obj.font_size = 12;
+        obj.font_size = at.font_body;
         obj.text_color = at.terminal_prompt_color;
         obj.w = 0;
         obj.h = 0;
     }
     if let Ok(obj) = sdi.get_mut("term_prompt") {
-        obj.text = Some(format!("{cwd}> {input_buf}_"));
+        let cursor_char = if cursor_visible { '_' } else { ' ' };
+        obj.text = Some(format!("{cwd}> {input_buf}{cursor_char}"));
         obj.visible = true;
     }
 }
@@ -349,7 +351,7 @@ mod tests {
         let mut sdi = SdiRegistry::new();
         let lines: Vec<String> = vec!["hello".to_string()];
         let at = ActiveTheme::default();
-        setup_terminal_objects(&mut sdi, &lines, "/home", "ls", 0, &at);
+        setup_terminal_objects(&mut sdi, &lines, "/home", "ls", 0, &at, true);
 
         // All objects should be visible after setup.
         assert!(sdi.get("terminal_bg").unwrap().visible);
@@ -384,7 +386,7 @@ mod tests {
         let mut sdi = SdiRegistry::new();
         let lines: Vec<String> = vec![];
         let at = ActiveTheme::default();
-        setup_terminal_objects(&mut sdi, &lines, "/", "", 0, &at);
+        setup_terminal_objects(&mut sdi, &lines, "/", "", 0, &at, true);
 
         assert!(sdi.contains("terminal_bg"));
         assert!(sdi.contains("term_input_bg"));
@@ -398,7 +400,7 @@ mod tests {
     fn setup_terminal_objects_prompt_format() {
         let mut sdi = SdiRegistry::new();
         let at = ActiveTheme::default();
-        setup_terminal_objects(&mut sdi, &[], "/home/user", "cat foo.txt", 0, &at);
+        setup_terminal_objects(&mut sdi, &[], "/home/user", "cat foo.txt", 0, &at, true);
 
         let prompt = sdi.get("term_prompt").unwrap();
         assert_eq!(prompt.text.as_deref(), Some("/home/user> cat foo.txt_"));
@@ -409,7 +411,7 @@ mod tests {
         let mut sdi = SdiRegistry::new();
         let lines: Vec<String> = (0..3).map(|i| format!("line{i}")).collect();
         let at = ActiveTheme::default();
-        setup_terminal_objects(&mut sdi, &lines, "/", "", 0, &at);
+        setup_terminal_objects(&mut sdi, &lines, "/", "", 0, &at, true);
 
         // With 3 lines and VISIBLE=12, start=0. Lines 0-2 have text, rest None.
         assert_eq!(
@@ -429,7 +431,7 @@ mod tests {
         // 20 lines -- only last 12 should be visible.
         let lines: Vec<String> = (0..20).map(|i| format!("line{i}")).collect();
         let at = ActiveTheme::default();
-        setup_terminal_objects(&mut sdi, &lines, "/", "", 0, &at);
+        setup_terminal_objects(&mut sdi, &lines, "/", "", 0, &at, true);
 
         let visible = visible_output_lines(&at);
         // start = 20 - 12 = 8, so term_line_0 = lines[8]
@@ -451,10 +453,10 @@ mod tests {
         let mut sdi = SdiRegistry::new();
         let lines = vec!["first".to_string()];
         let at = ActiveTheme::default();
-        setup_terminal_objects(&mut sdi, &lines, "/", "a", 0, &at);
+        setup_terminal_objects(&mut sdi, &lines, "/", "a", 0, &at, true);
 
         let lines2 = vec!["second".to_string()];
-        setup_terminal_objects(&mut sdi, &lines2, "/tmp", "b", 0, &at);
+        setup_terminal_objects(&mut sdi, &lines2, "/tmp", "b", 0, &at, true);
 
         // Should update text, not create duplicates.
         assert_eq!(
@@ -471,7 +473,7 @@ mod tests {
     fn setup_terminal_objects_bg_uses_theme() {
         let mut sdi = SdiRegistry::new();
         let at = ActiveTheme::default();
-        setup_terminal_objects(&mut sdi, &[], "/", "", 0, &at);
+        setup_terminal_objects(&mut sdi, &[], "/", "", 0, &at, true);
 
         let bg = sdi.get("terminal_bg").unwrap();
         assert_eq!(bg.x, 4);
@@ -483,7 +485,7 @@ mod tests {
     fn setup_terminal_objects_empty_input() {
         let mut sdi = SdiRegistry::new();
         let at = ActiveTheme::default();
-        setup_terminal_objects(&mut sdi, &[], "/", "", 0, &at);
+        setup_terminal_objects(&mut sdi, &[], "/", "", 0, &at, true);
 
         let prompt = sdi.get("term_prompt").unwrap();
         assert_eq!(prompt.text.as_deref(), Some("/> _"));

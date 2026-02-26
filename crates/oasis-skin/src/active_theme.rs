@@ -332,6 +332,50 @@ pub struct ActiveTheme {
     /// Start menu footer text.
     pub sm_footer_text: String,
 
+    // -- Tab pill stroke colors --
+    /// Active tab pill stroke color.
+    pub tab_active_stroke: Color,
+    /// Inactive tab pill stroke color.
+    pub tab_inactive_stroke: Color,
+
+    // -- Font sizes --
+    /// Body text font size (terminal lines, app content).
+    pub font_body: u16,
+    /// Hint/metadata font size (scroll indicators, metadata).
+    pub font_hint: u16,
+    /// Heading font size (section headings, media page title).
+    pub font_heading: u16,
+
+    // -- Terminal cursor blink --
+    /// Cursor blink rate in frames (0 = no blink, 30 = ~0.5s at 60fps).
+    pub terminal_cursor_blink_rate: u32,
+
+    // -- Start menu inner padding --
+    /// Inner padding for start menu panel.
+    pub sm_pad_inner: i32,
+
+    // -- Selection highlight --
+    /// Selection highlight border radius.
+    pub app_selection_border_radius: u16,
+    /// Selection left-accent bar color.
+    pub app_selection_accent_color: Color,
+
+    // -- Toast notification theme --
+    /// Toast info background color.
+    pub toast_info_bg: Color,
+    /// Toast success background color.
+    pub toast_success_bg: Color,
+    /// Toast error background color.
+    pub toast_error_bg: Color,
+    /// Toast warning background color.
+    pub toast_warning_bg: Color,
+    /// Toast text color.
+    pub toast_text_color: Color,
+    /// Toast border radius.
+    pub toast_border_radius: u16,
+    /// Toast time-to-live in frames.
+    pub toast_ttl: u32,
+
     // -- UI toolkit theme --
     /// Unified UI theme derived from the skin palette.
     ///
@@ -491,6 +535,22 @@ impl Default for ActiveTheme {
             bar_category_label: "OSS".to_string(),
             bar_url_text: "HTTP://OASIS.LOCAL".to_string(),
             sm_footer_text: "Log Off  Shut Down".to_string(),
+            tab_active_stroke: Color::rgba(255, 255, 255, 180),
+            tab_inactive_stroke: Color::rgba(255, 255, 255, 60),
+            font_body: 12,
+            font_hint: 10,
+            font_heading: 14,
+            terminal_cursor_blink_rate: 30,
+            sm_pad_inner: 8,
+            app_selection_border_radius: 2,
+            app_selection_accent_color: Color::rgba(50, 100, 200, 128),
+            toast_info_bg: Color::rgba(50, 100, 200, 220),
+            toast_success_bg: Color::rgba(60, 180, 100, 220),
+            toast_error_bg: Color::rgba(255, 68, 68, 220),
+            toast_warning_bg: Color::rgba(230, 170, 40, 220),
+            toast_text_color: Color::WHITE,
+            toast_border_radius: 4,
+            toast_ttl: 180,
             ui_theme: oasis_ui::theme::Theme::dark(),
         }
     }
@@ -1009,6 +1069,57 @@ impl ActiveTheme {
             sm_footer_text: sm
                 .and_then(|s| s.footer_text.clone())
                 .unwrap_or_else(|| "Log Off  Shut Down".to_string()),
+            tab_active_stroke: with_alpha(
+                text,
+                bar.and_then(|b| b.tab_active_alpha).unwrap_or(180),
+            ),
+            tab_inactive_stroke: with_alpha(
+                text,
+                bar.and_then(|b| b.tab_inactive_alpha).unwrap_or(60),
+            ),
+            font_body: skin
+                .geometry
+                .as_ref()
+                .and_then(|g| g.font_body)
+                .unwrap_or(12),
+            font_hint: skin
+                .geometry
+                .as_ref()
+                .and_then(|g| g.font_hint)
+                .unwrap_or(10),
+            font_heading: skin
+                .geometry
+                .as_ref()
+                .and_then(|g| g.font_heading)
+                .unwrap_or(14),
+            terminal_cursor_blink_rate: skin
+                .geometry
+                .as_ref()
+                .and_then(|g| g.cursor_blink_rate)
+                .unwrap_or(30),
+            sm_pad_inner: sm.and_then(|s| s.pad_inner).unwrap_or(8),
+            app_selection_border_radius: {
+                let ap = skin.app_overrides.as_ref();
+                ap.and_then(|a| a.selection_border_radius).unwrap_or(2)
+            },
+            app_selection_accent_color: {
+                let ap = skin.app_overrides.as_ref();
+                ov(
+                    ap.and_then(|a| a.selection_accent_color.as_ref()),
+                    with_alpha(primary, 128),
+                )
+            },
+            toast_info_bg: with_alpha(primary, 220),
+            toast_success_bg: Color::rgba(60, 180, 100, 220),
+            toast_error_bg: with_alpha(skin.error_color(), 220),
+            toast_warning_bg: Color::rgba(230, 170, 40, 220),
+            toast_text_color: text,
+            toast_border_radius: skin
+                .geometry
+                .as_ref()
+                .and_then(|g| g.terminal_border_radius)
+                .unwrap_or(4),
+            toast_ttl: 180,
             ui_theme: skin.to_ui_theme(),
         }
     }

@@ -13,3 +13,12 @@ error = "#FF4466"
 border_radius = 4
 shadow_intensity = 1
 gradient_enabled = true
+
+[geometry]
+font_body = 12
+font_hint = 10
+font_heading = 14
+
+[app_overrides]
+selection_accent_color = "#4488CC80"
+selection_border_radius = 3

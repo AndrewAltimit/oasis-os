@@ -275,7 +275,7 @@ impl OasisWasm {
             ],
             terminal_scroll_offset: 0,
             frame_counter: 0,
-            bg_color: Color::rgb(10, 10, 18),
+            bg_color: Color::rgb(0, 0, 0),
             width,
             height,
         })
@@ -489,6 +489,9 @@ impl OasisWasm {
                 self.start_menu.close();
                 self.start_menu.hide_sdi(&mut self.sdi);
                 terminal_sdi::hide_media_page(&mut self.sdi);
+                let cursor_visible = self.active_theme.terminal_cursor_blink_rate == 0
+                    || (self.frame_counter / self.active_theme.terminal_cursor_blink_rate as u64)
+                        .is_multiple_of(2);
                 terminal_sdi::setup_terminal_objects(
                     &mut self.sdi,
                     &self.output_lines,
@@ -496,6 +499,7 @@ impl OasisWasm {
                     &self.input_buf,
                     self.terminal_scroll_offset,
                     &self.active_theme,
+                    cursor_visible,
                 );
             },
             Mode::App => {

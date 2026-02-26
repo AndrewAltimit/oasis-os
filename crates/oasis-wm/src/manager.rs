@@ -770,7 +770,7 @@ impl WindowManager {
             }
         }
 
-        // Update titlebar colors for all windows.
+        // Update titlebar colors and frame distinction for all windows.
         for window in &self.windows {
             let is_active = window.id == id;
             let color = if is_active {
@@ -807,6 +807,24 @@ impl WindowManager {
                 } else {
                     obj.gradient_top = None;
                     obj.gradient_bottom = None;
+                }
+            }
+            // Dim inactive window frames.
+            let frame_name = window.sdi_name("frame");
+            if let Ok(obj) = sdi.get_mut(&frame_name) {
+                if is_active {
+                    let fc = self.theme.frame_color;
+                    obj.color = fc;
+                    if self.theme.frame_shadow_level > 0 {
+                        obj.shadow_level = Some(self.theme.frame_shadow_level);
+                    }
+                } else {
+                    obj.color = oasis_types::color::with_alpha(
+                        self.theme.frame_color,
+                        self.theme.inactive_frame_alpha,
+                    );
+                    let reduced = self.theme.frame_shadow_level.saturating_sub(1);
+                    obj.shadow_level = if reduced > 0 { Some(reduced) } else { None };
                 }
             }
         }

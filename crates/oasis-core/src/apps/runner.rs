@@ -866,7 +866,7 @@ impl AppRunner {
             obj.text = Some(format!("{}{dir_suffix}", self.title));
             obj.x = 8;
             obj.y = 4;
-            obj.font_size = 12;
+            obj.font_size = at.font_body;
             obj.text_color = at.app_title_bar_text;
             obj.w = 0;
             obj.h = 0;
@@ -897,15 +897,30 @@ impl AppRunner {
         if !sdi.contains("app_sel_bg") {
             sdi.create("app_sel_bg");
         }
+        let sel_y = content_y + (self.visual_selected * at.terminal_line_height as f32) as i32;
         if let Ok(obj) = sdi.get_mut("app_sel_bg") {
-            let sel_y = content_y + (self.visual_selected * at.terminal_line_height as f32) as i32;
             obj.x = content_x;
             obj.y = sel_y;
             obj.w = content_w;
             obj.h = at.terminal_line_height;
             obj.color = at.app_selected_bg;
+            obj.border_radius = Some(at.app_selection_border_radius);
             obj.visible = !self.lines.is_empty();
             obj.z = 101;
+        }
+        // Selection accent bar (left edge).
+        if !sdi.contains("app_sel_accent") {
+            sdi.create("app_sel_accent");
+        }
+        if let Ok(obj) = sdi.get_mut("app_sel_accent") {
+            obj.x = content_x;
+            obj.y = sel_y;
+            obj.w = 3;
+            obj.h = at.terminal_line_height;
+            obj.color = at.app_selection_accent_color;
+            obj.border_radius = Some(at.app_selection_border_radius);
+            obj.visible = !self.lines.is_empty();
+            obj.z = 102;
         }
 
         for (i, rect) in line_rects.iter().enumerate() {
@@ -916,16 +931,15 @@ impl AppRunner {
             if let Ok(obj) = sdi.get_mut(&name) {
                 let line_idx = self.scroll + i;
                 if line_idx < self.lines.len() {
-                    let prefix = if i == self.cursor { "> " } else { "  " };
-                    obj.text = Some(format!("{prefix}{}", self.lines[line_idx]));
+                    obj.text = Some(self.lines[line_idx].clone());
                     obj.visible = true;
                 } else {
                     obj.text = None;
                     obj.visible = false;
                 }
-                obj.x = rect.x;
+                obj.x = rect.x + 6;
                 obj.y = rect.y;
-                obj.font_size = 12;
+                obj.font_size = at.font_body;
                 obj.text_color = if i == self.cursor {
                     at.app_selected_text
                 } else {
@@ -953,7 +967,7 @@ impl AppRunner {
             }
             obj.x = 8;
             obj.y = at.screen_h as i32 - 14;
-            obj.font_size = 10;
+            obj.font_size = at.font_hint;
             obj.text_color = at.app_dim_text;
             obj.w = 0;
             obj.h = 0;
@@ -972,7 +986,7 @@ impl AppRunner {
             ));
             obj.x = 8;
             obj.y = 4;
-            obj.font_size = 12;
+            obj.font_size = at.font_body;
             obj.text_color = at.app_title_bar_text;
             obj.w = 0;
             obj.h = 0;
@@ -1027,20 +1041,15 @@ impl AppRunner {
                 let line_idx = p.scroll + i;
                 let is_active = self.active_panel == 0;
                 if line_idx < p.lines.len() {
-                    let prefix = if is_active && i == p.cursor {
-                        "> "
-                    } else {
-                        "  "
-                    };
-                    obj.text = Some(format!("{prefix}{}", p.lines[line_idx]));
+                    obj.text = Some(p.lines[line_idx].clone());
                     obj.visible = true;
                 } else {
                     obj.text = None;
                     obj.visible = false;
                 }
-                obj.x = rect.x;
+                obj.x = rect.x + 6;
                 obj.y = rect.y;
-                obj.font_size = 12;
+                obj.font_size = at.font_body;
                 obj.text_color = if is_active && i == p.cursor {
                     at.app_selected_text
                 } else {
@@ -1071,20 +1080,15 @@ impl AppRunner {
                 let line_idx = p.scroll + i;
                 let is_active = self.active_panel == 1;
                 if line_idx < p.lines.len() {
-                    let prefix = if is_active && i == p.cursor {
-                        "> "
-                    } else {
-                        "  "
-                    };
-                    obj.text = Some(format!("{prefix}{}", p.lines[line_idx]));
+                    obj.text = Some(p.lines[line_idx].clone());
                     obj.visible = true;
                 } else {
                     obj.text = None;
                     obj.visible = false;
                 }
-                obj.x = rect.x;
+                obj.x = rect.x + 6;
                 obj.y = rect.y;
-                obj.font_size = 12;
+                obj.font_size = at.font_body;
                 obj.text_color = if is_active && i == p.cursor {
                     at.app_selected_text
                 } else {
@@ -1104,7 +1108,7 @@ impl AppRunner {
             obj.text = Some("L/R=panel  Cancel=back".to_string());
             obj.x = 8;
             obj.y = at.screen_h as i32 - 14;
-            obj.font_size = 10;
+            obj.font_size = at.font_hint;
             obj.text_color = at.app_dim_text;
             obj.w = 0;
             obj.h = 0;
@@ -1133,6 +1137,7 @@ impl AppRunner {
             "app_scroll",
             "app_divider",
             "app_sel_bg",
+            "app_sel_accent",
         ];
         for name in &fixed {
             if let Ok(obj) = sdi.get_mut(name) {

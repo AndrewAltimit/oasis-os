@@ -714,7 +714,15 @@ mod tests {
         let (mut state, mut sdi, mut vfs) = make_test_state();
         state.mode = Mode::Terminal;
         // First create terminal objects so set_terminal_visible can hide them.
-        terminal_sdi::setup_terminal_objects(&mut sdi, &[], "/", "", 0, &ActiveTheme::default());
+        terminal_sdi::setup_terminal_objects(
+            &mut sdi,
+            &[],
+            "/",
+            "",
+            0,
+            &ActiveTheme::default(),
+            true,
+        );
         handle_default_input(
             &InputEvent::ButtonPress(Button::Cancel),
             &mut state,

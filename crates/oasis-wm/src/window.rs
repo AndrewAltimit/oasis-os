@@ -261,6 +261,8 @@ pub struct WmTheme {
     pub maximize_bottom_inset: u32,
     /// Color for the semi-transparent modal backdrop overlay.
     pub modal_overlay_color: Color,
+    /// Alpha applied to inactive window frames (default 180; 255 = no dim).
+    pub inactive_frame_alpha: u8,
 }
 
 impl Default for WmTheme {
@@ -309,6 +311,7 @@ impl Default for WmTheme {
             maximize_top_inset: 0,
             maximize_bottom_inset: 0,
             modal_overlay_color: Color::rgba(0, 0, 0, 100),
+            inactive_frame_alpha: 180,
         }
     }
 }

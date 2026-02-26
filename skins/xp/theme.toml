@@ -52,6 +52,7 @@ content_stroke_width = 1
 content_stroke_color = "#0054E320"
 maximize_top_inset = 44
 maximize_bottom_inset = 30
+inactive_frame_alpha = 160
 
 [bar_overrides]
 statusbar_bg = "#1F3E7B"
@@ -76,6 +77,14 @@ statusbar_height = 26
 bottombar_height = 30
 icon_width = 24
 icon_height = 28
+font_body = 14
+font_hint = 12
+font_heading = 16
+cursor_blink_rate = 25
+
+[app_overrides]
+selection_accent_color = "#0054E380"
+selection_border_radius = 2
 
 [icon_overrides]
 body_color = "#ECE9D8"

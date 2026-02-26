@@ -509,6 +509,15 @@ border_radius = 6
 shadow_intensity = 2
 gradient_enabled = true
 
+[geometry]
+font_body = 12
+font_hint = 10
+font_heading = 14
+
+[app_overrides]
+selection_accent_color = "#6C5CE780"
+selection_border_radius = 4
+
 [wm_theme]
 titlebar_height = 24
 border_width = 1
@@ -638,6 +647,7 @@ content_stroke_width = 1
 content_stroke_color = "#0054E320"
 maximize_top_inset = 52
 maximize_bottom_inset = 40
+inactive_frame_alpha = 160
 
 [bar_overrides]
 statusbar_bg = "#1F3E7B"
@@ -664,6 +674,14 @@ icon_width = 48
 icon_height = 56
 font_small = 12
 tab_row_height = 22
+font_body = 14
+font_hint = 12
+font_heading = 16
+cursor_blink_rate = 25
+
+[app_overrides]
+selection_accent_color = "#0054E380"
+selection_border_radius = 2
 
 [icon_overrides]
 body_color = "#ECE9D8"

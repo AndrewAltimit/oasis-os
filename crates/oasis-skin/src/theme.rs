@@ -184,6 +184,9 @@ pub struct WmThemeOverrides {
     pub maximize_bottom_inset: Option<u32>,
     #[serde(default)]
     pub modal_overlay_color: Option<String>,
+    /// Alpha applied to inactive window frames (default 180).
+    #[serde(default)]
+    pub inactive_frame_alpha: Option<u8>,
 }
 
 /// Per-element overrides for status bar and bottom bar colors.
@@ -308,6 +311,18 @@ pub struct GeometryOverrides {
     /// X offset where top tabs start (default: proportional to screen).
     #[serde(default)]
     pub tab_start_x: Option<i32>,
+    /// Body text font size (default 12).
+    #[serde(default)]
+    pub font_body: Option<u16>,
+    /// Hint/metadata font size (default 10).
+    #[serde(default)]
+    pub font_hint: Option<u16>,
+    /// Heading font size (default 14).
+    #[serde(default)]
+    pub font_heading: Option<u16>,
+    /// Terminal cursor blink rate in frames (default 30; 0 = no blink).
+    #[serde(default)]
+    pub cursor_blink_rate: Option<u32>,
 }
 
 /// Per-element overrides for the start menu popup and button.
@@ -373,6 +388,9 @@ pub struct StartMenuOverrides {
     /// Footer text (default: "Log Off  Shut Down").
     #[serde(default)]
     pub footer_text: Option<String>,
+    /// Inner padding for the menu panel (default 8).
+    #[serde(default)]
+    pub pad_inner: Option<i32>,
 }
 
 /// Per-element color overrides for app screens (File Manager, Photo Viewer, etc.).
@@ -405,6 +423,12 @@ pub struct AppOverrides {
     /// Title bar height in pixels.
     #[serde(default)]
     pub title_bar_height: Option<u32>,
+    /// Selection highlight border radius (default 2).
+    #[serde(default)]
+    pub selection_border_radius: Option<u16>,
+    /// Selection left-accent color (hex, default: with_alpha(primary, 128)).
+    #[serde(default)]
+    pub selection_accent_color: Option<String>,
 }
 
 /// Per-element color overrides for the on-screen keyboard.
@@ -833,6 +857,9 @@ impl SkinTheme {
                 && let Some(parsed) = parse_hex_color(c)
             {
                 theme.modal_overlay_color = parsed;
+            }
+            if let Some(a) = ov.inactive_frame_alpha {
+                theme.inactive_frame_alpha = a;
             }
         }
         // Default glyph colors to titlebar_text_color if not explicitly set.

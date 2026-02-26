@@ -650,12 +650,7 @@ impl DashboardState {
             obj.h = gfx_h;
             obj.visible = true;
             let c = app.color;
-            obj.color = Color::rgba(
-                c.r.saturating_add(30),
-                c.g.saturating_add(10),
-                c.b.saturating_add(30),
-                200,
-            );
+            obj.color = oasis_types::color::with_alpha(oasis_types::color::lighten(c, 0.15), 200);
             obj.text = None;
         }
         Self::draw_label(
@@ -704,7 +699,7 @@ impl DashboardState {
             obj.border_radius = Some(at.icon_border_radius + 1);
             obj.stroke_width = Some(1);
             let darker = darken(app.color, 0.25);
-            obj.stroke_color = Some(Color::rgba(darker.r, darker.g, darker.b, 100));
+            obj.stroke_color = Some(oasis_types::color::with_alpha(darker, 100));
         }
         // Card body: vertical gradient from lightened top to darkened bottom.
         if let Ok(obj) = sdi.get_mut(&format!("icon_{i}")) {

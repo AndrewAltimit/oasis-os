@@ -4,7 +4,6 @@
 //! SDI objects to display system status and top-level navigation tabs.
 
 use crate::active_theme::ActiveTheme;
-use crate::backend::Color;
 use crate::platform::{BatteryState, PowerInfo, SystemTime};
 use crate::sdi::SdiRegistry;
 use crate::sdi::helpers::{ensure_border, ensure_pill, ensure_text, hide_objects};
@@ -297,7 +296,7 @@ impl StatusBar {
                     tw,
                     th,
                     at.tab_active_fill,
-                    Color::rgba(255, 255, 255, at.tab_active_alpha),
+                    at.tab_active_stroke,
                 );
             } else {
                 // Inactive: transparent fill, dim stroke.
@@ -309,7 +308,7 @@ impl StatusBar {
                     tw,
                     th,
                     at.tab_inactive_fill,
-                    Color::rgba(255, 255, 255, at.tab_inactive_alpha),
+                    at.tab_inactive_stroke,
                 );
             }
 
@@ -322,7 +321,7 @@ impl StatusBar {
                 tx.max(x + 2),
                 tab_text_y,
                 font_small,
-                Color::WHITE,
+                at.media_tab_inactive,
             );
             if let Ok(obj) = sdi.get_mut(&name) {
                 obj.text = Some(tab.label().to_string());

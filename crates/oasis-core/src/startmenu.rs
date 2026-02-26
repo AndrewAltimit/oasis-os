@@ -18,10 +18,7 @@ use oasis_types::color::with_alpha;
 const BTN_X: i32 = 4;
 /// Menu panel X position.
 const MENU_X: i32 = 2;
-/// Padding inside the menu panel.
-const PAD_TOP: i32 = 8;
-const PAD_BOTTOM: i32 = 8;
-const PAD_LEFT: i32 = 8;
+// PAD: inner padding is now at.sm_pad_inner (themed, default 8).
 
 /// Z-order for menu objects (above bars at 900, below cursor).
 const Z_MENU: i32 = 950;
@@ -103,9 +100,8 @@ impl StartMenuState {
         } else {
             0
         };
-        let menu_h = header_h
-            + (PAD_TOP + rows as i32 * at.sm_item_row_height + PAD_BOTTOM) as u32
-            + footer_h;
+        let pad = at.sm_pad_inner;
+        let menu_h = header_h + (pad + rows as i32 * at.sm_item_row_height + pad) as u32 + footer_h;
         let bar_y = (at.screen_h - at.bottombar_height) as i32;
         let btn_y = bar_y + 3;
         let menu_y = bar_y - menu_h as i32 - 2;
@@ -282,14 +278,15 @@ impl StartMenuState {
             return None;
         }
         // Items start after header.
-        let items_top = self.menu_y + self.header_h as i32 + PAD_TOP;
+        let pad = self.at.sm_pad_inner;
+        let items_top = self.menu_y + self.header_h as i32 + pad;
         let rel_y = y - items_top;
-        let rel_x = x - MENU_X - PAD_LEFT;
+        let rel_x = x - MENU_X - pad;
         if rel_y < 0 || rel_x < 0 {
             return None;
         }
         let cols = self.at.sm_columns.max(1);
-        let col_w = (menu_w as i32 - PAD_LEFT * 2) / cols as i32;
+        let col_w = (menu_w as i32 - pad * 2) / cols as i32;
         if col_w <= 0 || self.at.sm_item_row_height <= 0 {
             return None;
         }
@@ -382,7 +379,8 @@ impl StartMenuState {
     fn update_menu_sdi(&self, sdi: &mut SdiRegistry, at: &ActiveTheme) {
         let menu_w = at.sm_panel_width;
         let cols = at.sm_columns.max(1);
-        let col_w = ((menu_w as i32 - PAD_LEFT * 2) / cols as i32).max(1);
+        let pad = at.sm_pad_inner;
+        let col_w = ((menu_w as i32 - pad * 2) / cols as i32).max(1);
         let item_row_h = at.sm_item_row_height.max(1);
         let icon_size = at.sm_item_icon_size;
 
@@ -455,7 +453,7 @@ impl StartMenuState {
                 obj.z = Z_MENU + 2;
             }
             if let Ok(obj) = sdi.get_mut("sm_header_text") {
-                obj.x = MENU_X + PAD_LEFT;
+                obj.x = MENU_X + pad;
                 obj.y = self.menu_y + y_offset + (self.header_h as i32 - at.font_small as i32) / 2;
                 obj.font_size = at.font_small;
                 obj.text = Some(header_text.clone());
@@ -467,8 +465,8 @@ impl StartMenuState {
         // Selection highlight.
         let sel_row = self.selected / cols;
         let sel_col = self.selected % cols;
-        let hl_x = MENU_X + PAD_LEFT + sel_col as i32 * col_w;
-        let hl_y = items_top + PAD_TOP + sel_row as i32 * item_row_h;
+        let hl_x = MENU_X + pad + sel_col as i32 * col_w;
+        let hl_y = items_top + pad + sel_row as i32 * item_row_h;
         ensure_rounded_fill(
             sdi,
             "sm_highlight",
@@ -487,9 +485,9 @@ impl StartMenuState {
         for (i, item) in self.items.iter().enumerate().take(MAX_ITEMS) {
             let row = i / cols;
             let col = i % cols;
-            let ix = MENU_X + PAD_LEFT + col as i32 * col_w + 2;
+            let ix = MENU_X + pad + col as i32 * col_w + 2;
             let iy =
-                items_top + PAD_TOP + row as i32 * item_row_h + (item_row_h - icon_size as i32) / 2;
+                items_top + pad + row as i32 * item_row_h + (item_row_h - icon_size as i32) / 2;
 
             // Icon placeholder (colored square).
             let icon_name = format!("sm_item_icon_{i}");
@@ -561,7 +559,7 @@ impl StartMenuState {
                 obj.z = Z_MENU + 2;
             }
             if let Ok(obj) = sdi.get_mut("sm_footer_text") {
-                obj.x = MENU_X + PAD_LEFT;
+                obj.x = MENU_X + pad;
                 obj.y = self.menu_y + self.menu_h as i32 - self.footer_h as i32
                     + y_offset
                     + (self.footer_h as i32 - at.font_small as i32) / 2;
@@ -701,8 +699,9 @@ mod tests {
         let mut sm = StartMenuState::new(StartMenuState::default_items(&ActiveTheme::default()));
         sm.open = true;
         // Click on first item area (items start after header).
-        let y = sm.menu_y + sm.header_h as i32 + PAD_TOP + 2;
-        let x = MENU_X + PAD_LEFT + 2;
+        let pad = sm.at.sm_pad_inner;
+        let y = sm.menu_y + sm.header_h as i32 + pad + 2;
+        let x = MENU_X + pad + 2;
         let action = sm.hit_test_item(x, y);
         assert!(action.is_some());
     }
@@ -755,7 +754,8 @@ mod tests {
         let at = ActiveTheme::default();
         let sm = StartMenuState::new(StartMenuState::default_items(&ActiveTheme::default()));
         // 6 items in 2 cols = 3 rows, default item_row_height = 22.
-        let expected_h = (PAD_TOP + 3 * at.sm_item_row_height + PAD_BOTTOM) as u32;
+        let pad = at.sm_pad_inner;
+        let expected_h = (pad + 3 * at.sm_item_row_height + pad) as u32;
         assert_eq!(sm.menu_h, expected_h);
         let bar_y = (at.screen_h - at.bottombar_height) as i32;
         assert!(sm.menu_y < bar_y);

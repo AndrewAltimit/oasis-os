@@ -46,6 +46,9 @@ pub fn update_sdi(state: &mut AppState, sdi: &mut SdiRegistry) {
             state.start_menu.close();
             state.start_menu.hide_sdi(sdi);
             terminal_sdi::hide_media_page(sdi);
+            let cursor_visible = state.active_theme.terminal_cursor_blink_rate == 0
+                || (state.frame_counter / state.active_theme.terminal_cursor_blink_rate as u64)
+                    .is_multiple_of(2);
             terminal_sdi::setup_terminal_objects(
                 sdi,
                 &state.output_lines,
@@ -53,6 +56,7 @@ pub fn update_sdi(state: &mut AppState, sdi: &mut SdiRegistry) {
                 &state.input_buf,
                 state.terminal_scroll_offset,
                 &state.active_theme,
+                cursor_visible,
             );
         },
         Mode::App => {
