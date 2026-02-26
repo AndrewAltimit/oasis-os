@@ -12,6 +12,10 @@ use oasis_core::terminal_sdi;
 /// each frame. The actual rendering (`backend.clear`, `sdi.draw`, etc.)
 /// remains in main.rs since it requires `&mut backend`.
 pub fn update_sdi(state: &mut AppState, sdi: &mut SdiRegistry) {
+    // Advance animations each frame.
+    state.dashboard.tick_animation();
+    state.start_menu.tick_animation();
+
     match state.mode {
         Mode::Dashboard => {
             terminal_sdi::set_terminal_visible(sdi, false);

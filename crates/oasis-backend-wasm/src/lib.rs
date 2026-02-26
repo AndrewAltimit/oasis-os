@@ -214,10 +214,11 @@ impl OasisWasm {
         terminal_sdi::setup_wallpaper(&mut sdi, wallpaper_tex, width, height);
 
         // Mouse cursor texture.
-        let mouse_cursor = CursorState::new(width, height);
+        let mut mouse_cursor = CursorState::new(width, height);
+        mouse_cursor.scale = active_theme.cursor_scale;
         let cursor_texture;
         {
-            let (cursor_pixels, cw, ch) = cursor::generate_cursor_pixels();
+            let (cursor_pixels, cw, ch) = cursor::generate_cursor_pixels(active_theme.cursor_scale);
             let cursor_tex = backend
                 .load_texture(cw, ch, &cursor_pixels)
                 .map_err(|e| JsValue::from_str(&format!("cursor: {e}")))?;
@@ -451,6 +452,10 @@ impl OasisWasm {
     // -----------------------------------------------------------------------
 
     fn update_sdi(&mut self) {
+        // Advance animations each frame.
+        self.dashboard.tick_animation();
+        self.start_menu.tick_animation();
+
         match self.mode {
             Mode::Dashboard => {
                 terminal_sdi::set_terminal_visible(&mut self.sdi, false);

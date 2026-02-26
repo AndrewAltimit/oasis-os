@@ -4,6 +4,7 @@ use crate::shadow::Shadow;
 use oasis_types::backend::Color;
 
 /// Complete visual theme for the UI toolkit.
+#[derive(Debug, Clone)]
 pub struct Theme {
     /// Main background color.
     pub background: Color,

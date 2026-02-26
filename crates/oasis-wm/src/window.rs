@@ -259,6 +259,8 @@ pub struct WmTheme {
     pub maximize_top_inset: u32,
     /// Bottom inset when maximized (for bottom bar awareness).
     pub maximize_bottom_inset: u32,
+    /// Color for the semi-transparent modal backdrop overlay.
+    pub modal_overlay_color: Color,
 }
 
 impl Default for WmTheme {
@@ -306,6 +308,7 @@ impl Default for WmTheme {
             content_stroke_color: Color::rgba(255, 255, 255, 20),
             maximize_top_inset: 0,
             maximize_bottom_inset: 0,
+            modal_overlay_color: Color::rgba(0, 0, 0, 100),
         }
     }
 }

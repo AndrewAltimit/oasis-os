@@ -6,7 +6,7 @@
 //! skins to actually drive the UI appearance.
 
 use oasis_types::backend::Color;
-use oasis_types::color::{lighten, with_alpha};
+use oasis_types::color::{darken, lighten, with_alpha};
 
 use crate::SkinTheme;
 use crate::theme::parse_hex_color;
@@ -256,6 +256,50 @@ pub struct ActiveTheme {
     pub wallpaper_wave_intensity: f32,
     /// Gradient angle in degrees.
     pub wallpaper_angle: f32,
+    /// Grid/dot spacing for pattern wallpapers (default 16).
+    pub wallpaper_grid_spacing: u32,
+    /// Grid/dot line color.
+    pub wallpaper_grid_color: Color,
+    /// Noise intensity for "noise" wallpaper (default 0.3).
+    pub wallpaper_noise_intensity: f32,
+    /// Whether the wallpaper animates (wave phase shift).
+    pub wallpaper_animated: bool,
+
+    // -- Scrollbar --
+    /// Scrollbar track color.
+    pub scrollbar_track_color: Color,
+    /// Scrollbar thumb color.
+    pub scrollbar_thumb_color: Color,
+    /// Scrollbar width in pixels.
+    pub scrollbar_width: u32,
+    /// Scrollbar corner radius.
+    pub scrollbar_border_radius: u16,
+
+    // -- Terminal --
+    /// Terminal line height in pixels.
+    pub terminal_line_height: u32,
+
+    // -- Cursor --
+    /// Cursor scale factor (1 at <=480px, 2 at 800px+, 3 at 1024px+).
+    pub cursor_scale: u32,
+
+    // -- Transition --
+    /// Transition fade overlay color (default: black).
+    pub transition_fade_color: Color,
+
+    // -- Focus ring --
+    /// Focus ring/outline color for highlighted elements.
+    pub focus_ring_color: Color,
+    /// Focus ring stroke width (pixels).
+    pub focus_ring_width: u16,
+    /// Focus ring offset from element edge (pixels).
+    pub focus_ring_offset: i32,
+
+    // -- UI toolkit theme --
+    /// Unified UI theme derived from the skin palette.
+    ///
+    /// Callers should use this instead of `oasis_ui::theme::Theme::dark()` etc.
+    pub ui_theme: oasis_ui::theme::Theme,
 }
 
 impl Default for ActiveTheme {
@@ -380,6 +424,21 @@ impl Default for ActiveTheme {
             wallpaper_wave: true,
             wallpaper_wave_intensity: 1.0,
             wallpaper_angle: 0.0,
+            wallpaper_grid_spacing: 16,
+            wallpaper_grid_color: Color::rgba(255, 255, 255, 20),
+            wallpaper_noise_intensity: 0.3,
+            wallpaper_animated: false,
+            scrollbar_track_color: Color::rgba(255, 255, 255, 20),
+            scrollbar_thumb_color: Color::rgba(255, 255, 255, 100),
+            scrollbar_width: 6,
+            scrollbar_border_radius: 3,
+            terminal_line_height: 16,
+            cursor_scale: 1,
+            transition_fade_color: Color::BLACK,
+            focus_ring_color: Color::rgba(100, 200, 255, 180),
+            focus_ring_width: 2,
+            focus_ring_offset: 2,
+            ui_theme: oasis_ui::theme::Theme::dark(),
         }
     }
 }
@@ -736,6 +795,54 @@ impl ActiveTheme {
                 .and_then(|w| w.wave_intensity)
                 .unwrap_or(1.0),
             wallpaper_angle: skin.wallpaper.as_ref().and_then(|w| w.angle).unwrap_or(0.0),
+            wallpaper_grid_spacing: skin
+                .wallpaper
+                .as_ref()
+                .and_then(|w| w.grid_spacing)
+                .unwrap_or(16),
+            wallpaper_grid_color: skin
+                .wallpaper
+                .as_ref()
+                .and_then(|w| w.grid_color.as_ref())
+                .and_then(|s| parse_hex_color(s))
+                .unwrap_or_else(|| lighten(skin.background_color(), 0.08)),
+            wallpaper_noise_intensity: skin
+                .wallpaper
+                .as_ref()
+                .and_then(|w| w.noise_intensity)
+                .unwrap_or(0.3),
+            wallpaper_animated: skin
+                .wallpaper
+                .as_ref()
+                .and_then(|w| w.animated)
+                .unwrap_or(false),
+            scrollbar_track_color: with_alpha(ov(None, with_alpha(secondary, 20)), 20),
+            scrollbar_thumb_color: with_alpha(ov(None, with_alpha(secondary, 100)), 100),
+            scrollbar_width: skin
+                .geometry
+                .as_ref()
+                .and_then(|g| g.scrollbar_width)
+                .unwrap_or(6),
+            scrollbar_border_radius: skin
+                .geometry
+                .as_ref()
+                .and_then(|g| g.scrollbar_border_radius)
+                .unwrap_or(3),
+            terminal_line_height: skin
+                .geometry
+                .as_ref()
+                .and_then(|g| g.terminal_line_height)
+                .unwrap_or(16),
+            cursor_scale: 1, // Set by with_screen_size()
+            focus_ring_color: with_alpha(primary, 180),
+            focus_ring_width: 2,
+            focus_ring_offset: 2,
+            transition_fade_color: skin
+                .transition
+                .as_ref()
+                .and_then(|t| t.fade_color.as_ref())
+                .and_then(|s| parse_hex_color(s))
+                .unwrap_or_else(|| darken(skin.background_color(), 0.3)),
             screen_w: 480,
             screen_h: 272,
             statusbar_gradient_top: Self::bar_gradient_pair(
@@ -766,6 +873,7 @@ impl ActiveTheme {
                 status_bar_color,
             )
             .map(|(_, b)| b),
+            ui_theme: skin.to_ui_theme(),
         }
     }
 
@@ -792,6 +900,15 @@ impl ActiveTheme {
         self.icon_gfx_h = scale_u(22);
         self.icon_gfx_pad = scale_u(4);
         self.icon_label_pad = scale(4);
+
+        // Resolution-aware cursor scaling.
+        self.cursor_scale = if w >= 1024 {
+            3
+        } else if w >= 800 {
+            2
+        } else {
+            1
+        };
 
         self
     }

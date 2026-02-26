@@ -22,6 +22,8 @@ pub struct CursorState {
     pub y: i32,
     /// Whether the cursor is visible.
     pub visible: bool,
+    /// Scale factor (1 = base 12x18, 2 = 24x36, 3 = 36x54).
+    pub scale: u32,
 }
 
 impl CursorState {
@@ -31,6 +33,7 @@ impl CursorState {
             x: screen_w as i32 / 2,
             y: screen_h as i32 / 2,
             visible: true,
+            scale: 1,
         }
     }
 
@@ -51,10 +54,11 @@ impl CursorState {
 
     /// Update the cursor SDI object to reflect current position.
     pub fn update_sdi(&self, sdi: &mut SdiRegistry) {
+        let s = self.scale.max(1);
         if !sdi.contains(CURSOR_SDI_NAME) {
             let obj = sdi.create(CURSOR_SDI_NAME);
-            obj.w = CURSOR_W;
-            obj.h = CURSOR_H;
+            obj.w = CURSOR_W * s;
+            obj.h = CURSOR_H * s;
             obj.overlay = true;
             obj.z = 10000; // Always on top.
         }
@@ -76,9 +80,11 @@ impl CursorState {
 
 /// Generate a procedural arrow cursor as RGBA pixel data.
 ///
-/// Returns `(pixels, width, height)`. The arrow is white with a black outline,
-/// pointing up-left like a standard OS cursor.
-pub fn generate_cursor_pixels() -> (Vec<u8>, u32, u32) {
+/// `scale` controls resolution: each bitmap pixel becomes a `scale x scale`
+/// block. Returns `(pixels, width, height)` where dimensions are
+/// `CURSOR_W * scale` by `CURSOR_H * scale`.
+pub fn generate_cursor_pixels(scale: u32) -> (Vec<u8>, u32, u32) {
+    let scale = scale.max(1);
     // 12x18 cursor bitmap. Legend: 0=transparent, 1=black outline, 2=white fill.
     #[rustfmt::skip]
     let bitmap: [[u8; 12]; 18] = [
@@ -102,22 +108,29 @@ pub fn generate_cursor_pixels() -> (Vec<u8>, u32, u32) {
         [0,0,0,0,0,1,1,0,0,0,0,0],
     ];
 
-    let w = CURSOR_W;
-    let h = CURSOR_H;
+    let w = CURSOR_W * scale;
+    let h = CURSOR_H * scale;
     let mut pixels = vec![0u8; (w * h * 4) as usize];
 
-    for (y, row) in bitmap.iter().enumerate() {
-        for (x, &val) in row.iter().enumerate() {
-            let offset = (y as u32 * w + x as u32) as usize * 4;
+    for (by, row) in bitmap.iter().enumerate() {
+        for (bx, &val) in row.iter().enumerate() {
             let (r, g, b, a) = match val {
                 1 => (0, 0, 0, 255),       // Black outline
                 2 => (255, 255, 255, 255), // White fill
                 _ => (0, 0, 0, 0),         // Transparent
             };
-            pixels[offset] = r;
-            pixels[offset + 1] = g;
-            pixels[offset + 2] = b;
-            pixels[offset + 3] = a;
+            // Fill scale x scale block.
+            for sy in 0..scale {
+                for sx in 0..scale {
+                    let px = bx as u32 * scale + sx;
+                    let py = by as u32 * scale + sy;
+                    let offset = (py * w + px) as usize * 4;
+                    pixels[offset] = r;
+                    pixels[offset + 1] = g;
+                    pixels[offset + 2] = b;
+                    pixels[offset + 3] = a;
+                }
+            }
         }
     }
 
@@ -160,7 +173,7 @@ mod tests {
 
     #[test]
     fn generate_cursor_correct_size() {
-        let (pixels, w, h) = generate_cursor_pixels();
+        let (pixels, w, h) = generate_cursor_pixels(1);
         assert_eq!(w, CURSOR_W);
         assert_eq!(h, CURSOR_H);
         assert_eq!(pixels.len(), (w * h * 4) as usize);
@@ -168,7 +181,7 @@ mod tests {
 
     #[test]
     fn generate_cursor_top_left_is_outline() {
-        let (pixels, _, _) = generate_cursor_pixels();
+        let (pixels, _, _) = generate_cursor_pixels(1);
         // Top-left pixel should be black outline (r=0,g=0,b=0,a=255).
         assert_eq!(pixels[0], 0);
         assert_eq!(pixels[1], 0);
@@ -189,7 +202,7 @@ mod tests {
 
     #[test]
     fn cursor_color_has_white_fill() {
-        let (pixels, w, _) = generate_cursor_pixels();
+        let (pixels, w, _) = generate_cursor_pixels(1);
         // Pixel at (1,2) should be white fill.
         let offset = (2 * w + 1) as usize * 4;
         assert_eq!(pixels[offset], 255); // R
@@ -275,7 +288,7 @@ mod tests {
 
     #[test]
     fn generate_cursor_has_transparent_pixels() {
-        let (pixels, w, _) = generate_cursor_pixels();
+        let (pixels, w, _) = generate_cursor_pixels(1);
         // Pixel at (5,0) should be transparent.
         let offset = (0 * w + 5) as usize * 4;
         assert_eq!(pixels[offset + 3], 0); // Alpha = 0
@@ -283,7 +296,7 @@ mod tests {
 
     #[test]
     fn generate_cursor_has_black_outline() {
-        let (pixels, w, _) = generate_cursor_pixels();
+        let (pixels, w, _) = generate_cursor_pixels(1);
         // Pixel at (1,1) should be black outline.
         let offset = (1 * w + 1) as usize * 4;
         assert_eq!(pixels[offset], 0);
@@ -327,5 +340,40 @@ mod tests {
         cursor.set_position(10000, 10000);
         assert_eq!(cursor.x, 10000);
         assert_eq!(cursor.y, 10000);
+    }
+
+    #[test]
+    fn generate_cursor_scale_2() {
+        let (pixels, w, h) = generate_cursor_pixels(2);
+        assert_eq!(w, CURSOR_W * 2);
+        assert_eq!(h, CURSOR_H * 2);
+        assert_eq!(pixels.len(), (w * h * 4) as usize);
+        // Top-left 2x2 block should all be black outline.
+        for dy in 0..2u32 {
+            for dx in 0..2u32 {
+                let offset = (dy * w + dx) as usize * 4;
+                assert_eq!(pixels[offset + 3], 255, "alpha at ({dx},{dy})");
+                assert_eq!(pixels[offset], 0, "red at ({dx},{dy})");
+            }
+        }
+    }
+
+    #[test]
+    fn generate_cursor_scale_3() {
+        let (pixels, w, h) = generate_cursor_pixels(3);
+        assert_eq!(w, CURSOR_W * 3);
+        assert_eq!(h, CURSOR_H * 3);
+        assert_eq!(pixels.len(), (w * h * 4) as usize);
+    }
+
+    #[test]
+    fn cursor_sdi_scaled_size() {
+        let mut cursor = CursorState::new(1024, 768);
+        cursor.scale = 3;
+        let mut sdi = SdiRegistry::new();
+        cursor.update_sdi(&mut sdi);
+        let obj = sdi.get(CURSOR_SDI_NAME).unwrap();
+        assert_eq!(obj.w, CURSOR_W * 3);
+        assert_eq!(obj.h, CURSOR_H * 3);
     }
 }

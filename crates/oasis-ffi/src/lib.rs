@@ -334,7 +334,7 @@ pub unsafe extern "C" fn oasis_tick(handle: *mut OasisInstance, _delta_seconds: 
     }
 
     // Update SDI.
-    if let Some(ref dashboard) = instance.dashboard {
+    if let Some(ref mut dashboard) = instance.dashboard {
         dashboard.update_sdi(&mut instance.sdi, &instance.active_theme);
     }
 

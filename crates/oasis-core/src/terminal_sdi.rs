@@ -6,9 +6,6 @@ use crate::sdi::SdiRegistry;
 /// Maximum lines retained in the scrollback buffer.
 pub const MAX_OUTPUT_LINES: usize = 2000;
 
-/// Line height in pixels for terminal output.
-const LINE_HEIGHT: i32 = 16;
-
 /// Compute the number of visible output lines for the given theme.
 ///
 /// Returns a value based on the available terminal area height and
@@ -20,7 +17,8 @@ pub fn visible_output_lines(at: &ActiveTheme) -> usize {
     let bg_h = bot_y - top_y;
     // Reserve space for the input bar (20px) and a small gap (4px).
     let output_area = bg_h - 24;
-    let lines = output_area / LINE_HEIGHT;
+    let line_h = at.terminal_line_height as i32;
+    let lines = output_area / line_h.max(1);
     (lines.max(1) as usize).min(200)
 }
 
@@ -151,7 +149,7 @@ pub fn setup_terminal_objects(
         if !sdi.contains(&name) {
             let obj = sdi.create(&name);
             obj.x = margin + 4;
-            obj.y = top_y + 2 + (i as i32) * LINE_HEIGHT;
+            obj.y = top_y + 2 + (i as i32) * at.terminal_line_height as i32;
             obj.font_size = 12;
             obj.text_color = output_color;
             obj.w = 0;
@@ -214,24 +212,13 @@ pub fn paint_terminal_scrollbar(
     let bg_w = at.screen_w - (margin * 2) as u32;
     let bg_h = (bot_y - top_y) as u32;
 
-    let sb_w: u32 = 6;
+    let sb_w = at.scrollbar_width;
     let track_x: i32 = margin + bg_w as i32 - sb_w as i32 - 1;
     let track_y: i32 = top_y;
     let track_h: u32 = bg_h;
 
     // Track.
-    backend.fill_rect(
-        track_x,
-        track_y,
-        sb_w,
-        track_h,
-        Color::rgba(
-            at.separator_color.r,
-            at.separator_color.g,
-            at.separator_color.b,
-            20,
-        ),
-    )?;
+    backend.fill_rect(track_x, track_y, sb_w, track_h, at.scrollbar_track_color)?;
 
     // Thumb: proportional to visible/total ratio.
     let ratio = visible_lines as f32 / total_lines as f32;
@@ -244,18 +231,7 @@ pub fn paint_terminal_scrollbar(
         1.0
     };
     let thumb_y = track_y + (scrollable as f32 * frac) as i32;
-    backend.fill_rect(
-        track_x,
-        thumb_y,
-        sb_w,
-        thumb_h,
-        Color::rgba(
-            at.separator_color.r,
-            at.separator_color.g,
-            at.separator_color.b,
-            100,
-        ),
-    )?;
+    backend.fill_rect(track_x, thumb_y, sb_w, thumb_h, at.scrollbar_thumb_color)?;
     Ok(())
 }
 

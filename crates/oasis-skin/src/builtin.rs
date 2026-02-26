@@ -66,6 +66,9 @@ status_bar = "#001A00"
 prompt = "#00FF00"
 output = "#00CC00"
 error = "#FF3333"
+
+[wallpaper]
+style = "scanlines"
 "##;
 
 const TERMINAL_STRINGS: &str = r#"
@@ -180,6 +183,11 @@ status_bar = "#1A1A1A"
 prompt = "#CC8800"
 output = "#AAAAAA"
 error = "#CC3333"
+
+[wallpaper]
+style = "dots"
+grid_color = "#1A1A1A"
+grid_spacing = 12
 "##;
 
 const TACTICAL_STRINGS: &str = r#"
@@ -875,6 +883,11 @@ status_bar = "#0A1A2A"
 prompt = "#00FFCC"
 output = "#00BBBB"
 error = "#FF4444"
+
+[wallpaper]
+style = "grid"
+grid_color = "#0D2233"
+grid_spacing = 16
 "##;
 
 const AGENT_TERMINAL_STRINGS: &str = r#"

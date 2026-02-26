@@ -27,6 +27,18 @@ pub struct CorruptedModifiers {
     /// Overall intensity multiplier (0.0 = no corruption, 1.0 = full).
     #[serde(default = "default_intensity")]
     pub intensity: f32,
+    /// Probability (0.0-1.0) of a horizontal tear band appearing per frame.
+    #[serde(default = "default_tear_chance")]
+    pub tear_chance: f32,
+    /// Maximum horizontal offset for tear bands (pixels).
+    #[serde(default = "default_tear_max")]
+    pub tear_max: i32,
+    /// Probability (0.0-1.0) of RGB channel separation per frame.
+    #[serde(default = "default_color_shift_chance")]
+    pub color_shift_chance: f32,
+    /// Maximum pixel offset for color channel separation.
+    #[serde(default = "default_color_shift_offset")]
+    pub color_shift_offset: i32,
 }
 
 fn default_jitter() -> i32 {
@@ -44,6 +56,18 @@ fn default_garble() -> f32 {
 fn default_intensity() -> f32 {
     1.0
 }
+fn default_tear_chance() -> f32 {
+    0.02
+}
+fn default_tear_max() -> i32 {
+    20
+}
+fn default_color_shift_chance() -> f32 {
+    0.03
+}
+fn default_color_shift_offset() -> i32 {
+    2
+}
 
 impl Default for CorruptedModifiers {
     fn default() -> Self {
@@ -53,6 +77,10 @@ impl Default for CorruptedModifiers {
             alpha_flicker_min: default_flicker_min(),
             text_garble_chance: default_garble(),
             intensity: default_intensity(),
+            tear_chance: default_tear_chance(),
+            tear_max: default_tear_max(),
+            color_shift_chance: default_color_shift_chance(),
+            color_shift_offset: default_color_shift_offset(),
         }
     }
 }
@@ -111,6 +139,30 @@ impl CorruptedModifiers {
         let jitter = (self.position_jitter as f32 * self.intensity) as i32;
         let flicker_chance = self.alpha_flicker_chance * self.intensity;
         let garble_chance = self.text_garble_chance * self.intensity;
+        let tear_chance = self.tear_chance * self.intensity;
+        let color_shift_chance = self.color_shift_chance * self.intensity;
+
+        // Determine this frame's tear band (if any).
+        let tear_band: Option<(i32, i32, i32)> =
+            if tear_chance > 0.0 && self.tear_max > 0 && rng.next_f32() < tear_chance {
+                let tear_y = (rng.next_u32() % 272) as i32;
+                let tear_h = 4 + (rng.next_u32() % 13) as i32; // 4-16px tall
+                let tear_offset = rng.next_range(self.tear_max);
+                Some((tear_y, tear_h, tear_offset))
+            } else {
+                None
+            };
+
+        // Determine this frame's color shift (if any).
+        let color_shift: Option<i32> = if color_shift_chance > 0.0
+            && self.color_shift_offset > 0
+            && rng.next_f32() < color_shift_chance
+        {
+            let shift = rng.next_range(self.color_shift_offset);
+            if shift != 0 { Some(shift) } else { None }
+        } else {
+            None
+        };
 
         // Collect names first to avoid borrow issues.
         let names: Vec<String> = sdi.names().map(String::from).collect();
@@ -137,6 +189,24 @@ impl CorruptedModifiers {
                     .alpha_flicker_min
                     .max((rng.next_u32() % 256) as u8)
                     .min(obj.alpha);
+            }
+
+            // Horizontal tear: shift objects whose Y range overlaps the tear band.
+            if let Some((tear_y, tear_h, tear_offset)) = tear_band {
+                let obj_top = obj.y;
+                let obj_bot = obj.y + obj.h as i32;
+                if obj_bot > tear_y && obj_top < tear_y + tear_h {
+                    obj.x += tear_offset;
+                }
+            }
+
+            // Color shift: offset text shadow to simulate RGB channel separation.
+            if let Some(shift) = color_shift
+                && obj.text.is_some()
+                && obj.text_shadow_offset.is_none()
+            {
+                obj.text_shadow_offset = Some((shift, 0));
+                obj.text_shadow_color = Some(oasis_types::backend::Color::rgba(255, 0, 255, 80));
             }
 
             // Text garbling.
@@ -324,5 +394,99 @@ intensity = 0.75
         let obj = sdi.get("hidden").unwrap();
         assert_eq!(obj.x, 100);
         assert_eq!(obj.y, 200);
+    }
+
+    #[test]
+    fn tear_defaults() {
+        let m = CorruptedModifiers::default();
+        assert!((m.tear_chance - 0.02).abs() < f32::EPSILON);
+        assert_eq!(m.tear_max, 20);
+        assert!((m.color_shift_chance - 0.03).abs() < f32::EPSILON);
+        assert_eq!(m.color_shift_offset, 2);
+    }
+
+    #[test]
+    fn tear_shifts_overlapping_objects() {
+        let m = CorruptedModifiers {
+            position_jitter: 0,
+            alpha_flicker_chance: 0.0,
+            text_garble_chance: 0.0,
+            tear_chance: 1.0, // Always trigger.
+            tear_max: 50,
+            color_shift_chance: 0.0,
+            color_shift_offset: 0,
+            intensity: 1.0,
+            ..CorruptedModifiers::default()
+        };
+        let mut sdi = SdiRegistry::new();
+        {
+            let obj = sdi.create("wide");
+            obj.x = 100;
+            obj.y = 0;
+            obj.w = 200;
+            obj.h = 300; // Covers full screen height.
+        }
+        let mut rng = SimpleRng::new(42);
+        m.apply(&mut sdi, &mut rng);
+        let obj = sdi.get("wide").unwrap();
+        // Object spans full height so the tear band always overlaps.
+        assert_ne!(obj.x, 100);
+    }
+
+    #[test]
+    fn color_shift_adds_text_shadow() {
+        let m = CorruptedModifiers {
+            position_jitter: 0,
+            alpha_flicker_chance: 0.0,
+            text_garble_chance: 0.0,
+            tear_chance: 0.0,
+            tear_max: 0,
+            color_shift_chance: 1.0, // Always trigger.
+            color_shift_offset: 5,
+            intensity: 1.0,
+            ..CorruptedModifiers::default()
+        };
+        let mut sdi = SdiRegistry::new();
+        {
+            let obj = sdi.create("label");
+            obj.text = Some("Hello".to_string());
+            obj.x = 100;
+            obj.y = 50;
+            obj.w = 50;
+            obj.h = 16;
+        }
+        // Run enough times for color shift to produce a non-zero offset.
+        let mut got_shadow = false;
+        for seed in 0..20u32 {
+            let mut rng = SimpleRng::new(seed);
+            // Reset shadow state each iteration.
+            if let Ok(obj) = sdi.get_mut("label") {
+                obj.text_shadow_offset = None;
+                obj.text_shadow_color = None;
+            }
+            m.apply(&mut sdi, &mut rng);
+            let obj = sdi.get("label").unwrap();
+            if obj.text_shadow_offset.is_some() {
+                got_shadow = true;
+                break;
+            }
+        }
+        assert!(got_shadow, "color shift should set text_shadow_offset");
+    }
+
+    #[test]
+    fn deserialize_tear_fields() {
+        let toml = r#"
+position_jitter = 2
+tear_chance = 0.05
+tear_max = 30
+color_shift_chance = 0.1
+color_shift_offset = 3
+"#;
+        let m: CorruptedModifiers = toml::from_str(toml).unwrap();
+        assert!((m.tear_chance - 0.05).abs() < f32::EPSILON);
+        assert_eq!(m.tear_max, 30);
+        assert!((m.color_shift_chance - 0.1).abs() < f32::EPSILON);
+        assert_eq!(m.color_shift_offset, 3);
     }
 }

@@ -94,6 +94,10 @@ pub struct SkinTheme {
     /// Geometry overrides (bar heights, icon sizes, font sizes).
     #[serde(default)]
     pub geometry: Option<GeometryOverrides>,
+
+    /// Transition effect overrides.
+    #[serde(default)]
+    pub transition: Option<TransitionOverrides>,
 }
 
 /// Optional overrides for the window manager theme.
@@ -174,6 +178,8 @@ pub struct WmThemeOverrides {
     pub maximize_top_inset: Option<u32>,
     #[serde(default)]
     pub maximize_bottom_inset: Option<u32>,
+    #[serde(default)]
+    pub modal_overlay_color: Option<String>,
 }
 
 /// Per-element overrides for status bar and bottom bar colors.
@@ -226,7 +232,8 @@ pub struct IconOverrides {
 /// Wallpaper generation configuration.
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct WallpaperConfig {
-    /// Style: "gradient" (default), "solid", or "none".
+    /// Style: "gradient" (default), "solid", "none", "grid", "noise",
+    /// "scanlines", or "dots".
     pub style: Option<String>,
     /// Hex color stops for gradient wallpaper.
     pub color_stops: Option<Vec<String>>,
@@ -236,6 +243,14 @@ pub struct WallpaperConfig {
     pub wave_intensity: Option<f32>,
     /// Gradient angle in degrees: 0=horizontal, 90=vertical (default 0).
     pub angle: Option<f32>,
+    /// Grid/dot spacing in pixels (default 16).
+    pub grid_spacing: Option<u32>,
+    /// Hex color for grid lines/dots (default: lighten(bg, 0.08)).
+    pub grid_color: Option<String>,
+    /// Noise intensity 0.0-1.0 for "noise" style (default 0.3).
+    pub noise_intensity: Option<f32>,
+    /// Whether the wallpaper should animate (default false).
+    pub animated: Option<bool>,
 }
 
 /// Geometry overrides for bar heights, icon sizes, and font sizes.
@@ -259,6 +274,15 @@ pub struct GeometryOverrides {
     /// Terminal background border radius (default 4).
     #[serde(default)]
     pub terminal_border_radius: Option<u16>,
+    /// Scrollbar width in pixels (default 6).
+    #[serde(default)]
+    pub scrollbar_width: Option<u32>,
+    /// Scrollbar corner radius (default 3).
+    #[serde(default)]
+    pub scrollbar_border_radius: Option<u16>,
+    /// Terminal line height in pixels (default 16).
+    #[serde(default)]
+    pub terminal_line_height: Option<u32>,
 }
 
 /// Per-element overrides for the start menu popup and button.
@@ -355,6 +379,13 @@ pub struct OskOverrides {
     pub key_dim_text: Option<String>,
 }
 
+/// Overrides for transition effects.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct TransitionOverrides {
+    /// Fade overlay color (hex). Default: derived from background.
+    pub fade_color: Option<String>,
+}
+
 /// Per-element overrides for browser chrome colors.
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct BrowserOverrides {
@@ -422,6 +453,7 @@ impl Default for SkinTheme {
             start_menu_overrides: None,
             wallpaper: None,
             geometry: None,
+            transition: None,
         }
     }
 }
@@ -743,6 +775,11 @@ impl SkinTheme {
             }
             if let Some(v) = ov.maximize_bottom_inset {
                 theme.maximize_bottom_inset = v;
+            }
+            if let Some(ref c) = ov.modal_overlay_color
+                && let Some(parsed) = parse_hex_color(c)
+            {
+                theme.modal_overlay_color = parsed;
             }
         }
         // Default glyph colors to titlebar_text_color if not explicitly set.

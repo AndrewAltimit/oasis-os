@@ -230,6 +230,41 @@ pub fn hide_bezel(sdi: &mut SdiRegistry, name: &str) {
     }
 }
 
+/// Ensure a focus ring (stroke-only outline) exists around a UI element.
+///
+/// Creates a single SDI object positioned around the target element with
+/// the given offset, drawn as a stroke outline (no fill).
+#[allow(clippy::too_many_arguments)]
+pub fn ensure_focus_ring(
+    sdi: &mut SdiRegistry,
+    name: &str,
+    x: i32,
+    y: i32,
+    w: u32,
+    h: u32,
+    color: Color,
+    stroke_width: u16,
+    offset: i32,
+    radius: u16,
+) {
+    if !sdi.contains(name) {
+        let obj = sdi.create(name);
+        obj.overlay = true;
+        obj.z = Z_BORDER + 1;
+    }
+    if let Ok(obj) = sdi.get_mut(name) {
+        obj.x = x - offset;
+        obj.y = y - offset;
+        obj.w = w + (offset as u32) * 2;
+        obj.h = h + (offset as u32) * 2;
+        obj.color = Color::rgba(0, 0, 0, 0); // Transparent fill.
+        obj.stroke_width = Some(stroke_width);
+        obj.stroke_color = Some(color);
+        obj.border_radius = Some(radius);
+        obj.visible = true;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -282,5 +317,31 @@ mod tests {
         hide_indexed(&mut sdi, "item_", 3);
         assert!(!sdi.get("item_0").unwrap().visible);
         assert!(!sdi.get("item_2").unwrap().visible);
+    }
+
+    #[test]
+    fn focus_ring_creates_stroke_object() {
+        let mut sdi = SdiRegistry::new();
+        ensure_focus_ring(
+            &mut sdi,
+            "ring",
+            100,
+            200,
+            50,
+            30,
+            Color::rgba(100, 200, 255, 180),
+            2,
+            2,
+            4,
+        );
+        assert!(sdi.contains("ring"));
+        let obj = sdi.get("ring").unwrap();
+        assert_eq!(obj.x, 98); // 100 - offset(2)
+        assert_eq!(obj.y, 198); // 200 - offset(2)
+        assert_eq!(obj.w, 54); // 50 + 2*2
+        assert_eq!(obj.h, 34); // 30 + 2*2
+        assert_eq!(obj.stroke_width, Some(2));
+        assert_eq!(obj.border_radius, Some(4));
+        assert_eq!(obj.color.a, 0); // Transparent fill.
     }
 }

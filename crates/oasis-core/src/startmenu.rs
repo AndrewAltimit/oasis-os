@@ -9,6 +9,8 @@ use crate::backend::Color;
 use crate::input::Button;
 use crate::sdi::SdiRegistry;
 use crate::sdi::helpers::{ensure_rounded_fill, ensure_text, hide_objects};
+use crate::transition::ease_out_cubic;
+use oasis_types::color::with_alpha;
 
 // -- Layout constants ---------------------------------------------------------
 
@@ -75,6 +77,10 @@ pub struct StartMenuState {
     header_h: u32,
     /// Footer height (0 if no footer).
     footer_h: u32,
+    /// Animation progress: 0.0 = closed, 1.0 = fully open.
+    anim_progress: f32,
+    /// Target state for animation.
+    anim_target_open: bool,
 }
 
 impl StartMenuState {
@@ -113,6 +119,8 @@ impl StartMenuState {
             btn_y,
             header_h,
             footer_h,
+            anim_progress: 0.0,
+            anim_target_open: false,
         }
     }
 
@@ -159,24 +167,56 @@ impl StartMenuState {
         ]
     }
 
-    /// Toggle the menu open/closed.
+    /// Toggle the menu open/closed (with animation).
     pub fn toggle(&mut self) {
-        self.open = !self.open;
-        if self.open {
+        if self.anim_target_open {
+            // Start closing.
+            self.anim_target_open = false;
+            // Keep `open = true` so SDI still renders during close anim.
+        } else {
+            // Start opening.
+            self.anim_target_open = true;
+            self.open = true;
             self.selected = 0;
         }
     }
 
-    /// Close the menu.
+    /// Close the menu (with animation).
     pub fn close(&mut self) {
-        self.open = false;
+        self.anim_target_open = false;
+        // Keep `open = true` so SDI still renders during close anim.
+    }
+
+    /// Advance open/close animation by one frame.
+    ///
+    /// Lerps `anim_progress` toward the target at 0.15/frame (~7 frames).
+    /// When close animation completes, sets `open = false`.
+    pub fn tick_animation(&mut self) {
+        let target = if self.anim_target_open { 1.0 } else { 0.0 };
+        let diff = target - self.anim_progress;
+        if diff.abs() < 0.01 {
+            self.anim_progress = target;
+        } else {
+            self.anim_progress += diff * 0.15;
+        }
+        // When fully closed, mark as not open.
+        if !self.anim_target_open && self.anim_progress <= 0.01 {
+            self.anim_progress = 0.0;
+            self.open = false;
+        }
+    }
+
+    /// Whether the menu is logically open (including during close animation).
+    pub fn is_visible(&self) -> bool {
+        self.open || self.anim_progress > 0.01
     }
 
     /// Handle D-pad / Confirm / Cancel input when menu is open.
     ///
     /// Returns an action if an item was activated, or `None`.
+    /// Input is ignored during close animation.
     pub fn handle_input(&mut self, button: &Button) -> StartMenuAction {
-        if !self.open {
+        if !self.open || !self.anim_target_open {
             return StartMenuAction::None;
         }
         let cols = self.at.sm_columns.max(1);
@@ -278,8 +318,8 @@ impl StartMenuState {
         // -- Start button (always visible) --
         self.update_button_sdi(sdi, at);
 
-        // -- Menu popup (only when open) --
-        if self.open {
+        // -- Menu popup (visible when open or animating) --
+        if self.is_visible() {
             self.update_menu_sdi(sdi, at);
         } else {
             self.hide_menu_sdi(sdi);
@@ -345,7 +385,14 @@ impl StartMenuState {
         let col_w = ((menu_w as i32 - PAD_LEFT * 2) / cols as i32).max(1);
         let item_row_h = at.sm_item_row_height.max(1);
         let icon_size = at.sm_item_icon_size;
-        let items_top = self.menu_y + self.header_h as i32;
+
+        // Animation: eased progress controls alpha and vertical offset.
+        let eased = ease_out_cubic(self.anim_progress);
+        let y_offset = ((1.0 - eased) * 10.0) as i32;
+        let alpha_scale = eased;
+        let scale_alpha = |c: Color| -> Color { with_alpha(c, (c.a as f32 * alpha_scale) as u8) };
+
+        let items_top = self.menu_y + self.header_h as i32 + y_offset;
 
         // Panel background.
         if !sdi.contains("sm_bg") {
@@ -355,15 +402,15 @@ impl StartMenuState {
         }
         if let Ok(obj) = sdi.get_mut("sm_bg") {
             obj.x = MENU_X;
-            obj.y = self.menu_y;
+            obj.y = self.menu_y + y_offset;
             obj.w = menu_w;
             obj.h = self.menu_h;
-            obj.color = at.sm_panel_bg;
+            obj.color = scale_alpha(at.sm_panel_bg);
             obj.visible = true;
             obj.border_radius = Some(at.sm_panel_border_radius);
             obj.shadow_level = Some(at.sm_panel_shadow_level);
-            obj.gradient_top = at.sm_panel_gradient_top;
-            obj.gradient_bottom = at.sm_panel_gradient_bottom;
+            obj.gradient_top = at.sm_panel_gradient_top.map(scale_alpha);
+            obj.gradient_bottom = at.sm_panel_gradient_bottom.map(scale_alpha);
         }
 
         // Panel border.
@@ -374,14 +421,14 @@ impl StartMenuState {
         }
         if let Ok(obj) = sdi.get_mut("sm_border") {
             obj.x = MENU_X;
-            obj.y = self.menu_y;
+            obj.y = self.menu_y + y_offset;
             obj.w = menu_w;
             obj.h = self.menu_h;
             obj.color = Color::rgba(0, 0, 0, 0); // transparent fill
             obj.visible = true;
             obj.border_radius = Some(at.sm_panel_border_radius);
             obj.stroke_width = Some(1);
-            obj.stroke_color = Some(at.sm_panel_border);
+            obj.stroke_color = Some(scale_alpha(at.sm_panel_border));
         }
 
         // Header (if configured).
@@ -395,12 +442,11 @@ impl StartMenuState {
             }
             if let Ok(obj) = sdi.get_mut("sm_header_bg") {
                 obj.x = MENU_X;
-                obj.y = self.menu_y;
+                obj.y = self.menu_y + y_offset;
                 obj.w = menu_w;
                 obj.h = self.header_h;
-                obj.color = at.sm_header_bg;
+                obj.color = scale_alpha(at.sm_header_bg);
                 obj.visible = true;
-                // No border_radius: only the panel bg rounds the corners.
                 obj.border_radius = None;
             }
             if !sdi.contains("sm_header_text") {
@@ -410,10 +456,10 @@ impl StartMenuState {
             }
             if let Ok(obj) = sdi.get_mut("sm_header_text") {
                 obj.x = MENU_X + PAD_LEFT;
-                obj.y = self.menu_y + (self.header_h as i32 - at.font_small as i32) / 2;
+                obj.y = self.menu_y + y_offset + (self.header_h as i32 - at.font_small as i32) / 2;
                 obj.font_size = at.font_small;
                 obj.text = Some(header_text.clone());
-                obj.text_color = at.sm_header_text_color;
+                obj.text_color = scale_alpha(at.sm_header_text_color);
                 obj.visible = true;
             }
         }
@@ -430,7 +476,7 @@ impl StartMenuState {
             hl_y,
             (col_w as u32).saturating_sub(2),
             (item_row_h as u32).saturating_sub(2),
-            at.sm_highlight_color,
+            scale_alpha(at.sm_highlight_color),
             at.sm_panel_border_radius,
         );
         if let Ok(obj) = sdi.get_mut("sm_highlight") {
@@ -447,7 +493,16 @@ impl StartMenuState {
 
             // Icon placeholder (colored square).
             let icon_name = format!("sm_item_icon_{i}");
-            ensure_rounded_fill(sdi, &icon_name, ix, iy, icon_size, icon_size, item.color, 2);
+            ensure_rounded_fill(
+                sdi,
+                &icon_name,
+                ix,
+                iy,
+                icon_size,
+                icon_size,
+                scale_alpha(item.color),
+                2,
+            );
             if let Ok(obj) = sdi.get_mut(&icon_name) {
                 obj.z = Z_MENU + 3;
             }
@@ -455,9 +510,9 @@ impl StartMenuState {
             // Text label.
             let label_name = format!("sm_item_label_{i}");
             let text_color = if i == self.selected {
-                at.sm_item_text_active
+                scale_alpha(at.sm_item_text_active)
             } else {
-                at.sm_item_text
+                scale_alpha(at.sm_item_text)
             };
             ensure_text(
                 sdi,
@@ -493,12 +548,11 @@ impl StartMenuState {
             }
             if let Ok(obj) = sdi.get_mut("sm_footer_bg") {
                 obj.x = MENU_X;
-                obj.y = self.menu_y + self.menu_h as i32 - self.footer_h as i32;
+                obj.y = self.menu_y + self.menu_h as i32 - self.footer_h as i32 + y_offset;
                 obj.w = menu_w;
                 obj.h = self.footer_h;
-                obj.color = at.sm_footer_bg;
+                obj.color = scale_alpha(at.sm_footer_bg);
                 obj.visible = true;
-                // No border_radius: only the panel bg rounds the corners.
                 obj.border_radius = None;
             }
             if !sdi.contains("sm_footer_text") {
@@ -509,10 +563,11 @@ impl StartMenuState {
             if let Ok(obj) = sdi.get_mut("sm_footer_text") {
                 obj.x = MENU_X + PAD_LEFT;
                 obj.y = self.menu_y + self.menu_h as i32 - self.footer_h as i32
+                    + y_offset
                     + (self.footer_h as i32 - at.font_small as i32) / 2;
                 obj.font_size = at.font_small;
                 obj.text = Some("Log Off  Shut Down".to_string());
-                obj.text_color = at.sm_footer_text_color;
+                obj.text_color = scale_alpha(at.sm_footer_text_color);
                 obj.visible = true;
             }
         }
@@ -558,8 +613,16 @@ mod tests {
         assert!(!sm.open);
         sm.toggle();
         assert!(sm.open);
+        assert!(sm.anim_target_open);
         assert_eq!(sm.selected, 0);
         sm.toggle();
+        // Menu stays visually open during close animation.
+        assert!(sm.open);
+        assert!(!sm.anim_target_open);
+        // After enough ticks, menu fully closes.
+        for _ in 0..50 {
+            sm.tick_animation();
+        }
         assert!(!sm.open);
     }
 
@@ -567,6 +630,8 @@ mod tests {
     fn dpad_navigation_2col() {
         let mut sm = StartMenuState::new(StartMenuState::default_items(&ActiveTheme::default()));
         sm.open = true;
+        sm.anim_target_open = true;
+        sm.anim_progress = 1.0;
         sm.selected = 0;
 
         // Right moves to col 1.
@@ -590,9 +655,16 @@ mod tests {
     fn confirm_returns_action_and_closes() {
         let mut sm = StartMenuState::new(StartMenuState::default_items(&ActiveTheme::default()));
         sm.open = true;
+        sm.anim_target_open = true;
+        sm.anim_progress = 1.0;
         sm.selected = 5; // Exit item
         let action = sm.handle_input(&Button::Confirm);
         assert_eq!(action, StartMenuAction::Exit);
+        // Close animation started -- menu stays open until animation completes.
+        assert!(!sm.anim_target_open);
+        for _ in 0..50 {
+            sm.tick_animation();
+        }
         assert!(!sm.open);
     }
 
@@ -600,8 +672,14 @@ mod tests {
     fn cancel_closes_menu() {
         let mut sm = StartMenuState::new(StartMenuState::default_items(&ActiveTheme::default()));
         sm.open = true;
+        sm.anim_target_open = true;
+        sm.anim_progress = 1.0;
         let action = sm.handle_input(&Button::Cancel);
         assert_eq!(action, StartMenuAction::None);
+        assert!(!sm.anim_target_open);
+        for _ in 0..50 {
+            sm.tick_animation();
+        }
         assert!(!sm.open);
     }
 
@@ -645,6 +723,8 @@ mod tests {
     fn update_sdi_shows_menu_when_open() {
         let mut sm = StartMenuState::new(StartMenuState::default_items(&ActiveTheme::default()));
         sm.open = true;
+        sm.anim_target_open = true;
+        sm.anim_progress = 1.0;
         let mut sdi = SdiRegistry::new();
         let at = ActiveTheme::default();
         sm.update_sdi(&mut sdi, &at);
@@ -659,6 +739,8 @@ mod tests {
     fn navigation_clamps_at_boundaries() {
         let mut sm = StartMenuState::new(StartMenuState::default_items(&ActiveTheme::default()));
         sm.open = true;
+        sm.anim_target_open = true;
+        sm.anim_progress = 1.0;
         sm.selected = 0;
         // Up at row 0 should stay.
         sm.handle_input(&Button::Up);

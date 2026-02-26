@@ -38,6 +38,8 @@ pub struct TransitionState {
     /// Screen dimensions.
     pub screen_w: u32,
     pub screen_h: u32,
+    /// Overlay color for fade/slide transitions (default: black).
+    pub transition_color: Color,
 }
 
 impl TransitionState {
@@ -49,7 +51,14 @@ impl TransitionState {
             duration: duration_frames,
             screen_w: w,
             screen_h: h,
+            transition_color: Color::BLACK,
         }
+    }
+
+    /// Set the overlay color for this transition (builder pattern).
+    pub fn with_color(mut self, color: Color) -> Self {
+        self.transition_color = color;
+        self
     }
 
     /// Raw linear progress from 0.0 (start) to 1.0 (complete).
@@ -141,31 +150,32 @@ impl TransitionState {
 
         let t = self.progress();
 
+        let c = self.transition_color;
         match self.effect {
             TransitionEffect::FadeIn => {
-                // Black overlay fading from opaque to transparent.
+                // Overlay fading from opaque to transparent.
                 let alpha = ((1.0 - t) * 255.0) as u8;
                 backend.fill_rect(
                     0,
                     0,
                     self.screen_w,
                     self.screen_h,
-                    Color::rgba(0, 0, 0, alpha),
+                    Color::rgba(c.r, c.g, c.b, alpha),
                 )?;
             },
             TransitionEffect::FadeOut => {
-                // Black overlay fading from transparent to opaque.
+                // Overlay fading from transparent to opaque.
                 let alpha = (t * 255.0) as u8;
                 backend.fill_rect(
                     0,
                     0,
                     self.screen_w,
                     self.screen_h,
-                    Color::rgba(0, 0, 0, alpha),
+                    Color::rgba(c.r, c.g, c.b, alpha),
                 )?;
             },
             TransitionEffect::SlideRight => {
-                // Black curtain sliding off to the right.
+                // Curtain sliding off to the right.
                 let curtain_x = (t * self.screen_w as f32) as i32;
                 if curtain_x < self.screen_w as i32 {
                     backend.fill_rect(
@@ -173,15 +183,21 @@ impl TransitionState {
                         0,
                         self.screen_w - curtain_x as u32,
                         self.screen_h,
-                        Color::rgba(0, 0, 0, 255),
+                        Color::rgba(c.r, c.g, c.b, 255),
                     )?;
                 }
             },
             TransitionEffect::SlideLeft => {
-                // Black curtain sliding off to the left.
+                // Curtain sliding off to the left.
                 let curtain_w = ((1.0 - t) * self.screen_w as f32) as u32;
                 if curtain_w > 0 {
-                    backend.fill_rect(0, 0, curtain_w, self.screen_h, Color::rgba(0, 0, 0, 255))?;
+                    backend.fill_rect(
+                        0,
+                        0,
+                        curtain_w,
+                        self.screen_h,
+                        Color::rgba(c.r, c.g, c.b, 255),
+                    )?;
                 }
             },
             TransitionEffect::None
@@ -236,12 +252,19 @@ pub fn page_slide_right_custom(w: u32, h: u32, frames: u32) -> TransitionState {
 /// Cubic ease-in-out: smooth acceleration and deceleration.
 ///
 /// `t` is expected in `[0.0, 1.0]`. Returns a value in `[0.0, 1.0]`.
-fn ease_in_out_cubic(t: f32) -> f32 {
+pub fn ease_in_out_cubic(t: f32) -> f32 {
     if t < 0.5 {
         4.0 * t * t * t
     } else {
         1.0 - (-2.0 * t + 2.0).powi(3) / 2.0
     }
+}
+
+/// Cubic ease-out: fast start, smooth deceleration.
+///
+/// `t` is expected in `[0.0, 1.0]`. Returns a value in `[0.0, 1.0]`.
+pub fn ease_out_cubic(t: f32) -> f32 {
+    1.0 - (1.0 - t).powi(3)
 }
 
 #[cfg(test)]

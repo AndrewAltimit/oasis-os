@@ -80,9 +80,6 @@ const MIN_VISIBLE: i32 = 20;
 /// SDI object name for the semi-transparent modal backdrop.
 const MODAL_OVERLAY_ID: &str = "__wm_modal_overlay";
 
-/// Color of the modal backdrop overlay.
-const MODAL_OVERLAY_COLOR: Color = Color::rgba(0, 0, 0, 100);
-
 /// The window manager.
 ///
 /// Manages a list of windows ordered by z-depth (last = topmost).
@@ -1202,7 +1199,7 @@ impl WindowManager {
         obj.y = 0;
         obj.w = self.screen_w;
         obj.h = self.screen_h;
-        obj.color = MODAL_OVERLAY_COLOR;
+        obj.color = self.theme.modal_overlay_color;
     }
 
     /// Hide and destroy the modal overlay.

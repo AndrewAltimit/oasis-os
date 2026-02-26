@@ -125,7 +125,8 @@ fn main() -> Result<()> {
         fade_frames,
     ));
 
-    let mouse_cursor = CursorState::new(config.screen_width, config.screen_height);
+    let mut mouse_cursor = CursorState::new(config.screen_width, config.screen_height);
+    mouse_cursor.scale = active_theme.cursor_scale;
 
     let start_menu =
         StartMenuState::new_with_theme(StartMenuState::default_items(&active_theme), &active_theme);
@@ -212,7 +213,8 @@ fn main() -> Result<()> {
 
     // -- Mouse cursor: generate procedural arrow and load as texture --
     {
-        let (cursor_pixels, cw, ch) = cursor::generate_cursor_pixels();
+        let (cursor_pixels, cw, ch) =
+            cursor::generate_cursor_pixels(state.active_theme.cursor_scale);
         let cursor_tex = backend.load_texture(cw, ch, &cursor_pixels)?;
         // Set texture on the cursor SDI object after first update_sdi creates it.
         state.mouse_cursor.update_sdi(&mut sdi);
