@@ -66,7 +66,8 @@ Default virtual resolution is 480x272 (PSP native). Skins may override this (e.g
 ### Key Features
 
 - **Scene Graph (SDI)** -- Named object registry with position, size, color, texture, text, z-order, alpha, gradients, rounded corners, shadows
-- **Browser Engine** -- Embedded HTML/CSS/Gemini renderer with DOM parsing, CSS cascade, block/inline/table layout, link navigation, reader mode, bookmarks
+- **Browser Engine** -- Embedded HTML/CSS/Gemini renderer with DOM parsing, CSS cascade, block/inline/table layout, link navigation, reader mode, bookmarks. JavaScript support via QuickJS-NG with DOM manipulation (getElementById, createElement, textContent, attributes)
+- **JavaScript Engine** -- Embedded QuickJS-NG runtime (`oasis-js` crate) with `console` API, inline `<script>` execution, and DOM bindings for dynamic page manipulation. Feature-gated (`javascript`) -- enabled by default on desktop
 - **Window Manager** -- Movable, resizable, overlapping windows with titlebars, minimize/maximize/close, hit testing, and themed decorations
 - **UI Widget Toolkit** -- 20+ reusable widgets: Button, Card, TabBar, Panel, TextField, ListView, ScrollView, ProgressBar, Toggle, NinePatch, flex layout, and more
 - **Proportional Bitmap Font** -- Variable-width glyph rendering from ink bounds with per-character advance values (not fixed-width 8x8)
@@ -81,7 +82,7 @@ Default virtual resolution is 480x272 (PSP native). Skins may override this (e.g
 
 ## Crates
 
-The framework is split into 17 workspace crates plus 2 excluded PSP crates:
+The framework is split into 18 workspace crates plus 2 excluded PSP crates:
 
 ```
 oasis-os/
@@ -98,6 +99,7 @@ oasis-os/
 |   +-- oasis-skin/                   # TOML skin engine, 8 skins, theme derivation from 9 base colors
 |   +-- oasis-terminal/              # Command interpreter: 90+ commands across 17 modules, shell features
 |   +-- oasis-browser/               # HTML/CSS/Gemini browser: DOM, CSS cascade, block/inline/table layout
+|   +-- oasis-js/                    # JavaScript engine: QuickJS-NG runtime, console API, DOM bindings
 |   +-- oasis-core/                   # Coordination layer: apps, dashboard, agent, plugin, script, etc.
 |   +-- oasis-backend-sdl/            # SDL2 rendering and input (desktop + Pi)
 |   +-- oasis-backend-wasm/           # Canvas 2D rendering, DOM input, Web Audio (browser)
@@ -128,7 +130,8 @@ oasis-os/
 | `oasis-wm` | Window manager: movable/resizable windows, titlebar buttons, hit testing, themed decorations |
 | `oasis-skin` | Data-driven TOML skin system with 8 skins, theme derivation from 9 base colors to ~30 UI element colors |
 | `oasis-terminal` | Command interpreter with 90+ commands across 17 modules, shell features (variables, globs, aliases, history, piping) |
-| `oasis-browser` | Embeddable HTML/CSS/Gemini rendering engine: DOM parser, CSS cascade, block/inline/table layout, reader mode |
+| `oasis-browser` | Embeddable HTML/CSS/Gemini rendering engine: DOM parser, CSS cascade, block/inline/table layout, reader mode, JavaScript DOM bindings |
+| `oasis-js` | JavaScript engine wrapping QuickJS-NG via rquickjs: `console` API, inline `<script>` execution, DOM manipulation from JS |
 | `oasis-core` | Coordination layer: app runner (dual-panel file manager), dashboard, agent/MCP, plugin, scripting, status/bottom bars |
 | `oasis-backend-sdl` | SDL2 rendering and input backend for desktop and Raspberry Pi |
 | `oasis-backend-wasm` | WebAssembly backend -- Canvas 2D rendering, DOM event input, Web Audio, iframe overlay for real web pages |
@@ -213,6 +216,19 @@ cargo run -p oasis-app --bin oasis-screenshot terminal
 cargo run -p oasis-app --bin oasis-screenshot tactical
 cargo run -p oasis-app --bin oasis-screenshot corrupted
 cargo run -p oasis-app --bin oasis-screenshot agent-terminal
+```
+
+## Environment Variables
+
+| Variable | Description | Example |
+|----------|-------------|---------|
+| `OASIS_SKIN` | Override the default skin at startup | `OASIS_SKIN=modern cargo run -p oasis-app` |
+| `OASIS_APP` | Auto-launch a named app on startup | `OASIS_APP=Browser` |
+| `OASIS_URL` | Navigate the browser to a URL on startup (requires `OASIS_APP=Browser`) | `OASIS_URL="vfs://sites/home/js-test.html"` |
+
+```bash
+# Launch directly into the browser with the JavaScript DOM test page
+OASIS_APP=Browser OASIS_URL="vfs://sites/home/js-test.html" cargo run -p oasis-app
 ```
 
 ## PSP Testing (PPSSPP)

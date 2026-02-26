@@ -94,7 +94,7 @@ The rust-psp SDK is an external dependency hosted at [github.com/AndrewAltimit/r
 
 ```
 oasis-os/
-+-- Cargo.toml                      # Workspace root (resolver="2", edition 2024, 16 members)
++-- Cargo.toml                      # Workspace root (resolver="2", edition 2024, 18 members)
 +-- crates/
 |   +-- oasis-types/                 # Foundation types: Color, Button, InputEvent, backend traits, errors
 |   +-- oasis-vfs/                   # Virtual file system: MemoryVfs, RealVfs, GameAssetVfs
@@ -106,7 +106,8 @@ oasis-os/
 |   +-- oasis-wm/                    # Window manager: lifecycle, drag/resize, hit testing, clipping
 |   +-- oasis-skin/                  # TOML skin engine, 8 skins, theme derivation from 9 base colors
 |   +-- oasis-terminal/              # 90+ commands across 17 modules, shell features
-|   +-- oasis-browser/               # HTML/CSS/Gemini: DOM, CSS cascade, block/inline/table layout
+|   +-- oasis-browser/               # HTML/CSS/Gemini: DOM, CSS cascade, block/inline/table layout, JS DOM bindings
+|   +-- oasis-js/                    # JavaScript engine: QuickJS-NG runtime, console API, DOM manipulation
 |   +-- oasis-core/                  # Coordination: apps (dual-panel FM), dashboard, agent, plugin, script
 |   +-- oasis-backend-sdl/           # SDL2 rendering and input (desktop dev + Raspberry Pi)
 |   +-- oasis-backend-ue5/           # UE5 render target, software RGBA framebuffer, FFI input queue
@@ -165,6 +166,7 @@ members = [
     "crates/oasis-skin",
     "crates/oasis-terminal",
     "crates/oasis-browser",
+    "crates/oasis-js",
     "crates/oasis-core",
     "crates/oasis-backend-sdl",
     "crates/oasis-backend-ue5",
@@ -210,7 +212,10 @@ rustls = { version = "0.23", default-features = false, features = ["ring", "logg
 webpki-roots = "1.0"
 rustls-pki-types = "1"
 
-# Internal crates (all 12 library crates)
+# JavaScript engine (feature-gated in oasis-browser)
+rquickjs = { version = "0.11", default-features = false, features = ["rust-alloc"] }
+
+# Internal crates (all 13 library crates)
 oasis-types = { path = "crates/oasis-types" }
 oasis-vfs = { path = "crates/oasis-vfs" }
 oasis-platform = { path = "crates/oasis-platform" }
@@ -222,6 +227,7 @@ oasis-wm = { path = "crates/oasis-wm" }
 oasis-skin = { path = "crates/oasis-skin" }
 oasis-terminal = { path = "crates/oasis-terminal" }
 oasis-browser = { path = "crates/oasis-browser" }
+oasis-js = { path = "crates/oasis-js" }
 oasis-core = { path = "crates/oasis-core" }
 oasis-backend-ue5 = { path = "crates/oasis-backend-ue5" }
 
