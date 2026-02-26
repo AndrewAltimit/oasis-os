@@ -52,6 +52,7 @@ pub struct SkinObjectDef {
     pub font_size: Option<u16>,
     pub alpha: Option<u8>,
     pub visible: Option<bool>,
+    pub z: Option<i32>,
     // Extended visual properties.
     #[serde(default)]
     pub border_radius: Option<u16>,
@@ -303,6 +304,9 @@ impl Skin {
                 }
                 if let Some(v) = def.visible {
                     obj.visible = v;
+                }
+                if let Some(z) = def.z {
+                    obj.z = z;
                 }
                 if let Some(ref t) = def.text {
                     obj.text = Some(t.clone());

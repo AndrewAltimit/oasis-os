@@ -26,6 +26,7 @@ x = 0
 y = 0
 w = 480
 h = 272
+z = -1
 color = "#000000"
 
 [terminal_output]
@@ -125,6 +126,7 @@ x = 0
 y = 17
 w = 480
 h = 255
+z = -1
 color = "#0A0A0A"
 
 [terminal_output]
@@ -230,6 +232,7 @@ x = 0
 y = 0
 w = 480
 h = 272
+z = -1
 color = "#050005"
 
 [glitch_overlay]
@@ -695,6 +698,10 @@ font_heading = 16
 cursor_blink_rate = 25
 
 [app_overrides]
+text_color = "#333333"
+dim_text = "#666666"
+terminal_output_color = "#000000"
+terminal_prompt_color = "#003399"
 selection_accent_color = "#0054E380"
 selection_border_radius = 2
 
@@ -874,6 +881,7 @@ x = 0
 y = 117
 w = 480
 h = 155
+z = -1
 color = "#060D15"
 border_radius = 4
 

@@ -139,6 +139,14 @@ fn capture_skin(skin_name: &str) -> anyhow::Result<()> {
     let power = platform.power_info().ok();
     status_bar.update_info(time.as_ref(), power.as_ref());
 
+    // Update desktop clock_display if the skin defines one.
+    if let Some(ref t) = time {
+        let clock_str = format!("{:02}:{:02}", t.hour, t.minute);
+        if let Ok(obj) = sdi.get_mut("clock_display") {
+            obj.text = Some(clock_str);
+        }
+    }
+
     // Create skin-specific output directory.
     let out_dir = Path::new("screenshots").join(skin_name);
     fs::create_dir_all(&out_dir)?;
@@ -266,6 +274,10 @@ fn capture_skin(skin_name: &str) -> anyhow::Result<()> {
         }
     } else if let Some(ref mut wm) = wm {
         let _ = wm.close_window("demo_files", &mut sdi);
+        // Clean up manually-created content text objects.
+        for i in 0..20 {
+            let _ = sdi.destroy(&format!("demo_files_line_{i}"));
+        }
     }
     mouse_cursor.update_sdi(&mut sdi);
     render_and_save(
