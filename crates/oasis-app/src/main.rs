@@ -247,14 +247,7 @@ fn main() -> Result<()> {
             if let Some(ref url) = auto_launch_url
                 && let Some(ref mut bw) = state.browser
             {
-                if url.starts_with("vfs://") {
-                    bw.navigate_vfs(url, &vfs);
-                } else {
-                    bw.load_html(
-                        &format!("<html><body>Navigating to {url}...</body></html>"),
-                        url,
-                    );
-                }
+                bw.navigate_vfs(url, &vfs);
                 log::info!("Auto-navigated to: {url}");
             }
         } else {

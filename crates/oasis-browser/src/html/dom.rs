@@ -590,6 +590,11 @@ impl Document {
 
     /// Replace the children of `node_id` with a single text node.
     pub fn set_text_content(&mut self, node_id: NodeId, text: &str) {
+        // Clear parent links on old children before removing them.
+        let old_children: Vec<NodeId> = self.nodes[node_id].children.clone();
+        for child_id in old_children {
+            self.nodes[child_id].parent = None;
+        }
         self.nodes[node_id].children.clear();
         let text_id = self.add_node(NodeKind::Text(text.to_string()));
         self.append_child(node_id, text_id);

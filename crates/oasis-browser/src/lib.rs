@@ -461,6 +461,10 @@ impl BrowserWidget {
         // mutate it. After the engine is dropped (freeing all JS-side
         // Rc clones), we unwrap the Rc to recover an owned Document.
         #[cfg(feature = "javascript")]
+        {
+            self.console_output.clear();
+        }
+        #[cfg(feature = "javascript")]
         let doc = {
             let scripts = Self::collect_scripts(&doc);
             if scripts.is_empty() {
@@ -601,7 +605,8 @@ impl BrowserWidget {
     }
 
     /// Walk the DOM to collect inline `<script>` text in document order.
-    /// External scripts (`<script src="...">`) are skipped.
+    /// External scripts (`<script src="...">`) and non-JavaScript types
+    /// (e.g. `application/ld+json`) are skipped.
     #[cfg(feature = "javascript")]
     fn collect_scripts(doc: &html::dom::Document) -> Vec<String> {
         let mut scripts = Vec::new();
@@ -609,6 +614,7 @@ impl BrowserWidget {
             if let html::dom::NodeKind::Element(elem) = &node.kind
                 && elem.tag == html::dom::TagName::Script
                 && elem.get_attribute("src").is_none()
+                && Self::is_js_script_type(elem.get_attribute("type"))
             {
                 let text = doc.text_content(id);
                 if !text.is_empty() {
@@ -617,6 +623,26 @@ impl BrowserWidget {
             }
         }
         scripts
+    }
+
+    /// Returns `true` if the script `type` attribute indicates JavaScript
+    /// (or is absent/empty, which defaults to JS per the HTML spec).
+    #[cfg(feature = "javascript")]
+    fn is_js_script_type(type_attr: Option<&str>) -> bool {
+        match type_attr {
+            None | Some("") => true,
+            Some(t) => {
+                let t = t.trim().to_ascii_lowercase();
+                matches!(
+                    t.as_str(),
+                    "text/javascript"
+                        | "application/javascript"
+                        | "text/ecmascript"
+                        | "application/ecmascript"
+                        | "module"
+                )
+            },
+        }
     }
 
     /// Console output from JavaScript execution on the current page.
