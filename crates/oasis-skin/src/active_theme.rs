@@ -161,6 +161,46 @@ pub struct ActiveTheme {
     /// Cursor style variant: "stroke" (default), "fill", or "underline".
     pub cursor_style: String,
 
+    // -- App screen colors --
+    /// App screen background color.
+    pub app_bg: Color,
+    /// App screen divider/separator color.
+    pub app_divider: Color,
+    /// App screen selected text color.
+    pub app_selected_text: Color,
+    /// App screen normal text color.
+    pub app_text: Color,
+    /// App screen dim/hint text color.
+    pub app_dim_text: Color,
+    /// App screen title bar background color.
+    pub app_title_bar_bg: Color,
+
+    // -- OSK colors --
+    /// OSK key background color.
+    pub osk_key_bg: Color,
+    /// OSK key text color.
+    pub osk_key_text: Color,
+    /// OSK focused key highlight color.
+    pub osk_key_focus: Color,
+    /// OSK active key background color.
+    pub osk_key_active: Color,
+    /// OSK dim text color (mode indicator, buffer display).
+    pub osk_key_dim_text: Color,
+
+    // -- Dashboard geometry --
+    /// Dashboard grid horizontal padding (default 16).
+    pub grid_padding_x: u16,
+    /// Dashboard grid vertical padding (default 6).
+    pub grid_padding_y: u16,
+    /// Dashboard icon shadow level (default 1).
+    pub icon_shadow_level: u8,
+    /// Terminal background border radius (default 4).
+    pub terminal_border_radius: u16,
+
+    // -- Start menu item palette --
+    /// Start menu item icon colors (6 colors derived from primary).
+    pub sm_item_colors: Vec<Color>,
+
     // -- Geometry overrides --
     /// Status bar height (default 24).
     pub statusbar_height: u32,
@@ -275,6 +315,29 @@ impl Default for ActiveTheme {
             sm_footer_height: 0,
             sm_item_icon_size: 14,
             sm_item_row_height: 22,
+            app_bg: Color::rgb(12, 12, 20),
+            app_divider: Color::rgb(60, 60, 80),
+            app_selected_text: Color::rgb(100, 200, 255),
+            app_text: Color::rgb(180, 180, 200),
+            app_dim_text: Color::rgb(100, 100, 130),
+            app_title_bar_bg: Color::rgb(30, 50, 90),
+            osk_key_bg: Color::rgba(20, 20, 40, 220),
+            osk_key_text: Color::WHITE,
+            osk_key_focus: Color::rgb(100, 200, 255),
+            osk_key_active: Color::rgb(60, 100, 180),
+            osk_key_dim_text: Color::rgb(150, 150, 180),
+            grid_padding_x: 16,
+            grid_padding_y: 6,
+            icon_shadow_level: 1,
+            terminal_border_radius: 4,
+            sm_item_colors: vec![
+                Color::rgb(70, 130, 180),
+                Color::rgb(60, 179, 113),
+                Color::rgb(218, 165, 32),
+                Color::rgb(186, 85, 211),
+                Color::rgb(100, 149, 237),
+                Color::rgb(205, 92, 92),
+            ],
             icon_body_color: Color::rgb(250, 250, 248),
             icon_fold_color: Color::rgb(210, 210, 205),
             icon_outline_color: Color::rgba(255, 255, 255, 180),
@@ -458,6 +521,99 @@ impl ActiveTheme {
             sm_footer_height: sm.and_then(|s| s.footer_height).unwrap_or(0),
             sm_item_icon_size: sm.and_then(|s| s.item_icon_size).unwrap_or(14),
             sm_item_row_height: sm.and_then(|s| s.item_row_height).unwrap_or(22).max(1),
+            // App screen colors: derive from skin background/primary/text.
+            app_bg: {
+                let ap = skin.app_overrides.as_ref();
+                ov(
+                    ap.and_then(|a| a.app_bg.as_ref()),
+                    lighten(skin.background_color(), 0.02),
+                )
+            },
+            app_divider: {
+                let ap = skin.app_overrides.as_ref();
+                ov(
+                    ap.and_then(|a| a.divider_color.as_ref()),
+                    lighten(skin.background_color(), 0.15),
+                )
+            },
+            app_selected_text: {
+                let ap = skin.app_overrides.as_ref();
+                ov(
+                    ap.and_then(|a| a.selected_text.as_ref()),
+                    lighten(primary, 0.3),
+                )
+            },
+            app_text: {
+                let ap = skin.app_overrides.as_ref();
+                ov(ap.and_then(|a| a.text_color.as_ref()), lighten(dim, 0.2))
+            },
+            app_dim_text: {
+                let ap = skin.app_overrides.as_ref();
+                ov(ap.and_then(|a| a.dim_text.as_ref()), dim)
+            },
+            app_title_bar_bg: {
+                let ap = skin.app_overrides.as_ref();
+                ov(
+                    ap.and_then(|a| a.title_bar_bg.as_ref()),
+                    lighten(skin.background_color(), 0.08),
+                )
+            },
+            // OSK colors: derive from skin background/primary/text.
+            osk_key_bg: {
+                let ok = skin.osk_overrides.as_ref();
+                ov(
+                    ok.and_then(|o| o.key_bg.as_ref()),
+                    with_alpha(lighten(skin.background_color(), 0.05), 220),
+                )
+            },
+            osk_key_text: {
+                let ok = skin.osk_overrides.as_ref();
+                ov(ok.and_then(|o| o.key_text.as_ref()), text)
+            },
+            osk_key_focus: {
+                let ok = skin.osk_overrides.as_ref();
+                ov(ok.and_then(|o| o.key_focus.as_ref()), lighten(primary, 0.3))
+            },
+            osk_key_active: {
+                let ok = skin.osk_overrides.as_ref();
+                ov(ok.and_then(|o| o.key_active.as_ref()), primary)
+            },
+            osk_key_dim_text: {
+                let ok = skin.osk_overrides.as_ref();
+                ov(ok.and_then(|o| o.key_dim_text.as_ref()), dim)
+            },
+            // Dashboard geometry.
+            grid_padding_x: skin
+                .geometry
+                .as_ref()
+                .and_then(|g| g.grid_padding_x)
+                .unwrap_or(16),
+            grid_padding_y: skin
+                .geometry
+                .as_ref()
+                .and_then(|g| g.grid_padding_y)
+                .unwrap_or(6),
+            icon_shadow_level: skin
+                .geometry
+                .as_ref()
+                .and_then(|g| g.icon_shadow_level)
+                .unwrap_or(1),
+            terminal_border_radius: skin
+                .geometry
+                .as_ref()
+                .and_then(|g| g.terminal_border_radius)
+                .unwrap_or(4),
+            // Start menu item colors.
+            sm_item_colors: sm
+                .and_then(|s| s.item_colors.as_ref())
+                .map(|colors| {
+                    colors
+                        .iter()
+                        .filter_map(|s| parse_hex_color(s))
+                        .collect::<Vec<_>>()
+                })
+                .filter(|v| !v.is_empty())
+                .unwrap_or_else(|| Self::derive_item_palette(primary)),
             icon_body_color: ov(ico.and_then(|i| i.body_color.as_ref()), text),
             icon_fold_color: ov(ico.and_then(|i| i.fold_color.as_ref()), dim),
             icon_outline_color: ov(
@@ -662,6 +818,43 @@ impl ActiveTheme {
             return Some((lighten(base, 0.15), base));
         }
         None
+    }
+
+    /// Derive a 6-color palette from the primary color using hue-shifted offsets.
+    ///
+    /// The palette is: primary itself, a green-shifted variant, a warm variant,
+    /// a purple variant, a lighter variant, and a reddish variant.
+    fn derive_item_palette(primary: Color) -> Vec<Color> {
+        vec![
+            // Base primary (slightly desaturated).
+            primary,
+            // Green-shifted: reduce red, boost green.
+            Color::rgb(
+                primary.r.saturating_sub(20),
+                primary.g.saturating_add(40),
+                primary.b.saturating_sub(30),
+            ),
+            // Warm/gold: boost red+green, reduce blue.
+            Color::rgb(
+                primary.r.saturating_add(60),
+                primary.g.saturating_add(20),
+                primary.b.saturating_sub(60),
+            ),
+            // Purple-shifted: boost red+blue.
+            Color::rgb(
+                primary.r.saturating_add(30),
+                primary.g.saturating_sub(40),
+                primary.b.saturating_add(40),
+            ),
+            // Lighter variant.
+            lighten(primary, 0.2),
+            // Reddish variant.
+            Color::rgb(
+                primary.r.saturating_add(50),
+                primary.g.saturating_sub(30),
+                primary.b.saturating_sub(30),
+            ),
+        ]
     }
 }
 

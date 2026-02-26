@@ -116,38 +116,45 @@ impl StartMenuState {
         }
     }
 
-    /// Default set of start menu items.
-    pub fn default_items() -> Vec<StartMenuItem> {
+    /// Default set of start menu items with colors derived from the theme.
+    pub fn default_items(at: &ActiveTheme) -> Vec<StartMenuItem> {
+        let colors = &at.sm_item_colors;
+        let color = |idx: usize| -> Color {
+            colors
+                .get(idx)
+                .copied()
+                .unwrap_or(Color::rgb(100, 100, 100))
+        };
         vec![
             StartMenuItem {
                 label: "Games".to_string(),
                 action: StartMenuAction::LaunchApp("File Manager".to_string()),
-                color: Color::rgb(70, 130, 180),
+                color: color(0),
             },
             StartMenuItem {
                 label: "Music".to_string(),
                 action: StartMenuAction::LaunchApp("Music Player".to_string()),
-                color: Color::rgb(60, 179, 113),
+                color: color(1),
             },
             StartMenuItem {
                 label: "Video".to_string(),
                 action: StartMenuAction::LaunchApp("Photo Viewer".to_string()),
-                color: Color::rgb(218, 165, 32),
+                color: color(2),
             },
             StartMenuItem {
                 label: "Photos".to_string(),
                 action: StartMenuAction::LaunchApp("Photo Viewer".to_string()),
-                color: Color::rgb(186, 85, 211),
+                color: color(3),
             },
             StartMenuItem {
                 label: "Settings".to_string(),
                 action: StartMenuAction::LaunchApp("Settings".to_string()),
-                color: Color::rgb(100, 149, 237),
+                color: color(4),
             },
             StartMenuItem {
                 label: "Exit".to_string(),
                 action: StartMenuAction::Exit,
-                color: Color::rgb(205, 92, 92),
+                color: color(5),
             },
         ]
     }
@@ -541,13 +548,13 @@ mod tests {
 
     #[test]
     fn default_items_count() {
-        let items = StartMenuState::default_items();
+        let items = StartMenuState::default_items(&ActiveTheme::default());
         assert_eq!(items.len(), 6);
     }
 
     #[test]
     fn toggle_opens_and_closes() {
-        let mut sm = StartMenuState::new(StartMenuState::default_items());
+        let mut sm = StartMenuState::new(StartMenuState::default_items(&ActiveTheme::default()));
         assert!(!sm.open);
         sm.toggle();
         assert!(sm.open);
@@ -558,7 +565,7 @@ mod tests {
 
     #[test]
     fn dpad_navigation_2col() {
-        let mut sm = StartMenuState::new(StartMenuState::default_items());
+        let mut sm = StartMenuState::new(StartMenuState::default_items(&ActiveTheme::default()));
         sm.open = true;
         sm.selected = 0;
 
@@ -581,7 +588,7 @@ mod tests {
 
     #[test]
     fn confirm_returns_action_and_closes() {
-        let mut sm = StartMenuState::new(StartMenuState::default_items());
+        let mut sm = StartMenuState::new(StartMenuState::default_items(&ActiveTheme::default()));
         sm.open = true;
         sm.selected = 5; // Exit item
         let action = sm.handle_input(&Button::Confirm);
@@ -591,7 +598,7 @@ mod tests {
 
     #[test]
     fn cancel_closes_menu() {
-        let mut sm = StartMenuState::new(StartMenuState::default_items());
+        let mut sm = StartMenuState::new(StartMenuState::default_items(&ActiveTheme::default()));
         sm.open = true;
         let action = sm.handle_input(&Button::Cancel);
         assert_eq!(action, StartMenuAction::None);
@@ -600,20 +607,20 @@ mod tests {
 
     #[test]
     fn hit_test_button() {
-        let sm = StartMenuState::new(StartMenuState::default_items());
+        let sm = StartMenuState::new(StartMenuState::default_items(&ActiveTheme::default()));
         assert!(sm.hit_test_button(BTN_X + 1, sm.btn_y + 1));
         assert!(!sm.hit_test_button(300, 100));
     }
 
     #[test]
     fn hit_test_item_when_closed() {
-        let sm = StartMenuState::new(StartMenuState::default_items());
+        let sm = StartMenuState::new(StartMenuState::default_items(&ActiveTheme::default()));
         assert!(sm.hit_test_item(MENU_X + 10, sm.menu_y + 10).is_none());
     }
 
     #[test]
     fn hit_test_item_when_open() {
-        let mut sm = StartMenuState::new(StartMenuState::default_items());
+        let mut sm = StartMenuState::new(StartMenuState::default_items(&ActiveTheme::default()));
         sm.open = true;
         // Click on first item area (items start after header).
         let y = sm.menu_y + sm.header_h as i32 + PAD_TOP + 2;
@@ -624,7 +631,7 @@ mod tests {
 
     #[test]
     fn update_sdi_creates_button_objects() {
-        let sm = StartMenuState::new(StartMenuState::default_items());
+        let sm = StartMenuState::new(StartMenuState::default_items(&ActiveTheme::default()));
         let mut sdi = SdiRegistry::new();
         let at = ActiveTheme::default();
         sm.update_sdi(&mut sdi, &at);
@@ -636,7 +643,7 @@ mod tests {
 
     #[test]
     fn update_sdi_shows_menu_when_open() {
-        let mut sm = StartMenuState::new(StartMenuState::default_items());
+        let mut sm = StartMenuState::new(StartMenuState::default_items(&ActiveTheme::default()));
         sm.open = true;
         let mut sdi = SdiRegistry::new();
         let at = ActiveTheme::default();
@@ -650,7 +657,7 @@ mod tests {
 
     #[test]
     fn navigation_clamps_at_boundaries() {
-        let mut sm = StartMenuState::new(StartMenuState::default_items());
+        let mut sm = StartMenuState::new(StartMenuState::default_items(&ActiveTheme::default()));
         sm.open = true;
         sm.selected = 0;
         // Up at row 0 should stay.
@@ -664,7 +671,7 @@ mod tests {
     #[test]
     fn menu_geometry() {
         let at = ActiveTheme::default();
-        let sm = StartMenuState::new(StartMenuState::default_items());
+        let sm = StartMenuState::new(StartMenuState::default_items(&ActiveTheme::default()));
         // 6 items in 2 cols = 3 rows, default item_row_height = 22.
         let expected_h = (PAD_TOP + 3 * at.sm_item_row_height + PAD_BOTTOM) as u32;
         assert_eq!(sm.menu_h, expected_h);

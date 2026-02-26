@@ -1,5 +1,6 @@
 //! App screen runner with title bar and scrollable content.
 
+use crate::active_theme::ActiveTheme;
 use crate::backend::{Color, SdiBackend};
 use crate::dashboard::AppEntry;
 use crate::input::Button;
@@ -416,14 +417,15 @@ impl AppRunner {
         cw: u32,
         ch: u32,
         backend: &mut dyn SdiBackend,
+        at: &ActiveTheme,
     ) -> crate::error::Result<()> {
         // Content background.
-        backend.fill_rect(cx, cy, cw, ch, Color::rgb(12, 12, 20))?;
+        backend.fill_rect(cx, cy, cw, ch, at.app_bg)?;
 
         if let Some(ref panels) = self.panels
             && self.viewing_file.is_none()
         {
-            return self.draw_windowed_dual(cx, cy, cw, ch, backend, panels);
+            return self.draw_windowed_dual(cx, cy, cw, ch, backend, panels, at);
         }
 
         // Title row with dir/file suffix.
@@ -439,7 +441,7 @@ impl AppRunner {
         backend.draw_text(&title_text, cx + 4, cy + 2, 12, Color::WHITE)?;
 
         // Separator line.
-        backend.fill_rect(cx, cy + 18, cw, 1, Color::rgb(60, 60, 80))?;
+        backend.fill_rect(cx, cy + 18, cw, 1, at.app_divider)?;
 
         // Content lines.
         let max_lines = ((ch as i32 - 24) / 16).max(0) as usize;
@@ -450,9 +452,9 @@ impl AppRunner {
             let prefix = if i == self.cursor { "> " } else { "  " };
             let text = format!("{prefix}{line}");
             let text_color = if i == self.cursor {
-                Color::rgb(100, 200, 255)
+                at.app_selected_text
             } else {
-                Color::rgb(180, 180, 200)
+                at.app_text
             };
             let y = cy + 22 + i as i32 * 16;
             backend.draw_text(&text, cx + 4, y, 12, text_color)?;
@@ -469,18 +471,13 @@ impl AppRunner {
             "Cancel=back".to_string()
         };
         let scroll_y = cy + ch as i32 - 14;
-        backend.draw_text(
-            &scroll_text,
-            cx + 4,
-            scroll_y,
-            10,
-            Color::rgb(100, 100, 130),
-        )?;
+        backend.draw_text(&scroll_text, cx + 4, scroll_y, 10, at.app_dim_text)?;
 
         Ok(())
     }
 
     /// Draw dual-panel file manager layout.
+    #[allow(clippy::too_many_arguments)]
     fn draw_windowed_dual(
         &self,
         cx: i32,
@@ -489,6 +486,7 @@ impl AppRunner {
         ch: u32,
         backend: &mut dyn SdiBackend,
         panels: &[FilePanel; 2],
+        at: &ActiveTheme,
     ) -> crate::error::Result<()> {
         let half_w = (cw / 2).saturating_sub(1);
         let divider_x = cx + half_w as i32;
@@ -499,12 +497,12 @@ impl AppRunner {
             panels[0].browse_dir, panels[1].browse_dir,
         );
         backend.draw_text(&title, cx + 4, cy + 2, 12, Color::WHITE)?;
-        backend.fill_rect(cx, cy + 18, cw, 1, Color::rgb(60, 60, 80))?;
+        backend.fill_rect(cx, cy + 18, cw, 1, at.app_divider)?;
 
         // Vertical divider.
         let content_y = cy + 20;
         let content_h = ch.saturating_sub(34);
-        backend.fill_rect(divider_x, content_y, 1, content_h, Color::rgb(60, 60, 80))?;
+        backend.fill_rect(divider_x, content_y, 1, content_h, at.app_divider)?;
 
         // Draw each panel.
         let max_lines = ((content_h as i32) / 16).max(0) as usize;
@@ -515,7 +513,7 @@ impl AppRunner {
 
             // Active panel indicator (subtle highlight strip at top).
             if is_active {
-                backend.fill_rect(px, content_y, pw, 1, Color::rgb(100, 200, 255))?;
+                backend.fill_rect(px, content_y, pw, 1, at.app_selected_text)?;
             }
 
             let visible = panel
@@ -540,9 +538,9 @@ impl AppRunner {
                 };
                 let text = format!("{prefix}{display}");
                 let text_color = if is_active && i == panel.cursor {
-                    Color::rgb(100, 200, 255)
+                    at.app_selected_text
                 } else {
-                    Color::rgb(180, 180, 200)
+                    at.app_text
                 };
                 let y = content_y + 2 + i as i32 * 16;
                 backend.draw_text(&text, px + 2, y, 12, text_color)?;
@@ -556,7 +554,7 @@ impl AppRunner {
             cx + 4,
             scroll_y,
             10,
-            Color::rgb(100, 100, 130),
+            at.app_dim_text,
         )?;
 
         Ok(())
@@ -796,7 +794,7 @@ impl AppRunner {
     }
 
     /// Render the app screen to SDI objects.
-    pub fn update_sdi(&self, sdi: &mut SdiRegistry) {
+    pub fn update_sdi(&self, sdi: &mut SdiRegistry, at: &ActiveTheme) {
         // Full-screen background.
         if !sdi.contains("app_bg") {
             sdi.create("app_bg");
@@ -804,9 +802,9 @@ impl AppRunner {
         if let Ok(obj) = sdi.get_mut("app_bg") {
             obj.x = 0;
             obj.y = 0;
-            obj.w = 480;
-            obj.h = 272;
-            obj.color = Color::rgb(12, 12, 20);
+            obj.w = at.screen_w;
+            obj.h = at.screen_h;
+            obj.color = at.app_bg;
             obj.visible = true;
             obj.z = 100;
         }
@@ -818,9 +816,9 @@ impl AppRunner {
         if let Ok(obj) = sdi.get_mut("app_title_bg") {
             obj.x = 0;
             obj.y = 0;
-            obj.w = 480;
+            obj.w = at.screen_w;
             obj.h = 22;
-            obj.color = Color::rgb(30, 50, 90);
+            obj.color = at.app_title_bar_bg;
             obj.visible = true;
             obj.z = 101;
         }
@@ -834,7 +832,7 @@ impl AppRunner {
         if let Some(ref panels) = self.panels
             && self.viewing_file.is_none()
         {
-            self.update_sdi_dual(sdi, panels);
+            self.update_sdi_dual(sdi, panels, at);
             return;
         }
 
@@ -879,9 +877,9 @@ impl AppRunner {
                 obj.y = rect.y;
                 obj.font_size = 12;
                 obj.text_color = if i == self.cursor {
-                    Color::rgb(100, 200, 255)
+                    at.app_selected_text
                 } else {
-                    Color::rgb(180, 180, 200)
+                    at.app_text
                 };
                 obj.w = 0;
                 obj.h = 0;
@@ -904,9 +902,9 @@ impl AppRunner {
                 obj.text = Some("Cancel=back".to_string());
             }
             obj.x = 8;
-            obj.y = 258;
+            obj.y = at.screen_h as i32 - 14;
             obj.font_size = 10;
-            obj.text_color = Color::rgb(100, 100, 130);
+            obj.text_color = at.app_dim_text;
             obj.w = 0;
             obj.h = 0;
             obj.visible = true;
@@ -915,7 +913,7 @@ impl AppRunner {
     }
 
     /// Render dual-panel layout to SDI objects.
-    fn update_sdi_dual(&self, sdi: &mut SdiRegistry, panels: &[FilePanel; 2]) {
+    fn update_sdi_dual(&self, sdi: &mut SdiRegistry, panels: &[FilePanel; 2], at: &ActiveTheme) {
         // Title with both panel paths.
         if let Ok(obj) = sdi.get_mut("app_title_text") {
             obj.text = Some(format!(
@@ -941,7 +939,7 @@ impl AppRunner {
             obj.y = 24;
             obj.w = 1;
             obj.h = 232;
-            obj.color = Color::rgb(60, 60, 80);
+            obj.color = at.app_divider;
             obj.visible = true;
             obj.z = 102;
         }
@@ -973,9 +971,9 @@ impl AppRunner {
                 obj.y = rect.y;
                 obj.font_size = 12;
                 obj.text_color = if is_active && i == p.cursor {
-                    Color::rgb(100, 200, 255)
+                    at.app_selected_text
                 } else {
-                    Color::rgb(180, 180, 200)
+                    at.app_text
                 };
                 obj.w = 0;
                 obj.h = 0;
@@ -1010,9 +1008,9 @@ impl AppRunner {
                 obj.y = rect.y;
                 obj.font_size = 12;
                 obj.text_color = if is_active && i == p.cursor {
-                    Color::rgb(100, 200, 255)
+                    at.app_selected_text
                 } else {
-                    Color::rgb(180, 180, 200)
+                    at.app_text
                 };
                 obj.w = 0;
                 obj.h = 0;
@@ -1027,9 +1025,9 @@ impl AppRunner {
         if let Ok(obj) = sdi.get_mut("app_scroll") {
             obj.text = Some("L/R=panel  Cancel=back".to_string());
             obj.x = 8;
-            obj.y = 258;
+            obj.y = at.screen_h as i32 - 14;
             obj.font_size = 10;
-            obj.text_color = Color::rgb(100, 100, 130);
+            obj.text_color = at.app_dim_text;
             obj.w = 0;
             obj.h = 0;
             obj.visible = true;
@@ -1523,7 +1521,7 @@ mod tests {
         let vfs = setup_vfs();
         let runner = AppRunner::launch(&make_app("Settings"), &vfs);
         let mut sdi = SdiRegistry::new();
-        runner.update_sdi(&mut sdi);
+        runner.update_sdi(&mut sdi, &ActiveTheme::default());
         assert!(sdi.contains("app_bg"));
         assert!(sdi.contains("app_title_bg"));
         assert!(sdi.contains("app_title_text"));
@@ -1536,7 +1534,7 @@ mod tests {
         let vfs = setup_vfs();
         let runner = AppRunner::launch(&make_app("Settings"), &vfs);
         let mut sdi = SdiRegistry::new();
-        runner.update_sdi(&mut sdi);
+        runner.update_sdi(&mut sdi, &ActiveTheme::default());
         AppRunner::hide_sdi(&mut sdi);
         assert!(!sdi.get("app_bg").unwrap().visible);
         assert!(!sdi.get("app_title_bg").unwrap().visible);
@@ -1899,7 +1897,7 @@ mod tests {
         let vfs = setup_vfs();
         let runner = AppRunner::launch(&make_app("File Manager"), &vfs);
         let mut sdi = SdiRegistry::new();
-        runner.update_sdi(&mut sdi);
+        runner.update_sdi(&mut sdi, &ActiveTheme::default());
         assert!(sdi.contains("app_bg"));
         assert!(sdi.contains("app_divider"));
         assert!(sdi.contains("app_lp_line_0"));
@@ -1912,7 +1910,7 @@ mod tests {
         let vfs = setup_vfs();
         let runner = AppRunner::launch(&make_app("File Manager"), &vfs);
         let mut sdi = SdiRegistry::new();
-        runner.update_sdi(&mut sdi);
+        runner.update_sdi(&mut sdi, &ActiveTheme::default());
         AppRunner::hide_sdi(&mut sdi);
         assert!(!sdi.get("app_bg").unwrap().visible);
         assert!(!sdi.get("app_divider").unwrap().visible);

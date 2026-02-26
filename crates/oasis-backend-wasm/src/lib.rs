@@ -198,8 +198,10 @@ impl OasisWasm {
         // Bars, start menu.
         let mut bottom_bar = BottomBar::new();
         bottom_bar.total_pages = dashboard.page_count();
-        let start_menu =
-            StartMenuState::new_with_theme(StartMenuState::default_items(), &active_theme);
+        let start_menu = StartMenuState::new_with_theme(
+            StartMenuState::default_items(&active_theme),
+            &active_theme,
+        );
 
         // Window manager.
         let wm = WindowManager::with_theme(width, height, skin.theme.build_wm_theme());
@@ -347,6 +349,7 @@ impl OasisWasm {
             let browser = &mut self.browser;
             let iframe_ref = &mut self.iframe;
             let open_runners = &self.open_runners;
+            let active_theme = &self.active_theme;
             if let Err(e) = self.wm.draw_with_clips(
                 &mut self.sdi,
                 &mut self.backend,
@@ -382,7 +385,7 @@ impl OasisWasm {
                     } else if let Some((_, runner)) =
                         open_runners.iter().find(|(id, _)| id == window_id)
                     {
-                        runner.draw_windowed(cx, cy, cw, ch, be)
+                        runner.draw_windowed(cx, cy, cw, ch, be, active_theme)
                     } else {
                         Ok(())
                     };
@@ -410,6 +413,7 @@ impl OasisWasm {
                 &mut self.backend,
                 self.output_lines.len(),
                 self.terminal_scroll_offset,
+                &self.active_theme,
             )
         {
             console_log!("terminal scrollbar error: {e}");
@@ -456,7 +460,11 @@ impl OasisWasm {
                     self.dashboard.update_sdi(&mut self.sdi, &self.active_theme);
                 } else {
                     self.dashboard.hide_sdi(&mut self.sdi);
-                    terminal_sdi::update_media_page(&mut self.sdi, &self.bottom_bar);
+                    terminal_sdi::update_media_page(
+                        &mut self.sdi,
+                        &self.bottom_bar,
+                        &self.active_theme,
+                    );
                 }
 
                 self.status_bar
@@ -482,6 +490,7 @@ impl OasisWasm {
                     &self.cwd,
                     &self.input_buf,
                     self.terminal_scroll_offset,
+                    &self.active_theme,
                 );
             },
             Mode::App => {
@@ -495,7 +504,7 @@ impl OasisWasm {
                 self.bottom_bar
                     .update_sdi(&mut self.sdi, &self.active_theme, &self.skin.features);
                 if let Some(ref runner) = self.app_runner {
-                    runner.update_sdi(&mut self.sdi);
+                    runner.update_sdi(&mut self.sdi, &self.active_theme);
                 }
             },
             Mode::Desktop => {
@@ -514,7 +523,7 @@ impl OasisWasm {
             },
             Mode::Osk => {
                 if let Some(ref osk_state) = self.osk {
-                    osk_state.update_sdi(&mut self.sdi);
+                    osk_state.update_sdi(&mut self.sdi, &self.active_theme);
                 }
             },
         }
@@ -685,7 +694,7 @@ impl OasisWasm {
             },
             InputEvent::MouseWheel { delta } if self.mode == Mode::Terminal => {
                 let len = self.output_lines.len();
-                let max_visible = terminal_sdi::VISIBLE_OUTPUT_LINES;
+                let max_visible = terminal_sdi::visible_output_lines(&self.active_theme);
                 if len > max_visible {
                     let max_offset = len - max_visible;
                     if *delta < 0 {
@@ -1102,7 +1111,7 @@ impl OasisWasm {
                 self.bottom_bar.total_pages = self.dashboard.page_count();
                 self.bottom_bar.current_page = 0;
                 self.start_menu = StartMenuState::new_with_theme(
-                    StartMenuState::default_items(),
+                    StartMenuState::default_items(&self.active_theme),
                     &self.active_theme,
                 );
                 self.output_lines

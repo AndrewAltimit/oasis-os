@@ -164,7 +164,7 @@ pub fn apply_skin_swap(name: &str, state: &mut AppState, sdi: &mut SdiRegistry, 
             state.bottom_bar.total_pages = state.dashboard.page_count();
             state.bottom_bar.current_page = 0;
             state.start_menu = StartMenuState::new_with_theme(
-                StartMenuState::default_items(),
+                StartMenuState::default_items(&state.active_theme),
                 &state.active_theme,
             );
             state
@@ -407,7 +407,7 @@ mod tests {
             dashboard: DashboardState::new(dash_cfg, vec![]),
             status_bar: StatusBar::new(),
             bottom_bar: BottomBar::new(),
-            start_menu: StartMenuState::new(StartMenuState::default_items()),
+            start_menu: StartMenuState::new(StartMenuState::default_items(&active_theme)),
             cmd_reg: CommandRegistry::new(),
             cwd: "/".to_string(),
             input_buf: String::new(),

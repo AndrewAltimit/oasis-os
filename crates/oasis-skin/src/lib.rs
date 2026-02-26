@@ -18,7 +18,10 @@ pub use corrupted::{CorruptedModifiers, SimpleRng};
 pub use effects::{CorruptedEffect, ScanlineEffect, SkinEffect};
 pub use loader::{Skin, SkinFeatures, SkinLayout, SkinManifest, SkinObjectDef};
 pub use strings::SkinStrings;
-pub use theme::{BarOverrides, BrowserOverrides, IconOverrides, SkinTheme, WmThemeOverrides};
+pub use theme::{
+    AppOverrides, BarOverrides, BrowserOverrides, IconOverrides, OskOverrides, SkinTheme,
+    WmThemeOverrides,
+};
 
 #[cfg(not(target_arch = "wasm32"))]
 use std::path::Path;

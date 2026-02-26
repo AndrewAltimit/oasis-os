@@ -21,7 +21,7 @@ pub fn update_sdi(state: &mut AppState, sdi: &mut SdiRegistry) {
                 state.dashboard.update_sdi(sdi, &state.active_theme);
             } else {
                 state.dashboard.hide_sdi(sdi);
-                terminal_sdi::update_media_page(sdi, &state.bottom_bar);
+                terminal_sdi::update_media_page(sdi, &state.bottom_bar, &state.active_theme);
             }
 
             state
@@ -48,6 +48,7 @@ pub fn update_sdi(state: &mut AppState, sdi: &mut SdiRegistry) {
                 &state.cwd,
                 &state.input_buf,
                 state.terminal_scroll_offset,
+                &state.active_theme,
             );
         },
         Mode::App => {
@@ -63,7 +64,7 @@ pub fn update_sdi(state: &mut AppState, sdi: &mut SdiRegistry) {
                 .bottom_bar
                 .update_sdi(sdi, &state.active_theme, &state.skin.features);
             if let Some(ref runner) = state.app_runner {
-                runner.update_sdi(sdi);
+                runner.update_sdi(sdi, &state.active_theme);
             }
         },
         Mode::Desktop => {
@@ -82,7 +83,7 @@ pub fn update_sdi(state: &mut AppState, sdi: &mut SdiRegistry) {
         },
         Mode::Osk => {
             if let Some(ref osk_state) = state.osk {
-                osk_state.update_sdi(sdi);
+                osk_state.update_sdi(sdi, &state.active_theme);
             }
         },
     }

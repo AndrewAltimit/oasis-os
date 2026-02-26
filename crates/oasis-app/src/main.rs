@@ -127,7 +127,8 @@ fn main() -> Result<()> {
 
     let mouse_cursor = CursorState::new(config.screen_width, config.screen_height);
 
-    let start_menu = StartMenuState::new_with_theme(StartMenuState::default_items(), &active_theme);
+    let start_menu =
+        StartMenuState::new_with_theme(StartMenuState::default_items(&active_theme), &active_theme);
 
     // Assemble application state.
     let mut state = AppState {
@@ -410,7 +411,7 @@ fn main() -> Result<()> {
                     } else if let Some((_, runner)) =
                         state.open_runners.iter().find(|(id, _)| id == window_id)
                     {
-                        runner.draw_windowed(cx, cy, cw, ch, be)
+                        runner.draw_windowed(cx, cy, cw, ch, be, &state.active_theme)
                     } else {
                         Ok(())
                     }
@@ -425,6 +426,7 @@ fn main() -> Result<()> {
                 &mut backend,
                 state.output_lines.len(),
                 state.terminal_scroll_offset,
+                &state.active_theme,
             )?;
         }
 

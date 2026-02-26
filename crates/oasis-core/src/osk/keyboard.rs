@@ -1,6 +1,6 @@
 //! On-screen keyboard state and rendering.
 
-use crate::backend::Color;
+use crate::active_theme::ActiveTheme;
 use crate::input::Button;
 use crate::sdi::SdiRegistry;
 
@@ -185,8 +185,8 @@ impl OskState {
         self.result == Some(false)
     }
 
-    /// Render the OSK to SDI objects.
-    pub fn update_sdi(&self, sdi: &mut SdiRegistry) {
+    /// Render the OSK to SDI objects using theme-driven colors.
+    pub fn update_sdi(&self, sdi: &mut SdiRegistry, at: &ActiveTheme) {
         let chars = self.chars();
         let cols = self.config.cols;
         let rows = self.rows();
@@ -201,7 +201,7 @@ impl OskState {
             obj.y = self.config.y - 24;
             obj.w = (cols as u32) * self.config.cell_w + 8;
             obj.h = (rows as u32) * self.config.cell_h + 48;
-            obj.color = Color::rgba(20, 20, 40, 220);
+            obj.color = at.osk_key_bg;
             obj.visible = self.active;
         }
 
@@ -215,7 +215,7 @@ impl OskState {
             obj.x = self.config.x;
             obj.y = self.config.y - 20;
             obj.font_size = 12;
-            obj.text_color = Color::WHITE;
+            obj.text_color = at.osk_key_text;
             obj.w = 0;
             obj.h = 0;
             obj.visible = self.active;
@@ -231,11 +231,14 @@ impl OskState {
             obj.x = self.config.x;
             obj.y = self.config.y + (rows as i32) * self.config.cell_h as i32 + 4;
             obj.font_size = 12;
-            obj.text_color = Color::rgb(100, 200, 255);
+            obj.text_color = at.osk_key_focus;
             obj.w = 0;
             obj.h = 0;
             obj.visible = self.active;
         }
+
+        // Inactive key color: slightly lighter than the background.
+        let inactive_key = oasis_types::color::lighten(at.osk_key_bg, 0.08);
 
         // Character grid cells.
         for (i, &ch) in chars.iter().enumerate() {
@@ -252,13 +255,13 @@ impl OskState {
                 obj.h = self.config.cell_h - 2;
                 obj.text = Some(ch.to_string());
                 obj.font_size = 14;
-                obj.text_color = Color::WHITE;
+                obj.text_color = at.osk_key_text;
                 obj.visible = self.active;
 
                 if i == self.cursor {
-                    obj.color = Color::rgb(60, 100, 180);
+                    obj.color = at.osk_key_active;
                 } else {
-                    obj.color = Color::rgb(40, 40, 60);
+                    obj.color = inactive_key;
                 }
             }
         }
@@ -278,7 +281,7 @@ impl OskState {
             obj.x = self.config.x;
             obj.y = self.config.y + (rows as i32) * self.config.cell_h as i32 + 20;
             obj.font_size = 10;
-            obj.text_color = Color::rgb(150, 150, 180);
+            obj.text_color = at.osk_key_dim_text;
             obj.w = 0;
             obj.h = 0;
             obj.visible = self.active;
@@ -595,7 +598,7 @@ mod tests {
         let config = OskConfig::default();
         let osk = OskState::new(config, "");
         let mut sdi = SdiRegistry::new();
-        osk.update_sdi(&mut sdi);
+        osk.update_sdi(&mut sdi, &ActiveTheme::default());
         assert!(sdi.contains("osk_bg"));
         assert!(sdi.get("osk_bg").unwrap().visible);
     }
@@ -605,7 +608,7 @@ mod tests {
         let config = OskConfig::default();
         let osk = OskState::new(config, "");
         let mut sdi = SdiRegistry::new();
-        osk.update_sdi(&mut sdi);
+        osk.update_sdi(&mut sdi, &ActiveTheme::default());
         assert!(sdi.contains("osk_title"));
         let obj = sdi.get("osk_title").unwrap();
         assert_eq!(obj.text, Some("Input".to_string()));
@@ -616,7 +619,7 @@ mod tests {
         let config = OskConfig::default();
         let osk = OskState::new(config, "test");
         let mut sdi = SdiRegistry::new();
-        osk.update_sdi(&mut sdi);
+        osk.update_sdi(&mut sdi, &ActiveTheme::default());
         assert!(sdi.contains("osk_buffer"));
         let obj = sdi.get("osk_buffer").unwrap();
         assert_eq!(obj.text, Some("test|".to_string()));
@@ -627,7 +630,7 @@ mod tests {
         let config = OskConfig::default();
         let osk = OskState::new(config, "");
         let mut sdi = SdiRegistry::new();
-        osk.update_sdi(&mut sdi);
+        osk.update_sdi(&mut sdi, &ActiveTheme::default());
         for i in 0..ALPHA_LOWER.len() {
             let name = format!("osk_key_{i}");
             assert!(sdi.contains(&name));
@@ -640,7 +643,7 @@ mod tests {
         let mut osk = OskState::new(config, "");
         osk.cursor = 5;
         let mut sdi = SdiRegistry::new();
-        osk.update_sdi(&mut sdi);
+        osk.update_sdi(&mut sdi, &ActiveTheme::default());
         let selected = sdi.get("osk_key_5").unwrap();
         let unselected = sdi.get("osk_key_0").unwrap();
         assert_ne!(selected.color, unselected.color);
@@ -651,7 +654,7 @@ mod tests {
         let config = OskConfig::default();
         let osk = OskState::new(config, "");
         let mut sdi = SdiRegistry::new();
-        osk.update_sdi(&mut sdi);
+        osk.update_sdi(&mut sdi, &ActiveTheme::default());
         assert!(sdi.contains("osk_mode"));
         let obj = sdi.get("osk_mode").unwrap();
         assert!(obj.text.as_ref().unwrap().contains("abc"));
@@ -663,7 +666,7 @@ mod tests {
         let mut osk = OskState::new(config, "");
         osk.mode = OskMode::AlphaUpper;
         let mut sdi = SdiRegistry::new();
-        osk.update_sdi(&mut sdi);
+        osk.update_sdi(&mut sdi, &ActiveTheme::default());
         let obj = sdi.get("osk_mode").unwrap();
         assert!(obj.text.as_ref().unwrap().contains("ABC"));
     }
@@ -674,7 +677,7 @@ mod tests {
         let mut osk = OskState::new(config, "");
         osk.mode = OskMode::NumSymbol;
         let mut sdi = SdiRegistry::new();
-        osk.update_sdi(&mut sdi);
+        osk.update_sdi(&mut sdi, &ActiveTheme::default());
         let obj = sdi.get("osk_mode").unwrap();
         assert!(obj.text.as_ref().unwrap().contains("123"));
     }
@@ -684,7 +687,7 @@ mod tests {
         let config = OskConfig::default();
         let osk = OskState::new(config, "");
         let mut sdi = SdiRegistry::new();
-        osk.update_sdi(&mut sdi);
+        osk.update_sdi(&mut sdi, &ActiveTheme::default());
         osk.hide_sdi(&mut sdi);
         assert!(!sdi.get("osk_bg").unwrap().visible);
         assert!(!sdi.get("osk_title").unwrap().visible);
@@ -702,7 +705,7 @@ mod tests {
         let mut osk = OskState::new(config, "");
         osk.active = false;
         let mut sdi = SdiRegistry::new();
-        osk.update_sdi(&mut sdi);
+        osk.update_sdi(&mut sdi, &ActiveTheme::default());
         assert!(!sdi.get("osk_bg").unwrap().visible);
     }
 }

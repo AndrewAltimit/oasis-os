@@ -580,7 +580,7 @@ fn run_skin_scenario(
 
     let start_menu = if skin.features.start_menu {
         Some(StartMenuState::new_with_theme(
-            StartMenuState::default_items(),
+            StartMenuState::default_items(&active_theme),
             &active_theme,
         ))
     } else {

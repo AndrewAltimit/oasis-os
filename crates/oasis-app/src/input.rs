@@ -425,7 +425,7 @@ pub fn handle_default_input(
 
         InputEvent::MouseWheel { delta } if state.mode == Mode::Terminal => {
             let len = state.output_lines.len();
-            let max_visible = terminal_sdi::VISIBLE_OUTPUT_LINES;
+            let max_visible = terminal_sdi::visible_output_lines(&state.active_theme);
             if len > max_visible {
                 let max_offset = len - max_visible;
                 if *delta < 0 {
@@ -489,6 +489,7 @@ fn handle_start_menu_action(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use oasis_core::active_theme::ActiveTheme;
 
     #[test]
     fn input_result_variants() {
@@ -559,7 +560,7 @@ mod tests {
             dashboard: DashboardState::new(dash_cfg, vec![]),
             status_bar: StatusBar::new(),
             bottom_bar: BottomBar::new(),
-            start_menu: StartMenuState::new(StartMenuState::default_items()),
+            start_menu: StartMenuState::new(StartMenuState::default_items(&active_theme)),
             cmd_reg: CommandRegistry::new(),
             cwd: "/".to_string(),
             input_buf: String::new(),
@@ -709,7 +710,7 @@ mod tests {
         let (mut state, mut sdi, mut vfs) = make_test_state();
         state.mode = Mode::Terminal;
         // First create terminal objects so set_terminal_visible can hide them.
-        terminal_sdi::setup_terminal_objects(&mut sdi, &[], "/", "", 0);
+        terminal_sdi::setup_terminal_objects(&mut sdi, &[], "/", "", 0, &ActiveTheme::default());
         handle_default_input(
             &InputEvent::ButtonPress(Button::Cancel),
             &mut state,

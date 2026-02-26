@@ -75,6 +75,14 @@ pub struct SkinTheme {
     #[serde(default)]
     pub browser_overrides: Option<BrowserOverrides>,
 
+    /// Per-element color overrides for app screens.
+    #[serde(default)]
+    pub app_overrides: Option<AppOverrides>,
+
+    /// Per-element color overrides for the on-screen keyboard.
+    #[serde(default)]
+    pub osk_overrides: Option<OskOverrides>,
+
     /// Per-element color overrides for the start menu popup.
     #[serde(default)]
     pub start_menu_overrides: Option<StartMenuOverrides>,
@@ -239,6 +247,18 @@ pub struct GeometryOverrides {
     pub icon_width: Option<u32>,
     pub icon_height: Option<u32>,
     pub font_small: Option<u16>,
+    /// Dashboard grid horizontal padding (default 16).
+    #[serde(default)]
+    pub grid_padding_x: Option<u16>,
+    /// Dashboard grid vertical padding (default 6).
+    #[serde(default)]
+    pub grid_padding_y: Option<u16>,
+    /// Shadow level for dashboard icons (default 1).
+    #[serde(default)]
+    pub icon_shadow_level: Option<u8>,
+    /// Terminal background border radius (default 4).
+    #[serde(default)]
+    pub terminal_border_radius: Option<u16>,
 }
 
 /// Per-element overrides for the start menu popup and button.
@@ -298,6 +318,41 @@ pub struct StartMenuOverrides {
     pub button_gradient_top: Option<String>,
     #[serde(default)]
     pub button_gradient_bottom: Option<String>,
+    /// Hex color array for category icon placeholders (default: derived from primary).
+    #[serde(default)]
+    pub item_colors: Option<Vec<String>>,
+}
+
+/// Per-element color overrides for app screens (File Manager, Photo Viewer, etc.).
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct AppOverrides {
+    /// App screen background color.
+    pub app_bg: Option<String>,
+    /// Divider/separator line color.
+    pub divider_color: Option<String>,
+    /// Selected/highlighted text color.
+    pub selected_text: Option<String>,
+    /// Normal content text color.
+    pub text_color: Option<String>,
+    /// Dimmed hint text color.
+    pub dim_text: Option<String>,
+    /// Title bar background color.
+    pub title_bar_bg: Option<String>,
+}
+
+/// Per-element color overrides for the on-screen keyboard.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct OskOverrides {
+    /// Key background color.
+    pub key_bg: Option<String>,
+    /// Key text color.
+    pub key_text: Option<String>,
+    /// Focused key highlight color.
+    pub key_focus: Option<String>,
+    /// Active (selected) key background color.
+    pub key_active: Option<String>,
+    /// Inactive/secondary text color (mode indicator, buffer).
+    pub key_dim_text: Option<String>,
 }
 
 /// Per-element overrides for browser chrome colors.
@@ -362,6 +417,8 @@ impl Default for SkinTheme {
             bar_overrides: None,
             icon_overrides: None,
             browser_overrides: None,
+            app_overrides: None,
+            osk_overrides: None,
             start_menu_overrides: None,
             wallpaper: None,
             geometry: None,

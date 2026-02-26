@@ -45,8 +45,8 @@ impl DashboardConfig {
         let rows = features.grid_rows;
         let content_top = at.statusbar_height + at.tab_row_height;
         let content_h = at.screen_h - content_top - at.bottombar_height;
-        let grid_padding_x = 16u16;
-        let grid_padding_y = 6u16;
+        let grid_padding_x = at.grid_padding_x;
+        let grid_padding_y = at.grid_padding_y;
         let grid_x = grid_padding_x as i32;
         let grid_y = (content_top + grid_padding_y as u32) as i32;
         let grid_w = at.screen_w - 2 * grid_padding_x as u32;
@@ -336,7 +336,7 @@ impl DashboardState {
                         cursor.w = self.config.cell_w;
                         cursor.h = 3;
                         cursor.color = at.cursor_color;
-                        cursor.border_radius = Some(1);
+                        cursor.border_radius = Some(at.cursor_border_radius.min(2));
                         cursor.stroke_width = None;
                         cursor.stroke_color = None;
                     },
@@ -526,7 +526,7 @@ impl DashboardState {
             obj.color = at.icon_body_color;
             obj.text = None;
             obj.border_radius = Some(at.icon_border_radius);
-            obj.shadow_level = Some(1);
+            obj.shadow_level = Some(at.icon_shadow_level);
         }
         if let Ok(obj) = sdi.get_mut(&format!("icon_stripe_{i}")) {
             let r = at.icon_border_radius as u32;
@@ -622,7 +622,7 @@ impl DashboardState {
             obj.gradient_bottom = Some(darken(app.color, 0.15));
             obj.text = None;
             obj.border_radius = Some(at.icon_border_radius);
-            obj.shadow_level = Some(1);
+            obj.shadow_level = Some(at.icon_shadow_level);
         }
         // Label below icon.
         Self::draw_label(
@@ -669,7 +669,7 @@ impl DashboardState {
             obj.color = app.color;
             obj.text = None;
             obj.border_radius = Some(radius);
-            obj.shadow_level = Some(1);
+            obj.shadow_level = Some(at.icon_shadow_level);
         }
         // Label below icon.
         Self::draw_label(
