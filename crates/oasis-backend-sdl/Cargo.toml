@@ -9,7 +9,7 @@ authors.workspace = true
 documentation = "https://docs.rs/oasis-backend-sdl"
 
 [dependencies]
-oasis-core = { workspace = true, features = ["tls-rustls"] }
+oasis-core = { workspace = true, features = ["tls-rustls", "javascript"] }
 oasis-types = { workspace = true }
 sdl2 = { workspace = true }
 log = { workspace = true }

@@ -21,6 +21,10 @@ path = "src/screenshot.rs"
 name = "screenshot-tests"
 path = "src/screenshot_tests.rs"
 
+[features]
+default = ["javascript"]
+javascript = ["oasis-core/javascript"]
+
 [dependencies]
 oasis-core = { workspace = true }
 oasis-audio = { workspace = true }

@@ -21,6 +21,9 @@ pub mod reader;
 pub mod scroll;
 pub mod skin;
 
+#[cfg(feature = "javascript")]
+mod js_dom;
+
 #[cfg(test)]
 pub(crate) mod test_utils;
 
@@ -230,6 +233,10 @@ pub struct BrowserWidget {
 
     /// Last time a hover restyle was performed (for throttling).
     last_hover_time: Option<std::time::Instant>,
+
+    /// Buffered JavaScript console output from the most recent page load.
+    #[cfg(feature = "javascript")]
+    console_output: Vec<oasis_js::ConsoleEntry>,
 }
 
 impl BrowserWidget {
@@ -275,6 +282,8 @@ impl BrowserWidget {
             cached_author_sheets: Vec::new(),
             cached_inline_styles: Vec::new(),
             last_hover_time: None,
+            #[cfg(feature = "javascript")]
+            console_output: Vec::new(),
         }
     }
 
@@ -446,6 +455,48 @@ impl BrowserWidget {
         let tokens = html::tokenizer::Tokenizer::new(html_source).tokenize();
         let doc = html::tree_builder::TreeBuilder::build(tokens);
 
+        // 1b. Execute inline <script> blocks (if JS enabled).
+        //
+        // The document is wrapped in Rc<RefCell<>> so JS closures can
+        // mutate it. After the engine is dropped (freeing all JS-side
+        // Rc clones), we unwrap the Rc to recover an owned Document.
+        #[cfg(feature = "javascript")]
+        {
+            self.console_output.clear();
+        }
+        #[cfg(feature = "javascript")]
+        let doc = {
+            let scripts = Self::collect_scripts(&doc);
+            if scripts.is_empty() {
+                doc
+            } else {
+                let shared: js_dom::SharedDoc = std::rc::Rc::new(std::cell::RefCell::new(doc));
+                match oasis_js::JsEngine::new(8 * 1024 * 1024) {
+                    Ok(engine) => {
+                        let s = std::rc::Rc::clone(&shared);
+                        if let Err(e) =
+                            engine.with_context(|ctx| js_dom::install_document_global(&ctx, &s))
+                        {
+                            log::warn!("JS DOM install failed: {}", e.message);
+                        }
+                        let script_refs: Vec<&str> = scripts.iter().map(String::as_str).collect();
+                        engine.eval_all(&script_refs);
+                        self.console_output = engine.console_output();
+                        drop(engine);
+                    },
+                    Err(e) => {
+                        log::warn!("JS engine init failed: {}", e.message);
+                    },
+                }
+                // Recover the owned Document. If something still holds
+                // an Rc (shouldn't happen), fall back to clone.
+                match std::rc::Rc::try_unwrap(shared) {
+                    Ok(cell) => cell.into_inner(),
+                    Err(rc) => rc.borrow().clone(),
+                }
+            }
+        };
+
         // 2. Extract page title.
         let title = doc.title().unwrap_or_else(|| url.to_string());
 
@@ -551,6 +602,53 @@ impl BrowserWidget {
             }
         }
         result
+    }
+
+    /// Walk the DOM to collect inline `<script>` text in document order.
+    /// External scripts (`<script src="...">`) and non-JavaScript types
+    /// (e.g. `application/ld+json`) are skipped.
+    #[cfg(feature = "javascript")]
+    fn collect_scripts(doc: &html::dom::Document) -> Vec<String> {
+        let mut scripts = Vec::new();
+        for (id, node) in doc.nodes.iter().enumerate() {
+            if let html::dom::NodeKind::Element(elem) = &node.kind
+                && elem.tag == html::dom::TagName::Script
+                && elem.get_attribute("src").is_none()
+                && Self::is_js_script_type(elem.get_attribute("type"))
+            {
+                let text = doc.text_content(id);
+                if !text.is_empty() {
+                    scripts.push(text);
+                }
+            }
+        }
+        scripts
+    }
+
+    /// Returns `true` if the script `type` attribute indicates JavaScript
+    /// (or is absent/empty, which defaults to JS per the HTML spec).
+    #[cfg(feature = "javascript")]
+    fn is_js_script_type(type_attr: Option<&str>) -> bool {
+        match type_attr {
+            None | Some("") => true,
+            Some(t) => {
+                let t = t.trim().to_ascii_lowercase();
+                matches!(
+                    t.as_str(),
+                    "text/javascript"
+                        | "application/javascript"
+                        | "text/ecmascript"
+                        | "application/ecmascript"
+                        | "module"
+                )
+            },
+        }
+    }
+
+    /// Console output from JavaScript execution on the current page.
+    #[cfg(feature = "javascript")]
+    pub fn console_output(&self) -> &[oasis_js::ConsoleEntry] {
+        &self.console_output
     }
 
     // ---------------------------------------------------------------
@@ -4000,5 +4098,103 @@ mod tests {
         // LRU order: img4 (front/MRU) ... img0 (back/LRU)
         // Verify the LRU tracks all 5.
         assert_eq!(browser.decoded_image_lru.len(), 5);
+    }
+
+    // ---------------------------------------------------------------
+    // JavaScript integration tests
+    // ---------------------------------------------------------------
+
+    #[test]
+    #[cfg(feature = "javascript")]
+    fn script_execution() {
+        let mut browser = make_browser();
+        browser.load_html(
+            "<html><body><script>console.log('works')</script></body></html>",
+            "test://js",
+        );
+        let out = browser.console_output();
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].level, oasis_js::ConsoleLevel::Log);
+        assert_eq!(out[0].message, "works");
+    }
+
+    #[test]
+    #[cfg(feature = "javascript")]
+    fn script_error_no_crash() {
+        let mut browser = make_browser();
+        browser.load_html(
+            "<html><body><script>throw new Error('boom')</script></body></html>",
+            "test://js-err",
+        );
+        // Should not panic; error appears in console output.
+        let out = browser.console_output();
+        assert!(out.iter().any(|e| e.level == oasis_js::ConsoleLevel::Error));
+    }
+
+    #[test]
+    #[cfg(feature = "javascript")]
+    fn no_external_scripts() {
+        let mut browser = make_browser();
+        browser.load_html(
+            "<html><body><script src=\"foo.js\"></script></body></html>",
+            "test://js-ext",
+        );
+        // External script should not be executed; no console output.
+        assert!(browser.console_output().is_empty());
+    }
+
+    #[test]
+    #[cfg(feature = "javascript")]
+    fn js_dom_text_content_mutation() {
+        let mut browser = make_browser();
+        browser.load_html(
+            "<html><body>\
+             <div id=\"target\">old</div>\
+             <script>document.getElementById('target').textContent = 'new'</script>\
+             </body></html>",
+            "test://js-dom-text",
+        );
+        let doc = browser.document.as_ref().unwrap();
+        let target = doc.get_element_by_id("target").unwrap();
+        assert_eq!(doc.text_content(target), "new");
+    }
+
+    #[test]
+    #[cfg(feature = "javascript")]
+    fn js_dom_create_element_and_append() {
+        let mut browser = make_browser();
+        browser.load_html(
+            "<html><body>\
+             <div id=\"container\"></div>\
+             <script>\
+               var el = document.createElement('span');\
+               el.textContent = 'created';\
+               document.getElementById('container').appendChild(el);\
+             </script>\
+             </body></html>",
+            "test://js-dom-create",
+        );
+        let doc = browser.document.as_ref().unwrap();
+        let container = doc.get_element_by_id("container").unwrap();
+        assert!(doc.text_content(container).contains("created"));
+    }
+
+    #[test]
+    #[cfg(feature = "javascript")]
+    fn js_dom_get_attribute() {
+        let mut browser = make_browser();
+        browser.load_html(
+            "<html><body>\
+             <a id=\"link\" href=\"https://example.com\">click</a>\
+             <script>\
+               var a = document.getElementById('link');\
+               console.log(a.getAttribute('href'));\
+             </script>\
+             </body></html>",
+            "test://js-dom-attr",
+        );
+        let out = browser.console_output();
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].message, "https://example.com");
     }
 }

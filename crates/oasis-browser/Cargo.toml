@@ -8,12 +8,17 @@ repository.workspace = true
 authors.workspace = true
 documentation = "https://docs.rs/oasis-browser"
 
+[features]
+default = []
+javascript = ["dep:oasis-js"]
+
 [dependencies]
 oasis-types = { workspace = true }
 oasis-vfs = { workspace = true }
 oasis-net = { workspace = true }
 oasis-skin = { workspace = true }
 oasis-terminal = { workspace = true }
+oasis-js = { workspace = true, optional = true }
 serde = { workspace = true }
 log = { workspace = true }
 png = { workspace = true }

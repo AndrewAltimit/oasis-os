@@ -79,7 +79,8 @@ oasis-types     (foundation: Color, Button, InputEvent, backend traits, error ty
 ├── oasis-wm         (window manager: drag/resize, hit testing, decorations)
 ├── oasis-skin       (TOML skin engine, 8 skins, theme derivation)
 ├── oasis-terminal   (90+ commands across 17 modules, shell features)
-├── oasis-browser    (HTML/CSS/Gemini: DOM, CSS cascade, layout engine)
+├── oasis-browser    (HTML/CSS/Gemini: DOM, CSS cascade, layout engine, JS DOM bindings)
+├── oasis-js         (JavaScript engine: QuickJS-NG runtime, console API)
 └── oasis-core       (coordination: apps, dashboard, agent, plugin, script)
     ├── oasis-backend-sdl  (SDL2 desktop/Pi rendering + input + audio)
     │   └── oasis-app      (binary entry points: oasis-app, oasis-screenshot)
@@ -110,12 +111,13 @@ Core code never calls platform APIs directly. All platform interaction goes thro
 
 ### Core Modules
 
-The framework is split into 17 workspace crates. Each module below is its own crate (previously all in oasis-core):
+The framework is split into 18 workspace crates. Each module below is its own crate (previously all in oasis-core):
 
 - **oasis-types** -- Foundation types: `Color`, `Button`, `InputEvent`, backend traits (`SdiBackend`, `InputBackend`, `NetworkBackend`, `AudioBackend`), error types, TLS, bitmap font metrics
 - **oasis-sdi** -- Scene Display Interface: named objects with position, size, color, texture, text, z-order, gradients, rounded corners, shadows
 - **oasis-skin** -- Data-driven TOML skin system with 8 skins (2 external in `skins/`, 7 built-in; xp exists in both forms). Theme derivation from 9 base colors.
-- **oasis-browser** -- Embeddable HTML/CSS/Gemini rendering engine: DOM parser, CSS cascade, block/inline/table layout, link navigation, reader mode
+- **oasis-browser** -- Embeddable HTML/CSS/Gemini rendering engine: DOM parser, CSS cascade, block/inline/table layout, link navigation, reader mode, JavaScript DOM bindings
+- **oasis-js** -- JavaScript engine wrapping QuickJS-NG via rquickjs: `console` API (log/warn/error/info), inline `<script>` execution, DOM manipulation (`document.getElementById`, `createElement`, `textContent`, attributes). Feature-gated (`javascript`)
 - **oasis-ui** -- 20+ reusable widgets: Button, Card, TabBar, Panel, TextField, ListView, ScrollView, ProgressBar, Toggle, NinePatch, flex layout
 - **oasis-vfs** -- Virtual file system: `MemoryVfs` (in-RAM), `RealVfs` (disk), `GameAssetVfs` (UE5 with overlay writes)
 - **oasis-terminal** -- Command interpreter with 90+ commands across 17 modules (core, text, file, system, dev, fun, security, doc, audio, network, skin, UI, plus agent/plugin/script/transfer/update registered by oasis-core). Shell features: variable expansion, glob expansion, aliases, history, piping
