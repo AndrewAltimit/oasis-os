@@ -563,7 +563,7 @@ impl Default for ActiveTheme {
             focus_ring_offset: 2,
             bar_version_text: "Version 0.1".to_string(),
             bar_category_label: "OSS".to_string(),
-            bar_url_text: "HTTP://OASIS.LOCAL".to_string(),
+            bar_url_text: String::new(),
             sm_footer_text: "Log Off  Shut Down".to_string(),
             tab_active_stroke: Color::rgba(255, 255, 255, 180),
             tab_inactive_stroke: Color::rgba(255, 255, 255, 60),
@@ -1104,9 +1104,7 @@ impl ActiveTheme {
             bar_category_label: bar
                 .and_then(|b| b.category_label.clone())
                 .unwrap_or_else(|| "OSS".to_string()),
-            bar_url_text: bar
-                .and_then(|b| b.url_text.clone())
-                .unwrap_or_else(|| "HTTP://OASIS.LOCAL".to_string()),
+            bar_url_text: bar.and_then(|b| b.url_text.clone()).unwrap_or_default(),
             sm_footer_text: sm
                 .and_then(|s| s.footer_text.clone())
                 .unwrap_or_else(|| "Log Off  Shut Down".to_string()),
@@ -1254,13 +1252,7 @@ impl ActiveTheme {
         self.icon_label_pad = scale(4);
 
         // Resolution-aware cursor scaling.
-        self.cursor_scale = if w >= 1024 {
-            3
-        } else if w >= 800 {
-            2
-        } else {
-            1
-        };
+        self.cursor_scale = if w >= 1920 { 2 } else { 1 };
 
         self
     }

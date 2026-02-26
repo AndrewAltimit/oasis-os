@@ -42,18 +42,20 @@ pub fn update_media_page(sdi: &mut SdiRegistry, bottom_bar: &BottomBar, at: &Act
     if !sdi.contains(page_name) {
         let obj = sdi.create(page_name);
         obj.font_size = at.font_heading;
-        obj.text_color = oasis_types::color::with_alpha(at.app_text, 200);
+        obj.text_color = at.app_text;
         obj.w = 0;
         obj.h = 0;
     }
+    let page_str = format!("[ {} Page ]", bottom_bar.active_tab.label());
     if let Ok(obj) = sdi.get_mut(page_name) {
-        obj.x = (at.screen_w as i32) / 3;
+        obj.x = (at.screen_w as i32) / 2 - (page_str.len() as i32 * at.font_heading as i32 / 2);
         obj.y = (at.screen_h as i32) / 2 - 16;
         obj.visible = true;
-        obj.text = Some(format!("[ {} Page ]", bottom_bar.active_tab.label()));
+        obj.text = Some(page_str);
     }
 
     let hint_name = "media_page_hint";
+    let hint_str = "Press R to cycle categories";
     if !sdi.contains(hint_name) {
         let obj = sdi.create(hint_name);
         obj.font_size = at.font_hint;
@@ -62,10 +64,10 @@ pub fn update_media_page(sdi: &mut SdiRegistry, bottom_bar: &BottomBar, at: &Act
         obj.h = 0;
     }
     if let Ok(obj) = sdi.get_mut(hint_name) {
-        obj.x = (at.screen_w as i32) / 3 - 30;
+        obj.x = (at.screen_w as i32) / 2 - (hint_str.len() as i32 * at.font_hint as i32 / 2);
         obj.y = (at.screen_h as i32) / 2 + 9;
         obj.visible = true;
-        obj.text = Some("Press R to cycle categories".to_string());
+        obj.text = Some(hint_str.to_string());
     }
 }
 

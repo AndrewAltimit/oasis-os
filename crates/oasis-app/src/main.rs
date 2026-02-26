@@ -45,19 +45,7 @@ use oasis_core::wm::manager::WindowManager;
 fn main() -> Result<()> {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
 
-    let config = OasisConfig::default();
-    log::info!(
-        "Starting OASIS_OS ({}x{})",
-        config.screen_width,
-        config.screen_height,
-    );
-
-    let mut backend = SdlBackend::new(
-        &config.window_title,
-        config.screen_width,
-        config.screen_height,
-    )?;
-    backend.init(config.screen_width, config.screen_height)?;
+    let mut config = OasisConfig::default();
 
     // Resolve skin from CLI arg, OASIS_SKIN env var, or config.
     let skin_name = std::env::args()
@@ -71,8 +59,25 @@ fn main() -> Result<()> {
         skin.manifest.version
     );
 
-    // Derive runtime theme from the active skin.
-    let active_theme = ActiveTheme::from_skin(&skin.theme);
+    // Use the skin's screen dimensions (e.g. 1024x768 for xp, 480x272 for classic).
+    config.screen_width = skin.manifest.screen_width;
+    config.screen_height = skin.manifest.screen_height;
+    log::info!(
+        "Starting OASIS_OS ({}x{})",
+        config.screen_width,
+        config.screen_height,
+    );
+
+    let mut backend = SdlBackend::new(
+        &config.window_title,
+        config.screen_width,
+        config.screen_height,
+    )?;
+    backend.init(config.screen_width, config.screen_height)?;
+
+    // Derive runtime theme from the active skin, applying screen dimensions.
+    let active_theme = ActiveTheme::from_skin(&skin.theme)
+        .with_screen_size(config.screen_width, config.screen_height);
     let browser_config = BrowserConfig::from_skin_theme(&skin.theme);
 
     // Set up platform services.

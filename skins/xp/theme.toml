@@ -87,6 +87,8 @@ page_slide_duration = 10
 press_flash_duration = 8
 
 [app_overrides]
+text_color = "#333333"
+dim_text = "#666666"
 selection_accent_color = "#0054E380"
 selection_border_radius = 2
 

@@ -3,10 +3,19 @@
 //! Occupies the top 24 pixels of the 480x272 screen. Creates and updates
 //! SDI objects to display system status and top-level navigation tabs.
 
+use oasis_types::bitmap_font::glyph_advance_scaled;
+
 use crate::active_theme::ActiveTheme;
 use crate::platform::{BatteryState, PowerInfo, SystemTime};
 use crate::sdi::SdiRegistry;
 use crate::sdi::helpers::{ensure_border, ensure_pill, ensure_text, hide_objects};
+
+/// Measure the pixel width of a text string using proportional glyph metrics.
+fn text_px(s: &str, font_size: u16) -> i32 {
+    s.chars()
+        .map(|c| glyph_advance_scaled(c, font_size) as i32)
+        .sum()
+}
 
 /// Top-level tabs (cycled with L trigger).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -172,7 +181,6 @@ impl StatusBar {
 
         // Vertically center text within the bar.
         let text_y = (bar_h as i32 - font_small as i32) / 2;
-        let char_w = font_small.max(8) as i32 / 8 * 8;
 
         // Battery + CPU info (left side).
         if features.show_battery {
@@ -201,7 +209,7 @@ impl StatusBar {
             } else {
                 format!("{} {}", self.clock_text, self.date_text)
             };
-            let clock_w = clock_str.len() as i32 * char_w;
+            let clock_w = text_px(&clock_str, font_small);
             let cx = screen_w as i32 - clock_w - 6;
             ensure_text(sdi, "bar_clock", cx, text_y, font_small, at.clock_color);
             if let Ok(obj) = sdi.get_mut("bar_clock") {
@@ -223,7 +231,7 @@ impl StatusBar {
         // Version label (center area) -- hidden when it would overlap clock.
         if features.show_version {
             let ver = &at.bar_version_text;
-            let ver_w = ver.len() as i32 * char_w;
+            let ver_w = text_px(ver, font_small);
             let ver_x = (screen_w as i32 - ver_w) / 2;
             if ver_x + ver_w <= clock_x {
                 ensure_text(
@@ -325,7 +333,7 @@ impl StatusBar {
             }
 
             // Tab text (centered in tab).
-            let tx = x + (at.tab_w - (tab.label().len() as i32 * char_w)) / 2;
+            let tx = x + (at.tab_w - text_px(tab.label(), font_small)) / 2;
             let tab_text_y = tab_y + (at.tab_h - font_small as i32) / 2;
             ensure_text(
                 sdi,
