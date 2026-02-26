@@ -91,6 +91,7 @@ td { border: 1px solid rgba(255,255,255,20); }
 <ol>
 <li><a href="/sites/home/about.html">About OASIS Browser</a></li>
 <li><a href="/sites/home/features.html">CSS Feature Test</a></li>
+<li><a href="/sites/home/js-test.html">JavaScript DOM Test</a></li>
 </ol>
 </body></html>"#,
     )
@@ -143,6 +144,94 @@ a { color: #64c8ff; }
 </body></html>"#,
     )
     .unwrap();
+
+    // JavaScript DOM manipulation test page.
+    vfs.write(
+        "/sites/home/js-test.html",
+        br#"<html><head><title>JS DOM Test</title>
+<style>
+body { color: #e0e0e0; background-color: #1a1a2e; }
+h1 { color: #64c8ff; }
+h2 { color: #80d0a0; }
+a { color: #64c8ff; }
+.pass { color: #80ff80; }
+.fail { color: #ff8080; }
+</style>
+</head><body>
+<h1>JavaScript DOM Test</h1>
+<div id="output"></div>
+<div id="created"></div>
+<p><a href="/sites/home/index.html">Back to home</a></p>
+<script>
+var out = document.getElementById("output");
+var results = [];
+function test(name, ok) { results.push((ok ? "PASS" : "FAIL") + ": " + name); }
+
+// Test 1: getElementById
+test("getElementById finds element", out !== null);
+
+// Test 2: tagName
+test("tagName is DIV", out.tagName === "DIV");
+
+// Test 3: textContent set
+out.textContent = "Tests running...";
+test("textContent set works", out.textContent === "Tests running...");
+
+// Test 4: setAttribute / getAttribute
+out.setAttribute("data-count", "42");
+test("setAttribute/getAttribute", out.getAttribute("data-count") === "42");
+
+// Test 5: removeAttribute
+out.removeAttribute("data-count");
+test("removeAttribute", out.getAttribute("data-count") === null);
+
+// Test 6: id property
+out.id = "results";
+test("id property set", document.getElementById("results") !== null);
+out.id = "output";
+
+// Test 7: createElement + appendChild
+var created = document.getElementById("created");
+var span = document.createElement("span");
+span.textContent = "Dynamic element!";
+created.appendChild(span);
+test("createElement+appendChild", created.textContent.indexOf("Dynamic") >= 0);
+
+// Test 8: createTextNode
+var t = document.createTextNode(" And text node!");
+created.appendChild(t);
+test("createTextNode+appendChild", created.textContent.indexOf("text node") >= 0);
+
+// Test 9: document.title get
+test("document.title get", document.title === "JS DOM Test");
+
+// Test 10: document.title set
+document.title = "Tests Complete";
+test("document.title set", document.title === "Tests Complete");
+
+// Test 11: document.body
+test("document.body exists", document.body !== null);
+
+// Test 12: children
+test("body has children", document.body.children.length > 0);
+
+// Render results
+var html = "";
+var pass = 0;
+for (var i = 0; i < results.length; i++) {
+  var r = results[i];
+  if (r.indexOf("PASS") === 0) pass++;
+  html = html + r + "\n";
+}
+html = pass + "/" + results.length + " tests passed\n\n" + html;
+out.textContent = html;
+</script>
+</body></html>"#,
+    )
+    .unwrap();
+
+    // Add JS test link to home page navigation is handled by the existing
+    // home page (users can navigate via URL bar to /sites/home/js-test.html).
 
     vfs.mkdir("/home/user/music").unwrap();
     vfs.mkdir("/home/user/photos").unwrap();

@@ -179,6 +179,11 @@ fn main() -> Result<()> {
         .load_stations(&vfs, "/etc/radio/stations.toml")
         .ok();
 
+    // Auto-launch app via OASIS_APP env var (e.g. OASIS_APP=Browser).
+    // Optionally OASIS_URL sets the initial URL for the browser.
+    let auto_launch_app = std::env::var("OASIS_APP").ok();
+    let auto_launch_url = std::env::var("OASIS_URL").ok();
+
     // Set up scene graph and apply skin layout.
     let mut sdi = SdiRegistry::new();
     state.skin.apply_layout(&mut sdi);
@@ -215,6 +220,47 @@ fn main() -> Result<()> {
         }
     }
     log::info!("Mouse cursor loaded");
+
+    // Apply auto-launch (after scene graph is fully set up).
+    if let Some(ref app_name) = auto_launch_app {
+        if let Some(app) = state
+            .dashboard
+            .apps
+            .iter()
+            .find(|a| a.title.eq_ignore_ascii_case(app_name))
+        {
+            let app = app.clone();
+            let result = launch::launch_app_window(
+                &app,
+                &mut state.wm,
+                &mut sdi,
+                &mut state.open_runners,
+                &mut state.browser,
+                &state.browser_config,
+                &vfs,
+                &state.tls_provider,
+            );
+            launch::apply_launch(result, &mut state.mode);
+            log::info!("Auto-launched app: {}", app.title);
+
+            // Navigate browser to OASIS_URL if specified.
+            if let Some(ref url) = auto_launch_url
+                && let Some(ref mut bw) = state.browser
+            {
+                if url.starts_with("vfs://") {
+                    bw.navigate_vfs(url, &vfs);
+                } else {
+                    bw.load_html(
+                        &format!("<html><body>Navigating to {url}...</body></html>"),
+                        url,
+                    );
+                }
+                log::info!("Auto-navigated to: {url}");
+            }
+        } else {
+            log::warn!("OASIS_APP={app_name}: app not found in dashboard");
+        }
+    }
 
     'running: loop {
         state.frame_counter += 1;
