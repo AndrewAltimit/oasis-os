@@ -454,6 +454,25 @@ impl ElementData {
     pub fn src(&self) -> Option<&str> {
         self.get_attribute("src")
     }
+
+    /// Set or overwrite an attribute value.
+    pub fn set_attribute(&mut self, name: &str, value: &str) {
+        if let Some(attr) = self.attributes.iter_mut().find(|a| a.name == name) {
+            attr.value = value.to_string();
+        } else {
+            self.attributes.push(Attribute {
+                name: name.to_string(),
+                value: value.to_string(),
+            });
+        }
+    }
+
+    /// Remove an attribute by name. Returns `true` if it existed.
+    pub fn remove_attribute(&mut self, name: &str) -> bool {
+        let len_before = self.attributes.len();
+        self.attributes.retain(|a| a.name != name);
+        self.attributes.len() < len_before
+    }
 }
 
 // ------------------------------------------------------------------
@@ -567,6 +586,27 @@ impl Document {
         let title_id = self.find_first_element(self.root, &TagName::Title)?;
         let text = self.text_content(title_id);
         if text.is_empty() { None } else { Some(text) }
+    }
+
+    /// Replace the children of `node_id` with a single text node.
+    pub fn set_text_content(&mut self, node_id: NodeId, text: &str) {
+        self.nodes[node_id].children.clear();
+        let text_id = self.add_node(NodeKind::Text(text.to_string()));
+        self.append_child(node_id, text_id);
+    }
+
+    /// Remove `child_id` from its parent's child list and clear its
+    /// parent link. Returns the former parent if one existed.
+    pub fn remove_child(&mut self, child_id: NodeId) -> Option<NodeId> {
+        let parent_id = self.nodes[child_id].parent.take()?;
+        self.nodes[parent_id].children.retain(|&c| c != child_id);
+        Some(parent_id)
+    }
+
+    /// Find the `<title>` element node (public wrapper around
+    /// `find_first_element`).
+    pub fn title_element(&self) -> Option<NodeId> {
+        self.find_first_element(self.root, &TagName::Title)
     }
 
     /// Depth-first search for the first element with the given tag.
@@ -817,5 +857,63 @@ mod tests {
         let doc = Document::default();
         assert_eq!(doc.nodes.len(), 1);
         assert_eq!(doc.root, 0);
+    }
+
+    #[test]
+    fn set_attribute_new() {
+        let mut elem = ElementData::new(TagName::Div);
+        elem.set_attribute("class", "foo");
+        assert_eq!(elem.get_attribute("class"), Some("foo"));
+    }
+
+    #[test]
+    fn set_attribute_overwrite() {
+        let mut elem = ElementData::new(TagName::Div);
+        elem.set_attribute("id", "old");
+        elem.set_attribute("id", "new");
+        assert_eq!(elem.get_attribute("id"), Some("new"));
+        assert_eq!(elem.attributes.len(), 1);
+    }
+
+    #[test]
+    fn remove_attribute_exists() {
+        let mut elem = ElementData::new(TagName::Div);
+        elem.set_attribute("id", "x");
+        assert!(elem.remove_attribute("id"));
+        assert_eq!(elem.get_attribute("id"), None);
+    }
+
+    #[test]
+    fn remove_attribute_missing() {
+        let mut elem = ElementData::new(TagName::Div);
+        assert!(!elem.remove_attribute("nope"));
+    }
+
+    #[test]
+    fn set_text_content_replaces_children() {
+        let mut doc = Document::new();
+        let div = doc.add_node(NodeKind::Element(ElementData::new(TagName::Div)));
+        doc.append_child(doc.root, div);
+        let t1 = doc.add_node(NodeKind::Text("old".into()));
+        doc.append_child(div, t1);
+        let span = doc.add_node(NodeKind::Element(ElementData::new(TagName::Span)));
+        doc.append_child(div, span);
+
+        doc.set_text_content(div, "new");
+        assert_eq!(doc.text_content(div), "new");
+        assert_eq!(doc.get(div).children.len(), 1);
+    }
+
+    #[test]
+    fn remove_child_unlinks() {
+        let mut doc = Document::new();
+        let parent = doc.add_node(NodeKind::Element(ElementData::new(TagName::Div)));
+        doc.append_child(doc.root, parent);
+        let child = doc.add_node(NodeKind::Element(ElementData::new(TagName::P)));
+        doc.append_child(parent, child);
+
+        assert_eq!(doc.remove_child(child), Some(parent));
+        assert!(doc.get(parent).children.is_empty());
+        assert_eq!(doc.get(child).parent, None);
     }
 }

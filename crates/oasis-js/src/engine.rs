@@ -115,6 +115,23 @@ impl JsEngine {
     pub fn take_console_output(&self) -> Vec<ConsoleEntry> {
         std::mem::take(&mut self.console_buf.borrow_mut())
     }
+
+    /// Run a closure with access to the raw rquickjs context.
+    ///
+    /// This lets external crates (e.g. `oasis-browser`) register
+    /// additional globals such as `document` without depending on
+    /// rquickjs internals directly.
+    pub fn with_context<R, F>(&self, f: F) -> Result<R, JsError>
+    where
+        F: FnOnce(rquickjs::Ctx<'_>) -> rquickjs::Result<R>,
+    {
+        self.context.with(|ctx| {
+            f(ctx).map_err(|e| JsError {
+                message: e.to_string(),
+                stack: None,
+            })
+        })
+    }
 }
 
 /// Convert a rquickjs `Value` to our public `JsValue` enum.
@@ -310,5 +327,17 @@ mod tests {
         let engine = JsEngine::new(8 * 1024 * 1024).unwrap();
         engine.eval("var x = 42").unwrap();
         assert_eq!(engine.eval("x").unwrap(), JsValue::Int(42));
+    }
+
+    #[test]
+    fn with_context_register_global() {
+        let engine = JsEngine::new(8 * 1024 * 1024).unwrap();
+        engine
+            .with_context(|ctx| {
+                ctx.globals().set("MY_CONST", 99)?;
+                Ok(())
+            })
+            .unwrap();
+        assert_eq!(engine.eval("MY_CONST").unwrap(), JsValue::Int(99));
     }
 }

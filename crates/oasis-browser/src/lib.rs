@@ -21,6 +21,9 @@ pub mod reader;
 pub mod scroll;
 pub mod skin;
 
+#[cfg(feature = "javascript")]
+mod js_dom;
+
 #[cfg(test)]
 pub(crate) mod test_utils;
 
@@ -453,22 +456,42 @@ impl BrowserWidget {
         let doc = html::tree_builder::TreeBuilder::build(tokens);
 
         // 1b. Execute inline <script> blocks (if JS enabled).
+        //
+        // The document is wrapped in Rc<RefCell<>> so JS closures can
+        // mutate it. After the engine is dropped (freeing all JS-side
+        // Rc clones), we unwrap the Rc to recover an owned Document.
         #[cfg(feature = "javascript")]
-        {
+        let doc = {
             let scripts = Self::collect_scripts(&doc);
-            if !scripts.is_empty() {
-                let script_refs: Vec<&str> = scripts.iter().map(String::as_str).collect();
+            if scripts.is_empty() {
+                doc
+            } else {
+                let shared: js_dom::SharedDoc = std::rc::Rc::new(std::cell::RefCell::new(doc));
                 match oasis_js::JsEngine::new(8 * 1024 * 1024) {
                     Ok(engine) => {
+                        let s = std::rc::Rc::clone(&shared);
+                        if let Err(e) =
+                            engine.with_context(|ctx| js_dom::install_document_global(&ctx, &s))
+                        {
+                            log::warn!("JS DOM install failed: {}", e.message);
+                        }
+                        let script_refs: Vec<&str> = scripts.iter().map(String::as_str).collect();
                         engine.eval_all(&script_refs);
                         self.console_output = engine.console_output();
+                        drop(engine);
                     },
                     Err(e) => {
                         log::warn!("JS engine init failed: {}", e.message);
                     },
                 }
+                // Recover the owned Document. If something still holds
+                // an Rc (shouldn't happen), fall back to clone.
+                match std::rc::Rc::try_unwrap(shared) {
+                    Ok(cell) => cell.into_inner(),
+                    Err(rc) => rc.borrow().clone(),
+                }
             }
-        }
+        };
 
         // 2. Extract page title.
         let title = doc.title().unwrap_or_else(|| url.to_string());
@@ -4092,5 +4115,60 @@ mod tests {
         );
         // External script should not be executed; no console output.
         assert!(browser.console_output().is_empty());
+    }
+
+    #[test]
+    #[cfg(feature = "javascript")]
+    fn js_dom_text_content_mutation() {
+        let mut browser = make_browser();
+        browser.load_html(
+            "<html><body>\
+             <div id=\"target\">old</div>\
+             <script>document.getElementById('target').textContent = 'new'</script>\
+             </body></html>",
+            "test://js-dom-text",
+        );
+        let doc = browser.document.as_ref().unwrap();
+        let target = doc.get_element_by_id("target").unwrap();
+        assert_eq!(doc.text_content(target), "new");
+    }
+
+    #[test]
+    #[cfg(feature = "javascript")]
+    fn js_dom_create_element_and_append() {
+        let mut browser = make_browser();
+        browser.load_html(
+            "<html><body>\
+             <div id=\"container\"></div>\
+             <script>\
+               var el = document.createElement('span');\
+               el.textContent = 'created';\
+               document.getElementById('container').appendChild(el);\
+             </script>\
+             </body></html>",
+            "test://js-dom-create",
+        );
+        let doc = browser.document.as_ref().unwrap();
+        let container = doc.get_element_by_id("container").unwrap();
+        assert!(doc.text_content(container).contains("created"));
+    }
+
+    #[test]
+    #[cfg(feature = "javascript")]
+    fn js_dom_get_attribute() {
+        let mut browser = make_browser();
+        browser.load_html(
+            "<html><body>\
+             <a id=\"link\" href=\"https://example.com\">click</a>\
+             <script>\
+               var a = document.getElementById('link');\
+               console.log(a.getAttribute('href'));\
+             </script>\
+             </body></html>",
+            "test://js-dom-attr",
+        );
+        let out = browser.console_output();
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].message, "https://example.com");
     }
 }
