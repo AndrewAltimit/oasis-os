@@ -12,6 +12,7 @@ members = [
     "crates/oasis-skin",
     "crates/oasis-terminal",
     "crates/oasis-browser",
+    "crates/oasis-js",
     "crates/oasis-core",
     "crates/oasis-backend-sdl",
     "crates/oasis-backend-ue5",
@@ -80,6 +81,9 @@ web-sys = { version = "0.3", features = [
 js-sys = "0.3"
 wasm-bindgen-futures = "0.4"
 
+# JavaScript engine
+rquickjs = { version = "0.11", default-features = false, features = ["rust-alloc"] }
+
 # Internal crates
 oasis-types = { path = "crates/oasis-types" }
 oasis-vfs = { path = "crates/oasis-vfs" }
@@ -92,6 +96,7 @@ oasis-wm = { path = "crates/oasis-wm" }
 oasis-skin = { path = "crates/oasis-skin" }
 oasis-terminal = { path = "crates/oasis-terminal" }
 oasis-browser = { path = "crates/oasis-browser" }
+oasis-js = { path = "crates/oasis-js" }
 oasis-core = { path = "crates/oasis-core" }
 oasis-backend-ue5 = { path = "crates/oasis-backend-ue5" }
 oasis-backend-wasm = { path = "crates/oasis-backend-wasm" }

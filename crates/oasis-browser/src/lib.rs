@@ -230,6 +230,10 @@ pub struct BrowserWidget {
 
     /// Last time a hover restyle was performed (for throttling).
     last_hover_time: Option<std::time::Instant>,
+
+    /// Buffered JavaScript console output from the most recent page load.
+    #[cfg(feature = "javascript")]
+    console_output: Vec<oasis_js::ConsoleEntry>,
 }
 
 impl BrowserWidget {
@@ -275,6 +279,8 @@ impl BrowserWidget {
             cached_author_sheets: Vec::new(),
             cached_inline_styles: Vec::new(),
             last_hover_time: None,
+            #[cfg(feature = "javascript")]
+            console_output: Vec::new(),
         }
     }
 
@@ -446,6 +452,24 @@ impl BrowserWidget {
         let tokens = html::tokenizer::Tokenizer::new(html_source).tokenize();
         let doc = html::tree_builder::TreeBuilder::build(tokens);
 
+        // 1b. Execute inline <script> blocks (if JS enabled).
+        #[cfg(feature = "javascript")]
+        {
+            let scripts = Self::collect_scripts(&doc);
+            if !scripts.is_empty() {
+                let script_refs: Vec<&str> = scripts.iter().map(String::as_str).collect();
+                match oasis_js::JsEngine::new(8 * 1024 * 1024) {
+                    Ok(engine) => {
+                        engine.eval_all(&script_refs);
+                        self.console_output = engine.console_output();
+                    },
+                    Err(e) => {
+                        log::warn!("JS engine init failed: {}", e.message);
+                    },
+                }
+            }
+        }
+
         // 2. Extract page title.
         let title = doc.title().unwrap_or_else(|| url.to_string());
 
@@ -551,6 +575,31 @@ impl BrowserWidget {
             }
         }
         result
+    }
+
+    /// Walk the DOM to collect inline `<script>` text in document order.
+    /// External scripts (`<script src="...">`) are skipped.
+    #[cfg(feature = "javascript")]
+    fn collect_scripts(doc: &html::dom::Document) -> Vec<String> {
+        let mut scripts = Vec::new();
+        for (id, node) in doc.nodes.iter().enumerate() {
+            if let html::dom::NodeKind::Element(elem) = &node.kind
+                && elem.tag == html::dom::TagName::Script
+                && elem.get_attribute("src").is_none()
+            {
+                let text = doc.text_content(id);
+                if !text.is_empty() {
+                    scripts.push(text);
+                }
+            }
+        }
+        scripts
+    }
+
+    /// Console output from JavaScript execution on the current page.
+    #[cfg(feature = "javascript")]
+    pub fn console_output(&self) -> &[oasis_js::ConsoleEntry] {
+        &self.console_output
     }
 
     // ---------------------------------------------------------------
@@ -4000,5 +4049,48 @@ mod tests {
         // LRU order: img4 (front/MRU) ... img0 (back/LRU)
         // Verify the LRU tracks all 5.
         assert_eq!(browser.decoded_image_lru.len(), 5);
+    }
+
+    // ---------------------------------------------------------------
+    // JavaScript integration tests
+    // ---------------------------------------------------------------
+
+    #[test]
+    #[cfg(feature = "javascript")]
+    fn script_execution() {
+        let mut browser = make_browser();
+        browser.load_html(
+            "<html><body><script>console.log('works')</script></body></html>",
+            "test://js",
+        );
+        let out = browser.console_output();
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].level, oasis_js::ConsoleLevel::Log);
+        assert_eq!(out[0].message, "works");
+    }
+
+    #[test]
+    #[cfg(feature = "javascript")]
+    fn script_error_no_crash() {
+        let mut browser = make_browser();
+        browser.load_html(
+            "<html><body><script>throw new Error('boom')</script></body></html>",
+            "test://js-err",
+        );
+        // Should not panic; error appears in console output.
+        let out = browser.console_output();
+        assert!(out.iter().any(|e| e.level == oasis_js::ConsoleLevel::Error));
+    }
+
+    #[test]
+    #[cfg(feature = "javascript")]
+    fn no_external_scripts() {
+        let mut browser = make_browser();
+        browser.load_html(
+            "<html><body><script src=\"foo.js\"></script></body></html>",
+            "test://js-ext",
+        );
+        // External script should not be executed; no console output.
+        assert!(browser.console_output().is_empty());
     }
 }
