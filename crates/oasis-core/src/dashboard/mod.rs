@@ -106,6 +106,10 @@ pub struct DashboardState {
     cursor_visual_y: f32,
     /// Whether cursor visual position has been initialized.
     cursor_initialized: bool,
+    /// Icon press flash countdown (0 = inactive).
+    press_flash_frame: u32,
+    /// Which icon index is flashing.
+    press_flash_index: usize,
 }
 
 impl DashboardState {
@@ -120,6 +124,8 @@ impl DashboardState {
             cursor_visual_x: 0.0,
             cursor_visual_y: 0.0,
             cursor_initialized: false,
+            press_flash_frame: 0,
+            press_flash_index: 0,
         }
     }
 
@@ -178,6 +184,12 @@ impl DashboardState {
         }
     }
 
+    /// Trigger an icon press flash on the currently selected icon.
+    pub fn trigger_press_flash(&mut self) {
+        self.press_flash_frame = 6;
+        self.press_flash_index = self.selected;
+    }
+
     /// Switch to the next page (wraps around) with slide animation.
     pub fn next_page(&mut self) {
         let count = self.page_count();
@@ -224,6 +236,10 @@ impl DashboardState {
             if anim.frame >= anim.duration {
                 self.page_anim = None;
             }
+        }
+        // Press flash countdown.
+        if self.press_flash_frame > 0 {
+            self.press_flash_frame -= 1;
         }
     }
 
@@ -598,7 +614,12 @@ impl DashboardState {
             obj.w = icon_w;
             obj.h = icon_h;
             obj.visible = true;
-            obj.color = at.icon_body_color;
+            // Apply press flash effect: lighten the pressed icon.
+            obj.color = if self.press_flash_frame > 0 && i == self.press_flash_index {
+                oasis_types::color::lighten(at.icon_body_color, 0.25)
+            } else {
+                at.icon_body_color
+            };
             obj.text = None;
             obj.border_radius = Some(at.icon_border_radius);
             obj.shadow_level = Some(at.icon_shadow_level);

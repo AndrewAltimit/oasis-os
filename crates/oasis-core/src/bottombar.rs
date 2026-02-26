@@ -156,7 +156,7 @@ impl BottomBar {
             at.url_color,
         );
         if let Ok(obj) = sdi.get_mut("bar_url") {
-            obj.text = Some("HTTP://OASIS.LOCAL".to_string());
+            obj.text = Some(at.bar_url_text.clone());
         }
 
         // Chrome bezel around URL area.
@@ -254,8 +254,7 @@ impl BottomBar {
         }
 
         // USB indicator (after URL text, not bezel -- avoids overlap).
-        let url_text = "HTTP://OASIS.LOCAL";
-        let url_text_end = 8 + url_offset + url_text.len() as i32 * char_w;
+        let url_text_end = 8 + url_offset + at.bar_url_text.len() as i32 * char_w;
         let usb_x = url_text_end + 6;
         ensure_text(sdi, "bar_usb", usb_x, text_y, font_small, at.usb_color);
         if let Ok(obj) = sdi.get_mut("bar_usb") {

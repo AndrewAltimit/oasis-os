@@ -215,7 +215,7 @@ impl StatusBar {
 
         // Version label (center area) -- hidden when it would overlap clock.
         if features.show_version {
-            let ver = "Version 0.1";
+            let ver = &at.bar_version_text;
             let ver_w = ver.len() as i32 * char_w;
             let ver_x = (screen_w as i32 - ver_w) / 2;
             if ver_x + ver_w <= clock_x {
@@ -250,7 +250,7 @@ impl StatusBar {
                 at.category_label_color,
             );
             if let Ok(obj) = sdi.get_mut("bar_mso") {
-                obj.text = Some("OSS".to_string());
+                obj.text = Some(at.bar_category_label.clone());
                 obj.visible = true;
             }
         } else if let Ok(obj) = sdi.get_mut("bar_mso") {

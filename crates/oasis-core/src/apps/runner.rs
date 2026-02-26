@@ -1,17 +1,17 @@
 //! App screen runner with title bar and scrollable content.
 
 use crate::active_theme::ActiveTheme;
-use crate::backend::{Color, SdiBackend};
+use crate::backend::SdiBackend;
 use crate::dashboard::AppEntry;
 use crate::input::Button;
 use crate::sdi::SdiRegistry;
 use crate::ui::flex;
 use crate::vfs::{EntryKind, Vfs};
 
-/// Maximum lines visible in the app content area.
+/// Maximum lines visible in the app content area (fallback for 480x272).
 const MAX_VISIBLE_LINES: usize = 13;
 
-/// Maximum lines visible per panel in dual-panel mode.
+/// Maximum lines visible per panel in dual-panel mode (fallback for 480x272).
 const PANEL_VISIBLE_LINES: usize = 13;
 
 /// Per-panel state for dual-panel file browsing.
@@ -145,6 +145,8 @@ pub struct AppRunner {
     active_panel: usize,
     /// Pending VFS IPC request from radio app (path, data).
     pending_vfs_request: Option<(String, String)>,
+    /// Smooth selection position (lerps toward cursor index).
+    visual_selected: f32,
 }
 
 impl AppRunner {
@@ -163,6 +165,7 @@ impl AppRunner {
             panels: None,
             active_panel: 0,
             pending_vfs_request: None,
+            visual_selected: 0.0,
         };
         runner.init_content(&title, vfs);
         runner
@@ -438,13 +441,20 @@ impl AppRunner {
                 .unwrap_or_default()
         };
         let title_text = format!("{}{dir_suffix}", self.title);
-        backend.draw_text(&title_text, cx + 4, cy + 2, 12, Color::WHITE)?;
+        backend.draw_text(&title_text, cx + 4, cy + 2, 12, at.app_title_bar_text)?;
 
         // Separator line.
-        backend.fill_rect(cx, cy + 18, cw, 1, at.app_divider)?;
+        backend.fill_rect(
+            cx,
+            cy + at.app_title_bar_height as i32 - 4,
+            cw,
+            1,
+            at.app_divider,
+        )?;
 
         // Content lines.
-        let max_lines = ((ch as i32 - 24) / 16).max(0) as usize;
+        let line_h = at.app_title_bar_height.max(12) as i32;
+        let max_lines = ((ch as i32 - line_h - 4) / line_h).max(0) as usize;
         let visible = self.lines.len().saturating_sub(self.scroll).min(max_lines);
         for i in 0..visible {
             let line_idx = self.scroll + i;
@@ -456,7 +466,7 @@ impl AppRunner {
             } else {
                 at.app_text
             };
-            let y = cy + 22 + i as i32 * 16;
+            let y = cy + at.app_title_bar_height as i32 + i as i32 * line_h;
             backend.draw_text(&text, cx + 4, y, 12, text_color)?;
         }
 
@@ -496,16 +506,24 @@ impl AppRunner {
             "File Manager  [L: {}]  [R: {}]",
             panels[0].browse_dir, panels[1].browse_dir,
         );
-        backend.draw_text(&title, cx + 4, cy + 2, 12, Color::WHITE)?;
-        backend.fill_rect(cx, cy + 18, cw, 1, at.app_divider)?;
+        backend.draw_text(&title, cx + 4, cy + 2, 12, at.app_title_bar_text)?;
+        backend.fill_rect(
+            cx,
+            cy + at.app_title_bar_height as i32 - 4,
+            cw,
+            1,
+            at.app_divider,
+        )?;
 
         // Vertical divider.
-        let content_y = cy + 20;
-        let content_h = ch.saturating_sub(34);
+        let title_h = at.app_title_bar_height as i32;
+        let content_y = cy + title_h;
+        let content_h = ch.saturating_sub(title_h as u32 + 14);
         backend.fill_rect(divider_x, content_y, 1, content_h, at.app_divider)?;
 
         // Draw each panel.
-        let max_lines = ((content_h as i32) / 16).max(0) as usize;
+        let line_h = at.terminal_line_height.max(12) as i32;
+        let max_lines = ((content_h as i32) / line_h).max(0) as usize;
         for (pi, panel) in panels.iter().enumerate() {
             let px = if pi == 0 { cx } else { divider_x + 1 };
             let pw = if pi == 0 { half_w } else { cw - half_w - 1 };
@@ -542,7 +560,7 @@ impl AppRunner {
                 } else {
                     at.app_text
                 };
-                let y = content_y + 2 + i as i32 * 16;
+                let y = content_y + 2 + i as i32 * line_h;
                 backend.draw_text(&text, px + 2, y, 12, text_color)?;
             }
         }
@@ -794,7 +812,7 @@ impl AppRunner {
     }
 
     /// Render the app screen to SDI objects.
-    pub fn update_sdi(&self, sdi: &mut SdiRegistry, at: &ActiveTheme) {
+    pub fn update_sdi(&mut self, sdi: &mut SdiRegistry, at: &ActiveTheme) {
         // Full-screen background.
         if !sdi.contains("app_bg") {
             sdi.create("app_bg");
@@ -849,15 +867,47 @@ impl AppRunner {
             obj.x = 8;
             obj.y = 4;
             obj.font_size = 12;
-            obj.text_color = Color::WHITE;
+            obj.text_color = at.app_title_bar_text;
             obj.w = 0;
             obj.h = 0;
             obj.visible = true;
             obj.z = 102;
         }
 
-        // Content lines.
-        let line_rects = flex::vertical_list(8, 26, 464, 18, 0, MAX_VISIBLE_LINES);
+        // Content lines -- responsive to screen resolution.
+        let title_h = at.app_title_bar_height;
+        let content_x = 8i32;
+        let content_y = (title_h + 4) as i32;
+        let content_w = at.screen_w.saturating_sub(16);
+        let usable_h = at.screen_h - title_h - at.statusbar_height - at.bottombar_height - 14;
+        let max_visible = (usable_h / at.terminal_line_height).max(1) as usize;
+        let line_rects = flex::vertical_list(
+            content_x,
+            content_y,
+            content_w,
+            at.terminal_line_height,
+            0,
+            max_visible,
+        );
+
+        // Smooth selection lerp.
+        self.visual_selected += (self.cursor as f32 - self.visual_selected) * 0.25;
+
+        // Selection highlight background.
+        if !sdi.contains("app_sel_bg") {
+            sdi.create("app_sel_bg");
+        }
+        if let Ok(obj) = sdi.get_mut("app_sel_bg") {
+            let sel_y = content_y + (self.visual_selected * at.terminal_line_height as f32) as i32;
+            obj.x = content_x;
+            obj.y = sel_y;
+            obj.w = content_w;
+            obj.h = at.terminal_line_height;
+            obj.color = at.app_selected_bg;
+            obj.visible = !self.lines.is_empty();
+            obj.z = 101;
+        }
+
         for (i, rect) in line_rects.iter().enumerate() {
             let name = format!("app_line_{i}");
             if !sdi.contains(&name) {
@@ -892,11 +942,11 @@ impl AppRunner {
             sdi.create("app_scroll");
         }
         if let Ok(obj) = sdi.get_mut("app_scroll") {
-            if self.lines.len() > MAX_VISIBLE_LINES {
+            if self.lines.len() > max_visible {
                 obj.text = Some(format!(
                     "[{}/{}]  Cancel=back",
                     self.scroll + 1,
-                    self.lines.len().saturating_sub(MAX_VISIBLE_LINES) + 1,
+                    self.lines.len().saturating_sub(max_visible) + 1,
                 ));
             } else {
                 obj.text = Some("Cancel=back".to_string());
@@ -923,29 +973,50 @@ impl AppRunner {
             obj.x = 8;
             obj.y = 4;
             obj.font_size = 12;
-            obj.text_color = Color::WHITE;
+            obj.text_color = at.app_title_bar_text;
             obj.w = 0;
             obj.h = 0;
             obj.visible = true;
             obj.z = 102;
         }
 
+        // Responsive dual-panel geometry.
+        let title_h = at.app_title_bar_height;
+        let content_y = (title_h + 4) as i32;
+        let half_w = at.screen_w / 2;
+        let panel_pad = 8u32;
+        let divider_x = half_w as i32;
+        let left_x = 8i32;
+        let left_w = half_w - panel_pad - left_x as u32;
+        let right_x = divider_x + panel_pad as i32;
+        let right_w = at.screen_w - half_w - panel_pad;
+        let divider_h = at.screen_h - title_h - at.statusbar_height - at.bottombar_height;
+        let usable_h = at.screen_h - title_h - at.statusbar_height - at.bottombar_height - 14;
+        let panel_visible = (usable_h / at.terminal_line_height).max(1) as usize;
+
         // Vertical divider.
         if !sdi.contains("app_divider") {
             sdi.create("app_divider");
         }
         if let Ok(obj) = sdi.get_mut("app_divider") {
-            obj.x = 240;
-            obj.y = 24;
+            obj.x = divider_x;
+            obj.y = content_y - 2;
             obj.w = 1;
-            obj.h = 232;
+            obj.h = divider_h;
             obj.color = at.app_divider;
             obj.visible = true;
             obj.z = 102;
         }
 
-        // Left panel lines (x=8, w=224).
-        let lp_rects = flex::vertical_list(8, 26, 224, 18, 0, PANEL_VISIBLE_LINES);
+        // Left panel lines.
+        let lp_rects = flex::vertical_list(
+            left_x,
+            content_y,
+            left_w,
+            at.terminal_line_height,
+            0,
+            panel_visible,
+        );
         for (i, rect) in lp_rects.iter().enumerate() {
             let name = format!("app_lp_line_{i}");
             if !sdi.contains(&name) {
@@ -981,8 +1052,15 @@ impl AppRunner {
             }
         }
 
-        // Right panel lines (x=248, w=224).
-        let rp_rects = flex::vertical_list(248, 26, 224, 18, 0, PANEL_VISIBLE_LINES);
+        // Right panel lines.
+        let rp_rects = flex::vertical_list(
+            right_x,
+            content_y,
+            right_w,
+            at.terminal_line_height,
+            0,
+            panel_visible,
+        );
         for (i, rect) in rp_rects.iter().enumerate() {
             let name = format!("app_rp_line_{i}");
             if !sdi.contains(&name) {
@@ -1035,8 +1113,11 @@ impl AppRunner {
         }
 
         // Hide single-panel lines (in case they were visible before).
-        for i in 0..MAX_VISIBLE_LINES {
+        for i in 0..100 {
             let name = format!("app_line_{i}");
+            if !sdi.contains(&name) {
+                break;
+            }
             if let Ok(obj) = sdi.get_mut(&name) {
                 obj.visible = false;
             }
@@ -1051,20 +1132,28 @@ impl AppRunner {
             "app_title_text",
             "app_scroll",
             "app_divider",
+            "app_sel_bg",
         ];
         for name in &fixed {
             if let Ok(obj) = sdi.get_mut(name) {
                 obj.visible = false;
             }
         }
-        for i in 0..MAX_VISIBLE_LINES {
+        // Hide up to a generous upper bound (handles all resolutions).
+        for i in 0..100 {
             let name = format!("app_line_{i}");
+            if !sdi.contains(&name) {
+                break;
+            }
             if let Ok(obj) = sdi.get_mut(&name) {
                 obj.visible = false;
             }
         }
-        for i in 0..PANEL_VISIBLE_LINES {
+        for i in 0..100 {
             let lp = format!("app_lp_line_{i}");
+            if !sdi.contains(&lp) {
+                break;
+            }
             let rp = format!("app_rp_line_{i}");
             if let Ok(obj) = sdi.get_mut(&lp) {
                 obj.visible = false;
@@ -1519,7 +1608,7 @@ mod tests {
     #[test]
     fn update_sdi_creates_objects() {
         let vfs = setup_vfs();
-        let runner = AppRunner::launch(&make_app("Settings"), &vfs);
+        let mut runner = AppRunner::launch(&make_app("Settings"), &vfs);
         let mut sdi = SdiRegistry::new();
         runner.update_sdi(&mut sdi, &ActiveTheme::default());
         assert!(sdi.contains("app_bg"));
@@ -1532,7 +1621,7 @@ mod tests {
     #[test]
     fn hide_sdi_hides_objects() {
         let vfs = setup_vfs();
-        let runner = AppRunner::launch(&make_app("Settings"), &vfs);
+        let mut runner = AppRunner::launch(&make_app("Settings"), &vfs);
         let mut sdi = SdiRegistry::new();
         runner.update_sdi(&mut sdi, &ActiveTheme::default());
         AppRunner::hide_sdi(&mut sdi);
@@ -1895,7 +1984,7 @@ mod tests {
     #[test]
     fn dual_panel_sdi_objects() {
         let vfs = setup_vfs();
-        let runner = AppRunner::launch(&make_app("File Manager"), &vfs);
+        let mut runner = AppRunner::launch(&make_app("File Manager"), &vfs);
         let mut sdi = SdiRegistry::new();
         runner.update_sdi(&mut sdi, &ActiveTheme::default());
         assert!(sdi.contains("app_bg"));
@@ -1908,7 +1997,7 @@ mod tests {
     #[test]
     fn dual_panel_hide_sdi() {
         let vfs = setup_vfs();
-        let runner = AppRunner::launch(&make_app("File Manager"), &vfs);
+        let mut runner = AppRunner::launch(&make_app("File Manager"), &vfs);
         let mut sdi = SdiRegistry::new();
         runner.update_sdi(&mut sdi, &ActiveTheme::default());
         AppRunner::hide_sdi(&mut sdi);

@@ -566,7 +566,7 @@ impl StartMenuState {
                     + y_offset
                     + (self.footer_h as i32 - at.font_small as i32) / 2;
                 obj.font_size = at.font_small;
-                obj.text = Some("Log Off  Shut Down".to_string());
+                obj.text = Some(at.sm_footer_text.clone());
                 obj.text_color = scale_alpha(at.sm_footer_text_color);
                 obj.visible = true;
             }

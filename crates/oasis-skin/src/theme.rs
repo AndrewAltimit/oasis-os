@@ -98,6 +98,10 @@ pub struct SkinTheme {
     /// Transition effect overrides.
     #[serde(default)]
     pub transition: Option<TransitionOverrides>,
+
+    /// Per-element overrides for scrollbar appearance.
+    #[serde(default)]
+    pub scrollbar_overrides: Option<ScrollbarOverrides>,
 }
 
 /// Optional overrides for the window manager theme.
@@ -207,6 +211,15 @@ pub struct BarOverrides {
     pub statusbar_gradient_bottom: Option<String>,
     pub bar_gradient_top: Option<String>,
     pub bar_gradient_bottom: Option<String>,
+    /// Version label text (default: "Version 0.1").
+    #[serde(default)]
+    pub version_text: Option<String>,
+    /// Category label text (default: "OSS").
+    #[serde(default)]
+    pub category_label: Option<String>,
+    /// URL text for bottom bar (default: "HTTP://OASIS.LOCAL").
+    #[serde(default)]
+    pub url_text: Option<String>,
 }
 
 /// Per-element overrides for dashboard icon rendering.
@@ -283,6 +296,18 @@ pub struct GeometryOverrides {
     /// Terminal line height in pixels (default 16).
     #[serde(default)]
     pub terminal_line_height: Option<u32>,
+    /// Top tab width (default: proportional to screen).
+    #[serde(default)]
+    pub tab_w: Option<u32>,
+    /// Top tab height (default: proportional to screen).
+    #[serde(default)]
+    pub tab_h: Option<u32>,
+    /// Gap between top tabs (default: proportional to screen).
+    #[serde(default)]
+    pub tab_gap: Option<u32>,
+    /// X offset where top tabs start (default: proportional to screen).
+    #[serde(default)]
+    pub tab_start_x: Option<i32>,
 }
 
 /// Per-element overrides for the start menu popup and button.
@@ -345,6 +370,9 @@ pub struct StartMenuOverrides {
     /// Hex color array for category icon placeholders (default: derived from primary).
     #[serde(default)]
     pub item_colors: Option<Vec<String>>,
+    /// Footer text (default: "Log Off  Shut Down").
+    #[serde(default)]
+    pub footer_text: Option<String>,
 }
 
 /// Per-element color overrides for app screens (File Manager, Photo Viewer, etc.).
@@ -362,6 +390,21 @@ pub struct AppOverrides {
     pub dim_text: Option<String>,
     /// Title bar background color.
     pub title_bar_bg: Option<String>,
+    /// Terminal output text color (overrides skin.output).
+    #[serde(default)]
+    pub terminal_output_color: Option<String>,
+    /// Terminal prompt text color (overrides skin.prompt).
+    #[serde(default)]
+    pub terminal_prompt_color: Option<String>,
+    /// Input bar border radius (overrides terminal_border_radius).
+    #[serde(default)]
+    pub input_border_radius: Option<u16>,
+    /// Title bar text color.
+    #[serde(default)]
+    pub title_bar_text: Option<String>,
+    /// Title bar height in pixels.
+    #[serde(default)]
+    pub title_bar_height: Option<u32>,
 }
 
 /// Per-element color overrides for the on-screen keyboard.
@@ -384,6 +427,15 @@ pub struct OskOverrides {
 pub struct TransitionOverrides {
     /// Fade overlay color (hex). Default: derived from background.
     pub fade_color: Option<String>,
+}
+
+/// Per-element overrides for scrollbar appearance.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct ScrollbarOverrides {
+    pub track_color: Option<String>,
+    pub thumb_color: Option<String>,
+    pub thumb_hover_color: Option<String>,
+    pub width: Option<u32>,
 }
 
 /// Per-element overrides for browser chrome colors.
@@ -454,6 +506,7 @@ impl Default for SkinTheme {
             wallpaper: None,
             geometry: None,
             transition: None,
+            scrollbar_overrides: None,
         }
     }
 }

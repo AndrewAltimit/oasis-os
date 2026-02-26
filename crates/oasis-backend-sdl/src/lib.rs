@@ -480,6 +480,54 @@ impl SdiBackend for SdlBackend {
         Ok(())
     }
 
+    fn stroke_circle(
+        &mut self,
+        cx: i32,
+        cy: i32,
+        radius: u16,
+        stroke_width: u16,
+        color: Color,
+    ) -> Result<()> {
+        let (tcx, tcy) = self.translate(cx, cy);
+        self.set_color(color);
+        let sw = (stroke_width as i32).max(1);
+
+        // Draw concentric circle outlines for the requested stroke width.
+        for offset in 0..sw {
+            let r = radius as i32 - offset;
+            if r <= 0 {
+                break;
+            }
+
+            let mut x = 0i32;
+            let mut y = r;
+            let mut d = 1 - r;
+            while x <= y {
+                // Plot 8 symmetric points on the perimeter.
+                for &(px, py) in &[
+                    (tcx + x, tcy + y),
+                    (tcx - x, tcy + y),
+                    (tcx + x, tcy - y),
+                    (tcx - x, tcy - y),
+                    (tcx + y, tcy + x),
+                    (tcx - y, tcy + x),
+                    (tcx + y, tcy - x),
+                    (tcx - y, tcy - x),
+                ] {
+                    let _ = self.canvas.draw_point(sdl2::rect::Point::new(px, py));
+                }
+                x += 1;
+                if d < 0 {
+                    d += 2 * x + 1;
+                } else {
+                    y -= 1;
+                    d += 2 * (x - y) + 1;
+                }
+            }
+        }
+        Ok(())
+    }
+
     fn fill_triangle(
         &mut self,
         x1: i32,
@@ -758,21 +806,13 @@ impl SdiBackend for SdlBackend {
     // -------------------------------------------------------------------
 
     fn measure_text_height(&self, font_size: u16) -> u32 {
-        let scale = if font_size >= 8 {
-            (font_size / 8) as u32
-        } else {
-            1
-        };
-        8 * scale
+        // Match WASM: font_size * 1.2 (the actual rendered row height).
+        (f64::from(font_size.max(8)) * 1.2).ceil() as u32
     }
 
     fn font_ascent(&self, font_size: u16) -> u32 {
-        let scale = if font_size >= 8 {
-            (font_size / 8) as u32
-        } else {
-            1
-        };
-        8 * scale
+        // Match WASM: font_size * 0.85 (baseline offset from top).
+        (f64::from(font_size.max(8)) * 0.85).ceil() as u32
     }
 
     // -------------------------------------------------------------------

@@ -67,7 +67,7 @@ pub fn update_sdi(state: &mut AppState, sdi: &mut SdiRegistry) {
             state
                 .bottom_bar
                 .update_sdi(sdi, &state.active_theme, &state.skin.features);
-            if let Some(ref runner) = state.app_runner {
+            if let Some(ref mut runner) = state.app_runner {
                 runner.update_sdi(sdi, &state.active_theme);
             }
         },

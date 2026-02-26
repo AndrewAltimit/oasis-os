@@ -508,7 +508,7 @@ impl OasisWasm {
                     .update_sdi(&mut self.sdi, &self.active_theme, &self.skin.features);
                 self.bottom_bar
                     .update_sdi(&mut self.sdi, &self.active_theme, &self.skin.features);
-                if let Some(ref runner) = self.app_runner {
+                if let Some(ref mut runner) = self.app_runner {
                     runner.update_sdi(&mut self.sdi, &self.active_theme);
                 }
             },
@@ -609,7 +609,10 @@ impl OasisWasm {
                 if self.mode != Mode::Osk {
                     let osk_cfg = OskConfig {
                         title: "On-Screen Keyboard".to_string(),
-                        ..OskConfig::default()
+                        ..OskConfig::for_screen(
+                            self.active_theme.screen_w,
+                            self.active_theme.screen_h,
+                        )
                     };
                     self.osk = Some(OskState::new(osk_cfg, ""));
                     self.mode = Mode::Osk;

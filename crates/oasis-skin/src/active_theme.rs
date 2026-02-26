@@ -174,6 +174,21 @@ pub struct ActiveTheme {
     pub app_dim_text: Color,
     /// App screen title bar background color.
     pub app_title_bar_bg: Color,
+    /// App screen title bar text color.
+    pub app_title_bar_text: Color,
+    /// App screen title bar height.
+    pub app_title_bar_height: u32,
+    /// Terminal output text color.
+    pub terminal_output_color: Color,
+    /// Terminal prompt text color.
+    pub terminal_prompt_color: Color,
+    /// Input bar border radius.
+    pub input_border_radius: u16,
+    /// App screen selected row background color.
+    pub app_selected_bg: Color,
+
+    /// Clear/background color for the frame.
+    pub clear_color: Color,
 
     // -- OSK colors --
     /// OSK key background color.
@@ -239,6 +254,16 @@ pub struct ActiveTheme {
     /// Gap between icon bottom and label text (base 4 at 480px).
     pub icon_label_pad: i32,
 
+    // -- Geometry overrides (raw, applied after scaling in with_screen_size) --
+    /// Explicit tab width override (None = auto-scaled).
+    tab_w_override: Option<i32>,
+    /// Explicit tab height override (None = auto-scaled).
+    tab_h_override: Option<i32>,
+    /// Explicit tab gap override (None = auto-scaled).
+    tab_gap_override: Option<i32>,
+    /// Explicit tab start X override (None = auto-scaled).
+    tab_start_x_override: Option<i32>,
+
     // -- Screen dimensions --
     /// Screen width (default 480, PSP native).
     pub screen_w: u32,
@@ -270,6 +295,8 @@ pub struct ActiveTheme {
     pub scrollbar_track_color: Color,
     /// Scrollbar thumb color.
     pub scrollbar_thumb_color: Color,
+    /// Scrollbar thumb hover color.
+    pub scrollbar_thumb_hover_color: Color,
     /// Scrollbar width in pixels.
     pub scrollbar_width: u32,
     /// Scrollbar corner radius.
@@ -294,6 +321,16 @@ pub struct ActiveTheme {
     pub focus_ring_width: u16,
     /// Focus ring offset from element edge (pixels).
     pub focus_ring_offset: i32,
+
+    // -- Configurable strings --
+    /// Version label text for status bar.
+    pub bar_version_text: String,
+    /// Category label text for status bar.
+    pub bar_category_label: String,
+    /// URL text for bottom bar.
+    pub bar_url_text: String,
+    /// Start menu footer text.
+    pub sm_footer_text: String,
 
     // -- UI toolkit theme --
     /// Unified UI theme derived from the skin palette.
@@ -365,6 +402,13 @@ impl Default for ActiveTheme {
             app_text: Color::rgb(180, 180, 200),
             app_dim_text: Color::rgb(100, 100, 130),
             app_title_bar_bg: Color::rgb(30, 50, 90),
+            app_title_bar_text: Color::WHITE,
+            app_title_bar_height: 22,
+            terminal_output_color: Color::rgb(204, 204, 204),
+            terminal_prompt_color: Color::rgb(0, 255, 0),
+            input_border_radius: 3,
+            app_selected_bg: Color::rgba(50, 100, 200, 40),
+            clear_color: Color::rgb(10, 10, 18),
             osk_key_bg: Color::rgba(20, 20, 40, 220),
             osk_key_text: Color::WHITE,
             osk_key_focus: Color::rgb(100, 200, 255),
@@ -411,6 +455,10 @@ impl Default for ActiveTheme {
             icon_gfx_h: 22,
             icon_gfx_pad: 4,
             icon_label_pad: 4,
+            tab_w_override: None,
+            tab_h_override: None,
+            tab_gap_override: None,
+            tab_start_x_override: None,
             screen_w: 480,
             screen_h: 272,
             wallpaper_style: "gradient".to_string(),
@@ -430,6 +478,7 @@ impl Default for ActiveTheme {
             wallpaper_animated: false,
             scrollbar_track_color: Color::rgba(255, 255, 255, 20),
             scrollbar_thumb_color: Color::rgba(255, 255, 255, 100),
+            scrollbar_thumb_hover_color: Color::rgba(255, 255, 255, 160),
             scrollbar_width: 6,
             scrollbar_border_radius: 3,
             terminal_line_height: 16,
@@ -438,6 +487,10 @@ impl Default for ActiveTheme {
             focus_ring_color: Color::rgba(100, 200, 255, 180),
             focus_ring_width: 2,
             focus_ring_offset: 2,
+            bar_version_text: "Version 0.1".to_string(),
+            bar_category_label: "OSS".to_string(),
+            bar_url_text: "HTTP://OASIS.LOCAL".to_string(),
+            sm_footer_text: "Log Off  Shut Down".to_string(),
             ui_theme: oasis_ui::theme::Theme::dark(),
         }
     }
@@ -617,6 +670,41 @@ impl ActiveTheme {
                     lighten(skin.background_color(), 0.08),
                 )
             },
+            app_title_bar_text: {
+                let ap = skin.app_overrides.as_ref();
+                ov(ap.and_then(|a| a.title_bar_text.as_ref()), text)
+            },
+            app_title_bar_height: skin
+                .app_overrides
+                .as_ref()
+                .and_then(|a| a.title_bar_height)
+                .unwrap_or(22),
+            terminal_output_color: {
+                let ap = skin.app_overrides.as_ref();
+                ov(
+                    ap.and_then(|a| a.terminal_output_color.as_ref()),
+                    skin.output_color(),
+                )
+            },
+            terminal_prompt_color: {
+                let ap = skin.app_overrides.as_ref();
+                ov(
+                    ap.and_then(|a| a.terminal_prompt_color.as_ref()),
+                    skin.prompt_color(),
+                )
+            },
+            input_border_radius: skin
+                .app_overrides
+                .as_ref()
+                .and_then(|a| a.input_border_radius)
+                .unwrap_or_else(|| {
+                    skin.geometry
+                        .as_ref()
+                        .and_then(|g| g.terminal_border_radius)
+                        .unwrap_or(4)
+                }),
+            app_selected_bg: with_alpha(primary, 40),
+            clear_color: darken(skin.background_color(), 0.5),
             // OSK colors: derive from skin background/primary/text.
             osk_key_bg: {
                 let ok = skin.osk_overrides.as_ref();
@@ -816,12 +904,32 @@ impl ActiveTheme {
                 .as_ref()
                 .and_then(|w| w.animated)
                 .unwrap_or(false),
-            scrollbar_track_color: with_alpha(ov(None, with_alpha(secondary, 20)), 20),
-            scrollbar_thumb_color: with_alpha(ov(None, with_alpha(secondary, 100)), 100),
+            scrollbar_track_color: {
+                let sb = skin.scrollbar_overrides.as_ref();
+                ov(
+                    sb.and_then(|s| s.track_color.as_ref()),
+                    with_alpha(secondary, 20),
+                )
+            },
+            scrollbar_thumb_color: {
+                let sb = skin.scrollbar_overrides.as_ref();
+                ov(
+                    sb.and_then(|s| s.thumb_color.as_ref()),
+                    with_alpha(secondary, 100),
+                )
+            },
+            scrollbar_thumb_hover_color: {
+                let sb = skin.scrollbar_overrides.as_ref();
+                ov(
+                    sb.and_then(|s| s.thumb_hover_color.as_ref()),
+                    with_alpha(secondary, 160),
+                )
+            },
             scrollbar_width: skin
-                .geometry
+                .scrollbar_overrides
                 .as_ref()
-                .and_then(|g| g.scrollbar_width)
+                .and_then(|s| s.width)
+                .or_else(|| skin.geometry.as_ref().and_then(|g| g.scrollbar_width))
                 .unwrap_or(6),
             scrollbar_border_radius: skin
                 .geometry
@@ -843,6 +951,22 @@ impl ActiveTheme {
                 .and_then(|t| t.fade_color.as_ref())
                 .and_then(|s| parse_hex_color(s))
                 .unwrap_or_else(|| darken(skin.background_color(), 0.3)),
+            tab_w_override: skin
+                .geometry
+                .as_ref()
+                .and_then(|g| g.tab_w)
+                .map(|v| v as i32),
+            tab_h_override: skin
+                .geometry
+                .as_ref()
+                .and_then(|g| g.tab_h)
+                .map(|v| v as i32),
+            tab_gap_override: skin
+                .geometry
+                .as_ref()
+                .and_then(|g| g.tab_gap)
+                .map(|v| v as i32),
+            tab_start_x_override: skin.geometry.as_ref().and_then(|g| g.tab_start_x),
             screen_w: 480,
             screen_h: 272,
             statusbar_gradient_top: Self::bar_gradient_pair(
@@ -873,6 +997,18 @@ impl ActiveTheme {
                 status_bar_color,
             )
             .map(|(_, b)| b),
+            bar_version_text: bar
+                .and_then(|b| b.version_text.clone())
+                .unwrap_or_else(|| "Version 0.1".to_string()),
+            bar_category_label: bar
+                .and_then(|b| b.category_label.clone())
+                .unwrap_or_else(|| "OSS".to_string()),
+            bar_url_text: bar
+                .and_then(|b| b.url_text.clone())
+                .unwrap_or_else(|| "HTTP://OASIS.LOCAL".to_string()),
+            sm_footer_text: sm
+                .and_then(|s| s.footer_text.clone())
+                .unwrap_or_else(|| "Log Off  Shut Down".to_string()),
             ui_theme: skin.to_ui_theme(),
         }
     }
@@ -889,10 +1025,10 @@ impl ActiveTheme {
         let scale = |base: i32| -> i32 { (base * w as i32 + 240) / 480 };
         let scale_u = |base: u32| -> u32 { (base * w + 240) / 480 };
 
-        self.tab_w = scale(45);
-        self.tab_h = scale(16);
-        self.tab_gap = scale(4);
-        self.tab_start_x = scale(34);
+        self.tab_w = self.tab_w_override.unwrap_or_else(|| scale(45));
+        self.tab_h = self.tab_h_override.unwrap_or_else(|| scale(16));
+        self.tab_gap = self.tab_gap_override.unwrap_or_else(|| scale(4));
+        self.tab_start_x = self.tab_start_x_override.unwrap_or_else(|| scale(34));
         self.pipe_gap = scale(5);
         self.r_hint_w = scale(28);
         self.icon_stripe_h = scale_u(12);

@@ -43,6 +43,30 @@ impl Default for OskConfig {
     }
 }
 
+impl OskConfig {
+    /// Create an OSK config sized and centered for the given screen dimensions.
+    pub fn for_screen(screen_w: u32, screen_h: u32) -> Self {
+        let cols = 10u32;
+        // Scale cells proportionally to screen width.
+        let cell_w = (screen_w / (cols + 2)) as i32; // +2 for margins
+        let cell_h = (cell_w * 4 / 5).max(24); // 4:5 aspect, min 24px
+        let total_w = cols as i32 * cell_w;
+        let x = ((screen_w as i32 - total_w) / 2).max(0);
+        // Anchor keyboard in lower half of screen.
+        let rows = 3i32; // typical row count
+        let total_h = rows * cell_h + 72; // +72 for tabs/buffer/help
+        let y = (screen_h as i32 - total_h) / 2 + total_h / 4; // shifted down
+        Self {
+            cols: cols as usize,
+            x,
+            y,
+            cell_w: cell_w as u32,
+            cell_h: cell_h as u32,
+            title: "Input".to_string(),
+        }
+    }
+}
+
 /// Character grids for each mode.
 const ALPHA_LOWER: &[char] = &[
     'a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j', 'k', 'l', 'm', 'n', 'o', 'p', 'q', 'r', 's',
@@ -75,6 +99,10 @@ pub struct OskState {
     pub result: Option<bool>,
     /// Flash counter for mode change highlight (counts down from 6).
     pub mode_change_flash: u32,
+    /// Flash counter for key press highlight (counts down from 4).
+    pub key_press_flash: u32,
+    /// Which key index is flashing.
+    pub key_press_index: usize,
 }
 
 impl OskState {
@@ -88,13 +116,18 @@ impl OskState {
             active: true,
             result: None,
             mode_change_flash: 0,
+            key_press_flash: 0,
+            key_press_index: 0,
         }
     }
 
-    /// Advance the mode change flash counter (call once per frame).
+    /// Advance animation counters (call once per frame).
     pub fn tick_animation(&mut self) {
         if self.mode_change_flash > 0 {
             self.mode_change_flash -= 1;
+        }
+        if self.key_press_flash > 0 {
+            self.key_press_flash -= 1;
         }
     }
 
@@ -148,6 +181,8 @@ impl OskState {
                 // Type the selected character.
                 if self.cursor < len {
                     self.buffer.push(chars[self.cursor]);
+                    self.key_press_flash = 4;
+                    self.key_press_index = self.cursor;
                 }
             },
             Button::Square => {
@@ -213,6 +248,9 @@ impl OskState {
             obj.w = (cols as u32) * self.config.cell_w + 8;
             obj.h = (rows as u32) * self.config.cell_h + 72;
             obj.color = at.osk_key_bg;
+            obj.border_radius = Some(at.terminal_border_radius);
+            obj.stroke_width = Some(1);
+            obj.stroke_color = Some(at.separator_color);
             obj.visible = self.active;
         }
 
@@ -225,7 +263,7 @@ impl OskState {
             obj.text = Some(self.config.title.clone());
             obj.x = self.config.x;
             obj.y = self.config.y - 20;
-            obj.font_size = 12;
+            obj.font_size = ((self.config.cell_h / 3) as u16).clamp(8, 16);
             obj.text_color = at.osk_key_text;
             obj.w = 0;
             obj.h = 0;
@@ -241,7 +279,7 @@ impl OskState {
             obj.text = Some(format!("{}|", self.buffer));
             obj.x = self.config.x;
             obj.y = self.config.y + (rows as i32) * self.config.cell_h as i32 + 4;
-            obj.font_size = 12;
+            obj.font_size = ((self.config.cell_h / 3) as u16).clamp(8, 16);
             obj.text_color = at.osk_key_focus;
             obj.w = 0;
             obj.h = 0;
@@ -265,23 +303,25 @@ impl OskState {
                 obj.w = self.config.cell_w - 2;
                 obj.h = self.config.cell_h - 2;
                 obj.text = Some(ch.to_string());
-                obj.font_size = 14;
+                obj.font_size = ((self.config.cell_h * 2 / 5) as u16).clamp(10, 18);
                 obj.text_color = at.osk_key_text;
                 obj.visible = self.active;
 
                 if i == self.cursor {
                     obj.color = at.osk_key_active;
+                } else if self.key_press_flash > 0 && i == self.key_press_index {
+                    obj.color = oasis_types::color::lighten(at.osk_key_active, 0.3);
                 } else {
                     obj.color = inactive_key;
                 }
             }
         }
 
-        // Mode indicator tabs.
+        // Mode indicator tabs -- scale from cell dimensions.
         let tab_labels = ["abc", "ABC", "123"];
         let tab_modes = [OskMode::Alpha, OskMode::AlphaUpper, OskMode::NumSymbol];
-        let tab_w: i32 = 40;
-        let tab_h: i32 = 16;
+        let tab_w: i32 = self.config.cell_w as i32;
+        let tab_h: i32 = (self.config.cell_h as i32 / 2).max(14);
         let tab_gap: i32 = 2;
         let tab_y = self.config.y - 42;
 
@@ -296,7 +336,7 @@ impl OskState {
                 obj.w = tab_w as u32;
                 obj.h = tab_h as u32;
                 obj.text = Some(label.to_string());
-                obj.font_size = 10;
+                obj.font_size = ((self.config.cell_h / 4) as u16).clamp(8, 12);
                 obj.visible = self.active;
 
                 let is_active = self.mode == mode;
@@ -324,7 +364,7 @@ impl OskState {
             obj.text = Some("Triangle=mode Start=OK Cancel=back".to_string());
             obj.x = self.config.x;
             obj.y = self.config.y + (rows as i32) * self.config.cell_h as i32 + 20;
-            obj.font_size = 10;
+            obj.font_size = ((self.config.cell_h / 4) as u16).clamp(8, 12);
             obj.text_color = at.osk_key_dim_text;
             obj.w = 0;
             obj.h = 0;

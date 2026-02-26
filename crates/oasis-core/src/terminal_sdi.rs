@@ -1,5 +1,5 @@
 use crate::active_theme::ActiveTheme;
-use crate::backend::{Color, TextureId};
+use crate::backend::TextureId;
 use crate::bottombar::BottomBar;
 use crate::sdi::SdiRegistry;
 
@@ -136,14 +136,7 @@ pub fn setup_terminal_objects(
     // Show visible lines from the scrollback buffer, offset by scroll.
     let end = output_lines.len().saturating_sub(scroll_offset);
     let start = end.saturating_sub(visible_lines);
-    let output_color = oasis_types::color::with_alpha(
-        Color::rgb(
-            at.app_selected_text.r,
-            at.app_selected_text.g,
-            at.app_selected_text.b,
-        ),
-        255,
-    );
+    let output_color = oasis_types::color::with_alpha(at.terminal_output_color, 255);
     for i in 0..visible_lines {
         let name = format!("term_line_{i}");
         if !sdi.contains(&name) {
@@ -170,7 +163,7 @@ pub fn setup_terminal_objects(
         obj.w = bg_w;
         obj.h = 20;
         obj.color = oasis_types::color::lighten(at.app_bg, 0.03);
-        obj.border_radius = Some(3);
+        obj.border_radius = Some(at.input_border_radius);
     }
     if let Ok(obj) = sdi.get_mut("term_input_bg") {
         obj.visible = true;
@@ -182,7 +175,7 @@ pub fn setup_terminal_objects(
         obj.x = margin + 4;
         obj.y = input_y + 2;
         obj.font_size = 12;
-        obj.text_color = at.osk_key_focus;
+        obj.text_color = at.terminal_prompt_color;
         obj.w = 0;
         obj.h = 0;
     }

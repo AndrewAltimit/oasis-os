@@ -219,6 +219,7 @@ pub fn handle_default_input(
 
         // Launch app from dashboard as floating window.
         InputEvent::ButtonPress(Button::Confirm) if state.mode == Mode::Dashboard => {
+            state.dashboard.trigger_press_flash();
             if state.bottom_bar.active_tab == MediaTab::None
                 && let Some(app) = state.dashboard.selected_app()
             {
@@ -315,7 +316,10 @@ pub fn handle_default_input(
             if state.mode != Mode::Osk {
                 let osk_cfg = OskConfig {
                     title: "On-Screen Keyboard".to_string(),
-                    ..OskConfig::default()
+                    ..OskConfig::for_screen(
+                        state.active_theme.screen_w,
+                        state.active_theme.screen_h,
+                    )
                 };
                 state.osk = Some(OskState::new(osk_cfg, ""));
                 state.mode = Mode::Osk;

@@ -21,6 +21,7 @@ use oasis_backend_sdl::SdlBackend;
 use oasis_core::active_theme::ActiveTheme;
 use oasis_core::backend::{Color, SdiBackend};
 use oasis_core::bottombar::{BottomBar, MediaTab};
+use oasis_core::color::lighten;
 use oasis_core::cursor::{self, CursorState};
 use oasis_core::dashboard::{DashboardConfig, DashboardState, discover_apps};
 use oasis_core::platform::DesktopPlatform;
@@ -124,7 +125,7 @@ fn main() -> anyhow::Result<()> {
         let mut wm = WindowManager::with_theme(w, h, wm_theme);
         if !has_dashboard {
             // WM-only (e.g. desktop): show windows in all screenshots.
-            create_demo_windows(&mut wm, &mut sdi)?;
+            create_demo_windows(&mut wm, &mut sdi, w, h)?;
         }
         Some(wm)
     } else {
@@ -152,6 +153,7 @@ fn main() -> anyhow::Result<()> {
         w,
         h,
         out_dir.join("01_dashboard.png"),
+        active_theme.clear_color,
     )?;
     log::info!("Saved 01_dashboard.png");
 
@@ -164,7 +166,7 @@ fn main() -> anyhow::Result<()> {
         }
         status_bar.update_sdi(&mut sdi, &active_theme, &skin.features);
         bottom_bar.update_sdi(&mut sdi, &active_theme, &skin.features);
-        update_media_page(&mut sdi, &bottom_bar);
+        update_media_page(&mut sdi, &bottom_bar, &active_theme);
     }
     mouse_cursor.update_sdi(&mut sdi);
     render_and_save(
@@ -173,6 +175,7 @@ fn main() -> anyhow::Result<()> {
         w,
         h,
         out_dir.join("02_media_tab.png"),
+        active_theme.clear_color,
     )?;
     log::info!("Saved 02_media_tab.png");
 
@@ -195,6 +198,7 @@ fn main() -> anyhow::Result<()> {
         w,
         h,
         out_dir.join("03_mods_tab.png"),
+        active_theme.clear_color,
     )?;
     log::info!("Saved 03_mods_tab.png");
 
@@ -224,7 +228,7 @@ fn main() -> anyhow::Result<()> {
                 wm.create_window(&term_cfg, &mut sdi)?;
             }
         } else {
-            setup_terminal_objects(&mut sdi, &DEMO_OUTPUT, "/home/user", "ls");
+            setup_terminal_objects(&mut sdi, &DEMO_OUTPUT, "/home/user", "ls", &active_theme);
         }
     } else if let Some(ref mut wm) = wm {
         // WM desktop: close file manager, keep only terminal window.
@@ -238,6 +242,7 @@ fn main() -> anyhow::Result<()> {
         w,
         h,
         out_dir.join("04_terminal.png"),
+        active_theme.clear_color,
     )?;
     log::info!("Saved 04_terminal.png");
 
@@ -249,26 +254,39 @@ fn main() -> anyhow::Result<()> {
 }
 
 /// Create demo windows (terminal + file manager) for WM-only skins.
-fn create_demo_windows(wm: &mut WindowManager, sdi: &mut SdiRegistry) -> anyhow::Result<()> {
+fn create_demo_windows(
+    wm: &mut WindowManager,
+    sdi: &mut SdiRegistry,
+    w: u32,
+    h: u32,
+) -> anyhow::Result<()> {
+    let win_margin = (w / 12) as i32;
+    let term_w = (w as i32 - win_margin * 2).max(300) as u32;
+    let term_h = (h as i32 - win_margin * 2).max(200) as u32;
     let term_cfg = WindowConfig {
         id: "demo_terminal".to_string(),
         title: "Terminal".to_string(),
-        x: Some(40),
-        y: Some(30),
-        width: 400,
-        height: 260,
+        x: Some(win_margin),
+        y: Some(win_margin),
+        width: term_w,
+        height: term_h,
         window_type: WindowType::AppWindow,
         always_on_top: false,
         modal: false,
     };
     wm.create_window(&term_cfg, sdi)?;
+
+    let fm_w = (w * 7 / 10).max(300);
+    let fm_h = (h * 7 / 10).max(200);
+    let fm_x = (w as i32 - fm_w as i32) / 2 + win_margin;
+    let fm_y = (h as i32 - fm_h as i32) / 2 + win_margin / 2;
     let fm_cfg = WindowConfig {
         id: "demo_files".to_string(),
         title: "File Manager".to_string(),
-        x: Some(200),
-        y: Some(100),
-        width: 350,
-        height: 220,
+        x: Some(fm_x),
+        y: Some(fm_y),
+        width: fm_w,
+        height: fm_h,
         window_type: WindowType::AppWindow,
         always_on_top: false,
         modal: false,
@@ -284,13 +302,14 @@ fn render_and_save(
     w: u32,
     h: u32,
     path: std::path::PathBuf,
+    clear_color: Color,
 ) -> anyhow::Result<()> {
-    backend.clear(Color::rgb(10, 10, 18))?;
+    backend.clear(clear_color)?;
     sdi.draw(backend)?;
     backend.swap_buffers()?;
 
     // Need to render again after swap so read_pixels gets the presented frame.
-    backend.clear(Color::rgb(10, 10, 18))?;
+    backend.clear(clear_color)?;
     sdi.draw(backend)?;
 
     let pixels = backend.read_pixels(0, 0, w, h)?;
@@ -360,18 +379,18 @@ fn populate_skin_terminal(sdi: &mut SdiRegistry, lines: &[&str], cwd: &str, inpu
     }
 }
 
-fn update_media_page(sdi: &mut SdiRegistry, bottom_bar: &BottomBar) {
+fn update_media_page(sdi: &mut SdiRegistry, bottom_bar: &BottomBar, at: &ActiveTheme) {
     let page_name = "media_page_text";
     if !sdi.contains(page_name) {
         let obj = sdi.create(page_name);
-        obj.font_size = 14;
-        obj.text_color = Color::rgb(160, 200, 180);
+        obj.font_size = at.terminal_line_height.saturating_sub(4).max(8) as u16;
+        obj.text_color = at.terminal_output_color;
         obj.w = 0;
         obj.h = 0;
     }
     if let Ok(obj) = sdi.get_mut(page_name) {
-        obj.x = 160;
-        obj.y = 120;
+        obj.x = (at.screen_w / 3) as i32;
+        obj.y = (at.screen_h / 2) as i32;
         obj.visible = true;
         obj.text = Some(format!("[ {} Page ]", bottom_bar.active_tab.label()));
     }
@@ -390,28 +409,37 @@ fn setup_terminal_objects(
     output_lines: &[&str],
     cwd: &str,
     input_buf: &str,
+    at: &ActiveTheme,
 ) {
+    let title_h = at.app_title_bar_height;
+    let content_x = 4i32;
+    let content_y = (title_h + 4) as i32;
+    let content_w = at.screen_w.saturating_sub(8);
+    let line_h = at.terminal_line_height;
+    let font_size = line_h.saturating_sub(4).max(8) as u16;
+    let usable_h = at.screen_h - title_h - at.statusbar_height - at.bottombar_height - 14;
+
     if !sdi.contains("terminal_bg") {
         let obj = sdi.create("terminal_bg");
-        obj.x = 4;
-        obj.y = 26;
-        obj.w = 472;
-        obj.h = 220;
-        obj.color = Color::rgb(12, 12, 20);
+        obj.x = content_x;
+        obj.y = content_y;
+        obj.w = content_w;
+        obj.h = usable_h;
+        obj.color = at.app_bg;
     }
     if let Ok(obj) = sdi.get_mut("terminal_bg") {
         obj.visible = true;
     }
 
-    let max_lines = 12;
+    let max_lines = (usable_h / line_h).max(1) as usize;
     for i in 0..max_lines {
         let name = format!("term_line_{i}");
         if !sdi.contains(&name) {
             let obj = sdi.create(&name);
-            obj.x = 8;
-            obj.y = 28 + (i as i32) * 16;
-            obj.font_size = 12;
-            obj.text_color = Color::rgb(0, 200, 0);
+            obj.x = content_x + 4;
+            obj.y = content_y + 2 + (i as i32) * (line_h as i32);
+            obj.font_size = font_size;
+            obj.text_color = at.terminal_output_color;
             obj.w = 0;
             obj.h = 0;
         }
@@ -421,13 +449,15 @@ fn setup_terminal_objects(
         }
     }
 
+    let input_y = content_y + (usable_h as i32) - (line_h as i32) - 2;
+    let input_bg_color = lighten(at.app_bg, 0.03);
     if !sdi.contains("term_input_bg") {
         let obj = sdi.create("term_input_bg");
-        obj.x = 4;
-        obj.y = 248;
-        obj.w = 472;
-        obj.h = 20;
-        obj.color = Color::rgb(20, 20, 35);
+        obj.x = content_x;
+        obj.y = input_y;
+        obj.w = content_w;
+        obj.h = line_h + 4;
+        obj.color = input_bg_color;
     }
     if let Ok(obj) = sdi.get_mut("term_input_bg") {
         obj.visible = true;
@@ -435,10 +465,10 @@ fn setup_terminal_objects(
 
     if !sdi.contains("term_prompt") {
         let obj = sdi.create("term_prompt");
-        obj.x = 8;
-        obj.y = 250;
-        obj.font_size = 12;
-        obj.text_color = Color::rgb(100, 200, 255);
+        obj.x = content_x + 4;
+        obj.y = input_y + 2;
+        obj.font_size = font_size;
+        obj.text_color = at.terminal_prompt_color;
         obj.w = 0;
         obj.h = 0;
     }

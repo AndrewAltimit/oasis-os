@@ -21,7 +21,7 @@ use oasis_audio::RadioManager;
 use oasis_backend_sdl::SdlAudioBackend;
 use oasis_backend_sdl::SdlBackend;
 use oasis_core::active_theme::ActiveTheme;
-use oasis_core::backend::{AudioBackend, Color, InputBackend, NetworkBackend, SdiBackend};
+use oasis_core::backend::{AudioBackend, InputBackend, NetworkBackend, SdiBackend};
 use oasis_core::bottombar::BottomBar;
 use oasis_core::browser::BrowserConfig;
 use oasis_core::config::OasisConfig;
@@ -132,6 +132,7 @@ fn main() -> Result<()> {
         StartMenuState::new_with_theme(StartMenuState::default_items(&active_theme), &active_theme);
 
     // Assemble application state.
+    let clear_color = active_theme.clear_color;
     let mut state = AppState {
         config,
         skin,
@@ -162,7 +163,7 @@ fn main() -> Result<()> {
         tls_provider: RustlsTlsProvider::new(),
         mouse_cursor,
         mode: Mode::Dashboard,
-        bg_color: Color::rgb(10, 10, 18),
+        bg_color: clear_color,
         active_transition,
         frame_counter: 0,
         radio_manager: RadioManager::new(),
