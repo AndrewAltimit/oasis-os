@@ -1014,7 +1014,7 @@ impl AppRunner {
         let left_x = 8i32;
         let left_w = half_w - panel_pad - left_x as u32;
         let right_x = divider_x + panel_pad as i32;
-        let right_w = at.screen_w - half_w - panel_pad;
+        let right_w = at.screen_w - right_x as u32 - panel_pad;
         let divider_h = at.screen_h - title_h - at.statusbar_height - at.bottombar_height;
         let usable_h = at.screen_h - title_h - at.statusbar_height - at.bottombar_height - 14;
         let panel_visible = (usable_h / at.terminal_line_height).max(1) as usize;

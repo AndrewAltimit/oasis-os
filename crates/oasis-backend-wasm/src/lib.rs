@@ -32,6 +32,7 @@ use oasis_core::terminal::{
     populate_profile, register_builtins,
 };
 use oasis_core::terminal_sdi;
+use oasis_core::toast::ToastManager;
 use oasis_core::transition::{self, TransitionState};
 use oasis_core::vfs::{MemoryVfs, Vfs};
 use oasis_core::wallpaper;
@@ -107,6 +108,7 @@ pub struct OasisWasm {
     open_runners: Vec<(String, AppRunner)>,
     browser: Option<BrowserWidget>,
     iframe: IframeOverlay,
+    toasts: ToastManager,
     osk: Option<OskState>,
     active_transition: Option<TransitionState>,
     mode: Mode,
@@ -263,6 +265,7 @@ impl OasisWasm {
             open_runners: Vec::new(),
             browser: None,
             iframe,
+            toasts: ToastManager::new(),
             osk: None,
             active_transition,
             mode: Mode::Dashboard,
@@ -435,9 +438,13 @@ impl OasisWasm {
         // transition overlay).
         if self.mouse_cursor.visible
             && let Some(tex) = self.cursor_texture
-            && let Err(e) = self
-                .backend
-                .blit(tex, self.mouse_cursor.x, self.mouse_cursor.y, 12, 18)
+            && let Err(e) = self.backend.blit(
+                tex,
+                self.mouse_cursor.x,
+                self.mouse_cursor.y,
+                12 * self.mouse_cursor.scale,
+                18 * self.mouse_cursor.scale,
+            )
         {
             console_log!("cursor blit error: {e}");
         }
@@ -455,6 +462,8 @@ impl OasisWasm {
         // Advance animations each frame.
         self.dashboard.tick_animation();
         self.start_menu.tick_animation();
+        self.bottom_bar.tick_animation(&self.active_theme);
+        self.toasts.tick();
 
         match self.mode {
             Mode::Dashboard => {
@@ -463,6 +472,7 @@ impl OasisWasm {
 
                 if self.bottom_bar.active_tab == MediaTab::None {
                     self.dashboard.update_sdi(&mut self.sdi, &self.active_theme);
+                    terminal_sdi::hide_media_page(&mut self.sdi);
                 } else {
                     self.dashboard.hide_sdi(&mut self.sdi);
                     terminal_sdi::update_media_page(
@@ -535,6 +545,16 @@ impl OasisWasm {
                     osk_state.tick_animation();
                     osk_state.update_sdi(&mut self.sdi, &self.active_theme);
                 }
+            },
+        }
+
+        // Update toast overlays (visible in Dashboard, App, Desktop modes).
+        match self.mode {
+            Mode::Dashboard | Mode::App | Mode::Desktop => {
+                self.toasts.update_sdi(&mut self.sdi, &self.active_theme);
+            },
+            _ => {
+                ToastManager::hide_sdi(&mut self.sdi);
             },
         }
 
