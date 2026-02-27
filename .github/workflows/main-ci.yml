@@ -187,6 +187,15 @@ jobs:
           cd crates/oasis-backend-psp
           RUST_PSP_BUILD_STD=1 cargo +nightly psp --release
 
+      - name: Upload PSP EBOOT artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: psp-eboot
+          path: crates/oasis-backend-psp/target/mipsel-sony-psp-std/release/EBOOT.PBP
+          if-no-files-found: ignore
+          retention-days: 90
+
       # -- PSP Emulator Test -------------------------------------------------
       - name: Run OASIS_OS EBOOT in PPSSPPHeadless
         run: |
@@ -313,6 +322,12 @@ jobs:
           name: oasis-binaries
           path: release-artifacts/binaries
 
+      - name: Download PSP EBOOT artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: psp-eboot
+          path: release-artifacts/psp
+
       - name: Determine version
         id: version
         run: |
@@ -367,6 +382,7 @@ jobs:
           | `oasis-app` | Desktop entry point (SDL2 backend) |
           | `oasis-screenshot` | Screenshot capture utility |
           | `liboasis_ffi` | C-ABI shared library for UE5 and external integrations |
+          | `EBOOT.PBP` | PSP homebrew binary (runs on real hardware and PPSSPP) |
 
           ### Installation
 
@@ -402,7 +418,9 @@ jobs:
           body_path: release_notes.md
           draft: false
           prerelease: ${{ contains(steps.version.outputs.version, '-') }}
-          files: release-artifacts/binaries/*
+          files: |
+            release-artifacts/binaries/*
+            release-artifacts/psp/*
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
