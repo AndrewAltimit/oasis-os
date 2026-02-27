@@ -11,7 +11,9 @@ authors.workspace = true
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-oasis-core = { workspace = true, features = ["javascript"] }
+# Note: `javascript` feature intentionally omitted — rquickjs-sys requires clang
+# to cross-compile QuickJS C code for wasm32-unknown-unknown.
+oasis-core = { workspace = true }
 oasis-types = { workspace = true }
 oasis-vfs = { workspace = true }
 oasis-sdi = { workspace = true }
