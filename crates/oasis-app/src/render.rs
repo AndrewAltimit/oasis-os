@@ -94,7 +94,8 @@ pub fn update_sdi(state: &mut AppState, sdi: &mut SdiRegistry) {
                 .update_sdi(sdi, &state.active_theme, &state.skin.features);
         },
         Mode::Osk => {
-            if let Some(ref osk_state) = state.osk {
+            if let Some(ref mut osk_state) = state.osk {
+                osk_state.tick_animation();
                 osk_state.update_sdi(sdi, &state.active_theme);
             }
         },

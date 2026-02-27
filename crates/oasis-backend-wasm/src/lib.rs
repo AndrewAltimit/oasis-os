@@ -531,7 +531,8 @@ impl OasisWasm {
                 }
             },
             Mode::Osk => {
-                if let Some(ref osk_state) = self.osk {
+                if let Some(ref mut osk_state) = self.osk {
+                    osk_state.tick_animation();
                     osk_state.update_sdi(&mut self.sdi, &self.active_theme);
                 }
             },

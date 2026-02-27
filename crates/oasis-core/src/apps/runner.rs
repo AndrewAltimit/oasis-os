@@ -453,7 +453,7 @@ impl AppRunner {
         )?;
 
         // Content lines.
-        let line_h = at.app_title_bar_height.max(12) as i32;
+        let line_h = at.terminal_line_height.max(12) as i32;
         let max_lines = ((ch as i32 - line_h - 4) / line_h).max(0) as usize;
         let visible = self.lines.len().saturating_sub(self.scroll).min(max_lines);
         for i in 0..visible {

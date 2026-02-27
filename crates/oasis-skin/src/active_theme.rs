@@ -307,7 +307,7 @@ pub struct ActiveTheme {
     pub terminal_line_height: u32,
 
     // -- Cursor --
-    /// Cursor scale factor (1 at <=480px, 2 at 800px+, 3 at 1024px+).
+    /// Cursor scale factor (1 at <1920px, 2 at 1920px+).
     pub cursor_scale: u32,
 
     // -- Transition --

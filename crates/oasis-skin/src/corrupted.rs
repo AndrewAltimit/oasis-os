@@ -39,6 +39,10 @@ pub struct CorruptedModifiers {
     /// Maximum pixel offset for color channel separation.
     #[serde(default = "default_color_shift_offset")]
     pub color_shift_offset: i32,
+    /// Screen height used for tear-band Y sampling. Defaults to PSP native
+    /// (272) but should be set to the actual resolution for higher-res skins.
+    #[serde(default = "default_screen_height")]
+    pub screen_height: u32,
 }
 
 fn default_jitter() -> i32 {
@@ -68,6 +72,9 @@ fn default_color_shift_chance() -> f32 {
 fn default_color_shift_offset() -> i32 {
     2
 }
+fn default_screen_height() -> u32 {
+    272
+}
 
 impl Default for CorruptedModifiers {
     fn default() -> Self {
@@ -81,6 +88,7 @@ impl Default for CorruptedModifiers {
             tear_max: default_tear_max(),
             color_shift_chance: default_color_shift_chance(),
             color_shift_offset: default_color_shift_offset(),
+            screen_height: default_screen_height(),
         }
     }
 }
@@ -145,7 +153,7 @@ impl CorruptedModifiers {
         // Determine this frame's tear band (if any).
         let tear_band: Option<(i32, i32, i32)> =
             if tear_chance > 0.0 && self.tear_max > 0 && rng.next_f32() < tear_chance {
-                let tear_y = (rng.next_u32() % 272) as i32;
+                let tear_y = (rng.next_u32() % self.screen_height.max(1)) as i32;
                 let tear_h = 4 + (rng.next_u32() % 13) as i32; // 4-16px tall
                 let tear_offset = rng.next_range(self.tear_max);
                 Some((tear_y, tear_h, tear_offset))
