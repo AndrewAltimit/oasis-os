@@ -11,7 +11,7 @@ authors.workspace = true
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-oasis-core = { workspace = true, features = ["javascript"] }
+oasis-core = { workspace = true }
 oasis-types = { workspace = true }
 oasis-vfs = { workspace = true }
 oasis-sdi = { workspace = true }
