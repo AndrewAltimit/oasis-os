@@ -11,9 +11,6 @@ use crate::vfs::{EntryKind, Vfs};
 /// Maximum lines visible in the app content area (fallback for 480x272).
 const MAX_VISIBLE_LINES: usize = 13;
 
-/// Maximum lines visible per panel in dual-panel mode (fallback for 480x272).
-const PANEL_VISIBLE_LINES: usize = 13;
-
 /// Per-panel state for dual-panel file browsing.
 #[derive(Debug)]
 struct FilePanel {
@@ -34,9 +31,9 @@ impl FilePanel {
         }
     }
 
-    fn visible_count(&self) -> usize {
+    fn visible_count(&self, max_visible: usize) -> usize {
         let remaining = self.lines.len().saturating_sub(self.scroll);
-        remaining.min(PANEL_VISIBLE_LINES)
+        remaining.min(max_visible)
     }
 
     fn navigate_up(&mut self) {
@@ -47,11 +44,11 @@ impl FilePanel {
         }
     }
 
-    fn navigate_down(&mut self) {
-        let visible = self.visible_count();
+    fn navigate_down(&mut self, max_visible: usize) {
+        let visible = self.visible_count(max_visible);
         if self.cursor + 1 < visible {
             self.cursor += 1;
-        } else if self.scroll + PANEL_VISIBLE_LINES < self.lines.len() {
+        } else if self.scroll + max_visible < self.lines.len() {
             self.scroll += 1;
         }
     }
@@ -147,6 +144,8 @@ pub struct AppRunner {
     pending_vfs_request: Option<(String, String)>,
     /// Smooth selection position (lerps toward cursor index).
     visual_selected: f32,
+    /// Cached max visible lines (updated each frame by `update_sdi`).
+    cached_max_visible: usize,
 }
 
 impl AppRunner {
@@ -166,6 +165,7 @@ impl AppRunner {
             active_panel: 0,
             pending_vfs_request: None,
             visual_selected: 0.0,
+            cached_max_visible: MAX_VISIBLE_LINES,
         };
         runner.init_content(&title, vfs);
         runner
@@ -332,7 +332,7 @@ impl AppRunner {
                 let visible = self.visible_count();
                 if self.cursor + 1 < visible {
                     self.cursor += 1;
-                } else if self.scroll + MAX_VISIBLE_LINES < self.lines.len() {
+                } else if self.scroll + self.cached_max_visible < self.lines.len() {
                     self.scroll += 1;
                 }
                 AppAction::None
@@ -367,7 +367,7 @@ impl AppRunner {
                 AppAction::None
             },
             Button::Down => {
-                panels[self.active_panel].navigate_down();
+                panels[self.active_panel].navigate_down(self.cached_max_visible);
                 AppAction::None
             },
             Button::Confirm => {
@@ -581,7 +581,7 @@ impl AppRunner {
     /// Number of currently visible content lines.
     fn visible_count(&self) -> usize {
         let remaining = self.lines.len().saturating_sub(self.scroll);
-        remaining.min(MAX_VISIBLE_LINES)
+        remaining.min(self.cached_max_visible)
     }
 
     /// File manager / photo viewer: enter directory or open file.
@@ -732,7 +732,7 @@ impl AppRunner {
                 let visible = self.visible_count();
                 if self.cursor + 1 < visible {
                     self.cursor += 1;
-                } else if self.scroll + MAX_VISIBLE_LINES < self.lines.len() {
+                } else if self.scroll + self.cached_max_visible < self.lines.len() {
                     self.scroll += 1;
                 }
                 AppAction::None
@@ -844,6 +844,13 @@ impl AppRunner {
             obj.z = 101;
         }
 
+        // Cache dynamic max-visible for input handling (both single & dual panel).
+        let title_h_cache = at.app_title_bar_height;
+        let line_h_safe = at.terminal_line_height.max(1);
+        let usable_h_cache =
+            at.screen_h - title_h_cache - at.statusbar_height - at.bottombar_height - 14;
+        self.cached_max_visible = (usable_h_cache / line_h_safe).max(1) as usize;
+
         // Title text.
         if !sdi.contains("app_title_text") {
             sdi.create("app_title_text");
@@ -890,7 +897,7 @@ impl AppRunner {
         let content_y = (title_h + 4) as i32;
         let content_w = at.screen_w.saturating_sub(16);
         let usable_h = at.screen_h - title_h - at.statusbar_height - at.bottombar_height - 14;
-        let max_visible = (usable_h / at.terminal_line_height).max(1) as usize;
+        let max_visible = (usable_h / at.terminal_line_height.max(1)).max(1) as usize;
         let line_rects = flex::vertical_list(
             content_x,
             content_y,
@@ -1017,7 +1024,7 @@ impl AppRunner {
         let right_w = at.screen_w - right_x as u32 - panel_pad;
         let divider_h = at.screen_h - title_h - at.statusbar_height - at.bottombar_height;
         let usable_h = at.screen_h - title_h - at.statusbar_height - at.bottombar_height - 14;
-        let panel_visible = (usable_h / at.terminal_line_height).max(1) as usize;
+        let panel_visible = (usable_h / at.terminal_line_height.max(1)).max(1) as usize;
 
         // Vertical divider.
         if !sdi.contains("app_divider") {

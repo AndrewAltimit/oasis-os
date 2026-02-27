@@ -575,6 +575,7 @@ impl OasisWasm {
         match event {
             // Launch app from dashboard.
             InputEvent::ButtonPress(Button::Confirm) if self.mode == Mode::Dashboard => {
+                self.dashboard.trigger_press_flash();
                 if self.bottom_bar.active_tab == MediaTab::None
                     && let Some(app) = self.dashboard.selected_app()
                 {
