@@ -431,6 +431,7 @@ mod tests {
             radio_source: None,
             audio_backend: SdlAudioBackend::new(),
             terminal_scroll_offset: 0,
+            toasts: oasis_core::toast::ToastManager::new(),
         }
     }
 

@@ -37,6 +37,7 @@ use oasis_core::statusbar::StatusBar;
 use oasis_core::terminal::{
     CommandRegistry, register_agent_commands, register_builtins, register_plugin_commands,
 };
+use oasis_core::toast::{ToastLevel, ToastManager};
 use oasis_core::transition;
 use oasis_core::vfs::{MemoryVfs, Vfs};
 use oasis_core::wallpaper;
@@ -179,7 +180,15 @@ fn main() -> Result<()> {
             ab
         },
         terminal_scroll_offset: 0,
+        toasts: ToastManager::new(),
     };
+
+    // Show a welcome toast.
+    state.toasts.show(
+        format!("Skin: {}", state.skin.manifest.name),
+        ToastLevel::Info,
+        state.active_theme.toast_ttl,
+    );
 
     // Load radio stations from VFS.
     state

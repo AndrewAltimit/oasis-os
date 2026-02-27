@@ -22,7 +22,11 @@ text_shadow_color = "#00000080"
 font_body = 12
 font_hint = 10
 font_heading = 14
+focus_ring_color = "#4488CCAA"
+toast_slide_in = true
 
 [app_overrides]
 selection_accent_color = "#4488CC80"
 selection_border_radius = 3
+title_bar_text_shadow = true
+title_bar_text_shadow_color = "#00000060"

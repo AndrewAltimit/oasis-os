@@ -9,6 +9,7 @@ use oasis_types::color::with_alpha;
 
 use crate::active_theme::ActiveTheme;
 use crate::sdi::SdiRegistry;
+use crate::transition::ease_out_cubic;
 
 /// Maximum number of visible toasts.
 const MAX_VISIBLE: usize = 4;
@@ -31,6 +32,8 @@ pub struct Toast {
     pub ttl: u32,
     /// Total initial TTL (for computing fade progress).
     pub total_ttl: u32,
+    /// Frames since this toast was created (for slide-in animation).
+    pub entrance_frame: u32,
 }
 
 impl Toast {
@@ -78,6 +81,7 @@ impl ToastManager {
             level,
             total_ttl: ttl,
             ttl,
+            entrance_frame: 0,
         });
         // Keep queue bounded.
         while self.toasts.len() > MAX_VISIBLE * 2 {
@@ -89,6 +93,7 @@ impl ToastManager {
     pub fn tick(&mut self) {
         for toast in &mut self.toasts {
             toast.ttl = toast.ttl.saturating_sub(1);
+            toast.entrance_frame = toast.entrance_frame.saturating_add(1);
         }
         self.toasts.retain(|t| t.ttl > 0);
     }
@@ -98,10 +103,10 @@ impl ToastManager {
     /// Creates up to `MAX_VISIBLE` bg+text object pairs, hidden when unused.
     /// Objects are positioned at the bottom-right, stacking upward.
     pub fn update_sdi(&self, sdi: &mut SdiRegistry, at: &ActiveTheme) {
-        let margin = 8i32;
-        let toast_w = (at.screen_w / 3).max(120);
-        let toast_h = 24u32;
-        let gap = 4i32;
+        let margin = at.toast_margin;
+        let toast_w = ((at.screen_w as f32 * at.toast_width_fraction) as u32).max(120);
+        let toast_h = at.toast_height;
+        let gap = at.toast_gap;
 
         // Take the last MAX_VISIBLE toasts.
         let visible: Vec<_> = self
@@ -132,11 +137,21 @@ impl ToastManager {
             if let Some(toast) = visible.get(i) {
                 let alpha = toast.alpha(at.toast_fade_frames);
                 let slot = (visible.len() - 1 - i) as i32;
-                let x = at.screen_w as i32 - toast_w as i32 - margin;
+                let final_x = at.screen_w as i32 - toast_w as i32 - margin;
                 let y = at.screen_h as i32
                     - at.bottombar_height as i32
                     - margin
                     - (slot + 1) * (toast_h as i32 + gap);
+
+                // Slide-in animation: offset X from the right edge.
+                let x = if at.toast_slide_in {
+                    let ff = at.toast_fade_frames.max(1);
+                    let progress = (toast.entrance_frame as f32 / ff as f32).min(1.0);
+                    let offset = ((1.0 - ease_out_cubic(progress)) * toast_w as f32) as i32;
+                    final_x + offset
+                } else {
+                    final_x
+                };
 
                 let bg_color = match toast.level {
                     ToastLevel::Info => at.toast_info_bg,
@@ -216,6 +231,7 @@ mod tests {
             level: ToastLevel::Info,
             ttl: 5,
             total_ttl: 60,
+            entrance_frame: 55,
         };
         // Near end of life -- should be fading out.
         assert!(t.alpha(10) < 255);
@@ -225,6 +241,7 @@ mod tests {
             level: ToastLevel::Info,
             ttl: 55,
             total_ttl: 60,
+            entrance_frame: 5,
         };
         // Near start -- should be fading in.
         assert!(t2.alpha(10) < 255);

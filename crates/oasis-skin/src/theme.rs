@@ -344,6 +344,42 @@ pub struct GeometryOverrides {
     /// Press flash duration in frames (default 6; 0 = disabled).
     #[serde(default)]
     pub press_flash_duration: Option<u32>,
+    /// Focus ring color (hex, default: derived from primary).
+    #[serde(default)]
+    pub focus_ring_color: Option<String>,
+    /// Focus ring stroke width in pixels (default 2).
+    #[serde(default)]
+    pub focus_ring_width: Option<u16>,
+    /// Focus ring offset from element edge in pixels (default 2).
+    #[serde(default)]
+    pub focus_ring_offset: Option<i32>,
+    /// Cursor highlight padding around icon (default 3).
+    #[serde(default)]
+    pub cursor_pad: Option<i32>,
+    /// Press flash lighten factor 0.0-1.0 (default 0.25).
+    #[serde(default)]
+    pub press_flash_lighten: Option<f32>,
+    /// App selection lerp speed 0.0-1.0 (default 0.25).
+    #[serde(default)]
+    pub app_selection_lerp_speed: Option<f32>,
+    /// Page dot lerp speed 0.0-1.0 (default 0.2).
+    #[serde(default)]
+    pub page_dot_lerp_speed: Option<f32>,
+    /// Toast margin from screen edge in pixels (default 8).
+    #[serde(default)]
+    pub toast_margin: Option<i32>,
+    /// Toast height in pixels (default 24).
+    #[serde(default)]
+    pub toast_height: Option<u32>,
+    /// Toast width as fraction of screen width (default 0.333).
+    #[serde(default)]
+    pub toast_width_fraction: Option<f32>,
+    /// Gap between stacked toasts in pixels (default 4).
+    #[serde(default)]
+    pub toast_gap: Option<i32>,
+    /// Whether toasts slide in from the right (default true).
+    #[serde(default)]
+    pub toast_slide_in: Option<bool>,
 }
 
 /// Per-element overrides for the start menu popup and button.
@@ -412,6 +448,18 @@ pub struct StartMenuOverrides {
     /// Inner padding for the menu panel (default 8).
     #[serde(default)]
     pub pad_inner: Option<i32>,
+    /// Start button X position on the bottom bar (default 4).
+    #[serde(default)]
+    pub button_x: Option<i32>,
+    /// Menu panel X position (default 2).
+    #[serde(default)]
+    pub panel_x: Option<i32>,
+    /// Whether item separators are drawn between rows (default false).
+    #[serde(default)]
+    pub item_separator: Option<bool>,
+    /// Item separator color (hex, default: derived from panel border).
+    #[serde(default)]
+    pub item_separator_color: Option<String>,
 }
 
 /// Per-element color overrides for app screens (File Manager, Photo Viewer, etc.).
@@ -456,6 +504,12 @@ pub struct AppOverrides {
     /// Title bar gradient bottom color (hex).
     #[serde(default)]
     pub title_bar_gradient_bottom: Option<String>,
+    /// Whether text shadow is enabled on app title bar text.
+    #[serde(default)]
+    pub title_bar_text_shadow: Option<bool>,
+    /// App title bar text shadow color (hex, default: "#00000080").
+    #[serde(default)]
+    pub title_bar_text_shadow_color: Option<String>,
 }
 
 /// Per-element color overrides for the on-screen keyboard.

@@ -406,6 +406,38 @@ pub struct ActiveTheme {
     /// Press flash duration in frames (default 6).
     pub press_flash_duration: u32,
 
+    // -- Phase 6A: exposed hardcoded values --
+    /// Cursor highlight padding around icon (default 3).
+    pub cursor_pad: i32,
+    /// Press flash lighten factor 0.0-1.0 (default 0.25).
+    pub press_flash_lighten: f32,
+    /// App selection lerp speed 0.0-1.0 (default 0.25).
+    pub app_selection_lerp_speed: f32,
+    /// Start button X position on the bottom bar (default 4).
+    pub sm_button_x: i32,
+    /// Menu panel X position (default 2).
+    pub sm_panel_x: i32,
+    /// Whether text shadow is enabled on app title bar text.
+    pub app_title_bar_text_shadow: bool,
+    /// App title bar text shadow color.
+    pub app_title_bar_text_shadow_color: Color,
+    /// Page dot lerp speed 0.0-1.0 (default 0.2).
+    pub page_dot_lerp_speed: f32,
+    /// Toast margin from screen edge (default 8).
+    pub toast_margin: i32,
+    /// Toast height in pixels (default 24).
+    pub toast_height: u32,
+    /// Toast width as fraction of screen width (default 0.333).
+    pub toast_width_fraction: f32,
+    /// Gap between stacked toasts (default 4).
+    pub toast_gap: i32,
+    /// Whether toasts slide in from the right (default true).
+    pub toast_slide_in: bool,
+    /// Whether item separators are drawn between start menu rows.
+    pub sm_item_separator: bool,
+    /// Item separator color.
+    pub sm_item_separator_color: Color,
+
     // -- UI toolkit theme --
     /// Unified UI theme derived from the skin palette.
     ///
@@ -587,11 +619,26 @@ impl Default for ActiveTheme {
             app_title_bar_gradient_top: None,
             app_title_bar_gradient_bottom: None,
             toast_shadow_level: 1,
-            cursor_lerp_speed: 0.18,
-            page_slide_duration: 12,
-            start_menu_anim_speed: 0.15,
+            cursor_lerp_speed: 0.35,
+            page_slide_duration: 6,
+            start_menu_anim_speed: 0.25,
             toast_fade_frames: 10,
             press_flash_duration: 6,
+            cursor_pad: 3,
+            press_flash_lighten: 0.25,
+            app_selection_lerp_speed: 0.25,
+            sm_button_x: 4,
+            sm_panel_x: 2,
+            app_title_bar_text_shadow: false,
+            app_title_bar_text_shadow_color: Color::rgba(0, 0, 0, 128),
+            page_dot_lerp_speed: 0.2,
+            toast_margin: 8,
+            toast_height: 24,
+            toast_width_fraction: 0.333,
+            toast_gap: 4,
+            toast_slide_in: true,
+            sm_item_separator: false,
+            sm_item_separator_color: Color::rgba(255, 255, 255, 40),
             ui_theme: oasis_ui::theme::Theme::dark(),
         }
     }
@@ -1043,9 +1090,22 @@ impl ActiveTheme {
                 .and_then(|g| g.terminal_line_height)
                 .unwrap_or(16),
             cursor_scale: 1, // Set by with_screen_size()
-            focus_ring_color: with_alpha(primary, 180),
-            focus_ring_width: 2,
-            focus_ring_offset: 2,
+            focus_ring_color: skin
+                .geometry
+                .as_ref()
+                .and_then(|g| g.focus_ring_color.as_ref())
+                .and_then(|s| parse_hex_color(s))
+                .unwrap_or_else(|| with_alpha(primary, 180)),
+            focus_ring_width: skin
+                .geometry
+                .as_ref()
+                .and_then(|g| g.focus_ring_width)
+                .unwrap_or(2),
+            focus_ring_offset: skin
+                .geometry
+                .as_ref()
+                .and_then(|g| g.focus_ring_offset)
+                .unwrap_or(2),
             transition_fade_color: skin
                 .transition
                 .as_ref()
@@ -1202,17 +1262,17 @@ impl ActiveTheme {
                 .geometry
                 .as_ref()
                 .and_then(|g| g.cursor_lerp_speed)
-                .unwrap_or(0.18),
+                .unwrap_or(0.35),
             page_slide_duration: skin
                 .geometry
                 .as_ref()
                 .and_then(|g| g.page_slide_duration)
-                .unwrap_or(12),
+                .unwrap_or(6),
             start_menu_anim_speed: skin
                 .geometry
                 .as_ref()
                 .and_then(|g| g.start_menu_anim_speed)
-                .unwrap_or(0.15),
+                .unwrap_or(0.25),
             toast_fade_frames: skin
                 .geometry
                 .as_ref()
@@ -1223,6 +1283,77 @@ impl ActiveTheme {
                 .as_ref()
                 .and_then(|g| g.press_flash_duration)
                 .unwrap_or(6),
+            // -- Phase 6A: exposed hardcoded values --
+            cursor_pad: skin
+                .geometry
+                .as_ref()
+                .and_then(|g| g.cursor_pad)
+                .unwrap_or(3),
+            press_flash_lighten: skin
+                .geometry
+                .as_ref()
+                .and_then(|g| g.press_flash_lighten)
+                .unwrap_or(0.25),
+            app_selection_lerp_speed: skin
+                .geometry
+                .as_ref()
+                .and_then(|g| g.app_selection_lerp_speed)
+                .unwrap_or(0.25),
+            sm_button_x: sm.and_then(|s| s.button_x).unwrap_or(4),
+            sm_panel_x: sm.and_then(|s| s.panel_x).unwrap_or(2),
+            app_title_bar_text_shadow: {
+                let ap = skin.app_overrides.as_ref();
+                ap.and_then(|a| a.title_bar_text_shadow)
+                    .unwrap_or(skin.gradient_enabled == Some(true))
+            },
+            app_title_bar_text_shadow_color: {
+                let ap = skin.app_overrides.as_ref();
+                ov(
+                    ap.and_then(|a| a.title_bar_text_shadow_color.as_ref()),
+                    Color::rgba(0, 0, 0, 128),
+                )
+            },
+            page_dot_lerp_speed: skin
+                .geometry
+                .as_ref()
+                .and_then(|g| g.page_dot_lerp_speed)
+                .unwrap_or(0.2),
+            toast_margin: skin
+                .geometry
+                .as_ref()
+                .and_then(|g| g.toast_margin)
+                .unwrap_or(8),
+            toast_height: skin
+                .geometry
+                .as_ref()
+                .and_then(|g| g.toast_height)
+                .unwrap_or(24),
+            toast_width_fraction: skin
+                .geometry
+                .as_ref()
+                .and_then(|g| g.toast_width_fraction)
+                .unwrap_or(0.333),
+            toast_gap: skin
+                .geometry
+                .as_ref()
+                .and_then(|g| g.toast_gap)
+                .unwrap_or(4),
+            toast_slide_in: skin
+                .geometry
+                .as_ref()
+                .and_then(|g| g.toast_slide_in)
+                .unwrap_or(true),
+            sm_item_separator: sm.and_then(|s| s.item_separator).unwrap_or(false),
+            sm_item_separator_color: {
+                let border = ov(
+                    sm.and_then(|s| s.panel_border.as_ref()),
+                    with_alpha(text, 40),
+                );
+                ov(
+                    sm.and_then(|s| s.item_separator_color.as_ref()),
+                    with_alpha(border, 64),
+                )
+            },
             ui_theme: skin.to_ui_theme(),
         }
     }

@@ -73,7 +73,7 @@ impl DashboardConfig {
             grid_y,
             cell_w,
             cell_h,
-            cursor_pad: 3,
+            cursor_pad: at.cursor_pad,
             grid_layout,
             grid_w,
             grid_h,
@@ -625,7 +625,7 @@ impl DashboardState {
             obj.visible = true;
             // Apply press flash effect: lighten the pressed icon.
             obj.color = if self.press_flash_frame > 0 && i == self.press_flash_index {
-                oasis_types::color::lighten(at.icon_body_color, 0.25)
+                oasis_types::color::lighten(at.icon_body_color, at.press_flash_lighten)
             } else {
                 at.icon_body_color
             };

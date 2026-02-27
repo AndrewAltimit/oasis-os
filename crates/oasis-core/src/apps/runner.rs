@@ -875,6 +875,13 @@ impl AppRunner {
             obj.h = 0;
             obj.visible = true;
             obj.z = 102;
+            if at.app_title_bar_text_shadow {
+                obj.text_shadow_offset = Some((1, 1));
+                obj.text_shadow_color = Some(at.app_title_bar_text_shadow_color);
+            } else {
+                obj.text_shadow_offset = None;
+                obj.text_shadow_color = None;
+            }
         }
 
         // Content lines -- responsive to screen resolution.
@@ -894,7 +901,8 @@ impl AppRunner {
         );
 
         // Smooth selection lerp.
-        self.visual_selected += (self.cursor as f32 - self.visual_selected) * 0.25;
+        self.visual_selected +=
+            (self.cursor as f32 - self.visual_selected) * at.app_selection_lerp_speed;
 
         // Selection highlight background.
         if !sdi.contains("app_sel_bg") {

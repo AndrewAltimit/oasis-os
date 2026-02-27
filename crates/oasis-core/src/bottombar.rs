@@ -5,6 +5,7 @@
 //! and shoulder button hints.
 
 use oasis_types::bitmap_font::glyph_advance_scaled;
+use oasis_types::color::lerp_color;
 
 use crate::active_theme::ActiveTheme;
 use crate::sdi::SdiRegistry;
@@ -81,6 +82,8 @@ pub struct BottomBar {
     pub l_pressed: bool,
     /// Whether R trigger is visually pressed.
     pub r_pressed: bool,
+    /// Smooth visual page position (lerps toward current_page).
+    pub dot_visual_page: f32,
 }
 
 impl BottomBar {
@@ -92,7 +95,14 @@ impl BottomBar {
             total_pages: 1,
             l_pressed: false,
             r_pressed: false,
+            dot_visual_page: 0.0,
         }
+    }
+
+    /// Advance page dot lerp animation by one frame.
+    pub fn tick_animation(&mut self, at: &ActiveTheme) {
+        self.dot_visual_page +=
+            (self.current_page as f32 - self.dot_visual_page) * at.page_dot_lerp_speed;
     }
 
     /// Cycle to the next media tab.
@@ -304,17 +314,15 @@ impl BottomBar {
             usb_x + text_px("USB", font_small)
         };
 
-        // Page dots (rounded for circular appearance).
+        // Page dots (rounded for circular appearance, with lerp transition).
         if features.show_page_dots {
             let dots_x = usb_end + 12;
             let max_dots = theme::MAX_PAGE_DOTS;
             for i in 0..self.total_pages.min(max_dots) {
                 let name = format!("bar_page_{i}");
-                let dot_color = if i == self.current_page {
-                    at.page_dot_active
-                } else {
-                    at.page_dot_inactive
-                };
+                // Proximity: 1.0 when this dot is the visual page, 0.0 when far.
+                let proximity = (1.0 - (i as f32 - self.dot_visual_page).abs()).max(0.0);
+                let dot_color = lerp_color(at.page_dot_inactive, at.page_dot_active, proximity);
                 ensure_rounded_fill(
                     sdi,
                     &name,

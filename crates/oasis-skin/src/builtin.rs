@@ -282,6 +282,9 @@ status_bar = "#1A001A"
 prompt = "#FF00FF"
 output = "#CC00CC"
 error = "#FF3333"
+
+[geometry]
+toast_slide_in = false
 "##;
 
 const CORRUPTED_STRINGS: &str = r#"
@@ -397,6 +400,10 @@ shadow_intensity = 1
 
 [bar_overrides]
 text_shadow = true
+
+[geometry]
+focus_ring_color = "#3264C8B0"
+toast_slide_in = true
 
 [wm_theme]
 titlebar_height = 24
@@ -530,10 +537,15 @@ font_hint = 10
 font_heading = 14
 cursor_lerp_speed = 0.15
 start_menu_anim_speed = 0.12
+focus_ring_color = "#6C5CE7AA"
+cursor_pad = 4
+press_flash_lighten = 0.3
+toast_slide_in = true
 
 [app_overrides]
 selection_accent_color = "#6C5CE780"
 selection_border_radius = 4
+title_bar_text_shadow = true
 
 [wm_theme]
 titlebar_height = 24
@@ -696,6 +708,9 @@ font_body = 14
 font_hint = 12
 font_heading = 16
 cursor_blink_rate = 25
+focus_ring_color = "#0054E3A0"
+cursor_pad = 4
+toast_slide_in = true
 
 [app_overrides]
 text_color = "#333333"
@@ -704,6 +719,7 @@ terminal_output_color = "#000000"
 terminal_prompt_color = "#003399"
 selection_accent_color = "#0054E380"
 selection_border_radius = 2
+title_bar_text_shadow = true
 
 [icon_overrides]
 body_color = "#ECE9D8"
@@ -748,6 +764,8 @@ footer_text_color = "#FFFFFF"
 footer_height = 30
 item_icon_size = 24
 item_row_height = 32
+item_separator = true
+item_separator_color = "#4080D040"
 
 [browser_overrides]
 chrome_bg = "#D6D2C2"

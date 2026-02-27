@@ -85,6 +85,9 @@ cursor_blink_rate = 25
 cursor_lerp_speed = 0.22
 page_slide_duration = 10
 press_flash_duration = 8
+focus_ring_color = "#0054E3A0"
+cursor_pad = 4
+toast_slide_in = true
 
 [app_overrides]
 text_color = "#333333"
@@ -93,6 +96,7 @@ terminal_output_color = "#000000"
 terminal_prompt_color = "#003399"
 selection_accent_color = "#0054E380"
 selection_border_radius = 2
+title_bar_text_shadow = true
 
 [icon_overrides]
 body_color = "#ECE9D8"
@@ -136,6 +140,8 @@ footer_text_color = "#FFFFFF"
 footer_height = 24
 item_icon_size = 16
 item_row_height = 24
+item_separator = true
+item_separator_color = "#4080D040"
 
 [browser_overrides]
 chrome_bg = "#D6D2C2"
