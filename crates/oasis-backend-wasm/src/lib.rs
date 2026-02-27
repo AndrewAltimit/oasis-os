@@ -32,6 +32,7 @@ use oasis_core::terminal::{
     populate_profile, register_builtins,
 };
 use oasis_core::terminal_sdi;
+use oasis_core::toast::ToastManager;
 use oasis_core::transition::{self, TransitionState};
 use oasis_core::vfs::{MemoryVfs, Vfs};
 use oasis_core::wallpaper;
@@ -107,6 +108,7 @@ pub struct OasisWasm {
     open_runners: Vec<(String, AppRunner)>,
     browser: Option<BrowserWidget>,
     iframe: IframeOverlay,
+    toasts: ToastManager,
     osk: Option<OskState>,
     active_transition: Option<TransitionState>,
     mode: Mode,
@@ -198,8 +200,10 @@ impl OasisWasm {
         // Bars, start menu.
         let mut bottom_bar = BottomBar::new();
         bottom_bar.total_pages = dashboard.page_count();
-        let start_menu =
-            StartMenuState::new_with_theme(StartMenuState::default_items(), &active_theme);
+        let start_menu = StartMenuState::new_with_theme(
+            StartMenuState::default_items(&active_theme),
+            &active_theme,
+        );
 
         // Window manager.
         let wm = WindowManager::with_theme(width, height, skin.theme.build_wm_theme());
@@ -212,10 +216,11 @@ impl OasisWasm {
         terminal_sdi::setup_wallpaper(&mut sdi, wallpaper_tex, width, height);
 
         // Mouse cursor texture.
-        let mouse_cursor = CursorState::new(width, height);
+        let mut mouse_cursor = CursorState::new(width, height);
+        mouse_cursor.scale = active_theme.cursor_scale;
         let cursor_texture;
         {
-            let (cursor_pixels, cw, ch) = cursor::generate_cursor_pixels();
+            let (cursor_pixels, cw, ch) = cursor::generate_cursor_pixels(active_theme.cursor_scale);
             let cursor_tex = backend
                 .load_texture(cw, ch, &cursor_pixels)
                 .map_err(|e| JsValue::from_str(&format!("cursor: {e}")))?;
@@ -260,6 +265,7 @@ impl OasisWasm {
             open_runners: Vec::new(),
             browser: None,
             iframe,
+            toasts: ToastManager::new(),
             osk: None,
             active_transition,
             mode: Mode::Dashboard,
@@ -272,7 +278,7 @@ impl OasisWasm {
             ],
             terminal_scroll_offset: 0,
             frame_counter: 0,
-            bg_color: Color::rgb(10, 10, 18),
+            bg_color: Color::rgb(0, 0, 0),
             width,
             height,
         })
@@ -347,6 +353,7 @@ impl OasisWasm {
             let browser = &mut self.browser;
             let iframe_ref = &mut self.iframe;
             let open_runners = &self.open_runners;
+            let active_theme = &self.active_theme;
             if let Err(e) = self.wm.draw_with_clips(
                 &mut self.sdi,
                 &mut self.backend,
@@ -382,7 +389,7 @@ impl OasisWasm {
                     } else if let Some((_, runner)) =
                         open_runners.iter().find(|(id, _)| id == window_id)
                     {
-                        runner.draw_windowed(cx, cy, cw, ch, be)
+                        runner.draw_windowed(cx, cy, cw, ch, be, active_theme)
                     } else {
                         Ok(())
                     };
@@ -410,6 +417,7 @@ impl OasisWasm {
                 &mut self.backend,
                 self.output_lines.len(),
                 self.terminal_scroll_offset,
+                &self.active_theme,
             )
         {
             console_log!("terminal scrollbar error: {e}");
@@ -430,9 +438,13 @@ impl OasisWasm {
         // transition overlay).
         if self.mouse_cursor.visible
             && let Some(tex) = self.cursor_texture
-            && let Err(e) = self
-                .backend
-                .blit(tex, self.mouse_cursor.x, self.mouse_cursor.y, 12, 18)
+            && let Err(e) = self.backend.blit(
+                tex,
+                self.mouse_cursor.x,
+                self.mouse_cursor.y,
+                12 * self.mouse_cursor.scale,
+                18 * self.mouse_cursor.scale,
+            )
         {
             console_log!("cursor blit error: {e}");
         }
@@ -447,6 +459,12 @@ impl OasisWasm {
     // -----------------------------------------------------------------------
 
     fn update_sdi(&mut self) {
+        // Advance animations each frame.
+        self.dashboard.tick_animation();
+        self.start_menu.tick_animation();
+        self.bottom_bar.tick_animation(&self.active_theme);
+        self.toasts.tick();
+
         match self.mode {
             Mode::Dashboard => {
                 terminal_sdi::set_terminal_visible(&mut self.sdi, false);
@@ -454,9 +472,14 @@ impl OasisWasm {
 
                 if self.bottom_bar.active_tab == MediaTab::None {
                     self.dashboard.update_sdi(&mut self.sdi, &self.active_theme);
+                    terminal_sdi::hide_media_page(&mut self.sdi);
                 } else {
                     self.dashboard.hide_sdi(&mut self.sdi);
-                    terminal_sdi::update_media_page(&mut self.sdi, &self.bottom_bar);
+                    terminal_sdi::update_media_page(
+                        &mut self.sdi,
+                        &self.bottom_bar,
+                        &self.active_theme,
+                    );
                 }
 
                 self.status_bar
@@ -476,12 +499,17 @@ impl OasisWasm {
                 self.start_menu.close();
                 self.start_menu.hide_sdi(&mut self.sdi);
                 terminal_sdi::hide_media_page(&mut self.sdi);
+                let cursor_visible = self.active_theme.terminal_cursor_blink_rate == 0
+                    || (self.frame_counter / self.active_theme.terminal_cursor_blink_rate as u64)
+                        .is_multiple_of(2);
                 terminal_sdi::setup_terminal_objects(
                     &mut self.sdi,
                     &self.output_lines,
                     &self.cwd,
                     &self.input_buf,
                     self.terminal_scroll_offset,
+                    &self.active_theme,
+                    cursor_visible,
                 );
             },
             Mode::App => {
@@ -494,8 +522,8 @@ impl OasisWasm {
                     .update_sdi(&mut self.sdi, &self.active_theme, &self.skin.features);
                 self.bottom_bar
                     .update_sdi(&mut self.sdi, &self.active_theme, &self.skin.features);
-                if let Some(ref runner) = self.app_runner {
-                    runner.update_sdi(&mut self.sdi);
+                if let Some(ref mut runner) = self.app_runner {
+                    runner.update_sdi(&mut self.sdi, &self.active_theme);
                 }
             },
             Mode::Desktop => {
@@ -513,9 +541,20 @@ impl OasisWasm {
                 }
             },
             Mode::Osk => {
-                if let Some(ref osk_state) = self.osk {
-                    osk_state.update_sdi(&mut self.sdi);
+                if let Some(ref mut osk_state) = self.osk {
+                    osk_state.tick_animation();
+                    osk_state.update_sdi(&mut self.sdi, &self.active_theme);
                 }
+            },
+        }
+
+        // Update toast overlays (visible in Dashboard, App, Desktop modes).
+        match self.mode {
+            Mode::Dashboard | Mode::App | Mode::Desktop => {
+                self.toasts.update_sdi(&mut self.sdi, &self.active_theme);
+            },
+            _ => {
+                ToastManager::hide_sdi(&mut self.sdi);
             },
         }
 
@@ -536,6 +575,7 @@ impl OasisWasm {
         match event {
             // Launch app from dashboard.
             InputEvent::ButtonPress(Button::Confirm) if self.mode == Mode::Dashboard => {
+                self.dashboard.trigger_press_flash();
                 if self.bottom_bar.active_tab == MediaTab::None
                     && let Some(app) = self.dashboard.selected_app()
                 {
@@ -595,7 +635,10 @@ impl OasisWasm {
                 if self.mode != Mode::Osk {
                     let osk_cfg = OskConfig {
                         title: "On-Screen Keyboard".to_string(),
-                        ..OskConfig::default()
+                        ..OskConfig::for_screen(
+                            self.active_theme.screen_w,
+                            self.active_theme.screen_h,
+                        )
                     };
                     self.osk = Some(OskState::new(osk_cfg, ""));
                     self.mode = Mode::Osk;
@@ -685,7 +728,7 @@ impl OasisWasm {
             },
             InputEvent::MouseWheel { delta } if self.mode == Mode::Terminal => {
                 let len = self.output_lines.len();
-                let max_visible = terminal_sdi::VISIBLE_OUTPUT_LINES;
+                let max_visible = terminal_sdi::visible_output_lines(&self.active_theme);
                 if len > max_visible {
                     let max_offset = len - max_visible;
                     if *delta < 0 {
@@ -1102,7 +1145,7 @@ impl OasisWasm {
                 self.bottom_bar.total_pages = self.dashboard.page_count();
                 self.bottom_bar.current_page = 0;
                 self.start_menu = StartMenuState::new_with_theme(
-                    StartMenuState::default_items(),
+                    StartMenuState::default_items(&self.active_theme),
                     &self.active_theme,
                 );
                 self.output_lines

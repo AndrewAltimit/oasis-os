@@ -26,6 +26,7 @@ x = 0
 y = 0
 w = 480
 h = 272
+z = -1
 color = "#000000"
 
 [terminal_output]
@@ -66,6 +67,12 @@ status_bar = "#001A00"
 prompt = "#00FF00"
 output = "#00CC00"
 error = "#FF3333"
+
+[geometry]
+cursor_blink_rate = 20
+
+[wallpaper]
+style = "scanlines"
 "##;
 
 const TERMINAL_STRINGS: &str = r#"
@@ -119,6 +126,7 @@ x = 0
 y = 17
 w = 480
 h = 255
+z = -1
 color = "#0A0A0A"
 
 [terminal_output]
@@ -180,6 +188,14 @@ status_bar = "#1A1A1A"
 prompt = "#CC8800"
 output = "#AAAAAA"
 error = "#CC3333"
+
+[geometry]
+press_flash_duration = 0
+
+[wallpaper]
+style = "dots"
+grid_color = "#1A1A1A"
+grid_spacing = 12
 "##;
 
 const TACTICAL_STRINGS: &str = r#"
@@ -216,6 +232,7 @@ x = 0
 y = 0
 w = 480
 h = 272
+z = -1
 color = "#050005"
 
 [glitch_overlay]
@@ -265,6 +282,9 @@ status_bar = "#1A001A"
 prompt = "#FF00FF"
 output = "#CC00CC"
 error = "#FF3333"
+
+[geometry]
+toast_slide_in = false
 "##;
 
 const CORRUPTED_STRINGS: &str = r#"
@@ -377,6 +397,13 @@ output = "#CCCCCC"
 error = "#FF4444"
 border_radius = 4
 shadow_intensity = 1
+
+[bar_overrides]
+text_shadow = true
+
+[geometry]
+focus_ring_color = "#3264C8B0"
+toast_slide_in = true
 
 [wm_theme]
 titlebar_height = 24
@@ -500,6 +527,25 @@ accent_hover = "#8B7CF7"
 border_radius = 6
 shadow_intensity = 2
 gradient_enabled = true
+
+[bar_overrides]
+text_shadow = true
+
+[geometry]
+font_body = 12
+font_hint = 10
+font_heading = 14
+cursor_lerp_speed = 0.15
+start_menu_anim_speed = 0.12
+focus_ring_color = "#6C5CE7AA"
+cursor_pad = 4
+press_flash_lighten = 0.3
+toast_slide_in = true
+
+[app_overrides]
+selection_accent_color = "#6C5CE780"
+selection_border_radius = 4
+title_bar_text_shadow = true
 
 [wm_theme]
 titlebar_height = 24
@@ -630,6 +676,7 @@ content_stroke_width = 1
 content_stroke_color = "#0054E320"
 maximize_top_inset = 52
 maximize_bottom_inset = 40
+inactive_frame_alpha = 160
 
 [bar_overrides]
 statusbar_bg = "#1F3E7B"
@@ -642,6 +689,7 @@ battery_color = "#FFFFFF"
 version_color = "#FFFFFF"
 clock_color = "#FFFFFF"
 separator_color = "#4080D0"
+text_shadow = true
 
 [wallpaper]
 style = "gradient"
@@ -656,6 +704,22 @@ icon_width = 48
 icon_height = 56
 font_small = 12
 tab_row_height = 22
+font_body = 14
+font_hint = 12
+font_heading = 16
+cursor_blink_rate = 25
+focus_ring_color = "#0054E3A0"
+cursor_pad = 4
+toast_slide_in = true
+
+[app_overrides]
+text_color = "#333333"
+dim_text = "#666666"
+terminal_output_color = "#000000"
+terminal_prompt_color = "#003399"
+selection_accent_color = "#0054E380"
+selection_border_radius = 2
+title_bar_text_shadow = true
 
 [icon_overrides]
 body_color = "#ECE9D8"
@@ -700,6 +764,8 @@ footer_text_color = "#FFFFFF"
 footer_height = 30
 item_icon_size = 24
 item_row_height = 32
+item_separator = true
+item_separator_color = "#4080D040"
 
 [browser_overrides]
 chrome_bg = "#D6D2C2"
@@ -832,7 +898,8 @@ stroke_color = "#00666640"
 x = 0
 y = 117
 w = 480
-h = 143
+h = 155
+z = -1
 color = "#060D15"
 border_radius = 4
 
@@ -840,7 +907,7 @@ border_radius = 4
 x = 4
 y = 120
 w = 472
-h = 124
+h = 132
 color = "#00000000"
 text = ""
 font_size = 8
@@ -850,7 +917,7 @@ text_color = "#00BBBB"
 x = 4
 y = 256
 w = 472
-h = 12
+h = 14
 color = "#00000000"
 text = "agent> "
 font_size = 8
@@ -875,6 +942,11 @@ status_bar = "#0A1A2A"
 prompt = "#00FFCC"
 output = "#00BBBB"
 error = "#FF4444"
+
+[wallpaper]
+style = "grid"
+grid_color = "#0D2233"
+grid_spacing = 16
 "##;
 
 const AGENT_TERMINAL_STRINGS: &str = r#"

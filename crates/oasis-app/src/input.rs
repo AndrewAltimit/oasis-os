@@ -219,6 +219,7 @@ pub fn handle_default_input(
 
         // Launch app from dashboard as floating window.
         InputEvent::ButtonPress(Button::Confirm) if state.mode == Mode::Dashboard => {
+            state.dashboard.trigger_press_flash();
             if state.bottom_bar.active_tab == MediaTab::None
                 && let Some(app) = state.dashboard.selected_app()
             {
@@ -315,7 +316,10 @@ pub fn handle_default_input(
             if state.mode != Mode::Osk {
                 let osk_cfg = OskConfig {
                     title: "On-Screen Keyboard".to_string(),
-                    ..OskConfig::default()
+                    ..OskConfig::for_screen(
+                        state.active_theme.screen_w,
+                        state.active_theme.screen_h,
+                    )
                 };
                 state.osk = Some(OskState::new(osk_cfg, ""));
                 state.mode = Mode::Osk;
@@ -425,7 +429,7 @@ pub fn handle_default_input(
 
         InputEvent::MouseWheel { delta } if state.mode == Mode::Terminal => {
             let len = state.output_lines.len();
-            let max_visible = terminal_sdi::VISIBLE_OUTPUT_LINES;
+            let max_visible = terminal_sdi::visible_output_lines(&state.active_theme);
             if len > max_visible {
                 let max_offset = len - max_visible;
                 if *delta < 0 {
@@ -489,6 +493,7 @@ fn handle_start_menu_action(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use oasis_core::active_theme::ActiveTheme;
 
     #[test]
     fn input_result_variants() {
@@ -559,7 +564,7 @@ mod tests {
             dashboard: DashboardState::new(dash_cfg, vec![]),
             status_bar: StatusBar::new(),
             bottom_bar: BottomBar::new(),
-            start_menu: StartMenuState::new(StartMenuState::default_items()),
+            start_menu: StartMenuState::new(StartMenuState::default_items(&active_theme)),
             cmd_reg: CommandRegistry::new(),
             cwd: "/".to_string(),
             input_buf: String::new(),
@@ -583,6 +588,7 @@ mod tests {
             radio_source: None,
             audio_backend: SdlAudioBackend::new(),
             terminal_scroll_offset: 0,
+            toasts: oasis_core::toast::ToastManager::new(),
         };
         let sdi = SdiRegistry::new();
         let vfs = MemoryVfs::new();
@@ -709,7 +715,15 @@ mod tests {
         let (mut state, mut sdi, mut vfs) = make_test_state();
         state.mode = Mode::Terminal;
         // First create terminal objects so set_terminal_visible can hide them.
-        terminal_sdi::setup_terminal_objects(&mut sdi, &[], "/", "", 0);
+        terminal_sdi::setup_terminal_objects(
+            &mut sdi,
+            &[],
+            "/",
+            "",
+            0,
+            &ActiveTheme::default(),
+            true,
+        );
         handle_default_input(
             &InputEvent::ButtonPress(Button::Cancel),
             &mut state,

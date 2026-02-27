@@ -80,9 +80,6 @@ const MIN_VISIBLE: i32 = 20;
 /// SDI object name for the semi-transparent modal backdrop.
 const MODAL_OVERLAY_ID: &str = "__wm_modal_overlay";
 
-/// Color of the modal backdrop overlay.
-const MODAL_OVERLAY_COLOR: Color = Color::rgba(0, 0, 0, 100);
-
 /// The window manager.
 ///
 /// Manages a list of windows ordered by z-depth (last = topmost).
@@ -773,7 +770,7 @@ impl WindowManager {
             }
         }
 
-        // Update titlebar colors for all windows.
+        // Update titlebar colors and frame distinction for all windows.
         for window in &self.windows {
             let is_active = window.id == id;
             let color = if is_active {
@@ -810,6 +807,24 @@ impl WindowManager {
                 } else {
                     obj.gradient_top = None;
                     obj.gradient_bottom = None;
+                }
+            }
+            // Dim inactive window frames.
+            let frame_name = window.sdi_name("frame");
+            if let Ok(obj) = sdi.get_mut(&frame_name) {
+                if is_active {
+                    let fc = self.theme.frame_color;
+                    obj.color = fc;
+                    if self.theme.frame_shadow_level > 0 {
+                        obj.shadow_level = Some(self.theme.frame_shadow_level);
+                    }
+                } else {
+                    obj.color = oasis_types::color::with_alpha(
+                        self.theme.frame_color,
+                        self.theme.inactive_frame_alpha,
+                    );
+                    let reduced = self.theme.frame_shadow_level.saturating_sub(1);
+                    obj.shadow_level = if reduced > 0 { Some(reduced) } else { None };
                 }
             }
         }
@@ -1202,7 +1217,7 @@ impl WindowManager {
         obj.y = 0;
         obj.w = self.screen_w;
         obj.h = self.screen_h;
-        obj.color = MODAL_OVERLAY_COLOR;
+        obj.color = self.theme.modal_overlay_color;
     }
 
     /// Hide and destroy the modal overlay.

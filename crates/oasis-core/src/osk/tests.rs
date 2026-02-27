@@ -1,6 +1,7 @@
 //! Tests for the on-screen keyboard module.
 
 use super::*;
+use crate::active_theme::ActiveTheme;
 use crate::input::Button;
 use crate::sdi::SdiRegistry;
 
@@ -121,7 +122,7 @@ fn rows_calculation() {
 fn update_sdi_creates_objects() {
     let osk = default_osk();
     let mut sdi = SdiRegistry::new();
-    osk.update_sdi(&mut sdi);
+    osk.update_sdi(&mut sdi, &ActiveTheme::default());
     assert!(sdi.contains("osk_bg"));
     assert!(sdi.contains("osk_title"));
     assert!(sdi.contains("osk_buffer"));
@@ -134,7 +135,7 @@ fn update_sdi_creates_objects() {
 fn hide_sdi_hides_objects() {
     let osk = default_osk();
     let mut sdi = SdiRegistry::new();
-    osk.update_sdi(&mut sdi);
+    osk.update_sdi(&mut sdi, &ActiveTheme::default());
 
     osk.hide_sdi(&mut sdi);
     let bg = sdi.get("osk_bg").unwrap();

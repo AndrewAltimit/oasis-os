@@ -16,6 +16,7 @@ use oasis_core::skin::Skin;
 use oasis_core::startmenu::StartMenuState;
 use oasis_core::statusbar::StatusBar;
 use oasis_core::terminal::CommandRegistry;
+use oasis_core::toast::ToastManager;
 use oasis_core::transfer::FtpServer;
 use oasis_core::transition;
 use oasis_core::wm::manager::WindowManager;
@@ -66,6 +67,7 @@ pub struct AppState {
     pub radio_source: Option<Box<dyn RadioSource>>,
     pub audio_backend: SdlAudioBackend,
     pub terminal_scroll_offset: usize,
+    pub toasts: ToastManager,
 }
 
 #[cfg(test)]

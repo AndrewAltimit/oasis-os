@@ -56,6 +56,12 @@ pub struct SdiObject {
     pub stroke_color: Option<Color>,
     /// Custom shadow color (default: black).
     pub shadow_color: Option<Color>,
+    /// Text shadow offset `(dx, dy)` in pixels. When set, text is drawn
+    /// twice: first at `(x+dx, y+dy)` in `text_shadow_color`, then
+    /// normally at `(x, y)`.
+    pub text_shadow_offset: Option<(i32, i32)>,
+    /// Text shadow color (default: black at 50% alpha).
+    pub text_shadow_color: Option<Color>,
 }
 
 impl SdiObject {
@@ -83,6 +89,8 @@ impl SdiObject {
             stroke_width: None,
             stroke_color: None,
             shadow_color: None,
+            text_shadow_offset: None,
+            text_shadow_color: None,
         }
     }
 }

@@ -4,6 +4,9 @@
 //! Displays URL label, USB indicator, media category tabs, page dots,
 //! and shoulder button hints.
 
+use oasis_types::bitmap_font::glyph_advance_scaled;
+use oasis_types::color::lerp_color;
+
 use crate::active_theme::ActiveTheme;
 use crate::sdi::SdiRegistry;
 use crate::sdi::helpers::{
@@ -11,6 +14,13 @@ use crate::sdi::helpers::{
     hide_objects,
 };
 use crate::theme;
+
+/// Measure the pixel width of a text string using proportional glyph metrics.
+fn text_px(s: &str, font_size: u16) -> i32 {
+    s.chars()
+        .map(|c| glyph_advance_scaled(c, font_size) as i32)
+        .sum()
+}
 
 /// Media category tabs (cycled with R trigger).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -72,6 +82,8 @@ pub struct BottomBar {
     pub l_pressed: bool,
     /// Whether R trigger is visually pressed.
     pub r_pressed: bool,
+    /// Smooth visual page position (lerps toward current_page).
+    pub dot_visual_page: f32,
 }
 
 impl BottomBar {
@@ -83,7 +95,14 @@ impl BottomBar {
             total_pages: 1,
             l_pressed: false,
             r_pressed: false,
+            dot_visual_page: 0.0,
         }
+    }
+
+    /// Advance page dot lerp animation by one frame.
+    pub fn tick_animation(&mut self, at: &ActiveTheme) {
+        self.dot_visual_page +=
+            (self.current_page as f32 - self.dot_visual_page) * at.page_dot_lerp_speed;
     }
 
     /// Cycle to the next media tab.
@@ -106,7 +125,6 @@ impl BottomBar {
         let bar_h = at.bottombar_height;
         let font_small = at.font_small;
         let screen_w = at.screen_w;
-        let char_w = font_small.max(8) as i32 / 8 * 8;
         // Vertically center text within the bar.
         let text_y = bar_y + (bar_h as i32 - font_small as i32) / 2;
 
@@ -141,44 +159,60 @@ impl BottomBar {
             at.separator_color,
         );
 
-        // URL label -- shift right past the start button when start menu is active.
+        // URL label + chrome bezel (only shown when bar_url_text is non-empty).
         let url_offset = if features.start_menu {
             at.sm_button_width as i32 + 10
         } else {
             0
         };
-        ensure_text(
-            sdi,
-            "bar_url",
-            8 + url_offset,
-            text_y,
-            font_small,
-            at.url_color,
-        );
-        if let Ok(obj) = sdi.get_mut("bar_url") {
-            obj.text = Some("HTTP://OASIS.LOCAL".to_string());
-        }
-
-        // Chrome bezel around URL area.
-        let url_bx = 2i32 + url_offset;
-        let url_bw = (190u32).saturating_sub(url_offset as u32);
         let bz_y = bar_y + 2;
         let bz_h = bar_h - 4;
-        ensure_chrome_bezel(
-            sdi,
-            "bar_url_bezel",
-            url_bx,
-            bz_y,
-            url_bw,
-            bz_h,
-            &BezelStyle::chrome(),
-        );
+        let url_text_end = if at.bar_url_text.is_empty() {
+            // No URL text -- hide URL label and bezel.
+            if let Ok(obj) = sdi.get_mut("bar_url") {
+                obj.visible = false;
+            }
+            hide_bezel(sdi, "bar_url_bezel");
+            url_offset
+        } else {
+            let end = 8 + url_offset + text_px(&at.bar_url_text, font_small);
+            ensure_text(
+                sdi,
+                "bar_url",
+                8 + url_offset,
+                text_y,
+                font_small,
+                at.url_color,
+            );
+            if let Ok(obj) = sdi.get_mut("bar_url") {
+                obj.text = Some(at.bar_url_text.clone());
+                if at.bar_text_shadow {
+                    obj.text_shadow_offset = Some((1, 1));
+                    obj.text_shadow_color = Some(at.bar_text_shadow_color);
+                }
+            }
+
+            // Chrome bezel around URL area (sized to actual text width).
+            let url_bx = 2i32 + url_offset;
+            let url_bw = (end + 6 - url_bx).max(60) as u32;
+            ensure_chrome_bezel(
+                sdi,
+                "bar_url_bezel",
+                url_bx,
+                bz_y,
+                url_bw,
+                bz_h,
+                &BezelStyle::chrome(),
+            );
+            end
+        };
 
         // Media category tabs (pipe-separated).
         if features.show_media_tabs {
             let tab_labels: Vec<&str> = MediaTab::TABS.iter().map(|t| t.label()).collect();
-            let labels_w: i32 = tab_labels.iter().map(|l| l.len() as i32 * char_w).sum();
-            let pipes_w = (tab_labels.len() as i32 - 1) * (at.pipe_gap * 2 + char_w);
+            let labels_w: i32 = tab_labels.iter().map(|l| text_px(l, font_small)).sum();
+            let pipe_w = text_px("|", font_small);
+            let pipes_w = (tab_labels.len() as i32 - 1) * (at.pipe_gap * 2 + pipe_w);
             let total_w = labels_w + pipes_w;
             let tabs_x = screen_w as i32 - total_w - at.r_hint_w - 8;
 
@@ -210,8 +244,12 @@ impl BottomBar {
                     obj.text = Some(label.to_string());
                     obj.text_color = color;
                     obj.visible = true;
+                    if at.bar_text_shadow {
+                        obj.text_shadow_offset = Some((1, 1));
+                        obj.text_shadow_color = Some(at.bar_text_shadow_color);
+                    }
                 }
-                cx += label.len() as i32 * char_w;
+                cx += text_px(label, font_small);
 
                 // Pipe separator (except after last tab).
                 if i < MediaTab::TABS.len() - 1 {
@@ -221,7 +259,7 @@ impl BottomBar {
                     if let Ok(obj) = sdi.get_mut(&pipe_name) {
                         obj.text = Some("|".to_string());
                     }
-                    cx += char_w + at.pipe_gap;
+                    cx += pipe_w + at.pipe_gap;
                 }
             }
 
@@ -236,6 +274,10 @@ impl BottomBar {
             );
             if let Ok(obj) = sdi.get_mut("bar_r_hint") {
                 obj.text = Some("R>".to_string());
+                if at.bar_text_shadow {
+                    obj.text_shadow_offset = Some((1, 1));
+                    obj.text_shadow_color = Some(at.bar_text_shadow_color);
+                }
             }
         } else {
             // Hide media tab objects when disabled.
@@ -253,26 +295,34 @@ impl BottomBar {
             hide_bezel(sdi, "bar_tab_bezel");
         }
 
-        // USB indicator (after URL text, not bezel -- avoids overlap).
-        let url_text = "HTTP://OASIS.LOCAL";
-        let url_text_end = 8 + url_offset + url_text.len() as i32 * char_w;
-        let usb_x = url_text_end + 6;
-        ensure_text(sdi, "bar_usb", usb_x, text_y, font_small, at.usb_color);
-        if let Ok(obj) = sdi.get_mut("bar_usb") {
-            obj.text = Some("USB".to_string());
-        }
+        // USB indicator (after URL text -- hidden when URL is empty).
+        let usb_end = if at.bar_url_text.is_empty() {
+            if let Ok(obj) = sdi.get_mut("bar_usb") {
+                obj.visible = false;
+            }
+            url_offset
+        } else {
+            let usb_x = url_text_end + 6;
+            ensure_text(sdi, "bar_usb", usb_x, text_y, font_small, at.usb_color);
+            if let Ok(obj) = sdi.get_mut("bar_usb") {
+                obj.text = Some("USB".to_string());
+                if at.bar_text_shadow {
+                    obj.text_shadow_offset = Some((1, 1));
+                    obj.text_shadow_color = Some(at.bar_text_shadow_color);
+                }
+            }
+            usb_x + text_px("USB", font_small)
+        };
 
-        // Page dots (rounded for circular appearance).
+        // Page dots (rounded for circular appearance, with lerp transition).
         if features.show_page_dots {
-            let dots_x = usb_x + 36;
+            let dots_x = usb_end + 12;
             let max_dots = theme::MAX_PAGE_DOTS;
             for i in 0..self.total_pages.min(max_dots) {
                 let name = format!("bar_page_{i}");
-                let dot_color = if i == self.current_page {
-                    at.page_dot_active
-                } else {
-                    at.page_dot_inactive
-                };
+                // Proximity: 1.0 when this dot is the visual page, 0.0 when far.
+                let proximity = (1.0 - (i as f32 - self.dot_visual_page).abs()).max(0.0);
+                let dot_color = lerp_color(at.page_dot_inactive, at.page_dot_active, proximity);
                 ensure_rounded_fill(
                     sdi,
                     &name,
@@ -360,7 +410,7 @@ mod tests {
         let feat = crate::skin::SkinFeatures::default();
         bar.update_sdi(&mut sdi, &at, &feat);
         assert!(sdi.contains("bar_bottom"));
-        assert!(sdi.contains("bar_url"));
+        // bar_url is not created when bar_url_text is empty (default).
         assert!(sdi.contains("bar_btab_0"));
         assert!(sdi.contains("bar_btab_1"));
         assert!(sdi.contains("bar_btab_2"));
@@ -494,8 +544,7 @@ mod tests {
         BottomBar::hide_sdi(&mut sdi);
 
         assert!(!sdi.get("bar_bottom").unwrap().visible);
-        assert!(!sdi.get("bar_url").unwrap().visible);
-        assert!(!sdi.get("bar_usb").unwrap().visible);
+        // bar_url and bar_usb are not created when URL text is empty.
     }
 
     #[test]
@@ -513,27 +562,41 @@ mod tests {
     }
 
     #[test]
-    fn url_label_is_created() {
+    fn url_label_hidden_when_empty() {
         let bar = BottomBar::new();
         let mut sdi = SdiRegistry::new();
         let at = crate::active_theme::ActiveTheme::default();
+        let feat = crate::skin::SkinFeatures::default();
+        bar.update_sdi(&mut sdi, &at, &feat);
+
+        // Default theme has empty bar_url_text, so URL label is not created.
+        assert!(!sdi.contains("bar_url"));
+    }
+
+    #[test]
+    fn url_label_shown_when_set() {
+        let bar = BottomBar::new();
+        let mut sdi = SdiRegistry::new();
+        let mut at = crate::active_theme::ActiveTheme::default();
+        at.bar_url_text = "HTTP://EXAMPLE".to_string();
         let feat = crate::skin::SkinFeatures::default();
         bar.update_sdi(&mut sdi, &at, &feat);
 
         let url = sdi.get("bar_url").unwrap();
-        assert_eq!(url.text, Some("HTTP://OASIS.LOCAL".to_string()));
+        assert_eq!(url.text, Some("HTTP://EXAMPLE".to_string()));
+        assert!(url.visible);
     }
 
     #[test]
-    fn usb_indicator_is_created() {
+    fn usb_hidden_when_url_empty() {
         let bar = BottomBar::new();
         let mut sdi = SdiRegistry::new();
         let at = crate::active_theme::ActiveTheme::default();
         let feat = crate::skin::SkinFeatures::default();
         bar.update_sdi(&mut sdi, &at, &feat);
 
-        let usb = sdi.get("bar_usb").unwrap();
-        assert_eq!(usb.text, Some("USB".to_string()));
+        // USB indicator is hidden when URL text is empty.
+        assert!(!sdi.contains("bar_usb"));
     }
 
     #[test]

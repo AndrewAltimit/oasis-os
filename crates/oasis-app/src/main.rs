@@ -21,7 +21,7 @@ use oasis_audio::RadioManager;
 use oasis_backend_sdl::SdlAudioBackend;
 use oasis_backend_sdl::SdlBackend;
 use oasis_core::active_theme::ActiveTheme;
-use oasis_core::backend::{AudioBackend, Color, InputBackend, NetworkBackend, SdiBackend};
+use oasis_core::backend::{AudioBackend, InputBackend, NetworkBackend, SdiBackend};
 use oasis_core::bottombar::BottomBar;
 use oasis_core::browser::BrowserConfig;
 use oasis_core::config::OasisConfig;
@@ -37,6 +37,7 @@ use oasis_core::statusbar::StatusBar;
 use oasis_core::terminal::{
     CommandRegistry, register_agent_commands, register_builtins, register_plugin_commands,
 };
+use oasis_core::toast::{ToastLevel, ToastManager};
 use oasis_core::transition;
 use oasis_core::vfs::{MemoryVfs, Vfs};
 use oasis_core::wallpaper;
@@ -45,19 +46,7 @@ use oasis_core::wm::manager::WindowManager;
 fn main() -> Result<()> {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
 
-    let config = OasisConfig::default();
-    log::info!(
-        "Starting OASIS_OS ({}x{})",
-        config.screen_width,
-        config.screen_height,
-    );
-
-    let mut backend = SdlBackend::new(
-        &config.window_title,
-        config.screen_width,
-        config.screen_height,
-    )?;
-    backend.init(config.screen_width, config.screen_height)?;
+    let mut config = OasisConfig::default();
 
     // Resolve skin from CLI arg, OASIS_SKIN env var, or config.
     let skin_name = std::env::args()
@@ -71,8 +60,25 @@ fn main() -> Result<()> {
         skin.manifest.version
     );
 
-    // Derive runtime theme from the active skin.
-    let active_theme = ActiveTheme::from_skin(&skin.theme);
+    // Use the skin's screen dimensions (e.g. 1024x768 for xp, 480x272 for classic).
+    config.screen_width = skin.manifest.screen_width;
+    config.screen_height = skin.manifest.screen_height;
+    log::info!(
+        "Starting OASIS_OS ({}x{})",
+        config.screen_width,
+        config.screen_height,
+    );
+
+    let mut backend = SdlBackend::new(
+        &config.window_title,
+        config.screen_width,
+        config.screen_height,
+    )?;
+    backend.init(config.screen_width, config.screen_height)?;
+
+    // Derive runtime theme from the active skin, applying screen dimensions.
+    let active_theme = ActiveTheme::from_skin(&skin.theme)
+        .with_screen_size(config.screen_width, config.screen_height);
     let browser_config = BrowserConfig::from_skin_theme(&skin.theme);
 
     // Set up platform services.
@@ -125,11 +131,14 @@ fn main() -> Result<()> {
         fade_frames,
     ));
 
-    let mouse_cursor = CursorState::new(config.screen_width, config.screen_height);
+    let mut mouse_cursor = CursorState::new(config.screen_width, config.screen_height);
+    mouse_cursor.scale = active_theme.cursor_scale;
 
-    let start_menu = StartMenuState::new_with_theme(StartMenuState::default_items(), &active_theme);
+    let start_menu =
+        StartMenuState::new_with_theme(StartMenuState::default_items(&active_theme), &active_theme);
 
     // Assemble application state.
+    let clear_color = active_theme.clear_color;
     let mut state = AppState {
         config,
         skin,
@@ -160,7 +169,7 @@ fn main() -> Result<()> {
         tls_provider: RustlsTlsProvider::new(),
         mouse_cursor,
         mode: Mode::Dashboard,
-        bg_color: Color::rgb(10, 10, 18),
+        bg_color: clear_color,
         active_transition,
         frame_counter: 0,
         radio_manager: RadioManager::new(),
@@ -171,7 +180,15 @@ fn main() -> Result<()> {
             ab
         },
         terminal_scroll_offset: 0,
+        toasts: ToastManager::new(),
     };
+
+    // Show a welcome toast.
+    state.toasts.show(
+        format!("Skin: {}", state.skin.manifest.name),
+        ToastLevel::Info,
+        state.active_theme.toast_ttl,
+    );
 
     // Load radio stations from VFS.
     state
@@ -211,7 +228,8 @@ fn main() -> Result<()> {
 
     // -- Mouse cursor: generate procedural arrow and load as texture --
     {
-        let (cursor_pixels, cw, ch) = cursor::generate_cursor_pixels();
+        let (cursor_pixels, cw, ch) =
+            cursor::generate_cursor_pixels(state.active_theme.cursor_scale);
         let cursor_tex = backend.load_texture(cw, ch, &cursor_pixels)?;
         // Set texture on the cursor SDI object after first update_sdi creates it.
         state.mouse_cursor.update_sdi(&mut sdi);
@@ -410,7 +428,7 @@ fn main() -> Result<()> {
                     } else if let Some((_, runner)) =
                         state.open_runners.iter().find(|(id, _)| id == window_id)
                     {
-                        runner.draw_windowed(cx, cy, cw, ch, be)
+                        runner.draw_windowed(cx, cy, cw, ch, be, &state.active_theme)
                     } else {
                         Ok(())
                     }
@@ -425,6 +443,7 @@ fn main() -> Result<()> {
                 &mut backend,
                 state.output_lines.len(),
                 state.terminal_scroll_offset,
+                &state.active_theme,
             )?;
         }
 

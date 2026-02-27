@@ -2,6 +2,7 @@ use oasis_core::apps::AppRunner;
 use oasis_core::bottombar::{BottomBar, MediaTab};
 use oasis_core::sdi::SdiRegistry;
 use oasis_core::statusbar::StatusBar;
+use oasis_core::toast::ToastManager;
 
 use crate::app_state::{AppState, Mode};
 use oasis_core::terminal_sdi;
@@ -12,6 +13,12 @@ use oasis_core::terminal_sdi;
 /// each frame. The actual rendering (`backend.clear`, `sdi.draw`, etc.)
 /// remains in main.rs since it requires `&mut backend`.
 pub fn update_sdi(state: &mut AppState, sdi: &mut SdiRegistry) {
+    // Advance animations each frame.
+    state.dashboard.tick_animation();
+    state.start_menu.tick_animation();
+    state.bottom_bar.tick_animation(&state.active_theme);
+    state.toasts.tick();
+
     match state.mode {
         Mode::Dashboard => {
             terminal_sdi::set_terminal_visible(sdi, false);
@@ -19,9 +26,10 @@ pub fn update_sdi(state: &mut AppState, sdi: &mut SdiRegistry) {
 
             if state.bottom_bar.active_tab == MediaTab::None {
                 state.dashboard.update_sdi(sdi, &state.active_theme);
+                terminal_sdi::hide_media_page(sdi);
             } else {
                 state.dashboard.hide_sdi(sdi);
-                terminal_sdi::update_media_page(sdi, &state.bottom_bar);
+                terminal_sdi::update_media_page(sdi, &state.bottom_bar, &state.active_theme);
             }
 
             state
@@ -42,12 +50,17 @@ pub fn update_sdi(state: &mut AppState, sdi: &mut SdiRegistry) {
             state.start_menu.close();
             state.start_menu.hide_sdi(sdi);
             terminal_sdi::hide_media_page(sdi);
+            let cursor_visible = state.active_theme.terminal_cursor_blink_rate == 0
+                || (state.frame_counter / state.active_theme.terminal_cursor_blink_rate as u64)
+                    .is_multiple_of(2);
             terminal_sdi::setup_terminal_objects(
                 sdi,
                 &state.output_lines,
                 &state.cwd,
                 &state.input_buf,
                 state.terminal_scroll_offset,
+                &state.active_theme,
+                cursor_visible,
             );
         },
         Mode::App => {
@@ -62,8 +75,8 @@ pub fn update_sdi(state: &mut AppState, sdi: &mut SdiRegistry) {
             state
                 .bottom_bar
                 .update_sdi(sdi, &state.active_theme, &state.skin.features);
-            if let Some(ref runner) = state.app_runner {
-                runner.update_sdi(sdi);
+            if let Some(ref mut runner) = state.app_runner {
+                runner.update_sdi(sdi, &state.active_theme);
             }
         },
         Mode::Desktop => {
@@ -81,9 +94,20 @@ pub fn update_sdi(state: &mut AppState, sdi: &mut SdiRegistry) {
                 .update_sdi(sdi, &state.active_theme, &state.skin.features);
         },
         Mode::Osk => {
-            if let Some(ref osk_state) = state.osk {
-                osk_state.update_sdi(sdi);
+            if let Some(ref mut osk_state) = state.osk {
+                osk_state.tick_animation();
+                osk_state.update_sdi(sdi, &state.active_theme);
             }
+        },
+    }
+
+    // Update toast overlays (visible in Dashboard, App, Desktop modes).
+    match state.mode {
+        Mode::Dashboard | Mode::App | Mode::Desktop => {
+            state.toasts.update_sdi(sdi, &state.active_theme);
+        },
+        _ => {
+            ToastManager::hide_sdi(sdi);
         },
     }
 

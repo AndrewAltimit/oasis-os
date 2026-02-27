@@ -75,6 +75,14 @@ pub struct SkinTheme {
     #[serde(default)]
     pub browser_overrides: Option<BrowserOverrides>,
 
+    /// Per-element color overrides for app screens.
+    #[serde(default)]
+    pub app_overrides: Option<AppOverrides>,
+
+    /// Per-element color overrides for the on-screen keyboard.
+    #[serde(default)]
+    pub osk_overrides: Option<OskOverrides>,
+
     /// Per-element color overrides for the start menu popup.
     #[serde(default)]
     pub start_menu_overrides: Option<StartMenuOverrides>,
@@ -86,6 +94,14 @@ pub struct SkinTheme {
     /// Geometry overrides (bar heights, icon sizes, font sizes).
     #[serde(default)]
     pub geometry: Option<GeometryOverrides>,
+
+    /// Transition effect overrides.
+    #[serde(default)]
+    pub transition: Option<TransitionOverrides>,
+
+    /// Per-element overrides for scrollbar appearance.
+    #[serde(default)]
+    pub scrollbar_overrides: Option<ScrollbarOverrides>,
 }
 
 /// Optional overrides for the window manager theme.
@@ -166,6 +182,11 @@ pub struct WmThemeOverrides {
     pub maximize_top_inset: Option<u32>,
     #[serde(default)]
     pub maximize_bottom_inset: Option<u32>,
+    #[serde(default)]
+    pub modal_overlay_color: Option<String>,
+    /// Alpha applied to inactive window frames (default 180).
+    #[serde(default)]
+    pub inactive_frame_alpha: Option<u8>,
 }
 
 /// Per-element overrides for status bar and bottom bar colors.
@@ -193,6 +214,21 @@ pub struct BarOverrides {
     pub statusbar_gradient_bottom: Option<String>,
     pub bar_gradient_top: Option<String>,
     pub bar_gradient_bottom: Option<String>,
+    /// Whether text shadow is enabled on bar text elements.
+    #[serde(default)]
+    pub text_shadow: Option<bool>,
+    /// Text shadow color (hex, default: "#00000080").
+    #[serde(default)]
+    pub text_shadow_color: Option<String>,
+    /// Version label text (default: "Version 0.1").
+    #[serde(default)]
+    pub version_text: Option<String>,
+    /// Category label text (default: "OSS").
+    #[serde(default)]
+    pub category_label: Option<String>,
+    /// URL text for bottom bar (default: "HTTP://OASIS.LOCAL").
+    #[serde(default)]
+    pub url_text: Option<String>,
 }
 
 /// Per-element overrides for dashboard icon rendering.
@@ -218,7 +254,8 @@ pub struct IconOverrides {
 /// Wallpaper generation configuration.
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct WallpaperConfig {
-    /// Style: "gradient" (default), "solid", or "none".
+    /// Style: "gradient" (default), "solid", "none", "grid", "noise",
+    /// "scanlines", or "dots".
     pub style: Option<String>,
     /// Hex color stops for gradient wallpaper.
     pub color_stops: Option<Vec<String>>,
@@ -228,6 +265,14 @@ pub struct WallpaperConfig {
     pub wave_intensity: Option<f32>,
     /// Gradient angle in degrees: 0=horizontal, 90=vertical (default 0).
     pub angle: Option<f32>,
+    /// Grid/dot spacing in pixels (default 16).
+    pub grid_spacing: Option<u32>,
+    /// Hex color for grid lines/dots (default: lighten(bg, 0.08)).
+    pub grid_color: Option<String>,
+    /// Noise intensity 0.0-1.0 for "noise" style (default 0.3).
+    pub noise_intensity: Option<f32>,
+    /// Whether the wallpaper should animate (default false).
+    pub animated: Option<bool>,
 }
 
 /// Geometry overrides for bar heights, icon sizes, and font sizes.
@@ -239,6 +284,102 @@ pub struct GeometryOverrides {
     pub icon_width: Option<u32>,
     pub icon_height: Option<u32>,
     pub font_small: Option<u16>,
+    /// Dashboard grid horizontal padding (default 16).
+    #[serde(default)]
+    pub grid_padding_x: Option<u16>,
+    /// Dashboard grid vertical padding (default 6).
+    #[serde(default)]
+    pub grid_padding_y: Option<u16>,
+    /// Shadow level for dashboard icons (default 1).
+    #[serde(default)]
+    pub icon_shadow_level: Option<u8>,
+    /// Terminal background border radius (default 4).
+    #[serde(default)]
+    pub terminal_border_radius: Option<u16>,
+    /// Scrollbar width in pixels (default 6).
+    #[serde(default)]
+    pub scrollbar_width: Option<u32>,
+    /// Scrollbar corner radius (default 3).
+    #[serde(default)]
+    pub scrollbar_border_radius: Option<u16>,
+    /// Terminal line height in pixels (default 16).
+    #[serde(default)]
+    pub terminal_line_height: Option<u32>,
+    /// Top tab width (default: proportional to screen).
+    #[serde(default)]
+    pub tab_w: Option<u32>,
+    /// Top tab height (default: proportional to screen).
+    #[serde(default)]
+    pub tab_h: Option<u32>,
+    /// Gap between top tabs (default: proportional to screen).
+    #[serde(default)]
+    pub tab_gap: Option<u32>,
+    /// X offset where top tabs start (default: proportional to screen).
+    #[serde(default)]
+    pub tab_start_x: Option<i32>,
+    /// Body text font size (default 12).
+    #[serde(default)]
+    pub font_body: Option<u16>,
+    /// Hint/metadata font size (default 10).
+    #[serde(default)]
+    pub font_hint: Option<u16>,
+    /// Heading font size (default 14).
+    #[serde(default)]
+    pub font_heading: Option<u16>,
+    /// Terminal cursor blink rate in frames (default 30; 0 = no blink).
+    #[serde(default)]
+    pub cursor_blink_rate: Option<u32>,
+    /// Cursor lerp speed (0.0-1.0, default 0.18).
+    #[serde(default)]
+    pub cursor_lerp_speed: Option<f32>,
+    /// Page slide animation duration in frames (default 12).
+    #[serde(default)]
+    pub page_slide_duration: Option<u32>,
+    /// Start menu open/close animation speed (default 0.15).
+    #[serde(default)]
+    pub start_menu_anim_speed: Option<f32>,
+    /// Toast fade in/out duration in frames (default 10).
+    #[serde(default)]
+    pub toast_fade_frames: Option<u32>,
+    /// Press flash duration in frames (default 6; 0 = disabled).
+    #[serde(default)]
+    pub press_flash_duration: Option<u32>,
+    /// Focus ring color (hex, default: derived from primary).
+    #[serde(default)]
+    pub focus_ring_color: Option<String>,
+    /// Focus ring stroke width in pixels (default 2).
+    #[serde(default)]
+    pub focus_ring_width: Option<u16>,
+    /// Focus ring offset from element edge in pixels (default 2).
+    #[serde(default)]
+    pub focus_ring_offset: Option<i32>,
+    /// Cursor highlight padding around icon (default 3).
+    #[serde(default)]
+    pub cursor_pad: Option<i32>,
+    /// Press flash lighten factor 0.0-1.0 (default 0.25).
+    #[serde(default)]
+    pub press_flash_lighten: Option<f32>,
+    /// App selection lerp speed 0.0-1.0 (default 0.25).
+    #[serde(default)]
+    pub app_selection_lerp_speed: Option<f32>,
+    /// Page dot lerp speed 0.0-1.0 (default 0.2).
+    #[serde(default)]
+    pub page_dot_lerp_speed: Option<f32>,
+    /// Toast margin from screen edge in pixels (default 8).
+    #[serde(default)]
+    pub toast_margin: Option<i32>,
+    /// Toast height in pixels (default 24).
+    #[serde(default)]
+    pub toast_height: Option<u32>,
+    /// Toast width as fraction of screen width (default 0.333).
+    #[serde(default)]
+    pub toast_width_fraction: Option<f32>,
+    /// Gap between stacked toasts in pixels (default 4).
+    #[serde(default)]
+    pub toast_gap: Option<i32>,
+    /// Whether toasts slide in from the right (default true).
+    #[serde(default)]
+    pub toast_slide_in: Option<bool>,
 }
 
 /// Per-element overrides for the start menu popup and button.
@@ -298,6 +439,108 @@ pub struct StartMenuOverrides {
     pub button_gradient_top: Option<String>,
     #[serde(default)]
     pub button_gradient_bottom: Option<String>,
+    /// Hex color array for category icon placeholders (default: derived from primary).
+    #[serde(default)]
+    pub item_colors: Option<Vec<String>>,
+    /// Footer text (default: "Log Off  Shut Down").
+    #[serde(default)]
+    pub footer_text: Option<String>,
+    /// Inner padding for the menu panel (default 8).
+    #[serde(default)]
+    pub pad_inner: Option<i32>,
+    /// Start button X position on the bottom bar (default 4).
+    #[serde(default)]
+    pub button_x: Option<i32>,
+    /// Menu panel X position (default 2).
+    #[serde(default)]
+    pub panel_x: Option<i32>,
+    /// Whether item separators are drawn between rows (default false).
+    #[serde(default)]
+    pub item_separator: Option<bool>,
+    /// Item separator color (hex, default: derived from panel border).
+    #[serde(default)]
+    pub item_separator_color: Option<String>,
+}
+
+/// Per-element color overrides for app screens (File Manager, Photo Viewer, etc.).
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct AppOverrides {
+    /// App screen background color.
+    pub app_bg: Option<String>,
+    /// Divider/separator line color.
+    pub divider_color: Option<String>,
+    /// Selected/highlighted text color.
+    pub selected_text: Option<String>,
+    /// Normal content text color.
+    pub text_color: Option<String>,
+    /// Dimmed hint text color.
+    pub dim_text: Option<String>,
+    /// Title bar background color.
+    pub title_bar_bg: Option<String>,
+    /// Terminal output text color (overrides skin.output).
+    #[serde(default)]
+    pub terminal_output_color: Option<String>,
+    /// Terminal prompt text color (overrides skin.prompt).
+    #[serde(default)]
+    pub terminal_prompt_color: Option<String>,
+    /// Input bar border radius (overrides terminal_border_radius).
+    #[serde(default)]
+    pub input_border_radius: Option<u16>,
+    /// Title bar text color.
+    #[serde(default)]
+    pub title_bar_text: Option<String>,
+    /// Title bar height in pixels.
+    #[serde(default)]
+    pub title_bar_height: Option<u32>,
+    /// Selection highlight border radius (default 2).
+    #[serde(default)]
+    pub selection_border_radius: Option<u16>,
+    /// Selection left-accent color (hex, default: with_alpha(primary, 128)).
+    #[serde(default)]
+    pub selection_accent_color: Option<String>,
+    /// Title bar gradient top color (hex).
+    #[serde(default)]
+    pub title_bar_gradient_top: Option<String>,
+    /// Title bar gradient bottom color (hex).
+    #[serde(default)]
+    pub title_bar_gradient_bottom: Option<String>,
+    /// Whether text shadow is enabled on app title bar text.
+    #[serde(default)]
+    pub title_bar_text_shadow: Option<bool>,
+    /// App title bar text shadow color (hex, default: "#00000080").
+    #[serde(default)]
+    pub title_bar_text_shadow_color: Option<String>,
+}
+
+/// Per-element color overrides for the on-screen keyboard.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct OskOverrides {
+    /// Key background color.
+    pub key_bg: Option<String>,
+    /// Key text color.
+    pub key_text: Option<String>,
+    /// Focused key highlight color.
+    pub key_focus: Option<String>,
+    /// Active (selected) key background color.
+    pub key_active: Option<String>,
+    /// Inactive/secondary text color (mode indicator, buffer).
+    pub key_dim_text: Option<String>,
+}
+
+/// Overrides for transition effects.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct TransitionOverrides {
+    /// Fade overlay color (hex). Default: derived from background.
+    pub fade_color: Option<String>,
+}
+
+/// Per-element overrides for scrollbar appearance.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct ScrollbarOverrides {
+    pub track_color: Option<String>,
+    pub thumb_color: Option<String>,
+    pub thumb_hover_color: Option<String>,
+    pub width: Option<u32>,
 }
 
 /// Per-element overrides for browser chrome colors.
@@ -362,9 +605,13 @@ impl Default for SkinTheme {
             bar_overrides: None,
             icon_overrides: None,
             browser_overrides: None,
+            app_overrides: None,
+            osk_overrides: None,
             start_menu_overrides: None,
             wallpaper: None,
             geometry: None,
+            transition: None,
+            scrollbar_overrides: None,
         }
     }
 }
@@ -686,6 +933,14 @@ impl SkinTheme {
             }
             if let Some(v) = ov.maximize_bottom_inset {
                 theme.maximize_bottom_inset = v;
+            }
+            if let Some(ref c) = ov.modal_overlay_color
+                && let Some(parsed) = parse_hex_color(c)
+            {
+                theme.modal_overlay_color = parsed;
+            }
+            if let Some(a) = ov.inactive_frame_alpha {
+                theme.inactive_frame_alpha = a;
             }
         }
         // Default glyph colors to titlebar_text_color if not explicitly set.

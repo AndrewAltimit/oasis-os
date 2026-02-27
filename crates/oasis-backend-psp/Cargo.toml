@@ -43,7 +43,7 @@ kernel-me = ["psp/kernel"]
 
 [dependencies]
 # Pinned to specific commit for reproducible builds.
-psp = { git = "https://github.com/AndrewAltimit/rust-psp", rev = "4c47345", features = ["std"] }
+psp = { git = "https://github.com/AndrewAltimit/rust-psp", rev = "d6e53a1", features = ["std"] }
 oasis-core = { path = "../oasis-core" }
 libm = "0.2"
 

@@ -6,7 +6,7 @@
 //! skins to actually drive the UI appearance.
 
 use oasis_types::backend::Color;
-use oasis_types::color::{lighten, with_alpha};
+use oasis_types::color::{darken, lighten, with_alpha};
 
 use crate::SkinTheme;
 use crate::theme::parse_hex_color;
@@ -161,6 +161,61 @@ pub struct ActiveTheme {
     /// Cursor style variant: "stroke" (default), "fill", or "underline".
     pub cursor_style: String,
 
+    // -- App screen colors --
+    /// App screen background color.
+    pub app_bg: Color,
+    /// App screen divider/separator color.
+    pub app_divider: Color,
+    /// App screen selected text color.
+    pub app_selected_text: Color,
+    /// App screen normal text color.
+    pub app_text: Color,
+    /// App screen dim/hint text color.
+    pub app_dim_text: Color,
+    /// App screen title bar background color.
+    pub app_title_bar_bg: Color,
+    /// App screen title bar text color.
+    pub app_title_bar_text: Color,
+    /// App screen title bar height.
+    pub app_title_bar_height: u32,
+    /// Terminal output text color.
+    pub terminal_output_color: Color,
+    /// Terminal prompt text color.
+    pub terminal_prompt_color: Color,
+    /// Input bar border radius.
+    pub input_border_radius: u16,
+    /// App screen selected row background color.
+    pub app_selected_bg: Color,
+
+    /// Clear/background color for the frame.
+    pub clear_color: Color,
+
+    // -- OSK colors --
+    /// OSK key background color.
+    pub osk_key_bg: Color,
+    /// OSK key text color.
+    pub osk_key_text: Color,
+    /// OSK focused key highlight color.
+    pub osk_key_focus: Color,
+    /// OSK active key background color.
+    pub osk_key_active: Color,
+    /// OSK dim text color (mode indicator, buffer display).
+    pub osk_key_dim_text: Color,
+
+    // -- Dashboard geometry --
+    /// Dashboard grid horizontal padding (default 16).
+    pub grid_padding_x: u16,
+    /// Dashboard grid vertical padding (default 6).
+    pub grid_padding_y: u16,
+    /// Dashboard icon shadow level (default 1).
+    pub icon_shadow_level: u8,
+    /// Terminal background border radius (default 4).
+    pub terminal_border_radius: u16,
+
+    // -- Start menu item palette --
+    /// Start menu item icon colors (6 colors derived from primary).
+    pub sm_item_colors: Vec<Color>,
+
     // -- Geometry overrides --
     /// Status bar height (default 24).
     pub statusbar_height: u32,
@@ -199,6 +254,16 @@ pub struct ActiveTheme {
     /// Gap between icon bottom and label text (base 4 at 480px).
     pub icon_label_pad: i32,
 
+    // -- Geometry overrides (raw, applied after scaling in with_screen_size) --
+    /// Explicit tab width override (None = auto-scaled).
+    tab_w_override: Option<i32>,
+    /// Explicit tab height override (None = auto-scaled).
+    tab_h_override: Option<i32>,
+    /// Explicit tab gap override (None = auto-scaled).
+    tab_gap_override: Option<i32>,
+    /// Explicit tab start X override (None = auto-scaled).
+    tab_start_x_override: Option<i32>,
+
     // -- Screen dimensions --
     /// Screen width (default 480, PSP native).
     pub screen_w: u32,
@@ -216,6 +281,168 @@ pub struct ActiveTheme {
     pub wallpaper_wave_intensity: f32,
     /// Gradient angle in degrees.
     pub wallpaper_angle: f32,
+    /// Grid/dot spacing for pattern wallpapers (default 16).
+    pub wallpaper_grid_spacing: u32,
+    /// Grid/dot line color.
+    pub wallpaper_grid_color: Color,
+    /// Noise intensity for "noise" wallpaper (default 0.3).
+    pub wallpaper_noise_intensity: f32,
+    /// Whether the wallpaper animates (wave phase shift).
+    pub wallpaper_animated: bool,
+
+    // -- Scrollbar --
+    /// Scrollbar track color.
+    pub scrollbar_track_color: Color,
+    /// Scrollbar thumb color.
+    pub scrollbar_thumb_color: Color,
+    /// Scrollbar thumb hover color.
+    pub scrollbar_thumb_hover_color: Color,
+    /// Scrollbar width in pixels.
+    pub scrollbar_width: u32,
+    /// Scrollbar corner radius.
+    pub scrollbar_border_radius: u16,
+
+    // -- Terminal --
+    /// Terminal line height in pixels.
+    pub terminal_line_height: u32,
+
+    // -- Cursor --
+    /// Cursor scale factor (1 at <1920px, 2 at 1920px+).
+    pub cursor_scale: u32,
+
+    // -- Transition --
+    /// Transition fade overlay color (default: black).
+    pub transition_fade_color: Color,
+
+    // -- Focus ring --
+    /// Focus ring/outline color for highlighted elements.
+    pub focus_ring_color: Color,
+    /// Focus ring stroke width (pixels).
+    pub focus_ring_width: u16,
+    /// Focus ring offset from element edge (pixels).
+    pub focus_ring_offset: i32,
+
+    // -- Configurable strings --
+    /// Version label text for status bar.
+    pub bar_version_text: String,
+    /// Category label text for status bar.
+    pub bar_category_label: String,
+    /// URL text for bottom bar.
+    pub bar_url_text: String,
+    /// Start menu footer text.
+    pub sm_footer_text: String,
+
+    // -- Tab pill stroke colors --
+    /// Active tab pill stroke color.
+    pub tab_active_stroke: Color,
+    /// Inactive tab pill stroke color.
+    pub tab_inactive_stroke: Color,
+
+    // -- Font sizes --
+    /// Body text font size (terminal lines, app content).
+    pub font_body: u16,
+    /// Hint/metadata font size (scroll indicators, metadata).
+    pub font_hint: u16,
+    /// Heading font size (section headings, media page title).
+    pub font_heading: u16,
+
+    // -- Terminal cursor blink --
+    /// Cursor blink rate in frames (0 = no blink, 30 = ~0.5s at 60fps).
+    pub terminal_cursor_blink_rate: u32,
+
+    // -- Start menu inner padding --
+    /// Inner padding for start menu panel.
+    pub sm_pad_inner: i32,
+
+    // -- Selection highlight --
+    /// Selection highlight border radius.
+    pub app_selection_border_radius: u16,
+    /// Selection left-accent bar color.
+    pub app_selection_accent_color: Color,
+
+    // -- Toast notification theme --
+    /// Toast info background color.
+    pub toast_info_bg: Color,
+    /// Toast success background color.
+    pub toast_success_bg: Color,
+    /// Toast error background color.
+    pub toast_error_bg: Color,
+    /// Toast warning background color.
+    pub toast_warning_bg: Color,
+    /// Toast text color.
+    pub toast_text_color: Color,
+    /// Toast border radius.
+    pub toast_border_radius: u16,
+    /// Toast time-to-live in frames.
+    pub toast_ttl: u32,
+
+    // -- Bar text shadows --
+    /// Whether bar text elements have drop shadows.
+    pub bar_text_shadow: bool,
+    /// Bar text shadow color.
+    pub bar_text_shadow_color: Color,
+    /// Whether toast text has drop shadows.
+    pub toast_text_shadow: bool,
+
+    // -- Title bar gradients --
+    /// App title bar gradient top color (None = flat fill).
+    pub app_title_bar_gradient_top: Option<Color>,
+    /// App title bar gradient bottom color.
+    pub app_title_bar_gradient_bottom: Option<Color>,
+
+    // -- Visual depth --
+    /// Toast notification shadow level.
+    pub toast_shadow_level: u8,
+
+    // -- Animation durations --
+    /// Cursor lerp speed (0.0-1.0, default 0.18).
+    pub cursor_lerp_speed: f32,
+    /// Page slide animation duration in frames (default 12).
+    pub page_slide_duration: u32,
+    /// Start menu open/close animation speed (default 0.15).
+    pub start_menu_anim_speed: f32,
+    /// Toast fade in/out duration in frames (default 10).
+    pub toast_fade_frames: u32,
+    /// Press flash duration in frames (default 6).
+    pub press_flash_duration: u32,
+
+    // -- Phase 6A: exposed hardcoded values --
+    /// Cursor highlight padding around icon (default 3).
+    pub cursor_pad: i32,
+    /// Press flash lighten factor 0.0-1.0 (default 0.25).
+    pub press_flash_lighten: f32,
+    /// App selection lerp speed 0.0-1.0 (default 0.25).
+    pub app_selection_lerp_speed: f32,
+    /// Start button X position on the bottom bar (default 4).
+    pub sm_button_x: i32,
+    /// Menu panel X position (default 2).
+    pub sm_panel_x: i32,
+    /// Whether text shadow is enabled on app title bar text.
+    pub app_title_bar_text_shadow: bool,
+    /// App title bar text shadow color.
+    pub app_title_bar_text_shadow_color: Color,
+    /// Page dot lerp speed 0.0-1.0 (default 0.2).
+    pub page_dot_lerp_speed: f32,
+    /// Toast margin from screen edge (default 8).
+    pub toast_margin: i32,
+    /// Toast height in pixels (default 24).
+    pub toast_height: u32,
+    /// Toast width as fraction of screen width (default 0.333).
+    pub toast_width_fraction: f32,
+    /// Gap between stacked toasts (default 4).
+    pub toast_gap: i32,
+    /// Whether toasts slide in from the right (default true).
+    pub toast_slide_in: bool,
+    /// Whether item separators are drawn between start menu rows.
+    pub sm_item_separator: bool,
+    /// Item separator color.
+    pub sm_item_separator_color: Color,
+
+    // -- UI toolkit theme --
+    /// Unified UI theme derived from the skin palette.
+    ///
+    /// Callers should use this instead of `oasis_ui::theme::Theme::dark()` etc.
+    pub ui_theme: oasis_ui::theme::Theme,
 }
 
 impl Default for ActiveTheme {
@@ -275,6 +502,36 @@ impl Default for ActiveTheme {
             sm_footer_height: 0,
             sm_item_icon_size: 14,
             sm_item_row_height: 22,
+            app_bg: Color::rgb(12, 12, 20),
+            app_divider: Color::rgb(60, 60, 80),
+            app_selected_text: Color::rgb(100, 200, 255),
+            app_text: Color::rgb(180, 180, 200),
+            app_dim_text: Color::rgb(100, 100, 130),
+            app_title_bar_bg: Color::rgb(30, 50, 90),
+            app_title_bar_text: Color::WHITE,
+            app_title_bar_height: 22,
+            terminal_output_color: Color::rgb(204, 204, 204),
+            terminal_prompt_color: Color::rgb(0, 255, 0),
+            input_border_radius: 3,
+            app_selected_bg: Color::rgba(50, 100, 200, 40),
+            clear_color: Color::rgb(10, 10, 18),
+            osk_key_bg: Color::rgba(20, 20, 40, 220),
+            osk_key_text: Color::WHITE,
+            osk_key_focus: Color::rgb(100, 200, 255),
+            osk_key_active: Color::rgb(60, 100, 180),
+            osk_key_dim_text: Color::rgb(150, 150, 180),
+            grid_padding_x: 16,
+            grid_padding_y: 6,
+            icon_shadow_level: 1,
+            terminal_border_radius: 4,
+            sm_item_colors: vec![
+                Color::rgb(70, 130, 180),
+                Color::rgb(60, 179, 113),
+                Color::rgb(218, 165, 32),
+                Color::rgb(186, 85, 211),
+                Color::rgb(100, 149, 237),
+                Color::rgb(205, 92, 92),
+            ],
             icon_body_color: Color::rgb(250, 250, 248),
             icon_fold_color: Color::rgb(210, 210, 205),
             icon_outline_color: Color::rgba(255, 255, 255, 180),
@@ -304,6 +561,10 @@ impl Default for ActiveTheme {
             icon_gfx_h: 22,
             icon_gfx_pad: 4,
             icon_label_pad: 4,
+            tab_w_override: None,
+            tab_h_override: None,
+            tab_gap_override: None,
+            tab_start_x_override: None,
             screen_w: 480,
             screen_h: 272,
             wallpaper_style: "gradient".to_string(),
@@ -317,6 +578,68 @@ impl Default for ActiveTheme {
             wallpaper_wave: true,
             wallpaper_wave_intensity: 1.0,
             wallpaper_angle: 0.0,
+            wallpaper_grid_spacing: 16,
+            wallpaper_grid_color: Color::rgba(255, 255, 255, 20),
+            wallpaper_noise_intensity: 0.3,
+            wallpaper_animated: false,
+            scrollbar_track_color: Color::rgba(255, 255, 255, 20),
+            scrollbar_thumb_color: Color::rgba(255, 255, 255, 100),
+            scrollbar_thumb_hover_color: Color::rgba(255, 255, 255, 160),
+            scrollbar_width: 6,
+            scrollbar_border_radius: 3,
+            terminal_line_height: 16,
+            cursor_scale: 1,
+            transition_fade_color: Color::BLACK,
+            focus_ring_color: Color::rgba(100, 200, 255, 180),
+            focus_ring_width: 2,
+            focus_ring_offset: 2,
+            bar_version_text: "Version 0.1".to_string(),
+            bar_category_label: "OSS".to_string(),
+            bar_url_text: String::new(),
+            sm_footer_text: "Log Off  Shut Down".to_string(),
+            tab_active_stroke: Color::rgba(255, 255, 255, 180),
+            tab_inactive_stroke: Color::rgba(255, 255, 255, 60),
+            font_body: 12,
+            font_hint: 10,
+            font_heading: 14,
+            terminal_cursor_blink_rate: 30,
+            sm_pad_inner: 8,
+            app_selection_border_radius: 2,
+            app_selection_accent_color: Color::rgba(50, 100, 200, 128),
+            toast_info_bg: Color::rgba(50, 100, 200, 220),
+            toast_success_bg: Color::rgba(60, 180, 100, 220),
+            toast_error_bg: Color::rgba(255, 68, 68, 220),
+            toast_warning_bg: Color::rgba(230, 170, 40, 220),
+            toast_text_color: Color::WHITE,
+            toast_border_radius: 4,
+            toast_ttl: 180,
+            bar_text_shadow: false,
+            bar_text_shadow_color: Color::rgba(0, 0, 0, 128),
+            toast_text_shadow: false,
+            app_title_bar_gradient_top: None,
+            app_title_bar_gradient_bottom: None,
+            toast_shadow_level: 1,
+            cursor_lerp_speed: 0.35,
+            page_slide_duration: 6,
+            start_menu_anim_speed: 0.25,
+            toast_fade_frames: 10,
+            press_flash_duration: 6,
+            cursor_pad: 3,
+            press_flash_lighten: 0.25,
+            app_selection_lerp_speed: 0.25,
+            sm_button_x: 4,
+            sm_panel_x: 2,
+            app_title_bar_text_shadow: false,
+            app_title_bar_text_shadow_color: Color::rgba(0, 0, 0, 128),
+            page_dot_lerp_speed: 0.2,
+            toast_margin: 8,
+            toast_height: 24,
+            toast_width_fraction: 0.333,
+            toast_gap: 4,
+            toast_slide_in: true,
+            sm_item_separator: false,
+            sm_item_separator_color: Color::rgba(255, 255, 255, 40),
+            ui_theme: oasis_ui::theme::Theme::dark(),
         }
     }
 }
@@ -458,6 +781,134 @@ impl ActiveTheme {
             sm_footer_height: sm.and_then(|s| s.footer_height).unwrap_or(0),
             sm_item_icon_size: sm.and_then(|s| s.item_icon_size).unwrap_or(14),
             sm_item_row_height: sm.and_then(|s| s.item_row_height).unwrap_or(22).max(1),
+            // App screen colors: derive from skin background/primary/text.
+            app_bg: {
+                let ap = skin.app_overrides.as_ref();
+                ov(
+                    ap.and_then(|a| a.app_bg.as_ref()),
+                    lighten(skin.background_color(), 0.02),
+                )
+            },
+            app_divider: {
+                let ap = skin.app_overrides.as_ref();
+                ov(
+                    ap.and_then(|a| a.divider_color.as_ref()),
+                    lighten(skin.background_color(), 0.15),
+                )
+            },
+            app_selected_text: {
+                let ap = skin.app_overrides.as_ref();
+                ov(
+                    ap.and_then(|a| a.selected_text.as_ref()),
+                    lighten(primary, 0.3),
+                )
+            },
+            app_text: {
+                let ap = skin.app_overrides.as_ref();
+                ov(ap.and_then(|a| a.text_color.as_ref()), lighten(dim, 0.2))
+            },
+            app_dim_text: {
+                let ap = skin.app_overrides.as_ref();
+                ov(ap.and_then(|a| a.dim_text.as_ref()), dim)
+            },
+            app_title_bar_bg: {
+                let ap = skin.app_overrides.as_ref();
+                ov(
+                    ap.and_then(|a| a.title_bar_bg.as_ref()),
+                    lighten(skin.background_color(), 0.08),
+                )
+            },
+            app_title_bar_text: {
+                let ap = skin.app_overrides.as_ref();
+                ov(ap.and_then(|a| a.title_bar_text.as_ref()), text)
+            },
+            app_title_bar_height: skin
+                .app_overrides
+                .as_ref()
+                .and_then(|a| a.title_bar_height)
+                .unwrap_or(22),
+            terminal_output_color: {
+                let ap = skin.app_overrides.as_ref();
+                ov(
+                    ap.and_then(|a| a.terminal_output_color.as_ref()),
+                    skin.output_color(),
+                )
+            },
+            terminal_prompt_color: {
+                let ap = skin.app_overrides.as_ref();
+                ov(
+                    ap.and_then(|a| a.terminal_prompt_color.as_ref()),
+                    skin.prompt_color(),
+                )
+            },
+            input_border_radius: skin
+                .app_overrides
+                .as_ref()
+                .and_then(|a| a.input_border_radius)
+                .unwrap_or_else(|| {
+                    skin.geometry
+                        .as_ref()
+                        .and_then(|g| g.terminal_border_radius)
+                        .unwrap_or(4)
+                }),
+            app_selected_bg: with_alpha(primary, 40),
+            clear_color: darken(skin.background_color(), 0.5),
+            // OSK colors: derive from skin background/primary/text.
+            osk_key_bg: {
+                let ok = skin.osk_overrides.as_ref();
+                ov(
+                    ok.and_then(|o| o.key_bg.as_ref()),
+                    with_alpha(lighten(skin.background_color(), 0.05), 220),
+                )
+            },
+            osk_key_text: {
+                let ok = skin.osk_overrides.as_ref();
+                ov(ok.and_then(|o| o.key_text.as_ref()), text)
+            },
+            osk_key_focus: {
+                let ok = skin.osk_overrides.as_ref();
+                ov(ok.and_then(|o| o.key_focus.as_ref()), lighten(primary, 0.3))
+            },
+            osk_key_active: {
+                let ok = skin.osk_overrides.as_ref();
+                ov(ok.and_then(|o| o.key_active.as_ref()), primary)
+            },
+            osk_key_dim_text: {
+                let ok = skin.osk_overrides.as_ref();
+                ov(ok.and_then(|o| o.key_dim_text.as_ref()), dim)
+            },
+            // Dashboard geometry.
+            grid_padding_x: skin
+                .geometry
+                .as_ref()
+                .and_then(|g| g.grid_padding_x)
+                .unwrap_or(16),
+            grid_padding_y: skin
+                .geometry
+                .as_ref()
+                .and_then(|g| g.grid_padding_y)
+                .unwrap_or(6),
+            icon_shadow_level: skin
+                .geometry
+                .as_ref()
+                .and_then(|g| g.icon_shadow_level)
+                .unwrap_or(1),
+            terminal_border_radius: skin
+                .geometry
+                .as_ref()
+                .and_then(|g| g.terminal_border_radius)
+                .unwrap_or(4),
+            // Start menu item colors.
+            sm_item_colors: sm
+                .and_then(|s| s.item_colors.as_ref())
+                .map(|colors| {
+                    colors
+                        .iter()
+                        .filter_map(|s| parse_hex_color(s))
+                        .collect::<Vec<_>>()
+                })
+                .filter(|v| !v.is_empty())
+                .unwrap_or_else(|| Self::derive_item_palette(primary)),
             icon_body_color: ov(ico.and_then(|i| i.body_color.as_ref()), text),
             icon_fold_color: ov(ico.and_then(|i| i.fold_color.as_ref()), dim),
             icon_outline_color: ov(
@@ -580,6 +1031,103 @@ impl ActiveTheme {
                 .and_then(|w| w.wave_intensity)
                 .unwrap_or(1.0),
             wallpaper_angle: skin.wallpaper.as_ref().and_then(|w| w.angle).unwrap_or(0.0),
+            wallpaper_grid_spacing: skin
+                .wallpaper
+                .as_ref()
+                .and_then(|w| w.grid_spacing)
+                .unwrap_or(16),
+            wallpaper_grid_color: skin
+                .wallpaper
+                .as_ref()
+                .and_then(|w| w.grid_color.as_ref())
+                .and_then(|s| parse_hex_color(s))
+                .unwrap_or_else(|| lighten(skin.background_color(), 0.08)),
+            wallpaper_noise_intensity: skin
+                .wallpaper
+                .as_ref()
+                .and_then(|w| w.noise_intensity)
+                .unwrap_or(0.3),
+            wallpaper_animated: skin
+                .wallpaper
+                .as_ref()
+                .and_then(|w| w.animated)
+                .unwrap_or(false),
+            scrollbar_track_color: {
+                let sb = skin.scrollbar_overrides.as_ref();
+                ov(
+                    sb.and_then(|s| s.track_color.as_ref()),
+                    with_alpha(secondary, 20),
+                )
+            },
+            scrollbar_thumb_color: {
+                let sb = skin.scrollbar_overrides.as_ref();
+                ov(
+                    sb.and_then(|s| s.thumb_color.as_ref()),
+                    with_alpha(secondary, 100),
+                )
+            },
+            scrollbar_thumb_hover_color: {
+                let sb = skin.scrollbar_overrides.as_ref();
+                ov(
+                    sb.and_then(|s| s.thumb_hover_color.as_ref()),
+                    with_alpha(secondary, 160),
+                )
+            },
+            scrollbar_width: skin
+                .scrollbar_overrides
+                .as_ref()
+                .and_then(|s| s.width)
+                .or_else(|| skin.geometry.as_ref().and_then(|g| g.scrollbar_width))
+                .unwrap_or(6),
+            scrollbar_border_radius: skin
+                .geometry
+                .as_ref()
+                .and_then(|g| g.scrollbar_border_radius)
+                .unwrap_or(3),
+            terminal_line_height: skin
+                .geometry
+                .as_ref()
+                .and_then(|g| g.terminal_line_height)
+                .unwrap_or(16),
+            cursor_scale: 1, // Set by with_screen_size()
+            focus_ring_color: skin
+                .geometry
+                .as_ref()
+                .and_then(|g| g.focus_ring_color.as_ref())
+                .and_then(|s| parse_hex_color(s))
+                .unwrap_or_else(|| with_alpha(primary, 180)),
+            focus_ring_width: skin
+                .geometry
+                .as_ref()
+                .and_then(|g| g.focus_ring_width)
+                .unwrap_or(2),
+            focus_ring_offset: skin
+                .geometry
+                .as_ref()
+                .and_then(|g| g.focus_ring_offset)
+                .unwrap_or(2),
+            transition_fade_color: skin
+                .transition
+                .as_ref()
+                .and_then(|t| t.fade_color.as_ref())
+                .and_then(|s| parse_hex_color(s))
+                .unwrap_or_else(|| darken(skin.background_color(), 0.3)),
+            tab_w_override: skin
+                .geometry
+                .as_ref()
+                .and_then(|g| g.tab_w)
+                .map(|v| v as i32),
+            tab_h_override: skin
+                .geometry
+                .as_ref()
+                .and_then(|g| g.tab_h)
+                .map(|v| v as i32),
+            tab_gap_override: skin
+                .geometry
+                .as_ref()
+                .and_then(|g| g.tab_gap)
+                .map(|v| v as i32),
+            tab_start_x_override: skin.geometry.as_ref().and_then(|g| g.tab_start_x),
             screen_w: 480,
             screen_h: 272,
             statusbar_gradient_top: Self::bar_gradient_pair(
@@ -610,6 +1158,203 @@ impl ActiveTheme {
                 status_bar_color,
             )
             .map(|(_, b)| b),
+            bar_version_text: bar
+                .and_then(|b| b.version_text.clone())
+                .unwrap_or_else(|| "Version 0.1".to_string()),
+            bar_category_label: bar
+                .and_then(|b| b.category_label.clone())
+                .unwrap_or_else(|| "OSS".to_string()),
+            bar_url_text: bar.and_then(|b| b.url_text.clone()).unwrap_or_default(),
+            sm_footer_text: sm
+                .and_then(|s| s.footer_text.clone())
+                .unwrap_or_else(|| "Log Off  Shut Down".to_string()),
+            tab_active_stroke: with_alpha(
+                text,
+                bar.and_then(|b| b.tab_active_alpha).unwrap_or(180),
+            ),
+            tab_inactive_stroke: with_alpha(
+                text,
+                bar.and_then(|b| b.tab_inactive_alpha).unwrap_or(60),
+            ),
+            font_body: skin
+                .geometry
+                .as_ref()
+                .and_then(|g| g.font_body)
+                .unwrap_or(12),
+            font_hint: skin
+                .geometry
+                .as_ref()
+                .and_then(|g| g.font_hint)
+                .unwrap_or(10),
+            font_heading: skin
+                .geometry
+                .as_ref()
+                .and_then(|g| g.font_heading)
+                .unwrap_or(14),
+            terminal_cursor_blink_rate: skin
+                .geometry
+                .as_ref()
+                .and_then(|g| g.cursor_blink_rate)
+                .unwrap_or(30),
+            sm_pad_inner: sm.and_then(|s| s.pad_inner).unwrap_or(8),
+            app_selection_border_radius: {
+                let ap = skin.app_overrides.as_ref();
+                ap.and_then(|a| a.selection_border_radius).unwrap_or(2)
+            },
+            app_selection_accent_color: {
+                let ap = skin.app_overrides.as_ref();
+                ov(
+                    ap.and_then(|a| a.selection_accent_color.as_ref()),
+                    with_alpha(primary, 128),
+                )
+            },
+            toast_info_bg: with_alpha(primary, 220),
+            toast_success_bg: Color::rgba(60, 180, 100, 220),
+            toast_error_bg: with_alpha(skin.error_color(), 220),
+            toast_warning_bg: Color::rgba(230, 170, 40, 220),
+            toast_text_color: text,
+            toast_border_radius: skin
+                .geometry
+                .as_ref()
+                .and_then(|g| g.terminal_border_radius)
+                .unwrap_or(4),
+            toast_ttl: 180,
+            // -- 5B: Bar text shadows --
+            bar_text_shadow: bar
+                .and_then(|b| b.text_shadow)
+                .unwrap_or(skin.gradient_enabled == Some(true)),
+            bar_text_shadow_color: ov(
+                bar.and_then(|b| b.text_shadow_color.as_ref()),
+                Color::rgba(0, 0, 0, 128),
+            ),
+            toast_text_shadow: skin.gradient_enabled == Some(true),
+            // -- 5C: Title bar gradients --
+            app_title_bar_gradient_top: {
+                let ap = skin.app_overrides.as_ref();
+                Self::bar_gradient_pair(
+                    skin,
+                    ap.and_then(|a| a.title_bar_gradient_top.as_ref()),
+                    ap.and_then(|a| a.title_bar_gradient_bottom.as_ref()),
+                    ov(
+                        ap.and_then(|a| a.title_bar_bg.as_ref()),
+                        darken(status_bar_color, 0.8),
+                    ),
+                )
+                .map(|(t, _)| t)
+            },
+            app_title_bar_gradient_bottom: {
+                let ap = skin.app_overrides.as_ref();
+                Self::bar_gradient_pair(
+                    skin,
+                    ap.and_then(|a| a.title_bar_gradient_top.as_ref()),
+                    ap.and_then(|a| a.title_bar_gradient_bottom.as_ref()),
+                    ov(
+                        ap.and_then(|a| a.title_bar_bg.as_ref()),
+                        darken(status_bar_color, 0.8),
+                    ),
+                )
+                .map(|(_, b)| b)
+            },
+            // -- 5D: Visual depth --
+            toast_shadow_level: 1,
+            // -- 5E: Animation durations --
+            cursor_lerp_speed: skin
+                .geometry
+                .as_ref()
+                .and_then(|g| g.cursor_lerp_speed)
+                .unwrap_or(0.35),
+            page_slide_duration: skin
+                .geometry
+                .as_ref()
+                .and_then(|g| g.page_slide_duration)
+                .unwrap_or(6),
+            start_menu_anim_speed: skin
+                .geometry
+                .as_ref()
+                .and_then(|g| g.start_menu_anim_speed)
+                .unwrap_or(0.25),
+            toast_fade_frames: skin
+                .geometry
+                .as_ref()
+                .and_then(|g| g.toast_fade_frames)
+                .unwrap_or(10),
+            press_flash_duration: skin
+                .geometry
+                .as_ref()
+                .and_then(|g| g.press_flash_duration)
+                .unwrap_or(6),
+            // -- Phase 6A: exposed hardcoded values --
+            cursor_pad: skin
+                .geometry
+                .as_ref()
+                .and_then(|g| g.cursor_pad)
+                .unwrap_or(3),
+            press_flash_lighten: skin
+                .geometry
+                .as_ref()
+                .and_then(|g| g.press_flash_lighten)
+                .unwrap_or(0.25),
+            app_selection_lerp_speed: skin
+                .geometry
+                .as_ref()
+                .and_then(|g| g.app_selection_lerp_speed)
+                .unwrap_or(0.25),
+            sm_button_x: sm.and_then(|s| s.button_x).unwrap_or(4),
+            sm_panel_x: sm.and_then(|s| s.panel_x).unwrap_or(2),
+            app_title_bar_text_shadow: {
+                let ap = skin.app_overrides.as_ref();
+                ap.and_then(|a| a.title_bar_text_shadow)
+                    .unwrap_or(skin.gradient_enabled == Some(true))
+            },
+            app_title_bar_text_shadow_color: {
+                let ap = skin.app_overrides.as_ref();
+                ov(
+                    ap.and_then(|a| a.title_bar_text_shadow_color.as_ref()),
+                    Color::rgba(0, 0, 0, 128),
+                )
+            },
+            page_dot_lerp_speed: skin
+                .geometry
+                .as_ref()
+                .and_then(|g| g.page_dot_lerp_speed)
+                .unwrap_or(0.2),
+            toast_margin: skin
+                .geometry
+                .as_ref()
+                .and_then(|g| g.toast_margin)
+                .unwrap_or(8),
+            toast_height: skin
+                .geometry
+                .as_ref()
+                .and_then(|g| g.toast_height)
+                .unwrap_or(24),
+            toast_width_fraction: skin
+                .geometry
+                .as_ref()
+                .and_then(|g| g.toast_width_fraction)
+                .unwrap_or(0.333),
+            toast_gap: skin
+                .geometry
+                .as_ref()
+                .and_then(|g| g.toast_gap)
+                .unwrap_or(4),
+            toast_slide_in: skin
+                .geometry
+                .as_ref()
+                .and_then(|g| g.toast_slide_in)
+                .unwrap_or(true),
+            sm_item_separator: sm.and_then(|s| s.item_separator).unwrap_or(false),
+            sm_item_separator_color: {
+                let border = ov(
+                    sm.and_then(|s| s.panel_border.as_ref()),
+                    with_alpha(text, 40),
+                );
+                ov(
+                    sm.and_then(|s| s.item_separator_color.as_ref()),
+                    with_alpha(border, 64),
+                )
+            },
+            ui_theme: skin.to_ui_theme(),
         }
     }
 
@@ -625,10 +1370,10 @@ impl ActiveTheme {
         let scale = |base: i32| -> i32 { (base * w as i32 + 240) / 480 };
         let scale_u = |base: u32| -> u32 { (base * w + 240) / 480 };
 
-        self.tab_w = scale(45);
-        self.tab_h = scale(16);
-        self.tab_gap = scale(4);
-        self.tab_start_x = scale(34);
+        self.tab_w = self.tab_w_override.unwrap_or_else(|| scale(45));
+        self.tab_h = self.tab_h_override.unwrap_or_else(|| scale(16));
+        self.tab_gap = self.tab_gap_override.unwrap_or_else(|| scale(4));
+        self.tab_start_x = self.tab_start_x_override.unwrap_or_else(|| scale(34));
         self.pipe_gap = scale(5);
         self.r_hint_w = scale(28);
         self.icon_stripe_h = scale_u(12);
@@ -636,6 +1381,9 @@ impl ActiveTheme {
         self.icon_gfx_h = scale_u(22);
         self.icon_gfx_pad = scale_u(4);
         self.icon_label_pad = scale(4);
+
+        // Resolution-aware cursor scaling.
+        self.cursor_scale = if w >= 1920 { 2 } else { 1 };
 
         self
     }
@@ -662,6 +1410,43 @@ impl ActiveTheme {
             return Some((lighten(base, 0.15), base));
         }
         None
+    }
+
+    /// Derive a 6-color palette from the primary color using hue-shifted offsets.
+    ///
+    /// The palette is: primary itself, a green-shifted variant, a warm variant,
+    /// a purple variant, a lighter variant, and a reddish variant.
+    fn derive_item_palette(primary: Color) -> Vec<Color> {
+        vec![
+            // Base primary (slightly desaturated).
+            primary,
+            // Green-shifted: reduce red, boost green.
+            Color::rgb(
+                primary.r.saturating_sub(20),
+                primary.g.saturating_add(40),
+                primary.b.saturating_sub(30),
+            ),
+            // Warm/gold: boost red+green, reduce blue.
+            Color::rgb(
+                primary.r.saturating_add(60),
+                primary.g.saturating_add(20),
+                primary.b.saturating_sub(60),
+            ),
+            // Purple-shifted: boost red+blue.
+            Color::rgb(
+                primary.r.saturating_add(30),
+                primary.g.saturating_sub(40),
+                primary.b.saturating_add(40),
+            ),
+            // Lighter variant.
+            lighten(primary, 0.2),
+            // Reddish variant.
+            Color::rgb(
+                primary.r.saturating_add(50),
+                primary.g.saturating_sub(30),
+                primary.b.saturating_sub(30),
+            ),
+        ]
     }
 }
 

@@ -35,6 +35,12 @@ pub struct DashboardConfig {
     pub grid_w: u32,
     /// Total grid area height (for `GridLayout::cell_rect`).
     pub grid_h: u32,
+    /// Cursor lerp speed (0.0-1.0).
+    pub cursor_lerp_speed: f32,
+    /// Page slide animation duration in frames.
+    pub page_slide_duration: u32,
+    /// Press flash duration in frames (0 = disabled).
+    pub press_flash_duration: u32,
 }
 
 impl DashboardConfig {
@@ -45,8 +51,8 @@ impl DashboardConfig {
         let rows = features.grid_rows;
         let content_top = at.statusbar_height + at.tab_row_height;
         let content_h = at.screen_h - content_top - at.bottombar_height;
-        let grid_padding_x = 16u16;
-        let grid_padding_y = 6u16;
+        let grid_padding_x = at.grid_padding_x;
+        let grid_padding_y = at.grid_padding_y;
         let grid_x = grid_padding_x as i32;
         let grid_y = (content_top + grid_padding_y as u32) as i32;
         let grid_w = at.screen_w - 2 * grid_padding_x as u32;
@@ -67,12 +73,29 @@ impl DashboardConfig {
             grid_y,
             cell_w,
             cell_h,
-            cursor_pad: 3,
+            cursor_pad: at.cursor_pad,
             grid_layout,
             grid_w,
             grid_h,
+            cursor_lerp_speed: at.cursor_lerp_speed,
+            page_slide_duration: at.page_slide_duration,
+            press_flash_duration: at.press_flash_duration,
         }
     }
+}
+
+/// Active page-slide animation state.
+#[derive(Debug)]
+struct PageSlideAnim {
+    /// Previous page index (for drawing outgoing icons).
+    #[allow(dead_code)] // reserved for outgoing page rendering
+    from_page: usize,
+    /// Current animation frame.
+    frame: u32,
+    /// Total animation duration in frames (~200ms at 60fps).
+    duration: u32,
+    /// Slide direction: -1 = left, +1 = right.
+    direction: i32,
 }
 
 /// Runtime state for the icon grid dashboard.
@@ -85,6 +108,17 @@ pub struct DashboardState {
     pub page: usize,
     /// Selected icon index within the current page (0-based).
     pub selected: usize,
+    /// Active page-slide animation (None = not animating).
+    page_anim: Option<PageSlideAnim>,
+    /// Smooth cursor visual position (lerp target).
+    cursor_visual_x: f32,
+    cursor_visual_y: f32,
+    /// Whether cursor visual position has been initialized.
+    cursor_initialized: bool,
+    /// Icon press flash countdown (0 = inactive).
+    press_flash_frame: u32,
+    /// Which icon index is flashing.
+    press_flash_index: usize,
 }
 
 impl DashboardState {
@@ -95,6 +129,12 @@ impl DashboardState {
             apps,
             page: 0,
             selected: 0,
+            page_anim: None,
+            cursor_visual_x: 0.0,
+            cursor_visual_y: 0.0,
+            cursor_initialized: false,
+            press_flash_frame: 0,
+            press_flash_index: 0,
         }
     }
 
@@ -153,19 +193,33 @@ impl DashboardState {
         }
     }
 
-    /// Switch to the next page (wraps around).
+    /// Trigger an icon press flash on the currently selected icon.
+    pub fn trigger_press_flash(&mut self) {
+        self.press_flash_frame = self.config.press_flash_duration;
+        self.press_flash_index = self.selected;
+    }
+
+    /// Switch to the next page (wraps around) with slide animation.
     pub fn next_page(&mut self) {
         let count = self.page_count();
+        let from = self.page;
         self.page = (self.page + 1) % count;
         let page_apps = self.current_page_apps().len();
         if self.selected >= page_apps && page_apps > 0 {
             self.selected = page_apps - 1;
         }
+        self.page_anim = Some(PageSlideAnim {
+            from_page: from,
+            frame: 0,
+            duration: self.config.page_slide_duration,
+            direction: -1, // slide left (next)
+        });
     }
 
-    /// Switch to the previous page (wraps around).
+    /// Switch to the previous page (wraps around) with slide animation.
     pub fn prev_page(&mut self) {
         let count = self.page_count();
+        let from = self.page;
         if self.page == 0 {
             self.page = count - 1;
         } else {
@@ -174,6 +228,27 @@ impl DashboardState {
         let page_apps = self.current_page_apps().len();
         if self.selected >= page_apps && page_apps > 0 {
             self.selected = page_apps - 1;
+        }
+        self.page_anim = Some(PageSlideAnim {
+            from_page: from,
+            frame: 0,
+            duration: self.config.page_slide_duration,
+            direction: 1, // slide right (prev)
+        });
+    }
+
+    /// Advance page-slide and cursor-lerp animations by one frame.
+    pub fn tick_animation(&mut self) {
+        // Page slide.
+        if let Some(ref mut anim) = self.page_anim {
+            anim.frame += 1;
+            if anim.frame >= anim.duration {
+                self.page_anim = None;
+            }
+        }
+        // Press flash countdown.
+        if self.press_flash_frame > 0 {
+            self.press_flash_frame -= 1;
         }
     }
 
@@ -187,13 +262,23 @@ impl DashboardState {
     ///
     /// Accepts an `ActiveTheme` for skin-driven colors. Pass
     /// `&ActiveTheme::default()` for legacy behaviour.
-    pub fn update_sdi(&self, sdi: &mut SdiRegistry, at: &ActiveTheme) {
+    pub fn update_sdi(&mut self, sdi: &mut SdiRegistry, at: &ActiveTheme) {
         let cols = self.config.grid_cols as usize;
         let page_apps = self.current_page_apps();
 
         let icon_w = at.icon_width;
         let icon_h = at.icon_height;
         let text_pad = at.icon_label_pad;
+
+        // Compute page-slide x-offset for incoming icons.
+        let slide_offset = if let Some(ref anim) = self.page_anim {
+            let t = crate::transition::ease_in_out_cubic(anim.frame as f32 / anim.duration as f32);
+            // Incoming page slides from off-screen to 0.
+            let w = at.screen_w as f32;
+            ((1.0 - t) * w * anim.direction as f32) as i32
+        } else {
+            0
+        };
 
         let per_page = self.config.icons_per_page as usize;
         for i in 0..per_page {
@@ -232,7 +317,7 @@ impl DashboardState {
                 per_page,
             );
             let (cell_x, cell_y) = match cell {
-                Some(r) => (r.x, r.y),
+                Some(r) => (r.x + slide_offset, r.y),
                 None => continue,
             };
             let ix = cell_x + (self.config.cell_w as i32 - icon_w as i32) / 2;
@@ -296,21 +381,36 @@ impl DashboardState {
             }
         }
 
-        // Cursor highlight.
+        // Cursor highlight with smooth movement.
         let cursor_name = "cursor_highlight";
         if !sdi.contains(cursor_name) {
             sdi.create(cursor_name);
         }
-        if let Ok(cursor) = sdi.get_mut(cursor_name) {
-            if !page_apps.is_empty() {
-                let sel_col = (self.selected % cols) as i32;
-                let sel_row = (self.selected / cols) as i32;
-                let pad = self.config.cursor_pad;
-                let cell_x = self.config.grid_x + sel_col * self.config.cell_w as i32;
-                let cell_y = self.config.grid_y + sel_row * self.config.cell_h as i32;
-                let ix = cell_x + (self.config.cell_w as i32 - icon_w as i32) / 2;
-                let iy = cell_y + (self.config.cell_h as i32 - icon_h as i32) / 4;
+        if !page_apps.is_empty() {
+            let sel_col = (self.selected % cols) as i32;
+            let sel_row = (self.selected / cols) as i32;
+            let pad = self.config.cursor_pad;
+            let cell_x = self.config.grid_x + sel_col * self.config.cell_w as i32;
+            let cell_y = self.config.grid_y + sel_row * self.config.cell_h as i32;
+            let target_ix = cell_x + (self.config.cell_w as i32 - icon_w as i32) / 2;
+            let target_iy = cell_y + (self.config.cell_h as i32 - icon_h as i32) / 4;
 
+            // Smooth cursor lerp.
+            let target_x = (target_ix - pad) as f32;
+            let target_y = (target_iy - pad) as f32;
+            if !self.cursor_initialized {
+                self.cursor_visual_x = target_x;
+                self.cursor_visual_y = target_y;
+                self.cursor_initialized = true;
+            } else {
+                let lerp_factor = self.config.cursor_lerp_speed;
+                self.cursor_visual_x += (target_x - self.cursor_visual_x) * lerp_factor;
+                self.cursor_visual_y += (target_y - self.cursor_visual_y) * lerp_factor;
+            }
+            let cx = self.cursor_visual_x as i32;
+            let cy = self.cursor_visual_y as i32;
+
+            if let Ok(cursor) = sdi.get_mut(cursor_name) {
                 cursor.visible = true;
                 cursor.overlay = true;
 
@@ -321,8 +421,8 @@ impl DashboardState {
 
                 match at.cursor_style.as_str() {
                     "fill" => {
-                        cursor.x = ix - pad;
-                        cursor.y = iy - pad;
+                        cursor.x = cx;
+                        cursor.y = cy;
                         cursor.w = icon_w + (pad * 2) as u32;
                         cursor.h = total_h + (pad * 2) as u32;
                         cursor.color = at.cursor_color;
@@ -331,19 +431,19 @@ impl DashboardState {
                         cursor.stroke_color = None;
                     },
                     "underline" => {
-                        cursor.x = cell_x;
-                        cursor.y = iy + icon_h as i32 + text_pad + glyph_h as i32 * 2 + 2;
+                        cursor.x = cx;
+                        cursor.y = cy + pad + icon_h as i32 + text_pad + glyph_h as i32 * 2 + 2;
                         cursor.w = self.config.cell_w;
                         cursor.h = 3;
                         cursor.color = at.cursor_color;
-                        cursor.border_radius = Some(1);
+                        cursor.border_radius = Some(at.cursor_border_radius.min(2));
                         cursor.stroke_width = None;
                         cursor.stroke_color = None;
                     },
                     _ => {
                         // "stroke" (default)
-                        cursor.x = ix - pad;
-                        cursor.y = iy - pad;
+                        cursor.x = cx;
+                        cursor.y = cy;
                         cursor.w = icon_w + (pad * 2) as u32;
                         cursor.h = total_h + (pad * 2) as u32;
                         cursor.color = Color::rgba(0, 0, 0, 0);
@@ -352,9 +452,9 @@ impl DashboardState {
                         cursor.stroke_color = Some(at.cursor_color);
                     },
                 }
-            } else {
-                cursor.visible = false;
             }
+        } else if let Ok(cursor) = sdi.get_mut(cursor_name) {
+            cursor.visible = false;
         }
     }
 
@@ -523,10 +623,15 @@ impl DashboardState {
             obj.w = icon_w;
             obj.h = icon_h;
             obj.visible = true;
-            obj.color = at.icon_body_color;
+            // Apply press flash effect: lighten the pressed icon.
+            obj.color = if self.press_flash_frame > 0 && i == self.press_flash_index {
+                oasis_types::color::lighten(at.icon_body_color, at.press_flash_lighten)
+            } else {
+                at.icon_body_color
+            };
             obj.text = None;
             obj.border_radius = Some(at.icon_border_radius);
-            obj.shadow_level = Some(1);
+            obj.shadow_level = Some(at.icon_shadow_level);
         }
         if let Ok(obj) = sdi.get_mut(&format!("icon_stripe_{i}")) {
             let r = at.icon_border_radius as u32;
@@ -554,12 +659,7 @@ impl DashboardState {
             obj.h = gfx_h;
             obj.visible = true;
             let c = app.color;
-            obj.color = Color::rgba(
-                c.r.saturating_add(30),
-                c.g.saturating_add(10),
-                c.b.saturating_add(30),
-                200,
-            );
+            obj.color = oasis_types::color::with_alpha(oasis_types::color::lighten(c, 0.15), 200);
             obj.text = None;
         }
         Self::draw_label(
@@ -608,7 +708,7 @@ impl DashboardState {
             obj.border_radius = Some(at.icon_border_radius + 1);
             obj.stroke_width = Some(1);
             let darker = darken(app.color, 0.25);
-            obj.stroke_color = Some(Color::rgba(darker.r, darker.g, darker.b, 100));
+            obj.stroke_color = Some(oasis_types::color::with_alpha(darker, 100));
         }
         // Card body: vertical gradient from lightened top to darkened bottom.
         if let Ok(obj) = sdi.get_mut(&format!("icon_{i}")) {
@@ -622,7 +722,7 @@ impl DashboardState {
             obj.gradient_bottom = Some(darken(app.color, 0.15));
             obj.text = None;
             obj.border_radius = Some(at.icon_border_radius);
-            obj.shadow_level = Some(1);
+            obj.shadow_level = Some(at.icon_shadow_level);
         }
         // Label below icon.
         Self::draw_label(
@@ -669,7 +769,7 @@ impl DashboardState {
             obj.color = app.color;
             obj.text = None;
             obj.border_radius = Some(radius);
-            obj.shadow_level = Some(1);
+            obj.shadow_level = Some(at.icon_shadow_level);
         }
         // Label below icon.
         Self::draw_label(
@@ -728,6 +828,9 @@ mod tests {
             grid_layout: GridLayout::new(2),
             grid_w: 220,
             grid_h: 190,
+            cursor_lerp_speed: 0.18,
+            page_slide_duration: 12,
+            press_flash_duration: 6,
         }
     }
 
@@ -825,7 +928,7 @@ mod tests {
 
     #[test]
     fn update_sdi_creates_objects() {
-        let dash = DashboardState::new(test_config(), test_apps(3));
+        let mut dash = DashboardState::new(test_config(), test_apps(3));
         let mut sdi = SdiRegistry::new();
         let at = crate::active_theme::ActiveTheme::default();
         dash.update_sdi(&mut sdi, &at);

@@ -330,8 +330,12 @@ impl SdiRegistry {
             }
         }
 
-        // 4. Text on top.
+        // 4. Text on top (with optional shadow pass).
         if let Some(ref text) = obj.text {
+            if let Some((dx, dy)) = obj.text_shadow_offset {
+                let shadow_color = obj.text_shadow_color.unwrap_or(Color::rgba(0, 0, 0, 128));
+                backend.draw_text(text, obj.x + dx, obj.y + dy, obj.font_size, shadow_color)?;
+            }
             backend.draw_text(text, obj.x, obj.y, obj.font_size, obj.text_color)?;
         }
 

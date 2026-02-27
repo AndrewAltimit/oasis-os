@@ -573,14 +573,14 @@ fn run_skin_scenario(
 
     let apps = discover_apps(&vfs, "/apps", Some("OASISOS"))?;
     let dash_config = DashboardConfig::from_features(&skin.features, &active_theme);
-    let dashboard = DashboardState::new(dash_config, apps);
+    let mut dashboard = DashboardState::new(dash_config, apps);
     let mut status_bar = StatusBar::new();
     let mut bottom_bar = BottomBar::new();
     bottom_bar.total_pages = dashboard.page_count();
 
     let start_menu = if skin.features.start_menu {
         Some(StartMenuState::new_with_theme(
-            StartMenuState::default_items(),
+            StartMenuState::default_items(&active_theme),
             &active_theme,
         ))
     } else {
@@ -605,8 +605,9 @@ fn run_skin_scenario(
 
     // Cursor.
     let mut mouse_cursor = CursorState::new(w, h);
+    mouse_cursor.scale = active_theme.cursor_scale;
     {
-        let (cursor_pixels, cw, ch) = cursor::generate_cursor_pixels();
+        let (cursor_pixels, cw, ch) = cursor::generate_cursor_pixels(active_theme.cursor_scale);
         let cursor_tex = backend.load_texture(cw, ch, &cursor_pixels)?;
         mouse_cursor.update_sdi(&mut sdi);
         if let Ok(obj) = sdi.get_mut("mouse_cursor") {

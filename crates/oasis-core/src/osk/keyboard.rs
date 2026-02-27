@@ -1,6 +1,6 @@
 //! On-screen keyboard state and rendering.
 
-use crate::backend::Color;
+use crate::active_theme::ActiveTheme;
 use crate::input::Button;
 use crate::sdi::SdiRegistry;
 
@@ -43,6 +43,30 @@ impl Default for OskConfig {
     }
 }
 
+impl OskConfig {
+    /// Create an OSK config sized and centered for the given screen dimensions.
+    pub fn for_screen(screen_w: u32, screen_h: u32) -> Self {
+        let cols = 10u32;
+        // Scale cells proportionally to screen width.
+        let cell_w = (screen_w / (cols + 2)) as i32; // +2 for margins
+        let cell_h = (cell_w * 4 / 5).max(24); // 4:5 aspect, min 24px
+        let total_w = cols as i32 * cell_w;
+        let x = ((screen_w as i32 - total_w) / 2).max(0);
+        // Anchor keyboard in lower half of screen.
+        let rows = 3i32; // typical row count
+        let total_h = rows * cell_h + 72; // +72 for tabs/buffer/help
+        let y = (screen_h as i32 - total_h) / 2 + total_h / 4; // shifted down
+        Self {
+            cols: cols as usize,
+            x,
+            y,
+            cell_w: cell_w as u32,
+            cell_h: cell_h as u32,
+            title: "Input".to_string(),
+        }
+    }
+}
+
 /// Character grids for each mode.
 const ALPHA_LOWER: &[char] = &[
     'a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j', 'k', 'l', 'm', 'n', 'o', 'p', 'q', 'r', 's',
@@ -73,6 +97,12 @@ pub struct OskState {
     pub active: bool,
     /// Whether the user confirmed or cancelled (`None` = still editing).
     pub result: Option<bool>,
+    /// Flash counter for mode change highlight (counts down from 6).
+    pub mode_change_flash: u32,
+    /// Flash counter for key press highlight (counts down from 4).
+    pub key_press_flash: u32,
+    /// Which key index is flashing.
+    pub key_press_index: usize,
 }
 
 impl OskState {
@@ -85,6 +115,19 @@ impl OskState {
             buffer: initial.to_string(),
             active: true,
             result: None,
+            mode_change_flash: 0,
+            key_press_flash: 0,
+            key_press_index: 0,
+        }
+    }
+
+    /// Advance animation counters (call once per frame).
+    pub fn tick_animation(&mut self) {
+        if self.mode_change_flash > 0 {
+            self.mode_change_flash -= 1;
+        }
+        if self.key_press_flash > 0 {
+            self.key_press_flash -= 1;
         }
     }
 
@@ -138,6 +181,8 @@ impl OskState {
                 // Type the selected character.
                 if self.cursor < len {
                     self.buffer.push(chars[self.cursor]);
+                    self.key_press_flash = 4;
+                    self.key_press_index = self.cursor;
                 }
             },
             Button::Square => {
@@ -151,6 +196,7 @@ impl OskState {
                     OskMode::AlphaUpper => OskMode::NumSymbol,
                     OskMode::NumSymbol => OskMode::Alpha,
                 };
+                self.mode_change_flash = 6;
                 // Clamp cursor to new grid size.
                 let new_len = self.chars().len();
                 if self.cursor >= new_len {
@@ -185,8 +231,8 @@ impl OskState {
         self.result == Some(false)
     }
 
-    /// Render the OSK to SDI objects.
-    pub fn update_sdi(&self, sdi: &mut SdiRegistry) {
+    /// Render the OSK to SDI objects using theme-driven colors.
+    pub fn update_sdi(&self, sdi: &mut SdiRegistry, at: &ActiveTheme) {
         let chars = self.chars();
         let cols = self.config.cols;
         let rows = self.rows();
@@ -198,10 +244,13 @@ impl OskState {
         }
         if let Ok(obj) = sdi.get_mut(bg_name) {
             obj.x = self.config.x - 4;
-            obj.y = self.config.y - 24;
+            obj.y = self.config.y - 46; // Extra space for mode tabs.
             obj.w = (cols as u32) * self.config.cell_w + 8;
-            obj.h = (rows as u32) * self.config.cell_h + 48;
-            obj.color = Color::rgba(20, 20, 40, 220);
+            obj.h = (rows as u32) * self.config.cell_h + 72;
+            obj.color = at.osk_key_bg;
+            obj.border_radius = Some(at.terminal_border_radius);
+            obj.stroke_width = Some(1);
+            obj.stroke_color = Some(at.separator_color);
             obj.visible = self.active;
         }
 
@@ -214,8 +263,8 @@ impl OskState {
             obj.text = Some(self.config.title.clone());
             obj.x = self.config.x;
             obj.y = self.config.y - 20;
-            obj.font_size = 12;
-            obj.text_color = Color::WHITE;
+            obj.font_size = ((self.config.cell_h / 3) as u16).clamp(8, 16);
+            obj.text_color = at.osk_key_text;
             obj.w = 0;
             obj.h = 0;
             obj.visible = self.active;
@@ -230,12 +279,15 @@ impl OskState {
             obj.text = Some(format!("{}|", self.buffer));
             obj.x = self.config.x;
             obj.y = self.config.y + (rows as i32) * self.config.cell_h as i32 + 4;
-            obj.font_size = 12;
-            obj.text_color = Color::rgb(100, 200, 255);
+            obj.font_size = ((self.config.cell_h / 3) as u16).clamp(8, 16);
+            obj.text_color = at.osk_key_focus;
             obj.w = 0;
             obj.h = 0;
             obj.visible = self.active;
         }
+
+        // Inactive key color: slightly lighter than the background.
+        let inactive_key = oasis_types::color::lighten(at.osk_key_bg, 0.08);
 
         // Character grid cells.
         for (i, &ch) in chars.iter().enumerate() {
@@ -251,34 +303,69 @@ impl OskState {
                 obj.w = self.config.cell_w - 2;
                 obj.h = self.config.cell_h - 2;
                 obj.text = Some(ch.to_string());
-                obj.font_size = 14;
-                obj.text_color = Color::WHITE;
+                obj.font_size = ((self.config.cell_h * 2 / 5) as u16).clamp(10, 18);
+                obj.text_color = at.osk_key_text;
                 obj.visible = self.active;
 
                 if i == self.cursor {
-                    obj.color = Color::rgb(60, 100, 180);
+                    obj.color = at.osk_key_active;
+                } else if self.key_press_flash > 0 && i == self.key_press_index {
+                    obj.color = oasis_types::color::lighten(at.osk_key_active, 0.3);
                 } else {
-                    obj.color = Color::rgb(40, 40, 60);
+                    obj.color = inactive_key;
                 }
             }
         }
 
-        // Mode indicator.
+        // Mode indicator tabs -- scale from cell dimensions.
+        let tab_labels = ["abc", "ABC", "123"];
+        let tab_modes = [OskMode::Alpha, OskMode::AlphaUpper, OskMode::NumSymbol];
+        let tab_w: i32 = self.config.cell_w as i32;
+        let tab_h: i32 = (self.config.cell_h as i32 / 2).max(14);
+        let tab_gap: i32 = 2;
+        let tab_y = self.config.y - 42;
+
+        for (i, (&label, &mode)) in tab_labels.iter().zip(&tab_modes).enumerate() {
+            let name = format!("osk_tab_{i}");
+            if !sdi.contains(&name) {
+                sdi.create(&name);
+            }
+            if let Ok(obj) = sdi.get_mut(&name) {
+                obj.x = self.config.x + i as i32 * (tab_w + tab_gap);
+                obj.y = tab_y;
+                obj.w = tab_w as u32;
+                obj.h = tab_h as u32;
+                obj.text = Some(label.to_string());
+                obj.font_size = ((self.config.cell_h / 4) as u16).clamp(8, 12);
+                obj.visible = self.active;
+
+                let is_active = self.mode == mode;
+                if is_active {
+                    let flash_boost = if self.mode_change_flash > 0 {
+                        oasis_types::color::lighten(at.osk_key_active, 0.2)
+                    } else {
+                        at.osk_key_active
+                    };
+                    obj.color = flash_boost;
+                    obj.text_color = at.osk_key_text;
+                } else {
+                    obj.color = at.osk_key_bg;
+                    obj.text_color = at.osk_key_dim_text;
+                }
+            }
+        }
+
+        // Help text.
         let mode_name = "osk_mode";
         if !sdi.contains(mode_name) {
             sdi.create(mode_name);
         }
         if let Ok(obj) = sdi.get_mut(mode_name) {
-            let mode_text = match self.mode {
-                OskMode::Alpha => "abc",
-                OskMode::AlphaUpper => "ABC",
-                OskMode::NumSymbol => "123",
-            };
-            obj.text = Some(format!("[{mode_text}] Triangle=mode Start=OK Cancel=back"));
+            obj.text = Some("Triangle=mode Start=OK Cancel=back".to_string());
             obj.x = self.config.x;
             obj.y = self.config.y + (rows as i32) * self.config.cell_h as i32 + 20;
-            obj.font_size = 10;
-            obj.text_color = Color::rgb(150, 150, 180);
+            obj.font_size = ((self.config.cell_h / 4) as u16).clamp(8, 12);
+            obj.text_color = at.osk_key_dim_text;
             obj.w = 0;
             obj.h = 0;
             obj.visible = self.active;
@@ -295,6 +382,12 @@ impl OskState {
         }
         for i in 0..self.chars().len() {
             let name = format!("osk_key_{i}");
+            if let Ok(obj) = sdi.get_mut(&name) {
+                obj.visible = false;
+            }
+        }
+        for i in 0..3 {
+            let name = format!("osk_tab_{i}");
             if let Ok(obj) = sdi.get_mut(&name) {
                 obj.visible = false;
             }
@@ -595,7 +688,7 @@ mod tests {
         let config = OskConfig::default();
         let osk = OskState::new(config, "");
         let mut sdi = SdiRegistry::new();
-        osk.update_sdi(&mut sdi);
+        osk.update_sdi(&mut sdi, &ActiveTheme::default());
         assert!(sdi.contains("osk_bg"));
         assert!(sdi.get("osk_bg").unwrap().visible);
     }
@@ -605,7 +698,7 @@ mod tests {
         let config = OskConfig::default();
         let osk = OskState::new(config, "");
         let mut sdi = SdiRegistry::new();
-        osk.update_sdi(&mut sdi);
+        osk.update_sdi(&mut sdi, &ActiveTheme::default());
         assert!(sdi.contains("osk_title"));
         let obj = sdi.get("osk_title").unwrap();
         assert_eq!(obj.text, Some("Input".to_string()));
@@ -616,7 +709,7 @@ mod tests {
         let config = OskConfig::default();
         let osk = OskState::new(config, "test");
         let mut sdi = SdiRegistry::new();
-        osk.update_sdi(&mut sdi);
+        osk.update_sdi(&mut sdi, &ActiveTheme::default());
         assert!(sdi.contains("osk_buffer"));
         let obj = sdi.get("osk_buffer").unwrap();
         assert_eq!(obj.text, Some("test|".to_string()));
@@ -627,7 +720,7 @@ mod tests {
         let config = OskConfig::default();
         let osk = OskState::new(config, "");
         let mut sdi = SdiRegistry::new();
-        osk.update_sdi(&mut sdi);
+        osk.update_sdi(&mut sdi, &ActiveTheme::default());
         for i in 0..ALPHA_LOWER.len() {
             let name = format!("osk_key_{i}");
             assert!(sdi.contains(&name));
@@ -640,7 +733,7 @@ mod tests {
         let mut osk = OskState::new(config, "");
         osk.cursor = 5;
         let mut sdi = SdiRegistry::new();
-        osk.update_sdi(&mut sdi);
+        osk.update_sdi(&mut sdi, &ActiveTheme::default());
         let selected = sdi.get("osk_key_5").unwrap();
         let unselected = sdi.get("osk_key_0").unwrap();
         assert_ne!(selected.color, unselected.color);
@@ -651,10 +744,15 @@ mod tests {
         let config = OskConfig::default();
         let osk = OskState::new(config, "");
         let mut sdi = SdiRegistry::new();
-        osk.update_sdi(&mut sdi);
+        osk.update_sdi(&mut sdi, &ActiveTheme::default());
+        // Mode tabs should exist.
+        assert!(sdi.contains("osk_tab_0"));
+        assert!(sdi.contains("osk_tab_1"));
+        assert!(sdi.contains("osk_tab_2"));
+        let tab0 = sdi.get("osk_tab_0").unwrap();
+        assert_eq!(tab0.text.as_deref(), Some("abc"));
+        // Help text still present.
         assert!(sdi.contains("osk_mode"));
-        let obj = sdi.get("osk_mode").unwrap();
-        assert!(obj.text.as_ref().unwrap().contains("abc"));
     }
 
     #[test]
@@ -663,9 +761,12 @@ mod tests {
         let mut osk = OskState::new(config, "");
         osk.mode = OskMode::AlphaUpper;
         let mut sdi = SdiRegistry::new();
-        osk.update_sdi(&mut sdi);
-        let obj = sdi.get("osk_mode").unwrap();
-        assert!(obj.text.as_ref().unwrap().contains("ABC"));
+        let at = ActiveTheme::default();
+        osk.update_sdi(&mut sdi, &at);
+        // ABC tab should have active color.
+        let tab1 = sdi.get("osk_tab_1").unwrap();
+        assert_eq!(tab1.text.as_deref(), Some("ABC"));
+        assert_eq!(tab1.color, at.osk_key_active);
     }
 
     #[test]
@@ -674,9 +775,12 @@ mod tests {
         let mut osk = OskState::new(config, "");
         osk.mode = OskMode::NumSymbol;
         let mut sdi = SdiRegistry::new();
-        osk.update_sdi(&mut sdi);
-        let obj = sdi.get("osk_mode").unwrap();
-        assert!(obj.text.as_ref().unwrap().contains("123"));
+        let at = ActiveTheme::default();
+        osk.update_sdi(&mut sdi, &at);
+        // 123 tab should have active color.
+        let tab2 = sdi.get("osk_tab_2").unwrap();
+        assert_eq!(tab2.text.as_deref(), Some("123"));
+        assert_eq!(tab2.color, at.osk_key_active);
     }
 
     #[test]
@@ -684,7 +788,7 @@ mod tests {
         let config = OskConfig::default();
         let osk = OskState::new(config, "");
         let mut sdi = SdiRegistry::new();
-        osk.update_sdi(&mut sdi);
+        osk.update_sdi(&mut sdi, &ActiveTheme::default());
         osk.hide_sdi(&mut sdi);
         assert!(!sdi.get("osk_bg").unwrap().visible);
         assert!(!sdi.get("osk_title").unwrap().visible);
@@ -692,6 +796,10 @@ mod tests {
         assert!(!sdi.get("osk_mode").unwrap().visible);
         for i in 0..ALPHA_LOWER.len() {
             let name = format!("osk_key_{i}");
+            assert!(!sdi.get(&name).unwrap().visible);
+        }
+        for i in 0..3 {
+            let name = format!("osk_tab_{i}");
             assert!(!sdi.get(&name).unwrap().visible);
         }
     }
@@ -702,7 +810,7 @@ mod tests {
         let mut osk = OskState::new(config, "");
         osk.active = false;
         let mut sdi = SdiRegistry::new();
-        osk.update_sdi(&mut sdi);
+        osk.update_sdi(&mut sdi, &ActiveTheme::default());
         assert!(!sdi.get("osk_bg").unwrap().visible);
     }
 }

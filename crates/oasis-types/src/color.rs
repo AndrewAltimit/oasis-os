@@ -37,6 +37,116 @@ pub fn with_alpha(color: Color, alpha: u8) -> Color {
     color.with_alpha(alpha)
 }
 
+/// Convert an RGB color to HSL (hue, saturation, lightness).
+///
+/// Returns `(h, s, l)` where `h` is in `[0.0, 360.0)`, and `s`, `l` are
+/// in `[0.0, 1.0]`. Alpha is discarded.
+pub fn rgb_to_hsl(color: Color) -> (f32, f32, f32) {
+    let r = color.r as f32 / 255.0;
+    let g = color.g as f32 / 255.0;
+    let b = color.b as f32 / 255.0;
+
+    let max = r.max(g).max(b);
+    let min = r.min(g).min(b);
+    let l = (max + min) / 2.0;
+
+    if (max - min).abs() < f32::EPSILON {
+        // Achromatic.
+        return (0.0, 0.0, l);
+    }
+
+    let d = max - min;
+    let s = if l > 0.5 {
+        d / (2.0 - max - min)
+    } else {
+        d / (max + min)
+    };
+
+    let h = if (max - r).abs() < f32::EPSILON {
+        let mut h = (g - b) / d;
+        if g < b {
+            h += 6.0;
+        }
+        h
+    } else if (max - g).abs() < f32::EPSILON {
+        (b - r) / d + 2.0
+    } else {
+        (r - g) / d + 4.0
+    };
+
+    (h * 60.0, s, l)
+}
+
+/// Convert HSL to an RGB color (alpha = 255).
+///
+/// `h` is in degrees `[0.0, 360.0)`, `s` and `l` are in `[0.0, 1.0]`.
+pub fn hsl_to_rgb(h: f32, s: f32, l: f32) -> Color {
+    let s = s.clamp(0.0, 1.0);
+    let l = l.clamp(0.0, 1.0);
+
+    if s.abs() < f32::EPSILON {
+        let v = (l * 255.0).round() as u8;
+        return Color::rgb(v, v, v);
+    }
+
+    let h = ((h % 360.0) + 360.0) % 360.0; // normalize to [0, 360)
+
+    let q = if l < 0.5 {
+        l * (1.0 + s)
+    } else {
+        l + s - l * s
+    };
+    let p = 2.0 * l - q;
+    let h_norm = h / 360.0;
+
+    let hue_to_rgb = |p: f32, q: f32, mut t: f32| -> f32 {
+        if t < 0.0 {
+            t += 1.0;
+        }
+        if t > 1.0 {
+            t -= 1.0;
+        }
+        if t < 1.0 / 6.0 {
+            return p + (q - p) * 6.0 * t;
+        }
+        if t < 1.0 / 2.0 {
+            return q;
+        }
+        if t < 2.0 / 3.0 {
+            return p + (q - p) * (2.0 / 3.0 - t) * 6.0;
+        }
+        p
+    };
+
+    let r = (hue_to_rgb(p, q, h_norm + 1.0 / 3.0) * 255.0).round() as u8;
+    let g = (hue_to_rgb(p, q, h_norm) * 255.0).round() as u8;
+    let b = (hue_to_rgb(p, q, h_norm - 1.0 / 3.0) * 255.0).round() as u8;
+
+    Color::rgb(r, g, b)
+}
+
+/// Rotate the hue of a color by the given number of degrees.
+///
+/// Wraps around at 360. Preserves saturation, lightness, and alpha.
+pub fn rotate_hue(color: Color, degrees: f32) -> Color {
+    let (h, s, l) = rgb_to_hsl(color);
+    let mut result = hsl_to_rgb(h + degrees, s, l);
+    result.a = color.a;
+    result
+}
+
+/// Adjust the saturation of a color by a multiplier.
+///
+/// `factor = 0.0` produces grayscale, `1.0` is unchanged, `2.0` doubles
+/// saturation (clamped to 1.0). Preserves hue, lightness, and alpha.
+pub fn adjust_saturation(color: Color, factor: f32) -> Color {
+    let (h, s, l) = rgb_to_hsl(color);
+    let new_s = (s * factor).clamp(0.0, 1.0);
+    let mut result = hsl_to_rgb(h, new_s, l);
+    result.a = color.a;
+    result
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -73,6 +183,101 @@ mod tests {
         let c = Color::rgb(0, 0, 0);
         let l = lighten(c, 1.0);
         assert_eq!(l, Color::rgb(255, 255, 255));
+    }
+
+    #[test]
+    fn hsl_red() {
+        let (h, s, l) = rgb_to_hsl(Color::rgb(255, 0, 0));
+        assert!((h - 0.0).abs() < 1.0);
+        assert!((s - 1.0).abs() < 0.01);
+        assert!((l - 0.5).abs() < 0.01);
+    }
+
+    #[test]
+    fn hsl_green() {
+        let (h, s, l) = rgb_to_hsl(Color::rgb(0, 255, 0));
+        assert!((h - 120.0).abs() < 1.0);
+        assert!((s - 1.0).abs() < 0.01);
+        assert!((l - 0.5).abs() < 0.01);
+    }
+
+    #[test]
+    fn hsl_blue() {
+        let (h, s, l) = rgb_to_hsl(Color::rgb(0, 0, 255));
+        assert!((h - 240.0).abs() < 1.0);
+        assert!((s - 1.0).abs() < 0.01);
+        assert!((l - 0.5).abs() < 0.01);
+    }
+
+    #[test]
+    fn hsl_white() {
+        let (h, s, l) = rgb_to_hsl(Color::rgb(255, 255, 255));
+        assert!((s - 0.0).abs() < 0.01);
+        assert!((l - 1.0).abs() < 0.01);
+        let _ = h; // hue is undefined for achromatic
+    }
+
+    #[test]
+    fn hsl_black() {
+        let (h, s, l) = rgb_to_hsl(Color::rgb(0, 0, 0));
+        assert!((s - 0.0).abs() < 0.01);
+        assert!((l - 0.0).abs() < 0.01);
+        let _ = h;
+    }
+
+    #[test]
+    fn hsl_to_rgb_known_values() {
+        // Pure red.
+        let c = hsl_to_rgb(0.0, 1.0, 0.5);
+        assert_eq!(c.r, 255);
+        assert_eq!(c.g, 0);
+        assert_eq!(c.b, 0);
+        // Pure green.
+        let c = hsl_to_rgb(120.0, 1.0, 0.5);
+        assert_eq!(c.r, 0);
+        assert_eq!(c.g, 255);
+        assert_eq!(c.b, 0);
+        // Pure blue.
+        let c = hsl_to_rgb(240.0, 1.0, 0.5);
+        assert_eq!(c.r, 0);
+        assert_eq!(c.g, 0);
+        assert_eq!(c.b, 255);
+    }
+
+    #[test]
+    fn hsl_grayscale() {
+        let c = hsl_to_rgb(0.0, 0.0, 0.5);
+        assert_eq!(c.r, 128);
+        assert_eq!(c.g, 128);
+        assert_eq!(c.b, 128);
+    }
+
+    #[test]
+    fn rotate_hue_red_to_green() {
+        let result = rotate_hue(Color::rgb(255, 0, 0), 120.0);
+        assert!(result.g > 200);
+        assert!(result.r < 50);
+        assert!(result.b < 50);
+    }
+
+    #[test]
+    fn rotate_hue_preserves_alpha() {
+        let result = rotate_hue(Color::rgba(255, 0, 0, 128), 120.0);
+        assert_eq!(result.a, 128);
+    }
+
+    #[test]
+    fn adjust_saturation_zero_is_gray() {
+        let result = adjust_saturation(Color::rgb(255, 0, 0), 0.0);
+        // Should be grayscale: r == g == b.
+        assert!((result.r as i16 - result.g as i16).abs() <= 1);
+        assert!((result.g as i16 - result.b as i16).abs() <= 1);
+    }
+
+    #[test]
+    fn adjust_saturation_preserves_alpha() {
+        let result = adjust_saturation(Color::rgba(255, 0, 0, 100), 0.5);
+        assert_eq!(result.a, 100);
     }
 
     mod prop {
@@ -179,6 +384,38 @@ mod tests {
                 prop_assert_eq!(result.g, c.g);
                 prop_assert_eq!(result.b, c.b);
                 prop_assert_eq!(result.a, a);
+            }
+
+            #[test]
+            fn hsl_roundtrip(r in any::<u8>(), g in any::<u8>(), b in any::<u8>()) {
+                let orig = Color::rgb(r, g, b);
+                let (h, s, l) = rgb_to_hsl(orig);
+                let back = hsl_to_rgb(h, s, l);
+                // Allow +-2 for float rounding through the conversion.
+                prop_assert!((back.r as i16 - orig.r as i16).abs() <= 2,
+                    "r: {} vs {} (h={h}, s={s}, l={l})", back.r, orig.r);
+                prop_assert!((back.g as i16 - orig.g as i16).abs() <= 2,
+                    "g: {} vs {} (h={h}, s={s}, l={l})", back.g, orig.g);
+                prop_assert!((back.b as i16 - orig.b as i16).abs() <= 2,
+                    "b: {} vs {} (h={h}, s={s}, l={l})", back.b, orig.b);
+            }
+
+            #[test]
+            fn rotate_hue_360_is_identity(r in any::<u8>(), g in any::<u8>(), b in any::<u8>()) {
+                let orig = Color::rgb(r, g, b);
+                let rotated = rotate_hue(orig, 360.0);
+                prop_assert!((rotated.r as i16 - orig.r as i16).abs() <= 2);
+                prop_assert!((rotated.g as i16 - orig.g as i16).abs() <= 2);
+                prop_assert!((rotated.b as i16 - orig.b as i16).abs() <= 2);
+            }
+
+            #[test]
+            fn adjust_saturation_one_is_identity(r in any::<u8>(), g in any::<u8>(), b in any::<u8>()) {
+                let orig = Color::rgb(r, g, b);
+                let result = adjust_saturation(orig, 1.0);
+                prop_assert!((result.r as i16 - orig.r as i16).abs() <= 2);
+                prop_assert!((result.g as i16 - orig.g as i16).abs() <= 2);
+                prop_assert!((result.b as i16 - orig.b as i16).abs() <= 2);
             }
         }
     }

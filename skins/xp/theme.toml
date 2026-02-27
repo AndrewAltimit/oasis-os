@@ -52,6 +52,7 @@ content_stroke_width = 1
 content_stroke_color = "#0054E320"
 maximize_top_inset = 44
 maximize_bottom_inset = 30
+inactive_frame_alpha = 160
 
 [bar_overrides]
 statusbar_bg = "#1F3E7B"
@@ -64,6 +65,7 @@ battery_color = "#FFFFFF"
 version_color = "#FFFFFF"
 clock_color = "#FFFFFF"
 separator_color = "#4080D0"
+text_shadow = true
 
 [wallpaper]
 style = "gradient"
@@ -76,6 +78,25 @@ statusbar_height = 26
 bottombar_height = 30
 icon_width = 24
 icon_height = 28
+font_body = 14
+font_hint = 12
+font_heading = 16
+cursor_blink_rate = 25
+cursor_lerp_speed = 0.22
+page_slide_duration = 10
+press_flash_duration = 8
+focus_ring_color = "#0054E3A0"
+cursor_pad = 4
+toast_slide_in = true
+
+[app_overrides]
+text_color = "#333333"
+dim_text = "#666666"
+terminal_output_color = "#000000"
+terminal_prompt_color = "#003399"
+selection_accent_color = "#0054E380"
+selection_border_radius = 2
+title_bar_text_shadow = true
 
 [icon_overrides]
 body_color = "#ECE9D8"
@@ -119,6 +140,8 @@ footer_text_color = "#FFFFFF"
 footer_height = 24
 item_icon_size = 16
 item_row_height = 24
+item_separator = true
+item_separator_color = "#4080D040"
 
 [browser_overrides]
 chrome_bg = "#D6D2C2"
