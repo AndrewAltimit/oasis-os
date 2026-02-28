@@ -671,15 +671,11 @@ fn main() -> Result<()> {
                     && let Some((path, data)) = runner.take_pending_request()
                 {
                     if path == oasis_core::apps::tv_guide::TV_REQUEST_PATH
-                        && data.starts_with("tune ")
+                        && data.starts_with("tune_url ")
                     {
-                        let parts: Vec<&str> = data.splitn(4, ' ').collect();
-                        if parts.len() >= 3 {
-                            let item_id = parts[2];
-                            let url =
-                                oasis_core::apps::tv_guide::ChannelCatalog::embed_url(item_id);
-                            let _ = std::process::Command::new("xdg-open").arg(&url).spawn();
-                        }
+                        let url = &data["tune_url ".len()..];
+                        log::info!("TV: opening video URL: {url}");
+                        let _ = std::process::Command::new("xdg-open").arg(url).spawn();
                     } else {
                         let _ = vfs.write(&path, data.as_bytes());
                     }

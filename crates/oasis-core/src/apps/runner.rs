@@ -884,11 +884,10 @@ impl AppRunner {
             },
             Button::Confirm => {
                 if let Some(req) = guide.tune() {
-                    // Publish tune request via VFS IPC.
-                    let data = format!(
-                        "tune {} {} {}",
-                        req.channel_index, req.episode.item_id, req.seek_secs,
-                    );
+                    // Build direct video URL and pass via VFS IPC.
+                    let url = super::tv_guide::catalog::ChannelCatalog::download_url(&req.episode);
+                    let data = format!("tune_url {url}");
+                    log::info!("TV: tune CH{} -> {}", req.channel_index, req.episode.title,);
                     self.pending_vfs_request = Some((TV_REQUEST_PATH.to_string(), data));
                 }
                 self.lines = guide.text_content();
