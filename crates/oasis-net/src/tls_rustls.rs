@@ -66,6 +66,18 @@ impl TlsProvider for RustlsTlsProvider {
 // Adapter: bridge rustls's `Read`/`Write` to our `NetworkStream` trait
 // ---------------------------------------------------------------------------
 
+/// Result of a `pull_plaintext` call, distinguishing "got data",
+/// "socket would block" and "connection EOF".
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PullResult {
+    /// New plaintext was added to `plaintext_buf`.
+    GotData,
+    /// The underlying socket returned WouldBlock — no data yet.
+    WouldBlock,
+    /// The peer closed the connection (EOF on the TLS layer).
+    Eof,
+}
+
 /// A TLS-wrapped network stream.
 ///
 /// Internally uses [`rustls::ClientConnection`] for the crypto and
@@ -127,11 +139,11 @@ impl RustlsStream {
 
     /// Pump ciphertext from the network into rustls and move any resulting
     /// plaintext into `self.plaintext_buf`.
-    fn pull_plaintext(&mut self) -> Result<()> {
+    fn pull_plaintext(&mut self) -> Result<PullResult> {
         // First, drain any plaintext already buffered inside rustls
         // (e.g. application data received during the handshake).
         if self.drain_reader() {
-            return Ok(());
+            return Ok(PullResult::GotData);
         }
 
         // Loop to handle partial TLS records: a single read_tls may not
@@ -154,12 +166,12 @@ impl RustlsStream {
             let mut adapter = IoAdapter::new(&mut *self.inner);
 
             match self.tls.read_tls(&mut adapter) {
-                Ok(0) => return Ok(()), // EOF
+                Ok(0) => return Ok(PullResult::Eof),
                 Err(ref e)
                     if e.kind() == io::ErrorKind::WouldBlock
                         || e.kind() == io::ErrorKind::TimedOut =>
                 {
-                    return Ok(());
+                    return Ok(PullResult::WouldBlock);
                 },
                 Err(e) => {
                     return Err(OasisError::Backend(format!("TLS read_tls: {e}")));
@@ -173,7 +185,7 @@ impl RustlsStream {
                 .map_err(|e| OasisError::Backend(format!("TLS process: {e}")))?;
 
             if self.drain_reader() {
-                return Ok(());
+                return Ok(PullResult::GotData);
             }
             // No plaintext yet -- TLS record may be incomplete, try reading more.
         }
@@ -209,15 +221,18 @@ impl NetworkStream for RustlsStream {
         }
 
         // Try to get more plaintext from the network.
-        self.pull_plaintext()?;
-
-        if self.plaintext_buf.is_empty() {
-            return Ok(0); // Nothing available (non-blocking).
+        match self.pull_plaintext()? {
+            PullResult::GotData => {
+                let n = buf.len().min(self.plaintext_buf.len());
+                drain_deque(&mut self.plaintext_buf, &mut buf[..n]);
+                Ok(n)
+            },
+            PullResult::Eof => Ok(0),
+            PullResult::WouldBlock => Err(OasisError::Io(io::Error::new(
+                io::ErrorKind::WouldBlock,
+                "would block",
+            ))),
         }
-
-        let n = buf.len().min(self.plaintext_buf.len());
-        drain_deque(&mut self.plaintext_buf, &mut buf[..n]);
-        Ok(n)
     }
 
     fn write(&mut self, data: &[u8]) -> Result<usize> {

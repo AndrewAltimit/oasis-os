@@ -426,8 +426,8 @@ mod tests {
             .expect("/etc/radio/stations.toml should exist");
         let text = std::str::from_utf8(&data).unwrap();
         assert!(
-            text.contains("SomaFM"),
-            "stations.toml should contain 'SomaFM', got: {text}",
+            text.contains("Old Time Radio"),
+            "stations.toml should contain 'Old Time Radio', got: {text}",
         );
     }
 

@@ -1,10 +1,12 @@
 //! SDL2 audio backend for OASIS_OS.
 //!
-//! Implements `AudioBackend` using SDL2's audio subsystem. On desktop and
-//! Raspberry Pi, SDL2 handles device discovery, mixing, and output.
+//! Implements `AudioBackend` using SDL2's audio queue and the `rmp3` MP3
+//! decoder.  Incoming MP3 data (from `feed_data` or `load_track`) is decoded
+//! to PCM i16 samples via `rmp3::RawDecoder`, volume-scaled, and pushed to an
+//! `sdl2::audio::AudioQueue<i16>` for speaker output.
 //!
-//! Audio data is stored in-memory after `load_track()`. Playback is managed
-//! through SDL2's audio callback or queue-based API.
+//! The SDL2 audio device is opened lazily on the first decoded frame so that
+//! the sample rate and channel count come from the actual stream.
 //!
 //! Note: Real audio output requires hardware. In CI (Docker without audio
 //! devices), `init()` may fail gracefully. The `NullAudioBackend` in
@@ -15,29 +17,45 @@ use std::collections::HashMap;
 use oasis_core::backend::{AudioBackend, AudioTrackId};
 use oasis_core::error::{OasisError, Result};
 
-/// SDL2-based audio backend.
-///
-/// Stores loaded tracks as raw byte data indexed by `AudioTrackId`.
-/// Actual SDL2 audio device interaction is gated behind `init()`.
+/// Maximum PCM bytes to keep in the SDL2 audio queue before we stop decoding
+/// more frames.  At 44 100 Hz stereo i16 this is roughly 4.5 seconds — enough
+/// runway to absorb rendering jitter without building excessive latency.
+const MAX_QUEUE_BYTES: u32 = 800_000;
+
+/// SDL2-based audio backend with real MP3 decoding.
 pub struct SdlAudioBackend {
     /// Whether the audio subsystem has been initialized.
     initialized: bool,
-    /// Loaded track data keyed by track ID.
+    /// SDL2 audio queue device (opened on first decoded frame).
+    device: Option<sdl2::audio::AudioQueue<i16>>,
+    /// SDL2 audio subsystem (kept alive for device lifetime).
+    audio_subsystem: Option<sdl2::AudioSubsystem>,
+    /// MP3 decoder state.
+    decoder: rmp3::RawDecoder,
+    /// Pending MP3 bytes not yet decoded (streaming track).
+    mp3_buffer: Vec<u8>,
+    /// Reusable staging buffer for decoded PCM (avoids per-call allocation).
+    pcm_staging: Vec<i16>,
+    /// Loaded non-streaming tracks (raw MP3 data).
     tracks: HashMap<u64, Vec<u8>>,
     /// Next track ID to assign.
     next_id: u64,
     /// Currently playing track ID (if any).
     current_track: Option<u64>,
+    /// Active streaming track ID (if any).
+    stream_track: Option<u64>,
     /// Current volume (0-100).
     volume: u8,
     /// Whether playback is active.
     playing: bool,
     /// Whether playback is paused.
     paused: bool,
-    /// Simulated playback position in ms (for status display).
-    position_ms: u64,
-    /// Simulated track duration in ms.
-    duration_ms: u64,
+    /// Sample rate detected from first decoded frame.
+    sample_rate: i32,
+    /// Channel count detected from first decoded frame.
+    channels: usize,
+    /// Total PCM samples queued (for position_ms calculation).
+    samples_queued: u64,
 }
 
 impl SdlAudioBackend {
@@ -45,15 +63,183 @@ impl SdlAudioBackend {
     pub fn new() -> Self {
         Self {
             initialized: false,
+            device: None,
+            audio_subsystem: None,
+            decoder: rmp3::RawDecoder::new(),
+            mp3_buffer: Vec::new(),
+            pcm_staging: Vec::new(),
             tracks: HashMap::new(),
             next_id: 0,
             current_track: None,
+            stream_track: None,
             volume: 80,
             playing: false,
             paused: false,
-            position_ms: 0,
-            duration_ms: 0,
+            sample_rate: 0,
+            channels: 0,
+            samples_queued: 0,
         }
+    }
+
+    /// Open an SDL2 AudioQueue with the given sample rate and channels.
+    fn open_device(&mut self, sample_rate: i32, channels: u8) -> Result<()> {
+        let audio = self
+            .audio_subsystem
+            .as_ref()
+            .ok_or_else(|| OasisError::Backend("audio subsystem not available".into()))?;
+
+        let spec = sdl2::audio::AudioSpecDesired {
+            freq: Some(sample_rate),
+            channels: Some(channels),
+            samples: Some(8192),
+        };
+        let device = audio
+            .open_queue::<i16, _>(None, &spec)
+            .map_err(OasisError::Backend)?;
+        self.sample_rate = device.spec().freq;
+        self.channels = device.spec().channels as usize;
+        log::info!(
+            "SDL2 audio device opened: {}Hz, {} channels",
+            self.sample_rate,
+            self.channels,
+        );
+        self.device = Some(device);
+        Ok(())
+    }
+
+    /// Decode available MP3 frames from `mp3_buffer` and queue PCM to the
+    /// SDL2 audio device.
+    ///
+    /// Throttle is applied **before** decoding: if the SDL2 queue already has
+    /// enough audio we leave the MP3 bytes in the buffer for next time,
+    /// avoiding the old bug where decoded PCM was silently dropped.
+    fn decode_buffered(&mut self) -> Result<()> {
+        // If the SDL2 queue already has plenty of audio, skip decoding and
+        // keep the MP3 bytes for later.  This bounds latency without losing
+        // any decoded audio.
+        //
+        // Exception: when the mp3_buffer is small (< 16 KB), always decode.
+        // This ensures the last frames of a finite track get decoded even if
+        // the queue is momentarily full — otherwise those bytes would be
+        // stranded when the source reaches EOF and feed_data is never called
+        // again.
+        if let Some(ref device) = self.device
+            && device.size() > MAX_QUEUE_BYTES
+            && self.mp3_buffer.len() >= 16 * 1024
+        {
+            return Ok(());
+        }
+
+        let mut pcm_out = [0i16; 2304];
+        let mut offset = 0;
+        self.pcm_staging.clear();
+        let mut detected_rate = 0u32;
+        let mut detected_channels = 0u16;
+
+        loop {
+            let remaining = self.mp3_buffer.len() - offset;
+            // Need at least 16 bytes for rmp3 to safely scan for a frame
+            // header (works around an unchecked slice bounds bug in rmp3).
+            if remaining < 16 {
+                break;
+            }
+            match self.decoder.next(&self.mp3_buffer[offset..], &mut pcm_out) {
+                Some((frame, consumed)) => {
+                    offset += consumed;
+                    if let rmp3::Frame::Audio(audio) = frame {
+                        detected_rate = audio.sample_rate();
+                        detected_channels = audio.channels();
+                        self.pcm_staging.extend_from_slice(audio.samples());
+                    }
+                },
+                None => break,
+            }
+        }
+
+        self.mp3_buffer.drain(..offset);
+
+        // Open device on first decoded frame (need sample rate).
+        if self.device.is_none() && detected_rate > 0 && self.audio_subsystem.is_some() {
+            self.open_device(detected_rate as i32, detected_channels as u8)?;
+        }
+
+        if !self.pcm_staging.is_empty() {
+            if detected_rate > 0 {
+                self.sample_rate = detected_rate as i32;
+                self.channels = detected_channels as usize;
+            }
+
+            // Apply volume scaling.
+            let vol = self.volume as i32;
+            for s in &mut self.pcm_staging {
+                *s = ((*s as i32 * vol) / 100) as i16;
+            }
+
+            // Always queue decoded PCM — never drop it.
+            if let Some(ref device) = self.device {
+                device
+                    .queue_audio(&self.pcm_staging)
+                    .map_err(OasisError::Backend)?;
+                self.samples_queued += self.pcm_staging.len() as u64;
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Decode an entire MP3 buffer and queue all PCM at once (for static
+    /// tracks loaded via `load_track`).
+    fn decode_and_queue_all(&mut self, mp3_data: &[u8]) -> Result<()> {
+        let mut decoder = rmp3::RawDecoder::new();
+        let mut pcm_out = [0i16; 2304];
+        let mut offset = 0;
+        let mut pending_pcm: Vec<i16> = Vec::new();
+        let mut detected_rate = 0u32;
+        let mut detected_channels = 0u16;
+
+        loop {
+            let remaining = mp3_data.len() - offset;
+            if remaining < 16 {
+                break;
+            }
+            match decoder.next(&mp3_data[offset..], &mut pcm_out) {
+                Some((frame, consumed)) => {
+                    offset += consumed;
+                    if let rmp3::Frame::Audio(audio) = frame {
+                        detected_rate = audio.sample_rate();
+                        detected_channels = audio.channels();
+                        pending_pcm.extend_from_slice(audio.samples());
+                    }
+                },
+                None => break,
+            }
+        }
+
+        // Open device if needed.
+        if self.device.is_none() && detected_rate > 0 && self.audio_subsystem.is_some() {
+            self.open_device(detected_rate as i32, detected_channels as u8)?;
+        }
+
+        if !pending_pcm.is_empty() {
+            if detected_rate > 0 {
+                self.sample_rate = detected_rate as i32;
+                self.channels = detected_channels as usize;
+            }
+
+            let vol = self.volume as i32;
+            for s in &mut pending_pcm {
+                *s = ((*s as i32 * vol) / 100) as i16;
+            }
+
+            if let Some(ref device) = self.device {
+                device
+                    .queue_audio(&pending_pcm)
+                    .map_err(OasisError::Backend)?;
+                self.samples_queued += pending_pcm.len() as u64;
+            }
+        }
+
+        Ok(())
     }
 }
 
@@ -65,13 +251,24 @@ impl Default for SdlAudioBackend {
 
 impl AudioBackend for SdlAudioBackend {
     fn init(&mut self) -> Result<()> {
-        // In a full implementation, this would call:
-        //   sdl2::init()?.audio()?
-        // and open an audio device. For now, we mark as initialized
-        // and manage track state. Real SDL2 audio device opening will
-        // be added when we integrate with the main loop.
+        // Try to initialize SDL2 audio subsystem.
+        // In CI/headless environments this may fail — we log a warning
+        // but still mark as initialized so non-audio functionality works.
+        match sdl2::init() {
+            Ok(sdl) => match sdl.audio() {
+                Ok(audio) => {
+                    self.audio_subsystem = Some(audio);
+                    log::info!("SDL2 audio subsystem initialized");
+                },
+                Err(e) => {
+                    log::warn!("SDL2 audio unavailable: {e}");
+                },
+            },
+            Err(e) => {
+                log::warn!("SDL2 init failed (headless?): {e}");
+            },
+        }
         self.initialized = true;
-        log::info!("SDL2 audio backend initialized");
         Ok(())
     }
 
@@ -82,13 +279,7 @@ impl AudioBackend for SdlAudioBackend {
         let id = self.next_id;
         self.next_id += 1;
         self.tracks.insert(id, data.to_vec());
-        // Estimate duration from data size (rough MP3 estimate: 128kbps).
-        // Real implementation would parse MP3 headers.
-        let estimated_ms = (data.len() as u64 * 8) / 128; // bits / kbps = ms
-        log::debug!(
-            "Loaded audio track {id} ({} bytes, ~{estimated_ms}ms)",
-            data.len()
-        );
+        log::debug!("Loaded audio track {id} ({} bytes)", data.len());
         Ok(AudioTrackId(id))
     }
 
@@ -96,26 +287,35 @@ impl AudioBackend for SdlAudioBackend {
         if !self.initialized {
             return Err(OasisError::Backend("audio not initialized".into()));
         }
-        if !self.tracks.contains_key(&track.0) {
+
+        let is_stream = self.stream_track == Some(track.0);
+        if !is_stream && !self.tracks.contains_key(&track.0) {
             return Err(OasisError::Backend(format!("track {} not loaded", track.0)));
         }
-        // In a full implementation, this would decode the audio data and
-        // feed it to the SDL2 audio queue/callback.
+
         self.current_track = Some(track.0);
         self.playing = true;
         self.paused = false;
-        self.position_ms = 0;
 
-        // Set duration from track data.
-        if let Some(data) = self.tracks.get(&track.0) {
-            self.duration_ms = (data.len() as u64 * 8) / 128;
+        // For static tracks, decode the full MP3 and queue all PCM.
+        if !is_stream && let Some(data) = self.tracks.get(&track.0).cloned() {
+            self.decode_and_queue_all(&data)?;
         }
+
+        // Resume the SDL2 audio device so queued samples play.
+        if let Some(ref device) = self.device {
+            device.resume();
+        }
+
         Ok(())
     }
 
     fn pause(&mut self) -> Result<()> {
         if !self.playing {
             return Err(OasisError::Backend("not playing".into()));
+        }
+        if let Some(ref device) = self.device {
+            device.pause();
         }
         self.playing = false;
         self.paused = true;
@@ -126,21 +326,28 @@ impl AudioBackend for SdlAudioBackend {
         if !self.paused {
             return Err(OasisError::Backend("not paused".into()));
         }
+        if let Some(ref device) = self.device {
+            device.resume();
+        }
         self.playing = true;
         self.paused = false;
         Ok(())
     }
 
     fn stop(&mut self) -> Result<()> {
+        if let Some(ref device) = self.device {
+            device.pause();
+            device.clear();
+        }
+        self.mp3_buffer.clear();
         self.playing = false;
         self.paused = false;
-        self.position_ms = 0;
+        self.samples_queued = 0;
         Ok(())
     }
 
     fn set_volume(&mut self, volume: u8) -> Result<()> {
         self.volume = volume.min(100);
-        // In full implementation: SDL_mixer SetVolume or adjust gain.
         Ok(())
     }
 
@@ -153,11 +360,35 @@ impl AudioBackend for SdlAudioBackend {
     }
 
     fn position_ms(&self) -> u64 {
-        self.position_ms
+        if self.sample_rate > 0 && self.channels > 0 {
+            // Subtract unplayed samples still sitting in the SDL audio queue
+            // so the position reflects what the user actually hears, not what
+            // has been decoded and queued.  `device.size()` returns queued
+            // bytes; each sample is i16 = 2 bytes.
+            let unplayed = self
+                .device
+                .as_ref()
+                .map(|d| d.size() as u64 / 2)
+                .unwrap_or(0);
+            let played = self.samples_queued.saturating_sub(unplayed);
+            (played / self.channels as u64) * 1000 / self.sample_rate as u64
+        } else {
+            0
+        }
     }
 
     fn duration_ms(&self) -> u64 {
-        self.duration_ms
+        // For streaming tracks, duration is unknown.
+        if self.stream_track.is_some() {
+            return 0;
+        }
+        // Rough estimate from MP3 data size (assume 128kbps).
+        if let Some(id) = self.current_track
+            && let Some(data) = self.tracks.get(&id)
+        {
+            return (data.len() as u64 * 8) / 128;
+        }
+        0
     }
 
     fn unload_track(&mut self, track: AudioTrackId) -> Result<()> {
@@ -165,13 +396,24 @@ impl AudioBackend for SdlAudioBackend {
             self.stop()?;
             self.current_track = None;
         }
+        if self.stream_track == Some(track.0) {
+            self.stream_track = None;
+            self.mp3_buffer.clear();
+            self.decoder = rmp3::RawDecoder::new();
+        }
         self.tracks.remove(&track.0);
         Ok(())
     }
 
     fn shutdown(&mut self) -> Result<()> {
         self.stop()?;
+        self.device = None;
+        self.audio_subsystem = None;
         self.tracks.clear();
+        self.stream_track = None;
+        self.mp3_buffer.clear();
+        self.pcm_staging.clear();
+        self.decoder = rmp3::RawDecoder::new();
         self.initialized = false;
         log::info!("SDL2 audio backend shut down");
         Ok(())
@@ -183,31 +425,32 @@ impl AudioBackend for SdlAudioBackend {
         }
         let id = self.next_id;
         self.next_id += 1;
-        // Store an empty track for the streaming session.
-        self.tracks.insert(id, Vec::new());
+        self.mp3_buffer.clear();
+        self.decoder = rmp3::RawDecoder::new();
+        self.stream_track = Some(id);
+        self.samples_queued = 0;
         log::debug!("Created streaming audio track {id}");
         Ok(AudioTrackId(id))
     }
 
     fn feed_data(&mut self, track: AudioTrackId, data: &[u8]) -> Result<()> {
-        // Cap streaming buffer at 128KB to prevent unbounded growth.
-        // When a real SDL audio callback consumes data, this limit
-        // ensures memory stays bounded even if consumption stalls.
-        const MAX_STREAMING_BUF: usize = 128 * 1024;
-
-        if let Some(buf) = self.tracks.get_mut(&track.0) {
-            buf.extend_from_slice(data);
-            if buf.len() > MAX_STREAMING_BUF {
-                let drain = buf.len() - MAX_STREAMING_BUF;
-                buf.drain(..drain);
-            }
-            Ok(())
-        } else {
-            Err(OasisError::Backend(format!(
+        if self.stream_track != Some(track.0) {
+            return Err(OasisError::Backend(format!(
                 "streaming track {} not found",
                 track.0
-            )))
+            )));
         }
+
+        self.mp3_buffer.extend_from_slice(data);
+
+        // Cap MP3 buffer at 256KB to prevent unbounded growth.
+        const MAX_MP3_BUF: usize = 256 * 1024;
+        if self.mp3_buffer.len() > MAX_MP3_BUF {
+            let drain = self.mp3_buffer.len() - MAX_MP3_BUF;
+            self.mp3_buffer.drain(..drain);
+        }
+
+        self.decode_buffered()
     }
 }
 
@@ -412,27 +655,34 @@ mod tests {
         );
     }
 
+    // ---------------------------------------------------------------
+    // Streaming tests
+    // ---------------------------------------------------------------
+
     #[test]
     fn streaming_lifecycle() {
         let mut backend = init_backend();
         let track = backend.load_streaming().unwrap();
+        assert_eq!(backend.stream_track, Some(track.0));
         backend.feed_data(track, b"chunk 1").unwrap();
         backend.feed_data(track, b"chunk 2").unwrap();
-        // Data should have accumulated.
-        assert_eq!(backend.tracks[&track.0].len(), 14);
+        // Decoder consumes garbage bytes while scanning for sync words,
+        // so mp3_buffer may be smaller than total fed bytes.
         backend.unload_track(track).unwrap();
+        assert_eq!(backend.stream_track, None);
+        assert!(backend.mp3_buffer.is_empty());
     }
 
     #[test]
     fn streaming_buffer_is_bounded() {
         let mut backend = init_backend();
         let track = backend.load_streaming().unwrap();
-        // Feed more than 128KB to verify the buffer is capped.
-        for _ in 0..40 {
+        // Feed more than 256KB to verify the buffer is capped.
+        for _ in 0..80 {
             backend.feed_data(track, &[0xAA; 4096]).unwrap();
         }
-        // 40 * 4096 = 160KB, should be capped to 128KB.
-        assert!(backend.tracks[&track.0].len() <= 128 * 1024);
+        // 80 * 4096 = 320KB, should be capped to 256KB.
+        assert!(backend.mp3_buffer.len() <= 256 * 1024);
     }
 
     #[test]
@@ -462,29 +712,11 @@ mod tests {
         assert!(backend.is_playing());
     }
 
-    // ---------------------------------------------------------------
-    // Additional streaming tests
-    // ---------------------------------------------------------------
-
     #[test]
     fn streaming_starts_empty() {
         let mut backend = init_backend();
-        let track = backend.load_streaming().unwrap();
-        assert_eq!(backend.tracks[&track.0].len(), 0);
-    }
-
-    #[test]
-    fn streaming_multiple_tracks() {
-        let mut backend = init_backend();
-        let t1 = backend.load_streaming().unwrap();
-        let t2 = backend.load_streaming().unwrap();
-        assert_ne!(t1, t2);
-
-        backend.feed_data(t1, b"track1").unwrap();
-        backend.feed_data(t2, b"track2_data").unwrap();
-
-        assert_eq!(backend.tracks[&t1.0].len(), 6);
-        assert_eq!(backend.tracks[&t2.0].len(), 11);
+        let _track = backend.load_streaming().unwrap();
+        assert!(backend.mp3_buffer.is_empty());
     }
 
     #[test]
@@ -506,7 +738,7 @@ mod tests {
         assert!(backend.is_playing());
         backend.unload_track(track).unwrap();
         assert!(!backend.is_playing());
-        assert!(!backend.tracks.contains_key(&track.0));
+        assert_eq!(backend.stream_track, None);
     }
 
     #[test]
@@ -514,43 +746,41 @@ mod tests {
         let mut backend = init_backend();
         let track = backend.load_streaming().unwrap();
         backend.feed_data(track, b"").unwrap();
-        assert_eq!(backend.tracks[&track.0].len(), 0);
+        assert!(backend.mp3_buffer.is_empty());
     }
 
     #[test]
-    fn streaming_buffer_exact_limit() {
+    fn streaming_buffer_cap_prevents_oom() {
         let mut backend = init_backend();
         let track = backend.load_streaming().unwrap();
-        // Feed exactly 128KB.
-        let chunk = vec![0xBBu8; 128 * 1024];
+        // Feed a large chunk; the decoder will consume garbage data as it
+        // scans, and the 256KB cap prevents unbounded growth in between.
+        let chunk = vec![0xBBu8; 256 * 1024];
         backend.feed_data(track, &chunk).unwrap();
-        assert_eq!(backend.tracks[&track.0].len(), 128 * 1024);
+        // After decoding, buffer should not exceed 256KB.
+        assert!(backend.mp3_buffer.len() <= 256 * 1024);
     }
 
     #[test]
-    fn streaming_buffer_drains_oldest_data() {
+    fn streaming_overflow_does_not_error() {
         let mut backend = init_backend();
         let track = backend.load_streaming().unwrap();
-        // Fill with 0xAA, then overflow with 0xBB.
-        let first = vec![0xAAu8; 128 * 1024];
+        // Feed >256KB to verify the cap + decode cycle stays stable.
+        let first = vec![0xAAu8; 256 * 1024];
         backend.feed_data(track, &first).unwrap();
         backend.feed_data(track, &[0xBBu8; 100]).unwrap();
-        // Buffer should be exactly 128KB.
-        assert_eq!(backend.tracks[&track.0].len(), 128 * 1024);
-        // Last bytes should be 0xBB (the new data).
-        let buf = &backend.tracks[&track.0];
-        assert_eq!(buf[buf.len() - 1], 0xBB);
-        assert_eq!(buf[buf.len() - 100], 0xBB);
+        // Buffer should never exceed cap (decoder consumes garbage).
+        assert!(backend.mp3_buffer.len() <= 256 * 1024);
     }
 
     #[test]
-    fn streaming_shutdown_clears_streaming_tracks() {
+    fn streaming_shutdown_clears_streaming() {
         let mut backend = init_backend();
         let t1 = backend.load_streaming().unwrap();
         backend.feed_data(t1, b"data").unwrap();
-        let _t2 = backend.load_streaming().unwrap();
         backend.shutdown().unwrap();
-        assert!(backend.tracks.is_empty());
+        assert_eq!(backend.stream_track, None);
+        assert!(backend.mp3_buffer.is_empty());
     }
 
     #[test]
@@ -562,12 +792,21 @@ mod tests {
     }
 
     #[test]
-    fn streaming_incremental_growth() {
+    fn streaming_incremental_feed() {
         let mut backend = init_backend();
         let track = backend.load_streaming().unwrap();
+        // Feed many small chunks; decoder consumes garbage bytes, so the
+        // buffer may not grow monotonically, but no errors should occur.
         for i in 0..10 {
             backend.feed_data(track, &[i as u8; 100]).unwrap();
         }
-        assert_eq!(backend.tracks[&track.0].len(), 1000);
+        // Buffer stays bounded (decoder consumed garbage).
+        assert!(backend.mp3_buffer.len() <= 1000);
+    }
+
+    #[test]
+    fn position_ms_is_zero_before_playback() {
+        let backend = init_backend();
+        assert_eq!(backend.position_ms(), 0);
     }
 }

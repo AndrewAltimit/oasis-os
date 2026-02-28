@@ -690,13 +690,19 @@ impl AppRunner {
 
         for (i, s) in registry.stations.iter().enumerate() {
             let fav = if s.favorite { "*" } else { " " };
-            let bitrate = if s.bitrate > 0 {
-                format!("{}k", s.bitrate)
+            let source_info = if s.source_type == "icecast" {
+                if s.bitrate > 0 {
+                    format!("{}k", s.bitrate)
+                } else {
+                    "?".to_string()
+                }
+            } else if !s.collection.is_empty() {
+                s.collection.clone()
             } else {
-                "?".to_string()
+                "archive".to_string()
             };
             lines.push(format!(
-                "  [{fav}] {:<26} {:<12} {bitrate}",
+                "  [{fav}] {:<26} {:<12} {source_info}",
                 s.name, s.genre
             ));
             // Store index as hidden data (used by input handler).

@@ -10,17 +10,34 @@ use serde::{Deserialize, Serialize};
 pub struct Station {
     /// Display name.
     pub name: String,
-    /// Stream URL (HTTP).
+    /// Stream URL (HTTP). Empty for archive-type stations.
+    #[serde(default)]
     pub url: String,
     /// Genre tag (e.g. "ambient", "electronic").
     pub genre: String,
     /// Audio format ("mp3" or "aac").
+    #[serde(default = "default_format")]
     pub format: String,
     /// Bitrate in kbps (0 if unknown).
+    #[serde(default)]
     pub bitrate: u32,
     /// Whether this station is a user favorite.
     #[serde(default)]
     pub favorite: bool,
+    /// Source type: "archive" (Internet Archive) or "icecast" (Icecast/Shoutcast).
+    #[serde(default = "default_source_type")]
+    pub source_type: String,
+    /// Internet Archive collection identifier (only for archive-type stations).
+    #[serde(default)]
+    pub collection: String,
+}
+
+fn default_source_type() -> String {
+    "archive".into()
+}
+
+fn default_format() -> String {
+    "mp3".into()
 }
 
 /// Collection of stations, serializable as TOML.
@@ -41,73 +58,49 @@ impl StationRegistry {
         toml::to_string_pretty(self).map_err(|e| format!("serialize error: {e}"))
     }
 
-    /// Return the default curated station list.
+    /// Return the default curated station list (Internet Archive collections).
     pub fn defaults() -> Self {
         Self {
             stations: vec![
                 Station {
-                    name: "SomaFM Drone Zone".into(),
-                    url: "http://ice2.somafm.com/dronezone-128-mp3".into(),
-                    genre: "ambient".into(),
+                    name: "Old Time Radio".into(),
+                    url: String::new(),
+                    genre: "drama".into(),
                     format: "mp3".into(),
-                    bitrate: 128,
+                    bitrate: 0,
                     favorite: true,
+                    source_type: "archive".into(),
+                    collection: "oldtimeradio".into(),
                 },
                 Station {
-                    name: "SomaFM DEF CON".into(),
-                    url: "http://ice2.somafm.com/defcon-128-mp3".into(),
-                    genre: "electronic".into(),
+                    name: "LibriVox Audiobooks".into(),
+                    url: String::new(),
+                    genre: "audiobooks".into(),
                     format: "mp3".into(),
-                    bitrate: 128,
+                    bitrate: 0,
                     favorite: false,
+                    source_type: "archive".into(),
+                    collection: "librivoxaudio".into(),
                 },
                 Station {
-                    name: "SomaFM Groove Salad".into(),
-                    url: "http://ice2.somafm.com/groovesalad-128-mp3".into(),
-                    genre: "chill".into(),
+                    name: "Netlabel Music".into(),
+                    url: String::new(),
+                    genre: "music".into(),
                     format: "mp3".into(),
-                    bitrate: 128,
+                    bitrate: 0,
                     favorite: true,
+                    source_type: "archive".into(),
+                    collection: "netlabels".into(),
                 },
                 Station {
-                    name: "SomaFM Space Station".into(),
-                    url: "http://ice2.somafm.com/spacestation-128-mp3".into(),
-                    genre: "space".into(),
+                    name: "78rpm Records".into(),
+                    url: String::new(),
+                    genre: "vintage".into(),
                     format: "mp3".into(),
-                    bitrate: 128,
+                    bitrate: 0,
                     favorite: false,
-                },
-                Station {
-                    name: "SomaFM Secret Agent".into(),
-                    url: "http://ice2.somafm.com/secretagent-128-mp3".into(),
-                    genre: "lounge".into(),
-                    format: "mp3".into(),
-                    bitrate: 128,
-                    favorite: false,
-                },
-                Station {
-                    name: "SomaFM Lush".into(),
-                    url: "http://ice2.somafm.com/lush-128-mp3".into(),
-                    genre: "electronic".into(),
-                    format: "mp3".into(),
-                    bitrate: 128,
-                    favorite: false,
-                },
-                Station {
-                    name: "SomaFM Metal Detector".into(),
-                    url: "http://ice2.somafm.com/metal-128-mp3".into(),
-                    genre: "metal".into(),
-                    format: "mp3".into(),
-                    bitrate: 128,
-                    favorite: false,
-                },
-                Station {
-                    name: "SomaFM Boot Liquor".into(),
-                    url: "http://ice2.somafm.com/bootliquor-128-mp3".into(),
-                    genre: "americana".into(),
-                    format: "mp3".into(),
-                    bitrate: 128,
-                    favorite: false,
+                    source_type: "archive".into(),
+                    collection: "78rpm".into(),
                 },
             ],
         }
@@ -153,7 +146,7 @@ mod tests {
     fn defaults_has_stations() {
         let reg = StationRegistry::defaults();
         assert!(!reg.stations.is_empty());
-        assert!(reg.stations.len() >= 8);
+        assert!(reg.stations.len() >= 4);
     }
 
     #[test]
@@ -183,18 +176,18 @@ mod tests {
     #[test]
     fn by_genre_filters() {
         let reg = StationRegistry::defaults();
-        let ambient = reg.by_genre("ambient");
-        assert!(!ambient.is_empty());
-        for s in &ambient {
-            assert_eq!(s.genre, "ambient");
+        let drama = reg.by_genre("drama");
+        assert!(!drama.is_empty());
+        for s in &drama {
+            assert_eq!(s.genre, "drama");
         }
     }
 
     #[test]
     fn by_genre_case_insensitive() {
         let reg = StationRegistry::defaults();
-        let upper = reg.by_genre("AMBIENT");
-        let lower = reg.by_genre("ambient");
+        let upper = reg.by_genre("DRAMA");
+        let lower = reg.by_genre("drama");
         assert_eq!(upper.len(), lower.len());
     }
 
@@ -242,5 +235,48 @@ bitrate = 64
         assert_eq!(reg.stations.len(), 1);
         assert_eq!(reg.stations[0].name, "Test Radio");
         assert!(!reg.stations[0].favorite);
+        // Backward compat: missing source_type defaults to "archive".
+        assert_eq!(reg.stations[0].source_type, "archive");
+    }
+
+    #[test]
+    fn from_toml_icecast_station() {
+        let toml_str = r#"
+[[station]]
+name = "Custom Icecast"
+url = "http://example.com/stream"
+genre = "electronic"
+format = "mp3"
+bitrate = 128
+source_type = "icecast"
+"#;
+        let reg = StationRegistry::from_toml(toml_str).unwrap();
+        assert_eq!(reg.stations[0].source_type, "icecast");
+        assert!(reg.stations[0].collection.is_empty());
+    }
+
+    #[test]
+    fn from_toml_archive_station() {
+        let toml_str = r#"
+[[station]]
+name = "Old Time Radio"
+genre = "drama"
+source_type = "archive"
+collection = "oldtimeradio"
+"#;
+        let reg = StationRegistry::from_toml(toml_str).unwrap();
+        assert_eq!(reg.stations[0].source_type, "archive");
+        assert_eq!(reg.stations[0].collection, "oldtimeradio");
+        assert!(reg.stations[0].url.is_empty());
+        assert_eq!(reg.stations[0].format, "mp3");
+    }
+
+    #[test]
+    fn defaults_are_archive_type() {
+        let reg = StationRegistry::defaults();
+        for s in &reg.stations {
+            assert_eq!(s.source_type, "archive");
+            assert!(!s.collection.is_empty());
+        }
     }
 }
