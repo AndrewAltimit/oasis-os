@@ -168,6 +168,7 @@ impl IcecastSource {
                 Err(e) => {
                     let msg = format!("{e}");
                     if msg.contains("WouldBlock") || msg.contains("would block") {
+                        std::thread::sleep(std::time::Duration::from_millis(1));
                         continue;
                     }
                     self.state = SourceState::Error;
@@ -179,20 +180,19 @@ impl IcecastSource {
     }
 
     /// Try to parse HTTP response headers from the accumulated buffer.
+    ///
+    /// Searches for `\r\n\r\n` directly in raw bytes to avoid offset
+    /// mismatches from lossy UTF-8 conversion.
     fn try_parse_headers(&mut self) -> Option<usize> {
-        let text = String::from_utf8_lossy(&self.header_buf);
-        if let Some(end) = text.find("\r\n\r\n") {
-            let header_str = &text[..end];
-            let metaint = parse_icy_metaint(header_str);
-            // Body starts after \r\n\r\n.
-            let body_offset = end + 4;
-            if let Some(mi) = metaint {
-                self.demuxer = Some(IcyDemuxer::new(mi));
-            }
-            Some(body_offset)
-        } else {
-            None
+        let end = self.header_buf.windows(4).position(|w| w == b"\r\n\r\n")?;
+        let header_str = String::from_utf8_lossy(&self.header_buf[..end]);
+        let metaint = parse_icy_metaint(&header_str);
+        // Body starts after \r\n\r\n.
+        let body_offset = end + 4;
+        if let Some(mi) = metaint {
+            self.demuxer = Some(IcyDemuxer::new(mi));
         }
+        Some(body_offset)
     }
 }
 
@@ -351,6 +351,7 @@ impl ArchiveSource {
                 Err(e) => {
                     let msg = format!("{e}");
                     if msg.contains("WouldBlock") || msg.contains("would block") {
+                        std::thread::sleep(std::time::Duration::from_millis(1));
                         continue;
                     }
                     self.state = SourceState::Error;

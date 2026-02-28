@@ -87,6 +87,11 @@ async fn fetch_stream(
     let reader: web_sys::ReadableStreamDefaultReader = body.get_reader().dyn_into()?;
 
     loop {
+        // Stop fetching if the source was disconnected externally.
+        if shared.borrow().source_state == SourceState::Ended {
+            let _ = reader.cancel();
+            break;
+        }
         let result = JsFuture::from(reader.read()).await?;
         let done = js_sys::Reflect::get(&result, &"done".into())?
             .as_bool()
