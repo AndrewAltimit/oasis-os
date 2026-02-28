@@ -6,6 +6,7 @@ use oasis_audio::radio::source::RadioSource;
 use oasis_backend_sdl::SdlAudioBackend;
 use oasis_core::active_theme::ActiveTheme;
 use oasis_core::apps::AppRunner;
+use oasis_core::backend::AudioTrackId;
 use oasis_core::backend::Color;
 use oasis_core::bottombar::BottomBar;
 use oasis_core::browser::{BrowserConfig, BrowserWidget};
@@ -90,6 +91,10 @@ pub struct AppState {
     >,
     /// When the TV catalog fetch thread was spawned (for timeout detection).
     pub tv_fetch_start: Option<std::time::Instant>,
+    /// In-app video player (ffmpeg subprocess) for TV Guide preview.
+    pub video_player: crate::video_player::VideoPlayer,
+    /// Audio track for TV Guide video playback.
+    pub tv_audio_track: Option<AudioTrackId>,
 }
 
 #[cfg(test)]

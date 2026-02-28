@@ -5,7 +5,7 @@
 //! program cells, selection highlight, and footer navigation hints.
 
 use crate::active_theme::ActiveTheme;
-use crate::backend::Color;
+use crate::backend::{Color, TextureId};
 use crate::sdi::SdiRegistry;
 
 use super::catalog::{ChannelCatalog, VideoEpisode};
@@ -100,6 +100,8 @@ pub struct TvGuideState {
     pub fetch_error: Option<String>,
     /// First visible channel row (for paging when channels > VISIBLE_ROWS).
     pub scroll_offset: usize,
+    /// Texture for the in-app video preview (set by the video player).
+    pub preview_texture: Option<TextureId>,
 }
 
 impl std::fmt::Debug for TvGuideState {
@@ -135,6 +137,7 @@ impl TvGuideState {
             fetch_attempted: false,
             fetch_error: None,
             scroll_offset: 0,
+            preview_texture: None,
         }
     }
 
@@ -217,6 +220,7 @@ impl TvGuideState {
     /// Un-tune (return to guide view).
     pub fn untune(&mut self) {
         self.tuned_channel = None;
+        self.preview_texture = None;
     }
 
     /// Get the grid's start time (aligned to 30-min boundary, with offset).
@@ -457,6 +461,23 @@ impl TvGuideState {
             obj.stroke_width = Some(1);
             obj.visible = true;
             obj.z = 102;
+        }
+
+        // Video preview texture (rendered inset 1px inside the preview box).
+        ensure_obj(sdi, "tv_hdr_preview_vid");
+        if let Ok(obj) = sdi.get_mut("tv_hdr_preview_vid") {
+            if let Some(tex) = self.preview_texture {
+                obj.x = preview_x + 1;
+                obj.y = preview_y + 1;
+                obj.w = preview_w.saturating_sub(2);
+                obj.h = preview_h.saturating_sub(2);
+                obj.texture = Some(tex);
+                obj.visible = true;
+                obj.z = 103;
+            } else {
+                obj.visible = false;
+                obj.texture = None;
+            }
         }
 
         // LIVE badge (red rounded rect, shown when tuned or has content).
@@ -1040,6 +1061,7 @@ impl TvGuideState {
             "tv_hdr_now_title",
             "tv_hdr_now_detail",
             "tv_hdr_preview_bg",
+            "tv_hdr_preview_vid",
             "tv_hdr_live_badge",
             "tv_hdr_live_text",
             "tv_time_bg",

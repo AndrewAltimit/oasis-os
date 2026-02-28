@@ -437,6 +437,8 @@ mod tests {
             toasts: oasis_core::toast::ToastManager::new(),
             pending_tv_catalog_fetch: None,
             tv_fetch_start: None,
+            video_player: crate::video_player::VideoPlayer::new(),
+            tv_audio_track: None,
         }
     }
 

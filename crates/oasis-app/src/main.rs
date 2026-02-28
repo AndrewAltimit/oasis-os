@@ -11,6 +11,7 @@ mod commands;
 mod input;
 mod launch;
 mod render;
+mod video_player;
 use oasis_core::terminal_sdi;
 mod vfs_setup;
 
@@ -198,6 +199,8 @@ fn main() -> Result<()> {
         toasts: ToastManager::new(),
         pending_tv_catalog_fetch: None,
         tv_fetch_start: None,
+        video_player: video_player::VideoPlayer::new(),
+        tv_audio_track: None,
     };
 
     // Show a welcome toast.
@@ -664,7 +667,7 @@ fn main() -> Result<()> {
                 }
             }
 
-            // Handle TV Guide tune requests — open in system browser.
+            // Handle TV Guide tune requests — start in-app video player.
             {
                 let runner = find_tv_guide_runner(&mut state.app_runner, &mut state.open_runners);
                 if let Some(runner) = runner
@@ -673,11 +676,89 @@ fn main() -> Result<()> {
                     if path == oasis_core::apps::tv_guide::TV_REQUEST_PATH
                         && data.starts_with("tune_url ")
                     {
-                        let url = &data["tune_url ".len()..];
-                        log::info!("TV: opening video URL: {url}");
-                        let _ = std::process::Command::new("xdg-open").arg(url).spawn();
+                        let rest = &data["tune_url ".len()..];
+                        // Parse "url seek_secs" from IPC data.
+                        let (url, seek_secs) = if let Some(space_idx) = rest.rfind(' ') {
+                            let seek: u64 = rest[space_idx + 1..].parse().unwrap_or(0);
+                            (&rest[..space_idx], seek)
+                        } else {
+                            (rest, 0u64)
+                        };
+                        log::info!("TV: starting video player: {url} seek={seek_secs}s");
+
+                        // Stop any existing video session.
+                        state.video_player.stop(&mut backend);
+                        if let Some(track) = state.tv_audio_track.take() {
+                            let _ = state.audio_backend.unload_track(track);
+                        }
+
+                        // Compute preview dimensions (match guide.rs header layout).
+                        let at = &state.active_theme;
+                        let usable_h = at
+                            .screen_h
+                            .saturating_sub(at.statusbar_height + at.bottombar_height);
+                        let header_h = (usable_h * 20 / 100).max(60);
+                        let preview_w = (at.screen_w / 5).max(80).saturating_sub(2);
+                        let preview_h = header_h.saturating_sub(16).saturating_sub(2);
+
+                        // Start ffmpeg subprocesses.
+                        state
+                            .video_player
+                            .start(url, seek_secs, preview_w, preview_h);
+
+                        // Set up streaming audio track.
+                        match state.audio_backend.load_streaming() {
+                            Ok(track) => {
+                                let _ = state.audio_backend.play(track);
+                                state.tv_audio_track = Some(track);
+                            },
+                            Err(e) => {
+                                log::warn!("TV: failed to start audio stream: {e}");
+                            },
+                        }
                     } else {
                         let _ = vfs.write(&path, data.as_bytes());
+                    }
+                }
+            }
+
+            // Tick video player: upload frames, collect audio chunks.
+            {
+                let (texture, audio_chunks) = state.video_player.tick(&mut backend);
+
+                // Feed audio chunks to the streaming track.
+                if let Some(track) = state.tv_audio_track {
+                    for chunk in &audio_chunks {
+                        let _ = state.audio_backend.feed_data(track, chunk);
+                    }
+                }
+
+                // Update the guide's preview texture.
+                let runner = find_tv_guide_runner(&mut state.app_runner, &mut state.open_runners);
+                if let Some(runner) = runner
+                    && let Some(guide) = runner.tv_guide_state()
+                {
+                    guide.preview_texture = texture;
+                }
+            }
+
+            // Detect untune: video is active but guide has no tuned channel.
+            if state.video_player.is_active() {
+                let should_stop = {
+                    let runner =
+                        find_tv_guide_runner(&mut state.app_runner, &mut state.open_runners);
+                    match runner {
+                        Some(runner) => runner
+                            .tv_guide_state()
+                            .is_none_or(|g| g.tuned_channel.is_none()),
+                        None => true, // TV Guide closed.
+                    }
+                };
+                if should_stop {
+                    log::info!("TV: untuned or guide closed, stopping video");
+                    state.video_player.stop(&mut backend);
+                    if let Some(track) = state.tv_audio_track.take() {
+                        let _ = state.audio_backend.unload_track(track);
                     }
                 }
             }
@@ -736,6 +817,12 @@ fn main() -> Result<()> {
         }
 
         backend.swap_buffers()?;
+    }
+
+    // Clean up video player before shutting down backend.
+    state.video_player.stop(&mut backend);
+    if let Some(track) = state.tv_audio_track.take() {
+        let _ = state.audio_backend.unload_track(track);
     }
 
     backend.shutdown()?;

@@ -886,7 +886,7 @@ impl AppRunner {
                 if let Some(req) = guide.tune() {
                     // Build direct video URL and pass via VFS IPC.
                     let url = super::tv_guide::catalog::ChannelCatalog::download_url(&req.episode);
-                    let data = format!("tune_url {url}");
+                    let data = format!("tune_url {url} {}", req.seek_secs);
                     log::info!("TV: tune CH{} -> {}", req.channel_index, req.episode.title,);
                     self.pending_vfs_request = Some((TV_REQUEST_PATH.to_string(), data));
                 }
@@ -2276,6 +2276,20 @@ mod tests {
     // TV Guide video launch pipeline tests
     // ---------------------------------------------------------------
 
+    /// Extract the URL from a `tune_url {url} {seek_secs}` IPC string.
+    fn extract_tune_url(data: &str) -> &str {
+        let rest = &data["tune_url ".len()..];
+        rest.rsplit_once(' ').map_or(rest, |(url, _)| url)
+    }
+
+    /// Extract the seek_secs from a `tune_url {url} {seek_secs}` IPC string.
+    fn extract_tune_seek(data: &str) -> u64 {
+        let rest = &data["tune_url ".len()..];
+        rest.rsplit_once(' ')
+            .and_then(|(_, s)| s.parse().ok())
+            .unwrap_or(0)
+    }
+
     /// Helper: create a TV Guide runner with a catalog injected for channel 0.
     fn setup_tv_guide_with_catalog(
         item_id: &str,
@@ -2319,7 +2333,14 @@ mod tests {
             "expected tune_url, got: {data}"
         );
 
-        let url = &data["tune_url ".len()..];
+        let url = extract_tune_url(&data);
+        let seek = extract_tune_seek(&data);
+
+        // Must include seek_secs in IPC data.
+        assert!(
+            seek > 0 || data.ends_with(" 0"),
+            "missing seek_secs: {data}"
+        );
 
         // Must be a direct download URL, not an embed URL.
         assert!(
@@ -2339,7 +2360,7 @@ mod tests {
 
         runner.handle_input(&Button::Confirm, &vfs);
         let (_, data) = runner.take_pending_request().unwrap();
-        let url = &data["tune_url ".len()..];
+        let url = extract_tune_url(&data);
 
         // URL must contain the item ID.
         assert!(url.contains("sonic-episodes"), "missing item_id in: {url}");
@@ -2358,7 +2379,7 @@ mod tests {
 
         runner.handle_input(&Button::Confirm, &vfs);
         let (_, data) = runner.take_pending_request().unwrap();
-        let url = &data["tune_url ".len()..];
+        let url = extract_tune_url(&data);
 
         // '#' must be percent-encoded to '%23' (raw '#' breaks URLs).
         assert!(!url.contains('#'), "raw '#' in URL breaks fragment: {url}");
@@ -2401,7 +2422,7 @@ mod tests {
         // Tune channel 1.
         runner.handle_input(&Button::Confirm, &vfs);
         let (_, data) = runner.take_pending_request().unwrap();
-        let url = &data["tune_url ".len()..];
+        let url = extract_tune_url(&data);
 
         // URL must reference channel 1's item, not channel 0's.
         assert!(
@@ -2487,7 +2508,7 @@ mod tests {
 
         runner.handle_input(&Button::Confirm, &vfs);
         let (_, data) = runner.take_pending_request().unwrap();
-        let url = &data["tune_url ".len()..];
+        let url = extract_tune_url(&data);
 
         assert!(url.starts_with("https://"), "URL must be HTTPS: {url}");
         assert!(!url.contains(' '), "URL must not contain spaces: {url}");
