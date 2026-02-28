@@ -789,6 +789,11 @@ impl AppRunner {
         }
     }
 
+    /// Peek at a pending VFS IPC request without consuming it.
+    pub fn peek_pending_request(&self) -> Option<&(String, String)> {
+        self.pending_vfs_request.as_ref()
+    }
+
     /// Take any pending VFS IPC request (returns path and data if present).
     pub fn take_pending_request(&mut self) -> Option<(String, String)> {
         self.pending_vfs_request.take()

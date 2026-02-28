@@ -336,13 +336,20 @@ fn main() -> Result<()> {
         commands::poll_remote_client(&mut state);
 
         // Process pending VFS requests from app runners (e.g. radio tune).
+        // Skip TV Guide tune requests — they're handled by the dedicated video
+        // player section below.
         {
             let mut pending = None;
-            if let Some(ref mut runner) = state.app_runner {
+            if let Some(ref mut runner) = state.app_runner
+                && !is_tv_tune_request(runner)
+            {
                 pending = runner.take_pending_request();
             }
             if pending.is_none() {
                 for (_, runner) in &mut state.open_runners {
+                    if is_tv_tune_request(runner) {
+                        continue;
+                    }
                     if let Some(req) = runner.take_pending_request() {
                         pending = Some(req);
                         break;
@@ -849,6 +856,14 @@ fn find_tv_guide_runner<'a>(
         log::trace!("TV: found TV Guide in open_runners (windowed)");
     }
     found
+}
+
+/// Check if a runner's pending request is a TV Guide tune_url (should not be
+/// consumed by the generic VFS handler).
+fn is_tv_tune_request(runner: &oasis_core::apps::AppRunner) -> bool {
+    runner.peek_pending_request().is_some_and(|req| {
+        req.0 == oasis_core::apps::tv_guide::TV_REQUEST_PATH && req.1.starts_with("tune_url ")
+    })
 }
 
 /// Parse an HTTP/HTTPS stream URL into (host, port, path, use_tls).
