@@ -311,11 +311,13 @@ impl RadioManager {
                 },
                 Ok(None) => {
                     if src.state() == SourceState::Ended {
-                        // Clean up current streaming track.
-                        if let Some(track) = self.stream_track.take() {
-                            let _ = backend.stop();
-                            let _ = backend.unload_track(track);
-                        }
+                        // Release the stream track handle but do NOT stop the
+                        // backend — the SDL audio queue may still have seconds
+                        // of decoded PCM waiting to play.  Calling stop() would
+                        // discard that audio, clipping the end of the track.
+                        // The next track's tune() or start_playback() will
+                        // reset the backend when it begins.
+                        self.stream_track = None;
                         self.audio_buf.clear();
                         // Signal TrackEnded so caller can auto-advance.
                         self.state = RadioState::TrackEnded;

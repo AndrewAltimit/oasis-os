@@ -374,6 +374,12 @@ impl OasisWasm {
                             // Clear stale catalog/pending fetches on station change.
                             self.archive_catalog = None;
                             self.pending_catalog = None;
+                            // Disconnect old source so tick() doesn't keep
+                            // polling the previous station while the new
+                            // catalog is being fetched.
+                            if let Some(mut old) = self.radio_source.take() {
+                                old.disconnect();
+                            }
 
                             self.radio_manager
                                 .set_source_info(&station.source_type, &station.collection);

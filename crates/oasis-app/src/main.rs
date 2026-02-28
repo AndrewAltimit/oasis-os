@@ -366,6 +366,12 @@ fn main() -> Result<()> {
                             state.archive_catalog = None;
                             state.pending_catalog_fetch = None;
                             state.pending_source_fetch = None;
+                            // Disconnect old source so tick() doesn't keep
+                            // polling the previous station while the new
+                            // catalog is being fetched.
+                            if let Some(mut old) = state.radio_source.take() {
+                                old.disconnect();
+                            }
 
                             state
                                 .radio_manager
@@ -781,8 +787,11 @@ fn connect_archive_source(
                 return Err("timeout waiting for response headers".into());
             }
             match source.poll() {
-                Ok(Some(_)) => {
-                    // Headers parsed, audio data flowing.
+                Ok(Some(chunk)) => {
+                    // Headers parsed, audio data flowing.  Push back the
+                    // first chunk so it is not lost — it contains the initial
+                    // audio bytes and the one-shot metadata update.
+                    source.push_back_chunk(chunk);
                     log::info!("Archive source connected, audio data flowing");
                     return Ok(Box::new(source));
                 },

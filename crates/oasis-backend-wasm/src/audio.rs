@@ -313,8 +313,10 @@ impl AudioBackend for WasmAudioBackend {
                         if let Some(chunk) = pq.pop_front() {
                             drop(pq);
                             let arr = js_sys::Uint8Array::from(chunk.as_slice());
-                            if sb_inner.append_buffer_with_array_buffer_view(&arr).is_ok() {
-                                // updating_inner will be set false again when this finishes
+                            if sb_inner.append_buffer_with_array_buffer_view(&arr).is_err() {
+                                // Re-queue on failure (e.g. QuotaExceededError)
+                                // so the chunk is not lost.
+                                pending_inner.borrow_mut().push_front(chunk);
                             }
                         }
                     }) as Box<dyn FnMut()>);

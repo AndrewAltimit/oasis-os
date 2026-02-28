@@ -296,6 +296,9 @@ pub struct ArchiveSource {
     metadata_sent: bool,
     redirect_url: Option<String>,
     status_code: Option<u16>,
+    /// First chunk buffered by `push_back_chunk` so that
+    /// `connect_archive_source` can poll past headers without losing data.
+    pending_first_chunk: Option<AudioChunk>,
 }
 
 impl ArchiveSource {
@@ -325,6 +328,7 @@ impl ArchiveSource {
             metadata_sent: false,
             redirect_url: None,
             status_code: None,
+            pending_first_chunk: None,
         }
     }
 
@@ -347,6 +351,14 @@ impl ArchiveSource {
             }
         }
         Ok(())
+    }
+
+    /// Push back a chunk so it is returned by the next `poll()` call.
+    ///
+    /// Used by `connect_archive_source` to preserve the first audio chunk
+    /// (and its metadata) that was consumed while waiting for headers.
+    pub fn push_back_chunk(&mut self, chunk: AudioChunk) {
+        self.pending_first_chunk = Some(chunk);
     }
 
     /// Try to parse HTTP response headers from the accumulated buffer.
@@ -383,6 +395,10 @@ impl ArchiveSource {
 
 impl RadioSource for ArchiveSource {
     fn poll(&mut self) -> Result<Option<AudioChunk>> {
+        // Return any buffered chunk first (pushed back after header parsing).
+        if let Some(chunk) = self.pending_first_chunk.take() {
+            return Ok(Some(chunk));
+        }
         match self.state {
             SourceState::Connecting => {
                 self.send_request()?;

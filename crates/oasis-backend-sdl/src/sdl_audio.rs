@@ -117,8 +117,15 @@ impl SdlAudioBackend {
         // If the SDL2 queue already has plenty of audio, skip decoding and
         // keep the MP3 bytes for later.  This bounds latency without losing
         // any decoded audio.
+        //
+        // Exception: when the mp3_buffer is small (< 16 KB), always decode.
+        // This ensures the last frames of a finite track get decoded even if
+        // the queue is momentarily full — otherwise those bytes would be
+        // stranded when the source reaches EOF and feed_data is never called
+        // again.
         if let Some(ref device) = self.device
             && device.size() > MAX_QUEUE_BYTES
+            && self.mp3_buffer.len() >= 16 * 1024
         {
             return Ok(());
         }
