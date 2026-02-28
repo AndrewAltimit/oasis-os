@@ -11,6 +11,7 @@ use oasis_types::error::{OasisError, Result};
 use super::icy::{IcyDemuxer, StreamMetadata, parse_icy_metaint};
 
 /// A chunk of audio data returned by a radio source.
+#[derive(Debug)]
 pub struct AudioChunk {
     /// Raw audio bytes (MP3 frames, etc.).
     pub data: Vec<u8>,
@@ -293,6 +294,8 @@ pub struct ArchiveSource {
     track_title: String,
     track_creator: String,
     metadata_sent: bool,
+    redirect_url: Option<String>,
+    status_code: Option<u16>,
 }
 
 impl ArchiveSource {
@@ -320,6 +323,8 @@ impl ArchiveSource {
             track_title: title.to_string(),
             track_creator: creator.to_string(),
             metadata_sent: false,
+            redirect_url: None,
+            status_code: None,
         }
     }
 
@@ -349,7 +354,13 @@ impl ArchiveSource {
         let text = String::from_utf8_lossy(&self.header_buf);
         if let Some(end) = text.find("\r\n\r\n") {
             let header_str = &text[..end];
-            // Parse Content-Length if present.
+
+            // Parse status code from first line (e.g. "HTTP/1.1 200 OK").
+            let first_line = header_str.lines().next().unwrap_or("");
+            if let Some(code_str) = first_line.split_whitespace().nth(1) {
+                self.status_code = code_str.parse().ok();
+            }
+
             for line in header_str.lines() {
                 let lower = line.to_ascii_lowercase();
                 if lower.starts_with("content-length:")
@@ -357,17 +368,11 @@ impl ArchiveSource {
                 {
                     self.content_length = val.parse().ok();
                 }
-            }
-            // Check for HTTP redirect (302/301).
-            let first_line = header_str.lines().next().unwrap_or("");
-            if first_line.contains("301") || first_line.contains("302") {
-                for line in header_str.lines() {
-                    let lower = line.to_ascii_lowercase();
-                    if lower.starts_with("location:")
-                        && let Some(loc) = line.split_once(':').map(|(_, v)| v.trim())
-                    {
-                        log::info!("HTTP redirect to: {loc}");
-                    }
+                // Extract Location header for redirects.
+                if lower.starts_with("location:")
+                    && let Some((_, loc)) = line.split_once(':')
+                {
+                    self.redirect_url = Some(loc.trim().to_string());
                 }
             }
             Some(end + 4)
@@ -409,6 +414,23 @@ impl RadioSource for ArchiveSource {
                     self.header_buf.extend_from_slice(&buf[..n]);
                     if let Some(body_offset) = self.try_parse_headers() {
                         self.headers_parsed = true;
+
+                        // Check for redirect.
+                        if let Some(ref url) = self.redirect_url {
+                            let url = url.clone();
+                            self.state = SourceState::Error;
+                            let _ = self.stream.close();
+                            return Err(OasisError::Backend(format!("redirect:{url}")));
+                        }
+                        // Check for HTTP error status.
+                        if let Some(code) = self.status_code
+                            && code >= 400
+                        {
+                            self.state = SourceState::Error;
+                            let _ = self.stream.close();
+                            return Err(OasisError::Backend(format!("HTTP {code}")));
+                        }
+
                         let body = self.header_buf[body_offset..].to_vec();
                         self.header_buf.clear();
                         if body.is_empty() {
@@ -664,6 +686,78 @@ mod tests {
         let stream = Box::new(MockStream::new(response));
         let mut src = ArchiveSource::new(stream, "host", "/path", "T", "C");
         src.disconnect();
+        assert_eq!(src.state(), SourceState::Ended);
+    }
+
+    #[test]
+    fn archive_source_302_redirect() {
+        let response =
+            b"HTTP/1.1 302 Found\r\nLocation: https://cdn.archive.org/file.mp3\r\n\r\n".to_vec();
+        let stream = Box::new(MockStream::new(response));
+        let mut src = ArchiveSource::new(stream, "archive.org", "/download/x/y.mp3", "T", "C");
+
+        // Connecting → Active.
+        src.poll().unwrap();
+        // Header parse returns redirect error.
+        let err = src.poll().unwrap_err();
+        let msg = format!("{err}");
+        assert!(
+            msg.contains("redirect:"),
+            "expected redirect error, got: {msg}"
+        );
+        assert!(msg.contains("cdn.archive.org"));
+        assert_eq!(src.state(), SourceState::Error);
+    }
+
+    #[test]
+    fn archive_source_404_error() {
+        let response = b"HTTP/1.1 404 Not Found\r\n\r\n".to_vec();
+        let stream = Box::new(MockStream::new(response));
+        let mut src = ArchiveSource::new(stream, "host", "/path", "T", "C");
+
+        src.poll().unwrap(); // Connecting → Active.
+        let err = src.poll().unwrap_err();
+        let msg = format!("{err}");
+        assert!(
+            msg.contains("HTTP 404"),
+            "expected HTTP 404 error, got: {msg}"
+        );
+        assert_eq!(src.state(), SourceState::Error);
+    }
+
+    #[test]
+    fn archive_source_500_error() {
+        let response = b"HTTP/1.1 500 Internal Server Error\r\n\r\n".to_vec();
+        let stream = Box::new(MockStream::new(response));
+        let mut src = ArchiveSource::new(stream, "host", "/path", "T", "C");
+
+        src.poll().unwrap();
+        let err = src.poll().unwrap_err();
+        let msg = format!("{err}");
+        assert!(
+            msg.contains("HTTP 500"),
+            "expected HTTP 500 error, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn archive_source_streams_without_content_length() {
+        // No Content-Length header → stream until EOF.
+        let mut response = b"HTTP/1.1 200 OK\r\n\r\n".to_vec();
+        response.extend_from_slice(&[0xAA; 200]);
+
+        let stream = Box::new(MockStream::new(response));
+        let mut src = ArchiveSource::new(stream, "host", "/path", "T", "C");
+
+        src.poll().unwrap(); // Connecting.
+        let mut total = 0;
+        loop {
+            match src.poll().unwrap() {
+                Some(chunk) => total += chunk.data.len(),
+                None => break,
+            }
+        }
+        assert_eq!(total, 200);
         assert_eq!(src.state(), SourceState::Ended);
     }
 }

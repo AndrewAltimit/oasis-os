@@ -77,6 +77,10 @@ pub struct RadioManager {
     pub registry: StationRegistry,
     /// Genre filter (empty = show all).
     genre_filter: String,
+    /// Source type (e.g. "icecast", "archive").
+    source_type_info: String,
+    /// Collection identifier (for archive stations).
+    collection_info: String,
 }
 
 impl RadioManager {
@@ -93,6 +97,8 @@ impl RadioManager {
             error_msg: String::new(),
             registry: StationRegistry::defaults(),
             genre_filter: String::new(),
+            source_type_info: String::new(),
+            collection_info: String::new(),
         }
     }
 
@@ -114,6 +120,25 @@ impl RadioManager {
     /// Current "now playing" metadata.
     pub fn now_playing(&self) -> &str {
         &self.now_playing
+    }
+
+    /// Current error message (when state is Error).
+    pub fn error_msg(&self) -> &str {
+        &self.error_msg
+    }
+
+    /// Clear error and reset to Connecting (e.g. after handling a redirect).
+    pub fn resume_from_redirect(&mut self) {
+        if self.state == RadioState::Error {
+            self.error_msg.clear();
+            self.state = RadioState::Connecting;
+        }
+    }
+
+    /// Set the source type and collection for status display.
+    pub fn set_source_info(&mut self, source_type: &str, collection: &str) {
+        self.source_type_info = source_type.to_string();
+        self.collection_info = collection.to_string();
     }
 
     /// Current genre filter.
@@ -227,6 +252,8 @@ impl RadioManager {
         self.state = RadioState::Stopped;
         self.station_name.clear();
         self.now_playing.clear();
+        self.source_type_info.clear();
+        self.collection_info.clear();
         Ok(())
     }
 
@@ -378,6 +405,13 @@ impl RadioManager {
             lines.push(format!("Station: {}", self.station_name));
         } else {
             lines.push("Station: --".to_string());
+        }
+
+        if !self.source_type_info.is_empty() {
+            lines.push(format!("Source: {}", self.source_type_info));
+        }
+        if !self.collection_info.is_empty() {
+            lines.push(format!("Collection: {}", self.collection_info));
         }
 
         if !self.now_playing.is_empty() {

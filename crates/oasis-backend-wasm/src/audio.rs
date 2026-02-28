@@ -17,9 +17,16 @@ fn js_err(e: JsValue) -> OasisError {
     OasisError::Backend(format!("{e:?}"))
 }
 
+/// Maximum pending chunks before dropping oldest (prevents unbounded growth
+/// when MSE SourceBuffer can't keep up, e.g. QuotaExceededError).
+const MAX_PENDING_CHUNKS: usize = 50;
+
 // ---------------------------------------------------------------------------
 // MSE streaming track state
 // ---------------------------------------------------------------------------
+
+/// Shared optional JS closure slot for event handler lifecycle management.
+type SharedClosure = Rc<RefCell<Option<Closure<dyn FnMut()>>>>;
 
 struct StreamingTrack {
     audio_el: web_sys::HtmlAudioElement,
@@ -36,6 +43,9 @@ struct StreamingTrack {
     closures: Vec<Closure<dyn FnMut()>>,
     #[allow(dead_code)]
     closures_ev: Vec<Closure<dyn FnMut(web_sys::Event)>>,
+    // Hold the updateend closure (replaces .forget() leak).
+    #[allow(dead_code)]
+    update_end_closure: SharedClosure,
 }
 
 // ---------------------------------------------------------------------------
@@ -272,6 +282,7 @@ impl AudioBackend for WasmAudioBackend {
         let pending_chunks: Rc<RefCell<VecDeque<Vec<u8>>>> = Rc::new(RefCell::new(VecDeque::new()));
         let updating = Rc::new(Cell::new(false));
         let ready = Rc::new(Cell::new(false));
+        let update_end_closure: SharedClosure = Rc::new(RefCell::new(None));
 
         let mut closures: Vec<Closure<dyn FnMut()>> = Vec::new();
         let mut closures_ev: Vec<Closure<dyn FnMut(web_sys::Event)>> = Vec::new();
@@ -283,6 +294,7 @@ impl AudioBackend for WasmAudioBackend {
             let ms_ref = media_source.clone();
             let pending_ref = Rc::clone(&pending_chunks);
             let updating_ref = Rc::clone(&updating);
+            let closure_slot = Rc::clone(&update_end_closure);
 
             let on_open = Closure::wrap(Box::new(move || {
                 if let Ok(sb) = ms_ref.add_source_buffer("audio/mpeg") {
@@ -292,8 +304,14 @@ impl AudioBackend for WasmAudioBackend {
                     let updating_inner = Rc::clone(&updating_ref);
                     let on_update_end = Closure::wrap(Box::new(move || {
                         updating_inner.set(false);
+                        // Drop oldest if queue grew too large.
+                        let mut pq = pending_inner.borrow_mut();
+                        while pq.len() > MAX_PENDING_CHUNKS {
+                            pq.pop_front();
+                        }
                         // Append next pending chunk if available.
-                        if let Some(chunk) = pending_inner.borrow_mut().pop_front() {
+                        if let Some(chunk) = pq.pop_front() {
+                            drop(pq);
                             let arr = js_sys::Uint8Array::from(chunk.as_slice());
                             if sb_inner.append_buffer_with_array_buffer_view(&arr).is_ok() {
                                 // updating_inner will be set false again when this finishes
@@ -301,7 +319,8 @@ impl AudioBackend for WasmAudioBackend {
                         }
                     }) as Box<dyn FnMut()>);
                     sb.set_onupdateend(Some(on_update_end.as_ref().unchecked_ref()));
-                    on_update_end.forget();
+                    // Store closure in the shared slot instead of leaking with .forget().
+                    *closure_slot.borrow_mut() = Some(on_update_end);
 
                     *sb_ref.borrow_mut() = Some(sb);
                     ready_ref.set(true);
@@ -337,6 +356,7 @@ impl AudioBackend for WasmAudioBackend {
             object_url,
             closures,
             closures_ev,
+            update_end_closure,
         });
 
         self.current_track = Some(id);
@@ -347,6 +367,13 @@ impl AudioBackend for WasmAudioBackend {
 
     fn feed_data(&mut self, _track: AudioTrackId, data: &[u8]) -> Result<()> {
         if let Some(ref st) = self.streaming_track {
+            // Cap pending queue to prevent unbounded memory growth.
+            {
+                let mut pq = st.pending_chunks.borrow_mut();
+                while pq.len() >= MAX_PENDING_CHUNKS {
+                    pq.pop_front();
+                }
+            }
             if !st.ready.get() {
                 // SourceBuffer not ready yet — queue data.
                 st.pending_chunks.borrow_mut().push_back(data.to_vec());

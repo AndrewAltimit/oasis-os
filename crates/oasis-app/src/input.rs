@@ -587,6 +587,8 @@ mod tests {
             radio_manager: RadioManager::new(),
             radio_source: None,
             archive_catalog: None,
+            pending_catalog_fetch: None,
+            pending_source_fetch: None,
             audio_backend: SdlAudioBackend::new(),
             terminal_scroll_offset: 0,
             toasts: oasis_core::toast::ToastManager::new(),

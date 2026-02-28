@@ -221,6 +221,12 @@ async fn fetch_catalog(
     let search_url = ArchiveCatalog::search_url(collection);
     let resp_val = JsFuture::from(window.fetch_with_str(&search_url)).await?;
     let resp: web_sys::Response = resp_val.dyn_into()?;
+    if !resp.ok() {
+        return Err(JsValue::from_str(&format!(
+            "search API: HTTP {}",
+            resp.status()
+        )));
+    }
     let body_val = JsFuture::from(resp.text()?).await?;
     let body: String = body_val.as_string().unwrap_or_default();
 
@@ -236,6 +242,9 @@ async fn fetch_catalog(
         let files_url = format!("https://archive.org/metadata/{item_id}/files");
         let freq = JsFuture::from(window.fetch_with_str(&files_url)).await?;
         let fresp: web_sys::Response = freq.dyn_into()?;
+        if !fresp.ok() {
+            continue; // Skip this item, try next.
+        }
         let fbody_val = JsFuture::from(fresp.text()?).await?;
         let fbody: String = fbody_val.as_string().unwrap_or_default();
         let tracks = ArchiveCatalog::parse_files_response(&fbody, item_id, creator);

@@ -696,6 +696,8 @@ impl AppRunner {
                 } else {
                     "?".to_string()
                 }
+            } else if !s.collection.is_empty() {
+                s.collection.clone()
             } else {
                 "archive".to_string()
             };

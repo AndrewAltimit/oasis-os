@@ -371,6 +371,13 @@ impl OasisWasm {
                                 &mut self.audio,
                             );
 
+                            // Clear stale catalog/pending fetches on station change.
+                            self.archive_catalog = None;
+                            self.pending_catalog = None;
+
+                            self.radio_manager
+                                .set_source_info(&station.source_type, &station.collection);
+
                             if station.source_type == "archive" && !station.collection.is_empty() {
                                 self.pending_catalog =
                                     Some(archive::WasmArchiveCatalogFetcher::new(
@@ -386,6 +393,11 @@ impl OasisWasm {
                         let _ = self
                             .radio_manager
                             .process_request(&request, &mut self.audio);
+                        // Clear catalog on stop.
+                        if self.radio_manager.state() == oasis_audio::radio::RadioState::Stopped {
+                            self.archive_catalog = None;
+                            self.pending_catalog = None;
+                        }
                     }
                 }
             }
@@ -397,6 +409,9 @@ impl OasisWasm {
                 let fetcher = self.pending_catalog.take().unwrap();
                 match fetcher.take_results() {
                     Ok((catalog, source)) => {
+                        if let Some(mut old) = self.radio_source.take() {
+                            old.disconnect();
+                        }
                         self.archive_catalog = Some(catalog);
                         self.radio_source = Some(source);
                     },
@@ -416,6 +431,9 @@ impl OasisWasm {
                 && let Some(ref mut catalog) = self.archive_catalog
                 && let Some(track) = catalog.next_track().cloned()
             {
+                if let Some(mut old) = self.radio_source.take() {
+                    old.disconnect();
+                }
                 let url = oasis_audio::radio::ArchiveCatalog::download_url(&track);
                 let source = archive::WasmArchiveSource::new(&url, &track.title, &track.creator);
                 self.radio_source = Some(Box::new(source));

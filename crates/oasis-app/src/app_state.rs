@@ -1,3 +1,5 @@
+use std::sync::mpsc;
+
 use oasis_audio::RadioManager;
 use oasis_audio::radio::archive::ArchiveCatalog;
 use oasis_audio::radio::source::RadioSource;
@@ -21,6 +23,17 @@ use oasis_core::toast::ToastManager;
 use oasis_core::transfer::FtpServer;
 use oasis_core::transition;
 use oasis_core::wm::manager::WindowManager;
+
+/// Result of a background catalog fetch (catalog + first connected track).
+pub struct CatalogFetchResult {
+    pub catalog: ArchiveCatalog,
+    pub source: Box<dyn RadioSource + Send>,
+}
+
+/// Result of a background single-track fetch.
+pub struct TrackFetchResult {
+    pub source: Box<dyn RadioSource + Send>,
+}
 
 /// The UI modes the app supports.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -67,6 +80,8 @@ pub struct AppState {
     pub radio_manager: RadioManager,
     pub radio_source: Option<Box<dyn RadioSource>>,
     pub archive_catalog: Option<ArchiveCatalog>,
+    pub pending_catalog_fetch: Option<mpsc::Receiver<Result<CatalogFetchResult, String>>>,
+    pub pending_source_fetch: Option<mpsc::Receiver<Result<TrackFetchResult, String>>>,
     pub audio_backend: SdlAudioBackend,
     pub terminal_scroll_offset: usize,
     pub toasts: ToastManager,

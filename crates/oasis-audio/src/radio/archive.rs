@@ -16,6 +16,33 @@ pub struct ArchiveTrack {
     pub creator: String,
 }
 
+/// Percent-encode a filename for use in HTTP paths/URLs.
+///
+/// Encodes characters that are unsafe in URL path segments: space, `#`, `?`,
+/// `&`, `%`, `+`, and bytes >127.
+pub fn percent_encode(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for b in s.bytes() {
+        match b {
+            b' ' => out.push_str("%20"),
+            b'#' => out.push_str("%23"),
+            b'?' => out.push_str("%3F"),
+            b'&' => out.push_str("%26"),
+            b'%' => out.push_str("%25"),
+            b'+' => out.push_str("%2B"),
+            0x80.. => {
+                out.push('%');
+                out.push(char::from(HEX[b as usize >> 4]));
+                out.push(char::from(HEX[b as usize & 0xF]));
+            },
+            _ => out.push(char::from(b)),
+        }
+    }
+    out
+}
+
+const HEX: [u8; 16] = *b"0123456789ABCDEF";
+
 /// A browsable catalog of tracks from an IA collection.
 pub struct ArchiveCatalog {
     /// IA collection identifier.
@@ -137,14 +164,19 @@ impl ArchiveCatalog {
 
     /// Return the download path for a track: `/download/{item_id}/{filename}`.
     pub fn download_path(track: &ArchiveTrack) -> String {
-        format!("/download/{}/{}", track.item_id, track.filename)
+        format!(
+            "/download/{}/{}",
+            track.item_id,
+            percent_encode(&track.filename)
+        )
     }
 
     /// Return the full download URL for a track.
     pub fn download_url(track: &ArchiveTrack) -> String {
         format!(
             "https://archive.org/download/{}/{}",
-            track.item_id, track.filename
+            track.item_id,
+            percent_encode(&track.filename)
         )
     }
 
@@ -386,5 +418,56 @@ mod tests {
             ArchiveCatalog::files_api_path("item-123"),
             "/metadata/item-123/files"
         );
+    }
+
+    #[test]
+    fn percent_encode_spaces() {
+        assert_eq!(percent_encode("hello world.mp3"), "hello%20world.mp3");
+    }
+
+    #[test]
+    fn percent_encode_special_chars() {
+        assert_eq!(percent_encode("file#1.mp3"), "file%231.mp3");
+        assert_eq!(percent_encode("a?b&c+d%e"), "a%3Fb%26c%2Bd%25e");
+    }
+
+    #[test]
+    fn percent_encode_safe_string() {
+        assert_eq!(percent_encode("simple.mp3"), "simple.mp3");
+        assert_eq!(percent_encode("a-b_c.mp3"), "a-b_c.mp3");
+    }
+
+    #[test]
+    fn percent_encode_unicode() {
+        let encoded = percent_encode("caf\u{00e9}.mp3");
+        assert!(
+            encoded.contains("%"),
+            "expected percent-encoded output: {encoded}"
+        );
+        assert!(!encoded.contains('\u{00e9}'));
+    }
+
+    #[test]
+    fn download_path_encodes_filename() {
+        let track = ArchiveTrack {
+            item_id: "item-123".into(),
+            filename: "my song #1.mp3".into(),
+            title: "T".into(),
+            creator: "C".into(),
+        };
+        let path = ArchiveCatalog::download_path(&track);
+        assert_eq!(path, "/download/item-123/my%20song%20%231.mp3");
+    }
+
+    #[test]
+    fn download_url_encodes_filename() {
+        let track = ArchiveTrack {
+            item_id: "item-123".into(),
+            filename: "track one.mp3".into(),
+            title: "T".into(),
+            creator: "C".into(),
+        };
+        let url = ArchiveCatalog::download_url(&track);
+        assert_eq!(url, "https://archive.org/download/item-123/track%20one.mp3");
     }
 }
