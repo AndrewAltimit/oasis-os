@@ -592,6 +592,7 @@ mod tests {
             audio_backend: SdlAudioBackend::new(),
             terminal_scroll_offset: 0,
             toasts: oasis_core::toast::ToastManager::new(),
+            pending_tv_catalog_fetch: None,
         };
         let sdi = SdiRegistry::new();
         let vfs = MemoryVfs::new();

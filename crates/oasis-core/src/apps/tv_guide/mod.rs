@@ -1,0 +1,25 @@
+//! Internet Archive TV Guide — retro EPG with deterministic scheduling.
+//!
+//! Provides a cable-TV-style channel grid with video content from Internet
+//! Archive collections. Each channel has a deterministic schedule seeded by
+//! channel number so every instance computes the same "what's on" result
+//! for any given Unix timestamp.
+
+pub mod catalog;
+pub mod channel;
+pub mod guide;
+pub mod schedule;
+
+pub use catalog::{ChannelCatalog, VideoEpisode};
+pub use channel::{Channel, ChannelConfig, ChannelSource};
+pub use guide::TvGuideState;
+pub use schedule::{ScheduleSlot, schedule_at, schedule_range};
+
+/// VFS path for TV channel configuration.
+pub const TV_CHANNELS_PATH: &str = "/etc/tv/channels.toml";
+
+/// VFS path for TV playback requests (IPC).
+pub const TV_REQUEST_PATH: &str = "/var/tv/request";
+
+/// VFS path for TV playback status (IPC).
+pub const TV_STATUS_PATH: &str = "/var/tv/status";

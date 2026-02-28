@@ -85,6 +85,9 @@ pub struct AppState {
     pub audio_backend: SdlAudioBackend,
     pub terminal_scroll_offset: usize,
     pub toasts: ToastManager,
+    pub pending_tv_catalog_fetch: Option<
+        mpsc::Receiver<Result<Vec<Option<oasis_core::apps::tv_guide::ChannelCatalog>>, String>>,
+    >,
 }
 
 #[cfg(test)]

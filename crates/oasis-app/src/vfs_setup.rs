@@ -33,6 +33,7 @@ pub fn populate_demo_vfs(vfs: &mut MemoryVfs) {
         "Package Manager",
         "System Monitor",
         "Browser",
+        "TV Guide",
     ] {
         vfs.mkdir(&format!("/apps/{name}")).unwrap();
     }
@@ -45,6 +46,16 @@ pub fn populate_demo_vfs(vfs: &mut MemoryVfs) {
         vfs.write("/etc/radio/stations.toml", toml_data.as_bytes())
             .unwrap();
     }
+
+    // TV Guide configuration directory and default channel list.
+    vfs.mkdir("/etc/tv").unwrap();
+    vfs.mkdir("/var/tv").unwrap();
+    vfs.mkdir("/var/tv/cache").unwrap();
+    vfs.write(
+        "/etc/tv/channels.toml",
+        oasis_core::apps::tv_guide::channel::DEFAULT_CHANNELS_TOML.as_bytes(),
+    )
+    .unwrap();
 
     // Browser home page content.
     vfs.mkdir("/sites").unwrap();
@@ -362,6 +373,7 @@ mod tests {
             "Package Manager",
             "System Monitor",
             "Browser",
+            "TV Guide",
         ];
         for name in &expected {
             let path = format!("/apps/{name}");

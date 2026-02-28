@@ -37,6 +37,7 @@ use oasis_core::startmenu::StartMenuState;
 use oasis_core::statusbar::StatusBar;
 use oasis_core::terminal::{
     CommandRegistry, register_agent_commands, register_builtins, register_plugin_commands,
+    register_tv_commands,
 };
 use oasis_core::toast::{ToastLevel, ToastManager};
 use oasis_core::transition;
@@ -115,6 +116,7 @@ fn main() -> Result<()> {
     oasis_core::update::register_update_commands(&mut cmd_reg);
     register_plugin_commands(&mut cmd_reg);
     register_agent_commands(&mut cmd_reg);
+    register_tv_commands(&mut cmd_reg);
     oasis_core::browser::commands::register_browser_commands(&mut cmd_reg);
 
     // Window manager state (Desktop mode).
@@ -185,6 +187,7 @@ fn main() -> Result<()> {
         },
         terminal_scroll_offset: 0,
         toasts: ToastManager::new(),
+        pending_tv_catalog_fetch: None,
     };
 
     // Show a welcome toast.
@@ -528,6 +531,60 @@ fn main() -> Result<()> {
             }
             for (_, runner) in &mut state.open_runners {
                 runner.refresh_radio(&vfs);
+            }
+
+            // Poll pending TV catalog fetch.
+            if let Some(ref rx) = state.pending_tv_catalog_fetch
+                && let Ok(result) = rx.try_recv()
+            {
+                state.pending_tv_catalog_fetch = None;
+                if let Ok(catalogs) = result
+                    && let Some(ref mut runner) = state.app_runner
+                    && let Some(guide) = runner.tv_guide_state()
+                {
+                    for (i, cat) in catalogs.into_iter().enumerate() {
+                        if let Some(c) = cat
+                            && i < guide.catalogs.len()
+                        {
+                            guide.catalogs[i] = Some(c);
+                        }
+                    }
+                }
+            }
+
+            // Start TV catalog fetch if a TV Guide app needs it.
+            if state.pending_tv_catalog_fetch.is_none()
+                && let Some(ref mut runner) = state.app_runner
+                && runner.title == "TV Guide"
+                && let Some(guide) = runner.tv_guide_state()
+                && guide.catalogs.iter().all(|c| c.is_none())
+            {
+                let channels = guide.channels.clone();
+                let (tx, rx) = std::sync::mpsc::channel();
+                let tls = state.tls_provider.clone();
+                std::thread::spawn(move || {
+                    let result = fetch_tv_catalogs_blocking(&channels, &tls);
+                    let _ = tx.send(result);
+                });
+                state.pending_tv_catalog_fetch = Some(rx);
+            }
+
+            // Handle TV Guide tune requests — open in system browser.
+            if let Some(ref mut runner) = state.app_runner
+                && let Some((path, data)) = runner.take_pending_request()
+            {
+                if path == oasis_core::apps::tv_guide::TV_REQUEST_PATH && data.starts_with("tune ")
+                {
+                    let parts: Vec<&str> = data.splitn(4, ' ').collect();
+                    if parts.len() >= 3 {
+                        let item_id = parts[2];
+                        let url = oasis_core::apps::tv_guide::ChannelCatalog::embed_url(item_id);
+                        // Open in default browser.
+                        let _ = std::process::Command::new("xdg-open").arg(&url).spawn();
+                    }
+                } else {
+                    let _ = vfs.write(&path, data.as_bytes());
+                }
             }
         }
 
@@ -896,6 +953,51 @@ fn fetch_catalog_blocking(
 
     let source = connect_archive_source(tls, &track)?;
     Ok(app_state::CatalogFetchResult { catalog, source })
+}
+
+/// Fetch video catalogs for all TV channels on a background thread.
+fn fetch_tv_catalogs_blocking(
+    channels: &[oasis_core::apps::tv_guide::Channel],
+    tls: &oasis_core::net::RustlsTlsProvider,
+) -> std::result::Result<Vec<Option<oasis_core::apps::tv_guide::ChannelCatalog>>, String> {
+    use oasis_core::apps::tv_guide::catalog::ChannelCatalog;
+
+    let mut net = oasis_core::net::StdNetworkBackend::new();
+    let mut results = Vec::new();
+
+    for channel in channels {
+        let mut catalog = ChannelCatalog::new(channel.number);
+
+        for source in &channel.source {
+            let files_path = ChannelCatalog::files_api_path(&source.item_id);
+            match https_get_body(&mut net, tls, "archive.org", &files_path) {
+                Ok(body) => {
+                    let episodes = ChannelCatalog::parse_files_response(
+                        &body,
+                        &source.item_id,
+                        source.subfolder.as_deref(),
+                    );
+                    log::info!(
+                        "TV item '{}': {} video episodes",
+                        source.item_id,
+                        episodes.len(),
+                    );
+                    catalog.add_episodes(episodes);
+                },
+                Err(e) => {
+                    log::warn!("TV files API for '{}': {e}", source.item_id);
+                },
+            }
+        }
+
+        if catalog.episodes.is_empty() {
+            results.push(None);
+        } else {
+            results.push(Some(catalog));
+        }
+    }
+
+    Ok(results)
 }
 
 /// Connect to a single archive track on a background thread.

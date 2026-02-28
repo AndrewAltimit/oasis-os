@@ -11,6 +11,8 @@ pub mod input;
 pub mod network;
 pub mod platform;
 pub mod renderer;
+pub mod tv_catalog;
+pub mod video;
 
 use wasm_bindgen::prelude::*;
 use web_sys::HtmlCanvasElement;
@@ -124,6 +126,8 @@ pub struct OasisWasm {
     radio_source: Option<Box<dyn oasis_audio::radio::RadioSource>>,
     archive_catalog: Option<oasis_audio::radio::ArchiveCatalog>,
     pending_catalog: Option<archive::WasmArchiveCatalogFetcher>,
+    video_overlay: video::VideoOverlay,
+    pending_tv_catalog: Option<tv_catalog::WasmTvCatalogFetcher>,
 }
 
 #[wasm_bindgen]
@@ -181,10 +185,15 @@ impl OasisWasm {
         let iframe = IframeOverlay::new(&canvas)
             .map_err(|e| JsValue::from_str(&format!("iframe overlay: {e:?}")))?;
 
+        // Video overlay for TV Guide playback.
+        let video_overlay = video::VideoOverlay::new(&canvas)
+            .map_err(|e| JsValue::from_str(&format!("video overlay: {e:?}")))?;
+
         // Scene graph and commands.
         let mut sdi = SdiRegistry::new();
         let mut cmd_reg = CommandRegistry::new();
         register_builtins(&mut cmd_reg);
+        oasis_core::terminal::register_tv_commands(&mut cmd_reg);
 
         // VFS with demo content.
         let mut vfs = MemoryVfs::new();
@@ -289,6 +298,8 @@ impl OasisWasm {
             radio_source: None,
             archive_catalog: None,
             pending_catalog: None,
+            video_overlay,
+            pending_tv_catalog: None,
         })
     }
 
@@ -457,6 +468,64 @@ impl OasisWasm {
             }
             for (_, runner) in &mut self.open_runners {
                 runner.refresh_radio(&self.vfs);
+            }
+
+            // Poll pending TV catalog fetch.
+            if let Some(ref fetcher) = self.pending_tv_catalog
+                && fetcher.is_ready()
+            {
+                let fetcher = self.pending_tv_catalog.take().unwrap();
+                if let Ok(catalogs) = fetcher.take_results() {
+                    // Update catalogs in any active TV Guide runner.
+                    if let Some(ref mut runner) = self.app_runner
+                        && let Some(ref mut guide) = runner.tv_guide_state()
+                    {
+                        for (i, cat) in catalogs.into_iter().enumerate() {
+                            if let Some(c) = cat
+                                && i < guide.catalogs.len()
+                            {
+                                guide.catalogs[i] = Some(c);
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Start TV catalog fetch if a TV Guide app needs it.
+            if self.pending_tv_catalog.is_none()
+                && let Some(ref mut runner) = self.app_runner
+                && runner.title == "TV Guide"
+                && let Some(guide) = runner.tv_guide_state()
+                && guide.catalogs.iter().all(|c| c.is_none())
+            {
+                self.pending_tv_catalog =
+                    Some(tv_catalog::WasmTvCatalogFetcher::new(&guide.channels));
+            }
+
+            // Handle TV Guide tune requests via VFS IPC.
+            if let Some(ref mut runner) = self.app_runner
+                && let Some((path, data)) = runner.take_pending_request()
+            {
+                if path == oasis_core::apps::tv_guide::TV_REQUEST_PATH && data.starts_with("tune ")
+                {
+                    // Parse: "tune <channel_idx> <item_id> <seek_secs>"
+                    let parts: Vec<&str> = data.splitn(4, ' ').collect();
+                    if parts.len() >= 3 {
+                        let item_id = parts[2];
+                        let seek_secs: u64 = parts.get(3).and_then(|s| s.parse().ok()).unwrap_or(0);
+                        let sw = self.active_theme.screen_w;
+                        self.video_overlay.show_pip(
+                            item_id,
+                            seek_secs,
+                            (sw as i32) - 160,
+                            4,
+                            152,
+                            100,
+                        );
+                    }
+                } else {
+                    let _ = self.vfs.write(&path, data.as_bytes());
+                }
             }
         }
 
@@ -1424,6 +1493,16 @@ fn populate_wasm_vfs(vfs: &mut MemoryVfs) {
     let _ = vfs.mkdir("/apps/Browser");
     let _ = vfs.mkdir("/apps/Music Player");
     let _ = vfs.mkdir("/apps/Terminal");
+    let _ = vfs.mkdir("/apps/TV Guide");
+
+    // TV Guide configuration.
+    let _ = vfs.mkdir("/etc/tv");
+    let _ = vfs.mkdir("/var/tv");
+    let _ = vfs.mkdir("/var/tv/cache");
+    let _ = vfs.write(
+        "/etc/tv/channels.toml",
+        oasis_core::apps::tv_guide::channel::DEFAULT_CHANNELS_TOML.as_bytes(),
+    );
 
     // Browser home page content.
     let _ = vfs.mkdir("/sites");

@@ -8,6 +8,8 @@ use crate::sdi::SdiRegistry;
 use crate::ui::flex;
 use crate::vfs::{EntryKind, Vfs};
 
+use super::tv_guide::guide::TvGuideState;
+
 /// Maximum lines visible in the app content area (fallback for 480x272).
 const MAX_VISIBLE_LINES: usize = 13;
 
@@ -146,6 +148,8 @@ pub struct AppRunner {
     visual_selected: f32,
     /// Cached max visible lines (updated each frame by `update_sdi`).
     cached_max_visible: usize,
+    /// TV Guide state (only for "TV Guide" app).
+    tv_guide: Option<TvGuideState>,
 }
 
 impl AppRunner {
@@ -166,6 +170,7 @@ impl AppRunner {
             pending_vfs_request: None,
             visual_selected: 0.0,
             cached_max_visible: MAX_VISIBLE_LINES,
+            tv_guide: None,
         };
         runner.init_content(&title, vfs);
         runner
@@ -265,6 +270,9 @@ impl AppRunner {
                 // Use cursor for station selection.
                 self.cursor = 0;
             },
+            "TV Guide" => {
+                self.init_tv_guide(vfs);
+            },
             "System Monitor" => {
                 self.lines = vec![
                     "System Monitor".to_string(),
@@ -299,6 +307,11 @@ impl AppRunner {
         // Internet Radio mode.
         if self.title == "Internet Radio" {
             return self.handle_radio_input(button, vfs);
+        }
+
+        // TV Guide mode.
+        if self.title == "TV Guide" {
+            return self.handle_tv_guide_input(button);
         }
 
         match button {
@@ -788,6 +801,88 @@ impl AppRunner {
         self.scroll = old_scroll;
     }
 
+    // ---------------------------------------------------------------
+    // TV Guide helpers
+    // ---------------------------------------------------------------
+
+    /// Initialize the TV Guide app from VFS channel config.
+    fn init_tv_guide(&mut self, vfs: &dyn Vfs) {
+        use super::tv_guide::TV_CHANNELS_PATH;
+        use super::tv_guide::channel::{ChannelConfig, DEFAULT_CHANNELS_TOML};
+
+        let config = if vfs.exists(TV_CHANNELS_PATH) {
+            let data = vfs.read(TV_CHANNELS_PATH).unwrap_or_default();
+            let text = String::from_utf8_lossy(&data);
+            ChannelConfig::from_toml(&text).unwrap_or_else(|_| {
+                ChannelConfig::from_toml(DEFAULT_CHANNELS_TOML)
+                    .expect("default channels TOML is valid")
+            })
+        } else {
+            ChannelConfig::from_toml(DEFAULT_CHANNELS_TOML).expect("default channels TOML is valid")
+        };
+
+        let guide = TvGuideState::new(&config);
+        self.lines = guide.text_content();
+        self.tv_guide = Some(guide);
+        self.cursor = 0;
+    }
+
+    /// Handle input for the TV Guide app.
+    fn handle_tv_guide_input(&mut self, button: &Button) -> AppAction {
+        use super::tv_guide::TV_REQUEST_PATH;
+
+        let Some(ref mut guide) = self.tv_guide else {
+            return AppAction::None;
+        };
+
+        match button {
+            Button::Cancel => {
+                if guide.tuned_channel.is_some() {
+                    guide.untune();
+                    AppAction::None
+                } else {
+                    AppAction::Exit
+                }
+            },
+            Button::Up => {
+                guide.select_up();
+                self.lines = guide.text_content();
+                AppAction::None
+            },
+            Button::Down => {
+                guide.select_down();
+                self.lines = guide.text_content();
+                AppAction::None
+            },
+            Button::Left => {
+                guide.scroll_left();
+                AppAction::None
+            },
+            Button::Right => {
+                guide.scroll_right();
+                AppAction::None
+            },
+            Button::Confirm => {
+                if let Some(req) = guide.tune() {
+                    // Publish tune request via VFS IPC.
+                    let data = format!(
+                        "tune {} {} {}",
+                        req.channel_index, req.episode.item_id, req.seek_secs,
+                    );
+                    self.pending_vfs_request = Some((TV_REQUEST_PATH.to_string(), data));
+                }
+                self.lines = guide.text_content();
+                AppAction::None
+            },
+            _ => AppAction::None,
+        }
+    }
+
+    /// Get mutable reference to the TV guide state.
+    pub fn tv_guide_state(&mut self) -> Option<&mut TvGuideState> {
+        self.tv_guide.as_mut()
+    }
+
     /// Open a file and display its contents.
     /// Dispatches to app-specific viewers for Music Player and Photo Viewer.
     pub fn open_file(&mut self, vfs: &dyn Vfs, path: &str) {
@@ -819,6 +914,12 @@ impl AppRunner {
 
     /// Render the app screen to SDI objects.
     pub fn update_sdi(&mut self, sdi: &mut SdiRegistry, at: &ActiveTheme) {
+        // TV Guide uses its own custom grid rendering.
+        if let Some(ref mut guide) = self.tv_guide {
+            guide.update_sdi(sdi, at);
+            return;
+        }
+
         // Full-screen background.
         if !sdi.contains("app_bg") {
             sdi.create("app_bg");
@@ -1191,6 +1292,9 @@ impl AppRunner {
                 obj.visible = false;
             }
         }
+
+        // Hide TV Guide objects.
+        TvGuideState::hide_sdi(sdi);
     }
 }
 
