@@ -435,6 +435,11 @@ impl AppRunner {
         backend: &mut dyn SdiBackend,
         at: &ActiveTheme,
     ) -> crate::error::Result<()> {
+        // TV Guide gets its own EPG grid renderer.
+        if let Some(ref guide) = self.tv_guide {
+            return guide.draw_windowed(cx, cy, cw, ch, backend, at);
+        }
+
         // Content background.
         backend.fill_rect(cx, cy, cw, ch, at.app_bg)?;
 
@@ -886,6 +891,13 @@ impl AppRunner {
                     );
                     self.pending_vfs_request = Some((TV_REQUEST_PATH.to_string(), data));
                 }
+                self.lines = guide.text_content();
+                AppAction::None
+            },
+            Button::Select => {
+                // Retry catalog fetch.
+                guide.fetch_attempted = false;
+                guide.fetch_error = None;
                 self.lines = guide.text_content();
                 AppAction::None
             },

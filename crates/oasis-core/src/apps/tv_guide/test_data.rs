@@ -111,6 +111,7 @@ mod tests {
                 call_sign: "TEST".to_string(),
                 name: "Test".to_string(),
                 genre: "test".to_string(),
+                location: None,
                 source: vec![],
             },
             Channel {
@@ -118,6 +119,7 @@ mod tests {
                 call_sign: "TST2".to_string(),
                 name: "Test 2".to_string(),
                 genre: "test".to_string(),
+                location: None,
                 source: vec![],
             },
         ];

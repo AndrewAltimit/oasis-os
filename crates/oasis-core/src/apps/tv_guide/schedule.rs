@@ -124,6 +124,44 @@ pub fn format_duration(secs: f64) -> String {
     }
 }
 
+/// Format a Unix timestamp as "WEEKDAY, MON DD, YYYY" (e.g. "FRIDAY, FEB 28, 2026").
+///
+/// Uses the Rata Die / Euclidean civil date algorithm — no external crate needed.
+pub fn format_date(unix_time: u64) -> String {
+    const WEEKDAYS: [&str; 7] = [
+        "THURSDAY",
+        "FRIDAY",
+        "SATURDAY",
+        "SUNDAY",
+        "MONDAY",
+        "TUESDAY",
+        "WEDNESDAY",
+    ];
+    const MONTHS: [&str; 12] = [
+        "JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC",
+    ];
+
+    // Days since Unix epoch (Jan 1 1970 = Thursday).
+    let days = unix_time / 86400;
+    let weekday = WEEKDAYS[(days % 7) as usize];
+
+    // Civil date from days since epoch (Euclidean affine algorithm).
+    // Shift epoch to March 1, 0000.
+    let z = days as i64 + 719468;
+    let era = (if z >= 0 { z } else { z - 146096 }) / 146097;
+    let doe = (z - era * 146097) as u64; // day of era [0, 146096]
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365; // year of era [0, 399]
+    let y = yoe as i64 + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100); // day of year [0, 365]
+    let mp = (5 * doy + 2) / 153; // month index [0, 11]
+    let d = doy - (153 * mp + 2) / 5 + 1; // day [1, 31]
+    let m = if mp < 10 { mp + 3 } else { mp - 9 }; // month [1, 12]
+    let y = if m <= 2 { y + 1 } else { y };
+
+    let month_name = MONTHS[(m - 1) as usize];
+    format!("{weekday}, {month_name} {d}, {y}")
+}
+
 /// Create a deterministic seed from a channel number.
 fn channel_seed(channel_number: u32) -> u64 {
     // Mix the channel number into a well-distributed seed.
@@ -485,5 +523,29 @@ mod tests {
         assert_eq!(slot.episode.title, "Episode 0");
         // Elapsed + remaining should equal episode duration.
         assert_eq!(slot.elapsed_secs + slot.remaining_secs, 600);
+    }
+
+    #[test]
+    fn format_date_epoch() {
+        // Unix epoch = Jan 1, 1970 (Thursday).
+        assert_eq!(format_date(0), "THURSDAY, JAN 1, 1970");
+    }
+
+    #[test]
+    fn format_date_known_date() {
+        // Feb 28, 2026 = Saturday. 2026-02-28 00:00 UTC = 1772236800.
+        assert_eq!(format_date(1772236800), "SATURDAY, FEB 28, 2026");
+    }
+
+    #[test]
+    fn format_date_leap_year() {
+        // Feb 29, 2024 = Thursday. 2024-02-29 00:00 UTC = 1709164800.
+        assert_eq!(format_date(1709164800), "THURSDAY, FEB 29, 2024");
+    }
+
+    #[test]
+    fn format_date_new_years() {
+        // Jan 1, 2000 = Saturday. 2000-01-01 00:00 UTC = 946684800.
+        assert_eq!(format_date(946684800), "SATURDAY, JAN 1, 2000");
     }
 }

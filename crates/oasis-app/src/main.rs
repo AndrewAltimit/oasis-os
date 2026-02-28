@@ -197,6 +197,7 @@ fn main() -> Result<()> {
         terminal_scroll_offset: 0,
         toasts: ToastManager::new(),
         pending_tv_catalog_fetch: None,
+        tv_fetch_start: None,
     };
 
     // Show a welcome toast.
@@ -556,7 +557,7 @@ fn main() -> Result<()> {
                     Ok(Ok(catalogs)) => {
                         let loaded = catalogs.iter().filter(|c| c.is_some()).count();
                         let total = catalogs.len();
-                        log::debug!(
+                        log::info!(
                             "TV catalog fetch result: {loaded}/{total} channels have episodes"
                         );
                         state.pending_tv_catalog_fetch = None;
@@ -610,7 +611,26 @@ fn main() -> Result<()> {
                             runner.refresh_tv_text();
                         }
                     },
-                    Err(std::sync::mpsc::TryRecvError::Empty) => {},
+                    Err(std::sync::mpsc::TryRecvError::Empty) => {
+                        // Timeout after 2 minutes.
+                        if let Some(start) = state.tv_fetch_start
+                            && start.elapsed().as_secs() >= 120
+                        {
+                            log::warn!("TV: catalog fetch timed out after 120s");
+                            state.pending_tv_catalog_fetch = None;
+                            state.tv_fetch_start = None;
+                            let runner = find_tv_guide_runner(
+                                &mut state.app_runner,
+                                &mut state.open_runners,
+                            );
+                            if let Some(runner) = runner {
+                                if let Some(guide) = runner.tv_guide_state() {
+                                    guide.fetch_error = Some("Fetch timed out (2 min)".into());
+                                }
+                                runner.refresh_tv_text();
+                            }
+                        }
+                    },
                 }
             }
 
@@ -622,7 +642,7 @@ fn main() -> Result<()> {
                     && !guide.fetch_attempted
                     && guide.catalogs.iter().all(|c| c.is_none())
                 {
-                    log::debug!(
+                    log::info!(
                         "TV: starting catalog fetch for {} channels",
                         guide.channels.len(),
                     );
@@ -631,15 +651,16 @@ fn main() -> Result<()> {
                     let (tx, rx) = std::sync::mpsc::channel();
                     let tls = state.tls_provider.clone();
                     std::thread::spawn(move || {
-                        log::debug!("TV: background fetch thread started");
+                        log::info!("TV: background fetch thread started");
                         let result = fetch_tv_catalogs_blocking(&channels, &tls);
-                        log::debug!(
+                        log::info!(
                             "TV: background fetch thread finished (ok={})",
                             result.is_ok(),
                         );
                         let _ = tx.send(result);
                     });
                     state.pending_tv_catalog_fetch = Some(rx);
+                    state.tv_fetch_start = Some(std::time::Instant::now());
                 }
             }
 
@@ -1069,7 +1090,7 @@ fn fetch_tv_catalogs_blocking(
 ) -> std::result::Result<Vec<Option<oasis_core::apps::tv_guide::ChannelCatalog>>, String> {
     use oasis_core::apps::tv_guide::catalog::ChannelCatalog;
 
-    log::debug!("TV fetch_tv_catalogs_blocking: {} channels", channels.len(),);
+    log::info!("TV fetch_tv_catalogs_blocking: {} channels", channels.len());
 
     let mut net = oasis_core::net::StdNetworkBackend::new();
     let mut results = Vec::new();
@@ -1125,7 +1146,7 @@ fn fetch_tv_catalogs_blocking(
     }
 
     let loaded = results.iter().filter(|c| c.is_some()).count();
-    log::debug!(
+    log::info!(
         "TV fetch_tv_catalogs_blocking done: {loaded}/{} channels loaded",
         results.len(),
     );

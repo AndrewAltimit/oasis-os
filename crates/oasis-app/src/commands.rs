@@ -436,6 +436,7 @@ mod tests {
             terminal_scroll_offset: 0,
             toasts: oasis_core::toast::ToastManager::new(),
             pending_tv_catalog_fetch: None,
+            tv_fetch_start: None,
         }
     }
 

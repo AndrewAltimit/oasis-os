@@ -30,6 +30,9 @@ pub struct Channel {
     pub name: String,
     /// Genre tag.
     pub genre: String,
+    /// Optional location / city (e.g. "New York, NY").
+    #[serde(default)]
+    pub location: Option<String>,
     /// One or more IA item sources for this channel's content.
     pub source: Vec<ChannelSource>,
 }
@@ -58,6 +61,7 @@ number = 2
 call_sign = "RETRO"
 name = "Retro Cartoons"
 genre = "cartoons"
+location = "Los Angeles, CA"
 
 [[channel.source]]
 item_id = "adventures-of-sonic-the-hedgehog-01-x-44-the-mystery-of-the-missing-hi-tops_202402"
@@ -69,6 +73,7 @@ number = 5
 call_sign = "TECH"
 name = "Tech & Bytes"
 genre = "technology"
+location = "San Francisco, CA"
 
 [[channel.source]]
 item_id = "bits-and-bytes-yt"
@@ -80,6 +85,7 @@ number = 8
 call_sign = "GAME"
 name = "Gaming"
 genre = "gaming"
+location = "Seattle, WA"
 
 [[channel.source]]
 item_id = "disney-bootlegs-jon-tron"
@@ -90,6 +96,7 @@ number = 11
 call_sign = "WILD"
 name = "Game Shows"
 genre = "game_shows"
+location = "New York, NY"
 
 [[channel.source]]
 item_id = "003-1986-05-16"
@@ -100,6 +107,7 @@ number = 13
 call_sign = "DOCS"
 name = "Documentaries"
 genre = "documentary"
+location = "Washington, DC"
 
 [[channel.source]]
 item_id = "youtube-mTtMCoJrGxk"
@@ -158,5 +166,32 @@ mod tests {
         let toml = "channel = []";
         let config: ChannelConfig = toml::from_str(toml).unwrap();
         assert!(config.channel.is_empty());
+    }
+
+    #[test]
+    fn location_field_defaults_to_none() {
+        let toml = r#"
+            [[channel]]
+            number = 1
+            call_sign = "TEST"
+            name = "Test Channel"
+            genre = "test"
+            [[channel.source]]
+            item_id = "test-item"
+        "#;
+        let config: ChannelConfig = toml::from_str(toml).unwrap();
+        assert!(config.channel[0].location.is_none());
+    }
+
+    #[test]
+    fn location_field_roundtrips() {
+        let config = ChannelConfig::from_toml(DEFAULT_CHANNELS_TOML).unwrap();
+        assert_eq!(
+            config.channel[0].location.as_deref(),
+            Some("Los Angeles, CA"),
+        );
+        let serialized = config.to_toml().unwrap();
+        let reparsed = ChannelConfig::from_toml(&serialized).unwrap();
+        assert_eq!(config.channel[0].location, reparsed.channel[0].location);
     }
 }

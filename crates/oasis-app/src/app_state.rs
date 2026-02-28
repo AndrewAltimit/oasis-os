@@ -88,6 +88,8 @@ pub struct AppState {
     pub pending_tv_catalog_fetch: Option<
         mpsc::Receiver<Result<Vec<Option<oasis_core::apps::tv_guide::ChannelCatalog>>, String>>,
     >,
+    /// When the TV catalog fetch thread was spawned (for timeout detection).
+    pub tv_fetch_start: Option<std::time::Instant>,
 }
 
 #[cfg(test)]
