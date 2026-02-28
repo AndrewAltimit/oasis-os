@@ -166,6 +166,10 @@ impl IcecastSource {
             match self.stream.write(&bytes[written..]) {
                 Ok(n) => written += n,
                 Err(e) => {
+                    let msg = format!("{e}");
+                    if msg.contains("WouldBlock") || msg.contains("would block") {
+                        continue;
+                    }
                     self.state = SourceState::Error;
                     return Err(e);
                 },
@@ -345,6 +349,10 @@ impl ArchiveSource {
             match self.stream.write(&bytes[written..]) {
                 Ok(n) => written += n,
                 Err(e) => {
+                    let msg = format!("{e}");
+                    if msg.contains("WouldBlock") || msg.contains("would block") {
+                        continue;
+                    }
                     self.state = SourceState::Error;
                     return Err(e);
                 },

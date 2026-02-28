@@ -642,9 +642,17 @@ fn https_get_body(
     let req_bytes = request.as_bytes();
     let mut written = 0;
     while written < req_bytes.len() {
-        written += stream
-            .write(&req_bytes[written..])
-            .map_err(|e| format!("write: {e}"))?;
+        match stream.write(&req_bytes[written..]) {
+            Ok(n) => written += n,
+            Err(e) => {
+                let msg = format!("{e}");
+                if msg.contains("WouldBlock") || msg.contains("would block") {
+                    std::thread::sleep(std::time::Duration::from_millis(1));
+                    continue;
+                }
+                return Err(format!("write: {e}"));
+            },
+        }
     }
 
     // Read full response (runs on background thread; may spin on WouldBlock).

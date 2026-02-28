@@ -361,7 +361,17 @@ impl AudioBackend for SdlAudioBackend {
 
     fn position_ms(&self) -> u64 {
         if self.sample_rate > 0 && self.channels > 0 {
-            (self.samples_queued / self.channels as u64) * 1000 / self.sample_rate as u64
+            // Subtract unplayed samples still sitting in the SDL audio queue
+            // so the position reflects what the user actually hears, not what
+            // has been decoded and queued.  `device.size()` returns queued
+            // bytes; each sample is i16 = 2 bytes.
+            let unplayed = self
+                .device
+                .as_ref()
+                .map(|d| d.size() as u64 / 2)
+                .unwrap_or(0);
+            let played = self.samples_queued.saturating_sub(unplayed);
+            (played / self.channels as u64) * 1000 / self.sample_rate as u64
         } else {
             0
         }
