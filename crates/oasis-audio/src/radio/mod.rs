@@ -827,4 +827,488 @@ mod tests {
         let mgr = RadioManager::new();
         assert!(!mgr.needs_next_track());
     }
+
+    // ---------------------------------------------------------------
+    // Integration: full pipeline end-to-end tests
+    // ---------------------------------------------------------------
+
+    /// Helper: drive RadioManager through Connecting → Buffering → Playing.
+    fn drive_to_playing(
+        mgr: &mut RadioManager,
+        source: &mut Option<Box<dyn RadioSource>>,
+        backend: &mut StubAudioBackend,
+    ) -> bool {
+        for _ in 0..200 {
+            mgr.tick(source, backend).unwrap();
+            if mgr.state() == RadioState::Playing {
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Helper: drive RadioManager until TrackEnded or max iterations.
+    fn drive_to_track_ended(
+        mgr: &mut RadioManager,
+        source: &mut Option<Box<dyn RadioSource>>,
+        backend: &mut StubAudioBackend,
+    ) -> bool {
+        for _ in 0..500 {
+            mgr.tick(source, backend).unwrap();
+            if mgr.needs_next_track() {
+                return true;
+            }
+        }
+        false
+    }
+
+    #[test]
+    fn full_pipeline_connecting_to_playing() {
+        let mut mgr = RadioManager::new();
+        let mut backend = StubAudioBackend::new();
+
+        mgr.tune("Test FM", 128, &mut backend).unwrap();
+        assert_eq!(mgr.state(), RadioState::Connecting);
+
+        // 128KB data → well above 32KB threshold.
+        let data = vec![0xAAu8; 128 * 1024];
+        let mut source: Option<Box<dyn RadioSource>> = Some(Box::new(VfsSource::new(data)));
+
+        assert!(drive_to_playing(&mut mgr, &mut source, &mut backend));
+        assert!(backend.playing);
+    }
+
+    #[test]
+    fn full_pipeline_playing_to_track_ended_to_next() {
+        let mut mgr = RadioManager::new();
+        let mut backend = StubAudioBackend::new();
+
+        mgr.tune("Test FM", 128, &mut backend).unwrap();
+
+        let data = vec![0xAAu8; 128 * 1024];
+        let mut source: Option<Box<dyn RadioSource>> = Some(Box::new(VfsSource::new(data)));
+
+        // Drive to playing.
+        assert!(drive_to_playing(&mut mgr, &mut source, &mut backend));
+
+        // Drive to track ended.
+        assert!(drive_to_track_ended(&mut mgr, &mut source, &mut backend));
+        assert!(mgr.needs_next_track());
+        assert!(source.is_none(), "source should be cleared on TrackEnded");
+
+        // Simulate auto-advance: supply new source and continue.
+        mgr.continue_playing();
+        assert_eq!(mgr.state(), RadioState::Connecting);
+
+        let data2 = vec![0xBBu8; 128 * 1024];
+        source = Some(Box::new(VfsSource::new(data2)));
+
+        // Should play the second track.
+        assert!(drive_to_playing(&mut mgr, &mut source, &mut backend));
+    }
+
+    #[test]
+    fn full_pipeline_multiple_track_advances() {
+        let mut mgr = RadioManager::new();
+        let mut backend = StubAudioBackend::new();
+        mgr.tune("Test FM", 128, &mut backend).unwrap();
+
+        // Simulate 5 consecutive track plays + auto-advances.
+        for i in 0..5 {
+            let data = vec![(i as u8).wrapping_mul(0x11); 64 * 1024];
+            let mut source: Option<Box<dyn RadioSource>> = Some(Box::new(VfsSource::new(data)));
+
+            assert!(
+                drive_to_playing(&mut mgr, &mut source, &mut backend),
+                "track {i}: should reach Playing"
+            );
+            assert!(
+                drive_to_track_ended(&mut mgr, &mut source, &mut backend),
+                "track {i}: should reach TrackEnded"
+            );
+
+            if i < 4 {
+                mgr.continue_playing();
+            }
+        }
+    }
+
+    #[test]
+    fn error_during_connecting_sets_error_state() {
+        let mut mgr = RadioManager::new();
+        let mut backend = StubAudioBackend::new();
+
+        mgr.tune("Broken Station", 128, &mut backend).unwrap();
+
+        // Create a source that immediately errors.
+        struct ErrorSource;
+        impl RadioSource for ErrorSource {
+            fn poll(&mut self) -> oasis_types::error::Result<Option<AudioChunk>> {
+                Err(oasis_types::error::OasisError::Backend(
+                    "connection refused".into(),
+                ))
+            }
+            fn disconnect(&mut self) {}
+            fn state(&self) -> SourceState {
+                SourceState::Error
+            }
+            fn source_type(&self) -> &str {
+                "error-test"
+            }
+        }
+
+        let mut source: Option<Box<dyn RadioSource>> = Some(Box::new(ErrorSource));
+        mgr.tick(&mut source, &mut backend).unwrap();
+
+        assert_eq!(mgr.state(), RadioState::Error);
+        assert!(
+            mgr.error_msg().contains("connection refused"),
+            "error_msg: {}",
+            mgr.error_msg()
+        );
+        assert!(source.is_none(), "source should be cleared on error");
+    }
+
+    #[test]
+    fn error_during_playing_cleans_up() {
+        let mut mgr = RadioManager::new();
+        let mut backend = StubAudioBackend::new();
+
+        mgr.tune("Test FM", 128, &mut backend).unwrap();
+
+        // Source that delivers data then errors after 40KB.
+        struct ErrorAfterSource {
+            delivered: usize,
+        }
+        impl RadioSource for ErrorAfterSource {
+            fn poll(&mut self) -> oasis_types::error::Result<Option<AudioChunk>> {
+                if self.delivered >= 40 * 1024 {
+                    return Err(oasis_types::error::OasisError::Backend(
+                        "stream interrupted".into(),
+                    ));
+                }
+                let chunk = vec![0xAA; 4096];
+                self.delivered += chunk.len();
+                Ok(Some(AudioChunk {
+                    data: chunk,
+                    metadata: None,
+                }))
+            }
+            fn disconnect(&mut self) {}
+            fn state(&self) -> SourceState {
+                SourceState::Active
+            }
+            fn source_type(&self) -> &str {
+                "error-after-test"
+            }
+        }
+
+        let mut source: Option<Box<dyn RadioSource>> =
+            Some(Box::new(ErrorAfterSource { delivered: 0 }));
+
+        // Drive to playing (32KB threshold).
+        for _ in 0..20 {
+            let _ = mgr.tick(&mut source, &mut backend);
+            if mgr.state() == RadioState::Playing {
+                break;
+            }
+        }
+        assert_eq!(mgr.state(), RadioState::Playing);
+
+        // Continue ticking — error occurs after 40KB.
+        for _ in 0..20 {
+            let _ = mgr.tick(&mut source, &mut backend);
+            if mgr.state() == RadioState::Error {
+                break;
+            }
+        }
+        assert_eq!(mgr.state(), RadioState::Error);
+        assert!(mgr.error_msg().contains("stream interrupted"));
+        assert!(source.is_none());
+    }
+
+    #[test]
+    fn tune_stop_tune_cycle() {
+        let mut mgr = RadioManager::new();
+        let mut backend = StubAudioBackend::new();
+
+        for i in 0..3 {
+            mgr.tune(&format!("Station {i}"), 128, &mut backend)
+                .unwrap();
+            assert_eq!(mgr.state(), RadioState::Connecting);
+            assert_eq!(mgr.station_name(), format!("Station {i}"));
+
+            let data = vec![0xAA; 64 * 1024];
+            let mut source: Option<Box<dyn RadioSource>> = Some(Box::new(VfsSource::new(data)));
+            assert!(drive_to_playing(&mut mgr, &mut source, &mut backend));
+
+            mgr.stop(&mut backend).unwrap();
+            assert_eq!(mgr.state(), RadioState::Stopped);
+            assert!(mgr.station_name().is_empty());
+        }
+    }
+
+    #[test]
+    fn rapid_tune_without_waiting() {
+        let mut mgr = RadioManager::new();
+        let mut backend = StubAudioBackend::new();
+
+        // Tune 5 times rapidly without letting sources complete.
+        for i in 0..5 {
+            mgr.tune(&format!("Station {i}"), 128, &mut backend)
+                .unwrap();
+        }
+        // Should be in Connecting for the last station.
+        assert_eq!(mgr.state(), RadioState::Connecting);
+        assert_eq!(mgr.station_name(), "Station 4");
+    }
+
+    #[test]
+    fn feed_audio_updates_now_playing() {
+        let mut mgr = RadioManager::new();
+        let mut backend = StubAudioBackend::new();
+
+        mgr.tune("Test FM", 128, &mut backend).unwrap();
+        mgr.begin_buffering();
+
+        let chunk = AudioChunk {
+            data: vec![0; 100],
+            metadata: Some(super::icy::StreamMetadata {
+                title: "Artist - Song Title".into(),
+            }),
+        };
+        mgr.feed_audio(&chunk, &mut backend).unwrap();
+        assert_eq!(mgr.now_playing(), "Artist - Song Title");
+    }
+
+    #[test]
+    fn feed_audio_ignores_empty_metadata() {
+        let mut mgr = RadioManager::new();
+        let mut backend = StubAudioBackend::new();
+
+        mgr.tune("Test FM", 128, &mut backend).unwrap();
+        mgr.begin_buffering();
+
+        // Set initial metadata.
+        let chunk1 = AudioChunk {
+            data: vec![0; 100],
+            metadata: Some(super::icy::StreamMetadata {
+                title: "First Song".into(),
+            }),
+        };
+        mgr.feed_audio(&chunk1, &mut backend).unwrap();
+        assert_eq!(mgr.now_playing(), "First Song");
+
+        // Empty title should not overwrite.
+        let chunk2 = AudioChunk {
+            data: vec![0; 100],
+            metadata: Some(super::icy::StreamMetadata {
+                title: String::new(),
+            }),
+        };
+        mgr.feed_audio(&chunk2, &mut backend).unwrap();
+        assert_eq!(mgr.now_playing(), "First Song");
+    }
+
+    #[test]
+    fn feed_audio_below_threshold_does_not_start_playback() {
+        let mut mgr = RadioManager::new();
+        let mut backend = StubAudioBackend::new();
+
+        mgr.tune("Test FM", 128, &mut backend).unwrap();
+        mgr.begin_buffering();
+
+        // Feed less than 32KB.
+        let chunk = AudioChunk {
+            data: vec![0; 1024],
+            metadata: None,
+        };
+        let should_start = mgr.feed_audio(&chunk, &mut backend).unwrap();
+        assert!(!should_start, "should not start with only 1KB buffered");
+        assert_eq!(mgr.state(), RadioState::Buffering);
+    }
+
+    #[test]
+    fn feed_audio_above_threshold_signals_start() {
+        let mut mgr = RadioManager::new();
+        let mut backend = StubAudioBackend::new();
+
+        mgr.tune("Test FM", 128, &mut backend).unwrap();
+        mgr.begin_buffering();
+
+        // Feed 32KB+ to cross threshold.
+        let chunk = AudioChunk {
+            data: vec![0; 33 * 1024],
+            metadata: None,
+        };
+        let should_start = mgr.feed_audio(&chunk, &mut backend).unwrap();
+        assert!(should_start, "should signal start after 33KB buffered");
+    }
+
+    #[test]
+    fn source_info_set_and_cleared() {
+        let mut mgr = RadioManager::new();
+        let mut backend = StubAudioBackend::new();
+
+        mgr.tune("Test Station", 128, &mut backend).unwrap();
+        mgr.set_source_info("archive", "oldtimeradio");
+
+        let status = mgr.format_status();
+        assert!(status.contains("Source: archive"));
+        assert!(status.contains("Collection: oldtimeradio"));
+
+        mgr.stop(&mut backend).unwrap();
+        let status = mgr.format_status();
+        assert!(!status.contains("Source:"));
+        assert!(!status.contains("Collection:"));
+    }
+
+    #[test]
+    fn resume_from_redirect_resets_state() {
+        let mut mgr = RadioManager::new();
+        mgr.set_error("redirect:https://cdn.example.com/file.mp3");
+        assert_eq!(mgr.state(), RadioState::Error);
+
+        mgr.resume_from_redirect();
+        assert_eq!(mgr.state(), RadioState::Connecting);
+        assert!(mgr.error_msg().is_empty());
+    }
+
+    #[test]
+    fn resume_from_redirect_noop_when_not_error() {
+        let mut mgr = RadioManager::new();
+        assert_eq!(mgr.state(), RadioState::Stopped);
+
+        mgr.resume_from_redirect();
+        assert_eq!(mgr.state(), RadioState::Stopped);
+    }
+
+    #[test]
+    fn format_status_shows_error() {
+        let mut mgr = RadioManager::new();
+        let mut backend = StubAudioBackend::new();
+
+        mgr.tune("Test FM", 128, &mut backend).unwrap();
+        mgr.set_error("HTTP 404");
+
+        let status = mgr.format_status();
+        assert!(status.contains("error"), "state should show error");
+        assert!(status.contains("HTTP 404"), "should include error message");
+    }
+
+    #[test]
+    fn format_status_shows_buffer_during_buffering() {
+        let mut mgr = RadioManager::new();
+        let mut backend = StubAudioBackend::new();
+
+        mgr.tune("Test FM", 128, &mut backend).unwrap();
+        mgr.begin_buffering();
+
+        let chunk = AudioChunk {
+            data: vec![0; 4096],
+            metadata: None,
+        };
+        mgr.feed_audio(&chunk, &mut backend).unwrap();
+
+        let status = mgr.format_status();
+        assert!(status.contains("Buffer:"), "should show buffer info");
+        assert!(status.contains("KB"), "should show buffer size in KB");
+    }
+
+    #[test]
+    fn tick_cleans_up_source_when_stopped() {
+        let mut mgr = RadioManager::new();
+        let mut backend = StubAudioBackend::new();
+
+        let data = vec![0xAAu8; 100];
+        let mut source: Option<Box<dyn RadioSource>> = Some(Box::new(VfsSource::new(data)));
+
+        // Manager is stopped — tick should clean up the source.
+        mgr.tick(&mut source, &mut backend).unwrap();
+        assert!(source.is_none(), "source should be cleaned up when stopped");
+    }
+
+    #[test]
+    fn tick_cleans_up_source_when_errored() {
+        let mut mgr = RadioManager::new();
+        let mut backend = StubAudioBackend::new();
+
+        mgr.set_error("some error");
+        let data = vec![0xAAu8; 100];
+        let mut source: Option<Box<dyn RadioSource>> = Some(Box::new(VfsSource::new(data)));
+
+        mgr.tick(&mut source, &mut backend).unwrap();
+        assert!(source.is_none(), "source should be cleaned up on error");
+    }
+
+    // ---------------------------------------------------------------
+    // VFS IPC integration tests
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn publish_status_reflects_playing_state() {
+        let mut mgr = RadioManager::new();
+        let mut backend = StubAudioBackend::new();
+        let mut vfs = MemoryVfs::new();
+        vfs.mkdir("/var").unwrap();
+        vfs.mkdir("/var/radio").unwrap();
+
+        mgr.tune("My Station", 128, &mut backend).unwrap();
+        mgr.set_source_info("archive", "oldtimeradio");
+
+        // Feed enough data to trigger playback.
+        mgr.begin_buffering();
+        let chunk = AudioChunk {
+            data: vec![0; 33 * 1024],
+            metadata: Some(super::icy::StreamMetadata {
+                title: "Now Playing Track".into(),
+            }),
+        };
+        mgr.feed_audio(&chunk, &mut backend).unwrap();
+        mgr.start_playback(&mut backend).unwrap();
+
+        mgr.publish_status(&mut vfs).unwrap();
+        let data = vfs.read(RADIO_STATUS_PATH).unwrap();
+        let status = String::from_utf8_lossy(&data);
+
+        assert!(status.contains("playing"), "status: {status}");
+        assert!(status.contains("My Station"), "status: {status}");
+        assert!(status.contains("Now Playing Track"), "status: {status}");
+        assert!(status.contains("Source: archive"), "status: {status}");
+        assert!(
+            status.contains("Collection: oldtimeradio"),
+            "status: {status}"
+        );
+    }
+
+    #[test]
+    fn process_request_vol_invalid() {
+        let mut mgr = RadioManager::new();
+        let mut backend = StubAudioBackend::new();
+        assert!(mgr.process_request("vol abc", &mut backend).is_err());
+    }
+
+    #[test]
+    fn process_request_fav_out_of_bounds() {
+        let mut mgr = RadioManager::new();
+        let mut backend = StubAudioBackend::new();
+        assert!(mgr.process_request("fav 999", &mut backend).is_err());
+    }
+
+    #[test]
+    fn default_stations_are_present() {
+        let mgr = RadioManager::new();
+        assert!(mgr.registry.stations.len() >= 4);
+
+        let names: Vec<&str> = mgr
+            .registry
+            .stations
+            .iter()
+            .map(|s| s.name.as_str())
+            .collect();
+        assert!(names.contains(&"Old Time Radio"));
+        assert!(names.contains(&"LibriVox Audiobooks"));
+        assert!(names.contains(&"Netlabel Music"));
+        assert!(names.contains(&"78rpm Records"));
+    }
 }

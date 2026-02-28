@@ -649,20 +649,22 @@ fn https_get_body(
 /// Connect to archive.org over TLS and create an ArchiveSource for the given track.
 ///
 /// Follows up to 3 HTTP redirects (archive.org CDN returns 302s).
+/// Polls the source until response headers are parsed before returning.
 fn connect_archive_source(
     tls_provider: &oasis_core::net::RustlsTlsProvider,
     track: &oasis_audio::radio::ArchiveTrack,
 ) -> std::result::Result<Box<dyn oasis_audio::radio::RadioSource + Send>, String> {
+    use oasis_audio::radio::source::SourceState;
     use oasis_core::backend::NetworkBackend;
     use oasis_core::net::TlsProvider;
 
-    let mut net_backend = StdNetworkBackend::new();
     let mut host = "archive.org".to_string();
     let mut path = oasis_audio::radio::ArchiveCatalog::download_path(track);
     let title = track.title.clone();
     let creator = track.creator.clone();
 
-    for _ in 0..3 {
+    'redirect: for _ in 0..3 {
+        let mut net_backend = StdNetworkBackend::new();
         let tcp = net_backend
             .connect(&host, 443)
             .map_err(|e| format!("connect: {e}"))?;
@@ -673,25 +675,42 @@ fn connect_archive_source(
         let mut source =
             oasis_audio::radio::ArchiveSource::new(stream, &host, &path, &title, &creator);
 
-        // Drive through Connecting → Active to trigger header parsing.
-        match source.poll() {
-            Ok(_) => {},
-            Err(e) => {
-                let msg = format!("{e}");
-                if let Some(url) = msg.strip_prefix("redirect:") {
-                    // Parse redirect URL into host + path.
-                    if let Some((new_host, _, new_path, _)) = parse_stream_url(url) {
-                        host = new_host;
-                        path = new_path;
-                        continue;
+        // Poll until headers are fully parsed (data arrives, or error/redirect).
+        // First poll sends the HTTP request (Connecting → Active).
+        // Subsequent polls read the response and parse headers.
+        for _ in 0..200 {
+            match source.poll() {
+                Ok(Some(_)) => {
+                    // Headers parsed, audio data flowing.
+                    return Ok(Box::new(source));
+                },
+                Ok(None) => match source.state() {
+                    SourceState::Ended => {
+                        return Err("connection closed before headers".into());
+                    },
+                    SourceState::Error => {
+                        return Err("source error during header parsing".into());
+                    },
+                    _ => continue,
+                },
+                Err(e) => {
+                    let msg = format!("{e}");
+                    // OasisError::Backend("redirect:...") formats as
+                    // "backend error: redirect:..." — strip the prefix.
+                    let inner = msg.strip_prefix("backend error: ").unwrap_or(&msg);
+                    if let Some(url) = inner.strip_prefix("redirect:") {
+                        if let Some((new_host, _, new_path, _)) = parse_stream_url(url) {
+                            host = new_host;
+                            path = new_path;
+                            continue 'redirect;
+                        }
+                        return Err(format!("bad redirect URL: {url}"));
                     }
-                    return Err(format!("bad redirect URL: {url}"));
-                }
-                return Err(msg);
-            },
+                    return Err(msg);
+                },
+            }
         }
-
-        return Ok(Box::new(source));
+        return Err("timeout waiting for response headers".into());
     }
 
     Err("too many redirects".to_string())

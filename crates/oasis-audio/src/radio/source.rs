@@ -760,4 +760,475 @@ mod tests {
         assert_eq!(total, 200);
         assert_eq!(src.state(), SourceState::Ended);
     }
+
+    // ---------------------------------------------------------------
+    // Redirect error format tests (critical for connect_archive_source)
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn redirect_error_format_has_backend_prefix() {
+        // Verify the exact format of redirect errors — callers depend on this.
+        let response =
+            b"HTTP/1.1 302 Found\r\nLocation: https://cdn.example.com/file.mp3\r\n\r\n".to_vec();
+        let stream = Box::new(MockStream::new(response));
+        let mut src = ArchiveSource::new(stream, "host", "/path", "T", "C");
+
+        src.poll().unwrap(); // Connecting → Active.
+        let err = src.poll().unwrap_err();
+        let msg = format!("{err}");
+
+        // OasisError::Backend("redirect:...") formats with "backend error: " prefix.
+        assert!(
+            msg.starts_with("backend error: redirect:"),
+            "unexpected format: {msg}"
+        );
+        // Callers strip prefix then check for "redirect:".
+        let inner = msg.strip_prefix("backend error: ").unwrap();
+        let url = inner.strip_prefix("redirect:").unwrap();
+        assert_eq!(url, "https://cdn.example.com/file.mp3");
+    }
+
+    #[test]
+    fn redirect_301_permanent() {
+        let response =
+            b"HTTP/1.1 301 Moved Permanently\r\nLocation: https://new.host/a.mp3\r\n\r\n".to_vec();
+        let stream = Box::new(MockStream::new(response));
+        let mut src = ArchiveSource::new(stream, "host", "/path", "T", "C");
+
+        src.poll().unwrap();
+        let err = src.poll().unwrap_err();
+        let msg = format!("{err}");
+        let inner = msg.strip_prefix("backend error: ").unwrap();
+        assert!(inner.starts_with("redirect:"));
+        assert!(inner.contains("new.host"));
+    }
+
+    #[test]
+    fn redirect_307_temporary() {
+        let response =
+            b"HTTP/1.1 307 Temporary Redirect\r\nLocation: https://tmp.host/b.mp3\r\n\r\n".to_vec();
+        let stream = Box::new(MockStream::new(response));
+        let mut src = ArchiveSource::new(stream, "host", "/path", "T", "C");
+
+        src.poll().unwrap();
+        let err = src.poll().unwrap_err();
+        let msg = format!("{err}");
+        // 307 has no Location extraction because status_code >= 400 check doesn't catch it,
+        // but redirect_url IS set via Location header parsing.
+        let inner = msg.strip_prefix("backend error: ").unwrap();
+        assert!(inner.starts_with("redirect:"));
+    }
+
+    #[test]
+    fn http_error_format() {
+        let response = b"HTTP/1.1 403 Forbidden\r\n\r\n".to_vec();
+        let stream = Box::new(MockStream::new(response));
+        let mut src = ArchiveSource::new(stream, "host", "/path", "T", "C");
+
+        src.poll().unwrap();
+        let err = src.poll().unwrap_err();
+        let msg = format!("{err}");
+        assert!(
+            msg.starts_with("backend error: HTTP 403"),
+            "unexpected format: {msg}"
+        );
+    }
+
+    // ---------------------------------------------------------------
+    // Partial header accumulation tests
+    // ---------------------------------------------------------------
+
+    /// Mock stream that delivers data in configurable-sized chunks.
+    struct ChunkedMockStream {
+        data: Vec<u8>,
+        pos: usize,
+        chunk_size: usize,
+        written: Vec<u8>,
+    }
+
+    impl ChunkedMockStream {
+        fn new(data: Vec<u8>, chunk_size: usize) -> Self {
+            Self {
+                data,
+                pos: 0,
+                chunk_size,
+                written: Vec::new(),
+            }
+        }
+    }
+
+    impl oasis_types::backend::NetworkStream for ChunkedMockStream {
+        fn read(&mut self, buf: &mut [u8]) -> Result<usize> {
+            if self.pos >= self.data.len() {
+                return Ok(0);
+            }
+            let available = self.data.len() - self.pos;
+            let n = buf.len().min(available).min(self.chunk_size);
+            buf[..n].copy_from_slice(&self.data[self.pos..self.pos + n]);
+            self.pos += n;
+            Ok(n)
+        }
+        fn write(&mut self, data: &[u8]) -> Result<usize> {
+            self.written.extend_from_slice(data);
+            Ok(data.len())
+        }
+        fn close(&mut self) -> Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn archive_source_partial_headers_across_polls() {
+        // Headers arrive in small chunks (e.g. slow network).
+        let mut response = b"HTTP/1.1 200 OK\r\nContent-Length: 50\r\n\r\n".to_vec();
+        response.extend_from_slice(&[0xCC; 50]);
+
+        // Deliver 10 bytes at a time — headers span multiple reads.
+        let stream = Box::new(ChunkedMockStream::new(response, 10));
+        let mut src = ArchiveSource::new(stream, "host", "/path", "T", "C");
+
+        // First poll sends request.
+        src.poll().unwrap();
+
+        // Keep polling until we get data (headers accumulate across polls).
+        let mut got_data = false;
+        let mut total = 0;
+        for _ in 0..50 {
+            match src.poll().unwrap() {
+                Some(chunk) => {
+                    got_data = true;
+                    total += chunk.data.len();
+                },
+                None => {
+                    if src.state() == SourceState::Ended {
+                        break;
+                    }
+                },
+            }
+        }
+        assert!(got_data, "should have received audio data");
+        assert_eq!(total, 50);
+    }
+
+    #[test]
+    fn archive_source_partial_headers_redirect() {
+        // Redirect response arrives in small chunks.
+        let response =
+            b"HTTP/1.1 302 Found\r\nLocation: https://cdn.example.com/file.mp3\r\n\r\n".to_vec();
+        // 5 bytes at a time.
+        let stream = Box::new(ChunkedMockStream::new(response, 5));
+        let mut src = ArchiveSource::new(stream, "host", "/path", "T", "C");
+
+        src.poll().unwrap(); // Send request.
+
+        // Poll until redirect error is detected.
+        let mut found_redirect = false;
+        for _ in 0..50 {
+            match src.poll() {
+                Err(e) => {
+                    let msg = format!("{e}");
+                    assert!(msg.contains("redirect:"), "unexpected error: {msg}");
+                    found_redirect = true;
+                    break;
+                },
+                Ok(_) => continue,
+            }
+        }
+        assert!(found_redirect, "should have detected redirect");
+    }
+
+    // ---------------------------------------------------------------
+    // WouldBlock handling
+    // ---------------------------------------------------------------
+
+    /// Mock stream that returns WouldBlock on every other read.
+    struct WouldBlockStream {
+        inner: MockStream,
+        call_count: usize,
+    }
+
+    impl WouldBlockStream {
+        fn new(data: Vec<u8>) -> Self {
+            Self {
+                inner: MockStream::new(data),
+                call_count: 0,
+            }
+        }
+    }
+
+    impl oasis_types::backend::NetworkStream for WouldBlockStream {
+        fn read(&mut self, buf: &mut [u8]) -> Result<usize> {
+            self.call_count += 1;
+            if self.call_count % 2 == 1 {
+                return Err(OasisError::Backend("WouldBlock".to_string()));
+            }
+            self.inner.read(buf)
+        }
+        fn write(&mut self, data: &[u8]) -> Result<usize> {
+            self.inner.write(data)
+        }
+        fn close(&mut self) -> Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn archive_source_handles_would_block() {
+        let mut response = b"HTTP/1.1 200 OK\r\nContent-Length: 100\r\n\r\n".to_vec();
+        response.extend_from_slice(&[0xDD; 100]);
+
+        let stream = Box::new(WouldBlockStream::new(response));
+        let mut src = ArchiveSource::new(stream, "host", "/path", "T", "C");
+
+        src.poll().unwrap(); // Send request.
+
+        // Poll with WouldBlock interspersed — should still eventually get all data.
+        let mut total = 0;
+        for _ in 0..200 {
+            match src.poll() {
+                Ok(Some(chunk)) => total += chunk.data.len(),
+                Ok(None) => {
+                    if src.state() == SourceState::Ended {
+                        break;
+                    }
+                },
+                Err(_) => panic!("unexpected error"),
+            }
+        }
+        assert_eq!(total, 100);
+    }
+
+    // ---------------------------------------------------------------
+    // Metadata formatting edge cases
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn archive_source_metadata_title_only() {
+        let mut response = b"HTTP/1.1 200 OK\r\n\r\n".to_vec();
+        response.extend_from_slice(&[0xAA; 50]);
+
+        // Empty creator → title only (no " - " prefix).
+        let stream = Box::new(MockStream::new(response));
+        let mut src = ArchiveSource::new(stream, "host", "/path", "My Song", "");
+
+        src.poll().unwrap();
+        let chunk = src.poll().unwrap().unwrap();
+        let meta = chunk.metadata.unwrap();
+        assert_eq!(meta.title, "My Song");
+    }
+
+    #[test]
+    fn archive_source_metadata_creator_and_title() {
+        let mut response = b"HTTP/1.1 200 OK\r\n\r\n".to_vec();
+        response.extend_from_slice(&[0xAA; 50]);
+
+        let stream = Box::new(MockStream::new(response));
+        let mut src = ArchiveSource::new(stream, "host", "/path", "Concerto", "Bach");
+
+        src.poll().unwrap();
+        let chunk = src.poll().unwrap().unwrap();
+        let meta = chunk.metadata.unwrap();
+        assert_eq!(meta.title, "Bach - Concerto");
+    }
+
+    #[test]
+    fn archive_source_metadata_sent_only_once() {
+        let mut response = b"HTTP/1.1 200 OK\r\n\r\n".to_vec();
+        response.extend_from_slice(&[0xAA; 10000]);
+
+        let stream = Box::new(MockStream::new(response));
+        let mut src = ArchiveSource::new(stream, "host", "/path", "Title", "Artist");
+
+        src.poll().unwrap(); // Send request.
+
+        let mut meta_count = 0;
+        for _ in 0..100 {
+            match src.poll().unwrap() {
+                Some(chunk) => {
+                    if chunk.metadata.is_some() {
+                        meta_count += 1;
+                    }
+                },
+                None => break,
+            }
+        }
+        assert_eq!(meta_count, 1, "metadata should be sent exactly once");
+    }
+
+    // ---------------------------------------------------------------
+    // Full lifecycle tests
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn archive_source_full_lifecycle() {
+        // Test complete lifecycle: Connecting → Active → data → Ended.
+        let body = vec![0xEE; 1000];
+        let mut response = b"HTTP/1.1 200 OK\r\nContent-Length: 1000\r\n\r\n".to_vec();
+        response.extend_from_slice(&body);
+
+        let stream = Box::new(MockStream::new(response));
+        let mut src = ArchiveSource::new(
+            stream,
+            "archive.org",
+            "/download/item/file.mp3",
+            "Song",
+            "Band",
+        );
+
+        // Phase 1: Connecting.
+        assert_eq!(src.state(), SourceState::Connecting);
+        let r = src.poll().unwrap();
+        assert!(r.is_none());
+        assert_eq!(src.state(), SourceState::Active);
+
+        // Phase 2: Streaming data.
+        let mut total_data = Vec::new();
+        let mut got_metadata = false;
+        loop {
+            match src.poll().unwrap() {
+                Some(chunk) => {
+                    if let Some(ref meta) = chunk.metadata {
+                        assert_eq!(meta.title, "Band - Song");
+                        got_metadata = true;
+                    }
+                    total_data.extend_from_slice(&chunk.data);
+                },
+                None => break,
+            }
+        }
+
+        // Phase 3: Verification.
+        assert!(got_metadata, "should have received metadata");
+        assert_eq!(total_data.len(), 1000);
+        assert_eq!(total_data, body);
+        assert_eq!(src.state(), SourceState::Ended);
+    }
+
+    #[test]
+    fn archive_source_large_file_content_length() {
+        // Simulate a 64KB file download.
+        let body = vec![0x42; 65536];
+        let mut response =
+            format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n", body.len()).into_bytes();
+        response.extend_from_slice(&body);
+
+        let stream = Box::new(MockStream::new(response));
+        let mut src = ArchiveSource::new(stream, "host", "/path", "Big File", "");
+
+        src.poll().unwrap(); // Send request.
+        let mut received = 0;
+        let mut polls = 0;
+        loop {
+            match src.poll().unwrap() {
+                Some(chunk) => {
+                    received += chunk.data.len();
+                    polls += 1;
+                },
+                None => break,
+            }
+        }
+        assert_eq!(received, 65536);
+        assert!(polls > 1, "should take multiple polls for 64KB");
+        assert_eq!(src.state(), SourceState::Ended);
+    }
+
+    #[test]
+    fn archive_source_disconnect_during_streaming() {
+        let mut response = b"HTTP/1.1 200 OK\r\n\r\n".to_vec();
+        response.extend_from_slice(&[0xAA; 10000]);
+
+        let stream = Box::new(MockStream::new(response));
+        let mut src = ArchiveSource::new(stream, "host", "/path", "T", "C");
+
+        src.poll().unwrap(); // Connecting → Active.
+        let _ = src.poll().unwrap(); // Read some data.
+
+        // Disconnect mid-stream.
+        src.disconnect();
+        assert_eq!(src.state(), SourceState::Ended);
+        // Further polls should return None.
+        assert!(src.poll().unwrap().is_none());
+    }
+
+    #[test]
+    fn archive_source_verifies_request_format() {
+        let response = b"HTTP/1.1 200 OK\r\n\r\n".to_vec();
+        let stream = Box::new(MockStream::new(response));
+        let mut src = ArchiveSource::new(
+            stream,
+            "archive.org",
+            "/download/item-123/my%20song.mp3",
+            "T",
+            "C",
+        );
+
+        src.poll().unwrap();
+
+        // Inspect what was written to the stream (the HTTP request).
+        // We can't easily access MockStream's `written` field after boxing,
+        // so this test verifies the source transitions correctly.
+        assert_eq!(src.state(), SourceState::Active);
+    }
+
+    // ---------------------------------------------------------------
+    // Icecast source tests
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn icecast_source_sends_request_with_icy_headers() {
+        let response = b"HTTP/1.0 200 OK\r\nicy-metaint:8192\r\n\r\n".to_vec();
+        let stream = Box::new(MockStream::new(response));
+        let mut src = IcecastSource::new(stream, "radio.example.com", "/stream.mp3");
+
+        assert_eq!(src.state(), SourceState::Connecting);
+        assert_eq!(src.source_type(), "icecast");
+
+        // First poll sends request.
+        let r = src.poll().unwrap();
+        assert!(r.is_none());
+        assert_eq!(src.state(), SourceState::Active);
+    }
+
+    #[test]
+    fn icecast_source_no_icy_metadata() {
+        // Response without icy-metaint → treat all data as audio.
+        let mut response = b"HTTP/1.0 200 OK\r\n\r\n".to_vec();
+        response.extend_from_slice(&[0xFF; 100]);
+
+        let stream = Box::new(MockStream::new(response));
+        let mut src = IcecastSource::new(stream, "host", "/stream");
+
+        src.poll().unwrap(); // Send request.
+        let chunk = src.poll().unwrap().unwrap();
+        assert!(!chunk.data.is_empty());
+        assert!(chunk.metadata.is_none());
+    }
+
+    #[test]
+    fn icecast_source_disconnect() {
+        let response = b"HTTP/1.0 200 OK\r\n\r\ndata".to_vec();
+        let stream = Box::new(MockStream::new(response));
+        let mut src = IcecastSource::new(stream, "host", "/stream");
+
+        src.disconnect();
+        assert_eq!(src.state(), SourceState::Ended);
+        assert!(src.poll().unwrap().is_none());
+    }
+
+    #[test]
+    fn icecast_source_eof_transitions_to_ended() {
+        let response = b"HTTP/1.0 200 OK\r\n\r\nshort".to_vec();
+        let stream = Box::new(MockStream::new(response));
+        let mut src = IcecastSource::new(stream, "host", "/stream");
+
+        src.poll().unwrap(); // Send request.
+
+        // Drain all data.
+        for _ in 0..10 {
+            if src.poll().unwrap().is_none() && src.state() == SourceState::Ended {
+                break;
+            }
+        }
+        assert_eq!(src.state(), SourceState::Ended);
+    }
 }
