@@ -247,7 +247,7 @@ out.textContent = html;
     vfs.mkdir("/home/user/music").unwrap();
     vfs.mkdir("/home/user/photos").unwrap();
 
-    load_disk_samples(vfs);
+    write_sample_placeholders(vfs);
 
     vfs.mkdir("/home/user/scripts").unwrap();
     vfs.write(
@@ -260,24 +260,13 @@ out.textContent = html;
     vfs.mkdir("/var/audio").unwrap();
 }
 
-/// Try to load real sample files from the `samples/` directory on disk.
-fn load_disk_samples(vfs: &mut MemoryVfs) {
+/// Write placeholder files for samples (instant, no disk I/O).
+fn write_sample_placeholders(vfs: &mut MemoryVfs) {
     use oasis_core::vfs::Vfs;
-    use std::path::Path;
-
-    let samples_dir = Path::new("samples");
 
     let music_files = ["ambient_dawn.mp3", "nightfall_theme.mp3"];
     for name in &music_files {
-        let disk_path = samples_dir.join(name);
         let vfs_path = format!("/home/user/music/{name}");
-        if disk_path.exists()
-            && let Ok(data) = std::fs::read(&disk_path)
-        {
-            log::info!("Loaded from disk: {vfs_path} ({} bytes)", data.len());
-            vfs.write(&vfs_path, &data).unwrap();
-            continue;
-        }
         vfs.write(
             &vfs_path,
             format!("(placeholder: run samples/fetch-samples.sh for real audio)\nFile: {name}\n")
@@ -288,15 +277,7 @@ fn load_disk_samples(vfs: &mut MemoryVfs) {
 
     let photo_files = ["sample_landscape.png"];
     for name in &photo_files {
-        let disk_path = samples_dir.join(name);
         let vfs_path = format!("/home/user/photos/{name}");
-        if disk_path.exists()
-            && let Ok(data) = std::fs::read(&disk_path)
-        {
-            log::info!("Loaded from disk: {vfs_path} ({} bytes)", data.len());
-            vfs.write(&vfs_path, &data).unwrap();
-            continue;
-        }
         vfs.write(
             &vfs_path,
             format!("(placeholder: run samples/fetch-samples.sh for real image)\nFile: {name}\n")
@@ -304,15 +285,59 @@ fn load_disk_samples(vfs: &mut MemoryVfs) {
         )
         .unwrap();
     }
-
-    load_disk_dir(vfs, &samples_dir.join("music"), "/home/user/music");
-    load_disk_dir(vfs, &samples_dir.join("photos"), "/home/user/photos");
 }
 
-/// Load all files from a real disk directory into the VFS.
-fn load_disk_dir(vfs: &mut MemoryVfs, disk_dir: &std::path::Path, vfs_dir: &str) {
-    use oasis_core::vfs::Vfs;
+/// Spawn a background thread that reads real sample files from disk.
+///
+/// Returns a receiver that yields `(vfs_path, data)` pairs as they are read.
+/// The main loop should poll this with `try_recv()` and write results to the VFS.
+pub fn spawn_disk_sample_loader() -> std::sync::mpsc::Receiver<(String, Vec<u8>)> {
+    let (tx, rx) = std::sync::mpsc::channel();
 
+    std::thread::spawn(move || {
+        use std::path::Path;
+
+        let samples_dir = Path::new("samples");
+
+        let music_files = ["ambient_dawn.mp3", "nightfall_theme.mp3"];
+        for name in &music_files {
+            let disk_path = samples_dir.join(name);
+            if let Ok(data) = std::fs::read(&disk_path) {
+                let vfs_path = format!("/home/user/music/{name}");
+                log::info!("Loaded from disk: {vfs_path} ({} bytes)", data.len());
+                if tx.send((vfs_path, data)).is_err() {
+                    return;
+                }
+            }
+        }
+
+        let photo_files = ["sample_landscape.png"];
+        for name in &photo_files {
+            let disk_path = samples_dir.join(name);
+            if let Ok(data) = std::fs::read(&disk_path) {
+                let vfs_path = format!("/home/user/photos/{name}");
+                log::info!("Loaded from disk: {vfs_path} ({} bytes)", data.len());
+                if tx.send((vfs_path, data)).is_err() {
+                    return;
+                }
+            }
+        }
+
+        load_disk_dir_to_channel(&tx, &samples_dir.join("music"), "/home/user/music");
+        load_disk_dir_to_channel(&tx, &samples_dir.join("photos"), "/home/user/photos");
+
+        log::info!("Disk samples loaded");
+    });
+
+    rx
+}
+
+/// Load all files from a real disk directory and send via channel.
+fn load_disk_dir_to_channel(
+    tx: &std::sync::mpsc::Sender<(String, Vec<u8>)>,
+    disk_dir: &std::path::Path,
+    vfs_dir: &str,
+) {
     let Ok(entries) = std::fs::read_dir(disk_dir) else {
         return;
     };
@@ -324,7 +349,9 @@ fn load_disk_dir(vfs: &mut MemoryVfs, disk_dir: &std::path::Path, vfs_dir: &str)
         {
             let vfs_path = format!("{vfs_dir}/{name}");
             log::info!("Loaded from disk: {vfs_path} ({} bytes)", data.len());
-            vfs.write(&vfs_path, &data).unwrap();
+            if tx.send((vfs_path, data)).is_err() {
+                return;
+            }
         }
     }
 }

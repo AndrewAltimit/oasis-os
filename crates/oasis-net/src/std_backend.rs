@@ -21,6 +21,15 @@ impl StdNetworkBackend {
             tls: super::tls_rustls::RustlsTlsProvider::new(),
         }
     }
+
+    /// Create a backend sharing an existing TLS provider (cheap `Arc` bump).
+    #[cfg(feature = "tls-rustls")]
+    pub fn with_tls(tls: super::tls_rustls::RustlsTlsProvider) -> Self {
+        Self {
+            listener: None,
+            tls,
+        }
+    }
 }
 
 impl Default for StdNetworkBackend {

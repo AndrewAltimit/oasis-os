@@ -22,7 +22,7 @@ use oasis_audio::radio::RadioSource;
 use oasis_backend_sdl::SdlAudioBackend;
 use oasis_backend_sdl::SdlBackend;
 use oasis_core::active_theme::ActiveTheme;
-use oasis_core::backend::{AudioBackend, InputBackend, NetworkBackend, SdiBackend};
+use oasis_core::backend::{AudioBackend, Color, InputBackend, NetworkBackend, SdiBackend};
 use oasis_core::bottombar::BottomBar;
 use oasis_core::browser::BrowserConfig;
 use oasis_core::config::OasisConfig;
@@ -78,6 +78,10 @@ fn main() -> Result<()> {
     )?;
     backend.init(config.screen_width, config.screen_height)?;
 
+    // Show a black frame immediately so the window isn't frozen during init.
+    backend.clear(Color::rgb(0, 0, 0))?;
+    backend.swap_buffers()?;
+
     // Derive runtime theme from the active skin, applying screen dimensions.
     let active_theme = ActiveTheme::from_skin(&skin.theme)
         .with_screen_size(config.screen_width, config.screen_height);
@@ -86,9 +90,11 @@ fn main() -> Result<()> {
     // Set up platform services.
     let platform = DesktopPlatform::new();
 
-    // Set up VFS with demo content + apps.
+    // Set up VFS with demo content + apps (placeholders only — real files
+    // are loaded on a background thread and merged in the main loop).
     let mut vfs = MemoryVfs::new();
     vfs_setup::populate_demo_vfs(&mut vfs);
+    let disk_sample_rx = vfs_setup::spawn_disk_sample_loader();
 
     // Populate terminal documentation and shell profile in VFS.
     oasis_core::terminal::populate_man_pages(&mut vfs);
@@ -165,7 +171,10 @@ fn main() -> Result<()> {
         wm,
         open_runners: Vec::new(),
         browser: None,
-        net_backend: StdNetworkBackend::new(),
+        net_backend: {
+            let tls = RustlsTlsProvider::new();
+            StdNetworkBackend::with_tls(tls)
+        },
         listener: None,
         ftp_server: None,
         remote_client: None,
@@ -212,39 +221,9 @@ fn main() -> Result<()> {
     let mut sdi = SdiRegistry::new();
     state.skin.apply_layout(&mut sdi);
 
-    // -- Wallpaper: generate from skin config and load as texture --
-    let wallpaper_tex = {
-        let wp_data = wallpaper::generate_from_config(
-            state.config.screen_width,
-            state.config.screen_height,
-            &state.active_theme,
-        );
-        backend.load_texture(
-            state.config.screen_width,
-            state.config.screen_height,
-            &wp_data,
-        )?
-    };
-    terminal_sdi::setup_wallpaper(
-        &mut sdi,
-        wallpaper_tex,
-        state.config.screen_width,
-        state.config.screen_height,
-    );
-    log::info!("Wallpaper loaded");
-
-    // -- Mouse cursor: generate procedural arrow and load as texture --
-    {
-        let (cursor_pixels, cw, ch) =
-            cursor::generate_cursor_pixels(state.active_theme.cursor_scale);
-        let cursor_tex = backend.load_texture(cw, ch, &cursor_pixels)?;
-        // Set texture on the cursor SDI object after first update_sdi creates it.
-        state.mouse_cursor.update_sdi(&mut sdi);
-        if let Ok(obj) = sdi.get_mut("mouse_cursor") {
-            obj.texture = Some(cursor_tex);
-        }
-    }
-    log::info!("Mouse cursor loaded");
+    // Wallpaper and cursor are deferred to the first loop iteration so
+    // the window appears immediately (the boot fade covers the delay).
+    let mut wallpaper_loaded = false;
 
     // Apply auto-launch (after scene graph is fully set up).
     if let Some(ref app_name) = auto_launch_app {
@@ -282,6 +261,44 @@ fn main() -> Result<()> {
 
     'running: loop {
         state.frame_counter += 1;
+
+        // Generate wallpaper + cursor on the first frame (deferred from init).
+        if !wallpaper_loaded {
+            wallpaper_loaded = true;
+            let wallpaper_tex = {
+                let wp_data = wallpaper::generate_from_config(
+                    state.config.screen_width,
+                    state.config.screen_height,
+                    &state.active_theme,
+                );
+                backend.load_texture(
+                    state.config.screen_width,
+                    state.config.screen_height,
+                    &wp_data,
+                )?
+            };
+            terminal_sdi::setup_wallpaper(
+                &mut sdi,
+                wallpaper_tex,
+                state.config.screen_width,
+                state.config.screen_height,
+            );
+            log::info!("Wallpaper loaded");
+
+            let (cursor_pixels, cw, ch) =
+                cursor::generate_cursor_pixels(state.active_theme.cursor_scale);
+            let cursor_tex = backend.load_texture(cw, ch, &cursor_pixels)?;
+            state.mouse_cursor.update_sdi(&mut sdi);
+            if let Ok(obj) = sdi.get_mut("mouse_cursor") {
+                obj.texture = Some(cursor_tex);
+            }
+            log::info!("Mouse cursor loaded");
+        }
+
+        // Drain background disk sample loads (non-blocking).
+        while let Ok((path, data)) = disk_sample_rx.try_recv() {
+            let _ = vfs.write(&path, &data);
+        }
 
         // Update system info every ~60 frames (~1s at 60fps).
         if state.frame_counter.is_multiple_of(60) {
@@ -547,6 +564,7 @@ fn main() -> Result<()> {
                             && i < guide.catalogs.len()
                         {
                             guide.catalogs[i] = Some(c);
+                            guide.rebuild_cached_schedule(i);
                         }
                     }
                 }

@@ -152,6 +152,86 @@ fn deterministic_shuffle(episodes: &[VideoEpisode], seed: u64) -> Vec<VideoEpiso
     result
 }
 
+/// Pre-computed shuffled playlist for a single channel.
+///
+/// Caches the deterministic shuffle so `schedule_at` doesn't re-shuffle
+/// the entire episode list on every call (60 fps × N channels).
+pub struct CachedSchedule {
+    /// Deterministically shuffled episodes (same order every time).
+    playlist: Vec<VideoEpisode>,
+    /// Total cycle duration in seconds (sum of all episode durations).
+    cycle_duration: u64,
+}
+
+impl CachedSchedule {
+    /// Build a cached schedule from a channel catalog.
+    ///
+    /// Returns `None` if the catalog has no episodes or zero total duration.
+    pub fn new(catalog: &ChannelCatalog) -> Option<Self> {
+        if catalog.episodes.is_empty() || catalog.total_duration_secs <= 0.0 {
+            return None;
+        }
+        let playlist =
+            deterministic_shuffle(&catalog.episodes, channel_seed(catalog.channel_number));
+        let cycle_duration = catalog.total_duration_secs as u64;
+        if cycle_duration == 0 {
+            return None;
+        }
+        Some(Self {
+            playlist,
+            cycle_duration,
+        })
+    }
+
+    /// Compute what's playing at a given Unix timestamp.
+    pub fn at(&self, unix_time: u64) -> Option<ScheduleSlot> {
+        let position_in_cycle = unix_time % self.cycle_duration;
+        let mut elapsed = 0u64;
+
+        for episode in &self.playlist {
+            let ep_duration = episode.duration_secs as u64;
+            if ep_duration == 0 {
+                continue;
+            }
+            if elapsed + ep_duration > position_in_cycle {
+                let ep_elapsed = position_in_cycle - elapsed;
+                return Some(ScheduleSlot {
+                    episode: episode.clone(),
+                    start_time: unix_time - ep_elapsed,
+                    elapsed_secs: ep_elapsed,
+                    remaining_secs: ep_duration - ep_elapsed,
+                });
+            }
+            elapsed += ep_duration;
+        }
+
+        self.playlist.last().map(|ep| ScheduleSlot {
+            episode: ep.clone(),
+            start_time: unix_time,
+            elapsed_secs: 0,
+            remaining_secs: ep.duration_secs as u64,
+        })
+    }
+
+    /// Generate schedule slots covering `[start_time, end_time)`.
+    pub fn range(&self, start_time: u64, end_time: u64) -> Vec<ScheduleSlot> {
+        if start_time >= end_time {
+            return Vec::new();
+        }
+        let mut slots = Vec::new();
+        let mut t = start_time;
+        while t < end_time {
+            let Some(slot) = self.at(t) else {
+                break;
+            };
+            let next_t = slot.start_time + slot.episode.duration_secs as u64;
+            slots.push(slot);
+            t = next_t;
+        }
+        slots
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -332,5 +412,47 @@ mod tests {
         let catalog = make_catalog(1, 1, 100.0);
         let result = deterministic_shuffle(&catalog.episodes, 42);
         assert_eq!(result.len(), 1);
+    }
+
+    // -- CachedSchedule tests --
+
+    #[test]
+    fn cached_schedule_matches_schedule_at() {
+        let catalog = make_catalog(2, 10, 600.0);
+        let cached = CachedSchedule::new(&catalog).unwrap();
+        let time = 1_700_000_000u64;
+        let slot_a = schedule_at(&catalog, time).unwrap();
+        let slot_b = cached.at(time).unwrap();
+        assert_eq!(slot_a.episode.title, slot_b.episode.title);
+        assert_eq!(slot_a.start_time, slot_b.start_time);
+        assert_eq!(slot_a.elapsed_secs, slot_b.elapsed_secs);
+    }
+
+    #[test]
+    fn cached_schedule_range_matches() {
+        let catalog = make_catalog(2, 5, 1800.0);
+        let cached = CachedSchedule::new(&catalog).unwrap();
+        let start = 1_000_000u64;
+        let end = start + 7200;
+        let range_a = schedule_range(&catalog, start, end);
+        let range_b = cached.range(start, end);
+        assert_eq!(range_a.len(), range_b.len());
+        for (a, b) in range_a.iter().zip(range_b.iter()) {
+            assert_eq!(a.episode.title, b.episode.title);
+            assert_eq!(a.start_time, b.start_time);
+        }
+    }
+
+    #[test]
+    fn cached_schedule_empty_catalog() {
+        let catalog = ChannelCatalog::new(1);
+        assert!(CachedSchedule::new(&catalog).is_none());
+    }
+
+    #[test]
+    fn cached_schedule_range_invalid_bounds() {
+        let catalog = make_catalog(1, 5, 600.0);
+        let cached = CachedSchedule::new(&catalog).unwrap();
+        assert!(cached.range(2000, 1000).is_empty());
     }
 }

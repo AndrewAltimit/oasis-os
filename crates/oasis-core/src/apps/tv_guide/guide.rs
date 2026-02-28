@@ -10,7 +10,7 @@ use crate::sdi::SdiRegistry;
 
 use super::catalog::{ChannelCatalog, VideoEpisode};
 use super::channel::{Channel, ChannelConfig};
-use super::schedule;
+use super::schedule::{self, CachedSchedule};
 
 /// Number of 30-minute time columns visible in the grid.
 const VISIBLE_TIME_SLOTS: usize = 5;
@@ -31,8 +31,39 @@ const COLOR_DIM_TEXT: Color = Color::rgba(100, 130, 160, 255);
 const COLOR_PLAYING_TEXT: Color = Color::rgba(0, 221, 255, 255);
 const COLOR_FOOTER_BG: Color = Color::rgba(12, 25, 45, 255);
 
+/// Maximum number of channels supported for pre-computed SDI names.
+const MAX_CHANNELS: usize = 10;
+
+/// Maximum number of program cells per row.
+const MAX_CELLS: usize = 8;
+
+/// Pre-computed SDI object name strings (avoids per-frame `format!()` calls).
+struct SdiNames {
+    time_cols: [String; VISIBLE_TIME_SLOTS],
+    row_labels: Vec<String>,
+    row_lines: Vec<String>,
+    row_cells: Vec<[String; MAX_CELLS]>,
+}
+
+impl SdiNames {
+    fn new(channel_count: usize) -> Self {
+        let n = channel_count.min(MAX_CHANNELS);
+        let time_cols = std::array::from_fn(|col| format!("tv_time_{col}"));
+        let row_labels = (0..n).map(|row| format!("tv_row_{row}_label")).collect();
+        let row_lines = (0..n).map(|row| format!("tv_row_{row}_line")).collect();
+        let row_cells = (0..n)
+            .map(|row| std::array::from_fn(|ci| format!("tv_row_{row}_cell_{ci}")))
+            .collect();
+        Self {
+            time_cols,
+            row_labels,
+            row_lines,
+            row_cells,
+        }
+    }
+}
+
 /// Runtime state for the TV Guide app.
-#[derive(Debug)]
 pub struct TvGuideState {
     /// Channel configuration.
     pub channels: Vec<Channel>,
@@ -48,6 +79,26 @@ pub struct TvGuideState {
     pub tuned_channel: Option<usize>,
     /// Current Unix timestamp (updated each frame from system time).
     pub current_time: u64,
+    /// Pre-computed shuffled playlists (rebuilt when catalogs arrive).
+    cached_schedules: Vec<Option<CachedSchedule>>,
+    /// Unix second of last schedule recompute (skip redundant updates).
+    last_schedule_time: u64,
+    /// Pre-computed SDI object name strings.
+    sdi_names: SdiNames,
+}
+
+impl std::fmt::Debug for TvGuideState {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TvGuideState")
+            .field("channels", &self.channels)
+            .field("catalogs", &self.catalogs)
+            .field("selected_channel", &self.selected_channel)
+            .field("time_offset", &self.time_offset)
+            .field("visual_selected", &self.visual_selected)
+            .field("tuned_channel", &self.tuned_channel)
+            .field("current_time", &self.current_time)
+            .finish_non_exhaustive()
+    }
 }
 
 impl TvGuideState {
@@ -62,6 +113,19 @@ impl TvGuideState {
             visual_selected: 0.0,
             tuned_channel: None,
             current_time: current_unix_time(),
+            cached_schedules: (0..channel_count).map(|_| None).collect(),
+            last_schedule_time: 0,
+            sdi_names: SdiNames::new(channel_count),
+        }
+    }
+
+    /// Rebuild the cached schedule for a channel after its catalog changes.
+    pub fn rebuild_cached_schedule(&mut self, index: usize) {
+        if let Some(Some(catalog)) = self.catalogs.get(index) {
+            let cached = CachedSchedule::new(catalog);
+            if index < self.cached_schedules.len() {
+                self.cached_schedules[index] = cached;
+            }
         }
     }
 
@@ -178,7 +242,14 @@ impl TvGuideState {
     pub fn update_sdi(&mut self, sdi: &mut SdiRegistry, at: &ActiveTheme) {
         self.update_time();
 
-        // Lerp visual selection.
+        // Rebuild cached schedules for any newly-loaded catalogs.
+        for i in 0..self.catalogs.len() {
+            if self.catalogs[i].is_some() && self.cached_schedules[i].is_none() {
+                self.rebuild_cached_schedule(i);
+            }
+        }
+
+        // Lerp visual selection (always runs — drives smooth animation).
         self.visual_selected +=
             (self.selected_channel as f32 - self.visual_selected) * at.app_selection_lerp_speed;
 
@@ -261,19 +332,27 @@ impl TvGuideState {
             obj.z = 101;
         }
 
+        // Only recompute grid content when the current second changes.
+        let schedule_changed = self.current_time != self.last_schedule_time;
+        if schedule_changed {
+            self.last_schedule_time = self.current_time;
+        }
+
         let slot_w = grid_w / VISIBLE_TIME_SLOTS as u32;
         for col in 0..VISIBLE_TIME_SLOTS {
-            let slot_time = grid_start + col as u64 * SLOT_DURATION;
-            let name = format!("tv_time_{col}");
-            ensure_obj(sdi, &name);
-            if let Ok(obj) = sdi.get_mut(&name) {
-                obj.text = Some(schedule::format_time(slot_time));
-                obj.x = (label_w + col as u32 * slot_w) as i32 + 4;
-                obj.y = (status_h + header_h) as i32 + 2;
-                obj.font_size = at.font_small;
-                obj.text_color = COLOR_TIME_HEADER;
-                obj.visible = true;
-                obj.z = 102;
+            let name = &self.sdi_names.time_cols[col];
+            ensure_obj(sdi, name);
+            if schedule_changed {
+                let slot_time = grid_start + col as u64 * SLOT_DURATION;
+                if let Ok(obj) = sdi.get_mut(name) {
+                    obj.text = Some(schedule::format_time(slot_time));
+                    obj.x = (label_w + col as u32 * slot_w) as i32 + 4;
+                    obj.y = (status_h + header_h) as i32 + 2;
+                    obj.font_size = at.font_small;
+                    obj.text_color = COLOR_TIME_HEADER;
+                    obj.visible = true;
+                    obj.z = 102;
+                }
             }
         }
 
@@ -284,9 +363,9 @@ impl TvGuideState {
             let row_y = grid_y as i32 + row as i32 * row_h as i32;
 
             // Channel label.
-            let label_name = format!("tv_row_{row}_label");
-            ensure_obj(sdi, &label_name);
-            if let Ok(obj) = sdi.get_mut(&label_name) {
+            let label_name = &self.sdi_names.row_labels[row];
+            ensure_obj(sdi, label_name);
+            if let Ok(obj) = sdi.get_mut(label_name) {
                 obj.text = Some(format!("CH{:>2}\n{}", ch.number, ch.call_sign));
                 obj.x = 4;
                 obj.y = row_y + 2;
@@ -297,9 +376,9 @@ impl TvGuideState {
             }
 
             // Grid line below the row.
-            let line_name = format!("tv_row_{row}_line");
-            ensure_obj(sdi, &line_name);
-            if let Ok(obj) = sdi.get_mut(&line_name) {
+            let line_name = &self.sdi_names.row_lines[row];
+            ensure_obj(sdi, line_name);
+            if let Ok(obj) = sdi.get_mut(line_name) {
                 obj.x = 0;
                 obj.y = row_y + row_h as i32 - 1;
                 obj.w = sw;
@@ -309,18 +388,18 @@ impl TvGuideState {
                 obj.z = 101;
             }
 
-            // Program cells.
-            let slots = if let Some(catalog) = self.catalogs.get(row).and_then(|c| c.as_ref()) {
-                schedule::schedule_range(catalog, grid_start, grid_end)
+            // Program cells — use cached schedule if available.
+            let slots = if let Some(Some(cached)) = self.cached_schedules.get(row) {
+                cached.range(grid_start, grid_end)
             } else {
                 Vec::new()
             };
 
             let total_grid_secs = (VISIBLE_TIME_SLOTS as u64 * SLOT_DURATION) as f64;
-            for (ci, slot) in slots.iter().enumerate().take(8) {
-                let cell_name = format!("tv_row_{row}_cell_{ci}");
-                ensure_obj(sdi, &cell_name);
-                if let Ok(obj) = sdi.get_mut(&cell_name) {
+            for (ci, slot) in slots.iter().enumerate().take(MAX_CELLS) {
+                let cell_name = &self.sdi_names.row_cells[row][ci];
+                ensure_obj(sdi, cell_name);
+                if let Ok(obj) = sdi.get_mut(cell_name) {
                     // Calculate cell position based on episode timing.
                     let ep_start = slot.start_time.max(grid_start);
                     let ep_end =
@@ -350,10 +429,10 @@ impl TvGuideState {
             }
 
             // Hide excess cells from previous frames.
-            let slot_count = slots.len().min(8);
-            for ci in slot_count..8 {
-                let cell_name = format!("tv_row_{row}_cell_{ci}");
-                if let Ok(obj) = sdi.get_mut(&cell_name) {
+            let slot_count = slots.len().min(MAX_CELLS);
+            for ci in slot_count..MAX_CELLS {
+                let cell_name = &self.sdi_names.row_cells[row][ci];
+                if let Ok(obj) = sdi.get_mut(cell_name) {
                     obj.visible = false;
                 }
             }
@@ -410,8 +489,8 @@ impl TvGuideState {
     /// Build "Currently Playing" text for the header.
     fn build_playing_text(&self) -> String {
         let idx = self.selected_channel;
-        if let Some(catalog) = self.catalogs.get(idx).and_then(|c| c.as_ref())
-            && let Some(slot) = schedule::schedule_at(catalog, self.current_time)
+        if let Some(Some(cached)) = self.cached_schedules.get(idx)
+            && let Some(slot) = cached.at(self.current_time)
         {
             let remaining = schedule::format_duration(slot.remaining_secs as f64);
             return format!(
@@ -449,15 +528,15 @@ impl TvGuideState {
                 obj.visible = false;
             }
         }
-        // Channel rows (up to 10 channels, 8 cells each).
-        for row in 0..10 {
+        // Channel rows (up to MAX_CHANNELS channels, MAX_CELLS cells each).
+        for row in 0..MAX_CHANNELS {
             for suffix in &["_label", "_line"] {
                 let name = format!("tv_row_{row}{suffix}");
                 if let Ok(obj) = sdi.get_mut(&name) {
                     obj.visible = false;
                 }
             }
-            for ci in 0..8 {
+            for ci in 0..MAX_CELLS {
                 let name = format!("tv_row_{row}_cell_{ci}");
                 if let Ok(obj) = sdi.get_mut(&name) {
                     obj.visible = false;

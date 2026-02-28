@@ -13,7 +13,7 @@ pub mod schedule;
 pub use catalog::{ChannelCatalog, VideoEpisode};
 pub use channel::{Channel, ChannelConfig, ChannelSource};
 pub use guide::TvGuideState;
-pub use schedule::{ScheduleSlot, schedule_at, schedule_range};
+pub use schedule::{CachedSchedule, ScheduleSlot, schedule_at, schedule_range};
 
 /// VFS path for TV channel configuration.
 pub const TV_CHANNELS_PATH: &str = "/etc/tv/channels.toml";
