@@ -560,15 +560,9 @@ impl OasisWasm {
                             .and_then(|p| p.split('/').next())
                             .unwrap_or(url);
                         if !item_id.is_empty() {
-                            let sw = self.active_theme.screen_w;
-                            self.video_overlay.show_pip(
-                                item_id,
-                                seek_secs,
-                                (sw as i32) - 160,
-                                4,
-                                152,
-                                100,
-                            );
+                            let (px, py, pw, ph) = tv_preview_rect(&self.active_theme);
+                            self.video_overlay
+                                .show_pip(item_id, seek_secs, px, py, pw, ph);
                         }
                     } else {
                         let _ = self.vfs.write(&path, data.as_bytes());
@@ -591,6 +585,10 @@ impl OasisWasm {
             };
             if should_hide {
                 self.video_overlay.hide();
+            } else {
+                // Track canvas resize / window movement each frame.
+                let (px, py, pw, ph) = tv_preview_rect(&self.active_theme);
+                self.video_overlay.update_position(px, py, pw, ph);
             }
         }
 
@@ -1526,6 +1524,19 @@ fn find_tv_guide_runner_wasm<'a>(
 
 /// Check if a runner's pending request is a TV Guide tune_url (should not be
 /// consumed by the generic VFS handler).
+/// Compute the TV preview box rect `(x, y, w, h)` matching `guide.rs` layout.
+fn tv_preview_rect(at: &ActiveTheme) -> (i32, i32, u32, u32) {
+    let usable_h = at
+        .screen_h
+        .saturating_sub(at.statusbar_height + at.bottombar_height);
+    let header_h = (usable_h * 20 / 100).max(60);
+    let preview_w = (at.screen_w / 5).max(80);
+    let preview_h = header_h.saturating_sub(16);
+    let preview_x = at.screen_w as i32 - preview_w as i32 - 10;
+    let preview_y = at.statusbar_height as i32 + 8;
+    (preview_x, preview_y, preview_w, preview_h)
+}
+
 fn is_tv_tune_request_wasm(runner: &AppRunner) -> bool {
     runner.peek_pending_request().is_some_and(|req| {
         req.0 == oasis_core::apps::tv_guide::TV_REQUEST_PATH && req.1.starts_with("tune_url ")

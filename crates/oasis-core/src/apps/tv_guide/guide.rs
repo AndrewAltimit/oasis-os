@@ -144,6 +144,22 @@ impl TvGuideState {
         }
     }
 
+    /// Reset fetch state so catalogs can be re-fetched from scratch.
+    ///
+    /// Clears existing catalogs and cached schedules so the fetch guard
+    /// (`catalogs.iter().all(|c| c.is_none())`) will pass on retry.
+    pub fn reset_for_retry(&mut self) {
+        self.fetch_attempted = false;
+        self.fetch_in_progress = false;
+        self.fetch_error = None;
+        for cat in &mut self.catalogs {
+            *cat = None;
+        }
+        for sched in &mut self.cached_schedules {
+            *sched = None;
+        }
+    }
+
     /// Rebuild the cached schedule for a channel after its catalog changes.
     pub fn rebuild_cached_schedule(&mut self, index: usize) {
         if let Some(Some(catalog)) = self.catalogs.get(index) {

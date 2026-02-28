@@ -899,10 +899,9 @@ impl AppRunner {
                 AppAction::None
             },
             Button::Select => {
-                // Retry catalog fetch.
-                guide.fetch_attempted = false;
-                guide.fetch_in_progress = false;
-                guide.fetch_error = None;
+                // Retry catalog fetch from scratch: clear existing
+                // catalogs so the `all(|c| c.is_none())` guard passes.
+                guide.reset_for_retry();
                 self.lines = guide.text_content();
                 AppAction::None
             },
@@ -2475,6 +2474,28 @@ mod tests {
 
         // Text should now show loading again.
         assert!(runner.lines.iter().any(|l| l.contains("Loading")));
+    }
+
+    #[test]
+    fn tv_select_retry_clears_partial_catalogs() {
+        let vfs = setup_vfs();
+        let mut runner = AppRunner::launch(&make_app("TV Guide"), &vfs);
+
+        // Simulate a partial fetch: first channel loaded, rest failed.
+        let guide = runner.tv_guide_state().unwrap();
+        guide.fetch_attempted = true;
+        assert!(!guide.catalogs.is_empty(), "need channels for this test");
+        guide.catalogs[0] = Some(crate::apps::tv_guide::catalog::ChannelCatalog::new(0));
+
+        // Press Select to retry — should clear all catalogs.
+        runner.handle_input(&Button::Select, &vfs);
+
+        let guide = runner.tv_guide_state().unwrap();
+        assert!(!guide.fetch_attempted, "fetch_attempted should be reset");
+        assert!(
+            guide.catalogs.iter().all(|c| c.is_none()),
+            "catalogs should be cleared so fetch guard passes"
+        );
     }
 
     #[test]
