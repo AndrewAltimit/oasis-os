@@ -7,6 +7,7 @@
 
 use std::process::{Child, Command, Stdio};
 use std::sync::mpsc::{self, Receiver, SyncSender, TryRecvError};
+use std::time::{Duration, Instant};
 
 use oasis_core::backend::{SdiBackend, TextureId};
 
@@ -24,6 +25,9 @@ enum PlayerState {
     Error,
 }
 
+/// Target decode framerate (must match `-r` flag passed to ffmpeg).
+const VIDEO_FPS: u32 = 15;
+
 /// Manages ffmpeg subprocesses for in-app video+audio playback.
 pub struct VideoPlayer {
     state: PlayerState,
@@ -35,6 +39,10 @@ pub struct VideoPlayer {
     frame_width: u32,
     frame_height: u32,
     error_msg: Option<String>,
+    /// When the last video frame was displayed (for pacing).
+    last_frame_time: Option<Instant>,
+    /// Minimum interval between displayed frames (1 / VIDEO_FPS).
+    frame_interval: Duration,
 }
 
 impl VideoPlayer {
@@ -50,6 +58,8 @@ impl VideoPlayer {
             frame_width: 0,
             frame_height: 0,
             error_msg: None,
+            last_frame_time: None,
+            frame_interval: Duration::from_nanos(1_000_000_000 / u64::from(VIDEO_FPS)),
         }
     }
 
@@ -206,31 +216,31 @@ impl VideoPlayer {
             return (self.current_texture, Vec::new());
         }
 
-        // Drain video channel, keeping only the latest frame.
+        // Take at most one video frame, paced to VIDEO_FPS.
+        // The sync_channel(2) backpressure keeps ffmpeg from racing too far
+        // ahead once we stop consuming frames.
         let mut latest_frame: Option<VideoFrame> = None;
         let mut video_disconnected = false;
-        if let Some(ref rx) = self.video_rx {
-            loop {
-                match rx.try_recv() {
-                    Ok(frame) => latest_frame = Some(frame),
-                    Err(TryRecvError::Empty) => break,
-                    Err(TryRecvError::Disconnected) => {
-                        video_disconnected = true;
-                        break;
-                    },
-                }
+        let should_take_frame = self
+            .last_frame_time
+            .is_none_or(|t| t.elapsed() >= self.frame_interval);
+        if should_take_frame && let Some(ref rx) = self.video_rx {
+            match rx.try_recv() {
+                Ok(frame) => latest_frame = Some(frame),
+                Err(TryRecvError::Empty) => {},
+                Err(TryRecvError::Disconnected) => video_disconnected = true,
             }
         }
 
-        // Upload new frame as texture.
+        // Upload new frame as texture and record display time.
         if let Some(frame) = latest_frame {
-            // Destroy old texture.
             if let Some(old_tex) = self.current_texture.take() {
                 let _ = backend.destroy_texture(old_tex);
             }
             match backend.load_texture(self.frame_width, self.frame_height, &frame.data) {
                 Ok(tex) => {
                     self.current_texture = Some(tex);
+                    self.last_frame_time = Some(Instant::now());
                     if self.state == PlayerState::Starting {
                         self.state = PlayerState::Playing;
                         log::info!("VideoPlayer: first frame received, now playing");
@@ -297,6 +307,7 @@ impl VideoPlayer {
         self.video_rx = None;
         self.audio_rx = None;
         self.current_texture = None;
+        self.last_frame_time = None;
         self.state = PlayerState::Idle;
         self.error_msg = None;
     }
