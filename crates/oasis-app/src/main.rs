@@ -551,57 +551,98 @@ fn main() -> Result<()> {
             }
 
             // Poll pending TV catalog fetch.
-            if let Some(ref rx) = state.pending_tv_catalog_fetch
-                && let Ok(result) = rx.try_recv()
-            {
-                state.pending_tv_catalog_fetch = None;
-                if let Ok(catalogs) = result
-                    && let Some(ref mut runner) = state.app_runner
-                    && let Some(guide) = runner.tv_guide_state()
-                {
-                    for (i, cat) in catalogs.into_iter().enumerate() {
-                        if let Some(c) = cat
-                            && i < guide.catalogs.len()
-                        {
-                            guide.catalogs[i] = Some(c);
-                            guide.rebuild_cached_schedule(i);
+            if let Some(ref rx) = state.pending_tv_catalog_fetch {
+                match rx.try_recv() {
+                    Ok(Ok(catalogs)) => {
+                        state.pending_tv_catalog_fetch = None;
+                        let runner =
+                            find_tv_guide_runner(&mut state.app_runner, &mut state.open_runners);
+                        if let Some(runner) = runner {
+                            if let Some(guide) = runner.tv_guide_state() {
+                                let all_none = catalogs.iter().all(|c| c.is_none());
+                                for (i, cat) in catalogs.into_iter().enumerate() {
+                                    if let Some(c) = cat
+                                        && i < guide.catalogs.len()
+                                    {
+                                        guide.catalogs[i] = Some(c);
+                                        guide.rebuild_cached_schedule(i);
+                                    }
+                                }
+                                if all_none {
+                                    guide.fetch_error =
+                                        Some("No episodes found for any channel".into());
+                                }
+                            }
+                            runner.refresh_tv_text();
                         }
-                    }
+                    },
+                    Ok(Err(e)) => {
+                        state.pending_tv_catalog_fetch = None;
+                        log::error!("TV catalog fetch failed: {e}");
+                        let runner =
+                            find_tv_guide_runner(&mut state.app_runner, &mut state.open_runners);
+                        if let Some(runner) = runner {
+                            if let Some(guide) = runner.tv_guide_state() {
+                                guide.fetch_error = Some(e);
+                            }
+                            runner.refresh_tv_text();
+                        }
+                    },
+                    Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                        state.pending_tv_catalog_fetch = None;
+                        log::error!("TV catalog fetch thread died");
+                        let runner =
+                            find_tv_guide_runner(&mut state.app_runner, &mut state.open_runners);
+                        if let Some(runner) = runner {
+                            if let Some(guide) = runner.tv_guide_state() {
+                                guide.fetch_error = Some("catalog fetch failed".into());
+                            }
+                            runner.refresh_tv_text();
+                        }
+                    },
+                    Err(std::sync::mpsc::TryRecvError::Empty) => {},
                 }
             }
 
             // Start TV catalog fetch if a TV Guide app needs it.
-            if state.pending_tv_catalog_fetch.is_none()
-                && let Some(ref mut runner) = state.app_runner
-                && runner.title == "TV Guide"
-                && let Some(guide) = runner.tv_guide_state()
-                && guide.catalogs.iter().all(|c| c.is_none())
-            {
-                let channels = guide.channels.clone();
-                let (tx, rx) = std::sync::mpsc::channel();
-                let tls = state.tls_provider.clone();
-                std::thread::spawn(move || {
-                    let result = fetch_tv_catalogs_blocking(&channels, &tls);
-                    let _ = tx.send(result);
-                });
-                state.pending_tv_catalog_fetch = Some(rx);
+            if state.pending_tv_catalog_fetch.is_none() {
+                let runner = find_tv_guide_runner(&mut state.app_runner, &mut state.open_runners);
+                if let Some(runner) = runner
+                    && let Some(guide) = runner.tv_guide_state()
+                    && !guide.fetch_attempted
+                    && guide.catalogs.iter().all(|c| c.is_none())
+                {
+                    guide.fetch_attempted = true;
+                    let channels = guide.channels.clone();
+                    let (tx, rx) = std::sync::mpsc::channel();
+                    let tls = state.tls_provider.clone();
+                    std::thread::spawn(move || {
+                        let result = fetch_tv_catalogs_blocking(&channels, &tls);
+                        let _ = tx.send(result);
+                    });
+                    state.pending_tv_catalog_fetch = Some(rx);
+                }
             }
 
             // Handle TV Guide tune requests — open in system browser.
-            if let Some(ref mut runner) = state.app_runner
-                && let Some((path, data)) = runner.take_pending_request()
             {
-                if path == oasis_core::apps::tv_guide::TV_REQUEST_PATH && data.starts_with("tune ")
+                let runner = find_tv_guide_runner(&mut state.app_runner, &mut state.open_runners);
+                if let Some(runner) = runner
+                    && let Some((path, data)) = runner.take_pending_request()
                 {
-                    let parts: Vec<&str> = data.splitn(4, ' ').collect();
-                    if parts.len() >= 3 {
-                        let item_id = parts[2];
-                        let url = oasis_core::apps::tv_guide::ChannelCatalog::embed_url(item_id);
-                        // Open in default browser.
-                        let _ = std::process::Command::new("xdg-open").arg(&url).spawn();
+                    if path == oasis_core::apps::tv_guide::TV_REQUEST_PATH
+                        && data.starts_with("tune ")
+                    {
+                        let parts: Vec<&str> = data.splitn(4, ' ').collect();
+                        if parts.len() >= 3 {
+                            let item_id = parts[2];
+                            let url =
+                                oasis_core::apps::tv_guide::ChannelCatalog::embed_url(item_id);
+                            let _ = std::process::Command::new("xdg-open").arg(&url).spawn();
+                        }
+                    } else {
+                        let _ = vfs.write(&path, data.as_bytes());
                     }
-                } else {
-                    let _ = vfs.write(&path, data.as_bytes());
                 }
             }
         }
@@ -664,6 +705,22 @@ fn main() -> Result<()> {
     backend.shutdown()?;
     log::info!("OASIS_OS shut down cleanly");
     Ok(())
+}
+
+/// Find a TV Guide runner in either the full-screen runner or open windowed runners.
+fn find_tv_guide_runner<'a>(
+    app_runner: &'a mut Option<oasis_core::apps::AppRunner>,
+    open_runners: &'a mut [(String, oasis_core::apps::AppRunner)],
+) -> Option<&'a mut oasis_core::apps::AppRunner> {
+    if let Some(ref mut runner) = *app_runner
+        && runner.title == "TV Guide"
+    {
+        return Some(runner);
+    }
+    open_runners
+        .iter_mut()
+        .map(|(_, runner)| runner)
+        .find(|runner| runner.title == "TV Guide")
 }
 
 /// Parse an HTTP/HTTPS stream URL into (host, port, path, use_tls).

@@ -85,6 +85,10 @@ pub struct TvGuideState {
     last_schedule_time: u64,
     /// Pre-computed SDI object name strings.
     sdi_names: SdiNames,
+    /// Whether a catalog fetch has been attempted (prevents infinite retry).
+    pub fetch_attempted: bool,
+    /// Error message from a failed catalog fetch.
+    pub fetch_error: Option<String>,
 }
 
 impl std::fmt::Debug for TvGuideState {
@@ -116,6 +120,8 @@ impl TvGuideState {
             cached_schedules: (0..channel_count).map(|_| None).collect(),
             last_schedule_time: 0,
             sdi_names: SdiNames::new(channel_count),
+            fetch_attempted: false,
+            fetch_error: None,
         }
     }
 
@@ -201,7 +207,13 @@ impl TvGuideState {
 
         let any_loaded = self.catalogs.iter().any(|c| c.is_some());
         if !any_loaded {
-            lines.push("Loading channel catalogs...".to_string());
+            if let Some(ref err) = self.fetch_error {
+                lines.push(format!("Error: {err}"));
+            } else if self.fetch_attempted {
+                lines.push("No content available from any channel.".to_string());
+            } else {
+                lines.push("Loading channel catalogs...".to_string());
+            }
             lines.push(String::new());
         }
 
@@ -499,6 +511,12 @@ impl TvGuideState {
             );
         }
         if self.catalogs.get(idx).and_then(|c| c.as_ref()).is_none() {
+            if let Some(ref err) = self.fetch_error {
+                return format!("Error: {err}");
+            }
+            if self.fetch_attempted {
+                return "No content available".to_string();
+            }
             return "Loading catalog...".to_string();
         }
         "No content available".to_string()
@@ -681,5 +699,83 @@ mod tests {
     #[test]
     fn truncate_title_zero() {
         assert_eq!(truncate_title("Hello", 0), "");
+    }
+
+    #[test]
+    fn text_content_with_fetch_error() {
+        let config = ChannelConfig::from_toml(DEFAULT_CHANNELS_TOML).unwrap();
+        let mut state = TvGuideState::new(&config);
+        state.fetch_attempted = true;
+        state.fetch_error = Some("network timeout".to_string());
+        let lines = state.text_content();
+        assert!(lines.iter().any(|l| l.contains("Error: network timeout")));
+        assert!(!lines.iter().any(|l| l.contains("Loading")));
+    }
+
+    #[test]
+    fn text_content_after_partial_load() {
+        let config = ChannelConfig::from_toml(DEFAULT_CHANNELS_TOML).unwrap();
+        let mut state = TvGuideState::new(&config);
+        state.fetch_attempted = true;
+
+        // Inject a catalog for channel 0.
+        let mut catalog = super::super::catalog::ChannelCatalog::new(state.channels[0].number);
+        catalog.add_episodes(vec![super::super::catalog::VideoEpisode {
+            item_id: "test-item".to_string(),
+            filename: "ep1.mp4".to_string(),
+            title: "Test Episode".to_string(),
+            duration_secs: 1800.0,
+            width: 640,
+            height: 480,
+            size_bytes: 1000,
+        }]);
+        state.catalogs[0] = Some(catalog);
+        state.rebuild_cached_schedule(0);
+
+        let lines = state.text_content();
+        // Should not show "Loading" — at least one catalog loaded.
+        assert!(!lines.iter().any(|l| l.contains("Loading")));
+        // Channel 0 should show the episode title.
+        assert!(lines.iter().any(|l| l.contains("Test Episode")));
+    }
+
+    #[test]
+    fn fetch_attempted_prevents_refetch_text() {
+        let config = ChannelConfig::from_toml(DEFAULT_CHANNELS_TOML).unwrap();
+        let mut state = TvGuideState::new(&config);
+        // Before fetch_attempted: shows loading.
+        let lines = state.text_content();
+        assert!(lines.iter().any(|l| l.contains("Loading")));
+
+        // After fetch_attempted with all None: shows no content.
+        state.fetch_attempted = true;
+        let lines = state.text_content();
+        assert!(lines.iter().any(|l| l.contains("No content")));
+        assert!(!lines.iter().any(|l| l.contains("Loading")));
+    }
+
+    #[test]
+    fn rebuild_cached_schedule_after_catalog() {
+        let config = ChannelConfig::from_toml(DEFAULT_CHANNELS_TOML).unwrap();
+        let mut state = TvGuideState::new(&config);
+
+        let mut catalog = super::super::catalog::ChannelCatalog::new(state.channels[0].number);
+        catalog.add_episodes(vec![super::super::catalog::VideoEpisode {
+            item_id: "test-item".to_string(),
+            filename: "ep1.mp4".to_string(),
+            title: "Test Episode".to_string(),
+            duration_secs: 3600.0,
+            width: 640,
+            height: 480,
+            size_bytes: 1000,
+        }]);
+        state.catalogs[0] = Some(catalog);
+        state.rebuild_cached_schedule(0);
+
+        // Tune should now work for channel 0.
+        let req = state.tune();
+        assert!(req.is_some());
+        let req = req.unwrap();
+        assert_eq!(req.episode.title, "Test Episode");
     }
 }

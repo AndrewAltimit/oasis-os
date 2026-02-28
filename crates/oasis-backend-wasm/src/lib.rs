@@ -475,56 +475,86 @@ impl OasisWasm {
                 && fetcher.is_ready()
             {
                 let fetcher = self.pending_tv_catalog.take().unwrap();
-                if let Ok(catalogs) = fetcher.take_results() {
-                    // Update catalogs in any active TV Guide runner.
-                    if let Some(ref mut runner) = self.app_runner
-                        && let Some(ref mut guide) = runner.tv_guide_state()
-                    {
-                        for (i, cat) in catalogs.into_iter().enumerate() {
-                            if let Some(c) = cat
-                                && i < guide.catalogs.len()
-                            {
-                                guide.catalogs[i] = Some(c);
+                match fetcher.take_results() {
+                    Ok(catalogs) => {
+                        let runner =
+                            find_tv_guide_runner_wasm(&mut self.app_runner, &mut self.open_runners);
+                        if let Some(runner) = runner {
+                            if let Some(guide) = runner.tv_guide_state() {
+                                let all_none = catalogs.iter().all(|c| c.is_none());
+                                for (i, cat) in catalogs.into_iter().enumerate() {
+                                    if let Some(c) = cat
+                                        && i < guide.catalogs.len()
+                                    {
+                                        guide.catalogs[i] = Some(c);
+                                        guide.rebuild_cached_schedule(i);
+                                    }
+                                }
+                                if all_none {
+                                    guide.fetch_error =
+                                        Some("No episodes found for any channel".into());
+                                }
                             }
+                            runner.refresh_tv_text();
                         }
-                    }
+                    },
+                    Err(e) => {
+                        console_log!("TV catalog fetch failed: {e}");
+                        let runner =
+                            find_tv_guide_runner_wasm(&mut self.app_runner, &mut self.open_runners);
+                        if let Some(runner) = runner {
+                            if let Some(guide) = runner.tv_guide_state() {
+                                guide.fetch_error = Some(e);
+                            }
+                            runner.refresh_tv_text();
+                        }
+                    },
                 }
             }
 
             // Start TV catalog fetch if a TV Guide app needs it.
-            if self.pending_tv_catalog.is_none()
-                && let Some(ref mut runner) = self.app_runner
-                && runner.title == "TV Guide"
-                && let Some(guide) = runner.tv_guide_state()
-                && guide.catalogs.iter().all(|c| c.is_none())
-            {
-                self.pending_tv_catalog =
-                    Some(tv_catalog::WasmTvCatalogFetcher::new(&guide.channels));
+            if self.pending_tv_catalog.is_none() {
+                let runner =
+                    find_tv_guide_runner_wasm(&mut self.app_runner, &mut self.open_runners);
+                if let Some(runner) = runner
+                    && let Some(guide) = runner.tv_guide_state()
+                    && !guide.fetch_attempted
+                    && guide.catalogs.iter().all(|c| c.is_none())
+                {
+                    guide.fetch_attempted = true;
+                    self.pending_tv_catalog =
+                        Some(tv_catalog::WasmTvCatalogFetcher::new(&guide.channels));
+                }
             }
 
             // Handle TV Guide tune requests via VFS IPC.
-            if let Some(ref mut runner) = self.app_runner
-                && let Some((path, data)) = runner.take_pending_request()
             {
-                if path == oasis_core::apps::tv_guide::TV_REQUEST_PATH && data.starts_with("tune ")
+                let runner =
+                    find_tv_guide_runner_wasm(&mut self.app_runner, &mut self.open_runners);
+                if let Some(runner) = runner
+                    && let Some((path, data)) = runner.take_pending_request()
                 {
-                    // Parse: "tune <channel_idx> <item_id> <seek_secs>"
-                    let parts: Vec<&str> = data.splitn(4, ' ').collect();
-                    if parts.len() >= 3 {
-                        let item_id = parts[2];
-                        let seek_secs: u64 = parts.get(3).and_then(|s| s.parse().ok()).unwrap_or(0);
-                        let sw = self.active_theme.screen_w;
-                        self.video_overlay.show_pip(
-                            item_id,
-                            seek_secs,
-                            (sw as i32) - 160,
-                            4,
-                            152,
-                            100,
-                        );
+                    if path == oasis_core::apps::tv_guide::TV_REQUEST_PATH
+                        && data.starts_with("tune ")
+                    {
+                        let parts: Vec<&str> = data.splitn(4, ' ').collect();
+                        if parts.len() >= 3 {
+                            let item_id = parts[2];
+                            let seek_secs: u64 =
+                                parts.get(3).and_then(|s| s.parse().ok()).unwrap_or(0);
+                            let sw = self.active_theme.screen_w;
+                            self.video_overlay.show_pip(
+                                item_id,
+                                seek_secs,
+                                (sw as i32) - 160,
+                                4,
+                                152,
+                                100,
+                            );
+                        }
+                    } else {
+                        let _ = self.vfs.write(&path, data.as_bytes());
                     }
-                } else {
-                    let _ = self.vfs.write(&path, data.as_bytes());
                 }
             }
         }
@@ -1443,6 +1473,22 @@ fn trim_output(output_lines: &mut Vec<String>) {
 // ---------------------------------------------------------------------------
 
 /// Populate the WASM VFS with demo content.
+/// Find a TV Guide runner in either the full-screen or windowed runners.
+fn find_tv_guide_runner_wasm<'a>(
+    app_runner: &'a mut Option<AppRunner>,
+    open_runners: &'a mut [(String, AppRunner)],
+) -> Option<&'a mut AppRunner> {
+    if let Some(ref mut runner) = *app_runner
+        && runner.title == "TV Guide"
+    {
+        return Some(runner);
+    }
+    open_runners
+        .iter_mut()
+        .map(|(_, runner)| runner)
+        .find(|runner| runner.title == "TV Guide")
+}
+
 fn populate_wasm_vfs(vfs: &mut MemoryVfs) {
     // Core directory structure.
     let _ = vfs.mkdir("/home");

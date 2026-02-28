@@ -801,6 +801,17 @@ impl AppRunner {
         self.scroll = old_scroll;
     }
 
+    /// Refresh TV Guide text display after catalog changes.
+    pub fn refresh_tv_text(&mut self) {
+        if let Some(ref guide) = self.tv_guide {
+            let old_cursor = self.cursor;
+            let old_scroll = self.scroll;
+            self.lines = guide.text_content();
+            self.cursor = old_cursor;
+            self.scroll = old_scroll;
+        }
+    }
+
     // ---------------------------------------------------------------
     // TV Guide helpers
     // ---------------------------------------------------------------
@@ -2152,5 +2163,97 @@ mod tests {
         let vfs = setup_vfs();
         let runner = AppRunner::launch(&make_app("Settings"), &vfs);
         assert!(runner.panels.is_none());
+    }
+
+    // ---------------------------------------------------------------
+    // TV Guide lifecycle tests
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn tv_guide_launch_and_catalog_inject() {
+        use crate::apps::tv_guide::catalog::{ChannelCatalog, VideoEpisode};
+
+        let vfs = setup_vfs();
+        let mut runner = AppRunner::launch(&make_app("TV Guide"), &vfs);
+        assert!(runner.tv_guide_state().is_some());
+        // Initially shows "Loading".
+        assert!(runner.lines.iter().any(|l| l.contains("Loading")));
+
+        // Inject a catalog for channel 0.
+        let guide = runner.tv_guide_state().unwrap();
+        let ch_num = guide.channels[0].number;
+        let mut catalog = ChannelCatalog::new(ch_num);
+        catalog.add_episodes(vec![VideoEpisode {
+            item_id: "test".to_string(),
+            filename: "ep.mp4".to_string(),
+            title: "Space Adventures".to_string(),
+            duration_secs: 1800.0,
+            width: 640,
+            height: 480,
+            size_bytes: 5000,
+        }]);
+        guide.catalogs[0] = Some(catalog);
+        guide.rebuild_cached_schedule(0);
+        guide.fetch_attempted = true;
+
+        // Refresh text lines.
+        runner.refresh_tv_text();
+        assert!(runner.lines.iter().any(|l| l.contains("Space Adventures")));
+        assert!(!runner.lines.iter().any(|l| l.contains("Loading")));
+    }
+
+    #[test]
+    fn tv_guide_error_display() {
+        let vfs = setup_vfs();
+        let mut runner = AppRunner::launch(&make_app("TV Guide"), &vfs);
+
+        let guide = runner.tv_guide_state().unwrap();
+        guide.fetch_attempted = true;
+        guide.fetch_error = Some("connection refused".to_string());
+
+        runner.refresh_tv_text();
+        assert!(
+            runner
+                .lines
+                .iter()
+                .any(|l| l.contains("Error: connection refused"))
+        );
+        assert!(!runner.lines.iter().any(|l| l.contains("Loading")));
+    }
+
+    #[test]
+    fn tv_guide_tune_with_catalog() {
+        use crate::apps::tv_guide::catalog::{ChannelCatalog, VideoEpisode};
+
+        let vfs = setup_vfs();
+        let mut runner = AppRunner::launch(&make_app("TV Guide"), &vfs);
+
+        // Inject catalog.
+        let guide = runner.tv_guide_state().unwrap();
+        let ch_num = guide.channels[0].number;
+        let mut catalog = ChannelCatalog::new(ch_num);
+        catalog.add_episodes(vec![VideoEpisode {
+            item_id: "tune-test".to_string(),
+            filename: "ep.mp4".to_string(),
+            title: "Tune Test Episode".to_string(),
+            duration_secs: 3600.0,
+            width: 640,
+            height: 480,
+            size_bytes: 5000,
+        }]);
+        guide.catalogs[0] = Some(catalog);
+        guide.rebuild_cached_schedule(0);
+
+        // Press Confirm to tune.
+        let action = runner.handle_input(&Button::Confirm, &vfs);
+        assert_eq!(action, AppAction::None);
+
+        // Should have a pending VFS request for the tune.
+        let req = runner.take_pending_request();
+        assert!(req.is_some());
+        let (path, data) = req.unwrap();
+        assert!(path.contains("tv"));
+        assert!(data.starts_with("tune"));
+        assert!(data.contains("tune-test"));
     }
 }

@@ -455,4 +455,35 @@ mod tests {
         let cached = CachedSchedule::new(&catalog).unwrap();
         assert!(cached.range(2000, 1000).is_empty());
     }
+
+    #[test]
+    fn cached_schedule_cycle_boundary_start() {
+        // At the exact start of a cycle (elapsed_secs should be 0).
+        let catalog = make_catalog(1, 3, 1000.0); // 3000s total cycle
+        let cached = CachedSchedule::new(&catalog).unwrap();
+        // Time 0 mod 3000 = 0 → start of cycle.
+        let slot = cached.at(0).unwrap();
+        assert_eq!(slot.elapsed_secs, 0);
+        assert_eq!(slot.remaining_secs, slot.episode.duration_secs as u64);
+    }
+
+    #[test]
+    fn cached_schedule_one_second_before_cycle_end() {
+        let catalog = make_catalog(1, 2, 500.0); // 1000s total cycle
+        let cached = CachedSchedule::new(&catalog).unwrap();
+        // Time 999 mod 1000 = 999 → 1 second before cycle wraps.
+        let slot = cached.at(999).unwrap();
+        assert_eq!(slot.remaining_secs, 1);
+    }
+
+    #[test]
+    fn cached_schedule_single_episode() {
+        // Single episode catalog: should always return that episode.
+        let catalog = make_catalog(1, 1, 600.0);
+        let cached = CachedSchedule::new(&catalog).unwrap();
+        let slot = cached.at(1_700_000_000).unwrap();
+        assert_eq!(slot.episode.title, "Episode 0");
+        // Elapsed + remaining should equal episode duration.
+        assert_eq!(slot.elapsed_secs + slot.remaining_secs, 600);
+    }
 }
