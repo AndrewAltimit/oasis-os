@@ -123,7 +123,8 @@ impl VideoPlayer {
         let audio_result = Command::new("ffmpeg")
             .args(&seek_args)
             .args([
-                "-i", url, "-vn", "-f", "mp3", "-b:a", "128k", "-v", "quiet", "pipe:1",
+                "-i", url, "-vn", "-ar", "44100", "-f", "mp3", "-b:a", "128k", "-v", "quiet",
+                "pipe:1",
             ])
             .stdout(Stdio::piped())
             .stderr(Stdio::null())

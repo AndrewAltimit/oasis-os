@@ -935,6 +935,22 @@ impl TvGuideState {
             COLOR_PLAYING_TEXT,
         )?;
 
+        // Preview box (right side of header).
+        let preview_w = (cw / 5).max(60);
+        let preview_h = header_h.saturating_sub(8);
+        let preview_x = cx + cw as i32 - preview_w as i32 - 4;
+        let preview_y = cy + 4;
+        backend.fill_rect(preview_x, preview_y, preview_w, preview_h, COLOR_BG)?;
+        if let Some(tex) = self.preview_texture {
+            backend.blit(
+                tex,
+                preview_x + 1,
+                preview_y + 1,
+                preview_w.saturating_sub(2),
+                preview_h.saturating_sub(2),
+            )?;
+        }
+
         // Time header.
         let time_y = cy + header_h as i32;
         backend.fill_rect(cx, time_y, cw, time_h, COLOR_TIME_HEADER_BG)?;
