@@ -2268,7 +2268,232 @@ mod tests {
         assert!(req.is_some());
         let (path, data) = req.unwrap();
         assert!(path.contains("tv"));
-        assert!(data.starts_with("tune"));
+        assert!(data.starts_with("tune_url "));
         assert!(data.contains("tune-test"));
+    }
+
+    // ---------------------------------------------------------------
+    // TV Guide video launch pipeline tests
+    // ---------------------------------------------------------------
+
+    /// Helper: create a TV Guide runner with a catalog injected for channel 0.
+    fn setup_tv_guide_with_catalog(
+        item_id: &str,
+        filename: &str,
+        title: &str,
+    ) -> (AppRunner, crate::vfs::MemoryVfs) {
+        use crate::apps::tv_guide::catalog::{ChannelCatalog, VideoEpisode};
+
+        let vfs = setup_vfs();
+        let mut runner = AppRunner::launch(&make_app("TV Guide"), &vfs);
+
+        let guide = runner.tv_guide_state().unwrap();
+        let ch_num = guide.channels[0].number;
+        let mut catalog = ChannelCatalog::new(ch_num);
+        catalog.add_episodes(vec![VideoEpisode {
+            item_id: item_id.to_string(),
+            filename: filename.to_string(),
+            title: title.to_string(),
+            duration_secs: 1800.0,
+            width: 640,
+            height: 480,
+            size_bytes: 50000,
+        }]);
+        guide.catalogs[0] = Some(catalog);
+        guide.rebuild_cached_schedule(0);
+        guide.fetch_attempted = true;
+
+        (runner, vfs)
+    }
+
+    #[test]
+    fn tv_tune_url_is_direct_download_not_embed() {
+        let (mut runner, vfs) = setup_tv_guide_with_catalog("my-item", "video.mp4", "My Video");
+
+        runner.handle_input(&Button::Confirm, &vfs);
+        let (_, data) = runner.take_pending_request().unwrap();
+
+        // Must use tune_url prefix (not old "tune " format).
+        assert!(
+            data.starts_with("tune_url "),
+            "expected tune_url, got: {data}"
+        );
+
+        let url = &data["tune_url ".len()..];
+
+        // Must be a direct download URL, not an embed URL.
+        assert!(
+            url.starts_with("https://archive.org/download/"),
+            "expected download URL, got: {url}",
+        );
+        assert!(
+            !url.contains("/embed/"),
+            "URL must not use embed endpoint: {url}",
+        );
+    }
+
+    #[test]
+    fn tv_tune_url_contains_specific_filename() {
+        let (mut runner, vfs) =
+            setup_tv_guide_with_catalog("sonic-episodes", "Season1/ep01.mp4", "Episode 1");
+
+        runner.handle_input(&Button::Confirm, &vfs);
+        let (_, data) = runner.take_pending_request().unwrap();
+        let url = &data["tune_url ".len()..];
+
+        // URL must contain the item ID.
+        assert!(url.contains("sonic-episodes"), "missing item_id in: {url}");
+
+        // URL must contain the filename (possibly percent-encoded).
+        assert!(
+            url.contains("Season1") && url.contains("ep01.mp4"),
+            "missing filename in: {url}",
+        );
+    }
+
+    #[test]
+    fn tv_tune_url_percent_encodes_special_chars() {
+        let (mut runner, vfs) =
+            setup_tv_guide_with_catalog("test-item", "My Video #1.mp4", "My Video");
+
+        runner.handle_input(&Button::Confirm, &vfs);
+        let (_, data) = runner.take_pending_request().unwrap();
+        let url = &data["tune_url ".len()..];
+
+        // '#' must be percent-encoded to '%23' (raw '#' breaks URLs).
+        assert!(!url.contains('#'), "raw '#' in URL breaks fragment: {url}");
+        assert!(url.contains("%23"), "expected percent-encoded '#': {url}");
+
+        // Spaces should be percent-encoded too.
+        assert!(!url.contains("My Video"), "raw spaces in URL: {url}",);
+    }
+
+    #[test]
+    fn tv_tune_navigate_then_tune_second_channel() {
+        use crate::apps::tv_guide::catalog::{ChannelCatalog, VideoEpisode};
+
+        let vfs = setup_vfs();
+        let mut runner = AppRunner::launch(&make_app("TV Guide"), &vfs);
+
+        // Inject catalogs for channels 0 and 1.
+        let guide = runner.tv_guide_state().unwrap();
+        for i in 0..2 {
+            let ch_num = guide.channels[i].number;
+            let mut catalog = ChannelCatalog::new(ch_num);
+            catalog.add_episodes(vec![VideoEpisode {
+                item_id: format!("item-ch{i}"),
+                filename: format!("ch{i}_video.mp4"),
+                title: format!("Channel {i} Show"),
+                duration_secs: 1800.0,
+                width: 640,
+                height: 480,
+                size_bytes: 5000,
+            }]);
+            guide.catalogs[i] = Some(catalog);
+            guide.rebuild_cached_schedule(i);
+        }
+
+        // Navigate down to channel 1.
+        runner.handle_input(&Button::Down, &vfs);
+        let guide = runner.tv_guide_state().unwrap();
+        assert_eq!(guide.selected_channel, 1);
+
+        // Tune channel 1.
+        runner.handle_input(&Button::Confirm, &vfs);
+        let (_, data) = runner.take_pending_request().unwrap();
+        let url = &data["tune_url ".len()..];
+
+        // URL must reference channel 1's item, not channel 0's.
+        assert!(
+            url.contains("item-ch1"),
+            "expected channel 1 item_id, got: {url}",
+        );
+        assert!(
+            url.contains("ch1_video.mp4"),
+            "expected channel 1 filename, got: {url}",
+        );
+    }
+
+    #[test]
+    fn tv_tune_without_catalog_produces_no_request() {
+        let vfs = setup_vfs();
+        let mut runner = AppRunner::launch(&make_app("TV Guide"), &vfs);
+
+        // Press Confirm with no catalogs loaded.
+        runner.handle_input(&Button::Confirm, &vfs);
+        assert!(
+            runner.take_pending_request().is_none(),
+            "should not produce tune request without catalog",
+        );
+    }
+
+    #[test]
+    fn tv_select_resets_fetch_for_retry() {
+        let vfs = setup_vfs();
+        let mut runner = AppRunner::launch(&make_app("TV Guide"), &vfs);
+
+        // Simulate a failed fetch.
+        let guide = runner.tv_guide_state().unwrap();
+        guide.fetch_attempted = true;
+        guide.fetch_error = Some("network error".to_string());
+        runner.refresh_tv_text();
+        assert!(runner.lines.iter().any(|l| l.contains("Error")));
+
+        // Press Select to retry.
+        runner.handle_input(&Button::Select, &vfs);
+
+        let guide = runner.tv_guide_state().unwrap();
+        assert!(!guide.fetch_attempted, "fetch_attempted should be reset");
+        assert!(guide.fetch_error.is_none(), "fetch_error should be cleared");
+
+        // Text should now show loading again.
+        assert!(runner.lines.iter().any(|l| l.contains("Loading")));
+    }
+
+    #[test]
+    fn tv_cancel_while_tuned_untunes_instead_of_exit() {
+        let (mut runner, vfs) = setup_tv_guide_with_catalog("item-x", "video.mp4", "Test Show");
+
+        // Tune to a channel.
+        runner.handle_input(&Button::Confirm, &vfs);
+        let guide = runner.tv_guide_state().unwrap();
+        assert!(guide.tuned_channel.is_some());
+
+        // Cancel should untune, not exit.
+        let action = runner.handle_input(&Button::Cancel, &vfs);
+        assert_eq!(action, AppAction::None);
+        let guide = runner.tv_guide_state().unwrap();
+        assert!(guide.tuned_channel.is_none());
+
+        // Second cancel should exit.
+        let action = runner.handle_input(&Button::Cancel, &vfs);
+        assert_eq!(action, AppAction::Exit);
+    }
+
+    #[test]
+    fn tv_tune_request_path_matches_constant() {
+        use crate::apps::tv_guide::TV_REQUEST_PATH;
+
+        let (mut runner, vfs) = setup_tv_guide_with_catalog("path-test", "ep.mp4", "Path Test");
+
+        runner.handle_input(&Button::Confirm, &vfs);
+        let (path, _) = runner.take_pending_request().unwrap();
+        assert_eq!(path, TV_REQUEST_PATH, "IPC path must match TV_REQUEST_PATH");
+    }
+
+    #[test]
+    fn tv_tune_url_is_well_formed_https() {
+        let (mut runner, vfs) = setup_tv_guide_with_catalog("https-test", "ep.mp4", "HTTPS Test");
+
+        runner.handle_input(&Button::Confirm, &vfs);
+        let (_, data) = runner.take_pending_request().unwrap();
+        let url = &data["tune_url ".len()..];
+
+        assert!(url.starts_with("https://"), "URL must be HTTPS: {url}");
+        assert!(!url.contains(' '), "URL must not contain spaces: {url}");
+        assert!(
+            url.contains("archive.org"),
+            "URL must target archive.org: {url}"
+        );
     }
 }
