@@ -73,14 +73,27 @@ async fn fetch_all_catalogs(
 
         for source in &channel.source {
             let files_url = format!("https://archive.org/metadata/{}/files", source.item_id);
-            let resp_val = JsFuture::from(window.fetch_with_str(&files_url)).await?;
-            let resp: web_sys::Response = resp_val.dyn_into()?;
+            let resp_val = match JsFuture::from(window.fetch_with_str(&files_url)).await {
+                Ok(v) => v,
+                Err(_) => continue, // Network error, skip source.
+            };
+            let resp: web_sys::Response = match resp_val.dyn_into() {
+                Ok(r) => r,
+                Err(_) => continue,
+            };
 
             if !resp.ok() {
                 continue; // Skip failed sources, try next.
             }
 
-            let body_val = JsFuture::from(resp.text()?).await?;
+            let text_promise = match resp.text() {
+                Ok(p) => p,
+                Err(_) => continue,
+            };
+            let body_val = match JsFuture::from(text_promise).await {
+                Ok(v) => v,
+                Err(_) => continue,
+            };
             let body: String = body_val.as_string().unwrap_or_default();
 
             let episodes = ChannelCatalog::parse_files_response(

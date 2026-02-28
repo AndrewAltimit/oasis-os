@@ -535,13 +535,21 @@ impl OasisWasm {
                     && let Some((path, data)) = runner.take_pending_request()
                 {
                     if path == oasis_core::apps::tv_guide::TV_REQUEST_PATH
-                        && data.starts_with("tune ")
+                        && data.starts_with("tune_url ")
                     {
-                        let parts: Vec<&str> = data.splitn(4, ' ').collect();
-                        if parts.len() >= 3 {
-                            let item_id = parts[2];
-                            let seek_secs: u64 =
-                                parts.get(3).and_then(|s| s.parse().ok()).unwrap_or(0);
+                        // Format: "tune_url {url} {seek_secs}"
+                        let rest = &data["tune_url ".len()..];
+                        let (url, seek_secs) = rest
+                            .rsplit_once(' ')
+                            .map(|(u, s)| (u, s.parse::<u64>().unwrap_or(0)))
+                            .unwrap_or((rest, 0));
+                        // Extract item_id from download URL:
+                        //   https://archive.org/download/{item_id}/{filename}
+                        let item_id = url
+                            .strip_prefix("https://archive.org/download/")
+                            .and_then(|p| p.split('/').next())
+                            .unwrap_or(url);
+                        if !item_id.is_empty() {
                             let sw = self.active_theme.screen_w;
                             self.video_overlay.show_pip(
                                 item_id,

@@ -196,8 +196,8 @@ fn test_tv_guide_tune_request_emitted() -> bool {
         "request path should match TV_REQUEST_PATH",
     );
     assert!(
-        data.starts_with("tune "),
-        "request data should start with 'tune '"
+        data.starts_with("tune_url "),
+        "request data should start with 'tune_url '"
     );
 
     true
@@ -237,9 +237,12 @@ fn test_tv_guide_screenshot_populated() -> bool {
     guide.update_sdi(&mut sdi, &active_theme);
 
     // Verify SDI objects were created.
-    assert!(sdi.contains("tv_bg"), "should create tv_bg SDI object");
-    assert!(sdi.contains("tv_header_bg"), "should create tv_header_bg");
-    assert!(sdi.contains("tv_footer_text"), "should create footer");
+    assert!(
+        sdi.contains("tv_hdr_bg"),
+        "should create tv_hdr_bg SDI object"
+    );
+    assert!(sdi.contains("tv_hdr_date"), "should create tv_hdr_date");
+    assert!(sdi.contains("tv_ftr_bg"), "should create tv_ftr_bg");
 
     true
 }

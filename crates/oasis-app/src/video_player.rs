@@ -179,7 +179,7 @@ impl VideoPlayer {
         });
 
         // Audio reader thread: reads variable-size chunks.
-        let (audio_tx, audio_rx) = mpsc::channel::<Vec<u8>>();
+        let (audio_tx, audio_rx) = mpsc::sync_channel::<Vec<u8>>(16);
         std::thread::spawn(move || {
             use std::io::Read;
             let mut reader = std::io::BufReader::new(audio_stdout);

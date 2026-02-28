@@ -80,10 +80,12 @@ impl ChannelCatalog {
             }
 
             // Subfolder filter: only include files in the specified directory.
-            if let Some(sf) = subfolder
-                && !name.starts_with(sf)
-            {
-                continue;
+            // Use "sf/" prefix to avoid matching sibling dirs (e.g. "Season1" vs "Season10").
+            if let Some(sf) = subfolder {
+                let prefix = format!("{sf}/");
+                if !name.starts_with(&prefix) {
+                    continue;
+                }
             }
 
             let duration = parse_duration(file);
