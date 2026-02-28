@@ -1,6 +1,11 @@
 //! `AudioBackend` implementation using the Web Audio API.
+//!
+//! Supports both static buffer playback (Web Audio `AudioBuffer`) and
+//! streaming playback via MSE (`MediaSource` + `SourceBuffer("audio/mpeg")`).
 
-use std::collections::HashMap;
+use std::cell::{Cell, RefCell};
+use std::collections::{HashMap, VecDeque};
+use std::rc::Rc;
 
 use wasm_bindgen::prelude::*;
 use web_sys::{AudioBuffer, AudioBufferSourceNode, AudioContext, GainNode};
@@ -10,6 +15,27 @@ use oasis_types::error::{OasisError, Result};
 
 fn js_err(e: JsValue) -> OasisError {
     OasisError::Backend(format!("{e:?}"))
+}
+
+// ---------------------------------------------------------------------------
+// MSE streaming track state
+// ---------------------------------------------------------------------------
+
+struct StreamingTrack {
+    audio_el: web_sys::HtmlAudioElement,
+    #[allow(dead_code)]
+    media_source: web_sys::MediaSource,
+    source_buffer: Rc<RefCell<Option<web_sys::SourceBuffer>>>,
+    pending_chunks: Rc<RefCell<VecDeque<Vec<u8>>>>,
+    #[allow(dead_code)]
+    updating: Rc<Cell<bool>>,
+    ready: Rc<Cell<bool>>,
+    object_url: String,
+    // Hold closures to prevent GC.
+    #[allow(dead_code)]
+    closures: Vec<Closure<dyn FnMut()>>,
+    #[allow(dead_code)]
+    closures_ev: Vec<Closure<dyn FnMut(web_sys::Event)>>,
 }
 
 // ---------------------------------------------------------------------------
@@ -26,6 +52,7 @@ pub struct WasmAudioBackend {
     volume: u8,
     playing: bool,
     paused: bool,
+    streaming_track: Option<StreamingTrack>,
 }
 
 impl WasmAudioBackend {
@@ -40,6 +67,7 @@ impl WasmAudioBackend {
             volume: 80,
             playing: false,
             paused: false,
+            streaming_track: None,
         }
     }
 
@@ -117,6 +145,16 @@ impl AudioBackend for WasmAudioBackend {
     }
 
     fn play(&mut self, track: AudioTrackId) -> Result<()> {
+        // If this is the streaming track, start the audio element.
+        if let Some(ref st) = self.streaming_track
+            && self.current_track == Some(track.0)
+        {
+            let _ = st.audio_el.play().map_err(js_err)?;
+            self.playing = true;
+            self.paused = false;
+            return Ok(());
+        }
+
         let buffer = self
             .tracks
             .get(&track.0)
@@ -164,12 +202,18 @@ impl AudioBackend for WasmAudioBackend {
     }
 
     fn stop(&mut self) -> Result<()> {
+        // Stop Web Audio buffer source.
         if let Some(ref source) = self.current_source {
             #[allow(deprecated)]
             let _ = source.stop_with_when(0.0);
         }
         self.current_source = None;
         self.current_track = None;
+        // Stop MSE streaming track.
+        if let Some(st) = self.streaming_track.take() {
+            st.audio_el.pause().ok();
+            let _ = web_sys::Url::revoke_object_url(&st.object_url);
+        }
         self.playing = false;
         self.paused = false;
         Ok(())
@@ -179,6 +223,9 @@ impl AudioBackend for WasmAudioBackend {
         self.volume = volume.min(100);
         if let Some(ref gain) = self.gain {
             gain.gain().set_value(self.volume as f32 / 100.0);
+        }
+        if let Some(ref st) = self.streaming_track {
+            st.audio_el.set_volume(self.volume as f64 / 100.0);
         }
         Ok(())
     }
@@ -203,5 +250,123 @@ impl AudioBackend for WasmAudioBackend {
             .and_then(|id| self.tracks.get(&id))
             .map(|buf| (buf.duration() * 1000.0) as u64)
             .unwrap_or(0)
+    }
+
+    fn load_streaming(&mut self) -> Result<AudioTrackId> {
+        use wasm_bindgen::JsCast;
+
+        // Clean up any previous streaming track.
+        if let Some(st) = self.streaming_track.take() {
+            st.audio_el.pause().ok();
+            let _ = web_sys::Url::revoke_object_url(&st.object_url);
+        }
+
+        let media_source = web_sys::MediaSource::new().map_err(js_err)?;
+        let object_url =
+            web_sys::Url::create_object_url_with_source(&media_source).map_err(js_err)?;
+
+        let audio_el = web_sys::HtmlAudioElement::new().map_err(js_err)?;
+        audio_el.set_src(&object_url);
+
+        let source_buffer: Rc<RefCell<Option<web_sys::SourceBuffer>>> = Rc::new(RefCell::new(None));
+        let pending_chunks: Rc<RefCell<VecDeque<Vec<u8>>>> = Rc::new(RefCell::new(VecDeque::new()));
+        let updating = Rc::new(Cell::new(false));
+        let ready = Rc::new(Cell::new(false));
+
+        let mut closures: Vec<Closure<dyn FnMut()>> = Vec::new();
+        let mut closures_ev: Vec<Closure<dyn FnMut(web_sys::Event)>> = Vec::new();
+
+        // Set up `sourceopen` event to create SourceBuffer.
+        {
+            let sb_ref = Rc::clone(&source_buffer);
+            let ready_ref = Rc::clone(&ready);
+            let ms_ref = media_source.clone();
+            let pending_ref = Rc::clone(&pending_chunks);
+            let updating_ref = Rc::clone(&updating);
+
+            let on_open = Closure::wrap(Box::new(move || {
+                if let Ok(sb) = ms_ref.add_source_buffer("audio/mpeg") {
+                    // Set up `updateend` to drain pending chunks.
+                    let pending_inner = Rc::clone(&pending_ref);
+                    let sb_inner = sb.clone();
+                    let updating_inner = Rc::clone(&updating_ref);
+                    let on_update_end = Closure::wrap(Box::new(move || {
+                        updating_inner.set(false);
+                        // Append next pending chunk if available.
+                        if let Some(chunk) = pending_inner.borrow_mut().pop_front() {
+                            let arr = js_sys::Uint8Array::from(chunk.as_slice());
+                            if sb_inner.append_buffer_with_array_buffer_view(&arr).is_ok() {
+                                // updating_inner will be set false again when this finishes
+                            }
+                        }
+                    }) as Box<dyn FnMut()>);
+                    sb.set_onupdateend(Some(on_update_end.as_ref().unchecked_ref()));
+                    on_update_end.forget();
+
+                    *sb_ref.borrow_mut() = Some(sb);
+                    ready_ref.set(true);
+                }
+            }) as Box<dyn FnMut()>);
+
+            let on_open_ev = Closure::wrap(Box::new({
+                let on_open_ref = on_open.as_ref().unchecked_ref::<js_sys::Function>().clone();
+                move |_ev: web_sys::Event| {
+                    let _ = on_open_ref.call0(&JsValue::NULL);
+                }
+            }) as Box<dyn FnMut(web_sys::Event)>);
+            media_source
+                .add_event_listener_with_callback("sourceopen", on_open_ev.as_ref().unchecked_ref())
+                .ok();
+            closures.push(on_open);
+            closures_ev.push(on_open_ev);
+        }
+
+        let vol = self.volume as f64 / 100.0;
+        audio_el.set_volume(vol);
+
+        let id = self.next_id;
+        self.next_id += 1;
+
+        self.streaming_track = Some(StreamingTrack {
+            audio_el,
+            media_source,
+            source_buffer,
+            pending_chunks,
+            updating,
+            ready,
+            object_url,
+            closures,
+            closures_ev,
+        });
+
+        self.current_track = Some(id);
+        self.playing = true;
+
+        Ok(AudioTrackId(id))
+    }
+
+    fn feed_data(&mut self, _track: AudioTrackId, data: &[u8]) -> Result<()> {
+        if let Some(ref st) = self.streaming_track {
+            if !st.ready.get() {
+                // SourceBuffer not ready yet — queue data.
+                st.pending_chunks.borrow_mut().push_back(data.to_vec());
+                return Ok(());
+            }
+            if let Some(ref sb) = *st.source_buffer.borrow() {
+                if sb.updating() {
+                    // Buffer is updating — queue data for `updateend` callback.
+                    st.pending_chunks.borrow_mut().push_back(data.to_vec());
+                } else {
+                    let arr = js_sys::Uint8Array::from(data);
+                    if sb.append_buffer_with_array_buffer_view(&arr).is_err() {
+                        // Failed to append — queue for retry.
+                        st.pending_chunks.borrow_mut().push_back(data.to_vec());
+                    }
+                }
+            } else {
+                st.pending_chunks.borrow_mut().push_back(data.to_vec());
+            }
+        }
+        Ok(())
     }
 }

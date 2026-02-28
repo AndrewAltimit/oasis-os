@@ -4,6 +4,7 @@
 //! playback from swappable `RadioSource` implementations (Icecast, VFS).
 //! Uses VFS-based IPC for terminal command integration.
 
+pub mod archive;
 pub mod buffer;
 pub mod icy;
 pub mod source;
@@ -13,7 +14,8 @@ use oasis_types::backend::{AudioBackend, AudioTrackId};
 use oasis_types::error::{OasisError, Result};
 use oasis_vfs::Vfs;
 
-pub use source::{AudioChunk, IcecastSource, RadioSource, SourceState, VfsSource};
+pub use archive::{ArchiveCatalog, ArchiveTrack};
+pub use source::{ArchiveSource, AudioChunk, IcecastSource, RadioSource, SourceState, VfsSource};
 pub use station::{Station, StationRegistry};
 
 /// VFS path where the radio manager publishes its status.
@@ -35,6 +37,8 @@ pub enum RadioState {
     Buffering,
     /// Actively streaming and playing.
     Playing,
+    /// Current track finished; ready for next track (archive auto-advance).
+    TrackEnded,
     /// An error occurred.
     Error,
 }
@@ -46,6 +50,7 @@ impl std::fmt::Display for RadioState {
             Self::Connecting => write!(f, "connecting"),
             Self::Buffering => write!(f, "buffering"),
             Self::Playing => write!(f, "playing"),
+            Self::TrackEnded => write!(f, "loading"),
             Self::Error => write!(f, "error"),
         }
     }
@@ -119,6 +124,20 @@ impl RadioManager {
     /// Set genre filter.
     pub fn set_genre_filter(&mut self, genre: &str) {
         self.genre_filter = genre.to_string();
+    }
+
+    /// Returns true if the current track ended and the manager is waiting
+    /// for the caller to supply the next track (archive auto-advance).
+    pub fn needs_next_track(&self) -> bool {
+        self.state == RadioState::TrackEnded
+    }
+
+    /// Reset state to Connecting after TrackEnded so the next source can play.
+    pub fn continue_playing(&mut self) {
+        if self.state == RadioState::TrackEnded {
+            self.audio_buf.clear();
+            self.state = RadioState::Connecting;
+        }
     }
 
     /// Start tuning to a station via a pre-created source.
@@ -265,7 +284,14 @@ impl RadioManager {
                 },
                 Ok(None) => {
                     if src.state() == SourceState::Ended {
-                        self.stop(backend)?;
+                        // Clean up current streaming track.
+                        if let Some(track) = self.stream_track.take() {
+                            let _ = backend.stop();
+                            let _ = backend.unload_track(track);
+                        }
+                        self.audio_buf.clear();
+                        // Signal TrackEnded so caller can auto-advance.
+                        self.state = RadioState::TrackEnded;
                         *source = None;
                     }
                 },
@@ -280,7 +306,7 @@ impl RadioManager {
                     *source = None;
                 },
             },
-            RadioState::Stopped | RadioState::Error => {
+            RadioState::Stopped | RadioState::TrackEnded | RadioState::Error => {
                 // Clean up the source if radio was stopped or errored.
                 if let Some(mut src) = source.take() {
                     src.disconnect();
@@ -565,9 +591,9 @@ mod tests {
     fn process_request_genre() {
         let mut mgr = RadioManager::new();
         let mut backend = StubAudioBackend::new();
-        let resp = mgr.process_request("genre ambient", &mut backend).unwrap();
-        assert!(resp.contains("ambient"));
-        assert_eq!(mgr.genre_filter(), "ambient");
+        let resp = mgr.process_request("genre drama", &mut backend).unwrap();
+        assert!(resp.contains("drama"));
+        assert_eq!(mgr.genre_filter(), "drama");
     }
 
     #[test]
@@ -576,7 +602,7 @@ mod tests {
         let mut backend = StubAudioBackend::new();
         let resp = mgr.process_request("genre", &mut backend).unwrap();
         assert!(resp.contains("Genres:"));
-        assert!(resp.contains("ambient"));
+        assert!(resp.contains("drama"));
     }
 
     #[test]
@@ -652,11 +678,11 @@ mod tests {
     #[test]
     fn filtered_stations_with_genre() {
         let mut mgr = RadioManager::new();
-        mgr.set_genre_filter("ambient");
+        mgr.set_genre_filter("drama");
         let filtered = mgr.filtered_stations();
         assert!(!filtered.is_empty());
         for (_, s) in &filtered {
-            assert_eq!(s.genre, "ambient");
+            assert_eq!(s.genre, "drama");
         }
     }
 
@@ -706,6 +732,65 @@ mod tests {
         assert_eq!(RadioState::Connecting.to_string(), "connecting");
         assert_eq!(RadioState::Buffering.to_string(), "buffering");
         assert_eq!(RadioState::Playing.to_string(), "playing");
+        assert_eq!(RadioState::TrackEnded.to_string(), "loading");
         assert_eq!(RadioState::Error.to_string(), "error");
+    }
+
+    #[test]
+    fn track_ended_transition() {
+        let mut mgr = RadioManager::new();
+        let mut backend = StubAudioBackend::new();
+
+        mgr.tune("Test", 128, &mut backend).unwrap();
+
+        // Create a VFS source that will end after all data consumed.
+        let data = vec![0xAAu8; 128 * 1024];
+        let mut source: Option<Box<dyn RadioSource>> = Some(Box::new(VfsSource::new(data)));
+
+        // Tick until playing.
+        for _ in 0..20 {
+            mgr.tick(&mut source, &mut backend).unwrap();
+        }
+        assert_eq!(mgr.state(), RadioState::Playing);
+
+        // Tick until source exhausted -> TrackEnded.
+        for _ in 0..100 {
+            mgr.tick(&mut source, &mut backend).unwrap();
+            if mgr.state() == RadioState::TrackEnded {
+                break;
+            }
+        }
+        assert_eq!(mgr.state(), RadioState::TrackEnded);
+        assert!(mgr.needs_next_track());
+        assert!(source.is_none());
+    }
+
+    #[test]
+    fn continue_playing_resets_state() {
+        let mut mgr = RadioManager::new();
+        let mut backend = StubAudioBackend::new();
+
+        mgr.tune("Test", 128, &mut backend).unwrap();
+        let data = vec![0xAAu8; 128 * 1024];
+        let mut source: Option<Box<dyn RadioSource>> = Some(Box::new(VfsSource::new(data)));
+
+        // Drive to TrackEnded.
+        for _ in 0..200 {
+            mgr.tick(&mut source, &mut backend).unwrap();
+            if mgr.needs_next_track() {
+                break;
+            }
+        }
+        assert!(mgr.needs_next_track());
+
+        mgr.continue_playing();
+        assert_eq!(mgr.state(), RadioState::Connecting);
+        assert!(!mgr.needs_next_track());
+    }
+
+    #[test]
+    fn needs_next_track_false_when_not_track_ended() {
+        let mgr = RadioManager::new();
+        assert!(!mgr.needs_next_track());
     }
 }

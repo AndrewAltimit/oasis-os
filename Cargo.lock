@@ -620,6 +620,7 @@ dependencies = [
  "oasis-vfs",
  "proptest",
  "serde",
+ "serde_json",
  "toml",
 ]
 

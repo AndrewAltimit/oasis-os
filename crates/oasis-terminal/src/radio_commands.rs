@@ -139,6 +139,8 @@ impl Command for RadioCmd {
                         if line.starts_with("Station:")
                             || line.starts_with("Now Playing:")
                             || line.starts_with("Buffer:")
+                            || line.starts_with("Source:")
+                            || line.starts_with("Collection:")
                         {
                             info_lines.push(line.to_string());
                         }

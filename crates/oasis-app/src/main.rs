@@ -174,6 +174,7 @@ fn main() -> Result<()> {
         frame_counter: 0,
         radio_manager: RadioManager::new(),
         radio_source: None,
+        archive_catalog: None,
         audio_backend: {
             let mut ab = SdlAudioBackend::new();
             ab.init().ok();
@@ -357,7 +358,118 @@ fn main() -> Result<()> {
                                 station.bitrate,
                                 &mut state.audio_backend,
                             );
-                            if let Some((host, port, path)) = parse_stream_url(&station.url) {
+
+                            if station.source_type == "archive" && !station.collection.is_empty() {
+                                // Internet Archive: fetch catalog, build playlist.
+                                let search_path = format!(
+                                    "/advancedsearch.php?\
+                                     q=collection:{col}+AND+mediatype:audio\
+                                     &fl=identifier,title,creator\
+                                     &sort=random&rows=50&output=json",
+                                    col = station.collection
+                                );
+                                match https_get_body(
+                                    &mut state.net_backend,
+                                    &state.tls_provider,
+                                    "archive.org",
+                                    &search_path,
+                                ) {
+                                    Ok(body) => {
+                                        let items = oasis_audio::radio::ArchiveCatalog
+                                            ::parse_search_response(&body);
+                                        if items.is_empty() {
+                                            state
+                                                .radio_manager
+                                                .set_error("no items found in collection");
+                                        } else {
+                                            // Pick the first item and fetch its files.
+                                            let (item_id, _title, creator) = &items[0];
+                                            let files_path =
+                                                oasis_audio::radio::ArchiveCatalog::files_api_path(
+                                                    item_id,
+                                                );
+                                            match https_get_body(
+                                                &mut state.net_backend,
+                                                &state.tls_provider,
+                                                "archive.org",
+                                                &files_path,
+                                            ) {
+                                                Ok(files_body) => {
+                                                    // Build catalog from all items.
+                                                    let mut catalog =
+                                                        oasis_audio::radio::ArchiveCatalog::new(
+                                                            &station.collection,
+                                                        );
+                                                    // Add tracks from first item.
+                                                    let tracks = oasis_audio::radio::ArchiveCatalog
+                                                        ::parse_files_response(
+                                                            &files_body, item_id, creator,
+                                                        );
+                                                    catalog.tracks.extend(tracks);
+                                                    // Add tracks from remaining items
+                                                    // (fetch up to 4 more for variety).
+                                                    for (id, _t, c) in items.iter().skip(1).take(4)
+                                                    {
+                                                        let fp = oasis_audio::radio
+                                                            ::ArchiveCatalog::files_api_path(id);
+                                                        if let Ok(fb) = https_get_body(
+                                                            &mut state.net_backend,
+                                                            &state.tls_provider,
+                                                            "archive.org",
+                                                            &fp,
+                                                        ) {
+                                                            let ts = oasis_audio::radio
+                                                                ::ArchiveCatalog
+                                                                ::parse_files_response(&fb, id, c);
+                                                            catalog.tracks.extend(ts);
+                                                        }
+                                                    }
+
+                                                    if catalog.tracks.is_empty() {
+                                                        state
+                                                            .radio_manager
+                                                            .set_error("no MP3 files found");
+                                                    } else {
+                                                        catalog.shuffle(state.frame_counter);
+                                                        // Connect to first track.
+                                                        if let Some(track) =
+                                                            catalog.current_track().cloned()
+                                                        {
+                                                            match connect_archive_source(
+                                                                &mut state.net_backend,
+                                                                &state.tls_provider,
+                                                                &track,
+                                                            ) {
+                                                                Ok(source) => {
+                                                                    state.radio_source =
+                                                                        Some(source);
+                                                                },
+                                                                Err(e) => {
+                                                                    state
+                                                                        .radio_manager
+                                                                        .set_error(&e);
+                                                                },
+                                                            }
+                                                        }
+                                                        state.archive_catalog = Some(catalog);
+                                                    }
+                                                },
+                                                Err(e) => {
+                                                    state
+                                                        .radio_manager
+                                                        .set_error(&format!("files API: {e}"));
+                                                },
+                                            }
+                                        }
+                                    },
+                                    Err(e) => {
+                                        state.radio_manager.set_error(&format!("search API: {e}"));
+                                    },
+                                }
+                            } else if let Some((host, port, path, _tls)) =
+                                parse_stream_url(&station.url)
+                            {
+                                // Icecast: connect to stream directly.
                                 match state.net_backend.connect(&host, port) {
                                     Ok(stream) => {
                                         let source = oasis_audio::radio::IcecastSource::new(
@@ -389,6 +501,22 @@ fn main() -> Result<()> {
             let _ = state
                 .radio_manager
                 .tick(&mut state.radio_source, &mut state.audio_backend);
+
+            // Auto-advance to next track for archive stations.
+            if state.radio_manager.needs_next_track()
+                && let Some(ref mut catalog) = state.archive_catalog
+                && let Some(track) = catalog.next_track().cloned()
+            {
+                match connect_archive_source(&mut state.net_backend, &state.tls_provider, &track) {
+                    Ok(source) => {
+                        state.radio_source = Some(source);
+                        state.radio_manager.continue_playing();
+                    },
+                    Err(e) => {
+                        state.radio_manager.set_error(&e);
+                    },
+                }
+            }
 
             // Publish radio status periodically (~4 times per second).
             if state.frame_counter.is_multiple_of(15) {
@@ -464,19 +592,113 @@ fn main() -> Result<()> {
     Ok(())
 }
 
-/// Parse an HTTP stream URL into (host, port, path).
-fn parse_stream_url(url: &str) -> Option<(String, u16, String)> {
-    let url = url.strip_prefix("http://")?;
-    let (host_port, path) = if let Some(idx) = url.find('/') {
-        (&url[..idx], url[idx..].to_string())
+/// Parse an HTTP/HTTPS stream URL into (host, port, path, use_tls).
+fn parse_stream_url(url: &str) -> Option<(String, u16, String, bool)> {
+    let (remainder, tls) = if let Some(r) = url.strip_prefix("https://") {
+        (r, true)
+    } else if let Some(r) = url.strip_prefix("http://") {
+        (r, false)
     } else {
-        (url, "/".to_string())
+        return None;
     };
+    let (host_port, path) = if let Some(idx) = remainder.find('/') {
+        (&remainder[..idx], remainder[idx..].to_string())
+    } else {
+        (remainder, "/".to_string())
+    };
+    let default_port = if tls { 443 } else { 80 };
     let (host, port) = if let Some(idx) = host_port.rfind(':') {
         let port: u16 = host_port[idx + 1..].parse().ok()?;
         (host_port[..idx].to_string(), port)
     } else {
-        (host_port.to_string(), 80)
+        (host_port.to_string(), default_port)
     };
-    Some((host, port, path))
+    Some((host, port, path, tls))
+}
+
+/// Perform a blocking HTTPS GET and return the response body as a string.
+///
+/// Used for Internet Archive API calls (small JSON responses).
+fn https_get_body(
+    net_backend: &mut oasis_core::net::StdNetworkBackend,
+    tls_provider: &oasis_core::net::RustlsTlsProvider,
+    host: &str,
+    path: &str,
+) -> std::result::Result<String, String> {
+    use oasis_core::backend::NetworkBackend;
+    use oasis_core::net::TlsProvider;
+
+    let tcp = net_backend
+        .connect(host, 443)
+        .map_err(|e| format!("connect: {e}"))?;
+
+    let mut stream = tls_provider
+        .connect_tls(tcp, host)
+        .map_err(|e| format!("TLS: {e}"))?;
+
+    let request = format!(
+        "GET {path} HTTP/1.1\r\nHost: {host}\r\nUser-Agent: OASIS_OS/0.1\r\n\
+         Connection: close\r\nAccept: */*\r\n\r\n"
+    );
+    let req_bytes = request.as_bytes();
+    let mut written = 0;
+    while written < req_bytes.len() {
+        written += stream
+            .write(&req_bytes[written..])
+            .map_err(|e| format!("write: {e}"))?;
+    }
+
+    // Read full response.
+    let mut buf = [0u8; 8192];
+    let mut response = Vec::new();
+    loop {
+        match stream.read(&mut buf) {
+            Ok(0) => break,
+            Ok(n) => response.extend_from_slice(&buf[..n]),
+            Err(e) => {
+                let msg = format!("{e}");
+                if msg.contains("WouldBlock") || msg.contains("would block") {
+                    continue;
+                }
+                if !response.is_empty() {
+                    break;
+                }
+                return Err(format!("read: {e}"));
+            },
+        }
+    }
+
+    let text = String::from_utf8_lossy(&response).into_owned();
+    // Strip HTTP headers.
+    if let Some(idx) = text.find("\r\n\r\n") {
+        Ok(text[idx + 4..].to_string())
+    } else {
+        Ok(text)
+    }
+}
+
+/// Connect to archive.org over TLS and create an ArchiveSource for the given track.
+fn connect_archive_source(
+    net_backend: &mut oasis_core::net::StdNetworkBackend,
+    tls_provider: &oasis_core::net::RustlsTlsProvider,
+    track: &oasis_audio::radio::ArchiveTrack,
+) -> std::result::Result<Box<dyn oasis_audio::radio::RadioSource>, String> {
+    use oasis_core::backend::NetworkBackend;
+    use oasis_core::net::TlsProvider;
+
+    let tcp = net_backend
+        .connect("archive.org", 443)
+        .map_err(|e| format!("connect: {e}"))?;
+    let stream = tls_provider
+        .connect_tls(tcp, "archive.org")
+        .map_err(|e| format!("TLS: {e}"))?;
+
+    let path = oasis_audio::radio::ArchiveCatalog::download_path(track);
+    Ok(Box::new(oasis_audio::radio::ArchiveSource::new(
+        stream,
+        "archive.org",
+        &path,
+        &track.title,
+        &track.creator,
+    )))
 }

@@ -77,6 +77,15 @@ web-sys = { version = "0.3", features = [
     "GainNode", "AudioParam", "AudioDestinationNode",
     "BaseAudioContext",
     "console",
+    # Fetch API (for Internet Archive streaming)
+    "Request", "RequestInit", "Response", "Headers",
+    "ReadableStream", "ReadableStreamDefaultReader",
+    # MediaSource Extensions (streaming audio playback)
+    "MediaSource", "SourceBuffer", "SourceBufferList",
+    # Audio element (streaming playback target)
+    "HtmlAudioElement", "HtmlMediaElement", "MediaSourceReadyState",
+    # URL (object URLs for MSE)
+    "Url",
 ] }
 js-sys = "0.3"
 wasm-bindgen-futures = "0.4"

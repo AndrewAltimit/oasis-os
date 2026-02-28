@@ -277,6 +277,207 @@ impl IcecastSource {
     }
 }
 
+/// Radio source that downloads an MP3 file from the Internet Archive via HTTP(S).
+///
+/// Simpler than `IcecastSource` — no ICY metadata demuxing, just HTTP GET
+/// and stream body bytes as audio chunks.
+pub struct ArchiveSource {
+    stream: Box<dyn oasis_types::backend::NetworkStream>,
+    path: String,
+    host: String,
+    state: SourceState,
+    header_buf: Vec<u8>,
+    headers_parsed: bool,
+    content_length: Option<usize>,
+    bytes_received: usize,
+    track_title: String,
+    track_creator: String,
+    metadata_sent: bool,
+}
+
+impl ArchiveSource {
+    /// Create a new archive source from a connected stream.
+    ///
+    /// `host` is the Host header value (e.g. "archive.org"),
+    /// `path` is the HTTP path (e.g. "/download/item/file.mp3").
+    /// `title` and `creator` are pre-fetched metadata for display.
+    pub fn new(
+        stream: Box<dyn oasis_types::backend::NetworkStream>,
+        host: &str,
+        path: &str,
+        title: &str,
+        creator: &str,
+    ) -> Self {
+        Self {
+            stream,
+            path: path.to_string(),
+            host: host.to_string(),
+            state: SourceState::Connecting,
+            header_buf: Vec::new(),
+            headers_parsed: false,
+            content_length: None,
+            bytes_received: 0,
+            track_title: title.to_string(),
+            track_creator: creator.to_string(),
+            metadata_sent: false,
+        }
+    }
+
+    /// Send the HTTP GET request.
+    fn send_request(&mut self) -> Result<()> {
+        let request = format!(
+            "GET {} HTTP/1.1\r\nHost: {}\r\nUser-Agent: OASIS_OS/0.1\r\n\
+             Connection: close\r\nAccept: */*\r\n\r\n",
+            self.path, self.host
+        );
+        let bytes = request.as_bytes();
+        let mut written = 0;
+        while written < bytes.len() {
+            match self.stream.write(&bytes[written..]) {
+                Ok(n) => written += n,
+                Err(e) => {
+                    self.state = SourceState::Error;
+                    return Err(e);
+                },
+            }
+        }
+        Ok(())
+    }
+
+    /// Try to parse HTTP response headers from the accumulated buffer.
+    fn try_parse_headers(&mut self) -> Option<usize> {
+        let text = String::from_utf8_lossy(&self.header_buf);
+        if let Some(end) = text.find("\r\n\r\n") {
+            let header_str = &text[..end];
+            // Parse Content-Length if present.
+            for line in header_str.lines() {
+                let lower = line.to_ascii_lowercase();
+                if lower.starts_with("content-length:")
+                    && let Some(val) = line.split_once(':').map(|(_, v)| v.trim())
+                {
+                    self.content_length = val.parse().ok();
+                }
+            }
+            // Check for HTTP redirect (302/301).
+            let first_line = header_str.lines().next().unwrap_or("");
+            if first_line.contains("301") || first_line.contains("302") {
+                for line in header_str.lines() {
+                    let lower = line.to_ascii_lowercase();
+                    if lower.starts_with("location:")
+                        && let Some(loc) = line.split_once(':').map(|(_, v)| v.trim())
+                    {
+                        log::info!("HTTP redirect to: {loc}");
+                    }
+                }
+            }
+            Some(end + 4)
+        } else {
+            None
+        }
+    }
+}
+
+impl RadioSource for ArchiveSource {
+    fn poll(&mut self) -> Result<Option<AudioChunk>> {
+        match self.state {
+            SourceState::Connecting => {
+                self.send_request()?;
+                self.state = SourceState::Active;
+                self.headers_parsed = false;
+                self.header_buf.clear();
+                Ok(None)
+            },
+            SourceState::Active => {
+                let mut buf = [0u8; 4096];
+                let n = match self.stream.read(&mut buf) {
+                    Ok(0) => {
+                        self.state = SourceState::Ended;
+                        return Ok(None);
+                    },
+                    Ok(n) => n,
+                    Err(e) => {
+                        let msg = format!("{e}");
+                        if msg.contains("WouldBlock") || msg.contains("would block") {
+                            return Ok(None);
+                        }
+                        self.state = SourceState::Error;
+                        return Err(OasisError::Backend(format!("stream read: {e}")));
+                    },
+                };
+
+                if !self.headers_parsed {
+                    self.header_buf.extend_from_slice(&buf[..n]);
+                    if let Some(body_offset) = self.try_parse_headers() {
+                        self.headers_parsed = true;
+                        let body = self.header_buf[body_offset..].to_vec();
+                        self.header_buf.clear();
+                        if body.is_empty() {
+                            return Ok(None);
+                        }
+                        self.bytes_received += body.len();
+                        let metadata = if !self.metadata_sent {
+                            self.metadata_sent = true;
+                            let title = if self.track_creator.is_empty() {
+                                self.track_title.clone()
+                            } else {
+                                format!("{} - {}", self.track_creator, self.track_title)
+                            };
+                            Some(super::icy::StreamMetadata { title })
+                        } else {
+                            None
+                        };
+                        return Ok(Some(AudioChunk {
+                            data: body,
+                            metadata,
+                        }));
+                    }
+                    return Ok(None);
+                }
+
+                self.bytes_received += n;
+
+                // Check if download is complete.
+                if let Some(cl) = self.content_length
+                    && self.bytes_received >= cl
+                {
+                    self.state = SourceState::Ended;
+                }
+
+                let metadata = if !self.metadata_sent {
+                    self.metadata_sent = true;
+                    let title = if self.track_creator.is_empty() {
+                        self.track_title.clone()
+                    } else {
+                        format!("{} - {}", self.track_creator, self.track_title)
+                    };
+                    Some(super::icy::StreamMetadata { title })
+                } else {
+                    None
+                };
+
+                Ok(Some(AudioChunk {
+                    data: buf[..n].to_vec(),
+                    metadata,
+                }))
+            },
+            _ => Ok(None),
+        }
+    }
+
+    fn disconnect(&mut self) {
+        let _ = self.stream.close();
+        self.state = SourceState::Ended;
+    }
+
+    fn state(&self) -> SourceState {
+        self.state
+    }
+
+    fn source_type(&self) -> &str {
+        "archive"
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -337,5 +538,132 @@ mod tests {
         }
         assert_eq!(total.len(), 5000);
         assert_eq!(total, data);
+    }
+
+    /// Mock network stream that replays pre-loaded data.
+    struct MockStream {
+        data: Vec<u8>,
+        pos: usize,
+        written: Vec<u8>,
+    }
+
+    impl MockStream {
+        fn new(data: Vec<u8>) -> Self {
+            Self {
+                data,
+                pos: 0,
+                written: Vec::new(),
+            }
+        }
+    }
+
+    impl oasis_types::backend::NetworkStream for MockStream {
+        fn read(&mut self, buf: &mut [u8]) -> Result<usize> {
+            if self.pos >= self.data.len() {
+                return Ok(0);
+            }
+            let n = buf.len().min(self.data.len() - self.pos);
+            buf[..n].copy_from_slice(&self.data[self.pos..self.pos + n]);
+            self.pos += n;
+            Ok(n)
+        }
+        fn write(&mut self, data: &[u8]) -> Result<usize> {
+            self.written.extend_from_slice(data);
+            Ok(data.len())
+        }
+        fn close(&mut self) -> Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn archive_source_sends_request_and_parses_headers() {
+        let body = vec![0xFFu8; 100];
+        let mut response = b"HTTP/1.1 200 OK\r\nContent-Length: 100\r\n\r\n".to_vec();
+        response.extend_from_slice(&body);
+
+        let stream = Box::new(MockStream::new(response));
+        let mut src =
+            ArchiveSource::new(stream, "archive.org", "/download/x/y.mp3", "Song", "Artist");
+
+        assert_eq!(src.state(), SourceState::Connecting);
+        assert_eq!(src.source_type(), "archive");
+
+        // First poll sends request, transitions to Active.
+        let r = src.poll().unwrap();
+        assert!(r.is_none());
+        assert_eq!(src.state(), SourceState::Active);
+
+        // Subsequent polls return audio data.
+        let mut total = Vec::new();
+        loop {
+            match src.poll().unwrap() {
+                Some(chunk) => {
+                    total.extend_from_slice(&chunk.data);
+                },
+                None => break,
+            }
+        }
+        assert_eq!(total.len(), 100);
+        assert_eq!(src.state(), SourceState::Ended);
+    }
+
+    #[test]
+    fn archive_source_metadata_on_first_chunk() {
+        let mut response = b"HTTP/1.1 200 OK\r\n\r\n".to_vec();
+        response.extend_from_slice(&[0xAA; 100]);
+
+        let stream = Box::new(MockStream::new(response));
+        let mut src =
+            ArchiveSource::new(stream, "archive.org", "/download/x/y.mp3", "Song", "Artist");
+
+        // Send request.
+        src.poll().unwrap();
+
+        // First data chunk should have metadata.
+        let chunk = src.poll().unwrap().unwrap();
+        assert!(chunk.metadata.is_some());
+        assert_eq!(chunk.metadata.unwrap().title, "Artist - Song");
+
+        // Drain remaining (may get more data or end).
+        loop {
+            match src.poll().unwrap() {
+                Some(chunk) => {
+                    // Subsequent chunks should NOT have metadata.
+                    assert!(chunk.metadata.is_none());
+                },
+                None => break,
+            }
+        }
+    }
+
+    #[test]
+    fn archive_source_content_length_tracking() {
+        let body = vec![0xBB; 50];
+        let mut response = b"HTTP/1.1 200 OK\r\nContent-Length: 50\r\n\r\n".to_vec();
+        response.extend_from_slice(&body);
+
+        let stream = Box::new(MockStream::new(response));
+        let mut src = ArchiveSource::new(stream, "host", "/path", "T", "");
+
+        src.poll().unwrap(); // Send request.
+        let mut received = 0;
+        loop {
+            match src.poll().unwrap() {
+                Some(chunk) => received += chunk.data.len(),
+                None => break,
+            }
+        }
+        assert_eq!(received, 50);
+        assert_eq!(src.state(), SourceState::Ended);
+    }
+
+    #[test]
+    fn archive_source_disconnect() {
+        let response = b"HTTP/1.1 200 OK\r\n\r\ndata".to_vec();
+        let stream = Box::new(MockStream::new(response));
+        let mut src = ArchiveSource::new(stream, "host", "/path", "T", "C");
+        src.disconnect();
+        assert_eq!(src.state(), SourceState::Ended);
     }
 }

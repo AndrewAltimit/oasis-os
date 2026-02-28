@@ -3,6 +3,7 @@
 //! Renders to an HTML `<canvas>` element using the Canvas 2D API,
 //! maps DOM events to `InputEvent`, and provides Web Audio playback.
 
+pub mod archive;
 pub mod audio;
 pub mod font;
 pub mod iframe;
@@ -86,7 +87,6 @@ enum Mode {
 pub struct OasisWasm {
     backend: WasmBackend,
     input: WasmInputBackend,
-    #[allow(dead_code)]
     audio: WasmAudioBackend,
     #[allow(dead_code)]
     network: WasmNetworkBackend,
@@ -120,6 +120,10 @@ pub struct OasisWasm {
     bg_color: Color,
     width: u32,
     height: u32,
+    radio_manager: oasis_audio::RadioManager,
+    radio_source: Option<Box<dyn oasis_audio::radio::RadioSource>>,
+    archive_catalog: Option<oasis_audio::radio::ArchiveCatalog>,
+    pending_catalog: Option<archive::WasmArchiveCatalogFetcher>,
 }
 
 #[wasm_bindgen]
@@ -281,6 +285,10 @@ impl OasisWasm {
             bg_color: Color::rgb(0, 0, 0),
             width,
             height,
+            radio_manager: oasis_audio::RadioManager::new(),
+            radio_source: None,
+            archive_catalog: None,
+            pending_catalog: None,
         })
     }
 
@@ -330,6 +338,101 @@ impl OasisWasm {
             }
             if let Some((path, data)) = pending {
                 let _ = self.vfs.write(&path, data.as_bytes());
+            }
+        }
+
+        // -- Radio processing --
+        {
+            use oasis_audio::RADIO_REQUEST_PATH;
+
+            // Read radio requests from VFS.
+            if self.vfs.exists(RADIO_REQUEST_PATH)
+                && let Ok(data) = self.vfs.read(RADIO_REQUEST_PATH)
+            {
+                let request = String::from_utf8_lossy(&data).to_string();
+                if !request.is_empty() {
+                    let _ = self.vfs.write(RADIO_REQUEST_PATH, b"");
+
+                    if let Some(target) = request.strip_prefix("tune ") {
+                        let station = if let Ok(idx) = target.parse::<usize>() {
+                            self.radio_manager.registry.stations.get(idx).cloned()
+                        } else {
+                            self.radio_manager
+                                .registry
+                                .stations
+                                .iter()
+                                .find(|s| s.name.eq_ignore_ascii_case(target.trim()))
+                                .cloned()
+                        };
+                        if let Some(station) = station {
+                            let _ = self.radio_manager.tune(
+                                &station.name,
+                                station.bitrate,
+                                &mut self.audio,
+                            );
+
+                            if station.source_type == "archive" && !station.collection.is_empty() {
+                                self.pending_catalog =
+                                    Some(archive::WasmArchiveCatalogFetcher::new(
+                                        &station.collection,
+                                        self.frame_counter,
+                                    ));
+                            }
+                        } else {
+                            self.radio_manager
+                                .set_error(&format!("station not found: {target}"));
+                        }
+                    } else {
+                        let _ = self
+                            .radio_manager
+                            .process_request(&request, &mut self.audio);
+                    }
+                }
+            }
+
+            // Poll pending catalog fetch.
+            if let Some(ref fetcher) = self.pending_catalog
+                && fetcher.is_ready()
+            {
+                let fetcher = self.pending_catalog.take().unwrap();
+                match fetcher.take_results() {
+                    Ok((catalog, source)) => {
+                        self.archive_catalog = Some(catalog);
+                        self.radio_source = Some(source);
+                    },
+                    Err(e) => {
+                        self.radio_manager.set_error(&e);
+                    },
+                }
+            }
+
+            // Drive the radio state machine.
+            let _ = self
+                .radio_manager
+                .tick(&mut self.radio_source, &mut self.audio);
+
+            // Auto-advance to next track for archive stations.
+            if self.radio_manager.needs_next_track()
+                && let Some(ref mut catalog) = self.archive_catalog
+                && let Some(track) = catalog.next_track().cloned()
+            {
+                let url = oasis_audio::radio::ArchiveCatalog::download_url(&track);
+                let source = archive::WasmArchiveSource::new(&url, &track.title, &track.creator);
+                self.radio_source = Some(Box::new(source));
+                self.radio_manager.continue_playing();
+            }
+
+            // Publish radio status periodically.
+            if self.frame_counter.is_multiple_of(15) {
+                let _ = self.radio_manager.publish_status(&mut self.vfs);
+            }
+
+            // Refresh radio app display if visible.
+            if let Some(ref mut runner) = self.app_runner {
+                runner.refresh_radio(&self.vfs);
+            }
+            for (_, runner) in &mut self.open_runners {
+                runner.refresh_radio(&self.vfs);
             }
         }
 
