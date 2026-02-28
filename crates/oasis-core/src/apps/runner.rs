@@ -901,6 +901,7 @@ impl AppRunner {
             Button::Select => {
                 // Retry catalog fetch.
                 guide.fetch_attempted = false;
+                guide.fetch_in_progress = false;
                 guide.fetch_error = None;
                 self.lines = guide.text_content();
                 AppAction::None

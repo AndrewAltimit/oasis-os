@@ -96,6 +96,8 @@ pub struct TvGuideState {
     sdi_names: SdiNames,
     /// Whether a catalog fetch has been attempted (prevents infinite retry).
     pub fetch_attempted: bool,
+    /// Whether a catalog fetch is currently in progress (background thread/future).
+    pub fetch_in_progress: bool,
     /// Error message from a failed catalog fetch.
     pub fetch_error: Option<String>,
     /// First visible channel row (for paging when channels > VISIBLE_ROWS).
@@ -135,6 +137,7 @@ impl TvGuideState {
             last_schedule_time: 0,
             sdi_names: SdiNames::new(),
             fetch_attempted: false,
+            fetch_in_progress: false,
             fetch_error: None,
             scroll_offset: 0,
             preview_texture: None,
@@ -257,11 +260,11 @@ impl TvGuideState {
         if !any_loaded {
             if let Some(ref err) = self.fetch_error {
                 lines.push(format!("Error: {err}"));
-            } else if self.fetch_attempted {
-                lines.push("No content available from any channel.".to_string());
-            } else {
+            } else if self.fetch_in_progress || !self.fetch_attempted {
                 let dots = ".".repeat((self.current_time % 4) as usize + 1);
                 lines.push(format!("Loading channel catalogs{dots}"));
+            } else {
+                lines.push("No content available from any channel.".to_string());
             }
             lines.push(String::new());
         }
@@ -480,13 +483,14 @@ impl TvGuideState {
             }
         }
 
-        // LIVE badge (red rounded rect, shown when tuned or has content).
-        let has_content = self
-            .cached_schedules
-            .get(self.selected_channel)
-            .and_then(|s| s.as_ref())
-            .and_then(|c| c.at(self.current_time))
-            .is_some();
+        // LIVE badge (red rounded rect, shown when the tuned channel has content).
+        let is_live = self.tuned_channel.is_some_and(|ch| {
+            self.cached_schedules
+                .get(ch)
+                .and_then(|s| s.as_ref())
+                .and_then(|c| c.at(self.current_time))
+                .is_some()
+        });
 
         ensure_obj(sdi, "tv_hdr_live_badge");
         if let Ok(obj) = sdi.get_mut("tv_hdr_live_badge") {
@@ -496,7 +500,7 @@ impl TvGuideState {
             obj.h = 14;
             obj.color = COLOR_LIVE_BADGE;
             obj.border_radius = Some(3);
-            obj.visible = has_content;
+            obj.visible = is_live;
             obj.z = 103;
         }
 
@@ -507,7 +511,7 @@ impl TvGuideState {
             obj.y = preview_y + 5;
             obj.font_size = at.font_hint;
             obj.text_color = COLOR_SELECTED_TEXT;
-            obj.visible = has_content;
+            obj.visible = is_live;
             obj.z = 104;
         }
     }
@@ -853,11 +857,11 @@ impl TvGuideState {
             if let Some(ref err) = self.fetch_error {
                 return format!("Error: {err}");
             }
-            if self.fetch_attempted {
-                return "No content available".to_string();
+            if self.fetch_in_progress || !self.fetch_attempted {
+                let dots = ".".repeat((self.current_time % 4) as usize + 1);
+                return format!("Loading catalog{dots}");
             }
-            let dots = ".".repeat((self.current_time % 4) as usize + 1);
-            return format!("Loading catalog{dots}");
+            return "No content available".to_string();
         }
         "No content available".to_string()
     }

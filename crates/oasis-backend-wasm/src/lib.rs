@@ -333,14 +333,21 @@ impl OasisWasm {
             }
         }
 
-        // Process pending VFS requests from app runners.
+        // Process pending VFS requests from app runners (e.g. radio tune).
+        // Skip TV Guide tune requests — they're handled by the dedicated video
+        // overlay section below.
         {
             let mut pending = None;
-            if let Some(ref mut runner) = self.app_runner {
+            if let Some(ref mut runner) = self.app_runner
+                && !is_tv_tune_request_wasm(runner)
+            {
                 pending = runner.take_pending_request();
             }
             if pending.is_none() {
                 for (_, runner) in &mut self.open_runners {
+                    if is_tv_tune_request_wasm(runner) {
+                        continue;
+                    }
                     if let Some(req) = runner.take_pending_request() {
                         pending = Some(req);
                         break;
@@ -481,6 +488,7 @@ impl OasisWasm {
                             find_tv_guide_runner_wasm(&mut self.app_runner, &mut self.open_runners);
                         if let Some(runner) = runner {
                             if let Some(guide) = runner.tv_guide_state() {
+                                guide.fetch_in_progress = false;
                                 let all_none = catalogs.iter().all(|c| c.is_none());
                                 for (i, cat) in catalogs.into_iter().enumerate() {
                                     if let Some(c) = cat
@@ -504,6 +512,7 @@ impl OasisWasm {
                             find_tv_guide_runner_wasm(&mut self.app_runner, &mut self.open_runners);
                         if let Some(runner) = runner {
                             if let Some(guide) = runner.tv_guide_state() {
+                                guide.fetch_in_progress = false;
                                 guide.fetch_error = Some(e);
                             }
                             runner.refresh_tv_text();
@@ -522,6 +531,7 @@ impl OasisWasm {
                     && guide.catalogs.iter().all(|c| c.is_none())
                 {
                     guide.fetch_attempted = true;
+                    guide.fetch_in_progress = true;
                     self.pending_tv_catalog =
                         Some(tv_catalog::WasmTvCatalogFetcher::new(&guide.channels));
                 }
@@ -564,6 +574,23 @@ impl OasisWasm {
                         let _ = self.vfs.write(&path, data.as_bytes());
                     }
                 }
+            }
+        }
+
+        // Detect untune: overlay is visible but guide has no tuned channel.
+        if self.video_overlay.is_visible() {
+            let should_hide = {
+                let runner =
+                    find_tv_guide_runner_wasm(&mut self.app_runner, &mut self.open_runners);
+                match runner {
+                    Some(runner) => runner
+                        .tv_guide_state()
+                        .is_none_or(|g| g.tuned_channel.is_none()),
+                    None => true, // TV Guide closed.
+                }
+            };
+            if should_hide {
+                self.video_overlay.hide();
             }
         }
 
@@ -1495,6 +1522,14 @@ fn find_tv_guide_runner_wasm<'a>(
         .iter_mut()
         .map(|(_, runner)| runner)
         .find(|runner| runner.title == "TV Guide")
+}
+
+/// Check if a runner's pending request is a TV Guide tune_url (should not be
+/// consumed by the generic VFS handler).
+fn is_tv_tune_request_wasm(runner: &AppRunner) -> bool {
+    runner.peek_pending_request().is_some_and(|req| {
+        req.0 == oasis_core::apps::tv_guide::TV_REQUEST_PATH && req.1.starts_with("tune_url ")
+    })
 }
 
 fn populate_wasm_vfs(vfs: &mut MemoryVfs) {

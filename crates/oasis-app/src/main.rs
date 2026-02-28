@@ -575,6 +575,7 @@ fn main() -> Result<()> {
                             find_tv_guide_runner(&mut state.app_runner, &mut state.open_runners);
                         if let Some(runner) = runner {
                             if let Some(guide) = runner.tv_guide_state() {
+                                guide.fetch_in_progress = false;
                                 let all_none = catalogs.iter().all(|c| c.is_none());
                                 for (i, cat) in catalogs.into_iter().enumerate() {
                                     if let Some(c) = cat
@@ -602,6 +603,7 @@ fn main() -> Result<()> {
                             find_tv_guide_runner(&mut state.app_runner, &mut state.open_runners);
                         if let Some(runner) = runner {
                             if let Some(guide) = runner.tv_guide_state() {
+                                guide.fetch_in_progress = false;
                                 guide.fetch_error = Some(e);
                             }
                             runner.refresh_tv_text();
@@ -616,6 +618,7 @@ fn main() -> Result<()> {
                             find_tv_guide_runner(&mut state.app_runner, &mut state.open_runners);
                         if let Some(runner) = runner {
                             if let Some(guide) = runner.tv_guide_state() {
+                                guide.fetch_in_progress = false;
                                 guide.fetch_error = Some("catalog fetch failed".into());
                             }
                             runner.refresh_tv_text();
@@ -635,6 +638,7 @@ fn main() -> Result<()> {
                             );
                             if let Some(runner) = runner {
                                 if let Some(guide) = runner.tv_guide_state() {
+                                    guide.fetch_in_progress = false;
                                     guide.fetch_error = Some("Fetch timed out (2 min)".into());
                                 }
                                 runner.refresh_tv_text();
@@ -657,6 +661,7 @@ fn main() -> Result<()> {
                         guide.channels.len(),
                     );
                     guide.fetch_attempted = true;
+                    guide.fetch_in_progress = true;
                     let channels = guide.channels.clone();
                     let (tx, rx) = std::sync::mpsc::channel();
                     let tls = state.tls_provider.clone();
