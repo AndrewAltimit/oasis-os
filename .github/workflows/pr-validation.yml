@@ -12,9 +12,9 @@ permissions:
   pull-requests: write
   issues: write
 
-concurrency:
-  group: pr-${{ github.event.pull_request.number || github.run_id }}
-  cancel-in-progress: true
+# concurrency:
+#   group: pr-${{ github.event.pull_request.number || github.run_id }}
+#   cancel-in-progress: true
 
 env:
   DOCKER_BUILDKIT: 1
