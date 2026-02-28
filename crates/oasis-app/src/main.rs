@@ -383,11 +383,26 @@ fn main() -> Result<()> {
                                     let _ = tx.send(result);
                                 });
                                 state.pending_catalog_fetch = Some(rx);
-                            } else if let Some((host, port, path, _tls)) =
+                            } else if let Some((host, port, path, tls)) =
                                 parse_stream_url(&station.url)
                             {
-                                // Icecast: connect to stream directly.
-                                match state.net_backend.connect(&host, port) {
+                                // Icecast: connect to stream (TLS if https).
+                                let conn_result = state
+                                    .net_backend
+                                    .connect(&host, port)
+                                    .map_err(|e| format!("connect: {e}"))
+                                    .and_then(|stream| {
+                                        if tls {
+                                            use oasis_core::net::TlsProvider;
+                                            state
+                                                .tls_provider
+                                                .connect_tls(stream, &host)
+                                                .map_err(|e| format!("TLS: {e}"))
+                                        } else {
+                                            Ok(stream)
+                                        }
+                                    });
+                                match conn_result {
                                     Ok(stream) => {
                                         let source = oasis_audio::radio::IcecastSource::new(
                                             stream, &host, &path,
@@ -395,7 +410,7 @@ fn main() -> Result<()> {
                                         state.radio_source = Some(Box::new(source));
                                     },
                                     Err(e) => {
-                                        state.radio_manager.set_error(&format!("connect: {e}"));
+                                        state.radio_manager.set_error(&e);
                                     },
                                 }
                             } else {
@@ -651,55 +666,58 @@ fn https_get_body(
         }
     }
 
-    let text = String::from_utf8_lossy(&response).into_owned();
-    // Strip HTTP headers and check status.
-    if let Some(idx) = text.find("\r\n\r\n") {
-        let headers = &text[..idx];
-        // Parse status code from first line.
-        if let Some(first_line) = headers.lines().next()
-            && let Some(code_str) = first_line.split_whitespace().nth(1)
-            && let Ok(code) = code_str.parse::<u16>()
-            && code >= 400
-        {
-            return Err(format!("HTTP {code}"));
-        }
-        let body = &text[idx + 4..];
-        // Decode chunked transfer encoding if present.
-        let is_chunked = headers.lines().any(|l| {
-            l.to_ascii_lowercase().starts_with("transfer-encoding:")
-                && l.to_ascii_lowercase().contains("chunked")
-        });
-        if is_chunked {
-            Ok(decode_chunked(body))
-        } else {
-            Ok(body.to_string())
-        }
-    } else {
-        Ok(text)
+    // Split headers from body on raw bytes to avoid UTF-8 lossy offset issues.
+    let header_end = response
+        .windows(4)
+        .position(|w| w == b"\r\n\r\n")
+        .ok_or_else(|| "no header/body separator in response".to_string())?;
+    let header_bytes = &response[..header_end];
+    let header_text = String::from_utf8_lossy(header_bytes);
+
+    // Parse status code from first line.
+    if let Some(first_line) = header_text.lines().next()
+        && let Some(code_str) = first_line.split_whitespace().nth(1)
+        && let Ok(code) = code_str.parse::<u16>()
+        && code >= 400
+    {
+        return Err(format!("HTTP {code}"));
     }
+
+    let body_bytes = &response[header_end + 4..];
+
+    // Decode chunked transfer encoding if present.
+    let is_chunked = header_text.lines().any(|l| {
+        l.to_ascii_lowercase().starts_with("transfer-encoding:")
+            && l.to_ascii_lowercase().contains("chunked")
+    });
+    let final_body = if is_chunked {
+        decode_chunked(body_bytes)
+    } else {
+        body_bytes.to_vec()
+    };
+    Ok(String::from_utf8_lossy(&final_body).into_owned())
 }
 
-/// Decode HTTP chunked transfer encoding.
+/// Decode HTTP chunked transfer encoding on raw bytes.
 ///
 /// Format: `<hex-size>\r\n<data>\r\n` repeated, terminated by `0\r\n\r\n`.
-fn decode_chunked(input: &str) -> String {
-    let mut result = String::new();
+fn decode_chunked(input: &[u8]) -> Vec<u8> {
+    let mut result = Vec::new();
     let mut pos = 0;
-    let bytes = input.as_bytes();
     loop {
         // Skip optional leading \r\n.
-        while pos < bytes.len() && (bytes[pos] == b'\r' || bytes[pos] == b'\n') {
+        while pos < input.len() && (input[pos] == b'\r' || input[pos] == b'\n') {
             pos += 1;
         }
-        if pos >= bytes.len() {
+        if pos >= input.len() {
             break;
         }
         // Read chunk size (hex).
         let size_start = pos;
-        while pos < bytes.len() && bytes[pos] != b'\r' && bytes[pos] != b'\n' {
+        while pos < input.len() && input[pos] != b'\r' && input[pos] != b'\n' {
             pos += 1;
         }
-        let size_str = &input[size_start..pos];
+        let size_str = std::str::from_utf8(&input[size_start..pos]).unwrap_or("");
         // Chunk size may include extensions after `;` — strip them.
         let hex = size_str.split(';').next().unwrap_or("").trim();
         let chunk_size = match usize::from_str_radix(hex, 16) {
@@ -708,15 +726,15 @@ fn decode_chunked(input: &str) -> String {
             Err(_) => break, // Malformed — return what we have.
         };
         // Skip \r\n after size line.
-        if pos < bytes.len() && bytes[pos] == b'\r' {
+        if pos < input.len() && input[pos] == b'\r' {
             pos += 1;
         }
-        if pos < bytes.len() && bytes[pos] == b'\n' {
+        if pos < input.len() && input[pos] == b'\n' {
             pos += 1;
         }
         // Extract chunk data.
-        let end = (pos + chunk_size).min(bytes.len());
-        result.push_str(&input[pos..end]);
+        let end = (pos + chunk_size).min(input.len());
+        result.extend_from_slice(&input[pos..end]);
         pos = end;
     }
     result

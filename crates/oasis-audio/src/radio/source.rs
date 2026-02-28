@@ -350,35 +350,34 @@ impl ArchiveSource {
     }
 
     /// Try to parse HTTP response headers from the accumulated buffer.
+    ///
+    /// Searches for `\r\n\r\n` directly in raw bytes to avoid offset
+    /// mismatches from lossy UTF-8 conversion.
     fn try_parse_headers(&mut self) -> Option<usize> {
-        let text = String::from_utf8_lossy(&self.header_buf);
-        if let Some(end) = text.find("\r\n\r\n") {
-            let header_str = &text[..end];
+        let end = self.header_buf.windows(4).position(|w| w == b"\r\n\r\n")?;
+        let header_str = String::from_utf8_lossy(&self.header_buf[..end]);
 
-            // Parse status code from first line (e.g. "HTTP/1.1 200 OK").
-            let first_line = header_str.lines().next().unwrap_or("");
-            if let Some(code_str) = first_line.split_whitespace().nth(1) {
-                self.status_code = code_str.parse().ok();
-            }
-
-            for line in header_str.lines() {
-                let lower = line.to_ascii_lowercase();
-                if lower.starts_with("content-length:")
-                    && let Some(val) = line.split_once(':').map(|(_, v)| v.trim())
-                {
-                    self.content_length = val.parse().ok();
-                }
-                // Extract Location header for redirects.
-                if lower.starts_with("location:")
-                    && let Some((_, loc)) = line.split_once(':')
-                {
-                    self.redirect_url = Some(loc.trim().to_string());
-                }
-            }
-            Some(end + 4)
-        } else {
-            None
+        // Parse status code from first line (e.g. "HTTP/1.1 200 OK").
+        let first_line = header_str.lines().next().unwrap_or("");
+        if let Some(code_str) = first_line.split_whitespace().nth(1) {
+            self.status_code = code_str.parse().ok();
         }
+
+        for line in header_str.lines() {
+            let lower = line.to_ascii_lowercase();
+            if lower.starts_with("content-length:")
+                && let Some(val) = line.split_once(':').map(|(_, v)| v.trim())
+            {
+                self.content_length = val.parse().ok();
+            }
+            // Extract Location header for redirects.
+            if lower.starts_with("location:")
+                && let Some((_, loc)) = line.split_once(':')
+            {
+                self.redirect_url = Some(loc.trim().to_string());
+            }
+        }
+        Some(end + 4)
     }
 }
 

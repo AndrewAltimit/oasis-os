@@ -322,6 +322,15 @@ impl AudioBackend for WasmAudioBackend {
                     // Store closure in the shared slot instead of leaking with .forget().
                     *closure_slot.borrow_mut() = Some(on_update_end);
 
+                    // Drain the first pending chunk to kick off the FIFO pipeline.
+                    // Subsequent chunks are drained by the `updateend` handler.
+                    let mut pq = pending_ref.borrow_mut();
+                    if let Some(chunk) = pq.pop_front() {
+                        let arr = js_sys::Uint8Array::from(chunk.as_slice());
+                        let _ = sb.append_buffer_with_array_buffer_view(&arr);
+                    }
+                    drop(pq);
+
                     *sb_ref.borrow_mut() = Some(sb);
                     ready_ref.set(true);
                 }
@@ -367,31 +376,26 @@ impl AudioBackend for WasmAudioBackend {
 
     fn feed_data(&mut self, _track: AudioTrackId, data: &[u8]) -> Result<()> {
         if let Some(ref st) = self.streaming_track {
-            // Cap pending queue to prevent unbounded memory growth.
+            // Always enqueue first to maintain FIFO order — earlier chunks
+            // (including those queued before `sourceopen`) must be appended first.
             {
                 let mut pq = st.pending_chunks.borrow_mut();
-                while pq.len() >= MAX_PENDING_CHUNKS {
+                pq.push_back(data.to_vec());
+                while pq.len() > MAX_PENDING_CHUNKS {
                     pq.pop_front();
                 }
             }
-            if !st.ready.get() {
-                // SourceBuffer not ready yet — queue data.
-                st.pending_chunks.borrow_mut().push_back(data.to_vec());
-                return Ok(());
-            }
-            if let Some(ref sb) = *st.source_buffer.borrow() {
-                if sb.updating() {
-                    // Buffer is updating — queue data for `updateend` callback.
-                    st.pending_chunks.borrow_mut().push_back(data.to_vec());
-                } else {
-                    let arr = js_sys::Uint8Array::from(data);
-                    if sb.append_buffer_with_array_buffer_view(&arr).is_err() {
-                        // Failed to append — queue for retry.
-                        st.pending_chunks.borrow_mut().push_back(data.to_vec());
-                    }
+            // Try to drain the oldest pending chunk if the SourceBuffer is idle.
+            if st.ready.get()
+                && let Some(ref sb) = *st.source_buffer.borrow()
+                && !sb.updating()
+                && let Some(chunk) = st.pending_chunks.borrow_mut().pop_front()
+            {
+                let arr = js_sys::Uint8Array::from(chunk.as_slice());
+                if sb.append_buffer_with_array_buffer_view(&arr).is_err() {
+                    // Re-queue on failure.
+                    st.pending_chunks.borrow_mut().push_front(chunk);
                 }
-            } else {
-                st.pending_chunks.borrow_mut().push_back(data.to_vec());
             }
         }
         Ok(())
