@@ -17,6 +17,11 @@ use std::collections::HashMap;
 use oasis_core::backend::{AudioBackend, AudioTrackId};
 use oasis_core::error::{OasisError, Result};
 
+/// Maximum PCM bytes to keep in the SDL2 audio queue before we stop decoding
+/// more frames.  At 44 100 Hz stereo i16 this is roughly 4.5 seconds — enough
+/// runway to absorb rendering jitter without building excessive latency.
+const MAX_QUEUE_BYTES: u32 = 800_000;
+
 /// SDL2-based audio backend with real MP3 decoding.
 pub struct SdlAudioBackend {
     /// Whether the audio subsystem has been initialized.
@@ -29,6 +34,8 @@ pub struct SdlAudioBackend {
     decoder: rmp3::RawDecoder,
     /// Pending MP3 bytes not yet decoded (streaming track).
     mp3_buffer: Vec<u8>,
+    /// Reusable staging buffer for decoded PCM (avoids per-call allocation).
+    pcm_staging: Vec<i16>,
     /// Loaded non-streaming tracks (raw MP3 data).
     tracks: HashMap<u64, Vec<u8>>,
     /// Next track ID to assign.
@@ -60,6 +67,7 @@ impl SdlAudioBackend {
             audio_subsystem: None,
             decoder: rmp3::RawDecoder::new(),
             mp3_buffer: Vec::new(),
+            pcm_staging: Vec::new(),
             tracks: HashMap::new(),
             next_id: 0,
             current_track: None,
@@ -83,7 +91,7 @@ impl SdlAudioBackend {
         let spec = sdl2::audio::AudioSpecDesired {
             freq: Some(sample_rate),
             channels: Some(channels),
-            samples: Some(4096),
+            samples: Some(8192),
         };
         let device = audio
             .open_queue::<i16, _>(None, &spec)
@@ -99,12 +107,25 @@ impl SdlAudioBackend {
         Ok(())
     }
 
-    /// Decode all available MP3 frames from `mp3_buffer` and queue PCM to
-    /// the SDL2 audio device.
+    /// Decode available MP3 frames from `mp3_buffer` and queue PCM to the
+    /// SDL2 audio device.
+    ///
+    /// Throttle is applied **before** decoding: if the SDL2 queue already has
+    /// enough audio we leave the MP3 bytes in the buffer for next time,
+    /// avoiding the old bug where decoded PCM was silently dropped.
     fn decode_buffered(&mut self) -> Result<()> {
+        // If the SDL2 queue already has plenty of audio, skip decoding and
+        // keep the MP3 bytes for later.  This bounds latency without losing
+        // any decoded audio.
+        if let Some(ref device) = self.device
+            && device.size() > MAX_QUEUE_BYTES
+        {
+            return Ok(());
+        }
+
         let mut pcm_out = [0i16; 2304];
         let mut offset = 0;
-        let mut pending_pcm: Vec<i16> = Vec::new();
+        self.pcm_staging.clear();
         let mut detected_rate = 0u32;
         let mut detected_channels = 0u16;
 
@@ -121,7 +142,7 @@ impl SdlAudioBackend {
                     if let rmp3::Frame::Audio(audio) = frame {
                         detected_rate = audio.sample_rate();
                         detected_channels = audio.channels();
-                        pending_pcm.extend_from_slice(audio.samples());
+                        self.pcm_staging.extend_from_slice(audio.samples());
                     }
                 },
                 None => break,
@@ -135,7 +156,7 @@ impl SdlAudioBackend {
             self.open_device(detected_rate as i32, detected_channels as u8)?;
         }
 
-        if !pending_pcm.is_empty() {
+        if !self.pcm_staging.is_empty() {
             if detected_rate > 0 {
                 self.sample_rate = detected_rate as i32;
                 self.channels = detected_channels as usize;
@@ -143,18 +164,16 @@ impl SdlAudioBackend {
 
             // Apply volume scaling.
             let vol = self.volume as i32;
-            for s in &mut pending_pcm {
+            for s in &mut self.pcm_staging {
                 *s = ((*s as i32 * vol) / 100) as i16;
             }
 
-            // Queue to SDL2 (throttle if too much queued).
-            if let Some(ref device) = self.device
-                && device.size() < 200_000
-            {
+            // Always queue decoded PCM — never drop it.
+            if let Some(ref device) = self.device {
                 device
-                    .queue_audio(&pending_pcm)
+                    .queue_audio(&self.pcm_staging)
                     .map_err(OasisError::Backend)?;
-                self.samples_queued += pending_pcm.len() as u64;
+                self.samples_queued += self.pcm_staging.len() as u64;
             }
         }
 
@@ -376,6 +395,7 @@ impl AudioBackend for SdlAudioBackend {
         self.tracks.clear();
         self.stream_track = None;
         self.mp3_buffer.clear();
+        self.pcm_staging.clear();
         self.decoder = rmp3::RawDecoder::new();
         self.initialized = false;
         log::info!("SDL2 audio backend shut down");
