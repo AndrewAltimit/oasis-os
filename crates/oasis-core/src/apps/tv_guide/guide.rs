@@ -196,6 +196,15 @@ impl TvGuideState {
 
     /// Generate content lines for text-mode display (fallback rendering).
     pub fn text_content(&self) -> Vec<String> {
+        let loaded = self.catalogs.iter().filter(|c| c.is_some()).count();
+        log::debug!(
+            "TV: text_content() channels={} loaded={} fetch_attempted={} error={:?}",
+            self.channels.len(),
+            loaded,
+            self.fetch_attempted,
+            self.fetch_error,
+        );
+
         let mut lines = Vec::new();
         lines.push("=== TV Guide ===".to_string());
         lines.push(String::new());

@@ -9,6 +9,8 @@ pub mod catalog;
 pub mod channel;
 pub mod guide;
 pub mod schedule;
+#[cfg(any(test, feature = "test-data"))]
+pub mod test_data;
 
 pub use catalog::{ChannelCatalog, VideoEpisode};
 pub use channel::{Channel, ChannelConfig, ChannelSource};

@@ -16,6 +16,7 @@ documentation = "https://docs.rs/oasis-core"
 default = []
 tls-rustls = ["oasis-net/tls-rustls"]
 javascript = ["oasis-browser/javascript"]
+test-data = []
 
 [dependencies]
 oasis-types = { workspace = true }

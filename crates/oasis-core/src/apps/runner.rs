@@ -807,6 +807,7 @@ impl AppRunner {
             let old_cursor = self.cursor;
             let old_scroll = self.scroll;
             self.lines = guide.text_content();
+            log::debug!("TV: refresh_tv_text -> {} lines", self.lines.len());
             self.cursor = old_cursor;
             self.scroll = old_scroll;
         }
@@ -822,6 +823,7 @@ impl AppRunner {
         use super::tv_guide::channel::{ChannelConfig, DEFAULT_CHANNELS_TOML};
 
         let config = if vfs.exists(TV_CHANNELS_PATH) {
+            log::debug!("TV: loading channel config from VFS");
             let data = vfs.read(TV_CHANNELS_PATH).unwrap_or_default();
             let text = String::from_utf8_lossy(&data);
             ChannelConfig::from_toml(&text).unwrap_or_else(|_| {
@@ -829,9 +831,11 @@ impl AppRunner {
                     .expect("default channels TOML is valid")
             })
         } else {
+            log::debug!("TV: using default channel config");
             ChannelConfig::from_toml(DEFAULT_CHANNELS_TOML).expect("default channels TOML is valid")
         };
 
+        log::debug!("TV: init_tv_guide with {} channels", config.channel.len());
         let guide = TvGuideState::new(&config);
         self.lines = guide.text_content();
         self.tv_guide = Some(guide);

@@ -554,6 +554,11 @@ fn main() -> Result<()> {
             if let Some(ref rx) = state.pending_tv_catalog_fetch {
                 match rx.try_recv() {
                     Ok(Ok(catalogs)) => {
+                        let loaded = catalogs.iter().filter(|c| c.is_some()).count();
+                        let total = catalogs.len();
+                        log::debug!(
+                            "TV catalog fetch result: {loaded}/{total} channels have episodes"
+                        );
                         state.pending_tv_catalog_fetch = None;
                         let runner =
                             find_tv_guide_runner(&mut state.app_runner, &mut state.open_runners);
@@ -569,11 +574,14 @@ fn main() -> Result<()> {
                                     }
                                 }
                                 if all_none {
+                                    log::warn!("TV: all channel catalogs empty");
                                     guide.fetch_error =
                                         Some("No episodes found for any channel".into());
                                 }
                             }
                             runner.refresh_tv_text();
+                        } else {
+                            log::warn!("TV: catalogs arrived but no TV Guide runner found");
                         }
                     },
                     Ok(Err(e)) => {
@@ -586,6 +594,8 @@ fn main() -> Result<()> {
                                 guide.fetch_error = Some(e);
                             }
                             runner.refresh_tv_text();
+                        } else {
+                            log::warn!("TV: error arrived but no TV Guide runner found");
                         }
                     },
                     Err(std::sync::mpsc::TryRecvError::Disconnected) => {
@@ -612,12 +622,21 @@ fn main() -> Result<()> {
                     && !guide.fetch_attempted
                     && guide.catalogs.iter().all(|c| c.is_none())
                 {
+                    log::debug!(
+                        "TV: starting catalog fetch for {} channels",
+                        guide.channels.len(),
+                    );
                     guide.fetch_attempted = true;
                     let channels = guide.channels.clone();
                     let (tx, rx) = std::sync::mpsc::channel();
                     let tls = state.tls_provider.clone();
                     std::thread::spawn(move || {
+                        log::debug!("TV: background fetch thread started");
                         let result = fetch_tv_catalogs_blocking(&channels, &tls);
+                        log::debug!(
+                            "TV: background fetch thread finished (ok={})",
+                            result.is_ok(),
+                        );
                         let _ = tx.send(result);
                     });
                     state.pending_tv_catalog_fetch = Some(rx);
@@ -715,12 +734,17 @@ fn find_tv_guide_runner<'a>(
     if let Some(ref mut runner) = *app_runner
         && runner.title == "TV Guide"
     {
+        log::trace!("TV: found TV Guide in app_runner (full-screen)");
         return Some(runner);
     }
-    open_runners
+    let found = open_runners
         .iter_mut()
         .map(|(_, runner)| runner)
-        .find(|runner| runner.title == "TV Guide")
+        .find(|runner| runner.title == "TV Guide");
+    if found.is_some() {
+        log::trace!("TV: found TV Guide in open_runners (windowed)");
+    }
+    found
 }
 
 /// Parse an HTTP/HTTPS stream URL into (host, port, path, use_tls).
@@ -759,13 +783,19 @@ fn https_get_body(
     use oasis_core::backend::NetworkBackend;
     use oasis_core::net::TlsProvider;
 
+    log::debug!("HTTPS GET https://{host}{path}");
+
     let tcp = net_backend
         .connect(host, 443)
         .map_err(|e| format!("connect: {e}"))?;
 
+    log::debug!("HTTPS: TCP connected to {host}:443");
+
     let mut stream = tls_provider
         .connect_tls(tcp, host)
         .map_err(|e| format!("TLS: {e}"))?;
+
+    log::debug!("HTTPS: TLS handshake complete");
 
     let request = format!(
         "GET {path} HTTP/1.1\r\nHost: {host}\r\nUser-Agent: OASIS_OS/0.1\r\n\
@@ -811,6 +841,8 @@ fn https_get_body(
             },
         }
     }
+
+    log::debug!("HTTPS: received {} bytes from {host}{path}", response.len());
 
     // Split headers from body on raw bytes to avoid UTF-8 lossy offset issues.
     let header_end = response
@@ -1037,16 +1069,29 @@ fn fetch_tv_catalogs_blocking(
 ) -> std::result::Result<Vec<Option<oasis_core::apps::tv_guide::ChannelCatalog>>, String> {
     use oasis_core::apps::tv_guide::catalog::ChannelCatalog;
 
+    log::debug!("TV fetch_tv_catalogs_blocking: {} channels", channels.len(),);
+
     let mut net = oasis_core::net::StdNetworkBackend::new();
     let mut results = Vec::new();
 
     for channel in channels {
+        log::debug!(
+            "TV: fetching CH {} '{}' ({} sources)",
+            channel.number,
+            channel.call_sign,
+            channel.source.len(),
+        );
         let mut catalog = ChannelCatalog::new(channel.number);
 
         for source in &channel.source {
             let files_path = ChannelCatalog::files_api_path(&source.item_id);
             match https_get_body(&mut net, tls, "archive.org", &files_path) {
                 Ok(body) => {
+                    log::debug!(
+                        "TV: source '{}' response: {} bytes",
+                        source.item_id,
+                        body.len(),
+                    );
                     let episodes = ChannelCatalog::parse_files_response(
                         &body,
                         &source.item_id,
@@ -1066,11 +1111,24 @@ fn fetch_tv_catalogs_blocking(
         }
 
         if catalog.episodes.is_empty() {
+            log::debug!("TV: CH {} has no episodes", channel.number);
             results.push(None);
         } else {
+            log::debug!(
+                "TV: CH {} loaded {} episodes ({:.0}s total)",
+                channel.number,
+                catalog.episodes.len(),
+                catalog.total_duration_secs,
+            );
             results.push(Some(catalog));
         }
     }
+
+    let loaded = results.iter().filter(|c| c.is_some()).count();
+    log::debug!(
+        "TV fetch_tv_catalogs_blocking done: {loaded}/{} channels loaded",
+        results.len(),
+    );
 
     Ok(results)
 }
