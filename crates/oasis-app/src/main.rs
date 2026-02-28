@@ -421,39 +421,57 @@ fn main() -> Result<()> {
             }
 
             // Poll background catalog fetch (non-blocking).
-            if let Some(ref rx) = state.pending_catalog_fetch
-                && let Ok(result) = rx.try_recv()
-            {
-                state.pending_catalog_fetch = None;
-                match result {
-                    Ok(app_state::CatalogFetchResult { catalog, source }) => {
+            if let Some(ref rx) = state.pending_catalog_fetch {
+                match rx.try_recv() {
+                    Ok(Ok(app_state::CatalogFetchResult { catalog, source })) => {
+                        state.pending_catalog_fetch = None;
+                        log::info!(
+                            "Catalog ready: {} tracks in '{}'",
+                            catalog.tracks.len(),
+                            catalog.collection
+                        );
                         if let Some(mut old) = state.radio_source.take() {
                             old.disconnect();
                         }
                         state.radio_source = Some(source);
                         state.archive_catalog = Some(catalog);
                     },
-                    Err(e) => {
+                    Ok(Err(e)) => {
+                        state.pending_catalog_fetch = None;
+                        log::error!("Catalog fetch failed: {e}");
                         state.radio_manager.set_error(&e);
                     },
+                    Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                        state.pending_catalog_fetch = None;
+                        log::error!("Catalog fetch thread died unexpectedly");
+                        state.radio_manager.set_error("catalog fetch failed");
+                    },
+                    Err(std::sync::mpsc::TryRecvError::Empty) => {},
                 }
             }
 
             // Poll background track fetch (non-blocking).
-            if let Some(ref rx) = state.pending_source_fetch
-                && let Ok(result) = rx.try_recv()
-            {
-                state.pending_source_fetch = None;
-                match result {
-                    Ok(app_state::TrackFetchResult { source }) => {
+            if let Some(ref rx) = state.pending_source_fetch {
+                match rx.try_recv() {
+                    Ok(Ok(app_state::TrackFetchResult { source })) => {
+                        state.pending_source_fetch = None;
+                        log::info!("Next track source ready");
                         if let Some(mut old) = state.radio_source.take() {
                             old.disconnect();
                         }
                         state.radio_source = Some(source);
                     },
-                    Err(e) => {
+                    Ok(Err(e)) => {
+                        state.pending_source_fetch = None;
+                        log::error!("Track fetch failed: {e}");
                         state.radio_manager.set_error(&e);
                     },
+                    Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                        state.pending_source_fetch = None;
+                        log::error!("Track fetch thread died unexpectedly");
+                        state.radio_manager.set_error("track fetch failed");
+                    },
+                    Err(std::sync::mpsc::TryRecvError::Empty) => {},
                 }
             }
 
@@ -608,16 +626,21 @@ fn https_get_body(
             .map_err(|e| format!("write: {e}"))?;
     }
 
-    // Read full response.
+    // Read full response (runs on background thread; may spin on WouldBlock).
     let mut buf = [0u8; 8192];
     let mut response = Vec::new();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
     loop {
+        if std::time::Instant::now() > deadline {
+            return Err("timeout reading HTTP response".to_string());
+        }
         match stream.read(&mut buf) {
             Ok(0) => break,
             Ok(n) => response.extend_from_slice(&buf[..n]),
             Err(e) => {
                 let msg = format!("{e}");
                 if msg.contains("WouldBlock") || msg.contains("would block") {
+                    std::thread::sleep(std::time::Duration::from_millis(1));
                     continue;
                 }
                 if !response.is_empty() {
@@ -640,10 +663,63 @@ fn https_get_body(
         {
             return Err(format!("HTTP {code}"));
         }
-        Ok(text[idx + 4..].to_string())
+        let body = &text[idx + 4..];
+        // Decode chunked transfer encoding if present.
+        let is_chunked = headers.lines().any(|l| {
+            l.to_ascii_lowercase().starts_with("transfer-encoding:")
+                && l.to_ascii_lowercase().contains("chunked")
+        });
+        if is_chunked {
+            Ok(decode_chunked(body))
+        } else {
+            Ok(body.to_string())
+        }
     } else {
         Ok(text)
     }
+}
+
+/// Decode HTTP chunked transfer encoding.
+///
+/// Format: `<hex-size>\r\n<data>\r\n` repeated, terminated by `0\r\n\r\n`.
+fn decode_chunked(input: &str) -> String {
+    let mut result = String::new();
+    let mut pos = 0;
+    let bytes = input.as_bytes();
+    loop {
+        // Skip optional leading \r\n.
+        while pos < bytes.len() && (bytes[pos] == b'\r' || bytes[pos] == b'\n') {
+            pos += 1;
+        }
+        if pos >= bytes.len() {
+            break;
+        }
+        // Read chunk size (hex).
+        let size_start = pos;
+        while pos < bytes.len() && bytes[pos] != b'\r' && bytes[pos] != b'\n' {
+            pos += 1;
+        }
+        let size_str = &input[size_start..pos];
+        // Chunk size may include extensions after `;` — strip them.
+        let hex = size_str.split(';').next().unwrap_or("").trim();
+        let chunk_size = match usize::from_str_radix(hex, 16) {
+            Ok(0) => break, // Final chunk.
+            Ok(n) => n,
+            Err(_) => break, // Malformed — return what we have.
+        };
+        // Skip \r\n after size line.
+        if pos < bytes.len() && bytes[pos] == b'\r' {
+            pos += 1;
+        }
+        if pos < bytes.len() && bytes[pos] == b'\n' {
+            pos += 1;
+        }
+        // Extract chunk data.
+        let end = (pos + chunk_size).min(bytes.len());
+        result.push_str(&input[pos..end]);
+        pos = end;
+    }
+    result
 }
 
 /// Connect to archive.org over TLS and create an ArchiveSource for the given track.
@@ -663,7 +739,9 @@ fn connect_archive_source(
     let title = track.title.clone();
     let creator = track.creator.clone();
 
-    'redirect: for _ in 0..3 {
+    log::info!("Connecting to archive source: {host}{path}");
+
+    'redirect: for _redirect_num in 0..3 {
         let mut net_backend = StdNetworkBackend::new();
         let tcp = net_backend
             .connect(&host, 443)
@@ -678,10 +756,16 @@ fn connect_archive_source(
         // Poll until headers are fully parsed (data arrives, or error/redirect).
         // First poll sends the HTTP request (Connecting → Active).
         // Subsequent polls read the response and parse headers.
-        for _ in 0..200 {
+        // Uses a time-based deadline since the socket is non-blocking.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        loop {
+            if std::time::Instant::now() > deadline {
+                return Err("timeout waiting for response headers".into());
+            }
             match source.poll() {
                 Ok(Some(_)) => {
                     // Headers parsed, audio data flowing.
+                    log::info!("Archive source connected, audio data flowing");
                     return Ok(Box::new(source));
                 },
                 Ok(None) => match source.state() {
@@ -691,7 +775,11 @@ fn connect_archive_source(
                     SourceState::Error => {
                         return Err("source error during header parsing".into());
                     },
-                    _ => continue,
+                    _ => {
+                        // No data yet (non-blocking); brief sleep to avoid
+                        // busy-waiting on the background thread.
+                        std::thread::sleep(std::time::Duration::from_millis(1));
+                    },
                 },
                 Err(e) => {
                     let msg = format!("{e}");
@@ -710,7 +798,6 @@ fn connect_archive_source(
                 },
             }
         }
-        return Err("timeout waiting for response headers".into());
     }
 
     Err("too many redirects".to_string())
@@ -726,6 +813,8 @@ fn fetch_catalog_blocking(
 ) -> std::result::Result<app_state::CatalogFetchResult, String> {
     let mut net = StdNetworkBackend::new();
 
+    log::info!("Fetching catalog for collection '{collection}'");
+
     let search_path = format!(
         "/advancedsearch.php?\
          q=collection:{collection}+AND+mediatype:audio\
@@ -736,6 +825,7 @@ fn fetch_catalog_blocking(
         .map_err(|e| format!("search API: {e}"))?;
 
     let items = oasis_audio::radio::ArchiveCatalog::parse_search_response(&body);
+    log::info!("Search returned {} items", items.len());
     if items.is_empty() {
         return Err("no items found in collection".to_string());
     }
@@ -745,10 +835,16 @@ fn fetch_catalog_blocking(
     // Fetch files for up to 5 items.
     for (item_id, _title, creator) in items.iter().take(5) {
         let fp = oasis_audio::radio::ArchiveCatalog::files_api_path(item_id);
-        if let Ok(fb) = https_get_body(&mut net, tls, "archive.org", &fp) {
-            let tracks =
-                oasis_audio::radio::ArchiveCatalog::parse_files_response(&fb, item_id, creator);
-            catalog.tracks.extend(tracks);
+        match https_get_body(&mut net, tls, "archive.org", &fp) {
+            Ok(fb) => {
+                let tracks =
+                    oasis_audio::radio::ArchiveCatalog::parse_files_response(&fb, item_id, creator);
+                log::info!("Item '{item_id}': {} MP3 tracks", tracks.len());
+                catalog.tracks.extend(tracks);
+            },
+            Err(e) => {
+                log::warn!("Files API for '{item_id}': {e}");
+            },
         }
     }
 

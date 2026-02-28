@@ -90,6 +90,9 @@ web-sys = { version = "0.3", features = [
 js-sys = "0.3"
 wasm-bindgen-futures = "0.4"
 
+# Audio decoding
+rmp3 = { version = "0.3", default-features = false, features = ["simd"] }
+
 # JavaScript engine
 rquickjs = { version = "0.11", default-features = false, features = ["rust-alloc"] }
 
