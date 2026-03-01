@@ -120,9 +120,9 @@ impl SoftwareVideoDecoder {
     pub fn next_video_frame(&mut self) -> Result<Option<VideoFrame>, VideoError> {
         #[cfg(not(feature = "h264"))]
         {
-            return Err(VideoError::NoTrack(
+            Err(VideoError::NoTrack(
                 "H.264 decoding unavailable (oasis-video built without 'h264' feature)".into(),
-            ));
+            ))
         }
 
         #[cfg(feature = "h264")]

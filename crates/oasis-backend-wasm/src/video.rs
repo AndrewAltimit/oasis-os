@@ -4,17 +4,9 @@
 //! video content is drawn onto an offscreen `<canvas>` that is registered as a
 //! backend texture.  The existing `preview_texture` rendering path in
 //! `guide.rs` handles display — no iframe overlay needed.
-//!
-//! When the browser lacks H.264 codec support (e.g. Firefox snap, Playwright
-//! Chromium), falls back to software decoding via the `oasis-video` crate:
-//! symphonia (MP4 demux + AAC) and openh264 (H.264 → RGBA).
-
-use std::cell::RefCell;
-use std::rc::Rc;
 
 use wasm_bindgen::JsCast;
 use wasm_bindgen::prelude::*;
-use wasm_bindgen_futures::JsFuture;
 use web_sys::{CanvasRenderingContext2d, HtmlCanvasElement, HtmlVideoElement};
 
 use oasis_types::backend::{SdiBackend, TextureId};
@@ -55,37 +47,10 @@ fn can_play_h264() -> bool {
     !result.is_empty()
 }
 
-// ---------------------------------------------------------------------------
-// Software decode state (shared with async fetch task)
-// ---------------------------------------------------------------------------
-
-/// Phases of the software decode pipeline.
-enum SoftwareState {
-    /// Downloading the MP4 as a byte buffer.
-    Fetching,
-    /// Decoder is ready; drive frames from `tick()`.
-    Decoding(Box<oasis_video::SoftwareVideoDecoder>),
-    /// Fetch or init failed.
-    Failed(String),
-}
-
-/// Shared state between the async fetch and the synchronous `tick()` caller.
-struct SoftwareFetchShared {
-    state: SoftwareState,
-}
-
-// ---------------------------------------------------------------------------
-// VideoPlayer
-// ---------------------------------------------------------------------------
-
-/// Manages video playback via native `<video>` or software decode fallback.
+/// Manages a hidden `<video>` element whose frames are captured onto an
+/// offscreen canvas registered as a backend texture.
 pub struct VideoPlayer {
-    // --- Native path ---
     video: Option<HtmlVideoElement>,
-    // --- Software fallback ---
-    software: Option<Rc<RefCell<SoftwareFetchShared>>>,
-    software_logged_ready: bool,
-    // --- Shared ---
     capture_canvas: Option<HtmlCanvasElement>,
     capture_ctx: Option<CanvasRenderingContext2d>,
     texture_id: Option<TextureId>,
@@ -107,8 +72,6 @@ impl VideoPlayer {
     pub fn new() -> Self {
         Self {
             video: None,
-            software: None,
-            software_logged_ready: false,
             capture_canvas: None,
             capture_ctx: None,
             texture_id: None,
@@ -122,11 +85,9 @@ impl VideoPlayer {
 
     /// Start playing a direct MP4 URL.
     ///
-    /// If the browser supports H.264, uses the native `<video>` element path.
-    /// Otherwise falls back to software decoding via `oasis-video`.
-    ///
-    /// Returns the `TextureId` the caller should assign to
-    /// `guide.preview_texture`.
+    /// Creates a hidden `<video>`, an offscreen capture canvas registered as a
+    /// texture, and begins playback.  Returns the `TextureId` the caller
+    /// should assign to `guide.preview_texture`.
     pub fn start(
         &mut self,
         url: &str,
@@ -146,24 +107,19 @@ impl VideoPlayer {
             h
         );
 
-        if can_play_h264() {
-            vlog!("H.264 codec: supported (native path)");
-            self.start_native(url, seek_secs, w, h, backend)
-        } else {
-            vlog!("H.264 codec: NOT supported — using software decode");
-            self.start_software(url, seek_secs, w, h, backend)
+        // Check H.264 codec support before even trying.
+        if !can_play_h264() {
+            verr!("Browser cannot play H.264/MP4 video!");
+            verr!("Internet Archive videos require H.264 support.");
+            verr!(
+                "If using Firefox snap on Linux, try installing: \
+                 sudo apt install ffmpeg"
+            );
+            verr!("Or use Chrome/Chromium which has built-in H.264.");
+            return None;
         }
-    }
+        vlog!("H.264 codec: supported");
 
-    /// Native `<video>` element path (zero overhead, browser does all work).
-    fn start_native(
-        &mut self,
-        url: &str,
-        seek_secs: u64,
-        w: u32,
-        h: u32,
-        backend: &mut WasmBackend,
-    ) -> Option<TextureId> {
         let window = web_sys::window()?;
         let document = window.document()?;
 
@@ -201,7 +157,17 @@ impl VideoPlayer {
         error_handler.forget();
 
         // --- Offscreen capture canvas ---
-        let (capture, ctx, tex_id) = self.create_capture_canvas(w, h, backend)?;
+        let capture: HtmlCanvasElement = document.create_element("canvas").ok()?.dyn_into().ok()?;
+        capture.set_width(w);
+        capture.set_height(h);
+
+        let ctx: CanvasRenderingContext2d = capture
+            .get_context("2d")
+            .ok()?
+            .and_then(|c| c.dyn_into().ok())?;
+
+        // Register the capture canvas as a texture (zero-copy path).
+        let tex_id = backend.register_canvas_as_texture(capture.clone());
 
         // Start playback. Muted autoplay should succeed immediately.
         // On success, try to unmute for audio.
@@ -235,104 +201,9 @@ impl VideoPlayer {
         self.logged_playing = false;
         self.logged_error = false;
 
-        vlog!("Native video player initialized, waiting for data...");
+        vlog!("Video player initialized, waiting for data...");
+
         Some(tex_id)
-    }
-
-    /// Software decode fallback: fetch MP4 bytes → oasis-video decoder.
-    fn start_software(
-        &mut self,
-        url: &str,
-        seek_secs: u64,
-        w: u32,
-        h: u32,
-        backend: &mut WasmBackend,
-    ) -> Option<TextureId> {
-        let (capture, ctx, tex_id) = self.create_capture_canvas(w, h, backend)?;
-
-        // Shared state for the async fetch task.
-        let shared = Rc::new(RefCell::new(SoftwareFetchShared {
-            state: SoftwareState::Fetching,
-        }));
-
-        // Kick off async MP4 download.
-        let shared_clone = Rc::clone(&shared);
-        let url_owned = url.to_string();
-        wasm_bindgen_futures::spawn_local(async move {
-            match fetch_mp4_bytes(&url_owned).await {
-                Ok(bytes) => {
-                    vlog!(
-                        "MP4 downloaded: {} bytes. Initializing decoder...",
-                        bytes.len()
-                    );
-                    match oasis_video::SoftwareVideoDecoder::open(bytes) {
-                        Ok(mut decoder) => {
-                            if seek_secs > 0
-                                && let Err(e) = decoder.seek(seek_secs as f64)
-                            {
-                                verr!("Software seek failed: {e}");
-                            }
-                            let (vw, vh) = decoder.video_size();
-                            let (sr, ch) = decoder.audio_format();
-                            vlog!(
-                                "Software decoder ready: video={}x{} audio={}Hz/{}ch",
-                                vw,
-                                vh,
-                                sr,
-                                ch
-                            );
-                            shared_clone.borrow_mut().state =
-                                SoftwareState::Decoding(Box::new(decoder));
-                        },
-                        Err(e) => {
-                            verr!("Software decoder init failed: {e}");
-                            shared_clone.borrow_mut().state = SoftwareState::Failed(format!("{e}"));
-                        },
-                    }
-                },
-                Err(e) => {
-                    verr!("MP4 fetch failed: {e}");
-                    shared_clone.borrow_mut().state = SoftwareState::Failed(e);
-                },
-            }
-        });
-
-        self.software = Some(shared);
-        self.software_logged_ready = false;
-        self.capture_canvas = Some(capture);
-        self.capture_ctx = Some(ctx);
-        self.texture_id = Some(tex_id);
-        self.width = w;
-        self.height = h;
-        self.active = true;
-        self.logged_playing = false;
-        self.logged_error = false;
-
-        vlog!("Software video player initialized, fetching MP4...");
-        Some(tex_id)
-    }
-
-    /// Create the offscreen capture canvas + 2D context + texture registration.
-    fn create_capture_canvas(
-        &self,
-        w: u32,
-        h: u32,
-        backend: &mut WasmBackend,
-    ) -> Option<(HtmlCanvasElement, CanvasRenderingContext2d, TextureId)> {
-        let window = web_sys::window()?;
-        let document = window.document()?;
-
-        let capture: HtmlCanvasElement = document.create_element("canvas").ok()?.dyn_into().ok()?;
-        capture.set_width(w);
-        capture.set_height(h);
-
-        let ctx: CanvasRenderingContext2d = capture
-            .get_context("2d")
-            .ok()?
-            .and_then(|c| c.dyn_into().ok())?;
-
-        let tex_id = backend.register_canvas_as_texture(capture.clone());
-        Some((capture, ctx, tex_id))
     }
 
     /// Capture the current video frame onto the offscreen canvas.
@@ -340,11 +211,11 @@ impl VideoPlayer {
     /// Should be called once per animation frame while active.  The texture
     /// automatically reflects the new content on the next `blit()`.
     pub fn tick(&mut self) {
-        // --- Native path ---
         if let Some(ref video) = self.video {
             let ready = video.ready_state();
             let network = video.network_state();
 
+            // Log first frame availability.
             if ready >= 2 && !self.logged_playing {
                 self.logged_playing = true;
                 vlog!(
@@ -355,6 +226,7 @@ impl VideoPlayer {
                 );
             }
 
+            // Detect errors (networkState 3 = NETWORK_NO_SOURCE).
             if network == 3 && !self.logged_error {
                 self.logged_error = true;
                 verr!(
@@ -365,6 +237,8 @@ impl VideoPlayer {
                 );
             }
 
+            // HAVE_CURRENT_DATA (readyState >= 2) means at least one frame
+            // is available for drawing.
             if ready >= 2
                 && let Some(ref ctx) = self.capture_ctx
             {
@@ -376,57 +250,6 @@ impl VideoPlayer {
                     self.height as f64,
                 );
             }
-            return;
-        }
-
-        // --- Software path ---
-        let shared = match self.software {
-            Some(ref s) => Rc::clone(s),
-            None => return,
-        };
-
-        let mut borrow = shared.borrow_mut();
-        match borrow.state {
-            SoftwareState::Fetching => {},
-            SoftwareState::Decoding(ref mut decoder) => {
-                if !self.software_logged_ready {
-                    self.software_logged_ready = true;
-                }
-                self.tick_software_frame(decoder);
-            },
-            SoftwareState::Failed(ref msg) => {
-                if !self.logged_error {
-                    self.logged_error = true;
-                    verr!("Software decode failed: {}", msg);
-                }
-            },
-        }
-    }
-
-    /// Decode and render one software video frame.
-    fn tick_software_frame(&mut self, decoder: &mut oasis_video::SoftwareVideoDecoder) {
-        match decoder.next_video_frame() {
-            Ok(Some(frame)) => {
-                if let Some(ref ctx) = self.capture_ctx {
-                    let clamped = wasm_bindgen::Clamped(frame.rgba.as_slice());
-                    if let Ok(image_data) = web_sys::ImageData::new_with_u8_clamped_array_and_sh(
-                        clamped,
-                        frame.width,
-                        frame.height,
-                    ) {
-                        let _ = ctx.put_image_data(&image_data, 0.0, 0.0);
-                    }
-                }
-            },
-            Ok(None) => {
-                // End of stream.
-            },
-            Err(e) => {
-                if !self.logged_error {
-                    self.logged_error = true;
-                    verr!("Software frame decode error: {e}");
-                }
-            },
         }
     }
 
@@ -439,8 +262,6 @@ impl VideoPlayer {
                 let _ = parent.remove_child(&video);
             }
         }
-        self.software = None;
-        self.software_logged_ready = false;
         self.capture_canvas = None;
         self.capture_ctx = None;
         if let Some(tex) = self.texture_id.take() {
@@ -468,31 +289,4 @@ impl Drop for VideoPlayer {
             }
         }
     }
-}
-
-// ---------------------------------------------------------------------------
-// Async MP4 fetch helper
-// ---------------------------------------------------------------------------
-
-/// Download an MP4 URL as a `Vec<u8>` using the Fetch API.
-async fn fetch_mp4_bytes(url: &str) -> Result<Vec<u8>, String> {
-    let window = web_sys::window().ok_or("no window")?;
-
-    let resp_val = JsFuture::from(window.fetch_with_str(url))
-        .await
-        .map_err(|e| format!("fetch error: {e:?}"))?;
-    let resp: web_sys::Response = resp_val.dyn_into().map_err(|_| "response cast failed")?;
-
-    if !resp.ok() {
-        return Err(format!("HTTP {}", resp.status()));
-    }
-
-    let buf_promise = resp
-        .array_buffer()
-        .map_err(|_| "arrayBuffer() failed".to_string())?;
-    let buf_val = JsFuture::from(buf_promise)
-        .await
-        .map_err(|e| format!("arrayBuffer await: {e:?}"))?;
-    let array = js_sys::Uint8Array::new(&buf_val);
-    Ok(array.to_vec())
 }

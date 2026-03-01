@@ -704,7 +704,6 @@ dependencies = [
  "oasis-types",
  "oasis-ui",
  "oasis-vfs",
- "oasis-video",
  "oasis-wm",
  "serde",
  "serde_json",
