@@ -398,11 +398,15 @@ impl SdiBackend for WasmBackend {
     }
 
     fn read_pixels(&self, x: i32, y: i32, w: u32, h: u32) -> Result<Vec<u8>> {
-        let data = self
+        // getImageData throws SecurityError if the canvas is tainted by a
+        // cross-origin video frame.  Return opaque black in that case.
+        match self
             .ctx
             .get_image_data(x as f64, y as f64, w as f64, h as f64)
-            .map_err(js_err)?;
-        Ok(data.data().to_vec())
+        {
+            Ok(data) => Ok(data.data().to_vec()),
+            Err(_) => Ok(vec![0; (w * h * 4) as usize]),
+        }
     }
 
     fn shutdown(&mut self) -> Result<()> {

@@ -66,9 +66,15 @@ impl VideoPlayer {
 
         // --- Hidden <video> element ---
         let video: HtmlVideoElement = document.create_element("video").ok()?.dyn_into().ok()?;
-        video.set_cross_origin(Some("anonymous"));
+        // Do NOT set crossOrigin — archive.org redirects to a CDN that does
+        // not return CORS headers, which blocks the video fetch entirely.
+        // Without crossOrigin the canvas becomes "tainted" (getImageData
+        // blocked) but drawImage for frame capture and blitting works fine.
         video.set_attribute("playsinline", "").ok()?;
         video.set_preload("auto");
+        // Start muted — muted autoplay is universally allowed without user
+        // gesture, avoiding AbortError that kills the network fetch.
+        video.set_muted(true);
         video.set_src(url);
         if seek_secs > 0 {
             video.set_current_time(seek_secs as f64);
@@ -90,15 +96,16 @@ impl VideoPlayer {
         // Register the capture canvas as a texture (zero-copy path).
         let tex_id = backend.register_canvas_as_texture(capture.clone());
 
-        // Attempt autoplay; if blocked by browser policy, retry muted.
+        // Start playback. Muted autoplay should succeed immediately.
+        // On success, try to unmute for audio.
         let video_clone = video.clone();
         if let Ok(promise) = video.play() {
-            let reject_handler = Closure::wrap(Box::new(move |_: JsValue| {
-                video_clone.set_muted(true);
-                let _ = video_clone.play();
+            let ok_handler = Closure::wrap(Box::new(move |_: JsValue| {
+                // Playing muted — try to unmute (may silently fail).
+                video_clone.set_muted(false);
             }) as Box<dyn FnMut(JsValue)>);
-            let _ = promise.catch(&reject_handler);
-            reject_handler.forget(); // one-shot, leak is fine
+            let _ = promise.then(&ok_handler);
+            ok_handler.forget();
         }
 
         self.video = Some(video);
