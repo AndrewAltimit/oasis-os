@@ -398,11 +398,15 @@ impl SdiBackend for WasmBackend {
     }
 
     fn read_pixels(&self, x: i32, y: i32, w: u32, h: u32) -> Result<Vec<u8>> {
-        let data = self
+        // getImageData throws SecurityError if the canvas is tainted by a
+        // cross-origin video frame.  Return opaque black in that case.
+        match self
             .ctx
             .get_image_data(x as f64, y as f64, w as f64, h as f64)
-            .map_err(js_err)?;
-        Ok(data.data().to_vec())
+        {
+            Ok(data) => Ok(data.data().to_vec()),
+            Err(_) => Ok([0, 0, 0, 255].repeat((w * h) as usize)),
+        }
     }
 
     fn shutdown(&mut self) -> Result<()> {
@@ -1014,5 +1018,23 @@ impl SdiBackend for WasmBackend {
         self.pop_clip_rect()?;
         self.pop_translate()?;
         Ok(())
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Extra public helpers (not part of SdiBackend)
+// ---------------------------------------------------------------------------
+
+impl WasmBackend {
+    /// Register an existing offscreen `<canvas>` as a texture.
+    ///
+    /// The caller keeps a clone of the `HtmlCanvasElement` reference so it can
+    /// draw into it (e.g. `ctx.drawImage(video, …)`).  When `blit()` runs it
+    /// will paint the latest content.
+    pub fn register_canvas_as_texture(&mut self, canvas: HtmlCanvasElement) -> TextureId {
+        let id = self.next_texture_id;
+        self.next_texture_id += 1;
+        self.textures.insert(id, TextureData { canvas });
+        TextureId(id)
     }
 }

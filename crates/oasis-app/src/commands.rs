@@ -153,8 +153,10 @@ pub fn process_command_output(
 pub fn apply_skin_swap(name: &str, state: &mut AppState, sdi: &mut SdiRegistry, vfs: &MemoryVfs) {
     match resolve_skin(name) {
         Ok(new_skin) => {
-            let swapped = Skin::swap(&state.skin, new_skin, sdi);
-            state.active_theme = ActiveTheme::from_skin(&swapped.theme);
+            let sw = state.active_theme.screen_w;
+            let sh = state.active_theme.screen_h;
+            let swapped = Skin::swap_scaled(&state.skin, new_skin, sdi, sw, sh);
+            state.active_theme = ActiveTheme::from_skin(&swapped.theme).with_screen_size(sw, sh);
             state.browser_config = BrowserConfig::from_skin_theme(&swapped.theme);
             state.wm.set_theme(swapped.theme.build_wm_theme());
             let dash_config =
@@ -217,8 +219,10 @@ fn format_remote_response(
         },
         Ok(CommandOutput::SkinSwap { name }) => match resolve_skin(&name) {
             Ok(new_skin) => {
-                let swapped = Skin::swap(skin, new_skin, sdi);
-                *active_theme = ActiveTheme::from_skin(&swapped.theme);
+                let sw = active_theme.screen_w;
+                let sh = active_theme.screen_h;
+                let swapped = Skin::swap_scaled(skin, new_skin, sdi, sw, sh);
+                *active_theme = ActiveTheme::from_skin(&swapped.theme).with_screen_size(sw, sh);
                 *browser_config = BrowserConfig::from_skin_theme(&swapped.theme);
                 wm.set_theme(swapped.theme.build_wm_theme());
                 let msg = format!("Switched to skin: {}", swapped.manifest.name);

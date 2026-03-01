@@ -1,0 +1,27 @@
+[package]
+name = "oasis-video"
+description = "Software MP4/H.264+AAC video decode pipeline for OASIS_OS"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[features]
+default = []
+# Enable H.264 decoding via openh264 (Cisco C source compiled via cc).
+# Requires a C++ compiler. Disabled by default for CI/WASM compatibility.
+h264 = ["dep:openh264"]
+
+[dependencies]
+# MP4 demuxing + AAC decoding (pure Rust)
+symphonia = { version = "0.5", default-features = false, features = [
+    "isomp4",  # MP4/ISO BMFF demuxer
+    "aac",     # AAC-LC decoder
+] }
+
+# H.264 decoding (Cisco OpenH264 C source compiled via cc)
+openh264 = { version = "0.9", optional = true }
+
+[lints]
+workspace = true

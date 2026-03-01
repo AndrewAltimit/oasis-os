@@ -2211,6 +2211,8 @@ mod tests {
             width: 640,
             height: 480,
             size_bytes: 5000,
+            format: "MPEG4".into(),
+            original: None,
         }]);
         guide.catalogs[0] = Some(catalog);
         guide.rebuild_cached_schedule(0);
@@ -2260,6 +2262,8 @@ mod tests {
             width: 640,
             height: 480,
             size_bytes: 5000,
+            format: "MPEG4".into(),
+            original: None,
         }]);
         guide.catalogs[0] = Some(catalog);
         guide.rebuild_cached_schedule(0);
@@ -2317,6 +2321,8 @@ mod tests {
             width: 640,
             height: 480,
             size_bytes: 50000,
+            format: "MPEG4".into(),
+            original: None,
         }]);
         guide.catalogs[0] = Some(catalog);
         guide.rebuild_cached_schedule(0);
@@ -2414,6 +2420,8 @@ mod tests {
                 width: 640,
                 height: 480,
                 size_bytes: 5000,
+                format: "MPEG4".into(),
+                original: None,
             }]);
             guide.catalogs[i] = Some(catalog);
             guide.rebuild_cached_schedule(i);

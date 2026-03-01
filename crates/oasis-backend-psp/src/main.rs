@@ -237,6 +237,11 @@ static APPS: &[AppEntry] = &[
         title: "Radio",
         color: Color::rgb(255, 140, 60),
     },
+    AppEntry {
+        id: "tvguide",
+        title: "TV Guide",
+        color: Color::rgb(0, 100, 200),
+    },
 ];
 
 // ---------------------------------------------------------------------------
@@ -261,6 +266,7 @@ enum ClassicView {
     MusicPlayer,
     Browser,
     Radio,
+    TvGuide,
 }
 
 // ---------------------------------------------------------------------------
@@ -620,13 +626,26 @@ fn psp_main() {
     let mut radio_now_playing = String::new();
     let mut radio_error_msg = String::new();
 
+    // TV Guide state.
+    let mut tv_channels: Vec<oasis_core::apps::tv_guide::Channel> = Vec::new();
+    let mut tv_catalogs: Vec<Option<oasis_core::apps::tv_guide::ChannelCatalog>> = Vec::new();
+    let mut tv_selected: usize = 0;
+    let mut tv_scroll: usize = 0;
+    let mut tv_tuned: Option<usize> = None;
+    let mut tv_downloading = false;
+    let mut tv_download_progress: f32 = 0.0;
+    let mut tv_preview_tex: Option<TextureId> = None;
+    let mut tv_error_msg = String::new();
+    let mut tv_now_playing = String::new();
+
     // AV codec modules (AvCodec, AvMpegBase, AvMp3) are loaded lazily
     // by the audio thread on first play. Loading them here at startup
     // would conflict with the PRX overlay's sceAudiocodec if the PRX
     // initialized before the EBOOT was launched.
 
-    // Single background worker thread handles both audio and file I/O.
+    // Background worker threads: audio, file I/O, and video decode.
     let (audio, io) = oasis_backend_psp::spawn_workers();
+    oasis_backend_psp::video::spawn_video_thread();
     let mut pv_loading = false; // true while waiting for async texture load
     show_boot_screen(&mut backend, "Starting workers...", 80);
 
@@ -693,6 +712,34 @@ fn psp_main() {
                         br_scroll = 0;
                         br_loading = false;
                         br_status_msg = format!("HTTP {} - {} bytes", status_code, body.len(),);
+                    } else if (tag & 0xFF00) == 0xAA00 {
+                        // TV Guide catalog response.
+                        let ch_idx = (tag & 0xFF) as usize;
+                        let src_idx = ((tag >> 16) & 0xF) as usize;
+                        if ch_idx < tv_channels.len() && status_code >= 200 && status_code < 300 {
+                            let json = String::from_utf8_lossy(&body);
+                            let ch = &tv_channels[ch_idx];
+                            let subfolder = ch
+                                .source
+                                .get(src_idx)
+                                .and_then(|s| s.subfolder.as_deref());
+                            let item_id = ch
+                                .source
+                                .get(src_idx)
+                                .map(|s| s.item_id.as_str())
+                                .unwrap_or("");
+                            let episodes =
+                                oasis_core::apps::tv_guide::ChannelCatalog
+                                    ::parse_files_response(&json, item_id, subfolder);
+                            if !episodes.is_empty() {
+                                let catalog = tv_catalogs[ch_idx]
+                                    .get_or_insert_with(|| {
+                                        oasis_core::apps::tv_guide::ChannelCatalog
+                                            ::new(ch.number)
+                                    });
+                                catalog.add_episodes(episodes);
+                            }
+                        }
                     } else {
                         let preview = String::from_utf8_lossy(&body[..body.len().min(256)]);
                         term_lines.push(format!(
@@ -717,8 +764,32 @@ fn psp_main() {
                     radio_status = RadioStatus::Error;
                     radio_error_msg = msg;
                 },
+                IoResponse::VideoProgress { tag: _, bytes, total } => {
+                    if let Some(t) = total {
+                        if t > 0 {
+                            tv_download_progress = bytes as f32 / t as f32;
+                        }
+                    }
+                },
+                IoResponse::VideoReady { tag: _, path } => {
+                    tv_downloading = false;
+                    tv_download_progress = 1.0;
+                    // Start video decode thread.
+                    oasis_backend_psp::video::send_video_cmd(
+                        oasis_backend_psp::video::VideoCmd::Play {
+                            path,
+                            seek_secs: 0,
+                        },
+                    );
+                },
+                IoResponse::VideoError { tag: _, msg } => {
+                    tv_downloading = false;
+                    tv_error_msg = format!("Download: {msg}");
+                    tv_tuned = None;
+                },
             }
         }
+
 
         // Poll radio streaming state from audio thread atomics.
         if radio_status == RadioStatus::Buffering || radio_status == RadioStatus::Playing {
@@ -861,6 +932,7 @@ fn psp_main() {
                         ClassicView::MusicPlayer => ClassicView::Dashboard,
                         ClassicView::Browser => ClassicView::Dashboard,
                         ClassicView::Radio => ClassicView::Dashboard,
+                        ClassicView::TvGuide => ClassicView::Dashboard,
                     };
                 },
 
@@ -944,6 +1016,42 @@ fn psp_main() {
                                 radio_selected = 0;
                                 radio_scroll = 0;
                                 // Keep radio_status if already playing.
+                            },
+                            "TV Guide" => {
+                                classic_view = ClassicView::TvGuide;
+                                // Parse channels on first open.
+                                if tv_channels.is_empty() {
+                                    if let Ok(config) =
+                                        oasis_core::apps::tv_guide::ChannelConfig::from_toml(
+                                            oasis_core::apps::tv_guide::channel
+                                                ::DEFAULT_CHANNELS_TOML,
+                                        )
+                                    {
+                                        tv_channels = config.channel;
+                                        tv_catalogs = vec![None; tv_channels.len()];
+                                        // Fetch catalogs from IA for each channel.
+                                        for (i, ch) in tv_channels.iter().enumerate() {
+                                            for (si, src) in ch.source.iter().enumerate() {
+                                                let api_path =
+                                                    oasis_core::apps::tv_guide::ChannelCatalog
+                                                        ::files_api_path(&src.item_id);
+                                                let url = format!(
+                                                    "https://archive.org{}",
+                                                    api_path,
+                                                );
+                                                // Tag layout: 0xAA in bits 8..15,
+                                                // channel index in bits 0..7,
+                                                // source index in bits 16..19.
+                                                let tag = 0xAA00
+                                                    | (i as u32 & 0xFF)
+                                                    | ((si as u32 & 0xF) << 16);
+                                                io.send(IoCmd::HttpGet { url, tag });
+                                            }
+                                        }
+                                    }
+                                }
+                                tv_selected = 0;
+                                tv_scroll = 0;
                             },
                             _ => {
                                 // Apps without a Classic view: open in Desktop mode.
@@ -1559,7 +1667,122 @@ fn psp_main() {
                     classic_view = ClassicView::Dashboard;
                 },
 
+                // -- TV Guide input --
+                InputEvent::ButtonPress(Button::Up)
+                    if classic_view == ClassicView::TvGuide && tv_tuned.is_none() =>
+                {
+                    if tv_selected > 0 {
+                        tv_selected -= 1;
+                        if tv_selected < tv_scroll {
+                            tv_scroll = tv_selected;
+                        }
+                    }
+                },
+                InputEvent::ButtonPress(Button::Down)
+                    if classic_view == ClassicView::TvGuide && tv_tuned.is_none() =>
+                {
+                    if tv_selected + 1 < tv_channels.len() {
+                        tv_selected += 1;
+                        if tv_selected >= tv_scroll + FM_VISIBLE_ROWS {
+                            tv_scroll = tv_selected - FM_VISIBLE_ROWS + 1;
+                        }
+                    }
+                },
+                InputEvent::ButtonPress(Button::Confirm)
+                    if classic_view == ClassicView::TvGuide =>
+                {
+                    if tv_tuned.is_none() && !tv_downloading {
+                        // Tune to selected channel.
+                        if tv_selected < tv_catalogs.len() {
+                            if let Some(catalog) = &tv_catalogs[tv_selected] {
+                                let best = oasis_core::apps::tv_guide::select_smallest_for(
+                                    &catalog.episodes,
+                                    20_000_000, // 20MB max
+                                    320,        // min width
+                                );
+                                if let Some(ep) = best {
+                                    // Init network.
+                                    if !oasis_backend_psp::network::is_net_initialized() {
+                                        if let Err(e) =
+                                            oasis_backend_psp::network::ensure_net_init_pub()
+                                        {
+                                            tv_error_msg = format!("Net: {e}");
+                                            backend.reinit_gu_frame();
+                                            continue;
+                                        }
+                                        backend.reinit_gu_frame();
+                                    }
+                                    let url =
+                                        oasis_core::apps::tv_guide::ChannelCatalog::download_url(
+                                            ep,
+                                        );
+                                    tv_now_playing = ep.title.clone();
+                                    tv_downloading = true;
+                                    tv_download_progress = 0.0;
+                                    tv_error_msg.clear();
+                                    tv_tuned = Some(tv_selected);
+                                    io.send(IoCmd::VideoDownload {
+                                        url,
+                                        dest: String::from(
+                                            "ms0:/PSP/GAME/OASISOS/tv_cache.mp4",
+                                        ),
+                                        tag: 0xBB00,
+                                    });
+                                } else {
+                                    tv_error_msg = String::from("No suitable video found");
+                                }
+                            } else {
+                                tv_error_msg = String::from("Channel catalog not loaded");
+                            }
+                        }
+                    }
+                },
+                InputEvent::ButtonPress(Button::Cancel)
+                    if classic_view == ClassicView::TvGuide =>
+                {
+                    if tv_tuned.is_some() {
+                        // Untune: stop video + audio.
+                        oasis_backend_psp::video::send_video_cmd(
+                            oasis_backend_psp::video::VideoCmd::Stop,
+                        );
+                        audio.send(AudioCmd::VideoAudioStop);
+                        if let Some(old) = tv_preview_tex.take() {
+                            backend.destroy_texture_inner(old);
+                        }
+                        tv_tuned = None;
+                        tv_downloading = false;
+                        tv_now_playing.clear();
+                        tv_error_msg.clear();
+                    } else {
+                        classic_view = ClassicView::Dashboard;
+                    }
+                },
+                InputEvent::ButtonPress(Button::Triangle)
+                    if classic_view == ClassicView::TvGuide =>
+                {
+                    // Back to dashboard (keep video playing in background).
+                    classic_view = ClassicView::Dashboard;
+                },
+
                 _ => {},
+            }
+        }
+
+        // -- Poll video decode frames --
+        if tv_tuned.is_some() && !tv_downloading {
+            if let Some(frame) = oasis_backend_psp::video::poll_video_frame() {
+                if let Some(old) = tv_preview_tex.take() {
+                    backend.destroy_texture_inner(old);
+                }
+                tv_preview_tex = backend.load_texture_inner(frame.width, frame.height, &frame.rgba);
+            }
+            // Check if video playback ended.
+            if !oasis_backend_psp::video::is_video_playing() {
+                if let Some(old) = tv_preview_tex.take() {
+                    backend.destroy_texture_inner(old);
+                }
+                tv_tuned = None;
+                tv_now_playing.clear();
             }
         }
 
@@ -1780,6 +2003,42 @@ fn psp_main() {
                         }
                         backend.force_bitmap_font = false;
                     },
+                    ClassicView::TvGuide => {
+                        backend.force_bitmap_font = true;
+                        if tv_tuned.is_some() {
+                            draw_tv_playing(
+                                &mut backend,
+                                &tv_now_playing,
+                                tv_downloading,
+                                tv_download_progress,
+                                tv_preview_tex,
+                                &tv_error_msg,
+                            );
+                            draw_button_hints(
+                                &mut backend,
+                                &[("O", "Untune"), ("^", "Back")],
+                            );
+                        } else if !tv_error_msg.is_empty() {
+                            draw_tv_error(&mut backend, &tv_error_msg);
+                            draw_button_hints(
+                                &mut backend,
+                                &[("X", "Retry"), ("O", "Back")],
+                            );
+                        } else {
+                            draw_tv_channels(
+                                &mut backend,
+                                &tv_channels,
+                                &tv_catalogs,
+                                tv_selected,
+                                tv_scroll,
+                            );
+                            draw_button_hints(
+                                &mut backend,
+                                &[("X", "Tune"), ("^v", "Nav"), ("O", "Back")],
+                            );
+                        }
+                        backend.force_bitmap_font = false;
+                    },
                 }
             },
 
@@ -1914,6 +2173,13 @@ fn psp_main() {
                     String::from("SYS://RADIO_ON")
                 } else {
                     String::from("SYS://RADIO")
+                }
+            },
+            (_, ClassicView::TvGuide) => {
+                if tv_tuned.is_some() {
+                    String::from("SYS://TV_LIVE")
+                } else {
+                    String::from("SYS://TV_GUIDE")
                 }
             },
         };
@@ -3956,6 +4222,246 @@ fn draw_radio_error(backend: &mut PspBackend, error_msg: &str) {
         8,
         Color::rgb(255, 80, 80),
     );
+
+    let max_chars = 55;
+    let display_msg = if error_msg.len() > max_chars {
+        let trunc: String = error_msg.chars().take(max_chars - 2).collect();
+        format!("{}..", trunc)
+    } else {
+        error_msg.to_string()
+    };
+    let msg_x = cx - (display_msg.len() as i32 * 8) / 2;
+    backend.draw_text_inner(&display_msg, msg_x, cy + 4, 8, Color::rgb(200, 200, 200));
+
+    backend.draw_text_inner(
+        "Press X to retry or O to go back",
+        cx - 16 * 8,
+        cy + 20,
+        8,
+        Color::rgb(140, 140, 140),
+    );
+}
+
+// ---------------------------------------------------------------------------
+// TV Guide drawing functions
+// ---------------------------------------------------------------------------
+
+/// Draw the TV Guide channel list (browsing mode).
+fn draw_tv_channels(
+    backend: &mut PspBackend,
+    channels: &[oasis_core::apps::tv_guide::Channel],
+    catalogs: &[Option<oasis_core::apps::tv_guide::ChannelCatalog>],
+    selected: usize,
+    scroll: usize,
+) {
+    let bg = Color::rgba(0, 0, 0, 200);
+    backend.fill_rect_inner(0, CONTENT_TOP as i32, SCREEN_WIDTH, CONTENT_H, bg);
+
+    draw_view_header(backend, "TV GUIDE", Color::rgb(0, 100, 200), None);
+
+    if channels.is_empty() {
+        backend.draw_text_inner("No channels", 8, FM_START_Y, 8, Color::rgb(140, 140, 140));
+        return;
+    }
+
+    let end = (scroll + FM_VISIBLE_ROWS).min(channels.len());
+    for i in scroll..end {
+        let ch = &channels[i];
+        let row = (i - scroll) as i32;
+        let y = FM_START_Y + row * FM_ROW_H;
+
+        if i == selected {
+            backend.fill_rect_inner(
+                0,
+                y - 1,
+                SCREEN_WIDTH,
+                FM_ROW_H as u32,
+                Color::rgba(0, 100, 200, 100),
+            );
+        }
+
+        // Channel number.
+        let num_str = format!("{:2}", ch.number);
+        backend.draw_text_inner(&num_str, 4, y, 8, Color::rgb(0, 160, 255));
+        // Call sign.
+        backend.draw_text_inner(&ch.call_sign, 28, y, 8, Color::WHITE);
+        // Channel name.
+        let name_x = 80;
+        let max_name = 25;
+        let display_name = if ch.name.len() > max_name {
+            let trunc: String = ch.name.chars().take(max_name - 2).collect();
+            format!("{}..", trunc)
+        } else {
+            ch.name.clone()
+        };
+        backend.draw_text_inner(&display_name, name_x, y, 8, Color::rgb(200, 200, 200));
+        // Status indicator (loaded / loading).
+        let status_x = 380;
+        if i < catalogs.len() {
+            if let Some(cat) = &catalogs[i] {
+                let ep_str = format!("{}ep", cat.episodes.len());
+                backend.draw_text_inner(&ep_str, status_x, y, 8, Color::rgb(120, 200, 120));
+            } else {
+                backend.draw_text_inner("...", status_x, y, 8, Color::rgb(180, 180, 80));
+            }
+        }
+        // Genre.
+        let genre_x = 430;
+        let genre_display = if ch.genre.len() > 6 {
+            let trunc: String = ch.genre.chars().take(5).collect();
+            format!("{}", trunc)
+        } else {
+            ch.genre.clone()
+        };
+        backend.draw_text_inner(&genre_display, genre_x, y, 8, Color::rgb(140, 140, 140));
+    }
+
+    // Scrollbar.
+    if channels.len() > FM_VISIBLE_ROWS {
+        let ratio = selected as f32 / (channels.len() - 1).max(1) as f32;
+        let track_h = CONTENT_H as i32 - 16;
+        let dot_y = FM_START_Y + (ratio * track_h as f32) as i32;
+        backend.fill_rect_inner(
+            SCREEN_WIDTH as i32 - 4,
+            dot_y,
+            3,
+            8,
+            Color::rgba(255, 255, 255, 120),
+        );
+    }
+}
+
+/// Draw the TV Guide "now playing" / downloading view.
+fn draw_tv_playing(
+    backend: &mut PspBackend,
+    now_playing: &str,
+    downloading: bool,
+    progress: f32,
+    preview_tex: Option<TextureId>,
+    error_msg: &str,
+) {
+    let bg = Color::rgba(0, 0, 0, 210);
+    backend.fill_rect_inner(0, CONTENT_TOP as i32, SCREEN_WIDTH, CONTENT_H, bg);
+
+    let cx = SCREEN_WIDTH as i32 / 2;
+
+    if downloading {
+        // Download progress view.
+        draw_view_header(backend, "TV GUIDE", Color::rgb(0, 100, 200), None);
+
+        let pct = (progress * 100.0) as u32;
+        let status = format!("Downloading... {}%", pct);
+        let status_x = cx - (status.len() as i32 * 8) / 2;
+        backend.draw_text_inner(
+            &status,
+            status_x,
+            CONTENT_TOP as i32 + 60,
+            8,
+            Color::rgb(255, 200, 80),
+        );
+
+        // Progress bar.
+        let bar_w: u32 = 300;
+        let bar_h: u32 = 8;
+        let bar_x = cx - bar_w as i32 / 2;
+        let bar_y = CONTENT_TOP as i32 + 80;
+        backend.fill_rect_inner(bar_x, bar_y, bar_w, bar_h, Color::rgba(40, 40, 60, 200));
+        let fill_w = (bar_w as f32 * progress) as u32;
+        if fill_w > 0 {
+            backend.fill_rect_inner(bar_x, bar_y, fill_w, bar_h, Color::rgb(0, 160, 255));
+        }
+
+        // Episode title.
+        let max_chars = 50;
+        let display = if now_playing.len() > max_chars {
+            let trunc: String = now_playing.chars().take(max_chars - 2).collect();
+            format!("{}..", trunc)
+        } else {
+            now_playing.to_string()
+        };
+        let title_x = cx - (display.len() as i32 * 8) / 2;
+        backend.draw_text_inner(&display, title_x, bar_y + 20, 8, Color::rgb(180, 180, 180));
+    } else if let Some(tex) = preview_tex {
+        // Video playing -- show the decoded frame.
+        // Scale to fit within the content area while preserving aspect ratio.
+        let max_w = SCREEN_WIDTH;
+        let max_h = CONTENT_H;
+        backend.blit_inner(tex, 0, CONTENT_TOP as i32, max_w, max_h);
+
+        // LIVE indicator.
+        backend.fill_rect_inner(
+            SCREEN_WIDTH as i32 - 48,
+            CONTENT_TOP as i32 + 4,
+            44,
+            12,
+            Color::rgba(200, 0, 0, 200),
+        );
+        backend.draw_text_inner(
+            "LIVE",
+            SCREEN_WIDTH as i32 - 40,
+            CONTENT_TOP as i32 + 6,
+            8,
+            Color::WHITE,
+        );
+
+        // Title overlay at bottom.
+        let max_chars = 50;
+        let display = if now_playing.len() > max_chars {
+            let trunc: String = now_playing.chars().take(max_chars - 2).collect();
+            format!("{}..", trunc)
+        } else {
+            now_playing.to_string()
+        };
+        let title_y = BOTTOMBAR_Y - 14;
+        backend.fill_rect_inner(0, title_y - 2, SCREEN_WIDTH, 12, Color::rgba(0, 0, 0, 160));
+        backend.draw_text_inner(&display, 4, title_y, 8, Color::WHITE);
+    } else {
+        // No video frame yet but not downloading -- audio only or ended.
+        draw_view_header(backend, "TV GUIDE", Color::rgb(0, 100, 200), None);
+
+        let status = if !error_msg.is_empty() {
+            error_msg
+        } else {
+            "Playing audio..."
+        };
+        let status_x = cx - (status.len() as i32 * 8) / 2;
+        let status_clr = if error_msg.is_empty() {
+            Color::rgb(120, 255, 120)
+        } else {
+            Color::rgb(255, 80, 80)
+        };
+        backend.draw_text_inner(status, status_x, CONTENT_TOP as i32 + 80, 8, status_clr);
+
+        // Episode title.
+        let max_chars = 50;
+        let display = if now_playing.len() > max_chars {
+            let trunc: String = now_playing.chars().take(max_chars - 2).collect();
+            format!("{}..", trunc)
+        } else {
+            now_playing.to_string()
+        };
+        let title_x = cx - (display.len() as i32 * 8) / 2;
+        backend.draw_text_inner(
+            &display,
+            title_x,
+            CONTENT_TOP as i32 + 100,
+            8,
+            Color::rgb(180, 180, 180),
+        );
+    }
+}
+
+/// Draw TV Guide error screen.
+fn draw_tv_error(backend: &mut PspBackend, error_msg: &str) {
+    let bg = Color::rgba(0, 0, 0, 200);
+    backend.fill_rect_inner(0, CONTENT_TOP as i32, SCREEN_WIDTH, CONTENT_H, bg);
+
+    draw_view_header(backend, "TV GUIDE", Color::rgb(0, 100, 200), None);
+
+    let cx = SCREEN_WIDTH as i32 / 2;
+    let cy = CONTENT_TOP as i32 + CONTENT_H as i32 / 2;
+
+    backend.draw_text_inner("Error", cx - 2 * 8, cy - 12, 8, Color::rgb(255, 80, 80));
 
     let max_chars = 55;
     let display_msg = if error_msg.len() > max_chars {

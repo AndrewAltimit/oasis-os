@@ -41,7 +41,9 @@ async function boot() {
 
   await init();
 
-  const skinParam = new URLSearchParams(window.location.search).get("skin");
+  const params = new URLSearchParams(window.location.search);
+  const skinParam = params.get("skin");
+  const appParam = params.get("app");
   oasis = new OasisWasm("oasis", skinParam || undefined);
 
   // Expose instance globally for automated tests (e.g. Playwright).
@@ -50,6 +52,11 @@ async function boot() {
 
   // Re-fit in case the skin changed the canvas buffer dimensions.
   fitCanvas();
+
+  // Auto-launch an app if ?app= is specified (e.g. ?app=TV+Guide).
+  if (appParam) {
+    oasis.launch_app(appParam);
+  }
 
   // Focus canvas for keyboard input.
   const canvas = document.getElementById("oasis");

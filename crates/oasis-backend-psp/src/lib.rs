@@ -31,6 +31,7 @@ pub mod status;
 pub mod textures;
 pub mod threading;
 pub mod tls;
+pub mod video;
 
 // ---------------------------------------------------------------------------
 // Re-exports from submodules (for main.rs and external users)

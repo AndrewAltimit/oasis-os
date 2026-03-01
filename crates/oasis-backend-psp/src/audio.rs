@@ -508,6 +508,38 @@ impl AudioPlayer {
         }
         (self.data_size as u64 * 8) / self.bitrate as u64
     }
+
+    /// Output raw PCM i16 samples from the video decode thread.
+    ///
+    /// Ensures an audio channel exists and outputs the samples directly.
+    /// Uses 44100 Hz stereo (most IA videos). The PSP hardware channel
+    /// is configured for 1152 samples (standard MP3 frame size).
+    pub fn output_video_pcm(&mut self, pcm_i16: &[i16]) {
+        use psp::audio::{AudioChannel, AudioFormat};
+
+        // Ensure we have a hardware channel.
+        if self.channel.is_none() {
+            self.channel = AudioChannel::reserve(MP3_FRAME_SAMPLES, AudioFormat::Stereo).ok();
+        }
+        let channel = match &self.channel {
+            Some(ch) => ch,
+            None => return,
+        };
+
+        // Output in MP3_FRAME_SAMPLES-sized chunks (1152 stereo samples = 2304 i16s).
+        let chunk_size = (MP3_FRAME_SAMPLES * 2) as usize; // stereo
+        for chunk in pcm_i16.chunks(chunk_size) {
+            // Pad to expected size if needed.
+            if chunk.len() == chunk_size {
+                let _ = channel.output_blocking(self.hw_volume, chunk);
+            } else {
+                // Pad with silence for the last partial chunk.
+                let mut padded = vec![0i16; chunk_size];
+                padded[..chunk.len()].copy_from_slice(chunk);
+                let _ = channel.output_blocking(self.hw_volume, &padded);
+            }
+        }
+    }
 }
 
 impl Drop for AudioPlayer {

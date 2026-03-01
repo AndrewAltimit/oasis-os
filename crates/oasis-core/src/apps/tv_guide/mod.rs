@@ -12,7 +12,7 @@ pub mod schedule;
 #[cfg(any(test, feature = "test-data"))]
 pub mod test_data;
 
-pub use catalog::{ChannelCatalog, VideoEpisode};
+pub use catalog::{ChannelCatalog, VideoEpisode, select_smallest_for};
 pub use channel::{Channel, ChannelConfig, ChannelSource};
 pub use guide::TvGuideState;
 pub use schedule::{CachedSchedule, ScheduleSlot, schedule_at, schedule_range};

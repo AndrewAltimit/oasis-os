@@ -68,6 +68,14 @@ pub enum AudioCmd {
     },
     /// Stop radio streaming and close the socket.
     RadioStop,
+    /// Video audio PCM data from the video decode thread.
+    VideoAudioData {
+        pcm_i16: Vec<i16>,
+        sample_rate: u32,
+        channels: u16,
+    },
+    /// Stop video audio playback.
+    VideoAudioStop,
     Shutdown,
 }
 
@@ -149,6 +157,12 @@ pub enum IoCmd {
     RadioConnect {
         url: String,
     },
+    /// Download a video file to Memory Stick for TV Guide playback.
+    VideoDownload {
+        url: String,
+        dest: String,
+        tag: u32,
+    },
     Shutdown,
 }
 
@@ -177,6 +191,22 @@ pub enum IoResponse {
     },
     /// Radio connection failed.
     RadioError {
+        msg: String,
+    },
+    /// Video download progress update.
+    VideoProgress {
+        tag: u32,
+        bytes: u64,
+        total: Option<u64>,
+    },
+    /// Video file downloaded successfully.
+    VideoReady {
+        tag: u32,
+        path: String,
+    },
+    /// Video download failed.
+    VideoError {
+        tag: u32,
         msg: String,
     },
     Error {
@@ -338,6 +368,28 @@ fn audio_thread_fn() {
                 RADIO_STREAMING.store(false, Ordering::Relaxed);
                 RADIO_BUFFERING.store(false, Ordering::Relaxed);
             },
+            Some(AudioCmd::VideoAudioData {
+                pcm_i16,
+                sample_rate: _,
+                channels: _,
+            }) => {
+                // Stop radio/file playback if still active.
+                if let Some(mut r) = radio.take() {
+                    r.stop();
+                    RADIO_STREAMING.store(false, Ordering::Relaxed);
+                    RADIO_BUFFERING.store(false, Ordering::Relaxed);
+                }
+                if player.is_playing() {
+                    player.stop();
+                    AUDIO_PLAYING.store(false, Ordering::Relaxed);
+                    AUDIO_PAUSED.store(false, Ordering::Relaxed);
+                }
+                // Output PCM directly to the hardware audio channel.
+                player.output_video_pcm(&pcm_i16);
+            },
+            Some(AudioCmd::VideoAudioStop) => {
+                // Video playback ended -- nothing special to clean up.
+            },
             Some(AudioCmd::Shutdown) => {
                 player.stop();
                 AUDIO_PLAYING.store(false, Ordering::Relaxed);
@@ -421,6 +473,9 @@ fn io_thread_fn() {
             },
             Some(IoCmd::RadioConnect { url }) => {
                 handle_radio_connect(url);
+            },
+            Some(IoCmd::VideoDownload { url, dest, tag }) => {
+                handle_video_download(url, dest, tag);
             },
             Some(IoCmd::Shutdown) => break,
             None => {
@@ -508,6 +563,109 @@ fn handle_http_get(url: String, tag: u32) {
             });
         },
     }
+}
+
+// ---------------------------------------------------------------------------
+// Video download handler (I/O thread)
+// ---------------------------------------------------------------------------
+
+/// Download a video file via HTTP and write it to Memory Stick.
+///
+/// Uses `psp::http::HttpClient` which buffers the entire response in RAM.
+/// The `select_smallest_for()` caller ensures files are capped (default 20MB)
+/// so this fits within PSP memory constraints.
+fn handle_video_download(url: String, dest: String, tag: u32) {
+    // Network must be initialized before HTTP.
+    if let Err(e) = crate::network::ensure_net_init_pub() {
+        let _ = IO_RESP_QUEUE.push(IoResponse::VideoError {
+            tag,
+            msg: format!("net init: {e}"),
+        });
+        return;
+    }
+
+    let mut url_bytes: Vec<u8> = url.as_bytes().to_vec();
+    url_bytes.push(0);
+
+    let client = match psp::http::HttpClient::new() {
+        Ok(c) => c,
+        Err(e) => {
+            let _ = IO_RESP_QUEUE.push(IoResponse::VideoError {
+                tag,
+                msg: format!("HTTP init: {e}"),
+            });
+            return;
+        },
+    };
+
+    let resp = match client.get(&url_bytes) {
+        Ok(r) => r,
+        Err(e) => {
+            let _ = IO_RESP_QUEUE.push(IoResponse::VideoError {
+                tag,
+                msg: format!("HTTP GET: {e}"),
+            });
+            return;
+        },
+    };
+
+    if resp.status_code < 200 || resp.status_code >= 300 {
+        let _ = IO_RESP_QUEUE.push(IoResponse::VideoError {
+            tag,
+            msg: format!("HTTP {}", resp.status_code),
+        });
+        return;
+    }
+
+    // Report progress (we have the full body now).
+    let total = resp.body.len() as u64;
+    let _ = IO_RESP_QUEUE.push(IoResponse::VideoProgress {
+        tag,
+        bytes: total,
+        total: Some(total),
+    });
+
+    // Write to Memory Stick.
+    let written = match psp::io::File::create(&dest) {
+        Ok(f) => {
+            // Write in chunks -- psp::io::File::write returns bytes written.
+            let mut offset = 0;
+            while offset < resp.body.len() {
+                match f.write(&resp.body[offset..]) {
+                    Ok(n) if n > 0 => offset += n,
+                    Ok(_) => break,
+                    Err(e) => {
+                        let _ = IO_RESP_QUEUE.push(IoResponse::VideoError {
+                            tag,
+                            msg: format!("write: {e}"),
+                        });
+                        return;
+                    },
+                }
+            }
+            offset
+        },
+        Err(e) => {
+            let _ = IO_RESP_QUEUE.push(IoResponse::VideoError {
+                tag,
+                msg: format!("create file: {e}"),
+            });
+            return;
+        },
+    };
+
+    if written < resp.body.len() {
+        let _ = IO_RESP_QUEUE.push(IoResponse::VideoError {
+            tag,
+            msg: format!("short write: {written}/{} bytes", resp.body.len()),
+        });
+        return;
+    }
+
+    let _ = IO_RESP_QUEUE.push(IoResponse::VideoReady {
+        tag,
+        path: dest,
+    });
 }
 
 // ---------------------------------------------------------------------------

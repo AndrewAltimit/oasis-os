@@ -1318,6 +1318,8 @@ fn run_tv_guide_scenario(
                         width: 640,
                         height: 480,
                         size_bytes: 50_000_000,
+                        format: "MPEG4".into(),
+                        original: None,
                     })
                     .collect();
                 cat.add_episodes(episodes);
@@ -1339,6 +1341,8 @@ fn run_tv_guide_scenario(
                         width: 640,
                         height: 480,
                         size_bytes: 50_000_000,
+                        format: "MPEG4".into(),
+                        original: None,
                     })
                     .collect();
                 cat.add_episodes(episodes);

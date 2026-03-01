@@ -282,22 +282,34 @@ impl Skin {
     /// Apply this skin's layout to an SDI registry. Existing objects are
     /// updated, missing objects are created.
     pub fn apply_layout(&self, sdi: &mut SdiRegistry) {
+        self.apply_layout_inner(sdi, 1.0, 1.0);
+    }
+
+    /// Apply layout scaled from the skin's native resolution to the target
+    /// screen size. Positions and sizes are proportionally adjusted.
+    pub fn apply_layout_scaled(&self, sdi: &mut SdiRegistry, target_w: u32, target_h: u32) {
+        let base_w = self.manifest.screen_width.max(1) as f64;
+        let base_h = self.manifest.screen_height.max(1) as f64;
+        self.apply_layout_inner(sdi, target_w as f64 / base_w, target_h as f64 / base_h);
+    }
+
+    fn apply_layout_inner(&self, sdi: &mut SdiRegistry, sx: f64, sy: f64) {
         for (name, def) in &self.layout.objects {
             if !sdi.contains(name) {
                 sdi.create(name);
             }
             if let Ok(obj) = sdi.get_mut(name) {
                 if let Some(x) = def.x {
-                    obj.x = x;
+                    obj.x = (x as f64 * sx) as i32;
                 }
                 if let Some(y) = def.y {
-                    obj.y = y;
+                    obj.y = (y as f64 * sy) as i32;
                 }
                 if let Some(w) = def.w {
-                    obj.w = w;
+                    obj.w = (w as f64 * sx) as u32;
                 }
                 if let Some(h) = def.h {
-                    obj.h = h;
+                    obj.h = (h as f64 * sy) as u32;
                 }
                 if let Some(a) = def.alpha {
                     obj.alpha = a;
@@ -430,6 +442,21 @@ impl Skin {
         // Apply the new skin's layout.
         new_skin.apply_layout(sdi);
 
+        new_skin
+    }
+
+    /// Tear down and rebuild with layout scaled to the target screen size.
+    pub fn swap_scaled(
+        current: &Skin,
+        new_skin: Skin,
+        sdi: &mut SdiRegistry,
+        target_w: u32,
+        target_h: u32,
+    ) -> Skin {
+        for name in current.layout.objects.keys() {
+            let _ = sdi.destroy(name);
+        }
+        new_skin.apply_layout_scaled(sdi, target_w, target_h);
         new_skin
     }
 }

@@ -50,6 +50,8 @@ fn mock_episodes(channel_num: u32, count: usize) -> Vec<VideoEpisode> {
             width: 640,
             height: 480,
             size_bytes: 50_000_000,
+            format: "MPEG4".into(),
+            original: None,
         })
         .collect()
 }

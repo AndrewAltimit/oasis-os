@@ -66,6 +66,12 @@ fn main() -> Result<()> {
     // Use the skin's screen dimensions (e.g. 1024x768 for xp, 480x272 for classic).
     config.screen_width = skin.manifest.screen_width;
     config.screen_height = skin.manifest.screen_height;
+
+    // Desktop: scale up PSP-native skins (480x272) to a usable desktop resolution.
+    if config.screen_width == 480 && config.screen_height == 272 {
+        config.screen_width = 1280;
+        config.screen_height = 720;
+    }
     log::info!(
         "Starting OASIS_OS ({}x{})",
         config.screen_width,
@@ -223,7 +229,11 @@ fn main() -> Result<()> {
 
     // Set up scene graph and apply skin layout.
     let mut sdi = SdiRegistry::new();
-    state.skin.apply_layout(&mut sdi);
+    state.skin.apply_layout_scaled(
+        &mut sdi,
+        state.config.screen_width,
+        state.config.screen_height,
+    );
 
     // Wallpaper and cursor are deferred to the first loop iteration so
     // the window appears immediately (the boot fade covers the delay).

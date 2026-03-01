@@ -285,6 +285,8 @@ mod tests {
                 width: 640,
                 height: 480,
                 size_bytes: 1000,
+                format: "MPEG4".into(),
+                original: None,
             })
             .collect();
         catalog.add_episodes(episodes);

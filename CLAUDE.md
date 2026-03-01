@@ -81,7 +81,8 @@ oasis-types     (foundation: Color, Button, InputEvent, backend traits, error ty
 ├── oasis-terminal   (90+ commands across 17 modules, shell features)
 ├── oasis-browser    (HTML/CSS/Gemini: DOM, CSS cascade, layout engine, JS DOM bindings)
 ├── oasis-js         (JavaScript engine: QuickJS-NG runtime, console API)
-└── oasis-core       (coordination: apps, dashboard, agent, plugin, script)
+├── oasis-video      (software MP4/H.264+AAC decode: symphonia + openh264)
+└── oasis-core       (coordination: 9 apps, dashboard, agent, plugin, script)
     ├── oasis-backend-sdl  (SDL2 desktop/Pi rendering + input + audio)
     │   └── oasis-app      (binary entry points: oasis-app, oasis-screenshot)
     ├── oasis-backend-wasm (Canvas 2D + DOM input + Web Audio, iframe overlay)
@@ -111,7 +112,7 @@ Core code never calls platform APIs directly. All platform interaction goes thro
 
 ### Core Modules
 
-The framework is split into 18 workspace crates. Each module below is its own crate (previously all in oasis-core):
+The framework is split into 19 workspace crates. Each module below is its own crate (previously all in oasis-core):
 
 - **oasis-types** -- Foundation types: `Color`, `Button`, `InputEvent`, backend traits (`SdiBackend`, `InputBackend`, `NetworkBackend`, `AudioBackend`), error types, TLS, bitmap font metrics
 - **oasis-sdi** -- Scene Display Interface: named objects with position, size, color, texture, text, z-order, gradients, rounded corners, shadows
@@ -125,7 +126,8 @@ The framework is split into 18 workspace crates. Each module below is its own cr
 - **oasis-net** -- TCP networking with PSK authentication, remote terminal, FTP transfer
 - **oasis-audio** -- Audio manager with playlist, shuffle/repeat modes, MP3 ID3 tag parsing
 - **oasis-platform** -- Platform service traits: PowerService, TimeService, UsbService, NetworkService, OskService
-- **oasis-core** -- Coordination layer: app runner with 8 apps (File Manager with dual-panel, Settings, Network, Music Player, Photo Viewer, Package Manager, Browser, System Monitor), dashboard, agent/MCP, plugin, scripting, status/bottom bars
+- **oasis-video** -- Software MP4/H.264+AAC decode pipeline: symphonia for demux + AAC, optional openh264 for H.264 video frames. Used by TV Guide for in-canvas (WASM) and download-and-play (PSP) video
+- **oasis-core** -- Coordination layer: app runner with 9 apps (File Manager, Settings, Network, Music Player, Photo Viewer, Package Manager, Browser, System Monitor, TV Guide), dashboard, agent/MCP, plugin, scripting, status/bottom bars
 
 ### Font Rendering
 
