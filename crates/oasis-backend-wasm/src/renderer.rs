@@ -405,7 +405,7 @@ impl SdiBackend for WasmBackend {
             .get_image_data(x as f64, y as f64, w as f64, h as f64)
         {
             Ok(data) => Ok(data.data().to_vec()),
-            Err(_) => Ok(vec![0; (w * h * 4) as usize]),
+            Err(_) => Ok([0, 0, 0, 255].repeat((w * h) as usize)),
         }
     }
 

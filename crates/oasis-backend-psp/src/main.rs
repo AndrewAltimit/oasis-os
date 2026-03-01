@@ -715,26 +715,29 @@ fn psp_main() {
                     } else if (tag & 0xFF00) == 0xAA00 {
                         // TV Guide catalog response.
                         let ch_idx = (tag & 0xFF) as usize;
+                        let src_idx = ((tag >> 16) & 0xF) as usize;
                         if ch_idx < tv_channels.len() && status_code >= 200 && status_code < 300 {
                             let json = String::from_utf8_lossy(&body);
                             let ch = &tv_channels[ch_idx];
                             let subfolder = ch
                                 .source
-                                .first()
+                                .get(src_idx)
                                 .and_then(|s| s.subfolder.as_deref());
                             let item_id = ch
                                 .source
-                                .first()
+                                .get(src_idx)
                                 .map(|s| s.item_id.as_str())
                                 .unwrap_or("");
                             let episodes =
                                 oasis_core::apps::tv_guide::ChannelCatalog
                                     ::parse_files_response(&json, item_id, subfolder);
                             if !episodes.is_empty() {
-                                let mut catalog =
-                                    oasis_core::apps::tv_guide::ChannelCatalog::new(ch.number);
+                                let catalog = tv_catalogs[ch_idx]
+                                    .get_or_insert_with(|| {
+                                        oasis_core::apps::tv_guide::ChannelCatalog
+                                            ::new(ch.number)
+                                    });
                                 catalog.add_episodes(episodes);
-                                tv_catalogs[ch_idx] = Some(catalog);
                             }
                         }
                     } else {
@@ -1028,7 +1031,7 @@ fn psp_main() {
                                         tv_catalogs = vec![None; tv_channels.len()];
                                         // Fetch catalogs from IA for each channel.
                                         for (i, ch) in tv_channels.iter().enumerate() {
-                                            for src in &ch.source {
+                                            for (si, src) in ch.source.iter().enumerate() {
                                                 let api_path =
                                                     oasis_core::apps::tv_guide::ChannelCatalog
                                                         ::files_api_path(&src.item_id);
@@ -1036,9 +1039,12 @@ fn psp_main() {
                                                     "https://archive.org{}",
                                                     api_path,
                                                 );
-                                                // Tag encodes channel index in upper bits,
-                                                // source index in lower bits.
-                                                let tag = 0xAA00 | (i as u32);
+                                                // Tag layout: 0xAA in bits 8..15,
+                                                // channel index in bits 0..7,
+                                                // source index in bits 16..19.
+                                                let tag = 0xAA00
+                                                    | (i as u32 & 0xFF)
+                                                    | ((si as u32 & 0xF) << 16);
                                                 io.send(IoCmd::HttpGet { url, tag });
                                             }
                                         }

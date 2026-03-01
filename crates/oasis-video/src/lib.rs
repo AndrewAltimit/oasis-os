@@ -13,7 +13,9 @@ pub mod demux;
 pub mod h264;
 pub mod yuv;
 
-use demux::{Mp4Demuxer, TrackKind};
+use std::collections::VecDeque;
+
+use demux::{DemuxedPacket, Mp4Demuxer, TrackKind};
 
 /// Errors from the video pipeline.
 #[derive(Debug)]
@@ -71,6 +73,10 @@ pub struct SoftwareVideoDecoder {
     video_height: u32,
     audio_sample_rate: u32,
     audio_channels: u16,
+    /// Buffered video packets encountered while reading audio.
+    video_queue: VecDeque<DemuxedPacket>,
+    /// Buffered audio packets encountered while reading video.
+    audio_queue: VecDeque<DemuxedPacket>,
 }
 
 impl SoftwareVideoDecoder {
@@ -110,12 +116,42 @@ impl SoftwareVideoDecoder {
             video_height,
             audio_sample_rate,
             audio_channels,
+            video_queue: VecDeque::new(),
+            audio_queue: VecDeque::new(),
         })
+    }
+
+    /// Read the next packet for a given track kind, buffering packets for the
+    /// other stream so they aren't lost.
+    fn next_packet_for(&mut self, kind: TrackKind) -> Result<Option<DemuxedPacket>, VideoError> {
+        // Check the dedicated queue first.
+        let queue = match kind {
+            TrackKind::Video => &mut self.video_queue,
+            TrackKind::Audio => &mut self.audio_queue,
+        };
+        if let Some(pkt) = queue.pop_front() {
+            return Ok(Some(pkt));
+        }
+        // Read from the demuxer, buffering packets for the other stream.
+        loop {
+            let packet = match self.demuxer.next_packet()? {
+                Some(p) => p,
+                None => return Ok(None),
+            };
+            if packet.kind == kind {
+                return Ok(Some(packet));
+            }
+            // Buffer the other stream's packet.
+            match packet.kind {
+                TrackKind::Video => self.video_queue.push_back(packet),
+                TrackKind::Audio => self.audio_queue.push_back(packet),
+            }
+        }
     }
 
     /// Decode the next video frame.
     ///
-    /// Skips audio packets internally. Returns `None` at end-of-stream.
+    /// Buffers audio packets internally. Returns `None` at end-of-stream.
     /// Requires the `h264` feature; returns `VideoError::NoTrack` without it.
     pub fn next_video_frame(&mut self) -> Result<Option<VideoFrame>, VideoError> {
         #[cfg(not(feature = "h264"))]
@@ -127,21 +163,17 @@ impl SoftwareVideoDecoder {
 
         #[cfg(feature = "h264")]
         {
-            let h264 = match &mut self.h264 {
-                Some(d) => d,
-                None => return Err(VideoError::NoTrack("no video track".into())),
-            };
+            if self.h264.is_none() {
+                return Err(VideoError::NoTrack("no video track".into()));
+            }
 
             loop {
-                let packet = match self.demuxer.next_packet()? {
+                let packet = match self.next_packet_for(TrackKind::Video)? {
                     Some(p) => p,
                     None => return Ok(None),
                 };
 
-                if packet.kind != TrackKind::Video {
-                    continue;
-                }
-
+                let h264 = self.h264.as_mut().unwrap();
                 if let Some(frame) = h264.decode(&packet.data)? {
                     // Update dimensions from the actual decoded frame.
                     if frame.width > 0 && frame.height > 0 {
@@ -162,23 +194,19 @@ impl SoftwareVideoDecoder {
 
     /// Decode the next chunk of audio.
     ///
-    /// Skips video packets internally. Returns `None` at end-of-stream.
+    /// Buffers video packets internally. Returns `None` at end-of-stream.
     pub fn next_audio_samples(&mut self) -> Result<Option<AudioChunk>, VideoError> {
-        let aac = match &mut self.aac {
-            Some(d) => d,
-            None => return Err(VideoError::NoTrack("no audio track".into())),
-        };
+        if self.aac.is_none() {
+            return Err(VideoError::NoTrack("no audio track".into()));
+        }
 
         loop {
-            let packet = match self.demuxer.next_packet()? {
+            let packet = match self.next_packet_for(TrackKind::Audio)? {
                 Some(p) => p,
                 None => return Ok(None),
             };
 
-            if packet.kind != TrackKind::Audio {
-                continue;
-            }
-
+            let aac = self.aac.as_mut().unwrap();
             if let Some(audio) = aac.decode(&packet.data, 0)? {
                 return Ok(Some(AudioChunk {
                     pcm_f32: audio.pcm_f32,

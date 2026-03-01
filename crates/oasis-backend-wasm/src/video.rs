@@ -59,6 +59,8 @@ pub struct VideoPlayer {
     active: bool,
     logged_playing: bool,
     logged_error: bool,
+    /// Stored so it is dropped (and freed) on `stop()` instead of leaked.
+    _error_handler: Option<Closure<dyn FnMut(web_sys::Event)>>,
 }
 
 impl Default for VideoPlayer {
@@ -80,6 +82,7 @@ impl VideoPlayer {
             active: false,
             logged_playing: false,
             logged_error: false,
+            _error_handler: None,
         }
     }
 
@@ -154,7 +157,6 @@ impl VideoPlayer {
         video
             .add_event_listener_with_callback("error", error_handler.as_ref().unchecked_ref())
             .ok();
-        error_handler.forget();
 
         // --- Offscreen capture canvas ---
         let capture: HtmlCanvasElement = document.create_element("canvas").ok()?.dyn_into().ok()?;
@@ -187,6 +189,8 @@ impl VideoPlayer {
             }) as Box<dyn FnMut(JsValue)>);
 
             let _ = promise.then2(&ok_handler, &reject_handler);
+            // Promise callbacks are one-shot; forget() is the standard
+            // wasm-bindgen pattern for these (tiny, called at most once).
             ok_handler.forget();
             reject_handler.forget();
         }
@@ -200,6 +204,7 @@ impl VideoPlayer {
         self.active = true;
         self.logged_playing = false;
         self.logged_error = false;
+        self._error_handler = Some(error_handler);
 
         vlog!("Video player initialized, waiting for data...");
 
@@ -262,6 +267,7 @@ impl VideoPlayer {
                 let _ = parent.remove_child(&video);
             }
         }
+        self._error_handler = None;
         self.capture_canvas = None;
         self.capture_ctx = None;
         if let Some(tex) = self.texture_id.take() {

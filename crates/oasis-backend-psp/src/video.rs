@@ -90,9 +90,10 @@ fn video_thread_fn() {
                 //   2. PSP Media Engine hardware decode (sceVideocodec/sceAudiocodec)
                 //   3. Or: pre-transcode to raw PCM on download
                 //
-                // For now, log that we received the play command.
+                // Keep VIDEO_PLAYING true until a Stop command is received so the
+                // main loop stays on the "now playing" screen. Without this the
+                // UI would immediately return to the channel list after download.
                 let _ = &path; // suppress unused warning
-                VIDEO_PLAYING.store(false, Ordering::Relaxed);
             },
             Some(VideoCmd::Stop) => {
                 VIDEO_PLAYING.store(false, Ordering::Relaxed);
