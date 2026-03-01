@@ -1084,6 +1084,18 @@ impl OasisWasm {
                                     &self.vfs,
                                 );
                             }
+                        } else if let Some((_, runner)) =
+                            self.open_runners.iter_mut().find(|(rid, _)| *rid == id)
+                            && let Some(win) = self.wm.get_window(&id)
+                        {
+                            let (_, _, cw, ch) = win.content_rect(self.wm.theme());
+                            let action = runner.handle_click(lx, ly, cw, ch);
+                            if action == AppAction::RequestFullscreen
+                                && self.fullscreen_app.is_none()
+                            {
+                                let _ = self.wm.enter_fullscreen(&id, &mut self.sdi);
+                                self.fullscreen_app = Some(id.to_string());
+                            }
                         }
                     },
                     WmEvent::DesktopClick(_, _) => {

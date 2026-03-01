@@ -88,6 +88,17 @@ pub fn handle_desktop_input(
                         let abs_x = bw.window_x() + lx;
                         let abs_y = bw.window_y() + ly;
                         bw.handle_input(&InputEvent::PointerClick { x: abs_x, y: abs_y }, vfs);
+                    } else if let Some((_, runner)) =
+                        state.open_runners.iter_mut().find(|(rid, _)| *rid == id)
+                        && let Some(win) = state.wm.get_window(&id)
+                    {
+                        let (_, _, cw, ch) = win.content_rect(state.wm.theme());
+                        let action = runner.handle_click(lx, ly, cw, ch);
+                        if action == AppAction::RequestFullscreen && state.fullscreen_app.is_none()
+                        {
+                            let _ = state.wm.enter_fullscreen(&id, sdi);
+                            state.fullscreen_app = Some(id.to_string());
+                        }
                     }
                 },
                 WmEvent::DesktopClick(_, _) => {

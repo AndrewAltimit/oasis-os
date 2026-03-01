@@ -918,6 +918,31 @@ impl AppRunner {
         }
     }
 
+    /// Handle a content-area click for the current app.
+    ///
+    /// Delegates to the TV Guide click handler when applicable.
+    pub fn handle_click(&mut self, lx: i32, ly: i32, cw: u32, ch: u32) -> AppAction {
+        if self.title == "TV Guide"
+            && let Some(ref mut guide) = self.tv_guide
+        {
+            if let Some(req) = guide.handle_click(lx, ly, cw, ch) {
+                use super::tv_guide::TV_REQUEST_PATH;
+                let url = super::tv_guide::catalog::ChannelCatalog::download_url(&req.episode);
+                let data = format!("tune_url {url} {}", req.seek_secs);
+                log::info!(
+                    "TV: click-tune CH{} -> {}",
+                    req.channel_index,
+                    req.episode.title,
+                );
+                self.pending_vfs_request = Some((TV_REQUEST_PATH.to_string(), data));
+                self.lines = guide.text_content();
+                return AppAction::RequestFullscreen;
+            }
+            self.lines = guide.text_content();
+        }
+        AppAction::None
+    }
+
     /// Get mutable reference to the TV guide state.
     pub fn tv_guide_state(&mut self) -> Option<&mut TvGuideState> {
         self.tv_guide.as_mut()
@@ -2560,5 +2585,57 @@ mod tests {
             url.contains("archive.org"),
             "URL must target archive.org: {url}"
         );
+    }
+
+    // ---------------------------------------------------------------
+    // TV Guide click handler tests
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn tv_click_selects_then_tunes() {
+        let (mut runner, _vfs) = setup_tv_guide_with_catalog("click-test", "ep.mp4", "Click Tune");
+
+        // Content dimensions matching a typical window.
+        let (cw, ch) = (800u32, 600u32);
+
+        // Compute layout to find a row 1 y position.
+        let usable_h = ch;
+        let header_h = (usable_h * 20 / 100).max(60);
+        let time_header_h = (usable_h * 4 / 100).max(20);
+        let footer_h = (usable_h * 5 / 100).max(18);
+        let grid_h = usable_h.saturating_sub(header_h + time_header_h + footer_h);
+        let row_count = 5u32; // default channels
+        let row_h = (grid_h / row_count).max(20);
+        let grid_y = header_h + time_header_h;
+
+        // Click row 1 — should select channel 1 (not tune).
+        let ly = (grid_y + row_h + row_h / 2) as i32;
+        let action = runner.handle_click(100, ly, cw, ch);
+        assert_eq!(action, AppAction::None);
+        assert_eq!(runner.tv_guide_state().unwrap().selected_channel, 1);
+        assert!(runner.take_pending_request().is_none());
+
+        // Click row 0 — selects channel 0 (catalog is on ch 0).
+        let ly0 = (grid_y + row_h / 2) as i32;
+        let action = runner.handle_click(100, ly0, cw, ch);
+        assert_eq!(action, AppAction::None);
+        assert_eq!(runner.tv_guide_state().unwrap().selected_channel, 0);
+
+        // Click row 0 again — already selected, should tune.
+        let action = runner.handle_click(100, ly0, cw, ch);
+        assert_eq!(action, AppAction::RequestFullscreen);
+        let (path, data) = runner.take_pending_request().unwrap();
+        assert!(path.contains("tv"));
+        assert!(data.starts_with("tune_url "));
+    }
+
+    #[test]
+    fn tv_click_outside_grid_is_noop() {
+        let (mut runner, _vfs) = setup_tv_guide_with_catalog("noop-test", "ep.mp4", "Noop");
+
+        // Click in the header area.
+        let action = runner.handle_click(100, 10, 800, 600);
+        assert_eq!(action, AppAction::None);
+        assert!(runner.take_pending_request().is_none());
     }
 }
