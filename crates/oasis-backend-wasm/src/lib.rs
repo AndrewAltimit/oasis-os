@@ -128,6 +128,8 @@ pub struct OasisWasm {
     pending_catalog: Option<archive::WasmArchiveCatalogFetcher>,
     video_player: video::VideoPlayer,
     pending_tv_catalog: Option<tv_catalog::WasmTvCatalogFetcher>,
+    /// Window id of the currently fullscreen-kiosk app (if any).
+    fullscreen_app: Option<String>,
 }
 
 #[wasm_bindgen]
@@ -299,6 +301,7 @@ impl OasisWasm {
             pending_catalog: None,
             video_player,
             pending_tv_catalog: None,
+            fullscreen_app: None,
         })
     }
 
@@ -794,13 +797,29 @@ impl OasisWasm {
                 AppRunner::hide_sdi(&mut self.sdi);
                 self.dashboard.hide_sdi(&mut self.sdi);
                 terminal_sdi::hide_media_page(&mut self.sdi);
-                self.status_bar
-                    .update_sdi(&mut self.sdi, &self.active_theme, &self.skin.features);
-                self.bottom_bar
-                    .update_sdi(&mut self.sdi, &self.active_theme, &self.skin.features);
-                if self.skin.features.start_menu {
-                    self.start_menu
-                        .update_sdi(&mut self.sdi, &self.active_theme);
+                self.start_menu.close();
+                self.start_menu.hide_sdi(&mut self.sdi);
+                if self.fullscreen_app.is_some() {
+                    StatusBar::hide_sdi(&mut self.sdi);
+                    BottomBar::hide_sdi(&mut self.sdi);
+                    if let Ok(obj) = self.sdi.get_mut("wallpaper") {
+                        obj.visible = false;
+                    }
+                } else {
+                    self.status_bar.update_sdi(
+                        &mut self.sdi,
+                        &self.active_theme,
+                        &self.skin.features,
+                    );
+                    self.bottom_bar.update_sdi(
+                        &mut self.sdi,
+                        &self.active_theme,
+                        &self.skin.features,
+                    );
+                    if self.skin.features.start_menu {
+                        self.start_menu
+                            .update_sdi(&mut self.sdi, &self.active_theme);
+                    }
                 }
             },
             Mode::Osk => {
@@ -1036,6 +1055,9 @@ impl OasisWasm {
                     .handle_input(&InputEvent::PointerClick { x: *x, y: *y }, &mut self.sdi);
                 match wm_event {
                     WmEvent::WindowClosed(id) => {
+                        if self.fullscreen_app.as_deref() == Some(id.as_str()) {
+                            self.fullscreen_app = None;
+                        }
                         self.open_runners.retain(|(rid, _)| *rid != id);
                         if id == "browser" {
                             self.browser = None;
@@ -1080,8 +1102,22 @@ impl OasisWasm {
                 self.wm
                     .handle_input(&InputEvent::PointerRelease { x: *x, y: *y }, &mut self.sdi);
             },
+            InputEvent::ToggleFullscreen => {
+                if let Some(ref fs_id) = self.fullscreen_app {
+                    let id = fs_id.clone();
+                    let _ = self.wm.exit_fullscreen(&id, &mut self.sdi);
+                    self.fullscreen_app = None;
+                } else if let Some(active_id) = self.wm.active_window().map(|s| s.to_string()) {
+                    let _ = self.wm.enter_fullscreen(&active_id, &mut self.sdi);
+                    self.fullscreen_app = Some(active_id);
+                }
+            },
             InputEvent::ButtonPress(Button::Cancel) => {
                 if let Some(active_id) = self.wm.active_window().map(|s| s.to_string()) {
+                    if self.fullscreen_app.as_deref() == Some(active_id.as_str()) {
+                        let _ = self.wm.exit_fullscreen(&active_id, &mut self.sdi);
+                        self.fullscreen_app = None;
+                    }
                     let _ = self.wm.close_window(&active_id, &mut self.sdi);
                     self.open_runners.retain(|(rid, _)| *rid != active_id);
                     if active_id == "browser" {
@@ -1132,6 +1168,10 @@ impl OasisWasm {
                     {
                         match runner.handle_input(btn, &self.vfs) {
                             AppAction::Exit => {
+                                if self.fullscreen_app.as_deref() == Some(active_id.as_str()) {
+                                    let _ = self.wm.exit_fullscreen(&active_id, &mut self.sdi);
+                                    self.fullscreen_app = None;
+                                }
                                 let _ = self.wm.close_window(&active_id, &mut self.sdi);
                                 self.open_runners.retain(|(rid, _)| *rid != active_id);
                                 if self.wm.window_count() == 0 {
@@ -1140,6 +1180,12 @@ impl OasisWasm {
                             },
                             AppAction::SwitchToTerminal => {
                                 self.mode = Mode::Terminal;
+                            },
+                            AppAction::RequestFullscreen => {
+                                if self.fullscreen_app.is_none() {
+                                    let _ = self.wm.enter_fullscreen(&active_id, &mut self.sdi);
+                                    self.fullscreen_app = Some(active_id);
+                                }
                             },
                             AppAction::None => {},
                         }
@@ -1169,7 +1215,7 @@ impl OasisWasm {
                     self.app_runner = None;
                     self.mode = Mode::Terminal;
                 },
-                AppAction::None => {},
+                AppAction::RequestFullscreen | AppAction::None => {},
             }
         }
     }

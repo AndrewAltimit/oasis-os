@@ -499,6 +499,83 @@ impl WindowManager {
         Ok(())
     }
 
+    /// Enter fullscreen kiosk mode for the given window.
+    ///
+    /// Saves the current geometry, expands the window to fill the screen,
+    /// sets the `fullscreen_kiosk` flag, and hides all decoration SDI objects.
+    pub fn enter_fullscreen(&mut self, id: &str, sdi: &mut SdiRegistry) -> Result<()> {
+        let (sw, sh) = (self.screen_w, self.screen_h);
+        let window = self
+            .windows
+            .iter_mut()
+            .find(|w| w.id == id)
+            .ok_or_else(|| OasisError::Wm(format!("window not found: {id}")))?;
+
+        // Save current geometry for restore.
+        window.saved_geometry = Some(Geometry {
+            x: window.x,
+            y: window.y,
+            w: window.outer_w,
+            h: window.outer_h,
+        });
+
+        window.x = 0;
+        window.y = 0;
+        window.outer_w = sw;
+        window.outer_h = sh;
+        window.fullscreen_kiosk = true;
+
+        // Hide all decoration SDI objects (everything except "content").
+        for suffix in window.sdi_suffixes() {
+            if suffix != "content" {
+                let name = window.sdi_name(suffix);
+                if let Ok(obj) = sdi.get_mut(&name) {
+                    obj.visible = false;
+                }
+            }
+        }
+
+        self.update_sdi_positions(id, sdi);
+        Ok(())
+    }
+
+    /// Exit fullscreen kiosk mode for the given window.
+    ///
+    /// Restores the saved geometry, clears the `fullscreen_kiosk` flag,
+    /// and re-shows all decoration SDI objects.
+    pub fn exit_fullscreen(&mut self, id: &str, sdi: &mut SdiRegistry) -> Result<()> {
+        let window = self
+            .windows
+            .iter_mut()
+            .find(|w| w.id == id)
+            .ok_or_else(|| OasisError::Wm(format!("window not found: {id}")))?;
+
+        if let Some(geom) = window.saved_geometry.take() {
+            window.x = geom.x;
+            window.y = geom.y;
+            window.outer_w = geom.w;
+            window.outer_h = geom.h;
+        }
+
+        window.fullscreen_kiosk = false;
+
+        // Re-show all decoration SDI objects.
+        for suffix in window.sdi_suffixes() {
+            let name = window.sdi_name(suffix);
+            if let Ok(obj) = sdi.get_mut(&name) {
+                obj.visible = true;
+            }
+        }
+
+        self.update_sdi_positions(id, sdi);
+        Ok(())
+    }
+
+    /// Returns `true` if any window is currently in fullscreen kiosk mode.
+    pub fn has_fullscreen_kiosk(&self) -> bool {
+        self.windows.iter().any(|w| w.fullscreen_kiosk)
+    }
+
     /// Process an input event through the WM. Returns what happened.
     pub fn handle_input(&mut self, event: &InputEvent, sdi: &mut SdiRegistry) -> WmEvent {
         match event {
@@ -2844,5 +2921,101 @@ mod tests {
         assert_eq!(win.y, 20);
         assert_eq!(win.outer_w, 800);
         assert_eq!(win.outer_h, 550); // 600 - 20 - 30
+    }
+
+    #[test]
+    fn enter_fullscreen_expands_to_screen() {
+        let mut sdi = SdiRegistry::new();
+        let mut wm = WindowManager::new(480, 272);
+        wm.create_window(&app_config("w"), &mut sdi).unwrap();
+
+        wm.enter_fullscreen("w", &mut sdi).unwrap();
+
+        let win = wm.get_window("w").unwrap();
+        assert!(win.fullscreen_kiosk);
+        assert_eq!(win.x, 0);
+        assert_eq!(win.y, 0);
+        assert_eq!(win.outer_w, 480);
+        assert_eq!(win.outer_h, 272);
+        assert!(win.saved_geometry.is_some());
+    }
+
+    #[test]
+    fn exit_fullscreen_restores_geometry() {
+        let mut sdi = SdiRegistry::new();
+        let mut wm = WindowManager::new(480, 272);
+        wm.create_window(&app_config("w"), &mut sdi).unwrap();
+
+        let orig = wm.get_window("w").unwrap();
+        let orig_x = orig.x;
+        let orig_y = orig.y;
+        let orig_w = orig.outer_w;
+        let orig_h = orig.outer_h;
+
+        wm.enter_fullscreen("w", &mut sdi).unwrap();
+        wm.exit_fullscreen("w", &mut sdi).unwrap();
+
+        let win = wm.get_window("w").unwrap();
+        assert!(!win.fullscreen_kiosk);
+        assert_eq!(win.x, orig_x);
+        assert_eq!(win.y, orig_y);
+        assert_eq!(win.outer_w, orig_w);
+        assert_eq!(win.outer_h, orig_h);
+        assert!(win.saved_geometry.is_none());
+    }
+
+    #[test]
+    fn enter_fullscreen_hides_decorations() {
+        let mut sdi = SdiRegistry::new();
+        let mut wm = WindowManager::new(480, 272);
+        wm.create_window(&app_config("w"), &mut sdi).unwrap();
+
+        wm.enter_fullscreen("w", &mut sdi).unwrap();
+
+        // Frame and titlebar should be hidden.
+        assert!(!sdi.get("w.frame").unwrap().visible);
+        assert!(!sdi.get("w.titlebar").unwrap().visible);
+        // Content should remain visible.
+        assert!(sdi.get("w.content").unwrap().visible);
+    }
+
+    #[test]
+    fn exit_fullscreen_shows_decorations() {
+        let mut sdi = SdiRegistry::new();
+        let mut wm = WindowManager::new(480, 272);
+        wm.create_window(&app_config("w"), &mut sdi).unwrap();
+
+        wm.enter_fullscreen("w", &mut sdi).unwrap();
+        wm.exit_fullscreen("w", &mut sdi).unwrap();
+
+        assert!(sdi.get("w.frame").unwrap().visible);
+        assert!(sdi.get("w.titlebar").unwrap().visible);
+        assert!(sdi.get("w.content").unwrap().visible);
+    }
+
+    #[test]
+    fn has_fullscreen_kiosk_tracks_state() {
+        let mut sdi = SdiRegistry::new();
+        let mut wm = WindowManager::new(480, 272);
+        wm.create_window(&app_config("w"), &mut sdi).unwrap();
+
+        assert!(!wm.has_fullscreen_kiosk());
+        wm.enter_fullscreen("w", &mut sdi).unwrap();
+        assert!(wm.has_fullscreen_kiosk());
+        wm.exit_fullscreen("w", &mut sdi).unwrap();
+        assert!(!wm.has_fullscreen_kiosk());
+    }
+
+    #[test]
+    fn enter_fullscreen_content_rect_is_full_screen() {
+        let mut sdi = SdiRegistry::new();
+        let mut wm = WindowManager::new(480, 272);
+        wm.create_window(&app_config("w"), &mut sdi).unwrap();
+
+        wm.enter_fullscreen("w", &mut sdi).unwrap();
+
+        let win = wm.get_window("w").unwrap();
+        let (cx, cy, cw, ch) = win.content_rect(wm.theme());
+        assert_eq!((cx, cy, cw, ch), (0, 0, 480, 272));
     }
 }

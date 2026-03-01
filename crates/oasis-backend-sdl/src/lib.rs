@@ -1052,6 +1052,7 @@ fn map_key_down(key: Keycode) -> Option<InputEvent> {
         Keycode::Backspace => Some(InputEvent::Backspace),
         Keycode::Q => Some(InputEvent::TriggerPress(Trigger::Left)),
         Keycode::E => Some(InputEvent::TriggerPress(Trigger::Right)),
+        Keycode::F11 => Some(InputEvent::ToggleFullscreen),
         _ => None,
     }
 }
@@ -1211,6 +1212,14 @@ mod tests {
         assert_eq!(
             map_key_down(Keycode::Backspace),
             Some(InputEvent::Backspace)
+        );
+    }
+
+    #[test]
+    fn key_down_f11_toggle_fullscreen() {
+        assert_eq!(
+            map_key_down(Keycode::F11),
+            Some(InputEvent::ToggleFullscreen)
         );
     }
 

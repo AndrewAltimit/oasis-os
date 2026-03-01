@@ -95,6 +95,8 @@ pub struct AppState {
     pub video_player: crate::video_player::VideoPlayer,
     /// Audio track for TV Guide video playback.
     pub tv_audio_track: Option<AudioTrackId>,
+    /// Window id of the currently fullscreen-kiosk app (if any).
+    pub fullscreen_app: Option<String>,
 }
 
 #[cfg(test)]

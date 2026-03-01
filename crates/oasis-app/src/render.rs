@@ -86,12 +86,21 @@ pub fn update_sdi(state: &mut AppState, sdi: &mut SdiRegistry) {
             terminal_sdi::hide_media_page(sdi);
             state.start_menu.close();
             state.start_menu.hide_sdi(sdi);
-            state
-                .status_bar
-                .update_sdi(sdi, &state.active_theme, &state.skin.features);
-            state
-                .bottom_bar
-                .update_sdi(sdi, &state.active_theme, &state.skin.features);
+            if state.fullscreen_app.is_some() {
+                StatusBar::hide_sdi(sdi);
+                BottomBar::hide_sdi(sdi);
+                // Hide wallpaper so it doesn't bleed through.
+                if let Ok(obj) = sdi.get_mut("wallpaper") {
+                    obj.visible = false;
+                }
+            } else {
+                state
+                    .status_bar
+                    .update_sdi(sdi, &state.active_theme, &state.skin.features);
+                state
+                    .bottom_bar
+                    .update_sdi(sdi, &state.active_theme, &state.skin.features);
+            }
         },
         Mode::Osk => {
             if let Some(ref mut osk_state) = state.osk {

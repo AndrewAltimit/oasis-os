@@ -119,6 +119,8 @@ pub enum AppAction {
     Exit,
     /// App wants to switch to terminal mode.
     SwitchToTerminal,
+    /// App requests entering fullscreen kiosk mode.
+    RequestFullscreen,
 }
 
 /// Runtime state for a launched application screen.
@@ -888,15 +890,22 @@ impl AppRunner {
                 AppAction::None
             },
             Button::Confirm => {
-                if let Some(req) = guide.tune() {
+                let tuned = if let Some(req) = guide.tune() {
                     // Build direct video URL and pass via VFS IPC.
                     let url = super::tv_guide::catalog::ChannelCatalog::download_url(&req.episode);
                     let data = format!("tune_url {url} {}", req.seek_secs);
                     log::info!("TV: tune CH{} -> {}", req.channel_index, req.episode.title,);
                     self.pending_vfs_request = Some((TV_REQUEST_PATH.to_string(), data));
-                }
+                    true
+                } else {
+                    false
+                };
                 self.lines = guide.text_content();
-                AppAction::None
+                if tuned {
+                    AppAction::RequestFullscreen
+                } else {
+                    AppAction::None
+                }
             },
             Button::Select => {
                 // Retry catalog fetch from scratch: clear existing
@@ -2268,9 +2277,9 @@ mod tests {
         guide.catalogs[0] = Some(catalog);
         guide.rebuild_cached_schedule(0);
 
-        // Press Confirm to tune.
+        // Press Confirm to tune -- TV Guide requests fullscreen on tune.
         let action = runner.handle_input(&Button::Confirm, &vfs);
-        assert_eq!(action, AppAction::None);
+        assert_eq!(action, AppAction::RequestFullscreen);
 
         // Should have a pending VFS request for the tune.
         let req = runner.take_pending_request();
