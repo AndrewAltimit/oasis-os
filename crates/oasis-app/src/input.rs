@@ -93,7 +93,7 @@ pub fn handle_desktop_input(
                         && let Some(win) = state.wm.get_window(&id)
                     {
                         let (_, _, cw, ch) = win.content_rect(state.wm.theme());
-                        let action = runner.handle_click(lx, ly, cw, ch);
+                        let action = runner.handle_click(lx, ly, cw, ch, win.fullscreen_kiosk);
                         if action == AppAction::RequestFullscreen && state.fullscreen_app.is_none()
                         {
                             let _ = state.wm.enter_fullscreen(&id, sdi);

@@ -843,8 +843,10 @@ impl OasisWasm {
         // Update cursor SDI position (always on top).
         self.mouse_cursor.update_sdi(&mut self.sdi);
 
-        // Ensure wallpaper is visible and at lowest z.
-        if let Ok(obj) = self.sdi.get_mut("wallpaper") {
+        // Ensure wallpaper is visible and at lowest z (skip during fullscreen kiosk
+        // where we explicitly hide it to prevent bleed-through).
+        let fullscreen_active = self.mode == Mode::Desktop && self.fullscreen_app.is_some();
+        if !fullscreen_active && let Ok(obj) = self.sdi.get_mut("wallpaper") {
             obj.visible = true;
         }
     }
@@ -1089,7 +1091,7 @@ impl OasisWasm {
                             && let Some(win) = self.wm.get_window(&id)
                         {
                             let (_, _, cw, ch) = win.content_rect(self.wm.theme());
-                            let action = runner.handle_click(lx, ly, cw, ch);
+                            let action = runner.handle_click(lx, ly, cw, ch, win.fullscreen_kiosk);
                             if action == AppAction::RequestFullscreen
                                 && self.fullscreen_app.is_none()
                             {

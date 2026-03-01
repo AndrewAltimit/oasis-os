@@ -511,8 +511,9 @@ impl WindowManager {
             .find(|w| w.id == id)
             .ok_or_else(|| OasisError::Wm(format!("window not found: {id}")))?;
 
-        // Save current geometry for restore.
-        window.saved_geometry = Some(Geometry {
+        // Save current geometry for restore (separate from maximize/minimize
+        // saved_geometry so we don't clobber it).
+        window.kiosk_saved_geometry = Some(Geometry {
             x: window.x,
             y: window.y,
             w: window.outer_w,
@@ -550,7 +551,7 @@ impl WindowManager {
             .find(|w| w.id == id)
             .ok_or_else(|| OasisError::Wm(format!("window not found: {id}")))?;
 
-        if let Some(geom) = window.saved_geometry.take() {
+        if let Some(geom) = window.kiosk_saved_geometry.take() {
             window.x = geom.x;
             window.y = geom.y;
             window.outer_w = geom.w;
@@ -2937,7 +2938,7 @@ mod tests {
         assert_eq!(win.y, 0);
         assert_eq!(win.outer_w, 480);
         assert_eq!(win.outer_h, 272);
-        assert!(win.saved_geometry.is_some());
+        assert!(win.kiosk_saved_geometry.is_some());
     }
 
     #[test]
@@ -2961,7 +2962,7 @@ mod tests {
         assert_eq!(win.y, orig_y);
         assert_eq!(win.outer_w, orig_w);
         assert_eq!(win.outer_h, orig_h);
-        assert!(win.saved_geometry.is_none());
+        assert!(win.kiosk_saved_geometry.is_none());
     }
 
     #[test]
@@ -3017,5 +3018,39 @@ mod tests {
         let win = wm.get_window("w").unwrap();
         let (cx, cy, cw, ch) = win.content_rect(wm.theme());
         assert_eq!((cx, cy, cw, ch), (0, 0, 480, 272));
+    }
+
+    #[test]
+    fn kiosk_from_maximized_preserves_normal_geometry() {
+        let mut sdi = SdiRegistry::new();
+        let mut wm = WindowManager::new(800, 600);
+        wm.create_window(&app_config("w"), &mut sdi).unwrap();
+
+        let orig = wm.get_window("w").unwrap();
+        let orig_x = orig.x;
+        let orig_y = orig.y;
+        let orig_w = orig.outer_w;
+        let orig_h = orig.outer_h;
+
+        // Maximize → saved_geometry holds the Normal geometry.
+        wm.maximize_window("w", &mut sdi).unwrap();
+        assert!(wm.get_window("w").unwrap().saved_geometry.is_some());
+
+        // Enter kiosk → should NOT clobber saved_geometry.
+        wm.enter_fullscreen("w", &mut sdi).unwrap();
+        assert!(wm.get_window("w").unwrap().saved_geometry.is_some());
+        assert!(wm.get_window("w").unwrap().kiosk_saved_geometry.is_some());
+
+        // Exit kiosk → back to maximized bounds, saved_geometry still intact.
+        wm.exit_fullscreen("w", &mut sdi).unwrap();
+        assert!(wm.get_window("w").unwrap().saved_geometry.is_some());
+
+        // Restore from maximized → back to original Normal geometry.
+        wm.restore_window("w", &mut sdi).unwrap();
+        let win = wm.get_window("w").unwrap();
+        assert_eq!(win.x, orig_x);
+        assert_eq!(win.y, orig_y);
+        assert_eq!(win.outer_w, orig_w);
+        assert_eq!(win.outer_h, orig_h);
     }
 }

@@ -921,11 +921,18 @@ impl AppRunner {
     /// Handle a content-area click for the current app.
     ///
     /// Delegates to the TV Guide click handler when applicable.
-    pub fn handle_click(&mut self, lx: i32, ly: i32, cw: u32, ch: u32) -> AppAction {
+    pub fn handle_click(
+        &mut self,
+        lx: i32,
+        ly: i32,
+        cw: u32,
+        ch: u32,
+        fullscreen: bool,
+    ) -> AppAction {
         if self.title == "TV Guide"
             && let Some(ref mut guide) = self.tv_guide
         {
-            if let Some(req) = guide.handle_click(lx, ly, cw, ch) {
+            if let Some(req) = guide.handle_click(lx, ly, cw, ch, fullscreen) {
                 use super::tv_guide::TV_REQUEST_PATH;
                 let url = super::tv_guide::catalog::ChannelCatalog::download_url(&req.episode);
                 let data = format!("tune_url {url} {}", req.seek_secs);
@@ -2610,19 +2617,19 @@ mod tests {
 
         // Click row 1 — should select channel 1 (not tune).
         let ly = (grid_y + row_h + row_h / 2) as i32;
-        let action = runner.handle_click(100, ly, cw, ch);
+        let action = runner.handle_click(100, ly, cw, ch, true);
         assert_eq!(action, AppAction::None);
         assert_eq!(runner.tv_guide_state().unwrap().selected_channel, 1);
         assert!(runner.take_pending_request().is_none());
 
         // Click row 0 — selects channel 0 (catalog is on ch 0).
         let ly0 = (grid_y + row_h / 2) as i32;
-        let action = runner.handle_click(100, ly0, cw, ch);
+        let action = runner.handle_click(100, ly0, cw, ch, true);
         assert_eq!(action, AppAction::None);
         assert_eq!(runner.tv_guide_state().unwrap().selected_channel, 0);
 
         // Click row 0 again — already selected, should tune.
-        let action = runner.handle_click(100, ly0, cw, ch);
+        let action = runner.handle_click(100, ly0, cw, ch, true);
         assert_eq!(action, AppAction::RequestFullscreen);
         let (path, data) = runner.take_pending_request().unwrap();
         assert!(path.contains("tv"));
@@ -2634,7 +2641,7 @@ mod tests {
         let (mut runner, _vfs) = setup_tv_guide_with_catalog("noop-test", "ep.mp4", "Noop");
 
         // Click in the header area.
-        let action = runner.handle_click(100, 10, 800, 600);
+        let action = runner.handle_click(100, 10, 800, 600, true);
         assert_eq!(action, AppAction::None);
         assert!(runner.take_pending_request().is_none());
     }

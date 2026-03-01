@@ -123,8 +123,10 @@ pub fn update_sdi(state: &mut AppState, sdi: &mut SdiRegistry) {
     // Update cursor SDI position (always on top).
     state.mouse_cursor.update_sdi(sdi);
 
-    // Ensure wallpaper is visible and at lowest z.
-    if let Ok(obj) = sdi.get_mut("wallpaper") {
+    // Ensure wallpaper is visible and at lowest z (skip during fullscreen kiosk
+    // where we explicitly hide it to prevent bleed-through).
+    let fullscreen_active = matches!(state.mode, Mode::Desktop) && state.fullscreen_app.is_some();
+    if !fullscreen_active && let Ok(obj) = sdi.get_mut("wallpaper") {
         obj.visible = true;
     }
 }

@@ -355,6 +355,9 @@ pub struct Window {
     pub modal: bool,
     /// Whether this window is in fullscreen kiosk mode (no decorations, full screen).
     pub fullscreen_kiosk: bool,
+    /// Geometry saved when entering kiosk mode (separate from maximize/minimize
+    /// `saved_geometry` so that kiosk ↔ maximize don't clobber each other).
+    pub kiosk_saved_geometry: Option<Geometry>,
 }
 
 impl Window {
@@ -389,6 +392,7 @@ impl Window {
             always_on_top: config.always_on_top,
             modal: config.modal,
             fullscreen_kiosk: false,
+            kiosk_saved_geometry: None,
         }
     }
 
