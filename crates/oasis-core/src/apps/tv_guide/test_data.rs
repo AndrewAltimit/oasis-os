@@ -21,6 +21,8 @@ pub fn mock_channel_catalog(channel_num: u32, episode_count: usize) -> ChannelCa
             width: 640,
             height: 480,
             size_bytes: 50_000_000,
+            format: "MPEG4".into(),
+            original: None,
         })
         .collect();
     catalog.add_episodes(episodes);

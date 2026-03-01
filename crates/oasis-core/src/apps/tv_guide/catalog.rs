@@ -20,6 +20,11 @@ pub struct VideoEpisode {
     pub height: u32,
     /// File size in bytes.
     pub size_bytes: u64,
+    /// IA format string (e.g. "MPEG4", "h.264 IA").
+    pub format: String,
+    /// Original filename this file derives from (IA `original` key).
+    /// Present on derivative files; `None` on originals.
+    pub original: Option<String>,
 }
 
 /// A channel's video library — all episodes available for scheduling.
@@ -111,6 +116,11 @@ impl ChannelCatalog {
                 .and_then(|s| s.parse().ok())
                 .unwrap_or(0);
 
+            let original = file
+                .get("original")
+                .and_then(|v| v.as_str())
+                .map(String::from);
+
             episodes.push(VideoEpisode {
                 item_id: item_id.to_string(),
                 filename: name.to_string(),
@@ -119,6 +129,8 @@ impl ChannelCatalog {
                 width,
                 height,
                 size_bytes,
+                format: format.to_string(),
+                original,
             });
         }
         episodes
@@ -147,6 +159,66 @@ impl ChannelCatalog {
     pub fn thumbnail_url(item_id: &str) -> String {
         format!("https://archive.org/services/img/{item_id}")
     }
+}
+
+/// Select the smallest suitable video file for constrained playback.
+///
+/// Prefers IA "h.264" derivatives (always smaller/optimized), filters to files
+/// under `max_bytes`, and among candidates prefers width >= `min_width` (for
+/// watchability on small screens like PSP 480x272). Falls back to the smallest
+/// file if nothing meets the threshold.
+pub fn select_smallest_for(
+    episodes: &[VideoEpisode],
+    max_bytes: u64,
+    min_width: u32,
+) -> Option<&VideoEpisode> {
+    if episodes.is_empty() {
+        return None;
+    }
+
+    // Partition into h.264 derivatives and others.
+    let is_h264_deriv = |ep: &&VideoEpisode| {
+        ep.format.to_ascii_lowercase().contains("h.264") && ep.original.is_some()
+    };
+
+    // First try: h.264 derivatives under max_bytes with acceptable width.
+    let mut best: Option<&VideoEpisode> = episodes
+        .iter()
+        .filter(is_h264_deriv)
+        .filter(|ep| ep.size_bytes <= max_bytes && ep.width >= min_width)
+        .min_by_key(|ep| ep.size_bytes);
+
+    // Second: h.264 derivatives under max_bytes (any width).
+    if best.is_none() {
+        best = episodes
+            .iter()
+            .filter(is_h264_deriv)
+            .filter(|ep| ep.size_bytes <= max_bytes)
+            .min_by_key(|ep| ep.size_bytes);
+    }
+
+    // Third: any file under max_bytes with acceptable width.
+    if best.is_none() {
+        best = episodes
+            .iter()
+            .filter(|ep| ep.size_bytes <= max_bytes && ep.width >= min_width)
+            .min_by_key(|ep| ep.size_bytes);
+    }
+
+    // Fourth: any file under max_bytes.
+    if best.is_none() {
+        best = episodes
+            .iter()
+            .filter(|ep| ep.size_bytes <= max_bytes)
+            .min_by_key(|ep| ep.size_bytes);
+    }
+
+    // Last resort: smallest file regardless of size.
+    if best.is_none() {
+        best = episodes.iter().min_by_key(|ep| ep.size_bytes);
+    }
+
+    best
 }
 
 /// Check if a format string indicates a video file (MP4/h.264).
@@ -239,7 +311,10 @@ mod tests {
         assert_eq!(episodes[0].width, 640);
         assert_eq!(episodes[0].height, 480);
         assert_eq!(episodes[0].size_bytes, 52428800);
+        assert_eq!(episodes[0].format, "MPEG4");
+        assert!(episodes[0].original.is_none());
         assert_eq!(episodes[1].filename, "Videos/episode02.mp4");
+        assert_eq!(episodes[1].format, "h.264 IA");
     }
 
     #[test]
@@ -327,6 +402,8 @@ mod tests {
                 width: 640,
                 height: 480,
                 size_bytes: 1000,
+                format: "MPEG4".into(),
+                original: None,
             },
             VideoEpisode {
                 item_id: "a".into(),
@@ -336,6 +413,8 @@ mod tests {
                 width: 640,
                 height: 480,
                 size_bytes: 2000,
+                format: "MPEG4".into(),
+                original: None,
             },
         ]);
         assert_eq!(catalog.episodes.len(), 2);
@@ -352,6 +431,8 @@ mod tests {
             width: 640,
             height: 480,
             size_bytes: 1000,
+            format: "MPEG4".into(),
+            original: None,
         };
         let url = ChannelCatalog::download_url(&ep);
         assert!(url.starts_with("https://archive.org/download/my-item/"));
@@ -402,5 +483,112 @@ mod tests {
         assert!(!is_video_format("VBR MP3"));
         assert!(!is_video_format("JPEG"));
         assert!(!is_video_format("Metadata"));
+    }
+
+    #[test]
+    fn parse_files_format_and_original() {
+        let json = r#"{
+            "result": [
+                {
+                    "name": "original.mp4",
+                    "format": "MPEG4",
+                    "length": "100",
+                    "size": "50000000"
+                },
+                {
+                    "name": "original.ia.mp4",
+                    "format": "h.264 IA",
+                    "original": "original.mp4",
+                    "length": "100",
+                    "size": "10000000"
+                }
+            ]
+        }"#;
+        let episodes = ChannelCatalog::parse_files_response(json, "item", None);
+        assert_eq!(episodes.len(), 2);
+        assert_eq!(episodes[0].format, "MPEG4");
+        assert!(episodes[0].original.is_none());
+        assert_eq!(episodes[1].format, "h.264 IA");
+        assert_eq!(episodes[1].original.as_deref(), Some("original.mp4"));
+    }
+
+    fn make_ep(
+        filename: &str,
+        format: &str,
+        original: Option<&str>,
+        size: u64,
+        width: u32,
+    ) -> VideoEpisode {
+        VideoEpisode {
+            item_id: "test".into(),
+            filename: filename.into(),
+            title: filename.into(),
+            duration_secs: 100.0,
+            width,
+            height: 240,
+            size_bytes: size,
+            format: format.into(),
+            original: original.map(String::from),
+        }
+    }
+
+    #[test]
+    fn select_smallest_prefers_h264_derivative() {
+        let eps = vec![
+            make_ep("big.mp4", "MPEG4", None, 50_000_000, 640),
+            make_ep("small.mp4", "h.264 IA", Some("big.mp4"), 10_000_000, 320),
+        ];
+        let best = select_smallest_for(&eps, 60_000_000, 320).unwrap();
+        assert_eq!(best.filename, "small.mp4");
+    }
+
+    #[test]
+    fn select_smallest_respects_max_bytes() {
+        let eps = vec![
+            make_ep("huge.mp4", "MPEG4", None, 100_000_000, 640),
+            make_ep("medium.mp4", "h.264 IA", Some("huge.mp4"), 30_000_000, 320),
+        ];
+        // With 20MB cap, neither h264 fits under cap; falls back to smallest overall.
+        let best = select_smallest_for(&eps, 20_000_000, 320).unwrap();
+        assert_eq!(best.filename, "medium.mp4");
+    }
+
+    #[test]
+    fn select_smallest_prefers_adequate_width() {
+        let eps = vec![
+            make_ep("tiny.mp4", "h.264 IA", Some("a.mp4"), 5_000_000, 160),
+            make_ep("good.mp4", "h.264 IA", Some("a.mp4"), 8_000_000, 320),
+        ];
+        let best = select_smallest_for(&eps, 20_000_000, 320).unwrap();
+        assert_eq!(best.filename, "good.mp4");
+    }
+
+    #[test]
+    fn select_smallest_falls_back_to_narrow() {
+        let eps = vec![make_ep(
+            "tiny.mp4",
+            "h.264 IA",
+            Some("a.mp4"),
+            5_000_000,
+            160,
+        )];
+        // Only narrow file available; still selected.
+        let best = select_smallest_for(&eps, 20_000_000, 320).unwrap();
+        assert_eq!(best.filename, "tiny.mp4");
+    }
+
+    #[test]
+    fn select_smallest_empty() {
+        assert!(select_smallest_for(&[], 20_000_000, 320).is_none());
+    }
+
+    #[test]
+    fn select_smallest_all_over_cap_returns_smallest() {
+        let eps = vec![
+            make_ep("a.mp4", "MPEG4", None, 50_000_000, 640),
+            make_ep("b.mp4", "MPEG4", None, 30_000_000, 640),
+        ];
+        let best = select_smallest_for(&eps, 10_000_000, 320).unwrap();
+        assert_eq!(best.filename, "b.mp4");
     }
 }

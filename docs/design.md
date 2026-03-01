@@ -108,7 +108,8 @@ oasis-os/
 |   +-- oasis-terminal/              # 90+ commands across 17 modules, shell features
 |   +-- oasis-browser/               # HTML/CSS/Gemini: DOM, CSS cascade, block/inline/table layout, JS DOM bindings
 |   +-- oasis-js/                    # JavaScript engine: QuickJS-NG runtime, console API, DOM manipulation
-|   +-- oasis-core/                  # Coordination: apps (dual-panel FM), dashboard, agent, plugin, script
+|   +-- oasis-video/                 # Software MP4/H.264+AAC decode (symphonia + openh264)
+|   +-- oasis-core/                  # Coordination: 9 apps (FM, TV Guide, Radio, etc.), dashboard, agent, plugin, script
 |   +-- oasis-backend-sdl/           # SDL2 rendering and input (desktop dev + Raspberry Pi)
 |   +-- oasis-backend-ue5/           # UE5 render target, software RGBA framebuffer, FFI input queue
 |   +-- oasis-backend-psp/           # [excluded from workspace] sceGu rendering, PSP controller, UMD browsing

@@ -245,7 +245,7 @@
 <section id="features">
   <div class="container fade-in">
     <h2 class="section-title">Key Features</h2>
-    <p class="section-subtitle">A complete operating system shell, not just a UI toolkit.</p>
+    <p class="section-subtitle">A complete operating system shell, not just a UI toolkit. 9 built-in apps including TV Guide and Internet Radio.</p>
 
     <div class="features-grid">
       <div class="feature-card">
@@ -288,6 +288,14 @@
         <h3>Remote Terminal</h3>
         <p>TCP networking with PSK authentication. Connect to OASIS_OS instances remotely and execute commands over an encrypted channel.</p>
       </div>
+      <div class="feature-card">
+        <h3>TV Guide</h3>
+        <p>Internet Archive-powered TV channels with a 1980s Prevue Channel aesthetic. Browse channels, view schedules, and watch video &mdash; in-canvas on WASM, download-and-play on PSP.</p>
+      </div>
+      <div class="feature-card">
+        <h3>Internet Radio</h3>
+        <p>Stream MP3 audio from curated Internet Archive collections. Background playback with channel browsing and real-time metadata display.</p>
+      </div>
     </div>
   </div>
 </section>
@@ -299,7 +307,7 @@
 <section id="architecture">
   <div class="container fade-in">
     <h2 class="section-title">Architecture</h2>
-    <p class="section-subtitle">18 workspace crates with a clean trait-based backend abstraction.</p>
+    <p class="section-subtitle">19 workspace crates with a clean trait-based backend abstraction.</p>
 
     <div class="arch-diagram">
       <pre><span class="crate-name">oasis-types</span>     (Color, Button, InputEvent, backend traits, error types)
@@ -314,7 +322,8 @@
 &#9500;&#9472;&#9472; <span class="crate-name">oasis-terminal</span>   (90+ commands, 17 modules, shell features)
 &#9500;&#9472;&#9472; <span class="crate-name">oasis-browser</span>    (HTML/CSS/Gemini: DOM, CSS cascade, layout engine, JS bindings)
 &#9500;&#9472;&#9472; <span class="crate-name">oasis-js</span>         (JavaScript engine: QuickJS-NG runtime, console, DOM)
-&#9492;&#9472;&#9472; <span class="crate-name">oasis-core</span>       (coordination: apps, dashboard, agent, plugin, script)
+&#9500;&#9472;&#9472; <span class="crate-name">oasis-video</span>      (software MP4/H.264+AAC decode: symphonia + openh264)
+&#9492;&#9472;&#9472; <span class="crate-name">oasis-core</span>       (coordination: 9 apps, dashboard, agent, plugin, script)
     &#9500;&#9472;&#9472; <span class="crate-name">oasis-backend-sdl</span>  &#8594; <span class="crate-name">oasis-app</span>      (desktop binary)
     &#9500;&#9472;&#9472; <span class="crate-name">oasis-backend-wasm</span>                    (browser Canvas 2D)
     &#9500;&#9472;&#9472; <span class="crate-name">oasis-backend-ue5</span> &#8594; <span class="crate-name">oasis-ffi</span>      (UE5 C-ABI)
@@ -330,7 +339,7 @@
         framework &mdash; UI widgets, browser engine, terminal, apps &mdash; to run unchanged
         on any target.
       </p>
-      <div class="crate-count">18 workspace crates &middot; 2 excluded PSP crates</div>
+      <div class="crate-count">19 workspace crates &middot; 2 excluded PSP crates</div>
     </div>
   </div>
 </section>

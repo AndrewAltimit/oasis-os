@@ -19,6 +19,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     pkg-config \
     libsdl2-dev \
     libglew-dev \
+    libegl-dev \
+    libgles-dev \
     libcurl4-openssl-dev \
     libfontconfig1-dev \
     libsdl2-ttf-dev \
@@ -63,6 +65,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libsdl2-ttf-2.0-0 \
     libglew2.2 \
     libgl1-mesa-glx \
+    libegl1 \
+    libgles2 \
     libopengl0 \
     libfontconfig1 \
     libcurl4 \
@@ -84,7 +88,8 @@ COPY --from=builder /ppsspp/assets /usr/local/share/ppsspp/assets
 ARG USER_ID=1000
 ARG GROUP_ID=1000
 RUN groupadd -g ${GROUP_ID} ppsspp || true && \
-    useradd -m -u ${USER_ID} -g ${GROUP_ID} ppsspp || true
+    useradd -m -u ${USER_ID} -g ${GROUP_ID} ppsspp || true && \
+    usermod -aG video ppsspp || true
 
 # Create PSP directory structure for the user.
 # PPSSPPSDL uses ~/.config/ppsspp/PSP/ while PPSSPPHeadless uses ~/.ppsspp/PSP/.
