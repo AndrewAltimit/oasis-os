@@ -219,7 +219,11 @@ impl SoftwareVideoDecoder {
     }
 
     /// Seek to a position in seconds.
+    ///
+    /// Clears any buffered packets so post-seek reads don't return stale data.
     pub fn seek(&mut self, secs: f64) -> Result<(), VideoError> {
+        self.video_queue.clear();
+        self.audio_queue.clear();
         self.demuxer.seek(secs)
     }
 

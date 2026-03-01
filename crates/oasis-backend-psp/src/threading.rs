@@ -626,7 +626,7 @@ fn handle_video_download(url: String, dest: String, tag: u32) {
     });
 
     // Write to Memory Stick.
-    match psp::io::File::create(&dest) {
+    let written = match psp::io::File::create(&dest) {
         Ok(f) => {
             // Write in chunks -- psp::io::File::write returns bytes written.
             let mut offset = 0;
@@ -643,6 +643,7 @@ fn handle_video_download(url: String, dest: String, tag: u32) {
                     },
                 }
             }
+            offset
         },
         Err(e) => {
             let _ = IO_RESP_QUEUE.push(IoResponse::VideoError {
@@ -651,6 +652,14 @@ fn handle_video_download(url: String, dest: String, tag: u32) {
             });
             return;
         },
+    };
+
+    if written < resp.body.len() {
+        let _ = IO_RESP_QUEUE.push(IoResponse::VideoError {
+            tag,
+            msg: format!("short write: {written}/{} bytes", resp.body.len()),
+        });
+        return;
     }
 
     let _ = IO_RESP_QUEUE.push(IoResponse::VideoReady {

@@ -175,24 +175,23 @@ impl VideoPlayer {
         // On success, try to unmute for audio.
         let video_clone = video.clone();
         if let Ok(promise) = video.play() {
-            let ok_handler = Closure::wrap(Box::new(move |_: JsValue| {
-                vlog!("Playback started (muted). Unmuting...");
-                video_clone.set_muted(false);
-            }) as Box<dyn FnMut(JsValue)>);
-
-            let reject_handler = Closure::wrap(Box::new(move |err: JsValue| {
-                let msg = js_sys::Object::from(err)
-                    .to_string()
-                    .as_string()
-                    .unwrap_or_default();
-                verr!("play() rejected: {}", msg);
-            }) as Box<dyn FnMut(JsValue)>);
-
-            let _ = promise.then2(&ok_handler, &reject_handler);
-            // Promise callbacks are one-shot; forget() is the standard
-            // wasm-bindgen pattern for these (tiny, called at most once).
-            ok_handler.forget();
-            reject_handler.forget();
+            // Spawn an async task to await the promise — avoids leaking
+            // closures via forget().
+            wasm_bindgen_futures::spawn_local(async move {
+                match wasm_bindgen_futures::JsFuture::from(promise).await {
+                    Ok(_) => {
+                        vlog!("Playback started (muted). Unmuting...");
+                        video_clone.set_muted(false);
+                    },
+                    Err(err) => {
+                        let msg = js_sys::Object::from(err)
+                            .to_string()
+                            .as_string()
+                            .unwrap_or_default();
+                        verr!("play() rejected: {}", msg);
+                    },
+                }
+            });
         }
 
         self.video = Some(video);

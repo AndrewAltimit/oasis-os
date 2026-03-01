@@ -1777,7 +1777,10 @@ fn psp_main() {
                 tv_preview_tex = backend.load_texture_inner(frame.width, frame.height, &frame.rgba);
             }
             // Check if video playback ended.
-            if !oasis_backend_psp::video::is_video_playing() && tv_preview_tex.is_none() {
+            if !oasis_backend_psp::video::is_video_playing() {
+                if let Some(old) = tv_preview_tex.take() {
+                    backend.destroy_texture_inner(old);
+                }
                 tv_tuned = None;
                 tv_now_playing.clear();
             }
