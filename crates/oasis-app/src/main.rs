@@ -207,6 +207,7 @@ fn main() -> Result<()> {
         tv_fetch_start: None,
         video_player: video_player::VideoPlayer::new(),
         tv_audio_track: None,
+        fullscreen_app: None,
     };
 
     // Show a welcome toast.

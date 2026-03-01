@@ -353,6 +353,11 @@ pub struct Window {
     pub always_on_top: bool,
     /// Block input to all windows below this one.
     pub modal: bool,
+    /// Whether this window is in fullscreen kiosk mode (no decorations, full screen).
+    pub fullscreen_kiosk: bool,
+    /// Geometry saved when entering kiosk mode (separate from maximize/minimize
+    /// `saved_geometry` so that kiosk ↔ maximize don't clobber each other).
+    pub kiosk_saved_geometry: Option<Geometry>,
 }
 
 impl Window {
@@ -386,11 +391,17 @@ impl Window {
             saved_geometry: None,
             always_on_top: config.always_on_top,
             modal: config.modal,
+            fullscreen_kiosk: false,
+            kiosk_saved_geometry: None,
         }
     }
 
     /// Compute the content area rectangle (position and size within the frame).
     pub fn content_rect(&self, theme: &WmTheme) -> (i32, i32, u32, u32) {
+        if self.fullscreen_kiosk {
+            return (self.x, self.y, self.outer_w, self.outer_h);
+        }
+
         let has_titlebar = self.window_type != WindowType::Fullscreen;
         let has_border = matches!(self.window_type, WindowType::AppWindow | WindowType::Dialog);
 
@@ -413,7 +424,7 @@ impl Window {
 
     /// Compute the titlebar rectangle.
     pub fn titlebar_rect(&self, theme: &WmTheme) -> Option<(i32, i32, u32, u32)> {
-        if self.window_type == WindowType::Fullscreen {
+        if self.fullscreen_kiosk || self.window_type == WindowType::Fullscreen {
             return None;
         }
         let has_border = matches!(self.window_type, WindowType::AppWindow | WindowType::Dialog);
@@ -533,7 +544,7 @@ impl Window {
 
     /// Whether this window type is resizable.
     pub fn is_resizable(&self) -> bool {
-        self.window_type == WindowType::AppWindow
+        !self.fullscreen_kiosk && self.window_type == WindowType::AppWindow
     }
 
     /// Whether this window type is draggable.
@@ -786,5 +797,37 @@ mod tests {
         assert!(theme.button_size > 0);
         assert!(theme.button_size <= theme.titlebar_height);
         assert!(theme.resize_handle_size > 0);
+    }
+
+    #[test]
+    fn kiosk_mode_content_rect_is_full_bounds() {
+        let theme = WmTheme::default();
+        let config = test_config();
+        let mut win = Window::new(&config, 0, 0, &theme);
+        win.fullscreen_kiosk = true;
+        win.x = 0;
+        win.y = 0;
+        win.outer_w = 480;
+        win.outer_h = 272;
+        let (cx, cy, cw, ch) = win.content_rect(&theme);
+        assert_eq!((cx, cy, cw, ch), (0, 0, 480, 272));
+    }
+
+    #[test]
+    fn kiosk_mode_titlebar_is_none() {
+        let theme = WmTheme::default();
+        let config = test_config();
+        let mut win = Window::new(&config, 10, 20, &theme);
+        assert!(win.titlebar_rect(&theme).is_some());
+        win.fullscreen_kiosk = true;
+        assert!(win.titlebar_rect(&theme).is_none());
+    }
+
+    #[test]
+    fn kiosk_mode_default_false() {
+        let theme = WmTheme::default();
+        let config = test_config();
+        let win = Window::new(&config, 0, 0, &theme);
+        assert!(!win.fullscreen_kiosk);
     }
 }

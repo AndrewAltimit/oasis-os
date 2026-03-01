@@ -308,6 +308,7 @@ fn map_keydown(ke: &KeyboardEvent) -> Option<InputEvent> {
         "q" | "Q" => Some(InputEvent::TriggerPress(Trigger::Left)),
         "e" | "E" => Some(InputEvent::TriggerPress(Trigger::Right)),
         "Backspace" => Some(InputEvent::Backspace),
+        "F11" => Some(InputEvent::ToggleFullscreen),
         _ => None,
     }
 }

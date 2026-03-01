@@ -70,6 +70,9 @@ pub fn handle_desktop_input(
                 .handle_input(&InputEvent::PointerClick { x: *x, y: *y }, sdi);
             match wm_event {
                 WmEvent::WindowClosed(id) => {
+                    if state.fullscreen_app.as_deref() == Some(id.as_str()) {
+                        state.fullscreen_app = None;
+                    }
                     state.open_runners.retain(|(rid, _)| *rid != id);
                     if id == "browser" {
                         state.browser = None;
@@ -85,6 +88,17 @@ pub fn handle_desktop_input(
                         let abs_x = bw.window_x() + lx;
                         let abs_y = bw.window_y() + ly;
                         bw.handle_input(&InputEvent::PointerClick { x: abs_x, y: abs_y }, vfs);
+                    } else if let Some((_, runner)) =
+                        state.open_runners.iter_mut().find(|(rid, _)| *rid == id)
+                        && let Some(win) = state.wm.get_window(&id)
+                    {
+                        let (_, _, cw, ch) = win.content_rect(state.wm.theme());
+                        let action = runner.handle_click(lx, ly, cw, ch, win.fullscreen_kiosk);
+                        if action == AppAction::RequestFullscreen && state.fullscreen_app.is_none()
+                        {
+                            let _ = state.wm.enter_fullscreen(&id, sdi);
+                            state.fullscreen_app = Some(id.to_string());
+                        }
                     }
                 },
                 WmEvent::DesktopClick(_, _) => {
@@ -105,8 +119,23 @@ pub fn handle_desktop_input(
                 .wm
                 .handle_input(&InputEvent::PointerRelease { x: *x, y: *y }, sdi);
         },
+        InputEvent::ToggleFullscreen => {
+            if let Some(ref fs_id) = state.fullscreen_app {
+                let id = fs_id.clone();
+                let _ = state.wm.exit_fullscreen(&id, sdi);
+                state.fullscreen_app = None;
+            } else if let Some(active_id) = state.wm.active_window().map(|s| s.to_string()) {
+                let _ = state.wm.enter_fullscreen(&active_id, sdi);
+                state.fullscreen_app = Some(active_id);
+            }
+        },
         InputEvent::ButtonPress(Button::Cancel) => {
             if let Some(active_id) = state.wm.active_window().map(|s| s.to_string()) {
+                // If closing the fullscreen window, clear fullscreen state first.
+                if state.fullscreen_app.as_deref() == Some(active_id.as_str()) {
+                    let _ = state.wm.exit_fullscreen(&active_id, sdi);
+                    state.fullscreen_app = None;
+                }
                 let _ = state.wm.close_window(&active_id, sdi);
                 state.open_runners.retain(|(rid, _)| *rid != active_id);
                 if active_id == "browser" {
@@ -156,6 +185,10 @@ pub fn handle_desktop_input(
                 {
                     match runner.handle_input(btn, vfs) {
                         AppAction::Exit => {
+                            if state.fullscreen_app.as_deref() == Some(active_id.as_str()) {
+                                let _ = state.wm.exit_fullscreen(&active_id, sdi);
+                                state.fullscreen_app = None;
+                            }
                             let _ = state.wm.close_window(&active_id, sdi);
                             state.open_runners.retain(|(rid, _)| *rid != active_id);
                             if state.wm.window_count() == 0 {
@@ -164,6 +197,12 @@ pub fn handle_desktop_input(
                         },
                         AppAction::SwitchToTerminal => {
                             state.mode = Mode::Terminal;
+                        },
+                        AppAction::RequestFullscreen => {
+                            if state.fullscreen_app.is_none() {
+                                let _ = state.wm.enter_fullscreen(&active_id, sdi);
+                                state.fullscreen_app = Some(active_id);
+                            }
                         },
                         AppAction::None => {},
                     }
@@ -196,7 +235,7 @@ pub fn handle_app_input(
                     state.app_runner = None;
                     state.mode = Mode::Terminal;
                 },
-                AppAction::None => {},
+                AppAction::RequestFullscreen | AppAction::None => {},
             },
             _ => {},
         }
@@ -596,6 +635,7 @@ mod tests {
             tv_fetch_start: None,
             video_player: crate::video_player::VideoPlayer::new(),
             tv_audio_track: None,
+            fullscreen_app: None,
         };
         let sdi = SdiRegistry::new();
         let vfs = MemoryVfs::new();

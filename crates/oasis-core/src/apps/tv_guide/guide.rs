@@ -1272,6 +1272,65 @@ impl TvGuideState {
             }
         }
     }
+
+    /// Handle a click at content-local coordinates.
+    ///
+    /// `cw`/`ch` are the content area dimensions (needed to recompute layout).
+    /// Returns `Some(TuneRequest)` if the click tuned a channel (caller should
+    /// enter fullscreen), `None` if it only selected a channel or missed.
+    pub fn handle_click(
+        &mut self,
+        lx: i32,
+        ly: i32,
+        _cw: u32,
+        ch: u32,
+        fullscreen: bool,
+    ) -> Option<TuneRequest> {
+        if self.channels.is_empty() || ly < 0 || lx < 0 {
+            return None;
+        }
+
+        // Recompute layout from content dimensions.
+        // Fullscreen uses SDI layout minimums (update_sdi); windowed uses
+        // draw_windowed minimums. Content-local: no status_h/bottom_h offset
+        // since those are outside the window content area.
+        let usable_h = ch;
+        let (min_header, min_time, min_footer) = if fullscreen {
+            (60, 20, 18) // matches update_sdi
+        } else {
+            (40, 16, 14) // matches draw_windowed
+        };
+        let header_h = (usable_h * 20 / 100).max(min_header);
+        let time_header_h = (usable_h * 4 / 100).max(min_time);
+        let footer_h = (usable_h * 5 / 100).max(min_footer);
+        let grid_h = usable_h.saturating_sub(header_h + time_header_h + footer_h);
+
+        let row_count = self.channels.len().clamp(1, VISIBLE_ROWS) as u32;
+        let min_row = if fullscreen { 20 } else { 16 };
+        let row_h = (grid_h / row_count).max(min_row);
+
+        let grid_y = header_h + time_header_h;
+
+        let ly_u = ly as u32;
+        if ly_u < grid_y || ly_u >= grid_y + row_count * row_h {
+            return None;
+        }
+
+        let vis_row = ((ly_u - grid_y) / row_h) as usize;
+        let channel_idx = self.scroll_offset + vis_row;
+        if channel_idx >= self.channels.len() {
+            return None;
+        }
+
+        if self.selected_channel == channel_idx {
+            // Already selected -- tune (same as Confirm).
+            self.tune()
+        } else {
+            // Select this channel.
+            self.selected_channel = channel_idx;
+            None
+        }
+    }
 }
 
 /// A request to tune to a specific channel and episode.
@@ -1598,6 +1657,114 @@ mod tests {
         }
         assert_eq!(state.selected_channel, 0);
         assert_eq!(state.scroll_offset, 0);
+    }
+
+    // -- handle_click tests --
+
+    /// Compute grid_y for a given content height (mirrors handle_click layout).
+    fn grid_y_for(ch: u32) -> u32 {
+        let usable_h = ch;
+        let header_h = (usable_h * 20 / 100).max(60);
+        let time_header_h = (usable_h * 4 / 100).max(20);
+        header_h + time_header_h
+    }
+
+    /// Compute row height for a given content height and channel count.
+    fn row_h_for(ch: u32, num_channels: usize) -> u32 {
+        let usable_h = ch;
+        let header_h = (usable_h * 20 / 100).max(60);
+        let time_header_h = (usable_h * 4 / 100).max(20);
+        let footer_h = (usable_h * 5 / 100).max(18);
+        let grid_h = usable_h.saturating_sub(header_h + time_header_h + footer_h);
+        let row_count = num_channels.clamp(1, VISIBLE_ROWS) as u32;
+        (grid_h / row_count).max(20)
+    }
+
+    #[test]
+    fn click_selects_channel() {
+        let config = ChannelConfig::from_toml(DEFAULT_CHANNELS_TOML).unwrap();
+        let mut state = TvGuideState::new(&config);
+        assert_eq!(state.selected_channel, 0);
+
+        let ch = 600u32;
+        let cw = 800u32;
+        let gy = grid_y_for(ch);
+        let rh = row_h_for(ch, state.channels.len());
+
+        // Click on row 2 (third channel).
+        let ly = (gy + rh * 2 + rh / 2) as i32;
+        let result = state.handle_click(100, ly, cw, ch, true);
+        assert!(result.is_none(), "first click should select, not tune");
+        assert_eq!(state.selected_channel, 2);
+    }
+
+    #[test]
+    fn click_already_selected_tunes() {
+        let config = ChannelConfig::from_toml(DEFAULT_CHANNELS_TOML).unwrap();
+        let mut state = TvGuideState::new(&config);
+
+        // Inject a catalog so tune() can succeed.
+        let mut catalog = super::super::catalog::ChannelCatalog::new(state.channels[0].number);
+        catalog.add_episodes(vec![super::super::catalog::VideoEpisode {
+            item_id: "click-test".to_string(),
+            filename: "ep.mp4".to_string(),
+            title: "Click Test".to_string(),
+            duration_secs: 1800.0,
+            width: 640,
+            height: 480,
+            size_bytes: 1000,
+            format: "MPEG4".into(),
+            original: None,
+        }]);
+        state.catalogs[0] = Some(catalog);
+        state.rebuild_cached_schedule(0);
+
+        let ch = 600u32;
+        let cw = 800u32;
+        let gy = grid_y_for(ch);
+        let rh = row_h_for(ch, state.channels.len());
+
+        // Channel 0 is already selected. Click on row 0.
+        let ly = (gy + rh / 2) as i32;
+        let result = state.handle_click(100, ly, cw, ch, true);
+        assert!(result.is_some(), "second click on selected should tune");
+        assert_eq!(result.unwrap().episode.title, "Click Test");
+    }
+
+    #[test]
+    fn click_outside_grid_ignored() {
+        let config = ChannelConfig::from_toml(DEFAULT_CHANNELS_TOML).unwrap();
+        let mut state = TvGuideState::new(&config);
+
+        let ch = 600u32;
+        let cw = 800u32;
+
+        // Click in header area (y=10, well above grid).
+        let result = state.handle_click(100, 10, cw, ch, true);
+        assert!(result.is_none());
+        assert_eq!(state.selected_channel, 0);
+
+        // Click below grid area (y=ch-1, in footer).
+        let result = state.handle_click(100, ch as i32 - 1, cw, ch, true);
+        assert!(result.is_none());
+        assert_eq!(state.selected_channel, 0);
+    }
+
+    #[test]
+    fn click_negative_coords_ignored() {
+        let config = ChannelConfig::from_toml(DEFAULT_CHANNELS_TOML).unwrap();
+        let mut state = TvGuideState::new(&config);
+        let result = state.handle_click(-10, -5, 800, 600, true);
+        assert!(result.is_none());
+        assert_eq!(state.selected_channel, 0);
+    }
+
+    #[test]
+    fn click_empty_channels_ignored() {
+        let config: ChannelConfig = toml::from_str("channel = []").unwrap();
+        let mut state = TvGuideState::new(&config);
+        let result = state.handle_click(100, 200, 800, 600, true);
+        assert!(result.is_none());
     }
 
     #[test]

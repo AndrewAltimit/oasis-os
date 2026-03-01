@@ -443,6 +443,7 @@ mod tests {
             tv_fetch_start: None,
             video_player: crate::video_player::VideoPlayer::new(),
             tv_audio_track: None,
+            fullscreen_app: None,
         }
     }
 
