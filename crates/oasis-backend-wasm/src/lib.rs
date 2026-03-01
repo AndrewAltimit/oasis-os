@@ -1392,7 +1392,8 @@ impl OasisWasm {
     fn apply_skin_swap(&mut self, name: &str) {
         match oasis_skin::resolve_skin(name) {
             Ok(new_skin) => {
-                let swapped = Skin::swap(&self.skin, new_skin, &mut self.sdi);
+                let swapped =
+                    Skin::swap_scaled(&self.skin, new_skin, &mut self.sdi, self.width, self.height);
                 self.active_theme = ActiveTheme::from_skin(&swapped.theme)
                     .with_screen_size(self.width, self.height);
                 self.browser_config = BrowserConfig::from_skin_theme(&swapped.theme);

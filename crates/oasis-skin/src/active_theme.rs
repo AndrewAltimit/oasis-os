@@ -1382,6 +1382,13 @@ impl ActiveTheme {
         self.icon_gfx_pad = scale_u(4);
         self.icon_label_pad = scale(4);
 
+        // Scale dashboard grid and icon dimensions.
+        self.grid_padding_x = scale(self.grid_padding_x as i32) as u16;
+        self.grid_padding_y = scale(self.grid_padding_y as i32) as u16;
+        self.icon_width = scale_u(self.icon_width);
+        self.icon_height = scale_u(self.icon_height);
+        self.cursor_pad = scale(self.cursor_pad);
+
         // Resolution-aware cursor scaling.
         self.cursor_scale = if w >= 1920 { 2 } else { 1 };
 
