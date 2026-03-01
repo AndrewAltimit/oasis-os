@@ -30,7 +30,7 @@ const COLOR_TIME_HEADER_BG: Color = Color::rgba(15, 35, 65, 255);
 const COLOR_TIME_HEADER: Color = Color::rgba(0, 204, 255, 255);
 const COLOR_CHANNEL_LABEL: Color = Color::rgba(200, 220, 240, 255);
 const COLOR_PROGRAM_TEXT: Color = Color::rgba(192, 216, 232, 255);
-const COLOR_SELECTED_BG: Color = Color::rgba(255, 140, 0, 180);
+const COLOR_SELECTED_BG: Color = Color::rgba(255, 140, 0, 220);
 const COLOR_SELECTED_TEXT: Color = Color::rgba(255, 255, 255, 255);
 const COLOR_DIM_TEXT: Color = Color::rgba(100, 130, 160, 255);
 const COLOR_PLAYING_TEXT: Color = Color::rgba(0, 221, 255, 255);
@@ -39,6 +39,10 @@ const COLOR_CELL_BORDER: Color = Color::rgba(26, 58, 92, 255);
 const COLOR_LIVE_BADGE: Color = Color::rgba(220, 40, 40, 255);
 const COLOR_DATE_TEXT: Color = Color::rgba(180, 200, 220, 255);
 const COLOR_FOOTER_BG: Color = Color::rgba(12, 25, 45, 255);
+const COLOR_TIME_LABEL: Color = Color::rgba(255, 160, 0, 255);
+const COLOR_GLOW_BORDER: Color = Color::rgba(60, 130, 200, 255);
+const COLOR_GLOW_OUTER: Color = Color::rgba(30, 70, 130, 180);
+const COLOR_HEADER_TITLE: Color = Color::rgba(220, 240, 255, 255);
 
 /// Maximum number of program cells per row.
 const MAX_CELLS: usize = 8;
@@ -410,12 +414,14 @@ impl TvGuideState {
             obj.z = 101;
         }
 
-        // Date line.
+        // --- Left zone (0%-40%): Channel branding ---
+        let left_w = sw * 40 / 100;
+
+        // Date (pale blue).
         let date_text = schedule::format_date(self.current_time);
-        let time_text = schedule::format_time(self.current_time);
         ensure_obj(sdi, "tv_hdr_date");
         if let Ok(obj) = sdi.get_mut("tv_hdr_date") {
-            obj.text = Some(format!("{date_text}  |  {time_text}"));
+            obj.text = Some(format!("{date_text}  |"));
             obj.x = 10;
             obj.y = y0 + 4;
             obj.font_size = at.font_small;
@@ -424,7 +430,21 @@ impl TvGuideState {
             obj.z = 102;
         }
 
-        // Channel info line.
+        // Time (bright cyan), positioned after date.
+        let time_text = schedule::format_time(self.current_time);
+        let date_w = (date_text.len() as i32 + 5) * at.font_small as i32 * 5 / 8;
+        ensure_obj(sdi, "tv_hdr_time");
+        if let Ok(obj) = sdi.get_mut("tv_hdr_time") {
+            obj.text = Some(time_text);
+            obj.x = 10 + date_w;
+            obj.y = y0 + 4;
+            obj.font_size = at.font_small;
+            obj.text_color = COLOR_TIME_HEADER;
+            obj.visible = true;
+            obj.z = 102;
+        }
+
+        // Channel title (large, with text shadow).
         let ch_info = self.build_channel_info();
         ensure_obj(sdi, "tv_hdr_ch_info");
         if let Ok(obj) = sdi.get_mut("tv_hdr_ch_info") {
@@ -432,74 +452,118 @@ impl TvGuideState {
             obj.x = 10;
             obj.y = y0 + 4 + at.font_small as i32 + 2;
             obj.font_size = at.font_body;
-            obj.text_color = COLOR_CHANNEL_LABEL;
+            obj.text_color = COLOR_HEADER_TITLE;
+            obj.text_shadow_offset = Some((1, 1));
+            obj.text_shadow_color = Some(Color::rgba(0, 0, 0, 128));
             obj.visible = true;
             obj.z = 102;
         }
 
-        // Now playing title.
-        let now_title = self.build_now_playing_title();
-        ensure_obj(sdi, "tv_hdr_now_title");
-        if let Ok(obj) = sdi.get_mut("tv_hdr_now_title") {
-            obj.text = Some(now_title);
+        // Location/genre line.
+        let location = self.build_channel_location();
+        ensure_obj(sdi, "tv_hdr_location");
+        if let Ok(obj) = sdi.get_mut("tv_hdr_location") {
+            obj.text = Some(location);
             obj.x = 10;
             obj.y = y0 + 4 + at.font_small as i32 + 2 + at.font_body as i32 + 2;
-            obj.font_size = at.font_small;
-            obj.text_color = COLOR_PLAYING_TEXT;
-            obj.visible = true;
-            obj.z = 102;
-        }
-
-        // Now playing detail (duration + resolution).
-        let now_detail = self.build_now_playing_detail();
-        ensure_obj(sdi, "tv_hdr_now_detail");
-        if let Ok(obj) = sdi.get_mut("tv_hdr_now_detail") {
-            obj.text = Some(now_detail);
-            obj.x = 10;
-            obj.y = y0 + 4 + at.font_small as i32 * 2 + at.font_body as i32 + 6;
             obj.font_size = at.font_hint;
             obj.text_color = COLOR_DIM_TEXT;
             obj.visible = true;
             obj.z = 102;
         }
 
-        // Preview box outline (right side of header).
-        let preview_w = (sw / 5).max(80);
-        let preview_h = header_h.saturating_sub(16);
-        let preview_x = sw as i32 - preview_w as i32 - 10;
-        let preview_y = y0 + 8;
+        // --- Center zone (40%-65%): Now playing info ---
+        let center_x = left_w as i32;
 
-        ensure_obj(sdi, "tv_hdr_preview_bg");
-        if let Ok(obj) = sdi.get_mut("tv_hdr_preview_bg") {
-            obj.x = preview_x;
-            obj.y = preview_y;
-            obj.w = preview_w;
-            obj.h = preview_h;
-            obj.color = Color::rgba(5, 12, 25, 255);
-            obj.stroke_color = Some(COLOR_CELL_BORDER);
-            obj.stroke_width = Some(1);
+        // "Currently Playing:" label.
+        ensure_obj(sdi, "tv_hdr_currently");
+        if let Ok(obj) = sdi.get_mut("tv_hdr_currently") {
+            obj.text = Some("Currently Playing:".to_string());
+            obj.x = center_x + 8;
+            obj.y = y0 + 4;
+            obj.font_size = at.font_hint;
+            obj.text_color = COLOR_DIM_TEXT;
             obj.visible = true;
             obj.z = 102;
         }
 
-        // Video preview texture (rendered inset 1px inside the preview box).
+        // Show title (ALL CAPS).
+        let now_title = self.build_now_playing_title();
+        ensure_obj(sdi, "tv_hdr_now_title");
+        if let Ok(obj) = sdi.get_mut("tv_hdr_now_title") {
+            obj.text = Some(now_title);
+            obj.x = center_x + 8;
+            obj.y = y0 + 4 + at.font_hint as i32 + 2;
+            obj.font_size = at.font_small;
+            obj.text_color = COLOR_PLAYING_TEXT;
+            obj.visible = true;
+            obj.z = 102;
+        }
+
+        // Episode metadata + remaining time.
+        let now_detail = self.build_now_playing_detail();
+        ensure_obj(sdi, "tv_hdr_now_detail");
+        if let Ok(obj) = sdi.get_mut("tv_hdr_now_detail") {
+            obj.text = Some(now_detail);
+            obj.x = center_x + 8;
+            obj.y = y0 + 4 + at.font_hint as i32 + at.font_small as i32 + 4;
+            obj.font_size = at.font_hint;
+            obj.text_color = COLOR_DIM_TEXT;
+            obj.visible = true;
+            obj.z = 102;
+        }
+
+        // --- Right zone (65%-100%): Live preview ---
+        let preview_w = (sw * 30 / 100).max(80);
+        let preview_h = header_h.saturating_sub(16);
+        let preview_x = sw as i32 - preview_w as i32 - 10;
+        let preview_y = y0 + 8;
+
+        // Outer glow border.
+        ensure_obj(sdi, "tv_hdr_preview_outer");
+        if let Ok(obj) = sdi.get_mut("tv_hdr_preview_outer") {
+            obj.x = preview_x - 4;
+            obj.y = preview_y - 4;
+            obj.w = preview_w + 8;
+            obj.h = preview_h + 8;
+            obj.color = COLOR_GLOW_OUTER;
+            obj.border_radius = Some(2);
+            obj.visible = true;
+            obj.z = 102;
+        }
+
+        // Inner border.
+        ensure_obj(sdi, "tv_hdr_preview_bg");
+        if let Ok(obj) = sdi.get_mut("tv_hdr_preview_bg") {
+            obj.x = preview_x - 2;
+            obj.y = preview_y - 2;
+            obj.w = preview_w + 4;
+            obj.h = preview_h + 4;
+            obj.color = Color::rgba(5, 12, 25, 255);
+            obj.stroke_color = Some(COLOR_GLOW_BORDER);
+            obj.stroke_width = Some(1);
+            obj.visible = true;
+            obj.z = 103;
+        }
+
+        // Video preview texture.
         ensure_obj(sdi, "tv_hdr_preview_vid");
         if let Ok(obj) = sdi.get_mut("tv_hdr_preview_vid") {
             if let Some(tex) = self.preview_texture {
-                obj.x = preview_x + 1;
-                obj.y = preview_y + 1;
-                obj.w = preview_w.saturating_sub(2);
-                obj.h = preview_h.saturating_sub(2);
+                obj.x = preview_x;
+                obj.y = preview_y;
+                obj.w = preview_w;
+                obj.h = preview_h;
                 obj.texture = Some(tex);
                 obj.visible = true;
-                obj.z = 103;
+                obj.z = 104;
             } else {
                 obj.visible = false;
                 obj.texture = None;
             }
         }
 
-        // LIVE badge (red rounded rect, shown when the tuned channel has content).
+        // LIVE badge.
         let is_live = self.tuned_channel.is_some_and(|ch| {
             self.cached_schedules
                 .get(ch)
@@ -510,25 +574,25 @@ impl TvGuideState {
 
         ensure_obj(sdi, "tv_hdr_live_badge");
         if let Ok(obj) = sdi.get_mut("tv_hdr_live_badge") {
-            obj.x = preview_x + preview_w as i32 - 38;
-            obj.y = preview_y + 4;
-            obj.w = 34;
+            obj.x = preview_x + preview_w as i32 - 42;
+            obj.y = preview_y - 2;
+            obj.w = 42;
             obj.h = 14;
             obj.color = COLOR_LIVE_BADGE;
             obj.border_radius = Some(3);
             obj.visible = is_live;
-            obj.z = 103;
+            obj.z = 105;
         }
 
         ensure_obj(sdi, "tv_hdr_live_text");
         if let Ok(obj) = sdi.get_mut("tv_hdr_live_text") {
-            obj.text = Some("LIVE".to_string());
-            obj.x = preview_x + preview_w as i32 - 34;
-            obj.y = preview_y + 5;
+            obj.text = Some("* LIVE".to_string());
+            obj.x = preview_x + preview_w as i32 - 39;
+            obj.y = preview_y - 1;
             obj.font_size = at.font_hint;
             obj.text_color = COLOR_SELECTED_TEXT;
             obj.visible = is_live;
-            obj.z = 104;
+            obj.z = 106;
         }
     }
 
@@ -559,14 +623,14 @@ impl TvGuideState {
             obj.z = 101;
         }
 
-        // "TIME" label.
+        // "TIME:" label (orange).
         ensure_obj(sdi, "tv_time_label_bg");
         if let Ok(obj) = sdi.get_mut("tv_time_label_bg") {
-            obj.text = Some("TIME".to_string());
+            obj.text = Some("TIME:".to_string());
             obj.x = 4;
             obj.y = y0 + 3;
             obj.font_size = at.font_hint;
-            obj.text_color = COLOR_TIME_HEADER;
+            obj.text_color = COLOR_TIME_LABEL;
             obj.visible = true;
             obj.z = 102;
         }
@@ -650,6 +714,13 @@ impl TvGuideState {
                 } else {
                     COLOR_BG
                 };
+                if is_selected {
+                    obj.gradient_top = Some(Color::rgba(255, 160, 0, 230));
+                    obj.gradient_bottom = Some(Color::rgba(255, 120, 0, 200));
+                } else {
+                    obj.gradient_top = None;
+                    obj.gradient_bottom = None;
+                }
                 obj.visible = has_channel;
                 obj.z = 101;
             }
@@ -660,7 +731,7 @@ impl TvGuideState {
             if let Ok(obj) = sdi.get_mut(label_name) {
                 if has_channel {
                     let ch = &self.channels[ch_idx];
-                    obj.text = Some(format!("CH {:>2}\n{}", ch.number, ch.call_sign));
+                    obj.text = Some(format!("[CH {}\n{}]", ch.number, ch.call_sign));
                 } else {
                     obj.text = None;
                 }
@@ -729,6 +800,13 @@ impl TvGuideState {
                     } else {
                         COLOR_CELL_BG
                     };
+                    if is_selected {
+                        obj.gradient_top = Some(Color::rgba(255, 160, 0, 230));
+                        obj.gradient_bottom = Some(Color::rgba(255, 120, 0, 200));
+                    } else {
+                        obj.gradient_top = None;
+                        obj.gradient_bottom = None;
+                    }
                     obj.stroke_color = Some(COLOR_CELL_BORDER);
                     obj.stroke_width = Some(1);
                     obj.visible = visible;
@@ -741,7 +819,17 @@ impl TvGuideState {
                     // Scale available chars with slot width (bitmap ~6px/char).
                     let avail_cols = (slot_w as usize / 6).saturating_sub(1);
                     let max_chars = (cell_w as usize / 6).saturating_sub(1).max(avail_cols);
-                    let title = truncate_title(&slot.episode.title, max_chars);
+                    let upper_title = slot.episode.title.to_uppercase();
+                    let is_now = slot.start_time <= self.current_time
+                        && slot.start_time + slot.episode.duration_secs as u64 > self.current_time;
+                    let title = if is_now && is_selected {
+                        format!(
+                            "* {}",
+                            truncate_title(&upper_title, max_chars.saturating_sub(2),),
+                        )
+                    } else {
+                        truncate_title(&upper_title, max_chars)
+                    };
 
                     obj.text = Some(format!("{time_str}\n{title}"));
                     obj.x = cell_x + 3;
@@ -781,6 +869,8 @@ impl TvGuideState {
             obj.w = sw;
             obj.h = row_h;
             obj.color = COLOR_SELECTED_BG;
+            obj.gradient_top = Some(Color::rgba(255, 160, 0, 230));
+            obj.gradient_bottom = Some(Color::rgba(255, 120, 0, 200));
             obj.border_radius = Some(2);
             obj.visible = !self.channels.is_empty();
             obj.z = 101;
@@ -809,7 +899,7 @@ impl TvGuideState {
         // Navigation hints (left).
         ensure_obj(sdi, "tv_ftr_nav");
         if let Ok(obj) = sdi.get_mut("tv_ftr_nav") {
-            obj.text = Some("Up/Down=SELECT  L/R=TIME  Confirm=TUNE  Select=RETRY".to_string());
+            obj.text = Some("[UP/DOWN SELECT]  [LEFT/RIGHT TIME]".to_string());
             obj.x = 8;
             obj.y = footer_y as i32 + 3;
             obj.font_size = at.font_hint;
@@ -819,7 +909,7 @@ impl TvGuideState {
         }
 
         // Page indicator (center-right).
-        let page_text = format!("PAGE {}/{}", self.current_page(), self.total_pages(),);
+        let page_text = format!("[PAGE {}/{}]", self.current_page(), self.total_pages());
         ensure_obj(sdi, "tv_ftr_page");
         if let Ok(obj) = sdi.get_mut("tv_ftr_page") {
             obj.text = Some(page_text);
@@ -857,17 +947,13 @@ impl TvGuideState {
         }
     }
 
-    /// Build "Now Playing" title line (e.g. "Now: Title (12:45 left)").
+    /// Build "Now Playing" title line (ALL CAPS).
     fn build_now_playing_title(&self) -> String {
         let idx = self.selected_channel;
         if let Some(Some(cached)) = self.cached_schedules.get(idx)
             && let Some(slot) = cached.at(self.current_time)
         {
-            let remaining = schedule::format_duration(slot.remaining_secs as f64);
-            return format!(
-                "Now: {} ({remaining} left)",
-                truncate_title(&slot.episode.title, 35),
-            );
+            return truncate_title(&slot.episode.title.to_uppercase(), 35);
         }
         if self.catalogs.get(idx).and_then(|c| c.as_ref()).is_none() {
             if let Some(ref err) = self.fetch_error {
@@ -882,17 +968,29 @@ impl TvGuideState {
         "No content available".to_string()
     }
 
-    /// Build detail line for now-playing (e.g. "Duration: 30:00 | 640x480").
+    /// Build detail line for now-playing (duration, resolution, remaining).
     fn build_now_playing_detail(&self) -> String {
         let idx = self.selected_channel;
         if let Some(Some(cached)) = self.cached_schedules.get(idx)
             && let Some(slot) = cached.at(self.current_time)
         {
             let dur = schedule::format_duration(slot.episode.duration_secs);
+            let remaining = schedule::format_duration(slot.remaining_secs as f64);
             return format!(
-                "Duration: {dur} | {}x{}",
+                "{dur} | {}x{}  ({remaining} remaining)",
                 slot.episode.width, slot.episode.height,
             );
+        }
+        String::new()
+    }
+
+    /// Build location/genre line for the header.
+    fn build_channel_location(&self) -> String {
+        if let Some(ch) = self.channels.get(self.selected_channel) {
+            if let Some(ref loc) = ch.location {
+                return loc.to_uppercase();
+            }
+            return ch.genre.to_uppercase();
         }
         String::new()
     }
@@ -956,7 +1054,7 @@ impl TvGuideState {
         )?;
 
         // Preview box (right side of header).
-        let preview_w = (cw / 5).max(60);
+        let preview_w = (cw * 30 / 100).max(60);
         let preview_h = header_h.saturating_sub(8);
         let preview_x = cx + cw as i32 - preview_w as i32 - 4;
         let preview_y = cy + 4;
@@ -974,7 +1072,7 @@ impl TvGuideState {
         // Time header.
         let time_y = cy + header_h as i32;
         backend.fill_rect(cx, time_y, cw, time_h, COLOR_TIME_HEADER_BG)?;
-        backend.draw_text("TIME", cx + 4, time_y + 2, at.font_hint, COLOR_TIME_HEADER)?;
+        backend.draw_text("TIME:", cx + 4, time_y + 2, at.font_hint, COLOR_TIME_LABEL)?;
 
         let grid_start = self.grid_start_time();
         let slot_w = grid_w / VISIBLE_TIME_SLOTS as u32;
@@ -1008,7 +1106,7 @@ impl TvGuideState {
             }
 
             let chan = &self.channels[ch_idx];
-            let label = format!("CH{:>2}\n{}", chan.number, chan.call_sign);
+            let label = format!("[CH {}\n{}]", chan.number, chan.call_sign);
             let lbl_color = if is_sel {
                 COLOR_SELECTED_TEXT
             } else {
@@ -1058,7 +1156,17 @@ impl TvGuideState {
                 };
                 let time_label = schedule::format_time(ep_start);
                 let max_chars = (cell_w as usize / 6).saturating_sub(1);
-                let title = truncate_title(&slot.episode.title, max_chars);
+                let upper_title = slot.episode.title.to_uppercase();
+                let is_now = slot.start_time <= self.current_time
+                    && slot.start_time + slot.episode.duration_secs as u64 > self.current_time;
+                let title = if is_now && is_sel {
+                    format!(
+                        "* {}",
+                        truncate_title(&upper_title, max_chars.saturating_sub(2),),
+                    )
+                } else {
+                    truncate_title(&upper_title, max_chars)
+                };
                 backend.draw_text(
                     &format!("{time_label}\n{title}"),
                     cell_x + 3,
@@ -1073,7 +1181,7 @@ impl TvGuideState {
         let ftr_y = cy + ch as i32 - footer_h as i32;
         backend.fill_rect(cx, ftr_y, cw, footer_h, COLOR_FOOTER_BG)?;
         let nav = format!(
-            "Up/Down=SELECT  L/R=TIME          PAGE {}/{}    [GUIDE]",
+            "[UP/DOWN SELECT]  [LEFT/RIGHT TIME]  [PAGE {}/{}]    [GUIDE]",
             self.current_page(),
             self.total_pages(),
         );
@@ -1093,9 +1201,13 @@ impl TvGuideState {
             "tv_hdr_bg",
             "tv_hdr_grad",
             "tv_hdr_date",
+            "tv_hdr_time",
             "tv_hdr_ch_info",
+            "tv_hdr_location",
+            "tv_hdr_currently",
             "tv_hdr_now_title",
             "tv_hdr_now_detail",
+            "tv_hdr_preview_outer",
             "tv_hdr_preview_bg",
             "tv_hdr_preview_vid",
             "tv_hdr_live_badge",
@@ -1430,8 +1542,8 @@ mod tests {
         state.rebuild_cached_schedule(0);
 
         let detail = state.build_now_playing_detail();
-        assert!(detail.contains("Duration:"));
         assert!(detail.contains("640x480"));
+        assert!(detail.contains("remaining"));
     }
 
     #[test]
