@@ -544,7 +544,7 @@ impl Window {
 
     /// Whether this window type is resizable.
     pub fn is_resizable(&self) -> bool {
-        self.window_type == WindowType::AppWindow
+        !self.fullscreen_kiosk && self.window_type == WindowType::AppWindow
     }
 
     /// Whether this window type is draggable.

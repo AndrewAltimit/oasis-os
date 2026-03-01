@@ -1306,7 +1306,8 @@ impl TvGuideState {
         let grid_h = usable_h.saturating_sub(header_h + time_header_h + footer_h);
 
         let row_count = self.channels.len().clamp(1, VISIBLE_ROWS) as u32;
-        let row_h = (grid_h / row_count).max(20);
+        let min_row = if fullscreen { 20 } else { 16 };
+        let row_h = (grid_h / row_count).max(min_row);
 
         let grid_y = header_h + time_header_h;
 
