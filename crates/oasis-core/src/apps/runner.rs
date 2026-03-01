@@ -8,6 +8,8 @@ use crate::sdi::SdiRegistry;
 use crate::ui::flex;
 use crate::vfs::{EntryKind, Vfs};
 
+use super::tv_guide::guide::TvGuideState;
+
 /// Maximum lines visible in the app content area (fallback for 480x272).
 const MAX_VISIBLE_LINES: usize = 13;
 
@@ -146,6 +148,8 @@ pub struct AppRunner {
     visual_selected: f32,
     /// Cached max visible lines (updated each frame by `update_sdi`).
     cached_max_visible: usize,
+    /// TV Guide state (only for "TV Guide" app).
+    tv_guide: Option<TvGuideState>,
 }
 
 impl AppRunner {
@@ -166,6 +170,7 @@ impl AppRunner {
             pending_vfs_request: None,
             visual_selected: 0.0,
             cached_max_visible: MAX_VISIBLE_LINES,
+            tv_guide: None,
         };
         runner.init_content(&title, vfs);
         runner
@@ -265,6 +270,9 @@ impl AppRunner {
                 // Use cursor for station selection.
                 self.cursor = 0;
             },
+            "TV Guide" => {
+                self.init_tv_guide(vfs);
+            },
             "System Monitor" => {
                 self.lines = vec![
                     "System Monitor".to_string(),
@@ -299,6 +307,11 @@ impl AppRunner {
         // Internet Radio mode.
         if self.title == "Internet Radio" {
             return self.handle_radio_input(button, vfs);
+        }
+
+        // TV Guide mode.
+        if self.title == "TV Guide" {
+            return self.handle_tv_guide_input(button);
         }
 
         match button {
@@ -422,6 +435,11 @@ impl AppRunner {
         backend: &mut dyn SdiBackend,
         at: &ActiveTheme,
     ) -> crate::error::Result<()> {
+        // TV Guide gets its own EPG grid renderer.
+        if let Some(ref guide) = self.tv_guide {
+            return guide.draw_windowed(cx, cy, cw, ch, backend, at);
+        }
+
         // Content background.
         backend.fill_rect(cx, cy, cw, ch, at.app_bg)?;
 
@@ -771,6 +789,11 @@ impl AppRunner {
         }
     }
 
+    /// Peek at a pending VFS IPC request without consuming it.
+    pub fn peek_pending_request(&self) -> Option<&(String, String)> {
+        self.pending_vfs_request.as_ref()
+    }
+
     /// Take any pending VFS IPC request (returns path and data if present).
     pub fn take_pending_request(&mut self) -> Option<(String, String)> {
         self.pending_vfs_request.take()
@@ -786,6 +809,109 @@ impl AppRunner {
         self.lines = Self::radio_content(vfs);
         self.cursor = old_cursor;
         self.scroll = old_scroll;
+    }
+
+    /// Refresh TV Guide text display after catalog changes.
+    pub fn refresh_tv_text(&mut self) {
+        if let Some(ref guide) = self.tv_guide {
+            let old_cursor = self.cursor;
+            let old_scroll = self.scroll;
+            self.lines = guide.text_content();
+            log::debug!("TV: refresh_tv_text -> {} lines", self.lines.len());
+            self.cursor = old_cursor;
+            self.scroll = old_scroll;
+        }
+    }
+
+    // ---------------------------------------------------------------
+    // TV Guide helpers
+    // ---------------------------------------------------------------
+
+    /// Initialize the TV Guide app from VFS channel config.
+    fn init_tv_guide(&mut self, vfs: &dyn Vfs) {
+        use super::tv_guide::TV_CHANNELS_PATH;
+        use super::tv_guide::channel::{ChannelConfig, DEFAULT_CHANNELS_TOML};
+
+        let config = if vfs.exists(TV_CHANNELS_PATH) {
+            log::debug!("TV: loading channel config from VFS");
+            let data = vfs.read(TV_CHANNELS_PATH).unwrap_or_default();
+            let text = String::from_utf8_lossy(&data);
+            ChannelConfig::from_toml(&text).unwrap_or_else(|_| {
+                ChannelConfig::from_toml(DEFAULT_CHANNELS_TOML)
+                    .expect("default channels TOML is valid")
+            })
+        } else {
+            log::debug!("TV: using default channel config");
+            ChannelConfig::from_toml(DEFAULT_CHANNELS_TOML).expect("default channels TOML is valid")
+        };
+
+        log::debug!("TV: init_tv_guide with {} channels", config.channel.len());
+        let guide = TvGuideState::new(&config);
+        self.lines = guide.text_content();
+        self.tv_guide = Some(guide);
+        self.cursor = 0;
+    }
+
+    /// Handle input for the TV Guide app.
+    fn handle_tv_guide_input(&mut self, button: &Button) -> AppAction {
+        use super::tv_guide::TV_REQUEST_PATH;
+
+        let Some(ref mut guide) = self.tv_guide else {
+            return AppAction::None;
+        };
+
+        match button {
+            Button::Cancel => {
+                if guide.tuned_channel.is_some() {
+                    guide.untune();
+                    AppAction::None
+                } else {
+                    AppAction::Exit
+                }
+            },
+            Button::Up => {
+                guide.select_up();
+                self.lines = guide.text_content();
+                AppAction::None
+            },
+            Button::Down => {
+                guide.select_down();
+                self.lines = guide.text_content();
+                AppAction::None
+            },
+            Button::Left => {
+                guide.scroll_left();
+                AppAction::None
+            },
+            Button::Right => {
+                guide.scroll_right();
+                AppAction::None
+            },
+            Button::Confirm => {
+                if let Some(req) = guide.tune() {
+                    // Build direct video URL and pass via VFS IPC.
+                    let url = super::tv_guide::catalog::ChannelCatalog::download_url(&req.episode);
+                    let data = format!("tune_url {url} {}", req.seek_secs);
+                    log::info!("TV: tune CH{} -> {}", req.channel_index, req.episode.title,);
+                    self.pending_vfs_request = Some((TV_REQUEST_PATH.to_string(), data));
+                }
+                self.lines = guide.text_content();
+                AppAction::None
+            },
+            Button::Select => {
+                // Retry catalog fetch from scratch: clear existing
+                // catalogs so the `all(|c| c.is_none())` guard passes.
+                guide.reset_for_retry();
+                self.lines = guide.text_content();
+                AppAction::None
+            },
+            _ => AppAction::None,
+        }
+    }
+
+    /// Get mutable reference to the TV guide state.
+    pub fn tv_guide_state(&mut self) -> Option<&mut TvGuideState> {
+        self.tv_guide.as_mut()
     }
 
     /// Open a file and display its contents.
@@ -819,6 +945,12 @@ impl AppRunner {
 
     /// Render the app screen to SDI objects.
     pub fn update_sdi(&mut self, sdi: &mut SdiRegistry, at: &ActiveTheme) {
+        // TV Guide uses its own custom grid rendering.
+        if let Some(ref mut guide) = self.tv_guide {
+            guide.update_sdi(sdi, at);
+            return;
+        }
+
         // Full-screen background.
         if !sdi.contains("app_bg") {
             sdi.create("app_bg");
@@ -1191,6 +1323,9 @@ impl AppRunner {
                 obj.visible = false;
             }
         }
+
+        // Hide TV Guide objects.
+        TvGuideState::hide_sdi(sdi);
     }
 }
 
@@ -2048,5 +2183,365 @@ mod tests {
         let vfs = setup_vfs();
         let runner = AppRunner::launch(&make_app("Settings"), &vfs);
         assert!(runner.panels.is_none());
+    }
+
+    // ---------------------------------------------------------------
+    // TV Guide lifecycle tests
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn tv_guide_launch_and_catalog_inject() {
+        use crate::apps::tv_guide::catalog::{ChannelCatalog, VideoEpisode};
+
+        let vfs = setup_vfs();
+        let mut runner = AppRunner::launch(&make_app("TV Guide"), &vfs);
+        assert!(runner.tv_guide_state().is_some());
+        // Initially shows "Loading".
+        assert!(runner.lines.iter().any(|l| l.contains("Loading")));
+
+        // Inject a catalog for channel 0.
+        let guide = runner.tv_guide_state().unwrap();
+        let ch_num = guide.channels[0].number;
+        let mut catalog = ChannelCatalog::new(ch_num);
+        catalog.add_episodes(vec![VideoEpisode {
+            item_id: "test".to_string(),
+            filename: "ep.mp4".to_string(),
+            title: "Space Adventures".to_string(),
+            duration_secs: 1800.0,
+            width: 640,
+            height: 480,
+            size_bytes: 5000,
+        }]);
+        guide.catalogs[0] = Some(catalog);
+        guide.rebuild_cached_schedule(0);
+        guide.fetch_attempted = true;
+
+        // Refresh text lines.
+        runner.refresh_tv_text();
+        assert!(runner.lines.iter().any(|l| l.contains("Space Adventures")));
+        assert!(!runner.lines.iter().any(|l| l.contains("Loading")));
+    }
+
+    #[test]
+    fn tv_guide_error_display() {
+        let vfs = setup_vfs();
+        let mut runner = AppRunner::launch(&make_app("TV Guide"), &vfs);
+
+        let guide = runner.tv_guide_state().unwrap();
+        guide.fetch_attempted = true;
+        guide.fetch_error = Some("connection refused".to_string());
+
+        runner.refresh_tv_text();
+        assert!(
+            runner
+                .lines
+                .iter()
+                .any(|l| l.contains("Error: connection refused"))
+        );
+        assert!(!runner.lines.iter().any(|l| l.contains("Loading")));
+    }
+
+    #[test]
+    fn tv_guide_tune_with_catalog() {
+        use crate::apps::tv_guide::catalog::{ChannelCatalog, VideoEpisode};
+
+        let vfs = setup_vfs();
+        let mut runner = AppRunner::launch(&make_app("TV Guide"), &vfs);
+
+        // Inject catalog.
+        let guide = runner.tv_guide_state().unwrap();
+        let ch_num = guide.channels[0].number;
+        let mut catalog = ChannelCatalog::new(ch_num);
+        catalog.add_episodes(vec![VideoEpisode {
+            item_id: "tune-test".to_string(),
+            filename: "ep.mp4".to_string(),
+            title: "Tune Test Episode".to_string(),
+            duration_secs: 3600.0,
+            width: 640,
+            height: 480,
+            size_bytes: 5000,
+        }]);
+        guide.catalogs[0] = Some(catalog);
+        guide.rebuild_cached_schedule(0);
+
+        // Press Confirm to tune.
+        let action = runner.handle_input(&Button::Confirm, &vfs);
+        assert_eq!(action, AppAction::None);
+
+        // Should have a pending VFS request for the tune.
+        let req = runner.take_pending_request();
+        assert!(req.is_some());
+        let (path, data) = req.unwrap();
+        assert!(path.contains("tv"));
+        assert!(data.starts_with("tune_url "));
+        assert!(data.contains("tune-test"));
+    }
+
+    // ---------------------------------------------------------------
+    // TV Guide video launch pipeline tests
+    // ---------------------------------------------------------------
+
+    /// Extract the URL from a `tune_url {url} {seek_secs}` IPC string.
+    fn extract_tune_url(data: &str) -> &str {
+        let rest = &data["tune_url ".len()..];
+        rest.rsplit_once(' ').map_or(rest, |(url, _)| url)
+    }
+
+    /// Extract the seek_secs from a `tune_url {url} {seek_secs}` IPC string.
+    fn extract_tune_seek(data: &str) -> u64 {
+        let rest = &data["tune_url ".len()..];
+        rest.rsplit_once(' ')
+            .and_then(|(_, s)| s.parse().ok())
+            .unwrap_or(0)
+    }
+
+    /// Helper: create a TV Guide runner with a catalog injected for channel 0.
+    fn setup_tv_guide_with_catalog(
+        item_id: &str,
+        filename: &str,
+        title: &str,
+    ) -> (AppRunner, crate::vfs::MemoryVfs) {
+        use crate::apps::tv_guide::catalog::{ChannelCatalog, VideoEpisode};
+
+        let vfs = setup_vfs();
+        let mut runner = AppRunner::launch(&make_app("TV Guide"), &vfs);
+
+        let guide = runner.tv_guide_state().unwrap();
+        let ch_num = guide.channels[0].number;
+        let mut catalog = ChannelCatalog::new(ch_num);
+        catalog.add_episodes(vec![VideoEpisode {
+            item_id: item_id.to_string(),
+            filename: filename.to_string(),
+            title: title.to_string(),
+            duration_secs: 1800.0,
+            width: 640,
+            height: 480,
+            size_bytes: 50000,
+        }]);
+        guide.catalogs[0] = Some(catalog);
+        guide.rebuild_cached_schedule(0);
+        guide.fetch_attempted = true;
+
+        (runner, vfs)
+    }
+
+    #[test]
+    fn tv_tune_url_is_direct_download_not_embed() {
+        let (mut runner, vfs) = setup_tv_guide_with_catalog("my-item", "video.mp4", "My Video");
+
+        runner.handle_input(&Button::Confirm, &vfs);
+        let (_, data) = runner.take_pending_request().unwrap();
+
+        // Must use tune_url prefix (not old "tune " format).
+        assert!(
+            data.starts_with("tune_url "),
+            "expected tune_url, got: {data}"
+        );
+
+        let url = extract_tune_url(&data);
+        let seek = extract_tune_seek(&data);
+
+        // Must include seek_secs in IPC data.
+        assert!(
+            seek > 0 || data.ends_with(" 0"),
+            "missing seek_secs: {data}"
+        );
+
+        // Must be a direct download URL, not an embed URL.
+        assert!(
+            url.starts_with("https://archive.org/download/"),
+            "expected download URL, got: {url}",
+        );
+        assert!(
+            !url.contains("/embed/"),
+            "URL must not use embed endpoint: {url}",
+        );
+    }
+
+    #[test]
+    fn tv_tune_url_contains_specific_filename() {
+        let (mut runner, vfs) =
+            setup_tv_guide_with_catalog("sonic-episodes", "Season1/ep01.mp4", "Episode 1");
+
+        runner.handle_input(&Button::Confirm, &vfs);
+        let (_, data) = runner.take_pending_request().unwrap();
+        let url = extract_tune_url(&data);
+
+        // URL must contain the item ID.
+        assert!(url.contains("sonic-episodes"), "missing item_id in: {url}");
+
+        // URL must contain the filename (possibly percent-encoded).
+        assert!(
+            url.contains("Season1") && url.contains("ep01.mp4"),
+            "missing filename in: {url}",
+        );
+    }
+
+    #[test]
+    fn tv_tune_url_percent_encodes_special_chars() {
+        let (mut runner, vfs) =
+            setup_tv_guide_with_catalog("test-item", "My Video #1.mp4", "My Video");
+
+        runner.handle_input(&Button::Confirm, &vfs);
+        let (_, data) = runner.take_pending_request().unwrap();
+        let url = extract_tune_url(&data);
+
+        // '#' must be percent-encoded to '%23' (raw '#' breaks URLs).
+        assert!(!url.contains('#'), "raw '#' in URL breaks fragment: {url}");
+        assert!(url.contains("%23"), "expected percent-encoded '#': {url}");
+
+        // Spaces should be percent-encoded too.
+        assert!(!url.contains("My Video"), "raw spaces in URL: {url}",);
+    }
+
+    #[test]
+    fn tv_tune_navigate_then_tune_second_channel() {
+        use crate::apps::tv_guide::catalog::{ChannelCatalog, VideoEpisode};
+
+        let vfs = setup_vfs();
+        let mut runner = AppRunner::launch(&make_app("TV Guide"), &vfs);
+
+        // Inject catalogs for channels 0 and 1.
+        let guide = runner.tv_guide_state().unwrap();
+        for i in 0..2 {
+            let ch_num = guide.channels[i].number;
+            let mut catalog = ChannelCatalog::new(ch_num);
+            catalog.add_episodes(vec![VideoEpisode {
+                item_id: format!("item-ch{i}"),
+                filename: format!("ch{i}_video.mp4"),
+                title: format!("Channel {i} Show"),
+                duration_secs: 1800.0,
+                width: 640,
+                height: 480,
+                size_bytes: 5000,
+            }]);
+            guide.catalogs[i] = Some(catalog);
+            guide.rebuild_cached_schedule(i);
+        }
+
+        // Navigate down to channel 1.
+        runner.handle_input(&Button::Down, &vfs);
+        let guide = runner.tv_guide_state().unwrap();
+        assert_eq!(guide.selected_channel, 1);
+
+        // Tune channel 1.
+        runner.handle_input(&Button::Confirm, &vfs);
+        let (_, data) = runner.take_pending_request().unwrap();
+        let url = extract_tune_url(&data);
+
+        // URL must reference channel 1's item, not channel 0's.
+        assert!(
+            url.contains("item-ch1"),
+            "expected channel 1 item_id, got: {url}",
+        );
+        assert!(
+            url.contains("ch1_video.mp4"),
+            "expected channel 1 filename, got: {url}",
+        );
+    }
+
+    #[test]
+    fn tv_tune_without_catalog_produces_no_request() {
+        let vfs = setup_vfs();
+        let mut runner = AppRunner::launch(&make_app("TV Guide"), &vfs);
+
+        // Press Confirm with no catalogs loaded.
+        runner.handle_input(&Button::Confirm, &vfs);
+        assert!(
+            runner.take_pending_request().is_none(),
+            "should not produce tune request without catalog",
+        );
+    }
+
+    #[test]
+    fn tv_select_resets_fetch_for_retry() {
+        let vfs = setup_vfs();
+        let mut runner = AppRunner::launch(&make_app("TV Guide"), &vfs);
+
+        // Simulate a failed fetch.
+        let guide = runner.tv_guide_state().unwrap();
+        guide.fetch_attempted = true;
+        guide.fetch_error = Some("network error".to_string());
+        runner.refresh_tv_text();
+        assert!(runner.lines.iter().any(|l| l.contains("Error")));
+
+        // Press Select to retry.
+        runner.handle_input(&Button::Select, &vfs);
+
+        let guide = runner.tv_guide_state().unwrap();
+        assert!(!guide.fetch_attempted, "fetch_attempted should be reset");
+        assert!(guide.fetch_error.is_none(), "fetch_error should be cleared");
+
+        // Text should now show loading again.
+        assert!(runner.lines.iter().any(|l| l.contains("Loading")));
+    }
+
+    #[test]
+    fn tv_select_retry_clears_partial_catalogs() {
+        let vfs = setup_vfs();
+        let mut runner = AppRunner::launch(&make_app("TV Guide"), &vfs);
+
+        // Simulate a partial fetch: first channel loaded, rest failed.
+        let guide = runner.tv_guide_state().unwrap();
+        guide.fetch_attempted = true;
+        assert!(!guide.catalogs.is_empty(), "need channels for this test");
+        guide.catalogs[0] = Some(crate::apps::tv_guide::catalog::ChannelCatalog::new(0));
+
+        // Press Select to retry — should clear all catalogs.
+        runner.handle_input(&Button::Select, &vfs);
+
+        let guide = runner.tv_guide_state().unwrap();
+        assert!(!guide.fetch_attempted, "fetch_attempted should be reset");
+        assert!(
+            guide.catalogs.iter().all(|c| c.is_none()),
+            "catalogs should be cleared so fetch guard passes"
+        );
+    }
+
+    #[test]
+    fn tv_cancel_while_tuned_untunes_instead_of_exit() {
+        let (mut runner, vfs) = setup_tv_guide_with_catalog("item-x", "video.mp4", "Test Show");
+
+        // Tune to a channel.
+        runner.handle_input(&Button::Confirm, &vfs);
+        let guide = runner.tv_guide_state().unwrap();
+        assert!(guide.tuned_channel.is_some());
+
+        // Cancel should untune, not exit.
+        let action = runner.handle_input(&Button::Cancel, &vfs);
+        assert_eq!(action, AppAction::None);
+        let guide = runner.tv_guide_state().unwrap();
+        assert!(guide.tuned_channel.is_none());
+
+        // Second cancel should exit.
+        let action = runner.handle_input(&Button::Cancel, &vfs);
+        assert_eq!(action, AppAction::Exit);
+    }
+
+    #[test]
+    fn tv_tune_request_path_matches_constant() {
+        use crate::apps::tv_guide::TV_REQUEST_PATH;
+
+        let (mut runner, vfs) = setup_tv_guide_with_catalog("path-test", "ep.mp4", "Path Test");
+
+        runner.handle_input(&Button::Confirm, &vfs);
+        let (path, _) = runner.take_pending_request().unwrap();
+        assert_eq!(path, TV_REQUEST_PATH, "IPC path must match TV_REQUEST_PATH");
+    }
+
+    #[test]
+    fn tv_tune_url_is_well_formed_https() {
+        let (mut runner, vfs) = setup_tv_guide_with_catalog("https-test", "ep.mp4", "HTTPS Test");
+
+        runner.handle_input(&Button::Confirm, &vfs);
+        let (_, data) = runner.take_pending_request().unwrap();
+        let url = extract_tune_url(&data);
+
+        assert!(url.starts_with("https://"), "URL must be HTTPS: {url}");
+        assert!(!url.contains(' '), "URL must not contain spaces: {url}");
+        assert!(
+            url.contains("archive.org"),
+            "URL must target archive.org: {url}"
+        );
     }
 }

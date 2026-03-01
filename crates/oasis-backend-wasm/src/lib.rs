@@ -11,6 +11,8 @@ pub mod input;
 pub mod network;
 pub mod platform;
 pub mod renderer;
+pub mod tv_catalog;
+pub mod video;
 
 use wasm_bindgen::prelude::*;
 use web_sys::HtmlCanvasElement;
@@ -124,6 +126,8 @@ pub struct OasisWasm {
     radio_source: Option<Box<dyn oasis_audio::radio::RadioSource>>,
     archive_catalog: Option<oasis_audio::radio::ArchiveCatalog>,
     pending_catalog: Option<archive::WasmArchiveCatalogFetcher>,
+    video_overlay: video::VideoOverlay,
+    pending_tv_catalog: Option<tv_catalog::WasmTvCatalogFetcher>,
 }
 
 #[wasm_bindgen]
@@ -181,10 +185,15 @@ impl OasisWasm {
         let iframe = IframeOverlay::new(&canvas)
             .map_err(|e| JsValue::from_str(&format!("iframe overlay: {e:?}")))?;
 
+        // Video overlay for TV Guide playback.
+        let video_overlay = video::VideoOverlay::new(&canvas)
+            .map_err(|e| JsValue::from_str(&format!("video overlay: {e:?}")))?;
+
         // Scene graph and commands.
         let mut sdi = SdiRegistry::new();
         let mut cmd_reg = CommandRegistry::new();
         register_builtins(&mut cmd_reg);
+        oasis_core::terminal::register_tv_commands(&mut cmd_reg);
 
         // VFS with demo content.
         let mut vfs = MemoryVfs::new();
@@ -289,6 +298,8 @@ impl OasisWasm {
             radio_source: None,
             archive_catalog: None,
             pending_catalog: None,
+            video_overlay,
+            pending_tv_catalog: None,
         })
     }
 
@@ -322,14 +333,21 @@ impl OasisWasm {
             }
         }
 
-        // Process pending VFS requests from app runners.
+        // Process pending VFS requests from app runners (e.g. radio tune).
+        // Skip TV Guide tune requests — they're handled by the dedicated video
+        // overlay section below.
         {
             let mut pending = None;
-            if let Some(ref mut runner) = self.app_runner {
+            if let Some(ref mut runner) = self.app_runner
+                && !is_tv_tune_request_wasm(runner)
+            {
                 pending = runner.take_pending_request();
             }
             if pending.is_none() {
                 for (_, runner) in &mut self.open_runners {
+                    if is_tv_tune_request_wasm(runner) {
+                        continue;
+                    }
                     if let Some(req) = runner.take_pending_request() {
                         pending = Some(req);
                         break;
@@ -457,6 +475,120 @@ impl OasisWasm {
             }
             for (_, runner) in &mut self.open_runners {
                 runner.refresh_radio(&self.vfs);
+            }
+
+            // Poll pending TV catalog fetch.
+            if let Some(ref fetcher) = self.pending_tv_catalog
+                && fetcher.is_ready()
+            {
+                let fetcher = self.pending_tv_catalog.take().unwrap();
+                match fetcher.take_results() {
+                    Ok(catalogs) => {
+                        let runner =
+                            find_tv_guide_runner_wasm(&mut self.app_runner, &mut self.open_runners);
+                        if let Some(runner) = runner {
+                            if let Some(guide) = runner.tv_guide_state() {
+                                guide.fetch_in_progress = false;
+                                let all_none = catalogs.iter().all(|c| c.is_none());
+                                for (i, cat) in catalogs.into_iter().enumerate() {
+                                    if let Some(c) = cat
+                                        && i < guide.catalogs.len()
+                                    {
+                                        guide.catalogs[i] = Some(c);
+                                        guide.rebuild_cached_schedule(i);
+                                    }
+                                }
+                                if all_none {
+                                    guide.fetch_error =
+                                        Some("No episodes found for any channel".into());
+                                }
+                            }
+                            runner.refresh_tv_text();
+                        }
+                    },
+                    Err(e) => {
+                        console_log!("TV catalog fetch failed: {e}");
+                        let runner =
+                            find_tv_guide_runner_wasm(&mut self.app_runner, &mut self.open_runners);
+                        if let Some(runner) = runner {
+                            if let Some(guide) = runner.tv_guide_state() {
+                                guide.fetch_in_progress = false;
+                                guide.fetch_error = Some(e);
+                            }
+                            runner.refresh_tv_text();
+                        }
+                    },
+                }
+            }
+
+            // Start TV catalog fetch if a TV Guide app needs it.
+            if self.pending_tv_catalog.is_none() {
+                let runner =
+                    find_tv_guide_runner_wasm(&mut self.app_runner, &mut self.open_runners);
+                if let Some(runner) = runner
+                    && let Some(guide) = runner.tv_guide_state()
+                    && !guide.fetch_attempted
+                    && guide.catalogs.iter().all(|c| c.is_none())
+                {
+                    guide.fetch_attempted = true;
+                    guide.fetch_in_progress = true;
+                    self.pending_tv_catalog =
+                        Some(tv_catalog::WasmTvCatalogFetcher::new(&guide.channels));
+                }
+            }
+
+            // Handle TV Guide tune requests via VFS IPC.
+            {
+                let runner =
+                    find_tv_guide_runner_wasm(&mut self.app_runner, &mut self.open_runners);
+                if let Some(runner) = runner
+                    && let Some((path, data)) = runner.take_pending_request()
+                {
+                    if path == oasis_core::apps::tv_guide::TV_REQUEST_PATH
+                        && data.starts_with("tune_url ")
+                    {
+                        // Format: "tune_url {url} {seek_secs}"
+                        let rest = &data["tune_url ".len()..];
+                        let (url, seek_secs) = rest
+                            .rsplit_once(' ')
+                            .map(|(u, s)| (u, s.parse::<u64>().unwrap_or(0)))
+                            .unwrap_or((rest, 0));
+                        // Extract item_id from download URL:
+                        //   https://archive.org/download/{item_id}/{filename}
+                        let item_id = url
+                            .strip_prefix("https://archive.org/download/")
+                            .and_then(|p| p.split('/').next())
+                            .unwrap_or(url);
+                        if !item_id.is_empty() {
+                            let (px, py, pw, ph) = tv_preview_rect(&self.active_theme);
+                            self.video_overlay
+                                .show_pip(item_id, seek_secs, px, py, pw, ph);
+                        }
+                    } else {
+                        let _ = self.vfs.write(&path, data.as_bytes());
+                    }
+                }
+            }
+        }
+
+        // Detect untune: overlay is visible but guide has no tuned channel.
+        if self.video_overlay.is_visible() {
+            let should_hide = {
+                let runner =
+                    find_tv_guide_runner_wasm(&mut self.app_runner, &mut self.open_runners);
+                match runner {
+                    Some(runner) => runner
+                        .tv_guide_state()
+                        .is_none_or(|g| g.tuned_channel.is_none()),
+                    None => true, // TV Guide closed.
+                }
+            };
+            if should_hide {
+                self.video_overlay.hide();
+            } else {
+                // Track canvas resize / window movement each frame.
+                let (px, py, pw, ph) = tv_preview_rect(&self.active_theme);
+                self.video_overlay.update_position(px, py, pw, ph);
             }
         }
 
@@ -1373,6 +1505,43 @@ fn trim_output(output_lines: &mut Vec<String>) {
 // VFS population
 // ---------------------------------------------------------------------------
 
+/// Find a TV Guide runner in either the full-screen or windowed runners.
+fn find_tv_guide_runner_wasm<'a>(
+    app_runner: &'a mut Option<AppRunner>,
+    open_runners: &'a mut [(String, AppRunner)],
+) -> Option<&'a mut AppRunner> {
+    if let Some(ref mut runner) = *app_runner
+        && runner.title == "TV Guide"
+    {
+        return Some(runner);
+    }
+    open_runners
+        .iter_mut()
+        .map(|(_, runner)| runner)
+        .find(|runner| runner.title == "TV Guide")
+}
+
+/// Compute the TV preview box rect `(x, y, w, h)` matching `guide.rs` layout.
+fn tv_preview_rect(at: &ActiveTheme) -> (i32, i32, u32, u32) {
+    let usable_h = at
+        .screen_h
+        .saturating_sub(at.statusbar_height + at.bottombar_height);
+    let header_h = (usable_h * 20 / 100).max(60);
+    let preview_w = (at.screen_w / 5).max(80);
+    let preview_h = header_h.saturating_sub(16);
+    let preview_x = at.screen_w as i32 - preview_w as i32 - 10;
+    let preview_y = at.statusbar_height as i32 + 8;
+    (preview_x, preview_y, preview_w, preview_h)
+}
+
+/// Check if a runner's pending request is a TV Guide tune_url (should not be
+/// consumed by the generic VFS handler).
+fn is_tv_tune_request_wasm(runner: &AppRunner) -> bool {
+    runner.peek_pending_request().is_some_and(|req| {
+        req.0 == oasis_core::apps::tv_guide::TV_REQUEST_PATH && req.1.starts_with("tune_url ")
+    })
+}
+
 /// Populate the WASM VFS with demo content.
 fn populate_wasm_vfs(vfs: &mut MemoryVfs) {
     // Core directory structure.
@@ -1424,6 +1593,16 @@ fn populate_wasm_vfs(vfs: &mut MemoryVfs) {
     let _ = vfs.mkdir("/apps/Browser");
     let _ = vfs.mkdir("/apps/Music Player");
     let _ = vfs.mkdir("/apps/Terminal");
+    let _ = vfs.mkdir("/apps/TV Guide");
+
+    // TV Guide configuration.
+    let _ = vfs.mkdir("/etc/tv");
+    let _ = vfs.mkdir("/var/tv");
+    let _ = vfs.mkdir("/var/tv/cache");
+    let _ = vfs.write(
+        "/etc/tv/channels.toml",
+        oasis_core::apps::tv_guide::channel::DEFAULT_CHANNELS_TOML.as_bytes(),
+    );
 
     // Browser home page content.
     let _ = vfs.mkdir("/sites");

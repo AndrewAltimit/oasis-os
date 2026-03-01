@@ -11,6 +11,7 @@ mod commands;
 mod input;
 mod launch;
 mod render;
+mod video_player;
 use oasis_core::terminal_sdi;
 mod vfs_setup;
 
@@ -22,7 +23,7 @@ use oasis_audio::radio::RadioSource;
 use oasis_backend_sdl::SdlAudioBackend;
 use oasis_backend_sdl::SdlBackend;
 use oasis_core::active_theme::ActiveTheme;
-use oasis_core::backend::{AudioBackend, InputBackend, NetworkBackend, SdiBackend};
+use oasis_core::backend::{AudioBackend, Color, InputBackend, NetworkBackend, SdiBackend};
 use oasis_core::bottombar::BottomBar;
 use oasis_core::browser::BrowserConfig;
 use oasis_core::config::OasisConfig;
@@ -37,6 +38,7 @@ use oasis_core::startmenu::StartMenuState;
 use oasis_core::statusbar::StatusBar;
 use oasis_core::terminal::{
     CommandRegistry, register_agent_commands, register_builtins, register_plugin_commands,
+    register_tv_commands,
 };
 use oasis_core::toast::{ToastLevel, ToastManager};
 use oasis_core::transition;
@@ -77,6 +79,10 @@ fn main() -> Result<()> {
     )?;
     backend.init(config.screen_width, config.screen_height)?;
 
+    // Show a black frame immediately so the window isn't frozen during init.
+    backend.clear(Color::rgb(0, 0, 0))?;
+    backend.swap_buffers()?;
+
     // Derive runtime theme from the active skin, applying screen dimensions.
     let active_theme = ActiveTheme::from_skin(&skin.theme)
         .with_screen_size(config.screen_width, config.screen_height);
@@ -85,9 +91,11 @@ fn main() -> Result<()> {
     // Set up platform services.
     let platform = DesktopPlatform::new();
 
-    // Set up VFS with demo content + apps.
+    // Set up VFS with demo content + apps (placeholders only — real files
+    // are loaded on a background thread and merged in the main loop).
     let mut vfs = MemoryVfs::new();
     vfs_setup::populate_demo_vfs(&mut vfs);
+    let disk_sample_rx = vfs_setup::spawn_disk_sample_loader();
 
     // Populate terminal documentation and shell profile in VFS.
     oasis_core::terminal::populate_man_pages(&mut vfs);
@@ -115,6 +123,7 @@ fn main() -> Result<()> {
     oasis_core::update::register_update_commands(&mut cmd_reg);
     register_plugin_commands(&mut cmd_reg);
     register_agent_commands(&mut cmd_reg);
+    register_tv_commands(&mut cmd_reg);
     oasis_core::browser::commands::register_browser_commands(&mut cmd_reg);
 
     // Window manager state (Desktop mode).
@@ -163,7 +172,10 @@ fn main() -> Result<()> {
         wm,
         open_runners: Vec::new(),
         browser: None,
-        net_backend: StdNetworkBackend::new(),
+        net_backend: {
+            let tls = RustlsTlsProvider::new();
+            StdNetworkBackend::with_tls(tls)
+        },
         listener: None,
         ftp_server: None,
         remote_client: None,
@@ -185,6 +197,10 @@ fn main() -> Result<()> {
         },
         terminal_scroll_offset: 0,
         toasts: ToastManager::new(),
+        pending_tv_catalog_fetch: None,
+        tv_fetch_start: None,
+        video_player: video_player::VideoPlayer::new(),
+        tv_audio_track: None,
     };
 
     // Show a welcome toast.
@@ -209,39 +225,9 @@ fn main() -> Result<()> {
     let mut sdi = SdiRegistry::new();
     state.skin.apply_layout(&mut sdi);
 
-    // -- Wallpaper: generate from skin config and load as texture --
-    let wallpaper_tex = {
-        let wp_data = wallpaper::generate_from_config(
-            state.config.screen_width,
-            state.config.screen_height,
-            &state.active_theme,
-        );
-        backend.load_texture(
-            state.config.screen_width,
-            state.config.screen_height,
-            &wp_data,
-        )?
-    };
-    terminal_sdi::setup_wallpaper(
-        &mut sdi,
-        wallpaper_tex,
-        state.config.screen_width,
-        state.config.screen_height,
-    );
-    log::info!("Wallpaper loaded");
-
-    // -- Mouse cursor: generate procedural arrow and load as texture --
-    {
-        let (cursor_pixels, cw, ch) =
-            cursor::generate_cursor_pixels(state.active_theme.cursor_scale);
-        let cursor_tex = backend.load_texture(cw, ch, &cursor_pixels)?;
-        // Set texture on the cursor SDI object after first update_sdi creates it.
-        state.mouse_cursor.update_sdi(&mut sdi);
-        if let Ok(obj) = sdi.get_mut("mouse_cursor") {
-            obj.texture = Some(cursor_tex);
-        }
-    }
-    log::info!("Mouse cursor loaded");
+    // Wallpaper and cursor are deferred to the first loop iteration so
+    // the window appears immediately (the boot fade covers the delay).
+    let mut wallpaper_loaded = false;
 
     // Apply auto-launch (after scene graph is fully set up).
     if let Some(ref app_name) = auto_launch_app {
@@ -280,6 +266,44 @@ fn main() -> Result<()> {
     'running: loop {
         state.frame_counter += 1;
 
+        // Generate wallpaper + cursor on the first frame (deferred from init).
+        if !wallpaper_loaded {
+            wallpaper_loaded = true;
+            let wallpaper_tex = {
+                let wp_data = wallpaper::generate_from_config(
+                    state.config.screen_width,
+                    state.config.screen_height,
+                    &state.active_theme,
+                );
+                backend.load_texture(
+                    state.config.screen_width,
+                    state.config.screen_height,
+                    &wp_data,
+                )?
+            };
+            terminal_sdi::setup_wallpaper(
+                &mut sdi,
+                wallpaper_tex,
+                state.config.screen_width,
+                state.config.screen_height,
+            );
+            log::info!("Wallpaper loaded");
+
+            let (cursor_pixels, cw, ch) =
+                cursor::generate_cursor_pixels(state.active_theme.cursor_scale);
+            let cursor_tex = backend.load_texture(cw, ch, &cursor_pixels)?;
+            state.mouse_cursor.update_sdi(&mut sdi);
+            if let Ok(obj) = sdi.get_mut("mouse_cursor") {
+                obj.texture = Some(cursor_tex);
+            }
+            log::info!("Mouse cursor loaded");
+        }
+
+        // Drain background disk sample loads (non-blocking).
+        while let Ok((path, data)) = disk_sample_rx.try_recv() {
+            let _ = vfs.write(&path, &data);
+        }
+
         // Update system info every ~60 frames (~1s at 60fps).
         if state.frame_counter.is_multiple_of(60) {
             let time = state.platform.now().ok();
@@ -312,13 +336,20 @@ fn main() -> Result<()> {
         commands::poll_remote_client(&mut state);
 
         // Process pending VFS requests from app runners (e.g. radio tune).
+        // Skip TV Guide tune requests — they're handled by the dedicated video
+        // player section below.
         {
             let mut pending = None;
-            if let Some(ref mut runner) = state.app_runner {
+            if let Some(ref mut runner) = state.app_runner
+                && !is_tv_tune_request(runner)
+            {
                 pending = runner.take_pending_request();
             }
             if pending.is_none() {
                 for (_, runner) in &mut state.open_runners {
+                    if is_tv_tune_request(runner) {
+                        continue;
+                    }
                     if let Some(req) = runner.take_pending_request() {
                         pending = Some(req);
                         break;
@@ -529,6 +560,220 @@ fn main() -> Result<()> {
             for (_, runner) in &mut state.open_runners {
                 runner.refresh_radio(&vfs);
             }
+
+            // Poll pending TV catalog fetch.
+            if let Some(ref rx) = state.pending_tv_catalog_fetch {
+                match rx.try_recv() {
+                    Ok(Ok(catalogs)) => {
+                        let loaded = catalogs.iter().filter(|c| c.is_some()).count();
+                        let total = catalogs.len();
+                        log::info!(
+                            "TV catalog fetch result: {loaded}/{total} channels have episodes"
+                        );
+                        state.pending_tv_catalog_fetch = None;
+                        let runner =
+                            find_tv_guide_runner(&mut state.app_runner, &mut state.open_runners);
+                        if let Some(runner) = runner {
+                            if let Some(guide) = runner.tv_guide_state() {
+                                guide.fetch_in_progress = false;
+                                let all_none = catalogs.iter().all(|c| c.is_none());
+                                for (i, cat) in catalogs.into_iter().enumerate() {
+                                    if let Some(c) = cat
+                                        && i < guide.catalogs.len()
+                                    {
+                                        guide.catalogs[i] = Some(c);
+                                        guide.rebuild_cached_schedule(i);
+                                    }
+                                }
+                                if all_none {
+                                    log::warn!("TV: all channel catalogs empty");
+                                    guide.fetch_error =
+                                        Some("No episodes found for any channel".into());
+                                }
+                            }
+                            runner.refresh_tv_text();
+                        } else {
+                            log::warn!("TV: catalogs arrived but no TV Guide runner found");
+                        }
+                    },
+                    Ok(Err(e)) => {
+                        state.pending_tv_catalog_fetch = None;
+                        log::error!("TV catalog fetch failed: {e}");
+                        let runner =
+                            find_tv_guide_runner(&mut state.app_runner, &mut state.open_runners);
+                        if let Some(runner) = runner {
+                            if let Some(guide) = runner.tv_guide_state() {
+                                guide.fetch_in_progress = false;
+                                guide.fetch_error = Some(e);
+                            }
+                            runner.refresh_tv_text();
+                        } else {
+                            log::warn!("TV: error arrived but no TV Guide runner found");
+                        }
+                    },
+                    Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                        state.pending_tv_catalog_fetch = None;
+                        log::error!("TV catalog fetch thread died");
+                        let runner =
+                            find_tv_guide_runner(&mut state.app_runner, &mut state.open_runners);
+                        if let Some(runner) = runner {
+                            if let Some(guide) = runner.tv_guide_state() {
+                                guide.fetch_in_progress = false;
+                                guide.fetch_error = Some("catalog fetch failed".into());
+                            }
+                            runner.refresh_tv_text();
+                        }
+                    },
+                    Err(std::sync::mpsc::TryRecvError::Empty) => {
+                        // Timeout after 2 minutes.
+                        if let Some(start) = state.tv_fetch_start
+                            && start.elapsed().as_secs() >= 120
+                        {
+                            log::warn!("TV: catalog fetch timed out after 120s");
+                            state.pending_tv_catalog_fetch = None;
+                            state.tv_fetch_start = None;
+                            let runner = find_tv_guide_runner(
+                                &mut state.app_runner,
+                                &mut state.open_runners,
+                            );
+                            if let Some(runner) = runner {
+                                if let Some(guide) = runner.tv_guide_state() {
+                                    guide.fetch_in_progress = false;
+                                    guide.fetch_error = Some("Fetch timed out (2 min)".into());
+                                }
+                                runner.refresh_tv_text();
+                            }
+                        }
+                    },
+                }
+            }
+
+            // Start TV catalog fetch if a TV Guide app needs it.
+            if state.pending_tv_catalog_fetch.is_none() {
+                let runner = find_tv_guide_runner(&mut state.app_runner, &mut state.open_runners);
+                if let Some(runner) = runner
+                    && let Some(guide) = runner.tv_guide_state()
+                    && !guide.fetch_attempted
+                    && guide.catalogs.iter().all(|c| c.is_none())
+                {
+                    log::info!(
+                        "TV: starting catalog fetch for {} channels",
+                        guide.channels.len(),
+                    );
+                    guide.fetch_attempted = true;
+                    guide.fetch_in_progress = true;
+                    let channels = guide.channels.clone();
+                    let (tx, rx) = std::sync::mpsc::channel();
+                    let tls = state.tls_provider.clone();
+                    std::thread::spawn(move || {
+                        log::info!("TV: background fetch thread started");
+                        let result = fetch_tv_catalogs_blocking(&channels, &tls);
+                        log::info!(
+                            "TV: background fetch thread finished (ok={})",
+                            result.is_ok(),
+                        );
+                        let _ = tx.send(result);
+                    });
+                    state.pending_tv_catalog_fetch = Some(rx);
+                    state.tv_fetch_start = Some(std::time::Instant::now());
+                }
+            }
+
+            // Handle TV Guide tune requests — start in-app video player.
+            {
+                let runner = find_tv_guide_runner(&mut state.app_runner, &mut state.open_runners);
+                if let Some(runner) = runner
+                    && let Some((path, data)) = runner.take_pending_request()
+                {
+                    if path == oasis_core::apps::tv_guide::TV_REQUEST_PATH
+                        && data.starts_with("tune_url ")
+                    {
+                        let rest = &data["tune_url ".len()..];
+                        // Parse "url seek_secs" from IPC data.
+                        let (url, seek_secs) = if let Some(space_idx) = rest.rfind(' ') {
+                            let seek: u64 = rest[space_idx + 1..].parse().unwrap_or(0);
+                            (&rest[..space_idx], seek)
+                        } else {
+                            (rest, 0u64)
+                        };
+                        log::info!("TV: starting video player: {url} seek={seek_secs}s");
+
+                        // Stop any existing video session.
+                        state.video_player.stop(&mut backend);
+                        if let Some(track) = state.tv_audio_track.take() {
+                            let _ = state.audio_backend.unload_track(track);
+                        }
+
+                        // Compute preview dimensions (match guide.rs header layout).
+                        let at = &state.active_theme;
+                        let usable_h = at
+                            .screen_h
+                            .saturating_sub(at.statusbar_height + at.bottombar_height);
+                        let header_h = (usable_h * 20 / 100).max(60);
+                        let preview_w = (at.screen_w / 5).max(80).saturating_sub(2);
+                        let preview_h = header_h.saturating_sub(16).saturating_sub(2);
+
+                        // Start ffmpeg subprocesses.
+                        state
+                            .video_player
+                            .start(url, seek_secs, preview_w, preview_h);
+
+                        // Set up streaming audio track.
+                        match state.audio_backend.load_streaming() {
+                            Ok(track) => {
+                                let _ = state.audio_backend.play(track);
+                                state.tv_audio_track = Some(track);
+                            },
+                            Err(e) => {
+                                log::warn!("TV: failed to start audio stream: {e}");
+                            },
+                        }
+                    } else {
+                        let _ = vfs.write(&path, data.as_bytes());
+                    }
+                }
+            }
+
+            // Tick video player: upload frames, collect audio chunks.
+            {
+                let (texture, audio_chunks) = state.video_player.tick(&mut backend);
+
+                // Feed audio chunks to the streaming track.
+                if let Some(track) = state.tv_audio_track {
+                    for chunk in &audio_chunks {
+                        let _ = state.audio_backend.feed_data(track, chunk);
+                    }
+                }
+
+                // Update the guide's preview texture.
+                let runner = find_tv_guide_runner(&mut state.app_runner, &mut state.open_runners);
+                if let Some(runner) = runner
+                    && let Some(guide) = runner.tv_guide_state()
+                {
+                    guide.preview_texture = texture;
+                }
+            }
+
+            // Detect untune: video is active but guide has no tuned channel.
+            if state.video_player.is_active() {
+                let should_stop = {
+                    let runner =
+                        find_tv_guide_runner(&mut state.app_runner, &mut state.open_runners);
+                    match runner {
+                        Some(runner) => runner
+                            .tv_guide_state()
+                            .is_none_or(|g| g.tuned_channel.is_none()),
+                        None => true, // TV Guide closed.
+                    }
+                };
+                if should_stop {
+                    log::info!("TV: untuned or guide closed, stopping video");
+                    state.video_player.stop(&mut backend);
+                    if let Some(track) = state.tv_audio_track.take() {
+                        let _ = state.audio_backend.unload_track(track);
+                    }
+                }
+            }
         }
 
         // Update SDI scene graph for the active mode.
@@ -586,9 +831,44 @@ fn main() -> Result<()> {
         backend.swap_buffers()?;
     }
 
+    // Clean up video player before shutting down backend.
+    state.video_player.stop(&mut backend);
+    if let Some(track) = state.tv_audio_track.take() {
+        let _ = state.audio_backend.unload_track(track);
+    }
+
     backend.shutdown()?;
     log::info!("OASIS_OS shut down cleanly");
     Ok(())
+}
+
+/// Find a TV Guide runner in either the full-screen runner or open windowed runners.
+fn find_tv_guide_runner<'a>(
+    app_runner: &'a mut Option<oasis_core::apps::AppRunner>,
+    open_runners: &'a mut [(String, oasis_core::apps::AppRunner)],
+) -> Option<&'a mut oasis_core::apps::AppRunner> {
+    if let Some(ref mut runner) = *app_runner
+        && runner.title == "TV Guide"
+    {
+        log::trace!("TV: found TV Guide in app_runner (full-screen)");
+        return Some(runner);
+    }
+    let found = open_runners
+        .iter_mut()
+        .map(|(_, runner)| runner)
+        .find(|runner| runner.title == "TV Guide");
+    if found.is_some() {
+        log::trace!("TV: found TV Guide in open_runners (windowed)");
+    }
+    found
+}
+
+/// Check if a runner's pending request is a TV Guide tune_url (should not be
+/// consumed by the generic VFS handler).
+fn is_tv_tune_request(runner: &oasis_core::apps::AppRunner) -> bool {
+    runner.peek_pending_request().is_some_and(|req| {
+        req.0 == oasis_core::apps::tv_guide::TV_REQUEST_PATH && req.1.starts_with("tune_url ")
+    })
 }
 
 /// Parse an HTTP/HTTPS stream URL into (host, port, path, use_tls).
@@ -627,13 +907,19 @@ fn https_get_body(
     use oasis_core::backend::NetworkBackend;
     use oasis_core::net::TlsProvider;
 
+    log::debug!("HTTPS GET https://{host}{path}");
+
     let tcp = net_backend
         .connect(host, 443)
         .map_err(|e| format!("connect: {e}"))?;
 
+    log::debug!("HTTPS: TCP connected to {host}:443");
+
     let mut stream = tls_provider
         .connect_tls(tcp, host)
         .map_err(|e| format!("TLS: {e}"))?;
+
+    log::debug!("HTTPS: TLS handshake complete");
 
     let request = format!(
         "GET {path} HTTP/1.1\r\nHost: {host}\r\nUser-Agent: OASIS_OS/0.1\r\n\
@@ -679,6 +965,8 @@ fn https_get_body(
             },
         }
     }
+
+    log::debug!("HTTPS: received {} bytes from {host}{path}", response.len());
 
     // Split headers from body on raw bytes to avoid UTF-8 lossy offset issues.
     let header_end = response
@@ -896,6 +1184,77 @@ fn fetch_catalog_blocking(
 
     let source = connect_archive_source(tls, &track)?;
     Ok(app_state::CatalogFetchResult { catalog, source })
+}
+
+/// Fetch video catalogs for all TV channels on a background thread.
+fn fetch_tv_catalogs_blocking(
+    channels: &[oasis_core::apps::tv_guide::Channel],
+    tls: &oasis_core::net::RustlsTlsProvider,
+) -> std::result::Result<Vec<Option<oasis_core::apps::tv_guide::ChannelCatalog>>, String> {
+    use oasis_core::apps::tv_guide::catalog::ChannelCatalog;
+
+    log::info!("TV fetch_tv_catalogs_blocking: {} channels", channels.len());
+
+    let mut net = oasis_core::net::StdNetworkBackend::new();
+    let mut results = Vec::new();
+
+    for channel in channels {
+        log::debug!(
+            "TV: fetching CH {} '{}' ({} sources)",
+            channel.number,
+            channel.call_sign,
+            channel.source.len(),
+        );
+        let mut catalog = ChannelCatalog::new(channel.number);
+
+        for source in &channel.source {
+            let files_path = ChannelCatalog::files_api_path(&source.item_id);
+            match https_get_body(&mut net, tls, "archive.org", &files_path) {
+                Ok(body) => {
+                    log::debug!(
+                        "TV: source '{}' response: {} bytes",
+                        source.item_id,
+                        body.len(),
+                    );
+                    let episodes = ChannelCatalog::parse_files_response(
+                        &body,
+                        &source.item_id,
+                        source.subfolder.as_deref(),
+                    );
+                    log::info!(
+                        "TV item '{}': {} video episodes",
+                        source.item_id,
+                        episodes.len(),
+                    );
+                    catalog.add_episodes(episodes);
+                },
+                Err(e) => {
+                    log::warn!("TV files API for '{}': {e}", source.item_id);
+                },
+            }
+        }
+
+        if catalog.episodes.is_empty() {
+            log::debug!("TV: CH {} has no episodes", channel.number);
+            results.push(None);
+        } else {
+            log::debug!(
+                "TV: CH {} loaded {} episodes ({:.0}s total)",
+                channel.number,
+                catalog.episodes.len(),
+                catalog.total_duration_secs,
+            );
+            results.push(Some(catalog));
+        }
+    }
+
+    let loaded = results.iter().filter(|c| c.is_some()).count();
+    log::info!(
+        "TV fetch_tv_catalogs_blocking done: {loaded}/{} channels loaded",
+        results.len(),
+    );
+
+    Ok(results)
 }
 
 /// Connect to a single archive track on a background thread.

@@ -22,6 +22,8 @@ use std::path::{Path, PathBuf};
 
 use oasis_backend_sdl::SdlBackend;
 use oasis_core::active_theme::ActiveTheme;
+use oasis_core::apps::tv_guide::TvGuideState;
+use oasis_core::apps::tv_guide::channel::{ChannelConfig, DEFAULT_CHANNELS_TOML};
 use oasis_core::backend::{Color, SdiBackend};
 use oasis_core::bottombar::BottomBar;
 use oasis_core::browser::{BrowserConfig, BrowserWidget};
@@ -170,6 +172,20 @@ fn all_scenarios() -> Vec<Scenario> {
         scenarios.push(Scenario {
             name: view.to_string(),
             category: "wm",
+        });
+    }
+
+    // TV Guide scenarios.
+    let tv_views = [
+        "tv_guide_loading",
+        "tv_guide_error",
+        "tv_guide_populated",
+        "tv_guide_tuned",
+    ];
+    for view in &tv_views {
+        scenarios.push(Scenario {
+            name: view.to_string(),
+            category: "tv_guide",
         });
     }
 
@@ -1231,6 +1247,155 @@ fn run_wm_scenario(
 }
 
 // ---------------------------------------------------------------------------
+// TV Guide scenarios
+// ---------------------------------------------------------------------------
+
+fn run_tv_guide_scenario(
+    backend: &mut SdlBackend,
+    scenario: &str,
+    out_dir: &Path,
+    w: u32,
+    h: u32,
+) -> anyhow::Result<()> {
+    let skin = resolve_skin("classic")?;
+    let active_theme = ActiveTheme::from_skin(&skin.theme);
+
+    let mut sdi = SdiRegistry::new();
+    skin.apply_layout(&mut sdi);
+
+    // Wallpaper.
+    let wp_data = wallpaper::generate_from_config(w, h, &active_theme);
+    let wallpaper_tex = backend.load_texture(w, h, &wp_data)?;
+    {
+        let obj = sdi.create("wallpaper");
+        obj.x = 0;
+        obj.y = 0;
+        obj.w = w;
+        obj.h = h;
+        obj.texture = Some(wallpaper_tex);
+        obj.z = -1000;
+    }
+
+    let mut wm = WindowManager::new(w, h);
+
+    // Create a window for the TV Guide.
+    let cfg = WindowConfig {
+        id: "tv_guide".to_string(),
+        title: "TV Guide".to_string(),
+        x: Some(20),
+        y: Some(20),
+        width: w.saturating_sub(40),
+        height: h.saturating_sub(40),
+        window_type: WindowType::AppWindow,
+        always_on_top: false,
+        modal: false,
+    };
+    wm.create_window(&cfg, &mut sdi)?;
+
+    // Build guide state based on scenario variant.
+    let config = ChannelConfig::from_toml(DEFAULT_CHANNELS_TOML)?;
+    let mut guide = TvGuideState::new(&config);
+
+    match scenario {
+        "tv_guide_loading" => {
+            // Default state: no catalogs, no fetch attempted.
+        },
+        "tv_guide_error" => {
+            guide.fetch_attempted = true;
+            guide.fetch_error = Some("Network timeout: archive.org".to_string());
+        },
+        "tv_guide_populated" => {
+            // Inject mock catalogs for all channels.
+            for (i, ch) in guide.channels.clone().iter().enumerate() {
+                let catalog = oasis_core::apps::tv_guide::catalog::ChannelCatalog::new(ch.number);
+                let mut cat = catalog;
+                let episodes: Vec<oasis_core::apps::tv_guide::VideoEpisode> = (0..5)
+                    .map(|j| oasis_core::apps::tv_guide::VideoEpisode {
+                        item_id: format!("mock-{}-{j}", ch.number),
+                        filename: format!("ep{j:02}.mp4"),
+                        title: format!("Episode {}", j + 1),
+                        duration_secs: 1800.0,
+                        width: 640,
+                        height: 480,
+                        size_bytes: 50_000_000,
+                    })
+                    .collect();
+                cat.add_episodes(episodes);
+                guide.catalogs[i] = Some(cat);
+                guide.rebuild_cached_schedule(i);
+            }
+            guide.fetch_attempted = true;
+        },
+        "tv_guide_tuned" => {
+            // Populated + tuned to channel 0.
+            for (i, ch) in guide.channels.clone().iter().enumerate() {
+                let mut cat = oasis_core::apps::tv_guide::catalog::ChannelCatalog::new(ch.number);
+                let episodes: Vec<oasis_core::apps::tv_guide::VideoEpisode> = (0..5)
+                    .map(|j| oasis_core::apps::tv_guide::VideoEpisode {
+                        item_id: format!("mock-{}-{j}", ch.number),
+                        filename: format!("ep{j:02}.mp4"),
+                        title: format!("Episode {}", j + 1),
+                        duration_secs: 1800.0,
+                        width: 640,
+                        height: 480,
+                        size_bytes: 50_000_000,
+                    })
+                    .collect();
+                cat.add_episodes(episodes);
+                guide.catalogs[i] = Some(cat);
+                guide.rebuild_cached_schedule(i);
+            }
+            guide.fetch_attempted = true;
+            guide.tuned_channel = Some(0);
+        },
+        _ => {
+            log::warn!("Unknown TV Guide scenario: {scenario}");
+        },
+    }
+
+    // Render the guide's SDI objects.
+    guide.update_sdi(&mut sdi, &active_theme);
+
+    // Also render text content into the window via draw_with_clips.
+    let lines = guide.text_content();
+    wm.draw_with_clips(&mut sdi, backend, |window_id, cx, cy, cw, ch, be| {
+        if window_id == "tv_guide" {
+            // Draw content background.
+            be.fill_rect(cx, cy, cw, ch, active_theme.app_bg)?;
+            // Draw title.
+            be.draw_text(
+                "TV Guide",
+                cx + 4,
+                cy + 2,
+                12,
+                active_theme.app_title_bar_text,
+            )?;
+            be.fill_rect(
+                cx,
+                cy + active_theme.app_title_bar_height as i32 - 4,
+                cw,
+                1,
+                active_theme.app_divider,
+            )?;
+            // Draw text lines.
+            let line_h = active_theme.terminal_line_height.max(12) as i32;
+            let max_lines = ((ch as i32 - line_h - 4) / line_h).max(0) as usize;
+            for (i, line) in lines.iter().take(max_lines).enumerate() {
+                let y = cy + active_theme.app_title_bar_height as i32 + i as i32 * line_h;
+                be.draw_text(line, cx + 4, y, 12, active_theme.app_text)?;
+            }
+        }
+        Ok(())
+    })?;
+
+    render_and_save(backend, &mut sdi, w, h, &out_dir.join("actual.png"))?;
+
+    backend.destroy_texture(wallpaper_tex)?;
+
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
 // HTML report generation
 // ---------------------------------------------------------------------------
 
@@ -1366,6 +1531,7 @@ fn main() -> anyhow::Result<()> {
             },
             "widget" => run_widget_gallery(&mut backend, &out_dir, w, h),
             "wm" => run_wm_scenario(&mut backend, &scenario.name, &out_dir, w, h),
+            "tv_guide" => run_tv_guide_scenario(&mut backend, &scenario.name, &out_dir, w, h),
             _ => {
                 anyhow::bail!("Unknown scenario category: {}", scenario.category);
             },

@@ -5,5 +5,6 @@
 //! content area, and handles input for navigation and exit.
 
 mod runner;
+pub mod tv_guide;
 
 pub use runner::{AppAction, AppRunner};

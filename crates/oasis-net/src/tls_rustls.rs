@@ -5,7 +5,7 @@
 
 use std::collections::VecDeque;
 use std::io::{self, Read, Write};
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 
 use rustls::ClientConfig;
 use rustls::pki_types::ServerName;
@@ -14,6 +14,17 @@ use oasis_types::backend::NetworkStream;
 use oasis_types::error::{OasisError, Result};
 
 use super::tls::TlsProvider;
+
+/// Process-wide TLS client configuration (built once, shared by all providers).
+static SHARED_CONFIG: LazyLock<Arc<ClientConfig>> = LazyLock::new(|| {
+    let root_store =
+        rustls::RootCertStore::from_iter(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+    Arc::new(
+        ClientConfig::builder()
+            .with_root_certificates(root_store)
+            .with_no_client_auth(),
+    )
+});
 
 /// Shared, reusable TLS client configuration (one per process).
 ///
@@ -26,16 +37,13 @@ pub struct RustlsTlsProvider {
 
 impl RustlsTlsProvider {
     /// Build a provider that trusts Mozilla's root CA bundle.
+    ///
+    /// Uses a process-wide `LazyLock` singleton so the root certificate
+    /// store is only initialized once, regardless of how many providers
+    /// or `StdNetworkBackend` instances are created.
     pub fn new() -> Self {
-        let root_store =
-            rustls::RootCertStore::from_iter(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
-
-        let config = ClientConfig::builder()
-            .with_root_certificates(root_store)
-            .with_no_client_auth();
-
         Self {
-            config: Arc::new(config),
+            config: Arc::clone(&SHARED_CONFIG),
         }
     }
 }
@@ -650,8 +658,8 @@ mod tests {
     #[test]
     fn test_default_provider() {
         let p = RustlsTlsProvider::default();
-        // default() should produce a valid provider identical to new().
-        assert!(!Arc::ptr_eq(&p.config, &RustlsTlsProvider::new().config));
+        // Both default() and new() share the process-wide LazyLock config.
+        assert!(Arc::ptr_eq(&p.config, &RustlsTlsProvider::new().config));
     }
 
     #[test]
