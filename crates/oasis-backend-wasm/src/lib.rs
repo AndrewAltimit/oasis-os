@@ -1505,7 +1505,6 @@ fn trim_output(output_lines: &mut Vec<String>) {
 // VFS population
 // ---------------------------------------------------------------------------
 
-/// Populate the WASM VFS with demo content.
 /// Find a TV Guide runner in either the full-screen or windowed runners.
 fn find_tv_guide_runner_wasm<'a>(
     app_runner: &'a mut Option<AppRunner>,
@@ -1522,8 +1521,6 @@ fn find_tv_guide_runner_wasm<'a>(
         .find(|runner| runner.title == "TV Guide")
 }
 
-/// Check if a runner's pending request is a TV Guide tune_url (should not be
-/// consumed by the generic VFS handler).
 /// Compute the TV preview box rect `(x, y, w, h)` matching `guide.rs` layout.
 fn tv_preview_rect(at: &ActiveTheme) -> (i32, i32, u32, u32) {
     let usable_h = at
@@ -1537,12 +1534,15 @@ fn tv_preview_rect(at: &ActiveTheme) -> (i32, i32, u32, u32) {
     (preview_x, preview_y, preview_w, preview_h)
 }
 
+/// Check if a runner's pending request is a TV Guide tune_url (should not be
+/// consumed by the generic VFS handler).
 fn is_tv_tune_request_wasm(runner: &AppRunner) -> bool {
     runner.peek_pending_request().is_some_and(|req| {
         req.0 == oasis_core::apps::tv_guide::TV_REQUEST_PATH && req.1.starts_with("tune_url ")
     })
 }
 
+/// Populate the WASM VFS with demo content.
 fn populate_wasm_vfs(vfs: &mut MemoryVfs) {
     // Core directory structure.
     let _ = vfs.mkdir("/home");
