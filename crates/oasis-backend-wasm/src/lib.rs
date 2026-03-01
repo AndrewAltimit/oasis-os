@@ -553,6 +553,11 @@ impl OasisWasm {
                             .map(|(u, s)| (u, s.parse::<u64>().unwrap_or(0)))
                             .unwrap_or((rest, 0));
                         if !url.is_empty() {
+                            console_log!(
+                                "TV tune: {} seek={}s",
+                                &url[..url.len().min(80)],
+                                seek_secs,
+                            );
                             let (_, _, pw, ph) = tv_preview_rect(&self.active_theme);
                             let tex_id =
                                 self.video_player
@@ -561,6 +566,7 @@ impl OasisWasm {
                             // existing rendering code displays it.
                             if let Some(guide) = runner.tv_guide_state() {
                                 guide.preview_texture = tex_id;
+                                console_log!("TV tune: texture={:?} preview={}x{}", tex_id, pw, ph,);
                             }
                         }
                     } else {

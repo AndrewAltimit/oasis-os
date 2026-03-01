@@ -13,6 +13,10 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
+# openh264-sys2 compiles Cisco's OpenH264 C source via cc.  For wasm32 we
+# must disable hand-written assembly (x86/ARM SIMD) that won't compile.
+export OPENH264_NO_ASM=1
+
 PROFILE="${1:-}"
 
 if [ "$PROFILE" = "--release" ]; then
