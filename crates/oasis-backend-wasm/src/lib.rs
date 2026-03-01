@@ -126,7 +126,7 @@ pub struct OasisWasm {
     radio_source: Option<Box<dyn oasis_audio::radio::RadioSource>>,
     archive_catalog: Option<oasis_audio::radio::ArchiveCatalog>,
     pending_catalog: Option<archive::WasmArchiveCatalogFetcher>,
-    video_overlay: video::VideoOverlay,
+    video_player: video::VideoPlayer,
     pending_tv_catalog: Option<tv_catalog::WasmTvCatalogFetcher>,
 }
 
@@ -185,9 +185,8 @@ impl OasisWasm {
         let iframe = IframeOverlay::new(&canvas)
             .map_err(|e| JsValue::from_str(&format!("iframe overlay: {e:?}")))?;
 
-        // Video overlay for TV Guide playback.
-        let video_overlay = video::VideoOverlay::new(&canvas)
-            .map_err(|e| JsValue::from_str(&format!("video overlay: {e:?}")))?;
+        // In-canvas video player for TV Guide playback.
+        let video_player = video::VideoPlayer::new();
 
         // Scene graph and commands.
         let mut sdi = SdiRegistry::new();
@@ -298,7 +297,7 @@ impl OasisWasm {
             radio_source: None,
             archive_catalog: None,
             pending_catalog: None,
-            video_overlay,
+            video_player,
             pending_tv_catalog: None,
         })
     }
@@ -553,16 +552,16 @@ impl OasisWasm {
                             .rsplit_once(' ')
                             .map(|(u, s)| (u, s.parse::<u64>().unwrap_or(0)))
                             .unwrap_or((rest, 0));
-                        // Extract item_id from download URL:
-                        //   https://archive.org/download/{item_id}/{filename}
-                        let item_id = url
-                            .strip_prefix("https://archive.org/download/")
-                            .and_then(|p| p.split('/').next())
-                            .unwrap_or(url);
-                        if !item_id.is_empty() {
-                            let (px, py, pw, ph) = tv_preview_rect(&self.active_theme);
-                            self.video_overlay
-                                .show_pip(item_id, seek_secs, px, py, pw, ph);
+                        if !url.is_empty() {
+                            let (_, _, pw, ph) = tv_preview_rect(&self.active_theme);
+                            let tex_id =
+                                self.video_player
+                                    .start(url, seek_secs, pw, ph, &mut self.backend);
+                            // Assign the texture to the guide so its
+                            // existing rendering code displays it.
+                            if let Some(guide) = runner.tv_guide_state() {
+                                guide.preview_texture = tex_id;
+                            }
                         }
                     } else {
                         let _ = self.vfs.write(&path, data.as_bytes());
@@ -571,9 +570,9 @@ impl OasisWasm {
             }
         }
 
-        // Detect untune: overlay is visible but guide has no tuned channel.
-        if self.video_overlay.is_visible() {
-            let should_hide = {
+        // Detect untune: video is playing but guide has no tuned channel.
+        if self.video_player.is_active() {
+            let should_stop = {
                 let runner =
                     find_tv_guide_runner_wasm(&mut self.app_runner, &mut self.open_runners);
                 match runner {
@@ -583,14 +582,13 @@ impl OasisWasm {
                     None => true, // TV Guide closed.
                 }
             };
-            if should_hide {
-                self.video_overlay.hide();
-            } else {
-                // Track canvas resize / window movement each frame.
-                let (px, py, pw, ph) = tv_preview_rect(&self.active_theme);
-                self.video_overlay.update_position(px, py, pw, ph);
+            if should_stop {
+                self.video_player.stop(&mut self.backend);
             }
         }
+
+        // Capture the latest video frame onto the texture canvas.
+        self.video_player.tick();
 
         // Update SDI scene graph for the active mode.
         self.update_sdi();
@@ -1488,6 +1486,21 @@ impl OasisWasm {
     /// Get the current screen height.
     pub fn screen_height(&self) -> u32 {
         self.height
+    }
+
+    /// Launch an app by title (e.g. "TV Guide", "Browser", "File Manager").
+    pub fn launch_app(&mut self, title: &str) {
+        let app = self
+            .dashboard
+            .apps
+            .iter()
+            .find(|a| a.title == title)
+            .cloned();
+        if let Some(app) = app {
+            self.launch_app_window(&app);
+        } else {
+            log::warn!("App not found: {title}");
+        }
     }
 }
 

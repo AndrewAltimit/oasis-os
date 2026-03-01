@@ -1016,3 +1016,21 @@ impl SdiBackend for WasmBackend {
         Ok(())
     }
 }
+
+// ---------------------------------------------------------------------------
+// Extra public helpers (not part of SdiBackend)
+// ---------------------------------------------------------------------------
+
+impl WasmBackend {
+    /// Register an existing offscreen `<canvas>` as a texture.
+    ///
+    /// The caller keeps a clone of the `HtmlCanvasElement` reference so it can
+    /// draw into it (e.g. `ctx.drawImage(video, …)`).  When `blit()` runs it
+    /// will paint the latest content.
+    pub fn register_canvas_as_texture(&mut self, canvas: HtmlCanvasElement) -> TextureId {
+        let id = self.next_texture_id;
+        self.next_texture_id += 1;
+        self.textures.insert(id, TextureData { canvas });
+        TextureId(id)
+    }
+}

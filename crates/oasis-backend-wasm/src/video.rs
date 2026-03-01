@@ -1,65 +1,171 @@
-//! Video overlay for TV Guide playback via `<iframe>` on the IA embed player.
+//! In-canvas video player for TV Guide playback.
 //!
-//! Wraps `IframeOverlay` to show Internet Archive video content at either
-//! PIP size (small preview in the header) or full-screen (fills content area).
+//! Uses a hidden `<video>` element playing a direct MP4 URL.  Each frame the
+//! video content is drawn onto an offscreen `<canvas>` that is registered as a
+//! backend texture.  The existing `preview_texture` rendering path in
+//! `guide.rs` handles display — no iframe overlay needed.
 
-use super::iframe::IframeOverlay;
-use web_sys::HtmlCanvasElement;
+use wasm_bindgen::JsCast;
+use wasm_bindgen::prelude::*;
+use web_sys::{CanvasRenderingContext2d, HtmlCanvasElement, HtmlVideoElement};
 
-/// Manages a video iframe overlay for Internet Archive video playback.
-pub struct VideoOverlay {
-    iframe: IframeOverlay,
+use oasis_types::backend::{SdiBackend, TextureId};
+
+use crate::renderer::WasmBackend;
+
+/// Manages a hidden `<video>` element whose frames are captured onto an
+/// offscreen canvas registered as a backend texture.
+pub struct VideoPlayer {
+    video: Option<HtmlVideoElement>,
+    capture_canvas: Option<HtmlCanvasElement>,
+    capture_ctx: Option<CanvasRenderingContext2d>,
+    texture_id: Option<TextureId>,
+    width: u32,
+    height: u32,
+    active: bool,
 }
 
-impl VideoOverlay {
-    /// Create a new hidden video overlay.
-    pub fn new(canvas: &HtmlCanvasElement) -> Result<Self, wasm_bindgen::JsValue> {
-        Ok(Self {
-            iframe: IframeOverlay::new(canvas)?,
-        })
+impl Default for VideoPlayer {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl VideoPlayer {
+    /// Create in idle (no-video) state.
+    pub fn new() -> Self {
+        Self {
+            video: None,
+            capture_canvas: None,
+            capture_ctx: None,
+            texture_id: None,
+            width: 0,
+            height: 0,
+            active: false,
+        }
     }
 
-    /// Show video at PIP size in the given canvas-pixel region.
-    pub fn show_pip(&mut self, item_id: &str, seek_secs: u64, cx: i32, cy: i32, cw: u32, ch: u32) {
-        let url = embed_url(item_id, seek_secs);
-        self.iframe.show(&url, cx, cy, cw, ch);
-    }
-
-    /// Show video full-screen in the given canvas-pixel region.
-    pub fn show_fullscreen(
+    /// Start playing a direct MP4 URL.
+    ///
+    /// Creates a hidden `<video>`, an offscreen capture canvas registered as a
+    /// texture, and begins playback.  Returns the `TextureId` the caller
+    /// should assign to `guide.preview_texture`.
+    pub fn start(
         &mut self,
-        item_id: &str,
+        url: &str,
         seek_secs: u64,
-        cx: i32,
-        cy: i32,
-        cw: u32,
-        ch: u32,
-    ) {
-        let url = embed_url(item_id, seek_secs);
-        self.iframe.show(&url, cx, cy, cw, ch);
+        w: u32,
+        h: u32,
+        backend: &mut WasmBackend,
+    ) -> Option<TextureId> {
+        // Tear down any previous session.
+        self.stop(backend);
+
+        let window = web_sys::window()?;
+        let document = window.document()?;
+
+        // --- Hidden <video> element ---
+        let video: HtmlVideoElement = document.create_element("video").ok()?.dyn_into().ok()?;
+        video.set_cross_origin(Some("anonymous"));
+        video.set_attribute("playsinline", "").ok()?;
+        video.set_preload("auto");
+        video.set_src(url);
+        if seek_secs > 0 {
+            video.set_current_time(seek_secs as f64);
+        }
+        // Hide from viewport.
+        video.style().set_property("display", "none").ok()?;
+        document.body()?.append_child(&video).ok()?;
+
+        // --- Offscreen capture canvas ---
+        let capture: HtmlCanvasElement = document.create_element("canvas").ok()?.dyn_into().ok()?;
+        capture.set_width(w);
+        capture.set_height(h);
+
+        let ctx: CanvasRenderingContext2d = capture
+            .get_context("2d")
+            .ok()?
+            .and_then(|c| c.dyn_into().ok())?;
+
+        // Register the capture canvas as a texture (zero-copy path).
+        let tex_id = backend.register_canvas_as_texture(capture.clone());
+
+        // Attempt autoplay; if blocked by browser policy, retry muted.
+        let video_clone = video.clone();
+        if let Ok(promise) = video.play() {
+            let reject_handler = Closure::wrap(Box::new(move |_: JsValue| {
+                video_clone.set_muted(true);
+                let _ = video_clone.play();
+            }) as Box<dyn FnMut(JsValue)>);
+            let _ = promise.catch(&reject_handler);
+            reject_handler.forget(); // one-shot, leak is fine
+        }
+
+        self.video = Some(video);
+        self.capture_canvas = Some(capture);
+        self.capture_ctx = Some(ctx);
+        self.texture_id = Some(tex_id);
+        self.width = w;
+        self.height = h;
+        self.active = true;
+
+        Some(tex_id)
     }
 
-    /// Hide the video overlay.
-    pub fn hide(&mut self) {
-        self.iframe.hide();
+    /// Capture the current video frame onto the offscreen canvas.
+    ///
+    /// Should be called once per animation frame while active.  The texture
+    /// automatically reflects the new content on the next `blit()`.
+    pub fn tick(&self) {
+        if let (Some(video), Some(ctx)) = (&self.video, &self.capture_ctx) {
+            // HAVE_CURRENT_DATA (readyState >= 2) means at least one frame
+            // is available for drawing.
+            if video.ready_state() >= 2 {
+                let _ = ctx.draw_image_with_html_video_element_and_dw_and_dh(
+                    video,
+                    0.0,
+                    0.0,
+                    self.width as f64,
+                    self.height as f64,
+                );
+            }
+        }
     }
 
-    /// Whether the video overlay is currently visible.
-    pub fn is_visible(&self) -> bool {
-        self.iframe.is_visible()
+    /// Stop playback, destroy DOM elements and the backend texture.
+    pub fn stop(&mut self, backend: &mut WasmBackend) {
+        if let Some(video) = self.video.take() {
+            video.pause().ok();
+            video.set_src("");
+            if let Some(parent) = video.parent_node() {
+                let _ = parent.remove_child(&video);
+            }
+        }
+        self.capture_canvas = None;
+        self.capture_ctx = None;
+        if let Some(tex) = self.texture_id.take() {
+            let _ = backend.destroy_texture(tex);
+        }
+        self.width = 0;
+        self.height = 0;
+        self.active = false;
     }
 
-    /// Update position (for window drag/resize).
-    pub fn update_position(&self, cx: i32, cy: i32, cw: u32, ch: u32) {
-        self.iframe.update_position(cx, cy, cw, ch);
+    /// Whether the player is currently loading or playing.
+    pub fn is_active(&self) -> bool {
+        self.active
     }
 }
 
-/// Build IA embed player URL with optional seek position.
-fn embed_url(item_id: &str, seek_secs: u64) -> String {
-    if seek_secs > 0 {
-        format!("https://archive.org/embed/{item_id}?start={seek_secs}")
-    } else {
-        format!("https://archive.org/embed/{item_id}")
+impl Drop for VideoPlayer {
+    fn drop(&mut self) {
+        // Best-effort DOM cleanup (no backend reference available here).
+        if let Some(video) = self.video.take() {
+            video.pause().ok();
+            video.set_src("");
+            if let Some(parent) = video.parent_node() {
+                let _ = parent.remove_child(&video);
+            }
+        }
     }
 }

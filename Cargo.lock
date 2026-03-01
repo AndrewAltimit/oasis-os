@@ -693,6 +693,7 @@ dependencies = [
 name = "oasis-core"
 version = "1.0.0"
 dependencies = [
+ "js-sys",
  "log",
  "oasis-audio",
  "oasis-browser",

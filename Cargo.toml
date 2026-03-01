@@ -84,6 +84,8 @@ web-sys = { version = "0.3", features = [
     "MediaSource", "SourceBuffer", "SourceBufferList",
     # Audio element (streaming playback target)
     "HtmlAudioElement", "HtmlMediaElement", "MediaSourceReadyState",
+    # Video element (in-canvas TV Guide playback)
+    "HtmlVideoElement",
     # URL (object URLs for MSE)
     "Url",
 ] }

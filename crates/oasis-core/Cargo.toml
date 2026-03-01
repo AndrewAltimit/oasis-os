@@ -36,6 +36,9 @@ toml = { workspace = true }
 log = { workspace = true }
 thiserror = { workspace = true }
 
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+js-sys = { workspace = true }
+
 [dev-dependencies]
 tempfile = "3"
 proptest = "1"
