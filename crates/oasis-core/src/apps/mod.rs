@@ -9,10 +9,15 @@
 
 mod app_trait;
 pub mod browsing_app;
+pub mod calculator;
+pub mod clock;
 pub mod file_manager;
+pub mod games;
 pub mod layout_calc;
+pub mod paint;
 mod runner;
 pub mod simple_app;
+pub mod text_editor;
 pub mod tv_guide;
 
 pub use app_trait::{App, ContentState};

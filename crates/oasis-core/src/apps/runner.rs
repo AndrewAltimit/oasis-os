@@ -87,6 +87,11 @@ impl AppRunner {
             "Photo Viewer" => Some(Box::new(super::browsing_app::BrowsingApp::photo_viewer(
                 &path, vfs,
             ))),
+            "Text Editor" => Some(Box::new(super::text_editor::TextEditorApp::new(&path))),
+            "Calculator" => Some(Box::new(super::calculator::CalculatorApp::new(&path))),
+            "Clock" => Some(Box::new(super::clock::ClockApp::new(&path))),
+            "Paint" => Some(Box::new(super::paint::PaintApp::new(&path))),
+            "Games" => Some(Box::new(super::games::GamesApp::new(&path))),
             // Internet Radio and TV Guide have special rendering in AppRunner.
             "Internet Radio" | "TV Guide" => None,
             // All other apps get a generic placeholder.
