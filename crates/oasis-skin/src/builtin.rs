@@ -1005,8 +1005,16 @@ pub fn modern_skin() -> Result<Skin> {
     )
 }
 
-/// Load a built-in skin by name.
+/// Load a built-in skin by name with optional inheritance.
+///
+/// If the skin's manifest specifies `inherits = "parent_name"`, the parent
+/// skin is loaded first and its theme/layout fields fill in any missing
+/// values in the child. Max inheritance depth is 3.
 pub fn load_builtin(name: &str) -> Result<Skin> {
+    load_builtin_recursive(name, 0)
+}
+
+fn load_builtin_raw(name: &str) -> Result<Skin> {
     match name {
         "terminal" => terminal_skin(),
         "tactical" => tactical_skin(),
@@ -1019,6 +1027,24 @@ pub fn load_builtin(name: &str) -> Result<Skin> {
             "unknown built-in skin: {name}"
         ))),
     }
+}
+
+fn load_builtin_recursive(name: &str, depth: u32) -> Result<Skin> {
+    const MAX_DEPTH: u32 = 3;
+    if depth > MAX_DEPTH {
+        return Err(oasis_types::error::OasisError::Config(format!(
+            "skin inheritance depth exceeds {MAX_DEPTH} for '{name}'"
+        )));
+    }
+
+    let mut skin = load_builtin_raw(name)?;
+
+    if let Some(ref parent_name) = skin.manifest.inherits {
+        let parent = load_builtin_recursive(parent_name, depth + 1)?;
+        skin.merge_theme_from(&parent);
+    }
+
+    Ok(skin)
 }
 
 /// List available built-in skin names.
@@ -1322,5 +1348,33 @@ mod tests {
         assert_eq!(panel.border_radius, Some(4));
         let session = sdi.get("session_panel").unwrap();
         assert_eq!(session.border_radius, Some(4));
+    }
+
+    // -- Skin inheritance tests --
+
+    #[test]
+    fn load_builtin_with_inheritance_all_names() {
+        // Ensure all built-in skins load without error (including inheritance).
+        for name in builtin_names() {
+            let skin = load_builtin(name);
+            assert!(skin.is_ok(), "failed to load builtin skin '{name}'");
+        }
+    }
+
+    #[test]
+    fn load_builtin_with_inheritance_unknown_fails() {
+        assert!(load_builtin("nonexistent").is_err());
+    }
+
+    #[test]
+    fn no_builtin_has_inherits_by_default() {
+        // Existing built-in skins don't use inheritance (none set `inherits`).
+        for name in builtin_names() {
+            let skin = load_builtin(name).unwrap();
+            assert!(
+                skin.manifest.inherits.is_none(),
+                "built-in skin '{name}' has unexpected inherits field"
+            );
+        }
     }
 }

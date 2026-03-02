@@ -27,6 +27,12 @@ pub struct SkinManifest {
     pub screen_width: u32,
     #[serde(default = "default_height")]
     pub screen_height: u32,
+    /// Parent skin to inherit from (built-in name).
+    ///
+    /// Child skin only needs to specify overrides; non-overridden fields
+    /// come from the parent. Max depth 3 to prevent infinite recursion.
+    #[serde(default)]
+    pub inherits: Option<String>,
 }
 
 fn default_version() -> String {
@@ -402,11 +408,20 @@ impl Skin {
         let strings = read_opt("strings.toml");
         let corrupted = read_opt("corrupted.toml");
 
-        if corrupted.is_empty() {
-            Self::from_toml_full(&manifest, &layout, &features, &theme, &strings)
+        let mut skin = if corrupted.is_empty() {
+            Self::from_toml_full(&manifest, &layout, &features, &theme, &strings)?
         } else {
-            Self::from_toml_corrupted(&manifest, &layout, &features, &theme, &strings, &corrupted)
+            Self::from_toml_corrupted(&manifest, &layout, &features, &theme, &strings, &corrupted)?
+        };
+
+        // Apply inheritance from a built-in parent skin if specified.
+        if let Some(ref parent_name) = skin.manifest.inherits
+            && let Ok(parent) = super::builtin::load_builtin(parent_name)
+        {
+            skin.merge_theme_from(&parent);
         }
+
+        Ok(skin)
     }
 
     /// Scan a directory for skin subdirectories (those containing `skin.toml`).
@@ -459,6 +474,90 @@ impl Skin {
         new_skin.apply_layout_scaled(sdi, target_w, target_h);
         new_skin
     }
+
+    /// Merge missing theme fields from a parent skin.
+    ///
+    /// Only fills in fields that are `None` / empty in the child. Explicitly
+    /// set fields in the child always win.
+    pub fn merge_theme_from(&mut self, parent: &Skin) {
+        let pt = &parent.theme;
+        let ct = &mut self.theme;
+
+        // Only override extended optional fields when the child hasn't set them.
+        if ct.surface.is_none() {
+            ct.surface.clone_from(&pt.surface);
+        }
+        if ct.accent_hover.is_none() {
+            ct.accent_hover.clone_from(&pt.accent_hover);
+        }
+        if ct.border_radius.is_none() {
+            ct.border_radius = pt.border_radius;
+        }
+        if ct.shadow_intensity.is_none() {
+            ct.shadow_intensity = pt.shadow_intensity;
+        }
+        if ct.gradient_enabled.is_none() {
+            ct.gradient_enabled = pt.gradient_enabled;
+        }
+        if ct.wm_theme.is_none() {
+            ct.wm_theme.clone_from(&pt.wm_theme);
+        }
+        if ct.bar_overrides.is_none() {
+            ct.bar_overrides.clone_from(&pt.bar_overrides);
+        }
+        if ct.icon_overrides.is_none() {
+            ct.icon_overrides.clone_from(&pt.icon_overrides);
+        }
+        if ct.browser_overrides.is_none() {
+            ct.browser_overrides.clone_from(&pt.browser_overrides);
+        }
+        if ct.app_overrides.is_none() {
+            ct.app_overrides.clone_from(&pt.app_overrides);
+        }
+        if ct.osk_overrides.is_none() {
+            ct.osk_overrides.clone_from(&pt.osk_overrides);
+        }
+        if ct.start_menu_overrides.is_none() {
+            ct.start_menu_overrides.clone_from(&pt.start_menu_overrides);
+        }
+        if ct.wallpaper.is_none() {
+            ct.wallpaper.clone_from(&pt.wallpaper);
+        }
+        if ct.geometry.is_none() {
+            ct.geometry.clone_from(&pt.geometry);
+        }
+        if ct.transition.is_none() {
+            ct.transition.clone_from(&pt.transition);
+        }
+        if ct.scrollbar_overrides.is_none() {
+            ct.scrollbar_overrides.clone_from(&pt.scrollbar_overrides);
+        }
+        // Merge collection fields: only fill if child has none.
+        if ct.app_themes.is_none() {
+            ct.app_themes.clone_from(&pt.app_themes);
+        }
+        if ct.gradients.is_none() {
+            ct.gradients.clone_from(&pt.gradients);
+        }
+        if ct.animations.is_none() {
+            ct.animations.clone_from(&pt.animations);
+        }
+        if ct.widget_states.is_none() {
+            ct.widget_states.clone_from(&pt.widget_states);
+        }
+
+        // Merge layout: parent objects fill in missing child objects.
+        for (name, def) in &parent.layout.objects {
+            if !ct_layout_has(&self.layout, name) {
+                self.layout.objects.insert(name.clone(), def.clone());
+            }
+        }
+    }
+}
+
+/// Check if a layout already defines an object.
+fn ct_layout_has(layout: &SkinLayout, name: &str) -> bool {
+    layout.objects.contains_key(name)
 }
 
 #[cfg(test)]
@@ -1109,5 +1208,86 @@ author = "テスト"
         let manifest = format!("name = \"{name}\"");
         let skin = Skin::from_toml(&manifest, LAYOUT, FEATURES).unwrap();
         assert_eq!(skin.manifest.name.len(), 1000);
+    }
+
+    // -- Skin inheritance tests --
+
+    #[test]
+    fn manifest_inherits_field() {
+        let manifest = r#"
+name = "child"
+inherits = "terminal"
+"#;
+        let skin = Skin::from_toml(manifest, LAYOUT, FEATURES).unwrap();
+        assert_eq!(skin.manifest.inherits.as_deref(), Some("terminal"));
+    }
+
+    #[test]
+    fn manifest_inherits_default_none() {
+        let skin = Skin::from_toml(MANIFEST, LAYOUT, FEATURES).unwrap();
+        assert!(skin.manifest.inherits.is_none());
+    }
+
+    #[test]
+    fn merge_theme_fills_missing_fields() {
+        let parent_theme = r##"
+border_radius = 8
+shadow_intensity = 2
+
+[gradients.accent]
+from = "#FF0000"
+to = "#880000"
+"##;
+        let mut parent =
+            Skin::from_toml_full(MANIFEST, LAYOUT, FEATURES, parent_theme, "").unwrap();
+        // Give parent a unique name.
+        parent.manifest.name = "parent".to_string();
+
+        // Child has no border_radius or gradients.
+        let mut child = Skin::from_toml(MANIFEST, LAYOUT, FEATURES).unwrap();
+        assert!(child.theme.border_radius.is_none());
+        assert!(child.theme.gradients.is_none());
+
+        child.merge_theme_from(&parent);
+        assert_eq!(child.theme.border_radius, Some(8));
+        assert_eq!(child.theme.shadow_intensity, Some(2));
+        assert!(child.theme.gradients.is_some());
+    }
+
+    #[test]
+    fn merge_theme_child_overrides_win() {
+        let parent_theme = r##"
+border_radius = 8
+shadow_intensity = 2
+"##;
+        let child_theme = r##"
+border_radius = 4
+"##;
+        let parent = Skin::from_toml_full(MANIFEST, LAYOUT, FEATURES, parent_theme, "").unwrap();
+        let mut child = Skin::from_toml_full(MANIFEST, LAYOUT, FEATURES, child_theme, "").unwrap();
+
+        child.merge_theme_from(&parent);
+        // Child's border_radius should win over parent's.
+        assert_eq!(child.theme.border_radius, Some(4));
+        // Parent's shadow_intensity fills in.
+        assert_eq!(child.theme.shadow_intensity, Some(2));
+    }
+
+    #[test]
+    fn merge_theme_layout_merges() {
+        let parent_layout = r#"
+[parent_object]
+x = 10
+y = 20
+w = 100
+h = 50
+"#;
+        let parent = Skin::from_toml(MANIFEST, parent_layout, FEATURES).unwrap();
+        let mut child = Skin::from_toml(MANIFEST, LAYOUT, FEATURES).unwrap();
+        let had_parent_obj = child.layout.objects.contains_key("parent_object");
+        assert!(!had_parent_obj);
+
+        child.merge_theme_from(&parent);
+        assert!(child.layout.objects.contains_key("parent_object"));
     }
 }

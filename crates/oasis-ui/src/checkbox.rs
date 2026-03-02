@@ -154,17 +154,10 @@ mod tests {
 
     #[test]
     fn draw_all_themes_no_panic() {
-        for theme in [
-            Theme::dark(),
-            Theme::light(),
-            Theme::classic(),
-            Theme::high_contrast(),
-        ] {
-            let mut backend = MockBackend::new();
-            let mut ctx = DrawContext::new(&mut backend, &theme);
+        crate::test_utils::test_draw_all_themes(|ctx| {
             let c = Checkbox::new("Test", true);
-            c.draw(&mut ctx, 0, 0, 200, 20).unwrap();
-        }
+            c.draw(ctx, 0, 0, 200, 20).unwrap();
+        });
     }
 }
 
@@ -193,13 +186,7 @@ impl Widget for Checkbox {
             .fill_rounded_rect(x, box_y, BOX_SIZE, BOX_SIZE, radius, box_bg)?;
 
         // Box border.
-        let border_color = if self.disabled {
-            ctx.theme.border_subtle
-        } else if self.checked {
-            ctx.theme.accent
-        } else {
-            ctx.theme.input_border
-        };
+        let border_color = ctx.theme.interactive_border(self.disabled, self.checked);
         ctx.backend
             .stroke_rounded_rect(x, box_y, BOX_SIZE, BOX_SIZE, radius, 1, border_color)?;
 
@@ -219,12 +206,13 @@ impl Widget for Checkbox {
             let text_h = ctx.backend.measure_text_height(fs);
             let tx = x + BOX_SIZE as i32 + LABEL_GAP as i32;
             let ty = y + layout::center(h, text_h);
-            let color = if self.disabled {
-                ctx.theme.text_disabled
-            } else {
-                ctx.theme.text_primary
-            };
-            ctx.backend.draw_text(&self.label, tx, ty, fs, color)?;
+            ctx.backend.draw_text(
+                &self.label,
+                tx,
+                ty,
+                fs,
+                ctx.theme.interactive_text(self.disabled),
+            )?;
         }
 
         Ok(())

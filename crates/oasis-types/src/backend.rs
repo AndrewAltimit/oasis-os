@@ -829,6 +829,61 @@ pub trait AudioBackend {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Backend error helpers
+// ---------------------------------------------------------------------------
+
+/// Extension trait for converting any error into `OasisError::Backend`.
+///
+/// Eliminates repeated `.map_err(|e| OasisError::Backend(e.to_string()))`
+/// across backend implementations.
+pub trait BackendErrExt<T> {
+    /// Convert the error to `OasisError::Backend` with the error's display string.
+    fn backend_err(self) -> Result<T>;
+}
+
+impl<T, E: std::fmt::Display> BackendErrExt<T> for std::result::Result<T, E> {
+    fn backend_err(self) -> Result<T> {
+        self.map_err(|e| OasisError::Backend(e.to_string()))
+    }
+}
+
+/// Look up a value in an `Option`, returning `OasisError::Backend` if `None`.
+///
+/// Eliminates repeated `.ok_or_else(|| OasisError::Backend(format!(...)))`.
+pub fn backend_require<T>(opt: Option<T>, msg: &str) -> Result<T> {
+    opt.ok_or_else(|| OasisError::Backend(msg.into()))
+}
+
+/// Return a "texture not found" backend error for the given id.
+pub fn texture_not_found(id: u64) -> OasisError {
+    OasisError::Backend(format!("texture not found: {id}"))
+}
+
+// ---------------------------------------------------------------------------
+// Texture validation helpers
+// ---------------------------------------------------------------------------
+
+/// Validate that `rgba_data` has exactly `width * height * 4` bytes.
+///
+/// Backends should call this at the top of `load_texture()` to replace the
+/// duplicated size-check boilerplate.
+pub fn validate_rgba_data(width: u32, height: u32, rgba_data: &[u8]) -> Result<()> {
+    let expected = (width as usize)
+        .checked_mul(height as usize)
+        .and_then(|n| n.checked_mul(4))
+        .ok_or_else(|| {
+            OasisError::Backend(format!("texture dimensions overflow: {width}x{height}"))
+        })?;
+    if rgba_data.len() != expected {
+        return Err(OasisError::Backend(format!(
+            "texture data size mismatch: expected {expected}, got {}",
+            rgba_data.len()
+        )));
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1665,5 +1720,84 @@ mod tests {
             DrawCommand::PushTranslate { dx: 1, dy: 2 },
             DrawCommand::PopTranslate,
         ];
+    }
+
+    // -- BackendErrExt tests --
+
+    #[test]
+    fn backend_err_ext_converts_string_error() {
+        let res: std::result::Result<(), String> = Err("oops".to_string());
+        let err = res.backend_err().unwrap_err();
+        assert!(format!("{err}").contains("oops"));
+    }
+
+    #[test]
+    fn backend_err_ext_ok_passes_through() {
+        let res: std::result::Result<i32, String> = Ok(42);
+        assert_eq!(res.backend_err().unwrap(), 42);
+    }
+
+    #[test]
+    fn backend_err_ext_io_error() {
+        let res: std::result::Result<(), std::io::Error> =
+            Err(std::io::Error::new(std::io::ErrorKind::NotFound, "gone"));
+        let err = res.backend_err().unwrap_err();
+        assert!(format!("{err}").contains("gone"));
+    }
+
+    #[test]
+    fn backend_require_some() {
+        assert_eq!(backend_require(Some(7), "missing").unwrap(), 7);
+    }
+
+    #[test]
+    fn backend_require_none() {
+        let err = backend_require::<i32>(None, "missing value").unwrap_err();
+        assert!(format!("{err}").contains("missing value"));
+    }
+
+    #[test]
+    fn texture_not_found_message() {
+        let err = texture_not_found(42);
+        assert_eq!(format!("{err}"), "backend error: texture not found: 42");
+    }
+
+    // -- validate_rgba_data tests --
+
+    #[test]
+    fn validate_rgba_data_correct_size() {
+        let data = vec![0u8; 4 * 4 * 4]; // 4x4 RGBA
+        assert!(validate_rgba_data(4, 4, &data).is_ok());
+    }
+
+    #[test]
+    fn validate_rgba_data_too_small() {
+        let data = vec![0u8; 10];
+        let err = validate_rgba_data(4, 4, &data).unwrap_err();
+        assert!(format!("{err}").contains("size mismatch"));
+    }
+
+    #[test]
+    fn validate_rgba_data_too_large() {
+        let data = vec![0u8; 100];
+        let err = validate_rgba_data(4, 4, &data).unwrap_err();
+        assert!(format!("{err}").contains("size mismatch"));
+    }
+
+    #[test]
+    fn validate_rgba_data_zero_dimensions() {
+        assert!(validate_rgba_data(0, 0, &[]).is_ok());
+    }
+
+    #[test]
+    fn validate_rgba_data_overflow_dimensions() {
+        let err = validate_rgba_data(u32::MAX, u32::MAX, &[]).unwrap_err();
+        assert!(format!("{err}").contains("overflow"));
+    }
+
+    #[test]
+    fn validate_rgba_data_1x1() {
+        let data = vec![255, 0, 0, 255]; // 1x1 red pixel
+        assert!(validate_rgba_data(1, 1, &data).is_ok());
     }
 }

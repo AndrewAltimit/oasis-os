@@ -3,6 +3,7 @@
 use oasis_types::error::{OasisError, Result};
 use oasis_vfs::EntryKind;
 
+use crate::cmd_helpers::require_args;
 use crate::interpreter::{Command, CommandOutput, CommandRegistry, Environment};
 
 /// Maximum file size for `cat` display (10 MiB).
@@ -209,9 +210,7 @@ impl Command for CatCmd {
         "filesystem"
     }
     fn execute(&self, args: &[&str], env: &mut Environment<'_>) -> Result<CommandOutput> {
-        if args.is_empty() {
-            return Err(OasisError::Command("usage: cat <file>".to_string()));
-        }
+        require_args(args, 1, "cat <file>")?;
         let path = resolve_path(&env.cwd, args[0]);
         let meta = env.vfs.stat(&path)?;
         if meta.size as usize > CAT_MAX_SIZE {
@@ -245,9 +244,7 @@ impl Command for MkdirCmd {
         "filesystem"
     }
     fn execute(&self, args: &[&str], env: &mut Environment<'_>) -> Result<CommandOutput> {
-        if args.is_empty() {
-            return Err(OasisError::Command("usage: mkdir <path>".to_string()));
-        }
+        require_args(args, 1, "mkdir <path>")?;
         let path = resolve_path(&env.cwd, args[0]);
         env.vfs.mkdir(&path)?;
         Ok(CommandOutput::None)
@@ -273,9 +270,7 @@ impl Command for RmCmd {
         "filesystem"
     }
     fn execute(&self, args: &[&str], env: &mut Environment<'_>) -> Result<CommandOutput> {
-        if args.is_empty() {
-            return Err(OasisError::Command("usage: rm <path>".to_string()));
-        }
+        require_args(args, 1, "rm <path>")?;
         let path = resolve_path(&env.cwd, args[0]);
         env.vfs.remove(&path)?;
         Ok(CommandOutput::None)
@@ -369,9 +364,7 @@ impl Command for TouchCmd {
         "filesystem"
     }
     fn execute(&self, args: &[&str], env: &mut Environment<'_>) -> Result<CommandOutput> {
-        if args.is_empty() {
-            return Err(OasisError::Command("usage: touch <file>".to_string()));
-        }
+        require_args(args, 1, "touch <file>")?;
         let path = resolve_path(&env.cwd, args[0]);
         if !env.vfs.exists(&path) {
             env.vfs.write(&path, &[])?;
@@ -399,9 +392,7 @@ impl Command for CpCmd {
         "filesystem"
     }
     fn execute(&self, args: &[&str], env: &mut Environment<'_>) -> Result<CommandOutput> {
-        if args.len() < 2 {
-            return Err(OasisError::Command("usage: cp <src> <dst>".to_string()));
-        }
+        require_args(args, 2, "cp <src> <dst>")?;
         let src = resolve_path(&env.cwd, args[0]);
         let dst = resolve_path(&env.cwd, args[1]);
         let meta = env.vfs.stat(&src)?;
@@ -436,9 +427,7 @@ impl Command for MvCmd {
         "filesystem"
     }
     fn execute(&self, args: &[&str], env: &mut Environment<'_>) -> Result<CommandOutput> {
-        if args.len() < 2 {
-            return Err(OasisError::Command("usage: mv <src> <dst>".to_string()));
-        }
+        require_args(args, 2, "mv <src> <dst>")?;
         let src = resolve_path(&env.cwd, args[0]);
         let dst = resolve_path(&env.cwd, args[1]);
         let meta = env.vfs.stat(&src)?;
@@ -718,11 +707,7 @@ impl Command for RemoteCmd {
         "network"
     }
     fn execute(&self, args: &[&str], env: &mut Environment<'_>) -> Result<CommandOutput> {
-        if args.is_empty() {
-            return Err(OasisError::Command(
-                "usage: remote <host|addr:port>".to_string(),
-            ));
-        }
+        require_args(args, 1, "remote <host|addr:port>")?;
         let target = args[0];
 
         // Try addr:port format.

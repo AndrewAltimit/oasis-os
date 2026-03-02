@@ -59,3 +59,6 @@ pub use system_commands::register_system_commands;
 pub use text_commands::register_text_commands;
 /// Register UI control commands (wm, sdi, theme, notify, screenshot).
 pub use ui_commands::register_ui_commands;
+
+pub mod cmd_helpers;
+pub use cmd_helpers::{require_args, require_args_exact};

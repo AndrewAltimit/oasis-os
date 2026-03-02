@@ -4,6 +4,7 @@
 //! primitives, and a widget toolkit. All rendering goes through `SdiBackend`
 //! trait methods -- no platform-specific code.
 
+pub mod accordion;
 pub mod animation;
 pub mod avatar;
 pub mod badge;
@@ -12,6 +13,7 @@ pub mod card;
 pub mod checkbox;
 pub use oasis_types::color;
 pub mod context;
+pub mod context_menu;
 pub mod divider;
 pub mod dropdown;
 pub mod flex;
@@ -27,12 +29,16 @@ pub mod progress_bar;
 pub mod scroll_view;
 pub use oasis_types::shadow;
 pub mod radio;
+pub mod slider;
 pub mod spinner;
+pub mod split_pane;
 pub mod tab_bar;
 pub mod text_block;
 pub mod theme;
+pub mod toast;
 pub mod toggle;
 pub mod tooltip;
+pub mod tree_view;
 pub mod widget;
 
 #[cfg(test)]

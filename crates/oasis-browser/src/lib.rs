@@ -57,6 +57,7 @@ pub mod internals {
     pub use crate::layout::block::{
         StyleCache, TextMeasurer, build_layout_tree, layout_block_incremental,
     };
+    pub use crate::layout::text_cache::CachingMeasurer;
     pub use crate::paint::paint as paint_page;
 }
 
@@ -328,10 +329,11 @@ impl BrowserWidget {
         let doc = self.document.as_ref().unwrap();
         let content_h = self.config.content_height(self.window_h);
         let base_url = self.nav.current_url().map(String::from);
+        let measurer = layout::text_cache::CachingMeasurer::new(&SimpleTextMeasurer);
         let layout_root = layout::block::build_layout_tree(
             doc,
             &self.styles,
-            &SimpleTextMeasurer,
+            &measurer,
             self.window_w as f32,
             content_h as f32,
             base_url.as_deref(),
@@ -527,10 +529,11 @@ impl BrowserWidget {
         // 6. Build layout tree.
         let content_h = self.config.content_height(self.window_h);
         let image_info = self.build_image_info_map();
+        let measurer = layout::text_cache::CachingMeasurer::new(&SimpleTextMeasurer);
         let layout_root = layout::block::build_layout_tree(
             &doc,
             &styles,
-            &SimpleTextMeasurer,
+            &measurer,
             self.window_w as f32,
             content_h as f32,
             Some(url),
@@ -892,10 +895,11 @@ impl BrowserWidget {
         if let Some(doc) = &self.document {
             let content_h = self.config.content_height(self.window_h);
             let base_url = self.nav.current_url().map(String::from);
+            let measurer = layout::text_cache::CachingMeasurer::new(&SimpleTextMeasurer);
             let layout_root = layout::block::build_layout_tree(
                 doc,
                 &self.styles,
-                &SimpleTextMeasurer,
+                &measurer,
                 self.window_w as f32,
                 content_h as f32,
                 base_url.as_deref(),

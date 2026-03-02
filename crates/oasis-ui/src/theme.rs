@@ -138,6 +138,46 @@ impl Theme {
         (scaled as u32).clamp(1, u16::MAX as u32) as u16
     }
 
+    // -------------------------------------------------------------------
+    // Interactive state color helpers
+    // -------------------------------------------------------------------
+
+    /// Border color for interactive controls (checkbox, radio, toggle).
+    ///
+    /// Returns `border_subtle` when disabled, `accent` when selected,
+    /// and `input_border` otherwise.
+    pub fn interactive_border(&self, disabled: bool, selected: bool) -> Color {
+        if disabled {
+            self.border_subtle
+        } else if selected {
+            self.accent
+        } else {
+            self.input_border
+        }
+    }
+
+    /// Accent color respecting disabled state.
+    ///
+    /// Returns `text_disabled` when disabled, `accent` otherwise.
+    pub fn interactive_accent(&self, disabled: bool) -> Color {
+        if disabled {
+            self.text_disabled
+        } else {
+            self.accent
+        }
+    }
+
+    /// Text color respecting disabled state.
+    ///
+    /// Returns `text_disabled` when disabled, `text_primary` otherwise.
+    pub fn interactive_text(&self, disabled: bool) -> Color {
+        if disabled {
+            self.text_disabled
+        } else {
+            self.text_primary
+        }
+    }
+
     /// Dark theme matching the OASIS cyberpunk aesthetic.
     pub fn dark() -> Self {
         Self {
@@ -688,5 +728,50 @@ mod tests {
         assert!(t.background.r < 50);
         assert!(t.background.g < 50);
         assert!(t.background.b < 50);
+    }
+
+    // -- interactive state helpers --
+
+    #[test]
+    fn interactive_border_disabled() {
+        let t = Theme::dark();
+        assert_eq!(t.interactive_border(true, false), t.border_subtle);
+        assert_eq!(t.interactive_border(true, true), t.border_subtle);
+    }
+
+    #[test]
+    fn interactive_border_selected() {
+        let t = Theme::dark();
+        assert_eq!(t.interactive_border(false, true), t.accent);
+    }
+
+    #[test]
+    fn interactive_border_default() {
+        let t = Theme::dark();
+        assert_eq!(t.interactive_border(false, false), t.input_border);
+    }
+
+    #[test]
+    fn interactive_accent_disabled() {
+        let t = Theme::dark();
+        assert_eq!(t.interactive_accent(true), t.text_disabled);
+    }
+
+    #[test]
+    fn interactive_accent_enabled() {
+        let t = Theme::dark();
+        assert_eq!(t.interactive_accent(false), t.accent);
+    }
+
+    #[test]
+    fn interactive_text_disabled() {
+        let t = Theme::dark();
+        assert_eq!(t.interactive_text(true), t.text_disabled);
+    }
+
+    #[test]
+    fn interactive_text_enabled() {
+        let t = Theme::dark();
+        assert_eq!(t.interactive_text(false), t.text_primary);
     }
 }

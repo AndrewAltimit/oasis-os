@@ -21,8 +21,11 @@ use sdl2::rect::Rect;
 use sdl2::render::{Canvas, Texture, TextureCreator};
 use sdl2::video::{Window, WindowContext};
 
-use oasis_core::backend::{Color, GradientStyle, SdiBackend, TextureId};
-use oasis_core::error::{OasisError, Result};
+use oasis_core::backend::{
+    BackendErrExt, Color, GradientStyle, SdiBackend, TextureId, texture_not_found,
+    validate_rgba_data,
+};
+use oasis_core::error::Result;
 use oasis_core::input::{Button, InputEvent, Trigger};
 
 pub use network::SdlNetworkBackend;
@@ -63,28 +66,22 @@ pub struct SdlBackend {
 impl SdlBackend {
     /// Create a new SDL2 backend with a window.
     pub fn new(title: &str, width: u32, height: u32) -> Result<Self> {
-        let sdl = sdl2::init().map_err(|e| OasisError::Backend(e.to_string()))?;
-        let video = sdl
-            .video()
-            .map_err(|e| OasisError::Backend(e.to_string()))?;
+        let sdl = sdl2::init().backend_err()?;
+        let video = sdl.video().backend_err()?;
         let window = video
             .window(title, width, height)
             .position_centered()
             .build()
-            .map_err(|e| OasisError::Backend(e.to_string()))?;
+            .backend_err()?;
         let headless =
             std::env::var("SDL_RENDER_DRIVER").is_ok_and(|v| v.eq_ignore_ascii_case("software"));
         let mut builder = window.into_canvas();
         if !headless {
             builder = builder.accelerated().present_vsync();
         }
-        let canvas = builder
-            .build()
-            .map_err(|e| OasisError::Backend(e.to_string()))?;
+        let canvas = builder.build().backend_err()?;
         let texture_creator = canvas.texture_creator();
-        let event_pump = sdl
-            .event_pump()
-            .map_err(|e| OasisError::Backend(e.to_string()))?;
+        let event_pump = sdl.event_pump().backend_err()?;
 
         log::info!("SDL2 backend initialized: {width}x{height}");
 
@@ -141,10 +138,10 @@ impl SdiBackend for SdlBackend {
         let texture = self
             .textures
             .get(&tex.0)
-            .ok_or_else(|| OasisError::Backend(format!("texture not found: {}", tex.0)))?;
+            .ok_or_else(|| texture_not_found(tex.0))?;
         self.canvas
             .copy(texture, None, Rect::new(tx, ty, w, h))
-            .map_err(|e| OasisError::Backend(e.to_string()))?;
+            .backend_err()?;
         Ok(())
     }
 
@@ -223,7 +220,7 @@ impl SdiBackend for SdlBackend {
         self.set_color(color);
         self.canvas
             .fill_rect(Rect::new(tx, ty, w, h))
-            .map_err(|e| OasisError::Backend(e.to_string()))?;
+            .backend_err()?;
         Ok(())
     }
 
@@ -233,24 +230,18 @@ impl SdiBackend for SdlBackend {
     }
 
     fn load_texture(&mut self, width: u32, height: u32, rgba_data: &[u8]) -> Result<TextureId> {
-        let expected = (width * height * 4) as usize;
-        if rgba_data.len() != expected {
-            return Err(OasisError::Backend(format!(
-                "texture data size mismatch: expected {expected}, got {}",
-                rgba_data.len()
-            )));
-        }
+        validate_rgba_data(width, height, rgba_data)?;
 
         let mut texture = self
             .texture_creator
             .create_texture_streaming(PixelFormatEnum::ABGR8888, width, height)
-            .map_err(|e| OasisError::Backend(e.to_string()))?;
+            .backend_err()?;
 
         texture
             .with_lock(None, |buffer: &mut [u8], _pitch: usize| {
-                buffer[..expected].copy_from_slice(rgba_data);
+                buffer[..rgba_data.len()].copy_from_slice(rgba_data);
             })
-            .map_err(|e| OasisError::Backend(e.to_string()))?;
+            .backend_err()?;
 
         texture.set_blend_mode(sdl2::render::BlendMode::Blend);
 
@@ -288,7 +279,7 @@ impl SdiBackend for SdlBackend {
         let rect = Rect::new(x, y, w, h);
         self.canvas
             .read_pixels(rect, PixelFormatEnum::ABGR8888)
-            .map_err(|e| OasisError::Backend(e.to_string()))
+            .backend_err()
     }
 
     fn shutdown(&mut self) -> Result<()> {
@@ -835,12 +826,12 @@ impl SdiBackend for SdlBackend {
         let texture = self
             .textures
             .get(&tex.0)
-            .ok_or_else(|| OasisError::Backend(format!("texture not found: {}", tex.0)))?;
+            .ok_or_else(|| texture_not_found(tex.0))?;
         let src_rect = Rect::new(src_x as i32, src_y as i32, src_w, src_h);
         let dst_rect = Rect::new(tx, ty, dst_w, dst_h);
         self.canvas
             .copy(texture, src_rect, dst_rect)
-            .map_err(|e| OasisError::Backend(e.to_string()))?;
+            .backend_err()?;
         Ok(())
     }
 
@@ -857,13 +848,11 @@ impl SdiBackend for SdlBackend {
         let texture = self
             .textures
             .get_mut(&tex.0)
-            .ok_or_else(|| OasisError::Backend(format!("texture not found: {}", tex.0)))?;
+            .ok_or_else(|| texture_not_found(tex.0))?;
         texture.set_color_mod(tint.r, tint.g, tint.b);
         texture.set_alpha_mod(tint.a);
         let dst_rect = Rect::new(tx, ty, w, h);
-        self.canvas
-            .copy(texture, None, dst_rect)
-            .map_err(|e| OasisError::Backend(e.to_string()))?;
+        self.canvas.copy(texture, None, dst_rect).backend_err()?;
         // Reset modulation.
         let texture = self.textures.get_mut(&tex.0).unwrap();
         texture.set_color_mod(255, 255, 255);
@@ -888,14 +877,14 @@ impl SdiBackend for SdlBackend {
         let texture = self
             .textures
             .get_mut(&tex.0)
-            .ok_or_else(|| OasisError::Backend(format!("texture not found: {}", tex.0)))?;
+            .ok_or_else(|| texture_not_found(tex.0))?;
         texture.set_color_mod(tint.r, tint.g, tint.b);
         texture.set_alpha_mod(tint.a);
         let src_rect = Rect::new(src_x as i32, src_y as i32, src_w, src_h);
         let dst_rect = Rect::new(tx, ty, dst_w, dst_h);
         self.canvas
             .copy(texture, src_rect, dst_rect)
-            .map_err(|e| OasisError::Backend(e.to_string()))?;
+            .backend_err()?;
         let texture = self.textures.get_mut(&tex.0).unwrap();
         texture.set_color_mod(255, 255, 255);
         texture.set_alpha_mod(255);
@@ -916,11 +905,11 @@ impl SdiBackend for SdlBackend {
         let texture = self
             .textures
             .get(&tex.0)
-            .ok_or_else(|| OasisError::Backend(format!("texture not found: {}", tex.0)))?;
+            .ok_or_else(|| texture_not_found(tex.0))?;
         let dst_rect = Rect::new(tx, ty, w, h);
         self.canvas
             .copy_ex(texture, None, dst_rect, 0.0, None, flip_h, flip_v)
-            .map_err(|e| OasisError::Backend(e.to_string()))?;
+            .backend_err()?;
         Ok(())
     }
 

@@ -47,6 +47,41 @@ pub enum Mode {
     Desktop,
 }
 
+/// Dashboard, status/bottom bars, start menu, and mouse cursor.
+pub struct UiLayer {
+    pub dashboard: DashboardState,
+    pub status_bar: StatusBar,
+    pub bottom_bar: BottomBar,
+    pub start_menu: StartMenuState,
+    pub mouse_cursor: CursorState,
+}
+
+/// Terminal/shell state: command registry, CWD, I/O buffers.
+pub struct TerminalLayer {
+    pub cmd_reg: CommandRegistry,
+    pub cwd: String,
+    pub input_buf: String,
+    pub output_lines: Vec<String>,
+    pub scroll_offset: usize,
+}
+
+/// Networking: TCP backend, remote listener/client, FTP, TLS.
+pub struct NetworkLayer {
+    pub backend: StdNetworkBackend,
+    pub listener: Option<RemoteListener>,
+    pub ftp_server: Option<FtpServer>,
+    pub remote_client: Option<RemoteClient>,
+    pub tls_provider: RustlsTlsProvider,
+}
+
+/// Running applications: app runners, browser, fullscreen state.
+pub struct ContentLayer {
+    pub app_runner: Option<AppRunner>,
+    pub open_runners: Vec<(String, AppRunner)>,
+    pub browser: Option<BrowserWidget>,
+    pub fullscreen_app: Option<String>,
+}
+
 /// All mutable application state except `backend`, `sdi`, and `vfs`
 /// (which stay as separate local variables in main() for borrow-splitting).
 pub struct AppState {
@@ -55,25 +90,12 @@ pub struct AppState {
     pub active_theme: ActiveTheme,
     pub browser_config: BrowserConfig,
     pub platform: DesktopPlatform,
-    pub dashboard: DashboardState,
-    pub status_bar: StatusBar,
-    pub bottom_bar: BottomBar,
-    pub start_menu: StartMenuState,
-    pub cmd_reg: CommandRegistry,
-    pub cwd: String,
-    pub input_buf: String,
-    pub output_lines: Vec<String>,
+    pub ui: UiLayer,
+    pub terminal: TerminalLayer,
+    pub net: NetworkLayer,
+    pub content: ContentLayer,
     pub osk: Option<OskState>,
-    pub app_runner: Option<AppRunner>,
     pub wm: WindowManager,
-    pub open_runners: Vec<(String, AppRunner)>,
-    pub browser: Option<BrowserWidget>,
-    pub net_backend: StdNetworkBackend,
-    pub listener: Option<RemoteListener>,
-    pub ftp_server: Option<FtpServer>,
-    pub remote_client: Option<RemoteClient>,
-    pub tls_provider: RustlsTlsProvider,
-    pub mouse_cursor: CursorState,
     pub mode: Mode,
     pub bg_color: Color,
     pub active_transition: Option<transition::TransitionState>,
@@ -84,7 +106,6 @@ pub struct AppState {
     pub pending_catalog_fetch: Option<mpsc::Receiver<Result<CatalogFetchResult, String>>>,
     pub pending_source_fetch: Option<mpsc::Receiver<Result<TrackFetchResult, String>>>,
     pub audio_backend: SdlAudioBackend,
-    pub terminal_scroll_offset: usize,
     pub toasts: ToastManager,
     pub pending_tv_catalog_fetch: Option<
         mpsc::Receiver<Result<Vec<Option<oasis_core::apps::tv_guide::ChannelCatalog>>, String>>,
@@ -95,8 +116,6 @@ pub struct AppState {
     pub video_player: crate::video_player::VideoPlayer,
     /// Audio track for TV Guide video playback.
     pub tv_audio_track: Option<AudioTrackId>,
-    /// Window id of the currently fullscreen-kiosk app (if any).
-    pub fullscreen_app: Option<String>,
 }
 
 #[cfg(test)]
@@ -105,7 +124,6 @@ mod tests {
 
     #[test]
     fn test_mode_variants_exist() {
-        // Ensure all Mode variants can be constructed.
         let _dashboard = Mode::Dashboard;
         let _terminal = Mode::Terminal;
         let _app = Mode::App;
@@ -138,14 +156,12 @@ mod tests {
     fn test_mode_copy() {
         let mode = Mode::Terminal;
         let copied = mode;
-        // Both should still be usable after copy.
         assert_eq!(mode, Mode::Terminal);
         assert_eq!(copied, Mode::Terminal);
     }
 
     #[test]
     fn test_mode_debug() {
-        // Ensure Debug formatting works for all variants.
         assert_eq!(format!("{:?}", Mode::Dashboard), "Dashboard");
         assert_eq!(format!("{:?}", Mode::Terminal), "Terminal");
         assert_eq!(format!("{:?}", Mode::App), "App");
@@ -166,5 +182,45 @@ mod tests {
             Mode::Terminal => {},
             _ => panic!("Expected Terminal"),
         }
+    }
+
+    #[test]
+    fn test_layer_structs_constructible() {
+        use oasis_core::dashboard::{DashboardConfig, DashboardState};
+        use oasis_core::skin::SkinFeatures;
+
+        let at = ActiveTheme::default();
+        let dash_cfg = DashboardConfig::from_features(&SkinFeatures::default(), &at);
+
+        let _ui = UiLayer {
+            dashboard: DashboardState::new(dash_cfg, vec![]),
+            status_bar: StatusBar::new(),
+            bottom_bar: BottomBar::new(),
+            start_menu: StartMenuState::new(StartMenuState::default_items(&at)),
+            mouse_cursor: CursorState::default(),
+        };
+
+        let _terminal = TerminalLayer {
+            cmd_reg: CommandRegistry::new(),
+            cwd: "/".to_string(),
+            input_buf: String::new(),
+            output_lines: Vec::new(),
+            scroll_offset: 0,
+        };
+
+        let _net = NetworkLayer {
+            backend: StdNetworkBackend::new(),
+            listener: None,
+            ftp_server: None,
+            remote_client: None,
+            tls_provider: RustlsTlsProvider::new(),
+        };
+
+        let _content = ContentLayer {
+            app_runner: None,
+            open_runners: Vec::new(),
+            browser: None,
+            fullscreen_app: None,
+        };
     }
 }

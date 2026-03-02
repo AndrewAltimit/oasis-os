@@ -5,7 +5,9 @@ use std::collections::HashMap;
 use wasm_bindgen::prelude::*;
 use web_sys::{CanvasRenderingContext2d, HtmlCanvasElement, ImageData};
 
-use oasis_types::backend::{Color, GradientStyle, SdiBackend, TextMetrics, TextureId};
+use oasis_types::backend::{
+    Color, GradientStyle, SdiBackend, TextMetrics, TextureId, texture_not_found, validate_rgba_data,
+};
 use oasis_types::error::{OasisError, Result};
 
 use crate::font;
@@ -342,7 +344,7 @@ impl SdiBackend for WasmBackend {
         let td = self
             .textures
             .get(&tex.0)
-            .ok_or_else(|| OasisError::Backend(format!("texture {} not found", tex.0)))?;
+            .ok_or_else(|| texture_not_found(tex.0))?;
         let (tx, ty) = self.translate(x, y);
         self.ctx
             .draw_image_with_html_canvas_element_and_dw_and_dh(
@@ -353,13 +355,7 @@ impl SdiBackend for WasmBackend {
     }
 
     fn load_texture(&mut self, width: u32, height: u32, rgba_data: &[u8]) -> Result<TextureId> {
-        let expected = (width * height * 4) as usize;
-        if rgba_data.len() != expected {
-            return Err(OasisError::Backend(format!(
-                "texture data length mismatch: expected {expected}, got {}",
-                rgba_data.len()
-            )));
-        }
+        validate_rgba_data(width, height, rgba_data)?;
         let canvas = self.rgba_to_offscreen(width, height, rgba_data)?;
         let id = self.next_texture_id;
         self.next_texture_id += 1;
@@ -852,7 +848,7 @@ impl SdiBackend for WasmBackend {
         let td = self
             .textures
             .get(&tex.0)
-            .ok_or_else(|| OasisError::Backend(format!("texture {} not found", tex.0)))?;
+            .ok_or_else(|| texture_not_found(tex.0))?;
         let (tx, ty) = self.translate(dst_x, dst_y);
         self.ctx
             .draw_image_with_html_canvas_element_and_sw_and_sh_and_dx_and_dy_and_dw_and_dh(
@@ -887,7 +883,7 @@ impl SdiBackend for WasmBackend {
         let td = self
             .textures
             .get(&tex.0)
-            .ok_or_else(|| OasisError::Backend(format!("texture {} not found", tex.0)))?;
+            .ok_or_else(|| texture_not_found(tex.0))?;
 
         let (tx, ty) = self.translate(x, y);
         let fw = w as f64;

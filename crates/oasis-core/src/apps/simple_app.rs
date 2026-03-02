@@ -1,0 +1,325 @@
+//! Generic simple app for static-content screens.
+//!
+//! Many apps (Settings, Network, Package Manager, Browser, System Monitor)
+//! are purely informational: they display static text lines with basic
+//! up/down scrolling and Cancel-to-exit. `SimpleApp` implements the `App`
+//! trait for all of them, avoiding near-identical implementations.
+
+use crate::active_theme::ActiveTheme;
+use crate::backend::SdiBackend;
+use crate::input::Button;
+use crate::sdi::SdiRegistry;
+use crate::vfs::Vfs;
+
+use super::ContentState;
+use super::app_trait::App;
+use super::file_manager::{
+    draw_content_windowed, hide_app_sdi, render_app_chrome, render_content_sdi,
+};
+use super::runner::AppAction;
+
+/// A simple static-content app that implements the `App` trait.
+///
+/// Used for apps that display informational text with basic navigation.
+/// Content is set at creation time via a builder or direct lines.
+#[derive(Debug)]
+pub struct SimpleApp {
+    pub content: ContentState,
+    /// Action returned on Confirm press (default: None).
+    confirm_action: AppAction,
+}
+
+impl SimpleApp {
+    /// Create a simple app with pre-set content lines.
+    pub fn new(title: &str, path: &str, lines: Vec<String>) -> Self {
+        let mut content = ContentState::new(title, path);
+        content.lines = lines;
+        Self {
+            content,
+            confirm_action: AppAction::None,
+        }
+    }
+
+    /// Create the Settings app.
+    pub fn settings(path: &str) -> Self {
+        Self::new(
+            "Settings",
+            path,
+            vec![
+                "OASIS_OS Settings".to_string(),
+                String::new(),
+                "  Screen:     480 x 272".to_string(),
+                "  Skin:       Classic".to_string(),
+                "  Audio:      Enabled".to_string(),
+                "  Network:    Enabled".to_string(),
+                "  Terminal:   Enabled".to_string(),
+                "  Plugins:    Enabled".to_string(),
+                String::new(),
+                "(Settings are read-only in this build)".to_string(),
+            ],
+        )
+    }
+
+    /// Create the Network app.
+    pub fn network(path: &str) -> Self {
+        Self::new(
+            "Network",
+            path,
+            vec![
+                "Network Status".to_string(),
+                String::new(),
+                "  Interface:  lo (loopback)".to_string(),
+                "  Status:     Active".to_string(),
+                "  Address:    127.0.0.1".to_string(),
+                String::new(),
+                "  Remote:     Not connected".to_string(),
+                "  Listener:   Not running".to_string(),
+                String::new(),
+                "Use terminal 'listen' and 'connect'".to_string(),
+                "commands for remote access.".to_string(),
+            ],
+        )
+    }
+
+    /// Create the Package Manager app.
+    pub fn package_manager(path: &str) -> Self {
+        Self::new(
+            "Package Manager",
+            path,
+            vec![
+                "Package Manager".to_string(),
+                String::new(),
+                "Installed packages:".to_string(),
+                "  oasis-core      0.1.0  (system)".to_string(),
+                "  oasis-sdl       0.1.0  (backend)".to_string(),
+                "  classic-skin    1.0.0  (skin)".to_string(),
+                String::new(),
+                "No updates available.".to_string(),
+            ],
+        )
+    }
+
+    /// Create the Browser app.
+    pub fn browser(path: &str) -> Self {
+        Self::new(
+            "Browser",
+            path,
+            vec![
+                "Browser".to_string(),
+                String::new(),
+                "Use the browser widget for web browsing.".to_string(),
+                String::new(),
+                "The browser supports HTML, CSS, and".to_string(),
+                "Gemini protocol content.".to_string(),
+                String::new(),
+                "Launch from the dashboard to open the".to_string(),
+                "full browser widget.".to_string(),
+            ],
+        )
+    }
+
+    /// Create the Terminal app (redirects to terminal mode on Confirm).
+    pub fn terminal(path: &str) -> Self {
+        let mut app = Self::new(
+            "Terminal",
+            path,
+            vec![
+                "Terminal".to_string(),
+                String::new(),
+                "Press Confirm to enter terminal mode.".to_string(),
+            ],
+        );
+        app.confirm_action = AppAction::SwitchToTerminal;
+        app
+    }
+
+    /// Create the System Monitor app.
+    pub fn system_monitor(path: &str) -> Self {
+        Self::new(
+            "System Monitor",
+            path,
+            vec![
+                "System Monitor".to_string(),
+                String::new(),
+                "  Platform:   Desktop (SDL2)".to_string(),
+                "  Backend:    SDL2 accelerated".to_string(),
+                "  VFS:        MemoryVfs".to_string(),
+                "  Uptime:     (not tracked)".to_string(),
+                String::new(),
+                "  CPU:        --".to_string(),
+                "  Memory:     --".to_string(),
+                "  Battery:    N/A (desktop)".to_string(),
+            ],
+        )
+    }
+}
+
+impl App for SimpleApp {
+    fn title(&self) -> &str {
+        &self.content.title
+    }
+
+    fn path(&self) -> &str {
+        &self.content.app_path
+    }
+
+    fn handle_input(&mut self, button: &Button, _vfs: &dyn Vfs) -> AppAction {
+        match button {
+            Button::Cancel => AppAction::Exit,
+            Button::Up => {
+                self.content.navigate_up();
+                AppAction::None
+            },
+            Button::Down => {
+                self.content.navigate_down();
+                AppAction::None
+            },
+            Button::Confirm => self.confirm_action,
+            _ => AppAction::None,
+        }
+    }
+
+    fn update_sdi(&mut self, sdi: &mut SdiRegistry, at: &ActiveTheme) {
+        self.content.update_layout(at);
+        self.content.animate_selection(0.3);
+        render_app_chrome(sdi, at);
+        render_content_sdi(&self.content, sdi, at);
+    }
+
+    fn draw_windowed(
+        &self,
+        cx: i32,
+        cy: i32,
+        cw: u32,
+        ch: u32,
+        backend: &mut dyn SdiBackend,
+        at: &ActiveTheme,
+    ) -> crate::error::Result<()> {
+        draw_content_windowed(&self.content, cx, cy, cw, ch, backend, at)
+    }
+
+    fn hide_sdi(&self, sdi: &mut SdiRegistry) {
+        hide_app_sdi(sdi);
+    }
+
+    fn lines(&self) -> &[String] {
+        &self.content.lines
+    }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
+    fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+        self
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::vfs::MemoryVfs;
+
+    fn make_vfs() -> MemoryVfs {
+        MemoryVfs::new()
+    }
+
+    #[test]
+    fn settings_title_and_path() {
+        let app = SimpleApp::settings("/apps/settings");
+        assert_eq!(app.title(), "Settings");
+        assert_eq!(app.path(), "/apps/settings");
+    }
+
+    #[test]
+    fn settings_content_lines() {
+        let app = SimpleApp::settings("/apps/settings");
+        assert!(app.lines().iter().any(|l| l.contains("OASIS_OS Settings")));
+        assert!(app.lines().iter().any(|l| l.contains("read-only")));
+    }
+
+    #[test]
+    fn network_content() {
+        let app = SimpleApp::network("/apps/network");
+        assert_eq!(app.title(), "Network");
+        assert!(app.lines().iter().any(|l| l.contains("127.0.0.1")));
+    }
+
+    #[test]
+    fn package_manager_content() {
+        let app = SimpleApp::package_manager("/apps/pkgmgr");
+        assert_eq!(app.title(), "Package Manager");
+        assert!(app.lines().iter().any(|l| l.contains("oasis-core")));
+    }
+
+    #[test]
+    fn browser_content() {
+        let app = SimpleApp::browser("/apps/browser");
+        assert_eq!(app.title(), "Browser");
+        assert!(app.lines().iter().any(|l| l.contains("HTML")));
+    }
+
+    #[test]
+    fn system_monitor_content() {
+        let app = SimpleApp::system_monitor("/apps/sysmon");
+        assert_eq!(app.title(), "System Monitor");
+        assert!(app.lines().iter().any(|l| l.contains("CPU")));
+    }
+
+    #[test]
+    fn cancel_exits() {
+        let vfs = make_vfs();
+        let mut app = SimpleApp::settings("/apps/settings");
+        assert_eq!(app.handle_input(&Button::Cancel, &vfs), AppAction::Exit);
+    }
+
+    #[test]
+    fn navigate_up_down() {
+        let vfs = make_vfs();
+        let mut app = SimpleApp::settings("/apps/settings");
+        app.content.cached_max_visible = 20;
+        app.handle_input(&Button::Down, &vfs);
+        assert_eq!(app.content.cursor, 1);
+        app.handle_input(&Button::Up, &vfs);
+        assert_eq!(app.content.cursor, 0);
+    }
+
+    #[test]
+    fn custom_content() {
+        let app = SimpleApp::new(
+            "Custom",
+            "/apps/custom",
+            vec!["Line 1".into(), "Line 2".into()],
+        );
+        assert_eq!(app.title(), "Custom");
+        assert_eq!(app.lines().len(), 2);
+    }
+
+    #[test]
+    fn no_browse_dir_or_viewing_file() {
+        let app = SimpleApp::settings("/apps/settings");
+        assert!(app.browse_dir().is_none());
+        assert!(app.viewing_file().is_none());
+    }
+
+    #[test]
+    fn no_pending_request() {
+        let mut app = SimpleApp::settings("/apps/settings");
+        assert!(app.take_pending_request().is_none());
+        assert!(app.peek_pending_request().is_none());
+    }
+
+    #[test]
+    fn downcast_works() {
+        let app = SimpleApp::settings("/apps/settings");
+        let any = app.as_any();
+        assert!(any.downcast_ref::<SimpleApp>().is_some());
+    }
+
+    #[test]
+    fn confirm_is_noop() {
+        let vfs = make_vfs();
+        let mut app = SimpleApp::settings("/apps/settings");
+        assert_eq!(app.handle_input(&Button::Confirm, &vfs), AppAction::None);
+    }
+}

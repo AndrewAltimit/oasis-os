@@ -36,14 +36,20 @@ pub fn handle_osk_input(
             InputEvent::ButtonPress(btn) => {
                 osk_state.handle_input(btn);
                 if let Some(text) = osk_state.confirmed_text() {
-                    state.output_lines.push(format!("[OSK] Input: {text}"));
-                    commands::trim_output(&mut state.output_lines);
+                    state
+                        .terminal
+                        .output_lines
+                        .push(format!("[OSK] Input: {text}"));
+                    commands::trim_output(&mut state.terminal.output_lines);
                     osk_state.hide_sdi(sdi);
                     state.osk = None;
                     state.mode = Mode::Dashboard;
                 } else if osk_state.is_cancelled() {
-                    state.output_lines.push("[OSK] Cancelled".to_string());
-                    commands::trim_output(&mut state.output_lines);
+                    state
+                        .terminal
+                        .output_lines
+                        .push("[OSK] Cancelled".to_string());
+                    commands::trim_output(&mut state.terminal.output_lines);
                     osk_state.hide_sdi(sdi);
                     state.osk = None;
                     state.mode = Mode::Dashboard;
@@ -70,12 +76,12 @@ pub fn handle_desktop_input(
                 .handle_input(&InputEvent::PointerClick { x: *x, y: *y }, sdi);
             match wm_event {
                 WmEvent::WindowClosed(id) => {
-                    if state.fullscreen_app.as_deref() == Some(id.as_str()) {
-                        state.fullscreen_app = None;
+                    if state.content.fullscreen_app.as_deref() == Some(id.as_str()) {
+                        state.content.fullscreen_app = None;
                     }
-                    state.open_runners.retain(|(rid, _)| *rid != id);
+                    state.content.open_runners.retain(|(rid, _)| *rid != id);
                     if id == "browser" {
-                        state.browser = None;
+                        state.content.browser = None;
                     }
                     if state.wm.window_count() == 0 {
                         state.mode = Mode::Dashboard;
@@ -83,21 +89,25 @@ pub fn handle_desktop_input(
                 },
                 WmEvent::ContentClick(id, lx, ly) => {
                     if id == "browser"
-                        && let Some(ref mut bw) = state.browser
+                        && let Some(ref mut bw) = state.content.browser
                     {
                         let abs_x = bw.window_x() + lx;
                         let abs_y = bw.window_y() + ly;
                         bw.handle_input(&InputEvent::PointerClick { x: abs_x, y: abs_y }, vfs);
-                    } else if let Some((_, runner)) =
-                        state.open_runners.iter_mut().find(|(rid, _)| *rid == id)
+                    } else if let Some((_, runner)) = state
+                        .content
+                        .open_runners
+                        .iter_mut()
+                        .find(|(rid, _)| *rid == id)
                         && let Some(win) = state.wm.get_window(&id)
                     {
                         let (_, _, cw, ch) = win.content_rect(state.wm.theme());
                         let action = runner.handle_click(lx, ly, cw, ch, win.fullscreen_kiosk);
-                        if action == AppAction::RequestFullscreen && state.fullscreen_app.is_none()
+                        if action == AppAction::RequestFullscreen
+                            && state.content.fullscreen_app.is_none()
                         {
                             let _ = state.wm.enter_fullscreen(&id, sdi);
-                            state.fullscreen_app = Some(id.to_string());
+                            state.content.fullscreen_app = Some(id.to_string());
                         }
                     }
                 },
@@ -120,26 +130,29 @@ pub fn handle_desktop_input(
                 .handle_input(&InputEvent::PointerRelease { x: *x, y: *y }, sdi);
         },
         InputEvent::ToggleFullscreen => {
-            if let Some(ref fs_id) = state.fullscreen_app {
+            if let Some(ref fs_id) = state.content.fullscreen_app {
                 let id = fs_id.clone();
                 let _ = state.wm.exit_fullscreen(&id, sdi);
-                state.fullscreen_app = None;
+                state.content.fullscreen_app = None;
             } else if let Some(active_id) = state.wm.active_window().map(|s| s.to_string()) {
                 let _ = state.wm.enter_fullscreen(&active_id, sdi);
-                state.fullscreen_app = Some(active_id);
+                state.content.fullscreen_app = Some(active_id);
             }
         },
         InputEvent::ButtonPress(Button::Cancel) => {
             if let Some(active_id) = state.wm.active_window().map(|s| s.to_string()) {
                 // If closing the fullscreen window, clear fullscreen state first.
-                if state.fullscreen_app.as_deref() == Some(active_id.as_str()) {
+                if state.content.fullscreen_app.as_deref() == Some(active_id.as_str()) {
                     let _ = state.wm.exit_fullscreen(&active_id, sdi);
-                    state.fullscreen_app = None;
+                    state.content.fullscreen_app = None;
                 }
                 let _ = state.wm.close_window(&active_id, sdi);
-                state.open_runners.retain(|(rid, _)| *rid != active_id);
+                state
+                    .content
+                    .open_runners
+                    .retain(|(rid, _)| *rid != active_id);
                 if active_id == "browser" {
-                    state.browser = None;
+                    state.content.browser = None;
                 }
                 if state.wm.window_count() == 0 {
                     state.mode = Mode::Dashboard;
@@ -153,21 +166,21 @@ pub fn handle_desktop_input(
         },
         InputEvent::TextInput(ch) => {
             if state.wm.active_window() == Some("browser")
-                && let Some(ref mut bw) = state.browser
+                && let Some(ref mut bw) = state.content.browser
             {
                 bw.handle_input(&InputEvent::TextInput(*ch), vfs);
             }
         },
         InputEvent::Backspace => {
             if state.wm.active_window() == Some("browser")
-                && let Some(ref mut bw) = state.browser
+                && let Some(ref mut bw) = state.content.browser
             {
                 bw.handle_input(&InputEvent::Backspace, vfs);
             }
         },
         InputEvent::MouseWheel { delta } => {
             if state.wm.active_window() == Some("browser")
-                && let Some(ref mut bw) = state.browser
+                && let Some(ref mut bw) = state.content.browser
             {
                 bw.handle_input(&InputEvent::MouseWheel { delta: *delta }, vfs);
             }
@@ -175,22 +188,26 @@ pub fn handle_desktop_input(
         InputEvent::ButtonPress(btn) => {
             if let Some(active_id) = state.wm.active_window().map(|s| s.to_string()) {
                 if active_id == "browser" {
-                    if let Some(ref mut bw) = state.browser {
+                    if let Some(ref mut bw) = state.content.browser {
                         bw.handle_input(&InputEvent::ButtonPress(*btn), vfs);
                     }
                 } else if let Some((_, runner)) = state
+                    .content
                     .open_runners
                     .iter_mut()
                     .find(|(id, _)| *id == active_id)
                 {
                     match runner.handle_input(btn, vfs) {
                         AppAction::Exit => {
-                            if state.fullscreen_app.as_deref() == Some(active_id.as_str()) {
+                            if state.content.fullscreen_app.as_deref() == Some(active_id.as_str()) {
                                 let _ = state.wm.exit_fullscreen(&active_id, sdi);
-                                state.fullscreen_app = None;
+                                state.content.fullscreen_app = None;
                             }
                             let _ = state.wm.close_window(&active_id, sdi);
-                            state.open_runners.retain(|(rid, _)| *rid != active_id);
+                            state
+                                .content
+                                .open_runners
+                                .retain(|(rid, _)| *rid != active_id);
                             if state.wm.window_count() == 0 {
                                 state.mode = Mode::Dashboard;
                             }
@@ -199,9 +216,9 @@ pub fn handle_desktop_input(
                             state.mode = Mode::Terminal;
                         },
                         AppAction::RequestFullscreen => {
-                            if state.fullscreen_app.is_none() {
+                            if state.content.fullscreen_app.is_none() {
                                 let _ = state.wm.enter_fullscreen(&active_id, sdi);
-                                state.fullscreen_app = Some(active_id);
+                                state.content.fullscreen_app = Some(active_id);
                             }
                         },
                         AppAction::None => {},
@@ -221,18 +238,18 @@ pub fn handle_app_input(
     sdi: &mut SdiRegistry,
     vfs: &MemoryVfs,
 ) -> InputResult {
-    if let Some(ref mut runner) = state.app_runner {
+    if let Some(ref mut runner) = state.content.app_runner {
         match event {
             InputEvent::Quit => return InputResult::Quit,
             InputEvent::ButtonPress(btn) => match runner.handle_input(btn, vfs) {
                 AppAction::Exit => {
                     AppRunner::hide_sdi(sdi);
-                    state.app_runner = None;
+                    state.content.app_runner = None;
                     state.mode = Mode::Dashboard;
                 },
                 AppAction::SwitchToTerminal => {
                     AppRunner::hide_sdi(sdi);
-                    state.app_runner = None;
+                    state.content.app_runner = None;
                     state.mode = Mode::Terminal;
                 },
                 AppAction::RequestFullscreen | AppAction::None => {},
@@ -258,9 +275,9 @@ pub fn handle_default_input(
 
         // Launch app from dashboard as floating window.
         InputEvent::ButtonPress(Button::Confirm) if state.mode == Mode::Dashboard => {
-            state.dashboard.trigger_press_flash();
-            if state.bottom_bar.active_tab == MediaTab::None
-                && let Some(app) = state.dashboard.selected_app()
+            state.ui.dashboard.trigger_press_flash();
+            if state.ui.bottom_bar.active_tab == MediaTab::None
+                && let Some(app) = state.ui.dashboard.selected_app()
             {
                 log::info!("Launching app: {}", app.title);
                 let app = app.clone();
@@ -268,11 +285,11 @@ pub fn handle_default_input(
                     &app,
                     &mut state.wm,
                     sdi,
-                    &mut state.open_runners,
-                    &mut state.browser,
+                    &mut state.content.open_runners,
+                    &mut state.content.browser,
                     &state.browser_config,
                     vfs,
-                    &state.tls_provider,
+                    &state.net.tls_provider,
                 );
                 launch::apply_launch(result, &mut state.mode);
                 state.active_transition = Some(launch::make_transition(
@@ -285,24 +302,24 @@ pub fn handle_default_input(
 
         // Pointer click on dashboard: start menu takes priority.
         InputEvent::PointerClick { x, y } if state.mode == Mode::Dashboard => {
-            if state.start_menu.hit_test_button(*x, *y) {
-                state.start_menu.toggle();
+            if state.ui.start_menu.hit_test_button(*x, *y) {
+                state.ui.start_menu.toggle();
                 return InputResult::Continue;
             }
-            if state.start_menu.open {
-                if let Some(action) = state.start_menu.hit_test_item(*x, *y) {
-                    state.start_menu.close();
+            if state.ui.start_menu.open {
+                if let Some(action) = state.ui.start_menu.hit_test_item(*x, *y) {
+                    state.ui.start_menu.close();
                     if action == StartMenuAction::Exit {
                         return InputResult::Quit;
                     }
                     handle_start_menu_action(&action, state, sdi, vfs);
                 } else {
-                    state.start_menu.close();
+                    state.ui.start_menu.close();
                 }
                 return InputResult::Continue;
             }
-            if state.bottom_bar.active_tab == MediaTab::None {
-                let cfg = &state.dashboard.config;
+            if state.ui.bottom_bar.active_tab == MediaTab::None {
+                let cfg = &state.ui.dashboard.config;
                 let gx = *x - cfg.grid_x;
                 let gy = *y - cfg.grid_y;
                 if gx >= 0 && gy >= 0 {
@@ -310,21 +327,21 @@ pub fn handle_default_input(
                     let row = gy as usize / cfg.cell_h as usize;
                     if col < cfg.grid_cols as usize && row < cfg.grid_rows as usize {
                         let idx = row * cfg.grid_cols as usize + col;
-                        let page_apps = state.dashboard.current_page_apps().len();
+                        let page_apps = state.ui.dashboard.current_page_apps().len();
                         if idx < page_apps {
-                            if state.dashboard.selected == idx {
-                                if let Some(app) = state.dashboard.selected_app() {
+                            if state.ui.dashboard.selected == idx {
+                                if let Some(app) = state.ui.dashboard.selected_app() {
                                     log::info!("Click-launching app: {}", app.title);
                                     let app = app.clone();
                                     let result = launch::launch_app_window(
                                         &app,
                                         &mut state.wm,
                                         sdi,
-                                        &mut state.open_runners,
-                                        &mut state.browser,
+                                        &mut state.content.open_runners,
+                                        &mut state.content.browser,
                                         &state.browser_config,
                                         vfs,
-                                        &state.tls_provider,
+                                        &state.net.tls_provider,
                                     );
                                     launch::apply_launch(result, &mut state.mode);
                                     state.active_transition = Some(launch::make_transition(
@@ -334,7 +351,7 @@ pub fn handle_default_input(
                                     ));
                                 }
                             } else {
-                                state.dashboard.selected = idx;
+                                state.ui.dashboard.selected = idx;
                             }
                         }
                     }
@@ -368,17 +385,17 @@ pub fn handle_default_input(
 
         // L trigger: cycle top tabs (status bar).
         InputEvent::TriggerPress(Trigger::Left) if state.mode == Mode::Dashboard => {
-            state.status_bar.next_tab();
-            state.bottom_bar.l_pressed = true;
+            state.ui.status_bar.next_tab();
+            state.ui.bottom_bar.l_pressed = true;
         },
         InputEvent::TriggerRelease(Trigger::Left) => {
-            state.bottom_bar.l_pressed = false;
+            state.ui.bottom_bar.l_pressed = false;
         },
 
         // R trigger: cycle media category tabs (bottom bar).
         InputEvent::TriggerPress(Trigger::Right) if state.mode == Mode::Dashboard => {
-            state.bottom_bar.next_tab();
-            state.bottom_bar.r_pressed = true;
+            state.ui.bottom_bar.next_tab();
+            state.ui.bottom_bar.r_pressed = true;
             state.active_transition = Some(transition::fade_in_custom(
                 state.config.screen_width,
                 state.config.screen_height,
@@ -386,12 +403,14 @@ pub fn handle_default_input(
             ));
         },
         InputEvent::TriggerRelease(Trigger::Right) => {
-            state.bottom_bar.r_pressed = false;
+            state.ui.bottom_bar.r_pressed = false;
         },
 
         // Start menu intercepts input when open.
-        InputEvent::ButtonPress(btn) if state.mode == Mode::Dashboard && state.start_menu.open => {
-            let action = state.start_menu.handle_input(btn);
+        InputEvent::ButtonPress(btn)
+            if state.mode == Mode::Dashboard && state.ui.start_menu.open =>
+        {
+            let action = state.ui.start_menu.handle_input(btn);
             if action == StartMenuAction::Exit {
                 return InputResult::Quit;
             }
@@ -403,20 +422,20 @@ pub fn handle_default_input(
         // Dashboard input: D-pad navigation.
         InputEvent::ButtonPress(btn) if state.mode == Mode::Dashboard => match btn {
             Button::Up | Button::Down | Button::Left | Button::Right => {
-                if state.bottom_bar.active_tab == MediaTab::None {
-                    state.dashboard.handle_input(btn);
+                if state.ui.bottom_bar.active_tab == MediaTab::None {
+                    state.ui.dashboard.handle_input(btn);
                 }
             },
             Button::Triangle => {
-                if state.bottom_bar.active_tab == MediaTab::None {
-                    state.dashboard.next_page();
-                    state.bottom_bar.current_page = state.dashboard.page;
+                if state.ui.bottom_bar.active_tab == MediaTab::None {
+                    state.ui.dashboard.next_page();
+                    state.ui.bottom_bar.current_page = state.ui.dashboard.page;
                 }
             },
             Button::Square => {
-                if state.bottom_bar.active_tab == MediaTab::None {
-                    state.dashboard.prev_page();
-                    state.bottom_bar.current_page = state.dashboard.page;
+                if state.ui.bottom_bar.active_tab == MediaTab::None {
+                    state.ui.dashboard.prev_page();
+                    state.ui.bottom_bar.current_page = state.ui.dashboard.page;
                 }
             },
             _ => {},
@@ -424,42 +443,42 @@ pub fn handle_default_input(
 
         // Terminal input.
         InputEvent::TextInput(ch) if state.mode == Mode::Terminal => {
-            state.input_buf.push(*ch);
+            state.terminal.input_buf.push(*ch);
         },
         InputEvent::Backspace if state.mode == Mode::Terminal => {
-            state.input_buf.pop();
+            state.terminal.input_buf.pop();
         },
         InputEvent::ButtonPress(Button::Confirm) if state.mode == Mode::Terminal => {
-            let line = state.input_buf.clone();
-            state.input_buf.clear();
-            state.terminal_scroll_offset = 0;
+            let line = state.terminal.input_buf.clone();
+            state.terminal.input_buf.clear();
+            state.terminal.scroll_offset = 0;
             if !line.is_empty() {
-                state.output_lines.push(format!("> {line}"));
+                state.terminal.output_lines.push(format!("> {line}"));
                 let pending_skin_swap;
                 {
                     let mut env = Environment {
-                        cwd: state.cwd.clone(),
+                        cwd: state.terminal.cwd.clone(),
                         vfs,
                         power: Some(&state.platform),
                         time: Some(&state.platform),
                         usb: Some(&state.platform),
                         network: None,
-                        tls: Some(&state.tls_provider),
+                        tls: Some(&state.net.tls_provider),
                         stdin: None,
                         stderr: String::new(),
                     };
-                    let result = state.cmd_reg.execute(&line, &mut env);
-                    state.cwd = env.cwd;
+                    let result = state.terminal.cmd_reg.execute(&line, &mut env);
+                    state.terminal.cwd = env.cwd;
                     pending_skin_swap = commands::process_command_output(result, state);
                 }
                 if let Some(name) = pending_skin_swap {
                     commands::apply_skin_swap(&name, state, sdi, vfs);
                 }
             }
-            commands::trim_output(&mut state.output_lines);
+            commands::trim_output(&mut state.terminal.output_lines);
         },
         InputEvent::ButtonPress(Button::Square) if state.mode == Mode::Terminal => {
-            state.input_buf.pop();
+            state.terminal.input_buf.pop();
         },
         InputEvent::ButtonPress(Button::Cancel) if state.mode == Mode::Terminal => {
             terminal_sdi::set_terminal_visible(sdi, false);
@@ -467,18 +486,19 @@ pub fn handle_default_input(
         },
 
         InputEvent::MouseWheel { delta } if state.mode == Mode::Terminal => {
-            let len = state.output_lines.len();
+            let len = state.terminal.output_lines.len();
             let max_visible = terminal_sdi::visible_output_lines(&state.active_theme);
             if len > max_visible {
                 let max_offset = len - max_visible;
                 if *delta < 0 {
                     // Scroll up (show older lines).
-                    state.terminal_scroll_offset =
-                        (state.terminal_scroll_offset + (-*delta as usize) * 3).min(max_offset);
+                    state.terminal.scroll_offset =
+                        (state.terminal.scroll_offset + (-*delta as usize) * 3).min(max_offset);
                 } else {
                     // Scroll down (show newer lines).
-                    state.terminal_scroll_offset = state
-                        .terminal_scroll_offset
+                    state.terminal.scroll_offset = state
+                        .terminal
+                        .scroll_offset
                         .saturating_sub(*delta as usize * 3);
                 }
             }
@@ -498,18 +518,18 @@ fn handle_start_menu_action(
 ) {
     match action {
         StartMenuAction::LaunchApp(title) => {
-            let app = state.dashboard.apps.iter().find(|a| a.title == *title);
+            let app = state.ui.dashboard.apps.iter().find(|a| a.title == *title);
             if let Some(app) = app {
                 let app = app.clone();
                 let result = launch::launch_app_window(
                     &app,
                     &mut state.wm,
                     sdi,
-                    &mut state.open_runners,
-                    &mut state.browser,
+                    &mut state.content.open_runners,
+                    &mut state.content.browser,
                     &state.browser_config,
                     vfs,
-                    &state.tls_provider,
+                    &state.net.tls_provider,
                 );
                 launch::apply_launch(result, &mut state.mode);
                 state.active_transition = Some(launch::make_transition(
@@ -590,6 +610,8 @@ mod tests {
         use oasis_core::terminal::CommandRegistry;
         use oasis_core::wm::manager::WindowManager;
 
+        use crate::app_state::{ContentLayer, NetworkLayer, TerminalLayer, UiLayer};
+
         let skin = load_builtin("terminal").unwrap();
         let active_theme = ActiveTheme::from_skin(&skin.theme);
         let dash_cfg = DashboardConfig::from_features(&SkinFeatures::default(), &active_theme);
@@ -600,25 +622,35 @@ mod tests {
             active_theme: active_theme.clone(),
             browser_config: BrowserConfig::default(),
             platform: DesktopPlatform::new(),
-            dashboard: DashboardState::new(dash_cfg, vec![]),
-            status_bar: StatusBar::new(),
-            bottom_bar: BottomBar::new(),
-            start_menu: StartMenuState::new(StartMenuState::default_items(&active_theme)),
-            cmd_reg: CommandRegistry::new(),
-            cwd: "/".to_string(),
-            input_buf: String::new(),
-            output_lines: Vec::new(),
+            ui: UiLayer {
+                dashboard: DashboardState::new(dash_cfg, vec![]),
+                status_bar: StatusBar::new(),
+                bottom_bar: BottomBar::new(),
+                start_menu: StartMenuState::new(StartMenuState::default_items(&active_theme)),
+                mouse_cursor: CursorState::default(),
+            },
+            terminal: TerminalLayer {
+                cmd_reg: CommandRegistry::new(),
+                cwd: "/".to_string(),
+                input_buf: String::new(),
+                output_lines: Vec::new(),
+                scroll_offset: 0,
+            },
+            net: NetworkLayer {
+                backend: StdNetworkBackend::new(),
+                listener: None,
+                ftp_server: None,
+                remote_client: None,
+                tls_provider: RustlsTlsProvider::new(),
+            },
+            content: ContentLayer {
+                app_runner: None,
+                open_runners: Vec::new(),
+                browser: None,
+                fullscreen_app: None,
+            },
             osk: None,
-            app_runner: None,
             wm: WindowManager::new(480, 272),
-            open_runners: Vec::new(),
-            browser: None,
-            net_backend: StdNetworkBackend::new(),
-            listener: None,
-            ftp_server: None,
-            remote_client: None,
-            tls_provider: RustlsTlsProvider::new(),
-            mouse_cursor: CursorState::default(),
             mode: Mode::Dashboard,
             bg_color: oasis_core::backend::Color::rgb(0, 0, 0),
             active_transition: None,
@@ -629,13 +661,11 @@ mod tests {
             pending_catalog_fetch: None,
             pending_source_fetch: None,
             audio_backend: SdlAudioBackend::new(),
-            terminal_scroll_offset: 0,
             toasts: oasis_core::toast::ToastManager::new(),
             pending_tv_catalog_fetch: None,
             tv_fetch_start: None,
             video_player: crate::video_player::VideoPlayer::new(),
             tv_audio_track: None,
-            fullscreen_app: None,
         };
         let sdi = SdiRegistry::new();
         let vfs = MemoryVfs::new();
@@ -708,23 +738,23 @@ mod tests {
         state.mode = Mode::Terminal;
         handle_default_input(&InputEvent::TextInput('h'), &mut state, &mut sdi, &mut vfs);
         handle_default_input(&InputEvent::TextInput('i'), &mut state, &mut sdi, &mut vfs);
-        assert_eq!(state.input_buf, "hi");
+        assert_eq!(state.terminal.input_buf, "hi");
     }
 
     #[test]
     fn terminal_backspace() {
         let (mut state, mut sdi, mut vfs) = make_test_state();
         state.mode = Mode::Terminal;
-        state.input_buf = "abc".to_string();
+        state.terminal.input_buf = "abc".to_string();
         handle_default_input(&InputEvent::Backspace, &mut state, &mut sdi, &mut vfs);
-        assert_eq!(state.input_buf, "ab");
+        assert_eq!(state.terminal.input_buf, "ab");
     }
 
     #[test]
     fn terminal_confirm_executes_command() {
         let (mut state, mut sdi, mut vfs) = make_test_state();
         state.mode = Mode::Terminal;
-        state.input_buf = "echo hello".to_string();
+        state.terminal.input_buf = "echo hello".to_string();
         handle_default_input(
             &InputEvent::ButtonPress(Button::Confirm),
             &mut state,
@@ -732,10 +762,11 @@ mod tests {
             &mut vfs,
         );
         // Input buffer should be cleared.
-        assert!(state.input_buf.is_empty());
+        assert!(state.terminal.input_buf.is_empty());
         // The command prompt should be in output.
         assert!(
             state
+                .terminal
                 .output_lines
                 .iter()
                 .any(|l| l.contains("> echo hello"))
@@ -746,7 +777,7 @@ mod tests {
     fn terminal_confirm_empty_noop() {
         let (mut state, mut sdi, mut vfs) = make_test_state();
         state.mode = Mode::Terminal;
-        state.input_buf.clear();
+        state.terminal.input_buf.clear();
         handle_default_input(
             &InputEvent::ButtonPress(Button::Confirm),
             &mut state,
@@ -754,7 +785,7 @@ mod tests {
             &mut vfs,
         );
         // Empty command should not add to output.
-        assert!(state.output_lines.is_empty());
+        assert!(state.terminal.output_lines.is_empty());
     }
 
     #[test]
@@ -784,14 +815,14 @@ mod tests {
     fn terminal_square_deletes_char() {
         let (mut state, mut sdi, mut vfs) = make_test_state();
         state.mode = Mode::Terminal;
-        state.input_buf = "xyz".to_string();
+        state.terminal.input_buf = "xyz".to_string();
         handle_default_input(
             &InputEvent::ButtonPress(Button::Square),
             &mut state,
             &mut sdi,
             &mut vfs,
         );
-        assert_eq!(state.input_buf, "xy");
+        assert_eq!(state.terminal.input_buf, "xy");
     }
 
     // -- handle_osk_input --
@@ -822,7 +853,7 @@ mod tests {
     fn app_no_runner_continues() {
         let (mut state, mut sdi, vfs) = make_test_state();
         state.mode = Mode::App;
-        state.app_runner = None;
+        state.content.app_runner = None;
         // Without a runner, all events (including Quit) are no-ops.
         let result = handle_app_input(
             &InputEvent::ButtonPress(Button::Confirm),
@@ -969,30 +1000,30 @@ mod tests {
         for ch in "hello world".chars() {
             handle_default_input(&InputEvent::TextInput(ch), &mut state, &mut sdi, &mut vfs);
         }
-        assert_eq!(state.input_buf, "hello world");
+        assert_eq!(state.terminal.input_buf, "hello world");
     }
 
     #[test]
     fn terminal_backspace_on_empty_is_noop() {
         let (mut state, mut sdi, mut vfs) = make_test_state();
         state.mode = Mode::Terminal;
-        state.input_buf.clear();
+        state.terminal.input_buf.clear();
         handle_default_input(&InputEvent::Backspace, &mut state, &mut sdi, &mut vfs);
-        assert!(state.input_buf.is_empty());
+        assert!(state.terminal.input_buf.is_empty());
     }
 
     #[test]
     fn terminal_square_on_empty_is_noop() {
         let (mut state, mut sdi, mut vfs) = make_test_state();
         state.mode = Mode::Terminal;
-        state.input_buf.clear();
+        state.terminal.input_buf.clear();
         handle_default_input(
             &InputEvent::ButtonPress(Button::Square),
             &mut state,
             &mut sdi,
             &mut vfs,
         );
-        assert!(state.input_buf.is_empty());
+        assert!(state.terminal.input_buf.is_empty());
     }
 
     #[test]
@@ -1032,14 +1063,14 @@ mod tests {
             &mut sdi,
             &mut vfs,
         );
-        assert!(state.bottom_bar.l_pressed);
+        assert!(state.ui.bottom_bar.l_pressed);
         handle_default_input(
             &InputEvent::TriggerRelease(Trigger::Left),
             &mut state,
             &mut sdi,
             &mut vfs,
         );
-        assert!(!state.bottom_bar.l_pressed);
+        assert!(!state.ui.bottom_bar.l_pressed);
     }
 
     #[test]
@@ -1052,7 +1083,7 @@ mod tests {
             &mut sdi,
             &mut vfs,
         );
-        assert!(state.bottom_bar.r_pressed);
+        assert!(state.ui.bottom_bar.r_pressed);
         assert!(state.active_transition.is_some());
         handle_default_input(
             &InputEvent::TriggerRelease(Trigger::Right),
@@ -1060,7 +1091,7 @@ mod tests {
             &mut sdi,
             &mut vfs,
         );
-        assert!(!state.bottom_bar.r_pressed);
+        assert!(!state.ui.bottom_bar.r_pressed);
     }
 
     #[test]
@@ -1127,7 +1158,7 @@ mod tests {
     fn desktop_text_input_without_browser_is_noop() {
         let (mut state, mut sdi, vfs) = make_test_state();
         state.mode = Mode::Desktop;
-        state.browser = None;
+        state.content.browser = None;
         let result = handle_desktop_input(&InputEvent::TextInput('a'), &mut state, &mut sdi, &vfs);
         assert_eq!(result, InputResult::Continue);
     }
@@ -1136,7 +1167,7 @@ mod tests {
     fn desktop_backspace_without_browser_is_noop() {
         let (mut state, mut sdi, vfs) = make_test_state();
         state.mode = Mode::Desktop;
-        state.browser = None;
+        state.content.browser = None;
         let result = handle_desktop_input(&InputEvent::Backspace, &mut state, &mut sdi, &vfs);
         assert_eq!(result, InputResult::Continue);
     }

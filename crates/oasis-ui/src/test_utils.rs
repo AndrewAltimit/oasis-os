@@ -104,6 +104,37 @@ impl MockBackend {
     }
 }
 
+/// Return all built-in themes for exhaustive widget testing.
+pub fn all_themes() -> [crate::theme::Theme; 5] {
+    use crate::theme::Theme;
+    [
+        Theme::dark(),
+        Theme::light(),
+        Theme::classic(),
+        Theme::high_contrast(),
+        Theme::colorblind(),
+    ]
+}
+
+/// Test that a widget draws without panicking across all built-in themes.
+///
+/// The closure receives a `&mut DrawContext` and should construct + draw the
+/// widget under test:
+///
+/// ```ignore
+/// test_draw_all_themes(|ctx| {
+///     let c = Checkbox::new("Test", true);
+///     c.draw(ctx, 0, 0, 200, 20).unwrap();
+/// });
+/// ```
+pub fn test_draw_all_themes(mut f: impl FnMut(&mut crate::context::DrawContext<'_>)) {
+    for theme in all_themes() {
+        let mut backend = MockBackend::new();
+        let mut ctx = crate::context::DrawContext::new(&mut backend, &theme);
+        f(&mut ctx);
+    }
+}
+
 impl SdiBackend for MockBackend {
     fn init(&mut self, _width: u32, _height: u32) -> Result<()> {
         Ok(())

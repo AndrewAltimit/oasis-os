@@ -20,10 +20,12 @@ pub struct SdiRegistry {
     objects: HashMap<String, SdiObject>,
     /// Monotonically increasing counter for assigning z-order to new objects.
     next_z: i32,
-    /// Pre-sorted list of object names in z-order (ascending). Rebuilt on
-    /// mutation rather than on every `draw()` call.
-    z_sorted_names: Vec<String>,
-    /// Whether `z_sorted_names` needs rebuilding before next draw.
+    /// Pre-sorted names of non-overlay objects in z-order (ascending).
+    /// Rebuilt on mutation rather than on every `draw()` call.
+    z_sorted_base: Vec<String>,
+    /// Pre-sorted names of overlay objects in z-order (ascending).
+    z_sorted_overlay: Vec<String>,
+    /// Whether the z-sorted lists need rebuilding before next draw.
     z_dirty: bool,
 }
 
@@ -33,7 +35,8 @@ impl SdiRegistry {
         Self {
             objects: HashMap::new(),
             next_z: 0,
-            z_sorted_names: Vec::new(),
+            z_sorted_base: Vec::new(),
+            z_sorted_overlay: Vec::new(),
             z_dirty: false,
         }
     }
@@ -221,34 +224,50 @@ impl SdiRegistry {
     }
 
     /// Rebuild the cached z-order index if it is dirty.
+    ///
+    /// Partitions objects into base and overlay lists and sorts each by
+    /// z-value using `sort_unstable_by_key` (faster than stable sort).
+    /// Reuses allocated `Vec` capacity via `clear()` + `push`.
     fn ensure_z_sorted(&mut self) {
         if !self.z_dirty {
             return;
         }
-        self.z_sorted_names = self.objects.keys().cloned().collect();
-        self.z_sorted_names.sort_by_key(|name| self.objects[name].z);
+        self.z_sorted_base.clear();
+        self.z_sorted_overlay.clear();
+        for (name, obj) in &self.objects {
+            if obj.overlay {
+                self.z_sorted_overlay.push(name.clone());
+            } else {
+                self.z_sorted_base.push(name.clone());
+            }
+        }
+        self.z_sorted_base
+            .sort_unstable_by_key(|name| self.objects[name].z);
+        self.z_sorted_overlay
+            .sort_unstable_by_key(|name| self.objects[name].z);
         self.z_dirty = false;
     }
 
     /// Draw all visible objects to the backend, sorted by z-order (ascending).
     /// Uses PSIX-style two-pass rendering: base-layer objects first, then
-    /// overlay objects on top.
+    /// overlay objects on top. Each pass iterates only its pre-partitioned
+    /// list, avoiding per-object overlay checks.
     pub fn draw(&mut self, backend: &mut dyn SdiBackend) -> Result<()> {
         self.ensure_z_sorted();
 
-        // Pass 1: base layer (overlay == false).
-        for name in &self.z_sorted_names {
+        // Pass 1: base layer (non-overlay objects).
+        for name in &self.z_sorted_base {
             let obj = &self.objects[name];
-            if obj.overlay || !obj.visible || obj.alpha == 0 {
+            if !obj.visible || obj.alpha == 0 {
                 continue;
             }
             Self::draw_object(obj, backend)?;
         }
 
-        // Pass 2: overlay layer (overlay == true).
-        for name in &self.z_sorted_names {
+        // Pass 2: overlay layer.
+        for name in &self.z_sorted_overlay {
             let obj = &self.objects[name];
-            if !obj.overlay || !obj.visible || obj.alpha == 0 {
+            if !obj.visible || obj.alpha == 0 {
                 continue;
             }
             Self::draw_object(obj, backend)?;

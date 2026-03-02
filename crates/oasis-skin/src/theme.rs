@@ -102,6 +102,55 @@ pub struct SkinTheme {
     /// Per-element overrides for scrollbar appearance.
     #[serde(default)]
     pub scrollbar_overrides: Option<ScrollbarOverrides>,
+
+    /// Per-app color overrides keyed by app name.
+    ///
+    /// Each entry maps color keys to hex color strings.
+    /// Apps query `ActiveTheme::app_color("app_name", "key")` with
+    /// fallback to their default palette.
+    ///
+    /// ```toml
+    /// [app_themes.tv_guide]
+    /// bg = "#0A1628"
+    /// grid_line = "#1A3A5C"
+    /// ```
+    #[serde(default)]
+    pub app_themes:
+        Option<std::collections::HashMap<String, std::collections::HashMap<String, String>>>,
+
+    /// Named gradient presets reusable across components.
+    ///
+    /// ```toml
+    /// [gradients.primary]
+    /// from = "#0066FF"
+    /// to = "#0044AA"
+    /// ```
+    #[serde(default)]
+    pub gradients: Option<std::collections::HashMap<String, GradientPreset>>,
+
+    /// Named animation timing presets.
+    ///
+    /// ```toml
+    /// [animations.button_press]
+    /// duration_ms = 100
+    /// easing = "ease_out_quad"
+    /// ```
+    #[serde(default)]
+    pub animations: Option<std::collections::HashMap<String, AnimationPreset>>,
+
+    /// Per-widget state color overrides.
+    ///
+    /// ```toml
+    /// [widget_states.button]
+    /// normal_bg = "#505050"
+    /// hover_bg = "#656565"
+    /// pressed_bg = "#353535"
+    /// disabled_bg = "#3A3A3A"
+    /// disabled_text = "#555555"
+    /// ```
+    #[serde(default)]
+    pub widget_states:
+        Option<std::collections::HashMap<String, std::collections::HashMap<String, String>>>,
 }
 
 /// Optional overrides for the window manager theme.
@@ -556,6 +605,55 @@ pub struct BrowserOverrides {
     pub link_color: Option<String>,
 }
 
+/// A reusable gradient preset (two-color linear gradient).
+#[derive(Debug, Clone, Deserialize)]
+pub struct GradientPreset {
+    /// Start color (hex).
+    pub from: String,
+    /// End color (hex).
+    pub to: String,
+}
+
+/// A named animation timing preset.
+#[derive(Debug, Clone, Deserialize)]
+pub struct AnimationPreset {
+    /// Duration in milliseconds.
+    pub duration_ms: u32,
+    /// Easing function name.
+    ///
+    /// Supported: "linear", "ease_in_quad", "ease_out_quad",
+    /// "ease_in_out_quad", "ease_in_cubic", "ease_out_cubic",
+    /// "ease_in_out_cubic".
+    #[serde(default = "default_easing")]
+    pub easing: String,
+}
+
+fn default_easing() -> String {
+    "linear".to_string()
+}
+
+/// Resolve an easing function name to a function pointer.
+///
+/// Supported names: `"linear"`, `"ease_in_quad"`, `"ease_out_quad"`,
+/// `"ease_in_out_quad"`, `"ease_out_cubic"`, `"ease_in_out_cubic"`,
+/// `"ease_out_elastic"`, `"ease_out_bounce"`.
+///
+/// Returns `linear` for unknown names.
+pub fn resolve_easing(name: &str) -> fn(f32) -> f32 {
+    use oasis_ui::animation::easing;
+    match name {
+        "linear" => easing::linear,
+        "ease_in_quad" => easing::ease_in_quad,
+        "ease_out_quad" => easing::ease_out_quad,
+        "ease_in_out_quad" => easing::ease_in_out_quad,
+        "ease_out_cubic" => easing::ease_out_cubic,
+        "ease_in_out_cubic" => easing::ease_in_out_cubic,
+        "ease_out_elastic" => easing::ease_out_elastic,
+        "ease_out_bounce" => easing::ease_out_bounce,
+        _ => easing::linear,
+    }
+}
+
 fn default_bg() -> String {
     "#1A1A2D".to_string()
 }
@@ -612,6 +710,10 @@ impl Default for SkinTheme {
             geometry: None,
             transition: None,
             scrollbar_overrides: None,
+            app_themes: None,
+            gradients: None,
+            animations: None,
+            widget_states: None,
         }
     }
 }
@@ -1116,5 +1218,84 @@ gradient_enabled = true
         let skin = SkinTheme::default();
         let ui = skin.to_ui_theme();
         assert_eq!(ui.accent, skin.primary_color());
+    }
+
+    // -- resolve_easing tests --
+
+    #[test]
+    fn resolve_easing_known_names() {
+        use super::resolve_easing;
+        let linear = resolve_easing("linear");
+        assert!((linear(0.5) - 0.5).abs() < f32::EPSILON);
+
+        let ease_out = resolve_easing("ease_out_quad");
+        assert!(ease_out(0.5) > 0.5);
+
+        let ease_in = resolve_easing("ease_in_quad");
+        assert!(ease_in(0.5) < 0.5);
+    }
+
+    #[test]
+    fn resolve_easing_unknown_returns_linear() {
+        use super::resolve_easing;
+        let f = resolve_easing("unknown_easing");
+        assert!((f(0.5) - 0.5).abs() < f32::EPSILON);
+    }
+
+    // -- GradientPreset / AnimationPreset deserialization tests --
+
+    #[test]
+    fn gradient_preset_deserialize() {
+        let toml = r##"
+[gradients.primary]
+from = "#0066FF"
+to = "#0044AA"
+"##;
+        let skin: SkinTheme = toml::from_str(toml).unwrap();
+        let grads = skin.gradients.unwrap();
+        let g = &grads["primary"];
+        assert_eq!(g.from, "#0066FF");
+        assert_eq!(g.to, "#0044AA");
+    }
+
+    #[test]
+    fn animation_preset_deserialize() {
+        let toml = r##"
+[animations.button_press]
+duration_ms = 100
+easing = "ease_out_quad"
+"##;
+        let skin: SkinTheme = toml::from_str(toml).unwrap();
+        let anims = skin.animations.unwrap();
+        let a = &anims["button_press"];
+        assert_eq!(a.duration_ms, 100);
+        assert_eq!(a.easing, "ease_out_quad");
+    }
+
+    #[test]
+    fn animation_preset_default_easing() {
+        let toml = r##"
+[animations.fast]
+duration_ms = 50
+"##;
+        let skin: SkinTheme = toml::from_str(toml).unwrap();
+        let anims = skin.animations.unwrap();
+        assert_eq!(anims["fast"].easing, "linear");
+    }
+
+    // -- widget_states deserialization tests --
+
+    #[test]
+    fn widget_states_deserialize() {
+        let toml = r##"
+[widget_states.button]
+normal_bg = "#505050"
+hover_bg = "#656565"
+pressed_bg = "#353535"
+"##;
+        let skin: SkinTheme = toml::from_str(toml).unwrap();
+        let states = skin.widget_states.unwrap();
+        let button = &states["button"];
+        assert_eq!(button["hover_bg"], "#656565");
     }
 }
