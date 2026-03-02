@@ -1298,4 +1298,111 @@ pressed_bg = "#353535"
         let button = &states["button"];
         assert_eq!(button["hover_bg"], "#656565");
     }
+
+    // -- Phase 12: expanded SkinTheme tests --
+
+    #[test]
+    fn default_theme_background_is_dark() {
+        let skin = SkinTheme::default();
+        let bg = skin.background_color();
+        assert!(bg.r < 50 && bg.g < 50 && bg.b < 50);
+    }
+
+    #[test]
+    fn default_theme_text_is_green() {
+        let skin = SkinTheme::default();
+        let text = skin.text_color();
+        assert_eq!(text.g, 255);
+    }
+
+    #[test]
+    fn parse_hex_color_three_byte() {
+        assert_eq!(
+            parse_hex_color("#AABBCC"),
+            Some(Color::rgb(0xAA, 0xBB, 0xCC))
+        );
+    }
+
+    #[test]
+    fn parse_hex_color_four_byte() {
+        assert_eq!(
+            parse_hex_color("#AABBCC80"),
+            Some(Color::rgba(0xAA, 0xBB, 0xCC, 0x80))
+        );
+    }
+
+    #[test]
+    fn parse_hex_color_lowercase() {
+        assert_eq!(
+            parse_hex_color("#aabbcc"),
+            Some(Color::rgb(0xAA, 0xBB, 0xCC))
+        );
+    }
+
+    #[test]
+    fn parse_hex_color_missing_hash() {
+        assert_eq!(parse_hex_color("AABBCC"), None);
+    }
+
+    #[test]
+    fn to_ui_theme_surface_derived_from_background() {
+        let skin = SkinTheme::default();
+        let ui = skin.to_ui_theme();
+        // Surface should be lighter than background (derived via lighten).
+        let bg = skin.background_color();
+        assert!(ui.surface.r >= bg.r || ui.surface.g >= bg.g || ui.surface.b >= bg.b);
+    }
+
+    #[test]
+    fn to_ui_theme_border_derived() {
+        let skin = SkinTheme::default();
+        let ui = skin.to_ui_theme();
+        // Border strong should match primary.
+        assert_eq!(ui.border_strong, skin.primary_color());
+    }
+
+    #[test]
+    fn to_ui_theme_font_sizes_are_reasonable() {
+        let skin = SkinTheme::default();
+        let ui = skin.to_ui_theme();
+        assert!(ui.font_size_sm > 0);
+        assert!(ui.font_size_md > 0);
+        assert!(ui.font_size_lg > ui.font_size_sm);
+    }
+
+    #[test]
+    fn bar_overrides_deserialize() {
+        let toml = r##"
+[bar_overrides]
+statusbar_bg = "#112233"
+clock_color = "#FFFFFF"
+"##;
+        let skin: SkinTheme = toml::from_str(toml).unwrap();
+        let bars = skin.bar_overrides.unwrap();
+        assert_eq!(bars.statusbar_bg.as_deref(), Some("#112233"));
+        assert_eq!(bars.clock_color.as_deref(), Some("#FFFFFF"));
+    }
+
+    #[test]
+    fn icon_overrides_deserialize() {
+        let toml = r##"
+[icon_overrides]
+body_color = "#FF0000"
+"##;
+        let skin: SkinTheme = toml::from_str(toml).unwrap();
+        let icons = skin.icon_overrides.unwrap();
+        assert_eq!(icons.body_color.as_deref(), Some("#FF0000"));
+    }
+
+    #[test]
+    fn default_no_overrides() {
+        let skin = SkinTheme::default();
+        assert!(skin.surface.is_none());
+        assert!(skin.accent_hover.is_none());
+        assert!(skin.border_radius.is_none());
+        assert!(skin.shadow_intensity.is_none());
+        assert!(skin.wm_theme.is_none());
+        assert!(skin.bar_overrides.is_none());
+        assert!(skin.icon_overrides.is_none());
+    }
 }

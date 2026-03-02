@@ -383,10 +383,10 @@ mod tests {
     #[test]
     fn wcag_aa_large_is_more_lenient() {
         // A pair that fails AA (4.5:1) but passes AA-large (3.0:1).
-        let fg = Color::rgb(110, 110, 110);
+        // Gray 135 on white gives ~3.59:1 contrast.
+        let fg = Color::rgb(135, 135, 135);
         let bg = Color::rgb(255, 255, 255);
         let ratio = contrast_ratio(fg, bg);
-        // Should be roughly 3.5-4.5
         assert!(ratio >= 3.0 && ratio < 4.5);
         assert!(!meets_wcag_aa(fg, bg));
         assert!(meets_wcag_aa_large(fg, bg));

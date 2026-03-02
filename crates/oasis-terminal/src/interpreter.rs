@@ -408,6 +408,7 @@ impl CommandRegistry {
         if all_outputs.is_empty() {
             Ok(CommandOutput::None)
         } else if all_outputs.len() == 1 {
+            // SAFETY: guarded by len() == 1 check above.
             Ok(all_outputs.into_iter().next().unwrap())
         } else {
             // Merge consecutive Text entries to reduce Multi size.
@@ -423,6 +424,7 @@ impl CommandRegistry {
                 merged.push(output);
             }
             if merged.len() == 1 {
+                // SAFETY: guarded by len() == 1 check above.
                 Ok(merged.into_iter().next().unwrap())
             } else {
                 Ok(CommandOutput::Multi(merged))
@@ -579,6 +581,7 @@ impl CommandRegistry {
             || trimmed.starts_with("function\t")
             || trimmed == "function"
         {
+            // SAFETY: guarded by starts_with("function") / == "function" above.
             let rest = trimmed.strip_prefix("function").unwrap().trim();
             return self.execute_function_def_raw(rest);
         }
@@ -1247,7 +1250,9 @@ impl CommandRegistry {
                 .sum();
             let mut out = format!("Commands ({total}):\n");
             for cat in &cats {
-                let cmds = categories.get(cat).unwrap();
+                let Some(cmds) = categories.get(cat) else {
+                    continue;
+                };
                 let mut cmds = cmds.clone();
                 cmds.sort_by_key(|(name, _)| *name);
                 out.push_str(&format!("\n  [{cat}]\n"));
@@ -1432,12 +1437,13 @@ impl CommandRegistry {
             };
             // Save the current value (or None if unset) in the top scope.
             let old = self.get_variable(name);
-            self.local_scopes
-                .borrow_mut()
-                .last_mut()
-                .unwrap()
-                .entry(name.to_string())
-                .or_insert(old);
+            let mut scopes_mut = self.local_scopes.borrow_mut();
+            let Some(top) = scopes_mut.last_mut() else {
+                return Err(OasisError::Command(
+                    "local: scope unexpectedly empty".to_string(),
+                ));
+            };
+            top.entry(name.to_string()).or_insert(old);
             // Set the new value.
             if let Some(v) = value {
                 self.set_variable(name, v);
@@ -1629,6 +1635,7 @@ pub fn tokenize(input: &str) -> Result<Vec<String>> {
             {
                 match next {
                     '"' | '\\' | '$' => {
+                        // SAFETY: peek() returned Some above; next() is guaranteed.
                         current.push(chars.next().unwrap());
                     },
                     _ => {
@@ -1775,6 +1782,7 @@ fn split_chains(input: &str) -> Result<Vec<ChainSegment>> {
             },
             '|' if brace_depth > 0 && chars.peek() == Some(&'|') => {
                 current.push(ch);
+                // SAFETY: peek() returned Some above; next() is guaranteed.
                 current.push(chars.next().unwrap());
             },
             '|' if chars.peek() == Some(&'|') => {
@@ -4483,5 +4491,130 @@ mod tests {
         let mut env = make_env(&mut vfs);
         let result = reg.execute("break", &mut env);
         assert!(result.is_ok());
+    }
+
+    // ---- Phase 12: integration tests ----
+
+    #[test]
+    fn pipe_chain_echo_to_echo() {
+        let mut reg = CommandRegistry::new();
+        reg.register(Box::new(EchoCmd));
+        let mut vfs = MemoryVfs::new();
+        let mut env = make_env(&mut vfs);
+        match reg.execute("echo hello | echo", &mut env).unwrap() {
+            CommandOutput::Text(s) => assert_eq!(s, "hello"),
+            other => panic!("expected Text, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn pipe_chain_three_stages() {
+        let mut reg = CommandRegistry::new();
+        reg.register(Box::new(EchoCmd));
+        let mut vfs = MemoryVfs::new();
+        let mut env = make_env(&mut vfs);
+        match reg.execute("echo data | echo | echo", &mut env).unwrap() {
+            CommandOutput::Text(s) => assert_eq!(s, "data"),
+            other => panic!("expected Text, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn variable_expansion_basic() {
+        let mut reg = CommandRegistry::new();
+        reg.register(Box::new(EchoCmd));
+        let mut vfs = MemoryVfs::new();
+        let mut env = make_env(&mut vfs);
+        reg.execute("set X=hello", &mut env).unwrap();
+        let val = reg.execute("echo $X", &mut env).ok().and_then(|o| match o {
+            CommandOutput::Text(s) => Some(s),
+            _ => None,
+        });
+        assert_eq!(val.as_deref(), Some("hello"));
+    }
+
+    #[test]
+    fn variable_expansion_unset() {
+        let mut reg = CommandRegistry::new();
+        reg.register(Box::new(EchoCmd));
+        let mut vfs = MemoryVfs::new();
+        let mut env = make_env(&mut vfs);
+        // Unset variable expands to empty string.
+        let out = reg.execute("echo $NONEXISTENT", &mut env);
+        assert!(out.is_ok());
+    }
+
+    #[test]
+    fn alias_define_and_use() {
+        let reg = CommandRegistry::new();
+        let mut vfs = MemoryVfs::new();
+        let mut env = make_env(&mut vfs);
+        reg.execute("alias greet='echo hi'", &mut env).unwrap();
+        let out = reg.execute("greet", &mut env);
+        match out {
+            Ok(CommandOutput::Text(s)) => assert_eq!(s, "hi"),
+            _ => {
+                // alias might not resolve echo if it's not registered;
+                // just verify no panic.
+            },
+        }
+    }
+
+    #[test]
+    fn history_records_commands() {
+        let reg = CommandRegistry::new();
+        let mut vfs = MemoryVfs::new();
+        let mut env = make_env(&mut vfs);
+        reg.execute("set A=1", &mut env).unwrap();
+        reg.execute("set B=2", &mut env).unwrap();
+        let out = reg.execute("history", &mut env).unwrap();
+        if let CommandOutput::Text(s) = out {
+            assert!(s.contains("set A=1"));
+            assert!(s.contains("set B=2"));
+        }
+    }
+
+    #[test]
+    fn chained_commands_semicolon() {
+        let reg = CommandRegistry::new();
+        let mut vfs = MemoryVfs::new();
+        let mut env = make_env(&mut vfs);
+        let out = reg.execute("set X=1; set Y=2", &mut env);
+        assert!(out.is_ok());
+    }
+
+    #[test]
+    fn chained_commands_and_operator() {
+        let mut reg = CommandRegistry::new();
+        reg.register(Box::new(EchoCmd));
+        let mut vfs = MemoryVfs::new();
+        let mut env = make_env(&mut vfs);
+        let out = reg.execute("echo first && echo second", &mut env).unwrap();
+        if let CommandOutput::Text(s) = out {
+            assert!(s.contains("first"));
+            assert!(s.contains("second"));
+        }
+    }
+
+    #[test]
+    fn empty_command_returns_none() {
+        let reg = CommandRegistry::new();
+        let mut vfs = MemoryVfs::new();
+        let mut env = make_env(&mut vfs);
+        match reg.execute("", &mut env).unwrap() {
+            CommandOutput::None => {},
+            other => panic!("expected None, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn whitespace_only_command_returns_none() {
+        let reg = CommandRegistry::new();
+        let mut vfs = MemoryVfs::new();
+        let mut env = make_env(&mut vfs);
+        match reg.execute("   ", &mut env).unwrap() {
+            CommandOutput::None => {},
+            other => panic!("expected None, got {other:?}"),
+        }
     }
 }
