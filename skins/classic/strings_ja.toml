@@ -1,0 +1,33 @@
+# Japanese localization for the Classic skin.
+#
+# Place in the skin directory alongside skin.toml.
+# Fields not specified here fall back to English defaults.
+
+title = "OASIS_OS"
+home_label = "ホーム"
+error_prefix = "エラー: "
+shutdown_message = "システムを停止しました。"
+welcome_message = "OASIS_OSへようこそ。"
+
+# Navigation
+back = "戻る"
+close = "閉じる"
+ok = "決定"
+cancel = "キャンセル"
+yes = "はい"
+no = "いいえ"
+
+# App names
+file_manager = "ファイル管理"
+settings = "設定"
+browser = "ブラウザ"
+music = "音楽"
+network = "ネットワーク"
+system_monitor = "システムモニタ"
+photos = "写真"
+packages = "パッケージ"
+tv_guide = "テレビガイド"
+
+# Status
+battery = "バッテリー"
+wifi = "無線LAN"

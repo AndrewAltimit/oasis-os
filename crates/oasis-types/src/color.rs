@@ -135,6 +135,46 @@ pub fn rotate_hue(color: Color, degrees: f32) -> Color {
     result
 }
 
+// -----------------------------------------------------------------------
+// WCAG 2.1 contrast utilities
+// -----------------------------------------------------------------------
+
+/// Compute the relative luminance of a color per WCAG 2.1.
+///
+/// Uses the sRGB linearization formula. Returns a value in `[0.0, 1.0]`
+/// where 0 is darkest black and 1 is lightest white.
+pub fn relative_luminance(c: Color) -> f64 {
+    fn linearize(channel: u8) -> f64 {
+        let s = channel as f64 / 255.0;
+        if s <= 0.04045 {
+            s / 12.92
+        } else {
+            ((s + 0.055) / 1.055).powf(2.4)
+        }
+    }
+    0.2126 * linearize(c.r) + 0.7152 * linearize(c.g) + 0.0722 * linearize(c.b)
+}
+
+/// Compute the WCAG 2.1 contrast ratio between two colors.
+///
+/// Returns a value in `[1.0, 21.0]`. The order of arguments does not matter.
+pub fn contrast_ratio(a: Color, b: Color) -> f64 {
+    let la = relative_luminance(a);
+    let lb = relative_luminance(b);
+    let (lighter, darker) = if la > lb { (la, lb) } else { (lb, la) };
+    (lighter + 0.05) / (darker + 0.05)
+}
+
+/// Check whether `fg` on `bg` meets WCAG AA for normal text (>= 4.5:1).
+pub fn meets_wcag_aa(fg: Color, bg: Color) -> bool {
+    contrast_ratio(fg, bg) >= 4.5
+}
+
+/// Check whether `fg` on `bg` meets WCAG AA for large text (>= 3.0:1).
+pub fn meets_wcag_aa_large(fg: Color, bg: Color) -> bool {
+    contrast_ratio(fg, bg) >= 3.0
+}
+
 /// Adjust the saturation of a color by a multiplier.
 ///
 /// `factor = 0.0` produces grayscale, `1.0` is unchanged, `2.0` doubles
@@ -278,6 +318,94 @@ mod tests {
     fn adjust_saturation_preserves_alpha() {
         let result = adjust_saturation(Color::rgba(255, 0, 0, 100), 0.5);
         assert_eq!(result.a, 100);
+    }
+
+    // -- WCAG contrast utility tests --
+
+    #[test]
+    fn luminance_black_is_zero() {
+        let l = relative_luminance(Color::rgb(0, 0, 0));
+        assert!(l.abs() < 1e-6);
+    }
+
+    #[test]
+    fn luminance_white_is_one() {
+        let l = relative_luminance(Color::rgb(255, 255, 255));
+        assert!((l - 1.0).abs() < 1e-4);
+    }
+
+    #[test]
+    fn luminance_mid_gray() {
+        let l = relative_luminance(Color::rgb(128, 128, 128));
+        // sRGB 128 -> ~0.2158 relative luminance
+        assert!(l > 0.2 && l < 0.25);
+    }
+
+    #[test]
+    fn contrast_black_white_is_21() {
+        let ratio = contrast_ratio(Color::rgb(0, 0, 0), Color::rgb(255, 255, 255));
+        assert!((ratio - 21.0).abs() < 0.1);
+    }
+
+    #[test]
+    fn contrast_same_color_is_one() {
+        let c = Color::rgb(100, 150, 200);
+        let ratio = contrast_ratio(c, c);
+        assert!((ratio - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn contrast_is_symmetric() {
+        let a = Color::rgb(50, 100, 200);
+        let b = Color::rgb(200, 200, 200);
+        let r1 = contrast_ratio(a, b);
+        let r2 = contrast_ratio(b, a);
+        assert!((r1 - r2).abs() < 1e-10);
+    }
+
+    #[test]
+    fn wcag_aa_white_on_black() {
+        assert!(meets_wcag_aa(
+            Color::rgb(255, 255, 255),
+            Color::rgb(0, 0, 0)
+        ));
+    }
+
+    #[test]
+    fn wcag_aa_fails_light_on_light() {
+        // Light gray on white should fail AA.
+        assert!(!meets_wcag_aa(
+            Color::rgb(200, 200, 200),
+            Color::rgb(255, 255, 255)
+        ));
+    }
+
+    #[test]
+    fn wcag_aa_large_is_more_lenient() {
+        // A pair that fails AA (4.5:1) but passes AA-large (3.0:1).
+        let fg = Color::rgb(110, 110, 110);
+        let bg = Color::rgb(255, 255, 255);
+        let ratio = contrast_ratio(fg, bg);
+        // Should be roughly 3.5-4.5
+        assert!(ratio >= 3.0 && ratio < 4.5);
+        assert!(!meets_wcag_aa(fg, bg));
+        assert!(meets_wcag_aa_large(fg, bg));
+    }
+
+    #[test]
+    fn wcag_known_ratio_value() {
+        // WCAG example: pure blue (#0000FF) on white
+        // Luminance of blue: 0.0722, white: 1.0
+        // ratio = (1.0 + 0.05) / (0.0722 + 0.05) = 1.05/0.1222 ≈ 8.59
+        let ratio = contrast_ratio(Color::rgb(0, 0, 255), Color::rgb(255, 255, 255));
+        assert!(ratio > 8.0 && ratio < 9.0);
+    }
+
+    #[test]
+    fn luminance_ignores_alpha() {
+        let a = relative_luminance(Color::rgba(100, 150, 200, 0));
+        let b = relative_luminance(Color::rgba(100, 150, 200, 255));
+        assert!((a - b).abs() < 1e-10);
     }
 
     mod prop {

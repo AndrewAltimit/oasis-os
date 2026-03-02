@@ -399,6 +399,36 @@ impl Theme {
         }
     }
 
+    /// Color-blind friendly theme optimized for protanopia (red-blind).
+    ///
+    /// Uses a blue/yellow axis for status differentiation:
+    /// - Success: cyan (visible on blue/yellow axis)
+    /// - Warning: yellow (high luminance, distinct)
+    /// - Error: blue-violet (distinct from cyan/yellow)
+    pub fn protanopia() -> Self {
+        let mut theme = Self::dark();
+        theme.success = Color::rgb(0, 200, 200); // cyan
+        theme.warning = Color::rgb(255, 220, 50); // yellow
+        theme.error = Color::rgb(130, 80, 220); // blue-violet
+        theme.info = Color::rgb(100, 180, 255); // light blue
+        theme
+    }
+
+    /// Color-blind friendly theme optimized for tritanopia (blue-blind).
+    ///
+    /// Uses a red/cyan axis for status differentiation:
+    /// - Success: teal (visible without blue perception)
+    /// - Warning: red-orange (high contrast, distinct)
+    /// - Error: deep red (distinct from teal/orange)
+    pub fn tritanopia() -> Self {
+        let mut theme = Self::dark();
+        theme.success = Color::rgb(0, 180, 160); // teal
+        theme.warning = Color::rgb(255, 120, 40); // red-orange
+        theme.error = Color::rgb(200, 30, 30); // deep red
+        theme.info = Color::rgb(0, 160, 200); // dark cyan
+        theme
+    }
+
     /// Color-blind friendly theme optimized for deuteranopia.
     ///
     /// Replaces the standard success/warning/error color scheme with
@@ -588,6 +618,8 @@ mod tests {
             Theme::classic(),
             Theme::high_contrast(),
             Theme::colorblind(),
+            Theme::protanopia(),
+            Theme::tritanopia(),
         ] {
             assert_eq!(theme.font_size_xs, 8);
             assert_eq!(theme.font_size_md, 8);
@@ -611,6 +643,8 @@ mod tests {
         assert!(!Theme::classic().reduced_motion);
         assert!(!Theme::high_contrast().reduced_motion);
         assert!(!Theme::colorblind().reduced_motion);
+        assert!(!Theme::protanopia().reduced_motion);
+        assert!(!Theme::tritanopia().reduced_motion);
     }
 
     #[test]
@@ -728,6 +762,104 @@ mod tests {
         assert!(t.background.r < 50);
         assert!(t.background.g < 50);
         assert!(t.background.b < 50);
+    }
+
+    // -- Protanopia theme tests --
+
+    #[test]
+    fn protanopia_has_distinct_status_colors() {
+        let t = Theme::protanopia();
+        assert_ne!(t.success, t.warning);
+        assert_ne!(t.success, t.error);
+        assert_ne!(t.warning, t.error);
+        assert_ne!(t.success, t.info);
+    }
+
+    #[test]
+    fn protanopia_success_is_cyan() {
+        let t = Theme::protanopia();
+        assert!(t.success.g >= 200);
+        assert!(t.success.b >= 200);
+        assert!(t.success.r < 50);
+    }
+
+    #[test]
+    fn protanopia_shares_dark_base() {
+        let dark = Theme::dark();
+        let p = Theme::protanopia();
+        assert_eq!(dark.background, p.background);
+        assert_eq!(dark.surface, p.surface);
+        assert_eq!(dark.text_primary, p.text_primary);
+    }
+
+    // -- Tritanopia theme tests --
+
+    #[test]
+    fn tritanopia_has_distinct_status_colors() {
+        let t = Theme::tritanopia();
+        assert_ne!(t.success, t.warning);
+        assert_ne!(t.success, t.error);
+        assert_ne!(t.warning, t.error);
+        assert_ne!(t.success, t.info);
+    }
+
+    #[test]
+    fn tritanopia_success_is_teal() {
+        let t = Theme::tritanopia();
+        assert!(t.success.g >= 150);
+        assert!(t.success.b >= 150);
+        assert!(t.success.r < 50);
+    }
+
+    #[test]
+    fn tritanopia_shares_dark_base() {
+        let dark = Theme::dark();
+        let tr = Theme::tritanopia();
+        assert_eq!(dark.background, tr.background);
+        assert_eq!(dark.surface, tr.surface);
+        assert_eq!(dark.text_primary, tr.text_primary);
+    }
+
+    #[test]
+    fn protanopia_default_font_scale() {
+        assert!((Theme::protanopia().font_scale - 1.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn tritanopia_default_font_scale() {
+        assert!((Theme::tritanopia().font_scale - 1.0).abs() < f32::EPSILON);
+    }
+
+    // -- WCAG AA validation across all themes --
+
+    #[test]
+    fn all_themes_text_meets_wcag_aa() {
+        use oasis_types::color::{contrast_ratio, meets_wcag_aa};
+        let themes = [
+            ("dark", Theme::dark()),
+            ("light", Theme::light()),
+            ("classic", Theme::classic()),
+            ("high_contrast", Theme::high_contrast()),
+            ("colorblind", Theme::colorblind()),
+            ("protanopia", Theme::protanopia()),
+            ("tritanopia", Theme::tritanopia()),
+        ];
+        for (name, theme) in &themes {
+            let ratio = contrast_ratio(theme.text_primary, theme.background);
+            assert!(
+                meets_wcag_aa(theme.text_primary, theme.background),
+                "{name}: text_primary vs background contrast {ratio:.2} < 4.5"
+            );
+        }
+    }
+
+    #[test]
+    fn high_contrast_exceeds_wcag_aaa() {
+        use oasis_types::color::contrast_ratio;
+        let t = Theme::high_contrast();
+        // White on black should be ~21:1, well above AAA (7:1).
+        let ratio = contrast_ratio(t.text_primary, t.background);
+        assert!(ratio >= 7.0);
     }
 
     // -- interactive state helpers --

@@ -105,7 +105,7 @@ impl MockBackend {
 }
 
 /// Return all built-in themes for exhaustive widget testing.
-pub fn all_themes() -> [crate::theme::Theme; 5] {
+pub fn all_themes() -> [crate::theme::Theme; 7] {
     use crate::theme::Theme;
     [
         Theme::dark(),
@@ -113,6 +113,8 @@ pub fn all_themes() -> [crate::theme::Theme; 5] {
         Theme::classic(),
         Theme::high_contrast(),
         Theme::colorblind(),
+        Theme::protanopia(),
+        Theme::tritanopia(),
     ]
 }
 
