@@ -69,6 +69,7 @@ wave_enabled = false
 angle = 90
 
 [geometry]
+tab_row_height = 0
 statusbar_height = 24
 bottombar_height = 52
 icon_width = 40

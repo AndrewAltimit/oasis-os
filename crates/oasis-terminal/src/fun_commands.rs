@@ -4,6 +4,30 @@ use oasis_types::error::{OasisError, Result};
 
 use crate::interpreter::{Command, CommandOutput, Environment};
 
+/// Platform-safe seed for PRNG. Uses `TimeService` when available (required on
+/// WASM where `std::time::SystemTime::now()` panics), falls back to std on native.
+fn time_seed(env: &Environment<'_>) -> u64 {
+    if let Some(time) = env.time
+        && let Ok(now) = time.now()
+    {
+        return (now.year as u64) << 40
+            | (now.month as u64) << 32
+            | (now.day as u64) << 24
+            | (now.hour as u64) << 16
+            | (now.minute as u64) << 8
+            | (now.second as u64);
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos() as u64
+    }
+    #[cfg(target_arch = "wasm32")]
+    0
+}
+
 // ---------------------------------------------------------------------------
 // cal
 // ---------------------------------------------------------------------------
@@ -121,7 +145,7 @@ impl Command for FortuneCmd {
     fn category(&self) -> &str {
         "fun"
     }
-    fn execute(&self, _args: &[&str], _env: &mut Environment<'_>) -> Result<CommandOutput> {
+    fn execute(&self, _args: &[&str], env: &mut Environment<'_>) -> Result<CommandOutput> {
         let fortunes = [
             "The best code is no code at all.",
             "There are only two hard things: cache invalidation and naming things.",
@@ -138,10 +162,7 @@ impl Command for FortuneCmd {
             "640K ought to be enough for anybody. (32MB on PSP, actually.)",
             "Keep it simple, keep it OASIS.",
         ];
-        let seed = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_nanos() as usize;
+        let seed = time_seed(env) as usize;
         let idx = seed % fortunes.len();
         Ok(CommandOutput::Text(fortunes[idx].to_string()))
     }
@@ -245,13 +266,10 @@ impl Command for MatrixCmd {
     fn category(&self) -> &str {
         "fun"
     }
-    fn execute(&self, _args: &[&str], _env: &mut Environment<'_>) -> Result<CommandOutput> {
+    fn execute(&self, _args: &[&str], env: &mut Environment<'_>) -> Result<CommandOutput> {
         let width = 48;
         let height = 10;
-        let mut seed = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_nanos() as u64;
+        let mut seed = time_seed(env);
 
         let chars = "01アイウエオカキクケコ日月火水木金土";
         let char_vec: Vec<char> = chars.chars().collect();

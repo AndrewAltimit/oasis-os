@@ -467,7 +467,8 @@ mod tests {
         let bar = StatusBar::new();
         let mut sdi = SdiRegistry::new();
         let at = crate::active_theme::ActiveTheme::default();
-        let feat = crate::skin::SkinFeatures::default();
+        let mut feat = crate::skin::SkinFeatures::default();
+        feat.show_tabs = true;
         bar.update_sdi(&mut sdi, &at, &feat);
         assert!(sdi.contains("bar_top"));
         assert!(sdi.contains("bar_version"));
@@ -665,6 +666,7 @@ mod tests {
 
         // First enable to create objects.
         let mut feat = crate::skin::SkinFeatures::default();
+        feat.show_tabs = true;
         bar.update_sdi(&mut sdi, &at, &feat);
 
         // Now disable and verify they're hidden.
@@ -732,7 +734,8 @@ mod tests {
         bar.active_tab = TopTab::Apps;
         let mut sdi = SdiRegistry::new();
         let at = crate::active_theme::ActiveTheme::default();
-        let feat = crate::skin::SkinFeatures::default();
+        let mut feat = crate::skin::SkinFeatures::default();
+        feat.show_tabs = true;
         bar.update_sdi(&mut sdi, &at, &feat);
 
         let apps_tab = sdi.get("bar_tab_0").unwrap();

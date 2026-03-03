@@ -55,6 +55,7 @@ dashboard = false
 terminal = true
 file_browser = true
 window_manager = false
+show_tabs = false
 "#;
 
 const TERMINAL_THEME: &str = r##"
@@ -175,6 +176,7 @@ dashboard = false
 terminal = true
 file_browser = true
 window_manager = false
+show_tabs = false
 command_categories = ["system", "file", "network"]
 "#;
 
@@ -269,6 +271,7 @@ dashboard = false
 terminal = true
 file_browser = true
 window_manager = false
+show_tabs = false
 corrupted = true
 "#;
 
@@ -349,17 +352,6 @@ w = 800
 h = 1
 color = "#444466"
 
-[start_button]
-x = 4
-y = 572
-w = 60
-h = 24
-color = "#3264C8"
-text = "Start"
-font_size = 10
-text_color = "#FFFFFF"
-border_radius = 4
-
 [task_area]
 x = 68
 y = 572
@@ -383,6 +375,7 @@ dashboard = false
 terminal = true
 file_browser = true
 window_manager = true
+show_tabs = false
 "#;
 
 const DESKTOP_THEME: &str = r##"
@@ -506,10 +499,11 @@ terminal = true
 file_browser = true
 browser = true
 window_manager = true
-dashboard_pages = 4
-icons_per_page = 4
-grid_cols = 2
-grid_rows = 2
+dashboard_pages = 2
+icons_per_page = 9
+grid_cols = 3
+grid_rows = 3
+show_tabs = false
 "#;
 
 const MODERN_THEME: &str = r##"
@@ -532,6 +526,9 @@ gradient_enabled = true
 text_shadow = true
 
 [geometry]
+tab_row_height = 0
+icon_width = 26
+icon_height = 30
 font_body = 12
 font_hint = 10
 font_heading = 14
@@ -617,6 +614,7 @@ grid_cols = 5
 grid_rows = 3
 start_menu = true
 show_version = false
+show_tabs = false
 transition_fade_frames = 12
 transition_slide_frames = 16
 "#;
@@ -703,7 +701,7 @@ bottombar_height = 40
 icon_width = 48
 icon_height = 56
 font_small = 12
-tab_row_height = 22
+tab_row_height = 0
 font_body = 14
 font_hint = 12
 font_heading = 16
@@ -929,6 +927,7 @@ dashboard = false
 terminal = true
 file_browser = true
 window_manager = false
+show_tabs = false
 command_categories = ["agent", "mcp", "system", "file", "network"]
 "#;
 
@@ -966,6 +965,37 @@ welcome_message = "Briefcase agent terminal online. Type 'help' for commands."
 error_prefix = "ERR: "
 shutdown_message = "Agent terminal session ended."
 "#;
+
+// ---------------------------------------------------------------------------
+// Classic skin: loaded from external TOML files via include_str!.
+// ---------------------------------------------------------------------------
+
+const CLASSIC_STRINGS: &str = r#"
+boot_text = [
+    "OASIS_OS v2.2 [classic]",
+    "Initializing subsystems...",
+    "VFS: mounted",
+    "Network: standby",
+    "Ready.",
+]
+prompt_format = "> "
+title = "OASIS_OS"
+home_label = "Home"
+welcome_message = "Welcome to OASIS_OS. Type 'help' for commands."
+error_prefix = "error: "
+shutdown_message = "Session ended."
+"#;
+
+/// Load the Classic skin.
+pub fn classic_skin() -> Result<Skin> {
+    Skin::from_toml_full(
+        include_str!("../../../skins/classic/skin.toml"),
+        include_str!("../../../skins/classic/layout.toml"),
+        include_str!("../../../skins/classic/features.toml"),
+        include_str!("../../../skins/classic/theme.toml"),
+        CLASSIC_STRINGS,
+    )
+}
 
 /// Load the XP skin.
 pub fn xp_skin() -> Result<Skin> {
@@ -1005,6 +1035,155 @@ pub fn modern_skin() -> Result<Skin> {
     )
 }
 
+// ---------------------------------------------------------------------------
+// macOS skin: light translucent theme with traffic-light window buttons.
+// ---------------------------------------------------------------------------
+
+const MACOS_STRINGS: &str = r#"
+boot_text = [
+    "OASIS_OS v2.2 [macos]",
+    "Loading macOS interface...",
+    "Window manager: active",
+    "Ready.",
+]
+prompt_format = "~ $ "
+title = "OASIS macOS"
+home_label = "Finder"
+welcome_message = "Welcome to OASIS macOS. Type 'help' for commands."
+error_prefix = "error: "
+shutdown_message = "Session ended."
+"#;
+
+/// Load the macOS skin.
+pub fn macos_skin() -> Result<Skin> {
+    Skin::from_toml_full(
+        include_str!("../../../skins/macos/skin.toml"),
+        include_str!("../../../skins/macos/layout.toml"),
+        include_str!("../../../skins/macos/features.toml"),
+        include_str!("../../../skins/macos/theme.toml"),
+        MACOS_STRINGS,
+    )
+}
+
+// ---------------------------------------------------------------------------
+// GNOME skin: dark Adwaita-inspired with top bar and rounded corners.
+// ---------------------------------------------------------------------------
+
+const GNOME_STRINGS: &str = r#"
+boot_text = [
+    "OASIS_OS v2.2 [gnome]",
+    "Loading GNOME desktop...",
+    "Activities overlay: ready",
+    "Ready.",
+]
+prompt_format = "$ "
+title = "OASIS GNOME"
+home_label = "Activities"
+welcome_message = "Welcome to OASIS GNOME. Type 'help' for commands."
+error_prefix = "error: "
+shutdown_message = "Session ended."
+"#;
+
+/// Load the GNOME skin.
+pub fn gnome_skin() -> Result<Skin> {
+    Skin::from_toml_full(
+        include_str!("../../../skins/gnome/skin.toml"),
+        include_str!("../../../skins/gnome/layout.toml"),
+        include_str!("../../../skins/gnome/features.toml"),
+        include_str!("../../../skins/gnome/theme.toml"),
+        GNOME_STRINGS,
+    )
+}
+
+// ---------------------------------------------------------------------------
+// Retro CGA skin: 4-color CGA palette, blocky, no frills.
+// ---------------------------------------------------------------------------
+
+const RETRO_CGA_STRINGS: &str = r#"
+boot_text = [
+    "OASIS_OS v2.2 [CGA]",
+    "VIDEO MODE: 320x200 4-COLOR",
+    "LOADING...",
+    "READY.",
+]
+prompt_format = "A> "
+title = "OASIS CGA"
+home_label = "HOME"
+welcome_message = "TYPE 'HELP' FOR COMMANDS."
+error_prefix = "ERR: "
+shutdown_message = "SYSTEM HALTED."
+"#;
+
+/// Load the Retro CGA skin.
+pub fn retro_cga_skin() -> Result<Skin> {
+    Skin::from_toml_full(
+        include_str!("../../../skins/retro-cga/skin.toml"),
+        include_str!("../../../skins/retro-cga/layout.toml"),
+        include_str!("../../../skins/retro-cga/features.toml"),
+        include_str!("../../../skins/retro-cga/theme.toml"),
+        RETRO_CGA_STRINGS,
+    )
+}
+
+// ---------------------------------------------------------------------------
+// Cyberpunk skin: dark with neon cyan/magenta accents and glow effects.
+// ---------------------------------------------------------------------------
+
+const CYBERPUNK_STRINGS: &str = r#"
+boot_text = [
+    "OASIS_OS v2.2 [cyberpunk]",
+    "Neon subsystems: online",
+    "Neural link: established",
+    "Ready.",
+]
+prompt_format = "neon> "
+title = "OASIS Cyberpunk"
+home_label = "NEON"
+welcome_message = "Welcome to the neon grid. Type 'help' for commands."
+error_prefix = "FAULT: "
+shutdown_message = "Signal lost."
+"#;
+
+/// Load the Cyberpunk skin.
+pub fn cyberpunk_skin() -> Result<Skin> {
+    Skin::from_toml_full(
+        include_str!("../../../skins/cyberpunk/skin.toml"),
+        include_str!("../../../skins/cyberpunk/layout.toml"),
+        include_str!("../../../skins/cyberpunk/features.toml"),
+        include_str!("../../../skins/cyberpunk/theme.toml"),
+        CYBERPUNK_STRINGS,
+    )
+}
+
+// ---------------------------------------------------------------------------
+// Paper skin: minimal cream/white, no shadows, maximum readability.
+// ---------------------------------------------------------------------------
+
+const PAPER_STRINGS: &str = r#"
+boot_text = [
+    "OASIS_OS v2.2 [paper]",
+    "Loading minimal interface...",
+    "Ready.",
+]
+prompt_format = "> "
+title = "OASIS Paper"
+home_label = "Home"
+welcome_message = "Welcome. Type 'help' for commands."
+error_prefix = "error: "
+shutdown_message = "Done."
+"#;
+
+/// Load the Paper skin.
+pub fn paper_skin() -> Result<Skin> {
+    Skin::from_toml_full(
+        include_str!("../../../skins/paper/skin.toml"),
+        include_str!("../../../skins/paper/layout.toml"),
+        include_str!("../../../skins/paper/features.toml"),
+        include_str!("../../../skins/paper/theme.toml"),
+        PAPER_STRINGS,
+    )
+}
+
 /// Load a built-in skin by name with optional inheritance.
 ///
 /// If the skin's manifest specifies `inherits = "parent_name"`, the parent
@@ -1016,6 +1195,7 @@ pub fn load_builtin(name: &str) -> Result<Skin> {
 
 fn load_builtin_raw(name: &str) -> Result<Skin> {
     match name {
+        "classic" => classic_skin(),
         "terminal" => terminal_skin(),
         "tactical" => tactical_skin(),
         "corrupted" => corrupted_skin(),
@@ -1023,6 +1203,11 @@ fn load_builtin_raw(name: &str) -> Result<Skin> {
         "agent-terminal" => agent_terminal_skin(),
         "modern" => modern_skin(),
         "xp" => xp_skin(),
+        "macos" => macos_skin(),
+        "gnome" => gnome_skin(),
+        "retro-cga" => retro_cga_skin(),
+        "cyberpunk" => cyberpunk_skin(),
+        "paper" => paper_skin(),
         _ => Err(oasis_types::error::OasisError::Config(format!(
             "unknown built-in skin: {name}"
         ))),
@@ -1050,6 +1235,7 @@ fn load_builtin_recursive(name: &str, depth: u32) -> Result<Skin> {
 /// List available built-in skin names.
 pub fn builtin_names() -> &'static [&'static str] {
     &[
+        "classic",
         "terminal",
         "tactical",
         "corrupted",
@@ -1057,6 +1243,11 @@ pub fn builtin_names() -> &'static [&'static str] {
         "agent-terminal",
         "modern",
         "xp",
+        "macos",
+        "gnome",
+        "retro-cga",
+        "cyberpunk",
+        "paper",
     ]
 }
 
@@ -1150,7 +1341,6 @@ mod tests {
         let mut sdi = SdiRegistry::new();
         skin.apply_layout(&mut sdi);
         assert!(sdi.contains("taskbar_bg"));
-        assert!(sdi.contains("start_button"));
         assert!(sdi.contains("clock_display"));
     }
 

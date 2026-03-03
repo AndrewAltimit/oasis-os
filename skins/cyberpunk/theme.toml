@@ -84,10 +84,11 @@ grid_spacing = 2
 grid_color = "#00F0FF08"
 
 [geometry]
+tab_row_height = 0
 statusbar_height = 28
 bottombar_height = 32
-icon_width = 48
-icon_height = 52
+icon_width = 40
+icon_height = 44
 font_body = 13
 font_hint = 11
 font_heading = 16
@@ -143,8 +144,8 @@ button_bg = "#FF206080"
 button_text = "#FFFFFF"
 panel_border_radius = 2
 panel_shadow_level = 2
-button_label = "JACK IN"
-button_width = 70
+button_label = ">>"
+button_width = 28
 button_height = 24
 button_shape = "rect"
 button_gradient = true

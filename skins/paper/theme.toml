@@ -69,6 +69,7 @@ color_stops = ["#FAF8F0"]
 wave_enabled = false
 
 [geometry]
+tab_row_height = 0
 statusbar_height = 20
 bottombar_height = 20
 icon_width = 32

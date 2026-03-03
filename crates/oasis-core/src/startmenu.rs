@@ -75,8 +75,10 @@ pub struct StartMenuState {
     anim_progress: f32,
     /// Target state for animation.
     anim_target_open: bool,
-    /// Smooth selection position (lerps toward selected index).
-    visual_selected: f32,
+    /// Smooth selection row position (lerps toward target row).
+    visual_row: f32,
+    /// Smooth selection column position (lerps toward target column).
+    visual_col: f32,
 }
 
 impl StartMenuState {
@@ -116,7 +118,8 @@ impl StartMenuState {
             footer_h,
             anim_progress: 0.0,
             anim_target_open: false,
-            visual_selected: 0.0,
+            visual_row: 0.0,
+            visual_col: 0.0,
         }
     }
 
@@ -200,9 +203,13 @@ impl StartMenuState {
             self.anim_progress = 0.0;
             self.open = false;
         }
-        // Lerp visual selection toward current selected index.
-        self.visual_selected +=
-            (self.selected as f32 - self.visual_selected) * self.at.start_menu_anim_speed;
+        // Lerp visual row/col toward current selected position.
+        let cols = self.at.sm_columns.max(1);
+        let target_row = (self.selected / cols) as f32;
+        let target_col = (self.selected % cols) as f32;
+        let speed = self.at.start_menu_anim_speed;
+        self.visual_row += (target_row - self.visual_row) * speed;
+        self.visual_col += (target_col - self.visual_col) * speed;
     }
 
     /// Whether the menu is logically open (including during close animation).
@@ -476,11 +483,9 @@ impl StartMenuState {
             }
         }
 
-        // Selection highlight (smooth lerp position).
-        let vis_row = self.visual_selected / cols as f32;
-        let vis_col = self.visual_selected - (vis_row.floor() * cols as f32);
-        let hl_x = menu_x + pad + (vis_col * col_w as f32) as i32;
-        let hl_y = items_top + pad + (vis_row * item_row_h as f32) as i32;
+        // Selection highlight (smooth lerp position using separate row/col).
+        let hl_x = menu_x + pad + (self.visual_col * col_w as f32) as i32;
+        let hl_y = items_top + pad + (self.visual_row * item_row_h as f32) as i32;
         ensure_rounded_fill(
             sdi,
             "sm_highlight",

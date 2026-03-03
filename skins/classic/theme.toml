@@ -19,6 +19,9 @@ text_shadow = true
 text_shadow_color = "#00000080"
 
 [geometry]
+tab_row_height = 0
+icon_width = 26
+icon_height = 30
 font_body = 12
 font_hint = 10
 font_heading = 14

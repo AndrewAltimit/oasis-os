@@ -138,7 +138,7 @@ pub struct SkinFeatures {
     #[serde(default = "yes")]
     pub show_version: bool,
     /// Whether top tabs are shown in the status bar.
-    #[serde(default = "yes")]
+    #[serde(default)]
     pub show_tabs: bool,
     /// Whether media category tabs are shown in the bottom bar.
     #[serde(default = "yes")]
@@ -161,13 +161,13 @@ fn default_pages() -> u32 {
     3
 }
 fn default_icons_per_page() -> u32 {
-    6
+    9
 }
 fn default_grid_cols() -> u32 {
     3
 }
 fn default_grid_rows() -> u32 {
-    2
+    3
 }
 
 impl Default for SkinFeatures {
@@ -179,16 +179,16 @@ impl Default for SkinFeatures {
             browser: true,
             window_manager: false,
             dashboard_pages: 3,
-            icons_per_page: 6,
+            icons_per_page: 9,
             grid_cols: 3,
-            grid_rows: 2,
+            grid_rows: 3,
             command_categories: Vec::new(),
             start_menu: true,
             corrupted: false,
             show_battery: true,
             show_clock: true,
             show_version: true,
-            show_tabs: true,
+            show_tabs: false,
             show_media_tabs: true,
             show_page_dots: true,
             transition_fade_frames: None,
@@ -644,7 +644,7 @@ grid_rows = 2
         assert!(f.dashboard);
         assert!(f.terminal);
         assert_eq!(f.dashboard_pages, 3);
-        assert_eq!(f.icons_per_page, 6);
+        assert_eq!(f.icons_per_page, 9);
     }
 
     #[test]
@@ -833,7 +833,7 @@ intensity = 0.5
         assert!(skin.features.dashboard);
         assert!(skin.features.terminal);
         assert_eq!(skin.features.grid_cols, 3);
-        assert_eq!(skin.features.grid_rows, 2);
+        assert_eq!(skin.features.grid_rows, 3);
     }
 
     #[test]

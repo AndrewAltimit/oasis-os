@@ -7,10 +7,69 @@
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
+  <div class="demo-bar">
+    <span class="title">OASIS_OS</span>
+    <div class="spacer"></div>
+    <label>
+      <select id="skin-select">
+        <optgroup label="Classic Skins">
+          <option value="classic">Classic</option>
+          <option value="xp">XP</option>
+        </optgroup>
+        <optgroup label="Built-in Skins">
+          <option value="modern">Modern</option>
+          <option value="desktop">Desktop</option>
+          <option value="terminal">Terminal</option>
+          <option value="tactical">Tactical</option>
+          <option value="corrupted">Corrupted</option>
+          <option value="agent-terminal">Agent Terminal</option>
+        </optgroup>
+        <optgroup label="New Skins">
+          <option value="macos">macOS</option>
+          <option value="gnome">GNOME</option>
+          <option value="retro-cga">Retro CGA</option>
+          <option value="cyberpunk">Cyberpunk</option>
+          <option value="paper">Paper</option>
+        </optgroup>
+      </select>
+    </label>
+  </div>
   <div id="container">
     <canvas id="oasis" width="480" height="272" tabindex="0"></canvas>
+    <div class="instructions" id="instructions">
+      <strong>Controls</strong><br>
+      <kbd>Arrow keys</kbd> Navigate &nbsp; <kbd>Enter</kbd> Select &nbsp; <kbd>Esc</kbd> Back<br>
+      Mouse click supported. Type in the terminal tab.
+      <span class="dismiss" id="dismiss-btn">Dismiss</span>
+    </div>
   </div>
   <noscript>OASIS_OS requires JavaScript and WebAssembly.</noscript>
+  <script>
+    const params = new URLSearchParams(window.location.search);
+    const currentSkin = params.get("skin") || "classic";
+    document.getElementById("skin-select").value = currentSkin;
+
+    document.getElementById("skin-select").addEventListener("change", (e) => {
+      const url = new URL(window.location);
+      url.searchParams.set("skin", e.target.value);
+      window.location.href = url.toString();
+    });
+
+    document.getElementById("dismiss-btn").addEventListener("click", () => {
+      document.getElementById("instructions").style.opacity = "0";
+      setTimeout(() => {
+        document.getElementById("instructions").style.display = "none";
+      }, 300);
+    });
+
+    setTimeout(() => {
+      const el = document.getElementById("instructions");
+      if (el && el.style.display !== "none") {
+        el.style.opacity = "0";
+        setTimeout(() => { el.style.display = "none"; }, 300);
+      }
+    }, 8000);
+  </script>
   <script type="module" src="index.js"></script>
 </body>
 </html>

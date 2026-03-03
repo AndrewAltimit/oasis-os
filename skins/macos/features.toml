@@ -10,5 +10,6 @@ grid_cols = 3
 grid_rows = 3
 start_menu = true
 show_version = false
+show_tabs = false
 transition_fade_frames = 10
 transition_slide_frames = 14
