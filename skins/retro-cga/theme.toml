@@ -1,0 +1,152 @@
+# Retro CGA Mode 4 High-Intensity palette
+# 4 colors: black (#000000), cyan (#55FFFF), magenta (#FF55FF), white (#FFFFFF)
+# No gradients, no rounded corners, no shadows. Pure blocky DOS aesthetic.
+
+background = "#000000"
+primary = "#55FFFF"
+secondary = "#FF55FF"
+text = "#FFFFFF"
+dim_text = "#55FFFF"
+status_bar = "#000000"
+prompt = "#55FFFF"
+output = "#FFFFFF"
+error = "#FF55FF"
+
+border_radius = 0
+shadow_intensity = 0
+gradient_enabled = false
+
+[wm_theme]
+titlebar_height = 16
+border_width = 2
+titlebar_active = "#55FFFF"
+titlebar_inactive = "#FF55FF"
+titlebar_text = "#000000"
+frame_color = "#55FFFF"
+content_bg = "#000000"
+btn_close = "#FF55FF"
+btn_minimize = "#55FFFF"
+btn_maximize = "#55FFFF"
+button_size = 12
+titlebar_font_size = 12
+titlebar_radius = 0
+titlebar_gradient = false
+frame_shadow_level = 0
+frame_border_radius = 0
+button_radius = 0
+button_side = "right"
+glyph_close = "X"
+glyph_minimize = "_"
+glyph_maximize = "O"
+title_align = "left"
+separator_enabled = true
+separator_color = "#FF55FF"
+glyph_close_color = "#000000"
+glyph_minimize_color = "#000000"
+glyph_maximize_color = "#000000"
+btn_close_hover = "#FFFFFF"
+btn_minimize_hover = "#FFFFFF"
+btn_maximize_hover = "#FFFFFF"
+title_text_shadow = false
+content_stroke_width = 2
+content_stroke_color = "#55FFFF"
+maximize_top_inset = 20
+maximize_bottom_inset = 20
+inactive_frame_alpha = 200
+
+[bar_overrides]
+statusbar_bg = "#000000"
+bar_bg = "#000000"
+battery_color = "#55FFFF"
+version_color = "#FF55FF"
+clock_color = "#FFFFFF"
+separator_color = "#FF55FF"
+text_shadow = false
+version_text = "CGA v1.0"
+url_text = "A:\\>"
+
+[wallpaper]
+style = "solid"
+color_stops = ["#000000"]
+wave_enabled = false
+
+[geometry]
+statusbar_height = 16
+bottombar_height = 16
+icon_width = 32
+icon_height = 32
+font_body = 12
+font_hint = 10
+font_heading = 14
+cursor_blink_rate = 15
+cursor_lerp_speed = 1.0
+page_slide_duration = 4
+press_flash_duration = 3
+focus_ring_color = "#55FFFF"
+cursor_pad = 2
+toast_slide_in = false
+
+[app_overrides]
+app_bg = "#000000"
+text_color = "#FFFFFF"
+dim_text = "#55FFFF"
+title_bar_bg = "#55FFFF"
+title_bar_text = "#000000"
+title_bar_height = 16
+selection_accent_color = "#FF55FF80"
+selection_border_radius = 0
+input_border_radius = 0
+terminal_output_color = "#FFFFFF"
+terminal_prompt_color = "#55FFFF"
+
+[icon_overrides]
+body_color = "#000000"
+fold_color = "#FF55FF"
+outline_color = "#55FFFF"
+label_color = "#FFFFFF"
+cursor_color = "#FF55FF80"
+icon_border_radius = 0
+cursor_border_radius = 0
+icon_style = "document"
+cursor_style = "stroke"
+cursor_stroke_width = 2
+
+[start_menu_overrides]
+panel_bg = "#000000"
+panel_border = "#55FFFF"
+item_text = "#FFFFFF"
+item_text_active = "#000000"
+highlight_color = "#55FFFF"
+button_bg = "#FF55FF"
+button_text = "#000000"
+panel_border_radius = 0
+panel_shadow_level = 0
+button_label = "MENU"
+button_width = 50
+button_height = 16
+button_shape = "rect"
+panel_width = 200
+columns = 1
+header_text = "PROGRAMS"
+header_bg = "#55FFFF"
+header_text_color = "#000000"
+header_height = 16
+footer_enabled = false
+item_icon_size = 12
+item_row_height = 16
+item_separator = true
+item_separator_color = "#FF55FF"
+
+[browser_overrides]
+chrome_bg = "#000000"
+chrome_text = "#55FFFF"
+chrome_button_bg = "#FF55FF"
+url_bar_bg = "#000000"
+url_bar_text = "#FFFFFF"
+link_color = "#55FFFF"
+
+[scrollbar_overrides]
+track_color = "#000000"
+thumb_color = "#FF55FF"
+thumb_hover_color = "#FFFFFF"
+width = 4

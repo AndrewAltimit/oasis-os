@@ -1,0 +1,6 @@
+name = "retro-cga"
+version = "1.0"
+author = "OASIS_OS"
+description = "Retro CGA/EGA 4-color skin with blocky DOS-era aesthetic"
+screen_width = 480
+screen_height = 272

@@ -1273,6 +1273,101 @@ border_radius = 4
         assert_eq!(child.theme.shadow_intensity, Some(2));
     }
 
+    // -- External skin loading tests --
+
+    #[test]
+    fn load_macos_skin() {
+        let skin = Skin::from_toml_full(
+            include_str!("../../../skins/macos/skin.toml"),
+            include_str!("../../../skins/macos/layout.toml"),
+            include_str!("../../../skins/macos/features.toml"),
+            include_str!("../../../skins/macos/theme.toml"),
+            "",
+        )
+        .unwrap();
+        assert_eq!(skin.manifest.name, "macos");
+        assert_eq!(skin.manifest.screen_width, 800);
+        assert_eq!(skin.manifest.screen_height, 600);
+        assert!(skin.features.window_manager);
+        assert!(skin.features.start_menu);
+        assert!(skin.theme.wm_theme.is_some());
+        let wm = skin.theme.wm_theme.as_ref().unwrap();
+        assert_eq!(wm.button_side.as_deref(), Some("left"));
+    }
+
+    #[test]
+    fn load_gnome_skin() {
+        let skin = Skin::from_toml_full(
+            include_str!("../../../skins/gnome/skin.toml"),
+            include_str!("../../../skins/gnome/layout.toml"),
+            include_str!("../../../skins/gnome/features.toml"),
+            include_str!("../../../skins/gnome/theme.toml"),
+            "",
+        )
+        .unwrap();
+        assert_eq!(skin.manifest.name, "gnome");
+        assert_eq!(skin.manifest.screen_width, 800);
+        assert!(skin.features.window_manager);
+        assert_eq!(skin.theme.border_radius, Some(12));
+        assert_eq!(skin.theme.gradient_enabled, Some(false));
+    }
+
+    #[test]
+    fn load_retro_cga_skin() {
+        let skin = Skin::from_toml_full(
+            include_str!("../../../skins/retro-cga/skin.toml"),
+            include_str!("../../../skins/retro-cga/layout.toml"),
+            include_str!("../../../skins/retro-cga/features.toml"),
+            include_str!("../../../skins/retro-cga/theme.toml"),
+            "",
+        )
+        .unwrap();
+        assert_eq!(skin.manifest.name, "retro-cga");
+        assert_eq!(skin.manifest.screen_width, 480);
+        assert!(!skin.features.window_manager);
+        assert_eq!(skin.theme.border_radius, Some(0));
+        assert_eq!(skin.theme.shadow_intensity, Some(0));
+        assert_eq!(skin.theme.gradient_enabled, Some(false));
+        assert_eq!(skin.theme.background, "#000000");
+    }
+
+    #[test]
+    fn load_cyberpunk_skin() {
+        let skin = Skin::from_toml_full(
+            include_str!("../../../skins/cyberpunk/skin.toml"),
+            include_str!("../../../skins/cyberpunk/layout.toml"),
+            include_str!("../../../skins/cyberpunk/features.toml"),
+            include_str!("../../../skins/cyberpunk/theme.toml"),
+            "",
+        )
+        .unwrap();
+        assert_eq!(skin.manifest.name, "cyberpunk");
+        assert_eq!(skin.manifest.screen_width, 800);
+        assert!(skin.features.window_manager);
+        assert_eq!(skin.theme.primary, "#00F0FF");
+        assert_eq!(skin.theme.shadow_intensity, Some(2));
+        assert!(skin.theme.wm_theme.is_some());
+    }
+
+    #[test]
+    fn load_paper_skin() {
+        let skin = Skin::from_toml_full(
+            include_str!("../../../skins/paper/skin.toml"),
+            include_str!("../../../skins/paper/layout.toml"),
+            include_str!("../../../skins/paper/features.toml"),
+            include_str!("../../../skins/paper/theme.toml"),
+            "",
+        )
+        .unwrap();
+        assert_eq!(skin.manifest.name, "paper");
+        assert_eq!(skin.manifest.screen_width, 480);
+        assert!(!skin.features.window_manager);
+        assert_eq!(skin.theme.border_radius, Some(0));
+        assert_eq!(skin.theme.shadow_intensity, Some(0));
+        assert_eq!(skin.theme.gradient_enabled, Some(false));
+        assert_eq!(skin.theme.background, "#FAF8F0");
+    }
+
     #[test]
     fn merge_theme_layout_merges() {
         let parent_layout = r#"

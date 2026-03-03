@@ -1,0 +1,6 @@
+name = "gnome"
+version = "1.0"
+author = "OASIS_OS"
+description = "GNOME/Adwaita-inspired dark theme with top bar and rounded headerbars"
+screen_width = 800
+screen_height = 600

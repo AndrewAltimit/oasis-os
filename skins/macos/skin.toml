@@ -1,0 +1,6 @@
+name = "macos"
+version = "1.0"
+author = "OASIS_OS"
+description = "macOS-inspired light skin with traffic light buttons and dock-style app bar"
+screen_width = 800
+screen_height = 600

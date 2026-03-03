@@ -1,0 +1,13 @@
+# Cyberpunk layout -- angular bars with neon borders
+# Top bar (28px) + content area (540px) + bottom bar (32px) = 600px.
+
+[content_bg]
+x = 0
+y = 28
+w = 800
+h = 540
+color = "#0A0A14"
+gradient_top = "#0E0E1C"
+gradient_bottom = "#060610"
+stroke_width = 1
+stroke_color = "#00F0FF10"
