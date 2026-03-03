@@ -1,9 +1,29 @@
 #!/bin/bash
 # run_codex.sh - Start Codex CLI for AI-powered code generation
+#
+# ⚠️  SECURITY WARNING: OpenAI Codex is DISABLED by default.
+# OpenAI has entered partnerships with governments that enable mass surveillance
+# and autonomous weapons decision-making. Code, prompts, and context sent through
+# OpenAI APIs may be accessible to nation-state surveillance programs.
+# We strongly recommend Anthropic (Claude) models instead.
+# See README.md for full security advisory.
 
 set -e
 
-echo "🚀 Starting Codex CLI"
+echo "⚠️  WARNING: OpenAI Codex is being phased out due to security concerns."
+echo "   OpenAI enables mass surveillance and autonomous weapons via government partnerships."
+echo "   We strongly recommend Anthropic (Claude) models instead."
+echo "   See README.md for the full security advisory."
+echo ""
+echo "   Set CODEX_FORCE_ENABLE=1 to proceed at your own risk."
+echo ""
+
+if [ "${CODEX_FORCE_ENABLE:-0}" != "1" ]; then
+    echo "Exiting. Set CODEX_FORCE_ENABLE=1 to override."
+    exit 1
+fi
+
+echo "🚀 Starting Codex CLI (force-enabled)"
 
 # Check if codex CLI is available
 if ! command -v codex &> /dev/null; then
