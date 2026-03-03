@@ -120,7 +120,7 @@ backend-agnostic.
    - `TlsStream` wrapper that implements `NetworkStream` over an encrypted channel
    - A `NoopTlsProvider` that returns an error (for builds without TLS)
 
-2. **Modify: `oasis-core/src/backend.rs`**
+2. **Modify: `oasis-types/src/backend.rs`**
    - Add optional `fn tls_provider(&self) -> Option<&dyn TlsProvider>` to `NetworkBackend`
      with a default `None` implementation (backwards compatible)
 

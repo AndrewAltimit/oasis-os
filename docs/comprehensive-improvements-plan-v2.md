@@ -812,7 +812,7 @@ oasis-terminal, oasis-core, oasis-sdi, oasis-wm.
 - Golden baselines in `screenshots/golden/`
 - HTML diff report on failure
 - `--bless` workflow for updating baselines
-- Run for all 8 skins
+- Run for all 13 skins
 
 **Files:** CI config, `oasis-app/src/screenshot_tests.rs`
 

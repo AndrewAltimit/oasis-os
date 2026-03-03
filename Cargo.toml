@@ -31,7 +31,7 @@ exclude = [
 [workspace.package]
 version = "1.0.0"
 edition = "2024"
-license = "MIT"
+license = "MIT OR Unlicense"
 repository = "https://github.com/AndrewAltimit/oasis-os"
 authors = ["AndrewAltimit"]
 

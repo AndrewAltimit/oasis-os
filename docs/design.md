@@ -40,7 +40,7 @@ OASIS_OS is an embeddable operating system framework written in Rust. It provide
 
 The project originated as a Rust port of a PSP homebrew shell OS written in C circa 2006-2008. The original source archive (`psixpsp.7z`) is preserved at the repository root. The original architecture -- a themed dashboard driven by a custom scene-graph engine called SDI (Simple Display Interface), with platform abstraction via compile-time guards -- turned out to be a natural foundation for something more general. The trait-based backend system designed for cross-platform PSP/SDL/framebuffer portability extends cleanly to a fourth target: rendering onto a texture inside Unreal Engine 5, where in-game computer props become fully interactive systems rather than scripted UI sequences.
 
-The framework supports multiple "skins" -- visual and behavioral personalities that determine what the OS looks like and what it exposes to the user. Eight skins are implemented: Classic (PSIX-style icon grid dashboard), XP (Windows XP Luna-inspired blue theme with start menu), Terminal (green-on-black CRT), Tactical (military command console), Corrupted (glitched visual effects), Desktop (windowed environment), Agent Terminal (AI agent/MCP console), and Modern (purple accent with rounded corners). External skins are defined as TOML directories in `skins/`; built-in skins are embedded in `oasis-core`. All skins share the same core: scene graph, command interpreter, virtual file system, browser engine, networking, and plugin infrastructure. The skin defines layout, theme, feature gating, and visual style.
+The framework supports multiple "skins" -- visual and behavioral personalities that determine what the OS looks like and what it exposes to the user. Thirteen skins are implemented: Classic (PSIX-style icon grid dashboard), XP (Windows XP Luna-inspired blue theme with start menu), macOS (macOS-inspired desktop), GNOME (GNOME desktop style), Cyberpunk (neon cyberpunk aesthetic), Retro-CGA (CGA 4-color retro), Paper (minimalist paper/ink), Terminal (green-on-black CRT), Tactical (military command console), Corrupted (glitched visual effects), Desktop (windowed environment), Agent Terminal (AI agent/MCP console), and Modern (purple accent with rounded corners). External skins are defined as TOML directories in `skins/` and embedded via `include_str!`; built-in skins are defined directly in `oasis-skin/src/builtin.rs`. All skins share the same core: scene graph, command interpreter, virtual file system, browser engine, networking, and plugin infrastructure. The skin defines layout, theme, feature gating, and visual style.
 
 Primary deployment targets are: in-game computers in UE5 projects (rendered as interactive props), real PSP hardware running modern custom firmware (6.60/6.61 with ARK-4), and the tamper-responsive briefcase system (`packages/tamper_briefcase/`) where a Raspberry Pi 5 boots directly into OASIS_OS as the field-deployable agent terminal OS. On the briefcase, OASIS_OS is the operator-facing interface for managing AI agents in untrusted environments -- the tamper detection, LUKS encryption, and cryptographic wipe services run alongside it as systemd units. On a PSP connected to infrastructure WiFi, OASIS_OS's remote terminal enables direct command sessions to machines running AI agents, making a 2005 handheld a viable field controller for the agent ecosystem described in `docs/agents/README.md`. The original C codebase (~15,000 lines) provides the proven UI design; the Rust rewrite provides memory safety, cross-platform backends, and the extensibility to support all targets from a single codebase.
 
@@ -94,7 +94,7 @@ The rust-psp SDK is an external dependency hosted at [github.com/AndrewAltimit/r
 
 ```
 oasis-os/
-+-- Cargo.toml                      # Workspace root (resolver="2", edition 2024, 18 members)
++-- Cargo.toml                      # Workspace root (resolver="2", edition 2024, 19 members)
 +-- crates/
 |   +-- oasis-types/                 # Foundation types: Color, Button, InputEvent, backend traits, errors
 |   +-- oasis-vfs/                   # Virtual file system: MemoryVfs, RealVfs, GameAssetVfs
@@ -104,12 +104,12 @@ oasis-os/
 |   +-- oasis-audio/                 # Audio manager, playlist, shuffle/repeat, MP3 ID3 parsing
 |   +-- oasis-ui/                    # 20+ widgets: Button, Card, TabBar, ListView, flex layout
 |   +-- oasis-wm/                    # Window manager: lifecycle, drag/resize, hit testing, clipping
-|   +-- oasis-skin/                  # TOML skin engine, 8 skins, theme derivation from 9 base colors
+|   +-- oasis-skin/                  # TOML skin engine, 13 skins, theme derivation from 9 base colors
 |   +-- oasis-terminal/              # 90+ commands across 17 modules, shell features
 |   +-- oasis-browser/               # HTML/CSS/Gemini: DOM, CSS cascade, block/inline/table layout, JS DOM bindings
 |   +-- oasis-js/                    # JavaScript engine: QuickJS-NG runtime, console API, DOM manipulation
 |   +-- oasis-video/                 # Software MP4/H.264+AAC decode (symphonia + openh264)
-|   +-- oasis-core/                  # Coordination: 9 apps (FM, TV Guide, Radio, etc.), dashboard, agent, plugin, script
+|   +-- oasis-core/                  # Coordination: 16 apps, dashboard, agent, plugin, script
 |   +-- oasis-backend-sdl/           # SDL2 rendering and input (desktop dev + Raspberry Pi)
 |   +-- oasis-backend-ue5/           # UE5 render target, software RGBA framebuffer, FFI input queue
 |   +-- oasis-backend-psp/           # [excluded from workspace] sceGu rendering, PSP controller, UMD browsing
@@ -119,6 +119,11 @@ oasis-os/
 +-- skins/
 |   +-- classic/                     # Icon grid dashboard, status bar, PSIX-style chrome
 |   +-- xp/                          # Windows XP Luna-inspired blue theme with start menu
+|   +-- macos/                       # macOS-inspired desktop with traffic-light buttons
+|   +-- gnome/                       # GNOME desktop style with Activities bar
+|   +-- cyberpunk/                   # Neon cyberpunk aesthetic
+|   +-- retro-cga/                   # CGA 4-color retro palette
+|   +-- paper/                       # Minimalist paper/ink style
 +-- docs/
 |   +-- design.md                    # This document
 |   +-- skin-authoring.md            # Skin creation guide with full TOML reference
@@ -129,7 +134,7 @@ oasis-os/
 
 - [rust-psp SDK](https://github.com/AndrewAltimit/rust-psp) (MIT) -- modernized fork with edition 2024, safety fixes, kernel mode support. Referenced as a git dependency from `oasis-backend-psp/Cargo.toml`.
 
-**Built-in skins (embedded in `oasis-core/src/skin/builtin.rs`):**
+**Built-in skins (embedded in `oasis-skin/src/builtin.rs`):**
 
 - `terminal` -- Full-screen CRT command line, monospace layout
 - `tactical` -- Military/tactical: stripped-down command interface
@@ -139,10 +144,19 @@ oasis-os/
 - `modern` -- Purple accent, rounded corners, gradient fills
 - `xp` -- Windows XP Luna theme (also available as external skin in `skins/xp/`)
 
-**Planned directories (not yet created):**
+**External skins (TOML directories in `skins/`, embedded via `include_str!`):**
 
-- `ppsspp/` -- PPSSPP Docker container with MCP patches for agent-assisted debugging
-- `asm/` -- Preserved MIPS assembly (me.S, audiolib.S, pspstub.s) from original C codebase
+- `classic` -- PSIX-style icon grid dashboard, status bar, chrome bezels
+- `macos` -- macOS-inspired desktop with traffic-light buttons and dock
+- `gnome` -- GNOME desktop style with Activities bar
+- `cyberpunk` -- Neon cyberpunk aesthetic with glowing accents
+- `retro-cga` -- CGA 4-color retro palette
+- `paper` -- Minimalist paper/ink style
+
+**Implemented infrastructure (in `docker/`):**
+
+- `ppsspp.Dockerfile` + `ppsspp-entrypoint.sh` -- PPSSPP Docker container for automated PSP testing
+- `ppsspp-patches/` -- PPSSPP configuration patches for CI headless testing
 
 **Planned crates (not yet created):**
 
@@ -171,8 +185,10 @@ members = [
     "crates/oasis-core",
     "crates/oasis-backend-sdl",
     "crates/oasis-backend-ue5",
+    "crates/oasis-backend-wasm",
     "crates/oasis-ffi",
     "crates/oasis-app",
+    "crates/oasis-video",
 ]
 # PSP crate excluded from workspace -- it requires mipsel-sony-psp target
 # and the rust-psp SDK (github.com/AndrewAltimit/rust-psp). Build separately with cargo-psp:
@@ -182,9 +198,9 @@ exclude = [
 ]
 
 [workspace.package]
-version = "0.1.0"
+version = "1.0.0"
 edition = "2024"
-license = "MIT"
+license = "MIT OR Unlicense"
 repository = "https://github.com/AndrewAltimit/oasis-os"
 authors = ["AndrewAltimit"]
 
@@ -260,9 +276,9 @@ The PSP backend crate has its own standalone `Cargo.toml` (not workspace-inherit
 
 [package]
 name = "oasis-backend-psp"
-version = "0.1.0"
+version = "1.0.0"
 edition = "2024"
-license = "MIT"
+license = "MIT OR Unlicense"
 
 [dependencies]
 psp = { git = "https://github.com/AndrewAltimit/rust-psp", features = ["kernel", "std"] }
