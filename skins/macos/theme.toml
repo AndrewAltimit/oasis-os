@@ -1,0 +1,148 @@
+# macOS-inspired light theme
+# Light appearance with translucent chrome and SF-style rounded corners.
+
+background = "#ECECEC"
+primary = "#007AFF"
+secondary = "#D1D1D6"
+text = "#1D1D1F"
+dim_text = "#86868B"
+status_bar = "#F5F5F780"
+prompt = "#007AFF"
+output = "#1D1D1F"
+error = "#FF3B30"
+surface = "#FFFFFF"
+accent_hover = "#0A84FF"
+
+border_radius = 10
+shadow_intensity = 2
+gradient_enabled = false
+
+[wm_theme]
+titlebar_height = 28
+border_width = 0
+titlebar_active = "#E8E8E8"
+titlebar_inactive = "#F6F6F6"
+titlebar_text = "#1D1D1F"
+frame_color = "#D1D1D6"
+content_bg = "#FFFFFF"
+btn_close = "#FF5F57"
+btn_minimize = "#FEBC2E"
+btn_maximize = "#28C840"
+button_size = 12
+titlebar_font_size = 12
+titlebar_radius = 10
+titlebar_gradient = false
+frame_shadow_level = 2
+frame_border_radius = 10
+button_radius = 6
+button_side = "left"
+glyph_close = ""
+glyph_minimize = ""
+glyph_maximize = ""
+title_align = "center"
+separator_enabled = false
+btn_close_hover = "#FF7369"
+btn_minimize_hover = "#FEC944"
+btn_maximize_hover = "#3DD654"
+title_text_shadow = false
+content_stroke_width = 0
+maximize_top_inset = 28
+maximize_bottom_inset = 52
+inactive_frame_alpha = 200
+
+[bar_overrides]
+statusbar_bg = "#F5F5F780"
+bar_bg = "#2C2C2E"
+battery_color = "#1D1D1F"
+version_color = "#86868B"
+clock_color = "#1D1D1F"
+separator_color = "#D1D1D6"
+text_shadow = false
+# Dock-style bottom bar uses dark translucent appearance
+bar_gradient_top = "#3A3A3C"
+bar_gradient_bottom = "#1C1C1E"
+
+[wallpaper]
+style = "gradient"
+color_stops = ["#C9D6FF", "#E2E2E2"]
+wave_enabled = false
+angle = 90
+
+[geometry]
+tab_row_height = 0
+statusbar_height = 24
+bottombar_height = 52
+icon_width = 40
+icon_height = 44
+font_body = 13
+font_hint = 11
+font_heading = 15
+cursor_blink_rate = 30
+cursor_lerp_speed = 0.18
+page_slide_duration = 10
+press_flash_duration = 6
+focus_ring_color = "#007AFF60"
+focus_ring_width = 3
+cursor_pad = 3
+toast_slide_in = true
+
+[app_overrides]
+app_bg = "#FFFFFF"
+text_color = "#1D1D1F"
+dim_text = "#86868B"
+title_bar_bg = "#E8E8E8"
+title_bar_text = "#1D1D1F"
+title_bar_height = 28
+selection_accent_color = "#007AFF40"
+selection_border_radius = 6
+input_border_radius = 8
+terminal_output_color = "#1D1D1F"
+terminal_prompt_color = "#007AFF"
+
+[icon_overrides]
+body_color = "#FFFFFF"
+fold_color = "#D1D1D6"
+outline_color = "#00000010"
+shadow_color = "#00000020"
+label_color = "#1D1D1F"
+cursor_color = "#007AFF40"
+icon_border_radius = 10
+cursor_border_radius = 10
+icon_style = "card"
+cursor_style = "fill"
+
+[start_menu_overrides]
+panel_bg = "#F5F5F7"
+panel_border = "#D1D1D6"
+item_text = "#1D1D1F"
+item_text_active = "#007AFF"
+highlight_color = "#007AFF20"
+button_bg = "#007AFF"
+button_text = "#FFFFFF"
+panel_border_radius = 10
+panel_shadow_level = 2
+button_label = "Finder"
+button_width = 64
+button_height = 24
+button_shape = "round"
+panel_width = 260
+columns = 1
+header_text = "User"
+header_bg = "#FFFFFF"
+header_text_color = "#1D1D1F"
+header_height = 32
+footer_enabled = false
+
+[browser_overrides]
+chrome_bg = "#F5F5F7"
+chrome_text = "#1D1D1F"
+chrome_button_bg = "#E5E5EA"
+url_bar_bg = "#FFFFFF"
+url_bar_text = "#1D1D1F"
+link_color = "#007AFF"
+
+[scrollbar_overrides]
+track_color = "#F0F0F0"
+thumb_color = "#C7C7CC"
+thumb_hover_color = "#A9A9AE"
+width = 8

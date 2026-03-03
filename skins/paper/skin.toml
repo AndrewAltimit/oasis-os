@@ -1,0 +1,6 @@
+name = "paper"
+version = "1.0"
+author = "OASIS_OS"
+description = "Minimal paper/e-reader skin with cream background, no shadows, maximum readability"
+screen_width = 480
+screen_height = 272

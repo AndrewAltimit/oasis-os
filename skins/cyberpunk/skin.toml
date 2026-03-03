@@ -1,0 +1,6 @@
+name = "cyberpunk"
+version = "1.0"
+author = "OASIS_OS"
+description = "Cyberpunk neon skin with dark background, glowing accents, and scanline effects"
+screen_width = 800
+screen_height = 600

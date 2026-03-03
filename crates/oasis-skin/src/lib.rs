@@ -54,13 +54,9 @@ pub fn resolve_skin(name_or_path: &str) -> Result<Skin> {
         return Skin::from_directory(&skins_dir);
     }
 
-    // 4. Fallback to classic embedded skin.
+    // 4. Fallback to classic built-in skin.
     log::warn!("Skin '{name_or_path}' not found -- falling back to classic");
-    Skin::from_toml(
-        include_str!("../../../skins/classic/skin.toml"),
-        include_str!("../../../skins/classic/layout.toml"),
-        include_str!("../../../skins/classic/features.toml"),
-    )
+    builtin::classic_skin()
 }
 
 /// Resolve a skin by name (WASM -- no filesystem, built-in skins only).
@@ -73,11 +69,7 @@ pub fn resolve_skin(name_or_path: &str) -> Result<Skin> {
         return Ok(skin);
     }
 
-    // 2. Fallback to classic embedded skin.
+    // 2. Fallback to classic built-in skin.
     log::warn!("Skin '{name_or_path}' not found -- falling back to classic");
-    Skin::from_toml(
-        include_str!("../../../skins/classic/skin.toml"),
-        include_str!("../../../skins/classic/layout.toml"),
-        include_str!("../../../skins/classic/features.toml"),
-    )
+    builtin::classic_skin()
 }

@@ -8,110 +8,14 @@ use crate::sdi::SdiRegistry;
 use crate::ui::flex;
 use crate::vfs::{EntryKind, Vfs};
 
+use super::layout_calc::AppLayout;
 use super::tv_guide::guide::TvGuideState;
 
 /// Maximum lines visible in the app content area (fallback for 480x272).
 const MAX_VISIBLE_LINES: usize = 13;
 
-/// Per-panel state for dual-panel file browsing.
-#[derive(Debug)]
-struct FilePanel {
-    browse_dir: String,
-    lines: Vec<String>,
-    scroll: usize,
-    cursor: usize,
-}
-
-impl FilePanel {
-    fn new(dir: &str, vfs: &dyn Vfs) -> Self {
-        let lines = list_directory(vfs, dir);
-        Self {
-            browse_dir: dir.to_string(),
-            lines,
-            scroll: 0,
-            cursor: 0,
-        }
-    }
-
-    fn visible_count(&self, max_visible: usize) -> usize {
-        let remaining = self.lines.len().saturating_sub(self.scroll);
-        remaining.min(max_visible)
-    }
-
-    fn navigate_up(&mut self) {
-        if self.cursor > 0 {
-            self.cursor -= 1;
-        } else if self.scroll > 0 {
-            self.scroll -= 1;
-        }
-    }
-
-    fn navigate_down(&mut self, max_visible: usize) {
-        let visible = self.visible_count(max_visible);
-        if self.cursor + 1 < visible {
-            self.cursor += 1;
-        } else if self.scroll + max_visible < self.lines.len() {
-            self.scroll += 1;
-        }
-    }
-
-    fn enter_selected(&mut self, vfs: &dyn Vfs) {
-        let abs_idx = self.scroll + self.cursor;
-        let Some(line) = self.lines.get(abs_idx) else {
-            return;
-        };
-        let line = line.trim().to_string();
-
-        if line == ".." {
-            let parent = if self.browse_dir == "/" {
-                "/".to_string()
-            } else {
-                let trimmed = self.browse_dir.trim_end_matches('/');
-                match trimmed.rfind('/') {
-                    Some(0) => "/".to_string(),
-                    Some(pos) => trimmed[..pos].to_string(),
-                    None => "/".to_string(),
-                }
-            };
-            self.browse_dir = parent.clone();
-            self.lines = list_directory(vfs, &parent);
-            self.scroll = 0;
-            self.cursor = 0;
-        } else if line.ends_with('/') {
-            let name = &line[..line.len() - 1];
-            let new_dir = if self.browse_dir == "/" {
-                format!("/{name}")
-            } else {
-                format!("{}/{name}", self.browse_dir)
-            };
-            self.browse_dir = new_dir.clone();
-            self.lines = list_directory(vfs, &new_dir);
-            self.scroll = 0;
-            self.cursor = 0;
-        }
-        // Files are not opened by panel navigation (only File Manager does that).
-    }
-
-    fn enter_selected_parent(&mut self, vfs: &dyn Vfs) {
-        let parent = if self.browse_dir == "/" {
-            "/".to_string()
-        } else {
-            let trimmed = self.browse_dir.trim_end_matches('/');
-            match trimmed.rfind('/') {
-                Some(0) => "/".to_string(),
-                Some(pos) => trimmed[..pos].to_string(),
-                None => "/".to_string(),
-            }
-        };
-        self.browse_dir = parent.clone();
-        self.lines = list_directory(vfs, &parent);
-        self.scroll = 0;
-        self.cursor = 0;
-    }
-}
-
 /// Action returned by the app after handling input.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AppAction {
     /// App consumed the input, no mode change needed.
     None,
@@ -124,6 +28,10 @@ pub enum AppAction {
 }
 
 /// Runtime state for a launched application screen.
+///
+/// Apps that have been extracted to the `App` trait (e.g. File Manager)
+/// are stored in the `delegate` field. Legacy apps still use the
+/// inline fields. This allows incremental migration.
 #[derive(Debug)]
 pub struct AppRunner {
     /// App display title.
@@ -140,10 +48,6 @@ pub struct AppRunner {
     pub viewing_file: Option<String>,
     /// Selected line index (relative to visible area).
     pub cursor: usize,
-    /// Dual panels for file manager mode (`None` for non-browsing apps).
-    panels: Option<[FilePanel; 2]>,
-    /// Which panel is active (0 = left, 1 = right).
-    active_panel: usize,
     /// Pending VFS IPC request from radio app (path, data).
     pending_vfs_request: Option<(String, String)>,
     /// Smooth selection position (lerps toward cursor index).
@@ -152,6 +56,8 @@ pub struct AppRunner {
     cached_max_visible: usize,
     /// TV Guide state (only for "TV Guide" app).
     tv_guide: Option<TvGuideState>,
+    /// Extracted app implementation (Some for migrated apps).
+    delegate: Option<Box<dyn super::app_trait::App>>,
 }
 
 impl AppRunner {
@@ -159,6 +65,64 @@ impl AppRunner {
     pub fn launch(app: &AppEntry, vfs: &dyn Vfs) -> Self {
         let title = app.title.clone();
         let path = app.path.clone();
+
+        // Try to create a delegate for extracted App trait implementations.
+        let delegate: Option<Box<dyn super::app_trait::App>> = match title.as_str() {
+            "File Manager" => Some(Box::new(super::file_manager::FileManagerApp::new(
+                &path, vfs,
+            ))),
+            "Settings" => Some(Box::new(super::simple_app::SimpleApp::settings(&path))),
+            "Network" => Some(Box::new(super::simple_app::SimpleApp::network(&path))),
+            "Package Manager" => Some(Box::new(super::simple_app::SimpleApp::package_manager(
+                &path,
+            ))),
+            "Browser" => Some(Box::new(super::simple_app::SimpleApp::browser(&path))),
+            "System Monitor" => Some(Box::new(super::simple_app::SimpleApp::system_monitor(
+                &path,
+            ))),
+            "Terminal" => Some(Box::new(super::simple_app::SimpleApp::terminal(&path))),
+            "Music Player" => Some(Box::new(super::browsing_app::BrowsingApp::music_player(
+                &path, vfs,
+            ))),
+            "Photo Viewer" => Some(Box::new(super::browsing_app::BrowsingApp::photo_viewer(
+                &path, vfs,
+            ))),
+            "Text Editor" => Some(Box::new(super::text_editor::TextEditorApp::new(&path))),
+            "Calculator" => Some(Box::new(super::calculator::CalculatorApp::new(&path))),
+            "Clock" => Some(Box::new(super::clock::ClockApp::new(&path))),
+            "Paint" => Some(Box::new(super::paint::PaintApp::new(&path))),
+            "Games" => Some(Box::new(super::games::GamesApp::new(&path))),
+            // Internet Radio and TV Guide have special rendering in AppRunner.
+            "Internet Radio" | "TV Guide" => None,
+            // All other apps get a generic placeholder.
+            _ => Some(Box::new(super::simple_app::SimpleApp::new(
+                &title,
+                &path,
+                vec![
+                    title.clone(),
+                    String::new(),
+                    "(No content available for this app)".to_string(),
+                ],
+            ))),
+        };
+
+        if let Some(app_impl) = delegate {
+            return Self {
+                title: app_impl.title().to_string(),
+                path: app_impl.path().to_string(),
+                lines: app_impl.lines().to_vec(),
+                scroll: 0,
+                browse_dir: app_impl.browse_dir().map(String::from),
+                viewing_file: None,
+                cursor: 0,
+                pending_vfs_request: None,
+                visual_selected: 0.0,
+                cached_max_visible: MAX_VISIBLE_LINES,
+                tv_guide: None,
+                delegate: Some(app_impl),
+            };
+        }
+
         let mut runner = Self {
             title: title.clone(),
             path,
@@ -167,143 +131,42 @@ impl AppRunner {
             browse_dir: None,
             viewing_file: None,
             cursor: 0,
-            panels: None,
-            active_panel: 0,
             pending_vfs_request: None,
             visual_selected: 0.0,
             cached_max_visible: MAX_VISIBLE_LINES,
             tv_guide: None,
+            delegate: None,
         };
         runner.init_content(&title, vfs);
         runner
     }
 
     /// Generate initial content based on the app title.
+    ///
+    /// Generate initial content for non-delegate apps.
+    ///
+    /// Only Internet Radio and TV Guide remain here; all other apps
+    /// are handled via the `delegate` field.
     fn init_content(&mut self, title: &str, vfs: &dyn Vfs) {
         match title {
-            "File Manager" => {
-                self.browse_dir = Some("/".to_string());
-                self.lines = list_directory(vfs, "/");
-                self.panels = Some([FilePanel::new("/", vfs), FilePanel::new("/", vfs)]);
-                self.active_panel = 0;
-            },
-            "Settings" => {
-                self.lines = vec![
-                    "OASIS_OS Settings".to_string(),
-                    "".to_string(),
-                    "  Screen:     480 x 272".to_string(),
-                    "  Skin:       Classic".to_string(),
-                    "  Audio:      Enabled".to_string(),
-                    "  Network:    Enabled".to_string(),
-                    "  Terminal:   Enabled".to_string(),
-                    "  Plugins:    Enabled".to_string(),
-                    "".to_string(),
-                    "(Settings are read-only in this build)".to_string(),
-                ];
-            },
-            "Network" => {
-                self.lines = vec![
-                    "Network Status".to_string(),
-                    "".to_string(),
-                    "  Interface:  lo (loopback)".to_string(),
-                    "  Status:     Active".to_string(),
-                    "  Address:    127.0.0.1".to_string(),
-                    "".to_string(),
-                    "  Remote:     Not connected".to_string(),
-                    "  Listener:   Not running".to_string(),
-                    "".to_string(),
-                    "Use terminal 'listen' and 'connect'".to_string(),
-                    "commands for remote access.".to_string(),
-                ];
-            },
-            "Music Player" => {
-                let dir = "/home/user/music";
-                self.browse_dir = Some(dir.to_string());
-                if vfs.exists(dir) {
-                    self.lines = list_directory(vfs, dir);
-                } else {
-                    self.lines = vec![
-                        "(Music directory not found)".to_string(),
-                        "".to_string(),
-                        "Create /home/user/music/ and add files.".to_string(),
-                    ];
-                }
-            },
-            "Photo Viewer" => {
-                let dir = "/home/user/photos";
-                self.browse_dir = Some(dir.to_string());
-                if vfs.exists(dir) {
-                    self.lines = list_directory(vfs, dir);
-                } else {
-                    self.lines = vec![
-                        "(Photos directory not found)".to_string(),
-                        "".to_string(),
-                        "Create /home/user/photos/ and add files.".to_string(),
-                    ];
-                }
-            },
-            "Package Manager" => {
-                self.lines = vec![
-                    "Package Manager".to_string(),
-                    "".to_string(),
-                    "Installed packages:".to_string(),
-                    "  oasis-core      0.1.0  (system)".to_string(),
-                    "  oasis-sdl       0.1.0  (backend)".to_string(),
-                    "  classic-skin    1.0.0  (skin)".to_string(),
-                    "".to_string(),
-                    "No updates available.".to_string(),
-                ];
-            },
-            "Browser" => {
-                self.lines = vec![
-                    "Browser".to_string(),
-                    "".to_string(),
-                    "Use the browser widget for web browsing.".to_string(),
-                    "".to_string(),
-                    "The browser supports HTML, CSS, and".to_string(),
-                    "Gemini protocol content.".to_string(),
-                    "".to_string(),
-                    "Launch from the dashboard to open the".to_string(),
-                    "full browser widget.".to_string(),
-                ];
-            },
             "Internet Radio" => {
                 self.lines = Self::radio_content(vfs);
-                // Use cursor for station selection.
                 self.cursor = 0;
             },
             "TV Guide" => {
-                self.init_tv_guide(vfs);
+                self.init_tv_guide(vfs, &ActiveTheme::default());
             },
-            "System Monitor" => {
-                self.lines = vec![
-                    "System Monitor".to_string(),
-                    "".to_string(),
-                    "  Platform:   Desktop (SDL2)".to_string(),
-                    "  Backend:    SDL2 accelerated".to_string(),
-                    "  VFS:        MemoryVfs".to_string(),
-                    "  Uptime:     (not tracked)".to_string(),
-                    "".to_string(),
-                    "  CPU:        --".to_string(),
-                    "  Memory:     --".to_string(),
-                    "  Battery:    N/A (desktop)".to_string(),
-                ];
-            },
-            _ => {
-                self.lines = vec![
-                    format!("{title}"),
-                    "".to_string(),
-                    "(No content available for this app)".to_string(),
-                ];
-            },
+            _ => {},
         }
     }
 
     /// Handle input while the app is active.
     pub fn handle_input(&mut self, button: &Button, vfs: &dyn Vfs) -> AppAction {
-        // Dual-panel mode (File Manager only).
-        if self.panels.is_some() && self.viewing_file.is_none() {
-            return self.handle_dual_panel_input(button, vfs);
+        // Delegate to extracted app if present.
+        if let Some(ref mut app) = self.delegate {
+            let action = app.handle_input(button, vfs);
+            self.sync_from_delegate();
+            return action;
         }
 
         // Internet Radio mode.
@@ -323,12 +186,8 @@ impl AppRunner {
                     self.viewing_file = None;
                     self.scroll = 0;
                     self.cursor = 0;
-                    // Refresh directory listing from active panel.
-                    if let Some(ref mut panels) = self.panels {
-                        let p = &panels[self.active_panel];
-                        self.browse_dir = Some(p.browse_dir.clone());
-                        self.lines = p.lines.clone();
-                    } else if let Some(ref dir) = self.browse_dir {
+                    // Refresh directory listing.
+                    if let Some(ref dir) = self.browse_dir {
                         self.lines = list_directory(vfs, dir);
                     }
                     return AppAction::None;
@@ -352,73 +211,7 @@ impl AppRunner {
                 }
                 AppAction::None
             },
-            Button::Confirm => {
-                // In file manager, enter selected directory or view file.
-                if self.browse_dir.is_some() && self.viewing_file.is_none() {
-                    self.enter_selected(vfs);
-                }
-                // Terminal app redirects to terminal mode.
-                if self.title == "Terminal" {
-                    return AppAction::SwitchToTerminal;
-                }
-                AppAction::None
-            },
-            _ => AppAction::None,
-        }
-    }
-
-    /// Handle input in dual-panel mode.
-    fn handle_dual_panel_input(&mut self, button: &Button, vfs: &dyn Vfs) -> AppAction {
-        let panels = self.panels.as_mut().unwrap();
-        match button {
-            Button::Left | Button::Right => {
-                self.active_panel = 1 - self.active_panel;
-                // Sync browse_dir with active panel.
-                self.browse_dir = Some(panels[self.active_panel].browse_dir.clone());
-                AppAction::None
-            },
-            Button::Up => {
-                panels[self.active_panel].navigate_up();
-                AppAction::None
-            },
-            Button::Down => {
-                panels[self.active_panel].navigate_down(self.cached_max_visible);
-                AppAction::None
-            },
-            Button::Confirm => {
-                let p = &mut panels[self.active_panel];
-                let abs_idx = p.scroll + p.cursor;
-                let is_file = p.lines.get(abs_idx).is_some_and(|line| {
-                    let l = line.trim();
-                    l != ".." && !l.ends_with('/')
-                });
-                if is_file {
-                    // Open file in viewer mode -- extract path.
-                    let line = p.lines[abs_idx].trim().to_string();
-                    let file_name = line.split("  (").next().unwrap_or(&line);
-                    let dir = &p.browse_dir;
-                    let file_path = if dir == "/" {
-                        format!("/{file_name}")
-                    } else {
-                        format!("{dir}/{file_name}")
-                    };
-                    self.open_file(vfs, &file_path);
-                } else {
-                    p.enter_selected(vfs);
-                    self.browse_dir = Some(p.browse_dir.clone());
-                }
-                AppAction::None
-            },
-            Button::Cancel => {
-                let p = &panels[self.active_panel];
-                if p.browse_dir == "/" {
-                    AppAction::Exit
-                } else {
-                    panels[self.active_panel].enter_selected_parent(vfs);
-                    self.browse_dir = Some(panels[self.active_panel].browse_dir.clone());
-                    AppAction::None
-                }
-            },
+            Button::Confirm => AppAction::None,
             _ => AppAction::None,
         }
     }
@@ -437,6 +230,11 @@ impl AppRunner {
         backend: &mut dyn SdiBackend,
         at: &ActiveTheme,
     ) -> crate::error::Result<()> {
+        // Delegate to extracted app.
+        if let Some(ref app) = self.delegate {
+            return app.draw_windowed(cx, cy, cw, ch, backend, at);
+        }
+
         // TV Guide gets its own EPG grid renderer.
         if let Some(ref guide) = self.tv_guide {
             return guide.draw_windowed(cx, cy, cw, ch, backend, at);
@@ -444,12 +242,6 @@ impl AppRunner {
 
         // Content background.
         backend.fill_rect(cx, cy, cw, ch, at.app_bg)?;
-
-        if let Some(ref panels) = self.panels
-            && self.viewing_file.is_none()
-        {
-            return self.draw_windowed_dual(cx, cy, cw, ch, backend, panels, at);
-        }
 
         // Title row with dir/file suffix.
         let dir_suffix = if let Some(ref file) = self.viewing_file {
@@ -506,154 +298,10 @@ impl AppRunner {
         Ok(())
     }
 
-    /// Draw dual-panel file manager layout.
-    #[allow(clippy::too_many_arguments)]
-    fn draw_windowed_dual(
-        &self,
-        cx: i32,
-        cy: i32,
-        cw: u32,
-        ch: u32,
-        backend: &mut dyn SdiBackend,
-        panels: &[FilePanel; 2],
-        at: &ActiveTheme,
-    ) -> crate::error::Result<()> {
-        let half_w = (cw / 2).saturating_sub(1);
-        let divider_x = cx + half_w as i32;
-
-        // Title bar with both panel paths.
-        let title = format!(
-            "File Manager  [L: {}]  [R: {}]",
-            panels[0].browse_dir, panels[1].browse_dir,
-        );
-        backend.draw_text(&title, cx + 4, cy + 2, 12, at.app_title_bar_text)?;
-        backend.fill_rect(
-            cx,
-            cy + at.app_title_bar_height as i32 - 4,
-            cw,
-            1,
-            at.app_divider,
-        )?;
-
-        // Vertical divider.
-        let title_h = at.app_title_bar_height as i32;
-        let content_y = cy + title_h;
-        let content_h = ch.saturating_sub(title_h as u32 + 14);
-        backend.fill_rect(divider_x, content_y, 1, content_h, at.app_divider)?;
-
-        // Draw each panel.
-        let line_h = at.terminal_line_height.max(12) as i32;
-        let max_lines = ((content_h as i32) / line_h).max(0) as usize;
-        for (pi, panel) in panels.iter().enumerate() {
-            let px = if pi == 0 { cx } else { divider_x + 1 };
-            let pw = if pi == 0 { half_w } else { cw - half_w - 1 };
-            let is_active = pi == self.active_panel;
-
-            // Active panel indicator (subtle highlight strip at top).
-            if is_active {
-                backend.fill_rect(px, content_y, pw, 1, at.app_selected_text)?;
-            }
-
-            let visible = panel
-                .lines
-                .len()
-                .saturating_sub(panel.scroll)
-                .min(max_lines);
-            for i in 0..visible {
-                let line_idx = panel.scroll + i;
-                let line = &panel.lines[line_idx];
-                let prefix = if is_active && i == panel.cursor {
-                    "> "
-                } else {
-                    "  "
-                };
-                // Truncate line to fit panel width (~chars = pw/8 - 2).
-                let max_chars = (pw as usize / 8).saturating_sub(2);
-                let display = if line.len() > max_chars {
-                    &line[..line.floor_char_boundary(max_chars)]
-                } else {
-                    line.as_str()
-                };
-                let text = format!("{prefix}{display}");
-                let text_color = if is_active && i == panel.cursor {
-                    at.app_selected_text
-                } else {
-                    at.app_text
-                };
-                let y = content_y + 2 + i as i32 * line_h;
-                backend.draw_text(&text, px + 2, y, 12, text_color)?;
-            }
-        }
-
-        // Bottom hints.
-        let scroll_y = cy + ch as i32 - 14;
-        backend.draw_text(
-            "L/R=panel  Cancel=back",
-            cx + 4,
-            scroll_y,
-            10,
-            at.app_dim_text,
-        )?;
-
-        Ok(())
-    }
-
     /// Number of currently visible content lines.
     fn visible_count(&self) -> usize {
         let remaining = self.lines.len().saturating_sub(self.scroll);
         remaining.min(self.cached_max_visible)
-    }
-
-    /// File manager / photo viewer: enter directory or open file.
-    fn enter_selected(&mut self, vfs: &dyn Vfs) {
-        let abs_idx = self.scroll + self.cursor;
-        let Some(line) = self.lines.get(abs_idx) else {
-            return;
-        };
-        let line = line.trim().to_string();
-
-        let Some(ref dir) = self.browse_dir else {
-            return;
-        };
-
-        if line == ".." {
-            // Go up.
-            let parent = if dir == "/" {
-                "/".to_string()
-            } else {
-                let trimmed = dir.trim_end_matches('/');
-                match trimmed.rfind('/') {
-                    Some(0) => "/".to_string(),
-                    Some(pos) => trimmed[..pos].to_string(),
-                    None => "/".to_string(),
-                }
-            };
-            self.browse_dir = Some(parent.clone());
-            self.lines = list_directory(vfs, &parent);
-            self.scroll = 0;
-            self.cursor = 0;
-        } else if line.ends_with('/') {
-            // Enter subdirectory.
-            let name = &line[..line.len() - 1];
-            let new_dir = if dir == "/" {
-                format!("/{name}")
-            } else {
-                format!("{dir}/{name}")
-            };
-            self.browse_dir = Some(new_dir.clone());
-            self.lines = list_directory(vfs, &new_dir);
-            self.scroll = 0;
-            self.cursor = 0;
-        } else {
-            // It's a file -- extract the filename (strip size suffix).
-            let file_name = line.split("  (").next().unwrap_or(&line);
-            let file_path = if dir == "/" {
-                format!("/{file_name}")
-            } else {
-                format!("{dir}/{file_name}")
-            };
-            self.open_file(vfs, &file_path);
-        }
     }
 
     // ---------------------------------------------------------------
@@ -793,11 +441,17 @@ impl AppRunner {
 
     /// Peek at a pending VFS IPC request without consuming it.
     pub fn peek_pending_request(&self) -> Option<&(String, String)> {
+        if let Some(ref app) = self.delegate {
+            return app.peek_pending_request();
+        }
         self.pending_vfs_request.as_ref()
     }
 
     /// Take any pending VFS IPC request (returns path and data if present).
     pub fn take_pending_request(&mut self) -> Option<(String, String)> {
+        if let Some(ref mut app) = self.delegate {
+            return app.take_pending_request();
+        }
         self.pending_vfs_request.take()
     }
 
@@ -830,7 +484,7 @@ impl AppRunner {
     // ---------------------------------------------------------------
 
     /// Initialize the TV Guide app from VFS channel config.
-    fn init_tv_guide(&mut self, vfs: &dyn Vfs) {
+    fn init_tv_guide(&mut self, vfs: &dyn Vfs, at: &ActiveTheme) {
         use super::tv_guide::TV_CHANNELS_PATH;
         use super::tv_guide::channel::{ChannelConfig, DEFAULT_CHANNELS_TOML};
 
@@ -848,7 +502,7 @@ impl AppRunner {
         };
 
         log::debug!("TV: init_tv_guide with {} channels", config.channel.len());
-        let guide = TvGuideState::new(&config);
+        let guide = TvGuideState::new(&config, at);
         self.lines = guide.text_content();
         self.tv_guide = Some(guide);
         self.cursor = 0;
@@ -929,6 +583,12 @@ impl AppRunner {
         ch: u32,
         fullscreen: bool,
     ) -> AppAction {
+        if let Some(ref mut app) = self.delegate {
+            let action = app.handle_click(lx, ly, cw, ch, fullscreen);
+            self.sync_from_delegate();
+            return action;
+        }
+
         if self.title == "TV Guide"
             && let Some(ref mut guide) = self.tv_guide
         {
@@ -955,37 +615,14 @@ impl AppRunner {
         self.tv_guide.as_mut()
     }
 
-    /// Open a file and display its contents.
-    /// Dispatches to app-specific viewers for Music Player and Photo Viewer.
-    pub fn open_file(&mut self, vfs: &dyn Vfs, path: &str) {
-        // Only open files that actually exist in the VFS.
-        if !vfs.exists(path) {
-            return;
-        }
-        self.viewing_file = Some(path.to_string());
-        self.scroll = 0;
-        self.cursor = 0;
-
-        let data = match vfs.read(path) {
-            Ok(d) => d,
-            Err(e) => {
-                self.lines = vec![
-                    format!("Error reading file: {e}"),
-                    "Cancel=back".to_string(),
-                ];
-                return;
-            },
-        };
-
-        self.lines = match self.title.as_str() {
-            "Music Player" => view_audio_file(path, &data),
-            "Photo Viewer" => view_image_file(path, &data),
-            _ => view_generic_file(path, &data),
-        };
-    }
-
     /// Render the app screen to SDI objects.
     pub fn update_sdi(&mut self, sdi: &mut SdiRegistry, at: &ActiveTheme) {
+        // Delegate to extracted app.
+        if let Some(ref mut app) = self.delegate {
+            app.update_sdi(sdi, at);
+            return;
+        }
+
         // TV Guide uses its own custom grid rendering.
         if let Some(ref mut guide) = self.tv_guide {
             guide.update_sdi(sdi, at);
@@ -1023,24 +660,12 @@ impl AppRunner {
             obj.z = 101;
         }
 
-        // Cache dynamic max-visible for input handling (both single & dual panel).
-        let title_h_cache = at.app_title_bar_height;
-        let line_h_safe = at.terminal_line_height.max(1);
-        let usable_h_cache =
-            at.screen_h - title_h_cache - at.statusbar_height - at.bottombar_height - 14;
-        self.cached_max_visible = (usable_h_cache / line_h_safe).max(1) as usize;
+        // Cache dynamic max-visible for input handling.
+        self.cached_max_visible = AppLayout::compute(at, 14).max_visible;
 
         // Title text.
         if !sdi.contains("app_title_text") {
             sdi.create("app_title_text");
-        }
-
-        // Dual-panel SDI rendering.
-        if let Some(ref panels) = self.panels
-            && self.viewing_file.is_none()
-        {
-            self.update_sdi_dual(sdi, panels, at);
-            return;
         }
 
         if let Ok(obj) = sdi.get_mut("app_title_text") {
@@ -1071,19 +696,14 @@ impl AppRunner {
         }
 
         // Content lines -- responsive to screen resolution.
-        let title_h = at.app_title_bar_height;
-        let content_x = 8i32;
-        let content_y = (title_h + 4) as i32;
-        let content_w = at.screen_w.saturating_sub(16);
-        let usable_h = at.screen_h - title_h - at.statusbar_height - at.bottombar_height - 14;
-        let max_visible = (usable_h / at.terminal_line_height.max(1)).max(1) as usize;
+        let app_layout = AppLayout::compute(at, 14);
         let line_rects = flex::vertical_list(
-            content_x,
-            content_y,
-            content_w,
-            at.terminal_line_height,
+            app_layout.content_x,
+            app_layout.content_y,
+            app_layout.content_w,
+            app_layout.line_h,
             0,
-            max_visible,
+            app_layout.max_visible,
         );
 
         // Smooth selection lerp.
@@ -1094,11 +714,11 @@ impl AppRunner {
         if !sdi.contains("app_sel_bg") {
             sdi.create("app_sel_bg");
         }
-        let sel_y = content_y + (self.visual_selected * at.terminal_line_height as f32) as i32;
+        let sel_y = app_layout.content_y + (self.visual_selected * app_layout.line_h as f32) as i32;
         if let Ok(obj) = sdi.get_mut("app_sel_bg") {
-            obj.x = content_x;
+            obj.x = app_layout.content_x;
             obj.y = sel_y;
-            obj.w = content_w;
+            obj.w = app_layout.content_w;
             obj.h = at.terminal_line_height;
             obj.color = at.app_selected_bg;
             obj.border_radius = Some(at.app_selection_border_radius);
@@ -1110,7 +730,7 @@ impl AppRunner {
             sdi.create("app_sel_accent");
         }
         if let Ok(obj) = sdi.get_mut("app_sel_accent") {
-            obj.x = content_x;
+            obj.x = app_layout.content_x;
             obj.y = sel_y;
             obj.w = 3;
             obj.h = at.terminal_line_height;
@@ -1153,11 +773,11 @@ impl AppRunner {
             sdi.create("app_scroll");
         }
         if let Ok(obj) = sdi.get_mut("app_scroll") {
-            if self.lines.len() > max_visible {
+            if self.lines.len() > app_layout.max_visible {
                 obj.text = Some(format!(
                     "[{}/{}]  Cancel=back",
                     self.scroll + 1,
-                    self.lines.len().saturating_sub(max_visible) + 1,
+                    self.lines.len().saturating_sub(app_layout.max_visible) + 1,
                 ));
             } else {
                 obj.text = Some("Cancel=back".to_string());
@@ -1170,158 +790,6 @@ impl AppRunner {
             obj.h = 0;
             obj.visible = true;
             obj.z = 102;
-        }
-    }
-
-    /// Render dual-panel layout to SDI objects.
-    fn update_sdi_dual(&self, sdi: &mut SdiRegistry, panels: &[FilePanel; 2], at: &ActiveTheme) {
-        // Title with both panel paths.
-        if let Ok(obj) = sdi.get_mut("app_title_text") {
-            obj.text = Some(format!(
-                "File Manager  [L: {}]  [R: {}]",
-                panels[0].browse_dir, panels[1].browse_dir,
-            ));
-            obj.x = 8;
-            obj.y = 4;
-            obj.font_size = at.font_body;
-            obj.text_color = at.app_title_bar_text;
-            obj.w = 0;
-            obj.h = 0;
-            obj.visible = true;
-            obj.z = 102;
-        }
-
-        // Responsive dual-panel geometry.
-        let title_h = at.app_title_bar_height;
-        let content_y = (title_h + 4) as i32;
-        let half_w = at.screen_w / 2;
-        let panel_pad = 8u32;
-        let divider_x = half_w as i32;
-        let left_x = 8i32;
-        let left_w = half_w - panel_pad - left_x as u32;
-        let right_x = divider_x + panel_pad as i32;
-        let right_w = at.screen_w - right_x as u32 - panel_pad;
-        let divider_h = at.screen_h - title_h - at.statusbar_height - at.bottombar_height;
-        let usable_h = at.screen_h - title_h - at.statusbar_height - at.bottombar_height - 14;
-        let panel_visible = (usable_h / at.terminal_line_height.max(1)).max(1) as usize;
-
-        // Vertical divider.
-        if !sdi.contains("app_divider") {
-            sdi.create("app_divider");
-        }
-        if let Ok(obj) = sdi.get_mut("app_divider") {
-            obj.x = divider_x;
-            obj.y = content_y - 2;
-            obj.w = 1;
-            obj.h = divider_h;
-            obj.color = at.app_divider;
-            obj.visible = true;
-            obj.z = 102;
-        }
-
-        // Left panel lines.
-        let lp_rects = flex::vertical_list(
-            left_x,
-            content_y,
-            left_w,
-            at.terminal_line_height,
-            0,
-            panel_visible,
-        );
-        for (i, rect) in lp_rects.iter().enumerate() {
-            let name = format!("app_lp_line_{i}");
-            if !sdi.contains(&name) {
-                sdi.create(&name);
-            }
-            if let Ok(obj) = sdi.get_mut(&name) {
-                let p = &panels[0];
-                let line_idx = p.scroll + i;
-                let is_active = self.active_panel == 0;
-                if line_idx < p.lines.len() {
-                    obj.text = Some(p.lines[line_idx].clone());
-                    obj.visible = true;
-                } else {
-                    obj.text = None;
-                    obj.visible = false;
-                }
-                obj.x = rect.x + 6;
-                obj.y = rect.y;
-                obj.font_size = at.font_body;
-                obj.text_color = if is_active && i == p.cursor {
-                    at.app_selected_text
-                } else {
-                    at.app_text
-                };
-                obj.w = 0;
-                obj.h = 0;
-                obj.z = 102;
-            }
-        }
-
-        // Right panel lines.
-        let rp_rects = flex::vertical_list(
-            right_x,
-            content_y,
-            right_w,
-            at.terminal_line_height,
-            0,
-            panel_visible,
-        );
-        for (i, rect) in rp_rects.iter().enumerate() {
-            let name = format!("app_rp_line_{i}");
-            if !sdi.contains(&name) {
-                sdi.create(&name);
-            }
-            if let Ok(obj) = sdi.get_mut(&name) {
-                let p = &panels[1];
-                let line_idx = p.scroll + i;
-                let is_active = self.active_panel == 1;
-                if line_idx < p.lines.len() {
-                    obj.text = Some(p.lines[line_idx].clone());
-                    obj.visible = true;
-                } else {
-                    obj.text = None;
-                    obj.visible = false;
-                }
-                obj.x = rect.x + 6;
-                obj.y = rect.y;
-                obj.font_size = at.font_body;
-                obj.text_color = if is_active && i == p.cursor {
-                    at.app_selected_text
-                } else {
-                    at.app_text
-                };
-                obj.w = 0;
-                obj.h = 0;
-                obj.z = 102;
-            }
-        }
-
-        // Scroll indicator.
-        if !sdi.contains("app_scroll") {
-            sdi.create("app_scroll");
-        }
-        if let Ok(obj) = sdi.get_mut("app_scroll") {
-            obj.text = Some("L/R=panel  Cancel=back".to_string());
-            obj.x = 8;
-            obj.y = at.screen_h as i32 - 14;
-            obj.font_size = at.font_hint;
-            obj.text_color = at.app_dim_text;
-            obj.w = 0;
-            obj.h = 0;
-            obj.visible = true;
-            obj.z = 102;
-        }
-
-        // Hide single-panel lines (in case they were visible before).
-        for i in 0..100 {
-            let name = format!("app_line_{i}");
-            if !sdi.contains(&name) {
-                break;
-            }
-            if let Ok(obj) = sdi.get_mut(&name) {
-                obj.visible = false;
-            }
         }
     }
 
@@ -1368,9 +836,38 @@ impl AppRunner {
         // Hide TV Guide objects.
         TvGuideState::hide_sdi(sdi);
     }
+
+    /// Sync AppRunner pub fields from the delegate app.
+    ///
+    /// This keeps the legacy `title`, `lines`, `browse_dir`, `viewing_file`
+    /// fields in sync after delegate calls, for backward compatibility with
+    /// external code that reads these fields directly.
+    fn sync_from_delegate(&mut self) {
+        if let Some(ref app) = self.delegate {
+            self.lines = app.lines().to_vec();
+            self.browse_dir = app.browse_dir().map(String::from);
+            self.viewing_file = app.viewing_file().map(String::from);
+        }
+    }
+
+    /// Get a reference to the delegate app, if present.
+    /// Get a reference to the delegate app, downcasting with `as_any()`.
+    pub fn delegate_as<T: 'static>(&self) -> Option<&T> {
+        self.delegate
+            .as_ref()
+            .and_then(|app| app.as_any().downcast_ref::<T>())
+    }
+
+    /// Get a mutable reference to the delegate app, downcasting with `as_any_mut()`.
+    pub fn delegate_as_mut<T: 'static>(&mut self) -> Option<&mut T> {
+        self.delegate
+            .as_mut()
+            .and_then(|app| app.as_any_mut().downcast_mut::<T>())
+    }
 }
 
 /// View an audio file: parse headers and show track metadata.
+#[cfg(test)]
 fn view_audio_file(path: &str, data: &[u8]) -> Vec<String> {
     let filename = path.rsplit('/').next().unwrap_or(path);
     let mut lines = vec![format!("=== Now Viewing: {filename} ==="), String::new()];
@@ -1439,6 +936,7 @@ fn view_audio_file(path: &str, data: &[u8]) -> Vec<String> {
 
 /// Try to extract title and artist from an ID3v2 tag.
 /// Returns (Option<title>, Option<artist>).
+#[cfg(test)]
 fn parse_id3v2_basic(data: &[u8]) -> (Option<String>, Option<String>) {
     if data.len() < 10 || &data[..3] != b"ID3" {
         return (None, None);
@@ -1484,6 +982,7 @@ fn parse_id3v2_basic(data: &[u8]) -> (Option<String>, Option<String>) {
 }
 
 /// View an image file: parse headers and show image metadata.
+#[cfg(test)]
 fn view_image_file(path: &str, data: &[u8]) -> Vec<String> {
     let filename = path.rsplit('/').next().unwrap_or(path);
     let mut lines = vec![format!("=== Photo: {filename} ==="), String::new()];
@@ -1545,6 +1044,7 @@ fn view_image_file(path: &str, data: &[u8]) -> Vec<String> {
 }
 
 /// Try to extract JPEG image dimensions from SOF markers.
+#[cfg(test)]
 fn parse_jpeg_dimensions(data: &[u8]) -> (u16, u16) {
     let mut pos = 2;
     while pos + 4 < data.len() {
@@ -1568,6 +1068,7 @@ fn parse_jpeg_dimensions(data: &[u8]) -> (u16, u16) {
 }
 
 /// Generic file viewer: text content or hex dump.
+#[cfg(test)]
 fn view_generic_file(path: &str, data: &[u8]) -> Vec<String> {
     let filename = path.rsplit('/').next().unwrap_or(path);
     let mut lines = vec![format!("--- {filename} ---"), String::new()];
@@ -1726,43 +1227,49 @@ mod tests {
 
     #[test]
     fn file_manager_navigate_down() {
+        use crate::apps::file_manager::FileManagerApp;
         let vfs = setup_vfs();
         let mut runner = AppRunner::launch(&make_app("File Manager"), &vfs);
-        let panel_cursor = runner.panels.as_ref().unwrap()[0].cursor;
-        assert_eq!(panel_cursor, 0);
+        let fm = runner.delegate_as::<FileManagerApp>().unwrap();
+        assert_eq!(fm.panels[0].cursor, 0);
         runner.handle_input(&Button::Down, &vfs);
-        let panel_cursor = runner.panels.as_ref().unwrap()[0].cursor;
-        assert_eq!(panel_cursor, 1);
+        let fm = runner.delegate_as::<FileManagerApp>().unwrap();
+        assert_eq!(fm.panels[0].cursor, 1);
     }
 
     #[test]
     fn file_manager_enter_directory() {
+        use crate::apps::file_manager::FileManagerApp;
         let vfs = setup_vfs();
         let mut runner = AppRunner::launch(&make_app("File Manager"), &vfs);
-        // Find the "home/" entry and navigate to it via Down presses.
-        let home_idx = runner.panels.as_ref().unwrap()[0]
+        let home_idx = runner.delegate_as::<FileManagerApp>().unwrap().panels[0]
             .lines
             .iter()
-            .position(|l| l.starts_with("home"))
+            .position(|l: &String| l.starts_with("home"))
             .expect("home/ should be in listing");
         for _ in 0..home_idx {
             runner.handle_input(&Button::Down, &vfs);
         }
         runner.handle_input(&Button::Confirm, &vfs);
         assert_eq!(runner.browse_dir.as_deref(), Some("/home"));
-        let panel = &runner.panels.as_ref().unwrap()[0];
-        assert!(panel.lines.iter().any(|l| l.contains("user")));
+        let fm = runner.delegate_as::<FileManagerApp>().unwrap();
+        assert!(
+            fm.panels[0]
+                .lines
+                .iter()
+                .any(|l: &String| l.contains("user"))
+        );
     }
 
     #[test]
     fn file_manager_go_up() {
+        use crate::apps::file_manager::FileManagerApp;
         let vfs = setup_vfs();
         let mut runner = AppRunner::launch(&make_app("File Manager"), &vfs);
-        // Enter /home first.
-        let home_idx = runner.panels.as_ref().unwrap()[0]
+        let home_idx = runner.delegate_as::<FileManagerApp>().unwrap().panels[0]
             .lines
             .iter()
-            .position(|l| l.starts_with("home"))
+            .position(|l: &String| l.starts_with("home"))
             .expect("home/ should be in listing");
         for _ in 0..home_idx {
             runner.handle_input(&Button::Down, &vfs);
@@ -1770,7 +1277,6 @@ mod tests {
         runner.handle_input(&Button::Confirm, &vfs);
         assert_eq!(runner.browse_dir.as_deref(), Some("/home"));
 
-        // Now go back up via Cancel.
         runner.handle_input(&Button::Cancel, &vfs);
         assert_eq!(runner.browse_dir.as_deref(), Some("/"));
     }
@@ -1793,21 +1299,25 @@ mod tests {
 
     #[test]
     fn scroll_down_when_content_exceeds_view() {
+        use crate::apps::simple_app::SimpleApp;
         let vfs = setup_vfs();
         let mut runner = AppRunner::launch(&make_app("Settings"), &vfs);
-        // Settings has ~10 lines, visible is 13, so no scroll needed.
-        // But test the mechanism by adding more lines.
+        // Settings uses delegate -- add extra lines via the delegate's content.
+        let app = runner.delegate_as_mut::<SimpleApp>().unwrap();
         for i in 0..20 {
-            runner.lines.push(format!("Extra line {i}"));
+            app.content.lines.push(format!("Extra line {i}"));
         }
+        app.content.cached_max_visible = MAX_VISIBLE_LINES;
         // Move cursor to bottom of visible area.
         for _ in 0..MAX_VISIBLE_LINES - 1 {
             runner.handle_input(&Button::Down, &vfs);
         }
-        assert_eq!(runner.cursor, MAX_VISIBLE_LINES - 1);
+        let app = runner.delegate_as::<SimpleApp>().unwrap();
+        assert_eq!(app.content.cursor, MAX_VISIBLE_LINES - 1);
         // Next down should scroll.
         runner.handle_input(&Button::Down, &vfs);
-        assert_eq!(runner.scroll, 1);
+        let app = runner.delegate_as::<SimpleApp>().unwrap();
+        assert_eq!(app.content.scroll, 1);
     }
 
     #[test]
@@ -1867,13 +1377,14 @@ mod tests {
         }
     }
 
-    /// Helper: find entry index in active panel lines.
+    /// Helper: find entry index in active panel lines (delegate-aware).
     fn find_panel_entry(runner: &AppRunner, needle: &str) -> usize {
-        let panels = runner.panels.as_ref().unwrap();
-        let p = &panels[runner.active_panel];
+        use crate::apps::file_manager::FileManagerApp;
+        let fm = runner.delegate_as::<FileManagerApp>().unwrap();
+        let p = &fm.panels[fm.active_panel];
         p.lines
             .iter()
-            .position(|l| l.contains(needle))
+            .position(|l: &String| l.contains(needle))
             .unwrap_or_else(|| panic!("{needle} not found in panel lines"))
     }
 
@@ -1881,27 +1392,24 @@ mod tests {
     fn file_manager_open_file() {
         let vfs = setup_vfs();
         let mut runner = AppRunner::launch(&make_app("File Manager"), &vfs);
-        // Navigate to /home/user via dual panel.
         let home_idx = find_panel_entry(&runner, "home");
         navigate_panel_to(&mut runner, home_idx, &vfs);
         runner.handle_input(&Button::Confirm, &vfs);
         let user_idx = find_panel_entry(&runner, "user");
         navigate_panel_to(&mut runner, user_idx, &vfs);
         runner.handle_input(&Button::Confirm, &vfs);
-        // Now select readme.txt.
         let file_idx = find_panel_entry(&runner, "readme.txt");
         navigate_panel_to(&mut runner, file_idx, &vfs);
         runner.handle_input(&Button::Confirm, &vfs);
-        // Should be in file viewer mode.
         assert!(runner.viewing_file.is_some());
         assert!(runner.lines.iter().any(|l| l.contains("Hello!")));
     }
 
     #[test]
     fn file_viewer_cancel_returns_to_dir() {
+        use crate::apps::file_manager::FileManagerApp;
         let vfs = setup_vfs();
         let mut runner = AppRunner::launch(&make_app("File Manager"), &vfs);
-        // Navigate to /home/user and open readme.txt.
         let home_idx = find_panel_entry(&runner, "home");
         navigate_panel_to(&mut runner, home_idx, &vfs);
         runner.handle_input(&Button::Confirm, &vfs);
@@ -1912,12 +1420,16 @@ mod tests {
         navigate_panel_to(&mut runner, file_idx, &vfs);
         runner.handle_input(&Button::Confirm, &vfs);
         assert!(runner.viewing_file.is_some());
-        // Cancel should return to directory, not exit app.
         let action = runner.handle_input(&Button::Cancel, &vfs);
         assert_eq!(action, AppAction::None);
         assert!(runner.viewing_file.is_none());
-        let panel = &runner.panels.as_ref().unwrap()[0];
-        assert!(panel.lines.iter().any(|l| l.contains("readme.txt")));
+        let fm = runner.delegate_as::<FileManagerApp>().unwrap();
+        assert!(
+            fm.panels[0]
+                .lines
+                .iter()
+                .any(|l: &String| l.contains("readme.txt"))
+        );
     }
 
     #[test]
@@ -1927,7 +1439,6 @@ mod tests {
         vfs.write("/home/user/data.bin", &[0x00, 0x01, 0xFF, 0xFE, 0x80])
             .unwrap();
         let mut runner = AppRunner::launch(&make_app("File Manager"), &vfs);
-        // Navigate to /home/user via dual panel.
         let home_idx = find_panel_entry(&runner, "home");
         navigate_panel_to(&mut runner, home_idx, &vfs);
         runner.handle_input(&Button::Confirm, &vfs);
@@ -1938,7 +1449,6 @@ mod tests {
         navigate_panel_to(&mut runner, file_idx, &vfs);
         runner.handle_input(&Button::Confirm, &vfs);
         assert!(runner.viewing_file.is_some());
-        // Generic viewer shows hex dump for binary.
         assert!(runner.lines.iter().any(|l| l.contains("Binary file")));
         assert!(runner.lines.iter().any(|l| l.contains("00 01 ff fe")));
     }
@@ -2025,14 +1535,19 @@ mod tests {
 
     #[test]
     fn music_player_open_track() {
+        use crate::apps::browsing_app::BrowsingApp;
         let vfs = setup_vfs();
         let mut runner = AppRunner::launch(&make_app("Music Player"), &vfs);
-        let track_idx = runner
+        let app = runner.delegate_as::<BrowsingApp>().unwrap();
+        let track_idx = app
+            .content
             .lines
             .iter()
-            .position(|l| l.contains("ambient_dawn"))
+            .position(|l: &String| l.contains("ambient_dawn"))
             .unwrap();
-        runner.cursor = track_idx;
+        for _ in 0..track_idx {
+            runner.handle_input(&Button::Down, &vfs);
+        }
         runner.handle_input(&Button::Confirm, &vfs);
         // Should open audio viewer with track info and playback hints.
         assert!(runner.viewing_file.is_some());
@@ -2066,15 +1581,19 @@ mod tests {
 
     #[test]
     fn photo_viewer_open_image() {
+        use crate::apps::browsing_app::BrowsingApp;
         let vfs = setup_vfs();
         let mut runner = AppRunner::launch(&make_app("Photo Viewer"), &vfs);
-        // Find sunset.png and open it.
-        let photo_idx = runner
+        let app = runner.delegate_as::<BrowsingApp>().unwrap();
+        let photo_idx = app
+            .content
             .lines
             .iter()
-            .position(|l| l.contains("sunset.png"))
+            .position(|l: &String| l.contains("sunset.png"))
             .unwrap();
-        runner.cursor = photo_idx;
+        for _ in 0..photo_idx {
+            runner.handle_input(&Button::Down, &vfs);
+        }
         runner.handle_input(&Button::Confirm, &vfs);
         // Photo viewer shows image metadata.
         assert!(runner.viewing_file.is_some());
@@ -2083,14 +1602,19 @@ mod tests {
 
     #[test]
     fn photo_viewer_cancel_from_view() {
+        use crate::apps::browsing_app::BrowsingApp;
         let vfs = setup_vfs();
         let mut runner = AppRunner::launch(&make_app("Photo Viewer"), &vfs);
-        let photo_idx = runner
+        let app = runner.delegate_as::<BrowsingApp>().unwrap();
+        let photo_idx = app
+            .content
             .lines
             .iter()
-            .position(|l| l.contains("sunset.png"))
+            .position(|l: &String| l.contains("sunset.png"))
             .unwrap();
-        runner.cursor = photo_idx;
+        for _ in 0..photo_idx {
+            runner.handle_input(&Button::Down, &vfs);
+        }
         runner.handle_input(&Button::Confirm, &vfs);
         assert!(runner.viewing_file.is_some());
         // Cancel returns to photo list.
@@ -2113,77 +1637,80 @@ mod tests {
     }
 
     #[test]
-    fn open_file_skips_nonexistent() {
-        let vfs = setup_vfs();
-        let mut runner = AppRunner::launch(&make_app("File Manager"), &vfs);
-        runner.open_file(&vfs, "/does/not/exist.txt");
-        // Should not switch to viewer mode.
-        assert!(runner.viewing_file.is_none());
-    }
-
-    #[test]
     fn dual_panel_switch_active() {
+        use crate::apps::file_manager::FileManagerApp;
         let vfs = setup_vfs();
         let mut runner = AppRunner::launch(&make_app("File Manager"), &vfs);
-        assert!(runner.panels.is_some());
-        assert_eq!(runner.active_panel, 0);
+        assert!(runner.delegate_as::<FileManagerApp>().is_some());
+        assert_eq!(
+            runner.delegate_as::<FileManagerApp>().unwrap().active_panel,
+            0
+        );
 
         // Right switches to panel 1.
         runner.handle_input(&Button::Right, &vfs);
-        assert_eq!(runner.active_panel, 1);
+        assert_eq!(
+            runner.delegate_as::<FileManagerApp>().unwrap().active_panel,
+            1
+        );
 
         // Left switches back to panel 0.
         runner.handle_input(&Button::Left, &vfs);
-        assert_eq!(runner.active_panel, 0);
+        assert_eq!(
+            runner.delegate_as::<FileManagerApp>().unwrap().active_panel,
+            0
+        );
     }
 
     #[test]
     fn dual_panel_independent_navigation() {
+        use crate::apps::file_manager::FileManagerApp;
         let vfs = setup_vfs();
         let mut runner = AppRunner::launch(&make_app("File Manager"), &vfs);
 
         // Navigate down in left panel (panel 0).
         runner.handle_input(&Button::Down, &vfs);
-        let left_cursor = runner.panels.as_ref().unwrap()[0].cursor;
-        assert_eq!(left_cursor, 1);
+        let fm = runner.delegate_as::<FileManagerApp>().unwrap();
+        assert_eq!(fm.panels[0].cursor, 1);
 
         // Switch to right panel.
         runner.handle_input(&Button::Right, &vfs);
-        assert_eq!(runner.active_panel, 1);
+        let fm = runner.delegate_as::<FileManagerApp>().unwrap();
+        assert_eq!(fm.active_panel, 1);
 
         // Right panel cursor should still be at 0.
-        let right_cursor = runner.panels.as_ref().unwrap()[1].cursor;
-        assert_eq!(right_cursor, 0);
+        assert_eq!(fm.panels[1].cursor, 0);
 
         // Navigate down in right panel.
         runner.handle_input(&Button::Down, &vfs);
-        let right_cursor = runner.panels.as_ref().unwrap()[1].cursor;
-        assert_eq!(right_cursor, 1);
+        let fm = runner.delegate_as::<FileManagerApp>().unwrap();
+        assert_eq!(fm.panels[1].cursor, 1);
 
         // Left panel cursor should still be at 1.
-        let left_cursor = runner.panels.as_ref().unwrap()[0].cursor;
-        assert_eq!(left_cursor, 1);
+        assert_eq!(fm.panels[0].cursor, 1);
     }
 
     #[test]
     fn dual_panel_enter_directory() {
+        use crate::apps::file_manager::FileManagerApp;
         let vfs = setup_vfs();
         let mut runner = AppRunner::launch(&make_app("File Manager"), &vfs);
 
         // Find "home/" and navigate into it on left panel.
-        let home_idx = runner.panels.as_ref().unwrap()[0]
+        let home_idx = runner.delegate_as::<FileManagerApp>().unwrap().panels[0]
             .lines
             .iter()
-            .position(|l| l.starts_with("home"))
+            .position(|l: &String| l.starts_with("home"))
             .expect("home/ should be in listing");
         // Move cursor to home entry.
         for _ in 0..home_idx {
             runner.handle_input(&Button::Down, &vfs);
         }
         runner.handle_input(&Button::Confirm, &vfs);
-        assert_eq!(runner.panels.as_ref().unwrap()[0].browse_dir, "/home");
+        let fm = runner.delegate_as::<FileManagerApp>().unwrap();
+        assert_eq!(fm.panels[0].browse_dir, "/home");
         // Right panel should still be at root.
-        assert_eq!(runner.panels.as_ref().unwrap()[1].browse_dir, "/");
+        assert_eq!(fm.panels[1].browse_dir, "/");
     }
 
     #[test]
@@ -2210,20 +1737,6 @@ mod tests {
         assert!(!sdi.get("app_divider").unwrap().visible);
         assert!(!sdi.get("app_lp_line_0").unwrap().visible);
         assert!(!sdi.get("app_rp_line_0").unwrap().visible);
-    }
-
-    #[test]
-    fn dual_panel_not_for_music() {
-        let vfs = setup_vfs();
-        let runner = AppRunner::launch(&make_app("Music Player"), &vfs);
-        assert!(runner.panels.is_none());
-    }
-
-    #[test]
-    fn dual_panel_not_for_settings() {
-        let vfs = setup_vfs();
-        let runner = AppRunner::launch(&make_app("Settings"), &vfs);
-        assert!(runner.panels.is_none());
     }
 
     // ---------------------------------------------------------------

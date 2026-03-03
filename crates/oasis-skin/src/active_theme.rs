@@ -438,6 +438,28 @@ pub struct ActiveTheme {
     /// Item separator color.
     pub sm_item_separator_color: Color,
 
+    // -- Per-app theme overrides --
+    /// App-specific color overrides (app_name -> (key -> Color)).
+    ///
+    /// Populated from `[app_themes.<name>]` sections in theme.toml.
+    /// Query with `app_color("tv_guide", "bg")`.
+    pub app_themes: std::collections::HashMap<String, std::collections::HashMap<String, Color>>,
+
+    // -- Named gradient presets --
+    /// Named gradient presets (name -> (from, to) colors).
+    pub gradients: std::collections::HashMap<String, (Color, Color)>,
+
+    // -- Named animation presets --
+    /// Named animation presets (name -> (duration_ms, easing)).
+    pub animations: std::collections::HashMap<String, (u32, String)>,
+
+    // -- Widget state color overrides --
+    /// Per-widget state color overrides (widget_name -> (state_key -> Color)).
+    ///
+    /// Populated from `[widget_states.<widget>]` sections in theme.toml.
+    /// Query with `widget_state_color("button", "hover_bg")`.
+    pub widget_states: std::collections::HashMap<String, std::collections::HashMap<String, Color>>,
+
     // -- UI toolkit theme --
     /// Unified UI theme derived from the skin palette.
     ///
@@ -639,6 +661,10 @@ impl Default for ActiveTheme {
             toast_slide_in: true,
             sm_item_separator: false,
             sm_item_separator_color: Color::rgba(255, 255, 255, 40),
+            app_themes: std::collections::HashMap::new(),
+            gradients: std::collections::HashMap::new(),
+            animations: std::collections::HashMap::new(),
+            widget_states: std::collections::HashMap::new(),
             ui_theme: oasis_ui::theme::Theme::dark(),
         }
     }
@@ -1354,6 +1380,62 @@ impl ActiveTheme {
                     with_alpha(border, 64),
                 )
             },
+            app_themes: {
+                let mut map = std::collections::HashMap::new();
+                if let Some(ref themes) = skin.app_themes {
+                    for (app, colors) in themes {
+                        let mut parsed = std::collections::HashMap::new();
+                        for (key, hex) in colors {
+                            if let Some(c) = parse_hex_color(hex) {
+                                parsed.insert(key.clone(), c);
+                            }
+                        }
+                        if !parsed.is_empty() {
+                            map.insert(app.clone(), parsed);
+                        }
+                    }
+                }
+                map
+            },
+            gradients: {
+                let mut map = std::collections::HashMap::new();
+                if let Some(ref grads) = skin.gradients {
+                    for (name, preset) in grads {
+                        if let (Some(from), Some(to)) =
+                            (parse_hex_color(&preset.from), parse_hex_color(&preset.to))
+                        {
+                            map.insert(name.clone(), (from, to));
+                        }
+                    }
+                }
+                map
+            },
+            animations: {
+                let mut map = std::collections::HashMap::new();
+                if let Some(ref anims) = skin.animations {
+                    for (name, preset) in anims {
+                        map.insert(name.clone(), (preset.duration_ms, preset.easing.clone()));
+                    }
+                }
+                map
+            },
+            widget_states: {
+                let mut map = std::collections::HashMap::new();
+                if let Some(ref states) = skin.widget_states {
+                    for (widget, colors) in states {
+                        let mut parsed = std::collections::HashMap::new();
+                        for (key, hex) in colors {
+                            if let Some(c) = parse_hex_color(hex) {
+                                parsed.insert(key.clone(), c);
+                            }
+                        }
+                        if !parsed.is_empty() {
+                            map.insert(widget.clone(), parsed);
+                        }
+                    }
+                }
+                map
+            },
             ui_theme: skin.to_ui_theme(),
         }
     }
@@ -1417,6 +1499,55 @@ impl ActiveTheme {
             return Some((lighten(base, 0.15), base));
         }
         None
+    }
+
+    /// Look up a per-app color override.
+    ///
+    /// Returns `Some(color)` if `[app_themes.<app_name>]` defines the key,
+    /// or `None` to fall back to the app's default.
+    pub fn app_color(&self, app_name: &str, key: &str) -> Option<Color> {
+        self.app_themes
+            .get(app_name)
+            .and_then(|m| m.get(key))
+            .copied()
+    }
+
+    /// Look up a named gradient preset.
+    ///
+    /// Returns `Some((from_color, to_color))` if the gradient is defined.
+    pub fn gradient(&self, name: &str) -> Option<(Color, Color)> {
+        self.gradients.get(name).copied()
+    }
+
+    /// Look up a named animation preset.
+    ///
+    /// Returns `Some((duration_ms, easing_name))` if the animation is defined.
+    pub fn animation(&self, name: &str) -> Option<(u32, &str)> {
+        self.animations
+            .get(name)
+            .map(|(dur, easing)| (*dur, easing.as_str()))
+    }
+
+    /// Resolve a named animation to `(duration_ms, easing_fn)`.
+    ///
+    /// If the named animation isn't defined, returns `(default_ms, linear)`.
+    pub fn resolve_animation(&self, name: &str, default_ms: u32) -> (u32, fn(f32) -> f32) {
+        if let Some((dur, easing_name)) = self.animation(name) {
+            (dur, super::theme::resolve_easing(easing_name))
+        } else {
+            (default_ms, oasis_ui::animation::easing::linear)
+        }
+    }
+
+    /// Look up a per-widget state color override.
+    ///
+    /// Returns `Some(color)` if `[widget_states.<widget>]` defines the key,
+    /// or `None` to fall back to the computed value.
+    pub fn widget_state_color(&self, widget: &str, state_key: &str) -> Option<Color> {
+        self.widget_states
+            .get(widget)
+            .and_then(|m| m.get(state_key))
+            .copied()
     }
 
     /// Derive a 6-color palette from the primary color using hue-shifted offsets.
@@ -1530,5 +1661,131 @@ error = "#FF0000"
         // Text-derived fields should be green.
         assert_eq!(at.clock_color, Color::rgb(0, 255, 0));
         assert_eq!(at.media_tab_active, Color::rgb(0, 255, 0));
+    }
+
+    // -- Per-app theme override tests --
+
+    #[test]
+    fn app_color_returns_none_by_default() {
+        let at = ActiveTheme::default();
+        assert!(at.app_color("tv_guide", "bg").is_none());
+    }
+
+    #[test]
+    fn app_color_from_theme_toml() {
+        let toml = r##"
+[app_themes.tv_guide]
+bg = "#0A1628"
+grid_line = "#1A3A5C"
+"##;
+        let skin: SkinTheme = toml::from_str(toml).unwrap();
+        let at = ActiveTheme::from_skin(&skin);
+        assert_eq!(at.app_color("tv_guide", "bg"), Some(Color::rgb(10, 22, 40)));
+        assert_eq!(
+            at.app_color("tv_guide", "grid_line"),
+            Some(Color::rgb(26, 58, 92))
+        );
+        assert!(at.app_color("tv_guide", "missing").is_none());
+        assert!(at.app_color("unknown", "bg").is_none());
+    }
+
+    // -- Named gradient preset tests --
+
+    #[test]
+    fn gradient_returns_none_by_default() {
+        let at = ActiveTheme::default();
+        assert!(at.gradient("primary").is_none());
+    }
+
+    #[test]
+    fn gradient_from_theme_toml() {
+        let toml = r##"
+[gradients.primary]
+from = "#0066FF"
+to = "#0044AA"
+"##;
+        let skin: SkinTheme = toml::from_str(toml).unwrap();
+        let at = ActiveTheme::from_skin(&skin);
+        let (from, to) = at.gradient("primary").unwrap();
+        assert_eq!(from, Color::rgb(0x00, 0x66, 0xFF));
+        assert_eq!(to, Color::rgb(0x00, 0x44, 0xAA));
+    }
+
+    // -- Named animation preset tests --
+
+    #[test]
+    fn animation_returns_none_by_default() {
+        let at = ActiveTheme::default();
+        assert!(at.animation("button_press").is_none());
+    }
+
+    #[test]
+    fn animation_from_theme_toml() {
+        let toml = r##"
+[animations.button_press]
+duration_ms = 100
+easing = "ease_out_quad"
+"##;
+        let skin: SkinTheme = toml::from_str(toml).unwrap();
+        let at = ActiveTheme::from_skin(&skin);
+        let (dur, easing) = at.animation("button_press").unwrap();
+        assert_eq!(dur, 100);
+        assert_eq!(easing, "ease_out_quad");
+    }
+
+    #[test]
+    fn resolve_animation_uses_preset() {
+        let toml = r##"
+[animations.cursor_move]
+duration_ms = 150
+easing = "ease_out_cubic"
+"##;
+        let skin: SkinTheme = toml::from_str(toml).unwrap();
+        let at = ActiveTheme::from_skin(&skin);
+        let (dur, easing_fn) = at.resolve_animation("cursor_move", 200);
+        assert_eq!(dur, 150);
+        // Verify the easing function is ease_out_cubic (not linear).
+        let val = easing_fn(0.5);
+        assert!(val > 0.5, "ease_out_cubic at 0.5 should be > 0.5");
+    }
+
+    #[test]
+    fn resolve_animation_falls_back() {
+        let at = ActiveTheme::default();
+        let (dur, easing_fn) = at.resolve_animation("nonexistent", 300);
+        assert_eq!(dur, 300);
+        // Default is linear.
+        assert!((easing_fn(0.5) - 0.5).abs() < f32::EPSILON);
+    }
+
+    // -- Widget state color override tests --
+
+    #[test]
+    fn widget_state_color_returns_none_by_default() {
+        let at = ActiveTheme::default();
+        assert!(at.widget_state_color("button", "hover_bg").is_none());
+    }
+
+    #[test]
+    fn widget_state_color_from_theme_toml() {
+        let toml = r##"
+[widget_states.button]
+normal_bg = "#505050"
+hover_bg = "#656565"
+pressed_bg = "#353535"
+disabled_text = "#555555"
+"##;
+        let skin: SkinTheme = toml::from_str(toml).unwrap();
+        let at = ActiveTheme::from_skin(&skin);
+        assert_eq!(
+            at.widget_state_color("button", "hover_bg"),
+            Some(Color::rgb(0x65, 0x65, 0x65))
+        );
+        assert_eq!(
+            at.widget_state_color("button", "disabled_text"),
+            Some(Color::rgb(0x55, 0x55, 0x55))
+        );
+        assert!(at.widget_state_color("button", "missing_key").is_none());
+        assert!(at.widget_state_color("slider", "hover_bg").is_none());
     }
 }

@@ -1,0 +1,1371 @@
+//! File Manager application with dual-panel browsing.
+//!
+//! Implements the `App` trait for a dual-panel file manager with
+//! file viewing capabilities (text, audio metadata, image metadata).
+
+use std::any::Any;
+
+use crate::active_theme::ActiveTheme;
+use crate::backend::SdiBackend;
+use crate::input::Button;
+use crate::sdi::SdiRegistry;
+use crate::ui::flex;
+use crate::vfs::{EntryKind, Vfs};
+
+use super::AppAction;
+use super::app_trait::{App, ContentState};
+use super::layout_calc::AppLayout;
+
+// ---------------------------------------------------------------
+// FilePanel: per-panel state for dual-panel browsing
+// ---------------------------------------------------------------
+
+/// Per-panel state for dual-panel file browsing.
+#[derive(Debug, Clone)]
+pub struct FilePanel {
+    /// Current directory being browsed.
+    pub browse_dir: String,
+    /// Display lines for the current directory.
+    pub lines: Vec<String>,
+    /// Scroll offset.
+    pub scroll: usize,
+    /// Cursor position (relative to visible area).
+    pub cursor: usize,
+}
+
+impl FilePanel {
+    /// Create a new panel rooted at the given directory.
+    pub fn new(dir: &str, vfs: &dyn Vfs) -> Self {
+        let lines = list_directory(vfs, dir);
+        Self {
+            browse_dir: dir.to_string(),
+            lines,
+            scroll: 0,
+            cursor: 0,
+        }
+    }
+
+    fn visible_count(&self, max_visible: usize) -> usize {
+        let remaining = self.lines.len().saturating_sub(self.scroll);
+        remaining.min(max_visible)
+    }
+
+    fn navigate_up(&mut self) {
+        if self.cursor > 0 {
+            self.cursor -= 1;
+        } else if self.scroll > 0 {
+            self.scroll -= 1;
+        }
+    }
+
+    fn navigate_down(&mut self, max_visible: usize) {
+        let visible = self.visible_count(max_visible);
+        if self.cursor + 1 < visible {
+            self.cursor += 1;
+        } else if self.scroll + max_visible < self.lines.len() {
+            self.scroll += 1;
+        }
+    }
+
+    fn enter_selected(&mut self, vfs: &dyn Vfs) {
+        let abs_idx = self.scroll + self.cursor;
+        let Some(line) = self.lines.get(abs_idx) else {
+            return;
+        };
+        let line = line.trim().to_string();
+
+        if line == ".." {
+            let parent = parent_dir(&self.browse_dir);
+            self.browse_dir = parent.clone();
+            self.lines = list_directory(vfs, &parent);
+            self.scroll = 0;
+            self.cursor = 0;
+        } else if line.ends_with('/') {
+            let name = &line[..line.len() - 1];
+            let new_dir = join_path(&self.browse_dir, name);
+            self.browse_dir = new_dir.clone();
+            self.lines = list_directory(vfs, &new_dir);
+            self.scroll = 0;
+            self.cursor = 0;
+        }
+    }
+
+    fn enter_selected_parent(&mut self, vfs: &dyn Vfs) {
+        let parent = parent_dir(&self.browse_dir);
+        self.browse_dir = parent.clone();
+        self.lines = list_directory(vfs, &parent);
+        self.scroll = 0;
+        self.cursor = 0;
+    }
+}
+
+// ---------------------------------------------------------------
+// FileManagerApp
+// ---------------------------------------------------------------
+
+/// File Manager application with dual-panel browsing.
+#[derive(Debug)]
+pub struct FileManagerApp {
+    /// Shared content state (title, lines, scroll, cursor, etc.).
+    pub content: ContentState,
+    /// Dual panels.
+    pub panels: [FilePanel; 2],
+    /// Which panel is active (0 = left, 1 = right).
+    pub active_panel: usize,
+}
+
+impl FileManagerApp {
+    /// Create a new File Manager app.
+    pub fn new(path: &str, vfs: &dyn Vfs) -> Self {
+        let mut content = ContentState::new("File Manager", path);
+        content.browse_dir = Some("/".to_string());
+        content.lines = list_directory(vfs, "/");
+        Self {
+            content,
+            panels: [FilePanel::new("/", vfs), FilePanel::new("/", vfs)],
+            active_panel: 0,
+        }
+    }
+
+    /// Handle input in dual-panel mode (no file viewer open).
+    fn handle_dual_panel_input(&mut self, button: &Button, vfs: &dyn Vfs) -> AppAction {
+        match button {
+            Button::Left | Button::Right => {
+                self.active_panel = 1 - self.active_panel;
+                self.content.browse_dir = Some(self.panels[self.active_panel].browse_dir.clone());
+                AppAction::None
+            },
+            Button::Up => {
+                self.panels[self.active_panel].navigate_up();
+                AppAction::None
+            },
+            Button::Down => {
+                self.panels[self.active_panel].navigate_down(self.content.cached_max_visible);
+                AppAction::None
+            },
+            Button::Confirm => {
+                let p = &mut self.panels[self.active_panel];
+                let abs_idx = p.scroll + p.cursor;
+                let is_file = p.lines.get(abs_idx).is_some_and(|line| {
+                    let l = line.trim();
+                    l != ".." && !l.ends_with('/')
+                });
+                if is_file {
+                    let line = p.lines[abs_idx].trim().to_string();
+                    let file_name = line.split("  (").next().unwrap_or(&line);
+                    let dir = &p.browse_dir;
+                    let file_path = join_path(dir, file_name);
+                    self.open_file(vfs, &file_path);
+                } else {
+                    p.enter_selected(vfs);
+                    self.content.browse_dir = Some(p.browse_dir.clone());
+                }
+                AppAction::None
+            },
+            Button::Cancel => {
+                let p = &self.panels[self.active_panel];
+                if p.browse_dir == "/" {
+                    AppAction::Exit
+                } else {
+                    self.panels[self.active_panel].enter_selected_parent(vfs);
+                    self.content.browse_dir =
+                        Some(self.panels[self.active_panel].browse_dir.clone());
+                    AppAction::None
+                }
+            },
+            _ => AppAction::None,
+        }
+    }
+
+    /// Handle input when viewing a file.
+    fn handle_file_viewer_input(&mut self, button: &Button, _vfs: &dyn Vfs) -> AppAction {
+        match button {
+            Button::Cancel => {
+                self.content.viewing_file = None;
+                self.content.scroll = 0;
+                self.content.cursor = 0;
+                let p = &self.panels[self.active_panel];
+                self.content.browse_dir = Some(p.browse_dir.clone());
+                self.content.lines = p.lines.clone();
+                AppAction::None
+            },
+            Button::Up => {
+                self.content.navigate_up();
+                AppAction::None
+            },
+            Button::Down => {
+                self.content.navigate_down();
+                AppAction::None
+            },
+            _ => AppAction::None,
+        }
+    }
+
+    /// Open a file in the viewer.
+    pub fn open_file(&mut self, vfs: &dyn Vfs, path: &str) {
+        if !vfs.exists(path) {
+            return;
+        }
+        self.content.viewing_file = Some(path.to_string());
+        self.content.scroll = 0;
+        self.content.cursor = 0;
+
+        let data = match vfs.read(path) {
+            Ok(d) => d,
+            Err(e) => {
+                self.content.lines = vec![
+                    format!("Error reading file: {e}"),
+                    "Cancel=back".to_string(),
+                ];
+                return;
+            },
+        };
+
+        self.content.lines = view_generic_file(path, &data);
+    }
+
+    /// Draw dual-panel layout to backend (windowed mode).
+    #[allow(clippy::too_many_arguments)]
+    fn draw_windowed_dual(
+        &self,
+        cx: i32,
+        cy: i32,
+        cw: u32,
+        ch: u32,
+        backend: &mut dyn SdiBackend,
+        at: &ActiveTheme,
+    ) -> crate::error::Result<()> {
+        let half_w = (cw / 2).saturating_sub(1);
+        let divider_x = cx + half_w as i32;
+
+        // Title bar.
+        let title = format!(
+            "File Manager  [L: {}]  [R: {}]",
+            self.panels[0].browse_dir, self.panels[1].browse_dir,
+        );
+        backend.draw_text(&title, cx + 4, cy + 2, 12, at.app_title_bar_text)?;
+        backend.fill_rect(
+            cx,
+            cy + at.app_title_bar_height as i32 - 4,
+            cw,
+            1,
+            at.app_divider,
+        )?;
+
+        // Vertical divider.
+        let title_h = at.app_title_bar_height as i32;
+        let content_y = cy + title_h;
+        let content_h = ch.saturating_sub(title_h as u32 + 14);
+        backend.fill_rect(divider_x, content_y, 1, content_h, at.app_divider)?;
+
+        // Draw each panel.
+        let line_h = at.terminal_line_height.max(12) as i32;
+        let max_lines = ((content_h as i32) / line_h).max(0) as usize;
+        for (pi, panel) in self.panels.iter().enumerate() {
+            let px = if pi == 0 { cx } else { divider_x + 1 };
+            let pw = if pi == 0 { half_w } else { cw - half_w - 1 };
+            let is_active = pi == self.active_panel;
+
+            if is_active {
+                backend.fill_rect(px, content_y, pw, 1, at.app_selected_text)?;
+            }
+
+            let visible = panel
+                .lines
+                .len()
+                .saturating_sub(panel.scroll)
+                .min(max_lines);
+            for i in 0..visible {
+                let line_idx = panel.scroll + i;
+                let line = &panel.lines[line_idx];
+                let prefix = if is_active && i == panel.cursor {
+                    "> "
+                } else {
+                    "  "
+                };
+                let max_chars = (pw as usize / 8).saturating_sub(2);
+                let display = if line.len() > max_chars {
+                    &line[..line.floor_char_boundary(max_chars)]
+                } else {
+                    line.as_str()
+                };
+                let text = format!("{prefix}{display}");
+                let text_color = if is_active && i == panel.cursor {
+                    at.app_selected_text
+                } else {
+                    at.app_text
+                };
+                let y = content_y + 2 + i as i32 * line_h;
+                backend.draw_text(&text, px + 2, y, 12, text_color)?;
+            }
+        }
+
+        let scroll_y = cy + ch as i32 - 14;
+        backend.draw_text(
+            "L/R=panel  Cancel=back",
+            cx + 4,
+            scroll_y,
+            10,
+            at.app_dim_text,
+        )?;
+
+        Ok(())
+    }
+
+    /// Render dual-panel to SDI objects.
+    fn update_sdi_dual(&self, sdi: &mut SdiRegistry, at: &ActiveTheme) {
+        // Title with both panel paths.
+        if let Ok(obj) = sdi.get_mut("app_title_text") {
+            obj.text = Some(format!(
+                "File Manager  [L: {}]  [R: {}]",
+                self.panels[0].browse_dir, self.panels[1].browse_dir,
+            ));
+            obj.x = 8;
+            obj.y = 4;
+            obj.font_size = at.font_body;
+            obj.text_color = at.app_title_bar_text;
+            obj.w = 0;
+            obj.h = 0;
+            obj.visible = true;
+            obj.z = 102;
+        }
+
+        // Responsive dual-panel geometry.
+        let title_h = at.app_title_bar_height;
+        let content_y = (title_h + 4) as i32;
+        let half_w = at.screen_w / 2;
+        let panel_pad = 8u32;
+        let divider_x = half_w as i32;
+        let left_x = 8i32;
+        let left_w = half_w - panel_pad - left_x as u32;
+        let right_x = divider_x + panel_pad as i32;
+        let right_w = at.screen_w - right_x as u32 - panel_pad;
+        let divider_h = at.screen_h - title_h - at.statusbar_height - at.bottombar_height;
+        let usable_h = at.screen_h - title_h - at.statusbar_height - at.bottombar_height - 14;
+        let panel_visible = (usable_h / at.terminal_line_height.max(1)).max(1) as usize;
+
+        // Vertical divider.
+        if !sdi.contains("app_divider") {
+            sdi.create("app_divider");
+        }
+        if let Ok(obj) = sdi.get_mut("app_divider") {
+            obj.x = divider_x;
+            obj.y = content_y - 2;
+            obj.w = 1;
+            obj.h = divider_h;
+            obj.color = at.app_divider;
+            obj.visible = true;
+            obj.z = 102;
+        }
+
+        // Left panel lines.
+        let lp_rects = flex::vertical_list(
+            left_x,
+            content_y,
+            left_w,
+            at.terminal_line_height,
+            0,
+            panel_visible,
+        );
+        for (i, rect) in lp_rects.iter().enumerate() {
+            let name = format!("app_lp_line_{i}");
+            if !sdi.contains(&name) {
+                sdi.create(&name);
+            }
+            if let Ok(obj) = sdi.get_mut(&name) {
+                let p = &self.panels[0];
+                let line_idx = p.scroll + i;
+                let is_active = self.active_panel == 0;
+                if line_idx < p.lines.len() {
+                    obj.text = Some(p.lines[line_idx].clone());
+                    obj.visible = true;
+                } else {
+                    obj.text = None;
+                    obj.visible = false;
+                }
+                obj.x = rect.x + 6;
+                obj.y = rect.y;
+                obj.font_size = at.font_body;
+                obj.text_color = if is_active && i == p.cursor {
+                    at.app_selected_text
+                } else {
+                    at.app_text
+                };
+                obj.w = 0;
+                obj.h = 0;
+                obj.z = 102;
+            }
+        }
+
+        // Right panel lines.
+        let rp_rects = flex::vertical_list(
+            right_x,
+            content_y,
+            right_w,
+            at.terminal_line_height,
+            0,
+            panel_visible,
+        );
+        for (i, rect) in rp_rects.iter().enumerate() {
+            let name = format!("app_rp_line_{i}");
+            if !sdi.contains(&name) {
+                sdi.create(&name);
+            }
+            if let Ok(obj) = sdi.get_mut(&name) {
+                let p = &self.panels[1];
+                let line_idx = p.scroll + i;
+                let is_active = self.active_panel == 1;
+                if line_idx < p.lines.len() {
+                    obj.text = Some(p.lines[line_idx].clone());
+                    obj.visible = true;
+                } else {
+                    obj.text = None;
+                    obj.visible = false;
+                }
+                obj.x = rect.x + 6;
+                obj.y = rect.y;
+                obj.font_size = at.font_body;
+                obj.text_color = if is_active && i == p.cursor {
+                    at.app_selected_text
+                } else {
+                    at.app_text
+                };
+                obj.w = 0;
+                obj.h = 0;
+                obj.z = 102;
+            }
+        }
+
+        // Scroll indicator.
+        if !sdi.contains("app_scroll") {
+            sdi.create("app_scroll");
+        }
+        if let Ok(obj) = sdi.get_mut("app_scroll") {
+            obj.text = Some("L/R=panel  Cancel=back".to_string());
+            obj.x = 8;
+            obj.y = at.screen_h as i32 - 14;
+            obj.font_size = at.font_hint;
+            obj.text_color = at.app_dim_text;
+            obj.w = 0;
+            obj.h = 0;
+            obj.visible = true;
+            obj.z = 102;
+        }
+
+        // Hide single-panel lines.
+        for i in 0..100 {
+            let name = format!("app_line_{i}");
+            if !sdi.contains(&name) {
+                break;
+            }
+            if let Ok(obj) = sdi.get_mut(&name) {
+                obj.visible = false;
+            }
+        }
+    }
+}
+
+impl App for FileManagerApp {
+    fn title(&self) -> &str {
+        &self.content.title
+    }
+
+    fn path(&self) -> &str {
+        &self.content.app_path
+    }
+
+    fn handle_input(&mut self, button: &Button, vfs: &dyn Vfs) -> AppAction {
+        if self.content.viewing_file.is_some() {
+            return self.handle_file_viewer_input(button, vfs);
+        }
+        self.handle_dual_panel_input(button, vfs)
+    }
+
+    fn update_sdi(&mut self, sdi: &mut SdiRegistry, at: &ActiveTheme) {
+        self.content.update_layout(at);
+
+        // Dual-panel rendering.
+        if self.content.viewing_file.is_none() {
+            // Common app chrome (bg, title bar).
+            render_app_chrome(sdi, at);
+            if !sdi.contains("app_title_text") {
+                sdi.create("app_title_text");
+            }
+            self.update_sdi_dual(sdi, at);
+            return;
+        }
+
+        // File viewer mode: use generic content rendering.
+        render_app_chrome(sdi, at);
+        if !sdi.contains("app_title_text") {
+            sdi.create("app_title_text");
+        }
+        render_content_sdi(&self.content, sdi, at);
+    }
+
+    fn draw_windowed(
+        &self,
+        cx: i32,
+        cy: i32,
+        cw: u32,
+        ch: u32,
+        backend: &mut dyn SdiBackend,
+        at: &ActiveTheme,
+    ) -> crate::error::Result<()> {
+        backend.fill_rect(cx, cy, cw, ch, at.app_bg)?;
+
+        if self.content.viewing_file.is_none() {
+            return self.draw_windowed_dual(cx, cy, cw, ch, backend, at);
+        }
+
+        // File viewer: generic content rendering.
+        draw_content_windowed(&self.content, cx, cy, cw, ch, backend, at)
+    }
+
+    fn hide_sdi(&self, sdi: &mut SdiRegistry) {
+        hide_app_sdi(sdi);
+    }
+
+    fn lines(&self) -> &[String] {
+        &self.content.lines
+    }
+
+    fn browse_dir(&self) -> Option<&str> {
+        self.content.browse_dir.as_deref()
+    }
+
+    fn viewing_file(&self) -> Option<&str> {
+        self.content.viewing_file.as_deref()
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn as_any_mut(&mut self) -> &mut dyn Any {
+        self
+    }
+}
+
+// ---------------------------------------------------------------
+// Generic content rendering helpers (shared across apps)
+// ---------------------------------------------------------------
+
+/// Render the common app chrome (background, title bar) to SDI.
+pub fn render_app_chrome(sdi: &mut SdiRegistry, at: &ActiveTheme) {
+    if !sdi.contains("app_bg") {
+        sdi.create("app_bg");
+    }
+    if let Ok(obj) = sdi.get_mut("app_bg") {
+        obj.x = 0;
+        obj.y = 0;
+        obj.w = at.screen_w;
+        obj.h = at.screen_h;
+        obj.color = at.app_bg;
+        obj.visible = true;
+        obj.z = 100;
+    }
+
+    if !sdi.contains("app_title_bg") {
+        sdi.create("app_title_bg");
+    }
+    if let Ok(obj) = sdi.get_mut("app_title_bg") {
+        obj.x = 0;
+        obj.y = 0;
+        obj.w = at.screen_w;
+        obj.h = at.app_title_bar_height;
+        obj.color = at.app_title_bar_bg;
+        obj.gradient_top = at.app_title_bar_gradient_top;
+        obj.gradient_bottom = at.app_title_bar_gradient_bottom;
+        obj.shadow_level = Some(1);
+        obj.visible = true;
+        obj.z = 101;
+    }
+}
+
+/// Render generic content (title, lines, scroll indicator, selection) to SDI.
+pub fn render_content_sdi(content: &ContentState, sdi: &mut SdiRegistry, at: &ActiveTheme) {
+    // Title text.
+    if !sdi.contains("app_title_text") {
+        sdi.create("app_title_text");
+    }
+    if let Ok(obj) = sdi.get_mut("app_title_text") {
+        let dir_suffix = if let Some(ref file) = content.viewing_file {
+            format!("  [{file}]")
+        } else {
+            content
+                .browse_dir
+                .as_deref()
+                .map(|d| format!("  [{d}]"))
+                .unwrap_or_default()
+        };
+        obj.text = Some(format!("{}{dir_suffix}", content.title));
+        obj.x = 8;
+        obj.y = 4;
+        obj.font_size = at.font_body;
+        obj.text_color = at.app_title_bar_text;
+        obj.w = 0;
+        obj.h = 0;
+        obj.visible = true;
+        obj.z = 102;
+        if at.app_title_bar_text_shadow {
+            obj.text_shadow_offset = Some((1, 1));
+            obj.text_shadow_color = Some(at.app_title_bar_text_shadow_color);
+        } else {
+            obj.text_shadow_offset = None;
+            obj.text_shadow_color = None;
+        }
+    }
+
+    // Content lines.
+    let app_layout = AppLayout::compute(at, 14);
+    let line_rects = flex::vertical_list(
+        app_layout.content_x,
+        app_layout.content_y,
+        app_layout.content_w,
+        app_layout.line_h,
+        0,
+        app_layout.max_visible,
+    );
+
+    // Selection highlight.
+    if !sdi.contains("app_sel_bg") {
+        sdi.create("app_sel_bg");
+    }
+    let sel_y = app_layout.content_y + (content.visual_selected * app_layout.line_h as f32) as i32;
+    if let Ok(obj) = sdi.get_mut("app_sel_bg") {
+        obj.x = app_layout.content_x;
+        obj.y = sel_y;
+        obj.w = app_layout.content_w;
+        obj.h = at.terminal_line_height;
+        obj.color = at.app_selected_bg;
+        obj.border_radius = Some(at.app_selection_border_radius);
+        obj.visible = !content.lines.is_empty();
+        obj.z = 101;
+    }
+
+    // Selection accent bar.
+    if !sdi.contains("app_sel_accent") {
+        sdi.create("app_sel_accent");
+    }
+    if let Ok(obj) = sdi.get_mut("app_sel_accent") {
+        obj.x = app_layout.content_x;
+        obj.y = sel_y;
+        obj.w = 3;
+        obj.h = at.terminal_line_height;
+        obj.color = at.app_selection_accent_color;
+        obj.border_radius = Some(at.app_selection_border_radius);
+        obj.visible = !content.lines.is_empty();
+        obj.z = 102;
+    }
+
+    for (i, rect) in line_rects.iter().enumerate() {
+        let name = format!("app_line_{i}");
+        if !sdi.contains(&name) {
+            sdi.create(&name);
+        }
+        if let Ok(obj) = sdi.get_mut(&name) {
+            let line_idx = content.scroll + i;
+            if line_idx < content.lines.len() {
+                obj.text = Some(content.lines[line_idx].clone());
+                obj.visible = true;
+            } else {
+                obj.text = None;
+                obj.visible = false;
+            }
+            obj.x = rect.x + 6;
+            obj.y = rect.y;
+            obj.font_size = at.font_body;
+            obj.text_color = if i == content.cursor {
+                at.app_selected_text
+            } else {
+                at.app_text
+            };
+            obj.w = 0;
+            obj.h = 0;
+            obj.z = 102;
+        }
+    }
+
+    // Scroll indicator.
+    if !sdi.contains("app_scroll") {
+        sdi.create("app_scroll");
+    }
+    if let Ok(obj) = sdi.get_mut("app_scroll") {
+        if content.lines.len() > app_layout.max_visible {
+            obj.text = Some(format!(
+                "[{}/{}]  Cancel=back",
+                content.scroll + 1,
+                content.lines.len().saturating_sub(app_layout.max_visible) + 1,
+            ));
+        } else {
+            obj.text = Some("Cancel=back".to_string());
+        }
+        obj.x = 8;
+        obj.y = at.screen_h as i32 - 14;
+        obj.font_size = at.font_hint;
+        obj.text_color = at.app_dim_text;
+        obj.w = 0;
+        obj.h = 0;
+        obj.visible = true;
+        obj.z = 102;
+    }
+}
+
+/// Draw generic content to a windowed region.
+pub fn draw_content_windowed(
+    content: &ContentState,
+    cx: i32,
+    cy: i32,
+    cw: u32,
+    ch: u32,
+    backend: &mut dyn SdiBackend,
+    at: &ActiveTheme,
+) -> crate::error::Result<()> {
+    // Title row.
+    let dir_suffix = if let Some(ref file) = content.viewing_file {
+        format!("  [{file}]")
+    } else {
+        content
+            .browse_dir
+            .as_deref()
+            .map(|d| format!("  [{d}]"))
+            .unwrap_or_default()
+    };
+    let title_text = format!("{}{dir_suffix}", content.title);
+    backend.draw_text(&title_text, cx + 4, cy + 2, 12, at.app_title_bar_text)?;
+
+    // Separator.
+    backend.fill_rect(
+        cx,
+        cy + at.app_title_bar_height as i32 - 4,
+        cw,
+        1,
+        at.app_divider,
+    )?;
+
+    // Content lines.
+    let line_h = at.terminal_line_height.max(12) as i32;
+    let max_lines = ((ch as i32 - line_h - 4) / line_h).max(0) as usize;
+    let visible = content
+        .lines
+        .len()
+        .saturating_sub(content.scroll)
+        .min(max_lines);
+    for i in 0..visible {
+        let line_idx = content.scroll + i;
+        let line = &content.lines[line_idx];
+        let prefix = if i == content.cursor { "> " } else { "  " };
+        let text = format!("{prefix}{line}");
+        let text_color = if i == content.cursor {
+            at.app_selected_text
+        } else {
+            at.app_text
+        };
+        let y = cy + at.app_title_bar_height as i32 + i as i32 * line_h;
+        backend.draw_text(&text, cx + 4, y, 12, text_color)?;
+    }
+
+    // Scroll indicator.
+    let scroll_text = if content.lines.len() > max_lines {
+        format!(
+            "[{}/{}]  Cancel=back",
+            content.scroll + 1,
+            content.lines.len().saturating_sub(max_lines) + 1,
+        )
+    } else {
+        "Cancel=back".to_string()
+    };
+    let scroll_y = cy + ch as i32 - 14;
+    backend.draw_text(&scroll_text, cx + 4, scroll_y, 10, at.app_dim_text)?;
+
+    Ok(())
+}
+
+/// Hide all app-related SDI objects.
+pub fn hide_app_sdi(sdi: &mut SdiRegistry) {
+    let fixed = [
+        "app_bg",
+        "app_title_bg",
+        "app_title_text",
+        "app_scroll",
+        "app_divider",
+        "app_sel_bg",
+        "app_sel_accent",
+    ];
+    for name in &fixed {
+        if let Ok(obj) = sdi.get_mut(name) {
+            obj.visible = false;
+        }
+    }
+    for i in 0..100 {
+        let name = format!("app_line_{i}");
+        if !sdi.contains(&name) {
+            break;
+        }
+        if let Ok(obj) = sdi.get_mut(&name) {
+            obj.visible = false;
+        }
+    }
+    for i in 0..100 {
+        let lp = format!("app_lp_line_{i}");
+        if !sdi.contains(&lp) {
+            break;
+        }
+        let rp = format!("app_rp_line_{i}");
+        if let Ok(obj) = sdi.get_mut(&lp) {
+            obj.visible = false;
+        }
+        if let Ok(obj) = sdi.get_mut(&rp) {
+            obj.visible = false;
+        }
+    }
+
+    // Hide TV Guide objects.
+    super::tv_guide::guide::TvGuideState::hide_sdi(sdi);
+}
+
+// ---------------------------------------------------------------
+// Path and directory helpers
+// ---------------------------------------------------------------
+
+/// Get parent directory of a path.
+pub fn parent_dir(path: &str) -> String {
+    if path == "/" {
+        "/".to_string()
+    } else {
+        let trimmed = path.trim_end_matches('/');
+        match trimmed.rfind('/') {
+            Some(0) => "/".to_string(),
+            Some(pos) => trimmed[..pos].to_string(),
+            None => "/".to_string(),
+        }
+    }
+}
+
+/// Join a directory and a name with proper path separator.
+pub fn join_path(dir: &str, name: &str) -> String {
+    if dir == "/" {
+        format!("/{name}")
+    } else {
+        format!("{dir}/{name}")
+    }
+}
+
+/// List a VFS directory, returning display lines.
+pub fn list_directory(vfs: &dyn Vfs, path: &str) -> Vec<String> {
+    let mut lines = Vec::new();
+
+    if path != "/" {
+        lines.push("..".to_string());
+    }
+
+    match vfs.readdir(path) {
+        Ok(entries) => {
+            let mut dirs: Vec<_> = entries
+                .iter()
+                .filter(|e| e.kind == EntryKind::Directory)
+                .collect();
+            let mut files: Vec<_> = entries
+                .iter()
+                .filter(|e| e.kind == EntryKind::File)
+                .collect();
+            dirs.sort_by(|a, b| a.name.cmp(&b.name));
+            files.sort_by(|a, b| a.name.cmp(&b.name));
+
+            for d in &dirs {
+                lines.push(format!("{}/", d.name));
+            }
+            for f in &files {
+                let size = f.size;
+                if size >= 1024 {
+                    lines.push(format!("{}  ({} KB)", f.name, size / 1024));
+                } else {
+                    lines.push(format!("{}  ({size} B)", f.name));
+                }
+            }
+
+            if dirs.is_empty() && files.is_empty() {
+                lines.push("(empty directory)".to_string());
+            }
+        },
+        Err(e) => {
+            lines.push(format!("Error reading directory: {e}"));
+        },
+    }
+
+    lines
+}
+
+// ---------------------------------------------------------------
+// File viewer helpers
+// ---------------------------------------------------------------
+
+/// View an audio file: parse headers and show track metadata.
+pub fn view_audio_file(path: &str, data: &[u8]) -> Vec<String> {
+    let filename = path.rsplit('/').next().unwrap_or(path);
+    let mut lines = vec![format!("=== Now Viewing: {filename} ==="), String::new()];
+
+    let size_kb = data.len() / 1024;
+    let ext = filename.rsplit('.').next().unwrap_or("").to_lowercase();
+
+    if data.len() >= 4 && &data[..4] == b"RIFF" && data.len() >= 44 && &data[8..12] == b"WAVE" {
+        let channels = u16::from_le_bytes([data[22], data[23]]);
+        let sample_rate = u32::from_le_bytes([data[24], data[25], data[26], data[27]]);
+        let bits = u16::from_le_bytes([data[34], data[35]]);
+        let data_size = if data.len() >= 44 {
+            u32::from_le_bytes([data[40], data[41], data[42], data[43]])
+        } else {
+            0
+        };
+        let duration_secs = if sample_rate > 0 && channels > 0 && bits > 0 {
+            data_size as f64 / (sample_rate as f64 * channels as f64 * (bits as f64 / 8.0))
+        } else {
+            0.0
+        };
+
+        lines.push("  Format:       WAV (PCM audio)".to_string());
+        lines.push(format!("  Sample Rate:  {sample_rate} Hz"));
+        lines.push(format!("  Channels:     {channels}"));
+        lines.push(format!("  Bit Depth:    {bits}-bit"));
+        lines.push(format!("  Duration:     {duration_secs:.1}s"));
+        lines.push(format!("  File Size:    {size_kb} KB"));
+    } else if data.len() >= 3 && (data[..2] == [0xFF, 0xFB] || data[..3] == *b"ID3") {
+        lines.push("  Format:       MP3 (MPEG audio)".to_string());
+        lines.push(format!("  File Size:    {size_kb} KB"));
+
+        if data.len() > 10 && &data[..3] == b"ID3" {
+            let id3_info = parse_id3v2_basic(data);
+            if let Some(title) = id3_info.0 {
+                lines.push(format!("  Title:        {title}"));
+            }
+            if let Some(artist) = id3_info.1 {
+                lines.push(format!("  Artist:       {artist}"));
+            }
+        }
+
+        let est_secs = (data.len() as f64) / (128.0 * 1024.0 / 8.0);
+        lines.push(format!("  Duration:     ~{est_secs:.0}s (estimated)"));
+    } else {
+        lines.push(format!("  Format:       {ext} audio"));
+        lines.push(format!("  File Size:    {size_kb} KB"));
+    }
+
+    lines.push(String::new());
+    lines.push("----------------------------------".to_string());
+    lines.push(String::new());
+    lines.push("  To play in terminal:".to_string());
+    lines.push("    music play".to_string());
+    lines.push("    music pause / music stop".to_string());
+    lines.push("    music vol <0-100>".to_string());
+    lines.push(String::new());
+    lines.push("Cancel=back to library".to_string());
+    lines
+}
+
+/// Try to extract title and artist from an ID3v2 tag.
+fn parse_id3v2_basic(data: &[u8]) -> (Option<String>, Option<String>) {
+    if data.len() < 10 || &data[..3] != b"ID3" {
+        return (None, None);
+    }
+    let header_size = ((data[6] as usize & 0x7F) << 21)
+        | ((data[7] as usize & 0x7F) << 14)
+        | ((data[8] as usize & 0x7F) << 7)
+        | (data[9] as usize & 0x7F);
+    let end = (10 + header_size).min(data.len());
+
+    let mut title = None;
+    let mut artist = None;
+    let mut pos = 10;
+
+    while pos + 10 < end {
+        let frame_id = &data[pos..pos + 4];
+        let frame_size =
+            u32::from_be_bytes([data[pos + 4], data[pos + 5], data[pos + 6], data[pos + 7]])
+                as usize;
+        if frame_size == 0 || pos + 10 + frame_size > end {
+            break;
+        }
+        let frame_data = &data[pos + 10..pos + 10 + frame_size];
+        let text = if frame_data.len() > 1 {
+            String::from_utf8_lossy(&frame_data[1..])
+                .trim_matches('\0')
+                .to_string()
+        } else {
+            String::new()
+        };
+
+        if frame_id == b"TIT2" && !text.is_empty() {
+            title = Some(text);
+        } else if frame_id == b"TPE1" && !text.is_empty() {
+            artist = Some(text);
+        }
+
+        pos += 10 + frame_size;
+    }
+
+    (title, artist)
+}
+
+/// View an image file: parse headers and show image metadata.
+pub fn view_image_file(path: &str, data: &[u8]) -> Vec<String> {
+    let filename = path.rsplit('/').next().unwrap_or(path);
+    let mut lines = vec![format!("=== Photo: {filename} ==="), String::new()];
+
+    let size_kb = data.len() / 1024;
+
+    if data.len() >= 24 && &data[..8] == b"\x89PNG\r\n\x1a\n" {
+        let w = u32::from_be_bytes([data[16], data[17], data[18], data[19]]);
+        let h = u32::from_be_bytes([data[20], data[21], data[22], data[23]]);
+        let bit_depth = data[24];
+        let color_type = data[25];
+        let color_name = match color_type {
+            0 => "Grayscale",
+            2 => "RGB",
+            3 => "Indexed",
+            4 => "Grayscale+Alpha",
+            6 => "RGBA",
+            _ => "Unknown",
+        };
+        lines.push("  Format:       PNG".to_string());
+        lines.push(format!("  Dimensions:   {w} x {h} pixels"));
+        lines.push(format!("  Color:        {color_name} ({bit_depth}-bit)"));
+        lines.push(format!("  File Size:    {size_kb} KB"));
+    } else if data.len() >= 2 && data[..2] == [0xFF, 0xD8] {
+        let (w, h) = parse_jpeg_dimensions(data);
+        lines.push("  Format:       JPEG".to_string());
+        if w > 0 && h > 0 {
+            lines.push(format!("  Dimensions:   {w} x {h} pixels"));
+        }
+        lines.push(format!("  File Size:    {size_kb} KB"));
+    } else if data.len() >= 6 && &data[..4] == b"GIF8" {
+        let w = u16::from_le_bytes([data[6], data[7]]);
+        let h = u16::from_le_bytes([data[8], data[9]]);
+        lines.push("  Format:       GIF".to_string());
+        lines.push(format!("  Dimensions:   {w} x {h} pixels"));
+        lines.push(format!("  File Size:    {size_kb} KB"));
+    } else if data.len() >= 12 && &data[..4] == b"RIFF" && &data[8..12] == b"WEBP" {
+        lines.push("  Format:       WebP".to_string());
+        lines.push(format!("  File Size:    {size_kb} KB"));
+    } else {
+        let ext = filename.rsplit('.').next().unwrap_or("").to_lowercase();
+        lines.push(format!("  Format:       {ext} image"));
+        lines.push(format!("  File Size:    {size_kb} KB"));
+    }
+
+    lines.push(String::new());
+    lines.push("----------------------------------".to_string());
+    lines.push(String::new());
+    lines.push("  (Image preview not available".to_string());
+    lines.push("   in text mode)".to_string());
+    lines.push(String::new());
+    lines.push("Cancel=back to gallery".to_string());
+    lines
+}
+
+/// Try to extract JPEG image dimensions from SOF markers.
+fn parse_jpeg_dimensions(data: &[u8]) -> (u16, u16) {
+    let mut pos = 2;
+    while pos + 4 < data.len() {
+        if data[pos] != 0xFF {
+            break;
+        }
+        let marker = data[pos + 1];
+        if (0xC0..=0xC3).contains(&marker) && pos + 9 < data.len() {
+            let h = u16::from_be_bytes([data[pos + 5], data[pos + 6]]);
+            let w = u16::from_be_bytes([data[pos + 7], data[pos + 8]]);
+            return (w, h);
+        }
+        if marker == 0xD9 || marker == 0xDA {
+            break;
+        }
+        let seg_len = u16::from_be_bytes([data[pos + 2], data[pos + 3]]) as usize;
+        pos += 2 + seg_len;
+    }
+    (0, 0)
+}
+
+/// Generic file viewer: text content or hex dump.
+pub fn view_generic_file(path: &str, data: &[u8]) -> Vec<String> {
+    let filename = path.rsplit('/').next().unwrap_or(path);
+    let mut lines = vec![format!("--- {filename} ---"), String::new()];
+
+    let is_text = data.len() < 64 * 1024 && std::str::from_utf8(data).is_ok();
+    if is_text {
+        let text = String::from_utf8_lossy(data);
+        for line in text.lines() {
+            lines.push(line.to_string());
+        }
+        if data.is_empty() {
+            lines.push("(empty file)".to_string());
+        }
+    } else {
+        lines.push(format!("Binary file  ({} bytes)", data.len()));
+        lines.push(String::new());
+        for (i, chunk) in data.chunks(16).enumerate().take(8) {
+            let hex: Vec<String> = chunk.iter().map(|b| format!("{b:02x}")).collect();
+            let ascii: String = chunk
+                .iter()
+                .map(|&b| {
+                    if (0x20..=0x7e).contains(&b) {
+                        b as char
+                    } else {
+                        '.'
+                    }
+                })
+                .collect();
+            lines.push(format!("{:04x}  {:<48}  {ascii}", i * 16, hex.join(" ")));
+        }
+        if data.len() > 128 {
+            lines.push(format!("... ({} more bytes)", data.len() - 128));
+        }
+    }
+
+    lines.push(String::new());
+    lines.push("Cancel=back".to_string());
+    lines
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::vfs::MemoryVfs;
+
+    fn setup_vfs() -> MemoryVfs {
+        use crate::vfs::Vfs;
+        let mut vfs = MemoryVfs::new();
+        vfs.mkdir("/home").unwrap();
+        vfs.mkdir("/home/user").unwrap();
+        vfs.mkdir("/home/user/music").unwrap();
+        vfs.mkdir("/home/user/photos").unwrap();
+        vfs.mkdir("/etc").unwrap();
+        vfs.mkdir("/tmp").unwrap();
+        vfs.write("/home/user/readme.txt", b"Hello!").unwrap();
+        vfs.write("/etc/hostname", b"oasis").unwrap();
+        vfs
+    }
+
+    #[test]
+    fn parent_dir_root() {
+        assert_eq!(parent_dir("/"), "/");
+    }
+
+    #[test]
+    fn parent_dir_one_level() {
+        assert_eq!(parent_dir("/home"), "/");
+    }
+
+    #[test]
+    fn parent_dir_two_levels() {
+        assert_eq!(parent_dir("/home/user"), "/home");
+    }
+
+    #[test]
+    fn join_path_root() {
+        assert_eq!(join_path("/", "home"), "/home");
+    }
+
+    #[test]
+    fn join_path_nested() {
+        assert_eq!(join_path("/home", "user"), "/home/user");
+    }
+
+    #[test]
+    fn list_directory_root_no_dotdot() {
+        let vfs = setup_vfs();
+        let lines = list_directory(&vfs, "/");
+        assert!(!lines.iter().any(|l| l == ".."));
+        assert!(lines.iter().any(|l| l.starts_with("home")));
+    }
+
+    #[test]
+    fn list_directory_subdir_has_dotdot() {
+        let vfs = setup_vfs();
+        let lines = list_directory(&vfs, "/home");
+        assert!(lines.iter().any(|l| l == ".."));
+    }
+
+    #[test]
+    fn list_directory_shows_sizes() {
+        let vfs = setup_vfs();
+        let lines = list_directory(&vfs, "/home/user");
+        assert!(
+            lines
+                .iter()
+                .any(|l| l.contains("readme.txt") && l.contains("6 B"))
+        );
+    }
+
+    #[test]
+    fn file_manager_launch() {
+        let vfs = setup_vfs();
+        let fm = FileManagerApp::new("/apps/fm", &vfs);
+        assert_eq!(fm.title(), "File Manager");
+        assert!(fm.browse_dir().is_some());
+        assert!(!fm.lines().is_empty());
+        assert!(fm.lines().iter().any(|l| l.contains("home")));
+    }
+
+    #[test]
+    fn file_manager_navigate_down() {
+        let vfs = setup_vfs();
+        let mut fm = FileManagerApp::new("/apps/fm", &vfs);
+        assert_eq!(fm.panels[0].cursor, 0);
+        fm.handle_input(&Button::Down, &vfs);
+        assert_eq!(fm.panels[0].cursor, 1);
+    }
+
+    #[test]
+    fn file_manager_switch_panel() {
+        let vfs = setup_vfs();
+        let mut fm = FileManagerApp::new("/apps/fm", &vfs);
+        assert_eq!(fm.active_panel, 0);
+        fm.handle_input(&Button::Right, &vfs);
+        assert_eq!(fm.active_panel, 1);
+        fm.handle_input(&Button::Left, &vfs);
+        assert_eq!(fm.active_panel, 0);
+    }
+
+    #[test]
+    fn file_manager_enter_directory() {
+        let vfs = setup_vfs();
+        let mut fm = FileManagerApp::new("/apps/fm", &vfs);
+        let home_idx = fm.panels[0]
+            .lines
+            .iter()
+            .position(|l| l.starts_with("home"))
+            .expect("home/ should be in listing");
+        for _ in 0..home_idx {
+            fm.handle_input(&Button::Down, &vfs);
+        }
+        fm.handle_input(&Button::Confirm, &vfs);
+        assert_eq!(fm.panels[0].browse_dir, "/home");
+    }
+
+    #[test]
+    fn file_manager_cancel_goes_up() {
+        let vfs = setup_vfs();
+        let mut fm = FileManagerApp::new("/apps/fm", &vfs);
+        // Enter /home first.
+        let home_idx = fm.panels[0]
+            .lines
+            .iter()
+            .position(|l| l.starts_with("home"))
+            .expect("home/ should be in listing");
+        for _ in 0..home_idx {
+            fm.handle_input(&Button::Down, &vfs);
+        }
+        fm.handle_input(&Button::Confirm, &vfs);
+        assert_eq!(fm.panels[0].browse_dir, "/home");
+
+        let action = fm.handle_input(&Button::Cancel, &vfs);
+        assert_eq!(action, AppAction::None);
+        assert_eq!(fm.panels[0].browse_dir, "/");
+    }
+
+    #[test]
+    fn file_manager_cancel_at_root_exits() {
+        let vfs = setup_vfs();
+        let mut fm = FileManagerApp::new("/apps/fm", &vfs);
+        let action = fm.handle_input(&Button::Cancel, &vfs);
+        assert_eq!(action, AppAction::Exit);
+    }
+
+    #[test]
+    fn file_manager_open_file() {
+        let vfs = setup_vfs();
+        let mut fm = FileManagerApp::new("/apps/fm", &vfs);
+        fm.open_file(&vfs, "/home/user/readme.txt");
+        assert!(fm.viewing_file().is_some());
+        assert!(fm.lines().iter().any(|l| l.contains("Hello!")));
+    }
+
+    #[test]
+    fn file_manager_cancel_from_viewer() {
+        let vfs = setup_vfs();
+        let mut fm = FileManagerApp::new("/apps/fm", &vfs);
+        fm.open_file(&vfs, "/home/user/readme.txt");
+        assert!(fm.viewing_file().is_some());
+        let action = fm.handle_input(&Button::Cancel, &vfs);
+        assert_eq!(action, AppAction::None);
+        assert!(fm.viewing_file().is_none());
+    }
+
+    #[test]
+    fn file_manager_open_nonexistent_noop() {
+        let vfs = setup_vfs();
+        let mut fm = FileManagerApp::new("/apps/fm", &vfs);
+        fm.open_file(&vfs, "/does/not/exist.txt");
+        assert!(fm.viewing_file().is_none());
+    }
+
+    #[test]
+    fn view_generic_text_file() {
+        let lines = view_generic_file("/test.txt", b"Hello\nWorld");
+        assert!(lines.iter().any(|l| l.contains("Hello")));
+        assert!(lines.iter().any(|l| l.contains("World")));
+    }
+
+    #[test]
+    fn view_generic_binary_file() {
+        let lines = view_generic_file("/data.bin", &[0x00, 0x01, 0xFF, 0xFE, 0x80]);
+        assert!(lines.iter().any(|l| l.contains("Binary file")));
+    }
+
+    #[test]
+    fn view_audio_wav() {
+        let mut wav = Vec::new();
+        wav.extend_from_slice(b"RIFF");
+        wav.extend_from_slice(&36u32.to_le_bytes());
+        wav.extend_from_slice(b"WAVEfmt ");
+        wav.extend_from_slice(&16u32.to_le_bytes());
+        wav.extend_from_slice(&1u16.to_le_bytes());
+        wav.extend_from_slice(&2u16.to_le_bytes());
+        wav.extend_from_slice(&44100u32.to_le_bytes());
+        wav.extend_from_slice(&176400u32.to_le_bytes());
+        wav.extend_from_slice(&4u16.to_le_bytes());
+        wav.extend_from_slice(&16u16.to_le_bytes());
+        wav.extend_from_slice(b"data");
+        wav.extend_from_slice(&0u32.to_le_bytes());
+
+        let lines = view_audio_file("/music/test.wav", &wav);
+        assert!(lines.iter().any(|l| l.contains("WAV")));
+        assert!(lines.iter().any(|l| l.contains("44100")));
+    }
+
+    #[test]
+    fn view_audio_mp3() {
+        let data = vec![0xFF, 0xFB, 0x90, 0x00, 0x00];
+        let lines = view_audio_file("/music/song.mp3", &data);
+        assert!(lines.iter().any(|l| l.contains("MP3")));
+    }
+
+    #[test]
+    fn view_image_png() {
+        let mut png = Vec::new();
+        png.extend_from_slice(b"\x89PNG\r\n\x1a\n");
+        png.extend_from_slice(&13u32.to_be_bytes());
+        png.extend_from_slice(b"IHDR");
+        png.extend_from_slice(&480u32.to_be_bytes());
+        png.extend_from_slice(&272u32.to_be_bytes());
+        png.push(8);
+        png.push(6);
+        png.extend_from_slice(&[0, 0, 0]);
+
+        let lines = view_image_file("/photos/test.png", &png);
+        assert!(lines.iter().any(|l| l.contains("PNG")));
+        assert!(lines.iter().any(|l| l.contains("480 x 272")));
+        assert!(lines.iter().any(|l| l.contains("RGBA")));
+    }
+
+    #[test]
+    fn view_image_jpeg() {
+        let data = vec![
+            0xFF, 0xD8, 0xFF, 0xC0, 0x00, 0x0B, 0x08, 0x01, 0x10, 0x01, 0xE0, 0x03, 0x01, 0x22,
+            0x00,
+        ];
+        let lines = view_image_file("/photos/pic.jpg", &data);
+        assert!(lines.iter().any(|l| l.contains("JPEG")));
+        assert!(lines.iter().any(|l| l.contains("480 x 272")));
+    }
+}

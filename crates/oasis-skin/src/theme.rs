@@ -102,6 +102,55 @@ pub struct SkinTheme {
     /// Per-element overrides for scrollbar appearance.
     #[serde(default)]
     pub scrollbar_overrides: Option<ScrollbarOverrides>,
+
+    /// Per-app color overrides keyed by app name.
+    ///
+    /// Each entry maps color keys to hex color strings.
+    /// Apps query `ActiveTheme::app_color("app_name", "key")` with
+    /// fallback to their default palette.
+    ///
+    /// ```toml
+    /// [app_themes.tv_guide]
+    /// bg = "#0A1628"
+    /// grid_line = "#1A3A5C"
+    /// ```
+    #[serde(default)]
+    pub app_themes:
+        Option<std::collections::HashMap<String, std::collections::HashMap<String, String>>>,
+
+    /// Named gradient presets reusable across components.
+    ///
+    /// ```toml
+    /// [gradients.primary]
+    /// from = "#0066FF"
+    /// to = "#0044AA"
+    /// ```
+    #[serde(default)]
+    pub gradients: Option<std::collections::HashMap<String, GradientPreset>>,
+
+    /// Named animation timing presets.
+    ///
+    /// ```toml
+    /// [animations.button_press]
+    /// duration_ms = 100
+    /// easing = "ease_out_quad"
+    /// ```
+    #[serde(default)]
+    pub animations: Option<std::collections::HashMap<String, AnimationPreset>>,
+
+    /// Per-widget state color overrides.
+    ///
+    /// ```toml
+    /// [widget_states.button]
+    /// normal_bg = "#505050"
+    /// hover_bg = "#656565"
+    /// pressed_bg = "#353535"
+    /// disabled_bg = "#3A3A3A"
+    /// disabled_text = "#555555"
+    /// ```
+    #[serde(default)]
+    pub widget_states:
+        Option<std::collections::HashMap<String, std::collections::HashMap<String, String>>>,
 }
 
 /// Optional overrides for the window manager theme.
@@ -556,6 +605,55 @@ pub struct BrowserOverrides {
     pub link_color: Option<String>,
 }
 
+/// A reusable gradient preset (two-color linear gradient).
+#[derive(Debug, Clone, Deserialize)]
+pub struct GradientPreset {
+    /// Start color (hex).
+    pub from: String,
+    /// End color (hex).
+    pub to: String,
+}
+
+/// A named animation timing preset.
+#[derive(Debug, Clone, Deserialize)]
+pub struct AnimationPreset {
+    /// Duration in milliseconds.
+    pub duration_ms: u32,
+    /// Easing function name.
+    ///
+    /// Supported: "linear", "ease_in_quad", "ease_out_quad",
+    /// "ease_in_out_quad", "ease_in_cubic", "ease_out_cubic",
+    /// "ease_in_out_cubic".
+    #[serde(default = "default_easing")]
+    pub easing: String,
+}
+
+fn default_easing() -> String {
+    "linear".to_string()
+}
+
+/// Resolve an easing function name to a function pointer.
+///
+/// Supported names: `"linear"`, `"ease_in_quad"`, `"ease_out_quad"`,
+/// `"ease_in_out_quad"`, `"ease_out_cubic"`, `"ease_in_out_cubic"`,
+/// `"ease_out_elastic"`, `"ease_out_bounce"`.
+///
+/// Returns `linear` for unknown names.
+pub fn resolve_easing(name: &str) -> fn(f32) -> f32 {
+    use oasis_ui::animation::easing;
+    match name {
+        "linear" => easing::linear,
+        "ease_in_quad" => easing::ease_in_quad,
+        "ease_out_quad" => easing::ease_out_quad,
+        "ease_in_out_quad" => easing::ease_in_out_quad,
+        "ease_out_cubic" => easing::ease_out_cubic,
+        "ease_in_out_cubic" => easing::ease_in_out_cubic,
+        "ease_out_elastic" => easing::ease_out_elastic,
+        "ease_out_bounce" => easing::ease_out_bounce,
+        _ => easing::linear,
+    }
+}
+
 fn default_bg() -> String {
     "#1A1A2D".to_string()
 }
@@ -612,6 +710,10 @@ impl Default for SkinTheme {
             geometry: None,
             transition: None,
             scrollbar_overrides: None,
+            app_themes: None,
+            gradients: None,
+            animations: None,
+            widget_states: None,
         }
     }
 }
@@ -1116,5 +1218,191 @@ gradient_enabled = true
         let skin = SkinTheme::default();
         let ui = skin.to_ui_theme();
         assert_eq!(ui.accent, skin.primary_color());
+    }
+
+    // -- resolve_easing tests --
+
+    #[test]
+    fn resolve_easing_known_names() {
+        use super::resolve_easing;
+        let linear = resolve_easing("linear");
+        assert!((linear(0.5) - 0.5).abs() < f32::EPSILON);
+
+        let ease_out = resolve_easing("ease_out_quad");
+        assert!(ease_out(0.5) > 0.5);
+
+        let ease_in = resolve_easing("ease_in_quad");
+        assert!(ease_in(0.5) < 0.5);
+    }
+
+    #[test]
+    fn resolve_easing_unknown_returns_linear() {
+        use super::resolve_easing;
+        let f = resolve_easing("unknown_easing");
+        assert!((f(0.5) - 0.5).abs() < f32::EPSILON);
+    }
+
+    // -- GradientPreset / AnimationPreset deserialization tests --
+
+    #[test]
+    fn gradient_preset_deserialize() {
+        let toml = r##"
+[gradients.primary]
+from = "#0066FF"
+to = "#0044AA"
+"##;
+        let skin: SkinTheme = toml::from_str(toml).unwrap();
+        let grads = skin.gradients.unwrap();
+        let g = &grads["primary"];
+        assert_eq!(g.from, "#0066FF");
+        assert_eq!(g.to, "#0044AA");
+    }
+
+    #[test]
+    fn animation_preset_deserialize() {
+        let toml = r##"
+[animations.button_press]
+duration_ms = 100
+easing = "ease_out_quad"
+"##;
+        let skin: SkinTheme = toml::from_str(toml).unwrap();
+        let anims = skin.animations.unwrap();
+        let a = &anims["button_press"];
+        assert_eq!(a.duration_ms, 100);
+        assert_eq!(a.easing, "ease_out_quad");
+    }
+
+    #[test]
+    fn animation_preset_default_easing() {
+        let toml = r##"
+[animations.fast]
+duration_ms = 50
+"##;
+        let skin: SkinTheme = toml::from_str(toml).unwrap();
+        let anims = skin.animations.unwrap();
+        assert_eq!(anims["fast"].easing, "linear");
+    }
+
+    // -- widget_states deserialization tests --
+
+    #[test]
+    fn widget_states_deserialize() {
+        let toml = r##"
+[widget_states.button]
+normal_bg = "#505050"
+hover_bg = "#656565"
+pressed_bg = "#353535"
+"##;
+        let skin: SkinTheme = toml::from_str(toml).unwrap();
+        let states = skin.widget_states.unwrap();
+        let button = &states["button"];
+        assert_eq!(button["hover_bg"], "#656565");
+    }
+
+    // -- Phase 12: expanded SkinTheme tests --
+
+    #[test]
+    fn default_theme_background_is_dark() {
+        let skin = SkinTheme::default();
+        let bg = skin.background_color();
+        assert!(bg.r < 50 && bg.g < 50 && bg.b < 50);
+    }
+
+    #[test]
+    fn default_theme_text_is_green() {
+        let skin = SkinTheme::default();
+        let text = skin.text_color();
+        assert_eq!(text.g, 255);
+    }
+
+    #[test]
+    fn parse_hex_color_three_byte() {
+        assert_eq!(
+            parse_hex_color("#AABBCC"),
+            Some(Color::rgb(0xAA, 0xBB, 0xCC))
+        );
+    }
+
+    #[test]
+    fn parse_hex_color_four_byte() {
+        assert_eq!(
+            parse_hex_color("#AABBCC80"),
+            Some(Color::rgba(0xAA, 0xBB, 0xCC, 0x80))
+        );
+    }
+
+    #[test]
+    fn parse_hex_color_lowercase() {
+        assert_eq!(
+            parse_hex_color("#aabbcc"),
+            Some(Color::rgb(0xAA, 0xBB, 0xCC))
+        );
+    }
+
+    #[test]
+    fn parse_hex_color_missing_hash() {
+        assert_eq!(parse_hex_color("AABBCC"), None);
+    }
+
+    #[test]
+    fn to_ui_theme_surface_derived_from_background() {
+        let skin = SkinTheme::default();
+        let ui = skin.to_ui_theme();
+        // Surface should be lighter than background (derived via lighten).
+        let bg = skin.background_color();
+        assert!(ui.surface.r >= bg.r || ui.surface.g >= bg.g || ui.surface.b >= bg.b);
+    }
+
+    #[test]
+    fn to_ui_theme_border_derived() {
+        let skin = SkinTheme::default();
+        let ui = skin.to_ui_theme();
+        // Border strong should match primary.
+        assert_eq!(ui.border_strong, skin.primary_color());
+    }
+
+    #[test]
+    fn to_ui_theme_font_sizes_are_reasonable() {
+        let skin = SkinTheme::default();
+        let ui = skin.to_ui_theme();
+        assert!(ui.font_size_sm > 0);
+        assert!(ui.font_size_md > 0);
+        assert!(ui.font_size_lg > ui.font_size_sm);
+    }
+
+    #[test]
+    fn bar_overrides_deserialize() {
+        let toml = r##"
+[bar_overrides]
+statusbar_bg = "#112233"
+clock_color = "#FFFFFF"
+"##;
+        let skin: SkinTheme = toml::from_str(toml).unwrap();
+        let bars = skin.bar_overrides.unwrap();
+        assert_eq!(bars.statusbar_bg.as_deref(), Some("#112233"));
+        assert_eq!(bars.clock_color.as_deref(), Some("#FFFFFF"));
+    }
+
+    #[test]
+    fn icon_overrides_deserialize() {
+        let toml = r##"
+[icon_overrides]
+body_color = "#FF0000"
+"##;
+        let skin: SkinTheme = toml::from_str(toml).unwrap();
+        let icons = skin.icon_overrides.unwrap();
+        assert_eq!(icons.body_color.as_deref(), Some("#FF0000"));
+    }
+
+    #[test]
+    fn default_no_overrides() {
+        let skin = SkinTheme::default();
+        assert!(skin.surface.is_none());
+        assert!(skin.accent_hover.is_none());
+        assert!(skin.border_radius.is_none());
+        assert!(skin.shadow_intensity.is_none());
+        assert!(skin.wm_theme.is_none());
+        assert!(skin.bar_overrides.is_none());
+        assert!(skin.icon_overrides.is_none());
     }
 }

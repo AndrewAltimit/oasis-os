@@ -571,18 +571,11 @@ mod tests {
 
     #[test]
     fn draw_all_themes_no_panic() {
-        for theme in [
-            Theme::dark(),
-            Theme::light(),
-            Theme::classic(),
-            Theme::high_contrast(),
-        ] {
-            let mut backend = MockBackend::new();
-            let mut ctx = DrawContext::new(&mut backend, &theme);
+        crate::test_utils::test_draw_all_themes(|ctx| {
             let mut t = Tooltip::new("Theme test");
             t.state = TooltipState::Visible;
-            t.draw(&mut ctx, 0, 0, 80, 16).ok();
-        }
+            t.draw(ctx, 0, 0, 80, 16).ok();
+        });
     }
 
     #[test]

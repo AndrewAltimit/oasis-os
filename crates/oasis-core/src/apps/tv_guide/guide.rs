@@ -21,28 +21,93 @@ const SLOT_DURATION: u64 = 1800;
 /// Number of channel rows visible at once (scrolls if more channels exist).
 const VISIBLE_ROWS: usize = 5;
 
-// --- Retro CRT color palette ---
-const COLOR_BG: Color = Color::rgba(10, 22, 40, 255);
-const COLOR_GRID_LINE: Color = Color::rgba(26, 58, 92, 255);
-const COLOR_HEADER_BG: Color = Color::rgba(12, 25, 50, 255);
-const COLOR_HEADER_DARK: Color = Color::rgba(8, 18, 38, 255);
-const COLOR_TIME_HEADER_BG: Color = Color::rgba(15, 35, 65, 255);
-const COLOR_TIME_HEADER: Color = Color::rgba(0, 204, 255, 255);
-const COLOR_CHANNEL_LABEL: Color = Color::rgba(200, 220, 240, 255);
-const COLOR_PROGRAM_TEXT: Color = Color::rgba(192, 216, 232, 255);
-const COLOR_SELECTED_BG: Color = Color::rgba(255, 140, 0, 220);
-const COLOR_SELECTED_TEXT: Color = Color::rgba(255, 255, 255, 255);
-const COLOR_DIM_TEXT: Color = Color::rgba(100, 130, 160, 255);
-const COLOR_PLAYING_TEXT: Color = Color::rgba(0, 221, 255, 255);
-const COLOR_CELL_BG: Color = Color::rgba(15, 30, 55, 255);
-const COLOR_CELL_BORDER: Color = Color::rgba(26, 58, 92, 255);
-const COLOR_LIVE_BADGE: Color = Color::rgba(220, 40, 40, 255);
-const COLOR_DATE_TEXT: Color = Color::rgba(180, 200, 220, 255);
-const COLOR_FOOTER_BG: Color = Color::rgba(12, 25, 45, 255);
-const COLOR_TIME_LABEL: Color = Color::rgba(255, 160, 0, 255);
-const COLOR_GLOW_BORDER: Color = Color::rgba(60, 130, 200, 255);
-const COLOR_GLOW_OUTER: Color = Color::rgba(30, 70, 130, 180);
-const COLOR_HEADER_TITLE: Color = Color::rgba(220, 240, 255, 255);
+/// TV Guide color palette, populated from the active theme.
+///
+/// Defaults match the original retro CRT aesthetic. Skins can override
+/// any color via `[app_themes.tv_guide]` in theme.toml.
+#[derive(Debug, Clone)]
+pub struct TvGuideColors {
+    pub bg: Color,
+    pub grid_line: Color,
+    pub header_bg: Color,
+    pub header_dark: Color,
+    pub time_header_bg: Color,
+    pub time_header: Color,
+    pub channel_label: Color,
+    pub program_text: Color,
+    pub selected_bg: Color,
+    pub selected_text: Color,
+    pub dim_text: Color,
+    pub playing_text: Color,
+    pub cell_bg: Color,
+    pub cell_border: Color,
+    pub live_badge: Color,
+    pub date_text: Color,
+    pub footer_bg: Color,
+    pub time_label: Color,
+    pub glow_border: Color,
+    pub glow_outer: Color,
+    pub header_title: Color,
+}
+
+impl TvGuideColors {
+    /// Build colors from the active theme, using app_color overrides.
+    pub fn from_theme(at: &ActiveTheme) -> Self {
+        let c = |key: &str, default: Color| -> Color {
+            at.app_color("tv_guide", key).unwrap_or(default)
+        };
+        Self {
+            bg: c("bg", Color::rgba(10, 22, 40, 255)),
+            grid_line: c("grid_line", Color::rgba(26, 58, 92, 255)),
+            header_bg: c("header_bg", Color::rgba(12, 25, 50, 255)),
+            header_dark: c("header_dark", Color::rgba(8, 18, 38, 255)),
+            time_header_bg: c("time_header_bg", Color::rgba(15, 35, 65, 255)),
+            time_header: c("time_header", Color::rgba(0, 204, 255, 255)),
+            channel_label: c("channel_label", Color::rgba(200, 220, 240, 255)),
+            program_text: c("program_text", Color::rgba(192, 216, 232, 255)),
+            selected_bg: c("selected_bg", Color::rgba(255, 140, 0, 220)),
+            selected_text: c("selected_text", Color::rgba(255, 255, 255, 255)),
+            dim_text: c("dim_text", Color::rgba(100, 130, 160, 255)),
+            playing_text: c("playing_text", Color::rgba(0, 221, 255, 255)),
+            cell_bg: c("cell_bg", Color::rgba(15, 30, 55, 255)),
+            cell_border: c("cell_border", Color::rgba(26, 58, 92, 255)),
+            live_badge: c("live_badge", Color::rgba(220, 40, 40, 255)),
+            date_text: c("date_text", Color::rgba(180, 200, 220, 255)),
+            footer_bg: c("footer_bg", Color::rgba(12, 25, 45, 255)),
+            time_label: c("time_label", Color::rgba(255, 160, 0, 255)),
+            glow_border: c("glow_border", Color::rgba(60, 130, 200, 255)),
+            glow_outer: c("glow_outer", Color::rgba(30, 70, 130, 180)),
+            header_title: c("header_title", Color::rgba(220, 240, 255, 255)),
+        }
+    }
+
+    /// Build colors with hardcoded defaults (no theme overrides).
+    pub fn defaults() -> Self {
+        Self {
+            bg: Color::rgba(10, 22, 40, 255),
+            grid_line: Color::rgba(26, 58, 92, 255),
+            header_bg: Color::rgba(12, 25, 50, 255),
+            header_dark: Color::rgba(8, 18, 38, 255),
+            time_header_bg: Color::rgba(15, 35, 65, 255),
+            time_header: Color::rgba(0, 204, 255, 255),
+            channel_label: Color::rgba(200, 220, 240, 255),
+            program_text: Color::rgba(192, 216, 232, 255),
+            selected_bg: Color::rgba(255, 140, 0, 220),
+            selected_text: Color::rgba(255, 255, 255, 255),
+            dim_text: Color::rgba(100, 130, 160, 255),
+            playing_text: Color::rgba(0, 221, 255, 255),
+            cell_bg: Color::rgba(15, 30, 55, 255),
+            cell_border: Color::rgba(26, 58, 92, 255),
+            live_badge: Color::rgba(220, 40, 40, 255),
+            date_text: Color::rgba(180, 200, 220, 255),
+            footer_bg: Color::rgba(12, 25, 45, 255),
+            time_label: Color::rgba(255, 160, 0, 255),
+            glow_border: Color::rgba(60, 130, 200, 255),
+            glow_outer: Color::rgba(30, 70, 130, 180),
+            header_title: Color::rgba(220, 240, 255, 255),
+        }
+    }
+}
 
 /// Maximum number of program cells per row.
 const MAX_CELLS: usize = 8;
@@ -108,6 +173,8 @@ pub struct TvGuideState {
     pub scroll_offset: usize,
     /// Texture for the in-app video preview (set by the video player).
     pub preview_texture: Option<TextureId>,
+    /// Theme-derived colors for the TV Guide UI.
+    pub colors: TvGuideColors,
 }
 
 impl std::fmt::Debug for TvGuideState {
@@ -127,7 +194,10 @@ impl std::fmt::Debug for TvGuideState {
 
 impl TvGuideState {
     /// Create a new TV guide state from channel config.
-    pub fn new(config: &ChannelConfig) -> Self {
+    ///
+    /// Colors are derived from the active theme. Skins can override
+    /// individual colors via `[app_themes.tv_guide]` in theme.toml.
+    pub fn new(config: &ChannelConfig, at: &ActiveTheme) -> Self {
         let channel_count = config.channel.len();
         Self {
             channels: config.channel.clone(),
@@ -145,6 +215,7 @@ impl TvGuideState {
             fetch_error: None,
             scroll_offset: 0,
             preview_texture: None,
+            colors: TvGuideColors::from_theme(at),
         }
     }
 
@@ -384,7 +455,7 @@ impl TvGuideState {
             obj.y = 0;
             obj.w = sw;
             obj.h = sh;
-            obj.color = COLOR_BG;
+            obj.color = self.colors.bg;
             obj.visible = true;
             obj.z = 100;
         }
@@ -407,9 +478,9 @@ impl TvGuideState {
             obj.y = y0;
             obj.w = sw;
             obj.h = header_h;
-            obj.color = COLOR_HEADER_BG;
-            obj.gradient_top = Some(COLOR_HEADER_BG);
-            obj.gradient_bottom = Some(COLOR_HEADER_DARK);
+            obj.color = self.colors.header_bg;
+            obj.gradient_top = Some(self.colors.header_bg);
+            obj.gradient_bottom = Some(self.colors.header_dark);
             obj.visible = true;
             obj.z = 101;
         }
@@ -425,7 +496,7 @@ impl TvGuideState {
             obj.x = 10;
             obj.y = y0 + 4;
             obj.font_size = at.font_small;
-            obj.text_color = COLOR_DATE_TEXT;
+            obj.text_color = self.colors.date_text;
             obj.visible = true;
             obj.z = 102;
         }
@@ -439,7 +510,7 @@ impl TvGuideState {
             obj.x = 10 + date_w;
             obj.y = y0 + 4;
             obj.font_size = at.font_small;
-            obj.text_color = COLOR_TIME_HEADER;
+            obj.text_color = self.colors.time_header;
             obj.visible = true;
             obj.z = 102;
         }
@@ -452,7 +523,7 @@ impl TvGuideState {
             obj.x = 10;
             obj.y = y0 + 4 + at.font_small as i32 + 2;
             obj.font_size = at.font_body;
-            obj.text_color = COLOR_HEADER_TITLE;
+            obj.text_color = self.colors.header_title;
             obj.text_shadow_offset = Some((1, 1));
             obj.text_shadow_color = Some(Color::rgba(0, 0, 0, 128));
             obj.visible = true;
@@ -467,7 +538,7 @@ impl TvGuideState {
             obj.x = 10;
             obj.y = y0 + 4 + at.font_small as i32 + 2 + at.font_body as i32 + 2;
             obj.font_size = at.font_hint;
-            obj.text_color = COLOR_DIM_TEXT;
+            obj.text_color = self.colors.dim_text;
             obj.visible = true;
             obj.z = 102;
         }
@@ -482,7 +553,7 @@ impl TvGuideState {
             obj.x = center_x + 8;
             obj.y = y0 + 4;
             obj.font_size = at.font_hint;
-            obj.text_color = COLOR_DIM_TEXT;
+            obj.text_color = self.colors.dim_text;
             obj.visible = true;
             obj.z = 102;
         }
@@ -495,7 +566,7 @@ impl TvGuideState {
             obj.x = center_x + 8;
             obj.y = y0 + 4 + at.font_hint as i32 + 2;
             obj.font_size = at.font_small;
-            obj.text_color = COLOR_PLAYING_TEXT;
+            obj.text_color = self.colors.playing_text;
             obj.visible = true;
             obj.z = 102;
         }
@@ -508,7 +579,7 @@ impl TvGuideState {
             obj.x = center_x + 8;
             obj.y = y0 + 4 + at.font_hint as i32 + at.font_small as i32 + 4;
             obj.font_size = at.font_hint;
-            obj.text_color = COLOR_DIM_TEXT;
+            obj.text_color = self.colors.dim_text;
             obj.visible = true;
             obj.z = 102;
         }
@@ -526,7 +597,7 @@ impl TvGuideState {
             obj.y = preview_y - 4;
             obj.w = preview_w + 8;
             obj.h = preview_h + 8;
-            obj.color = COLOR_GLOW_OUTER;
+            obj.color = self.colors.glow_outer;
             obj.border_radius = Some(2);
             obj.visible = true;
             obj.z = 102;
@@ -540,7 +611,7 @@ impl TvGuideState {
             obj.w = preview_w + 4;
             obj.h = preview_h + 4;
             obj.color = Color::rgba(5, 12, 25, 255);
-            obj.stroke_color = Some(COLOR_GLOW_BORDER);
+            obj.stroke_color = Some(self.colors.glow_border);
             obj.stroke_width = Some(1);
             obj.visible = true;
             obj.z = 103;
@@ -578,7 +649,7 @@ impl TvGuideState {
             obj.y = preview_y - 2;
             obj.w = 42;
             obj.h = 14;
-            obj.color = COLOR_LIVE_BADGE;
+            obj.color = self.colors.live_badge;
             obj.border_radius = Some(3);
             obj.visible = is_live;
             obj.z = 105;
@@ -590,7 +661,7 @@ impl TvGuideState {
             obj.x = preview_x + preview_w as i32 - 39;
             obj.y = preview_y - 1;
             obj.font_size = at.font_hint;
-            obj.text_color = COLOR_SELECTED_TEXT;
+            obj.text_color = self.colors.selected_text;
             obj.visible = is_live;
             obj.z = 106;
         }
@@ -618,7 +689,7 @@ impl TvGuideState {
             obj.y = y0;
             obj.w = sw;
             obj.h = time_header_h;
-            obj.color = COLOR_TIME_HEADER_BG;
+            obj.color = self.colors.time_header_bg;
             obj.visible = true;
             obj.z = 101;
         }
@@ -630,7 +701,7 @@ impl TvGuideState {
             obj.x = 4;
             obj.y = y0 + 3;
             obj.font_size = at.font_hint;
-            obj.text_color = COLOR_TIME_LABEL;
+            obj.text_color = self.colors.time_label;
             obj.visible = true;
             obj.z = 102;
         }
@@ -650,8 +721,8 @@ impl TvGuideState {
                 obj.y = y0;
                 obj.w = slot_w;
                 obj.h = time_header_h;
-                obj.color = COLOR_TIME_HEADER_BG;
-                obj.stroke_color = Some(COLOR_CELL_BORDER);
+                obj.color = self.colors.time_header_bg;
+                obj.stroke_color = Some(self.colors.cell_border);
                 obj.stroke_width = Some(1);
                 obj.visible = true;
                 obj.z = 101;
@@ -667,7 +738,7 @@ impl TvGuideState {
                     obj.x = col_x as i32 + (slot_w as i32 / 2) - 20;
                     obj.y = y0 + 3;
                     obj.font_size = at.font_hint;
-                    obj.text_color = COLOR_TIME_HEADER;
+                    obj.text_color = self.colors.time_header;
                     obj.visible = true;
                     obj.z = 102;
                 }
@@ -710,9 +781,9 @@ impl TvGuideState {
                 obj.w = label_w + grid_w;
                 obj.h = row_h;
                 obj.color = if is_selected {
-                    COLOR_SELECTED_BG
+                    self.colors.selected_bg
                 } else {
-                    COLOR_BG
+                    self.colors.bg
                 };
                 if is_selected {
                     obj.gradient_top = Some(Color::rgba(255, 160, 0, 230));
@@ -739,9 +810,9 @@ impl TvGuideState {
                 obj.y = row_y + 4;
                 obj.font_size = at.font_small;
                 obj.text_color = if is_selected {
-                    COLOR_SELECTED_TEXT
+                    self.colors.selected_text
                 } else {
-                    COLOR_CHANNEL_LABEL
+                    self.colors.channel_label
                 };
                 obj.visible = has_channel;
                 obj.z = 103;
@@ -755,7 +826,7 @@ impl TvGuideState {
                 obj.y = row_y + row_h as i32 - 1;
                 obj.w = label_w + grid_w;
                 obj.h = 1;
-                obj.color = COLOR_GRID_LINE;
+                obj.color = self.colors.grid_line;
                 obj.visible = has_channel;
                 obj.z = 102;
             }
@@ -796,9 +867,9 @@ impl TvGuideState {
                     obj.w = cell_w.saturating_sub(1);
                     obj.h = row_h.saturating_sub(2);
                     obj.color = if is_selected {
-                        COLOR_SELECTED_BG
+                        self.colors.selected_bg
                     } else {
-                        COLOR_CELL_BG
+                        self.colors.cell_bg
                     };
                     if is_selected {
                         obj.gradient_top = Some(Color::rgba(255, 160, 0, 230));
@@ -807,7 +878,7 @@ impl TvGuideState {
                         obj.gradient_top = None;
                         obj.gradient_bottom = None;
                     }
-                    obj.stroke_color = Some(COLOR_CELL_BORDER);
+                    obj.stroke_color = Some(self.colors.cell_border);
                     obj.stroke_width = Some(1);
                     obj.visible = visible;
                     obj.z = 102;
@@ -836,9 +907,9 @@ impl TvGuideState {
                     obj.y = row_y + 3;
                     obj.font_size = at.font_hint;
                     obj.text_color = if is_selected {
-                        COLOR_SELECTED_TEXT
+                        self.colors.selected_text
                     } else {
-                        COLOR_PROGRAM_TEXT
+                        self.colors.program_text
                     };
                     obj.visible = visible;
                     obj.z = 103;
@@ -868,7 +939,7 @@ impl TvGuideState {
             obj.y = sel_y as i32;
             obj.w = sw;
             obj.h = row_h;
-            obj.color = COLOR_SELECTED_BG;
+            obj.color = self.colors.selected_bg;
             obj.gradient_top = Some(Color::rgba(255, 160, 0, 230));
             obj.gradient_bottom = Some(Color::rgba(255, 120, 0, 200));
             obj.border_radius = Some(2);
@@ -891,7 +962,7 @@ impl TvGuideState {
             obj.y = footer_y as i32;
             obj.w = sw;
             obj.h = footer_h;
-            obj.color = COLOR_FOOTER_BG;
+            obj.color = self.colors.footer_bg;
             obj.visible = true;
             obj.z = 101;
         }
@@ -903,7 +974,7 @@ impl TvGuideState {
             obj.x = 8;
             obj.y = footer_y as i32 + 3;
             obj.font_size = at.font_hint;
-            obj.text_color = COLOR_DIM_TEXT;
+            obj.text_color = self.colors.dim_text;
             obj.visible = true;
             obj.z = 102;
         }
@@ -916,7 +987,7 @@ impl TvGuideState {
             obj.x = sw as i32 - 140;
             obj.y = footer_y as i32 + 3;
             obj.font_size = at.font_hint;
-            obj.text_color = COLOR_DIM_TEXT;
+            obj.text_color = self.colors.dim_text;
             obj.visible = true;
             obj.z = 102;
         }
@@ -928,7 +999,7 @@ impl TvGuideState {
             obj.x = sw as i32 - 56;
             obj.y = footer_y as i32 + 3;
             obj.font_size = at.font_hint;
-            obj.text_color = COLOR_TIME_HEADER;
+            obj.text_color = self.colors.time_header;
             obj.visible = true;
             obj.z = 102;
         }
@@ -1013,7 +1084,7 @@ impl TvGuideState {
         at: &ActiveTheme,
     ) -> crate::error::Result<()> {
         // Background.
-        backend.fill_rect(cx, cy, cw, ch, COLOR_BG)?;
+        backend.fill_rect(cx, cy, cw, ch, self.colors.bg)?;
 
         // Layout.
         let header_h = (ch * 20 / 100).max(40);
@@ -1026,7 +1097,7 @@ impl TvGuideState {
         let row_h = (grid_h / row_count as u32).max(16);
 
         // Header.
-        backend.fill_rect(cx, cy, cw, header_h, COLOR_HEADER_BG)?;
+        backend.fill_rect(cx, cy, cw, header_h, self.colors.header_bg)?;
         let date_str = schedule::format_date(self.current_time);
         let time_str = schedule::format_time(self.current_time);
         backend.draw_text(
@@ -1034,7 +1105,7 @@ impl TvGuideState {
             cx + 6,
             cy + 3,
             at.font_hint,
-            COLOR_DATE_TEXT,
+            self.colors.date_text,
         )?;
         let ch_info = self.build_channel_info();
         backend.draw_text(
@@ -1042,7 +1113,7 @@ impl TvGuideState {
             cx + 6,
             cy + 3 + at.font_hint as i32 + 2,
             at.font_small,
-            COLOR_CHANNEL_LABEL,
+            self.colors.channel_label,
         )?;
         let now_title = self.build_now_playing_title();
         backend.draw_text(
@@ -1050,7 +1121,7 @@ impl TvGuideState {
             cx + 6,
             cy + 3 + at.font_hint as i32 + at.font_small as i32 + 4,
             at.font_hint,
-            COLOR_PLAYING_TEXT,
+            self.colors.playing_text,
         )?;
 
         // Preview box (right side of header).
@@ -1058,7 +1129,7 @@ impl TvGuideState {
         let preview_h = header_h.saturating_sub(8);
         let preview_x = cx + cw as i32 - preview_w as i32 - 4;
         let preview_y = cy + 4;
-        backend.fill_rect(preview_x, preview_y, preview_w, preview_h, COLOR_BG)?;
+        backend.fill_rect(preview_x, preview_y, preview_w, preview_h, self.colors.bg)?;
         if let Some(tex) = self.preview_texture {
             backend.blit(
                 tex,
@@ -1071,8 +1142,14 @@ impl TvGuideState {
 
         // Time header.
         let time_y = cy + header_h as i32;
-        backend.fill_rect(cx, time_y, cw, time_h, COLOR_TIME_HEADER_BG)?;
-        backend.draw_text("TIME:", cx + 4, time_y + 2, at.font_hint, COLOR_TIME_LABEL)?;
+        backend.fill_rect(cx, time_y, cw, time_h, self.colors.time_header_bg)?;
+        backend.draw_text(
+            "TIME:",
+            cx + 4,
+            time_y + 2,
+            at.font_hint,
+            self.colors.time_label,
+        )?;
 
         let grid_start = self.grid_start_time();
         let slot_w = grid_w / VISIBLE_TIME_SLOTS as u32;
@@ -1084,7 +1161,7 @@ impl TvGuideState {
                 col_x + 4,
                 time_y + 2,
                 at.font_hint,
-                COLOR_TIME_HEADER,
+                self.colors.time_header,
             )?;
         }
 
@@ -1102,20 +1179,20 @@ impl TvGuideState {
             let is_sel = ch_idx == self.selected_channel;
 
             if is_sel {
-                backend.fill_rect(cx, row_y, cw, row_h, COLOR_SELECTED_BG)?;
+                backend.fill_rect(cx, row_y, cw, row_h, self.colors.selected_bg)?;
             }
 
             let chan = &self.channels[ch_idx];
             let label = format!("[CH {}\n{}]", chan.number, chan.call_sign);
             let lbl_color = if is_sel {
-                COLOR_SELECTED_TEXT
+                self.colors.selected_text
             } else {
-                COLOR_CHANNEL_LABEL
+                self.colors.channel_label
             };
             backend.draw_text(&label, cx + 4, row_y + 3, at.font_hint, lbl_color)?;
 
             // Grid line.
-            backend.fill_rect(cx, row_y + row_h as i32 - 1, cw, 1, COLOR_GRID_LINE)?;
+            backend.fill_rect(cx, row_y + row_h as i32 - 1, cw, 1, self.colors.grid_line)?;
 
             // Program cells.
             let slots = if let Some(Some(cached)) = self.cached_schedules.get(ch_idx) {
@@ -1137,9 +1214,9 @@ impl TvGuideState {
                 }
 
                 let bg = if is_sel {
-                    COLOR_SELECTED_BG
+                    self.colors.selected_bg
                 } else {
-                    COLOR_CELL_BG
+                    self.colors.cell_bg
                 };
                 backend.fill_rect(
                     cell_x,
@@ -1150,9 +1227,9 @@ impl TvGuideState {
                 )?;
 
                 let txt_color = if is_sel {
-                    COLOR_SELECTED_TEXT
+                    self.colors.selected_text
                 } else {
-                    COLOR_PROGRAM_TEXT
+                    self.colors.program_text
                 };
                 let time_label = schedule::format_time(ep_start);
                 let max_chars = (cell_w as usize / 6).saturating_sub(1);
@@ -1179,13 +1256,13 @@ impl TvGuideState {
 
         // Footer.
         let ftr_y = cy + ch as i32 - footer_h as i32;
-        backend.fill_rect(cx, ftr_y, cw, footer_h, COLOR_FOOTER_BG)?;
+        backend.fill_rect(cx, ftr_y, cw, footer_h, self.colors.footer_bg)?;
         let nav = format!(
             "[UP/DOWN SELECT]  [LEFT/RIGHT TIME]  [PAGE {}/{}]    [GUIDE]",
             self.current_page(),
             self.total_pages(),
         );
-        backend.draw_text(&nav, cx + 6, ftr_y + 2, at.font_hint, COLOR_DIM_TEXT)?;
+        backend.draw_text(&nav, cx + 6, ftr_y + 2, at.font_hint, self.colors.dim_text)?;
 
         Ok(())
     }
@@ -1389,7 +1466,7 @@ mod tests {
     #[test]
     fn new_guide_state() {
         let config = ChannelConfig::from_toml(DEFAULT_CHANNELS_TOML).unwrap();
-        let state = TvGuideState::new(&config);
+        let state = TvGuideState::new(&config, &ActiveTheme::default());
         assert_eq!(state.channels.len(), 5);
         assert_eq!(state.catalogs.len(), 5);
         assert_eq!(state.selected_channel, 0);
@@ -1400,7 +1477,7 @@ mod tests {
     #[test]
     fn navigation() {
         let config = ChannelConfig::from_toml(DEFAULT_CHANNELS_TOML).unwrap();
-        let mut state = TvGuideState::new(&config);
+        let mut state = TvGuideState::new(&config, &ActiveTheme::default());
 
         state.select_down();
         assert_eq!(state.selected_channel, 1);
@@ -1417,7 +1494,7 @@ mod tests {
     #[test]
     fn navigation_bounds() {
         let config = ChannelConfig::from_toml(DEFAULT_CHANNELS_TOML).unwrap();
-        let mut state = TvGuideState::new(&config);
+        let mut state = TvGuideState::new(&config, &ActiveTheme::default());
         for _ in 0..100 {
             state.select_down();
         }
@@ -1427,7 +1504,7 @@ mod tests {
     #[test]
     fn navigation_auto_scroll() {
         let config = ChannelConfig::from_toml(DEFAULT_CHANNELS_TOML).unwrap();
-        let mut state = TvGuideState::new(&config);
+        let mut state = TvGuideState::new(&config, &ActiveTheme::default());
         // 5 channels, VISIBLE_ROWS=5, so no scroll needed.
         for _ in 0..4 {
             state.select_down();
@@ -1444,7 +1521,7 @@ mod tests {
     #[test]
     fn paging_methods() {
         let config = ChannelConfig::from_toml(DEFAULT_CHANNELS_TOML).unwrap();
-        let state = TvGuideState::new(&config);
+        let state = TvGuideState::new(&config, &ActiveTheme::default());
         assert_eq!(state.current_page(), 1);
         assert_eq!(state.total_pages(), 1);
     }
@@ -1452,7 +1529,7 @@ mod tests {
     #[test]
     fn paging_empty_channels() {
         let config: ChannelConfig = toml::from_str("channel = []").unwrap();
-        let state = TvGuideState::new(&config);
+        let state = TvGuideState::new(&config, &ActiveTheme::default());
         assert_eq!(state.current_page(), 1);
         assert_eq!(state.total_pages(), 1);
     }
@@ -1460,7 +1537,7 @@ mod tests {
     #[test]
     fn time_scroll() {
         let config = ChannelConfig::from_toml(DEFAULT_CHANNELS_TOML).unwrap();
-        let mut state = TvGuideState::new(&config);
+        let mut state = TvGuideState::new(&config, &ActiveTheme::default());
         let start = state.grid_start_time();
         state.scroll_right();
         let after_right = state.grid_start_time();
@@ -1473,7 +1550,7 @@ mod tests {
     #[test]
     fn text_content_no_catalogs() {
         let config = ChannelConfig::from_toml(DEFAULT_CHANNELS_TOML).unwrap();
-        let state = TvGuideState::new(&config);
+        let state = TvGuideState::new(&config, &ActiveTheme::default());
         let lines = state.text_content();
         assert!(lines.iter().any(|l| l.contains("TV Guide")));
         assert!(lines.iter().any(|l| l.contains("Loading")));
@@ -1482,7 +1559,7 @@ mod tests {
     #[test]
     fn tune_without_catalog() {
         let config = ChannelConfig::from_toml(DEFAULT_CHANNELS_TOML).unwrap();
-        let mut state = TvGuideState::new(&config);
+        let mut state = TvGuideState::new(&config, &ActiveTheme::default());
         assert!(state.tune().is_none());
     }
 
@@ -1514,7 +1591,7 @@ mod tests {
     #[test]
     fn text_content_with_fetch_error() {
         let config = ChannelConfig::from_toml(DEFAULT_CHANNELS_TOML).unwrap();
-        let mut state = TvGuideState::new(&config);
+        let mut state = TvGuideState::new(&config, &ActiveTheme::default());
         state.fetch_attempted = true;
         state.fetch_error = Some("network timeout".to_string());
         let lines = state.text_content();
@@ -1525,7 +1602,7 @@ mod tests {
     #[test]
     fn text_content_after_partial_load() {
         let config = ChannelConfig::from_toml(DEFAULT_CHANNELS_TOML).unwrap();
-        let mut state = TvGuideState::new(&config);
+        let mut state = TvGuideState::new(&config, &ActiveTheme::default());
         state.fetch_attempted = true;
 
         // Inject a catalog for channel 0.
@@ -1554,7 +1631,7 @@ mod tests {
     #[test]
     fn fetch_attempted_prevents_refetch_text() {
         let config = ChannelConfig::from_toml(DEFAULT_CHANNELS_TOML).unwrap();
-        let mut state = TvGuideState::new(&config);
+        let mut state = TvGuideState::new(&config, &ActiveTheme::default());
         // Before fetch_attempted: shows loading.
         let lines = state.text_content();
         assert!(lines.iter().any(|l| l.contains("Loading")));
@@ -1569,7 +1646,7 @@ mod tests {
     #[test]
     fn rebuild_cached_schedule_after_catalog() {
         let config = ChannelConfig::from_toml(DEFAULT_CHANNELS_TOML).unwrap();
-        let mut state = TvGuideState::new(&config);
+        let mut state = TvGuideState::new(&config, &ActiveTheme::default());
 
         let mut catalog = super::super::catalog::ChannelCatalog::new(state.channels[0].number);
         catalog.add_episodes(vec![super::super::catalog::VideoEpisode {
@@ -1596,7 +1673,7 @@ mod tests {
     #[test]
     fn now_playing_detail_with_content() {
         let config = ChannelConfig::from_toml(DEFAULT_CHANNELS_TOML).unwrap();
-        let mut state = TvGuideState::new(&config);
+        let mut state = TvGuideState::new(&config, &ActiveTheme::default());
 
         let mut catalog = super::super::catalog::ChannelCatalog::new(state.channels[0].number);
         catalog.add_episodes(vec![super::super::catalog::VideoEpisode {
@@ -1621,7 +1698,7 @@ mod tests {
     #[test]
     fn now_playing_detail_empty() {
         let config = ChannelConfig::from_toml(DEFAULT_CHANNELS_TOML).unwrap();
-        let state = TvGuideState::new(&config);
+        let state = TvGuideState::new(&config, &ActiveTheme::default());
         let detail = state.build_now_playing_detail();
         assert!(detail.is_empty());
     }
@@ -1639,7 +1716,7 @@ mod tests {
             ));
         }
         let config: ChannelConfig = toml::from_str(&toml_str).unwrap();
-        let mut state = TvGuideState::new(&config);
+        let mut state = TvGuideState::new(&config, &ActiveTheme::default());
         assert_eq!(state.channels.len(), 12);
 
         // Navigate down past VISIBLE_ROWS.
@@ -1683,7 +1760,7 @@ mod tests {
     #[test]
     fn click_selects_channel() {
         let config = ChannelConfig::from_toml(DEFAULT_CHANNELS_TOML).unwrap();
-        let mut state = TvGuideState::new(&config);
+        let mut state = TvGuideState::new(&config, &ActiveTheme::default());
         assert_eq!(state.selected_channel, 0);
 
         let ch = 600u32;
@@ -1701,7 +1778,7 @@ mod tests {
     #[test]
     fn click_already_selected_tunes() {
         let config = ChannelConfig::from_toml(DEFAULT_CHANNELS_TOML).unwrap();
-        let mut state = TvGuideState::new(&config);
+        let mut state = TvGuideState::new(&config, &ActiveTheme::default());
 
         // Inject a catalog so tune() can succeed.
         let mut catalog = super::super::catalog::ChannelCatalog::new(state.channels[0].number);
@@ -1734,7 +1811,7 @@ mod tests {
     #[test]
     fn click_outside_grid_ignored() {
         let config = ChannelConfig::from_toml(DEFAULT_CHANNELS_TOML).unwrap();
-        let mut state = TvGuideState::new(&config);
+        let mut state = TvGuideState::new(&config, &ActiveTheme::default());
 
         let ch = 600u32;
         let cw = 800u32;
@@ -1753,7 +1830,7 @@ mod tests {
     #[test]
     fn click_negative_coords_ignored() {
         let config = ChannelConfig::from_toml(DEFAULT_CHANNELS_TOML).unwrap();
-        let mut state = TvGuideState::new(&config);
+        let mut state = TvGuideState::new(&config, &ActiveTheme::default());
         let result = state.handle_click(-10, -5, 800, 600, true);
         assert!(result.is_none());
         assert_eq!(state.selected_channel, 0);
@@ -1762,7 +1839,7 @@ mod tests {
     #[test]
     fn click_empty_channels_ignored() {
         let config: ChannelConfig = toml::from_str("channel = []").unwrap();
-        let mut state = TvGuideState::new(&config);
+        let mut state = TvGuideState::new(&config, &ActiveTheme::default());
         let result = state.handle_click(100, 200, 800, 600, true);
         assert!(result.is_none());
     }
@@ -1779,7 +1856,7 @@ mod tests {
             ));
         }
         let config: ChannelConfig = toml::from_str(&toml_str).unwrap();
-        let state = TvGuideState::new(&config);
+        let state = TvGuideState::new(&config, &ActiveTheme::default());
         assert_eq!(state.total_pages(), 3); // ceil(12/5) = 3
         assert_eq!(state.current_page(), 1);
     }

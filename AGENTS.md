@@ -55,7 +55,7 @@ cargo run -p oasis-app --bin oasis-screenshot
 
 All steps run via `docker compose --profile ci run --rm rust-ci`. Self-hosted runners only.
 
-**PR Validation** additionally runs: Gemini AI review -> Codex AI review -> agent auto-fix response (max 5 iterations) -> agent failure handler (max 5 iterations).
+**PR Validation** additionally runs: Gemini AI review -> agent auto-fix response (max 5 iterations) -> agent failure handler (max 5 iterations). Codex AI review has been **disabled** (see security notice).
 
 ## Architecture
 
@@ -132,25 +132,25 @@ Proportional bitmap font rendering from glyph ink bounds. `oasis-types` provides
 
 ### Enabled Agents
 
-| Agent | Runtime | Role |
-|-------|---------|------|
-| Claude | Host (Claude Code CLI) | Primary development, PR creation, complex tasks |
-| Gemini | Host (Gemini CLI) | PR code review (primary reviewer) |
-| Codex | Containerized | PR code review (secondary reviewer) |
-| OpenCode | Containerized | Code generation, issue implementation |
-| Crush | Containerized | Quick code generation, conversion |
+| Agent | Runtime | Role | Status |
+|-------|---------|------|--------|
+| Claude | Host (Claude Code CLI) | Primary development, PR creation, complex tasks | Active |
+| Gemini | Host (Gemini CLI) | PR code review (primary reviewer) | Active |
+| Codex | Containerized | PR code review (secondary reviewer) | **DISABLED** -- see security notice below |
+| OpenCode | Containerized | Code generation, issue implementation | Active |
+| Crush | Containerized | Quick code generation, conversion | Active |
 
 ### Agent Priorities
 
 - **Issue creation / PR authoring:** Claude > OpenCode
-- **PR reviews:** Gemini (primary) > Codex (secondary, runs after Gemini)
+- **PR reviews:** Gemini (primary). Codex secondary review is **disabled** (see security notice).
 - **Code fixes:** Claude > Crush > OpenCode
 
 ### CI Agent Workflow (PR Validation)
 
 1. CI pipeline runs (format, clippy, test, build, cargo-deny, PSP)
 2. Gemini reviews the PR diff and posts feedback
-3. Codex reviews after Gemini completes
+3. ~~Codex reviews after Gemini completes~~ **(DISABLED -- see security notice)**
 4. **Review Response Agent** reads review artifacts and auto-fixes issues (via `automation-cli`), max 5 iterations
 5. **Failure Handler Agent** auto-fixes CI failures, max 5 iterations
 6. Iteration tracking via `.github/actions/agent-iteration-check/` -- admins can comment `[CONTINUE]` to extend limits
@@ -165,12 +165,20 @@ Configured in `.mcp.json`, all run as Docker containers via `docker compose --pr
 | code-quality | Linting, formatting, testing, security scanning, type checking |
 | content-creation | LaTeX, TikZ, Manim rendering |
 | gemini | Gemini AI consultation (second opinion) |
-| codex | Codex AI consultation |
+| codex | Codex AI consultation **(DISABLED)** |
 | opencode | OpenCode AI consultation |
 | crush | Crush AI consultation |
 | github-board | GitHub Projects board management (issue claiming, status tracking) |
 | agentcore-memory | Persistent agent memory (AWS/ChromaDB) |
 | reaction-search | Reaction image search |
+
+### Security Notice: OpenAI / Codex / GPT Phase-Out
+
+**OpenAI Codex has been disabled across all pipelines effective immediately.** OpenAI has entered partnerships with government agencies that enable mass surveillance and autonomous weapons decision-making. The mass surveillance risk alone -- where code, prompts, and context sent through OpenAI APIs may be accessible to nation-state actors -- is unacceptable for this project and its users.
+
+We strongly recommend **Anthropic (Claude)** models for all AI-assisted workflows. See the [README security advisory](README.md#security-advisory-openai--codex--gpt-phase-out) for full details.
+
+To re-enable at your own risk: set `CODEX_ENABLED=true` in your environment.
 
 ### Agent Tooling
 

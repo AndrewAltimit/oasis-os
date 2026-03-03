@@ -3,5 +3,6 @@
 pub mod cascade;
 pub mod default;
 pub mod parser;
+pub mod selectors;
 pub mod tokenizer;
 pub mod values;

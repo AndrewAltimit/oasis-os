@@ -243,17 +243,10 @@ mod tests {
 
     #[test]
     fn draw_all_themes_no_panic() {
-        for theme in [
-            Theme::dark(),
-            Theme::light(),
-            Theme::classic(),
-            Theme::high_contrast(),
-        ] {
-            let mut backend = MockBackend::new();
-            let mut ctx = DrawContext::new(&mut backend, &theme);
+        crate::test_utils::test_draw_all_themes(|ctx| {
             let r = RadioGroup::new(sample());
-            r.draw(&mut ctx, 0, 0, 200, 100).unwrap();
-        }
+            r.draw(ctx, 0, 0, 200, 100).unwrap();
+        });
     }
 }
 
@@ -289,13 +282,7 @@ impl Widget for RadioGroup {
 
             // Outer circle (as rounded rect with full radius).
             let circle_y = iy + layout::center(row_h, CIRCLE_SIZE);
-            let border_color = if self.disabled {
-                ctx.theme.border_subtle
-            } else if is_selected {
-                ctx.theme.accent
-            } else {
-                ctx.theme.input_border
-            };
+            let border_color = ctx.theme.interactive_border(self.disabled, is_selected);
             ctx.backend.stroke_rounded_rect(
                 x,
                 circle_y,
@@ -312,30 +299,26 @@ impl Widget for RadioGroup {
                 let dot_r = dot_size / 2;
                 let dot_x = x + layout::center(CIRCLE_SIZE, dot_size);
                 let dot_y = circle_y + layout::center(CIRCLE_SIZE, dot_size);
-                let dot_color = if self.disabled {
-                    ctx.theme.text_disabled
-                } else {
-                    ctx.theme.accent
-                };
                 ctx.backend.fill_rounded_rect(
                     dot_x,
                     dot_y,
                     dot_size,
                     dot_size,
                     dot_r as u16,
-                    dot_color,
+                    ctx.theme.interactive_accent(self.disabled),
                 )?;
             }
 
             // Label text.
             let tx = x + CIRCLE_SIZE as i32 + LABEL_GAP as i32;
             let ty = iy + layout::center(row_h, text_h);
-            let color = if self.disabled {
-                ctx.theme.text_disabled
-            } else {
-                ctx.theme.text_primary
-            };
-            ctx.backend.draw_text(option, tx, ty, fs, color)?;
+            ctx.backend.draw_text(
+                option,
+                tx,
+                ty,
+                fs,
+                ctx.theme.interactive_text(self.disabled),
+            )?;
         }
 
         Ok(())

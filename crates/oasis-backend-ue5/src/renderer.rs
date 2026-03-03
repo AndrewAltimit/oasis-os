@@ -9,8 +9,10 @@
 
 use std::rc::Rc;
 
-use oasis_core::backend::{Color, GradientStyle, SdiBackend, TextureId};
-use oasis_core::error::{OasisError, Result};
+use oasis_core::backend::{
+    Color, GradientStyle, SdiBackend, TextureId, texture_not_found, validate_rgba_data,
+};
+use oasis_core::error::Result;
 
 use crate::font;
 
@@ -187,7 +189,7 @@ impl Ue5Backend {
             .textures
             .get(idx)
             .and_then(|t| t.as_ref())
-            .ok_or_else(|| OasisError::Backend(format!("invalid texture id: {}", tex.0)))?;
+            .ok_or_else(|| texture_not_found(tex.0))?;
         Ok((texture.width, texture.height, Rc::clone(&texture.data)))
     }
 }
@@ -293,13 +295,7 @@ impl SdiBackend for Ue5Backend {
     }
 
     fn load_texture(&mut self, width: u32, height: u32, rgba_data: &[u8]) -> Result<TextureId> {
-        let expected = (width * height * 4) as usize;
-        if rgba_data.len() != expected {
-            return Err(OasisError::Backend(format!(
-                "texture data size mismatch: expected {expected}, got {}",
-                rgba_data.len()
-            )));
-        }
+        validate_rgba_data(width, height, rgba_data)?;
 
         let texture = Texture {
             width,

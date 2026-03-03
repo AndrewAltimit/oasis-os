@@ -3,6 +3,7 @@
 use oasis_types::error::{OasisError, Result};
 use oasis_vfs::EntryKind;
 
+use crate::cmd_helpers::require_args;
 use crate::interpreter::{Command, CommandOutput, Environment, resolve_path};
 
 // ---------------------------------------------------------------------------
@@ -24,11 +25,7 @@ impl Command for WriteCmd {
         "filesystem"
     }
     fn execute(&self, args: &[&str], env: &mut Environment<'_>) -> Result<CommandOutput> {
-        if args.len() < 2 {
-            return Err(OasisError::Command(
-                "usage: write <file> <text...>".to_string(),
-            ));
-        }
+        require_args(args, 2, "write <file> <text...>")?;
         let path = resolve_path(&env.cwd, args[0]);
         let text = args[1..].join(" ");
         env.vfs.write(&path, text.as_bytes())?;
@@ -58,11 +55,7 @@ impl Command for AppendCmd {
         "filesystem"
     }
     fn execute(&self, args: &[&str], env: &mut Environment<'_>) -> Result<CommandOutput> {
-        if args.len() < 2 {
-            return Err(OasisError::Command(
-                "usage: append <file> <text...>".to_string(),
-            ));
-        }
+        require_args(args, 2, "append <file> <text...>")?;
         let path = resolve_path(&env.cwd, args[0]);
         let text = args[1..].join(" ");
         let mut data = if env.vfs.exists(&path) {
@@ -264,9 +257,7 @@ impl Command for StatCmd {
         "filesystem"
     }
     fn execute(&self, args: &[&str], env: &mut Environment<'_>) -> Result<CommandOutput> {
-        if args.is_empty() {
-            return Err(OasisError::Command("usage: stat <path>".to_string()));
-        }
+        require_args(args, 1, "stat <path>")?;
         let path = resolve_path(&env.cwd, args[0]);
         let meta = env.vfs.stat(&path)?;
         let kind = match meta.kind {
@@ -365,9 +356,7 @@ impl Command for ChecksumCmd {
         "filesystem"
     }
     fn execute(&self, args: &[&str], env: &mut Environment<'_>) -> Result<CommandOutput> {
-        if args.is_empty() {
-            return Err(OasisError::Command("usage: checksum <file>".to_string()));
-        }
+        require_args(args, 1, "checksum <file>")?;
         let path = resolve_path(&env.cwd, args[0]);
         let data = env.vfs.read(&path)?;
         // Simple FNV-1a 32-bit hash (no external dependencies).

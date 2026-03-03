@@ -17,7 +17,7 @@ mod vfs_setup;
 
 use anyhow::Result;
 
-use app_state::{AppState, Mode};
+use app_state::{AppState, ContentLayer, Mode, NetworkLayer, TerminalLayer, UiLayer};
 use oasis_audio::RadioManager;
 use oasis_audio::radio::RadioSource;
 use oasis_backend_sdl::SdlAudioBackend;
@@ -161,32 +161,42 @@ fn main() -> Result<()> {
         active_theme,
         browser_config,
         platform,
-        dashboard,
-        status_bar: StatusBar::new(),
-        bottom_bar,
-        start_menu,
-        cmd_reg,
-        cwd: "/".to_string(),
-        input_buf: String::new(),
-        output_lines: vec![
-            "OASIS_OS v0.1.0 -- Type 'help' for commands".to_string(),
-            "F1=terminal  F2=on-screen keyboard  Escape=quit".to_string(),
-            String::new(),
-        ],
-        osk: None,
-        app_runner: None,
-        wm,
-        open_runners: Vec::new(),
-        browser: None,
-        net_backend: {
-            let tls = RustlsTlsProvider::new();
-            StdNetworkBackend::with_tls(tls)
+        ui: UiLayer {
+            dashboard,
+            status_bar: StatusBar::new(),
+            bottom_bar,
+            start_menu,
+            mouse_cursor,
         },
-        listener: None,
-        ftp_server: None,
-        remote_client: None,
-        tls_provider: RustlsTlsProvider::new(),
-        mouse_cursor,
+        terminal: TerminalLayer {
+            cmd_reg,
+            cwd: "/".to_string(),
+            input_buf: String::new(),
+            output_lines: vec![
+                "OASIS_OS v0.1.0 -- Type 'help' for commands".to_string(),
+                "F1=terminal  F2=on-screen keyboard  Escape=quit".to_string(),
+                String::new(),
+            ],
+            scroll_offset: 0,
+        },
+        net: NetworkLayer {
+            backend: {
+                let tls = RustlsTlsProvider::new();
+                StdNetworkBackend::with_tls(tls)
+            },
+            listener: None,
+            ftp_server: None,
+            remote_client: None,
+            tls_provider: RustlsTlsProvider::new(),
+        },
+        content: ContentLayer {
+            app_runner: None,
+            open_runners: Vec::new(),
+            browser: None,
+            fullscreen_app: None,
+        },
+        osk: None,
+        wm,
         mode: Mode::Dashboard,
         bg_color: clear_color,
         active_transition,
@@ -201,13 +211,11 @@ fn main() -> Result<()> {
             ab.init().ok();
             ab
         },
-        terminal_scroll_offset: 0,
         toasts: ToastManager::new(),
         pending_tv_catalog_fetch: None,
         tv_fetch_start: None,
         video_player: video_player::VideoPlayer::new(),
         tv_audio_track: None,
-        fullscreen_app: None,
     };
 
     // Show a welcome toast.
@@ -243,6 +251,7 @@ fn main() -> Result<()> {
     // Apply auto-launch (after scene graph is fully set up).
     if let Some(ref app_name) = auto_launch_app {
         if let Some(app) = state
+            .ui
             .dashboard
             .apps
             .iter()
@@ -253,18 +262,18 @@ fn main() -> Result<()> {
                 &app,
                 &mut state.wm,
                 &mut sdi,
-                &mut state.open_runners,
-                &mut state.browser,
+                &mut state.content.open_runners,
+                &mut state.content.browser,
                 &state.browser_config,
                 &vfs,
-                &state.tls_provider,
+                &state.net.tls_provider,
             );
             launch::apply_launch(result, &mut state.mode);
             log::info!("Auto-launched app: {}", app.title);
 
             // Navigate browser to OASIS_URL if specified.
             if let Some(ref url) = auto_launch_url
-                && let Some(ref mut bw) = state.browser
+                && let Some(ref mut bw) = state.content.browser
             {
                 bw.navigate_vfs(url, &vfs);
                 log::info!("Auto-navigated to: {url}");
@@ -303,7 +312,7 @@ fn main() -> Result<()> {
             let (cursor_pixels, cw, ch) =
                 cursor::generate_cursor_pixels(state.active_theme.cursor_scale);
             let cursor_tex = backend.load_texture(cw, ch, &cursor_pixels)?;
-            state.mouse_cursor.update_sdi(&mut sdi);
+            state.ui.mouse_cursor.update_sdi(&mut sdi);
             if let Ok(obj) = sdi.get_mut("mouse_cursor") {
                 obj.texture = Some(cursor_tex);
             }
@@ -319,12 +328,15 @@ fn main() -> Result<()> {
         if state.frame_counter.is_multiple_of(60) {
             let time = state.platform.now().ok();
             let power = state.platform.power_info().ok();
-            state.status_bar.update_info(time.as_ref(), power.as_ref());
+            state
+                .ui
+                .status_bar
+                .update_info(time.as_ref(), power.as_ref());
         }
 
         let events = backend.poll_events();
         for event in &events {
-            state.mouse_cursor.handle_input(event);
+            state.ui.mouse_cursor.handle_input(event);
 
             let result = match state.mode {
                 Mode::Osk => input::handle_osk_input(event, &mut state, &mut sdi),
@@ -351,13 +363,13 @@ fn main() -> Result<()> {
         // player section below.
         {
             let mut pending = None;
-            if let Some(ref mut runner) = state.app_runner
+            if let Some(ref mut runner) = state.content.app_runner
                 && !is_tv_tune_request(runner)
             {
                 pending = runner.take_pending_request();
             }
             if pending.is_none() {
-                for (_, runner) in &mut state.open_runners {
+                for (_, runner) in &mut state.content.open_runners {
                     if is_tv_tune_request(runner) {
                         continue;
                     }
@@ -424,7 +436,7 @@ fn main() -> Result<()> {
                                 // catalog and connect to first track (non-blocking).
                                 let collection = station.collection.clone();
                                 let seed = state.frame_counter;
-                                let tls = state.tls_provider.clone();
+                                let tls = state.net.tls_provider.clone();
                                 let (tx, rx) = std::sync::mpsc::channel();
                                 std::thread::spawn(move || {
                                     let result = fetch_catalog_blocking(&collection, seed, &tls);
@@ -436,13 +448,15 @@ fn main() -> Result<()> {
                             {
                                 // Icecast: connect to stream (TLS if https).
                                 let conn_result = state
-                                    .net_backend
+                                    .net
+                                    .backend
                                     .connect(&host, port)
                                     .map_err(|e| format!("connect: {e}"))
                                     .and_then(|stream| {
                                         if tls {
                                             use oasis_core::net::TlsProvider;
                                             state
+                                                .net
                                                 .tls_provider
                                                 .connect_tls(stream, &host)
                                                 .map_err(|e| format!("TLS: {e}"))
@@ -549,7 +563,7 @@ fn main() -> Result<()> {
                 && let Some(ref mut catalog) = state.archive_catalog
                 && let Some(track) = catalog.next_track().cloned()
             {
-                let tls = state.tls_provider.clone();
+                let tls = state.net.tls_provider.clone();
                 let (tx, rx) = std::sync::mpsc::channel();
                 std::thread::spawn(move || {
                     let result = connect_archive_track_sync(&tls, &track);
@@ -565,10 +579,10 @@ fn main() -> Result<()> {
             }
 
             // Refresh radio app display if visible.
-            if let Some(ref mut runner) = state.app_runner {
+            if let Some(ref mut runner) = state.content.app_runner {
                 runner.refresh_radio(&vfs);
             }
-            for (_, runner) in &mut state.open_runners {
+            for (_, runner) in &mut state.content.open_runners {
                 runner.refresh_radio(&vfs);
             }
 
@@ -582,8 +596,10 @@ fn main() -> Result<()> {
                             "TV catalog fetch result: {loaded}/{total} channels have episodes"
                         );
                         state.pending_tv_catalog_fetch = None;
-                        let runner =
-                            find_tv_guide_runner(&mut state.app_runner, &mut state.open_runners);
+                        let runner = find_tv_guide_runner(
+                            &mut state.content.app_runner,
+                            &mut state.content.open_runners,
+                        );
                         if let Some(runner) = runner {
                             if let Some(guide) = runner.tv_guide_state() {
                                 guide.fetch_in_progress = false;
@@ -610,8 +626,10 @@ fn main() -> Result<()> {
                     Ok(Err(e)) => {
                         state.pending_tv_catalog_fetch = None;
                         log::error!("TV catalog fetch failed: {e}");
-                        let runner =
-                            find_tv_guide_runner(&mut state.app_runner, &mut state.open_runners);
+                        let runner = find_tv_guide_runner(
+                            &mut state.content.app_runner,
+                            &mut state.content.open_runners,
+                        );
                         if let Some(runner) = runner {
                             if let Some(guide) = runner.tv_guide_state() {
                                 guide.fetch_in_progress = false;
@@ -625,8 +643,10 @@ fn main() -> Result<()> {
                     Err(std::sync::mpsc::TryRecvError::Disconnected) => {
                         state.pending_tv_catalog_fetch = None;
                         log::error!("TV catalog fetch thread died");
-                        let runner =
-                            find_tv_guide_runner(&mut state.app_runner, &mut state.open_runners);
+                        let runner = find_tv_guide_runner(
+                            &mut state.content.app_runner,
+                            &mut state.content.open_runners,
+                        );
                         if let Some(runner) = runner {
                             if let Some(guide) = runner.tv_guide_state() {
                                 guide.fetch_in_progress = false;
@@ -644,8 +664,8 @@ fn main() -> Result<()> {
                             state.pending_tv_catalog_fetch = None;
                             state.tv_fetch_start = None;
                             let runner = find_tv_guide_runner(
-                                &mut state.app_runner,
-                                &mut state.open_runners,
+                                &mut state.content.app_runner,
+                                &mut state.content.open_runners,
                             );
                             if let Some(runner) = runner {
                                 if let Some(guide) = runner.tv_guide_state() {
@@ -661,7 +681,10 @@ fn main() -> Result<()> {
 
             // Start TV catalog fetch if a TV Guide app needs it.
             if state.pending_tv_catalog_fetch.is_none() {
-                let runner = find_tv_guide_runner(&mut state.app_runner, &mut state.open_runners);
+                let runner = find_tv_guide_runner(
+                    &mut state.content.app_runner,
+                    &mut state.content.open_runners,
+                );
                 if let Some(runner) = runner
                     && let Some(guide) = runner.tv_guide_state()
                     && !guide.fetch_attempted
@@ -675,7 +698,7 @@ fn main() -> Result<()> {
                     guide.fetch_in_progress = true;
                     let channels = guide.channels.clone();
                     let (tx, rx) = std::sync::mpsc::channel();
-                    let tls = state.tls_provider.clone();
+                    let tls = state.net.tls_provider.clone();
                     std::thread::spawn(move || {
                         log::info!("TV: background fetch thread started");
                         let result = fetch_tv_catalogs_blocking(&channels, &tls);
@@ -692,7 +715,10 @@ fn main() -> Result<()> {
 
             // Handle TV Guide tune requests — start in-app video player.
             {
-                let runner = find_tv_guide_runner(&mut state.app_runner, &mut state.open_runners);
+                let runner = find_tv_guide_runner(
+                    &mut state.content.app_runner,
+                    &mut state.content.open_runners,
+                );
                 if let Some(runner) = runner
                     && let Some((path, data)) = runner.take_pending_request()
                 {
@@ -757,7 +783,10 @@ fn main() -> Result<()> {
                 }
 
                 // Update the guide's preview texture.
-                let runner = find_tv_guide_runner(&mut state.app_runner, &mut state.open_runners);
+                let runner = find_tv_guide_runner(
+                    &mut state.content.app_runner,
+                    &mut state.content.open_runners,
+                );
                 if let Some(runner) = runner
                     && let Some(guide) = runner.tv_guide_state()
                 {
@@ -768,8 +797,10 @@ fn main() -> Result<()> {
             // Detect untune: video is active but guide has no tuned channel.
             if state.video_player.is_active() {
                 let should_stop = {
-                    let runner =
-                        find_tv_guide_runner(&mut state.app_runner, &mut state.open_runners);
+                    let runner = find_tv_guide_runner(
+                        &mut state.content.app_runner,
+                        &mut state.content.open_runners,
+                    );
                     match runner {
                         Some(runner) => runner
                             .tv_guide_state()
@@ -791,7 +822,7 @@ fn main() -> Result<()> {
         render::update_sdi(&mut state, &mut sdi);
 
         // Drive browser image streaming (progressive loading).
-        if let Some(ref mut bw) = state.browser {
+        if let Some(ref mut bw) = state.content.browser {
             bw.tick(&vfs);
         }
 
@@ -802,14 +833,17 @@ fn main() -> Result<()> {
                 .wm
                 .draw_with_clips(&mut sdi, &mut backend, |window_id, cx, cy, cw, ch, be| {
                     if window_id == "browser" {
-                        if let Some(ref mut bw) = state.browser {
+                        if let Some(ref mut bw) = state.content.browser {
                             bw.set_window(cx, cy, cw, ch);
                             bw.paint(be)
                         } else {
                             Ok(())
                         }
-                    } else if let Some((_, runner)) =
-                        state.open_runners.iter().find(|(id, _)| id == window_id)
+                    } else if let Some((_, runner)) = state
+                        .content
+                        .open_runners
+                        .iter()
+                        .find(|(id, _)| id == window_id)
                     {
                         runner.draw_windowed(cx, cy, cw, ch, be, &state.active_theme)
                     } else {
@@ -824,8 +858,8 @@ fn main() -> Result<()> {
         if state.mode == Mode::Terminal {
             terminal_sdi::paint_terminal_scrollbar(
                 &mut backend,
-                state.output_lines.len(),
-                state.terminal_scroll_offset,
+                state.terminal.output_lines.len(),
+                state.terminal.scroll_offset,
                 &state.active_theme,
             )?;
         }

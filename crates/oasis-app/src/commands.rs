@@ -9,7 +9,9 @@ use oasis_core::terminal::{CommandOutput, Environment};
 use oasis_core::transfer::FtpServer;
 use oasis_core::vfs::MemoryVfs;
 
-use crate::app_state::AppState;
+#[cfg(test)]
+use crate::app_state::UiLayer;
+use crate::app_state::{AppState, ContentLayer, NetworkLayer, TerminalLayer};
 use oasis_core::terminal_sdi;
 
 /// Process a local terminal command result. Returns a pending skin swap name
@@ -21,30 +23,35 @@ pub fn process_command_output(
     match result {
         Ok(CommandOutput::Text(text)) => {
             for l in text.lines() {
-                state.output_lines.push(l.to_string());
+                state.terminal.output_lines.push(l.to_string());
             }
         },
         Ok(CommandOutput::Table { headers, rows }) => {
-            state.output_lines.push(headers.join(" | "));
+            state.terminal.output_lines.push(headers.join(" | "));
             for row in &rows {
-                state.output_lines.push(row.join(" | "));
+                state.terminal.output_lines.push(row.join(" | "));
             }
         },
-        Ok(CommandOutput::Clear) => state.output_lines.clear(),
+        Ok(CommandOutput::Clear) => state.terminal.output_lines.clear(),
         Ok(CommandOutput::None) => {},
         Ok(CommandOutput::ListenToggle { port }) => {
             if port == 0 {
-                if let Some(ref mut l) = state.listener {
+                if let Some(ref mut l) = state.net.listener {
                     l.stop();
-                    state.listener = None;
+                    state.net.listener = None;
                     state
+                        .terminal
                         .output_lines
                         .push("Remote listener stopped.".to_string());
                 } else {
-                    state.output_lines.push("No listener running.".to_string());
+                    state
+                        .terminal
+                        .output_lines
+                        .push("No listener running.".to_string());
                 }
-            } else if state.listener.is_some() {
+            } else if state.net.listener.is_some() {
                 state
+                    .terminal
                     .output_lines
                     .push("Listener already running. Use 'listen stop' first.".to_string());
             } else {
@@ -55,41 +62,50 @@ pub fn process_command_output(
                     ..ListenerConfig::default()
                 };
                 let mut l = RemoteListener::new(cfg);
-                match l.start(&mut state.net_backend) {
+                match l.start(&mut state.net.backend) {
                     Ok(()) => {
                         state
+                            .terminal
                             .output_lines
                             .push(format!("Listening on port {port}."));
-                        state.listener = Some(l);
+                        state.net.listener = Some(l);
                     },
                     Err(e) => {
-                        state.output_lines.push(format!("Listen error: {e}"));
+                        state
+                            .terminal
+                            .output_lines
+                            .push(format!("Listen error: {e}"));
                     },
                 }
             }
         },
         Ok(CommandOutput::RemoteConnect { address, port, psk }) => {
-            if state.remote_client.is_some() {
+            if state.net.remote_client.is_some() {
                 state
+                    .terminal
                     .output_lines
                     .push("Already connected. Disconnect first.".to_string());
             } else {
                 let mut client = RemoteClient::new();
-                match client.connect(&mut state.net_backend, &address, port, psk.as_deref()) {
+                match client.connect(&mut state.net.backend, &address, port, psk.as_deref()) {
                     Ok(()) => {
                         state
+                            .terminal
                             .output_lines
                             .push(format!("Connected to {address}:{port}."));
-                        state.remote_client = Some(client);
+                        state.net.remote_client = Some(client);
                     },
                     Err(e) => {
-                        state.output_lines.push(format!("Connect error: {e}"));
+                        state
+                            .terminal
+                            .output_lines
+                            .push(format!("Connect error: {e}"));
                     },
                 }
             }
         },
         Ok(CommandOutput::BrowserSandbox { enable }) => {
-            if let Some(ref mut bw) = state.browser {
+            if let Some(ref mut bw) = state.content.browser {
                 bw.config.features.sandbox_only = enable;
             }
             let st = if enable {
@@ -97,34 +113,46 @@ pub fn process_command_output(
             } else {
                 "off (HTTP enabled)"
             };
-            state.output_lines.push(format!("Browser sandbox: {st}"));
+            state
+                .terminal
+                .output_lines
+                .push(format!("Browser sandbox: {st}"));
         },
         Ok(CommandOutput::FtpToggle { port }) => {
             if port == 0 {
-                if let Some(ref mut f) = state.ftp_server {
+                if let Some(ref mut f) = state.net.ftp_server {
                     f.stop();
-                    state.ftp_server = None;
-                    state.output_lines.push("FTP server stopped.".to_string());
+                    state.net.ftp_server = None;
+                    state
+                        .terminal
+                        .output_lines
+                        .push("FTP server stopped.".to_string());
                 } else {
                     state
+                        .terminal
                         .output_lines
                         .push("No FTP server running.".to_string());
                 }
-            } else if state.ftp_server.is_some() {
+            } else if state.net.ftp_server.is_some() {
                 state
+                    .terminal
                     .output_lines
                     .push("FTP server already running. Use 'ftp stop' first.".to_string());
             } else {
                 let mut server = FtpServer::new(port);
-                match server.start(&mut state.net_backend) {
+                match server.start(&mut state.net.backend) {
                     Ok(()) => {
                         state
+                            .terminal
                             .output_lines
                             .push(format!("FTP server listening on port {port}."));
-                        state.ftp_server = Some(server);
+                        state.net.ftp_server = Some(server);
                     },
                     Err(e) => {
-                        state.output_lines.push(format!("FTP server error: {e}"));
+                        state
+                            .terminal
+                            .output_lines
+                            .push(format!("FTP server error: {e}"));
                     },
                 }
             }
@@ -143,7 +171,7 @@ pub fn process_command_output(
             return skin_swap;
         },
         Err(e) => {
-            state.output_lines.push(format!("error: {e}"));
+            state.terminal.output_lines.push(format!("error: {e}"));
         },
     }
     None
@@ -162,20 +190,21 @@ pub fn apply_skin_swap(name: &str, state: &mut AppState, sdi: &mut SdiRegistry, 
             let dash_config =
                 DashboardConfig::from_features(&swapped.features, &state.active_theme);
             let apps = discover_apps(vfs, "/apps", Some("OASISOS")).unwrap_or_default();
-            state.dashboard = DashboardState::new(dash_config, apps);
-            state.bottom_bar.total_pages = state.dashboard.page_count();
-            state.bottom_bar.current_page = 0;
-            state.start_menu = StartMenuState::new_with_theme(
+            state.ui.dashboard = DashboardState::new(dash_config, apps);
+            state.ui.bottom_bar.total_pages = state.ui.dashboard.page_count();
+            state.ui.bottom_bar.current_page = 0;
+            state.ui.start_menu = StartMenuState::new_with_theme(
                 StartMenuState::default_items(&state.active_theme),
                 &state.active_theme,
             );
             state
+                .terminal
                 .output_lines
                 .push(format!("Switched to skin: {}", swapped.manifest.name));
             state.skin = swapped;
         },
         Err(e) => {
-            state.output_lines.push(format!("Skin error: {e}"));
+            state.terminal.output_lines.push(format!("Skin error: {e}"));
         },
     }
 }
@@ -257,13 +286,10 @@ fn format_remote_response(
 pub fn poll_remote_listener(state: &mut AppState, sdi: &mut SdiRegistry, vfs: &mut MemoryVfs) {
     // Destructure to allow field-level borrow splitting.
     let AppState {
-        ref mut listener,
-        ref mut net_backend,
-        ref mut cmd_reg,
-        ref mut cwd,
+        ref mut net,
+        ref mut terminal,
+        ref mut content,
         ref platform,
-        ref tls_provider,
-        ref mut browser,
         ref mut skin,
         ref mut active_theme,
         ref mut browser_config,
@@ -271,9 +297,26 @@ pub fn poll_remote_listener(state: &mut AppState, sdi: &mut SdiRegistry, vfs: &m
         ..
     } = *state;
 
+    let NetworkLayer {
+        ref mut listener,
+        ref mut backend,
+        ref tls_provider,
+        ..
+    } = *net;
+
+    let TerminalLayer {
+        ref mut cmd_reg,
+        ref mut cwd,
+        ..
+    } = *terminal;
+
+    let ContentLayer {
+        ref mut browser, ..
+    } = *content;
+
     let Some(l) = listener else { return };
 
-    let remote_cmds = l.poll(net_backend);
+    let remote_cmds = l.poll(backend);
     for (cmd_line, conn_idx) in remote_cmds {
         log::info!("Remote command from #{conn_idx}: {cmd_line}");
         let mut env = Environment {
@@ -297,35 +340,36 @@ pub fn poll_remote_listener(state: &mut AppState, sdi: &mut SdiRegistry, vfs: &m
 
 /// Poll the FTP server for incoming connections and commands.
 pub fn poll_ftp_server(state: &mut AppState, vfs: &mut MemoryVfs) {
-    let AppState {
+    let NetworkLayer {
         ref mut ftp_server,
-        ref mut net_backend,
+        ref mut backend,
         ..
-    } = *state;
+    } = state.net;
 
     let Some(server) = ftp_server else { return };
 
-    if let Err(e) = server.poll(net_backend, vfs) {
+    if let Err(e) = server.poll(backend, vfs) {
         log::warn!("FTP server poll error: {e}");
     }
 }
 
 /// Poll the remote client for received data.
 pub fn poll_remote_client(state: &mut AppState) {
-    let Some(ref mut client) = state.remote_client else {
+    let Some(ref mut client) = state.net.remote_client else {
         return;
     };
     let lines = client.poll();
     for line in lines {
-        state.output_lines.push(format!("[remote] {line}"));
+        state.terminal.output_lines.push(format!("[remote] {line}"));
     }
     if !client.is_connected() {
         state
+            .terminal
             .output_lines
             .push("[remote] Disconnected.".to_string());
-        state.remote_client = None;
+        state.net.remote_client = None;
     }
-    trim_output(&mut state.output_lines);
+    trim_output(&mut state.terminal.output_lines);
 }
 
 /// Truncate output lines to `MAX_OUTPUT_LINES`.
@@ -408,25 +452,35 @@ mod tests {
             active_theme: active_theme.clone(),
             browser_config: BrowserConfig::default(),
             platform: DesktopPlatform::new(),
-            dashboard: DashboardState::new(dash_cfg, vec![]),
-            status_bar: StatusBar::new(),
-            bottom_bar: BottomBar::new(),
-            start_menu: StartMenuState::new(StartMenuState::default_items(&active_theme)),
-            cmd_reg: CommandRegistry::new(),
-            cwd: "/".to_string(),
-            input_buf: String::new(),
-            output_lines: Vec::new(),
+            ui: UiLayer {
+                dashboard: DashboardState::new(dash_cfg, vec![]),
+                status_bar: StatusBar::new(),
+                bottom_bar: BottomBar::new(),
+                start_menu: StartMenuState::new(StartMenuState::default_items(&active_theme)),
+                mouse_cursor: CursorState::default(),
+            },
+            terminal: TerminalLayer {
+                cmd_reg: CommandRegistry::new(),
+                cwd: "/".to_string(),
+                input_buf: String::new(),
+                output_lines: Vec::new(),
+                scroll_offset: 0,
+            },
+            net: NetworkLayer {
+                backend: StdNetworkBackend::new(),
+                listener: None,
+                ftp_server: None,
+                remote_client: None,
+                tls_provider: RustlsTlsProvider::new(),
+            },
+            content: ContentLayer {
+                app_runner: None,
+                open_runners: Vec::new(),
+                browser: None,
+                fullscreen_app: None,
+            },
             osk: None,
-            app_runner: None,
             wm: WindowManager::new(480, 272),
-            open_runners: Vec::new(),
-            browser: None,
-            net_backend: StdNetworkBackend::new(),
-            listener: None,
-            ftp_server: None,
-            remote_client: None,
-            tls_provider: RustlsTlsProvider::new(),
-            mouse_cursor: CursorState::default(),
             mode: crate::app_state::Mode::Dashboard,
             bg_color: Color::rgb(0, 0, 0),
             active_transition: None,
@@ -437,13 +491,11 @@ mod tests {
             pending_catalog_fetch: None,
             pending_source_fetch: None,
             audio_backend: SdlAudioBackend::new(),
-            terminal_scroll_offset: 0,
             toasts: oasis_core::toast::ToastManager::new(),
             pending_tv_catalog_fetch: None,
             tv_fetch_start: None,
             video_player: crate::video_player::VideoPlayer::new(),
             tv_audio_track: None,
-            fullscreen_app: None,
         }
     }
 
@@ -455,7 +507,7 @@ mod tests {
             &mut state,
         );
         assert!(result.is_none());
-        assert_eq!(state.output_lines, vec!["hello", "world"]);
+        assert_eq!(state.terminal.output_lines, vec!["hello", "world"]);
     }
 
     #[test]
@@ -469,18 +521,18 @@ mod tests {
             &mut state,
         );
         assert!(result.is_none());
-        assert_eq!(state.output_lines.len(), 2);
-        assert_eq!(state.output_lines[0], "Name | Size");
-        assert_eq!(state.output_lines[1], "foo.txt | 42");
+        assert_eq!(state.terminal.output_lines.len(), 2);
+        assert_eq!(state.terminal.output_lines[0], "Name | Size");
+        assert_eq!(state.terminal.output_lines[1], "foo.txt | 42");
     }
 
     #[test]
     fn process_clear_output() {
         let mut state = make_test_state();
-        state.output_lines.push("existing".to_string());
+        state.terminal.output_lines.push("existing".to_string());
         let result = process_command_output(Ok(CommandOutput::Clear), &mut state);
         assert!(result.is_none());
-        assert!(state.output_lines.is_empty());
+        assert!(state.terminal.output_lines.is_empty());
     }
 
     #[test]
@@ -488,7 +540,7 @@ mod tests {
         let mut state = make_test_state();
         let result = process_command_output(Ok(CommandOutput::None), &mut state);
         assert!(result.is_none());
-        assert!(state.output_lines.is_empty());
+        assert!(state.terminal.output_lines.is_empty());
     }
 
     #[test]
@@ -509,8 +561,8 @@ mod tests {
         let err = oasis_core::error::OasisError::Command("test error".into());
         let result = process_command_output(Err(err), &mut state);
         assert!(result.is_none());
-        assert_eq!(state.output_lines.len(), 1);
-        assert!(state.output_lines[0].starts_with("error:"));
+        assert_eq!(state.terminal.output_lines.len(), 1);
+        assert!(state.terminal.output_lines[0].starts_with("error:"));
     }
 
     #[test]
@@ -524,7 +576,7 @@ mod tests {
             &mut state,
         );
         assert!(result.is_none());
-        assert_eq!(state.output_lines, vec!["first", "second"]);
+        assert_eq!(state.terminal.output_lines, vec!["first", "second"]);
     }
 
     #[test]
@@ -540,7 +592,7 @@ mod tests {
             &mut state,
         );
         assert_eq!(result, Some("corrupted".to_string()));
-        assert_eq!(state.output_lines, vec!["before"]);
+        assert_eq!(state.terminal.output_lines, vec!["before"]);
     }
 
     #[test]
@@ -551,9 +603,9 @@ mod tests {
             &mut state,
         );
         assert!(result.is_none());
-        assert_eq!(state.output_lines.len(), 1);
-        assert!(state.output_lines[0].contains("sandbox"));
-        assert!(state.output_lines[0].contains("on"));
+        assert_eq!(state.terminal.output_lines.len(), 1);
+        assert!(state.terminal.output_lines[0].contains("sandbox"));
+        assert!(state.terminal.output_lines[0].contains("on"));
     }
 
     #[test]
@@ -564,7 +616,7 @@ mod tests {
             &mut state,
         );
         assert!(result.is_none());
-        assert!(state.output_lines[0].contains("off"));
+        assert!(state.terminal.output_lines[0].contains("off"));
     }
 
     #[test]
@@ -573,7 +625,7 @@ mod tests {
         let result =
             process_command_output(Ok(CommandOutput::ListenToggle { port: 0 }), &mut state);
         assert!(result.is_none());
-        assert_eq!(state.output_lines[0], "No listener running.");
+        assert_eq!(state.terminal.output_lines[0], "No listener running.");
     }
 
     #[test]
@@ -581,14 +633,14 @@ mod tests {
         let mut state = make_test_state();
         let result = process_command_output(Ok(CommandOutput::FtpToggle { port: 0 }), &mut state);
         assert!(result.is_none());
-        assert_eq!(state.output_lines[0], "No FTP server running.");
+        assert_eq!(state.terminal.output_lines[0], "No FTP server running.");
     }
 
     #[test]
     fn process_remote_connect_already_connected() {
         let mut state = make_test_state();
         // Simulate an existing client.
-        state.remote_client = Some(oasis_core::net::RemoteClient::new());
+        state.net.remote_client = Some(oasis_core::net::RemoteClient::new());
         let result = process_command_output(
             Ok(CommandOutput::RemoteConnect {
                 address: "127.0.0.1".into(),
@@ -599,7 +651,7 @@ mod tests {
         );
         assert!(result.is_none());
         assert_eq!(
-            state.output_lines[0],
+            state.terminal.output_lines[0],
             "Already connected. Disconnect first."
         );
     }
@@ -616,20 +668,20 @@ mod tests {
             max_connections: 1,
             ..oasis_core::net::ListenerConfig::default()
         };
-        state.listener = Some(oasis_core::net::RemoteListener::new(cfg));
+        state.net.listener = Some(oasis_core::net::RemoteListener::new(cfg));
         let result =
             process_command_output(Ok(CommandOutput::ListenToggle { port: 8080 }), &mut state);
         assert!(result.is_none());
-        assert!(state.output_lines[0].contains("already running"));
+        assert!(state.terminal.output_lines[0].contains("already running"));
     }
 
     #[test]
     fn process_ftp_already_running() {
         let mut state = make_test_state();
-        state.ftp_server = Some(oasis_core::transfer::FtpServer::new(19000));
+        state.net.ftp_server = Some(oasis_core::transfer::FtpServer::new(19000));
         let result = process_command_output(Ok(CommandOutput::FtpToggle { port: 21 }), &mut state);
         assert!(result.is_none());
-        assert!(state.output_lines[0].contains("already running"));
+        assert!(state.terminal.output_lines[0].contains("already running"));
     }
 
     #[test]
@@ -637,7 +689,7 @@ mod tests {
         let mut state = make_test_state();
         let result = process_command_output(Ok(CommandOutput::Multi(vec![])), &mut state);
         assert!(result.is_none());
-        assert!(state.output_lines.is_empty());
+        assert!(state.terminal.output_lines.is_empty());
     }
 
     #[test]
@@ -652,10 +704,10 @@ mod tests {
             &mut state,
         );
         assert!(result.is_none());
-        assert_eq!(state.output_lines.len(), 3);
-        assert_eq!(state.output_lines[0], "alpha");
-        assert_eq!(state.output_lines[1], "beta");
-        assert_eq!(state.output_lines[2], "gamma");
+        assert_eq!(state.terminal.output_lines.len(), 3);
+        assert_eq!(state.terminal.output_lines[0], "alpha");
+        assert_eq!(state.terminal.output_lines[1], "beta");
+        assert_eq!(state.terminal.output_lines[2], "gamma");
     }
 
     #[test]
@@ -686,8 +738,8 @@ mod tests {
             &mut state,
         );
         assert!(result.is_none());
-        assert_eq!(state.output_lines.len(), 1);
-        assert_eq!(state.output_lines[0], "Col1 | Col2");
+        assert_eq!(state.terminal.output_lines.len(), 1);
+        assert_eq!(state.terminal.output_lines[0], "Col1 | Col2");
     }
 
     #[test]
@@ -696,16 +748,16 @@ mod tests {
         let text = "line1\nline2\nline3\nline4";
         let result = process_command_output(Ok(CommandOutput::Text(text.to_string())), &mut state);
         assert!(result.is_none());
-        assert_eq!(state.output_lines.len(), 4);
+        assert_eq!(state.terminal.output_lines.len(), 4);
     }
 
     #[test]
     fn process_clear_empties_all() {
         let mut state = make_test_state();
-        state.output_lines = vec!["a".to_string(), "b".to_string(), "c".to_string()];
+        state.terminal.output_lines = vec!["a".to_string(), "b".to_string(), "c".to_string()];
         let result = process_command_output(Ok(CommandOutput::Clear), &mut state);
         assert!(result.is_none());
-        assert!(state.output_lines.is_empty());
+        assert!(state.terminal.output_lines.is_empty());
     }
 
     #[test]
@@ -722,7 +774,7 @@ mod tests {
         let mut state = make_test_state();
         let err = oasis_core::error::OasisError::Vfs("file not found".into());
         process_command_output(Err(err), &mut state);
-        assert!(state.output_lines[0].contains("error:"));
-        assert!(state.output_lines[0].contains("file not found"));
+        assert!(state.terminal.output_lines[0].contains("error:"));
+        assert!(state.terminal.output_lines[0].contains("file not found"));
     }
 }

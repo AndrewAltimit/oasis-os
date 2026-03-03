@@ -1,0 +1,189 @@
+# Cyberpunk / Neon theme
+# Dark background with vivid cyan, magenta, and yellow neon accents.
+# Glow effects via shadow colors, scanline wallpaper, angular geometry.
+
+background = "#0A0A14"
+primary = "#00F0FF"
+secondary = "#1A1A2E"
+text = "#E0F0FF"
+dim_text = "#506080"
+status_bar = "#08081080"
+prompt = "#00F0FF"
+output = "#C0D8FF"
+error = "#FF2060"
+surface = "#12122A"
+accent_hover = "#40FFFF"
+
+border_radius = 2
+shadow_intensity = 2
+gradient_enabled = true
+
+[wm_theme]
+titlebar_height = 28
+border_width = 1
+titlebar_active = "#12122A"
+titlebar_inactive = "#0E0E20"
+titlebar_text = "#00F0FF"
+frame_color = "#00F0FF40"
+content_bg = "#0A0A14"
+btn_close = "#FF2060"
+btn_minimize = "#FFD000"
+btn_maximize = "#00F0FF"
+button_size = 14
+titlebar_font_size = 12
+titlebar_radius = 2
+titlebar_gradient = true
+titlebar_gradient_top = "#1A1A3A"
+titlebar_gradient_bottom = "#0A0A1A"
+frame_shadow_level = 2
+frame_border_radius = 2
+button_radius = 1
+button_side = "right"
+glyph_close = "X"
+glyph_minimize = "_"
+glyph_maximize = "+"
+title_align = "left"
+separator_enabled = true
+separator_color = "#00F0FF30"
+glyph_close_color = "#FF2060"
+glyph_minimize_color = "#FFD000"
+glyph_maximize_color = "#00F0FF"
+btn_close_hover = "#FF4080"
+btn_minimize_hover = "#FFE040"
+btn_maximize_hover = "#40FFFF"
+title_text_shadow = true
+title_text_shadow_color = "#00F0FF40"
+content_stroke_width = 1
+content_stroke_color = "#00F0FF20"
+maximize_top_inset = 32
+maximize_bottom_inset = 36
+modal_overlay_color = "#00000099"
+inactive_frame_alpha = 140
+
+[bar_overrides]
+statusbar_bg = "#08081080"
+bar_bg = "#0A0A14"
+battery_color = "#00F0FF"
+version_color = "#FF2060"
+clock_color = "#FFD000"
+separator_color = "#00F0FF40"
+text_shadow = true
+text_shadow_color = "#00F0FF30"
+statusbar_gradient_top = "#14142A"
+statusbar_gradient_bottom = "#08081A"
+bar_gradient_top = "#14142A"
+bar_gradient_bottom = "#08081A"
+version_text = "NEON://OS"
+url_text = "NET://OASIS"
+
+[wallpaper]
+style = "scanlines"
+color_stops = ["#0A0A14", "#0E0E20"]
+wave_enabled = false
+grid_spacing = 2
+grid_color = "#00F0FF08"
+
+[geometry]
+tab_row_height = 0
+statusbar_height = 28
+bottombar_height = 32
+icon_width = 40
+icon_height = 44
+font_body = 13
+font_hint = 11
+font_heading = 16
+cursor_blink_rate = 20
+cursor_lerp_speed = 0.25
+page_slide_duration = 8
+press_flash_duration = 4
+focus_ring_color = "#00F0FF80"
+focus_ring_width = 1
+cursor_pad = 3
+toast_slide_in = true
+press_flash_lighten = 0.4
+
+[app_overrides]
+app_bg = "#0A0A14"
+text_color = "#E0F0FF"
+dim_text = "#506080"
+title_bar_bg = "#12122A"
+title_bar_text = "#00F0FF"
+title_bar_height = 28
+title_bar_gradient_top = "#1A1A3A"
+title_bar_gradient_bottom = "#0E0E22"
+title_bar_text_shadow = true
+title_bar_text_shadow_color = "#00F0FF30"
+selection_accent_color = "#00F0FF30"
+selection_border_radius = 2
+input_border_radius = 2
+terminal_output_color = "#C0D8FF"
+terminal_prompt_color = "#00F0FF"
+
+[icon_overrides]
+body_color = "#12122A"
+fold_color = "#1A1A3A"
+outline_color = "#00F0FF30"
+shadow_color = "#00F0FF15"
+label_color = "#E0F0FF"
+cursor_color = "#00F0FF30"
+icon_border_radius = 2
+cursor_border_radius = 2
+cursor_stroke_width = 1
+icon_style = "card"
+cursor_style = "stroke"
+
+[start_menu_overrides]
+panel_bg = "#0E0E20"
+panel_gradient_top = "#14142E"
+panel_gradient_bottom = "#0A0A18"
+panel_border = "#00F0FF40"
+item_text = "#E0F0FF"
+item_text_active = "#00F0FF"
+highlight_color = "#00F0FF20"
+button_bg = "#FF206080"
+button_text = "#FFFFFF"
+panel_border_radius = 2
+panel_shadow_level = 2
+button_label = ">>"
+button_width = 28
+button_height = 24
+button_shape = "rect"
+button_gradient = true
+button_gradient_top = "#FF3070"
+button_gradient_bottom = "#C01850"
+panel_width = 280
+columns = 2
+header_text = "NETRUNNER"
+header_bg = "#00F0FF20"
+header_text_color = "#00F0FF"
+header_height = 28
+footer_enabled = true
+footer_bg = "#0A0A14"
+footer_text_color = "#506080"
+footer_text = "DISCONNECT  SHUTDOWN"
+footer_height = 24
+item_icon_size = 20
+item_row_height = 28
+item_separator = true
+item_separator_color = "#00F0FF15"
+
+[browser_overrides]
+chrome_bg = "#12122A"
+chrome_text = "#E0F0FF"
+chrome_button_bg = "#1A1A3A"
+url_bar_bg = "#0A0A14"
+url_bar_text = "#00F0FF"
+link_color = "#FF2060"
+
+[scrollbar_overrides]
+track_color = "#0A0A14"
+thumb_color = "#00F0FF40"
+thumb_hover_color = "#00F0FF80"
+width = 4
+
+[osk_overrides]
+key_bg = "#12122A"
+key_text = "#E0F0FF"
+key_focus = "#00F0FF"
+key_active = "#FF2060"
+key_dim_text = "#506080"

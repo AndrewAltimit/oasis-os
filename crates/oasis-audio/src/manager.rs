@@ -619,6 +619,102 @@ mod tests {
         assert!(!data.is_empty());
     }
 
+    // ---- Phase 12: additional unit tests ----
+
+    #[test]
+    fn new_defaults() {
+        let mgr = AudioManager::new();
+        assert_eq!(mgr.state(), PlaybackState::Stopped);
+        assert_eq!(mgr.volume(), 80);
+        assert!(mgr.playlist.is_empty());
+    }
+
+    #[test]
+    fn default_matches_new() {
+        let mgr = AudioManager::default();
+        assert_eq!(mgr.state(), PlaybackState::Stopped);
+        assert_eq!(mgr.volume(), 80);
+    }
+
+    #[test]
+    fn volume_clamps_at_100() {
+        let mut mgr = AudioManager::new();
+        let mut backend = StubAudioBackend::new();
+        mgr.set_volume(255, &mut backend).unwrap();
+        assert_eq!(mgr.volume(), 100);
+    }
+
+    #[test]
+    fn volume_zero_is_valid() {
+        let mut mgr = AudioManager::new();
+        let mut backend = StubAudioBackend::new();
+        mgr.set_volume(0, &mut backend).unwrap();
+        assert_eq!(mgr.volume(), 0);
+    }
+
+    #[test]
+    fn next_when_stopped_no_panic() {
+        let (mut mgr, mut backend) = setup();
+        // next() from stopped state should not panic.
+        let result = mgr.next(&mut backend);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn prev_when_stopped_no_panic() {
+        let (mut mgr, mut backend) = setup();
+        let result = mgr.prev(&mut backend);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn state_transitions_play_stop_play() {
+        let (mut mgr, mut backend) = setup();
+        mgr.play(&mut backend).unwrap();
+        assert_eq!(mgr.state(), PlaybackState::Playing);
+
+        mgr.stop(&mut backend).unwrap();
+        assert_eq!(mgr.state(), PlaybackState::Stopped);
+
+        mgr.play(&mut backend).unwrap();
+        assert_eq!(mgr.state(), PlaybackState::Playing);
+    }
+
+    #[test]
+    fn repeat_mode_one() {
+        let (mut mgr, _) = setup();
+        mgr.set_repeat(RepeatMode::One);
+        assert_eq!(mgr.playlist.repeat, RepeatMode::One);
+    }
+
+    #[test]
+    fn repeat_mode_off() {
+        let (mut mgr, _) = setup();
+        mgr.set_repeat(RepeatMode::All);
+        mgr.set_repeat(RepeatMode::Off);
+        assert_eq!(mgr.playlist.repeat, RepeatMode::Off);
+    }
+
+    #[test]
+    fn format_status_stopped() {
+        let (mgr, backend) = setup();
+        let status = mgr.format_status(&backend);
+        assert!(status.contains("stopped"));
+        assert!(status.contains("3 tracks"));
+    }
+
+    #[test]
+    fn process_request_invalid_vol() {
+        let (mut mgr, mut backend) = setup();
+        assert!(mgr.process_request("vol abc", &mut backend).is_err());
+    }
+
+    #[test]
+    fn process_request_invalid_repeat() {
+        let (mut mgr, mut backend) = setup();
+        assert!(mgr.process_request("repeat xyz", &mut backend).is_err());
+    }
+
     #[test]
     fn workflow_process_request_sequence() {
         let (mut mgr, mut backend) = setup();

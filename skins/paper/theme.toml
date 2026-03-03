@@ -1,0 +1,150 @@
+# Paper / Minimal theme
+# White/cream background with no shadows, no gradients, and subtle borders.
+# Optimized for content readability like an e-reader or printed document.
+
+background = "#FAF8F0"
+primary = "#2C2C2C"
+secondary = "#E0DDD4"
+text = "#1A1A1A"
+dim_text = "#8C8C84"
+status_bar = "#F0EDE4"
+prompt = "#2C2C2C"
+output = "#333333"
+error = "#B00020"
+
+border_radius = 0
+shadow_intensity = 0
+gradient_enabled = false
+
+[wm_theme]
+titlebar_height = 22
+border_width = 1
+titlebar_active = "#F0EDE4"
+titlebar_inactive = "#F5F3EC"
+titlebar_text = "#1A1A1A"
+frame_color = "#D0CCC4"
+content_bg = "#FFFFFF"
+btn_close = "#B00020"
+btn_minimize = "#8C8C84"
+btn_maximize = "#8C8C84"
+button_size = 12
+titlebar_font_size = 12
+titlebar_radius = 0
+titlebar_gradient = false
+frame_shadow_level = 0
+frame_border_radius = 0
+button_radius = 0
+button_side = "right"
+glyph_close = "x"
+glyph_minimize = "_"
+glyph_maximize = "o"
+title_align = "left"
+separator_enabled = true
+separator_color = "#D0CCC4"
+glyph_close_color = "#B00020"
+glyph_minimize_color = "#8C8C84"
+glyph_maximize_color = "#8C8C84"
+btn_close_hover = "#D0002A"
+btn_minimize_hover = "#666660"
+btn_maximize_hover = "#666660"
+title_text_shadow = false
+content_stroke_width = 1
+content_stroke_color = "#D0CCC4"
+maximize_top_inset = 24
+maximize_bottom_inset = 24
+inactive_frame_alpha = 220
+
+[bar_overrides]
+statusbar_bg = "#F0EDE4"
+bar_bg = "#F0EDE4"
+battery_color = "#1A1A1A"
+version_color = "#8C8C84"
+clock_color = "#1A1A1A"
+separator_color = "#D0CCC4"
+text_shadow = false
+
+[wallpaper]
+style = "solid"
+color_stops = ["#FAF8F0"]
+wave_enabled = false
+
+[geometry]
+tab_row_height = 0
+statusbar_height = 20
+bottombar_height = 20
+icon_width = 32
+icon_height = 36
+font_body = 13
+font_hint = 11
+font_heading = 15
+cursor_blink_rate = 30
+cursor_lerp_speed = 0.15
+page_slide_duration = 12
+press_flash_duration = 0
+focus_ring_color = "#2C2C2C60"
+focus_ring_width = 1
+cursor_pad = 3
+toast_slide_in = false
+
+[app_overrides]
+app_bg = "#FFFFFF"
+text_color = "#1A1A1A"
+dim_text = "#8C8C84"
+title_bar_bg = "#F0EDE4"
+title_bar_text = "#1A1A1A"
+title_bar_height = 22
+selection_accent_color = "#2C2C2C20"
+selection_border_radius = 0
+input_border_radius = 0
+terminal_output_color = "#333333"
+terminal_prompt_color = "#2C2C2C"
+
+[icon_overrides]
+body_color = "#FFFFFF"
+fold_color = "#E0DDD4"
+outline_color = "#D0CCC4"
+label_color = "#1A1A1A"
+cursor_color = "#2C2C2C20"
+icon_border_radius = 0
+cursor_border_radius = 0
+icon_style = "document"
+cursor_style = "stroke"
+cursor_stroke_width = 1
+
+[start_menu_overrides]
+panel_bg = "#FFFFFF"
+panel_border = "#D0CCC4"
+item_text = "#1A1A1A"
+item_text_active = "#1A1A1A"
+highlight_color = "#2C2C2C15"
+button_bg = "#F0EDE4"
+button_text = "#1A1A1A"
+panel_border_radius = 0
+panel_shadow_level = 0
+button_label = "Menu"
+button_width = 48
+button_height = 18
+button_shape = "rect"
+panel_width = 220
+columns = 1
+header_text = ""
+header_height = 0
+footer_enabled = false
+item_icon_size = 14
+item_row_height = 22
+item_separator = true
+item_separator_color = "#E0DDD4"
+
+[browser_overrides]
+chrome_bg = "#F0EDE4"
+chrome_text = "#1A1A1A"
+chrome_button_bg = "#E0DDD4"
+url_bar_bg = "#FFFFFF"
+url_bar_text = "#1A1A1A"
+link_color = "#1A5276"
+
+[scrollbar_overrides]
+track_color = "#F0EDE4"
+thumb_color = "#D0CCC4"
+thumb_hover_color = "#B0ACA4"
+width = 4

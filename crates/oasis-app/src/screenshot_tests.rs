@@ -1294,7 +1294,7 @@ fn run_tv_guide_scenario(
 
     // Build guide state based on scenario variant.
     let config = ChannelConfig::from_toml(DEFAULT_CHANNELS_TOML)?;
-    let mut guide = TvGuideState::new(&config);
+    let mut guide = TvGuideState::new(&config, &ActiveTheme::default());
 
     match scenario {
         "tv_guide_loading" => {

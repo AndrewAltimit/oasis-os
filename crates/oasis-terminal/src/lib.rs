@@ -6,11 +6,15 @@
 
 pub mod audio_commands;
 mod commands;
+pub mod completion;
 pub mod dev_commands;
 pub mod doc_commands;
 pub mod file_commands;
 pub mod fun_commands;
+pub mod highlight;
 mod interpreter;
+pub mod jobs;
+pub mod line_edit;
 pub mod network_commands;
 pub mod radio_commands;
 pub mod security_commands;
@@ -59,3 +63,16 @@ pub use system_commands::register_system_commands;
 pub use text_commands::register_text_commands;
 /// Register UI control commands (wm, sdi, theme, notify, screenshot).
 pub use ui_commands::register_ui_commands;
+
+pub mod cmd_helpers;
+pub use cmd_helpers::{require_args, require_args_exact};
+/// Shell job (background or stopped command).
+pub use jobs::Job;
+/// Manages shell jobs (background and stopped commands).
+pub use jobs::JobManager;
+/// Current state of a job (Running, Stopped, Done).
+pub use jobs::JobState;
+/// Parse a job specifier like `%1`, `%%`, `%+`, `%-`.
+pub use jobs::parse_job_spec;
+/// Readline-style line editing: actions, results, and the editor state machine.
+pub use line_edit::{EditAction, EditResult, LineEditor};

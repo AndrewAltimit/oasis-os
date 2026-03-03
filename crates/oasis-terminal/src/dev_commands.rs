@@ -4,6 +4,30 @@ use oasis_types::error::{OasisError, Result};
 
 use crate::interpreter::{Command, CommandOutput, Environment};
 
+/// Platform-safe seed for PRNG. Uses `TimeService` when available (required on
+/// WASM where `std::time::SystemTime::now()` panics), falls back to std on native.
+fn time_seed(env: &Environment<'_>) -> u64 {
+    if let Some(time) = env.time
+        && let Ok(now) = time.now()
+    {
+        return (now.year as u64) << 40
+            | (now.month as u64) << 32
+            | (now.day as u64) << 24
+            | (now.hour as u64) << 16
+            | (now.minute as u64) << 8
+            | (now.second as u64);
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos() as u64
+    }
+    #[cfg(target_arch = "wasm32")]
+    0
+}
+
 // ---------------------------------------------------------------------------
 // base64
 // ---------------------------------------------------------------------------
@@ -282,12 +306,9 @@ impl Command for UuidCmd {
     fn category(&self) -> &str {
         "dev"
     }
-    fn execute(&self, _args: &[&str], _env: &mut Environment<'_>) -> Result<CommandOutput> {
+    fn execute(&self, _args: &[&str], env: &mut Environment<'_>) -> Result<CommandOutput> {
         // Simple PRNG-based UUID v4 (not cryptographic).
-        let seed = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_nanos() as u64;
+        let seed = time_seed(env);
 
         let mut state = seed;
         let mut bytes = [0u8; 16];

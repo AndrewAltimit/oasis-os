@@ -8,8 +8,11 @@ pub mod agent_commands;
 pub mod plugin_commands;
 pub mod tv_commands;
 
-// Re-export everything from the oasis-terminal crate.
-pub use oasis_terminal::*;
+// Explicit re-exports from the oasis-terminal crate.
+pub use oasis_terminal::{
+    Command, CommandOutput, CommandRegistry, Environment, cmd_helpers, populate_man_pages,
+    populate_motd, populate_profile, register_builtins,
+};
 
 pub use agent_commands::register_agent_commands;
 pub use plugin_commands::register_plugin_commands;

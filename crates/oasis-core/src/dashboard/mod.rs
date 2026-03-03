@@ -414,9 +414,9 @@ impl DashboardState {
                 cursor.visible = true;
                 cursor.overlay = true;
 
-                // Include label area (icon + gap + up to 2 lines).
+                // Include label area (icon + gap + 1 line of text).
                 let glyph_h = at.font_small.max(8) as u32;
-                let label_h = text_pad as u32 + glyph_h * 2 + 1;
+                let label_h = text_pad as u32 + glyph_h + 2;
                 let total_h = icon_h + label_h;
 
                 match at.cursor_style.as_str() {
@@ -432,7 +432,7 @@ impl DashboardState {
                     },
                     "underline" => {
                         cursor.x = cx;
-                        cursor.y = cy + pad + icon_h as i32 + text_pad + glyph_h as i32 * 2 + 2;
+                        cursor.y = cy + pad + icon_h as i32 + text_pad + glyph_h as i32 + 2;
                         cursor.w = self.config.cell_w;
                         cursor.h = 3;
                         cursor.color = at.cursor_color;
@@ -599,11 +599,16 @@ impl DashboardState {
         app: &AppEntry,
         text_pad: i32,
     ) {
-        let stripe_h = at.icon_stripe_h;
-        let fold_size = at.icon_fold_size;
-        let gfx_pad = at.icon_gfx_pad;
-        let gfx_w = icon_w - 2 * gfx_pad;
-        let gfx_h = at.icon_gfx_h;
+        let r = at.icon_border_radius as u32;
+        // Clamp sub-element sizes to fit within the icon body's rounded rect.
+        let stripe_h = at.icon_stripe_h.min(icon_h / 4);
+        let fold_size = at.icon_fold_size.min(icon_w / 3).min(icon_h / 4);
+        let gfx_pad = at.icon_gfx_pad.max(r);
+        let gfx_w = icon_w.saturating_sub(2 * gfx_pad);
+        let gfx_gap = 2u32;
+        let gfx_h = at
+            .icon_gfx_h
+            .min(icon_h.saturating_sub(stripe_h + gfx_gap + r));
 
         if let Ok(obj) = sdi.get_mut(&format!("icon_outline_{i}")) {
             obj.x = ix - 1;
@@ -633,13 +638,14 @@ impl DashboardState {
             obj.border_radius = Some(at.icon_border_radius);
             obj.shadow_level = Some(at.icon_shadow_level);
         }
+        // Inset stripe below the top rounded corners.
         if let Ok(obj) = sdi.get_mut(&format!("icon_stripe_{i}")) {
-            let r = at.icon_border_radius as u32;
+            let inset = r.min(2);
             obj.x = ix + r as i32;
-            obj.y = iy;
-            obj.w = icon_w - fold_size - r;
+            obj.y = iy + inset as i32;
+            obj.w = icon_w.saturating_sub(fold_size + r);
             obj.h = stripe_h;
-            obj.visible = true;
+            obj.visible = stripe_h > 0;
             obj.color = app.color;
             obj.text = None;
         }
@@ -648,16 +654,16 @@ impl DashboardState {
             obj.y = iy;
             obj.w = fold_size;
             obj.h = fold_size;
-            obj.visible = true;
+            obj.visible = fold_size > 0;
             obj.color = at.icon_fold_color;
             obj.text = None;
         }
         if let Ok(obj) = sdi.get_mut(&format!("icon_gfx_{i}")) {
             obj.x = ix + gfx_pad as i32;
-            obj.y = iy + stripe_h as i32 + 3;
+            obj.y = iy + stripe_h as i32 + gfx_gap as i32;
             obj.w = gfx_w;
             obj.h = gfx_h;
-            obj.visible = true;
+            obj.visible = gfx_w > 0 && gfx_h > 0;
             let c = app.color;
             obj.color = oasis_types::color::with_alpha(oasis_types::color::lighten(c, 0.15), 200);
             obj.text = None;

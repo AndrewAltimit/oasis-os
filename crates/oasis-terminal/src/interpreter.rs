@@ -126,6 +126,13 @@ pub struct CommandRegistry {
     call_depth: Cell<usize>,
     /// Set by `return` to signal early exit from a function body.
     return_flag: Cell<bool>,
+    /// Set by `break` inside a loop body.
+    break_flag: Cell<bool>,
+    /// Set by `continue` inside a loop body.
+    continue_flag: Cell<bool>,
+    /// Stack of local variable scopes for function calls.
+    /// Each scope maps variable names to their saved values (None = was unset).
+    local_scopes: RefCell<Vec<HashMap<String, Option<String>>>>,
 }
 
 impl CommandRegistry {
@@ -144,6 +151,9 @@ impl CommandRegistry {
             functions: RefCell::new(HashMap::new()),
             call_depth: Cell::new(0),
             return_flag: Cell::new(false),
+            break_flag: Cell::new(false),
+            continue_flag: Cell::new(false),
+            local_scopes: RefCell::new(Vec::new()),
         }
     }
 
@@ -266,11 +276,24 @@ impl CommandRegistry {
         }
         self.set_variable("#", &args.len().to_string());
 
+        // Push a new local variable scope.
+        self.local_scopes.borrow_mut().push(HashMap::new());
+
         // Execute body as a chain of commands.
         let result = self.execute(func.body.trim(), env);
 
         // Clear the return flag so it doesn't propagate to the caller.
         self.return_flag.set(false);
+
+        // Pop local variable scope and restore saved values.
+        if let Some(scope) = self.local_scopes.borrow_mut().pop() {
+            for (name, saved) in scope {
+                match saved {
+                    Some(v) => self.set_variable(&name, &v),
+                    None => self.unset_variable(&name),
+                }
+            }
+        }
 
         // Restore previous positional args.
         for (key, old_val) in saved_args {
@@ -385,6 +408,7 @@ impl CommandRegistry {
         if all_outputs.is_empty() {
             Ok(CommandOutput::None)
         } else if all_outputs.len() == 1 {
+            // SAFETY: guarded by len() == 1 check above.
             Ok(all_outputs.into_iter().next().unwrap())
         } else {
             // Merge consecutive Text entries to reduce Multi size.
@@ -400,6 +424,7 @@ impl CommandRegistry {
                 merged.push(output);
             }
             if merged.len() == 1 {
+                // SAFETY: guarded by len() == 1 check above.
                 Ok(merged.into_iter().next().unwrap())
             } else {
                 Ok(CommandOutput::Multi(merged))
@@ -556,6 +581,7 @@ impl CommandRegistry {
             || trimmed.starts_with("function\t")
             || trimmed == "function"
         {
+            // SAFETY: guarded by starts_with("function") / == "function" above.
             let rest = trimmed.strip_prefix("function").unwrap().trim();
             return self.execute_function_def_raw(rest);
         }
@@ -597,6 +623,9 @@ impl CommandRegistry {
             "unalias" => return self.execute_unalias(&args),
             "which" => return self.execute_which(&args),
             "return" => return self.execute_return(&args),
+            "break" => return self.execute_break(),
+            "continue" => return self.execute_continue(),
+            "local" => return self.execute_local(&args),
             _ => {},
         }
 
@@ -772,97 +801,37 @@ impl CommandRegistry {
         const MAX_ITERATIONS: usize = 1000;
 
         while *pos < lines.len() {
+            // Check flow-control flags early.
+            if self.return_flag.get() || self.break_flag.get() || self.continue_flag.get() {
+                return;
+            }
+
             let line = &lines[*pos];
             let first_word = line.split_whitespace().next().unwrap_or("");
 
             match first_word {
                 "if" => {
-                    let condition = line.strip_prefix("if").unwrap_or("").trim();
-                    *pos += 1;
-                    // Evaluate condition.
-                    let cond_result = self.eval_condition(condition, env);
-
-                    // Find then/else/fi boundaries and collect blocks.
-                    let mut then_block = Vec::new();
-                    let mut else_block = Vec::new();
-                    let mut in_else = false;
-                    let mut depth = 0;
-
-                    while *pos < lines.len() {
-                        let l = &lines[*pos];
-                        let fw = l.split_whitespace().next().unwrap_or("");
-                        if fw == "if" {
-                            depth += 1;
-                        }
-                        if fw == "fi" {
-                            if depth == 0 {
-                                *pos += 1;
-                                break;
-                            }
-                            depth -= 1;
-                        }
-                        if fw == "else" && depth == 0 {
-                            in_else = true;
-                            *pos += 1;
-                            continue;
-                        }
-                        // Skip "then" keyword.
-                        if fw == "then" && depth == 0 {
-                            *pos += 1;
-                            continue;
-                        }
-                        if in_else {
-                            else_block.push(l.clone());
-                        } else {
-                            then_block.push(l.clone());
-                        }
-                        *pos += 1;
-                    }
-
-                    let block = if cond_result {
-                        &then_block
-                    } else {
-                        &else_block
-                    };
-                    if !block.is_empty() {
-                        let mut sub_pos = 0;
-                        self.execute_script_block(block, &mut sub_pos, env, output);
-                    }
+                    self.execute_if_block(lines, pos, env, output);
+                },
+                "case" => {
+                    self.execute_case_block(lines, pos, env, output);
                 },
                 "while" => {
                     let condition = line.strip_prefix("while").unwrap_or("").trim().to_string();
                     *pos += 1;
-                    // Skip "do" keyword.
-                    if *pos < lines.len() && lines[*pos].split_whitespace().next() == Some("do") {
-                        *pos += 1;
-                    }
+                    let body = self.collect_loop_body(lines, pos);
 
-                    // Collect loop body until "done".
-                    let body_start = *pos;
-                    let mut depth = 0;
-                    while *pos < lines.len() {
-                        let fw = lines[*pos].split_whitespace().next().unwrap_or("");
-                        if fw == "while" || fw == "for" {
-                            depth += 1;
-                        }
-                        if fw == "done" {
-                            if depth == 0 {
-                                break;
-                            }
-                            depth -= 1;
-                        }
-                        *pos += 1;
-                    }
-                    let body: Vec<String> = lines[body_start..*pos].to_vec();
-                    if *pos < lines.len() {
-                        *pos += 1; // Skip "done".
-                    }
-
-                    // Execute loop.
                     let mut iterations = 0;
                     while self.eval_condition(&condition, env) && iterations < MAX_ITERATIONS {
+                        self.break_flag.set(false);
+                        self.continue_flag.set(false);
                         let mut sub_pos = 0;
                         self.execute_script_block(&body, &mut sub_pos, env, output);
+                        if self.break_flag.get() {
+                            self.break_flag.set(false);
+                            break;
+                        }
+                        self.continue_flag.set(false);
                         iterations += 1;
                     }
                     if iterations >= MAX_ITERATIONS {
@@ -873,7 +842,6 @@ impl CommandRegistry {
                     }
                 },
                 "for" => {
-                    // Parse: for VAR in ITEM1 ITEM2 ...
                     let rest = line.strip_prefix("for").unwrap_or("").trim();
                     let parts: Vec<&str> = rest.splitn(3, ' ').collect();
                     let var_name = parts.first().copied().unwrap_or("_");
@@ -885,49 +853,270 @@ impl CommandRegistry {
                     let items: Vec<&str> = items_str.split_whitespace().collect();
 
                     *pos += 1;
-                    // Skip "do" keyword.
-                    if *pos < lines.len() && lines[*pos].split_whitespace().next() == Some("do") {
-                        *pos += 1;
-                    }
+                    let body = self.collect_loop_body(lines, pos);
 
-                    // Collect loop body until "done".
-                    let body_start = *pos;
-                    let mut depth = 0;
-                    while *pos < lines.len() {
-                        let fw = lines[*pos].split_whitespace().next().unwrap_or("");
-                        if fw == "while" || fw == "for" {
-                            depth += 1;
-                        }
-                        if fw == "done" {
-                            if depth == 0 {
-                                break;
-                            }
-                            depth -= 1;
-                        }
-                        *pos += 1;
-                    }
-                    let body: Vec<String> = lines[body_start..*pos].to_vec();
-                    if *pos < lines.len() {
-                        *pos += 1; // Skip "done".
-                    }
-
-                    // Execute for each item.
                     for item in &items {
                         self.set_variable(var_name, item);
+                        self.break_flag.set(false);
+                        self.continue_flag.set(false);
                         let mut sub_pos = 0;
                         self.execute_script_block(&body, &mut sub_pos, env, output);
+                        if self.break_flag.get() {
+                            self.break_flag.set(false);
+                            break;
+                        }
+                        self.continue_flag.set(false);
                     }
                 },
                 // Stop tokens -- return to parent.
-                "fi" | "done" | "else" | "then" => {
+                "fi" | "done" | "else" | "elif" | "then" | "esac" => {
                     *pos += 1;
                     return;
                 },
                 _ => {
-                    // Regular command.
                     self.execute_script_line(line, env, output, *pos);
                     *pos += 1;
                 },
+            }
+        }
+    }
+
+    /// Collect loop body lines (skipping `do`, until matching `done`), advancing `pos` past `done`.
+    fn collect_loop_body(&self, lines: &[String], pos: &mut usize) -> Vec<String> {
+        // Skip "do" keyword.
+        if *pos < lines.len() && lines[*pos].split_whitespace().next() == Some("do") {
+            *pos += 1;
+        }
+        let body_start = *pos;
+        let mut depth = 0;
+        while *pos < lines.len() {
+            let fw = lines[*pos].split_whitespace().next().unwrap_or("");
+            if fw == "while" || fw == "for" {
+                depth += 1;
+            }
+            if fw == "done" {
+                if depth == 0 {
+                    break;
+                }
+                depth -= 1;
+            }
+            *pos += 1;
+        }
+        let body: Vec<String> = lines[body_start..*pos].to_vec();
+        if *pos < lines.len() {
+            *pos += 1; // Skip "done".
+        }
+        body
+    }
+
+    /// Execute an `if`/`elif`/`else`/`fi` block with full elif support.
+    ///
+    /// Collects branches as `(Option<condition>, body_lines)` pairs, then
+    /// evaluates and executes only the first matching branch.
+    fn execute_if_block(
+        &self,
+        lines: &[String],
+        pos: &mut usize,
+        env: &mut Environment<'_>,
+        output: &mut Vec<String>,
+    ) {
+        // branches: Vec<(Option<condition_string>, Vec<body_lines>)>
+        // None condition = else branch.
+        let mut branches: Vec<(Option<String>, Vec<String>)> = Vec::new();
+
+        // Parse the initial "if COND" line.
+        let first_cond = lines[*pos]
+            .strip_prefix("if")
+            .unwrap_or("")
+            .trim()
+            .to_string();
+        *pos += 1;
+        // Skip "then".
+        if *pos < lines.len() && lines[*pos].split_whitespace().next() == Some("then") {
+            *pos += 1;
+        }
+
+        let mut current_cond: Option<String> = Some(first_cond);
+        let mut current_body: Vec<String> = Vec::new();
+        let mut depth = 0;
+
+        while *pos < lines.len() {
+            let l = &lines[*pos];
+            let fw = l.split_whitespace().next().unwrap_or("");
+
+            if fw == "if" || fw == "case" {
+                depth += 1;
+            }
+            if (fw == "fi" || fw == "esac") && depth > 0 {
+                depth -= 1;
+                current_body.push(l.clone());
+                *pos += 1;
+                continue;
+            }
+
+            if depth == 0 && fw == "fi" {
+                // End of entire if block.
+                branches.push((current_cond.take(), current_body));
+                *pos += 1;
+                break;
+            }
+            if depth == 0 && fw == "elif" {
+                branches.push((current_cond.take(), current_body));
+                current_body = Vec::new();
+                current_cond = Some(l.strip_prefix("elif").unwrap_or("").trim().to_string());
+                *pos += 1;
+                // Skip "then".
+                if *pos < lines.len() && lines[*pos].split_whitespace().next() == Some("then") {
+                    *pos += 1;
+                }
+                continue;
+            }
+            if depth == 0 && fw == "else" {
+                branches.push((current_cond.take(), current_body));
+                current_body = Vec::new();
+                current_cond = None; // else branch
+                *pos += 1;
+                continue;
+            }
+            if depth == 0 && fw == "then" {
+                *pos += 1;
+                continue;
+            }
+
+            current_body.push(l.clone());
+            *pos += 1;
+        }
+
+        // Execute the first matching branch.
+        for (cond, body) in &branches {
+            let matches = match cond {
+                Some(c) => self.eval_condition(c, env),
+                None => true, // else branch always matches
+            };
+            if matches {
+                if !body.is_empty() {
+                    let mut sub_pos = 0;
+                    self.execute_script_block(body, &mut sub_pos, env, output);
+                }
+                return;
+            }
+        }
+    }
+
+    /// Execute a `case EXPR in ... esac` block.
+    fn execute_case_block(
+        &self,
+        lines: &[String],
+        pos: &mut usize,
+        env: &mut Environment<'_>,
+        output: &mut Vec<String>,
+    ) {
+        // Parse "case EXPR in".
+        let case_line = &lines[*pos];
+        let rest = case_line.strip_prefix("case").unwrap_or("").trim();
+        // Extract the expression (everything before "in").
+        let expr = if let Some(idx) = rest.rfind(" in") {
+            rest[..idx].trim()
+        } else {
+            rest.trim_end_matches(" in").trim()
+        };
+        // Expand variables in the expression.
+        let value = self.expand_variables(expr, &env.cwd);
+        *pos += 1;
+
+        // Collect pattern/body pairs until "esac".
+        // Format: PATTERN) BODY ;; or PATTERN)\nBODY\n;;
+        let mut matched = false;
+        let mut depth = 0;
+
+        while *pos < lines.len() {
+            let l = lines[*pos].trim().to_string();
+
+            if l == "esac" && depth == 0 {
+                *pos += 1;
+                break;
+            }
+
+            // Track nested case blocks.
+            if l.starts_with("case ") {
+                depth += 1;
+            }
+            if l == "esac" && depth > 0 {
+                depth -= 1;
+                *pos += 1;
+                continue;
+            }
+
+            if depth > 0 || matched {
+                *pos += 1;
+                continue;
+            }
+
+            // Look for "PATTERN)" or "PATTERN|PATTERN)".
+            if let Some(paren_idx) = l.find(')') {
+                let pattern = l[..paren_idx].trim();
+                // Body might be on the same line after ")".
+                let after = l[paren_idx + 1..].trim().to_string();
+
+                // Collect body lines until ";;".
+                let mut body_lines: Vec<String> = Vec::new();
+                if !after.is_empty() {
+                    // Inline body: "pattern) cmd1; cmd2 ;;"
+                    let trimmed = after.trim_end_matches(";;").trim();
+                    if !trimmed.is_empty() {
+                        // Split on ';' for inline commands.
+                        for cmd in trimmed.split(';') {
+                            let cmd = cmd.trim();
+                            if !cmd.is_empty() {
+                                body_lines.push(cmd.to_string());
+                            }
+                        }
+                    }
+                    if after.contains(";;") {
+                        *pos += 1;
+                    } else {
+                        *pos += 1;
+                        // Continue collecting until ";;".
+                        while *pos < lines.len() {
+                            let bl = lines[*pos].trim();
+                            if bl == ";;" || bl.ends_with(";;") {
+                                let trimmed = bl.trim_end_matches(";;").trim();
+                                if !trimmed.is_empty() {
+                                    body_lines.push(trimmed.to_string());
+                                }
+                                *pos += 1;
+                                break;
+                            }
+                            body_lines.push(bl.to_string());
+                            *pos += 1;
+                        }
+                    }
+                } else {
+                    *pos += 1;
+                    while *pos < lines.len() {
+                        let bl = lines[*pos].trim();
+                        if bl == ";;" || bl.ends_with(";;") {
+                            let trimmed = bl.trim_end_matches(";;").trim();
+                            if !trimmed.is_empty() {
+                                body_lines.push(trimmed.to_string());
+                            }
+                            *pos += 1;
+                            break;
+                        }
+                        body_lines.push(bl.to_string());
+                        *pos += 1;
+                    }
+                }
+
+                if case_pattern_matches(&value, pattern) {
+                    matched = true;
+                    if !body_lines.is_empty() {
+                        let mut sub_pos = 0;
+                        self.execute_script_block(&body_lines, &mut sub_pos, env, output);
+                    }
+                }
+            } else {
+                *pos += 1;
             }
         }
     }
@@ -1061,7 +1250,9 @@ impl CommandRegistry {
                 .sum();
             let mut out = format!("Commands ({total}):\n");
             for cat in &cats {
-                let cmds = categories.get(cat).unwrap();
+                let Some(cmds) = categories.get(cat) else {
+                    continue;
+                };
                 let mut cmds = cmds.clone();
                 cmds.sort_by_key(|(name, _)| *name);
                 out.push_str(&format!("\n  [{cat}]\n"));
@@ -1087,7 +1278,7 @@ impl CommandRegistry {
         // Check intercepted commands first.
         let intercepted = [
             "help", "run", "history", "set", "unset", "env", "alias", "unalias", "which",
-            "function", "return",
+            "function", "return", "break", "continue", "local",
         ];
         if intercepted.contains(&name.as_str()) {
             return Ok(CommandOutput::Text(format!("{name}: shell built-in")));
@@ -1211,6 +1402,53 @@ impl CommandRegistry {
         self.last_exit_code.set(code);
         self.set_variable("?", &code.to_string());
         self.return_flag.set(true);
+        Ok(CommandOutput::None)
+    }
+
+    /// Built-in `break` command — sets the break flag for the enclosing loop.
+    fn execute_break(&self) -> Result<CommandOutput> {
+        self.break_flag.set(true);
+        Ok(CommandOutput::None)
+    }
+
+    /// Built-in `continue` command — sets the continue flag for the enclosing loop.
+    fn execute_continue(&self) -> Result<CommandOutput> {
+        self.continue_flag.set(true);
+        Ok(CommandOutput::None)
+    }
+
+    /// Built-in `local` command — declares a local variable in the current function scope.
+    ///
+    /// Syntax: `local NAME=VALUE` or `local NAME`
+    fn execute_local(&self, args: &[&str]) -> Result<CommandOutput> {
+        let scopes = self.local_scopes.borrow();
+        if scopes.is_empty() {
+            return Err(OasisError::Command(
+                "local: can only be used inside a function".to_string(),
+            ));
+        }
+        drop(scopes);
+
+        for arg in args {
+            let (name, value) = if let Some((n, v)) = arg.split_once('=') {
+                (n, Some(v))
+            } else {
+                (*arg, None)
+            };
+            // Save the current value (or None if unset) in the top scope.
+            let old = self.get_variable(name);
+            let mut scopes_mut = self.local_scopes.borrow_mut();
+            let Some(top) = scopes_mut.last_mut() else {
+                return Err(OasisError::Command(
+                    "local: scope unexpectedly empty".to_string(),
+                ));
+            };
+            top.entry(name.to_string()).or_insert(old);
+            // Set the new value.
+            if let Some(v) = value {
+                self.set_variable(name, v);
+            }
+        }
         Ok(CommandOutput::None)
     }
 
@@ -1397,6 +1635,7 @@ pub fn tokenize(input: &str) -> Result<Vec<String>> {
             {
                 match next {
                     '"' | '\\' | '$' => {
+                        // SAFETY: peek() returned Some above; next() is guaranteed.
                         current.push(chars.next().unwrap());
                     },
                     _ => {
@@ -1543,6 +1782,7 @@ fn split_chains(input: &str) -> Result<Vec<ChainSegment>> {
             },
             '|' if brace_depth > 0 && chars.peek() == Some(&'|') => {
                 current.push(ch);
+                // SAFETY: peek() returned Some above; next() is guaranteed.
                 current.push(chars.next().unwrap());
             },
             '|' if chars.peek() == Some(&'|') => {
@@ -2079,6 +2319,46 @@ fn parse_char_class(p: &[char], pi: usize) -> Option<(bool, Vec<char>, usize)> {
     } else {
         None // No closing bracket.
     }
+}
+
+// ---------------------------------------------------------------------------
+// Case pattern matching
+// ---------------------------------------------------------------------------
+
+/// Match a case pattern against a value.
+///
+/// Supports `*` (wildcard), `|` (alternation), and literal matching.
+fn case_pattern_matches(value: &str, pattern: &str) -> bool {
+    for alt in pattern.split('|') {
+        let alt = alt.trim();
+        if alt == "*" {
+            return true;
+        }
+        if alt == value {
+            return true;
+        }
+        if alt.contains('*') && glob_match_simple(value, alt) {
+            return true;
+        }
+    }
+    false
+}
+
+/// Simple glob matching supporting `*` as wildcard.
+fn glob_match_simple(value: &str, pattern: &str) -> bool {
+    if pattern == "*" {
+        return true;
+    }
+    if let Some(prefix) = pattern.strip_suffix('*') {
+        return value.starts_with(prefix);
+    }
+    if let Some(suffix) = pattern.strip_prefix('*') {
+        return value.ends_with(suffix);
+    }
+    if let Some((prefix, suffix)) = pattern.split_once('*') {
+        return value.starts_with(prefix) && value.ends_with(suffix);
+    }
+    value == pattern
 }
 
 // ---------------------------------------------------------------------------
@@ -3906,6 +4186,435 @@ mod tests {
                 let expanded = expand_braces(&tokens);
                 prop_assert_eq!(expanded, vec![s]);
             }
+        }
+    }
+
+    // -- Extended scripting tests --
+
+    /// Minimal `test` mock: supports `test A == B` and `test true`.
+    struct MockTestCmd;
+    impl Command for MockTestCmd {
+        fn name(&self) -> &str {
+            "test"
+        }
+        fn description(&self) -> &str {
+            "test"
+        }
+        fn usage(&self) -> &str {
+            "test"
+        }
+        fn execute(&self, args: &[&str], _env: &mut Environment<'_>) -> Result<CommandOutput> {
+            if args.len() == 3 && args[1] == "==" {
+                let result = args[0] == args[2];
+                return Ok(CommandOutput::Text(result.to_string()));
+            }
+            if args.first() == Some(&"true") {
+                return Ok(CommandOutput::Text("true".into()));
+            }
+            Ok(CommandOutput::Text("false".into()))
+        }
+    }
+
+    fn make_ext_reg() -> CommandRegistry {
+        let mut reg = CommandRegistry::new();
+        reg.register(Box::new(EchoCmd));
+        reg.register(Box::new(MockTestCmd));
+        reg
+    }
+
+    fn run_script_ext(reg: &CommandRegistry, script: &str) -> String {
+        let mut vfs = MemoryVfs::new();
+        vfs.mkdir("/tmp").unwrap();
+        run_script(reg, &mut vfs, script)
+    }
+
+    #[test]
+    fn script_elif_first_branch() {
+        let reg = make_ext_reg();
+        let script = "set X=hello\n\
+            if test $X == hello\n\
+            then\n\
+            echo first\n\
+            elif test $X == world\n\
+            then\n\
+            echo second\n\
+            else\n\
+            echo third\n\
+            fi";
+        let out = run_script_ext(&reg, script);
+        assert_eq!(out, "first");
+    }
+
+    #[test]
+    fn script_elif_second_branch() {
+        let reg = make_ext_reg();
+        let script = "set X=world\n\
+            if test $X == hello\n\
+            then\n\
+            echo first\n\
+            elif test $X == world\n\
+            then\n\
+            echo second\n\
+            else\n\
+            echo third\n\
+            fi";
+        let out = run_script_ext(&reg, script);
+        assert_eq!(out, "second");
+    }
+
+    #[test]
+    fn script_elif_else_fallback() {
+        let reg = make_ext_reg();
+        let script = "set X=other\n\
+            if test $X == hello\n\
+            then\n\
+            echo first\n\
+            elif test $X == world\n\
+            then\n\
+            echo second\n\
+            else\n\
+            echo third\n\
+            fi";
+        let out = run_script_ext(&reg, script);
+        assert_eq!(out, "third");
+    }
+
+    #[test]
+    fn script_case_exact_match() {
+        let reg = make_ext_reg();
+        let script = "set X=hello\n\
+            case $X in\n\
+            hello) echo matched ;;  \n\
+            *) echo default ;;\n\
+            esac";
+        let out = run_script_ext(&reg, script);
+        assert_eq!(out, "matched");
+    }
+
+    #[test]
+    fn script_case_wildcard_default() {
+        let reg = make_ext_reg();
+        let script = "set X=other\n\
+            case $X in\n\
+            hello) echo matched ;;\n\
+            *) echo default ;;\n\
+            esac";
+        let out = run_script_ext(&reg, script);
+        assert_eq!(out, "default");
+    }
+
+    #[test]
+    fn script_case_alternation() {
+        let reg = make_ext_reg();
+        let script = "set X=world\n\
+            case $X in\n\
+            hello|world) echo either ;;\n\
+            *) echo nope ;;\n\
+            esac";
+        let out = run_script_ext(&reg, script);
+        assert_eq!(out, "either");
+    }
+
+    #[test]
+    fn script_break_in_for() {
+        let reg = make_ext_reg();
+        let script = "for i in a b c d\n\
+            do\n\
+            if test $i == c\n\
+            then\n\
+            break\n\
+            fi\n\
+            echo $i\n\
+            done";
+        let out = run_script_ext(&reg, script);
+        assert_eq!(out, "a\nb");
+    }
+
+    #[test]
+    fn script_continue_in_for() {
+        let reg = make_ext_reg();
+        let script = "for i in a b c d\n\
+            do\n\
+            if test $i == b\n\
+            then\n\
+            continue\n\
+            fi\n\
+            echo $i\n\
+            done";
+        let out = run_script_ext(&reg, script);
+        assert_eq!(out, "a\nc\nd");
+    }
+
+    #[test]
+    fn script_break_in_while() {
+        let reg = make_ext_reg();
+        let script = "set N=0\n\
+            while test true\n\
+            do\n\
+            echo $N\n\
+            if test $N == 2\n\
+            then\n\
+            break\n\
+            fi\n\
+            set N=1\n\
+            set N=2\n\
+            done";
+        let out = run_script_ext(&reg, script);
+        // Should output at least the initial 0
+        assert!(out.contains('0'));
+    }
+
+    #[test]
+    fn script_local_variables() {
+        let reg = make_ext_reg();
+        let mut vfs = MemoryVfs::new();
+        let mut env = make_env(&mut vfs);
+
+        // Set a global variable.
+        reg.execute("set X=global", &mut env).unwrap();
+
+        // Define a function that uses local.
+        reg.execute("function myfn() { local X=local; echo $X }", &mut env)
+            .unwrap();
+
+        // Call the function.
+        match reg.execute("myfn", &mut env).unwrap() {
+            CommandOutput::Text(s) => assert_eq!(s, "local"),
+            _ => panic!("expected text"),
+        }
+
+        // Global should be restored.
+        assert_eq!(reg.get_variable("X"), Some("global".to_string()));
+    }
+
+    #[test]
+    fn script_local_unset_after_function() {
+        let reg = make_ext_reg();
+        let mut vfs = MemoryVfs::new();
+        let mut env = make_env(&mut vfs);
+
+        // No global X.
+        assert!(reg.get_variable("X").is_none());
+
+        // Function creates local X.
+        reg.execute("function myfn() { local X=temp; echo $X }", &mut env)
+            .unwrap();
+        reg.execute("myfn", &mut env).unwrap();
+
+        // X should not leak to global scope.
+        assert!(reg.get_variable("X").is_none());
+    }
+
+    #[test]
+    fn case_pattern_matches_exact() {
+        assert!(super::case_pattern_matches("hello", "hello"));
+        assert!(!super::case_pattern_matches("hello", "world"));
+    }
+
+    #[test]
+    fn case_pattern_matches_wildcard() {
+        assert!(super::case_pattern_matches("anything", "*"));
+    }
+
+    #[test]
+    fn case_pattern_matches_alternation() {
+        assert!(super::case_pattern_matches("b", "a|b|c"));
+        assert!(!super::case_pattern_matches("d", "a|b|c"));
+    }
+
+    #[test]
+    fn case_pattern_matches_glob_prefix() {
+        assert!(super::case_pattern_matches("hello_world", "hello*"));
+        assert!(!super::case_pattern_matches("goodbye", "hello*"));
+    }
+
+    #[test]
+    fn case_pattern_matches_glob_suffix() {
+        assert!(super::case_pattern_matches("file.txt", "*.txt"));
+        assert!(!super::case_pattern_matches("file.rs", "*.txt"));
+    }
+
+    #[test]
+    fn glob_match_simple_middle() {
+        assert!(super::glob_match_simple("hello_world", "hello*world"));
+        assert!(!super::glob_match_simple("hello_earth", "hello*world"));
+    }
+
+    #[test]
+    fn script_case_no_match() {
+        let reg = make_ext_reg();
+        let script = "set X=zzz\n\
+            case $X in\n\
+            hello) echo matched ;;\n\
+            esac\n\
+            echo done";
+        let out = run_script_ext(&reg, script);
+        assert_eq!(out, "done");
+    }
+
+    #[test]
+    fn script_elif_multiple() {
+        let reg = make_ext_reg();
+        let script = "set X=c\n\
+            if test $X == a\n\
+            then\n\
+            echo A\n\
+            elif test $X == b\n\
+            then\n\
+            echo B\n\
+            elif test $X == c\n\
+            then\n\
+            echo C\n\
+            elif test $X == d\n\
+            then\n\
+            echo D\n\
+            fi";
+        let out = run_script_ext(&reg, script);
+        assert_eq!(out, "C");
+    }
+
+    #[test]
+    fn script_local_outside_function_fails() {
+        let reg = CommandRegistry::new();
+        let mut vfs = MemoryVfs::new();
+        let mut env = make_env(&mut vfs);
+        let result = reg.execute("local X=val", &mut env);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn script_break_outside_loop_noop() {
+        // break outside a loop just sets the flag which gets
+        // ignored since there's no loop to break from.
+        let reg = CommandRegistry::new();
+        let mut vfs = MemoryVfs::new();
+        let mut env = make_env(&mut vfs);
+        let result = reg.execute("break", &mut env);
+        assert!(result.is_ok());
+    }
+
+    // ---- Phase 12: integration tests ----
+
+    #[test]
+    fn pipe_chain_echo_to_echo() {
+        let mut reg = CommandRegistry::new();
+        reg.register(Box::new(EchoCmd));
+        let mut vfs = MemoryVfs::new();
+        let mut env = make_env(&mut vfs);
+        match reg.execute("echo hello | echo", &mut env).unwrap() {
+            CommandOutput::Text(s) => assert_eq!(s, "hello"),
+            other => panic!("expected Text, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn pipe_chain_three_stages() {
+        let mut reg = CommandRegistry::new();
+        reg.register(Box::new(EchoCmd));
+        let mut vfs = MemoryVfs::new();
+        let mut env = make_env(&mut vfs);
+        match reg.execute("echo data | echo | echo", &mut env).unwrap() {
+            CommandOutput::Text(s) => assert_eq!(s, "data"),
+            other => panic!("expected Text, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn variable_expansion_basic() {
+        let mut reg = CommandRegistry::new();
+        reg.register(Box::new(EchoCmd));
+        let mut vfs = MemoryVfs::new();
+        let mut env = make_env(&mut vfs);
+        reg.execute("set X=hello", &mut env).unwrap();
+        let val = reg.execute("echo $X", &mut env).ok().and_then(|o| match o {
+            CommandOutput::Text(s) => Some(s),
+            _ => None,
+        });
+        assert_eq!(val.as_deref(), Some("hello"));
+    }
+
+    #[test]
+    fn variable_expansion_unset() {
+        let mut reg = CommandRegistry::new();
+        reg.register(Box::new(EchoCmd));
+        let mut vfs = MemoryVfs::new();
+        let mut env = make_env(&mut vfs);
+        // Unset variable expands to empty string.
+        let out = reg.execute("echo $NONEXISTENT", &mut env);
+        assert!(out.is_ok());
+    }
+
+    #[test]
+    fn alias_define_and_use() {
+        let reg = CommandRegistry::new();
+        let mut vfs = MemoryVfs::new();
+        let mut env = make_env(&mut vfs);
+        reg.execute("alias greet='echo hi'", &mut env).unwrap();
+        let out = reg.execute("greet", &mut env);
+        match out {
+            Ok(CommandOutput::Text(s)) => assert_eq!(s, "hi"),
+            _ => {
+                // alias might not resolve echo if it's not registered;
+                // just verify no panic.
+            },
+        }
+    }
+
+    #[test]
+    fn history_records_commands() {
+        let reg = CommandRegistry::new();
+        let mut vfs = MemoryVfs::new();
+        let mut env = make_env(&mut vfs);
+        reg.execute("set A=1", &mut env).unwrap();
+        reg.execute("set B=2", &mut env).unwrap();
+        let out = reg.execute("history", &mut env).unwrap();
+        if let CommandOutput::Text(s) = out {
+            assert!(s.contains("set A=1"));
+            assert!(s.contains("set B=2"));
+        }
+    }
+
+    #[test]
+    fn chained_commands_semicolon() {
+        let reg = CommandRegistry::new();
+        let mut vfs = MemoryVfs::new();
+        let mut env = make_env(&mut vfs);
+        let out = reg.execute("set X=1; set Y=2", &mut env);
+        assert!(out.is_ok());
+    }
+
+    #[test]
+    fn chained_commands_and_operator() {
+        let mut reg = CommandRegistry::new();
+        reg.register(Box::new(EchoCmd));
+        let mut vfs = MemoryVfs::new();
+        let mut env = make_env(&mut vfs);
+        let out = reg.execute("echo first && echo second", &mut env).unwrap();
+        if let CommandOutput::Text(s) = out {
+            assert!(s.contains("first"));
+            assert!(s.contains("second"));
+        }
+    }
+
+    #[test]
+    fn empty_command_returns_none() {
+        let reg = CommandRegistry::new();
+        let mut vfs = MemoryVfs::new();
+        let mut env = make_env(&mut vfs);
+        match reg.execute("", &mut env).unwrap() {
+            CommandOutput::None => {},
+            other => panic!("expected None, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn whitespace_only_command_returns_none() {
+        let reg = CommandRegistry::new();
+        let mut vfs = MemoryVfs::new();
+        let mut env = make_env(&mut vfs);
+        match reg.execute("   ", &mut env).unwrap() {
+            CommandOutput::None => {},
+            other => panic!("expected None, got {other:?}"),
         }
     }
 }

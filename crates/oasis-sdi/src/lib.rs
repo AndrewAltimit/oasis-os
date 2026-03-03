@@ -10,5 +10,5 @@ pub mod helpers;
 pub mod object;
 pub mod registry;
 
-pub use object::SdiObject;
+pub use object::{AccessibilityRole, SdiObject};
 pub use registry::SdiRegistry;

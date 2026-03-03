@@ -1,0 +1,11 @@
+# Retro CGA layout -- blocky DOS-era bars
+# Top bar (16px) + content area (240px) + bottom bar (16px) = 272px.
+
+[content_bg]
+x = 0
+y = 16
+w = 480
+h = 240
+color = "#000000"
+stroke_width = 1
+stroke_color = "#55FFFF"

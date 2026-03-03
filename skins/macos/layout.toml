@@ -1,0 +1,9 @@
+# macOS layout -- translucent menu bar + dock-style bottom bar
+# Top menu bar (24px) + content area (524px) + dock bar (52px) = 600px.
+
+[content_bg]
+x = 0
+y = 24
+w = 800
+h = 524
+color = "#ECECEC"

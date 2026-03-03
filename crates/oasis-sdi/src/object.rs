@@ -7,6 +7,29 @@
 
 use oasis_types::backend::{Color, TextureId};
 
+/// Semantic role for accessibility screen readers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AccessibilityRole {
+    /// A clickable button.
+    Button,
+    /// A heading / title.
+    Heading,
+    /// An item in a list.
+    ListItem,
+    /// A text input field.
+    TextField,
+    /// A menu item.
+    MenuItem,
+    /// An image or icon.
+    Image,
+    /// A grouping container.
+    Group,
+    /// A status indicator (e.g. battery, network).
+    Status,
+    /// A navigation container.
+    Navigation,
+}
+
 /// A single object in the SDI scene graph.
 #[derive(Debug, Clone)]
 pub struct SdiObject {
@@ -62,6 +85,12 @@ pub struct SdiObject {
     pub text_shadow_offset: Option<(i32, i32)>,
     /// Text shadow color (default: black at 50% alpha).
     pub text_shadow_color: Option<Color>,
+
+    // -- Accessibility --
+    /// Human-readable label for screen readers.
+    pub aria_label: Option<String>,
+    /// Semantic role for assistive technology.
+    pub role: Option<AccessibilityRole>,
 }
 
 impl SdiObject {
@@ -91,6 +120,8 @@ impl SdiObject {
             shadow_color: None,
             text_shadow_offset: None,
             text_shadow_color: None,
+            aria_label: None,
+            role: None,
         }
     }
 }
@@ -108,5 +139,134 @@ mod tests {
         assert_eq!(obj.alpha, 255);
         assert!(obj.visible);
         assert!(obj.texture.is_none());
+    }
+
+    #[test]
+    fn new_accessibility_defaults_none() {
+        let obj = SdiObject::new("btn");
+        assert!(obj.aria_label.is_none());
+        assert!(obj.role.is_none());
+    }
+
+    #[test]
+    fn set_aria_label() {
+        let mut obj = SdiObject::new("submit_btn");
+        obj.aria_label = Some("Submit form".to_string());
+        assert_eq!(obj.aria_label.as_deref(), Some("Submit form"));
+    }
+
+    #[test]
+    fn set_role() {
+        let mut obj = SdiObject::new("nav");
+        obj.role = Some(AccessibilityRole::Navigation);
+        assert_eq!(obj.role, Some(AccessibilityRole::Navigation));
+    }
+
+    #[test]
+    fn role_equality() {
+        assert_eq!(AccessibilityRole::Button, AccessibilityRole::Button);
+        assert_ne!(AccessibilityRole::Button, AccessibilityRole::Heading);
+    }
+
+    #[test]
+    fn role_clone() {
+        let role = AccessibilityRole::TextField;
+        let cloned = role;
+        assert_eq!(role, cloned);
+    }
+
+    #[test]
+    fn role_debug() {
+        let role = AccessibilityRole::Status;
+        let debug = format!("{role:?}");
+        assert!(debug.contains("Status"));
+    }
+
+    #[test]
+    fn object_default_color_is_white() {
+        let obj = SdiObject::new("c");
+        assert_eq!(obj.color, Color::WHITE);
+    }
+
+    #[test]
+    fn object_default_text_color_is_black() {
+        let obj = SdiObject::new("t");
+        assert_eq!(obj.text_color, Color::BLACK);
+    }
+
+    #[test]
+    fn object_default_font_size() {
+        let obj = SdiObject::new("f");
+        assert_eq!(obj.font_size, 12);
+    }
+
+    #[test]
+    fn object_default_z_is_zero() {
+        let obj = SdiObject::new("z");
+        assert_eq!(obj.z, 0);
+    }
+
+    #[test]
+    fn object_default_overlay_is_false() {
+        let obj = SdiObject::new("o");
+        assert!(!obj.overlay);
+    }
+
+    #[test]
+    fn object_extended_props_default_none() {
+        let obj = SdiObject::new("ext");
+        assert!(obj.border_radius.is_none());
+        assert!(obj.gradient_top.is_none());
+        assert!(obj.gradient_bottom.is_none());
+        assert!(obj.shadow_level.is_none());
+        assert!(obj.stroke_width.is_none());
+        assert!(obj.stroke_color.is_none());
+        assert!(obj.shadow_color.is_none());
+        assert!(obj.text_shadow_offset.is_none());
+        assert!(obj.text_shadow_color.is_none());
+    }
+
+    #[test]
+    fn object_clone() {
+        let mut obj = SdiObject::new("clone_test");
+        obj.x = 10;
+        obj.aria_label = Some("label".to_string());
+        obj.role = Some(AccessibilityRole::Button);
+        let cloned = obj.clone();
+        assert_eq!(cloned.name, "clone_test");
+        assert_eq!(cloned.x, 10);
+        assert_eq!(cloned.aria_label.as_deref(), Some("label"));
+        assert_eq!(cloned.role, Some(AccessibilityRole::Button));
+    }
+
+    #[test]
+    fn object_debug() {
+        let obj = SdiObject::new("debug_test");
+        let debug = format!("{obj:?}");
+        assert!(debug.contains("debug_test"));
+    }
+
+    #[test]
+    fn all_accessibility_roles_distinct() {
+        let roles = [
+            AccessibilityRole::Button,
+            AccessibilityRole::Heading,
+            AccessibilityRole::ListItem,
+            AccessibilityRole::TextField,
+            AccessibilityRole::MenuItem,
+            AccessibilityRole::Image,
+            AccessibilityRole::Group,
+            AccessibilityRole::Status,
+            AccessibilityRole::Navigation,
+        ];
+        for (i, a) in roles.iter().enumerate() {
+            for (j, b) in roles.iter().enumerate() {
+                if i == j {
+                    assert_eq!(a, b);
+                } else {
+                    assert_ne!(a, b);
+                }
+            }
+        }
     }
 }

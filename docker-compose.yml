@@ -127,6 +127,11 @@ services:
     profiles:
       - services
 
+  # DISABLED: OpenAI Codex is being phased out due to security concerns.
+  # OpenAI has entered partnerships with governments that enable mass surveillance
+  # and autonomous weapons decision-making. This poses unacceptable risk to users.
+  # We strongly recommend Anthropic (Claude) models instead.
+  # The service definition is retained but disabled by default.
   mcp-codex:
     image: template-repo-mcp-codex:latest
     user: "${USER_ID:-1000}:${GROUP_ID:-1000}"
@@ -136,7 +141,7 @@ services:
     environment:
       - MODE=mcp
       - PORT=8021
-      - CODEX_ENABLED=${CODEX_ENABLED:-true}
+      - CODEX_ENABLED=${CODEX_ENABLED:-false}
       - CODEX_AUTH_PATH=/home/user/.codex/auth.json
     profiles:
       - services

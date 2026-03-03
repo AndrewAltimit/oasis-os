@@ -10,6 +10,7 @@
 
 use std::time::Instant;
 
+use oasis_core::active_theme::ActiveTheme;
 use oasis_core::apps::AppRunner;
 use oasis_core::apps::tv_guide::catalog::ChannelCatalog;
 use oasis_core::apps::tv_guide::channel::{ChannelConfig, DEFAULT_CHANNELS_TOML};
@@ -37,7 +38,7 @@ fn make_vfs() -> MemoryVfs {
 fn make_guide() -> TvGuideState {
     let config =
         ChannelConfig::from_toml(DEFAULT_CHANNELS_TOML).expect("default channels TOML is valid");
-    TvGuideState::new(&config)
+    TvGuideState::new(&config, &ActiveTheme::default())
 }
 
 fn mock_episodes(channel_num: u32, count: usize) -> Vec<VideoEpisode> {

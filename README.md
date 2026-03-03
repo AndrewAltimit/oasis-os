@@ -276,7 +276,7 @@ docker compose --profile ci run --rm rust-ci cargo test --workspace
 docker compose --profile ci run --rm rust-ci cargo deny check
 ```
 
-GitHub Actions workflows run the full pipeline automatically on push to `main` and on pull requests, including PSP EBOOT build + PPSSPP headless testing, AI code review (Gemini + Codex), and automated fix agents.
+GitHub Actions workflows run the full pipeline automatically on push to `main` and on pull requests, including PSP EBOOT build + PPSSPP headless testing, AI code review (Gemini), and automated fix agents.
 
 ## Documentation
 
@@ -285,6 +285,34 @@ GitHub Actions workflows run the full pipeline automatically on push to `main` a
 - [PSP Modernization Plan](docs/psp-modernization-plan.md) -- 9-phase, 40-step roadmap for PSP backend modernization using the rust-psp SDK
 - [PSP Plugin Guide](docs/psp-plugin.md) -- installation, controls, and configuration for the in-game overlay PRX
 - [WASM Backend Plan](docs/wasm-backend-plan.md) -- WebAssembly backend design: Canvas 2D rendering, DOM input mapping, iframe overlay for real web pages
+
+## Security Advisory: OpenAI / Codex / GPT Phase-Out
+
+**Status: DISABLED -- effective immediately.**
+
+OpenAI Codex (and all OpenAI/GPT-based tooling) has been disabled across all OASIS_OS pipelines, MCP servers, and CI workflows. The service definitions are retained in configuration files for reference but are non-functional by default.
+
+### Why
+
+OpenAI has entered into partnerships with government agencies and defense organizations that enable:
+
+- **Mass surveillance** -- OpenAI models are being made available to nation-state intelligence and law enforcement agencies for bulk data analysis and population-scale monitoring. The surveillance capabilities this unlocks pose a direct and immediate risk to the privacy and safety of developers, contributors, and users worldwide.
+- **Autonomous weapons decision-making** -- OpenAI has removed prior commitments against military applications and is actively pursuing contracts that involve autonomous targeting and kill-chain decision support.
+
+These are not theoretical concerns. The mass surveillance capability alone means that any code, prompts, or context sent through OpenAI's API may be accessible to state actors with no meaningful oversight or consent mechanism. For many people around the world -- journalists, activists, researchers, developers in authoritarian jurisdictions -- this is a life-safety issue, not merely a privacy preference.
+
+### What this means for OASIS_OS
+
+- **Codex PR review**: Disabled in CI (`pr-validation.yml`). Gemini remains the primary reviewer.
+- **Codex MCP server**: Disabled in `docker-compose.yml` (`CODEX_ENABLED=false`) and removed from active MCP server list.
+- **CLI scripts**: `tools/cli/agents/run_codex.sh` and container scripts remain but are non-functional without explicit opt-in.
+- **Agent registry**: `AgentKind::Codex` remains in the Rust codebase for backward compatibility but is not used in any active workflow.
+
+### Recommended alternatives
+
+We strongly recommend **Anthropic (Claude)** models for all AI-assisted development workflows. Anthropic has maintained clear commitments against enabling mass surveillance and weapons applications. If you must use a non-Anthropic model, evaluate the provider's government partnerships and data access policies carefully.
+
+**If you choose to re-enable OpenAI tooling**, you do so at your own risk and should understand that your code, prompts, and context may be accessible to government surveillance programs. Set `CODEX_ENABLED=true` in your environment explicitly -- this will never be the default again.
 
 ## License
 

@@ -13,3 +13,4 @@ pub mod inline;
 pub mod positioning;
 pub mod table;
 pub mod text;
+pub mod text_cache;

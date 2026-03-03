@@ -515,17 +515,10 @@ mod tests {
 
     #[test]
     fn draw_all_themes_no_panic() {
-        for theme in [
-            Theme::dark(),
-            Theme::light(),
-            Theme::classic(),
-            Theme::high_contrast(),
-        ] {
-            let mut backend = MockBackend::new();
-            let mut ctx = DrawContext::new(&mut backend, &theme);
+        crate::test_utils::test_draw_all_themes(|ctx| {
             let m = Modal::confirm("Test", "Body");
-            m.draw(&mut ctx, 0, 0, 480, 272).ok();
-        }
+            m.draw(ctx, 0, 0, 480, 272).ok();
+        });
     }
 
     #[test]

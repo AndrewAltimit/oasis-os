@@ -14,9 +14,9 @@ use oasis_core::terminal_sdi;
 /// remains in main.rs since it requires `&mut backend`.
 pub fn update_sdi(state: &mut AppState, sdi: &mut SdiRegistry) {
     // Advance animations each frame.
-    state.dashboard.tick_animation();
-    state.start_menu.tick_animation();
-    state.bottom_bar.tick_animation(&state.active_theme);
+    state.ui.dashboard.tick_animation();
+    state.ui.start_menu.tick_animation();
+    state.ui.bottom_bar.tick_animation(&state.active_theme);
     state.toasts.tick();
 
     match state.mode {
@@ -24,69 +24,73 @@ pub fn update_sdi(state: &mut AppState, sdi: &mut SdiRegistry) {
             terminal_sdi::set_terminal_visible(sdi, false);
             AppRunner::hide_sdi(sdi);
 
-            if state.bottom_bar.active_tab == MediaTab::None {
-                state.dashboard.update_sdi(sdi, &state.active_theme);
+            if state.ui.bottom_bar.active_tab == MediaTab::None {
+                state.ui.dashboard.update_sdi(sdi, &state.active_theme);
                 terminal_sdi::hide_media_page(sdi);
             } else {
-                state.dashboard.hide_sdi(sdi);
-                terminal_sdi::update_media_page(sdi, &state.bottom_bar, &state.active_theme);
+                state.ui.dashboard.hide_sdi(sdi);
+                terminal_sdi::update_media_page(sdi, &state.ui.bottom_bar, &state.active_theme);
             }
 
             state
+                .ui
                 .status_bar
                 .update_sdi(sdi, &state.active_theme, &state.skin.features);
             state
+                .ui
                 .bottom_bar
                 .update_sdi(sdi, &state.active_theme, &state.skin.features);
             if state.skin.features.start_menu {
-                state.start_menu.update_sdi(sdi, &state.active_theme);
+                state.ui.start_menu.update_sdi(sdi, &state.active_theme);
             }
         },
         Mode::Terminal => {
-            state.dashboard.hide_sdi(sdi);
+            state.ui.dashboard.hide_sdi(sdi);
             AppRunner::hide_sdi(sdi);
             StatusBar::hide_sdi(sdi);
             BottomBar::hide_sdi(sdi);
-            state.start_menu.close();
-            state.start_menu.hide_sdi(sdi);
+            state.ui.start_menu.close();
+            state.ui.start_menu.hide_sdi(sdi);
             terminal_sdi::hide_media_page(sdi);
             let cursor_visible = state.active_theme.terminal_cursor_blink_rate == 0
                 || (state.frame_counter / state.active_theme.terminal_cursor_blink_rate as u64)
                     .is_multiple_of(2);
             terminal_sdi::setup_terminal_objects(
                 sdi,
-                &state.output_lines,
-                &state.cwd,
-                &state.input_buf,
-                state.terminal_scroll_offset,
+                &state.terminal.output_lines,
+                &state.terminal.cwd,
+                &state.terminal.input_buf,
+                state.terminal.scroll_offset,
                 &state.active_theme,
                 cursor_visible,
             );
         },
         Mode::App => {
-            state.dashboard.hide_sdi(sdi);
+            state.ui.dashboard.hide_sdi(sdi);
             terminal_sdi::set_terminal_visible(sdi, false);
             terminal_sdi::hide_media_page(sdi);
-            state.start_menu.close();
-            state.start_menu.hide_sdi(sdi);
+            state.ui.start_menu.close();
+            state.ui.start_menu.hide_sdi(sdi);
             state
+                .ui
                 .status_bar
                 .update_sdi(sdi, &state.active_theme, &state.skin.features);
             state
+                .ui
                 .bottom_bar
                 .update_sdi(sdi, &state.active_theme, &state.skin.features);
-            if let Some(ref mut runner) = state.app_runner {
+            if let Some(ref mut runner) = state.content.app_runner {
                 runner.update_sdi(sdi, &state.active_theme);
             }
         },
         Mode::Desktop => {
             terminal_sdi::set_terminal_visible(sdi, false);
             AppRunner::hide_sdi(sdi);
-            state.dashboard.hide_sdi(sdi);
+            state.ui.dashboard.hide_sdi(sdi);
             terminal_sdi::hide_media_page(sdi);
-            state.start_menu.close();
-            state.start_menu.hide_sdi(sdi);
-            if state.fullscreen_app.is_some() {
+            state.ui.start_menu.close();
+            state.ui.start_menu.hide_sdi(sdi);
+            if state.content.fullscreen_app.is_some() {
                 StatusBar::hide_sdi(sdi);
                 BottomBar::hide_sdi(sdi);
                 // Hide wallpaper so it doesn't bleed through.
@@ -95,9 +99,11 @@ pub fn update_sdi(state: &mut AppState, sdi: &mut SdiRegistry) {
                 }
             } else {
                 state
+                    .ui
                     .status_bar
                     .update_sdi(sdi, &state.active_theme, &state.skin.features);
                 state
+                    .ui
                     .bottom_bar
                     .update_sdi(sdi, &state.active_theme, &state.skin.features);
             }
@@ -121,11 +127,12 @@ pub fn update_sdi(state: &mut AppState, sdi: &mut SdiRegistry) {
     }
 
     // Update cursor SDI position (always on top).
-    state.mouse_cursor.update_sdi(sdi);
+    state.ui.mouse_cursor.update_sdi(sdi);
 
     // Ensure wallpaper is visible and at lowest z (skip during fullscreen kiosk
     // where we explicitly hide it to prevent bleed-through).
-    let fullscreen_active = matches!(state.mode, Mode::Desktop) && state.fullscreen_app.is_some();
+    let fullscreen_active =
+        matches!(state.mode, Mode::Desktop) && state.content.fullscreen_app.is_some();
     if !fullscreen_active && let Ok(obj) = sdi.get_mut("wallpaper") {
         obj.visible = true;
     }

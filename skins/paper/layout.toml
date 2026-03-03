@@ -1,0 +1,9 @@
+# Paper layout -- minimal bars with subtle dividers
+# Top bar (20px) + content area (232px) + bottom bar (20px) = 272px.
+
+[content_bg]
+x = 0
+y = 20
+w = 480
+h = 232
+color = "#FAF8F0"
