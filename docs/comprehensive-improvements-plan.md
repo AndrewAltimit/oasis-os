@@ -97,7 +97,7 @@ improvements below address the gaps found.
 **Current state:** Screenshots dated Feb 12, 2025; user reports visual glitches.
 **Impact:** README shows outdated/glitchy images.
 
-- Run `cargo run -p oasis-app --bin oasis-screenshot` for all 8 skins
+- Run `cargo run -p oasis-app --bin oasis-screenshot` for all 13 skins
 - Review each screenshot for rendering artifacts
 - Fix any rendering bugs discovered (likely off-by-one issues found in audit)
 - Update golden baselines

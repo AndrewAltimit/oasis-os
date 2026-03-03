@@ -84,7 +84,7 @@ Fill zero-coverage and under-tested modules with fast, deterministic unit tests.
 - Test `Result` type alias usage
 
 #### 1.3 Backend Trait Default Method Tests
-**File:** `oasis-core/src/backend.rs`
+**File:** `oasis-types/src/backend.rs`
 **Effort:** Medium
 - Create a `RecordingBackend` test double that records all draw calls
 - Test default `fill_rounded_rect` decomposes into correct fill_rect calls
@@ -255,8 +255,8 @@ cargo run -p oasis-app --bin screenshot-tests -- --report
 #### 3.2 Skin Screenshot Matrix
 **Effort:** Medium
 
-For each of the 8 skins (classic, xp, terminal, ocean, sunset, forest, midnight,
-corrupted), capture:
+For each of the 13 skins (classic, xp, macos, gnome, cyberpunk, retro-cga, paper,
+terminal, tactical, corrupted, desktop, agent-terminal, modern), capture:
 1. Dashboard with icons
 2. Terminal with output
 3. Start menu open
@@ -264,7 +264,7 @@ corrupted), capture:
 5. Settings app open
 6. Browser showing a page
 
-**Total: 8 skins x 6 scenarios = 48 screenshots**
+**Total: 13 skins x 6 scenarios = 78 screenshots**
 
 Purpose: Verify skin theming applies correctly everywhere. Catch regressions where
 a skin change breaks another skin's appearance.

@@ -55,8 +55,9 @@ TOML at compile time.
 ## Consequences
 
 - `oasis-skin` crate owns parsing, resolution, and theme derivation.
-- 8 skins ship built-in: classic, modern, terminal, retro, midnight, xp, aqua,
-  monochrome.
-- 2 external skins in `skins/` demonstrate the filesystem loading path.
+- 13 skins ship: 7 built-in (terminal, tactical, corrupted, desktop, modern,
+  agent-terminal, xp) + 7 external TOML directories in `skins/` (classic, xp,
+  macos, gnome, cyberpunk, retro-cga, paper) -- all embedded via `include_str!`.
+- External skins demonstrate the TOML filesystem loading path.
 - The `ActiveTheme` struct provides runtime-mutable access to all derived colors.
 - Adding a new skin requires only TOML files -- no Rust code changes.

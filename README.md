@@ -34,7 +34,7 @@ An embeddable operating system framework in Rust. Renders a skinnable shell inte
 
 ## Overview
 
-OASIS_OS originated as a Rust port of a PSP homebrew shell OS written in C circa 2006-2008. The trait-based backend system designed for cross-platform portability extends to four rendering targets:
+OASIS_OS originated as a Rust port of a PSP homebrew shell OS written in C circa 2006-2008. The trait-based backend system designed for cross-platform portability extends to five rendering targets:
 
 | Target | Backend | Renderer | Input | Status |
 |--------|---------|----------|-------|--------|
@@ -46,12 +46,17 @@ OASIS_OS originated as a Rust port of a PSP homebrew shell OS written in C circa
 
 ### Skins
 
-The framework supports a data-driven **skin system** that controls visual layout, color themes, feature gating, and behavioral personality. Skins are defined in TOML configuration files -- no code changes required. Eight skins are implemented:
+The framework supports a data-driven **skin system** that controls visual layout, color themes, feature gating, and behavioral personality. Skins are defined in TOML configuration files -- no code changes required. Thirteen skins are implemented:
 
 | Skin | Style | Key Features | Source |
 |------|-------|-------------|--------|
 | **classic** | PSIX-style icon grid dashboard | Dashboard + terminal, tabbed navigation (OSS/APPS/MODS/NET), status bar, chrome bezels | External (`skins/classic/`) |
-| **xp** | Windows XP Luna-inspired blue theme | Dashboard + terminal + start menu, gradient titlebars, taskbar | External (`skins/xp/`) |
+| **xp** | Windows XP Luna-inspired blue theme | Dashboard + terminal + start menu, gradient titlebars, taskbar | External (`skins/xp/`) + Built-in |
+| **macos** | macOS-inspired desktop | Window manager, traffic-light buttons, dock-style launcher | External (`skins/macos/`) |
+| **gnome** | GNOME desktop style | Window manager, Activities bar, rounded elements | External (`skins/gnome/`) |
+| **cyberpunk** | Neon cyberpunk aesthetic | Glowing accents, dark theme, futuristic UI | External (`skins/cyberpunk/`) |
+| **retro-cga** | CGA 4-color retro | CGA palette, retro styling, nostalgic look | External (`skins/retro-cga/`) |
+| **paper** | Minimalist paper/ink style | Clean, light theme, paper-like appearance | External (`skins/paper/`) |
 | **terminal** | Green-on-black CRT | Terminal only, full-screen command line | Built-in |
 | **tactical** | Military command console | Terminal + restricted commands, stripped-down UI | Built-in |
 | **corrupted** | Glitched terminal | Terminal + corruption effects (jitter, flicker, garbling) | Built-in |
@@ -71,7 +76,7 @@ Default virtual resolution is 480x272 (PSP native). Skins may override this (e.g
 - **Window Manager** -- Movable, resizable, overlapping windows with titlebars, minimize/maximize/close, hit testing, and themed decorations
 - **UI Widget Toolkit** -- 20+ reusable widgets: Button, Card, TabBar, Panel, TextField, ListView, ScrollView, ProgressBar, Toggle, NinePatch, flex layout, and more
 - **Proportional Bitmap Font** -- Variable-width glyph rendering from ink bounds with per-character advance values (not fixed-width 8x8)
-- **90+ Terminal Commands** -- 17 command modules: core (fs/system), text processing (head, tail, grep, sort, uniq, tr, cut, diff), file utilities (write, tree, du, stat, xxd, checksum), dev tools (base64, json, uuid, seq, expr), fun (cal, fortune, banner, matrix), security (chmod, chown, passwd, audit), documentation (man, tutorial, motd), networking (wifi, ping, http), audio, UI, skin switching, scripting, transfer (FTP), system updates. Shell features include variable expansion, glob expansion, aliases, history (!!/!n), piping, and command chaining
+- **90+ Terminal Commands** -- 17+ command modules: core (fs/system), text processing (head, tail, grep, sort, uniq, tr, cut, diff), file utilities (write, tree, du, stat, xxd, checksum), dev tools (base64, json, uuid, seq, expr, test, xargs), fun (cal, fortune, banner, matrix, yes, watch, time), system (uptime, df, whoami, hostname, date, sleep), security (chmod, chown, passwd, audit), documentation (man, tutorial, motd), networking (wifi, ping, http), audio, radio, UI (wm, sdi, theme, notify, screenshot), skin switching, scripting, transfer (FTP), TV Guide, system updates. Shell features include variable expansion, glob expansion, aliases, history (!!/!n), piping, and command chaining
 - **Audio System** -- Playlist management, MP3/WAV playback, ID3 tag parsing, shuffle/repeat modes, volume control
 - **Plugin System** -- Runtime-extensible via `Plugin` trait, VFS-based IPC, manifest-driven discovery
 - **Virtual File System** -- `MemoryVfs` (in-RAM), `RealVfs` (disk), `GameAssetVfs` (UE5 with overlay writes)
@@ -80,7 +85,7 @@ Default virtual resolution is 480x272 (PSP native). Skins may override this (e.g
 - **Scripting** -- Line-based command scripts, startup scripts, cron-like scheduling
 - **Internet Archive Integration** -- TV Guide streams live video from Internet Archive channels with a 1980s Prevue Channel aesthetic; Radio streams MP3 audio from curated Internet Archive collections
 - **Video Playback** -- Software MP4/H.264+AAC decode pipeline (`oasis-video` crate) using symphonia for demux and AAC, optional openh264 for H.264 video frames. WASM backend renders in-canvas; PSP backend downloads to Memory Stick
-- **9 Built-in Apps** -- File Manager (dual-panel Norton Commander-style), Settings, Network, Music Player, Photo Viewer, Package Manager, Browser, System Monitor, TV Guide
+- **16 Built-in Apps** -- File Manager (dual-panel Norton Commander-style), Settings, Network, Music Player, Photo Viewer, Package Manager, Browser, System Monitor, TV Guide, Internet Radio, Terminal, Text Editor, Calculator, Clock, Paint, Games
 
 ## Crates
 
@@ -98,11 +103,11 @@ oasis-os/
 |   +-- oasis-audio/                  # Audio manager, playlist, shuffle/repeat, MP3 ID3 parsing
 |   +-- oasis-ui/                     # 20+ widgets: Button, Card, TabBar, Panel, TextField, ListView, etc.
 |   +-- oasis-wm/                     # Window manager: drag/resize, hit testing, minimize/maximize/close
-|   +-- oasis-skin/                   # TOML skin engine, 8 skins, theme derivation from 9 base colors
+|   +-- oasis-skin/                   # TOML skin engine, 13 skins, theme derivation from 9 base colors
 |   +-- oasis-terminal/              # Command interpreter: 90+ commands across 17 modules, shell features
 |   +-- oasis-browser/               # HTML/CSS/Gemini browser: DOM, CSS cascade, block/inline/table layout
 |   +-- oasis-js/                    # JavaScript engine: QuickJS-NG runtime, console API, DOM bindings
-|   +-- oasis-core/                   # Coordination layer: apps, dashboard, agent, plugin, script, etc.
+|   +-- oasis-core/                   # Coordination layer: 16 apps, dashboard, agent, plugin, script, etc.
 |   +-- oasis-video/                  # Software MP4/H.264+AAC decode pipeline (symphonia + openh264)
 |   +-- oasis-backend-sdl/            # SDL2 rendering and input (desktop + Pi)
 |   +-- oasis-backend-wasm/           # Canvas 2D rendering, DOM input, Web Audio (browser)
@@ -115,6 +120,11 @@ oasis-os/
 +-- skins/
 |   +-- classic/                      # PSIX-style icon grid dashboard
 |   +-- xp/                           # Windows XP Luna-inspired theme with start menu
+|   +-- macos/                        # macOS-inspired desktop with traffic-light buttons
+|   +-- gnome/                        # GNOME desktop style with Activities bar
+|   +-- cyberpunk/                    # Neon cyberpunk aesthetic
+|   +-- retro-cga/                    # CGA 4-color retro palette
+|   +-- paper/                        # Minimalist paper/ink style
 +-- docs/
     +-- design.md                     # Technical design document (v2.4)
     +-- skin-authoring.md             # Skin creation guide with full TOML reference
@@ -131,11 +141,11 @@ oasis-os/
 | `oasis-audio` | Audio manager with playlist, shuffle/repeat modes, MP3 ID3 tag parsing |
 | `oasis-ui` | 20+ reusable widgets: Button, Card, TabBar, Panel, TextField, ListView, ScrollView, ProgressBar, Toggle, NinePatch, flex layout |
 | `oasis-wm` | Window manager: movable/resizable windows, titlebar buttons, hit testing, themed decorations |
-| `oasis-skin` | Data-driven TOML skin system with 8 skins, theme derivation from 9 base colors to ~30 UI element colors |
+| `oasis-skin` | Data-driven TOML skin system with 13 skins (7 external TOML + 7 built-in; xp exists in both), theme derivation from 9 base colors to ~30 UI element colors |
 | `oasis-terminal` | Command interpreter with 90+ commands across 17 modules, shell features (variables, globs, aliases, history, piping) |
 | `oasis-browser` | Embeddable HTML/CSS/Gemini rendering engine: DOM parser, CSS cascade, block/inline/table layout, reader mode, JavaScript DOM bindings |
 | `oasis-js` | JavaScript engine wrapping QuickJS-NG via rquickjs: `console` API, inline `<script>` execution, DOM manipulation from JS |
-| `oasis-core` | Coordination layer: app runner (9 apps including TV Guide), dashboard, agent/MCP, plugin, scripting, status/bottom bars |
+| `oasis-core` | Coordination layer: app runner (16 apps), dashboard, agent/MCP, plugin, scripting, status/bottom bars |
 | `oasis-video` | Software MP4/H.264+AAC decode pipeline: symphonia for demux + AAC, optional openh264 for H.264 video frames |
 | `oasis-backend-sdl` | SDL2 rendering and input backend for desktop and Raspberry Pi |
 | `oasis-backend-wasm` | WebAssembly backend -- Canvas 2D rendering, DOM event input, Web Audio, iframe overlay for real web pages |
@@ -276,7 +286,7 @@ docker compose --profile ci run --rm rust-ci cargo test --workspace
 docker compose --profile ci run --rm rust-ci cargo deny check
 ```
 
-GitHub Actions workflows run the full pipeline automatically on push to `main` and on pull requests, including PSP EBOOT build + PPSSPP headless testing, AI code review (Gemini), and automated fix agents.
+GitHub Actions workflows run the full pipeline automatically on push to `main` and on pull requests, including PSP EBOOT build + PPSSPP headless testing, screenshot regression tests, benchmarks, code coverage, AI code review (Gemini), automated fix agents, and GitHub Pages deployment (WASM build).
 
 ## Documentation
 
@@ -286,33 +296,9 @@ GitHub Actions workflows run the full pipeline automatically on push to `main` a
 - [PSP Plugin Guide](docs/psp-plugin.md) -- installation, controls, and configuration for the in-game overlay PRX
 - [WASM Backend Plan](docs/wasm-backend-plan.md) -- WebAssembly backend design: Canvas 2D rendering, DOM input mapping, iframe overlay for real web pages
 
-## Security Advisory: OpenAI / Codex / GPT Phase-Out
+## Security Notice
 
-**Status: DISABLED -- effective immediately.**
-
-OpenAI Codex (and all OpenAI/GPT-based tooling) has been disabled across all OASIS_OS pipelines, MCP servers, and CI workflows. The service definitions are retained in configuration files for reference but are non-functional by default.
-
-### Why
-
-OpenAI has entered into partnerships with government agencies and defense organizations that enable:
-
-- **Mass surveillance** -- OpenAI models are being made available to nation-state intelligence and law enforcement agencies for bulk data analysis and population-scale monitoring. The surveillance capabilities this unlocks pose a direct and immediate risk to the privacy and safety of developers, contributors, and users worldwide.
-- **Autonomous weapons decision-making** -- OpenAI has removed prior commitments against military applications and is actively pursuing contracts that involve autonomous targeting and kill-chain decision support.
-
-These are not theoretical concerns. The mass surveillance capability alone means that any code, prompts, or context sent through OpenAI's API may be accessible to state actors with no meaningful oversight or consent mechanism. For many people around the world -- journalists, activists, researchers, developers in authoritarian jurisdictions -- this is a life-safety issue, not merely a privacy preference.
-
-### What this means for OASIS_OS
-
-- **Codex PR review**: Disabled in CI (`pr-validation.yml`). Gemini remains the primary reviewer.
-- **Codex MCP server**: Disabled in `docker-compose.yml` (`CODEX_ENABLED=false`) and removed from active MCP server list.
-- **CLI scripts**: `tools/cli/agents/run_codex.sh` and container scripts remain but are non-functional without explicit opt-in.
-- **Agent registry**: `AgentKind::Codex` remains in the Rust codebase for backward compatibility but is not used in any active workflow.
-
-### Recommended alternatives
-
-We strongly recommend **Anthropic (Claude)** models for all AI-assisted development workflows. Anthropic has maintained clear commitments against enabling mass surveillance and weapons applications. If you must use a non-Anthropic model, evaluate the provider's government partnerships and data access policies carefully.
-
-**If you choose to re-enable OpenAI tooling**, you do so at your own risk and should understand that your code, prompts, and context may be accessible to government surveillance programs. Set `CODEX_ENABLED=true` in your environment explicitly -- this will never be the default again.
+> **OpenAI/Codex integrations are disabled.** OpenAI's government surveillance and autonomous weapons partnerships make their APIs an unacceptable security risk for code pipelines. We recommend Anthropic (Claude) as the primary AI backend. To re-enable at your own risk: `CODEX_ENABLED=true`.
 
 ## License
 

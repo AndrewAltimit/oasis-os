@@ -48,17 +48,13 @@ The desktop app opens an SDL2 window at 480x272 native resolution with the defau
 
 ### Choosing a Skin
 
-OASIS_OS ships with 8 skins. Select one via environment variable or CLI argument:
+OASIS_OS ships with 13 skins. Select one via environment variable:
 
 ```bash
-# Via environment variable
 OASIS_SKIN=modern cargo run -p oasis-app
-
-# Via CLI argument
-cargo run -p oasis-app -- --skin terminal
 ```
 
-Available skins: `classic`, `modern`, `terminal`, `retro`, `midnight`, `xp`, `aqua`, `monochrome`.
+Available skins: `classic`, `xp`, `macos`, `gnome`, `cyberpunk`, `retro-cga`, `paper`, `terminal`, `tactical`, `corrupted`, `desktop`, `agent-terminal`, `modern`.
 
 Custom skins can be loaded from a directory containing `skin.toml`:
 
@@ -104,7 +100,7 @@ cargo deny check
 
 ## Taking Screenshots
 
-Generate screenshots for all 8 skins:
+Generate screenshots for all 13 skins:
 
 ```bash
 cargo run -p oasis-app --bin oasis-screenshot
@@ -193,13 +189,16 @@ oasis-os/
     oasis-types/        Foundation types, backend traits
     oasis-vfs/          Virtual file system
     oasis-sdi/          Scene display interface
-    oasis-ui/           20+ reusable widgets
+    oasis-ui/           27 reusable widgets
     oasis-wm/           Window manager
-    oasis-skin/         TOML skin engine (8 skins)
+    oasis-skin/         TOML skin engine (13 skins)
     oasis-terminal/     90+ commands, shell interpreter
     oasis-browser/      HTML/CSS/Gemini browser engine
-    oasis-core/         Coordination, apps, dashboard
+    oasis-js/           JavaScript engine (QuickJS-NG)
+    oasis-video/        Software video decode (H.264+AAC)
+    oasis-core/         Coordination, 16 apps, dashboard
     oasis-backend-sdl/  Desktop/Raspberry Pi backend
+    oasis-backend-wasm/ WebAssembly browser backend
     oasis-backend-ue5/  Unreal Engine 5 backend
     oasis-ffi/          C-ABI shared library
     oasis-backend-psp/  PSP hardware backend

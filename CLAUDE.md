@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-OASIS_OS is an embeddable operating system framework in Rust (edition 2024). It provides a skinnable shell with a scene-graph UI, command interpreter, virtual file system, browser engine (HTML/CSS/Gemini), plugin system, and remote terminal. It renders to any pixel buffer + input stream. Originally ported from a PSP homebrew shell (2006-2008). Eight skins are implemented (2 external TOML skins, 7 built-in; xp exists in both forms).
+OASIS_OS is an embeddable operating system framework in Rust (edition 2024). It provides a skinnable shell with a scene-graph UI, command interpreter, virtual file system, browser engine (HTML/CSS/Gemini), plugin system, and remote terminal. It renders to any pixel buffer + input stream. Originally ported from a PSP homebrew shell (2006-2008). Thirteen skins are implemented (7 external TOML skins, 7 built-in; xp exists in both forms).
 
 Default virtual resolution is 480x272 (PSP native). Skins may override this (e.g. modern=800x600, xp=1024x768); the backend canvas/window scales to match.
 
@@ -60,7 +60,7 @@ cargo run -p oasis-app --bin oasis-screenshot
 
 ## CI Pipeline Order
 
-format check -> clippy -> test -> release build -> cargo-deny -> PSP EBOOT build -> PPSSPP headless test
+format check -> clippy -> test -> release build -> cargo-deny -> PSP EBOOT build -> PPSSPP headless test -> screenshot regression -> benchmarks -> code coverage -> GitHub Pages deploy (WASM)
 
 All steps run via `docker compose --profile ci run --rm rust-ci`.
 
@@ -75,14 +75,14 @@ oasis-types     (foundation: Color, Button, InputEvent, backend traits, error ty
 ├── oasis-sdi        (scene display interface: named object registry, z-order)
 ├── oasis-net        (TCP networking, PSK auth, remote terminal, FTP)
 ├── oasis-audio      (audio manager, playlist, MP3 ID3 parsing)
-├── oasis-ui         (20+ widgets: Button, Card, TabBar, ListView, flex layout)
+├── oasis-ui         (27 widgets: Button, Card, TabBar, ListView, flex layout, etc.)
 ├── oasis-wm         (window manager: drag/resize, hit testing, decorations)
-├── oasis-skin       (TOML skin engine, 8 skins, theme derivation)
-├── oasis-terminal   (90+ commands across 17 modules, shell features)
+├── oasis-skin       (TOML skin engine, 13 skins, theme derivation)
+├── oasis-terminal   (90+ commands across 17+ modules, shell features)
 ├── oasis-browser    (HTML/CSS/Gemini: DOM, CSS cascade, layout engine, JS DOM bindings)
 ├── oasis-js         (JavaScript engine: QuickJS-NG runtime, console API)
 ├── oasis-video      (software MP4/H.264+AAC decode: symphonia + openh264)
-└── oasis-core       (coordination: 9 apps, dashboard, agent, plugin, script)
+└── oasis-core       (coordination: 16 apps, dashboard, agent, plugin, script)
     ├── oasis-backend-sdl  (SDL2 desktop/Pi rendering + input + audio)
     │   └── oasis-app      (binary entry points: oasis-app, oasis-screenshot)
     ├── oasis-backend-wasm (Canvas 2D + DOM input + Web Audio, iframe overlay)
@@ -102,7 +102,7 @@ The PRX hooks `sceDisplaySetFrameBuf` to draw overlay UI into the game's framebu
 
 ### Key Abstraction: Backend Traits
 
-`oasis-core/src/backend.rs` defines the only abstraction boundary between core and platform:
+`oasis-types/src/backend.rs` defines the only abstraction boundary between core and platform (re-exported by `oasis-core`):
 - `SdiBackend` -- rendering (clear, blit, fill_rect, draw_text, load_texture, swap_buffers, read_pixels)
 - `InputBackend` -- input polling (returns `Vec<InputEvent>`)
 - `NetworkBackend` -- TCP networking
@@ -116,10 +116,10 @@ The framework is split into 19 workspace crates. Each module below is its own cr
 
 - **oasis-types** -- Foundation types: `Color`, `Button`, `InputEvent`, backend traits (`SdiBackend`, `InputBackend`, `NetworkBackend`, `AudioBackend`), error types, TLS, bitmap font metrics
 - **oasis-sdi** -- Scene Display Interface: named objects with position, size, color, texture, text, z-order, gradients, rounded corners, shadows
-- **oasis-skin** -- Data-driven TOML skin system with 8 skins (2 external in `skins/`, 7 built-in; xp exists in both forms). Theme derivation from 9 base colors.
+- **oasis-skin** -- Data-driven TOML skin system with 13 skins (7 external in `skins/`, 7 built-in; xp exists in both forms). Theme derivation from 9 base colors.
 - **oasis-browser** -- Embeddable HTML/CSS/Gemini rendering engine: DOM parser, CSS cascade, block/inline/table layout, link navigation, reader mode, JavaScript DOM bindings
 - **oasis-js** -- JavaScript engine wrapping QuickJS-NG via rquickjs: `console` API (log/warn/error/info), inline `<script>` execution, DOM manipulation (`document.getElementById`, `createElement`, `textContent`, attributes). Feature-gated (`javascript`)
-- **oasis-ui** -- 20+ reusable widgets: Button, Card, TabBar, Panel, TextField, ListView, ScrollView, ProgressBar, Toggle, NinePatch, flex layout
+- **oasis-ui** -- 27 reusable widgets: Button, Card, TabBar, Panel, TextField, ListView, ScrollView, ProgressBar, Toggle, NinePatch, flex layout, Accordion, Avatar, Badge, Checkbox, Dropdown, Modal, Slider, Spinner, Toast, Tooltip, TreeView, and more
 - **oasis-vfs** -- Virtual file system: `MemoryVfs` (in-RAM), `RealVfs` (disk), `GameAssetVfs` (UE5 with overlay writes)
 - **oasis-terminal** -- Command interpreter with 90+ commands across 17 modules (core, text, file, system, dev, fun, security, doc, audio, network, skin, UI, plus agent/plugin/script/transfer/update registered by oasis-core). Shell features: variable expansion, glob expansion, aliases, history, piping
 - **oasis-wm** -- Window manager (window configs, hit testing, drag/resize, minimize/maximize/close)
@@ -127,7 +127,7 @@ The framework is split into 19 workspace crates. Each module below is its own cr
 - **oasis-audio** -- Audio manager with playlist, shuffle/repeat modes, MP3 ID3 tag parsing
 - **oasis-platform** -- Platform service traits: PowerService, TimeService, UsbService, NetworkService, OskService
 - **oasis-video** -- Software MP4/H.264+AAC decode pipeline: symphonia for demux + AAC, optional openh264 for H.264 video frames. Used by TV Guide for in-canvas (WASM) and download-and-play (PSP) video
-- **oasis-core** -- Coordination layer: app runner with 9 apps (File Manager, Settings, Network, Music Player, Photo Viewer, Package Manager, Browser, System Monitor, TV Guide), dashboard, agent/MCP, plugin, scripting, status/bottom bars
+- **oasis-core** -- Coordination layer: app runner with 16 apps (File Manager, Settings, Network, Music Player, Photo Viewer, Package Manager, Browser, System Monitor, TV Guide, Internet Radio, Terminal, Text Editor, Calculator, Clock, Paint, Games), dashboard, agent/MCP, plugin, scripting, status/bottom bars
 
 ### Font Rendering
 
