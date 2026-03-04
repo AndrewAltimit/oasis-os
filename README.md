@@ -2,65 +2,33 @@
 
 An embeddable operating system framework in Rust. Renders a skinnable shell interface -- scene-graph UI, command interpreter, virtual file system, browser engine, plugin system, remote terminal -- anywhere you can provide a pixel buffer and an input stream.
 
-### Classic Skin
+### Dashboards
 
-| Dashboard | Terminal |
-|:---:|:---:|
-| ![Dashboard](screenshots/classic/01_dashboard.png) | ![Terminal](screenshots/classic/04_terminal.png) |
-
-### XP Skin
-
-| Dashboard | Terminal |
-|:---:|:---:|
-| ![Dashboard](screenshots/xp/01_dashboard.png) | ![Terminal](screenshots/xp/04_terminal.png) |
-
-### Modern Skin
-
-| Dashboard | Terminal |
-|:---:|:---:|
-| ![Dashboard](screenshots/modern/01_dashboard.png) | ![Terminal](screenshots/modern/04_terminal.png) |
-
-### Desktop Skin
-
-| Dashboard | Terminal |
-|:---:|:---:|
-| ![Dashboard](screenshots/desktop/01_dashboard.png) | ![Terminal](screenshots/desktop/04_terminal.png) |
-
-### macOS Skin
-
-| Dashboard | Terminal |
-|:---:|:---:|
-| ![Dashboard](screenshots/macos/01_dashboard.png) | ![Terminal](screenshots/macos/04_terminal.png) |
-
-### GNOME Skin
-
-| Dashboard | Terminal |
-|:---:|:---:|
-| ![Dashboard](screenshots/gnome/01_dashboard.png) | ![Terminal](screenshots/gnome/04_terminal.png) |
-
-### Cyberpunk Skin
-
-| Dashboard | Terminal |
-|:---:|:---:|
-| ![Dashboard](screenshots/cyberpunk/01_dashboard.png) | ![Terminal](screenshots/cyberpunk/04_terminal.png) |
-
-### Win95 Skin
-
-| Dashboard | Terminal |
-|:---:|:---:|
-| ![Dashboard](screenshots/win95/01_dashboard.png) | ![Terminal](screenshots/win95/04_terminal.png) |
-
-### Additional Skins
-
-| Retro CGA | Paper | Solarized | Vaporwave | High Contrast |
+| Classic | XP | Modern | Desktop | macOS |
 |:---:|:---:|:---:|:---:|:---:|
-| ![CGA](screenshots/retro-cga/01_dashboard.png) | ![Paper](screenshots/paper/01_dashboard.png) | ![Solarized](screenshots/solarized/01_dashboard.png) | ![Vaporwave](screenshots/vaporwave/01_dashboard.png) | ![HiCon](screenshots/highcontrast/01_dashboard.png) |
+| ![Classic](screenshots/classic/01_dashboard.png) | ![XP](screenshots/xp/01_dashboard.png) | ![Modern](screenshots/modern/01_dashboard.png) | ![Desktop](screenshots/desktop/01_dashboard.png) | ![macOS](screenshots/macos/01_dashboard.png) |
 
-### Terminal Skins
+| GNOME | Cyberpunk | Win95 | Solarized | Vaporwave |
+|:---:|:---:|:---:|:---:|:---:|
+| ![GNOME](screenshots/gnome/01_dashboard.png) | ![Cyberpunk](screenshots/cyberpunk/01_dashboard.png) | ![Win95](screenshots/win95/01_dashboard.png) | ![Solarized](screenshots/solarized/01_dashboard.png) | ![Vaporwave](screenshots/vaporwave/01_dashboard.png) |
 
-| Terminal | Tactical | Corrupted | Agent Terminal |
-|:---:|:---:|:---:|:---:|
-| ![Terminal](screenshots/terminal/04_terminal.png) | ![Tactical](screenshots/tactical/04_terminal.png) | ![Corrupted](screenshots/corrupted/04_terminal.png) | ![Agent](screenshots/agent-terminal/04_terminal.png) |
+| Retro CGA | Paper | High Contrast |
+|:---:|:---:|:---:|
+| ![CGA](screenshots/retro-cga/01_dashboard.png) | ![Paper](screenshots/paper/01_dashboard.png) | ![HiCon](screenshots/highcontrast/01_dashboard.png) |
+
+### Terminals
+
+| Classic | XP | Modern | Desktop | macOS |
+|:---:|:---:|:---:|:---:|:---:|
+| ![Classic](screenshots/classic/04_terminal.png) | ![XP](screenshots/xp/04_terminal.png) | ![Modern](screenshots/modern/04_terminal.png) | ![Desktop](screenshots/desktop/04_terminal.png) | ![macOS](screenshots/macos/04_terminal.png) |
+
+| Terminal | Tactical | Corrupted | Agent Terminal | Cyberpunk |
+|:---:|:---:|:---:|:---:|:---:|
+| ![Terminal](screenshots/terminal/04_terminal.png) | ![Tactical](screenshots/tactical/04_terminal.png) | ![Corrupted](screenshots/corrupted/04_terminal.png) | ![Agent](screenshots/agent-terminal/04_terminal.png) | ![Cyberpunk](screenshots/cyberpunk/04_terminal.png) |
+
+| Win95 | Solarized | Vaporwave | High Contrast | GNOME |
+|:---:|:---:|:---:|:---:|:---:|
+| ![Win95](screenshots/win95/04_terminal.png) | ![Solarized](screenshots/solarized/04_terminal.png) | ![Vaporwave](screenshots/vaporwave/04_terminal.png) | ![HiCon](screenshots/highcontrast/04_terminal.png) | ![GNOME](screenshots/gnome/04_terminal.png) |
 
 ## Overview
 
