@@ -17,7 +17,6 @@ oasis-types = { workspace = true }
 oasis-vfs = { workspace = true }
 oasis-net = { workspace = true }
 oasis-skin = { workspace = true }
-oasis-terminal = { workspace = true }
 oasis-js = { workspace = true, optional = true }
 serde = { workspace = true }
 log = { workspace = true }

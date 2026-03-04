@@ -724,7 +724,6 @@ dependencies = [
  "oasis-js",
  "oasis-net",
  "oasis-skin",
- "oasis-terminal",
  "oasis-types",
  "oasis-vfs",
  "png",

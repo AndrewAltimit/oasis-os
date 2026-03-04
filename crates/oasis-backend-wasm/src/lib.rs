@@ -19,7 +19,7 @@ use web_sys::HtmlCanvasElement;
 
 use oasis_core::active_theme::ActiveTheme;
 use oasis_core::apps::{AppAction, AppRunner};
-use oasis_core::backend::{AudioBackend, Color, InputBackend, SdiBackend, TextureId};
+use oasis_core::backend::{AudioBackend, Color, InputBackend, SdiCore, TextureId};
 use oasis_core::bottombar::{BottomBar, MediaTab};
 use oasis_core::browser::{BrowserConfig, BrowserWidget};
 use oasis_core::cursor::{self, CursorState};

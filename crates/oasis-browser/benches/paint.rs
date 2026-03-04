@@ -7,13 +7,13 @@ use oasis_browser::SimpleTextMeasurer;
 use oasis_browser::internals::{
     CascadeContext, Stylesheet, Tokenizer, TreeBuilder, build_layout_tree, paint_page, style_tree,
 };
-use oasis_types::backend::{Color, SdiBackend, TextureId};
+use oasis_types::backend::{Color, SdiBackend, SdiCore, TextureId};
 use oasis_types::error::Result;
 
 /// A no-op backend that does nothing -- isolates paint logic cost from rendering.
 struct NullBackend;
 
-impl SdiBackend for NullBackend {
+impl SdiCore for NullBackend {
     fn init(&mut self, _w: u32, _h: u32) -> Result<()> {
         Ok(())
     }
@@ -61,6 +61,8 @@ impl SdiBackend for NullBackend {
         Ok(())
     }
 }
+
+impl SdiBackend for NullBackend {}
 
 /// Generate a page with various elements that produce paint commands.
 fn generate_mixed_page(n: usize) -> String {

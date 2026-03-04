@@ -21,7 +21,7 @@ use std::path::Path;
 
 use oasis_backend_sdl::SdlBackend;
 use oasis_core::active_theme::ActiveTheme;
-use oasis_core::backend::{Color, SdiBackend};
+use oasis_core::backend::{Color, SdiCore};
 use oasis_core::bottombar::{BottomBar, MediaTab};
 use oasis_core::color::lighten;
 use oasis_core::cursor::{self, CursorState};

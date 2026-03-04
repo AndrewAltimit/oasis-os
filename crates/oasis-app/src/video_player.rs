@@ -154,8 +154,14 @@ impl VideoPlayer {
         };
 
         // Take stdout handles before moving children.
-        let video_stdout = video_child.stdout.take().unwrap();
-        let audio_stdout = audio_child.stdout.take().unwrap();
+        let video_stdout = video_child
+            .stdout
+            .take()
+            .expect("video child stdout must be piped");
+        let audio_stdout = audio_child
+            .stdout
+            .take()
+            .expect("audio child stdout must be piped");
 
         // Video reader thread: reads exact frame-sized chunks.
         let frame_size = (width * height * 4) as usize;
@@ -322,13 +328,13 @@ impl Drop for VideoPlayer {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use oasis_core::backend::{Color, SdiBackend, TextureId};
+    use oasis_core::backend::{Color, SdiBackend, SdiCore, TextureId};
     use oasis_core::error::Result;
 
     /// Minimal mock backend for video_player tests.
     struct MockBackend;
 
-    impl SdiBackend for MockBackend {
+    impl SdiCore for MockBackend {
         fn init(&mut self, _w: u32, _h: u32) -> Result<()> {
             Ok(())
         }
@@ -369,6 +375,8 @@ mod tests {
             Ok(())
         }
     }
+
+    impl SdiBackend for MockBackend {}
 
     #[test]
     fn new_is_idle() {

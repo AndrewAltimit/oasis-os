@@ -199,29 +199,13 @@ impl GradientStyle {
     }
 }
 
-/// Rendering backend trait.
+/// Core rendering methods that every backend must implement.
 ///
-/// Four implementations cover all deployment targets: GU (PSP), SDL2
-/// (desktop/Pi), framebuffer (headless Pi), and UE5 render target.
-///
-/// # Core Methods (required)
-///
-/// All backends must implement the 13 core methods: `init`, `clear`, `blit`,
-/// `fill_rect`, `draw_text`, `swap_buffers`, `load_texture`,
-/// `destroy_texture`, `set_clip_rect`, `reset_clip_rect`, `measure_text`,
-/// `read_pixels`, and `shutdown`.
-///
-/// # Extended Primitives (optional, with defaults)
-///
-/// Backends may override the extended methods for native-accelerated
-/// rendering. Default implementations approximate using `fill_rect` and
-/// other core methods, so existing backends continue to work without changes.
-#[allow(clippy::too_many_arguments)]
-pub trait SdiBackend {
-    // -----------------------------------------------------------------------
-    // Core methods (required -- no default implementations)
-    // -----------------------------------------------------------------------
-
+/// These 13 methods are the minimum surface for a rendering backend.
+/// Test mocks and null backends only need to implement this trait,
+/// then add an empty `impl SdiBackend for T {}` to pick up all
+/// extended methods with their default implementations.
+pub trait SdiCore {
     /// Initialize the rendering subsystem.
     fn init(&mut self, width: u32, height: u32) -> Result<()>;
 
@@ -263,9 +247,24 @@ pub trait SdiBackend {
 
     /// Shut down the rendering subsystem and release resources.
     fn shutdown(&mut self) -> Result<()>;
+}
 
+/// Full rendering backend trait with extended primitives.
+///
+/// Extends [`SdiCore`] with 30 optional methods for shapes, gradients,
+/// text system, texture operations, clip/transform stacks, and batching.
+/// All have default implementations that approximate using [`SdiCore`]
+/// methods, so backends can progressively override for native acceleration.
+///
+/// # For backend implementors
+///
+/// 1. Implement [`SdiCore`] with the 13 required methods
+/// 2. Implement `SdiBackend` and override only the methods you can accelerate
+/// 3. For test mocks: `impl SdiBackend for MyMock {}` (empty) is sufficient
+#[allow(clippy::too_many_arguments)]
+pub trait SdiBackend: SdiCore {
     // -----------------------------------------------------------------------
-    // Extended: Shape Primitives (Phase 1)
+    // Extended: Shape Primitives
     // -----------------------------------------------------------------------
 
     /// Draw a filled rectangle with rounded corners.
@@ -1004,7 +1003,7 @@ mod tests {
         }
     }
 
-    impl SdiBackend for RecordingBackend {
+    impl SdiCore for RecordingBackend {
         fn init(&mut self, _w: u32, _h: u32) -> Result<()> {
             Ok(())
         }
@@ -1071,6 +1070,8 @@ mod tests {
             Ok(())
         }
     }
+
+    impl SdiBackend for RecordingBackend {}
 
     // -- Color tests --
 

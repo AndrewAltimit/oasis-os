@@ -58,10 +58,14 @@ impl SettingsStore {
     pub fn save(&mut self, vfs: &mut dyn Vfs) {
         let toml = self.to_toml();
         // Ensure parent directory exists.
-        if let Some(parent) = self.path.rsplit_once('/') {
-            let _ = vfs.mkdir(parent.0);
+        if let Some(parent) = self.path.rsplit_once('/')
+            && let Err(e) = vfs.mkdir(parent.0)
+        {
+            log::warn!("settings mkdir({}) failed: {e}", parent.0);
         }
-        let _ = vfs.write(&self.path, toml.as_bytes());
+        if let Err(e) = vfs.write(&self.path, toml.as_bytes()) {
+            log::warn!("settings save({}) failed: {e}", self.path);
+        }
         self.dirty = false;
     }
 

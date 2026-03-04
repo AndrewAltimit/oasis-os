@@ -2,7 +2,7 @@
 //!
 //! Provides a [`MockBackend`] that records all draw calls for assertion.
 
-use oasis_types::backend::{Color, SdiBackend, TextureId};
+use oasis_types::backend::{Color, SdiBackend, SdiCore, TextureId};
 use oasis_types::error::Result;
 
 /// A recorded draw call from the mock backend.
@@ -137,7 +137,7 @@ pub fn test_draw_all_themes(mut f: impl FnMut(&mut crate::context::DrawContext<'
     }
 }
 
-impl SdiBackend for MockBackend {
+impl SdiCore for MockBackend {
     fn init(&mut self, _width: u32, _height: u32) -> Result<()> {
         Ok(())
     }
@@ -206,3 +206,5 @@ impl SdiBackend for MockBackend {
         Ok(())
     }
 }
+
+impl SdiBackend for MockBackend {}

@@ -640,11 +640,15 @@ impl WindowManager {
 
         match region {
             HitRegion::TitlebarButton(id, ButtonKind::Close) => {
-                let _ = self.close_window(&id, sdi);
+                if let Err(e) = self.close_window(&id, sdi) {
+                    log::debug!("close_window({id}): {e}");
+                }
                 WmEvent::WindowClosed(id)
             },
             HitRegion::TitlebarButton(id, ButtonKind::Minimize) => {
-                let _ = self.minimize_window(&id, sdi);
+                if let Err(e) = self.minimize_window(&id, sdi) {
+                    log::debug!("minimize_window({id}): {e}");
+                }
                 WmEvent::WindowMinimized(id)
             },
             HitRegion::TitlebarButton(id, ButtonKind::Maximize) => {
@@ -657,11 +661,15 @@ impl WindowManager {
                     .unwrap_or(false);
 
                 if is_maximized {
-                    let _ = self.restore_window(&id, sdi);
+                    if let Err(e) = self.restore_window(&id, sdi) {
+                        log::debug!("restore_window({id}): {e}");
+                    }
                     WmEvent::WindowRestored(id)
                 } else {
                     self.focus_window_internal(&id, sdi);
-                    let _ = self.maximize_window(&id, sdi);
+                    if let Err(e) = self.maximize_window(&id, sdi) {
+                        log::debug!("maximize_window({id}): {e}");
+                    }
                     WmEvent::WindowMaximized(id)
                 }
             },

@@ -432,7 +432,7 @@ impl Default for SdiRegistry {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use oasis_types::backend::TextureId;
+    use oasis_types::backend::{SdiCore, TextureId};
 
     #[test]
     fn create_and_get() {
@@ -621,7 +621,7 @@ font_size = 16
         }
     }
 
-    impl SdiBackend for RecordingBackend {
+    impl SdiCore for RecordingBackend {
         fn init(&mut self, _w: u32, _h: u32) -> Result<()> {
             Ok(())
         }
@@ -680,6 +680,8 @@ font_size = 16
             Ok(())
         }
     }
+
+    impl SdiBackend for RecordingBackend {}
 
     #[test]
     fn draw_dispatches_fill_rect_for_colored_objects() {

@@ -6,7 +6,6 @@
 //! [`BrowserWidget`] -- the top-level component that the window manager
 //! drives.
 
-pub mod commands;
 pub mod config;
 pub(crate) mod css;
 pub mod gemini;

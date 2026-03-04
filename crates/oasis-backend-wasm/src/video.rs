@@ -9,7 +9,7 @@ use wasm_bindgen::JsCast;
 use wasm_bindgen::prelude::*;
 use web_sys::{CanvasRenderingContext2d, HtmlCanvasElement, HtmlVideoElement};
 
-use oasis_types::backend::{SdiBackend, TextureId};
+use oasis_types::backend::{SdiCore, TextureId};
 
 use crate::renderer::WasmBackend;
 

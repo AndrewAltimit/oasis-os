@@ -24,7 +24,7 @@ use oasis_audio::RadioManager;
 use oasis_backend_sdl::SdlAudioBackend;
 use oasis_backend_sdl::SdlBackend;
 use oasis_core::active_theme::ActiveTheme;
-use oasis_core::backend::{AudioBackend, Color, InputBackend, SdiBackend};
+use oasis_core::backend::{AudioBackend, Color, InputBackend, SdiCore};
 use oasis_core::bottombar::BottomBar;
 use oasis_core::browser::BrowserConfig;
 use oasis_core::config::OasisConfig;
@@ -132,7 +132,7 @@ fn main() -> Result<()> {
     register_plugin_commands(&mut cmd_reg);
     register_agent_commands(&mut cmd_reg);
     register_tv_commands(&mut cmd_reg);
-    oasis_core::browser::commands::register_browser_commands(&mut cmd_reg);
+    oasis_core::terminal::register_browser_commands(&mut cmd_reg);
 
     // Window manager state (Desktop mode).
     let wm = WindowManager::with_theme(

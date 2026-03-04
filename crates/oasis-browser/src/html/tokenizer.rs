@@ -333,7 +333,10 @@ impl Tokenizer {
     /// Emit a start/end tag from the current tag builder, updating
     /// `last_start_tag` and the state machine as needed.
     fn emit_current_tag(&mut self) -> Token {
-        let tag = self.current_tag.take().unwrap();
+        let tag = self
+            .current_tag
+            .take()
+            .expect("current_tag must be Some when emitting");
         let name = tag.name.clone();
         let is_start = !tag.is_end_tag;
         let tok = tag.into_token();
@@ -619,7 +622,7 @@ impl Tokenizer {
             Some(ch) => {
                 self.current_tag
                     .as_mut()
-                    .unwrap()
+                    .expect("current_tag must be Some in TagName state")
                     .name
                     .push(ch.to_ascii_lowercase());
                 None
@@ -635,7 +638,10 @@ impl Tokenizer {
     fn state_self_closing(&mut self) -> Option<Token> {
         match self.consume() {
             Some('>') => {
-                self.current_tag.as_mut().unwrap().self_closing = true;
+                self.current_tag
+                    .as_mut()
+                    .expect("current_tag must be Some in SelfClosing state")
+                    .self_closing = true;
                 self.state = State::Data;
                 Some(self.emit_current_tag())
             },
@@ -663,7 +669,10 @@ impl Tokenizer {
                 None
             },
             Some('=') => {
-                let tag = self.current_tag.as_mut().unwrap();
+                let tag = self
+                    .current_tag
+                    .as_mut()
+                    .expect("current_tag must be Some in BeforeAttributeName state");
                 tag.finish_attribute();
                 tag.current_attr_name.push('=');
                 self.consume();
@@ -671,7 +680,10 @@ impl Tokenizer {
                 None
             },
             _ => {
-                self.current_tag.as_mut().unwrap().finish_attribute();
+                self.current_tag
+                    .as_mut()
+                    .expect("current_tag must be Some in BeforeAttributeName state")
+                    .finish_attribute();
                 self.state = State::AttributeName;
                 None
             },
@@ -693,7 +705,7 @@ impl Tokenizer {
             Some(ch) => {
                 self.current_tag
                     .as_mut()
-                    .unwrap()
+                    .expect("current_tag must be Some in AttributeName state")
                     .current_attr_name
                     .push(ch.to_ascii_lowercase());
                 None
@@ -731,7 +743,10 @@ impl Tokenizer {
                 Some(Token::Eof)
             },
             _ => {
-                self.current_tag.as_mut().unwrap().finish_attribute();
+                self.current_tag
+                    .as_mut()
+                    .expect("current_tag must be Some in AfterAttributeName state")
+                    .finish_attribute();
                 self.state = State::AttributeName;
                 None
             },
@@ -781,7 +796,7 @@ impl Tokenizer {
             Some(ch) => {
                 self.current_tag
                     .as_mut()
-                    .unwrap()
+                    .expect("current_tag must be Some in attribute-value state")
                     .current_attr_value
                     .push(ch);
                 None
@@ -808,7 +823,7 @@ impl Tokenizer {
             Some(ch) => {
                 self.current_tag
                     .as_mut()
-                    .unwrap()
+                    .expect("current_tag must be Some in attribute-value state")
                     .current_attr_value
                     .push(ch);
                 None
@@ -839,7 +854,7 @@ impl Tokenizer {
             Some(ch) => {
                 self.current_tag
                     .as_mut()
-                    .unwrap()
+                    .expect("current_tag must be Some in attribute-value state")
                     .current_attr_value
                     .push(ch);
                 None
@@ -1346,9 +1361,15 @@ impl Tokenizer {
     /// as a token.
     fn consume_content_end_tag(&mut self, end_tag: &str) -> Token {
         self.pos += end_tag.len();
-        let tag_name = self.last_start_tag.clone().unwrap();
+        let tag_name = self
+            .last_start_tag
+            .clone()
+            .expect("last_start_tag must be set before consuming content end tag");
         self.current_tag = Some(TagBuilder::new(true));
-        self.current_tag.as_mut().unwrap().name = tag_name;
+        self.current_tag
+            .as_mut()
+            .expect("just set current_tag above")
+            .name = tag_name;
         // Skip to `>`.
         loop {
             match self.consume() {
@@ -1356,7 +1377,10 @@ impl Tokenizer {
                 _ => {},
             }
         }
-        self.current_tag.take().unwrap().into_token()
+        self.current_tag
+            .take()
+            .expect("current_tag must be Some when emitting content end tag")
+            .into_token()
     }
 
     /// **RawText** -- for `<script>`, `<style>`, etc.

@@ -17,7 +17,7 @@ use std::sync::Once;
 
 use oasis_backend_ue5::{FfiInputBackend, Ue5AudioBackend, Ue5Backend};
 use oasis_core::active_theme::ActiveTheme;
-use oasis_core::backend::{AudioBackend, InputBackend, SdiBackend};
+use oasis_core::backend::{AudioBackend, InputBackend, SdiCore};
 use oasis_core::dashboard::{DashboardConfig, DashboardState, discover_apps};
 use oasis_core::input::{Button, InputEvent, Trigger};
 use oasis_core::platform::DesktopPlatform;

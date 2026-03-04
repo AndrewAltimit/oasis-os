@@ -10,6 +10,7 @@ use super::parser::{
     AttrOp, Combinator, CompoundSelector, CssColor, CssValue, Declaration, LengthUnit, Rule,
     SimpleSelector, Specificity, Stylesheet, parse_value_list,
 };
+use super::selectors;
 use super::tokenizer::CssTokenizer;
 use super::values::ComputedStyle;
 use crate::html::dom::{Document, ElementData, NodeId, NodeKind};
@@ -863,7 +864,12 @@ fn matches_simple(
     }
 }
 
-/// Match structural pseudo-classes.
+/// Match pseudo-classes (structural + stateful).
+///
+/// Structural pseudo-classes (`:first-child`, `:last-child`, etc.)
+/// are delegated to the [`selectors`] module. Stateful pseudo-classes
+/// (`:hover`, `:visited`, `:link`) remain here because they require
+/// the cascade context.
 fn match_pseudo_class(
     doc: &Document,
     node_id: NodeId,
@@ -871,48 +877,8 @@ fn match_pseudo_class(
     pseudo: &str,
     ctx: &CascadeContext<'_>,
 ) -> bool {
+    // Stateful pseudo-classes that require CascadeContext.
     match pseudo {
-        "first-child" => {
-            if let Some(pid) = doc.nodes[node_id].parent {
-                let siblings = &doc.nodes[pid].children;
-                for &sid in siblings {
-                    if matches!(doc.nodes[sid].kind, NodeKind::Element(_)) {
-                        return sid == node_id;
-                    }
-                }
-            }
-            false
-        },
-        "last-child" => {
-            if let Some(pid) = doc.nodes[node_id].parent {
-                let siblings = &doc.nodes[pid].children;
-                for &sid in siblings.iter().rev() {
-                    if matches!(doc.nodes[sid].kind, NodeKind::Element(_)) {
-                        return sid == node_id;
-                    }
-                }
-            }
-            false
-        },
-        "only-child" => {
-            if let Some(pid) = doc.nodes[node_id].parent {
-                let siblings = &doc.nodes[pid].children;
-                let element_count = siblings
-                    .iter()
-                    .filter(|&&sid| matches!(doc.nodes[sid].kind, NodeKind::Element(_)))
-                    .count();
-                element_count == 1
-            } else {
-                false
-            }
-        },
-        "empty" => {
-            // :empty matches if the node has no element or text children.
-            doc.nodes[node_id]
-                .children
-                .iter()
-                .all(|&cid| matches!(doc.nodes[cid].kind, NodeKind::Comment(_)))
-        },
         "hover" => {
             // :hover matches the hovered node and all its ancestors.
             if let Some(hover_nid) = ctx.hover_node {
@@ -924,7 +890,7 @@ fn match_pseudo_class(
                     current = doc.nodes[nid].parent;
                 }
             }
-            false
+            return false;
         },
         "visited" => {
             // :visited matches <a> elements whose href is in the visited set.
@@ -934,7 +900,7 @@ fn match_pseudo_class(
             {
                 return visited.contains(href);
             }
-            false
+            return false;
         },
         "link" => {
             // :link matches <a> elements with href that have NOT been visited.
@@ -946,22 +912,19 @@ fn match_pseudo_class(
                 }
                 return true; // No visited info = treat as unvisited.
             }
-            false
+            return false;
         },
-        "root" => {
-            // :root matches the document root element (<html>), whose
-            // parent is the Document node, not another Element.
-            if let Some(pid) = doc.nodes[node_id].parent {
-                !matches!(doc.nodes[pid].kind, NodeKind::Element(_))
-            } else {
-                true
-            }
-        },
-        _ => false,
+        _ => {},
     }
+
+    // Structural pseudo-classes delegated to the selectors module.
+    selectors::matches_pseudo_class(&doc.nodes, node_id, pseudo)
 }
 
 /// Match functional pseudo-classes like `:nth-child(An+B)`.
+///
+/// Delegates to the [`selectors`] module which handles `nth-child`,
+/// `nth-last-child`, `nth-of-type`, and `nth-last-of-type`.
 fn match_pseudo_class_fn(
     doc: &Document,
     node_id: NodeId,
@@ -969,19 +932,7 @@ fn match_pseudo_class_fn(
     name: &str,
     arg: &str,
 ) -> bool {
-    match name {
-        "nth-child" => {
-            let (a, b) = parse_an_plus_b(arg);
-            let index = element_index_in_parent(doc, node_id);
-            matches_an_plus_b(a, b, index)
-        },
-        "nth-last-child" => {
-            let (a, b) = parse_an_plus_b(arg);
-            let index = element_last_index_in_parent(doc, node_id);
-            matches_an_plus_b(a, b, index)
-        },
-        _ => false,
-    }
+    selectors::matches_pseudo_class_fn(&doc.nodes, node_id, name, arg)
 }
 
 /// Match an attribute selector against an element.
@@ -1004,85 +955,6 @@ fn match_attribute(elem: &ElementData, name: &str, op: &AttrOp, value: Option<&s
         AttrOp::Suffix => value.is_some_and(|v| attr_val.ends_with(v)),
         AttrOp::Substring => value.is_some_and(|v| attr_val.contains(v)),
     }
-}
-
-/// Parse `An+B` notation (e.g. "2n+1", "odd", "even", "3").
-fn parse_an_plus_b(arg: &str) -> (i32, i32) {
-    let s = arg.trim().to_ascii_lowercase();
-    if s == "odd" {
-        return (2, 1);
-    }
-    if s == "even" {
-        return (2, 0);
-    }
-    // Try "An+B", "An-B", "An", "B", "-n+B", "n+B"
-    if let Some(n_pos) = s.find('n') {
-        let a_str = &s[..n_pos].trim();
-        let a = if a_str.is_empty() || *a_str == "+" {
-            1
-        } else if *a_str == "-" {
-            -1
-        } else {
-            a_str.parse::<i32>().unwrap_or(1)
-        };
-        let rest = s[n_pos + 1..].trim().to_string();
-        let b = if rest.is_empty() {
-            0
-        } else {
-            rest.replace(' ', "").parse::<i32>().unwrap_or(0)
-        };
-        (a, b)
-    } else {
-        // Just a number.
-        (0, s.parse::<i32>().unwrap_or(0))
-    }
-}
-
-/// Check if `index` (1-based) matches the `An+B` formula.
-fn matches_an_plus_b(a: i32, b: i32, index: i32) -> bool {
-    if a == 0 {
-        return index == b;
-    }
-    let diff = index - b;
-    if a > 0 {
-        diff >= 0 && diff % a == 0
-    } else {
-        diff <= 0 && diff % a == 0
-    }
-}
-
-/// Get the 1-based index of a node among its element siblings.
-fn element_index_in_parent(doc: &Document, node_id: NodeId) -> i32 {
-    if let Some(pid) = doc.nodes[node_id].parent {
-        let siblings = &doc.nodes[pid].children;
-        let mut idx = 0;
-        for &sid in siblings {
-            if matches!(doc.nodes[sid].kind, NodeKind::Element(_)) {
-                idx += 1;
-                if sid == node_id {
-                    return idx;
-                }
-            }
-        }
-    }
-    0
-}
-
-/// Get the 1-based index counting from the last element sibling.
-fn element_last_index_in_parent(doc: &Document, node_id: NodeId) -> i32 {
-    if let Some(pid) = doc.nodes[node_id].parent {
-        let siblings = &doc.nodes[pid].children;
-        let mut idx = 0;
-        for &sid in siblings.iter().rev() {
-            if matches!(doc.nodes[sid].kind, NodeKind::Element(_)) {
-                idx += 1;
-                if sid == node_id {
-                    return idx;
-                }
-            }
-        }
-    }
-    0
 }
 
 // -----------------------------------------------------------------------
@@ -2062,25 +1934,27 @@ mod tests {
 
     #[test]
     fn nth_child_matching() {
-        assert!(matches_an_plus_b(2, 1, 1)); // odd: 1
-        assert!(!matches_an_plus_b(2, 1, 2)); // odd: 2 is even
-        assert!(matches_an_plus_b(2, 1, 3)); // odd: 3
-        assert!(matches_an_plus_b(2, 0, 2)); // even: 2
-        assert!(!matches_an_plus_b(2, 0, 1)); // even: 1 is odd
-        assert!(matches_an_plus_b(0, 3, 3)); // exactly 3
-        assert!(!matches_an_plus_b(0, 3, 4)); // not 3
-        assert!(matches_an_plus_b(3, 0, 6)); // 3n: 6
+        use super::selectors::AnB;
+        assert!(AnB { a: 2, b: 1 }.matches(1)); // odd: 1
+        assert!(!AnB { a: 2, b: 1 }.matches(2)); // odd: 2 is even
+        assert!(AnB { a: 2, b: 1 }.matches(3)); // odd: 3
+        assert!(AnB { a: 2, b: 0 }.matches(2)); // even: 2
+        assert!(!AnB { a: 2, b: 0 }.matches(1)); // even: 1 is odd
+        assert!(AnB { a: 0, b: 3 }.matches(3)); // exactly 3
+        assert!(!AnB { a: 0, b: 3 }.matches(4)); // not 3
+        assert!(AnB { a: 3, b: 0 }.matches(6)); // 3n: 6
     }
 
     #[test]
     fn parse_an_plus_b_cases() {
-        assert_eq!(parse_an_plus_b("odd"), (2, 1));
-        assert_eq!(parse_an_plus_b("even"), (2, 0));
-        assert_eq!(parse_an_plus_b("3"), (0, 3));
-        assert_eq!(parse_an_plus_b("2n+1"), (2, 1));
-        assert_eq!(parse_an_plus_b("2n"), (2, 0));
-        assert_eq!(parse_an_plus_b("n+3"), (1, 3));
-        assert_eq!(parse_an_plus_b("-n+3"), (-1, 3));
+        use super::selectors::AnB;
+        assert_eq!(AnB::parse("odd"), Some(AnB { a: 2, b: 1 }));
+        assert_eq!(AnB::parse("even"), Some(AnB { a: 2, b: 0 }));
+        assert_eq!(AnB::parse("3"), Some(AnB { a: 0, b: 3 }));
+        assert_eq!(AnB::parse("2n+1"), Some(AnB { a: 2, b: 1 }));
+        assert_eq!(AnB::parse("2n"), Some(AnB { a: 2, b: 0 }));
+        assert_eq!(AnB::parse("n+3"), Some(AnB { a: 1, b: 3 }));
+        assert_eq!(AnB::parse("-n+3"), Some(AnB { a: -1, b: 3 }));
     }
 
     #[test]
@@ -2614,7 +2488,7 @@ mod tests {
         use proptest::prelude::*;
 
         proptest! {
-            /// "odd" parses to (2, 1) and "even" parses to (2, 0).
+            /// "odd" parses to AnB(2,1) and "even" parses to AnB(2,0).
             #[test]
             fn an_plus_b_odd_even(
                 input in proptest::sample::select(vec![
@@ -2622,30 +2496,33 @@ mod tests {
                     "even".to_string(), "EVEN".to_string(), "Even".to_string(),
                 ]),
             ) {
-                let (a, b) = parse_an_plus_b(&input);
+                use super::super::selectors::AnB;
+                let anb = AnB::parse(&input).unwrap();
                 let lower = input.to_ascii_lowercase();
                 if lower == "odd" {
-                    prop_assert_eq!((a, b), (2, 1));
+                    prop_assert_eq!((anb.a, anb.b), (2, 1));
                 } else {
-                    prop_assert_eq!((a, b), (2, 0));
+                    prop_assert_eq!((anb.a, anb.b), (2, 0));
                 }
             }
 
-            /// A plain positive integer parses as (0, n).
+            /// A plain positive integer parses as AnB(0, n).
             #[test]
             fn an_plus_b_plain_number(n in 1i32..100) {
-                let (a, b) = parse_an_plus_b(&n.to_string());
-                prop_assert_eq!(a, 0);
-                prop_assert_eq!(b, n);
+                use super::super::selectors::AnB;
+                let anb = AnB::parse(&n.to_string()).unwrap();
+                prop_assert_eq!(anb.a, 0);
+                prop_assert_eq!(anb.b, n);
             }
 
-            /// "An" form parses as (A, 0).
+            /// "An" form parses as AnB(A, 0).
             #[test]
             fn an_plus_b_an_form(coeff in 1i32..20) {
+                use super::super::selectors::AnB;
                 let input = format!("{coeff}n");
-                let (a, b) = parse_an_plus_b(&input);
-                prop_assert_eq!(a, coeff);
-                prop_assert_eq!(b, 0);
+                let anb = AnB::parse(&input).unwrap();
+                prop_assert_eq!(anb.a, coeff);
+                prop_assert_eq!(anb.b, 0);
             }
 
             /// "An+B" form parses correctly.
@@ -2654,35 +2531,39 @@ mod tests {
                 coeff in 1i32..20,
                 offset in 0i32..20,
             ) {
+                use super::super::selectors::AnB;
                 let input = format!("{coeff}n+{offset}");
-                let (a, b) = parse_an_plus_b(&input);
-                prop_assert_eq!(a, coeff);
-                prop_assert_eq!(b, offset);
+                let anb = AnB::parse(&input).unwrap();
+                prop_assert_eq!(anb.a, coeff);
+                prop_assert_eq!(anb.b, offset);
             }
 
-            /// matches_an_plus_b: if a==0, only index==b matches.
+            /// AnB::matches: if a==0, only index==b matches.
             #[test]
-            fn matches_an_plus_b_a_zero(b in 1i32..50, index in 1i32..50) {
-                let result = matches_an_plus_b(0, b, index);
+            fn anb_matches_a_zero(b in 1i32..50, index in 1i32..50) {
+                use super::super::selectors::AnB;
+                let result = AnB { a: 0, b }.matches(index);
                 prop_assert_eq!(result, index == b);
             }
 
-            /// matches_an_plus_b: index == a*1 + b always matches.
+            /// AnB::matches: index == a*1 + b always matches.
             #[test]
-            fn matches_an_plus_b_first_match(a in 1i32..20, b in 0i32..10) {
+            fn anb_matches_first_match(a in 1i32..20, b in 0i32..10) {
+                use super::super::selectors::AnB;
                 let index = a + b;
                 if index > 0 {
                     prop_assert!(
-                        matches_an_plus_b(a, b, index),
+                        AnB { a, b }.matches(index),
                         "{a}n+{b} should match index {index}",
                     );
                 }
             }
 
-            /// parse_an_plus_b never panics on arbitrary ASCII.
+            /// AnB::parse never panics on arbitrary ASCII.
             #[test]
-            fn an_plus_b_never_panics(input in "[ -~]{0,30}") {
-                let _ = parse_an_plus_b(&input);
+            fn anb_parse_never_panics(input in "[ -~]{0,30}") {
+                use super::super::selectors::AnB;
+                let _ = AnB::parse(&input);
             }
         }
     }

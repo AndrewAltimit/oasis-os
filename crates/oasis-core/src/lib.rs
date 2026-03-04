@@ -20,12 +20,9 @@ pub use oasis_types::error;
 pub use oasis_types::input;
 pub use oasis_types::tls;
 
-// Internal-only type re-exports (not part of the primary API surface).
-#[doc(hidden)]
 pub use oasis_types::color;
 #[doc(hidden)]
 pub use oasis_types::pbp;
-#[doc(hidden)]
 pub use oasis_types::shadow;
 
 // -----------------------------------------------------------------------
@@ -80,7 +77,8 @@ pub mod wallpaper;
 pub mod prelude {
     // Backend traits
     pub use oasis_types::backend::{
-        AudioBackend, AudioTrackId, Color, InputBackend, NetworkBackend, SdiBackend, TextureId,
+        AudioBackend, AudioTrackId, Color, InputBackend, NetworkBackend, SdiBackend, SdiCore,
+        TextureId,
     };
 
     // Error handling
