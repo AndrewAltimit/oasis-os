@@ -71,4 +71,63 @@ mod tests {
             assert_eq!(pixel, &[255, 255, 255, 255]);
         }
     }
+
+    #[test]
+    fn red_frame() {
+        // Pure red in BT.601: Y=82, U=90, V=240
+        let y = vec![82u8; 4];
+        let u = vec![90u8; 1];
+        let v = vec![240u8; 1];
+        let rgba = yuv420_to_rgba(&y, &u, &v, 2, 2, 2, 1);
+        for pixel in rgba.chunks(4) {
+            // Approximate: BT.601 integer math won't be pixel-perfect.
+            assert!(pixel[0] > 200, "R should be high, got {}", pixel[0]);
+            assert!(pixel[1] < 50, "G should be low, got {}", pixel[1]);
+            assert!(pixel[2] < 50, "B should be low, got {}", pixel[2]);
+            assert_eq!(pixel[3], 255);
+        }
+    }
+
+    #[test]
+    fn output_length_correct() {
+        let w: u32 = 8;
+        let h: u32 = 6;
+        let y = vec![128u8; (w * h) as usize];
+        let u = vec![128u8; ((w / 2) * (h / 2)) as usize];
+        let v = vec![128u8; ((w / 2) * (h / 2)) as usize];
+        let rgba = yuv420_to_rgba(&y, &u, &v, w, h, w as usize, (w / 2) as usize);
+        assert_eq!(rgba.len(), (w * h * 4) as usize);
+    }
+
+    #[test]
+    fn alpha_always_255() {
+        // Random-ish Y/U/V values; alpha must always be 255.
+        let y = vec![50, 100, 150, 200];
+        let u = vec![60];
+        let v = vec![200];
+        let rgba = yuv420_to_rgba(&y, &u, &v, 2, 2, 2, 1);
+        for pixel in rgba.chunks(4) {
+            assert_eq!(pixel[3], 255);
+        }
+    }
+
+    #[test]
+    fn stride_larger_than_width() {
+        // Stride can be larger than width (e.g. 512 stride for 480 width).
+        let stride_y: usize = 8;
+        let stride_uv: usize = 4;
+        let w: u32 = 4;
+        let h: u32 = 4;
+        let y = vec![128u8; stride_y * h as usize];
+        let u = vec![128u8; stride_uv * (h as usize / 2)];
+        let v = vec![128u8; stride_uv * (h as usize / 2)];
+        let rgba = yuv420_to_rgba(&y, &u, &v, w, h, stride_y, stride_uv);
+        assert_eq!(rgba.len(), (w * h * 4) as usize);
+        // Mid-gray: Y=128, U=0, V=0 → R=G=B=128
+        for pixel in rgba.chunks(4) {
+            assert_eq!(pixel[0], 128);
+            assert_eq!(pixel[1], 128);
+            assert_eq!(pixel[2], 128);
+        }
+    }
 }

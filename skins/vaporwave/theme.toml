@@ -1,0 +1,88 @@
+# Vaporwave Aesthetic Theme
+# Purple/pink/cyan gradient palette, ambient and dreamy
+
+background = "#1A0A2E"
+primary = "#FF71CE"
+secondary = "#2D1B69"
+accent = "#01CDFE"
+text = "#E0D0FF"
+dim_text = "#8B6AAD"
+error = "#FF3860"
+border_radius = 8
+shadow_intensity = 2
+gradient_enabled = true
+
+[wm_theme]
+titlebar_height = 22
+border_width = 1
+titlebar_active = "#2D1B69"
+titlebar_inactive = "#1A0A2E"
+titlebar_text_active = "#FF71CE"
+titlebar_text_inactive = "#8B6AAD"
+titlebar_gradient = true
+titlebar_gradient_top = "#3D2B79"
+titlebar_gradient_bottom = "#1A0A2E"
+close_button_color = "#FF3860"
+close_button_hover = "#FF6090"
+minimize_button_color = "#01CDFE"
+maximize_button_color = "#B967FF"
+frame_shadow_level = 2
+frame_border_radius = 8
+button_radius = 4
+
+[bar_overrides]
+statusbar_bg = "#2D1B69"
+text_color = "#E0D0FF"
+text_shadow = true
+gradient_top = "#3D2B79"
+gradient_bottom = "#1A0A2E"
+
+[icon_overrides]
+body_color = "#2D1B69"
+icon_style = "card"
+cursor_style = "fill"
+
+[wallpaper]
+style = "gradient"
+color_stops = ["#1A0A2E", "#2D1B69", "#0D0221", "#1A0A2E"]
+angle = 135
+
+[geometry]
+tab_row_height = 0
+statusbar_height = 22
+bottombar_height = 24
+icon_width = 28
+icon_height = 32
+font_body = 13
+font_hint = 11
+font_heading = 15
+cursor_blink_rate = 30
+press_flash_duration = 6
+
+[app_overrides]
+app_bg = "#1A0A2E"
+text_color = "#E0D0FF"
+selection_accent_color = "#FF71CE40"
+
+[start_menu_overrides]
+panel_bg = "#2D1B69"
+button_bg = "#FF71CE"
+button_text = "#1A0A2E"
+button_gradient = true
+panel_width = 200
+panel_border_radius = 8
+columns = 1
+item_row_height = 22
+
+[browser_overrides]
+chrome_bg = "#2D1B69"
+url_bar_bg = "#1A0A2E"
+link_color = "#01CDFE"
+
+[scrollbar_overrides]
+track_color = "#2D1B69"
+thumb_color = "#8B6AAD"
+
+[transition]
+fade_ms = 300
+slide_ms = 400

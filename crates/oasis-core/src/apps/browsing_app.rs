@@ -27,6 +27,20 @@ pub struct BrowsingApp {
     pub content: ContentState,
     /// Which viewer to use when opening files.
     viewer_mode: ViewerMode,
+    /// Playlist queue (music mode): list of file paths.
+    playlist: Vec<String>,
+    /// Current index in the playlist.
+    playlist_index: usize,
+    /// Whether playlist plays in shuffle order.
+    shuffle: bool,
+    /// Zoom level for photo viewer (1 = fit, 2 = 2x, etc.).
+    zoom_level: u32,
+    /// Image rotation in degrees (0, 90, 180, 270).
+    rotation: u16,
+    /// Whether slideshow mode is active.
+    slideshow: bool,
+    /// Frame counter for slideshow timing.
+    slideshow_timer: u32,
 }
 
 /// How files should be viewed when opened.
@@ -62,6 +76,13 @@ impl BrowsingApp {
         Self {
             content,
             viewer_mode: viewer,
+            playlist: Vec::new(),
+            playlist_index: 0,
+            shuffle: false,
+            zoom_level: 1,
+            rotation: 0,
+            slideshow: false,
+            slideshow_timer: 0,
         }
     }
 
@@ -121,6 +142,129 @@ impl BrowsingApp {
         }
     }
 
+    /// Add the selected file to the playlist (music mode).
+    fn add_to_playlist(&mut self, vfs: &dyn Vfs) {
+        if !matches!(self.viewer_mode, ViewerMode::Audio) {
+            return;
+        }
+        let abs_idx = self.content.scroll + self.content.cursor;
+        let Some(line) = self.content.lines.get(abs_idx) else {
+            return;
+        };
+        let line = line.trim().to_string();
+        if line == ".." || line.ends_with('/') {
+            return;
+        }
+        let Some(ref dir) = self.content.browse_dir else {
+            return;
+        };
+        let file_name = line.split("  (").next().unwrap_or(&line);
+        let file_path = join_path(dir, file_name);
+        if vfs.exists(&file_path) && !self.playlist.contains(&file_path) {
+            self.playlist.push(file_path);
+        }
+    }
+
+    /// Play the next track in the playlist.
+    fn playlist_next(&mut self, vfs: &dyn Vfs) {
+        if self.playlist.is_empty() {
+            return;
+        }
+        self.playlist_index = (self.playlist_index + 1) % self.playlist.len();
+        let path = self.playlist[self.playlist_index].clone();
+        self.open_file(vfs, &path);
+    }
+
+    /// Play the previous track in the playlist.
+    fn playlist_prev(&mut self, vfs: &dyn Vfs) {
+        if self.playlist.is_empty() {
+            return;
+        }
+        if self.playlist_index == 0 {
+            self.playlist_index = self.playlist.len() - 1;
+        } else {
+            self.playlist_index -= 1;
+        }
+        let path = self.playlist[self.playlist_index].clone();
+        self.open_file(vfs, &path);
+    }
+
+    /// Get the current playlist.
+    pub fn playlist(&self) -> &[String] {
+        &self.playlist
+    }
+
+    /// Get the current zoom level (photo viewer).
+    pub fn zoom_level(&self) -> u32 {
+        self.zoom_level
+    }
+
+    /// Get the current rotation in degrees (photo viewer).
+    pub fn rotation(&self) -> u16 {
+        self.rotation
+    }
+
+    /// Whether slideshow is active (photo viewer).
+    pub fn slideshow_active(&self) -> bool {
+        self.slideshow
+    }
+
+    /// Cycle zoom level: 1 -> 2 -> 4 -> 1.
+    fn cycle_zoom(&mut self) {
+        self.zoom_level = match self.zoom_level {
+            1 => 2,
+            2 => 4,
+            _ => 1,
+        };
+    }
+
+    /// Rotate image 90 degrees clockwise.
+    fn rotate_cw(&mut self) {
+        self.rotation = (self.rotation + 90) % 360;
+    }
+
+    /// Navigate to next/previous image in slideshow or manual browsing.
+    fn navigate_image(&mut self, vfs: &dyn Vfs, forward: bool) {
+        if !matches!(self.viewer_mode, ViewerMode::Image) {
+            return;
+        }
+        let Some(dir) = self.content.browse_dir.clone() else {
+            return;
+        };
+        let files = list_directory(vfs, &dir);
+        let image_exts = [".png", ".jpg", ".jpeg", ".bmp", ".gif"];
+        let images: Vec<String> = files
+            .iter()
+            .filter(|f| {
+                let lower = f.to_lowercase();
+                image_exts.iter().any(|ext| lower.contains(ext)) && !f.ends_with('/')
+            })
+            .cloned()
+            .collect();
+        if images.is_empty() {
+            return;
+        }
+        let current_file = self.content.viewing_file.as_deref().unwrap_or("");
+        let current_name = current_file.rsplit('/').next().unwrap_or("");
+        let cur_idx = images
+            .iter()
+            .position(|f| f.split("  (").next().unwrap_or(f) == current_name)
+            .unwrap_or(0);
+        let next_idx = if forward {
+            (cur_idx + 1) % images.len()
+        } else if cur_idx == 0 {
+            images.len() - 1
+        } else {
+            cur_idx - 1
+        };
+        let next_name = images[next_idx]
+            .split("  (")
+            .next()
+            .unwrap_or(&images[next_idx]);
+        let next_path = join_path(&dir, next_name);
+        self.open_file(vfs, &next_path);
+    }
+
     /// Open a file for viewing.
     fn open_file(&mut self, vfs: &dyn Vfs, path: &str) {
         if !vfs.exists(path) {
@@ -162,10 +306,12 @@ impl App for BrowsingApp {
         match button {
             Button::Cancel => {
                 if self.content.viewing_file.is_some() {
-                    // Return from file viewer to directory listing.
                     self.content.viewing_file = None;
                     self.content.scroll = 0;
                     self.content.cursor = 0;
+                    self.slideshow = false;
+                    self.zoom_level = 1;
+                    self.rotation = 0;
                     if let Some(ref dir) = self.content.browse_dir {
                         self.content.lines = list_directory(vfs, dir);
                     }
@@ -185,6 +331,68 @@ impl App for BrowsingApp {
             Button::Confirm => {
                 if self.content.browse_dir.is_some() && self.content.viewing_file.is_none() {
                     self.enter_selected(vfs);
+                }
+                AppAction::None
+            },
+            // Music mode: Triangle adds to playlist from listing.
+            Button::Triangle if matches!(self.viewer_mode, ViewerMode::Audio) => {
+                if self.content.viewing_file.is_none() {
+                    self.add_to_playlist(vfs);
+                }
+                AppAction::None
+            },
+            // Music mode: L/R for prev/next track in playlist.
+            Button::Left
+                if matches!(self.viewer_mode, ViewerMode::Audio)
+                    && self.content.viewing_file.is_some() =>
+            {
+                self.playlist_prev(vfs);
+                AppAction::None
+            },
+            Button::Right
+                if matches!(self.viewer_mode, ViewerMode::Audio)
+                    && self.content.viewing_file.is_some() =>
+            {
+                self.playlist_next(vfs);
+                AppAction::None
+            },
+            // Music mode: Select toggles shuffle.
+            Button::Select if matches!(self.viewer_mode, ViewerMode::Audio) => {
+                self.shuffle = !self.shuffle;
+                AppAction::None
+            },
+            // Photo mode: Square rotates, L/R cycle zoom, Start toggles slideshow.
+            Button::Square if matches!(self.viewer_mode, ViewerMode::Image) => {
+                if self.content.viewing_file.is_some() {
+                    self.rotate_cw();
+                }
+                AppAction::None
+            },
+            Button::Left
+                if matches!(self.viewer_mode, ViewerMode::Image)
+                    && self.content.viewing_file.is_some() =>
+            {
+                self.navigate_image(vfs, false);
+                AppAction::None
+            },
+            Button::Right
+                if matches!(self.viewer_mode, ViewerMode::Image)
+                    && self.content.viewing_file.is_some() =>
+            {
+                self.navigate_image(vfs, true);
+                AppAction::None
+            },
+            Button::Triangle
+                if matches!(self.viewer_mode, ViewerMode::Image)
+                    && self.content.viewing_file.is_some() =>
+            {
+                self.cycle_zoom();
+                AppAction::None
+            },
+            Button::Start if matches!(self.viewer_mode, ViewerMode::Image) => {
+                if self.content.viewing_file.is_some() {
+                    self.slideshow = !self.slideshow;
+                    self.slideshow_timer = 0;
                 }
                 AppAction::None
             },
@@ -358,5 +566,102 @@ mod tests {
         let app = BrowsingApp::music_player("/apps/music", &vfs);
         let any = app.as_any();
         assert!(any.downcast_ref::<BrowsingApp>().is_some());
+    }
+
+    #[test]
+    fn music_add_to_playlist() {
+        let vfs = setup_vfs();
+        let mut app = BrowsingApp::music_player("/apps/music", &vfs);
+        app.content.cached_max_visible = 20;
+        // Navigate to a track and add it.
+        let idx = app
+            .content
+            .lines
+            .iter()
+            .position(|l| l.contains("ambient_dawn"))
+            .unwrap();
+        app.content.cursor = idx;
+        app.handle_input(&Button::Triangle, &vfs);
+        assert_eq!(app.playlist().len(), 1);
+        assert!(app.playlist()[0].contains("ambient_dawn"));
+    }
+
+    #[test]
+    fn music_playlist_no_duplicates() {
+        let vfs = setup_vfs();
+        let mut app = BrowsingApp::music_player("/apps/music", &vfs);
+        app.content.cached_max_visible = 20;
+        let idx = app
+            .content
+            .lines
+            .iter()
+            .position(|l| l.contains("ambient_dawn"))
+            .unwrap();
+        app.content.cursor = idx;
+        app.handle_input(&Button::Triangle, &vfs);
+        app.handle_input(&Button::Triangle, &vfs);
+        assert_eq!(app.playlist().len(), 1);
+    }
+
+    #[test]
+    fn music_shuffle_toggle() {
+        let vfs = setup_vfs();
+        let mut app = BrowsingApp::music_player("/apps/music", &vfs);
+        assert!(!app.shuffle);
+        app.handle_input(&Button::Select, &vfs);
+        assert!(app.shuffle);
+        app.handle_input(&Button::Select, &vfs);
+        assert!(!app.shuffle);
+    }
+
+    #[test]
+    fn photo_rotate() {
+        let vfs = setup_vfs();
+        let mut app = BrowsingApp::photo_viewer("/apps/photos", &vfs);
+        app.open_file(&vfs, "/home/user/photos/sunset.png");
+        assert_eq!(app.rotation(), 0);
+        app.handle_input(&Button::Square, &vfs);
+        assert_eq!(app.rotation(), 90);
+        app.handle_input(&Button::Square, &vfs);
+        assert_eq!(app.rotation(), 180);
+    }
+
+    #[test]
+    fn photo_zoom_cycle() {
+        let vfs = setup_vfs();
+        let mut app = BrowsingApp::photo_viewer("/apps/photos", &vfs);
+        app.open_file(&vfs, "/home/user/photos/sunset.png");
+        assert_eq!(app.zoom_level(), 1);
+        app.handle_input(&Button::Triangle, &vfs);
+        assert_eq!(app.zoom_level(), 2);
+        app.handle_input(&Button::Triangle, &vfs);
+        assert_eq!(app.zoom_level(), 4);
+        app.handle_input(&Button::Triangle, &vfs);
+        assert_eq!(app.zoom_level(), 1);
+    }
+
+    #[test]
+    fn photo_slideshow_toggle() {
+        let vfs = setup_vfs();
+        let mut app = BrowsingApp::photo_viewer("/apps/photos", &vfs);
+        app.open_file(&vfs, "/home/user/photos/sunset.png");
+        assert!(!app.slideshow_active());
+        app.handle_input(&Button::Start, &vfs);
+        assert!(app.slideshow_active());
+        app.handle_input(&Button::Start, &vfs);
+        assert!(!app.slideshow_active());
+    }
+
+    #[test]
+    fn photo_cancel_resets_state() {
+        let vfs = setup_vfs();
+        let mut app = BrowsingApp::photo_viewer("/apps/photos", &vfs);
+        app.open_file(&vfs, "/home/user/photos/sunset.png");
+        app.handle_input(&Button::Square, &vfs); // rotate
+        app.handle_input(&Button::Triangle, &vfs); // zoom
+        app.handle_input(&Button::Cancel, &vfs); // back to listing
+        assert_eq!(app.rotation(), 0);
+        assert_eq!(app.zoom_level(), 1);
+        assert!(!app.slideshow_active());
     }
 }

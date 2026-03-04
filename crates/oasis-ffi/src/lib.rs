@@ -228,7 +228,7 @@ pub unsafe extern "C" fn oasis_create(
 
     let active_theme = skin
         .as_ref()
-        .map(|s| ActiveTheme::from_skin(&s.theme))
+        .map(|s| ActiveTheme::from_skin(&s.theme).with_features(&s.features))
         .unwrap_or_default();
 
     // Apply skin layout if available.

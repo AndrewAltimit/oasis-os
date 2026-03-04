@@ -1,0 +1,6 @@
+name = "vaporwave"
+version = "1.0"
+author = "OASIS_OS"
+description = "A E S T H E T I C vaporwave palette with purple, pink, and cyan gradients"
+screen_width = 480
+screen_height = 272

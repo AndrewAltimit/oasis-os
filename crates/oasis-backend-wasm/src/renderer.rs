@@ -805,6 +805,10 @@ impl SdiBackend for WasmBackend {
         self.fill_rect(x, y, w, h, c)
     }
 
+    fn viewport_size(&self) -> (u32, u32) {
+        (self.width, self.height)
+    }
+
     fn dim_screen(&mut self, alpha: u8) -> Result<()> {
         self.fill_rect(0, 0, self.width, self.height, Color::rgba(0, 0, 0, alpha))
     }

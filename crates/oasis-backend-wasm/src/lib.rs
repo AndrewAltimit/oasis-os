@@ -200,7 +200,9 @@ impl OasisWasm {
         let mut vfs = MemoryVfs::new();
         populate_wasm_vfs(&mut vfs);
 
-        let active_theme = ActiveTheme::from_skin(&skin.theme).with_screen_size(width, height);
+        let active_theme = ActiveTheme::from_skin(&skin.theme)
+            .with_screen_size(width, height)
+            .with_features(&skin.features);
         let mut browser_config = BrowserConfig::from_skin_theme(&skin.theme);
         // In WASM mode, use Google's iframe-compatible search page as home.
         browser_config.features.home_url = "https://www.google.com/webhp?igu=1".to_string();
@@ -1459,7 +1461,8 @@ impl OasisWasm {
                 let swapped =
                     Skin::swap_scaled(&self.skin, new_skin, &mut self.sdi, self.width, self.height);
                 self.active_theme = ActiveTheme::from_skin(&swapped.theme)
-                    .with_screen_size(self.width, self.height);
+                    .with_screen_size(self.width, self.height)
+                    .with_features(&swapped.features);
                 self.browser_config = BrowserConfig::from_skin_theme(&swapped.theme);
                 self.wm.set_theme(swapped.theme.build_wm_theme());
                 let dash_config =

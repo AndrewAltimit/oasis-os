@@ -10,7 +10,9 @@ mod app_state;
 mod commands;
 mod input;
 mod launch;
+mod radio_controller;
 mod render;
+mod tv_controller;
 mod video_player;
 use oasis_core::terminal_sdi;
 mod vfs_setup;
@@ -19,11 +21,10 @@ use anyhow::Result;
 
 use app_state::{AppState, ContentLayer, Mode, NetworkLayer, TerminalLayer, UiLayer};
 use oasis_audio::RadioManager;
-use oasis_audio::radio::RadioSource;
 use oasis_backend_sdl::SdlAudioBackend;
 use oasis_backend_sdl::SdlBackend;
 use oasis_core::active_theme::ActiveTheme;
-use oasis_core::backend::{AudioBackend, Color, InputBackend, NetworkBackend, SdiBackend};
+use oasis_core::backend::{AudioBackend, Color, InputBackend, SdiBackend};
 use oasis_core::bottombar::BottomBar;
 use oasis_core::browser::BrowserConfig;
 use oasis_core::config::OasisConfig;
@@ -91,7 +92,8 @@ fn main() -> Result<()> {
 
     // Derive runtime theme from the active skin, applying screen dimensions.
     let active_theme = ActiveTheme::from_skin(&skin.theme)
-        .with_screen_size(config.screen_width, config.screen_height);
+        .with_screen_size(config.screen_width, config.screen_height)
+        .with_features(&skin.features);
     let browser_config = BrowserConfig::from_skin_theme(&skin.theme);
 
     // Set up platform services.
@@ -222,7 +224,7 @@ fn main() -> Result<()> {
     state.toasts.show(
         format!("Skin: {}", state.skin.manifest.name),
         ToastLevel::Info,
-        state.active_theme.toast_ttl,
+        state.active_theme.toast.ttl,
     );
 
     // Load radio stations from VFS.
@@ -384,439 +386,9 @@ fn main() -> Result<()> {
             }
         }
 
-        // Tick radio manager: process VFS requests and drive streaming.
-        {
-            use oasis_audio::RADIO_REQUEST_PATH;
-
-            if vfs.exists(RADIO_REQUEST_PATH)
-                && let Ok(data) = vfs.read(RADIO_REQUEST_PATH)
-            {
-                let request = String::from_utf8_lossy(&data).to_string();
-                if !request.is_empty() {
-                    // Clear the request immediately.
-                    let _ = vfs.write(RADIO_REQUEST_PATH, b"");
-
-                    if let Some(target) = request.strip_prefix("tune ") {
-                        // Resolve station by index or case-insensitive name.
-                        let station = if let Ok(idx) = target.parse::<usize>() {
-                            state.radio_manager.registry.stations.get(idx).cloned()
-                        } else {
-                            state
-                                .radio_manager
-                                .registry
-                                .stations
-                                .iter()
-                                .find(|s| s.name.eq_ignore_ascii_case(target.trim()))
-                                .cloned()
-                        };
-                        if let Some(station) = station {
-                            let _ = state.radio_manager.tune(
-                                &station.name,
-                                station.bitrate,
-                                &mut state.audio_backend,
-                            );
-
-                            // Clear stale catalog/pending fetches on station change.
-                            state.archive_catalog = None;
-                            state.pending_catalog_fetch = None;
-                            state.pending_source_fetch = None;
-                            // Disconnect old source so tick() doesn't keep
-                            // polling the previous station while the new
-                            // catalog is being fetched.
-                            if let Some(mut old) = state.radio_source.take() {
-                                old.disconnect();
-                            }
-
-                            state
-                                .radio_manager
-                                .set_source_info(&station.source_type, &station.collection);
-
-                            if station.source_type == "archive" && !station.collection.is_empty() {
-                                // Internet Archive: spawn background thread to fetch
-                                // catalog and connect to first track (non-blocking).
-                                let collection = station.collection.clone();
-                                let seed = state.frame_counter;
-                                let tls = state.net.tls_provider.clone();
-                                let (tx, rx) = std::sync::mpsc::channel();
-                                std::thread::spawn(move || {
-                                    let result = fetch_catalog_blocking(&collection, seed, &tls);
-                                    let _ = tx.send(result);
-                                });
-                                state.pending_catalog_fetch = Some(rx);
-                            } else if let Some((host, port, path, tls)) =
-                                parse_stream_url(&station.url)
-                            {
-                                // Icecast: connect to stream (TLS if https).
-                                let conn_result = state
-                                    .net
-                                    .backend
-                                    .connect(&host, port)
-                                    .map_err(|e| format!("connect: {e}"))
-                                    .and_then(|stream| {
-                                        if tls {
-                                            use oasis_core::net::TlsProvider;
-                                            state
-                                                .net
-                                                .tls_provider
-                                                .connect_tls(stream, &host)
-                                                .map_err(|e| format!("TLS: {e}"))
-                                        } else {
-                                            Ok(stream)
-                                        }
-                                    });
-                                match conn_result {
-                                    Ok(stream) => {
-                                        let source = oasis_audio::radio::IcecastSource::new(
-                                            stream, &host, &path,
-                                        );
-                                        state.radio_source = Some(Box::new(source));
-                                    },
-                                    Err(e) => {
-                                        state.radio_manager.set_error(&e);
-                                    },
-                                }
-                            } else {
-                                state.radio_manager.set_error("invalid stream URL");
-                            }
-                        } else {
-                            state
-                                .radio_manager
-                                .set_error(&format!("station not found: {target}"));
-                        }
-                    } else {
-                        let _ = state
-                            .radio_manager
-                            .process_request(&request, &mut state.audio_backend);
-                        // Clear catalog on stop.
-                        if state.radio_manager.state() == oasis_audio::radio::RadioState::Stopped {
-                            state.archive_catalog = None;
-                            state.pending_catalog_fetch = None;
-                            state.pending_source_fetch = None;
-                        }
-                    }
-                }
-            }
-
-            // Poll background catalog fetch (non-blocking).
-            if let Some(ref rx) = state.pending_catalog_fetch {
-                match rx.try_recv() {
-                    Ok(Ok(app_state::CatalogFetchResult { catalog, source })) => {
-                        state.pending_catalog_fetch = None;
-                        log::info!(
-                            "Catalog ready: {} tracks in '{}'",
-                            catalog.tracks.len(),
-                            catalog.collection
-                        );
-                        if let Some(mut old) = state.radio_source.take() {
-                            old.disconnect();
-                        }
-                        state.radio_source = Some(source);
-                        state.archive_catalog = Some(catalog);
-                    },
-                    Ok(Err(e)) => {
-                        state.pending_catalog_fetch = None;
-                        log::error!("Catalog fetch failed: {e}");
-                        state.radio_manager.set_error(&e);
-                    },
-                    Err(std::sync::mpsc::TryRecvError::Disconnected) => {
-                        state.pending_catalog_fetch = None;
-                        log::error!("Catalog fetch thread died unexpectedly");
-                        state.radio_manager.set_error("catalog fetch failed");
-                    },
-                    Err(std::sync::mpsc::TryRecvError::Empty) => {},
-                }
-            }
-
-            // Poll background track fetch (non-blocking).
-            if let Some(ref rx) = state.pending_source_fetch {
-                match rx.try_recv() {
-                    Ok(Ok(app_state::TrackFetchResult { source })) => {
-                        state.pending_source_fetch = None;
-                        log::info!("Next track source ready");
-                        if let Some(mut old) = state.radio_source.take() {
-                            old.disconnect();
-                        }
-                        state.radio_source = Some(source);
-                    },
-                    Ok(Err(e)) => {
-                        state.pending_source_fetch = None;
-                        log::error!("Track fetch failed: {e}");
-                        state.radio_manager.set_error(&e);
-                    },
-                    Err(std::sync::mpsc::TryRecvError::Disconnected) => {
-                        state.pending_source_fetch = None;
-                        log::error!("Track fetch thread died unexpectedly");
-                        state.radio_manager.set_error("track fetch failed");
-                    },
-                    Err(std::sync::mpsc::TryRecvError::Empty) => {},
-                }
-            }
-
-            // Drive the radio state machine.
-            let _ = state
-                .radio_manager
-                .tick(&mut state.radio_source, &mut state.audio_backend);
-
-            // Auto-advance to next track for archive stations (non-blocking).
-            if state.radio_manager.needs_next_track()
-                && state.pending_source_fetch.is_none()
-                && let Some(ref mut catalog) = state.archive_catalog
-                && let Some(track) = catalog.next_track().cloned()
-            {
-                let tls = state.net.tls_provider.clone();
-                let (tx, rx) = std::sync::mpsc::channel();
-                std::thread::spawn(move || {
-                    let result = connect_archive_track_sync(&tls, &track);
-                    let _ = tx.send(result);
-                });
-                state.pending_source_fetch = Some(rx);
-                state.radio_manager.continue_playing();
-            }
-
-            // Publish radio status periodically (~4 times per second).
-            if state.frame_counter.is_multiple_of(15) {
-                let _ = state.radio_manager.publish_status(&mut vfs);
-            }
-
-            // Refresh radio app display if visible.
-            if let Some(ref mut runner) = state.content.app_runner {
-                runner.refresh_radio(&vfs);
-            }
-            for (_, runner) in &mut state.content.open_runners {
-                runner.refresh_radio(&vfs);
-            }
-
-            // Poll pending TV catalog fetch.
-            if let Some(ref rx) = state.pending_tv_catalog_fetch {
-                match rx.try_recv() {
-                    Ok(Ok(catalogs)) => {
-                        let loaded = catalogs.iter().filter(|c| c.is_some()).count();
-                        let total = catalogs.len();
-                        log::info!(
-                            "TV catalog fetch result: {loaded}/{total} channels have episodes"
-                        );
-                        state.pending_tv_catalog_fetch = None;
-                        let runner = find_tv_guide_runner(
-                            &mut state.content.app_runner,
-                            &mut state.content.open_runners,
-                        );
-                        if let Some(runner) = runner {
-                            if let Some(guide) = runner.tv_guide_state() {
-                                guide.fetch_in_progress = false;
-                                let all_none = catalogs.iter().all(|c| c.is_none());
-                                for (i, cat) in catalogs.into_iter().enumerate() {
-                                    if let Some(c) = cat
-                                        && i < guide.catalogs.len()
-                                    {
-                                        guide.catalogs[i] = Some(c);
-                                        guide.rebuild_cached_schedule(i);
-                                    }
-                                }
-                                if all_none {
-                                    log::warn!("TV: all channel catalogs empty");
-                                    guide.fetch_error =
-                                        Some("No episodes found for any channel".into());
-                                }
-                            }
-                            runner.refresh_tv_text();
-                        } else {
-                            log::warn!("TV: catalogs arrived but no TV Guide runner found");
-                        }
-                    },
-                    Ok(Err(e)) => {
-                        state.pending_tv_catalog_fetch = None;
-                        log::error!("TV catalog fetch failed: {e}");
-                        let runner = find_tv_guide_runner(
-                            &mut state.content.app_runner,
-                            &mut state.content.open_runners,
-                        );
-                        if let Some(runner) = runner {
-                            if let Some(guide) = runner.tv_guide_state() {
-                                guide.fetch_in_progress = false;
-                                guide.fetch_error = Some(e);
-                            }
-                            runner.refresh_tv_text();
-                        } else {
-                            log::warn!("TV: error arrived but no TV Guide runner found");
-                        }
-                    },
-                    Err(std::sync::mpsc::TryRecvError::Disconnected) => {
-                        state.pending_tv_catalog_fetch = None;
-                        log::error!("TV catalog fetch thread died");
-                        let runner = find_tv_guide_runner(
-                            &mut state.content.app_runner,
-                            &mut state.content.open_runners,
-                        );
-                        if let Some(runner) = runner {
-                            if let Some(guide) = runner.tv_guide_state() {
-                                guide.fetch_in_progress = false;
-                                guide.fetch_error = Some("catalog fetch failed".into());
-                            }
-                            runner.refresh_tv_text();
-                        }
-                    },
-                    Err(std::sync::mpsc::TryRecvError::Empty) => {
-                        // Timeout after 2 minutes.
-                        if let Some(start) = state.tv_fetch_start
-                            && start.elapsed().as_secs() >= 120
-                        {
-                            log::warn!("TV: catalog fetch timed out after 120s");
-                            state.pending_tv_catalog_fetch = None;
-                            state.tv_fetch_start = None;
-                            let runner = find_tv_guide_runner(
-                                &mut state.content.app_runner,
-                                &mut state.content.open_runners,
-                            );
-                            if let Some(runner) = runner {
-                                if let Some(guide) = runner.tv_guide_state() {
-                                    guide.fetch_in_progress = false;
-                                    guide.fetch_error = Some("Fetch timed out (2 min)".into());
-                                }
-                                runner.refresh_tv_text();
-                            }
-                        }
-                    },
-                }
-            }
-
-            // Start TV catalog fetch if a TV Guide app needs it.
-            if state.pending_tv_catalog_fetch.is_none() {
-                let runner = find_tv_guide_runner(
-                    &mut state.content.app_runner,
-                    &mut state.content.open_runners,
-                );
-                if let Some(runner) = runner
-                    && let Some(guide) = runner.tv_guide_state()
-                    && !guide.fetch_attempted
-                    && guide.catalogs.iter().all(|c| c.is_none())
-                {
-                    log::info!(
-                        "TV: starting catalog fetch for {} channels",
-                        guide.channels.len(),
-                    );
-                    guide.fetch_attempted = true;
-                    guide.fetch_in_progress = true;
-                    let channels = guide.channels.clone();
-                    let (tx, rx) = std::sync::mpsc::channel();
-                    let tls = state.net.tls_provider.clone();
-                    std::thread::spawn(move || {
-                        log::info!("TV: background fetch thread started");
-                        let result = fetch_tv_catalogs_blocking(&channels, &tls);
-                        log::info!(
-                            "TV: background fetch thread finished (ok={})",
-                            result.is_ok(),
-                        );
-                        let _ = tx.send(result);
-                    });
-                    state.pending_tv_catalog_fetch = Some(rx);
-                    state.tv_fetch_start = Some(std::time::Instant::now());
-                }
-            }
-
-            // Handle TV Guide tune requests — start in-app video player.
-            {
-                let runner = find_tv_guide_runner(
-                    &mut state.content.app_runner,
-                    &mut state.content.open_runners,
-                );
-                if let Some(runner) = runner
-                    && let Some((path, data)) = runner.take_pending_request()
-                {
-                    if path == oasis_core::apps::tv_guide::TV_REQUEST_PATH
-                        && data.starts_with("tune_url ")
-                    {
-                        let rest = &data["tune_url ".len()..];
-                        // Parse "url seek_secs" from IPC data.
-                        let (url, seek_secs) = if let Some(space_idx) = rest.rfind(' ') {
-                            let seek: u64 = rest[space_idx + 1..].parse().unwrap_or(0);
-                            (&rest[..space_idx], seek)
-                        } else {
-                            (rest, 0u64)
-                        };
-                        log::info!("TV: starting video player: {url} seek={seek_secs}s");
-
-                        // Stop any existing video session.
-                        state.video_player.stop(&mut backend);
-                        if let Some(track) = state.tv_audio_track.take() {
-                            let _ = state.audio_backend.unload_track(track);
-                        }
-
-                        // Compute preview dimensions (match guide.rs header layout).
-                        let at = &state.active_theme;
-                        let usable_h = at
-                            .screen_h
-                            .saturating_sub(at.statusbar_height + at.bottombar_height);
-                        let header_h = (usable_h * 20 / 100).max(60);
-                        let preview_w = (at.screen_w / 5).max(80).saturating_sub(2);
-                        let preview_h = header_h.saturating_sub(16).saturating_sub(2);
-
-                        // Start ffmpeg subprocesses.
-                        state
-                            .video_player
-                            .start(url, seek_secs, preview_w, preview_h);
-
-                        // Set up streaming audio track.
-                        match state.audio_backend.load_streaming() {
-                            Ok(track) => {
-                                let _ = state.audio_backend.play(track);
-                                state.tv_audio_track = Some(track);
-                            },
-                            Err(e) => {
-                                log::warn!("TV: failed to start audio stream: {e}");
-                            },
-                        }
-                    } else {
-                        let _ = vfs.write(&path, data.as_bytes());
-                    }
-                }
-            }
-
-            // Tick video player: upload frames, collect audio chunks.
-            {
-                let (texture, audio_chunks) = state.video_player.tick(&mut backend);
-
-                // Feed audio chunks to the streaming track.
-                if let Some(track) = state.tv_audio_track {
-                    for chunk in &audio_chunks {
-                        let _ = state.audio_backend.feed_data(track, chunk);
-                    }
-                }
-
-                // Update the guide's preview texture.
-                let runner = find_tv_guide_runner(
-                    &mut state.content.app_runner,
-                    &mut state.content.open_runners,
-                );
-                if let Some(runner) = runner
-                    && let Some(guide) = runner.tv_guide_state()
-                {
-                    guide.preview_texture = texture;
-                }
-            }
-
-            // Detect untune: video is active but guide has no tuned channel.
-            if state.video_player.is_active() {
-                let should_stop = {
-                    let runner = find_tv_guide_runner(
-                        &mut state.content.app_runner,
-                        &mut state.content.open_runners,
-                    );
-                    match runner {
-                        Some(runner) => runner
-                            .tv_guide_state()
-                            .is_none_or(|g| g.tuned_channel.is_none()),
-                        None => true, // TV Guide closed.
-                    }
-                };
-                if should_stop {
-                    log::info!("TV: untuned or guide closed, stopping video");
-                    state.video_player.stop(&mut backend);
-                    if let Some(track) = state.tv_audio_track.take() {
-                        let _ = state.audio_backend.unload_track(track);
-                    }
-                }
-            }
-        }
+        // Tick radio and TV subsystems.
+        radio_controller::tick(&mut state, &mut vfs);
+        tv_controller::tick(&mut state, &mut backend, &mut vfs);
 
         // Update SDI scene graph for the active mode.
         render::update_sdi(&mut state, &mut sdi);
@@ -885,27 +457,6 @@ fn main() -> Result<()> {
     backend.shutdown()?;
     log::info!("OASIS_OS shut down cleanly");
     Ok(())
-}
-
-/// Find a TV Guide runner in either the full-screen runner or open windowed runners.
-fn find_tv_guide_runner<'a>(
-    app_runner: &'a mut Option<oasis_core::apps::AppRunner>,
-    open_runners: &'a mut [(String, oasis_core::apps::AppRunner)],
-) -> Option<&'a mut oasis_core::apps::AppRunner> {
-    if let Some(ref mut runner) = *app_runner
-        && runner.title == "TV Guide"
-    {
-        log::trace!("TV: found TV Guide in app_runner (full-screen)");
-        return Some(runner);
-    }
-    let found = open_runners
-        .iter_mut()
-        .map(|(_, runner)| runner)
-        .find(|runner| runner.title == "TV Guide");
-    if found.is_some() {
-        log::trace!("TV: found TV Guide in open_runners (windowed)");
-    }
-    found
 }
 
 /// Check if a runner's pending request is a TV Guide tune_url (should not be
@@ -1095,6 +646,7 @@ fn connect_archive_source(
     tls_provider: &oasis_core::net::RustlsTlsProvider,
     track: &oasis_audio::radio::ArchiveTrack,
 ) -> std::result::Result<Box<dyn oasis_audio::radio::RadioSource + Send>, String> {
+    use oasis_audio::radio::RadioSource;
     use oasis_audio::radio::source::SourceState;
     use oasis_core::backend::NetworkBackend;
     use oasis_core::net::TlsProvider;

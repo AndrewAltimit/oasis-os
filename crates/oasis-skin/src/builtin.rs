@@ -1184,6 +1184,122 @@ pub fn paper_skin() -> Result<Skin> {
     )
 }
 
+// ---------------------------------------------------------------------------
+// Win95 skin: Windows 95/98 classic look with raised 3D borders.
+// ---------------------------------------------------------------------------
+
+const WIN95_STRINGS: &str = r#"
+boot_text = [
+    "OASIS_OS v2.2 [win95]",
+    "Loading Windows 95 interface...",
+    "Ready.",
+]
+prompt_format = "C:\\> "
+title = "OASIS Win95"
+home_label = "Start"
+welcome_message = "Welcome to OASIS Win95. Type 'help' for commands."
+error_prefix = "Error: "
+shutdown_message = "It is now safe to turn off your computer."
+"#;
+
+/// Load the Win95 skin.
+pub fn win95_skin() -> Result<Skin> {
+    Skin::from_toml_full(
+        include_str!("../../../skins/win95/skin.toml"),
+        include_str!("../../../skins/win95/layout.toml"),
+        include_str!("../../../skins/win95/features.toml"),
+        include_str!("../../../skins/win95/theme.toml"),
+        WIN95_STRINGS,
+    )
+}
+
+// ---------------------------------------------------------------------------
+// Solarized skin: Solarized Dark color palette, developer-focused.
+// ---------------------------------------------------------------------------
+
+const SOLARIZED_STRINGS: &str = r#"
+boot_text = [
+    "OASIS_OS v2.2 [solarized]",
+    "Loading Solarized interface...",
+    "Ready.",
+]
+prompt_format = "$ "
+title = "OASIS Solarized"
+home_label = "Home"
+welcome_message = "Welcome to OASIS Solarized. Type 'help' for commands."
+error_prefix = "error: "
+shutdown_message = "Goodbye."
+"#;
+
+/// Load the Solarized skin.
+pub fn solarized_skin() -> Result<Skin> {
+    Skin::from_toml_full(
+        include_str!("../../../skins/solarized/skin.toml"),
+        include_str!("../../../skins/solarized/layout.toml"),
+        include_str!("../../../skins/solarized/features.toml"),
+        include_str!("../../../skins/solarized/theme.toml"),
+        SOLARIZED_STRINGS,
+    )
+}
+
+// ---------------------------------------------------------------------------
+// Vaporwave skin: aesthetic purple/pink/cyan palette.
+// ---------------------------------------------------------------------------
+
+const VAPORWAVE_STRINGS: &str = r#"
+boot_text = [
+    "OASIS_OS v2.2 [vaporwave]",
+    "Loading aesthetic interface...",
+    "Ready.",
+]
+prompt_format = "~ "
+title = "OASIS Vaporwave"
+home_label = "Home"
+welcome_message = "Welcome to OASIS Vaporwave. Type 'help' for commands."
+error_prefix = "error: "
+shutdown_message = "Goodbye."
+"#;
+
+/// Load the Vaporwave skin.
+pub fn vaporwave_skin() -> Result<Skin> {
+    Skin::from_toml_full(
+        include_str!("../../../skins/vaporwave/skin.toml"),
+        include_str!("../../../skins/vaporwave/layout.toml"),
+        include_str!("../../../skins/vaporwave/features.toml"),
+        include_str!("../../../skins/vaporwave/theme.toml"),
+        VAPORWAVE_STRINGS,
+    )
+}
+
+// ---------------------------------------------------------------------------
+// High Contrast skin: accessibility theme, black/white/yellow.
+// ---------------------------------------------------------------------------
+
+const HIGHCONTRAST_STRINGS: &str = r#"
+boot_text = [
+    "OASIS_OS v2.2 [highcontrast]",
+    "Loading high contrast interface...",
+    "Ready.",
+]
+prompt_format = "> "
+title = "OASIS High Contrast"
+home_label = "Home"
+welcome_message = "Welcome to OASIS High Contrast. Type 'help' for commands."
+error_prefix = "ERROR: "
+shutdown_message = "Goodbye."
+"#;
+
+/// Load the High Contrast skin.
+pub fn highcontrast_skin() -> Result<Skin> {
+    Skin::from_toml_full(
+        include_str!("../../../skins/highcontrast/skin.toml"),
+        include_str!("../../../skins/highcontrast/layout.toml"),
+        include_str!("../../../skins/highcontrast/features.toml"),
+        include_str!("../../../skins/highcontrast/theme.toml"),
+        HIGHCONTRAST_STRINGS,
+    )
+}
+
 /// Load a built-in skin by name with optional inheritance.
 ///
 /// If the skin's manifest specifies `inherits = "parent_name"`, the parent
@@ -1208,6 +1324,10 @@ fn load_builtin_raw(name: &str) -> Result<Skin> {
         "retro-cga" => retro_cga_skin(),
         "cyberpunk" => cyberpunk_skin(),
         "paper" => paper_skin(),
+        "win95" => win95_skin(),
+        "solarized" => solarized_skin(),
+        "vaporwave" => vaporwave_skin(),
+        "highcontrast" => highcontrast_skin(),
         _ => Err(oasis_types::error::OasisError::Config(format!(
             "unknown built-in skin: {name}"
         ))),
@@ -1248,6 +1368,10 @@ pub fn builtin_names() -> &'static [&'static str] {
         "retro-cga",
         "cyberpunk",
         "paper",
+        "win95",
+        "solarized",
+        "vaporwave",
+        "highcontrast",
     ]
 }
 

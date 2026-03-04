@@ -356,6 +356,10 @@ impl PspBackend {
         let buf_h = texture.buf_h;
         let data_ptr = texture.data;
 
+        // SAFETY: Binds the texture (RAM pointer via uncached mirror) and
+        // draws a Sprites primitive with bilinear filtering. data_ptr
+        // validity is ensured by load_texture_inner. Filter state is
+        // restored to Nearest after the draw.
         unsafe {
             let uncached_ptr =
                 psp::cache::UncachedPtr::from_cached_addr(data_ptr).as_ptr() as *const c_void;

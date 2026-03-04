@@ -90,6 +90,7 @@ pub unsafe fn on_frame(fb: *mut u32, stride: u32) {
     // SAFETY: Single-threaded access from display hook context.
     let prev = unsafe { PREV_BUTTONS };
     let pressed = buttons & !prev; // Rising edge
+    // SAFETY: Single-threaded access from display hook context.
     unsafe {
         PREV_BUTTONS = buttons;
     }
@@ -107,6 +108,7 @@ pub unsafe fn on_frame(fb: *mut u32, stride: u32) {
         OverlayState::Hidden => {
             if triggered {
                 STATE.store(OverlayState::Menu as u8, Ordering::Relaxed);
+                // SAFETY: CURSOR only modified from display hook (single-threaded).
                 unsafe {
                     CURSOR = 0;
                 }
@@ -125,6 +127,7 @@ pub unsafe fn on_frame(fb: *mut u32, stride: u32) {
             }
             if triggered {
                 STATE.store(OverlayState::Menu as u8, Ordering::Relaxed);
+                // SAFETY: CURSOR only modified from display hook (single-threaded).
                 unsafe {
                     CURSOR = 0;
                 }

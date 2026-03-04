@@ -48,13 +48,13 @@ The desktop app opens an SDL2 window at 480x272 native resolution with the defau
 
 ### Choosing a Skin
 
-OASIS_OS ships with 13 skins. Select one via environment variable:
+OASIS_OS ships with 17 skins. Select one via environment variable:
 
 ```bash
 OASIS_SKIN=modern cargo run -p oasis-app
 ```
 
-Available skins: `classic`, `xp`, `macos`, `gnome`, `cyberpunk`, `retro-cga`, `paper`, `terminal`, `tactical`, `corrupted`, `desktop`, `agent-terminal`, `modern`.
+Available skins: `classic`, `xp`, `macos`, `gnome`, `cyberpunk`, `retro-cga`, `paper`, `win95`, `solarized`, `vaporwave`, `highcontrast`, `terminal`, `tactical`, `corrupted`, `desktop`, `agent-terminal`, `modern`.
 
 Custom skins can be loaded from a directory containing `skin.toml`:
 
@@ -67,7 +67,7 @@ See `docs/skin-authoring.md` for the TOML skin format.
 ## Running Tests
 
 ```bash
-# Full workspace test suite (~2,400 tests)
+# Full workspace test suite (~4,600 tests)
 cargo test --workspace
 
 # Single crate
@@ -100,7 +100,7 @@ cargo deny check
 
 ## Taking Screenshots
 
-Generate screenshots for all 13 skins:
+Generate screenshots for all 17 skins:
 
 ```bash
 cargo run -p oasis-app --bin oasis-screenshot
@@ -191,7 +191,7 @@ oasis-os/
     oasis-sdi/          Scene display interface
     oasis-ui/           27 reusable widgets
     oasis-wm/           Window manager
-    oasis-skin/         TOML skin engine (13 skins)
+    oasis-skin/         TOML skin engine (17 skins)
     oasis-terminal/     90+ commands, shell interpreter
     oasis-browser/      HTML/CSS/Gemini browser engine
     oasis-js/           JavaScript engine (QuickJS-NG)
@@ -204,7 +204,7 @@ oasis-os/
     oasis-backend-psp/  PSP hardware backend
     oasis-plugin-psp/   PSP kernel-mode overlay
     oasis-net/          TCP networking, FTP
-    oasis-audio/        Audio manager, MP3
+    oasis-audio/        Audio manager, MP3/WAV
     oasis-platform/     Platform service traits
     oasis-app/          Desktop binary entry points
   skins/                External TOML skin definitions

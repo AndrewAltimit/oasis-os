@@ -156,16 +156,16 @@ impl StatusBar {
             obj.y = 0;
             obj.w = screen_w;
             obj.h = bar_h;
-            obj.color = at.statusbar_bg;
+            obj.color = at.bar.statusbar_bg;
             obj.overlay = true;
             obj.z = 900;
         }
         if let Ok(obj) = sdi.get_mut("bar_top") {
-            obj.color = at.statusbar_bg;
+            obj.color = at.bar.statusbar_bg;
             obj.h = bar_h;
             obj.visible = true;
-            obj.gradient_top = at.statusbar_gradient_top;
-            obj.gradient_bottom = at.statusbar_gradient_bottom;
+            obj.gradient_top = at.bar.statusbar_gradient_top;
+            obj.gradient_bottom = at.bar.statusbar_gradient_bottom;
         }
 
         // Thin line separator below status bar.
@@ -176,7 +176,7 @@ impl StatusBar {
             bar_h as i32 - 1,
             screen_w,
             1,
-            at.separator_color,
+            at.bar.separator_color,
         );
 
         // Vertically center text within the bar.
@@ -184,7 +184,14 @@ impl StatusBar {
 
         // Battery + CPU info (left side).
         if features.show_battery {
-            ensure_text(sdi, "bar_battery", 6, text_y, font_small, at.battery_color);
+            ensure_text(
+                sdi,
+                "bar_battery",
+                6,
+                text_y,
+                font_small,
+                at.bar.battery_color,
+            );
             if let Ok(obj) = sdi.get_mut("bar_battery") {
                 let mut info = self.battery_text.clone();
                 if !self.cpu_text.is_empty() {
@@ -192,9 +199,9 @@ impl StatusBar {
                 }
                 obj.text = Some(info);
                 obj.visible = true;
-                if at.bar_text_shadow {
+                if at.bar.text_shadow {
                     obj.text_shadow_offset = Some((1, 1));
-                    obj.text_shadow_color = Some(at.bar_text_shadow_color);
+                    obj.text_shadow_color = Some(at.bar.text_shadow_color);
                 }
             }
         } else if let Ok(obj) = sdi.get_mut("bar_battery") {
@@ -211,13 +218,13 @@ impl StatusBar {
             };
             let clock_w = text_px(&clock_str, font_small);
             let cx = screen_w as i32 - clock_w - 6;
-            ensure_text(sdi, "bar_clock", cx, text_y, font_small, at.clock_color);
+            ensure_text(sdi, "bar_clock", cx, text_y, font_small, at.bar.clock_color);
             if let Ok(obj) = sdi.get_mut("bar_clock") {
                 obj.text = Some(clock_str);
                 obj.visible = true;
-                if at.bar_text_shadow {
+                if at.bar.text_shadow {
                     obj.text_shadow_offset = Some((1, 1));
-                    obj.text_shadow_color = Some(at.bar_text_shadow_color);
+                    obj.text_shadow_color = Some(at.bar.text_shadow_color);
                 }
             }
             cx
@@ -230,7 +237,7 @@ impl StatusBar {
 
         // Version label (center area) -- hidden when it would overlap clock.
         if features.show_version {
-            let ver = &at.bar_version_text;
+            let ver = &at.bar.version_text;
             let ver_w = text_px(ver, font_small);
             let ver_x = (screen_w as i32 - ver_w) / 2;
             if ver_x + ver_w <= clock_x {
@@ -240,14 +247,14 @@ impl StatusBar {
                     ver_x,
                     text_y,
                     font_small,
-                    at.version_color,
+                    at.bar.version_color,
                 );
                 if let Ok(obj) = sdi.get_mut("bar_version") {
                     obj.text = Some(ver.to_string());
                     obj.visible = true;
-                    if at.bar_text_shadow {
+                    if at.bar.text_shadow {
                         obj.text_shadow_offset = Some((1, 1));
-                        obj.text_shadow_color = Some(at.bar_text_shadow_color);
+                        obj.text_shadow_color = Some(at.bar.text_shadow_color);
                     }
                 }
             } else if let Ok(obj) = sdi.get_mut("bar_version") {
@@ -266,10 +273,10 @@ impl StatusBar {
                 6,
                 mso_y,
                 font_small,
-                at.category_label_color,
+                at.bar.category_label_color,
             );
             if let Ok(obj) = sdi.get_mut("bar_mso") {
-                obj.text = Some(at.bar_category_label.clone());
+                obj.text = Some(at.bar.category_label.clone());
                 obj.visible = true;
             }
         } else if let Ok(obj) = sdi.get_mut("bar_mso") {
@@ -315,8 +322,8 @@ impl StatusBar {
                     tab_y,
                     tw,
                     th,
-                    at.tab_active_fill,
-                    at.tab_active_stroke,
+                    at.bar.tab_active_fill,
+                    at.bar.tab_active_stroke,
                 );
             } else {
                 // Inactive: transparent fill, dim stroke.
@@ -327,8 +334,8 @@ impl StatusBar {
                     tab_y,
                     tw,
                     th,
-                    at.tab_inactive_fill,
-                    at.tab_inactive_stroke,
+                    at.bar.tab_inactive_fill,
+                    at.bar.tab_inactive_stroke,
                 );
             }
 
@@ -341,14 +348,14 @@ impl StatusBar {
                 tx.max(x + 2),
                 tab_text_y,
                 font_small,
-                at.media_tab_inactive,
+                at.bar.media_tab_inactive,
             );
             if let Ok(obj) = sdi.get_mut(&name) {
                 obj.text = Some(tab.label().to_string());
                 obj.text_color = if is_active {
-                    at.media_tab_active
+                    at.bar.media_tab_active
                 } else {
-                    at.media_tab_inactive
+                    at.bar.media_tab_inactive
                 };
             }
         }

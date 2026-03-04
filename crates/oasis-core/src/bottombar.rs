@@ -135,17 +135,17 @@ impl BottomBar {
             obj.y = bar_y;
             obj.w = screen_w;
             obj.h = bar_h;
-            obj.color = at.bar_bg;
+            obj.color = at.bar.bg;
             obj.overlay = true;
             obj.z = 900;
         }
         if let Ok(obj) = sdi.get_mut("bar_bottom") {
-            obj.color = at.bar_bg;
+            obj.color = at.bar.bg;
             obj.y = bar_y;
             obj.h = bar_h;
             obj.visible = true;
-            obj.gradient_top = at.bar_gradient_top;
-            obj.gradient_bottom = at.bar_gradient_bottom;
+            obj.gradient_top = at.bar.gradient_top;
+            obj.gradient_bottom = at.bar.gradient_bottom;
         }
 
         // Thin separator line at top of bottom bar.
@@ -156,18 +156,18 @@ impl BottomBar {
             bar_y,
             screen_w,
             1,
-            at.separator_color,
+            at.bar.separator_color,
         );
 
         // URL label + chrome bezel (only shown when bar_url_text is non-empty).
         let url_offset = if features.start_menu {
-            at.sm_button_width as i32 + 10
+            at.menu.button_width as i32 + 10
         } else {
             0
         };
         let bz_y = bar_y + 2;
-        let bz_h = bar_h - 4;
-        let url_text_end = if at.bar_url_text.is_empty() {
+        let bz_h = bar_h.saturating_sub(4);
+        let url_text_end = if at.bar.url_text.is_empty() {
             // No URL text -- hide URL label and bezel.
             if let Ok(obj) = sdi.get_mut("bar_url") {
                 obj.visible = false;
@@ -175,20 +175,20 @@ impl BottomBar {
             hide_bezel(sdi, "bar_url_bezel");
             url_offset
         } else {
-            let end = 8 + url_offset + text_px(&at.bar_url_text, font_small);
+            let end = 8 + url_offset + text_px(&at.bar.url_text, font_small);
             ensure_text(
                 sdi,
                 "bar_url",
                 8 + url_offset,
                 text_y,
                 font_small,
-                at.url_color,
+                at.bar.url_color,
             );
             if let Ok(obj) = sdi.get_mut("bar_url") {
-                obj.text = Some(at.bar_url_text.clone());
-                if at.bar_text_shadow {
+                obj.text = Some(at.bar.url_text.clone());
+                if at.bar.text_shadow {
                     obj.text_shadow_offset = Some((1, 1));
-                    obj.text_shadow_color = Some(at.bar_text_shadow_color);
+                    obj.text_shadow_color = Some(at.bar.text_shadow_color);
                 }
             }
 
@@ -235,18 +235,18 @@ impl BottomBar {
                 let name = format!("bar_btab_{i}");
 
                 let color = if *tab == self.active_tab {
-                    at.media_tab_active
+                    at.bar.media_tab_active
                 } else {
-                    at.media_tab_inactive
+                    at.bar.media_tab_inactive
                 };
                 ensure_text(sdi, &name, cx, text_y, font_small, color);
                 if let Ok(obj) = sdi.get_mut(&name) {
                     obj.text = Some(label.to_string());
                     obj.text_color = color;
                     obj.visible = true;
-                    if at.bar_text_shadow {
+                    if at.bar.text_shadow {
                         obj.text_shadow_offset = Some((1, 1));
-                        obj.text_shadow_color = Some(at.bar_text_shadow_color);
+                        obj.text_shadow_color = Some(at.bar.text_shadow_color);
                     }
                 }
                 cx += text_px(label, font_small);
@@ -255,7 +255,7 @@ impl BottomBar {
                 if i < MediaTab::TABS.len() - 1 {
                     cx += at.pipe_gap;
                     let pipe_name = format!("bar_bpipe_{i}");
-                    ensure_text(sdi, &pipe_name, cx, text_y, font_small, at.pipe_color);
+                    ensure_text(sdi, &pipe_name, cx, text_y, font_small, at.bar.pipe_color);
                     if let Ok(obj) = sdi.get_mut(&pipe_name) {
                         obj.text = Some("|".to_string());
                     }
@@ -270,13 +270,13 @@ impl BottomBar {
                 screen_w as i32 - at.r_hint_w,
                 text_y,
                 font_small,
-                at.r_hint_color,
+                at.bar.r_hint_color,
             );
             if let Ok(obj) = sdi.get_mut("bar_r_hint") {
                 obj.text = Some("R>".to_string());
-                if at.bar_text_shadow {
+                if at.bar.text_shadow {
                     obj.text_shadow_offset = Some((1, 1));
-                    obj.text_shadow_color = Some(at.bar_text_shadow_color);
+                    obj.text_shadow_color = Some(at.bar.text_shadow_color);
                 }
             }
         } else {
@@ -296,19 +296,19 @@ impl BottomBar {
         }
 
         // USB indicator (after URL text -- hidden when URL is empty).
-        let usb_end = if at.bar_url_text.is_empty() {
+        let usb_end = if at.bar.url_text.is_empty() {
             if let Ok(obj) = sdi.get_mut("bar_usb") {
                 obj.visible = false;
             }
             url_offset
         } else {
             let usb_x = url_text_end + 6;
-            ensure_text(sdi, "bar_usb", usb_x, text_y, font_small, at.usb_color);
+            ensure_text(sdi, "bar_usb", usb_x, text_y, font_small, at.bar.usb_color);
             if let Ok(obj) = sdi.get_mut("bar_usb") {
                 obj.text = Some("USB".to_string());
-                if at.bar_text_shadow {
+                if at.bar.text_shadow {
                     obj.text_shadow_offset = Some((1, 1));
-                    obj.text_shadow_color = Some(at.bar_text_shadow_color);
+                    obj.text_shadow_color = Some(at.bar.text_shadow_color);
                 }
             }
             usb_x + text_px("USB", font_small)
@@ -322,7 +322,8 @@ impl BottomBar {
                 let name = format!("bar_page_{i}");
                 // Proximity: 1.0 when this dot is the visual page, 0.0 when far.
                 let proximity = (1.0 - (i as f32 - self.dot_visual_page).abs()).max(0.0);
-                let dot_color = lerp_color(at.page_dot_inactive, at.page_dot_active, proximity);
+                let dot_color =
+                    lerp_color(at.bar.page_dot_inactive, at.bar.page_dot_active, proximity);
                 ensure_rounded_fill(
                     sdi,
                     &name,
@@ -578,7 +579,7 @@ mod tests {
         let bar = BottomBar::new();
         let mut sdi = SdiRegistry::new();
         let mut at = crate::active_theme::ActiveTheme::default();
-        at.bar_url_text = "HTTP://EXAMPLE".to_string();
+        at.bar.url_text = "HTTP://EXAMPLE".to_string();
         let feat = crate::skin::SkinFeatures::default();
         bar.update_sdi(&mut sdi, &at, &feat);
 

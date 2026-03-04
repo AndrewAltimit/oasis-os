@@ -59,7 +59,7 @@ pub fn poll_buttons() -> u32 {
 /// Polls sceCtrlPeekBufferPositive at ~60Hz and stores the result
 /// in CURRENT_BUTTONS for the display hook to read.
 unsafe extern "C" fn ctrl_thread_entry(_args: usize, _argp: *mut core::ffi::c_void) -> i32 {
-    // Brief delay to let the game fully start.
+    // SAFETY: PSP kernel syscall to sleep thread; called from kernel thread context.
     unsafe { psp::sys::sceKernelDelayThread(500_000) };
 
     let mut logged = false;
@@ -69,13 +69,16 @@ unsafe extern "C" fn ctrl_thread_entry(_args: usize, _argp: *mut core::ffi::c_vo
         let peek = unsafe { core::ptr::read_volatile(&raw const CTRL_PEEK_FN) };
         if let Some(peek) = peek {
             let mut data = [0u32; 4]; // SceCtrlData = 16 bytes
+            // SAFETY: peek is a resolved kernel-mode sceCtrlPeekBufferPositive fn ptr.
             unsafe { peek(data.as_mut_ptr() as *mut u8, 1) };
+            // SAFETY: Volatile read of stack-local data written by the peek call above.
             let buttons = unsafe { core::ptr::read_volatile(&raw const data[1]) };
             CURRENT_BUTTONS.store(buttons, Ordering::Relaxed);
 
             // One-time diagnostic (file I/O works from thread context).
             if !logged {
                 logged = true;
+                // SAFETY: Volatile read of stack-local data populated by peek above.
                 let ts = unsafe { core::ptr::read_volatile(&raw const data[0]) };
                 let mut buf = [0u8; 64];
                 let mut pos = write_log_bytes(&mut buf, 0, b"[OASIS] ctrl ts=");
@@ -85,6 +88,7 @@ unsafe extern "C" fn ctrl_thread_entry(_args: usize, _argp: *mut core::ffi::c_vo
                 crate::debug_log(&buf[..pos]);
             }
         }
+        // SAFETY: PSP kernel syscall to sleep thread for frame pacing.
         unsafe { psp::sys::sceKernelDelayThread(16_000) }; // ~60fps
     }
 }
@@ -167,11 +171,14 @@ pub fn install_display_hook() -> bool {
 
     // Wait for CFW and game to fully initialize.
     crate::debug_log(b"[OASIS] hook: waiting for system init...");
+    // SAFETY: PSP kernel syscall to delay thread during single-threaded init.
     unsafe {
         psp::sys::sceKernelDelayThread(2_000_000);
     }
 
     // Try each module/library pair until we find sceDisplaySetFrameBuf.
+    // SAFETY: SyscallHook::install performs kernel-mode CFW syscall patching
+    // via sctrlHENFindFunction. Called during single-threaded init from psp_main.
     let hook = unsafe {
         let mut result = None;
         for &(module, library) in DISPLAY_MODULE_NAMES {
@@ -205,6 +212,9 @@ pub fn install_display_hook() -> bool {
         (b"sceController_Service\0", b"sceCtrl_driver\0"),
         (b"sceController_Service\0", b"sceCtrl\0"),
     ];
+    // SAFETY: Resolving kernel driver function pointers via sctrlHENFindFunction
+    // and transmuting to typed fn pointers. Single-threaded init; statics are
+    // written once here and read-only afterwards.
     unsafe {
         for &(module, library) in ctrl_names {
             if let Some(ptr) = psp::hook::find_function(
@@ -249,6 +259,9 @@ pub fn install_display_hook() -> bool {
     }
 
     // Resolve scePower driver functions for CPU clock and battery.
+    // SAFETY: Resolving kernel driver function pointers via sctrlHENFindFunction
+    // and transmuting to typed fn pointers. Volatile reads/writes to statics
+    // during single-threaded init; read-only afterwards.
     unsafe {
         for &(module, library) in POWER_MODULES {
             if core::ptr::read_volatile(&raw const POWER_SET_CLOCK_FN).is_none() {

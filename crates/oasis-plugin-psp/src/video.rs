@@ -99,6 +99,7 @@ static mut TOTAL_FRAMES: u32 = 0;
 /// Allocate PIP frame buffers from user-memory partition 2.
 /// Returns true on success.
 unsafe fn alloc_pip_buffers() -> bool {
+    // SAFETY: Single-threaded access; PIP_BUF_BLOCK only written from this thread.
     if unsafe { PIP_BUF_BLOCK } >= 0 {
         return true; // Already allocated.
     }
@@ -144,6 +145,7 @@ unsafe fn alloc_pip_buffers() -> bool {
 /// Free PIP frame buffers.
 #[allow(dead_code)]
 unsafe fn free_pip_buffers() {
+    // SAFETY: Single-threaded access; PIP_BUF_BLOCK only written from this thread.
     let block = unsafe { PIP_BUF_BLOCK };
     if block >= 0 {
         // SAFETY: block is a valid memory block ID.
@@ -249,6 +251,7 @@ unsafe fn scan_video_dir() {
         psp::sys::sceIoDclose(psp::sys::SceUid(dfd.0));
     }
 
+    // SAFETY: VIDEO_COUNT written only from this thread during scan.
     log_usize(b"[VIDEO] found .rgb files: ", unsafe { VIDEO_COUNT });
 }
 
@@ -259,6 +262,7 @@ unsafe fn scan_video_dir() {
 /// Read one frame from the video file into the back PIP buffer.
 /// Returns true if a full frame was read, false on EOF or error.
 unsafe fn read_frame() -> bool {
+    // SAFETY: Volatile read of VIDEO_FD which may be written from video thread.
     let fd = unsafe { core::ptr::read_volatile(&raw const VIDEO_FD) };
     if fd < 0 {
         return false;
@@ -266,6 +270,8 @@ unsafe fn read_frame() -> bool {
 
     // Write to the back buffer (opposite of what display hook reads).
     let idx = FRAME_INDEX.load(Ordering::Relaxed);
+    // SAFETY: Volatile reads of PIP frame buffer pointers; they are set once
+    // during alloc_pip_buffers and remain valid while PIP is active.
     let dst = if idx == 0 {
         unsafe { core::ptr::read_volatile(&raw const PIP_FRAME_B) }
     } else {
@@ -326,6 +332,8 @@ unsafe extern "C" fn video_thread_entry(_args: usize, _argp: *mut core::ffi::c_v
 
     // Scan for video files.
     crate::debug_log(b"[VIDEO] scanning...");
+    // SAFETY: Called from video thread; scan_video_dir accesses statics only
+    // from this thread context.
     unsafe {
         scan_video_dir();
     }
@@ -346,6 +354,7 @@ unsafe extern "C" fn video_thread_entry(_args: usize, _argp: *mut core::ffi::c_v
                         stop_playback();
                     } else {
                         // Rescan if no videos found yet.
+                        // SAFETY: VIDEO_COUNT and scan_video_dir accessed only from video thread.
                         if unsafe { VIDEO_COUNT } == 0 {
                             unsafe { scan_video_dir() };
                         }
@@ -358,6 +367,7 @@ unsafe extern "C" fn video_thread_entry(_args: usize, _argp: *mut core::ffi::c_v
                     if was_active {
                         stop_playback();
                     }
+                    // SAFETY: VIDEO_COUNT and CURRENT_VIDEO accessed only from video thread.
                     unsafe {
                         if VIDEO_COUNT > 0 {
                             CURRENT_VIDEO = (CURRENT_VIDEO + 1) % VIDEO_COUNT;
@@ -374,10 +384,12 @@ unsafe extern "C" fn video_thread_entry(_args: usize, _argp: *mut core::ffi::c_v
 
         // If PIP active, read and display frames.
         if PIP_ACTIVE.load(Ordering::Relaxed) != 0 {
+            // SAFETY: read_frame reads from valid fd into allocated PIP buffer.
             let got_frame = unsafe { read_frame() };
 
             if !got_frame {
                 // EOF -- loop the video by seeking back to start.
+                // SAFETY: VIDEO_FD accessed only from video thread.
                 let fd = unsafe { VIDEO_FD };
                 if fd >= 0 {
                     // SAFETY: Valid fd, seek to beginning.
@@ -389,6 +401,7 @@ unsafe extern "C" fn video_thread_entry(_args: usize, _argp: *mut core::ffi::c_v
                         );
                     }
                     // Try reading again after seek.
+                    // SAFETY: read_frame reads from valid fd into allocated PIP buffer.
                     let retry = unsafe { read_frame() };
                     if !retry {
                         crate::debug_log(b"[VIDEO] read error, stopping");
@@ -418,11 +431,13 @@ unsafe extern "C" fn video_thread_entry(_args: usize, _argp: *mut core::ffi::c_v
 /// Start video playback of the current video.
 fn start_playback() {
     // Allocate PIP frame buffers on demand.
+    // SAFETY: alloc_pip_buffers allocates from PSP user-memory partition.
     if !unsafe { alloc_pip_buffers() } {
         overlay::show_osd(b"PIP: out of memory");
         return;
     }
 
+    // SAFETY: CURRENT_VIDEO and VIDEO_COUNT accessed only from video thread.
     let idx = unsafe { CURRENT_VIDEO };
     let count = unsafe { VIDEO_COUNT };
     if idx >= count || count == 0 {
@@ -431,14 +446,17 @@ fn start_playback() {
         return;
     }
 
+    // SAFETY: idx is bounded by VIDEO_COUNT < MAX_VIDEOS; VIDEO_LIST is valid.
     let filepath_ptr = unsafe {
         (&raw const VIDEO_LIST)
             .cast::<[u8; MAX_FILENAME]>()
             .add(idx)
     };
+    // SAFETY: filepath_ptr points to a valid entry in VIDEO_LIST.
     let filepath = unsafe { &*filepath_ptr };
 
     // Set display name for OSD.
+    // SAFETY: set_video_name writes to VIDEO_NAME static; single-threaded access.
     unsafe {
         set_video_name(filepath);
     }
@@ -453,6 +471,7 @@ fn start_playback() {
         overlay::show_osd(b"PIP: open failed");
         return;
     }
+    // SAFETY: VIDEO_FD accessed only from video thread.
     unsafe {
         VIDEO_FD = fd.0;
     }
@@ -464,13 +483,17 @@ fn start_playback() {
         psp::sys::sceIoLseek(fd, 0, psp::sys::IoWhence::Set);
         end as u32
     };
+    // SAFETY: TOTAL_FRAMES accessed only from video thread.
     unsafe {
         TOTAL_FRAMES = file_size / FRAME_SIZE as u32;
     }
+    // SAFETY: TOTAL_FRAMES accessed only from video thread.
     log_u32(b"[VIDEO] frames=", unsafe { TOTAL_FRAMES });
 
+    // SAFETY: TOTAL_FRAMES accessed only from video thread.
     if unsafe { TOTAL_FRAMES } == 0 {
         crate::debug_log(b"[VIDEO] file too small");
+        // SAFETY: Valid fd; VIDEO_FD accessed only from video thread.
         unsafe {
             psp::sys::sceIoClose(fd);
             VIDEO_FD = -1;
@@ -489,6 +512,7 @@ fn start_playback() {
     let mut buf = [0u8; 48];
     let p = copy_bytes(&mut buf, 0, b"PIP: ");
     let name_len = video_name_len();
+    // SAFETY: VIDEO_NAME is a valid static buffer; name_len is bounded by 48.
     let name_slice = unsafe {
         core::slice::from_raw_parts((&raw const VIDEO_NAME).cast::<u8>(), name_len)
     };
@@ -508,6 +532,7 @@ fn stop_playback() {
     crate::audio::stop_video_mp3();
 
     // Close file.
+    // SAFETY: VIDEO_FD accessed only from video thread.
     let fd = unsafe { VIDEO_FD };
     if fd >= 0 {
         // SAFETY: Valid fd.
@@ -571,6 +596,7 @@ pub fn is_pip_active() -> bool {
 pub fn pip_frame() -> (*const u8, u32, u32) {
     let idx = FRAME_INDEX.load(Ordering::Relaxed);
     // SAFETY: PIP_FRAME_A/B are either null or valid allocated pointers.
+    // Volatile reads ensure we see the latest value from the video thread.
     let ptr = if idx == 0 {
         unsafe { core::ptr::read_volatile(&raw const PIP_FRAME_A) }
     } else {
@@ -672,6 +698,7 @@ fn video_name_len() -> usize {
     let name_ptr = (&raw const VIDEO_NAME).cast::<u8>();
     let mut len = 0;
     while len < 48 {
+        // SAFETY: name_ptr points to VIDEO_NAME static; len is bounded by 48.
         if unsafe { *name_ptr.add(len) } == 0 {
             break;
         }

@@ -98,6 +98,51 @@ struct PageSlideAnim {
     direction: i32,
 }
 
+/// Pre-computed SDI object names for a single icon slot.
+#[derive(Debug, Clone)]
+struct IconNames {
+    outline: String,
+    icon: String,
+    stripe: String,
+    fold: String,
+    gfx: String,
+    label: String,
+    label2: String,
+    shadow: String,
+    shadow2: String,
+}
+
+impl IconNames {
+    fn new(i: usize) -> Self {
+        Self {
+            outline: format!("icon_outline_{i}"),
+            icon: format!("icon_{i}"),
+            stripe: format!("icon_stripe_{i}"),
+            fold: format!("icon_fold_{i}"),
+            gfx: format!("icon_gfx_{i}"),
+            label: format!("icon_label_{i}"),
+            label2: format!("icon_label2_{i}"),
+            shadow: format!("icon_shadow_{i}"),
+            shadow2: format!("icon_shadow2_{i}"),
+        }
+    }
+
+    /// All 9 names as an array of references.
+    fn all(&self) -> [&str; 9] {
+        [
+            &self.outline,
+            &self.icon,
+            &self.stripe,
+            &self.fold,
+            &self.gfx,
+            &self.label,
+            &self.label2,
+            &self.shadow,
+            &self.shadow2,
+        ]
+    }
+}
+
 /// Runtime state for the icon grid dashboard.
 #[derive(Debug)]
 pub struct DashboardState {
@@ -119,11 +164,15 @@ pub struct DashboardState {
     press_flash_frame: u32,
     /// Which icon index is flashing.
     press_flash_index: usize,
+    /// Cached icon SDI names (avoids per-frame format! allocations).
+    icon_names: Vec<IconNames>,
 }
 
 impl DashboardState {
     /// Create a new dashboard with the given config and app list.
     pub fn new(config: DashboardConfig, apps: Vec<AppEntry>) -> Self {
+        let per_page = config.icons_per_page as usize;
+        let icon_names = (0..per_page).map(IconNames::new).collect();
         Self {
             config,
             apps,
@@ -135,6 +184,7 @@ impl DashboardState {
             cursor_initialized: false,
             press_flash_frame: 0,
             press_flash_index: 0,
+            icon_names,
         }
     }
 
@@ -282,27 +332,9 @@ impl DashboardState {
 
         let per_page = self.config.icons_per_page as usize;
         for i in 0..per_page {
-            let outline_name = format!("icon_outline_{i}");
-            let icon_name = format!("icon_{i}");
-            let stripe_name = format!("icon_stripe_{i}");
-            let fold_name = format!("icon_fold_{i}");
-            let gfx_name = format!("icon_gfx_{i}");
-            let label_name = format!("icon_label_{i}");
-            let label2_name = format!("icon_label2_{i}");
-            let shadow_name = format!("icon_shadow_{i}");
-            let shadow2_name = format!("icon_shadow2_{i}");
+            let names = &self.icon_names[i];
 
-            for name in [
-                &outline_name,
-                &icon_name,
-                &stripe_name,
-                &fold_name,
-                &gfx_name,
-                &label_name,
-                &label2_name,
-                &shadow_name,
-                &shadow2_name,
-            ] {
+            for name in names.all() {
                 if !sdi.contains(name) {
                     sdi.create(name);
                 }
@@ -324,11 +356,11 @@ impl DashboardState {
             let iy = cell_y + (self.config.cell_h as i32 - icon_h as i32) / 4;
 
             if i < page_apps.len() {
-                match at.icon_style.as_str() {
+                match at.icon.style.as_str() {
                     "card" => self.draw_card_icon(
                         sdi,
                         at,
-                        i,
+                        names,
                         ix,
                         iy,
                         icon_w,
@@ -340,7 +372,7 @@ impl DashboardState {
                     "circle" => self.draw_circle_icon(
                         sdi,
                         at,
-                        i,
+                        names,
                         ix,
                         iy,
                         icon_w,
@@ -352,6 +384,7 @@ impl DashboardState {
                     _ => self.draw_document_icon(
                         sdi,
                         at,
+                        names,
                         i,
                         ix,
                         iy,
@@ -363,17 +396,7 @@ impl DashboardState {
                     ),
                 }
             } else {
-                for name in [
-                    &outline_name,
-                    &icon_name,
-                    &stripe_name,
-                    &fold_name,
-                    &gfx_name,
-                    &label_name,
-                    &label2_name,
-                    &shadow_name,
-                    &shadow2_name,
-                ] {
+                for name in names.all() {
                     if let Ok(obj) = sdi.get_mut(name) {
                         obj.visible = false;
                     }
@@ -419,14 +442,14 @@ impl DashboardState {
                 let label_h = text_pad as u32 + glyph_h + 2;
                 let total_h = icon_h + label_h;
 
-                match at.cursor_style.as_str() {
+                match at.icon.cursor_style.as_str() {
                     "fill" => {
                         cursor.x = cx;
                         cursor.y = cy;
                         cursor.w = icon_w + (pad * 2) as u32;
                         cursor.h = total_h + (pad * 2) as u32;
-                        cursor.color = at.cursor_color;
-                        cursor.border_radius = Some(at.cursor_border_radius);
+                        cursor.color = at.icon.cursor_color;
+                        cursor.border_radius = Some(at.icon.cursor_border_radius);
                         cursor.stroke_width = None;
                         cursor.stroke_color = None;
                     },
@@ -435,8 +458,8 @@ impl DashboardState {
                         cursor.y = cy + pad + icon_h as i32 + text_pad + glyph_h as i32 + 2;
                         cursor.w = self.config.cell_w;
                         cursor.h = 3;
-                        cursor.color = at.cursor_color;
-                        cursor.border_radius = Some(at.cursor_border_radius.min(2));
+                        cursor.color = at.icon.cursor_color;
+                        cursor.border_radius = Some(at.icon.cursor_border_radius.min(2));
                         cursor.stroke_width = None;
                         cursor.stroke_color = None;
                     },
@@ -447,9 +470,9 @@ impl DashboardState {
                         cursor.w = icon_w + (pad * 2) as u32;
                         cursor.h = total_h + (pad * 2) as u32;
                         cursor.color = Color::rgba(0, 0, 0, 0);
-                        cursor.border_radius = Some(at.cursor_border_radius);
-                        cursor.stroke_width = Some(at.cursor_stroke_width);
-                        cursor.stroke_color = Some(at.cursor_color);
+                        cursor.border_radius = Some(at.icon.cursor_border_radius);
+                        cursor.stroke_width = Some(at.icon.cursor_stroke_width);
+                        cursor.stroke_color = Some(at.icon.cursor_color);
                     },
                 }
             }
@@ -493,7 +516,7 @@ impl DashboardState {
     fn draw_label(
         sdi: &mut SdiRegistry,
         at: &ActiveTheme,
-        i: usize,
+        names: &IconNames,
         cell_x: i32,
         cell_w: u32,
         label_y: i32,
@@ -506,9 +529,9 @@ impl DashboardState {
         let line_h = glyph_w as i32 + 1; // 1px spacing between lines
 
         // Label shadows (1px offset).
-        if let Some(shadow_color) = at.icon_label_shadow {
+        if let Some(shadow_color) = at.icon.label_shadow {
             // Shadow for line 1.
-            if let Ok(obj) = sdi.get_mut(&format!("icon_shadow_{i}")) {
+            if let Ok(obj) = sdi.get_mut(&names.shadow) {
                 if let Some(line) = lines.first() {
                     let tw = line.len() as i32 * glyph_w as i32;
                     obj.x = cell_x + (cell_w as i32 - tw) / 2 + 1;
@@ -525,7 +548,7 @@ impl DashboardState {
                 }
             }
             // Shadow for line 2.
-            if let Ok(obj) = sdi.get_mut(&format!("icon_shadow2_{i}")) {
+            if let Ok(obj) = sdi.get_mut(&names.shadow2) {
                 if lines.len() > 1 {
                     let tw = lines[1].len() as i32 * glyph_w as i32;
                     obj.x = cell_x + (cell_w as i32 - tw) / 2 + 1;
@@ -542,16 +565,16 @@ impl DashboardState {
                 }
             }
         } else {
-            if let Ok(obj) = sdi.get_mut(&format!("icon_shadow_{i}")) {
+            if let Ok(obj) = sdi.get_mut(&names.shadow) {
                 obj.visible = false;
             }
-            if let Ok(obj) = sdi.get_mut(&format!("icon_shadow2_{i}")) {
+            if let Ok(obj) = sdi.get_mut(&names.shadow2) {
                 obj.visible = false;
             }
         }
 
         // Line 1.
-        if let Ok(obj) = sdi.get_mut(&format!("icon_label_{i}")) {
+        if let Ok(obj) = sdi.get_mut(&names.label) {
             if let Some(line) = lines.first() {
                 let tw = line.len() as i32 * glyph_w as i32;
                 obj.x = cell_x + (cell_w as i32 - tw) / 2;
@@ -560,14 +583,14 @@ impl DashboardState {
                 obj.h = 0;
                 obj.font_size = fs;
                 obj.text = Some(line.clone());
-                obj.text_color = at.icon_label_color;
+                obj.text_color = at.icon.label_color;
                 obj.visible = true;
             } else {
                 obj.visible = false;
             }
         }
         // Line 2.
-        if let Ok(obj) = sdi.get_mut(&format!("icon_label2_{i}")) {
+        if let Ok(obj) = sdi.get_mut(&names.label2) {
             if lines.len() > 1 {
                 let tw = lines[1].len() as i32 * glyph_w as i32;
                 obj.x = cell_x + (cell_w as i32 - tw) / 2;
@@ -576,7 +599,7 @@ impl DashboardState {
                 obj.h = 0;
                 obj.font_size = fs;
                 obj.text = Some(lines[1].clone());
-                obj.text_color = at.icon_label_color;
+                obj.text_color = at.icon.label_color;
                 obj.visible = true;
             } else {
                 obj.visible = false;
@@ -590,7 +613,8 @@ impl DashboardState {
         &self,
         sdi: &mut SdiRegistry,
         at: &ActiveTheme,
-        i: usize,
+        names: &IconNames,
+        slot: usize,
         ix: i32,
         iy: i32,
         icon_w: u32,
@@ -599,7 +623,7 @@ impl DashboardState {
         app: &AppEntry,
         text_pad: i32,
     ) {
-        let r = at.icon_border_radius as u32;
+        let r = at.icon.border_radius as u32;
         // Clamp sub-element sizes to fit within the icon body's rounded rect.
         let stripe_h = at.icon_stripe_h.min(icon_h / 4);
         let fold_size = at.icon_fold_size.min(icon_w / 3).min(icon_h / 4);
@@ -610,7 +634,7 @@ impl DashboardState {
             .icon_gfx_h
             .min(icon_h.saturating_sub(stripe_h + gfx_gap + r));
 
-        if let Ok(obj) = sdi.get_mut(&format!("icon_outline_{i}")) {
+        if let Ok(obj) = sdi.get_mut(&names.outline) {
             obj.x = ix - 1;
             obj.y = iy - 1;
             obj.w = icon_w + 2;
@@ -618,28 +642,28 @@ impl DashboardState {
             obj.visible = true;
             obj.color = Color::rgba(0, 0, 0, 0);
             obj.text = None;
-            obj.border_radius = Some(at.icon_border_radius + 1);
+            obj.border_radius = Some(at.icon.border_radius + 1);
             obj.stroke_width = Some(1);
-            obj.stroke_color = Some(at.icon_outline_color);
+            obj.stroke_color = Some(at.icon.outline_color);
         }
-        if let Ok(obj) = sdi.get_mut(&format!("icon_{i}")) {
+        if let Ok(obj) = sdi.get_mut(&names.icon) {
             obj.x = ix;
             obj.y = iy;
             obj.w = icon_w;
             obj.h = icon_h;
             obj.visible = true;
             // Apply press flash effect: lighten the pressed icon.
-            obj.color = if self.press_flash_frame > 0 && i == self.press_flash_index {
-                oasis_types::color::lighten(at.icon_body_color, at.press_flash_lighten)
+            obj.color = if self.press_flash_frame > 0 && slot == self.press_flash_index {
+                oasis_types::color::lighten(at.icon.body_color, at.press_flash_lighten)
             } else {
-                at.icon_body_color
+                at.icon.body_color
             };
             obj.text = None;
-            obj.border_radius = Some(at.icon_border_radius);
-            obj.shadow_level = Some(at.icon_shadow_level);
+            obj.border_radius = Some(at.icon.border_radius);
+            obj.shadow_level = Some(at.icon.shadow_level);
         }
         // Inset stripe below the top rounded corners.
-        if let Ok(obj) = sdi.get_mut(&format!("icon_stripe_{i}")) {
+        if let Ok(obj) = sdi.get_mut(&names.stripe) {
             let inset = r.min(2);
             obj.x = ix + r as i32;
             obj.y = iy + inset as i32;
@@ -649,16 +673,16 @@ impl DashboardState {
             obj.color = app.color;
             obj.text = None;
         }
-        if let Ok(obj) = sdi.get_mut(&format!("icon_fold_{i}")) {
+        if let Ok(obj) = sdi.get_mut(&names.fold) {
             obj.x = ix + icon_w as i32 - fold_size as i32;
             obj.y = iy;
             obj.w = fold_size;
             obj.h = fold_size;
             obj.visible = fold_size > 0;
-            obj.color = at.icon_fold_color;
+            obj.color = at.icon.fold_color;
             obj.text = None;
         }
-        if let Ok(obj) = sdi.get_mut(&format!("icon_gfx_{i}")) {
+        if let Ok(obj) = sdi.get_mut(&names.gfx) {
             obj.x = ix + gfx_pad as i32;
             obj.y = iy + stripe_h as i32 + gfx_gap as i32;
             obj.w = gfx_w;
@@ -671,7 +695,7 @@ impl DashboardState {
         Self::draw_label(
             sdi,
             at,
-            i,
+            names,
             cell_x,
             self.config.cell_w,
             iy + icon_h as i32 + text_pad,
@@ -685,7 +709,7 @@ impl DashboardState {
         &self,
         sdi: &mut SdiRegistry,
         at: &ActiveTheme,
-        i: usize,
+        names: &IconNames,
         ix: i32,
         iy: i32,
         icon_w: u32,
@@ -697,13 +721,13 @@ impl DashboardState {
         use oasis_types::color::{darken, lighten};
 
         // Hide document-specific sub-objects (stripe, fold, gfx).
-        for prefix in &["icon_stripe_", "icon_fold_", "icon_gfx_"] {
-            if let Ok(obj) = sdi.get_mut(&format!("{prefix}{i}")) {
+        for name in [&names.stripe, &names.fold, &names.gfx] {
+            if let Ok(obj) = sdi.get_mut(name) {
                 obj.visible = false;
             }
         }
         // Subtle outline for visual depth.
-        if let Ok(obj) = sdi.get_mut(&format!("icon_outline_{i}")) {
+        if let Ok(obj) = sdi.get_mut(&names.outline) {
             obj.x = ix - 1;
             obj.y = iy - 1;
             obj.w = icon_w + 2;
@@ -711,13 +735,13 @@ impl DashboardState {
             obj.visible = true;
             obj.color = Color::rgba(0, 0, 0, 0);
             obj.text = None;
-            obj.border_radius = Some(at.icon_border_radius + 1);
+            obj.border_radius = Some(at.icon.border_radius + 1);
             obj.stroke_width = Some(1);
             let darker = darken(app.color, 0.25);
             obj.stroke_color = Some(oasis_types::color::with_alpha(darker, 100));
         }
         // Card body: vertical gradient from lightened top to darkened bottom.
-        if let Ok(obj) = sdi.get_mut(&format!("icon_{i}")) {
+        if let Ok(obj) = sdi.get_mut(&names.icon) {
             obj.x = ix;
             obj.y = iy;
             obj.w = icon_w;
@@ -727,14 +751,14 @@ impl DashboardState {
             obj.gradient_top = Some(lighten(app.color, 0.3));
             obj.gradient_bottom = Some(darken(app.color, 0.15));
             obj.text = None;
-            obj.border_radius = Some(at.icon_border_radius);
-            obj.shadow_level = Some(at.icon_shadow_level);
+            obj.border_radius = Some(at.icon.border_radius);
+            obj.shadow_level = Some(at.icon.shadow_level);
         }
         // Label below icon.
         Self::draw_label(
             sdi,
             at,
-            i,
+            names,
             cell_x,
             self.config.cell_w,
             iy + icon_h as i32 + text_pad,
@@ -748,7 +772,7 @@ impl DashboardState {
         &self,
         sdi: &mut SdiRegistry,
         at: &ActiveTheme,
-        i: usize,
+        names: &IconNames,
         ix: i32,
         iy: i32,
         icon_w: u32,
@@ -758,15 +782,15 @@ impl DashboardState {
         text_pad: i32,
     ) {
         // Hide document-specific sub-objects.
-        for prefix in &["icon_outline_", "icon_stripe_", "icon_fold_", "icon_gfx_"] {
-            if let Ok(obj) = sdi.get_mut(&format!("{prefix}{i}")) {
+        for name in [&names.outline, &names.stripe, &names.fold, &names.gfx] {
+            if let Ok(obj) = sdi.get_mut(name) {
                 obj.visible = false;
             }
         }
         // Circle body: use min dimension for a circle.
         let diameter = icon_w.min(icon_h);
         let radius = (diameter / 2) as u16;
-        if let Ok(obj) = sdi.get_mut(&format!("icon_{i}")) {
+        if let Ok(obj) = sdi.get_mut(&names.icon) {
             obj.x = ix + (icon_w as i32 - diameter as i32) / 2;
             obj.y = iy + (icon_h as i32 - diameter as i32) / 2;
             obj.w = diameter;
@@ -775,13 +799,13 @@ impl DashboardState {
             obj.color = app.color;
             obj.text = None;
             obj.border_radius = Some(radius);
-            obj.shadow_level = Some(at.icon_shadow_level);
+            obj.shadow_level = Some(at.icon.shadow_level);
         }
         // Label below icon.
         Self::draw_label(
             sdi,
             at,
-            i,
+            names,
             cell_x,
             self.config.cell_w,
             iy + icon_h as i32 + text_pad,
@@ -791,21 +815,9 @@ impl DashboardState {
 
     /// Hide all dashboard SDI objects.
     pub fn hide_sdi(&self, sdi: &mut SdiRegistry) {
-        let per_page = self.config.icons_per_page as usize;
-        for i in 0..per_page {
-            for prefix in &[
-                "icon_",
-                "icon_label_",
-                "icon_label2_",
-                "icon_outline_",
-                "icon_stripe_",
-                "icon_fold_",
-                "icon_gfx_",
-                "icon_shadow_",
-                "icon_shadow2_",
-            ] {
-                let name = format!("{prefix}{i}");
-                if let Ok(obj) = sdi.get_mut(&name) {
+        for names in &self.icon_names {
+            for name in names.all() {
+                if let Ok(obj) = sdi.get_mut(name) {
                     obj.visible = false;
                 }
             }

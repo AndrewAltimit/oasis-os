@@ -13,7 +13,10 @@ mod loader;
 pub mod strings;
 pub mod theme;
 
-pub use active_theme::ActiveTheme;
+pub use active_theme::{
+    ActiveTheme, AppScreenTheme, BarTheme, IconTheme, OskTheme, ScrollbarTheme, StartMenuTheme,
+    ToastTheme, WallpaperTheme,
+};
 pub use corrupted::{CorruptedModifiers, SimpleRng};
 pub use effects::{CorruptedEffect, ScanlineEffect, SkinEffect};
 pub use loader::{Skin, SkinFeatures, SkinLayout, SkinManifest, SkinObjectDef};

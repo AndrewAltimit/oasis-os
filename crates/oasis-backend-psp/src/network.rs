@@ -167,6 +167,7 @@ impl NetworkStream for PspNetworkStream {
         let ret =
             unsafe { sys::sceNetInetRecv(self.fd, buf.as_mut_ptr() as *mut c_void, buf.len(), 0) };
         if ret < 0 {
+            // SAFETY: sceNetInetGetErrno retrieves the last socket error code.
             let errno = unsafe { sys::sceNetInetGetErrno() };
             Err(OasisError::Backend(format!(
                 "recv failed: errno {:#x}",
@@ -186,6 +187,7 @@ impl NetworkStream for PspNetworkStream {
         let ret =
             unsafe { sys::sceNetInetSend(self.fd, data.as_ptr() as *const c_void, data.len(), 0) };
         if ret < 0 {
+            // SAFETY: sceNetInetGetErrno retrieves the last socket error code.
             let errno = unsafe { sys::sceNetInetGetErrno() };
             Err(OasisError::Backend(format!(
                 "send failed: errno {:#x}",
@@ -260,6 +262,7 @@ impl NetworkBackend for PspNetworkBackend {
         // SAFETY: Create a TCP socket (AF_INET=2, SOCK_STREAM=1).
         let fd = unsafe { sys::sceNetInetSocket(2, 1, 0) };
         if fd < 0 {
+            // SAFETY: sceNetInetGetErrno retrieves the last socket error code.
             let errno = unsafe { sys::sceNetInetGetErrno() };
             return Err(OasisError::Backend(format!(
                 "socket() failed: errno {:#x}",
@@ -297,7 +300,9 @@ impl NetworkBackend for PspNetworkBackend {
         // SAFETY: Bind the socket to the given port on all interfaces.
         let ret = unsafe { sys::sceNetInetBind(fd, &sa, mem::size_of::<sys::sockaddr>() as u32) };
         if ret < 0 {
+            // SAFETY: sceNetInetGetErrno retrieves the last socket error code.
             let errno = unsafe { sys::sceNetInetGetErrno() };
+            // SAFETY: fd is a valid socket; closing on bind failure.
             unsafe { sys::sceNetInetClose(fd) };
             return Err(OasisError::Backend(format!(
                 "bind(:{port}) failed: errno {:#x}",
@@ -308,7 +313,9 @@ impl NetworkBackend for PspNetworkBackend {
         // SAFETY: Start listening with a backlog of 4.
         let ret = unsafe { sys::sceNetInetListen(fd, 4) };
         if ret < 0 {
+            // SAFETY: sceNetInetGetErrno retrieves the last socket error code.
             let errno = unsafe { sys::sceNetInetGetErrno() };
+            // SAFETY: fd is a valid socket; closing on listen failure.
             unsafe { sys::sceNetInetClose(fd) };
             return Err(OasisError::Backend(format!(
                 "listen(:{port}) failed: errno {:#x}",
@@ -339,6 +346,7 @@ impl NetworkBackend for PspNetworkBackend {
 
         if client_fd < 0 {
             // EAGAIN / EWOULDBLOCK: no connection pending.
+            // SAFETY: sceNetInetGetErrno retrieves the last socket error code.
             let errno = unsafe { sys::sceNetInetGetErrno() };
             // EAGAIN = 11 (0xB), EWOULDBLOCK = 11 on PSP
             if errno == 0x0B || errno == 35 {
@@ -368,6 +376,7 @@ impl NetworkBackend for PspNetworkBackend {
         // SAFETY: AF_INET=2, SOCK_STREAM=1.
         let fd = unsafe { sys::sceNetInetSocket(2, 1, 0) };
         if fd < 0 {
+            // SAFETY: sceNetInetGetErrno retrieves the last socket error code.
             let errno = unsafe { sys::sceNetInetGetErrno() };
             return Err(OasisError::Backend(format!(
                 "socket() failed: errno {:#x}",
@@ -380,7 +389,9 @@ impl NetworkBackend for PspNetworkBackend {
         let ret =
             unsafe { sys::sceNetInetConnect(fd, &sa, mem::size_of::<sys::sockaddr>() as u32) };
         if ret < 0 {
+            // SAFETY: sceNetInetGetErrno retrieves the last socket error code.
             let errno = unsafe { sys::sceNetInetGetErrno() };
+            // SAFETY: fd is a valid socket; closing on connect failure.
             unsafe { sys::sceNetInetClose(fd) };
             return Err(OasisError::Backend(format!(
                 "connect {}:{} failed: errno {:#x}",

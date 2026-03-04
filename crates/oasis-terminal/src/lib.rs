@@ -4,11 +4,15 @@
 //! `Command` trait and are registered by name. The interpreter parses input
 //! lines, resolves the command name, and dispatches `execute()`.
 
+#[macro_use]
+mod command_macro;
 pub mod audio_commands;
 mod commands;
 pub mod completion;
+pub mod control_flow;
 pub mod dev_commands;
 pub mod doc_commands;
+pub(crate) mod expander;
 pub mod file_commands;
 pub mod fun_commands;
 pub mod highlight;
@@ -16,6 +20,7 @@ mod interpreter;
 pub mod jobs;
 pub mod line_edit;
 pub mod network_commands;
+pub(crate) mod pipeline;
 pub mod radio_commands;
 pub mod security_commands;
 pub mod skin_commands;

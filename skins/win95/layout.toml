@@ -1,0 +1,7 @@
+# Top bar (24px) + content area (428px) + bottom bar (28px) = 480px
+[content_bg]
+x = 0
+y = 24
+w = 640
+h = 428
+color = "#C0C0C0"

@@ -39,6 +39,23 @@ pub struct PluginManifest {
     /// Whether to auto-load on startup.
     #[serde(default)]
     pub auto_load: bool,
+    /// Plugin configuration key-value pairs (from `[config]` section).
+    #[serde(default)]
+    pub config: std::collections::HashMap<String, PluginConfigValue>,
+}
+
+/// A typed configuration value for a plugin.
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+#[serde(untagged)]
+pub enum PluginConfigValue {
+    /// Boolean value.
+    Bool(bool),
+    /// Integer value.
+    Int(i64),
+    /// Floating-point value.
+    Float(f64),
+    /// String value.
+    Str(String),
 }
 
 /// Manages the plugin lifecycle.

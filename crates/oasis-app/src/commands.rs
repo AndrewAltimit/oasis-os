@@ -184,7 +184,9 @@ pub fn apply_skin_swap(name: &str, state: &mut AppState, sdi: &mut SdiRegistry, 
             let sw = state.active_theme.screen_w;
             let sh = state.active_theme.screen_h;
             let swapped = Skin::swap_scaled(&state.skin, new_skin, sdi, sw, sh);
-            state.active_theme = ActiveTheme::from_skin(&swapped.theme).with_screen_size(sw, sh);
+            state.active_theme = ActiveTheme::from_skin(&swapped.theme)
+                .with_screen_size(sw, sh)
+                .with_features(&swapped.features);
             state.browser_config = BrowserConfig::from_skin_theme(&swapped.theme);
             state.wm.set_theme(swapped.theme.build_wm_theme());
             let dash_config =
@@ -251,7 +253,9 @@ fn format_remote_response(
                 let sw = active_theme.screen_w;
                 let sh = active_theme.screen_h;
                 let swapped = Skin::swap_scaled(skin, new_skin, sdi, sw, sh);
-                *active_theme = ActiveTheme::from_skin(&swapped.theme).with_screen_size(sw, sh);
+                *active_theme = ActiveTheme::from_skin(&swapped.theme)
+                    .with_screen_size(sw, sh)
+                    .with_features(&swapped.features);
                 *browser_config = BrowserConfig::from_skin_theme(&swapped.theme);
                 wm.set_theme(swapped.theme.build_wm_theme());
                 let msg = format!("Switched to skin: {}", swapped.manifest.name);

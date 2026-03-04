@@ -112,70 +112,38 @@ fn count_vfs_recursive(
 }
 
 // ---------------------------------------------------------------------------
-// whoami
+// whoami / hostname (simple one-liner commands via macro)
 // ---------------------------------------------------------------------------
 
-struct WhoamiCmd;
-impl Command for WhoamiCmd {
-    fn name(&self) -> &str {
-        "whoami"
-    }
-    fn description(&self) -> &str {
-        "Print current user name"
-    }
-    fn usage(&self) -> &str {
-        "whoami"
-    }
-    fn category(&self) -> &str {
-        "system"
-    }
-    fn execute(&self, _args: &[&str], _env: &mut Environment<'_>) -> Result<CommandOutput> {
-        Ok(CommandOutput::Text("oasis".to_string()))
-    }
-}
+define_command!(
+    WhoamiCmd,
+    "whoami",
+    "Print current user name",
+    "whoami",
+    "system",
+    |_args, _env| { Ok(CommandOutput::Text("oasis".to_string())) }
+);
 
-// ---------------------------------------------------------------------------
-// hostname
-// ---------------------------------------------------------------------------
-
-struct HostnameCmd;
-impl Command for HostnameCmd {
-    fn name(&self) -> &str {
-        "hostname"
-    }
-    fn description(&self) -> &str {
-        "Print system hostname"
-    }
-    fn usage(&self) -> &str {
-        "hostname"
-    }
-    fn category(&self) -> &str {
-        "system"
-    }
-    fn execute(&self, _args: &[&str], _env: &mut Environment<'_>) -> Result<CommandOutput> {
-        Ok(CommandOutput::Text("oasis-os".to_string()))
-    }
-}
+define_command!(
+    HostnameCmd,
+    "hostname",
+    "Print system hostname",
+    "hostname",
+    "system",
+    |_args, _env| { Ok(CommandOutput::Text("oasis-os".to_string())) }
+);
 
 // ---------------------------------------------------------------------------
 // date
 // ---------------------------------------------------------------------------
 
-struct DateCmd;
-impl Command for DateCmd {
-    fn name(&self) -> &str {
-        "date"
-    }
-    fn description(&self) -> &str {
-        "Print current date and time"
-    }
-    fn usage(&self) -> &str {
-        "date"
-    }
-    fn category(&self) -> &str {
-        "system"
-    }
-    fn execute(&self, _args: &[&str], env: &mut Environment<'_>) -> Result<CommandOutput> {
+define_command!(
+    DateCmd,
+    "date",
+    "Print current date and time",
+    "date",
+    "system",
+    |_args, env| {
         if let Some(time) = env.time {
             let now = time.now()?;
             Ok(CommandOutput::Text(now.to_string()))
@@ -185,27 +153,19 @@ impl Command for DateCmd {
             ))
         }
     }
-}
+);
 
 // ---------------------------------------------------------------------------
 // sleep
 // ---------------------------------------------------------------------------
 
-struct SleepCmd;
-impl Command for SleepCmd {
-    fn name(&self) -> &str {
-        "sleep"
-    }
-    fn description(&self) -> &str {
-        "Pause execution (simulated)"
-    }
-    fn usage(&self) -> &str {
-        "sleep <seconds>"
-    }
-    fn category(&self) -> &str {
-        "system"
-    }
-    fn execute(&self, args: &[&str], _env: &mut Environment<'_>) -> Result<CommandOutput> {
+define_command!(
+    SleepCmd,
+    "sleep",
+    "Pause execution (simulated)",
+    "sleep <seconds>",
+    "system",
+    |args, _env| {
         if args.is_empty() {
             return Err(OasisError::Command("usage: sleep <seconds>".to_string()));
         }
@@ -217,7 +177,7 @@ impl Command for SleepCmd {
             "(slept {secs:.1}s -- simulated)"
         )))
     }
-}
+);
 
 /// Register system commands.
 pub fn register_system_commands(reg: &mut crate::CommandRegistry) {

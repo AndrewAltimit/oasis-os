@@ -1,0 +1,6 @@
+name = "solarized"
+version = "1.0"
+author = "OASIS_OS"
+description = "Solarized Dark color palette by Ethan Schoonover, clean and developer-focused"
+screen_width = 800
+screen_height = 600

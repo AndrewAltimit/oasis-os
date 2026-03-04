@@ -2,35 +2,33 @@
 
 An embeddable operating system framework in Rust. Renders a skinnable shell interface -- scene-graph UI, command interpreter, virtual file system, browser engine, plugin system, remote terminal -- anywhere you can provide a pixel buffer and an input stream.
 
-### Classic Skin
+### Dashboards
 
-| Dashboard | Terminal |
-|:---:|:---:|
-| ![Dashboard](screenshots/classic/01_dashboard.png) | ![Terminal](screenshots/classic/04_terminal.png) |
+| Classic | XP | Modern | Desktop | macOS |
+|:---:|:---:|:---:|:---:|:---:|
+| ![Classic](screenshots/classic/01_dashboard.png) | ![XP](screenshots/xp/01_dashboard.png) | ![Modern](screenshots/modern/01_dashboard.png) | ![Desktop](screenshots/desktop/01_dashboard.png) | ![macOS](screenshots/macos/01_dashboard.png) |
 
-### XP Skin
+| GNOME | Cyberpunk | Win95 | Solarized | Vaporwave |
+|:---:|:---:|:---:|:---:|:---:|
+| ![GNOME](screenshots/gnome/01_dashboard.png) | ![Cyberpunk](screenshots/cyberpunk/01_dashboard.png) | ![Win95](screenshots/win95/01_dashboard.png) | ![Solarized](screenshots/solarized/01_dashboard.png) | ![Vaporwave](screenshots/vaporwave/01_dashboard.png) |
 
-| Dashboard | Terminal |
-|:---:|:---:|
-| ![Dashboard](screenshots/xp/01_dashboard.png) | ![Terminal](screenshots/xp/04_terminal.png) |
+| Retro CGA | Paper | High Contrast |
+|:---:|:---:|:---:|
+| ![CGA](screenshots/retro-cga/01_dashboard.png) | ![Paper](screenshots/paper/01_dashboard.png) | ![HiCon](screenshots/highcontrast/01_dashboard.png) |
 
-### Modern Skin
+### Terminals
 
-| Dashboard | Terminal |
-|:---:|:---:|
-| ![Dashboard](screenshots/modern/01_dashboard.png) | ![Terminal](screenshots/modern/04_terminal.png) |
+| Classic | XP | Modern | Desktop | macOS |
+|:---:|:---:|:---:|:---:|:---:|
+| ![Classic](screenshots/classic/04_terminal.png) | ![XP](screenshots/xp/04_terminal.png) | ![Modern](screenshots/modern/04_terminal.png) | ![Desktop](screenshots/desktop/04_terminal.png) | ![macOS](screenshots/macos/04_terminal.png) |
 
-### Desktop Skin
+| Terminal | Tactical | Corrupted | Agent Terminal | Cyberpunk |
+|:---:|:---:|:---:|:---:|:---:|
+| ![Terminal](screenshots/terminal/04_terminal.png) | ![Tactical](screenshots/tactical/04_terminal.png) | ![Corrupted](screenshots/corrupted/04_terminal.png) | ![Agent](screenshots/agent-terminal/04_terminal.png) | ![Cyberpunk](screenshots/cyberpunk/04_terminal.png) |
 
-| Dashboard | Terminal |
-|:---:|:---:|
-| ![Dashboard](screenshots/desktop/01_dashboard.png) | ![Terminal](screenshots/desktop/04_terminal.png) |
-
-### Terminal Skins
-
-| Terminal | Tactical | Corrupted | Agent Terminal |
-|:---:|:---:|:---:|:---:|
-| ![Terminal](screenshots/terminal/04_terminal.png) | ![Tactical](screenshots/tactical/04_terminal.png) | ![Corrupted](screenshots/corrupted/04_terminal.png) | ![Agent](screenshots/agent-terminal/04_terminal.png) |
+| Win95 | Solarized | Vaporwave | High Contrast | GNOME |
+|:---:|:---:|:---:|:---:|:---:|
+| ![Win95](screenshots/win95/04_terminal.png) | ![Solarized](screenshots/solarized/04_terminal.png) | ![Vaporwave](screenshots/vaporwave/04_terminal.png) | ![HiCon](screenshots/highcontrast/04_terminal.png) | ![GNOME](screenshots/gnome/04_terminal.png) |
 
 ## Overview
 
@@ -46,7 +44,7 @@ OASIS_OS originated as a Rust port of a PSP homebrew shell OS written in C circa
 
 ### Skins
 
-The framework supports a data-driven **skin system** that controls visual layout, color themes, feature gating, and behavioral personality. Skins are defined in TOML configuration files -- no code changes required. Thirteen skins are implemented:
+The framework supports a data-driven **skin system** that controls visual layout, color themes, feature gating, and behavioral personality. Skins are defined in TOML configuration files -- no code changes required. Seventeen skins are implemented:
 
 | Skin | Style | Key Features | Source |
 |------|-------|-------------|--------|
@@ -62,6 +60,10 @@ The framework supports a data-driven **skin system** that controls visual layout
 | **corrupted** | Glitched terminal | Terminal + corruption effects (jitter, flicker, garbling) | Built-in |
 | **desktop** | Windowed desktop | Window manager + terminal, resizable/draggable windows | Built-in |
 | **agent-terminal** | AI agent console | Terminal + agent/MCP commands, system health | Built-in |
+| **win95** | Windows 95/98 classic look | Raised 3D borders, system gray, blue titlebars | External (`skins/win95/`) |
+| **solarized** | Solarized Dark palette | Developer-focused, clean Solarized color scheme | External (`skins/solarized/`) |
+| **vaporwave** | Aesthetic vaporwave | Purple, pink, and cyan gradients | External (`skins/vaporwave/`) |
+| **highcontrast** | High contrast accessibility | Black background, white text, yellow accents | External (`skins/highcontrast/`) |
 | **modern** | Purple accent, rounded corners | Dashboard + WM + browser, gradient fills, shadows | Built-in |
 
 All skins share the same core: scene graph, command interpreter, virtual file system, networking, and plugin infrastructure. See the [Skin Authoring Guide](docs/skin-authoring.md) for creating custom skins.
@@ -74,7 +76,7 @@ Default virtual resolution is 480x272 (PSP native). Skins may override this (e.g
 - **Browser Engine** -- Embedded HTML/CSS/Gemini renderer with DOM parsing, CSS cascade, block/inline/table layout, link navigation, reader mode, bookmarks. JavaScript support via QuickJS-NG with DOM manipulation (getElementById, createElement, textContent, attributes)
 - **JavaScript Engine** -- Embedded QuickJS-NG runtime (`oasis-js` crate) with `console` API, inline `<script>` execution, and DOM bindings for dynamic page manipulation. Feature-gated (`javascript`) -- enabled by default on desktop
 - **Window Manager** -- Movable, resizable, overlapping windows with titlebars, minimize/maximize/close, hit testing, and themed decorations
-- **UI Widget Toolkit** -- 20+ reusable widgets: Button, Card, TabBar, Panel, TextField, ListView, ScrollView, ProgressBar, Toggle, NinePatch, flex layout, and more
+- **UI Widget Toolkit** -- 30+ reusable widgets: Button, Card, TabBar, Panel, TextField, ListView, ScrollView, ProgressBar, Toggle, NinePatch, flex layout, and more
 - **Proportional Bitmap Font** -- Variable-width glyph rendering from ink bounds with per-character advance values (not fixed-width 8x8)
 - **90+ Terminal Commands** -- 17+ command modules: core (fs/system), text processing (head, tail, grep, sort, uniq, tr, cut, diff), file utilities (write, tree, du, stat, xxd, checksum), dev tools (base64, json, uuid, seq, expr, test, xargs), fun (cal, fortune, banner, matrix, yes, watch, time), system (uptime, df, whoami, hostname, date, sleep), security (chmod, chown, passwd, audit), documentation (man, tutorial, motd), networking (wifi, ping, http), audio, radio, UI (wm, sdi, theme, notify, screenshot), skin switching, scripting, transfer (FTP), TV Guide, system updates. Shell features include variable expansion, glob expansion, aliases, history (!!/!n), piping, and command chaining
 - **Audio System** -- Playlist management, MP3/WAV playback, ID3 tag parsing, shuffle/repeat modes, volume control
@@ -100,10 +102,10 @@ oasis-os/
 |   +-- oasis-platform/              # Platform service traits: Power, Time, USB, Network, OSK
 |   +-- oasis-sdi/                    # Scene Display Interface: named object registry, z-order, rendering
 |   +-- oasis-net/                    # TCP networking, PSK authentication, remote terminal, FTP transfer
-|   +-- oasis-audio/                  # Audio manager, playlist, shuffle/repeat, MP3 ID3 parsing
+|   +-- oasis-audio/                  # Audio manager, playlist, shuffle/repeat, MP3/WAV decode, ID3 parsing
 |   +-- oasis-ui/                     # 20+ widgets: Button, Card, TabBar, Panel, TextField, ListView, etc.
 |   +-- oasis-wm/                     # Window manager: drag/resize, hit testing, minimize/maximize/close
-|   +-- oasis-skin/                   # TOML skin engine, 13 skins, theme derivation from 9 base colors
+|   +-- oasis-skin/                   # TOML skin engine, 17 skins, theme derivation from 9 base colors
 |   +-- oasis-terminal/              # Command interpreter: 90+ commands across 17 modules, shell features
 |   +-- oasis-browser/               # HTML/CSS/Gemini browser: DOM, CSS cascade, block/inline/table layout
 |   +-- oasis-js/                    # JavaScript engine: QuickJS-NG runtime, console API, DOM bindings
@@ -125,6 +127,10 @@ oasis-os/
 |   +-- cyberpunk/                    # Neon cyberpunk aesthetic
 |   +-- retro-cga/                    # CGA 4-color retro palette
 |   +-- paper/                        # Minimalist paper/ink style
+|   +-- win95/                        # Windows 95/98 classic 3D borders
+|   +-- solarized/                    # Solarized Dark developer palette
+|   +-- vaporwave/                    # Aesthetic vaporwave palette
+|   +-- highcontrast/                 # High contrast accessibility theme
 +-- docs/
     +-- design.md                     # Technical design document (v2.4)
     +-- skin-authoring.md             # Skin creation guide with full TOML reference
@@ -138,10 +144,10 @@ oasis-os/
 | `oasis-platform` | Platform service traits: `PowerService`, `TimeService`, `UsbService`, `NetworkService`, `OskService` |
 | `oasis-sdi` | Scene Display Interface: named object registry with position, size, color, texture, text, z-order, gradients, shadows |
 | `oasis-net` | TCP networking with PSK authentication, remote terminal, FTP transfer |
-| `oasis-audio` | Audio manager with playlist, shuffle/repeat modes, MP3 ID3 tag parsing |
-| `oasis-ui` | 20+ reusable widgets: Button, Card, TabBar, Panel, TextField, ListView, ScrollView, ProgressBar, Toggle, NinePatch, flex layout |
+| `oasis-audio` | Audio manager with playlist, shuffle/repeat modes, MP3/WAV decode, ID3 tag parsing |
+| `oasis-ui` | 30+ reusable widgets: Button, Card, TabBar, Panel, TextField, ListView, ScrollView, ProgressBar, Toggle, NinePatch, flex layout |
 | `oasis-wm` | Window manager: movable/resizable windows, titlebar buttons, hit testing, themed decorations |
-| `oasis-skin` | Data-driven TOML skin system with 13 skins (7 external TOML + 7 built-in; xp exists in both), theme derivation from 9 base colors to ~30 UI element colors |
+| `oasis-skin` | Data-driven TOML skin system with 17 skins (11 external TOML + 7 built-in; xp exists in both), theme derivation from 9 base colors to ~30 UI element colors |
 | `oasis-terminal` | Command interpreter with 90+ commands across 17 modules, shell features (variables, globs, aliases, history, piping) |
 | `oasis-browser` | Embeddable HTML/CSS/Gemini rendering engine: DOM parser, CSS cascade, block/inline/table layout, reader mode, JavaScript DOM bindings |
 | `oasis-js` | JavaScript engine wrapping QuickJS-NG via rquickjs: `console` API, inline `<script>` execution, DOM manipulation from JS |
@@ -230,6 +236,15 @@ cargo run -p oasis-app --bin oasis-screenshot terminal
 cargo run -p oasis-app --bin oasis-screenshot tactical
 cargo run -p oasis-app --bin oasis-screenshot corrupted
 cargo run -p oasis-app --bin oasis-screenshot agent-terminal
+cargo run -p oasis-app --bin oasis-screenshot macos
+cargo run -p oasis-app --bin oasis-screenshot gnome
+cargo run -p oasis-app --bin oasis-screenshot cyberpunk
+cargo run -p oasis-app --bin oasis-screenshot retro-cga
+cargo run -p oasis-app --bin oasis-screenshot paper
+cargo run -p oasis-app --bin oasis-screenshot win95
+cargo run -p oasis-app --bin oasis-screenshot solarized
+cargo run -p oasis-app --bin oasis-screenshot vaporwave
+cargo run -p oasis-app --bin oasis-screenshot highcontrast
 ```
 
 ## Environment Variables
@@ -295,6 +310,12 @@ GitHub Actions workflows run the full pipeline automatically on push to `main` a
 - [PSP Modernization Plan](docs/psp-modernization-plan.md) -- 9-phase, 40-step roadmap for PSP backend modernization using the rust-psp SDK
 - [PSP Plugin Guide](docs/psp-plugin.md) -- installation, controls, and configuration for the in-game overlay PRX
 - [WASM Backend Plan](docs/wasm-backend-plan.md) -- WebAssembly backend design: Canvas 2D rendering, DOM input mapping, iframe overlay for real web pages
+- [Getting Started](docs/getting-started.md) -- setup, building, testing, and running OASIS_OS
+- [Troubleshooting](docs/troubleshooting.md) -- common issues and solutions
+- [FFI Integration](docs/ffi-integration.md) -- C API reference for UE5 and external embeddings
+- [Plugin Development](docs/plugin-development.md) -- writing plugins, VFS-based IPC, event bus
+- [Adding Commands](docs/adding-commands.md) -- guide for adding new terminal commands
+- [ADR Index](docs/adr/) -- architectural decision records
 
 ## Security Notice
 

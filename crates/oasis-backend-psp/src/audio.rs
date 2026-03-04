@@ -32,6 +32,9 @@ fn load_av_modules_once() {
     if LOADED.swap(true, Ordering::Relaxed) {
         return; // Already loaded.
     }
+    // SAFETY: sceUtilityLoadModule loads firmware modules into memory.
+    // AvCodec, AvMpegBase, and AvMp3 are required for sceAudiocodec MP3
+    // decoding. The AtomicBool guard ensures these are loaded at most once.
     unsafe {
         psp::sys::sceUtilityLoadModule(psp::sys::Module::AvCodec);
         psp::sys::sceUtilityLoadModule(psp::sys::Module::AvMpegBase);
@@ -191,6 +194,8 @@ impl AudioPlayer {
     /// Close the current file if open.
     fn close_file(&mut self) {
         if self.fd >= psp::sys::SceUid(0) {
+            // SAFETY: fd is a valid open file descriptor (checked >= 0).
+            // After closing, we immediately invalidate it to -1.
             unsafe { psp::sys::sceIoClose(self.fd) };
             self.fd = psp::sys::SceUid(-1);
         }
@@ -207,6 +212,8 @@ impl AudioPlayer {
         // Open file.
         let mut path_bytes: Vec<u8> = path.as_bytes().to_vec();
         path_bytes.push(0); // null-terminate
+        // SAFETY: path_bytes is a null-terminated byte string on the stack.
+        // sceIoOpen returns a valid fd or a negative error code.
         let fd =
             unsafe { psp::sys::sceIoOpen(path_bytes.as_ptr(), psp::sys::IoOpenFlags::RD_ONLY, 0) };
         if fd < psp::sys::SceUid(0) {
@@ -214,9 +221,13 @@ impl AudioPlayer {
         }
 
         // Get file size.
+        // SAFETY: fd is a valid file descriptor returned by sceIoOpen above.
+        // Seeking to End then back to Set is the standard way to measure
+        // file size on PSP.
         let size = unsafe { psp::sys::sceIoLseek(fd, 0, psp::sys::IoWhence::End) } as usize;
         unsafe { psp::sys::sceIoLseek(fd, 0, psp::sys::IoWhence::Set) };
         if size == 0 {
+            // SAFETY: fd is valid; closing an empty file.
             unsafe { psp::sys::sceIoClose(fd) };
             return false;
         }
@@ -227,6 +238,8 @@ impl AudioPlayer {
         self.data_size = size as u32;
 
         // Initial read into buffer.
+        // SAFETY: self.fd is a valid open file descriptor. read_buf is a
+        // Vec<u8> of READ_BUF_SIZE bytes, so the pointer and length are valid.
         let read = unsafe {
             psp::sys::sceIoRead(
                 self.fd,
@@ -253,10 +266,13 @@ impl AudioPlayer {
                 self.buf_pos = id3_skip;
             } else {
                 // Tag exceeds buffer — seek past it in the file.
+                // SAFETY: self.fd is a valid open file descriptor.
+                // Seeking past the ID3v2 tag to the first audio frame.
                 unsafe {
                     psp::sys::sceIoLseek(self.fd, id3_skip as i64, psp::sys::IoWhence::Set);
                 }
                 self.file_pos = id3_skip;
+                // SAFETY: self.fd is valid; read_buf pointer and size are correct.
                 let re_read = unsafe {
                     psp::sys::sceIoRead(
                         self.fd,
@@ -324,6 +340,8 @@ impl AudioPlayer {
         let temp_path = "ms0:/PSP/GAME/oasis_os/__temp_audio.mp3";
         let temp_path_c = b"ms0:/PSP/GAME/oasis_os/__temp_audio.mp3\0";
 
+        // SAFETY: temp_path_c is a null-terminated byte string literal.
+        // sceIoOpen creates/truncates the temp file for writing.
         let fd = unsafe {
             psp::sys::sceIoOpen(
                 temp_path_c.as_ptr(),
@@ -336,7 +354,9 @@ impl AudioPlayer {
         if fd < psp::sys::SceUid(0) {
             return false;
         }
+        // SAFETY: fd is valid; data.as_ptr() and data.len() describe a valid byte slice.
         let written = unsafe { psp::sys::sceIoWrite(fd, data.as_ptr() as *const _, data.len()) };
+        // SAFETY: fd is valid and will not be used after this close.
         unsafe { psp::sys::sceIoClose(fd) };
 
         // Free the input data immediately — we don't need it anymore.
@@ -379,6 +399,9 @@ impl AudioPlayer {
         if self.buf_valid < READ_BUF_SIZE && self.file_pos < self.file_size {
             let room = READ_BUF_SIZE - self.buf_valid;
             let chunk = room.min(4096);
+            // SAFETY: self.fd is a valid open file descriptor. The write
+            // target is read_buf[buf_valid..buf_valid+chunk], which is within
+            // the Vec's allocated capacity (READ_BUF_SIZE).
             let read = unsafe {
                 psp::sys::sceIoRead(
                     self.fd,

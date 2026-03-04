@@ -671,6 +671,7 @@ name = "oasis-backend-sdl"
 version = "1.0.0"
 dependencies = [
  "log",
+ "oasis-audio",
  "oasis-core",
  "oasis-types",
  "rmp3",

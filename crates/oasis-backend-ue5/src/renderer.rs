@@ -702,6 +702,10 @@ impl SdiBackend for Ue5Backend {
         Ok(())
     }
 
+    fn viewport_size(&self) -> (u32, u32) {
+        (self.width, self.height)
+    }
+
     fn dim_screen(&mut self, alpha: u8) -> Result<()> {
         self.fill_rect(0, 0, self.width, self.height, Color::rgba(0, 0, 0, alpha))
     }

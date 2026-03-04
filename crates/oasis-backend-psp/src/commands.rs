@@ -122,7 +122,11 @@ pub fn execute_command(cmd: &str, config: &mut psp::config::Config) -> CommandRe
                 String::from("Backend: sceGu hardware"),
                 format!(
                     "CPU: {}MHz  Bus: {}MHz",
+                    // SAFETY: scePowerGetCpuClockFrequency is a read-only
+                    // PSP firmware syscall returning the current CPU clock.
                     unsafe { psp::sys::scePowerGetCpuClockFrequency() },
+                    // SAFETY: scePowerGetBusClockFrequency is a read-only
+                    // PSP firmware syscall returning the current bus clock.
                     unsafe { psp::sys::scePowerGetBusClockFrequency() }
                 ),
                 bat,
@@ -357,6 +361,7 @@ fn cmd_mem() -> Vec<String> {
     let mut out = Vec::new();
     // SAFETY: sceKernelTotalFreeMemSize returns available heap bytes.
     let free = unsafe { psp::sys::sceKernelTotalFreeMemSize() };
+    // SAFETY: sceKernelMaxFreeMemSize returns the largest contiguous free block.
     let max_block = unsafe { psp::sys::sceKernelMaxFreeMemSize() };
     out.push(format!("Free RAM: {} KB", free / 1024));
     out.push(format!("Largest block: {} KB", max_block / 1024));

@@ -1118,6 +1118,70 @@ pub fn parse_hex_color(s: &str) -> Option<Color> {
     }
 }
 
+/// Compute the WCAG 2.0 relative luminance of a color.
+///
+/// See <https://www.w3.org/TR/WCAG20/#relativeluminancedef>.
+fn relative_luminance(c: Color) -> f64 {
+    fn linearize(val: u8) -> f64 {
+        let s = val as f64 / 255.0;
+        if s <= 0.04045 {
+            s / 12.92
+        } else {
+            ((s + 0.055) / 1.055).powf(2.4)
+        }
+    }
+    0.2126 * linearize(c.r) + 0.7152 * linearize(c.g) + 0.0722 * linearize(c.b)
+}
+
+/// Compute the WCAG 2.0 contrast ratio between two colors.
+///
+/// Returns a value between 1.0 (identical) and 21.0 (black vs white).
+pub fn contrast_ratio(a: Color, b: Color) -> f64 {
+    let la = relative_luminance(a);
+    let lb = relative_luminance(b);
+    let (lighter, darker) = if la > lb { (la, lb) } else { (lb, la) };
+    (lighter + 0.05) / (darker + 0.05)
+}
+
+/// A contrast warning for a text/background color pair.
+#[derive(Debug, Clone)]
+pub struct ContrastWarning {
+    /// Human-readable label for the pair (e.g. "text on background").
+    pub pair: String,
+    /// The computed contrast ratio.
+    pub ratio: f64,
+    /// WCAG AA minimum (4.5 for normal text, 3.0 for large text).
+    pub required: f64,
+}
+
+impl SkinTheme {
+    /// Validate key text/background pairs against WCAG AA contrast minimums.
+    ///
+    /// Returns a list of warnings for pairs that fail the 4.5:1 ratio.
+    pub fn validate_contrast(&self) -> Vec<ContrastWarning> {
+        let bg = self.background_color();
+        let pairs: &[(&str, Color, f64)] = &[
+            ("text on background", self.text_color(), 4.5),
+            ("dim_text on background", self.dim_text_color(), 3.0),
+            ("prompt on background", self.prompt_color(), 3.0),
+            ("error on background", self.error_color(), 3.0),
+        ];
+
+        let mut warnings = Vec::new();
+        for &(label, fg, required) in pairs {
+            let ratio = contrast_ratio(fg, bg);
+            if ratio < required {
+                warnings.push(ContrastWarning {
+                    pair: label.to_string(),
+                    ratio,
+                    required,
+                });
+            }
+        }
+        warnings
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1368,6 +1432,41 @@ pressed_bg = "#353535"
         assert!(ui.font_size_sm > 0);
         assert!(ui.font_size_md > 0);
         assert!(ui.font_size_lg > ui.font_size_sm);
+    }
+
+    #[test]
+    fn contrast_ratio_black_white() {
+        let ratio = contrast_ratio(Color::BLACK, Color::WHITE);
+        assert!((ratio - 21.0).abs() < 0.1);
+    }
+
+    #[test]
+    fn contrast_ratio_same_color() {
+        let ratio = contrast_ratio(Color::rgb(128, 128, 128), Color::rgb(128, 128, 128));
+        assert!((ratio - 1.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn default_theme_passes_contrast() {
+        let skin = SkinTheme::default();
+        let warnings = skin.validate_contrast();
+        // Default theme (light text on dark bg) should pass.
+        assert!(
+            warnings.is_empty(),
+            "default theme has contrast warnings: {warnings:?}"
+        );
+    }
+
+    #[test]
+    fn low_contrast_theme_warns() {
+        let toml = r##"
+background = "#808080"
+text = "#909090"
+"##;
+        let skin: SkinTheme = toml::from_str(toml).unwrap();
+        let warnings = skin.validate_contrast();
+        assert!(!warnings.is_empty(), "should warn on low contrast");
+        assert!(warnings.iter().any(|w| w.pair.contains("text")));
     }
 
     #[test]

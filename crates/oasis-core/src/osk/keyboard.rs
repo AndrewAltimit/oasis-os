@@ -247,10 +247,10 @@ impl OskState {
             obj.y = self.config.y - 46; // Extra space for mode tabs.
             obj.w = (cols as u32) * self.config.cell_w + 8;
             obj.h = (rows as u32) * self.config.cell_h + 72;
-            obj.color = at.osk_key_bg;
+            obj.color = at.osk.key_bg;
             obj.border_radius = Some(at.terminal_border_radius);
             obj.stroke_width = Some(1);
-            obj.stroke_color = Some(at.separator_color);
+            obj.stroke_color = Some(at.bar.separator_color);
             obj.visible = self.active;
         }
 
@@ -264,7 +264,7 @@ impl OskState {
             obj.x = self.config.x;
             obj.y = self.config.y - 20;
             obj.font_size = ((self.config.cell_h / 3) as u16).clamp(8, 16);
-            obj.text_color = at.osk_key_text;
+            obj.text_color = at.osk.key_text;
             obj.w = 0;
             obj.h = 0;
             obj.visible = self.active;
@@ -280,14 +280,14 @@ impl OskState {
             obj.x = self.config.x;
             obj.y = self.config.y + (rows as i32) * self.config.cell_h as i32 + 4;
             obj.font_size = ((self.config.cell_h / 3) as u16).clamp(8, 16);
-            obj.text_color = at.osk_key_focus;
+            obj.text_color = at.osk.key_focus;
             obj.w = 0;
             obj.h = 0;
             obj.visible = self.active;
         }
 
         // Inactive key color: slightly lighter than the background.
-        let inactive_key = oasis_types::color::lighten(at.osk_key_bg, 0.08);
+        let inactive_key = oasis_types::color::lighten(at.osk.key_bg, 0.08);
 
         // Character grid cells.
         for (i, &ch) in chars.iter().enumerate() {
@@ -304,13 +304,13 @@ impl OskState {
                 obj.h = self.config.cell_h - 2;
                 obj.text = Some(ch.to_string());
                 obj.font_size = ((self.config.cell_h * 2 / 5) as u16).clamp(10, 18);
-                obj.text_color = at.osk_key_text;
+                obj.text_color = at.osk.key_text;
                 obj.visible = self.active;
 
                 if i == self.cursor {
-                    obj.color = at.osk_key_active;
+                    obj.color = at.osk.key_active;
                 } else if self.key_press_flash > 0 && i == self.key_press_index {
-                    obj.color = oasis_types::color::lighten(at.osk_key_active, 0.3);
+                    obj.color = oasis_types::color::lighten(at.osk.key_active, 0.3);
                 } else {
                     obj.color = inactive_key;
                 }
@@ -342,15 +342,15 @@ impl OskState {
                 let is_active = self.mode == mode;
                 if is_active {
                     let flash_boost = if self.mode_change_flash > 0 {
-                        oasis_types::color::lighten(at.osk_key_active, 0.2)
+                        oasis_types::color::lighten(at.osk.key_active, 0.2)
                     } else {
-                        at.osk_key_active
+                        at.osk.key_active
                     };
                     obj.color = flash_boost;
-                    obj.text_color = at.osk_key_text;
+                    obj.text_color = at.osk.key_text;
                 } else {
-                    obj.color = at.osk_key_bg;
-                    obj.text_color = at.osk_key_dim_text;
+                    obj.color = at.osk.key_bg;
+                    obj.text_color = at.osk.key_dim_text;
                 }
             }
         }
@@ -365,7 +365,7 @@ impl OskState {
             obj.x = self.config.x;
             obj.y = self.config.y + (rows as i32) * self.config.cell_h as i32 + 20;
             obj.font_size = ((self.config.cell_h / 4) as u16).clamp(8, 12);
-            obj.text_color = at.osk_key_dim_text;
+            obj.text_color = at.osk.key_dim_text;
             obj.w = 0;
             obj.h = 0;
             obj.visible = self.active;
@@ -766,7 +766,7 @@ mod tests {
         // ABC tab should have active color.
         let tab1 = sdi.get("osk_tab_1").unwrap();
         assert_eq!(tab1.text.as_deref(), Some("ABC"));
-        assert_eq!(tab1.color, at.osk_key_active);
+        assert_eq!(tab1.color, at.osk.key_active);
     }
 
     #[test]
@@ -780,7 +780,7 @@ mod tests {
         // 123 tab should have active color.
         let tab2 = sdi.get("osk_tab_2").unwrap();
         assert_eq!(tab2.text.as_deref(), Some("123"));
-        assert_eq!(tab2.color, at.osk_key_active);
+        assert_eq!(tab2.color, at.osk.key_active);
     }
 
     #[test]

@@ -189,7 +189,42 @@ impl SdlAudioBackend {
 
     /// Decode an entire MP3 buffer and queue all PCM at once (for static
     /// tracks loaded via `load_track`).
-    fn decode_and_queue_all(&mut self, mp3_data: &[u8]) -> Result<()> {
+    fn decode_and_queue_all(&mut self, audio_data: &[u8]) -> Result<()> {
+        // Try WAV first (cheap header check), then fall back to MP3.
+        if oasis_audio::wav::is_wav(audio_data) {
+            return self.decode_wav_and_queue(audio_data);
+        }
+        self.decode_mp3_and_queue(audio_data)
+    }
+
+    fn decode_wav_and_queue(&mut self, wav_data: &[u8]) -> Result<()> {
+        let wav = oasis_audio::wav::decode_wav(wav_data)
+            .ok_or_else(|| OasisError::Backend("invalid WAV data".into()))?;
+
+        if self.device.is_none() && self.audio_subsystem.is_some() {
+            self.open_device(wav.sample_rate as i32, wav.channels as u8)?;
+        }
+
+        self.sample_rate = wav.sample_rate as i32;
+        self.channels = wav.channels as usize;
+
+        let mut pending_pcm = wav.samples;
+        let vol = self.volume as i32;
+        for s in &mut pending_pcm {
+            *s = ((*s as i32 * vol) / 100) as i16;
+        }
+
+        if let Some(ref device) = self.device {
+            device
+                .queue_audio(&pending_pcm)
+                .map_err(OasisError::Backend)?;
+            self.samples_queued += pending_pcm.len() as u64;
+        }
+
+        Ok(())
+    }
+
+    fn decode_mp3_and_queue(&mut self, mp3_data: &[u8]) -> Result<()> {
         let mut decoder = rmp3::RawDecoder::new();
         let mut pcm_out = [0i16; 2304];
         let mut offset = 0;

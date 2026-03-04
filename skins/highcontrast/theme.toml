@@ -1,0 +1,83 @@
+# High Contrast Dark Accessibility Theme
+# Maximum contrast ratios, no gradients, large touch targets
+# WCAG AAA compliant: 21:1 contrast for text on background
+
+background = "#000000"
+primary = "#FFFF00"
+secondary = "#1A1A1A"
+accent = "#00FF00"
+text = "#FFFFFF"
+dim_text = "#CCCCCC"
+error = "#FF4444"
+border_radius = 0
+shadow_intensity = 0
+gradient_enabled = false
+reduced_motion = true
+
+[wm_theme]
+titlebar_height = 26
+border_width = 2
+titlebar_active = "#1A1A1A"
+titlebar_inactive = "#0D0D0D"
+titlebar_text_active = "#FFFF00"
+titlebar_text_inactive = "#CCCCCC"
+titlebar_gradient = false
+close_button_color = "#FF4444"
+close_button_hover = "#FF6666"
+minimize_button_color = "#FFFF00"
+maximize_button_color = "#FFFF00"
+frame_shadow_level = 0
+frame_border_radius = 0
+button_radius = 0
+
+[bar_overrides]
+statusbar_bg = "#1A1A1A"
+text_color = "#FFFFFF"
+text_shadow = false
+gradient_top = "#1A1A1A"
+gradient_bottom = "#1A1A1A"
+
+[icon_overrides]
+body_color = "#1A1A1A"
+icon_style = "card"
+cursor_style = "fill"
+
+[wallpaper]
+style = "solid"
+color_stops = ["#000000"]
+
+[geometry]
+tab_row_height = 0
+statusbar_height = 24
+bottombar_height = 26
+icon_width = 36
+icon_height = 40
+font_body = 15
+font_hint = 13
+font_heading = 18
+cursor_blink_rate = 15
+press_flash_duration = 0
+
+[app_overrides]
+app_bg = "#000000"
+text_color = "#FFFFFF"
+selection_accent_color = "#FFFF0060"
+
+[start_menu_overrides]
+panel_bg = "#1A1A1A"
+button_bg = "#FFFF00"
+button_text = "#000000"
+button_gradient = false
+panel_width = 220
+panel_border_radius = 0
+columns = 1
+item_row_height = 28
+
+[browser_overrides]
+chrome_bg = "#1A1A1A"
+url_bar_bg = "#000000"
+link_color = "#00FFFF"
+
+[scrollbar_overrides]
+track_color = "#1A1A1A"
+thumb_color = "#FFFF00"

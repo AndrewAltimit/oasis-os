@@ -1,0 +1,6 @@
+name = "highcontrast"
+version = "1.0"
+author = "OASIS_OS"
+description = "High contrast dark theme for accessibility: black background, white text, yellow accents"
+screen_width = 480
+screen_height = 272

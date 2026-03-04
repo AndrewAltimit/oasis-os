@@ -93,10 +93,11 @@ pub fn generate_from_config_with_phase(
     at: &crate::active_theme::ActiveTheme,
     phase: f32,
 ) -> Vec<u8> {
-    match at.wallpaper_style.as_str() {
+    match at.wallpaper.style.as_str() {
         "solid" => {
             let c = at
-                .wallpaper_stops
+                .wallpaper
+                .stops
                 .first()
                 .copied()
                 .unwrap_or(crate::backend::Color::BLACK);
@@ -120,10 +121,10 @@ pub fn generate_from_config_with_phase(
             generate_gradient_config(
                 w,
                 h,
-                &at.wallpaper_stops,
-                at.wallpaper_angle,
-                at.wallpaper_wave,
-                at.wallpaper_wave_intensity,
+                &at.wallpaper.stops,
+                at.wallpaper.angle,
+                at.wallpaper.wave,
+                at.wallpaper.wave_intensity,
                 phase,
             )
         },
@@ -148,12 +149,13 @@ fn generate_solid(w: u32, h: u32, c: crate::backend::Color) -> Vec<u8> {
 /// Solid background with 1px horizontal and vertical grid lines.
 fn generate_grid(w: u32, h: u32, at: &crate::active_theme::ActiveTheme) -> Vec<u8> {
     let bg = at
-        .wallpaper_stops
+        .wallpaper
+        .stops
         .first()
         .copied()
         .unwrap_or(crate::backend::Color::BLACK);
-    let gc = at.wallpaper_grid_color;
-    let spacing = at.wallpaper_grid_spacing.max(2);
+    let gc = at.wallpaper.grid_color;
+    let spacing = at.wallpaper.grid_spacing.max(2);
 
     let mut buf = generate_solid(w, h, bg);
     for y in 0..h {
@@ -172,7 +174,8 @@ fn generate_grid(w: u32, h: u32, at: &crate::active_theme::ActiveTheme) -> Vec<u
 /// Solid background with every-other-row darkened for a CRT scanline effect.
 fn generate_scanlines(w: u32, h: u32, at: &crate::active_theme::ActiveTheme) -> Vec<u8> {
     let bg = at
-        .wallpaper_stops
+        .wallpaper
+        .stops
         .first()
         .copied()
         .unwrap_or(crate::backend::Color::BLACK);
@@ -196,13 +199,13 @@ fn generate_noise(w: u32, h: u32, at: &crate::active_theme::ActiveTheme) -> Vec<
     let mut buf = generate_gradient_config(
         w,
         h,
-        &at.wallpaper_stops,
-        at.wallpaper_angle,
-        at.wallpaper_wave,
-        at.wallpaper_wave_intensity,
+        &at.wallpaper.stops,
+        at.wallpaper.angle,
+        at.wallpaper.wave,
+        at.wallpaper.wave_intensity,
         0.0,
     );
-    let intensity = at.wallpaper_noise_intensity.clamp(0.0, 1.0);
+    let intensity = at.wallpaper.noise_intensity.clamp(0.0, 1.0);
     let max_offset = (intensity * 40.0) as i16;
     if max_offset == 0 {
         return buf;
@@ -224,12 +227,13 @@ fn generate_noise(w: u32, h: u32, at: &crate::active_theme::ActiveTheme) -> Vec<
 /// Solid background with small filled circles at grid intersections.
 fn generate_dots(w: u32, h: u32, at: &crate::active_theme::ActiveTheme) -> Vec<u8> {
     let bg = at
-        .wallpaper_stops
+        .wallpaper
+        .stops
         .first()
         .copied()
         .unwrap_or(crate::backend::Color::BLACK);
-    let gc = at.wallpaper_grid_color;
-    let spacing = at.wallpaper_grid_spacing.max(4);
+    let gc = at.wallpaper.grid_color;
+    let spacing = at.wallpaper.grid_spacing.max(4);
     let radius = (spacing / 6).max(1);
     let r2 = (radius * radius) as i32;
 
@@ -269,17 +273,19 @@ fn generate_dots(w: u32, h: u32, at: &crate::active_theme::ActiveTheme) -> Vec<u
 /// band width. Colors from first two `wallpaper_stops`.
 fn generate_stripes(w: u32, h: u32, at: &crate::active_theme::ActiveTheme) -> Vec<u8> {
     let c0 = at
-        .wallpaper_stops
+        .wallpaper
+        .stops
         .first()
         .copied()
         .unwrap_or(crate::backend::Color::BLACK);
     let c1 = at
-        .wallpaper_stops
+        .wallpaper
+        .stops
         .get(1)
         .copied()
         .unwrap_or(crate::backend::Color::rgb(40, 40, 40));
-    let spacing = at.wallpaper_grid_spacing.max(2) as f32;
-    let angle_rad = at.wallpaper_angle.to_radians();
+    let spacing = at.wallpaper.grid_spacing.max(2) as f32;
+    let angle_rad = at.wallpaper.angle.to_radians();
     let cos_a = angle_rad.cos();
     let sin_a = angle_rad.sin();
 
@@ -304,16 +310,18 @@ fn generate_stripes(w: u32, h: u32, at: &crate::active_theme::ActiveTheme) -> Ve
 /// Uses first two `wallpaper_stops` and `wallpaper_grid_spacing` for cell size.
 fn generate_checkerboard(w: u32, h: u32, at: &crate::active_theme::ActiveTheme) -> Vec<u8> {
     let c0 = at
-        .wallpaper_stops
+        .wallpaper
+        .stops
         .first()
         .copied()
         .unwrap_or(crate::backend::Color::BLACK);
     let c1 = at
-        .wallpaper_stops
+        .wallpaper
+        .stops
         .get(1)
         .copied()
         .unwrap_or(crate::backend::Color::rgb(40, 40, 40));
-    let spacing = at.wallpaper_grid_spacing.max(2);
+    let spacing = at.wallpaper.grid_spacing.max(2);
 
     let mut buf = vec![0u8; (w * h * 4) as usize];
     for y in 0..h {
@@ -470,7 +478,7 @@ mod tests {
 
     fn at_with_style(style: &str) -> ActiveTheme {
         let mut at = ActiveTheme::default();
-        at.wallpaper_style = style.to_string();
+        at.wallpaper.style = style.to_string();
         at
     }
 
@@ -542,8 +550,8 @@ mod tests {
     #[test]
     fn checkerboard_alternates() {
         let mut at = at_with_style("checkerboard");
-        at.wallpaper_grid_spacing = 16;
-        at.wallpaper_stops = vec![
+        at.wallpaper.grid_spacing = 16;
+        at.wallpaper.stops = vec![
             crate::backend::Color::rgb(255, 0, 0),
             crate::backend::Color::rgb(0, 0, 255),
         ];

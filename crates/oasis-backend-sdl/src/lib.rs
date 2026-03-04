@@ -782,6 +782,10 @@ impl SdiBackend for SdlBackend {
         Ok(())
     }
 
+    fn viewport_size(&self) -> (u32, u32) {
+        (self.viewport_w, self.viewport_h)
+    }
+
     fn dim_screen(&mut self, alpha: u8) -> Result<()> {
         self.fill_rect(
             0,
