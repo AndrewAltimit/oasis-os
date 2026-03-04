@@ -995,12 +995,15 @@ unsafe fn resolve_nid_any(
     nid: u32,
 ) -> Option<*mut u8> {
     // Fast path: sctrlHENFindFunction (kernel modules).
+    // SAFETY: resolve_nid calls sctrlHENFindFunction with valid module/library names.
     if let Some(ptr) = unsafe { resolve_nid(modules, nid) } {
         return Some(ptr);
     }
     // Slow path: walk exports from discovered text_addr.
+    // SAFETY: Volatile read of text_addr_ptr; caller ensures it points to valid memory.
     let text_addr = unsafe { core::ptr::read_volatile(text_addr_ptr) };
     if text_addr != 0 {
+        // SAFETY: walk_exports_from_text reads module export tables at text_addr.
         if let Some(ptr) = unsafe { walk_exports_from_text(text_addr, nid) } {
             return Some(ptr);
         }
@@ -1817,6 +1820,7 @@ unsafe fn scan_playlist() {
         core::ptr::write_volatile(&raw mut PLAYLIST_LEN, 0);
         scan_dir_recursive(&config.music_dir, config.music_dir_len, 0);
     }
+    // SAFETY: Volatile read of PLAYLIST_LEN after scan_dir_recursive populated it.
     let count = unsafe { core::ptr::read_volatile(&raw const PLAYLIST_LEN) };
     let mut buf = [0u8; 48];
     let mut p = copy_bytes(&mut buf, 0, b"[OASIS] found ");
@@ -2466,10 +2470,12 @@ unsafe fn play_track_mp3(path: &[u8], channel: i32) -> i32 {
             }
         }
         if AUDIO_STATE.load(Ordering::Relaxed) != 1 {
+            // SAFETY: PSP kernel syscall to sleep thread while paused.
             unsafe { psp::sys::sceKernelDelayThread(50_000) };
             continue;
         }
 
+        // SAFETY: Volatile read of resolved sceMp3CheckStreamDataNeeded fn pointer.
         let needs_data = unsafe {
             match core::ptr::read_volatile(&raw const MP3_CHECK_NEED_DATA_FN) {
                 Some(f) => f(handle),
@@ -2477,6 +2483,7 @@ unsafe fn play_track_mp3(path: &[u8], channel: i32) -> i32 {
             }
         };
         if needs_data > 0 {
+            // SAFETY: fill_stream_data reads file data into MP3 stream buffer.
             let filled = unsafe { fill_stream_data(handle, fd) };
             if filled <= 0 {
                 break;
@@ -2484,6 +2491,8 @@ unsafe fn play_track_mp3(path: &[u8], channel: i32) -> i32 {
         }
 
         let mut pcm_out: *const i16 = core::ptr::null();
+        // SAFETY: Volatile read of resolved sceMp3Decode fn pointer;
+        // calling with valid handle, pcm_out receives decoded PCM pointer.
         let decoded = unsafe {
             match core::ptr::read_volatile(&raw const MP3_DECODE_FN) {
                 Some(f) => f(handle, &mut pcm_out),
@@ -2495,7 +2504,10 @@ unsafe fn play_track_mp3(path: &[u8], channel: i32) -> i32 {
         }
 
         let vol = (AUDIO_VOLUME.load(Ordering::Relaxed) as i32 * 0x8000) / 255;
+        // SAFETY: Volatile read of USE_SRC_OUTPUT flag; set during init.
         let use_src = unsafe { core::ptr::read_volatile(&raw const USE_SRC_OUTPUT) };
+        // SAFETY: Volatile reads of resolved audio output fn pointers;
+        // calling with valid channel, volume, and PCM buffer from decoder.
         unsafe {
             if use_src {
                 if let Some(f) = core::ptr::read_volatile(&raw const AUDIO_SRC_OUTPUT_FN) {
@@ -2520,6 +2532,7 @@ unsafe fn play_track_mp3(path: &[u8], channel: i32) -> i32 {
         }
     }
 
+    // SAFETY: Releasing MP3 handle and closing file descriptor on cleanup.
     unsafe {
         if let Some(f) = core::ptr::read_volatile(&raw const MP3_RELEASE_HANDLE_FN) {
             f(handle);
@@ -2534,6 +2547,8 @@ unsafe fn fill_stream_data(handle: i32, fd: psp::sys::SceUid) -> i32 {
     let mut to_write: i32 = 0;
     let mut src_pos: i32 = 0;
 
+    // SAFETY: Volatile reads of resolved sceMp3 fn pointers (GetInfoToAddStreamData,
+    // NotifyAddStreamData); calling with valid handle. sceIoLseek/sceIoRead with valid fd.
     unsafe {
         let get_info = match core::ptr::read_volatile(&raw const MP3_GET_INFO_TO_ADD_FN) {
             Some(f) => f,
@@ -2564,28 +2579,34 @@ unsafe fn fill_stream_data(handle: i32, fd: psp::sys::SceUid) -> i32 {
 // ---------------------------------------------------------------------------
 
 unsafe fn play_track_codec(path: &[u8], channel: i32) -> i32 {
+    // SAFETY: sceIoOpen with valid null-terminated path and read-only flag.
     let fd = unsafe { psp::sys::sceIoOpen(path.as_ptr(), psp::sys::IoOpenFlags::RD_ONLY, 0) };
     if fd < psp::sys::SceUid(0) {
         return -1;
     }
 
+    // SAFETY: sceIoLseek with valid fd to determine file size, then reset to start.
     let file_size = unsafe { psp::sys::sceIoLseek(fd, 0, psp::sys::IoWhence::End) } as usize;
     unsafe { psp::sys::sceIoLseek(fd, 0, psp::sys::IoWhence::Set) };
     if file_size == 0 {
+        // SAFETY: sceIoClose with valid fd.
         unsafe { psp::sys::sceIoClose(fd) };
         return -1;
     }
 
     // Use user-memory buffers (allocated in audio_thread_entry).
+    // SAFETY: Volatile reads of UMEM_* pointers; set during init, read-only after.
     let codec = unsafe { core::ptr::read_volatile(&raw const UMEM_CODEC) };
     let pcm_buf = unsafe { core::ptr::read_volatile(&raw const UMEM_PCM) };
     let read_buf = unsafe { core::ptr::read_volatile(&raw const UMEM_READ) };
     if codec.is_null() || pcm_buf.is_null() || read_buf.is_null() {
         crate::debug_log(b"[OASIS] codec bufs null");
+        // SAFETY: sceIoClose with valid fd.
         unsafe { psp::sys::sceIoClose(fd) };
         return -1;
     }
-    // Zero the codec buffer.
+    // SAFETY: Zeroing codec buffer via pointer arithmetic; codec points to
+    // CODEC_BUF_WORDS words of allocated user memory.
     unsafe {
         let mut i = 0;
         while i < CODEC_BUF_WORDS {
@@ -2595,6 +2616,9 @@ unsafe fn play_track_codec(path: &[u8], channel: i32) -> i32 {
     }
 
     let mut edram_allocated = false;
+    // SAFETY: Volatile reads of resolved sceAudiocodec fn pointers
+    // (CheckNeedMem, GetEDRAM, Init); calling with valid codec buffer.
+    // sceIoClose on error paths.
     unsafe {
         if let Some(f) = core::ptr::read_volatile(&raw const CODEC_CHECK_NEED_MEM_FN) {
             f(codec, CODEC_TYPE_MP3);
@@ -2638,8 +2662,10 @@ unsafe fn play_track_codec(path: &[u8], channel: i32) -> i32 {
     let mut buf_valid: usize;
     let mut buf_pos: usize = 0;
 
+    // SAFETY: sceIoRead with valid fd into allocated read_buf.
     let initial_read = unsafe { psp::sys::sceIoRead(fd, read_buf as *mut _, READ_BUF_SIZE as u32) };
     if initial_read <= 0 {
+        // SAFETY: Releasing EDRAM and closing fd on error path.
         unsafe {
             if edram_allocated {
                 if let Some(f) = core::ptr::read_volatile(&raw const CODEC_RELEASE_EDRAM_FN) {
@@ -2654,12 +2680,15 @@ unsafe fn play_track_codec(path: &[u8], channel: i32) -> i32 {
     file_pos = buf_valid;
 
     // Skip ID3v2 tag.
+    // SAFETY: read_buf points to buf_valid bytes of data read from the file.
     let slice = unsafe { core::slice::from_raw_parts(read_buf, buf_valid) };
     let id3_skip = skip_id3v2(slice);
     if id3_skip > 0 && id3_skip < buf_valid {
         buf_pos = id3_skip;
     }
 
+    // SAFETY: Volatile read of resolved sceAudiocodecDecode fn pointer;
+    // releasing EDRAM and closing fd on error path.
     let decode_fn = unsafe {
         match core::ptr::read_volatile(&raw const CODEC_DECODE_FN) {
             Some(f) => f,
@@ -2696,6 +2725,7 @@ unsafe fn play_track_codec(path: &[u8], channel: i32) -> i32 {
             }
         }
         if AUDIO_STATE.load(Ordering::Relaxed) != 1 {
+            // SAFETY: PSP kernel syscall to sleep thread while paused.
             unsafe { psp::sys::sceKernelDelayThread(50_000) };
             continue;
         }
@@ -2706,6 +2736,9 @@ unsafe fn play_track_codec(path: &[u8], channel: i32) -> i32 {
         if buf_pos > READ_BUF_SIZE / 2 && file_pos < file_size {
             let remaining = buf_valid - buf_pos;
             if remaining > 0 {
+                // SAFETY: Manual byte copy within allocated read_buf;
+                // source [buf_pos..buf_pos+remaining] and dest [0..remaining]
+                // are within bounds as buf_pos < buf_valid <= READ_BUF_SIZE.
                 unsafe {
                     let mut i = 0;
                     while i < remaining {
@@ -2721,6 +2754,8 @@ unsafe fn play_track_codec(path: &[u8], channel: i32) -> i32 {
         if buf_valid < READ_BUF_SIZE && file_pos < file_size {
             let room = READ_BUF_SIZE - buf_valid;
             let chunk = if room > 4096 { 4096 } else { room };
+            // SAFETY: sceIoRead with valid fd into read_buf at offset buf_valid;
+            // buf_valid + chunk <= READ_BUF_SIZE.
             let read =
                 unsafe { psp::sys::sceIoRead(fd, read_buf.add(buf_valid) as *mut _, chunk as u32) };
             if read > 0 {
@@ -2733,6 +2768,7 @@ unsafe fn play_track_codec(path: &[u8], channel: i32) -> i32 {
             break;
         }
 
+        // SAFETY: read_buf points to buf_valid bytes of valid data.
         let slice = unsafe { core::slice::from_raw_parts(read_buf, buf_valid) };
         let sync_pos = match find_mp3_sync(slice, buf_pos) {
             Some(pos) => pos,
@@ -2744,6 +2780,9 @@ unsafe fn play_track_codec(path: &[u8], channel: i32) -> i32 {
         }
 
         let avail = buf_valid - buf_pos;
+        // SAFETY: Setting codec buffer fields via pointer arithmetic;
+        // codec points to CODEC_BUF_WORDS words of allocated user memory.
+        // Indices 6-10 are within the sceAudiocodec context structure.
         unsafe {
             *codec.add(6) = read_buf.add(buf_pos) as u32;
             *codec.add(7) = avail as u32;
@@ -2752,6 +2791,7 @@ unsafe fn play_track_codec(path: &[u8], channel: i32) -> i32 {
             *codec.add(10) = avail as u32;
         }
 
+        // SAFETY: Calling resolved sceAudiocodecDecode with valid codec buffer.
         let ret = unsafe { decode_fn(codec, CODEC_TYPE_MP3) };
         if ret < 0 {
             // Limit consecutive failures to avoid infinite spin.
@@ -2764,6 +2804,7 @@ unsafe fn play_track_codec(path: &[u8], channel: i32) -> i32 {
             continue;
         }
 
+        // SAFETY: Reading consumed byte count from codec buffer field 7.
         let consumed = unsafe { *codec.add(7) } as usize;
         if consumed == 0 {
             zero_consumed += 1;
@@ -2778,7 +2819,10 @@ unsafe fn play_track_codec(path: &[u8], channel: i32) -> i32 {
         buf_pos += consumed;
 
         let vol = (AUDIO_VOLUME.load(Ordering::Relaxed) as i32 * 0x8000) / 255;
+        // SAFETY: Volatile read of USE_SRC_OUTPUT flag; set during init.
         let use_src = unsafe { core::ptr::read_volatile(&raw const USE_SRC_OUTPUT) };
+        // SAFETY: Volatile reads of resolved audio output fn pointers;
+        // calling with valid channel, volume, and decoded PCM buffer.
         unsafe {
             if use_src {
                 // SRC output: sceAudioSRCOutputBlocking(volume, buffer)
@@ -2806,6 +2850,7 @@ unsafe fn play_track_codec(path: &[u8], channel: i32) -> i32 {
         frame_count += 1;
     }
 
+    // SAFETY: Releasing EDRAM allocation and closing file descriptor on cleanup.
     unsafe {
         if edram_allocated {
             if let Some(f) = core::ptr::read_volatile(&raw const CODEC_RELEASE_EDRAM_FN) {
@@ -2838,6 +2883,7 @@ unsafe fn play_radio_stream(station_idx: u8, channel: i32) -> i32 {
     let station = &RADIO_STATIONS[station_idx as usize];
 
     // Set track name to station name.
+    // SAFETY: Writing to TRACK_NAME static buffer; called from audio thread only.
     unsafe {
         let len = station.name.len().min(47);
         let mut j = 0;
@@ -2852,6 +2898,7 @@ unsafe fn play_radio_stream(station_idx: u8, channel: i32) -> i32 {
     }
 
     // DNS resolve.
+    // SAFETY: resolve_hostname_raw calls resolved sceNetResolver fn pointers.
     let ip = match unsafe { resolve_hostname_raw(station.host.as_ptr()) } {
         Some(ip) => ip,
         None => {
@@ -2873,27 +2920,32 @@ unsafe fn play_radio_stream(station_idx: u8, channel: i32) -> i32 {
     }
 
     // TCP socket + connect.
+    // SAFETY: Volatile reads of resolved sceNetInet fn pointers (socket, connect, recv, close).
     let socket_fn = unsafe {
         match core::ptr::read_volatile(&raw const INET_SOCKET_FN) {
             Some(f) => f,
             None => return -1,
         }
     };
+    // SAFETY: Volatile read of resolved sceNetInetConnect fn pointer.
     let connect_fn = unsafe {
         match core::ptr::read_volatile(&raw const INET_CONNECT_FN) {
             Some(f) => f,
             None => return -1,
         }
     };
+    // SAFETY: Volatile read of resolved sceNetInetRecv fn pointer.
     let recv_fn = unsafe {
         match core::ptr::read_volatile(&raw const INET_RECV_FN) {
             Some(f) => f,
             None => return -1,
         }
     };
+    // SAFETY: Volatile read of resolved sceNetInetClose fn pointer.
     let close_fn = unsafe { core::ptr::read_volatile(&raw const INET_CLOSE_FN) };
 
     // AF_INET=2, SOCK_STREAM=1
+    // SAFETY: Calling resolved sceNetInetSocket to create a TCP socket.
     let sock = unsafe { socket_fn(2, 1, 0) };
     if sock < 0 {
         crate::debug_log(b"[OASIS] radio: socket failed");
@@ -2901,16 +2953,19 @@ unsafe fn play_radio_stream(station_idx: u8, channel: i32) -> i32 {
     }
 
     let sa = make_sockaddr_in(ip, station.port);
+    // SAFETY: Calling resolved sceNetInetConnect with valid socket and sockaddr.
     let ret = unsafe { connect_fn(sock, sa.as_ptr(), 16) };
     if ret < 0 {
         crate::debug_log(b"[OASIS] radio: connect failed");
         if let Some(f) = close_fn {
+            // SAFETY: Closing socket on error path.
             unsafe { f(sock) };
         }
         return -1;
     }
 
     // Build HTTP GET request with ICY metadata header.
+    // SAFETY: Accessing HTTP_BUF static; called from single audio thread only.
     let http_len = unsafe {
         let buf = &raw mut HTTP_BUF;
         let b = &mut *buf;
@@ -2928,9 +2983,11 @@ unsafe fn play_radio_stream(station_idx: u8, channel: i32) -> i32 {
         p
     };
 
+    // SAFETY: send_all sends data over valid socket; HTTP_BUF accessed from audio thread.
     if !unsafe { send_all(sock, &(&(*(&raw const HTTP_BUF)))[..http_len]) } {
         crate::debug_log(b"[OASIS] radio: send request failed");
         if let Some(f) = close_fn {
+            // SAFETY: Closing socket on error path.
             unsafe { f(sock) };
         }
         return -1;
@@ -2939,6 +2996,8 @@ unsafe fn play_radio_stream(station_idx: u8, channel: i32) -> i32 {
     // Read response headers.
     let mut header_len: usize = 0;
     let mut header_end: usize = 0;
+    // SAFETY: Calling resolved recv fn with valid socket; writing into RECV_BUF
+    // static accessed from audio thread only. Scanning for \r\n\r\n header end.
     unsafe {
         let recv_buf = &raw mut RECV_BUF;
         loop {
@@ -2979,12 +3038,14 @@ unsafe fn play_radio_stream(station_idx: u8, channel: i32) -> i32 {
     if header_end == 0 {
         crate::debug_log(b"[OASIS] radio: no header end");
         if let Some(f) = close_fn {
+            // SAFETY: Closing socket on error path.
             unsafe { f(sock) };
         }
         return -1;
     }
 
     // Parse icy-metaint from headers.
+    // SAFETY: Accessing RECV_BUF static with header_end bytes of valid header data.
     let metaint = unsafe { parse_icy_metaint_raw(&(&(*(&raw const RECV_BUF)))[..header_end]) };
     let metaint = metaint.unwrap_or(0);
     {
@@ -2995,18 +3056,21 @@ unsafe fn play_radio_stream(station_idx: u8, channel: i32) -> i32 {
     }
 
     // Initialize codec (reuse user-memory buffers).
+    // SAFETY: Volatile reads of UMEM_* pointers; set during init, read-only after.
     let codec = unsafe { core::ptr::read_volatile(&raw const UMEM_CODEC) };
     let pcm_buf = unsafe { core::ptr::read_volatile(&raw const UMEM_PCM) };
     let read_buf = unsafe { core::ptr::read_volatile(&raw const UMEM_READ) };
     if codec.is_null() || pcm_buf.is_null() || read_buf.is_null() {
         crate::debug_log(b"[OASIS] radio: codec bufs null");
         if let Some(f) = close_fn {
+            // SAFETY: Closing socket on error path.
             unsafe { f(sock) };
         }
         return -1;
     }
 
-    // Zero the codec buffer.
+    // SAFETY: Zeroing codec buffer via pointer arithmetic; codec points to
+    // CODEC_BUF_WORDS words of allocated user memory.
     unsafe {
         let mut i = 0;
         while i < CODEC_BUF_WORDS {
@@ -3016,6 +3080,9 @@ unsafe fn play_radio_stream(station_idx: u8, channel: i32) -> i32 {
     }
 
     let mut edram_allocated = false;
+    // SAFETY: Volatile reads of resolved sceAudiocodec fn pointers
+    // (CheckNeedMem, GetEDRAM, Init); calling with valid codec buffer.
+    // Closing socket on error paths.
     unsafe {
         if let Some(f) = core::ptr::read_volatile(&raw const CODEC_CHECK_NEED_MEM_FN) {
             f(codec, CODEC_TYPE_MP3);
@@ -3052,6 +3119,8 @@ unsafe fn play_radio_stream(station_idx: u8, channel: i32) -> i32 {
         }
     }
 
+    // SAFETY: Volatile read of resolved sceAudiocodecDecode fn pointer;
+    // releasing EDRAM and closing socket on error path.
     let decode_fn = unsafe {
         match core::ptr::read_volatile(&raw const CODEC_DECODE_FN) {
             Some(f) => f,
@@ -3079,6 +3148,8 @@ unsafe fn play_radio_stream(station_idx: u8, channel: i32) -> i32 {
     // Seed read_buf with any leftover data after headers.
     let mut buf_valid: usize = 0;
     let mut buf_pos: usize = 0;
+    // SAFETY: Copying leftover header data from RECV_BUF into read_buf via
+    // ICY demuxer or raw byte copy. Both buffers are allocated user memory.
     unsafe {
         let leftover = header_len - header_end;
         if leftover > 0 {
@@ -3125,6 +3196,7 @@ unsafe fn play_radio_stream(station_idx: u8, channel: i32) -> i32 {
             }
         }
         if AUDIO_STATE.load(Ordering::Relaxed) != 1 {
+            // SAFETY: PSP kernel syscall to sleep thread while paused.
             unsafe { psp::sys::sceKernelDelayThread(50_000) };
             continue;
         }
@@ -3133,6 +3205,8 @@ unsafe fn play_radio_stream(station_idx: u8, channel: i32) -> i32 {
         if buf_pos > READ_BUF_SIZE / 2 {
             let remaining = buf_valid - buf_pos;
             if remaining > 0 {
+                // SAFETY: Manual byte copy within allocated read_buf;
+                // source and dest ranges are within bounds.
                 unsafe {
                     let mut i = 0;
                     while i < remaining {
@@ -3147,6 +3221,7 @@ unsafe fn play_radio_stream(station_idx: u8, channel: i32) -> i32 {
 
         // Fill buffer from network.
         while buf_valid < READ_BUF_SIZE - 4096 {
+            // SAFETY: Calling resolved recv fn with valid socket into RECV_BUF static.
             let n = unsafe { recv_fn(sock, (*(&raw mut RECV_BUF)).as_mut_ptr(), 4096, 0) };
             if n <= 0 {
                 if n == 0 {
@@ -3154,10 +3229,13 @@ unsafe fn play_radio_stream(station_idx: u8, channel: i32) -> i32 {
                 }
                 break;
             }
+            // SAFETY: Creating slice from RECV_BUF with n bytes of valid recv data.
             let recv_data = unsafe {
                 core::slice::from_raw_parts((*(&raw const RECV_BUF)).as_ptr(), n as usize)
             };
             if let Some(ref mut d) = demuxer {
+                // SAFETY: Creating mutable slice from read_buf at offset buf_valid;
+                // remaining capacity is READ_BUF_SIZE - buf_valid.
                 let out = unsafe {
                     core::slice::from_raw_parts_mut(
                         read_buf.add(buf_valid),
@@ -3168,6 +3246,8 @@ unsafe fn play_radio_stream(station_idx: u8, channel: i32) -> i32 {
                 buf_valid += written;
             } else {
                 let copy = (n as usize).min(READ_BUF_SIZE - buf_valid);
+                // SAFETY: Copying recv_data bytes into read_buf at buf_valid offset;
+                // copy is bounded by remaining buffer capacity.
                 unsafe {
                     let mut j = 0;
                     while j < copy {
@@ -3188,11 +3268,13 @@ unsafe fn play_radio_stream(station_idx: u8, channel: i32) -> i32 {
                 result = -1;
                 break;
             }
+            // SAFETY: PSP kernel syscall to sleep thread while waiting for data.
             unsafe { psp::sys::sceKernelDelayThread(10_000) };
             continue;
         }
 
         // Find MP3 sync and decode.
+        // SAFETY: read_buf points to buf_valid bytes of valid data.
         let slice = unsafe { core::slice::from_raw_parts(read_buf, buf_valid) };
         let sync_pos = match find_mp3_sync(slice, buf_pos) {
             Some(pos) => pos,
@@ -3207,6 +3289,8 @@ unsafe fn play_radio_stream(station_idx: u8, channel: i32) -> i32 {
         }
 
         let avail = buf_valid - buf_pos;
+        // SAFETY: Setting codec buffer fields via pointer arithmetic;
+        // codec points to CODEC_BUF_WORDS words of allocated user memory.
         unsafe {
             *codec.add(6) = read_buf.add(buf_pos) as u32;
             *codec.add(7) = avail as u32;
@@ -3215,6 +3299,7 @@ unsafe fn play_radio_stream(station_idx: u8, channel: i32) -> i32 {
             *codec.add(10) = avail as u32;
         }
 
+        // SAFETY: Calling resolved sceAudiocodecDecode with valid codec buffer.
         let ret = unsafe { decode_fn(codec, CODEC_TYPE_MP3) };
         if ret < 0 {
             frame_count += 1;
@@ -3226,6 +3311,7 @@ unsafe fn play_radio_stream(station_idx: u8, channel: i32) -> i32 {
             continue;
         }
 
+        // SAFETY: Reading consumed byte count from codec buffer field 7.
         let consumed = unsafe { *codec.add(7) } as usize;
         if consumed == 0 {
             zero_consumed += 1;
@@ -3240,7 +3326,10 @@ unsafe fn play_radio_stream(station_idx: u8, channel: i32) -> i32 {
 
         // Output decoded audio.
         let vol = (AUDIO_VOLUME.load(Ordering::Relaxed) as i32 * 0x8000) / 255;
+        // SAFETY: Volatile read of USE_SRC_OUTPUT flag; set during init.
         let use_src = unsafe { core::ptr::read_volatile(&raw const USE_SRC_OUTPUT) };
+        // SAFETY: Volatile reads of resolved audio output fn pointers;
+        // calling with valid channel, volume, and decoded PCM buffer.
         unsafe {
             if use_src {
                 if let Some(f) = core::ptr::read_volatile(&raw const AUDIO_SRC_OUTPUT_FN) {
@@ -3267,6 +3356,7 @@ unsafe fn play_radio_stream(station_idx: u8, channel: i32) -> i32 {
     }
 
     // Cleanup.
+    // SAFETY: Releasing EDRAM allocation and closing socket on cleanup.
     unsafe {
         if edram_allocated {
             if let Some(f) = core::ptr::read_volatile(&raw const CODEC_RELEASE_EDRAM_FN) {
@@ -3349,6 +3439,9 @@ fn find_mp3_sync(data: &[u8], start: usize) -> Option<usize> {
 pub fn start_audio_thread() {
     crate::debug_log(b"[OASIS] starting audio thread...");
 
+    // SAFETY: Creating and starting a kernel thread for audio playback.
+    // sceKernelCreateThread with valid name, entry point, and stack size.
+    // sceKernelStartThread with valid thread ID returned from create.
     unsafe {
         let thid = psp::sys::sceKernelCreateThread(
             b"OasisAudio\0".as_ptr(),
