@@ -14,32 +14,31 @@ pub mod renderer;
 pub mod tv_catalog;
 pub mod video;
 
+mod input_dispatch;
+mod vfs_content;
+
 use wasm_bindgen::prelude::*;
 use web_sys::HtmlCanvasElement;
 
 use oasis_core::active_theme::ActiveTheme;
-use oasis_core::apps::{AppAction, AppRunner};
+use oasis_core::apps::AppRunner;
 use oasis_core::backend::{AudioBackend, Color, InputBackend, SdiCore, TextureId};
 use oasis_core::bottombar::{BottomBar, MediaTab};
 use oasis_core::browser::{BrowserConfig, BrowserWidget};
 use oasis_core::cursor::{self, CursorState};
 use oasis_core::dashboard::{AppEntry, DashboardConfig, DashboardState, discover_apps};
-use oasis_core::input::{Button, InputEvent, Trigger};
-use oasis_core::osk::{OskConfig, OskState};
+use oasis_core::osk::OskState;
 use oasis_core::sdi::SdiRegistry;
 use oasis_core::skin::Skin;
 use oasis_core::startmenu::{StartMenuAction, StartMenuState};
 use oasis_core::statusbar::StatusBar;
-use oasis_core::terminal::{
-    CommandOutput, CommandRegistry, Environment, populate_man_pages, populate_motd,
-    populate_profile, register_builtins,
-};
+use oasis_core::terminal::{CommandOutput, CommandRegistry, Environment, register_builtins};
 use oasis_core::terminal_sdi;
 use oasis_core::toast::ToastManager;
 use oasis_core::transition::{self, TransitionState};
 use oasis_core::vfs::{MemoryVfs, Vfs};
 use oasis_core::wallpaper;
-use oasis_core::wm::manager::{WindowManager, WmEvent};
+use oasis_core::wm::manager::WindowManager;
 use oasis_core::wm::window::{WindowConfig, WindowType};
 
 use audio::WasmAudioBackend;
@@ -198,7 +197,7 @@ impl OasisWasm {
 
         // VFS with demo content.
         let mut vfs = MemoryVfs::new();
-        populate_wasm_vfs(&mut vfs);
+        vfs_content::populate_wasm_vfs(&mut vfs);
 
         let active_theme = ActiveTheme::from_skin(&skin.theme)
             .with_screen_size(width, height)
@@ -343,13 +342,13 @@ impl OasisWasm {
         {
             let mut pending = None;
             if let Some(ref mut runner) = self.app_runner
-                && !is_tv_tune_request_wasm(runner)
+                && !vfs_content::is_tv_tune_request_wasm(runner)
             {
                 pending = runner.take_pending_request();
             }
             if pending.is_none() {
                 for (_, runner) in &mut self.open_runners {
-                    if is_tv_tune_request_wasm(runner) {
+                    if vfs_content::is_tv_tune_request_wasm(runner) {
                         continue;
                     }
                     if let Some(req) = runner.take_pending_request() {
@@ -488,8 +487,10 @@ impl OasisWasm {
                 let fetcher = self.pending_tv_catalog.take().unwrap();
                 match fetcher.take_results() {
                     Ok(catalogs) => {
-                        let runner =
-                            find_tv_guide_runner_wasm(&mut self.app_runner, &mut self.open_runners);
+                        let runner = vfs_content::find_tv_guide_runner_wasm(
+                            &mut self.app_runner,
+                            &mut self.open_runners,
+                        );
                         if let Some(runner) = runner {
                             if let Some(guide) = runner.tv_guide_state() {
                                 guide.fetch_in_progress = false;
@@ -512,8 +513,10 @@ impl OasisWasm {
                     },
                     Err(e) => {
                         console_log!("TV catalog fetch failed: {e}");
-                        let runner =
-                            find_tv_guide_runner_wasm(&mut self.app_runner, &mut self.open_runners);
+                        let runner = vfs_content::find_tv_guide_runner_wasm(
+                            &mut self.app_runner,
+                            &mut self.open_runners,
+                        );
                         if let Some(runner) = runner {
                             if let Some(guide) = runner.tv_guide_state() {
                                 guide.fetch_in_progress = false;
@@ -527,8 +530,10 @@ impl OasisWasm {
 
             // Start TV catalog fetch if a TV Guide app needs it.
             if self.pending_tv_catalog.is_none() {
-                let runner =
-                    find_tv_guide_runner_wasm(&mut self.app_runner, &mut self.open_runners);
+                let runner = vfs_content::find_tv_guide_runner_wasm(
+                    &mut self.app_runner,
+                    &mut self.open_runners,
+                );
                 if let Some(runner) = runner
                     && let Some(guide) = runner.tv_guide_state()
                     && !guide.fetch_attempted
@@ -543,8 +548,10 @@ impl OasisWasm {
 
             // Handle TV Guide tune requests via VFS IPC.
             {
-                let runner =
-                    find_tv_guide_runner_wasm(&mut self.app_runner, &mut self.open_runners);
+                let runner = vfs_content::find_tv_guide_runner_wasm(
+                    &mut self.app_runner,
+                    &mut self.open_runners,
+                );
                 if let Some(runner) = runner
                     && let Some((path, data)) = runner.take_pending_request()
                 {
@@ -563,7 +570,7 @@ impl OasisWasm {
                                 &url[..url.len().min(80)],
                                 seek_secs,
                             );
-                            let (_, _, pw, ph) = tv_preview_rect(&self.active_theme);
+                            let (_, _, pw, ph) = vfs_content::tv_preview_rect(&self.active_theme);
                             let tex_id =
                                 self.video_player
                                     .start(url, seek_secs, pw, ph, &mut self.backend);
@@ -584,8 +591,10 @@ impl OasisWasm {
         // Detect untune: video is playing but guide has no tuned channel.
         if self.video_player.is_active() {
             let should_stop = {
-                let runner =
-                    find_tv_guide_runner_wasm(&mut self.app_runner, &mut self.open_runners);
+                let runner = vfs_content::find_tv_guide_runner_wasm(
+                    &mut self.app_runner,
+                    &mut self.open_runners,
+                );
                 match runner {
                     Some(runner) => runner
                         .tv_guide_state()
@@ -854,420 +863,6 @@ impl OasisWasm {
     }
 
     // -----------------------------------------------------------------------
-    // Input dispatch: default (Dashboard / Terminal)
-    // -----------------------------------------------------------------------
-
-    fn handle_default_input(&mut self, event: &InputEvent) {
-        match event {
-            // Launch app from dashboard.
-            InputEvent::ButtonPress(Button::Confirm) if self.mode == Mode::Dashboard => {
-                self.dashboard.trigger_press_flash();
-                if self.bottom_bar.active_tab == MediaTab::None
-                    && let Some(app) = self.dashboard.selected_app()
-                {
-                    let app = app.clone();
-                    self.launch_app_window(&app);
-                }
-            },
-
-            // Pointer click on dashboard: start menu takes priority.
-            InputEvent::PointerClick { x, y } if self.mode == Mode::Dashboard => {
-                if self.start_menu.hit_test_button(*x, *y) {
-                    self.start_menu.toggle();
-                    return;
-                }
-                if self.start_menu.open {
-                    if let Some(action) = self.start_menu.hit_test_item(*x, *y) {
-                        self.start_menu.close();
-                        self.handle_start_menu_action(&action);
-                    } else {
-                        self.start_menu.close();
-                    }
-                    return;
-                }
-                if self.bottom_bar.active_tab == MediaTab::None {
-                    let cfg = &self.dashboard.config;
-                    let gx = *x - cfg.grid_x;
-                    let gy = *y - cfg.grid_y;
-                    if gx >= 0 && gy >= 0 {
-                        let col = gx as usize / cfg.cell_w as usize;
-                        let row = gy as usize / cfg.cell_h as usize;
-                        if col < cfg.grid_cols as usize && row < cfg.grid_rows as usize {
-                            let idx = row * cfg.grid_cols as usize + col;
-                            let page_apps = self.dashboard.current_page_apps().len();
-                            if idx < page_apps {
-                                if self.dashboard.selected == idx {
-                                    if let Some(app) = self.dashboard.selected_app() {
-                                        let app = app.clone();
-                                        self.launch_app_window(&app);
-                                    }
-                                } else {
-                                    self.dashboard.selected = idx;
-                                }
-                            }
-                        }
-                    }
-                }
-            },
-
-            InputEvent::ButtonPress(Button::Start) => {
-                self.mode = match self.mode {
-                    Mode::Dashboard => Mode::Terminal,
-                    Mode::Terminal => Mode::Dashboard,
-                    other => other,
-                };
-            },
-            InputEvent::ButtonPress(Button::Select) => {
-                if self.mode != Mode::Osk {
-                    let osk_cfg = OskConfig {
-                        title: "On-Screen Keyboard".to_string(),
-                        ..OskConfig::for_screen(
-                            self.active_theme.screen_w,
-                            self.active_theme.screen_h,
-                        )
-                    };
-                    self.osk = Some(OskState::new(osk_cfg, ""));
-                    self.mode = Mode::Osk;
-                }
-            },
-
-            InputEvent::ButtonPress(Button::Cancel) if self.mode == Mode::Dashboard => {},
-
-            // L trigger: cycle top tabs.
-            InputEvent::TriggerPress(Trigger::Left) if self.mode == Mode::Dashboard => {
-                self.status_bar.next_tab();
-                self.bottom_bar.l_pressed = true;
-            },
-            InputEvent::TriggerRelease(Trigger::Left) => {
-                self.bottom_bar.l_pressed = false;
-            },
-
-            // R trigger: cycle media category tabs.
-            InputEvent::TriggerPress(Trigger::Right) if self.mode == Mode::Dashboard => {
-                self.bottom_bar.next_tab();
-                self.bottom_bar.r_pressed = true;
-                self.active_transition = Some(transition::fade_in_custom(
-                    self.width,
-                    self.height,
-                    self.skin.features.transition_fade_frames.unwrap_or(15),
-                ));
-            },
-            InputEvent::TriggerRelease(Trigger::Right) => {
-                self.bottom_bar.r_pressed = false;
-            },
-
-            // Start menu intercepts input when open.
-            InputEvent::ButtonPress(btn)
-                if self.mode == Mode::Dashboard && self.start_menu.open =>
-            {
-                let action = self.start_menu.handle_input(btn);
-                if action != StartMenuAction::None {
-                    self.handle_start_menu_action(&action);
-                }
-            },
-
-            // Dashboard D-pad navigation.
-            InputEvent::ButtonPress(btn) if self.mode == Mode::Dashboard => match btn {
-                Button::Up | Button::Down | Button::Left | Button::Right => {
-                    if self.bottom_bar.active_tab == MediaTab::None {
-                        self.dashboard.handle_input(btn);
-                    }
-                },
-                Button::Triangle => {
-                    if self.bottom_bar.active_tab == MediaTab::None {
-                        self.dashboard.next_page();
-                        self.bottom_bar.current_page = self.dashboard.page;
-                    }
-                },
-                Button::Square => {
-                    if self.bottom_bar.active_tab == MediaTab::None {
-                        self.dashboard.prev_page();
-                        self.bottom_bar.current_page = self.dashboard.page;
-                    }
-                },
-                _ => {},
-            },
-
-            // Terminal input.
-            InputEvent::TextInput(ch) if self.mode == Mode::Terminal => {
-                self.input_buf.push(*ch);
-            },
-            InputEvent::Backspace if self.mode == Mode::Terminal => {
-                self.input_buf.pop();
-            },
-            InputEvent::ButtonPress(Button::Confirm) if self.mode == Mode::Terminal => {
-                let line = self.input_buf.clone();
-                self.input_buf.clear();
-                self.terminal_scroll_offset = 0;
-                if !line.is_empty() {
-                    self.output_lines.push(format!("> {line}"));
-                    self.execute_terminal_command(&line);
-                    trim_output(&mut self.output_lines);
-                }
-            },
-            InputEvent::ButtonPress(Button::Square) if self.mode == Mode::Terminal => {
-                self.input_buf.pop();
-            },
-            InputEvent::ButtonPress(Button::Cancel) if self.mode == Mode::Terminal => {
-                terminal_sdi::set_terminal_visible(&mut self.sdi, false);
-                self.mode = Mode::Dashboard;
-            },
-            InputEvent::MouseWheel { delta } if self.mode == Mode::Terminal => {
-                let len = self.output_lines.len();
-                let max_visible = terminal_sdi::visible_output_lines(&self.active_theme);
-                if len > max_visible {
-                    let max_offset = len - max_visible;
-                    if *delta < 0 {
-                        self.terminal_scroll_offset =
-                            (self.terminal_scroll_offset + (-*delta as usize) * 3).min(max_offset);
-                    } else {
-                        self.terminal_scroll_offset = self
-                            .terminal_scroll_offset
-                            .saturating_sub(*delta as usize * 3);
-                    }
-                }
-            },
-
-            _ => {},
-        }
-    }
-
-    // -----------------------------------------------------------------------
-    // Input dispatch: Desktop (windowed WM) mode
-    // -----------------------------------------------------------------------
-
-    fn handle_desktop_input(&mut self, event: &InputEvent) {
-        match event {
-            InputEvent::PointerClick { x, y } => {
-                // Start menu takes priority over window manager.
-                if self.start_menu.hit_test_button(*x, *y) {
-                    self.start_menu.toggle();
-                    return;
-                }
-                if self.start_menu.open {
-                    if let Some(action) = self.start_menu.hit_test_item(*x, *y) {
-                        self.start_menu.close();
-                        self.handle_start_menu_action(&action);
-                    } else {
-                        self.start_menu.close();
-                    }
-                    return;
-                }
-
-                let wm_event = self
-                    .wm
-                    .handle_input(&InputEvent::PointerClick { x: *x, y: *y }, &mut self.sdi);
-                match wm_event {
-                    WmEvent::WindowClosed(id) => {
-                        if self.fullscreen_app.as_deref() == Some(id.as_str()) {
-                            self.fullscreen_app = None;
-                        }
-                        self.open_runners.retain(|(rid, _)| *rid != id);
-                        if id == "browser" {
-                            self.browser = None;
-                            self.iframe.hide();
-                        }
-                        if self.wm.window_count() == 0 {
-                            self.mode = Mode::Dashboard;
-                        }
-                    },
-                    WmEvent::ContentClick(id, lx, ly) => {
-                        if id == "browser"
-                            && let Some(ref mut bw) = self.browser
-                        {
-                            // When the iframe is showing a real web page,
-                            // only forward clicks in the URL bar area to
-                            // the browser widget — the iframe handles its
-                            // own content input natively.
-                            let in_url_bar = ly < bw.config.url_bar_height as i32;
-                            if in_url_bar || !self.iframe.is_visible() {
-                                let abs_x = bw.window_x() + lx;
-                                let abs_y = bw.window_y() + ly;
-                                bw.handle_input(
-                                    &InputEvent::PointerClick { x: abs_x, y: abs_y },
-                                    &self.vfs,
-                                );
-                            }
-                        } else if let Some((_, runner)) =
-                            self.open_runners.iter_mut().find(|(rid, _)| *rid == id)
-                            && let Some(win) = self.wm.get_window(&id)
-                        {
-                            let (_, _, cw, ch) = win.content_rect(self.wm.theme());
-                            let action = runner.handle_click(lx, ly, cw, ch, win.fullscreen_kiosk);
-                            if action == AppAction::RequestFullscreen
-                                && self.fullscreen_app.is_none()
-                            {
-                                let _ = self.wm.enter_fullscreen(&id, &mut self.sdi);
-                                self.fullscreen_app = Some(id.to_string());
-                            }
-                        }
-                    },
-                    WmEvent::DesktopClick(_, _) => {
-                        if self.wm.window_count() == 0 {
-                            self.mode = Mode::Dashboard;
-                        }
-                    },
-                    _ => {},
-                }
-            },
-            InputEvent::CursorMove { x, y } => {
-                self.wm
-                    .handle_input(&InputEvent::CursorMove { x: *x, y: *y }, &mut self.sdi);
-            },
-            InputEvent::PointerRelease { x, y } => {
-                self.wm
-                    .handle_input(&InputEvent::PointerRelease { x: *x, y: *y }, &mut self.sdi);
-            },
-            InputEvent::ToggleFullscreen => {
-                if let Some(ref fs_id) = self.fullscreen_app {
-                    let id = fs_id.clone();
-                    let _ = self.wm.exit_fullscreen(&id, &mut self.sdi);
-                    self.fullscreen_app = None;
-                } else if let Some(active_id) = self.wm.active_window().map(|s| s.to_string()) {
-                    let _ = self.wm.enter_fullscreen(&active_id, &mut self.sdi);
-                    self.fullscreen_app = Some(active_id);
-                }
-            },
-            InputEvent::ButtonPress(Button::Cancel) => {
-                if let Some(active_id) = self.wm.active_window().map(|s| s.to_string()) {
-                    if self.fullscreen_app.as_deref() == Some(active_id.as_str()) {
-                        let _ = self.wm.exit_fullscreen(&active_id, &mut self.sdi);
-                        self.fullscreen_app = None;
-                    }
-                    let _ = self.wm.close_window(&active_id, &mut self.sdi);
-                    self.open_runners.retain(|(rid, _)| *rid != active_id);
-                    if active_id == "browser" {
-                        self.browser = None;
-                        self.iframe.hide();
-                    }
-                    if self.wm.window_count() == 0 {
-                        self.mode = Mode::Dashboard;
-                    }
-                } else {
-                    self.mode = Mode::Dashboard;
-                }
-            },
-            InputEvent::ButtonPress(Button::Start) => {
-                self.mode = Mode::Terminal;
-            },
-            InputEvent::TextInput(ch) => {
-                if self.wm.active_window() == Some("browser")
-                    && let Some(ref mut bw) = self.browser
-                {
-                    bw.handle_input(&InputEvent::TextInput(*ch), &self.vfs);
-                }
-            },
-            InputEvent::Backspace => {
-                if self.wm.active_window() == Some("browser")
-                    && let Some(ref mut bw) = self.browser
-                {
-                    bw.handle_input(&InputEvent::Backspace, &self.vfs);
-                }
-            },
-            InputEvent::MouseWheel { delta } => {
-                if self.wm.active_window() == Some("browser")
-                    && let Some(ref mut bw) = self.browser
-                {
-                    bw.handle_input(&InputEvent::MouseWheel { delta: *delta }, &self.vfs);
-                }
-            },
-            InputEvent::ButtonPress(btn) => {
-                if let Some(active_id) = self.wm.active_window().map(|s| s.to_string()) {
-                    if active_id == "browser" {
-                        if let Some(ref mut bw) = self.browser {
-                            bw.handle_input(&InputEvent::ButtonPress(*btn), &self.vfs);
-                        }
-                    } else if let Some((_, runner)) = self
-                        .open_runners
-                        .iter_mut()
-                        .find(|(id, _)| *id == active_id)
-                    {
-                        match runner.handle_input(btn, &self.vfs) {
-                            AppAction::Exit => {
-                                if self.fullscreen_app.as_deref() == Some(active_id.as_str()) {
-                                    let _ = self.wm.exit_fullscreen(&active_id, &mut self.sdi);
-                                    self.fullscreen_app = None;
-                                }
-                                let _ = self.wm.close_window(&active_id, &mut self.sdi);
-                                self.open_runners.retain(|(rid, _)| *rid != active_id);
-                                if self.wm.window_count() == 0 {
-                                    self.mode = Mode::Dashboard;
-                                }
-                            },
-                            AppAction::SwitchToTerminal => {
-                                self.mode = Mode::Terminal;
-                            },
-                            AppAction::RequestFullscreen => {
-                                if self.fullscreen_app.is_none() {
-                                    let _ = self.wm.enter_fullscreen(&active_id, &mut self.sdi);
-                                    self.fullscreen_app = Some(active_id);
-                                }
-                            },
-                            AppAction::None => {},
-                        }
-                    }
-                }
-            },
-            _ => {},
-        }
-    }
-
-    // -----------------------------------------------------------------------
-    // Input dispatch: App (fullscreen) mode
-    // -----------------------------------------------------------------------
-
-    fn handle_app_input(&mut self, event: &InputEvent) {
-        if let Some(ref mut runner) = self.app_runner
-            && let InputEvent::ButtonPress(btn) = event
-        {
-            match runner.handle_input(btn, &self.vfs) {
-                AppAction::Exit => {
-                    AppRunner::hide_sdi(&mut self.sdi);
-                    self.app_runner = None;
-                    self.mode = Mode::Dashboard;
-                },
-                AppAction::SwitchToTerminal => {
-                    AppRunner::hide_sdi(&mut self.sdi);
-                    self.app_runner = None;
-                    self.mode = Mode::Terminal;
-                },
-                AppAction::RequestFullscreen | AppAction::None => {},
-            }
-        }
-    }
-
-    // -----------------------------------------------------------------------
-    // Input dispatch: OSK mode
-    // -----------------------------------------------------------------------
-
-    fn handle_osk_input(&mut self, event: &InputEvent) {
-        if let Some(ref mut osk_state) = self.osk {
-            match event {
-                InputEvent::Backspace => {
-                    osk_state.buffer.pop();
-                },
-                InputEvent::ButtonPress(btn) => {
-                    osk_state.handle_input(btn);
-                    if let Some(text) = osk_state.confirmed_text() {
-                        self.output_lines.push(format!("[OSK] Input: {text}"));
-                        trim_output(&mut self.output_lines);
-                        osk_state.hide_sdi(&mut self.sdi);
-                        self.osk = None;
-                        self.mode = Mode::Dashboard;
-                    } else if osk_state.is_cancelled() {
-                        self.output_lines.push("[OSK] Cancelled".to_string());
-                        trim_output(&mut self.output_lines);
-                        osk_state.hide_sdi(&mut self.sdi);
-                        self.osk = None;
-                        self.mode = Mode::Dashboard;
-                    }
-                },
-                _ => {},
-            }
-        }
-    }
-
-    // -----------------------------------------------------------------------
     // App launching (mirrors oasis-app launch.rs)
     // -----------------------------------------------------------------------
 
@@ -1528,7 +1123,7 @@ impl OasisWasm {
         if let Some(name) = pending_skin_swap {
             self.apply_skin_swap(&name);
         }
-        trim_output(&mut self.output_lines);
+        vfs_content::trim_output(&mut self.output_lines);
         output
     }
 
@@ -1571,220 +1166,4 @@ impl OasisWasm {
             log::warn!("App not found: {title}");
         }
     }
-}
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-/// Truncate output lines to `MAX_OUTPUT_LINES`.
-fn trim_output(output_lines: &mut Vec<String>) {
-    while output_lines.len() > terminal_sdi::MAX_OUTPUT_LINES {
-        output_lines.remove(0);
-    }
-}
-
-// ---------------------------------------------------------------------------
-// VFS population
-// ---------------------------------------------------------------------------
-
-/// Find a TV Guide runner in either the full-screen or windowed runners.
-fn find_tv_guide_runner_wasm<'a>(
-    app_runner: &'a mut Option<AppRunner>,
-    open_runners: &'a mut [(String, AppRunner)],
-) -> Option<&'a mut AppRunner> {
-    if let Some(ref mut runner) = *app_runner
-        && runner.title == "TV Guide"
-    {
-        return Some(runner);
-    }
-    open_runners
-        .iter_mut()
-        .map(|(_, runner)| runner)
-        .find(|runner| runner.title == "TV Guide")
-}
-
-/// Compute the TV preview box rect `(x, y, w, h)` matching `guide.rs` layout.
-fn tv_preview_rect(at: &ActiveTheme) -> (i32, i32, u32, u32) {
-    let usable_h = at
-        .screen_h
-        .saturating_sub(at.statusbar_height + at.bottombar_height);
-    let header_h = (usable_h * 20 / 100).max(60);
-    let preview_w = (at.screen_w / 5).max(80);
-    let preview_h = header_h.saturating_sub(16);
-    let preview_x = at.screen_w as i32 - preview_w as i32 - 10;
-    let preview_y = at.statusbar_height as i32 + 8;
-    (preview_x, preview_y, preview_w, preview_h)
-}
-
-/// Check if a runner's pending request is a TV Guide tune_url (should not be
-/// consumed by the generic VFS handler).
-fn is_tv_tune_request_wasm(runner: &AppRunner) -> bool {
-    runner.peek_pending_request().is_some_and(|req| {
-        req.0 == oasis_core::apps::tv_guide::TV_REQUEST_PATH && req.1.starts_with("tune_url ")
-    })
-}
-
-/// Populate the WASM VFS with demo content.
-fn populate_wasm_vfs(vfs: &mut MemoryVfs) {
-    // Core directory structure.
-    let _ = vfs.mkdir("/home");
-    let _ = vfs.mkdir("/home/user");
-    let _ = vfs.mkdir("/etc");
-    let _ = vfs.mkdir("/tmp");
-    let _ = vfs.mkdir("/var");
-    let _ = vfs.mkdir("/var/oasis");
-    let _ = vfs.mkdir("/var/log");
-
-    // Use the terminal's built-in content populators.
-    populate_motd(vfs);
-    populate_profile(vfs);
-    populate_man_pages(vfs);
-
-    // System metadata.
-    let _ = vfs.write("/etc/hostname", b"oasis-wasm");
-    let _ = vfs.write("/etc/version", b"1.0.0-wasm");
-
-    // Demo user files.
-    let _ = vfs.write(
-        "/home/user/readme.txt",
-        b"OASIS_OS is running in your browser!\n\
-          \n\
-          This is a retro operating system shell originally built for the PSP.\n\
-          It now runs on desktop (SDL2), Unreal Engine 5, and WebAssembly.\n\
-          \n\
-          Try these commands:\n\
-            help        Show available commands\n\
-            ls          List files\n\
-            cat <file>  Read a file\n\
-            skin list   Show available skins\n\
-            fortune     Random fortune\n\
-            tutorial    Interactive terminal tutorial\n\
-            man ls      Manual page for a command\n",
-    );
-
-    let _ = vfs.write(
-        "/home/user/notes.txt",
-        b"Shopping list:\n- Milk\n- Bread\n- Memory Stick PRO Duo\n",
-    );
-
-    // Demo app directories (discovered by the dashboard).
-    // Names must match the title strings in AppRunner::init_content().
-    let _ = vfs.mkdir("/apps");
-    let _ = vfs.mkdir("/apps/File Manager");
-    let _ = vfs.mkdir("/apps/Settings");
-    let _ = vfs.mkdir("/apps/Browser");
-    let _ = vfs.mkdir("/apps/Music Player");
-    let _ = vfs.mkdir("/apps/Terminal");
-    let _ = vfs.mkdir("/apps/TV Guide");
-
-    // TV Guide configuration.
-    let _ = vfs.mkdir("/etc/tv");
-    let _ = vfs.mkdir("/var/tv");
-    let _ = vfs.mkdir("/var/tv/cache");
-    let _ = vfs.write(
-        "/etc/tv/channels.toml",
-        oasis_core::apps::tv_guide::channel::DEFAULT_CHANNELS_TOML.as_bytes(),
-    );
-
-    // Browser home page content.
-    let _ = vfs.mkdir("/sites");
-    let _ = vfs.mkdir("/sites/home");
-    let _ = vfs.write(
-        "/sites/home/index.html",
-        br#"<html><head><title>OASIS Home</title>
-<style>
-body { color: #e0e0e0; background-color: #1a1a2e; }
-h1 { color: #64c8ff; }
-h2 { color: #80d0a0; }
-a { color: #64c8ff; }
-code { background-color: rgba(100,200,255,30); }
-pre { background-color: rgba(100,200,255,15); border: 1px solid rgba(100,200,255,30); }
-blockquote { border-left-color: #64c8ff; color: #a0a0c0; }
-table { border-collapse: collapse; }
-th { background-color: rgba(100,200,255,20); border: 1px solid rgba(255,255,255,30); }
-td { border: 1px solid rgba(255,255,255,20); }
-</style>
-</head><body>
-<h1>Welcome to OASIS Browser</h1>
-<p>A lightweight <strong>HTML/CSS</strong> rendering engine for
-<em>OASIS_OS</em>. Supports block, inline, flex, and table layout.</p>
-
-<h2>Features</h2>
-<ul>
-<li>CSS cascade with <code>specificity</code></li>
-<li>Block, inline, flex, and table layout</li>
-<li>Text wrapping and decoration</li>
-<li>Smooth scrolling with mouse wheel</li>
-</ul>
-
-<h2>Shortcuts</h2>
-<table>
-<tr><th>Key</th><th>Action</th></tr>
-<tr><td>Tab</td><td>Focus URL bar</td></tr>
-<tr><td>Left/Right</td><td>Navigate links</td></tr>
-<tr><td>Up/Down</td><td>Scroll page</td></tr>
-</table>
-
-<blockquote>Originally ported from a PSP homebrew shell (2006-2008).</blockquote>
-
-<h2>Links</h2>
-<ol>
-<li><a href="/sites/home/about.html">About OASIS Browser</a></li>
-<li><a href="/sites/home/features.html">CSS Feature Test</a></li>
-</ol>
-</body></html>"#,
-    );
-    let _ = vfs.write(
-        "/sites/home/about.html",
-        br#"<html><head><title>About OASIS Browser</title>
-<style>
-body { color: #e0e0e0; background-color: #1a1a2e; }
-h1 { color: #64c8ff; }
-a { color: #64c8ff; }
-</style>
-</head><body>
-<h1>About OASIS Browser</h1>
-<p>A lightweight HTML/CSS engine for embedded systems:</p>
-<ul>
-<li><strong>HTML</strong> -- WHATWG tokenizer, 70+ tags</li>
-<li><strong>CSS</strong> -- cascade, specificity, media queries</li>
-<li><strong>Layout</strong> -- block, inline, flex, table, float</li>
-<li><strong>Gemini</strong> -- lightweight text protocol</li>
-</ul>
-<p><a href="/sites/home/index.html">Back to home</a></p>
-</body></html>"#,
-    );
-    let _ = vfs.write(
-        "/sites/home/features.html",
-        br#"<html><head><title>CSS Features</title>
-<style>
-body { color: #e0e0e0; background-color: #1a1a2e; }
-h1 { color: #64c8ff; }
-h2 { color: #80d0a0; font-size: 1.2em; }
-a { color: #64c8ff; }
-</style>
-</head><body>
-<h1>CSS Feature Test</h1>
-<h2>Text Formatting</h2>
-<p><strong>Bold</strong>, <em>italic</em>, <u>underline</u>,
-<s>strikethrough</s>, <code>inline code</code>,
-<mark>highlighted</mark>, <small>small</small>.</p>
-<h2>Blockquote</h2>
-<blockquote>Blockquote with left border.</blockquote>
-<h2>Ordered List</h2>
-<ol><li>First</li><li>Second</li><li>Third</li></ol>
-<h2>Preformatted</h2>
-<pre>fn main() {
-    println!("Hello!");
-}</pre>
-<p><a href="/sites/home/index.html">Back to home</a></p>
-</body></html>"#,
-    );
-
-    // Demo startup script.
-    let _ = vfs.write(
-        "/home/user/startup.sh",
-        b"# OASIS_OS startup script\necho Welcome back!\nls /apps\n",
-    );
 }
