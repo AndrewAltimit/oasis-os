@@ -55,7 +55,7 @@ pub fn decode_wav(data: &[u8]) -> Option<WavData> {
 
     // Find the "data" sub-chunk.
     let (data_offset, data_size) = find_chunk(data, b"data")?;
-    let end = (data_offset + data_size).min(data.len());
+    let end = data_offset.saturating_add(data_size).min(data.len());
     let pcm_bytes = &data[data_offset..end];
 
     let samples = if bits_per_sample == 16 {
@@ -89,7 +89,11 @@ fn find_chunk(data: &[u8], id: &[u8; 4]) -> Option<(usize, usize)> {
             return Some((pos + 8, chunk_size));
         }
         // Advance to next chunk (size is padded to even boundary).
-        pos += 8 + ((chunk_size + 1) & !1);
+        let padded = (chunk_size.saturating_add(1)) & !1;
+        pos = match pos.checked_add(8 + padded) {
+            Some(next) => next,
+            None => break,
+        };
     }
     None
 }
