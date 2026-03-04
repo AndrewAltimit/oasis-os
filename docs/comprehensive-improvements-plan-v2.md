@@ -11,8 +11,7 @@
 
 Deep analysis of the entire codebase (100K+ LOC, 21 workspace crates) across 6 dimensions:
 code duplication, skinning/widgets, modularity/architecture, performance, new features,
-and testing/quality. This plan supersedes `comprehensive-improvements-plan.md` (Feb 2026)
-with significantly expanded scope covering architecture, DRY, performance, and new features.
+and testing/quality. Covers architecture, DRY, performance, and new features.
 
 ---
 
