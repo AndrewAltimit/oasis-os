@@ -42,7 +42,7 @@ pub fn update_media_page(sdi: &mut SdiRegistry, bottom_bar: &BottomBar, at: &Act
     if !sdi.contains(page_name) {
         let obj = sdi.create(page_name);
         obj.font_size = at.font_heading;
-        obj.text_color = at.app_text;
+        obj.text_color = at.app.text;
         obj.w = 0;
         obj.h = 0;
     }
@@ -59,7 +59,7 @@ pub fn update_media_page(sdi: &mut SdiRegistry, bottom_bar: &BottomBar, at: &Act
     if !sdi.contains(hint_name) {
         let obj = sdi.create(hint_name);
         obj.font_size = at.font_hint;
-        obj.text_color = at.app_dim_text;
+        obj.text_color = at.app.dim_text;
         obj.w = 0;
         obj.h = 0;
     }
@@ -127,10 +127,10 @@ pub fn setup_terminal_objects(
         obj.y = top_y;
         obj.w = bg_w;
         obj.h = bg_h;
-        obj.color = at.app_bg;
+        obj.color = at.app.bg;
         obj.border_radius = Some(at.terminal_border_radius);
         obj.stroke_width = Some(1);
-        obj.stroke_color = Some(at.separator_color);
+        obj.stroke_color = Some(at.bar.separator_color);
     }
     if let Ok(obj) = sdi.get_mut("terminal_bg") {
         obj.visible = true;
@@ -139,7 +139,7 @@ pub fn setup_terminal_objects(
     // Show visible lines from the scrollback buffer, offset by scroll.
     let end = output_lines.len().saturating_sub(scroll_offset);
     let start = end.saturating_sub(visible_lines);
-    let output_color = oasis_types::color::with_alpha(at.terminal_output_color, 255);
+    let output_color = oasis_types::color::with_alpha(at.app.terminal_output_color, 255);
     for i in 0..visible_lines {
         let name = format!("term_line_{i}");
         if !sdi.contains(&name) {
@@ -165,8 +165,8 @@ pub fn setup_terminal_objects(
         obj.y = input_y;
         obj.w = bg_w;
         obj.h = 20;
-        obj.color = oasis_types::color::lighten(at.app_bg, 0.03);
-        obj.border_radius = Some(at.input_border_radius);
+        obj.color = oasis_types::color::lighten(at.app.bg, 0.03);
+        obj.border_radius = Some(at.app.input_border_radius);
     }
     if let Ok(obj) = sdi.get_mut("term_input_bg") {
         obj.visible = true;
@@ -178,7 +178,7 @@ pub fn setup_terminal_objects(
         obj.x = margin + 4;
         obj.y = input_y + 2;
         obj.font_size = at.font_body;
-        obj.text_color = at.terminal_prompt_color;
+        obj.text_color = at.app.terminal_prompt_color;
         obj.w = 0;
         obj.h = 0;
     }
@@ -209,13 +209,13 @@ pub fn paint_terminal_scrollbar(
     let bg_w = at.screen_w - (margin * 2) as u32;
     let bg_h = (bot_y - top_y) as u32;
 
-    let sb_w = at.scrollbar_width;
+    let sb_w = at.scrollbar.width;
     let track_x: i32 = margin + bg_w as i32 - sb_w as i32 - 1;
     let track_y: i32 = top_y;
     let track_h: u32 = bg_h;
 
     // Track.
-    backend.fill_rect(track_x, track_y, sb_w, track_h, at.scrollbar_track_color)?;
+    backend.fill_rect(track_x, track_y, sb_w, track_h, at.scrollbar.track_color)?;
 
     // Thumb: proportional to visible/total ratio.
     let ratio = visible_lines as f32 / total_lines as f32;
@@ -228,7 +228,7 @@ pub fn paint_terminal_scrollbar(
         1.0
     };
     let thumb_y = track_y + (scrollable as f32 * frac) as i32;
-    backend.fill_rect(track_x, thumb_y, sb_w, thumb_h, at.scrollbar_thumb_color)?;
+    backend.fill_rect(track_x, thumb_y, sb_w, thumb_h, at.scrollbar.thumb_color)?;
     Ok(())
 }
 

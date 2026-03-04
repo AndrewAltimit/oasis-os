@@ -11,6 +11,7 @@ pub mod null_backend;
 pub mod playlist;
 pub mod radio;
 pub mod types;
+pub mod wav;
 
 pub use manager::{AUDIO_REQUEST_PATH, AUDIO_STATUS_PATH, AudioManager};
 pub use null_backend::NullAudioBackend;

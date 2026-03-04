@@ -1,0 +1,85 @@
+# Solarized Dark Theme
+# Based on the Solarized color palette by Ethan Schoonover
+# base03=#002B36, base02=#073642, base01=#586E75, base00=#657B83
+# base0=#839496, base1=#93A1A1, base2=#EEE8D5, base3=#FDF6E3
+# yellow=#B58900, orange=#CB4B16, red=#DC322F, magenta=#D33682
+# violet=#6C71C4, blue=#268BD2, cyan=#2AA198, green=#859900
+
+background = "#002B36"
+primary = "#268BD2"
+secondary = "#073642"
+accent = "#2AA198"
+text = "#839496"
+dim_text = "#586E75"
+error = "#DC322F"
+border_radius = 4
+shadow_intensity = 1
+gradient_enabled = false
+
+[wm_theme]
+titlebar_height = 24
+border_width = 1
+titlebar_active = "#073642"
+titlebar_inactive = "#002B36"
+titlebar_text_active = "#93A1A1"
+titlebar_text_inactive = "#586E75"
+titlebar_gradient = false
+close_button_color = "#DC322F"
+close_button_hover = "#FF4136"
+minimize_button_color = "#B58900"
+maximize_button_color = "#859900"
+frame_shadow_level = 1
+frame_border_radius = 4
+button_radius = 2
+
+[bar_overrides]
+statusbar_bg = "#073642"
+text_color = "#93A1A1"
+text_shadow = false
+gradient_top = "#073642"
+gradient_bottom = "#073642"
+
+[icon_overrides]
+body_color = "#073642"
+icon_style = "card"
+cursor_style = "fill"
+
+[wallpaper]
+style = "solid"
+color_stops = ["#002B36"]
+
+[geometry]
+tab_row_height = 0
+statusbar_height = 26
+bottombar_height = 28
+icon_width = 36
+icon_height = 40
+font_body = 14
+font_hint = 12
+font_heading = 16
+cursor_blink_rate = 25
+press_flash_duration = 4
+
+[app_overrides]
+app_bg = "#002B36"
+text_color = "#839496"
+selection_accent_color = "#268BD240"
+
+[start_menu_overrides]
+panel_bg = "#073642"
+button_bg = "#268BD2"
+button_text = "#FDF6E3"
+button_gradient = false
+panel_width = 280
+panel_border_radius = 4
+columns = 2
+item_row_height = 26
+
+[browser_overrides]
+chrome_bg = "#073642"
+url_bar_bg = "#002B36"
+link_color = "#268BD2"
+
+[scrollbar_overrides]
+track_color = "#073642"
+thumb_color = "#586E75"

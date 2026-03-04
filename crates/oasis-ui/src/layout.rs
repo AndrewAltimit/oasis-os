@@ -1,5 +1,8 @@
 //! Layout helpers: centering, alignment, padding, distribution.
 
+/// Gap between a control indicator (checkbox, radio) and its label text.
+pub const LABEL_GAP: u32 = 6;
+
 /// Padding specification for all four sides.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Padding {

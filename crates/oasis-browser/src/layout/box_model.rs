@@ -250,6 +250,37 @@ impl LayoutBox {
     pub fn mark_dirty(&mut self) {
         self.dirty = true;
     }
+
+    /// Recursively clear the dirty flag on this box and all descendants.
+    pub fn clear_dirty(&mut self) {
+        self.dirty = false;
+        for child in &mut self.children {
+            child.clear_dirty();
+        }
+    }
+
+    /// Check whether this box or any descendant is dirty.
+    pub fn any_dirty(&self) -> bool {
+        if self.dirty {
+            return true;
+        }
+        self.children.iter().any(|c| c.any_dirty())
+    }
+
+    /// Mark a specific node and its ancestors as dirty.
+    pub fn mark_node_dirty(&mut self, target_node: NodeId) -> bool {
+        if self.node == Some(target_node) {
+            self.dirty = true;
+            return true;
+        }
+        for child in &mut self.children {
+            if child.mark_node_dirty(target_node) {
+                self.dirty = true;
+                return true;
+            }
+        }
+        false
+    }
 }
 
 /// A line box containing inline fragments.
@@ -672,6 +703,39 @@ mod tests {
                 let mid_y = y + h / 2.0;
                 prop_assert!(r.contains(mid_x, mid_y));
             }
+        }
+
+        #[test]
+        fn layout_box_dirty_tracking() {
+            let style = ComputedStyle::default();
+            let mut root = LayoutBox::new(BoxType::Block, style.clone(), Some(0));
+            let mut child = LayoutBox::new(BoxType::Block, style.clone(), Some(1));
+            child.dirty = false;
+            root.children.push(child);
+
+            // Root is dirty, so any_dirty returns true.
+            assert!(root.any_dirty());
+
+            // Clear all dirty flags.
+            root.clear_dirty();
+            assert!(!root.any_dirty());
+            assert!(!root.dirty);
+            assert!(!root.children[0].dirty);
+
+            // Mark a specific node dirty.
+            root.mark_node_dirty(1);
+            assert!(root.dirty);
+            assert!(root.children[0].dirty);
+        }
+
+        #[test]
+        fn mark_node_dirty_missing_node() {
+            let style = ComputedStyle::default();
+            let mut root = LayoutBox::new(BoxType::Block, style, Some(0));
+            root.dirty = false;
+            // Marking a non-existent node returns false.
+            assert!(!root.mark_node_dirty(99));
+            assert!(!root.dirty);
         }
     }
 }

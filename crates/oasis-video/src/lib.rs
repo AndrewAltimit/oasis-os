@@ -237,3 +237,65 @@ impl SoftwareVideoDecoder {
         (self.audio_sample_rate, self.audio_channels)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn open_empty_data_fails() {
+        let result = SoftwareVideoDecoder::open(Vec::new());
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn open_garbage_data_fails() {
+        let result = SoftwareVideoDecoder::open(vec![0xDE, 0xAD, 0xBE, 0xEF, 0x00, 0x11]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn video_error_display() {
+        let e = VideoError::Demux("bad container".into());
+        assert_eq!(format!("{e}"), "demux error: bad container");
+
+        let e = VideoError::Decode("codec failure".into());
+        assert_eq!(format!("{e}"), "decode error: codec failure");
+
+        let e = VideoError::NoTrack("no video".into());
+        assert_eq!(format!("{e}"), "no track: no video");
+    }
+
+    #[test]
+    fn video_error_is_error_trait() {
+        let e: Box<dyn std::error::Error> = Box::new(VideoError::Demux("test".into()));
+        assert!(!e.to_string().is_empty());
+    }
+
+    #[test]
+    fn video_frame_fields() {
+        let frame = VideoFrame {
+            rgba: vec![255; 16],
+            width: 2,
+            height: 2,
+            timestamp_secs: 1.5,
+        };
+        assert_eq!(frame.rgba.len(), 16);
+        assert_eq!(frame.width, 2);
+        assert_eq!(frame.height, 2);
+        assert!((frame.timestamp_secs - 1.5).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn audio_chunk_fields() {
+        let chunk = AudioChunk {
+            pcm_f32: vec![0.0; 1024],
+            channels: 2,
+            sample_rate: 44100,
+            timestamp_secs: 0.0,
+        };
+        assert_eq!(chunk.pcm_f32.len(), 1024);
+        assert_eq!(chunk.channels, 2);
+        assert_eq!(chunk.sample_rate, 44100);
+    }
+}

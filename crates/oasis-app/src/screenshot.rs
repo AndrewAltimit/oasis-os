@@ -84,7 +84,9 @@ fn capture_skin(skin_name: &str) -> anyhow::Result<()> {
     let mut vfs = MemoryVfs::new();
     populate_demo_vfs(&mut vfs);
 
-    let active_theme = ActiveTheme::from_skin(&skin.theme).with_screen_size(w, h);
+    let active_theme = ActiveTheme::from_skin(&skin.theme)
+        .with_screen_size(w, h)
+        .with_features(&skin.features);
 
     let apps = discover_apps(&vfs, "/apps", Some("OASISOS"))?;
     let dash_config = DashboardConfig::from_features(&skin.features, &active_theme);
@@ -265,7 +267,7 @@ fn capture_skin(skin_name: &str) -> anyhow::Result<()> {
                     &mut sdi,
                     "demo_terminal",
                     &DEMO_TERMINAL_CONTENT,
-                    active_theme.terminal_output_color,
+                    active_theme.app.terminal_output_color,
                     8,
                 );
             }
@@ -325,7 +327,7 @@ fn create_demo_windows_with_content(
         sdi,
         "demo_terminal",
         &DEMO_TERMINAL_CONTENT,
-        at.terminal_output_color,
+        at.app.terminal_output_color,
         8,
     );
 
@@ -345,7 +347,7 @@ fn create_demo_windows_with_content(
         modal: false,
     };
     wm.create_window(&fm_cfg, sdi)?;
-    populate_window_content(sdi, "demo_files", &DEMO_FILEMANAGER_CONTENT, at.app_text, 8);
+    populate_window_content(sdi, "demo_files", &DEMO_FILEMANAGER_CONTENT, at.app.text, 8);
     Ok(())
 }
 
@@ -459,7 +461,7 @@ fn update_media_page(sdi: &mut SdiRegistry, bottom_bar: &BottomBar, at: &ActiveT
     if !sdi.contains(page_name) {
         let obj = sdi.create(page_name);
         obj.font_size = at.font_heading;
-        obj.text_color = at.app_text;
+        obj.text_color = at.app.text;
         obj.w = 0;
         obj.h = 0;
     }
@@ -487,7 +489,7 @@ fn setup_terminal_objects(
     input_buf: &str,
     at: &ActiveTheme,
 ) {
-    let title_h = at.app_title_bar_height;
+    let title_h = at.app.title_bar_height;
     let content_x = 4i32;
     let content_y = (title_h + 4) as i32;
     let content_w = at.screen_w.saturating_sub(8);
@@ -501,7 +503,7 @@ fn setup_terminal_objects(
         obj.y = content_y;
         obj.w = content_w;
         obj.h = usable_h;
-        obj.color = at.app_bg;
+        obj.color = at.app.bg;
     }
     if let Ok(obj) = sdi.get_mut("terminal_bg") {
         obj.visible = true;
@@ -515,7 +517,7 @@ fn setup_terminal_objects(
             obj.x = content_x + 4;
             obj.y = content_y + 2 + (i as i32) * (line_h as i32);
             obj.font_size = font_size;
-            obj.text_color = at.terminal_output_color;
+            obj.text_color = at.app.terminal_output_color;
             obj.w = 0;
             obj.h = 0;
         }
@@ -526,7 +528,7 @@ fn setup_terminal_objects(
     }
 
     let input_y = content_y + (usable_h as i32) - (line_h as i32) - 2;
-    let input_bg_color = lighten(at.app_bg, 0.03);
+    let input_bg_color = lighten(at.app.bg, 0.03);
     if !sdi.contains("term_input_bg") {
         let obj = sdi.create("term_input_bg");
         obj.x = content_x;
@@ -544,7 +546,7 @@ fn setup_terminal_objects(
         obj.x = content_x + 4;
         obj.y = input_y + 2;
         obj.font_size = font_size;
-        obj.text_color = at.terminal_prompt_color;
+        obj.text_color = at.app.terminal_prompt_color;
         obj.w = 0;
         obj.h = 0;
     }

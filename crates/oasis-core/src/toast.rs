@@ -103,10 +103,10 @@ impl ToastManager {
     /// Creates up to `MAX_VISIBLE` bg+text object pairs, hidden when unused.
     /// Objects are positioned at the bottom-right, stacking upward.
     pub fn update_sdi(&self, sdi: &mut SdiRegistry, at: &ActiveTheme) {
-        let margin = at.toast_margin;
-        let toast_w = ((at.screen_w as f32 * at.toast_width_fraction) as u32).max(120);
-        let toast_h = at.toast_height;
-        let gap = at.toast_gap;
+        let margin = at.toast.margin;
+        let toast_w = ((at.screen_w as f32 * at.toast.width_fraction) as u32).max(120);
+        let toast_h = at.toast.height;
+        let gap = at.toast.gap;
 
         // Take the last MAX_VISIBLE toasts.
         let visible: Vec<_> = self
@@ -135,7 +135,7 @@ impl ToastManager {
             }
 
             if let Some(toast) = visible.get(i) {
-                let alpha = toast.alpha(at.toast_fade_frames);
+                let alpha = toast.alpha(at.toast.fade_frames);
                 let slot = (visible.len() - 1 - i) as i32;
                 let final_x = at.screen_w as i32 - toast_w as i32 - margin;
                 let y = at.screen_h as i32
@@ -144,8 +144,8 @@ impl ToastManager {
                     - (slot + 1) * (toast_h as i32 + gap);
 
                 // Slide-in animation: offset X from the right edge.
-                let x = if at.toast_slide_in {
-                    let ff = at.toast_fade_frames.max(1);
+                let x = if at.toast.slide_in {
+                    let ff = at.toast.fade_frames.max(1);
                     let progress = (toast.entrance_frame as f32 / ff as f32).min(1.0);
                     let offset = ((1.0 - ease_out_cubic(progress)) * toast_w as f32) as i32;
                     final_x + offset
@@ -154,10 +154,10 @@ impl ToastManager {
                 };
 
                 let bg_color = match toast.level {
-                    ToastLevel::Info => at.toast_info_bg,
-                    ToastLevel::Success => at.toast_success_bg,
-                    ToastLevel::Warning => at.toast_warning_bg,
-                    ToastLevel::Error => at.toast_error_bg,
+                    ToastLevel::Info => at.toast.info_bg,
+                    ToastLevel::Success => at.toast.success_bg,
+                    ToastLevel::Warning => at.toast.warning_bg,
+                    ToastLevel::Error => at.toast.error_bg,
                 };
 
                 if let Ok(obj) = sdi.get_mut(&bg_name) {
@@ -167,8 +167,8 @@ impl ToastManager {
                     obj.h = toast_h;
                     obj.color =
                         with_alpha(bg_color, (bg_color.a as u16 * alpha as u16 / 255) as u8);
-                    obj.border_radius = Some(at.toast_border_radius);
-                    obj.shadow_level = Some(at.toast_shadow_level);
+                    obj.border_radius = Some(at.toast.border_radius);
+                    obj.shadow_level = Some(at.toast.shadow_level);
                     obj.visible = true;
                 }
                 if let Ok(obj) = sdi.get_mut(&text_name) {
@@ -178,11 +178,11 @@ impl ToastManager {
                     obj.h = toast_h.saturating_sub(8);
                     obj.font_size = at.font_body;
                     obj.text = Some(toast.message.clone());
-                    obj.text_color = with_alpha(at.toast_text_color, alpha);
+                    obj.text_color = with_alpha(at.toast.text_color, alpha);
                     obj.visible = true;
-                    if at.toast_text_shadow {
+                    if at.toast.text_shadow {
                         obj.text_shadow_offset = Some((1, 1));
-                        obj.text_shadow_color = Some(at.bar_text_shadow_color);
+                        obj.text_shadow_color = Some(at.bar.text_shadow_color);
                     }
                 }
             } else {

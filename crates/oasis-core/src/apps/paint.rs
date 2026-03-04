@@ -538,6 +538,51 @@ pub fn draw_brush(pixels: &mut [Color], w: u32, h: u32, x: i32, y: i32, size: u3
 // UndoEntry
 // ---------------------------------------------------------------
 
+/// Encode pixel data as a 32-bit BMP file (BGRA, bottom-up).
+fn encode_bmp(pixels: &[Color], w: u32, h: u32) -> Vec<u8> {
+    let row_size = w * 4;
+    let pixel_data_size = row_size * h;
+    let file_size = 54 + pixel_data_size;
+    let mut buf = Vec::with_capacity(file_size as usize);
+
+    // BMP file header (14 bytes).
+    buf.extend_from_slice(b"BM");
+    buf.extend_from_slice(&(file_size).to_le_bytes());
+    buf.extend_from_slice(&0u16.to_le_bytes()); // reserved
+    buf.extend_from_slice(&0u16.to_le_bytes()); // reserved
+    buf.extend_from_slice(&54u32.to_le_bytes()); // pixel data offset
+
+    // DIB header (BITMAPINFOHEADER, 40 bytes).
+    buf.extend_from_slice(&40u32.to_le_bytes()); // header size
+    buf.extend_from_slice(&(w as i32).to_le_bytes());
+    buf.extend_from_slice(&(h as i32).to_le_bytes());
+    buf.extend_from_slice(&1u16.to_le_bytes()); // planes
+    buf.extend_from_slice(&32u16.to_le_bytes()); // bits per pixel
+    buf.extend_from_slice(&0u32.to_le_bytes()); // compression (BI_RGB)
+    buf.extend_from_slice(&pixel_data_size.to_le_bytes());
+    buf.extend_from_slice(&2835u32.to_le_bytes()); // x pixels/meter
+    buf.extend_from_slice(&2835u32.to_le_bytes()); // y pixels/meter
+    buf.extend_from_slice(&0u32.to_le_bytes()); // colors used
+    buf.extend_from_slice(&0u32.to_le_bytes()); // important colors
+
+    // Pixel data (bottom-up, BGRA).
+    for y in (0..h).rev() {
+        for x in 0..w {
+            let idx = (y * w + x) as usize;
+            let c = if idx < pixels.len() {
+                pixels[idx]
+            } else {
+                Color::rgba(0, 0, 0, 0)
+            };
+            buf.push(c.b);
+            buf.push(c.g);
+            buf.push(c.r);
+            buf.push(c.a);
+        }
+    }
+    buf
+}
+
 /// A snapshot of a layer's pixels for undo/redo.
 #[derive(Debug, Clone)]
 pub struct UndoEntry {
@@ -820,6 +865,32 @@ impl PaintApp {
     pub fn cycle_brush_size(&mut self) {
         self.brush_size = (self.brush_size % 5) + 1;
     }
+
+    /// Save the canvas to VFS as a BMP file.
+    pub fn save_to_vfs(&self, vfs: &mut dyn Vfs) -> bool {
+        let w = self.canvas.width();
+        let h = self.canvas.height();
+        let flat = self.canvas.flatten();
+        let bmp = encode_bmp(&flat, w, h);
+        let save_dir = "/home/user/pictures";
+        let _ = vfs.mkdir(save_dir);
+        let path = format!("{save_dir}/paint_{w}x{h}.bmp");
+        vfs.write(&path, &bmp).is_ok()
+    }
+
+    /// Create a new canvas with the given dimensions.
+    pub fn new_canvas(&mut self, width: u32, height: u32) {
+        let w = width.clamp(8, 256);
+        let h = height.clamp(8, 256);
+        self.canvas = Canvas::new(w, h);
+        self.cursor_x = (w / 2) as i32;
+        self.cursor_y = (h / 2) as i32;
+        self.undo_stack.clear();
+        self.redo_stack.clear();
+        self.drawing = false;
+        self.drag_start = None;
+        self.rebuild_display_lines();
+    }
 }
 
 impl App for PaintApp {
@@ -923,8 +994,8 @@ impl App for PaintApp {
         // Reserve space for 8 info lines + title bar.
         let info_lines = 9u32;
         let line_h = at.terminal_line_height.max(1);
-        let canvas_top = cy + at.app_title_bar_height as i32 + (info_lines * line_h) as i32;
-        let available_h = ch.saturating_sub(at.app_title_bar_height + info_lines * line_h + 16);
+        let canvas_top = cy + at.app.title_bar_height as i32 + (info_lines * line_h) as i32;
+        let available_h = ch.saturating_sub(at.app.title_bar_height + info_lines * line_h + 16);
         let available_w = cw.saturating_sub(8);
 
         if available_h < 4 || available_w < 4 {
@@ -1754,5 +1825,51 @@ mod tests {
         let red = Color::rgb(255, 0, 0);
         c.set_pixel(0, 0, red);
         assert_eq!(c.get_pixel(0, 0), red);
+    }
+
+    #[test]
+    fn encode_bmp_valid_header() {
+        let pixels = vec![Color::rgb(255, 0, 0); 4];
+        let bmp = encode_bmp(&pixels, 2, 2);
+        assert_eq!(&bmp[0..2], b"BM");
+        // File size: 54 header + 2*2*4 = 70.
+        let file_size = u32::from_le_bytes([bmp[2], bmp[3], bmp[4], bmp[5]]);
+        assert_eq!(file_size, 70);
+    }
+
+    #[test]
+    fn save_to_vfs_creates_file() {
+        let app = PaintApp::new("/apps/paint");
+        let mut vfs = make_vfs();
+        crate::vfs::Vfs::mkdir(&mut vfs, "/home").unwrap();
+        crate::vfs::Vfs::mkdir(&mut vfs, "/home/user").unwrap();
+        assert!(app.save_to_vfs(&mut vfs));
+        assert!(vfs.exists("/home/user/pictures/paint_64x48.bmp"));
+    }
+
+    #[test]
+    fn new_canvas_resets_state() {
+        let mut app = PaintApp::new("/apps/paint");
+        let vfs = make_vfs();
+        // Draw something and add undo entries.
+        app.handle_input(&Button::Confirm, &vfs);
+        app.stop_drawing();
+        assert!(!app.undo_stack.is_empty());
+        // Reset canvas.
+        app.new_canvas(32, 32);
+        assert!(app.undo_stack.is_empty());
+        assert_eq!(app.canvas.width(), 32);
+        assert_eq!(app.canvas.height(), 32);
+    }
+
+    #[test]
+    fn new_canvas_clamps_size() {
+        let mut app = PaintApp::new("/apps/paint");
+        app.new_canvas(4, 4); // below minimum
+        assert_eq!(app.canvas.width(), 8);
+        assert_eq!(app.canvas.height(), 8);
+        app.new_canvas(999, 999); // above maximum
+        assert_eq!(app.canvas.width(), 256);
+        assert_eq!(app.canvas.height(), 256);
     }
 }

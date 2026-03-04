@@ -91,7 +91,8 @@ fn main() -> Result<()> {
 
     // Derive runtime theme from the active skin, applying screen dimensions.
     let active_theme = ActiveTheme::from_skin(&skin.theme)
-        .with_screen_size(config.screen_width, config.screen_height);
+        .with_screen_size(config.screen_width, config.screen_height)
+        .with_features(&skin.features);
     let browser_config = BrowserConfig::from_skin_theme(&skin.theme);
 
     // Set up platform services.
@@ -222,7 +223,7 @@ fn main() -> Result<()> {
     state.toasts.show(
         format!("Skin: {}", state.skin.manifest.name),
         ToastLevel::Info,
-        state.active_theme.toast_ttl,
+        state.active_theme.toast.ttl,
     );
 
     // Load radio stations from VFS.

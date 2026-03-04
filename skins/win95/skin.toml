@@ -1,0 +1,6 @@
+name = "win95"
+version = "1.0"
+author = "OASIS_OS"
+description = "Windows 95/98 classic look with raised 3D borders, system gray, and blue titlebars"
+screen_width = 640
+screen_height = 480

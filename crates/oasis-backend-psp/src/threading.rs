@@ -742,6 +742,7 @@ fn handle_radio_connect(url: String) {
         psp::sys::sceNetInetConnect(fd, &sa, core::mem::size_of::<psp::sys::sockaddr>() as u32)
     };
     if ret < 0 {
+        // SAFETY: fd is a valid socket descriptor; closing on connect failure.
         unsafe { psp::sys::sceNetInetClose(fd) };
         let _ = IO_RESP_QUEUE.push(IoResponse::RadioError {
             msg: format!("connect {}:{} failed", host, port),
@@ -761,6 +762,7 @@ fn handle_radio_connect(url: String) {
         psp::sys::sceNetInetSend(fd, req_bytes.as_ptr() as *const c_void, req_bytes.len(), 0)
     };
     if sent <= 0 {
+        // SAFETY: fd is a valid socket descriptor; closing on send failure.
         unsafe { psp::sys::sceNetInetClose(fd) };
         let _ = IO_RESP_QUEUE.push(IoResponse::RadioError {
             msg: "send failed".into(),
@@ -812,6 +814,7 @@ fn handle_radio_connect(url: String) {
     };
 
     if header_end.is_none() {
+        // SAFETY: fd is a valid socket descriptor; closing on incomplete headers.
         unsafe { psp::sys::sceNetInetClose(fd) };
         let _ = IO_RESP_QUEUE.push(IoResponse::RadioError {
             msg: "incomplete headers".into(),

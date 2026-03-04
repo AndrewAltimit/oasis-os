@@ -4,11 +4,9 @@ use crate::active_theme::ActiveTheme;
 use crate::backend::SdiBackend;
 use crate::dashboard::AppEntry;
 use crate::input::Button;
-use crate::sdi::SdiRegistry;
-use crate::ui::flex;
-use crate::vfs::{EntryKind, Vfs};
+use crate::vfs::Vfs;
 
-use super::layout_calc::AppLayout;
+use super::file_viewer::list_directory;
 use super::tv_guide::guide::TvGuideState;
 
 /// Maximum lines visible in the app content area (fallback for 480x272).
@@ -49,15 +47,15 @@ pub struct AppRunner {
     /// Selected line index (relative to visible area).
     pub cursor: usize,
     /// Pending VFS IPC request from radio app (path, data).
-    pending_vfs_request: Option<(String, String)>,
+    pub(crate) pending_vfs_request: Option<(String, String)>,
     /// Smooth selection position (lerps toward cursor index).
-    visual_selected: f32,
+    pub(crate) visual_selected: f32,
     /// Cached max visible lines (updated each frame by `update_sdi`).
-    cached_max_visible: usize,
+    pub(crate) cached_max_visible: usize,
     /// TV Guide state (only for "TV Guide" app).
-    tv_guide: Option<TvGuideState>,
+    pub(crate) tv_guide: Option<TvGuideState>,
     /// Extracted app implementation (Some for migrated apps).
-    delegate: Option<Box<dyn super::app_trait::App>>,
+    pub(crate) delegate: Option<Box<dyn super::app_trait::App>>,
 }
 
 impl AppRunner {
@@ -241,7 +239,7 @@ impl AppRunner {
         }
 
         // Content background.
-        backend.fill_rect(cx, cy, cw, ch, at.app_bg)?;
+        backend.fill_rect(cx, cy, cw, ch, at.app.bg)?;
 
         // Title row with dir/file suffix.
         let dir_suffix = if let Some(ref file) = self.viewing_file {
@@ -253,15 +251,15 @@ impl AppRunner {
                 .unwrap_or_default()
         };
         let title_text = format!("{}{dir_suffix}", self.title);
-        backend.draw_text(&title_text, cx + 4, cy + 2, 12, at.app_title_bar_text)?;
+        backend.draw_text(&title_text, cx + 4, cy + 2, 12, at.app.title_bar_text)?;
 
         // Separator line.
         backend.fill_rect(
             cx,
-            cy + at.app_title_bar_height as i32 - 4,
+            cy + at.app.title_bar_height as i32 - 4,
             cw,
             1,
-            at.app_divider,
+            at.app.divider,
         )?;
 
         // Content lines.
@@ -274,11 +272,11 @@ impl AppRunner {
             let prefix = if i == self.cursor { "> " } else { "  " };
             let text = format!("{prefix}{line}");
             let text_color = if i == self.cursor {
-                at.app_selected_text
+                at.app.selected_text
             } else {
-                at.app_text
+                at.app.text
             };
-            let y = cy + at.app_title_bar_height as i32 + i as i32 * line_h;
+            let y = cy + at.app.title_bar_height as i32 + i as i32 * line_h;
             backend.draw_text(&text, cx + 4, y, 12, text_color)?;
         }
 
@@ -293,7 +291,7 @@ impl AppRunner {
             "Cancel=back".to_string()
         };
         let scroll_y = cy + ch as i32 - 14;
-        backend.draw_text(&scroll_text, cx + 4, scroll_y, 10, at.app_dim_text)?;
+        backend.draw_text(&scroll_text, cx + 4, scroll_y, 10, at.app.dim_text)?;
 
         Ok(())
     }
@@ -615,228 +613,6 @@ impl AppRunner {
         self.tv_guide.as_mut()
     }
 
-    /// Render the app screen to SDI objects.
-    pub fn update_sdi(&mut self, sdi: &mut SdiRegistry, at: &ActiveTheme) {
-        // Delegate to extracted app.
-        if let Some(ref mut app) = self.delegate {
-            app.update_sdi(sdi, at);
-            return;
-        }
-
-        // TV Guide uses its own custom grid rendering.
-        if let Some(ref mut guide) = self.tv_guide {
-            guide.update_sdi(sdi, at);
-            return;
-        }
-
-        // Full-screen background.
-        if !sdi.contains("app_bg") {
-            sdi.create("app_bg");
-        }
-        if let Ok(obj) = sdi.get_mut("app_bg") {
-            obj.x = 0;
-            obj.y = 0;
-            obj.w = at.screen_w;
-            obj.h = at.screen_h;
-            obj.color = at.app_bg;
-            obj.visible = true;
-            obj.z = 100;
-        }
-
-        // Title bar background.
-        if !sdi.contains("app_title_bg") {
-            sdi.create("app_title_bg");
-        }
-        if let Ok(obj) = sdi.get_mut("app_title_bg") {
-            obj.x = 0;
-            obj.y = 0;
-            obj.w = at.screen_w;
-            obj.h = at.app_title_bar_height;
-            obj.color = at.app_title_bar_bg;
-            obj.gradient_top = at.app_title_bar_gradient_top;
-            obj.gradient_bottom = at.app_title_bar_gradient_bottom;
-            obj.shadow_level = Some(1);
-            obj.visible = true;
-            obj.z = 101;
-        }
-
-        // Cache dynamic max-visible for input handling.
-        self.cached_max_visible = AppLayout::compute(at, 14).max_visible;
-
-        // Title text.
-        if !sdi.contains("app_title_text") {
-            sdi.create("app_title_text");
-        }
-
-        if let Ok(obj) = sdi.get_mut("app_title_text") {
-            let dir_suffix = if let Some(ref file) = self.viewing_file {
-                format!("  [{file}]")
-            } else {
-                self.browse_dir
-                    .as_deref()
-                    .map(|d| format!("  [{d}]"))
-                    .unwrap_or_default()
-            };
-            obj.text = Some(format!("{}{dir_suffix}", self.title));
-            obj.x = 8;
-            obj.y = 4;
-            obj.font_size = at.font_body;
-            obj.text_color = at.app_title_bar_text;
-            obj.w = 0;
-            obj.h = 0;
-            obj.visible = true;
-            obj.z = 102;
-            if at.app_title_bar_text_shadow {
-                obj.text_shadow_offset = Some((1, 1));
-                obj.text_shadow_color = Some(at.app_title_bar_text_shadow_color);
-            } else {
-                obj.text_shadow_offset = None;
-                obj.text_shadow_color = None;
-            }
-        }
-
-        // Content lines -- responsive to screen resolution.
-        let app_layout = AppLayout::compute(at, 14);
-        let line_rects = flex::vertical_list(
-            app_layout.content_x,
-            app_layout.content_y,
-            app_layout.content_w,
-            app_layout.line_h,
-            0,
-            app_layout.max_visible,
-        );
-
-        // Smooth selection lerp.
-        self.visual_selected +=
-            (self.cursor as f32 - self.visual_selected) * at.app_selection_lerp_speed;
-
-        // Selection highlight background.
-        if !sdi.contains("app_sel_bg") {
-            sdi.create("app_sel_bg");
-        }
-        let sel_y = app_layout.content_y + (self.visual_selected * app_layout.line_h as f32) as i32;
-        if let Ok(obj) = sdi.get_mut("app_sel_bg") {
-            obj.x = app_layout.content_x;
-            obj.y = sel_y;
-            obj.w = app_layout.content_w;
-            obj.h = at.terminal_line_height;
-            obj.color = at.app_selected_bg;
-            obj.border_radius = Some(at.app_selection_border_radius);
-            obj.visible = !self.lines.is_empty();
-            obj.z = 101;
-        }
-        // Selection accent bar (left edge).
-        if !sdi.contains("app_sel_accent") {
-            sdi.create("app_sel_accent");
-        }
-        if let Ok(obj) = sdi.get_mut("app_sel_accent") {
-            obj.x = app_layout.content_x;
-            obj.y = sel_y;
-            obj.w = 3;
-            obj.h = at.terminal_line_height;
-            obj.color = at.app_selection_accent_color;
-            obj.border_radius = Some(at.app_selection_border_radius);
-            obj.visible = !self.lines.is_empty();
-            obj.z = 102;
-        }
-
-        for (i, rect) in line_rects.iter().enumerate() {
-            let name = format!("app_line_{i}");
-            if !sdi.contains(&name) {
-                sdi.create(&name);
-            }
-            if let Ok(obj) = sdi.get_mut(&name) {
-                let line_idx = self.scroll + i;
-                if line_idx < self.lines.len() {
-                    obj.text = Some(self.lines[line_idx].clone());
-                    obj.visible = true;
-                } else {
-                    obj.text = None;
-                    obj.visible = false;
-                }
-                obj.x = rect.x + 6;
-                obj.y = rect.y;
-                obj.font_size = at.font_body;
-                obj.text_color = if i == self.cursor {
-                    at.app_selected_text
-                } else {
-                    at.app_text
-                };
-                obj.w = 0;
-                obj.h = 0;
-                obj.z = 102;
-            }
-        }
-
-        // Scroll indicator.
-        if !sdi.contains("app_scroll") {
-            sdi.create("app_scroll");
-        }
-        if let Ok(obj) = sdi.get_mut("app_scroll") {
-            if self.lines.len() > app_layout.max_visible {
-                obj.text = Some(format!(
-                    "[{}/{}]  Cancel=back",
-                    self.scroll + 1,
-                    self.lines.len().saturating_sub(app_layout.max_visible) + 1,
-                ));
-            } else {
-                obj.text = Some("Cancel=back".to_string());
-            }
-            obj.x = 8;
-            obj.y = at.screen_h as i32 - 14;
-            obj.font_size = at.font_hint;
-            obj.text_color = at.app_dim_text;
-            obj.w = 0;
-            obj.h = 0;
-            obj.visible = true;
-            obj.z = 102;
-        }
-    }
-
-    /// Hide all app-related SDI objects.
-    pub fn hide_sdi(sdi: &mut SdiRegistry) {
-        let fixed = [
-            "app_bg",
-            "app_title_bg",
-            "app_title_text",
-            "app_scroll",
-            "app_divider",
-            "app_sel_bg",
-            "app_sel_accent",
-        ];
-        for name in &fixed {
-            if let Ok(obj) = sdi.get_mut(name) {
-                obj.visible = false;
-            }
-        }
-        // Hide up to a generous upper bound (handles all resolutions).
-        for i in 0..100 {
-            let name = format!("app_line_{i}");
-            if !sdi.contains(&name) {
-                break;
-            }
-            if let Ok(obj) = sdi.get_mut(&name) {
-                obj.visible = false;
-            }
-        }
-        for i in 0..100 {
-            let lp = format!("app_lp_line_{i}");
-            if !sdi.contains(&lp) {
-                break;
-            }
-            let rp = format!("app_rp_line_{i}");
-            if let Ok(obj) = sdi.get_mut(&lp) {
-                obj.visible = false;
-            }
-            if let Ok(obj) = sdi.get_mut(&rp) {
-                obj.visible = false;
-            }
-        }
-
-        // Hide TV Guide objects.
-        TvGuideState::hide_sdi(sdi);
-    }
-
     /// Sync AppRunner pub fields from the delegate app.
     ///
     /// This keeps the legacy `title`, `lines`, `browse_dir`, `viewing_file`
@@ -866,301 +642,13 @@ impl AppRunner {
     }
 }
 
-/// View an audio file: parse headers and show track metadata.
-#[cfg(test)]
-fn view_audio_file(path: &str, data: &[u8]) -> Vec<String> {
-    let filename = path.rsplit('/').next().unwrap_or(path);
-    let mut lines = vec![format!("=== Now Viewing: {filename} ==="), String::new()];
-
-    let size_kb = data.len() / 1024;
-    let ext = filename.rsplit('.').next().unwrap_or("").to_lowercase();
-
-    // Detect format and parse headers.
-    if data.len() >= 4 && &data[..4] == b"RIFF" && data.len() >= 44 && &data[8..12] == b"WAVE" {
-        // WAV file -- parse header.
-        let channels = u16::from_le_bytes([data[22], data[23]]);
-        let sample_rate = u32::from_le_bytes([data[24], data[25], data[26], data[27]]);
-        let bits = u16::from_le_bytes([data[34], data[35]]);
-        let data_size = if data.len() >= 44 {
-            u32::from_le_bytes([data[40], data[41], data[42], data[43]])
-        } else {
-            0
-        };
-        let duration_secs = if sample_rate > 0 && channels > 0 && bits > 0 {
-            data_size as f64 / (sample_rate as f64 * channels as f64 * (bits as f64 / 8.0))
-        } else {
-            0.0
-        };
-
-        lines.push("  Format:       WAV (PCM audio)".to_string());
-        lines.push(format!("  Sample Rate:  {sample_rate} Hz"));
-        lines.push(format!("  Channels:     {channels}"));
-        lines.push(format!("  Bit Depth:    {bits}-bit"));
-        lines.push(format!("  Duration:     {duration_secs:.1}s"));
-        lines.push(format!("  File Size:    {size_kb} KB"));
-    } else if data.len() >= 3 && (data[..2] == [0xFF, 0xFB] || data[..3] == *b"ID3") {
-        // MP3 file.
-        lines.push("  Format:       MP3 (MPEG audio)".to_string());
-        lines.push(format!("  File Size:    {size_kb} KB"));
-
-        // Try to extract ID3v2 title/artist.
-        if data.len() > 10 && &data[..3] == b"ID3" {
-            let id3_info = parse_id3v2_basic(data);
-            if let Some(title) = id3_info.0 {
-                lines.push(format!("  Title:        {title}"));
-            }
-            if let Some(artist) = id3_info.1 {
-                lines.push(format!("  Artist:       {artist}"));
-            }
-        }
-
-        // Rough duration estimate from file size (128kbps average).
-        let est_secs = (data.len() as f64) / (128.0 * 1024.0 / 8.0);
-        lines.push(format!("  Duration:     ~{est_secs:.0}s (estimated)"));
-    } else {
-        lines.push(format!("  Format:       {ext} audio"));
-        lines.push(format!("  File Size:    {size_kb} KB"));
-    }
-
-    lines.push(String::new());
-    lines.push("----------------------------------".to_string());
-    lines.push(String::new());
-    lines.push("  To play in terminal:".to_string());
-    lines.push("    music play".to_string());
-    lines.push("    music pause / music stop".to_string());
-    lines.push("    music vol <0-100>".to_string());
-    lines.push(String::new());
-    lines.push("Cancel=back to library".to_string());
-    lines
-}
-
-/// Try to extract title and artist from an ID3v2 tag.
-/// Returns (Option<title>, Option<artist>).
-#[cfg(test)]
-fn parse_id3v2_basic(data: &[u8]) -> (Option<String>, Option<String>) {
-    if data.len() < 10 || &data[..3] != b"ID3" {
-        return (None, None);
-    }
-    let header_size = ((data[6] as usize & 0x7F) << 21)
-        | ((data[7] as usize & 0x7F) << 14)
-        | ((data[8] as usize & 0x7F) << 7)
-        | (data[9] as usize & 0x7F);
-    let end = (10 + header_size).min(data.len());
-
-    let mut title = None;
-    let mut artist = None;
-    let mut pos = 10;
-
-    while pos + 10 < end {
-        let frame_id = &data[pos..pos + 4];
-        let frame_size =
-            u32::from_be_bytes([data[pos + 4], data[pos + 5], data[pos + 6], data[pos + 7]])
-                as usize;
-        if frame_size == 0 || pos + 10 + frame_size > end {
-            break;
-        }
-        let frame_data = &data[pos + 10..pos + 10 + frame_size];
-        // Skip encoding byte, extract as lossy UTF-8.
-        let text = if frame_data.len() > 1 {
-            String::from_utf8_lossy(&frame_data[1..])
-                .trim_matches('\0')
-                .to_string()
-        } else {
-            String::new()
-        };
-
-        if frame_id == b"TIT2" && !text.is_empty() {
-            title = Some(text);
-        } else if frame_id == b"TPE1" && !text.is_empty() {
-            artist = Some(text);
-        }
-
-        pos += 10 + frame_size;
-    }
-
-    (title, artist)
-}
-
-/// View an image file: parse headers and show image metadata.
-#[cfg(test)]
-fn view_image_file(path: &str, data: &[u8]) -> Vec<String> {
-    let filename = path.rsplit('/').next().unwrap_or(path);
-    let mut lines = vec![format!("=== Photo: {filename} ==="), String::new()];
-
-    let size_kb = data.len() / 1024;
-
-    if data.len() >= 24 && &data[..8] == b"\x89PNG\r\n\x1a\n" {
-        // PNG -- IHDR is at offset 8 (4 len + 4 type + data).
-        let w = u32::from_be_bytes([data[16], data[17], data[18], data[19]]);
-        let h = u32::from_be_bytes([data[20], data[21], data[22], data[23]]);
-        let bit_depth = data[24];
-        let color_type = data[25];
-        let color_name = match color_type {
-            0 => "Grayscale",
-            2 => "RGB",
-            3 => "Indexed",
-            4 => "Grayscale+Alpha",
-            6 => "RGBA",
-            _ => "Unknown",
-        };
-
-        lines.push("  Format:       PNG".to_string());
-        lines.push(format!("  Dimensions:   {w} x {h} pixels"));
-        lines.push(format!("  Color:        {color_name} ({bit_depth}-bit)"));
-        lines.push(format!("  File Size:    {size_kb} KB"));
-    } else if data.len() >= 2 && data[..2] == [0xFF, 0xD8] {
-        // JPEG.
-        let (w, h) = parse_jpeg_dimensions(data);
-        lines.push("  Format:       JPEG".to_string());
-        if w > 0 && h > 0 {
-            lines.push(format!("  Dimensions:   {w} x {h} pixels"));
-        }
-        lines.push(format!("  File Size:    {size_kb} KB"));
-    } else if data.len() >= 6 && (&data[..4] == b"GIF8") {
-        // GIF.
-        let w = u16::from_le_bytes([data[6], data[7]]);
-        let h = u16::from_le_bytes([data[8], data[9]]);
-        lines.push("  Format:       GIF".to_string());
-        lines.push(format!("  Dimensions:   {w} x {h} pixels"));
-        lines.push(format!("  File Size:    {size_kb} KB"));
-    } else if data.len() >= 12 && &data[..4] == b"RIFF" && &data[8..12] == b"WEBP" {
-        // WebP.
-        lines.push("  Format:       WebP".to_string());
-        lines.push(format!("  File Size:    {size_kb} KB"));
-    } else {
-        let ext = filename.rsplit('.').next().unwrap_or("").to_lowercase();
-        lines.push(format!("  Format:       {ext} image"));
-        lines.push(format!("  File Size:    {size_kb} KB"));
-    }
-
-    lines.push(String::new());
-    lines.push("----------------------------------".to_string());
-    lines.push(String::new());
-    lines.push("  (Image preview not available".to_string());
-    lines.push("   in text mode)".to_string());
-    lines.push(String::new());
-    lines.push("Cancel=back to gallery".to_string());
-    lines
-}
-
-/// Try to extract JPEG image dimensions from SOF markers.
-#[cfg(test)]
-fn parse_jpeg_dimensions(data: &[u8]) -> (u16, u16) {
-    let mut pos = 2;
-    while pos + 4 < data.len() {
-        if data[pos] != 0xFF {
-            break;
-        }
-        let marker = data[pos + 1];
-        // SOF0..SOF3 markers contain dimensions.
-        if (0xC0..=0xC3).contains(&marker) && pos + 9 < data.len() {
-            let h = u16::from_be_bytes([data[pos + 5], data[pos + 6]]);
-            let w = u16::from_be_bytes([data[pos + 7], data[pos + 8]]);
-            return (w, h);
-        }
-        if marker == 0xD9 || marker == 0xDA {
-            break; // End of headers.
-        }
-        let seg_len = u16::from_be_bytes([data[pos + 2], data[pos + 3]]) as usize;
-        pos += 2 + seg_len;
-    }
-    (0, 0)
-}
-
-/// Generic file viewer: text content or hex dump.
-#[cfg(test)]
-fn view_generic_file(path: &str, data: &[u8]) -> Vec<String> {
-    let filename = path.rsplit('/').next().unwrap_or(path);
-    let mut lines = vec![format!("--- {filename} ---"), String::new()];
-
-    let is_text = data.len() < 64 * 1024 && std::str::from_utf8(data).is_ok();
-    if is_text {
-        let text = String::from_utf8_lossy(data);
-        for line in text.lines() {
-            lines.push(line.to_string());
-        }
-        if data.is_empty() {
-            lines.push("(empty file)".to_string());
-        }
-    } else {
-        lines.push(format!("Binary file  ({} bytes)", data.len()));
-        lines.push(String::new());
-        for (i, chunk) in data.chunks(16).enumerate().take(8) {
-            let hex: Vec<String> = chunk.iter().map(|b| format!("{b:02x}")).collect();
-            let ascii: String = chunk
-                .iter()
-                .map(|&b| {
-                    if (0x20..=0x7e).contains(&b) {
-                        b as char
-                    } else {
-                        '.'
-                    }
-                })
-                .collect();
-            lines.push(format!("{:04x}  {:<48}  {ascii}", i * 16, hex.join(" ")));
-        }
-        if data.len() > 128 {
-            lines.push(format!("... ({} more bytes)", data.len() - 128));
-        }
-    }
-
-    lines.push(String::new());
-    lines.push("Cancel=back".to_string());
-    lines
-}
-
-/// List a VFS directory, returning display lines.
-fn list_directory(vfs: &dyn Vfs, path: &str) -> Vec<String> {
-    let mut lines = Vec::new();
-
-    // Parent link (unless at root).
-    if path != "/" {
-        lines.push("..".to_string());
-    }
-
-    match vfs.readdir(path) {
-        Ok(entries) => {
-            // Directories first, then files.
-            let mut dirs: Vec<_> = entries
-                .iter()
-                .filter(|e| e.kind == EntryKind::Directory)
-                .collect();
-            let mut files: Vec<_> = entries
-                .iter()
-                .filter(|e| e.kind == EntryKind::File)
-                .collect();
-            dirs.sort_by(|a, b| a.name.cmp(&b.name));
-            files.sort_by(|a, b| a.name.cmp(&b.name));
-
-            for d in &dirs {
-                lines.push(format!("{}/", d.name));
-            }
-            for f in &files {
-                let size = f.size;
-                if size >= 1024 {
-                    lines.push(format!("{}  ({} KB)", f.name, size / 1024));
-                } else {
-                    lines.push(format!("{}  ({size} B)", f.name));
-                }
-            }
-
-            if dirs.is_empty() && files.is_empty() {
-                lines.push("(empty directory)".to_string());
-            }
-        },
-        Err(e) => {
-            lines.push(format!("Error reading directory: {e}"));
-        },
-    }
-
-    lines
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::apps::file_viewer::{view_audio_file, view_generic_file, view_image_file};
     use crate::backend::Color;
     use crate::dashboard::AppEntry;
+    use crate::sdi::SdiRegistry;
     use crate::vfs::MemoryVfs;
 
     fn make_app(title: &str) -> AppEntry {

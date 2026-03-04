@@ -340,6 +340,43 @@ const JS_DOM_BOOTSTRAP: &str = r#"
     return child;
   };
 
+  // -- Event listener support --
+  var __oasis_listeners = {};
+
+  Element.prototype.addEventListener = function(type, fn) {
+    var nid = this.__oasis_node_id;
+    var key = nid + ":" + type;
+    if (!__oasis_listeners[key]) __oasis_listeners[key] = [];
+    __oasis_listeners[key].push(fn);
+  };
+  Element.prototype.removeEventListener = function(type, fn) {
+    var nid = this.__oasis_node_id;
+    var key = nid + ":" + type;
+    var arr = __oasis_listeners[key];
+    if (!arr) return;
+    for (var i = 0; i < arr.length; i++) {
+      if (arr[i] === fn) { arr.splice(i, 1); return; }
+    }
+  };
+  Element.prototype.dispatchEvent = function(evt) {
+    var nid = this.__oasis_node_id;
+    var key = nid + ":" + evt.type;
+    var arr = __oasis_listeners[key];
+    if (!arr) return;
+    evt.target = this;
+    for (var i = 0; i < arr.length; i++) arr[i].call(this, evt);
+  };
+
+  // Expose dispatch helper for Rust-side event triggering.
+  globalThis.__oasis_dispatch_event = function(nid, type, detail) {
+    var key = nid + ":" + type;
+    var arr = __oasis_listeners[key];
+    if (!arr || arr.length === 0) return;
+    var el = new Element(nid);
+    var evt = { type: type, target: el, detail: detail || null };
+    for (var i = 0; i < arr.length; i++) arr[i].call(el, evt);
+  };
+
   var document = {
     getElementById: function(id) {
       var nid = __oasis_getbyid(id);

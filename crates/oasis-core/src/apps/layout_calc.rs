@@ -32,7 +32,7 @@ impl AppLayout {
     /// The `padding` parameter is the combined vertical padding between
     /// title bar, content area, and bottom bar edges (typically 14).
     pub fn compute(at: &ActiveTheme, padding: u32) -> Self {
-        let title_h = at.app_title_bar_height;
+        let title_h = at.app.title_bar_height;
         let line_h = at.terminal_line_height.max(1);
         let usable_h = at
             .screen_h
@@ -65,7 +65,7 @@ mod tests {
         let mut at = ActiveTheme::default();
         at.screen_w = 480;
         at.screen_h = 272;
-        at.app_title_bar_height = 20;
+        at.app.title_bar_height = 20;
         at.terminal_line_height = 12;
         at.statusbar_height = 16;
         at.bottombar_height = 16;
@@ -100,7 +100,7 @@ mod tests {
     fn tiny_screen_no_panic() {
         let mut at = mock_theme();
         at.screen_h = 50;
-        at.app_title_bar_height = 20;
+        at.app.title_bar_height = 20;
         at.statusbar_height = 16;
         at.bottombar_height = 16;
         let layout = AppLayout::compute(&at, 14);

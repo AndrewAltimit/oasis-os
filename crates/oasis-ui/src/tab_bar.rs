@@ -24,6 +24,8 @@ pub struct TabBar {
     pub active: usize,
     /// Visual style variant.
     pub style: TabStyle,
+    /// Whether the tab bar is disabled (non-interactive).
+    pub disabled: bool,
 }
 
 impl TabBar {
@@ -33,6 +35,14 @@ impl TabBar {
             tabs,
             active: 0,
             style: TabStyle::Underline,
+            disabled: false,
+        }
+    }
+
+    /// Select a tab by index (respects disabled state).
+    pub fn select(&mut self, index: usize) {
+        if !self.disabled && index < self.tabs.len() {
+            self.active = index;
         }
     }
 }

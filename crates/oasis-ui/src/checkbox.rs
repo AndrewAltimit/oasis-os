@@ -18,8 +18,7 @@ pub struct Checkbox {
 /// Size of the checkbox box in pixels.
 const BOX_SIZE: u32 = 14;
 
-/// Gap between box and label.
-const LABEL_GAP: u32 = 6;
+use crate::layout::LABEL_GAP;
 
 impl Checkbox {
     /// Create a new checkbox.

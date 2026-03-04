@@ -340,4 +340,81 @@ mod tests {
             .unwrap();
         assert_eq!(engine.eval("MY_CONST").unwrap(), JsValue::Int(99));
     }
+
+    #[test]
+    fn eval_object_returns_string() {
+        // Objects are converted to String("[object]") by our JsValue mapping.
+        let engine = JsEngine::new(8 * 1024 * 1024).unwrap();
+        let val = engine.eval("({})").unwrap();
+        assert_eq!(val, JsValue::String("[object]".into()));
+    }
+
+    #[test]
+    fn eval_array_returns_string() {
+        let engine = JsEngine::new(8 * 1024 * 1024).unwrap();
+        let val = engine.eval("[1,2,3]").unwrap();
+        assert_eq!(val, JsValue::String("[object]".into()));
+    }
+
+    #[test]
+    fn eval_large_integer() {
+        let engine = JsEngine::new(8 * 1024 * 1024).unwrap();
+        assert_eq!(engine.eval("2147483647").unwrap(), JsValue::Int(i32::MAX));
+    }
+
+    #[test]
+    fn eval_negative_integer() {
+        let engine = JsEngine::new(8 * 1024 * 1024).unwrap();
+        assert_eq!(engine.eval("-42").unwrap(), JsValue::Int(-42));
+    }
+
+    #[test]
+    fn console_log_no_args() {
+        let engine = JsEngine::new(8 * 1024 * 1024).unwrap();
+        engine.eval("console.log()").unwrap();
+        let out = engine.console_output();
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].message, "");
+    }
+
+    #[test]
+    fn clear_timeout_noop() {
+        let engine = JsEngine::new(8 * 1024 * 1024).unwrap();
+        let val = engine.eval("clearTimeout(0)").unwrap();
+        assert_eq!(val, JsValue::Undefined);
+    }
+
+    #[test]
+    fn js_error_display() {
+        let engine = JsEngine::new(8 * 1024 * 1024).unwrap();
+        let err = engine.eval("throw new Error('oops')").unwrap_err();
+        assert!(err.to_string().contains("oops"));
+    }
+
+    #[test]
+    fn js_error_is_error_trait() {
+        let err = JsError {
+            message: "test".into(),
+            stack: None,
+        };
+        let dyn_err: &dyn std::error::Error = &err;
+        assert!(!dyn_err.to_string().is_empty());
+    }
+
+    #[test]
+    fn function_definition_and_call() {
+        let engine = JsEngine::new(8 * 1024 * 1024).unwrap();
+        engine.eval("function add(a, b) { return a + b; }").unwrap();
+        assert_eq!(engine.eval("add(3, 4)").unwrap(), JsValue::Int(7));
+    }
+
+    #[test]
+    fn closures_work() {
+        let engine = JsEngine::new(8 * 1024 * 1024).unwrap();
+        engine
+            .eval("var counter = (function() { var n = 0; return function() { return ++n; }; })()")
+            .unwrap();
+        assert_eq!(engine.eval("counter()").unwrap(), JsValue::Int(1));
+        assert_eq!(engine.eval("counter()").unwrap(), JsValue::Int(2));
+    }
 }

@@ -531,6 +531,7 @@ static mut UMEM_READ: *mut u8 = core::ptr::null_mut();
 /// Allocate codec buffers in user memory partition (partition 2).
 /// Required because syscall stubs validate that pointers are in user range.
 unsafe fn alloc_codec_user_mem() -> bool {
+    // SAFETY: sceKernelAllocPartitionMemory with valid partition ID and size.
     let block = unsafe {
         psp::sys::sceKernelAllocPartitionMemory(
             psp::sys::SceSysMemPartitionId::SceKernelPrimaryUserPartition,
@@ -544,11 +545,14 @@ unsafe fn alloc_codec_user_mem() -> bool {
         crate::debug_log(b"[OASIS] user mem alloc failed");
         return false;
     }
+    // SAFETY: block is a valid memory block ID returned by sceKernelAllocPartitionMemory.
     let base = unsafe { psp::sys::sceKernelGetBlockHeadAddr(block) } as *mut u8;
     if base.is_null() {
         crate::debug_log(b"[OASIS] user mem addr null");
         return false;
     }
+    // SAFETY: base is valid; pointer arithmetic stays within the allocated block.
+    // Single-threaded init, statics written once.
     unsafe {
         UMEM_BLOCK_ID = block;
         // Align codec buffer to 64 bytes.
@@ -567,6 +571,7 @@ unsafe fn alloc_codec_user_mem() -> bool {
 
 /// Free user-memory block if allocated.
 unsafe fn free_codec_user_mem() {
+    // SAFETY: UMEM_BLOCK_ID is valid if >= SceUid(0); freeing the partition memory.
     unsafe {
         if UMEM_BLOCK_ID >= psp::sys::SceUid(0) && UMEM_BLOCK_ID != psp::sys::SceUid(0) {
             psp::sys::sceKernelFreePartitionMemory(UMEM_BLOCK_ID);
@@ -588,6 +593,7 @@ static mut CURRENT_TRACK: usize = 0;
 // ---------------------------------------------------------------------------
 
 pub fn current_track_name() -> &'static [u8] {
+    // SAFETY: TRACK_NAME is a valid 48-byte static buffer.
     unsafe { core::slice::from_raw_parts((&raw const TRACK_NAME).cast::<u8>(), 48) }
 }
 
@@ -670,6 +676,7 @@ pub fn radio_station_name() -> &'static [u8] {
 }
 
 pub fn radio_meta() -> &'static [u8] {
+    // SAFETY: RADIO_META is a valid 48-byte static buffer.
     unsafe { core::slice::from_raw_parts((&raw const RADIO_META).cast::<u8>(), 48) }
 }
 
@@ -684,6 +691,8 @@ static VIDEO_MP3_ACTIVE: AtomicBool = AtomicBool::new(false);
 /// When the MP3 finishes, it loops until `stop_video_mp3()` is called.
 pub fn play_video_mp3(path: &[u8]) {
     // Copy path to shared buffer.
+    // SAFETY: VIDEO_MP3_PATH is a 128-byte static; len is clamped to 127.
+    // Written before VIDEO_MP3_ACTIVE is set (Release ordering ensures visibility).
     unsafe {
         let dst = (&raw mut VIDEO_MP3_PATH).cast::<u8>();
         let len = path.len().min(127);
@@ -722,6 +731,8 @@ pub fn stop_video_mp3() {
 unsafe fn resolve_nid(modules: &[(&[u8], &[u8])], nid: u32) -> Option<*mut u8> {
     // Try each named module/library pair.
     for &(module, library) in modules {
+        // SAFETY: find_function calls sctrlHENFindFunction (CFW kernel API)
+        // with valid null-terminated module/library name pointers.
         if let Some(ptr) =
             unsafe { psp::hook::find_function(module.as_ptr(), library.as_ptr(), nid) }
         {
@@ -730,6 +741,7 @@ unsafe fn resolve_nid(modules: &[(&[u8], &[u8])], nid: u32) -> Option<*mut u8> {
     }
     // Fallback: NULL module name (searches all loaded modules on PRO/ME/ARK).
     for &(_, library) in modules {
+        // SAFETY: find_function with null module name searches all loaded modules.
         if let Some(ptr) =
             unsafe { psp::hook::find_function(core::ptr::null(), library.as_ptr(), nid) }
         {
@@ -758,6 +770,8 @@ fn is_valid_ptr(addr: u32) -> bool {
 
 /// Resolve module enumeration APIs.
 unsafe fn init_module_enum() -> bool {
+    // SAFETY: Resolving kernel module manager NIDs via sctrlHENFindFunction;
+    // transmuting raw pointers to typed fn pointers. Single-threaded init.
     unsafe {
         if let Some(ptr) = resolve_nid(MOD_MGR_MODULES, NID_GET_MODULE_ID_LIST) {
             core::ptr::write_volatile(
@@ -786,6 +800,9 @@ unsafe fn init_module_enum() -> bool {
 /// Enumerate all loaded modules and log their names.
 /// Stores text_addr for MP3/codec modules when found.
 unsafe fn enumerate_modules() {
+    // SAFETY: Calling resolved kernel APIs (sceKernelGetModuleIdList,
+    // sceKernelQueryModuleInfo) with properly-sized stack buffers.
+    // Reading module info structs at documented offsets.
     unsafe {
         let get_list = match core::ptr::read_volatile(&raw const GET_MODULE_ID_LIST_FN) {
             Some(f) => f,
@@ -903,6 +920,8 @@ unsafe fn walk_exports_from_text(text_addr: u32, nid: u32) -> Option<*mut u8> {
     if !is_valid_ptr(text_addr) {
         return None;
     }
+    // SAFETY: text_addr validated by is_valid_ptr; reading SceModuleInfo header
+    // at documented offsets (ent_top, ent_end) from the module's text segment.
     unsafe {
         let base = text_addr as *const u8;
         let ent_top_val = *(base.add(SCEMODINFO_ENT_TOP) as *const u32);
@@ -925,6 +944,8 @@ unsafe fn walk_exports_from_text(text_addr: u32, nid: u32) -> Option<*mut u8> {
 
 /// Walk an export table (array of SceLibraryEntryTable entries).
 unsafe fn walk_export_table(ent_top: *const u8, ent_size: usize, nid: u32) -> Option<*mut u8> {
+    // SAFETY: ent_top validated by is_valid_ptr; reading SceLibraryEntryTable
+    // entries at documented field offsets. Pointer reads validated before use.
     unsafe {
         let mut offset = 0usize;
         while offset < ent_size {
@@ -1009,6 +1030,9 @@ unsafe fn try_codec_stub_extraction() -> bool {
     let mut nid_addr: u32 = 0;
     let mut addr: u32 = 0x0880_0000;
 
+    // SAFETY: Scanning user memory range (0x08800000-0x0A000000) for NID patterns.
+    // From kernel mode we have full access to user memory. Volatile reads avoid
+    // compiler optimizations that might skip changed memory.
     while addr < 0x0A00_0000 - 4 {
         let val = unsafe { core::ptr::read_volatile(addr as *const u32) };
         if val == NID_CODEC_DECODE {
@@ -1044,6 +1068,8 @@ unsafe fn try_codec_stub_extraction() -> bool {
 
     // Step 2: Walk backwards to find the NID table start (sorted
     // ascending).
+    // SAFETY: Volatile reads scanning backwards through user memory to find
+    // the NID table start. Addresses are within validated user memory range.
     let mut table_start = nid_addr;
     while table_start > 0x0880_0004 {
         let prev = unsafe { core::ptr::read_volatile((table_start - 4) as *const u32) };
@@ -1057,6 +1083,7 @@ unsafe fn try_codec_stub_extraction() -> bool {
 
     // Walk forward to count entries.
     let mut table_end = table_start;
+    // SAFETY: Volatile reads scanning forward to count NID table entries.
     let mut prev_val = 0u32;
     while table_end < nid_addr + 64 {
         let val = unsafe { core::ptr::read_volatile(table_end as *const u32) };
@@ -1078,6 +1105,7 @@ unsafe fn try_codec_stub_extraction() -> bool {
 
     // Step 3: Scan user memory for a pointer to table_start.
     // This finds the SceLibraryStubTable's nid_table field (+0x0C).
+    // SAFETY: Volatile reads scanning user memory for SceLibraryStubTable pointer.
     let mut stub_table_ptr: u32 = 0;
     addr = 0x0880_0000;
     while addr < 0x0A00_0000 - 8 {
@@ -1109,6 +1137,9 @@ unsafe fn try_codec_stub_extraction() -> bool {
     // kernel mode because the PSP syscall mechanism doesn't require
     // user-mode context.
     let mut resolved = 0u32;
+    // SAFETY: Volatile reads of NID table entries and MIPS instruction words
+    // at validated user memory addresses. Stub addresses are within the game's
+    // import stub table.
     let mut i = 0u32;
     while i < entry_count {
         let nid = unsafe { core::ptr::read_volatile((table_start + i * 4) as *const u32) };
@@ -1134,6 +1165,9 @@ unsafe fn try_codec_stub_extraction() -> bool {
 
         // Use the stub address as the function pointer. When called,
         // jr $ra + syscall N trampolines through the kernel.
+        // SAFETY: Transmuting validated syscall stub addresses to typed fn pointers.
+        // The stubs are game import stubs (jr $ra + syscall N) that trap to the
+        // kernel's syscall handler, which dispatches to the actual codec function.
         unsafe {
             match nid {
                 NID_CODEC_CHECK_NEED_MEM => {
@@ -1200,12 +1234,15 @@ fn log_hex(prefix: &[u8], val: u32) {
 ///             sctrlHENFindFunction can find their exports).
 unsafe fn load_av_modules() {
     // Strategy 1: sceUtilityLoadModule (loads into user space).
+    // SAFETY: Resolving sceUtilityLoadModule via sctrlHENFindFunction and
+    // transmuting the raw pointer to a typed fn pointer.
     let load_fn: Option<unsafe extern "C" fn(i32) -> i32> = unsafe {
         resolve_nid(UTILITY_MODULES, NID_UTILITY_LOAD_MODULE).map(|ptr| core::mem::transmute(ptr))
     };
 
     if let Some(load) = load_fn {
         crate::debug_log(b"[OASIS] sceUtilityLoadModule resolved");
+        // SAFETY: Calling resolved sceUtilityLoadModule with valid module IDs.
         let r1 = unsafe { load(PSP_MODULE_AV_AVCODEC) };
         log_i32(b"[OASIS] LoadModule AVCODEC=", r1);
         let r2 = unsafe { load(PSP_MODULE_AV_MPEGBASE) };
@@ -1228,6 +1265,8 @@ unsafe fn load_av_modules() {
         b"flash0:/vsh/module/libmp3.prx\0",
     ];
     for path in kprxs {
+        // SAFETY: sceKernelLoadModule/sceKernelStartModule with valid
+        // null-terminated flash0 paths. Kernel-mode PRX loading.
         unsafe {
             let mod_id = psp::sys::sceKernelLoadModule(path.as_ptr(), 0, core::ptr::null_mut());
             if mod_id.0 >= 0 {
@@ -1249,6 +1288,9 @@ unsafe fn load_av_modules() {
 /// first, then falls back to manual export table walking for user-mode
 /// modules.
 unsafe fn try_resolve_mp3() -> bool {
+    // SAFETY: Resolving sceMp3 NIDs via combined resolution (sctrlHENFindFunction +
+    // export table walking). Transmuting raw pointers to typed fn pointers.
+    // Volatile writes to statics during single-threaded audio init.
     unsafe {
         if let Some(ptr) =
             resolve_nid_any(MP3_MODULES, &raw const MP3_TEXT_ADDR, NID_MP3_INIT_RESOURCE)
@@ -1327,6 +1369,9 @@ unsafe fn try_resolve_mp3() -> bool {
 /// Try to resolve sceAudiocodec function pointers. Uses combined
 /// resolution (sctrlHENFindFunction + export table walking).
 unsafe fn try_resolve_codec() -> bool {
+    // SAFETY: Resolving sceAudiocodec NIDs via combined resolution
+    // (sctrlHENFindFunction + export table walking). Transmuting raw pointers
+    // to typed fn pointers. Volatile writes to statics during audio init.
     unsafe {
         if let Some(ptr) = resolve_nid_any(
             CODEC_MODULES,
@@ -1384,6 +1429,9 @@ unsafe fn try_resolve_codec() -> bool {
 /// Resolve all audio driver function pointers.
 unsafe fn init_audio_drivers() -> bool {
     // Step 1: Resolve sceAudio driver (always available in games).
+    // SAFETY: Resolving sceAudio driver NIDs via sctrlHENFindFunction and
+    // transmuting to typed fn pointers. Volatile writes to statics during
+    // single-threaded audio init.
     unsafe {
         if let Some(ptr) = resolve_nid(AUDIO_MODULES, NID_AUDIO_CH_RESERVE) {
             core::ptr::write_volatile(
@@ -1453,14 +1501,18 @@ unsafe fn init_audio_drivers() -> bool {
     {
         let mut attempt = 0u32;
         while attempt < 3 {
+            // SAFETY: try_resolve_codec resolves codec NIDs; safe during audio init.
             if unsafe { try_resolve_codec() } {
+                // SAFETY: Volatile write to DECODER_BACKEND during single-threaded init.
                 unsafe {
                     core::ptr::write_volatile(&raw mut DECODER_BACKEND, 2);
                 }
                 crate::debug_log(b"[OASIS] using sceAudiocodec backend");
                 return true;
             }
+            // SAFETY: try_codec_stub_extraction scans user memory for codec stubs.
             if unsafe { try_codec_stub_extraction() } {
+                // SAFETY: Volatile write to DECODER_BACKEND during single-threaded init.
                 unsafe {
                     core::ptr::write_volatile(&raw mut DECODER_BACKEND, 2);
                 }
@@ -1469,6 +1521,7 @@ unsafe fn init_audio_drivers() -> bool {
             }
             attempt += 1;
             if attempt < 3 {
+                // SAFETY: PSP kernel syscall to sleep thread between retry attempts.
                 unsafe { psp::sys::sceKernelDelayThread(15_000_000) };
             }
         }
@@ -1478,19 +1531,25 @@ unsafe fn init_audio_drivers() -> bool {
     // retry.  This game likely doesn't use audio codecs, so the
     // conflict risk is low.
     crate::debug_log(b"[OASIS] loading AV modules (fallback)");
+    // SAFETY: load_av_modules loads PSP AV system modules from flash0.
     unsafe { load_av_modules() };
 
     // Retry sceAudiocodec after module load.
+    // SAFETY: Retry codec resolution after loading AV modules.
     if unsafe { try_resolve_codec() } {
+        // SAFETY: Volatile write to DECODER_BACKEND during single-threaded init.
         unsafe { core::ptr::write_volatile(&raw mut DECODER_BACKEND, 2) };
         crate::debug_log(b"[OASIS] using sceAudiocodec backend");
         return true;
     }
 
     // Try sceMp3 as last resort.
+    // SAFETY: init_module_enum/enumerate_modules resolve kernel APIs and scan modules.
     unsafe { init_module_enum() };
     unsafe { enumerate_modules() };
+    // SAFETY: try_resolve_mp3 resolves sceMp3 NIDs.
     if unsafe { try_resolve_mp3() } {
+        // SAFETY: Volatile write to DECODER_BACKEND during single-threaded init.
         unsafe { core::ptr::write_volatile(&raw mut DECODER_BACKEND, 1) };
         crate::debug_log(b"[OASIS] using sceMp3 backend");
         return true;
@@ -1508,6 +1567,10 @@ unsafe fn init_audio_drivers() -> bool {
 /// Load network modules and initialize the PSP network stack.
 /// Only called on first radio activation.
 unsafe fn init_network() -> bool {
+    // SAFETY: Initializing PSP network stack via resolved kernel driver NIDs.
+    // Loading network PRX modules, resolving sceNetInet/sceNetApctl/sceNetResolver
+    // function pointers, and calling them to connect WiFi. Volatile reads/writes
+    // to statics during audio thread network init (single caller).
     unsafe {
         if core::ptr::read_volatile(&raw const NET_INITIALIZED) {
             return true;
@@ -1675,6 +1738,8 @@ unsafe fn init_network() -> bool {
 
 /// Resolve hostname to IPv4 address using sceNetResolver.
 unsafe fn resolve_hostname_raw(host: *const u8) -> Option<[u8; 4]> {
+    // SAFETY: Calling resolved sceNetResolver functions with valid parameters.
+    // RESOLVER_BUF is a stack-like static buffer used as resolver working memory.
     unsafe {
         let create = core::ptr::read_volatile(&raw const RESOLVER_CREATE_FN)?;
         let start = core::ptr::read_volatile(&raw const RESOLVER_START_N2A_FN)?;
@@ -1722,6 +1787,7 @@ fn make_sockaddr_in(ip: [u8; 4], port: u16) -> [u8; 16] {
 
 /// Send all bytes on a socket (loop until complete).
 unsafe fn send_all(fd: i32, data: &[u8]) -> bool {
+    // SAFETY: Calling resolved sceNetInetSend with valid socket fd and data buffer.
     unsafe {
         let send = match core::ptr::read_volatile(&raw const INET_SEND_FN) {
             Some(f) => f,
@@ -1745,6 +1811,8 @@ unsafe fn send_all(fd: i32, data: &[u8]) -> bool {
 
 unsafe fn scan_playlist() {
     let config = crate::config::get_config();
+    // SAFETY: Volatile write/read of PLAYLIST_LEN; called only from audio thread.
+    // scan_dir_recursive accesses PLAYLIST statics from this thread only.
     unsafe {
         core::ptr::write_volatile(&raw mut PLAYLIST_LEN, 0);
         scan_dir_recursive(&config.music_dir, config.music_dir_len, 0);
@@ -1761,11 +1829,13 @@ unsafe fn scan_dir_recursive(dir_path: &[u8], dir_len: usize, depth: usize) {
     if depth > MAX_SCAN_DEPTH {
         return;
     }
+    // SAFETY: Volatile read of PLAYLIST_LEN; accessed only from audio thread.
     let pl_len = unsafe { core::ptr::read_volatile(&raw const PLAYLIST_LEN) };
     if pl_len >= MAX_PLAYLIST {
         return;
     }
 
+    // SAFETY: sceIoDopen with valid null-terminated directory path.
     let dfd = unsafe { psp::sys::sceIoDopen(dir_path.as_ptr()) };
     if dfd.0 < 0 {
         if depth == 0 {
@@ -1774,6 +1844,10 @@ unsafe fn scan_dir_recursive(dir_path: &[u8], dir_len: usize, depth: usize) {
         return;
     }
 
+    // SAFETY: sceIoDread/sceIoDclose with valid directory fd. SceIoDirent is
+    // repr(C) and zero-initialization is valid. Pointer arithmetic on d_name
+    // stays within the 256-byte name buffer. PLAYLIST entries written within
+    // bounds (PLAYLIST_LEN < MAX_PLAYLIST).
     unsafe {
         let mut dirent = core::mem::zeroed::<psp::sys::SceIoDirent>();
         loop {
@@ -1863,6 +1937,8 @@ unsafe fn scan_dir_recursive(dir_path: &[u8], dir_len: usize, depth: usize) {
 // ---------------------------------------------------------------------------
 
 unsafe fn set_track_name(path: &[u8]) {
+    // SAFETY: Writing to TRACK_NAME static buffer; called only from audio thread.
+    // copy_len is clamped to 47 (buffer is 48 bytes).
     unsafe {
         let mut last_slash = 0;
         let mut i = 0;
@@ -1921,6 +1997,8 @@ unsafe fn is_oasis_running() -> bool {
         let mut matched = true;
         let mut j = 0usize;
         while j < needle.len() {
+            // SAFETY: Volatile read from user memory (0x08800000-0x09800000).
+            // Kernel mode has full access to user memory range.
             let byte = unsafe { core::ptr::read_volatile((addr + j as u32) as *const u8) };
             if byte != needle[j] {
                 matched = false;
@@ -1947,7 +2025,9 @@ unsafe extern "C" fn audio_thread_entry(_args: usize, _argp: *mut core::ffi::c_v
     {
         let delays: [u32; 4] = [3_000_000, 3_000_000, 4_000_000, 5_000_000];
         for (i, &delay) in delays.iter().enumerate() {
+            // SAFETY: PSP kernel syscall to sleep thread.
             unsafe { psp::sys::sceKernelDelayThread(delay) };
+            // SAFETY: is_oasis_running scans user memory from kernel mode.
             if unsafe { is_oasis_running() } {
                 crate::debug_log(b"[OASIS] OASIS_OS detected, skipping PRX audio");
                 return 0;
@@ -1959,22 +2039,27 @@ unsafe extern "C" fn audio_thread_entry(_args: usize, _argp: *mut core::ffi::c_v
         crate::debug_log(b"[OASIS] OASIS_OS not detected after 15s, proceeding");
     }
 
+    // SAFETY: init_audio_drivers resolves audio/codec NIDs; called from audio thread.
     if !unsafe { init_audio_drivers() } {
         crate::debug_log(b"[OASIS] audio init failed");
         return 1;
     }
 
     AUDIO_AVAILABLE.store(1, Ordering::Relaxed);
+    // SAFETY: scan_playlist accesses PLAYLIST statics from this thread only.
     unsafe { scan_playlist() };
 
+    // SAFETY: Volatile read of PLAYLIST_LEN; accessed only from audio thread.
     if unsafe { core::ptr::read_volatile(&raw const PLAYLIST_LEN) } == 0 {
         crate::debug_log(b"[OASIS] no mp3 files found");
         // Don't return -- thread stays alive for radio streaming.
     }
 
     // Init MP3 resource manager (sceMp3 backend only).
+    // SAFETY: Volatile read of DECODER_BACKEND; set during init, read-only after.
     let backend = unsafe { core::ptr::read_volatile(&raw const DECODER_BACKEND) };
     if backend == 1 {
+        // SAFETY: Calling resolved sceMp3InitResource fn pointer.
         unsafe {
             if let Some(f) = core::ptr::read_volatile(&raw const MP3_INIT_RESOURCE_FN) {
                 let ret = f();
@@ -1992,6 +2077,7 @@ unsafe extern "C" fn audio_thread_entry(_args: usize, _argp: *mut core::ffi::c_v
     // get rejected.  Even when resolved via sctrlHENFindFunction, the
     // kernel functions may still do pointer validation.
     if backend == 2 {
+        // SAFETY: alloc_codec_user_mem allocates from PSP user-memory partition.
         if !unsafe { alloc_codec_user_mem() } {
             crate::debug_log(b"[OASIS] codec user mem failed");
             return 1;
@@ -2001,9 +2087,11 @@ unsafe extern "C" fn audio_thread_entry(_args: usize, _argp: *mut core::ffi::c_v
     // Reserve audio output.  Prefer the SRC (Sample Rate Conversion)
     // channel which is a dedicated output path that does NOT conflict
     // with the 8 regular PCM channels games use.
+    // SAFETY: Volatile read of USE_SRC_OUTPUT; set during init, read-only after.
     let use_src = unsafe { core::ptr::read_volatile(&raw const USE_SRC_OUTPUT) };
     let channel: i32;
     if use_src {
+        // SAFETY: Calling resolved sceAudioSRCChReserve fn pointer with valid params.
         let ret = unsafe {
             if let Some(f) = core::ptr::read_volatile(&raw const AUDIO_SRC_RESERVE_FN) {
                 // sceAudioSRCChReserve(sample_count, sample_rate, channels)
@@ -2021,6 +2109,7 @@ unsafe extern "C" fn audio_thread_entry(_args: usize, _argp: *mut core::ffi::c_v
         crate::debug_log(b"[OASIS] audio SRC reserved");
     } else {
         // Fallback to regular channel (less desirable).
+        // SAFETY: Calling resolved sceAudioChReserve fn pointer.
         channel = unsafe {
             if let Some(f) = core::ptr::read_volatile(&raw const AUDIO_CH_RESERVE_FN) {
                 let mut ch = f(7, MP3_SAMPLES_PER_FRAME, AUDIO_FORMAT_STEREO);
@@ -2045,15 +2134,18 @@ unsafe extern "C" fn audio_thread_entry(_args: usize, _argp: *mut core::ffi::c_v
     } else {
         AUDIO_STATE.store(0, Ordering::Relaxed);
     }
+    // SAFETY: Volatile write to CURRENT_TRACK; accessed only from audio thread.
     unsafe { core::ptr::write_volatile(&raw mut CURRENT_TRACK, 0) };
 
     // Apply radio config from INI.
     let cfg = crate::config::get_config();
     RADIO_STATION_IDX.store(cfg.radio_station, Ordering::Relaxed);
     if cfg.radio_mode {
+        // SAFETY: Volatile read of DECODER_BACKEND; set during init.
         let backend = unsafe { core::ptr::read_volatile(&raw const DECODER_BACKEND) };
         if backend == 2 {
             overlay::show_osd(b"Connecting WiFi...");
+            // SAFETY: init_network initializes PSP network stack.
             if unsafe { init_network() } {
                 RADIO_ACTIVE.store(true, Ordering::Relaxed);
                 AUDIO_STATE.store(1, Ordering::Relaxed);
@@ -2088,6 +2180,8 @@ unsafe extern "C" fn audio_thread_entry(_args: usize, _argp: *mut core::ffi::c_v
                     RADIO_STATION_IDX
                         .store((idx + 1) % RADIO_STATIONS.len() as u8, Ordering::Relaxed);
                 } else {
+                    // SAFETY: Volatile reads/writes of CURRENT_TRACK and PLAYLIST_LEN;
+                    // accessed only from audio thread.
                     unsafe {
                         let cur = core::ptr::read_volatile(&raw const CURRENT_TRACK);
                         let pl = core::ptr::read_volatile(&raw const PLAYLIST_LEN);
@@ -2108,6 +2202,8 @@ unsafe extern "C" fn audio_thread_entry(_args: usize, _argp: *mut core::ffi::c_v
                     };
                     RADIO_STATION_IDX.store(new, Ordering::Relaxed);
                 } else {
+                    // SAFETY: Volatile reads/writes of CURRENT_TRACK and PLAYLIST_LEN;
+                    // accessed only from audio thread.
                     unsafe {
                         let cur = core::ptr::read_volatile(&raw const CURRENT_TRACK);
                         let pl = core::ptr::read_volatile(&raw const PLAYLIST_LEN);
@@ -2127,12 +2223,15 @@ unsafe extern "C" fn audio_thread_entry(_args: usize, _argp: *mut core::ffi::c_v
                     RADIO_ACTIVE.store(false, Ordering::Relaxed);
                     overlay::show_osd(b"Radio OFF");
                 } else {
+                    // SAFETY: Volatile read of DECODER_BACKEND; set during init.
                     let backend = unsafe { core::ptr::read_volatile(&raw const DECODER_BACKEND) };
                     if backend != 2 {
                         overlay::show_osd(b"Radio: no codec");
                     } else {
+                        // SAFETY: Volatile read of NET_INITIALIZED; written from this thread.
                         if !unsafe { core::ptr::read_volatile(&raw const NET_INITIALIZED) } {
                             overlay::show_osd(b"Connecting WiFi...");
+                            // SAFETY: init_network initializes PSP network stack.
                             if !unsafe { init_network() } {
                                 overlay::show_osd(b"WiFi failed");
                             } else {
@@ -2174,6 +2273,7 @@ unsafe extern "C" fn audio_thread_entry(_args: usize, _argp: *mut core::ffi::c_v
 
         let state = AUDIO_STATE.load(Ordering::Relaxed);
         if state == 0 || state == 2 {
+            // SAFETY: PSP kernel syscall to sleep thread.
             unsafe { psp::sys::sceKernelDelayThread(50_000) };
             continue;
         }
@@ -2181,6 +2281,7 @@ unsafe extern "C" fn audio_thread_entry(_args: usize, _argp: *mut core::ffi::c_v
         // Radio streaming branch.
         if RADIO_ACTIVE.load(Ordering::Relaxed) {
             let idx = RADIO_STATION_IDX.load(Ordering::Relaxed);
+            // SAFETY: play_radio_stream uses resolved network/codec fn pointers.
             let result = unsafe { play_radio_stream(idx, channel) };
             if result < 0 {
                 radio_failures += 1;
@@ -2190,6 +2291,7 @@ unsafe extern "C" fn audio_thread_entry(_args: usize, _argp: *mut core::ffi::c_v
                     overlay::show_osd(b"Radio: failed");
                     radio_failures = 0;
                 } else {
+                    // SAFETY: PSP kernel syscall to sleep thread before retry.
                     unsafe { psp::sys::sceKernelDelayThread(2_000_000) };
                 }
             } else {
@@ -2202,9 +2304,14 @@ unsafe extern "C" fn audio_thread_entry(_args: usize, _argp: *mut core::ffi::c_v
         // When active, play the video's audio track on loop instead of
         // the normal playlist. Does not touch CURRENT_TRACK.
         if VIDEO_MP3_ACTIVE.load(Ordering::Acquire) {
+            // SAFETY: VIDEO_MP3_PATH written before VIDEO_MP3_ACTIVE (Release ordering);
+            // Acquire load above ensures we see the completed write.
             let vpath = unsafe { &*(&raw const VIDEO_MP3_PATH) };
+            // SAFETY: set_track_name writes to TRACK_NAME; called from audio thread.
             unsafe { set_track_name(vpath) };
+            // SAFETY: Volatile read of DECODER_BACKEND; set during init.
             let backend = unsafe { core::ptr::read_volatile(&raw const DECODER_BACKEND) };
+            // SAFETY: play_track_mp3/play_track_codec use resolved codec fn pointers.
             let result = match backend {
                 1 => unsafe { play_track_mp3(vpath, channel) },
                 2 => unsafe { play_track_codec(vpath, channel) },
@@ -2214,6 +2321,7 @@ unsafe extern "C" fn audio_thread_entry(_args: usize, _argp: *mut core::ffi::c_v
                 crate::debug_log(b"[OASIS] video mp3 error");
                 VIDEO_MP3_ACTIVE.store(false, Ordering::Release);
                 // Brief delay before resuming normal playback.
+                // SAFETY: PSP kernel syscall to sleep thread.
                 unsafe { psp::sys::sceKernelDelayThread(50_000) };
             }
             // Loop back -- if VIDEO_MP3_ACTIVE is still true, replay.
@@ -2222,17 +2330,24 @@ unsafe extern "C" fn audio_thread_entry(_args: usize, _argp: *mut core::ffi::c_v
         }
 
         // File playback (only when we have tracks).
+        // SAFETY: Volatile read of PLAYLIST_LEN; accessed only from audio thread.
         let pl_len = unsafe { core::ptr::read_volatile(&raw const PLAYLIST_LEN) };
         if pl_len == 0 {
+            // SAFETY: PSP kernel syscall to sleep thread.
             unsafe { psp::sys::sceKernelDelayThread(50_000) };
             continue;
         }
 
+        // SAFETY: Volatile reads of CURRENT_TRACK and PLAYLIST; accessed only
+        // from audio thread. track_idx bounded by PLAYLIST_LEN.
         let track_idx = unsafe { core::ptr::read_volatile(&raw const CURRENT_TRACK) };
         let track_path = unsafe { &(*(&raw const PLAYLIST))[track_idx] };
+        // SAFETY: set_track_name writes to TRACK_NAME; called from audio thread.
         unsafe { set_track_name(track_path) };
 
+        // SAFETY: Volatile read of DECODER_BACKEND; set during init.
         let backend = unsafe { core::ptr::read_volatile(&raw const DECODER_BACKEND) };
+        // SAFETY: play_track_mp3/play_track_codec use resolved codec fn pointers.
         let result = match backend {
             1 => unsafe { play_track_mp3(track_path, channel) },
             2 => unsafe { play_track_codec(track_path, channel) },
@@ -2247,6 +2362,7 @@ unsafe extern "C" fn audio_thread_entry(_args: usize, _argp: *mut core::ffi::c_v
         // are handled explicitly at the top of the main loop.
         let pending = AUDIO_CMD.load(Ordering::Relaxed);
         if pending != 2 && pending != 3 && pending != 7 {
+            // SAFETY: Volatile read/write of CURRENT_TRACK; accessed only from audio thread.
             unsafe {
                 let cur = core::ptr::read_volatile(&raw const CURRENT_TRACK);
                 core::ptr::write_volatile(&raw mut CURRENT_TRACK, (cur + 1) % pl_len);
@@ -2260,14 +2376,17 @@ unsafe extern "C" fn audio_thread_entry(_args: usize, _argp: *mut core::ffi::c_v
 // ---------------------------------------------------------------------------
 
 unsafe fn play_track_mp3(path: &[u8], channel: i32) -> i32 {
+    // SAFETY: sceIoOpen with valid null-terminated path and read-only flag.
     let fd = unsafe { psp::sys::sceIoOpen(path.as_ptr(), psp::sys::IoOpenFlags::RD_ONLY, 0) };
     if fd < psp::sys::SceUid(0) {
         return -1;
     }
 
+    // SAFETY: sceIoLseek with valid fd to determine file size, then reset to start.
     let file_size = unsafe { psp::sys::sceIoLseek(fd, 0, psp::sys::IoWhence::End) } as i32;
     unsafe { psp::sys::sceIoLseek(fd, 0, psp::sys::IoWhence::Set) };
     if file_size <= 0 {
+        // SAFETY: sceIoClose with valid fd.
         unsafe { psp::sys::sceIoClose(fd) };
         return -1;
     }
@@ -2275,6 +2394,8 @@ unsafe fn play_track_mp3(path: &[u8], channel: i32) -> i32 {
     static mut S_MP3_BUF: [u8; MP3_BUF_SIZE] = [0u8; MP3_BUF_SIZE];
     static mut S_PCM_BUF: [u8; PCM_BUF_SIZE] = [0u8; PCM_BUF_SIZE];
 
+    // SAFETY: Accessing function-local statics; play_track_mp3 is only called
+    // from the single audio thread, so no concurrent access.
     let mp3_buf_ptr = unsafe { (*(&raw mut S_MP3_BUF)).as_mut_ptr() };
     let pcm_buf_ptr = unsafe { (*(&raw mut S_PCM_BUF)).as_mut_ptr() };
 
@@ -2289,6 +2410,8 @@ unsafe fn play_track_mp3(path: &[u8], channel: i32) -> i32 {
         pcm_buf_size: PCM_BUF_SIZE as i32,
     };
 
+    // SAFETY: Volatile read of resolved sceMp3ReserveMpegHandle fn pointer;
+    // calling it with valid init struct. sceIoClose on error path.
     let handle = unsafe {
         match core::ptr::read_volatile(&raw const MP3_RESERVE_HANDLE_FN) {
             Some(f) => f(&init),
@@ -2299,12 +2422,15 @@ unsafe fn play_track_mp3(path: &[u8], channel: i32) -> i32 {
         }
     };
     if handle < 0 {
+        // SAFETY: sceIoClose with valid fd on error path.
         unsafe { psp::sys::sceIoClose(fd) };
         return -1;
     }
 
+    // SAFETY: fill_stream_data reads file data into MP3 stream buffer.
     unsafe { fill_stream_data(handle, fd) };
 
+    // SAFETY: Volatile read of resolved sceMp3Init fn pointer; calling with valid handle.
     let ret = unsafe {
         match core::ptr::read_volatile(&raw const MP3_INIT_FN) {
             Some(f) => f(handle),
@@ -2312,6 +2438,7 @@ unsafe fn play_track_mp3(path: &[u8], channel: i32) -> i32 {
         }
     };
     if ret < 0 {
+        // SAFETY: Releasing MP3 handle and closing fd on error path.
         unsafe {
             if let Some(f) = core::ptr::read_volatile(&raw const MP3_RELEASE_HANDLE_FN) {
                 f(handle);

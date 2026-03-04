@@ -97,11 +97,53 @@ impl FilePanel {
         self.scroll = 0;
         self.cursor = 0;
     }
+
+    /// Return the full path of the currently selected entry (if any).
+    fn selected_path(&self) -> Option<String> {
+        let abs_idx = self.scroll + self.cursor;
+        let line = self.lines.get(abs_idx)?;
+        let name = line.trim();
+        if name == ".." {
+            return None;
+        }
+        // Strip trailing '/' for directories, and strip size suffix for files.
+        let name = name
+            .strip_suffix('/')
+            .unwrap_or_else(|| name.split("  (").next().unwrap_or(name));
+        Some(join_path(&self.browse_dir, name))
+    }
+
+    /// Whether the currently selected item is a directory.
+    #[allow(dead_code)]
+    fn selected_is_dir(&self) -> bool {
+        let abs_idx = self.scroll + self.cursor;
+        self.lines.get(abs_idx).is_some_and(|l| {
+            let l = l.trim();
+            l != ".." && l.ends_with('/')
+        })
+    }
+
+    /// Refresh the panel listing from VFS.
+    pub fn refresh(&mut self, vfs: &dyn Vfs) {
+        self.lines = list_directory(vfs, &self.browse_dir);
+        // Clamp cursor to new list size.
+        let max = self.lines.len().saturating_sub(1);
+        self.cursor = self.cursor.min(max);
+    }
 }
 
 // ---------------------------------------------------------------
 // FileManagerApp
 // ---------------------------------------------------------------
+
+/// A pending VFS operation for the file manager.
+#[derive(Debug, Clone)]
+pub enum FileOp {
+    /// Delete the file or directory at this path.
+    Delete(String),
+    /// Create a directory at this path.
+    Mkdir(String),
+}
 
 /// File Manager application with dual-panel browsing.
 #[derive(Debug)]
@@ -112,6 +154,8 @@ pub struct FileManagerApp {
     pub panels: [FilePanel; 2],
     /// Which panel is active (0 = left, 1 = right).
     pub active_panel: usize,
+    /// Pending file operation to be applied by the runner.
+    pub pending_op: Option<FileOp>,
 }
 
 impl FileManagerApp {
@@ -124,6 +168,7 @@ impl FileManagerApp {
             content,
             panels: [FilePanel::new("/", vfs), FilePanel::new("/", vfs)],
             active_panel: 0,
+            pending_op: None,
         }
     }
 
@@ -173,8 +218,27 @@ impl FileManagerApp {
                     AppAction::None
                 }
             },
+            Button::Triangle => {
+                // Delete selected file/directory.
+                if let Some(path) = self.panels[self.active_panel].selected_path() {
+                    self.pending_op = Some(FileOp::Delete(path));
+                }
+                AppAction::None
+            },
+            Button::Square => {
+                // Create new directory in active panel.
+                let dir = &self.panels[self.active_panel].browse_dir;
+                let new_dir = join_path(dir, "new_folder");
+                self.pending_op = Some(FileOp::Mkdir(new_dir));
+                AppAction::None
+            },
             _ => AppAction::None,
         }
+    }
+
+    /// Take and clear the pending file operation.
+    pub fn take_file_op(&mut self) -> Option<FileOp> {
+        self.pending_op.take()
     }
 
     /// Handle input when viewing a file.
@@ -243,20 +307,20 @@ impl FileManagerApp {
             "File Manager  [L: {}]  [R: {}]",
             self.panels[0].browse_dir, self.panels[1].browse_dir,
         );
-        backend.draw_text(&title, cx + 4, cy + 2, 12, at.app_title_bar_text)?;
+        backend.draw_text(&title, cx + 4, cy + 2, 12, at.app.title_bar_text)?;
         backend.fill_rect(
             cx,
-            cy + at.app_title_bar_height as i32 - 4,
+            cy + at.app.title_bar_height as i32 - 4,
             cw,
             1,
-            at.app_divider,
+            at.app.divider,
         )?;
 
         // Vertical divider.
-        let title_h = at.app_title_bar_height as i32;
+        let title_h = at.app.title_bar_height as i32;
         let content_y = cy + title_h;
         let content_h = ch.saturating_sub(title_h as u32 + 14);
-        backend.fill_rect(divider_x, content_y, 1, content_h, at.app_divider)?;
+        backend.fill_rect(divider_x, content_y, 1, content_h, at.app.divider)?;
 
         // Draw each panel.
         let line_h = at.terminal_line_height.max(12) as i32;
@@ -267,7 +331,7 @@ impl FileManagerApp {
             let is_active = pi == self.active_panel;
 
             if is_active {
-                backend.fill_rect(px, content_y, pw, 1, at.app_selected_text)?;
+                backend.fill_rect(px, content_y, pw, 1, at.app.selected_text)?;
             }
 
             let visible = panel
@@ -291,9 +355,9 @@ impl FileManagerApp {
                 };
                 let text = format!("{prefix}{display}");
                 let text_color = if is_active && i == panel.cursor {
-                    at.app_selected_text
+                    at.app.selected_text
                 } else {
-                    at.app_text
+                    at.app.text
                 };
                 let y = content_y + 2 + i as i32 * line_h;
                 backend.draw_text(&text, px + 2, y, 12, text_color)?;
@@ -302,11 +366,11 @@ impl FileManagerApp {
 
         let scroll_y = cy + ch as i32 - 14;
         backend.draw_text(
-            "L/R=panel  Cancel=back",
+            "L/R=panel  \u{25b3}=delete  \u{25a1}=mkdir  Cancel=back",
             cx + 4,
             scroll_y,
             10,
-            at.app_dim_text,
+            at.app.dim_text,
         )?;
 
         Ok(())
@@ -323,7 +387,7 @@ impl FileManagerApp {
             obj.x = 8;
             obj.y = 4;
             obj.font_size = at.font_body;
-            obj.text_color = at.app_title_bar_text;
+            obj.text_color = at.app.title_bar_text;
             obj.w = 0;
             obj.h = 0;
             obj.visible = true;
@@ -331,7 +395,7 @@ impl FileManagerApp {
         }
 
         // Responsive dual-panel geometry.
-        let title_h = at.app_title_bar_height;
+        let title_h = at.app.title_bar_height;
         let content_y = (title_h + 4) as i32;
         let half_w = at.screen_w / 2;
         let panel_pad = 8u32;
@@ -353,7 +417,7 @@ impl FileManagerApp {
             obj.y = content_y - 2;
             obj.w = 1;
             obj.h = divider_h;
-            obj.color = at.app_divider;
+            obj.color = at.app.divider;
             obj.visible = true;
             obj.z = 102;
         }
@@ -387,9 +451,9 @@ impl FileManagerApp {
                 obj.y = rect.y;
                 obj.font_size = at.font_body;
                 obj.text_color = if is_active && i == p.cursor {
-                    at.app_selected_text
+                    at.app.selected_text
                 } else {
-                    at.app_text
+                    at.app.text
                 };
                 obj.w = 0;
                 obj.h = 0;
@@ -426,9 +490,9 @@ impl FileManagerApp {
                 obj.y = rect.y;
                 obj.font_size = at.font_body;
                 obj.text_color = if is_active && i == p.cursor {
-                    at.app_selected_text
+                    at.app.selected_text
                 } else {
-                    at.app_text
+                    at.app.text
                 };
                 obj.w = 0;
                 obj.h = 0;
@@ -441,11 +505,11 @@ impl FileManagerApp {
             sdi.create("app_scroll");
         }
         if let Ok(obj) = sdi.get_mut("app_scroll") {
-            obj.text = Some("L/R=panel  Cancel=back".to_string());
+            obj.text = Some("L/R=panel  \u{25b3}=delete  \u{25a1}=mkdir  Cancel=back".to_string());
             obj.x = 8;
             obj.y = at.screen_h as i32 - 14;
             obj.font_size = at.font_hint;
-            obj.text_color = at.app_dim_text;
+            obj.text_color = at.app.dim_text;
             obj.w = 0;
             obj.h = 0;
             obj.visible = true;
@@ -512,7 +576,7 @@ impl App for FileManagerApp {
         backend: &mut dyn SdiBackend,
         at: &ActiveTheme,
     ) -> crate::error::Result<()> {
-        backend.fill_rect(cx, cy, cw, ch, at.app_bg)?;
+        backend.fill_rect(cx, cy, cw, ch, at.app.bg)?;
 
         if self.content.viewing_file.is_none() {
             return self.draw_windowed_dual(cx, cy, cw, ch, backend, at);
@@ -561,7 +625,7 @@ pub fn render_app_chrome(sdi: &mut SdiRegistry, at: &ActiveTheme) {
         obj.y = 0;
         obj.w = at.screen_w;
         obj.h = at.screen_h;
-        obj.color = at.app_bg;
+        obj.color = at.app.bg;
         obj.visible = true;
         obj.z = 100;
     }
@@ -573,10 +637,10 @@ pub fn render_app_chrome(sdi: &mut SdiRegistry, at: &ActiveTheme) {
         obj.x = 0;
         obj.y = 0;
         obj.w = at.screen_w;
-        obj.h = at.app_title_bar_height;
-        obj.color = at.app_title_bar_bg;
-        obj.gradient_top = at.app_title_bar_gradient_top;
-        obj.gradient_bottom = at.app_title_bar_gradient_bottom;
+        obj.h = at.app.title_bar_height;
+        obj.color = at.app.title_bar_bg;
+        obj.gradient_top = at.app.title_bar_gradient_top;
+        obj.gradient_bottom = at.app.title_bar_gradient_bottom;
         obj.shadow_level = Some(1);
         obj.visible = true;
         obj.z = 101;
@@ -603,14 +667,14 @@ pub fn render_content_sdi(content: &ContentState, sdi: &mut SdiRegistry, at: &Ac
         obj.x = 8;
         obj.y = 4;
         obj.font_size = at.font_body;
-        obj.text_color = at.app_title_bar_text;
+        obj.text_color = at.app.title_bar_text;
         obj.w = 0;
         obj.h = 0;
         obj.visible = true;
         obj.z = 102;
-        if at.app_title_bar_text_shadow {
+        if at.app.title_bar_text_shadow {
             obj.text_shadow_offset = Some((1, 1));
-            obj.text_shadow_color = Some(at.app_title_bar_text_shadow_color);
+            obj.text_shadow_color = Some(at.app.title_bar_text_shadow_color);
         } else {
             obj.text_shadow_offset = None;
             obj.text_shadow_color = None;
@@ -638,8 +702,8 @@ pub fn render_content_sdi(content: &ContentState, sdi: &mut SdiRegistry, at: &Ac
         obj.y = sel_y;
         obj.w = app_layout.content_w;
         obj.h = at.terminal_line_height;
-        obj.color = at.app_selected_bg;
-        obj.border_radius = Some(at.app_selection_border_radius);
+        obj.color = at.app.selected_bg;
+        obj.border_radius = Some(at.app.selection_border_radius);
         obj.visible = !content.lines.is_empty();
         obj.z = 101;
     }
@@ -653,8 +717,8 @@ pub fn render_content_sdi(content: &ContentState, sdi: &mut SdiRegistry, at: &Ac
         obj.y = sel_y;
         obj.w = 3;
         obj.h = at.terminal_line_height;
-        obj.color = at.app_selection_accent_color;
-        obj.border_radius = Some(at.app_selection_border_radius);
+        obj.color = at.app.selection_accent_color;
+        obj.border_radius = Some(at.app.selection_border_radius);
         obj.visible = !content.lines.is_empty();
         obj.z = 102;
     }
@@ -677,9 +741,9 @@ pub fn render_content_sdi(content: &ContentState, sdi: &mut SdiRegistry, at: &Ac
             obj.y = rect.y;
             obj.font_size = at.font_body;
             obj.text_color = if i == content.cursor {
-                at.app_selected_text
+                at.app.selected_text
             } else {
-                at.app_text
+                at.app.text
             };
             obj.w = 0;
             obj.h = 0;
@@ -704,7 +768,7 @@ pub fn render_content_sdi(content: &ContentState, sdi: &mut SdiRegistry, at: &Ac
         obj.x = 8;
         obj.y = at.screen_h as i32 - 14;
         obj.font_size = at.font_hint;
-        obj.text_color = at.app_dim_text;
+        obj.text_color = at.app.dim_text;
         obj.w = 0;
         obj.h = 0;
         obj.visible = true;
@@ -733,15 +797,15 @@ pub fn draw_content_windowed(
             .unwrap_or_default()
     };
     let title_text = format!("{}{dir_suffix}", content.title);
-    backend.draw_text(&title_text, cx + 4, cy + 2, 12, at.app_title_bar_text)?;
+    backend.draw_text(&title_text, cx + 4, cy + 2, 12, at.app.title_bar_text)?;
 
     // Separator.
     backend.fill_rect(
         cx,
-        cy + at.app_title_bar_height as i32 - 4,
+        cy + at.app.title_bar_height as i32 - 4,
         cw,
         1,
-        at.app_divider,
+        at.app.divider,
     )?;
 
     // Content lines.
@@ -758,11 +822,11 @@ pub fn draw_content_windowed(
         let prefix = if i == content.cursor { "> " } else { "  " };
         let text = format!("{prefix}{line}");
         let text_color = if i == content.cursor {
-            at.app_selected_text
+            at.app.selected_text
         } else {
-            at.app_text
+            at.app.text
         };
-        let y = cy + at.app_title_bar_height as i32 + i as i32 * line_h;
+        let y = cy + at.app.title_bar_height as i32 + i as i32 * line_h;
         backend.draw_text(&text, cx + 4, y, 12, text_color)?;
     }
 
@@ -777,7 +841,7 @@ pub fn draw_content_windowed(
         "Cancel=back".to_string()
     };
     let scroll_y = cy + ch as i32 - 14;
-    backend.draw_text(&scroll_text, cx + 4, scroll_y, 10, at.app_dim_text)?;
+    backend.draw_text(&scroll_text, cx + 4, scroll_y, 10, at.app.dim_text)?;
 
     Ok(())
 }

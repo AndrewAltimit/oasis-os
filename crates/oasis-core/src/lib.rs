@@ -57,6 +57,7 @@ pub mod dashboard;
 pub mod osk;
 pub mod plugin;
 pub mod script;
+pub mod settings;
 pub mod startmenu;
 pub mod statusbar;
 pub mod terminal;

@@ -18,8 +18,7 @@ pub struct RadioGroup {
 /// Diameter of the radio circle in pixels.
 const CIRCLE_SIZE: u32 = 14;
 
-/// Gap between circle and label text.
-const LABEL_GAP: u32 = 6;
+use crate::layout::LABEL_GAP;
 
 /// Vertical spacing between radio options.
 const ITEM_SPACING: u32 = 4;

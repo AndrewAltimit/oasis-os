@@ -19,6 +19,8 @@ pub struct InputField {
     pub focused: bool,
     /// If true, display text as asterisks.
     pub password_mode: bool,
+    /// Whether the field is disabled (non-interactive).
+    pub disabled: bool,
 }
 
 impl InputField {
@@ -31,6 +33,7 @@ impl InputField {
             selection: None,
             focused: false,
             password_mode: false,
+            disabled: false,
         }
     }
 
@@ -45,6 +48,9 @@ impl InputField {
 
     /// Insert a character at the cursor position.
     pub fn insert(&mut self, ch: char) {
+        if self.disabled {
+            return;
+        }
         let byte_pos = self
             .text
             .char_indices()
@@ -57,6 +63,9 @@ impl InputField {
 
     /// Delete the character before the cursor.
     pub fn backspace(&mut self) {
+        if self.disabled {
+            return;
+        }
         if self.cursor_pos > 0 {
             self.cursor_pos -= 1;
             let byte_pos = self
@@ -315,6 +324,23 @@ mod tests {
         f.insert('B');
         assert_eq!(f.text, "ABC");
         assert_eq!(f.cursor_pos, 2);
+    }
+
+    #[test]
+    fn disabled_blocks_insert() {
+        let mut f = InputField::new();
+        f.disabled = true;
+        f.insert('A');
+        assert!(f.text.is_empty());
+    }
+
+    #[test]
+    fn disabled_blocks_backspace() {
+        let mut f = InputField::new();
+        f.insert('A');
+        f.disabled = true;
+        f.backspace();
+        assert_eq!(f.text, "A");
     }
 
     #[test]

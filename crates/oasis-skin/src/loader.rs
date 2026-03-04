@@ -152,6 +152,9 @@ pub struct SkinFeatures {
     /// Custom slide transition duration in frames (default 20).
     #[serde(default)]
     pub transition_slide_frames: Option<u32>,
+    /// Disable animations for accessibility (defaults to false).
+    #[serde(default)]
+    pub reduced_motion: bool,
 }
 
 fn yes() -> bool {
@@ -193,6 +196,7 @@ impl Default for SkinFeatures {
             show_page_dots: true,
             transition_fade_frames: None,
             transition_slide_frames: None,
+            reduced_motion: false,
         }
     }
 }
@@ -1366,6 +1370,77 @@ border_radius = 4
         assert_eq!(skin.theme.shadow_intensity, Some(0));
         assert_eq!(skin.theme.gradient_enabled, Some(false));
         assert_eq!(skin.theme.background, "#FAF8F0");
+    }
+
+    #[test]
+    fn load_win95_skin() {
+        let skin = Skin::from_toml_full(
+            include_str!("../../../skins/win95/skin.toml"),
+            include_str!("../../../skins/win95/layout.toml"),
+            include_str!("../../../skins/win95/features.toml"),
+            include_str!("../../../skins/win95/theme.toml"),
+            "",
+        )
+        .unwrap();
+        assert_eq!(skin.manifest.name, "win95");
+        assert_eq!(skin.manifest.screen_width, 640);
+        assert_eq!(skin.manifest.screen_height, 480);
+        assert!(skin.features.window_manager);
+        assert_eq!(skin.theme.border_radius, Some(0));
+        assert_eq!(skin.theme.gradient_enabled, Some(false));
+        assert_eq!(skin.theme.background, "#008080");
+    }
+
+    #[test]
+    fn load_solarized_skin() {
+        let skin = Skin::from_toml_full(
+            include_str!("../../../skins/solarized/skin.toml"),
+            include_str!("../../../skins/solarized/layout.toml"),
+            include_str!("../../../skins/solarized/features.toml"),
+            include_str!("../../../skins/solarized/theme.toml"),
+            "",
+        )
+        .unwrap();
+        assert_eq!(skin.manifest.name, "solarized");
+        assert_eq!(skin.manifest.screen_width, 800);
+        assert_eq!(skin.manifest.screen_height, 600);
+        assert!(skin.features.window_manager);
+        assert_eq!(skin.theme.background, "#002B36");
+    }
+
+    #[test]
+    fn load_vaporwave_skin() {
+        let skin = Skin::from_toml_full(
+            include_str!("../../../skins/vaporwave/skin.toml"),
+            include_str!("../../../skins/vaporwave/layout.toml"),
+            include_str!("../../../skins/vaporwave/features.toml"),
+            include_str!("../../../skins/vaporwave/theme.toml"),
+            "",
+        )
+        .unwrap();
+        assert_eq!(skin.manifest.name, "vaporwave");
+        assert_eq!(skin.manifest.screen_width, 480);
+        assert!(!skin.features.window_manager);
+        assert_eq!(skin.theme.gradient_enabled, Some(true));
+        assert_eq!(skin.theme.background, "#1A0A2E");
+    }
+
+    #[test]
+    fn load_highcontrast_skin() {
+        let skin = Skin::from_toml_full(
+            include_str!("../../../skins/highcontrast/skin.toml"),
+            include_str!("../../../skins/highcontrast/layout.toml"),
+            include_str!("../../../skins/highcontrast/features.toml"),
+            include_str!("../../../skins/highcontrast/theme.toml"),
+            "",
+        )
+        .unwrap();
+        assert_eq!(skin.manifest.name, "highcontrast");
+        assert_eq!(skin.theme.border_radius, Some(0));
+        assert_eq!(skin.theme.shadow_intensity, Some(0));
+        assert_eq!(skin.theme.gradient_enabled, Some(false));
+        assert_eq!(skin.theme.background, "#000000");
+        assert_eq!(skin.theme.text, "#FFFFFF");
     }
 
     #[test]

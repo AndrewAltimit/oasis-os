@@ -1,0 +1,81 @@
+# Windows 95 Classic Theme
+# System gray with blue titlebars, raised 3D borders, classic desktop teal
+
+background = "#008080"
+primary = "#000080"
+secondary = "#C0C0C0"
+accent = "#000080"
+text = "#000000"
+dim_text = "#808080"
+error = "#FF0000"
+border_radius = 0
+shadow_intensity = 0
+gradient_enabled = false
+
+[wm_theme]
+titlebar_height = 20
+border_width = 2
+titlebar_active = "#000080"
+titlebar_inactive = "#808080"
+titlebar_text_active = "#FFFFFF"
+titlebar_text_inactive = "#C0C0C0"
+titlebar_gradient = false
+close_button_color = "#C0C0C0"
+close_button_hover = "#FF0000"
+minimize_button_color = "#C0C0C0"
+maximize_button_color = "#C0C0C0"
+frame_shadow_level = 0
+frame_border_radius = 0
+button_radius = 0
+
+[bar_overrides]
+statusbar_bg = "#C0C0C0"
+text_color = "#000000"
+text_shadow = false
+gradient_top = "#C0C0C0"
+gradient_bottom = "#C0C0C0"
+
+[icon_overrides]
+body_color = "#C0C0C0"
+icon_style = "card"
+cursor_style = "fill"
+
+[wallpaper]
+style = "solid"
+color_stops = ["#008080"]
+
+[geometry]
+tab_row_height = 0
+statusbar_height = 24
+bottombar_height = 28
+icon_width = 32
+icon_height = 36
+font_body = 14
+font_hint = 12
+font_heading = 16
+cursor_blink_rate = 20
+press_flash_duration = 2
+
+[app_overrides]
+app_bg = "#C0C0C0"
+text_color = "#000000"
+selection_accent_color = "#00008060"
+
+[start_menu_overrides]
+panel_bg = "#C0C0C0"
+button_bg = "#C0C0C0"
+button_text = "#000000"
+button_gradient = false
+panel_width = 200
+panel_border_radius = 0
+columns = 1
+item_row_height = 24
+
+[browser_overrides]
+chrome_bg = "#C0C0C0"
+url_bar_bg = "#FFFFFF"
+link_color = "#0000FF"
+
+[scrollbar_overrides]
+track_color = "#C0C0C0"
+thumb_color = "#808080"
