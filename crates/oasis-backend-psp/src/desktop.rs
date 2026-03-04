@@ -229,6 +229,9 @@ pub(crate) fn draw_photos_windowed(
     be.fill_rect(cx, cy, cw, ch, Color::BLACK)?;
     if viewing {
         if let Some(t) = tex {
+            if img_w == 0 || img_h == 0 {
+                return Ok(());
+            }
             let scale_w = cw as f32 / img_w as f32;
             let scale_h = ch as f32 / img_h as f32;
             let scale = if scale_w < scale_h { scale_w } else { scale_h };
