@@ -157,7 +157,12 @@ impl SettingsStore {
                 } else if value == "false" {
                     SettingsValue::Bool(false)
                 } else if let Some(s) = value.strip_prefix('"').and_then(|s| s.strip_suffix('"')) {
-                    SettingsValue::String(s.to_string())
+                    // Unescape TOML basic string: \\  ->  \  then  \"  ->  "
+                    SettingsValue::String(
+                        s.replace("\\\\", "\x00")
+                            .replace("\\\"", "\"")
+                            .replace('\x00', "\\"),
+                    )
                 } else if let Ok(n) = value.parse::<i64>() {
                     SettingsValue::Int(n)
                 } else if let Ok(f) = value.parse::<f64>() {
@@ -177,7 +182,9 @@ impl SettingsStore {
         for (key, value) in &self.entries {
             match value {
                 SettingsValue::String(s) => {
-                    out.push_str(&format!("{key} = \"{s}\"\n"));
+                    // Escape backslashes first, then quotes.
+                    let escaped = s.replace('\\', "\\\\").replace('"', "\\\"");
+                    out.push_str(&format!("{key} = \"{escaped}\"\n"));
                 },
                 SettingsValue::Int(n) => {
                     out.push_str(&format!("{key} = {n}\n"));
@@ -304,6 +311,22 @@ mod tests {
         s.set_string("a", "first");
         let keys: Vec<&str> = s.keys().collect();
         assert_eq!(keys, vec!["a", "z"]);
+    }
+
+    #[test]
+    fn roundtrip_special_chars() {
+        let mut vfs = MemoryVfs::new();
+        let mut s = SettingsStore::new();
+        s.set_string("path", r#"C:\Users\test"#);
+        s.set_string("quoted", r#"He said "hello""#);
+        s.set_string("both", r#"a\"b"#);
+        s.save(&mut vfs);
+
+        let mut s2 = SettingsStore::new();
+        s2.load(&vfs);
+        assert_eq!(s2.get_string("path"), Some(r#"C:\Users\test"#));
+        assert_eq!(s2.get_string("quoted"), Some(r#"He said "hello""#));
+        assert_eq!(s2.get_string("both"), Some(r#"a\"b"#));
     }
 
     #[test]

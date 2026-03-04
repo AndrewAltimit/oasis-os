@@ -548,6 +548,10 @@ impl SdiBackend for PspBackend {
         Ok(())
     }
 
+    fn viewport_size(&self) -> (u32, u32) {
+        (self.width, self.height)
+    }
+
     fn dim_screen(&mut self, alpha: u8) -> OasisResult<()> {
         self.dim_screen_inner(alpha);
         Ok(())

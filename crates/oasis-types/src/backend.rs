@@ -329,8 +329,9 @@ pub trait SdiBackend {
 
     /// Draw a line between two points.
     ///
-    /// `width` is the line thickness in pixels. Diagonal lines have no
-    /// default rendering; backends must override for diagonal support.
+    /// `width` is the line thickness in pixels. The default implementation
+    /// handles horizontal, vertical, and diagonal lines using Bresenham's
+    /// algorithm.
     fn draw_line(
         &mut self,
         x1: i32,
@@ -348,14 +349,55 @@ pub trait SdiBackend {
             let ly = y1.min(y2);
             let h = (y1 - y2).unsigned_abs();
             self.fill_rect(x1, ly, width as u32, h.max(1), color)?;
+        } else {
+            // Bresenham's line algorithm for diagonal lines.
+            let w = width as u32;
+            let dx = (x2 - x1).abs();
+            let dy = -(y2 - y1).abs();
+            let sx: i32 = if x1 < x2 { 1 } else { -1 };
+            let sy: i32 = if y1 < y2 { 1 } else { -1 };
+            let mut err = dx + dy;
+            let (mut cx, mut cy) = (x1, y1);
+            loop {
+                self.fill_rect(cx, cy, w, w, color)?;
+                if cx == x2 && cy == y2 {
+                    break;
+                }
+                let e2 = 2 * err;
+                if e2 >= dy {
+                    err += dy;
+                    cx += sx;
+                }
+                if e2 <= dx {
+                    err += dx;
+                    cy += sy;
+                }
+            }
         }
         Ok(())
     }
 
-    /// Draw a filled circle.
+    /// Draw a filled circle using the midpoint circle algorithm.
     fn fill_circle(&mut self, cx: i32, cy: i32, radius: u16, color: Color) -> Result<()> {
         let r = radius as i32;
-        self.fill_rect(cx - r, cy - r, radius as u32 * 2, radius as u32 * 2, color)
+        let mut x = r;
+        let mut y: i32 = 0;
+        let mut err = 1 - r;
+        while x >= y {
+            // Fill horizontal spans for each octant pair.
+            self.fill_rect(cx - x, cy + y, (x * 2 + 1) as u32, 1, color)?;
+            self.fill_rect(cx - x, cy - y, (x * 2 + 1) as u32, 1, color)?;
+            self.fill_rect(cx - y, cy + x, (y * 2 + 1) as u32, 1, color)?;
+            self.fill_rect(cx - y, cy - x, (y * 2 + 1) as u32, 1, color)?;
+            y += 1;
+            if err < 0 {
+                err += 2 * y + 1;
+            } else {
+                x -= 1;
+                err += 2 * (y - x) + 1;
+            }
+        }
+        Ok(())
     }
 
     /// Draw the outline of a circle.
@@ -371,7 +413,7 @@ pub trait SdiBackend {
         self.fill_circle(cx, cy, radius, color)
     }
 
-    /// Draw a filled triangle defined by three vertices.
+    /// Draw a filled triangle defined by three vertices (scanline fill).
     fn fill_triangle(
         &mut self,
         x1: i32,
@@ -382,7 +424,51 @@ pub trait SdiBackend {
         y3: i32,
         color: Color,
     ) -> Result<()> {
-        let _ = (x1, y1, x2, y2, x3, y3, color);
+        // Sort vertices by y-coordinate.
+        let (mut v0, mut v1, mut v2) = ((x1, y1), (x2, y2), (x3, y3));
+        if v0.1 > v1.1 {
+            core::mem::swap(&mut v0, &mut v1);
+        }
+        if v0.1 > v2.1 {
+            core::mem::swap(&mut v0, &mut v2);
+        }
+        if v1.1 > v2.1 {
+            core::mem::swap(&mut v1, &mut v2);
+        }
+        let total_h = v2.1 - v0.1;
+        if total_h == 0 {
+            // Degenerate: all on same scanline.
+            let lx = v0.0.min(v1.0).min(v2.0);
+            let rx = v0.0.max(v1.0).max(v2.0);
+            return self.fill_rect(lx, v0.1, (rx - lx).max(1) as u32, 1, color);
+        }
+        // Scanline fill.
+        for y in v0.1..=v2.1 {
+            let second_half = y >= v1.1;
+            let seg_h = if second_half {
+                v2.1 - v1.1
+            } else {
+                v1.1 - v0.1
+            };
+            let alpha = (y - v0.1) as f32 / total_h as f32;
+            let beta = if seg_h == 0 {
+                0.0
+            } else if second_half {
+                (y - v1.1) as f32 / seg_h as f32
+            } else {
+                (y - v0.1) as f32 / seg_h as f32
+            };
+            let mut ax = v0.0 + ((v2.0 - v0.0) as f32 * alpha) as i32;
+            let mut bx = if second_half {
+                v1.0 + ((v2.0 - v1.0) as f32 * beta) as i32
+            } else {
+                v0.0 + ((v1.0 - v0.0) as f32 * beta) as i32
+            };
+            if ax > bx {
+                core::mem::swap(&mut ax, &mut bx);
+            }
+            self.fill_rect(ax, y, (bx - ax + 1) as u32, 1, color)?;
+        }
         Ok(())
     }
 
@@ -434,9 +520,18 @@ pub trait SdiBackend {
         self.fill_rect(x, y, w, h, color.with_alpha(alpha))
     }
 
+    /// Return the current viewport dimensions `(width, height)`.
+    ///
+    /// The default returns the PSP native resolution (480x272). Backends
+    /// should override this to return their actual canvas size.
+    fn viewport_size(&self) -> (u32, u32) {
+        (480, 272)
+    }
+
     /// Dim the entire viewport with a semi-transparent overlay.
     fn dim_screen(&mut self, alpha: u8) -> Result<()> {
-        self.fill_rect(0, 0, 480, 272, Color::rgba(0, 0, 0, alpha))
+        let (w, h) = self.viewport_size();
+        self.fill_rect(0, 0, w, h, Color::rgba(0, 0, 0, alpha))
     }
 
     // -----------------------------------------------------------------------
@@ -1089,24 +1184,32 @@ mod tests {
     }
 
     #[test]
-    fn draw_line_diagonal_is_noop() {
+    fn draw_line_diagonal_uses_bresenham() {
         let mut b = RecordingBackend::new();
-        b.draw_line(0, 0, 100, 100, 1, Color::WHITE).unwrap();
-        assert!(
-            b.calls().is_empty(),
-            "diagonal lines should be no-op in default impl"
-        );
+        b.draw_line(0, 0, 5, 5, 1, Color::WHITE).unwrap();
+        let calls = b.calls();
+        // Bresenham plots one fill_rect per pixel along the diagonal.
+        assert_eq!(calls.len(), 6); // (0,0) through (5,5) inclusive
+        assert!(calls[0].starts_with("fill_rect(0,0,1,1,"));
+        assert!(calls[5].starts_with("fill_rect(5,5,1,1,"));
     }
 
-    // -- Default: fill_circle falls back to bounding box fill_rect --
+    // -- Default: fill_circle uses midpoint algorithm (scanline spans) --
 
     #[test]
     fn fill_circle_default() {
         let mut b = RecordingBackend::new();
         b.fill_circle(50, 50, 10, Color::rgb(0, 255, 0)).unwrap();
         let calls = b.calls();
-        assert_eq!(calls.len(), 1);
-        assert!(calls[0].starts_with("fill_rect(40,40,20,20,"));
+        // Midpoint algorithm emits multiple fill_rect scanlines, not a single box.
+        assert!(
+            calls.len() > 1,
+            "fill_circle should emit multiple scanlines"
+        );
+        // All calls should be fill_rect.
+        for call in &calls {
+            assert!(call.starts_with("fill_rect("));
+        }
     }
 
     // -- Default: stroke_circle falls back to fill_circle --
@@ -1116,17 +1219,23 @@ mod tests {
         let mut b = RecordingBackend::new();
         b.stroke_circle(50, 50, 10, 1, Color::WHITE).unwrap();
         let calls = b.calls();
-        assert_eq!(calls.len(), 1);
-        assert!(calls[0].starts_with("fill_rect(")); // fill_circle -> fill_rect
+        // fill_circle now emits scanlines, not a single rect.
+        assert!(calls.len() > 1);
+        assert!(calls[0].starts_with("fill_rect("));
     }
 
-    // -- Default: fill_triangle is no-op --
+    // -- Default: fill_triangle uses scanline fill --
 
     #[test]
-    fn fill_triangle_default_noop() {
+    fn fill_triangle_default() {
         let mut b = RecordingBackend::new();
         b.fill_triangle(0, 0, 10, 0, 5, 10, Color::WHITE).unwrap();
-        assert!(b.calls().is_empty());
+        let calls = b.calls();
+        // Scanline fill emits one fill_rect per scanline row.
+        assert_eq!(calls.len(), 11); // y=0..=10
+        for call in &calls {
+            assert!(call.starts_with("fill_rect("));
+        }
     }
 
     // -- Gradient defaults --

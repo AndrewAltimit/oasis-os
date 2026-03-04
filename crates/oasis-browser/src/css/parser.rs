@@ -278,11 +278,13 @@ impl CssParser {
     }
 
     fn advance(&mut self) -> CssToken {
-        let tok = self.tokens.get(self.pos).cloned().unwrap_or(CssToken::Eof);
         if self.pos < self.tokens.len() {
+            let tok = std::mem::replace(&mut self.tokens[self.pos], CssToken::Eof);
             self.pos += 1;
+            tok
+        } else {
+            CssToken::Eof
         }
-        tok
     }
 
     fn skip_whitespace(&mut self) {
@@ -305,6 +307,15 @@ impl CssParser {
         matches!(self.peek(), CssToken::Eof)
     }
 
+    /// Peek and check if the next token is an at-keyword, returning its
+    /// lowercase name without cloning the full token.
+    fn peek_at_keyword_lc(&self) -> Option<String> {
+        match self.peek() {
+            CssToken::AtKeyword(s) => Some(s.to_ascii_lowercase()),
+            _ => None,
+        }
+    }
+
     // -- stylesheet --------------------------------------------------
 
     fn parse_stylesheet(&mut self) -> Stylesheet {
@@ -314,8 +325,7 @@ impl CssParser {
             if self.at_eof() {
                 break;
             }
-            if let CssToken::AtKeyword(ref name) = self.peek().clone() {
-                let lc = name.to_ascii_lowercase();
+            if let Some(lc) = self.peek_at_keyword_lc() {
                 if lc == "media" {
                     // Parse @media rules and include matching ones.
                     let media_rules = self.parse_media_rule();
