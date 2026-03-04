@@ -323,7 +323,7 @@ SDI is deliberately simple. It is not a DOM, not a layout engine, and not a reta
 | Z-ordering | `sdi_move_top("name")` | `sdi.move_to_top("name")` |
 | Theme loading | `sdi_load_state(path)` | `sdi.load_theme(path)?` |
 
-**Key trait:** `SdiBackend` abstracts all rendering. The scene graph calls `backend.blit()`, `backend.clear()`, `backend.swap_buffers()` -- it never knows what surface it's drawing to.
+**Key traits:** `SdiCore` defines 13 required rendering methods and `SdiBackend` extends it with 30 optional accelerated primitives. The scene graph calls `backend.blit()`, `backend.clear()`, `backend.swap_buffers()` -- it never knows what surface it's drawing to.
 
 ### 4.2 Command Interpreter
 
@@ -420,7 +420,7 @@ If the clicked window is not already the topmost, the WM brings it to front befo
 
 #### 4.5.5 Content Clipping
 
-When a window's content exceeds its content area (scrolling text, tall file listings, large images), the content must be clipped at the window boundary. This requires a `set_clip_rect(x, y, w, h)` method on the `SdiBackend` trait -- the one addition to SDI's backend interface that the WM necessitates.
+When a window's content exceeds its content area (scrolling text, tall file listings, large images), the content must be clipped at the window boundary. This requires a `set_clip_rect(x, y, w, h)` method on the `SdiCore` trait -- one of the 13 required backend methods.
 
 | Backend | Clip Implementation |
 |---------|-------------------|
@@ -475,7 +475,7 @@ The corrupted skin demonstrates that the WM's behavioral hooks (position update,
 
 ### 5.1 Rendering Backend Trait
 
-Every rendering operation passes through `SdiBackend`. Three implementations exist; a fourth (framebuffer) is planned.
+Every rendering operation passes through `SdiCore` (13 required methods) and `SdiBackend` (30 optional accelerated primitives). Four implementations exist: PSP (GU), SDL2, WASM (Canvas 2D), and UE5 (software RGBA buffer).
 
 | Method | PSP (GU) | SDL2 | Framebuffer [PLANNED] | UE5 Render Target |
 |--------|---------|------|-------------|-------------------|

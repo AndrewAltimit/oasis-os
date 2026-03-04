@@ -4,7 +4,7 @@
 
 Add a WebAssembly backend to OASIS_OS so it can run in web browsers. This follows
 the established backend pattern (SDL, UE5, PSP) by creating a new
-`oasis-backend-wasm` crate that implements `SdiBackend`, `InputBackend`,
+`oasis-backend-wasm` crate that implements `SdiCore`/`SdiBackend`, `InputBackend`,
 `AudioBackend`, and `NetworkBackend` using Web APIs via `wasm-bindgen`.
 
 The UE5 backend is the closest architectural reference: it uses a software RGBA
@@ -162,9 +162,9 @@ assume filesystem access). Each fix uses `#[cfg(not(target_arch = "wasm32"))]`.
 
 ---
 
-## Phase 2: SdiBackend — Canvas 2D Rendering
+## Phase 2: SdiCore/SdiBackend — Canvas 2D Rendering
 
-**Goal**: Implement `SdiBackend` trait for `WasmBackend` using Canvas 2D API.
+**Goal**: Implement `SdiCore` + `SdiBackend` traits for `WasmBackend` using Canvas 2D API.
 
 ### Step 2.1: WasmBackend struct
 
@@ -616,7 +616,7 @@ This allows customizing the WASM build without recompilation.
 ### Step 9.1: WASM-specific tests
 
 - Unit tests for coordinate scaling
-- Test that all 13 core SdiBackend methods don't panic
+- Test that all 13 core SdiCore methods don't panic
 - Test input event mapping for all key codes
 - Integration test: create OasisWasm, tick 10 frames, verify no errors
 

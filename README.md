@@ -139,7 +139,7 @@ oasis-os/
 
 | Crate | Description |
 |-------|-------------|
-| `oasis-types` | Foundation types and traits: `Color`, `Button`, `InputEvent`, `SdiBackend`, `InputBackend`, `NetworkBackend`, `AudioBackend`, error types, TLS |
+| `oasis-types` | Foundation types and traits: `Color`, `Button`, `InputEvent`, `SdiCore`, `SdiBackend`, `InputBackend`, `NetworkBackend`, `AudioBackend`, error types, TLS |
 | `oasis-vfs` | Virtual file system: `MemoryVfs` (in-RAM), `RealVfs` (disk), `GameAssetVfs` (UE5 with overlay writes) |
 | `oasis-platform` | Platform service traits: `PowerService`, `TimeService`, `UsbService`, `NetworkService`, `OskService` |
 | `oasis-sdi` | Scene Display Interface: named object registry with position, size, color, texture, text, z-order, gradients, shadows |

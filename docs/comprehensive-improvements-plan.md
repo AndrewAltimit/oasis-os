@@ -61,7 +61,7 @@ improvements below address the gaps found.
 
 ### 1.4 PSP Backend: Extended Shape Rendering
 
-**Current state:** 14 extended rendering methods use trait defaults (fill_rect fallback).
+**Current state:** 30 extended rendering methods in `SdiBackend` use trait defaults (`SdiCore` fallback).
 **Impact:** Circles render as squares, no gradients, no rounded rects on PSP.
 
 - Implement `fill_rounded_rect()` using GU line strips
@@ -70,7 +70,7 @@ improvements below address the gaps found.
 - Implement vertical/horizontal gradients using GU vertex colors
 - Keep complex methods (blit_sub, clip stacks) as defaults
 
-**Files:** `crates/oasis-backend-psp/src/lib.rs`, `render.rs`
+**Files:** `crates/oasis-backend-psp/src/lib.rs`, `shapes.rs`, `render.rs`
 **Estimate:** ~300 LOC
 
 ---

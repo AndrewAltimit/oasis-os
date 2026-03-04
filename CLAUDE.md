@@ -103,7 +103,8 @@ The PRX hooks `sceDisplaySetFrameBuf` to draw overlay UI into the game's framebu
 ### Key Abstraction: Backend Traits
 
 `oasis-types/src/backend.rs` defines the only abstraction boundary between core and platform (re-exported by `oasis-core`):
-- `SdiBackend` -- rendering (clear, blit, fill_rect, draw_text, load_texture, swap_buffers, read_pixels)
+- `SdiCore` -- required rendering (13 methods: init, clear, blit, fill_rect, draw_text, swap_buffers, load_texture, destroy_texture, set_clip_rect, reset_clip_rect, measure_text, read_pixels, shutdown)
+- `SdiBackend` -- extends `SdiCore` with 30 optional accelerated primitives (shapes, gradients, text styling, batching)
 - `InputBackend` -- input polling (returns `Vec<InputEvent>`)
 - `NetworkBackend` -- TCP networking
 - `AudioBackend` -- audio playback
@@ -114,7 +115,7 @@ Core code never calls platform APIs directly. All platform interaction goes thro
 
 The framework is split into 19 workspace crates. Each module below is its own crate (previously all in oasis-core):
 
-- **oasis-types** -- Foundation types: `Color`, `Button`, `InputEvent`, backend traits (`SdiBackend`, `InputBackend`, `NetworkBackend`, `AudioBackend`), error types, TLS, bitmap font metrics
+- **oasis-types** -- Foundation types: `Color`, `Button`, `InputEvent`, backend traits (`SdiCore`, `SdiBackend`, `InputBackend`, `NetworkBackend`, `AudioBackend`), error types, TLS, bitmap font metrics
 - **oasis-sdi** -- Scene Display Interface: named objects with position, size, color, texture, text, z-order, gradients, rounded corners, shadows
 - **oasis-skin** -- Data-driven TOML skin system with 13 skins (7 external in `skins/`, 7 built-in; xp exists in both forms). Theme derivation from 9 base colors.
 - **oasis-browser** -- Embeddable HTML/CSS/Gemini rendering engine: DOM parser, CSS cascade, block/inline/table layout, link navigation, reader mode, JavaScript DOM bindings

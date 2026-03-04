@@ -608,9 +608,9 @@ would add ~200 more tests plus 60+ screenshot scenarios and 6 fuzz targets.
 ## Implementation Notes
 
 ### Test Infrastructure Needed
-1. **`RecordingBackend`** -- a test double implementing `SdiBackend` that records all
-   draw calls for assertion. Similar to `MockBackend` in browser tests but generalized
-   for all modules.
+1. **`RecordingBackend`** -- a test double implementing `SdiCore` + `SdiBackend` that
+   records all draw calls for assertion. Similar to `MockBackend` in browser tests but
+   generalized for all modules.
 2. **`TestEnvironment`** -- helper that creates a fully wired `Environment` (VFS +
    CommandRegistry + SdiRegistry + platform stubs) for integration tests.
 3. **Screenshot test binary** -- extends existing `screenshot.rs` with scenario
