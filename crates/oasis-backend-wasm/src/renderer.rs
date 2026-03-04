@@ -6,7 +6,8 @@ use wasm_bindgen::prelude::*;
 use web_sys::{CanvasRenderingContext2d, HtmlCanvasElement, ImageData};
 
 use oasis_types::backend::{
-    Color, GradientStyle, SdiBackend, TextMetrics, TextureId, texture_not_found, validate_rgba_data,
+    Color, GradientStyle, SdiBackend, SdiCore, TextMetrics, TextureId, texture_not_found,
+    validate_rgba_data,
 };
 use oasis_types::error::{OasisError, Result};
 
@@ -254,13 +255,47 @@ impl WasmBackend {
         }
         Ok(offscreen)
     }
+
+    /// Shared glyph-rendering implementation for both `draw_text` and
+    /// `draw_text_styled`.
+    #[allow(clippy::too_many_arguments)]
+    fn draw_text_impl(
+        &mut self,
+        text: &str,
+        x: i32,
+        y: i32,
+        font_size: u16,
+        color: Color,
+        bold: bool,
+        italic: bool,
+    ) -> Result<()> {
+        if text.is_empty() || color.a == 0 || font_size == 0 {
+            return Ok(());
+        }
+        let (tx, ty) = self.translate(x, y);
+        let mut cx = tx as i32;
+
+        for ch in text.chars() {
+            let key = GlyphCacheKey::new(ch, font_size, color, bold, italic);
+            if !self.glyph_cache.contains_key(&key) {
+                let canvas = self.render_glyph_to_canvas(ch, font_size, color, bold, italic)?;
+                self.glyph_cache.insert(key, canvas);
+            }
+            let glyph_canvas = &self.glyph_cache[&key];
+            self.ctx
+                .draw_image_with_html_canvas_element(glyph_canvas, cx as f64, ty)
+                .map_err(js_err)?;
+            cx += font::glyph_advance_scaled(ch, font_size) as i32;
+        }
+        Ok(())
+    }
 }
 
 // ---------------------------------------------------------------------------
-// SdiBackend — core methods (13 required)
+// SdiCore — 13 required methods
 // ---------------------------------------------------------------------------
 
-impl SdiBackend for WasmBackend {
+impl SdiCore for WasmBackend {
     fn init(&mut self, width: u32, height: u32) -> Result<()> {
         self.width = width;
         self.height = height;
@@ -306,38 +341,7 @@ impl SdiBackend for WasmBackend {
         font_size: u16,
         color: Color,
     ) -> Result<()> {
-        self.draw_text_styled(text, x, y, font_size, color, false, false)
-    }
-
-    fn draw_text_styled(
-        &mut self,
-        text: &str,
-        x: i32,
-        y: i32,
-        font_size: u16,
-        color: Color,
-        bold: bool,
-        italic: bool,
-    ) -> Result<()> {
-        if text.is_empty() || color.a == 0 || font_size == 0 {
-            return Ok(());
-        }
-        let (tx, ty) = self.translate(x, y);
-        let mut cx = tx as i32;
-
-        for ch in text.chars() {
-            let key = GlyphCacheKey::new(ch, font_size, color, bold, italic);
-            if !self.glyph_cache.contains_key(&key) {
-                let canvas = self.render_glyph_to_canvas(ch, font_size, color, bold, italic)?;
-                self.glyph_cache.insert(key, canvas);
-            }
-            let glyph_canvas = &self.glyph_cache[&key];
-            self.ctx
-                .draw_image_with_html_canvas_element(glyph_canvas, cx as f64, ty)
-                .map_err(js_err)?;
-            cx += font::glyph_advance_scaled(ch, font_size) as i32;
-        }
-        Ok(())
+        self.draw_text_impl(text, x, y, font_size, color, false, false)
     }
 
     fn blit(&mut self, tex: TextureId, x: i32, y: i32, w: u32, h: u32) -> Result<()> {
@@ -412,7 +416,13 @@ impl SdiBackend for WasmBackend {
         self.gradient_cache.clear();
         Ok(())
     }
+}
 
+// ---------------------------------------------------------------------------
+// SdiBackend — override methods
+// ---------------------------------------------------------------------------
+
+impl SdiBackend for WasmBackend {
     // -------------------------------------------------------------------
     // Extended: shape primitives
     // -------------------------------------------------------------------
@@ -816,6 +826,19 @@ impl SdiBackend for WasmBackend {
     // -------------------------------------------------------------------
     // Extended: text
     // -------------------------------------------------------------------
+
+    fn draw_text_styled(
+        &mut self,
+        text: &str,
+        x: i32,
+        y: i32,
+        font_size: u16,
+        color: Color,
+        bold: bool,
+        italic: bool,
+    ) -> Result<()> {
+        self.draw_text_impl(text, x, y, font_size, color, bold, italic)
+    }
 
     fn measure_text_height(&self, font_size: u16) -> u32 {
         (f64::from(font_size) * 1.2).ceil() as u32

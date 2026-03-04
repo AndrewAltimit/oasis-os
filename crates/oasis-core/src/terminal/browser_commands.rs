@@ -1,5 +1,10 @@
 //! Terminal commands for the browser subsystem.
+//!
+//! These commands live in oasis-core (not oasis-browser) because they
+//! depend on the `Command` / `CommandRegistry` types from oasis-terminal.
+//! Keeping them here avoids a dependency from oasis-browser → oasis-terminal.
 
+use oasis_browser::loader;
 use oasis_terminal::{Command, CommandOutput, CommandRegistry, Environment};
 use oasis_types::error::Result;
 
@@ -160,9 +165,9 @@ impl Command for FetchCmd {
         // VFS miss -- try HTTP(S) for http:// and https:// URLs.
         #[cfg(not(target_arch = "wasm32"))]
         if (url.starts_with("http://") || url.starts_with("https://"))
-            && let Some(parsed) = super::loader::Url::parse(url)
+            && let Some(parsed) = loader::Url::parse(url)
         {
-            match super::loader::http::http_get(&parsed, env.tls) {
+            match loader::http::http_get(&parsed, env.tls) {
                 Ok(resp) => {
                     let text = String::from_utf8_lossy(&resp.body);
                     if show_headers {

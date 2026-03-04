@@ -13,6 +13,7 @@ use oasis_core::backend::{
     Color, GradientStyle, SdiBackend, TextureId, texture_not_found, validate_rgba_data,
 };
 use oasis_core::error::Result;
+use oasis_types::backend::SdiCore;
 
 use crate::font;
 
@@ -194,7 +195,7 @@ impl Ue5Backend {
     }
 }
 
-impl SdiBackend for Ue5Backend {
+impl SdiCore for Ue5Backend {
     fn init(&mut self, width: u32, height: u32) -> Result<()> {
         self.width = width;
         self.height = height;
@@ -365,7 +366,9 @@ impl SdiBackend for Ue5Backend {
         log::info!("UE5 backend shut down");
         Ok(())
     }
+}
 
+impl SdiBackend for Ue5Backend {
     // -------------------------------------------------------------------
     // Extended: Shape Primitives
     // -------------------------------------------------------------------

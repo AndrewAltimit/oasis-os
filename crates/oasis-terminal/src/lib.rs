@@ -7,6 +7,7 @@
 #[macro_use]
 mod command_macro;
 pub mod audio_commands;
+mod builtins;
 mod commands;
 pub mod completion;
 pub mod control_flow;
@@ -22,6 +23,7 @@ pub mod line_edit;
 pub mod network_commands;
 pub(crate) mod pipeline;
 pub mod radio_commands;
+mod script;
 pub mod security_commands;
 pub mod skin_commands;
 pub mod system_commands;

@@ -126,7 +126,9 @@ impl Plugin for ClockWidgetPlugin {
 
     fn shutdown(&mut self, host: &mut PluginHost<'_>) -> Result<()> {
         if self.widget_created {
-            let _ = host.sdi.destroy(CLOCK_WIDGET_NAME);
+            if let Err(e) = host.sdi.destroy(CLOCK_WIDGET_NAME) {
+                log::debug!("destroy({CLOCK_WIDGET_NAME}) during plugin shutdown: {e}");
+            }
             self.widget_created = false;
         }
         Ok(())

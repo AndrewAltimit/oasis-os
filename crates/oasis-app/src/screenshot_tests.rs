@@ -24,7 +24,7 @@ use oasis_backend_sdl::SdlBackend;
 use oasis_core::active_theme::ActiveTheme;
 use oasis_core::apps::tv_guide::TvGuideState;
 use oasis_core::apps::tv_guide::channel::{ChannelConfig, DEFAULT_CHANNELS_TOML};
-use oasis_core::backend::{Color, SdiBackend};
+use oasis_core::backend::{Color, SdiCore};
 use oasis_core::bottombar::BottomBar;
 use oasis_core::browser::{BrowserConfig, BrowserWidget};
 use oasis_core::config::OasisConfig;

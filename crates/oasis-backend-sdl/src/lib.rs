@@ -22,7 +22,7 @@ use sdl2::render::{Canvas, Texture, TextureCreator};
 use sdl2::video::{Window, WindowContext};
 
 use oasis_core::backend::{
-    BackendErrExt, Color, GradientStyle, SdiBackend, TextureId, texture_not_found,
+    BackendErrExt, Color, GradientStyle, SdiBackend, SdiCore, TextureId, texture_not_found,
     validate_rgba_data,
 };
 use oasis_core::error::Result;
@@ -120,7 +120,7 @@ impl SdlBackend {
     }
 }
 
-impl SdiBackend for SdlBackend {
+impl SdiCore for SdlBackend {
     fn init(&mut self, _width: u32, _height: u32) -> Result<()> {
         Ok(())
     }
@@ -154,65 +154,6 @@ impl SdiBackend for SdlBackend {
         color: Color,
     ) -> Result<()> {
         self.draw_text_styled(text, x, y, font_size, color, false, false)
-    }
-
-    fn draw_text_styled(
-        &mut self,
-        text: &str,
-        x: i32,
-        y: i32,
-        font_size: u16,
-        color: Color,
-        bold: bool,
-        italic: bool,
-    ) -> Result<()> {
-        let (tx, ty) = self.translate(x, y);
-        let fs = font_size.max(1) as i32;
-        let sdl_color = sdl2::pixels::Color::RGBA(color.r, color.g, color.b, color.a);
-        self.canvas.set_draw_color(sdl_color);
-
-        let mut cx = tx;
-        for ch in text.chars() {
-            let glyph_data = font::glyph(ch);
-            let (left_pad, _advance) = font::glyph_metrics(ch);
-            let left_pad = left_pad as i32;
-            for row in 0..8i32 {
-                let bits = glyph_data[row as usize];
-                if bits == 0 {
-                    continue;
-                }
-                let oy0 = row * fs / 8;
-                let oy1 = (row + 1) * fs / 8;
-                let rh = (oy1 - oy0).max(1);
-                // Faux-italic: shift top rows rightward (~12-degree).
-                let italic_offset = if italic { (7 - row) * fs / 32 } else { 0 };
-                for col in 0..8i32 {
-                    if bits & (0x80 >> col) != 0 {
-                        let src_col = col - left_pad;
-                        let ox0 = src_col * fs / 8;
-                        let ox1 = (src_col + 1) * fs / 8;
-                        let rw = (ox1 - ox0).max(1);
-                        let px = cx + ox0 + italic_offset;
-                        let py = ty + oy0;
-                        if rw == 1 && rh == 1 {
-                            let _ = self.canvas.draw_point(sdl2::rect::Point::new(px, py));
-                        } else {
-                            let _ = self
-                                .canvas
-                                .fill_rect(Rect::new(px, py, rw as u32, rh as u32));
-                        }
-                        if bold {
-                            let _ = self.canvas.draw_point(sdl2::rect::Point::new(px + 1, py));
-                            if rh > 1 {
-                                let _ = self.canvas.fill_rect(Rect::new(px + 1, py, 1, rh as u32));
-                            }
-                        }
-                    }
-                }
-            }
-            cx += oasis_types::bitmap_font::glyph_advance_scaled(ch, font_size) as i32;
-        }
-        Ok(())
     }
 
     fn fill_rect(&mut self, x: i32, y: i32, w: u32, h: u32, color: Color) -> Result<()> {
@@ -284,6 +225,67 @@ impl SdiBackend for SdlBackend {
 
     fn shutdown(&mut self) -> Result<()> {
         log::info!("SDL2 backend shut down");
+        Ok(())
+    }
+}
+
+impl SdiBackend for SdlBackend {
+    fn draw_text_styled(
+        &mut self,
+        text: &str,
+        x: i32,
+        y: i32,
+        font_size: u16,
+        color: Color,
+        bold: bool,
+        italic: bool,
+    ) -> Result<()> {
+        let (tx, ty) = self.translate(x, y);
+        let fs = font_size.max(1) as i32;
+        let sdl_color = sdl2::pixels::Color::RGBA(color.r, color.g, color.b, color.a);
+        self.canvas.set_draw_color(sdl_color);
+
+        let mut cx = tx;
+        for ch in text.chars() {
+            let glyph_data = font::glyph(ch);
+            let (left_pad, _advance) = font::glyph_metrics(ch);
+            let left_pad = left_pad as i32;
+            for row in 0..8i32 {
+                let bits = glyph_data[row as usize];
+                if bits == 0 {
+                    continue;
+                }
+                let oy0 = row * fs / 8;
+                let oy1 = (row + 1) * fs / 8;
+                let rh = (oy1 - oy0).max(1);
+                // Faux-italic: shift top rows rightward (~12-degree).
+                let italic_offset = if italic { (7 - row) * fs / 32 } else { 0 };
+                for col in 0..8i32 {
+                    if bits & (0x80 >> col) != 0 {
+                        let src_col = col - left_pad;
+                        let ox0 = src_col * fs / 8;
+                        let ox1 = (src_col + 1) * fs / 8;
+                        let rw = (ox1 - ox0).max(1);
+                        let px = cx + ox0 + italic_offset;
+                        let py = ty + oy0;
+                        if rw == 1 && rh == 1 {
+                            let _ = self.canvas.draw_point(sdl2::rect::Point::new(px, py));
+                        } else {
+                            let _ = self
+                                .canvas
+                                .fill_rect(Rect::new(px, py, rw as u32, rh as u32));
+                        }
+                        if bold {
+                            let _ = self.canvas.draw_point(sdl2::rect::Point::new(px + 1, py));
+                            if rh > 1 {
+                                let _ = self.canvas.fill_rect(Rect::new(px + 1, py, 1, rh as u32));
+                            }
+                        }
+                    }
+                }
+            }
+            cx += oasis_types::bitmap_font::glyph_advance_scaled(ch, font_size) as i32;
+        }
         Ok(())
     }
 
@@ -857,8 +859,7 @@ impl SdiBackend for SdlBackend {
         texture.set_alpha_mod(tint.a);
         let dst_rect = Rect::new(tx, ty, w, h);
         self.canvas.copy(texture, None, dst_rect).backend_err()?;
-        // Reset modulation.
-        let texture = self.textures.get_mut(&tex.0).unwrap();
+        // Reset modulation on the same texture.
         texture.set_color_mod(255, 255, 255);
         texture.set_alpha_mod(255);
         Ok(())
@@ -889,7 +890,7 @@ impl SdiBackend for SdlBackend {
         self.canvas
             .copy(texture, src_rect, dst_rect)
             .backend_err()?;
-        let texture = self.textures.get_mut(&tex.0).unwrap();
+        // Reset modulation on the same texture.
         texture.set_color_mod(255, 255, 255);
         texture.set_alpha_mod(255);
         Ok(())

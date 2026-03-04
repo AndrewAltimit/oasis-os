@@ -1,434 +1,7 @@
-//! Form state management and interaction for the browser engine.
-//!
-//! Provides [`FormManager`] to track multiple HTML forms on a page,
-//! manage focus/tab navigation between form elements, handle keyboard
-//! input into text fields, and collect [`FormData`] for submission.
+//! [`FormManager`] — manages all forms on a page.
 
-// No external dependencies -- std only.
-
-// -----------------------------------------------------------------------
-// Form element types
-// -----------------------------------------------------------------------
-
-/// The input type for a text-like `<input>` element.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum InputType {
-    /// Plain text input.
-    Text,
-    /// Password input (value masked on display).
-    Password,
-    /// Email address input.
-    Email,
-    /// Numeric input.
-    Number,
-    /// Hidden input (not displayed, not focusable).
-    Hidden,
-}
-
-/// A single option inside a `<select>` dropdown.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SelectOption {
-    /// The value submitted with the form.
-    pub value: String,
-    /// The display label shown to the user.
-    pub label: String,
-    /// Whether this option is disabled.
-    pub disabled: bool,
-}
-
-/// A form element that can appear inside a `<form>`.
-#[derive(Debug, Clone, PartialEq)]
-pub enum FormElement {
-    /// A single-line text input field.
-    TextInput {
-        name: String,
-        value: String,
-        placeholder: String,
-        maxlength: Option<usize>,
-        input_type: InputType,
-    },
-    /// A checkbox.
-    Checkbox {
-        name: String,
-        value: String,
-        checked: bool,
-        label: String,
-    },
-    /// A radio button belonging to a named group.
-    RadioButton {
-        name: String,
-        value: String,
-        checked: bool,
-        group: String,
-    },
-    /// A dropdown select box.
-    SelectBox {
-        name: String,
-        options: Vec<SelectOption>,
-        selected_index: Option<usize>,
-    },
-    /// A multi-line text area.
-    TextArea {
-        name: String,
-        value: String,
-        rows: u32,
-        cols: u32,
-        placeholder: String,
-    },
-    /// A submit button.
-    SubmitButton {
-        name: String,
-        value: String,
-        label: String,
-    },
-    /// A reset button.
-    ResetButton {
-        label: String,
-    },
-    /// A hidden input (not displayed, not focusable).
-    HiddenInput {
-        name: String,
-        value: String,
-    },
-}
-
-impl FormElement {
-    /// Returns the element name, if any.
-    fn name(&self) -> Option<&str> {
-        match self {
-            Self::TextInput { name, .. }
-            | Self::Checkbox { name, .. }
-            | Self::RadioButton { name, .. }
-            | Self::SelectBox { name, .. }
-            | Self::TextArea { name, .. }
-            | Self::SubmitButton { name, .. }
-            | Self::HiddenInput { name, .. } => {
-                if name.is_empty() { None } else { Some(name) }
-            }
-            Self::ResetButton { .. } => None,
-        }
-    }
-
-    /// Whether this element is focusable via tab navigation.
-    fn is_focusable(&self) -> bool {
-        !matches!(self, Self::HiddenInput { .. })
-    }
-}
-
-// -----------------------------------------------------------------------
-// Form submission types
-// -----------------------------------------------------------------------
-
-/// HTTP method for form submission.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum FormMethod {
-    /// Submit via query string (`GET`).
-    Get,
-    /// Submit via request body (`POST`).
-    Post,
-}
-
-/// Collected form data ready for submission.
-#[derive(Debug, Clone, PartialEq)]
-pub struct FormData {
-    /// Key-value pairs of form field names and values.
-    pub fields: Vec<(String, String)>,
-    /// The HTTP method for submission.
-    pub method: FormMethod,
-    /// The action URL.
-    pub action: String,
-}
-
-impl FormData {
-    /// URL-encode the form data into an
-    /// `application/x-www-form-urlencoded` string.
-    pub fn encode(&self) -> String {
-        self.fields
-            .iter()
-            .map(|(k, v)| {
-                format!("{}={}", url_encode(k), url_encode(v))
-            })
-            .collect::<Vec<_>>()
-            .join("&")
-    }
-
-    /// Return the fields as key-value pairs.
-    pub fn to_pairs(&self) -> Vec<(String, String)> {
-        self.fields.clone()
-    }
-}
-
-/// Minimal percent-encoding for form data (space -> `+`, special
-/// chars -> `%XX`).
-fn url_encode(input: &str) -> String {
-    let mut out = String::with_capacity(input.len());
-    for b in input.bytes() {
-        match b {
-            b'A'..=b'Z'
-            | b'a'..=b'z'
-            | b'0'..=b'9'
-            | b'-'
-            | b'_'
-            | b'.'
-            | b'~' => out.push(b as char),
-            b' ' => out.push('+'),
-            _ => {
-                out.push('%');
-                out.push(hex_digit(b >> 4));
-                out.push(hex_digit(b & 0x0F));
-            }
-        }
-    }
-    out
-}
-
-/// Convert a nibble (0..15) to an uppercase hex digit.
-fn hex_digit(nibble: u8) -> char {
-    match nibble {
-        0..=9 => (b'0' + nibble) as char,
-        _ => (b'A' + nibble - 10) as char,
-    }
-}
-
-// -----------------------------------------------------------------------
-// Keyboard input
-// -----------------------------------------------------------------------
-
-/// A key event relevant to form interaction.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum FormKey {
-    /// A printable character.
-    Char(char),
-    /// Backspace (delete before cursor).
-    Backspace,
-    /// Delete (delete after cursor).
-    Delete,
-    /// Enter / Return.
-    Enter,
-    /// Tab (focus next element).
-    Tab,
-    /// Shift+Tab (focus previous element).
-    ShiftTab,
-    /// Left arrow (move cursor left).
-    Left,
-    /// Right arrow (move cursor right).
-    Right,
-    /// Up arrow (select box: previous option).
-    Up,
-    /// Down arrow (select box: next option).
-    Down,
-    /// Home (move cursor to start).
-    Home,
-    /// End (move cursor to end).
-    End,
-    /// Space (toggle checkbox / select radio).
-    Space,
-}
-
-/// The result of handling a form key event.
-#[derive(Debug, Clone, PartialEq)]
-pub enum FormAction {
-    /// Nothing happened.
-    None,
-    /// A form was submitted.
-    Submit(FormData),
-    /// Focus moved to a different element.
-    FocusChanged,
-    /// A form value changed.
-    ValueChanged,
-}
-
-// -----------------------------------------------------------------------
-// FormState -- per-form state
-// -----------------------------------------------------------------------
-
-/// State for a single `<form>` element, including all its child
-/// elements and their current values.
-#[derive(Debug, Clone)]
-pub struct FormState {
-    /// Unique identifier for this form.
-    pub form_id: usize,
-    /// The action URL for submission.
-    pub action: String,
-    /// The HTTP method for submission.
-    pub method: FormMethod,
-    /// Ordered list of form elements.
-    elements: Vec<FormElement>,
-    /// Default values for each element, used by [`FormManager::reset`].
-    defaults: Vec<FormElement>,
-    /// Cursor position within the currently-focused text field.
-    cursor: usize,
-}
-
-impl FormState {
-    /// Create a new empty form.
-    fn new(form_id: usize, action: String, method: FormMethod) -> Self {
-        Self {
-            form_id,
-            action,
-            method,
-            elements: Vec::new(),
-            defaults: Vec::new(),
-            cursor: 0,
-        }
-    }
-
-    /// Add an element to this form. A snapshot is kept as default.
-    fn add_element(&mut self, element: FormElement) {
-        self.defaults.push(element.clone());
-        self.elements.push(element);
-    }
-
-    /// Names of all focusable elements, in order.
-    fn focusable_names(&self) -> Vec<String> {
-        self.elements
-            .iter()
-            .filter(|e| e.is_focusable())
-            .filter_map(|e| match e {
-                FormElement::ResetButton { .. } => {
-                    Some("__reset__".to_string())
-                }
-                FormElement::SubmitButton { name, .. } => {
-                    if name.is_empty() {
-                        Some("__submit__".to_string())
-                    } else {
-                        Some(name.clone())
-                    }
-                }
-                other => other.name().map(String::from),
-            })
-            .collect()
-    }
-
-    /// Find element index by name.
-    fn index_of(&self, name: &str) -> Option<usize> {
-        self.elements.iter().position(|e| {
-            match e {
-                FormElement::ResetButton { .. } => {
-                    name == "__reset__"
-                }
-                FormElement::SubmitButton {
-                    name: n, ..
-                } => {
-                    if n.is_empty() {
-                        name == "__submit__"
-                    } else {
-                        n == name
-                    }
-                }
-                _ => e.name() == Some(name),
-            }
-        })
-    }
-
-    /// Collect form data for submission.
-    fn collect(&self) -> Vec<(String, String)> {
-        let mut pairs = Vec::new();
-        for elem in &self.elements {
-            match elem {
-                FormElement::TextInput {
-                    name, value, ..
-                } if !name.is_empty() => {
-                    pairs.push((name.clone(), value.clone()));
-                }
-                FormElement::Checkbox {
-                    name,
-                    value,
-                    checked,
-                    ..
-                } if *checked && !name.is_empty() => {
-                    pairs.push((name.clone(), value.clone()));
-                }
-                FormElement::RadioButton {
-                    name,
-                    value,
-                    checked,
-                    ..
-                } if *checked && !name.is_empty() => {
-                    pairs.push((name.clone(), value.clone()));
-                }
-                FormElement::SelectBox {
-                    name,
-                    options,
-                    selected_index,
-                } if !name.is_empty() => {
-                    if let Some(idx) = selected_index {
-                        if let Some(opt) = options.get(*idx) {
-                            pairs.push((
-                                name.clone(),
-                                opt.value.clone(),
-                            ));
-                        }
-                    }
-                }
-                FormElement::TextArea {
-                    name, value, ..
-                } if !name.is_empty() => {
-                    pairs.push((name.clone(), value.clone()));
-                }
-                FormElement::HiddenInput { name, value }
-                    if !name.is_empty() =>
-                {
-                    pairs.push((name.clone(), value.clone()));
-                }
-                _ => {}
-            }
-        }
-        pairs
-    }
-
-    /// Reset all elements to their default values.
-    fn reset(&mut self) {
-        self.elements = self.defaults.clone();
-        self.cursor = 0;
-    }
-}
-
-// -----------------------------------------------------------------------
-// ElementKind (borrow-safe dispatch tag)
-// -----------------------------------------------------------------------
-
-/// Lightweight tag extracted from a [`FormElement`] to allow
-/// dispatching in [`FormManager::handle_input`] without holding
-/// a mutable borrow on the element across the entire match.
-enum ElementKind {
-    TextInput { maxlength: Option<usize> },
-    TextArea,
-    Checkbox,
-    RadioButton { group: String, value: String },
-    SelectBox,
-    SubmitButton,
-    ResetButton,
-    Hidden,
-}
-
-impl ElementKind {
-    fn of(elem: &FormElement) -> Self {
-        match elem {
-            FormElement::TextInput { maxlength, .. } => {
-                Self::TextInput {
-                    maxlength: *maxlength,
-                }
-            }
-            FormElement::TextArea { .. } => Self::TextArea,
-            FormElement::Checkbox { .. } => Self::Checkbox,
-            FormElement::RadioButton {
-                group, value, ..
-            } => Self::RadioButton {
-                group: group.clone(),
-                value: value.clone(),
-            },
-            FormElement::SelectBox { .. } => Self::SelectBox,
-            FormElement::SubmitButton { .. } => {
-                Self::SubmitButton
-            }
-            FormElement::ResetButton { .. } => {
-                Self::ResetButton
-            }
-            FormElement::HiddenInput { .. } => Self::Hidden,
-        }
-    }
-}
+use super::state::{ElementKind, FormState};
+use super::types::{FormAction, FormData, FormElement, FormKey, FormMethod, SelectOption};
 
 // -----------------------------------------------------------------------
 // FormManager
@@ -456,38 +29,22 @@ impl FormManager {
     }
 
     /// Register a new form and return its id.
-    pub fn add_form(
-        &mut self,
-        action: &str,
-        method: FormMethod,
-    ) -> usize {
+    pub fn add_form(&mut self, action: &str, method: FormMethod) -> usize {
         let id = self.forms.len();
-        self.forms.push(FormState::new(
-            id,
-            action.to_string(),
-            method,
-        ));
+        self.forms
+            .push(FormState::new(id, action.to_string(), method));
         id
     }
 
     /// Add an element to the form with the given id.
-    pub fn add_element(
-        &mut self,
-        form_id: usize,
-        element: FormElement,
-    ) {
+    pub fn add_element(&mut self, form_id: usize, element: FormElement) {
         if let Some(form) = self.forms.get_mut(form_id) {
             form.add_element(element);
         }
     }
 
     /// Set the value of a named text element.
-    pub fn set_value(
-        &mut self,
-        form_id: usize,
-        name: &str,
-        value: &str,
-    ) {
+    pub fn set_value(&mut self, form_id: usize, name: &str, value: &str) {
         let Some(form) = self.forms.get_mut(form_id) else {
             return;
         };
@@ -505,80 +62,51 @@ impl FormManager {
                         value.to_string()
                     };
                     return;
-                }
+                },
                 FormElement::TextArea {
-                    name: n,
-                    value: v,
-                    ..
+                    name: n, value: v, ..
                 } if n == name => {
                     *v = value.to_string();
                     return;
-                }
-                _ => {}
+                },
+                _ => {},
             }
         }
     }
 
     /// Get the value of a named text element.
-    pub fn get_value(
-        &self,
-        form_id: usize,
-        name: &str,
-    ) -> Option<&str> {
+    pub fn get_value(&self, form_id: usize, name: &str) -> Option<&str> {
         let form = self.forms.get(form_id)?;
         for elem in &form.elements {
             match elem {
-                FormElement::TextInput {
-                    name: n,
-                    value,
-                    ..
-                } if n == name => return Some(value),
-                FormElement::TextArea {
-                    name: n,
-                    value,
-                    ..
-                } if n == name => return Some(value),
-                FormElement::HiddenInput {
-                    name: n,
-                    value,
-                } if n == name => return Some(value),
-                _ => {}
+                FormElement::TextInput { name: n, value, .. } if n == name => return Some(value),
+                FormElement::TextArea { name: n, value, .. } if n == name => return Some(value),
+                FormElement::HiddenInput { name: n, value } if n == name => return Some(value),
+                _ => {},
             }
         }
         None
     }
 
     /// Toggle a checkbox by name.
-    pub fn toggle_checkbox(
-        &mut self,
-        form_id: usize,
-        name: &str,
-    ) {
+    pub fn toggle_checkbox(&mut self, form_id: usize, name: &str) {
         let Some(form) = self.forms.get_mut(form_id) else {
             return;
         };
         for elem in &mut form.elements {
             if let FormElement::Checkbox {
-                name: n,
-                checked,
-                ..
+                name: n, checked, ..
             } = elem
+                && n == name
             {
-                if n == name {
-                    *checked = !*checked;
-                    return;
-                }
+                *checked = !*checked;
+                return;
             }
         }
     }
 
     /// Select a radio button within a group, deselecting the others.
-    pub fn select_radio(
-        &mut self,
-        form_id: usize,
-        group: &str,
-        value: &str,
-    ) {
+    pub fn select_radio(&mut self, form_id: usize, group: &str, value: &str) {
         let Some(form) = self.forms.get_mut(form_id) else {
             return;
         };
@@ -589,21 +117,15 @@ impl FormManager {
                 checked,
                 ..
             } = elem
+                && g == group
             {
-                if g == group {
-                    *checked = v == value;
-                }
+                *checked = v == value;
             }
         }
     }
 
     /// Select an option in a select box by index.
-    pub fn select_option(
-        &mut self,
-        form_id: usize,
-        name: &str,
-        index: usize,
-    ) {
+    pub fn select_option(&mut self, form_id: usize, name: &str, index: usize) {
         let Some(form) = self.forms.get_mut(form_id) else {
             return;
         };
@@ -613,15 +135,15 @@ impl FormManager {
                 options,
                 selected_index,
             } = elem
+                && n == name
+                && index < options.len()
             {
-                if n == name && index < options.len() {
-                    if let Some(opt) = options.get(index) {
-                        if !opt.disabled {
-                            *selected_index = Some(index);
-                        }
-                    }
-                    return;
+                if let Some(opt) = options.get(index)
+                    && !opt.disabled
+                {
+                    *selected_index = Some(index);
                 }
+                return;
             }
         }
     }
@@ -643,11 +165,7 @@ impl FormManager {
             .forms
             .iter()
             .enumerate()
-            .flat_map(|(fi, f)| {
-                f.focusable_names()
-                    .into_iter()
-                    .map(move |name| (fi, name))
-            })
+            .flat_map(|(fi, f)| f.focusable_names().into_iter().map(move |name| (fi, name)))
             .collect();
 
         if flat.is_empty() {
@@ -655,11 +173,8 @@ impl FormManager {
         }
 
         // Find current position in flat list.
-        let current_pos = match (&self.focused_form, &self.focused_element)
-        {
-            (Some(fi), Some(name)) => {
-                flat.iter().position(|(f, n)| f == fi && n == name)
-            }
+        let current_pos = match (&self.focused_form, &self.focused_element) {
+            (Some(fi), Some(name)) => flat.iter().position(|(f, n)| f == fi && n == name),
             _ => None,
         };
 
@@ -672,10 +187,14 @@ impl FormManager {
                 } else {
                     pos - 1
                 }
-            }
+            },
             None => {
-                if forward { 0 } else { flat.len() - 1 }
-            }
+                if forward {
+                    0
+                } else {
+                    flat.len() - 1
+                }
+            },
         };
 
         let (fi, ref name) = flat[next_pos];
@@ -683,19 +202,19 @@ impl FormManager {
         self.focused_element = Some(name.clone());
 
         // Reset cursor to end of text for newly focused text fields.
-        if let Some(form) = self.forms.get_mut(fi) {
-            if let Some(idx) = form.index_of(name) {
-                match &form.elements[idx] {
-                    FormElement::TextInput { value, .. } => {
-                        form.cursor = value.len();
-                    }
-                    FormElement::TextArea { value, .. } => {
-                        form.cursor = value.len();
-                    }
-                    _ => {
-                        form.cursor = 0;
-                    }
-                }
+        if let Some(form) = self.forms.get_mut(fi)
+            && let Some(idx) = form.index_of(name)
+        {
+            match &form.elements[idx] {
+                FormElement::TextInput { value, .. } => {
+                    form.cursor = value.len();
+                },
+                FormElement::TextArea { value, .. } => {
+                    form.cursor = value.len();
+                },
+                _ => {
+                    form.cursor = 0;
+                },
             }
         }
     }
@@ -709,18 +228,15 @@ impl FormManager {
             FormKey::Tab => {
                 self.focus_next();
                 return FormAction::FocusChanged;
-            }
+            },
             FormKey::ShiftTab => {
                 self.focus_prev();
                 return FormAction::FocusChanged;
-            }
-            _ => {}
+            },
+            _ => {},
         }
 
-        let (fi, name) = match (
-            &self.focused_form,
-            &self.focused_element,
-        ) {
+        let (fi, name) = match (&self.focused_form, &self.focused_element) {
             (Some(fi), Some(name)) => (*fi, name.clone()),
             _ => return FormAction::None,
         };
@@ -740,48 +256,36 @@ impl FormManager {
 
         match kind {
             ElementKind::TextInput { maxlength } => {
-                Self::handle_text_on_form(
-                    &key, form, elem_idx, maxlength,
-                )
-            }
-            ElementKind::TextArea => {
-                Self::handle_text_on_form(
-                    &key, form, elem_idx, None,
-                )
-            }
+                Self::handle_text_on_form(&key, form, elem_idx, maxlength)
+            },
+            ElementKind::TextArea => Self::handle_text_on_form(&key, form, elem_idx, None),
             ElementKind::Checkbox => match key {
                 FormKey::Space | FormKey::Enter => {
-                    if let FormElement::Checkbox {
-                        checked, ..
-                    } = &mut form.elements[elem_idx]
-                    {
+                    if let FormElement::Checkbox { checked, .. } = &mut form.elements[elem_idx] {
                         *checked = !*checked;
                     }
                     FormAction::ValueChanged
-                }
+                },
                 _ => FormAction::None,
             },
-            ElementKind::RadioButton { group, value } => {
-                match key {
-                    FormKey::Space | FormKey::Enter => {
-                        for e in &mut form.elements {
-                            if let FormElement::RadioButton {
-                                group: g,
-                                value: v,
-                                checked,
-                                ..
-                            } = e
-                            {
-                                if *g == group {
-                                    *checked = *v == value;
-                                }
-                            }
+            ElementKind::RadioButton { group, value } => match key {
+                FormKey::Space | FormKey::Enter => {
+                    for e in &mut form.elements {
+                        if let FormElement::RadioButton {
+                            group: g,
+                            value: v,
+                            checked,
+                            ..
+                        } = e
+                            && *g == group
+                        {
+                            *checked = *v == value;
                         }
-                        FormAction::ValueChanged
                     }
-                    _ => FormAction::None,
-                }
-            }
+                    FormAction::ValueChanged
+                },
+                _ => FormAction::None,
+            },
             ElementKind::SelectBox => {
                 if let FormElement::SelectBox {
                     options,
@@ -789,15 +293,11 @@ impl FormManager {
                     ..
                 } = &mut form.elements[elem_idx]
                 {
-                    Self::handle_select_key(
-                        &key,
-                        options,
-                        selected_index,
-                    )
+                    Self::handle_select_key(&key, options, selected_index)
                 } else {
                     FormAction::None
                 }
-            }
+            },
             ElementKind::SubmitButton => match key {
                 FormKey::Space | FormKey::Enter => {
                     let data = FormData {
@@ -806,7 +306,7 @@ impl FormManager {
                         action: form.action.clone(),
                     };
                     FormAction::Submit(data)
-                }
+                },
                 _ => FormAction::None,
             },
             ElementKind::ResetButton => match key {
@@ -815,7 +315,7 @@ impl FormManager {
                     form.elements = defaults;
                     form.cursor = 0;
                     FormAction::ValueChanged
-                }
+                },
                 _ => FormAction::None,
             },
             ElementKind::Hidden => FormAction::None,
@@ -834,8 +334,7 @@ impl FormManager {
         // For Enter we need to collect *all* elements, so handle it
         // before taking a mutable borrow on the individual element.
         if *key == FormKey::Enter {
-            let fields =
-                collect_from_elements(&form.elements);
+            let fields = collect_from_elements(&form.elements);
             return FormAction::Submit(FormData {
                 fields,
                 method: form.method,
@@ -844,17 +343,11 @@ impl FormManager {
         }
 
         let value = match &mut form.elements[elem_idx] {
-            FormElement::TextInput { value, .. }
-            | FormElement::TextArea { value, .. } => value,
+            FormElement::TextInput { value, .. } | FormElement::TextArea { value, .. } => value,
             _ => return FormAction::None,
         };
 
-        Self::handle_text_key(
-            key,
-            value,
-            &mut form.cursor,
-            maxlength,
-        )
+        Self::handle_text_key(key, value, &mut form.cursor, maxlength)
     }
 
     /// Handle a single text-editing key event.
@@ -866,70 +359,68 @@ impl FormManager {
     ) -> FormAction {
         match key {
             FormKey::Char(ch) => {
-                if let Some(max) = maxlength {
-                    if value.chars().count() >= max {
-                        return FormAction::None;
-                    }
+                if let Some(max) = maxlength
+                    && value.chars().count() >= max
+                {
+                    return FormAction::None;
                 }
                 let byte_pos = char_to_byte(value, *cursor);
                 value.insert(byte_pos, *ch);
                 *cursor += 1;
                 FormAction::ValueChanged
-            }
+            },
             FormKey::Backspace => {
                 if *cursor > 0 {
                     *cursor -= 1;
-                    let byte_pos =
-                        char_to_byte(value, *cursor);
+                    let byte_pos = char_to_byte(value, *cursor);
                     value.remove(byte_pos);
                     FormAction::ValueChanged
                 } else {
                     FormAction::None
                 }
-            }
+            },
             FormKey::Delete => {
                 let len = value.chars().count();
                 if *cursor < len {
-                    let byte_pos =
-                        char_to_byte(value, *cursor);
+                    let byte_pos = char_to_byte(value, *cursor);
                     value.remove(byte_pos);
                     FormAction::ValueChanged
                 } else {
                     FormAction::None
                 }
-            }
+            },
             FormKey::Left => {
                 if *cursor > 0 {
                     *cursor -= 1;
                 }
                 FormAction::None
-            }
+            },
             FormKey::Right => {
                 let len = value.chars().count();
                 if *cursor < len {
                     *cursor += 1;
                 }
                 FormAction::None
-            }
+            },
             FormKey::Home => {
                 *cursor = 0;
                 FormAction::None
-            }
+            },
             FormKey::End => {
                 *cursor = value.chars().count();
                 FormAction::None
-            }
+            },
             FormKey::Space => {
-                if let Some(max) = maxlength {
-                    if value.chars().count() >= max {
-                        return FormAction::None;
-                    }
+                if let Some(max) = maxlength
+                    && value.chars().count() >= max
+                {
+                    return FormAction::None;
                 }
                 let byte_pos = char_to_byte(value, *cursor);
                 value.insert(byte_pos, ' ');
                 *cursor += 1;
                 FormAction::ValueChanged
-            }
+            },
             // Enter is handled in handle_text_on_form.
             _ => FormAction::None,
         }
@@ -961,10 +452,9 @@ impl FormManager {
                     }
                 }
                 FormAction::None
-            }
+            },
             FormKey::Down => {
-                let current =
-                    selected_index.unwrap_or(0);
+                let current = selected_index.unwrap_or(0);
                 let mut idx = current;
                 loop {
                     idx += 1;
@@ -977,16 +467,13 @@ impl FormManager {
                     }
                 }
                 FormAction::None
-            }
+            },
             _ => FormAction::None,
         }
     }
 
     /// Submit a form by id, returning the collected data.
-    pub fn submit(
-        &self,
-        form_id: usize,
-    ) -> Option<FormData> {
+    pub fn submit(&self, form_id: usize) -> Option<FormData> {
         let form = self.forms.get(form_id)?;
         Some(FormData {
             fields: form.collect(),
@@ -1030,17 +517,13 @@ fn char_to_byte(s: &str, char_idx: usize) -> usize {
 
 /// Collect form data from a slice of elements (used internally when
 /// we only have a shared reference to the elements vec).
-fn collect_from_elements(
-    elements: &[FormElement],
-) -> Vec<(String, String)> {
+fn collect_from_elements(elements: &[FormElement]) -> Vec<(String, String)> {
     let mut pairs = Vec::new();
     for elem in elements {
         match elem {
-            FormElement::TextInput {
-                name, value, ..
-            } if !name.is_empty() => {
+            FormElement::TextInput { name, value, .. } if !name.is_empty() => {
                 pairs.push((name.clone(), value.clone()));
-            }
+            },
             FormElement::Checkbox {
                 name,
                 value,
@@ -1048,7 +531,7 @@ fn collect_from_elements(
                 ..
             } if *checked && !name.is_empty() => {
                 pairs.push((name.clone(), value.clone()));
-            }
+            },
             FormElement::RadioButton {
                 name,
                 value,
@@ -1056,30 +539,25 @@ fn collect_from_elements(
                 ..
             } if *checked && !name.is_empty() => {
                 pairs.push((name.clone(), value.clone()));
-            }
+            },
             FormElement::SelectBox {
                 name,
                 options,
                 selected_index,
             } if !name.is_empty() => {
-                if let Some(idx) = selected_index {
-                    if let Some(opt) = options.get(*idx) {
-                        pairs
-                            .push((name.clone(), opt.value.clone()));
-                    }
+                if let Some(idx) = selected_index
+                    && let Some(opt) = options.get(*idx)
+                {
+                    pairs.push((name.clone(), opt.value.clone()));
                 }
-            }
-            FormElement::TextArea {
-                name, value, ..
-            } if !name.is_empty() => {
+            },
+            FormElement::TextArea { name, value, .. } if !name.is_empty() => {
                 pairs.push((name.clone(), value.clone()));
-            }
-            FormElement::HiddenInput { name, value }
-                if !name.is_empty() =>
-            {
+            },
+            FormElement::HiddenInput { name, value } if !name.is_empty() => {
                 pairs.push((name.clone(), value.clone()));
-            }
-            _ => {}
+            },
+            _ => {},
         }
     }
     pairs
@@ -1091,6 +569,7 @@ fn collect_from_elements(
 
 #[cfg(test)]
 mod tests {
+    use super::super::types::{InputType, SelectOption};
     use super::*;
 
     // -- helpers --------------------------------------------------------
@@ -1220,10 +699,7 @@ mod tests {
         let long = "a".repeat(50);
         mgr.set_value(0, "user", &long);
         // maxlength = 20 for user field.
-        assert_eq!(
-            mgr.get_value(0, "user").map(|s| s.len()),
-            Some(20)
-        );
+        assert_eq!(mgr.get_value(0, "user").map(|s| s.len()), Some(20));
     }
 
     #[test]
@@ -1351,18 +827,14 @@ mod tests {
         let mut mgr = make_manager_with_login_form();
         mgr.toggle_checkbox(0, "remember");
         // Check the internal state directly.
-        if let FormElement::Checkbox { checked, .. } =
-            &mgr.forms[0].elements[2]
-        {
+        if let FormElement::Checkbox { checked, .. } = &mgr.forms[0].elements[2] {
             assert!(*checked);
         } else {
             panic!("expected checkbox");
         }
 
         mgr.toggle_checkbox(0, "remember");
-        if let FormElement::Checkbox { checked, .. } =
-            &mgr.forms[0].elements[2]
-        {
+        if let FormElement::Checkbox { checked, .. } = &mgr.forms[0].elements[2] {
             assert!(!*checked);
         } else {
             panic!("expected checkbox");
@@ -1419,9 +891,7 @@ mod tests {
             .elements
             .iter()
             .filter_map(|e| match e {
-                FormElement::RadioButton { checked, .. } => {
-                    Some(*checked)
-                }
+                FormElement::RadioButton { checked, .. } => Some(*checked),
                 _ => None,
             })
             .collect();
@@ -1482,10 +952,7 @@ mod tests {
         );
 
         mgr.select_option(fid, "size", 1);
-        if let FormElement::SelectBox {
-            selected_index, ..
-        } = &mgr.forms[fid].elements[0]
-        {
+        if let FormElement::SelectBox { selected_index, .. } = &mgr.forms[fid].elements[0] {
             assert_eq!(*selected_index, Some(1));
         } else {
             panic!("expected select box");
@@ -1517,10 +984,7 @@ mod tests {
         );
 
         mgr.select_option(fid, "size", 1);
-        if let FormElement::SelectBox {
-            selected_index, ..
-        } = &mgr.forms[fid].elements[0]
-        {
+        if let FormElement::SelectBox { selected_index, .. } = &mgr.forms[fid].elements[0] {
             // Should remain at 0 because index 1 is disabled.
             assert_eq!(*selected_index, Some(0));
         } else {
@@ -1561,18 +1025,12 @@ mod tests {
 
         let r = mgr.handle_input(FormKey::Down);
         assert_eq!(r, FormAction::ValueChanged);
-        if let FormElement::SelectBox {
-            selected_index, ..
-        } = &mgr.forms[fid].elements[0]
-        {
+        if let FormElement::SelectBox { selected_index, .. } = &mgr.forms[fid].elements[0] {
             assert_eq!(*selected_index, Some(1));
         }
 
         mgr.handle_input(FormKey::Up);
-        if let FormElement::SelectBox {
-            selected_index, ..
-        } = &mgr.forms[fid].elements[0]
-        {
+        if let FormElement::SelectBox { selected_index, .. } = &mgr.forms[fid].elements[0] {
             assert_eq!(*selected_index, Some(0));
         }
     }
@@ -1609,10 +1067,7 @@ mod tests {
         mgr.focused_element = Some("x".into());
 
         mgr.handle_input(FormKey::Down);
-        if let FormElement::SelectBox {
-            selected_index, ..
-        } = &mgr.forms[fid].elements[0]
-        {
+        if let FormElement::SelectBox { selected_index, .. } = &mgr.forms[fid].elements[0] {
             // Should skip index 1 (disabled) and land on 2.
             assert_eq!(*selected_index, Some(2));
         }
@@ -1625,35 +1080,20 @@ mod tests {
         let mut mgr = make_manager_with_login_form();
 
         mgr.handle_input(FormKey::Tab);
-        assert_eq!(
-            mgr.focused_element.as_deref(),
-            Some("user")
-        );
+        assert_eq!(mgr.focused_element.as_deref(), Some("user"));
 
         mgr.handle_input(FormKey::Tab);
-        assert_eq!(
-            mgr.focused_element.as_deref(),
-            Some("pass")
-        );
+        assert_eq!(mgr.focused_element.as_deref(), Some("pass"));
 
         mgr.handle_input(FormKey::Tab);
-        assert_eq!(
-            mgr.focused_element.as_deref(),
-            Some("remember")
-        );
+        assert_eq!(mgr.focused_element.as_deref(), Some("remember"));
 
         mgr.handle_input(FormKey::Tab);
-        assert_eq!(
-            mgr.focused_element.as_deref(),
-            Some("__submit__")
-        );
+        assert_eq!(mgr.focused_element.as_deref(), Some("__submit__"));
 
         // Wraps around.
         mgr.handle_input(FormKey::Tab);
-        assert_eq!(
-            mgr.focused_element.as_deref(),
-            Some("user")
-        );
+        assert_eq!(mgr.focused_element.as_deref(), Some("user"));
     }
 
     #[test]
@@ -1662,17 +1102,11 @@ mod tests {
 
         // First tab focuses "user".
         mgr.handle_input(FormKey::Tab);
-        assert_eq!(
-            mgr.focused_element.as_deref(),
-            Some("user")
-        );
+        assert_eq!(mgr.focused_element.as_deref(), Some("user"));
 
         // Shift-tab wraps to last element.
         mgr.handle_input(FormKey::ShiftTab);
-        assert_eq!(
-            mgr.focused_element.as_deref(),
-            Some("__submit__")
-        );
+        assert_eq!(mgr.focused_element.as_deref(), Some("__submit__"));
     }
 
     #[test]
@@ -1716,18 +1150,9 @@ mod tests {
         assert_eq!(data.method, FormMethod::Post);
 
         let pairs = data.to_pairs();
-        assert!(pairs.contains(&(
-            "user".to_string(),
-            "alice".to_string()
-        )));
-        assert!(pairs.contains(&(
-            "pass".to_string(),
-            "secret".to_string()
-        )));
-        assert!(pairs.contains(&(
-            "remember".to_string(),
-            "1".to_string()
-        )));
+        assert!(pairs.contains(&("user".to_string(), "alice".to_string())));
+        assert!(pairs.contains(&("pass".to_string(), "secret".to_string())));
+        assert!(pairs.contains(&("remember".to_string(), "1".to_string())));
     }
 
     #[test]
@@ -1750,11 +1175,8 @@ mod tests {
         match result {
             FormAction::Submit(data) => {
                 assert_eq!(data.action, "/login");
-            }
-            other => panic!(
-                "expected Submit, got {:?}",
-                other
-            ),
+            },
+            other => panic!("expected Submit, got {:?}", other),
         }
     }
 
@@ -1775,9 +1197,7 @@ mod tests {
         mgr.reset(0);
 
         assert_eq!(mgr.get_value(0, "user"), Some(""));
-        if let FormElement::Checkbox { checked, .. } =
-            &mgr.forms[0].elements[2]
-        {
+        if let FormElement::Checkbox { checked, .. } = &mgr.forms[0].elements[2] {
             assert!(!*checked);
         }
     }
@@ -1830,10 +1250,7 @@ mod tests {
     #[test]
     fn url_encode_special_characters() {
         let data = FormData {
-            fields: vec![(
-                "data".into(),
-                "a=1&b=2".into(),
-            )],
+            fields: vec![("data".into(), "a=1&b=2".into())],
             method: FormMethod::Get,
             action: "/".into(),
         };
@@ -1882,14 +1299,8 @@ mod tests {
         mgr.set_value(f0, "q", "search term");
         mgr.set_value(f1, "q", "login user");
 
-        assert_eq!(
-            mgr.get_value(f0, "q"),
-            Some("search term")
-        );
-        assert_eq!(
-            mgr.get_value(f1, "q"),
-            Some("login user")
-        );
+        assert_eq!(mgr.get_value(f0, "q"), Some("search term"));
+        assert_eq!(mgr.get_value(f1, "q"), Some("login user"));
     }
 
     #[test]
@@ -1955,10 +1366,7 @@ mod tests {
         );
 
         let data = mgr.submit(fid).expect("should work");
-        assert_eq!(
-            data.fields,
-            vec![("csrf".into(), "tok123".into())]
-        );
+        assert_eq!(data.fields, vec![("csrf".into(), "tok123".into())]);
     }
 
     #[test]
@@ -2030,10 +1438,7 @@ mod tests {
         );
 
         mgr.set_value(fid, "body", "Hello\nWorld");
-        assert_eq!(
-            mgr.get_value(fid, "body"),
-            Some("Hello\nWorld")
-        );
+        assert_eq!(mgr.get_value(fid, "body"), Some("Hello\nWorld"));
     }
 
     #[test]
@@ -2052,10 +1457,7 @@ mod tests {
         );
 
         let data = mgr.submit(fid).expect("should work");
-        assert_eq!(
-            data.fields,
-            vec![("content".into(), "some text".into())]
-        );
+        assert_eq!(data.fields, vec![("content".into(), "some text".into())]);
     }
 
     #[test]
@@ -2083,10 +1485,7 @@ mod tests {
         );
 
         let data = mgr.submit(fid).expect("should work");
-        assert_eq!(
-            data.fields,
-            vec![("size".into(), "m".into())]
-        );
+        assert_eq!(data.fields, vec![("size".into(), "m".into())]);
     }
 
     #[test]
@@ -2128,10 +1527,7 @@ mod tests {
         );
 
         mgr.select_option(fid, "x", 99);
-        if let FormElement::SelectBox {
-            selected_index, ..
-        } = &mgr.forms[fid].elements[0]
-        {
+        if let FormElement::SelectBox { selected_index, .. } = &mgr.forms[fid].elements[0] {
             assert_eq!(*selected_index, Some(0));
         }
     }
@@ -2196,25 +1592,16 @@ mod tests {
         match result {
             FormAction::Submit(data) => {
                 assert_eq!(data.action, "/login");
-                assert!(data
-                    .fields
-                    .iter()
-                    .any(|(k, v)| k == "user" && v == "test"));
-            }
-            other => panic!(
-                "expected Submit, got {:?}",
-                other
-            ),
+                assert!(data.fields.iter().any(|(k, v)| k == "user" && v == "test"));
+            },
+            other => panic!("expected Submit, got {:?}", other),
         }
     }
 
     #[test]
     fn form_data_to_pairs() {
         let data = FormData {
-            fields: vec![
-                ("a".into(), "1".into()),
-                ("b".into(), "2".into()),
-            ],
+            fields: vec![("a".into(), "1".into()), ("b".into(), "2".into())],
             method: FormMethod::Get,
             action: "/".into(),
         };
@@ -2225,11 +1612,13 @@ mod tests {
 
     #[test]
     fn url_encode_preserves_unreserved() {
+        use super::super::types::url_encode;
         assert_eq!(url_encode("abc-_.~"), "abc-_.~");
     }
 
     #[test]
     fn url_encode_percent_encodes_reserved() {
+        use super::super::types::url_encode;
         assert_eq!(url_encode("@"), "%40");
         assert_eq!(url_encode("/"), "%2F");
     }

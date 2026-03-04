@@ -29,22 +29,22 @@ pub fn register_builtins(reg: &mut CommandRegistry) {
     reg.register(Box::new(ClearCmd));
     reg.register(Box::new(StatusCmd));
     reg.register(Box::new(TouchCmd));
-    // Phase 4: file browser commands.
+    // File browser commands.
     reg.register(Box::new(CpCmd));
     reg.register(Box::new(MvCmd));
     reg.register(Box::new(FindCmd));
-    // Phase 4: system commands using platform services.
+    // System commands using platform services.
     reg.register(Box::new(PowerCmd));
     reg.register(Box::new(ClockCmd));
     reg.register(Box::new(MemoryCmd));
     reg.register(Box::new(UsbCmd));
-    // Phase 5: remote terminal commands.
+    // Remote terminal commands.
     reg.register(Box::new(ListenCmd));
     reg.register(Box::new(RemoteCmd));
     reg.register(Box::new(HostsCmd));
-    // Phase 6: network commands.
+    // Network commands.
     crate::register_network_commands(reg);
-    // Phase 11: audio commands.
+    // Audio commands.
     crate::register_audio_commands(reg);
     // Internet radio commands.
     crate::register_radio_commands(reg);

@@ -1,55 +1,14 @@
-#![allow(dead_code)] // Standalone module; cascade integration deferred.
-
 //! Advanced CSS pseudo-class selector matching.
 //!
-//! Provides standalone, pure functions for evaluating structural and
-//! UI-state pseudo-class selectors against an arena-based DOM. Each
-//! function takes a node slice and a target node index, returning
-//! whether the pseudo-class matches.
+//! Provides pure functions for evaluating structural and UI-state
+//! pseudo-class selectors against the arena-based DOM from
+//! [`crate::html::dom`]. Each function takes a node slice and a target
+//! node index, returning whether the pseudo-class matches.
 //!
-//! The module is self-contained: it defines its own minimal `Node` and
-//! `ElementData` types so it can be tested independently. The cascade
-//! integration layer converts between these types and the full DOM.
+//! The cascade delegates to [`matches_pseudo_class`] and
+//! [`matches_pseudo_class_fn`] for structural pseudo-class evaluation.
 
-// -------------------------------------------------------------------
-// Minimal DOM types (self-contained for testing)
-// -------------------------------------------------------------------
-
-/// Minimal node representation for selector matching.
-///
-/// In production, this maps to the DOM's `Node` type. The selectors
-/// module only needs parent/children relationships and element data.
-#[derive(Debug, Clone)]
-pub struct Node {
-    /// What kind of node this is (element, text, etc.).
-    pub kind: NodeKind,
-    /// Index of the parent node, if any.
-    pub parent: Option<usize>,
-    /// Indices of child nodes in document order.
-    pub children: Vec<usize>,
-}
-
-/// The kind of DOM node.
-#[derive(Debug, Clone)]
-pub enum NodeKind {
-    /// The document root (not an element).
-    Document,
-    /// An HTML element with tag name and attributes.
-    Element(ElementData),
-    /// A text node.
-    Text(String),
-    /// A comment node.
-    Comment(String),
-}
-
-/// Data associated with an element node.
-#[derive(Debug, Clone)]
-pub struct ElementData {
-    /// The tag name (lowercase).
-    pub tag: String,
-    /// Attribute name-value pairs.
-    pub attributes: Vec<(String, String)>,
-}
+use crate::html::dom::{Node, NodeKind};
 
 // -------------------------------------------------------------------
 // An+B notation
@@ -138,7 +97,7 @@ impl AnB {
 /// element.
 pub fn element_tag(nodes: &[Node], node: usize) -> Option<&str> {
     match &nodes[node].kind {
-        NodeKind::Element(data) => Some(&data.tag),
+        NodeKind::Element(data) => Some(data.tag.as_str()),
         _ => None,
     }
 }
@@ -163,7 +122,7 @@ pub fn element_siblings(nodes: &[Node], node: usize) -> Vec<usize> {
 /// Check whether an element has an attribute with the given name.
 pub fn has_attribute(nodes: &[Node], node: usize, attr: &str) -> bool {
     match &nodes[node].kind {
-        NodeKind::Element(data) => data.attributes.iter().any(|(name, _)| name == attr),
+        NodeKind::Element(data) => data.attributes.iter().any(|a| a.name == attr),
         _ => false,
     }
 }
@@ -440,11 +399,13 @@ pub fn matches_checked(nodes: &[Node], node: usize) -> bool {
 
 /// Dispatch a simple (non-functional) pseudo-class by name.
 ///
-/// Handles: `first-child`, `last-child`, `first-of-type`,
-/// `last-of-type`, `only-child`, `only-of-type`, `empty`, `root`,
-/// `enabled`, `disabled`, `checked`.
+/// Handles structural pseudo-classes: `first-child`, `last-child`,
+/// `first-of-type`, `last-of-type`, `only-child`, `only-of-type`,
+/// `empty`, `root`, `enabled`, `disabled`, `checked`.
 ///
-/// Returns `false` for unrecognised names.
+/// Returns `false` for unrecognised names. Stateful pseudo-classes
+/// like `:hover`, `:visited`, `:link` are handled by the cascade
+/// directly since they require external context.
 pub fn matches_pseudo_class(nodes: &[Node], node: usize, name: &str) -> bool {
     match name {
         "first-child" => matches_first_child(nodes, node),
@@ -485,6 +446,7 @@ pub fn matches_pseudo_class_fn(nodes: &[Node], node: usize, name: &str, arg: &st
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::html::dom::{Attribute, ElementData, TagName};
 
     // ---------------------------------------------------------------
     // Test DOM builder helpers
@@ -503,7 +465,7 @@ mod tests {
     fn elem(tag: &str) -> Node {
         Node {
             kind: NodeKind::Element(ElementData {
-                tag: tag.to_string(),
+                tag: TagName::from_str(tag),
                 attributes: Vec::new(),
             }),
             parent: None,
@@ -515,10 +477,13 @@ mod tests {
     fn elem_with_attrs(tag: &str, attrs: &[(&str, &str)]) -> Node {
         Node {
             kind: NodeKind::Element(ElementData {
-                tag: tag.to_string(),
+                tag: TagName::from_str(tag),
                 attributes: attrs
                     .iter()
-                    .map(|(n, v)| (n.to_string(), v.to_string()))
+                    .map(|(n, v)| Attribute {
+                        name: n.to_string(),
+                        value: v.to_string(),
+                    })
                     .collect(),
             }),
             parent: None,

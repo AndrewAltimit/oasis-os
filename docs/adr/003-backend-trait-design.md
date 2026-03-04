@@ -15,14 +15,18 @@ subsystems. We need an abstraction that:
 
 ## Decision
 
-We define **four separate backend traits** in `oasis-types`:
+We define **five separate backend traits** in `oasis-types`:
 
-1. **`SdiBackend`** -- Rendering: `clear`, `fill_rect`, `draw_text`, `blit`,
-   `load_texture`, `swap_buffers`, `read_pixels`, plus 14 extended methods.
-2. **`InputBackend`** -- Input: `poll_events() -> Vec<InputEvent>`.
-3. **`NetworkBackend`** -- Networking: `listen`, `accept`, `connect`,
+1. **`SdiCore`** -- Required rendering: 13 methods (`init`, `clear`, `blit`,
+   `fill_rect`, `draw_text`, `swap_buffers`, `load_texture`, `destroy_texture`,
+   `set_clip_rect`, `reset_clip_rect`, `measure_text`, `read_pixels`, `shutdown`).
+2. **`SdiBackend`** -- Extends `SdiCore` with 30 optional accelerated primitives
+   (shapes, gradients, text styling, texture ops, clip/transform stacks, batching).
+   All have default implementations that fall back to `SdiCore` methods.
+3. **`InputBackend`** -- Input: `poll_events() -> Vec<InputEvent>`.
+4. **`NetworkBackend`** -- Networking: `listen`, `accept`, `connect`,
    `tls_provider`.
-4. **`AudioBackend`** -- Audio: `load_track`, `play`, `pause`, `stop`, `volume`,
+5. **`AudioBackend`** -- Audio: `load_track`, `play`, `pause`, `stop`, `volume`,
    `stream`, plus queries.
 
 ## Rationale
@@ -31,12 +35,13 @@ We define **four separate backend traits** in `oasis-types`:
   PSP user-mode has no network. By splitting traits, backends implement only
   what applies. Core code accepts `Option<&dyn AudioBackend>` where audio is
   optional.
-- **Single responsibility.** Each trait is focused. `SdiBackend` is about
-  drawing. `InputBackend` is about events. They can be implemented by different
-  structs if needed.
-- **Default methods.** `SdiBackend` provides default implementations for
-  extended rendering (rounded rects, circles, gradients) that fall back to
-  `fill_rect`. Backends can override for hardware acceleration.
+- **Single responsibility.** Each trait is focused. `SdiCore` is about
+  required drawing. `SdiBackend` adds optional accelerated methods. `InputBackend`
+  is about events. They can be implemented by different structs if needed.
+- **Two-tier rendering.** `SdiCore` has 13 required methods that every backend
+  must implement. `SdiBackend` extends it with 30 optional methods for shapes,
+  gradients, and batching that fall back to `SdiCore` calls. Backends can
+  progressively override for hardware acceleration.
 - **Minimal vtable.** Four small vtables instead of one large one. On PSP,
   indirect calls through vtables are expensive; smaller vtables mean fewer
   cache misses.
@@ -55,4 +60,4 @@ We define **four separate backend traits** in `oasis-types`:
 - Core code uses `&mut dyn SdiBackend` for rendering, never SDL/PSP directly.
 - `oasis-app` composes all four traits into a single application state.
 - `MockBackend` in `oasis-types` records all draw calls for test assertions.
-- New backends only need to implement `SdiBackend` + `InputBackend` at minimum.
+- New backends only need to implement `SdiCore` + `SdiBackend` + `InputBackend` at minimum.

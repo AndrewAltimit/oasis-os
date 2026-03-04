@@ -92,7 +92,8 @@ oasis-types     (foundation: Color, Button, InputEvent, backend traits, error ty
 ### Backend Trait Boundary
 
 `oasis-types/src/backend.rs` defines the only abstraction between core and platform (re-exported by `oasis-core`):
-- `SdiBackend` -- rendering (clear, blit, fill_rect, draw_text, load_texture, swap_buffers, read_pixels)
+- `SdiCore` -- required rendering (13 methods: init, clear, blit, fill_rect, draw_text, swap_buffers, load_texture, destroy_texture, set_clip_rect, reset_clip_rect, measure_text, read_pixels, shutdown)
+- `SdiBackend` -- extends `SdiCore` with 30 optional accelerated primitives (shapes, gradients, text styling, batching)
 - `InputBackend` -- input polling (returns `Vec<InputEvent>`)
 - `NetworkBackend` -- TCP networking
 - `AudioBackend` -- audio playback

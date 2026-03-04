@@ -10,9 +10,12 @@ previously impossible or impractical: multi-threading, networking, system fonts,
 SIMD math, DMA transfers, on-screen keyboard input, persistent configuration, save data,
 system dialogs, HTTP connectivity, USB storage mode, Media Engine offloading, and more.
 
-**Scope:** Every file in `crates/oasis-backend-psp/` (lib.rs, main.rs, font.rs) will be
-rewritten. Several new modules and features will be added. The `oasis-core` backend traits
-will gain new implementations (NetworkBackend, AudioBackend) that were previously stubbed.
+**Scope:** Every file in `crates/oasis-backend-psp/` was rewritten and split into 14+
+source files (lib.rs, main.rs, theme.rs, types.rs, boot.rs, chrome.rs, views.rs,
+desktop.rs, commands.rs, font.rs, render.rs, textures.rs, status.rs, and more).
+The `oasis-core` backend traits gained new implementations (NetworkBackend, AudioBackend).
+The `SdiBackend` trait was later split into `SdiCore` (13 required) + `SdiBackend`
+(30 extended).
 
 ---
 
@@ -758,14 +761,14 @@ impl AudioBackend for PspAudioBackend {
 - Volume control exposed (currently hardcoded to max)
 - Position/duration tracking enables progress bar display
 
-### 4.2 Split `lib.rs` into Modules
+### 4.2 Split `lib.rs` into Modules -- COMPLETE
 
-**Current:** Single 2168-line `lib.rs` containing everything.
+**Status:** Done. `lib.rs` was split from 2168 lines into focused modules.
 
-**New module structure:**
+**Current module structure:**
 ```
 crates/oasis-backend-psp/src/
-├── lib.rs           # Re-exports, PspBackend struct, SdiBackend impl
+├── lib.rs           # Re-exports, PspBackend struct, SdiCore + SdiBackend impls (~600 lines)
 ├── audio.rs         # AudioPlayer, AudioBackend impl, mixer integration
 ├── input.rs         # InputBackend impl using psp::input::Controller
 ├── network.rs       # NetworkBackend impl using psp::net::*
@@ -775,45 +778,37 @@ crates/oasis-backend-psp/src/
 ├── filesystem.rs    # list_directory, read_file using psp::io
 ├── status.rs        # StatusBarInfo, SystemInfo using psp::power/rtc
 ├── procedural.rs    # Wallpaper generator, cursor generator (VFPU math)
+├── shapes.rs        # GU-accelerated shape primitives
+├── sfx.rs           # Sound effect IDs
 ├── threading.rs     # Thread spawning, SPSC queues, shared state
-├── config.rs        # Persistent config wrapper
-└── main.rs          # Entry point, app modes, rendering functions
+├── tls.rs           # TLS provider
+├── video.rs         # Video playback support
+├── main.rs          # Entry point + psp_main() (~1,840 lines)
+├── theme.rs         # Geometry and color constants
+├── types.rs         # AppEntry, AppMode, ClassicView, RadioStation types
+├── boot.rs          # Boot splash screen
+├── chrome.rs        # Dashboard + shell chrome rendering
+├── views.rs         # Classic full-screen view renderers
+├── desktop.rs       # Desktop mode helpers + windowed renderers
+└── commands.rs      # PSP-specific terminal commands
 ```
 
-**Impact:**
-- Better code organization and maintainability
-- Each module has a clear responsibility
-- Easier to test individual components
-- Parallel development on different modules
+### 4.3 Refactor `main.rs` App Modes -- PARTIAL
 
-### 4.3 Refactor `main.rs` App Modes
+**Status:** Rendering functions extracted to chrome.rs, views.rs, desktop.rs. The
+`psp_main()` function (~1,750 lines) remains monolithic with shared local state.
+Extracting a `PspApp` trait and per-app structs is a follow-up task that would
+require significant state refactoring.
 
-**Current:** 1820-line `main.rs` with all app logic (dashboard, terminal, file manager,
-photo viewer, music player, desktop mode) in one function.
-
-**New:** Extract each app into its own struct with `update()` and `draw()` methods:
+**Completed:** Module split reduces `main.rs` from 4,485 to ~1,840 lines.
+**Remaining:** Extract per-app structs with `update()` and `draw()` methods:
 ```rust
 trait PspApp {
     fn handle_input(&mut self, event: &InputEvent, backend: &mut PspBackend);
     fn update(&mut self);
     fn draw(&self, backend: &mut PspBackend);
 }
-
-struct TerminalApp { lines: Vec<String>, input: String, ... }
-struct FileManagerApp { path: String, entries: Vec<FileEntry>, ... }
-struct PhotoViewerApp { ... }
-struct MusicPlayerApp { ... }
-struct SettingsApp { config: psp::config::Config, ... }
-struct NetworkApp { ... }
-struct SysMonitorApp { frame_timer: FrameTimer, ... }
 ```
-
-**Impact:**
-- Each app is self-contained with its own state
-- Apps can be independently developed and tested
-- Cleaner main loop: just dispatch to active app
-- Settings and Network apps become functional (currently placeholder)
-- System Monitor app can show FPS, memory usage, thread status
 
 ---
 

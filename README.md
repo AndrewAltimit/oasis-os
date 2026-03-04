@@ -139,7 +139,7 @@ oasis-os/
 
 | Crate | Description |
 |-------|-------------|
-| `oasis-types` | Foundation types and traits: `Color`, `Button`, `InputEvent`, `SdiBackend`, `InputBackend`, `NetworkBackend`, `AudioBackend`, error types, TLS |
+| `oasis-types` | Foundation types and traits: `Color`, `Button`, `InputEvent`, `SdiCore`, `SdiBackend`, `InputBackend`, `NetworkBackend`, `AudioBackend`, error types, TLS |
 | `oasis-vfs` | Virtual file system: `MemoryVfs` (in-RAM), `RealVfs` (disk), `GameAssetVfs` (UE5 with overlay writes) |
 | `oasis-platform` | Platform service traits: `PowerService`, `TimeService`, `UsbService`, `NetworkService`, `OskService` |
 | `oasis-sdi` | Scene Display Interface: named object registry with position, size, color, texture, text, z-order, gradients, shadows |
@@ -309,7 +309,6 @@ GitHub Actions workflows run the full pipeline automatically on push to `main` a
 - [Skin Authoring Guide](docs/skin-authoring.md) -- creating custom skins, TOML file reference, theme derivation, effect system, runtime switching
 - [PSP Modernization Plan](docs/psp-modernization-plan.md) -- 9-phase, 40-step roadmap for PSP backend modernization using the rust-psp SDK
 - [PSP Plugin Guide](docs/psp-plugin.md) -- installation, controls, and configuration for the in-game overlay PRX
-- [WASM Backend Plan](docs/wasm-backend-plan.md) -- WebAssembly backend design: Canvas 2D rendering, DOM input mapping, iframe overlay for real web pages
 - [Getting Started](docs/getting-started.md) -- setup, building, testing, and running OASIS_OS
 - [Troubleshooting](docs/troubleshooting.md) -- common issues and solutions
 - [FFI Integration](docs/ffi-integration.md) -- C API reference for UE5 and external embeddings
