@@ -157,10 +157,12 @@ impl SettingsStore {
                 } else if value == "false" {
                     SettingsValue::Bool(false)
                 } else if let Some(s) = value.strip_prefix('"').and_then(|s| s.strip_suffix('"')) {
-                    // Unescape TOML basic string: \\  ->  \  then  \"  ->  "
+                    // Unescape TOML basic string.
                     SettingsValue::String(
                         s.replace("\\\\", "\x00")
                             .replace("\\\"", "\"")
+                            .replace("\\n", "\n")
+                            .replace("\\r", "\r")
                             .replace('\x00', "\\"),
                     )
                 } else if let Ok(n) = value.parse::<i64>() {
@@ -182,8 +184,12 @@ impl SettingsStore {
         for (key, value) in &self.entries {
             match value {
                 SettingsValue::String(s) => {
-                    // Escape backslashes first, then quotes.
-                    let escaped = s.replace('\\', "\\\\").replace('"', "\\\"");
+                    // Escape backslashes first, then quotes, then newlines.
+                    let escaped = s
+                        .replace('\\', "\\\\")
+                        .replace('"', "\\\"")
+                        .replace('\n', "\\n")
+                        .replace('\r', "\\r");
                     out.push_str(&format!("{key} = \"{escaped}\"\n"));
                 },
                 SettingsValue::Int(n) => {
@@ -327,6 +333,24 @@ mod tests {
         assert_eq!(s2.get_string("path"), Some(r#"C:\Users\test"#));
         assert_eq!(s2.get_string("quoted"), Some(r#"He said "hello""#));
         assert_eq!(s2.get_string("both"), Some(r#"a\"b"#));
+    }
+
+    #[test]
+    fn roundtrip_newlines() {
+        let mut vfs = MemoryVfs::new();
+        let mut s = SettingsStore::new();
+        s.set_string("multi", "line1\nline2\nline3");
+        s.set_string("cr", "a\rb");
+        s.set_string("crlf", "hello\r\nworld");
+        s.set_string("mixed", "path\\with\nnewline");
+        s.save(&mut vfs);
+
+        let mut s2 = SettingsStore::new();
+        s2.load(&vfs);
+        assert_eq!(s2.get_string("multi"), Some("line1\nline2\nline3"));
+        assert_eq!(s2.get_string("cr"), Some("a\rb"));
+        assert_eq!(s2.get_string("crlf"), Some("hello\r\nworld"));
+        assert_eq!(s2.get_string("mixed"), Some("path\\with\nnewline"));
     }
 
     #[test]
