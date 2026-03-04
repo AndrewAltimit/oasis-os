@@ -667,7 +667,6 @@ dependencies = [
  "log",
  "oasis-net",
  "oasis-skin",
- "oasis-terminal",
  "oasis-types",
  "oasis-vfs",
  "png",
