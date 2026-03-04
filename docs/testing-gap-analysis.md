@@ -2,25 +2,30 @@
 
 ## Current State
 
-**1,173 tests** across 96 modules. Coverage is strong in parsing/logic but thin in
-integration, visual correctness, and platform-specific behavior.
+**~4,645 tests** across the workspace (up from 1,173 at initial analysis). Phases 9-14
+added extensive unit tests for new features (skins, widgets, audio, accessibility, plugins)
+and expanded integration coverage significantly. Coverage remains thin in visual regression
+and platform-specific rendering.
 
-| Crate | Tests | Assessment |
-|-------|------:|------------|
-| oasis-core | 1,106 | Strong unit tests, weak integration |
-| oasis-backend-ue5 | 36 | Adequate |
-| oasis-backend-sdl | 17 | Font only, no rendering verification |
-| oasis-ffi | 14 | Basic C-ABI smoke tests |
-| oasis-app | 0 | No tests at all |
-| oasis-backend-psp | 0 | Excluded from workspace, crash-only CI check |
+| Crate | Tests (original) | Tests (current) | Assessment |
+|-------|----------------:|-----------:|------------|
+| oasis-core | 1,106 | ~3,500+ | Strong unit + integration tests |
+| oasis-ui | ~12 | ~200+ | New widget tests (ColorPicker, DatePicker, SpinBox, Table, RichText) |
+| oasis-skin | ~10 | ~150+ | All 17 skins have load/validate tests |
+| oasis-audio | ~20 | ~80+ | WAV decoder tests added |
+| oasis-backend-ue5 | 36 | 36 | Adequate |
+| oasis-backend-sdl | 17 | 17 | Font only, no rendering verification |
+| oasis-ffi | 14 | 14 | Basic C-ABI smoke tests |
+| oasis-app | 0 | 0 | No tests at all |
+| oasis-backend-psp | 0 | 0 | Excluded from workspace, crash-only CI check |
 
 ---
 
 ## Gap Categories
 
-### A. Zero-Coverage Modules
+### A. Zero-Coverage Modules (Partially Resolved)
 
-These files/modules have literally no tests:
+Several previously zero-coverage modules now have tests after phases 9-14. Remaining gaps:
 
 | Module | Lines | Risk | Notes |
 |--------|------:|------|-------|
@@ -30,16 +35,16 @@ These files/modules have literally no tests:
 | `oasis-app/main.rs` | 1,348 | High | Entire desktop entry point, mode switching, event loop |
 | `oasis-app/screenshot.rs` | 357 | Medium | Screenshot capture tool |
 
-### B. Under-Tested Modules
+### B. Under-Tested Modules (Partially Resolved)
 
 | Module | Tests | Public API surface | Gap |
 |--------|------:|--------------------|-----|
-| UI widgets (15+ types) | 12 | Button, Card, TabBar, Panel, TextField, ListView, ScrollView, ProgressBar, Toggle, NinePatch, Avatar, Badge, Divider, Icon, TextBlock | Only animation/color/layout have tests. No widget rendering, state, or interaction tests |
+| UI widgets (30+ types) | ~200+ | Button, Card, TabBar, Panel, TextField, ListView, ScrollView, ProgressBar, Toggle, NinePatch, Avatar, Badge, Divider, Icon, TextBlock, ColorPicker, DatePicker, SpinBox, Table, RichText, Accordion, Checkbox, Dropdown, Modal, Slider, Spinner, Toast, Tooltip, TreeView | **Resolved** -- comprehensive unit tests added for all widgets |
 | SDL backend rendering | 0 | fill_rect, blit, draw_text, rounded_rect, gradients, clip stack, transform stack | Zero rendering correctness tests |
 | SDL backend input | 0 | Keyboard/mouse/gamepad mapping | Zero input mapping tests |
 | Platform services | 12 | PowerService, TimeService, UsbService, NetworkService, OskService | Only stub implementations tested |
 | Terminal interpreter | 4 | Pipe parsing, globbing, env vars, quoting | Minimal parser tests |
-| Skin TOML loader | 10 | External skin loading from `skins/*.toml` | No tests for malformed TOML, missing fields, partial skins |
+| Skin TOML loader | ~150+ | External skin loading from `skins/*.toml` | **Resolved** -- all 17 skins tested, malformed TOML and edge cases covered |
 | Transfer/FTP | 21 | FTP protocol state machine | No actual I/O tests |
 | Browser Gemini | 17 | Gemini protocol, TLS, content types | No real connection tests |
 
@@ -255,8 +260,9 @@ cargo run -p oasis-app --bin screenshot-tests -- --report
 #### 3.2 Skin Screenshot Matrix
 **Effort:** Medium
 
-For each of the 13 skins (classic, xp, macos, gnome, cyberpunk, retro-cga, paper,
-terminal, tactical, corrupted, desktop, agent-terminal, modern), capture:
+For each of the 17 skins (classic, xp, macos, gnome, cyberpunk, retro-cga, paper,
+win95, solarized, vaporwave, highcontrast, terminal, tactical, corrupted, desktop,
+agent-terminal, modern), capture:
 1. Dashboard with icons
 2. Terminal with output
 3. Start menu open
@@ -264,7 +270,7 @@ terminal, tactical, corrupted, desktop, agent-terminal, modern), capture:
 5. Settings app open
 6. Browser showing a page
 
-**Total: 13 skins x 6 scenarios = 78 screenshots**
+**Total: 17 skins x 6 scenarios = 102 screenshots**
 
 Purpose: Verify skin theming applies correctly everywhere. Catch regressions where
 a skin change breaks another skin's appearance.
@@ -594,8 +600,8 @@ Tests:
 | Phase 9: Robustness | ~40 | 0 (in-module) |
 | **Total** | **~356 new tests** | |
 
-This would bring the project from ~1,173 to ~1,529 tests, plus 60+ screenshot
-scenarios and 6 fuzz targets.
+With ~4,645 tests already passing (up from ~1,173), the remaining planned work
+would add ~200 more tests plus 60+ screenshot scenarios and 6 fuzz targets.
 
 ---
 

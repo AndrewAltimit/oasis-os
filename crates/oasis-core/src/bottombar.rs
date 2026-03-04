@@ -166,7 +166,7 @@ impl BottomBar {
             0
         };
         let bz_y = bar_y + 2;
-        let bz_h = bar_h - 4;
+        let bz_h = bar_h.saturating_sub(4);
         let url_text_end = if at.bar.url_text.is_empty() {
             // No URL text -- hide URL label and bezel.
             if let Ok(obj) = sdi.get_mut("bar_url") {

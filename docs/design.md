@@ -40,7 +40,7 @@ OASIS_OS is an embeddable operating system framework written in Rust. It provide
 
 The project originated as a Rust port of a PSP homebrew shell OS written in C circa 2006-2008. The original source archive (`psixpsp.7z`) is preserved at the repository root. The original architecture -- a themed dashboard driven by a custom scene-graph engine called SDI (Simple Display Interface), with platform abstraction via compile-time guards -- turned out to be a natural foundation for something more general. The trait-based backend system designed for cross-platform PSP/SDL/framebuffer portability extends cleanly to a fourth target: rendering onto a texture inside Unreal Engine 5, where in-game computer props become fully interactive systems rather than scripted UI sequences.
 
-The framework supports multiple "skins" -- visual and behavioral personalities that determine what the OS looks like and what it exposes to the user. Thirteen skins are implemented: Classic (PSIX-style icon grid dashboard), XP (Windows XP Luna-inspired blue theme with start menu), macOS (macOS-inspired desktop), GNOME (GNOME desktop style), Cyberpunk (neon cyberpunk aesthetic), Retro-CGA (CGA 4-color retro), Paper (minimalist paper/ink), Terminal (green-on-black CRT), Tactical (military command console), Corrupted (glitched visual effects), Desktop (windowed environment), Agent Terminal (AI agent/MCP console), and Modern (purple accent with rounded corners). External skins are defined as TOML directories in `skins/` and embedded via `include_str!`; built-in skins are defined directly in `oasis-skin/src/builtin.rs`. All skins share the same core: scene graph, command interpreter, virtual file system, browser engine, networking, and plugin infrastructure. The skin defines layout, theme, feature gating, and visual style.
+The framework supports multiple "skins" -- visual and behavioral personalities that determine what the OS looks like and what it exposes to the user. Seventeen skins are implemented: Classic (PSIX-style icon grid dashboard), XP (Windows XP Luna-inspired blue theme with start menu), macOS (macOS-inspired desktop), GNOME (GNOME desktop style), Cyberpunk (neon cyberpunk aesthetic), Retro-CGA (CGA 4-color retro), Paper (minimalist paper/ink), Win95 (Windows 95/98 classic 3D borders), Solarized (Solarized Dark developer palette), Vaporwave (aesthetic purple/pink/cyan), High Contrast (accessibility: black/white/yellow), Terminal (green-on-black CRT), Tactical (military command console), Corrupted (glitched visual effects), Desktop (windowed environment), Agent Terminal (AI agent/MCP console), and Modern (purple accent with rounded corners). External skins are defined as TOML directories in `skins/` and embedded via `include_str!`; built-in skins are defined directly in `oasis-skin/src/builtin.rs`. All skins share the same core: scene graph, command interpreter, virtual file system, browser engine, networking, and plugin infrastructure. The skin defines layout, theme, feature gating, and visual style.
 
 Primary deployment targets are: in-game computers in UE5 projects (rendered as interactive props), real PSP hardware running modern custom firmware (6.60/6.61 with ARK-4), and the tamper-responsive briefcase system (`packages/tamper_briefcase/`) where a Raspberry Pi 5 boots directly into OASIS_OS as the field-deployable agent terminal OS. On the briefcase, OASIS_OS is the operator-facing interface for managing AI agents in untrusted environments -- the tamper detection, LUKS encryption, and cryptographic wipe services run alongside it as systemd units. On a PSP connected to infrastructure WiFi, OASIS_OS's remote terminal enables direct command sessions to machines running AI agents, making a 2005 handheld a viable field controller for the agent ecosystem described in `docs/agents/README.md`. The original C codebase (~15,000 lines) provides the proven UI design; the Rust rewrite provides memory safety, cross-platform backends, and the extensibility to support all targets from a single codebase.
 
@@ -101,10 +101,10 @@ oasis-os/
 |   +-- oasis-platform/              # Platform service traits: Power, Time, USB, Network, OSK
 |   +-- oasis-sdi/                   # Scene graph: named registry, z-order, alpha, layout, theming
 |   +-- oasis-net/                   # TCP networking, PSK auth, remote terminal, FTP transfer
-|   +-- oasis-audio/                 # Audio manager, playlist, shuffle/repeat, MP3 ID3 parsing
-|   +-- oasis-ui/                    # 20+ widgets: Button, Card, TabBar, ListView, flex layout
+|   +-- oasis-audio/                 # Audio manager, playlist, shuffle/repeat, MP3/WAV decode, ID3 parsing
+|   +-- oasis-ui/                    # 30+ widgets: Button, Card, TabBar, ListView, flex layout
 |   +-- oasis-wm/                    # Window manager: lifecycle, drag/resize, hit testing, clipping
-|   +-- oasis-skin/                  # TOML skin engine, 13 skins, theme derivation from 9 base colors
+|   +-- oasis-skin/                  # TOML skin engine, 17 skins, theme derivation from 9 base colors
 |   +-- oasis-terminal/              # 90+ commands across 17 modules, shell features
 |   +-- oasis-browser/               # HTML/CSS/Gemini: DOM, CSS cascade, block/inline/table layout, JS DOM bindings
 |   +-- oasis-js/                    # JavaScript engine: QuickJS-NG runtime, console API, DOM manipulation
@@ -124,6 +124,10 @@ oasis-os/
 |   +-- cyberpunk/                   # Neon cyberpunk aesthetic
 |   +-- retro-cga/                   # CGA 4-color retro palette
 |   +-- paper/                       # Minimalist paper/ink style
+|   +-- win95/                       # Windows 95/98 classic 3D borders
+|   +-- solarized/                   # Solarized Dark developer palette
+|   +-- vaporwave/                   # Aesthetic vaporwave palette
+|   +-- highcontrast/                # High contrast accessibility theme
 +-- docs/
 |   +-- design.md                    # This document
 |   +-- skin-authoring.md            # Skin creation guide with full TOML reference
@@ -152,6 +156,10 @@ oasis-os/
 - `cyberpunk` -- Neon cyberpunk aesthetic with glowing accents
 - `retro-cga` -- CGA 4-color retro palette
 - `paper` -- Minimalist paper/ink style
+- `win95` -- Windows 95/98 classic look with raised 3D borders, system gray, blue titlebars
+- `solarized` -- Solarized Dark color palette, clean and developer-focused
+- `vaporwave` -- Aesthetic vaporwave palette with purple, pink, and cyan gradients
+- `highcontrast` -- High contrast dark theme for accessibility: black background, white text, yellow accents
 
 **Implemented infrastructure (in `docker/`):**
 
@@ -1213,6 +1221,60 @@ OASIS_OS supports runtime-extensible functionality through a platform-appropriat
 ### 14.2 Host API Surface
 
 Plugins interact with OASIS_OS through a stable, versioned API providing access to: SDI scene graph (create/modify UI elements), command registry (register new commands), VFS (read/write files), network sockets, configuration storage, and event bus (subscribe to OS events).
+
+### 14.3 Event Bus IPC
+
+The plugin event bus (`crates/oasis-core/src/plugin/event_bus.rs`) provides a publish/subscribe communication channel between plugins and core components. Plugins subscribe to topics and publish `PluginEvent` messages containing a topic string, source identifier, and data payload. This supplements VFS-based IPC with a more immediate, event-driven pattern suitable for real-time notifications. Events are string-based for cross-language compatibility.
+
+### 14.4 Plugin Configuration
+
+Plugin manifests support a `config` field containing typed key-value pairs via `PluginConfigValue`:
+
+| Variant | Rust Type | TOML Example |
+|---------|-----------|-------------|
+| `Bool` | `bool` | `auto_start = true` |
+| `Int` | `i64` | `refresh_interval = 30` |
+| `Float` | `f64` | `opacity = 0.8` |
+| `Str` | `String` | `theme = "dark"` |
+
+Configuration values are parsed from the `[config]` section of `plugin.toml` and available to plugins at init time.
+
+---
+
+## 14b. Audio System
+
+### WAV Decoder
+
+The `oasis-audio` crate (`crates/oasis-audio/src/wav.rs`) includes a software WAV decoder supporting uncompressed PCM audio (format tag 1) in 8-bit and 16-bit, mono and stereo. The decoder validates RIFF/WAVE headers and returns interleaved i16 samples at the source sample rate. WAV support supplements the existing MP3 decode pipeline for short sound effects, UI feedback tones, and game audio assets.
+
+---
+
+## 14c. Accessibility
+
+The `oasis-ui` crate (`crates/oasis-ui/src/accessibility.rs`) provides accessibility utilities:
+
+- **`AccessibilityLabel`** -- Semantic label struct with `label`, `description`, and `role` fields for UI elements
+- **`relative_luminance()`** -- Calculates relative luminance per WCAG 2.0 specification
+- **`contrast_ratio()`** -- Computes contrast ratio between two colors
+- **`meets_wcag_aa()`** / **`meets_wcag_aaa()`** -- Checks minimum contrast thresholds for WCAG AA (4.5:1) and AAA (7:1) compliance
+
+The High Contrast skin leverages these utilities to ensure all text meets WCAG AAA contrast requirements.
+
+---
+
+## 14d. New Widgets (Phases 9-14)
+
+Five new widgets were added to the `oasis-ui` crate:
+
+| Widget | File | Description |
+|--------|------|-------------|
+| `ColorPicker` | `color_picker.rs` | Interactive color selection with RGB/HSV support |
+| `DatePicker` | `date_picker.rs` | Calendar-based date selection |
+| `SpinBox` | `spin_box.rs` | Numeric input with increment/decrement buttons |
+| `Table` | `table.rs` | Tabular data display with rows, columns, and headers |
+| `RichText` | `rich_text.rs` | Styled text rendering with inline formatting |
+
+These bring the total widget count from ~20 to 30+.
 
 ---
 

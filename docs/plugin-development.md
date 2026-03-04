@@ -264,3 +264,101 @@ The codebase ships three example plugins in `crates/oasis-core/src/plugin/exampl
 | `NotepadPlugin` | `note [list\|read\|write]` | VFS-backed notepad with CRUD operations |
 
 Study these for patterns on SDI widget creation, VFS interaction, and command registration.
+
+---
+
+## EventBus IPC
+
+In addition to VFS-based IPC, plugins can communicate via the **event bus** -- a publish/subscribe system for real-time, topic-based messaging.
+
+Source: `crates/oasis-core/src/plugin/event_bus.rs`
+
+### Publishing Events
+
+```rust
+use oasis_core::plugin::event_bus::{EventBus, PluginEvent};
+
+fn update(&mut self, host: &mut PluginHost<'_>) -> Result<()> {
+    // Publish an event to a topic.
+    let event = PluginEvent {
+        topic: "sensor.temperature".to_string(),
+        source: "temp-monitor".to_string(),
+        data: "72.5".to_string(),
+    };
+    host.event_bus.publish(event);
+    Ok(())
+}
+```
+
+### Subscribing to Events
+
+```rust
+fn init(&mut self, host: &mut PluginHost<'_>) -> Result<()> {
+    // Subscribe to a topic. Returns a receiver for incoming events.
+    let rx = host.event_bus.subscribe("sensor.temperature");
+    self.temp_rx = Some(rx);
+    Ok(())
+}
+
+fn update(&mut self, _host: &mut PluginHost<'_>) -> Result<()> {
+    // Check for events (non-blocking).
+    if let Some(ref rx) = self.temp_rx {
+        while let Ok(event) = rx.try_recv() {
+            // Handle event.data
+        }
+    }
+    Ok(())
+}
+```
+
+Events are string-based for cross-language compatibility. The event bus is useful for real-time notifications (e.g., state changes, sensor data), while VFS-based IPC remains better for persistent state and file-like data exchange.
+
+---
+
+## Plugin Configuration via Manifests
+
+Plugin manifests support a `[config]` section with typed values via `PluginConfigValue`:
+
+```toml
+# plugin.toml
+name = "my-plugin"
+version = "2.0"
+author = "Your Name"
+description = "A configurable plugin"
+library = "libmyplugin.so"
+auto_load = true
+
+[config]
+refresh_interval = 30
+theme = "dark"
+auto_start = true
+opacity = 0.8
+```
+
+### Accessing Config Values
+
+Configuration is available as a `HashMap<String, PluginConfigValue>` on the manifest:
+
+```rust
+use oasis_core::plugin::manager::PluginConfigValue;
+
+fn init(&mut self, host: &mut PluginHost<'_>) -> Result<()> {
+    // Read config from the manifest (if discovered via plugin.toml).
+    if let Some(PluginConfigValue::Int(interval)) = self.config.get("refresh_interval") {
+        self.refresh_ms = *interval as u64;
+    }
+    if let Some(PluginConfigValue::Str(theme)) = self.config.get("theme") {
+        self.theme = theme.clone();
+    }
+    Ok(())
+}
+```
+
+### PluginConfigValue Variants
+
+| Variant | Rust Type | TOML Example |
+|---------|-----------|-------------|
+| `Bool(bool)` | `bool` | `auto_start = true` |
+| `Int(i64)` | `i64` | `refresh_interval = 30` |
+| `Float(f64)` | `f64` | `opacity = 0.8` |
+| `Str(String)` | `String` | `theme = "dark"` |
