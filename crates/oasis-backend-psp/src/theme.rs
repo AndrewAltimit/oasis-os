@@ -1,6 +1,6 @@
 //! Theme constants (matching oasis-core/src/theme.rs).
 
-use oasis_backend_psp::{Color, SCREEN_HEIGHT, SCREEN_WIDTH};
+use oasis_backend_psp::{Color, SCREEN_HEIGHT};
 
 // Bar geometry.
 pub(crate) const STATUSBAR_H: u32 = 18;

@@ -2,9 +2,9 @@
 
 use oasis_backend_psp::{AudioHandle, Color, FileEntry, PspBackend, SCREEN_WIDTH, TextureId};
 
-use crate::chrome::{draw_chrome_bezel, draw_view_header};
+use crate::chrome::draw_view_header;
 use crate::theme::*;
-use crate::types::{RadioStation, RADIO_STATIONS};
+use crate::types::RADIO_STATIONS;
 
 // ---------------------------------------------------------------------------
 // Terminal rendering (classic full-screen)

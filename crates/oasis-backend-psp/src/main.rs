@@ -13,9 +13,9 @@
 use psp::sys::CtrlButtons;
 
 use oasis_backend_psp::{
-    AudioCmd, AudioHandle, Button, CURSOR_H, CURSOR_W, Color, FileEntry, InputEvent, IoCmd,
-    IoResponse, PspBackend, SCREEN_HEIGHT, SCREEN_WIDTH, SdiRegistry, SfxId, StatusBarInfo,
-    SystemInfo, TextureId, Trigger, WindowManager, WmEvent,
+    AudioCmd, Button, CURSOR_H, CURSOR_W, Color, FileEntry, InputEvent, IoCmd, IoResponse,
+    PspBackend, SCREEN_HEIGHT, SCREEN_WIDTH, SdiRegistry, SfxId, StatusBarInfo, SystemInfo,
+    TextureId, Trigger, WindowManager,
 };
 
 mod boot;

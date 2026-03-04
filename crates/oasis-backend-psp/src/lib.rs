@@ -55,7 +55,7 @@ pub use tls::PspTlsProvider;
 // Re-exports from oasis-core
 // ---------------------------------------------------------------------------
 
-pub use oasis_core::backend::{Color, SdiBackend, TextureId};
+pub use oasis_core::backend::{Color, SdiBackend, SdiCore, TextureId};
 pub use oasis_core::error::{OasisError, Result as OasisResult};
 pub use oasis_core::input::{Button, InputEvent, Trigger};
 pub use oasis_core::sdi::SdiRegistry;
@@ -413,7 +413,7 @@ impl PspBackend {
 // SdiBackend trait implementation
 // ---------------------------------------------------------------------------
 
-impl SdiBackend for PspBackend {
+impl SdiCore for PspBackend {
     fn init(&mut self, _width: u32, _height: u32) -> OasisResult<()> {
         // PSP backend initializes during PspBackend::init().
         Ok(())
@@ -490,7 +490,9 @@ impl SdiBackend for PspBackend {
     fn shutdown(&mut self) -> OasisResult<()> {
         Ok(())
     }
+}
 
+impl SdiBackend for PspBackend {
     // -------------------------------------------------------------------
     // Extended: Shape Primitives (GU-accelerated)
     // -------------------------------------------------------------------
