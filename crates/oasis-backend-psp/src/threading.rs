@@ -294,7 +294,7 @@ fn decode_aac_frame(
         match AudiocodecDecoder::new(CodecType::Aac) {
             Ok(dec) => *aac_decoder = Some(dec),
             Err(e) => {
-                log::error!("video: AAC decoder init failed: {e}");
+                psp::dprintln!("video: AAC decoder init failed: {e}");
                 return;
             },
         }
@@ -319,7 +319,7 @@ fn decode_aac_frame(
             }
         },
         Err(e) => {
-            log::warn!("video: AAC decode error: {e}");
+            psp::dprintln!("video: AAC decode error: {e}");
         },
     }
 }

@@ -268,7 +268,7 @@ fn play_mp4(path: &str, seek_secs: u64) {
     let reader = match PspFileReader::open(path) {
         Some(r) => r,
         None => {
-            log::error!("video: failed to open {path}");
+            psp::dprintln!("video: failed to open {path}");
             VIDEO_PLAYING.store(false, Ordering::Relaxed);
             return;
         },
@@ -277,7 +277,7 @@ fn play_mp4(path: &str, seek_secs: u64) {
     let mut mp4 = match Mp4Lite::open(reader) {
         Ok(m) => m,
         Err(e) => {
-            log::error!("video: failed to parse MP4 {path}: {e}");
+            psp::dprintln!("video: failed to parse MP4 {path}: {e}");
             VIDEO_PLAYING.store(false, Ordering::Relaxed);
             return;
         },
@@ -286,23 +286,23 @@ fn play_mp4(path: &str, seek_secs: u64) {
     // Seek if requested.
     if seek_secs > 0 {
         if let Err(e) = mp4.seek(seek_secs as f64) {
-            log::warn!("video: seek to {seek_secs}s failed: {e}");
+            psp::dprintln!("video: seek to {seek_secs}s failed: {e}");
         }
     }
 
     // Attempt H.264 hardware decoder init.
     let mut _h264 = match PspVideoDecoder::try_init() {
         Ok(dec) => {
-            log::info!("video: H.264 hardware decoder initialized");
+            psp::dprintln!("video: H.264 hardware decoder initialized");
             Some(dec)
         },
         Err(e) => {
-            log::warn!("video: H.264 disabled ({e}), audio-only mode");
+            psp::dprintln!("video: H.264 disabled ({e}), audio-only mode");
             None
         },
     };
 
-    log::info!(
+    psp::dprintln!(
         "video: MP4 opened, video={}, audio={}",
         mp4.video_track_info().is_some(),
         mp4.audio_track_info().is_some(),
@@ -341,7 +341,7 @@ fn play_mp4(path: &str, seek_secs: u64) {
             },
             Ok(None) => {
                 // Audio stream exhausted.
-                log::info!(
+                psp::dprintln!(
                     "video: stream ended — {video_count} video, {audio_count} audio samples"
                 );
                 VIDEO_PLAYING.store(false, Ordering::Relaxed);
@@ -352,7 +352,7 @@ fn play_mp4(path: &str, seek_secs: u64) {
                 // No audio track — continue with video only.
             },
             Err(e) => {
-                log::error!("video: audio read error: {e}");
+                psp::dprintln!("video: audio read error: {e}");
                 break;
             },
         }
@@ -366,7 +366,7 @@ fn play_mp4(path: &str, seek_secs: u64) {
             Ok(None) => {},
             Err(oasis_video::demux_lite::LiteError::NoTrack(_)) => {},
             Err(e) => {
-                log::error!("video: video read error: {e}");
+                psp::dprintln!("video: video read error: {e}");
                 break;
             },
         }
