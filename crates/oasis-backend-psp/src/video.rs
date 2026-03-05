@@ -249,7 +249,9 @@ fn video_thread_fn() {
         match VIDEO_CMD_QUEUE.pop() {
             Some(VideoCmd::Play { path, seek_secs }) => {
                 VIDEO_PLAYING.store(true, Ordering::Relaxed);
-                play_mp4(&path, seek_secs);
+                if play_mp4(&path, seek_secs) {
+                    break;
+                }
             },
             Some(VideoCmd::Stop) => {
                 VIDEO_PLAYING.store(false, Ordering::Relaxed);
@@ -268,7 +270,7 @@ fn video_thread_fn() {
 }
 
 /// Demux an MP4 file and feed audio samples to the audio thread.
-fn play_mp4(path: &str, seek_secs: u64) {
+fn play_mp4(path: &str, seek_secs: u64) -> bool {
     use oasis_video::demux_lite::Mp4Lite;
 
     let reader = match PspFileReader::open(path) {
@@ -276,7 +278,7 @@ fn play_mp4(path: &str, seek_secs: u64) {
         None => {
             psp::dprintln!("video: failed to open {path}");
             VIDEO_PLAYING.store(false, Ordering::Relaxed);
-            return;
+            return false;
         },
     };
 
@@ -285,7 +287,7 @@ fn play_mp4(path: &str, seek_secs: u64) {
         Err(e) => {
             psp::dprintln!("video: failed to parse MP4 {path}: {e}");
             VIDEO_PLAYING.store(false, Ordering::Relaxed);
-            return;
+            return false;
         },
     };
 
@@ -327,7 +329,7 @@ fn play_mp4(path: &str, seek_secs: u64) {
                     VIDEO_PLAYING.store(false, Ordering::Relaxed);
                     send_audio_cmd(AudioCmd::VideoAudioStop);
                     if matches!(cmd, VideoCmd::Shutdown) {
-                        return;
+                        return true;
                     }
                     break;
                 },
@@ -392,4 +394,5 @@ fn play_mp4(path: &str, seek_secs: u64) {
     );
     VIDEO_PLAYING.store(false, Ordering::Relaxed);
     send_audio_cmd(AudioCmd::VideoAudioStop);
+    false
 }
