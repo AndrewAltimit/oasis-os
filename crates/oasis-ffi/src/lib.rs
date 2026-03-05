@@ -1067,7 +1067,9 @@ pub unsafe extern "C" fn oasis_video_get_audio(
             }
             written += remaining as u32;
             // Remove consumed samples from the front of this chunk.
-            let chunk = ring.front_mut().unwrap();
+            let chunk = ring
+                .front_mut()
+                .expect("ring buffer non-empty after front() check");
             chunk.pcm_f32.drain(..remaining);
             break;
         }

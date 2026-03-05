@@ -9,6 +9,7 @@ pub mod animation;
 pub mod desktops;
 pub mod hit_test;
 pub mod manager;
+mod sdi_objects;
 pub mod snap;
 pub mod tiling;
 pub mod window;

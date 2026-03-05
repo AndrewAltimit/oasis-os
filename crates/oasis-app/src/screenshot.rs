@@ -603,16 +603,18 @@ fn populate_window_content(
 fn populate_demo_vfs(vfs: &mut MemoryVfs) {
     use oasis_core::vfs::Vfs;
 
-    vfs.mkdir("/home").unwrap();
-    vfs.mkdir("/home/user").unwrap();
-    vfs.mkdir("/etc").unwrap();
-    vfs.mkdir("/tmp").unwrap();
+    vfs.mkdir("/home").expect("VFS mkdir /home");
+    vfs.mkdir("/home/user").expect("VFS mkdir /home/user");
+    vfs.mkdir("/etc").expect("VFS mkdir /etc");
+    vfs.mkdir("/tmp").expect("VFS mkdir /tmp");
     vfs.write("/home/user/readme.txt", b"Welcome to OASIS_OS!")
-        .unwrap();
-    vfs.write("/etc/hostname", b"oasis").unwrap();
-    vfs.write("/etc/version", b"0.1.0").unwrap();
+        .expect("VFS write readme.txt");
+    vfs.write("/etc/hostname", b"oasis")
+        .expect("VFS write hostname");
+    vfs.write("/etc/version", b"0.1.0")
+        .expect("VFS write version");
 
-    vfs.mkdir("/apps").unwrap();
+    vfs.mkdir("/apps").expect("VFS mkdir /apps");
     for name in &[
         "File Manager",
         "Settings",
@@ -623,9 +625,10 @@ fn populate_demo_vfs(vfs: &mut MemoryVfs) {
         "Package Manager",
         "System Monitor",
     ] {
-        vfs.mkdir(&format!("/apps/{name}")).unwrap();
+        vfs.mkdir(&format!("/apps/{name}"))
+            .expect("VFS mkdir app directory");
     }
 
-    vfs.mkdir("/home/user/music").unwrap();
-    vfs.mkdir("/home/user/photos").unwrap();
+    vfs.mkdir("/home/user/music").expect("VFS mkdir music");
+    vfs.mkdir("/home/user/photos").expect("VFS mkdir photos");
 }

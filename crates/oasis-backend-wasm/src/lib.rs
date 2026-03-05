@@ -430,10 +430,9 @@ impl OasisWasm {
             }
 
             // Poll pending catalog fetch.
-            if let Some(ref fetcher) = self.pending_catalog
-                && fetcher.is_ready()
+            if self.pending_catalog.as_ref().is_some_and(|f| f.is_ready())
+                && let Some(fetcher) = self.pending_catalog.take()
             {
-                let fetcher = self.pending_catalog.take().unwrap();
                 match fetcher.take_results() {
                     Ok((catalog, source)) => {
                         if let Some(mut old) = self.radio_source.take() {
@@ -481,10 +480,12 @@ impl OasisWasm {
             }
 
             // Poll pending TV catalog fetch.
-            if let Some(ref fetcher) = self.pending_tv_catalog
-                && fetcher.is_ready()
+            if self
+                .pending_tv_catalog
+                .as_ref()
+                .is_some_and(|f| f.is_ready())
+                && let Some(fetcher) = self.pending_tv_catalog.take()
             {
-                let fetcher = self.pending_tv_catalog.take().unwrap();
                 match fetcher.take_results() {
                     Ok(catalogs) => {
                         let runner = vfs_content::find_tv_guide_runner_wasm(
@@ -642,18 +643,12 @@ impl OasisWasm {
                             let is_http = url.as_ref().is_some_and(|u| {
                                 u.starts_with("http://") || u.starts_with("https://")
                             });
-                            if is_http {
+                            if is_http && let Some(ref u) = url {
                                 let url_bar_h = bw.config.url_bar_height;
                                 let status_bar_h = bw.config.status_bar_height;
                                 let content_y = cy + url_bar_h as i32;
                                 let content_h = ch.saturating_sub(url_bar_h + status_bar_h);
-                                iframe_ref.show(
-                                    url.as_ref().unwrap(),
-                                    cx,
-                                    content_y,
-                                    cw,
-                                    content_h,
-                                );
+                                iframe_ref.show(u, cx, content_y, cw, content_h);
                                 bw.paint_chrome_only(be)
                             } else {
                                 iframe_ref.hide();

@@ -225,7 +225,10 @@ impl SoftwareVideoDecoder {
                     None => return Ok(None),
                 };
 
-                let h264 = self.h264.as_mut().unwrap();
+                let h264 = self
+                    .h264
+                    .as_mut()
+                    .expect("h264 decoder verified present above");
                 if let Some(frame) = h264.decode(&packet.data)? {
                     // Update dimensions from the actual decoded frame.
                     if frame.width > 0 && frame.height > 0 {
@@ -258,7 +261,10 @@ impl SoftwareVideoDecoder {
                 None => return Ok(None),
             };
 
-            let aac = self.aac.as_mut().unwrap();
+            let aac = self
+                .aac
+                .as_mut()
+                .expect("aac decoder verified present above");
             if let Some(audio) = aac.decode(&packet.data, 0)? {
                 return Ok(Some(AudioChunk {
                     pcm_f32: audio.pcm_f32,

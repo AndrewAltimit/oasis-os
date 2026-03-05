@@ -35,7 +35,9 @@ impl WasmInputBackend {
         {
             let ev = Rc::clone(&events);
             let closure = Closure::wrap(Box::new(move |e: web_sys::Event| {
-                let ke: KeyboardEvent = e.dyn_into().unwrap();
+                let Ok(ke) = e.dyn_into::<KeyboardEvent>() else {
+                    return;
+                };
                 let mapped = map_keydown(&ke);
                 if mapped.is_some() {
                     ke.prevent_default();
@@ -53,9 +55,8 @@ impl WasmInputBackend {
                     q.push(InputEvent::TextInput(chars[0]));
                 }
             }) as Box<dyn FnMut(web_sys::Event)>);
-            win_target
-                .add_event_listener_with_callback("keydown", closure.as_ref().unchecked_ref())
-                .unwrap();
+            let _ = win_target
+                .add_event_listener_with_callback("keydown", closure.as_ref().unchecked_ref());
             closures.push(closure);
         }
 
@@ -63,15 +64,16 @@ impl WasmInputBackend {
         {
             let ev = Rc::clone(&events);
             let closure = Closure::wrap(Box::new(move |e: web_sys::Event| {
-                let ke: KeyboardEvent = e.dyn_into().unwrap();
+                let Ok(ke) = e.dyn_into::<KeyboardEvent>() else {
+                    return;
+                };
                 if let Some(input) = map_keyup(&ke) {
                     ke.prevent_default();
                     ev.borrow_mut().push(input);
                 }
             }) as Box<dyn FnMut(web_sys::Event)>);
-            win_target
-                .add_event_listener_with_callback("keyup", closure.as_ref().unchecked_ref())
-                .unwrap();
+            let _ = win_target
+                .add_event_listener_with_callback("keyup", closure.as_ref().unchecked_ref());
             closures.push(closure);
         }
 
@@ -84,13 +86,14 @@ impl WasmInputBackend {
             let ch = height;
             let canvas_clone = canvas.clone();
             let closure = Closure::wrap(Box::new(move |e: web_sys::Event| {
-                let me: MouseEvent = e.dyn_into().unwrap();
+                let Ok(me) = e.dyn_into::<MouseEvent>() else {
+                    return;
+                };
                 let (x, y) = scale_mouse(&canvas_clone, &me, cw, ch);
                 ev.borrow_mut().push(InputEvent::CursorMove { x, y });
             }) as Box<dyn FnMut(web_sys::Event)>);
-            target
-                .add_event_listener_with_callback("mousemove", closure.as_ref().unchecked_ref())
-                .unwrap();
+            let _ = target
+                .add_event_listener_with_callback("mousemove", closure.as_ref().unchecked_ref());
             closures.push(closure);
         }
 
@@ -101,13 +104,14 @@ impl WasmInputBackend {
             let ch = height;
             let canvas_clone = canvas.clone();
             let closure = Closure::wrap(Box::new(move |e: web_sys::Event| {
-                let me: MouseEvent = e.dyn_into().unwrap();
+                let Ok(me) = e.dyn_into::<MouseEvent>() else {
+                    return;
+                };
                 let (x, y) = scale_mouse(&canvas_clone, &me, cw, ch);
                 ev.borrow_mut().push(InputEvent::PointerClick { x, y });
             }) as Box<dyn FnMut(web_sys::Event)>);
-            target
-                .add_event_listener_with_callback("mousedown", closure.as_ref().unchecked_ref())
-                .unwrap();
+            let _ = target
+                .add_event_listener_with_callback("mousedown", closure.as_ref().unchecked_ref());
             closures.push(closure);
         }
 
@@ -118,13 +122,14 @@ impl WasmInputBackend {
             let ch = height;
             let canvas_clone = canvas.clone();
             let closure = Closure::wrap(Box::new(move |e: web_sys::Event| {
-                let me: MouseEvent = e.dyn_into().unwrap();
+                let Ok(me) = e.dyn_into::<MouseEvent>() else {
+                    return;
+                };
                 let (x, y) = scale_mouse(&canvas_clone, &me, cw, ch);
                 ev.borrow_mut().push(InputEvent::PointerRelease { x, y });
             }) as Box<dyn FnMut(web_sys::Event)>);
-            target
-                .add_event_listener_with_callback("mouseup", closure.as_ref().unchecked_ref())
-                .unwrap();
+            let _ = target
+                .add_event_listener_with_callback("mouseup", closure.as_ref().unchecked_ref());
             closures.push(closure);
         }
 
@@ -132,14 +137,15 @@ impl WasmInputBackend {
         {
             let ev = Rc::clone(&events);
             let closure = Closure::wrap(Box::new(move |e: web_sys::Event| {
-                let we: WheelEvent = e.dyn_into().unwrap();
+                let Ok(we) = e.dyn_into::<WheelEvent>() else {
+                    return;
+                };
                 we.prevent_default();
                 let delta = if we.delta_y() > 0.0 { 1 } else { -1 };
                 ev.borrow_mut().push(InputEvent::MouseWheel { delta });
             }) as Box<dyn FnMut(web_sys::Event)>);
-            target
-                .add_event_listener_with_callback("wheel", closure.as_ref().unchecked_ref())
-                .unwrap();
+            let _ =
+                target.add_event_listener_with_callback("wheel", closure.as_ref().unchecked_ref());
             closures.push(closure);
         }
 
@@ -149,9 +155,8 @@ impl WasmInputBackend {
             let closure = Closure::wrap(Box::new(move |_e: web_sys::Event| {
                 ev.borrow_mut().push(InputEvent::FocusGained);
             }) as Box<dyn FnMut(web_sys::Event)>);
-            win_target
-                .add_event_listener_with_callback("focus", closure.as_ref().unchecked_ref())
-                .unwrap();
+            let _ = win_target
+                .add_event_listener_with_callback("focus", closure.as_ref().unchecked_ref());
             closures.push(closure);
         }
         {
@@ -159,9 +164,8 @@ impl WasmInputBackend {
             let closure = Closure::wrap(Box::new(move |_e: web_sys::Event| {
                 ev.borrow_mut().push(InputEvent::FocusLost);
             }) as Box<dyn FnMut(web_sys::Event)>);
-            win_target
-                .add_event_listener_with_callback("blur", closure.as_ref().unchecked_ref())
-                .unwrap();
+            let _ = win_target
+                .add_event_listener_with_callback("blur", closure.as_ref().unchecked_ref());
             closures.push(closure);
         }
 
@@ -175,15 +179,16 @@ impl WasmInputBackend {
             let canvas_clone = canvas.clone();
             let closure = Closure::wrap(Box::new(move |e: web_sys::Event| {
                 e.prevent_default();
-                let te: web_sys::TouchEvent = e.dyn_into().unwrap();
+                let Ok(te) = e.dyn_into::<web_sys::TouchEvent>() else {
+                    return;
+                };
                 if let Some(touch) = te.touches().get(0) {
                     let (x, y) = scale_touch(&canvas_clone, &touch, cw, ch);
                     ev.borrow_mut().push(InputEvent::PointerClick { x, y });
                 }
             }) as Box<dyn FnMut(web_sys::Event)>);
-            target
-                .add_event_listener_with_callback("touchstart", closure.as_ref().unchecked_ref())
-                .unwrap();
+            let _ = target
+                .add_event_listener_with_callback("touchstart", closure.as_ref().unchecked_ref());
             closures.push(closure);
         }
 
@@ -195,15 +200,16 @@ impl WasmInputBackend {
             let canvas_clone = canvas.clone();
             let closure = Closure::wrap(Box::new(move |e: web_sys::Event| {
                 e.prevent_default();
-                let te: web_sys::TouchEvent = e.dyn_into().unwrap();
+                let Ok(te) = e.dyn_into::<web_sys::TouchEvent>() else {
+                    return;
+                };
                 if let Some(touch) = te.touches().get(0) {
                     let (x, y) = scale_touch(&canvas_clone, &touch, cw, ch);
                     ev.borrow_mut().push(InputEvent::CursorMove { x, y });
                 }
             }) as Box<dyn FnMut(web_sys::Event)>);
-            target
-                .add_event_listener_with_callback("touchmove", closure.as_ref().unchecked_ref())
-                .unwrap();
+            let _ = target
+                .add_event_listener_with_callback("touchmove", closure.as_ref().unchecked_ref());
             closures.push(closure);
         }
 
@@ -215,15 +221,16 @@ impl WasmInputBackend {
             let canvas_clone = canvas.clone();
             let closure = Closure::wrap(Box::new(move |e: web_sys::Event| {
                 e.prevent_default();
-                let te: web_sys::TouchEvent = e.dyn_into().unwrap();
+                let Ok(te) = e.dyn_into::<web_sys::TouchEvent>() else {
+                    return;
+                };
                 if let Some(touch) = te.changed_touches().get(0) {
                     let (x, y) = scale_touch(&canvas_clone, &touch, cw, ch);
                     ev.borrow_mut().push(InputEvent::PointerRelease { x, y });
                 }
             }) as Box<dyn FnMut(web_sys::Event)>);
-            target
-                .add_event_listener_with_callback("touchend", closure.as_ref().unchecked_ref())
-                .unwrap();
+            let _ = target
+                .add_event_listener_with_callback("touchend", closure.as_ref().unchecked_ref());
             closures.push(closure);
         }
 

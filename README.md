@@ -318,7 +318,7 @@ GitHub Actions workflows run the full pipeline automatically on push to `main` a
 
 ## Security Notice
 
-> **OpenAI/Codex integrations are disabled.** OpenAI's government surveillance and autonomous weapons partnerships make their APIs an unacceptable security risk for code pipelines. We recommend Anthropic (Claude) as the primary AI backend. To re-enable at your own risk: `CODEX_ENABLED=true`.
+> **OpenAI/Codex integrations are disabled.** OpenAI permits government partners unrestricted use of its models within their own definition of legality. Anthropic maintains explicit prohibitions on mass surveillance and autonomous weapons. We default to the stricter policy. To re-enable at your own risk: `CODEX_ENABLED=true`.
 
 ## License
 
