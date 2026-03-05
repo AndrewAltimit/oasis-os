@@ -1056,8 +1056,19 @@ pub unsafe extern "C" fn oasis_video_get_audio(
             written += available as u32;
             ring.pop_front();
         } else {
-            // Partial copy — take what we can and leave the rest.
-            // For simplicity, skip partial chunks (consumer should call again).
+            // Partial copy — take what fits and drain consumed samples.
+            // SAFETY: Caller guarantees buf has space for `remaining` samples.
+            unsafe {
+                std::ptr::copy_nonoverlapping(
+                    chunk.pcm_f32.as_ptr(),
+                    buf.add(written as usize),
+                    remaining,
+                );
+            }
+            written += remaining as u32;
+            // Remove consumed samples from the front of this chunk.
+            let chunk = ring.front_mut().unwrap();
+            chunk.pcm_f32.drain(..remaining);
             break;
         }
     }

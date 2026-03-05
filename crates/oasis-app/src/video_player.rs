@@ -92,6 +92,9 @@ pub struct VideoPlayer {
     /// PTS of the first frame received (base for wall-clock sync).
     #[cfg(feature = "video-decode")]
     base_pts: f64,
+    /// Buffered early frame that arrived before its PTS (software decode).
+    #[cfg(feature = "video-decode")]
+    next_frame: Option<VideoFrame>,
 }
 
 impl VideoPlayer {
@@ -110,6 +113,8 @@ impl VideoPlayer {
             playback_start: None,
             #[cfg(feature = "video-decode")]
             base_pts: 0.0,
+            #[cfg(feature = "video-decode")]
+            next_frame: None,
         }
     }
 
@@ -451,6 +456,16 @@ impl VideoPlayer {
                     .unwrap_or(0.0);
                 let target_pts = self.base_pts + wall;
 
+                // Check buffered early frame from previous tick first.
+                if let Some(buffered) = self.next_frame.take() {
+                    if buffered.timestamp_secs <= target_pts {
+                        latest_frame = Some(buffered);
+                    } else {
+                        // Still early — keep it buffered.
+                        self.next_frame = Some(buffered);
+                    }
+                }
+
                 loop {
                     match video_rx.try_recv() {
                         Ok(frame) => {
@@ -458,9 +473,8 @@ impl VideoPlayer {
                                 // This frame is due or late — keep it, try next.
                                 latest_frame = Some(frame);
                             } else {
-                                // Frame is early — display it anyway (we can't
-                                // put it back), but stop draining.
-                                latest_frame = Some(frame);
+                                // Frame is early — buffer it for a future tick.
+                                self.next_frame = Some(frame);
                                 break;
                             }
                         },
@@ -598,6 +612,7 @@ impl VideoPlayer {
         {
             self.playback_start = None;
             self.base_pts = 0.0;
+            self.next_frame = None;
         }
         self.state = PlayerState::Idle;
         self.error_msg = None;
