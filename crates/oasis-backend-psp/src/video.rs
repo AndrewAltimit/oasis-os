@@ -316,6 +316,8 @@ fn play_mp4(path: &str, seek_secs: u64) {
 
     let mut video_count = 0u32;
     let mut audio_count = 0u32;
+    let mut audio_done = mp4.audio_track_info().is_none();
+    let mut video_done = mp4.video_track_info().is_none();
 
     loop {
         // Check for stop command.
@@ -340,41 +342,54 @@ fn play_mp4(path: &str, seek_secs: u64) {
         }
 
         // Read audio samples and forward raw AAC to the audio thread.
-        match mp4.next_audio_sample() {
-            Ok(Some(sample)) => {
-                audio_count += 1;
-                send_audio_cmd(AudioCmd::VideoAudioAac { data: sample.data });
-            },
-            Ok(None) => {
-                // Audio stream exhausted.
-                psp::dprintln!(
-                    "video: stream ended — {video_count} video, {audio_count} audio samples"
-                );
-                VIDEO_PLAYING.store(false, Ordering::Relaxed);
-                send_audio_cmd(AudioCmd::VideoAudioStop);
-                break;
-            },
-            Err(oasis_video::demux_lite::LiteError::NoTrack(_)) => {
-                // No audio track — continue with video only.
-            },
-            Err(e) => {
-                psp::dprintln!("video: audio read error: {e}");
-                break;
-            },
+        if !audio_done {
+            match mp4.next_audio_sample() {
+                Ok(Some(sample)) => {
+                    audio_count += 1;
+                    send_audio_cmd(AudioCmd::VideoAudioAac { data: sample.data });
+                },
+                Ok(None) => {
+                    audio_done = true;
+                },
+                Err(oasis_video::demux_lite::LiteError::NoTrack(_)) => {
+                    audio_done = true;
+                },
+                Err(e) => {
+                    psp::dprintln!("video: audio read error: {e}");
+                    audio_done = true;
+                },
+            }
         }
 
         // Read video samples (log count, no H.264 decode yet).
-        match mp4.next_video_sample() {
-            Ok(Some(_sample)) => {
-                video_count += 1;
-                // TODO: decode H.264 NALs via sceVideocodec (Step 6).
-            },
-            Ok(None) => {},
-            Err(oasis_video::demux_lite::LiteError::NoTrack(_)) => {},
-            Err(e) => {
-                psp::dprintln!("video: video read error: {e}");
-                break;
-            },
+        if !video_done {
+            match mp4.next_video_sample() {
+                Ok(Some(_sample)) => {
+                    video_count += 1;
+                    // TODO: decode H.264 NALs via sceVideocodec.
+                },
+                Ok(None) => {
+                    video_done = true;
+                },
+                Err(oasis_video::demux_lite::LiteError::NoTrack(_)) => {
+                    video_done = true;
+                },
+                Err(e) => {
+                    psp::dprintln!("video: video read error: {e}");
+                    video_done = true;
+                },
+            }
+        }
+
+        if audio_done && video_done {
+            break;
         }
     }
+
+    // Cleanup on all exit paths.
+    psp::dprintln!(
+        "video: stream ended — {video_count} video, {audio_count} audio samples"
+    );
+    VIDEO_PLAYING.store(false, Ordering::Relaxed);
+    send_audio_cmd(AudioCmd::VideoAudioStop);
 }
