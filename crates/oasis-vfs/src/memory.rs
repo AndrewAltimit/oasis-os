@@ -8,7 +8,7 @@ use std::collections::BTreeMap;
 
 use oasis_types::error::{OasisError, Result};
 
-use crate::{EntryKind, Vfs, VfsEntry, VfsMetadata};
+use crate::{EntryKind, FilePermissions, Vfs, VfsEntry, VfsMetadata};
 
 #[derive(Debug, Clone)]
 enum Node {
@@ -21,6 +21,7 @@ enum Node {
 pub struct MemoryVfs {
     /// Map of normalized paths to file/directory nodes.
     nodes: BTreeMap<String, Node>,
+    permissions: BTreeMap<String, FilePermissions>,
 }
 
 impl MemoryVfs {
@@ -28,7 +29,9 @@ impl MemoryVfs {
     pub fn new() -> Self {
         let mut nodes = BTreeMap::new();
         nodes.insert("/".to_string(), Node::Dir);
-        Self { nodes }
+        let mut permissions = BTreeMap::new();
+        permissions.insert("/".to_string(), FilePermissions::default_dir());
+        Self { nodes, permissions }
     }
 }
 
@@ -162,8 +165,14 @@ impl Vfs for MemoryVfs {
                 "parent directory does not exist: {par}"
             )));
         }
-        self.nodes
-            .insert(path.into_owned(), Node::File(data.to_vec()));
+        if let Some(perms) = self.permissions.get(path.as_ref())
+            && !perms.owner_can_write()
+        {
+            return Err(OasisError::Vfs(format!("permission denied (read-only): {path}")));
+        }
+        let owned = path.into_owned();
+        self.permissions.entry(owned.clone()).or_insert_with(FilePermissions::default_file);
+        self.nodes.insert(owned, Node::File(data.to_vec()));
         Ok(())
     }
 
@@ -192,7 +201,9 @@ impl Vfs for MemoryVfs {
         if par != path.as_ref() && !self.nodes.contains_key(&par) {
             self.mkdir(&par)?;
         }
-        self.nodes.insert(path.into_owned(), Node::Dir);
+        let owned = path.into_owned();
+        self.permissions.entry(owned.clone()).or_insert_with(FilePermissions::default_dir);
+        self.nodes.insert(owned, Node::Dir);
         Ok(())
     }
 
@@ -219,13 +230,35 @@ impl Vfs for MemoryVfs {
                 return Err(OasisError::Vfs(format!("no such path: {path}")));
             },
         }
-        self.nodes.remove(path.as_ref());
+        let ps = path.as_ref().to_string();
+        self.nodes.remove(&ps);
+        self.permissions.remove(&ps);
         Ok(())
     }
 
     fn exists(&self, path: &str) -> bool {
         let path = normalize(path);
         self.nodes.contains_key(path.as_ref())
+    }
+
+    fn get_permissions(&self, path: &str) -> Result<FilePermissions> {
+        let path = normalize(path);
+        if !self.nodes.contains_key(path.as_ref()) {
+            return Err(OasisError::Vfs(format!("no such path: {path}")));
+        }
+        Ok(self.permissions.get(path.as_ref()).cloned().unwrap_or_else(|| match self.nodes.get(path.as_ref()) {
+            Some(Node::Dir) => FilePermissions::default_dir(),
+            _ => FilePermissions::default_file(),
+        }))
+    }
+
+    fn set_permissions(&mut self, path: &str, perms: FilePermissions) -> Result<()> {
+        let path = normalize(path);
+        if !self.nodes.contains_key(path.as_ref()) {
+            return Err(OasisError::Vfs(format!("no such path: {path}")));
+        }
+        self.permissions.insert(path.into_owned(), perms);
+        Ok(())
     }
 }
 
@@ -610,6 +643,44 @@ mod tests {
         vfs.remove("/reuse").unwrap();
         vfs.mkdir("/reuse").unwrap();
         assert!(vfs.exists("/reuse"));
+    }
+
+    #[test]
+    fn chmod_enforces_readonly() {
+        let mut vfs = MemoryVfs::new();
+        vfs.write("/file", b"data").unwrap();
+        vfs.set_permissions("/file", FilePermissions { owner: "user".to_string(), mode: 0o444 }).unwrap();
+        assert!(vfs.write("/file", b"new").is_err());
+        assert_eq!(vfs.read("/file").unwrap(), b"data");
+    }
+
+    #[test]
+    fn chmod_restore_write() {
+        let mut vfs = MemoryVfs::new();
+        vfs.write("/file", b"data").unwrap();
+        vfs.set_permissions("/file", FilePermissions { owner: "user".to_string(), mode: 0o444 }).unwrap();
+        assert!(vfs.write("/file", b"new").is_err());
+        vfs.set_permissions("/file", FilePermissions { owner: "user".to_string(), mode: 0o644 }).unwrap();
+        vfs.write("/file", b"new").unwrap();
+        assert_eq!(vfs.read("/file").unwrap(), b"new");
+    }
+
+    #[test]
+    fn chown_sets_owner() {
+        let mut vfs = MemoryVfs::new();
+        vfs.write("/file", b"data").unwrap();
+        vfs.set_permissions("/file", FilePermissions { owner: "root".to_string(), mode: 0o644 }).unwrap();
+        let perms = vfs.get_permissions("/file").unwrap();
+        assert_eq!(perms.owner, "root");
+    }
+
+    #[test]
+    fn permissions_removed_on_delete() {
+        let mut vfs = MemoryVfs::new();
+        vfs.write("/tmp_file", b"data").unwrap();
+        vfs.set_permissions("/tmp_file", FilePermissions { owner: "user".to_string(), mode: 0o700 }).unwrap();
+        vfs.remove("/tmp_file").unwrap();
+        assert!(vfs.get_permissions("/tmp_file").is_err());
     }
 
     mod prop {

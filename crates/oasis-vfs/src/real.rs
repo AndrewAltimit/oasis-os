@@ -9,7 +9,7 @@ use std::path::PathBuf;
 
 use oasis_types::error::{OasisError, Result};
 
-use crate::{EntryKind, Vfs, VfsEntry, VfsMetadata};
+use crate::{EntryKind, FilePermissions, Vfs, VfsEntry, VfsMetadata};
 
 /// A VFS backed by the real filesystem, rooted at a configurable directory.
 #[derive(Debug)]
@@ -143,6 +143,22 @@ impl Vfs for RealVfs {
 
     fn exists(&self, path: &str) -> bool {
         self.resolve(path).map(|p| p.exists()).unwrap_or(false)
+    }
+
+    fn get_permissions(&self, path: &str) -> Result<FilePermissions> {
+        let real_path = self.resolve(path)?;
+        if !real_path.exists() {
+            return Err(OasisError::Vfs(format!("no such path: {path}")));
+        }
+        if real_path.is_dir() { Ok(FilePermissions::default_dir()) } else { Ok(FilePermissions::default_file()) }
+    }
+
+    fn set_permissions(&mut self, path: &str, _perms: FilePermissions) -> Result<()> {
+        let real_path = self.resolve(path)?;
+        if !real_path.exists() {
+            return Err(OasisError::Vfs(format!("no such path: {path}")));
+        }
+        Ok(())
     }
 }
 

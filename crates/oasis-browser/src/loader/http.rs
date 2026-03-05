@@ -30,7 +30,7 @@ const READ_TIMEOUT: Duration = Duration::from_secs(15);
 /// When `tls` is `Some`, HTTPS URLs are supported.  When `None`, HTTPS
 /// URLs produce a user-friendly error page instead.
 ///
-/// Follows redirects (301/302/307/308) up to [`MAX_REDIRECTS`] hops.
+/// Follows redirects (301/302/307/308) up to `MAX_REDIRECTS` hops.
 pub fn http_get(url: &Url, tls: Option<&dyn TlsProvider>) -> Result<ResourceResponse> {
     if url.scheme == "https" && tls.is_none() {
         return Ok(https_error_page(url, url));

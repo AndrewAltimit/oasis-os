@@ -10,7 +10,7 @@ use crate::html::dom::{Document, NodeId, NodeKind, TagName};
 pub struct Article {
     /// Article title (from `<title>` or first `<h1>`).
     pub title: String,
-    /// The [`NodeId`] of the identified article container.
+    /// The `NodeId` of the identified article container.
     pub content_node: NodeId,
     /// Simplified HTML for re-rendering.
     pub html: String,

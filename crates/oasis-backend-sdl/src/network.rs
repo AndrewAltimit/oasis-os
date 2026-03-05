@@ -1,6 +1,6 @@
 //! SDL backend network module.
 //!
-//! Re-exports [`StdNetworkBackend`] from `oasis-net` as the SDL
+//! Re-exports `StdNetworkBackend` from `oasis-net` as the SDL
 //! backend's `NetworkBackend` implementation. On desktop and Raspberry
 //! Pi, all TCP and TLS operations use `std::net`.
 //!

@@ -28,13 +28,17 @@ impl Command for ChmodCmd {
                 "usage: chmod <mode> <file>".to_string(),
             ));
         }
-        let mode = args[0];
+        let mode_str = args[0];
         let path = resolve_path(&env.cwd, args[1]);
-        // VFS doesn't have real permissions; store as metadata.
-        let meta_path = format!("{path}.__perms__");
-        env.vfs.write(&meta_path, mode.as_bytes())?;
+        let mode =
+            u16::from_str_radix(mode_str, 8).map_err(|_| {
+                OasisError::Command(format!("invalid octal mode: {mode_str}"))
+            })?;
+        let mut perms = env.vfs.get_permissions(&path)?;
+        perms.mode = mode;
+        env.vfs.set_permissions(&path, perms)?;
         Ok(CommandOutput::Text(format!(
-            "Set permissions on {path}: {mode}"
+            "Set permissions on {path}: {mode_str}"
         )))
     }
 }
@@ -65,8 +69,9 @@ impl Command for ChownCmd {
         }
         let owner = args[0];
         let path = resolve_path(&env.cwd, args[1]);
-        let meta_path = format!("{path}.__owner__");
-        env.vfs.write(&meta_path, owner.as_bytes())?;
+        let mut perms = env.vfs.get_permissions(&path)?;
+        perms.owner = owner.to_string();
+        env.vfs.set_permissions(&path, perms)?;
         Ok(CommandOutput::Text(format!("Set owner of {path}: {owner}")))
     }
 }
@@ -177,7 +182,7 @@ mod tests {
     }
 
     #[test]
-    fn chmod_sets_metadata() {
+    fn chmod_sets_permissions() {
         let mut reg = CommandRegistry::new();
         register_security_commands(&mut reg);
         let mut vfs = MemoryVfs::new();
@@ -186,12 +191,23 @@ mod tests {
             CommandOutput::Text(s) => assert!(s.contains("755")),
             _ => panic!("expected text"),
         }
-        let perms = vfs.read("/test.txt.__perms__").unwrap();
-        assert_eq!(perms, b"755");
+        let perms = vfs.get_permissions("/test.txt").unwrap();
+        assert_eq!(perms.mode, 0o755);
     }
 
     #[test]
-    fn chown_sets_metadata() {
+    fn chmod_enforces_readonly() {
+        let mut reg = CommandRegistry::new();
+        register_security_commands(&mut reg);
+        let mut vfs = MemoryVfs::new();
+        vfs.write("/test.txt", b"data").unwrap();
+        exec(&reg, &mut vfs, "chmod 444 /test.txt").unwrap();
+        assert!(vfs.write("/test.txt", b"new data").is_err());
+        assert_eq!(vfs.read("/test.txt").unwrap(), b"data");
+    }
+
+    #[test]
+    fn chown_sets_owner() {
         let mut reg = CommandRegistry::new();
         register_security_commands(&mut reg);
         let mut vfs = MemoryVfs::new();
@@ -200,6 +216,8 @@ mod tests {
             CommandOutput::Text(s) => assert!(s.contains("root")),
             _ => panic!("expected text"),
         }
+        let perms = vfs.get_permissions("/test.txt").unwrap();
+        assert_eq!(perms.owner, "root");
     }
 
     #[test]

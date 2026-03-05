@@ -2,7 +2,7 @@
 //!
 //! Converts a parsed [`GeminiDocument`] directly into a layout tree,
 //! bypassing the HTML/CSS parsing pipeline. Each Gemini line type maps
-//! to a block-level [`LayoutBox`] with inline styling applied via
+//! to a block-level `LayoutBox` with inline styling applied via
 //! [`ComputedStyle`].
 
 #![allow(clippy::field_reassign_with_default)]
