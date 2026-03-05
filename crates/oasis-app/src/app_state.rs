@@ -122,9 +122,17 @@ pub struct AppState {
     /// Cached video file path for cleanup on untune.
     #[cfg(feature = "video-decode")]
     pub tv_video_cache_path: Option<std::path::PathBuf>,
+    /// Video file cache: (URL, file path) pairs, FIFO eviction at 3 entries.
+    #[cfg(feature = "video-decode")]
+    pub tv_video_cache: Vec<(String, std::path::PathBuf)>,
     /// Parameters saved from tune request, needed when download completes.
     #[cfg(feature = "video-decode")]
     pub pending_video_params: Option<PendingVideoParams>,
+    /// Download progress: (bytes downloaded, total bytes). Updated atomically
+    /// from the download thread.
+    #[cfg(feature = "video-decode")]
+    pub tv_download_progress:
+        Option<std::sync::Arc<(std::sync::atomic::AtomicU64, std::sync::atomic::AtomicU64)>>,
 }
 
 /// Parameters stashed from a tune request so they survive until download completes.

@@ -3,7 +3,7 @@
 //! Decodes N frames from an MP4 and reports RSS (resident set size) to stdout
 //! in a machine-readable format for CI assertion.
 //!
-//! Usage: video-memprofile <path.mp4> [--frames N]
+//! Usage: video-memprofile <path.mp4> [--frames N] [--max-rss-kb N] [--loops N]
 
 use std::env;
 use std::fs;
@@ -28,11 +28,59 @@ fn rss_kb() -> u64 {
 }
 
 fn usage() -> ! {
-    eprintln!("Usage: video-memprofile <file.mp4> [--frames N]");
+    eprintln!("Usage: video-memprofile <file.mp4> [--frames N] [--max-rss-kb N] [--loops N]");
     eprintln!();
     eprintln!("Decodes up to N video frames (default: all) and reports peak RSS.");
     eprintln!("Machine-readable output on stdout: PEAK_RSS_KB=<val> FRAME_COUNT=<val>");
+    eprintln!();
+    eprintln!("Options:");
+    eprintln!("  --frames N       Max frames per loop (default: all)");
+    eprintln!("  --max-rss-kb N   Exit 1 if peak RSS exceeds N KB");
+    eprintln!("  --loops N        Re-decode N times (seek to start), report RSS per loop");
     process::exit(1);
+}
+
+fn decode_loop(
+    decoder: &mut SoftwareVideoDecoder,
+    max_frames: u64,
+    peak_rss: &mut u64,
+    loop_idx: usize,
+) -> u64 {
+    let mut frame_count: u64 = 0;
+
+    loop {
+        if frame_count >= max_frames {
+            break;
+        }
+
+        match decoder.next_video_frame() {
+            Ok(Some(frame)) => {
+                frame_count += 1;
+                let (w, h) = (frame.width, frame.height);
+
+                // Sample RSS every 10 frames to reduce overhead.
+                if frame_count.is_multiple_of(10) || frame_count == 1 {
+                    let current = rss_kb();
+                    if current > *peak_rss {
+                        *peak_rss = current;
+                    }
+                    if loop_idx == 0 {
+                        eprintln!(
+                            "  frame {frame_count}: {w}x{h} ts={:.3}s rss={current} KB",
+                            frame.timestamp_secs
+                        );
+                    }
+                }
+            },
+            Ok(None) => break,
+            Err(e) => {
+                eprintln!("decode error at frame {frame_count}: {e}");
+                break;
+            },
+        }
+    }
+
+    frame_count
 }
 
 fn main() {
@@ -43,6 +91,8 @@ fn main() {
 
     let mut mp4_path = None;
     let mut max_frames: u64 = u64::MAX;
+    let mut max_rss_limit: Option<u64> = None;
+    let mut loops: u64 = 1;
 
     let mut i = 1;
     while i < args.len() {
@@ -54,6 +104,26 @@ fn main() {
             }
             max_frames = args[i].parse().unwrap_or_else(|_| {
                 eprintln!("error: invalid frame count: {}", args[i]);
+                process::exit(1);
+            });
+        } else if args[i] == "--max-rss-kb" {
+            i += 1;
+            if i >= args.len() {
+                eprintln!("error: --max-rss-kb requires a value");
+                process::exit(1);
+            }
+            max_rss_limit = Some(args[i].parse().unwrap_or_else(|_| {
+                eprintln!("error: invalid max-rss-kb: {}", args[i]);
+                process::exit(1);
+            }));
+        } else if args[i] == "--loops" {
+            i += 1;
+            if i >= args.len() {
+                eprintln!("error: --loops requires a value");
+                process::exit(1);
+            }
+            loops = args[i].parse().unwrap_or_else(|_| {
+                eprintln!("error: invalid loop count: {}", args[i]);
                 process::exit(1);
             });
         } else if args[i].starts_with('-') {
@@ -83,35 +153,31 @@ fn main() {
     eprintln!("RSS before decode: {rss_before} KB");
 
     let mut peak_rss: u64 = rss_before;
-    let mut frame_count: u64 = 0;
+    let mut total_frames: u64 = 0;
 
-    loop {
-        if frame_count >= max_frames {
+    for loop_idx in 0..loops {
+        if loop_idx > 0
+            && let Err(e) = decoder.seek(0.0)
+        {
+            eprintln!("seek to start failed on loop {loop_idx}: {e}");
             break;
         }
 
-        match decoder.next_video_frame() {
-            Ok(Some(frame)) => {
-                frame_count += 1;
-                let (w, h) = (frame.width, frame.height);
+        let frames = decode_loop(&mut decoder, max_frames, &mut peak_rss, loop_idx as usize);
+        total_frames += frames;
 
-                // Sample RSS every 10 frames to reduce overhead.
-                if frame_count.is_multiple_of(10) || frame_count == 1 {
-                    let current = rss_kb();
-                    if current > peak_rss {
-                        peak_rss = current;
-                    }
-                    eprintln!(
-                        "  frame {frame_count}: {w}x{h} ts={:.3}s rss={current} KB",
-                        frame.timestamp_secs
-                    );
-                }
-            },
-            Ok(None) => break,
-            Err(e) => {
-                eprintln!("decode error at frame {frame_count}: {e}");
-                break;
-            },
+        let loop_rss = rss_kb();
+        if loop_rss > peak_rss {
+            peak_rss = loop_rss;
+        }
+
+        // Machine-readable per-loop RSS for leak detection.
+        println!("LOOP_RSS_KB={loop_rss}");
+        if loops > 1 {
+            eprintln!(
+                "  loop {}: {frames} frames, RSS={loop_rss} KB",
+                loop_idx + 1,
+            );
         }
     }
 
@@ -123,7 +189,8 @@ fn main() {
 
     eprintln!();
     eprintln!("--- Summary ---");
-    eprintln!("Frames decoded: {frame_count}");
+    eprintln!("Loops: {loops}");
+    eprintln!("Total frames decoded: {total_frames}");
     eprintln!("RSS before: {rss_before} KB");
     eprintln!("RSS after:  {rss_after} KB");
     eprintln!("Peak RSS:   {peak_rss} KB");
@@ -132,5 +199,14 @@ fn main() {
 
     // Machine-readable output for CI.
     println!("PEAK_RSS_KB={peak_rss}");
-    println!("FRAME_COUNT={frame_count}");
+    println!("FRAME_COUNT={total_frames}");
+
+    // Assert max RSS if threshold was given.
+    if let Some(limit) = max_rss_limit {
+        if peak_rss > limit {
+            eprintln!("FAIL: peak RSS {peak_rss} KB exceeds limit {limit} KB");
+            process::exit(1);
+        }
+        eprintln!("PASS: peak RSS {peak_rss} KB within limit {limit} KB");
+    }
 }

@@ -506,6 +506,10 @@ mod tests {
             tv_video_cache_path: None,
             #[cfg(feature = "video-decode")]
             pending_video_params: None,
+            #[cfg(feature = "video-decode")]
+            tv_download_progress: None,
+            #[cfg(feature = "video-decode")]
+            tv_video_cache: Vec::new(),
         }
     }
 

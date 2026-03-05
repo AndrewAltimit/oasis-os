@@ -173,6 +173,8 @@ pub struct TvGuideState {
     pub scroll_offset: usize,
     /// Texture for the in-app video preview (set by the video player).
     pub preview_texture: Option<TextureId>,
+    /// Download progress status text (e.g. "Downloading... 42% (1234/5678KB)").
+    pub download_status: Option<String>,
     /// Theme-derived colors for the TV Guide UI.
     pub colors: TvGuideColors,
 }
@@ -215,6 +217,7 @@ impl TvGuideState {
             fetch_error: None,
             scroll_offset: 0,
             preview_texture: None,
+            download_status: None,
             colors: TvGuideColors::from_theme(at),
         }
     }
@@ -315,6 +318,7 @@ impl TvGuideState {
     pub fn untune(&mut self) {
         self.tuned_channel = None;
         self.preview_texture = None;
+        self.download_status = None;
     }
 
     /// Get the grid's start time (aligned to 30-min boundary, with offset).
@@ -1137,6 +1141,15 @@ impl TvGuideState {
                 preview_y + 1,
                 preview_w.saturating_sub(2),
                 preview_h.saturating_sub(2),
+            )?;
+        } else if let Some(ref status) = self.download_status {
+            // Show download progress text centered in the preview area.
+            backend.draw_text(
+                status,
+                preview_x + 4,
+                preview_y + preview_h as i32 / 2 - 4,
+                at.font_hint,
+                self.colors.program_text,
             )?;
         }
 

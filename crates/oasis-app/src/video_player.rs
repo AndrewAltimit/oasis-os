@@ -22,6 +22,9 @@ struct VideoFrame {
     width: u32,
     #[cfg(feature = "video-decode")]
     height: u32,
+    /// Presentation timestamp in seconds (software decode only; 0.0 for ffmpeg).
+    #[cfg(feature = "video-decode")]
+    timestamp_secs: f64,
 }
 
 /// Player lifecycle state.
@@ -83,6 +86,12 @@ pub struct VideoPlayer {
     last_frame_time: Option<Instant>,
     /// Minimum interval between displayed frames (1 / VIDEO_FPS).
     frame_interval: Duration,
+    /// Wall-clock time when the first frame was displayed (PTS sync).
+    #[cfg(feature = "video-decode")]
+    playback_start: Option<Instant>,
+    /// PTS of the first frame received (base for wall-clock sync).
+    #[cfg(feature = "video-decode")]
+    base_pts: f64,
 }
 
 impl VideoPlayer {
@@ -97,6 +106,10 @@ impl VideoPlayer {
             error_msg: None,
             last_frame_time: None,
             frame_interval: Duration::from_nanos(1_000_000_000 / u64::from(VIDEO_FPS)),
+            #[cfg(feature = "video-decode")]
+            playback_start: None,
+            #[cfg(feature = "video-decode")]
+            base_pts: 0.0,
         }
     }
 
@@ -216,6 +229,8 @@ impl VideoPlayer {
                             width: 0,
                             #[cfg(feature = "video-decode")]
                             height: 0,
+                            #[cfg(feature = "video-decode")]
+                            timestamp_secs: 0.0,
                         };
                         if video_tx.send(frame).is_err() {
                             break; // Receiver dropped.
@@ -321,6 +336,7 @@ impl VideoPlayer {
                 match decoder.next_video_frame() {
                     Ok(Some(frame)) => {
                         // Scale to target if dimensions differ.
+                        let ts = frame.timestamp_secs;
                         let (data, w, h) = if frame.width == target_w && frame.height == target_h {
                             (frame.rgba, frame.width, frame.height)
                         } else {
@@ -341,6 +357,7 @@ impl VideoPlayer {
                                 data,
                                 width: w,
                                 height: h,
+                                timestamp_secs: ts,
                             })
                             .is_err()
                         {
@@ -407,27 +424,54 @@ impl VideoPlayer {
             return (self.current_texture, AudioOutput::None);
         };
 
-        // Take at most one video frame, paced to VIDEO_FPS.
+        // Take at most one video frame, paced appropriately per backend.
         let mut latest_frame: Option<VideoFrame> = None;
         let mut video_disconnected = false;
-        let should_take_frame = self
-            .last_frame_time
-            .is_none_or(|t| t.elapsed() >= self.frame_interval);
 
-        if should_take_frame {
-            match decode {
-                DecodeBackend::Ffmpeg { video_rx, .. } => match video_rx.try_recv() {
-                    Ok(frame) => latest_frame = Some(frame),
-                    Err(TryRecvError::Empty) => {},
-                    Err(TryRecvError::Disconnected) => video_disconnected = true,
-                },
-                #[cfg(feature = "video-decode")]
-                DecodeBackend::Software { video_rx, .. } => match video_rx.try_recv() {
-                    Ok(frame) => latest_frame = Some(frame),
-                    Err(TryRecvError::Empty) => {},
-                    Err(TryRecvError::Disconnected) => video_disconnected = true,
-                },
-            }
+        match decode {
+            DecodeBackend::Ffmpeg { video_rx, .. } => {
+                // Fixed framerate pacing for ffmpeg (no timestamps).
+                let should_take = self
+                    .last_frame_time
+                    .is_none_or(|t| t.elapsed() >= self.frame_interval);
+                if should_take {
+                    match video_rx.try_recv() {
+                        Ok(frame) => latest_frame = Some(frame),
+                        Err(TryRecvError::Empty) => {},
+                        Err(TryRecvError::Disconnected) => video_disconnected = true,
+                    }
+                }
+            },
+            #[cfg(feature = "video-decode")]
+            DecodeBackend::Software { video_rx, .. } => {
+                // PTS-based pacing: display the latest frame whose PTS <= wall clock.
+                let wall = self
+                    .playback_start
+                    .map(|t| t.elapsed().as_secs_f64())
+                    .unwrap_or(0.0);
+                let target_pts = self.base_pts + wall;
+
+                loop {
+                    match video_rx.try_recv() {
+                        Ok(frame) => {
+                            if frame.timestamp_secs <= target_pts {
+                                // This frame is due or late — keep it, try next.
+                                latest_frame = Some(frame);
+                            } else {
+                                // Frame is early — display it anyway (we can't
+                                // put it back), but stop draining.
+                                latest_frame = Some(frame);
+                                break;
+                            }
+                        },
+                        Err(TryRecvError::Empty) => break,
+                        Err(TryRecvError::Disconnected) => {
+                            video_disconnected = true;
+                            break;
+                        },
+                    }
+                }
+            },
         }
 
         // Upload new frame as texture and record display time.
@@ -446,12 +490,22 @@ impl VideoPlayer {
             #[cfg(not(feature = "video-decode"))]
             let (fw, fh) = (self.frame_width, self.frame_height);
 
+            // Save timestamp before consuming frame data.
+            #[cfg(feature = "video-decode")]
+            let frame_ts = frame.timestamp_secs;
+
             match backend.load_texture(fw, fh, &frame.data) {
                 Ok(tex) => {
                     self.current_texture = Some(tex);
                     self.last_frame_time = Some(Instant::now());
                     if self.state == PlayerState::Starting {
                         self.state = PlayerState::Playing;
+                        // Record PTS sync reference on first frame.
+                        #[cfg(feature = "video-decode")]
+                        {
+                            self.playback_start = Some(Instant::now());
+                            self.base_pts = frame_ts;
+                        }
                         log::info!("VideoPlayer: first frame received, now playing");
                     }
                 },
@@ -540,6 +594,11 @@ impl VideoPlayer {
         }
         self.current_texture = None;
         self.last_frame_time = None;
+        #[cfg(feature = "video-decode")]
+        {
+            self.playback_start = None;
+            self.base_pts = 0.0;
+        }
         self.state = PlayerState::Idle;
         self.error_msg = None;
     }

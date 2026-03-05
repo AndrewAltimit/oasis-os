@@ -87,14 +87,14 @@ oasis-types     (foundation: Color, Button, InputEvent, backend traits, error ty
 ├── oasis-terminal   (90+ commands across 17+ modules, shell features)
 ├── oasis-browser    (HTML/CSS/Gemini: DOM, CSS cascade, layout engine, JS DOM bindings)
 ├── oasis-js         (JavaScript engine: QuickJS-NG runtime, console API)
-├── oasis-video      (software MP4/H.264+AAC decode: symphonia + openh264)
+├── oasis-video      (MP4/H.264+AAC decode; features: h264, no-std-demux, video-decode)
 └── oasis-core       (coordination: 16 apps, dashboard, agent, plugin, script)
     ├── oasis-backend-sdl  (SDL2 desktop/Pi rendering + input + audio)
-    │   └── oasis-app      (binary entry points: oasis-app, oasis-screenshot; optional oasis-video)
+    │   └── oasis-app      (binary entry points: oasis-app, oasis-screenshot; oasis-video[video-decode])
     ├── oasis-backend-wasm (Canvas 2D + DOM input + Web Audio, iframe overlay)
     ├── oasis-backend-ue5  (software RGBA framebuffer for Unreal Engine 5)
-    │   └── oasis-ffi      (cdylib C-ABI for UE5 integration; optional oasis-video)
-    ├── oasis-backend-psp  (excluded from workspace, PSP hardware via sceGu)
+    │   └── oasis-ffi      (cdylib C-ABI for UE5 integration; oasis-video[video-decode])
+    ├── oasis-backend-psp  (excluded from workspace, PSP hardware; oasis-video[no-std-demux])
     └── oasis-plugin-psp   (excluded from workspace, kernel-mode PRX overlay)
 ```
 
@@ -133,7 +133,7 @@ The framework is split into 19 workspace crates. Each module below is its own cr
 - **oasis-net** -- TCP networking with PSK authentication, remote terminal, FTP transfer
 - **oasis-audio** -- Audio manager with playlist, shuffle/repeat modes, MP3 ID3 tag parsing
 - **oasis-platform** -- Platform service traits: PowerService, TimeService, UsbService, NetworkService, OskService
-- **oasis-video** -- Software MP4/H.264+AAC decode pipeline: symphonia for demux + AAC, optional openh264 for H.264 video frames. Used by TV Guide for in-canvas (WASM) and download-and-play (PSP) video
+- **oasis-video** -- MP4/H.264+AAC decode pipeline. Feature flags: `h264` (openh264 video decode + symphonia demux/AAC), `no-std-demux` (lightweight `demux_lite::Mp4Lite` parser, no symphonia/no std::sync::Once — PSP-safe), `video-decode` (re-exports `SoftwareVideoDecoder` for desktop/UE5). Streaming pipelines: desktop downloads MP4 then decodes in-process with PTS-based A/V sync; PSP uses `demux_lite` + `sceAudiocodec` AAC hardware decode + `sceVideocodec` H.264 (real HW only, audio-only on PPSSPP)
 - **oasis-core** -- Coordination layer: app runner with 16 apps (File Manager, Settings, Network, Music Player, Photo Viewer, Package Manager, Browser, System Monitor, TV Guide, Internet Radio, Terminal, Text Editor, Calculator, Clock, Paint, Games), dashboard, agent/MCP, plugin, scripting, status/bottom bars
 
 ### Font Rendering

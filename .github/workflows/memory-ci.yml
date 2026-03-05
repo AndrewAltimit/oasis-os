@@ -153,11 +153,23 @@ jobs:
               --massif-out-file=/app/valgrind-massif/massif.out \
               ./target/debug/video-memprofile \
               tests/fixtures/test_320x240_2s.mp4 --frames 60 \
+              --max-rss-kb 25600 \
               > /app/valgrind-massif/memprofile_stdout.txt \
               2> /app/valgrind-massif/memprofile_stderr.txt
 
             ms_print /app/valgrind-massif/massif.out \
               > /app/valgrind-massif/ms_print_report.txt 2>&1 || true
+          "
+
+      - name: Leak test (multi-loop)
+        run: |
+          mkdir -p valgrind-massif
+          docker compose --profile ci run --rm rust-ci bash -c "
+            ./target/debug/video-memprofile \
+              tests/fixtures/test_320x240_2s.mp4 \
+              --loops 5 --max-rss-kb 30720 \
+              > /app/valgrind-massif/leak_test_stdout.txt \
+              2> /app/valgrind-massif/leak_test_stderr.txt
           "
 
       - name: Check peak memory
@@ -176,6 +188,14 @@ jobs:
           if [ -n "$PEAK" ] && [ "$PEAK" -gt 102400 ] 2>/dev/null; then
             echo "" >> $GITHUB_STEP_SUMMARY
             echo "**Warning:** Peak RSS ${PEAK} KB exceeds 100 MB threshold" >> $GITHUB_STEP_SUMMARY
+          fi
+          # Leak test results
+          if [ -f valgrind-massif/leak_test_stdout.txt ]; then
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "**Leak test (5 loops):**" >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            grep 'LOOP_RSS_KB=' valgrind-massif/leak_test_stdout.txt >> $GITHUB_STEP_SUMMARY || true
+            echo '```' >> $GITHUB_STEP_SUMMARY
           fi
           if [ -f valgrind-massif/ms_print_report.txt ]; then
             echo "" >> $GITHUB_STEP_SUMMARY
