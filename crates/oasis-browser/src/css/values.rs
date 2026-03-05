@@ -1265,7 +1265,7 @@ impl ComputedStyle {
                                 color = Some(Color::rgba(c.r, c.g, c.b, c.a));
                             },
                             CssValue::Keyword(kw) => {
-                                if let Some(c) = crate::css::parser::named_color(kw) {
+                                if let Some(c) = crate::css::helpers::named_color(kw) {
                                     color = Some(Color::rgba(c.r, c.g, c.b, c.a));
                                 }
                             },

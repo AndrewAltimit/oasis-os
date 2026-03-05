@@ -4,24 +4,26 @@ use oasis_core::vfs::MemoryVfs;
 pub fn populate_demo_vfs(vfs: &mut MemoryVfs) {
     use oasis_core::vfs::Vfs;
 
-    vfs.mkdir("/home").unwrap();
-    vfs.mkdir("/home/user").unwrap();
-    vfs.mkdir("/etc").unwrap();
-    vfs.mkdir("/tmp").unwrap();
+    vfs.mkdir("/home").expect("vfs mkdir /home");
+    vfs.mkdir("/home/user").expect("vfs mkdir /home/user");
+    vfs.mkdir("/etc").expect("vfs mkdir /etc");
+    vfs.mkdir("/tmp").expect("vfs mkdir /tmp");
     vfs.write(
         "/home/user/readme.txt",
         b"Welcome to OASIS_OS!\nType 'help' for available commands.",
     )
-    .unwrap();
-    vfs.write("/etc/hostname", b"oasis").unwrap();
-    vfs.write("/etc/version", b"0.1.0").unwrap();
+    .expect("vfs write /home/user/readme.txt");
+    vfs.write("/etc/hostname", b"oasis")
+        .expect("vfs write /etc/hostname");
+    vfs.write("/etc/version", b"0.1.0")
+        .expect("vfs write /etc/version");
     vfs.write(
         "/etc/hosts.toml",
         b"[[host]]\nname = \"briefcase\"\naddress = \"192.168.0.50\"\nport = 9000\nprotocol = \"oasis-terminal\"\n",
     )
-    .unwrap();
+    .expect("vfs write /etc/hosts.toml");
 
-    vfs.mkdir("/apps").unwrap();
+    vfs.mkdir("/apps").expect("vfs mkdir /apps");
     for name in &[
         "File Manager",
         "Settings",
@@ -35,31 +37,32 @@ pub fn populate_demo_vfs(vfs: &mut MemoryVfs) {
         "Browser",
         "TV Guide",
     ] {
-        vfs.mkdir(&format!("/apps/{name}")).unwrap();
+        vfs.mkdir(&format!("/apps/{name}"))
+            .expect("vfs mkdir app dir");
     }
 
     // Radio configuration directory and default station list.
-    vfs.mkdir("/etc/radio").unwrap();
-    vfs.mkdir("/var/radio").unwrap();
+    vfs.mkdir("/etc/radio").expect("vfs mkdir /etc/radio");
+    vfs.mkdir("/var/radio").expect("vfs mkdir /var/radio");
     let default_stations = oasis_audio::radio::station::StationRegistry::defaults();
     if let Ok(toml_data) = default_stations.to_toml() {
         vfs.write("/etc/radio/stations.toml", toml_data.as_bytes())
-            .unwrap();
+            .expect("vfs write /etc/radio/stations.toml");
     }
 
     // TV Guide configuration directory and default channel list.
-    vfs.mkdir("/etc/tv").unwrap();
-    vfs.mkdir("/var/tv").unwrap();
-    vfs.mkdir("/var/tv/cache").unwrap();
+    vfs.mkdir("/etc/tv").expect("vfs mkdir /etc/tv");
+    vfs.mkdir("/var/tv").expect("vfs mkdir /var/tv");
+    vfs.mkdir("/var/tv/cache").expect("vfs mkdir /var/tv/cache");
     vfs.write(
         "/etc/tv/channels.toml",
         oasis_core::apps::tv_guide::channel::DEFAULT_CHANNELS_TOML.as_bytes(),
     )
-    .unwrap();
+    .expect("vfs write /etc/tv/channels.toml");
 
     // Browser home page content.
-    vfs.mkdir("/sites").unwrap();
-    vfs.mkdir("/sites/home").unwrap();
+    vfs.mkdir("/sites").expect("vfs mkdir /sites");
+    vfs.mkdir("/sites/home").expect("vfs mkdir /sites/home");
     vfs.write(
         "/sites/home/index.html",
         br#"<html><head><title>OASIS Home</title>
@@ -106,7 +109,7 @@ td { border: 1px solid rgba(255,255,255,20); }
 </ol>
 </body></html>"#,
     )
-    .unwrap();
+    .expect("vfs write /sites/home/index.html");
     vfs.write(
         "/sites/home/about.html",
         br#"<html><head><title>About OASIS Browser</title>
@@ -127,7 +130,7 @@ a { color: #64c8ff; }
 <p><a href="/sites/home/index.html">Back to home</a></p>
 </body></html>"#,
     )
-    .unwrap();
+    .expect("vfs write /sites/home/about.html");
     vfs.write(
         "/sites/home/features.html",
         br#"<html><head><title>CSS Features</title>
@@ -154,7 +157,7 @@ a { color: #64c8ff; }
 <p><a href="/sites/home/index.html">Back to home</a></p>
 </body></html>"#,
     )
-    .unwrap();
+    .expect("vfs write /sites/home/features.html");
 
     // JavaScript DOM manipulation test page.
     vfs.write(
@@ -239,25 +242,28 @@ out.textContent = html;
 </script>
 </body></html>"#,
     )
-    .unwrap();
+    .expect("vfs write /sites/home/js-test.html");
 
     // Add JS test link to home page navigation is handled by the existing
     // home page (users can navigate via URL bar to /sites/home/js-test.html).
 
-    vfs.mkdir("/home/user/music").unwrap();
-    vfs.mkdir("/home/user/photos").unwrap();
+    vfs.mkdir("/home/user/music")
+        .expect("vfs mkdir /home/user/music");
+    vfs.mkdir("/home/user/photos")
+        .expect("vfs mkdir /home/user/photos");
 
     write_sample_placeholders(vfs);
 
-    vfs.mkdir("/home/user/scripts").unwrap();
+    vfs.mkdir("/home/user/scripts")
+        .expect("vfs mkdir /home/user/scripts");
     vfs.write(
         "/home/user/scripts/hello.sh",
         b"# Demo script\necho Hello from OASIS_OS!\nstatus\npwd\n",
     )
-    .unwrap();
+    .expect("vfs write /home/user/scripts/hello.sh");
 
-    vfs.mkdir("/var").unwrap();
-    vfs.mkdir("/var/audio").unwrap();
+    vfs.mkdir("/var").expect("vfs mkdir /var");
+    vfs.mkdir("/var/audio").expect("vfs mkdir /var/audio");
 }
 
 /// Write placeholder files for samples (instant, no disk I/O).
@@ -272,7 +278,7 @@ fn write_sample_placeholders(vfs: &mut MemoryVfs) {
             format!("(placeholder: run samples/fetch-samples.sh for real audio)\nFile: {name}\n")
                 .as_bytes(),
         )
-        .unwrap();
+        .expect("vfs write music placeholder");
     }
 
     let photo_files = ["sample_landscape.png"];
@@ -283,7 +289,7 @@ fn write_sample_placeholders(vfs: &mut MemoryVfs) {
             format!("(placeholder: run samples/fetch-samples.sh for real image)\nFile: {name}\n")
                 .as_bytes(),
         )
-        .unwrap();
+        .expect("vfs write photo placeholder");
     }
 }
 

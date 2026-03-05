@@ -95,7 +95,9 @@ impl WasmAudioBackend {
             self.gain = Some(gain);
             self.ctx = Some(ctx);
         }
-        Ok(self.ctx.as_ref().unwrap())
+        self.ctx
+            .as_ref()
+            .ok_or_else(|| OasisError::Backend("AudioContext not initialized".into()))
     }
 }
 
@@ -135,7 +137,10 @@ impl AudioBackend for WasmAudioBackend {
         let id = self.next_id;
         self.next_id += 1;
 
-        let ctx = self.ctx.as_ref().unwrap();
+        let ctx = self
+            .ctx
+            .as_ref()
+            .ok_or_else(|| OasisError::Backend("AudioContext not initialized".into()))?;
         let sample_rate = ctx.sample_rate();
         // Estimate duration: assume ~128kbps MP3 for reasonable duration.
         let estimated_samples = (data.len() as f32 * 8.0 / 128000.0 * sample_rate).max(1.0);
