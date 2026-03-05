@@ -135,3 +135,8 @@ strip = true
 [profile.dev]
 opt-level = 0
 debug = true
+
+[profile.asan]
+inherits = "dev"
+opt-level = 1
+debug = true

@@ -1,0 +1,84 @@
+# Valgrind suppression file for OASIS_OS
+#
+# Suppresses known false positives from system libraries.
+# Usage: valgrind --suppressions=valgrind/oasis.supp ...
+#
+# Primarily useful for memcheck runs. Massif (heap profiling) does not
+# use suppressions, but having this committed means we're ready for
+# `valgrind --tool=memcheck` in CI.
+
+# -- glibc / ld.so -----------------------------------------------------------
+{
+   glibc_dlopen_worker
+   Memcheck:Leak
+   match-leak-kinds: reachable
+   ...
+   fun:_dl_open
+}
+{
+   glibc_dlopen_malloc
+   Memcheck:Leak
+   match-leak-kinds: reachable
+   ...
+   fun:dlopen@@*
+}
+{
+   glibc_nss_lookup
+   Memcheck:Leak
+   match-leak-kinds: reachable
+   ...
+   fun:__nss_lookup_function
+}
+
+# -- SDL2 init ---------------------------------------------------------------
+{
+   sdl2_init_video
+   Memcheck:Leak
+   match-leak-kinds: reachable
+   ...
+   fun:SDL_Init*
+}
+{
+   sdl2_x11_init
+   Memcheck:Leak
+   match-leak-kinds: reachable
+   ...
+   fun:X11_*
+}
+{
+   sdl2_gl_context
+   Memcheck:Leak
+   match-leak-kinds: reachable
+   ...
+   fun:SDL_GL_*
+}
+
+# -- openh264 internals ------------------------------------------------------
+{
+   openh264_decoder_init
+   Memcheck:Leak
+   match-leak-kinds: reachable
+   ...
+   fun:WelsCreateDecoder
+}
+{
+   openh264_cond_uninit
+   Memcheck:Cond
+   ...
+   obj:*libopenh264*
+}
+{
+   openh264_value_uninit
+   Memcheck:Value8
+   ...
+   obj:*libopenh264*
+}
+
+# -- pthread / thread-local storage ------------------------------------------
+{
+   pthread_create_allocate
+   Memcheck:Leak
+   match-leak-kinds: possible
+   ...
+   fun:pthread_create@@*
+}

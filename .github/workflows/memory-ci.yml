@@ -1,0 +1,207 @@
+---
+name: Memory Analysis
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    paths:
+      - 'crates/oasis-video/**'
+      - 'crates/oasis-core/**'
+      - '.github/workflows/memory-ci.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: memory-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  DOCKER_BUILDKIT: 1
+  COMPOSE_DOCKER_CLI_BUILD: 1
+
+jobs:
+  # -- AddressSanitizer (use-after-free, overflow, leak detection) -----------
+  asan:
+    name: AddressSanitizer
+    runs-on: self-hosted
+    timeout-minutes: 45
+    continue-on-error: true
+    steps:
+      - name: Pre-checkout cleanup
+        run: |
+          for item in target .git/index.lock; do
+            if [ -d "$item" ] || [ -f "$item" ]; then
+              docker run --rm -v "$(pwd):/workspace" busybox:1.36.1 sh -c \
+                "rm -rf /workspace/$item" 2>/dev/null || \
+                sudo rm -rf "$item" 2>/dev/null || true
+            fi
+          done
+
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+          clean: true
+
+      - name: Set UID/GID
+        run: |
+          echo "USER_ID=$(id -u)" >> $GITHUB_ENV
+          echo "GROUP_ID=$(id -g)" >> $GITHUB_ENV
+
+      - name: Build CI Docker image
+        run: docker compose --profile ci build rust-ci
+
+      - name: Run tests with ASAN
+        run: |
+          set -o pipefail
+          docker compose --profile ci run --rm \
+            -e RUSTFLAGS="-Zsanitizer=address" \
+            -e CFLAGS="-fsanitize=address" \
+            -e ASAN_OPTIONS="detect_leaks=1:halt_on_error=0:print_summary=1" \
+            -e SDL_VIDEODRIVER=dummy \
+            rust-ci bash -c "
+              rustup component add rust-src --toolchain nightly
+              cargo +nightly test --workspace \
+                --target x86_64-unknown-linux-gnu \
+                -Zbuild-std \
+                --target-dir target/asan \
+                2>&1
+            " | tee asan_output.txt
+
+      - name: ASAN summary
+        if: always()
+        run: |
+          echo "### AddressSanitizer Results" >> $GITHUB_STEP_SUMMARY
+          if [ ! -f asan_output.txt ]; then
+            echo "No ASAN output captured." >> $GITHUB_STEP_SUMMARY
+            exit 0
+          fi
+          ERRORS=$(grep -cE '(ERROR: AddressSanitizer|SUMMARY:.*[1-9]+ error)' asan_output.txt 2>/dev/null) || ERRORS=0
+          LEAKS=$(grep -cE 'ERROR: LeakSanitizer' asan_output.txt 2>/dev/null) || LEAKS=0
+          if [ "$ERRORS" -gt 0 ] || [ "$LEAKS" -gt 0 ]; then
+            echo "ASAN detected issues:" >> $GITHUB_STEP_SUMMARY
+            echo "- Memory errors: $ERRORS" >> $GITHUB_STEP_SUMMARY
+            echo "- Leak reports: $LEAKS" >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            grep -A5 'ERROR:' asan_output.txt | head -60 >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+          else
+            echo "No memory errors or leaks detected." >> $GITHUB_STEP_SUMMARY
+          fi
+
+      - name: Upload ASAN report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: asan-report
+          path: asan_output.txt
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - name: Fix Docker file ownership
+        if: always()
+        run: |
+          if [ -d target ]; then
+            docker run --rm -v "$(pwd)/target:/workspace" busybox:1.36.1 \
+              chown -Rh "$(id -u):$(id -g)" /workspace 2>/dev/null || true
+          fi
+
+  # -- Valgrind Massif (heap profile with peak memory assertion) -------------
+  valgrind-massif:
+    name: Valgrind Massif (Heap Profile)
+    runs-on: self-hosted
+    timeout-minutes: 30
+    continue-on-error: true
+    steps:
+      - name: Pre-checkout cleanup
+        run: |
+          for item in target .git/index.lock; do
+            if [ -d "$item" ] || [ -f "$item" ]; then
+              docker run --rm -v "$(pwd):/workspace" busybox:1.36.1 sh -c \
+                "rm -rf /workspace/$item" 2>/dev/null || \
+                sudo rm -rf "$item" 2>/dev/null || true
+            fi
+          done
+
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+          clean: true
+
+      - name: Set UID/GID
+        run: |
+          echo "USER_ID=$(id -u)" >> $GITHUB_ENV
+          echo "GROUP_ID=$(id -g)" >> $GITHUB_ENV
+
+      - name: Build CI Docker image
+        run: docker compose --profile ci build rust-ci
+
+      - name: Build video-memprofile
+        run: |
+          docker compose --profile ci run --rm rust-ci \
+            cargo build -p oasis-video --bin video-memprofile --features h264
+
+      - name: Run Valgrind massif
+        run: |
+          mkdir -p valgrind-massif
+          docker compose --profile ci run --rm rust-ci bash -c "
+            valgrind --tool=massif --depth=15 \
+              --massif-out-file=/app/valgrind-massif/massif.out \
+              ./target/debug/video-memprofile \
+              tests/fixtures/test_320x240_2s.mp4 --frames 60 \
+              > /app/valgrind-massif/memprofile_stdout.txt \
+              2> /app/valgrind-massif/memprofile_stderr.txt
+
+            ms_print /app/valgrind-massif/massif.out \
+              > /app/valgrind-massif/ms_print_report.txt 2>&1 || true
+          "
+
+      - name: Check peak memory
+        if: always()
+        run: |
+          echo "### Valgrind Massif Results" >> $GITHUB_STEP_SUMMARY
+          if [ ! -f valgrind-massif/memprofile_stdout.txt ]; then
+            echo "No profiling output captured." >> $GITHUB_STEP_SUMMARY
+            exit 0
+          fi
+          cat valgrind-massif/memprofile_stderr.txt || true
+          PEAK=$(grep 'PEAK_RSS_KB=' valgrind-massif/memprofile_stdout.txt | head -1 | cut -d= -f2)
+          FRAMES=$(grep 'FRAME_COUNT=' valgrind-massif/memprofile_stdout.txt | head -1 | cut -d= -f2)
+          echo "- Peak RSS: ${PEAK:-unknown} KB" >> $GITHUB_STEP_SUMMARY
+          echo "- Frames decoded: ${FRAMES:-unknown}" >> $GITHUB_STEP_SUMMARY
+          if [ -n "$PEAK" ] && [ "$PEAK" -gt 102400 ] 2>/dev/null; then
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "**Warning:** Peak RSS ${PEAK} KB exceeds 100 MB threshold" >> $GITHUB_STEP_SUMMARY
+          fi
+          if [ -f valgrind-massif/ms_print_report.txt ]; then
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "<details><summary>Heap profile timeline</summary>" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            head -80 valgrind-massif/ms_print_report.txt >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            echo "</details>" >> $GITHUB_STEP_SUMMARY
+          fi
+
+      - name: Upload massif report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: valgrind-massif
+          path: valgrind-massif/
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - name: Fix Docker file ownership
+        if: always()
+        run: |
+          for dir in target valgrind-massif; do
+            if [ -d "$dir" ]; then
+              docker run --rm -v "$(pwd)/$dir:/workspace" busybox:1.36.1 \
+                chown -Rh "$(id -u):$(id -g)" /workspace 2>/dev/null || true
+            fi
+          done

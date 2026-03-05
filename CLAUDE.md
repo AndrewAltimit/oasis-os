@@ -64,6 +64,12 @@ format check -> clippy -> test -> release build -> cargo-deny -> PSP EBOOT build
 
 All steps run via `docker compose --profile ci run --rm rust-ci`.
 
+**Memory analysis** (`memory-ci.yml`, separate non-blocking workflow):
+- **ASAN** (AddressSanitizer) -- catches use-after-free, buffer overflow, leaks (~2x slowdown)
+- **Valgrind massif** -- heap profiling with peak memory assertions for video decode
+
+Both jobs use `continue-on-error: true` and run on pushes to main, PRs touching `crates/oasis-video/**` or `crates/oasis-core/**`, and `workflow_dispatch`.
+
 ## Architecture
 
 ### Crate Dependency Graph

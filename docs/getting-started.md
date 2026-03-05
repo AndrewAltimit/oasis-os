@@ -196,6 +196,38 @@ Output: `target/release/liboasis_ffi.so` (Linux), `.dylib` (macOS), or `.dll` (W
 
 See `docs/ffi-integration.md` for the C API reference and integration guide.
 
+## Memory Analysis (ASAN / Valgrind)
+
+The project includes a separate CI workflow (`memory-ci.yml`) for memory safety analysis:
+
+### AddressSanitizer (ASAN)
+
+Catches use-after-free, buffer overflows, and memory leaks at ~2x runtime cost:
+
+```bash
+# Single-crate ASAN test (requires nightly + rust-src)
+RUSTFLAGS="-Zsanitizer=address" cargo +nightly test -p oasis-video \
+  --target x86_64-unknown-linux-gnu -Zbuild-std --target-dir target/asan
+```
+
+### Valgrind Massif (Heap Profiling)
+
+Profile peak heap usage during video decode:
+
+```bash
+# Build the profiling binary
+cargo build -p oasis-video --bin video-memprofile --features h264
+
+# Run under valgrind massif
+valgrind --tool=massif --depth=15 \
+  ./target/debug/video-memprofile tests/fixtures/test_320x240_2s.mp4 --frames 60
+
+# View the heap timeline
+ms_print massif.out.*
+```
+
+The `video-memprofile` binary reports machine-readable `PEAK_RSS_KB=` and `FRAME_COUNT=` on stdout for CI assertion. The `[profile.asan]` Cargo profile (`opt-level=1`, inherits `dev`) is available for ASAN builds.
+
 ## Project Structure
 
 ```
