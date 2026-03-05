@@ -30,15 +30,10 @@ jobs:
     timeout-minutes: 45
     continue-on-error: true
     steps:
-      - name: Pre-checkout cleanup
+      - name: Fix workspace permissions
         run: |
-          for item in target .git/index.lock; do
-            if [ -d "$item" ] || [ -f "$item" ]; then
-              docker run --rm -v "$(pwd):/workspace" busybox:1.36.1 sh -c \
-                "rm -rf /workspace/$item" 2>/dev/null || \
-                sudo rm -rf "$item" 2>/dev/null || true
-            fi
-          done
+          docker run --rm -v "$(pwd):/workspace" busybox:1.36.1 \
+            chown -Rh "$(id -u):$(id -g)" /workspace 2>/dev/null || true
 
       - name: Checkout
         uses: actions/checkout@v4
@@ -116,15 +111,10 @@ jobs:
     timeout-minutes: 30
     continue-on-error: true
     steps:
-      - name: Pre-checkout cleanup
+      - name: Fix workspace permissions
         run: |
-          for item in target .git/index.lock; do
-            if [ -d "$item" ] || [ -f "$item" ]; then
-              docker run --rm -v "$(pwd):/workspace" busybox:1.36.1 sh -c \
-                "rm -rf /workspace/$item" 2>/dev/null || \
-                sudo rm -rf "$item" 2>/dev/null || true
-            fi
-          done
+          docker run --rm -v "$(pwd):/workspace" busybox:1.36.1 \
+            chown -Rh "$(id -u):$(id -g)" /workspace 2>/dev/null || true
 
       - name: Checkout
         uses: actions/checkout@v4
