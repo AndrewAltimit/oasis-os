@@ -22,7 +22,7 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
 # Install nightly toolchain (for format checking with edition 2024)
 RUN rustup install nightly \
     && rustup component add rustfmt clippy \
-    && rustup component add --toolchain nightly rustfmt
+    && rustup component add --toolchain nightly rustfmt rust-src
 
 # Install cargo-deny for license/advisory checks
 RUN --mount=type=cache,target=/usr/local/cargo/registry \

@@ -63,9 +63,9 @@ jobs:
             -e ASAN_OPTIONS="detect_leaks=1:halt_on_error=0:print_summary=1" \
             -e SDL_VIDEODRIVER=dummy \
             rust-ci bash -c "
-              rustup component add rust-src --toolchain nightly
+              TARGET=\$(rustc -vV | awk '/^host:/ { print \$2 }')
               cargo +nightly test --workspace \
-                --target x86_64-unknown-linux-gnu \
+                --target \$TARGET \
                 -Zbuild-std \
                 --target-dir target/asan \
                 2>&1
