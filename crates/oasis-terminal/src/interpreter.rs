@@ -1,7 +1,8 @@
 //! Command trait, registry, and dispatch logic.
 //!
-//! Supports quoted arguments, environment variables, command history,
-//! pipes, output redirection, command chaining, and glob expansion.
+//! Supports quoted arguments, environment variables, command substitution,
+//! command history, pipes, input/output redirection, command chaining,
+//! and glob expansion.
 
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
@@ -375,8 +376,9 @@ impl CommandRegistry {
 
     /// Parse and execute a command line.
     ///
-    /// Supports quoting, variable expansion, aliases, command chaining
-    /// (`;`, `&&`, `||`), pipes (`|`), and output redirection (`>`, `>>`).
+    /// Supports quoting, variable expansion, command substitution (`$(...)`),
+    /// aliases, command chaining (`;`, `&&`, `||`), pipes (`|`),
+    /// input redirection (`<`), and output redirection (`>`, `>>`).
     /// Command names are case-insensitive.
     pub fn execute(&self, line: &str, env: &mut Environment<'_>) -> Result<CommandOutput> {
         let trimmed = line.trim();
@@ -647,8 +649,11 @@ impl CommandRegistry {
             return self.execute_function_def_raw(rest);
         }
 
+        // Expand command substitutions ($(...)).
+        let after_subst = self.expand_substitutions(trimmed, env);
+
         // Expand variables.
-        let expanded = self.expand_variables(trimmed, &env.cwd);
+        let expanded = self.expand_variables(&after_subst, &env.cwd);
 
         // Tokenize with quote handling.
         let tokens = tokenize(&expanded)?;
@@ -726,6 +731,97 @@ impl CommandRegistry {
             return Ok(hist[n - 1].clone());
         }
         Ok(input.to_string())
+    }
+
+    // -- Command substitution --
+
+    /// Expand `$(command)` substitutions in the input string.
+    ///
+    /// Executes the inner command, captures its output, and replaces
+    /// the `$(...)` expression with the output (trailing newlines
+    /// trimmed). Supports one level of nesting
+    /// (e.g. `$(echo $(echo hi))`).
+    pub(crate) fn expand_substitutions(&self, input: &str, env: &mut Environment<'_>) -> String {
+        let chars: Vec<char> = input.chars().collect();
+        let mut result = String::with_capacity(input.len());
+        let mut i = 0;
+
+        while i < chars.len() {
+            // Skip single-quoted strings (no substitution inside).
+            if chars[i] == '\'' {
+                result.push('\'');
+                i += 1;
+                while i < chars.len() && chars[i] != '\'' {
+                    result.push(chars[i]);
+                    i += 1;
+                }
+                if i < chars.len() {
+                    result.push('\'');
+                    i += 1;
+                }
+                continue;
+            }
+
+            if chars[i] == '$' && i + 1 < chars.len() && chars[i + 1] == '(' {
+                // Find matching closing paren, respecting nesting.
+                let start = i + 2;
+                let mut depth = 1;
+                let mut j = start;
+                let mut in_sq = false;
+                let mut in_dq = false;
+
+                while j < chars.len() && depth > 0 {
+                    if in_sq {
+                        if chars[j] == '\'' {
+                            in_sq = false;
+                        }
+                    } else if in_dq {
+                        if chars[j] == '"' {
+                            in_dq = false;
+                        } else if chars[j] == '\\' {
+                            j += 1; // skip escaped char
+                        }
+                    } else {
+                        match chars[j] {
+                            '\'' => in_sq = true,
+                            '"' => in_dq = true,
+                            '(' if j > 0 && chars[j - 1] == '$' => {
+                                depth += 1;
+                            },
+                            '(' => {},
+                            ')' => depth -= 1,
+                            _ => {},
+                        }
+                    }
+                    if depth > 0 {
+                        j += 1;
+                    }
+                }
+
+                if depth == 0 {
+                    let inner: String = chars[start..j].iter().collect();
+                    let output = match self.execute(&inner, env) {
+                        Ok(ref out) => output_to_text(out),
+                        Err(e) => {
+                            env.stderr.push_str(&format!("command substitution: {e}"));
+                            String::new()
+                        },
+                    };
+                    // Trim trailing newlines (like bash).
+                    result.push_str(output.trim_end_matches('\n'));
+                    i = j + 1;
+                    continue;
+                }
+                // Unmatched paren -- pass through literally.
+                result.push('$');
+                i += 1;
+            } else {
+                result.push(chars[i]);
+                i += 1;
+            }
+        }
+
+        result
     }
 
     // -- Variable expansion --
@@ -3041,6 +3137,123 @@ mod tests {
         match reg.execute("   ", &mut env).unwrap() {
             CommandOutput::None => {},
             other => panic!("expected None, got {other:?}"),
+        }
+    }
+
+    // -- Command substitution tests --
+
+    #[test]
+    fn command_substitution_basic() {
+        let mut reg = CommandRegistry::new();
+        reg.register(Box::new(EchoCmd));
+        let mut vfs = MemoryVfs::new();
+        let mut env = make_env(&mut vfs);
+        match reg.execute("echo $(echo hello)", &mut env).unwrap() {
+            CommandOutput::Text(s) => assert_eq!(s, "hello"),
+            other => panic!("expected text, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn command_substitution_in_args() {
+        let mut reg = CommandRegistry::new();
+        reg.register(Box::new(EchoCmd));
+        let mut vfs = MemoryVfs::new();
+        let mut env = make_env(&mut vfs);
+        match reg
+            .execute("echo prefix-$(echo mid)-suffix", &mut env)
+            .unwrap()
+        {
+            CommandOutput::Text(s) => {
+                assert_eq!(s, "prefix-mid-suffix");
+            },
+            other => panic!("expected text, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn command_substitution_nested() {
+        let mut reg = CommandRegistry::new();
+        reg.register(Box::new(EchoCmd));
+        let mut vfs = MemoryVfs::new();
+        let mut env = make_env(&mut vfs);
+        match reg
+            .execute("echo $(echo $(echo nested))", &mut env)
+            .unwrap()
+        {
+            CommandOutput::Text(s) => {
+                assert_eq!(s, "nested");
+            },
+            other => panic!("expected text, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn command_substitution_trims_trailing_newlines() {
+        let mut reg = CommandRegistry::new();
+        reg.register(Box::new(EchoCmd));
+        let mut vfs = MemoryVfs::new();
+        let mut env = make_env(&mut vfs);
+        let result = reg.expand_substitutions("$(echo test)", &mut env);
+        assert_eq!(result, "test");
+    }
+
+    #[test]
+    fn command_substitution_preserves_single_quotes() {
+        let mut reg = CommandRegistry::new();
+        reg.register(Box::new(EchoCmd));
+        let mut vfs = MemoryVfs::new();
+        let mut env = make_env(&mut vfs);
+        // $(...) inside single quotes should NOT be expanded.
+        match reg.execute("echo '$(echo nope)'", &mut env).unwrap() {
+            CommandOutput::Text(s) => {
+                assert_eq!(s, "$(echo nope)");
+            },
+            other => {
+                panic!("expected literal text, got {other:?}");
+            },
+        }
+    }
+
+    #[test]
+    fn command_substitution_multiple() {
+        let mut reg = CommandRegistry::new();
+        reg.register(Box::new(EchoCmd));
+        let mut vfs = MemoryVfs::new();
+        let mut env = make_env(&mut vfs);
+        match reg.execute("echo $(echo a)-$(echo b)", &mut env).unwrap() {
+            CommandOutput::Text(s) => {
+                assert_eq!(s, "a-b");
+            },
+            other => panic!("expected text, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn command_substitution_unmatched_paren_passthrough() {
+        let mut reg = CommandRegistry::new();
+        reg.register(Box::new(EchoCmd));
+        let mut vfs = MemoryVfs::new();
+        let mut env = make_env(&mut vfs);
+        // Unmatched $( should pass through as literal.
+        let result = reg.expand_substitutions("$(unclosed", &mut env);
+        assert_eq!(result, "$(unclosed");
+    }
+
+    #[test]
+    fn command_substitution_with_variable() {
+        let mut reg = CommandRegistry::new();
+        reg.register(Box::new(EchoCmd));
+        reg.set_variable("X", "world");
+        let mut vfs = MemoryVfs::new();
+        let mut env = make_env(&mut vfs);
+        // Variable expansion happens after substitution, so $X in
+        // the outer command should still expand.
+        match reg.execute("echo $(echo hello) $X", &mut env).unwrap() {
+            CommandOutput::Text(s) => {
+                assert_eq!(s, "hello world");
+            },
+            other => panic!("expected text, got {other:?}"),
         }
     }
 }

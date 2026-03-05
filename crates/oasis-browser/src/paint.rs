@@ -194,6 +194,7 @@ fn paint_box(
     match &layout_box.box_type {
         BoxType::Block
         | BoxType::Flex
+        | BoxType::Grid
         | BoxType::Anonymous
         | BoxType::TableWrapper
         | BoxType::TableRow

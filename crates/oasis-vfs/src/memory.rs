@@ -168,10 +168,14 @@ impl Vfs for MemoryVfs {
         if let Some(perms) = self.permissions.get(path.as_ref())
             && !perms.owner_can_write()
         {
-            return Err(OasisError::Vfs(format!("permission denied (read-only): {path}")));
+            return Err(OasisError::Vfs(format!(
+                "permission denied (read-only): {path}"
+            )));
         }
         let owned = path.into_owned();
-        self.permissions.entry(owned.clone()).or_insert_with(FilePermissions::default_file);
+        self.permissions
+            .entry(owned.clone())
+            .or_insert_with(FilePermissions::default_file);
         self.nodes.insert(owned, Node::File(data.to_vec()));
         Ok(())
     }
@@ -202,7 +206,9 @@ impl Vfs for MemoryVfs {
             self.mkdir(&par)?;
         }
         let owned = path.into_owned();
-        self.permissions.entry(owned.clone()).or_insert_with(FilePermissions::default_dir);
+        self.permissions
+            .entry(owned.clone())
+            .or_insert_with(FilePermissions::default_dir);
         self.nodes.insert(owned, Node::Dir);
         Ok(())
     }
@@ -246,10 +252,14 @@ impl Vfs for MemoryVfs {
         if !self.nodes.contains_key(path.as_ref()) {
             return Err(OasisError::Vfs(format!("no such path: {path}")));
         }
-        Ok(self.permissions.get(path.as_ref()).cloned().unwrap_or_else(|| match self.nodes.get(path.as_ref()) {
-            Some(Node::Dir) => FilePermissions::default_dir(),
-            _ => FilePermissions::default_file(),
-        }))
+        Ok(self
+            .permissions
+            .get(path.as_ref())
+            .cloned()
+            .unwrap_or_else(|| match self.nodes.get(path.as_ref()) {
+                Some(Node::Dir) => FilePermissions::default_dir(),
+                _ => FilePermissions::default_file(),
+            }))
     }
 
     fn set_permissions(&mut self, path: &str, perms: FilePermissions) -> Result<()> {
@@ -649,7 +659,14 @@ mod tests {
     fn chmod_enforces_readonly() {
         let mut vfs = MemoryVfs::new();
         vfs.write("/file", b"data").unwrap();
-        vfs.set_permissions("/file", FilePermissions { owner: "user".to_string(), mode: 0o444 }).unwrap();
+        vfs.set_permissions(
+            "/file",
+            FilePermissions {
+                owner: "user".to_string(),
+                mode: 0o444,
+            },
+        )
+        .unwrap();
         assert!(vfs.write("/file", b"new").is_err());
         assert_eq!(vfs.read("/file").unwrap(), b"data");
     }
@@ -658,9 +675,23 @@ mod tests {
     fn chmod_restore_write() {
         let mut vfs = MemoryVfs::new();
         vfs.write("/file", b"data").unwrap();
-        vfs.set_permissions("/file", FilePermissions { owner: "user".to_string(), mode: 0o444 }).unwrap();
+        vfs.set_permissions(
+            "/file",
+            FilePermissions {
+                owner: "user".to_string(),
+                mode: 0o444,
+            },
+        )
+        .unwrap();
         assert!(vfs.write("/file", b"new").is_err());
-        vfs.set_permissions("/file", FilePermissions { owner: "user".to_string(), mode: 0o644 }).unwrap();
+        vfs.set_permissions(
+            "/file",
+            FilePermissions {
+                owner: "user".to_string(),
+                mode: 0o644,
+            },
+        )
+        .unwrap();
         vfs.write("/file", b"new").unwrap();
         assert_eq!(vfs.read("/file").unwrap(), b"new");
     }
@@ -669,7 +700,14 @@ mod tests {
     fn chown_sets_owner() {
         let mut vfs = MemoryVfs::new();
         vfs.write("/file", b"data").unwrap();
-        vfs.set_permissions("/file", FilePermissions { owner: "root".to_string(), mode: 0o644 }).unwrap();
+        vfs.set_permissions(
+            "/file",
+            FilePermissions {
+                owner: "root".to_string(),
+                mode: 0o644,
+            },
+        )
+        .unwrap();
         let perms = vfs.get_permissions("/file").unwrap();
         assert_eq!(perms.owner, "root");
     }
@@ -678,7 +716,14 @@ mod tests {
     fn permissions_removed_on_delete() {
         let mut vfs = MemoryVfs::new();
         vfs.write("/tmp_file", b"data").unwrap();
-        vfs.set_permissions("/tmp_file", FilePermissions { owner: "user".to_string(), mode: 0o700 }).unwrap();
+        vfs.set_permissions(
+            "/tmp_file",
+            FilePermissions {
+                owner: "user".to_string(),
+                mode: 0o700,
+            },
+        )
+        .unwrap();
         vfs.remove("/tmp_file").unwrap();
         assert!(vfs.get_permissions("/tmp_file").is_err());
     }

@@ -72,6 +72,13 @@ jobs:
       - name: Clippy
         run: docker compose --profile ci run --rm rust-ci cargo clippy --workspace -- -D warnings
 
+      # -- Documentation ------------------------------------------------------
+      - name: Doc build
+        run: >
+          docker compose --profile ci run --rm
+          -e RUSTDOCFLAGS="-D warnings"
+          rust-ci cargo doc --workspace --no-deps
+
       # -- Tests -------------------------------------------------------------
       - name: Test
         run: |

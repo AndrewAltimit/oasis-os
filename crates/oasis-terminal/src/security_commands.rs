@@ -30,10 +30,8 @@ impl Command for ChmodCmd {
         }
         let mode_str = args[0];
         let path = resolve_path(&env.cwd, args[1]);
-        let mode =
-            u16::from_str_radix(mode_str, 8).map_err(|_| {
-                OasisError::Command(format!("invalid octal mode: {mode_str}"))
-            })?;
+        let mode = u16::from_str_radix(mode_str, 8)
+            .map_err(|_| OasisError::Command(format!("invalid octal mode: {mode_str}")))?;
         let mut perms = env.vfs.get_permissions(&path)?;
         perms.mode = mode;
         env.vfs.set_permissions(&path, perms)?;

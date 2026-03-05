@@ -150,7 +150,11 @@ impl Vfs for RealVfs {
         if !real_path.exists() {
             return Err(OasisError::Vfs(format!("no such path: {path}")));
         }
-        if real_path.is_dir() { Ok(FilePermissions::default_dir()) } else { Ok(FilePermissions::default_file()) }
+        if real_path.is_dir() {
+            Ok(FilePermissions::default_dir())
+        } else {
+            Ok(FilePermissions::default_file())
+        }
     }
 
     fn set_permissions(&mut self, path: &str, _perms: FilePermissions) -> Result<()> {

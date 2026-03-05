@@ -57,15 +57,31 @@ pub struct FilePermissions {
 
 impl FilePermissions {
     /// Default permissions for a regular file (mode 0o644, owner "user").
-    pub fn default_file() -> Self { Self { owner: "user".to_string(), mode: 0o644 } }
+    pub fn default_file() -> Self {
+        Self {
+            owner: "user".to_string(),
+            mode: 0o644,
+        }
+    }
     /// Default permissions for a directory (mode 0o755, owner "user").
-    pub fn default_dir() -> Self { Self { owner: "user".to_string(), mode: 0o755 } }
+    pub fn default_dir() -> Self {
+        Self {
+            owner: "user".to_string(),
+            mode: 0o755,
+        }
+    }
     /// Check if the owner has write permission.
-    pub fn owner_can_write(&self) -> bool { self.mode & 0o200 != 0 }
+    pub fn owner_can_write(&self) -> bool {
+        self.mode & 0o200 != 0
+    }
     /// Check if the owner has read permission.
-    pub fn owner_can_read(&self) -> bool { self.mode & 0o400 != 0 }
+    pub fn owner_can_read(&self) -> bool {
+        self.mode & 0o400 != 0
+    }
     /// Check if the owner has execute permission.
-    pub fn owner_can_execute(&self) -> bool { self.mode & 0o100 != 0 }
+    pub fn owner_can_execute(&self) -> bool {
+        self.mode & 0o100 != 0
+    }
 }
 
 /// The virtual file system trait.

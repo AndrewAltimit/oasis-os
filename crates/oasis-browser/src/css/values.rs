@@ -26,6 +26,7 @@ pub enum Display {
     Inline,
     InlineBlock,
     Flex,
+    Grid,
     ListItem,
     Table,
     TableRow,
@@ -307,6 +308,14 @@ pub struct BoxShadow {
     pub color: Color,
 }
 
+/// A single CSS Grid track size.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum GridTrackSize {
+    Px(f32),
+    Fr(f32),
+    Auto,
+}
+
 // -----------------------------------------------------------------------
 // CssValue helper
 // -----------------------------------------------------------------------
@@ -430,6 +439,9 @@ pub struct ComputedStyle {
     pub before_content: Option<String>,
     pub after_content: Option<String>,
 
+    pub before_style: Option<Box<ComputedStyle>>,
+    pub after_style: Option<Box<ComputedStyle>>,
+
     // -- Margin auto flags (for block centering) -------------------------
     pub margin_left_auto: bool,
     pub margin_right_auto: bool,
@@ -445,6 +457,15 @@ pub struct ComputedStyle {
     pub flex_shrink: f32,
     pub flex_basis: Dimension,
     pub gap: f32,
+
+    pub grid_template_columns: Vec<GridTrackSize>,
+    pub grid_template_rows: Vec<GridTrackSize>,
+    pub grid_column_start: Option<i32>,
+    pub grid_column_end: Option<i32>,
+    pub grid_row_start: Option<i32>,
+    pub grid_row_end: Option<i32>,
+    pub column_gap: f32,
+    pub row_gap: f32,
 
     // -- Percentage padding/margin (resolved against containing width) ---
     /// When `Some(pct)`, padding-top was specified as a percentage.
@@ -566,6 +587,9 @@ impl Default for ComputedStyle {
             before_content: None,
             after_content: None,
 
+            before_style: None,
+            after_style: None,
+
             margin_left_auto: false,
             margin_right_auto: false,
             margin_top_auto: false,
@@ -579,6 +603,15 @@ impl Default for ComputedStyle {
             flex_shrink: 1.0,
             flex_basis: Dimension::Auto,
             gap: 0.0,
+
+            grid_template_columns: Vec::new(),
+            grid_template_rows: Vec::new(),
+            grid_column_start: None,
+            grid_column_end: None,
+            grid_row_start: None,
+            grid_row_end: None,
+            column_gap: 0.0,
+            row_gap: 0.0,
 
             padding_top_pct: None,
             padding_right_pct: None,
@@ -678,6 +711,7 @@ impl ComputedStyle {
                         "table-row" => Display::TableRow,
                         "table-cell" => Display::TableCell,
                         "flex" => Display::Flex,
+                        "grid" => Display::Grid,
                         "none" => Display::None,
                         _ => return,
                     };
@@ -1227,8 +1261,53 @@ impl ComputedStyle {
             "flex-basis" => {
                 self.flex_basis = resolve_dimension(value, parent_font_size);
             },
-            "gap" | "row-gap" | "column-gap" => {
-                self.gap = resolve_length(value, parent_font_size);
+            "gap" | "grid-gap" => {
+                let v = resolve_length(value, parent_font_size);
+                self.gap = v;
+                self.column_gap = v;
+                self.row_gap = v;
+            },
+            "column-gap" | "grid-column-gap" => {
+                self.column_gap = resolve_length(value, parent_font_size);
+            },
+            "row-gap" | "grid-row-gap" => {
+                self.row_gap = resolve_length(value, parent_font_size);
+            },
+            "grid-template-columns" => {
+                self.grid_template_columns = parse_grid_template(value, parent_font_size);
+            },
+            "grid-template-rows" => {
+                self.grid_template_rows = parse_grid_template(value, parent_font_size);
+            },
+            "grid-column-start" => {
+                if let CssValue::Number(n) = value {
+                    self.grid_column_start = Some(*n as i32);
+                }
+            },
+            "grid-column-end" => {
+                if let CssValue::Number(n) = value {
+                    self.grid_column_end = Some(*n as i32);
+                }
+            },
+            "grid-column" => {
+                if let CssValue::Number(n) = value {
+                    self.grid_column_start = Some(*n as i32);
+                }
+            },
+            "grid-row-start" => {
+                if let CssValue::Number(n) = value {
+                    self.grid_row_start = Some(*n as i32);
+                }
+            },
+            "grid-row-end" => {
+                if let CssValue::Number(n) = value {
+                    self.grid_row_end = Some(*n as i32);
+                }
+            },
+            "grid-row" => {
+                if let CssValue::Number(n) = value {
+                    self.grid_row_start = Some(*n as i32);
+                }
             },
 
             // -- Visual effects -----------------------------------------
@@ -1577,6 +1656,92 @@ fn resolve_line_height(value: &CssValue, font_size: f32, parent_font_size: f32) 
 // -----------------------------------------------------------------------
 // Tests
 // -----------------------------------------------------------------------
+
+/// Parse a grid-template-columns or grid-template-rows value.
+fn parse_grid_template(value: &CssValue, parent_font_size: f32) -> Vec<GridTrackSize> {
+    match value {
+        CssValue::Keyword(kw) if kw == "none" => Vec::new(),
+        CssValue::Keyword(kw) if kw == "auto" => vec![GridTrackSize::Auto],
+        CssValue::Keyword(kw) => parse_grid_template_str(kw, parent_font_size),
+        CssValue::String(s) => parse_grid_template_str(s, parent_font_size),
+        CssValue::Length(n, unit) => {
+            let px = match unit {
+                LengthUnit::Px => *n,
+                LengthUnit::Em => *n * parent_font_size,
+                LengthUnit::Rem => *n * ROOT_FONT_SIZE,
+                LengthUnit::Pt => *n * 1.333,
+            };
+            vec![GridTrackSize::Px(px)]
+        },
+        CssValue::Number(n) => vec![GridTrackSize::Px(*n)],
+        CssValue::Multiple(vals) => {
+            let mut tracks = Vec::new();
+            for v in vals {
+                match v {
+                    CssValue::Keyword(kw) if kw == "auto" => tracks.push(GridTrackSize::Auto),
+                    CssValue::Keyword(kw) => {
+                        if let Some(t) = parse_single_track_str(kw) {
+                            tracks.push(t);
+                        }
+                    },
+                    CssValue::Length(px, LengthUnit::Px) => {
+                        tracks.push(GridTrackSize::Px(*px));
+                    },
+                    CssValue::Number(n) => tracks.push(GridTrackSize::Px(*n)),
+                    CssValue::String(s) => {
+                        if let Some(t) = parse_single_track_str(s) {
+                            tracks.push(t);
+                        }
+                    },
+                    _ => {},
+                }
+            }
+            tracks
+        },
+        _ => Vec::new(),
+    }
+}
+
+fn parse_single_track_str(s: &str) -> Option<GridTrackSize> {
+    let s = s.trim();
+    if s == "auto" {
+        Some(GridTrackSize::Auto)
+    } else if let Some(fr) = s.strip_suffix("fr") {
+        fr.trim().parse::<f32>().ok().map(GridTrackSize::Fr)
+    } else if let Some(px) = s.strip_suffix("px") {
+        px.trim().parse::<f32>().ok().map(GridTrackSize::Px)
+    } else if let Ok(n) = s.parse::<f32>() {
+        Some(GridTrackSize::Px(n))
+    } else {
+        None
+    }
+}
+
+fn parse_grid_template_str(s: &str, _parent_font_size: f32) -> Vec<GridTrackSize> {
+    let s = s.trim();
+    if s == "none" {
+        return Vec::new();
+    }
+    let mut tracks = Vec::new();
+    if let Some(rest) = s.strip_prefix("repeat(")
+        && let Some(inner) = rest.strip_suffix(')')
+        && let Some((cs, vs)) = inner.split_once(',')
+        && let Ok(count) = cs.trim().parse::<usize>()
+    {
+        if let Some(track) = parse_single_track_str(vs.trim()) {
+            for _ in 0..count {
+                tracks.push(track);
+            }
+        }
+        return tracks;
+    }
+    for token in s.split_whitespace() {
+        if let Some(track) = parse_single_track_str(token) {
+            tracks.push(track);
+        }
+    }
+    tracks
+}
 
 #[cfg(test)]
 mod tests {
@@ -2022,6 +2187,10 @@ mod tests {
                     | "justify-content" | "align-items"
                     | "flex-grow" | "flex-shrink" | "flex-basis"
                     | "gap" | "row-gap" | "column-gap"
+                    | "grid-template-columns" | "grid-template-rows"
+                    | "grid-column" | "grid-column-start" | "grid-column-end"
+                    | "grid-row" | "grid-row-start" | "grid-row-end"
+                    | "grid-gap" | "grid-row-gap" | "grid-column-gap"
                     | "top" | "right" | "bottom" | "left"
                     | "max-width" | "min-width"
                     | "max-height" | "min-height"

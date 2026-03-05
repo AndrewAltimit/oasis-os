@@ -168,10 +168,14 @@ impl Vfs for GameAssetVfs {
         if let Some(perms) = self.permissions.get(&path)
             && !perms.owner_can_write()
         {
-            return Err(OasisError::Vfs(format!("permission denied (read-only): {path}")));
+            return Err(OasisError::Vfs(format!(
+                "permission denied (read-only): {path}"
+            )));
         }
         self.deleted.remove(&path);
-        self.permissions.entry(path.clone()).or_insert_with(FilePermissions::default_file);
+        self.permissions
+            .entry(path.clone())
+            .or_insert_with(FilePermissions::default_file);
         self.overlay.insert(path, Node::File(data.to_vec()));
         Ok(())
     }
@@ -202,7 +206,9 @@ impl Vfs for GameAssetVfs {
             self.mkdir(&par)?;
         }
         self.deleted.remove(&path);
-        self.permissions.entry(path.clone()).or_insert_with(FilePermissions::default_dir);
+        self.permissions
+            .entry(path.clone())
+            .or_insert_with(FilePermissions::default_dir);
         self.overlay.insert(path, Node::Dir);
         Ok(())
     }
@@ -247,9 +253,11 @@ impl Vfs for GameAssetVfs {
         if self.effective_entry(&path).is_none() {
             return Err(OasisError::Vfs(format!("no such path: {path}")));
         }
-        Ok(self.permissions.get(&path).cloned().unwrap_or_else(|| match self.effective_entry(&path) {
-            Some(Node::Dir) => FilePermissions::default_dir(),
-            _ => FilePermissions::default_file(),
+        Ok(self.permissions.get(&path).cloned().unwrap_or_else(|| {
+            match self.effective_entry(&path) {
+                Some(Node::Dir) => FilePermissions::default_dir(),
+                _ => FilePermissions::default_file(),
+            }
         }))
     }
 
@@ -490,7 +498,14 @@ mod tests {
         let mut vfs = GameAssetVfs::new();
         vfs.add_base_dir("/etc");
         vfs.add_base_file("/etc/config", b"original");
-        vfs.set_permissions("/etc/config", FilePermissions { owner: "user".to_string(), mode: 0o444 }).unwrap();
+        vfs.set_permissions(
+            "/etc/config",
+            FilePermissions {
+                owner: "user".to_string(),
+                mode: 0o444,
+            },
+        )
+        .unwrap();
         assert!(vfs.write("/etc/config", b"hacked").is_err());
         assert_eq!(vfs.read("/etc/config").unwrap(), b"original");
     }

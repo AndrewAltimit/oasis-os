@@ -199,6 +199,7 @@ pub unsafe extern "C" fn oasis_create(
         let _ = env_logger::try_init();
     });
 
+    // SAFETY: Caller guarantees pointers are null or valid C strings per function safety contract.
     let skin_str = unsafe { c_str_to_str(skin_toml) };
     let layout_str = unsafe { c_str_to_str(layout_toml) };
     let features_str = unsafe { c_str_to_str(features_toml) };
@@ -276,6 +277,7 @@ pub unsafe extern "C" fn oasis_create(
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn oasis_destroy(handle: *mut OasisInstance) {
     if !handle.is_null() {
+        // SAFETY: Reclaiming ownership of handle allocated by `oasis_create` via `Box::into_raw`.
         let mut instance = unsafe { Box::from_raw(handle) };
         let _ = instance.audio.shutdown();
         let _ = instance.backend.shutdown();
@@ -292,6 +294,7 @@ pub unsafe extern "C" fn oasis_destroy(handle: *mut OasisInstance) {
 /// `handle` must be a valid, non-null instance pointer.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn oasis_tick(handle: *mut OasisInstance, _delta_seconds: f32) {
+    // SAFETY: Caller guarantees `handle` is valid and non-null per function safety contract.
     let Some(instance) = (unsafe { handle.as_mut() }) else {
         return;
     };
@@ -362,9 +365,11 @@ pub unsafe extern "C" fn oasis_send_input(
     handle: *mut OasisInstance,
     event: *const OasisInputEvent,
 ) {
+    // SAFETY: Caller guarantees `handle` is valid and non-null per function safety contract.
     let Some(instance) = (unsafe { handle.as_mut() }) else {
         return;
     };
+    // SAFETY: Caller guarantees `event` is valid and non-null per function safety contract.
     let Some(evt) = (unsafe { event.as_ref() }) else {
         return;
     };
@@ -403,13 +408,16 @@ pub unsafe extern "C" fn oasis_get_buffer(
     out_width: *mut u32,
     out_height: *mut u32,
 ) -> *const u8 {
+    // SAFETY: Caller guarantees `handle` is valid and non-null per function safety contract.
     let Some(instance) = (unsafe { handle.as_ref() }) else {
         return std::ptr::null();
     };
 
+    // SAFETY: Pointer is either null (handled by `as_mut()` returning None) or valid per caller.
     if let Some(w) = unsafe { out_width.as_mut() } {
         *w = instance.width;
     }
+    // SAFETY: Pointer is either null (handled by `as_mut()` returning None) or valid per caller.
     if let Some(h) = unsafe { out_height.as_mut() } {
         *h = instance.height;
     }
@@ -424,6 +432,7 @@ pub unsafe extern "C" fn oasis_get_buffer(
 /// `handle` must be valid and non-null.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn oasis_get_dirty(handle: *mut OasisInstance) -> bool {
+    // SAFETY: Caller guarantees `handle` is valid and non-null per function safety contract.
     let Some(instance) = (unsafe { handle.as_mut() }) else {
         return false;
     };
@@ -448,9 +457,11 @@ pub unsafe extern "C" fn oasis_send_command(
     handle: *mut OasisInstance,
     cmd: *const c_char,
 ) -> *mut c_char {
+    // SAFETY: Caller guarantees `handle` is valid and non-null per function safety contract.
     let Some(instance) = (unsafe { handle.as_mut() }) else {
         return std::ptr::null_mut();
     };
+    // SAFETY: Caller guarantees pointer is null or a valid C string per function safety contract.
     let Some(cmd_str) = (unsafe { c_str_to_str(cmd) }) else {
         return std::ptr::null_mut();
     };
@@ -540,6 +551,7 @@ pub unsafe extern "C" fn oasis_send_command(
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn oasis_free_string(ptr: *mut c_char) {
     if !ptr.is_null() {
+        // SAFETY: Reclaiming ownership of CString allocated by `CString::into_raw`.
         drop(unsafe { CString::from_raw(ptr) });
     }
 }
@@ -557,6 +569,7 @@ pub unsafe extern "C" fn oasis_free_string(ptr: *mut c_char) {
 /// `handle` must be valid. `path` must be a valid C string or null.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn oasis_set_vfs_root(handle: *mut OasisInstance, _path: *const c_char) {
+    // SAFETY: Caller guarantees `handle` is valid and non-null per function safety contract.
     let Some(instance) = (unsafe { handle.as_mut() }) else {
         return;
     };
@@ -582,6 +595,7 @@ pub unsafe extern "C" fn oasis_register_callback(
     event: u32,
     cb: OasisCallback,
 ) {
+    // SAFETY: Caller guarantees `handle` is valid and non-null per function safety contract.
     let Some(instance) = (unsafe { handle.as_mut() }) else {
         return;
     };
@@ -604,15 +618,18 @@ pub unsafe extern "C" fn oasis_add_vfs_file(
     data: *const u8,
     data_len: u32,
 ) {
+    // SAFETY: Caller guarantees `handle` is valid and non-null per function safety contract.
     let Some(instance) = (unsafe { handle.as_mut() }) else {
         return;
     };
+    // SAFETY: Caller guarantees pointer is null or a valid C string per function safety contract.
     let Some(path_str) = (unsafe { c_str_to_str(path) }) else {
         return;
     };
     if data.is_null() {
         return;
     }
+    // SAFETY: Caller guarantees `data` is valid for `data_len` bytes; null check above.
     let slice = unsafe { std::slice::from_raw_parts(data, data_len as usize) };
     instance.vfs.add_base_file(path_str, slice);
 }
@@ -639,6 +656,7 @@ pub unsafe extern "C" fn oasis_set_audio_callback(
     handle: *mut OasisInstance,
     cb: OasisAudioCallback,
 ) {
+    // SAFETY: Caller guarantees `handle` is valid and non-null per function safety contract.
     let Some(instance) = (unsafe { handle.as_mut() }) else {
         return;
     };
@@ -656,12 +674,14 @@ pub unsafe extern "C" fn oasis_audio_load(
     data: *const u8,
     data_len: u32,
 ) -> u64 {
+    // SAFETY: Caller guarantees `handle` is valid and non-null per function safety contract.
     let Some(instance) = (unsafe { handle.as_mut() }) else {
         return u64::MAX;
     };
     if data.is_null() || data_len == 0 {
         return u64::MAX;
     }
+    // SAFETY: Caller guarantees `data` is valid for `data_len` bytes; null check above.
     let slice = unsafe { std::slice::from_raw_parts(data, data_len as usize) };
     match instance.audio.load_track(slice) {
         Ok(id) => id.0,
@@ -676,6 +696,7 @@ pub unsafe extern "C" fn oasis_audio_load(
 /// `handle` must be valid.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn oasis_audio_play(handle: *mut OasisInstance, track_id: u64) -> bool {
+    // SAFETY: Caller guarantees `handle` is valid and non-null per function safety contract.
     let Some(instance) = (unsafe { handle.as_mut() }) else {
         return false;
     };
@@ -692,6 +713,7 @@ pub unsafe extern "C" fn oasis_audio_play(handle: *mut OasisInstance, track_id: 
 /// `handle` must be valid.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn oasis_audio_pause(handle: *mut OasisInstance) -> bool {
+    // SAFETY: Caller guarantees `handle` is valid and non-null per function safety contract.
     let Some(instance) = (unsafe { handle.as_mut() }) else {
         return false;
     };
@@ -705,6 +727,7 @@ pub unsafe extern "C" fn oasis_audio_pause(handle: *mut OasisInstance) -> bool {
 /// `handle` must be valid.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn oasis_audio_resume(handle: *mut OasisInstance) -> bool {
+    // SAFETY: Caller guarantees `handle` is valid and non-null per function safety contract.
     let Some(instance) = (unsafe { handle.as_mut() }) else {
         return false;
     };
@@ -718,6 +741,7 @@ pub unsafe extern "C" fn oasis_audio_resume(handle: *mut OasisInstance) -> bool 
 /// `handle` must be valid.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn oasis_audio_stop(handle: *mut OasisInstance) -> bool {
+    // SAFETY: Caller guarantees `handle` is valid and non-null per function safety contract.
     let Some(instance) = (unsafe { handle.as_mut() }) else {
         return false;
     };
@@ -731,6 +755,7 @@ pub unsafe extern "C" fn oasis_audio_stop(handle: *mut OasisInstance) -> bool {
 /// `handle` must be valid.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn oasis_audio_set_volume(handle: *mut OasisInstance, volume: u8) -> bool {
+    // SAFETY: Caller guarantees `handle` is valid and non-null per function safety contract.
     let Some(instance) = (unsafe { handle.as_mut() }) else {
         return false;
     };
@@ -744,6 +769,7 @@ pub unsafe extern "C" fn oasis_audio_set_volume(handle: *mut OasisInstance, volu
 /// `handle` must be valid.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn oasis_audio_get_volume(handle: *mut OasisInstance) -> u8 {
+    // SAFETY: Caller guarantees `handle` is valid and non-null per function safety contract.
     let Some(instance) = (unsafe { handle.as_ref() }) else {
         return 0;
     };
@@ -757,6 +783,7 @@ pub unsafe extern "C" fn oasis_audio_get_volume(handle: *mut OasisInstance) -> u
 /// `handle` must be valid.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn oasis_audio_is_playing(handle: *mut OasisInstance) -> bool {
+    // SAFETY: Caller guarantees `handle` is valid and non-null per function safety contract.
     let Some(instance) = (unsafe { handle.as_ref() }) else {
         return false;
     };
@@ -849,9 +876,11 @@ fn decode_loop(
 #[cfg(feature = "video-decode")]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn oasis_video_play(handle: *mut OasisInstance, path: *const c_char) -> i32 {
+    // SAFETY: Caller guarantees `handle` is valid and non-null per function safety contract.
     let Some(instance) = (unsafe { handle.as_mut() }) else {
         return -1;
     };
+    // SAFETY: Caller guarantees pointer is null or a valid C string per function safety contract.
     let Some(path_str) = (unsafe { c_str_to_str(path) }) else {
         return -1;
     };
@@ -922,6 +951,7 @@ fn stop_video_thread(instance: &mut OasisInstance) {
 #[cfg(feature = "video-decode")]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn oasis_video_stop(handle: *mut OasisInstance) {
+    // SAFETY: Caller guarantees `handle` is valid and non-null per function safety contract.
     let Some(instance) = (unsafe { handle.as_mut() }) else {
         return;
     };
@@ -939,6 +969,7 @@ pub unsafe extern "C" fn oasis_video_stop(handle: *mut OasisInstance) {
 #[cfg(feature = "video-decode")]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn oasis_video_is_playing(handle: *mut OasisInstance) -> i32 {
+    // SAFETY: Caller guarantees `handle` is valid and non-null per function safety contract.
     let Some(instance) = (unsafe { handle.as_ref() }) else {
         return 0;
     };
@@ -964,6 +995,7 @@ pub unsafe extern "C" fn oasis_video_next_frame(
     out_w: *mut u32,
     out_h: *mut u32,
 ) -> i32 {
+    // SAFETY: Caller guarantees `handle` is valid and non-null per function safety contract.
     let Some(instance) = (unsafe { handle.as_ref() }) else {
         return -1;
     };
@@ -982,7 +1014,7 @@ pub unsafe extern "C" fn oasis_video_next_frame(
             if buf.is_null() || f.rgba.len() != byte_len {
                 return -1;
             }
-            // SAFETY: Caller guarantees buf has enough space.
+            // SAFETY: Caller guarantees destination buffer has sufficient space.
             unsafe {
                 std::ptr::copy_nonoverlapping(f.rgba.as_ptr(), buf, byte_len);
                 if !out_w.is_null() {
@@ -1016,6 +1048,7 @@ pub unsafe extern "C" fn oasis_video_get_audio(
     buf: *mut f32,
     max_samples: u32,
 ) -> i32 {
+    // SAFETY: Caller guarantees `handle` is valid and non-null per function safety contract.
     let Some(instance) = (unsafe { handle.as_ref() }) else {
         return -1;
     };
@@ -1045,7 +1078,7 @@ pub unsafe extern "C" fn oasis_video_get_audio(
 
         if available <= remaining {
             // Copy entire chunk.
-            // SAFETY: Caller guarantees buf has enough space.
+            // SAFETY: Caller guarantees destination buffer has sufficient space.
             unsafe {
                 std::ptr::copy_nonoverlapping(
                     chunk.pcm_f32.as_ptr(),
@@ -1057,7 +1090,7 @@ pub unsafe extern "C" fn oasis_video_get_audio(
             ring.pop_front();
         } else {
             // Partial copy — take what fits and drain consumed samples.
-            // SAFETY: Caller guarantees buf has space for `remaining` samples.
+            // SAFETY: Caller guarantees destination buffer has sufficient space.
             unsafe {
                 std::ptr::copy_nonoverlapping(
                     chunk.pcm_f32.as_ptr(),

@@ -142,6 +142,7 @@ pub enum BoxType {
     Inline,
     InlineBlock,
     Flex,
+    Grid,
     TableWrapper,
     TableRow,
     TableCell,
@@ -226,6 +227,7 @@ impl LayoutBox {
             self.box_type,
             BoxType::Block
                 | BoxType::Flex
+                | BoxType::Grid
                 | BoxType::ListItem { .. }
                 | BoxType::TableWrapper
                 | BoxType::Anonymous
