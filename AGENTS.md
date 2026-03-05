@@ -81,10 +81,10 @@ oasis-types     (foundation: Color, Button, InputEvent, backend traits, error ty
 ├── oasis-video      (software MP4/H.264+AAC decode: symphonia + openh264)
 └── oasis-core       (coordination: 16 apps, dashboard, agent, plugin, script)
     ├── oasis-backend-sdl  (SDL2 desktop/Pi rendering + input + audio)
-    │   └── oasis-app      (binary entry points: oasis-app, oasis-screenshot)
+    │   └── oasis-app      (binary entry points; optional oasis-video for software decode)
     ├── oasis-backend-wasm (Canvas 2D + DOM input + Web Audio, iframe overlay)
     ├── oasis-backend-ue5  (software RGBA framebuffer for Unreal Engine 5)
-    │   └── oasis-ffi      (cdylib C-ABI for UE5 integration)
+    │   └── oasis-ffi      (cdylib C-ABI for UE5; optional oasis-video for video playback)
     ├── oasis-backend-psp  (excluded from workspace, PSP hardware via sceGu)
     └── oasis-plugin-psp   (excluded from workspace, kernel-mode PRX overlay)
 ```
@@ -116,12 +116,12 @@ The framework is split into 19 workspace crates. Each module below is its own cr
 - **oasis-net** -- TCP networking with PSK authentication, remote terminal, FTP transfer
 - **oasis-audio** -- Audio manager with playlist, shuffle/repeat modes, MP3 ID3 tag parsing
 - **oasis-platform** -- Platform service traits: PowerService, TimeService, UsbService, NetworkService, OskService
-- **oasis-video** -- Software MP4/H.264+AAC decode pipeline: symphonia for demux + AAC, optional openh264 for H.264 video frames. Used by TV Guide for in-canvas (WASM) and download-and-play (PSP) video
+- **oasis-video** -- Software MP4/H.264+AAC decode pipeline: symphonia for demux + AAC, optional openh264 for H.264 video frames. Streaming `VideoSource` trait accepts any `Read + Seek + Send + Sync` source. Used by TV Guide for software decode on SDL desktop (download-to-disk), in-canvas on WASM, and download-and-play on PSP
 - **oasis-core** -- Coordination layer: app runner with 16 apps (File Manager, Settings, Network, Music Player, Photo Viewer, Package Manager, Browser, System Monitor, TV Guide, Internet Radio, Terminal, Text Editor, Calculator, Clock, Paint, Games), dashboard, agent/MCP, plugin, scripting, status/bottom bars
 
 ### FFI Boundary (oasis-ffi)
 
-Exports C-ABI functions: `oasis_create`, `oasis_destroy`, `oasis_tick`, `oasis_send_input`, `oasis_get_buffer`, `oasis_get_dirty`, `oasis_send_command`, `oasis_free_string`, `oasis_set_vfs_root`, `oasis_register_callback`, `oasis_add_vfs_file`.
+Exports C-ABI functions: `oasis_create`, `oasis_destroy`, `oasis_tick`, `oasis_send_input`, `oasis_get_buffer`, `oasis_get_dirty`, `oasis_send_command`, `oasis_free_string`, `oasis_set_vfs_root`, `oasis_register_callback`, `oasis_add_vfs_file`. Video playback (feature-gated): `oasis_video_play`, `oasis_video_stop`, `oasis_video_is_playing`.
 
 ### Font Rendering
 

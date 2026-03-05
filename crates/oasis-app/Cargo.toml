@@ -26,13 +26,15 @@ name = "e2e-tests"
 path = "src/e2e_tests.rs"
 
 [features]
-default = ["javascript"]
+default = ["javascript", "video-decode"]
 javascript = ["oasis-core/javascript"]
+video-decode = ["dep:oasis-video", "oasis-video/h264"]
 
 [dependencies]
 oasis-core = { workspace = true }
 oasis-audio = { workspace = true }
 oasis-backend-sdl = { path = "../oasis-backend-sdl" }
+oasis-video = { workspace = true, optional = true }
 log = { workspace = true }
 env_logger = { workspace = true }
 anyhow = { workspace = true }

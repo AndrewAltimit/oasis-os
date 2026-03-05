@@ -84,10 +84,10 @@ oasis-types     (foundation: Color, Button, InputEvent, backend traits, error ty
 ├── oasis-video      (software MP4/H.264+AAC decode: symphonia + openh264)
 └── oasis-core       (coordination: 16 apps, dashboard, agent, plugin, script)
     ├── oasis-backend-sdl  (SDL2 desktop/Pi rendering + input + audio)
-    │   └── oasis-app      (binary entry points: oasis-app, oasis-screenshot)
+    │   └── oasis-app      (binary entry points: oasis-app, oasis-screenshot; optional oasis-video)
     ├── oasis-backend-wasm (Canvas 2D + DOM input + Web Audio, iframe overlay)
     ├── oasis-backend-ue5  (software RGBA framebuffer for Unreal Engine 5)
-    │   └── oasis-ffi      (cdylib C-ABI for UE5 integration)
+    │   └── oasis-ffi      (cdylib C-ABI for UE5 integration; optional oasis-video)
     ├── oasis-backend-psp  (excluded from workspace, PSP hardware via sceGu)
     └── oasis-plugin-psp   (excluded from workspace, kernel-mode PRX overlay)
 ```

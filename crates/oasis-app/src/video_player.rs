@@ -1,9 +1,13 @@
-//! In-app video player using ffmpeg as a subprocess.
+//! In-app video player with multiple decode backends.
 //!
-//! Spawns two ffmpeg processes (video + audio) to decode Internet Archive
-//! URLs. Background reader threads pipe decoded RGBA frames and MP3 audio
-//! chunks to the main thread via `mpsc` channels. The main loop uploads
-//! video frames as SDL textures and feeds audio to `SdlAudioBackend`.
+//! Supports two decode strategies:
+//! - **Ffmpeg** (default): spawns two ffmpeg subprocesses (video→RGBA, audio→MP3)
+//! - **Software** (feature `video-decode`): uses `oasis-video` for pure-Rust
+//!   MP4/H.264+AAC decoding from a local file
+//!
+//! Background reader/decode threads pipe frames and audio to the main thread
+//! via `mpsc` channels. The main loop uploads video frames as SDL textures and
+//! feeds audio to the audio backend.
 
 use std::process::{Child, Command, Stdio};
 use std::sync::mpsc::{self, Receiver, SyncSender, TryRecvError};
@@ -11,9 +15,13 @@ use std::time::{Duration, Instant};
 
 use oasis_core::backend::{SdiBackend, TextureId};
 
-/// Raw RGBA frame from the ffmpeg video decoder.
+/// Raw RGBA frame from a decode backend.
 struct VideoFrame {
     data: Vec<u8>,
+    #[cfg(feature = "video-decode")]
+    width: u32,
+    #[cfg(feature = "video-decode")]
+    height: u32,
 }
 
 /// Player lifecycle state.
@@ -28,13 +36,45 @@ enum PlayerState {
 /// Target decode framerate (must match `-r` flag passed to ffmpeg).
 const VIDEO_FPS: u32 = 15;
 
-/// Manages ffmpeg subprocesses for in-app video+audio playback.
+/// Audio output from a single tick.
+pub enum AudioOutput {
+    /// MP3-encoded chunks (ffmpeg path).
+    Mp3Chunks(Vec<Vec<u8>>),
+    /// Decoded PCM f32 samples (software decode path).
+    #[cfg(feature = "video-decode")]
+    PcmF32(Vec<SoftwareAudio>),
+    /// No audio this tick.
+    None,
+}
+
+/// A chunk of decoded PCM f32 audio from the software decoder.
+#[cfg(feature = "video-decode")]
+pub struct SoftwareAudio {
+    pub pcm_f32: Vec<f32>,
+    pub channels: u16,
+    pub sample_rate: u32,
+}
+
+/// Which decode backend is active.
+enum DecodeBackend {
+    Ffmpeg {
+        video_process: Child,
+        audio_process: Child,
+        video_rx: Receiver<VideoFrame>,
+        audio_rx: Receiver<Vec<u8>>,
+    },
+    #[cfg(feature = "video-decode")]
+    Software {
+        video_rx: Receiver<VideoFrame>,
+        audio_rx: Receiver<SoftwareAudio>,
+        stop_tx: std::sync::mpsc::Sender<()>,
+    },
+}
+
+/// Manages video+audio playback using either ffmpeg or software decoding.
 pub struct VideoPlayer {
     state: PlayerState,
-    video_process: Option<Child>,
-    audio_process: Option<Child>,
-    video_rx: Option<Receiver<VideoFrame>>,
-    audio_rx: Option<Receiver<Vec<u8>>>,
+    decode: Option<DecodeBackend>,
     current_texture: Option<TextureId>,
     frame_width: u32,
     frame_height: u32,
@@ -50,10 +90,7 @@ impl VideoPlayer {
     pub fn new() -> Self {
         Self {
             state: PlayerState::Idle,
-            video_process: None,
-            audio_process: None,
-            video_rx: None,
-            audio_rx: None,
+            decode: None,
             current_texture: None,
             frame_width: 0,
             frame_height: 0,
@@ -63,9 +100,8 @@ impl VideoPlayer {
         }
     }
 
-    /// Start playing a video from the given URL.
+    /// Start playing a video from a URL using ffmpeg subprocesses.
     ///
-    /// Spawns ffmpeg video and audio decoder subprocesses with reader threads.
     /// If `seek_secs > 0`, seeks into the stream before decoding.
     pub fn start(&mut self, url: &str, seek_secs: u64, width: u32, height: u32) {
         self.stop_internal();
@@ -174,7 +210,14 @@ impl VideoPlayer {
                 let mut buf = vec![0u8; frame_size];
                 match reader.read_exact(&mut buf) {
                     Ok(()) => {
-                        if video_tx.send(VideoFrame { data: buf }).is_err() {
+                        let frame = VideoFrame {
+                            data: buf,
+                            #[cfg(feature = "video-decode")]
+                            width: 0,
+                            #[cfg(feature = "video-decode")]
+                            height: 0,
+                        };
+                        if video_tx.send(frame).is_err() {
                             break; // Receiver dropped.
                         }
                     },
@@ -204,37 +247,186 @@ impl VideoPlayer {
             log::debug!("VideoPlayer: audio reader thread exited");
         });
 
-        self.video_process = Some(video_child);
-        self.audio_process = Some(audio_child);
-        self.video_rx = Some(video_rx);
-        self.audio_rx = Some(audio_rx);
+        self.decode = Some(DecodeBackend::Ffmpeg {
+            video_process: video_child,
+            audio_process: audio_child,
+            video_rx,
+            audio_rx,
+        });
         self.state = PlayerState::Starting;
 
         log::info!("VideoPlayer: started {width}x{height} seek={seek_secs}s url={url}");
     }
 
-    /// Tick the video player: drain channels, upload latest frame, collect audio.
+    /// Start playing a video from a local file using the software decoder.
     ///
-    /// Returns `(current_texture, audio_chunks)`. The caller should feed
-    /// audio chunks to the audio backend and assign the texture to the guide.
-    pub fn tick(&mut self, backend: &mut impl SdiBackend) -> (Option<TextureId>, Vec<Vec<u8>>) {
-        if self.state != PlayerState::Starting && self.state != PlayerState::Playing {
-            return (self.current_texture, Vec::new());
+    /// Requires the `video-decode` feature. Opens the file as a streaming
+    /// source and spawns a background decode thread.
+    #[cfg(feature = "video-decode")]
+    pub fn start_software(
+        &mut self,
+        path: std::path::PathBuf,
+        seek_secs: u64,
+        width: u32,
+        height: u32,
+    ) {
+        self.stop_internal();
+
+        self.frame_width = width;
+        self.frame_height = height;
+
+        let file = match std::fs::File::open(&path) {
+            Ok(f) => f,
+            Err(e) => {
+                log::error!("VideoPlayer: failed to open {}: {e}", path.display());
+                self.state = PlayerState::Error;
+                self.error_msg = Some(format!("open file: {e}"));
+                return;
+            },
+        };
+
+        let mut decoder = match oasis_video::SoftwareVideoDecoder::open_stream(Box::new(file)) {
+            Ok(d) => d,
+            Err(e) => {
+                log::error!("VideoPlayer: failed to open decoder: {e}");
+                self.state = PlayerState::Error;
+                self.error_msg = Some(format!("decoder: {e}"));
+                return;
+            },
+        };
+
+        // Seek if requested.
+        if seek_secs > 0
+            && let Err(e) = decoder.seek(seek_secs as f64)
+        {
+            log::warn!("VideoPlayer: seek to {seek_secs}s failed: {e}");
         }
 
+        let (video_tx, video_rx) = mpsc::sync_channel::<VideoFrame>(2);
+        let (audio_tx, audio_rx) = mpsc::sync_channel::<SoftwareAudio>(8);
+        let (stop_tx, stop_rx) = mpsc::channel::<()>();
+
+        let target_w = width;
+        let target_h = height;
+
+        std::thread::spawn(move || {
+            log::info!("VideoPlayer: software decode thread started");
+            loop {
+                // Check stop signal.
+                if stop_rx.try_recv().is_ok() {
+                    break;
+                }
+
+                // Alternate: try video frame first, then audio.
+                match decoder.next_video_frame() {
+                    Ok(Some(frame)) => {
+                        // Scale to target if dimensions differ.
+                        let (data, w, h) = if frame.width == target_w && frame.height == target_h {
+                            (frame.rgba, frame.width, frame.height)
+                        } else {
+                            (
+                                simple_scale(
+                                    &frame.rgba,
+                                    frame.width,
+                                    frame.height,
+                                    target_w,
+                                    target_h,
+                                ),
+                                target_w,
+                                target_h,
+                            )
+                        };
+                        if video_tx
+                            .send(VideoFrame {
+                                data,
+                                width: w,
+                                height: h,
+                            })
+                            .is_err()
+                        {
+                            break;
+                        }
+                    },
+                    Ok(None) => {
+                        log::info!("VideoPlayer: software decode: end of video stream");
+                        break;
+                    },
+                    Err(oasis_video::VideoError::NoTrack(_)) => {
+                        // No video track — still try audio.
+                    },
+                    Err(e) => {
+                        log::error!("VideoPlayer: video decode error: {e}");
+                        break;
+                    },
+                }
+
+                // Try audio.
+                match decoder.next_audio_samples() {
+                    Ok(Some(chunk)) => {
+                        let _ = audio_tx.send(SoftwareAudio {
+                            pcm_f32: chunk.pcm_f32,
+                            channels: chunk.channels,
+                            sample_rate: chunk.sample_rate,
+                        });
+                    },
+                    Ok(None) => {},
+                    Err(oasis_video::VideoError::NoTrack(_)) => {},
+                    Err(e) => {
+                        log::warn!("VideoPlayer: audio decode error: {e}");
+                    },
+                }
+            }
+            log::info!("VideoPlayer: software decode thread exited");
+        });
+
+        self.decode = Some(DecodeBackend::Software {
+            video_rx,
+            audio_rx,
+            stop_tx,
+        });
+        self.state = PlayerState::Starting;
+
+        log::info!(
+            "VideoPlayer: software decode started {}x{} seek={seek_secs}s file={}",
+            width,
+            height,
+            path.display(),
+        );
+    }
+
+    /// Tick the video player: drain channels, upload latest frame, collect audio.
+    ///
+    /// Returns `(current_texture, audio_output)`. The caller should feed
+    /// audio to the audio backend and assign the texture to the guide.
+    pub fn tick(&mut self, backend: &mut impl SdiBackend) -> (Option<TextureId>, AudioOutput) {
+        if self.state != PlayerState::Starting && self.state != PlayerState::Playing {
+            return (self.current_texture, AudioOutput::None);
+        }
+
+        let Some(ref decode) = self.decode else {
+            return (self.current_texture, AudioOutput::None);
+        };
+
         // Take at most one video frame, paced to VIDEO_FPS.
-        // The sync_channel(2) backpressure keeps ffmpeg from racing too far
-        // ahead once we stop consuming frames.
         let mut latest_frame: Option<VideoFrame> = None;
         let mut video_disconnected = false;
         let should_take_frame = self
             .last_frame_time
             .is_none_or(|t| t.elapsed() >= self.frame_interval);
-        if should_take_frame && let Some(ref rx) = self.video_rx {
-            match rx.try_recv() {
-                Ok(frame) => latest_frame = Some(frame),
-                Err(TryRecvError::Empty) => {},
-                Err(TryRecvError::Disconnected) => video_disconnected = true,
+
+        if should_take_frame {
+            match decode {
+                DecodeBackend::Ffmpeg { video_rx, .. } => match video_rx.try_recv() {
+                    Ok(frame) => latest_frame = Some(frame),
+                    Err(TryRecvError::Empty) => {},
+                    Err(TryRecvError::Disconnected) => video_disconnected = true,
+                },
+                #[cfg(feature = "video-decode")]
+                DecodeBackend::Software { video_rx, .. } => match video_rx.try_recv() {
+                    Ok(frame) => latest_frame = Some(frame),
+                    Err(TryRecvError::Empty) => {},
+                    Err(TryRecvError::Disconnected) => video_disconnected = true,
+                },
             }
         }
 
@@ -243,7 +435,18 @@ impl VideoPlayer {
             if let Some(old_tex) = self.current_texture.take() {
                 let _ = backend.destroy_texture(old_tex);
             }
-            match backend.load_texture(self.frame_width, self.frame_height, &frame.data) {
+
+            // For software decode, frame may carry its own dimensions.
+            #[cfg(feature = "video-decode")]
+            let (fw, fh) = if frame.width > 0 && frame.height > 0 {
+                (frame.width, frame.height)
+            } else {
+                (self.frame_width, self.frame_height)
+            };
+            #[cfg(not(feature = "video-decode"))]
+            let (fw, fh) = (self.frame_width, self.frame_height);
+
+            match backend.load_texture(fw, fh, &frame.data) {
                 Ok(tex) => {
                     self.current_texture = Some(tex);
                     self.last_frame_time = Some(Instant::now());
@@ -259,30 +462,47 @@ impl VideoPlayer {
         }
 
         // Drain audio channel.
-        let mut audio_chunks = Vec::new();
         let mut audio_disconnected = false;
-        if let Some(ref rx) = self.audio_rx {
-            loop {
-                match rx.try_recv() {
-                    Ok(chunk) => audio_chunks.push(chunk),
-                    Err(TryRecvError::Empty) => break,
-                    Err(TryRecvError::Disconnected) => {
-                        audio_disconnected = true;
-                        break;
-                    },
+        let audio = match decode {
+            DecodeBackend::Ffmpeg { audio_rx, .. } => {
+                let mut chunks = Vec::new();
+                loop {
+                    match audio_rx.try_recv() {
+                        Ok(chunk) => chunks.push(chunk),
+                        Err(TryRecvError::Empty) => break,
+                        Err(TryRecvError::Disconnected) => {
+                            audio_disconnected = true;
+                            break;
+                        },
+                    }
                 }
-            }
-        }
+                AudioOutput::Mp3Chunks(chunks)
+            },
+            #[cfg(feature = "video-decode")]
+            DecodeBackend::Software { audio_rx, .. } => {
+                let mut chunks = Vec::new();
+                loop {
+                    match audio_rx.try_recv() {
+                        Ok(chunk) => chunks.push(chunk),
+                        Err(TryRecvError::Empty) => break,
+                        Err(TryRecvError::Disconnected) => {
+                            audio_disconnected = true;
+                            break;
+                        },
+                    }
+                }
+                AudioOutput::PcmF32(chunks)
+            },
+        };
 
-        // Detect ffmpeg exit (both channels disconnected).
+        // Detect decode exit (both channels disconnected).
         if video_disconnected && audio_disconnected {
-            log::info!("VideoPlayer: ffmpeg exited (both channels disconnected)");
-            self.video_rx = None;
-            self.audio_rx = None;
+            log::info!("VideoPlayer: decode exited (both channels disconnected)");
+            self.decode = None;
             // Keep current_texture visible (last frame stays).
         }
 
-        (self.current_texture, audio_chunks)
+        (self.current_texture, audio)
     }
 
     /// Stop playback and clean up all resources.
@@ -298,25 +518,47 @@ impl VideoPlayer {
         self.state == PlayerState::Starting || self.state == PlayerState::Playing
     }
 
-    /// Internal cleanup: kill processes, clear channels.
+    /// Internal cleanup: kill processes / signal threads, clear channels.
     fn stop_internal(&mut self) {
-        if let Some(ref mut child) = self.video_process {
-            let _ = child.kill();
-            let _ = child.wait();
+        if let Some(decode) = self.decode.take() {
+            match decode {
+                DecodeBackend::Ffmpeg {
+                    mut video_process,
+                    mut audio_process,
+                    ..
+                } => {
+                    let _ = video_process.kill();
+                    let _ = video_process.wait();
+                    let _ = audio_process.kill();
+                    let _ = audio_process.wait();
+                },
+                #[cfg(feature = "video-decode")]
+                DecodeBackend::Software { stop_tx, .. } => {
+                    let _ = stop_tx.send(());
+                },
+            }
         }
-        if let Some(ref mut child) = self.audio_process {
-            let _ = child.kill();
-            let _ = child.wait();
-        }
-        self.video_process = None;
-        self.audio_process = None;
-        self.video_rx = None;
-        self.audio_rx = None;
         self.current_texture = None;
         self.last_frame_time = None;
         self.state = PlayerState::Idle;
         self.error_msg = None;
     }
+}
+
+/// Nearest-neighbor RGBA scale.
+#[cfg(feature = "video-decode")]
+fn simple_scale(src: &[u8], src_w: u32, src_h: u32, dst_w: u32, dst_h: u32) -> Vec<u8> {
+    let mut dst = vec![0u8; (dst_w * dst_h * 4) as usize];
+    for y in 0..dst_h {
+        let sy = (y * src_h / dst_h).min(src_h - 1);
+        for x in 0..dst_w {
+            let sx = (x * src_w / dst_w).min(src_w - 1);
+            let si = (sy * src_w + sx) as usize * 4;
+            let di = (y * dst_w + x) as usize * 4;
+            dst[di..di + 4].copy_from_slice(&src[si..si + 4]);
+        }
+    }
+    dst
 }
 
 impl Drop for VideoPlayer {
@@ -410,7 +652,7 @@ mod tests {
         let mut backend = MockBackend;
         let (tex, audio) = player.tick(&mut backend);
         assert!(tex.is_none());
-        assert!(audio.is_empty());
+        assert!(matches!(audio, AudioOutput::None));
     }
 
     #[test]
@@ -434,5 +676,60 @@ mod tests {
         }
         // If ffmpeg IS available, we can't easily test error without
         // a network call, so just verify construction is valid.
+    }
+
+    #[cfg(feature = "video-decode")]
+    #[test]
+    fn start_software_nonexistent_file_sets_error() {
+        let mut player = VideoPlayer::new();
+        player.start_software("/tmp/nonexistent_video.mp4".into(), 0, 160, 104);
+        assert_eq!(player.state, PlayerState::Error);
+        assert!(player.error_msg.is_some());
+    }
+
+    #[cfg(feature = "video-decode")]
+    #[test]
+    fn start_software_corrupt_file_sets_error() {
+        use std::io::Write;
+        let path = std::env::temp_dir().join("oasis_test_corrupt.mp4");
+        {
+            let mut f = std::fs::File::create(&path).unwrap();
+            f.write_all(b"this is not an mp4").unwrap();
+        }
+        let mut player = VideoPlayer::new();
+        player.start_software(path.clone(), 0, 160, 104);
+        assert_eq!(player.state, PlayerState::Error);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn audio_output_variants() {
+        let mp3 = AudioOutput::Mp3Chunks(vec![vec![1, 2, 3]]);
+        assert!(matches!(mp3, AudioOutput::Mp3Chunks(ref v) if v.len() == 1));
+
+        let none = AudioOutput::None;
+        assert!(matches!(none, AudioOutput::None));
+    }
+
+    #[cfg(feature = "video-decode")]
+    #[test]
+    fn simple_scale_identity() {
+        let src = vec![255u8; 4 * 4 * 4]; // 4x4 white
+        let dst = simple_scale(&src, 4, 4, 4, 4);
+        assert_eq!(dst, src);
+    }
+
+    #[cfg(feature = "video-decode")]
+    #[test]
+    fn simple_scale_downscale() {
+        // 4x4 → 2x2
+        let mut src = vec![0u8; 4 * 4 * 4];
+        // Set top-left pixel to red.
+        src[0] = 255;
+        src[3] = 255;
+        let dst = simple_scale(&src, 4, 4, 2, 2);
+        assert_eq!(dst.len(), 2 * 2 * 4);
+        // Top-left of downscaled should sample top-left of source.
+        assert_eq!(dst[0], 255); // R
     }
 }

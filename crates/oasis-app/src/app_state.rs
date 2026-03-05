@@ -112,10 +112,28 @@ pub struct AppState {
     >,
     /// When the TV catalog fetch thread was spawned (for timeout detection).
     pub tv_fetch_start: Option<std::time::Instant>,
-    /// In-app video player (ffmpeg subprocess) for TV Guide preview.
+    /// In-app video player (ffmpeg subprocess or software decode) for TV Guide preview.
     pub video_player: crate::video_player::VideoPlayer,
     /// Audio track for TV Guide video playback.
     pub tv_audio_track: Option<AudioTrackId>,
+    /// Pending video file download (software decode path).
+    #[cfg(feature = "video-decode")]
+    pub pending_video_download: Option<mpsc::Receiver<Result<std::path::PathBuf, String>>>,
+    /// Cached video file path for cleanup on untune.
+    #[cfg(feature = "video-decode")]
+    pub tv_video_cache_path: Option<std::path::PathBuf>,
+    /// Parameters saved from tune request, needed when download completes.
+    #[cfg(feature = "video-decode")]
+    pub pending_video_params: Option<PendingVideoParams>,
+}
+
+/// Parameters stashed from a tune request so they survive until download completes.
+#[cfg(feature = "video-decode")]
+pub struct PendingVideoParams {
+    pub url: String,
+    pub seek_secs: u64,
+    pub width: u32,
+    pub height: u32,
 }
 
 #[cfg(test)]

@@ -189,6 +189,25 @@ typedef void (*OasisAudioCallback)(uint32_t event, uint64_t track_id, uint32_t v
 
 void oasis_set_audio_callback(OasisInstance* handle, OasisAudioCallback cb);
 
+/* ----------------------------------------------------------------
+ * Video Playback (requires video-decode feature)
+ * ---------------------------------------------------------------- */
+
+/* Start software video playback from a local file path.
+ *
+ * path: Path to an MP4 file on disk.
+ * Returns true if decode started successfully.
+ */
+bool oasis_video_play(OasisInstance* handle, const char* path);
+
+/* Stop video playback and clean up decode resources. */
+void oasis_video_stop(OasisInstance* handle);
+
+/* Check if video is currently playing.
+ * Returns 1 if playing, 0 if not.
+ */
+int32_t oasis_video_is_playing(OasisInstance* handle);
+
 uint64_t oasis_audio_load(OasisInstance* handle, const uint8_t* data, uint32_t data_len);
 bool oasis_audio_play(OasisInstance* handle, uint64_t track_id);
 bool oasis_audio_pause(OasisInstance* handle);

@@ -12,7 +12,34 @@ use symphonia::core::meta::MetadataOptions;
 use symphonia::core::probe::Hint;
 use symphonia::core::units::Time;
 
-use crate::VideoError;
+use symphonia::core::io::MediaSource;
+
+use crate::{VideoError, VideoSource};
+
+/// Wraps a `Box<dyn VideoSource>` to implement symphonia's `MediaSource`.
+struct VideoSourceAdapter(Box<dyn VideoSource>);
+
+impl std::io::Read for VideoSourceAdapter {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        self.0.read(buf)
+    }
+}
+
+impl std::io::Seek for VideoSourceAdapter {
+    fn seek(&mut self, pos: std::io::SeekFrom) -> std::io::Result<u64> {
+        self.0.seek(pos)
+    }
+}
+
+impl MediaSource for VideoSourceAdapter {
+    fn is_seekable(&self) -> bool {
+        self.0.is_seekable()
+    }
+
+    fn byte_len(&self) -> Option<u64> {
+        self.0.byte_len()
+    }
+}
 
 /// Identifies which track a packet belongs to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -40,11 +67,23 @@ pub struct Mp4Demuxer {
 }
 
 impl Mp4Demuxer {
+    /// Open an MP4 from a streaming source.
+    ///
+    /// Accepts any `Read + Seek + Send` source (file, cursor, etc.) and passes
+    /// it directly to symphonia's `MediaSourceStream`.
+    pub fn open_stream(source: Box<dyn VideoSource>) -> Result<Self, VideoError> {
+        let adapter = VideoSourceAdapter(source);
+        let mss = MediaSourceStream::new(Box::new(adapter), Default::default());
+        Self::open_from_mss(mss)
+    }
+
     /// Open an MP4 from a byte buffer.
     pub fn open(data: Vec<u8>) -> Result<Self, VideoError> {
-        let cursor = Cursor::new(data);
-        let mss = MediaSourceStream::new(Box::new(cursor), Default::default());
+        Self::open_stream(Box::new(Cursor::new(data)))
+    }
 
+    /// Shared probe + track discovery for both `open` and `open_stream`.
+    fn open_from_mss(mss: MediaSourceStream) -> Result<Self, VideoError> {
         let mut hint = Hint::new();
         hint.with_extension("mp4");
 

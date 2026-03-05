@@ -110,6 +110,11 @@ pub struct OasisInstance {
     callbacks: HashMap<u32, OasisCallback>,
     width: u32,
     height: u32,
+    /// Software video decode state (when `video-decode` feature is enabled).
+    #[cfg(feature = "video-decode")]
+    video_decoder: Option<oasis_video::SoftwareVideoDecoder>,
+    #[cfg(feature = "video-decode")]
+    video_playing: bool,
 }
 
 impl OasisInstance {
@@ -257,6 +262,10 @@ pub unsafe extern "C" fn oasis_create(
         callbacks: HashMap::new(),
         width,
         height,
+        #[cfg(feature = "video-decode")]
+        video_decoder: None,
+        #[cfg(feature = "video-decode")]
+        video_playing: false,
     };
 
     Box::into_raw(Box::new(instance))
@@ -756,6 +765,82 @@ pub unsafe extern "C" fn oasis_audio_is_playing(handle: *mut OasisInstance) -> b
         return false;
     };
     instance.audio.is_playing()
+}
+
+// ---------------------------------------------------------------------------
+// Video decode FFI (requires `video-decode` feature)
+// ---------------------------------------------------------------------------
+
+/// Start software video playback from a file path.
+///
+/// Opens the file at `path` and begins decoding. Video frames are decoded
+/// on a background thread and blitted during `oasis_tick`.
+///
+/// # Safety
+///
+/// `handle` must be valid. `path` must be a valid null-terminated C string.
+#[cfg(feature = "video-decode")]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn oasis_video_play(handle: *mut OasisInstance, path: *const c_char) -> i32 {
+    let Some(instance) = (unsafe { handle.as_mut() }) else {
+        return -1;
+    };
+    let Some(path_str) = (unsafe { c_str_to_str(path) }) else {
+        return -1;
+    };
+
+    let file = match std::fs::File::open(path_str) {
+        Ok(f) => f,
+        Err(e) => {
+            log::error!("oasis_video_play: open failed: {e}");
+            return -1;
+        },
+    };
+
+    match oasis_video::SoftwareVideoDecoder::open_stream(Box::new(file)) {
+        Ok(decoder) => {
+            instance.video_decoder = Some(decoder);
+            instance.video_playing = true;
+            log::info!("oasis_video_play: started {path_str}");
+            0
+        },
+        Err(e) => {
+            log::error!("oasis_video_play: decode init failed: {e}");
+            -1
+        },
+    }
+}
+
+/// Stop video playback.
+///
+/// # Safety
+///
+/// `handle` must be valid.
+#[cfg(feature = "video-decode")]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn oasis_video_stop(handle: *mut OasisInstance) {
+    let Some(instance) = (unsafe { handle.as_mut() }) else {
+        return;
+    };
+    instance.video_decoder = None;
+    instance.video_playing = false;
+    log::info!("oasis_video_stop: stopped");
+}
+
+/// Check whether video is currently playing.
+///
+/// Returns 1 if playing, 0 if not.
+///
+/// # Safety
+///
+/// `handle` must be valid.
+#[cfg(feature = "video-decode")]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn oasis_video_is_playing(handle: *mut OasisInstance) -> i32 {
+    let Some(instance) = (unsafe { handle.as_ref() }) else {
+        return 0;
+    };
+    i32::from(instance.video_playing && instance.video_decoder.is_some())
 }
 
 // ---------------------------------------------------------------------------

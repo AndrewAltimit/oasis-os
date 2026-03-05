@@ -14,8 +14,46 @@ pub mod h264;
 pub mod yuv;
 
 use std::collections::VecDeque;
+use std::io::{Cursor, Read, Seek};
 
 use demux::{DemuxedPacket, Mp4Demuxer, TrackKind};
+
+/// A streaming video source: anything that is `Read + Seek + Send + Sync`.
+///
+/// Provides optional length and seekability hints for the demuxer.
+/// This is a blanket trait — `File`, `Cursor<Vec<u8>>`, and any other
+/// `Read + Seek + Send + Sync + 'static` type implements it automatically.
+pub trait VideoSource: Read + Seek + Send + Sync {
+    /// Whether the source supports seeking. Defaults to `true`.
+    fn is_seekable(&self) -> bool {
+        true
+    }
+
+    /// Total length in bytes, if known.
+    fn byte_len(&self) -> Option<u64> {
+        None
+    }
+}
+
+impl VideoSource for std::fs::File {
+    fn is_seekable(&self) -> bool {
+        true
+    }
+
+    fn byte_len(&self) -> Option<u64> {
+        self.metadata().ok().map(|m| m.len())
+    }
+}
+
+impl<T: AsRef<[u8]> + Send + Sync> VideoSource for Cursor<T> {
+    fn is_seekable(&self) -> bool {
+        true
+    }
+
+    fn byte_len(&self) -> Option<u64> {
+        Some(self.get_ref().as_ref().len() as u64)
+    }
+}
 
 /// Errors from the video pipeline.
 #[derive(Debug)]
@@ -80,13 +118,25 @@ pub struct SoftwareVideoDecoder {
 }
 
 impl SoftwareVideoDecoder {
+    /// Open an MP4 from a streaming source.
+    ///
+    /// Accepts any `Read + Seek + Send` source (e.g. `File`, network stream)
+    /// and initializes decoders for any H.264 video and AAC audio tracks.
+    pub fn open_stream(source: Box<dyn VideoSource>) -> Result<Self, VideoError> {
+        let demuxer = Mp4Demuxer::open_stream(source)?;
+        Self::from_demuxer(demuxer)
+    }
+
     /// Open an MP4 from a byte buffer.
     ///
     /// Parses the container and initializes decoders for any H.264 video and
     /// AAC audio tracks found.
     pub fn open(mp4_data: Vec<u8>) -> Result<Self, VideoError> {
-        let demuxer = Mp4Demuxer::open(mp4_data)?;
+        Self::open_stream(Box::new(Cursor::new(mp4_data)))
+    }
 
+    /// Initialize decoders from a probed demuxer.
+    fn from_demuxer(demuxer: Mp4Demuxer) -> Result<Self, VideoError> {
         #[cfg(feature = "h264")]
         let h264 = if demuxer.has_video() {
             Some(h264::H264Decoder::new()?)
@@ -297,5 +347,30 @@ mod tests {
         assert_eq!(chunk.pcm_f32.len(), 1024);
         assert_eq!(chunk.channels, 2);
         assert_eq!(chunk.sample_rate, 44100);
+    }
+
+    #[test]
+    fn open_stream_with_cursor_empty_fails() {
+        let cursor = std::io::Cursor::new(Vec::<u8>::new());
+        let result = SoftwareVideoDecoder::open_stream(Box::new(cursor));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn open_stream_equivalent_to_open_on_garbage() {
+        let data = vec![0xDE, 0xAD, 0xBE, 0xEF, 0x00, 0x11];
+        let r1 = SoftwareVideoDecoder::open(data.clone());
+        let r2 = SoftwareVideoDecoder::open_stream(Box::new(std::io::Cursor::new(data)));
+        // Both should fail with the same kind of error.
+        assert!(r1.is_err());
+        assert!(r2.is_err());
+    }
+
+    #[test]
+    fn video_source_impls_compile() {
+        // Compile-time check: File and Cursor implement VideoSource.
+        fn _assert_video_source<T: VideoSource>() {}
+        _assert_video_source::<std::fs::File>();
+        _assert_video_source::<std::io::Cursor<Vec<u8>>>();
     }
 }

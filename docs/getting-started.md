@@ -98,6 +98,21 @@ cargo clippy --workspace -- -D warnings
 cargo deny check
 ```
 
+## Feature Flags
+
+`oasis-app` supports optional features that can be toggled at build time:
+
+| Feature | Default | Description |
+|---------|---------|-------------|
+| `javascript` | Yes | JavaScript engine (QuickJS-NG) for the browser |
+| `video-decode` | Yes | Software MP4/H.264+AAC decode via oasis-video (no ffmpeg needed) |
+
+To build without software video decode (falls back to ffmpeg subprocesses for TV Guide):
+
+```bash
+cargo build -p oasis-app --no-default-features --features javascript
+```
+
 ## Taking Screenshots
 
 Generate screenshots for all 17 skins:

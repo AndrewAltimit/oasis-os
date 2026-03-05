@@ -218,6 +218,12 @@ fn main() -> Result<()> {
         tv_fetch_start: None,
         video_player: video_player::VideoPlayer::new(),
         tv_audio_track: None,
+        #[cfg(feature = "video-decode")]
+        pending_video_download: None,
+        #[cfg(feature = "video-decode")]
+        tv_video_cache_path: None,
+        #[cfg(feature = "video-decode")]
+        pending_video_params: None,
     };
 
     // Show a welcome toast.
