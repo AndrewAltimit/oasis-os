@@ -23,5 +23,10 @@ symphonia = { version = "0.5", default-features = false, features = [
 # H.264 decoding (Cisco OpenH264 C source compiled via cc)
 openh264 = { version = "0.9", optional = true }
 
+[[bin]]
+name = "video-memprofile"
+path = "src/bin/video_memprofile.rs"
+required-features = ["h264"]
+
 [lints]
 workspace = true
