@@ -196,17 +196,36 @@ void oasis_set_audio_callback(OasisInstance* handle, OasisAudioCallback cb);
 /* Start software video playback from a local file path.
  *
  * path: Path to an MP4 file on disk.
- * Returns true if decode started successfully.
+ * Spawns a background decode thread. Poll frames with oasis_video_next_frame.
+ * Returns 0 on success, -1 on error.
  */
-bool oasis_video_play(OasisInstance* handle, const char* path);
+int32_t oasis_video_play(OasisInstance* handle, const char* path);
 
-/* Stop video playback and clean up decode resources. */
+/* Stop video playback, join the decode thread, and clean up resources. */
 void oasis_video_stop(OasisInstance* handle);
 
 /* Check if video is currently playing.
  * Returns 1 if playing, 0 if not.
  */
 int32_t oasis_video_is_playing(OasisInstance* handle);
+
+/* Poll the latest decoded video frame.
+ *
+ * Takes the most recent frame (single-buffered; skips intermediate frames).
+ * Copies RGBA pixels into buf, sets out_w/out_h to video dimensions.
+ * buf must be at least out_w * out_h * 4 bytes.
+ * Returns: 1 = new frame copied, 0 = no new frame available, -1 = error.
+ */
+int32_t oasis_video_next_frame(OasisInstance* handle, uint8_t* buf,
+                               uint32_t* out_w, uint32_t* out_h);
+
+/* Drain decoded audio samples into a host buffer.
+ *
+ * Copies interleaved f32 PCM into buf, up to max_samples floats.
+ * Returns: number of samples copied, or -1 on error.
+ */
+int32_t oasis_video_get_audio(OasisInstance* handle, float* buf,
+                              uint32_t max_samples);
 
 uint64_t oasis_audio_load(OasisInstance* handle, const uint8_t* data, uint32_t data_len);
 bool oasis_audio_play(OasisInstance* handle, uint64_t track_id);

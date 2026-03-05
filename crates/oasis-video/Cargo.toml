@@ -12,6 +12,8 @@ default = []
 # Enable H.264 decoding via openh264 (Cisco C source compiled via cc).
 # Requires a C++ compiler. Disabled by default for CI/WASM compatibility.
 h264 = ["dep:openh264"]
+# Lightweight MP4 parser for no-symphonia environments (e.g. PSP).
+no-std-demux = []
 
 [dependencies]
 # MP4 demuxing + AAC decoding (pure Rust)

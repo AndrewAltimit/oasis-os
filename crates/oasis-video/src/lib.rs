@@ -9,6 +9,8 @@
 
 pub mod aac;
 pub mod demux;
+#[cfg(feature = "no-std-demux")]
+pub mod demux_lite;
 #[cfg(feature = "h264")]
 pub mod h264;
 pub mod yuv;
@@ -291,6 +293,170 @@ impl SoftwareVideoDecoder {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Path to the shared test fixture (320x240, ~2s, H.264+AAC).
+    fn fixture_path() -> std::path::PathBuf {
+        let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        manifest.join("../../tests/fixtures/test_320x240_2s.mp4")
+    }
+
+    /// Read the fixture into a `Vec<u8>`.
+    fn fixture_bytes() -> Vec<u8> {
+        std::fs::read(fixture_path()).expect("fixture file missing")
+    }
+
+    /// Open the fixture as a `File`.
+    fn fixture_file() -> std::fs::File {
+        std::fs::File::open(fixture_path()).expect("fixture file missing")
+    }
+
+    // ------------------------------------------------------------------
+    // Integration tests (require the test fixture)
+    // ------------------------------------------------------------------
+
+    #[test]
+    #[cfg(feature = "h264")]
+    fn open_stream_with_file_decodes() {
+        let file = fixture_file();
+        let mut dec =
+            SoftwareVideoDecoder::open_stream(Box::new(file)).expect("open_stream failed");
+        let frame = dec
+            .next_video_frame()
+            .expect("decode error")
+            .expect("no frame");
+        assert_eq!(frame.width, 320);
+        assert_eq!(frame.height, 240);
+        assert_eq!(frame.rgba.len(), (320 * 240 * 4) as usize);
+    }
+
+    #[test]
+    #[cfg(feature = "h264")]
+    fn open_stream_with_cursor_decodes() {
+        let data = fixture_bytes();
+        let cursor = Cursor::new(data);
+        let mut dec =
+            SoftwareVideoDecoder::open_stream(Box::new(cursor)).expect("open_stream failed");
+        let frame = dec
+            .next_video_frame()
+            .expect("decode error")
+            .expect("no frame");
+        assert!(frame.width > 0);
+        assert!(frame.height > 0);
+    }
+
+    #[test]
+    #[cfg(feature = "h264")]
+    fn full_decode_pipeline() {
+        let mut dec = SoftwareVideoDecoder::open(fixture_bytes()).expect("open failed");
+        let mut count = 0u32;
+        let mut last_ts = -1.0f64;
+        let mut dims = (0u32, 0u32);
+        while let Some(frame) = dec.next_video_frame().expect("decode error") {
+            count += 1;
+            assert!(
+                frame.timestamp_secs >= last_ts,
+                "timestamp went backwards: {} < {}",
+                frame.timestamp_secs,
+                last_ts
+            );
+            last_ts = frame.timestamp_secs;
+            dims = (frame.width, frame.height);
+        }
+        assert!(count >= 10, "expected >=10 frames, got {count}");
+        assert_eq!(dims, (320, 240));
+    }
+
+    #[test]
+    fn audio_decode_format() {
+        let mut dec = SoftwareVideoDecoder::open(fixture_bytes()).expect("open failed");
+        let chunk = dec
+            .next_audio_samples()
+            .expect("audio decode error")
+            .expect("no audio");
+        assert!(chunk.sample_rate > 0, "sample_rate should be > 0");
+        assert!(chunk.channels > 0, "channels should be > 0");
+        assert!(!chunk.pcm_f32.is_empty(), "PCM buffer should not be empty");
+    }
+
+    #[test]
+    #[cfg(feature = "h264")]
+    fn seek_to_midstream() {
+        let mut dec = SoftwareVideoDecoder::open(fixture_bytes()).expect("open failed");
+        // Decode one frame to prime the decoder.
+        let _ = dec.next_video_frame().expect("decode error");
+        dec.seek(1.0).expect("seek failed");
+        let frame = dec
+            .next_video_frame()
+            .expect("decode error")
+            .expect("no frame after seek");
+        // Timestamp should be within ±0.5s of the seek target.
+        assert!(
+            (frame.timestamp_secs - 1.0).abs() < 0.5,
+            "post-seek timestamp {} not near 1.0s",
+            frame.timestamp_secs
+        );
+    }
+
+    #[test]
+    fn truncated_file_no_panic() {
+        let full = fixture_bytes();
+        let half = &full[..full.len() / 2];
+        // Opening or decoding a truncated file should not panic.
+        match SoftwareVideoDecoder::open(half.to_vec()) {
+            Ok(mut dec) => {
+                // If it opens, try decoding — it may error, but must not panic.
+                let _ = dec.next_video_frame();
+                let _ = dec.next_audio_samples();
+            },
+            Err(_) => {
+                // Error on open is acceptable.
+            },
+        }
+    }
+
+    #[test]
+    fn video_size_before_decode() {
+        let dec = SoftwareVideoDecoder::open(fixture_bytes()).expect("open failed");
+        // Before any decode, video_size is (0,0) (dimensions come from first frame).
+        assert_eq!(dec.video_size(), (0, 0));
+        // Audio format should already be known from track headers.
+        let (sr, ch) = dec.audio_format();
+        assert!(sr > 0, "sample_rate should be discoverable before decode");
+        assert!(ch > 0, "channels should be discoverable before decode");
+    }
+
+    #[test]
+    #[cfg(feature = "h264")]
+    fn timestamp_monotonicity() {
+        let mut dec = SoftwareVideoDecoder::open(fixture_bytes()).expect("open failed");
+        let mut last_video_ts = -1.0f64;
+        let mut last_audio_ts = -1.0f64;
+        for _ in 0..60 {
+            // Alternate video and audio to exercise interleaved buffering.
+            if let Ok(Some(frame)) = dec.next_video_frame() {
+                assert!(
+                    frame.timestamp_secs >= last_video_ts,
+                    "video ts went backwards: {} < {}",
+                    frame.timestamp_secs,
+                    last_video_ts
+                );
+                last_video_ts = frame.timestamp_secs;
+            }
+            if let Ok(Some(chunk)) = dec.next_audio_samples() {
+                assert!(
+                    chunk.timestamp_secs >= last_audio_ts,
+                    "audio ts went backwards: {} < {}",
+                    chunk.timestamp_secs,
+                    last_audio_ts
+                );
+                last_audio_ts = chunk.timestamp_secs;
+            }
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // Existing unit tests
+    // ------------------------------------------------------------------
 
     #[test]
     fn open_empty_data_fails() {
