@@ -921,6 +921,23 @@ pub trait AudioBackend {
         let _ = (track, data);
         Err(OasisError::Backend("streaming not supported".into()))
     }
+
+    /// Feed decoded PCM f32 samples directly to a streaming track.
+    ///
+    /// Used by the software video decoder path where audio is already decoded
+    /// to interleaved f32 PCM (no MP3 re-encoding needed).
+    fn feed_pcm_f32(
+        &mut self,
+        track: AudioTrackId,
+        samples: &[f32],
+        channels: u16,
+        sample_rate: u32,
+    ) -> Result<()> {
+        let _ = (track, samples, channels, sample_rate);
+        Err(OasisError::Backend(
+            "pcm f32 streaming not supported".into(),
+        ))
+    }
 }
 
 // ---------------------------------------------------------------------------

@@ -650,6 +650,7 @@ dependencies = [
  "oasis-audio",
  "oasis-backend-sdl",
  "oasis-core",
+ "oasis-video",
  "png",
 ]
 
@@ -764,6 +765,7 @@ dependencies = [
  "log",
  "oasis-backend-ue5",
  "oasis-core",
+ "oasis-video",
 ]
 
 [[package]]
@@ -867,6 +869,7 @@ dependencies = [
 name = "oasis-video"
 version = "1.0.0"
 dependencies = [
+ "criterion",
  "openh264",
  "symphonia",
 ]

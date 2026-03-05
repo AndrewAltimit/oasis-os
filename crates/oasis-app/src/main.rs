@@ -218,6 +218,16 @@ fn main() -> Result<()> {
         tv_fetch_start: None,
         video_player: video_player::VideoPlayer::new(),
         tv_audio_track: None,
+        #[cfg(feature = "video-decode")]
+        pending_video_download: None,
+        #[cfg(feature = "video-decode")]
+        tv_video_cache_path: None,
+        #[cfg(feature = "video-decode")]
+        pending_video_params: None,
+        #[cfg(feature = "video-decode")]
+        tv_download_progress: None,
+        #[cfg(feature = "video-decode")]
+        tv_video_cache: Vec::new(),
     };
 
     // Show a welcome toast.
@@ -452,6 +462,14 @@ fn main() -> Result<()> {
     state.video_player.stop(&mut backend);
     if let Some(track) = state.tv_audio_track.take() {
         let _ = state.audio_backend.unload_track(track);
+    }
+
+    // Clean up all cached video files.
+    #[cfg(feature = "video-decode")]
+    for (_, path) in &state.tv_video_cache {
+        if let Err(e) = std::fs::remove_file(path) {
+            log::warn!("TV: failed to remove cached file {}: {e}", path.display());
+        }
     }
 
     backend.shutdown()?;

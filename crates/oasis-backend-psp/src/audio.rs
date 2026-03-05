@@ -26,7 +26,9 @@ const READ_BUF_SIZE: usize = 32 * 1024;
 
 /// Load AV codec modules once (idempotent). Called lazily on first play
 /// to avoid conflicts with the PRX overlay at boot time.
-fn load_av_modules_once() {
+///
+/// Also exposed as `pub` for use by the video AAC decoder in threading.rs.
+pub(crate) fn load_av_modules_once_pub() {
     use core::sync::atomic::{AtomicBool, Ordering};
     static LOADED: AtomicBool = AtomicBool::new(false);
     if LOADED.swap(true, Ordering::Relaxed) {
@@ -40,6 +42,11 @@ fn load_av_modules_once() {
         psp::sys::sceUtilityLoadModule(psp::sys::Module::AvMpegBase);
         psp::sys::sceUtilityLoadModule(psp::sys::Module::AvMp3);
     }
+}
+
+/// Internal alias.
+fn load_av_modules_once() {
+    load_av_modules_once_pub();
 }
 
 // ---------------------------------------------------------------------------

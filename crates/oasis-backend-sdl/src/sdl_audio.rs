@@ -487,6 +487,55 @@ impl AudioBackend for SdlAudioBackend {
 
         self.decode_buffered()
     }
+
+    fn feed_pcm_f32(
+        &mut self,
+        track: AudioTrackId,
+        samples: &[f32],
+        channels: u16,
+        sample_rate: u32,
+    ) -> Result<()> {
+        if self.stream_track != Some(track.0) {
+            return Err(OasisError::Backend(format!(
+                "streaming track {} not found",
+                track.0
+            )));
+        }
+
+        if samples.is_empty() {
+            return Ok(());
+        }
+
+        // Open device lazily with the stream's format.
+        if self.device.is_none() && self.audio_subsystem.is_some() {
+            self.open_device(sample_rate as i32, channels as u8)?;
+        }
+
+        self.sample_rate = sample_rate as i32;
+        self.channels = channels as usize;
+
+        // Convert f32 → i16 with volume scaling.
+        let vol = self.volume as f32 / 100.0;
+        self.pcm_staging.clear();
+        self.pcm_staging.reserve(samples.len());
+        for &s in samples {
+            let scaled = s * vol * 32767.0;
+            self.pcm_staging
+                .push(scaled.clamp(-32768.0, 32767.0) as i16);
+        }
+
+        // Apply backpressure: skip if queue is already full.
+        if let Some(ref device) = self.device
+            && device.size() < MAX_QUEUE_BYTES
+        {
+            device
+                .queue_audio(&self.pcm_staging)
+                .map_err(OasisError::Backend)?;
+            self.samples_queued += self.pcm_staging.len() as u64;
+        }
+
+        Ok(())
+    }
 }
 
 #[cfg(test)]

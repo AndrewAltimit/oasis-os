@@ -86,7 +86,7 @@ Default virtual resolution is 480x272 (PSP native). Skins may override this (e.g
 - **Agent/MCP Integration** -- Agent status tracking, MCP tool browsing/invocation, tamper detection, system health dashboard
 - **Scripting** -- Line-based command scripts, startup scripts, cron-like scheduling
 - **Internet Archive Integration** -- TV Guide streams live video from Internet Archive channels with a 1980s Prevue Channel aesthetic; Radio streams MP3 audio from curated Internet Archive collections
-- **Video Playback** -- Software MP4/H.264+AAC decode pipeline (`oasis-video` crate) using symphonia for demux and AAC, optional openh264 for H.264 video frames. WASM backend renders in-canvas; PSP backend downloads to Memory Stick
+- **Video Playback** -- Software MP4/H.264+AAC decode pipeline (`oasis-video` crate) with streaming `VideoSource` API for file-backed decode. Desktop uses software decode via `video-decode` feature (no ffmpeg required) with ffmpeg fallback; WASM renders in-canvas; PSP downloads to Memory Stick. UE5 exposes video control via C-ABI (`oasis_video_play/stop/is_playing`)
 - **16 Built-in Apps** -- File Manager (dual-panel Norton Commander-style), Settings, Network, Music Player, Photo Viewer, Package Manager, Browser, System Monitor, TV Guide, Internet Radio, Terminal, Text Editor, Calculator, Clock, Paint, Games
 
 ## Crates
@@ -152,14 +152,14 @@ oasis-os/
 | `oasis-browser` | Embeddable HTML/CSS/Gemini rendering engine: DOM parser, CSS cascade, block/inline/table layout, reader mode, JavaScript DOM bindings |
 | `oasis-js` | JavaScript engine wrapping QuickJS-NG via rquickjs: `console` API, inline `<script>` execution, DOM manipulation from JS |
 | `oasis-core` | Coordination layer: app runner (16 apps), dashboard, agent/MCP, plugin, scripting, status/bottom bars |
-| `oasis-video` | Software MP4/H.264+AAC decode pipeline: symphonia for demux + AAC, optional openh264 for H.264 video frames |
+| `oasis-video` | Software MP4/H.264+AAC decode pipeline: streaming `VideoSource` API, symphonia for demux + AAC, optional openh264 for H.264. Consumed by `oasis-app` (desktop) and `oasis-ffi` (UE5) via `video-decode` feature |
 | `oasis-backend-sdl` | SDL2 rendering and input backend for desktop and Raspberry Pi |
 | `oasis-backend-wasm` | WebAssembly backend -- Canvas 2D rendering, DOM event input, Web Audio, iframe overlay for real web pages |
 | `oasis-backend-ue5` | UE5 render target backend -- software RGBA framebuffer and FFI input queue |
 | `oasis-backend-psp` | PSP hardware backend -- sceGu sprite rendering, PSP controller input, dual-panel file manager, UMD disc browsing, std via [rust-psp](https://github.com/AndrewAltimit/rust-psp) SDK |
 | `oasis-plugin-psp` | PSP overlay plugin PRX -- kernel-mode companion module for in-game overlay UI and background MP3 playback |
-| `oasis-ffi` | C-ABI FFI boundary (`cdylib`) for UE5 and external integrations |
-| `oasis-app` | Desktop entry point (SDL2) and screenshot capture tool |
+| `oasis-ffi` | C-ABI FFI boundary (`cdylib`) for UE5 and external integrations. Optional `video-decode` feature adds `oasis_video_play/stop/is_playing` |
+| `oasis-app` | Desktop entry point (SDL2) and screenshot capture tool. `video-decode` feature (default) enables software video decode for TV Guide without ffmpeg |
 
 The PSP crates are excluded from the workspace (require `mipsel-sony-psp` target) and depend on the standalone [rust-psp SDK](https://github.com/AndrewAltimit/rust-psp) via git dependency. The backend compiles to an EBOOT.PBP (standalone application) with TV Guide, Internet Radio, and all core apps, while the plugin compiles to a kernel-mode PRX (resident overlay module loaded by CFW via `PLUGINS.TXT`). The WASM backend compiles to a `cdylib` via `wasm-pack` and runs in any modern browser with in-canvas video rendering for TV Guide.
 

@@ -14,6 +14,8 @@ pub fn tick(state: &mut AppState, backend: &mut impl SdiBackend, vfs: &mut dyn V
     poll_catalog_fetch(state);
     start_catalog_fetch_if_needed(state);
     handle_tune_requests(state, backend, vfs);
+    #[cfg(feature = "video-decode")]
+    poll_video_download(state, backend);
     tick_video_player(state, backend);
     detect_untune(state, backend);
 }
@@ -189,12 +191,21 @@ fn handle_tune_requests(state: &mut AppState, backend: &mut impl SdiBackend, vfs
     let preview_w = (at.screen_w / 5).max(80).saturating_sub(2);
     let preview_h = header_h.saturating_sub(16).saturating_sub(2);
 
-    // Start ffmpeg subprocesses.
-    state
-        .video_player
-        .start(url, seek_secs, preview_w, preview_h);
+    #[cfg(feature = "video-decode")]
+    start_video_download(state, url, seek_secs, preview_w, preview_h);
 
-    // Set up streaming audio track.
+    #[cfg(not(feature = "video-decode"))]
+    start_ffmpeg_playback(state, url, seek_secs, preview_w, preview_h);
+}
+
+/// Start ffmpeg-based playback (the legacy path).
+fn start_ffmpeg_playback(state: &mut AppState, url: &str, seek_secs: u64, width: u32, height: u32) {
+    state.video_player.start(url, seek_secs, width, height);
+    setup_streaming_audio(state);
+}
+
+/// Set up a streaming audio track for the video player.
+fn setup_streaming_audio(state: &mut AppState) {
     match state.audio_backend.load_streaming() {
         Ok(track) => {
             let _ = state.audio_backend.play(track);
@@ -206,14 +217,343 @@ fn handle_tune_requests(state: &mut AppState, backend: &mut impl SdiBackend, vfs
     }
 }
 
+/// Maximum number of cached video files.
+#[cfg(feature = "video-decode")]
+const VIDEO_CACHE_MAX: usize = 3;
+
+/// Start downloading the video to a temp file for software decode.
+///
+/// Checks the cache first — if the URL was already downloaded and the file
+/// still exists on disk, skips the download and starts decode immediately.
+#[cfg(feature = "video-decode")]
+fn start_video_download(state: &mut AppState, url: &str, seek_secs: u64, width: u32, height: u32) {
+    use crate::app_state::PendingVideoParams;
+    use std::sync::Arc;
+    use std::sync::atomic::AtomicU64;
+
+    // Check cache: if URL exists and file is on disk, skip download.
+    if let Some(pos) = state.tv_video_cache.iter().position(|(u, _)| u == url) {
+        let (_, ref path) = state.tv_video_cache[pos];
+        if path.exists() {
+            log::info!("TV: cache hit for {url}, starting software decode");
+            state.tv_video_cache_path = Some(path.clone());
+            state
+                .video_player
+                .start_software(path.clone(), seek_secs, width, height);
+            setup_streaming_audio(state);
+            return;
+        }
+        // File was deleted externally — remove stale cache entry.
+        state.tv_video_cache.remove(pos);
+    }
+
+    let url_owned = url.to_string();
+    let tls = state.net.tls_provider.clone();
+    let (tx, rx) = std::sync::mpsc::channel();
+    let progress = Arc::new((AtomicU64::new(0), AtomicU64::new(0)));
+    let progress_thread = Arc::clone(&progress);
+
+    std::thread::spawn(move || {
+        log::info!("TV: video download thread started: {url_owned}");
+        let result = download_to_temp(&url_owned, &tls, &progress_thread);
+        log::info!("TV: video download finished (ok={})", result.is_ok(),);
+        let _ = tx.send(result);
+    });
+
+    state.pending_video_download = Some(rx);
+    state.tv_download_progress = Some(progress);
+    state.pending_video_params = Some(PendingVideoParams {
+        url: url.to_string(),
+        seek_secs,
+        width,
+        height,
+    });
+}
+
+/// Download a URL to a temporary file with streaming writes and progress.
+///
+/// Streams the response body directly to disk in chunks instead of
+/// buffering the entire response in memory. Updates `progress` atomics
+/// so the UI thread can show a progress bar.
+#[cfg(feature = "video-decode")]
+fn download_to_temp(
+    url: &str,
+    tls: &oasis_core::net::RustlsTlsProvider,
+    progress: &std::sync::Arc<(std::sync::atomic::AtomicU64, std::sync::atomic::AtomicU64)>,
+) -> Result<std::path::PathBuf, String> {
+    use oasis_core::backend::NetworkBackend;
+    use oasis_core::net::TlsProvider;
+    use std::io::Write;
+    use std::sync::atomic::Ordering;
+
+    // Parse URL into host + path.
+    let stripped = url
+        .strip_prefix("https://")
+        .or_else(|| url.strip_prefix("http://"))
+        .ok_or_else(|| format!("unsupported URL scheme: {url}"))?;
+    let (host, path) = stripped
+        .split_once('/')
+        .map(|(h, p)| (h, format!("/{p}")))
+        .unwrap_or((stripped, "/".to_string()));
+
+    let tmp_path = std::env::temp_dir().join(format!(
+        "oasis_tv_{}.mp4",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis()
+    ));
+
+    let mut net = oasis_core::net::StdNetworkBackend::new();
+    let tcp = net
+        .connect(host, 443)
+        .map_err(|e| format!("connect: {e}"))?;
+
+    let mut stream = tls
+        .connect_tls(tcp, host)
+        .map_err(|e| format!("TLS: {e}"))?;
+
+    let request = format!(
+        "GET {path} HTTP/1.1\r\nHost: {host}\r\nUser-Agent: OASIS_OS/0.1\r\n\
+         Connection: close\r\nAccept: */*\r\n\r\n"
+    );
+    let req_bytes = request.as_bytes();
+    let mut written = 0;
+    while written < req_bytes.len() {
+        match stream.write(&req_bytes[written..]) {
+            Ok(n) => written += n,
+            Err(e) => {
+                let msg = format!("{e}");
+                if msg.contains("WouldBlock") || msg.contains("would block") {
+                    std::thread::sleep(std::time::Duration::from_millis(1));
+                    continue;
+                }
+                return Err(format!("write: {e}"));
+            },
+        }
+    }
+
+    // Read HTTP headers first.
+    let mut header_buf = Vec::with_capacity(4096);
+    let mut buf = [0u8; 4096];
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(120);
+    let header_end;
+    let leftover_start;
+
+    loop {
+        if std::time::Instant::now() > deadline {
+            return Err("timeout reading headers".to_string());
+        }
+        match stream.read(&mut buf) {
+            Ok(0) => return Err("connection closed before headers complete".to_string()),
+            Ok(n) => {
+                header_buf.extend_from_slice(&buf[..n]);
+                if let Some(pos) = header_buf.windows(4).position(|w| w == b"\r\n\r\n") {
+                    header_end = pos;
+                    leftover_start = pos + 4;
+                    break;
+                }
+            },
+            Err(e) => {
+                let msg = format!("{e}");
+                if msg.contains("WouldBlock") || msg.contains("would block") {
+                    std::thread::sleep(std::time::Duration::from_millis(1));
+                    continue;
+                }
+                return Err(format!("read headers: {e}"));
+            },
+        }
+    }
+
+    // Parse Content-Length from headers.
+    let header_str = String::from_utf8_lossy(&header_buf[..header_end]);
+    let content_length: u64 = header_str
+        .lines()
+        .find_map(|line| {
+            let lower = line.to_ascii_lowercase();
+            lower
+                .strip_prefix("content-length:")
+                .and_then(|v| v.trim().parse().ok())
+        })
+        .unwrap_or(0);
+
+    progress.1.store(content_length, Ordering::Relaxed);
+
+    // Create the temp file and stream body to it.
+    let mut file =
+        std::fs::File::create(&tmp_path).map_err(|e| format!("create temp file: {e}"))?;
+
+    // Write any leftover bytes from the header read.
+    let leftover = &header_buf[leftover_start..];
+    if !leftover.is_empty() {
+        file.write_all(leftover)
+            .map_err(|e| format!("write: {e}"))?;
+    }
+    let mut downloaded = leftover.len() as u64;
+    progress.0.store(downloaded, Ordering::Relaxed);
+
+    // Stream remaining body directly to file.
+    loop {
+        if std::time::Instant::now() > deadline {
+            return Err("timeout downloading video".to_string());
+        }
+        match stream.read(&mut buf) {
+            Ok(0) => break,
+            Ok(n) => {
+                file.write_all(&buf[..n])
+                    .map_err(|e| format!("write: {e}"))?;
+                downloaded += n as u64;
+                progress.0.store(downloaded, Ordering::Relaxed);
+            },
+            Err(e) => {
+                let msg = format!("{e}");
+                if msg.contains("WouldBlock") || msg.contains("would block") {
+                    std::thread::sleep(std::time::Duration::from_millis(1));
+                    continue;
+                }
+                if downloaded > 0 {
+                    break;
+                }
+                return Err(format!("read: {e}"));
+            },
+        }
+    }
+
+    log::info!(
+        "TV: streamed {} bytes to {}",
+        downloaded,
+        tmp_path.display()
+    );
+    Ok(tmp_path)
+}
+
+/// Poll pending video download and start software decode when ready.
+#[cfg(feature = "video-decode")]
+fn poll_video_download(state: &mut AppState, backend: &mut impl SdiBackend) {
+    let Some(ref rx) = state.pending_video_download else {
+        return;
+    };
+
+    match rx.try_recv() {
+        Ok(Ok(path)) => {
+            state.pending_video_download = None;
+            state.tv_download_progress = None;
+            let params = state.pending_video_params.take();
+            if let Some(params) = params {
+                log::info!("TV: download complete, starting software decode");
+                state.tv_video_cache_path = Some(path.clone());
+                // Add to cache with FIFO eviction.
+                if state.tv_video_cache.len() >= VIDEO_CACHE_MAX {
+                    let (_, evicted) = state.tv_video_cache.remove(0);
+                    if let Err(e) = std::fs::remove_file(&evicted) {
+                        log::warn!("TV: failed to evict cached file {}: {e}", evicted.display());
+                    }
+                }
+                state
+                    .tv_video_cache
+                    .push((params.url.clone(), path.clone()));
+                state.video_player.start_software(
+                    path,
+                    params.seek_secs,
+                    params.width,
+                    params.height,
+                );
+                setup_streaming_audio(state);
+            }
+        },
+        Ok(Err(e)) => {
+            state.pending_video_download = None;
+            state.tv_download_progress = None;
+            let params = state.pending_video_params.take();
+            log::warn!("TV: video download failed: {e}, falling back to ffmpeg");
+            // Fallback to ffmpeg.
+            if let Some(params) = params {
+                start_ffmpeg_playback(
+                    state,
+                    &params.url,
+                    params.seek_secs,
+                    params.width,
+                    params.height,
+                );
+            }
+        },
+        Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+            state.pending_video_download = None;
+            state.tv_download_progress = None;
+            let params = state.pending_video_params.take();
+            log::error!("TV: video download thread died, falling back to ffmpeg");
+            if let Some(params) = params {
+                start_ffmpeg_playback(
+                    state,
+                    &params.url,
+                    params.seek_secs,
+                    params.width,
+                    params.height,
+                );
+            }
+        },
+        Err(std::sync::mpsc::TryRecvError::Empty) => {
+            // Still downloading — read progress and update the guide.
+            let progress_text = if let Some(ref prog) = state.tv_download_progress {
+                use std::sync::atomic::Ordering;
+                let downloaded = prog.0.load(Ordering::Relaxed);
+                let total = prog.1.load(Ordering::Relaxed);
+                if total > 0 {
+                    let pct = (downloaded * 100).checked_div(total).unwrap_or(0);
+                    Some(format!(
+                        "Downloading... {pct}% ({}/{}KB)",
+                        downloaded / 1024,
+                        total / 1024
+                    ))
+                } else if downloaded > 0 {
+                    Some(format!("Downloading... {}KB", downloaded / 1024))
+                } else {
+                    Some("Downloading...".to_string())
+                }
+            } else {
+                None
+            };
+
+            let runner = find_tv_guide_runner(
+                &mut state.content.app_runner,
+                &mut state.content.open_runners,
+            );
+            if let Some(runner) = runner
+                && let Some(guide) = runner.tv_guide_state()
+            {
+                // Clear texture while downloading (shows progress in guide).
+                guide.preview_texture = None;
+                guide.download_status = progress_text;
+            }
+            let _ = backend; // suppress unused warning
+        },
+    }
+}
+
 /// Tick video player: upload frames, collect audio chunks.
 fn tick_video_player(state: &mut AppState, backend: &mut impl SdiBackend) {
-    let (texture, audio_chunks) = state.video_player.tick(backend);
+    let (texture, audio_output) = state.video_player.tick(backend);
 
-    // Feed audio chunks to the streaming track.
+    // Feed audio to the streaming track.
     if let Some(track) = state.tv_audio_track {
-        for chunk in &audio_chunks {
-            let _ = state.audio_backend.feed_data(track, chunk);
+        match &audio_output {
+            crate::video_player::AudioOutput::Mp3Chunks(chunks) => {
+                for chunk in chunks {
+                    let _ = state.audio_backend.feed_data(track, chunk);
+                }
+            },
+            #[cfg(feature = "video-decode")]
+            crate::video_player::AudioOutput::PcmF32(chunks) => {
+                for chunk in chunks {
+                    let _ = state.audio_backend.feed_pcm_f32(
+                        track,
+                        &chunk.pcm_f32,
+                        chunk.channels,
+                        chunk.sample_rate,
+                    );
+                }
+            },
+            crate::video_player::AudioOutput::None => {},
         }
     }
 
@@ -251,6 +591,14 @@ fn detect_untune(state: &mut AppState, backend: &mut impl SdiBackend) {
         state.video_player.stop(backend);
         if let Some(track) = state.tv_audio_track.take() {
             let _ = state.audio_backend.unload_track(track);
+        }
+        #[cfg(feature = "video-decode")]
+        {
+            state.pending_video_download = None;
+            state.pending_video_params = None;
+            state.tv_download_progress = None;
+            // Keep the file in cache (don't delete) — it can be reused on re-tune.
+            state.tv_video_cache_path = None;
         }
     }
 }

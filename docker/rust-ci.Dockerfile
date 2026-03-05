@@ -10,17 +10,19 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     apt-get update && apt-get install -y --no-install-recommends \
     pkg-config \
     git \
+    g++ \
     libsdl2-dev \
     libsdl2-mixer-dev \
     xvfb \
     xauth \
     libgl1-mesa-dri \
+    valgrind \
     && rm -rf /var/lib/apt/lists/*
 
 # Install nightly toolchain (for format checking with edition 2024)
 RUN rustup install nightly \
     && rustup component add rustfmt clippy \
-    && rustup component add --toolchain nightly rustfmt
+    && rustup component add --toolchain nightly rustfmt rust-src
 
 # Install cargo-deny for license/advisory checks
 RUN --mount=type=cache,target=/usr/local/cargo/registry \

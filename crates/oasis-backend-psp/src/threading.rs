@@ -74,6 +74,8 @@ pub enum AudioCmd {
         sample_rate: u32,
         channels: u16,
     },
+    /// Raw AAC frame data from demux_lite for hardware decode.
+    VideoAudioAac { data: Vec<u8> },
     /// Stop video audio playback.
     VideoAudioStop,
     Shutdown,
@@ -270,6 +272,58 @@ pub fn spawn_workers() -> (AudioHandle, IoHandle) {
 // Audio thread
 // ---------------------------------------------------------------------------
 
+/// Decode a raw AAC frame via PSP hardware codec and output PCM.
+///
+/// Lazily initializes the AAC decoder on first call. AAC frames from MP4
+/// are raw (no ADTS header) — the PSP codec handles this natively.
+fn decode_aac_frame(
+    data: &[u8],
+    player: &mut AudioPlayer,
+    aac_decoder: &mut Option<psp::audiocodec::AudiocodecDecoder>,
+) {
+    use psp::audio::{AudioChannel, AudioFormat};
+    use psp::audiocodec::{AudiocodecDecoder, CodecType};
+
+    // AAC: 1024 samples per frame, stereo = 2048 i16.
+    const AAC_FRAME_SAMPLES: i32 = 1024;
+
+    crate::audio::load_av_modules_once_pub();
+
+    // Lazily create AAC decoder.
+    if aac_decoder.is_none() {
+        match AudiocodecDecoder::new(CodecType::Aac) {
+            Ok(dec) => *aac_decoder = Some(dec),
+            Err(e) => {
+                psp::dprintln!("video: AAC decoder init failed: {e}");
+                return;
+            },
+        }
+    }
+
+    // Ensure audio channel exists.
+    if player.channel.is_none() {
+        player.channel =
+            AudioChannel::reserve(AAC_FRAME_SAMPLES, AudioFormat::Stereo).ok();
+    }
+
+    let decoder = aac_decoder.as_mut().unwrap();
+    let mut pcm = vec![0i16; AAC_FRAME_SAMPLES as usize * 2];
+
+    match decoder.decode(data, &mut pcm) {
+        Ok(consumed) => {
+            if consumed == 0 {
+                return;
+            }
+            if let Some(channel) = &player.channel {
+                let _ = channel.output_blocking(0x8000, &pcm);
+            }
+        },
+        Err(e) => {
+            psp::dprintln!("video: AAC decode error: {e}");
+        },
+    }
+}
+
 /// Dedicated audio thread: MP3 playback + SFX mixing + radio streaming.
 fn audio_thread_fn() {
     let mut player = AudioPlayer::new();
@@ -277,6 +331,7 @@ fn audio_thread_fn() {
 
     let mut sfx = SfxEngine::new();
     let mut radio: Option<RadioStreamer> = None;
+    let mut aac_decoder: Option<psp::audiocodec::AudiocodecDecoder> = None;
 
     loop {
         match AUDIO_QUEUE.pop() {
@@ -387,8 +442,13 @@ fn audio_thread_fn() {
                 // Output PCM directly to the hardware audio channel.
                 player.output_video_pcm(&pcm_i16);
             },
+            Some(AudioCmd::VideoAudioAac { data }) => {
+                // Decode raw AAC frame via sceAudiocodec and output PCM.
+                decode_aac_frame(&data, &mut player, &mut aac_decoder);
+            },
             Some(AudioCmd::VideoAudioStop) => {
-                // Video playback ended -- nothing special to clean up.
+                // Video playback ended -- flush AAC decoder state.
+                aac_decoder = None;
             },
             Some(AudioCmd::Shutdown) => {
                 player.stop();

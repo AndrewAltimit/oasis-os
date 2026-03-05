@@ -11,9 +11,14 @@ documentation = "https://docs.rs/oasis-ffi"
 [lib]
 crate-type = ["cdylib", "rlib"]
 
+[features]
+default = []
+video-decode = ["dep:oasis-video", "oasis-video/h264"]
+
 [dependencies]
 oasis-core.workspace = true
 oasis-backend-ue5.workspace = true
+oasis-video = { workspace = true, optional = true }
 log.workspace = true
 env_logger.workspace = true
 

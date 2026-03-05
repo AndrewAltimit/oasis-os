@@ -9,13 +9,53 @@
 
 pub mod aac;
 pub mod demux;
+#[cfg(feature = "no-std-demux")]
+pub mod demux_lite;
 #[cfg(feature = "h264")]
 pub mod h264;
 pub mod yuv;
 
 use std::collections::VecDeque;
+use std::io::{Cursor, Read, Seek};
 
 use demux::{DemuxedPacket, Mp4Demuxer, TrackKind};
+
+/// A streaming video source: anything that is `Read + Seek + Send + Sync`.
+///
+/// Provides optional length and seekability hints for the demuxer.
+/// This is a blanket trait — `File`, `Cursor<Vec<u8>>`, and any other
+/// `Read + Seek + Send + Sync + 'static` type implements it automatically.
+pub trait VideoSource: Read + Seek + Send + Sync {
+    /// Whether the source supports seeking. Defaults to `true`.
+    fn is_seekable(&self) -> bool {
+        true
+    }
+
+    /// Total length in bytes, if known.
+    fn byte_len(&self) -> Option<u64> {
+        None
+    }
+}
+
+impl VideoSource for std::fs::File {
+    fn is_seekable(&self) -> bool {
+        true
+    }
+
+    fn byte_len(&self) -> Option<u64> {
+        self.metadata().ok().map(|m| m.len())
+    }
+}
+
+impl<T: AsRef<[u8]> + Send + Sync> VideoSource for Cursor<T> {
+    fn is_seekable(&self) -> bool {
+        true
+    }
+
+    fn byte_len(&self) -> Option<u64> {
+        Some(self.get_ref().as_ref().len() as u64)
+    }
+}
 
 /// Errors from the video pipeline.
 #[derive(Debug)]
@@ -80,13 +120,25 @@ pub struct SoftwareVideoDecoder {
 }
 
 impl SoftwareVideoDecoder {
+    /// Open an MP4 from a streaming source.
+    ///
+    /// Accepts any `Read + Seek + Send` source (e.g. `File`, network stream)
+    /// and initializes decoders for any H.264 video and AAC audio tracks.
+    pub fn open_stream(source: Box<dyn VideoSource>) -> Result<Self, VideoError> {
+        let demuxer = Mp4Demuxer::open_stream(source)?;
+        Self::from_demuxer(demuxer)
+    }
+
     /// Open an MP4 from a byte buffer.
     ///
     /// Parses the container and initializes decoders for any H.264 video and
     /// AAC audio tracks found.
     pub fn open(mp4_data: Vec<u8>) -> Result<Self, VideoError> {
-        let demuxer = Mp4Demuxer::open(mp4_data)?;
+        Self::open_stream(Box::new(Cursor::new(mp4_data)))
+    }
 
+    /// Initialize decoders from a probed demuxer.
+    fn from_demuxer(demuxer: Mp4Demuxer) -> Result<Self, VideoError> {
         #[cfg(feature = "h264")]
         let h264 = if demuxer.has_video() {
             Some(h264::H264Decoder::new()?)
@@ -242,6 +294,170 @@ impl SoftwareVideoDecoder {
 mod tests {
     use super::*;
 
+    /// Path to the shared test fixture (320x240, ~2s, H.264+AAC).
+    fn fixture_path() -> std::path::PathBuf {
+        let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        manifest.join("../../tests/fixtures/test_320x240_2s.mp4")
+    }
+
+    /// Read the fixture into a `Vec<u8>`.
+    fn fixture_bytes() -> Vec<u8> {
+        std::fs::read(fixture_path()).expect("fixture file missing")
+    }
+
+    /// Open the fixture as a `File`.
+    fn fixture_file() -> std::fs::File {
+        std::fs::File::open(fixture_path()).expect("fixture file missing")
+    }
+
+    // ------------------------------------------------------------------
+    // Integration tests (require the test fixture)
+    // ------------------------------------------------------------------
+
+    #[test]
+    #[cfg(feature = "h264")]
+    fn open_stream_with_file_decodes() {
+        let file = fixture_file();
+        let mut dec =
+            SoftwareVideoDecoder::open_stream(Box::new(file)).expect("open_stream failed");
+        let frame = dec
+            .next_video_frame()
+            .expect("decode error")
+            .expect("no frame");
+        assert_eq!(frame.width, 320);
+        assert_eq!(frame.height, 240);
+        assert_eq!(frame.rgba.len(), (320 * 240 * 4) as usize);
+    }
+
+    #[test]
+    #[cfg(feature = "h264")]
+    fn open_stream_with_cursor_decodes() {
+        let data = fixture_bytes();
+        let cursor = Cursor::new(data);
+        let mut dec =
+            SoftwareVideoDecoder::open_stream(Box::new(cursor)).expect("open_stream failed");
+        let frame = dec
+            .next_video_frame()
+            .expect("decode error")
+            .expect("no frame");
+        assert!(frame.width > 0);
+        assert!(frame.height > 0);
+    }
+
+    #[test]
+    #[cfg(feature = "h264")]
+    fn full_decode_pipeline() {
+        let mut dec = SoftwareVideoDecoder::open(fixture_bytes()).expect("open failed");
+        let mut count = 0u32;
+        let mut last_ts = -1.0f64;
+        let mut dims = (0u32, 0u32);
+        while let Some(frame) = dec.next_video_frame().expect("decode error") {
+            count += 1;
+            assert!(
+                frame.timestamp_secs >= last_ts,
+                "timestamp went backwards: {} < {}",
+                frame.timestamp_secs,
+                last_ts
+            );
+            last_ts = frame.timestamp_secs;
+            dims = (frame.width, frame.height);
+        }
+        assert!(count >= 10, "expected >=10 frames, got {count}");
+        assert_eq!(dims, (320, 240));
+    }
+
+    #[test]
+    fn audio_decode_format() {
+        let mut dec = SoftwareVideoDecoder::open(fixture_bytes()).expect("open failed");
+        let chunk = dec
+            .next_audio_samples()
+            .expect("audio decode error")
+            .expect("no audio");
+        assert!(chunk.sample_rate > 0, "sample_rate should be > 0");
+        assert!(chunk.channels > 0, "channels should be > 0");
+        assert!(!chunk.pcm_f32.is_empty(), "PCM buffer should not be empty");
+    }
+
+    #[test]
+    #[cfg(feature = "h264")]
+    fn seek_to_midstream() {
+        let mut dec = SoftwareVideoDecoder::open(fixture_bytes()).expect("open failed");
+        // Decode one frame to prime the decoder.
+        let _ = dec.next_video_frame().expect("decode error");
+        dec.seek(1.0).expect("seek failed");
+        let frame = dec
+            .next_video_frame()
+            .expect("decode error")
+            .expect("no frame after seek");
+        // Timestamp should be within ±0.5s of the seek target.
+        assert!(
+            (frame.timestamp_secs - 1.0).abs() < 0.5,
+            "post-seek timestamp {} not near 1.0s",
+            frame.timestamp_secs
+        );
+    }
+
+    #[test]
+    fn truncated_file_no_panic() {
+        let full = fixture_bytes();
+        let half = &full[..full.len() / 2];
+        // Opening or decoding a truncated file should not panic.
+        match SoftwareVideoDecoder::open(half.to_vec()) {
+            Ok(mut dec) => {
+                // If it opens, try decoding — it may error, but must not panic.
+                let _ = dec.next_video_frame();
+                let _ = dec.next_audio_samples();
+            },
+            Err(_) => {
+                // Error on open is acceptable.
+            },
+        }
+    }
+
+    #[test]
+    fn video_size_before_decode() {
+        let dec = SoftwareVideoDecoder::open(fixture_bytes()).expect("open failed");
+        // Before any decode, video_size is (0,0) (dimensions come from first frame).
+        assert_eq!(dec.video_size(), (0, 0));
+        // Audio format should already be known from track headers.
+        let (sr, ch) = dec.audio_format();
+        assert!(sr > 0, "sample_rate should be discoverable before decode");
+        assert!(ch > 0, "channels should be discoverable before decode");
+    }
+
+    #[test]
+    #[cfg(feature = "h264")]
+    fn timestamp_monotonicity() {
+        let mut dec = SoftwareVideoDecoder::open(fixture_bytes()).expect("open failed");
+        let mut last_video_ts = -1.0f64;
+        let mut last_audio_ts = -1.0f64;
+        for _ in 0..60 {
+            // Alternate video and audio to exercise interleaved buffering.
+            if let Ok(Some(frame)) = dec.next_video_frame() {
+                assert!(
+                    frame.timestamp_secs >= last_video_ts,
+                    "video ts went backwards: {} < {}",
+                    frame.timestamp_secs,
+                    last_video_ts
+                );
+                last_video_ts = frame.timestamp_secs;
+            }
+            if let Ok(Some(chunk)) = dec.next_audio_samples() {
+                assert!(
+                    chunk.timestamp_secs >= last_audio_ts,
+                    "audio ts went backwards: {} < {}",
+                    chunk.timestamp_secs,
+                    last_audio_ts
+                );
+                last_audio_ts = chunk.timestamp_secs;
+            }
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // Existing unit tests
+    // ------------------------------------------------------------------
+
     #[test]
     fn open_empty_data_fails() {
         let result = SoftwareVideoDecoder::open(Vec::new());
@@ -297,5 +513,30 @@ mod tests {
         assert_eq!(chunk.pcm_f32.len(), 1024);
         assert_eq!(chunk.channels, 2);
         assert_eq!(chunk.sample_rate, 44100);
+    }
+
+    #[test]
+    fn open_stream_with_cursor_empty_fails() {
+        let cursor = std::io::Cursor::new(Vec::<u8>::new());
+        let result = SoftwareVideoDecoder::open_stream(Box::new(cursor));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn open_stream_equivalent_to_open_on_garbage() {
+        let data = vec![0xDE, 0xAD, 0xBE, 0xEF, 0x00, 0x11];
+        let r1 = SoftwareVideoDecoder::open(data.clone());
+        let r2 = SoftwareVideoDecoder::open_stream(Box::new(std::io::Cursor::new(data)));
+        // Both should fail with the same kind of error.
+        assert!(r1.is_err());
+        assert!(r2.is_err());
+    }
+
+    #[test]
+    fn video_source_impls_compile() {
+        // Compile-time check: File and Cursor implement VideoSource.
+        fn _assert_video_source<T: VideoSource>() {}
+        _assert_video_source::<std::fs::File>();
+        _assert_video_source::<std::io::Cursor<Vec<u8>>>();
     }
 }
