@@ -206,8 +206,9 @@ Catches use-after-free, buffer overflows, and memory leaks at ~2x runtime cost:
 
 ```bash
 # Single-crate ASAN test (requires nightly + rust-src)
+TARGET=$(rustc -vV | awk '/^host:/ { print $2 }')
 RUSTFLAGS="-Zsanitizer=address" cargo +nightly test -p oasis-video \
-  --target x86_64-unknown-linux-gnu -Zbuild-std --target-dir target/asan
+  --target $TARGET -Zbuild-std --target-dir target/asan
 ```
 
 ### Valgrind Massif (Heap Profiling)
