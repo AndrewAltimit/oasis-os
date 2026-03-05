@@ -150,13 +150,21 @@ impl Drop for PspFileReader {
 // H.264 video decoder stub (sceVideocodec)
 // ---------------------------------------------------------------------------
 
+/// 64-byte-aligned codec buffer required by the PSP Media Engine.
+///
+/// `sceVideocodec*` APIs require a 64-byte-aligned buffer of at least
+/// 65 `u32` words. `#[repr(align(64))]` lets the Rust compiler guarantee
+/// alignment without manual pointer arithmetic.
+#[repr(align(64))]
+struct CodecBuf([u32; 65]);
+
 /// PSP hardware H.264 video decoder using the Media Engine.
 ///
 /// Uses `sceVideocodec*` raw APIs. The ME is not emulated in PPSSPP, so
 /// `try_init()` returns `Err` when running under emulation (audio-only mode).
 struct PspVideoDecoder {
-    /// Codec buffer (65 words, 64-byte aligned).
-    buf: Vec<u32>,
+    /// Codec buffer (65 words, 64-byte aligned via `CodecBuf`).
+    buf: Box<CodecBuf>,
     initialized: bool,
 }
 
@@ -166,17 +174,12 @@ impl PspVideoDecoder {
     /// Returns `Err` on PPSSPP (ME not emulated) or if the codec modules
     /// are unavailable. The caller should fall back to audio-only mode.
     fn try_init() -> Result<Self, String> {
-        let mut buf = vec![0u32; 96]; // over-allocate for alignment
-        // Ensure 64-byte alignment (codec requirement).
-        let ptr = buf.as_mut_ptr();
-        let aligned = ((ptr as usize + 63) & !63) as *mut u32;
-        let offset = unsafe { aligned.offset_from(ptr) } as usize;
-        // Use aligned portion.
-        let _ = offset; // Alignment handled by the allocation padding.
+        let mut buf = Box::new(CodecBuf([0u32; 65]));
+        let ptr = buf.0.as_mut_ptr();
 
         // SAFETY: sceVideocodecOpen initializes the codec buffer.
-        // Type 0 = H.264 / AVC.
-        let ret = unsafe { psp::sys::sceVideocodecOpen(buf.as_mut_ptr(), 0) };
+        // Type 0 = H.264 / AVC. ptr is 64-byte aligned via CodecBuf.
+        let ret = unsafe { psp::sys::sceVideocodecOpen(ptr, 0) };
         if ret < 0 {
             return Err(format!(
                 "sceVideocodecOpen failed: {:#010x} (ME not available?)",
@@ -184,7 +187,8 @@ impl PspVideoDecoder {
             ));
         }
 
-        let ret = unsafe { psp::sys::sceVideocodecGetEDRAM(buf.as_mut_ptr(), 0) };
+        // SAFETY: ptr is the same aligned buffer passed to Open.
+        let ret = unsafe { psp::sys::sceVideocodecGetEDRAM(ptr, 0) };
         if ret < 0 {
             return Err(format!(
                 "sceVideocodecGetEDRAM failed: {:#010x}",
@@ -192,10 +196,11 @@ impl PspVideoDecoder {
             ));
         }
 
-        let ret = unsafe { psp::sys::sceVideocodecInit(buf.as_mut_ptr(), 0) };
+        // SAFETY: ptr is the same aligned buffer passed to Open/GetEDRAM.
+        let ret = unsafe { psp::sys::sceVideocodecInit(ptr, 0) };
         if ret < 0 {
-            // Release EDRAM on init failure.
-            unsafe { psp::sys::sceVideocodecReleaseEDRAM(buf.as_mut_ptr()) };
+            // SAFETY: Release EDRAM on init failure.
+            unsafe { psp::sys::sceVideocodecReleaseEDRAM(ptr) };
             return Err(format!(
                 "sceVideocodecInit failed: {:#010x}",
                 ret as u32
@@ -229,7 +234,8 @@ impl Drop for PspVideoDecoder {
     fn drop(&mut self) {
         if self.initialized {
             // SAFETY: Release EDRAM allocated by sceVideocodecGetEDRAM.
-            unsafe { psp::sys::sceVideocodecReleaseEDRAM(self.buf.as_mut_ptr()) };
+            // buf.0.as_mut_ptr() is the same 64-byte-aligned pointer.
+            unsafe { psp::sys::sceVideocodecReleaseEDRAM(self.buf.0.as_mut_ptr()) };
         }
     }
 }
