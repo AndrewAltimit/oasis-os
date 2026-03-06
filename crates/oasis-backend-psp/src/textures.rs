@@ -50,6 +50,9 @@ impl VolatileAllocator {
         if aligned + len > self.size {
             return ptr::null_mut();
         }
+        // SAFETY: `aligned` is within `[0, self.size)` (checked above),
+        // and `self.base` points to a valid region of `self.size` bytes
+        // obtained from `sceKernelVolatileMemTryLock`.
         let ptr = unsafe { self.base.add(aligned) };
         self.offset = aligned + len;
         ptr

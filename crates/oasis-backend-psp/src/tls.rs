@@ -33,13 +33,15 @@ struct PspRng {
 
 impl PspRng {
     fn new() -> Self {
-        // SAFETY: MT19937 context is stack-local, seed from CPU cycle counter.
+        // SAFETY: MT19937 context is initialized by sceKernelUtilsMt19937Init
+        // before any reads. MaybeUninit avoids potential UB from zeroing a
+        // struct with padding or invariant fields. Seed from CPU cycle counter.
         unsafe {
-            let mut ctx = core::mem::zeroed();
+            let mut ctx = core::mem::MaybeUninit::uninit();
             let seed: u32;
             core::arch::asm!("mfc0 {}, $9", out(reg) seed);
-            psp::sys::sceKernelUtilsMt19937Init(&mut ctx, seed);
-            Self { ctx }
+            psp::sys::sceKernelUtilsMt19937Init(ctx.as_mut_ptr(), seed);
+            Self { ctx: ctx.assume_init() }
         }
     }
 }
@@ -111,11 +113,38 @@ impl embedded_io::Write for IoAdapter {
 // ---------------------------------------------------------------------------
 
 /// PSP TLS provider using embedded-tls with RustCrypto.
-pub struct PspTlsProvider;
+///
+/// Uses `UnsecureProvider` by default since PSP has no certificate store.
+/// Call [`with_pinned_host`](PspTlsProvider::with_pinned_host) to restrict
+/// connections to specific server names (hostname allowlist).
+pub struct PspTlsProvider {
+    /// Optional allowlist of server names. When non-empty, only these
+    /// hosts are permitted. This is a defense-in-depth measure -- the TLS
+    /// handshake still proceeds without certificate validation, but
+    /// connections to unexpected hosts are rejected early.
+    pinned_hosts: Vec<String>,
+}
 
 impl PspTlsProvider {
     pub fn new() -> Self {
-        Self
+        Self {
+            pinned_hosts: Vec::new(),
+        }
+    }
+
+    /// Restrict TLS connections to a set of known server names.
+    ///
+    /// When pinned hosts are configured, `connect_tls` will reject any
+    /// server name not in the list. This prevents accidental connections
+    /// to untrusted servers when certificate validation is unavailable.
+    pub fn with_pinned_hosts(mut self, hosts: Vec<String>) -> Self {
+        self.pinned_hosts = hosts;
+        self
+    }
+
+    /// Add a single pinned host.
+    pub fn pin_host(&mut self, host: &str) {
+        self.pinned_hosts.push(host.to_string());
     }
 }
 
@@ -131,6 +160,18 @@ impl TlsProvider for PspTlsProvider {
     ) -> Result<Box<dyn NetworkStream>> {
         use embedded_tls::UnsecureProvider;
         use embedded_tls::blocking::{Aes128GcmSha256, TlsConfig, TlsConnection, TlsContext};
+
+        // Reject connections to hosts not in the pinned allowlist.
+        if !self.pinned_hosts.is_empty()
+            && !self
+                .pinned_hosts
+                .iter()
+                .any(|h| h.eq_ignore_ascii_case(server_name))
+        {
+            return Err(OasisError::Backend(format!(
+                "TLS rejected: '{server_name}' is not in the pinned host allowlist"
+            )));
+        }
 
         let adapter = IoAdapter(stream);
 

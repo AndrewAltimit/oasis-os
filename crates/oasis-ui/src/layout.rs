@@ -142,6 +142,143 @@ pub fn align_y(container_h: u32, child_h: u32, align: VAlign) -> i32 {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Measure cache
+// ---------------------------------------------------------------------------
+
+use std::collections::HashMap;
+
+use crate::context::DrawContext;
+use crate::widget::Widget;
+
+/// Cache key: `(widget_id, available_width)`.
+///
+/// `widget_id` is a caller-supplied opaque identifier (e.g. an index or hash)
+/// that uniquely identifies a widget instance within the layout pass.
+/// `available_width` is included because it is by far the most common axis
+/// that changes between measure calls; height rarely constrains widgets.
+type MeasureKey = (u64, u32);
+
+/// Opt-in cache for `Widget::measure()` results.
+///
+/// Widgets are measured every frame even when their inputs have not changed.
+/// Wrap the call in [`MeasureCache::get_or_measure`] to skip redundant work.
+///
+/// # Invalidation
+///
+/// Call [`MeasureCache::next_generation`] once per frame (or whenever widget
+/// content changes). Entries from a previous generation are treated as stale
+/// and will be recomputed on next access.
+///
+/// # Example
+///
+/// ```ignore
+/// let mut cache = MeasureCache::new();
+/// // — each frame —
+/// cache.next_generation();
+/// let (w, h) = cache.get_or_measure(widget_id, avail_w, || {
+///     my_widget.measure(&ctx, avail_w, avail_h)
+/// });
+/// ```
+pub struct MeasureCache {
+    generation: u64,
+    entries: HashMap<MeasureKey, MeasureCacheEntry>,
+}
+
+/// A single cached measurement together with the generation it was stored in.
+struct MeasureCacheEntry {
+    generation: u64,
+    size: (u32, u32),
+}
+
+impl MeasureCache {
+    /// Create an empty cache.
+    pub fn new() -> Self {
+        Self {
+            generation: 0,
+            entries: HashMap::new(),
+        }
+    }
+
+    /// Advance the generation counter.
+    ///
+    /// Previous entries are not deleted immediately — they are lazily evicted
+    /// on the next lookup — so this call is O(1).
+    pub fn next_generation(&mut self) {
+        self.generation = self.generation.wrapping_add(1);
+    }
+
+    /// Return the current generation counter.
+    pub fn generation(&self) -> u64 {
+        self.generation
+    }
+
+    /// Return a cached size or compute it via the closure, caching the result.
+    ///
+    /// `widget_id` must uniquely identify the widget within the current layout.
+    /// `available_w` is the width constraint passed to `Widget::measure`.
+    pub fn get_or_measure(
+        &mut self,
+        widget_id: u64,
+        available_w: u32,
+        measure_fn: impl FnOnce() -> (u32, u32),
+    ) -> (u32, u32) {
+        let key = (widget_id, available_w);
+        if let Some(entry) = self.entries.get(&key)
+            && entry.generation == self.generation
+        {
+            return entry.size;
+        }
+        let size = measure_fn();
+        self.entries.insert(
+            key,
+            MeasureCacheEntry {
+                generation: self.generation,
+                size,
+            },
+        );
+        size
+    }
+
+    /// Remove all cached entries.
+    pub fn clear(&mut self) {
+        self.entries.clear();
+    }
+
+    /// Number of entries currently stored (including stale ones).
+    pub fn len(&self) -> usize {
+        self.entries.len()
+    }
+
+    /// Whether the cache contains zero entries.
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+}
+
+impl Default for MeasureCache {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Convenience: measure a widget through the cache.
+///
+/// This is a free function so callers do not need to manually construct the
+/// closure. `widget_id` must uniquely identify `widget` in the current layout.
+pub fn cached_measure(
+    cache: &mut MeasureCache,
+    widget_id: u64,
+    widget: &dyn Widget,
+    ctx: &DrawContext<'_>,
+    available_w: u32,
+    available_h: u32,
+) -> (u32, u32) {
+    cache.get_or_measure(widget_id, available_w, || {
+        widget.measure(ctx, available_w, available_h)
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -321,5 +458,128 @@ mod tests {
         let a = Padding::uniform(8);
         let b = a;
         assert_eq!(a, b);
+    }
+
+    // -- MeasureCache tests -------------------------------------------------
+
+    use super::MeasureCache;
+    use std::cell::Cell;
+
+    #[test]
+    fn cache_new_is_empty() {
+        let cache = MeasureCache::new();
+        assert!(cache.is_empty());
+        assert_eq!(cache.len(), 0);
+        assert_eq!(cache.generation(), 0);
+    }
+
+    #[test]
+    fn cache_default_is_new() {
+        let cache = MeasureCache::default();
+        assert!(cache.is_empty());
+        assert_eq!(cache.generation(), 0);
+    }
+
+    #[test]
+    fn cache_stores_and_returns_result() {
+        let mut cache = MeasureCache::new();
+        let call_count = Cell::new(0u32);
+        let size = cache.get_or_measure(1, 200, || {
+            call_count.set(call_count.get() + 1);
+            (80, 24)
+        });
+        assert_eq!(size, (80, 24));
+        assert_eq!(call_count.get(), 1);
+
+        // Second call with same key should return cached value.
+        let size2 = cache.get_or_measure(1, 200, || {
+            call_count.set(call_count.get() + 1);
+            (999, 999)
+        });
+        assert_eq!(size2, (80, 24));
+        assert_eq!(call_count.get(), 1, "measure_fn should not be called again");
+        assert_eq!(cache.len(), 1);
+    }
+
+    #[test]
+    fn cache_different_widget_id() {
+        let mut cache = MeasureCache::new();
+        cache.get_or_measure(1, 200, || (10, 20));
+        cache.get_or_measure(2, 200, || (30, 40));
+        assert_eq!(cache.len(), 2);
+        assert_eq!(cache.get_or_measure(1, 200, || unreachable!()), (10, 20));
+        assert_eq!(cache.get_or_measure(2, 200, || unreachable!()), (30, 40));
+    }
+
+    #[test]
+    fn cache_different_width() {
+        let mut cache = MeasureCache::new();
+        cache.get_or_measure(1, 200, || (80, 24));
+        cache.get_or_measure(1, 300, || (120, 24));
+        assert_eq!(cache.len(), 2);
+        assert_eq!(cache.get_or_measure(1, 200, || unreachable!()), (80, 24));
+        assert_eq!(cache.get_or_measure(1, 300, || unreachable!()), (120, 24));
+    }
+
+    #[test]
+    fn cache_invalidates_on_next_generation() {
+        let mut cache = MeasureCache::new();
+        cache.get_or_measure(1, 200, || (80, 24));
+
+        cache.next_generation();
+        assert_eq!(cache.generation(), 1);
+
+        // Same key but stale generation — should recompute.
+        let call_count = Cell::new(0u32);
+        let size = cache.get_or_measure(1, 200, || {
+            call_count.set(call_count.get() + 1);
+            (90, 30)
+        });
+        assert_eq!(size, (90, 30));
+        assert_eq!(call_count.get(), 1);
+    }
+
+    #[test]
+    fn cache_clear_removes_all() {
+        let mut cache = MeasureCache::new();
+        cache.get_or_measure(1, 100, || (10, 10));
+        cache.get_or_measure(2, 100, || (20, 20));
+        assert_eq!(cache.len(), 2);
+
+        cache.clear();
+        assert!(cache.is_empty());
+        assert_eq!(cache.len(), 0);
+    }
+
+    #[test]
+    fn cache_generation_wraps() {
+        let mut cache = MeasureCache::new();
+        cache.generation = u64::MAX;
+        cache.next_generation();
+        assert_eq!(cache.generation(), 0);
+    }
+
+    #[test]
+    fn cached_measure_helper() {
+        use super::cached_measure;
+        use crate::button::Button;
+        use crate::context::DrawContext;
+        use crate::test_utils::MockBackend;
+        use crate::theme::Theme;
+
+        let theme = Theme::dark();
+        let mut backend = MockBackend::new();
+        let ctx = DrawContext::new(&mut backend, &theme);
+        let btn = Button::new("Hello");
+
+        let mut cache = MeasureCache::new();
+        let (w1, h1) = cached_measure(&mut cache, 42, &btn, &ctx, 200, 100);
+        assert!(w1 > 0);
+        assert!(h1 > 0);
+
+        // Second call returns same result from cache.
+        let (w2, h2) = cached_measure(&mut cache, 42, &btn, &ctx, 200, 100);
+        assert_eq!((w1, h1), (w2, h2));
+        assert_eq!(cache.len(), 1);
     }
 }

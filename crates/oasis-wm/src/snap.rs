@@ -65,6 +65,11 @@ pub enum KeyboardSnapDirection {
 /// each frame with the cursor position. When the drag ends, call
 /// [`apply_snap`](SnapManager::apply_snap) to get the target geometry and
 /// clear the preview.
+/// Default pixels from screen edge that trigger an edge snap zone.
+const DEFAULT_EDGE_THRESHOLD: u32 = 16;
+/// Default size of corner snap trigger zones (measured from each corner).
+const DEFAULT_CORNER_SIZE: u32 = 64;
+
 pub struct SnapManager {
     /// The currently active snap preview, if any.
     pub active_preview: Option<SnapPreview>,
@@ -81,8 +86,8 @@ impl SnapManager {
     pub fn new() -> Self {
         Self {
             active_preview: None,
-            edge_threshold: 16,
-            corner_size: 64,
+            edge_threshold: DEFAULT_EDGE_THRESHOLD,
+            corner_size: DEFAULT_CORNER_SIZE,
         }
     }
 

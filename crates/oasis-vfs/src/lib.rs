@@ -107,6 +107,9 @@ pub trait Vfs {
     /// Remove a file or empty directory.
     fn remove(&mut self, path: &str) -> Result<()>;
 
+    /// Rename or move a file/directory within the VFS.
+    fn rename(&mut self, from: &str, to: &str) -> Result<()>;
+
     /// Check whether a path exists.
     fn exists(&self, path: &str) -> bool;
     /// Get permissions for a path.

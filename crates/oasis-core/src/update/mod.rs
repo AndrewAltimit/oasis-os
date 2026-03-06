@@ -236,31 +236,29 @@ mod tests {
         let (_, mut vfs) = setup();
         vfs.write(UPDATE_LATEST_PATH, b"0.2.0").unwrap();
         let status = check_update(&vfs).unwrap();
-        match status {
-            UpdateStatus::Available { current, latest } => {
-                assert_eq!(current.to_string(), "0.1.0");
-                assert_eq!(latest.to_string(), "0.2.0");
-            },
-            _ => panic!("expected Available"),
-        }
+        let UpdateStatus::Available { current, latest } = status else {
+            panic!("expected UpdateStatus::Available");
+        };
+        assert_eq!(current.to_string(), "0.1.0");
+        assert_eq!(latest.to_string(), "0.2.0");
     }
 
     #[test]
     fn update_cmd_check() {
         let (reg, mut vfs) = setup();
-        match exec(&reg, &mut vfs, "update check").unwrap() {
-            CommandOutput::Text(s) => assert!(s.contains("0.1.0")),
-            _ => panic!("expected text"),
-        }
+        let CommandOutput::Text(s) = exec(&reg, &mut vfs, "update check").unwrap() else {
+            panic!("expected CommandOutput::Text");
+        };
+        assert!(s.contains("0.1.0"));
     }
 
     #[test]
     fn update_cmd_log_missing() {
         let (reg, mut vfs) = setup();
-        match exec(&reg, &mut vfs, "update log").unwrap() {
-            CommandOutput::Text(s) => assert!(s.contains("no update log")),
-            _ => panic!("expected text"),
-        }
+        let CommandOutput::Text(s) = exec(&reg, &mut vfs, "update log").unwrap() else {
+            panic!("expected CommandOutput::Text");
+        };
+        assert!(s.contains("no update log"));
     }
 
     #[test]
@@ -268,10 +266,10 @@ mod tests {
         let (reg, mut vfs) = setup();
         vfs.write(UPDATE_LOG_PATH, b"v0.1.0: initial release")
             .unwrap();
-        match exec(&reg, &mut vfs, "update log").unwrap() {
-            CommandOutput::Text(s) => assert!(s.contains("initial release")),
-            _ => panic!("expected text"),
-        }
+        let CommandOutput::Text(s) = exec(&reg, &mut vfs, "update log").unwrap() else {
+            panic!("expected CommandOutput::Text");
+        };
+        assert!(s.contains("initial release"));
     }
 
     #[test]

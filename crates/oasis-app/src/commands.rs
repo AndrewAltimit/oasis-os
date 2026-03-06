@@ -118,7 +118,7 @@ pub fn process_command_output(
                 .output_lines
                 .push(format!("Browser sandbox: {st}"));
         },
-        Ok(CommandOutput::FtpToggle { port }) => {
+        Ok(CommandOutput::FtpToggle { port, password }) => {
             if port == 0 {
                 if let Some(ref mut f) = state.net.ftp_server {
                     f.stop();
@@ -140,6 +140,9 @@ pub fn process_command_output(
                     .push("FTP server already running. Use 'ftp stop' first.".to_string());
             } else {
                 let mut server = FtpServer::new(port);
+                if let Some(pass) = password {
+                    server = server.with_password(pass);
+                }
                 match server.start(&mut state.net.backend) {
                     Ok(()) => {
                         state
@@ -645,7 +648,13 @@ mod tests {
     #[test]
     fn process_ftp_stop_no_server() {
         let mut state = make_test_state();
-        let result = process_command_output(Ok(CommandOutput::FtpToggle { port: 0 }), &mut state);
+        let result = process_command_output(
+            Ok(CommandOutput::FtpToggle {
+                port: 0,
+                password: None,
+            }),
+            &mut state,
+        );
         assert!(result.is_none());
         assert_eq!(state.terminal.output_lines[0], "No FTP server running.");
     }
@@ -693,7 +702,13 @@ mod tests {
     fn process_ftp_already_running() {
         let mut state = make_test_state();
         state.net.ftp_server = Some(oasis_core::transfer::FtpServer::new(19000));
-        let result = process_command_output(Ok(CommandOutput::FtpToggle { port: 21 }), &mut state);
+        let result = process_command_output(
+            Ok(CommandOutput::FtpToggle {
+                port: 21,
+                password: None,
+            }),
+            &mut state,
+        );
         assert!(result.is_none());
         assert!(state.terminal.output_lines[0].contains("already running"));
     }

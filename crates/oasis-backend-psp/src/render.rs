@@ -47,6 +47,9 @@ pub const FONT_ATLAS_H: u32 = 64;
 /// Glyphs per row in the atlas.
 const ATLAS_COLS: u32 = 16;
 
+/// Fully opaque white in ABGR8888 format (used for untinted texture sampling).
+const COLOR_WHITE_ABGR: u32 = 0xFFFF_FFFF;
+
 // ---------------------------------------------------------------------------
 // PspBackend rendering methods
 // ---------------------------------------------------------------------------
@@ -73,7 +76,7 @@ impl PspBackend {
         // Used by fill_rect_inner to draw colored rectangles without toggling
         // Texture2D state (sample white texel * vertex color = fill color).
         let white_offset = ((FONT_ATLAS_H - 1) * stride + (FONT_ATLAS_W - 1)) as usize;
-        unsafe { pixels.add(white_offset).write(0xFFFF_FFFFu32) };
+        unsafe { pixels.add(white_offset).write(COLOR_WHITE_ABGR) };
 
         for idx in 0u32..95 {
             let col = idx % ATLAS_COLS;
@@ -87,7 +90,7 @@ impl PspBackend {
                         let px = col * 8 + gx;
                         let py = row * 8 + gy;
                         let offset = (py * stride + px) as usize;
-                        unsafe { pixels.add(offset).write(0xFFFF_FFFFu32) };
+                        unsafe { pixels.add(offset).write(COLOR_WHITE_ABGR) };
                     }
                 }
             }
@@ -296,14 +299,12 @@ impl PspBackend {
                 return;
             }
 
-            let white = 0xFFFF_FFFFu32;
-
             ptr::write(
                 verts,
                 TexturedColorVertex {
                     u: 0,
                     v: 0,
-                    color: white,
+                    color: COLOR_WHITE_ABGR,
                     x: x as i16,
                     y: y as i16,
                     z: 0,
@@ -315,7 +316,7 @@ impl PspBackend {
                 TexturedColorVertex {
                     u: tex_w,
                     v: tex_h,
-                    color: white,
+                    color: COLOR_WHITE_ABGR,
                     x: (x + w as i32) as i16,
                     y: (y + h as i32) as i16,
                     z: 0,
@@ -381,14 +382,12 @@ impl PspBackend {
                 return;
             }
 
-            let white = 0xFFFF_FFFFu32;
-
             ptr::write(
                 verts,
                 TexturedColorVertex {
                     u: 0,
                     v: 0,
-                    color: white,
+                    color: COLOR_WHITE_ABGR,
                     x: x as i16,
                     y: y as i16,
                     z: 0,
@@ -400,7 +399,7 @@ impl PspBackend {
                 TexturedColorVertex {
                     u: tex_w,
                     v: tex_h,
-                    color: white,
+                    color: COLOR_WHITE_ABGR,
                     x: (x + w as i32) as i16,
                     y: (y + h as i32) as i16,
                     z: 0,

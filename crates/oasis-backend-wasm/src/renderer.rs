@@ -1,6 +1,6 @@
 //! `SdiBackend` implementation using the Canvas 2D API.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 
 use wasm_bindgen::prelude::*;
 use web_sys::{CanvasRenderingContext2d, HtmlCanvasElement, ImageData};
@@ -59,7 +59,7 @@ struct TextureData {
 struct GlyphCacheKey(u64);
 
 impl GlyphCacheKey {
-    fn new(ch: char, font_size: u16, color: Color, bold: bool, italic: bool) -> Self {
+    const fn new(ch: char, font_size: u16, color: Color, bold: bool, italic: bool) -> Self {
         // char: 21 bits, font_size: 16 bits, rgba: 25 bits (r5 g5 b5 a8 + 2 flags)
         // Total ≤ 64 bits.
         let c = ch as u64 & 0x1F_FFFF; // 21 bits
@@ -109,6 +109,9 @@ struct ClipRect {
 // WasmBackend
 // ---------------------------------------------------------------------------
 
+/// Maximum number of cached glyphs before LRU eviction kicks in.
+const MAX_GLYPH_CACHE_SIZE: usize = 2048;
+
 pub struct WasmBackend {
     canvas: HtmlCanvasElement,
     ctx: CanvasRenderingContext2d,
@@ -121,6 +124,8 @@ pub struct WasmBackend {
     cumulative_translate: (i32, i32),
     color_cache: HashMap<u32, String>,
     glyph_cache: HashMap<GlyphCacheKey, HtmlCanvasElement>,
+    /// Insertion-order queue for LRU eviction of glyph cache entries.
+    glyph_lru: VecDeque<GlyphCacheKey>,
     gradient_cache: HashMap<GradientCacheKey, web_sys::CanvasGradient>,
 }
 
@@ -152,6 +157,7 @@ impl WasmBackend {
             cumulative_translate: (0, 0),
             color_cache: HashMap::new(),
             glyph_cache: HashMap::new(),
+            glyph_lru: VecDeque::new(),
             gradient_cache: HashMap::new(),
         })
     }
@@ -278,8 +284,17 @@ impl WasmBackend {
         for ch in text.chars() {
             let key = GlyphCacheKey::new(ch, font_size, color, bold, italic);
             if !self.glyph_cache.contains_key(&key) {
+                // Evict oldest entries when cache is full.
+                while self.glyph_cache.len() >= MAX_GLYPH_CACHE_SIZE {
+                    if let Some(old_key) = self.glyph_lru.pop_front() {
+                        self.glyph_cache.remove(&old_key);
+                    } else {
+                        break;
+                    }
+                }
                 let canvas = self.render_glyph_to_canvas(ch, font_size, color, bold, italic)?;
                 self.glyph_cache.insert(key, canvas);
+                self.glyph_lru.push_back(key);
             }
             let glyph_canvas = &self.glyph_cache[&key];
             self.ctx
@@ -303,6 +318,7 @@ impl SdiCore for WasmBackend {
         self.canvas.set_height(height);
         self.ctx.set_image_smoothing_enabled(false);
         self.glyph_cache.clear();
+        self.glyph_lru.clear();
         self.color_cache.clear();
         self.gradient_cache.clear();
         Ok(())
@@ -412,6 +428,7 @@ impl SdiCore for WasmBackend {
     fn shutdown(&mut self) -> Result<()> {
         self.textures.clear();
         self.glyph_cache.clear();
+        self.glyph_lru.clear();
         self.color_cache.clear();
         self.gradient_cache.clear();
         Ok(())

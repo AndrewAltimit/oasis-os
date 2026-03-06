@@ -285,7 +285,10 @@ mod tests {
             },
             CommandOutput::BrowserSandbox { enable: true },
             CommandOutput::SkinSwap { name: "xp".into() },
-            CommandOutput::FtpToggle { port: 2121 },
+            CommandOutput::FtpToggle {
+                port: 2121,
+                password: None,
+            },
         ];
         for o in &outputs {
             let _ = format!("{o:?}");

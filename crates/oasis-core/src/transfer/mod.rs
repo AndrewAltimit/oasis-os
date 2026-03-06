@@ -6,6 +6,7 @@
 //! - `LIST <path>` -- list directory contents
 //! - `GET <path>`  -- retrieve file (response: size + data)
 //! - `PUT <path> <size>` -- upload file
+//! - `RENAME <from> <to>` -- rename/move file or directory
 //! - `QUIT` -- close connection
 //!
 //! Also provides terminal commands: `ftp start/stop`, `push`, `pull`.
@@ -98,6 +99,17 @@ pub fn process_ftp_request(line: &str, vfs: &mut dyn Vfs) -> String {
                 Err(e) => format!("500 {e}\n"),
             }
         },
+        "RENAME" => {
+            let from = parts.get(1).copied().unwrap_or("");
+            let to = parts.get(2).copied().unwrap_or("");
+            if from.is_empty() || to.is_empty() {
+                return "400 missing paths (usage: RENAME <from> <to>)\n".to_string();
+            }
+            match vfs.rename(from, to) {
+                Ok(()) => format!("200 renamed {from} -> {to}\n"),
+                Err(e) => format!("500 {e}\n"),
+            }
+        },
         "STAT" => {
             let path = parts.get(1).copied().unwrap_or("");
             if path.is_empty() {
@@ -136,19 +148,28 @@ const MAX_CMDS_PER_POLL: usize = 16;
 /// Idle connection timeout in seconds.
 const FTP_IDLE_TIMEOUT_SECS: u64 = 300;
 
+/// Maximum failed authentication attempts before disconnecting.
+const MAX_AUTH_FAILURES: u8 = 3;
+
 /// A single FTP client connection.
 struct FtpConnection {
     stream: Box<dyn NetworkStream>,
     read_buf: Vec<u8>,
     last_activity: Instant,
+    /// Whether this connection has been authenticated.
+    authenticated: bool,
+    /// Number of failed authentication attempts.
+    failed_attempts: u8,
 }
 
 impl FtpConnection {
-    fn new(stream: Box<dyn NetworkStream>) -> Self {
+    fn new(stream: Box<dyn NetworkStream>, authenticated: bool) -> Self {
         Self {
             stream,
             read_buf: Vec::with_capacity(256),
             last_activity: Instant::now(),
+            authenticated,
+            failed_attempts: 0,
         }
     }
 }
@@ -162,6 +183,9 @@ pub struct FtpServer {
     port: u16,
     connections: Vec<FtpConnection>,
     listening: bool,
+    /// Optional password for authentication. When `None`, all
+    /// connections are immediately authenticated.
+    password: Option<String>,
 }
 
 impl FtpServer {
@@ -171,7 +195,14 @@ impl FtpServer {
             port,
             connections: Vec::new(),
             listening: false,
+            password: None,
         }
+    }
+
+    /// Set an optional password for FTP authentication (builder pattern).
+    pub fn with_password(mut self, password: String) -> Self {
+        self.password = Some(password);
+        self
     }
 
     /// Start listening on the configured port.
@@ -203,11 +234,17 @@ impl FtpServer {
         let idle_timeout = std::time::Duration::from_secs(FTP_IDLE_TIMEOUT_SECS);
 
         // Accept new connections.
+        let requires_auth = self.password.is_some();
         if self.connections.len() < MAX_FTP_CONNECTIONS {
             match backend.accept() {
                 Ok(Some(stream)) => {
-                    let mut conn = FtpConnection::new(stream);
-                    let _ = conn.stream.write(b"220 OASIS FTP server ready\r\n");
+                    let mut conn = FtpConnection::new(stream, !requires_auth);
+                    let greeting = if requires_auth {
+                        &b"220 OASIS FTP server ready (auth required)\r\n"[..]
+                    } else {
+                        &b"220 OASIS FTP server ready\r\n"[..]
+                    };
+                    let _ = conn.stream.write(greeting);
                     self.connections.push(conn);
                 },
                 Ok(None) => {},
@@ -238,6 +275,7 @@ impl FtpServer {
 
                     // Process complete lines (capped per poll cycle).
                     let mut cmds_processed = 0usize;
+                    let mut should_close = false;
                     while cmds_processed < MAX_CMDS_PER_POLL {
                         let Some(pos) = conn.read_buf.iter().position(|&b| b == b'\n') else {
                             break;
@@ -250,16 +288,47 @@ impl FtpServer {
                             continue;
                         }
 
-                        // Check for QUIT.
+                        // Check for QUIT (always allowed).
                         if line.eq_ignore_ascii_case("QUIT") {
                             let _ = conn.stream.write(b"200 goodbye\r\n");
                             to_remove.push(idx);
+                            should_close = true;
                             break;
+                        }
+
+                        // Authentication gate.
+                        if !conn.authenticated
+                            && let Some(ref expected) = self.password
+                        {
+                            let upper = line.to_uppercase();
+                            if upper.starts_with("PASS ") {
+                                let supplied = line[5..].trim();
+                                if supplied == expected.as_str() {
+                                    conn.authenticated = true;
+                                    let _ = conn.stream.write(b"230 Authenticated\r\n");
+                                } else {
+                                    conn.failed_attempts += 1;
+                                    if conn.failed_attempts >= MAX_AUTH_FAILURES {
+                                        let _ = conn.stream.write(b"530 Too many failures\r\n");
+                                        to_remove.push(idx);
+                                        should_close = true;
+                                        break;
+                                    }
+                                    let _ = conn.stream.write(b"530 Authentication failed\r\n");
+                                }
+                            } else {
+                                let _ = conn.stream.write(b"530 Not authenticated\r\n");
+                            }
+                            continue;
                         }
 
                         // Process command against VFS.
                         let response = process_ftp_request(&line, vfs);
                         let _ = conn.stream.write(response.as_bytes());
+                    }
+
+                    if should_close {
+                        continue;
                     }
 
                     // Guard against overlong lines.
@@ -311,7 +380,7 @@ impl Command for FtpCmd {
         "Manage the file transfer server"
     }
     fn usage(&self) -> &str {
-        "ftp [start [port]|stop|status]"
+        "ftp [start [port] [--password <pass>]|stop|status]"
     }
     fn category(&self) -> &str {
         "transfer"
@@ -321,13 +390,32 @@ impl Command for FtpCmd {
 
         match subcmd {
             "start" => {
-                let port = args
-                    .get(1)
-                    .and_then(|s| s.parse::<u16>().ok())
-                    .unwrap_or(DEFAULT_FTP_PORT);
-                Ok(CommandOutput::FtpToggle { port })
+                let mut port = DEFAULT_FTP_PORT;
+                let mut password: Option<String> = None;
+                let mut i = 1;
+                while i < args.len() {
+                    if args[i] == "--password" {
+                        if let Some(&pass) = args.get(i + 1) {
+                            password = Some(pass.to_string());
+                            i += 2;
+                        } else {
+                            return Err(OasisError::Command(
+                                "--password requires a value".to_string(),
+                            ));
+                        }
+                    } else if let Ok(p) = args[i].parse::<u16>() {
+                        port = p;
+                        i += 1;
+                    } else {
+                        i += 1;
+                    }
+                }
+                Ok(CommandOutput::FtpToggle { port, password })
             },
-            "stop" => Ok(CommandOutput::FtpToggle { port: 0 }),
+            "stop" => Ok(CommandOutput::FtpToggle {
+                port: 0,
+                password: None,
+            }),
             "status" => {
                 if env.vfs.exists(FTP_STATUS_PATH) {
                     let data = env.vfs.read(FTP_STATUS_PATH)?;
@@ -427,6 +515,8 @@ mod tests {
     use super::*;
     use crate::terminal::CommandRegistry;
     use crate::vfs::MemoryVfs;
+    use std::collections::VecDeque;
+    use std::sync::{Arc, Mutex};
 
     fn setup() -> (CommandRegistry, MemoryVfs) {
         let mut reg = CommandRegistry::new();
@@ -540,6 +630,34 @@ mod tests {
     }
 
     #[test]
+    fn ftp_rename() {
+        let mut vfs = MemoryVfs::new();
+        vfs.mkdir("/src").unwrap();
+        vfs.mkdir("/dst").unwrap();
+        vfs.write("/src/file.txt", b"hello").unwrap();
+        let resp = process_ftp_request("RENAME /src/file.txt /dst/moved.txt", &mut vfs);
+        assert!(resp.starts_with("200"));
+        assert!(!vfs.exists("/src/file.txt"));
+        assert_eq!(vfs.read("/dst/moved.txt").unwrap(), b"hello");
+    }
+
+    #[test]
+    fn ftp_rename_missing_source() {
+        let mut vfs = MemoryVfs::new();
+        let resp = process_ftp_request("RENAME /nope.txt /dest.txt", &mut vfs);
+        assert!(resp.starts_with("500"));
+    }
+
+    #[test]
+    fn ftp_rename_missing_args() {
+        let mut vfs = MemoryVfs::new();
+        let resp = process_ftp_request("RENAME", &mut vfs);
+        assert!(resp.starts_with("400"));
+        let resp = process_ftp_request("RENAME /only_one", &mut vfs);
+        assert!(resp.starts_with("400"));
+    }
+
+    #[test]
     fn ftp_quit() {
         let mut vfs = MemoryVfs::new();
         let resp = process_ftp_request("QUIT", &mut vfs);
@@ -574,39 +692,45 @@ mod tests {
         let (reg, mut vfs) = setup();
         // Remove the status file to test default.
         vfs.remove(FTP_STATUS_PATH).ok();
-        match exec(&reg, &mut vfs, "ftp status").unwrap() {
-            CommandOutput::Text(s) => assert!(s.contains("inactive")),
-            _ => panic!("expected text"),
-        }
+        let CommandOutput::Text(s) = exec(&reg, &mut vfs, "ftp status").unwrap() else {
+            panic!("expected CommandOutput::Text");
+        };
+        assert!(s.contains("inactive"));
     }
 
     #[test]
     fn ftp_cmd_start() {
         let (reg, mut vfs) = setup();
-        match exec(&reg, &mut vfs, "ftp start 8021").unwrap() {
-            CommandOutput::FtpToggle { port } => assert_eq!(port, 8021),
-            other => panic!("expected FtpToggle, got {other:?}"),
-        }
+        let CommandOutput::FtpToggle { port, password } =
+            exec(&reg, &mut vfs, "ftp start 8021").unwrap()
+        else {
+            panic!("expected CommandOutput::FtpToggle");
+        };
+        assert_eq!(port, 8021);
+        assert!(password.is_none());
     }
 
     #[test]
     fn ftp_cmd_start_default_port() {
         let (reg, mut vfs) = setup();
-        match exec(&reg, &mut vfs, "ftp start").unwrap() {
-            CommandOutput::FtpToggle { port } => {
-                assert_eq!(port, DEFAULT_FTP_PORT);
-            },
-            other => panic!("expected FtpToggle, got {other:?}"),
-        }
+        let CommandOutput::FtpToggle { port, password } =
+            exec(&reg, &mut vfs, "ftp start").unwrap()
+        else {
+            panic!("expected CommandOutput::FtpToggle");
+        };
+        assert_eq!(port, DEFAULT_FTP_PORT);
+        assert!(password.is_none());
     }
 
     #[test]
     fn ftp_cmd_stop() {
         let (reg, mut vfs) = setup();
-        match exec(&reg, &mut vfs, "ftp stop").unwrap() {
-            CommandOutput::FtpToggle { port } => assert_eq!(port, 0),
-            other => panic!("expected FtpToggle stop, got {other:?}"),
-        }
+        let CommandOutput::FtpToggle { port, password } = exec(&reg, &mut vfs, "ftp stop").unwrap()
+        else {
+            panic!("expected CommandOutput::FtpToggle");
+        };
+        assert_eq!(port, 0);
+        assert!(password.is_none());
     }
 
     #[test]
@@ -618,10 +742,12 @@ mod tests {
     #[test]
     fn push_copies_file() {
         let (reg, mut vfs) = setup();
-        match exec(&reg, &mut vfs, "push /home/test.txt /tmp/copy.txt").unwrap() {
-            CommandOutput::Text(s) => assert!(s.contains("9 bytes")),
-            _ => panic!("expected text"),
-        }
+        let CommandOutput::Text(s) =
+            exec(&reg, &mut vfs, "push /home/test.txt /tmp/copy.txt").unwrap()
+        else {
+            panic!("expected CommandOutput::Text");
+        };
+        assert!(s.contains("9 bytes"));
         let data = vfs.read("/tmp/copy.txt").unwrap();
         assert_eq!(data, b"Hello FTP");
     }
@@ -642,9 +768,294 @@ mod tests {
     #[test]
     fn pull_copies_file() {
         let (reg, mut vfs) = setup();
-        match exec(&reg, &mut vfs, "pull /home/test.txt /tmp/pulled.txt").unwrap() {
-            CommandOutput::Text(s) => assert!(s.contains("9 bytes")),
-            _ => panic!("expected text"),
+        let CommandOutput::Text(s) =
+            exec(&reg, &mut vfs, "pull /home/test.txt /tmp/pulled.txt").unwrap()
+        else {
+            panic!("expected CommandOutput::Text");
+        };
+        assert!(s.contains("9 bytes"));
+    }
+
+    // -- FTP authentication tests --
+
+    /// Shared buffer that records all writes from a mock stream.
+    type WriteBuf = Arc<Mutex<Vec<u8>>>;
+
+    /// Mock network stream backed by an input queue and an output buffer.
+    struct MockStream {
+        input: VecDeque<u8>,
+        output: WriteBuf,
+        closed: bool,
+    }
+
+    impl MockStream {
+        fn new(input: &[u8], output: WriteBuf) -> Self {
+            Self {
+                input: VecDeque::from(input.to_vec()),
+                output,
+                closed: false,
+            }
         }
+    }
+
+    impl oasis_types::backend::NetworkStream for MockStream {
+        fn read(&mut self, buf: &mut [u8]) -> crate::error::Result<usize> {
+            if self.input.is_empty() {
+                return Err(OasisError::Io(std::io::Error::new(
+                    std::io::ErrorKind::WouldBlock,
+                    "no data",
+                )));
+            }
+            let n = buf.len().min(self.input.len());
+            for b in buf.iter_mut().take(n) {
+                *b = self.input.pop_front().unwrap();
+            }
+            Ok(n)
+        }
+
+        fn write(&mut self, data: &[u8]) -> crate::error::Result<usize> {
+            self.output.lock().unwrap().extend_from_slice(data);
+            Ok(data.len())
+        }
+
+        fn close(&mut self) -> crate::error::Result<()> {
+            self.closed = true;
+            Ok(())
+        }
+    }
+
+    /// Mock network backend that yields pre-built streams.
+    struct MockBackend {
+        pending: VecDeque<Box<dyn oasis_types::backend::NetworkStream>>,
+    }
+
+    impl MockBackend {
+        fn new() -> Self {
+            Self {
+                pending: VecDeque::new(),
+            }
+        }
+
+        fn add_stream(&mut self, stream: Box<dyn oasis_types::backend::NetworkStream>) {
+            self.pending.push_back(stream);
+        }
+    }
+
+    impl oasis_types::backend::NetworkBackend for MockBackend {
+        fn listen(&mut self, _port: u16) -> crate::error::Result<()> {
+            Ok(())
+        }
+
+        fn accept(
+            &mut self,
+        ) -> crate::error::Result<Option<Box<dyn oasis_types::backend::NetworkStream>>> {
+            Ok(self.pending.pop_front())
+        }
+
+        fn connect(
+            &mut self,
+            _address: &str,
+            _port: u16,
+        ) -> crate::error::Result<Box<dyn oasis_types::backend::NetworkStream>> {
+            Err(OasisError::Backend("mock: no outbound".to_string()))
+        }
+    }
+
+    /// Helper: collect all bytes written to the shared output buffer.
+    fn read_output(output: &WriteBuf) -> String {
+        String::from_utf8_lossy(&output.lock().unwrap()).into_owned()
+    }
+
+    #[test]
+    fn ftp_auth_correct_password() {
+        let output: WriteBuf = Arc::new(Mutex::new(Vec::new()));
+        let stream = MockStream::new(b"PASS secret123\n", Arc::clone(&output));
+
+        let mut backend = MockBackend::new();
+        backend.add_stream(Box::new(stream));
+
+        let mut server = FtpServer::new(2121).with_password("secret123".to_string());
+        server.start(&mut backend).unwrap();
+
+        let mut vfs = MemoryVfs::new();
+        server.poll(&mut backend, &mut vfs).unwrap();
+
+        let written = read_output(&output);
+        assert!(
+            written.contains("220 OASIS FTP server ready (auth required)"),
+            "should get auth-required greeting"
+        );
+        assert!(written.contains("230 Authenticated"), "should authenticate");
+        assert_eq!(server.connection_count(), 1);
+    }
+
+    #[test]
+    fn ftp_auth_wrong_password() {
+        let output: WriteBuf = Arc::new(Mutex::new(Vec::new()));
+        let stream = MockStream::new(b"PASS wrong\n", Arc::clone(&output));
+
+        let mut backend = MockBackend::new();
+        backend.add_stream(Box::new(stream));
+
+        let mut server = FtpServer::new(2121).with_password("secret123".to_string());
+        server.start(&mut backend).unwrap();
+
+        let mut vfs = MemoryVfs::new();
+        server.poll(&mut backend, &mut vfs).unwrap();
+
+        let written = read_output(&output);
+        assert!(
+            written.contains("530 Authentication failed"),
+            "should reject wrong password"
+        );
+        assert_eq!(server.connection_count(), 1, "should stay connected");
+    }
+
+    #[test]
+    fn ftp_auth_too_many_failures() {
+        let output: WriteBuf = Arc::new(Mutex::new(Vec::new()));
+        let stream = MockStream::new(b"PASS bad1\nPASS bad2\nPASS bad3\n", Arc::clone(&output));
+
+        let mut backend = MockBackend::new();
+        backend.add_stream(Box::new(stream));
+
+        let mut server = FtpServer::new(2121).with_password("correct".to_string());
+        server.start(&mut backend).unwrap();
+
+        let mut vfs = MemoryVfs::new();
+        server.poll(&mut backend, &mut vfs).unwrap();
+
+        let written = read_output(&output);
+        assert!(
+            written.contains("530 Too many failures"),
+            "should disconnect after 3 failures"
+        );
+        assert_eq!(server.connection_count(), 0, "connection should be removed");
+    }
+
+    #[test]
+    fn ftp_auth_command_before_auth() {
+        let output: WriteBuf = Arc::new(Mutex::new(Vec::new()));
+        let stream = MockStream::new(b"LIST /\n", Arc::clone(&output));
+
+        let mut backend = MockBackend::new();
+        backend.add_stream(Box::new(stream));
+
+        let mut server = FtpServer::new(2121).with_password("secret".to_string());
+        server.start(&mut backend).unwrap();
+
+        let mut vfs = MemoryVfs::new();
+        server.poll(&mut backend, &mut vfs).unwrap();
+
+        let written = read_output(&output);
+        assert!(
+            written.contains("530 Not authenticated"),
+            "should reject commands before auth"
+        );
+    }
+
+    #[test]
+    fn ftp_auth_then_command() {
+        let output: WriteBuf = Arc::new(Mutex::new(Vec::new()));
+        let stream = MockStream::new(b"PASS mypass\nLIST /\n", Arc::clone(&output));
+
+        let mut backend = MockBackend::new();
+        backend.add_stream(Box::new(stream));
+
+        let mut server = FtpServer::new(2121).with_password("mypass".to_string());
+        server.start(&mut backend).unwrap();
+
+        let mut vfs = MemoryVfs::new();
+        vfs.mkdir("/home").unwrap();
+        server.poll(&mut backend, &mut vfs).unwrap();
+
+        let written = read_output(&output);
+        assert!(
+            written.contains("230 Authenticated"),
+            "should authenticate first"
+        );
+        assert!(written.contains("200"), "LIST should succeed after auth");
+    }
+
+    #[test]
+    fn ftp_no_password_immediately_authenticated() {
+        let output: WriteBuf = Arc::new(Mutex::new(Vec::new()));
+        let stream = MockStream::new(b"LIST /\n", Arc::clone(&output));
+
+        let mut backend = MockBackend::new();
+        backend.add_stream(Box::new(stream));
+
+        let mut server = FtpServer::new(2121);
+        server.start(&mut backend).unwrap();
+
+        let mut vfs = MemoryVfs::new();
+        vfs.mkdir("/home").unwrap();
+        server.poll(&mut backend, &mut vfs).unwrap();
+
+        let written = read_output(&output);
+        assert!(
+            written.contains("220 OASIS FTP server ready\r\n"),
+            "should get standard greeting"
+        );
+        assert!(
+            !written.contains("auth required"),
+            "should not mention auth"
+        );
+        assert!(written.contains("200"), "LIST should work without auth");
+    }
+
+    #[test]
+    fn ftp_auth_quit_before_auth() {
+        let output: WriteBuf = Arc::new(Mutex::new(Vec::new()));
+        let stream = MockStream::new(b"QUIT\n", Arc::clone(&output));
+
+        let mut backend = MockBackend::new();
+        backend.add_stream(Box::new(stream));
+
+        let mut server = FtpServer::new(2121).with_password("secret".to_string());
+        server.start(&mut backend).unwrap();
+
+        let mut vfs = MemoryVfs::new();
+        server.poll(&mut backend, &mut vfs).unwrap();
+
+        let written = read_output(&output);
+        assert!(
+            written.contains("200 goodbye"),
+            "QUIT should always be allowed"
+        );
+        assert_eq!(server.connection_count(), 0);
+    }
+
+    #[test]
+    fn ftp_cmd_start_with_password() {
+        let (reg, mut vfs) = setup();
+        let CommandOutput::FtpToggle { port, password } =
+            exec(&reg, &mut vfs, "ftp start 8021 --password secret").unwrap()
+        else {
+            panic!("expected CommandOutput::FtpToggle");
+        };
+        assert_eq!(port, 8021);
+        assert_eq!(password.as_deref(), Some("secret"));
+    }
+
+    #[test]
+    fn ftp_cmd_start_password_default_port() {
+        let (reg, mut vfs) = setup();
+        let CommandOutput::FtpToggle { port, password } =
+            exec(&reg, &mut vfs, "ftp start --password mypass").unwrap()
+        else {
+            panic!("expected CommandOutput::FtpToggle");
+        };
+        assert_eq!(port, DEFAULT_FTP_PORT);
+        assert_eq!(password.as_deref(), Some("mypass"));
+    }
+
+    #[test]
+    fn ftp_cmd_start_password_missing_value() {
+        let (reg, mut vfs) = setup();
+        assert!(
+            exec(&reg, &mut vfs, "ftp start --password").is_err(),
+            "--password without value should error"
+        );
     }
 }
