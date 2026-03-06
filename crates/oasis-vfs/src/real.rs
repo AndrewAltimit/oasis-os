@@ -177,11 +177,11 @@ impl Vfs for RealVfs {
             return Err(OasisError::Vfs(format!("no such path: {path}")));
         }
         // RealVfs cannot change file ownership (requires root/libc).
-        let current = self.get_permissions(path)?;
-        if perms.owner != current.owner {
+        // Check against the hardcoded owner string returned by get_permissions.
+        if perms.owner != "user" {
             return Err(OasisError::Vfs(format!(
-                "RealVfs does not support changing file ownership (from '{}' to '{}')",
-                current.owner, perms.owner
+                "RealVfs does not support changing file ownership (from 'user' to '{}')",
+                perms.owner
             )));
         }
         #[cfg(unix)]
@@ -193,7 +193,14 @@ impl Vfs for RealVfs {
         }
         #[cfg(not(unix))]
         {
-            let _ = perms;
+            // Map write permission to the platform's readonly flag.
+            let mut fs_perms = fs::metadata(&real_path)
+                .map_err(|e| OasisError::Vfs(format!("cannot read metadata: {e}")))?
+                .permissions();
+            // Mode 0o200 is owner-write; if absent, mark readonly.
+            fs_perms.set_readonly(perms.mode & 0o200 == 0);
+            fs::set_permissions(&real_path, fs_perms)
+                .map_err(|e| OasisError::Vfs(format!("cannot set permissions: {e}")))?;
         }
         Ok(())
     }
