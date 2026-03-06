@@ -44,7 +44,7 @@ kernel-me = ["psp/kernel"]
 [dependencies]
 # Pinned to specific commit for reproducible builds.
 psp = { git = "https://github.com/AndrewAltimit/rust-psp", rev = "d6e53a1", features = ["std"] }
-oasis-core = { path = "../oasis-core" }
+oasis-core = { path = "../oasis-core", default-features = false }
 oasis-video = { path = "../oasis-video", default-features = false, features = ["no-std-demux"] }
 libm = "0.2"
 
