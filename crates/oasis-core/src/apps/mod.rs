@@ -22,5 +22,5 @@ pub mod simple_app;
 pub mod text_editor;
 pub mod tv_guide;
 
-pub use app_trait::{App, ContentState};
-pub use runner::{AppAction, AppRunner};
+pub use app_trait::{App, AppAction, ContentState};
+pub use runner::AppRunner;

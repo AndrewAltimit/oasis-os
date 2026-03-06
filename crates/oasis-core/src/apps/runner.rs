@@ -9,21 +9,10 @@ use crate::vfs::Vfs;
 use super::file_viewer::list_directory;
 use super::tv_guide::guide::TvGuideState;
 
+use super::app_trait::AppAction;
+
 /// Maximum lines visible in the app content area (fallback for 480x272).
 const MAX_VISIBLE_LINES: usize = 13;
-
-/// Action returned by the app after handling input.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum AppAction {
-    /// App consumed the input, no mode change needed.
-    None,
-    /// User wants to exit this app and return to dashboard.
-    Exit,
-    /// App wants to switch to terminal mode.
-    SwitchToTerminal,
-    /// App requests entering fullscreen kiosk mode.
-    RequestFullscreen,
-}
 
 /// Runtime state for a launched application screen.
 ///

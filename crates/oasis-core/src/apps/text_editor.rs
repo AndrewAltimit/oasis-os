@@ -17,7 +17,7 @@ use super::app_trait::App;
 use super::file_manager::{
     draw_content_windowed, hide_app_sdi, render_app_chrome, render_content_sdi,
 };
-use super::runner::AppAction;
+use super::AppAction;
 
 // ---------------------------------------------------------------
 // EditorMode
@@ -945,7 +945,7 @@ mod tests {
     use super::EditorMode;
     use super::TextEditorApp;
     use crate::apps::app_trait::App;
-    use crate::apps::runner::AppAction;
+    use crate::apps::AppAction;
     use crate::input::Button;
     use crate::vfs::MemoryVfs;
 

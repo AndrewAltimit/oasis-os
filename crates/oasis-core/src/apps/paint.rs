@@ -17,7 +17,7 @@ use super::app_trait::{App, ContentState};
 use super::file_manager::{
     draw_content_windowed, hide_app_sdi, render_app_chrome, render_content_sdi,
 };
-use super::runner::AppAction;
+use super::AppAction;
 
 // ---------------------------------------------------------------
 // Constants

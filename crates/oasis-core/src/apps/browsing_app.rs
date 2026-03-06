@@ -16,7 +16,7 @@ use super::file_manager::{
     draw_content_windowed, hide_app_sdi, join_path, list_directory, parent_dir, render_app_chrome,
     render_content_sdi, view_audio_file, view_generic_file, view_image_file,
 };
-use super::runner::AppAction;
+use super::AppAction;
 
 /// File-browsing app implementing the `App` trait.
 ///
