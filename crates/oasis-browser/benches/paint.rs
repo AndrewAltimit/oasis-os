@@ -126,7 +126,13 @@ fn bench_paint(c: &mut Criterion) {
             &(&layout, &link_map),
             |b, (layout, link_map)| {
                 let mut backend = NullBackend;
-                let vp = PaintViewport { scroll_y: 0.0, x: 0, y: 0, width: 480.0, height: 272.0 };
+                let vp = PaintViewport {
+                    scroll_y: 0.0,
+                    x: 0,
+                    y: 0,
+                    width: 480.0,
+                    height: 272.0,
+                };
                 b.iter(|| paint_page(layout, &mut backend, vp, link_map));
             },
         );
@@ -165,7 +171,13 @@ fn bench_full_pipeline(c: &mut Criterion) {
                         &std::collections::HashMap::new(),
                     );
                     let link_map: HashMap<usize, String> = HashMap::new();
-                    let vp = PaintViewport { scroll_y: 0.0, x: 0, y: 0, width: 480.0, height: 272.0 };
+                    let vp = PaintViewport {
+                        scroll_y: 0.0,
+                        x: 0,
+                        y: 0,
+                        width: 480.0,
+                        height: 272.0,
+                    };
                     paint_page(&layout, &mut backend, vp, &link_map)
                 });
             },
