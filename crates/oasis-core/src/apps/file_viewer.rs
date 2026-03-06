@@ -249,4 +249,3 @@ fn parse_jpeg_dimensions(data: &[u8]) -> (u16, u16) {
     }
     (0, 0)
 }
-
