@@ -283,8 +283,14 @@ impl WasmBackend {
 
         for ch in text.chars() {
             let key = GlyphCacheKey::new(ch, font_size, color, bold, italic);
-            if !self.glyph_cache.contains_key(&key) {
-                // Evict oldest entries when cache is full.
+            if self.glyph_cache.contains_key(&key) {
+                // Promote to back of LRU on cache hit.
+                if let Some(pos) = self.glyph_lru.iter().position(|k| k == &key) {
+                    self.glyph_lru.remove(pos);
+                }
+                self.glyph_lru.push_back(key);
+            } else {
+                // Evict least-recently-used entries when cache is full.
                 while self.glyph_cache.len() >= MAX_GLYPH_CACHE_SIZE {
                     if let Some(old_key) = self.glyph_lru.pop_front() {
                         self.glyph_cache.remove(&old_key);
