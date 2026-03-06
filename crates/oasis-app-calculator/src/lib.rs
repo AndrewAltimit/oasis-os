@@ -7,17 +7,15 @@
 use std::any::Any;
 use std::fmt;
 
-use crate::active_theme::ActiveTheme;
-use crate::backend::SdiBackend;
-use crate::input::Button;
-use crate::sdi::SdiRegistry;
-use crate::vfs::Vfs;
-
-use super::AppAction;
-use super::app_trait::{App, ContentState};
-use super::file_manager::{
+use oasis_app_core::render::{
     draw_content_windowed, hide_app_sdi, render_app_chrome, render_content_sdi,
 };
+use oasis_app_core::{App, AppAction, ContentState};
+use oasis_sdi::SdiRegistry;
+use oasis_skin::ActiveTheme;
+use oasis_types::backend::SdiBackend;
+use oasis_types::input::Button;
+use oasis_vfs::Vfs;
 
 // ---------------------------------------------------------------
 // CalcError
@@ -741,7 +739,7 @@ impl App for CalculatorApp {
         ch: u32,
         backend: &mut dyn SdiBackend,
         at: &ActiveTheme,
-    ) -> crate::error::Result<()> {
+    ) -> oasis_types::error::Result<()> {
         draw_content_windowed(&self.content, cx, cy, cw, ch, backend, at)
     }
 
@@ -769,7 +767,7 @@ impl App for CalculatorApp {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::vfs::MemoryVfs;
+    use oasis_vfs::MemoryVfs;
 
     // -- Expression evaluator: basic operations --
 

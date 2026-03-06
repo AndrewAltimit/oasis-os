@@ -75,17 +75,17 @@ impl AppRunner {
                 0,
             ))),
             "Terminal" => Some(Box::new(super::simple_app::SimpleApp::terminal(&path))),
-            "Music Player" => Some(Box::new(super::browsing_app::BrowsingApp::music_player(
+            "Music Player" => Some(Box::new(oasis_app_media::BrowsingApp::music_player(
                 &path, vfs,
             ))),
-            "Photo Viewer" => Some(Box::new(super::browsing_app::BrowsingApp::photo_viewer(
+            "Photo Viewer" => Some(Box::new(oasis_app_media::BrowsingApp::photo_viewer(
                 &path, vfs,
             ))),
-            "Text Editor" => Some(Box::new(super::text_editor::TextEditorApp::new(&path))),
-            "Calculator" => Some(Box::new(super::calculator::CalculatorApp::new(&path))),
-            "Clock" => Some(Box::new(super::clock::ClockApp::new(&path))),
-            "Paint" => Some(Box::new(super::paint::PaintApp::new(&path))),
-            "Games" => Some(Box::new(super::games::GamesApp::new(&path))),
+            "Text Editor" => Some(Box::new(oasis_app_text_editor::TextEditorApp::new(&path))),
+            "Calculator" => Some(Box::new(oasis_app_calculator::CalculatorApp::new(&path))),
+            "Clock" => Some(Box::new(oasis_app_clock::ClockApp::new(&path))),
+            "Paint" => Some(Box::new(oasis_app_paint::PaintApp::new(&path))),
+            "Games" => Some(Box::new(oasis_app_games::GamesApp::new(&path))),
             // Internet Radio and TV Guide have special rendering in AppRunner.
             "Internet Radio" | "TV Guide" => None,
             // All other apps get a generic placeholder.
@@ -1019,7 +1019,7 @@ mod tests {
 
     #[test]
     fn music_player_open_track() {
-        use crate::apps::browsing_app::BrowsingApp;
+        use oasis_app_media::BrowsingApp;
         let vfs = setup_vfs();
         let mut runner = AppRunner::launch(&make_app("Music Player"), &vfs);
         let app = runner.delegate_as::<BrowsingApp>().unwrap();
@@ -1065,7 +1065,7 @@ mod tests {
 
     #[test]
     fn photo_viewer_open_image() {
-        use crate::apps::browsing_app::BrowsingApp;
+        use oasis_app_media::BrowsingApp;
         let vfs = setup_vfs();
         let mut runner = AppRunner::launch(&make_app("Photo Viewer"), &vfs);
         let app = runner.delegate_as::<BrowsingApp>().unwrap();
@@ -1086,7 +1086,7 @@ mod tests {
 
     #[test]
     fn photo_viewer_cancel_from_view() {
-        use crate::apps::browsing_app::BrowsingApp;
+        use oasis_app_media::BrowsingApp;
         let vfs = setup_vfs();
         let mut runner = AppRunner::launch(&make_app("Photo Viewer"), &vfs);
         let app = runner.delegate_as::<BrowsingApp>().unwrap();

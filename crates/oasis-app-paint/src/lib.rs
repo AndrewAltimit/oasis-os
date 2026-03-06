@@ -7,17 +7,15 @@
 
 use std::any::Any;
 
-use crate::active_theme::ActiveTheme;
-use crate::backend::{Color, SdiBackend};
-use crate::input::Button;
-use crate::sdi::SdiRegistry;
-use crate::vfs::Vfs;
-
-use super::app_trait::{App, ContentState};
-use super::file_manager::{
+use oasis_app_core::render::{
     draw_content_windowed, hide_app_sdi, render_app_chrome, render_content_sdi,
 };
-use super::AppAction;
+use oasis_app_core::{App, AppAction, ContentState};
+use oasis_sdi::SdiRegistry;
+use oasis_skin::ActiveTheme;
+use oasis_types::backend::{Color, SdiBackend};
+use oasis_types::input::Button;
+use oasis_vfs::Vfs;
 
 // ---------------------------------------------------------------
 // Constants
@@ -986,7 +984,7 @@ impl App for PaintApp {
         ch: u32,
         backend: &mut dyn SdiBackend,
         at: &ActiveTheme,
-    ) -> crate::error::Result<()> {
+    ) -> oasis_types::error::Result<()> {
         // Draw the text info first using the standard helper.
         draw_content_windowed(&self.content, cx, cy, cw, ch, backend, at)?;
 
@@ -1104,7 +1102,7 @@ impl App for PaintApp {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::vfs::MemoryVfs;
+    use oasis_vfs::MemoryVfs;
 
     fn make_vfs() -> MemoryVfs {
         MemoryVfs::new()
@@ -1841,8 +1839,8 @@ mod tests {
     fn save_to_vfs_creates_file() {
         let app = PaintApp::new("/apps/paint");
         let mut vfs = make_vfs();
-        crate::vfs::Vfs::mkdir(&mut vfs, "/home").unwrap();
-        crate::vfs::Vfs::mkdir(&mut vfs, "/home/user").unwrap();
+        oasis_vfs::Vfs::mkdir(&mut vfs, "/home").unwrap();
+        oasis_vfs::Vfs::mkdir(&mut vfs, "/home/user").unwrap();
         assert!(app.save_to_vfs(&mut vfs));
         assert!(vfs.exists("/home/user/pictures/paint_64x48.bmp"));
     }

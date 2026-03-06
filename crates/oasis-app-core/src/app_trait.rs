@@ -3,10 +3,10 @@
 //! Each application (File Manager, Settings, Music Player, etc.) implements
 //! this trait. `AppRunner` delegates to the active `App` implementation.
 
+use oasis_sdi::SdiRegistry;
 use oasis_skin::ActiveTheme;
 use oasis_types::backend::SdiBackend;
 use oasis_types::input::Button;
-use oasis_sdi::SdiRegistry;
 use oasis_vfs::Vfs;
 
 use crate::AppAction;
