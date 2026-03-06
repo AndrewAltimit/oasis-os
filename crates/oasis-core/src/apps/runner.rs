@@ -69,14 +69,21 @@ impl AppRunner {
             "File Manager" => Some(Box::new(super::file_manager::FileManagerApp::new(
                 &path, vfs,
             ))),
-            "Settings" => Some(Box::new(super::simple_app::SimpleApp::settings(&path))),
-            "Network" => Some(Box::new(super::simple_app::SimpleApp::network(&path))),
+            "Settings" => Some(Box::new(super::simple_app::SimpleApp::settings(
+                &path, "Classic", 480, 272,
+            ))),
+            "Network" => Some(Box::new(super::simple_app::SimpleApp::network(
+                &path, false, 9000, false,
+            ))),
             "Package Manager" => Some(Box::new(super::simple_app::SimpleApp::package_manager(
                 &path,
             ))),
             "Browser" => Some(Box::new(super::simple_app::SimpleApp::browser(&path))),
             "System Monitor" => Some(Box::new(super::simple_app::SimpleApp::system_monitor(
                 &path,
+                "Desktop (SDL2)",
+                "SDL2",
+                0,
             ))),
             "Terminal" => Some(Box::new(super::simple_app::SimpleApp::terminal(&path))),
             "Music Player" => Some(Box::new(super::browsing_app::BrowsingApp::music_player(
@@ -645,7 +652,7 @@ impl AppRunner {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::apps::file_viewer::{view_audio_file, view_generic_file, view_image_file};
+    use crate::apps::file_viewer::{view_audio_file, view_image_file};
     use crate::backend::Color;
     use crate::dashboard::AppEntry;
     use crate::sdi::SdiRegistry;

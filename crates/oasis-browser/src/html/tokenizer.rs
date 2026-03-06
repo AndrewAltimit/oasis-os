@@ -10,6 +10,26 @@
 //! Malformed input is always handled gracefully -- the tokenizer never
 //! panics.
 //!
+//! ## State machine overview
+//!
+//! ```text
+//!   Data ──'<'──> TagOpen ──'/'──> EndTagOpen ──> TagName
+//!     │              │                               │
+//!     │              ├──'!'──> MarkupDeclarationOpen  ├──ws──> BeforeAttributeName
+//!     │              │            ├──"--"──> Comment  │            │
+//!     │              │            └──"DOCTYPE"──>...  │       AttributeName
+//!     │              └──alpha──> TagName              │            │
+//!     │                                              '>'     BeforeAttributeValue
+//!     │                                            (emit)     │     │     │
+//!     ├── CharacterReference (&#...; / &name;)               "     '   unquoted
+//!     ├── RawText  (<script>, <style> -- no tag parsing)
+//!     └── RcData   (<title>, <textarea> -- refs only)
+//! ```
+//!
+//! Each character is consumed once, advancing through states until a
+//! token is emitted. The `RawText` and `RcData` states suppress normal
+//! tag recognition inside their respective elements.
+//!
 //! [spec]: https://html.spec.whatwg.org/multipage/parsing.html#tokenization
 
 // ---------------------------------------------------------------------------

@@ -63,6 +63,7 @@ pub mod internals {
         StyleCache, TextMeasurer, build_layout_tree, layout_block_incremental,
     };
     pub use crate::layout::text_cache::CachingMeasurer;
+    pub use crate::paint::PaintViewport;
     pub use crate::paint::paint as paint_page;
 }
 
@@ -326,7 +327,10 @@ impl BrowserWidget {
         }
 
         let image_info = self.build_image_info_map();
-        let doc = self.document.as_ref().unwrap();
+        let doc = self
+            .document
+            .as_ref()
+            .expect("guarded by is_none() early return above");
         let content_h = self.config.content_height(self.window_h);
         let base_url = self.nav.current_url().map(String::from);
         let measurer = layout::text_cache::CachingMeasurer::new(&SimpleTextMeasurer);
@@ -430,7 +434,7 @@ impl BrowserWidget {
 mod tests {
     use super::*;
     use crate::test_utils::MockBackend;
-    use oasis_types::input::{Button, InputEvent, Trigger};
+    use oasis_types::input::{Button, InputEvent};
     use oasis_vfs::{MemoryVfs, Vfs};
 
     // ---------------------------------------------------------------
@@ -2592,7 +2596,7 @@ mod tests {
              </body></html>",
             elements.join("")
         );
-        let vfs = MemoryVfs::new();
+        let _vfs = MemoryVfs::new();
         let config = BrowserConfig::default();
         let mut browser = BrowserWidget::new(config);
         browser.load_html(&html, "file:///test.html");

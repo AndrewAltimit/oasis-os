@@ -22,11 +22,11 @@ pub use crate::types::{Command, CommandOutput, Environment};
 #[cfg(test)]
 pub(crate) use crate::expander::case_pattern_matches;
 #[cfg(test)]
+pub(crate) use crate::expander::expand_braces;
+#[cfg(test)]
 pub use crate::expander::tokenize;
 #[cfg(test)]
-pub(crate) use crate::expander::{expand_braces, expand_globs};
-#[cfg(test)]
-pub(crate) use crate::pipeline::{output_to_text, parse_redirect};
+pub(crate) use crate::pipeline::parse_redirect;
 #[cfg(test)]
 use oasis_types::error::Result;
 

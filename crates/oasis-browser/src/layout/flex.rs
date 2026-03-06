@@ -4,6 +4,27 @@
 //! OASIS browser engine. Supports `flex-direction`, `justify-content`,
 //! `align-items`, `flex-grow`, `flex-shrink`, `flex-basis`, `gap`,
 //! and `flex-wrap`.
+//!
+//! ## Algorithm phases
+//!
+//! The implementation follows the spec's algorithm in four phases:
+//!
+//! 1. **Resolve base sizes** -- Each flex item's hypothetical main size
+//!    is determined from `flex-basis` (or `width`/`height` fallback).
+//!    Items are laid out at this basis to discover their intrinsic
+//!    cross size.
+//!
+//! 2. **Split into flex lines** -- When `flex-wrap` is enabled, items
+//!    are distributed across lines so that each line does not exceed
+//!    the container's main size.
+//!
+//! 3. **Resolve flexible lengths** -- Free space (or deficit) on each
+//!    line is distributed among items proportional to their
+//!    `flex-grow` / `flex-shrink` factors.
+//!
+//! 4. **Position items** -- Items are placed along the main axis
+//!    according to `justify-content` (and reversed if `*-reverse`),
+//!    then aligned on the cross axis per `align-items`.
 
 use super::block::{TextMeasurer, layout_block, resolve_edge_sizes};
 use super::box_model::*;

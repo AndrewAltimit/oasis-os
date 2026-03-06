@@ -23,6 +23,21 @@ use oasis_types::error::Result;
 
 // -------------------------------------------------------------------
 // Public types
+
+/// Viewport and scroll parameters for painting.
+#[derive(Debug, Clone, Copy)]
+pub struct PaintViewport {
+    /// Vertical scroll offset in pixels.
+    pub scroll_y: f32,
+    /// X origin of the viewport in screen coordinates.
+    pub x: i32,
+    /// Y origin of the viewport in screen coordinates.
+    pub y: i32,
+    /// Viewport width (currently unused but reserved for clipping).
+    pub width: f32,
+    /// Viewport height for culling off-screen content.
+    pub height: f32,
+}
 // -------------------------------------------------------------------
 
 /// A clickable link region recorded during painting.
@@ -74,27 +89,22 @@ struct PaintContext {
 /// attribute values. This is built by the style/layout phase and passed
 /// in so the paint layer can record clickable regions without needing
 /// access to the DOM.
-#[allow(clippy::too_many_arguments)]
 pub fn paint(
     layout: &LayoutBox,
     backend: &mut dyn SdiBackend,
-    scroll_y: f32,
-    viewport_x: i32,
-    viewport_y: i32,
-    _viewport_width: f32,
-    viewport_height: f32,
+    viewport: PaintViewport,
     link_map: &HashMap<NodeId, String>,
 ) -> Result<PaintResult> {
     let mut ctx = PaintContext {
         links: Vec::new(),
         current_link: None,
-        scroll_y,
-        viewport_height,
+        scroll_y: viewport.scroll_y,
+        viewport_height: viewport.height,
         clip_rect: None,
         text_overflow_ellipsis: false,
     };
 
-    paint_box(layout, backend, viewport_x, viewport_y, &mut ctx, link_map)?;
+    paint_box(layout, backend, viewport.x, viewport.y, &mut ctx, link_map)?;
 
     Ok(PaintResult {
         links: ctx.links,
@@ -1053,6 +1063,15 @@ mod tests {
     use crate::test_utils::{DrawCall, MockBackend};
     use oasis_types::backend::Color;
 
+    /// Default test viewport (480x272 at origin, no scroll).
+    const TEST_VP: PaintViewport = PaintViewport {
+        scroll_y: 0.0,
+        x: 0,
+        y: 0,
+        width: 480.0,
+        height: 272.0,
+    };
+
     // ---------------------------------------------------------------
     // Helper: build a simple block layout box
     // ---------------------------------------------------------------
@@ -1082,7 +1101,7 @@ mod tests {
         let lb = make_block(0.0, 0.0, 100.0, 50.0, style);
         let link_map = HashMap::new();
 
-        paint(&lb, &mut backend, 0.0, 0, 0, 480.0, 272.0, &link_map).unwrap();
+        paint(&lb, &mut backend, TEST_VP, &link_map).unwrap();
 
         // No fill_rect calls for the transparent background.
         assert_eq!(backend.fill_rect_count(), 0);
@@ -1097,7 +1116,7 @@ mod tests {
         let lb = make_block(10.0, 20.0, 100.0, 50.0, style);
         let link_map = HashMap::new();
 
-        paint(&lb, &mut backend, 0.0, 0, 0, 480.0, 272.0, &link_map).unwrap();
+        paint(&lb, &mut backend, TEST_VP, &link_map).unwrap();
 
         assert!(backend.fill_rect_count() > 0);
         // First fill_rect should be the background.
@@ -1121,7 +1140,7 @@ mod tests {
         let lb = make_block(0.0, 0.0, 100.0, 50.0, style);
         let link_map = HashMap::new();
 
-        paint(&lb, &mut backend, 0.0, 0, 0, 480.0, 272.0, &link_map).unwrap();
+        paint(&lb, &mut backend, TEST_VP, &link_map).unwrap();
 
         // No calls at all (transparent bg + zero borders).
         assert_eq!(backend.fill_rect_count(), 0);
@@ -1144,7 +1163,7 @@ mod tests {
         };
         let link_map = HashMap::new();
 
-        paint(&lb, &mut backend, 0.0, 0, 0, 480.0, 272.0, &link_map).unwrap();
+        paint(&lb, &mut backend, TEST_VP, &link_map).unwrap();
 
         // Should have exactly one fill_rect for the top border.
         assert_eq!(backend.fill_rect_count(), 1);
@@ -1178,7 +1197,7 @@ mod tests {
         let mut link_map = HashMap::new();
         link_map.insert(5_usize, "https://example.com".to_string());
 
-        let result = paint(&root, &mut backend, 0.0, 0, 0, 480.0, 272.0, &link_map).unwrap();
+        let result = paint(&root, &mut backend, TEST_VP, &link_map).unwrap();
 
         assert!(!result.links.is_empty());
         assert_eq!(result.links[0].href, "https://example.com");
@@ -1200,7 +1219,7 @@ mod tests {
         let lb = make_block(0.0, -100.0, 100.0, 50.0, style);
         let link_map = HashMap::new();
 
-        paint(&lb, &mut backend, 0.0, 0, 0, 480.0, 272.0, &link_map).unwrap();
+        paint(&lb, &mut backend, TEST_VP, &link_map).unwrap();
 
         assert_eq!(
             backend.calls.len(),
@@ -1219,7 +1238,7 @@ mod tests {
         let lb = make_block(0.0, 500.0, 100.0, 50.0, style);
         let link_map = HashMap::new();
 
-        paint(&lb, &mut backend, 0.0, 0, 0, 480.0, 272.0, &link_map).unwrap();
+        paint(&lb, &mut backend, TEST_VP, &link_map).unwrap();
 
         assert_eq!(
             backend.calls.len(),
@@ -1237,7 +1256,7 @@ mod tests {
         let lb = make_block(0.0, 100.0, 100.0, 50.0, style);
         let link_map = HashMap::new();
 
-        paint(&lb, &mut backend, 0.0, 0, 0, 480.0, 272.0, &link_map).unwrap();
+        paint(&lb, &mut backend, TEST_VP, &link_map).unwrap();
 
         assert!(!backend.calls.is_empty(), "onscreen box should be painted");
     }
@@ -1261,7 +1280,7 @@ mod tests {
         let link_map = HashMap::new();
         // The box is at default (0,0) with no content -- that is
         // fine; we just check that the bullet character is drawn.
-        paint(&lb, &mut backend, 0.0, 0, 0, 480.0, 272.0, &link_map).unwrap();
+        paint(&lb, &mut backend, TEST_VP, &link_map).unwrap();
 
         assert!(backend.draw_text_count() > 0);
         if let DrawCall::DrawText { text, .. } = &backend.calls[0] {
@@ -1284,7 +1303,7 @@ mod tests {
             Some(0),
         );
         let link_map = HashMap::new();
-        paint(&lb, &mut backend, 0.0, 0, 0, 480.0, 272.0, &link_map).unwrap();
+        paint(&lb, &mut backend, TEST_VP, &link_map).unwrap();
 
         assert!(backend.draw_text_count() > 0);
         if let DrawCall::DrawText { text, .. } = &backend.calls[0] {
@@ -1322,7 +1341,7 @@ mod tests {
         };
         let link_map = HashMap::new();
 
-        paint(&lb, &mut backend, 0.0, 0, 0, 480.0, 272.0, &link_map).unwrap();
+        paint(&lb, &mut backend, TEST_VP, &link_map).unwrap();
 
         // Should have 4 fill_rects (border) + 1 draw_text (X symbol).
         let fill_count = backend.fill_rect_count();
@@ -1362,7 +1381,7 @@ mod tests {
         };
         let link_map = HashMap::new();
 
-        paint(&lb, &mut backend, 0.0, 0, 0, 480.0, 272.0, &link_map).unwrap();
+        paint(&lb, &mut backend, TEST_VP, &link_map).unwrap();
 
         // The draw_text call should use the alt text, not the X.
         let text_call = backend
@@ -1393,7 +1412,7 @@ mod tests {
         };
         let link_map = HashMap::new();
 
-        let result = paint(&lb, &mut backend, 0.0, 0, 0, 480.0, 272.0, &link_map).unwrap();
+        let result = paint(&lb, &mut backend, TEST_VP, &link_map).unwrap();
 
         // margin_box height = content(500) + margin(10+10) = 520
         assert!((result.content_height - 520.0).abs() < f32::EPSILON);
@@ -1473,7 +1492,7 @@ mod tests {
         };
         let link_map = HashMap::new();
 
-        paint(&lb, &mut backend, 0.0, 0, 0, 480.0, 272.0, &link_map).unwrap();
+        paint(&lb, &mut backend, TEST_VP, &link_map).unwrap();
 
         assert_eq!(backend.fill_rect_count(), 1);
         if let DrawCall::FillRect { w, h, color, .. } = &backend.calls[0] {

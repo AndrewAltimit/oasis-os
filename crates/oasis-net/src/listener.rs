@@ -130,6 +130,11 @@ impl RemoteListener {
     /// Start listening on the configured port.
     pub fn start(&mut self, backend: &mut dyn NetworkBackend) -> Result<()> {
         backend.listen(self.config.port)?;
+        #[cfg(not(feature = "tls-rustls"))]
+        log::warn!(
+            "Remote terminal listening WITHOUT TLS — PSK will be sent in plaintext. \
+             Enable the `tls-rustls` feature for encrypted connections."
+        );
         self.listening = true;
         Ok(())
     }

@@ -61,11 +61,13 @@ impl BrowserWidget {
             let result = paint::paint(
                 layout,
                 backend,
-                self.scroll.scroll_y as f32,
-                self.window_x,
-                content_y,
-                self.window_w as f32,
-                content_h as f32,
+                paint::PaintViewport {
+                    scroll_y: self.scroll.scroll_y as f32,
+                    x: self.window_x,
+                    y: content_y,
+                    width: self.window_w as f32,
+                    height: content_h as f32,
+                },
                 &self.href_map,
             )?;
             self.link_map = result.links;

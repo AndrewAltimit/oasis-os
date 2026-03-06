@@ -13,7 +13,7 @@ documentation = "https://docs.rs/oasis-core"
 #   support via rustls for the SDL desktop backend. The PSP backend uses embedded-tls
 #   instead (pure Rust, no C/asm, works on mipsel-sony-psp).
 [features]
-default = []
+default = ["tls-rustls"]
 tls-rustls = ["oasis-net/tls-rustls"]
 javascript = ["oasis-browser/javascript"]
 test-data = []

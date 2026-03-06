@@ -92,7 +92,8 @@ impl CommandRegistry {
         if all_outputs.is_empty() {
             Ok(CommandOutput::None)
         } else if all_outputs.len() == 1 {
-            // SAFETY: guarded by len() == 1 check above.
+            // Length is 1 so `next()` is guaranteed `Some`.
+            #[allow(clippy::unwrap_used)]
             Ok(all_outputs.into_iter().next().unwrap())
         } else {
             // Merge consecutive Text entries to reduce Multi size.
@@ -108,7 +109,8 @@ impl CommandRegistry {
                 merged.push(output);
             }
             if merged.len() == 1 {
-                // SAFETY: guarded by len() == 1 check above.
+                // Length is 1 so `next()` is guaranteed `Some`.
+                #[allow(clippy::unwrap_used)]
                 Ok(merged.into_iter().next().unwrap())
             } else {
                 Ok(CommandOutput::Multi(merged))
@@ -289,9 +291,8 @@ impl CommandRegistry {
             || trimmed.starts_with("function\t")
             || trimmed == "function"
         {
-            // SAFETY: guarded by starts_with("function") /
-            // == "function" above.
-            let rest = trimmed.strip_prefix("function").unwrap().trim();
+            // Guarded by starts_with("function") / == "function" above.
+            let rest = trimmed.strip_prefix("function").unwrap_or("").trim();
             return self.execute_function_def_raw(rest);
         }
 

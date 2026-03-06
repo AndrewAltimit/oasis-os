@@ -47,6 +47,9 @@ impl SdiRegistry {
     /// If an object with the same name already exists, it is replaced.
     pub fn create(&mut self, name: impl Into<String>) -> &mut SdiObject {
         let name = name.into();
+        if self.next_z == i32::MAX {
+            self.renormalize_z_orders();
+        }
         let mut obj = SdiObject::new(&name);
         obj.z = self.next_z;
         self.next_z += 1;
@@ -85,6 +88,9 @@ impl SdiRegistry {
 
     /// Move an object to the top of the z-order (drawn last = on top).
     pub fn move_to_top(&mut self, name: &str) -> Result<()> {
+        if self.next_z == i32::MAX {
+            self.renormalize_z_orders();
+        }
         let new_z = self.next_z;
         self.next_z += 1;
         let obj = self.get_mut(name)?;
@@ -221,6 +227,20 @@ impl SdiRegistry {
     /// Return an iterator over all object names in the registry.
     pub fn names(&self) -> impl Iterator<Item = &str> {
         self.objects.keys().map(String::as_str)
+    }
+
+    /// Renormalize all z-orders by sorting objects by their current z-value
+    /// and reassigning sequential values starting from 0. Called when `next_z`
+    /// reaches `i32::MAX` to prevent overflow.
+    fn renormalize_z_orders(&mut self) {
+        let mut sorted: Vec<String> = self.objects.keys().cloned().collect();
+        sorted.sort_unstable_by_key(|name| self.objects[name].z);
+        for (i, name) in sorted.iter().enumerate() {
+            // Cast is safe: object count is bounded by memory well before i32::MAX.
+            self.objects.get_mut(name).expect("key from own iterator").z = i as i32;
+        }
+        self.next_z = sorted.len() as i32;
+        self.z_dirty = true;
     }
 
     /// Rebuild the cached z-order index if it is dirty.
@@ -495,6 +515,65 @@ mod tests {
         reg.move_to_bottom("b").unwrap();
         let b_z = reg.get("b").unwrap().z;
         assert!(b_z < a_z);
+    }
+
+    #[test]
+    fn renormalize_z_orders_on_overflow() {
+        let mut reg = SdiRegistry::new();
+        // Create three objects with normal z-orders.
+        reg.create("a"); // z=0
+        reg.create("b"); // z=1
+        reg.create("c"); // z=2
+
+        // Force next_z to i32::MAX to trigger renormalization on next create.
+        reg.next_z = i32::MAX;
+
+        // Manually set z-orders to large values to simulate long-running usage.
+        reg.get_mut("a").unwrap().z = i32::MAX - 100;
+        reg.get_mut("b").unwrap().z = i32::MAX - 50;
+        reg.get_mut("c").unwrap().z = i32::MAX - 10;
+
+        // This create should trigger renormalization, then assign the new object.
+        reg.create("d");
+
+        // After renormalization, z-orders should be sequential starting from 0.
+        // The relative order must be preserved: a < b < c < d.
+        let za = reg.get("a").unwrap().z;
+        let zb = reg.get("b").unwrap().z;
+        let zc = reg.get("c").unwrap().z;
+        let zd = reg.get("d").unwrap().z;
+        assert!(za < zb, "a.z={za} should be < b.z={zb}");
+        assert!(zb < zc, "b.z={zb} should be < c.z={zc}");
+        assert!(zc < zd, "c.z={zc} should be < d.z={zd}");
+        // The values should be small (renormalized from 0).
+        assert!(
+            zd < 10,
+            "z-orders should be renormalized to small values, got d.z={zd}"
+        );
+    }
+
+    #[test]
+    fn renormalize_z_orders_on_move_to_top() {
+        let mut reg = SdiRegistry::new();
+        reg.create("x"); // z=0
+        reg.create("y"); // z=1
+
+        // Force next_z to i32::MAX.
+        reg.next_z = i32::MAX;
+        reg.get_mut("x").unwrap().z = i32::MAX - 20;
+        reg.get_mut("y").unwrap().z = i32::MAX - 10;
+
+        // move_to_top should trigger renormalization first, then assign new top z.
+        reg.move_to_top("x").unwrap();
+
+        let zx = reg.get("x").unwrap().z;
+        let zy = reg.get("y").unwrap().z;
+        assert!(zx > zy, "x.z={zx} should be > y.z={zy} after move_to_top");
+        // Values should be small after renormalization.
+        assert!(
+            zx < 10,
+            "z-orders should be renormalized to small values, got x.z={zx}"
+        );
     }
 
     #[test]

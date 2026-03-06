@@ -3,6 +3,32 @@
 //! Implements the CSS cascade algorithm: for each element in a DOM tree,
 //! collect matching rules from all stylesheets, sort by specificity and
 //! source order, then apply declarations to produce computed styles.
+//!
+//! ## Property resolution order
+//!
+//! For every DOM element the cascade resolves each CSS property by:
+//!
+//! 1. **Collect** -- gather all rules whose selector matches the element.
+//! 2. **Sort** -- order matches by specificity (a, b, c) then source order.
+//! 3. **Apply** -- winning declarations overwrite the `ComputedStyle`.
+//! 4. **Inherit** -- unset *inherited* properties (color, font-size, etc.)
+//!    fall through to the parent's computed value. Non-inherited properties
+//!    revert to their CSS initial value instead.
+//!
+//! ## Specificity
+//!
+//! Each selector produces a three-component weight `(a, b, c)`:
+//! - **a** = number of ID selectors (`#id`)
+//! - **b** = number of class, attribute, and pseudo-class selectors
+//! - **c** = number of type (tag) and pseudo-element selectors
+//!
+//! Higher tuples win; ties are broken by source order (later wins).
+//!
+//! ## Performance
+//!
+//! A [`SelectorIndex`] buckets rules by their rightmost (subject) simple
+//! selector (ID > class > tag > universal) so that only a small subset of
+//! rules is tested against each element.
 
 use std::collections::{HashMap, HashSet};
 
@@ -2538,7 +2564,6 @@ mod tests {
     }
 
     mod prop {
-        use super::*;
         use proptest::prelude::*;
 
         proptest! {
@@ -2701,5 +2726,346 @@ mod tests {
         let parent_style = ComputedStyle::default();
         let ps = resolve_pseudo_style(&doc, p_id, "before", &parent_style, &[&sheet], &ctx);
         assert!(ps.is_none(), "no matching rule should return None");
+    }
+
+    // ---------------------------------------------------------------
+    // Property-based tests (proptest)
+    // ---------------------------------------------------------------
+
+    mod prop_tests {
+        use proptest::prelude::*;
+
+        use super::super::super::parser::{
+            CompoundSelector, CssValue, Declaration, Rule, Selector, SelectorList, SimpleSelector,
+            Specificity, Stylesheet,
+        };
+        use super::style_tree;
+        use crate::html::dom::{Attribute, TagName};
+
+        /// Strategy for Specificity values with bounded components.
+        fn arb_specificity() -> impl Strategy<Value = Specificity> {
+            (0u8..=1, 0u8..=10, 0u8..=10, 0u8..=10).prop_map(|(inline, ids, classes, types)| {
+                Specificity {
+                    inline,
+                    ids,
+                    classes,
+                    types,
+                }
+            })
+        }
+
+        /// Build a simple selector from counts of id/class/type parts.
+        fn selector_with_counts(n_ids: u8, n_classes: u8, n_types: u8) -> Selector {
+            let mut parts = Vec::new();
+            for i in 0..n_ids {
+                parts.push(SimpleSelector::Id(format!("id{i}")));
+            }
+            for i in 0..n_classes {
+                parts.push(SimpleSelector::Class(format!("cls{i}")));
+            }
+            for i in 0..n_types {
+                parts.push(SimpleSelector::Type(format!("t{i}")));
+            }
+            if parts.is_empty() {
+                parts.push(SimpleSelector::Universal);
+            }
+            Selector {
+                parts: vec![(CompoundSelector { parts }, None)],
+            }
+        }
+
+        // -- Specificity struct ordering -----------------------------------
+
+        proptest! {
+            /// Specificity comparison is reflexive.
+            #[test]
+            fn specificity_reflexive(
+                inline in 0u8..=1,
+                ids in 0u8..=10,
+                classes in 0u8..=10,
+                types in 0u8..=10,
+            ) {
+                let s = Specificity { inline, ids, classes, types };
+                prop_assert_eq!(s.cmp(&s), std::cmp::Ordering::Equal);
+            }
+
+            /// Higher inline always beats any non-inline specificity.
+            #[test]
+            fn inline_always_wins(
+                ids in 0u8..=10,
+                classes in 0u8..=10,
+                types in 0u8..=10,
+            ) {
+                let inline = Specificity { inline: 1, ids: 0, classes: 0, types: 0 };
+                let non_inline = Specificity { inline: 0, ids, classes, types };
+                prop_assert!(inline > non_inline);
+            }
+
+            /// Any ID selector beats any number of class+type selectors
+            /// (with no IDs and no inline).
+            #[test]
+            fn id_beats_classes_and_types(
+                classes in 0u8..=10,
+                types in 0u8..=10,
+            ) {
+                let with_id = Specificity { inline: 0, ids: 1, classes: 0, types: 0 };
+                let without_id = Specificity { inline: 0, ids: 0, classes, types };
+                prop_assert!(with_id > without_id);
+            }
+
+            /// Any class selector beats any number of type selectors
+            /// (with no IDs, no inline, no classes on the other side).
+            #[test]
+            fn class_beats_types(types in 0u8..=10) {
+                let with_class = Specificity { inline: 0, ids: 0, classes: 1, types: 0 };
+                let only_types = Specificity { inline: 0, ids: 0, classes: 0, types };
+                prop_assert!(with_class > only_types);
+            }
+
+            /// Specificity ordering is transitive: if a > b and b > c then a > c.
+            #[test]
+            fn specificity_transitive(
+                a in arb_specificity(),
+                b in arb_specificity(),
+                c in arb_specificity(),
+            ) {
+                if a > b && b > c {
+                    prop_assert!(a > c);
+                }
+            }
+
+            /// Specificity ordering is antisymmetric: if a > b then !(b > a).
+            #[test]
+            fn specificity_antisymmetric(
+                a in arb_specificity(),
+                b in arb_specificity(),
+            ) {
+                if a > b {
+                    prop_assert!(!(b > a));
+                }
+            }
+        }
+
+        // -- Selector::specificity() computation --------------------------
+
+        proptest! {
+            /// A selector with N id parts should have ids == N in its
+            /// specificity (up to saturation).
+            #[test]
+            fn selector_specificity_id_count(n_ids in 1u8..=5) {
+                let sel = selector_with_counts(n_ids, 0, 0);
+                let spec = sel.specificity();
+                prop_assert_eq!(spec.ids, n_ids);
+                prop_assert_eq!(spec.classes, 0);
+                prop_assert_eq!(spec.types, 0);
+            }
+
+            /// A selector with only class parts should have classes == N.
+            #[test]
+            fn selector_specificity_class_count(n_classes in 1u8..=5) {
+                let sel = selector_with_counts(0, n_classes, 0);
+                let spec = sel.specificity();
+                prop_assert_eq!(spec.classes, n_classes);
+                prop_assert_eq!(spec.ids, 0);
+            }
+
+            /// Adding an ID part to a selector always increases specificity.
+            #[test]
+            fn adding_id_increases_specificity(
+                n_classes in 0u8..=3,
+                n_types in 0u8..=3,
+            ) {
+                let without = selector_with_counts(0, n_classes, n_types);
+                let with = selector_with_counts(1, n_classes, n_types);
+                prop_assert!(with.specificity() > without.specificity());
+            }
+        }
+
+        // -- Source order: equal specificity, later declaration wins -------
+
+        proptest! {
+            /// When two rules have equal specificity (both type selectors),
+            /// the later rule's value wins in the cascade.
+            #[test]
+            fn source_order_later_wins(
+                later_color in proptest::sample::select(vec![
+                    ("red",     oasis_types::backend::Color::rgb(255, 0, 0)),
+                    ("green",   oasis_types::backend::Color::rgb(0, 128, 0)),
+                    ("blue",    oasis_types::backend::Color::rgb(0, 0, 255)),
+                    ("yellow",  oasis_types::backend::Color::rgb(255, 255, 0)),
+                    ("cyan",    oasis_types::backend::Color::rgb(0, 255, 255)),
+                    ("magenta", oasis_types::backend::Color::rgb(255, 0, 255)),
+                    ("white",   oasis_types::backend::Color::rgb(255, 255, 255)),
+                ]),
+            ) {
+                let (color_name, expected) = later_color;
+                // First rule sets color to black; second to the named color.
+                let sheet = Stylesheet {
+                    rules: vec![
+                        Rule {
+                            selectors: SelectorList {
+                                selectors: vec![super::simple_type_selector("div")],
+                            },
+                            declarations: vec![Declaration {
+                                property: "color".to_string(),
+                                value: CssValue::Keyword("black".to_string()),
+                                important: false,
+                            }],
+                        },
+                        Rule {
+                            selectors: SelectorList {
+                                selectors: vec![super::simple_type_selector("div")],
+                            },
+                            declarations: vec![Declaration {
+                                property: "color".to_string(),
+                                value: CssValue::Keyword(String::from(color_name)),
+                                important: false,
+                            }],
+                        },
+                    ],
+                };
+                let doc = super::make_doc(vec![(TagName::Div, vec![])]);
+                let styles = style_tree(&doc, &[&sheet], &[], &super::ctx());
+                let style = styles[3].as_ref().expect("div should have style");
+                // The second (later) rule should win.
+                prop_assert_eq!(style.color, expected);
+            }
+        }
+
+        // -- Inheritance overridden by any direct declaration -------------
+
+        proptest! {
+            /// A direct type-selector rule on a child always overrides an
+            /// inherited value from the parent, regardless of what the
+            /// parent's color is.
+            #[test]
+            fn direct_declaration_overrides_inheritance(
+                parent_color in proptest::sample::select(vec![
+                    "red", "green", "blue", "yellow", "cyan", "magenta",
+                ]),
+            ) {
+                use crate::html::dom::{ElementData, Node, NodeKind};
+
+                let mut doc = super::make_doc(vec![(TagName::Div, vec![])]);
+                let p_id = doc.nodes.len();
+                doc.nodes.push(Node {
+                    kind: NodeKind::Element(ElementData {
+                        tag: TagName::P,
+                        attributes: vec![],
+                    }),
+                    parent: Some(3),
+                    children: vec![],
+                });
+                doc.nodes[3].children.push(p_id);
+
+                // Parent sets color to parent_color; child sets color to white.
+                let sheet = Stylesheet {
+                    rules: vec![
+                        Rule {
+                            selectors: SelectorList {
+                                selectors: vec![super::simple_type_selector("div")],
+                            },
+                            declarations: vec![Declaration {
+                                property: "color".to_string(),
+                                value: CssValue::Keyword(String::from(parent_color)),
+                                important: false,
+                            }],
+                        },
+                        Rule {
+                            selectors: SelectorList {
+                                selectors: vec![super::simple_type_selector("p")],
+                            },
+                            declarations: vec![Declaration {
+                                property: "color".to_string(),
+                                value: CssValue::Keyword("white".to_string()),
+                                important: false,
+                            }],
+                        },
+                    ],
+                };
+                let styles = style_tree(&doc, &[&sheet], &[], &super::ctx());
+                let p_style = styles[p_id].as_ref().expect("p should have style");
+                // Child should always be white, not the inherited parent color.
+                prop_assert_eq!(
+                    p_style.color,
+                    oasis_types::backend::Color::rgb(255, 255, 255),
+                );
+            }
+
+            /// !important on a low-specificity selector beats a higher-
+            /// specificity normal declaration.
+            #[test]
+            fn important_beats_higher_specificity(
+                n_extra_classes in 0u8..=5,
+            ) {
+                // Build a selector with 1 id + N extra classes (high specificity).
+                let high_spec_sel = Selector {
+                    parts: vec![(
+                        CompoundSelector {
+                            parts: {
+                                let mut p = vec![SimpleSelector::Id("main".to_string())];
+                                for i in 0..n_extra_classes {
+                                    p.push(SimpleSelector::Class(format!("c{i}")));
+                                }
+                                p
+                            },
+                        },
+                        None,
+                    )],
+                };
+                // Low-specificity type selector with !important.
+                let low_spec_sel = super::simple_type_selector("div");
+
+                let sheet = Stylesheet {
+                    rules: vec![
+                        Rule {
+                            selectors: SelectorList {
+                                selectors: vec![high_spec_sel],
+                            },
+                            declarations: vec![Declaration {
+                                property: "color".to_string(),
+                                value: CssValue::Keyword("red".to_string()),
+                                important: false,
+                            }],
+                        },
+                        Rule {
+                            selectors: SelectorList {
+                                selectors: vec![low_spec_sel],
+                            },
+                            declarations: vec![Declaration {
+                                property: "color".to_string(),
+                                value: CssValue::Keyword("blue".to_string()),
+                                important: true,
+                            }],
+                        },
+                    ],
+                };
+
+                // Build element with id="main" and all the extra classes.
+                let mut class_val = String::new();
+                for i in 0..n_extra_classes {
+                    if !class_val.is_empty() {
+                        class_val.push(' ');
+                    }
+                    class_val.push_str(&format!("c{i}"));
+                }
+                let mut attrs = vec![Attribute {
+                    name: "id".to_string(),
+                    value: "main".to_string(),
+                }];
+                if !class_val.is_empty() {
+                    attrs.push(Attribute {
+                        name: "class".to_string(),
+                        value: class_val,
+                    });
+                }
+
+                let doc = super::make_doc(vec![(TagName::Div, attrs)]);
+                let styles = style_tree(&doc, &[&sheet], &[], &super::ctx());
+                let style = styles[3].as_ref().expect("div should have style");
+                // Blue (!important) should always win.
+                prop_assert_eq!(style.color, oasis_types::backend::Color::rgb(0, 0, 255));
+            }
+        }
     }
 }

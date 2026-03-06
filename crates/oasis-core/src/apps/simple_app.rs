@@ -41,15 +41,15 @@ impl SimpleApp {
     }
 
     /// Create the Settings app.
-    pub fn settings(path: &str) -> Self {
+    pub fn settings(path: &str, skin_name: &str, width: u32, height: u32) -> Self {
         Self::new(
             "Settings",
             path,
             vec![
                 "OASIS_OS Settings".to_string(),
                 String::new(),
-                "  Screen:     480 x 272".to_string(),
-                "  Skin:       Classic".to_string(),
+                format!("  Screen:     {width} x {height}"),
+                format!("  Skin:       {skin_name}"),
                 "  Audio:      Enabled".to_string(),
                 "  Network:    Enabled".to_string(),
                 "  Terminal:   Enabled".to_string(),
@@ -61,7 +61,22 @@ impl SimpleApp {
     }
 
     /// Create the Network app.
-    pub fn network(path: &str) -> Self {
+    pub fn network(
+        path: &str,
+        listener_active: bool,
+        listener_port: u16,
+        remote_connected: bool,
+    ) -> Self {
+        let listener_status = if listener_active {
+            format!("Active (port {listener_port})")
+        } else {
+            "Not running".to_string()
+        };
+        let remote_status = if remote_connected {
+            "Connected".to_string()
+        } else {
+            "Not connected".to_string()
+        };
         Self::new(
             "Network",
             path,
@@ -72,8 +87,8 @@ impl SimpleApp {
                 "  Status:     Active".to_string(),
                 "  Address:    127.0.0.1".to_string(),
                 String::new(),
-                "  Remote:     Not connected".to_string(),
-                "  Listener:   Not running".to_string(),
+                format!("  Remote:     {remote_status}"),
+                format!("  Listener:   {listener_status}"),
                 String::new(),
                 "Use terminal 'listen' and 'connect'".to_string(),
                 "commands for remote access.".to_string(),
@@ -134,17 +149,20 @@ impl SimpleApp {
     }
 
     /// Create the System Monitor app.
-    pub fn system_monitor(path: &str) -> Self {
+    pub fn system_monitor(path: &str, platform: &str, backend: &str, uptime_secs: u64) -> Self {
+        let h = uptime_secs / 3600;
+        let m = (uptime_secs % 3600) / 60;
+        let s = uptime_secs % 60;
         Self::new(
             "System Monitor",
             path,
             vec![
                 "System Monitor".to_string(),
                 String::new(),
-                "  Platform:   Desktop (SDL2)".to_string(),
-                "  Backend:    SDL2 accelerated".to_string(),
+                format!("  Platform:   {platform}"),
+                format!("  Backend:    {backend}"),
                 "  VFS:        MemoryVfs".to_string(),
-                "  Uptime:     (not tracked)".to_string(),
+                format!("  Uptime:     {h}:{m:02}:{s:02}"),
                 String::new(),
                 "  CPU:        --".to_string(),
                 "  Memory:     --".to_string(),
@@ -226,21 +244,21 @@ mod tests {
 
     #[test]
     fn settings_title_and_path() {
-        let app = SimpleApp::settings("/apps/settings");
+        let app = SimpleApp::settings("/apps/settings", "Classic", 480, 272);
         assert_eq!(app.title(), "Settings");
         assert_eq!(app.path(), "/apps/settings");
     }
 
     #[test]
     fn settings_content_lines() {
-        let app = SimpleApp::settings("/apps/settings");
+        let app = SimpleApp::settings("/apps/settings", "Classic", 480, 272);
         assert!(app.lines().iter().any(|l| l.contains("OASIS_OS Settings")));
         assert!(app.lines().iter().any(|l| l.contains("read-only")));
     }
 
     #[test]
     fn network_content() {
-        let app = SimpleApp::network("/apps/network");
+        let app = SimpleApp::network("/apps/network", false, 9000, false);
         assert_eq!(app.title(), "Network");
         assert!(app.lines().iter().any(|l| l.contains("127.0.0.1")));
     }
@@ -261,7 +279,7 @@ mod tests {
 
     #[test]
     fn system_monitor_content() {
-        let app = SimpleApp::system_monitor("/apps/sysmon");
+        let app = SimpleApp::system_monitor("/apps/sysmon", "Desktop (SDL2)", "SDL2", 0);
         assert_eq!(app.title(), "System Monitor");
         assert!(app.lines().iter().any(|l| l.contains("CPU")));
     }
@@ -269,14 +287,14 @@ mod tests {
     #[test]
     fn cancel_exits() {
         let vfs = make_vfs();
-        let mut app = SimpleApp::settings("/apps/settings");
+        let mut app = SimpleApp::settings("/apps/settings", "Classic", 480, 272);
         assert_eq!(app.handle_input(&Button::Cancel, &vfs), AppAction::Exit);
     }
 
     #[test]
     fn navigate_up_down() {
         let vfs = make_vfs();
-        let mut app = SimpleApp::settings("/apps/settings");
+        let mut app = SimpleApp::settings("/apps/settings", "Classic", 480, 272);
         app.content.cached_max_visible = 20;
         app.handle_input(&Button::Down, &vfs);
         assert_eq!(app.content.cursor, 1);
@@ -297,21 +315,21 @@ mod tests {
 
     #[test]
     fn no_browse_dir_or_viewing_file() {
-        let app = SimpleApp::settings("/apps/settings");
+        let app = SimpleApp::settings("/apps/settings", "Classic", 480, 272);
         assert!(app.browse_dir().is_none());
         assert!(app.viewing_file().is_none());
     }
 
     #[test]
     fn no_pending_request() {
-        let mut app = SimpleApp::settings("/apps/settings");
+        let mut app = SimpleApp::settings("/apps/settings", "Classic", 480, 272);
         assert!(app.take_pending_request().is_none());
         assert!(app.peek_pending_request().is_none());
     }
 
     #[test]
     fn downcast_works() {
-        let app = SimpleApp::settings("/apps/settings");
+        let app = SimpleApp::settings("/apps/settings", "Classic", 480, 272);
         let any = app.as_any();
         assert!(any.downcast_ref::<SimpleApp>().is_some());
     }
@@ -319,7 +337,7 @@ mod tests {
     #[test]
     fn confirm_is_noop() {
         let vfs = make_vfs();
-        let mut app = SimpleApp::settings("/apps/settings");
+        let mut app = SimpleApp::settings("/apps/settings", "Classic", 480, 272);
         assert_eq!(app.handle_input(&Button::Confirm, &vfs), AppAction::None);
     }
 }
