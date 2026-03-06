@@ -165,6 +165,14 @@ impl Vfs for MemoryVfs {
                 "parent directory does not exist: {par}"
             )));
         }
+        // Check parent directory write permission.
+        if let Some(perms) = self.permissions.get(par)
+            && !perms.owner_can_write()
+        {
+            return Err(OasisError::Vfs(format!(
+                "permission denied (directory read-only): {par}"
+            )));
+        }
         if let Some(perms) = self.permissions.get(path.as_ref())
             && !perms.owner_can_write()
         {
@@ -205,6 +213,14 @@ impl Vfs for MemoryVfs {
         if par != path.as_ref() && !self.nodes.contains_key(&par) {
             self.mkdir(&par)?;
         }
+        // Check parent directory write permission.
+        if let Some(perms) = self.permissions.get(&par)
+            && !perms.owner_can_write()
+        {
+            return Err(OasisError::Vfs(format!(
+                "permission denied (directory read-only): {par}"
+            )));
+        }
         let owned = path.into_owned();
         self.permissions
             .entry(owned.clone())
@@ -217,6 +233,23 @@ impl Vfs for MemoryVfs {
         let path = normalize(path);
         if path.as_ref() == "/" {
             return Err(OasisError::Vfs("cannot remove root".to_string()));
+        }
+        // Check parent directory write permission.
+        let par = parent(&path);
+        if let Some(perms) = self.permissions.get(par)
+            && !perms.owner_can_write()
+        {
+            return Err(OasisError::Vfs(format!(
+                "permission denied (directory read-only): {par}"
+            )));
+        }
+        // Check target's own permission.
+        if let Some(perms) = self.permissions.get(path.as_ref())
+            && !perms.owner_can_write()
+        {
+            return Err(OasisError::Vfs(format!(
+                "permission denied (read-only): {path}"
+            )));
         }
         match self.nodes.get(path.as_ref()) {
             Some(Node::Dir) => {
@@ -710,6 +743,67 @@ mod tests {
         .unwrap();
         let perms = vfs.get_permissions("/file").unwrap();
         assert_eq!(perms.owner, "root");
+    }
+
+    #[test]
+    fn readonly_dir_blocks_write() {
+        let mut vfs = MemoryVfs::new();
+        vfs.mkdir("/locked").unwrap();
+        vfs.set_permissions(
+            "/locked",
+            FilePermissions {
+                owner: "user".to_string(),
+                mode: 0o555, // read + execute, no write
+            },
+        )
+        .unwrap();
+        assert!(vfs.write("/locked/new_file", b"data").is_err());
+    }
+
+    #[test]
+    fn readonly_dir_blocks_mkdir() {
+        let mut vfs = MemoryVfs::new();
+        vfs.mkdir("/locked").unwrap();
+        vfs.set_permissions(
+            "/locked",
+            FilePermissions {
+                owner: "user".to_string(),
+                mode: 0o555,
+            },
+        )
+        .unwrap();
+        assert!(vfs.mkdir("/locked/subdir").is_err());
+    }
+
+    #[test]
+    fn readonly_dir_blocks_remove() {
+        let mut vfs = MemoryVfs::new();
+        vfs.mkdir("/locked").unwrap();
+        vfs.write("/locked/file", b"data").unwrap();
+        vfs.set_permissions(
+            "/locked",
+            FilePermissions {
+                owner: "user".to_string(),
+                mode: 0o555,
+            },
+        )
+        .unwrap();
+        assert!(vfs.remove("/locked/file").is_err());
+    }
+
+    #[test]
+    fn readonly_file_blocks_remove() {
+        let mut vfs = MemoryVfs::new();
+        vfs.write("/file", b"data").unwrap();
+        vfs.set_permissions(
+            "/file",
+            FilePermissions {
+                owner: "user".to_string(),
+                mode: 0o444,
+            },
+        )
+        .unwrap();
+        assert!(vfs.remove("/file").is_err());
     }
 
     #[test]

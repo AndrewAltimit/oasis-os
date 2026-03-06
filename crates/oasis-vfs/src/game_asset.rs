@@ -165,6 +165,14 @@ impl Vfs for GameAssetVfs {
                 "parent directory does not exist: {par}"
             )));
         }
+        // Check parent directory write permission.
+        if let Some(perms) = self.permissions.get(par)
+            && !perms.owner_can_write()
+        {
+            return Err(OasisError::Vfs(format!(
+                "permission denied (directory read-only): {par}"
+            )));
+        }
         if let Some(perms) = self.permissions.get(&path)
             && !perms.owner_can_write()
         {
@@ -205,6 +213,14 @@ impl Vfs for GameAssetVfs {
         if par != path && !self.effective_dir_exists(&par) {
             self.mkdir(&par)?;
         }
+        // Check parent directory write permission.
+        if let Some(perms) = self.permissions.get(&par)
+            && !perms.owner_can_write()
+        {
+            return Err(OasisError::Vfs(format!(
+                "permission denied (directory read-only): {par}"
+            )));
+        }
         self.deleted.remove(&path);
         self.permissions
             .entry(path.clone())
@@ -217,6 +233,23 @@ impl Vfs for GameAssetVfs {
         let path = normalize(path);
         if path == "/" {
             return Err(OasisError::Vfs("cannot remove root".to_string()));
+        }
+        // Check parent directory write permission.
+        let par = parent(&path);
+        if let Some(perms) = self.permissions.get(par)
+            && !perms.owner_can_write()
+        {
+            return Err(OasisError::Vfs(format!(
+                "permission denied (directory read-only): {par}"
+            )));
+        }
+        // Check target's own permission.
+        if let Some(perms) = self.permissions.get(&path)
+            && !perms.owner_can_write()
+        {
+            return Err(OasisError::Vfs(format!(
+                "permission denied (read-only): {path}"
+            )));
         }
         match self.effective_entry(&path) {
             Some(Node::Dir) => {
