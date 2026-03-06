@@ -1,4 +1,8 @@
-//! App screen runner with title bar and scrollable content.
+//! App screen runner -- dispatches to extracted `App` trait implementations.
+//!
+//! All apps except TV Guide are fully delegated to their own crate.
+//! TV Guide retains inline handling due to its custom EPG grid rendering
+//! and heavy external coupling via `tv_guide_state()`.
 
 use crate::active_theme::ActiveTheme;
 use crate::backend::SdiBackend;
@@ -6,19 +10,14 @@ use crate::dashboard::AppEntry;
 use crate::input::Button;
 use crate::vfs::Vfs;
 
-use super::file_viewer::list_directory;
 use oasis_app_tv_guide::guide::TvGuideState;
 
 use super::app_trait::AppAction;
 
-/// Maximum lines visible in the app content area (fallback for 480x272).
-const MAX_VISIBLE_LINES: usize = 13;
-
 /// Runtime state for a launched application screen.
 ///
-/// Apps that have been extracted to the `App` trait (e.g. File Manager)
-/// are stored in the `delegate` field. Legacy apps still use the
-/// inline fields. This allows incremental migration.
+/// All apps are stored in the `delegate` field as `Box<dyn App>` except
+/// TV Guide, which retains inline handling via the `tv_guide` field.
 #[derive(Debug)]
 pub struct AppRunner {
     /// App display title.
@@ -35,12 +34,8 @@ pub struct AppRunner {
     pub viewing_file: Option<String>,
     /// Selected line index (relative to visible area).
     pub cursor: usize,
-    /// Pending VFS IPC request from radio app (path, data).
+    /// Pending VFS IPC request from inline apps (path, data).
     pub(crate) pending_vfs_request: Option<(String, String)>,
-    /// Smooth selection position (lerps toward cursor index).
-    pub(crate) visual_selected: f32,
-    /// Cached max visible lines (updated each frame by `update_sdi`).
-    pub(crate) cached_max_visible: usize,
     /// TV Guide state (only for "TV Guide" app).
     pub(crate) tv_guide: Option<TvGuideState>,
     /// Extracted app implementation (Some for migrated apps).
@@ -86,8 +81,9 @@ impl AppRunner {
             "Clock" => Some(Box::new(oasis_app_clock::ClockApp::new(&path))),
             "Paint" => Some(Box::new(oasis_app_paint::PaintApp::new(&path))),
             "Games" => Some(Box::new(oasis_app_games::GamesApp::new(&path))),
-            // Internet Radio and TV Guide have special rendering in AppRunner.
-            "Internet Radio" | "TV Guide" => None,
+            "Internet Radio" => Some(Box::new(oasis_app_radio::RadioApp::new(&path, vfs))),
+            // TV Guide has special rendering in AppRunner.
+            "TV Guide" => None,
             // All other apps get a generic placeholder.
             _ => Some(Box::new(super::simple_app::SimpleApp::new(
                 &title,
@@ -110,8 +106,6 @@ impl AppRunner {
                 viewing_file: None,
                 cursor: 0,
                 pending_vfs_request: None,
-                visual_selected: 0.0,
-                cached_max_visible: MAX_VISIBLE_LINES,
                 tv_guide: None,
                 delegate: Some(app_impl),
             };
@@ -126,32 +120,14 @@ impl AppRunner {
             viewing_file: None,
             cursor: 0,
             pending_vfs_request: None,
-            visual_selected: 0.0,
-            cached_max_visible: MAX_VISIBLE_LINES,
             tv_guide: None,
             delegate: None,
         };
-        runner.init_content(&title, vfs);
-        runner
-    }
-
-    /// Generate initial content based on the app title.
-    ///
-    /// Generate initial content for non-delegate apps.
-    ///
-    /// Only Internet Radio and TV Guide remain here; all other apps
-    /// are handled via the `delegate` field.
-    fn init_content(&mut self, title: &str, vfs: &dyn Vfs) {
-        match title {
-            "Internet Radio" => {
-                self.lines = Self::radio_content(vfs);
-                self.cursor = 0;
-            },
-            "TV Guide" => {
-                self.init_tv_guide(vfs, &ActiveTheme::default());
-            },
-            _ => {},
+        // TV Guide is the only remaining inline app.
+        if title == "TV Guide" {
+            runner.init_tv_guide(vfs, &ActiveTheme::default());
         }
+        runner
     }
 
     /// Handle input while the app is active.
@@ -163,51 +139,12 @@ impl AppRunner {
             return action;
         }
 
-        // Internet Radio mode.
-        if self.title == "Internet Radio" {
-            return self.handle_radio_input(button, vfs);
-        }
-
-        // TV Guide mode.
+        // TV Guide mode (only remaining inline app).
         if self.title == "TV Guide" {
             return self.handle_tv_guide_input(button);
         }
 
-        match button {
-            Button::Cancel => {
-                // If viewing a file, go back to directory listing.
-                if self.viewing_file.is_some() {
-                    self.viewing_file = None;
-                    self.scroll = 0;
-                    self.cursor = 0;
-                    // Refresh directory listing.
-                    if let Some(ref dir) = self.browse_dir {
-                        self.lines = list_directory(vfs, dir);
-                    }
-                    return AppAction::None;
-                }
-                AppAction::Exit
-            },
-            Button::Up => {
-                if self.cursor > 0 {
-                    self.cursor -= 1;
-                } else if self.scroll > 0 {
-                    self.scroll -= 1;
-                }
-                AppAction::None
-            },
-            Button::Down => {
-                let visible = self.visible_count();
-                if self.cursor + 1 < visible {
-                    self.cursor += 1;
-                } else if self.scroll + self.cached_max_visible < self.lines.len() {
-                    self.scroll += 1;
-                }
-                AppAction::None
-            },
-            Button::Confirm => AppAction::None,
-            _ => AppAction::None,
-        }
+        AppAction::None
     }
 
     /// Render app content directly into a windowed content area.
@@ -229,208 +166,12 @@ impl AppRunner {
             return app.draw_windowed(cx, cy, cw, ch, backend, at);
         }
 
-        // TV Guide gets its own EPG grid renderer.
+        // TV Guide gets its own EPG grid renderer (only remaining inline app).
         if let Some(ref guide) = self.tv_guide {
             return guide.draw_windowed(cx, cy, cw, ch, backend, at);
         }
 
-        // Content background.
-        backend.fill_rect(cx, cy, cw, ch, at.app.bg)?;
-
-        // Title row with dir/file suffix.
-        let dir_suffix = if let Some(ref file) = self.viewing_file {
-            format!("  [{file}]")
-        } else {
-            self.browse_dir
-                .as_deref()
-                .map(|d| format!("  [{d}]"))
-                .unwrap_or_default()
-        };
-        let title_text = format!("{}{dir_suffix}", self.title);
-        backend.draw_text(&title_text, cx + 4, cy + 2, 12, at.app.title_bar_text)?;
-
-        // Separator line.
-        backend.fill_rect(
-            cx,
-            cy + at.app.title_bar_height as i32 - 4,
-            cw,
-            1,
-            at.app.divider,
-        )?;
-
-        // Content lines.
-        let line_h = at.terminal_line_height.max(12) as i32;
-        let max_lines = ((ch as i32 - line_h - 4) / line_h).max(0) as usize;
-        let visible = self.lines.len().saturating_sub(self.scroll).min(max_lines);
-        for i in 0..visible {
-            let line_idx = self.scroll + i;
-            let line = &self.lines[line_idx];
-            let prefix = if i == self.cursor { "> " } else { "  " };
-            let text = format!("{prefix}{line}");
-            let text_color = if i == self.cursor {
-                at.app.selected_text
-            } else {
-                at.app.text
-            };
-            let y = cy + at.app.title_bar_height as i32 + i as i32 * line_h;
-            backend.draw_text(&text, cx + 4, y, 12, text_color)?;
-        }
-
-        // Scroll indicator at bottom-left.
-        let scroll_text = if self.lines.len() > max_lines {
-            format!(
-                "[{}/{}]  Cancel=back",
-                self.scroll + 1,
-                self.lines.len().saturating_sub(max_lines) + 1,
-            )
-        } else {
-            "Cancel=back".to_string()
-        };
-        let scroll_y = cy + ch as i32 - 14;
-        backend.draw_text(&scroll_text, cx + 4, scroll_y, 10, at.app.dim_text)?;
-
         Ok(())
-    }
-
-    /// Number of currently visible content lines.
-    fn visible_count(&self) -> usize {
-        let remaining = self.lines.len().saturating_sub(self.scroll);
-        remaining.min(self.cached_max_visible)
-    }
-
-    // ---------------------------------------------------------------
-    // Internet Radio helpers
-    // ---------------------------------------------------------------
-
-    /// Generate content lines for the Internet Radio app.
-    fn radio_content(vfs: &dyn Vfs) -> Vec<String> {
-        use oasis_audio::radio::station::StationRegistry;
-        use oasis_audio::{RADIO_REQUEST_PATH, RADIO_STATUS_PATH};
-
-        let mut lines = Vec::new();
-        lines.push("=== Internet Radio ===".to_string());
-        lines.push(String::new());
-
-        // Read status from VFS if available.
-        let (state, station, now_playing) = if vfs.exists(RADIO_STATUS_PATH) {
-            let data = vfs.read(RADIO_STATUS_PATH).unwrap_or_default();
-            let text = String::from_utf8_lossy(&data);
-            let mut st = "Stopped".to_string();
-            let mut stn = "--".to_string();
-            let mut np = "--".to_string();
-            for line in text.lines() {
-                if let Some(v) = line.strip_prefix("State: ") {
-                    st = v.to_string();
-                } else if let Some(v) = line.strip_prefix("Station: ") {
-                    stn = v.to_string();
-                } else if let Some(v) = line.strip_prefix("Now Playing: ") {
-                    np = v.to_string();
-                }
-            }
-            (st, stn, np)
-        } else {
-            ("Stopped".to_string(), "--".to_string(), "--".to_string())
-        };
-
-        lines.push(format!("Status: {state}"));
-        lines.push(format!("Station: {station}"));
-        lines.push(format!("Now Playing: {now_playing}"));
-        lines.push(String::new());
-        lines.push("--- Stations ---".to_string());
-
-        // Load stations from VFS.
-        let registry = if vfs.exists("/etc/radio/stations.toml") {
-            let data = vfs.read("/etc/radio/stations.toml").unwrap_or_default();
-            let text = String::from_utf8_lossy(&data);
-            StationRegistry::from_toml(&text).unwrap_or_else(|_| StationRegistry::defaults())
-        } else {
-            StationRegistry::defaults()
-        };
-
-        // Check for pending request (to avoid re-sending).
-        let _ = RADIO_REQUEST_PATH;
-
-        for (i, s) in registry.stations.iter().enumerate() {
-            let fav = if s.favorite { "*" } else { " " };
-            let source_info = if s.source_type == "icecast" {
-                if s.bitrate > 0 {
-                    format!("{}k", s.bitrate)
-                } else {
-                    "?".to_string()
-                }
-            } else if !s.collection.is_empty() {
-                s.collection.clone()
-            } else {
-                "archive".to_string()
-            };
-            lines.push(format!(
-                "  [{fav}] {:<26} {:<12} {source_info}",
-                s.name, s.genre
-            ));
-            // Store index as hidden data (used by input handler).
-            let _ = i;
-        }
-
-        lines.push(String::new());
-        lines.push("Confirm=Tune  Triangle=Fav  Cancel=Exit".to_string());
-
-        lines
-    }
-
-    /// Handle input for the Internet Radio app.
-    fn handle_radio_input(&mut self, button: &Button, _vfs: &dyn Vfs) -> AppAction {
-        use oasis_audio::RADIO_REQUEST_PATH;
-
-        // The station list starts at line 7 (after header + status lines).
-        let station_header_lines = 7;
-        let station_count = self.lines.len().saturating_sub(station_header_lines + 2);
-        // 2 = blank line + help line at bottom.
-
-        match button {
-            Button::Cancel => AppAction::Exit,
-            Button::Up => {
-                if self.cursor > 0 {
-                    self.cursor -= 1;
-                } else if self.scroll > 0 {
-                    self.scroll -= 1;
-                }
-                AppAction::None
-            },
-            Button::Down => {
-                let visible = self.visible_count();
-                if self.cursor + 1 < visible {
-                    self.cursor += 1;
-                } else if self.scroll + self.cached_max_visible < self.lines.len() {
-                    self.scroll += 1;
-                }
-                AppAction::None
-            },
-            Button::Confirm => {
-                // Determine which station is selected.
-                let abs_idx = self.scroll + self.cursor;
-                if abs_idx >= station_header_lines && abs_idx < station_header_lines + station_count
-                {
-                    let station_idx = abs_idx - station_header_lines;
-                    self.pending_vfs_request = Some((
-                        RADIO_REQUEST_PATH.to_string(),
-                        format!("tune {station_idx}"),
-                    ));
-                }
-                AppAction::None
-            },
-            Button::Triangle => {
-                // Triangle = toggle favorite.
-                let abs_idx = self.scroll + self.cursor;
-                if abs_idx >= station_header_lines && abs_idx < station_header_lines + station_count
-                {
-                    let station_idx = abs_idx - station_header_lines;
-                    self.pending_vfs_request =
-                        Some((RADIO_REQUEST_PATH.to_string(), format!("fav {station_idx}")));
-                }
-                AppAction::None
-            },
-            _ => AppAction::None,
-        }
     }
 
     /// Peek at a pending VFS IPC request without consuming it.
@@ -454,11 +195,10 @@ impl AppRunner {
         if self.title != "Internet Radio" {
             return;
         }
-        let old_cursor = self.cursor;
-        let old_scroll = self.scroll;
-        self.lines = Self::radio_content(vfs);
-        self.cursor = old_cursor;
-        self.scroll = old_scroll;
+        if let Some(ref mut app) = self.delegate {
+            app.refresh(vfs);
+            self.sync_from_delegate();
+        }
     }
 
     /// Refresh TV Guide text display after catalog changes.
@@ -642,11 +382,13 @@ impl AppRunner {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::apps::file_viewer::{view_audio_file, view_image_file};
+    use crate::apps::file_viewer::{list_directory, view_audio_file, view_image_file};
     use crate::backend::Color;
     use crate::dashboard::AppEntry;
     use crate::sdi::SdiRegistry;
     use crate::vfs::MemoryVfs;
+
+    const MAX_VISIBLE_LINES: usize = 13;
 
     fn make_app(title: &str) -> AppEntry {
         AppEntry {

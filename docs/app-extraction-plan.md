@@ -288,14 +288,19 @@ use oasis_app_radio::RadioApp;         // now implements App
 | 5 | Clean up runner.rs | — | Low |
 | **Total** | **10 new crates** | **~15,228** | |
 
+## Status: COMPLETE
+
+All phases have been implemented. Final metrics:
+
 ## Impact on oasis-core
 
 | Metric | Before | After |
 |--------|--------|-------|
-| oasis-core LOC | ~30,726 | ~15,500 |
-| Apps in oasis-core | 16 | 5 (SimpleApp static screens) |
-| Special-case apps in runner.rs | 2 (Radio, TV Guide) | 0 |
-| New workspace crates | 0 | 10 |
+| oasis-core LOC | ~30,726 | ~16,495 |
+| Apps in oasis-core | 16 | 6 (5 SimpleApp + File Manager) |
+| Special-case apps in runner.rs | 2 (Radio, TV Guide) | 1 (TV Guide) |
+| New workspace crates | 0 | 9 |
+| runner.rs + runner_sdi.rs LOC | 1,889 | 1,455 |
 
 ## Dependency Graph (after extraction)
 

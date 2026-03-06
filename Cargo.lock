@@ -721,6 +721,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "oasis-app-radio"
+version = "1.0.0"
+dependencies = [
+ "oasis-app-core",
+ "oasis-audio",
+ "oasis-sdi",
+ "oasis-skin",
+ "oasis-types",
+ "oasis-vfs",
+]
+
+[[package]]
 name = "oasis-app-text-editor"
 version = "1.0.0"
 dependencies = [
@@ -837,6 +849,7 @@ dependencies = [
  "oasis-app-games",
  "oasis-app-media",
  "oasis-app-paint",
+ "oasis-app-radio",
  "oasis-app-text-editor",
  "oasis-app-tv-guide",
  "oasis-audio",
