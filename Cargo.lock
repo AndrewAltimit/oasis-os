@@ -747,6 +747,7 @@ dependencies = [
 name = "oasis-app-tv-guide"
 version = "1.0.0"
 dependencies = [
+ "js-sys",
  "log",
  "oasis-app-core",
  "oasis-audio",
