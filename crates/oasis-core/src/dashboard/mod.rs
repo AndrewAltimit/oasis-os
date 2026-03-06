@@ -4,6 +4,7 @@
 //! It creates and updates SDI objects based on its internal state.
 
 mod discovery;
+mod vector_icons;
 
 pub use discovery::{AppEntry, discover_apps};
 
@@ -381,6 +382,7 @@ impl DashboardState {
                 match at.icon.style.as_str() {
                     "card" => self.draw_card_icon(sdi, at, names, geo, &page_apps[i]),
                     "circle" => self.draw_circle_icon(sdi, at, names, geo, &page_apps[i]),
+                    "vector" => self.draw_vector_icon(sdi, at, names, geo, i, &page_apps[i]),
                     _ => self.draw_document_icon(sdi, at, names, geo, i, &page_apps[i]),
                 }
             } else {

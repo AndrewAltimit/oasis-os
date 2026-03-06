@@ -298,6 +298,10 @@ pub struct IconOverrides {
     /// Cursor style variant: "stroke" (default), "fill", or "underline".
     #[serde(default)]
     pub cursor_style: Option<String>,
+    /// Vector icon preset name (used when `icon_style = "vector"`).
+    /// Available presets: "altimit" (default).
+    #[serde(default)]
+    pub vector_preset: Option<String>,
 }
 
 /// Wallpaper generation configuration.

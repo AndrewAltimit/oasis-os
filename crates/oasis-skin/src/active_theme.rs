@@ -113,12 +113,15 @@ pub struct IconTheme {
     pub cursor_border_radius: u16,
     /// Cursor highlight stroke width (pixels).
     pub cursor_stroke_width: u16,
-    /// Icon style variant: "document" (default), "card", or "circle".
+    /// Icon style variant: "document" (default), "card", "circle", or "vector".
     pub style: String,
     /// Cursor style variant: "stroke" (default), "fill", or "underline".
     pub cursor_style: String,
     /// Dashboard icon shadow level (default 1).
     pub shadow_level: u8,
+    /// Vector icon preset name (used when `style = "vector"`).
+    /// Available presets: "altimit" (default).
+    pub vector_preset: String,
 }
 
 /// Start button and popup panel theme.
@@ -545,6 +548,7 @@ impl Default for ActiveTheme {
                 style: "document".to_string(),
                 cursor_style: "stroke".to_string(),
                 shadow_level: 1,
+                vector_preset: "altimit".to_string(),
             },
             menu: StartMenuTheme {
                 panel_bg: Color::rgba(20, 20, 35, 220),
@@ -893,6 +897,9 @@ impl ActiveTheme {
                 .as_ref()
                 .and_then(|g| g.icon_shadow_level)
                 .unwrap_or(1),
+            vector_preset: ico
+                .and_then(|i| i.vector_preset.clone())
+                .unwrap_or_else(|| "altimit".to_string()),
         };
 
         // -- Start menu theme --

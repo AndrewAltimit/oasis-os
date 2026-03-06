@@ -273,9 +273,17 @@ impl SdiRegistry {
     /// overlay objects on top. Each pass iterates only its pre-partitioned
     /// list, avoiding per-object overlay checks.
     pub fn draw(&mut self, backend: &mut dyn SdiBackend) -> Result<()> {
+        self.draw_base_layer(backend)?;
+        self.draw_overlay_layer(backend)
+    }
+
+    /// Draw only the base layer (non-overlay objects), sorted by z-order.
+    ///
+    /// Use this with [`draw_overlay_layer`] when you need to insert custom
+    /// rendering (e.g., vector scenes) between the base and overlay passes.
+    pub fn draw_base_layer(&mut self, backend: &mut dyn SdiBackend) -> Result<()> {
         self.ensure_z_sorted();
 
-        // Pass 1: base layer (non-overlay objects).
         for name in &self.z_sorted_base {
             let obj = &self.objects[name];
             if !obj.visible || obj.alpha == 0 {
@@ -283,8 +291,13 @@ impl SdiRegistry {
             }
             Self::draw_object(obj, backend)?;
         }
+        Ok(())
+    }
 
-        // Pass 2: overlay layer.
+    /// Draw only the overlay layer, sorted by z-order.
+    ///
+    /// Call after [`draw_base_layer`] and any custom mid-layer rendering.
+    pub fn draw_overlay_layer(&self, backend: &mut dyn SdiBackend) -> Result<()> {
         for name in &self.z_sorted_overlay {
             let obj = &self.objects[name];
             if !obj.visible || obj.alpha == 0 {
@@ -292,7 +305,6 @@ impl SdiRegistry {
             }
             Self::draw_object(obj, backend)?;
         }
-
         Ok(())
     }
 

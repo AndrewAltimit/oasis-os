@@ -1,0 +1,6 @@
+name = "altimit"
+version = "1.0"
+author = "AndrewAltimit"
+description = "Altimit-style vector icon dashboard inspired by .hack//SIGN's desktop OS"
+screen_width = 480
+screen_height = 272

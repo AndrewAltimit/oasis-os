@@ -432,6 +432,19 @@ fn main() -> Result<()> {
                         Ok(())
                     }
                 })?;
+        } else if state.active_theme.icon.style == "vector" && state.mode == Mode::Desktop {
+            // Split draw: base layer → vector overlays/icons → overlay layer.
+            sdi.draw_base_layer(&mut backend)?;
+            oasis_core::vector_overlay::render_vector_background(
+                &mut backend,
+                &state.active_theme,
+                state.frame_counter as u32,
+            )?;
+            state
+                .ui
+                .dashboard
+                .render_vector_icons(&mut backend, &state.active_theme)?;
+            sdi.draw_overlay_layer(&mut backend)?;
         } else {
             sdi.draw(&mut backend)?;
         }

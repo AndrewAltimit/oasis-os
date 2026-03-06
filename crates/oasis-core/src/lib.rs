@@ -39,6 +39,7 @@ pub use oasis_skin::active_theme;
 #[doc(hidden)]
 pub use oasis_skin::legacy_theme as theme;
 pub use oasis_ui as ui;
+pub use oasis_vector as vector;
 pub use oasis_vfs as vfs;
 pub use oasis_wm as wm;
 
@@ -63,6 +64,7 @@ pub mod toast;
 pub mod transfer;
 pub mod transition;
 pub mod update;
+pub mod vector_overlay;
 pub mod wallpaper;
 
 // -----------------------------------------------------------------------

@@ -359,7 +359,20 @@ pub unsafe extern "C" fn oasis_tick(handle: *mut OasisInstance, _delta_seconds: 
     let _ = instance
         .backend
         .clear(oasis_core::backend::Color::rgb(10, 10, 18));
-    let _ = instance.sdi.draw(&mut instance.backend);
+    if instance.active_theme.icon.style == "vector" {
+        let _ = instance.sdi.draw_base_layer(&mut instance.backend);
+        let _ = oasis_core::vector_overlay::render_vector_background(
+            &mut instance.backend,
+            &instance.active_theme,
+            0,
+        );
+        if let Some(ref dash) = instance.dashboard {
+            let _ = dash.render_vector_icons(&mut instance.backend, &instance.active_theme);
+        }
+        let _ = instance.sdi.draw_overlay_layer(&mut instance.backend);
+    } else {
+        let _ = instance.sdi.draw(&mut instance.backend);
+    }
     let _ = instance.backend.swap_buffers();
 }
 

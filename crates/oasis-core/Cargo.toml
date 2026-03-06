@@ -37,6 +37,7 @@ oasis-audio = { workspace = true }
 oasis-ui = { workspace = true }
 oasis-wm = { workspace = true }
 oasis-skin = { workspace = true }
+oasis-vector = { workspace = true }
 oasis-terminal = { workspace = true }
 oasis-browser = { workspace = true }
 serde = { workspace = true }

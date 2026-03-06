@@ -678,7 +678,22 @@ impl OasisWasm {
         } else {
             // Not in desktop mode or no windows — hide iframe.
             self.iframe.hide();
-            if let Err(e) = self.sdi.draw(&mut self.backend) {
+            if self.active_theme.icon.style == "vector" && self.mode == Mode::Desktop {
+                if let Err(e) = self.sdi.draw_base_layer(&mut self.backend) {
+                    console_log!("sdi draw_base error: {e}");
+                }
+                let _ = oasis_core::vector_overlay::render_vector_background(
+                    &mut self.backend,
+                    &self.active_theme,
+                    self.frame_counter as u32,
+                );
+                let _ = self
+                    .dashboard
+                    .render_vector_icons(&mut self.backend, &self.active_theme);
+                if let Err(e) = self.sdi.draw_overlay_layer(&mut self.backend) {
+                    console_log!("sdi draw_overlay error: {e}");
+                }
+            } else if let Err(e) = self.sdi.draw(&mut self.backend) {
                 console_log!("sdi draw error: {e}");
             }
         }

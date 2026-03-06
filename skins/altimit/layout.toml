@@ -1,0 +1,10 @@
+# Altimit skin layout -- dark background with vector overlay
+[content_bg]
+x = 0
+y = 24
+w = 480
+h = 224
+color = "#080816"
+gradient_top = "#0C0C20"
+gradient_bottom = "#060612"
+border_radius = 0
