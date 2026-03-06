@@ -143,6 +143,20 @@ impl IconNames {
     }
 }
 
+/// Icon geometry and cell layout, shared across icon drawing functions.
+///
+/// Extracts the value-type parameters (positions, sizes) into a struct
+/// so that `draw_*_icon` methods take fewer arguments.
+#[derive(Debug, Clone, Copy)]
+struct IconGeometry {
+    ix: i32,
+    iy: i32,
+    icon_w: u32,
+    icon_h: u32,
+    cell_x: i32,
+    text_pad: i32,
+}
+
 /// Runtime state for the icon grid dashboard.
 #[derive(Debug)]
 pub struct DashboardState {
@@ -356,44 +370,18 @@ impl DashboardState {
             let iy = cell_y + (self.config.cell_h as i32 - icon_h as i32) / 4;
 
             if i < page_apps.len() {
+                let geo = IconGeometry {
+                    ix,
+                    iy,
+                    icon_w,
+                    icon_h,
+                    cell_x,
+                    text_pad,
+                };
                 match at.icon.style.as_str() {
-                    "card" => self.draw_card_icon(
-                        sdi,
-                        at,
-                        names,
-                        ix,
-                        iy,
-                        icon_w,
-                        icon_h,
-                        cell_x,
-                        &page_apps[i],
-                        text_pad,
-                    ),
-                    "circle" => self.draw_circle_icon(
-                        sdi,
-                        at,
-                        names,
-                        ix,
-                        iy,
-                        icon_w,
-                        icon_h,
-                        cell_x,
-                        &page_apps[i],
-                        text_pad,
-                    ),
-                    _ => self.draw_document_icon(
-                        sdi,
-                        at,
-                        names,
-                        i,
-                        ix,
-                        iy,
-                        icon_w,
-                        icon_h,
-                        cell_x,
-                        &page_apps[i],
-                        text_pad,
-                    ),
+                    "card" => self.draw_card_icon(sdi, at, names, geo, &page_apps[i]),
+                    "circle" => self.draw_circle_icon(sdi, at, names, geo, &page_apps[i]),
+                    _ => self.draw_document_icon(sdi, at, names, geo, i, &page_apps[i]),
                 }
             } else {
                 for name in names.all() {
@@ -512,7 +500,6 @@ impl DashboardState {
     }
 
     /// Render word-wrapped, centered label lines under an icon.
-    #[allow(clippy::too_many_arguments)]
     fn draw_label(
         sdi: &mut SdiRegistry,
         at: &ActiveTheme,
@@ -608,21 +595,23 @@ impl DashboardState {
     }
 
     /// Draw a "document" style icon (default PSIX: white page, fold, stripe, gfx).
-    #[allow(clippy::too_many_arguments)]
     fn draw_document_icon(
         &self,
         sdi: &mut SdiRegistry,
         at: &ActiveTheme,
         names: &IconNames,
+        geo: IconGeometry,
         slot: usize,
-        ix: i32,
-        iy: i32,
-        icon_w: u32,
-        icon_h: u32,
-        cell_x: i32,
         app: &AppEntry,
-        text_pad: i32,
     ) {
+        let IconGeometry {
+            ix,
+            iy,
+            icon_w,
+            icon_h,
+            cell_x,
+            text_pad,
+        } = geo;
         let r = at.icon.border_radius as u32;
         // Clamp sub-element sizes to fit within the icon body's rounded rect.
         let stripe_h = at.icon_stripe_h.min(icon_h / 4);
@@ -704,20 +693,22 @@ impl DashboardState {
     }
 
     /// Draw a "card" style icon (rounded rect with gradient fill and outline).
-    #[allow(clippy::too_many_arguments)]
     fn draw_card_icon(
         &self,
         sdi: &mut SdiRegistry,
         at: &ActiveTheme,
         names: &IconNames,
-        ix: i32,
-        iy: i32,
-        icon_w: u32,
-        icon_h: u32,
-        cell_x: i32,
+        geo: IconGeometry,
         app: &AppEntry,
-        text_pad: i32,
     ) {
+        let IconGeometry {
+            ix,
+            iy,
+            icon_w,
+            icon_h,
+            cell_x,
+            text_pad,
+        } = geo;
         use oasis_types::color::{darken, lighten};
 
         // Hide document-specific sub-objects (stripe, fold, gfx).
@@ -767,20 +758,22 @@ impl DashboardState {
     }
 
     /// Draw a "circle" style icon (large circle with first letter centered).
-    #[allow(clippy::too_many_arguments)]
     fn draw_circle_icon(
         &self,
         sdi: &mut SdiRegistry,
         at: &ActiveTheme,
         names: &IconNames,
-        ix: i32,
-        iy: i32,
-        icon_w: u32,
-        icon_h: u32,
-        cell_x: i32,
+        geo: IconGeometry,
         app: &AppEntry,
-        text_pad: i32,
     ) {
+        let IconGeometry {
+            ix,
+            iy,
+            icon_w,
+            icon_h,
+            cell_x,
+            text_pad,
+        } = geo;
         // Hide document-specific sub-objects.
         for name in [&names.outline, &names.stripe, &names.fold, &names.gfx] {
             if let Ok(obj) = sdi.get_mut(name) {

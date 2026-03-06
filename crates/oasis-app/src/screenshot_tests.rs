@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used)] // Test binary -- unwrap is acceptable.
 //! Screenshot test harness for OASIS_OS visual regression testing.
 //!
 //! Renders specific scenarios and saves PNG screenshots to

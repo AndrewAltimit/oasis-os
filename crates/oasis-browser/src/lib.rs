@@ -326,6 +326,8 @@ impl BrowserWidget {
         }
 
         let image_info = self.build_image_info_map();
+        // Guarded by `is_none()` early return above.
+        #[allow(clippy::unwrap_used)]
         let doc = self.document.as_ref().unwrap();
         let content_h = self.config.content_height(self.window_h);
         let base_url = self.nav.current_url().map(String::from);

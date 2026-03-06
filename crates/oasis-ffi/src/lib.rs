@@ -199,6 +199,15 @@ pub unsafe extern "C" fn oasis_create(
         let _ = env_logger::try_init();
     });
 
+    if width == 0 || height == 0 || width > 4096 || height > 4096 {
+        log::error!(
+            "oasis_create: invalid dimensions {}x{} (must be 1..=4096)",
+            width,
+            height,
+        );
+        return std::ptr::null_mut();
+    }
+
     // SAFETY: Caller guarantees pointers are null or valid C strings per function safety contract.
     let skin_str = unsafe { c_str_to_str(skin_toml) };
     let layout_str = unsafe { c_str_to_str(layout_toml) };

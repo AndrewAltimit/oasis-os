@@ -33,6 +33,9 @@ pub mod text_commands;
 mod types;
 pub mod ui_commands;
 
+#[cfg(test)]
+mod test_helpers;
+
 /// Register audio playback commands (music) into a registry.
 pub use audio_commands::register_audio_commands;
 /// Register all built-in commands (fs, system, network, audio, skin) into a registry.

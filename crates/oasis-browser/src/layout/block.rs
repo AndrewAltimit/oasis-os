@@ -4,6 +4,35 @@
 //! boxes are stacked vertically; their widths expand to fill the
 //! containing block and heights are determined by content.
 //!
+//! ## Block formatting context (BFC)
+//!
+//! A BFC is established by the root element, floats, absolutely
+//! positioned boxes, and `overflow` values other than `visible`.
+//! Inside a BFC the algorithm works as follows:
+//!
+//! ```text
+//!   containing block (available width W)
+//!   +------------------------------------+
+//!   | child A  (width = W, height = ?)   |  <- laid out first
+//!   +------------------------------------+
+//!   | collapsed margin                   |  <- max(A.margin-bottom, B.margin-top)
+//!   +------------------------------------+
+//!   | child B  (width = W, height = ?)   |  <- cursor advances by A.height + margin
+//!   +------------------------------------+
+//! ```
+//!
+//! ## Margin collapsing
+//!
+//! Adjacent vertical margins between siblings collapse to the larger
+//! of the two (see [`collapse_margins`]). Parent-child margins also
+//! collapse when no border, padding, or clearance separates them.
+//!
+//! ## Float interaction
+//!
+//! Floated boxes are removed from normal flow and placed left or right
+//! within the BFC. Subsequent block boxes' content area shrinks to
+//! avoid overlap, while `clear` forces the cursor past earlier floats.
+//!
 //! ## Incremental layout
 //!
 //! Each [`LayoutBox`] carries a `dirty` flag. When only a subtree

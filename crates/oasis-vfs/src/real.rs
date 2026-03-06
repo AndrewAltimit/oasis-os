@@ -150,17 +150,42 @@ impl Vfs for RealVfs {
         if !real_path.exists() {
             return Err(OasisError::Vfs(format!("no such path: {path}")));
         }
-        if real_path.is_dir() {
-            Ok(FilePermissions::default_dir())
-        } else {
-            Ok(FilePermissions::default_file())
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let meta = fs::metadata(&real_path)
+                .map_err(|e| OasisError::Vfs(format!("cannot read metadata: {e}")))?;
+            let mode = meta.permissions().mode() & 0o7777;
+            Ok(FilePermissions {
+                owner: "user".to_string(),
+                mode: mode as u16,
+            })
+        }
+        #[cfg(not(unix))]
+        {
+            if real_path.is_dir() {
+                Ok(FilePermissions::default_dir())
+            } else {
+                Ok(FilePermissions::default_file())
+            }
         }
     }
 
-    fn set_permissions(&mut self, path: &str, _perms: FilePermissions) -> Result<()> {
+    fn set_permissions(&mut self, path: &str, perms: FilePermissions) -> Result<()> {
         let real_path = self.resolve(path)?;
         if !real_path.exists() {
             return Err(OasisError::Vfs(format!("no such path: {path}")));
+        }
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let unix_perms = fs::Permissions::from_mode(u32::from(perms.mode));
+            fs::set_permissions(&real_path, unix_perms)
+                .map_err(|e| OasisError::Vfs(format!("cannot set permissions: {e}")))?;
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = perms;
         }
         Ok(())
     }
@@ -233,5 +258,92 @@ mod tests {
     fn nonexistent_root_fails() {
         let result = RealVfs::new(std::path::Path::new("/nonexistent_oasis_test_dir"));
         assert!(result.is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn get_permissions_reads_real_mode() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let (_dir, mut vfs) = temp_vfs();
+        vfs.write("/test.txt", b"hello").unwrap();
+
+        // Set a known mode via std::fs so we can verify get_permissions reads it.
+        let real_path = vfs.resolve("/test.txt").unwrap();
+        fs::set_permissions(&real_path, fs::Permissions::from_mode(0o755)).unwrap();
+
+        let perms = vfs.get_permissions("/test.txt").unwrap();
+        assert_eq!(perms.mode, 0o755);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn set_permissions_applies_mode() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let (_dir, mut vfs) = temp_vfs();
+        vfs.write("/test.txt", b"hello").unwrap();
+
+        vfs.set_permissions(
+            "/test.txt",
+            FilePermissions {
+                owner: "user".to_string(),
+                mode: 0o600,
+            },
+        )
+        .unwrap();
+
+        // Verify via std::fs that the mode was actually applied.
+        let real_path = vfs.resolve("/test.txt").unwrap();
+        let actual_mode = fs::metadata(&real_path).unwrap().permissions().mode() & 0o7777;
+        assert_eq!(actual_mode, 0o600);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn set_then_get_permissions_roundtrip() {
+        let (_dir, mut vfs) = temp_vfs();
+        vfs.write("/roundtrip.txt", b"data").unwrap();
+
+        let target = FilePermissions {
+            owner: "user".to_string(),
+            mode: 0o744,
+        };
+        vfs.set_permissions("/roundtrip.txt", target).unwrap();
+
+        let got = vfs.get_permissions("/roundtrip.txt").unwrap();
+        assert_eq!(got.mode, 0o744);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn get_permissions_directory() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let (_dir, mut vfs) = temp_vfs();
+        vfs.mkdir("/mydir").unwrap();
+
+        let real_path = vfs.resolve("/mydir").unwrap();
+        fs::set_permissions(&real_path, fs::Permissions::from_mode(0o700)).unwrap();
+
+        let perms = vfs.get_permissions("/mydir").unwrap();
+        assert_eq!(perms.mode, 0o700);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn permissions_nonexistent_path_errors() {
+        let (_dir, mut vfs) = temp_vfs();
+        assert!(vfs.get_permissions("/nope").is_err());
+        assert!(
+            vfs.set_permissions(
+                "/nope",
+                FilePermissions {
+                    owner: "user".to_string(),
+                    mode: 0o644,
+                },
+            )
+            .is_err()
+        );
     }
 }

@@ -4,6 +4,22 @@ use oasis_types::error::{OasisError, Result};
 
 use crate::interpreter::{Command, CommandOutput, Environment, resolve_path};
 
+/// Append an entry to the VFS audit log.
+fn audit_log(vfs: &mut dyn oasis_vfs::Vfs, entry: &str) {
+    let log_path = "/var/log/audit.log";
+    // Ensure parent dirs exist.
+    let _ = vfs.mkdir("/var");
+    let _ = vfs.mkdir("/var/log");
+    let existing = vfs.read(log_path).unwrap_or_default();
+    let mut content = String::from_utf8_lossy(&existing).into_owned();
+    if !content.is_empty() && !content.ends_with('\n') {
+        content.push('\n');
+    }
+    content.push_str(entry);
+    content.push('\n');
+    let _ = vfs.write(log_path, content.as_bytes());
+}
+
 // ---------------------------------------------------------------------------
 // chmod
 // ---------------------------------------------------------------------------
@@ -35,6 +51,7 @@ impl Command for ChmodCmd {
         let mut perms = env.vfs.get_permissions(&path)?;
         perms.mode = mode;
         env.vfs.set_permissions(&path, perms)?;
+        audit_log(env.vfs, &format!("chmod {mode_str} {path}"));
         Ok(CommandOutput::Text(format!(
             "Set permissions on {path}: {mode_str}"
         )))
@@ -70,6 +87,7 @@ impl Command for ChownCmd {
         let mut perms = env.vfs.get_permissions(&path)?;
         perms.owner = owner.to_string();
         env.vfs.set_permissions(&path, perms)?;
+        audit_log(env.vfs, &format!("chown {owner} {path}"));
         Ok(CommandOutput::Text(format!("Set owner of {path}: {owner}")))
     }
 }
@@ -161,7 +179,8 @@ pub fn register_security_commands(reg: &mut crate::CommandRegistry) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{CommandOutput, CommandRegistry, Environment};
+    use crate::test_helpers::assert_text;
+    use crate::{CommandRegistry, Environment};
     use oasis_vfs::{MemoryVfs, Vfs};
 
     fn exec(reg: &CommandRegistry, vfs: &mut MemoryVfs, line: &str) -> Result<CommandOutput> {
@@ -185,10 +204,8 @@ mod tests {
         register_security_commands(&mut reg);
         let mut vfs = MemoryVfs::new();
         vfs.write("/test.txt", b"data").unwrap();
-        match exec(&reg, &mut vfs, "chmod 755 /test.txt").unwrap() {
-            CommandOutput::Text(s) => assert!(s.contains("755")),
-            _ => panic!("expected text"),
-        }
+        let s = assert_text!(exec(&reg, &mut vfs, "chmod 755 /test.txt").unwrap());
+        assert!(s.contains("755"));
         let perms = vfs.get_permissions("/test.txt").unwrap();
         assert_eq!(perms.mode, 0o755);
     }
@@ -210,10 +227,8 @@ mod tests {
         register_security_commands(&mut reg);
         let mut vfs = MemoryVfs::new();
         vfs.write("/test.txt", b"data").unwrap();
-        match exec(&reg, &mut vfs, "chown root /test.txt").unwrap() {
-            CommandOutput::Text(s) => assert!(s.contains("root")),
-            _ => panic!("expected text"),
-        }
+        let s = assert_text!(exec(&reg, &mut vfs, "chown root /test.txt").unwrap());
+        assert!(s.contains("root"));
         let perms = vfs.get_permissions("/test.txt").unwrap();
         assert_eq!(perms.owner, "root");
     }
@@ -223,10 +238,8 @@ mod tests {
         let mut reg = CommandRegistry::new();
         register_security_commands(&mut reg);
         let mut vfs = MemoryVfs::new();
-        match exec(&reg, &mut vfs, "passwd").unwrap() {
-            CommandOutput::Text(s) => assert!(s.contains("simulated")),
-            _ => panic!("expected text"),
-        }
+        let s = assert_text!(exec(&reg, &mut vfs, "passwd").unwrap());
+        assert!(s.contains("simulated"));
     }
 
     #[test]
@@ -234,10 +247,8 @@ mod tests {
         let mut reg = CommandRegistry::new();
         register_security_commands(&mut reg);
         let mut vfs = MemoryVfs::new();
-        match exec(&reg, &mut vfs, "audit").unwrap() {
-            CommandOutput::Text(s) => assert!(s.contains("no audit log")),
-            _ => panic!("expected text"),
-        }
+        let s = assert_text!(exec(&reg, &mut vfs, "audit").unwrap());
+        assert!(s.contains("no audit log"));
     }
 
     #[test]
@@ -249,10 +260,8 @@ mod tests {
         vfs.mkdir("/var/log").unwrap();
         vfs.write("/var/log/audit.log", b"event: login at 12:00")
             .unwrap();
-        match exec(&reg, &mut vfs, "audit show").unwrap() {
-            CommandOutput::Text(s) => assert!(s.contains("login")),
-            _ => panic!("expected text"),
-        }
+        let s = assert_text!(exec(&reg, &mut vfs, "audit show").unwrap());
+        assert!(s.contains("login"));
     }
 
     #[test]
@@ -263,11 +272,38 @@ mod tests {
         vfs.mkdir("/var").unwrap();
         vfs.mkdir("/var/log").unwrap();
         vfs.write("/var/log/audit.log", b"old data").unwrap();
-        match exec(&reg, &mut vfs, "audit clear").unwrap() {
-            CommandOutput::Text(s) => assert!(s.contains("cleared")),
-            _ => panic!("expected text"),
-        }
+        let s = assert_text!(exec(&reg, &mut vfs, "audit clear").unwrap());
+        assert!(s.contains("cleared"));
         let data = vfs.read("/var/log/audit.log").unwrap();
         assert!(data.is_empty());
+    }
+
+    #[test]
+    fn chmod_chown_create_audit_entries() {
+        let mut reg = CommandRegistry::new();
+        register_security_commands(&mut reg);
+        let mut vfs = MemoryVfs::new();
+        vfs.write("/a.txt", b"hello").unwrap();
+        vfs.write("/b.txt", b"world").unwrap();
+
+        // No audit log yet.
+        assert!(!vfs.exists("/var/log/audit.log"));
+
+        // chmod should create an audit entry.
+        exec(&reg, &mut vfs, "chmod 755 /a.txt").unwrap();
+        let log = String::from_utf8(vfs.read("/var/log/audit.log").unwrap()).unwrap();
+        assert!(
+            log.contains("chmod 755 /a.txt"),
+            "missing chmod entry: {log}"
+        );
+
+        // chown should append an audit entry.
+        exec(&reg, &mut vfs, "chown root /b.txt").unwrap();
+        let log = String::from_utf8(vfs.read("/var/log/audit.log").unwrap()).unwrap();
+        assert!(log.contains("chmod 755 /a.txt"), "chmod entry lost: {log}");
+        assert!(
+            log.contains("chown root /b.txt"),
+            "missing chown entry: {log}"
+        );
     }
 }

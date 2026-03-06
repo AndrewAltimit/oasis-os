@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used)] // Test binary -- unwrap is acceptable.
 //! End-to-end tests for the TV Guide app lifecycle.
 //!
 //! Headless test binary that exercises the full TV Guide pipeline without

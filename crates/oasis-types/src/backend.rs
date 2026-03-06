@@ -1927,4 +1927,730 @@ mod tests {
         let data = vec![255, 0, 0, 255]; // 1x1 red pixel
         assert!(validate_rgba_data(1, 1, &data).is_ok());
     }
+
+    // -----------------------------------------------------------------------
+    // PSP backend integration tests: trait object safety & delegation
+    // -----------------------------------------------------------------------
+
+    /// Verify `SdiCore` is object-safe: a mock can be used as `&dyn SdiCore`.
+    #[test]
+    fn sdi_core_is_object_safe() {
+        let mut backend = RecordingBackend::new();
+        let core: &mut dyn SdiCore = &mut backend;
+        core.clear(Color::BLACK).unwrap();
+        core.fill_rect(0, 0, 10, 10, Color::WHITE).unwrap();
+        core.draw_text("test", 0, 0, 8, Color::WHITE).unwrap();
+        assert_eq!(core.measure_text("AB", 8), backend.measure_text("AB", 8));
+    }
+
+    /// Verify `SdiBackend` is object-safe: a mock can be used as `&dyn SdiBackend`.
+    #[test]
+    fn sdi_backend_is_object_safe() {
+        let mut backend = RecordingBackend::new();
+        let b: &mut dyn SdiBackend = &mut backend;
+        // Call a mix of SdiCore and SdiBackend default methods through the
+        // trait object to prove they dispatch correctly.
+        b.clear(Color::BLACK).unwrap();
+        b.fill_rounded_rect(0, 0, 50, 50, 5, Color::WHITE).unwrap();
+        b.stroke_rect(0, 0, 20, 20, 1, Color::WHITE).unwrap();
+        b.draw_line(0, 0, 10, 10, 1, Color::WHITE).unwrap();
+        b.fill_circle(25, 25, 5, Color::WHITE).unwrap();
+        b.fill_rect_gradient(
+            0,
+            0,
+            10,
+            10,
+            &GradientStyle::Vertical {
+                top: Color::BLACK,
+                bottom: Color::WHITE,
+            },
+        )
+        .unwrap();
+        b.dim_screen(128).unwrap();
+        b.push_clip_rect(0, 0, 100, 100).unwrap();
+        b.pop_clip_rect().unwrap();
+        b.begin_batch().unwrap();
+        b.flush_batch().unwrap();
+        assert_eq!(b.viewport_size(), (480, 272));
+        assert_eq!(b.current_translate(), (0, 0));
+        assert!(b.current_clip_rect().is_none());
+    }
+
+    /// A minimal `SdiCore`-only impl (no `SdiBackend`) can be used as
+    /// `&dyn SdiCore`, proving that PSP-like backends only need 13 methods.
+    #[test]
+    fn minimal_sdi_core_impl_is_sufficient() {
+        struct MinimalCore;
+        impl SdiCore for MinimalCore {
+            fn init(&mut self, _w: u32, _h: u32) -> Result<()> {
+                Ok(())
+            }
+            fn clear(&mut self, _c: Color) -> Result<()> {
+                Ok(())
+            }
+            fn blit(&mut self, _t: TextureId, _x: i32, _y: i32, _w: u32, _h: u32) -> Result<()> {
+                Ok(())
+            }
+            fn fill_rect(&mut self, _x: i32, _y: i32, _w: u32, _h: u32, _c: Color) -> Result<()> {
+                Ok(())
+            }
+            fn draw_text(&mut self, _t: &str, _x: i32, _y: i32, _fs: u16, _c: Color) -> Result<()> {
+                Ok(())
+            }
+            fn swap_buffers(&mut self) -> Result<()> {
+                Ok(())
+            }
+            fn load_texture(&mut self, _w: u32, _h: u32, _d: &[u8]) -> Result<TextureId> {
+                Ok(TextureId(0))
+            }
+            fn destroy_texture(&mut self, _t: TextureId) -> Result<()> {
+                Ok(())
+            }
+            fn set_clip_rect(&mut self, _x: i32, _y: i32, _w: u32, _h: u32) -> Result<()> {
+                Ok(())
+            }
+            fn reset_clip_rect(&mut self) -> Result<()> {
+                Ok(())
+            }
+            fn measure_text(&self, _t: &str, _fs: u16) -> u32 {
+                0
+            }
+            fn read_pixels(&self, _x: i32, _y: i32, _w: u32, _h: u32) -> Result<Vec<u8>> {
+                Ok(vec![])
+            }
+            fn shutdown(&mut self) -> Result<()> {
+                Ok(())
+            }
+        }
+
+        // Can be used as &dyn SdiCore (13 methods only).
+        let mut m = MinimalCore;
+        let core: &mut dyn SdiCore = &mut m;
+        core.init(480, 272).unwrap();
+        core.clear(Color::BLACK).unwrap();
+        core.fill_rect(0, 0, 10, 10, Color::WHITE).unwrap();
+        core.draw_text("hi", 0, 0, 8, Color::WHITE).unwrap();
+        core.swap_buffers().unwrap();
+        let tex = core.load_texture(1, 1, &[0, 0, 0, 255]).unwrap();
+        core.blit(tex, 0, 0, 1, 1).unwrap();
+        core.destroy_texture(tex).unwrap();
+        core.set_clip_rect(0, 0, 100, 100).unwrap();
+        core.reset_clip_rect().unwrap();
+        assert_eq!(core.measure_text("x", 8), 0);
+        core.read_pixels(0, 0, 1, 1).unwrap();
+        core.shutdown().unwrap();
+    }
+
+    /// Adding an empty `impl SdiBackend` gives all 30+ default methods.
+    #[test]
+    fn empty_sdi_backend_impl_provides_defaults() {
+        struct DefaultBackend {
+            fill_rect_count: std::cell::Cell<u32>,
+        }
+        impl SdiCore for DefaultBackend {
+            fn init(&mut self, _w: u32, _h: u32) -> Result<()> {
+                Ok(())
+            }
+            fn clear(&mut self, _c: Color) -> Result<()> {
+                Ok(())
+            }
+            fn blit(&mut self, _t: TextureId, _x: i32, _y: i32, _w: u32, _h: u32) -> Result<()> {
+                Ok(())
+            }
+            fn fill_rect(&mut self, _x: i32, _y: i32, _w: u32, _h: u32, _c: Color) -> Result<()> {
+                self.fill_rect_count.set(self.fill_rect_count.get() + 1);
+                Ok(())
+            }
+            fn draw_text(&mut self, _t: &str, _x: i32, _y: i32, _fs: u16, _c: Color) -> Result<()> {
+                Ok(())
+            }
+            fn swap_buffers(&mut self) -> Result<()> {
+                Ok(())
+            }
+            fn load_texture(&mut self, _w: u32, _h: u32, _d: &[u8]) -> Result<TextureId> {
+                Ok(TextureId(0))
+            }
+            fn destroy_texture(&mut self, _t: TextureId) -> Result<()> {
+                Ok(())
+            }
+            fn set_clip_rect(&mut self, _x: i32, _y: i32, _w: u32, _h: u32) -> Result<()> {
+                Ok(())
+            }
+            fn reset_clip_rect(&mut self) -> Result<()> {
+                Ok(())
+            }
+            fn measure_text(&self, t: &str, fs: u16) -> u32 {
+                bitmap_measure_text(t, fs)
+            }
+            fn read_pixels(&self, _x: i32, _y: i32, _w: u32, _h: u32) -> Result<Vec<u8>> {
+                Ok(vec![])
+            }
+            fn shutdown(&mut self) -> Result<()> {
+                Ok(())
+            }
+        }
+        impl SdiBackend for DefaultBackend {} // Empty -- all defaults!
+
+        let mut b = DefaultBackend {
+            fill_rect_count: std::cell::Cell::new(0),
+        };
+
+        // fill_rounded_rect should delegate to fill_rect.
+        b.fill_rounded_rect(0, 0, 50, 50, 10, Color::WHITE).unwrap();
+        assert_eq!(b.fill_rect_count.get(), 1);
+
+        // stroke_rect should call fill_rect 4 times.
+        b.fill_rect_count.set(0);
+        b.stroke_rect(0, 0, 100, 100, 2, Color::WHITE).unwrap();
+        assert_eq!(b.fill_rect_count.get(), 4);
+
+        // fill_circle should call fill_rect multiple times (scanlines).
+        b.fill_rect_count.set(0);
+        b.fill_circle(50, 50, 5, Color::WHITE).unwrap();
+        assert!(b.fill_rect_count.get() > 1);
+
+        // Viewport defaults to PSP resolution.
+        assert_eq!(b.viewport_size(), (480, 272));
+    }
+
+    // -----------------------------------------------------------------------
+    // Bresenham line algorithm correctness
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn draw_line_bresenham_45_degree_plots_all_points() {
+        let mut b = RecordingBackend::new();
+        b.draw_line(0, 0, 4, 4, 1, Color::WHITE).unwrap();
+        let calls = b.calls();
+        // 45-degree line: one pixel at each (0,0), (1,1), (2,2), (3,3), (4,4)
+        assert_eq!(calls.len(), 5);
+        for (i, call) in calls.iter().enumerate() {
+            assert!(
+                call.starts_with(&format!("fill_rect({i},{i},1,1,")),
+                "expected pixel at ({i},{i}), got: {call}"
+            );
+        }
+    }
+
+    #[test]
+    fn draw_line_bresenham_negative_slope() {
+        let mut b = RecordingBackend::new();
+        b.draw_line(4, 4, 0, 0, 1, Color::WHITE).unwrap();
+        let calls = b.calls();
+        // Same length as forward diagonal.
+        assert_eq!(calls.len(), 5);
+        // First pixel at (4,4), last at (0,0).
+        assert!(calls[0].starts_with("fill_rect(4,4,1,1,"));
+        assert!(calls[4].starts_with("fill_rect(0,0,1,1,"));
+    }
+
+    #[test]
+    fn draw_line_bresenham_steep_line() {
+        // Steep line: more vertical than horizontal (dx=1, dy=4)
+        let mut b = RecordingBackend::new();
+        b.draw_line(0, 0, 1, 4, 1, Color::WHITE).unwrap();
+        let calls = b.calls();
+        // Should visit 5 pixels (y from 0 to 4 inclusive).
+        assert_eq!(calls.len(), 5);
+        // First and last pixels.
+        assert!(calls[0].starts_with("fill_rect(0,0,1,1,"));
+        assert!(calls[4].starts_with("fill_rect(1,4,1,1,"));
+    }
+
+    #[test]
+    fn draw_line_bresenham_shallow_line() {
+        // Shallow line: more horizontal than vertical (dx=4, dy=1)
+        let mut b = RecordingBackend::new();
+        b.draw_line(0, 0, 4, 1, 1, Color::WHITE).unwrap();
+        let calls = b.calls();
+        // Should visit 5 pixels (x from 0 to 4 inclusive).
+        assert_eq!(calls.len(), 5);
+        assert!(calls[0].starts_with("fill_rect(0,0,1,1,"));
+        assert!(calls[4].starts_with("fill_rect(4,1,1,1,"));
+    }
+
+    #[test]
+    fn draw_line_bresenham_single_point() {
+        // Diagonal from (5,5) to (5,5) -- single point.
+        // This is actually horizontal (y1==y2), handled by the fast path.
+        let mut b = RecordingBackend::new();
+        b.draw_line(5, 5, 5, 5, 1, Color::WHITE).unwrap();
+        let calls = b.calls();
+        assert_eq!(calls.len(), 1);
+    }
+
+    #[test]
+    fn draw_line_bresenham_width_scales_pixels() {
+        let mut b = RecordingBackend::new();
+        b.draw_line(0, 0, 2, 2, 3, Color::WHITE).unwrap();
+        let calls = b.calls();
+        // Each pixel plotted as a 3x3 fill_rect.
+        assert_eq!(calls.len(), 3); // (0,0), (1,1), (2,2)
+        for call in &calls {
+            // Width and height should be 3.
+            assert!(call.contains(",3,3,"), "expected 3x3 pixel, got: {call}");
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // DrawCommand batch dispatch
+    // -----------------------------------------------------------------------
+
+    /// Helper: dispatch a `DrawCommand` to an `SdiBackend`, simulating what
+    /// a batch renderer does internally.
+    fn dispatch_command(backend: &mut dyn SdiBackend, cmd: &DrawCommand) -> Result<()> {
+        match cmd {
+            DrawCommand::FillRect { x, y, w, h, color } => {
+                backend.fill_rect(*x, *y, *w, *h, *color)
+            },
+            DrawCommand::FillRoundedRect {
+                x,
+                y,
+                w,
+                h,
+                radius,
+                color,
+            } => backend.fill_rounded_rect(*x, *y, *w, *h, *radius, *color),
+            DrawCommand::StrokeRect {
+                x,
+                y,
+                w,
+                h,
+                stroke_width,
+                color,
+            } => backend.stroke_rect(*x, *y, *w, *h, *stroke_width, *color),
+            DrawCommand::DrawLine {
+                x1,
+                y1,
+                x2,
+                y2,
+                width,
+                color,
+            } => backend.draw_line(*x1, *y1, *x2, *y2, *width, *color),
+            DrawCommand::FillCircle {
+                cx,
+                cy,
+                radius,
+                color,
+            } => backend.fill_circle(*cx, *cy, *radius, *color),
+            DrawCommand::FillTriangle { points, color } => backend.fill_triangle(
+                points[0].0,
+                points[0].1,
+                points[1].0,
+                points[1].1,
+                points[2].0,
+                points[2].1,
+                *color,
+            ),
+            DrawCommand::Gradient { x, y, w, h, style } => {
+                backend.fill_rect_gradient(*x, *y, *w, *h, style)
+            },
+            DrawCommand::DrawText {
+                text,
+                x,
+                y,
+                font_size,
+                color,
+            } => backend.draw_text(text, *x, *y, *font_size, *color),
+            DrawCommand::Blit { tex, x, y, w, h } => backend.blit(*tex, *x, *y, *w, *h),
+            DrawCommand::BlitSub { tex, src, dst } => {
+                backend.blit_sub(*tex, src.0, src.1, src.2, src.3, dst.0, dst.1, dst.2, dst.3)
+            },
+            DrawCommand::BlitTinted {
+                tex,
+                x,
+                y,
+                w,
+                h,
+                tint,
+            } => backend.blit_tinted(*tex, *x, *y, *w, *h, *tint),
+            DrawCommand::PushClip { x, y, w, h } => backend.push_clip_rect(*x, *y, *w, *h),
+            DrawCommand::PopClip => backend.pop_clip_rect(),
+            DrawCommand::PushTranslate { dx, dy } => backend.push_translate(*dx, *dy),
+            DrawCommand::PopTranslate => backend.pop_translate(),
+        }
+    }
+
+    #[test]
+    fn dispatch_fill_rect_command() {
+        let mut b = RecordingBackend::new();
+        let cmd = DrawCommand::FillRect {
+            x: 10,
+            y: 20,
+            w: 30,
+            h: 40,
+            color: Color::rgb(1, 2, 3),
+        };
+        dispatch_command(&mut b, &cmd).unwrap();
+        let calls = b.calls();
+        assert_eq!(calls.len(), 1);
+        assert!(calls[0].starts_with("fill_rect(10,20,30,40,1,2,3,"));
+    }
+
+    #[test]
+    fn dispatch_fill_rounded_rect_command() {
+        let mut b = RecordingBackend::new();
+        let cmd = DrawCommand::FillRoundedRect {
+            x: 5,
+            y: 5,
+            w: 50,
+            h: 50,
+            radius: 8,
+            color: Color::WHITE,
+        };
+        dispatch_command(&mut b, &cmd).unwrap();
+        let calls = b.calls();
+        // Default falls back to fill_rect.
+        assert_eq!(calls.len(), 1);
+        assert!(calls[0].starts_with("fill_rect(5,5,50,50,"));
+    }
+
+    #[test]
+    fn dispatch_stroke_rect_command() {
+        let mut b = RecordingBackend::new();
+        let cmd = DrawCommand::StrokeRect {
+            x: 0,
+            y: 0,
+            w: 20,
+            h: 20,
+            stroke_width: 1,
+            color: Color::WHITE,
+        };
+        dispatch_command(&mut b, &cmd).unwrap();
+        // stroke_rect emits 4 fill_rect calls.
+        assert_eq!(b.calls().len(), 4);
+    }
+
+    #[test]
+    fn dispatch_draw_line_command() {
+        let mut b = RecordingBackend::new();
+        let cmd = DrawCommand::DrawLine {
+            x1: 0,
+            y1: 0,
+            x2: 0,
+            y2: 10,
+            width: 1,
+            color: Color::WHITE,
+        };
+        dispatch_command(&mut b, &cmd).unwrap();
+        let calls = b.calls();
+        assert_eq!(calls.len(), 1);
+        assert!(calls[0].starts_with("fill_rect(0,0,1,10,"));
+    }
+
+    #[test]
+    fn dispatch_fill_circle_command() {
+        let mut b = RecordingBackend::new();
+        let cmd = DrawCommand::FillCircle {
+            cx: 50,
+            cy: 50,
+            radius: 3,
+            color: Color::WHITE,
+        };
+        dispatch_command(&mut b, &cmd).unwrap();
+        assert!(b.calls().len() > 1); // Multiple scanlines.
+    }
+
+    #[test]
+    fn dispatch_fill_triangle_command() {
+        let mut b = RecordingBackend::new();
+        let cmd = DrawCommand::FillTriangle {
+            points: [(0, 0), (10, 0), (5, 5)],
+            color: Color::WHITE,
+        };
+        dispatch_command(&mut b, &cmd).unwrap();
+        assert!(b.calls().len() > 1); // Multiple scanlines.
+    }
+
+    #[test]
+    fn dispatch_gradient_command() {
+        let mut b = RecordingBackend::new();
+        let cmd = DrawCommand::Gradient {
+            x: 0,
+            y: 0,
+            w: 100,
+            h: 50,
+            style: GradientStyle::Vertical {
+                top: Color::rgb(255, 0, 0),
+                bottom: Color::rgb(0, 0, 255),
+            },
+        };
+        dispatch_command(&mut b, &cmd).unwrap();
+        let calls = b.calls();
+        assert_eq!(calls.len(), 1);
+        assert!(calls[0].contains("255,0,0")); // Primary color used.
+    }
+
+    #[test]
+    fn dispatch_draw_text_command() {
+        let mut b = RecordingBackend::new();
+        let cmd = DrawCommand::DrawText {
+            text: "hello".into(),
+            x: 5,
+            y: 10,
+            font_size: 8,
+            color: Color::BLACK,
+        };
+        dispatch_command(&mut b, &cmd).unwrap();
+        let calls = b.calls();
+        assert_eq!(calls.len(), 1);
+        assert!(calls[0].contains("hello"));
+    }
+
+    #[test]
+    fn dispatch_blit_command() {
+        let mut b = RecordingBackend::new();
+        let cmd = DrawCommand::Blit {
+            tex: TextureId(42),
+            x: 10,
+            y: 20,
+            w: 64,
+            h: 64,
+        };
+        dispatch_command(&mut b, &cmd).unwrap();
+        let calls = b.calls();
+        assert_eq!(calls.len(), 1);
+        assert!(calls[0].starts_with("blit(42,10,20,64,64)"));
+    }
+
+    #[test]
+    fn dispatch_blit_sub_command() {
+        let mut b = RecordingBackend::new();
+        let cmd = DrawCommand::BlitSub {
+            tex: TextureId(7),
+            src: (0, 0, 16, 16),
+            dst: (10, 20, 32, 32),
+        };
+        dispatch_command(&mut b, &cmd).unwrap();
+        let calls = b.calls();
+        assert_eq!(calls.len(), 1);
+        // Default blit_sub falls back to blit with dst coords.
+        assert!(calls[0].starts_with("blit(7,10,20,32,32)"));
+    }
+
+    #[test]
+    fn dispatch_blit_tinted_command() {
+        let mut b = RecordingBackend::new();
+        let cmd = DrawCommand::BlitTinted {
+            tex: TextureId(3),
+            x: 0,
+            y: 0,
+            w: 16,
+            h: 16,
+            tint: Color::rgb(255, 0, 0),
+        };
+        dispatch_command(&mut b, &cmd).unwrap();
+        let calls = b.calls();
+        assert_eq!(calls.len(), 1);
+        assert!(calls[0].starts_with("blit(3,0,0,16,16)"));
+    }
+
+    #[test]
+    fn dispatch_push_pop_clip_commands() {
+        let mut b = RecordingBackend::new();
+        dispatch_command(
+            &mut b,
+            &DrawCommand::PushClip {
+                x: 10,
+                y: 20,
+                w: 100,
+                h: 50,
+            },
+        )
+        .unwrap();
+        dispatch_command(&mut b, &DrawCommand::PopClip).unwrap();
+        let calls = b.calls();
+        assert_eq!(calls.len(), 2);
+        assert!(calls[0].starts_with("set_clip(10,20,100,50)"));
+        assert_eq!(calls[1], "reset_clip");
+    }
+
+    #[test]
+    fn dispatch_push_pop_translate_commands() {
+        let mut b = RecordingBackend::new();
+        dispatch_command(&mut b, &DrawCommand::PushTranslate { dx: 5, dy: 10 }).unwrap();
+        dispatch_command(&mut b, &DrawCommand::PopTranslate).unwrap();
+        // Default translate is no-op, should succeed without recording.
+        assert!(b.calls().is_empty());
+    }
+
+    /// Dispatch every `DrawCommand` variant in a single batch to verify
+    /// nothing panics and all variants are handled.
+    #[test]
+    fn dispatch_all_command_variants_in_batch() {
+        let mut b = RecordingBackend::new();
+        let commands = vec![
+            DrawCommand::FillRect {
+                x: 0,
+                y: 0,
+                w: 10,
+                h: 10,
+                color: Color::BLACK,
+            },
+            DrawCommand::FillRoundedRect {
+                x: 0,
+                y: 0,
+                w: 10,
+                h: 10,
+                radius: 2,
+                color: Color::BLACK,
+            },
+            DrawCommand::StrokeRect {
+                x: 0,
+                y: 0,
+                w: 10,
+                h: 10,
+                stroke_width: 1,
+                color: Color::BLACK,
+            },
+            DrawCommand::DrawLine {
+                x1: 0,
+                y1: 0,
+                x2: 5,
+                y2: 5,
+                width: 1,
+                color: Color::BLACK,
+            },
+            DrawCommand::FillCircle {
+                cx: 5,
+                cy: 5,
+                radius: 3,
+                color: Color::BLACK,
+            },
+            DrawCommand::FillTriangle {
+                points: [(0, 0), (5, 0), (2, 3)],
+                color: Color::BLACK,
+            },
+            DrawCommand::Gradient {
+                x: 0,
+                y: 0,
+                w: 10,
+                h: 10,
+                style: GradientStyle::Horizontal {
+                    left: Color::BLACK,
+                    right: Color::WHITE,
+                },
+            },
+            DrawCommand::DrawText {
+                text: "batch".into(),
+                x: 0,
+                y: 0,
+                font_size: 8,
+                color: Color::WHITE,
+            },
+            DrawCommand::Blit {
+                tex: TextureId(1),
+                x: 0,
+                y: 0,
+                w: 8,
+                h: 8,
+            },
+            DrawCommand::BlitSub {
+                tex: TextureId(1),
+                src: (0, 0, 4, 4),
+                dst: (0, 0, 8, 8),
+            },
+            DrawCommand::BlitTinted {
+                tex: TextureId(1),
+                x: 0,
+                y: 0,
+                w: 8,
+                h: 8,
+                tint: Color::WHITE,
+            },
+            DrawCommand::PushClip {
+                x: 0,
+                y: 0,
+                w: 100,
+                h: 100,
+            },
+            DrawCommand::PopClip,
+            DrawCommand::PushTranslate { dx: 10, dy: 20 },
+            DrawCommand::PopTranslate,
+        ];
+
+        b.begin_batch().unwrap();
+        for cmd in &commands {
+            dispatch_command(&mut b, cmd).unwrap();
+        }
+        b.flush_batch().unwrap();
+
+        // Verify we got a reasonable number of calls (some commands expand
+        // to multiple fill_rect calls via defaults).
+        let calls = b.calls();
+        assert!(
+            calls.len() >= 15,
+            "expected at least 15 recorded calls from all variants, got {}",
+            calls.len()
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // fill_rounded_rect fallback verification
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn fill_rounded_rect_zero_radius_is_fill_rect() {
+        let mut b = RecordingBackend::new();
+        b.fill_rounded_rect(10, 20, 100, 50, 0, Color::rgb(1, 2, 3))
+            .unwrap();
+        let calls = b.calls();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0], "fill_rect(10,20,100,50,1,2,3,255)");
+    }
+
+    #[test]
+    fn fill_rounded_rect_large_radius_still_delegates() {
+        let mut b = RecordingBackend::new();
+        // radius (999) >> half of min dimension (25) -- default ignores radius.
+        b.fill_rounded_rect(0, 0, 100, 50, 999, Color::WHITE)
+            .unwrap();
+        let calls = b.calls();
+        assert_eq!(calls.len(), 1);
+        assert!(calls[0].starts_with("fill_rect(0,0,100,50,"));
+    }
+
+    #[test]
+    fn fill_rounded_rect_preserves_exact_color() {
+        let mut b = RecordingBackend::new();
+        let color = Color::rgba(12, 34, 56, 78);
+        b.fill_rounded_rect(0, 0, 10, 10, 3, color).unwrap();
+        let calls = b.calls();
+        assert_eq!(calls[0], "fill_rect(0,0,10,10,12,34,56,78)");
+    }
+
+    // -----------------------------------------------------------------------
+    // Text metrics coherence
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn text_metrics_ascent_less_than_height() {
+        let b = RecordingBackend::new();
+        for fs in [1, 5, 8, 10, 12, 16, 20, 32, 64] {
+            let m = b.text_metrics("Test", fs);
+            assert!(
+                m.ascent < m.height,
+                "ascent ({}) must be < height ({}) for font_size {fs}",
+                m.ascent,
+                m.height
+            );
+        }
+    }
+
+    #[test]
+    fn text_metrics_width_matches_measure_text() {
+        let b = RecordingBackend::new();
+        let text = "Hello World";
+        let m = b.text_metrics(text, 10);
+        assert_eq!(m.width, b.measure_text(text, 10));
+    }
+
+    #[test]
+    fn text_metrics_extents_matches_text_metrics() {
+        let b = RecordingBackend::new();
+        let m = b.text_metrics("ABCD", 12);
+        let (w, h) = b.measure_text_extents("ABCD", 12);
+        assert_eq!(w, m.width);
+        assert_eq!(h, m.height);
+    }
 }

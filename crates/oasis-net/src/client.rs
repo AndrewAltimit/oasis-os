@@ -53,6 +53,14 @@ impl RemoteClient {
         let stream = backend.connect(address, port)?;
         self.stream = Some(stream);
 
+        #[cfg(not(feature = "tls-rustls"))]
+        if psk.is_some() {
+            log::warn!(
+                "Connecting WITHOUT TLS — PSK will be sent in plaintext. \
+                 Enable the `tls-rustls` feature for encrypted connections."
+            );
+        }
+
         if let Some(key) = psk {
             // Send PSK immediately.
             if let Some(ref mut s) = self.stream {
