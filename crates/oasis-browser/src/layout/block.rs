@@ -186,7 +186,7 @@ impl StyleCache {
 ///
 /// This is an additive optimisation -- when the entire tree is dirty
 /// (e.g. initial layout), the result is identical to a full
-/// [`layout_block`] pass.
+/// `layout_block` pass.
 pub fn layout_block_incremental(
     layout_box: &mut LayoutBox,
     containing_width: f32,

@@ -54,7 +54,7 @@ impl Default for GeminiTheme {
 
 /// Render a Gemini document into a layout tree.
 ///
-/// Returns a root [`LayoutBox`] containing one child per Gemini line.
+/// Returns a root `LayoutBox` containing one child per Gemini line.
 /// The tree is positioned within the given `viewport_width` and uses
 /// the `measurer` for text width calculations.
 pub fn render_gemini(
