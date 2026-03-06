@@ -302,6 +302,33 @@ pub struct IconOverrides {
     /// Available presets: "altimit" (default).
     #[serde(default)]
     pub vector_preset: Option<String>,
+    /// Enable idle float animation (gentle sine-wave bob) for vector icons.
+    #[serde(default)]
+    pub vector_idle_float: Option<bool>,
+    /// Float animation amplitude in pixels (default 2.0).
+    #[serde(default)]
+    pub vector_float_amplitude: Option<f32>,
+    /// Float animation speed multiplier (default 0.04).
+    #[serde(default)]
+    pub vector_float_speed: Option<f32>,
+    /// Enable spin animation on "the_world" inner element (default true).
+    #[serde(default)]
+    pub vector_spin_enabled: Option<bool>,
+    /// Spin speed in radians per frame (default 0.03).
+    #[serde(default)]
+    pub vector_spin_speed: Option<f32>,
+    /// Enable pulse animation on "audio" inner element (default true).
+    #[serde(default)]
+    pub vector_pulse_enabled: Option<bool>,
+    /// Pulse speed multiplier (default 0.06).
+    #[serde(default)]
+    pub vector_pulse_speed: Option<f32>,
+    /// Enable LED blink on "data" icon (default true).
+    #[serde(default)]
+    pub vector_blink_enabled: Option<bool>,
+    /// LED blink interval in frames (default 45).
+    #[serde(default)]
+    pub vector_blink_interval: Option<u32>,
 }
 
 /// Wallpaper generation configuration.

@@ -367,7 +367,7 @@ pub unsafe extern "C" fn oasis_tick(handle: *mut OasisInstance, _delta_seconds: 
             0,
         );
         if let Some(ref dash) = instance.dashboard {
-            let _ = dash.render_vector_icons(&mut instance.backend, &instance.active_theme);
+            let _ = dash.render_vector_icons(&mut instance.backend, &instance.active_theme, 0);
         }
         let _ = instance.sdi.draw_overlay_layer(&mut instance.backend);
     } else {

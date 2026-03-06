@@ -43,12 +43,13 @@ pub fn render_vector_background(
         scene.push(op);
     }
 
-    // Wireframe sphere on the right side.
+    // Wireframe sphere on the right side (animated rotation).
     let sphere_r: u16 = (h / 7).min(40) as u16;
     let sphere_cx = (w as i32 * 4) / 5;
     let sphere_cy = h as i32 / 2;
     let sphere_color = with_alpha(Color::WHITE, 20);
-    let sphere = icons::wireframe_sphere(sphere_r, sphere_color);
+    let sphere_angle = frame_counter as f32 * 0.015; // slow globe rotation
+    let sphere = icons::wireframe_sphere_animated(sphere_r, sphere_color, sphere_angle);
     scene.embed(
         sphere_cx - sphere_r as i32,
         sphere_cy - sphere_r as i32,

@@ -122,6 +122,24 @@ pub struct IconTheme {
     /// Vector icon preset name (used when `style = "vector"`).
     /// Available presets: "altimit" (default).
     pub vector_preset: String,
+    /// Enable idle float animation for vector icons.
+    pub idle_float: bool,
+    /// Float amplitude in pixels.
+    pub float_amplitude: f32,
+    /// Float speed (radians per frame).
+    pub float_speed: f32,
+    /// Enable spin on "the_world" inner element.
+    pub spin_enabled: bool,
+    /// Spin speed (radians per frame).
+    pub spin_speed: f32,
+    /// Enable pulse on "audio" inner element.
+    pub pulse_enabled: bool,
+    /// Pulse speed multiplier.
+    pub pulse_speed: f32,
+    /// Enable LED blink on "data" icon.
+    pub blink_enabled: bool,
+    /// LED blink interval in frames.
+    pub blink_interval: u32,
 }
 
 /// Start button and popup panel theme.
@@ -549,6 +567,15 @@ impl Default for ActiveTheme {
                 cursor_style: "stroke".to_string(),
                 shadow_level: 1,
                 vector_preset: "altimit".to_string(),
+                idle_float: false,
+                float_amplitude: 2.0,
+                float_speed: 0.04,
+                spin_enabled: false,
+                spin_speed: 0.03,
+                pulse_enabled: false,
+                pulse_speed: 0.06,
+                blink_enabled: false,
+                blink_interval: 45,
             },
             menu: StartMenuTheme {
                 panel_bg: Color::rgba(20, 20, 35, 220),
@@ -900,6 +927,15 @@ impl ActiveTheme {
             vector_preset: ico
                 .and_then(|i| i.vector_preset.clone())
                 .unwrap_or_else(|| "altimit".to_string()),
+            idle_float: ico.and_then(|i| i.vector_idle_float).unwrap_or(false),
+            float_amplitude: ico.and_then(|i| i.vector_float_amplitude).unwrap_or(2.0),
+            float_speed: ico.and_then(|i| i.vector_float_speed).unwrap_or(0.04),
+            spin_enabled: ico.and_then(|i| i.vector_spin_enabled).unwrap_or(false),
+            spin_speed: ico.and_then(|i| i.vector_spin_speed).unwrap_or(0.03),
+            pulse_enabled: ico.and_then(|i| i.vector_pulse_enabled).unwrap_or(false),
+            pulse_speed: ico.and_then(|i| i.vector_pulse_speed).unwrap_or(0.06),
+            blink_enabled: ico.and_then(|i| i.vector_blink_enabled).unwrap_or(false),
+            blink_interval: ico.and_then(|i| i.vector_blink_interval).unwrap_or(45),
         };
 
         // -- Start menu theme --

@@ -10,6 +10,7 @@
 
 use oasis_types::backend::Color;
 
+use crate::anim;
 use crate::op::VectorOp;
 
 /// A named vector icon with its operations and bounding dimensions.
@@ -287,6 +288,184 @@ pub fn icon_data(color: Color, led_color: Color) -> IconDef {
         ],
         width: 22,
         height: 22,
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Animated icon variants
+// ---------------------------------------------------------------------------
+
+/// THE WORLD with spinning inner square.
+///
+/// The outer border is static; the inner filled square rotates by `angle`.
+pub fn icon_the_world_animated(color: Color, angle: f32) -> IconDef {
+    IconDef {
+        name: "the_world",
+        ops: vec![
+            // Outer border (static)
+            VectorOp::StrokeRect {
+                x: 0,
+                y: 0,
+                w: 22,
+                h: 22,
+                width: 2,
+                color,
+            },
+            // Inner filled square (rotated)
+            anim::rotate_rect(5, 5, 12, 12, angle, color),
+        ],
+        width: 22,
+        height: 22,
+    }
+}
+
+/// AUDIO with pulsing inner triangle.
+///
+/// The outer triangle outline is static; the inner triangle's alpha oscillates.
+pub fn icon_audio_animated(color: Color, alpha: u8) -> IconDef {
+    let mut inner_color = color;
+    inner_color.a = ((color.a as u16 * alpha as u16) / 255) as u8;
+    IconDef {
+        name: "audio",
+        ops: vec![
+            // Outer triangle outline (static)
+            VectorOp::StrokePolygon {
+                points: vec![
+                    (0, 0),   // top-left
+                    (0, 22),  // bottom-left
+                    (22, 11), // right center
+                ],
+                width: 2,
+                color,
+            },
+            // Inner filled triangle (pulsing alpha)
+            VectorOp::FillPolygon {
+                points: vec![
+                    (4, 5),   // top
+                    (4, 17),  // bottom
+                    (15, 11), // right
+                ],
+                color: inner_color,
+            },
+        ],
+        width: 22,
+        height: 22,
+    }
+}
+
+/// DATA with blinking LED.
+///
+/// The card body is static; the LED circle visibility is controlled by `led_visible`.
+pub fn icon_data_animated(color: Color, led_color: Color, led_visible: bool) -> IconDef {
+    let mut ops = vec![
+        // Card body outline
+        VectorOp::StrokePolygon {
+            points: vec![(0, 0), (15, 0), (22, 7), (22, 22), (0, 22)],
+            width: 2,
+            color,
+        },
+        // Contact line 1
+        VectorOp::FillRect {
+            x: 4,
+            y: 6,
+            w: 10,
+            h: 2,
+            color,
+        },
+        // Contact line 2
+        VectorOp::FillRect {
+            x: 4,
+            y: 10,
+            w: 10,
+            h: 2,
+            color,
+        },
+    ];
+    if led_visible {
+        ops.push(VectorOp::FillCircle {
+            cx: 18,
+            cy: 17,
+            radius: 2,
+            color: led_color,
+        });
+    }
+    IconDef {
+        name: "data",
+        ops,
+        width: 22,
+        height: 22,
+    }
+}
+
+/// Wireframe sphere with animated longitude line rotation.
+///
+/// The main circle and cross lines are static; the inner ellipse rotates.
+pub fn wireframe_sphere_animated(radius: u16, color: Color, angle: f32) -> IconDef {
+    let r = radius as i32;
+    let cx = r;
+    let cy = r;
+    let full_circle = core::f32::consts::TAU;
+    let inner_r = radius / 3;
+
+    // Compute two rotating "longitude" line endpoints
+    let (sin, cos) = (angle.sin(), angle.cos());
+    let line_x1 = cx + (inner_r as f32 * cos) as i32;
+    let line_y1 = cy - r;
+    let line_x2 = cx - (inner_r as f32 * cos) as i32;
+    let line_y2 = cy + r;
+
+    IconDef {
+        name: "wireframe_sphere",
+        ops: vec![
+            // Main circle
+            VectorOp::StrokeArc {
+                cx,
+                cy,
+                radius,
+                start_angle: 0.0,
+                end_angle: full_circle,
+                width: 1,
+                color,
+            },
+            // Horizontal cross line
+            VectorOp::Line {
+                x1: cx - r,
+                y1: cy,
+                x2: cx + r,
+                y2: cy,
+                width: 1,
+                color,
+            },
+            // Vertical cross line
+            VectorOp::Line {
+                x1: cx,
+                y1: cy - r,
+                x2: cx,
+                y2: cy + r,
+                width: 1,
+                color,
+            },
+            // Rotating inner ellipse (approximated as offset vertical line)
+            VectorOp::Line {
+                x1: line_x1,
+                y1: line_y1,
+                x2: line_x2,
+                y2: line_y2,
+                width: 1,
+                color,
+            },
+            // Second rotating line (perpendicular)
+            VectorOp::Line {
+                x1: cx + (inner_r as f32 * sin) as i32,
+                y1: cy - r,
+                x2: cx - (inner_r as f32 * sin) as i32,
+                y2: cy + r,
+                width: 1,
+                color,
+            },
+        ],
+        width: (r * 2) as u32,
+        height: (r * 2) as u32,
     }
 }
 

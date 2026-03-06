@@ -7,6 +7,7 @@
 //! The rasterizer dispatches ops to any `SdiBackend` implementation, making
 //! vector content work identically on SDL2, WASM, PSP, and UE5 backends.
 
+pub mod anim;
 pub mod icons;
 pub mod op;
 pub mod render;

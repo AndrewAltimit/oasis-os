@@ -440,10 +440,11 @@ fn main() -> Result<()> {
                 &state.active_theme,
                 state.frame_counter as u32,
             )?;
-            state
-                .ui
-                .dashboard
-                .render_vector_icons(&mut backend, &state.active_theme)?;
+            state.ui.dashboard.render_vector_icons(
+                &mut backend,
+                &state.active_theme,
+                state.frame_counter as u32,
+            )?;
             sdi.draw_overlay_layer(&mut backend)?;
         } else {
             sdi.draw(&mut backend)?;

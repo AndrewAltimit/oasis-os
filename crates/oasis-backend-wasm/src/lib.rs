@@ -687,9 +687,11 @@ impl OasisWasm {
                     &self.active_theme,
                     self.frame_counter as u32,
                 );
-                let _ = self
-                    .dashboard
-                    .render_vector_icons(&mut self.backend, &self.active_theme);
+                let _ = self.dashboard.render_vector_icons(
+                    &mut self.backend,
+                    &self.active_theme,
+                    self.frame_counter as u32,
+                );
                 if let Err(e) = self.sdi.draw_overlay_layer(&mut self.backend) {
                     console_log!("sdi draw_overlay error: {e}");
                 }
