@@ -176,6 +176,14 @@ impl Vfs for RealVfs {
         if !real_path.exists() {
             return Err(OasisError::Vfs(format!("no such path: {path}")));
         }
+        // RealVfs cannot change file ownership (requires root/libc).
+        let current = self.get_permissions(path)?;
+        if perms.owner != current.owner {
+            return Err(OasisError::Vfs(format!(
+                "RealVfs does not support changing file ownership (from '{}' to '{}')",
+                current.owner, perms.owner
+            )));
+        }
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
@@ -328,6 +336,23 @@ mod tests {
 
         let perms = vfs.get_permissions("/mydir").unwrap();
         assert_eq!(perms.mode, 0o700);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn set_permissions_rejects_owner_change() {
+        let (_dir, mut vfs) = temp_vfs();
+        vfs.write("/test.txt", b"hello").unwrap();
+        let result = vfs.set_permissions(
+            "/test.txt",
+            FilePermissions {
+                owner: "root".to_string(),
+                mode: 0o644,
+            },
+        );
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("ownership"), "unexpected error: {err}");
     }
 
     #[cfg(unix)]
