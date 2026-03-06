@@ -847,6 +847,144 @@ impl SdiBackend for WasmBackend {
     }
 
     // -------------------------------------------------------------------
+    // Extended: vector graphics primitives
+    // -------------------------------------------------------------------
+
+    fn fill_polygon(&mut self, points: &[(i32, i32)], color: Color) -> Result<()> {
+        if points.len() < 3 || color.a == 0 {
+            return Ok(());
+        }
+        self.ctx.begin_path();
+        let (tx0, ty0) = self.translate(points[0].0, points[0].1);
+        self.ctx.move_to(tx0, ty0);
+        for &(x, y) in &points[1..] {
+            let (tx, ty) = self.translate(x, y);
+            self.ctx.line_to(tx, ty);
+        }
+        self.ctx.close_path();
+        let css = cached_css_color(&mut self.color_cache, color);
+        self.ctx.set_fill_style_str(css);
+        self.ctx.fill();
+        Ok(())
+    }
+
+    fn stroke_polygon(&mut self, points: &[(i32, i32)], width: u16, color: Color) -> Result<()> {
+        if points.len() < 2 || color.a == 0 {
+            return Ok(());
+        }
+        self.ctx.begin_path();
+        let (tx0, ty0) = self.translate(points[0].0, points[0].1);
+        self.ctx.move_to(tx0, ty0);
+        for &(x, y) in &points[1..] {
+            let (tx, ty) = self.translate(x, y);
+            self.ctx.line_to(tx, ty);
+        }
+        self.ctx.close_path();
+        let css = cached_css_color(&mut self.color_cache, color);
+        self.ctx.set_stroke_style_str(css);
+        self.ctx.set_line_width(f64::from(width));
+        self.ctx.stroke();
+        Ok(())
+    }
+
+    fn fill_arc(
+        &mut self,
+        cx: i32,
+        cy: i32,
+        radius: u16,
+        start_angle: f32,
+        end_angle: f32,
+        color: Color,
+    ) -> Result<()> {
+        if color.a == 0 || radius == 0 {
+            return Ok(());
+        }
+        let (tcx, tcy) = self.translate(cx, cy);
+        self.ctx.begin_path();
+        self.ctx.move_to(tcx, tcy);
+        self.ctx
+            .arc(
+                tcx,
+                tcy,
+                f64::from(radius),
+                f64::from(start_angle),
+                f64::from(end_angle),
+            )
+            .map_err(js_err)?;
+        self.ctx.close_path();
+        let css = cached_css_color(&mut self.color_cache, color);
+        self.ctx.set_fill_style_str(css);
+        self.ctx.fill();
+        Ok(())
+    }
+
+    fn stroke_arc(
+        &mut self,
+        cx: i32,
+        cy: i32,
+        radius: u16,
+        start_angle: f32,
+        end_angle: f32,
+        width: u16,
+        color: Color,
+    ) -> Result<()> {
+        if color.a == 0 || radius == 0 {
+            return Ok(());
+        }
+        let (tcx, tcy) = self.translate(cx, cy);
+        self.ctx.begin_path();
+        self.ctx
+            .arc(
+                tcx,
+                tcy,
+                f64::from(radius),
+                f64::from(start_angle),
+                f64::from(end_angle),
+            )
+            .map_err(js_err)?;
+        let css = cached_css_color(&mut self.color_cache, color);
+        self.ctx.set_stroke_style_str(css);
+        self.ctx.set_line_width(f64::from(width));
+        self.ctx.stroke();
+        Ok(())
+    }
+
+    fn stroke_line_dashed(
+        &mut self,
+        x1: i32,
+        y1: i32,
+        x2: i32,
+        y2: i32,
+        width: u16,
+        color: Color,
+        dash: u16,
+        gap: u16,
+    ) -> Result<()> {
+        if color.a == 0 {
+            return Ok(());
+        }
+        let (tx1, ty1) = self.translate(x1, y1);
+        let (tx2, ty2) = self.translate(x2, y2);
+        // Canvas 2D has native dash support via setLineDash.
+        let dash_array = js_sys::Array::new();
+        dash_array.push(&wasm_bindgen::JsValue::from(f64::from(dash)));
+        dash_array.push(&wasm_bindgen::JsValue::from(f64::from(gap)));
+        self.ctx.set_line_dash(&dash_array).map_err(js_err)?;
+        self.ctx.begin_path();
+        self.ctx.move_to(tx1, ty1);
+        self.ctx.line_to(tx2, ty2);
+        let css = cached_css_color(&mut self.color_cache, color);
+        self.ctx.set_stroke_style_str(css);
+        self.ctx.set_line_width(f64::from(width));
+        self.ctx.stroke();
+        // Reset dash pattern.
+        self.ctx
+            .set_line_dash(&js_sys::Array::new())
+            .map_err(|e| OasisError::Backend(format!("{e:?}")))?;
+        Ok(())
+    }
+
+    // -------------------------------------------------------------------
     // Extended: text
     // -------------------------------------------------------------------
 
