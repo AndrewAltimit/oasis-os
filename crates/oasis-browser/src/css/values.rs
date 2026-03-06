@@ -2300,7 +2300,11 @@ mod tests {
         let tracks = parse_grid_template_str("100px repeat(2, auto)", 16.0);
         assert_eq!(
             tracks,
-            vec![GridTrackSize::Px(100.0), GridTrackSize::Auto, GridTrackSize::Auto]
+            vec![
+                GridTrackSize::Px(100.0),
+                GridTrackSize::Auto,
+                GridTrackSize::Auto
+            ]
         );
 
         // "none" returns empty.
