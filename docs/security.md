@@ -106,6 +106,8 @@ authentication for remote terminal connections:
 
 - Connections require a shared secret before command execution
 - FTP transfers are opt-in and require explicit user action
+- FTP server supports optional password authentication (`ftp on [port] [password]`);
+  after three failed login attempts the connection is dropped
 - No outbound connections are made without user initiation
 
 ## Thread Safety
@@ -114,8 +116,19 @@ authentication for remote terminal connections:
 - `GameAssetVfs` uses `RwLock` for thread-safe overlay writes
 - The FFI video decode thread communicates via `Arc<Mutex<...>>` and
   `AtomicBool` stop flags
-- No `unsafe impl Send/Sync` markers are used; all thread safety
+- `unsafe impl Send/Sync` is used only for the PSP backend
+  (`PspTlsProvider`, `PspTlsStream`) where the hardware is
+  single-core with cooperative scheduling; all other thread safety
   derives from standard library primitives
+
+## PSP TLS Host Pinning
+
+The PSP backend uses `embedded-tls` with `UnsecureProvider` (no
+certificate store available on PSP hardware). To mitigate the lack of
+certificate validation, `PspTlsProvider` supports a host pinning
+allowlist. When pinned hosts are configured, `connect_tls` rejects any
+server name not in the list, preventing accidental connections to
+untrusted servers.
 
 ## Audit Logging
 

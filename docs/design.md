@@ -945,6 +945,7 @@ The virtual file system is the abstraction that makes the same command interpret
 | File info | `stat(path) -> Metadata` | Size, modified time, type |
 | Create directory | `mkdir(path)` | Create directory |
 | Delete | `remove(path)` | Delete file or directory |
+| Rename | `rename(from, to)` | Rename/move file or directory |
 | Exists | `exists(path) -> bool` | Check existence |
 
 ### 12.2 VFS Backends
