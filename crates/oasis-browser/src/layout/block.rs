@@ -16,6 +16,7 @@
 use super::box_model::*;
 use super::flex::layout_flex;
 use super::float::{ClearSide, FloatContext, FloatSide};
+use super::grid::layout_grid;
 use super::inline::layout_inline;
 use super::positioning::apply_positioning;
 use super::table::layout_table;
@@ -185,7 +186,7 @@ impl StyleCache {
 ///
 /// This is an additive optimisation -- when the entire tree is dirty
 /// (e.g. initial layout), the result is identical to a full
-/// [`layout_block`] pass.
+/// `layout_block` pass.
 pub fn layout_block_incremental(
     layout_box: &mut LayoutBox,
     containing_width: f32,
@@ -203,6 +204,8 @@ pub fn layout_block_incremental(
 
     if matches!(layout_box.box_type, BoxType::Flex) {
         layout_flex(layout_box, containing_width, measurer);
+    } else if matches!(layout_box.box_type, BoxType::Grid) {
+        layout_grid(layout_box, containing_width, measurer);
     } else if matches!(layout_box.box_type, BoxType::TableWrapper) {
         layout_table_children(layout_box, measurer);
     } else {
@@ -477,34 +480,10 @@ fn build_box_for_node(
             let mut lb = LayoutBox::new(box_type, style.clone(), Some(node_id));
 
             // Generate ::before pseudo-element content.
-            let before_box = if let Some(ref text) = style.before_content {
-                if !text.is_empty() {
-                    let mut pseudo_style = style.clone();
-                    pseudo_style.display = Display::Inline;
-                    let mut pb = LayoutBox::new(BoxType::Inline, pseudo_style, None);
-                    pb.text = Some(text.clone());
-                    Some(pb)
-                } else {
-                    None
-                }
-            } else {
-                None
-            };
+            let before_box = make_pseudo_box(&style.before_style);
 
             // Generate ::after pseudo-element content.
-            let after_box = if let Some(ref text) = style.after_content {
-                if !text.is_empty() {
-                    let mut pseudo_style = style.clone();
-                    pseudo_style.display = Display::Inline;
-                    let mut pb = LayoutBox::new(BoxType::Inline, pseudo_style, None);
-                    pb.text = Some(text.clone());
-                    Some(pb)
-                } else {
-                    None
-                }
-            } else {
-                None
-            };
+            let after_box = make_pseudo_box(&style.after_style);
 
             // For table cells, encode colspan/rowspan in the style
             // using the convention expected by the table layout engine.
@@ -573,6 +552,7 @@ fn box_type_for_element(_elem: &ElementData, style: &ComputedStyle) -> BoxType {
         Display::Inline => BoxType::Inline,
         Display::InlineBlock => BoxType::InlineBlock,
         Display::Flex => BoxType::Flex,
+        Display::Grid => BoxType::Grid,
         Display::ListItem => {
             let marker = resolve_list_marker(style);
             BoxType::ListItem { marker }
@@ -593,6 +573,28 @@ fn resolve_list_marker(style: &ComputedStyle) -> ListMarker {
         ListStyleType::Decimal => ListMarker::Decimal(1),
         ListStyleType::None => ListMarker::None,
     }
+}
+
+/// Create a layout box for a `::before` or `::after` pseudo-element.
+fn make_pseudo_box(pseudo_style: &Option<Box<ComputedStyle>>) -> Option<LayoutBox> {
+    let ps = pseudo_style.as_ref()?;
+    let content_text = ps.content.as_ref()?;
+    let box_type = match ps.display {
+        Display::Block => BoxType::Block,
+        Display::None => return None,
+        _ => BoxType::Inline,
+    };
+    let mut pseudo = (**ps).clone();
+    pseudo.before_content = None;
+    pseudo.after_content = None;
+    pseudo.before_style = None;
+    pseudo.after_style = None;
+    pseudo.content = Some(content_text.clone());
+    let mut pb = LayoutBox::new(box_type, pseudo, None);
+    if !content_text.is_empty() {
+        pb.text = Some(content_text.clone());
+    }
+    Some(pb)
 }
 
 /// Check if an element is a replaced element and return its content.
@@ -941,6 +943,8 @@ fn layout_block_with_height(
     // 3. Layout children.
     if matches!(layout_box.box_type, BoxType::Flex) {
         layout_flex(layout_box, containing_width, measurer);
+    } else if matches!(layout_box.box_type, BoxType::Grid) {
+        layout_grid(layout_box, containing_width, measurer);
     } else if matches!(layout_box.box_type, BoxType::TableWrapper) {
         layout_table_children(layout_box, measurer);
     } else {
@@ -1154,7 +1158,10 @@ fn establishes_bfc(style: &ComputedStyle) -> bool {
     style.overflow != Overflow::Visible
         || style.float != Float::None
         || matches!(style.position, Position::Absolute | Position::Fixed)
-        || matches!(style.display, Display::InlineBlock | Display::Flex)
+        || matches!(
+            style.display,
+            Display::InlineBlock | Display::Flex | Display::Grid
+        )
 }
 
 /// Layout block-level children, stacking them vertically.

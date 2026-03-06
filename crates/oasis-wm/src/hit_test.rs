@@ -366,4 +366,141 @@ mod tests {
         assert!(!point_in_rect(10, 10, 0, 0, 10, 10)); // Exclusive upper bound.
         assert!(!point_in_rect(-1, 5, 0, 0, 10, 10));
     }
+
+    #[test]
+    fn point_in_rect_zero_size() {
+        assert!(!point_in_rect(0, 0, 0, 0, 0, 0));
+        assert!(!point_in_rect(5, 5, 5, 5, 0, 0));
+    }
+
+    #[test]
+    fn point_in_rect_negative_origin() {
+        assert!(point_in_rect(-5, -5, -10, -10, 20, 20));
+        assert!(!point_in_rect(-11, -5, -10, -10, 20, 20));
+    }
+
+    #[test]
+    fn point_in_rect_boundary_corners() {
+        // Inclusive: top-left corner
+        assert!(point_in_rect(0, 0, 0, 0, 10, 10));
+        // Exclusive: bottom-right corner
+        assert!(!point_in_rect(10, 10, 0, 0, 10, 10));
+        // Exclusive: right edge
+        assert!(!point_in_rect(10, 5, 0, 0, 10, 10));
+        // Exclusive: bottom edge
+        assert!(!point_in_rect(5, 10, 0, 0, 10, 10));
+        // Inclusive: just inside bottom-right
+        assert!(point_in_rect(9, 9, 0, 0, 10, 10));
+    }
+
+    #[test]
+    fn overlapping_windows_topmost_has_priority() {
+        let theme = WmTheme::default();
+        // Three overlapping windows at the same position.
+        let w1 = make_window("w1", 0, 0, 100, 100);
+        let w2 = make_window("w2", 0, 0, 100, 100);
+        let w3 = make_window("w3", 0, 0, 100, 100);
+        let (cx, cy, _, _) = w3.content_rect(&theme);
+        let result = hit_test(&[w1, w2, w3], cx + 10, cy + 10, &theme);
+        match result {
+            HitRegion::Content(id, _, _) => assert_eq!(id, "w3"),
+            other => panic!("expected Content(w3), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn panel_content_area_hit() {
+        let theme = WmTheme::default();
+        let config = WindowConfig {
+            id: "panel".to_string(),
+            title: "Panel".to_string(),
+            x: None,
+            y: None,
+            width: 200,
+            height: 100,
+            window_type: WindowType::Panel,
+            always_on_top: false,
+            modal: false,
+        };
+        let win = Window::new(&config, 0, 0, &theme);
+        let (cx, cy, _, _) = win.content_rect(&theme);
+        // Click inside content area of panel.
+        let result = hit_test(&[win], cx + 10, cy + 10, &theme);
+        match result {
+            HitRegion::Content(id, lx, ly) => {
+                assert_eq!(id, "panel");
+                assert_eq!(lx, 10);
+                assert_eq!(ly, 10);
+            },
+            other => panic!("expected Content for panel, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn resize_all_edges() {
+        let theme = WmTheme::default();
+        let win = make_window("w1", 50, 50, 200, 150);
+        let w = win.outer_w as i32;
+        let h = win.outer_h as i32;
+        let mid_x = 50 + w / 2;
+        let mid_y = 50 + h / 2;
+
+        // North edge (top center)
+        assert_eq!(
+            hit_test(&[win.clone()], mid_x, 50, &theme),
+            HitRegion::ResizeHandle("w1".into(), ResizeEdge::North)
+        );
+        // South edge (bottom center)
+        assert_eq!(
+            hit_test(&[win.clone()], mid_x, 50 + h - 1, &theme),
+            HitRegion::ResizeHandle("w1".into(), ResizeEdge::South)
+        );
+        // West edge (left center)
+        assert_eq!(
+            hit_test(&[win.clone()], 50, mid_y, &theme),
+            HitRegion::ResizeHandle("w1".into(), ResizeEdge::West)
+        );
+        // East edge (right center)
+        assert_eq!(
+            hit_test(&[win.clone()], 50 + w - 1, mid_y, &theme),
+            HitRegion::ResizeHandle("w1".into(), ResizeEdge::East)
+        );
+        // Corners
+        assert_eq!(
+            hit_test(&[win.clone()], 50, 50, &theme),
+            HitRegion::ResizeHandle("w1".into(), ResizeEdge::NorthWest)
+        );
+        assert_eq!(
+            hit_test(&[win.clone()], 50 + w - 1, 50, &theme),
+            HitRegion::ResizeHandle("w1".into(), ResizeEdge::NorthEast)
+        );
+        assert_eq!(
+            hit_test(&[win.clone()], 50, 50 + h - 1, &theme),
+            HitRegion::ResizeHandle("w1".into(), ResizeEdge::SouthWest)
+        );
+        assert_eq!(
+            hit_test(&[win], 50 + w - 1, 50 + h - 1, &theme),
+            HitRegion::ResizeHandle("w1".into(), ResizeEdge::SouthEast)
+        );
+    }
+
+    #[test]
+    fn floating_widget_no_minimize_maximize() {
+        let theme = WmTheme::default();
+        let config = WindowConfig {
+            id: "widget".to_string(),
+            title: "Widget".to_string(),
+            x: None,
+            y: None,
+            width: 100,
+            height: 80,
+            window_type: WindowType::FloatingWidget,
+            always_on_top: false,
+            modal: false,
+        };
+        let win = Window::new(&config, 0, 0, &theme);
+        // FloatingWidget should not have minimize/maximize buttons.
+        assert!(win.minimize_btn_rect(&theme).is_none());
+        assert!(win.maximize_btn_rect(&theme).is_none());
+    }
 }

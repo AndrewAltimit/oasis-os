@@ -2,7 +2,7 @@
 //!
 //! Converts a parsed [`GeminiDocument`] directly into a layout tree,
 //! bypassing the HTML/CSS parsing pipeline. Each Gemini line type maps
-//! to a block-level [`LayoutBox`] with inline styling applied via
+//! to a block-level `LayoutBox` with inline styling applied via
 //! [`ComputedStyle`].
 
 #![allow(clippy::field_reassign_with_default)]
@@ -54,7 +54,7 @@ impl Default for GeminiTheme {
 
 /// Render a Gemini document into a layout tree.
 ///
-/// Returns a root [`LayoutBox`] containing one child per Gemini line.
+/// Returns a root `LayoutBox` containing one child per Gemini line.
 /// The tree is positioned within the given `viewport_width` and uses
 /// the `measurer` for text width calculations.
 pub fn render_gemini(

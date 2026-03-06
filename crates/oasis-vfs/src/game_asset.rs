@@ -8,7 +8,7 @@ use std::collections::{HashMap, HashSet};
 
 use oasis_types::error::{OasisError, Result};
 
-use crate::{EntryKind, Vfs, VfsEntry, VfsMetadata};
+use crate::{EntryKind, FilePermissions, Vfs, VfsEntry, VfsMetadata};
 
 /// An entry in the game asset VFS.
 #[derive(Debug, Clone)]
@@ -34,6 +34,7 @@ pub struct GameAssetVfs {
     overlay: HashMap<String, Node>,
     /// Paths marked as deleted (hides base entries).
     deleted: HashSet<String>,
+    permissions: HashMap<String, FilePermissions>,
 }
 
 impl GameAssetVfs {
@@ -45,6 +46,7 @@ impl GameAssetVfs {
             base,
             overlay: HashMap::new(),
             deleted: HashSet::new(),
+            permissions: HashMap::new(),
         }
     }
 
@@ -163,8 +165,25 @@ impl Vfs for GameAssetVfs {
                 "parent directory does not exist: {par}"
             )));
         }
-        // Un-delete if it was previously deleted.
+        // Check parent directory write permission.
+        if let Some(perms) = self.permissions.get(par)
+            && !perms.owner_can_write()
+        {
+            return Err(OasisError::Vfs(format!(
+                "permission denied (directory read-only): {par}"
+            )));
+        }
+        if let Some(perms) = self.permissions.get(&path)
+            && !perms.owner_can_write()
+        {
+            return Err(OasisError::Vfs(format!(
+                "permission denied (read-only): {path}"
+            )));
+        }
         self.deleted.remove(&path);
+        self.permissions
+            .entry(path.clone())
+            .or_insert_with(FilePermissions::default_file);
         self.overlay.insert(path, Node::File(data.to_vec()));
         Ok(())
     }
@@ -194,7 +213,18 @@ impl Vfs for GameAssetVfs {
         if par != path && !self.effective_dir_exists(&par) {
             self.mkdir(&par)?;
         }
+        // Check parent directory write permission.
+        if let Some(perms) = self.permissions.get(&par)
+            && !perms.owner_can_write()
+        {
+            return Err(OasisError::Vfs(format!(
+                "permission denied (directory read-only): {par}"
+            )));
+        }
         self.deleted.remove(&path);
+        self.permissions
+            .entry(path.clone())
+            .or_insert_with(FilePermissions::default_dir);
         self.overlay.insert(path, Node::Dir);
         Ok(())
     }
@@ -203,6 +233,23 @@ impl Vfs for GameAssetVfs {
         let path = normalize(path);
         if path == "/" {
             return Err(OasisError::Vfs("cannot remove root".to_string()));
+        }
+        // Check parent directory write permission.
+        let par = parent(&path);
+        if let Some(perms) = self.permissions.get(par)
+            && !perms.owner_can_write()
+        {
+            return Err(OasisError::Vfs(format!(
+                "permission denied (directory read-only): {par}"
+            )));
+        }
+        // Check target's own permission.
+        if let Some(perms) = self.permissions.get(&path)
+            && !perms.owner_can_write()
+        {
+            return Err(OasisError::Vfs(format!(
+                "permission denied (read-only): {path}"
+            )));
         }
         match self.effective_entry(&path) {
             Some(Node::Dir) => {
@@ -224,6 +271,7 @@ impl Vfs for GameAssetVfs {
             },
         }
         self.overlay.remove(&path);
+        self.permissions.remove(&path);
         self.deleted.insert(path);
         Ok(())
     }
@@ -231,6 +279,28 @@ impl Vfs for GameAssetVfs {
     fn exists(&self, path: &str) -> bool {
         let path = normalize(path);
         self.effective_entry(&path).is_some()
+    }
+
+    fn get_permissions(&self, path: &str) -> Result<FilePermissions> {
+        let path = normalize(path);
+        if self.effective_entry(&path).is_none() {
+            return Err(OasisError::Vfs(format!("no such path: {path}")));
+        }
+        Ok(self.permissions.get(&path).cloned().unwrap_or_else(|| {
+            match self.effective_entry(&path) {
+                Some(Node::Dir) => FilePermissions::default_dir(),
+                _ => FilePermissions::default_file(),
+            }
+        }))
+    }
+
+    fn set_permissions(&mut self, path: &str, perms: FilePermissions) -> Result<()> {
+        let path = normalize(path);
+        if self.effective_entry(&path).is_none() {
+            return Err(OasisError::Vfs(format!("no such path: {path}")));
+        }
+        self.permissions.insert(path, perms);
+        Ok(())
     }
 }
 
@@ -454,6 +524,23 @@ mod tests {
     fn default_constructor() {
         let vfs = GameAssetVfs::default();
         assert!(vfs.exists("/"));
+    }
+
+    #[test]
+    fn permissions_enforced() {
+        let mut vfs = GameAssetVfs::new();
+        vfs.add_base_dir("/etc");
+        vfs.add_base_file("/etc/config", b"original");
+        vfs.set_permissions(
+            "/etc/config",
+            FilePermissions {
+                owner: "user".to_string(),
+                mode: 0o444,
+            },
+        )
+        .unwrap();
+        assert!(vfs.write("/etc/config", b"hacked").is_err());
+        assert_eq!(vfs.read("/etc/config").unwrap(), b"original");
     }
 
     #[test]

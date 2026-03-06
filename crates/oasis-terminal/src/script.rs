@@ -288,8 +288,9 @@ impl CommandRegistry {
         } else {
             rest.trim_end_matches(" in").trim()
         };
-        // Expand variables in the expression.
-        let value = self.expand_variables(expr, &env.cwd);
+        // Expand command substitutions and variables in the expression.
+        let expr_subst = self.expand_substitutions(expr, env);
+        let value = self.expand_variables(&expr_subst, &env.cwd);
         *pos += 1;
 
         // Collect pattern/body pairs until "esac".

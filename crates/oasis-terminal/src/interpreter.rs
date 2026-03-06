@@ -1,828 +1,48 @@
 //! Command trait, registry, and dispatch logic.
 //!
-//! Supports quoted arguments, environment variables, command history,
-//! pipes, output redirection, command chaining, and glob expansion.
+//! Supports quoted arguments, environment variables, command substitution,
+//! command history, pipes, input/output redirection, command chaining,
+//! and glob expansion.
+//!
+//! The implementation is split across three submodules:
+//! - [`crate::types`]: core types (`CommandOutput`, `Environment`,
+//!   `Command`, `ShellFunction`, constants)
+//! - [`crate::registry`]: `CommandRegistry` struct, variable/alias/
+//!   function/history APIs, expansion helpers
+//! - [`crate::executor`]: execution pipeline (`execute`,
+//!   `execute_pipeline`, `execute_with_redirect`,
+//!   `execute_single_cmd`, `expand_substitutions`)
 
-use std::cell::{Cell, RefCell};
-use std::collections::HashMap;
+// Re-export everything so `use crate::interpreter::*` paths keep working.
+pub use crate::expander::resolve_path;
+pub use crate::registry::CommandRegistry;
+pub use crate::types::{Command, CommandOutput, Environment};
 
-use oasis_platform::{NetworkService, PowerService, TimeService, UsbService};
-use oasis_types::error::{OasisError, Result};
-use oasis_vfs::Vfs;
-
-// Re-export extracted modules for use within this crate and tests.
+// Items re-exported only for tests and internal use.
 #[cfg(test)]
 pub(crate) use crate::expander::case_pattern_matches;
+#[cfg(test)]
+pub use crate::expander::tokenize;
+#[cfg(test)]
 pub(crate) use crate::expander::{expand_braces, expand_globs};
-pub use crate::expander::{resolve_path, tokenize};
-pub(crate) use crate::pipeline::{
-    ChainOp, output_to_text, parse_redirect, split_chains, split_pipes, write_redirect,
-};
-
-/// Output produced by a command.
-#[derive(Debug, Clone)]
-pub enum CommandOutput {
-    /// Plain text lines.
-    Text(String),
-    /// Tabular data (header row + data rows).
-    Table {
-        headers: Vec<String>,
-        rows: Vec<Vec<String>>,
-    },
-    /// Command produced no visible output.
-    None,
-    /// Signal to clear the terminal output buffer.
-    Clear,
-    /// Signal to the app to start/stop the remote terminal listener.
-    ListenToggle {
-        /// Port to listen on (0 = stop).
-        port: u16,
-    },
-    /// Signal to the app to connect to a remote host.
-    RemoteConnect {
-        address: String,
-        port: u16,
-        psk: Option<String>,
-    },
-    /// Signal to the app to toggle browser sandbox mode.
-    BrowserSandbox {
-        /// `true` = sandbox on (VFS only), `false` = networking enabled.
-        enable: bool,
-    },
-    /// Signal to the app to swap the active skin.
-    SkinSwap {
-        /// Skin name or path to load.
-        name: String,
-    },
-    /// Signal to the app to start/stop the FTP file server.
-    FtpToggle {
-        /// Port to listen on (0 = stop).
-        port: u16,
-    },
-    /// Multiple outputs from a chained command (e.g. `skin xp ; echo Done`).
-    /// Each inner output is processed in order by the app layer.
-    Multi(Vec<CommandOutput>),
-}
-
-/// Shared mutable environment passed to every command.
-pub struct Environment<'a> {
-    /// Current working directory (VFS path).
-    pub cwd: String,
-    /// The virtual file system.
-    pub vfs: &'a mut dyn Vfs,
-    /// Power service for battery/CPU queries.
-    pub power: Option<&'a dyn PowerService>,
-    /// Time service for clock/uptime queries.
-    pub time: Option<&'a dyn TimeService>,
-    /// USB service for status queries.
-    pub usb: Option<&'a dyn UsbService>,
-    /// Network service for WiFi status queries.
-    pub network: Option<&'a dyn NetworkService>,
-    /// TLS provider for HTTPS connections.
-    pub tls: Option<&'a dyn oasis_net::tls::TlsProvider>,
-    /// Piped input from a previous command in a pipeline.
-    pub stdin: Option<String>,
-    /// Accumulated stderr output from the most recent command.
-    /// Commands append error messages here. Cleared before each command.
-    pub stderr: String,
-}
-
-/// A single executable command.
-pub trait Command {
-    /// The command name (what the user types).
-    fn name(&self) -> &str;
-
-    /// One-line description for `help`.
-    fn description(&self) -> &str;
-
-    /// Usage string (e.g. "ls \[path\]").
-    fn usage(&self) -> &str;
-
-    /// Command category for grouping in `help` output.
-    fn category(&self) -> &str {
-        "general"
-    }
-
-    /// Execute the command with the given arguments and environment.
-    fn execute(&self, args: &[&str], env: &mut Environment<'_>) -> Result<CommandOutput>;
-}
-
-/// Maximum number of history entries to retain.
-const MAX_HISTORY: usize = 100;
-
-/// Maximum shell function call depth (prevents infinite recursion).
-const MAX_CALL_DEPTH: usize = 64;
-
-/// A user-defined shell function.
-#[derive(Clone, Debug)]
-pub(crate) struct ShellFunction {
-    /// Function body lines (semicolon-separated or newline-separated).
-    pub(crate) body: String,
-}
-
-/// Registry of available commands with dispatch.
-///
-/// Also holds persistent shell state: variables, aliases, and history.
-pub struct CommandRegistry {
-    pub(crate) commands: HashMap<String, Box<dyn Command>>,
-    pub(crate) variables: RefCell<HashMap<String, String>>,
-    pub(crate) aliases: RefCell<HashMap<String, String>>,
-    pub(crate) history: RefCell<Vec<String>>,
-    pub(crate) last_exit_code: Cell<i32>,
-    /// User-defined shell functions.
-    pub(crate) functions: RefCell<HashMap<String, ShellFunction>>,
-    /// Current function call depth (for recursion limiting).
-    pub(crate) call_depth: Cell<usize>,
-    /// Set by `return` to signal early exit from a function body.
-    pub(crate) return_flag: Cell<bool>,
-    /// Set by `break` inside a loop body.
-    pub(crate) break_flag: Cell<bool>,
-    /// Set by `continue` inside a loop body.
-    pub(crate) continue_flag: Cell<bool>,
-    /// Stack of local variable scopes for function calls.
-    /// Each scope maps variable names to their saved values (None = was unset).
-    pub(crate) local_scopes: RefCell<Vec<HashMap<String, Option<String>>>>,
-}
-
-impl CommandRegistry {
-    /// Create an empty command registry.
-    pub fn new() -> Self {
-        let mut vars = HashMap::new();
-        vars.insert("SHELL".to_string(), "oasis".to_string());
-        vars.insert("HOME".to_string(), "/home".to_string());
-        vars.insert("USER".to_string(), "user".to_string());
-        Self {
-            commands: HashMap::new(),
-            variables: RefCell::new(vars),
-            aliases: RefCell::new(HashMap::new()),
-            history: RefCell::new(Vec::new()),
-            last_exit_code: Cell::new(0),
-            functions: RefCell::new(HashMap::new()),
-            call_depth: Cell::new(0),
-            return_flag: Cell::new(false),
-            break_flag: Cell::new(false),
-            continue_flag: Cell::new(false),
-            local_scopes: RefCell::new(Vec::new()),
-        }
-    }
-
-    /// Register a command. Replaces any existing command with the same name.
-    pub fn register(&mut self, cmd: Box<dyn Command>) {
-        self.commands.insert(cmd.name().to_string(), cmd);
-    }
-
-    // -- Shell variable API --
-
-    /// Set a shell variable.
-    pub fn set_variable(&self, name: &str, value: &str) {
-        self.variables
-            .borrow_mut()
-            .insert(name.to_string(), value.to_string());
-    }
-
-    /// Get a shell variable value.
-    pub fn get_variable(&self, name: &str) -> Option<String> {
-        self.variables.borrow().get(name).cloned()
-    }
-
-    /// Get all shell variables.
-    pub fn variables(&self) -> HashMap<String, String> {
-        self.variables.borrow().clone()
-    }
-
-    /// Remove a shell variable.
-    pub fn unset_variable(&self, name: &str) {
-        self.variables.borrow_mut().remove(name);
-    }
-
-    // -- Control flow flag accessors --
-
-    /// Get the last command exit code.
-    pub fn last_exit_code(&self) -> i32 {
-        self.last_exit_code.get()
-    }
-
-    /// Whether the break flag is set.
-    pub fn break_flag(&self) -> bool {
-        self.break_flag.get()
-    }
-
-    /// Clear the break flag.
-    pub fn clear_break(&self) {
-        self.break_flag.set(false);
-    }
-
-    /// Whether the continue flag is set.
-    pub fn continue_flag(&self) -> bool {
-        self.continue_flag.get()
-    }
-
-    /// Clear the continue flag.
-    pub fn clear_continue(&self) {
-        self.continue_flag.set(false);
-    }
-
-    /// Whether the return flag is set.
-    pub fn return_flag(&self) -> bool {
-        self.return_flag.get()
-    }
-
-    // -- Alias API --
-
-    /// Set a command alias.
-    pub fn set_alias(&self, name: &str, expansion: &str) {
-        self.aliases
-            .borrow_mut()
-            .insert(name.to_string(), expansion.to_string());
-    }
-
-    /// Get all aliases.
-    pub fn aliases(&self) -> HashMap<String, String> {
-        self.aliases.borrow().clone()
-    }
-
-    /// Remove a command alias.
-    pub fn unset_alias(&self, name: &str) {
-        self.aliases.borrow_mut().remove(name);
-    }
-
-    // -- Function API --
-
-    /// Define a shell function.
-    pub(crate) fn define_function(&self, name: &str, body: &str) {
-        self.functions.borrow_mut().insert(
-            name.to_string(),
-            ShellFunction {
-                body: body.to_string(),
-            },
-        );
-    }
-
-    /// List all defined functions.
-    pub(crate) fn list_functions(&self) -> Vec<(String, String)> {
-        self.functions
-            .borrow()
-            .iter()
-            .map(|(k, v)| (k.clone(), v.body.clone()))
-            .collect()
-    }
-
-    /// Call a shell function by name with positional arguments.
-    fn call_function(
-        &self,
-        name: &str,
-        args: &[&str],
-        env: &mut Environment<'_>,
-    ) -> Result<CommandOutput> {
-        let func = self
-            .functions
-            .borrow()
-            .get(name)
-            .cloned()
-            .ok_or_else(|| OasisError::Command(format!("unknown function: {name}")))?;
-
-        // Check recursion depth.
-        let depth = self.call_depth.get();
-        if depth >= MAX_CALL_DEPTH {
-            return Err(OasisError::Command(format!(
-                "{name}: maximum recursion depth ({MAX_CALL_DEPTH}) exceeded"
-            )));
-        }
-        self.call_depth.set(depth + 1);
-
-        // Save current positional args and set new ones.
-        // Determine prior arg count so we save/restore the full range.
-        let saved_argc = self.get_variable("#");
-        let prior_count: usize = saved_argc
-            .as_deref()
-            .and_then(|s| s.parse().ok())
-            .unwrap_or(0);
-        let save_range = prior_count.max(args.len());
-        let saved_args: Vec<(String, Option<String>)> = (0..=save_range)
-            .map(|i| {
-                let key = i.to_string();
-                let old = self.get_variable(&key);
-                (key, old)
-            })
-            .collect();
-
-        // Set positional args: $0 = function name, $1..$n = args.
-        // Unset any prior positional args beyond the new arg count.
-        self.set_variable("0", name);
-        for (i, arg) in args.iter().enumerate() {
-            self.set_variable(&(i + 1).to_string(), arg);
-        }
-        for i in (args.len() + 1)..=prior_count {
-            self.unset_variable(&i.to_string());
-        }
-        self.set_variable("#", &args.len().to_string());
-
-        // Push a new local variable scope.
-        self.local_scopes.borrow_mut().push(HashMap::new());
-
-        // Execute body as a chain of commands.
-        let result = self.execute(func.body.trim(), env);
-
-        // Clear the return flag so it doesn't propagate to the caller.
-        self.return_flag.set(false);
-
-        // Pop local variable scope and restore saved values.
-        if let Some(scope) = self.local_scopes.borrow_mut().pop() {
-            for (name, saved) in scope {
-                match saved {
-                    Some(v) => self.set_variable(&name, &v),
-                    None => self.unset_variable(&name),
-                }
-            }
-        }
-
-        // Restore previous positional args.
-        for (key, old_val) in saved_args {
-            match old_val {
-                Some(v) => self.set_variable(&key, &v),
-                None => self.unset_variable(&key),
-            }
-        }
-        match saved_argc {
-            Some(v) => self.set_variable("#", &v),
-            None => self.unset_variable("#"),
-        }
-
-        // Restore call depth.
-        self.call_depth.set(depth);
-
-        result
-    }
-
-    // -- History API --
-
-    /// Get command history.
-    pub fn history(&self) -> Vec<String> {
-        self.history.borrow().clone()
-    }
-
-    /// Push a command to history.
-    fn push_history(&self, line: &str) {
-        let mut hist = self.history.borrow_mut();
-        // Don't duplicate the last entry.
-        if hist.last().is_none_or(|last| last != line) {
-            hist.push(line.to_string());
-            if hist.len() > MAX_HISTORY {
-                hist.remove(0);
-            }
-        }
-    }
-
-    /// Parse and execute a command line.
-    ///
-    /// Supports quoting, variable expansion, aliases, command chaining
-    /// (`;`, `&&`, `||`), pipes (`|`), and output redirection (`>`, `>>`).
-    /// Command names are case-insensitive.
-    pub fn execute(&self, line: &str, env: &mut Environment<'_>) -> Result<CommandOutput> {
-        let trimmed = line.trim();
-        if trimmed.is_empty() {
-            return Ok(CommandOutput::None);
-        }
-
-        // History expansion: !! and !n
-        let expanded = self.expand_history(trimmed)?;
-        let line = if expanded != trimmed {
-            expanded
-        } else {
-            trimmed.to_string()
-        };
-
-        // Push to history (after history expansion, before execution).
-        self.push_history(&line);
-
-        // Update $CWD before variable expansion.
-        self.set_variable("CWD", &env.cwd);
-        self.last_exit_code.set(self.last_exit_code.get());
-
-        // Split into chained segments (;, &&, ||).
-        let segments = split_chains(&line)?;
-        let single_command = segments.len() == 1;
-        let mut all_outputs: Vec<CommandOutput> = Vec::new();
-
-        for segment in &segments {
-            // Check chain condition.
-            let should_run = match segment.chain_op {
-                ChainOp::Always => true,
-                ChainOp::And => self.last_exit_code.get() == 0,
-                ChainOp::Or => self.last_exit_code.get() != 0,
-            };
-            if !should_run {
-                continue;
-            }
-
-            // Reset exit code before pipeline so we can detect if the
-            // pipeline sets a non-zero code (e.g. redirect capturing an
-            // error via was_error).
-            self.last_exit_code.set(0);
-            self.set_variable("?", "0");
-            match self.execute_pipeline(&segment.command, env) {
-                Ok(output) => {
-                    match output {
-                        CommandOutput::None => {},
-                        other => all_outputs.push(other),
-                    }
-                    // Stop executing further segments if `return` was called.
-                    if self.return_flag.get() {
-                        break;
-                    }
-                },
-                Err(e) => {
-                    self.last_exit_code.set(1);
-                    self.set_variable("?", "1");
-                    // For single commands, propagate errors directly.
-                    if single_command {
-                        return Err(e);
-                    }
-                    all_outputs.push(CommandOutput::Text(format!("error: {e}")));
-                },
-            }
-        }
-
-        // Flatten: if only one output, return it directly. If multiple,
-        // merge consecutive text outputs and wrap in Multi so signals
-        // are preserved alongside text.
-        if all_outputs.is_empty() {
-            Ok(CommandOutput::None)
-        } else if all_outputs.len() == 1 {
-            // SAFETY: guarded by len() == 1 check above.
-            Ok(all_outputs.into_iter().next().unwrap())
-        } else {
-            // Merge consecutive Text entries to reduce Multi size.
-            let mut merged: Vec<CommandOutput> = Vec::new();
-            for output in all_outputs {
-                if let CommandOutput::Text(ref new_text) = output
-                    && let Some(CommandOutput::Text(prev)) = merged.last_mut()
-                {
-                    prev.push('\n');
-                    prev.push_str(new_text);
-                    continue;
-                }
-                merged.push(output);
-            }
-            if merged.len() == 1 {
-                // SAFETY: guarded by len() == 1 check above.
-                Ok(merged.into_iter().next().unwrap())
-            } else {
-                Ok(CommandOutput::Multi(merged))
-            }
-        }
-    }
-
-    /// Execute a pipeline: `cmd1 | cmd2 | cmd3`.
-    fn execute_pipeline(
-        &self,
-        pipeline_str: &str,
-        env: &mut Environment<'_>,
-    ) -> Result<CommandOutput> {
-        let pipe_segments = split_pipes(pipeline_str)?;
-
-        if pipe_segments.len() == 1 {
-            // No pipes -- just execute the single command with redirection.
-            return self.execute_with_redirect(&pipe_segments[0], env);
-        }
-
-        // Pipeline: chain stdout -> stdin.
-        let mut stdin: Option<String> = env.stdin.take();
-
-        for segment in &pipe_segments {
-            env.stdin = stdin.take();
-            // All segments get redirection parsing so `>` / `>>` is
-            // stripped instead of being passed as literal arguments.
-            let result = self.execute_with_redirect(segment, env)?;
-
-            stdin = match result {
-                CommandOutput::Text(text) => Some(text),
-                CommandOutput::Table { headers, rows } => {
-                    let mut out = headers.join(" | ");
-                    for row in &rows {
-                        out.push('\n');
-                        out.push_str(&row.join(" | "));
-                    }
-                    Some(out)
-                },
-                _ => None,
-            };
-        }
-
-        // Return the final output.
-        match stdin {
-            Some(text) => Ok(CommandOutput::Text(text)),
-            None => Ok(CommandOutput::None),
-        }
-    }
-
-    /// Execute a command, handling output redirection (`>`, `>>`, `2>`,
-    /// `2>>`, `2>&1`).
-    fn execute_with_redirect(
-        &self,
-        cmd_str: &str,
-        env: &mut Environment<'_>,
-    ) -> Result<CommandOutput> {
-        let (cmd_part, redirections) = parse_redirect(cmd_str);
-        let has_stderr_handling = redirections.stderr.is_some() || redirections.stderr_to_stdout;
-
-        // Clear stderr before each command.
-        env.stderr.clear();
-
-        // Handle stdin redirect: read file contents into env.stdin.
-        if let Some(stdin_path) = redirections.stdin {
-            let resolved = resolve_path(&env.cwd, stdin_path);
-            match env.vfs.read(&resolved) {
-                Ok(data) => {
-                    env.stdin = Some(String::from_utf8_lossy(&data).into_owned());
-                },
-                Err(e) => {
-                    return Err(OasisError::Command(format!(
-                        "cannot redirect stdin from '{stdin_path}': {e}"
-                    )));
-                },
-            }
-        }
-
-        let result = self.execute_single_cmd(cmd_part.trim(), env);
-
-        // If no stderr redirect/merge, propagate errors normally.
-        if !has_stderr_handling {
-            let result = result?;
-            if let Some(redir) = redirections.stdout {
-                let text = output_to_text(&result);
-                write_redirect(&text, redir.path, redir.append, &env.cwd, env.vfs)?;
-                return Ok(CommandOutput::None);
-            }
-            return Ok(result);
-        }
-
-        // Capture error messages into stderr.
-        let (result, captured_stderr, was_error) = match result {
-            Ok(output) => (output, std::mem::take(&mut env.stderr), false),
-            Err(e) => {
-                let mut stderr_text = std::mem::take(&mut env.stderr);
-                if !stderr_text.is_empty() {
-                    stderr_text.push('\n');
-                }
-                stderr_text.push_str(&e.to_string());
-                (CommandOutput::None, stderr_text, true)
-            },
-        };
-
-        // If 2>&1, merge stderr into stdout.
-        let (result, captured_stderr) = if redirections.stderr_to_stdout {
-            if captured_stderr.is_empty() {
-                (result, String::new())
-            } else {
-                let merged = match result {
-                    CommandOutput::Text(t) if !t.is_empty() => {
-                        CommandOutput::Text(format!("{t}\n{captured_stderr}"))
-                    },
-                    CommandOutput::Text(_) | CommandOutput::None => {
-                        CommandOutput::Text(captured_stderr)
-                    },
-                    other => other,
-                };
-                (merged, String::new())
-            }
-        } else {
-            (result, captured_stderr)
-        };
-
-        // Handle stdout redirect.
-        let result = if let Some(redir) = redirections.stdout {
-            let text = output_to_text(&result);
-            write_redirect(&text, redir.path, redir.append, &env.cwd, env.vfs)?;
-            CommandOutput::None
-        } else {
-            result
-        };
-
-        // Handle stderr redirect.
-        if let Some(redir) = redirections.stderr {
-            write_redirect(
-                &captured_stderr,
-                redir.path,
-                redir.append,
-                &env.cwd,
-                env.vfs,
-            )?;
-        }
-
-        // Preserve exit code: if command errored, keep it as exit code 1
-        // even though we captured the error text.
-        if was_error {
-            self.last_exit_code.set(1);
-            self.set_variable("?", "1");
-        }
-
-        Ok(result)
-    }
-
-    /// Execute a single command (after chaining, piping, and redirection).
-    pub(crate) fn execute_single_cmd(
-        &self,
-        cmd_str: &str,
-        env: &mut Environment<'_>,
-    ) -> Result<CommandOutput> {
-        let trimmed = cmd_str.trim();
-        if trimmed.is_empty() {
-            return Ok(CommandOutput::None);
-        }
-
-        // Intercept control flow structures (if/for/while) before expansion.
-        if let Some(result) = crate::control_flow::parse_and_execute(trimmed, self, env) {
-            return result;
-        }
-
-        // Intercept `function` before variable expansion so the body
-        // is stored literally (variables expand at call time).
-        if trimmed.starts_with("function ")
-            || trimmed.starts_with("function\t")
-            || trimmed == "function"
-        {
-            // SAFETY: guarded by starts_with("function") / == "function" above.
-            let rest = trimmed.strip_prefix("function").unwrap().trim();
-            return self.execute_function_def_raw(rest);
-        }
-
-        // Expand variables.
-        let expanded = self.expand_variables(trimmed, &env.cwd);
-
-        // Tokenize with quote handling.
-        let tokens = tokenize(&expanded)?;
-        if tokens.is_empty() {
-            return Ok(CommandOutput::None);
-        }
-
-        // Expand aliases (first token only).
-        let tokens = self.expand_alias(tokens);
-        if tokens.is_empty() {
-            return Ok(CommandOutput::None);
-        }
-
-        // Expand braces ({a,b,c}).
-        let tokens = expand_braces(&tokens);
-
-        // Expand globs.
-        let tokens = expand_globs(&tokens, env.vfs, &env.cwd);
-
-        let name_lower = tokens[0].to_ascii_lowercase();
-        let arg_strings: Vec<String> = tokens[1..].to_vec();
-        let args: Vec<&str> = arg_strings.iter().map(|s| s.as_str()).collect();
-
-        // Intercept built-in commands that need registry access.
-        match name_lower.as_str() {
-            "help" => return self.execute_help(&args),
-            "run" => return self.execute_run(&args, env),
-            "history" => return self.execute_history_cmd(&args),
-            "set" => return self.execute_set(&args),
-            "unset" => return self.execute_unset(&args),
-            "env" => return self.execute_env(),
-            "alias" => return self.execute_alias(&args),
-            "unalias" => return self.execute_unalias(&args),
-            "which" => return self.execute_which(&args),
-            "return" => return self.execute_return(&args),
-            "break" => return self.execute_break(),
-            "continue" => return self.execute_continue(),
-            "local" => return self.execute_local(&args),
-            _ => {},
-        }
-
-        // Check registered commands first, then user-defined functions.
-        if let Some(cmd) = self.commands.get(name_lower.as_str()) {
-            return cmd.execute(&args, env);
-        }
-
-        // Check user-defined functions.
-        if self.functions.borrow().contains_key(name_lower.as_str()) {
-            return self.call_function(&name_lower, &args, env);
-        }
-
-        Err(OasisError::Command(format!(
-            "unknown command: {}",
-            tokens[0]
-        )))
-    }
-
-    // -- History expansion --
-
-    fn expand_history(&self, input: &str) -> Result<String> {
-        if input == "!!" {
-            let hist = self.history.borrow();
-            return hist
-                .last()
-                .cloned()
-                .ok_or_else(|| OasisError::Command("!!: no previous command".to_string()));
-        }
-        if let Some(n_str) = input.strip_prefix('!')
-            && let Ok(n) = n_str.parse::<usize>()
-        {
-            let hist = self.history.borrow();
-            if n == 0 || n > hist.len() {
-                return Err(OasisError::Command(format!("!{n}: event not found")));
-            }
-            return Ok(hist[n - 1].clone());
-        }
-        Ok(input.to_string())
-    }
-
-    // -- Variable expansion --
-
-    pub(crate) fn expand_variables(&self, input: &str, cwd: &str) -> String {
-        let vars = self.variables.borrow();
-        let mut result = String::with_capacity(input.len());
-        let chars: Vec<char> = input.chars().collect();
-        let mut i = 0;
-
-        while i < chars.len() {
-            if chars[i] == '$' && i + 1 < chars.len() {
-                // Check for $? (last exit code) and $# (arg count).
-                if chars[i + 1] == '?' || chars[i + 1] == '#' {
-                    let name = chars[i + 1].to_string();
-                    let value = self.resolve_var(&name, &vars, cwd);
-                    result.push_str(&value);
-                    i += 2;
-                    continue;
-                }
-                // Check for ${VAR} syntax.
-                if chars[i + 1] == '{'
-                    && let Some(end) = chars[i + 2..].iter().position(|&c| c == '}')
-                {
-                    let name: String = chars[i + 2..i + 2 + end].iter().collect();
-                    let value = self.resolve_var(&name, &vars, cwd);
-                    result.push_str(&value);
-                    i += 3 + end;
-                    continue;
-                }
-                // Bare $VAR.
-                let start = i + 1;
-                let mut end = start;
-                while end < chars.len() && (chars[end].is_alphanumeric() || chars[end] == '_') {
-                    end += 1;
-                }
-                if end > start {
-                    let name: String = chars[start..end].iter().collect();
-                    let value = self.resolve_var(&name, &vars, cwd);
-                    result.push_str(&value);
-                    i = end;
-                    continue;
-                }
-                result.push('$');
-                i += 1;
-            } else {
-                result.push(chars[i]);
-                i += 1;
-            }
-        }
-        result
-    }
-
-    fn resolve_var(&self, name: &str, vars: &HashMap<String, String>, cwd: &str) -> String {
-        match name {
-            "CWD" => cwd.to_string(),
-            "?" => self.last_exit_code.get().to_string(),
-            _ => vars.get(name).cloned().unwrap_or_default(),
-        }
-    }
-
-    // -- Alias expansion --
-
-    fn expand_alias(&self, mut tokens: Vec<String>) -> Vec<String> {
-        if tokens.is_empty() {
-            return tokens;
-        }
-        let aliases = self.aliases.borrow();
-        if let Some(expansion) = aliases.get(&tokens[0]) {
-            // Replace the first token with the alias expansion.
-            let expanded_tokens = match tokenize(expansion) {
-                Ok(t) => t,
-                Err(_) => return tokens,
-            };
-            tokens.splice(0..1, expanded_tokens);
-        }
-        tokens
-    }
-}
+#[cfg(test)]
+pub(crate) use crate::pipeline::{output_to_text, parse_redirect};
+#[cfg(test)]
+use oasis_types::error::Result;
 
 // Builtin commands and script execution are in separate files:
 // - builtins.rs: help, which, function, return, break, continue, local,
-//                history, set, unset, env, alias, unalias, list_commands, completions
-// - script.rs:   run, execute_script_block, collect_loop_body, execute_if_block,
-//                execute_case_block, execute_script_line, eval_condition
-
-impl Default for CommandRegistry {
-    fn default() -> Self {
-        Self::new()
-    }
-}
+//                history, set, unset, env, alias, unalias, list_commands,
+//                completions
+// - script.rs:   run, execute_script_block, collect_loop_body,
+//                execute_if_block, execute_case_block,
+//                execute_script_line, eval_condition
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::expander::{glob_match, glob_match_simple};
-    use oasis_vfs::MemoryVfs;
+    use oasis_vfs::{MemoryVfs, Vfs};
 
     struct EchoCmd;
     impl Command for EchoCmd {
@@ -3041,6 +2261,123 @@ mod tests {
         match reg.execute("   ", &mut env).unwrap() {
             CommandOutput::None => {},
             other => panic!("expected None, got {other:?}"),
+        }
+    }
+
+    // -- Command substitution tests --
+
+    #[test]
+    fn command_substitution_basic() {
+        let mut reg = CommandRegistry::new();
+        reg.register(Box::new(EchoCmd));
+        let mut vfs = MemoryVfs::new();
+        let mut env = make_env(&mut vfs);
+        match reg.execute("echo $(echo hello)", &mut env).unwrap() {
+            CommandOutput::Text(s) => assert_eq!(s, "hello"),
+            other => panic!("expected text, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn command_substitution_in_args() {
+        let mut reg = CommandRegistry::new();
+        reg.register(Box::new(EchoCmd));
+        let mut vfs = MemoryVfs::new();
+        let mut env = make_env(&mut vfs);
+        match reg
+            .execute("echo prefix-$(echo mid)-suffix", &mut env)
+            .unwrap()
+        {
+            CommandOutput::Text(s) => {
+                assert_eq!(s, "prefix-mid-suffix");
+            },
+            other => panic!("expected text, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn command_substitution_nested() {
+        let mut reg = CommandRegistry::new();
+        reg.register(Box::new(EchoCmd));
+        let mut vfs = MemoryVfs::new();
+        let mut env = make_env(&mut vfs);
+        match reg
+            .execute("echo $(echo $(echo nested))", &mut env)
+            .unwrap()
+        {
+            CommandOutput::Text(s) => {
+                assert_eq!(s, "nested");
+            },
+            other => panic!("expected text, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn command_substitution_trims_trailing_newlines() {
+        let mut reg = CommandRegistry::new();
+        reg.register(Box::new(EchoCmd));
+        let mut vfs = MemoryVfs::new();
+        let mut env = make_env(&mut vfs);
+        let result = reg.expand_substitutions("$(echo test)", &mut env);
+        assert_eq!(result, "test");
+    }
+
+    #[test]
+    fn command_substitution_preserves_single_quotes() {
+        let mut reg = CommandRegistry::new();
+        reg.register(Box::new(EchoCmd));
+        let mut vfs = MemoryVfs::new();
+        let mut env = make_env(&mut vfs);
+        // $(...) inside single quotes should NOT be expanded.
+        match reg.execute("echo '$(echo nope)'", &mut env).unwrap() {
+            CommandOutput::Text(s) => {
+                assert_eq!(s, "$(echo nope)");
+            },
+            other => {
+                panic!("expected literal text, got {other:?}");
+            },
+        }
+    }
+
+    #[test]
+    fn command_substitution_multiple() {
+        let mut reg = CommandRegistry::new();
+        reg.register(Box::new(EchoCmd));
+        let mut vfs = MemoryVfs::new();
+        let mut env = make_env(&mut vfs);
+        match reg.execute("echo $(echo a)-$(echo b)", &mut env).unwrap() {
+            CommandOutput::Text(s) => {
+                assert_eq!(s, "a-b");
+            },
+            other => panic!("expected text, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn command_substitution_unmatched_paren_passthrough() {
+        let mut reg = CommandRegistry::new();
+        reg.register(Box::new(EchoCmd));
+        let mut vfs = MemoryVfs::new();
+        let mut env = make_env(&mut vfs);
+        // Unmatched $( should pass through as literal.
+        let result = reg.expand_substitutions("$(unclosed", &mut env);
+        assert_eq!(result, "$(unclosed");
+    }
+
+    #[test]
+    fn command_substitution_with_variable() {
+        let mut reg = CommandRegistry::new();
+        reg.register(Box::new(EchoCmd));
+        reg.set_variable("X", "world");
+        let mut vfs = MemoryVfs::new();
+        let mut env = make_env(&mut vfs);
+        // Variable expansion happens after substitution, so $X in
+        // the outer command should still expand.
+        match reg.execute("echo $(echo hello) $X", &mut env).unwrap() {
+            CommandOutput::Text(s) => {
+                assert_eq!(s, "hello world");
+            },
+            other => panic!("expected text, got {other:?}"),
         }
     }
 }

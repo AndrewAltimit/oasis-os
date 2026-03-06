@@ -303,26 +303,40 @@ pub fn compute_style(
         style.apply_declaration(&entry.property, &resolved, element_font_size);
     }
 
-    // Resolve ::before and ::after pseudo-element content.
-    style.before_content = resolve_pseudo_content(doc, node_id, "before", stylesheets, ctx);
-    style.after_content = resolve_pseudo_content(doc, node_id, "after", stylesheets, ctx);
+    // Resolve ::before and ::after pseudo-element content and styles.
+    let before_ps = resolve_pseudo_style(doc, node_id, "before", &style, stylesheets, ctx);
+    if let Some(ref ps) = before_ps {
+        style.before_content = ps.content.clone();
+    }
+    style.before_style = before_ps.map(Box::new);
+
+    let after_ps = resolve_pseudo_style(doc, node_id, "after", &style, stylesheets, ctx);
+    if let Some(ref ps) = after_ps {
+        style.after_content = ps.content.clone();
+    }
+    style.after_style = after_ps.map(Box::new);
 
     style
 }
 
-/// Find the `content` property value from matching ::before or ::after
-/// rules for a given element. Respects cascade ordering (important,
-/// specificity, source order) so that higher-specificity rules win
-/// regardless of source order.
-fn resolve_pseudo_content(
+/// Resolve the full computed style for a ::before or ::after pseudo-element.
+///
+/// Collects ALL declarations from matching pseudo-element rules (not just
+/// `content`), sorts by cascade order, inherits from the originating
+/// element, and applies declarations. Returns `None` if no matching rule
+/// sets `content` to a string value (including empty string for clearfix).
+fn resolve_pseudo_style(
     doc: &Document,
     node_id: NodeId,
     pseudo: &str,
+    element_style: &ComputedStyle,
     stylesheets: &[&Stylesheet],
     ctx: &CascadeContext<'_>,
-) -> Option<String> {
-    // Collect all matching content declarations with cascade metadata.
-    let mut matched: Vec<(bool, Specificity, usize, CssValue)> = Vec::new();
+) -> Option<ComputedStyle> {
+    use super::values::Display;
+
+    // Collect all matching declarations with cascade metadata.
+    let mut matched: Vec<MatchedDeclaration> = Vec::new();
     let mut source_order: usize = 0;
 
     for stylesheet in stylesheets {
@@ -339,32 +353,71 @@ fn resolve_pseudo_content(
                 }
                 let specificity = selector.specificity();
                 for (i, decl) in rule.declarations.iter().enumerate() {
-                    if decl.property == "content" {
-                        matched.push((
-                            decl.important,
-                            specificity,
-                            decl_base + i,
-                            decl.value.clone(),
-                        ));
-                    }
+                    matched.push(MatchedDeclaration {
+                        property: decl.property.clone(),
+                        value: decl.value.clone(),
+                        important: decl.important,
+                        origin: Origin::Stylesheet,
+                        specificity,
+                        source_order: decl_base + i,
+                    });
                 }
             }
         }
     }
 
-    // Sort by cascade order: !important, then specificity, then source order.
+    if matched.is_empty() {
+        return None;
+    }
+
+    // Sort by cascade order.
     matched.sort_by(|a, b| {
-        a.0.cmp(&b.0)
-            .then_with(|| a.1.cmp(&b.1))
-            .then_with(|| a.2.cmp(&b.2))
+        a.important
+            .cmp(&b.important)
+            .then_with(|| a.origin.cmp(&b.origin))
+            .then_with(|| a.specificity.cmp(&b.specificity))
+            .then_with(|| a.source_order.cmp(&b.source_order))
     });
 
-    // The last entry after sorting wins.
-    matched.last().and_then(|(_, _, _, value)| match value {
-        CssValue::String(s) => Some(s.clone()),
-        CssValue::Keyword(kw) if kw == "none" || kw == "normal" => None,
-        _ => None,
-    })
+    // Find the winning `content` value.
+    let content_value = matched
+        .iter()
+        .rev()
+        .find(|d| d.property == "content")
+        .and_then(|d| match &d.value {
+            CssValue::String(s) => Some(s.clone()),
+            CssValue::Keyword(kw) if kw == "none" || kw == "normal" => None,
+            _ => None,
+        });
+
+    // No content declaration or content:none/normal => no pseudo-element.
+    let content_text = content_value?;
+
+    // Pseudo-elements inherit from the originating element.
+    let mut style = ComputedStyle::inherit(element_style);
+    // Default display for pseudo-elements is inline (CSS spec).
+    style.display = Display::Inline;
+
+    let parent_font_size = element_style.font_size;
+
+    // Apply font-size first (for em-unit resolution in other properties).
+    for entry in &matched {
+        if entry.property == "font-size" {
+            style.apply_declaration("font-size", &entry.value, parent_font_size);
+        }
+    }
+    let pseudo_font_size = style.font_size;
+
+    // Apply all other declarations.
+    for entry in &matched {
+        if entry.property == "font-size" || entry.property == "content" {
+            continue;
+        }
+        style.apply_declaration(&entry.property, &entry.value, pseudo_font_size);
+    }
+
+    style.content = Some(content_text);
+    Some(style)
 }
 
 /// Match a selector against a node, ignoring any pseudo-element part.
@@ -2454,9 +2507,10 @@ mod tests {
         )]);
         let ctx = ctx();
         let p_id = 3; // first body child in make_doc
-        let result = resolve_pseudo_content(&doc, p_id, "before", &[&sheet], &ctx);
+        let parent_style = ComputedStyle::default();
+        let result = resolve_pseudo_style(&doc, p_id, "before", &parent_style, &[&sheet], &ctx);
         assert_eq!(
-            result,
+            result.as_ref().and_then(|s| s.content.clone()),
             Some("B".to_string()),
             ".special::before (higher specificity) should beat p::before",
         );
@@ -2566,5 +2620,86 @@ mod tests {
                 let _ = AnB::parse(&input);
             }
         }
+    }
+
+    #[test]
+    fn pseudo_element_inherits_color_from_rule() {
+        let sheet = Stylesheet::parse(r#"p::before { content: "> "; color: red; }"#);
+        let doc = make_doc(vec![(TagName::P, vec![])]);
+        let ctx = ctx();
+        let p_id = 3;
+        let parent_style = ComputedStyle::default();
+        let ps = resolve_pseudo_style(&doc, p_id, "before", &parent_style, &[&sheet], &ctx)
+            .expect("should produce pseudo style");
+        assert_eq!(ps.content, Some("> ".to_string()));
+        assert_eq!(ps.color, Color::rgb(255, 0, 0));
+    }
+
+    #[test]
+    fn pseudo_element_inherits_from_parent_when_not_set() {
+        let sheet = Stylesheet::parse(
+            r#"p { color: blue; } p::before { content: "*"; font-weight: bold; }"#,
+        );
+        let doc = make_doc(vec![(TagName::P, vec![])]);
+        let ctx = ctx();
+        let p_id = 3;
+        let index = SelectorIndex::build(&[&sheet]);
+        let inline_map = std::collections::HashMap::new();
+        let parent_style = compute_style(&doc, p_id, None, &[&sheet], &index, &inline_map, &ctx);
+        let ps = resolve_pseudo_style(&doc, p_id, "before", &parent_style, &[&sheet], &ctx)
+            .expect("should produce pseudo style");
+        assert_eq!(ps.color, Color::rgb(0, 0, 255), "should inherit blue");
+        assert_eq!(ps.font_weight, FontWeight::Bold);
+    }
+
+    #[test]
+    fn pseudo_element_after_content() {
+        let sheet = Stylesheet::parse(r#"p::after { content: "!"; color: green; }"#);
+        let doc = make_doc(vec![(TagName::P, vec![])]);
+        let ctx = ctx();
+        let p_id = 3;
+        let parent_style = ComputedStyle::default();
+        let ps = resolve_pseudo_style(&doc, p_id, "after", &parent_style, &[&sheet], &ctx)
+            .expect("should produce ::after style");
+        assert_eq!(ps.content, Some("!".to_string()));
+        assert_eq!(ps.color, Color::rgb(0, 128, 0));
+    }
+
+    #[test]
+    fn pseudo_element_empty_content_clearfix() {
+        let sheet = Stylesheet::parse(r#"p::after { content: ""; display: block; }"#);
+        let doc = make_doc(vec![(TagName::P, vec![])]);
+        let ctx = ctx();
+        let p_id = 3;
+        let parent_style = ComputedStyle::default();
+        let ps = resolve_pseudo_style(&doc, p_id, "after", &parent_style, &[&sheet], &ctx)
+            .expect("empty content should still produce a pseudo style");
+        assert_eq!(ps.content, Some(String::new()));
+        assert_eq!(ps.display, Display::Block);
+    }
+
+    #[test]
+    fn pseudo_element_content_none_no_generation() {
+        let sheet = Stylesheet::parse(r#"p::before { content: none; color: red; }"#);
+        let doc = make_doc(vec![(TagName::P, vec![])]);
+        let ctx = ctx();
+        let p_id = 3;
+        let parent_style = ComputedStyle::default();
+        let ps = resolve_pseudo_style(&doc, p_id, "before", &parent_style, &[&sheet], &ctx);
+        assert!(
+            ps.is_none(),
+            "content:none should not generate pseudo-element"
+        );
+    }
+
+    #[test]
+    fn pseudo_element_no_matching_rule() {
+        let sheet = Stylesheet::parse("p { color: red; }");
+        let doc = make_doc(vec![(TagName::P, vec![])]);
+        let ctx = ctx();
+        let p_id = 3;
+        let parent_style = ComputedStyle::default();
+        let ps = resolve_pseudo_style(&doc, p_id, "before", &parent_style, &[&sheet], &ctx);
+        assert!(ps.is_none(), "no matching rule should return None");
     }
 }

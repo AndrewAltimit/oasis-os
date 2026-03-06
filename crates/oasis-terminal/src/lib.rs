@@ -13,6 +13,7 @@ pub mod completion;
 pub mod control_flow;
 pub mod dev_commands;
 pub mod doc_commands;
+mod executor;
 pub(crate) mod expander;
 pub mod file_commands;
 pub mod fun_commands;
@@ -23,11 +24,13 @@ pub mod line_edit;
 pub mod network_commands;
 pub(crate) mod pipeline;
 pub mod radio_commands;
+mod registry;
 mod script;
 pub mod security_commands;
 pub mod skin_commands;
 pub mod system_commands;
 pub mod text_commands;
+mod types;
 pub mod ui_commands;
 
 /// Register audio playback commands (music) into a registry.

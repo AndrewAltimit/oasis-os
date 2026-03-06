@@ -46,6 +46,44 @@ pub struct VfsMetadata {
     pub size: u64,
 }
 
+/// Unix-style file permissions (owner + mode).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FilePermissions {
+    /// Owner of the file (default: "user").
+    pub owner: String,
+    /// Unix-style octal mode (default: 0o644 for files, 0o755 for dirs).
+    pub mode: u16,
+}
+
+impl FilePermissions {
+    /// Default permissions for a regular file (mode 0o644, owner "user").
+    pub fn default_file() -> Self {
+        Self {
+            owner: "user".to_string(),
+            mode: 0o644,
+        }
+    }
+    /// Default permissions for a directory (mode 0o755, owner "user").
+    pub fn default_dir() -> Self {
+        Self {
+            owner: "user".to_string(),
+            mode: 0o755,
+        }
+    }
+    /// Check if the owner has write permission.
+    pub fn owner_can_write(&self) -> bool {
+        self.mode & 0o200 != 0
+    }
+    /// Check if the owner has read permission.
+    pub fn owner_can_read(&self) -> bool {
+        self.mode & 0o400 != 0
+    }
+    /// Check if the owner has execute permission.
+    pub fn owner_can_execute(&self) -> bool {
+        self.mode & 0o100 != 0
+    }
+}
+
 /// The virtual file system trait.
 ///
 /// All file operations in the command interpreter go through this trait.
@@ -71,4 +109,8 @@ pub trait Vfs {
 
     /// Check whether a path exists.
     fn exists(&self, path: &str) -> bool;
+    /// Get permissions for a path.
+    fn get_permissions(&self, path: &str) -> Result<FilePermissions>;
+    /// Set permissions for a path.
+    fn set_permissions(&mut self, path: &str, perms: FilePermissions) -> Result<()>;
 }
