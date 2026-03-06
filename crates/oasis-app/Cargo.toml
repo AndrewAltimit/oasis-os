@@ -31,7 +31,7 @@ javascript = ["oasis-core/javascript"]
 video-decode = ["dep:oasis-video", "oasis-video/h264"]
 
 [dependencies]
-oasis-core = { workspace = true }
+oasis-core = { workspace = true, features = ["tls-rustls"] }
 oasis-audio = { workspace = true }
 oasis-backend-sdl = { path = "../oasis-backend-sdl" }
 oasis-video = { workspace = true, optional = true }
