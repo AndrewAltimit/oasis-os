@@ -63,6 +63,7 @@ pub mod internals {
         StyleCache, TextMeasurer, build_layout_tree, layout_block_incremental,
     };
     pub use crate::layout::text_cache::CachingMeasurer;
+    pub use crate::paint::PaintViewport;
     pub use crate::paint::paint as paint_page;
 }
 
