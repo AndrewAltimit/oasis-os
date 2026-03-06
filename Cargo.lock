@@ -971,6 +971,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "oasis-vector"
+version = "1.0.0"
+dependencies = [
+ "oasis-types",
+]
+
+[[package]]
 name = "oasis-vfs"
 version = "1.0.0"
 dependencies = [
