@@ -13,7 +13,7 @@ documentation = "https://docs.rs/oasis-net"
 #   Pulls in rustls, webpki-roots (Mozilla CA bundle), and rustls-pki-types.
 #   Without this feature, all connections are plaintext TCP only.
 [features]
-default = ["tls-rustls"]
+default = []
 tls-rustls = ["dep:rustls", "dep:webpki-roots", "dep:rustls-pki-types"]
 
 [dependencies]
