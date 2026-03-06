@@ -185,13 +185,17 @@ fn capture_skin(skin_name: &str) -> anyhow::Result<()> {
         populate_skin_terminal(&mut sdi, &DEMO_OUTPUT, "/home/user", "ls");
     }
     mouse_cursor.update_sdi(&mut sdi);
-    render_and_save(
+    render_and_save_inner(
         &mut backend,
         &mut sdi,
         w,
         h,
         out_dir.join("01_dashboard.png"),
         active_theme.clear_color,
+        Some(VectorCtx {
+            dashboard: &dashboard,
+            theme: &active_theme,
+        }),
     )?;
     log::info!("Saved {skin_name}/01_dashboard.png");
 
@@ -360,13 +364,42 @@ fn render_and_save(
     path: std::path::PathBuf,
     clear_color: Color,
 ) -> anyhow::Result<()> {
-    backend.clear(clear_color)?;
-    sdi.draw(backend)?;
-    backend.swap_buffers()?;
+    render_and_save_inner(backend, sdi, w, h, path, clear_color, None)
+}
 
-    // Need to render again after swap so read_pixels gets the presented frame.
-    backend.clear(clear_color)?;
-    sdi.draw(backend)?;
+/// Vector-capable rendering context for screenshots.
+struct VectorCtx<'a> {
+    dashboard: &'a DashboardState,
+    theme: &'a ActiveTheme,
+}
+
+fn render_and_save_inner(
+    backend: &mut SdlBackend,
+    sdi: &mut SdiRegistry,
+    w: u32,
+    h: u32,
+    path: std::path::PathBuf,
+    clear_color: Color,
+    vector: Option<VectorCtx<'_>>,
+) -> anyhow::Result<()> {
+    let render_once = |b: &mut SdlBackend, s: &mut SdiRegistry| -> anyhow::Result<()> {
+        b.clear(clear_color)?;
+        if let Some(ref v) = vector
+            && v.theme.icon.style == "vector"
+        {
+            s.draw_base_layer(b)?;
+            oasis_core::vector_overlay::render_vector_background(b, v.theme, 30)?;
+            v.dashboard.render_vector_icons(b, v.theme, 30)?;
+            s.draw_overlay_layer(b)?;
+            return Ok(());
+        }
+        s.draw(b)?;
+        Ok(())
+    };
+
+    render_once(backend, sdi)?;
+    backend.swap_buffers()?;
+    render_once(backend, sdi)?;
 
     let pixels = backend.read_pixels(0, 0, w, h)?;
     save_png(&path, w, h, &pixels)?;

@@ -32,23 +32,22 @@ pub fn render_vector_background(
 ) -> Result<()> {
     let w = at.screen_w;
     let h = at.screen_h;
-    let accent = with_alpha(Color::WHITE, 12);
 
     let mut scene = VectorScene::new(w, h);
 
-    // Grid overlay: sparse, very subtle.
-    let grid_color = with_alpha(Color::WHITE, 8);
+    // Grid overlay: subtle but visible guide lines.
+    let grid_color = with_alpha(Color::WHITE, 18);
     let grid_ops = icons::grid_overlay(w, h, 30, grid_color);
     for op in grid_ops {
         scene.push(op);
     }
 
     // Wireframe sphere on the right side (animated rotation).
-    let sphere_r: u16 = (h / 7).min(40) as u16;
+    let sphere_r: u16 = (h / 4).min(60) as u16;
     let sphere_cx = (w as i32 * 4) / 5;
     let sphere_cy = h as i32 / 2;
-    let sphere_color = with_alpha(Color::WHITE, 20);
-    let sphere_angle = frame_counter as f32 * 0.015; // slow globe rotation
+    let sphere_color = with_alpha(Color::WHITE, 50);
+    let sphere_angle = frame_counter as f32 * 0.02; // globe rotation
     let sphere = icons::wireframe_sphere_animated(sphere_r, sphere_color, sphere_angle);
     scene.embed(
         sphere_cx - sphere_r as i32,
@@ -62,8 +61,8 @@ pub fn render_vector_background(
 
     // Radar sweep (animated).
     let sweep_angle = 0.8; // ~45 degrees
-    let rotation = (frame_counter as f32) * 0.03; // slow rotation
-    let radar_color = with_alpha(accent, 15);
+    let rotation = (frame_counter as f32) * 0.03;
+    let radar_color = with_alpha(Color::WHITE, 30);
     scene.push(icons::radar_sweep(
         sphere_cx,
         sphere_cy,
@@ -74,7 +73,7 @@ pub fn render_vector_background(
     ));
 
     // Glass polygon shards (decorative translucent triangles).
-    let shard_color = with_alpha(Color::WHITE, 6);
+    let shard_color = with_alpha(Color::WHITE, 20);
     // Bottom-left shard.
     scene.push(icons::glass_polygon(
         vec![
@@ -83,7 +82,7 @@ pub fn render_vector_background(
             ((w / 8) as i32, h as i32),
         ],
         shard_color,
-        6,
+        20,
     ));
     // Top-right shard.
     scene.push(icons::glass_polygon(
@@ -93,7 +92,7 @@ pub fn render_vector_background(
             (w as i32, 0),
         ],
         shard_color,
-        6,
+        20,
     ));
 
     render_scene(backend, &scene)

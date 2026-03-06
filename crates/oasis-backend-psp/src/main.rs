@@ -18,6 +18,15 @@ use oasis_backend_psp::{
     TextureId, Trigger, WindowManager,
 };
 
+// oasis-core SDI integration types.
+use oasis_core::active_theme::ActiveTheme;
+use oasis_core::bottombar::BottomBar;
+use oasis_core::dashboard::{AppEntry as CoreAppEntry, DashboardConfig, DashboardState};
+use oasis_core::platform::{BatteryState, CpuClock, PowerInfo, SystemTime};
+use oasis_core::skin::builtin as skin_builtin;
+use oasis_core::statusbar::StatusBar;
+use oasis_core::terminal_sdi;
+
 mod boot;
 mod chrome;
 mod commands;
@@ -115,6 +124,32 @@ fn psp_main() {
 
     // Query static hardware info.
     let sysinfo = SystemInfo::query();
+
+    // -- Skin & ActiveTheme (Phase 1: SDI integration) --
+    let skin_name = config.get_str("skin").unwrap_or("altimit");
+    let skin = skin_builtin::load_builtin(&skin_name)
+        .unwrap_or_else(|_| skin_builtin::load_builtin("altimit").expect("altimit built-in"));
+    let mut active_theme = ActiveTheme::from_skin(&skin.theme)
+        .with_screen_size(SCREEN_WIDTH, SCREEN_HEIGHT)
+        .with_features(&skin.features);
+    let dash_config = DashboardConfig::from_features(&skin.features, &active_theme);
+
+    // Convert PSP app list to oasis-core AppEntry for DashboardState.
+    let core_apps: Vec<CoreAppEntry> = APPS
+        .iter()
+        .map(|a| CoreAppEntry {
+            title: a.title.to_string(),
+            path: format!("/apps/{}", a.id),
+            icon_png: Vec::new(),
+            color: a.color,
+        })
+        .collect();
+    let mut dashboard = DashboardState::new(dash_config, core_apps);
+
+    let mut status_bar = StatusBar::new();
+    let mut bottom_bar = BottomBar::new();
+    bottom_bar.total_pages = dashboard.page_count();
+
     boot::show_boot_screen(&mut backend, "Generating textures...", 40);
 
     // Load wallpaper texture at reduced resolution (64x64 = 16KB vs 1MB).
@@ -136,13 +171,13 @@ fn psp_main() {
     let psp_theme = oasis_backend_psp::psp_wm_theme();
     let mut wm = WindowManager::with_theme(SCREEN_WIDTH, SCREEN_HEIGHT, psp_theme);
     let mut sdi = SdiRegistry::new();
+    // Apply skin layout to SDI registry (creates wallpaper, bar, etc. objects).
+    skin.apply_layout_scaled(&mut sdi, SCREEN_WIDTH, SCREEN_HEIGHT);
 
     // -- App mode --
     let mut app_mode = AppMode::Classic;
     let mut classic_view = ClassicView::Dashboard;
 
-    let mut selected: usize = 0;
-    let page: usize = 0;
     let mut icons_hidden: bool = false;
     let mut viz_frame: u32 = 0;
 
@@ -459,7 +494,7 @@ fn psp_main() {
                             &mut app_mode,
                             &mut wm,
                             &mut sdi,
-                            page,
+                            dashboard.page,
                         );
                     },
                     InputEvent::ButtonRelease(Button::Confirm) => {
@@ -479,47 +514,28 @@ fn psp_main() {
                         classic_view = ClassicView::Dashboard;
                     },
                     InputEvent::ButtonPress(Button::Triangle) => {
-                        // Open app launcher: cycle through apps and open as windows.
-                        let idx = page * ICONS_PER_PAGE + selected;
-                        if idx < APPS.len() {
-                            let app = &APPS[idx];
-                            desktop::open_app_window(&mut wm, &mut sdi, app.id, app.title);
+                        // Open app launcher: open selected app as window.
+                        if let Some(app) = dashboard.selected_app() {
+                            let title = app.title.clone();
+                            if let Some(psp_app) = APPS.iter().find(|a| a.title == title.as_str()) {
+                                desktop::open_app_window(
+                                    &mut wm, &mut sdi, psp_app.id, psp_app.title,
+                                );
+                            }
                         }
                     },
                     InputEvent::ButtonPress(Button::Start) => {
-                        // Toggle terminal window.
                         desktop::open_app_window(&mut wm, &mut sdi, "terminal", "Terminal");
                     },
                     // Dashboard navigation works in Desktop mode too.
-                    InputEvent::ButtonPress(Button::Up) => {
-                        if selected >= GRID_COLS {
-                            selected -= GRID_COLS;
+                    InputEvent::ButtonPress(
+                        btn @ (Button::Up | Button::Down | Button::Left | Button::Right),
+                    ) => {
+                        let old_sel = dashboard.selected;
+                        dashboard.handle_input(btn);
+                        if dashboard.selected != old_sel {
                             audio.send(AudioCmd::PlaySfx(SfxId::Click));
                         }
-                    },
-                    InputEvent::ButtonPress(Button::Down) => {
-                        let page_start = page * ICONS_PER_PAGE;
-                        let page_count = APPS.len().saturating_sub(page_start).min(ICONS_PER_PAGE);
-                        if selected + GRID_COLS < page_count {
-                            selected += GRID_COLS;
-                            audio.send(AudioCmd::PlaySfx(SfxId::Click));
-                        }
-                    },
-                    InputEvent::ButtonPress(Button::Left) => {
-                        let page_start = page * ICONS_PER_PAGE;
-                        let page_count = APPS.len().saturating_sub(page_start).min(ICONS_PER_PAGE);
-                        if selected == 0 {
-                            selected = if page_count > 0 { page_count - 1 } else { 0 };
-                        } else {
-                            selected -= 1;
-                        }
-                        audio.send(AudioCmd::PlaySfx(SfxId::Click));
-                    },
-                    InputEvent::ButtonPress(Button::Right) => {
-                        let page_start = page * ICONS_PER_PAGE;
-                        let page_count = APPS.len().saturating_sub(page_start).min(ICONS_PER_PAGE);
-                        selected = (selected + 1) % page_count.max(1);
-                        audio.send(AudioCmd::PlaySfx(SfxId::Click));
                     },
                     InputEvent::TriggerPress(Trigger::Left) => {
                         // Both triggers held = close all windows.
@@ -578,47 +594,24 @@ fn psp_main() {
                     app_mode = AppMode::Desktop;
                 },
 
-                // -- Dashboard input --
-                InputEvent::ButtonPress(Button::Up) if classic_view == ClassicView::Dashboard => {
-                    if selected >= GRID_COLS {
-                        selected -= GRID_COLS;
-                        audio.send(AudioCmd::PlaySfx(SfxId::Click));
-                    }
-                },
-                InputEvent::ButtonPress(Button::Down) if classic_view == ClassicView::Dashboard => {
-                    let page_start = page * ICONS_PER_PAGE;
-                    let page_count = APPS.len().saturating_sub(page_start).min(ICONS_PER_PAGE);
-                    if selected + GRID_COLS < page_count {
-                        selected += GRID_COLS;
-                        audio.send(AudioCmd::PlaySfx(SfxId::Click));
-                    }
-                },
-                InputEvent::ButtonPress(Button::Left) if classic_view == ClassicView::Dashboard => {
-                    let page_start = page * ICONS_PER_PAGE;
-                    let page_count = APPS.len().saturating_sub(page_start).min(ICONS_PER_PAGE);
-                    if selected == 0 {
-                        selected = if page_count > 0 { page_count - 1 } else { 0 };
-                    } else {
-                        selected -= 1;
-                    }
-                    audio.send(AudioCmd::PlaySfx(SfxId::Click));
-                },
-                InputEvent::ButtonPress(Button::Right)
+                // -- Dashboard input (via DashboardState) --
+                InputEvent::ButtonPress(btn @ (Button::Up | Button::Down | Button::Left | Button::Right))
                     if classic_view == ClassicView::Dashboard =>
                 {
-                    let page_start = page * ICONS_PER_PAGE;
-                    let page_count = APPS.len().saturating_sub(page_start).min(ICONS_PER_PAGE);
-                    selected = (selected + 1) % page_count.max(1);
-                    audio.send(AudioCmd::PlaySfx(SfxId::Click));
+                    let old_sel = dashboard.selected;
+                    dashboard.handle_input(btn);
+                    if dashboard.selected != old_sel {
+                        audio.send(AudioCmd::PlaySfx(SfxId::Click));
+                    }
                 },
                 InputEvent::ButtonPress(Button::Confirm)
                     if classic_view == ClassicView::Dashboard =>
                 {
                     audio.send(AudioCmd::PlaySfx(SfxId::Navigate));
-                    let idx = page * ICONS_PER_PAGE + selected;
-                    if idx < APPS.len() {
-                        let app = &APPS[idx];
-                        match app.title {
+                    dashboard.trigger_press_flash();
+                    let app_title = dashboard.selected_app().map(|a| a.title.clone());
+                    if let Some(ref title) = app_title {
+                        match title.as_str() {
                             "Terminal" => {
                                 classic_view = ClassicView::Terminal;
                             },
@@ -650,11 +643,9 @@ fn psp_main() {
                                 classic_view = ClassicView::Radio;
                                 radio_selected = 0;
                                 radio_scroll = 0;
-                                // Keep radio_status if already playing.
                             },
                             "TV Guide" => {
                                 classic_view = ClassicView::TvGuide;
-                                // Parse channels on first open.
                                 if tv_channels.is_empty() {
                                     if let Ok(config) =
                                         oasis_core::apps::tv_guide::ChannelConfig::from_toml(
@@ -664,7 +655,6 @@ fn psp_main() {
                                     {
                                         tv_channels = config.channel;
                                         tv_catalogs = vec![None; tv_channels.len()];
-                                        // Fetch catalogs from IA for each channel.
                                         for (i, ch) in tv_channels.iter().enumerate() {
                                             for (si, src) in ch.source.iter().enumerate() {
                                                 let api_path =
@@ -674,9 +664,6 @@ fn psp_main() {
                                                     "https://archive.org{}",
                                                     api_path,
                                                 );
-                                                // Tag layout: 0xAA in bits 8..15,
-                                                // channel index in bits 0..7,
-                                                // source index in bits 16..19.
                                                 let tag = 0xAA00
                                                     | (i as u32 & 0xFF)
                                                     | ((si as u32 & 0xF) << 16);
@@ -690,8 +677,12 @@ fn psp_main() {
                             },
                             _ => {
                                 // Apps without a Classic view: open in Desktop mode.
-                                app_mode = AppMode::Desktop;
-                                desktop::open_app_window(&mut wm, &mut sdi, app.id, app.title);
+                                if let Some(app) = APPS.iter().find(|a| a.title == title.as_str()) {
+                                    app_mode = AppMode::Desktop;
+                                    desktop::open_app_window(
+                                        &mut wm, &mut sdi, app.id, app.title,
+                                    );
+                                }
                             },
                         }
                     }
@@ -1427,6 +1418,46 @@ fn psp_main() {
         let fps = frame_timer.fps();
         let usb_active = usb_storage.is_some();
 
+        // Feed PSP status info into oasis-core's StatusBar for SDI rendering.
+        {
+            let sys_time = SystemTime {
+                year: status.year,
+                month: status.month as u8,
+                day: status.day as u8,
+                hour: status.hour as u8,
+                minute: status.minute as u8,
+                second: 0,
+            };
+            let bat_state = if status.ac_power && !status.battery_charging {
+                BatteryState::Full
+            } else if status.battery_charging {
+                BatteryState::Charging
+            } else if status.battery_percent < 0 {
+                BatteryState::NoBattery
+            } else {
+                BatteryState::Discharging
+            };
+            let power = PowerInfo {
+                battery_percent: if status.battery_percent >= 0 {
+                    Some(status.battery_percent as u8)
+                } else {
+                    None
+                },
+                battery_minutes: None,
+                state: bat_state,
+                cpu: CpuClock {
+                    current_mhz: sysinfo.cpu_mhz as u32,
+                    max_mhz: 333,
+                },
+            };
+            status_bar.update_info(Some(&sys_time), Some(&power));
+        }
+
+        // Update bottom bar page tracking.
+        bottom_bar.current_page = dashboard.page;
+        bottom_bar.total_pages = dashboard.page_count();
+        bottom_bar.tick_animation(&active_theme);
+
         backend.clear_inner(Color::BLACK);
         // Wallpaper: 64x64 texture scaled to fullscreen by GE (bilinear).
         backend.blit_scaled(wallpaper_tex, 0, 0, SCREEN_WIDTH, SCREEN_HEIGHT);
@@ -1479,12 +1510,24 @@ fn psp_main() {
                     mp_loaded = true;
                 }
 
+                // Show or hide dashboard icons based on current view.
+                let show_dashboard = classic_view == ClassicView::Dashboard
+                    && !icons_hidden;
+                if show_dashboard {
+                    dashboard.tick_animation();
+                    dashboard.update_sdi(&mut sdi, &active_theme);
+                } else {
+                    dashboard.hide_sdi(&mut sdi);
+                }
+
+                // Show or hide terminal SDI objects.
+                if classic_view != ClassicView::Terminal {
+                    terminal_sdi::set_terminal_visible(&mut sdi, false);
+                }
+
                 match classic_view {
                     ClassicView::Dashboard => {
                         backend.force_bitmap_font = true;
-                        if !icons_hidden {
-                            chrome::draw_dashboard(&mut backend, selected, page, viz_frame);
-                        }
                         chrome::draw_button_hints(
                             &mut backend,
                             &[
@@ -1497,8 +1540,17 @@ fn psp_main() {
                         backend.force_bitmap_font = false;
                     },
                     ClassicView::Terminal => {
+                        // SDI-based terminal rendering (Phase 4).
+                        terminal_sdi::setup_terminal_objects(
+                            &mut sdi,
+                            &term_lines,
+                            "/",
+                            &term_input,
+                            term_scroll,
+                            &active_theme,
+                            viz_frame % 30 < 15, // blinking cursor
+                        );
                         backend.force_bitmap_font = true;
-                        views::draw_terminal(&mut backend, &term_lines, &term_input, term_scroll);
                         chrome::draw_button_hints(
                             &mut backend,
                             &[
@@ -1678,12 +1730,15 @@ fn psp_main() {
             },
 
             AppMode::Desktop => {
-                // Draw dashboard icons behind windows.
+                // Show dashboard icons behind windows in Desktop mode.
                 if !icons_hidden {
-                    backend.force_bitmap_font = true;
-                    chrome::draw_dashboard(&mut backend, selected, page, viz_frame);
-                    backend.force_bitmap_font = false;
+                    dashboard.tick_animation();
+                    dashboard.update_sdi(&mut sdi, &active_theme);
+                } else {
+                    dashboard.hide_sdi(&mut sdi);
                 }
+                // Hide terminal SDI objects in Desktop mode.
+                terminal_sdi::set_terminal_visible(&mut sdi, false);
 
                 // Pre-compute values for windowed app renderers.
                 let settings_clock = config.get_i32("clock_mhz").unwrap_or(333);
@@ -1767,15 +1822,12 @@ fn psp_main() {
             },
         }
 
-        // Status bar + bottom bar (always visible, drawn on top).
-        // Force bitmap font: all bar layouts use `len() * 8` fixed-width metrics.
-        backend.force_bitmap_font = true;
-        chrome::draw_status_bar(&mut backend, &status, &sysinfo);
-
-        let url_text = match (app_mode, classic_view) {
-            (AppMode::Desktop, _) => String::from("SYS://DESKTOP"),
-            (_, ClassicView::Dashboard) => String::from("SYS://DASHBOARD"),
-            (_, ClassicView::Terminal) => String::from("SYS://TERMINAL"),
+        // Status bar + bottom bar (always visible, drawn on top via SDI).
+        // Update URL text based on current mode/view.
+        active_theme.bar.url_text = match (app_mode, classic_view) {
+            (AppMode::Desktop, _) => "SYS://DESKTOP".to_string(),
+            (_, ClassicView::Dashboard) => "SYS://DASHBOARD".to_string(),
+            (_, ClassicView::Terminal) => "SYS://TERMINAL".to_string(),
             (_, ClassicView::FileManager) => {
                 let active_path = if fm_active_panel == 0 {
                     &fm_path
@@ -1794,44 +1846,65 @@ fn psp_main() {
                     format!("MSO:/{}", path_part)
                 }
             },
-            (_, ClassicView::PhotoViewer) => String::from("SYS://PHOTOS"),
+            (_, ClassicView::PhotoViewer) => "SYS://PHOTOS".to_string(),
             (_, ClassicView::MusicPlayer) => {
                 if audio.is_playing() {
-                    String::from("SYS://NOW_PLAY")
+                    "SYS://NOW_PLAY".to_string()
                 } else {
-                    String::from("SYS://MUSIC")
+                    "SYS://MUSIC".to_string()
                 }
             },
-            (_, ClassicView::Browser) => String::from("SYS://BROWSER"),
+            (_, ClassicView::Browser) => "SYS://BROWSER".to_string(),
             (_, ClassicView::Radio) => {
                 if audio.is_radio_streaming() {
-                    String::from("SYS://RADIO_ON")
+                    "SYS://RADIO_ON".to_string()
                 } else {
-                    String::from("SYS://RADIO")
+                    "SYS://RADIO".to_string()
                 }
             },
             (_, ClassicView::TvGuide) => {
                 if tv_tuned.is_some() {
-                    String::from("SYS://TV_LIVE")
+                    "SYS://TV_LIVE".to_string()
                 } else {
-                    String::from("SYS://TV_GUIDE")
+                    "SYS://TV_GUIDE".to_string()
                 }
             },
         };
-        let desktop_wm = if app_mode == AppMode::Desktop {
-            Some(&wm)
-        } else {
-            None
-        };
-        chrome::draw_bottom_bar(
-            &mut backend,
-            &audio,
-            viz_frame,
-            &status,
-            &url_text,
-            desktop_wm,
-        );
-        backend.force_bitmap_font = false;
+        status_bar.update_sdi(&mut sdi, &active_theme, &skin.features);
+        bottom_bar.update_sdi(&mut sdi, &active_theme, &skin.features);
+        let _ = sdi.draw(&mut backend);
+
+        // Post-SDI overlays drawn directly on the backend.
+        if app_mode == AppMode::Classic {
+            match classic_view {
+                ClassicView::Dashboard if !icons_hidden
+                    && active_theme.icon.style == "vector" =>
+                {
+                    // Vector icons overlay.
+                    let _ = oasis_core::vector_overlay::render_vector_background(
+                        &mut backend,
+                        &active_theme,
+                        viz_frame,
+                    );
+                    let _ = dashboard.render_vector_icons(
+                        &mut backend,
+                        &active_theme,
+                        viz_frame,
+                    );
+                },
+                ClassicView::Terminal => {
+                    // Terminal scrollbar (painted directly after SDI draw).
+                    let _ = terminal_sdi::paint_terminal_scrollbar(
+                        &mut backend,
+                        term_lines.len(),
+                        term_scroll,
+                        &active_theme,
+                    );
+                },
+                _ => {},
+            }
+        }
+
         viz_frame = viz_frame.wrapping_add(1);
 
         // Cursor (always on top).

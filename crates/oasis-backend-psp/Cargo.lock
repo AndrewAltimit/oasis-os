@@ -831,6 +831,7 @@ dependencies = [
  "oasis-terminal",
  "oasis-types",
  "oasis-ui",
+ "oasis-vector",
  "oasis-vfs",
  "oasis-wm",
  "serde",
@@ -905,6 +906,13 @@ dependencies = [
 
 [[package]]
 name = "oasis-ui"
+version = "1.0.0"
+dependencies = [
+ "oasis-types",
+]
+
+[[package]]
+name = "oasis-vector"
 version = "1.0.0"
 dependencies = [
  "oasis-types",

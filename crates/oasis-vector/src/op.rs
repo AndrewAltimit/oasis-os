@@ -198,6 +198,96 @@ impl VectorOp {
         }
     }
 
+    /// Scale all coordinates and dimensions by the given factor.
+    ///
+    /// Used to resize icons from design-space (22x22) to display-space.
+    pub fn scale(&mut self, factor: f32) {
+        let s = |v: &mut i32| *v = (*v as f32 * factor) as i32;
+        let su = |v: &mut u32| *v = (*v as f32 * factor) as u32;
+        let su16 = |v: &mut u16| *v = (*v as f32 * factor).max(1.0) as u16;
+        match self {
+            Self::FillRect { x, y, w, h, .. } => {
+                s(x);
+                s(y);
+                su(w);
+                su(h);
+            },
+            Self::StrokeRect {
+                x, y, w, h, width, ..
+            } => {
+                s(x);
+                s(y);
+                su(w);
+                su(h);
+                su16(width);
+            },
+            Self::FillRoundedRect {
+                x, y, w, h, radius, ..
+            } => {
+                s(x);
+                s(y);
+                su(w);
+                su(h);
+                su16(radius);
+            },
+            Self::FillPolygon { points, .. } | Self::StrokePolygon { points, .. } => {
+                for (px, py) in points.iter_mut() {
+                    s(px);
+                    s(py);
+                }
+            },
+            Self::FillCircle { cx, cy, radius, .. } | Self::StrokeCircle { cx, cy, radius, .. } => {
+                s(cx);
+                s(cy);
+                su16(radius);
+            },
+            Self::FillArc { cx, cy, radius, .. } | Self::StrokeArc { cx, cy, radius, .. } => {
+                s(cx);
+                s(cy);
+                su16(radius);
+            },
+            Self::Line { x1, y1, x2, y2, .. } | Self::DashedLine { x1, y1, x2, y2, .. } => {
+                s(x1);
+                s(y1);
+                s(x2);
+                s(y2);
+            },
+            Self::RectGradient { x, y, w, h, .. } => {
+                s(x);
+                s(y);
+                su(w);
+                su(h);
+            },
+            Self::PolygonGradient { points, .. } => {
+                for (px, py) in points.iter_mut() {
+                    s(px);
+                    s(py);
+                }
+            },
+            Self::FillTriangle { points, .. } => {
+                for (px, py) in points.iter_mut() {
+                    s(px);
+                    s(py);
+                }
+            },
+            Self::Text {
+                x, y, font_size, ..
+            } => {
+                s(x);
+                s(y);
+                su16(font_size);
+            },
+            Self::Group { ops, translate, .. } => {
+                let (dx, dy) = translate;
+                *dx = (*dx as f32 * factor) as i32;
+                *dy = (*dy as f32 * factor) as i32;
+                for op in ops {
+                    op.scale(factor);
+                }
+            },
+        }
+    }
+
     /// Apply an alpha multiplier to this op (modulates existing alpha).
     pub fn modulate_alpha(&mut self, alpha: u8) {
         let modulate = |c: &mut Color| {

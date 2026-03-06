@@ -103,14 +103,14 @@ icon_style = "vector"
 cursor_style = "stroke"
 vector_preset = "altimit"
 vector_idle_float = true
-vector_float_amplitude = 1.5
-vector_float_speed = 0.04
+vector_float_amplitude = 3.0
+vector_float_speed = 0.06
 vector_spin_enabled = true
-vector_spin_speed = 0.03
+vector_spin_speed = 0.05
 vector_pulse_enabled = true
-vector_pulse_speed = 0.06
+vector_pulse_speed = 0.10
 vector_blink_enabled = true
-vector_blink_interval = 45
+vector_blink_interval = 30
 
 [app_overrides]
 app_bg = "#080816"

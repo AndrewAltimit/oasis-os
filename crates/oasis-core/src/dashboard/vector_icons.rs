@@ -175,23 +175,24 @@ impl DashboardState {
                 ));
             }
 
-            // Build a scene from the icon and render it.
-            let mut scene = VectorScene::new(icon.width, icon.height);
-            for op in icon.ops {
+            // Build a scene from the icon and scale to fill the icon cell.
+            // Icons are 22x22 base, scale to icon_w x icon_h.
+            let scale_x = icon_w as f32 / icon.width.max(1) as f32;
+            let scale_y = icon_h as f32 / icon.height.max(1) as f32;
+            let scale = scale_x.min(scale_y);
+
+            let mut scene = VectorScene::new(
+                (icon.width as f32 * scale) as u32,
+                (icon.height as f32 * scale) as u32,
+            );
+            for mut op in icon.ops {
+                op.scale(scale);
                 scene.push(op);
             }
 
-            // Scale the icon to fill the icon cell.
-            // Icons are 22x22 base, scale to icon_w x icon_h.
-            let scale_x = icon_w as f32 / scene.width.max(1) as f32;
-            let scale_y = icon_h as f32 / scene.height.max(1) as f32;
-            let scale = scale_x.min(scale_y);
-
             // Center the scaled icon within the cell.
-            let scaled_w = (scene.width as f32 * scale) as i32;
-            let scaled_h = (scene.height as f32 * scale) as i32;
-            let ox = ix + (icon_w as i32 - scaled_w) / 2;
-            let mut oy = iy + (icon_h as i32 - scaled_h) / 2;
+            let ox = ix + (icon_w as i32 - scene.width as i32) / 2;
+            let mut oy = iy + (icon_h as i32 - scene.height as i32) / 2;
 
             // Apply idle float animation (sine-wave bob).
             if at.icon.idle_float {
@@ -203,8 +204,6 @@ impl DashboardState {
                 );
             }
 
-            // For now, render at 1:1 scale centered in the cell.
-            // True scaling would require coordinate transform in VectorOp.
             render_scene_at(backend, &scene, ox, oy, 255)?;
         }
 
