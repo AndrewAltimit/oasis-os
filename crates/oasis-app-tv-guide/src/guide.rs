@@ -4,13 +4,13 @@
 //! info, time-slot column headers, channel rows with variable-width
 //! program cells, selection highlight, and footer navigation hints.
 
-use crate::active_theme::ActiveTheme;
-use crate::backend::{Color, TextureId};
-use crate::sdi::SdiRegistry;
+use oasis_sdi::SdiRegistry;
+use oasis_skin::active_theme::ActiveTheme;
+use oasis_types::backend::{Color, TextureId};
 
-use super::catalog::{ChannelCatalog, VideoEpisode};
-use super::channel::{Channel, ChannelConfig};
-use super::schedule::{self, CachedSchedule};
+use crate::catalog::{ChannelCatalog, VideoEpisode};
+use crate::channel::{Channel, ChannelConfig};
+use crate::schedule::{self, CachedSchedule};
 
 /// Number of 30-minute time columns visible in the grid.
 const VISIBLE_TIME_SLOTS: usize = 5;
@@ -1084,9 +1084,9 @@ impl TvGuideState {
         cy: i32,
         cw: u32,
         ch: u32,
-        backend: &mut dyn crate::backend::SdiBackend,
+        backend: &mut dyn oasis_types::backend::SdiBackend,
         at: &ActiveTheme,
-    ) -> crate::error::Result<()> {
+    ) -> oasis_types::error::Result<()> {
         // Background.
         backend.fill_rect(cx, cy, cw, ch, self.colors.bg)?;
 
@@ -1474,7 +1474,7 @@ fn current_unix_time() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::apps::tv_guide::channel::{ChannelConfig, DEFAULT_CHANNELS_TOML};
+    use crate::channel::{ChannelConfig, DEFAULT_CHANNELS_TOML};
 
     #[test]
     fn new_guide_state() {
@@ -1619,8 +1619,8 @@ mod tests {
         state.fetch_attempted = true;
 
         // Inject a catalog for channel 0.
-        let mut catalog = super::super::catalog::ChannelCatalog::new(state.channels[0].number);
-        catalog.add_episodes(vec![super::super::catalog::VideoEpisode {
+        let mut catalog = crate::catalog::ChannelCatalog::new(state.channels[0].number);
+        catalog.add_episodes(vec![crate::catalog::VideoEpisode {
             item_id: "test-item".to_string(),
             filename: "ep1.mp4".to_string(),
             title: "Test Episode".to_string(),
@@ -1661,8 +1661,8 @@ mod tests {
         let config = ChannelConfig::from_toml(DEFAULT_CHANNELS_TOML).unwrap();
         let mut state = TvGuideState::new(&config, &ActiveTheme::default());
 
-        let mut catalog = super::super::catalog::ChannelCatalog::new(state.channels[0].number);
-        catalog.add_episodes(vec![super::super::catalog::VideoEpisode {
+        let mut catalog = crate::catalog::ChannelCatalog::new(state.channels[0].number);
+        catalog.add_episodes(vec![crate::catalog::VideoEpisode {
             item_id: "test-item".to_string(),
             filename: "ep1.mp4".to_string(),
             title: "Test Episode".to_string(),
@@ -1688,8 +1688,8 @@ mod tests {
         let config = ChannelConfig::from_toml(DEFAULT_CHANNELS_TOML).unwrap();
         let mut state = TvGuideState::new(&config, &ActiveTheme::default());
 
-        let mut catalog = super::super::catalog::ChannelCatalog::new(state.channels[0].number);
-        catalog.add_episodes(vec![super::super::catalog::VideoEpisode {
+        let mut catalog = crate::catalog::ChannelCatalog::new(state.channels[0].number);
+        catalog.add_episodes(vec![crate::catalog::VideoEpisode {
             item_id: "test".to_string(),
             filename: "ep.mp4".to_string(),
             title: "Test".to_string(),
@@ -1794,8 +1794,8 @@ mod tests {
         let mut state = TvGuideState::new(&config, &ActiveTheme::default());
 
         // Inject a catalog so tune() can succeed.
-        let mut catalog = super::super::catalog::ChannelCatalog::new(state.channels[0].number);
-        catalog.add_episodes(vec![super::super::catalog::VideoEpisode {
+        let mut catalog = crate::catalog::ChannelCatalog::new(state.channels[0].number);
+        catalog.add_episodes(vec![crate::catalog::VideoEpisode {
             item_id: "click-test".to_string(),
             filename: "ep.mp4".to_string(),
             title: "Click Test".to_string(),

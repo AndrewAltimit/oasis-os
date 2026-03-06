@@ -1,0 +1,18 @@
+[package]
+name = "oasis-app-core"
+description = "Shared App trait, layout, and rendering helpers for OASIS_OS applications"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+oasis-types = { workspace = true }
+oasis-sdi = { workspace = true }
+oasis-skin = { workspace = true }
+oasis-vfs = { workspace = true }
+oasis-ui = { workspace = true }
+
+[lints]
+workspace = true

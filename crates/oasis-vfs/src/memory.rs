@@ -275,6 +275,45 @@ impl Vfs for MemoryVfs {
         Ok(())
     }
 
+    fn rename(&mut self, from: &str, to: &str) -> Result<()> {
+        let from = normalize(from);
+        let to = normalize(to);
+        if !self.nodes.contains_key(from.as_ref()) {
+            return Err(OasisError::Vfs(format!("no such path: {from}")));
+        }
+        // Ensure destination parent exists.
+        let to_par = parent(&to);
+        if !self.nodes.contains_key(to_par) {
+            return Err(OasisError::Vfs(format!(
+                "parent directory does not exist: {to_par}"
+            )));
+        }
+        // Collect all entries to move (the source itself + children if directory).
+        let from_str = from.as_ref().to_string();
+        let prefix = format!("{from_str}/");
+        let keys_to_move: Vec<String> = self
+            .nodes
+            .keys()
+            .filter(|k| *k == &from_str || k.starts_with(&prefix))
+            .cloned()
+            .collect();
+        let to_str = to.into_owned();
+        for old_key in keys_to_move {
+            let new_key = if old_key == from_str {
+                to_str.clone()
+            } else {
+                format!("{to_str}{}", &old_key[from_str.len()..])
+            };
+            if let Some(node) = self.nodes.remove(&old_key) {
+                self.nodes.insert(new_key.clone(), node);
+            }
+            if let Some(perms) = self.permissions.remove(&old_key) {
+                self.permissions.insert(new_key, perms);
+            }
+        }
+        Ok(())
+    }
+
     fn exists(&self, path: &str) -> bool {
         let path = normalize(path);
         self.nodes.contains_key(path.as_ref())
@@ -820,6 +859,62 @@ mod tests {
         .unwrap();
         vfs.remove("/tmp_file").unwrap();
         assert!(vfs.get_permissions("/tmp_file").is_err());
+    }
+
+    #[test]
+    fn rename_file() {
+        let mut vfs = MemoryVfs::new();
+        vfs.mkdir("/src").unwrap();
+        vfs.mkdir("/dst").unwrap();
+        vfs.write("/src/file.txt", b"hello").unwrap();
+        vfs.rename("/src/file.txt", "/dst/moved.txt").unwrap();
+        assert!(!vfs.exists("/src/file.txt"));
+        assert_eq!(vfs.read("/dst/moved.txt").unwrap(), b"hello");
+    }
+
+    #[test]
+    fn rename_directory_moves_children() {
+        let mut vfs = MemoryVfs::new();
+        vfs.mkdir("/old/sub").unwrap();
+        vfs.write("/old/sub/file.txt", b"data").unwrap();
+        vfs.rename("/old", "/new").unwrap();
+        assert!(!vfs.exists("/old"));
+        assert!(!vfs.exists("/old/sub"));
+        assert!(!vfs.exists("/old/sub/file.txt"));
+        assert!(vfs.exists("/new"));
+        assert!(vfs.exists("/new/sub"));
+        assert_eq!(vfs.read("/new/sub/file.txt").unwrap(), b"data");
+    }
+
+    #[test]
+    fn rename_preserves_permissions() {
+        let mut vfs = MemoryVfs::new();
+        vfs.write("/file", b"data").unwrap();
+        vfs.set_permissions(
+            "/file",
+            FilePermissions {
+                owner: "root".to_string(),
+                mode: 0o600,
+            },
+        )
+        .unwrap();
+        vfs.rename("/file", "/moved").unwrap();
+        let perms = vfs.get_permissions("/moved").unwrap();
+        assert_eq!(perms.owner, "root");
+        assert_eq!(perms.mode, 0o600);
+    }
+
+    #[test]
+    fn rename_nonexistent_fails() {
+        let mut vfs = MemoryVfs::new();
+        assert!(vfs.rename("/ghost", "/dest").is_err());
+    }
+
+    #[test]
+    fn rename_missing_dest_parent_fails() {
+        let mut vfs = MemoryVfs::new();
+        vfs.write("/file", b"data").unwrap();
+        assert!(vfs.rename("/file", "/no/such/dir/file").is_err());
     }
 
     mod prop {

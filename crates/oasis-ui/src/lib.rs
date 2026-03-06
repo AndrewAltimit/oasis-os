@@ -51,6 +51,6 @@ pub mod widget;
 pub(crate) mod test_utils;
 
 pub use context::DrawContext;
-pub use layout::Padding;
+pub use layout::{MeasureCache, Padding, cached_measure};
 pub use theme::Theme;
 pub use widget::Widget;

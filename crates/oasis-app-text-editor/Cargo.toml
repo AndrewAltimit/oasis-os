@@ -1,0 +1,18 @@
+[package]
+name = "oasis-app-text-editor"
+description = "Text editor application for OASIS_OS: modal editing with undo/redo"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+oasis-app-core = { workspace = true }
+oasis-types = { workspace = true }
+oasis-sdi = { workspace = true }
+oasis-skin = { workspace = true }
+oasis-vfs = { workspace = true }
+
+[lints]
+workspace = true

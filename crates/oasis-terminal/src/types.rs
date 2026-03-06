@@ -46,6 +46,8 @@ pub enum CommandOutput {
     FtpToggle {
         /// Port to listen on (0 = stop).
         port: u16,
+        /// Optional password for FTP authentication.
+        password: Option<String>,
     },
     /// Multiple outputs from a chained command (e.g. `skin xp ; echo Done`).
     /// Each inner output is processed in order by the app layer.

@@ -655,6 +655,112 @@ dependencies = [
 ]
 
 [[package]]
+name = "oasis-app-calculator"
+version = "1.0.0"
+dependencies = [
+ "oasis-app-core",
+ "oasis-sdi",
+ "oasis-skin",
+ "oasis-types",
+ "oasis-vfs",
+]
+
+[[package]]
+name = "oasis-app-clock"
+version = "1.0.0"
+dependencies = [
+ "oasis-app-core",
+ "oasis-sdi",
+ "oasis-skin",
+ "oasis-types",
+ "oasis-vfs",
+]
+
+[[package]]
+name = "oasis-app-core"
+version = "1.0.0"
+dependencies = [
+ "oasis-sdi",
+ "oasis-skin",
+ "oasis-types",
+ "oasis-ui",
+ "oasis-vfs",
+]
+
+[[package]]
+name = "oasis-app-games"
+version = "1.0.0"
+dependencies = [
+ "oasis-app-core",
+ "oasis-sdi",
+ "oasis-skin",
+ "oasis-types",
+ "oasis-vfs",
+]
+
+[[package]]
+name = "oasis-app-media"
+version = "1.0.0"
+dependencies = [
+ "oasis-app-core",
+ "oasis-sdi",
+ "oasis-skin",
+ "oasis-types",
+ "oasis-vfs",
+]
+
+[[package]]
+name = "oasis-app-paint"
+version = "1.0.0"
+dependencies = [
+ "oasis-app-core",
+ "oasis-sdi",
+ "oasis-skin",
+ "oasis-types",
+ "oasis-vfs",
+]
+
+[[package]]
+name = "oasis-app-radio"
+version = "1.0.0"
+dependencies = [
+ "oasis-app-core",
+ "oasis-audio",
+ "oasis-sdi",
+ "oasis-skin",
+ "oasis-types",
+ "oasis-vfs",
+]
+
+[[package]]
+name = "oasis-app-text-editor"
+version = "1.0.0"
+dependencies = [
+ "oasis-app-core",
+ "oasis-sdi",
+ "oasis-skin",
+ "oasis-types",
+ "oasis-vfs",
+]
+
+[[package]]
+name = "oasis-app-tv-guide"
+version = "1.0.0"
+dependencies = [
+ "js-sys",
+ "log",
+ "oasis-app-core",
+ "oasis-audio",
+ "oasis-sdi",
+ "oasis-skin",
+ "oasis-types",
+ "oasis-vfs",
+ "serde",
+ "serde_json",
+ "toml",
+]
+
+[[package]]
 name = "oasis-audio"
 version = "1.0.0"
 dependencies = [
@@ -738,6 +844,15 @@ version = "1.0.0"
 dependencies = [
  "js-sys",
  "log",
+ "oasis-app-calculator",
+ "oasis-app-clock",
+ "oasis-app-core",
+ "oasis-app-games",
+ "oasis-app-media",
+ "oasis-app-paint",
+ "oasis-app-radio",
+ "oasis-app-text-editor",
+ "oasis-app-tv-guide",
  "oasis-audio",
  "oasis-browser",
  "oasis-net",

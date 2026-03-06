@@ -4,19 +4,18 @@
 //! into subdirectories, and open files for viewing. `BrowsingApp` implements
 //! the `App` trait with this shared logic.
 
-use crate::active_theme::ActiveTheme;
-use crate::backend::SdiBackend;
-use crate::input::Button;
-use crate::sdi::SdiRegistry;
-use crate::vfs::Vfs;
-
-use super::ContentState;
-use super::app_trait::App;
-use super::file_manager::{
-    draw_content_windowed, hide_app_sdi, join_path, list_directory, parent_dir, render_app_chrome,
-    render_content_sdi, view_audio_file, view_generic_file, view_image_file,
+use oasis_app_core::file_viewer::{
+    join_path, list_directory, parent_dir, view_audio_file, view_generic_file, view_image_file,
 };
-use super::runner::AppAction;
+use oasis_app_core::render::{
+    draw_content_windowed, hide_app_sdi, render_app_chrome, render_content_sdi,
+};
+use oasis_app_core::{App, AppAction, ContentState};
+use oasis_sdi::SdiRegistry;
+use oasis_skin::ActiveTheme;
+use oasis_types::backend::SdiBackend;
+use oasis_types::input::Button;
+use oasis_vfs::Vfs;
 
 /// File-browsing app implementing the `App` trait.
 ///
@@ -415,7 +414,7 @@ impl App for BrowsingApp {
         ch: u32,
         backend: &mut dyn SdiBackend,
         at: &ActiveTheme,
-    ) -> crate::error::Result<()> {
+    ) -> oasis_types::error::Result<()> {
         draw_content_windowed(&self.content, cx, cy, cw, ch, backend, at)
     }
 
@@ -447,22 +446,22 @@ impl App for BrowsingApp {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::vfs::MemoryVfs;
+    use oasis_vfs::MemoryVfs;
 
     fn setup_vfs() -> MemoryVfs {
         let mut vfs = MemoryVfs::new();
-        crate::vfs::Vfs::mkdir(&mut vfs, "/home").unwrap();
-        crate::vfs::Vfs::mkdir(&mut vfs, "/home/user").unwrap();
-        crate::vfs::Vfs::mkdir(&mut vfs, "/home/user/music").unwrap();
-        crate::vfs::Vfs::mkdir(&mut vfs, "/home/user/photos").unwrap();
-        crate::vfs::Vfs::write(&mut vfs, "/home/user/music/ambient_dawn.mp3", b"fake mp3").unwrap();
-        crate::vfs::Vfs::write(
+        oasis_vfs::Vfs::mkdir(&mut vfs, "/home").unwrap();
+        oasis_vfs::Vfs::mkdir(&mut vfs, "/home/user").unwrap();
+        oasis_vfs::Vfs::mkdir(&mut vfs, "/home/user/music").unwrap();
+        oasis_vfs::Vfs::mkdir(&mut vfs, "/home/user/photos").unwrap();
+        oasis_vfs::Vfs::write(&mut vfs, "/home/user/music/ambient_dawn.mp3", b"fake mp3").unwrap();
+        oasis_vfs::Vfs::write(
             &mut vfs,
             "/home/user/music/nightfall_theme.mp3",
             b"fake mp3 2",
         )
         .unwrap();
-        crate::vfs::Vfs::write(&mut vfs, "/home/user/photos/sunset.png", b"fake png").unwrap();
+        oasis_vfs::Vfs::write(&mut vfs, "/home/user/photos/sunset.png", b"fake png").unwrap();
         vfs
     }
 
@@ -494,8 +493,8 @@ mod tests {
     #[test]
     fn music_player_missing_dir() {
         let mut vfs = MemoryVfs::new();
-        crate::vfs::Vfs::mkdir(&mut vfs, "/home").unwrap();
-        crate::vfs::Vfs::mkdir(&mut vfs, "/home/user").unwrap();
+        oasis_vfs::Vfs::mkdir(&mut vfs, "/home").unwrap();
+        oasis_vfs::Vfs::mkdir(&mut vfs, "/home/user").unwrap();
         let app = BrowsingApp::music_player("/apps/music", &vfs);
         assert!(
             app.lines()

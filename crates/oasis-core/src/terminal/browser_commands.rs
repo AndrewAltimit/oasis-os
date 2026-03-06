@@ -4,6 +4,7 @@
 //! depend on the `Command` / `CommandRegistry` types from oasis-terminal.
 //! Keeping them here avoids a dependency from oasis-browser → oasis-terminal.
 
+#[cfg(not(target_arch = "wasm32"))]
 use oasis_browser::loader;
 use oasis_terminal::{Command, CommandOutput, CommandRegistry, Environment};
 use oasis_types::error::Result;
@@ -393,115 +394,98 @@ mod tests {
     #[test]
     fn browse_no_args_shows_usage() {
         let (reg, mut vfs) = setup();
-        match exec(&reg, &mut vfs, "browse").unwrap() {
-            CommandOutput::Text(s) => {
-                assert!(s.contains("Usage"));
-                assert!(s.contains("browse"));
-            },
-            _ => panic!("expected text"),
-        }
+        let CommandOutput::Text(s) = exec(&reg, &mut vfs, "browse").unwrap() else {
+            panic!("expected CommandOutput::Text");
+        };
+        assert!(s.contains("Usage"));
+        assert!(s.contains("browse"));
     }
 
     #[test]
     fn browse_url_returns_opening_message() {
         let (reg, mut vfs) = setup();
-        match exec(&reg, &mut vfs, "browse https://example.com").unwrap() {
-            CommandOutput::Text(s) => {
-                assert!(s.contains("Opening"));
-                assert!(s.contains("https://example.com"));
-            },
-            _ => panic!("expected text"),
-        }
+        let CommandOutput::Text(s) = exec(&reg, &mut vfs, "browse https://example.com").unwrap()
+        else {
+            panic!("expected CommandOutput::Text");
+        };
+        assert!(s.contains("Opening"));
+        assert!(s.contains("https://example.com"));
     }
 
     #[test]
     fn browse_bookmarks() {
         let (reg, mut vfs) = setup();
-        match exec(&reg, &mut vfs, "browse bookmarks").unwrap() {
-            CommandOutput::Text(s) => {
-                assert!(s.contains("bookmarks"));
-            },
-            _ => panic!("expected text"),
-        }
+        let CommandOutput::Text(s) = exec(&reg, &mut vfs, "browse bookmarks").unwrap() else {
+            panic!("expected CommandOutput::Text");
+        };
+        assert!(s.contains("bookmarks"));
     }
 
     #[test]
     fn browse_history() {
         let (reg, mut vfs) = setup();
-        match exec(&reg, &mut vfs, "browse history").unwrap() {
-            CommandOutput::Text(s) => {
-                assert!(s.contains("history"));
-            },
-            _ => panic!("expected text"),
-        }
+        let CommandOutput::Text(s) = exec(&reg, &mut vfs, "browse history").unwrap() else {
+            panic!("expected CommandOutput::Text");
+        };
+        assert!(s.contains("history"));
     }
 
     #[test]
     fn browse_home() {
         let (reg, mut vfs) = setup();
-        match exec(&reg, &mut vfs, "browse home").unwrap() {
-            CommandOutput::Text(s) => {
-                assert!(s.contains("home"));
-            },
-            _ => panic!("expected text"),
-        }
+        let CommandOutput::Text(s) = exec(&reg, &mut vfs, "browse home").unwrap() else {
+            panic!("expected CommandOutput::Text");
+        };
+        assert!(s.contains("home"));
     }
 
     #[test]
     fn browse_back() {
         let (reg, mut vfs) = setup();
-        match exec(&reg, &mut vfs, "browse back").unwrap() {
-            CommandOutput::Text(s) => {
-                assert!(s.contains("back"));
-            },
-            _ => panic!("expected text"),
-        }
+        let CommandOutput::Text(s) = exec(&reg, &mut vfs, "browse back").unwrap() else {
+            panic!("expected CommandOutput::Text");
+        };
+        assert!(s.contains("back"));
     }
 
     #[test]
     fn browse_forward() {
         let (reg, mut vfs) = setup();
-        match exec(&reg, &mut vfs, "browse forward").unwrap() {
-            CommandOutput::Text(s) => {
-                assert!(s.contains("forward"));
-            },
-            _ => panic!("expected text"),
-        }
+        let CommandOutput::Text(s) = exec(&reg, &mut vfs, "browse forward").unwrap() else {
+            panic!("expected CommandOutput::Text");
+        };
+        assert!(s.contains("forward"));
     }
 
     #[test]
     fn browse_reader() {
         let (reg, mut vfs) = setup();
-        match exec(&reg, &mut vfs, "browse reader").unwrap() {
-            CommandOutput::Text(s) => {
-                assert!(s.contains("reader"));
-            },
-            _ => panic!("expected text"),
-        }
+        let CommandOutput::Text(s) = exec(&reg, &mut vfs, "browse reader").unwrap() else {
+            panic!("expected CommandOutput::Text");
+        };
+        assert!(s.contains("reader"));
     }
 
     #[test]
     fn browse_sandbox_with_url() {
         let (reg, mut vfs) = setup();
-        match exec(&reg, &mut vfs, "browse sandbox https://untrusted.example").unwrap() {
-            CommandOutput::Text(s) => {
-                assert!(s.contains("sandbox"));
-                assert!(s.contains("https://untrusted.example"));
-            },
-            _ => panic!("expected text"),
-        }
+        let CommandOutput::Text(s) =
+            exec(&reg, &mut vfs, "browse sandbox https://untrusted.example").unwrap()
+        else {
+            panic!("expected CommandOutput::Text");
+        };
+        assert!(s.contains("sandbox"));
+        assert!(s.contains("https://untrusted.example"));
     }
 
     #[test]
     fn fetch_no_args_shows_usage() {
         let (reg, mut vfs) = setup();
-        match exec(&reg, &mut vfs, "fetch").unwrap() {
-            CommandOutput::Text(s) => {
-                assert!(s.contains("Usage"));
-                assert!(s.contains("fetch"));
-            },
-            _ => panic!("expected text"),
-        }
+        let CommandOutput::Text(s) = exec(&reg, &mut vfs, "fetch").unwrap() else {
+            panic!("expected CommandOutput::Text");
+        };
+        assert!(s.contains("Usage"));
+        assert!(s.contains("fetch"));
     }
 
     #[test]
@@ -511,14 +495,14 @@ mod tests {
         vfs.mkdir("/sites/example.com").unwrap();
         vfs.write("/sites/example.com/index.html", b"<html>hello</html>")
             .unwrap();
-        match exec(&reg, &mut vfs, "fetch headers https://example.com").unwrap() {
-            CommandOutput::Text(s) => {
-                assert!(s.contains("Content-Length:"));
-                assert!(s.contains("Content-Type: text/html"));
-                assert!(s.contains("VFS-Path:"));
-            },
-            _ => panic!("expected text"),
-        }
+        let CommandOutput::Text(s) =
+            exec(&reg, &mut vfs, "fetch headers https://example.com").unwrap()
+        else {
+            panic!("expected CommandOutput::Text");
+        };
+        assert!(s.contains("Content-Length:"));
+        assert!(s.contains("Content-Type: text/html"));
+        assert!(s.contains("VFS-Path:"));
     }
 
     #[test]
@@ -542,38 +526,35 @@ mod tests {
     #[test]
     fn gemini_url_auto_prefix() {
         let (reg, mut vfs) = setup();
-        match exec(&reg, &mut vfs, "gemini geminispace.info").unwrap() {
-            CommandOutput::Text(s) => {
-                assert!(s.contains("gemini://geminispace.info"));
-            },
-            _ => panic!("expected text"),
-        }
+        let CommandOutput::Text(s) = exec(&reg, &mut vfs, "gemini geminispace.info").unwrap()
+        else {
+            panic!("expected CommandOutput::Text");
+        };
+        assert!(s.contains("gemini://geminispace.info"));
     }
 
     #[test]
     fn gemini_url_already_has_prefix() {
         let (reg, mut vfs) = setup();
-        match exec(&reg, &mut vfs, "gemini gemini://geminispace.info/").unwrap() {
-            CommandOutput::Text(s) => {
-                assert!(s.contains("gemini://geminispace.info/"));
-                // Should NOT double-prefix.
-                assert!(!s.contains("gemini://gemini://"));
-            },
-            _ => panic!("expected text"),
-        }
+        let CommandOutput::Text(s) =
+            exec(&reg, &mut vfs, "gemini gemini://geminispace.info/").unwrap()
+        else {
+            panic!("expected CommandOutput::Text");
+        };
+        assert!(s.contains("gemini://geminispace.info/"));
+        // Should NOT double-prefix.
+        assert!(!s.contains("gemini://gemini://"));
     }
 
     #[test]
     fn curl_delegates_to_fetch() {
         let (reg, mut vfs) = setup();
         // curl with no args should show fetch usage.
-        match exec(&reg, &mut vfs, "curl").unwrap() {
-            CommandOutput::Text(s) => {
-                assert!(s.contains("Usage"));
-                assert!(s.contains("fetch"));
-            },
-            _ => panic!("expected text"),
-        }
+        let CommandOutput::Text(s) = exec(&reg, &mut vfs, "curl").unwrap() else {
+            panic!("expected CommandOutput::Text");
+        };
+        assert!(s.contains("Usage"));
+        assert!(s.contains("fetch"));
     }
 
     #[test]
@@ -583,36 +564,36 @@ mod tests {
         vfs.mkdir("/sites/example.com").unwrap();
         vfs.write("/sites/example.com/page.html", b"<html>content</html>")
             .unwrap();
-        match exec(&reg, &mut vfs, "fetch https://example.com/page.html").unwrap() {
-            CommandOutput::Text(s) => {
-                assert!(s.contains("<html>content</html>"));
-            },
-            _ => panic!("expected text"),
-        }
+        let CommandOutput::Text(s) =
+            exec(&reg, &mut vfs, "fetch https://example.com/page.html").unwrap()
+        else {
+            panic!("expected CommandOutput::Text");
+        };
+        assert!(s.contains("<html>content</html>"));
     }
 
     #[test]
     fn fetch_url_not_in_vfs() {
         let (reg, mut vfs) = setup();
         // A non-HTTP(S) URL that is not in the VFS triggers the fallback message.
-        match exec(&reg, &mut vfs, "fetch gopher://missing.example.com").unwrap() {
-            CommandOutput::Text(s) => {
-                assert!(s.contains("not found in VFS"));
-            },
-            _ => panic!("expected text"),
-        }
+        let CommandOutput::Text(s) =
+            exec(&reg, &mut vfs, "fetch gopher://missing.example.com").unwrap()
+        else {
+            panic!("expected CommandOutput::Text");
+        };
+        assert!(s.contains("not found in VFS"));
     }
 
     #[test]
     fn fetch_https_without_tls_shows_error_page() {
         let (reg, mut vfs) = setup();
         // With tls: None, HTTPS URLs return the "HTTPS Required" error page.
-        match exec(&reg, &mut vfs, "fetch https://missing.example.com").unwrap() {
-            CommandOutput::Text(s) => {
-                assert!(s.contains("HTTPS Required"));
-            },
-            _ => panic!("expected text"),
-        }
+        let CommandOutput::Text(s) =
+            exec(&reg, &mut vfs, "fetch https://missing.example.com").unwrap()
+        else {
+            panic!("expected CommandOutput::Text");
+        };
+        assert!(s.contains("HTTPS Required"));
     }
 
     #[test]
@@ -639,31 +620,31 @@ mod tests {
     #[test]
     fn sandbox_on() {
         let (reg, mut vfs) = setup();
-        match exec(&reg, &mut vfs, "sandbox on").unwrap() {
-            CommandOutput::BrowserSandbox { enable } => assert!(enable),
-            _ => panic!("expected BrowserSandbox"),
-        }
+        let CommandOutput::BrowserSandbox { enable } = exec(&reg, &mut vfs, "sandbox on").unwrap()
+        else {
+            panic!("expected CommandOutput::BrowserSandbox");
+        };
+        assert!(enable);
     }
 
     #[test]
     fn sandbox_off() {
         let (reg, mut vfs) = setup();
-        match exec(&reg, &mut vfs, "sandbox off").unwrap() {
-            CommandOutput::BrowserSandbox { enable } => assert!(!enable),
-            _ => panic!("expected BrowserSandbox"),
-        }
+        let CommandOutput::BrowserSandbox { enable } = exec(&reg, &mut vfs, "sandbox off").unwrap()
+        else {
+            panic!("expected CommandOutput::BrowserSandbox");
+        };
+        assert!(!enable);
     }
 
     #[test]
     fn sandbox_no_args_shows_usage() {
         let (reg, mut vfs) = setup();
-        match exec(&reg, &mut vfs, "sandbox").unwrap() {
-            CommandOutput::Text(s) => {
-                assert!(s.contains("Usage"));
-                assert!(s.contains("sandbox"));
-            },
-            _ => panic!("expected text"),
-        }
+        let CommandOutput::Text(s) = exec(&reg, &mut vfs, "sandbox").unwrap() else {
+            panic!("expected CommandOutput::Text");
+        };
+        assert!(s.contains("Usage"));
+        assert!(s.contains("sandbox"));
     }
 
     #[test]
@@ -671,29 +652,29 @@ mod tests {
         let (reg, mut vfs) = setup();
         // fetch does not handle gemini:// URLs -- they fall through
         // to the "not found in VFS" message.
-        match exec(&reg, &mut vfs, "fetch gemini://geminispace.info/").unwrap() {
-            CommandOutput::Text(s) => {
-                assert!(
-                    s.contains("not found in VFS"),
-                    "expected VFS fallback message for gemini URL, got: {s}",
-                );
-            },
-            _ => panic!("expected text"),
-        }
+        let CommandOutput::Text(s) =
+            exec(&reg, &mut vfs, "fetch gemini://geminispace.info/").unwrap()
+        else {
+            panic!("expected CommandOutput::Text");
+        };
+        assert!(
+            s.contains("not found in VFS"),
+            "expected VFS fallback message for gemini URL, got: {s}",
+        );
     }
 
     #[test]
     fn curl_https_without_tls_shows_error_page() {
         let (reg, mut vfs) = setup();
         // curl delegates to fetch, which calls http_get with tls: None.
-        match exec(&reg, &mut vfs, "curl https://missing.example.com").unwrap() {
-            CommandOutput::Text(s) => {
-                assert!(
-                    s.contains("HTTPS Required"),
-                    "expected HTTPS Required page from curl, got: {s}",
-                );
-            },
-            _ => panic!("expected text"),
-        }
+        let CommandOutput::Text(s) =
+            exec(&reg, &mut vfs, "curl https://missing.example.com").unwrap()
+        else {
+            panic!("expected CommandOutput::Text");
+        };
+        assert!(
+            s.contains("HTTPS Required"),
+            "expected HTTPS Required page from curl, got: {s}",
+        );
     }
 }

@@ -276,6 +276,50 @@ impl Vfs for GameAssetVfs {
         Ok(())
     }
 
+    fn rename(&mut self, from: &str, to: &str) -> Result<()> {
+        let from = normalize(from);
+        let to = normalize(to);
+        if self.effective_entry(&from).is_none() {
+            return Err(OasisError::Vfs(format!("no such path: {from}")));
+        }
+        // Only allow rename if the source exists in the overlay layer.
+        // Base-layer-only entries cannot be renamed (they are immutable).
+        if !self.overlay.contains_key(&from) {
+            return Err(OasisError::Vfs(format!(
+                "cannot rename base-layer entry not in overlay: {from}"
+            )));
+        }
+        // Ensure destination parent exists.
+        let to_par = parent(&to);
+        if !self.effective_dir_exists(to_par) {
+            return Err(OasisError::Vfs(format!(
+                "parent directory does not exist: {to_par}"
+            )));
+        }
+        // Collect all overlay entries to move (source + children if directory).
+        let prefix = format!("{from}/");
+        let keys_to_move: Vec<String> = self
+            .overlay
+            .keys()
+            .filter(|k| *k == &from || k.starts_with(&prefix))
+            .cloned()
+            .collect();
+        for old_key in keys_to_move {
+            let new_key = if old_key == from {
+                to.clone()
+            } else {
+                format!("{to}{}", &old_key[from.len()..])
+            };
+            if let Some(node) = self.overlay.remove(&old_key) {
+                self.overlay.insert(new_key.clone(), node);
+            }
+            if let Some(perms) = self.permissions.remove(&old_key) {
+                self.permissions.insert(new_key, perms);
+            }
+        }
+        Ok(())
+    }
+
     fn exists(&self, path: &str) -> bool {
         let path = normalize(path);
         self.effective_entry(&path).is_some()
@@ -541,6 +585,52 @@ mod tests {
         .unwrap();
         assert!(vfs.write("/etc/config", b"hacked").is_err());
         assert_eq!(vfs.read("/etc/config").unwrap(), b"original");
+    }
+
+    #[test]
+    fn rename_overlay_file() {
+        let mut vfs = GameAssetVfs::new();
+        vfs.add_base_dir("/src");
+        vfs.add_base_dir("/dst");
+        vfs.write("/src/file.txt", b"player data").unwrap();
+        vfs.rename("/src/file.txt", "/dst/moved.txt").unwrap();
+        assert!(!vfs.exists("/src/file.txt"));
+        assert_eq!(vfs.read("/dst/moved.txt").unwrap(), b"player data");
+    }
+
+    #[test]
+    fn rename_base_only_file_fails() {
+        let mut vfs = GameAssetVfs::new();
+        vfs.add_base_dir("/src");
+        vfs.add_base_dir("/dst");
+        vfs.add_base_file("/src/base.txt", b"immutable");
+        assert!(vfs.rename("/src/base.txt", "/dst/moved.txt").is_err());
+    }
+
+    #[test]
+    fn rename_nonexistent_fails() {
+        let mut vfs = GameAssetVfs::new();
+        assert!(vfs.rename("/ghost", "/dest").is_err());
+    }
+
+    #[test]
+    fn rename_overlay_dir_moves_children() {
+        let mut vfs = GameAssetVfs::new();
+        vfs.mkdir("/old/sub").unwrap();
+        vfs.write("/old/sub/file.txt", b"data").unwrap();
+        vfs.rename("/old", "/new").unwrap();
+        assert!(!vfs.exists("/old"));
+        assert!(vfs.exists("/new"));
+        assert!(vfs.exists("/new/sub"));
+        assert_eq!(vfs.read("/new/sub/file.txt").unwrap(), b"data");
+    }
+
+    #[test]
+    fn rename_missing_dest_parent_fails() {
+        let mut vfs = GameAssetVfs::new();
+        vfs.mkdir("/src").unwrap();
+        vfs.write("/src/file.txt", b"data").unwrap();
+        assert!(vfs.rename("/src/file.txt", "/no/such/dir/file").is_err());
     }
 
     #[test]

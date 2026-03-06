@@ -2040,29 +2040,17 @@ mod tests {
     fn only_child_pseudo_class() {
         // Single child.
         let doc = make_doc(vec![(TagName::P, vec![])]);
-        assert!(match_pseudo_class(
-            &doc,
-            3,
-            match &doc.nodes[3].kind {
-                NodeKind::Element(e) => e,
-                _ => panic!(),
-            },
-            "only-child",
-            &ctx(),
-        ));
+        let NodeKind::Element(e) = &doc.nodes[3].kind else {
+            panic!("expected NodeKind::Element");
+        };
+        assert!(match_pseudo_class(&doc, 3, e, "only-child", &ctx()));
 
         // Multiple children.
         let doc2 = make_doc(vec![(TagName::P, vec![]), (TagName::Div, vec![])]);
-        assert!(!match_pseudo_class(
-            &doc2,
-            3,
-            match &doc2.nodes[3].kind {
-                NodeKind::Element(e) => e,
-                _ => panic!(),
-            },
-            "only-child",
-            &ctx(),
-        ));
+        let NodeKind::Element(e2) = &doc2.nodes[3].kind else {
+            panic!("expected NodeKind::Element");
+        };
+        assert!(!match_pseudo_class(&doc2, 3, e2, "only-child", &ctx()));
     }
 
     #[test]
@@ -2142,9 +2130,8 @@ mod tests {
             hover_node: Some(3),
             visited_urls: None,
         };
-        let elem = match &doc.nodes[3].kind {
-            NodeKind::Element(e) => e,
-            _ => panic!(),
+        let NodeKind::Element(elem) = &doc.nodes[3].kind else {
+            panic!("expected NodeKind::Element");
         };
         assert!(match_pseudo_class(&doc, 3, elem, "hover", &hctx));
         assert!(!match_pseudo_class(&doc, 3, elem, "hover", &ctx()));
@@ -2171,9 +2158,8 @@ mod tests {
             visited_urls: None,
         };
         // <div> (ancestor) should also match :hover.
-        let div_elem = match &doc.nodes[3].kind {
-            NodeKind::Element(e) => e,
-            _ => panic!(),
+        let NodeKind::Element(div_elem) = &doc.nodes[3].kind else {
+            panic!("expected NodeKind::Element");
         };
         assert!(match_pseudo_class(&doc, 3, div_elem, "hover", &hctx));
     }
@@ -2194,9 +2180,8 @@ mod tests {
             hover_node: None,
             visited_urls: Some(&visited),
         };
-        let elem = match &doc.nodes[3].kind {
-            NodeKind::Element(e) => e,
-            _ => panic!(),
+        let NodeKind::Element(elem) = &doc.nodes[3].kind else {
+            panic!("expected NodeKind::Element");
         };
         assert!(match_pseudo_class(&doc, 3, elem, "visited", &vctx));
         assert!(!match_pseudo_class(&doc, 3, elem, "link", &vctx));
@@ -2217,9 +2202,8 @@ mod tests {
             hover_node: None,
             visited_urls: Some(&visited),
         };
-        let elem = match &doc.nodes[3].kind {
-            NodeKind::Element(e) => e,
-            _ => panic!(),
+        let NodeKind::Element(elem) = &doc.nodes[3].kind else {
+            panic!("expected NodeKind::Element");
         };
         assert!(match_pseudo_class(&doc, 3, elem, "link", &vctx));
         assert!(!match_pseudo_class(&doc, 3, elem, "visited", &vctx));
@@ -2270,17 +2254,15 @@ mod tests {
     #[test]
     fn root_pseudo_class_matches_html() {
         let doc = make_doc(vec![(TagName::P, vec![])]);
-        let html_elem = match &doc.nodes[1].kind {
-            NodeKind::Element(e) => e,
-            _ => panic!("node 1 should be <html>"),
+        let NodeKind::Element(html_elem) = &doc.nodes[1].kind else {
+            panic!("node 1 should be <html>");
         };
         // <html> (node 1) has parent Document (node 0) → matches :root.
         assert!(match_pseudo_class(&doc, 1, html_elem, "root", &ctx()));
 
         // <body> (node 2) has parent <html> (element) → does NOT match :root.
-        let body_elem = match &doc.nodes[2].kind {
-            NodeKind::Element(e) => e,
-            _ => panic!("node 2 should be <body>"),
+        let NodeKind::Element(body_elem) = &doc.nodes[2].kind else {
+            panic!("node 2 should be <body>");
         };
         assert!(!match_pseudo_class(&doc, 2, body_elem, "root", &ctx()));
     }

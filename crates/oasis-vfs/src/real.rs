@@ -141,6 +141,16 @@ impl Vfs for RealVfs {
         Ok(())
     }
 
+    fn rename(&mut self, from: &str, to: &str) -> Result<()> {
+        let real_from = self.resolve(from)?;
+        if !real_from.exists() {
+            return Err(OasisError::Vfs(format!("no such path: {from}")));
+        }
+        let real_to = self.resolve(to)?;
+        fs::rename(&real_from, &real_to)?;
+        Ok(())
+    }
+
     fn exists(&self, path: &str) -> bool {
         self.resolve(path).map(|p| p.exists()).unwrap_or(false)
     }
@@ -273,6 +283,41 @@ mod tests {
     fn nonexistent_root_fails() {
         let result = RealVfs::new(std::path::Path::new("/nonexistent_oasis_test_dir"));
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn rename_file() {
+        let (_dir, mut vfs) = temp_vfs();
+        vfs.mkdir("/src").unwrap();
+        vfs.mkdir("/dst").unwrap();
+        vfs.write("/src/file.txt", b"hello").unwrap();
+        vfs.rename("/src/file.txt", "/dst/moved.txt").unwrap();
+        assert!(!vfs.exists("/src/file.txt"));
+        assert_eq!(vfs.read("/dst/moved.txt").unwrap(), b"hello");
+    }
+
+    #[test]
+    fn rename_directory() {
+        let (_dir, mut vfs) = temp_vfs();
+        vfs.mkdir("/old").unwrap();
+        vfs.write("/old/file.txt", b"data").unwrap();
+        vfs.rename("/old", "/new").unwrap();
+        assert!(!vfs.exists("/old"));
+        assert!(vfs.exists("/new"));
+        assert_eq!(vfs.read("/new/file.txt").unwrap(), b"data");
+    }
+
+    #[test]
+    fn rename_nonexistent_fails() {
+        let (_dir, mut vfs) = temp_vfs();
+        assert!(vfs.rename("/ghost", "/dest").is_err());
+    }
+
+    #[test]
+    fn rename_path_traversal_blocked() {
+        let (_dir, mut vfs) = temp_vfs();
+        vfs.write("/file.txt", b"data").unwrap();
+        assert!(vfs.rename("/file.txt", "/../../escaped").is_err());
     }
 
     #[cfg(unix)]

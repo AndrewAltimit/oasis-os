@@ -19,6 +19,15 @@ javascript = ["oasis-browser/javascript"]
 test-data = []
 
 [dependencies]
+oasis-app-core = { workspace = true }
+oasis-app-games = { workspace = true }
+oasis-app-paint = { workspace = true }
+oasis-app-clock = { workspace = true }
+oasis-app-text-editor = { workspace = true }
+oasis-app-calculator = { workspace = true }
+oasis-app-media = { workspace = true }
+oasis-app-tv-guide = { workspace = true }
+oasis-app-radio = { workspace = true }
 oasis-types = { workspace = true }
 oasis-vfs = { workspace = true }
 oasis-platform = { workspace = true }

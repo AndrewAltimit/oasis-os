@@ -6,9 +6,9 @@
 //! - `tv tune <channel>` — tune to a channel (writes IPC request)
 //! - `tv guide`          — show a text-mode schedule grid
 
-use crate::apps::tv_guide::{self, ChannelConfig};
 use crate::error::{OasisError, Result};
 use crate::terminal::{Command, CommandOutput, Environment};
+use oasis_app_tv_guide::{self as tv_guide, ChannelConfig};
 
 /// Load channel config from VFS.
 fn load_channels(env: &mut Environment<'_>) -> Result<ChannelConfig> {
@@ -176,7 +176,7 @@ mod tests {
         vfs.mkdir("/var/tv/cache").unwrap();
         vfs.write(
             "/etc/tv/channels.toml",
-            crate::apps::tv_guide::channel::DEFAULT_CHANNELS_TOML.as_bytes(),
+            oasis_app_tv_guide::channel::DEFAULT_CHANNELS_TOML.as_bytes(),
         )
         .unwrap();
 
@@ -201,35 +201,31 @@ mod tests {
     #[test]
     fn tv_list_shows_channels() {
         let (reg, mut vfs) = setup_tv_env();
-        match exec(&reg, &mut vfs, "tv list").unwrap() {
-            CommandOutput::Text(s) => {
-                assert!(s.contains("RETRO"), "should contain RETRO call sign");
-                assert!(s.contains("TECH"), "should contain TECH call sign");
-                assert!(s.contains("TV Channels:"));
-            },
-            _ => panic!("expected text"),
-        }
+        let CommandOutput::Text(s) = exec(&reg, &mut vfs, "tv list").unwrap() else {
+            panic!("expected CommandOutput::Text");
+        };
+        assert!(s.contains("RETRO"), "should contain RETRO call sign");
+        assert!(s.contains("TECH"), "should contain TECH call sign");
+        assert!(s.contains("TV Channels:"));
     }
 
     #[test]
     fn tv_default_is_list() {
         let (reg, mut vfs) = setup_tv_env();
-        match exec(&reg, &mut vfs, "tv").unwrap() {
-            CommandOutput::Text(s) => assert!(s.contains("TV Channels:")),
-            _ => panic!("expected text"),
-        }
+        let CommandOutput::Text(s) = exec(&reg, &mut vfs, "tv").unwrap() else {
+            panic!("expected CommandOutput::Text");
+        };
+        assert!(s.contains("TV Channels:"));
     }
 
     #[test]
     fn tv_now_shows_channels() {
         let (reg, mut vfs) = setup_tv_env();
-        match exec(&reg, &mut vfs, "tv now").unwrap() {
-            CommandOutput::Text(s) => {
-                assert!(s.contains("Now Playing"));
-                assert!(s.contains("RETRO"));
-            },
-            _ => panic!("expected text"),
-        }
+        let CommandOutput::Text(s) = exec(&reg, &mut vfs, "tv now").unwrap() else {
+            panic!("expected CommandOutput::Text");
+        };
+        assert!(s.contains("Now Playing"));
+        assert!(s.contains("RETRO"));
     }
 
     #[test]
@@ -253,13 +249,11 @@ mod tests {
     #[test]
     fn tv_tune_writes_request() {
         let (reg, mut vfs) = setup_tv_env();
-        match exec(&reg, &mut vfs, "tv tune 2").unwrap() {
-            CommandOutput::Text(s) => {
-                assert!(s.contains("Tuning"));
-                assert!(s.contains("RETRO"));
-            },
-            _ => panic!("expected text"),
-        }
+        let CommandOutput::Text(s) = exec(&reg, &mut vfs, "tv tune 2").unwrap() else {
+            panic!("expected CommandOutput::Text");
+        };
+        assert!(s.contains("Tuning"));
+        assert!(s.contains("RETRO"));
         let data = vfs.read("/var/tv/request").unwrap();
         assert_eq!(String::from_utf8_lossy(&data), "tune_ch:2");
     }
@@ -267,14 +261,12 @@ mod tests {
     #[test]
     fn tv_guide_shows_channels() {
         let (reg, mut vfs) = setup_tv_env();
-        match exec(&reg, &mut vfs, "tv guide").unwrap() {
-            CommandOutput::Text(s) => {
-                assert!(s.contains("TV Guide"));
-                assert!(s.contains("RETRO"));
-                assert!(s.contains("tv tune"));
-            },
-            _ => panic!("expected text"),
-        }
+        let CommandOutput::Text(s) = exec(&reg, &mut vfs, "tv guide").unwrap() else {
+            panic!("expected CommandOutput::Text");
+        };
+        assert!(s.contains("TV Guide"));
+        assert!(s.contains("RETRO"));
+        assert!(s.contains("tv tune"));
     }
 
     #[test]

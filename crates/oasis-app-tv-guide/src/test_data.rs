@@ -3,8 +3,8 @@
 //! Provides deterministic test fixtures so TV Guide tests don't need network
 //! access. Gated behind `#[cfg(any(test, feature = "test-data"))]`.
 
-use super::catalog::{ChannelCatalog, VideoEpisode};
-use super::channel::Channel;
+use crate::catalog::{ChannelCatalog, VideoEpisode};
+use crate::channel::Channel;
 
 /// Create a mock channel catalog with synthetic episodes.
 ///

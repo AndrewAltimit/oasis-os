@@ -51,7 +51,7 @@ Commands return a `CommandOutput` enum:
 | `ListenToggle { port }` | Signal to start/stop remote terminal |
 | `RemoteConnect { address, port, psk }` | Signal to connect to remote host |
 | `SkinSwap { name }` | Signal to swap the active skin |
-| `FtpToggle { port }` | Signal to start/stop FTP server |
+| `FtpToggle { port, password }` | Signal to start/stop FTP server (optional password auth) |
 | `BrowserSandbox { enable }` | Signal to toggle browser sandbox mode |
 
 Use `Text` for most commands. The signal variants (`ListenToggle`, `SkinSwap`, etc.) are intercepted by the app layer to trigger system-level actions.

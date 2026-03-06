@@ -12,18 +12,15 @@
 
 use std::any::Any;
 
-use crate::active_theme::ActiveTheme;
-use crate::backend::SdiBackend;
-use crate::input::Button;
-use crate::sdi::SdiRegistry;
-use crate::vfs::Vfs;
-
-use super::ContentState;
-use super::app_trait::App;
-use super::file_manager::{
+use oasis_app_core::render::{
     draw_content_windowed, hide_app_sdi, render_app_chrome, render_content_sdi,
 };
-use super::runner::AppAction;
+use oasis_app_core::{App, AppAction, ContentState};
+use oasis_sdi::SdiRegistry;
+use oasis_skin::ActiveTheme;
+use oasis_types::backend::SdiBackend;
+use oasis_types::input::Button;
+use oasis_vfs::Vfs;
 
 // ---------------------------------------------------------------
 // ClockMode
@@ -967,7 +964,7 @@ impl App for ClockApp {
         ch: u32,
         backend: &mut dyn SdiBackend,
         at: &ActiveTheme,
-    ) -> crate::error::Result<()> {
+    ) -> oasis_types::error::Result<()> {
         draw_content_windowed(&self.content, cx, cy, cw, ch, backend, at)
     }
 
@@ -995,7 +992,7 @@ impl App for ClockApp {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::vfs::MemoryVfs;
+    use oasis_vfs::MemoryVfs;
 
     fn make_vfs() -> MemoryVfs {
         MemoryVfs::new()

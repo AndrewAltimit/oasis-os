@@ -11,12 +11,12 @@ use crate::input::Button;
 use crate::sdi::SdiRegistry;
 use crate::vfs::Vfs;
 
+use super::AppAction;
 use super::ContentState;
 use super::app_trait::App;
 use super::file_manager::{
     draw_content_windowed, hide_app_sdi, render_app_chrome, render_content_sdi,
 };
-use super::runner::AppAction;
 
 /// A simple static-content app that implements the `App` trait.
 ///

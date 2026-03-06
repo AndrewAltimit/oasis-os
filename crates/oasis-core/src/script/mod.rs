@@ -428,22 +428,20 @@ mod tests {
         let (reg, mut vfs) = setup();
         vfs.write("/tmp/demo.sh", b"echo hello\necho world\n")
             .unwrap();
-        match exec(&reg, &mut vfs, "run /tmp/demo.sh").unwrap() {
-            CommandOutput::Text(s) => {
-                assert!(s.contains("hello"));
-                assert!(s.contains("world"));
-            },
-            _ => panic!("expected text"),
-        }
+        let CommandOutput::Text(s) = exec(&reg, &mut vfs, "run /tmp/demo.sh").unwrap() else {
+            panic!("expected CommandOutput::Text");
+        };
+        assert!(s.contains("hello"));
+        assert!(s.contains("world"));
     }
 
     #[test]
     fn cron_list_empty() {
         let (reg, mut vfs) = setup();
-        match exec(&reg, &mut vfs, "cron list").unwrap() {
-            CommandOutput::Text(s) => assert!(s.contains("no cron")),
-            _ => panic!("expected text"),
-        }
+        let CommandOutput::Text(s) = exec(&reg, &mut vfs, "cron list").unwrap() else {
+            panic!("expected CommandOutput::Text");
+        };
+        assert!(s.contains("no cron"));
     }
 
     #[test]
@@ -451,13 +449,11 @@ mod tests {
         let (reg, mut vfs) = setup();
         vfs.write("/tmp/job.sh", b"echo cron").unwrap();
         exec(&reg, &mut vfs, "cron add myjob /tmp/job.sh").unwrap();
-        match exec(&reg, &mut vfs, "cron list").unwrap() {
-            CommandOutput::Text(s) => {
-                assert!(s.contains("myjob"));
-                assert!(s.contains("/tmp/job.sh"));
-            },
-            _ => panic!("expected text"),
-        }
+        let CommandOutput::Text(s) = exec(&reg, &mut vfs, "cron list").unwrap() else {
+            panic!("expected CommandOutput::Text");
+        };
+        assert!(s.contains("myjob"));
+        assert!(s.contains("/tmp/job.sh"));
     }
 
     #[test]
@@ -465,10 +461,10 @@ mod tests {
         let (reg, mut vfs) = setup();
         exec(&reg, &mut vfs, "cron add myjob /tmp/job.sh").unwrap();
         exec(&reg, &mut vfs, "cron remove myjob").unwrap();
-        match exec(&reg, &mut vfs, "cron list").unwrap() {
-            CommandOutput::Text(s) => assert!(s.contains("no cron")),
-            _ => panic!("expected text"),
-        }
+        let CommandOutput::Text(s) = exec(&reg, &mut vfs, "cron list").unwrap() else {
+            panic!("expected CommandOutput::Text");
+        };
+        assert!(s.contains("no cron"));
     }
 
     #[test]
@@ -480,10 +476,10 @@ mod tests {
     #[test]
     fn startup_show_empty() {
         let (reg, mut vfs) = setup();
-        match exec(&reg, &mut vfs, "startup show").unwrap() {
-            CommandOutput::Text(s) => assert!(s.contains("no startup")),
-            _ => panic!("expected text"),
-        }
+        let CommandOutput::Text(s) = exec(&reg, &mut vfs, "startup show").unwrap() else {
+            panic!("expected CommandOutput::Text");
+        };
+        assert!(s.contains("no startup"));
     }
 
     #[test]
@@ -491,13 +487,11 @@ mod tests {
         let (reg, mut vfs) = setup();
         vfs.write("/tmp/init.sh", b"echo booting\nstatus").unwrap();
         exec(&reg, &mut vfs, "startup set /tmp/init.sh").unwrap();
-        match exec(&reg, &mut vfs, "startup show").unwrap() {
-            CommandOutput::Text(s) => {
-                assert!(s.contains("echo booting"));
-                assert!(s.contains("status"));
-            },
-            _ => panic!("expected text"),
-        }
+        let CommandOutput::Text(s) = exec(&reg, &mut vfs, "startup show").unwrap() else {
+            panic!("expected CommandOutput::Text");
+        };
+        assert!(s.contains("echo booting"));
+        assert!(s.contains("status"));
     }
 
     #[test]
@@ -506,10 +500,10 @@ mod tests {
         vfs.write("/tmp/init.sh", b"echo boot").unwrap();
         exec(&reg, &mut vfs, "startup set /tmp/init.sh").unwrap();
         exec(&reg, &mut vfs, "startup clear").unwrap();
-        match exec(&reg, &mut vfs, "startup show").unwrap() {
-            CommandOutput::Text(s) => assert!(s.contains("no startup")),
-            _ => panic!("expected text"),
-        }
+        let CommandOutput::Text(s) = exec(&reg, &mut vfs, "startup show").unwrap() else {
+            panic!("expected CommandOutput::Text");
+        };
+        assert!(s.contains("no startup"));
     }
 
     #[test]

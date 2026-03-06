@@ -476,9 +476,8 @@ impl SdiCore for PspBackend {
         Ok(())
     }
 
-    fn measure_text(&self, text: &str, _font_size: u16) -> u32 {
-        // PSP bitmap font is fixed 8×8 (no scaling support yet).
-        text.len() as u32 * 8
+    fn measure_text(&self, text: &str, font_size: u16) -> u32 {
+        oasis_core::backend::bitmap_measure_text(text, font_size)
     }
 
     fn read_pixels(&self, _x: i32, _y: i32, _w: u32, _h: u32) -> OasisResult<Vec<u8>> {
