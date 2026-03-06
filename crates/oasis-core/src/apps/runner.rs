@@ -652,7 +652,7 @@ impl AppRunner {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::apps::file_viewer::{view_audio_file, view_generic_file, view_image_file};
+    use crate::apps::file_viewer::{view_audio_file, view_image_file};
     use crate::backend::Color;
     use crate::dashboard::AppEntry;
     use crate::sdi::SdiRegistry;

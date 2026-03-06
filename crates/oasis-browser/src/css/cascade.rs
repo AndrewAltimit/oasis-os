@@ -2564,7 +2564,6 @@ mod tests {
     }
 
     mod prop {
-        use super::*;
         use proptest::prelude::*;
 
         proptest! {

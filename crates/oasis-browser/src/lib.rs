@@ -434,7 +434,7 @@ impl BrowserWidget {
 mod tests {
     use super::*;
     use crate::test_utils::MockBackend;
-    use oasis_types::input::{Button, InputEvent, Trigger};
+    use oasis_types::input::{Button, InputEvent};
     use oasis_vfs::{MemoryVfs, Vfs};
 
     // ---------------------------------------------------------------
@@ -2596,7 +2596,7 @@ mod tests {
              </body></html>",
             elements.join("")
         );
-        let vfs = MemoryVfs::new();
+        let _vfs = MemoryVfs::new();
         let config = BrowserConfig::default();
         let mut browser = BrowserWidget::new(config);
         browser.load_html(&html, "file:///test.html");
