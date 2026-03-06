@@ -1723,21 +1723,42 @@ fn parse_grid_template_str(s: &str, _parent_font_size: f32) -> Vec<GridTrackSize
         return Vec::new();
     }
     let mut tracks = Vec::new();
-    if let Some(rest) = s.strip_prefix("repeat(")
-        && let Some(inner) = rest.strip_suffix(')')
-        && let Some((cs, vs)) = inner.split_once(',')
-        && let Ok(count) = cs.trim().parse::<usize>()
-    {
-        if let Some(track) = parse_single_track_str(vs.trim()) {
-            for _ in 0..count {
+    let mut remainder = s;
+    while !remainder.is_empty() {
+        remainder = remainder.trim_start();
+        if remainder.starts_with("repeat(") {
+            // Find the matching closing paren for this repeat() block.
+            if let Some(close) = remainder.find(')') {
+                let inner = &remainder["repeat(".len()..close];
+                if let Some((cs, vs)) = inner.split_once(',')
+                    && let Ok(count) = cs.trim().parse::<usize>()
+                    && let Some(track) = parse_single_track_str(vs.trim())
+                {
+                    for _ in 0..count {
+                        tracks.push(track);
+                    }
+                }
+                remainder = &remainder[close + 1..];
+            } else {
+                break;
+            }
+        } else {
+            // Take the next whitespace-delimited token.
+            let token = match remainder.find(char::is_whitespace) {
+                Some(pos) => {
+                    let t = &remainder[..pos];
+                    remainder = &remainder[pos..];
+                    t
+                },
+                None => {
+                    let t = remainder;
+                    remainder = "";
+                    t
+                },
+            };
+            if let Some(track) = parse_single_track_str(token) {
                 tracks.push(track);
             }
-        }
-        return tracks;
-    }
-    for token in s.split_whitespace() {
-        if let Some(track) = parse_single_track_str(token) {
-            tracks.push(track);
         }
     }
     tracks
@@ -2255,5 +2276,35 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn parse_grid_template_compound_repeat() {
+        // Single repeat block (already worked).
+        let tracks = parse_grid_template_str("repeat(3, 1fr)", 16.0);
+        assert_eq!(tracks, vec![GridTrackSize::Fr(1.0); 3]);
+
+        // Compound: repeat() followed by a fixed track.
+        let tracks = parse_grid_template_str("repeat(3, 1fr) 20px", 16.0);
+        assert_eq!(
+            tracks,
+            vec![
+                GridTrackSize::Fr(1.0),
+                GridTrackSize::Fr(1.0),
+                GridTrackSize::Fr(1.0),
+                GridTrackSize::Px(20.0),
+            ]
+        );
+
+        // Fixed track followed by repeat().
+        let tracks = parse_grid_template_str("100px repeat(2, auto)", 16.0);
+        assert_eq!(
+            tracks,
+            vec![GridTrackSize::Px(100.0), GridTrackSize::Auto, GridTrackSize::Auto]
+        );
+
+        // "none" returns empty.
+        let tracks = parse_grid_template_str("none", 16.0);
+        assert!(tracks.is_empty());
     }
 }
