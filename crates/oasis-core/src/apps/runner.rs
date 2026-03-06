@@ -7,7 +7,7 @@ use crate::input::Button;
 use crate::vfs::Vfs;
 
 use super::file_viewer::list_directory;
-use super::tv_guide::guide::TvGuideState;
+use oasis_app_tv_guide::guide::TvGuideState;
 
 use super::app_trait::AppAction;
 
@@ -479,8 +479,8 @@ impl AppRunner {
 
     /// Initialize the TV Guide app from VFS channel config.
     fn init_tv_guide(&mut self, vfs: &dyn Vfs, at: &ActiveTheme) {
-        use super::tv_guide::TV_CHANNELS_PATH;
-        use super::tv_guide::channel::{ChannelConfig, DEFAULT_CHANNELS_TOML};
+        use oasis_app_tv_guide::TV_CHANNELS_PATH;
+        use oasis_app_tv_guide::channel::{ChannelConfig, DEFAULT_CHANNELS_TOML};
 
         let config = if vfs.exists(TV_CHANNELS_PATH) {
             log::debug!("TV: loading channel config from VFS");
@@ -504,7 +504,7 @@ impl AppRunner {
 
     /// Handle input for the TV Guide app.
     fn handle_tv_guide_input(&mut self, button: &Button) -> AppAction {
-        use super::tv_guide::TV_REQUEST_PATH;
+        use oasis_app_tv_guide::TV_REQUEST_PATH;
 
         let Some(ref mut guide) = self.tv_guide else {
             return AppAction::None;
@@ -540,7 +540,8 @@ impl AppRunner {
             Button::Confirm => {
                 let tuned = if let Some(req) = guide.tune() {
                     // Build direct video URL and pass via VFS IPC.
-                    let url = super::tv_guide::catalog::ChannelCatalog::download_url(&req.episode);
+                    let url =
+                        oasis_app_tv_guide::catalog::ChannelCatalog::download_url(&req.episode);
                     let data = format!("tune_url {url} {}", req.seek_secs);
                     log::info!("TV: tune CH{} -> {}", req.channel_index, req.episode.title,);
                     self.pending_vfs_request = Some((TV_REQUEST_PATH.to_string(), data));
@@ -587,8 +588,8 @@ impl AppRunner {
             && let Some(ref mut guide) = self.tv_guide
         {
             if let Some(req) = guide.handle_click(lx, ly, cw, ch, fullscreen) {
-                use super::tv_guide::TV_REQUEST_PATH;
-                let url = super::tv_guide::catalog::ChannelCatalog::download_url(&req.episode);
+                use oasis_app_tv_guide::TV_REQUEST_PATH;
+                let url = oasis_app_tv_guide::catalog::ChannelCatalog::download_url(&req.episode);
                 let data = format!("tune_url {url} {}", req.seek_secs);
                 log::info!(
                     "TV: click-tune CH{} -> {}",
@@ -1229,7 +1230,7 @@ mod tests {
 
     #[test]
     fn tv_guide_launch_and_catalog_inject() {
-        use crate::apps::tv_guide::catalog::{ChannelCatalog, VideoEpisode};
+        use oasis_app_tv_guide::catalog::{ChannelCatalog, VideoEpisode};
 
         let vfs = setup_vfs();
         let mut runner = AppRunner::launch(&make_app("TV Guide"), &vfs);
@@ -1283,7 +1284,7 @@ mod tests {
 
     #[test]
     fn tv_guide_tune_with_catalog() {
-        use crate::apps::tv_guide::catalog::{ChannelCatalog, VideoEpisode};
+        use oasis_app_tv_guide::catalog::{ChannelCatalog, VideoEpisode};
 
         let vfs = setup_vfs();
         let mut runner = AppRunner::launch(&make_app("TV Guide"), &vfs);
@@ -1343,7 +1344,7 @@ mod tests {
         filename: &str,
         title: &str,
     ) -> (AppRunner, crate::vfs::MemoryVfs) {
-        use crate::apps::tv_guide::catalog::{ChannelCatalog, VideoEpisode};
+        use oasis_app_tv_guide::catalog::{ChannelCatalog, VideoEpisode};
 
         let vfs = setup_vfs();
         let mut runner = AppRunner::launch(&make_app("TV Guide"), &vfs);
@@ -1440,7 +1441,7 @@ mod tests {
 
     #[test]
     fn tv_tune_navigate_then_tune_second_channel() {
-        use crate::apps::tv_guide::catalog::{ChannelCatalog, VideoEpisode};
+        use oasis_app_tv_guide::catalog::{ChannelCatalog, VideoEpisode};
 
         let vfs = setup_vfs();
         let mut runner = AppRunner::launch(&make_app("TV Guide"), &vfs);
@@ -1531,7 +1532,7 @@ mod tests {
         let guide = runner.tv_guide_state().unwrap();
         guide.fetch_attempted = true;
         assert!(!guide.catalogs.is_empty(), "need channels for this test");
-        guide.catalogs[0] = Some(crate::apps::tv_guide::catalog::ChannelCatalog::new(0));
+        guide.catalogs[0] = Some(oasis_app_tv_guide::catalog::ChannelCatalog::new(0));
 
         // Press Select to retry — should clear all catalogs.
         runner.handle_input(&Button::Select, &vfs);
@@ -1566,7 +1567,7 @@ mod tests {
 
     #[test]
     fn tv_tune_request_path_matches_constant() {
-        use crate::apps::tv_guide::TV_REQUEST_PATH;
+        use oasis_app_tv_guide::TV_REQUEST_PATH;
 
         let (mut runner, vfs) = setup_tv_guide_with_catalog("path-test", "ep.mp4", "Path Test");
 

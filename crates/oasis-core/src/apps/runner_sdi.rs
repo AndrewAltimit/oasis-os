@@ -6,7 +6,7 @@ use crate::ui::flex;
 
 use super::layout_calc::AppLayout;
 use super::runner::AppRunner;
-use super::tv_guide::guide::TvGuideState;
+use oasis_app_tv_guide::guide::TvGuideState;
 
 impl AppRunner {
     /// Render the app screen as SDI objects (single-display-interface mode).

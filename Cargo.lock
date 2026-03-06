@@ -732,6 +732,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "oasis-app-tv-guide"
+version = "1.0.0"
+dependencies = [
+ "log",
+ "oasis-app-core",
+ "oasis-audio",
+ "oasis-sdi",
+ "oasis-skin",
+ "oasis-types",
+ "oasis-vfs",
+ "serde",
+ "serde_json",
+ "toml",
+]
+
+[[package]]
 name = "oasis-audio"
 version = "1.0.0"
 dependencies = [
@@ -822,6 +838,7 @@ dependencies = [
  "oasis-app-media",
  "oasis-app-paint",
  "oasis-app-text-editor",
+ "oasis-app-tv-guide",
  "oasis-audio",
  "oasis-browser",
  "oasis-net",

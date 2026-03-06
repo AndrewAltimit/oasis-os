@@ -14,7 +14,9 @@ pub mod layout_calc;
 mod runner;
 mod runner_sdi;
 pub mod simple_app;
-pub mod tv_guide;
 
 pub use app_trait::{App, AppAction, ContentState};
 pub use runner::AppRunner;
+
+/// Re-export TV Guide crate for backwards compatibility with external crates.
+pub use oasis_app_tv_guide as tv_guide;

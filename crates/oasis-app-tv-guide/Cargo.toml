@@ -1,0 +1,26 @@
+[package]
+name = "oasis-app-tv-guide"
+description = "TV Guide application for OASIS_OS: EPG grid with Internet Archive catalog"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[features]
+test-data = []
+
+[dependencies]
+oasis-app-core = { workspace = true }
+oasis-types = { workspace = true }
+oasis-sdi = { workspace = true }
+oasis-skin = { workspace = true }
+oasis-vfs = { workspace = true }
+oasis-audio = { workspace = true }
+log = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+toml = { workspace = true }
+
+[lints]
+workspace = true

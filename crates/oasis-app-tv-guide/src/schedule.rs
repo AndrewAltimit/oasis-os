@@ -4,7 +4,7 @@
 //! episode is playing. The schedule is deterministic: same catalog + same
 //! timestamp = same result, regardless of when the app was started.
 
-use super::catalog::{ChannelCatalog, VideoEpisode};
+use crate::catalog::{ChannelCatalog, VideoEpisode};
 
 /// A scheduled time slot — what's playing and when.
 #[derive(Debug, Clone)]

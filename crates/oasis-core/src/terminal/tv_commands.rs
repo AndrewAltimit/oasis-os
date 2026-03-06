@@ -6,9 +6,9 @@
 //! - `tv tune <channel>` — tune to a channel (writes IPC request)
 //! - `tv guide`          — show a text-mode schedule grid
 
-use crate::apps::tv_guide::{self, ChannelConfig};
 use crate::error::{OasisError, Result};
 use crate::terminal::{Command, CommandOutput, Environment};
+use oasis_app_tv_guide::{self as tv_guide, ChannelConfig};
 
 /// Load channel config from VFS.
 fn load_channels(env: &mut Environment<'_>) -> Result<ChannelConfig> {
@@ -176,7 +176,7 @@ mod tests {
         vfs.mkdir("/var/tv/cache").unwrap();
         vfs.write(
             "/etc/tv/channels.toml",
-            crate::apps::tv_guide::channel::DEFAULT_CHANNELS_TOML.as_bytes(),
+            oasis_app_tv_guide::channel::DEFAULT_CHANNELS_TOML.as_bytes(),
         )
         .unwrap();
 

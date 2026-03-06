@@ -20,6 +20,7 @@ members = [
     "crates/oasis-app-text-editor",
     "crates/oasis-app-calculator",
     "crates/oasis-app-media",
+    "crates/oasis-app-tv-guide",
     "crates/oasis-core",
     "crates/oasis-backend-sdl",
     "crates/oasis-backend-ue5",
@@ -126,6 +127,7 @@ oasis-app-clock = { path = "crates/oasis-app-clock" }
 oasis-app-text-editor = { path = "crates/oasis-app-text-editor" }
 oasis-app-calculator = { path = "crates/oasis-app-calculator" }
 oasis-app-media = { path = "crates/oasis-app-media" }
+oasis-app-tv-guide = { path = "crates/oasis-app-tv-guide" }
 oasis-core = { path = "crates/oasis-core", default-features = false }
 oasis-backend-ue5 = { path = "crates/oasis-backend-ue5" }
 oasis-backend-wasm = { path = "crates/oasis-backend-wasm" }
