@@ -1464,8 +1464,9 @@ fn psp_main() {
                 InputEvent::ButtonPress(Button::Cancel)
                     if classic_view == ClassicView::TvGuide =>
                 {
-                    if tv_tuned.is_some() {
-                        // Untune: stop video + audio.
+                    if tv_tuned.is_some() || tv_downloading {
+                        // Untune: stop video + audio + cancel download.
+                        oasis_backend_psp::threading::cancel_video_download();
                         oasis_backend_psp::video::send_video_cmd(
                             oasis_backend_psp::video::VideoCmd::Stop,
                         );

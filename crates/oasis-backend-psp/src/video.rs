@@ -846,6 +846,18 @@ fn play_mp4(path: &str, seek_secs: u64) -> bool {
 fn play_stream() -> bool {
     vlog("[VIDEO] play_stream: starting streaming decode (audio-only)");
 
+    // Drain stale commands that may have been queued during moov buffering
+    // (e.g., user pressed Cancel while I/O thread was still downloading).
+    // Without this, a stale Stop command would immediately exit the loop.
+    while let Some(cmd) = VIDEO_CMD_QUEUE.pop() {
+        if matches!(cmd, VideoCmd::Shutdown) {
+            VIDEO_PLAYING.store(false, Ordering::Relaxed);
+            vlog("[VIDEO] play_stream: shutdown during drain");
+            return true;
+        }
+        vlog("[VIDEO] play_stream: drained stale command");
+    }
+
     // Skip H.264 hardware decoder init for streaming mode.
     // The I/O thread skips all video samples (audio-only streaming),
     // so initializing the ME coprocessor is unnecessary and can cause

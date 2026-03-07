@@ -49,6 +49,19 @@ static RADIO_BUFFERING: AtomicBool = AtomicBool::new(false);
 static RADIO_META_QUEUE: SpscQueue<String, 4> = SpscQueue::new();
 
 // ---------------------------------------------------------------------------
+// Video download cancellation flag
+// ---------------------------------------------------------------------------
+
+/// Set by main thread when the user cancels a download (Circle press).
+/// Checked by I/O thread during moov buffering and streaming to abort early.
+static DOWNLOAD_CANCEL: AtomicBool = AtomicBool::new(false);
+
+/// Request cancellation of the current video download.
+pub fn cancel_video_download() {
+    DOWNLOAD_CANCEL.store(true, Ordering::Release);
+}
+
+// ---------------------------------------------------------------------------
 // Audio commands
 // ---------------------------------------------------------------------------
 
@@ -1604,6 +1617,9 @@ fn handle_video_download(url: String, _dest: String, tag: u32) {
 
     io_log(&format!("[IO-DL] starting stream: {url}"));
 
+    // Clear any previous cancellation flag.
+    DOWNLOAD_CANCEL.store(false, Ordering::Release);
+
     if let Err(e) = crate::network::ensure_net_init_pub() {
         let _ = IO_RESP_QUEUE.push(IoResponse::VideoError {
             tag,
@@ -1713,6 +1729,13 @@ fn handle_video_download(url: String, _dest: String, tag: u32) {
     let mut last_progress: u64 = 0;
 
     loop {
+        // Check for cancellation (user pressed Circle during download).
+        if DOWNLOAD_CANCEL.load(Ordering::Acquire) {
+            io_log("[IO-DL] cancelled during moov buffering");
+            source.cleanup();
+            return;
+        }
+
         let n = source.read_data(&mut buf);
         if n < 0 {
             io_log(&format!("[IO-DL] read error (phase1): {n:#x}"));
@@ -1884,7 +1907,9 @@ fn handle_video_download(url: String, _dest: String, tag: u32) {
 
     let mut loop_iter = 0u32;
     loop {
-        if !crate::video::is_video_playing() {
+        if !crate::video::is_video_playing()
+            || DOWNLOAD_CANCEL.load(Ordering::Acquire)
+        {
             io_log("[IO-DL] playback stopped, ending stream");
             break;
         }
@@ -2310,6 +2335,14 @@ impl TlsHttpReader {
         // SAFETY: getpeername succeeds only when socket is connected.
         let mut connected = false;
         for tick in 0..100u32 {
+            // Check for download cancellation during connect wait.
+            if DOWNLOAD_CANCEL.load(Ordering::Acquire) {
+                io_log("[IO-TLS] cancelled during TCP connect");
+                // SAFETY: Close socket on cancellation.
+                unsafe { psp::sys::sceNetInetClose(fd) };
+                return Err("cancelled".into());
+            }
+
             let mut sa_out: psp::sys::sockaddr =
                 unsafe { core::mem::zeroed() };
             let mut sa_len: u32 =
