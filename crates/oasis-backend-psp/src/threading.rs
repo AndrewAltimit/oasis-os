@@ -301,7 +301,7 @@ pub fn spawn_workers() -> (AudioHandle, IoHandle) {
     // I/O thread: normal priority (32) for file operations.
     if let Ok(handle) = ThreadBuilder::new(b"oasis_io\0")
         .priority(32)
-        .stack_size(256 * 1024) // 256KB for moov parsing + streaming
+        .stack_size(512 * 1024) // 512KB for moov parsing + TLS handshake
         .spawn(move || {
             io_thread_fn();
             0
@@ -2230,11 +2230,11 @@ struct IoRng {
 impl IoRng {
     fn new() -> Self {
         // SAFETY: MT19937 context is initialized before use.
-        // Seed from CPU cycle counter for per-session uniqueness.
+        // Seed from system timer (user-mode safe). mfc0 $9 (COP0 Count)
+        // is privileged on PSP Allegrex and crashes in user mode.
         unsafe {
             let mut ctx = core::mem::MaybeUninit::uninit();
-            let seed: u32;
-            core::arch::asm!("mfc0 {}, $9", out(reg) seed);
+            let seed = psp::sys::sceKernelGetSystemTimeLow() as u32;
             psp::sys::sceKernelUtilsMt19937Init(ctx.as_mut_ptr(), seed);
             Self {
                 ctx: ctx.assume_init(),
@@ -2409,7 +2409,7 @@ impl TlsHttpReader {
             );
         }
 
-        io_log("[IO-TLS] TCP connected, starting TLS 1.3 handshake...");
+        io_log("[IO-TLS] TCP connected, starting TLS...");
 
         // TLS 1.3 handshake via embedded-tls.
         let socket_io = PspSocketIo { fd };
@@ -2430,14 +2430,14 @@ impl TlsHttpReader {
                 socket_io, read_buf, write_buf,
             );
 
+        let provider = embedded_tls::UnsecureProvider::new::<
+            embedded_tls::blocking::Aes128GcmSha256,
+        >(IoRng::new());
         let context = embedded_tls::blocking::TlsContext::new(
             &config,
-            embedded_tls::UnsecureProvider::new::<
-                embedded_tls::blocking::Aes128GcmSha256,
-            >(IoRng::new()),
+            provider,
         );
-
-        io_log("[IO-TLS] calling tls.open()...");
+        io_log("[IO-TLS] starting TLS 1.3 handshake...");
         if let Err(e) = tls.open(context) {
             drop(tls);
             // SAFETY: Reclaim leaked buffers after TLS is dropped.
@@ -2462,6 +2462,7 @@ impl TlsHttpReader {
         );
         if let Err(e) =
             embedded_io::Write::write_all(&mut tls, request.as_bytes())
+                .and_then(|_| embedded_io::Write::flush(&mut tls))
         {
             drop(tls);
             unsafe {

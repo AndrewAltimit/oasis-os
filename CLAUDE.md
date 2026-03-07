@@ -109,7 +109,7 @@ The PRX hooks `sceDisplaySetFrameBuf` to draw overlay UI into the game's framebu
 
 ### PSP TLS 1.3
 
-The PSP firmware's built-in SSL uses root CAs from 2008 and SSL 3.0, which cannot connect to modern HTTPS servers. The PSP backend implements native TLS 1.3 via `embedded-tls` (pure Rust, no C/asm) with `UnsecureProvider` (no certificate validation). Raw TCP sockets (`sceNetInet*`) are wrapped with `embedded_io::Read + Write` adapters. Entropy comes from the PSP's MT19937 PRNG (`sceKernelUtilsMt19937*`) seeded from the CPU cycle counter. This enables HTTPS downloads for TV Guide video streaming from servers that enforce TLS (e.g., archive.org CDN redirects).
+The PSP firmware's built-in SSL uses root CAs from 2008 and SSL 3.0, which cannot connect to modern HTTPS servers. The PSP backend implements native TLS 1.3 via `embedded-tls` (pure Rust, no C/asm) with `UnsecureProvider` (no certificate validation). The `alloc` feature is required to advertise RSA signature schemes (archive.org uses RSA certs). Raw TCP sockets (`sceNetInet*`) are wrapped with `embedded_io::Read + Write` adapters. RNG seeded from `sceKernelGetSystemTimeLow` (not `mfc0 $9` which is privileged on PSP Allegrex). DNS resolution via `psp::net::resolve_hostname` with `to_ne_bytes()` (network byte order fix for little-endian MIPS). HTTP→HTTPS redirect loops are detected automatically, triggering TLS fallback; HTTPS redirects (archive.org → CDN node) are followed within the TLS path. This enables HTTPS downloads for TV Guide video streaming from servers that enforce TLS.
 
 ### PSP Video Streaming
 

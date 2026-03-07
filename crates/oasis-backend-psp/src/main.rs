@@ -51,16 +51,18 @@ psp::module!("OASIS_OS", 1, 0);
 
 /// getrandom 0.2 custom backend (used by transitive deps like webpki).
 mod psp_getrandom_v02 {
-    use psp::sys::{sceKernelUtilsMt19937Init, sceKernelUtilsMt19937UInt};
+    use psp::sys::{
+        sceKernelGetSystemTimeLow, sceKernelUtilsMt19937Init,
+        sceKernelUtilsMt19937UInt,
+    };
 
     fn psp_fill_random(buf: &mut [u8]) -> Result<(), getrandom_02::Error> {
         // SAFETY: MT19937 context is initialized by sceKernelUtilsMt19937Init
-        // before any reads. MaybeUninit avoids potential UB from zeroing a
-        // struct with padding or invariant fields. Seed from CPU cycle counter.
+        // before any reads. Seed from system timer (user-mode safe).
+        // mfc0 $9 (COP0 Count) is privileged on PSP Allegrex.
         unsafe {
             let mut ctx = core::mem::MaybeUninit::uninit();
-            let seed: u32;
-            core::arch::asm!("mfc0 {}, $9", out(reg) seed);
+            let seed = sceKernelGetSystemTimeLow() as u32;
             sceKernelUtilsMt19937Init(ctx.as_mut_ptr(), seed);
             let mut ctx = ctx.assume_init();
             for byte in buf.iter_mut() {
@@ -80,14 +82,16 @@ unsafe extern "Rust" fn __getrandom_v03_custom(
     dest: *mut u8,
     len: usize,
 ) -> Result<(), getrandom::Error> {
-    use psp::sys::{sceKernelUtilsMt19937Init, sceKernelUtilsMt19937UInt};
+    use psp::sys::{
+        sceKernelGetSystemTimeLow, sceKernelUtilsMt19937Init,
+        sceKernelUtilsMt19937UInt,
+    };
     // SAFETY: MT19937 context is initialized by sceKernelUtilsMt19937Init
-    // before any reads. MaybeUninit avoids potential UB from zeroing a
-    // struct with padding or invariant fields. Seed from CPU cycle counter.
+    // before any reads. Seed from system timer (user-mode safe).
+    // mfc0 $9 (COP0 Count) is privileged on PSP Allegrex.
     unsafe {
         let mut ctx = core::mem::MaybeUninit::uninit();
-        let seed: u32;
-        core::arch::asm!("mfc0 {}, $9", out(reg) seed);
+        let seed = sceKernelGetSystemTimeLow() as u32;
         sceKernelUtilsMt19937Init(ctx.as_mut_ptr(), seed);
         let mut ctx = ctx.assume_init();
         for i in 0..len {

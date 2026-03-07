@@ -550,5 +550,6 @@ static image/waveform visualization.
 | Video files too large for streaming | Use h.264 IA derivatives (smaller); iframe lets browser handle buffering |
 | Items removed from IA | Graceful fallback — show "Unavailable" in schedule |
 | No video codec in SDL backend | Use external player (mpv/browser) for MVP |
+| PSP HTTPS/TLS failures to CDN | TLS 1.3 fallback via `embedded-tls` + `UnsecureProvider` is implemented and working; both `ia*` (HTTP) and `dn*` (HTTPS-only) CDN nodes now stream successfully |
 | Schedule drift if episode durations change | Cache durations; schedule only recomputes when cache refreshes |
 | Large catalogs (100+ episodes) | Paginate IA metadata fetch; limit to first 50 episodes per channel |

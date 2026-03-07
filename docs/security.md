@@ -124,11 +124,21 @@ authentication for remote terminal connections:
 ## PSP TLS Host Pinning
 
 The PSP backend uses `embedded-tls` with `UnsecureProvider` (no
-certificate store available on PSP hardware). To mitigate the lack of
-certificate validation, `PspTlsProvider` supports a host pinning
-allowlist. When pinned hosts are configured, `connect_tls` rejects any
-server name not in the list, preventing accidental connections to
-untrusted servers.
+certificate store available on PSP hardware -- skips cert validation
+entirely). To mitigate the lack of certificate validation,
+`PspTlsProvider` supports a host pinning allowlist. When pinned hosts
+are configured, `connect_tls` rejects any server name not in the list,
+preventing accidental connections to untrusted servers.
+
+The `embedded-tls` crate requires the `alloc` feature to advertise RSA
+signature schemes during the TLS 1.3 handshake. Without it, servers
+using RSA certificates (e.g. archive.org) reject the connection with
+HandshakeFailure.
+
+RNG entropy for TLS key exchange uses `sceKernelGetSystemTimeLow()`
+(a microsecond timer). The COP0 Count register (`mfc0 $9`) is
+privileged on PSP Allegrex and crashes in user mode, so it cannot be
+used as an entropy source.
 
 ## Audit Logging
 
