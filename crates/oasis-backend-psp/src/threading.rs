@@ -288,6 +288,7 @@ pub fn spawn_workers() -> (AudioHandle, IoHandle) {
     // I/O thread: normal priority (32) for file operations.
     if let Ok(handle) = ThreadBuilder::new(b"oasis_io\0")
         .priority(32)
+        .stack_size(256 * 1024) // 256KB for moov parsing + streaming
         .spawn(move || {
             io_thread_fn();
             0
@@ -332,22 +333,35 @@ impl PspAacDecoder {
         let codec_type = 0x1003; // AAC
 
         // SAFETY: sceAudiocodec operates on the 64-byte-aligned buffer.
+        // Flush cache before each codec call (DMA coherency).
         unsafe {
+            sys::sceKernelDcacheWritebackInvalidateAll();
             let ret = sys::sceAudiocodecCheckNeedMem(ptr, codec_type);
             if ret < 0 {
+                io_log(&format!(
+                    "[AUDIO] CheckNeedMem failed: {ret:#010x}"
+                ));
                 return Err(ret);
             }
 
+            sys::sceKernelDcacheWritebackInvalidateAll();
             let ret = sys::sceAudiocodecGetEDRAM(ptr, codec_type);
             if ret < 0 {
+                io_log(&format!(
+                    "[AUDIO] GetEDRAM failed: {ret:#010x}"
+                ));
                 return Err(ret);
             }
 
             // Set sample rate BEFORE init — required for AAC.
             buf.words[10] = sample_rate;
 
+            sys::sceKernelDcacheWritebackInvalidateAll();
             let ret = sys::sceAudiocodecInit(ptr, codec_type);
             if ret < 0 {
+                io_log(&format!(
+                    "[AUDIO] AudiocodecInit failed: {ret:#010x}"
+                ));
                 sys::sceAudiocodecReleaseEDRAM(ptr);
                 return Err(ret);
             }
@@ -371,6 +385,14 @@ impl PspAacDecoder {
         words[8] = dst.as_mut_ptr() as u32;
         words[9] = (dst.len() * 2) as u32; // bytes
         // Do NOT touch words[10] — it holds the sample rate set during init.
+
+        // Flush D-cache before DMA-based codec decode to ensure the
+        // hardware reads coherent data from the source buffer.
+        // SAFETY: sceKernelDcacheWritebackInvalidateAll flushes all
+        // cached data back to main memory.
+        unsafe {
+            sys::sceKernelDcacheWritebackInvalidateAll();
+        }
 
         // SAFETY: sceAudiocodecDecode operates on the aligned buffer.
         let ret = unsafe {
@@ -414,10 +436,15 @@ fn decode_aac_frame(
 
     // Lazily create AAC decoder (only once, don't retry on failure).
     if aac_decoder.is_none() {
+        io_log(&format!(
+            "[AUDIO] creating AAC decoder (rate={aac_sample_rate})..."
+        ));
         match PspAacDecoder::init(aac_sample_rate) {
-            Ok(dec) => *aac_decoder = Some(dec),
+            Ok(dec) => {
+                io_log("[AUDIO] AAC decoder init OK");
+                *aac_decoder = Some(dec);
+            },
             Err(e) => {
-                // Log once to file, not to screen (avoid flooding).
                 io_log(&format!(
                     "[AUDIO] AAC decoder init failed: {e:#010x}"
                 ));
@@ -428,15 +455,38 @@ fn decode_aac_frame(
 
     // Ensure audio channel exists.
     if player.channel.is_none() {
+        io_log("[AUDIO] reserving audio channel...");
         player.channel =
             AudioChannel::reserve(AAC_FRAME_SAMPLES, AudioFormat::Stereo).ok();
+        if player.channel.is_some() {
+            io_log("[AUDIO] audio channel reserved OK");
+        } else {
+            io_log("[AUDIO] audio channel reserve FAILED");
+        }
     }
 
     let decoder = aac_decoder.as_mut().unwrap();
+
     let mut pcm = vec![0i16; AAC_FRAME_SAMPLES as usize * 2];
+
+    static DECODE_COUNT: core::sync::atomic::AtomicU32 =
+        core::sync::atomic::AtomicU32::new(0);
+    let count = DECODE_COUNT.fetch_add(1, Ordering::Relaxed);
+    if count < 3 {
+        io_log(&format!(
+            "[AUDIO] decode #{count} src_len={} src_ptr={:#x}",
+            data.len(),
+            data.as_ptr() as u32,
+        ));
+    }
 
     match decoder.decode(data, &mut pcm) {
         Ok(consumed) => {
+            if count < 3 {
+                io_log(&format!(
+                    "[AUDIO] decode #{count} OK, consumed={consumed}"
+                ));
+            }
             if consumed == 0 {
                 return;
             }
@@ -445,12 +495,13 @@ fn decode_aac_frame(
             }
         },
         Err(e) => {
-            // Log to file only (not screen), and only occasionally.
             static ERR_COUNT: core::sync::atomic::AtomicU32 =
                 core::sync::atomic::AtomicU32::new(0);
             let c = ERR_COUNT.fetch_add(1, Ordering::Relaxed);
-            if c < 5 {
-                io_log(&format!("[AUDIO] AAC decode error: {e:#010x}"));
+            if c < 10 {
+                io_log(&format!(
+                    "[AUDIO] AAC decode #{count} error: {e:#010x}"
+                ));
             }
         },
     }
@@ -641,12 +692,13 @@ fn audio_thread_fn() {
                 RADIO_STREAMING.store(false, Ordering::Relaxed);
                 RADIO_BUFFERING.store(false, Ordering::Relaxed);
             }
-        } else if aac_sample_rate == 0 {
-            // Only sleep when idle — during video AAC playback, we need
-            // to process frames without delay to keep up with real-time
-            // audio output (~21ms per 1024-sample AAC frame at 48kHz).
+        } else {
+            // Sleep when idle. During AAC playback the audio thread must
+            // wake frequently to pop frames, but a short sleep (1ms)
+            // prevents a CPU-burning busy loop that can crash the PSP.
+            let sleep_us = if aac_sample_rate > 0 { 1_000 } else { 10_000 };
             // SAFETY: sceKernelDelayThread sleeps the current thread.
-            unsafe { psp::sys::sceKernelDelayThread(10_000) };
+            unsafe { psp::sys::sceKernelDelayThread(sleep_us) };
         }
 
         // Pump SFX mixer (separate hardware channel, short blocking).
@@ -1069,6 +1121,52 @@ fn find_moov_end(header_bytes: &[u8]) -> Option<u64> {
     None
 }
 
+/// Persistent sceHttp template ID.  Initialized once, never torn down.
+/// Mirrors how `psp::http::HttpClient` works (one template, many requests).
+/// SAFETY: Only accessed from the I/O thread (single producer).
+static mut DL_TEMPLATE_ID: i32 = -1;
+
+/// Ensure sceHttp is initialized and return the persistent template ID.
+///
+/// On first call: `sceHttpInit` + `sceHttpCreateTemplate`.
+/// On subsequent calls: returns the cached template ID immediately.
+unsafe fn ensure_dl_template() -> Result<i32, String> {
+    use psp::sys;
+
+    if DL_TEMPLATE_ID >= 0 {
+        return Ok(DL_TEMPLATE_ID);
+    }
+
+    let ret = sys::sceHttpInit(0x20000);
+    // Accept "already initialized" (0x80431020) in case IO-TV already
+    // initialized it via psp::http::HttpClient.
+    if ret < 0 && ret != -0x7FBCEFE0_i32 {
+        io_log(&format!("[IO-DL] sceHttpInit failed: {ret:#x}"));
+        return Err(format!("sceHttpInit failed: {ret:#x}"));
+    }
+    io_log(&format!("[IO-DL] sceHttpInit: {ret:#x}"));
+
+    let tid = sys::sceHttpCreateTemplate(
+        b"oasis-psp/1.0\0".as_ptr() as *mut u8,
+        1, 0,
+    );
+    if tid < 0 {
+        return Err(format!("template: {tid:#x}"));
+    }
+    // Disable keep-alive so each request gets a fresh TCP connection.
+    sys::sceHttpDisableKeepAlive(tid);
+    // Disable auto-redirect. archive.org redirects some items'
+    // HTTP URLs to HTTPS, and PSP's built-in SSL (2008 root CAs)
+    // can't connect. We handle redirects manually, rewriting
+    // HTTPS→HTTP in the Location header.
+    sys::sceHttpDisableRedirect(tid);
+    io_log(&format!(
+        "[IO-DL] template created: {tid} (keep-alive off, redirect off)"
+    ));
+    DL_TEMPLATE_ID = tid;
+    Ok(tid)
+}
+
 /// Open an HTTP connection with manual redirect handling.
 ///
 /// PSP's `sceHttpEnableRedirect` follows HTTP→HTTPS redirects which fail
@@ -1076,36 +1174,25 @@ fn find_moov_end(header_bytes: &[u8]) -> Option<u64> {
 /// 301/302/307/308 manually, rewriting `https://` → `http://` in the
 /// Location header.
 ///
-/// Returns `(req_id, template_id, conn_id, content_length)` on success.
-/// The caller must clean up all three IDs and call `sceHttpEnd()`.
+/// Returns `(req_id, conn_id, content_length)` on success.
+/// Uses a persistent template — caller must only clean up req_id and conn_id.
+///
+/// On redirect-loop failure (CDN requires HTTPS), returns the HTTPS
+/// redirect URL as the second element so the caller can try TLS.
 unsafe fn http_open_with_redirect(
     url: &str,
-) -> Result<(i32, i32, i32, u64), String> {
+) -> Result<(i32, i32, u64), (String, Option<String>)> {
     use psp::sys;
 
+    let template_id = ensure_dl_template()
+        .map_err(|e| (e, None))?;
     let mut current_url = url.to_string();
+    // Track the last HTTPS redirect URL for TLS fallback.
+    let mut last_https_redirect: Option<String> = None;
 
     for attempt in 0..5 {
         let mut url_bytes: Vec<u8> = current_url.as_bytes().to_vec();
         url_bytes.push(0);
-
-        if attempt == 0 {
-            let ret = sys::sceHttpInit(0x20000);
-            if ret < 0 {
-                return Err(format!("HTTP init: {ret:#x}"));
-            }
-        }
-
-        let template_id = sys::sceHttpCreateTemplate(
-            b"oasis-psp/1.0\0".as_ptr() as *mut u8,
-            1, 0,
-        );
-        if template_id < 0 {
-            sys::sceHttpEnd();
-            return Err(format!("template: {template_id:#x}"));
-        }
-
-        // Do NOT enable automatic redirect — we handle it manually.
 
         let conn_id = sys::sceHttpCreateConnectionWithURL(
             template_id,
@@ -1113,9 +1200,7 @@ unsafe fn http_open_with_redirect(
             0,
         );
         if conn_id < 0 {
-            sys::sceHttpDeleteTemplate(template_id);
-            sys::sceHttpEnd();
-            return Err(format!("connect: {conn_id:#x}"));
+            return Err((format!("connect: {conn_id:#x}"), None));
         }
 
         let req_id = sys::sceHttpCreateRequestWithURL(
@@ -1126,9 +1211,7 @@ unsafe fn http_open_with_redirect(
         );
         if req_id < 0 {
             sys::sceHttpDeleteConnection(conn_id);
-            sys::sceHttpDeleteTemplate(template_id);
-            sys::sceHttpEnd();
-            return Err(format!("request: {req_id:#x}"));
+            return Err((format!("request: {req_id:#x}"), None));
         }
 
         sys::sceHttpSetConnectTimeOut(req_id, 30_000_000);
@@ -1139,9 +1222,10 @@ unsafe fn http_open_with_redirect(
             io_log(&format!("[IO-DL] send failed: {ret:#x}"));
             sys::sceHttpDeleteRequest(req_id);
             sys::sceHttpDeleteConnection(conn_id);
-            sys::sceHttpDeleteTemplate(template_id);
-            sys::sceHttpEnd();
-            return Err(format!("send: {ret:#x}"));
+            return Err((
+                format!("send: {ret:#x}"),
+                last_https_redirect.clone(),
+            ));
         }
 
         let mut status_code: i32 = 0;
@@ -1174,47 +1258,295 @@ unsafe fn http_open_with_redirect(
                 None
             };
 
-            // Now safe to delete the request.
+            // Now safe to delete the request+connection (template persists).
             sys::sceHttpDeleteRequest(req_id);
             sys::sceHttpDeleteConnection(conn_id);
-            sys::sceHttpDeleteTemplate(template_id);
 
             if let Some(loc) = location_url {
+                // Save HTTPS URL for TLS fallback before rewriting.
+                if loc.starts_with("https://") {
+                    last_https_redirect = Some(loc.clone());
+                }
                 // Rewrite HTTPS → HTTP so PSP can follow it.
                 let new_url = loc.replacen("https://", "http://", 1);
+                // Detect redirect loop: same URL after rewrite.
+                if new_url == current_url {
+                    io_log(&format!(
+                        "[IO-DL] redirect loop detected → {new_url}"
+                    ));
+                    return Err((
+                        String::from("redirect loop (CDN requires HTTPS)"),
+                        last_https_redirect,
+                    ));
+                }
                 io_log(&format!("[IO-DL] redirect → {new_url}"));
                 current_url = new_url;
                 continue;
             } else {
-                sys::sceHttpEnd();
-                return Err(format!("redirect {status_code}, no Location"));
+                return Err((
+                    format!("redirect {status_code}, no Location"),
+                    None,
+                ));
             }
         }
 
         if status_code < 200 || status_code >= 300 {
             sys::sceHttpDeleteRequest(req_id);
             sys::sceHttpDeleteConnection(conn_id);
-            sys::sceHttpDeleteTemplate(template_id);
-            sys::sceHttpEnd();
-            return Err(format!("HTTP {status_code}"));
+            return Err((format!("HTTP {status_code}"), None));
         }
 
         let mut content_length: u64 = 0;
         sys::sceHttpGetContentLength(req_id, &mut content_length);
 
-        return Ok((req_id, template_id, conn_id, content_length));
+        return Ok((req_id, conn_id, content_length));
     }
 
-    sys::sceHttpEnd();
-    Err(String::from("too many redirects"))
+    Err((
+        String::from("too many redirects"),
+        last_https_redirect,
+    ))
 }
 
-/// Abstraction over HTTP data sources (sceHttp or raw TLS socket).
+/// Raw TCP HTTP reader — bypasses sceHttp entirely using BSD sockets.
+///
+/// sceHttp's internal state corrupts after the first download session,
+/// causing `0x80431079` on subsequent `sceHttpSendRequest` calls.
+/// Raw sockets have no such state — each connection is independent.
+struct RawHttpReader {
+    fd: i32,
+    /// Leftover body data read during header parsing.
+    leftover: Vec<u8>,
+}
+
+impl RawHttpReader {
+    /// Open an HTTP connection via raw TCP: DNS → connect → GET → parse headers.
+    ///
+    /// Returns the reader and content length (0 if unknown).
+    /// Follows up to 5 redirects.
+    fn open(url: &str) -> Result<(Self, u64), String> {
+        Self::open_with_redirects(url, 5)
+    }
+
+    fn open_with_redirects(
+        url: &str,
+        max_redirects: u32,
+    ) -> Result<(Self, u64), String> {
+        let (host, port, path, _) =
+            parse_url(url).ok_or_else(|| format!("bad URL: {url}"))?;
+
+        io_log(&format!("[IO-RAW] resolving {host}..."));
+
+        let mut host_bytes: Vec<u8> = host.as_bytes().to_vec();
+        host_bytes.push(0);
+        let addr = psp::net::resolve_hostname(&host_bytes)
+            .map_err(|e| format!("DNS {host}: {e}"))?;
+
+        io_log(&format!(
+            "[IO-RAW] resolved {host} → {}.{}.{}.{}",
+            addr.0[0], addr.0[1], addr.0[2], addr.0[3]
+        ));
+
+        // SAFETY: AF_INET=2, SOCK_STREAM=1, protocol=0.
+        let fd = unsafe { psp::sys::sceNetInetSocket(2, 1, 0) };
+        if fd < 0 {
+            return Err("socket() failed".into());
+        }
+
+        // Set recv/send timeouts (30s) before connect.
+        // SAFETY: Valid socket options on PSP BSD stack.
+        unsafe {
+            #[repr(C)]
+            struct Timeval { tv_sec: i32, tv_usec: i32 }
+            let timeout = Timeval { tv_sec: 30, tv_usec: 0 };
+            let timeout_ptr =
+                &timeout as *const Timeval as *const core::ffi::c_void;
+            let timeout_len = core::mem::size_of::<Timeval>() as u32;
+            psp::sys::sceNetInetSetsockopt(
+                fd, 0xFFFF, 0x1005, timeout_ptr, timeout_len,
+            );
+            psp::sys::sceNetInetSetsockopt(
+                fd, 0xFFFF, 0x1006, timeout_ptr, timeout_len,
+            );
+        }
+
+        io_log(&format!("[IO-RAW] connecting to {host}:{port}..."));
+
+        let sa = crate::network::make_sockaddr_in_pub(addr.0, port);
+        // SAFETY: Blocking connect — will return when connected or on
+        // TCP timeout. Port 80 is not blocked so this completes quickly.
+        let ret = unsafe {
+            psp::sys::sceNetInetConnect(
+                fd, &sa,
+                core::mem::size_of::<psp::sys::sockaddr>() as u32,
+            )
+        };
+        if ret < 0 {
+            io_log(&format!("[IO-RAW] connect failed: {ret:#x}"));
+            unsafe { psp::sys::sceNetInetClose(fd) };
+            return Err(format!("connect failed {host}:{port}: {ret:#x}"));
+        }
+
+        io_log("[IO-RAW] connected, sending HTTP GET...");
+
+        // Send HTTP/1.1 GET request.
+        let request = format!(
+            "GET {path} HTTP/1.1\r\n\
+             Host: {host}\r\n\
+             User-Agent: oasis-psp/1.0\r\n\
+             Accept: */*\r\n\
+             Connection: close\r\n\r\n"
+        );
+        let req_bytes = request.as_bytes();
+        let mut sent = 0usize;
+        while sent < req_bytes.len() {
+            // SAFETY: fd is valid, buf points to request data.
+            let n = unsafe {
+                psp::sys::sceNetInetSend(
+                    fd,
+                    req_bytes[sent..].as_ptr() as *const core::ffi::c_void,
+                    req_bytes.len() - sent,
+                    0,
+                )
+            };
+            if n <= 0 {
+                unsafe { psp::sys::sceNetInetClose(fd) };
+                return Err("send failed".into());
+            }
+            sent += n as usize;
+        }
+
+        // Read response headers (up to 8KB).
+        let mut hdr_buf = vec![0u8; 8192];
+        let mut hdr_len = 0usize;
+        loop {
+            if hdr_len >= hdr_buf.len() {
+                break;
+            }
+            // SAFETY: fd is valid, buffer is valid.
+            let n = unsafe {
+                psp::sys::sceNetInetRecv(
+                    fd,
+                    hdr_buf[hdr_len..].as_mut_ptr() as *mut core::ffi::c_void,
+                    hdr_buf.len() - hdr_len,
+                    0,
+                )
+            };
+            if n <= 0 {
+                break;
+            }
+            hdr_len += n as usize;
+            if find_header_end(&hdr_buf[..hdr_len]).is_some() {
+                break;
+            }
+        }
+
+        let header_end = find_header_end(&hdr_buf[..hdr_len])
+            .ok_or_else(|| "incomplete HTTP headers".to_string())?;
+
+        let hdr_str =
+            core::str::from_utf8(&hdr_buf[..header_end]).unwrap_or("");
+        io_log(&format!(
+            "[IO-RAW] response: {}",
+            hdr_str.lines().next().unwrap_or("?")
+        ));
+
+        let status = hdr_str
+            .lines()
+            .next()
+            .and_then(|l| l.split_whitespace().nth(1))
+            .and_then(|s| s.parse::<u16>().ok())
+            .unwrap_or(0);
+
+        // Handle redirects.
+        if matches!(status, 301 | 302 | 303 | 307 | 308) {
+            unsafe { psp::sys::sceNetInetClose(fd) };
+
+            if max_redirects == 0 {
+                return Err("too many redirects".into());
+            }
+
+            let location = hdr_str.lines().find_map(|l| {
+                if l.len() > 9
+                    && l[..9].eq_ignore_ascii_case("location:")
+                {
+                    l.split_once(':').map(|(_, v)| v.trim().to_string())
+                } else {
+                    None
+                }
+            });
+
+            if let Some(loc) = location {
+                // Rewrite HTTPS → HTTP for PSP.
+                let new_url = loc.replacen("https://", "http://", 1);
+                io_log(&format!("[IO-RAW] redirect → {new_url}"));
+                return Self::open_with_redirects(
+                    &new_url,
+                    max_redirects - 1,
+                );
+            }
+            return Err(format!("redirect {status}, no Location"));
+        }
+
+        if status < 200 || status >= 300 {
+            unsafe { psp::sys::sceNetInetClose(fd) };
+            return Err(format!("HTTP {status}"));
+        }
+
+        let content_length: u64 = hdr_str
+            .lines()
+            .find_map(|l| {
+                if l.len() > 15
+                    && l[..15].eq_ignore_ascii_case("content-length:")
+                {
+                    l[15..].trim().parse().ok()
+                } else {
+                    None
+                }
+            })
+            .unwrap_or(0);
+
+        io_log(&format!(
+            "[IO-RAW] status={status} content-length={content_length}"
+        ));
+
+        let leftover = hdr_buf[header_end..hdr_len].to_vec();
+
+        Ok((Self { fd, leftover }, content_length))
+    }
+
+    /// Read body data. Returns leftover first, then reads from socket.
+    fn read_data(&mut self, buf: &mut [u8]) -> i32 {
+        if !self.leftover.is_empty() {
+            let take = core::cmp::min(self.leftover.len(), buf.len());
+            buf[..take].copy_from_slice(&self.leftover[..take]);
+            self.leftover.drain(..take);
+            return take as i32;
+        }
+        // SAFETY: fd is valid, buf is valid.
+        let n = unsafe {
+            psp::sys::sceNetInetRecv(
+                self.fd,
+                buf.as_mut_ptr() as *mut core::ffi::c_void,
+                buf.len(),
+                0,
+            )
+        };
+        if n < 0 { 0 } else { n as i32 }
+    }
+
+    /// Close the socket.
+    fn cleanup(self) {
+        // SAFETY: fd is a valid open socket.
+        unsafe { psp::sys::sceNetInetClose(self.fd) };
+    }
+}
+
+/// Abstraction over HTTP data sources.
 enum HttpDataSource {
     /// PSP's built-in HTTP library (for `http://` URLs).
     SceHttp {
         req_id: i32,
-        template_id: i32,
         conn_id: i32,
     },
     /// Raw TCP + TLS 1.3 via embedded-tls (for `https://` URLs).
@@ -1241,21 +1573,21 @@ impl HttpDataSource {
         }
     }
 
-    /// Clean up the connection.
+    /// Clean up the connection — abort the in-flight request, delete
+    /// request+connection handles. The persistent template stays alive.
     fn cleanup(self) {
         match self {
             HttpDataSource::SceHttp {
                 req_id,
-                template_id,
                 conn_id,
             } => {
                 // SAFETY: IDs are valid sceHttp handles.
                 unsafe {
+                    psp::sys::sceHttpAbortRequest(req_id);
                     psp::sys::sceHttpDeleteRequest(req_id);
                     psp::sys::sceHttpDeleteConnection(conn_id);
-                    psp::sys::sceHttpDeleteTemplate(template_id);
-                    psp::sys::sceHttpEnd();
                 }
+                io_log("[IO-DL] cleanup: abort+delete done");
             },
             HttpDataSource::Tls(reader) => reader.cleanup(),
         }
@@ -1280,40 +1612,66 @@ fn handle_video_download(url: String, _dest: String, tag: u32) {
         return;
     }
 
-    let is_https = url.starts_with("https://");
-
-    // Open HTTP(S) connection.
-    let (mut source, content_length) = if is_https {
-        match TlsHttpReader::open(&url) {
-            Ok((reader, cl)) => (HttpDataSource::Tls(reader), cl),
-            Err(msg) => {
-                let _ = IO_RESP_QUEUE.push(IoResponse::VideoError {
-                    tag,
-                    msg,
-                });
-                return;
-            },
-        }
+    // Try sceHttp first (HTTP port 80), fall back to raw TCP + TLS 1.3
+    // (HTTPS port 443) if sceHttp fails. sceHttp's internal connection
+    // pool corrupts after an aborted partial download, causing 0x80431079
+    // on subsequent requests. The TLS path uses independent raw sockets.
+    let http_url = if url.starts_with("https://") {
+        url.replacen("https://", "http://", 1)
     } else {
-        // SAFETY: All sceHttp calls use IDs returned by prior creation.
-        match unsafe { http_open_with_redirect(&url) } {
-            Ok((req_id, template_id, conn_id, cl)) => (
-                HttpDataSource::SceHttp {
-                    req_id,
-                    template_id,
-                    conn_id,
-                },
-                cl,
-            ),
-            Err(msg) => {
-                let _ = IO_RESP_QUEUE.push(IoResponse::VideoError {
-                    tag,
-                    msg,
-                });
-                return;
-            },
-        }
+        url.clone()
     };
+
+    // SAFETY: All sceHttp calls use IDs returned by prior creation.
+    let (mut source, content_length) =
+        match unsafe { http_open_with_redirect(&http_url) } {
+            Ok((req_id, conn_id, cl)) => {
+                io_log("[IO-DL] sceHttp OK");
+                (
+                    HttpDataSource::SceHttp {
+                        req_id,
+                        conn_id,
+                    },
+                    cl,
+                )
+            },
+            Err((msg, https_redirect)) => {
+                // Use the CDN's HTTPS redirect URL if available
+                // (from a redirect loop), otherwise the original URL.
+                let tls_url = https_redirect.unwrap_or_else(|| {
+                    if url.starts_with("http://") {
+                        url.replacen("http://", "https://", 1)
+                    } else {
+                        url.clone()
+                    }
+                });
+                io_log(&format!(
+                    "[IO-DL] sceHttp failed ({msg}), trying TLS to \
+                     {tls_url}..."
+                ));
+                match TlsHttpReader::open(&tls_url) {
+                    Ok((reader, cl)) => {
+                        io_log(&format!(
+                            "[IO-DL] TLS fallback OK, len={cl}"
+                        ));
+                        (HttpDataSource::Tls(reader), cl)
+                    },
+                    Err(tls_err) => {
+                        io_log(&format!(
+                            "[IO-DL] TLS fallback failed: {tls_err}"
+                        ));
+                        let _ =
+                            IO_RESP_QUEUE.push(IoResponse::VideoError {
+                                tag,
+                                msg: format!(
+                                    "HTTP: {msg}; TLS: {tls_err}"
+                                ),
+                            });
+                        return;
+                    },
+                }
+            },
+        };
 
     let total = if content_length > 0 {
         Some(content_length)
@@ -1434,11 +1792,15 @@ fn handle_video_download(url: String, _dest: String, tag: u32) {
         }
     }
 
+    io_log("[IO-DL] setting video_playing...");
+
     // Pre-arm the playing flag BEFORE sending StreamStart to avoid a
     // race: the I/O thread checks is_video_playing() in the phase-2
     // loop, but the video thread may not have processed the command yet.
     crate::video::set_video_playing(true);
     crate::video::request_stream_start();
+
+    io_log("[IO-DL] sending VideoStreamReady...");
 
     // Notify main thread that streaming playback has begun.
     let _ = IO_RESP_QUEUE.push(IoResponse::VideoStreamReady {
@@ -1467,6 +1829,11 @@ fn handle_video_download(url: String, _dest: String, tag: u32) {
     };
     http_pos = moov_end_off;
 
+    io_log(&format!(
+        "[IO-DL] leftover={} bytes, moov_end_off={moov_end_off}",
+        leftover.len()
+    ));
+
     if !leftover.is_empty() {
         process_stream_chunk(
             leftover,
@@ -1481,16 +1848,25 @@ fn handle_video_download(url: String, _dest: String, tag: u32) {
             &video_track,
             &audio_track,
         );
+        io_log(&format!(
+            "[IO-DL] leftover processed: v={v_idx} a={a_idx}"
+        ));
     }
 
+    io_log("[IO-DL] dropping moov_buf...");
     drop(moov_buf);
+    io_log("[IO-DL] entering phase 2 loop");
 
+    let mut loop_iter = 0u32;
     loop {
         if !crate::video::is_video_playing() {
             io_log("[IO-DL] playback stopped, ending stream");
             break;
         }
 
+        if loop_iter < 3 {
+            io_log(&format!("[IO-DL] phase2 read #{loop_iter}..."));
+        }
         let n = source.read_data(&mut buf);
         if n < 0 {
             io_log(&format!("[IO-DL] read error (phase2): {n:#x}"));
@@ -1499,8 +1875,12 @@ fn handle_video_download(url: String, _dest: String, tag: u32) {
         if n == 0 {
             break; // EOF
         }
+        if loop_iter < 3 {
+            io_log(&format!("[IO-DL] phase2 read #{loop_iter}: {n} bytes"));
+        }
 
         downloaded += n as u64;
+        loop_iter += 1;
 
         process_stream_chunk(
             &buf[..n as usize],
@@ -1856,7 +2236,7 @@ impl TlsHttpReader {
         let (host, port, path, _) =
             parse_url(url).ok_or_else(|| format!("bad URL: {url}"))?;
 
-        io_log(&format!("[IO-TLS] connecting to {host}:{port}..."));
+        io_log(&format!("[IO-TLS] resolving {host}..."));
 
         // DNS resolve.
         let mut host_bytes: Vec<u8> = host.as_bytes().to_vec();
@@ -1864,29 +2244,114 @@ impl TlsHttpReader {
         let addr = psp::net::resolve_hostname(&host_bytes)
             .map_err(|e| format!("DNS {host}: {e}"))?;
 
-        // TCP connect.
+        io_log(&format!(
+            "[IO-TLS] resolved {host} → {}.{}.{}.{}",
+            addr.0[0], addr.0[1], addr.0[2], addr.0[3]
+        ));
+
+        // TCP connect with non-blocking + polling timeout.
         // SAFETY: AF_INET=2, SOCK_STREAM=1, protocol=0.
         let fd = unsafe { psp::sys::sceNetInetSocket(2, 1, 0) };
         if fd < 0 {
             return Err("socket() failed".into());
         }
 
+        // Set non-blocking mode for connect with timeout.
+        // SAFETY: SO_NONBLOCK=0x1009 is a PSP-specific socket option.
+        unsafe {
+            let nb: u32 = 1;
+            psp::sys::sceNetInetSetsockopt(
+                fd,
+                0xFFFF,
+                0x1009,
+                &nb as *const u32 as *const core::ffi::c_void,
+                4,
+            );
+        }
+
+        io_log(&format!("[IO-TLS] TCP connecting to {host}:{port}..."));
+
         let sa = crate::network::make_sockaddr_in_pub(addr.0, port);
-        // SAFETY: Connect to the resolved address.
-        let ret = unsafe {
+        // SAFETY: Non-blocking connect returns immediately.
+        unsafe {
             psp::sys::sceNetInetConnect(
                 fd,
                 &sa,
                 core::mem::size_of::<psp::sys::sockaddr>() as u32,
-            )
-        };
-        if ret < 0 {
-            // SAFETY: Close socket on connect failure.
-            unsafe { psp::sys::sceNetInetClose(fd) };
-            return Err(format!("connect {host}:{port}: {ret:#x}"));
+            );
         }
 
-        io_log("[IO-TLS] TCP connected, starting TLS handshake...");
+        // Poll for connection (up to 10 seconds, 100ms intervals).
+        // SAFETY: getpeername succeeds only when socket is connected.
+        let mut connected = false;
+        for tick in 0..100u32 {
+            let mut sa_out: psp::sys::sockaddr =
+                unsafe { core::mem::zeroed() };
+            let mut sa_len: u32 =
+                core::mem::size_of::<psp::sys::sockaddr>() as u32;
+            let ret = unsafe {
+                psp::sys::sceNetInetGetpeername(
+                    fd,
+                    &mut sa_out,
+                    &mut sa_len,
+                )
+            };
+            if ret == 0 {
+                connected = true;
+                break;
+            }
+            if tick == 0 {
+                io_log("[IO-TLS] waiting for TCP connect...");
+            }
+            // SAFETY: Sleep 100ms between polls.
+            unsafe {
+                psp::sys::sceKernelDelayThread(100_000);
+            }
+        }
+
+        if !connected {
+            let errno = unsafe { psp::sys::sceNetInetGetErrno() };
+            // SAFETY: Close socket on connect timeout.
+            unsafe { psp::sys::sceNetInetClose(fd) };
+            return Err(format!(
+                "connect timeout {host}:{port} (10s, errno={errno})"
+            ));
+        }
+
+        // Set back to blocking mode for TLS I/O + timeouts.
+        // SAFETY: Valid socket options on PSP BSD stack.
+        #[repr(C)]
+        struct Timeval {
+            tv_sec: i32,
+            tv_usec: i32,
+        }
+        unsafe {
+            let nb: u32 = 0;
+            psp::sys::sceNetInetSetsockopt(
+                fd,
+                0xFFFF,
+                0x1009,
+                &nb as *const u32 as *const core::ffi::c_void,
+                4,
+            );
+            // SOL_SOCKET=0xFFFF, SO_SNDTIMEO=0x1005, SO_RCVTIMEO=0x1006
+            let timeout = Timeval {
+                tv_sec: 30,
+                tv_usec: 0,
+            };
+            let timeout_ptr =
+                &timeout as *const Timeval as *const core::ffi::c_void;
+            let timeout_len =
+                core::mem::size_of::<Timeval>() as u32;
+            psp::sys::sceNetInetSetsockopt(
+                fd, 0xFFFF, 0x1005, timeout_ptr, timeout_len,
+            );
+            psp::sys::sceNetInetSetsockopt(
+                fd, 0xFFFF, 0x1006, timeout_ptr, timeout_len,
+            );
+        }
+
+        io_log("[IO-TLS] TCP connected, starting TLS 1.3 handshake...");
 
         // TLS 1.3 handshake via embedded-tls.
         let socket_io = PspSocketIo { fd };
@@ -1914,6 +2379,7 @@ impl TlsHttpReader {
             >(IoRng::new()),
         );
 
+        io_log("[IO-TLS] calling tls.open()...");
         if let Err(e) = tls.open(context) {
             drop(tls);
             // SAFETY: Reclaim leaked buffers after TLS is dropped.

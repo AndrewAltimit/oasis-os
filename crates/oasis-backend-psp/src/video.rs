@@ -844,21 +844,13 @@ fn play_mp4(path: &str, seek_secs: u64) -> bool {
 ///
 /// Returns `true` if Shutdown was received (caller should exit thread).
 fn play_stream() -> bool {
-    vlog("[VIDEO] play_stream: starting streaming decode");
+    vlog("[VIDEO] play_stream: starting streaming decode (audio-only)");
 
-    // Attempt H.264 hardware decoder init.
-    let mut h264 = match PspVideoDecoder::try_init() {
-        Ok(dec) => {
-            vlog("[VIDEO] play_stream: H.264 hardware decoder initialized");
-            Some(dec)
-        },
-        Err(e) => {
-            vlog(&format!(
-                "[VIDEO] play_stream: H.264 disabled ({e}), audio-only"
-            ));
-            None
-        },
-    };
+    // Skip H.264 hardware decoder init for streaming mode.
+    // The I/O thread skips all video samples (audio-only streaming),
+    // so initializing the ME coprocessor is unnecessary and can cause
+    // hard crashes on some PSP firmware if the ME isn't available.
+    let mut h264: Option<PspVideoDecoder> = None;
 
     let start_us = unsafe { psp::sys::sceKernelGetSystemTimeLow() };
     let mut decode_count = 0u32;
