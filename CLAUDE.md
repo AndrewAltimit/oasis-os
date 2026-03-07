@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-OASIS_OS is an embeddable operating system framework in Rust (edition 2024). It provides a skinnable shell with a scene-graph UI, command interpreter, virtual file system, browser engine (HTML/CSS/Gemini), plugin system, and remote terminal. It renders to any pixel buffer + input stream. Originally ported from a PSP homebrew shell (2006-2008). Seventeen skins are implemented (11 external TOML skins, 17 built-in; external skins also have built-in equivalents).
+OASIS_OS is an embeddable operating system framework in Rust (edition 2024). It provides a skinnable shell with a scene-graph UI, command interpreter, virtual file system, browser engine (HTML/CSS/Gemini), plugin system, and remote terminal. It renders to any pixel buffer + input stream. Originally ported from a PSP homebrew shell (2006-2008). Eighteen skins are implemented (12 external TOML skins, 18 built-in; external skins also have built-in equivalents).
 
 Default virtual resolution is 480x272 (PSP native). Skins may override this (e.g. modern=800x600, xp=1024x768); the backend canvas/window scales to match.
 
@@ -88,6 +88,7 @@ oasis-types     (foundation: Color, Button, InputEvent, backend traits, error ty
 ├── oasis-browser    (HTML/CSS/Gemini: DOM, CSS cascade, layout engine, JS DOM bindings)
 ├── oasis-js         (JavaScript engine: QuickJS-NG runtime, console API)
 ├── oasis-video      (MP4/H.264+AAC decode; features: h264, no-std-demux, video-decode)
+├── oasis-vector     (vector graphics: scene graph, path ops, icons, frame-driven animations)
 └── oasis-core       (coordination: 16 apps, dashboard, agent, plugin, script)
     ├── oasis-backend-sdl  (SDL2 desktop/Pi rendering + input + audio)
     │   └── oasis-app      (binary entry points: oasis-app, oasis-screenshot; oasis-video[video-decode])
@@ -106,11 +107,19 @@ The PSP deployment uses two binaries:
 
 The PRX hooks `sceDisplaySetFrameBuf` to draw overlay UI into the game's framebuffer and claims a PSP audio channel for background MP3 playback. No dependency on oasis-core -- direct framebuffer rendering only (<64KB binary).
 
+### PSP TLS 1.3
+
+The PSP firmware's built-in SSL uses root CAs from 2008 and SSL 3.0, which cannot connect to modern HTTPS servers. The PSP backend implements native TLS 1.3 via `embedded-tls` (pure Rust, no C/asm) with `UnsecureProvider` (no certificate validation). Raw TCP sockets (`sceNetInet*`) are wrapped with `embedded_io::Read + Write` adapters. Entropy comes from the PSP's MT19937 PRNG (`sceKernelUtilsMt19937*`) seeded from the CPU cycle counter. This enables HTTPS downloads for TV Guide video streaming from servers that enforce TLS (e.g., archive.org CDN redirects).
+
+### PSP Video Streaming
+
+TV Guide on PSP uses in-memory streaming (no disk I/O). The I/O thread downloads HTTP(S) data, buffers the MP4 `moov` atom (~1-3MB), parses track tables via `demux_lite::Mp4Lite`, then extracts interleaved audio/video samples from the `mdat` stream in file-offset order. Video samples are skipped (H.264 decode requires real ME hardware, not available on PPSSPP). Audio AAC frames are decoded via `sceAudiocodec` hardware and output through `AudioChannel::output_blocking`. Backpressure is applied via retry-with-sleep when the audio command queue is full, naturally throttling the download to real-time playback speed.
+
 ### Key Abstraction: Backend Traits
 
 `oasis-types/src/backend.rs` defines the only abstraction boundary between core and platform (re-exported by `oasis-core`):
 - `SdiCore` -- required rendering (13 methods: init, clear, blit, fill_rect, draw_text, swap_buffers, load_texture, destroy_texture, set_clip_rect, reset_clip_rect, measure_text, read_pixels, shutdown)
-- `SdiBackend` -- extends `SdiCore` with 30 optional accelerated primitives (shapes, gradients, text styling, batching)
+- `SdiBackend` -- extends `SdiCore` with 30+ optional accelerated primitives (shapes, gradients, text styling, batching, vector graphics path operations)
 - `InputBackend` -- input polling (returns `Vec<InputEvent>`)
 - `NetworkBackend` -- TCP networking
 - `AudioBackend` -- audio playback
@@ -119,11 +128,11 @@ Core code never calls platform APIs directly. All platform interaction goes thro
 
 ### Core Modules
 
-The framework is split into 19 workspace crates. Each module below is its own crate (previously all in oasis-core):
+The framework is split into 20 workspace crates. Each module below is its own crate (previously all in oasis-core):
 
 - **oasis-types** -- Foundation types: `Color`, `Button`, `InputEvent`, backend traits (`SdiCore`, `SdiBackend`, `InputBackend`, `NetworkBackend`, `AudioBackend`), error types, TLS, bitmap font metrics
 - **oasis-sdi** -- Scene Display Interface: named objects with position, size, color, texture, text, z-order, gradients, rounded corners, shadows
-- **oasis-skin** -- Data-driven TOML skin system with 17 skins (11 external TOML in `skins/`, 17 built-in). Theme derivation from 9 base colors.
+- **oasis-skin** -- Data-driven TOML skin system with 18 skins (12 external TOML in `skins/`, 18 built-in). Theme derivation from 9 base colors.
 - **oasis-browser** -- Embeddable HTML/CSS/Gemini rendering engine: DOM parser, CSS cascade, block/inline/table layout, link navigation, reader mode, JavaScript DOM bindings
 - **oasis-js** -- JavaScript engine wrapping QuickJS-NG via rquickjs: `console` API (log/warn/error/info), inline `<script>` execution, DOM manipulation (`document.getElementById`, `createElement`, `textContent`, attributes). Feature-gated (`javascript`)
 - **oasis-ui** -- 27 reusable widgets: Button, Card, TabBar, Panel, TextField, ListView, ScrollView, ProgressBar, Toggle, NinePatch, flex layout, Accordion, Avatar, Badge, Checkbox, Dropdown, Modal, Slider, Spinner, Toast, Tooltip, TreeView, and more
@@ -133,7 +142,8 @@ The framework is split into 19 workspace crates. Each module below is its own cr
 - **oasis-net** -- TCP networking with PSK authentication, remote terminal, FTP transfer
 - **oasis-audio** -- Audio manager with playlist, shuffle/repeat modes, MP3 ID3 tag parsing
 - **oasis-platform** -- Platform service traits: PowerService, TimeService, UsbService, NetworkService, OskService
-- **oasis-video** -- MP4/H.264+AAC decode pipeline. Feature flags: `h264` (openh264 video decode + symphonia demux/AAC), `no-std-demux` (lightweight `demux_lite::Mp4Lite` parser, no symphonia/no std::sync::Once — PSP-safe), `video-decode` (re-exports `SoftwareVideoDecoder` for desktop/UE5). Streaming pipelines: desktop downloads MP4 then decodes in-process with PTS-based A/V sync; PSP uses `demux_lite` + `sceAudiocodec` AAC hardware decode + `sceVideocodec` H.264 (real HW only, audio-only on PPSSPP)
+- **oasis-video** -- MP4/H.264+AAC decode pipeline. Feature flags: `h264` (openh264 video decode + symphonia demux/AAC), `no-std-demux` (lightweight `demux_lite::Mp4Lite` parser, no symphonia/no std::sync::Once — PSP-safe), `video-decode` (re-exports `SoftwareVideoDecoder` for desktop/UE5). Streaming pipelines: desktop downloads MP4 then decodes in-process with PTS-based A/V sync; PSP streams in-memory via `demux_lite` + `sceAudiocodec` AAC hardware decode + `sceVideocodec` H.264 (real HW only, audio-only on PPSSPP) with backpressure-throttled I/O
+- **oasis-vector** -- Resolution-independent vector graphics: scene graph with path-based drawing operations (fill, stroke, arcs, beziers), Altimit-style dashboard icons, and frame-driven animations. Integrates via `SdiBackend` vector graphics trait extensions
 - **oasis-core** -- Coordination layer: app runner with 16 apps (File Manager, Settings, Network, Music Player, Photo Viewer, Package Manager, Browser, System Monitor, TV Guide, Internet Radio, Terminal, Text Editor, Calculator, Clock, Paint, Games), dashboard, agent/MCP, plugin, scripting, status/bottom bars
 
 ### Font Rendering

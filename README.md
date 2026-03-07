@@ -44,7 +44,7 @@ OASIS_OS originated as a Rust port of a PSP homebrew shell OS written in C circa
 
 ### Skins
 
-The framework supports a data-driven **skin system** that controls visual layout, color themes, feature gating, and behavioral personality. Skins are defined in TOML configuration files -- no code changes required. Seventeen skins are implemented:
+The framework supports a data-driven **skin system** that controls visual layout, color themes, feature gating, and behavioral personality. Skins are defined in TOML configuration files -- no code changes required. Eighteen skins are implemented:
 
 | Skin | Style | Key Features | Source |
 |------|-------|-------------|--------|
@@ -64,6 +64,7 @@ The framework supports a data-driven **skin system** that controls visual layout
 | **solarized** | Solarized Dark palette | Developer-focused, clean Solarized color scheme | External (`skins/solarized/`) |
 | **vaporwave** | Aesthetic vaporwave | Purple, pink, and cyan gradients | External (`skins/vaporwave/`) |
 | **highcontrast** | High contrast accessibility | Black background, white text, yellow accents | External (`skins/highcontrast/`) |
+| **altimit** | Altimit-style vector icons | Dashboard + terminal, vector icon grid, animated icons | External (`skins/altimit/`) |
 | **modern** | Purple accent, rounded corners | Dashboard + WM + browser, gradient fills, shadows | Built-in |
 
 All skins share the same core: scene graph, command interpreter, virtual file system, networking, and plugin infrastructure. See the [Skin Authoring Guide](docs/skin-authoring.md) for creating custom skins.
@@ -86,12 +87,14 @@ Default virtual resolution is 480x272 (PSP native). Skins may override this (e.g
 - **Agent/MCP Integration** -- Agent status tracking, MCP tool browsing/invocation, tamper detection, system health dashboard
 - **Scripting** -- Line-based command scripts, startup scripts, cron-like scheduling
 - **Internet Archive Integration** -- TV Guide streams live video from Internet Archive channels with a 1980s Prevue Channel aesthetic; Radio streams MP3 audio from curated Internet Archive collections
-- **Video Playback** -- Software MP4/H.264+AAC decode pipeline (`oasis-video` crate) with streaming `VideoSource` API for file-backed decode. Desktop uses software decode via `video-decode` feature (no ffmpeg required) with ffmpeg fallback; WASM renders in-canvas; PSP downloads to Memory Stick. UE5 exposes video control via C-ABI (`oasis_video_play/stop/is_playing`)
+- **Vector Graphics** -- Resolution-independent scene graph (`oasis-vector` crate) with path-based drawing operations, Altimit-style icons, and frame-driven animations via the `SdiBackend` trait
+- **TLS 1.3** -- Pure Rust TLS 1.3 via `embedded-tls` with `UnsecureProvider`. On PSP, wraps raw TCP sockets with custom MT19937 PRNG entropy, enabling HTTPS connections that the firmware's SSL 3.0 stack cannot handle
+- **Video Playback** -- Software MP4/H.264+AAC decode pipeline (`oasis-video` crate) with streaming `VideoSource` API for file-backed decode. Desktop uses software decode via `video-decode` feature (no ffmpeg required) with ffmpeg fallback; WASM renders in-canvas; PSP streams in-memory with `demux_lite` MP4 parsing, `sceAudiocodec` AAC hardware decode, and backpressure-throttled I/O. UE5 exposes video control via C-ABI (`oasis_video_play/stop/is_playing`)
 - **16 Built-in Apps** -- File Manager (dual-panel Norton Commander-style), Settings, Network, Music Player, Photo Viewer, Package Manager, Browser, System Monitor, TV Guide, Internet Radio, Terminal, Text Editor, Calculator, Clock, Paint, Games
 
 ## Crates
 
-The framework is split into 19 workspace crates plus 2 excluded PSP crates:
+The framework is split into 20 workspace crates plus 2 excluded PSP crates:
 
 ```
 oasis-os/
@@ -111,6 +114,7 @@ oasis-os/
 |   +-- oasis-js/                    # JavaScript engine: QuickJS-NG runtime, console API, DOM bindings
 |   +-- oasis-core/                   # Coordination layer: 16 apps, dashboard, agent, plugin, script, etc.
 |   +-- oasis-video/                  # Software MP4/H.264+AAC decode pipeline (symphonia + openh264)
+|   +-- oasis-vector/                 # Vector graphics: scene graph, path ops, icons, animations
 |   +-- oasis-backend-sdl/            # SDL2 rendering and input (desktop + Pi)
 |   +-- oasis-backend-wasm/           # Canvas 2D rendering, DOM input, Web Audio (browser)
 |   +-- oasis-backend-ue5/            # UE5 software framebuffer + FFI input queue
@@ -147,7 +151,7 @@ oasis-os/
 | `oasis-audio` | Audio manager with playlist, shuffle/repeat modes, MP3/WAV decode, ID3 tag parsing |
 | `oasis-ui` | 30+ reusable widgets: Button, Card, TabBar, Panel, TextField, ListView, ScrollView, ProgressBar, Toggle, NinePatch, flex layout |
 | `oasis-wm` | Window manager: movable/resizable windows, titlebar buttons, hit testing, themed decorations |
-| `oasis-skin` | Data-driven TOML skin system with 17 skins (11 external TOML + 7 built-in; xp exists in both), theme derivation from 9 base colors to ~30 UI element colors |
+| `oasis-skin` | Data-driven TOML skin system with 18 skins (12 external TOML + 7 built-in; xp exists in both), theme derivation from 9 base colors to ~30 UI element colors |
 | `oasis-terminal` | Command interpreter with 90+ commands across 17 modules, shell features (variables, globs, aliases, history, piping) |
 | `oasis-browser` | Embeddable HTML/CSS/Gemini rendering engine: DOM parser, CSS cascade, block/inline/table layout, reader mode, JavaScript DOM bindings |
 | `oasis-js` | JavaScript engine wrapping QuickJS-NG via rquickjs: `console` API, inline `<script>` execution, DOM manipulation from JS |
@@ -156,7 +160,8 @@ oasis-os/
 | `oasis-backend-sdl` | SDL2 rendering and input backend for desktop and Raspberry Pi |
 | `oasis-backend-wasm` | WebAssembly backend -- Canvas 2D rendering, DOM event input, Web Audio, iframe overlay for real web pages |
 | `oasis-backend-ue5` | UE5 render target backend -- software RGBA framebuffer and FFI input queue |
-| `oasis-backend-psp` | PSP hardware backend -- sceGu sprite rendering, PSP controller input, dual-panel file manager, UMD disc browsing, std via [rust-psp](https://github.com/AndrewAltimit/rust-psp) SDK |
+| `oasis-vector` | Resolution-independent vector graphics: scene graph, path operations, Altimit-style icons, frame-driven animations |
+| `oasis-backend-psp` | PSP hardware backend -- sceGu sprite rendering, SDI scene-graph integration, TLS 1.3 via embedded-tls, in-memory MP4 streaming with AAC hardware decode, PSP controller input, std via [rust-psp](https://github.com/AndrewAltimit/rust-psp) SDK |
 | `oasis-plugin-psp` | PSP overlay plugin PRX -- kernel-mode companion module for in-game overlay UI and background MP3 playback |
 | `oasis-ffi` | C-ABI FFI boundary (`cdylib`) for UE5 and external integrations. Optional `video-decode` feature adds `oasis_video_play/stop/is_playing` |
 | `oasis-app` | Desktop entry point (SDL2) and screenshot capture tool. `video-decode` feature (default) enables software video decode for TV Guide without ffmpeg |

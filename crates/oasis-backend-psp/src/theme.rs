@@ -1,6 +1,6 @@
 //! Theme constants (matching oasis-core/src/theme.rs).
 
-use oasis_backend_psp::{Color, SCREEN_HEIGHT};
+use oasis_backend_psp::{Color, SCREEN_HEIGHT, SCREEN_WIDTH};
 
 // Bar geometry.
 pub(crate) const STATUSBAR_H: u32 = 18;
@@ -20,24 +20,25 @@ pub(crate) const CHAR_W: i32 = 8;
 // Bottom bar layout.
 pub(crate) const R_HINT_W: i32 = 28;
 
-// Icon theme (compact to fit 4 rows).
-pub(crate) const ICON_W: u32 = 42;
-pub(crate) const ICON_H: u32 = 40;
-pub(crate) const ICON_STRIPE_H: u32 = 8;
-pub(crate) const ICON_FOLD_SIZE: u32 = 7;
-pub(crate) const ICON_GFX_H: u32 = 16;
-pub(crate) const ICON_GFX_PAD: u32 = 3;
+// Icon theme (compact for 4x3 grid on 480x272).
+pub(crate) const ICON_W: u32 = 34;
+pub(crate) const ICON_H: u32 = 34;
+pub(crate) const ICON_STRIPE_H: u32 = 6;
+pub(crate) const ICON_FOLD_SIZE: u32 = 5;
+pub(crate) const ICON_GFX_H: u32 = 14;
+pub(crate) const ICON_GFX_PAD: u32 = 2;
 pub(crate) const ICON_LABEL_PAD: i32 = 1;
 
-// Dashboard grid (3 columns, 4 rows = 12 icons per page, L/R pagination).
-pub(crate) const GRID_COLS: usize = 3;
-pub(crate) const GRID_ROWS: usize = 4;
-pub(crate) const GRID_PAD_X: i32 = 15;
+// Dashboard grid (4 columns, 3 rows = 12 icons per page).
+pub(crate) const GRID_COLS: usize = 4;
+pub(crate) const GRID_ROWS: usize = 3;
+pub(crate) const GRID_PAD_X: i32 = 8;
 pub(crate) const GRID_PAD_Y: i32 = 2;
-pub(crate) const CELL_W: i32 = 150;
+pub(crate) const CELL_W: i32 =
+    (SCREEN_WIDTH as i32 - 2 * GRID_PAD_X) / GRID_COLS as i32;
 pub(crate) const CELL_H: i32 = (CONTENT_H as i32 - 2 * GRID_PAD_Y) / GRID_ROWS as i32;
 pub(crate) const ICONS_PER_PAGE: usize = GRID_COLS * GRID_ROWS;
-pub(crate) const CURSOR_PAD: i32 = 3;
+pub(crate) const CURSOR_PAD: i32 = 2;
 
 // Persistent configuration path on Memory Stick.
 pub(crate) const CONFIG_PATH: &str = "ms0:/PSP/GAME/OASISOS/config.rcfg";

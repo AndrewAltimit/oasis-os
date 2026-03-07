@@ -14,6 +14,7 @@ use psp::sys::CtrlButtons;
 
 use oasis_backend_psp::{
     AudioCmd, Button, CURSOR_H, CURSOR_W, Color, FileEntry, InputEvent, IoCmd, IoResponse,
+    TvCatalogRequest,
     PspBackend, SCREEN_HEIGHT, SCREEN_WIDTH, SdiRegistry, SfxId, StatusBarInfo, SystemInfo,
     TextureId, Trigger, WindowManager,
 };
@@ -160,7 +161,22 @@ fn psp_main() {
     // Default is semi-transparent (alpha=80) which looks muddy on 480x272.
     active_theme.bar.statusbar_bg = Color::rgba(10, 10, 20, 255);
     active_theme.bar.bg = Color::rgba(10, 10, 20, 255);
-    let skin_features = SkinFeatures::default();
+    // PSP: match actual bar sizes (theme.rs constants) so SDI grid aligns.
+    active_theme.statusbar_height = 18;
+    active_theme.tab_row_height = 0;
+    active_theme.bottombar_height = 32;
+    // PSP: compact icons for 4x3 grid on 480x272.
+    active_theme.icon_width = 34;
+    active_theme.icon_height = 34;
+    active_theme.icon_stripe_h = 6;
+    active_theme.icon_fold_size = 5;
+    active_theme.grid_padding_x = 8;
+    active_theme.grid_padding_y = 2;
+    active_theme.cursor_pad = 2;
+    let mut skin_features = SkinFeatures::default();
+    skin_features.grid_cols = 4;
+    skin_features.grid_rows = 3;
+    skin_features.icons_per_page = 12;
     dbg_log("[EBOOT] active_theme created");
     let dash_config = DashboardConfig::from_features(&skin_features, &active_theme);
 
@@ -397,6 +413,7 @@ fn psp_main() {
                     }
                 },
                 IoResponse::Error { path, msg } => {
+                    dbg_log(&format!("[IO] error: {} - {}", path, msg));
                     term_lines.push(format!("I/O error: {} - {}", path, msg));
                     pv_loading = false;
                     if br_loading {
@@ -419,39 +436,28 @@ fn psp_main() {
                         br_loading = false;
                         br_status_msg = format!("HTTP {} - {} bytes", status_code, body.len(),);
                     } else if (tag & 0xFF00) == 0xAA00 {
-                        // TV Guide catalog response.
-                        let ch_idx = (tag & 0xFF) as usize;
-                        let src_idx = ((tag >> 16) & 0xF) as usize;
-                        if ch_idx < tv_channels.len() && status_code >= 200 && status_code < 300 {
-                            let json = String::from_utf8_lossy(&body);
-                            let ch = &tv_channels[ch_idx];
-                            let subfolder = ch
-                                .source
-                                .get(src_idx)
-                                .and_then(|s| s.subfolder.as_deref());
-                            let item_id = ch
-                                .source
-                                .get(src_idx)
-                                .map(|s| s.item_id.as_str())
-                                .unwrap_or("");
-                            let episodes =
-                                oasis_core::apps::tv_guide::ChannelCatalog
-                                    ::parse_files_response(&json, item_id, subfolder);
-                            if !episodes.is_empty() {
-                                let catalog = tv_catalogs[ch_idx]
-                                    .get_or_insert_with(|| {
-                                        oasis_core::apps::tv_guide::ChannelCatalog
-                                            ::new(ch.number)
-                                    });
-                                catalog.add_episodes(episodes);
-                            }
-                        }
+                        // Legacy TV Guide tag — no longer used.
+                        let _ = (tag, body);
                     } else {
                         let preview = String::from_utf8_lossy(&body[..body.len().min(256)]);
                         term_lines.push(format!(
                             "HTTP {status_code} ({} bytes): {preview}",
                             body.len(),
                         ));
+                    }
+                },
+                IoResponse::TvCatalogReady { ch_idx, episodes } => {
+                    dbg_log(&format!(
+                        "[TV] catalog ready ch={ch_idx} episodes={}",
+                        episodes.len()
+                    ));
+                    if ch_idx < tv_channels.len() && !episodes.is_empty() {
+                        let ch = &tv_channels[ch_idx];
+                        let catalog = tv_catalogs[ch_idx]
+                            .get_or_insert_with(|| {
+                                oasis_core::apps::tv_guide::ChannelCatalog::new(ch.number)
+                            });
+                        catalog.add_episodes(episodes);
                     }
                 },
                 IoResponse::RadioConnected {
@@ -478,15 +484,21 @@ fn psp_main() {
                     }
                 },
                 IoResponse::VideoReady { tag: _, path } => {
+                    // Non-faststart fallback: file fully downloaded, play from disk.
                     tv_downloading = false;
                     tv_download_progress = 1.0;
-                    // Start video decode thread.
                     oasis_backend_psp::video::send_video_cmd(
                         oasis_backend_psp::video::VideoCmd::Play {
                             path,
                             seek_secs: 0,
                         },
                     );
+                },
+                IoResponse::VideoStreamReady { tag: _, .. } => {
+                    // Streaming playback started by I/O thread (moov parsed,
+                    // samples being pushed to video thread). Just update UI.
+                    tv_downloading = false;
+                    tv_download_progress = 1.0;
                 },
                 IoResponse::VideoError { tag: _, msg } => {
                     tv_downloading = false;
@@ -681,31 +693,58 @@ fn psp_main() {
                                 radio_scroll = 0;
                             },
                             "TV Guide" => {
+                                dbg_log("[TV] entering TV Guide view");
                                 classic_view = ClassicView::TvGuide;
                                 if tv_channels.is_empty() {
+                                    // Init network on main thread (WiFi dialog needs GU).
+                                    if !oasis_backend_psp::network::is_net_initialized() {
+                                        dbg_log("[TV] init network...");
+                                        if let Err(e) =
+                                            oasis_backend_psp::network::ensure_net_init_pub()
+                                        {
+                                            dbg_log(&format!("[TV] net init failed: {e}"));
+                                            backend.reinit_gu_frame();
+                                        } else {
+                                            dbg_log("[TV] net init OK");
+                                            backend.reinit_gu_frame();
+                                        }
+                                    }
+                                    dbg_log("[TV] parsing channel TOML...");
                                     if let Ok(config) =
                                         oasis_core::apps::tv_guide::ChannelConfig::from_toml(
                                             oasis_core::apps::tv_guide::channel
                                                 ::DEFAULT_CHANNELS_TOML,
                                         )
                                     {
+                                        dbg_log(&format!(
+                                            "[TV] parsed {} channels",
+                                            config.channel.len()
+                                        ));
                                         tv_channels = config.channel;
                                         tv_catalogs = vec![None; tv_channels.len()];
+                                        let mut batch = Vec::new();
                                         for (i, ch) in tv_channels.iter().enumerate() {
-                                            for (si, src) in ch.source.iter().enumerate() {
+                                            for src in &ch.source {
                                                 let api_path =
                                                     oasis_core::apps::tv_guide::ChannelCatalog
                                                         ::files_api_path(&src.item_id);
-                                                let url = format!(
-                                                    "https://archive.org{}",
-                                                    api_path,
-                                                );
-                                                let tag = 0xAA00
-                                                    | (i as u32 & 0xFF)
-                                                    | ((si as u32 & 0xF) << 16);
-                                                io.send(IoCmd::HttpGet { url, tag });
+                                                batch.push(TvCatalogRequest {
+                                                    url: format!(
+                                                        "http://archive.org{}",
+                                                        api_path,
+                                                    ),
+                                                    ch_idx: i,
+                                                    item_id: src.item_id.clone(),
+                                                    subfolder: src.subfolder.clone(),
+                                                });
                                             }
                                         }
+                                        io.send(IoCmd::TvCatalogFetchBatch {
+                                            requests: batch,
+                                        });
+                                        dbg_log("[TV] catalog batch sent");
+                                    } else {
+                                        dbg_log("[TV] TOML parse failed");
                                     }
                                 }
                                 tv_selected = 0;
@@ -1355,29 +1394,46 @@ fn psp_main() {
                 {
                     if tv_tuned.is_none() && !tv_downloading {
                         // Tune to selected channel.
+                        dbg_log(&format!(
+                            "[TV] X pressed, tuning ch {} (catalogs={})",
+                            tv_selected, tv_catalogs.len()
+                        ));
                         if tv_selected < tv_catalogs.len() {
                             if let Some(catalog) = &tv_catalogs[tv_selected] {
+                                dbg_log(&format!(
+                                    "[TV] catalog has {} episodes",
+                                    catalog.episodes.len()
+                                ));
                                 let best = oasis_core::apps::tv_guide::select_smallest_for(
                                     &catalog.episodes,
                                     20_000_000, // 20MB max
                                     320,        // min width
                                 );
                                 if let Some(ep) = best {
-                                    // Init network.
+                                    dbg_log(&format!(
+                                        "[TV] episode: {} ({}B)",
+                                        ep.title, ep.width
+                                    ));
+                                    // Network already initialized on TV Guide entry.
                                     if !oasis_backend_psp::network::is_net_initialized() {
+                                        dbg_log("[TV] calling ensure_net_init_pub...");
                                         if let Err(e) =
                                             oasis_backend_psp::network::ensure_net_init_pub()
                                         {
+                                            dbg_log(&format!("[TV] net init failed: {e}"));
                                             tv_error_msg = format!("Net: {e}");
                                             backend.reinit_gu_frame();
                                             continue;
                                         }
+                                        dbg_log("[TV] net init OK");
                                         backend.reinit_gu_frame();
                                     }
+                                    // Use HTTPS natively via embedded-tls when needed.
                                     let url =
                                         oasis_core::apps::tv_guide::ChannelCatalog::download_url(
                                             ep,
                                         );
+                                    dbg_log(&format!("[TV] starting download: {url}"));
                                     tv_now_playing = ep.title.clone();
                                     tv_downloading = true;
                                     tv_download_progress = 0.0;
@@ -1391,11 +1447,15 @@ fn psp_main() {
                                         tag: 0xBB00,
                                     });
                                 } else {
+                                    dbg_log("[TV] no suitable video found");
                                     tv_error_msg = String::from("No suitable video found");
                                 }
                             } else {
+                                dbg_log("[TV] catalog not loaded yet");
                                 tv_error_msg = String::from("Channel catalog not loaded");
                             }
+                        } else {
+                            dbg_log("[TV] tv_selected out of range");
                         }
                     }
                 },
@@ -1727,6 +1787,9 @@ fn psp_main() {
                         backend.force_bitmap_font = false;
                     },
                     ClassicView::TvGuide => {
+                        if viz_frame < 3 || viz_frame % 60 == 0 {
+                            dbg_log(&format!("[TV] render frame {}", viz_frame));
+                        }
                         backend.force_bitmap_font = true;
                         if tv_tuned.is_some() {
                             views::draw_tv_playing(

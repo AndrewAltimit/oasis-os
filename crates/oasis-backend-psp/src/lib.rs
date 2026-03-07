@@ -48,7 +48,7 @@ pub use procedural::{
 };
 pub use sfx::SfxId;
 pub use status::{StatusBarInfo, SystemInfo};
-pub use threading::{AudioCmd, AudioHandle, IoCmd, IoHandle, IoResponse, spawn_workers};
+pub use threading::{AudioCmd, AudioHandle, IoCmd, IoHandle, IoResponse, TvCatalogRequest, spawn_workers};
 pub use tls::PspTlsProvider;
 
 // ---------------------------------------------------------------------------

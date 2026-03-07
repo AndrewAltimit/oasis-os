@@ -115,6 +115,30 @@ pub struct TrackInfo {
     pub aac_config: Option<AacConfig>,
 }
 
+impl TrackInfo {
+    /// Number of samples in this track.
+    pub fn sample_count(&self) -> usize {
+        self.table.stsz.len()
+    }
+
+    /// Get the absolute file offset and size (bytes) for a sample.
+    pub fn sample_offset_size(&self, idx: usize) -> Option<(u64, u32)> {
+        sample_file_offset(&self.table, idx)
+    }
+
+    /// Presentation timestamp in seconds for a sample.
+    pub fn sample_timestamp(&self, idx: usize) -> f64 {
+        let pts = sample_pts(&self.table, idx);
+        let ts = self.table.timescale;
+        if ts > 0 { pts as f64 / ts as f64 } else { 0.0 }
+    }
+
+    /// Whether a sample is a sync (key) frame.
+    pub fn sample_is_keyframe(&self, idx: usize) -> bool {
+        is_keyframe(&self.table, idx)
+    }
+}
+
 /// A raw sample read from the file.
 #[derive(Debug)]
 pub struct RawSample {
@@ -958,7 +982,9 @@ fn read_sample<R: Read + Seek>(
 }
 
 /// Convert AVCC-formatted NALs to Annex B, prepending SPS/PPS on keyframes.
-fn avcc_to_annex_b(
+/// Convert AVCC-formatted NAL units to Annex B format with start codes.
+/// Prepends SPS + PPS on keyframes.
+pub fn avcc_to_annex_b(
     data: &[u8],
     avcc: &AvccConfig,
     is_keyframe: bool,
