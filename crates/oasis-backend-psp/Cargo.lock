@@ -1035,7 +1035,7 @@ dependencies = [
 [[package]]
 name = "psp"
 version = "1.0.0"
-source = "git+https://github.com/AndrewAltimit/rust-psp?branch=fix%2Fweak-videocodec-import#1ea2e178465035600acb26b643522a785e3fc921"
+source = "git+https://github.com/AndrewAltimit/rust-psp?rev=1c119f1#1c119f1ec7e501f215ec18a83b8b9c4c3e815e75"
 dependencies = [
  "bitflags 2.10.0",
  "libm",
