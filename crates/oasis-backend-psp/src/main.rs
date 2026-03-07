@@ -23,7 +23,7 @@ use oasis_core::active_theme::ActiveTheme;
 use oasis_core::bottombar::BottomBar;
 use oasis_core::dashboard::{AppEntry as CoreAppEntry, DashboardConfig, DashboardState};
 use oasis_core::platform::{BatteryState, CpuClock, PowerInfo, SystemTime};
-use oasis_core::skin::builtin as skin_builtin;
+use oasis_core::skin::SkinFeatures;
 use oasis_core::statusbar::StatusBar;
 use oasis_core::terminal_sdi;
 
@@ -104,9 +104,31 @@ unsafe extern "Rust" fn __getrandom_v03_custom(
 fn psp_main() {
     let _ = psp::callback::setup_exit_callback();
 
+    // Debug log helper -- appends a line using raw PSP I/O.
+    fn dbg_log(msg: &str) {
+        // SAFETY: sceIo calls with valid path and buffer pointers.
+        unsafe {
+            let fd = psp::sys::sceIoOpen(
+                b"ms0:/PSP/GAME/OASISOS/eboot.log\0".as_ptr(),
+                psp::sys::IoOpenFlags::APPEND
+                    | psp::sys::IoOpenFlags::CREAT
+                    | psp::sys::IoOpenFlags::WR_ONLY,
+                0o777,
+            );
+            if fd >= psp::sys::SceUid(0) {
+                psp::sys::sceIoWrite(fd, msg.as_ptr() as *const _, msg.len());
+                psp::sys::sceIoWrite(fd, b"\n".as_ptr() as *const _, 1);
+                psp::sys::sceIoClose(fd);
+            }
+        }
+    }
+
+    dbg_log("[EBOOT] psp_main entered");
+
     let mut backend = PspBackend::new();
     backend.init();
     boot::show_boot_screen(&mut backend, "Initializing...", 10);
+    dbg_log("[EBOOT] backend init OK");
 
     // Register exception handler (kernel mode only) for crash diagnostics.
     #[cfg(feature = "kernel-exception")]
@@ -116,6 +138,7 @@ fn psp_main() {
     // Load persistent configuration.
     let mut config =
         psp::config::Config::load(CONFIG_PATH).unwrap_or_else(|_| psp::config::Config::new());
+    dbg_log("[EBOOT] config loaded");
 
     // Set clock speed from config (default: max 333MHz).
     let clock_mhz = config.get_i32("clock_mhz").unwrap_or(333);
@@ -124,15 +147,22 @@ fn psp_main() {
 
     // Query static hardware info.
     let sysinfo = SystemInfo::query();
+    dbg_log("[EBOOT] sysinfo queried");
 
-    // -- Skin & ActiveTheme (Phase 1: SDI integration) --
-    let skin_name = config.get_str("skin").unwrap_or("altimit");
-    let skin = skin_builtin::load_builtin(&skin_name)
-        .unwrap_or_else(|_| skin_builtin::load_builtin("altimit").expect("altimit built-in"));
-    let mut active_theme = ActiveTheme::from_skin(&skin.theme)
-        .with_screen_size(SCREEN_WIDTH, SCREEN_HEIGHT)
-        .with_features(&skin.features);
-    let dash_config = DashboardConfig::from_features(&skin.features, &active_theme);
+    // -- ActiveTheme (SDI integration) --
+    // Use default theme directly to avoid pulling in the TOML parser and
+    // 17 embedded skin files (~850KB code). ActiveTheme::default() provides
+    // PSIX-style layout already matched to 480x272.
+    dbg_log("[EBOOT] creating theme...");
+    let mut active_theme = ActiveTheme::default()
+        .with_screen_size(SCREEN_WIDTH, SCREEN_HEIGHT);
+    // PSP: make bar backgrounds opaque to prevent darkening window content.
+    // Default is semi-transparent (alpha=80) which looks muddy on 480x272.
+    active_theme.bar.statusbar_bg = Color::rgba(10, 10, 20, 255);
+    active_theme.bar.bg = Color::rgba(10, 10, 20, 255);
+    let skin_features = SkinFeatures::default();
+    dbg_log("[EBOOT] active_theme created");
+    let dash_config = DashboardConfig::from_features(&skin_features, &active_theme);
 
     // Convert PSP app list to oasis-core AppEntry for DashboardState.
     let core_apps: Vec<CoreAppEntry> = APPS
@@ -145,12 +175,14 @@ fn psp_main() {
         })
         .collect();
     let mut dashboard = DashboardState::new(dash_config, core_apps);
+    dbg_log("[EBOOT] dashboard created");
 
     let mut status_bar = StatusBar::new();
     let mut bottom_bar = BottomBar::new();
     bottom_bar.total_pages = dashboard.page_count();
 
     boot::show_boot_screen(&mut backend, "Generating textures...", 40);
+    dbg_log("[EBOOT] textures phase");
 
     // Load wallpaper texture at reduced resolution (64x64 = 16KB vs 1MB).
     // The GE scales it up to 480x272 with bilinear filtering during blit.
@@ -171,8 +203,7 @@ fn psp_main() {
     let psp_theme = oasis_backend_psp::psp_wm_theme();
     let mut wm = WindowManager::with_theme(SCREEN_WIDTH, SCREEN_HEIGHT, psp_theme);
     let mut sdi = SdiRegistry::new();
-    // Apply skin layout to SDI registry (creates wallpaper, bar, etc. objects).
-    skin.apply_layout_scaled(&mut sdi, SCREEN_WIDTH, SCREEN_HEIGHT);
+    dbg_log("[EBOOT] SDI registry created");
 
     // -- App mode --
     let mut app_mode = AppMode::Classic;
@@ -328,10 +359,15 @@ fn psp_main() {
     // Frame timing via hardware tick counter.
     let mut frame_timer = psp::time::FrameTimer::new();
     boot::show_boot_screen(&mut backend, "Ready", 100);
+    dbg_log("[EBOOT] entering main loop");
     psp::thread::sleep_ms(400);
 
     loop {
         let _dt = frame_timer.tick();
+        // Log first frame only.
+        if viz_frame == 0 {
+            dbg_log("[EBOOT] first frame tick");
+        }
         // Prevent idle auto-suspend while running.
         oasis_backend_psp::power_tick();
 
@@ -1870,9 +1906,24 @@ fn psp_main() {
                 }
             },
         };
-        status_bar.update_sdi(&mut sdi, &active_theme, &skin.features);
-        bottom_bar.update_sdi(&mut sdi, &active_theme, &skin.features);
-        let _ = sdi.draw(&mut backend);
+        status_bar.update_sdi(&mut sdi, &active_theme, &skin_features);
+        bottom_bar.update_sdi(&mut sdi, &active_theme, &skin_features);
+
+        // On PSP, draw SDI in two passes to control cost:
+        // - Base layer only when dashboard/terminal are active (icons, term lines)
+        // - Overlay layer always (status bar, bottom bar at z=900)
+        // This avoids 100+ unnecessary draw calls in non-dashboard views.
+        let needs_base = match app_mode {
+            AppMode::Classic => matches!(
+                classic_view,
+                ClassicView::Dashboard | ClassicView::Terminal
+            ),
+            AppMode::Desktop => false, // WM draws windows directly
+        };
+        if needs_base {
+            let _ = sdi.draw_base_layer(&mut backend);
+        }
+        let _ = sdi.draw_overlay_layer(&mut backend);
 
         // Post-SDI overlays drawn directly on the backend.
         if app_mode == AppMode::Classic {

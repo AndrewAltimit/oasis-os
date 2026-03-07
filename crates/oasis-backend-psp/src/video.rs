@@ -147,8 +147,14 @@ impl Drop for PspFileReader {
 }
 
 // ---------------------------------------------------------------------------
-// H.264 video decoder stub (sceVideocodec)
+// H.264 video decoder (sceVideocodec)
 // ---------------------------------------------------------------------------
+//
+// sceVideocodec is declared with weak import flags (0x4009) in the rust-psp
+// SDK, so the EBOOT module loads even when codec libraries aren't present at
+// boot. Before first use, we call `load_av_modules_once()` which triggers
+// `sceUtilityLoadModule(AvCodec)` + `sceUtilityLoadModule(AvMpegBase)`.
+// The kernel then re-links the weak stubs with the real syscall entries.
 
 /// 64-byte-aligned codec buffer required by the PSP Media Engine.
 ///
@@ -160,8 +166,9 @@ struct CodecBuf([u32; 65]);
 
 /// PSP hardware H.264 video decoder using the Media Engine.
 ///
-/// Uses `sceVideocodec*` raw APIs. The ME is not emulated in PPSSPP, so
-/// `try_init()` returns `Err` when running under emulation (audio-only mode).
+/// Uses `sceVideocodec*` APIs after lazy-loading the AV modules.
+/// The ME is not emulated in PPSSPP, so `try_init()` returns `Err`
+/// when running under emulation (falls back to audio-only mode).
 struct PspVideoDecoder {
     /// Codec buffer (65 words, 64-byte aligned via `CodecBuf`).
     buf: Box<CodecBuf>,
@@ -171,9 +178,14 @@ struct PspVideoDecoder {
 impl PspVideoDecoder {
     /// Attempt to initialize the H.264 hardware decoder.
     ///
+    /// Loads AV codec modules first (idempotent), then calls sceVideocodec.
     /// Returns `Err` on PPSSPP (ME not emulated) or if the codec modules
     /// are unavailable. The caller should fall back to audio-only mode.
     fn try_init() -> Result<Self, String> {
+        // Ensure AV modules are loaded so the weak sceVideocodec stubs
+        // get re-linked by the kernel to the real syscall entries.
+        crate::audio::load_av_modules_once_pub();
+
         let mut buf = Box::new(CodecBuf([0u32; 65]));
         let ptr = buf.0.as_mut_ptr();
 
