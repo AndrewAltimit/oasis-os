@@ -1636,35 +1636,60 @@ fn handle_video_download(url: String, _dest: String, tag: u32) {
                 )
             },
             Err((msg, https_redirect)) => {
-                // Use the CDN's HTTPS redirect URL if available
-                // (from a redirect loop), otherwise the original URL.
-                let tls_url = https_redirect.unwrap_or_else(|| {
-                    if url.starts_with("http://") {
-                        url.replacen("http://", "https://", 1)
-                    } else {
-                        url.clone()
+                // Try TLS fallback. First try archive.org HTTPS
+                // (may redirect to a different, reachable CDN node),
+                // then try CDN HTTPS directly as a last resort.
+                let origin_tls = if url.starts_with("http://") {
+                    url.replacen("http://", "https://", 1)
+                } else {
+                    url.clone()
+                };
+
+                // Build candidate list: origin first, then CDN if different.
+                let mut tls_candidates: Vec<String> = vec![origin_tls];
+                if let Some(cdn_url) = &https_redirect {
+                    if !tls_candidates.contains(cdn_url) {
+                        tls_candidates.push(cdn_url.clone());
                     }
-                });
-                io_log(&format!(
-                    "[IO-DL] sceHttp failed ({msg}), trying TLS to \
-                     {tls_url}..."
-                ));
-                match TlsHttpReader::open(&tls_url) {
-                    Ok((reader, cl)) => {
-                        io_log(&format!(
-                            "[IO-DL] TLS fallback OK, len={cl}"
-                        ));
+                }
+
+                let mut last_err = msg.clone();
+                let mut found = None;
+                for (i, tls_url) in tls_candidates.iter().enumerate() {
+                    io_log(&format!(
+                        "[IO-DL] sceHttp failed ({msg}), trying TLS \
+                         #{} to {tls_url}...",
+                        i + 1
+                    ));
+                    match TlsHttpReader::open(tls_url) {
+                        Ok((reader, cl)) => {
+                            io_log(&format!(
+                                "[IO-DL] TLS fallback #{} OK, len={cl}",
+                                i + 1
+                            ));
+                            found = Some((reader, cl));
+                            break;
+                        },
+                        Err(e) => {
+                            io_log(&format!(
+                                "[IO-DL] TLS fallback #{} failed: {e}",
+                                i + 1
+                            ));
+                            last_err = e;
+                        },
+                    }
+                }
+
+                match found {
+                    Some((reader, cl)) => {
                         (HttpDataSource::Tls(reader), cl)
                     },
-                    Err(tls_err) => {
-                        io_log(&format!(
-                            "[IO-DL] TLS fallback failed: {tls_err}"
-                        ));
+                    None => {
                         let _ =
                             IO_RESP_QUEUE.push(IoResponse::VideoError {
                                 tag,
                                 msg: format!(
-                                    "HTTP: {msg}; TLS: {tls_err}"
+                                    "HTTP: {msg}; TLS: {last_err}"
                                 ),
                             });
                         return;

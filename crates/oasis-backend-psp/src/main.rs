@@ -451,13 +451,15 @@ fn psp_main() {
                         "[TV] catalog ready ch={ch_idx} episodes={}",
                         episodes.len()
                     ));
-                    if ch_idx < tv_channels.len() && !episodes.is_empty() {
+                    if ch_idx < tv_channels.len() {
                         let ch = &tv_channels[ch_idx];
                         let catalog = tv_catalogs[ch_idx]
                             .get_or_insert_with(|| {
                                 oasis_core::apps::tv_guide::ChannelCatalog::new(ch.number)
                             });
-                        catalog.add_episodes(episodes);
+                        if !episodes.is_empty() {
+                            catalog.add_episodes(episodes);
+                        }
                     }
                 },
                 IoResponse::RadioConnected {
@@ -1451,8 +1453,8 @@ fn psp_main() {
                                     tv_error_msg = String::from("No suitable video found");
                                 }
                             } else {
-                                dbg_log("[TV] catalog not loaded yet");
-                                tv_error_msg = String::from("Channel catalog not loaded");
+                                dbg_log("[TV] catalog still loading");
+                                tv_error_msg = String::from("Loading channel catalog...");
                             }
                         } else {
                             dbg_log("[TV] tv_selected out of range");
