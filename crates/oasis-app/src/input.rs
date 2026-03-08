@@ -666,6 +666,8 @@ mod tests {
             tv_fetch_start: None,
             video_player: crate::video_player::VideoPlayer::new(),
             tv_audio_track: None,
+            tv_audio_chunks_fed: 0,
+            tv_audio_samples_fed: 0,
             #[cfg(feature = "video-decode")]
             pending_video_download: None,
             #[cfg(feature = "video-decode")]

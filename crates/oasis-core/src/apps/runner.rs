@@ -190,6 +190,11 @@ impl AppRunner {
         self.pending_vfs_request.take()
     }
 
+    /// Set a pending VFS IPC request (used for auto-tune in tests).
+    pub fn set_pending_request(&mut self, path: String, data: String) {
+        self.pending_vfs_request = Some((path, data));
+    }
+
     /// Refresh radio display from VFS status (called each frame when visible).
     pub fn refresh_radio(&mut self, vfs: &dyn Vfs) {
         if self.title != "Internet Radio" {

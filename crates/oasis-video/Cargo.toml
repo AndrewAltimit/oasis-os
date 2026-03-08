@@ -16,6 +16,8 @@ h264 = ["dep:openh264"]
 no-std-demux = []
 
 [dependencies]
+log = "0.4"
+
 # MP4 demuxing + AAC decoding (pure Rust)
 symphonia = { version = "0.5", default-features = false, features = [
     "isomp4",  # MP4/ISO BMFF demuxer

@@ -116,6 +116,10 @@ pub struct AppState {
     pub video_player: crate::video_player::VideoPlayer,
     /// Audio track for TV Guide video playback.
     pub tv_audio_track: Option<AudioTrackId>,
+    /// Diagnostic: total audio chunks fed to the backend since last tune.
+    pub tv_audio_chunks_fed: u64,
+    /// Diagnostic: total audio samples fed to the backend since last tune.
+    pub tv_audio_samples_fed: u64,
     /// Pending video file download (software decode path).
     #[cfg(feature = "video-decode")]
     pub pending_video_download: Option<mpsc::Receiver<Result<std::path::PathBuf, String>>>,
@@ -136,7 +140,9 @@ pub struct AppState {
 }
 
 /// Parameters stashed from a tune request so they survive until download completes.
+/// Retained for potential future cache-miss fallback paths.
 #[cfg(feature = "video-decode")]
+#[allow(dead_code)]
 pub struct PendingVideoParams {
     pub url: String,
     pub seek_secs: u64,

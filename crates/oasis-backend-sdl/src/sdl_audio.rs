@@ -17,10 +17,10 @@ use std::collections::HashMap;
 use oasis_core::backend::{AudioBackend, AudioTrackId};
 use oasis_core::error::{OasisError, Result};
 
-/// Maximum PCM bytes to keep in the SDL2 audio queue before we stop decoding
-/// more frames.  At 44 100 Hz stereo i16 this is roughly 4.5 seconds — enough
-/// runway to absorb rendering jitter without building excessive latency.
-const MAX_QUEUE_BYTES: u32 = 800_000;
+/// Maximum PCM bytes to keep in the SDL2 audio queue before we stop accepting
+/// more samples.  At 44 100 Hz stereo i16 this is roughly 9 seconds — enough
+/// runway to absorb decode jitter and video frame blocking without audio gaps.
+const MAX_QUEUE_BYTES: u32 = 1_600_000;
 
 /// SDL2-based audio backend with real MP3 decoding.
 pub struct SdlAudioBackend {
@@ -525,13 +525,19 @@ impl AudioBackend for SdlAudioBackend {
         }
 
         // Apply backpressure: skip if queue is already full.
-        if let Some(ref device) = self.device
-            && device.size() < MAX_QUEUE_BYTES
-        {
-            device
-                .queue_audio(&self.pcm_staging)
-                .map_err(OasisError::Backend)?;
-            self.samples_queued += self.pcm_staging.len() as u64;
+        if let Some(ref device) = self.device {
+            if device.size() < MAX_QUEUE_BYTES {
+                device
+                    .queue_audio(&self.pcm_staging)
+                    .map_err(OasisError::Backend)?;
+                self.samples_queued += self.pcm_staging.len() as u64;
+            } else {
+                log::trace!(
+                    "SDL audio: queue full ({} bytes), dropping {} samples",
+                    device.size(),
+                    self.pcm_staging.len(),
+                );
+            }
         }
 
         Ok(())

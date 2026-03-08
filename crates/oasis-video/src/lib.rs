@@ -66,6 +66,9 @@ pub enum VideoError {
     Decode(String),
     /// No suitable track found.
     NoTrack(String),
+    /// Decoder couldn't produce a frame within the packet skip limit.
+    /// Not a fatal error — caller should continue with audio and retry.
+    SkipLimit,
 }
 
 impl std::fmt::Display for VideoError {
@@ -74,6 +77,7 @@ impl std::fmt::Display for VideoError {
             Self::Demux(s) => write!(f, "demux error: {s}"),
             Self::Decode(s) => write!(f, "decode error: {s}"),
             Self::NoTrack(s) => write!(f, "no track: {s}"),
+            Self::SkipLimit => write!(f, "decoder skip limit reached"),
         }
     }
 }
@@ -203,7 +207,14 @@ impl SoftwareVideoDecoder {
 
     /// Decode the next video frame.
     ///
-    /// Buffers audio packets internally. Returns `None` at end-of-stream.
+    /// Buffers audio packets internally. Returns `Ok(None)` at end-of-stream,
+    /// `Err(VideoError::SkipLimit)` if the decoder couldn't produce a frame
+    /// within the packet limit (caller should continue with audio).
+    ///
+    /// When OpenH264 enters an error state (lost reference frame), the decoder
+    /// is reinitialized and packets are skipped until the next IDR keyframe,
+    /// which is then fed with SPS/PPS to restart decoding.
+    ///
     /// Requires the `h264` feature; returns `VideoError::NoTrack` without it.
     pub fn next_video_frame(&mut self) -> Result<Option<VideoFrame>, VideoError> {
         #[cfg(not(feature = "h264"))]
@@ -219,6 +230,58 @@ impl SoftwareVideoDecoder {
                 return Err(VideoError::NoTrack("no video track".into()));
             }
 
+            // If decoder has been failing, reinit and skip to next IDR.
+            let h264 = self
+                .h264
+                .as_mut()
+                .expect("h264 decoder verified present above");
+            if h264.error_streak > 5 {
+                h264.reinit()?;
+                self.demuxer.reset_params();
+                let params = self.demuxer.parameter_sets().map(|p| p.to_vec());
+                let mut skipped_to_idr = 0u32;
+                loop {
+                    let packet = match self.next_packet_for(TrackKind::Video)? {
+                        Some(p) => p,
+                        None => return Ok(None),
+                    };
+                    skipped_to_idr += 1;
+                    if Self::contains_idr(&packet.data) {
+                        // Prepend SPS/PPS to IDR for decoder reinitialization.
+                        let decode_data = if let Some(ref ps) = params {
+                            let mut buf = Vec::with_capacity(ps.len() + packet.data.len());
+                            buf.extend_from_slice(ps);
+                            buf.extend_from_slice(&packet.data);
+                            buf
+                        } else {
+                            packet.data.clone()
+                        };
+                        let h264 = self
+                .h264
+                .as_mut()
+                .expect("h264 decoder verified present above");
+                        if let Some(frame) = h264.decode(&decode_data)? {
+                            if frame.width > 0 && frame.height > 0 {
+                                self.video_width = frame.width;
+                                self.video_height = frame.height;
+                            }
+                            return Ok(Some(VideoFrame {
+                                rgba: frame.rgba,
+                                width: frame.width,
+                                height: frame.height,
+                                timestamp_secs: packet.timestamp_secs,
+                            }));
+                        }
+                        break; // IDR didn't produce a frame — fall through to normal loop.
+                    }
+                    if skipped_to_idr > 2000 {
+                        return Err(VideoError::SkipLimit);
+                    }
+                }
+            }
+
+            // Normal decode: read packets until we produce a frame.
+            let mut skipped = 0u32;
             loop {
                 let packet = match self.next_packet_for(TrackKind::Video)? {
                     Some(p) => p,
@@ -229,8 +292,8 @@ impl SoftwareVideoDecoder {
                     .h264
                     .as_mut()
                     .expect("h264 decoder verified present above");
+
                 if let Some(frame) = h264.decode(&packet.data)? {
-                    // Update dimensions from the actual decoded frame.
                     if frame.width > 0 && frame.height > 0 {
                         self.video_width = frame.width;
                         self.video_height = frame.height;
@@ -242,9 +305,40 @@ impl SoftwareVideoDecoder {
                         timestamp_secs: packet.timestamp_secs,
                     }));
                 }
-                // No frame produced (SPS/PPS etc.) — keep reading.
+
+                // After enough consecutive failures, trigger reinit on next call.
+                if h264.error_streak > 5 {
+                    return Err(VideoError::SkipLimit);
+                }
+
+                skipped += 1;
+                if skipped > 500 {
+                    return Err(VideoError::SkipLimit);
+                }
             }
         }
+    }
+
+    /// Check if an Annex-B bitstream contains an IDR NAL unit (type 5).
+    #[cfg(feature = "h264")]
+    fn contains_idr(data: &[u8]) -> bool {
+        let mut i = 0;
+        while i + 4 <= data.len() {
+            if data[i] == 0 && data[i + 1] == 0 && data[i + 2] == 0 && data[i + 3] == 1 {
+                if i + 4 < data.len() && (data[i + 4] & 0x1F) == 5 {
+                    return true;
+                }
+                i += 4;
+            } else if data[i] == 0 && data[i + 1] == 0 && data[i + 2] == 1 {
+                if i + 3 < data.len() && (data[i + 3] & 0x1F) == 5 {
+                    return true;
+                }
+                i += 3;
+            } else {
+                i += 1;
+            }
+        }
+        false
     }
 
     /// Decode the next chunk of audio.

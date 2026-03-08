@@ -1041,6 +1041,7 @@ name = "oasis-video"
 version = "1.0.0"
 dependencies = [
  "criterion",
+ "log",
  "openh264",
  "symphonia",
 ]

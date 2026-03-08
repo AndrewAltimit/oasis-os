@@ -372,6 +372,18 @@ impl Mp4Demuxer {
         Ok(())
     }
 
+    /// Reset the SPS/PPS sent flag so parameter sets are re-prepended
+    /// to the next video packet. Used after decoder error recovery.
+    pub fn reset_params(&mut self) {
+        self.sent_params = false;
+    }
+
+    /// Get a copy of the SPS/PPS parameter sets as Annex-B data.
+    /// Returns `None` if no AVCC config was found.
+    pub fn parameter_sets(&self) -> Option<&[u8]> {
+        self.avcc.as_ref().map(|a| a.parameter_sets.as_slice())
+    }
+
     /// The video track's codec parameters (for initializing the H.264 decoder).
     pub fn video_codec_params(&self) -> Option<&CodecParameters> {
         self.video_codec_params.as_ref()
