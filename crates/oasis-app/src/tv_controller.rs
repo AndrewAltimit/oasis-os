@@ -383,11 +383,11 @@ const INIT_WARN_THRESHOLD: usize = 128 * 1024 * 1024; // 128 MB
 /// Time without receiving any body bytes before we consider the connection
 /// stalled and attempt a reconnect (inspired by ffmpeg's `reconnect_on_http`).
 #[cfg(feature = "_video")]
-const STALL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+const STALL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 
 /// Maximum number of reconnect attempts on a stalled Range download.
 #[cfg(feature = "_video")]
-const MAX_RECONNECTS: u32 = 3;
+const MAX_RECONNECTS: u32 = 5;
 
 /// Short-seek read-through threshold: if the seek position is within this
 /// many bytes of data already downloaded, continue the linear download
@@ -645,15 +645,25 @@ impl StreamingInner {
                     s.atoms.push((scan_pos, atom_size, fourcc));
                     s.atoms_scanned_to = scan_pos + atom_size;
 
-                    // Retain moov if found at end of file.
+                    // Retain moov if found at end of file (only if complete).
                     if &fourcc == b"moov" && s.moov.is_none() {
-                        let end = (buf_off + atom_size as usize).min(s.buf.len());
-                        let moov_data = s.buf[buf_off..end].to_vec();
-                        log::info!(
-                            "TV: retained moov atom ({} bytes) at offset {scan_pos} (end of file)",
-                            moov_data.len(),
-                        );
-                        s.moov = Some((scan_pos, moov_data));
+                        let expected_end = buf_off + atom_size as usize;
+                        if expected_end <= s.buf.len() {
+                            let moov_data = s.buf[buf_off..expected_end].to_vec();
+                            log::info!(
+                                "TV: retained moov atom ({} bytes) at offset \
+                                 {scan_pos} (end of file)",
+                                moov_data.len(),
+                            );
+                            s.moov = Some((scan_pos, moov_data));
+                        } else {
+                            log::warn!(
+                                "TV: moov at offset {scan_pos} truncated \
+                                 ({} of {} bytes available)",
+                                s.buf.len() - buf_off,
+                                atom_size,
+                            );
+                        }
                     }
                 }
             }
@@ -735,6 +745,7 @@ impl StreamingInner {
     /// Disable probe mode so reads block on real data instead of
     /// returning zeros.  Called after the decoder's probe phase completes.
     pub(crate) fn disable_probe_mode(&self) {
+        log::info!("TV: StreamingBuffer probe_mode disabled — reads will now block");
         self.probe_mode
             .store(false, std::sync::atomic::Ordering::Relaxed);
     }
@@ -780,6 +791,10 @@ struct StreamingBuffer {
     /// Whether sliding-window eviction is active. Starts `false` to allow
     /// the demuxer to `read_to_end` + `seek(Start(0))` without data loss.
     eviction_enabled: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    /// Whether we've logged a "waiting for data" message (avoids log spam).
+    logged_wait: bool,
+    /// Whether we've logged a "gap-fill zeros" warning (avoids log spam).
+    logged_gap: bool,
 }
 
 #[cfg(feature = "_video")]
@@ -789,6 +804,8 @@ impl StreamingBuffer {
             inner,
             pos: 0,
             eviction_enabled: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            logged_wait: false,
+            logged_gap: false,
         }
     }
 
@@ -908,7 +925,19 @@ impl std::io::Read for StreamingBuffer {
             }
 
             // Position is in the gap (evicted data) — return zeros.
+            // WARNING: this feeds zeros to the demuxer which may corrupt
+            // the stream.  Log once per gap encounter so we can diagnose.
             if self.pos < s.base_offset {
+                if !self.logged_gap {
+                    log::warn!(
+                        "TV: StreamingBuffer gap-fill zeros at {:.1}MB \
+                         (base_offset={:.1}MB, gap={:.0}KB)",
+                        self.pos as f64 / (1024.0 * 1024.0),
+                        s.base_offset as f64 / (1024.0 * 1024.0),
+                        (s.base_offset - self.pos) as f64 / 1024.0,
+                    );
+                    self.logged_gap = true;
+                }
                 let gap_remaining = (s.base_offset - self.pos) as usize;
                 let n = buf.len().min(gap_remaining);
                 buf[..n].fill(0);
@@ -919,6 +948,19 @@ impl std::io::Read for StreamingBuffer {
             // Position is beyond available data.
             if self.inner.is_done() {
                 break 0; // EOF
+            }
+
+            // Log once when first entering a wait state.
+            if !self.logged_wait {
+                log::info!(
+                    "TV: StreamingBuffer waiting for data at {:.1}MB \
+                     (buffer: {:.1}MB..{:.1}MB, {:.1}MB available)",
+                    self.pos as f64 / (1024.0 * 1024.0),
+                    s.base_offset as f64 / (1024.0 * 1024.0),
+                    buf_end as f64 / (1024.0 * 1024.0),
+                    s.buf.len() as f64 / (1024.0 * 1024.0),
+                );
+                self.logged_wait = true;
             }
 
             // Block until more data arrives.
@@ -948,7 +990,7 @@ impl std::io::Seek for StreamingBuffer {
 
         let new_pos = match pos {
             std::io::SeekFrom::Start(p) => p as i64,
-            std::io::SeekFrom::Current(off) => self.pos as i64 + off,
+            std::io::SeekFrom::Current(off) => (self.pos as i64).saturating_add(off),
             std::io::SeekFrom::End(off) => {
                 // Wait for total_size from Content-Length header.
                 let total = self.inner.total_size.load(Ordering::Acquire);
@@ -970,9 +1012,9 @@ impl std::io::Seek for StreamingBuffer {
                 }
                 let total = self.inner.total_size.load(Ordering::Acquire);
                 if total == 0 {
-                    self.inner.bytes_received() as i64 + off
+                    (self.inner.bytes_received() as i64).saturating_add(off)
                 } else {
-                    total as i64 + off
+                    (total as i64).saturating_add(off)
                 }
             },
         };
@@ -984,7 +1026,23 @@ impl std::io::Seek for StreamingBuffer {
             ));
         }
 
+        let old_pos = self.pos;
         self.pos = new_pos as u64;
+        self.logged_wait = false; // reset so next wait/gap is logged
+        // Log significant seeks (> 1MB jump) for debugging streaming issues.
+        let jump = if self.pos > old_pos {
+            self.pos - old_pos
+        } else {
+            old_pos - self.pos
+        };
+        if jump > 1024 * 1024 {
+            log::info!(
+                "TV: StreamingBuffer seek {:.1}MB -> {:.1}MB (jump {:.1}MB)",
+                old_pos as f64 / (1024.0 * 1024.0),
+                self.pos as f64 / (1024.0 * 1024.0),
+                jump as f64 / (1024.0 * 1024.0),
+            );
+        }
         Ok(self.pos)
     }
 }
@@ -1144,28 +1202,62 @@ fn fetch_range_inner(
 fn check_moov_at_start_restart(s: &SlidingState, seek_secs: u64) -> Option<u64> {
     let moov_data = s.moov.as_ref().map(|(_, d)| d)?;
 
-    // Try exact seek-byte from MP4 sample tables (stts+stss+stsc+stco+stsz).
-    // Falls back to linear interpolation if tables can't be parsed.
-    let seek_byte = if let Some(exact) =
-        oasis_video::demux_lite::seek_byte_from_moov(moov_data, seek_secs as f64)
-    {
-        log::info!(
-            "TV: exact seek-byte from sample tables: {:.1}MB for {seek_secs}s",
-            exact as f64 / (1024.0 * 1024.0),
-        );
-        exact
-    } else {
-        // Fallback: linear interpolation within mdat.
-        let dur = parse_moov_duration(moov_data)?;
+    // Compute seek position two ways and take the minimum.
+    // Our exact seek-byte from MP4 sample tables only considers the video
+    // track, but symphonia's own seek considers both audio and video tracks
+    // and may land at a significantly earlier byte position.  Using the
+    // minimum of both estimates ensures the Range download covers wherever
+    // symphonia will actually seek to.
+    let exact_byte =
+        oasis_video::demux_lite::seek_byte_from_moov(moov_data, seek_secs as f64);
+
+    let linear_byte = parse_moov_duration(moov_data).and_then(|dur| {
         let (mdat_off, mdat_size) = s
             .atoms
             .iter()
             .find(|(_, size, cc)| cc == b"mdat" && *size > 1024)
             .map(|(off, size, _)| (*off, *size))?;
         let frac = (seek_secs as f64 / dur).clamp(0.0, 1.0);
-        mdat_off + (frac * mdat_size as f64) as u64
+        Some(mdat_off + (frac * mdat_size as f64) as u64)
+    });
+
+    // Use the LINEAR estimate as start_from (it tracks where symphonia
+    // actually seeks, since symphonia uses time-based coarse seek which
+    // maps roughly linearly within the mdat).  The exact seek-byte from
+    // our sample tables may differ significantly because it only
+    // considers the video track's stco/stsz tables.
+    let seek_byte = match (linear_byte, exact_byte) {
+        (Some(linear), Some(exact)) => {
+            log::info!(
+                "TV: seek estimates: linear={:.1}MB, exact={:.1}MB, using linear",
+                linear as f64 / (1024.0 * 1024.0),
+                exact as f64 / (1024.0 * 1024.0),
+            );
+            linear
+        },
+        (Some(linear), None) => linear,
+        (None, Some(exact)) => {
+            log::info!(
+                "TV: exact seek-byte from sample tables: {:.1}MB",
+                exact as f64 / (1024.0 * 1024.0),
+            );
+            exact
+        },
+        (None, None) => return None,
     };
 
+    // Clamp seek byte to file boundaries.
+    let total = s.bytes_received.max(
+        s.atoms
+            .iter()
+            .map(|(off, sz, _)| off + sz)
+            .max()
+            .unwrap_or(0),
+    );
+    let seek_byte = seek_byte.min(total);
+    // Back up 2MB before the estimated position to give symphonia room
+    // to find sync points — its internal seek may land somewhat before
+    // our estimate.
     let start_from = seek_byte.saturating_sub(2 * 1024 * 1024);
     let downloaded = s.bytes_received;
     if start_from > downloaded + SHORT_SEEK_THRESHOLD {
@@ -1252,26 +1344,40 @@ fn parse_tail_for_moov(
     // If seeking, compute byte offset and set base_offset so the
     // main download thread can restart from the seek position.
     if seek_secs > 0 {
-        // Try exact seek-byte from sample tables, fall back to linear.
-        let seek_byte = if let Some(exact) =
-            oasis_video::demux_lite::seek_byte_from_moov(&moov_data, seek_secs as f64)
-        {
-            log::info!(
-                "TV: tail probe: exact seek-byte from sample tables: {:.1}MB",
-                exact as f64 / (1024.0 * 1024.0),
-            );
-            exact
-        } else if let Some(dur) = parse_moov_duration(&moov_data) {
+        // Compute seek position two ways and take the minimum.
+        // Our exact seek-byte only considers video track, but symphonia
+        // may seek to an earlier position when considering both tracks.
+        let exact_byte =
+            oasis_video::demux_lite::seek_byte_from_moov(&moov_data, seek_secs as f64);
+
+        let linear_byte = parse_moov_duration(&moov_data).map(|dur| {
             let mdat_end = file_off;
             let frac = (seek_secs as f64 / dur).clamp(0.0, 1.0);
             (frac * mdat_end as f64) as u64
-        } else {
-            // Cannot estimate — retain moov and let decoder seek.
-            let mut s = buffer.state.lock().unwrap_or_else(|e| e.into_inner());
-            s.moov = Some((file_off, moov_data));
-            buffer.condvar.notify_all();
-            return;
+        });
+
+        let seek_byte = match (linear_byte, exact_byte) {
+            (Some(linear), Some(exact)) => {
+                log::info!(
+                    "TV: tail seek estimates: linear={:.1}MB, exact={:.1}MB, using linear",
+                    linear as f64 / (1024.0 * 1024.0),
+                    exact as f64 / (1024.0 * 1024.0),
+                );
+                linear
+            },
+            (Some(linear), None) => linear,
+            (None, Some(exact)) => exact,
+            (None, None) => {
+                // Cannot estimate — retain moov and let decoder seek.
+                let mut s = buffer.state.lock().unwrap_or_else(|e| e.into_inner());
+                s.moov = Some((file_off, moov_data));
+                buffer.condvar.notify_all();
+                return;
+            },
         };
+        // Clamp to file size to avoid requesting bytes beyond EOF.
+        let seek_byte = seek_byte.min(content_length.saturating_sub(1));
+        // Back up 2MB for symphonia's seek margin.
         let start_from = seek_byte.saturating_sub(2 * 1024 * 1024);
         log::info!(
             "TV: tail probe: seek={seek_secs}s -> byte ~{:.1}MB, \
@@ -1435,15 +1541,35 @@ fn open_range_connection(
     let status_line = header_str.lines().next().unwrap_or("");
     log::info!("TV: Range response: {status_line}");
 
-    // Check for 2xx status.
     let status = header_str
         .lines()
         .next()
         .and_then(|l| l.split_whitespace().nth(1))
         .and_then(|s| s.parse::<u16>().ok())
         .unwrap_or(0);
-    if !(200..300).contains(&status) {
-        return Err(format!("HTTP {status} on Range request"));
+
+    match status {
+        206 => {
+            // Partial Content — server honoured the Range request.
+        },
+        200 => {
+            // Server ignored Range header and is sending the full file.
+            // This is valid per RFC 7233 but wastes bandwidth.
+            log::warn!(
+                "TV: server returned 200 (not 206) for Range request — \
+                 Range header may not be supported"
+            );
+        },
+        416 => {
+            return Err("HTTP 416 Range Not Satisfiable".into());
+        },
+        _ if (200..300).contains(&status) => {
+            // Other 2xx — unexpected but not fatal.
+            log::warn!("TV: unexpected HTTP {status} for Range request");
+        },
+        _ => {
+            return Err(format!("HTTP {status} on Range request"));
+        },
     }
 
     let leftover = header_buf[leftover_start..].to_vec();
@@ -1511,6 +1637,7 @@ fn stream_download_range(
         // Stream body with stall detection.
         let mut buf = [0u8; 8192];
         let mut last_data_time = std::time::Instant::now();
+        let mut was_throttled = false;
         let mut first_data_logged = current_offset > start_offset;
 
         loop {
@@ -1523,8 +1650,14 @@ fn stream_download_range(
             }
             if buffer.should_throttle() {
                 std::thread::sleep(std::time::Duration::from_millis(100));
-                last_data_time = std::time::Instant::now();
+                was_throttled = true;
                 continue;
+            }
+            // After exiting throttle, reset stall timer since the pause
+            // was intentional (decoder was lagging, not the network).
+            if was_throttled {
+                last_data_time = std::time::Instant::now();
+                was_throttled = false;
             }
             match stream.read(&mut buf) {
                 Ok(0) => break 'outer, // Clean EOF

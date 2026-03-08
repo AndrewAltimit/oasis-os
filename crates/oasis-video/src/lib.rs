@@ -472,15 +472,27 @@ impl SoftwareVideoDecoder {
         {
             // Drain from the audio queue (packets buffered during video reads).
             while let Some(pkt) = self.audio_queue.pop_front() {
-                if let Some(aac) = self.aac.as_mut()
-                    && let Ok(Some(audio)) = aac.decode(&pkt.data, 0)
-                {
-                    return Some(AudioChunk {
-                        pcm_f32: audio.pcm_f32,
-                        channels: audio.channels,
-                        sample_rate: audio.sample_rate,
-                        timestamp_secs: pkt.timestamp_secs,
-                    });
+                let Some(aac) = self.aac.as_mut() else {
+                    continue;
+                };
+                match aac.decode(&pkt.data, 0) {
+                    Ok(Some(audio)) => {
+                        return Some(AudioChunk {
+                            pcm_f32: audio.pcm_f32,
+                            channels: audio.channels,
+                            sample_rate: audio.sample_rate,
+                            timestamp_secs: pkt.timestamp_secs,
+                        });
+                    },
+                    Ok(None) => {
+                        // Decoder consumed packet but produced no output
+                        // (e.g. priming frame). Continue to next packet.
+                    },
+                    Err(e) => {
+                        // Log once per burst to avoid spam (AAC errors are
+                        // common after seeking into mid-stream).
+                        log::debug!("AAC decode error (skipping frame): {e}");
+                    },
                 }
             }
             None
