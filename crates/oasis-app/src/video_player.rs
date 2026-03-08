@@ -357,6 +357,10 @@ impl VideoPlayer {
     /// so the main/UI thread is never blocked. The optional `on_init`
     /// callback runs after the decoder's initial scan completes (used to
     /// enable sliding-window eviction on streaming buffers).
+    ///
+    /// If `moov_source` is provided, the decoder thread waits for moov data
+    /// from it, extracts avcC, and skips the expensive full-file
+    /// `read_to_end` scan.
     #[cfg(feature = "_video")]
     pub fn start_software_source(
         &mut self,
@@ -365,6 +369,7 @@ impl VideoPlayer {
         width: u32,
         height: u32,
         on_init: Option<Box<dyn FnOnce() + Send>>,
+        moov_source: std::sync::Arc<crate::tv_controller::StreamingInner>,
     ) {
         self.stop_internal();
 
@@ -379,10 +384,23 @@ impl VideoPlayer {
         let target_h = height;
 
         std::thread::spawn(move || {
-            // Open decoder on background thread to avoid blocking the UI.
-            log::info!("VideoPlayer: opening decoder (streaming source)...");
+            // Wait for moov data from the download thread so we can extract
+            // avcC without reading the entire stream.
+            log::info!("VideoPlayer: waiting for moov data from download thread...");
+            let moov_data = moov_source.wait_for_moov(std::time::Duration::from_secs(15));
+            let has_avcc = moov_data.is_some();
+            log::info!(
+                "VideoPlayer: opening decoder (streaming source, avcc={})",
+                if has_avcc { "pre-extracted" } else { "full-scan fallback" },
+            );
             let t0 = std::time::Instant::now();
-            let mut decoder = match oasis_video::SoftwareVideoDecoder::open_stream(source) {
+            let open_result = if let Some(ref moov) = moov_data {
+                let avcc = oasis_video::find_avcc_in_mp4(moov);
+                oasis_video::SoftwareVideoDecoder::open_stream_with_avcc(source, avcc)
+            } else {
+                oasis_video::SoftwareVideoDecoder::open_stream(source)
+            };
+            let mut decoder = match open_result {
                 Ok(d) => {
                     log::info!(
                         "VideoPlayer: decoder opened in {:.1}s",

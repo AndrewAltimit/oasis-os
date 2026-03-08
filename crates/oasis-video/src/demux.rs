@@ -57,7 +57,7 @@ pub struct DemuxedPacket {
 const ANNEX_B_START_CODE: [u8; 4] = [0x00, 0x00, 0x00, 0x01];
 
 /// H.264 AVCC-to-Annex B conversion state parsed from the avcC box.
-struct AvccConfig {
+pub struct AvccConfig {
     /// Number of bytes in each NAL length prefix (1, 2, 3, or 4).
     nal_length_size: usize,
     /// SPS + PPS NAL units formatted as Annex B (with start codes).
@@ -124,7 +124,8 @@ fn parse_avcc(data: &[u8]) -> Result<AvccConfig, VideoError> {
 ///
 /// Symphonia is audio-focused and doesn't extract video codec parameters,
 /// so we find the avcC atom ourselves by scanning for the `avcC` fourcc.
-fn find_avcc_in_mp4(mp4_data: &[u8]) -> Option<AvccConfig> {
+/// Works on the full MP4 or just the moov atom data.
+pub fn find_avcc_in_mp4(mp4_data: &[u8]) -> Option<AvccConfig> {
     // The avcC box is a child of the avc1 sample entry inside stsd.
     // Structure: [4-byte size][4-byte type='avcC'][AVCDecoderConfigurationRecord]
     // We scan for the 'avcC' fourcc and parse the box contents.
@@ -221,6 +222,19 @@ impl Mp4Demuxer {
             .map_err(|e| VideoError::Demux(format!("seek to start: {e}")))?;
         drop(buf);
 
+        let adapter = VideoSourceAdapter(source);
+        let mss = MediaSourceStream::new(Box::new(adapter), Default::default());
+        Self::open_from_mss(mss, avcc)
+    }
+
+    /// Open an MP4 from a streaming source with pre-extracted avcC config.
+    ///
+    /// Skips the expensive `read_to_end()` scan — the caller has already
+    /// extracted avcC from the moov atom (e.g. via a Range request).
+    pub fn open_stream_with_avcc(
+        source: Box<dyn VideoSource>,
+        avcc: Option<AvccConfig>,
+    ) -> Result<Self, VideoError> {
         let adapter = VideoSourceAdapter(source);
         let mss = MediaSourceStream::new(Box::new(adapter), Default::default());
         Self::open_from_mss(mss, avcc)

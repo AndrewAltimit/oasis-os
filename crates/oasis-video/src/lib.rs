@@ -31,6 +31,10 @@ use std::collections::VecDeque;
 #[cfg(not(feature = "ffmpeg"))]
 use demux::{DemuxedPacket, Mp4Demuxer, TrackKind};
 
+// Re-export avcC helpers so callers can pre-extract from moov data.
+#[cfg(not(feature = "ffmpeg"))]
+pub use demux::{find_avcc_in_mp4, AvccConfig};
+
 /// A streaming video source: anything that is `Read + Seek + Send + Sync`.
 ///
 /// Provides optional length and seekability hints for the demuxer.
@@ -165,6 +169,20 @@ impl SoftwareVideoDecoder {
             let demuxer = Mp4Demuxer::open_stream(source)?;
             Self::from_demuxer(demuxer)
         }
+    }
+
+    /// Open from a streaming source with pre-extracted avcC config.
+    ///
+    /// Skips the full-file `read_to_end()` scan that `open_stream` performs.
+    /// Use this when avcC has already been extracted from the moov atom
+    /// (e.g. fetched via HTTP Range request).
+    #[cfg(not(feature = "ffmpeg"))]
+    pub fn open_stream_with_avcc(
+        source: Box<dyn VideoSource>,
+        avcc: Option<AvccConfig>,
+    ) -> Result<Self, VideoError> {
+        let demuxer = Mp4Demuxer::open_stream_with_avcc(source, avcc)?;
+        Self::from_demuxer(demuxer)
     }
 
     /// Open an MP4 from a byte buffer.
