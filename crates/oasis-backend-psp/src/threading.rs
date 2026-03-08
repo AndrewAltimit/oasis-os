@@ -2292,6 +2292,14 @@ impl TlsHttpReader {
     ///
     /// Returns the reader and content length (0 if unknown).
     fn open(url: &str) -> Result<(Self, u64), String> {
+        Self::open_with_redirects(url, 5)
+    }
+
+    /// Open with redirect depth limit to prevent infinite recursion.
+    fn open_with_redirects(
+        url: &str,
+        redirects_left: u8,
+    ) -> Result<(Self, u64), String> {
         let (host, port, path, _) =
             parse_url(url).ok_or_else(|| format!("bad URL: {url}"))?;
 
@@ -2555,9 +2563,14 @@ impl TlsHttpReader {
             }
 
             if let Some(loc) = location {
+                if redirects_left == 0 {
+                    return Err("too many TLS redirects".into());
+                }
                 io_log(&format!("[IO-TLS] redirect → {loc}"));
-                // Recurse for the redirect (up to 5 via call depth).
-                return Self::open(&loc);
+                return Self::open_with_redirects(
+                    &loc,
+                    redirects_left - 1,
+                );
             }
             return Err(format!("redirect {status}, no Location"));
         }

@@ -639,6 +639,35 @@ impl VideoPlayer {
             audio_sent += s;
             audio_dropped += d;
 
+            // In audio-only mode, advance the demuxer explicitly since
+            // next_video_frame() is no longer being called.
+            if video_failed && has_audio {
+                match decoder.next_audio_samples() {
+                    Ok(Some(chunk)) => {
+                        match audio_tx.try_send(SoftwareAudio {
+                            pcm_f32: chunk.pcm_f32,
+                            channels: chunk.channels,
+                            sample_rate: chunk.sample_rate,
+                        }) {
+                            Ok(()) => audio_sent += 1,
+                            Err(_) => audio_dropped += 1,
+                        }
+                    }
+                    Ok(None) => {
+                        log::info!("VideoPlayer: audio EOF in audio-only mode");
+                        break;
+                    }
+                    Err(e) => {
+                        log::debug!("VideoPlayer: audio-only decode error: {e}");
+                    }
+                }
+                // Also drain any buffered audio produced by the demux advance.
+                let (s2, d2) =
+                    Self::drain_audio(&mut decoder, &audio_tx, has_audio);
+                audio_sent += s2;
+                audio_dropped += d2;
+            }
+
             // In audio-only mode, sleep briefly to avoid busy-spinning.
             if video_failed && s == 0 {
                 // No audio produced — we're at EOF or stream is stalled.

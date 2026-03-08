@@ -1193,14 +1193,17 @@ fn fetch_range_inner(
     // Read response.
     let mut response = Vec::new();
     let mut buf = [0u8; 8192];
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    let mut deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
     loop {
         if std::time::Instant::now() > deadline {
             return Err("timeout".into());
         }
         match stream.read(&mut buf) {
             Ok(0) => break,
-            Ok(n) => response.extend_from_slice(&buf[..n]),
+            Ok(n) => {
+                response.extend_from_slice(&buf[..n]);
+                deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+            }
             Err(e) => {
                 let msg = format!("{e}");
                 if msg.contains("WouldBlock") || msg.contains("would block") {
@@ -2335,10 +2338,27 @@ fn auto_advance_episode(state: &mut AppState, backend: &mut impl SdiBackend) {
         .unwrap_or(0);
     guide.current_time = now;
 
-    // Re-tune to whatever should be playing now.
+    // Re-tune to whatever should be playing now. If the current slot has
+    // very little time left (<5s), skip ahead to the next episode to avoid
+    // an infinite re-tune loop (video finishes instantly, triggers another
+    // auto-advance to the same nearly-finished episode).
     let catalog = guide.catalogs.get(channel_idx).and_then(|c| c.as_ref());
     let Some(catalog) = catalog else { return };
-    let Some(slot) = oasis_core::apps::tv_guide::schedule_at(catalog, now) else {
+    let query_time = {
+        let Some(slot) = oasis_core::apps::tv_guide::schedule_at(catalog, now)
+        else {
+            return;
+        };
+        if slot.remaining_secs < 5 {
+            // Jump past current slot end to get the next episode.
+            now + slot.remaining_secs + 1
+        } else {
+            now
+        }
+    };
+    let Some(slot) =
+        oasis_core::apps::tv_guide::schedule_at(catalog, query_time)
+    else {
         return;
     };
 

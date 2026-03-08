@@ -327,10 +327,6 @@ impl PspVideoDecoder {
 
         // SAFETY: sceVideocodecDecode processes one AU through the Media
         // Engine. The codec buffer and AU data must remain valid.
-        vlog(&format!(
-            "[VIDEO] decode: AU size={}, calling sceVideocodecDecode...",
-            au_data.len()
-        ));
         let ret = unsafe { psp::sys::sceVideocodecDecode(ptr, 0) };
         if ret < 0 {
             vlog(&format!(
@@ -339,7 +335,6 @@ impl PspVideoDecoder {
             ));
             return None;
         }
-        vlog("[VIDEO] decode: sceVideocodecDecode OK");
 
         // Read decoded frame info from codec buffer.
         //
