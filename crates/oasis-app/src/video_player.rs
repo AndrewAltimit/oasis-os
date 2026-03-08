@@ -652,18 +652,17 @@ impl VideoPlayer {
                             Ok(()) => audio_sent += 1,
                             Err(_) => audio_dropped += 1,
                         }
-                    }
+                    },
                     Ok(None) => {
                         log::info!("VideoPlayer: audio EOF in audio-only mode");
                         break;
-                    }
+                    },
                     Err(e) => {
                         log::debug!("VideoPlayer: audio-only decode error: {e}");
-                    }
+                    },
                 }
                 // Also drain any buffered audio produced by the demux advance.
-                let (s2, d2) =
-                    Self::drain_audio(&mut decoder, &audio_tx, has_audio);
+                let (s2, d2) = Self::drain_audio(&mut decoder, &audio_tx, has_audio);
                 audio_sent += s2;
                 audio_dropped += d2;
             }

@@ -1203,7 +1203,7 @@ fn fetch_range_inner(
             Ok(n) => {
                 response.extend_from_slice(&buf[..n]);
                 deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
-            }
+            },
             Err(e) => {
                 let msg = format!("{e}");
                 if msg.contains("WouldBlock") || msg.contains("would block") {
@@ -2345,8 +2345,7 @@ fn auto_advance_episode(state: &mut AppState, backend: &mut impl SdiBackend) {
     let catalog = guide.catalogs.get(channel_idx).and_then(|c| c.as_ref());
     let Some(catalog) = catalog else { return };
     let query_time = {
-        let Some(slot) = oasis_core::apps::tv_guide::schedule_at(catalog, now)
-        else {
+        let Some(slot) = oasis_core::apps::tv_guide::schedule_at(catalog, now) else {
             return;
         };
         if slot.remaining_secs < 5 {
@@ -2356,9 +2355,7 @@ fn auto_advance_episode(state: &mut AppState, backend: &mut impl SdiBackend) {
             now
         }
     };
-    let Some(slot) =
-        oasis_core::apps::tv_guide::schedule_at(catalog, query_time)
-    else {
+    let Some(slot) = oasis_core::apps::tv_guide::schedule_at(catalog, query_time) else {
         return;
     };
 
