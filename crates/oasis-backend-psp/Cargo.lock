@@ -929,6 +929,7 @@ dependencies = [
 name = "oasis-video"
 version = "1.0.0"
 dependencies = [
+ "log",
  "symphonia",
 ]
 
@@ -1035,7 +1036,7 @@ dependencies = [
 [[package]]
 name = "psp"
 version = "1.0.0"
-source = "git+https://github.com/AndrewAltimit/rust-psp?rev=d48345a#d48345ad46d348d1388bc8865c37722c44f67b0c"
+source = "git+https://github.com/AndrewAltimit/rust-psp?rev=4370415#43704150320652f72c81dc8ea22b456c90fa9ac2"
 dependencies = [
  "bitflags 2.10.0",
  "libm",
