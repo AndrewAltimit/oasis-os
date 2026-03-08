@@ -990,13 +990,22 @@ fn parse_files_lightweight(
             Some(p) => pos + p,
             None => break,
         };
-        // Find the matching closing brace. Skip nested braces by tracking depth.
+        // Find the matching closing brace. Skip nested braces by tracking
+        // depth, ignoring braces inside JSON string literals.
         let mut depth = 0i32;
         let mut obj_end = obj_start;
+        let mut in_string = false;
+        let mut escape = false;
         for (i, b) in rest[obj_start..].bytes().enumerate() {
+            if escape {
+                escape = false;
+                continue;
+            }
             match b {
-                b'{' => depth += 1,
-                b'}' => {
+                b'\\' if in_string => escape = true,
+                b'"' => in_string = !in_string,
+                b'{' if !in_string => depth += 1,
+                b'}' if !in_string => {
                     depth -= 1;
                     if depth == 0 {
                         obj_end = obj_start + i + 1;

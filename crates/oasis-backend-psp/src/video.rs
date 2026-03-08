@@ -320,6 +320,11 @@ impl PspVideoDecoder {
             *ptr.add(10) = au_data.len() as u32;
         }
 
+        // SAFETY: The Media Engine reads AU data via DMA, which bypasses
+        // the CPU data cache. Flush the cache so the ME sees the latest
+        // writes to `au_data` (and the codec buffer fields we just set).
+        unsafe { psp::sys::sceKernelDcacheWritebackInvalidateAll() };
+
         // SAFETY: sceVideocodecDecode processes one AU through the Media
         // Engine. The codec buffer and AU data must remain valid.
         vlog(&format!(
@@ -729,7 +734,8 @@ fn play_mp4(path: &str, seek_secs: u64) -> bool {
     let mut video_done = mp4.video_track_info().is_none();
 
     // Track playback start time for frame pacing.
-    let start_us = unsafe { psp::sys::sceKernelGetSystemTimeLow() };
+    // Use u64 (sceKernelGetSystemTimeWide) to avoid overflow at ~71 minutes.
+    let start_us = unsafe { psp::sys::sceKernelGetSystemTimeWide() } as u64;
 
     loop {
         // Check for stop command.
@@ -788,12 +794,13 @@ fn play_mp4(path: &str, seek_secs: u64) -> bool {
                             // This prevents dumping frames faster than
                             // the display can consume them.
                             let pts_us =
-                                (sample.timestamp_secs * 1_000_000.0) as u32;
-                            let now_us =
-                                unsafe { psp::sys::sceKernelGetSystemTimeLow() };
+                                (sample.timestamp_secs * 1_000_000.0) as u64;
+                            let now_us = unsafe {
+                                psp::sys::sceKernelGetSystemTimeWide()
+                            } as u64;
                             let elapsed = now_us.wrapping_sub(start_us);
                             if pts_us > elapsed {
-                                let wait = pts_us - elapsed;
+                                let wait = (pts_us - elapsed) as u32;
                                 // Cap wait to 100ms to avoid stalls.
                                 if wait < 100_000 {
                                     // SAFETY: Sleep for frame pacing.
@@ -864,7 +871,8 @@ fn play_stream() -> bool {
     // hard crashes on some PSP firmware if the ME isn't available.
     let mut h264: Option<PspVideoDecoder> = None;
 
-    let start_us = unsafe { psp::sys::sceKernelGetSystemTimeLow() };
+    // Use u64 (sceKernelGetSystemTimeWide) to avoid overflow at ~71 minutes.
+    let start_us = unsafe { psp::sys::sceKernelGetSystemTimeWide() } as u64;
     let mut decode_count = 0u32;
 
     loop {
@@ -900,12 +908,13 @@ fn play_stream() -> bool {
 
                         // Frame pacing via PTS.
                         let pts_us =
-                            (frame.timestamp_secs * 1_000_000.0) as u32;
-                        let now_us =
-                            unsafe { psp::sys::sceKernelGetSystemTimeLow() };
+                            (frame.timestamp_secs * 1_000_000.0) as u64;
+                        let now_us = unsafe {
+                            psp::sys::sceKernelGetSystemTimeWide()
+                        } as u64;
                         let elapsed = now_us.wrapping_sub(start_us);
                         if pts_us > elapsed {
-                            let wait = pts_us - elapsed;
+                            let wait = (pts_us - elapsed) as u32;
                             if wait < 100_000 {
                                 // SAFETY: Sleep for frame pacing.
                                 unsafe {
