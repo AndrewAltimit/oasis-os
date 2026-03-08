@@ -830,10 +830,10 @@ impl StreamingInner {
 /// After each read, data far behind the cursor is evicted to bound memory
 /// usage. The moov atom is retained separately and never evicted.
 ///
-/// Eviction is disabled by default and must be enabled via
-/// [`enable_eviction`](Self::enable_eviction) after the demuxer has finished
-/// its initial full-file scan (avcC + probe). This prevents evicting data
-/// that the demuxer needs to seek back to during initialization.
+/// Eviction is disabled by default and must be enabled by setting the
+/// `eviction_enabled` flag after the demuxer has finished its initial
+/// full-file scan (avcC + probe). This prevents evicting data that the
+/// demuxer needs to seek back to during initialization.
 #[cfg(feature = "_video")]
 struct StreamingBuffer {
     inner: std::sync::Arc<StreamingInner>,

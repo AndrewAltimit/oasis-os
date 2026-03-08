@@ -279,7 +279,7 @@ impl SdiRegistry {
 
     /// Draw only the base layer (non-overlay objects), sorted by z-order.
     ///
-    /// Use this with [`draw_overlay_layer`] when you need to insert custom
+    /// Use this with [`Self::draw_overlay_layer`] when you need to insert custom
     /// rendering (e.g., vector scenes) between the base and overlay passes.
     pub fn draw_base_layer(&mut self, backend: &mut dyn SdiBackend) -> Result<()> {
         self.ensure_z_sorted();
@@ -296,7 +296,7 @@ impl SdiRegistry {
 
     /// Draw only the overlay layer, sorted by z-order.
     ///
-    /// Call after [`draw_base_layer`] and any custom mid-layer rendering.
+    /// Call after [`Self::draw_base_layer`] and any custom mid-layer rendering.
     pub fn draw_overlay_layer(&self, backend: &mut dyn SdiBackend) -> Result<()> {
         for name in &self.z_sorted_overlay {
             let obj = &self.objects[name];
