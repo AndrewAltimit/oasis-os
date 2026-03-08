@@ -1529,6 +1529,18 @@ fn open_range_connection(
     range_start: u64,
     range_end: u64,
 ) -> Result<(Box<dyn oasis_core::backend::NetworkStream>, Vec<u8>), String> {
+    open_range_connection_inner(host, path, tls, range_start, range_end, 5)
+}
+
+#[cfg(feature = "_video")]
+fn open_range_connection_inner(
+    host: &str,
+    path: &str,
+    tls: &oasis_core::net::RustlsTlsProvider,
+    range_start: u64,
+    range_end: u64,
+    redirects_left: u8,
+) -> Result<(Box<dyn oasis_core::backend::NetworkStream>, Vec<u8>), String> {
     use oasis_core::backend::NetworkBackend;
     use oasis_core::net::TlsProvider;
 
@@ -1603,6 +1615,9 @@ fn open_range_connection(
 
     // Follow redirects (archive.org 302 → CDN node).
     if matches!(status, 301 | 302 | 303 | 307 | 308) {
+        if redirects_left == 0 {
+            return Err("too many redirects on Range request".into());
+        }
         let location = header_str
             .lines()
             .find(|l| l.len() > 9 && l[..9].eq_ignore_ascii_case("location:"))
@@ -1618,7 +1633,14 @@ fn open_range_connection(
                 .map(|(h, p)| (h, format!("/{p}")))
                 .unwrap_or((redir, "/".to_string()));
             drop(stream);
-            return open_range_connection(redir_host, &redir_path, tls, range_start, range_end);
+            return open_range_connection_inner(
+                redir_host,
+                &redir_path,
+                tls,
+                range_start,
+                range_end,
+                redirects_left - 1,
+            );
         }
         return Err(format!("HTTP {status} with no Location header"));
     }
@@ -1628,12 +1650,10 @@ fn open_range_connection(
             // Partial Content — server honoured the Range request.
         },
         200 => {
-            // Server ignored Range header and is sending the full file.
-            // This is valid per RFC 7233 but wastes bandwidth.
-            log::warn!(
-                "TV: server returned 200 (not 206) for Range request — \
-                 Range header may not be supported"
-            );
+            // Server ignored Range header and is sending the full file
+            // from byte 0.  Pushing this data at `range_start` would
+            // corrupt the stream with misaligned data.
+            return Err("HTTP 200 (server ignored Range header) — cannot resume".into());
         },
         416 => {
             return Err("HTTP 416 Range Not Satisfiable".into());
@@ -1890,7 +1910,7 @@ fn stream_download_inner(
     // Read HTTP headers.
     let mut header_buf = Vec::with_capacity(4096);
     let mut buf = [0u8; 8192];
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(120);
+    let mut deadline = std::time::Instant::now() + std::time::Duration::from_secs(120);
 
     let (header_end, leftover_start) = loop {
         if std::time::Instant::now() > deadline {
@@ -2121,6 +2141,10 @@ fn stream_download_inner(
             Ok(0) => break,
             Ok(n) => {
                 buffer.push(&buf[..n]);
+                // Reset deadline on successful data receipt so long
+                // videos (and intentional throttle pauses) don't hit the
+                // timeout.
+                deadline = std::time::Instant::now() + std::time::Duration::from_secs(120);
             },
             Err(e) => {
                 let msg = format!("{e}");

@@ -517,7 +517,7 @@ static YUV_BIAS: BiasVec = BiasVec([16.0, 128.0, 128.0, 0.0]);
 /// - `y_ptr`, `cb_ptr`, `cr_ptr` must point to valid YUV420P plane data
 ///   with the given dimensions.
 /// - Y plane: `height` rows of `y_stride` bytes (only first `width` used).
-/// - Cb/Cr planes: `height/2` rows of `width/2` bytes each.
+/// - Cb/Cr planes: `height/2` rows of `y_stride/2` bytes each.
 /// - Pointers should use uncached addresses for EDRAM data.
 unsafe fn yuv420_to_rgba_vfpu(
     y_ptr: *const u8,
@@ -529,7 +529,7 @@ unsafe fn yuv420_to_rgba_vfpu(
 ) -> DecodedFrame {
     let w = width as usize;
     let h = height as usize;
-    let chroma_w = w / 2;
+    let chroma_stride = y_stride / 2;
     let mut rgba = vec![0u8; w * h * 4];
 
     let mat_ptr = BT601.0.as_ptr() as *const u8;
@@ -572,10 +572,10 @@ unsafe fn yuv420_to_rgba_vfpu(
                 *y_ptr.add(row * y_stride + col)
             } as u32;
             let cb_val = unsafe {
-                *cb_ptr.add(chroma_row * chroma_w + chroma_col)
+                *cb_ptr.add(chroma_row * chroma_stride + chroma_col)
             } as u32;
             let cr_val = unsafe {
-                *cr_ptr.add(chroma_row * chroma_w + chroma_col)
+                *cr_ptr.add(chroma_row * chroma_stride + chroma_col)
             } as u32;
             let alpha: u32 = 255;
 
