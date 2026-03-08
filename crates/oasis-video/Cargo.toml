@@ -12,10 +12,16 @@ default = []
 # Enable H.264 decoding via openh264 (Cisco C source compiled via cc).
 # Requires a C++ compiler. Disabled by default for CI/WASM compatibility.
 h264 = ["dep:openh264"]
+# Full decode via statically-linked ffmpeg (desktop, UE5, shipping).
+# Replaces both symphonia (demux/AAC) and openh264 (H.264) with ffmpeg.
+# Mutually exclusive with `h264`.
+ffmpeg = ["dep:ffmpeg-next"]
 # Lightweight MP4 parser for no-symphonia environments (e.g. PSP).
 no-std-demux = []
 
 [dependencies]
+log = "0.4"
+
 # MP4 demuxing + AAC decoding (pure Rust)
 symphonia = { version = "0.5", default-features = false, features = [
     "isomp4",  # MP4/ISO BMFF demuxer
@@ -24,6 +30,17 @@ symphonia = { version = "0.5", default-features = false, features = [
 
 # H.264 decoding (Cisco OpenH264 C source compiled via cc)
 openh264 = { version = "0.9", optional = true }
+
+# FFmpeg via Rust bindings — static build from source, no runtime deps.
+# Only H.264 + AAC codecs and MP4 demuxer are needed.
+ffmpeg-next = { version = "7", optional = true, default-features = false, features = [
+    "build",
+    "static",
+    "codec",
+    "format",
+    "software-resampling",
+    "software-scaling",
+] }
 
 [[bin]]
 name = "video-memprofile"

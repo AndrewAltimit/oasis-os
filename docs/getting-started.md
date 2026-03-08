@@ -48,13 +48,13 @@ The desktop app opens an SDL2 window at 480x272 native resolution with the defau
 
 ### Choosing a Skin
 
-OASIS_OS ships with 17 skins. Select one via environment variable:
+OASIS_OS ships with 18 skins. Select one via environment variable:
 
 ```bash
 OASIS_SKIN=modern cargo run -p oasis-app
 ```
 
-Available skins: `classic`, `xp`, `macos`, `gnome`, `cyberpunk`, `retro-cga`, `paper`, `win95`, `solarized`, `vaporwave`, `highcontrast`, `terminal`, `tactical`, `corrupted`, `desktop`, `agent-terminal`, `modern`.
+Available skins: `classic`, `xp`, `macos`, `gnome`, `cyberpunk`, `retro-cga`, `paper`, `win95`, `solarized`, `vaporwave`, `highcontrast`, `altimit`, `terminal`, `tactical`, `corrupted`, `desktop`, `agent-terminal`, `modern`.
 
 Custom skins can be loaded from a directory containing `skin.toml`:
 

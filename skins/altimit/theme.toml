@@ -1,0 +1,159 @@
+# Altimit skin theme -- .hack//SIGN desktop OS inspired
+# Dark background, cyan/green accents, vector icon rendering.
+
+background = "#080816"
+primary = "#00CC88"
+secondary = "#1A1A2E"
+text = "#D0E8E0"
+dim_text = "#506860"
+status_bar = "#0A0A1A80"
+prompt = "#00CC88"
+output = "#B0D8C8"
+error = "#FF4466"
+
+# Extended visual properties
+border_radius = 2
+shadow_intensity = 1
+gradient_enabled = true
+
+[wm_theme]
+titlebar_height = 24
+border_width = 1
+titlebar_active = "#0E0E22"
+titlebar_inactive = "#0A0A1A"
+titlebar_text = "#00CC88"
+frame_color = "#00CC8830"
+content_bg = "#080816"
+btn_close = "#FF4466"
+btn_minimize = "#00CC88"
+btn_maximize = "#00CC88"
+button_size = 12
+titlebar_font_size = 12
+titlebar_radius = 2
+titlebar_gradient = true
+titlebar_gradient_top = "#12122A"
+titlebar_gradient_bottom = "#0A0A1A"
+frame_shadow_level = 1
+frame_border_radius = 2
+button_radius = 1
+button_side = "right"
+glyph_close = "X"
+glyph_minimize = "_"
+glyph_maximize = "+"
+title_align = "left"
+separator_enabled = true
+separator_color = "#00CC8820"
+glyph_close_color = "#FF4466"
+glyph_minimize_color = "#00CC88"
+glyph_maximize_color = "#00CC88"
+content_stroke_width = 1
+content_stroke_color = "#00CC8815"
+modal_overlay_color = "#00000088"
+
+[bar_overrides]
+statusbar_bg = "#0A0A1A80"
+bar_bg = "#080816"
+battery_color = "#00CC88"
+version_color = "#D0E8E0"
+clock_color = "#00CC88"
+separator_color = "#00CC8830"
+text_shadow = true
+text_shadow_color = "#00CC8820"
+statusbar_gradient_top = "#0E0E22"
+statusbar_gradient_bottom = "#080816"
+bar_gradient_top = "#0E0E22"
+bar_gradient_bottom = "#080816"
+version_text = "ALTIMIT"
+url_text = "THE WORLD"
+
+[wallpaper]
+style = "solid"
+color_stops = ["#080816"]
+wave_enabled = false
+
+[geometry]
+tab_row_height = 0
+statusbar_height = 24
+bottombar_height = 24
+icon_width = 32
+icon_height = 32
+font_body = 12
+font_hint = 10
+font_heading = 14
+cursor_lerp_speed = 0.2
+page_slide_duration = 10
+press_flash_duration = 5
+focus_ring_color = "#00CC8880"
+focus_ring_width = 1
+cursor_pad = 4
+toast_slide_in = true
+press_flash_lighten = 0.35
+
+[icon_overrides]
+body_color = "#0E0E22"
+fold_color = "#1A1A2E"
+outline_color = "#00CC8830"
+shadow_color = "#00CC8810"
+label_color = "#D0E8E0"
+cursor_color = "#00CC8840"
+icon_border_radius = 2
+cursor_border_radius = 3
+cursor_stroke_width = 1
+icon_style = "vector"
+cursor_style = "stroke"
+vector_preset = "altimit"
+vector_idle_float = true
+vector_float_amplitude = 3.0
+vector_float_speed = 0.06
+vector_spin_enabled = true
+vector_spin_speed = 0.05
+vector_pulse_enabled = true
+vector_pulse_speed = 0.10
+vector_blink_enabled = true
+vector_blink_interval = 30
+
+[app_overrides]
+app_bg = "#080816"
+text_color = "#D0E8E0"
+dim_text = "#506860"
+title_bar_bg = "#0E0E22"
+title_bar_text = "#00CC88"
+title_bar_height = 24
+title_bar_gradient_top = "#12122A"
+title_bar_gradient_bottom = "#0A0A1A"
+selection_accent_color = "#00CC8830"
+selection_border_radius = 2
+terminal_output_color = "#B0D8C8"
+terminal_prompt_color = "#00CC88"
+
+[start_menu_overrides]
+panel_bg = "#0A0A1A"
+panel_gradient_top = "#0E0E22"
+panel_gradient_bottom = "#060612"
+panel_border = "#00CC8830"
+item_text = "#D0E8E0"
+item_text_active = "#00CC88"
+highlight_color = "#00CC8820"
+button_bg = "#00CC8860"
+button_text = "#FFFFFF"
+panel_border_radius = 2
+panel_shadow_level = 1
+button_label = ">"
+header_text = "THE WORLD"
+header_bg = "#00CC8815"
+header_text_color = "#00CC88"
+header_height = 24
+
+[browser_overrides]
+chrome_bg = "#0E0E22"
+chrome_text = "#D0E8E0"
+chrome_button_bg = "#1A1A2E"
+url_bar_bg = "#080816"
+url_bar_text = "#00CC88"
+link_color = "#4488CC"
+
+[scrollbar_overrides]
+track_color = "#080816"
+thumb_color = "#00CC8830"
+thumb_hover_color = "#00CC8860"
+width = 3

@@ -43,13 +43,13 @@ kernel-me = ["psp/kernel"]
 
 [dependencies]
 # Pinned to specific commit for reproducible builds.
-psp = { git = "https://github.com/AndrewAltimit/rust-psp", rev = "d6e53a1", features = ["std"] }
+psp = { git = "https://github.com/AndrewAltimit/rust-psp", rev = "4370415", features = ["std"] }
 oasis-core = { path = "../oasis-core", default-features = false }
 oasis-video = { path = "../oasis-video", default-features = false, features = ["no-std-demux"] }
 libm = "0.2"
 
 # TLS for HTTPS/Gemini (pure Rust, no C/asm, works on mipsel-sony-psp)
-embedded-tls = { version = "0.18", default-features = false, features = ["std", "log"] }
+embedded-tls = { version = "0.18", default-features = false, features = ["std", "alloc", "log"] }
 embedded-io = { version = "0.7", features = ["std"] }
 rand_core = "0.6"
 webpki = { version = "0.22", default-features = false, features = ["std"] }

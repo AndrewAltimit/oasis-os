@@ -14,9 +14,19 @@ use psp::sys::CtrlButtons;
 
 use oasis_backend_psp::{
     AudioCmd, Button, CURSOR_H, CURSOR_W, Color, FileEntry, InputEvent, IoCmd, IoResponse,
+    TvCatalogRequest,
     PspBackend, SCREEN_HEIGHT, SCREEN_WIDTH, SdiRegistry, SfxId, StatusBarInfo, SystemInfo,
     TextureId, Trigger, WindowManager,
 };
+
+// oasis-core SDI integration types.
+use oasis_core::active_theme::ActiveTheme;
+use oasis_core::bottombar::BottomBar;
+use oasis_core::dashboard::{AppEntry as CoreAppEntry, DashboardConfig, DashboardState};
+use oasis_core::platform::{BatteryState, CpuClock, PowerInfo, SystemTime};
+use oasis_core::skin::SkinFeatures;
+use oasis_core::statusbar::StatusBar;
+use oasis_core::terminal_sdi;
 
 mod boot;
 mod chrome;
@@ -41,16 +51,18 @@ psp::module!("OASIS_OS", 1, 0);
 
 /// getrandom 0.2 custom backend (used by transitive deps like webpki).
 mod psp_getrandom_v02 {
-    use psp::sys::{sceKernelUtilsMt19937Init, sceKernelUtilsMt19937UInt};
+    use psp::sys::{
+        sceKernelGetSystemTimeLow, sceKernelUtilsMt19937Init,
+        sceKernelUtilsMt19937UInt,
+    };
 
     fn psp_fill_random(buf: &mut [u8]) -> Result<(), getrandom_02::Error> {
         // SAFETY: MT19937 context is initialized by sceKernelUtilsMt19937Init
-        // before any reads. MaybeUninit avoids potential UB from zeroing a
-        // struct with padding or invariant fields. Seed from CPU cycle counter.
+        // before any reads. Seed from system timer (user-mode safe).
+        // mfc0 $9 (COP0 Count) is privileged on PSP Allegrex.
         unsafe {
             let mut ctx = core::mem::MaybeUninit::uninit();
-            let seed: u32;
-            core::arch::asm!("mfc0 {}, $9", out(reg) seed);
+            let seed = sceKernelGetSystemTimeLow() as u32;
             sceKernelUtilsMt19937Init(ctx.as_mut_ptr(), seed);
             let mut ctx = ctx.assume_init();
             for byte in buf.iter_mut() {
@@ -70,14 +82,16 @@ unsafe extern "Rust" fn __getrandom_v03_custom(
     dest: *mut u8,
     len: usize,
 ) -> Result<(), getrandom::Error> {
-    use psp::sys::{sceKernelUtilsMt19937Init, sceKernelUtilsMt19937UInt};
+    use psp::sys::{
+        sceKernelGetSystemTimeLow, sceKernelUtilsMt19937Init,
+        sceKernelUtilsMt19937UInt,
+    };
     // SAFETY: MT19937 context is initialized by sceKernelUtilsMt19937Init
-    // before any reads. MaybeUninit avoids potential UB from zeroing a
-    // struct with padding or invariant fields. Seed from CPU cycle counter.
+    // before any reads. Seed from system timer (user-mode safe).
+    // mfc0 $9 (COP0 Count) is privileged on PSP Allegrex.
     unsafe {
         let mut ctx = core::mem::MaybeUninit::uninit();
-        let seed: u32;
-        core::arch::asm!("mfc0 {}, $9", out(reg) seed);
+        let seed = sceKernelGetSystemTimeLow() as u32;
         sceKernelUtilsMt19937Init(ctx.as_mut_ptr(), seed);
         let mut ctx = ctx.assume_init();
         for i in 0..len {
@@ -95,9 +109,31 @@ unsafe extern "Rust" fn __getrandom_v03_custom(
 fn psp_main() {
     let _ = psp::callback::setup_exit_callback();
 
+    // Debug log helper -- appends a line using raw PSP I/O.
+    fn dbg_log(msg: &str) {
+        // SAFETY: sceIo calls with valid path and buffer pointers.
+        unsafe {
+            let fd = psp::sys::sceIoOpen(
+                b"ms0:/PSP/GAME/OASISOS/eboot.log\0".as_ptr(),
+                psp::sys::IoOpenFlags::APPEND
+                    | psp::sys::IoOpenFlags::CREAT
+                    | psp::sys::IoOpenFlags::WR_ONLY,
+                0o777,
+            );
+            if fd >= psp::sys::SceUid(0) {
+                psp::sys::sceIoWrite(fd, msg.as_ptr() as *const _, msg.len());
+                psp::sys::sceIoWrite(fd, b"\n".as_ptr() as *const _, 1);
+                psp::sys::sceIoClose(fd);
+            }
+        }
+    }
+
+    dbg_log("[EBOOT] psp_main entered");
+
     let mut backend = PspBackend::new();
     backend.init();
     boot::show_boot_screen(&mut backend, "Initializing...", 10);
+    dbg_log("[EBOOT] backend init OK");
 
     // Register exception handler (kernel mode only) for crash diagnostics.
     #[cfg(feature = "kernel-exception")]
@@ -107,6 +143,7 @@ fn psp_main() {
     // Load persistent configuration.
     let mut config =
         psp::config::Config::load(CONFIG_PATH).unwrap_or_else(|_| psp::config::Config::new());
+    dbg_log("[EBOOT] config loaded");
 
     // Set clock speed from config (default: max 333MHz).
     let clock_mhz = config.get_i32("clock_mhz").unwrap_or(333);
@@ -115,7 +152,57 @@ fn psp_main() {
 
     // Query static hardware info.
     let sysinfo = SystemInfo::query();
+    dbg_log("[EBOOT] sysinfo queried");
+
+    // -- ActiveTheme (SDI integration) --
+    // Use default theme directly to avoid pulling in the TOML parser and
+    // 17 embedded skin files (~850KB code). ActiveTheme::default() provides
+    // PSIX-style layout already matched to 480x272.
+    dbg_log("[EBOOT] creating theme...");
+    let mut active_theme = ActiveTheme::default()
+        .with_screen_size(SCREEN_WIDTH, SCREEN_HEIGHT);
+    // PSP: make bar backgrounds opaque to prevent darkening window content.
+    // Default is semi-transparent (alpha=80) which looks muddy on 480x272.
+    active_theme.bar.statusbar_bg = Color::rgba(10, 10, 20, 255);
+    active_theme.bar.bg = Color::rgba(10, 10, 20, 255);
+    // PSP: match actual bar sizes (theme.rs constants) so SDI grid aligns.
+    active_theme.statusbar_height = 18;
+    active_theme.tab_row_height = 0;
+    active_theme.bottombar_height = 32;
+    // PSP: compact icons for 4x3 grid on 480x272.
+    active_theme.icon_width = 34;
+    active_theme.icon_height = 34;
+    active_theme.icon_stripe_h = 6;
+    active_theme.icon_fold_size = 5;
+    active_theme.grid_padding_x = 8;
+    active_theme.grid_padding_y = 2;
+    active_theme.cursor_pad = 2;
+    let mut skin_features = SkinFeatures::default();
+    skin_features.grid_cols = 4;
+    skin_features.grid_rows = 3;
+    skin_features.icons_per_page = 12;
+    dbg_log("[EBOOT] active_theme created");
+    let dash_config = DashboardConfig::from_features(&skin_features, &active_theme);
+
+    // Convert PSP app list to oasis-core AppEntry for DashboardState.
+    let core_apps: Vec<CoreAppEntry> = APPS
+        .iter()
+        .map(|a| CoreAppEntry {
+            title: a.title.to_string(),
+            path: format!("/apps/{}", a.id),
+            icon_png: Vec::new(),
+            color: a.color,
+        })
+        .collect();
+    let mut dashboard = DashboardState::new(dash_config, core_apps);
+    dbg_log("[EBOOT] dashboard created");
+
+    let mut status_bar = StatusBar::new();
+    let mut bottom_bar = BottomBar::new();
+    bottom_bar.total_pages = dashboard.page_count();
+
     boot::show_boot_screen(&mut backend, "Generating textures...", 40);
+    dbg_log("[EBOOT] textures phase");
 
     // Load wallpaper texture at reduced resolution (64x64 = 16KB vs 1MB).
     // The GE scales it up to 480x272 with bilinear filtering during blit.
@@ -136,13 +223,12 @@ fn psp_main() {
     let psp_theme = oasis_backend_psp::psp_wm_theme();
     let mut wm = WindowManager::with_theme(SCREEN_WIDTH, SCREEN_HEIGHT, psp_theme);
     let mut sdi = SdiRegistry::new();
+    dbg_log("[EBOOT] SDI registry created");
 
     // -- App mode --
     let mut app_mode = AppMode::Classic;
     let mut classic_view = ClassicView::Dashboard;
 
-    let mut selected: usize = 0;
-    let page: usize = 0;
     let mut icons_hidden: bool = false;
     let mut viz_frame: u32 = 0;
 
@@ -293,10 +379,15 @@ fn psp_main() {
     // Frame timing via hardware tick counter.
     let mut frame_timer = psp::time::FrameTimer::new();
     boot::show_boot_screen(&mut backend, "Ready", 100);
+    dbg_log("[EBOOT] entering main loop");
     psp::thread::sleep_ms(400);
 
     loop {
         let _dt = frame_timer.tick();
+        // Log first frame only.
+        if viz_frame == 0 {
+            dbg_log("[EBOOT] first frame tick");
+        }
         // Prevent idle auto-suspend while running.
         oasis_backend_psp::power_tick();
 
@@ -326,6 +417,7 @@ fn psp_main() {
                     }
                 },
                 IoResponse::Error { path, msg } => {
+                    dbg_log(&format!("[IO] error: {} - {}", path, msg));
                     term_lines.push(format!("I/O error: {} - {}", path, msg));
                     pv_loading = false;
                     if br_loading {
@@ -348,39 +440,30 @@ fn psp_main() {
                         br_loading = false;
                         br_status_msg = format!("HTTP {} - {} bytes", status_code, body.len(),);
                     } else if (tag & 0xFF00) == 0xAA00 {
-                        // TV Guide catalog response.
-                        let ch_idx = (tag & 0xFF) as usize;
-                        let src_idx = ((tag >> 16) & 0xF) as usize;
-                        if ch_idx < tv_channels.len() && status_code >= 200 && status_code < 300 {
-                            let json = String::from_utf8_lossy(&body);
-                            let ch = &tv_channels[ch_idx];
-                            let subfolder = ch
-                                .source
-                                .get(src_idx)
-                                .and_then(|s| s.subfolder.as_deref());
-                            let item_id = ch
-                                .source
-                                .get(src_idx)
-                                .map(|s| s.item_id.as_str())
-                                .unwrap_or("");
-                            let episodes =
-                                oasis_core::apps::tv_guide::ChannelCatalog
-                                    ::parse_files_response(&json, item_id, subfolder);
-                            if !episodes.is_empty() {
-                                let catalog = tv_catalogs[ch_idx]
-                                    .get_or_insert_with(|| {
-                                        oasis_core::apps::tv_guide::ChannelCatalog
-                                            ::new(ch.number)
-                                    });
-                                catalog.add_episodes(episodes);
-                            }
-                        }
+                        // Legacy TV Guide tag — no longer used.
+                        let _ = (tag, body);
                     } else {
                         let preview = String::from_utf8_lossy(&body[..body.len().min(256)]);
                         term_lines.push(format!(
                             "HTTP {status_code} ({} bytes): {preview}",
                             body.len(),
                         ));
+                    }
+                },
+                IoResponse::TvCatalogReady { ch_idx, episodes } => {
+                    dbg_log(&format!(
+                        "[TV] catalog ready ch={ch_idx} episodes={}",
+                        episodes.len()
+                    ));
+                    if ch_idx < tv_channels.len() {
+                        let ch = &tv_channels[ch_idx];
+                        let catalog = tv_catalogs[ch_idx]
+                            .get_or_insert_with(|| {
+                                oasis_core::apps::tv_guide::ChannelCatalog::new(ch.number)
+                            });
+                        if !episodes.is_empty() {
+                            catalog.add_episodes(episodes);
+                        }
                     }
                 },
                 IoResponse::RadioConnected {
@@ -407,15 +490,21 @@ fn psp_main() {
                     }
                 },
                 IoResponse::VideoReady { tag: _, path } => {
+                    // Non-faststart fallback: file fully downloaded, play from disk.
                     tv_downloading = false;
                     tv_download_progress = 1.0;
-                    // Start video decode thread.
                     oasis_backend_psp::video::send_video_cmd(
                         oasis_backend_psp::video::VideoCmd::Play {
                             path,
                             seek_secs: 0,
                         },
                     );
+                },
+                IoResponse::VideoStreamReady { tag: _, .. } => {
+                    // Streaming playback started by I/O thread (moov parsed,
+                    // samples being pushed to video thread). Just update UI.
+                    tv_downloading = false;
+                    tv_download_progress = 1.0;
                 },
                 IoResponse::VideoError { tag: _, msg } => {
                     tv_downloading = false;
@@ -459,7 +548,7 @@ fn psp_main() {
                             &mut app_mode,
                             &mut wm,
                             &mut sdi,
-                            page,
+                            dashboard.page,
                         );
                     },
                     InputEvent::ButtonRelease(Button::Confirm) => {
@@ -479,47 +568,28 @@ fn psp_main() {
                         classic_view = ClassicView::Dashboard;
                     },
                     InputEvent::ButtonPress(Button::Triangle) => {
-                        // Open app launcher: cycle through apps and open as windows.
-                        let idx = page * ICONS_PER_PAGE + selected;
-                        if idx < APPS.len() {
-                            let app = &APPS[idx];
-                            desktop::open_app_window(&mut wm, &mut sdi, app.id, app.title);
+                        // Open app launcher: open selected app as window.
+                        if let Some(app) = dashboard.selected_app() {
+                            let title = app.title.clone();
+                            if let Some(psp_app) = APPS.iter().find(|a| a.title == title.as_str()) {
+                                desktop::open_app_window(
+                                    &mut wm, &mut sdi, psp_app.id, psp_app.title,
+                                );
+                            }
                         }
                     },
                     InputEvent::ButtonPress(Button::Start) => {
-                        // Toggle terminal window.
                         desktop::open_app_window(&mut wm, &mut sdi, "terminal", "Terminal");
                     },
                     // Dashboard navigation works in Desktop mode too.
-                    InputEvent::ButtonPress(Button::Up) => {
-                        if selected >= GRID_COLS {
-                            selected -= GRID_COLS;
+                    InputEvent::ButtonPress(
+                        btn @ (Button::Up | Button::Down | Button::Left | Button::Right),
+                    ) => {
+                        let old_sel = dashboard.selected;
+                        dashboard.handle_input(btn);
+                        if dashboard.selected != old_sel {
                             audio.send(AudioCmd::PlaySfx(SfxId::Click));
                         }
-                    },
-                    InputEvent::ButtonPress(Button::Down) => {
-                        let page_start = page * ICONS_PER_PAGE;
-                        let page_count = APPS.len().saturating_sub(page_start).min(ICONS_PER_PAGE);
-                        if selected + GRID_COLS < page_count {
-                            selected += GRID_COLS;
-                            audio.send(AudioCmd::PlaySfx(SfxId::Click));
-                        }
-                    },
-                    InputEvent::ButtonPress(Button::Left) => {
-                        let page_start = page * ICONS_PER_PAGE;
-                        let page_count = APPS.len().saturating_sub(page_start).min(ICONS_PER_PAGE);
-                        if selected == 0 {
-                            selected = if page_count > 0 { page_count - 1 } else { 0 };
-                        } else {
-                            selected -= 1;
-                        }
-                        audio.send(AudioCmd::PlaySfx(SfxId::Click));
-                    },
-                    InputEvent::ButtonPress(Button::Right) => {
-                        let page_start = page * ICONS_PER_PAGE;
-                        let page_count = APPS.len().saturating_sub(page_start).min(ICONS_PER_PAGE);
-                        selected = (selected + 1) % page_count.max(1);
-                        audio.send(AudioCmd::PlaySfx(SfxId::Click));
                     },
                     InputEvent::TriggerPress(Trigger::Left) => {
                         // Both triggers held = close all windows.
@@ -578,47 +648,24 @@ fn psp_main() {
                     app_mode = AppMode::Desktop;
                 },
 
-                // -- Dashboard input --
-                InputEvent::ButtonPress(Button::Up) if classic_view == ClassicView::Dashboard => {
-                    if selected >= GRID_COLS {
-                        selected -= GRID_COLS;
-                        audio.send(AudioCmd::PlaySfx(SfxId::Click));
-                    }
-                },
-                InputEvent::ButtonPress(Button::Down) if classic_view == ClassicView::Dashboard => {
-                    let page_start = page * ICONS_PER_PAGE;
-                    let page_count = APPS.len().saturating_sub(page_start).min(ICONS_PER_PAGE);
-                    if selected + GRID_COLS < page_count {
-                        selected += GRID_COLS;
-                        audio.send(AudioCmd::PlaySfx(SfxId::Click));
-                    }
-                },
-                InputEvent::ButtonPress(Button::Left) if classic_view == ClassicView::Dashboard => {
-                    let page_start = page * ICONS_PER_PAGE;
-                    let page_count = APPS.len().saturating_sub(page_start).min(ICONS_PER_PAGE);
-                    if selected == 0 {
-                        selected = if page_count > 0 { page_count - 1 } else { 0 };
-                    } else {
-                        selected -= 1;
-                    }
-                    audio.send(AudioCmd::PlaySfx(SfxId::Click));
-                },
-                InputEvent::ButtonPress(Button::Right)
+                // -- Dashboard input (via DashboardState) --
+                InputEvent::ButtonPress(btn @ (Button::Up | Button::Down | Button::Left | Button::Right))
                     if classic_view == ClassicView::Dashboard =>
                 {
-                    let page_start = page * ICONS_PER_PAGE;
-                    let page_count = APPS.len().saturating_sub(page_start).min(ICONS_PER_PAGE);
-                    selected = (selected + 1) % page_count.max(1);
-                    audio.send(AudioCmd::PlaySfx(SfxId::Click));
+                    let old_sel = dashboard.selected;
+                    dashboard.handle_input(btn);
+                    if dashboard.selected != old_sel {
+                        audio.send(AudioCmd::PlaySfx(SfxId::Click));
+                    }
                 },
                 InputEvent::ButtonPress(Button::Confirm)
                     if classic_view == ClassicView::Dashboard =>
                 {
                     audio.send(AudioCmd::PlaySfx(SfxId::Navigate));
-                    let idx = page * ICONS_PER_PAGE + selected;
-                    if idx < APPS.len() {
-                        let app = &APPS[idx];
-                        match app.title {
+                    dashboard.trigger_press_flash();
+                    let app_title = dashboard.selected_app().map(|a| a.title.clone());
+                    if let Some(ref title) = app_title {
+                        match title.as_str() {
                             "Terminal" => {
                                 classic_view = ClassicView::Terminal;
                             },
@@ -650,39 +697,60 @@ fn psp_main() {
                                 classic_view = ClassicView::Radio;
                                 radio_selected = 0;
                                 radio_scroll = 0;
-                                // Keep radio_status if already playing.
                             },
                             "TV Guide" => {
+                                dbg_log("[TV] entering TV Guide view");
                                 classic_view = ClassicView::TvGuide;
-                                // Parse channels on first open.
                                 if tv_channels.is_empty() {
+                                    // Init network on main thread (WiFi dialog needs GU).
+                                    if !oasis_backend_psp::network::is_net_initialized() {
+                                        dbg_log("[TV] init network...");
+                                        if let Err(e) =
+                                            oasis_backend_psp::network::ensure_net_init_pub()
+                                        {
+                                            dbg_log(&format!("[TV] net init failed: {e}"));
+                                            backend.reinit_gu_frame();
+                                        } else {
+                                            dbg_log("[TV] net init OK");
+                                            backend.reinit_gu_frame();
+                                        }
+                                    }
+                                    dbg_log("[TV] parsing channel TOML...");
                                     if let Ok(config) =
                                         oasis_core::apps::tv_guide::ChannelConfig::from_toml(
                                             oasis_core::apps::tv_guide::channel
                                                 ::DEFAULT_CHANNELS_TOML,
                                         )
                                     {
+                                        dbg_log(&format!(
+                                            "[TV] parsed {} channels",
+                                            config.channel.len()
+                                        ));
                                         tv_channels = config.channel;
                                         tv_catalogs = vec![None; tv_channels.len()];
-                                        // Fetch catalogs from IA for each channel.
+                                        let mut batch = Vec::new();
                                         for (i, ch) in tv_channels.iter().enumerate() {
-                                            for (si, src) in ch.source.iter().enumerate() {
+                                            for src in &ch.source {
                                                 let api_path =
                                                     oasis_core::apps::tv_guide::ChannelCatalog
                                                         ::files_api_path(&src.item_id);
-                                                let url = format!(
-                                                    "https://archive.org{}",
-                                                    api_path,
-                                                );
-                                                // Tag layout: 0xAA in bits 8..15,
-                                                // channel index in bits 0..7,
-                                                // source index in bits 16..19.
-                                                let tag = 0xAA00
-                                                    | (i as u32 & 0xFF)
-                                                    | ((si as u32 & 0xF) << 16);
-                                                io.send(IoCmd::HttpGet { url, tag });
+                                                batch.push(TvCatalogRequest {
+                                                    url: format!(
+                                                        "http://archive.org{}",
+                                                        api_path,
+                                                    ),
+                                                    ch_idx: i,
+                                                    item_id: src.item_id.clone(),
+                                                    subfolder: src.subfolder.clone(),
+                                                });
                                             }
                                         }
+                                        io.send(IoCmd::TvCatalogFetchBatch {
+                                            requests: batch,
+                                        });
+                                        dbg_log("[TV] catalog batch sent");
+                                    } else {
+                                        dbg_log("[TV] TOML parse failed");
                                     }
                                 }
                                 tv_selected = 0;
@@ -690,8 +758,12 @@ fn psp_main() {
                             },
                             _ => {
                                 // Apps without a Classic view: open in Desktop mode.
-                                app_mode = AppMode::Desktop;
-                                desktop::open_app_window(&mut wm, &mut sdi, app.id, app.title);
+                                if let Some(app) = APPS.iter().find(|a| a.title == title.as_str()) {
+                                    app_mode = AppMode::Desktop;
+                                    desktop::open_app_window(
+                                        &mut wm, &mut sdi, app.id, app.title,
+                                    );
+                                }
                             },
                         }
                     }
@@ -1328,29 +1400,46 @@ fn psp_main() {
                 {
                     if tv_tuned.is_none() && !tv_downloading {
                         // Tune to selected channel.
+                        dbg_log(&format!(
+                            "[TV] X pressed, tuning ch {} (catalogs={})",
+                            tv_selected, tv_catalogs.len()
+                        ));
                         if tv_selected < tv_catalogs.len() {
                             if let Some(catalog) = &tv_catalogs[tv_selected] {
+                                dbg_log(&format!(
+                                    "[TV] catalog has {} episodes",
+                                    catalog.episodes.len()
+                                ));
                                 let best = oasis_core::apps::tv_guide::select_smallest_for(
                                     &catalog.episodes,
                                     20_000_000, // 20MB max
                                     320,        // min width
                                 );
                                 if let Some(ep) = best {
-                                    // Init network.
+                                    dbg_log(&format!(
+                                        "[TV] episode: {} ({}B)",
+                                        ep.title, ep.width
+                                    ));
+                                    // Network already initialized on TV Guide entry.
                                     if !oasis_backend_psp::network::is_net_initialized() {
+                                        dbg_log("[TV] calling ensure_net_init_pub...");
                                         if let Err(e) =
                                             oasis_backend_psp::network::ensure_net_init_pub()
                                         {
+                                            dbg_log(&format!("[TV] net init failed: {e}"));
                                             tv_error_msg = format!("Net: {e}");
                                             backend.reinit_gu_frame();
                                             continue;
                                         }
+                                        dbg_log("[TV] net init OK");
                                         backend.reinit_gu_frame();
                                     }
+                                    // Use HTTPS natively via embedded-tls when needed.
                                     let url =
                                         oasis_core::apps::tv_guide::ChannelCatalog::download_url(
                                             ep,
                                         );
+                                    dbg_log(&format!("[TV] starting download: {url}"));
                                     tv_now_playing = ep.title.clone();
                                     tv_downloading = true;
                                     tv_download_progress = 0.0;
@@ -1364,19 +1453,24 @@ fn psp_main() {
                                         tag: 0xBB00,
                                     });
                                 } else {
+                                    dbg_log("[TV] no suitable video found");
                                     tv_error_msg = String::from("No suitable video found");
                                 }
                             } else {
-                                tv_error_msg = String::from("Channel catalog not loaded");
+                                dbg_log("[TV] catalog still loading");
+                                tv_error_msg = String::from("Loading channel catalog...");
                             }
+                        } else {
+                            dbg_log("[TV] tv_selected out of range");
                         }
                     }
                 },
                 InputEvent::ButtonPress(Button::Cancel)
                     if classic_view == ClassicView::TvGuide =>
                 {
-                    if tv_tuned.is_some() {
-                        // Untune: stop video + audio.
+                    if tv_tuned.is_some() || tv_downloading {
+                        // Untune: stop video + audio + cancel download.
+                        oasis_backend_psp::threading::cancel_video_download();
                         oasis_backend_psp::video::send_video_cmd(
                             oasis_backend_psp::video::VideoCmd::Stop,
                         );
@@ -1426,6 +1520,46 @@ fn psp_main() {
 
         let fps = frame_timer.fps();
         let usb_active = usb_storage.is_some();
+
+        // Feed PSP status info into oasis-core's StatusBar for SDI rendering.
+        {
+            let sys_time = SystemTime {
+                year: status.year,
+                month: status.month as u8,
+                day: status.day as u8,
+                hour: status.hour as u8,
+                minute: status.minute as u8,
+                second: 0,
+            };
+            let bat_state = if status.ac_power && !status.battery_charging {
+                BatteryState::Full
+            } else if status.battery_charging {
+                BatteryState::Charging
+            } else if status.battery_percent < 0 {
+                BatteryState::NoBattery
+            } else {
+                BatteryState::Discharging
+            };
+            let power = PowerInfo {
+                battery_percent: if status.battery_percent >= 0 {
+                    Some(status.battery_percent as u8)
+                } else {
+                    None
+                },
+                battery_minutes: None,
+                state: bat_state,
+                cpu: CpuClock {
+                    current_mhz: sysinfo.cpu_mhz as u32,
+                    max_mhz: 333,
+                },
+            };
+            status_bar.update_info(Some(&sys_time), Some(&power));
+        }
+
+        // Update bottom bar page tracking.
+        bottom_bar.current_page = dashboard.page;
+        bottom_bar.total_pages = dashboard.page_count();
+        bottom_bar.tick_animation(&active_theme);
 
         backend.clear_inner(Color::BLACK);
         // Wallpaper: 64x64 texture scaled to fullscreen by GE (bilinear).
@@ -1479,12 +1613,24 @@ fn psp_main() {
                     mp_loaded = true;
                 }
 
+                // Show or hide dashboard icons based on current view.
+                let show_dashboard = classic_view == ClassicView::Dashboard
+                    && !icons_hidden;
+                if show_dashboard {
+                    dashboard.tick_animation();
+                    dashboard.update_sdi(&mut sdi, &active_theme);
+                } else {
+                    dashboard.hide_sdi(&mut sdi);
+                }
+
+                // Show or hide terminal SDI objects.
+                if classic_view != ClassicView::Terminal {
+                    terminal_sdi::set_terminal_visible(&mut sdi, false);
+                }
+
                 match classic_view {
                     ClassicView::Dashboard => {
                         backend.force_bitmap_font = true;
-                        if !icons_hidden {
-                            chrome::draw_dashboard(&mut backend, selected, page, viz_frame);
-                        }
                         chrome::draw_button_hints(
                             &mut backend,
                             &[
@@ -1497,8 +1643,17 @@ fn psp_main() {
                         backend.force_bitmap_font = false;
                     },
                     ClassicView::Terminal => {
+                        // SDI-based terminal rendering (Phase 4).
+                        terminal_sdi::setup_terminal_objects(
+                            &mut sdi,
+                            &term_lines,
+                            "/",
+                            &term_input,
+                            term_scroll,
+                            &active_theme,
+                            viz_frame % 30 < 15, // blinking cursor
+                        );
                         backend.force_bitmap_font = true;
-                        views::draw_terminal(&mut backend, &term_lines, &term_input, term_scroll);
                         chrome::draw_button_hints(
                             &mut backend,
                             &[
@@ -1639,6 +1794,9 @@ fn psp_main() {
                         backend.force_bitmap_font = false;
                     },
                     ClassicView::TvGuide => {
+                        if viz_frame < 3 || viz_frame % 60 == 0 {
+                            dbg_log(&format!("[TV] render frame {}", viz_frame));
+                        }
                         backend.force_bitmap_font = true;
                         if tv_tuned.is_some() {
                             views::draw_tv_playing(
@@ -1678,12 +1836,15 @@ fn psp_main() {
             },
 
             AppMode::Desktop => {
-                // Draw dashboard icons behind windows.
+                // Show dashboard icons behind windows in Desktop mode.
                 if !icons_hidden {
-                    backend.force_bitmap_font = true;
-                    chrome::draw_dashboard(&mut backend, selected, page, viz_frame);
-                    backend.force_bitmap_font = false;
+                    dashboard.tick_animation();
+                    dashboard.update_sdi(&mut sdi, &active_theme);
+                } else {
+                    dashboard.hide_sdi(&mut sdi);
                 }
+                // Hide terminal SDI objects in Desktop mode.
+                terminal_sdi::set_terminal_visible(&mut sdi, false);
 
                 // Pre-compute values for windowed app renderers.
                 let settings_clock = config.get_i32("clock_mhz").unwrap_or(333);
@@ -1767,15 +1928,12 @@ fn psp_main() {
             },
         }
 
-        // Status bar + bottom bar (always visible, drawn on top).
-        // Force bitmap font: all bar layouts use `len() * 8` fixed-width metrics.
-        backend.force_bitmap_font = true;
-        chrome::draw_status_bar(&mut backend, &status, &sysinfo);
-
-        let url_text = match (app_mode, classic_view) {
-            (AppMode::Desktop, _) => String::from("SYS://DESKTOP"),
-            (_, ClassicView::Dashboard) => String::from("SYS://DASHBOARD"),
-            (_, ClassicView::Terminal) => String::from("SYS://TERMINAL"),
+        // Status bar + bottom bar (always visible, drawn on top via SDI).
+        // Update URL text based on current mode/view.
+        active_theme.bar.url_text = match (app_mode, classic_view) {
+            (AppMode::Desktop, _) => "SYS://DESKTOP".to_string(),
+            (_, ClassicView::Dashboard) => "SYS://DASHBOARD".to_string(),
+            (_, ClassicView::Terminal) => "SYS://TERMINAL".to_string(),
             (_, ClassicView::FileManager) => {
                 let active_path = if fm_active_panel == 0 {
                     &fm_path
@@ -1794,44 +1952,80 @@ fn psp_main() {
                     format!("MSO:/{}", path_part)
                 }
             },
-            (_, ClassicView::PhotoViewer) => String::from("SYS://PHOTOS"),
+            (_, ClassicView::PhotoViewer) => "SYS://PHOTOS".to_string(),
             (_, ClassicView::MusicPlayer) => {
                 if audio.is_playing() {
-                    String::from("SYS://NOW_PLAY")
+                    "SYS://NOW_PLAY".to_string()
                 } else {
-                    String::from("SYS://MUSIC")
+                    "SYS://MUSIC".to_string()
                 }
             },
-            (_, ClassicView::Browser) => String::from("SYS://BROWSER"),
+            (_, ClassicView::Browser) => "SYS://BROWSER".to_string(),
             (_, ClassicView::Radio) => {
                 if audio.is_radio_streaming() {
-                    String::from("SYS://RADIO_ON")
+                    "SYS://RADIO_ON".to_string()
                 } else {
-                    String::from("SYS://RADIO")
+                    "SYS://RADIO".to_string()
                 }
             },
             (_, ClassicView::TvGuide) => {
                 if tv_tuned.is_some() {
-                    String::from("SYS://TV_LIVE")
+                    "SYS://TV_LIVE".to_string()
                 } else {
-                    String::from("SYS://TV_GUIDE")
+                    "SYS://TV_GUIDE".to_string()
                 }
             },
         };
-        let desktop_wm = if app_mode == AppMode::Desktop {
-            Some(&wm)
-        } else {
-            None
+        status_bar.update_sdi(&mut sdi, &active_theme, &skin_features);
+        bottom_bar.update_sdi(&mut sdi, &active_theme, &skin_features);
+
+        // On PSP, draw SDI in two passes to control cost:
+        // - Base layer only when dashboard/terminal are active (icons, term lines)
+        // - Overlay layer always (status bar, bottom bar at z=900)
+        // This avoids 100+ unnecessary draw calls in non-dashboard views.
+        let needs_base = match app_mode {
+            AppMode::Classic => matches!(
+                classic_view,
+                ClassicView::Dashboard | ClassicView::Terminal
+            ),
+            AppMode::Desktop => false, // WM draws windows directly
         };
-        chrome::draw_bottom_bar(
-            &mut backend,
-            &audio,
-            viz_frame,
-            &status,
-            &url_text,
-            desktop_wm,
-        );
-        backend.force_bitmap_font = false;
+        if needs_base {
+            let _ = sdi.draw_base_layer(&mut backend);
+        }
+        let _ = sdi.draw_overlay_layer(&mut backend);
+
+        // Post-SDI overlays drawn directly on the backend.
+        if app_mode == AppMode::Classic {
+            match classic_view {
+                ClassicView::Dashboard if !icons_hidden
+                    && active_theme.icon.style == "vector" =>
+                {
+                    // Vector icons overlay.
+                    let _ = oasis_core::vector_overlay::render_vector_background(
+                        &mut backend,
+                        &active_theme,
+                        viz_frame,
+                    );
+                    let _ = dashboard.render_vector_icons(
+                        &mut backend,
+                        &active_theme,
+                        viz_frame,
+                    );
+                },
+                ClassicView::Terminal => {
+                    // Terminal scrollbar (painted directly after SDI draw).
+                    let _ = terminal_sdi::paint_terminal_scrollbar(
+                        &mut backend,
+                        term_lines.len(),
+                        term_scroll,
+                        &active_theme,
+                    );
+                },
+                _ => {},
+            }
+        }
+
         viz_frame = viz_frame.wrapping_add(1);
 
         // Cursor (always on top).

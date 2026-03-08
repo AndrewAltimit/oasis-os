@@ -622,6 +622,7 @@ impl TvGuideState {
         }
 
         // Video preview texture.
+        let is_loading = self.tuned_channel.is_some() && self.preview_texture.is_none();
         ensure_obj(sdi, "tv_hdr_preview_vid");
         if let Ok(obj) = sdi.get_mut("tv_hdr_preview_vid") {
             if let Some(tex) = self.preview_texture {
@@ -636,6 +637,29 @@ impl TvGuideState {
                 obj.visible = false;
                 obj.texture = None;
             }
+        }
+
+        // Loading indicator (visible while tuned but no video frame yet).
+        let dots = match self.current_time % 4 {
+            0 => "",
+            1 => ".",
+            2 => "..",
+            _ => "...",
+        };
+        let loading_text = if let Some(ref status) = self.download_status {
+            status.clone()
+        } else {
+            format!("Loading{dots}")
+        };
+        ensure_obj(sdi, "tv_hdr_loading_text");
+        if let Ok(obj) = sdi.get_mut("tv_hdr_loading_text") {
+            obj.text = Some(loading_text);
+            obj.x = preview_x + preview_w as i32 / 2 - 20;
+            obj.y = preview_y + preview_h as i32 / 2 - 4;
+            obj.font_size = at.font_hint;
+            obj.text_color = self.colors.dim_text;
+            obj.visible = is_loading;
+            obj.z = 105;
         }
 
         // LIVE badge.

@@ -831,6 +831,7 @@ dependencies = [
  "oasis-terminal",
  "oasis-types",
  "oasis-ui",
+ "oasis-vector",
  "oasis-vfs",
  "oasis-wm",
  "serde",
@@ -911,6 +912,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "oasis-vector"
+version = "1.0.0"
+dependencies = [
+ "oasis-types",
+]
+
+[[package]]
 name = "oasis-vfs"
 version = "1.0.0"
 dependencies = [
@@ -921,6 +929,7 @@ dependencies = [
 name = "oasis-video"
 version = "1.0.0"
 dependencies = [
+ "log",
  "symphonia",
 ]
 
@@ -1027,7 +1036,7 @@ dependencies = [
 [[package]]
 name = "psp"
 version = "1.0.0"
-source = "git+https://github.com/AndrewAltimit/rust-psp?rev=d6e53a1#d6e53a16e2c9823c9833663039568f5033effb9f"
+source = "git+https://github.com/AndrewAltimit/rust-psp?rev=4370415#43704150320652f72c81dc8ea22b456c90fa9ac2"
 dependencies = [
  "bitflags 2.10.0",
  "libm",

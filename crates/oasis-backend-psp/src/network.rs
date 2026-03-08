@@ -52,11 +52,15 @@ fn load_net_modules_once() {
     // SAFETY: sceUtilityLoadModule loads firmware modules into memory.
     // NetCommon and NetInet are required for sceNetInit/sceNetInetInit.
     // NetParseUri and NetHttp are required for psp::http::HttpClient.
+    // NetSsl is required for HTTPS connections (archive.org, etc.).
     unsafe {
         sys::sceUtilityLoadModule(sys::Module::NetCommon);
         sys::sceUtilityLoadModule(sys::Module::NetInet);
         sys::sceUtilityLoadModule(sys::Module::NetParseUri);
         sys::sceUtilityLoadModule(sys::Module::NetHttp);
+        sys::sceUtilityLoadModule(sys::Module::NetSsl);
+        // Initialize the SSL library (128KB pool for TLS buffers).
+        sys::sceSslInit(0x20000);
     }
 }
 

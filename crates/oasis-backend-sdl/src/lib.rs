@@ -107,6 +107,57 @@ impl SdlBackend {
         )
     }
 
+    /// Fill a triangle using pre-translated screen coordinates.
+    ///
+    /// Used by `fill_arc` which translates the center once and computes
+    /// all vertices in screen space.
+    #[allow(clippy::too_many_arguments)]
+    fn fill_triangle_translated(
+        &mut self,
+        tx1: i32,
+        ty1: i32,
+        tx2: i32,
+        ty2: i32,
+        tx3: i32,
+        ty3: i32,
+        color: Color,
+    ) {
+        let mut verts = [(tx1, ty1), (tx2, ty2), (tx3, ty3)];
+        verts.sort_by_key(|v| v.1);
+        let (vx0, vy0) = verts[0];
+        let (vx1, vy1) = verts[1];
+        let (vx2, vy2) = verts[2];
+
+        self.set_color(color);
+        for y in vy0..=vy2 {
+            let mut x_min = i32::MAX;
+            let mut x_max = i32::MIN;
+            let x_02 = edge_x(vx0, vy0, vx2, vy2, y);
+            x_min = x_min.min(x_02);
+            x_max = x_max.max(x_02);
+            if y <= vy1 && vy0 != vy1 {
+                let x_01 = edge_x(vx0, vy0, vx1, vy1, y);
+                x_min = x_min.min(x_01);
+                x_max = x_max.max(x_01);
+            }
+            if y >= vy1 && vy1 != vy2 {
+                let x_12 = edge_x(vx1, vy1, vx2, vy2, y);
+                x_min = x_min.min(x_12);
+                x_max = x_max.max(x_12);
+            }
+            if y == vy1 {
+                x_min = x_min.min(vx1);
+                x_max = x_max.max(vx1);
+            }
+            if x_min <= x_max {
+                let _ = self.canvas.draw_line(
+                    sdl2::rect::Point::new(x_min, y),
+                    sdl2::rect::Point::new(x_max, y),
+                );
+            }
+        }
+    }
+
     /// Set the SDL draw color with optional blend mode.
     fn set_color(&mut self, color: Color) {
         if color.a < 255 {
@@ -796,6 +847,163 @@ impl SdiBackend for SdlBackend {
             self.viewport_h,
             Color::rgba(0, 0, 0, alpha),
         )
+    }
+
+    // -------------------------------------------------------------------
+    // Extended: Vector Graphics Primitives
+    // -------------------------------------------------------------------
+
+    fn fill_polygon(&mut self, points: &[(i32, i32)], color: Color) -> Result<()> {
+        if points.len() < 3 {
+            return Ok(());
+        }
+        self.set_color(color);
+
+        // Collect translated, y-sorted scanline edges.
+        let translated: Vec<(i32, i32)> =
+            points.iter().map(|&(x, y)| self.translate(x, y)).collect();
+
+        let y_min = translated.iter().map(|v| v.1).min().unwrap_or(0);
+        let y_max = translated.iter().map(|v| v.1).max().unwrap_or(0);
+
+        for y in y_min..=y_max {
+            let mut x_intersections = Vec::new();
+            let n = translated.len();
+            for i in 0..n {
+                let j = (i + 1) % n;
+                let (x0, y0) = translated[i];
+                let (x1, y1) = translated[j];
+                if (y0 <= y && y1 > y) || (y1 <= y && y0 > y) {
+                    let t = (y - y0) as f32 / (y1 - y0) as f32;
+                    x_intersections.push(x0 + (t * (x1 - x0) as f32) as i32);
+                }
+            }
+            x_intersections.sort_unstable();
+            for pair in x_intersections.chunks_exact(2) {
+                let _ = self.canvas.draw_line(
+                    sdl2::rect::Point::new(pair[0], y),
+                    sdl2::rect::Point::new(pair[1], y),
+                );
+            }
+        }
+        Ok(())
+    }
+
+    fn fill_arc(
+        &mut self,
+        cx: i32,
+        cy: i32,
+        radius: u16,
+        start_angle: f32,
+        end_angle: f32,
+        color: Color,
+    ) -> Result<()> {
+        use oasis_types::backend::{arc_segments, cos_approx_f32, sin_approx_f32};
+        let (tcx, tcy) = self.translate(cx, cy);
+        self.set_color(color);
+        let segments = arc_segments(radius, start_angle, end_angle);
+        let r = radius as f32;
+        let step = (end_angle - start_angle) / segments as f32;
+
+        // Build triangle fan vertices and scanline-fill each triangle.
+        let mut prev_x = tcx + (r * cos_approx_f32(start_angle)) as i32;
+        let mut prev_y = tcy + (r * sin_approx_f32(start_angle)) as i32;
+        for i in 1..=segments {
+            let angle = start_angle + step * i as f32;
+            let nx = tcx + (r * cos_approx_f32(angle)) as i32;
+            let ny = tcy + (r * sin_approx_f32(angle)) as i32;
+            self.fill_triangle_translated(tcx, tcy, prev_x, prev_y, nx, ny, color);
+            prev_x = nx;
+            prev_y = ny;
+        }
+        Ok(())
+    }
+
+    fn stroke_arc(
+        &mut self,
+        cx: i32,
+        cy: i32,
+        radius: u16,
+        start_angle: f32,
+        end_angle: f32,
+        width: u16,
+        color: Color,
+    ) -> Result<()> {
+        use oasis_types::backend::{arc_segments, cos_approx_f32, sin_approx_f32};
+        let (tcx, tcy) = self.translate(cx, cy);
+        self.set_color(color);
+        let segments = arc_segments(radius, start_angle, end_angle);
+        let r = radius as f32;
+        let step = (end_angle - start_angle) / segments as f32;
+
+        let half = width as i32 / 2;
+        let mut prev_x = tcx + (r * cos_approx_f32(start_angle)) as i32;
+        let mut prev_y = tcy + (r * sin_approx_f32(start_angle)) as i32;
+        for i in 1..=segments {
+            let angle = start_angle + step * i as f32;
+            let nx = tcx + (r * cos_approx_f32(angle)) as i32;
+            let ny = tcy + (r * sin_approx_f32(angle)) as i32;
+            // Thicken: draw parallel lines.
+            for offset in -half..=(width as i32 - half - 1) {
+                let dx = (nx - prev_x) as f32;
+                let dy = (ny - prev_y) as f32;
+                let len = (dx * dx + dy * dy).sqrt().max(1.0);
+                let ox = (-dy / len * offset as f32) as i32;
+                let oy = (dx / len * offset as f32) as i32;
+                let _ = self.canvas.draw_line(
+                    sdl2::rect::Point::new(prev_x + ox, prev_y + oy),
+                    sdl2::rect::Point::new(nx + ox, ny + oy),
+                );
+            }
+            prev_x = nx;
+            prev_y = ny;
+        }
+        Ok(())
+    }
+
+    fn stroke_line_dashed(
+        &mut self,
+        x1: i32,
+        y1: i32,
+        x2: i32,
+        y2: i32,
+        width: u16,
+        color: Color,
+        dash: u16,
+        gap: u16,
+    ) -> Result<()> {
+        let (tx1, ty1) = self.translate(x1, y1);
+        let (tx2, ty2) = self.translate(x2, y2);
+        self.set_color(color);
+
+        let dx = (tx2 - tx1) as f32;
+        let dy = (ty2 - ty1) as f32;
+        let total_len = (dx * dx + dy * dy).sqrt();
+        if total_len < 1.0 {
+            return Ok(());
+        }
+        let ux = dx / total_len;
+        let uy = dy / total_len;
+        let cycle = dash as f32 + gap as f32;
+        let half = width as i32 / 2;
+        let mut t = 0.0f32;
+        while t < total_len {
+            let seg_end = (t + dash as f32).min(total_len);
+            let sx = tx1 + (ux * t) as i32;
+            let sy = ty1 + (uy * t) as i32;
+            let ex = tx1 + (ux * seg_end) as i32;
+            let ey = ty1 + (uy * seg_end) as i32;
+            for offset in -half..=(width as i32 - half - 1) {
+                let ox = (-uy * offset as f32) as i32;
+                let oy = (ux * offset as f32) as i32;
+                let _ = self.canvas.draw_line(
+                    sdl2::rect::Point::new(sx + ox, sy + oy),
+                    sdl2::rect::Point::new(ex + ox, ey + oy),
+                );
+            }
+            t += cycle;
+        }
+        Ok(())
     }
 
     // -------------------------------------------------------------------

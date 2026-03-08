@@ -114,68 +114,68 @@ fn draw_icon_graphic(
     match app_id {
         "filemgr" => {
             // Folder: body rect + tab on top-left.
-            backend.fill_rect_inner(cx - 8, cy - 2, 16, 8, s);
-            backend.fill_rect_inner(cx - 8, cy - 5, 7, 3, s);
+            backend.fill_rect_inner(cx - 6, cy - 2, 12, 6, s);
+            backend.fill_rect_inner(cx - 6, cy - 4, 5, 2, s);
         },
         "settings" => {
-            // Gear: 3x3 cross pattern (5 fill_rects).
-            backend.fill_rect_inner(cx - 5, cy - 1, 10, 3, s);
-            backend.fill_rect_inner(cx - 1, cy - 5, 3, 10, s);
-            backend.fill_rect_inner(cx - 4, cy - 4, 3, 3, s);
-            backend.fill_rect_inner(cx + 2, cy - 4, 3, 3, s);
-            backend.fill_rect_inner(cx - 4, cy + 2, 3, 3, s);
+            // Gear: cross pattern.
+            backend.fill_rect_inner(cx - 4, cy - 1, 8, 2, s);
+            backend.fill_rect_inner(cx - 1, cy - 4, 2, 8, s);
+            backend.fill_rect_inner(cx - 3, cy - 3, 2, 2, s);
+            backend.fill_rect_inner(cx + 1, cy - 3, 2, 2, s);
+            backend.fill_rect_inner(cx - 3, cy + 1, 2, 2, s);
         },
         "network" => {
             // WiFi arcs: 3 horizontal bars widening bottom-up.
-            backend.fill_rect_inner(cx - 2, cy + 2, 5, 2, s);
-            backend.fill_rect_inner(cx - 5, cy - 1, 11, 2, s);
-            backend.fill_rect_inner(cx - 8, cy - 4, 17, 2, s);
+            backend.fill_rect_inner(cx - 1, cy + 1, 3, 2, s);
+            backend.fill_rect_inner(cx - 4, cy - 1, 9, 2, s);
+            backend.fill_rect_inner(cx - 6, cy - 3, 13, 2, s);
         },
         "terminal" => {
             // >_ prompt text.
-            backend.draw_text_inner(">_", cx - 8, cy - 4, 8, s);
+            backend.draw_text_inner(">_", cx - 8, cy - 3, 8, s);
         },
         "music" => {
             // Music note: stem + filled head.
-            backend.fill_rect_inner(cx + 2, cy - 5, 2, 10, s);
-            backend.fill_rect_inner(cx - 3, cy + 2, 5, 3, s);
+            backend.fill_rect_inner(cx + 1, cy - 4, 2, 8, s);
+            backend.fill_rect_inner(cx - 2, cy + 1, 4, 3, s);
         },
         "photos" => {
             // Mountain/landscape: stepped pyramid.
-            backend.fill_rect_inner(cx - 8, cy + 2, 17, 2, s);
-            backend.fill_rect_inner(cx - 5, cy - 1, 11, 3, s);
-            backend.fill_rect_inner(cx - 2, cy - 4, 5, 3, s);
+            backend.fill_rect_inner(cx - 6, cy + 1, 13, 2, s);
+            backend.fill_rect_inner(cx - 4, cy - 1, 9, 2, s);
+            backend.fill_rect_inner(cx - 1, cy - 3, 3, 2, s);
         },
         "packages" => {
             // Box/crate: outlined rect + cross divider.
-            backend.fill_rect_inner(cx - 7, cy - 5, 15, 1, s);
-            backend.fill_rect_inner(cx - 7, cy + 4, 15, 1, s);
-            backend.fill_rect_inner(cx - 7, cy - 5, 1, 10, s);
-            backend.fill_rect_inner(cx + 7, cy - 5, 1, 10, s);
-            backend.fill_rect_inner(cx, cy - 5, 1, 10, s);
+            backend.fill_rect_inner(cx - 5, cy - 4, 11, 1, s);
+            backend.fill_rect_inner(cx - 5, cy + 3, 11, 1, s);
+            backend.fill_rect_inner(cx - 5, cy - 4, 1, 8, s);
+            backend.fill_rect_inner(cx + 5, cy - 4, 1, 8, s);
+            backend.fill_rect_inner(cx, cy - 4, 1, 8, s);
         },
         "sysmon" => {
             // Bar chart: 3 vertical bars at different heights.
-            backend.fill_rect_inner(cx - 6, cy, 4, 5, s);
-            backend.fill_rect_inner(cx - 1, cy - 3, 4, 8, s);
-            backend.fill_rect_inner(cx + 4, cy - 5, 4, 10, s);
+            backend.fill_rect_inner(cx - 5, cy, 3, 4, s);
+            backend.fill_rect_inner(cx - 1, cy - 2, 3, 6, s);
+            backend.fill_rect_inner(cx + 3, cy - 4, 3, 8, s);
         },
         "browser" => {
-            // Globe: circle outline approximation (H cross + V cross).
-            backend.fill_rect_inner(cx - 7, cy - 1, 15, 2, s);
-            backend.fill_rect_inner(cx - 1, cy - 7, 2, 14, s);
-            backend.fill_rect_inner(cx - 6, cy - 5, 1, 10, s);
-            backend.fill_rect_inner(cx + 6, cy - 5, 1, 10, s);
-            backend.fill_rect_inner(cx - 5, cy - 6, 10, 1, s);
-            backend.fill_rect_inner(cx - 5, cy + 6, 10, 1, s);
+            // Globe: circle outline approximation.
+            backend.fill_rect_inner(cx - 5, cy - 1, 11, 2, s);
+            backend.fill_rect_inner(cx - 1, cy - 5, 2, 10, s);
+            backend.fill_rect_inner(cx - 4, cy - 4, 1, 8, s);
+            backend.fill_rect_inner(cx + 4, cy - 4, 1, 8, s);
+            backend.fill_rect_inner(cx - 3, cy - 5, 7, 1, s);
+            backend.fill_rect_inner(cx - 3, cy + 4, 7, 1, s);
         },
         "radio" => {
             // Radio waves: antenna dot + arcs.
-            backend.fill_rect_inner(cx - 1, cy + 2, 3, 3, s);
-            backend.fill_rect_inner(cx - 4, cy - 1, 2, 4, s);
-            backend.fill_rect_inner(cx + 3, cy - 1, 2, 4, s);
-            backend.fill_rect_inner(cx - 7, cy - 4, 2, 6, s);
-            backend.fill_rect_inner(cx + 6, cy - 4, 2, 6, s);
+            backend.fill_rect_inner(cx - 1, cy + 1, 3, 2, s);
+            backend.fill_rect_inner(cx - 3, cy - 1, 2, 3, s);
+            backend.fill_rect_inner(cx + 2, cy - 1, 2, 3, s);
+            backend.fill_rect_inner(cx - 5, cy - 3, 2, 5, s);
+            backend.fill_rect_inner(cx + 4, cy - 3, 2, 5, s);
         },
         _ => {},
     }

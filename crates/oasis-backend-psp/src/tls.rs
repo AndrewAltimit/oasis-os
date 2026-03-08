@@ -35,11 +35,12 @@ impl PspRng {
     fn new() -> Self {
         // SAFETY: MT19937 context is initialized by sceKernelUtilsMt19937Init
         // before any reads. MaybeUninit avoids potential UB from zeroing a
-        // struct with padding or invariant fields. Seed from CPU cycle counter.
+        // struct with padding or invariant fields. Seed from system timer
+        // (user-mode safe). mfc0 $9 (COP0 Count) is privileged on PSP
+        // Allegrex and crashes in user mode.
         unsafe {
             let mut ctx = core::mem::MaybeUninit::uninit();
-            let seed: u32;
-            core::arch::asm!("mfc0 {}, $9", out(reg) seed);
+            let seed = psp::sys::sceKernelGetSystemTimeLow() as u32;
             psp::sys::sceKernelUtilsMt19937Init(ctx.as_mut_ptr(), seed);
             Self { ctx: ctx.assume_init() }
         }

@@ -111,7 +111,7 @@ pub struct OasisInstance {
     width: u32,
     height: u32,
     /// Background video decode thread state (when `video-decode` feature is enabled).
-    #[cfg(feature = "video-decode")]
+    #[cfg(feature = "_video")]
     video_state: Option<VideoThreadState>,
 }
 
@@ -270,7 +270,7 @@ pub unsafe extern "C" fn oasis_create(
         callbacks: HashMap::new(),
         width,
         height,
-        #[cfg(feature = "video-decode")]
+        #[cfg(feature = "_video")]
         video_state: None,
     };
 
@@ -359,7 +359,20 @@ pub unsafe extern "C" fn oasis_tick(handle: *mut OasisInstance, _delta_seconds: 
     let _ = instance
         .backend
         .clear(oasis_core::backend::Color::rgb(10, 10, 18));
-    let _ = instance.sdi.draw(&mut instance.backend);
+    if instance.active_theme.icon.style == "vector" {
+        let _ = instance.sdi.draw_base_layer(&mut instance.backend);
+        let _ = oasis_core::vector_overlay::render_vector_background(
+            &mut instance.backend,
+            &instance.active_theme,
+            0,
+        );
+        if let Some(ref dash) = instance.dashboard {
+            let _ = dash.render_vector_icons(&mut instance.backend, &instance.active_theme, 0);
+        }
+        let _ = instance.sdi.draw_overlay_layer(&mut instance.backend);
+    } else {
+        let _ = instance.sdi.draw(&mut instance.backend);
+    }
     let _ = instance.backend.swap_buffers();
 }
 
@@ -804,7 +817,7 @@ pub unsafe extern "C" fn oasis_audio_is_playing(handle: *mut OasisInstance) -> b
 // ---------------------------------------------------------------------------
 
 /// Background decode thread state.
-#[cfg(feature = "video-decode")]
+#[cfg(feature = "_video")]
 struct VideoThreadState {
     /// Latest decoded video frame (replaced each iteration).
     latest_frame: std::sync::Arc<std::sync::Mutex<Option<oasis_video::VideoFrame>>>,
@@ -817,11 +830,11 @@ struct VideoThreadState {
     thread: Option<std::thread::JoinHandle<()>>,
 }
 
-#[cfg(feature = "video-decode")]
+#[cfg(feature = "_video")]
 const AUDIO_RING_CAP: usize = 128;
 
 /// Background decode loop run on a dedicated thread.
-#[cfg(feature = "video-decode")]
+#[cfg(feature = "_video")]
 fn decode_loop(
     mut decoder: oasis_video::SoftwareVideoDecoder,
     latest_frame: std::sync::Arc<std::sync::Mutex<Option<oasis_video::VideoFrame>>>,
@@ -882,7 +895,7 @@ fn decode_loop(
 /// # Safety
 ///
 /// `handle` must be valid. `path` must be a valid null-terminated C string.
-#[cfg(feature = "video-decode")]
+#[cfg(feature = "_video")]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn oasis_video_play(handle: *mut OasisInstance, path: *const c_char) -> i32 {
     // SAFETY: Caller guarantees `handle` is valid and non-null per function safety contract.
@@ -940,7 +953,7 @@ pub unsafe extern "C" fn oasis_video_play(handle: *mut OasisInstance, path: *con
 }
 
 /// Internal helper to stop and join the decode thread.
-#[cfg(feature = "video-decode")]
+#[cfg(feature = "_video")]
 fn stop_video_thread(instance: &mut OasisInstance) {
     if let Some(mut state) = instance.video_state.take() {
         state
@@ -957,7 +970,7 @@ fn stop_video_thread(instance: &mut OasisInstance) {
 /// # Safety
 ///
 /// `handle` must be valid.
-#[cfg(feature = "video-decode")]
+#[cfg(feature = "_video")]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn oasis_video_stop(handle: *mut OasisInstance) {
     // SAFETY: Caller guarantees `handle` is valid and non-null per function safety contract.
@@ -975,7 +988,7 @@ pub unsafe extern "C" fn oasis_video_stop(handle: *mut OasisInstance) {
 /// # Safety
 ///
 /// `handle` must be valid.
-#[cfg(feature = "video-decode")]
+#[cfg(feature = "_video")]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn oasis_video_is_playing(handle: *mut OasisInstance) -> i32 {
     // SAFETY: Caller guarantees `handle` is valid and non-null per function safety contract.
@@ -996,7 +1009,7 @@ pub unsafe extern "C" fn oasis_video_is_playing(handle: *mut OasisInstance) -> i
 ///
 /// `handle` must be valid. `buf` must point to at least `w*h*4` bytes where
 /// w/h are the video dimensions. `out_w` and `out_h` must be valid pointers.
-#[cfg(feature = "video-decode")]
+#[cfg(feature = "_video")]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn oasis_video_next_frame(
     handle: *mut OasisInstance,
@@ -1050,7 +1063,7 @@ pub unsafe extern "C" fn oasis_video_next_frame(
 ///
 /// `handle` must be valid. `buf` must point to at least `max_samples * 4`
 /// bytes.
-#[cfg(feature = "video-decode")]
+#[cfg(feature = "_video")]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn oasis_video_get_audio(
     handle: *mut OasisInstance,

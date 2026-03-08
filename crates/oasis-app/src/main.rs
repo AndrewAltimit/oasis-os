@@ -218,16 +218,22 @@ fn main() -> Result<()> {
         tv_fetch_start: None,
         video_player: video_player::VideoPlayer::new(),
         tv_audio_track: None,
-        #[cfg(feature = "video-decode")]
+        tv_audio_chunks_fed: 0,
+        tv_audio_samples_fed: 0,
+        #[cfg(feature = "_video")]
         pending_video_download: None,
-        #[cfg(feature = "video-decode")]
+        #[cfg(feature = "_video")]
         tv_video_cache_path: None,
-        #[cfg(feature = "video-decode")]
+        #[cfg(feature = "_video")]
         pending_video_params: None,
-        #[cfg(feature = "video-decode")]
+        #[cfg(feature = "_video")]
         tv_download_progress: None,
-        #[cfg(feature = "video-decode")]
+        #[cfg(feature = "_video")]
         tv_video_cache: Vec::new(),
+        #[cfg(feature = "_video")]
+        tv_stream_session: None,
+        #[cfg(feature = "_video")]
+        tv_current_url: None,
     };
 
     // Show a welcome toast.
@@ -245,8 +251,14 @@ fn main() -> Result<()> {
 
     // Auto-launch app via OASIS_APP env var (e.g. OASIS_APP=Browser).
     // Optionally OASIS_URL sets the initial URL for the browser.
+    // OASIS_TV_CHANNEL=N auto-tunes channel N after catalog loads.
+    // OASIS_TV_TIMEOUT=N auto-exits N seconds after video decode starts.
     let auto_launch_app = std::env::var("OASIS_APP").ok();
     let auto_launch_url = std::env::var("OASIS_URL").ok();
+    let tv_timeout_secs: Option<u64> = std::env::var("OASIS_TV_TIMEOUT")
+        .ok()
+        .and_then(|s| s.parse().ok());
+    let mut tv_timeout_start: Option<std::time::Instant> = None;
 
     // Set up scene graph and apply skin layout.
     let mut sdi = SdiRegistry::new();
@@ -400,6 +412,20 @@ fn main() -> Result<()> {
         radio_controller::tick(&mut state, &mut vfs);
         tv_controller::tick(&mut state, &mut backend, &mut vfs);
 
+        // Auto-exit timer for TV streaming tests.
+        if let Some(timeout) = tv_timeout_secs {
+            if state.video_player.is_active() && tv_timeout_start.is_none() {
+                tv_timeout_start = Some(std::time::Instant::now());
+                log::info!("TV test: decode active, auto-exit in {timeout}s");
+            }
+            if let Some(start) = tv_timeout_start
+                && start.elapsed().as_secs() >= timeout
+            {
+                log::info!("TV test: timeout reached, exiting");
+                break 'running;
+            }
+        }
+
         // Update SDI scene graph for the active mode.
         render::update_sdi(&mut state, &mut sdi);
 
@@ -432,6 +458,20 @@ fn main() -> Result<()> {
                         Ok(())
                     }
                 })?;
+        } else if state.active_theme.icon.style == "vector" && state.mode == Mode::Dashboard {
+            // Split draw: base layer → vector overlays/icons → overlay layer.
+            sdi.draw_base_layer(&mut backend)?;
+            oasis_core::vector_overlay::render_vector_background(
+                &mut backend,
+                &state.active_theme,
+                state.frame_counter as u32,
+            )?;
+            state.ui.dashboard.render_vector_icons(
+                &mut backend,
+                &state.active_theme,
+                state.frame_counter as u32,
+            )?;
+            sdi.draw_overlay_layer(&mut backend)?;
         } else {
             sdi.draw(&mut backend)?;
         }
@@ -465,7 +505,7 @@ fn main() -> Result<()> {
     }
 
     // Clean up all cached video files.
-    #[cfg(feature = "video-decode")]
+    #[cfg(feature = "_video")]
     for (_, path) in &state.tv_video_cache {
         if let Err(e) = std::fs::remove_file(path) {
             log::warn!("TV: failed to remove cached file {}: {e}", path.display());

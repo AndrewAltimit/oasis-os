@@ -116,27 +116,40 @@ pub struct AppState {
     pub video_player: crate::video_player::VideoPlayer,
     /// Audio track for TV Guide video playback.
     pub tv_audio_track: Option<AudioTrackId>,
+    /// Diagnostic: total audio chunks fed to the backend since last tune.
+    pub tv_audio_chunks_fed: u64,
+    /// Diagnostic: total audio samples fed to the backend since last tune.
+    pub tv_audio_samples_fed: u64,
     /// Pending video file download (software decode path).
-    #[cfg(feature = "video-decode")]
+    #[cfg(feature = "_video")]
     pub pending_video_download: Option<mpsc::Receiver<Result<std::path::PathBuf, String>>>,
     /// Cached video file path for cleanup on untune.
-    #[cfg(feature = "video-decode")]
+    #[cfg(feature = "_video")]
     pub tv_video_cache_path: Option<std::path::PathBuf>,
     /// Video file cache: (URL, file path) pairs, FIFO eviction at 3 entries.
-    #[cfg(feature = "video-decode")]
+    #[cfg(feature = "_video")]
     pub tv_video_cache: Vec<(String, std::path::PathBuf)>,
     /// Parameters saved from tune request, needed when download completes.
-    #[cfg(feature = "video-decode")]
+    #[cfg(feature = "_video")]
     pub pending_video_params: Option<PendingVideoParams>,
     /// Download progress: (bytes downloaded, total bytes). Updated atomically
     /// from the download thread.
-    #[cfg(feature = "video-decode")]
+    #[cfg(feature = "_video")]
     pub tv_download_progress:
         Option<std::sync::Arc<(std::sync::atomic::AtomicU64, std::sync::atomic::AtomicU64)>>,
+    /// Current streaming session — cancelled on re-tune to abort orphaned
+    /// download + decoder threads.
+    #[cfg(feature = "_video")]
+    pub tv_stream_session: Option<std::sync::Arc<crate::tv_controller::StreamingInner>>,
+    /// URL currently being played — used to deduplicate tune requests.
+    #[cfg(feature = "_video")]
+    pub tv_current_url: Option<String>,
 }
 
 /// Parameters stashed from a tune request so they survive until download completes.
-#[cfg(feature = "video-decode")]
+/// Retained for potential future cache-miss fallback paths.
+#[cfg(feature = "_video")]
+#[allow(dead_code)]
 pub struct PendingVideoParams {
     pub url: String,
     pub seek_secs: u64,

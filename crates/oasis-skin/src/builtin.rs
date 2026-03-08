@@ -1300,6 +1300,36 @@ pub fn highcontrast_skin() -> Result<Skin> {
     )
 }
 
+// ---------------------------------------------------------------------------
+// Altimit skin: .hack//SIGN-inspired vector icon desktop.
+// ---------------------------------------------------------------------------
+
+const ALTIMIT_STRINGS: &str = r#"
+boot_text = [
+    "ALTIMIT OS v1.0",
+    "Connecting to THE WORLD...",
+    "Network initialized.",
+    "Ready.",
+]
+prompt_format = ">> "
+title = "ALTIMIT"
+home_label = "THE WORLD"
+welcome_message = "Welcome to ALTIMIT. Type 'help' for commands."
+error_prefix = "ERROR: "
+shutdown_message = "Logging out..."
+"#;
+
+/// Load the Altimit skin (vector icon style).
+pub fn altimit_skin() -> Result<Skin> {
+    Skin::from_toml_full(
+        include_str!("../../../skins/altimit/skin.toml"),
+        include_str!("../../../skins/altimit/layout.toml"),
+        include_str!("../../../skins/altimit/features.toml"),
+        include_str!("../../../skins/altimit/theme.toml"),
+        ALTIMIT_STRINGS,
+    )
+}
+
 /// Load a built-in skin by name with optional inheritance.
 ///
 /// If the skin's manifest specifies `inherits = "parent_name"`, the parent
@@ -1328,6 +1358,7 @@ fn load_builtin_raw(name: &str) -> Result<Skin> {
         "solarized" => solarized_skin(),
         "vaporwave" => vaporwave_skin(),
         "highcontrast" => highcontrast_skin(),
+        "altimit" => altimit_skin(),
         _ => Err(oasis_types::error::OasisError::Config(format!(
             "unknown built-in skin: {name}"
         ))),
@@ -1372,6 +1403,7 @@ pub fn builtin_names() -> &'static [&'static str] {
         "solarized",
         "vaporwave",
         "highcontrast",
+        "altimit",
     ]
 }
 

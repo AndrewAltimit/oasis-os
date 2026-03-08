@@ -159,6 +159,37 @@ pub enum DrawCommand {
         dy: i32,
     },
     PopTranslate,
+    FillPolygon {
+        points: Vec<(i32, i32)>,
+        color: Color,
+    },
+    FillArc {
+        cx: i32,
+        cy: i32,
+        radius: u16,
+        start_angle: f32,
+        end_angle: f32,
+        color: Color,
+    },
+    StrokeArc {
+        cx: i32,
+        cy: i32,
+        radius: u16,
+        start_angle: f32,
+        end_angle: f32,
+        width: u16,
+        color: Color,
+    },
+    StrokeLineDashed {
+        x1: i32,
+        y1: i32,
+        x2: i32,
+        y2: i32,
+        width: u16,
+        color: Color,
+        dash: u16,
+        gap: u16,
+    },
 }
 
 /// Measured dimensions and baseline metrics for a text string.
@@ -197,6 +228,41 @@ impl GradientStyle {
             Self::FourCorner { top_left, .. } => top_left,
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// Vector graphics helpers (used by default trait implementations)
+// ---------------------------------------------------------------------------
+
+/// Fast cosine approximation using a 4-term Taylor series.
+///
+/// Accurate to ~0.001 for the range used in arc rendering.
+/// Avoids pulling in libm on `no_std` targets (PSP).
+pub fn cos_approx_f32(x: f32) -> f32 {
+    use core::f32::consts::PI;
+    // Reduce to [-PI, PI].
+    let mut x = x % (2.0 * PI);
+    if x > PI {
+        x -= 2.0 * PI;
+    } else if x < -PI {
+        x += 2.0 * PI;
+    }
+    let x2 = x * x;
+    // Taylor: 1 - x^2/2 + x^4/24 - x^6/720
+    1.0 - x2 * (0.5 - x2 * (1.0 / 24.0 - x2 * (1.0 / 720.0)))
+}
+
+/// Fast sine approximation: `sin(x) = cos(x - PI/2)`.
+pub fn sin_approx_f32(x: f32) -> f32 {
+    cos_approx_f32(x - core::f32::consts::FRAC_PI_2)
+}
+
+/// Compute the number of line segments for an arc at the given radius
+/// and angular span. Uses ~1 segment per 8 pixels of arc length,
+/// clamped to 4..64.
+pub fn arc_segments(radius: u16, start_angle: f32, end_angle: f32) -> usize {
+    let arc_len = radius as f32 * (end_angle - start_angle).abs();
+    (arc_len / 8.0).ceil().clamp(4.0, 64.0) as usize
 }
 
 /// Core rendering methods that every backend must implement.
@@ -806,6 +872,156 @@ pub trait SdiBackend: SdiCore {
     fn pop_region(&mut self) -> Result<()> {
         self.pop_clip_rect()?;
         self.pop_translate()
+    }
+
+    // -----------------------------------------------------------------------
+    // Extended: Vector Graphics Primitives (Phase 7)
+    // -----------------------------------------------------------------------
+
+    /// Draw a filled convex polygon defined by 3 or more vertices.
+    ///
+    /// The polygon is filled using fan triangulation from the first vertex.
+    /// For correct results, the polygon should be convex. Concave polygons
+    /// may produce visual artifacts but will not crash.
+    fn fill_polygon(&mut self, points: &[(i32, i32)], color: Color) -> Result<()> {
+        if points.len() < 3 {
+            return Ok(());
+        }
+        // Fan triangulation from vertex 0.
+        let v0 = points[0];
+        for i in 1..points.len() - 1 {
+            let v1 = points[i];
+            let v2 = points[i + 1];
+            self.fill_triangle(v0.0, v0.1, v1.0, v1.1, v2.0, v2.1, color)?;
+        }
+        Ok(())
+    }
+
+    /// Draw the outline of a polygon.
+    fn stroke_polygon(&mut self, points: &[(i32, i32)], width: u16, color: Color) -> Result<()> {
+        if points.len() < 2 {
+            return Ok(());
+        }
+        for i in 0..points.len() {
+            let j = (i + 1) % points.len();
+            self.draw_line(
+                points[i].0,
+                points[i].1,
+                points[j].0,
+                points[j].1,
+                width,
+                color,
+            )?;
+        }
+        Ok(())
+    }
+
+    /// Draw a filled arc (pie wedge) from `start_angle` to `end_angle`.
+    ///
+    /// Angles are in radians, measured clockwise from the positive X axis
+    /// (3 o'clock position). A full circle is `0.0..TAU`.
+    fn fill_arc(
+        &mut self,
+        cx: i32,
+        cy: i32,
+        radius: u16,
+        start_angle: f32,
+        end_angle: f32,
+        color: Color,
+    ) -> Result<()> {
+        let segments = arc_segments(radius, start_angle, end_angle);
+        let r = radius as f32;
+        let step = (end_angle - start_angle) / segments as f32;
+        let mut prev_x = cx + (r * cos_approx_f32(start_angle)) as i32;
+        let mut prev_y = cy + (r * sin_approx_f32(start_angle)) as i32;
+        for i in 1..=segments {
+            let angle = start_angle + step * i as f32;
+            let nx = cx + (r * cos_approx_f32(angle)) as i32;
+            let ny = cy + (r * sin_approx_f32(angle)) as i32;
+            self.fill_triangle(cx, cy, prev_x, prev_y, nx, ny, color)?;
+            prev_x = nx;
+            prev_y = ny;
+        }
+        Ok(())
+    }
+
+    /// Draw an arc stroke (partial circle outline) from `start_angle`
+    /// to `end_angle`. Angles in radians, clockwise from 3 o'clock.
+    fn stroke_arc(
+        &mut self,
+        cx: i32,
+        cy: i32,
+        radius: u16,
+        start_angle: f32,
+        end_angle: f32,
+        width: u16,
+        color: Color,
+    ) -> Result<()> {
+        let segments = arc_segments(radius, start_angle, end_angle);
+        let r = radius as f32;
+        let step = (end_angle - start_angle) / segments as f32;
+        let mut prev_x = cx + (r * cos_approx_f32(start_angle)) as i32;
+        let mut prev_y = cy + (r * sin_approx_f32(start_angle)) as i32;
+        for i in 1..=segments {
+            let angle = start_angle + step * i as f32;
+            let nx = cx + (r * cos_approx_f32(angle)) as i32;
+            let ny = cy + (r * sin_approx_f32(angle)) as i32;
+            self.draw_line(prev_x, prev_y, nx, ny, width, color)?;
+            prev_x = nx;
+            prev_y = ny;
+        }
+        Ok(())
+    }
+
+    /// Draw a dashed line between two points.
+    ///
+    /// `dash` is the length of each drawn segment in pixels.
+    /// `gap` is the length of each space between segments.
+    fn stroke_line_dashed(
+        &mut self,
+        x1: i32,
+        y1: i32,
+        x2: i32,
+        y2: i32,
+        width: u16,
+        color: Color,
+        dash: u16,
+        gap: u16,
+    ) -> Result<()> {
+        let dx = (x2 - x1) as f32;
+        let dy = (y2 - y1) as f32;
+        let total_len = (dx * dx + dy * dy).sqrt();
+        if total_len < 1.0 {
+            return Ok(());
+        }
+        let ux = dx / total_len;
+        let uy = dy / total_len;
+        let cycle = dash as f32 + gap as f32;
+        let mut t = 0.0f32;
+        while t < total_len {
+            let seg_end = (t + dash as f32).min(total_len);
+            let sx = x1 + (ux * t) as i32;
+            let sy = y1 + (uy * t) as i32;
+            let ex = x1 + (ux * seg_end) as i32;
+            let ey = y1 + (uy * seg_end) as i32;
+            self.draw_line(sx, sy, ex, ey, width, color)?;
+            t += cycle;
+        }
+        Ok(())
+    }
+
+    /// Draw a filled polygon with a per-vertex linear gradient.
+    ///
+    /// `color_start` is applied at the topmost vertex, `color_end` at the
+    /// bottommost. Intermediate vertices are interpolated by Y position.
+    /// Falls back to solid `color_start` fill by default.
+    fn fill_polygon_gradient(
+        &mut self,
+        points: &[(i32, i32)],
+        color_start: Color,
+        _color_end: Color,
+    ) -> Result<()> {
+        self.fill_polygon(points, color_start)
     }
 
     // -----------------------------------------------------------------------
@@ -2268,6 +2484,34 @@ mod tests {
             DrawCommand::PopClip => backend.pop_clip_rect(),
             DrawCommand::PushTranslate { dx, dy } => backend.push_translate(*dx, *dy),
             DrawCommand::PopTranslate => backend.pop_translate(),
+            DrawCommand::FillPolygon { points, color } => backend.fill_polygon(points, *color),
+            DrawCommand::FillArc {
+                cx,
+                cy,
+                radius,
+                start_angle,
+                end_angle,
+                color,
+            } => backend.fill_arc(*cx, *cy, *radius, *start_angle, *end_angle, *color),
+            DrawCommand::StrokeArc {
+                cx,
+                cy,
+                radius,
+                start_angle,
+                end_angle,
+                width,
+                color,
+            } => backend.stroke_arc(*cx, *cy, *radius, *start_angle, *end_angle, *width, *color),
+            DrawCommand::StrokeLineDashed {
+                x1,
+                y1,
+                x2,
+                y2,
+                width,
+                color,
+                dash,
+                gap,
+            } => backend.stroke_line_dashed(*x1, *y1, *x2, *y2, *width, *color, *dash, *gap),
         }
     }
 

@@ -13,7 +13,11 @@ crate-type = ["cdylib", "rlib"]
 
 [features]
 default = []
-video-decode = ["dep:oasis-video", "oasis-video/h264"]
+# Internal: oasis-video is available.
+_video = ["dep:oasis-video"]
+video-decode = ["_video", "oasis-video/h264"]
+# Use ffmpeg for video decode (statically linked, no runtime deps).
+video-decode-ffmpeg = ["_video", "oasis-video/ffmpeg"]
 
 [dependencies]
 oasis-core.workspace = true
