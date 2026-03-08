@@ -9,12 +9,12 @@
 //! via `mpsc` channels. The main loop uploads video frames as SDL textures and
 //! feeds audio to the audio backend.
 
-#[cfg(not(feature = "video-decode"))]
+#[cfg(not(feature = "_video"))]
 use std::process::{Child, Command, Stdio};
-#[cfg(not(feature = "video-decode"))]
+#[cfg(not(feature = "_video"))]
 use std::sync::mpsc::SyncSender;
 use std::sync::mpsc::{self, Receiver, TryRecvError};
-#[cfg(not(feature = "video-decode"))]
+#[cfg(not(feature = "_video"))]
 use std::time::Duration;
 use std::time::Instant;
 
@@ -23,12 +23,12 @@ use oasis_core::backend::{SdiBackend, TextureId};
 /// Raw RGBA frame from a decode backend.
 struct VideoFrame {
     data: Vec<u8>,
-    #[cfg(feature = "video-decode")]
+    #[cfg(feature = "_video")]
     width: u32,
-    #[cfg(feature = "video-decode")]
+    #[cfg(feature = "_video")]
     height: u32,
     /// Presentation timestamp in seconds (software decode only; 0.0 for ffmpeg).
-    #[cfg(feature = "video-decode")]
+    #[cfg(feature = "_video")]
     timestamp_secs: f64,
 }
 
@@ -42,23 +42,23 @@ enum PlayerState {
 }
 
 /// Target decode framerate (must match `-r` flag passed to ffmpeg).
-#[cfg(not(feature = "video-decode"))]
+#[cfg(not(feature = "_video"))]
 const VIDEO_FPS: u32 = 15;
 
 /// Audio output from a single tick.
 pub enum AudioOutput {
     /// MP3-encoded chunks (ffmpeg path).
-    #[cfg(not(feature = "video-decode"))]
+    #[cfg(not(feature = "_video"))]
     Mp3Chunks(Vec<Vec<u8>>),
     /// Decoded PCM f32 samples (software decode path).
-    #[cfg(feature = "video-decode")]
+    #[cfg(feature = "_video")]
     PcmF32(Vec<SoftwareAudio>),
     /// No audio this tick.
     None,
 }
 
 /// A chunk of decoded PCM f32 audio from the software decoder.
-#[cfg(feature = "video-decode")]
+#[cfg(feature = "_video")]
 pub struct SoftwareAudio {
     pub pcm_f32: Vec<f32>,
     pub channels: u16,
@@ -67,14 +67,14 @@ pub struct SoftwareAudio {
 
 /// Which decode backend is active.
 enum DecodeBackend {
-    #[cfg(not(feature = "video-decode"))]
+    #[cfg(not(feature = "_video"))]
     Ffmpeg {
         video_process: Child,
         audio_process: Child,
         video_rx: Receiver<VideoFrame>,
         audio_rx: Receiver<Vec<u8>>,
     },
-    #[cfg(feature = "video-decode")]
+    #[cfg(feature = "_video")]
     Software {
         video_rx: Receiver<VideoFrame>,
         audio_rx: Receiver<SoftwareAudio>,
@@ -99,14 +99,17 @@ pub struct VideoPlayer {
     /// Last time a display stats log was emitted.
     last_display_report: Option<Instant>,
     /// Minimum interval between displayed frames (1 / VIDEO_FPS).
-    #[cfg(not(feature = "video-decode"))]
+    #[cfg(not(feature = "_video"))]
     frame_interval: Duration,
     /// Wall-clock time when the first frame was displayed (PTS sync).
-    #[cfg(feature = "video-decode")]
+    #[cfg(feature = "_video")]
     playback_start: Option<Instant>,
     /// PTS of the first frame received (base for wall-clock sync).
-    #[cfg(feature = "video-decode")]
+    #[cfg(feature = "_video")]
     base_pts: f64,
+    /// Frame waiting to be displayed (held until wall-clock catches up to its PTS).
+    #[cfg(feature = "_video")]
+    pending_frame: Option<VideoFrame>,
 }
 
 impl VideoPlayer {
@@ -123,19 +126,21 @@ impl VideoPlayer {
             last_frame_time: None,
             displayed_frames: 0,
             last_display_report: None,
-            #[cfg(not(feature = "video-decode"))]
+            #[cfg(not(feature = "_video"))]
             frame_interval: Duration::from_nanos(1_000_000_000 / u64::from(VIDEO_FPS)),
-            #[cfg(feature = "video-decode")]
+            #[cfg(feature = "_video")]
             playback_start: None,
-            #[cfg(feature = "video-decode")]
+            #[cfg(feature = "_video")]
             base_pts: 0.0,
+            #[cfg(feature = "_video")]
+            pending_frame: None,
         }
     }
 
     /// Start playing a video from a URL using ffmpeg subprocesses.
     ///
     /// If `seek_secs > 0`, seeks into the stream before decoding.
-    #[cfg(not(feature = "video-decode"))]
+    #[cfg(not(feature = "_video"))]
     pub fn start(&mut self, url: &str, seek_secs: u64, width: u32, height: u32) {
         self.stop_internal();
 
@@ -245,11 +250,11 @@ impl VideoPlayer {
                     Ok(()) => {
                         let frame = VideoFrame {
                             data: buf,
-                            #[cfg(feature = "video-decode")]
+                            #[cfg(feature = "_video")]
                             width: 0,
-                            #[cfg(feature = "video-decode")]
+                            #[cfg(feature = "_video")]
                             height: 0,
-                            #[cfg(feature = "video-decode")]
+                            #[cfg(feature = "_video")]
                             timestamp_secs: 0.0,
                         };
                         if video_tx.send(frame).is_err() {
@@ -297,7 +302,7 @@ impl VideoPlayer {
     ///
     /// Requires the `video-decode` feature. Opens the file as a streaming
     /// source and spawns a background decode thread.
-    #[cfg(feature = "video-decode")]
+    #[cfg(feature = "_video")]
     pub fn start_software(
         &mut self,
         path: std::path::PathBuf,
@@ -352,7 +357,7 @@ impl VideoPlayer {
     /// so the main/UI thread is never blocked. The optional `on_init`
     /// callback runs after the decoder's initial scan completes (used to
     /// enable sliding-window eviction on streaming buffers).
-    #[cfg(feature = "video-decode")]
+    #[cfg(feature = "_video")]
     pub fn start_software_source(
         &mut self,
         source: Box<dyn oasis_video::VideoSource>,
@@ -375,10 +380,21 @@ impl VideoPlayer {
 
         std::thread::spawn(move || {
             // Open decoder on background thread to avoid blocking the UI.
+            log::info!("VideoPlayer: opening decoder (streaming source)...");
+            let t0 = std::time::Instant::now();
             let mut decoder = match oasis_video::SoftwareVideoDecoder::open_stream(source) {
-                Ok(d) => d,
+                Ok(d) => {
+                    log::info!(
+                        "VideoPlayer: decoder opened in {:.1}s",
+                        t0.elapsed().as_secs_f64(),
+                    );
+                    d
+                },
                 Err(e) => {
-                    log::error!("VideoPlayer: failed to open decoder: {e}");
+                    log::error!(
+                        "VideoPlayer: failed to open decoder after {:.1}s: {e}",
+                        t0.elapsed().as_secs_f64(),
+                    );
                     return;
                 },
             };
@@ -406,7 +422,7 @@ impl VideoPlayer {
     }
 
     /// Spawn the decode loop for an already-opened decoder.
-    #[cfg(feature = "video-decode")]
+    #[cfg(feature = "_video")]
     fn spawn_decode_thread(
         &mut self,
         decoder: oasis_video::SoftwareVideoDecoder,
@@ -429,9 +445,13 @@ impl VideoPlayer {
         self.state = PlayerState::Starting;
     }
 
-    /// Drain all available audio packets from the decoder and send them.
+    /// Drain all buffered audio from the decoder and send it.
+    ///
+    /// Uses `next_buffered_audio()` to avoid reading new packets from the
+    /// stream, which would advance the read position and potentially cause
+    /// the video decoder to miss data or hit premature EOF.
     /// Returns the number of chunks sent and dropped.
-    #[cfg(feature = "video-decode")]
+    #[cfg(feature = "_video")]
     fn drain_audio(
         decoder: &mut oasis_video::SoftwareVideoDecoder,
         audio_tx: &mpsc::SyncSender<SoftwareAudio>,
@@ -442,24 +462,14 @@ impl VideoPlayer {
         }
         let mut sent = 0u64;
         let mut dropped = 0u64;
-        loop {
-            match decoder.next_audio_samples() {
-                Ok(Some(chunk)) => {
-                    match audio_tx.try_send(SoftwareAudio {
-                        pcm_f32: chunk.pcm_f32,
-                        channels: chunk.channels,
-                        sample_rate: chunk.sample_rate,
-                    }) {
-                        Ok(()) => sent += 1,
-                        Err(_) => dropped += 1,
-                    }
-                },
-                Ok(None) => break,
-                Err(oasis_video::VideoError::NoTrack(_)) => break,
-                Err(e) => {
-                    log::warn!("VideoPlayer: audio decode error: {e}");
-                    break;
-                },
+        while let Some(chunk) = decoder.next_buffered_audio() {
+            match audio_tx.try_send(SoftwareAudio {
+                pcm_f32: chunk.pcm_f32,
+                channels: chunk.channels,
+                sample_rate: chunk.sample_rate,
+            }) {
+                Ok(()) => sent += 1,
+                Err(_) => dropped += 1,
             }
         }
         (sent, dropped)
@@ -470,7 +480,7 @@ impl VideoPlayer {
     /// Decodes video and audio from the same decoder, draining all available
     /// audio after each video frame to prevent audio starvation. Falls back
     /// to audio-only mode if H.264 decoding fails repeatedly.
-    #[cfg(feature = "video-decode")]
+    #[cfg(feature = "_video")]
     fn decode_loop(
         mut decoder: oasis_video::SoftwareVideoDecoder,
         video_tx: mpsc::SyncSender<VideoFrame>,
@@ -498,6 +508,7 @@ impl VideoPlayer {
         let decode_start = Instant::now();
         let mut last_report = Instant::now();
         let mut video_failed = false;
+        let mut skip_limit_count = 0u32;
 
         loop {
             if stop_rx.try_recv().is_ok() {
@@ -567,11 +578,19 @@ impl VideoPlayer {
                         video_failed = true;
                     },
                     Err(oasis_video::VideoError::SkipLimit) => {
-                        log::warn!(
-                            "VideoPlayer: H.264 skip limit after {frame_count} frames, \
-                             switching to audio-only mode"
-                        );
-                        video_failed = true;
+                        skip_limit_count += 1;
+                        if skip_limit_count >= 3 {
+                            log::warn!(
+                                "VideoPlayer: H.264 skip limit x{skip_limit_count} after \
+                                 {frame_count} frames, switching to audio-only mode"
+                            );
+                            video_failed = true;
+                        } else {
+                            log::warn!(
+                                "VideoPlayer: H.264 skip limit ({skip_limit_count}/3) after \
+                                 {frame_count} frames, will retry"
+                            );
+                        }
                     },
                     Err(e) => {
                         log::error!(
@@ -633,7 +652,7 @@ impl VideoPlayer {
         let mut video_disconnected = false;
 
         match decode {
-            #[cfg(not(feature = "video-decode"))]
+            #[cfg(not(feature = "_video"))]
             DecodeBackend::Ffmpeg { video_rx, .. } => {
                 // Fixed framerate pacing for ffmpeg (no timestamps).
                 let should_take = self
@@ -647,25 +666,60 @@ impl VideoPlayer {
                     }
                 }
             },
-            #[cfg(feature = "video-decode")]
+            #[cfg(feature = "_video")]
             DecodeBackend::Software { video_rx, .. } => {
-                // Drain all available frames — display the latest one.
-                let mut drained = 0u32;
-                loop {
+                // PTS-based frame pacing: only display when wall-clock
+                // time has caught up to the frame's presentation timestamp.
+
+                // Try to fill pending_frame from the channel if empty.
+                if self.pending_frame.is_none() {
                     match video_rx.try_recv() {
-                        Ok(frame) => {
-                            drained += 1;
-                            latest_frame = Some(frame);
-                        },
-                        Err(TryRecvError::Empty) => break,
-                        Err(TryRecvError::Disconnected) => {
-                            video_disconnected = true;
-                            break;
-                        },
+                        Ok(frame) => self.pending_frame = Some(frame),
+                        Err(TryRecvError::Empty) => {},
+                        Err(TryRecvError::Disconnected) => video_disconnected = true,
                     }
                 }
-                if drained > 0 && self.displayed_frames > 0 {
-                    log::trace!("VideoPlayer tick: drained {drained} frames");
+
+                if let Some(ref pending) = self.pending_frame {
+                    let should_display = match self.playback_start {
+                        Some(start) => {
+                            let wall_elapsed = start.elapsed().as_secs_f64();
+                            let frame_pts = pending.timestamp_secs - self.base_pts;
+                            frame_pts <= wall_elapsed
+                        },
+                        // First frame — always display immediately.
+                        None => true,
+                    };
+
+                    if should_display {
+                        latest_frame = self.pending_frame.take();
+
+                        // Skip frames that are already behind schedule
+                        // (catch up if decode is ahead of display).
+                        loop {
+                            match video_rx.try_recv() {
+                                Ok(next) => {
+                                    if let Some(start) = self.playback_start {
+                                        let wall_elapsed = start.elapsed().as_secs_f64();
+                                        let next_pts = next.timestamp_secs - self.base_pts;
+                                        if next_pts <= wall_elapsed {
+                                            // This frame is also due — skip to it.
+                                            latest_frame = Some(next);
+                                            continue;
+                                        }
+                                    }
+                                    // Next frame is in the future — hold it.
+                                    self.pending_frame = Some(next);
+                                    break;
+                                },
+                                Err(TryRecvError::Empty) => break,
+                                Err(TryRecvError::Disconnected) => {
+                                    video_disconnected = true;
+                                    break;
+                                },
+                            }
+                        }
+                    }
                 }
             },
         }
@@ -677,17 +731,17 @@ impl VideoPlayer {
             }
 
             // For software decode, frame may carry its own dimensions.
-            #[cfg(feature = "video-decode")]
+            #[cfg(feature = "_video")]
             let (fw, fh) = if frame.width > 0 && frame.height > 0 {
                 (frame.width, frame.height)
             } else {
                 (self.frame_width, self.frame_height)
             };
-            #[cfg(not(feature = "video-decode"))]
+            #[cfg(not(feature = "_video"))]
             let (fw, fh) = (self.frame_width, self.frame_height);
 
             // Save timestamp before consuming frame data.
-            #[cfg(feature = "video-decode")]
+            #[cfg(feature = "_video")]
             let frame_ts = frame.timestamp_secs;
 
             match backend.load_texture(fw, fh, &frame.data) {
@@ -697,7 +751,7 @@ impl VideoPlayer {
                     self.displayed_frames += 1;
                     if self.state == PlayerState::Starting {
                         self.state = PlayerState::Playing;
-                        #[cfg(feature = "video-decode")]
+                        #[cfg(feature = "_video")]
                         {
                             self.playback_start = Some(Instant::now());
                             self.base_pts = frame_ts;
@@ -729,7 +783,7 @@ impl VideoPlayer {
         // Drain audio channel.
         let mut audio_disconnected = false;
         let audio = match decode {
-            #[cfg(not(feature = "video-decode"))]
+            #[cfg(not(feature = "_video"))]
             DecodeBackend::Ffmpeg { audio_rx, .. } => {
                 let mut chunks = Vec::new();
                 loop {
@@ -744,7 +798,7 @@ impl VideoPlayer {
                 }
                 AudioOutput::Mp3Chunks(chunks)
             },
-            #[cfg(feature = "video-decode")]
+            #[cfg(feature = "_video")]
             DecodeBackend::Software { audio_rx, .. } => {
                 let mut chunks = Vec::new();
                 loop {
@@ -799,7 +853,7 @@ impl VideoPlayer {
     fn stop_internal(&mut self) {
         if let Some(decode) = self.decode.take() {
             match decode {
-                #[cfg(not(feature = "video-decode"))]
+                #[cfg(not(feature = "_video"))]
                 DecodeBackend::Ffmpeg {
                     mut video_process,
                     mut audio_process,
@@ -810,7 +864,7 @@ impl VideoPlayer {
                     let _ = audio_process.kill();
                     let _ = audio_process.wait();
                 },
-                #[cfg(feature = "video-decode")]
+                #[cfg(feature = "_video")]
                 DecodeBackend::Software { stop_tx, .. } => {
                     let _ = stop_tx.send(());
                 },
@@ -821,10 +875,11 @@ impl VideoPlayer {
         self.displayed_frames = 0;
         self.last_display_report = None;
         self.finished = false;
-        #[cfg(feature = "video-decode")]
+        #[cfg(feature = "_video")]
         {
             self.playback_start = None;
             self.base_pts = 0.0;
+            self.pending_frame = None;
         }
         self.state = PlayerState::Idle;
         self.error_msg = None;
@@ -832,7 +887,7 @@ impl VideoPlayer {
 }
 
 /// Nearest-neighbor RGBA scale.
-#[cfg(feature = "video-decode")]
+#[cfg(feature = "_video")]
 fn simple_scale(src: &[u8], src_w: u32, src_h: u32, dst_w: u32, dst_h: u32) -> Vec<u8> {
     let mut dst = vec![0u8; (dst_w * dst_h * 4) as usize];
     for y in 0..dst_h {
@@ -941,7 +996,7 @@ mod tests {
         assert!(matches!(audio, AudioOutput::None));
     }
 
-    #[cfg(not(feature = "video-decode"))]
+    #[cfg(not(feature = "_video"))]
     #[test]
     fn start_with_bogus_command_sets_error() {
         let mut player = VideoPlayer::new();
@@ -965,7 +1020,7 @@ mod tests {
         // a network call, so just verify construction is valid.
     }
 
-    #[cfg(feature = "video-decode")]
+    #[cfg(feature = "_video")]
     #[test]
     fn start_software_nonexistent_file_sets_error() {
         let mut player = VideoPlayer::new();
@@ -974,7 +1029,7 @@ mod tests {
         assert!(player.error_msg.is_some());
     }
 
-    #[cfg(feature = "video-decode")]
+    #[cfg(feature = "_video")]
     #[test]
     fn start_software_corrupt_file_sets_error() {
         use std::io::Write;
@@ -991,7 +1046,7 @@ mod tests {
 
     #[test]
     fn audio_output_variants() {
-        #[cfg(not(feature = "video-decode"))]
+        #[cfg(not(feature = "_video"))]
         {
             let mp3 = AudioOutput::Mp3Chunks(vec![vec![1, 2, 3]]);
             assert!(matches!(mp3, AudioOutput::Mp3Chunks(ref v) if v.len() == 1));
@@ -1001,7 +1056,7 @@ mod tests {
         assert!(matches!(none, AudioOutput::None));
     }
 
-    #[cfg(feature = "video-decode")]
+    #[cfg(feature = "_video")]
     #[test]
     fn simple_scale_identity() {
         let src = vec![255u8; 4 * 4 * 4]; // 4x4 white
@@ -1009,7 +1064,7 @@ mod tests {
         assert_eq!(dst, src);
     }
 
-    #[cfg(feature = "video-decode")]
+    #[cfg(feature = "_video")]
     #[test]
     fn simple_scale_downscale() {
         // 4x4 → 2x2

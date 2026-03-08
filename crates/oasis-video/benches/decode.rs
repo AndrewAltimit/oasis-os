@@ -11,7 +11,7 @@ fn fixture_bytes() -> Vec<u8> {
     std::fs::read(fixture_path()).expect("fixture file missing")
 }
 
-#[cfg(feature = "h264")]
+#[cfg(any(feature = "h264", feature = "ffmpeg"))]
 fn bench_demux_open(c: &mut Criterion) {
     let data = fixture_bytes();
     c.bench_function("demux_open", |b| {
@@ -21,7 +21,7 @@ fn bench_demux_open(c: &mut Criterion) {
     });
 }
 
-#[cfg(feature = "h264")]
+#[cfg(any(feature = "h264", feature = "ffmpeg"))]
 fn bench_video_decode_throughput(c: &mut Criterion) {
     let data = fixture_bytes();
     c.bench_function("video_decode_throughput", |b| {
@@ -36,7 +36,7 @@ fn bench_video_decode_throughput(c: &mut Criterion) {
     });
 }
 
-#[cfg(feature = "h264")]
+#[cfg(any(feature = "h264", feature = "ffmpeg"))]
 fn bench_audio_decode_throughput(c: &mut Criterion) {
     let data = fixture_bytes();
     c.bench_function("audio_decode_throughput", |b| {
@@ -70,7 +70,7 @@ fn bench_yuv420_to_rgba(c: &mut Criterion) {
     group.finish();
 }
 
-#[cfg(feature = "h264")]
+#[cfg(any(feature = "h264", feature = "ffmpeg"))]
 fn bench_seek_latency(c: &mut Criterion) {
     let data = fixture_bytes();
     c.bench_function("seek_latency", |b| {
@@ -120,7 +120,7 @@ fn bench_demux_lite_read_samples(c: &mut Criterion) {
 }
 
 // Build the benchmark group based on enabled features.
-#[cfg(feature = "h264")]
+#[cfg(any(feature = "h264", feature = "ffmpeg"))]
 criterion_group!(
     h264_benches,
     bench_demux_open,
@@ -129,7 +129,7 @@ criterion_group!(
     bench_seek_latency,
 );
 
-#[cfg(not(feature = "h264"))]
+#[cfg(not(any(feature = "h264", feature = "ffmpeg")))]
 criterion_group!(h264_benches, bench_yuv420_to_rgba);
 
 criterion_group!(common_benches, bench_yuv420_to_rgba);

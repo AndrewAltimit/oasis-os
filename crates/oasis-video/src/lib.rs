@@ -1,23 +1,34 @@
 //! Software MP4/H.264+AAC video decode pipeline.
 //!
 //! Provides a pure-software path for decoding MP4 videos when hardware or
-//! browser-native codecs are unavailable.  Uses:
-//! - **symphonia** (pure Rust) for MP4 demuxing and AAC-LC audio decoding
-//! - **openh264** (Cisco C source via `cc`) for H.264 video frame decoding
-//!   (requires the `h264` feature, enabled by default)
-//! - Pure Rust YUV420→RGBA pixel conversion
+//! browser-native codecs are unavailable.  Two backends:
+//!
+//! - **symphonia + openh264** (default): Pure Rust MP4 demuxing and AAC-LC
+//!   decoding via symphonia, with optional H.264 via openh264 (`h264` feature).
+//! - **ffmpeg** (`ffmpeg` feature): Statically-linked ffmpeg for demuxing,
+//!   H.264, and AAC. Full codec support, SIMD-optimized, no runtime deps.
+//!
+//! The `h264` and `ffmpeg` features are mutually exclusive.
+
+#[cfg(all(feature = "h264", feature = "ffmpeg"))]
+compile_error!("features `h264` and `ffmpeg` are mutually exclusive — use one or the other");
 
 pub mod aac;
 pub mod demux;
 #[cfg(feature = "no-std-demux")]
 pub mod demux_lite;
+#[cfg(feature = "ffmpeg")]
+#[allow(clippy::unnecessary_cast)]
+pub mod ffmpeg_decoder;
 #[cfg(feature = "h264")]
 pub mod h264;
 pub mod yuv;
 
-use std::collections::VecDeque;
 use std::io::{Cursor, Read, Seek};
 
+#[cfg(not(feature = "ffmpeg"))]
+use std::collections::VecDeque;
+#[cfg(not(feature = "ffmpeg"))]
 use demux::{DemuxedPacket, Mp4Demuxer, TrackKind};
 
 /// A streaming video source: anything that is `Read + Seek + Send + Sync`.
@@ -105,21 +116,35 @@ pub struct AudioChunk {
 /// Opens an MP4 from a byte buffer and provides frame-by-frame video (RGBA)
 /// and audio (PCM f32) output.
 ///
-/// H.264 video decoding requires the `h264` feature (enabled by default).
+/// When the `ffmpeg` feature is enabled, uses statically-linked ffmpeg for
+/// full H.264+AAC decode with SIMD optimization.
+///
+/// Otherwise, H.264 video decoding requires the `h264` feature.
 /// Without it, [`next_video_frame`](Self::next_video_frame) returns
 /// [`VideoError::NoTrack`].
 pub struct SoftwareVideoDecoder {
+    #[cfg(feature = "ffmpeg")]
+    inner: ffmpeg_decoder::FfmpegDecoder,
+
+    #[cfg(not(feature = "ffmpeg"))]
     demuxer: Mp4Demuxer,
-    #[cfg(feature = "h264")]
+    #[cfg(all(not(feature = "ffmpeg"), feature = "h264"))]
     h264: Option<h264::H264Decoder>,
+    #[cfg(not(feature = "ffmpeg"))]
     aac: Option<aac::AacDecoder>,
+    #[cfg(not(feature = "ffmpeg"))]
     video_width: u32,
+    #[cfg(not(feature = "ffmpeg"))]
     video_height: u32,
+    #[cfg(not(feature = "ffmpeg"))]
     audio_sample_rate: u32,
+    #[cfg(not(feature = "ffmpeg"))]
     audio_channels: u16,
     /// Buffered video packets encountered while reading audio.
+    #[cfg(not(feature = "ffmpeg"))]
     video_queue: VecDeque<DemuxedPacket>,
     /// Buffered audio packets encountered while reading video.
+    #[cfg(not(feature = "ffmpeg"))]
     audio_queue: VecDeque<DemuxedPacket>,
 }
 
@@ -129,8 +154,17 @@ impl SoftwareVideoDecoder {
     /// Accepts any `Read + Seek + Send` source (e.g. `File`, network stream)
     /// and initializes decoders for any H.264 video and AAC audio tracks.
     pub fn open_stream(source: Box<dyn VideoSource>) -> Result<Self, VideoError> {
-        let demuxer = Mp4Demuxer::open_stream(source)?;
-        Self::from_demuxer(demuxer)
+        #[cfg(feature = "ffmpeg")]
+        {
+            let inner = ffmpeg_decoder::FfmpegDecoder::open_stream(source)?;
+            Ok(Self { inner })
+        }
+
+        #[cfg(not(feature = "ffmpeg"))]
+        {
+            let demuxer = Mp4Demuxer::open_stream(source)?;
+            Self::from_demuxer(demuxer)
+        }
     }
 
     /// Open an MP4 from a byte buffer.
@@ -141,7 +175,8 @@ impl SoftwareVideoDecoder {
         Self::open_stream(Box::new(Cursor::new(mp4_data)))
     }
 
-    /// Initialize decoders from a probed demuxer.
+    /// Initialize decoders from a probed demuxer (symphonia path only).
+    #[cfg(not(feature = "ffmpeg"))]
     fn from_demuxer(demuxer: Mp4Demuxer) -> Result<Self, VideoError> {
         #[cfg(feature = "h264")]
         let h264 = if demuxer.has_video() {
@@ -179,6 +214,7 @@ impl SoftwareVideoDecoder {
 
     /// Read the next packet for a given track kind, buffering packets for the
     /// other stream so they aren't lost.
+    #[cfg(not(feature = "ffmpeg"))]
     fn next_packet_for(&mut self, kind: TrackKind) -> Result<Option<DemuxedPacket>, VideoError> {
         // Check the dedicated queue first.
         let queue = match kind {
@@ -211,13 +247,17 @@ impl SoftwareVideoDecoder {
     /// `Err(VideoError::SkipLimit)` if the decoder couldn't produce a frame
     /// within the packet limit (caller should continue with audio).
     ///
-    /// When OpenH264 enters an error state (lost reference frame), the decoder
-    /// is reinitialized and packets are skipped until the next IDR keyframe,
-    /// which is then fed with SPS/PPS to restart decoding.
-    ///
-    /// Requires the `h264` feature; returns `VideoError::NoTrack` without it.
+    /// With the `ffmpeg` feature, uses ffmpeg's full H.264 decoder (Main/High
+    /// profile support, SIMD-optimized). Otherwise falls back to openh264
+    /// (Baseline profile only, with reinit-on-error recovery).
+    #[allow(clippy::needless_return)]
     pub fn next_video_frame(&mut self) -> Result<Option<VideoFrame>, VideoError> {
-        #[cfg(not(feature = "h264"))]
+        #[cfg(feature = "ffmpeg")]
+        {
+            return self.inner.next_video_frame();
+        }
+
+        #[cfg(not(any(feature = "h264", feature = "ffmpeg")))]
         {
             Err(VideoError::NoTrack(
                 "H.264 decoding unavailable (oasis-video built without 'h264' feature)".into(),
@@ -230,92 +270,112 @@ impl SoftwareVideoDecoder {
                 return Err(VideoError::NoTrack("no video track".into()));
             }
 
-            // If decoder has been failing, reinit and skip to next IDR.
-            let h264 = self
-                .h264
-                .as_mut()
-                .expect("h264 decoder verified present above");
-            if h264.error_streak > 5 {
-                h264.reinit()?;
-                self.demuxer.reset_params();
-                let params = self.demuxer.parameter_sets().map(|p| p.to_vec());
-                let mut skipped_to_idr = 0u32;
-                loop {
-                    let packet = match self.next_packet_for(TrackKind::Video)? {
-                        Some(p) => p,
-                        None => return Ok(None),
-                    };
-                    skipped_to_idr += 1;
-                    if Self::contains_idr(&packet.data) {
-                        // Prepend SPS/PPS to IDR for decoder reinitialization.
-                        let decode_data = if let Some(ref ps) = params {
-                            let mut buf = Vec::with_capacity(ps.len() + packet.data.len());
-                            buf.extend_from_slice(ps);
-                            buf.extend_from_slice(&packet.data);
-                            buf
-                        } else {
-                            packet.data.clone()
-                        };
-                        let h264 = self
-                .h264
-                .as_mut()
-                .expect("h264 decoder verified present above");
-                        if let Some(frame) = h264.decode(&decode_data)? {
-                            if frame.width > 0 && frame.height > 0 {
-                                self.video_width = frame.width;
-                                self.video_height = frame.height;
-                            }
-                            return Ok(Some(VideoFrame {
-                                rgba: frame.rgba,
-                                width: frame.width,
-                                height: frame.height,
-                                timestamp_secs: packet.timestamp_secs,
-                            }));
-                        }
-                        break; // IDR didn't produce a frame — fall through to normal loop.
-                    }
-                    if skipped_to_idr > 2000 {
-                        return Err(VideoError::SkipLimit);
-                    }
-                }
-            }
-
-            // Normal decode: read packets until we produce a frame.
-            let mut skipped = 0u32;
-            loop {
-                let packet = match self.next_packet_for(TrackKind::Video)? {
-                    Some(p) => p,
-                    None => return Ok(None),
-                };
-
+            // Try up to 3 reinit cycles per call. Each cycle: reinit decoder,
+            // skip to next IDR, decode with SPS/PPS. If that doesn't produce
+            // a frame, fall through to the normal decode loop which may trigger
+            // another reinit cycle.
+            for reinit_attempt in 0u32..3 {
                 let h264 = self
                     .h264
                     .as_mut()
                     .expect("h264 decoder verified present above");
 
-                if let Some(frame) = h264.decode(&packet.data)? {
-                    if frame.width > 0 && frame.height > 0 {
-                        self.video_width = frame.width;
-                        self.video_height = frame.height;
-                    }
-                    return Ok(Some(VideoFrame {
-                        rgba: frame.rgba,
-                        width: frame.width,
-                        height: frame.height,
-                        timestamp_secs: packet.timestamp_secs,
-                    }));
-                }
-
-                // After enough consecutive failures, trigger reinit on next call.
                 if h264.error_streak > 5 {
-                    return Err(VideoError::SkipLimit);
+                    log::info!(
+                        "H264: reinit attempt {} (error_streak={})",
+                        reinit_attempt + 1,
+                        h264.error_streak,
+                    );
+                    h264.reinit()?;
+                    self.demuxer.reset_params();
+                    let params = self.demuxer.parameter_sets().map(|p| p.to_vec());
+                    let mut skipped_to_idr = 0u32;
+                    loop {
+                        let packet = match self.next_packet_for(TrackKind::Video)? {
+                            Some(p) => p,
+                            None => return Ok(None),
+                        };
+                        skipped_to_idr += 1;
+                        if Self::contains_idr(&packet.data) {
+                            log::info!(
+                                "H264: found IDR after skipping {skipped_to_idr} packets"
+                            );
+                            // Prepend SPS/PPS to IDR for decoder reinitialization.
+                            let decode_data = if let Some(ref ps) = params {
+                                let mut buf =
+                                    Vec::with_capacity(ps.len() + packet.data.len());
+                                buf.extend_from_slice(ps);
+                                buf.extend_from_slice(&packet.data);
+                                buf
+                            } else {
+                                packet.data.clone()
+                            };
+                            let h264 = self
+                                .h264
+                                .as_mut()
+                                .expect("h264 decoder verified present above");
+                            if let Some(frame) = h264.decode(&decode_data)? {
+                                if frame.width > 0 && frame.height > 0 {
+                                    self.video_width = frame.width;
+                                    self.video_height = frame.height;
+                                }
+                                return Ok(Some(VideoFrame {
+                                    rgba: frame.rgba,
+                                    width: frame.width,
+                                    height: frame.height,
+                                    timestamp_secs: packet.timestamp_secs,
+                                }));
+                            }
+                            break; // IDR didn't produce frame — fall through
+                                   // to normal decode loop for subsequent frames.
+                        }
+                        if skipped_to_idr > 2000 {
+                            return Err(VideoError::SkipLimit);
+                        }
+                    }
                 }
 
-                skipped += 1;
-                if skipped > 500 {
-                    return Err(VideoError::SkipLimit);
+                // Normal decode: read packets until we produce a frame.
+                let mut skipped = 0u32;
+                loop {
+                    let packet = match self.next_packet_for(TrackKind::Video)? {
+                        Some(p) => p,
+                        None => return Ok(None),
+                    };
+
+                    let h264 = self
+                        .h264
+                        .as_mut()
+                        .expect("h264 decoder verified present above");
+
+                    if let Some(frame) = h264.decode(&packet.data)? {
+                        if frame.width > 0 && frame.height > 0 {
+                            self.video_width = frame.width;
+                            self.video_height = frame.height;
+                        }
+                        return Ok(Some(VideoFrame {
+                            rgba: frame.rgba,
+                            width: frame.width,
+                            height: frame.height,
+                            timestamp_secs: packet.timestamp_secs,
+                        }));
+                    }
+
+                    // When error_streak crosses threshold, break to outer
+                    // loop for reinit instead of returning SkipLimit.
+                    if h264.error_streak > 5 {
+                        break;
+                    }
+
+                    skipped += 1;
+                    if skipped > 500 {
+                        return Err(VideoError::SkipLimit);
+                    }
                 }
             }
+
+            // All reinit attempts exhausted.
+            Err(VideoError::SkipLimit)
         }
     }
 
@@ -344,49 +404,119 @@ impl SoftwareVideoDecoder {
     /// Decode the next chunk of audio.
     ///
     /// Buffers video packets internally. Returns `None` at end-of-stream.
+    #[allow(clippy::needless_return)]
     pub fn next_audio_samples(&mut self) -> Result<Option<AudioChunk>, VideoError> {
-        if self.aac.is_none() {
-            return Err(VideoError::NoTrack("no audio track".into()));
+        #[cfg(feature = "ffmpeg")]
+        {
+            return self.inner.next_audio_samples();
         }
 
-        loop {
-            let packet = match self.next_packet_for(TrackKind::Audio)? {
-                Some(p) => p,
-                None => return Ok(None),
-            };
-
-            let aac = self
-                .aac
-                .as_mut()
-                .expect("aac decoder verified present above");
-            if let Some(audio) = aac.decode(&packet.data, 0)? {
-                return Ok(Some(AudioChunk {
-                    pcm_f32: audio.pcm_f32,
-                    channels: audio.channels,
-                    sample_rate: audio.sample_rate,
-                    timestamp_secs: packet.timestamp_secs,
-                }));
+        #[cfg(not(feature = "ffmpeg"))]
+        {
+            if self.aac.is_none() {
+                return Err(VideoError::NoTrack("no audio track".into()));
             }
+
+            loop {
+                let packet = match self.next_packet_for(TrackKind::Audio)? {
+                    Some(p) => p,
+                    None => return Ok(None),
+                };
+
+                let aac = self
+                    .aac
+                    .as_mut()
+                    .expect("aac decoder verified present above");
+                if let Some(audio) = aac.decode(&packet.data, 0)? {
+                    return Ok(Some(AudioChunk {
+                        pcm_f32: audio.pcm_f32,
+                        channels: audio.channels,
+                        sample_rate: audio.sample_rate,
+                        timestamp_secs: packet.timestamp_secs,
+                    }));
+                }
+            }
+        }
+    }
+
+    /// Return a buffered audio chunk without reading new packets from the stream.
+    ///
+    /// With the `ffmpeg` backend, audio packets are automatically buffered during
+    /// `next_video_frame()`. This method drains those buffers without advancing
+    /// the stream, preventing EOF from being triggered prematurely.
+    ///
+    /// With the symphonia backend, this drains from the internal audio queue
+    /// (packets already read from the demuxer during video decoding).
+    #[allow(clippy::needless_return)]
+    pub fn next_buffered_audio(&mut self) -> Option<AudioChunk> {
+        #[cfg(feature = "ffmpeg")]
+        {
+            return self.inner.next_buffered_audio();
+        }
+
+        #[cfg(not(feature = "ffmpeg"))]
+        {
+            // Drain from the audio queue (packets buffered during video reads).
+            while let Some(pkt) = self.audio_queue.pop_front() {
+                if let Some(aac) = self.aac.as_mut() {
+                    if let Ok(Some(audio)) = aac.decode(&pkt.data, 0) {
+                        return Some(AudioChunk {
+                            pcm_f32: audio.pcm_f32,
+                            channels: audio.channels,
+                            sample_rate: audio.sample_rate,
+                            timestamp_secs: pkt.timestamp_secs,
+                        });
+                    }
+                }
+            }
+            None
         }
     }
 
     /// Seek to a position in seconds.
     ///
     /// Clears any buffered packets so post-seek reads don't return stale data.
+    #[allow(clippy::needless_return)]
     pub fn seek(&mut self, secs: f64) -> Result<(), VideoError> {
-        self.video_queue.clear();
-        self.audio_queue.clear();
-        self.demuxer.seek(secs)
+        #[cfg(feature = "ffmpeg")]
+        {
+            return self.inner.seek(secs);
+        }
+
+        #[cfg(not(feature = "ffmpeg"))]
+        {
+            self.video_queue.clear();
+            self.audio_queue.clear();
+            self.demuxer.seek(secs)
+        }
     }
 
     /// Video dimensions (may be 0x0 if no video track or not yet decoded).
+    #[allow(clippy::needless_return)]
     pub fn video_size(&self) -> (u32, u32) {
-        (self.video_width, self.video_height)
+        #[cfg(feature = "ffmpeg")]
+        {
+            return self.inner.video_size();
+        }
+
+        #[cfg(not(feature = "ffmpeg"))]
+        {
+            (self.video_width, self.video_height)
+        }
     }
 
     /// Audio sample rate and channel count.
+    #[allow(clippy::needless_return)]
     pub fn audio_format(&self) -> (u32, u16) {
-        (self.audio_sample_rate, self.audio_channels)
+        #[cfg(feature = "ffmpeg")]
+        {
+            return self.inner.audio_format();
+        }
+
+        #[cfg(not(feature = "ffmpeg"))]
+        {
+            (self.audio_sample_rate, self.audio_channels)
+        }
     }
 }
 
@@ -415,7 +545,7 @@ mod tests {
     // ------------------------------------------------------------------
 
     #[test]
-    #[cfg(feature = "h264")]
+    #[cfg(any(feature = "h264", feature = "ffmpeg"))]
     fn open_stream_with_file_decodes() {
         let file = fixture_file();
         let mut dec =
@@ -430,7 +560,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg(feature = "h264")]
+    #[cfg(any(feature = "h264", feature = "ffmpeg"))]
     fn open_stream_with_cursor_decodes() {
         let data = fixture_bytes();
         let cursor = Cursor::new(data);
@@ -445,7 +575,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg(feature = "h264")]
+    #[cfg(any(feature = "h264", feature = "ffmpeg"))]
     fn full_decode_pipeline() {
         let mut dec = SoftwareVideoDecoder::open(fixture_bytes()).expect("open failed");
         let mut count = 0u32;
@@ -479,7 +609,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg(feature = "h264")]
+    #[cfg(any(feature = "h264", feature = "ffmpeg"))]
     fn seek_to_midstream() {
         let mut dec = SoftwareVideoDecoder::open(fixture_bytes()).expect("open failed");
         // Decode one frame to prime the decoder.
@@ -517,8 +647,15 @@ mod tests {
     #[test]
     fn video_size_before_decode() {
         let dec = SoftwareVideoDecoder::open(fixture_bytes()).expect("open failed");
-        // Before any decode, video_size is (0,0) (dimensions come from first frame).
+        // Without ffmpeg, dimensions come from first decoded frame (0,0 initially).
+        // With ffmpeg, dimensions are known from stream headers at open time.
+        #[cfg(not(feature = "ffmpeg"))]
         assert_eq!(dec.video_size(), (0, 0));
+        #[cfg(feature = "ffmpeg")]
+        {
+            let (w, h) = dec.video_size();
+            assert!(w > 0 && h > 0, "ffmpeg should know dimensions at open");
+        }
         // Audio format should already be known from track headers.
         let (sr, ch) = dec.audio_format();
         assert!(sr > 0, "sample_rate should be discoverable before decode");
@@ -526,7 +663,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg(feature = "h264")]
+    #[cfg(any(feature = "h264", feature = "ffmpeg"))]
     fn timestamp_monotonicity() {
         let mut dec = SoftwareVideoDecoder::open(fixture_bytes()).expect("open failed");
         let mut last_video_ts = -1.0f64;

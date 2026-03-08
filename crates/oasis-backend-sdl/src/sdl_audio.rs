@@ -506,9 +506,28 @@ impl AudioBackend for SdlAudioBackend {
             return Ok(());
         }
 
-        // Open device lazily with the stream's format.
+        // Open device lazily with the stream's format, or reopen if format changed.
+        let format_changed = self.device.is_some()
+            && (self.sample_rate != sample_rate as i32
+                || self.channels != channels as usize);
+        if format_changed {
+            log::info!(
+                "SDL audio: format change {}Hz/{}ch -> {}Hz/{}ch, reopening device",
+                self.sample_rate,
+                self.channels,
+                sample_rate,
+                channels,
+            );
+            self.device = None;
+        }
         if self.device.is_none() && self.audio_subsystem.is_some() {
             self.open_device(sample_rate as i32, channels as u8)?;
+            // Resume immediately — play() was called before the device existed.
+            if self.playing
+                && let Some(ref device) = self.device
+            {
+                device.resume();
+            }
         }
 
         self.sample_rate = sample_rate as i32;

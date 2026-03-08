@@ -220,16 +220,20 @@ fn main() -> Result<()> {
         tv_audio_track: None,
         tv_audio_chunks_fed: 0,
         tv_audio_samples_fed: 0,
-        #[cfg(feature = "video-decode")]
+        #[cfg(feature = "_video")]
         pending_video_download: None,
-        #[cfg(feature = "video-decode")]
+        #[cfg(feature = "_video")]
         tv_video_cache_path: None,
-        #[cfg(feature = "video-decode")]
+        #[cfg(feature = "_video")]
         pending_video_params: None,
-        #[cfg(feature = "video-decode")]
+        #[cfg(feature = "_video")]
         tv_download_progress: None,
-        #[cfg(feature = "video-decode")]
+        #[cfg(feature = "_video")]
         tv_video_cache: Vec::new(),
+        #[cfg(feature = "_video")]
+        tv_stream_session: None,
+        #[cfg(feature = "_video")]
+        tv_current_url: None,
     };
 
     // Show a welcome toast.
@@ -501,7 +505,7 @@ fn main() -> Result<()> {
     }
 
     // Clean up all cached video files.
-    #[cfg(feature = "video-decode")]
+    #[cfg(feature = "_video")]
     for (_, path) in &state.tv_video_cache {
         if let Err(e) = std::fs::remove_file(path) {
             log::warn!("TV: failed to remove cached file {}: {e}", path.display());

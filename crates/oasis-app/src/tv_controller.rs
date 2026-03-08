@@ -223,6 +223,19 @@ fn handle_tune_requests(state: &mut AppState, backend: &mut impl SdiBackend, vfs
         .unwrap_or(seek_secs);
     log::info!("TV: tune request: seek={seek_secs}s url={url}");
 
+    // Deduplicate: ignore tune requests for the URL already playing.
+    #[cfg(feature = "_video")]
+    if state.tv_current_url.as_deref() == Some(url) && state.video_player.is_active() {
+        log::info!("TV: ignoring duplicate tune request for same URL");
+        return;
+    }
+
+    // Cancel any orphaned streaming session (download + decoder threads).
+    #[cfg(feature = "_video")]
+    if let Some(ref session) = state.tv_stream_session.take() {
+        session.cancel();
+    }
+
     // Stop any existing video session.
     state.video_player.stop(backend);
     if let Some(track) = state.tv_audio_track.take() {
@@ -242,15 +255,15 @@ fn handle_tune_requests(state: &mut AppState, backend: &mut impl SdiBackend, vfs
     let preview_h = header_h.saturating_sub(16).saturating_sub(2);
     log::info!("TV: preview {preview_w}x{preview_h}, seek={seek_secs}s");
 
-    #[cfg(feature = "video-decode")]
+    #[cfg(feature = "_video")]
     start_video_download(state, url, seek_secs, preview_w, preview_h);
 
-    #[cfg(not(feature = "video-decode"))]
+    #[cfg(not(feature = "_video"))]
     start_ffmpeg_playback(state, url, seek_secs, preview_w, preview_h);
 }
 
 /// Start ffmpeg-based playback (the legacy path, used when video-decode is disabled).
-#[cfg(not(feature = "video-decode"))]
+#[cfg(not(feature = "_video"))]
 fn start_ffmpeg_playback(state: &mut AppState, url: &str, seek_secs: u64, width: u32, height: u32) {
     state.video_player.start(url, seek_secs, width, height);
     setup_streaming_audio(state);
@@ -271,7 +284,7 @@ fn setup_streaming_audio(state: &mut AppState) {
 
 /// Start streaming video decode — downloads in background while decoding
 /// starts immediately. No "Downloading..." wait state.
-#[cfg(feature = "video-decode")]
+#[cfg(feature = "_video")]
 fn start_video_download(state: &mut AppState, url: &str, seek_secs: u64, width: u32, height: u32) {
     use std::sync::Arc;
 
@@ -297,12 +310,18 @@ fn start_video_download(state: &mut AppState, url: &str, seek_secs: u64, width: 
     let reader = StreamingBuffer::new(Arc::clone(&buffer));
     let eviction_flag = Arc::clone(&reader.eviction_enabled);
 
+    // Store session for cancellation on re-tune, and URL for dedup.
+    state.tv_stream_session = Some(Arc::clone(&buffer));
+    state.tv_current_url = Some(url.to_string());
+
     let url_owned = url.to_string();
     let tls = state.net.tls_provider.clone();
 
     std::thread::spawn(move || {
         log::info!("TV: streaming download thread started: {url_owned}");
-        if let Err(e) = stream_download(&url_owned, &tls, &buffer) {
+        if let Err(e) = stream_download(&url_owned, &tls, &buffer, seek_secs)
+            && !buffer.is_cancelled()
+        {
             log::error!("TV: streaming download failed: {e}");
             buffer.set_error(e);
         }
@@ -339,17 +358,18 @@ fn start_video_download(state: &mut AppState, url: &str, seek_secs: u64, width: 
 
 /// How much data to retain behind the decoder's read cursor.
 /// Allows minor backward seeks without re-downloading.
-#[cfg(feature = "video-decode")]
+#[cfg(feature = "_video")]
 const RETAIN_BEHIND: usize = 4 * 1024 * 1024; // 4 MB
 
-/// Maximum buffer size before eviction is enabled (during init phase).
-/// Prevents unbounded memory growth while the demuxer does its full-file scan.
-/// Once eviction is enabled, the buffer is bounded by RETAIN_BEHIND + read-ahead.
-#[cfg(feature = "video-decode")]
-const MAX_INIT_BUFFER: usize = 64 * 1024 * 1024; // 64 MB
+/// Maximum buffer size before a warning is logged (during init phase).
+/// The demuxer's `read_to_end()` + `seek(0)` pattern requires the full file
+/// in memory during init; eviction MUST NOT remove data before seek-back.
+/// Actual eviction only begins after the `on_init` callback enables it.
+#[cfg(feature = "_video")]
+const INIT_WARN_THRESHOLD: usize = 128 * 1024 * 1024; // 128 MB
 
 /// Sliding-window buffer state, protected by a mutex.
-#[cfg(feature = "video-decode")]
+#[cfg(feature = "_video")]
 struct SlidingState {
     /// Contiguous buffer of the currently-retained byte range.
     /// `buf[0]` corresponds to file offset `base_offset`.
@@ -370,20 +390,22 @@ struct SlidingState {
 }
 
 /// Shared inner state for the streaming buffer, fed by the download thread.
-#[cfg(feature = "video-decode")]
-struct StreamingInner {
+#[cfg(feature = "_video")]
+pub(crate) struct StreamingInner {
     state: std::sync::Mutex<SlidingState>,
     /// Total content length from HTTP Content-Length header.
     total_size: std::sync::atomic::AtomicU64,
     /// Whether the download is complete (all data received).
     done: std::sync::atomic::AtomicBool,
+    /// Whether this session has been cancelled (new channel tuned).
+    cancelled: std::sync::atomic::AtomicBool,
     /// Download error message, if any.
     error: std::sync::Mutex<Option<String>>,
     /// Signalled when new data arrives or download completes.
     condvar: std::sync::Condvar,
 }
 
-#[cfg(feature = "video-decode")]
+#[cfg(feature = "_video")]
 impl StreamingInner {
     fn new() -> Self {
         Self {
@@ -397,6 +419,7 @@ impl StreamingInner {
             }),
             total_size: std::sync::atomic::AtomicU64::new(0),
             done: std::sync::atomic::AtomicBool::new(false),
+            cancelled: std::sync::atomic::AtomicBool::new(false),
             error: std::sync::Mutex::new(None),
             condvar: std::sync::Condvar::new(),
         }
@@ -425,6 +448,15 @@ impl StreamingInner {
             log::info!(
                 "TV: download progress: {:.1}MB received{pct}, buffer={:.1}MB",
                 received as f64 / (1024.0 * 1024.0),
+                buf_len as f64 / (1024.0 * 1024.0),
+            );
+        }
+        // Warn once when buffer is large (init phase holds entire file).
+        if buf_len > INIT_WARN_THRESHOLD
+            && (buf_len - chunk.len()) <= INIT_WARN_THRESHOLD
+        {
+            log::warn!(
+                "TV: buffer reached {:.0}MB during init (file held in memory until demuxer probes)",
                 buf_len as f64 / (1024.0 * 1024.0),
             );
         }
@@ -586,6 +618,20 @@ impl StreamingInner {
     fn is_done(&self) -> bool {
         self.done.load(std::sync::atomic::Ordering::Acquire)
     }
+
+    /// Cancel the download and unblock any waiting readers.
+    fn cancel(&self) {
+        self.cancelled
+            .store(true, std::sync::atomic::Ordering::Release);
+        self.done
+            .store(true, std::sync::atomic::Ordering::Release);
+        self.condvar.notify_all();
+    }
+
+    /// Whether this session has been cancelled.
+    fn is_cancelled(&self) -> bool {
+        self.cancelled.load(std::sync::atomic::Ordering::Acquire)
+    }
 }
 
 /// A reader cursor over a `StreamingInner` sliding-window buffer.
@@ -599,7 +645,7 @@ impl StreamingInner {
 /// [`enable_eviction`](Self::enable_eviction) after the demuxer has finished
 /// its initial full-file scan (avcC + probe). This prevents evicting data
 /// that the demuxer needs to seek back to during initialization.
-#[cfg(feature = "video-decode")]
+#[cfg(feature = "_video")]
 struct StreamingBuffer {
     inner: std::sync::Arc<StreamingInner>,
     pos: u64,
@@ -608,7 +654,7 @@ struct StreamingBuffer {
     eviction_enabled: std::sync::Arc<std::sync::atomic::AtomicBool>,
 }
 
-#[cfg(feature = "video-decode")]
+#[cfg(feature = "_video")]
 impl StreamingBuffer {
     fn new(inner: std::sync::Arc<StreamingInner>) -> Self {
         Self {
@@ -620,33 +666,21 @@ impl StreamingBuffer {
 
     /// Evict data that is far behind the read cursor, except moov.
     ///
-    /// When eviction is explicitly enabled (post-init), uses `RETAIN_BEHIND`.
-    /// When buffer exceeds `MAX_INIT_BUFFER` during init, forces emergency
-    /// eviction to prevent unbounded memory growth.
+    /// Eviction is ONLY active after `on_init` enables it (post-demuxer probe).
+    /// During init the demuxer does `read_to_end()` + `seek(0)`, so ALL data
+    /// must remain in the buffer — evicting early breaks format probing.
     fn maybe_evict(&self) {
-        let explicit = self
+        if !self
             .eviction_enabled
-            .load(std::sync::atomic::Ordering::Acquire);
+            .load(std::sync::atomic::Ordering::Acquire)
+        {
+            return;
+        }
 
         let mut s = self.inner.state.lock().unwrap_or_else(|e| e.into_inner());
-
-        // During init phase, force eviction if buffer is too large.
-        let retain = if explicit {
-            RETAIN_BEHIND
-        } else if s.buf.len() > MAX_INIT_BUFFER {
-            log::warn!(
-                "TV: buffer exceeded {}MB during init, forcing early eviction",
-                MAX_INIT_BUFFER / (1024 * 1024),
-            );
-            // Use a larger retain window during init to accommodate backward seeks.
-            MAX_INIT_BUFFER / 2
-        } else {
-            return; // Not enabled and not oversized — skip eviction.
-        };
-
         let cursor_in_buf = self.pos.saturating_sub(s.base_offset) as usize;
-        if cursor_in_buf > retain {
-            let evict = cursor_in_buf - retain;
+        if cursor_in_buf > RETAIN_BEHIND {
+            let evict = cursor_in_buf - RETAIN_BEHIND;
             let evict = evict.min(s.buf.len());
             if evict > 0 {
                 s.buf.drain(..evict);
@@ -663,11 +697,18 @@ impl StreamingBuffer {
     }
 }
 
-#[cfg(feature = "video-decode")]
+#[cfg(feature = "_video")]
 impl std::io::Read for StreamingBuffer {
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
         let n = loop {
-            // Check for errors first.
+            // Check for cancellation first.
+            if self.inner.is_cancelled() {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::Interrupted,
+                    "streaming session cancelled",
+                ));
+            }
+            // Check for errors.
             if let Some(ref e) = *self.inner.error.lock().unwrap_or_else(|e| e.into_inner()) {
                 return Err(std::io::Error::other(e.clone()));
             }
@@ -728,7 +769,7 @@ impl std::io::Read for StreamingBuffer {
     }
 }
 
-#[cfg(feature = "video-decode")]
+#[cfg(feature = "_video")]
 impl std::io::Seek for StreamingBuffer {
     fn seek(&mut self, pos: std::io::SeekFrom) -> std::io::Result<u64> {
         use std::sync::atomic::Ordering;
@@ -778,12 +819,12 @@ impl std::io::Seek for StreamingBuffer {
 
 // SAFETY: StreamingBuffer is Send + Sync because StreamingInner uses
 // Arc<Mutex<..>> + atomics for all shared state.
-#[cfg(feature = "video-decode")]
+#[cfg(feature = "_video")]
 unsafe impl Send for StreamingBuffer {}
-#[cfg(feature = "video-decode")]
+#[cfg(feature = "_video")]
 unsafe impl Sync for StreamingBuffer {}
 
-#[cfg(feature = "video-decode")]
+#[cfg(feature = "_video")]
 impl oasis_video::VideoSource for StreamingBuffer {
     fn is_seekable(&self) -> bool {
         true
@@ -802,22 +843,325 @@ impl oasis_video::VideoSource for StreamingBuffer {
 // HTTP streaming download
 // ---------------------------------------------------------------------------
 
+/// Fetch a byte range from a URL via HTTP Range request.
+/// Returns the raw body bytes on success.
+#[cfg(feature = "_video")]
+fn fetch_range(
+    tls: &oasis_core::net::RustlsTlsProvider,
+    url: &str,
+    start: u64,
+    end: u64,
+) -> Result<Vec<u8>, String> {
+    fetch_range_inner(tls, url, start, end, 3)
+}
+
+#[cfg(feature = "_video")]
+fn fetch_range_inner(
+    tls: &oasis_core::net::RustlsTlsProvider,
+    url: &str,
+    start: u64,
+    end: u64,
+    redirects_left: u8,
+) -> Result<Vec<u8>, String> {
+    use oasis_core::backend::NetworkBackend;
+    use oasis_core::net::TlsProvider;
+
+    let stripped = url
+        .strip_prefix("https://")
+        .or_else(|| url.strip_prefix("http://"))
+        .ok_or_else(|| format!("unsupported URL: {url}"))?;
+    let (host, path) = stripped
+        .split_once('/')
+        .map(|(h, p)| (h, format!("/{p}")))
+        .unwrap_or((stripped, "/".to_string()));
+
+    let mut net = oasis_core::net::StdNetworkBackend::new();
+    let tcp = net
+        .connect(host, 443)
+        .map_err(|e| format!("connect: {e}"))?;
+    let mut stream = tls
+        .connect_tls(tcp, host)
+        .map_err(|e| format!("TLS: {e}"))?;
+
+    let request = format!(
+        "GET {path} HTTP/1.1\r\nHost: {host}\r\nUser-Agent: OASIS_OS/0.1\r\n\
+         Range: bytes={start}-{}\r\nConnection: close\r\n\r\n",
+        end.saturating_sub(1),
+    );
+
+    let req_bytes = request.as_bytes();
+    let mut written = 0;
+    while written < req_bytes.len() {
+        match stream.write(&req_bytes[written..]) {
+            Ok(n) => written += n,
+            Err(e) => {
+                let msg = format!("{e}");
+                if msg.contains("WouldBlock") || msg.contains("would block") {
+                    std::thread::sleep(std::time::Duration::from_millis(1));
+                    continue;
+                }
+                return Err(format!("write: {e}"));
+            },
+        }
+    }
+
+    // Read response.
+    let mut response = Vec::new();
+    let mut buf = [0u8; 8192];
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    loop {
+        if std::time::Instant::now() > deadline {
+            return Err("timeout".into());
+        }
+        match stream.read(&mut buf) {
+            Ok(0) => break,
+            Ok(n) => response.extend_from_slice(&buf[..n]),
+            Err(e) => {
+                let msg = format!("{e}");
+                if msg.contains("WouldBlock") || msg.contains("would block") {
+                    std::thread::sleep(std::time::Duration::from_millis(1));
+                    continue;
+                }
+                if !response.is_empty() {
+                    break;
+                }
+                return Err(format!("read: {e}"));
+            },
+        }
+    }
+
+    // Split headers from body.
+    let header_end = response
+        .windows(4)
+        .position(|w| w == b"\r\n\r\n")
+        .ok_or("no header terminator")?;
+    let header_str = String::from_utf8_lossy(&response[..header_end]);
+    let status = header_str
+        .lines()
+        .next()
+        .and_then(|l| l.split_whitespace().nth(1))
+        .and_then(|s| s.parse::<u16>().ok())
+        .unwrap_or(0);
+
+    if matches!(status, 301 | 302 | 303 | 307 | 308) {
+        if redirects_left == 0 {
+            return Err("too many redirects".into());
+        }
+        let location = header_str
+            .lines()
+            .find(|l| l.len() > 9 && l[..9].eq_ignore_ascii_case("location:"))
+            .and_then(|l| l.split_once(':').map(|(_, v)| v.trim().to_string()));
+        if let Some(loc) = location {
+            return fetch_range_inner(tls, &loc, start, end, redirects_left - 1);
+        }
+        return Err(format!("HTTP {status} no Location"));
+    }
+
+    if status != 206 && status != 200 {
+        return Err(format!("HTTP {status}"));
+    }
+
+    let body = response[header_end + 4..].to_vec();
+    log::info!(
+        "TV: Range response: HTTP {status}, {} bytes",
+        body.len(),
+    );
+    Ok(body)
+}
+
+/// Parse the duration in seconds from a moov atom's mvhd box.
+#[cfg(feature = "_video")]
+fn parse_moov_duration(moov_data: &[u8]) -> Option<f64> {
+    // moov is a container atom. Scan its children for mvhd.
+    let mut pos = 8usize; // skip moov header (size + fourcc)
+    while pos + 8 <= moov_data.len() {
+        let size = u32::from_be_bytes([
+            moov_data[pos],
+            moov_data[pos + 1],
+            moov_data[pos + 2],
+            moov_data[pos + 3],
+        ]) as usize;
+        if size < 8 || pos + size > moov_data.len() {
+            break;
+        }
+        let fourcc = &moov_data[pos + 4..pos + 8];
+        if fourcc == b"mvhd" {
+            // mvhd: version(1) + flags(3) + ...
+            let data = &moov_data[pos + 8..pos + size];
+            if data.is_empty() {
+                return None;
+            }
+            let version = data[0];
+            if version == 0 && data.len() >= 20 {
+                // v0: create(4) + mod(4) + timescale(4) + duration(4)
+                let timescale = u32::from_be_bytes([data[4 + 4], data[4 + 5], data[4 + 6], data[4 + 7]]);
+                let duration = u32::from_be_bytes([data[4 + 8], data[4 + 9], data[4 + 10], data[4 + 11]]);
+                if timescale > 0 {
+                    return Some(duration as f64 / timescale as f64);
+                }
+            } else if version == 1 && data.len() >= 32 {
+                // v1: create(8) + mod(8) + timescale(4) + duration(8)
+                let timescale = u32::from_be_bytes([data[4 + 16], data[4 + 17], data[4 + 18], data[4 + 19]]);
+                let duration = u64::from_be_bytes([
+                    data[4 + 20], data[4 + 21], data[4 + 22], data[4 + 23],
+                    data[4 + 24], data[4 + 25], data[4 + 26], data[4 + 27],
+                ]);
+                if timescale > 0 {
+                    return Some(duration as f64 / timescale as f64);
+                }
+            }
+            return None;
+        }
+        pos += size;
+    }
+    None
+}
+
+/// Download from a specific byte offset using HTTP Range request.
+/// Pushes data into the buffer starting at `start_offset`.
+#[cfg(feature = "_video")]
+fn stream_download_range(
+    url: &str,
+    tls: &oasis_core::net::RustlsTlsProvider,
+    buffer: &StreamingInner,
+    start_offset: u64,
+    total_size: u64,
+) -> Result<(), String> {
+    use oasis_core::backend::NetworkBackend;
+    use oasis_core::net::TlsProvider;
+
+    let stripped = url
+        .strip_prefix("https://")
+        .or_else(|| url.strip_prefix("http://"))
+        .ok_or_else(|| format!("unsupported URL: {url}"))?;
+    let (host, path) = stripped
+        .split_once('/')
+        .map(|(h, p)| (h, format!("/{p}")))
+        .unwrap_or((stripped, "/".to_string()));
+
+    let mut net = oasis_core::net::StdNetworkBackend::new();
+    let tcp = net
+        .connect(host, 443)
+        .map_err(|e| format!("connect: {e}"))?;
+    let mut stream = tls
+        .connect_tls(tcp, host)
+        .map_err(|e| format!("TLS: {e}"))?;
+
+    let request = format!(
+        "GET {path} HTTP/1.1\r\nHost: {host}\r\nUser-Agent: OASIS_OS/0.1\r\n\
+         Range: bytes={start_offset}-{}\r\nConnection: close\r\n\r\n",
+        total_size.saturating_sub(1),
+    );
+    let req_bytes = request.as_bytes();
+    let mut written = 0;
+    while written < req_bytes.len() {
+        match stream.write(&req_bytes[written..]) {
+            Ok(n) => written += n,
+            Err(e) => {
+                let msg = format!("{e}");
+                if msg.contains("WouldBlock") || msg.contains("would block") {
+                    std::thread::sleep(std::time::Duration::from_millis(1));
+                    continue;
+                }
+                return Err(format!("write: {e}"));
+            },
+        }
+    }
+
+    // Read headers.
+    let mut header_buf = Vec::with_capacity(4096);
+    let mut buf = [0u8; 8192];
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(120);
+
+    let leftover_start = loop {
+        if std::time::Instant::now() > deadline {
+            buffer.finish();
+            return Err("timeout reading headers".into());
+        }
+        match stream.read(&mut buf) {
+            Ok(0) => {
+                buffer.finish();
+                return Err("connection closed before headers".into());
+            },
+            Ok(n) => {
+                header_buf.extend_from_slice(&buf[..n]);
+                if let Some(pos) = header_buf.windows(4).position(|w| w == b"\r\n\r\n") {
+                    break pos + 4;
+                }
+            },
+            Err(e) => {
+                let msg = format!("{e}");
+                if msg.contains("WouldBlock") || msg.contains("would block") {
+                    std::thread::sleep(std::time::Duration::from_millis(1));
+                    continue;
+                }
+                buffer.finish();
+                return Err(format!("read headers: {e}"));
+            },
+        }
+    };
+
+    let leftover = &header_buf[leftover_start..];
+    if !leftover.is_empty() {
+        buffer.push(leftover);
+    }
+
+    // Stream body.
+    loop {
+        if buffer.is_cancelled() {
+            log::info!("TV: range download cancelled");
+            return Ok(());
+        }
+        if std::time::Instant::now() > deadline {
+            buffer.finish();
+            return Err("timeout downloading".into());
+        }
+        match stream.read(&mut buf) {
+            Ok(0) => break,
+            Ok(n) => buffer.push(&buf[..n]),
+            Err(e) => {
+                let msg = format!("{e}");
+                if msg.contains("WouldBlock") || msg.contains("would block") {
+                    std::thread::sleep(std::time::Duration::from_millis(1));
+                    continue;
+                }
+                if buffer.bytes_received() > start_offset {
+                    break;
+                }
+                buffer.finish();
+                return Err(format!("read: {e}"));
+            },
+        }
+    }
+
+    let received = buffer.bytes_received();
+    log::info!(
+        "TV: range download complete: {:.1}MB received (from offset {:.1}MB)",
+        (received - start_offset) as f64 / (1024.0 * 1024.0),
+        start_offset as f64 / (1024.0 * 1024.0),
+    );
+    buffer.finish();
+    Ok(())
+}
+
 /// Download URL data into a `StreamingInner` buffer (follows redirects).
-#[cfg(feature = "video-decode")]
+#[cfg(feature = "_video")]
 fn stream_download(
     url: &str,
     tls: &oasis_core::net::RustlsTlsProvider,
     buffer: &StreamingInner,
+    seek_secs: u64,
 ) -> Result<(), String> {
-    stream_download_inner(url, tls, buffer, 5)
+    stream_download_inner(url, tls, buffer, 5, seek_secs)
 }
 
-#[cfg(feature = "video-decode")]
+#[cfg(feature = "_video")]
 fn stream_download_inner(
     url: &str,
     tls: &oasis_core::net::RustlsTlsProvider,
     buffer: &StreamingInner,
     redirects_left: u8,
+    seek_secs: u64,
 ) -> Result<(), String> {
     use oasis_core::backend::NetworkBackend;
     use oasis_core::net::TlsProvider;
@@ -909,7 +1253,7 @@ fn stream_download_inner(
         if let Some(loc) = location {
             log::info!("TV: stream redirect {status} -> {loc}");
             drop(stream);
-            return stream_download_inner(&loc, tls, buffer, redirects_left - 1);
+            return stream_download_inner(&loc, tls, buffer, redirects_left - 1, seek_secs);
         }
         return Err(format!("HTTP {status} with no Location header"));
     }
@@ -938,8 +1282,163 @@ fn stream_download_inner(
         buffer.push(leftover);
     }
 
+    // Check if moov atom is at the end of a large file. If so, fetch it
+    // concurrently via a Range request so the decoder can open immediately
+    // instead of waiting for the entire file to download linearly.
+    if content_length > 10 * 1024 * 1024 {
+        let mdat_info = {
+            let s = buffer.state.lock().unwrap_or_else(|e| e.into_inner());
+            if s.moov.is_some() {
+                None // moov already found
+            } else {
+                // Find the large mdat atom — moov comes after it.
+                s.atoms
+                    .iter()
+                    .find(|(_, size, cc)| cc == b"mdat" && *size > 10 * 1024 * 1024)
+                    .map(|(off, size, _)| (*off, *size))
+            }
+        };
+        if let Some((mdat_offset, mdat_size)) = mdat_info {
+            let moov_file_offset = mdat_offset + mdat_size;
+            let moov_approx_size = content_length.saturating_sub(moov_file_offset);
+            if moov_approx_size > 0 && moov_approx_size < 50 * 1024 * 1024 {
+                log::info!(
+                    "TV: moov at offset {} (~{:.1}MB) in {:.0}MB file, fetching via Range",
+                    moov_file_offset,
+                    moov_approx_size as f64 / (1024.0 * 1024.0),
+                    content_length as f64 / (1024.0 * 1024.0),
+                );
+                let final_url = format!("https://{host}{path}");
+                match fetch_range(tls, &final_url, moov_file_offset, content_length) {
+                    Ok(tail_data) => {
+                        // Parse atoms starting from the exact moov position.
+                        let mut offset = 0usize;
+                        while offset + 8 <= tail_data.len() {
+                            let size32 = u32::from_be_bytes([
+                                tail_data[offset],
+                                tail_data[offset + 1],
+                                tail_data[offset + 2],
+                                tail_data[offset + 3],
+                            ]);
+                            let fourcc: [u8; 4] = [
+                                tail_data[offset + 4],
+                                tail_data[offset + 5],
+                                tail_data[offset + 6],
+                                tail_data[offset + 7],
+                            ];
+                            let atom_size = if size32 == 1 && offset + 16 <= tail_data.len() {
+                                u64::from_be_bytes([
+                                    tail_data[offset + 8],
+                                    tail_data[offset + 9],
+                                    tail_data[offset + 10],
+                                    tail_data[offset + 11],
+                                    tail_data[offset + 12],
+                                    tail_data[offset + 13],
+                                    tail_data[offset + 14],
+                                    tail_data[offset + 15],
+                                ]) as usize
+                            } else if size32 == 0 {
+                                tail_data.len() - offset
+                            } else {
+                                size32 as usize
+                            };
+                            if atom_size < 8 || offset + atom_size > tail_data.len() {
+                                break;
+                            }
+                            log::debug!(
+                                "TV: tail atom '{}' at file offset {}, size {}",
+                                String::from_utf8_lossy(&fourcc),
+                                moov_file_offset + offset as u64,
+                                atom_size,
+                            );
+                            if &fourcc == b"moov" {
+                                let file_off = moov_file_offset + offset as u64;
+                                let moov_data =
+                                    tail_data[offset..offset + atom_size].to_vec();
+                                log::info!(
+                                    "TV: pre-fetched moov atom ({} bytes) at offset {}",
+                                    moov_data.len(),
+                                    file_off,
+                                );
+
+                                // Parse mvhd duration to estimate seek byte offset.
+                                if seek_secs > 0
+                                    && let Some(dur) = parse_moov_duration(&moov_data)
+                                {
+                                        let frac = (seek_secs as f64 / dur).clamp(0.0, 1.0);
+                                        let seek_byte = mdat_offset
+                                            + (frac * mdat_size as f64) as u64;
+                                        // Start download from slightly before seek pos
+                                        // to ensure keyframe is included.
+                                        let start_from = seek_byte
+                                            .saturating_sub(2 * 1024 * 1024)
+                                            .max(mdat_offset);
+                                        log::info!(
+                                            "TV: duration={dur:.0}s, seek={seek_secs}s \
+                                             -> byte ~{:.1}MB, downloading from {:.1}MB",
+                                            seek_byte as f64 / (1024.0 * 1024.0),
+                                            start_from as f64 / (1024.0 * 1024.0),
+                                        );
+                                        let mut s = buffer
+                                            .state
+                                            .lock()
+                                            .unwrap_or_else(|e| e.into_inner());
+                                        s.moov = Some((file_off, moov_data));
+                                        // Set base_offset and bytes_received so the
+                                        // buffer looks like it already has data up to
+                                        // start_from (which it doesn't, but the decoder
+                                        // only needs data from start_from onwards + moov).
+                                        s.base_offset = start_from;
+                                        s.bytes_received = start_from;
+                                        drop(s);
+                                        buffer.condvar.notify_all();
+
+                                        // Restart download from seek position.
+                                        let range_url =
+                                            format!("https://{host}{path}");
+                                        log::info!(
+                                            "TV: restarting download from byte {}",
+                                            start_from,
+                                        );
+                                        return stream_download_range(
+                                            &range_url,
+                                            tls,
+                                            buffer,
+                                            start_from,
+                                            content_length,
+                                        );
+                                }
+
+                                let mut s = buffer
+                                    .state
+                                    .lock()
+                                    .unwrap_or_else(|e| e.into_inner());
+                                s.moov = Some((file_off, moov_data));
+                                buffer.condvar.notify_all();
+                                break;
+                            }
+                            offset += atom_size;
+                        }
+                    },
+                    Err(e) => {
+                        log::warn!("TV: Range request for moov failed: {e}");
+                    },
+                }
+            }
+        }
+    }
+
+    // For moov-at-start files with a seek target: once moov is found in the
+    // linear stream, parse duration, calculate seek byte offset, and restart
+    // the download from near the seek position via a Range request.
+    let mut checked_moov_at_start = false;
+
     // Stream remaining body into the shared buffer.
     loop {
+        if buffer.is_cancelled() {
+            log::info!("TV: download cancelled");
+            return Ok(());
+        }
         if std::time::Instant::now() > deadline {
             buffer.finish();
             return Err("timeout downloading video".to_string());
@@ -948,6 +1447,64 @@ fn stream_download_inner(
             Ok(0) => break,
             Ok(n) => {
                 buffer.push(&buf[..n]);
+
+                // Check once if moov was found at start of file.
+                if !checked_moov_at_start && seek_secs > 0 && content_length > 10 * 1024 * 1024 {
+                    let moov_info = {
+                        let s = buffer.state.lock().unwrap_or_else(|e| e.into_inner());
+                        s.moov
+                            .as_ref()
+                            .map(|(off, data)| (*off, data.clone()))
+                    };
+                    if let Some((_moov_off, moov_data)) = moov_info {
+                        checked_moov_at_start = true;
+                        if let Some(dur) = parse_moov_duration(&moov_data) {
+                            // Find mdat for byte offset calculation.
+                            let mdat_info = {
+                                let s = buffer.state.lock().unwrap_or_else(|e| e.into_inner());
+                                s.atoms
+                                    .iter()
+                                    .find(|(_, size, cc)| cc == b"mdat" && *size > 1024)
+                                    .map(|(off, size, _)| (*off, *size))
+                            };
+                            if let Some((mdat_off, mdat_size)) = mdat_info {
+                                let frac = (seek_secs as f64 / dur).clamp(0.0, 1.0);
+                                let seek_byte = mdat_off + (frac * mdat_size as f64) as u64;
+                                let start_from = seek_byte
+                                    .saturating_sub(2 * 1024 * 1024)
+                                    .max(mdat_off);
+                                let downloaded = buffer.bytes_received();
+                                // Only worth restarting if seek position is far ahead.
+                                if start_from > downloaded + 4 * 1024 * 1024 {
+                                    log::info!(
+                                        "TV: moov-at-start: duration={dur:.0}s, seek={seek_secs}s \
+                                         -> byte ~{:.1}MB (downloaded {:.1}MB), restarting from {:.1}MB",
+                                        seek_byte as f64 / (1024.0 * 1024.0),
+                                        downloaded as f64 / (1024.0 * 1024.0),
+                                        start_from as f64 / (1024.0 * 1024.0),
+                                    );
+                                    let mut s = buffer
+                                        .state
+                                        .lock()
+                                        .unwrap_or_else(|e| e.into_inner());
+                                    s.base_offset = start_from;
+                                    s.bytes_received = start_from;
+                                    s.buf.clear();
+                                    drop(s);
+
+                                    let range_url = format!("https://{host}{path}");
+                                    return stream_download_range(
+                                        &range_url,
+                                        tls,
+                                        buffer,
+                                        start_from,
+                                        content_length,
+                                    );
+                                }
+                            }
+                        }
+                    }
+                }
             },
             Err(e) => {
                 let msg = format!("{e}");
@@ -984,14 +1541,14 @@ fn tick_video_player(state: &mut AppState, backend: &mut impl SdiBackend) {
         let mut audio_chunks_fed = 0u32;
         let mut audio_samples_fed = 0u64;
         match &audio_output {
-            #[cfg(not(feature = "video-decode"))]
+            #[cfg(not(feature = "_video"))]
             crate::video_player::AudioOutput::Mp3Chunks(chunks) => {
                 for chunk in chunks {
                     let _ = state.audio_backend.feed_data(track, chunk);
                     audio_chunks_fed += 1;
                 }
             },
-            #[cfg(feature = "video-decode")]
+            #[cfg(feature = "_video")]
             crate::video_player::AudioOutput::PcmF32(chunks) => {
                 for chunk in chunks {
                     audio_samples_fed += chunk.pcm_f32.len() as u64;
@@ -1059,8 +1616,12 @@ fn detect_untune(state: &mut AppState, backend: &mut impl SdiBackend) {
         if let Some(track) = state.tv_audio_track.take() {
             let _ = state.audio_backend.unload_track(track);
         }
-        #[cfg(feature = "video-decode")]
+        #[cfg(feature = "_video")]
         {
+            if let Some(ref session) = state.tv_stream_session.take() {
+                session.cancel();
+            }
+            state.tv_current_url = None;
             state.pending_video_download = None;
             state.pending_video_params = None;
             state.tv_download_progress = None;
