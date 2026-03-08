@@ -752,11 +752,7 @@ impl StreamingInner {
     /// Block until at least `min_bytes` of body data have been buffered,
     /// or until the download finishes/is cancelled.  Returns `true` if
     /// the minimum was reached, `false` on timeout/cancel/done.
-    pub(crate) fn wait_for_buffered(
-        &self,
-        min_bytes: u64,
-        timeout: std::time::Duration,
-    ) -> bool {
+    pub(crate) fn wait_for_buffered(&self, min_bytes: u64, timeout: std::time::Duration) -> bool {
         let deadline = std::time::Instant::now() + timeout;
         let mut s = self.state.lock().unwrap_or_else(|e| e.into_inner());
         loop {
@@ -1267,8 +1263,7 @@ fn check_moov_at_start_restart(s: &SlidingState, seek_secs: u64) -> Option<u64> 
     // and may land at a significantly earlier byte position.  Using the
     // minimum of both estimates ensures the Range download covers wherever
     // symphonia will actually seek to.
-    let exact_byte =
-        oasis_video::demux_lite::seek_byte_from_moov(moov_data, seek_secs as f64);
+    let exact_byte = oasis_video::demux_lite::seek_byte_from_moov(moov_data, seek_secs as f64);
 
     let linear_byte = parse_moov_duration(moov_data).and_then(|dur| {
         let (mdat_off, mdat_size) = s
@@ -1406,8 +1401,7 @@ fn parse_tail_for_moov(
         // Compute seek position two ways and take the minimum.
         // Our exact seek-byte only considers video track, but symphonia
         // may seek to an earlier position when considering both tracks.
-        let exact_byte =
-            oasis_video::demux_lite::seek_byte_from_moov(&moov_data, seek_secs as f64);
+        let exact_byte = oasis_video::demux_lite::seek_byte_from_moov(&moov_data, seek_secs as f64);
 
         let linear_byte = parse_moov_duration(&moov_data).map(|dur| {
             let mdat_end = file_off;
@@ -1624,13 +1618,7 @@ fn open_range_connection(
                 .map(|(h, p)| (h, format!("/{p}")))
                 .unwrap_or((redir, "/".to_string()));
             drop(stream);
-            return open_range_connection(
-                redir_host,
-                &redir_path,
-                tls,
-                range_start,
-                range_end,
-            );
+            return open_range_connection(redir_host, &redir_path, tls, range_start, range_end);
         }
         return Err(format!("HTTP {status} with no Location header"));
     }
@@ -1948,7 +1936,12 @@ fn stream_download_inner(
             log::info!("TV: stream redirect {status} -> {loc}");
             drop(stream);
             return stream_download_inner(
-                &loc, tls, buffer, redirects_left - 1, seek_secs, original_url,
+                &loc,
+                tls,
+                buffer,
+                redirects_left - 1,
+                seek_secs,
+                original_url,
             );
         }
         return Err(format!("HTTP {status} with no Location header"));
@@ -2043,10 +2036,9 @@ fn stream_download_inner(
                 // far ahead of the decoder (decoder_pos was left at the
                 // probe position ~1MB while bytes_received jumps to
                 // the seek restart offset).
-                buffer.decoder_pos.store(
-                    start_from,
-                    std::sync::atomic::Ordering::Relaxed,
-                );
+                buffer
+                    .decoder_pos
+                    .store(start_from, std::sync::atomic::Ordering::Relaxed);
                 log::info!(
                     "TV: restarting download from byte {:.1}MB via Range",
                     start_from as f64 / (1024.0 * 1024.0),
@@ -2056,7 +2048,11 @@ fn stream_download_inner(
                 // This avoids 401 errors from CDN nodes that reject direct
                 // Range requests without a fresh redirect.
                 return stream_download_range(
-                    original_url, tls, buffer, start_from, content_length,
+                    original_url,
+                    tls,
+                    buffer,
+                    start_from,
+                    content_length,
                 );
             }
         }
@@ -2085,22 +2081,15 @@ fn stream_download_inner(
                 let tail_url = original_url.to_string();
                 let tail_tls = tls.clone();
                 std::thread::spawn(move || {
-                    let tail_size =
-                        (8 * 1024 * 1024u64).min(content_length / 4);
-                    let tail_offset =
-                        content_length.saturating_sub(tail_size);
+                    let tail_size = (8 * 1024 * 1024u64).min(content_length / 4);
+                    let tail_offset = content_length.saturating_sub(tail_size);
                     log::info!(
                         "TV: probing tail {:.1}MB of {:.0}MB file \
                          for moov via Range",
                         tail_size as f64 / (1024.0 * 1024.0),
                         content_length as f64 / (1024.0 * 1024.0),
                     );
-                    match fetch_range(
-                        &tail_tls,
-                        &tail_url,
-                        tail_offset,
-                        content_length,
-                    ) {
+                    match fetch_range(&tail_tls, &tail_url, tail_offset, content_length) {
                         Ok(tail_data) => {
                             parse_tail_for_moov(
                                 &tail_buffer,
@@ -2111,9 +2100,7 @@ fn stream_download_inner(
                             );
                         },
                         Err(e) => {
-                            log::warn!(
-                                "TV: Range request for moov failed: {e}"
-                            );
+                            log::warn!("TV: Range request for moov failed: {e}");
                         },
                     }
                 });
