@@ -393,6 +393,9 @@ struct SlidingState {
     /// Retained moov atom — copied out so it survives eviction.
     /// `(file_offset, data)`.
     moov: Option<(u64, Vec<u8>)>,
+    /// Retained file header (ftyp atom, typically 24-32 bytes).
+    /// Kept so symphonia can probe the container format after seek restart.
+    header: Option<Vec<u8>>,
     /// Parsed top-level atom boundaries: `(offset, size, fourcc)`.
     /// Used to detect moov/mdat locations.
     atoms: Vec<(u64, u64, [u8; 4])>,
@@ -417,6 +420,10 @@ pub(crate) struct StreamingInner {
     /// Decoder's current read position (updated by `StreamingBuffer::read`).
     /// The download thread uses this to throttle when too far ahead.
     decoder_pos: std::sync::atomic::AtomicU64,
+    /// When true, reads beyond retained data return zeros instantly
+    /// instead of blocking.  Used during symphonia's probe phase so
+    /// ignore_bytes() can skip the mdat body without downloading it.
+    probe_mode: std::sync::atomic::AtomicBool,
 }
 
 #[cfg(feature = "_video")]
@@ -428,6 +435,7 @@ impl StreamingInner {
                 base_offset: 0,
                 bytes_received: 0,
                 moov: None,
+                header: None,
                 atoms: Vec::new(),
                 atoms_scanned_to: 0,
             }),
@@ -437,6 +445,7 @@ impl StreamingInner {
             error: std::sync::Mutex::new(None),
             condvar: std::sync::Condvar::new(),
             decoder_pos: std::sync::atomic::AtomicU64::new(0),
+            probe_mode: std::sync::atomic::AtomicBool::new(true),
         }
     }
 
@@ -537,9 +546,17 @@ impl StreamingInner {
                 String::from_utf8_lossy(&fourcc),
             );
 
+            // For moov: don't advance past it until the full atom is
+            // available and retained.  Otherwise we'd skip over moov and
+            // never revisit it on subsequent push() calls.
+            if &fourcc == b"moov" && s.moov.is_none() && scan_pos + atom_size > total {
+                // moov found but incomplete — wait for more data.
+                break;
+            }
+
             s.atoms.push((scan_pos, atom_size, fourcc));
 
-            // If this is moov and we have the full atom, retain it.
+            // Retain the full moov atom for the decoder.
             if &fourcc == b"moov" && scan_pos + atom_size <= total && s.moov.is_none() {
                 let start = buf_off;
                 let end = start + atom_size as usize;
@@ -552,6 +569,21 @@ impl StreamingInner {
             }
 
             s.atoms_scanned_to = scan_pos + atom_size;
+        }
+
+        // Update retained file header — includes all scanned atom
+        // headers so symphonia can discover the file structure after
+        // a seek restart.  We save up to atoms_scanned_to + 16
+        // (for the next atom's header), capped to avoid saving large
+        // moov bodies (moov is retained separately).
+        if s.base_offset == 0 && s.atoms_scanned_to > 0 {
+            let scan_end = (s.atoms_scanned_to - s.base_offset) as usize;
+            let keep = (scan_end + 16).min(s.buf.len());
+            // Don't replace an existing larger header.
+            let current_len = s.header.as_ref().map_or(0, |h| h.len());
+            if keep > current_len {
+                s.header = Some(s.buf[..keep].to_vec());
+            }
         }
     }
 
@@ -657,8 +689,20 @@ impl StreamingInner {
             if let Some((_, ref data)) = s.moov {
                 return Some(data.clone());
             }
-            if self.is_done() || self.is_cancelled() {
+            if self.is_cancelled() {
                 return None;
+            }
+            // After download finishes, `finish()` does a final atom scan
+            // that may store moov under the lock.  Re-check moov one last
+            // time (we already hold the lock via `s`) before giving up.
+            if self.is_done() {
+                // `s` is the current MutexGuard — moov was just checked
+                // above and was None, so the download truly has no moov.
+                // Drop and re-acquire to pick up any store that happened
+                // between `finish()`'s unlock and `done=true`.
+                drop(s);
+                let s2 = self.state.lock().unwrap_or_else(|e| e.into_inner());
+                return s2.moov.as_ref().map(|(_, data)| data.clone());
             }
             let remaining = deadline.saturating_duration_since(std::time::Instant::now());
             if remaining.is_zero() {
@@ -671,6 +715,13 @@ impl StreamingInner {
                 .unwrap_or_else(|e| e.into_inner());
             s = result.0;
         }
+    }
+
+    /// Disable probe mode so reads block on real data instead of
+    /// returning zeros.  Called after the decoder's probe phase completes.
+    pub(crate) fn disable_probe_mode(&self) {
+        self.probe_mode
+            .store(false, std::sync::atomic::Ordering::Relaxed);
     }
 
     /// Returns `true` if the download is far enough ahead of the decoder
@@ -687,9 +738,10 @@ impl StreamingInner {
             // After decoder starts reading: throttle based on lookahead.
             received > decoder + MAX_LOOKAHEAD
         } else {
-            // During init: throttle once moov is found and buffer is large
-            // enough.  The decoder can probe format metadata from the
-            // retained moov copy without needing the full linear stream.
+            // During init: throttle once moov is found so the download
+            // doesn't race past the seek-restart point.  Before moov is
+            // found, the download must run freely so the tail probe (or
+            // linear scan) can discover it.
             has_moov && buf_size > MAX_LOOKAHEAD
         }
     }
@@ -776,6 +828,17 @@ impl std::io::Read for StreamingBuffer {
 
             let s = self.inner.state.lock().unwrap_or_else(|e| e.into_inner());
 
+            // Try serving from the retained file header (ftyp).
+            if let Some(ref hdr) = s.header
+                && (self.pos as usize) < hdr.len()
+            {
+                let local = self.pos as usize;
+                let n = buf.len().min(hdr.len() - local);
+                buf[..n].copy_from_slice(&hdr[local..local + n]);
+                self.pos += n as u64;
+                break n;
+            }
+
             // Try serving from the retained moov atom.
             if let Some((moov_off, ref moov_data)) = s.moov {
                 let moov_end = moov_off + moov_data.len() as u64;
@@ -798,15 +861,44 @@ impl std::io::Read for StreamingBuffer {
                 break n;
             }
 
-            // Position is before the sliding window (evicted, non-moov data).
+            // Position is at or beyond file end — EOF.
+            let total = self
+                .inner
+                .total_size
+                .load(std::sync::atomic::Ordering::Relaxed);
+            if total > 0 && self.pos >= total {
+                break 0; // EOF
+            }
+
+            // In probe mode: return zeros for any position not covered
+            // by retained data or the sliding buffer.  This lets
+            // symphonia's ignore_bytes() skip the mdat body instantly
+            // without downloading it.
+            let in_probe = self
+                .inner
+                .probe_mode
+                .load(std::sync::atomic::Ordering::Relaxed);
+            if in_probe {
+                // Fill with zeros up to base_offset, total_size, or
+                // buf.len() — whichever comes first.
+                let limit = if total > 0 { total } else { u64::MAX };
+                let remaining = (limit - self.pos) as usize;
+                let n = buf.len().min(remaining);
+                if n == 0 {
+                    break 0; // EOF
+                }
+                buf[..n].fill(0);
+                self.pos += n as u64;
+                break n;
+            }
+
+            // Position is in the gap (evicted data) — return zeros.
             if self.pos < s.base_offset {
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::InvalidInput,
-                    format!(
-                        "read at evicted offset {} (window starts at {})",
-                        self.pos, s.base_offset
-                    ),
-                ));
+                let gap_remaining = (s.base_offset - self.pos) as usize;
+                let n = buf.len().min(gap_remaining);
+                buf[..n].fill(0);
+                self.pos += n as u64;
+                break n;
             }
 
             // Position is beyond available data.
@@ -824,9 +916,13 @@ impl std::io::Read for StreamingBuffer {
 
         // Update decoder position and evict old data after successful read.
         if n > 0 {
-            self.inner.decoder_pos.store(self.pos, std::sync::atomic::Ordering::Relaxed);
+            self.inner.decoder_pos.store(
+                self.pos,
+                std::sync::atomic::Ordering::Relaxed,
+            );
             self.maybe_evict();
         }
+
         Ok(n)
     }
 }
@@ -1031,8 +1127,6 @@ fn fetch_range_inner(
     Ok(body)
 }
 
-/// Parse the duration in seconds from a moov atom's mvhd box.
-#[cfg(feature = "_video")]
 /// Check if a moov-at-start file should restart download from a seek position.
 /// Returns `Some(byte_offset)` if restart is worthwhile.
 #[cfg(feature = "_video")]
@@ -1067,6 +1161,10 @@ fn check_moov_at_start_restart(s: &SlidingState, seek_secs: u64) -> Option<u64> 
 
 /// Parse tail data (fetched via Range) looking for the moov atom.
 /// If found, retains it in the buffer and notifies waiters.
+///
+/// The tail data typically starts in the middle of an mdat atom (raw
+/// video/audio data), so we cannot walk atom boundaries from offset 0.
+/// Instead, scan for the `moov` fourcc and validate the atom header.
 #[cfg(feature = "_video")]
 fn parse_tail_for_moov(
     buffer: &StreamingInner,
@@ -1075,101 +1173,111 @@ fn parse_tail_for_moov(
     content_length: u64,
     seek_secs: u64,
 ) {
-    let mut offset = 0usize;
-    while offset + 8 <= tail_data.len() {
+    // Scan for the 'moov' fourcc.  In an MP4 atom header the layout is
+    // [4-byte big-endian size][4-byte fourcc], so 'moov' appears at
+    // offset+4 of the atom header.  We look for the fourcc and then
+    // validate the preceding size field.
+    let needle = b"moov";
+    let mut search_from = 4usize; // need ≥4 bytes before fourcc for size
+    let found = loop {
+        if search_from + 4 > tail_data.len() {
+            break None;
+        }
+        let haystack = &tail_data[search_from..];
+        let pos = haystack
+            .windows(4)
+            .position(|w| w == needle);
+        let Some(rel) = pos else { break None };
+        let fourcc_off = search_from + rel;
+        let atom_start = fourcc_off - 4; // size field is 4 bytes before fourcc
         let size32 = u32::from_be_bytes([
-            tail_data[offset],
-            tail_data[offset + 1],
-            tail_data[offset + 2],
-            tail_data[offset + 3],
+            tail_data[atom_start],
+            tail_data[atom_start + 1],
+            tail_data[atom_start + 2],
+            tail_data[atom_start + 3],
         ]);
-        let fourcc: [u8; 4] = [
-            tail_data[offset + 4],
-            tail_data[offset + 5],
-            tail_data[offset + 6],
-            tail_data[offset + 7],
-        ];
-        let atom_size = if size32 == 1 && offset + 16 <= tail_data.len() {
-            u64::from_be_bytes([
-                tail_data[offset + 8],
-                tail_data[offset + 9],
-                tail_data[offset + 10],
-                tail_data[offset + 11],
-                tail_data[offset + 12],
-                tail_data[offset + 13],
-                tail_data[offset + 14],
-                tail_data[offset + 15],
-            ]) as usize
+        let atom_size = if size32 == 1 && atom_start + 16 <= tail_data.len() {
+            let b = &tail_data[atom_start + 8..atom_start + 16];
+            u64::from_be_bytes([b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7]])
+                as usize
         } else if size32 == 0 {
-            tail_data.len() - offset
+            tail_data.len() - atom_start
         } else {
             size32 as usize
         };
-        if atom_size < 8 || offset + atom_size > tail_data.len() {
-            break;
+        // Validate: atom must be ≥8 bytes and fit within the tail data.
+        if atom_size >= 8 && atom_start + atom_size <= tail_data.len() {
+            break Some((atom_start, atom_size));
         }
-        let file_off = tail_offset + offset as u64;
-        log::debug!(
-            "TV: tail atom '{}' at file offset {}, size {}",
-            String::from_utf8_lossy(&fourcc),
-            file_off,
-            atom_size,
+        // False positive — keep scanning past this occurrence.
+        search_from = fourcc_off + 4;
+    };
+
+    let Some((atom_start, atom_size)) = found else {
+        log::info!("TV: tail probe: no moov found in last {:.1}MB of file",
+            tail_data.len() as f64 / (1024.0 * 1024.0));
+        return;
+    };
+
+    let file_off = tail_offset + atom_start as u64;
+    let moov_data = tail_data[atom_start..atom_start + atom_size].to_vec();
+    log::info!(
+        "TV: pre-fetched moov atom ({} bytes) at file offset {}",
+        moov_data.len(),
+        file_off,
+    );
+
+    // If seeking, estimate byte offset and set base_offset so the
+    // main download thread can restart from the seek position.
+    if seek_secs > 0
+        && let Some(dur) = parse_moov_duration(&moov_data)
+    {
+        let mdat_end = file_off;
+        let frac = (seek_secs as f64 / dur).clamp(0.0, 1.0);
+        let seek_byte = (frac * mdat_end as f64) as u64;
+        let start_from = seek_byte.saturating_sub(2 * 1024 * 1024);
+        log::info!(
+            "TV: tail probe: duration={dur:.0}s, seek={seek_secs}s \
+             -> byte ~{:.1}MB, need download from {:.1}MB",
+            seek_byte as f64 / (1024.0 * 1024.0),
+            start_from as f64 / (1024.0 * 1024.0),
         );
-        if &fourcc == b"moov" {
-            let moov_data = tail_data[offset..offset + atom_size].to_vec();
-            log::info!(
-                "TV: pre-fetched moov atom ({} bytes) at offset {}",
-                moov_data.len(),
-                file_off,
-            );
-
-            // If seeking, estimate byte offset and set base_offset so the
-            // main download thread can restart from the seek position.
-            if seek_secs > 0
-                && let Some(dur) = parse_moov_duration(&moov_data)
-            {
-                let mdat_end = file_off;
-                let frac = (seek_secs as f64 / dur).clamp(0.0, 1.0);
-                let seek_byte = (frac * mdat_end as f64) as u64;
-                let start_from = seek_byte.saturating_sub(2 * 1024 * 1024);
-                log::info!(
-                    "TV: tail probe: duration={dur:.0}s, seek={seek_secs}s \
-                     -> byte ~{:.1}MB, need download from {:.1}MB",
-                    seek_byte as f64 / (1024.0 * 1024.0),
-                    start_from as f64 / (1024.0 * 1024.0),
-                );
-                let mut s = buffer
-                    .state
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner());
-                s.moov = Some((file_off, moov_data));
-                // Set base_offset so the main download loop knows where
-                // to restart from (checked via `restart_offset`).
-                if start_from > s.bytes_received + 4 * 1024 * 1024 {
-                    s.base_offset = start_from;
-                    s.bytes_received = start_from;
-                    s.buf.clear();
+        let mut s = buffer
+            .state
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        s.moov = Some((file_off, moov_data));
+        // Set base_offset so the main download loop knows where
+        // to restart from (checked via `restart_offset`).
+        if start_from > s.bytes_received + 4 * 1024 * 1024 {
+            // Retain file header (ftyp + mdat header) for symphonia
+            // probe.  Upgrade if current header is smaller.
+            if !s.buf.is_empty() {
+                let current_len = s.header.as_ref().map_or(0, |h| h.len());
+                let keep = s.buf.len().min(4096);
+                if keep > current_len {
+                    s.header = Some(s.buf[..keep].to_vec());
                 }
-                drop(s);
-                buffer.condvar.notify_all();
-                // Signal content_length for seek-based range download.
-                buffer
-                    .total_size
-                    .store(content_length, std::sync::atomic::Ordering::Release);
-                return;
             }
-
-            let mut s = buffer
-                .state
-                .lock()
-                .unwrap_or_else(|e| e.into_inner());
-            s.moov = Some((file_off, moov_data));
-            buffer.condvar.notify_all();
-            return;
+            s.base_offset = start_from;
+            s.bytes_received = start_from;
+            s.buf.clear();
         }
-        offset += atom_size;
+        drop(s);
+        buffer.condvar.notify_all();
+        // Signal content_length for seek-based range download.
+        buffer
+            .total_size
+            .store(content_length, std::sync::atomic::Ordering::Release);
+        return;
     }
-    log::debug!("TV: tail probe: no moov found in tail data");
+
+    let mut s = buffer
+        .state
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    s.moov = Some((file_off, moov_data));
+    buffer.condvar.notify_all();
 }
 
 fn parse_moov_duration(moov_data: &[u8]) -> Option<f64> {
@@ -1194,18 +1302,20 @@ fn parse_moov_duration(moov_data: &[u8]) -> Option<f64> {
             }
             let version = data[0];
             if version == 0 && data.len() >= 20 {
-                // v0: create(4) + mod(4) + timescale(4) + duration(4)
-                let timescale = u32::from_be_bytes([data[4 + 4], data[4 + 5], data[4 + 6], data[4 + 7]]);
-                let duration = u32::from_be_bytes([data[4 + 8], data[4 + 9], data[4 + 10], data[4 + 11]]);
+                // v0 layout after version(1)+flags(3): create(4) + mod(4) + timescale(4) + duration(4)
+                // timescale starts at byte 12, duration at byte 16
+                let timescale = u32::from_be_bytes([data[12], data[13], data[14], data[15]]);
+                let duration = u32::from_be_bytes([data[16], data[17], data[18], data[19]]);
                 if timescale > 0 {
                     return Some(duration as f64 / timescale as f64);
                 }
             } else if version == 1 && data.len() >= 32 {
-                // v1: create(8) + mod(8) + timescale(4) + duration(8)
-                let timescale = u32::from_be_bytes([data[4 + 16], data[4 + 17], data[4 + 18], data[4 + 19]]);
+                // v1 layout after version(1)+flags(3): create(8) + mod(8) + timescale(4) + duration(8)
+                // timescale starts at byte 20, duration at byte 24
+                let timescale = u32::from_be_bytes([data[20], data[21], data[22], data[23]]);
                 let duration = u64::from_be_bytes([
-                    data[4 + 20], data[4 + 21], data[4 + 22], data[4 + 23],
-                    data[4 + 24], data[4 + 25], data[4 + 26], data[4 + 27],
+                    data[24], data[25], data[26], data[27],
+                    data[28], data[29], data[30], data[31],
                 ]);
                 if timescale > 0 {
                     return Some(duration as f64 / timescale as f64);
@@ -1275,6 +1385,10 @@ fn stream_download_range(
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(120);
 
     let leftover_start = loop {
+        if buffer.is_cancelled() {
+            log::info!("TV: range download cancelled during headers");
+            return Ok(());
+        }
         if std::time::Instant::now() > deadline {
             buffer.finish();
             return Err("timeout reading headers".into());
@@ -1302,15 +1416,24 @@ fn stream_download_range(
         }
     };
 
+    // Log HTTP response status.
+    let header_str = String::from_utf8_lossy(&header_buf[..leftover_start]);
+    let status_line = header_str.lines().next().unwrap_or("");
+    log::info!(
+        "TV: range download response: {status_line} (leftover={})",
+        header_buf.len() - leftover_start,
+    );
+
     let leftover = &header_buf[leftover_start..];
     if !leftover.is_empty() {
         buffer.push(leftover);
     }
 
     // Stream body.
+    let mut range_body_received = 0u64;
     loop {
         if buffer.is_cancelled() {
-            log::info!("TV: range download cancelled");
+            log::info!("TV: range download cancelled (received {range_body_received} body bytes)");
             return Ok(());
         }
         // Backpressure: pause downloading when buffer is far ahead of decoder.
@@ -1324,7 +1447,17 @@ fn stream_download_range(
         }
         match stream.read(&mut buf) {
             Ok(0) => break,
-            Ok(n) => buffer.push(&buf[..n]),
+            Ok(n) => {
+                if range_body_received == 0 {
+                    log::info!(
+                        "TV: range download first data: {n} bytes \
+                         (buffer at {:.1}MB)",
+                        buffer.bytes_received() as f64 / (1024.0 * 1024.0),
+                    );
+                }
+                range_body_received += n as u64;
+                buffer.push(&buf[..n]);
+            },
             Err(e) => {
                 let msg = format!("{e}");
                 if msg.contains("WouldBlock") || msg.contains("would block") {
@@ -1503,7 +1636,7 @@ fn stream_download_inner(
             let tail_url = format!("https://{host}{path}");
             let tail_tls = tls.clone();
             std::thread::spawn(move || {
-                let tail_size = (4 * 1024 * 1024u64).min(content_length / 4);
+                let tail_size = (8 * 1024 * 1024u64).min(content_length / 4);
                 let tail_offset = content_length.saturating_sub(tail_size);
                 log::info!(
                     "TV: probing tail {:.1}MB of {:.0}MB file for moov via Range",
@@ -1537,24 +1670,20 @@ fn stream_download_inner(
             log::info!("TV: download cancelled");
             return Ok(());
         }
-        // Backpressure: pause downloading when buffer is far ahead of decoder.
-        if buffer.should_throttle() {
-            std::thread::sleep(std::time::Duration::from_millis(100));
-            continue;
-        }
 
-        // Check if the tail probe (or scan_atoms) found moov and set a seek
-        // restart target.  If base_offset jumped ahead, abandon the linear
-        // download and restart from the seek position via Range request.
+        // Check for moov-based seek restart BEFORE throttle check so that
+        // when the tail probe finds moov (and clears the buffer), we
+        // immediately issue the Range restart instead of sleeping.
         if !checked_seek_restart && seek_secs > 0 && content_length > 10 * 1024 * 1024 {
             let restart_from = {
                 let s = buffer.state.lock().unwrap_or_else(|e| e.into_inner());
                 if s.moov.is_some() {
                     checked_seek_restart = true;
-                    // If base_offset is far ahead of what we've streamed linearly,
-                    // the tail probe set a seek target — restart from there.
-                    let linear_pos = s.base_offset + s.buf.len() as u64;
-                    if s.base_offset > 0 && linear_pos <= s.base_offset {
+                    // If base_offset was moved far ahead by the tail probe
+                    // (moov-at-end case), restart from there.
+                    if s.base_offset > 4 * 1024 * 1024
+                        && s.buf.len() < 1024 * 1024
+                    {
                         Some(s.base_offset)
                     } else {
                         // moov found at start — check if seek position is far ahead.
@@ -1571,6 +1700,18 @@ fn stream_download_inner(
                         .state
                         .lock()
                         .unwrap_or_else(|e| e.into_inner());
+                    // For moov-at-start: retain the entire current buffer
+                    // (ftyp + moov + mdat header) so symphonia can probe
+                    // the full atom structure after restart.  At this point
+                    // the buffer is typically only ~1-2MB.
+                    // For moov-at-end: the tail probe already stored moov
+                    // separately; only retain if base_offset is still 0
+                    // (moov-at-start case).
+                    if s.base_offset == 0 && s.moov.is_some() && !s.buf.is_empty()
+                    {
+                        let full_header = s.buf.clone();
+                        s.moov = Some((s.base_offset, full_header));
+                    }
                     s.base_offset = start_from;
                     s.bytes_received = start_from;
                     s.buf.clear();
@@ -1588,6 +1729,12 @@ fn stream_download_inner(
                     content_length,
                 );
             }
+        }
+
+        // Backpressure: pause downloading when buffer is far ahead of decoder.
+        if buffer.should_throttle() {
+            std::thread::sleep(std::time::Duration::from_millis(100));
+            continue;
         }
 
         if std::time::Instant::now() > deadline {

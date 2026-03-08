@@ -406,6 +406,9 @@ impl VideoPlayer {
                         "VideoPlayer: decoder opened in {:.1}s",
                         t0.elapsed().as_secs_f64(),
                     );
+                    // Disable probe mode so reads block on real data
+                    // instead of returning zeros.
+                    moov_source.disable_probe_mode();
                     d
                 },
                 Err(e) => {
@@ -422,10 +425,12 @@ impl VideoPlayer {
                 cb();
             }
 
-            if seek_secs > 0
-                && let Err(e) = decoder.seek(seek_secs as f64)
-            {
-                log::warn!("VideoPlayer: seek to {seek_secs}s failed: {e}");
+            if seek_secs > 0 {
+                log::info!("VideoPlayer: seeking to {seek_secs}s...");
+                match decoder.seek(seek_secs as f64) {
+                    Ok(()) => log::info!("VideoPlayer: seek complete"),
+                    Err(e) => log::warn!("VideoPlayer: seek to {seek_secs}s failed: {e}"),
+                }
             }
 
             Self::decode_loop(decoder, video_tx, audio_tx, stop_rx, target_w, target_h);

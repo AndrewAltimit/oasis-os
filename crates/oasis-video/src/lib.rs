@@ -476,15 +476,15 @@ impl SoftwareVideoDecoder {
         {
             // Drain from the audio queue (packets buffered during video reads).
             while let Some(pkt) = self.audio_queue.pop_front() {
-                if let Some(aac) = self.aac.as_mut() {
-                    if let Ok(Some(audio)) = aac.decode(&pkt.data, 0) {
-                        return Some(AudioChunk {
-                            pcm_f32: audio.pcm_f32,
-                            channels: audio.channels,
-                            sample_rate: audio.sample_rate,
-                            timestamp_secs: pkt.timestamp_secs,
-                        });
-                    }
+                if let Some(aac) = self.aac.as_mut()
+                    && let Ok(Some(audio)) = aac.decode(&pkt.data, 0)
+                {
+                    return Some(AudioChunk {
+                        pcm_f32: audio.pcm_f32,
+                        channels: audio.channels,
+                        sample_rate: audio.sample_rate,
+                        timestamp_secs: pkt.timestamp_secs,
+                    });
                 }
             }
             None
