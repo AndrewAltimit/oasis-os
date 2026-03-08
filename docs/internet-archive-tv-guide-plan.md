@@ -296,16 +296,22 @@ Video playback is fundamentally different per backend:
 - Seek to correct position: append `#t={elapsed_seconds}` to MP4 URL, or use
   the IA embed player's start parameter
 
-**SDL Desktop Backend:**
-- Option A: Launch system browser / mpv with the video URL (simplest)
-- Option B: Use an HTML overlay window (like WASM iframe but via a webview)
-- Option C: Build native video decode with ffmpeg bindings (overkill for now)
-- **Recommended: Option A for MVP** — open the URL in the default browser or mpv,
-  with the PIP being a thumbnail image only (no live video in the canvas)
+**SDL Desktop Backend (Implemented):**
+- In-process streaming decode via `StreamingBuffer` + oasis-video (no ffmpeg required)
+- `StreamingBuffer` wraps a shared sliding-window buffer fed by a background HTTPS
+  download thread, implementing `Read + Seek` for symphonia's `MediaSourceStream`
+- Progressive playback: video starts playing while download continues
+- Deferred tail probe (8MB threshold) avoids CDN connection throttling
+- Range request CDN failover through archive.org for fresh 302 redirects
+- Prebuffer gate (2MB) prevents decoder starvation after seek restart
+- PTS-based A/V sync with backpressure throttling
+- ffmpeg subprocess fallback still available when `video-decode` feature disabled
 
-**PSP Backend:**
-- Not applicable for video (PSP can barely handle MP3 streaming)
-- Could show schedule grid as information-only
+**PSP Backend (Implemented):**
+- In-memory streaming with AAC hardware decode via `sceAudiocodec`
+- Audio-only on PPSSPP emulator (H.264 ME decode requires real hardware)
+- TLS 1.3 via embedded-tls for HTTPS CDN nodes
+- Backpressure-throttled I/O via audio command queue
 
 ### 4.2 WASM Video Playback Implementation
 
@@ -549,7 +555,7 @@ static image/waveform visualization.
 | IA rate limiting on metadata fetches | Cache aggressively in VFS (24h TTL) |
 | Video files too large for streaming | Use h.264 IA derivatives (smaller); iframe lets browser handle buffering |
 | Items removed from IA | Graceful fallback — show "Unavailable" in schedule |
-| No video codec in SDL backend | Use external player (mpv/browser) for MVP |
+| No video codec in SDL backend | SOLVED: in-process streaming decode via oasis-video + StreamingBuffer |
 | PSP HTTPS/TLS failures to CDN | TLS 1.3 fallback via `embedded-tls` + `UnsecureProvider` is implemented and working; both `ia*` (HTTP) and `dn*` (HTTPS-only) CDN nodes now stream successfully |
 | Schedule drift if episode durations change | Cache durations; schedule only recomputes when cache refreshes |
 | Large catalogs (100+ episodes) | Paginate IA metadata fetch; limit to first 50 episodes per channel |

@@ -1,6 +1,6 @@
 # PRD: oasis-video Integration
 
-## Status: Orphan Crate → Streaming Cross-Platform Video Decode
+## Status: Streaming Cross-Platform Video Decode (Phase 1-2 Complete)
 
 ### Problem
 
@@ -9,7 +9,7 @@ workspace but imported by nothing. Current video playback varies by platform:
 
 | Platform | Current Approach | Issues |
 |----------|-----------------|--------|
-| **SDL2 desktop** | Two ffmpeg subprocesses (video→rawvideo, audio→mp3) | Requires ffmpeg binary on PATH |
+| **SDL2 desktop** | In-process streaming decode via `StreamingBuffer` + oasis-video (ffmpeg fallback available) | No external dependencies required |
 | **WASM** | Hidden `<video>` element + canvas `drawImage` capture | Works but archive.org CORS blocks fetch() |
 | **PSP** | Stub only (thread skeleton, no decode) | No playback at all |
 | **UE5** | Nothing | No video support |
@@ -118,8 +118,7 @@ impl SoftwareVideoDecoder {
 
 | Platform | VideoSource Implementation | Memory Ceiling |
 |----------|---------------------------|----------------|
-| SDL2 desktop | `File` (download to temp, stream from disk) | ~8 MB decode buffers |
-| SDL2 progressive | `HttpRangeFile` (HTTP Range requests, LRU page cache) | ~16 MB page cache |
+| SDL2 desktop | `StreamingBuffer` (in-memory sliding window fed by download thread) | ~16-32 MB sliding window |
 | PSP | `File` from Memory Stick (`ms0:/PSP/GAME/OASISOS/tv_cache.mp4`) | ~4 MB decode buffers |
 | UE5 | `File` or `Cursor<Vec<u8>>` (host provides data) | ~8 MB decode buffers |
 | WASM | N/A (uses native `<video>` element) | — |
@@ -352,39 +351,55 @@ int  oasis_video_is_playing();
 
 ## Streaming Implementation Details
 
-### How symphonia Streaming Works
+### Desktop Streaming Architecture (Implemented)
 
-symphonia's `MediaSourceStream` reads MP4 in two phases:
-1. **moov atom parse** — seeks to file end to find moov box, reads sample tables
-   (stco, stsz, stss, stsc, stts). This requires a few seeks + small reads.
-2. **mdat streaming** — reads sample data sequentially from mdat, using offsets
-   from stco. Each `next_packet()` call reads one demuxed packet.
+The desktop TV Guide uses `StreamingBuffer` — a `Read + Seek` wrapper over a
+shared sliding-window buffer fed by a background download thread. This enables
+true progressive playback: video starts playing while the download continues.
 
-This means any `Read + Seek` source works — the demuxer never loads the
-full file. It reads small chunks on demand.
+**Key components:**
+- `StreamingInner` — shared state with `Arc<Mutex<SlidingState>>`, `Condvar`,
+  atomic `decoder_pos`, `bytes_received`, and `probe_mode` flag
+- `StreamingBuffer` — implements `Read + Seek + Send` for symphonia's
+  `MediaSourceStream`, backed by `StreamingInner`
+- `stream_download_inner()` — download thread that feeds the sliding window
+  with HTTP(S) data, following archive.org redirects
 
-### Download-Then-Stream Pipeline (Desktop + PSP)
+**Probe phase handling:**
+symphonia probes the file to find the `moov` atom. During probe, the decoder
+seeks to the end of the file. `probe_mode` flag causes reads to return zeros
+(skipping mdat body instantly). Once probe completes, the download thread
+detects moov discovery and restarts the download from the correct offset using
+a Range request through archive.org (which 302-redirects to a fresh CDN node).
+
+**Deferred tail probe:**
+For moov-at-end files, a separate thread fetches the last 8MB. This is deferred
+until >8MB of body data has been received without finding moov, avoiding CDN
+connection throttling (archive.org throttles concurrent HTTPS connections).
+
+**Backpressure via `should_throttle()`:**
+The download thread pauses when it gets too far ahead of the decoder:
+`decoder_pos > 0 ? received > decoder_pos + 16MB : has_moov && buf_size > 16MB`
+
+**Prebuffer gate:**
+Before seeking, the decoder waits for MIN_PREBUFFER (2MB) of body data to
+accumulate, preventing seeks into empty buffer regions.
+
+**CDN failover:**
+Range requests route through the original archive.org URL (not cached CDN URL)
+to get a fresh 302 redirect, avoiding 401 errors from stale CDN nodes.
+`open_range_connection()` follows redirect chains automatically.
 
 ```
-1. HTTP GET full file → write to disk (temp file or Memory Stick)
-2. Open File handle → SoftwareVideoDecoder::open_stream(File)
-3. Decoder reads moov (few KB) → knows duration, codec params, sample map
-4. Decoder reads mdat samples on demand (~10-100 KB per read)
-5. Caller pulls frames: next_video_frame() / next_audio_samples()
-```
-
-Memory at step 4: only the current packet + decoded frame in memory.
-The full MP4 lives on disk, accessed via OS file I/O.
-
-### Progressive HTTP Pipeline (Desktop Stretch Goal)
-
-```
-1. HTTP HEAD → check Accept-Ranges: bytes
-2. Seek to end → read moov atom (range request for last ~500 KB)
-3. Parse sample tables → know all sample offsets
-4. Begin sequential mdat reads via range requests
-5. LRU page cache: keep 256× 64 KB pages (16 MB) for recent + seek targets
-6. On seek: compute target sample offset → range request → resume decode
+┌──────────────┐    ┌─────────────────┐    ┌──────────────────┐
+│ Download     │───→│ StreamingInner  │←───│ StreamingBuffer  │
+│ Thread       │    │ (sliding window)│    │ (Read + Seek)    │
+│ HTTP(S) GET  │    │ + Condvar wake  │    │ for symphonia    │
+└──────┬───────┘    └────────┬────────┘    └────────┬─────────┘
+       │                     │                      │
+       │ seek restart        │ moov discovery        │ probe_mode
+       │ via Range req       │ triggers restart      │ returns zeros
+       └─────────────────────┴──────────────────────┘
 ```
 
 ### PSP Download Strategy
@@ -464,13 +479,15 @@ fn select_smallest_for(files: &[ArchiveFile]) -> Option<&ArchiveFile> {
 |------|-----------|--------|------------|
 | oasis-video decoder bugs on real content | Medium | High | ffmpeg fallback (desktop), test with 10+ archive.org samples |
 | symphonia Read+Seek overhead vs Vec<u8> | Low | Low | Benchmark; Cursor path still available for small files |
-| Progressive HTTP complexity (Range edge cases) | Medium | Medium | Mark as stretch goal, download-to-disk is primary path |
+| CDN connection throttling on concurrent requests | Medium | High | Deferred tail probe (8MB threshold) + sequential downloads (SOLVED) |
+| CDN 401 Unauthorized on stale Range requests | Medium | High | Route Range requests through archive.org for fresh redirect (SOLVED) |
+| Throttle deadlock (probe_mode decoder_pos race) | Medium | Critical | Skip decoder_pos updates during probe_mode reads (SOLVED) |
 | PSP std::sync::Once blocker (symphonia) | Certain | — | Skip symphonia entirely on PSP, use demux_lite |
 | PSP Media Engine not emulated in PPSSPP | High | Medium | openh264 software fallback (Task 3d) |
 | openh264 cross-compile to MIPS | Medium | Low | Verify early; if blocked, ME-only on real HW |
 | Audio sync drift over long playback | Medium | Medium | Timestamp-based resync every 5s, hard resync on seek |
 | Memory Stick I/O latency during decode | Low | Medium | Read-ahead buffer (64 KB), ME handles decode latency |
-| Large moov atom at file end (slow initial load) | Low | Low | moov is typically <100 KB even for long videos |
+| Large moov atom at file end (slow initial load) | Medium | Medium | Deferred tail probe fetches last 8MB; moov can be 1-4MB for long videos |
 | Corrupt/truncated downloads on PSP | Medium | Medium | Verify file size post-download, hash check if available |
 
 ---
@@ -485,6 +502,11 @@ fn select_smallest_for(files: &[ArchiveFile]) -> Option<&ArchiveFile> {
 
 ### Phase 2 (SDL2 Desktop):
 - [x] TV Guide video plays via oasis-video without ffmpeg installed
+- [x] Streaming playback — video starts before download completes (StreamingBuffer)
+- [x] Deferred tail probe prevents CDN connection throttling
+- [x] CDN failover via redirect-following Range requests
+- [x] Prebuffer gate (2MB) prevents decoder starvation on seek
+- [x] Backpressure throttle prevents unbounded memory growth
 - [ ] Peak memory ≤25 MB during 25-minute video playback
 - [x] A/V sync within ±50ms over 10-minute session (PTS-based pacing)
 - [x] Seek works within keyframe boundaries (<500ms latency)

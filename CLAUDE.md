@@ -115,6 +115,17 @@ The PSP firmware's built-in SSL uses root CAs from 2008 and SSL 3.0, which canno
 
 TV Guide on PSP uses in-memory streaming (no disk I/O). The I/O thread downloads HTTP(S) data, buffers the MP4 `moov` atom (~1-3MB), parses track tables via `demux_lite::Mp4Lite`, then extracts interleaved audio/video samples from the `mdat` stream in file-offset order. Video samples are skipped (H.264 decode requires real ME hardware, not available on PPSSPP). Audio AAC frames are decoded via `sceAudiocodec` hardware and output through `AudioChannel::output_blocking`. Backpressure is applied via retry-with-sleep when the audio command queue is full, naturally throttling the download to real-time playback speed.
 
+### Desktop Video Streaming
+
+TV Guide on desktop uses in-process progressive streaming via `StreamingBuffer` (in `tv_controller.rs`). A background download thread feeds an `Arc<StreamingInner>` sliding-window buffer while symphonia decodes from the same buffer via `Read + Seek`. Key mechanisms:
+
+- **`probe_mode`** — During symphonia's probe phase, reads return zeros so mdat body is skipped instantly. `decoder_pos` is NOT updated during probe to prevent a throttle deadlock.
+- **Deferred tail probe** — A separate thread fetches the last 8MB for moov-at-end files, but only launches after >8MB body data received without finding moov. Prevents CDN connection throttling.
+- **`should_throttle()`** — Backpressure: `decoder_pos > 0 ? received > decoder_pos + 16MB : has_moov && buf_size > 16MB`
+- **CDN failover** — Range requests route through the original archive.org URL (not cached CDN) to get a fresh 302 redirect, avoiding 401 errors from stale CDN nodes. `open_range_connection()` follows redirect chains.
+- **Prebuffer gate** — Decoder waits for MIN_PREBUFFER (2MB) of body data before seeking, preventing reads into empty buffer regions.
+- **Seek restart** — After probe discovers moov, the download restarts from the estimated byte offset via a Range request. Linear interpolation: `(seek_secs / duration) * file_size`.
+
 ### Key Abstraction: Backend Traits
 
 `oasis-types/src/backend.rs` defines the only abstraction boundary between core and platform (re-exported by `oasis-core`):
@@ -142,7 +153,7 @@ The framework is split into 20 workspace crates. Each module below is its own cr
 - **oasis-net** -- TCP networking with PSK authentication, remote terminal, FTP transfer
 - **oasis-audio** -- Audio manager with playlist, shuffle/repeat modes, MP3 ID3 tag parsing
 - **oasis-platform** -- Platform service traits: PowerService, TimeService, UsbService, NetworkService, OskService
-- **oasis-video** -- MP4/H.264+AAC decode pipeline. Feature flags: `h264` (openh264 video decode + symphonia demux/AAC), `no-std-demux` (lightweight `demux_lite::Mp4Lite` parser, no symphonia/no std::sync::Once — PSP-safe), `video-decode` (re-exports `SoftwareVideoDecoder` for desktop/UE5). Streaming pipelines: desktop downloads MP4 then decodes in-process with PTS-based A/V sync; PSP streams in-memory via `demux_lite` + `sceAudiocodec` AAC hardware decode + `sceVideocodec` H.264 (real HW only, audio-only on PPSSPP) with backpressure-throttled I/O
+- **oasis-video** -- MP4/H.264+AAC decode pipeline. Feature flags: `h264` (openh264 video decode + symphonia demux/AAC), `no-std-demux` (lightweight `demux_lite::Mp4Lite` parser, no symphonia/no std::sync::Once — PSP-safe), `video-decode` (re-exports `SoftwareVideoDecoder` for desktop/UE5). Streaming pipelines: desktop uses `StreamingBuffer` sliding-window for progressive playback with deferred tail probe, CDN failover, and PTS-based A/V sync; PSP streams in-memory via `demux_lite` + `sceAudiocodec` AAC hardware decode + `sceVideocodec` H.264 (real HW only, audio-only on PPSSPP) with backpressure-throttled I/O
 - **oasis-vector** -- Resolution-independent vector graphics: scene graph with path-based drawing operations (fill, stroke, arcs, beziers), Altimit-style dashboard icons, and frame-driven animations. Integrates via `SdiBackend` vector graphics trait extensions
 - **oasis-core** -- Coordination layer: app runner with 16 apps (File Manager, Settings, Network, Music Player, Photo Viewer, Package Manager, Browser, System Monitor, TV Guide, Internet Radio, Terminal, Text Editor, Calculator, Clock, Paint, Games), dashboard, agent/MCP, plugin, scripting, status/bottom bars
 

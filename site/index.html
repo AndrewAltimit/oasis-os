@@ -450,7 +450,7 @@
       </div>
       <div class="feature-card">
         <h3>TV Guide</h3>
-        <p>Internet Archive-powered TV channels with a 1980s Prevue Channel aesthetic. Browse channels, view schedules, and watch video &mdash; software decode on desktop (no ffmpeg required), in-canvas on WASM, in-memory streaming with AAC hardware decode on PSP.</p>
+        <p>Internet Archive-powered TV channels with a 1980s Prevue Channel aesthetic. Browse channels, view schedules, and watch video &mdash; progressive streaming decode on desktop (no ffmpeg required) with CDN failover and A/V sync, in-canvas on WASM, in-memory streaming with AAC hardware decode on PSP.</p>
       </div>
       <div class="feature-card">
         <h3>Internet Radio</h3>
@@ -490,7 +490,7 @@
 &#9500;&#9472;&#9472; <span class="crate-name">oasis-terminal</span>   (90+ commands, 17 modules, shell features)
 &#9500;&#9472;&#9472; <span class="crate-name">oasis-browser</span>    (HTML/CSS/Gemini: DOM, CSS cascade, layout engine, JS bindings)
 &#9500;&#9472;&#9472; <span class="crate-name">oasis-js</span>         (JavaScript engine: QuickJS-NG runtime, console, DOM)
-&#9500;&#9472;&#9472; <span class="crate-name">oasis-video</span>      (software MP4/H.264+AAC decode: streaming VideoSource API)
+&#9500;&#9472;&#9472; <span class="crate-name">oasis-video</span>      (MP4/H.264+AAC decode: StreamingBuffer, progressive playback)
 &#9500;&#9472;&#9472; <span class="crate-name">oasis-vector</span>     (vector graphics: scene graph, path ops, icons, animations)
 &#9492;&#9472;&#9472; <span class="crate-name">oasis-core</span>       (coordination: 16 apps, dashboard, agent, plugin, script)
     &#9500;&#9472;&#9472; <span class="crate-name">oasis-backend-sdl</span>  &#8594; <span class="crate-name">oasis-app</span>      (desktop binary)
@@ -541,8 +541,10 @@
           embedded-tls with RSA certificate support and automatic HTTP&rarr;HTTPS fallback
           (pure Rust, enabling HTTPS streaming on 2008-era firmware that only speaks SSL 3.0),
           and <strong>in-memory MP4 streaming</strong> with AAC hardware decode for TV Guide
-          video playback supporting both HTTP and HTTPS CDN nodes &mdash; all running on a
-          modern Rust toolchain with full safety guarantees.
+          video playback supporting both HTTP and HTTPS CDN nodes. The desktop backend
+          features <strong>progressive streaming video</strong> via a sliding-window
+          <code>StreamingBuffer</code> with deferred tail probe, CDN failover, and
+          PTS-based A/V sync &mdash; no ffmpeg required.
         </p>
       </div>
       <img class="psp-screenshot"
