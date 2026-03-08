@@ -140,8 +140,7 @@ pub struct AppState {
     /// Current streaming session — cancelled on re-tune to abort orphaned
     /// download + decoder threads.
     #[cfg(feature = "_video")]
-    pub tv_stream_session:
-        Option<std::sync::Arc<crate::tv_controller::StreamingInner>>,
+    pub tv_stream_session: Option<std::sync::Arc<crate::tv_controller::StreamingInner>>,
     /// URL currently being played — used to deduplicate tune requests.
     #[cfg(feature = "_video")]
     pub tv_current_url: Option<String>,

@@ -508,8 +508,7 @@ impl AudioBackend for SdlAudioBackend {
 
         // Open device lazily with the stream's format, or reopen if format changed.
         let format_changed = self.device.is_some()
-            && (self.sample_rate != sample_rate as i32
-                || self.channels != channels as usize);
+            && (self.sample_rate != sample_rate as i32 || self.channels != channels as usize);
         if format_changed {
             log::info!(
                 "SDL audio: format change {}Hz/{}ch -> {}Hz/{}ch, reopening device",

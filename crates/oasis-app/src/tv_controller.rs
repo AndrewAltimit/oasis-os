@@ -67,7 +67,8 @@ fn poll_catalog_fetch(state: &mut AppState) {
                                 let data = format!("tune_url {url} {seek_secs}");
                                 log::info!("TV: auto-tune CH{} -> {}", ch_num, req.episode.title,);
                                 runner.set_pending_request(TV_REQUEST_PATH.to_string(), data);
-                            } else if let Some(catalog) = guide.catalogs.get(idx).and_then(|c| c.as_ref())
+                            } else if let Some(catalog) =
+                                guide.catalogs.get(idx).and_then(|c| c.as_ref())
                                 && let Some(ep) = catalog.episodes.first()
                             {
                                 // Force-tune to first episode (schedule has no slot
@@ -379,6 +380,23 @@ const MAX_LOOKAHEAD: u64 = 16 * 1024 * 1024; // 16 MB
 #[cfg(feature = "_video")]
 const INIT_WARN_THRESHOLD: usize = 128 * 1024 * 1024; // 128 MB
 
+/// Time without receiving any body bytes before we consider the connection
+/// stalled and attempt a reconnect (inspired by ffmpeg's `reconnect_on_http`).
+#[cfg(feature = "_video")]
+const STALL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// Maximum number of reconnect attempts on a stalled Range download.
+#[cfg(feature = "_video")]
+const MAX_RECONNECTS: u32 = 3;
+
+/// Short-seek read-through threshold: if the seek position is within this
+/// many bytes of data already downloaded, continue the linear download
+/// instead of reconnecting with a new Range request.  Inspired by ffmpeg's
+/// `avio.c` short-seek optimization (ffmpeg defaults to ~half buffer size).
+/// We use a larger value since HTTP Range reconnects are expensive.
+#[cfg(feature = "_video")]
+const SHORT_SEEK_THRESHOLD: u64 = 4 * 1024 * 1024; // 4 MB
+
 /// Sliding-window buffer state, protected by a mutex.
 #[cfg(feature = "_video")]
 struct SlidingState {
@@ -476,9 +494,7 @@ impl StreamingInner {
             );
         }
         // Warn once when buffer is large (init phase holds entire file).
-        if buf_len > INIT_WARN_THRESHOLD
-            && (buf_len - chunk.len()) <= INIT_WARN_THRESHOLD
-        {
+        if buf_len > INIT_WARN_THRESHOLD && (buf_len - chunk.len()) <= INIT_WARN_THRESHOLD {
             log::warn!(
                 "TV: buffer reached {:.0}MB during init (file held in memory until demuxer probes)",
                 buf_len as f64 / (1024.0 * 1024.0),
@@ -670,8 +686,7 @@ impl StreamingInner {
     fn cancel(&self) {
         self.cancelled
             .store(true, std::sync::atomic::Ordering::Release);
-        self.done
-            .store(true, std::sync::atomic::Ordering::Release);
+        self.done.store(true, std::sync::atomic::Ordering::Release);
         self.condvar.notify_all();
     }
 
@@ -916,10 +931,9 @@ impl std::io::Read for StreamingBuffer {
 
         // Update decoder position and evict old data after successful read.
         if n > 0 {
-            self.inner.decoder_pos.store(
-                self.pos,
-                std::sync::atomic::Ordering::Relaxed,
-            );
+            self.inner
+                .decoder_pos
+                .store(self.pos, std::sync::atomic::Ordering::Relaxed);
             self.maybe_evict();
         }
 
@@ -1120,10 +1134,7 @@ fn fetch_range_inner(
     }
 
     let body = response[header_end + 4..].to_vec();
-    log::info!(
-        "TV: Range response: HTTP {status}, {} bytes",
-        body.len(),
-    );
+    log::info!("TV: Range response: HTTP {status}, {} bytes", body.len(),);
     Ok(body)
 }
 
@@ -1132,27 +1143,39 @@ fn fetch_range_inner(
 #[cfg(feature = "_video")]
 fn check_moov_at_start_restart(s: &SlidingState, seek_secs: u64) -> Option<u64> {
     let moov_data = s.moov.as_ref().map(|(_, d)| d)?;
-    let dur = parse_moov_duration(moov_data)?;
-    let (mdat_off, mdat_size) = s
-        .atoms
-        .iter()
-        .find(|(_, size, cc)| cc == b"mdat" && *size > 1024)
-        .map(|(off, size, _)| (*off, *size))?;
-    let frac = (seek_secs as f64 / dur).clamp(0.0, 1.0);
-    let seek_byte = mdat_off + (frac * mdat_size as f64) as u64;
-    let start_from = seek_byte.saturating_sub(2 * 1024 * 1024).max(mdat_off);
-    let downloaded = s.bytes_received;
-    if start_from > downloaded + 4 * 1024 * 1024 {
+
+    // Try exact seek-byte from MP4 sample tables (stts+stss+stsc+stco+stsz).
+    // Falls back to linear interpolation if tables can't be parsed.
+    let seek_byte = if let Some(exact) =
+        oasis_video::demux_lite::seek_byte_from_moov(moov_data, seek_secs as f64)
+    {
         log::info!(
-            "TV: moov-at-start: duration={dur:.0}s, seek={seek_secs}s \
-             -> byte ~{:.1}MB (downloaded {:.1}MB), restarting from {:.1}MB",
+            "TV: exact seek-byte from sample tables: {:.1}MB for {seek_secs}s",
+            exact as f64 / (1024.0 * 1024.0),
+        );
+        exact
+    } else {
+        // Fallback: linear interpolation within mdat.
+        let dur = parse_moov_duration(moov_data)?;
+        let (mdat_off, mdat_size) = s
+            .atoms
+            .iter()
+            .find(|(_, size, cc)| cc == b"mdat" && *size > 1024)
+            .map(|(off, size, _)| (*off, *size))?;
+        let frac = (seek_secs as f64 / dur).clamp(0.0, 1.0);
+        mdat_off + (frac * mdat_size as f64) as u64
+    };
+
+    let start_from = seek_byte.saturating_sub(2 * 1024 * 1024);
+    let downloaded = s.bytes_received;
+    if start_from > downloaded + SHORT_SEEK_THRESHOLD {
+        log::info!(
+            "TV: moov-at-start: seek={seek_secs}s -> byte ~{:.1}MB \
+             (downloaded {:.1}MB), restarting from {:.1}MB",
             seek_byte as f64 / (1024.0 * 1024.0),
             downloaded as f64 / (1024.0 * 1024.0),
             start_from as f64 / (1024.0 * 1024.0),
         );
-        // Clear the linearly-downloaded data since we're jumping ahead.
-        // NOTE: We can't mutate `s` here since we only have a shared ref;
-        // the caller must handle the buffer reset.
         Some(start_from)
     } else {
         None
@@ -1184,9 +1207,7 @@ fn parse_tail_for_moov(
             break None;
         }
         let haystack = &tail_data[search_from..];
-        let pos = haystack
-            .windows(4)
-            .position(|w| w == needle);
+        let pos = haystack.windows(4).position(|w| w == needle);
         let Some(rel) = pos else { break None };
         let fourcc_off = search_from + rel;
         let atom_start = fourcc_off - 4; // size field is 4 bytes before fourcc
@@ -1198,8 +1219,7 @@ fn parse_tail_for_moov(
         ]);
         let atom_size = if size32 == 1 && atom_start + 16 <= tail_data.len() {
             let b = &tail_data[atom_start + 8..atom_start + 16];
-            u64::from_be_bytes([b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7]])
-                as usize
+            u64::from_be_bytes([b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7]]) as usize
         } else if size32 == 0 {
             tail_data.len() - atom_start
         } else {
@@ -1214,8 +1234,10 @@ fn parse_tail_for_moov(
     };
 
     let Some((atom_start, atom_size)) = found else {
-        log::info!("TV: tail probe: no moov found in last {:.1}MB of file",
-            tail_data.len() as f64 / (1024.0 * 1024.0));
+        log::info!(
+            "TV: tail probe: no moov found in last {:.1}MB of file",
+            tail_data.len() as f64 / (1024.0 * 1024.0)
+        );
         return;
     };
 
@@ -1227,29 +1249,41 @@ fn parse_tail_for_moov(
         file_off,
     );
 
-    // If seeking, estimate byte offset and set base_offset so the
+    // If seeking, compute byte offset and set base_offset so the
     // main download thread can restart from the seek position.
-    if seek_secs > 0
-        && let Some(dur) = parse_moov_duration(&moov_data)
-    {
-        let mdat_end = file_off;
-        let frac = (seek_secs as f64 / dur).clamp(0.0, 1.0);
-        let seek_byte = (frac * mdat_end as f64) as u64;
+    if seek_secs > 0 {
+        // Try exact seek-byte from sample tables, fall back to linear.
+        let seek_byte = if let Some(exact) =
+            oasis_video::demux_lite::seek_byte_from_moov(&moov_data, seek_secs as f64)
+        {
+            log::info!(
+                "TV: tail probe: exact seek-byte from sample tables: {:.1}MB",
+                exact as f64 / (1024.0 * 1024.0),
+            );
+            exact
+        } else if let Some(dur) = parse_moov_duration(&moov_data) {
+            let mdat_end = file_off;
+            let frac = (seek_secs as f64 / dur).clamp(0.0, 1.0);
+            (frac * mdat_end as f64) as u64
+        } else {
+            // Cannot estimate — retain moov and let decoder seek.
+            let mut s = buffer.state.lock().unwrap_or_else(|e| e.into_inner());
+            s.moov = Some((file_off, moov_data));
+            buffer.condvar.notify_all();
+            return;
+        };
         let start_from = seek_byte.saturating_sub(2 * 1024 * 1024);
         log::info!(
-            "TV: tail probe: duration={dur:.0}s, seek={seek_secs}s \
-             -> byte ~{:.1}MB, need download from {:.1}MB",
+            "TV: tail probe: seek={seek_secs}s -> byte ~{:.1}MB, \
+             need download from {:.1}MB",
             seek_byte as f64 / (1024.0 * 1024.0),
             start_from as f64 / (1024.0 * 1024.0),
         );
-        let mut s = buffer
-            .state
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
+        let mut s = buffer.state.lock().unwrap_or_else(|e| e.into_inner());
         s.moov = Some((file_off, moov_data));
         // Set base_offset so the main download loop knows where
         // to restart from (checked via `restart_offset`).
-        if start_from > s.bytes_received + 4 * 1024 * 1024 {
+        if start_from > s.bytes_received + SHORT_SEEK_THRESHOLD {
             // Retain file header (ftyp + mdat header) for symphonia
             // probe.  Upgrade if current header is smaller.
             if !s.buf.is_empty() {
@@ -1272,10 +1306,7 @@ fn parse_tail_for_moov(
         return;
     }
 
-    let mut s = buffer
-        .state
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let mut s = buffer.state.lock().unwrap_or_else(|e| e.into_inner());
     s.moov = Some((file_off, moov_data));
     buffer.condvar.notify_all();
 }
@@ -1314,8 +1345,7 @@ fn parse_moov_duration(moov_data: &[u8]) -> Option<f64> {
                 // timescale starts at byte 20, duration at byte 24
                 let timescale = u32::from_be_bytes([data[20], data[21], data[22], data[23]]);
                 let duration = u64::from_be_bytes([
-                    data[24], data[25], data[26], data[27],
-                    data[28], data[29], data[30], data[31],
+                    data[24], data[25], data[26], data[27], data[28], data[29], data[30], data[31],
                 ]);
                 if timescale > 0 {
                     return Some(duration as f64 / timescale as f64);
@@ -1328,27 +1358,20 @@ fn parse_moov_duration(moov_data: &[u8]) -> Option<f64> {
     None
 }
 
-/// Download from a specific byte offset using HTTP Range request.
-/// Pushes data into the buffer starting at `start_offset`.
+/// Open a TLS connection, send an HTTP Range request, and return the stream
+/// plus any leftover body bytes from the header read.
+///
+/// Returns `(stream, leftover_body_bytes)` on success.
 #[cfg(feature = "_video")]
-fn stream_download_range(
-    url: &str,
+fn open_range_connection(
+    host: &str,
+    path: &str,
     tls: &oasis_core::net::RustlsTlsProvider,
-    buffer: &StreamingInner,
-    start_offset: u64,
-    total_size: u64,
-) -> Result<(), String> {
+    range_start: u64,
+    range_end: u64,
+) -> Result<(Box<dyn oasis_core::backend::NetworkStream>, Vec<u8>), String> {
     use oasis_core::backend::NetworkBackend;
     use oasis_core::net::TlsProvider;
-
-    let stripped = url
-        .strip_prefix("https://")
-        .or_else(|| url.strip_prefix("http://"))
-        .ok_or_else(|| format!("unsupported URL: {url}"))?;
-    let (host, path) = stripped
-        .split_once('/')
-        .map(|(h, p)| (h, format!("/{p}")))
-        .unwrap_or((stripped, "/".to_string()));
 
     let mut net = oasis_core::net::StdNetworkBackend::new();
     let tcp = net
@@ -1360,8 +1383,7 @@ fn stream_download_range(
 
     let request = format!(
         "GET {path} HTTP/1.1\r\nHost: {host}\r\nUser-Agent: OASIS_OS/0.1\r\n\
-         Range: bytes={start_offset}-{}\r\nConnection: close\r\n\r\n",
-        total_size.saturating_sub(1),
+         Range: bytes={range_start}-{range_end}\r\nConnection: close\r\n\r\n",
     );
     let req_bytes = request.as_bytes();
     let mut written = 0;
@@ -1382,20 +1404,14 @@ fn stream_download_range(
     // Read headers.
     let mut header_buf = Vec::with_capacity(4096);
     let mut buf = [0u8; 8192];
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(120);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
 
     let leftover_start = loop {
-        if buffer.is_cancelled() {
-            log::info!("TV: range download cancelled during headers");
-            return Ok(());
-        }
         if std::time::Instant::now() > deadline {
-            buffer.finish();
-            return Err("timeout reading headers".into());
+            return Err("timeout reading Range headers".into());
         }
         match stream.read(&mut buf) {
             Ok(0) => {
-                buffer.finish();
                 return Err("connection closed before headers".into());
             },
             Ok(n) => {
@@ -1410,72 +1426,177 @@ fn stream_download_range(
                     std::thread::sleep(std::time::Duration::from_millis(1));
                     continue;
                 }
-                buffer.finish();
                 return Err(format!("read headers: {e}"));
             },
         }
     };
 
-    // Log HTTP response status.
     let header_str = String::from_utf8_lossy(&header_buf[..leftover_start]);
     let status_line = header_str.lines().next().unwrap_or("");
-    log::info!(
-        "TV: range download response: {status_line} (leftover={})",
-        header_buf.len() - leftover_start,
-    );
+    log::info!("TV: Range response: {status_line}");
 
-    let leftover = &header_buf[leftover_start..];
-    if !leftover.is_empty() {
-        buffer.push(leftover);
+    // Check for 2xx status.
+    let status = header_str
+        .lines()
+        .next()
+        .and_then(|l| l.split_whitespace().nth(1))
+        .and_then(|s| s.parse::<u16>().ok())
+        .unwrap_or(0);
+    if !(200..300).contains(&status) {
+        return Err(format!("HTTP {status} on Range request"));
     }
 
-    // Stream body.
-    let mut range_body_received = 0u64;
-    loop {
+    let leftover = header_buf[leftover_start..].to_vec();
+    Ok((stream, leftover))
+}
+
+/// Download from a specific byte offset using HTTP Range request.
+/// Pushes data into the buffer starting at `start_offset`.
+///
+/// Implements stall detection with automatic reconnect (inspired by ffmpeg's
+/// `reconnect_on_http`): if no data arrives for `STALL_TIMEOUT` seconds,
+/// the connection is dropped and a new Range request resumes from the last
+/// byte received.  Up to `MAX_RECONNECTS` reconnect attempts are made.
+#[cfg(feature = "_video")]
+fn stream_download_range(
+    url: &str,
+    tls: &oasis_core::net::RustlsTlsProvider,
+    buffer: &StreamingInner,
+    start_offset: u64,
+    total_size: u64,
+) -> Result<(), String> {
+    let stripped = url
+        .strip_prefix("https://")
+        .or_else(|| url.strip_prefix("http://"))
+        .ok_or_else(|| format!("unsupported URL: {url}"))?;
+    let (host, path) = stripped
+        .split_once('/')
+        .map(|(h, p)| (h, format!("/{p}")))
+        .unwrap_or((stripped, "/".to_string()));
+
+    let range_end = total_size.saturating_sub(1);
+    let mut current_offset = start_offset;
+    let mut reconnects = 0u32;
+
+    'outer: loop {
         if buffer.is_cancelled() {
-            log::info!("TV: range download cancelled (received {range_body_received} body bytes)");
+            log::info!("TV: range download cancelled before connect");
             return Ok(());
         }
-        // Backpressure: pause downloading when buffer is far ahead of decoder.
-        if buffer.should_throttle() {
-            std::thread::sleep(std::time::Duration::from_millis(100));
-            continue;
+
+        let (mut stream, leftover) =
+            match open_range_connection(host, &path, tls, current_offset, range_end) {
+                Ok(pair) => pair,
+                Err(e) => {
+                    if reconnects < MAX_RECONNECTS {
+                        reconnects += 1;
+                        log::warn!(
+                            "TV: Range connect failed ({e}), reconnect {reconnects}/\
+                         {MAX_RECONNECTS} from {:.1}MB",
+                            current_offset as f64 / (1024.0 * 1024.0),
+                        );
+                        std::thread::sleep(std::time::Duration::from_secs(1));
+                        continue;
+                    }
+                    buffer.finish();
+                    return Err(e);
+                },
+            };
+
+        if !leftover.is_empty() {
+            buffer.push(&leftover);
+            current_offset += leftover.len() as u64;
         }
-        if std::time::Instant::now() > deadline {
-            buffer.finish();
-            return Err("timeout downloading".into());
-        }
-        match stream.read(&mut buf) {
-            Ok(0) => break,
-            Ok(n) => {
-                if range_body_received == 0 {
-                    log::info!(
-                        "TV: range download first data: {n} bytes \
-                         (buffer at {:.1}MB)",
-                        buffer.bytes_received() as f64 / (1024.0 * 1024.0),
-                    );
-                }
-                range_body_received += n as u64;
-                buffer.push(&buf[..n]);
-            },
-            Err(e) => {
-                let msg = format!("{e}");
-                if msg.contains("WouldBlock") || msg.contains("would block") {
-                    std::thread::sleep(std::time::Duration::from_millis(1));
-                    continue;
-                }
-                if buffer.bytes_received() > start_offset {
-                    break;
-                }
-                buffer.finish();
-                return Err(format!("read: {e}"));
-            },
+
+        // Stream body with stall detection.
+        let mut buf = [0u8; 8192];
+        let mut last_data_time = std::time::Instant::now();
+        let mut first_data_logged = current_offset > start_offset;
+
+        loop {
+            if buffer.is_cancelled() {
+                log::info!(
+                    "TV: range download cancelled ({:.1}MB received)",
+                    (current_offset - start_offset) as f64 / (1024.0 * 1024.0),
+                );
+                return Ok(());
+            }
+            if buffer.should_throttle() {
+                std::thread::sleep(std::time::Duration::from_millis(100));
+                last_data_time = std::time::Instant::now();
+                continue;
+            }
+            match stream.read(&mut buf) {
+                Ok(0) => break 'outer, // Clean EOF
+                Ok(n) => {
+                    if !first_data_logged {
+                        log::info!(
+                            "TV: range download first data: {n} bytes \
+                             (buffer at {:.1}MB)",
+                            buffer.bytes_received() as f64 / (1024.0 * 1024.0),
+                        );
+                        first_data_logged = true;
+                    }
+                    current_offset += n as u64;
+                    buffer.push(&buf[..n]);
+                    last_data_time = std::time::Instant::now();
+                },
+                Err(e) => {
+                    let msg = format!("{e}");
+                    if msg.contains("WouldBlock") || msg.contains("would block") {
+                        // Check for stall.
+                        if last_data_time.elapsed() > STALL_TIMEOUT {
+                            if reconnects >= MAX_RECONNECTS {
+                                log::warn!(
+                                    "TV: stall detected, max reconnects \
+                                     ({MAX_RECONNECTS}) exhausted"
+                                );
+                                if current_offset > start_offset {
+                                    break 'outer; // partial success
+                                }
+                                buffer.finish();
+                                return Err("stalled, max reconnects exhausted".into());
+                            }
+                            reconnects += 1;
+                            log::info!(
+                                "TV: stall detected ({:.0}s no data), \
+                                 reconnect {reconnects}/{MAX_RECONNECTS} \
+                                 from {:.1}MB",
+                                last_data_time.elapsed().as_secs_f64(),
+                                current_offset as f64 / (1024.0 * 1024.0),
+                            );
+                            drop(stream);
+                            continue 'outer;
+                        }
+                        std::thread::sleep(std::time::Duration::from_millis(1));
+                        continue;
+                    }
+                    // Hard error — try reconnect or finish.
+                    if reconnects < MAX_RECONNECTS && current_offset < total_size {
+                        reconnects += 1;
+                        log::warn!(
+                            "TV: read error ({msg}), reconnect \
+                             {reconnects}/{MAX_RECONNECTS} from {:.1}MB",
+                            current_offset as f64 / (1024.0 * 1024.0),
+                        );
+                        drop(stream);
+                        std::thread::sleep(std::time::Duration::from_secs(1));
+                        continue 'outer;
+                    }
+                    if current_offset > start_offset {
+                        break 'outer; // partial success
+                    }
+                    buffer.finish();
+                    return Err(format!("read: {msg}"));
+                },
+            }
         }
     }
 
     let received = buffer.bytes_received();
     log::info!(
-        "TV: range download complete: {:.1}MB received (from offset {:.1}MB)",
+        "TV: range download complete: {:.1}MB received (from offset {:.1}MB, \
+         {reconnects} reconnects)",
         (received - start_offset) as f64 / (1024.0 * 1024.0),
         start_offset as f64 / (1024.0 * 1024.0),
     );
@@ -1681,9 +1802,7 @@ fn stream_download_inner(
                     checked_seek_restart = true;
                     // If base_offset was moved far ahead by the tail probe
                     // (moov-at-end case), restart from there.
-                    if s.base_offset > 4 * 1024 * 1024
-                        && s.buf.len() < 1024 * 1024
-                    {
+                    if s.base_offset > 4 * 1024 * 1024 && s.buf.len() < 1024 * 1024 {
                         Some(s.base_offset)
                     } else {
                         // moov found at start — check if seek position is far ahead.
@@ -1696,10 +1815,7 @@ fn stream_download_inner(
             if let Some(start_from) = restart_from {
                 // Clear buffer and set base_offset for the restart.
                 {
-                    let mut s = buffer
-                        .state
-                        .lock()
-                        .unwrap_or_else(|e| e.into_inner());
+                    let mut s = buffer.state.lock().unwrap_or_else(|e| e.into_inner());
                     // For moov-at-start: retain the entire current buffer
                     // (ftyp + moov + mdat header) so symphonia can probe
                     // the full atom structure after restart.  At this point
@@ -1707,8 +1823,7 @@ fn stream_download_inner(
                     // For moov-at-end: the tail probe already stored moov
                     // separately; only retain if base_offset is still 0
                     // (moov-at-start case).
-                    if s.base_offset == 0 && s.moov.is_some() && !s.buf.is_empty()
-                    {
+                    if s.base_offset == 0 && s.moov.is_some() && !s.buf.is_empty() {
                         let full_header = s.buf.clone();
                         s.moov = Some((s.base_offset, full_header));
                     }
@@ -1721,13 +1836,7 @@ fn stream_download_inner(
                     start_from as f64 / (1024.0 * 1024.0),
                 );
                 let range_url = format!("https://{host}{path}");
-                return stream_download_range(
-                    &range_url,
-                    tls,
-                    buffer,
-                    start_from,
-                    content_length,
-                );
+                return stream_download_range(&range_url, tls, buffer, start_from, content_length);
             }
         }
 
@@ -1827,16 +1936,12 @@ fn tick_video_player(state: &mut AppState, backend: &mut impl SdiBackend) {
         {
             state.tv_stream_session.as_ref().and_then(|session| {
                 let received = session.bytes_received();
-                let total =
-                    session.total_size.load(std::sync::atomic::Ordering::Relaxed);
+                let total = session
+                    .total_size
+                    .load(std::sync::atomic::Ordering::Relaxed);
                 if total > 0 {
                     let pct = (received * 100).checked_div(total).unwrap_or(0);
-                    Some(format!(
-                        "{}% ({}/{}KB)",
-                        pct,
-                        received / 1024,
-                        total / 1024,
-                    ))
+                    Some(format!("{}% ({}/{}KB)", pct, received / 1024, total / 1024,))
                 } else if received > 0 {
                     Some(format!("{}KB", received / 1024))
                 } else {
@@ -1946,8 +2051,7 @@ fn auto_advance_episode(state: &mut AppState, backend: &mut impl SdiBackend) {
         return;
     };
 
-    let url =
-        oasis_core::apps::tv_guide::catalog::ChannelCatalog::download_url(&slot.episode);
+    let url = oasis_core::apps::tv_guide::catalog::ChannelCatalog::download_url(&slot.episode);
     let seek_secs = slot.elapsed_secs;
     let data = format!("tune_url {url} {seek_secs}");
     log::info!(

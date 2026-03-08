@@ -136,7 +136,10 @@ impl FfmpegDecoder {
         ffmpeg::init().map_err(|e| VideoError::Demux(format!("ffmpeg init: {e}")))?;
 
         // Set up custom I/O via AVIO context.
-        let io_ctx = Box::new(IoContext { source, read_count: 0 });
+        let io_ctx = Box::new(IoContext {
+            source,
+            read_count: 0,
+        });
         let io_ptr = &*io_ctx as *const IoContext as *mut std::ffi::c_void;
 
         const AVIO_BUF_SIZE: usize = 32 * 1024;
@@ -457,7 +460,9 @@ impl FfmpegDecoder {
 
         match decoder.send_packet(pkt) {
             Ok(()) => {},
-            Err(ffmpeg::Error::Other { errno: ffmpeg::util::error::EAGAIN }) => {
+            Err(ffmpeg::Error::Other {
+                errno: ffmpeg::util::error::EAGAIN,
+            }) => {
                 // Decoder buffer full — drain frames first, then retry.
                 let mut decoded = ffmpeg::frame::Video::empty();
                 while decoder.receive_frame(&mut decoded).is_ok() {
@@ -489,7 +494,9 @@ impl FfmpegDecoder {
         let mut decoded = ffmpeg::frame::Video::empty();
         match decoder.receive_frame(&mut decoded) {
             Ok(()) => {},
-            Err(ffmpeg::Error::Other { errno: ffmpeg::util::error::EAGAIN }) => {
+            Err(ffmpeg::Error::Other {
+                errno: ffmpeg::util::error::EAGAIN,
+            }) => {
                 // If we buffered frames during drain, return the first one.
                 if let Some(frame) = self.video_buffer.pop_front() {
                     return Ok(Some(frame));
@@ -580,7 +587,9 @@ impl FfmpegDecoder {
         let mut decoded = ffmpeg::frame::Audio::empty();
         match decoder.receive_frame(&mut decoded) {
             Ok(()) => {},
-            Err(ffmpeg::Error::Other { errno: ffmpeg::util::error::EAGAIN }) => {
+            Err(ffmpeg::Error::Other {
+                errno: ffmpeg::util::error::EAGAIN,
+            }) => {
                 return Ok(None);
             },
             Err(e) => {
@@ -649,9 +658,7 @@ impl FfmpegDecoder {
             let pkt = match self.read_packet() {
                 Some(p) => p,
                 None => {
-                    log::info!(
-                        "FFmpeg: next_video_frame EOF after {packets_read} packets"
-                    );
+                    log::info!("FFmpeg: next_video_frame EOF after {packets_read} packets");
                     return Ok(None);
                 },
             };

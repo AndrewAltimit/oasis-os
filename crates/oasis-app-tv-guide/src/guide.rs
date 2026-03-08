@@ -622,8 +622,7 @@ impl TvGuideState {
         }
 
         // Video preview texture.
-        let is_loading =
-            self.tuned_channel.is_some() && self.preview_texture.is_none();
+        let is_loading = self.tuned_channel.is_some() && self.preview_texture.is_none();
         ensure_obj(sdi, "tv_hdr_preview_vid");
         if let Ok(obj) = sdi.get_mut("tv_hdr_preview_vid") {
             if let Some(tex) = self.preview_texture {

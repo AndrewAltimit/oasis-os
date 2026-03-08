@@ -391,7 +391,11 @@ impl VideoPlayer {
             let has_avcc = moov_data.is_some();
             log::info!(
                 "VideoPlayer: opening decoder (streaming source, avcc={})",
-                if has_avcc { "pre-extracted" } else { "full-scan fallback" },
+                if has_avcc {
+                    "pre-extracted"
+                } else {
+                    "full-scan fallback"
+                },
             );
             let t0 = std::time::Instant::now();
             let open_result = if let Some(ref moov) = moov_data {
@@ -518,9 +522,7 @@ impl VideoPlayer {
         let (audio_rate, audio_ch) = decoder.audio_format();
         let has_audio = audio_rate > 0 && audio_ch > 0;
         if has_audio {
-            log::info!(
-                "VideoPlayer: audio track: {audio_rate}Hz, {audio_ch}ch",
-            );
+            log::info!("VideoPlayer: audio track: {audio_rate}Hz, {audio_ch}ch",);
         } else {
             log::warn!("VideoPlayer: no audio track found in video");
         }
@@ -556,22 +558,21 @@ impl VideoPlayer {
                             );
                         }
                         let ts = frame.timestamp_secs;
-                        let (data, w, h) =
-                            if frame.width == target_w && frame.height == target_h {
-                                (frame.rgba, frame.width, frame.height)
-                            } else {
-                                (
-                                    simple_scale(
-                                        &frame.rgba,
-                                        frame.width,
-                                        frame.height,
-                                        target_w,
-                                        target_h,
-                                    ),
+                        let (data, w, h) = if frame.width == target_w && frame.height == target_h {
+                            (frame.rgba, frame.width, frame.height)
+                        } else {
+                            (
+                                simple_scale(
+                                    &frame.rgba,
+                                    frame.width,
+                                    frame.height,
                                     target_w,
                                     target_h,
-                                )
-                            };
+                                ),
+                                target_w,
+                                target_h,
+                            )
+                        };
                         if video_tx
                             .send(VideoFrame {
                                 data,

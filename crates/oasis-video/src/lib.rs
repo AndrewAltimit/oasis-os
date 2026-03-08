@@ -15,7 +15,6 @@ compile_error!("features `h264` and `ffmpeg` are mutually exclusive — use one 
 
 pub mod aac;
 pub mod demux;
-#[cfg(feature = "no-std-demux")]
 pub mod demux_lite;
 #[cfg(feature = "ffmpeg")]
 #[allow(clippy::unnecessary_cast)]
@@ -27,13 +26,13 @@ pub mod yuv;
 use std::io::{Cursor, Read, Seek};
 
 #[cfg(not(feature = "ffmpeg"))]
-use std::collections::VecDeque;
-#[cfg(not(feature = "ffmpeg"))]
 use demux::{DemuxedPacket, Mp4Demuxer, TrackKind};
+#[cfg(not(feature = "ffmpeg"))]
+use std::collections::VecDeque;
 
 // Re-export avcC helpers so callers can pre-extract from moov data.
 #[cfg(not(feature = "ffmpeg"))]
-pub use demux::{find_avcc_in_mp4, AvccConfig};
+pub use demux::{AvccConfig, find_avcc_in_mp4};
 
 /// A streaming video source: anything that is `Read + Seek + Send + Sync`.
 ///
@@ -315,13 +314,10 @@ impl SoftwareVideoDecoder {
                         };
                         skipped_to_idr += 1;
                         if Self::contains_idr(&packet.data) {
-                            log::info!(
-                                "H264: found IDR after skipping {skipped_to_idr} packets"
-                            );
+                            log::info!("H264: found IDR after skipping {skipped_to_idr} packets");
                             // Prepend SPS/PPS to IDR for decoder reinitialization.
                             let decode_data = if let Some(ref ps) = params {
-                                let mut buf =
-                                    Vec::with_capacity(ps.len() + packet.data.len());
+                                let mut buf = Vec::with_capacity(ps.len() + packet.data.len());
                                 buf.extend_from_slice(ps);
                                 buf.extend_from_slice(&packet.data);
                                 buf
@@ -345,7 +341,7 @@ impl SoftwareVideoDecoder {
                                 }));
                             }
                             break; // IDR didn't produce frame — fall through
-                                   // to normal decode loop for subsequent frames.
+                            // to normal decode loop for subsequent frames.
                         }
                         if skipped_to_idr > 2000 {
                             return Err(VideoError::SkipLimit);

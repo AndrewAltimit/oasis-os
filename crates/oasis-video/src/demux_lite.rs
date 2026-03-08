@@ -251,7 +251,7 @@ impl<R: Read + Seek> Mp4Lite<R> {
 
 /// Read a box header at the current position.
 fn read_box_header<R: Read + Seek>(r: &mut R) -> Result<Option<BoxHeader>, LiteError> {
-    let offset = r.seek(SeekFrom::Current(0))?;
+    let offset = r.stream_position()?;
     let mut buf = [0u8; 8];
     match r.read_exact(&mut buf) {
         Ok(()) => {},
@@ -389,6 +389,7 @@ fn current_track_mut<'a>(
 // Individual box parsers
 // ---------------------------------------------------------------------------
 
+#[allow(dead_code)]
 fn read_u16_be<R: Read>(r: &mut R) -> Result<u16, LiteError> {
     let mut buf = [0u8; 2];
     r.read_exact(&mut buf)?;
@@ -422,7 +423,7 @@ fn parse_stsd<R: Read + Seek>(
     let entries_end = offset + size;
 
     for _ in 0..entry_count {
-        let pos = r.seek(SeekFrom::Current(0))?;
+        let pos = r.stream_position()?;
         if pos >= entries_end {
             break;
         }
@@ -708,17 +709,12 @@ fn parse_ctts<R: Read + Seek>(
     audio: &mut Option<TrackInfo>,
 ) -> Result<(), LiteError> {
     r.seek(SeekFrom::Start(offset))?;
-    let version_flags = read_u32_be(r)?;
-    let version = version_flags >> 24;
+    let _version_flags = read_u32_be(r)?;
     let count = read_u32_be(r)?;
     let mut entries = Vec::with_capacity(count as usize);
     for _ in 0..count {
         let sample_count = read_u32_be(r)?;
-        let sample_offset = if version == 0 {
-            read_u32_be(r)? as i32
-        } else {
-            read_u32_be(r)? as i32 // v1 is signed
-        };
+        let sample_offset = read_u32_be(r)? as i32;
         entries.push(CttsEntry {
             sample_count,
             sample_offset,
@@ -963,10 +959,10 @@ fn read_sample<R: Read + Seek>(
     let keyframe = is_keyframe(&track.table, sample_idx);
 
     // AVCC→Annex B for video.
-    if track.kind == TrackKind::Video {
-        if let Some(avcc) = &track.avcc {
-            data = avcc_to_annex_b(&data, avcc, keyframe)?;
-        }
+    if track.kind == TrackKind::Video
+        && let Some(avcc) = &track.avcc
+    {
+        data = avcc_to_annex_b(&data, avcc, keyframe)?;
     }
 
     let pts = sample_pts(&track.table, sample_idx);
@@ -1070,6 +1066,88 @@ fn find_sample_at(track: &TrackInfo, target_ts: u64) -> usize {
         }
     }
     sample.saturating_sub(1)
+}
+
+// ---------------------------------------------------------------------------
+// Public moov-parsing API for streaming seek estimation
+// ---------------------------------------------------------------------------
+
+/// Parse raw moov atom bytes and return track information.
+///
+/// The input should be the complete moov atom including the 8-byte header
+/// (size + `moov` fourcc).  Returns `(video_track, audio_track)`.
+///
+/// This is useful for streaming players that have pre-fetched the moov atom
+/// and need to compute exact sample byte offsets for seeking without having
+/// the full file available.
+pub fn parse_moov_tracks(
+    moov_data: &[u8],
+) -> Result<(Option<TrackInfo>, Option<TrackInfo>), LiteError> {
+    if moov_data.len() < 8 {
+        return Err(LiteError::Parse("moov too short".into()));
+    }
+    let mut cursor = std::io::Cursor::new(moov_data);
+    let moov_len = moov_data.len() as u64;
+
+    // Skip the moov atom header (8 bytes: size + fourcc).
+    // parse_boxes will recursively parse trak→mdia→minf→stbl children.
+    let mut video = None;
+    let mut audio = None;
+    parse_boxes(&mut cursor, 8, moov_len, &mut video, &mut audio)?;
+    Ok((video, audio))
+}
+
+/// Find the byte offset of the keyframe nearest to `seek_secs` using
+/// sample tables parsed from moov data.
+///
+/// Returns `Some(byte_offset)` of the keyframe's file position, or `None`
+/// if the moov doesn't contain enough information.
+pub fn seek_byte_from_moov(moov_data: &[u8], seek_secs: f64) -> Option<u64> {
+    let (video, _audio) = parse_moov_tracks(moov_data).ok()?;
+    let track = video?;
+    let count = track.sample_count();
+    if count == 0 {
+        return None;
+    }
+
+    // Find sample nearest to seek_secs via binary search on timestamp.
+    let target_sample = {
+        let mut lo = 0usize;
+        let mut hi = count;
+        while lo < hi {
+            let mid = lo + (hi - lo) / 2;
+            let ts = track.sample_timestamp(mid);
+            if ts < seek_secs {
+                lo = mid + 1;
+            } else {
+                hi = mid;
+            }
+        }
+        if lo > 0 { lo - 1 } else { 0 }
+    };
+
+    // Find the nearest keyframe at or before target_sample.
+    let keyframe_sample = if track.table.stss.is_empty() {
+        // All frames are keyframes.
+        target_sample
+    } else {
+        // stss is 1-based and sorted. Find largest entry <= target_sample+1.
+        let one_based = (target_sample + 1) as u32;
+        match track.table.stss.binary_search(&one_based) {
+            Ok(_) => target_sample,
+            Err(0) => {
+                // Before first keyframe — use first keyframe.
+                (track.table.stss[0] as usize).saturating_sub(1)
+            },
+            Err(i) => {
+                // stss[i-1] is the largest keyframe <= target.
+                (track.table.stss[i - 1] as usize).saturating_sub(1)
+            },
+        }
+    };
+
+    let (offset, _size) = track.sample_offset_size(keyframe_sample)?;
+    Some(offset)
 }
 
 // ---------------------------------------------------------------------------
