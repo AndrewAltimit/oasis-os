@@ -373,6 +373,13 @@ const RETAIN_BEHIND: usize = 4 * 1024 * 1024; // 4 MB
 #[cfg(feature = "_video")]
 const MAX_LOOKAHEAD: u64 = 16 * 1024 * 1024; // 16 MB
 
+/// Minimum bytes of body data that must be buffered before the decoder
+/// starts reading.  Ensures the decoder doesn't block on CDN latency
+/// during initial playback.  The browser's `<video>` element does this
+/// automatically; we must do it explicitly for the desktop pipeline.
+#[cfg(feature = "_video")]
+pub(crate) const MIN_PREBUFFER: u64 = 2 * 1024 * 1024; // 2 MB
+
 /// Maximum buffer size before a warning is logged (during init phase).
 /// The demuxer's `read_to_end()` + `seek(0)` pattern requires the full file
 /// in memory during init; eviction MUST NOT remove data before seek-back.
@@ -742,6 +749,53 @@ impl StreamingInner {
         }
     }
 
+    /// Block until at least `min_bytes` of body data have been buffered,
+    /// or until the download finishes/is cancelled.  Returns `true` if
+    /// the minimum was reached, `false` on timeout/cancel/done.
+    pub(crate) fn wait_for_buffered(
+        &self,
+        min_bytes: u64,
+        timeout: std::time::Duration,
+    ) -> bool {
+        let deadline = std::time::Instant::now() + timeout;
+        let mut s = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        loop {
+            if s.buf.len() as u64 >= min_bytes {
+                log::info!(
+                    "TV: prebuffer ready: {:.1}MB buffered",
+                    s.buf.len() as f64 / (1024.0 * 1024.0),
+                );
+                return true;
+            }
+            if self.is_cancelled() || self.is_done() {
+                log::info!(
+                    "TV: prebuffer ended early: {:.1}MB buffered (done={}, cancelled={})",
+                    s.buf.len() as f64 / (1024.0 * 1024.0),
+                    self.is_done(),
+                    self.is_cancelled(),
+                );
+                // If some data arrived, proceed anyway.
+                return !s.buf.is_empty();
+            }
+            let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+            if remaining.is_zero() {
+                log::warn!(
+                    "TV: prebuffer timeout: {:.1}MB buffered (wanted {:.1}MB)",
+                    s.buf.len() as f64 / (1024.0 * 1024.0),
+                    min_bytes as f64 / (1024.0 * 1024.0),
+                );
+                // Proceed with whatever we have.
+                return !s.buf.is_empty();
+            }
+            let wait = remaining.min(std::time::Duration::from_millis(200));
+            let result = self
+                .condvar
+                .wait_timeout(s, wait)
+                .unwrap_or_else(|e| e.into_inner());
+            s = result.0;
+        }
+    }
+
     /// Disable probe mode so reads block on real data instead of
     /// returning zeros.  Called after the decoder's probe phase completes.
     pub(crate) fn disable_probe_mode(&self) {
@@ -972,7 +1026,16 @@ impl std::io::Read for StreamingBuffer {
         };
 
         // Update decoder position and evict old data after successful read.
-        if n > 0 {
+        // Skip during probe_mode — probe reads return zeros and don't
+        // represent real decoder progress.  Updating decoder_pos during
+        // probe would race with the download thread's seek-restart logic
+        // that resets decoder_pos to the Range start offset.
+        if n > 0
+            && !self
+                .inner
+                .probe_mode
+                .load(std::sync::atomic::Ordering::Relaxed)
+        {
             self.inner
                 .decoder_pos
                 .store(self.pos, std::sync::atomic::Ordering::Relaxed);
@@ -1030,11 +1093,7 @@ impl std::io::Seek for StreamingBuffer {
         self.pos = new_pos as u64;
         self.logged_wait = false; // reset so next wait/gap is logged
         // Log significant seeks (> 1MB jump) for debugging streaming issues.
-        let jump = if self.pos > old_pos {
-            self.pos - old_pos
-        } else {
-            old_pos - self.pos
-        };
+        let jump = self.pos.abs_diff(old_pos);
         if jump > 1024 * 1024 {
             log::info!(
                 "TV: StreamingBuffer seek {:.1}MB -> {:.1}MB (jump {:.1}MB)",
@@ -1548,6 +1607,34 @@ fn open_range_connection(
         .and_then(|s| s.parse::<u16>().ok())
         .unwrap_or(0);
 
+    // Follow redirects (archive.org 302 → CDN node).
+    if matches!(status, 301 | 302 | 303 | 307 | 308) {
+        let location = header_str
+            .lines()
+            .find(|l| l.len() > 9 && l[..9].eq_ignore_ascii_case("location:"))
+            .and_then(|l| l.split_once(':').map(|(_, v)| v.trim().to_string()));
+        if let Some(loc) = location {
+            log::info!("TV: Range redirect {status} -> {loc}");
+            let redir = loc
+                .strip_prefix("https://")
+                .or_else(|| loc.strip_prefix("http://"))
+                .ok_or_else(|| format!("bad redirect: {loc}"))?;
+            let (redir_host, redir_path) = redir
+                .split_once('/')
+                .map(|(h, p)| (h, format!("/{p}")))
+                .unwrap_or((redir, "/".to_string()));
+            drop(stream);
+            return open_range_connection(
+                redir_host,
+                &redir_path,
+                tls,
+                range_start,
+                range_end,
+            );
+        }
+        return Err(format!("HTTP {status} with no Location header"));
+    }
+
     match status {
         206 => {
             // Partial Content — server honoured the Range request.
@@ -1635,6 +1722,10 @@ fn stream_download_range(
         }
 
         // Stream body with stall detection.
+        log::info!(
+            "TV: range body loop starting at {:.1}MB (reconnect {reconnects})",
+            current_offset as f64 / (1024.0 * 1024.0),
+        );
         let mut buf = [0u8; 8192];
         let mut last_data_time = std::time::Instant::now();
         let mut was_throttled = false;
@@ -1660,7 +1751,15 @@ fn stream_download_range(
                 was_throttled = false;
             }
             match stream.read(&mut buf) {
-                Ok(0) => break 'outer, // Clean EOF
+                Ok(0) => {
+                    log::info!(
+                        "TV: range body EOF at {:.1}MB (received {:.1}MB from {:.1}MB)",
+                        current_offset as f64 / (1024.0 * 1024.0),
+                        (current_offset - start_offset) as f64 / (1024.0 * 1024.0),
+                        start_offset as f64 / (1024.0 * 1024.0),
+                    );
+                    break 'outer;
+                }, // Clean EOF
                 Ok(n) => {
                     if !first_data_logged {
                         log::info!(
@@ -1745,7 +1844,8 @@ fn stream_download(
     buffer: &std::sync::Arc<StreamingInner>,
     seek_secs: u64,
 ) -> Result<(), String> {
-    stream_download_inner(url, tls, buffer, 5, seek_secs)
+    let original_url = url.to_string();
+    stream_download_inner(url, tls, buffer, 5, seek_secs, &original_url)
 }
 
 #[cfg(feature = "_video")]
@@ -1755,6 +1855,7 @@ fn stream_download_inner(
     buffer: &std::sync::Arc<StreamingInner>,
     redirects_left: u8,
     seek_secs: u64,
+    original_url: &str,
 ) -> Result<(), String> {
     use oasis_core::backend::NetworkBackend;
     use oasis_core::net::TlsProvider;
@@ -1846,7 +1947,9 @@ fn stream_download_inner(
         if let Some(loc) = location {
             log::info!("TV: stream redirect {status} -> {loc}");
             drop(stream);
-            return stream_download_inner(&loc, tls, buffer, redirects_left - 1, seek_secs);
+            return stream_download_inner(
+                &loc, tls, buffer, redirects_left - 1, seek_secs, original_url,
+            );
         }
         return Err(format!("HTTP {status} with no Location header"));
     }
@@ -1875,48 +1978,20 @@ fn stream_download_inner(
         buffer.push(leftover);
     }
 
-    // Spawn a concurrent tail probe to find moov-at-end without blocking
-    // the linear download.  For moov-at-start files the linear stream finds
-    // moov faster; for moov-at-end files the tail probe wins.
-    if content_length > 10 * 1024 * 1024 {
-        let has_moov = buffer
-            .state
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .moov
-            .is_some();
-        if !has_moov {
-            let tail_buffer = std::sync::Arc::clone(buffer);
-            let tail_url = format!("https://{host}{path}");
-            let tail_tls = tls.clone();
-            std::thread::spawn(move || {
-                let tail_size = (8 * 1024 * 1024u64).min(content_length / 4);
-                let tail_offset = content_length.saturating_sub(tail_size);
-                log::info!(
-                    "TV: probing tail {:.1}MB of {:.0}MB file for moov via Range",
-                    tail_size as f64 / (1024.0 * 1024.0),
-                    content_length as f64 / (1024.0 * 1024.0),
-                );
-                match fetch_range(&tail_tls, &tail_url, tail_offset, content_length) {
-                    Ok(tail_data) => {
-                        parse_tail_for_moov(
-                            &tail_buffer,
-                            &tail_data,
-                            tail_offset,
-                            content_length,
-                            seek_secs,
-                        );
-                    },
-                    Err(e) => {
-                        log::warn!("TV: Range request for moov failed: {e}");
-                    },
-                }
-            });
-        }
-    }
-
     // Track whether we've already checked for moov-based seek restart.
     let mut checked_seek_restart = false;
+
+    // Deferred tail probe: only launch after we've received >2MB without
+    // finding moov.  For moov-at-start files (moov within first ~1.2MB),
+    // the linear stream discovers moov before the threshold, so no tail
+    // probe is launched.  This avoids concurrent HTTPS connections to the
+    // CDN which causes connection throttling (0 body bytes on the Range
+    // download while the tail probe consumes bandwidth).
+    let mut tail_probe_launched = content_length <= 10 * 1024 * 1024; // skip for small files
+    // Threshold must exceed the largest plausible moov-at-start atom
+    // (observed up to ~4MB) plus margin, so moov is fully retained
+    // before we decide whether to launch the tail probe.
+    const TAIL_PROBE_THRESHOLD: u64 = 8 * 1024 * 1024;
 
     // Stream remaining body into the shared buffer.
     loop {
@@ -1964,12 +2039,84 @@ fn stream_download_inner(
                     s.bytes_received = start_from;
                     s.buf.clear();
                 }
+                // Reset decoder_pos so throttle doesn't think we're
+                // far ahead of the decoder (decoder_pos was left at the
+                // probe position ~1MB while bytes_received jumps to
+                // the seek restart offset).
+                buffer.decoder_pos.store(
+                    start_from,
+                    std::sync::atomic::Ordering::Relaxed,
+                );
                 log::info!(
                     "TV: restarting download from byte {:.1}MB via Range",
                     start_from as f64 / (1024.0 * 1024.0),
                 );
-                let range_url = format!("https://{host}{path}");
-                return stream_download_range(&range_url, tls, buffer, start_from, content_length);
+                // Use original archive.org URL for Range requests —
+                // open_range_connection follows the 302 redirect to the CDN.
+                // This avoids 401 errors from CDN nodes that reject direct
+                // Range requests without a fresh redirect.
+                return stream_download_range(
+                    original_url, tls, buffer, start_from, content_length,
+                );
+            }
+        }
+
+        // Deferred tail probe: if we've downloaded >8MB and moov still not
+        // found, launch the tail probe now.  This ensures moov-at-start files
+        // never launch a competing concurrent connection.  Also skip if moov
+        // was already found and a seek restart is pending/done.
+        if !tail_probe_launched
+            && !checked_seek_restart
+            && buffer.bytes_received() > TAIL_PROBE_THRESHOLD
+        {
+            let has_moov = buffer
+                .state
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .moov
+                .is_some();
+            if has_moov {
+                // moov already found in linear stream — no tail probe needed.
+                tail_probe_launched = true;
+                log::info!("TV: moov found at start, skipping tail probe");
+            } else {
+                tail_probe_launched = true;
+                let tail_buffer = std::sync::Arc::clone(buffer);
+                let tail_url = original_url.to_string();
+                let tail_tls = tls.clone();
+                std::thread::spawn(move || {
+                    let tail_size =
+                        (8 * 1024 * 1024u64).min(content_length / 4);
+                    let tail_offset =
+                        content_length.saturating_sub(tail_size);
+                    log::info!(
+                        "TV: probing tail {:.1}MB of {:.0}MB file \
+                         for moov via Range",
+                        tail_size as f64 / (1024.0 * 1024.0),
+                        content_length as f64 / (1024.0 * 1024.0),
+                    );
+                    match fetch_range(
+                        &tail_tls,
+                        &tail_url,
+                        tail_offset,
+                        content_length,
+                    ) {
+                        Ok(tail_data) => {
+                            parse_tail_for_moov(
+                                &tail_buffer,
+                                &tail_data,
+                                tail_offset,
+                                content_length,
+                                seek_secs,
+                            );
+                        },
+                        Err(e) => {
+                            log::warn!(
+                                "TV: Range request for moov failed: {e}"
+                            );
+                        },
+                    }
+                });
             }
         }
 

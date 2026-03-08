@@ -429,7 +429,16 @@ impl VideoPlayer {
                 cb();
             }
 
+            // Wait for enough data to be buffered before seeking/decoding.
+            // This prevents the decoder from blocking on CDN latency during
+            // initial playback (the browser <video> element does this
+            // automatically; we must do it explicitly).
             if seek_secs > 0 {
+                log::info!("VideoPlayer: waiting for prebuffer before seek...");
+                moov_source.wait_for_buffered(
+                    super::tv_controller::MIN_PREBUFFER,
+                    std::time::Duration::from_secs(15),
+                );
                 log::info!("VideoPlayer: seeking to {seek_secs}s...");
                 match decoder.seek(seek_secs as f64) {
                     Ok(()) => log::info!("VideoPlayer: seek complete"),
