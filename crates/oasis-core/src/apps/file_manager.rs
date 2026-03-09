@@ -112,16 +112,6 @@ impl FilePanel {
         Some(join_path(&self.browse_dir, name))
     }
 
-    /// Whether the currently selected item is a directory.
-    #[allow(dead_code)]
-    fn selected_is_dir(&self) -> bool {
-        let abs_idx = self.scroll + self.cursor;
-        self.lines.get(abs_idx).is_some_and(|l| {
-            let l = l.trim();
-            l != ".." && l.ends_with('/')
-        })
-    }
-
     /// Refresh the panel listing from VFS.
     pub fn refresh(&mut self, vfs: &dyn Vfs) {
         self.lines = list_directory(vfs, &self.browse_dir);

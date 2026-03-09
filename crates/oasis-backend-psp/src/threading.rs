@@ -1137,6 +1137,11 @@ static mut DL_TEMPLATE_ID: i32 = -1;
 ///
 /// On first call: `sceHttpInit` + `sceHttpCreateTemplate`.
 /// On subsequent calls: returns the cached template ID immediately.
+///
+/// # Safety
+///
+/// Must only be called from the I/O thread. Accesses mutable statics
+/// (`DL_TEMPLATE_ID`) and PSP HTTP syscalls.
 unsafe fn ensure_dl_template() -> Result<i32, String> {
     use psp::sys;
 
@@ -1192,6 +1197,12 @@ unsafe fn ensure_dl_template() -> Result<i32, String> {
 ///
 /// On redirect-loop failure (CDN requires HTTPS), returns the HTTPS
 /// redirect URL as the second element so the caller can try TLS.
+///
+/// # Safety
+///
+/// Must only be called from the I/O thread. Calls PSP HTTP syscalls
+/// (`sceHttpCreateConnection`, `sceHttpCreateRequest`, `sceHttpSendRequest`,
+/// `sceHttpReadData`) and accesses the persistent template ID.
 unsafe fn http_open_with_redirect(url: &str) -> Result<(i32, i32, u64), (String, Option<String>)> {
     use psp::sys;
 
@@ -1399,6 +1410,7 @@ impl RawHttpReader {
         };
         if ret < 0 {
             io_log(&format!("[IO-RAW] connect failed: {ret:#x}"));
+            // SAFETY: fd is a valid socket descriptor from sceNetInetSocket.
             unsafe { psp::sys::sceNetInetClose(fd) };
             return Err(format!("connect failed {host}:{port}: {ret:#x}"));
         }
@@ -1426,6 +1438,7 @@ impl RawHttpReader {
                 )
             };
             if n <= 0 {
+                // SAFETY: fd is a valid socket descriptor.
                 unsafe { psp::sys::sceNetInetClose(fd) };
                 return Err("send failed".into());
             }
@@ -1475,6 +1488,7 @@ impl RawHttpReader {
 
         // Handle redirects.
         if matches!(status, 301 | 302 | 303 | 307 | 308) {
+            // SAFETY: fd is a valid socket descriptor.
             unsafe { psp::sys::sceNetInetClose(fd) };
 
             if max_redirects == 0 {
@@ -1499,6 +1513,7 @@ impl RawHttpReader {
         }
 
         if status < 200 || status >= 300 {
+            // SAFETY: fd is a valid socket descriptor.
             unsafe { psp::sys::sceNetInetClose(fd) };
             return Err(format!("HTTP {status}"));
         }
@@ -2295,8 +2310,10 @@ impl TlsHttpReader {
                 return Err("cancelled".into());
             }
 
+            // SAFETY: sockaddr is a plain data struct, safe to zero-init.
             let mut sa_out: psp::sys::sockaddr = unsafe { core::mem::zeroed() };
             let mut sa_len: u32 = core::mem::size_of::<psp::sys::sockaddr>() as u32;
+            // SAFETY: fd is valid, sa_out/sa_len are properly initialized.
             let ret = unsafe { psp::sys::sceNetInetGetpeername(fd, &mut sa_out, &mut sa_len) };
             if ret == 0 {
                 connected = true;
@@ -2312,6 +2329,7 @@ impl TlsHttpReader {
         }
 
         if !connected {
+            // SAFETY: Retrieves errno from the PSP BSD socket layer.
             let errno = unsafe { psp::sys::sceNetInetGetErrno() };
             // SAFETY: Close socket on connect timeout.
             unsafe { psp::sys::sceNetInetClose(fd) };
@@ -2394,6 +2412,7 @@ impl TlsHttpReader {
             .and_then(|_| embedded_io::Write::flush(&mut tls))
         {
             drop(tls);
+            // SAFETY: Reclaim leaked TLS buffers and close socket on write error.
             unsafe {
                 let _ = Box::from_raw(read_buf_ptr);
                 let _ = Box::from_raw(write_buf_ptr);
@@ -2421,6 +2440,8 @@ impl TlsHttpReader {
                 },
                 Err(e) => {
                     drop(tls);
+                    // SAFETY: Reclaim leaked TLS buffers and close socket
+                    // on header read error.
                     unsafe {
                         let _ = Box::from_raw(read_buf_ptr);
                         let _ = Box::from_raw(write_buf_ptr);
@@ -2460,6 +2481,7 @@ impl TlsHttpReader {
 
             // Clean up current connection.
             drop(tls);
+            // SAFETY: Reclaim leaked TLS buffers and close socket before redirect.
             unsafe {
                 let _ = Box::from_raw(read_buf_ptr);
                 let _ = Box::from_raw(write_buf_ptr);
@@ -2478,6 +2500,7 @@ impl TlsHttpReader {
 
         if status < 200 || status >= 300 {
             drop(tls);
+            // SAFETY: Reclaim leaked TLS buffers and close socket on HTTP error.
             unsafe {
                 let _ = Box::from_raw(read_buf_ptr);
                 let _ = Box::from_raw(write_buf_ptr);

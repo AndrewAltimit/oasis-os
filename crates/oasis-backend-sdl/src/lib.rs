@@ -64,10 +64,11 @@ pub(crate) struct ClipRect {
 ///
 /// # Safety
 ///
-/// `textures` is declared before `texture_creator` so that Rust's drop order
-/// (declaration order) destroys all textures before the creator they borrow from.
-/// The `Texture<'static>` lifetime is erased via transmute in `load_texture()` --
-/// this is sound because the `TextureCreator` always outlives the textures.
+/// `Texture<'static>` lifetimes are erased via transmute in `load_texture()` --
+/// the textures actually borrow from `texture_creator` in this struct.
+/// An explicit `Drop` impl calls `self.textures.clear()` to destroy all textures
+/// while `texture_creator` is still alive, ensuring soundness regardless of
+/// field declaration order.
 pub struct SdlBackend {
     pub(crate) canvas: Canvas<Window>,
     pub(crate) event_pump: EventPump,
@@ -205,8 +206,8 @@ impl SdiCore for SdlBackend {
         texture.set_blend_mode(sdl3::render::BlendMode::Blend);
 
         // SAFETY: The texture borrows from self.texture_creator which lives in the
-        // same struct. `textures` is declared before `texture_creator`, so Rust drops
-        // textures first. The erased lifetime is therefore always valid.
+        // same struct. The explicit `Drop` impl clears all textures before
+        // texture_creator is dropped. The erased lifetime is therefore always valid.
         let texture: Texture<'static> = unsafe { std::mem::transmute(texture) };
 
         let id = self.next_texture_id;
@@ -724,6 +725,18 @@ impl SdiBackend for SdlBackend {
 
     fn current_translate(&self) -> (i32, i32) {
         self.cumulative_translate
+    }
+}
+
+impl Drop for SdlBackend {
+    fn drop(&mut self) {
+        // SAFETY: Textures hold transmuted `'static` references that actually borrow
+        // from `self.texture_creator`. We must drop all textures before the
+        // texture_creator is dropped. Without this explicit Drop impl, correctness
+        // would depend on struct field declaration order (Rust drops fields in
+        // declaration order), which is a fragile invariant. Clearing here makes
+        // the safety guarantee explicit and immune to field reordering.
+        self.textures.clear();
     }
 }
 

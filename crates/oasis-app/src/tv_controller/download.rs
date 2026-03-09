@@ -23,14 +23,18 @@ pub(crate) const SHORT_SEEK_THRESHOLD: u64 = 4 * 1024 * 1024; // 4 MB
 
 /// Fetch a byte range from a URL via HTTP Range request.
 /// Returns the raw body bytes on success.
+///
+/// If `cancel` is provided, the download loop checks it periodically and
+/// returns early with an `Err` when the flag is set.
 #[cfg(feature = "_video")]
 pub(crate) fn fetch_range(
     tls: &oasis_core::net::RustlsTlsProvider,
     url: &str,
     start: u64,
     end: u64,
+    cancel: Option<&std::sync::atomic::AtomicBool>,
 ) -> Result<Vec<u8>, String> {
-    fetch_range_inner(tls, url, start, end, 3)
+    fetch_range_inner(tls, url, start, end, 3, cancel)
 }
 
 #[cfg(feature = "_video")]
@@ -40,6 +44,7 @@ fn fetch_range_inner(
     start: u64,
     end: u64,
     redirects_left: u8,
+    cancel: Option<&std::sync::atomic::AtomicBool>,
 ) -> Result<Vec<u8>, String> {
     use oasis_core::backend::NetworkBackend;
     use oasis_core::net::TlsProvider;
@@ -88,6 +93,11 @@ fn fetch_range_inner(
     let mut buf = [0u8; 8192];
     let mut deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
     loop {
+        if let Some(flag) = cancel
+            && flag.load(std::sync::atomic::Ordering::Acquire)
+        {
+            return Err("cancelled".into());
+        }
         if std::time::Instant::now() > deadline {
             return Err("timeout".into());
         }
@@ -133,7 +143,7 @@ fn fetch_range_inner(
             .find(|l| l.len() > 9 && l[..9].eq_ignore_ascii_case("location:"))
             .and_then(|l| l.split_once(':').map(|(_, v)| v.trim().to_string()));
         if let Some(loc) = location {
-            return fetch_range_inner(tls, &loc, start, end, redirects_left - 1);
+            return fetch_range_inner(tls, &loc, start, end, redirects_left - 1, cancel);
         }
         return Err(format!("HTTP {status} no Location"));
     }
@@ -1015,8 +1025,23 @@ fn stream_download_inner(
                         tail_size as f64 / (1024.0 * 1024.0),
                         content_length as f64 / (1024.0 * 1024.0),
                     );
-                    match fetch_range(&tail_tls, &tail_url, tail_offset, content_length) {
+                    // Use the buffer's cancelled flag so this download
+                    // aborts promptly when the session is cancelled.
+                    let cancel_flag = &tail_buffer.cancelled_flag();
+                    match fetch_range(
+                        &tail_tls,
+                        &tail_url,
+                        tail_offset,
+                        content_length,
+                        Some(cancel_flag),
+                    ) {
                         Ok(tail_data) => {
+                            // Check cancellation before processing results
+                            // to avoid mutating buffer state after cancel.
+                            if tail_buffer.is_cancelled() {
+                                log::info!("TV: tail probe cancelled, discarding result");
+                                return;
+                            }
                             parse_tail_for_moov(
                                 &tail_buffer,
                                 &tail_data,
@@ -1026,7 +1051,11 @@ fn stream_download_inner(
                             );
                         },
                         Err(e) => {
-                            log::warn!("TV: Range request for moov failed: {e}");
+                            if tail_buffer.is_cancelled() {
+                                log::info!("TV: tail probe cancelled");
+                            } else {
+                                log::warn!("TV: Range request for moov failed: {e}");
+                            }
                         },
                     }
                 });

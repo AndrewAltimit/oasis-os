@@ -333,6 +333,13 @@ impl StreamingInner {
         self.cancelled.load(std::sync::atomic::Ordering::Acquire)
     }
 
+    /// Returns a reference to the cancellation flag for passing to
+    /// functions that need to poll cancellation without a full
+    /// `StreamingInner` reference.
+    pub(crate) fn cancelled_flag(&self) -> &std::sync::atomic::AtomicBool {
+        &self.cancelled
+    }
+
     /// Wait until moov data is available (or download finishes/cancels).
     /// Returns a clone of the moov data if found.
     pub(crate) fn wait_for_moov(&self, timeout: std::time::Duration) -> Option<Vec<u8>> {

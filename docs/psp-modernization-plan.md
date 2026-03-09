@@ -15,7 +15,7 @@ source files (lib.rs, main.rs, theme.rs, types.rs, boot.rs, chrome.rs, views.rs,
 desktop.rs, commands.rs, font.rs, render.rs, textures.rs, status.rs, and more).
 The `oasis-core` backend traits gained new implementations (NetworkBackend, AudioBackend).
 The `SdiBackend` trait was later split into `SdiCore` (13 required) + `SdiBackend`
-(30 extended).
+(39 extended).
 
 ---
 

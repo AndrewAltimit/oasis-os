@@ -7,6 +7,7 @@
 
 pub mod animation;
 pub mod desktops;
+mod drag_resize;
 pub mod hit_test;
 pub mod manager;
 mod sdi_objects;

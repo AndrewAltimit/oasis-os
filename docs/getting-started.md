@@ -125,7 +125,7 @@ cargo build -p oasis-app --no-default-features --features javascript
 
 ## Taking Screenshots
 
-Generate screenshots for all 17 skins:
+Generate screenshots for all 18 skins:
 
 ```bash
 cargo run -p oasis-app --bin oasis-screenshot
@@ -247,9 +247,9 @@ oasis-os/
     oasis-types/        Foundation types, backend traits
     oasis-vfs/          Virtual file system
     oasis-sdi/          Scene display interface
-    oasis-ui/           27 reusable widgets
+    oasis-ui/           32 reusable widgets
     oasis-wm/           Window manager
-    oasis-skin/         TOML skin engine (17 skins)
+    oasis-skin/         TOML skin engine (18 skins)
     oasis-terminal/     90+ commands, shell interpreter
     oasis-browser/      HTML/CSS/Gemini browser engine
     oasis-js/           JavaScript engine (QuickJS-NG)

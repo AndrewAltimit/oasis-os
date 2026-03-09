@@ -81,9 +81,9 @@ oasis-types     (foundation: Color, Button, InputEvent, backend traits, error ty
 ├── oasis-sdi        (scene display interface: named object registry, z-order)
 ├── oasis-net        (TCP networking, PSK auth, remote terminal, FTP)
 ├── oasis-audio      (audio manager, playlist, MP3 ID3 parsing)
-├── oasis-ui         (27 widgets: Button, Card, TabBar, ListView, flex layout, etc.)
+├── oasis-ui         (32 widgets: Button, Card, TabBar, ListView, flex layout, etc.)
 ├── oasis-wm         (window manager: drag/resize, hit testing, decorations)
-├── oasis-skin       (TOML skin engine, 17 skins, theme derivation)
+├── oasis-skin       (TOML skin engine, 18 skins, theme derivation)
 ├── oasis-terminal   (90+ commands across 17+ modules, shell features)
 ├── oasis-browser    (HTML/CSS/Gemini: DOM, CSS cascade, layout engine, JS DOM bindings)
 ├── oasis-js         (JavaScript engine: QuickJS-NG runtime, console API)
@@ -146,7 +146,7 @@ The framework is split into 20 workspace crates. Each module below is its own cr
 - **oasis-skin** -- Data-driven TOML skin system with 18 skins (12 external TOML in `skins/`, 18 built-in). Theme derivation from 9 base colors.
 - **oasis-browser** -- Embeddable HTML/CSS/Gemini rendering engine: DOM parser, CSS cascade, block/inline/table layout, link navigation, reader mode, JavaScript DOM bindings
 - **oasis-js** -- JavaScript engine wrapping QuickJS-NG via rquickjs: `console` API (log/warn/error/info), inline `<script>` execution, DOM manipulation (`document.getElementById`, `createElement`, `textContent`, attributes), retained engine with event dispatch (click bubbling via `__oasis_dispatch_with_bubbling`, `stopPropagation`/`preventDefault`). Feature-gated (`javascript`)
-- **oasis-ui** -- 27 reusable widgets: Button, Card, TabBar, Panel, TextField, ListView, ScrollView, ProgressBar, Toggle, NinePatch, flex layout, Accordion, Avatar, Badge, Checkbox, Dropdown, Modal, Slider, Spinner, Toast, Tooltip, TreeView, and more
+- **oasis-ui** -- 32 reusable widgets: Button, Card, TabBar, Panel, InputField, ListView, ScrollView, ProgressBar, Toggle, NinePatch, flex layout, Accordion, Avatar, Badge, Checkbox, ColorPicker, ContextMenu, DatePicker, Divider, Dropdown, Icon, Modal, Radio, RichText, Slider, SpinBox, Spinner, SplitPane, Table, Toast, Tooltip, TreeView
 - **oasis-vfs** -- Virtual file system: `MemoryVfs` (in-RAM), `RealVfs` (disk), `GameAssetVfs` (UE5 with overlay writes)
 - **oasis-terminal** -- Command interpreter with 90+ commands across 17 modules (core, text, file, system, dev, fun, security, doc, audio, network, skin, UI, plus agent/plugin/script/transfer/update registered by oasis-core). Shell features: variable expansion, glob expansion, aliases, history, piping
 - **oasis-wm** -- Window manager (window configs, hit testing, drag/resize, minimize/maximize/close)

@@ -131,10 +131,13 @@ impl RemoteListener {
     pub fn start(&mut self, backend: &mut dyn NetworkBackend) -> Result<()> {
         backend.listen(self.config.port)?;
         #[cfg(not(feature = "tls-rustls"))]
-        log::warn!(
-            "Remote terminal listening WITHOUT TLS — PSK will be sent in plaintext. \
-             Enable the `tls-rustls` feature for encrypted connections."
-        );
+        if !self.config.psk.is_empty() {
+            log::warn!(
+                "Remote terminal listening WITHOUT TLS but PSK is configured. \
+                 Connections attempting PSK auth will be rejected. \
+                 Enable the `tls-rustls` feature for encrypted connections."
+            );
+        }
         self.listening = true;
         Ok(())
     }
@@ -199,10 +202,20 @@ impl RemoteListener {
                             // No auth required.
                             conn.auth = AuthState::Authenticated;
                             let _ = conn.stream.write(b"OASIS_OS remote terminal\n> ");
+                            self.connections.push(conn);
                         } else {
-                            let _ = conn.stream.write(b"AUTH_REQUIRED\n");
+                            #[cfg(not(feature = "tls-rustls"))]
+                            {
+                                // Reject PSK auth without TLS.
+                                let _ = conn.stream.write(b"AUTH_FAIL TLS required for PSK auth\n");
+                                let _ = conn.stream.close();
+                            }
+                            #[cfg(feature = "tls-rustls")]
+                            {
+                                let _ = conn.stream.write(b"AUTH_REQUIRED\n");
+                                self.connections.push(conn);
+                            }
                         }
-                        self.connections.push(conn);
                     }
                 },
                 Ok(None) => {},
