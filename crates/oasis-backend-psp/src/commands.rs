@@ -94,6 +94,8 @@ pub fn execute_command(cmd: &str, config: &mut psp::config::Config) -> CommandRe
             String::from("  plugin install - Install overlay PRX"),
             String::from("  plugin remove  - Remove overlay PRX"),
             String::from("  plugin status  - Plugin load status"),
+            String::from("  skin       - List available skins"),
+            String::from("  skin NAME  - Switch to named skin"),
             String::from("  selftest   - Run built-in test suite"),
             String::from("  clear      - Clear terminal"),
             String::new(),
