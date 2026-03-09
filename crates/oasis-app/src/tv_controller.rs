@@ -810,17 +810,43 @@ impl StreamingInner {
         drop(s);
 
         let decoder = self.decoder_pos.load(std::sync::atomic::Ordering::Relaxed);
-        if decoder > 0 {
-            // After decoder starts reading: throttle based on lookahead.
-            received > decoder + MAX_LOOKAHEAD
-        } else {
-            // During init: throttle once moov is found so the download
-            // doesn't race past the seek-restart point.  Before moov is
-            // found, the download must run freely so the tail probe (or
-            // linear scan) can discover it.
-            has_moov && buf_size > MAX_LOOKAHEAD
-        }
+        should_throttle_pure(decoder, received, has_moov, buf_size)
     }
+}
+
+/// Pure logic for throttle decision, extracted for testability.
+///
+/// - `decoder_pos > 0`: throttle if `received > decoder_pos + MAX_LOOKAHEAD`
+/// - `decoder_pos == 0`: throttle if moov found AND `buf_size > MAX_LOOKAHEAD`
+#[cfg(feature = "_video")]
+fn should_throttle_pure(
+    decoder_pos: u64,
+    bytes_received: u64,
+    has_moov: bool,
+    buf_size: u64,
+) -> bool {
+    if decoder_pos > 0 {
+        bytes_received > decoder_pos + MAX_LOOKAHEAD
+    } else {
+        has_moov && buf_size > MAX_LOOKAHEAD
+    }
+}
+
+/// Pure logic for linear seek interpolation within mdat.
+///
+/// Returns estimated byte offset = `mdat_offset + (seek_secs / duration) * mdat_size`.
+#[cfg(feature = "_video")]
+fn linear_seek_interpolation(
+    seek_secs: f64,
+    duration: f64,
+    mdat_offset: u64,
+    mdat_size: u64,
+) -> u64 {
+    if duration <= 0.0 {
+        return mdat_offset;
+    }
+    let frac = (seek_secs / duration).clamp(0.0, 1.0);
+    mdat_offset + (frac * mdat_size as f64) as u64
 }
 
 /// A reader cursor over a `StreamingInner` sliding-window buffer.
@@ -1274,8 +1300,12 @@ fn check_moov_at_start_restart(s: &SlidingState, seek_secs: u64) -> Option<u64> 
             .iter()
             .find(|(_, size, cc)| cc == b"mdat" && *size > 1024)
             .map(|(off, size, _)| (*off, *size))?;
-        let frac = (seek_secs as f64 / dur).clamp(0.0, 1.0);
-        Some(mdat_off + (frac * mdat_size as f64) as u64)
+        Some(linear_seek_interpolation(
+            seek_secs as f64,
+            dur,
+            mdat_off,
+            mdat_size,
+        ))
     });
 
     // Use the LINEAR estimate as start_from (it tracks where symphonia
@@ -1406,11 +1436,8 @@ fn parse_tail_for_moov(
         // may seek to an earlier position when considering both tracks.
         let exact_byte = oasis_video::demux_lite::seek_byte_from_moov(&moov_data, seek_secs as f64);
 
-        let linear_byte = parse_moov_duration(&moov_data).map(|dur| {
-            let mdat_end = file_off;
-            let frac = (seek_secs as f64 / dur).clamp(0.0, 1.0);
-            (frac * mdat_end as f64) as u64
-        });
+        let linear_byte = parse_moov_duration(&moov_data)
+            .map(|dur| linear_seek_interpolation(seek_secs as f64, dur, 0, file_off));
 
         let seek_byte = match (linear_byte, exact_byte) {
             (Some(linear), Some(exact)) => {
@@ -2391,4 +2418,300 @@ fn find_tv_guide_runner<'a>(
         log::trace!("TV: found TV Guide in open_runners (windowed)");
     }
     found
+}
+
+// -------------------------------------------------------------------
+// Tests
+// -------------------------------------------------------------------
+
+#[cfg(test)]
+#[cfg(feature = "_video")]
+mod tests {
+    use super::*;
+
+    // ---------------------------------------------------------------
+    // should_throttle_pure tests
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn throttle_decoder_zero_no_moov_no_throttle() {
+        assert!(!should_throttle_pure(0, 0, false, 0));
+    }
+
+    #[test]
+    fn throttle_decoder_zero_no_moov_large_buf_no_throttle() {
+        // Without moov, never throttle even with huge buffer.
+        assert!(!should_throttle_pure(0, 100_000_000, false, 100_000_000));
+    }
+
+    #[test]
+    fn throttle_decoder_zero_has_moov_small_buf_no_throttle() {
+        // moov found but buffer under threshold.
+        assert!(!should_throttle_pure(0, 1_000_000, true, 1_000_000));
+    }
+
+    #[test]
+    fn throttle_decoder_zero_has_moov_at_threshold_no_throttle() {
+        // Exactly at MAX_LOOKAHEAD — not over, so no throttle.
+        assert!(!should_throttle_pure(0, MAX_LOOKAHEAD, true, MAX_LOOKAHEAD));
+    }
+
+    #[test]
+    fn throttle_decoder_zero_has_moov_over_threshold_throttle() {
+        assert!(should_throttle_pure(
+            0,
+            MAX_LOOKAHEAD + 1,
+            true,
+            MAX_LOOKAHEAD + 1,
+        ));
+    }
+
+    #[test]
+    fn throttle_decoder_active_under_lookahead_no_throttle() {
+        let decoder = 10_000_000u64;
+        let received = decoder + MAX_LOOKAHEAD - 1;
+        assert!(!should_throttle_pure(decoder, received, true, received));
+    }
+
+    #[test]
+    fn throttle_decoder_active_at_boundary_no_throttle() {
+        let decoder = 10_000_000u64;
+        let received = decoder + MAX_LOOKAHEAD;
+        // received == decoder + MAX_LOOKAHEAD, not >, so no throttle.
+        assert!(!should_throttle_pure(decoder, received, true, received));
+    }
+
+    #[test]
+    fn throttle_decoder_active_over_lookahead_throttle() {
+        let decoder = 10_000_000u64;
+        let received = decoder + MAX_LOOKAHEAD + 1;
+        assert!(should_throttle_pure(decoder, received, true, received));
+    }
+
+    #[test]
+    fn throttle_decoder_active_ignores_moov_flag() {
+        // When decoder_pos > 0, moov doesn't matter.
+        let decoder = 5_000_000u64;
+        let received = decoder + MAX_LOOKAHEAD + 100;
+        assert!(should_throttle_pure(decoder, received, false, received));
+        assert!(should_throttle_pure(decoder, received, true, received));
+    }
+
+    #[test]
+    fn throttle_decoder_active_received_less_than_decoder() {
+        // Edge: received < decoder (shouldn't happen, but shouldn't panic).
+        assert!(!should_throttle_pure(100, 50, true, 50));
+    }
+
+    #[test]
+    fn throttle_large_values() {
+        // Multi-GB file scenario.
+        let decoder = 2_000_000_000u64; // 2 GB
+        let received = decoder + MAX_LOOKAHEAD + 1;
+        assert!(should_throttle_pure(decoder, received, true, received));
+    }
+
+    // ---------------------------------------------------------------
+    // linear_seek_interpolation tests
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn seek_interpolation_zero_secs() {
+        let offset = linear_seek_interpolation(0.0, 100.0, 1000, 50_000);
+        assert_eq!(offset, 1000);
+    }
+
+    #[test]
+    fn seek_interpolation_at_duration() {
+        let offset = linear_seek_interpolation(100.0, 100.0, 1000, 50_000);
+        assert_eq!(offset, 1000 + 50_000);
+    }
+
+    #[test]
+    fn seek_interpolation_half_duration() {
+        let offset = linear_seek_interpolation(50.0, 100.0, 1000, 50_000);
+        assert_eq!(offset, 1000 + 25_000);
+    }
+
+    #[test]
+    fn seek_interpolation_beyond_duration_clamps() {
+        // seek_secs > duration -> frac clamped to 1.0
+        let offset = linear_seek_interpolation(200.0, 100.0, 1000, 50_000);
+        assert_eq!(offset, 1000 + 50_000);
+    }
+
+    #[test]
+    fn seek_interpolation_duration_zero() {
+        // Edge: duration=0 -> returns mdat_offset (no division).
+        let offset = linear_seek_interpolation(50.0, 0.0, 1000, 50_000);
+        assert_eq!(offset, 1000);
+    }
+
+    #[test]
+    fn seek_interpolation_negative_duration() {
+        // Edge: negative duration -> returns mdat_offset.
+        let offset = linear_seek_interpolation(50.0, -10.0, 1000, 50_000);
+        assert_eq!(offset, 1000);
+    }
+
+    #[test]
+    fn seek_interpolation_small_file() {
+        let offset = linear_seek_interpolation(1.0, 2.0, 0, 100);
+        assert_eq!(offset, 50);
+    }
+
+    #[test]
+    fn seek_interpolation_large_file() {
+        // 4 GB file at quarter duration.
+        let file_size = 4_000_000_000u64;
+        let offset = linear_seek_interpolation(25.0, 100.0, 0, file_size);
+        assert_eq!(offset, 1_000_000_000);
+    }
+
+    // ---------------------------------------------------------------
+    // parse_moov_duration tests
+    // ---------------------------------------------------------------
+
+    /// Build a minimal moov atom containing an mvhd v0 child.
+    fn build_moov_v0(timescale: u32, duration: u32) -> Vec<u8> {
+        // mvhd v0: version(1) + flags(3) + create(4) + mod(4)
+        //          + timescale(4) + duration(4) = 20 bytes
+        let mut mvhd_body = Vec::new();
+        mvhd_body.push(0); // version 0
+        mvhd_body.extend_from_slice(&[0, 0, 0]); // flags
+        mvhd_body.extend_from_slice(&[0; 4]); // creation_time
+        mvhd_body.extend_from_slice(&[0; 4]); // modification_time
+        mvhd_body.extend_from_slice(&timescale.to_be_bytes());
+        mvhd_body.extend_from_slice(&duration.to_be_bytes());
+        // Pad to plausible size (real mvhd has more fields).
+        mvhd_body.extend_from_slice(&[0; 80]);
+
+        let mvhd_size = (8 + mvhd_body.len()) as u32;
+        let moov_size = (8 + mvhd_size as usize) as u32;
+
+        let mut moov = Vec::new();
+        moov.extend_from_slice(&moov_size.to_be_bytes());
+        moov.extend_from_slice(b"moov");
+        moov.extend_from_slice(&mvhd_size.to_be_bytes());
+        moov.extend_from_slice(b"mvhd");
+        moov.extend_from_slice(&mvhd_body);
+        moov
+    }
+
+    #[test]
+    fn parse_moov_duration_v0() {
+        let moov = build_moov_v0(1000, 60000);
+        let dur = parse_moov_duration(&moov);
+        assert_eq!(dur, Some(60.0));
+    }
+
+    #[test]
+    fn parse_moov_duration_zero_timescale() {
+        let moov = build_moov_v0(0, 60000);
+        assert_eq!(parse_moov_duration(&moov), None);
+    }
+
+    #[test]
+    fn parse_moov_duration_no_mvhd() {
+        // moov with only a trak child, no mvhd.
+        let trak_body = [0u8; 16];
+        let trak_size = (8 + trak_body.len()) as u32;
+        let moov_size = (8 + trak_size as usize) as u32;
+        let mut moov = Vec::new();
+        moov.extend_from_slice(&moov_size.to_be_bytes());
+        moov.extend_from_slice(b"moov");
+        moov.extend_from_slice(&trak_size.to_be_bytes());
+        moov.extend_from_slice(b"trak");
+        moov.extend_from_slice(&trak_body);
+        assert_eq!(parse_moov_duration(&moov), None);
+    }
+
+    #[test]
+    fn parse_moov_duration_too_short() {
+        assert_eq!(parse_moov_duration(&[0; 4]), None);
+    }
+
+    // ---------------------------------------------------------------
+    // maybe_evict tests (via StreamingBuffer)
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn evict_small_buffer_no_eviction() {
+        let inner = std::sync::Arc::new(StreamingInner::new());
+        // Push less than RETAIN_BEHIND bytes.
+        inner.push(&vec![0xAA; 1024]);
+        let sb = StreamingBuffer::new(std::sync::Arc::clone(&inner));
+        // Enable eviction.
+        sb.eviction_enabled
+            .store(true, std::sync::atomic::Ordering::Release);
+        sb.maybe_evict();
+        let s = inner.state.lock().unwrap();
+        // Nothing evicted — cursor is at 0, not past RETAIN_BEHIND.
+        assert_eq!(s.base_offset, 0);
+        assert_eq!(s.buf.len(), 1024);
+    }
+
+    #[test]
+    fn evict_large_buffer_evicts_old_data() {
+        let inner = std::sync::Arc::new(StreamingInner::new());
+        let data_size = RETAIN_BEHIND + 2 * 1024 * 1024;
+        inner.push(&vec![0xBB; data_size]);
+        let mut sb = StreamingBuffer::new(std::sync::Arc::clone(&inner));
+        sb.eviction_enabled
+            .store(true, std::sync::atomic::Ordering::Release);
+        // Move cursor past RETAIN_BEHIND.
+        sb.pos = data_size as u64;
+        sb.maybe_evict();
+        let s = inner.state.lock().unwrap();
+        // Some data should have been evicted.
+        assert!(s.base_offset > 0, "expected eviction");
+        // Remaining buffer should be approximately RETAIN_BEHIND.
+        assert!(
+            s.buf.len() <= RETAIN_BEHIND + 1,
+            "expected buf <= RETAIN_BEHIND after eviction"
+        );
+    }
+
+    #[test]
+    fn evict_disabled_no_eviction() {
+        let inner = std::sync::Arc::new(StreamingInner::new());
+        let data_size = RETAIN_BEHIND + 2 * 1024 * 1024;
+        inner.push(&vec![0xCC; data_size]);
+        let mut sb = StreamingBuffer::new(std::sync::Arc::clone(&inner));
+        // eviction_enabled defaults to false.
+        sb.pos = data_size as u64;
+        sb.maybe_evict();
+        let s = inner.state.lock().unwrap();
+        assert_eq!(s.base_offset, 0, "eviction should be disabled");
+        assert_eq!(s.buf.len(), data_size);
+    }
+
+    #[test]
+    fn evict_cursor_at_start_no_eviction() {
+        let inner = std::sync::Arc::new(StreamingInner::new());
+        inner.push(&vec![0xDD; RETAIN_BEHIND + 1024]);
+        let sb = StreamingBuffer::new(std::sync::Arc::clone(&inner));
+        sb.eviction_enabled
+            .store(true, std::sync::atomic::Ordering::Release);
+        // pos=0 means cursor_in_buf=0, not > RETAIN_BEHIND.
+        sb.maybe_evict();
+        let s = inner.state.lock().unwrap();
+        assert_eq!(s.base_offset, 0);
+    }
+
+    #[test]
+    fn evict_preserves_data_near_cursor() {
+        let inner = std::sync::Arc::new(StreamingInner::new());
+        let total = RETAIN_BEHIND * 3;
+        inner.push(&vec![0xEE; total]);
+        let mut sb = StreamingBuffer::new(std::sync::Arc::clone(&inner));
+        sb.eviction_enabled
+            .store(true, std::sync::atomic::Ordering::Release);
+        // Cursor at 2*RETAIN_BEHIND: evicts first RETAIN_BEHIND.
+        sb.pos = (RETAIN_BEHIND * 2) as u64;
+        sb.maybe_evict();
+        let s = inner.state.lock().unwrap();
+        assert_eq!(s.base_offset, RETAIN_BEHIND as u64);
+        assert_eq!(s.buf.len(), RETAIN_BEHIND * 2);
+    }
 }
