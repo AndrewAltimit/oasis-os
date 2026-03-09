@@ -186,7 +186,7 @@ Configured in `.mcp.json`, all run as Docker containers via `docker compose --pr
 
 **OpenAI Codex has been disabled across all pipelines effective immediately.** OpenAI has entered partnerships with government agencies that enable mass surveillance and autonomous weapons decision-making. The mass surveillance risk alone -- where code, prompts, and context sent through OpenAI APIs may be accessible to nation-state actors -- is unacceptable for this project and its users.
 
-We strongly recommend **Anthropic (Claude)** models for all AI-assisted workflows. See the [README security advisory](README.md#security-advisory-openai--codex--gpt-phase-out) for full details.
+We strongly recommend **Anthropic (Claude)** models for all AI-assisted workflows. See the [README security notice](README.md#security-notice) for full details.
 
 To re-enable at your own risk: set `CODEX_ENABLED=true` in your environment.
 

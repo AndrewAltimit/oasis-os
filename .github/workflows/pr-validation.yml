@@ -79,6 +79,24 @@ jobs:
           -e RUSTDOCFLAGS="-D warnings"
           rust-ci cargo doc --workspace --no-deps
 
+      # -- Markdown Link Check ------------------------------------------------
+      - name: Markdown link check
+        run: |
+          set -o pipefail
+          FAIL=0
+          # Check top-level markdown and docs/ (skip vendored target/node_modules)
+          for target in *.md docs/ scripts/psp-scenarios.md; do
+            [ -e "$target" ] || continue
+            md-link-checker "$target" --internal-only 2>&1 \
+              | tee -a link_check_output.txt || FAIL=1
+          done
+          if [ $FAIL -ne 0 ]; then
+            echo "### Markdown Link Check" >> $GITHUB_STEP_SUMMARY
+            grep -E '(broken link|->.*not found)' link_check_output.txt \
+              >> $GITHUB_STEP_SUMMARY 2>/dev/null || true
+          fi
+          exit $FAIL
+
       # -- Tests -------------------------------------------------------------
       - name: Test
         run: |

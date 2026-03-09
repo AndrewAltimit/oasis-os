@@ -60,7 +60,7 @@ cargo run -p oasis-app --bin oasis-screenshot
 
 ## CI Pipeline Order
 
-format check -> clippy -> test -> release build -> cargo-deny -> PSP EBOOT build -> PPSSPP headless test -> screenshot regression -> benchmarks -> code coverage -> GitHub Pages deploy (WASM)
+format check -> clippy -> doc build -> markdown link check -> test -> release build -> screenshot regression -> cargo-deny -> benchmarks -> PSP EBOOT build -> PPSSPP headless test -> code coverage -> GitHub Pages deploy (WASM)
 
 All steps run via `docker compose --profile ci run --rm rust-ci`.
 
