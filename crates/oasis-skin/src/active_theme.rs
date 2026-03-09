@@ -1488,10 +1488,10 @@ impl ActiveTheme {
 
     /// Derive an `ActiveTheme` directly from 9 base `Color` values.
     ///
-    /// This is a lightweight alternative to [`from_skin`] that avoids the TOML
-    /// parser and `SkinTheme` struct entirely.  All sub-themes are derived from
-    /// the same algorithm used by `from_skin`, but without any override maps or
-    /// hex-string parsing.
+    /// This is a lightweight alternative to [`Self::from_skin`] that avoids the
+    /// TOML parser and `SkinTheme` struct entirely.  All sub-themes are derived
+    /// from the same algorithm used by `from_skin`, but without any override
+    /// maps or hex-string parsing.
     ///
     /// # Arguments
     /// * `background`  - Main background / wallpaper base

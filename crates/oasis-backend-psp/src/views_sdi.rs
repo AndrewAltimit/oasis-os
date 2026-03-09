@@ -53,6 +53,15 @@ fn ensure(sdi: &mut SdiRegistry, name: &str) {
     }
 }
 
+/// Only update `obj.text` when the value actually changed, avoiding a heap
+/// allocation + drop on every frame for static content.
+fn set_text(slot: &mut Option<String>, value: String) {
+    match slot {
+        Some(existing) if *existing == value => {}
+        _ => *slot = Some(value),
+    }
+}
+
 /// Hide all SDI objects whose name starts with `prefix`.
 fn hide_prefixed(sdi: &mut SdiRegistry, prefix: &str) {
     let names: Vec<String> = sdi
@@ -139,7 +148,7 @@ fn update_list_bg(
         obj.y = CONTENT_TOP as i32 + 2;
         obj.w = 0;
         obj.h = 0;
-        obj.text = Some(title.to_string());
+        set_text(&mut obj.text, title.to_string());
         obj.font_size = 8;
         obj.text_color = accent;
         obj.z = 101;
@@ -158,7 +167,7 @@ fn update_list_bg(
             };
             obj.x = 4 + (title.len() as i32 + 2) * CHAR_W;
             obj.y = CONTENT_TOP as i32 + 2;
-            obj.text = Some(display);
+            set_text(&mut obj.text, display);
             obj.font_size = 8;
             obj.text_color = at.app.dim_text;
             obj.z = 101;
@@ -233,7 +242,7 @@ fn update_list_row(
     if let Ok(obj) = sdi.get_mut(name) {
         obj.x = 4;
         obj.y = y;
-        obj.text = Some(icon_text.to_string());
+        set_text(&mut obj.text, icon_text.to_string());
         obj.font_size = 8;
         obj.text_color = icon_color;
         obj.z = 103;
@@ -245,7 +254,7 @@ fn update_list_row(
     if let Ok(obj) = sdi.get_mut(name) {
         obj.x = 32;
         obj.y = y;
-        obj.text = Some(name_text.to_string());
+        set_text(&mut obj.text, name_text.to_string());
         obj.font_size = 8;
         obj.text_color = name_color;
         obj.z = 103;
@@ -258,7 +267,7 @@ fn update_list_row(
         if let Some((text, color, x)) = extra_text {
             obj.x = x;
             obj.y = y;
-            obj.text = Some(text.to_string());
+            set_text(&mut obj.text, text.to_string());
             obj.font_size = 8;
             obj.text_color = color;
             obj.z = 103;
@@ -274,7 +283,7 @@ fn update_list_row(
         if let Some((text, color, x)) = extra2_text {
             obj.x = x;
             obj.y = y;
-            obj.text = Some(text.to_string());
+            set_text(&mut obj.text, text.to_string());
             obj.font_size = 8;
             obj.text_color = color;
             obj.z = 103;
@@ -427,7 +436,7 @@ pub(crate) fn update_tv_channels(
         if let Ok(obj) = sdi.get_mut(name) {
             obj.x = 4;
             obj.y = y;
-            obj.text = Some(num_str);
+            set_text(&mut obj.text, num_str);
             obj.font_size = 8;
             obj.text_color = accent;
             obj.z = 103;
@@ -438,7 +447,7 @@ pub(crate) fn update_tv_channels(
         if let Ok(obj) = sdi.get_mut(name) {
             obj.x = 28;
             obj.y = y;
-            obj.text = Some(format!("{:<6} {}", ch.call_sign, display_name));
+            set_text(&mut obj.text, format!("{:<6} {}", ch.call_sign, display_name));
             obj.font_size = 8;
             obj.text_color = at.app.text;
             obj.z = 103;
@@ -450,7 +459,7 @@ pub(crate) fn update_tv_channels(
             if let Some((text, color, x)) = &status {
                 obj.x = *x;
                 obj.y = y;
-                obj.text = Some(text.clone());
+                set_text(&mut obj.text, text.clone());
                 obj.font_size = 8;
                 obj.text_color = *color;
                 obj.z = 103;
@@ -464,7 +473,7 @@ pub(crate) fn update_tv_channels(
         if let Ok(obj) = sdi.get_mut(name) {
             obj.x = 430;
             obj.y = y;
-            obj.text = Some(genre_display);
+            set_text(&mut obj.text, genre_display);
             obj.font_size = 8;
             obj.text_color = at.app.dim_text;
             obj.z = 103;
@@ -594,7 +603,7 @@ pub(crate) fn update_photo_view(
         if tex.is_none() {
             obj.x = 160;
             obj.y = 130;
-            obj.text = Some("Failed to load image".to_string());
+            set_text(&mut obj.text, "Failed to load image".to_string());
             obj.font_size = 8;
             obj.text_color = Color::rgb(255, 80, 80);
             obj.z = 102;
@@ -709,7 +718,7 @@ pub(crate) fn update_browser(
         };
         obj.x = 4 + 7 * CHAR_W + 8;
         obj.y = CONTENT_TOP as i32 + 3;
-        obj.text = Some(display_url);
+        set_text(&mut obj.text, display_url);
         obj.font_size = 8;
         obj.text_color = accent;
         obj.z = 101;
@@ -720,7 +729,7 @@ pub(crate) fn update_browser(
     if let Ok(obj) = sdi.get_mut("browser_status") {
         obj.x = 4;
         obj.y = LIST_Y - 1;
-        obj.text = Some(status_msg.to_string());
+        set_text(&mut obj.text, status_msg.to_string());
         obj.font_size = 8;
         obj.text_color = at.app.dim_text;
         obj.z = 101;
@@ -740,7 +749,7 @@ pub(crate) fn update_browser(
                 let y = text_start_y + row as i32 * 9;
                 obj.x = 4;
                 obj.y = y;
-                obj.text = Some(lines[scroll + row].clone());
+                set_text(&mut obj.text, lines[scroll + row].clone());
                 obj.font_size = 8;
                 obj.text_color = at.app.text;
                 obj.z = 103;
@@ -826,7 +835,7 @@ pub(crate) fn update_file_manager(
     if let Ok(obj) = sdi.get_mut("fm_hdr") {
         obj.x = 4;
         obj.y = CONTENT_TOP as i32 + 2;
-        obj.text = Some(format!("FILE MGR  {}", header));
+        set_text(&mut obj.text, format!("FILE MGR  {}", header));
         obj.font_size = 8;
         obj.text_color = accent;
         obj.z = 101;
@@ -921,7 +930,7 @@ fn update_fm_panel(
         if let Ok(obj) = sdi.get_mut(name) {
             obj.x = panel_x + 2;
             obj.y = y;
-            obj.text = Some(icon.to_string());
+            set_text(&mut obj.text, icon.to_string());
             obj.font_size = 8;
             obj.text_color = icon_clr;
             obj.z = 103;
@@ -931,7 +940,7 @@ fn update_fm_panel(
         if let Ok(obj) = sdi.get_mut(name) {
             obj.x = panel_x + 28;
             obj.y = y;
-            obj.text = Some(display);
+            set_text(&mut obj.text, display);
             obj.font_size = 8;
             obj.text_color = name_color;
             obj.z = 103;
