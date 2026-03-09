@@ -72,6 +72,14 @@ jobs:
       - name: Clippy
         run: docker compose --profile ci run --rm rust-ci cargo clippy --workspace -- -D warnings
 
+      # -- Nightly Warnings Check (advisory) -----------------------------------
+      - name: Nightly warnings check
+        continue-on-error: true
+        run: >
+          docker compose --profile ci run --rm rust-ci
+          cargo +nightly clippy --workspace -- -D warnings
+          -W unused-comparisons
+
       # -- Documentation ------------------------------------------------------
       - name: Doc build
         run: >

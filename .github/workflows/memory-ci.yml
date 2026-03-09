@@ -8,6 +8,12 @@ on:
     paths:
       - 'crates/oasis-video/**'
       - 'crates/oasis-core/**'
+      - 'crates/oasis-app/**'
+      - 'crates/oasis-backend-sdl/**'
+      - 'crates/oasis-backend-ue5/**'
+      - 'crates/oasis-types/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
       - '.github/workflows/memory-ci.yml'
   workflow_dispatch:
 
@@ -54,7 +60,6 @@ jobs:
           set -o pipefail
           docker compose --profile ci run --rm \
             -e RUSTFLAGS="-Zsanitizer=address" \
-            -e CFLAGS="-fsanitize=address" \
             -e ASAN_OPTIONS="detect_leaks=1:halt_on_error=0:print_summary=1" \
             -e SDL_VIDEODRIVER=dummy \
             rust-ci bash -c "

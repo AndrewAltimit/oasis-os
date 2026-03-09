@@ -124,7 +124,6 @@ mod tests {
         for f in 0..200 {
             let a = pulse_alpha(f, 0.06, 80);
             assert!(a >= 80);
-            assert!(a <= 255);
         }
     }
 

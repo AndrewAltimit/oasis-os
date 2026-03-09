@@ -133,38 +133,37 @@ impl BrowserWidget {
         #[cfg(feature = "javascript")]
         {
             self.console_output.clear();
+            // Drop any previously retained engine before loading a new page.
+            self.js_engine = None;
+            self.js_doc = None;
         }
         #[cfg(feature = "javascript")]
         let doc = {
             let scripts = Self::collect_scripts(&doc);
-            if scripts.is_empty() {
-                doc
-            } else {
-                let shared: js_dom::SharedDoc = std::rc::Rc::new(std::cell::RefCell::new(doc));
-                match oasis_js::JsEngine::new(8 * 1024 * 1024) {
-                    Ok(engine) => {
-                        let s = std::rc::Rc::clone(&shared);
-                        if let Err(e) =
-                            engine.with_context(|ctx| js_dom::install_document_global(&ctx, &s))
-                        {
-                            log::warn!("JS DOM install failed: {}", e.message);
-                        }
+            let shared: js_dom::SharedDoc = std::rc::Rc::new(std::cell::RefCell::new(doc));
+            match oasis_js::JsEngine::new(8 * 1024 * 1024) {
+                Ok(engine) => {
+                    let s = std::rc::Rc::clone(&shared);
+                    if let Err(e) =
+                        engine.with_context(|ctx| js_dom::install_document_global(&ctx, &s))
+                    {
+                        log::warn!("JS DOM install failed: {}", e.message);
+                    }
+                    if !scripts.is_empty() {
                         let script_refs: Vec<&str> = scripts.iter().map(String::as_str).collect();
                         engine.eval_all(&script_refs);
-                        self.console_output = engine.console_output();
-                        drop(engine);
-                    },
-                    Err(e) => {
-                        log::warn!("JS engine init failed: {}", e.message);
-                    },
-                }
-                // Recover the owned Document. If something still holds
-                // an Rc (shouldn't happen), fall back to clone.
-                match std::rc::Rc::try_unwrap(shared) {
-                    Ok(cell) => cell.into_inner(),
-                    Err(rc) => rc.borrow().clone(),
-                }
+                    }
+                    self.console_output = engine.console_output();
+                    // Retain engine + shared doc for event dispatch.
+                    self.js_engine = Some(engine);
+                    self.js_doc = Some(std::rc::Rc::clone(&shared));
+                },
+                Err(e) => {
+                    log::warn!("JS engine init failed: {}", e.message);
+                },
             }
+            // Clone the (possibly mutated) document for layout/paint.
+            shared.borrow().clone()
         };
 
         // 2. Extract page title.

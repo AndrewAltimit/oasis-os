@@ -377,6 +377,33 @@ const JS_DOM_BOOTSTRAP: &str = r#"
     for (var i = 0; i < arr.length; i++) arr[i].call(el, evt);
   };
 
+  // Dispatch with bubbling: walk from target up to root.
+  globalThis.__oasis_dispatch_with_bubbling = function(nid, type, detail) {
+    var target = new Element(nid);
+    var evt = {
+      type: type,
+      detail: detail || null,
+      target: target,
+      currentTarget: null,
+      _stopped: false,
+      stopPropagation: function() { this._stopped = true; },
+      preventDefault: function() { this._defaultPrevented = true; },
+      _defaultPrevented: false
+    };
+    var current = nid;
+    while (current >= 0 && !evt._stopped) {
+      var key = current + ":" + type;
+      var arr = __oasis_listeners[key];
+      if (arr) {
+        evt.currentTarget = new Element(current);
+        for (var i = 0; i < arr.length; i++) {
+          arr[i].call(evt.currentTarget, evt);
+        }
+      }
+      current = __oasis_parent(current);
+    }
+  };
+
   var document = {
     getElementById: function(id) {
       var nid = __oasis_getbyid(id);
@@ -619,5 +646,158 @@ mod tests {
         let doc = shared.borrow();
         let main = doc.get_element_by_id("main").unwrap();
         assert_eq!(doc.text_content(main), "persisted");
+    }
+
+    // ---------------------------------------------------------------
+    // Event listener + dispatch tests
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn add_event_listener_and_dispatch() {
+        let (engine, _doc) = setup(sample_doc());
+        engine
+            .eval(
+                "var clicked = false; \
+                 var el = document.getElementById('main'); \
+                 el.addEventListener('click', function() { clicked = true; }); \
+                 __oasis_dispatch_event(el.__oasis_node_id, 'click', null)",
+            )
+            .unwrap();
+        let val = engine.eval("clicked").unwrap();
+        assert_eq!(val, oasis_js::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn multiple_listeners_on_same_element() {
+        let (engine, _doc) = setup(sample_doc());
+        engine
+            .eval(
+                "var count = 0; \
+                 var el = document.getElementById('main'); \
+                 el.addEventListener('click', function() { count++; }); \
+                 el.addEventListener('click', function() { count += 10; }); \
+                 __oasis_dispatch_event(el.__oasis_node_id, 'click', null)",
+            )
+            .unwrap();
+        let val = engine.eval("count").unwrap();
+        assert_eq!(val, oasis_js::JsValue::Int(11));
+    }
+
+    #[test]
+    fn remove_event_listener() {
+        let (engine, _doc) = setup(sample_doc());
+        engine
+            .eval(
+                "var count = 0; \
+                 var el = document.getElementById('main'); \
+                 var fn1 = function() { count++; }; \
+                 el.addEventListener('click', fn1); \
+                 el.removeEventListener('click', fn1); \
+                 __oasis_dispatch_event(el.__oasis_node_id, 'click', null)",
+            )
+            .unwrap();
+        let val = engine.eval("count").unwrap();
+        assert_eq!(val, oasis_js::JsValue::Int(0));
+    }
+
+    #[test]
+    fn dispatch_with_bubbling_child_to_parent() {
+        let (engine, _doc) = setup(sample_doc());
+        // p(7) is child of div#main(6).
+        engine
+            .eval(
+                "var order = []; \
+                 var p = document.getElementById('main').children[0]; \
+                 var div = document.getElementById('main'); \
+                 p.addEventListener('click', function() { order.push('p'); }); \
+                 div.addEventListener('click', function() { order.push('div'); }); \
+                 __oasis_dispatch_with_bubbling(\
+                     p.__oasis_node_id, 'click', null)",
+            )
+            .unwrap();
+        let val = engine.eval("order.join(',')").unwrap();
+        assert_eq!(val, oasis_js::JsValue::String("p,div".into()));
+    }
+
+    #[test]
+    fn stop_propagation_prevents_bubbling() {
+        let (engine, _doc) = setup(sample_doc());
+        engine
+            .eval(
+                "var order = []; \
+                 var p = document.getElementById('main').children[0]; \
+                 var div = document.getElementById('main'); \
+                 p.addEventListener('click', function(e) { \
+                     order.push('p'); e.stopPropagation(); }); \
+                 div.addEventListener('click', function() { order.push('div'); }); \
+                 __oasis_dispatch_with_bubbling(\
+                     p.__oasis_node_id, 'click', null)",
+            )
+            .unwrap();
+        let val = engine.eval("order.join(',')").unwrap();
+        assert_eq!(val, oasis_js::JsValue::String("p".into()));
+    }
+
+    #[test]
+    fn bubbling_event_target_vs_current_target() {
+        let (engine, _doc) = setup(sample_doc());
+        engine
+            .eval(
+                "var targetTag = ''; var currentTag = ''; \
+                 var p = document.getElementById('main').children[0]; \
+                 var div = document.getElementById('main'); \
+                 div.addEventListener('click', function(e) { \
+                     targetTag = e.target.tagName; \
+                     currentTag = e.currentTarget.tagName; \
+                 }); \
+                 __oasis_dispatch_with_bubbling(\
+                     p.__oasis_node_id, 'click', null)",
+            )
+            .unwrap();
+        let target = engine.eval("targetTag").unwrap();
+        let current = engine.eval("currentTag").unwrap();
+        assert_eq!(target, oasis_js::JsValue::String("P".into()));
+        assert_eq!(current, oasis_js::JsValue::String("DIV".into()));
+    }
+
+    #[test]
+    fn dispatch_event_receives_detail() {
+        let (engine, _doc) = setup(sample_doc());
+        engine
+            .eval(
+                "var received = null; \
+                 var el = document.getElementById('main'); \
+                 el.addEventListener('custom', function(e) { \
+                     received = e.detail; \
+                 }); \
+                 __oasis_dispatch_event(\
+                     el.__oasis_node_id, 'custom', 'payload')",
+            )
+            .unwrap();
+        let val = engine.eval("received").unwrap();
+        assert_eq!(val, oasis_js::JsValue::String("payload".into()));
+    }
+
+    #[test]
+    fn retained_engine_fires_events_after_script_exec() {
+        // Simulate what widget_pipeline.rs does: create engine, run
+        // scripts, then dispatch events later.
+        let (engine, _doc) = setup(sample_doc());
+        engine
+            .eval(
+                "var clicked = false; \
+                 document.getElementById('main')\
+                     .addEventListener('click', function() { \
+                         clicked = true; \
+                     })",
+            )
+            .unwrap();
+
+        // Later, Rust dispatches an event.
+        engine
+            .eval("__oasis_dispatch_with_bubbling(6, 'click', null)")
+            .unwrap();
+        let val = engine.eval("clicked").unwrap();
+        assert_eq!(val, oasis_js::JsValue::Bool(true));
     }
 }
