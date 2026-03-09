@@ -9,7 +9,7 @@ workspace but imported by nothing. Current video playback varies by platform:
 
 | Platform | Current Approach | Issues |
 |----------|-----------------|--------|
-| **SDL2 desktop** | In-process streaming decode via `StreamingBuffer` + oasis-video (ffmpeg fallback available) | No external dependencies required |
+| **SDL3 desktop** | In-process streaming decode via `StreamingBuffer` + oasis-video (ffmpeg fallback available) | No external dependencies required |
 | **WASM** | Hidden `<video>` element + canvas `drawImage` capture | Works but archive.org CORS blocks fetch() |
 | **PSP** | Stub only (thread skeleton, no decode) | No playback at all |
 | **UE5** | Nothing | No video support |
@@ -118,14 +118,14 @@ impl SoftwareVideoDecoder {
 
 | Platform | VideoSource Implementation | Memory Ceiling |
 |----------|---------------------------|----------------|
-| SDL2 desktop | `StreamingBuffer` (in-memory sliding window fed by download thread) | ~16-32 MB sliding window |
+| SDL3 desktop | `StreamingBuffer` (in-memory sliding window fed by download thread) | ~16-32 MB sliding window |
 | PSP | `File` from Memory Stick (`ms0:/PSP/GAME/OASISOS/tv_cache.mp4`) | ~4 MB decode buffers |
 | UE5 | `File` or `Cursor<Vec<u8>>` (host provides data) | ~8 MB decode buffers |
 | WASM | N/A (uses native `<video>` element) | — |
 
 ### Memory Budget Breakdown
 
-**Desktop (SDL2):**
+**Desktop (SDL3):**
 ```
 Decode buffers:
   - 2× RGBA frame buffer (480×272×4)  = ~1.0 MB
@@ -185,7 +185,7 @@ oasis-video = { path = "crates/oasis-video" }
 - `open(vec_data)` still works (backwards compatible)
 - Feature flag compiles cleanly with and without `video-decode`
 
-### Phase 2: SDL2 Desktop Integration (P1, 4 tasks)
+### Phase 2: SDL3 Desktop Integration (P1, 4 tasks)
 
 **Task 2a — Refactor `video_player.rs` with backend enum:**
 ```rust
@@ -342,7 +342,7 @@ int  oasis_video_is_playing();
 
 | Platform | Source | Demuxer | Video Codec | Audio Codec | Memory Budget | Priority |
 |----------|--------|---------|-------------|-------------|---------------|----------|
-| SDL2 | `File` (temp) or `HttpRangeFile` | symphonia | openh264 (software) | symphonia AAC | ~5 MB fixed + 16 MB HTTP cache | P1 |
+| SDL3 | `File` (temp) or `HttpRangeFile` | symphonia | openh264 (software) | symphonia AAC | ~5 MB fixed + 16 MB HTTP cache | P1 |
 | PSP | `File` (Memory Stick) | `demux_lite` (no_std) | Media Engine (HW) or openh264 | `sceAudiocodec` (HW) | ~1 MB fixed | P2 |
 | UE5 | `File` (host filesystem) | symphonia | openh264 (software) | symphonia AAC | ~5 MB fixed | P3 |
 | WASM | N/A | N/A (browser) | N/A (browser) | N/A (browser) | 0 (native element) | — |
@@ -443,7 +443,7 @@ fn select_smallest_for(files: &[ArchiveFile]) -> Option<&ArchiveFile> {
 
 ## Fallback Chain Per Platform
 
-**SDL2 Desktop:**
+**SDL3 Desktop:**
 ```
 1. video-decode feature ON + MP4 available → oasis-video (stream from disk)
 2. video-decode feature ON + Range support → oasis-video (progressive HTTP)
@@ -500,7 +500,7 @@ fn select_smallest_for(files: &[ArchiveFile]) -> Option<&ArchiveFile> {
 - [x] File-backed decode: memory usage independent of file size
 - [x] Feature flag compiles cleanly on/off
 
-### Phase 2 (SDL2 Desktop):
+### Phase 2 (SDL3 Desktop):
 - [x] TV Guide video plays via oasis-video without ffmpeg installed
 - [x] Streaming playback — video starts before download completes (StreamingBuffer)
 - [x] Deferred tail probe prevents CDN connection throttling
@@ -539,7 +539,7 @@ fn select_smallest_for(files: &[ArchiveFile]) -> Option<&ArchiveFile> {
 - `Cargo.toml` (workspace) — add oasis-video to workspace deps
 - `crates/oasis-app/Cargo.toml` — feature flag + oasis-video dep
 
-**Phase 2 (SDL2):**
+**Phase 2 (SDL3):**
 - `crates/oasis-app/src/video_player.rs` — `DecodeBackend` enum, streaming decode
 - `crates/oasis-app/src/tv_controller.rs` — download-to-disk pipeline (or guide.rs)
 - `crates/oasis-app/src/http_range.rs` — new: `HttpRangeFile` (stretch goal)
@@ -568,7 +568,7 @@ Phase 1: Streaming API (P0)
   ├── 1a: open_stream() API
   └── 1b: Feature flags
           │
-Phase 2: SDL2 Desktop (P1) ─── depends on Phase 1
+Phase 2: SDL3 Desktop (P1) ─── depends on Phase 1
   ├── 2a: DecodeBackend enum
   ├── 2b: Download-to-disk
   ├── 2c: Progressive HTTP (stretch)
@@ -593,7 +593,7 @@ Phase 5: Testing (P1) ─── ongoing from Phase 1
 Phase 6: Documentation (P1) ─── after Phase 2
 ```
 
-**Critical path:** Phase 1 → Phase 2 (SDL2 desktop is the first user-visible milestone)
+**Critical path:** Phase 1 → Phase 2 (SDL3 desktop is the first user-visible milestone)
 
 **Parallel track:** Phase 3 (PSP) can begin `demux_lite` work as soon as Phase 1 feature
 flags are in place, since PSP uses its own demuxer (not symphonia).

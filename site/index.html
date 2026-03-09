@@ -65,7 +65,7 @@
         <div class="icon">&#128421;</div>
         <h3>Desktop / Pi</h3>
         <div class="crate">oasis-backend-sdl</div>
-        <p>SDL2-based backend for Linux, macOS, Windows, and Raspberry Pi with hardware-accelerated rendering.</p>
+        <p>SDL3-based backend for Linux, macOS, Windows, and Raspberry Pi with hardware-accelerated rendering.</p>
       </div>
       <div class="platform-card">
         <div class="icon">&#127760;</div>
@@ -572,8 +572,8 @@
     </div>
 
     <div class="build-panel active" id="build-desktop">
-      <pre><span class="comment"># Install SDL2 dev libs (Ubuntu/Debian)</span>
-<span class="cmd">sudo apt install libsdl2-dev</span>
+      <pre><span class="comment"># Install build deps (Ubuntu/Debian) -- SDL3 is compiled from source</span>
+<span class="cmd">sudo apt install cmake g++ make libxtst-dev libx11-dev libasound2-dev</span>
 
 <span class="comment"># Build and run</span>
 <span class="cmd">cargo build --release -p oasis-app</span>

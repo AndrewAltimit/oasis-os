@@ -1,11 +1,11 @@
-//! SDL2 backend for OASIS_OS.
+//! SDL3 backend for OASIS_OS.
 //!
-//! Implements `SdiBackend` and `InputBackend` using SDL2. Used for desktop
-//! development and Raspberry Pi deployment (via SDL2's kmsdrm or X11 backend).
+//! Implements `SdiBackend` and `InputBackend` using SDL3. Used for desktop
+//! development and Raspberry Pi deployment (via SDL3's kmsdrm or X11 backend).
 //!
 //! Extended primitives (rounded rects, lines, circles, triangles, gradients,
 //! sub-rect blits, tinted blits, clip/transform stacks) are implemented using
-//! SDL2 renderer API calls and software rasterization helpers.
+//! SDL3 renderer API calls and software rasterization helpers.
 
 mod blitting;
 mod font;
@@ -16,11 +16,11 @@ mod shapes;
 
 use std::collections::HashMap;
 
-use sdl2::EventPump;
-use sdl2::pixels::PixelFormatEnum;
-use sdl2::rect::Rect;
-use sdl2::render::{Canvas, Texture, TextureCreator};
-use sdl2::video::{Window, WindowContext};
+use sdl3::EventPump;
+use sdl3::pixels::PixelFormat;
+use sdl3::rect::Rect;
+use sdl3::render::{Canvas, ClippingRect, FPoint, FRect, Texture, TextureCreator};
+use sdl3::video::{Window, WindowContext};
 
 use oasis_core::backend::{
     BackendErrExt, Color, GradientStyle, SdiBackend, SdiCore, TextureId, texture_not_found,
@@ -39,6 +39,16 @@ use input::{map_key_down, map_key_up};
 #[cfg(test)]
 use shapes::edge_x;
 
+/// Convert integer coordinates to an `FRect` for SDL3 renderer calls.
+pub(crate) fn frect(x: i32, y: i32, w: u32, h: u32) -> FRect {
+    FRect::new(x as f32, y as f32, w as f32, h as f32)
+}
+
+/// Convert integer coordinates to an `FPoint` for SDL3 renderer calls.
+pub(crate) fn fpoint(x: i32, y: i32) -> FPoint {
+    FPoint::new(x as f32, y as f32)
+}
+
 /// Stored clip rectangle.
 #[derive(Clone, Copy)]
 pub(crate) struct ClipRect {
@@ -48,7 +58,7 @@ pub(crate) struct ClipRect {
     pub(crate) h: u32,
 }
 
-/// SDL2 rendering and input backend.
+/// SDL3 rendering and input backend.
 ///
 /// Supports solid-color rects, 8x8 bitmap text, and RGBA texture loading/blitting.
 ///
@@ -72,26 +82,28 @@ pub struct SdlBackend {
 }
 
 impl SdlBackend {
-    /// Create a new SDL2 backend with a window.
+    /// Create a new SDL3 backend with a window.
     pub fn new(title: &str, width: u32, height: u32) -> Result<Self> {
-        let sdl = sdl2::init().backend_err()?;
+        let sdl = sdl3::init().backend_err()?;
         let video = sdl.video().backend_err()?;
         let window = video
             .window(title, width, height)
             .position_centered()
             .build()
             .backend_err()?;
+        let canvas: Canvas<Window> = window.into_canvas();
+        let texture_creator = canvas.texture_creator();
         let headless =
             std::env::var("SDL_RENDER_DRIVER").is_ok_and(|v| v.eq_ignore_ascii_case("software"));
-        let mut builder = window.into_canvas();
         if !headless {
-            builder = builder.accelerated().present_vsync();
+            // SAFETY: canvas.raw() returns the valid SDL_Renderer pointer owned by canvas.
+            unsafe {
+                sdl3::sys::render::SDL_SetRenderVSync(canvas.raw(), 1);
+            }
         }
-        let canvas = builder.build().backend_err()?;
-        let texture_creator = canvas.texture_creator();
         let event_pump = sdl.event_pump().backend_err()?;
 
-        log::info!("SDL2 backend initialized: {width}x{height}");
+        log::info!("SDL3 backend initialized: {width}x{height}");
 
         Ok(Self {
             canvas,
@@ -118,11 +130,11 @@ impl SdlBackend {
     /// Set the SDL draw color with optional blend mode.
     pub(crate) fn set_color(&mut self, color: Color) {
         if color.a < 255 {
-            self.canvas.set_blend_mode(sdl2::render::BlendMode::Blend);
+            self.canvas.set_blend_mode(sdl3::render::BlendMode::Blend);
         } else {
-            self.canvas.set_blend_mode(sdl2::render::BlendMode::None);
+            self.canvas.set_blend_mode(sdl3::render::BlendMode::None);
         }
-        self.canvas.set_draw_color(sdl2::pixels::Color::RGBA(
+        self.canvas.set_draw_color(sdl3::pixels::Color::RGBA(
             color.r, color.g, color.b, color.a,
         ));
     }
@@ -134,7 +146,7 @@ impl SdiCore for SdlBackend {
     }
 
     fn clear(&mut self, color: Color) -> Result<()> {
-        self.canvas.set_draw_color(sdl2::pixels::Color::RGBA(
+        self.canvas.set_draw_color(sdl3::pixels::Color::RGBA(
             color.r, color.g, color.b, color.a,
         ));
         self.canvas.clear();
@@ -148,7 +160,7 @@ impl SdiCore for SdlBackend {
             .get(&tex.0)
             .ok_or_else(|| texture_not_found(tex.0))?;
         self.canvas
-            .copy(texture, None, Rect::new(tx, ty, w, h))
+            .copy(texture, None, frect(tx, ty, w, h))
             .backend_err()?;
         Ok(())
     }
@@ -167,9 +179,7 @@ impl SdiCore for SdlBackend {
     fn fill_rect(&mut self, x: i32, y: i32, w: u32, h: u32, color: Color) -> Result<()> {
         let (tx, ty) = self.translate(x, y);
         self.set_color(color);
-        self.canvas
-            .fill_rect(Rect::new(tx, ty, w, h))
-            .backend_err()?;
+        self.canvas.fill_rect(frect(tx, ty, w, h)).backend_err()?;
         Ok(())
     }
 
@@ -183,7 +193,7 @@ impl SdiCore for SdlBackend {
 
         let mut texture = self
             .texture_creator
-            .create_texture_streaming(PixelFormatEnum::ABGR8888, width, height)
+            .create_texture_streaming(PixelFormat::ABGR8888, width, height)
             .backend_err()?;
 
         texture
@@ -192,7 +202,7 @@ impl SdiCore for SdlBackend {
             })
             .backend_err()?;
 
-        texture.set_blend_mode(sdl2::render::BlendMode::Blend);
+        texture.set_blend_mode(sdl3::render::BlendMode::Blend);
 
         // SAFETY: The texture borrows from self.texture_creator which lives in the
         // same struct. `textures` is declared before `texture_creator`, so Rust drops
@@ -226,13 +236,30 @@ impl SdiCore for SdlBackend {
 
     fn read_pixels(&self, x: i32, y: i32, w: u32, h: u32) -> Result<Vec<u8>> {
         let rect = Rect::new(x, y, w, h);
-        self.canvas
-            .read_pixels(rect, PixelFormatEnum::ABGR8888)
-            .backend_err()
+        let surface = self.canvas.read_pixels(rect).backend_err()?;
+        let pitch = surface.pitch() as usize;
+        let height = surface.height() as usize;
+        let width = surface.width() as usize;
+        let bpp = 4usize; // RGBA
+        // SAFETY: The surface was just created by read_pixels and is not
+        // shared; we only read the pixel data before it goes out of scope.
+        let data = unsafe { surface.without_lock() }.ok_or_else(|| {
+            oasis_core::error::OasisError::Backend("cannot lock surface pixels".into())
+        })?;
+        // Copy pixel data row by row (pitch may differ from width * bpp).
+        let mut pixels = Vec::with_capacity(width * height * bpp);
+        for row in 0..height {
+            let start = row * pitch;
+            let end = start + width * bpp;
+            if end <= data.len() {
+                pixels.extend_from_slice(&data[start..end]);
+            }
+        }
+        Ok(pixels)
     }
 
     fn shutdown(&mut self) -> Result<()> {
-        log::info!("SDL2 backend shut down");
+        log::info!("SDL3 backend shut down");
         Ok(())
     }
 }
@@ -250,7 +277,7 @@ impl SdiBackend for SdlBackend {
     ) -> Result<()> {
         let (tx, ty) = self.translate(x, y);
         let fs = font_size.max(1) as i32;
-        let sdl_color = sdl2::pixels::Color::RGBA(color.r, color.g, color.b, color.a);
+        let sdl_color = sdl3::pixels::Color::RGBA(color.r, color.g, color.b, color.a);
         self.canvas.set_draw_color(sdl_color);
 
         let mut cx = tx;
@@ -277,16 +304,14 @@ impl SdiBackend for SdlBackend {
                         let px = cx + ox0 + italic_offset;
                         let py = ty + oy0;
                         if rw == 1 && rh == 1 {
-                            let _ = self.canvas.draw_point(sdl2::rect::Point::new(px, py));
+                            let _ = self.canvas.draw_point(fpoint(px, py));
                         } else {
-                            let _ = self
-                                .canvas
-                                .fill_rect(Rect::new(px, py, rw as u32, rh as u32));
+                            let _ = self.canvas.fill_rect(frect(px, py, rw as u32, rh as u32));
                         }
                         if bold {
-                            let _ = self.canvas.draw_point(sdl2::rect::Point::new(px + 1, py));
+                            let _ = self.canvas.draw_point(fpoint(px + 1, py));
                             if rh > 1 {
-                                let _ = self.canvas.fill_rect(Rect::new(px + 1, py, 1, rh as u32));
+                                let _ = self.canvas.fill_rect(frect(px + 1, py, 1, rh as u32));
                             }
                         }
                     }
@@ -440,7 +465,7 @@ impl SdiBackend for SdlBackend {
                 for dy in 0..h as i32 {
                     let color = lerp_color_sdl(top, bottom, dy as u32, h_max);
                     self.set_color(color);
-                    let _ = self.canvas.fill_rect(Rect::new(tx, ty + dy, w, 1));
+                    let _ = self.canvas.fill_rect(frect(tx, ty + dy, w, 1));
                 }
             },
             GradientStyle::Horizontal { left, right } => {
@@ -448,7 +473,7 @@ impl SdiBackend for SdlBackend {
                 for dx in 0..w as i32 {
                     let color = lerp_color_sdl(left, right, dx as u32, w_max);
                     self.set_color(color);
-                    let _ = self.canvas.fill_rect(Rect::new(tx + dx, ty, 1, h));
+                    let _ = self.canvas.fill_rect(frect(tx + dx, ty, 1, h));
                 }
             },
             GradientStyle::FourCorner {
@@ -465,7 +490,7 @@ impl SdiBackend for SdlBackend {
                     for dx in 0..w as i32 {
                         let color = lerp_color_sdl(left, right, dx as u32, w_max);
                         self.set_color(color);
-                        let _ = self.canvas.fill_rect(Rect::new(tx + dx, ty + dy, 1, 1));
+                        let _ = self.canvas.fill_rect(frect(tx + dx, ty + dy, 1, 1));
                     }
                 }
             },
@@ -518,7 +543,7 @@ impl SdiBackend for SdlBackend {
             if lx <= rx {
                 let _ = self
                     .canvas
-                    .fill_rect(Rect::new(lx, ty + dy, (rx - lx + 1) as u32, 1));
+                    .fill_rect(frect(lx, ty + dy, (rx - lx + 1) as u32, 1));
             }
         }
         Ok(())
@@ -621,29 +646,41 @@ impl SdiBackend for SdlBackend {
     fn push_clip_rect(&mut self, x: i32, y: i32, w: u32, h: u32) -> Result<()> {
         let (tx, ty) = self.translate(x, y);
         let new_clip = ClipRect { x: tx, y: ty, w, h };
-        if let Some(current_sdl) = self.canvas.clip_rect() {
-            let current = ClipRect {
-                x: current_sdl.x(),
-                y: current_sdl.y(),
-                w: current_sdl.width(),
-                h: current_sdl.height(),
-            };
-            self.clip_stack.push(current);
-            let isect = intersect_clip(&current, &new_clip);
-            if let Some(c) = isect {
-                self.canvas.set_clip_rect(Rect::new(c.x, c.y, c.w, c.h));
-            } else {
+        match self.canvas.clip_rect() {
+            ClippingRect::Some(current_sdl) => {
+                let current = ClipRect {
+                    x: current_sdl.x(),
+                    y: current_sdl.y(),
+                    w: current_sdl.width(),
+                    h: current_sdl.height(),
+                };
+                self.clip_stack.push(current);
+                let isect = intersect_clip(&current, &new_clip);
+                if let Some(c) = isect {
+                    self.canvas.set_clip_rect(Rect::new(c.x, c.y, c.w, c.h));
+                } else {
+                    self.canvas.set_clip_rect(Rect::new(0, 0, 0, 0));
+                }
+            },
+            ClippingRect::Zero => {
+                self.clip_stack.push(ClipRect {
+                    x: 0,
+                    y: 0,
+                    w: 0,
+                    h: 0,
+                });
                 self.canvas.set_clip_rect(Rect::new(0, 0, 0, 0));
-            }
-        } else {
-            self.clip_stack.push(ClipRect {
-                x: 0,
-                y: 0,
-                w: self.viewport_w,
-                h: self.viewport_h,
-            });
-            self.canvas
-                .set_clip_rect(Rect::new(new_clip.x, new_clip.y, new_clip.w, new_clip.h));
+            },
+            ClippingRect::None => {
+                self.clip_stack.push(ClipRect {
+                    x: 0,
+                    y: 0,
+                    w: self.viewport_w,
+                    h: self.viewport_h,
+                });
+                self.canvas
+                    .set_clip_rect(Rect::new(new_clip.x, new_clip.y, new_clip.w, new_clip.h));
+            },
         }
         Ok(())
     }
@@ -664,9 +701,11 @@ impl SdiBackend for SdlBackend {
     }
 
     fn current_clip_rect(&self) -> Option<(i32, i32, u32, u32)> {
-        self.canvas
-            .clip_rect()
-            .map(|r| (r.x(), r.y(), r.width(), r.height()))
+        match self.canvas.clip_rect() {
+            ClippingRect::Some(r) => Some((r.x(), r.y(), r.width(), r.height())),
+            ClippingRect::Zero => Some((0, 0, 0, 0)),
+            ClippingRect::None => None,
+        }
     }
 
     fn push_translate(&mut self, dx: i32, dy: i32) -> Result<()> {
@@ -692,7 +731,7 @@ impl SdiBackend for SdlBackend {
 mod tests {
     use super::*;
 
-    use sdl2::keyboard::Keycode;
+    use sdl3::keyboard::Keycode;
 
     use oasis_core::input::{Button, InputEvent, Trigger};
 
@@ -784,7 +823,7 @@ mod tests {
     fn key_down_unmapped_returns_none() {
         assert_eq!(map_key_down(Keycode::A), None);
         assert_eq!(map_key_down(Keycode::Z), None);
-        assert_eq!(map_key_down(Keycode::Num0), None);
+        assert_eq!(map_key_down(Keycode::_0), None);
         assert_eq!(map_key_down(Keycode::F5), None);
     }
 
@@ -1061,8 +1100,8 @@ mod tests {
     // ---------------------------------------------------------------
     // SDL rendering correctness tests (require display)
     //
-    // These tests require a working SDL2 display. In CI, set
-    // SDL_VIDEODRIVER=dummy (or x11/wayland) and run:
+    // These tests require a working SDL3 display. In CI, set
+    // SDL_VIDEO_DRIVER=dummy (or x11/wayland) and run:
     //   cargo test -p oasis-backend-sdl -- --ignored
     //
     // Locally with a display, they can be run directly.

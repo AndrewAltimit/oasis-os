@@ -36,7 +36,7 @@ OASIS_OS originated as a Rust port of a PSP homebrew shell OS written in C circa
 
 | Target | Backend | Renderer | Input | Status |
 |--------|---------|----------|-------|--------|
-| Desktop / Raspberry Pi | `oasis-backend-sdl` | SDL2 window | Keyboard, mouse, gamepad | Implemented |
+| Desktop / Raspberry Pi | `oasis-backend-sdl` | SDL3 window | Keyboard, mouse, gamepad | Implemented |
 | WebAssembly (Browser) | `oasis-backend-wasm` | Canvas 2D API | DOM events (keyboard, mouse, touch) | Implemented |
 | PSP / PPSSPP | `oasis-backend-psp` | sceGu hardware sprites | PSP controller | Implemented |
 | Unreal Engine 5 | `oasis-backend-ue5` | Software RGBA framebuffer | FFI input queue | Implemented |
@@ -115,7 +115,7 @@ oasis-os/
 |   +-- oasis-core/                   # Coordination layer: 16 apps, dashboard, agent, plugin, script, etc.
 |   +-- oasis-video/                  # Software MP4/H.264+AAC decode pipeline (symphonia + openh264)
 |   +-- oasis-vector/                 # Vector graphics: scene graph, path ops, icons, animations
-|   +-- oasis-backend-sdl/            # SDL2 rendering and input (desktop + Pi)
+|   +-- oasis-backend-sdl/            # SDL3 rendering and input (desktop + Pi)
 |   +-- oasis-backend-wasm/           # Canvas 2D rendering, DOM input, Web Audio (browser)
 |   +-- oasis-backend-ue5/            # UE5 software framebuffer + FFI input queue
 |   +-- oasis-backend-psp/            # [excluded from workspace] sceGu hardware rendering, PSP controller, UMD browsing
@@ -157,26 +157,26 @@ oasis-os/
 | `oasis-js` | JavaScript engine wrapping QuickJS-NG via rquickjs: `console` API, inline `<script>` execution, DOM manipulation from JS |
 | `oasis-core` | Coordination layer: app runner (16 apps), dashboard, agent/MCP, plugin, scripting, status/bottom bars |
 | `oasis-video` | Software MP4/H.264+AAC decode pipeline: streaming `VideoSource` API, symphonia for demux + AAC, optional openh264 for H.264. Consumed by `oasis-app` (desktop) and `oasis-ffi` (UE5) via `video-decode` feature |
-| `oasis-backend-sdl` | SDL2 rendering and input backend for desktop and Raspberry Pi |
+| `oasis-backend-sdl` | SDL3 rendering and input backend for desktop and Raspberry Pi (built from source via cmake) |
 | `oasis-backend-wasm` | WebAssembly backend -- Canvas 2D rendering, DOM event input, Web Audio, iframe overlay for real web pages |
 | `oasis-backend-ue5` | UE5 render target backend -- software RGBA framebuffer and FFI input queue |
 | `oasis-vector` | Resolution-independent vector graphics: scene graph, path operations, Altimit-style icons, frame-driven animations |
 | `oasis-backend-psp` | PSP hardware backend -- sceGu sprite rendering, SDI scene-graph integration, TLS 1.3 via embedded-tls, in-memory MP4 streaming with AAC hardware decode, PSP controller input, std via [rust-psp](https://github.com/AndrewAltimit/rust-psp) SDK |
 | `oasis-plugin-psp` | PSP overlay plugin PRX -- kernel-mode companion module for in-game overlay UI and background MP3 playback |
 | `oasis-ffi` | C-ABI FFI boundary (`cdylib`) for UE5 and external integrations. Optional `video-decode` feature adds `oasis_video_play/stop/is_playing` |
-| `oasis-app` | Desktop entry point (SDL2) and screenshot capture tool. `video-decode` feature (default) enables software video decode for TV Guide without ffmpeg |
+| `oasis-app` | Desktop entry point (SDL3) and screenshot capture tool. `video-decode` feature (default) enables software video decode for TV Guide without ffmpeg |
 
 The PSP crates are excluded from the workspace (require `mipsel-sony-psp` target) and depend on the standalone [rust-psp SDK](https://github.com/AndrewAltimit/rust-psp) via git dependency. The backend compiles to an EBOOT.PBP (standalone application) with TV Guide, Internet Radio, and all core apps, while the plugin compiles to a kernel-mode PRX (resident overlay module loaded by CFW via `PLUGINS.TXT`). The WASM backend compiles to a `cdylib` via `wasm-pack` and runs in any modern browser with in-canvas video rendering for TV Guide.
 
 ## Building
 
-### Desktop (SDL2)
+### Desktop (SDL3)
 
 ```bash
 # Via Docker (container-first)
 docker compose --profile ci run --rm rust-ci cargo build --release -p oasis-app
 
-# Or natively (requires libsdl2-dev, libsdl2-mixer-dev)
+# Or natively (requires cmake, g++, and X11/audio dev headers)
 cargo build --release -p oasis-app
 ```
 

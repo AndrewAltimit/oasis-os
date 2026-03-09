@@ -1,15 +1,13 @@
-//! Shape drawing primitives for the SDL2 backend.
+//! Shape drawing primitives for the SDL3 backend.
 //!
 //! Contains all shape-related drawing methods (rounded rects, lines,
 //! circles, triangles, polygons, arcs) and helper functions used by both
 //! this module and the parent `lib.rs` (gradients, clip intersection).
 
-use sdl2::rect::Rect;
-
 use oasis_core::backend::{Color, SdiCore};
 use oasis_core::error::Result;
 
-use super::{ClipRect, SdlBackend};
+use super::{ClipRect, SdlBackend, fpoint, frect};
 
 // -------------------------------------------------------------------
 // Inherent shape methods on SdlBackend
@@ -59,10 +57,7 @@ impl SdlBackend {
                 x_max = x_max.max(vx1);
             }
             if x_min <= x_max {
-                let _ = self.canvas.draw_line(
-                    sdl2::rect::Point::new(x_min, y),
-                    sdl2::rect::Point::new(x_max, y),
-                );
+                let _ = self.canvas.draw_line(fpoint(x_min, y), fpoint(x_max, y));
             }
         }
     }
@@ -87,18 +82,15 @@ impl SdlBackend {
         // Center body rect.
         let _ = self
             .canvas
-            .fill_rect(Rect::new(tx, ty + r, w, h - r as u32 * 2));
+            .fill_rect(frect(tx, ty + r, w, h - r as u32 * 2));
         // Top strip.
         let _ = self
             .canvas
-            .fill_rect(Rect::new(tx + r, ty, w - r as u32 * 2, r as u32));
+            .fill_rect(frect(tx + r, ty, w - r as u32 * 2, r as u32));
         // Bottom strip.
-        let _ = self.canvas.fill_rect(Rect::new(
-            tx + r,
-            ty + h as i32 - r,
-            w - r as u32 * 2,
-            r as u32,
-        ));
+        let _ = self
+            .canvas
+            .fill_rect(frect(tx + r, ty + h as i32 - r, w - r as u32 * 2, r as u32));
 
         // Corner fills using midpoint circle horizontal spans.
         let mut cx = 0i32;
@@ -107,25 +99,25 @@ impl SdlBackend {
         while cx <= cy {
             // Top-left + top-right.
             let _ = self.canvas.draw_line(
-                sdl2::rect::Point::new(tx + r - cy, ty + r - cx),
-                sdl2::rect::Point::new(tx + w as i32 - 1 - r + cy, ty + r - cx),
+                fpoint(tx + r - cy, ty + r - cx),
+                fpoint(tx + w as i32 - 1 - r + cy, ty + r - cx),
             );
             if cx != cy {
                 let _ = self.canvas.draw_line(
-                    sdl2::rect::Point::new(tx + r - cx, ty + r - cy),
-                    sdl2::rect::Point::new(tx + w as i32 - 1 - r + cx, ty + r - cy),
+                    fpoint(tx + r - cx, ty + r - cy),
+                    fpoint(tx + w as i32 - 1 - r + cx, ty + r - cy),
                 );
             }
             // Bottom-left + bottom-right.
             if cx != 0 {
                 let _ = self.canvas.draw_line(
-                    sdl2::rect::Point::new(tx + r - cy, ty + h as i32 - 1 - r + cx),
-                    sdl2::rect::Point::new(tx + w as i32 - 1 - r + cy, ty + h as i32 - 1 - r + cx),
+                    fpoint(tx + r - cy, ty + h as i32 - 1 - r + cx),
+                    fpoint(tx + w as i32 - 1 - r + cy, ty + h as i32 - 1 - r + cx),
                 );
             }
             let _ = self.canvas.draw_line(
-                sdl2::rect::Point::new(tx + r - cx, ty + h as i32 - 1 - r + cy),
-                sdl2::rect::Point::new(tx + w as i32 - 1 - r + cx, ty + h as i32 - 1 - r + cy),
+                fpoint(tx + r - cx, ty + h as i32 - 1 - r + cy),
+                fpoint(tx + w as i32 - 1 - r + cx, ty + h as i32 - 1 - r + cy),
             );
 
             cx += 1;
@@ -152,17 +144,17 @@ impl SdlBackend {
         let (tx, ty) = self.translate(x, y);
         self.set_color(color);
         if stroke_width == 1 {
-            let _ = self.canvas.draw_rect(Rect::new(tx, ty, w, h));
+            let _ = self.canvas.draw_rect(frect(tx, ty, w, h));
         } else {
             let sw = stroke_width as u32;
-            let _ = self.canvas.fill_rect(Rect::new(tx, ty, w, sw));
+            let _ = self.canvas.fill_rect(frect(tx, ty, w, sw));
             let _ = self
                 .canvas
-                .fill_rect(Rect::new(tx, ty + h as i32 - sw as i32, w, sw));
-            let _ =
-                self.canvas
-                    .fill_rect(Rect::new(tx, ty + sw as i32, sw, h.saturating_sub(sw * 2)));
-            let _ = self.canvas.fill_rect(Rect::new(
+                .fill_rect(frect(tx, ty + h as i32 - sw as i32, w, sw));
+            let _ = self
+                .canvas
+                .fill_rect(frect(tx, ty + sw as i32, sw, h.saturating_sub(sw * 2)));
+            let _ = self.canvas.fill_rect(frect(
                 tx + w as i32 - sw as i32,
                 ty + sw as i32,
                 sw,
@@ -186,10 +178,7 @@ impl SdlBackend {
         let (tx2, ty2) = self.translate(x2, y2);
         self.set_color(color);
         if width <= 1 {
-            let _ = self.canvas.draw_line(
-                sdl2::rect::Point::new(tx1, ty1),
-                sdl2::rect::Point::new(tx2, ty2),
-            );
+            let _ = self.canvas.draw_line(fpoint(tx1, ty1), fpoint(tx2, ty2));
         } else {
             // Draw multiple parallel lines for thickness.
             let half = width as i32 / 2;
@@ -201,10 +190,9 @@ impl SdlBackend {
             for i in -half..=(width as i32 - half - 1) {
                 let ox = nx * i;
                 let oy = ny * i;
-                let _ = self.canvas.draw_line(
-                    sdl2::rect::Point::new(tx1 + ox, ty1 + oy),
-                    sdl2::rect::Point::new(tx2 + ox, ty2 + oy),
-                );
+                let _ = self
+                    .canvas
+                    .draw_line(fpoint(tx1 + ox, ty1 + oy), fpoint(tx2 + ox, ty2 + oy));
             }
         }
         Ok(())
@@ -225,25 +213,21 @@ impl SdlBackend {
         let mut y = r;
         let mut d = 1 - r;
         while x <= y {
-            let _ = self.canvas.draw_line(
-                sdl2::rect::Point::new(tcx - y, tcy + x),
-                sdl2::rect::Point::new(tcx + y, tcy + x),
-            );
+            let _ = self
+                .canvas
+                .draw_line(fpoint(tcx - y, tcy + x), fpoint(tcx + y, tcy + x));
             if x != 0 {
-                let _ = self.canvas.draw_line(
-                    sdl2::rect::Point::new(tcx - y, tcy - x),
-                    sdl2::rect::Point::new(tcx + y, tcy - x),
-                );
+                let _ = self
+                    .canvas
+                    .draw_line(fpoint(tcx - y, tcy - x), fpoint(tcx + y, tcy - x));
             }
             if x != y {
-                let _ = self.canvas.draw_line(
-                    sdl2::rect::Point::new(tcx - x, tcy + y),
-                    sdl2::rect::Point::new(tcx + x, tcy + y),
-                );
-                let _ = self.canvas.draw_line(
-                    sdl2::rect::Point::new(tcx - x, tcy - y),
-                    sdl2::rect::Point::new(tcx + x, tcy - y),
-                );
+                let _ = self
+                    .canvas
+                    .draw_line(fpoint(tcx - x, tcy + y), fpoint(tcx + x, tcy + y));
+                let _ = self
+                    .canvas
+                    .draw_line(fpoint(tcx - x, tcy - y), fpoint(tcx + x, tcy - y));
             }
             x += 1;
             if d < 0 {
@@ -291,7 +275,7 @@ impl SdlBackend {
                     (tcx + y, tcy - x),
                     (tcx - y, tcy - x),
                 ] {
-                    let _ = self.canvas.draw_point(sdl2::rect::Point::new(px, py));
+                    let _ = self.canvas.draw_point(fpoint(px, py));
                 }
                 x += 1;
                 if d < 0 {
@@ -353,10 +337,7 @@ impl SdlBackend {
             }
 
             if x_min <= x_max {
-                let _ = self.canvas.draw_line(
-                    sdl2::rect::Point::new(x_min, y),
-                    sdl2::rect::Point::new(x_max, y),
-                );
+                let _ = self.canvas.draw_line(fpoint(x_min, y), fpoint(x_max, y));
             }
         }
         Ok(())
@@ -384,23 +365,23 @@ impl SdlBackend {
         for t in 0..sw {
             // Top edge.
             let _ = self.canvas.draw_line(
-                sdl2::rect::Point::new(tx + r, ty + t),
-                sdl2::rect::Point::new(tx + w as i32 - 1 - r, ty + t),
+                fpoint(tx + r, ty + t),
+                fpoint(tx + w as i32 - 1 - r, ty + t),
             );
             // Bottom edge.
             let _ = self.canvas.draw_line(
-                sdl2::rect::Point::new(tx + r, ty + h as i32 - 1 - t),
-                sdl2::rect::Point::new(tx + w as i32 - 1 - r, ty + h as i32 - 1 - t),
+                fpoint(tx + r, ty + h as i32 - 1 - t),
+                fpoint(tx + w as i32 - 1 - r, ty + h as i32 - 1 - t),
             );
             // Left edge.
             let _ = self.canvas.draw_line(
-                sdl2::rect::Point::new(tx + t, ty + r),
-                sdl2::rect::Point::new(tx + t, ty + h as i32 - 1 - r),
+                fpoint(tx + t, ty + r),
+                fpoint(tx + t, ty + h as i32 - 1 - r),
             );
             // Right edge.
             let _ = self.canvas.draw_line(
-                sdl2::rect::Point::new(tx + w as i32 - 1 - t, ty + r),
-                sdl2::rect::Point::new(tx + w as i32 - 1 - t, ty + h as i32 - 1 - r),
+                fpoint(tx + w as i32 - 1 - t, ty + r),
+                fpoint(tx + w as i32 - 1 - t, ty + h as i32 - 1 - r),
             );
 
             // Rounded corners via midpoint circle arc.
@@ -413,44 +394,36 @@ impl SdlBackend {
             let mut d = 1 - cr;
             while cx <= cy {
                 // Top-left corner.
+                let _ = self.canvas.draw_point(fpoint(tx + r - cy, ty + r - cx));
+                if cx != cy {
+                    let _ = self.canvas.draw_point(fpoint(tx + r - cx, ty + r - cy));
+                }
+                // Top-right corner.
                 let _ = self
                     .canvas
-                    .draw_point(sdl2::rect::Point::new(tx + r - cy, ty + r - cx));
+                    .draw_point(fpoint(tx + w as i32 - 1 - r + cy, ty + r - cx));
                 if cx != cy {
                     let _ = self
                         .canvas
-                        .draw_point(sdl2::rect::Point::new(tx + r - cx, ty + r - cy));
-                }
-                // Top-right corner.
-                let _ = self.canvas.draw_point(sdl2::rect::Point::new(
-                    tx + w as i32 - 1 - r + cy,
-                    ty + r - cx,
-                ));
-                if cx != cy {
-                    let _ = self.canvas.draw_point(sdl2::rect::Point::new(
-                        tx + w as i32 - 1 - r + cx,
-                        ty + r - cy,
-                    ));
+                        .draw_point(fpoint(tx + w as i32 - 1 - r + cx, ty + r - cy));
                 }
                 // Bottom-left corner.
                 if cx != 0 {
-                    let _ = self.canvas.draw_point(sdl2::rect::Point::new(
-                        tx + r - cy,
-                        ty + h as i32 - 1 - r + cx,
-                    ));
+                    let _ = self
+                        .canvas
+                        .draw_point(fpoint(tx + r - cy, ty + h as i32 - 1 - r + cx));
                 }
-                let _ = self.canvas.draw_point(sdl2::rect::Point::new(
-                    tx + r - cx,
-                    ty + h as i32 - 1 - r + cy,
-                ));
+                let _ = self
+                    .canvas
+                    .draw_point(fpoint(tx + r - cx, ty + h as i32 - 1 - r + cy));
                 // Bottom-right corner.
                 if cx != 0 {
-                    let _ = self.canvas.draw_point(sdl2::rect::Point::new(
+                    let _ = self.canvas.draw_point(fpoint(
                         tx + w as i32 - 1 - r + cy,
                         ty + h as i32 - 1 - r + cx,
                     ));
                 }
-                let _ = self.canvas.draw_point(sdl2::rect::Point::new(
+                let _ = self.canvas.draw_point(fpoint(
                     tx + w as i32 - 1 - r + cx,
                     ty + h as i32 - 1 - r + cy,
                 ));
@@ -494,10 +467,9 @@ impl SdlBackend {
             }
             x_intersections.sort_unstable();
             for pair in x_intersections.chunks_exact(2) {
-                let _ = self.canvas.draw_line(
-                    sdl2::rect::Point::new(pair[0], y),
-                    sdl2::rect::Point::new(pair[1], y),
-                );
+                let _ = self
+                    .canvas
+                    .draw_line(fpoint(pair[0], y), fpoint(pair[1], y));
             }
         }
         Ok(())
@@ -566,10 +538,9 @@ impl SdlBackend {
                 let len = (dx * dx + dy * dy).sqrt().max(1.0);
                 let ox = (-dy / len * offset as f32) as i32;
                 let oy = (dx / len * offset as f32) as i32;
-                let _ = self.canvas.draw_line(
-                    sdl2::rect::Point::new(prev_x + ox, prev_y + oy),
-                    sdl2::rect::Point::new(nx + ox, ny + oy),
-                );
+                let _ = self
+                    .canvas
+                    .draw_line(fpoint(prev_x + ox, prev_y + oy), fpoint(nx + ox, ny + oy));
             }
             prev_x = nx;
             prev_y = ny;
@@ -613,10 +584,9 @@ impl SdlBackend {
             for offset in -half..=(width as i32 - half - 1) {
                 let ox = (-uy * offset as f32) as i32;
                 let oy = (ux * offset as f32) as i32;
-                let _ = self.canvas.draw_line(
-                    sdl2::rect::Point::new(sx + ox, sy + oy),
-                    sdl2::rect::Point::new(ex + ox, ey + oy),
-                );
+                let _ = self
+                    .canvas
+                    .draw_line(fpoint(sx + ox, sy + oy), fpoint(ex + ox, ey + oy));
             }
             t += cycle;
         }

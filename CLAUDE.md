@@ -10,7 +10,7 @@ Default virtual resolution is 480x272 (PSP native). Skins may override this (e.g
 
 ## Build Commands
 
-All CI commands run inside Docker containers. For local development you can run cargo directly if SDL2 dev libs are installed, or use the Docker wrapper.
+All CI commands run inside Docker containers. For local development you can run cargo directly (SDL3 is compiled from source automatically via the `build-from-source` feature), or use the Docker wrapper.
 
 ```bash
 # Build (desktop)
@@ -90,7 +90,7 @@ oasis-types     (foundation: Color, Button, InputEvent, backend traits, error ty
 ├── oasis-video      (MP4/H.264+AAC decode; features: h264, no-std-demux, video-decode)
 ├── oasis-vector     (vector graphics: scene graph, path ops, icons, frame-driven animations)
 └── oasis-core       (coordination: 16 apps, dashboard, agent, plugin, script)
-    ├── oasis-backend-sdl  (SDL2 desktop/Pi rendering + input + audio)
+    ├── oasis-backend-sdl  (SDL3 desktop/Pi rendering + input + audio)
     │   └── oasis-app      (binary entry points: oasis-app, oasis-screenshot; oasis-video[video-decode])
     ├── oasis-backend-wasm (Canvas 2D + DOM input + Web Audio, iframe overlay)
     ├── oasis-backend-ue5  (software RGBA framebuffer for Unreal Engine 5)
@@ -178,7 +178,7 @@ Exports C-ABI functions: `oasis_create`, `oasis_destroy`, `oasis_tick`, `oasis_s
 ## Docker Services
 
 `docker-compose.yml` profiles:
-- `ci` -- rust-ci container (rust:1.93-slim + SDL2 dev libs + nightly + cargo-deny)
+- `ci` -- rust-ci container (rust:1.93-slim + cmake + X11/audio dev libs + nightly + cargo-deny)
 - `psp` -- PPSSPP emulator (multi-stage build, NVIDIA GPU passthrough)
 - `services` -- MCP server containers (code-quality, content-creation, gemini, etc.)
 
