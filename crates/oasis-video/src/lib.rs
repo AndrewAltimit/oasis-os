@@ -72,31 +72,22 @@ impl<T: AsRef<[u8]> + Send + Sync> VideoSource for Cursor<T> {
 }
 
 /// Errors from the video pipeline.
-#[derive(Debug)]
+#[derive(Debug, thiserror::Error)]
 pub enum VideoError {
     /// MP4 container / demuxing error.
+    #[error("demux error: {0}")]
     Demux(String),
     /// Codec decode error (H.264 or AAC).
+    #[error("decode error: {0}")]
     Decode(String),
     /// No suitable track found.
+    #[error("no track: {0}")]
     NoTrack(String),
     /// Decoder couldn't produce a frame within the packet skip limit.
     /// Not a fatal error — caller should continue with audio and retry.
+    #[error("decoder skip limit reached")]
     SkipLimit,
 }
-
-impl std::fmt::Display for VideoError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Demux(s) => write!(f, "demux error: {s}"),
-            Self::Decode(s) => write!(f, "decode error: {s}"),
-            Self::NoTrack(s) => write!(f, "no track: {s}"),
-            Self::SkipLimit => write!(f, "decoder skip limit reached"),
-        }
-    }
-}
-
-impl std::error::Error for VideoError {}
 
 /// A decoded video frame in RGBA format.
 pub struct VideoFrame {

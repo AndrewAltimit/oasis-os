@@ -1140,11 +1140,13 @@ static mut DL_TEMPLATE_ID: i32 = -1;
 unsafe fn ensure_dl_template() -> Result<i32, String> {
     use psp::sys;
 
-    if DL_TEMPLATE_ID >= 0 {
-        return Ok(DL_TEMPLATE_ID);
+    // SAFETY: Only accessed from the I/O thread (single producer).
+    if unsafe { DL_TEMPLATE_ID } >= 0 {
+        return Ok(unsafe { DL_TEMPLATE_ID });
     }
 
-    let ret = sys::sceHttpInit(0x20000);
+    // SAFETY: PSP HTTP subsystem init with 128KB pool.
+    let ret = unsafe { sys::sceHttpInit(0x20000) };
     // Accept "already initialized" (0x80431020) in case IO-TV already
     // initialized it via psp::http::HttpClient.
     if ret < 0 && ret != -0x7FBCEFE0_i32 {
@@ -1153,21 +1155,28 @@ unsafe fn ensure_dl_template() -> Result<i32, String> {
     }
     io_log(&format!("[IO-DL] sceHttpInit: {ret:#x}"));
 
-    let tid = sys::sceHttpCreateTemplate(b"oasis-psp/1.0\0".as_ptr() as *mut u8, 1, 0);
+    // SAFETY: Creating HTTP template with user-agent string.
+    let tid = unsafe {
+        sys::sceHttpCreateTemplate(b"oasis-psp/1.0\0".as_ptr() as *mut u8, 1, 0)
+    };
     if tid < 0 {
         return Err(format!("template: {tid:#x}"));
     }
-    // Disable keep-alive so each request gets a fresh TCP connection.
-    sys::sceHttpDisableKeepAlive(tid);
-    // Disable auto-redirect. archive.org redirects some items'
-    // HTTP URLs to HTTPS, and PSP's built-in SSL (2008 root CAs)
-    // can't connect. We handle redirects manually, rewriting
-    // HTTPS→HTTP in the Location header.
-    sys::sceHttpDisableRedirect(tid);
+    // SAFETY: Configuring template options on valid template ID.
+    unsafe {
+        // Disable keep-alive so each request gets a fresh TCP connection.
+        sys::sceHttpDisableKeepAlive(tid);
+        // Disable auto-redirect. archive.org redirects some items'
+        // HTTP URLs to HTTPS, and PSP's built-in SSL (2008 root CAs)
+        // can't connect. We handle redirects manually, rewriting
+        // HTTPS→HTTP in the Location header.
+        sys::sceHttpDisableRedirect(tid);
+    }
     io_log(&format!(
         "[IO-DL] template created: {tid} (keep-alive off, redirect off)"
     ));
-    DL_TEMPLATE_ID = tid;
+    // SAFETY: Only accessed from the I/O thread (single producer).
+    unsafe { DL_TEMPLATE_ID = tid; }
     Ok(tid)
 }
 
@@ -1186,7 +1195,9 @@ unsafe fn ensure_dl_template() -> Result<i32, String> {
 unsafe fn http_open_with_redirect(url: &str) -> Result<(i32, i32, u64), (String, Option<String>)> {
     use psp::sys;
 
-    let template_id = ensure_dl_template().map_err(|e| (e, None))?;
+    // SAFETY: Delegates to ensure_dl_template which accesses mutable statics
+    // and PSP HTTP syscalls; only called from I/O thread.
+    let template_id = unsafe { ensure_dl_template() }.map_err(|e| (e, None))?;
     let mut current_url = url.to_string();
     // Track the last HTTPS redirect URL for TLS fallback.
     let mut last_https_redirect: Option<String> = None;
@@ -1195,35 +1206,52 @@ unsafe fn http_open_with_redirect(url: &str) -> Result<(i32, i32, u64), (String,
         let mut url_bytes: Vec<u8> = current_url.as_bytes().to_vec();
         url_bytes.push(0);
 
-        let conn_id = sys::sceHttpCreateConnectionWithURL(template_id, url_bytes.as_ptr(), 0);
+        // SAFETY: Valid template ID and null-terminated URL.
+        let conn_id = unsafe {
+            sys::sceHttpCreateConnectionWithURL(template_id, url_bytes.as_ptr(), 0)
+        };
         if conn_id < 0 {
             return Err((format!("connect: {conn_id:#x}"), None));
         }
 
-        let req_id = sys::sceHttpCreateRequestWithURL(
-            conn_id,
-            sys::HttpMethod::Get,
-            url_bytes.as_ptr() as *mut u8,
-            0,
-        );
+        // SAFETY: Valid connection ID and null-terminated URL.
+        let req_id = unsafe {
+            sys::sceHttpCreateRequestWithURL(
+                conn_id,
+                sys::HttpMethod::Get,
+                url_bytes.as_ptr() as *mut u8,
+                0,
+            )
+        };
         if req_id < 0 {
-            sys::sceHttpDeleteConnection(conn_id);
+            // SAFETY: Cleaning up valid connection ID.
+            unsafe { sys::sceHttpDeleteConnection(conn_id); }
             return Err((format!("request: {req_id:#x}"), None));
         }
 
-        sys::sceHttpSetConnectTimeOut(req_id, 30_000_000);
-        sys::sceHttpSetRecvTimeOut(req_id, 30_000_000);
+        // SAFETY: Setting timeouts on valid request ID.
+        unsafe {
+            sys::sceHttpSetConnectTimeOut(req_id, 30_000_000);
+            sys::sceHttpSetRecvTimeOut(req_id, 30_000_000);
+        }
 
-        let ret = sys::sceHttpSendRequest(req_id, core::ptr::null_mut(), 0);
+        // SAFETY: Sending HTTP GET request with no body.
+        let ret = unsafe {
+            sys::sceHttpSendRequest(req_id, core::ptr::null_mut(), 0)
+        };
         if ret < 0 {
             io_log(&format!("[IO-DL] send failed: {ret:#x}"));
-            sys::sceHttpDeleteRequest(req_id);
-            sys::sceHttpDeleteConnection(conn_id);
+            // SAFETY: Cleaning up valid request and connection IDs.
+            unsafe {
+                sys::sceHttpDeleteRequest(req_id);
+                sys::sceHttpDeleteConnection(conn_id);
+            }
             return Err((format!("send: {ret:#x}"), last_https_redirect.clone()));
         }
 
         let mut status_code: i32 = 0;
-        sys::sceHttpGetStatusCode(req_id, &mut status_code);
+        // SAFETY: Valid request ID, writing to local variable.
+        unsafe { sys::sceHttpGetStatusCode(req_id, &mut status_code); }
         io_log(&format!("[IO-DL] status={status_code} (attempt {attempt})"));
 
         // Handle redirects manually.
@@ -1232,11 +1260,16 @@ unsafe fn http_open_with_redirect(url: &str) -> Result<(i32, i32, u64), (String,
             // deleting the request, since the pointer is into its buffer.
             let mut hdr_ptr: *mut u8 = core::ptr::null_mut();
             let mut hdr_len: u32 = 0;
-            let ret = sys::sceHttpGetAllHeader(req_id, &mut hdr_ptr, &mut hdr_len);
+            // SAFETY: Valid request ID, writing to local variables.
+            let ret = unsafe {
+                sys::sceHttpGetAllHeader(req_id, &mut hdr_ptr, &mut hdr_len)
+            };
 
             let location_url = if ret >= 0 && !hdr_ptr.is_null() && hdr_len > 0 {
-                // SAFETY: pointer valid while request alive.
-                let hdrs = core::slice::from_raw_parts(hdr_ptr, hdr_len as usize);
+                // SAFETY: Pointer valid while request alive; length from kernel.
+                let hdrs = unsafe {
+                    core::slice::from_raw_parts(hdr_ptr, hdr_len as usize)
+                };
                 let hdr_str = core::str::from_utf8(hdrs).unwrap_or("");
                 hdr_str
                     .lines()
@@ -1247,8 +1280,11 @@ unsafe fn http_open_with_redirect(url: &str) -> Result<(i32, i32, u64), (String,
             };
 
             // Now safe to delete the request+connection (template persists).
-            sys::sceHttpDeleteRequest(req_id);
-            sys::sceHttpDeleteConnection(conn_id);
+            // SAFETY: Cleaning up valid request and connection IDs.
+            unsafe {
+                sys::sceHttpDeleteRequest(req_id);
+                sys::sceHttpDeleteConnection(conn_id);
+            }
 
             if let Some(loc) = location_url {
                 // Save HTTPS URL for TLS fallback before rewriting.
@@ -1274,13 +1310,17 @@ unsafe fn http_open_with_redirect(url: &str) -> Result<(i32, i32, u64), (String,
         }
 
         if status_code < 200 || status_code >= 300 {
-            sys::sceHttpDeleteRequest(req_id);
-            sys::sceHttpDeleteConnection(conn_id);
+            // SAFETY: Cleaning up valid request and connection IDs.
+            unsafe {
+                sys::sceHttpDeleteRequest(req_id);
+                sys::sceHttpDeleteConnection(conn_id);
+            }
             return Err((format!("HTTP {status_code}"), None));
         }
 
         let mut content_length: u64 = 0;
-        sys::sceHttpGetContentLength(req_id, &mut content_length);
+        // SAFETY: Valid request ID, writing to local variable.
+        unsafe { sys::sceHttpGetContentLength(req_id, &mut content_length); }
 
         return Ok((req_id, conn_id, content_length));
     }
@@ -1293,12 +1333,14 @@ unsafe fn http_open_with_redirect(url: &str) -> Result<(i32, i32, u64), (String,
 /// sceHttp's internal state corrupts after the first download session,
 /// causing `0x80431079` on subsequent `sceHttpSendRequest` calls.
 /// Raw sockets have no such state — each connection is independent.
+#[allow(dead_code)]
 struct RawHttpReader {
     fd: i32,
     /// Leftover body data read during header parsing.
     leftover: Vec<u8>,
 }
 
+#[allow(dead_code)]
 impl RawHttpReader {
     /// Open an HTTP connection via raw TCP: DNS → connect → GET → parse headers.
     ///

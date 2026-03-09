@@ -263,6 +263,9 @@ impl PspVideoDecoder {
         // SAFETY: ptr is the same aligned buffer passed to Open.
         let ret = unsafe { psp::sys::sceVideocodecGetEDRAM(ptr, 0) };
         if ret < 0 {
+            // Note: sceVideocodecOpen has no corresponding Close/Stop API, so
+            // the codec handle from Open cannot be explicitly released. Only
+            // EDRAM (from GetEDRAM) has a release function.
             let msg = format!("sceVideocodecGetEDRAM failed: {:#010x}", ret as u32);
             vlog(&format!("[VIDEO] {msg}"));
             return Err(msg);

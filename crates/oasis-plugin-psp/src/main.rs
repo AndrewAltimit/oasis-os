@@ -22,8 +22,6 @@
 
 #![no_std]
 #![no_main]
-#![feature(asm_experimental_arch)]
-
 psp::module_kernel!("OasisPlugin", 1, 0);
 
 mod audio;

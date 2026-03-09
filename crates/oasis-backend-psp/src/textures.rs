@@ -36,6 +36,7 @@ pub(crate) struct VolatileAllocator {
 
 impl VolatileAllocator {
     /// Create a new allocator over the given memory region.
+    #[allow(dead_code)]
     pub(crate) fn new(base: *mut u8, size: usize) -> Self {
         Self {
             base,

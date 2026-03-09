@@ -5,7 +5,6 @@
 //! pure recursive-descent parser with no external dependencies.
 
 use std::any::Any;
-use std::fmt;
 
 use oasis_app_core::render::{
     draw_content_windowed, hide_app_sdi, render_app_chrome, render_content_sdi,
@@ -22,29 +21,20 @@ use oasis_vfs::Vfs;
 // ---------------------------------------------------------------
 
 /// Errors that can occur during expression evaluation.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, thiserror::Error)]
 pub enum CalcError {
     /// Division or modulo by zero.
+    #[error("Division by zero")]
     DivisionByZero,
     /// Expression could not be parsed.
+    #[error("Invalid expression: {0}")]
     InvalidExpression(String),
     /// Mismatched parentheses.
+    #[error("Unmatched parentheses")]
     UnmatchedParen,
     /// Input was empty or whitespace-only.
+    #[error("Empty expression")]
     EmptyExpression,
-}
-
-impl fmt::Display for CalcError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::DivisionByZero => write!(f, "Division by zero"),
-            Self::InvalidExpression(msg) => {
-                write!(f, "Invalid expression: {msg}")
-            },
-            Self::UnmatchedParen => write!(f, "Unmatched parentheses"),
-            Self::EmptyExpression => write!(f, "Empty expression"),
-        }
-    }
 }
 
 // ---------------------------------------------------------------

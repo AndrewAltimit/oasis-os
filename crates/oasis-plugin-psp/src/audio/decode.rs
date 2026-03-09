@@ -7,7 +7,7 @@ use super::network::*;
 use super::radio::*;
 use super::resolve::*;
 use super::state::*;
-use super::{copy_bytes, find_mp3_sync, log_i32, skip_id3v2, write_hex32, write_u32_decimal};
+use super::{copy_bytes, find_mp3_sync, log_i32, skip_id3v2, write_hex32};
 
 use crate::overlay;
 
@@ -1164,6 +1164,7 @@ pub(super) unsafe fn play_track_codec(path: &[u8], channel: i32) -> i32 {
         }
     }
 
+    #[allow(unused_assignments)]
     let mut edram_allocated = false;
     // SAFETY: Volatile reads of resolved sceAudiocodec fn pointers
     // (CheckNeedMem, GetEDRAM, Init); calling with valid codec buffer.

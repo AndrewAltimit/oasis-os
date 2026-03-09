@@ -12,7 +12,6 @@
 //! - `input_dispatch` -- input event routing for Classic and Desktop modes
 
 #![feature(restricted_std)]
-#![feature(asm_experimental_arch)]
 #![no_main]
 
 use oasis_backend_psp::{
@@ -1010,7 +1009,7 @@ fn render_desktop(
     pv: &PhotoViewerState,
     mp: &MusicPlayerState,
     audio: &oasis_backend_psp::AudioHandle,
-    br: &BrowserState,
+    _br: &BrowserState,
 ) {
     let settings_clock = config.get_i32("clock_mhz").unwrap_or(333);
     let settings_bus = config.get_i32("bus_mhz").unwrap_or(166);

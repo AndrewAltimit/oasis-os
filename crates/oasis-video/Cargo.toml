@@ -21,6 +21,7 @@ no-std-demux = []
 
 [dependencies]
 log = "0.4"
+thiserror = { workspace = true }
 
 # MP4 demuxing + AAC decoding (pure Rust)
 symphonia = { version = "0.5", default-features = false, features = [

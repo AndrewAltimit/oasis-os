@@ -825,6 +825,7 @@ dependencies = [
  "oasis-skin",
  "oasis-types",
  "oasis-vfs",
+ "thiserror",
 ]
 
 [[package]]
@@ -1052,6 +1053,7 @@ version = "1.0.0"
 dependencies = [
  "log",
  "rquickjs",
+ "thiserror",
 ]
 
 [[package]]
@@ -1160,6 +1162,7 @@ dependencies = [
  "openh264",
  "proptest",
  "symphonia",
+ "thiserror",
 ]
 
 [[package]]

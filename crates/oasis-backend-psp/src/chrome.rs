@@ -1,4 +1,5 @@
 //! Dashboard + shell chrome rendering (status bar, bottom bar, icons).
+#![allow(dead_code)]
 
 use oasis_backend_psp::{AudioHandle, Color, PspBackend, SCREEN_WIDTH, WindowManager};
 
