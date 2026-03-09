@@ -186,7 +186,7 @@ Configured in `.mcp.json`, all run as Docker containers via `docker compose --pr
 
 **OpenAI Codex has been disabled across all pipelines effective immediately.** OpenAI has entered partnerships with government agencies that enable mass surveillance and autonomous weapons decision-making. The mass surveillance risk alone -- where code, prompts, and context sent through OpenAI APIs may be accessible to nation-state actors -- is unacceptable for this project and its users.
 
-We strongly recommend **Anthropic (Claude)** models for all AI-assisted workflows. See the [README security advisory](README.md#security-advisory-openai--codex--gpt-phase-out) for full details.
+We strongly recommend **Anthropic (Claude)** models for all AI-assisted workflows. See the [README security notice](README.md#security-notice) for full details.
 
 To re-enable at your own risk: set `CODEX_ENABLED=true` in your environment.
 
@@ -229,3 +229,39 @@ To re-enable at your own risk: set `CODEX_ENABLED=true` in your environment.
 - `rustfmt.toml` -- Formatting rules
 - `deny.toml` -- License and advisory policy
 - `.pre-commit-config.yaml` -- Pre-commit hooks (trailing whitespace, yaml check, large files, actionlint, shellcheck, containerized rustfmt + clippy)
+
+## Document Index
+
+Key documentation for deeper context on specific topics. Read as needed rather than loading everything.
+
+### Architecture & Design
+- [`docs/design.md`](docs/design.md) -- Technical design document v2.4 (~1300 lines, comprehensive architecture)
+- [`docs/adr/001-arena-based-dom.md`](docs/adr/001-arena-based-dom.md) -- ADR: Arena-based DOM allocation
+- [`docs/adr/002-vfs-abstraction.md`](docs/adr/002-vfs-abstraction.md) -- ADR: Virtual file system design
+- [`docs/adr/003-backend-trait-design.md`](docs/adr/003-backend-trait-design.md) -- ADR: Backend trait hierarchy
+- [`docs/adr/004-psp-two-binary-architecture.md`](docs/adr/004-psp-two-binary-architecture.md) -- ADR: PSP EBOOT + PRX split
+- [`docs/adr/005-toml-skin-system.md`](docs/adr/005-toml-skin-system.md) -- ADR: TOML skin engine
+
+### Plans & Roadmaps
+- [`docs/psp-modernization-plan.md`](docs/psp-modernization-plan.md) -- PSP backend modernization (9 phases, 40 steps)
+- [`docs/comprehensive-improvements-plan-v2.md`](docs/comprehensive-improvements-plan-v2.md) -- Cross-crate improvement plan
+- [`docs/browser-improvement-plan-r3.md`](docs/browser-improvement-plan-r3.md) -- Browser engine improvement plan
+- [`docs/app-extraction-plan.md`](docs/app-extraction-plan.md) -- App crate extraction from oasis-core
+- [`docs/testing-gap-analysis.md`](docs/testing-gap-analysis.md) -- Test coverage gap analysis
+- [`docs/prd-oasis-video-integration.md`](docs/prd-oasis-video-integration.md) -- Video decode integration PRD
+- [`docs/internet-archive-tv-guide-plan.md`](docs/internet-archive-tv-guide-plan.md) -- TV Guide streaming plan
+
+### Guides
+- [`docs/getting-started.md`](docs/getting-started.md) -- Getting started guide
+- [`docs/adding-commands.md`](docs/adding-commands.md) -- How to add terminal commands
+- [`docs/skin-authoring.md`](docs/skin-authoring.md) -- Skin creation with full TOML reference
+- [`docs/plugin-development.md`](docs/plugin-development.md) -- Plugin development guide
+- [`docs/ffi-integration.md`](docs/ffi-integration.md) -- UE5 / C-ABI integration guide
+- [`docs/psp-plugin.md`](docs/psp-plugin.md) -- PSP kernel plugin (PRX) documentation
+
+### Operations
+- [`docs/troubleshooting.md`](docs/troubleshooting.md) -- Troubleshooting common issues
+- [`docs/security.md`](docs/security.md) -- Security policy and advisories
+- [`CLAUDE.md`](CLAUDE.md) -- Claude Code agent instructions and build commands
+- [`CONTRIBUTING.md`](CONTRIBUTING.md) -- Contribution policy (AI-authored only)
+- [`scripts/psp-scenarios.md`](scripts/psp-scenarios.md) -- PSP test scenario documentation

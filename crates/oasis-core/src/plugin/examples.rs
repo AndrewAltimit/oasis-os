@@ -237,7 +237,7 @@ impl Command for NoteCmd {
             "read" => {
                 let name = args.get(1).copied().unwrap_or("");
                 if name.is_empty() {
-                    return Err(OasisError::Command("usage: note read <name>".to_string()));
+                    return Err(OasisError::Command("usage: note read <name>".into()));
                 }
                 let path = format!("{NOTEPAD_DIR}/{name}");
                 let data = env.vfs.read(&path)?;
@@ -248,7 +248,7 @@ impl Command for NoteCmd {
                 let name = args.get(1).copied().unwrap_or("");
                 if name.is_empty() || args.len() < 3 {
                     return Err(OasisError::Command(
-                        "usage: note write <name> <text...>".to_string(),
+                        "usage: note write <name> <text...>".into(),
                     ));
                 }
                 let text = args[2..].join(" ");
@@ -258,7 +258,7 @@ impl Command for NoteCmd {
             },
             _ => Err(OasisError::Command(format!(
                 "unknown subcommand: {subcmd}\nusage: note [list|read <name>|write <name> <text>]"
-            ))),
+            ).into())),
         }
     }
 }

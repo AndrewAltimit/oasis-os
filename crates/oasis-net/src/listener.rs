@@ -309,13 +309,13 @@ impl RemoteListener {
         let conn = self
             .connections
             .get_mut(conn_idx)
-            .ok_or_else(|| OasisError::Backend("invalid connection index".to_string()))?;
+            .ok_or_else(|| OasisError::Backend("invalid connection index".into()))?;
         conn.stream
             .write(text.as_bytes())
-            .map_err(|e| OasisError::Backend(format!("send: {e}")))?;
+            .map_err(|e| OasisError::Backend(format!("send: {e}").into()))?;
         conn.stream
             .write(b"\n> ")
-            .map_err(|e| OasisError::Backend(format!("send prompt: {e}")))?;
+            .map_err(|e| OasisError::Backend(format!("send prompt: {e}").into()))?;
         Ok(())
     }
 

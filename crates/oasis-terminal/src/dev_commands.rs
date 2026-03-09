@@ -65,7 +65,9 @@ impl Command for Base64Cmd {
         if decode {
             match base64_decode(&input) {
                 Ok(decoded) => Ok(CommandOutput::Text(decoded)),
-                Err(e) => Err(OasisError::Command(format!("base64 decode error: {e}"))),
+                Err(e) => Err(OasisError::Command(
+                    format!("base64 decode error: {e}").into(),
+                )),
             }
         } else {
             Ok(CommandOutput::Text(base64_encode(input.as_bytes())))
@@ -178,13 +180,13 @@ impl Command for JsonCmd {
             if valid {
                 Ok(CommandOutput::Text("Valid JSON".to_string()))
             } else {
-                Err(OasisError::Command("Invalid JSON".to_string()))
+                Err(OasisError::Command("Invalid JSON".into()))
             }
         } else if valid {
             // Simple pretty-print: add newlines and indentation.
             Ok(CommandOutput::Text(pretty_json(trimmed)))
         } else {
-            Err(OasisError::Command("Invalid JSON".to_string()))
+            Err(OasisError::Command("Invalid JSON".into()))
         }
     }
 }
@@ -366,36 +368,36 @@ impl Command for SeqCmd {
         let (start, end, step) = match args.len() {
             0 => {
                 return Err(OasisError::Command(
-                    "usage: seq [start] <end> [step]".to_string(),
+                    "usage: seq [start] <end> [step]".into(),
                 ));
             },
             1 => {
                 let end: i64 = args[0]
                     .parse()
-                    .map_err(|_| OasisError::Command("invalid number".to_string()))?;
+                    .map_err(|_| OasisError::Command("invalid number".into()))?;
                 (1i64, end, 1i64)
             },
             2 => {
                 let start: i64 = args[0]
                     .parse()
-                    .map_err(|_| OasisError::Command("invalid number".to_string()))?;
+                    .map_err(|_| OasisError::Command("invalid number".into()))?;
                 let end: i64 = args[1]
                     .parse()
-                    .map_err(|_| OasisError::Command("invalid number".to_string()))?;
+                    .map_err(|_| OasisError::Command("invalid number".into()))?;
                 (start, end, if start <= end { 1 } else { -1 })
             },
             _ => {
                 let start: i64 = args[0]
                     .parse()
-                    .map_err(|_| OasisError::Command("invalid number".to_string()))?;
+                    .map_err(|_| OasisError::Command("invalid number".into()))?;
                 let end: i64 = args[1]
                     .parse()
-                    .map_err(|_| OasisError::Command("invalid number".to_string()))?;
+                    .map_err(|_| OasisError::Command("invalid number".into()))?;
                 let step: i64 = args[2]
                     .parse()
-                    .map_err(|_| OasisError::Command("invalid number".to_string()))?;
+                    .map_err(|_| OasisError::Command("invalid number".into()))?;
                 if step == 0 {
-                    return Err(OasisError::Command("step cannot be 0".to_string()));
+                    return Err(OasisError::Command("step cannot be 0".into()));
                 }
                 (start, end, step)
             },
@@ -435,7 +437,7 @@ impl Command for ExprCmd {
     }
     fn execute(&self, args: &[&str], _env: &mut Environment<'_>) -> Result<CommandOutput> {
         if args.is_empty() {
-            return Err(OasisError::Command("usage: expr <expression>".to_string()));
+            return Err(OasisError::Command("usage: expr <expression>".into()));
         }
         let expr_str = args.join(" ");
         match eval_expr(&expr_str) {
@@ -446,7 +448,7 @@ impl Command for ExprCmd {
                     Ok(CommandOutput::Text(format!("{val}")))
                 }
             },
-            Err(e) => Err(OasisError::Command(format!("expr: {e}"))),
+            Err(e) => Err(OasisError::Command(format!("expr: {e}").into())),
         }
     }
 }
@@ -609,7 +611,7 @@ impl Command for TestCmd {
             "-f" => {
                 let path = args
                     .get(1)
-                    .ok_or_else(|| OasisError::Command("usage: test -f <file>".to_string()))?;
+                    .ok_or_else(|| OasisError::Command("usage: test -f <file>".into()))?;
                 let full = crate::interpreter::resolve_path(&env.cwd, path);
                 env.vfs.exists(&full)
                     && env
@@ -621,7 +623,7 @@ impl Command for TestCmd {
             "-d" => {
                 let path = args
                     .get(1)
-                    .ok_or_else(|| OasisError::Command("usage: test -d <dir>".to_string()))?;
+                    .ok_or_else(|| OasisError::Command("usage: test -d <dir>".into()))?;
                 let full = crate::interpreter::resolve_path(&env.cwd, path);
                 env.vfs.exists(&full)
                     && env
@@ -690,7 +692,7 @@ impl Command for XargsCmd {
     }
     fn execute(&self, args: &[&str], env: &mut Environment<'_>) -> Result<CommandOutput> {
         if args.is_empty() {
-            return Err(OasisError::Command("usage: xargs <command>".to_string()));
+            return Err(OasisError::Command("usage: xargs <command>".into()));
         }
         let base_cmd = args.join(" ");
         let input = env.stdin.clone().unwrap_or_default();

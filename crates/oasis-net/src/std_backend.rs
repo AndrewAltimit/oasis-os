@@ -46,11 +46,11 @@ impl NetworkBackend for StdNetworkBackend {
 
     fn listen(&mut self, port: u16) -> Result<()> {
         let addr = format!("0.0.0.0:{port}");
-        let listener =
-            TcpListener::bind(&addr).map_err(|e| OasisError::Backend(format!("bind: {e}")))?;
+        let listener = TcpListener::bind(&addr)
+            .map_err(|e| OasisError::Backend(format!("bind: {e}").into()))?;
         listener
             .set_nonblocking(true)
-            .map_err(|e| OasisError::Backend(format!("set_nonblocking: {e}")))?;
+            .map_err(|e| OasisError::Backend(format!("set_nonblocking: {e}").into()))?;
         log::info!("Remote terminal listening on {addr}");
         self.listener = Some(listener);
         Ok(())
@@ -58,28 +58,28 @@ impl NetworkBackend for StdNetworkBackend {
 
     fn accept(&mut self) -> Result<Option<Box<dyn NetworkStream>>> {
         let Some(ref listener) = self.listener else {
-            return Err(OasisError::Backend("not listening".to_string()));
+            return Err(OasisError::Backend("not listening".into()));
         };
         match listener.accept() {
             Ok((stream, addr)) => {
                 log::info!("Remote connection from {addr}");
                 stream
                     .set_nonblocking(true)
-                    .map_err(|e| OasisError::Backend(format!("set_nonblocking: {e}")))?;
+                    .map_err(|e| OasisError::Backend(format!("set_nonblocking: {e}").into()))?;
                 Ok(Some(Box::new(StdNetworkStream::new(stream))))
             },
             Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => Ok(None),
-            Err(e) => Err(OasisError::Backend(format!("accept: {e}"))),
+            Err(e) => Err(OasisError::Backend(format!("accept: {e}").into())),
         }
     }
 
     fn connect(&mut self, address: &str, port: u16) -> Result<Box<dyn NetworkStream>> {
         let addr = format!("{address}:{port}");
-        let stream =
-            TcpStream::connect(&addr).map_err(|e| OasisError::Backend(format!("connect: {e}")))?;
+        let stream = TcpStream::connect(&addr)
+            .map_err(|e| OasisError::Backend(format!("connect: {e}").into()))?;
         stream
             .set_nonblocking(true)
-            .map_err(|e| OasisError::Backend(format!("set_nonblocking: {e}")))?;
+            .map_err(|e| OasisError::Backend(format!("set_nonblocking: {e}").into()))?;
         log::info!("Connected to {addr}");
         Ok(Box::new(StdNetworkStream::new(stream)))
     }
@@ -108,7 +108,7 @@ impl NetworkStream for StdNetworkStream {
     fn close(&mut self) -> Result<()> {
         self.stream
             .shutdown(std::net::Shutdown::Both)
-            .map_err(|e| OasisError::Backend(format!("close: {e}")))
+            .map_err(|e| OasisError::Backend(format!("close: {e}").into()))
     }
 }
 

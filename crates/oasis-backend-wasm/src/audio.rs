@@ -14,7 +14,7 @@ use oasis_types::backend::{AudioBackend, AudioTrackId};
 use oasis_types::error::{OasisError, Result};
 
 fn js_err(e: JsValue) -> OasisError {
-    OasisError::Backend(format!("{e:?}"))
+    OasisError::Backend(format!("{e:?}").into())
 }
 
 /// Maximum pending chunks before dropping oldest (prevents unbounded growth
@@ -173,7 +173,7 @@ impl AudioBackend for WasmAudioBackend {
         let buffer = self
             .tracks
             .get(&track.0)
-            .ok_or_else(|| OasisError::Backend(format!("track {} not found", track.0)))?
+            .ok_or_else(|| OasisError::Backend(format!("track {} not found", track.0).into()))?
             .clone();
 
         let ctx = self.ensure_context()?;

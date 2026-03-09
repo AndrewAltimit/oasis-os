@@ -34,10 +34,9 @@ impl Command for WifiCmd {
         let subcmd = args.first().copied().unwrap_or("status");
         match subcmd {
             "status" | "" => wifi_status(env),
-            _ => Err(OasisError::Command(format!(
-                "unknown subcommand: {subcmd}\nusage: {}",
-                self.usage()
-            ))),
+            _ => Err(OasisError::Command(
+                format!("unknown subcommand: {subcmd}\nusage: {}", self.usage()).into(),
+            )),
         }
     }
 }
@@ -45,7 +44,7 @@ impl Command for WifiCmd {
 fn wifi_status(env: &mut Environment<'_>) -> Result<CommandOutput> {
     let Some(net) = env.network else {
         return Ok(CommandOutput::Text(
-            "wifi: no network service available".to_string(),
+            "wifi: no network service available".into(),
         ));
     };
     let info = net.wifi_info()?;
@@ -100,7 +99,7 @@ impl Command for PingCmd {
     }
     fn execute(&self, args: &[&str], env: &mut Environment<'_>) -> Result<CommandOutput> {
         if args.is_empty() {
-            return Err(OasisError::Command("usage: ping <hostname>".to_string()));
+            return Err(OasisError::Command("usage: ping <hostname>".into()));
         }
         let Some(net) = env.network else {
             return Ok(CommandOutput::Text(
@@ -141,7 +140,7 @@ impl Command for HttpCmd {
     }
     fn execute(&self, args: &[&str], env: &mut Environment<'_>) -> Result<CommandOutput> {
         if args.is_empty() {
-            return Err(OasisError::Command("usage: http <url>".to_string()));
+            return Err(OasisError::Command("usage: http <url>".into()));
         }
         let Some(net) = env.network else {
             return Ok(CommandOutput::Text(

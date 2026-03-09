@@ -115,7 +115,7 @@ impl AgentRegistry {
     /// Load agents from a TOML string (contents of `agents.toml`).
     pub fn from_toml(toml_str: &str) -> Result<Self> {
         let config: AgentsConfig = toml::from_str(toml_str)
-            .map_err(|e| OasisError::Config(format!("agents.toml: {e}")))?;
+            .map_err(|e| OasisError::Config(format!("agents.toml: {e}").into()))?;
         Ok(Self {
             agents: config.agent,
         })

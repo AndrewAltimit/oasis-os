@@ -220,7 +220,7 @@ impl RadioSource for IcecastSource {
                             return Ok(None);
                         }
                         self.state = SourceState::Error;
-                        return Err(OasisError::Backend(format!("stream read: {e}")));
+                        return Err(OasisError::Backend(format!("stream read: {e}").into()));
                     },
                 };
 
@@ -430,7 +430,7 @@ impl RadioSource for ArchiveSource {
                             return Ok(None);
                         }
                         self.state = SourceState::Error;
-                        return Err(OasisError::Backend(format!("stream read: {e}")));
+                        return Err(OasisError::Backend(format!("stream read: {e}").into()));
                     },
                 };
 
@@ -444,7 +444,7 @@ impl RadioSource for ArchiveSource {
                             let url = url.clone();
                             self.state = SourceState::Error;
                             let _ = self.stream.close();
-                            return Err(OasisError::Backend(format!("redirect:{url}")));
+                            return Err(OasisError::Backend(format!("redirect:{url}").into()));
                         }
                         // Check for HTTP error status.
                         if let Some(code) = self.status_code
@@ -452,7 +452,7 @@ impl RadioSource for ArchiveSource {
                         {
                             self.state = SourceState::Error;
                             let _ = self.stream.close();
-                            return Err(OasisError::Backend(format!("HTTP {code}")));
+                            return Err(OasisError::Backend(format!("HTTP {code}").into()));
                         }
 
                         let body = self.header_buf[body_offset..].to_vec();
@@ -984,7 +984,7 @@ mod tests {
         fn read(&mut self, buf: &mut [u8]) -> Result<usize> {
             self.call_count += 1;
             if self.call_count % 2 == 1 {
-                return Err(OasisError::Backend("WouldBlock".to_string()));
+                return Err(OasisError::Backend("WouldBlock".into()));
             }
             self.inner.read(buf)
         }

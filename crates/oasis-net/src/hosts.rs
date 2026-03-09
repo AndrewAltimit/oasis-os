@@ -37,7 +37,7 @@ pub fn parse_hosts(toml_str: &str) -> oasis_types::error::Result<Vec<HostEntry>>
     }
 
     let file: HostsFile = toml::from_str(toml_str)
-        .map_err(|e| oasis_types::error::OasisError::Config(format!("hosts.toml: {e}")))?;
+        .map_err(|e| oasis_types::error::OasisError::Config(format!("hosts.toml: {e}").into()))?;
     Ok(file.host)
 }
 
@@ -185,7 +185,7 @@ psk = "my-secret"
         let result = parse_hosts(toml);
         assert!(result.is_err());
         if let Err(oasis_types::error::OasisError::Config(msg)) = result {
-            assert!(msg.contains("hosts.toml"));
+            assert!(msg.to_string().contains("hosts.toml"));
         } else {
             panic!("Expected Config error");
         }

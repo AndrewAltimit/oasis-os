@@ -126,7 +126,7 @@ impl Command for RunCmd {
         let path = args
             .first()
             .copied()
-            .ok_or_else(|| OasisError::Command("usage: run <path>".to_string()))?;
+            .ok_or_else(|| OasisError::Command("usage: run <path>".into()))?;
 
         // Resolve relative paths against cwd.
         let full_path = if path.starts_with('/') {
@@ -138,9 +138,9 @@ impl Command for RunCmd {
         };
 
         if !env.vfs.exists(&full_path) {
-            return Err(OasisError::Command(format!(
-                "script not found: {full_path}"
-            )));
+            return Err(OasisError::Command(
+                format!("script not found: {full_path}").into(),
+            ));
         }
 
         // We need a reference to the registry, but we're inside a Command.
@@ -231,13 +231,14 @@ impl Command for CronCmd {
                     env.vfs.remove(&entry_path)?;
                     Ok(CommandOutput::Text(format!("Cron job '{name}' removed")))
                 } else {
-                    Err(OasisError::Command(format!("cron job not found: {name}")))
+                    Err(OasisError::Command(
+                        format!("cron job not found: {name}").into(),
+                    ))
                 }
             },
-            _ => Err(OasisError::Command(format!(
-                "unknown subcommand: {subcmd}\nusage: {}",
-                self.usage()
-            ))),
+            _ => Err(OasisError::Command(
+                format!("unknown subcommand: {subcmd}\nusage: {}", self.usage()).into(),
+            )),
         }
     }
 }
@@ -283,10 +284,12 @@ impl Command for StartupCmd {
                 let path = args
                     .get(1)
                     .copied()
-                    .ok_or_else(|| OasisError::Command("usage: startup set <path>".to_string()))?;
+                    .ok_or_else(|| OasisError::Command("usage: startup set <path>".into()))?;
                 // Copy the script to the startup path.
                 if !env.vfs.exists(path) {
-                    return Err(OasisError::Command(format!("file not found: {path}")));
+                    return Err(OasisError::Command(
+                        format!("file not found: {path}").into(),
+                    ));
                 }
                 let data = env.vfs.read(path)?;
                 env.vfs.write(STARTUP_SCRIPT_PATH, &data)?;
@@ -300,10 +303,9 @@ impl Command for StartupCmd {
                 }
                 Ok(CommandOutput::Text("Startup script cleared".to_string()))
             },
-            _ => Err(OasisError::Command(format!(
-                "unknown subcommand: {subcmd}\nusage: {}",
-                self.usage()
-            ))),
+            _ => Err(OasisError::Command(
+                format!("unknown subcommand: {subcmd}\nusage: {}", self.usage()).into(),
+            )),
         }
     }
 }

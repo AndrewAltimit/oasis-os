@@ -36,10 +36,9 @@ pub fn http_get(url: &Url, tls: Option<&dyn TlsProvider>) -> Result<ResourceResp
         return Ok(https_error_page(url, url));
     }
     if url.scheme != "http" && url.scheme != "https" {
-        return Err(OasisError::Backend(format!(
-            "unsupported scheme for HTTP client: {}",
-            url.scheme,
-        )));
+        return Err(OasisError::Backend(
+            format!("unsupported scheme for HTTP client: {}", url.scheme,).into(),
+        ));
     }
 
     let mut current_url = url.clone();
@@ -50,9 +49,9 @@ pub fn http_get(url: &Url, tls: Option<&dyn TlsProvider>) -> Result<ResourceResp
             && let Some(location) = find_header(&resp.headers, "location")
         {
             let location = location.to_string();
-            current_url = current_url
-                .resolve(&location)
-                .ok_or_else(|| OasisError::Backend(format!("bad redirect Location: {location}")))?;
+            current_url = current_url.resolve(&location).ok_or_else(|| {
+                OasisError::Backend(format!("bad redirect Location: {location}").into())
+            })?;
             if current_url.scheme == "https" && tls.is_none() {
                 return Ok(https_error_page(url, &current_url));
             }
@@ -71,7 +70,7 @@ pub fn http_get(url: &Url, tls: Option<&dyn TlsProvider>) -> Result<ResourceResp
         });
     }
 
-    Err(OasisError::Backend("too many redirects".to_string()))
+    Err(OasisError::Backend("too many redirects".into()))
 }
 
 // -------------------------------------------------------------------
@@ -103,8 +102,7 @@ fn do_request(url: &Url, tls: Option<&dyn TlsProvider>) -> Result<HttpResponse> 
     let stream = tcp_connect(host, port)?;
 
     if is_https {
-        let tls_provider =
-            tls.ok_or_else(|| OasisError::Backend("TLS not available".to_string()))?;
+        let tls_provider = tls.ok_or_else(|| OasisError::Backend("TLS not available".into()))?;
 
         // Wrap the TcpStream as a NetworkStream, then upgrade to TLS.
         let net_stream: Box<dyn NetworkStream> = Box::new(oasis_net::StdNetworkStream::new(stream));
@@ -128,16 +126,16 @@ fn tcp_connect(host: &str, port: u16) -> Result<TcpStream> {
 
     let addr = format!("{host}:{port}")
         .to_socket_addrs()
-        .map_err(|e| OasisError::Backend(format!("DNS resolution failed: {e}")))?
+        .map_err(|e| OasisError::Backend(format!("DNS resolution failed: {e}").into()))?
         .next()
-        .ok_or_else(|| OasisError::Backend(format!("no addresses for {host}:{port}")))?;
+        .ok_or_else(|| OasisError::Backend(format!("no addresses for {host}:{port}").into()))?;
 
     let stream = TcpStream::connect_timeout(&addr, CONNECT_TIMEOUT)
-        .map_err(|e| OasisError::Backend(format!("TCP connect failed: {e}")))?;
+        .map_err(|e| OasisError::Backend(format!("TCP connect failed: {e}").into()))?;
 
     stream
         .set_read_timeout(Some(READ_TIMEOUT))
-        .map_err(|e| OasisError::Backend(format!("set read timeout: {e}")))?;
+        .map_err(|e| OasisError::Backend(format!("set read timeout: {e}").into()))?;
 
     Ok(stream)
 }
@@ -167,7 +165,7 @@ fn send_request(stream: &mut impl Write, url: &Url, is_https: bool) -> Result<()
 
     stream
         .write_all(request.as_bytes())
-        .map_err(|e| OasisError::Backend(format!("send request: {e}")))?;
+        .map_err(|e| OasisError::Backend(format!("send request: {e}").into()))?;
 
     Ok(())
 }
@@ -181,7 +179,7 @@ fn read_response(stream: &mut impl Read) -> Result<Vec<u8>> {
             Ok(0) => break,
             Ok(n) => {
                 if buf.len() + n > MAX_BODY_SIZE + 4096 {
-                    return Err(OasisError::Backend("response too large".to_string()));
+                    return Err(OasisError::Backend("response too large".into()));
                 }
                 buf.extend_from_slice(&chunk[..n]);
             },
@@ -191,7 +189,7 @@ fn read_response(stream: &mut impl Read) -> Result<Vec<u8>> {
                 break;
             },
             Err(e) => {
-                return Err(OasisError::Backend(format!("read response: {e}")));
+                return Err(OasisError::Backend(format!("read response: {e}").into()));
             },
         }
     }
@@ -202,21 +200,21 @@ fn read_response(stream: &mut impl Read) -> Result<Vec<u8>> {
 pub fn parse_response(data: &[u8]) -> Result<HttpResponse> {
     // Find the header/body boundary (\r\n\r\n).
     let header_end = find_subsequence(data, b"\r\n\r\n").ok_or_else(|| {
-        OasisError::Backend("malformed HTTP response: no header terminator".to_string())
+        OasisError::Backend("malformed HTTP response: no header terminator".into())
     })?;
 
     let header_bytes = &data[..header_end];
     let body_start = header_end + 4;
 
     let header_str = std::str::from_utf8(header_bytes)
-        .map_err(|_| OasisError::Backend("non-UTF-8 headers".to_string()))?;
+        .map_err(|_| OasisError::Backend("non-UTF-8 headers".into()))?;
 
     let mut lines = header_str.split("\r\n");
 
     // Status line: "HTTP/1.x STATUS REASON"
     let status_line = lines
         .next()
-        .ok_or_else(|| OasisError::Backend("empty response".to_string()))?;
+        .ok_or_else(|| OasisError::Backend("empty response".into()))?;
     let status_code = parse_status_line(status_line)?;
 
     // Parse headers.
@@ -238,10 +236,10 @@ pub fn parse_response(data: &[u8]) -> Result<HttpResponse> {
     } else if let Some(cl) = find_header(&headers, "content-length") {
         let len: usize = cl
             .parse()
-            .map_err(|_| OasisError::Backend("bad Content-Length".to_string()))?;
+            .map_err(|_| OasisError::Backend("bad Content-Length".into()))?;
         if len > MAX_BODY_SIZE {
             return Err(OasisError::Backend(
-                "response body exceeds 8 MB limit".to_string(),
+                "response body exceeds 8 MB limit".into(),
             ));
         }
         raw_body[..raw_body.len().min(len)].to_vec()
@@ -251,7 +249,7 @@ pub fn parse_response(data: &[u8]) -> Result<HttpResponse> {
 
     if body.len() > MAX_BODY_SIZE {
         return Err(OasisError::Backend(
-            "response body exceeds 8 MB limit".to_string(),
+            "response body exceeds 8 MB limit".into(),
         ));
     }
 
@@ -267,11 +265,13 @@ fn parse_status_line(line: &str) -> Result<u16> {
     // Expected: "HTTP/1.x NNN ..."
     let parts: Vec<&str> = line.splitn(3, ' ').collect();
     if parts.len() < 2 {
-        return Err(OasisError::Backend(format!("bad status line: {line}")));
+        return Err(OasisError::Backend(
+            format!("bad status line: {line}").into(),
+        ));
     }
     parts[1]
         .parse()
-        .map_err(|_| OasisError::Backend(format!("bad status code in: {line}")))
+        .map_err(|_| OasisError::Backend(format!("bad status code in: {line}").into()))
 }
 
 /// Case-insensitive header lookup.
@@ -296,14 +296,14 @@ fn decode_chunked(data: &[u8]) -> Result<Vec<u8>> {
         let line_end = pos + i;
 
         let size_str = std::str::from_utf8(&data[pos..line_end])
-            .map_err(|_| OasisError::Backend("bad chunk size".to_string()))?
+            .map_err(|_| OasisError::Backend("bad chunk size".into()))?
             .trim();
 
         // Strip optional chunk extensions (after `;`).
         let size_str = size_str.split(';').next().unwrap_or("").trim();
 
         let chunk_size = usize::from_str_radix(size_str, 16)
-            .map_err(|_| OasisError::Backend("bad chunk size".to_string()))?;
+            .map_err(|_| OasisError::Backend("bad chunk size".into()))?;
 
         if chunk_size == 0 {
             break;
@@ -325,7 +325,7 @@ fn decode_chunked(data: &[u8]) -> Result<Vec<u8>> {
 
         if result.len() + chunk_size > MAX_BODY_SIZE {
             return Err(OasisError::Backend(
-                "chunked body exceeds 8 MB limit".to_string(),
+                "chunked body exceeds 8 MB limit".into(),
             ));
         }
 

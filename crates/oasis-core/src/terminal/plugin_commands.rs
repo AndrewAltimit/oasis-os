@@ -49,7 +49,7 @@ impl Command for PluginCmd {
             "load" => {
                 let name = args.get(1).copied().unwrap_or("");
                 if name.is_empty() {
-                    return Err(OasisError::Command("usage: plugin load <name>".to_string()));
+                    return Err(OasisError::Command("usage: plugin load <name>".into()));
                 }
                 let request = format!("load {name}");
                 env.vfs.write(PLUGIN_REQUEST_PATH, request.as_bytes())?;
@@ -60,9 +60,7 @@ impl Command for PluginCmd {
             "unload" => {
                 let name = args.get(1).copied().unwrap_or("");
                 if name.is_empty() {
-                    return Err(OasisError::Command(
-                        "usage: plugin unload <name>".to_string(),
-                    ));
+                    return Err(OasisError::Command("usage: plugin unload <name>".into()));
                 }
                 let request = format!("unload {name}");
                 env.vfs.write(PLUGIN_REQUEST_PATH, request.as_bytes())?;
@@ -70,9 +68,12 @@ impl Command for PluginCmd {
                     "Plugin unload request queued: {name}"
                 )))
             },
-            _ => Err(OasisError::Command(format!(
-                "unknown subcommand: {subcmd}\nusage: plugin [list|load <name>|unload <name>]"
-            ))),
+            _ => Err(OasisError::Command(
+                format!(
+                    "unknown subcommand: {subcmd}\nusage: plugin [list|load <name>|unload <name>]"
+                )
+                .into(),
+            )),
         }
     }
 }

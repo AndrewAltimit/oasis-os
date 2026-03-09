@@ -362,9 +362,9 @@ impl RadioManager {
             },
             "vol" => {
                 let vol_str = parts.get(1).unwrap_or(&"");
-                let vol: u8 = vol_str
-                    .parse()
-                    .map_err(|_| OasisError::Command(format!("invalid volume: {vol_str}")))?;
+                let vol: u8 = vol_str.parse().map_err(|_| {
+                    OasisError::Command(format!("invalid volume: {vol_str}").into())
+                })?;
                 self.set_volume(vol, backend)?;
                 Ok(format!("volume: {}%", self.volume))
             },
@@ -372,14 +372,16 @@ impl RadioManager {
                 let idx_str = parts.get(1).unwrap_or(&"");
                 let idx: usize = idx_str
                     .parse()
-                    .map_err(|_| OasisError::Command(format!("invalid index: {idx_str}")))?;
+                    .map_err(|_| OasisError::Command(format!("invalid index: {idx_str}").into()))?;
                 if self.registry.toggle_favorite(idx) {
                     let fav = self.registry.stations[idx].favorite;
                     let name = &self.registry.stations[idx].name;
                     let star = if fav { "added" } else { "removed" };
                     Ok(format!("{name}: favorite {star}"))
                 } else {
-                    Err(OasisError::Command(format!("station {idx} not found")))
+                    Err(OasisError::Command(
+                        format!("station {idx} not found").into(),
+                    ))
                 }
             },
             "genre" => {
@@ -393,7 +395,9 @@ impl RadioManager {
                 }
             },
             // "tune" is handled by the main loop (needs NetworkBackend).
-            _ => Err(OasisError::Command(format!("unknown radio command: {cmd}"))),
+            _ => Err(OasisError::Command(
+                format!("unknown radio command: {cmd}").into(),
+            )),
         }
     }
 
@@ -460,7 +464,7 @@ impl RadioManager {
                 self.registry = reg;
                 Ok(())
             },
-            Err(e) => Err(OasisError::Backend(e)),
+            Err(e) => Err(OasisError::Backend(e.into())),
         }
     }
 

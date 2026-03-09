@@ -60,7 +60,7 @@ cargo run -p oasis-app --bin oasis-screenshot
 
 ## CI Pipeline Order
 
-format check -> clippy -> test -> release build -> cargo-deny -> PSP EBOOT build -> PPSSPP headless test -> screenshot regression -> benchmarks -> code coverage -> GitHub Pages deploy (WASM)
+format check -> clippy -> doc build -> markdown link check -> test -> release build -> screenshot regression -> cargo-deny -> benchmarks -> PSP EBOOT build -> PPSSPP headless test -> code coverage -> GitHub Pages deploy (WASM)
 
 All steps run via `docker compose --profile ci run --rm rust-ci`.
 
@@ -181,3 +181,39 @@ Exports C-ABI functions: `oasis_create`, `oasis_destroy`, `oasis_tick`, `oasis_s
 - `ci` -- rust-ci container (rust:1.93-slim + SDL2 dev libs + nightly + cargo-deny)
 - `psp` -- PPSSPP emulator (multi-stage build, NVIDIA GPU passthrough)
 - `services` -- MCP server containers (code-quality, content-creation, gemini, etc.)
+
+## Document Index
+
+Key documentation files for agents and contributors. Read these for deeper context on specific topics rather than loading everything into every conversation.
+
+### Architecture & Design
+- [`docs/design.md`](docs/design.md) -- Technical design document v2.4 (~1300 lines, comprehensive architecture)
+- [`docs/adr/001-arena-based-dom.md`](docs/adr/001-arena-based-dom.md) -- ADR: Arena-based DOM allocation
+- [`docs/adr/002-vfs-abstraction.md`](docs/adr/002-vfs-abstraction.md) -- ADR: Virtual file system design
+- [`docs/adr/003-backend-trait-design.md`](docs/adr/003-backend-trait-design.md) -- ADR: Backend trait hierarchy
+- [`docs/adr/004-psp-two-binary-architecture.md`](docs/adr/004-psp-two-binary-architecture.md) -- ADR: PSP EBOOT + PRX split
+- [`docs/adr/005-toml-skin-system.md`](docs/adr/005-toml-skin-system.md) -- ADR: TOML skin engine
+
+### Plans & Roadmaps
+- [`docs/psp-modernization-plan.md`](docs/psp-modernization-plan.md) -- PSP backend modernization (9 phases, 40 steps)
+- [`docs/comprehensive-improvements-plan-v2.md`](docs/comprehensive-improvements-plan-v2.md) -- Cross-crate improvement plan
+- [`docs/browser-improvement-plan-r3.md`](docs/browser-improvement-plan-r3.md) -- Browser engine improvement plan
+- [`docs/app-extraction-plan.md`](docs/app-extraction-plan.md) -- App crate extraction from oasis-core
+- [`docs/testing-gap-analysis.md`](docs/testing-gap-analysis.md) -- Test coverage gap analysis
+- [`docs/prd-oasis-video-integration.md`](docs/prd-oasis-video-integration.md) -- Video decode integration PRD
+- [`docs/internet-archive-tv-guide-plan.md`](docs/internet-archive-tv-guide-plan.md) -- TV Guide streaming plan
+
+### Guides
+- [`docs/getting-started.md`](docs/getting-started.md) -- Getting started guide
+- [`docs/adding-commands.md`](docs/adding-commands.md) -- How to add terminal commands
+- [`docs/skin-authoring.md`](docs/skin-authoring.md) -- Skin creation with full TOML reference
+- [`docs/plugin-development.md`](docs/plugin-development.md) -- Plugin development guide
+- [`docs/ffi-integration.md`](docs/ffi-integration.md) -- UE5 / C-ABI integration guide
+- [`docs/psp-plugin.md`](docs/psp-plugin.md) -- PSP kernel plugin (PRX) documentation
+
+### Operations
+- [`docs/troubleshooting.md`](docs/troubleshooting.md) -- Troubleshooting common issues
+- [`docs/security.md`](docs/security.md) -- Security policy and advisories
+- [`AGENTS.md`](AGENTS.md) -- Multi-agent system configuration and CI workflow
+- [`CONTRIBUTING.md`](CONTRIBUTING.md) -- Contribution policy (AI-authored only)
+- [`scripts/psp-scenarios.md`](scripts/psp-scenarios.md) -- PSP test scenario documentation

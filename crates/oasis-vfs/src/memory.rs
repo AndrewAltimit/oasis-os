@@ -104,10 +104,10 @@ impl Vfs for MemoryVfs {
         match self.nodes.get(path.as_ref()) {
             Some(Node::Dir) => {},
             Some(Node::File(_)) => {
-                return Err(OasisError::Vfs(format!("not a directory: {path}")));
+                return Err(OasisError::Vfs(format!("not a directory: {path}").into()));
             },
             None => {
-                return Err(OasisError::Vfs(format!("no such directory: {path}")));
+                return Err(OasisError::Vfs(format!("no such directory: {path}").into()));
             },
         }
 
@@ -151,8 +151,8 @@ impl Vfs for MemoryVfs {
         let path = normalize(path);
         match self.nodes.get(path.as_ref()) {
             Some(Node::File(data)) => Ok(data.clone()),
-            Some(Node::Dir) => Err(OasisError::Vfs(format!("is a directory: {path}"))),
-            None => Err(OasisError::Vfs(format!("no such file: {path}"))),
+            Some(Node::Dir) => Err(OasisError::Vfs(format!("is a directory: {path}").into())),
+            None => Err(OasisError::Vfs(format!("no such file: {path}").into())),
         }
     }
 
@@ -161,24 +161,24 @@ impl Vfs for MemoryVfs {
         // Ensure parent directory exists.
         let par = parent(&path);
         if !self.nodes.contains_key(par) {
-            return Err(OasisError::Vfs(format!(
-                "parent directory does not exist: {par}"
-            )));
+            return Err(OasisError::Vfs(
+                format!("parent directory does not exist: {par}").into(),
+            ));
         }
         // Check parent directory write permission.
         if let Some(perms) = self.permissions.get(par)
             && !perms.owner_can_write()
         {
-            return Err(OasisError::Vfs(format!(
-                "permission denied (directory read-only): {par}"
-            )));
+            return Err(OasisError::Vfs(
+                format!("permission denied (directory read-only): {par}").into(),
+            ));
         }
         if let Some(perms) = self.permissions.get(path.as_ref())
             && !perms.owner_can_write()
         {
-            return Err(OasisError::Vfs(format!(
-                "permission denied (read-only): {path}"
-            )));
+            return Err(OasisError::Vfs(
+                format!("permission denied (read-only): {path}").into(),
+            ));
         }
         let owned = path.into_owned();
         self.permissions
@@ -199,7 +199,7 @@ impl Vfs for MemoryVfs {
                 kind: EntryKind::Directory,
                 size: 0,
             }),
-            None => Err(OasisError::Vfs(format!("no such path: {path}"))),
+            None => Err(OasisError::Vfs(format!("no such path: {path}").into())),
         }
     }
 
@@ -217,9 +217,9 @@ impl Vfs for MemoryVfs {
         if let Some(perms) = self.permissions.get(&par)
             && !perms.owner_can_write()
         {
-            return Err(OasisError::Vfs(format!(
-                "permission denied (directory read-only): {par}"
-            )));
+            return Err(OasisError::Vfs(
+                format!("permission denied (directory read-only): {par}").into(),
+            ));
         }
         let owned = path.into_owned();
         self.permissions
@@ -232,24 +232,24 @@ impl Vfs for MemoryVfs {
     fn remove(&mut self, path: &str) -> Result<()> {
         let path = normalize(path);
         if path.as_ref() == "/" {
-            return Err(OasisError::Vfs("cannot remove root".to_string()));
+            return Err(OasisError::Vfs("cannot remove root".into()));
         }
         // Check parent directory write permission.
         let par = parent(&path);
         if let Some(perms) = self.permissions.get(par)
             && !perms.owner_can_write()
         {
-            return Err(OasisError::Vfs(format!(
-                "permission denied (directory read-only): {par}"
-            )));
+            return Err(OasisError::Vfs(
+                format!("permission denied (directory read-only): {par}").into(),
+            ));
         }
         // Check target's own permission.
         if let Some(perms) = self.permissions.get(path.as_ref())
             && !perms.owner_can_write()
         {
-            return Err(OasisError::Vfs(format!(
-                "permission denied (read-only): {path}"
-            )));
+            return Err(OasisError::Vfs(
+                format!("permission denied (read-only): {path}").into(),
+            ));
         }
         match self.nodes.get(path.as_ref()) {
             Some(Node::Dir) => {
@@ -261,12 +261,14 @@ impl Vfs for MemoryVfs {
                     .next()
                     .is_some_and(|(k, _)| k.starts_with(&prefix));
                 if has_children {
-                    return Err(OasisError::Vfs(format!("directory not empty: {path}")));
+                    return Err(OasisError::Vfs(
+                        format!("directory not empty: {path}").into(),
+                    ));
                 }
             },
             Some(Node::File(_)) => {},
             None => {
-                return Err(OasisError::Vfs(format!("no such path: {path}")));
+                return Err(OasisError::Vfs(format!("no such path: {path}").into()));
             },
         }
         let ps = path.as_ref().to_string();
@@ -279,14 +281,14 @@ impl Vfs for MemoryVfs {
         let from = normalize(from);
         let to = normalize(to);
         if !self.nodes.contains_key(from.as_ref()) {
-            return Err(OasisError::Vfs(format!("no such path: {from}")));
+            return Err(OasisError::Vfs(format!("no such path: {from}").into()));
         }
         // Ensure destination parent exists.
         let to_par = parent(&to);
         if !self.nodes.contains_key(to_par) {
-            return Err(OasisError::Vfs(format!(
-                "parent directory does not exist: {to_par}"
-            )));
+            return Err(OasisError::Vfs(
+                format!("parent directory does not exist: {to_par}").into(),
+            ));
         }
         // Collect all entries to move (the source itself + children if directory).
         let from_str = from.as_ref().to_string();
@@ -322,7 +324,7 @@ impl Vfs for MemoryVfs {
     fn get_permissions(&self, path: &str) -> Result<FilePermissions> {
         let path = normalize(path);
         if !self.nodes.contains_key(path.as_ref()) {
-            return Err(OasisError::Vfs(format!("no such path: {path}")));
+            return Err(OasisError::Vfs(format!("no such path: {path}").into()));
         }
         Ok(self
             .permissions
@@ -337,7 +339,7 @@ impl Vfs for MemoryVfs {
     fn set_permissions(&mut self, path: &str, perms: FilePermissions) -> Result<()> {
         let path = normalize(path);
         if !self.nodes.contains_key(path.as_ref()) {
-            return Err(OasisError::Vfs(format!("no such path: {path}")));
+            return Err(OasisError::Vfs(format!("no such path: {path}").into()));
         }
         self.permissions.insert(path.into_owned(), perms);
         Ok(())

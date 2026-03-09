@@ -26,7 +26,7 @@ impl Command for ManCmd {
         let name = args
             .first()
             .copied()
-            .ok_or_else(|| OasisError::Command("usage: man <command>".to_string()))?;
+            .ok_or_else(|| OasisError::Command("usage: man <command>".into()))?;
 
         let man_path = format!("/usr/share/man/{name}.txt");
         if env.vfs.exists(&man_path) {
@@ -36,10 +36,13 @@ impl Command for ManCmd {
             ))
         } else {
             // Fall back to help-style output if no man page exists.
-            Err(OasisError::Command(format!(
-                "No manual entry for '{name}'.\n\
+            Err(OasisError::Command(
+                format!(
+                    "No manual entry for '{name}'.\n\
                  Try 'help {name}' for brief usage."
-            )))
+                )
+                .into(),
+            ))
         }
     }
 }
@@ -219,10 +222,9 @@ impl Command for TutorialCmd {
                 // Jump to specific lesson.
                 if let Ok(num) = n.parse::<usize>() {
                     if num == 0 || num > LESSONS.len() {
-                        return Err(OasisError::Command(format!(
-                            "Lesson number must be 1-{}",
-                            LESSONS.len()
-                        )));
+                        return Err(OasisError::Command(
+                            format!("Lesson number must be 1-{}", LESSONS.len()).into(),
+                        ));
                     }
                     let idx = num - 1;
                     // Save progress.
@@ -232,10 +234,9 @@ impl Command for TutorialCmd {
                         "--- Lesson {num}: {title} ---\n\n{content}"
                     )))
                 } else {
-                    Err(OasisError::Command(format!(
-                        "unknown subcommand: {n}\nusage: {}",
-                        self.usage()
-                    )))
+                    Err(OasisError::Command(
+                        format!("unknown subcommand: {n}\nusage: {}", self.usage()).into(),
+                    ))
                 }
             },
         }
@@ -283,7 +284,7 @@ fn default_motd() -> String {
 \n\
   Welcome to OASIS OS!\n\
   Type 'help' for commands, 'tutorial' to get started.\n"
-        .to_string()
+        .into()
 }
 
 /// Register documentation commands.

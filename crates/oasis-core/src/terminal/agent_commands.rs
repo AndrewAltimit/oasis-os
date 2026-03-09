@@ -62,21 +62,19 @@ impl Command for AgentCmd {
             "status" => {
                 let name = args.get(1).copied().unwrap_or("");
                 if name.is_empty() {
-                    return Err(OasisError::Command(
-                        "usage: agent status <name>".to_string(),
-                    ));
+                    return Err(OasisError::Command("usage: agent status <name>".into()));
                 }
                 match registry.find(name) {
                     Some(a) => Ok(CommandOutput::Text(format!(
                         "{} ({})\n  Transport: {}\n  Address:   {}\n  Status:    {}",
                         a.name, a.kind, a.transport, a.address, a.availability
                     ))),
-                    None => Err(OasisError::Command(format!("unknown agent: {name}"))),
+                    None => Err(OasisError::Command(format!("unknown agent: {name}").into())),
                 }
             },
-            _ => Err(OasisError::Command(format!(
-                "unknown subcommand: {subcmd}\nusage: agent [list|status <name>]"
-            ))),
+            _ => Err(OasisError::Command(
+                format!("unknown subcommand: {subcmd}\nusage: agent [list|status <name>]").into(),
+            )),
         }
     }
 }
@@ -155,9 +153,9 @@ impl Command for McpCmd {
                             }
                             Ok(CommandOutput::Text(lines.join("\n")))
                         },
-                        None => Err(OasisError::Command(format!(
-                            "unknown MCP server: {server_name}"
-                        ))),
+                        None => Err(OasisError::Command(
+                            format!("unknown MCP server: {server_name}").into(),
+                        )),
                     }
                 } else {
                     // Attempt to invoke a tool (display info -- actual invocation
@@ -174,9 +172,9 @@ impl Command for McpCmd {
                                 tool.name, tool.description
                             )))
                         },
-                        None => Err(OasisError::Command(format!(
-                            "unknown tool: {server_name}.{tool_name}"
-                        ))),
+                        None => Err(OasisError::Command(
+                            format!("unknown tool: {server_name}.{tool_name}").into(),
+                        )),
                     }
                 }
             },
@@ -234,9 +232,9 @@ impl Command for TamperCmd {
                     "Disarm request sent to tamper-gate.".to_string(),
                 ))
             },
-            _ => Err(OasisError::Command(format!(
-                "unknown subcommand: {subcmd}\nusage: tamper [status|arm|disarm]"
-            ))),
+            _ => Err(OasisError::Command(
+                format!("unknown subcommand: {subcmd}\nusage: tamper [status|arm|disarm]").into(),
+            )),
         }
     }
 }
@@ -288,9 +286,7 @@ impl Command for BoardCmd {
                     .copied()
                     .unwrap_or("")
                     .parse::<u32>()
-                    .map_err(|_| {
-                        OasisError::Command("usage: board claim <issue_number>".to_string())
-                    })?;
+                    .map_err(|_| OasisError::Command("usage: board claim <issue_number>".into()))?;
                 // Write claim request to VFS.
                 let claim_path = "/var/board/claim";
                 env.vfs.write(claim_path, format!("{issue}").as_bytes())?;
@@ -305,7 +301,7 @@ impl Command for BoardCmd {
                     .unwrap_or("")
                     .parse::<u32>()
                     .map_err(|_| {
-                        OasisError::Command("usage: board release <issue_number>".to_string())
+                        OasisError::Command("usage: board release <issue_number>".into())
                     })?;
                 let release_path = "/var/board/release";
                 env.vfs.write(release_path, format!("{issue}").as_bytes())?;
@@ -313,9 +309,10 @@ impl Command for BoardCmd {
                     "Release request written for issue #{issue}."
                 )))
             },
-            _ => Err(OasisError::Command(format!(
-                "unknown subcommand: {subcmd}\nusage: board [query|claim <n>|release <n>]"
-            ))),
+            _ => Err(OasisError::Command(
+                format!("unknown subcommand: {subcmd}\nusage: board [query|claim <n>|release <n>]")
+                    .into(),
+            )),
         }
     }
 }
@@ -340,11 +337,11 @@ impl Command for CiCmd {
     }
     fn execute(&self, args: &[&str], env: &mut Environment<'_>) -> Result<CommandOutput> {
         if args.first().copied() != Some("run") {
-            return Err(OasisError::Command("usage: ci run <stage>".to_string()));
+            return Err(OasisError::Command("usage: ci run <stage>".into()));
         }
         let stage = args.get(1).copied().unwrap_or("");
         if stage.is_empty() {
-            return Err(OasisError::Command("usage: ci run <stage>".to_string()));
+            return Err(OasisError::Command("usage: ci run <stage>".into()));
         }
 
         // Write CI request to VFS for the app layer to pick up.

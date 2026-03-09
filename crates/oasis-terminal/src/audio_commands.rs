@@ -66,9 +66,9 @@ impl Command for MusicCmd {
                     }
                     return Ok(CommandOutput::Text("Volume: unknown".to_string()));
                 }
-                let _vol: u8 = vol_str
-                    .parse()
-                    .map_err(|_| OasisError::Command(format!("invalid volume: {vol_str}")))?;
+                let _vol: u8 = vol_str.parse().map_err(|_| {
+                    OasisError::Command(format!("invalid volume: {vol_str}").into())
+                })?;
                 let request = format!("vol {vol_str}");
                 env.vfs.write(AUDIO_REQUEST_PATH, request.as_bytes())?;
                 Ok(CommandOutput::Text(format!(
@@ -79,16 +79,16 @@ impl Command for MusicCmd {
                 let mode = args.get(1).copied().unwrap_or("");
                 if mode.is_empty() {
                     return Err(OasisError::Command(
-                        "usage: music repeat <off|all|one>".to_string(),
+                        "usage: music repeat <off|all|one>".into(),
                     ));
                 }
                 // Validate the mode locally before sending.
                 match mode {
                     "off" | "all" | "one" => {},
                     _ => {
-                        return Err(OasisError::Command(format!(
-                            "invalid repeat mode: {mode} (use off/all/one)"
-                        )));
+                        return Err(OasisError::Command(
+                            format!("invalid repeat mode: {mode} (use off/all/one)").into(),
+                        ));
                     },
                 }
                 let request = format!("repeat {mode}");
@@ -110,10 +110,9 @@ impl Command for MusicCmd {
                     Ok(CommandOutput::Text("(no playlist available)".to_string()))
                 }
             },
-            _ => Err(OasisError::Command(format!(
-                "unknown subcommand: {subcmd}\nusage: {}",
-                self.usage()
-            ))),
+            _ => Err(OasisError::Command(
+                format!("unknown subcommand: {subcmd}\nusage: {}", self.usage()).into(),
+            )),
         }
     }
 }

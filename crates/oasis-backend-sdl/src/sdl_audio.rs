@@ -95,7 +95,7 @@ impl SdlAudioBackend {
         };
         let device = audio
             .open_queue::<i16, _>(None, &spec)
-            .map_err(OasisError::Backend)?;
+            .map_err(|e| OasisError::Backend(e.into()))?;
         self.sample_rate = device.spec().freq;
         self.channels = device.spec().channels as usize;
         log::info!(
@@ -179,7 +179,7 @@ impl SdlAudioBackend {
             if let Some(ref device) = self.device {
                 device
                     .queue_audio(&self.pcm_staging)
-                    .map_err(OasisError::Backend)?;
+                    .map_err(|e| OasisError::Backend(e.into()))?;
                 self.samples_queued += self.pcm_staging.len() as u64;
             }
         }
@@ -217,7 +217,7 @@ impl SdlAudioBackend {
         if let Some(ref device) = self.device {
             device
                 .queue_audio(&pending_pcm)
-                .map_err(OasisError::Backend)?;
+                .map_err(|e| OasisError::Backend(e.into()))?;
             self.samples_queued += pending_pcm.len() as u64;
         }
 
@@ -269,7 +269,7 @@ impl SdlAudioBackend {
             if let Some(ref device) = self.device {
                 device
                     .queue_audio(&pending_pcm)
-                    .map_err(OasisError::Backend)?;
+                    .map_err(|e| OasisError::Backend(e.into()))?;
                 self.samples_queued += pending_pcm.len() as u64;
             }
         }
@@ -325,7 +325,9 @@ impl AudioBackend for SdlAudioBackend {
 
         let is_stream = self.stream_track == Some(track.0);
         if !is_stream && !self.tracks.contains_key(&track.0) {
-            return Err(OasisError::Backend(format!("track {} not loaded", track.0)));
+            return Err(OasisError::Backend(
+                format!("track {} not loaded", track.0).into(),
+            ));
         }
 
         self.current_track = Some(track.0);
@@ -470,10 +472,9 @@ impl AudioBackend for SdlAudioBackend {
 
     fn feed_data(&mut self, track: AudioTrackId, data: &[u8]) -> Result<()> {
         if self.stream_track != Some(track.0) {
-            return Err(OasisError::Backend(format!(
-                "streaming track {} not found",
-                track.0
-            )));
+            return Err(OasisError::Backend(
+                format!("streaming track {} not found", track.0).into(),
+            ));
         }
 
         self.mp3_buffer.extend_from_slice(data);
@@ -496,10 +497,9 @@ impl AudioBackend for SdlAudioBackend {
         sample_rate: u32,
     ) -> Result<()> {
         if self.stream_track != Some(track.0) {
-            return Err(OasisError::Backend(format!(
-                "streaming track {} not found",
-                track.0
-            )));
+            return Err(OasisError::Backend(
+                format!("streaming track {} not found", track.0).into(),
+            ));
         }
 
         if samples.is_empty() {
@@ -547,7 +547,7 @@ impl AudioBackend for SdlAudioBackend {
             if device.size() < MAX_QUEUE_BYTES {
                 device
                     .queue_audio(&self.pcm_staging)
-                    .map_err(OasisError::Backend)?;
+                    .map_err(|e| OasisError::Backend(e.into()))?;
                 self.samples_queued += self.pcm_staging.len() as u64;
             } else {
                 log::trace!(

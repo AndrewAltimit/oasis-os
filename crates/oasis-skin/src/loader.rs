@@ -227,24 +227,24 @@ impl Skin {
         strings_toml: &str,
     ) -> Result<Self> {
         let manifest: SkinManifest = toml::from_str(manifest_toml)
-            .map_err(|e| OasisError::Config(format!("skin.toml: {e}")))?;
+            .map_err(|e| OasisError::Config(format!("skin.toml: {e}").into()))?;
         let layout: SkinLayout = toml::from_str(layout_toml)
-            .map_err(|e| OasisError::Config(format!("layout.toml: {e}")))?;
+            .map_err(|e| OasisError::Config(format!("layout.toml: {e}").into()))?;
         let features: SkinFeatures = toml::from_str(features_toml)
-            .map_err(|e| OasisError::Config(format!("features.toml: {e}")))?;
+            .map_err(|e| OasisError::Config(format!("features.toml: {e}").into()))?;
 
         let theme: SkinTheme = if theme_toml.is_empty() {
             SkinTheme::default()
         } else {
             toml::from_str(theme_toml)
-                .map_err(|e| OasisError::Config(format!("theme.toml: {e}")))?
+                .map_err(|e| OasisError::Config(format!("theme.toml: {e}").into()))?
         };
 
         let strings: SkinStrings = if strings_toml.is_empty() {
             SkinStrings::default()
         } else {
             toml::from_str(strings_toml)
-                .map_err(|e| OasisError::Config(format!("strings.toml: {e}")))?
+                .map_err(|e| OasisError::Config(format!("strings.toml: {e}").into()))?
         };
 
         let corrupted_modifiers = if features.corrupted {
@@ -282,7 +282,7 @@ impl Skin {
 
         if !corrupted_toml.is_empty() {
             let modifiers: CorruptedModifiers = toml::from_str(corrupted_toml)
-                .map_err(|e| OasisError::Config(format!("corrupted.toml: {e}")))?;
+                .map_err(|e| OasisError::Config(format!("corrupted.toml: {e}").into()))?;
             skin.corrupted_modifiers = Some(modifiers);
         }
 
@@ -400,7 +400,7 @@ impl Skin {
         let read = |name: &str| -> Result<String> {
             let p = dir.join(name);
             std::fs::read_to_string(&p)
-                .map_err(|e| OasisError::Config(format!("{}: {e}", p.display())))
+                .map_err(|e| OasisError::Config(format!("{}: {e}", p.display()).into()))
         };
         let read_opt =
             |name: &str| -> String { std::fs::read_to_string(dir.join(name)).unwrap_or_default() };

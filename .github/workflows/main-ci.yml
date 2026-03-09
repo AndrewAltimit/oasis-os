@@ -74,6 +74,16 @@ jobs:
           -e RUSTDOCFLAGS="-D warnings"
           rust-ci cargo doc --workspace --no-deps
 
+      # -- Markdown Link Check ------------------------------------------------
+      - name: Markdown link check
+        run: |
+          FAIL=0
+          for target in *.md docs/ scripts/psp-scenarios.md; do
+            [ -e "$target" ] || continue
+            md-link-checker "$target" --internal-only || FAIL=1
+          done
+          exit $FAIL
+
       # -- Tests -------------------------------------------------------------
       - name: Test
         run: |

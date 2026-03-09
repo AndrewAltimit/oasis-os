@@ -24,15 +24,14 @@ impl RealVfs {
     pub fn new(root: impl Into<PathBuf>) -> Result<Self> {
         let root = root.into();
         if !root.is_dir() {
-            return Err(OasisError::Vfs(format!(
-                "VFS root is not a directory: {}",
-                root.display()
-            )));
+            return Err(OasisError::Vfs(
+                format!("VFS root is not a directory: {}", root.display()).into(),
+            ));
         }
         Ok(Self {
             root: root
                 .canonicalize()
-                .map_err(|e| OasisError::Vfs(format!("cannot canonicalize root: {e}")))?,
+                .map_err(|e| OasisError::Vfs(format!("cannot canonicalize root: {e}").into()))?,
         })
     }
 
@@ -47,25 +46,25 @@ impl RealVfs {
         let resolved = if candidate.exists() {
             candidate
                 .canonicalize()
-                .map_err(|e| OasisError::Vfs(format!("cannot resolve path: {e}")))?
+                .map_err(|e| OasisError::Vfs(format!("cannot resolve path: {e}").into()))?
         } else {
             // For non-existent paths (write/mkdir), verify the parent is inside root.
             let parent = candidate
                 .parent()
-                .ok_or_else(|| OasisError::Vfs("invalid path: no parent".to_string()))?;
+                .ok_or_else(|| OasisError::Vfs("invalid path: no parent".into()))?;
             if parent.exists() {
                 let canon_parent = parent
                     .canonicalize()
-                    .map_err(|e| OasisError::Vfs(format!("cannot resolve parent: {e}")))?;
+                    .map_err(|e| OasisError::Vfs(format!("cannot resolve parent: {e}").into()))?;
                 if !canon_parent.starts_with(&self.root) {
-                    return Err(OasisError::Vfs("path escapes VFS root".to_string()));
+                    return Err(OasisError::Vfs("path escapes VFS root".into()));
                 }
             }
             candidate
         };
 
         if !resolved.starts_with(&self.root) {
-            return Err(OasisError::Vfs("path escapes VFS root".to_string()));
+            return Err(OasisError::Vfs("path escapes VFS root".into()));
         }
         Ok(resolved)
     }
@@ -75,7 +74,7 @@ impl Vfs for RealVfs {
     fn readdir(&self, path: &str) -> Result<Vec<VfsEntry>> {
         let real_path = self.resolve(path)?;
         if !real_path.is_dir() {
-            return Err(OasisError::Vfs(format!("not a directory: {path}")));
+            return Err(OasisError::Vfs(format!("not a directory: {path}").into()));
         }
         let mut entries = Vec::new();
         for entry in fs::read_dir(&real_path)? {
@@ -98,7 +97,7 @@ impl Vfs for RealVfs {
     fn read(&self, path: &str) -> Result<Vec<u8>> {
         let real_path = self.resolve(path)?;
         if real_path.is_dir() {
-            return Err(OasisError::Vfs(format!("is a directory: {path}")));
+            return Err(OasisError::Vfs(format!("is a directory: {path}").into()));
         }
         Ok(fs::read(&real_path)?)
     }
@@ -131,7 +130,7 @@ impl Vfs for RealVfs {
     fn remove(&mut self, path: &str) -> Result<()> {
         let real_path = self.resolve(path)?;
         if real_path == self.root {
-            return Err(OasisError::Vfs("cannot remove VFS root".to_string()));
+            return Err(OasisError::Vfs("cannot remove VFS root".into()));
         }
         if real_path.is_dir() {
             fs::remove_dir(&real_path)?;
@@ -144,7 +143,7 @@ impl Vfs for RealVfs {
     fn rename(&mut self, from: &str, to: &str) -> Result<()> {
         let real_from = self.resolve(from)?;
         if !real_from.exists() {
-            return Err(OasisError::Vfs(format!("no such path: {from}")));
+            return Err(OasisError::Vfs(format!("no such path: {from}").into()));
         }
         let real_to = self.resolve(to)?;
         fs::rename(&real_from, &real_to)?;
@@ -158,13 +157,13 @@ impl Vfs for RealVfs {
     fn get_permissions(&self, path: &str) -> Result<FilePermissions> {
         let real_path = self.resolve(path)?;
         if !real_path.exists() {
-            return Err(OasisError::Vfs(format!("no such path: {path}")));
+            return Err(OasisError::Vfs(format!("no such path: {path}").into()));
         }
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
             let meta = fs::metadata(&real_path)
-                .map_err(|e| OasisError::Vfs(format!("cannot read metadata: {e}")))?;
+                .map_err(|e| OasisError::Vfs(format!("cannot read metadata: {e}").into()))?;
             let mode = meta.permissions().mode() & 0o7777;
             Ok(FilePermissions {
                 owner: "user".to_string(),
@@ -184,33 +183,36 @@ impl Vfs for RealVfs {
     fn set_permissions(&mut self, path: &str, perms: FilePermissions) -> Result<()> {
         let real_path = self.resolve(path)?;
         if !real_path.exists() {
-            return Err(OasisError::Vfs(format!("no such path: {path}")));
+            return Err(OasisError::Vfs(format!("no such path: {path}").into()));
         }
         // RealVfs cannot change file ownership (requires root/libc).
         // Check against the hardcoded owner string returned by get_permissions.
         if perms.owner != "user" {
-            return Err(OasisError::Vfs(format!(
-                "RealVfs does not support changing file ownership (from 'user' to '{}')",
-                perms.owner
-            )));
+            return Err(OasisError::Vfs(
+                format!(
+                    "RealVfs does not support changing file ownership (from 'user' to '{}')",
+                    perms.owner
+                )
+                .into(),
+            ));
         }
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
             let unix_perms = fs::Permissions::from_mode(u32::from(perms.mode));
             fs::set_permissions(&real_path, unix_perms)
-                .map_err(|e| OasisError::Vfs(format!("cannot set permissions: {e}")))?;
+                .map_err(|e| OasisError::Vfs(format!("cannot set permissions: {e}").into()))?;
         }
         #[cfg(not(unix))]
         {
             // Map write permission to the platform's readonly flag.
             let mut fs_perms = fs::metadata(&real_path)
-                .map_err(|e| OasisError::Vfs(format!("cannot read metadata: {e}")))?
+                .map_err(|e| OasisError::Vfs(format!("cannot read metadata: {e}").into()))?
                 .permissions();
             // Mode 0o200 is owner-write; if absent, mark readonly.
             fs_perms.set_readonly(perms.mode & 0o200 == 0);
             fs::set_permissions(&real_path, fs_perms)
-                .map_err(|e| OasisError::Vfs(format!("cannot set permissions: {e}")))?;
+                .map_err(|e| OasisError::Vfs(format!("cannot set permissions: {e}").into()))?;
         }
         Ok(())
     }

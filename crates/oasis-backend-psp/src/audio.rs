@@ -960,7 +960,7 @@ impl AudioBackend for PspAudioBackend {
             .tracks
             .get_mut(idx)
             .and_then(|slot| slot.take())
-            .ok_or_else(|| OasisError::Backend(format!("track {} not loaded", track.0)))?;
+            .ok_or_else(|| OasisError::Backend(format!("track {} not loaded", track.0).into()))?;
         send_audio_cmd(AudioCmd::LoadAndPlayData(data));
         self.current_track = Some(track.0);
         Ok(())

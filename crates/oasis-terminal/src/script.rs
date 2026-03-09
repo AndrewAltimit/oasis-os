@@ -19,14 +19,14 @@ impl CommandRegistry {
         let path = args
             .first()
             .copied()
-            .ok_or_else(|| OasisError::Command("usage: run <path>".to_string()))?;
+            .ok_or_else(|| OasisError::Command("usage: run <path>".into()))?;
 
         let full_path = resolve_path(&env.cwd, path);
 
         if !env.vfs.exists(&full_path) {
-            return Err(OasisError::Command(format!(
-                "script not found: {full_path}"
-            )));
+            return Err(OasisError::Command(
+                format!("script not found: {full_path}").into(),
+            ));
         }
 
         let data = env.vfs.read(&full_path)?;

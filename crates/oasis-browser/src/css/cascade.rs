@@ -2714,6 +2714,272 @@ mod tests {
     // Property-based tests (proptest)
     // ---------------------------------------------------------------
 
+    // -- real-world CSS compliance tests ----------------------------------
+
+    #[test]
+    fn universal_with_descendant_combinator() {
+        // `* p { color: red }` -- universal selector as ancestor.
+        let mut doc = make_doc(vec![(TagName::Div, vec![])]);
+        let p_id = doc.nodes.len();
+        doc.nodes.push(Node {
+            kind: NodeKind::Element(ElementData {
+                tag: TagName::P,
+                attributes: vec![],
+            }),
+            parent: Some(3),
+            children: vec![],
+        });
+        doc.nodes[3].children.push(p_id);
+
+        let sel = Selector {
+            parts: vec![
+                (
+                    CompoundSelector {
+                        parts: vec![SimpleSelector::Universal],
+                    },
+                    None,
+                ),
+                (
+                    CompoundSelector {
+                        parts: vec![SimpleSelector::Type("p".to_string())],
+                    },
+                    Some(Combinator::Descendant),
+                ),
+            ],
+        };
+        // <p> inside <div> (which matches *) should match `* p`.
+        assert!(matches_selector(&doc, p_id, &sel, &ctx()));
+    }
+
+    #[test]
+    fn multiple_class_selector_compound() {
+        // `.a.b` should only match elements with both classes.
+        let doc = make_doc(vec![
+            (
+                TagName::Div,
+                vec![Attribute {
+                    name: "class".to_string(),
+                    value: "a b".to_string(),
+                }],
+            ),
+            (
+                TagName::Div,
+                vec![Attribute {
+                    name: "class".to_string(),
+                    value: "a".to_string(),
+                }],
+            ),
+        ]);
+        let sel = Selector {
+            parts: vec![(
+                CompoundSelector {
+                    parts: vec![
+                        SimpleSelector::Class("a".to_string()),
+                        SimpleSelector::Class("b".to_string()),
+                    ],
+                },
+                None,
+            )],
+        };
+        assert!(
+            matches_selector(&doc, 3, &sel, &ctx()),
+            "element with classes 'a b' should match .a.b"
+        );
+        assert!(
+            !matches_selector(&doc, 4, &sel, &ctx()),
+            "element with only class 'a' should not match .a.b"
+        );
+    }
+
+    #[test]
+    fn pseudo_class_with_type_selector() {
+        // `a:hover` -- compound type + pseudo-class.
+        let doc = make_doc(vec![
+            (
+                TagName::A,
+                vec![Attribute {
+                    name: "href".to_string(),
+                    value: "/page".to_string(),
+                }],
+            ),
+            (TagName::P, vec![]),
+        ]);
+        let sheet = Stylesheet::parse("a:hover { color: red; }");
+        let hctx = CascadeContext {
+            hover_node: Some(3),
+            visited_urls: None,
+        };
+        let styles = style_tree(&doc, &[&sheet], &[], &hctx);
+        let a_style = styles[3].as_ref().expect("a should have style");
+        assert_eq!(a_style.color, Color::rgb(255, 0, 0));
+
+        // <p> (node 4) should NOT get the hover style even if hovered,
+        // because the selector requires `a`, not `p`.
+        let hctx_p = CascadeContext {
+            hover_node: Some(4),
+            visited_urls: None,
+        };
+        let styles2 = style_tree(&doc, &[&sheet], &[], &hctx_p);
+        let p_style = styles2[4].as_ref().unwrap();
+        assert_ne!(
+            p_style.color,
+            Color::rgb(255, 0, 0),
+            "p:hover should not match a:hover rule"
+        );
+    }
+
+    #[test]
+    fn specificity_id_vs_many_classes() {
+        // #id should beat .a.b.c.d.e.f.g.h.i.j.k (11 classes).
+        // CSS specificity: #id = (0,1,0,0), 11 classes = (0,0,11,0).
+        // ID always wins per spec.
+        let mut attrs = vec![Attribute {
+            name: "id".to_string(),
+            value: "x".to_string(),
+        }];
+        let classes = "a b c d e f g h i j k";
+        attrs.push(Attribute {
+            name: "class".to_string(),
+            value: classes.to_string(),
+        });
+        let doc = make_doc(vec![(TagName::Div, attrs)]);
+
+        let rule_classes = make_rule(
+            vec![Selector {
+                parts: vec![(
+                    CompoundSelector {
+                        parts: vec![
+                            SimpleSelector::Class("a".into()),
+                            SimpleSelector::Class("b".into()),
+                            SimpleSelector::Class("c".into()),
+                            SimpleSelector::Class("d".into()),
+                            SimpleSelector::Class("e".into()),
+                            SimpleSelector::Class("f".into()),
+                            SimpleSelector::Class("g".into()),
+                            SimpleSelector::Class("h".into()),
+                            SimpleSelector::Class("i".into()),
+                            SimpleSelector::Class("j".into()),
+                            SimpleSelector::Class("k".into()),
+                        ],
+                    },
+                    None,
+                )],
+            }],
+            vec![decl("color", CssValue::Keyword("red".to_string()), false)],
+        );
+        let rule_id = make_rule(
+            vec![simple_id_selector("x")],
+            vec![decl("color", CssValue::Keyword("blue".to_string()), false)],
+        );
+
+        let sheet = Stylesheet {
+            rules: vec![rule_classes, rule_id],
+        };
+        let styles = style_tree(&doc, &[&sheet], &[], &ctx());
+        let style = styles[3].as_ref().expect("div should have style");
+        assert_eq!(
+            style.color,
+            Color::rgb(0, 0, 255),
+            "#id should beat 11 classes"
+        );
+    }
+
+    #[test]
+    fn important_on_inherited_vs_direct() {
+        // Parent has `color: red !important`.
+        // Child has direct `color: blue` (not important).
+        // Direct declaration on the child should win over inherited
+        // !important, because !important only affects the same element.
+        let mut doc = make_doc(vec![(TagName::Div, vec![])]);
+        let p_id = doc.nodes.len();
+        doc.nodes.push(Node {
+            kind: NodeKind::Element(ElementData {
+                tag: TagName::P,
+                attributes: vec![],
+            }),
+            parent: Some(3),
+            children: vec![],
+        });
+        doc.nodes[3].children.push(p_id);
+
+        let sheet = Stylesheet {
+            rules: vec![
+                make_rule(
+                    vec![simple_type_selector("div")],
+                    vec![decl("color", CssValue::Keyword("red".to_string()), true)],
+                ),
+                make_rule(
+                    vec![simple_type_selector("p")],
+                    vec![decl("color", CssValue::Keyword("blue".to_string()), false)],
+                ),
+            ],
+        };
+        let styles = style_tree(&doc, &[&sheet], &[], &ctx());
+        let p_style = styles[p_id].as_ref().expect("p should have style");
+        assert_eq!(
+            p_style.color,
+            Color::rgb(0, 0, 255),
+            "direct declaration on child should beat inherited !important"
+        );
+    }
+
+    #[test]
+    fn nth_child_negative_n_plus_3() {
+        // :nth-child(-n+3) matches positions 1, 2, 3 only.
+        use super::selectors::AnB;
+        let anb = AnB::parse("-n+3").expect("-n+3 should parse");
+        assert!(anb.matches(1), "-n+3 should match 1");
+        assert!(anb.matches(2), "-n+3 should match 2");
+        assert!(anb.matches(3), "-n+3 should match 3");
+        assert!(!anb.matches(4), "-n+3 should not match 4");
+        assert!(!anb.matches(5), "-n+3 should not match 5");
+    }
+
+    #[test]
+    fn compound_type_and_class_selector() {
+        // `p.highlight` -- type + class compound.
+        let doc = make_doc(vec![
+            (
+                TagName::P,
+                vec![Attribute {
+                    name: "class".to_string(),
+                    value: "highlight".to_string(),
+                }],
+            ),
+            (TagName::P, vec![]),
+            (
+                TagName::Div,
+                vec![Attribute {
+                    name: "class".to_string(),
+                    value: "highlight".to_string(),
+                }],
+            ),
+        ]);
+        let sel = Selector {
+            parts: vec![(
+                CompoundSelector {
+                    parts: vec![
+                        SimpleSelector::Type("p".to_string()),
+                        SimpleSelector::Class("highlight".to_string()),
+                    ],
+                },
+                None,
+            )],
+        };
+        assert!(
+            matches_selector(&doc, 3, &sel, &ctx()),
+            "p.highlight should match <p class=highlight>"
+        );
+        assert!(
+            !matches_selector(&doc, 4, &sel, &ctx()),
+            "p.highlight should not match <p> without class"
+        );
+        assert!(
+            !matches_selector(&doc, 5, &sel, &ctx()),
+            "p.highlight should not match <div class=highlight>"
+        );
+    }
+
     mod prop_tests {
         use proptest::prelude::*;
 

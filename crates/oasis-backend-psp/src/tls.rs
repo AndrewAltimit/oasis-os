@@ -171,7 +171,7 @@ impl TlsProvider for PspTlsProvider {
         {
             return Err(OasisError::Backend(format!(
                 "TLS rejected: '{server_name}' is not in the pinned host allowlist"
-            )));
+            ).into()));
         }
 
         let adapter = IoAdapter(stream);
@@ -209,7 +209,7 @@ impl TlsProvider for PspTlsProvider {
             return Err(OasisError::Backend(format!(
                 "TLS handshake failed: {:?}",
                 e
-            )));
+            ).into()));
         }
 
         Ok(Box::new(PspTlsStream {
@@ -250,18 +250,18 @@ impl NetworkStream for PspTlsStream<'_> {
         let tls = self
             .tls
             .as_mut()
-            .ok_or_else(|| OasisError::Backend("TLS connection closed".to_string()))?;
+            .ok_or_else(|| OasisError::Backend("TLS connection closed".to_string().into()))?;
         embedded_io::Read::read(tls, buf)
-            .map_err(|e| OasisError::Backend(format!("TLS read: {:?}", e)))
+            .map_err(|e| OasisError::Backend(format!("TLS read: {:?}", e).into()))
     }
 
     fn write(&mut self, data: &[u8]) -> Result<usize> {
         let tls = self
             .tls
             .as_mut()
-            .ok_or_else(|| OasisError::Backend("TLS connection closed".to_string()))?;
+            .ok_or_else(|| OasisError::Backend("TLS connection closed".to_string().into()))?;
         embedded_io::Write::write(tls, data)
-            .map_err(|e| OasisError::Backend(format!("TLS write: {:?}", e)))
+            .map_err(|e| OasisError::Backend(format!("TLS write: {:?}", e).into()))
     }
 
     fn close(&mut self) -> Result<()> {

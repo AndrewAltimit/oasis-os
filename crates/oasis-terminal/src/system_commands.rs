@@ -167,11 +167,11 @@ define_command!(
     "system",
     |args, _env| {
         if args.is_empty() {
-            return Err(OasisError::Command("usage: sleep <seconds>".to_string()));
+            return Err(OasisError::Command("usage: sleep <seconds>".into()));
         }
         let secs: f64 = args[0]
             .parse()
-            .map_err(|_| OasisError::Command("invalid number".to_string()))?;
+            .map_err(|_| OasisError::Command("invalid number".into()))?;
         // In a real system this would block; in VFS-only mode we just report.
         Ok(CommandOutput::Text(format!(
             "(slept {secs:.1}s -- simulated)"

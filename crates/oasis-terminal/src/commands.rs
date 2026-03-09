@@ -161,7 +161,9 @@ impl Command for CdCmd {
         // Verify it exists and is a directory.
         let meta = env.vfs.stat(&target)?;
         if meta.kind != EntryKind::Directory {
-            return Err(OasisError::Command(format!("not a directory: {target}")));
+            return Err(OasisError::Command(
+                format!("not a directory: {target}").into(),
+            ));
         }
         env.cwd = target;
         Ok(CommandOutput::None)
@@ -214,10 +216,9 @@ impl Command for CatCmd {
         let path = resolve_path(&env.cwd, args[0]);
         let meta = env.vfs.stat(&path)?;
         if meta.size as usize > CAT_MAX_SIZE {
-            return Err(OasisError::Command(format!(
-                "file too large ({} bytes, max {})",
-                meta.size, CAT_MAX_SIZE
-            )));
+            return Err(OasisError::Command(
+                format!("file too large ({} bytes, max {})", meta.size, CAT_MAX_SIZE).into(),
+            ));
         }
         let data = env.vfs.read(&path)?;
         let text = String::from_utf8_lossy(&data).into_owned();
@@ -397,10 +398,13 @@ impl Command for CpCmd {
         let dst = resolve_path(&env.cwd, args[1]);
         let meta = env.vfs.stat(&src)?;
         if meta.size as usize > COPY_MAX_SIZE {
-            return Err(OasisError::Command(format!(
-                "file too large ({} bytes, max {})",
-                meta.size, COPY_MAX_SIZE
-            )));
+            return Err(OasisError::Command(
+                format!(
+                    "file too large ({} bytes, max {})",
+                    meta.size, COPY_MAX_SIZE
+                )
+                .into(),
+            ));
         }
         let data = env.vfs.read(&src)?;
         env.vfs.write(&dst, &data)?;
@@ -432,10 +436,13 @@ impl Command for MvCmd {
         let dst = resolve_path(&env.cwd, args[1]);
         let meta = env.vfs.stat(&src)?;
         if meta.size as usize > COPY_MAX_SIZE {
-            return Err(OasisError::Command(format!(
-                "file too large ({} bytes, max {})",
-                meta.size, COPY_MAX_SIZE
-            )));
+            return Err(OasisError::Command(
+                format!(
+                    "file too large ({} bytes, max {})",
+                    meta.size, COPY_MAX_SIZE
+                )
+                .into(),
+            ));
         }
         let data = env.vfs.read(&src)?;
         env.vfs.write(&dst, &data)?;
@@ -465,9 +472,7 @@ impl Command for FindCmd {
     fn execute(&self, args: &[&str], env: &mut Environment<'_>) -> Result<CommandOutput> {
         let (root, pattern) = match args.len() {
             0 => {
-                return Err(OasisError::Command(
-                    "usage: find [path] <pattern>".to_string(),
-                ));
+                return Err(OasisError::Command("usage: find [path] <pattern>".into()));
             },
             1 => (env.cwd.clone(), args[0]),
             _ => (resolve_path(&env.cwd, args[0]), args[1]),
@@ -683,7 +688,7 @@ impl Command for ListenCmd {
         }
         match args[0].parse::<u16>() {
             Ok(port) => Ok(CommandOutput::ListenToggle { port }),
-            Err(_) => Err(OasisError::Command("usage: listen [port|stop]".to_string())),
+            Err(_) => Err(OasisError::Command("usage: listen [port|stop]".into())),
         }
     }
 }
@@ -715,7 +720,7 @@ impl Command for RemoteCmd {
             && let Ok(port) = port_str.parse::<u16>()
         {
             return Ok(CommandOutput::RemoteConnect {
-                address: addr.to_string(),
+                address: addr.into(),
                 port,
                 psk: None,
             });
@@ -739,9 +744,10 @@ impl Command for RemoteCmd {
             }
         }
 
-        Err(OasisError::Command(format!(
-            "unknown host: {target}  (use addr:port or configure in /etc/hosts.toml)"
-        )))
+        Err(OasisError::Command(
+            format!("unknown host: {target}  (use addr:port or configure in /etc/hosts.toml)")
+                .into(),
+        ))
     }
 }
 
@@ -767,7 +773,7 @@ impl Command for HostsCmd {
         let hosts_path = "/etc/hosts.toml";
         if !env.vfs.exists(hosts_path) {
             return Ok(CommandOutput::Text(
-                "(no hosts configured -- create /etc/hosts.toml)".to_string(),
+                "(no hosts configured -- create /etc/hosts.toml)".into(),
             ));
         }
         let data = env.vfs.read(hosts_path)?;

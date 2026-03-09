@@ -44,7 +44,9 @@ impl CommandRegistry {
                     out.push_str(&format!("  Usage: {}", cmd.usage()));
                     Ok(CommandOutput::Text(out))
                 },
-                None => Err(OasisError::Command(format!("unknown command: {name}"))),
+                None => Err(OasisError::Command(
+                    format!("unknown command: {name}").into(),
+                )),
             }
         } else {
             // Group commands by category.
@@ -81,7 +83,9 @@ impl CommandRegistry {
                 let fc_lower = fc.to_ascii_lowercase();
                 cats.retain(|c| c.to_ascii_lowercase().contains(&fc_lower));
                 if cats.is_empty() {
-                    return Err(OasisError::Command(format!("no category matching '{fc}'")));
+                    return Err(OasisError::Command(
+                        format!("no category matching '{fc}'").into(),
+                    ));
                 }
             }
 
@@ -114,7 +118,7 @@ impl CommandRegistry {
     /// Built-in `which` command.
     pub(crate) fn execute_which(&self, args: &[&str]) -> Result<CommandOutput> {
         if args.is_empty() {
-            return Err(OasisError::Command("usage: which <command>".to_string()));
+            return Err(OasisError::Command("usage: which <command>".into()));
         }
         let name = args[0].to_ascii_lowercase();
         // Check intercepted commands first.
@@ -145,7 +149,7 @@ impl CommandRegistry {
                     if funcs.contains_key(&name) {
                         Ok(CommandOutput::Text(format!("{name}: shell function")))
                     } else {
-                        Err(OasisError::Command(format!("{name}: not found")))
+                        Err(OasisError::Command(format!("{name}: not found").into()))
                     }
                 }
             },
@@ -199,30 +203,26 @@ impl CommandRegistry {
             },
             (None, None) => {
                 return Err(OasisError::Command(
-                    "usage: function name() { body }".to_string(),
+                    "usage: function name() { body }".into(),
                 ));
             },
         };
 
         if name.is_empty() {
-            return Err(OasisError::Command(
-                "function name cannot be empty".to_string(),
-            ));
+            return Err(OasisError::Command("function name cannot be empty".into()));
         }
 
         // Extract body between { and }.
         let rest = rest
             .strip_prefix('{')
-            .ok_or_else(|| OasisError::Command("expected '{' after function name".to_string()))?;
+            .ok_or_else(|| OasisError::Command("expected '{' after function name".into()))?;
         let body = rest
             .strip_suffix('}')
-            .ok_or_else(|| OasisError::Command("expected '}' at end of function".to_string()))?;
+            .ok_or_else(|| OasisError::Command("expected '}' at end of function".into()))?;
         let body = body.trim();
 
         if body.is_empty() {
-            return Err(OasisError::Command(
-                "function body cannot be empty".to_string(),
-            ));
+            return Err(OasisError::Command("function body cannot be empty".into()));
         }
 
         self.define_function(&name.to_ascii_lowercase(), body);
@@ -233,7 +233,7 @@ impl CommandRegistry {
     pub(crate) fn execute_return(&self, args: &[&str]) -> Result<CommandOutput> {
         if self.call_depth.get() == 0 {
             return Err(OasisError::Command(
-                "return: can only be used inside a function".to_string(),
+                "return: can only be used inside a function".into(),
             ));
         }
         let code: i32 = if let Some(s) = args.first() {
@@ -266,7 +266,7 @@ impl CommandRegistry {
         let scopes = self.local_scopes.borrow();
         if scopes.is_empty() {
             return Err(OasisError::Command(
-                "local: can only be used inside a function".to_string(),
+                "local: can only be used inside a function".into(),
             ));
         }
         drop(scopes);
@@ -282,7 +282,7 @@ impl CommandRegistry {
             let mut scopes_mut = self.local_scopes.borrow_mut();
             let Some(top) = scopes_mut.last_mut() else {
                 return Err(OasisError::Command(
-                    "local: scope unexpectedly empty".to_string(),
+                    "local: scope unexpectedly empty".into(),
                 ));
             };
             top.entry(name.to_string()).or_insert(old);
@@ -322,7 +322,7 @@ impl CommandRegistry {
             let name = name.trim();
             let value = value.trim();
             if name.is_empty() {
-                return Err(OasisError::Command("usage: set VAR=value".to_string()));
+                return Err(OasisError::Command("usage: set VAR=value".into()));
             }
             self.set_variable(name, value);
             Ok(CommandOutput::None)
@@ -338,7 +338,7 @@ impl CommandRegistry {
     /// Built-in `unset` command.
     pub(crate) fn execute_unset(&self, args: &[&str]) -> Result<CommandOutput> {
         if args.is_empty() {
-            return Err(OasisError::Command("usage: unset <VAR>".to_string()));
+            return Err(OasisError::Command("usage: unset <VAR>".into()));
         }
         for name in args {
             self.unset_variable(name);
@@ -383,9 +383,7 @@ impl CommandRegistry {
             let name = name.trim();
             let value = value.trim().trim_matches('\'').trim_matches('"');
             if name.is_empty() {
-                return Err(OasisError::Command(
-                    "usage: alias <name>=<command>".to_string(),
-                ));
+                return Err(OasisError::Command("usage: alias <name>=<command>".into()));
             }
             self.set_alias(name, value);
             Ok(CommandOutput::None)
@@ -402,7 +400,7 @@ impl CommandRegistry {
     /// Built-in `unalias` command.
     pub(crate) fn execute_unalias(&self, args: &[&str]) -> Result<CommandOutput> {
         if args.is_empty() {
-            return Err(OasisError::Command("usage: unalias <name>".to_string()));
+            return Err(OasisError::Command("usage: unalias <name>".into()));
         }
         for name in args {
             self.unset_alias(name);

@@ -37,7 +37,7 @@ mod tests {
             server_name: &str,
         ) -> Result<Box<dyn NetworkStream>> {
             if server_name == "bad.example.com" {
-                return Err(OasisError::Backend("mock TLS error".to_string()));
+                return Err(OasisError::Backend("mock TLS error".into()));
             }
             Ok(_stream) // pass-through for testing
         }

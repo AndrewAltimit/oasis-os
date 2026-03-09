@@ -89,9 +89,9 @@ pub fn execute_while(
 
     loop {
         if iterations >= max_iterations {
-            return Err(OasisError::Command(format!(
-                "while loop exceeded {max_iterations} iterations"
-            )));
+            return Err(OasisError::Command(
+                format!("while loop exceeded {max_iterations} iterations").into(),
+            ));
         }
         iterations += 1;
 
