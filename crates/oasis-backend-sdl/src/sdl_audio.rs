@@ -550,15 +550,15 @@ impl AudioBackend for SdlAudioBackend {
                 .push(scaled.clamp(-32768.0, 32767.0) as i16);
         }
 
-        // Apply backpressure: skip if queue is already full.
-        if self.queued_bytes() < MAX_QUEUE_BYTES {
+        // Apply backpressure: skip if queue is already full to prevent unbounded growth.
+        let queued = self.queued_bytes();
+        if queued < MAX_QUEUE_BYTES {
             let staging = std::mem::take(&mut self.pcm_staging);
             self.queue_pcm(&staging)?;
             self.pcm_staging = staging;
         } else {
-            log::trace!(
-                "SDL audio: queue full ({} bytes), dropping {} samples",
-                self.queued_bytes(),
+            log::debug!(
+                "SDL audio: queue full ({queued} bytes), dropping {} samples",
                 self.pcm_staging.len(),
             );
         }

@@ -1835,6 +1835,44 @@ mod tests {
                 let expanded = expand_braces(&tokens);
                 prop_assert_eq!(expanded, vec![s]);
             }
+
+            // -- tokenize: full Unicode / adversarial input ------------------
+
+            /// Tokenize never panics on arbitrary Unicode input (not just ASCII).
+            #[test]
+            fn tokenize_arbitrary_unicode_no_panic(s in "\\PC{0,100}") {
+                let _ = tokenize(&s);
+            }
+
+            // -- parse_redirect: fuzz ----------------------------------------
+
+            /// `parse_redirect` never panics on arbitrary input.
+            #[test]
+            fn parse_redirect_no_panic(s in "\\PC{0,100}") {
+                let _ = parse_redirect(&s);
+            }
+
+            /// `parse_redirect` always returns a command part that is a
+            /// substring (or equal) of the original input.
+            #[test]
+            fn parse_redirect_command_part_is_substring(s in "[ -~]{0,80}") {
+                let (cmd, _) = parse_redirect(&s);
+                prop_assert!(
+                    s.contains(cmd.trim()),
+                    "command part '{cmd}' should be within original '{s}'",
+                );
+            }
+
+            // -- CommandRegistry::execute: fuzz -------------------------------
+
+            /// Executing arbitrary command strings never panics.
+            #[test]
+            fn execute_arbitrary_no_panic(s in "\\PC{0,100}") {
+                let reg = CommandRegistry::new();
+                let mut vfs = MemoryVfs::new();
+                let mut env = super::make_env(&mut vfs);
+                let _ = reg.execute(&s, &mut env);
+            }
         }
     }
 

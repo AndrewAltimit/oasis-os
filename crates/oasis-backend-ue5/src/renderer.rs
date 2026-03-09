@@ -174,13 +174,56 @@ impl Ue5Backend {
         }
     }
 
+    /// Fill a horizontal span of pixels. Clips to bounds and active clip rect.
+    /// Much faster than per-pixel `set_pixel` for solid-color fills.
+    fn fill_span(&mut self, y: i32, x_start: i32, x_end: i32, color: Color) {
+        if y < 0 || y >= self.height as i32 {
+            return;
+        }
+        // Determine effective x range after clipping.
+        let mut xs = x_start.max(0);
+        let mut xe = x_end.min(self.width as i32);
+        if let Some(clip) = &self.clip {
+            xs = xs.max(clip.x);
+            xe = xe.min(clip.x + clip.w as i32);
+            if y < clip.y || y >= clip.y + clip.h as i32 {
+                return;
+            }
+        }
+        if xs >= xe {
+            return;
+        }
+        let row_offset = (y as usize * self.width as usize) * 4;
+        if color.a == 255 {
+            // Opaque: direct write, no blending.
+            for x in xs..xe {
+                let offset = row_offset + x as usize * 4;
+                self.buffer[offset] = color.r;
+                self.buffer[offset + 1] = color.g;
+                self.buffer[offset + 2] = color.b;
+                self.buffer[offset + 3] = 255;
+            }
+        } else if color.a > 0 {
+            let sa = color.a as u16;
+            let da = 255 - sa;
+            for x in xs..xe {
+                let offset = row_offset + x as usize * 4;
+                self.buffer[offset] =
+                    ((color.r as u16 * sa + self.buffer[offset] as u16 * da + 127) / 255) as u8;
+                self.buffer[offset + 1] =
+                    ((color.g as u16 * sa + self.buffer[offset + 1] as u16 * da + 127) / 255) as u8;
+                self.buffer[offset + 2] =
+                    ((color.b as u16 * sa + self.buffer[offset + 2] as u16 * da + 127) / 255) as u8;
+                self.buffer[offset + 3] = 255;
+            }
+        }
+    }
+
     /// Draw a horizontal span (faster than pixel-by-pixel for solid fills).
     fn hline(&mut self, x1: i32, x2: i32, y: i32, color: Color) {
         let start = x1.min(x2);
-        let end = x1.max(x2);
-        for x in start..=end {
-            self.set_pixel(x, y, color);
-        }
+        let end = x1.max(x2) + 1; // fill_span uses exclusive end
+        self.fill_span(y, start, end, color);
     }
 
     /// Get texture data via `Rc::clone` (O(1) refcount bump, no data copy).
@@ -216,11 +259,12 @@ impl SdiCore for Ue5Backend {
     }
 
     fn fill_rect(&mut self, x: i32, y: i32, w: u32, h: u32, color: Color) -> Result<()> {
+        if w == 0 || h == 0 || color.a == 0 {
+            return Ok(());
+        }
         let (tx, ty) = self.translate(x, y);
         for dy in 0..h as i32 {
-            for dx in 0..w as i32 {
-                self.set_pixel(tx + dx, ty + dy, color);
-            }
+            self.fill_span(ty + dy, tx, tx + w as i32, color);
         }
         self.dirty = true;
         Ok(())
@@ -669,9 +713,7 @@ impl SdiBackend for Ue5Backend {
                 let h_max = h.saturating_sub(1).max(1);
                 for dy in 0..h as i32 {
                     let color = lerp_color(top, bottom, dy as u32, h_max);
-                    for dx in 0..w as i32 {
-                        self.set_pixel(tx + dx, ty + dy, color);
-                    }
+                    self.fill_span(ty + dy, tx, tx + w as i32, color);
                 }
             },
             GradientStyle::Horizontal { left, right } => {

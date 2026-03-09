@@ -49,6 +49,7 @@ required-features = ["h264"]
 
 [dev-dependencies]
 criterion = { version = "0.5", features = ["html_reports"] }
+proptest.workspace = true
 
 [[bench]]
 name = "decode"

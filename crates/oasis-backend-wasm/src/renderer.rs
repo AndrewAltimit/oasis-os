@@ -1,6 +1,6 @@
 //! `SdiBackend` implementation using the Canvas 2D API.
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::HashMap;
 
 use wasm_bindgen::prelude::*;
 use web_sys::{CanvasRenderingContext2d, HtmlCanvasElement, ImageData};
@@ -112,6 +112,9 @@ struct ClipRect {
 /// Maximum number of cached glyphs before LRU eviction kicks in.
 const MAX_GLYPH_CACHE_SIZE: usize = 2048;
 
+/// Maximum number of cached canvas gradients before the cache is cleared.
+const MAX_GRADIENT_CACHE_SIZE: usize = 256;
+
 pub struct WasmBackend {
     canvas: HtmlCanvasElement,
     ctx: CanvasRenderingContext2d,
@@ -124,8 +127,9 @@ pub struct WasmBackend {
     cumulative_translate: (i32, i32),
     color_cache: HashMap<u32, String>,
     glyph_cache: HashMap<GlyphCacheKey, HtmlCanvasElement>,
-    /// Insertion-order queue for LRU eviction of glyph cache entries.
-    glyph_lru: VecDeque<GlyphCacheKey>,
+    /// Access timestamps for LRU eviction of glyph cache entries.
+    glyph_access: HashMap<GlyphCacheKey, u64>,
+    glyph_access_counter: u64,
     gradient_cache: HashMap<GradientCacheKey, web_sys::CanvasGradient>,
 }
 
@@ -157,7 +161,8 @@ impl WasmBackend {
             cumulative_translate: (0, 0),
             color_cache: HashMap::new(),
             glyph_cache: HashMap::new(),
-            glyph_lru: VecDeque::new(),
+            glyph_access: HashMap::new(),
+            glyph_access_counter: 0,
             gradient_cache: HashMap::new(),
         })
     }
@@ -284,23 +289,25 @@ impl WasmBackend {
         for ch in text.chars() {
             let key = GlyphCacheKey::new(ch, font_size, color, bold, italic);
             if self.glyph_cache.contains_key(&key) {
-                // Promote to back of LRU on cache hit.
-                if let Some(pos) = self.glyph_lru.iter().position(|k| k == &key) {
-                    self.glyph_lru.remove(pos);
-                }
-                self.glyph_lru.push_back(key);
+                // Update access timestamp on cache hit.
+                self.glyph_access_counter += 1;
+                self.glyph_access.insert(key, self.glyph_access_counter);
             } else {
-                // Evict least-recently-used entries when cache is full.
+                // Evict least-recently-used entry when cache is full (O(N) scan).
                 while self.glyph_cache.len() >= MAX_GLYPH_CACHE_SIZE {
-                    if let Some(old_key) = self.glyph_lru.pop_front() {
-                        self.glyph_cache.remove(&old_key);
+                    if let Some((&oldest_key, _)) =
+                        self.glyph_access.iter().min_by_key(|&(_, &ts)| ts)
+                    {
+                        self.glyph_cache.remove(&oldest_key);
+                        self.glyph_access.remove(&oldest_key);
                     } else {
                         break;
                     }
                 }
                 let canvas = self.render_glyph_to_canvas(ch, font_size, color, bold, italic)?;
                 self.glyph_cache.insert(key, canvas);
-                self.glyph_lru.push_back(key);
+                self.glyph_access_counter += 1;
+                self.glyph_access.insert(key, self.glyph_access_counter);
             }
             let glyph_canvas = &self.glyph_cache[&key];
             self.ctx
@@ -324,7 +331,7 @@ impl SdiCore for WasmBackend {
         self.canvas.set_height(height);
         self.ctx.set_image_smoothing_enabled(false);
         self.glyph_cache.clear();
-        self.glyph_lru.clear();
+        self.glyph_access.clear();
         self.color_cache.clear();
         self.gradient_cache.clear();
         Ok(())
@@ -434,7 +441,7 @@ impl SdiCore for WasmBackend {
     fn shutdown(&mut self) -> Result<()> {
         self.textures.clear();
         self.glyph_cache.clear();
-        self.glyph_lru.clear();
+        self.glyph_access.clear();
         self.color_cache.clear();
         self.gradient_cache.clear();
         Ok(())
@@ -686,6 +693,9 @@ impl SdiBackend for WasmBackend {
                     let css_bot = cached_css_color(&mut self.color_cache, *bottom).to_owned();
                     grad.add_color_stop(0.0, &css_top).map_err(js_err)?;
                     grad.add_color_stop(1.0, &css_bot).map_err(js_err)?;
+                    if self.gradient_cache.len() >= MAX_GRADIENT_CACHE_SIZE {
+                        self.gradient_cache.clear();
+                    }
                     self.gradient_cache.insert(cache_key, grad);
                 }
                 let grad = &self.gradient_cache[&cache_key];
@@ -707,6 +717,9 @@ impl SdiBackend for WasmBackend {
                     let css_right = cached_css_color(&mut self.color_cache, *right).to_owned();
                     grad.add_color_stop(0.0, &css_left).map_err(js_err)?;
                     grad.add_color_stop(1.0, &css_right).map_err(js_err)?;
+                    if self.gradient_cache.len() >= MAX_GRADIENT_CACHE_SIZE {
+                        self.gradient_cache.clear();
+                    }
                     self.gradient_cache.insert(cache_key, grad);
                 }
                 let grad = &self.gradient_cache[&cache_key];

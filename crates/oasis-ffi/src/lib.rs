@@ -9,6 +9,14 @@
 //! All `extern "C"` functions that take an `*mut OasisInstance` require a
 //! valid, non-null handle previously returned by `oasis_create`. Passing
 //! null or a freed handle is undefined behavior.
+//!
+//! # Thread Safety
+//!
+//! `OasisInstance` is **not** thread-safe. All `extern "C"` functions must be
+//! called from the same thread (typically the UE5 game thread). Calling any
+//! `oasis_*` function from multiple threads concurrently is undefined behavior.
+//! If you need to interact with OASIS_OS from a worker thread, synchronize
+//! access externally (e.g. via a mutex in your C++ code).
 
 use std::collections::HashMap;
 use std::ffi::{CStr, CString};
@@ -187,6 +195,10 @@ static INIT_LOGGER: Once = Once::new();
 /// # Safety
 ///
 /// String pointers must be null or valid null-terminated C strings.
+///
+/// # Thread Safety
+///
+/// Caller must ensure single-threaded access to the returned handle.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn oasis_create(
     width: u32,
@@ -283,6 +295,10 @@ pub unsafe extern "C" fn oasis_create(
 ///
 /// `handle` must be a valid pointer returned by `oasis_create`, or null.
 /// After this call, `handle` is invalid and must not be used.
+///
+/// # Thread Safety
+///
+/// Caller must ensure single-threaded access to the handle.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn oasis_destroy(handle: *mut OasisInstance) {
     if !handle.is_null() {
@@ -301,6 +317,10 @@ pub unsafe extern "C" fn oasis_destroy(handle: *mut OasisInstance) {
 /// # Safety
 ///
 /// `handle` must be a valid, non-null instance pointer.
+///
+/// # Thread Safety
+///
+/// Caller must ensure single-threaded access to the handle.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn oasis_tick(handle: *mut OasisInstance, _delta_seconds: f32) {
     // SAFETY: Caller guarantees `handle` is valid and non-null per function safety contract.
@@ -382,6 +402,10 @@ pub unsafe extern "C" fn oasis_tick(handle: *mut OasisInstance, _delta_seconds: 
 ///
 /// `handle` must be valid and non-null. `event` must point to a valid
 /// `OasisInputEvent`.
+///
+/// # Thread Safety
+///
+/// Caller must ensure single-threaded access to the handle.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn oasis_send_input(
     handle: *mut OasisInstance,
@@ -424,6 +448,10 @@ pub unsafe extern "C" fn oasis_send_input(
 /// # Safety
 ///
 /// `handle` must be valid. `out_width` and `out_height` may be null.
+///
+/// # Thread Safety
+///
+/// Caller must ensure single-threaded access to the handle.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn oasis_get_buffer(
     handle: *mut OasisInstance,
@@ -474,6 +502,10 @@ pub unsafe extern "C" fn oasis_get_dirty(handle: *mut OasisInstance) -> bool {
 /// # Safety
 ///
 /// `handle` must be valid. `cmd` must be a valid null-terminated C string.
+///
+/// # Thread Safety
+///
+/// Caller must ensure single-threaded access to the handle.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn oasis_send_command(
     handle: *mut OasisInstance,
