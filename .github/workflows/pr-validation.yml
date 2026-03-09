@@ -136,23 +136,24 @@ jobs:
       - name: cargo-deny
         run: docker compose --profile ci run --rm rust-ci cargo deny check
 
-      # -- Benchmarks (disabled -- run manually or in main-ci) ----------------
-      # - name: Benchmarks
-      #   run: |
-      #     set -o pipefail
-      #     docker compose --profile ci run --rm rust-ci \
-      #       cargo bench --workspace 2>&1 | tee bench_results.txt
-      #     echo "::group::Benchmark Results"
-      #     grep -E '(time:|bench)' bench_results.txt || true
-      #     echo "::endgroup::"
-      #
-      # - name: Upload benchmark results
-      #   if: always()
-      #   uses: actions/upload-artifact@v4
-      #   with:
-      #     name: benchmark-results
-      #     path: bench_results.txt
-      #     retention-days: 30
+      # -- Benchmarks (disabled by default, enable via workflow_dispatch) ------
+      - name: Benchmarks
+        if: github.event_name == 'workflow_dispatch'
+        run: |
+          set -o pipefail
+          docker compose --profile ci run --rm rust-ci \
+            cargo bench --workspace 2>&1 | tee bench_results.txt
+          echo "::group::Benchmark Results"
+          grep -E '(time:|bench)' bench_results.txt || true
+          echo "::endgroup::"
+
+      - name: Upload benchmark results
+        if: github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-results
+          path: bench_results.txt
+          retention-days: 30
 
       # -- Test Metrics -------------------------------------------------------
       - name: Test metrics summary
