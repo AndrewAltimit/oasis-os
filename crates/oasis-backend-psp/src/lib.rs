@@ -458,7 +458,7 @@ impl SdiCore for PspBackend {
         rgba_data: &[u8],
     ) -> OasisResult<TextureId> {
         self.load_texture_inner(width, height, rgba_data)
-            .ok_or_else(|| OasisError::Backend("PSP texture allocation failed".into()))
+            .ok_or_else(|| OasisError::Backend("PSP texture allocation failed".to_string().into()))
     }
 
     fn destroy_texture(&mut self, tex: TextureId) -> OasisResult<()> {
@@ -482,7 +482,7 @@ impl SdiCore for PspBackend {
 
     fn read_pixels(&self, _x: i32, _y: i32, _w: u32, _h: u32) -> OasisResult<Vec<u8>> {
         Err(OasisError::Backend(
-            "read_pixels not supported on PSP".into(),
+            "read_pixels not supported on PSP".to_string().into(),
         ))
     }
 

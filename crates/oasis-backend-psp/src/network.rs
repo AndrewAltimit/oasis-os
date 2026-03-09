@@ -75,7 +75,9 @@ fn ensure_net_init() -> Result<()> {
 
     if !psp::wlan::is_available() {
         return Err(OasisError::Backend(
-            "WLAN not available (switch off or no hardware)".into(),
+            "WLAN not available (switch off or no hardware)"
+                .to_string()
+                .into(),
         ));
     }
 
@@ -83,7 +85,8 @@ fn ensure_net_init() -> Result<()> {
     load_net_modules_once();
 
     // 128 KiB memory pool for the networking stack.
-    psp::net::init(0x20000).map_err(|e| OasisError::Backend(format!("net init failed: {e}")))?;
+    psp::net::init(0x20000)
+        .map_err(|e| OasisError::Backend(format!("net init failed: {e}").into()))?;
 
     // Show the PSP's built-in WiFi connection dialog.
     // This is the standard approach used by PSP games — it lets the user
@@ -91,7 +94,7 @@ fn ensure_net_init() -> Result<()> {
     // both real hardware and PPSSPP.
     if let Err(e) = psp::net::connect_dialog() {
         psp::net::term();
-        return Err(OasisError::Backend(format!("WiFi connect failed: {e}")));
+        return Err(OasisError::Backend(format!("WiFi connect failed: {e}").into()));
     }
 
     NET_INITIALIZED.store(true, Ordering::Release);
@@ -176,7 +179,7 @@ impl NetworkStream for PspNetworkStream {
             Err(OasisError::Backend(format!(
                 "recv failed: errno {:#x}",
                 errno as u32,
-            )))
+            ).into()))
         } else {
             Ok(ret as usize)
         }
@@ -184,7 +187,7 @@ impl NetworkStream for PspNetworkStream {
 
     fn write(&mut self, data: &[u8]) -> Result<usize> {
         if self.closed {
-            return Err(OasisError::Backend("stream closed".into()));
+            return Err(OasisError::Backend("stream closed".to_string().into()));
         }
         // SAFETY: sceNetInetSend is the PSP inet send syscall.
         // data is a valid byte slice.
@@ -196,7 +199,7 @@ impl NetworkStream for PspNetworkStream {
             Err(OasisError::Backend(format!(
                 "send failed: errno {:#x}",
                 errno as u32,
-            )))
+            ).into()))
         } else {
             Ok(ret as usize)
         }
@@ -271,7 +274,7 @@ impl NetworkBackend for PspNetworkBackend {
             return Err(OasisError::Backend(format!(
                 "socket() failed: errno {:#x}",
                 errno as u32,
-            )));
+            ).into()));
         }
 
         // Set SO_REUSEADDR so we can rebind quickly.
@@ -311,7 +314,7 @@ impl NetworkBackend for PspNetworkBackend {
             return Err(OasisError::Backend(format!(
                 "bind(:{port}) failed: errno {:#x}",
                 errno as u32,
-            )));
+            ).into()));
         }
 
         // SAFETY: Start listening with a backlog of 4.
@@ -324,7 +327,7 @@ impl NetworkBackend for PspNetworkBackend {
             return Err(OasisError::Backend(format!(
                 "listen(:{port}) failed: errno {:#x}",
                 errno as u32,
-            )));
+            ).into()));
         }
 
         self.listener_fd = fd;
@@ -334,7 +337,7 @@ impl NetworkBackend for PspNetworkBackend {
 
     fn accept(&mut self) -> Result<Option<Box<dyn NetworkStream>>> {
         if self.listener_fd < 0 {
-            return Err(OasisError::Backend("not listening".into()));
+            return Err(OasisError::Backend("not listening".to_string().into()));
         }
 
         let mut sa = sys::sockaddr {
@@ -359,7 +362,7 @@ impl NetworkBackend for PspNetworkBackend {
             return Err(OasisError::Backend(format!(
                 "accept failed: errno {:#x}",
                 errno as u32,
-            )));
+            ).into()));
         }
 
         let (_ip, _port) = parse_sockaddr(&sa);
@@ -374,7 +377,7 @@ impl NetworkBackend for PspNetworkBackend {
         host_bytes.push(0); // null-terminate for the resolver
 
         let addr = psp::net::resolve_hostname(&host_bytes)
-            .map_err(|e| OasisError::Backend(format!("DNS resolve '{}' failed: {e}", address,)))?;
+            .map_err(|e| OasisError::Backend(format!("DNS resolve '{}' failed: {e}", address,).into()))?;
 
         // Create TCP socket and connect.
         // SAFETY: AF_INET=2, SOCK_STREAM=1.
@@ -385,7 +388,7 @@ impl NetworkBackend for PspNetworkBackend {
             return Err(OasisError::Backend(format!(
                 "socket() failed: errno {:#x}",
                 errno as u32,
-            )));
+            ).into()));
         }
 
         let sa = make_sockaddr_in(addr.0, port);
@@ -400,7 +403,7 @@ impl NetworkBackend for PspNetworkBackend {
             return Err(OasisError::Backend(format!(
                 "connect {}:{} failed: errno {:#x}",
                 address, port, errno as u32,
-            )));
+            ).into()));
         }
 
         Ok(Box::new(PspNetworkStream::new(fd)))
@@ -434,11 +437,11 @@ impl NetworkService for PspNetworkService {
         url_bytes.push(0);
 
         let client = psp::http::HttpClient::new()
-            .map_err(|e| OasisError::Backend(format!("HTTP init failed: {e}")))?;
+            .map_err(|e| OasisError::Backend(format!("HTTP init failed: {e}").into()))?;
 
         let resp = client
             .get(&url_bytes)
-            .map_err(|e| OasisError::Backend(format!("HTTP GET failed: {e}")))?;
+            .map_err(|e| OasisError::Backend(format!("HTTP GET failed: {e}").into()))?;
 
         Ok(HttpResponse {
             status_code: resp.status_code,
