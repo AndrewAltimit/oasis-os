@@ -20,11 +20,9 @@ use oasis_backend_psp::{
 };
 
 // oasis-core SDI integration types.
-use oasis_core::active_theme::ActiveTheme;
 use oasis_core::bottombar::BottomBar;
 use oasis_core::dashboard::{AppEntry as CoreAppEntry, DashboardConfig, DashboardState};
 use oasis_core::platform::{BatteryState, CpuClock, PowerInfo, SystemTime};
-use oasis_core::skin::SkinFeatures;
 use oasis_core::statusbar::StatusBar;
 use oasis_core::terminal_sdi;
 
@@ -32,9 +30,11 @@ mod boot;
 mod chrome;
 mod commands;
 mod desktop;
+mod skins;
 mod theme;
 mod types;
 mod views;
+mod views_sdi;
 
 use theme::*;
 use types::*;
@@ -155,32 +155,13 @@ fn psp_main() {
     dbg_log("[EBOOT] sysinfo queried");
 
     // -- ActiveTheme (SDI integration) --
-    // Use default theme directly to avoid pulling in the TOML parser and
-    // 17 embedded skin files (~850KB code). ActiveTheme::default() provides
-    // PSIX-style layout already matched to 480x272.
+    // Derive theme from a lightweight preset (9 base colors) instead of
+    // pulling in the TOML parser + 18 embedded skin strings (~850KB).
     dbg_log("[EBOOT] creating theme...");
-    let mut active_theme = ActiveTheme::default()
-        .with_screen_size(SCREEN_WIDTH, SCREEN_HEIGHT);
-    // PSP: make bar backgrounds opaque to prevent darkening window content.
-    // Default is semi-transparent (alpha=80) which looks muddy on 480x272.
-    active_theme.bar.statusbar_bg = Color::rgba(10, 10, 20, 255);
-    active_theme.bar.bg = Color::rgba(10, 10, 20, 255);
-    // PSP: match actual bar sizes (theme.rs constants) so SDI grid aligns.
-    active_theme.statusbar_height = 18;
-    active_theme.tab_row_height = 0;
-    active_theme.bottombar_height = 32;
-    // PSP: compact icons for 4x3 grid on 480x272.
-    active_theme.icon_width = 34;
-    active_theme.icon_height = 34;
-    active_theme.icon_stripe_h = 6;
-    active_theme.icon_fold_size = 5;
-    active_theme.grid_padding_x = 8;
-    active_theme.grid_padding_y = 2;
-    active_theme.cursor_pad = 2;
-    let mut skin_features = SkinFeatures::default();
-    skin_features.grid_cols = 4;
-    skin_features.grid_rows = 3;
-    skin_features.icons_per_page = 12;
+    let skin_key = config.get_str("skin").unwrap_or("psix");
+    let mut current_preset = skins::PspSkinPreset::from_key(skin_key);
+    let mut active_theme = current_preset.to_active_theme();
+    let skin_features = skins::PspSkinPreset::skin_features();
     dbg_log("[EBOOT] active_theme created");
     let dash_config = DashboardConfig::from_features(&skin_features, &active_theme);
 
@@ -228,6 +209,7 @@ fn psp_main() {
     // -- App mode --
     let mut app_mode = AppMode::Classic;
     let mut classic_view = ClassicView::Dashboard;
+    let mut prev_classic_view = ClassicView::Dashboard;
 
     let mut icons_hidden: bool = false;
     let mut viz_frame: u32 = 0;
@@ -895,6 +877,47 @@ fn psp_main() {
                         "stop" => {
                             audio.send(AudioCmd::Stop);
                             (vec!["Stopped.".into()], false)
+                        },
+                        "skin" => {
+                            let names: Vec<String> = skins::PspSkinPreset::ALL
+                                .iter()
+                                .map(|p| {
+                                    let marker =
+                                        if *p == current_preset { ">" } else { " " };
+                                    format!("{} {}", marker, p.name())
+                                })
+                                .collect();
+                            let mut out = vec!["Skins (use 'skin NAME'):".into()];
+                            out.extend(names);
+                            (out, false)
+                        },
+                        _ if cmd.trim().starts_with("skin ") => {
+                            let key = cmd.trim().strip_prefix("skin ").unwrap().trim();
+                            let preset = skins::PspSkinPreset::from_key(key);
+                            if preset == current_preset {
+                                (vec![format!("Already using '{}'.", key)], false)
+                            } else {
+                                current_preset = preset;
+                                active_theme = preset.to_active_theme();
+                                dashboard.config = DashboardConfig::from_features(
+                                    &skin_features,
+                                    &active_theme,
+                                );
+                                config.set(
+                                    "skin",
+                                    psp::config::ConfigValue::Str(
+                                        preset.key().to_string(),
+                                    ),
+                                );
+                                let _ = config.save(CONFIG_PATH);
+                                (
+                                    vec![format!(
+                                        "Skin changed to '{}'.",
+                                        preset.name()
+                                    )],
+                                    false,
+                                )
+                            }
                         },
                         _ => {
                             let r = commands::execute_command(&cmd, &mut config);
@@ -1628,6 +1651,13 @@ fn psp_main() {
                     terminal_sdi::set_terminal_visible(&mut sdi, false);
                 }
 
+                // View transition: hide old SDI objects, set up new ones.
+                if classic_view != prev_classic_view {
+                    views_sdi::hide_all(&mut sdi);
+                    views_sdi::setup_view(&mut sdi, classic_view);
+                    prev_classic_view = classic_view;
+                }
+
                 match classic_view {
                     ClassicView::Dashboard => {
                         backend.force_bitmap_font = true;
@@ -1666,9 +1696,8 @@ fn psp_main() {
                         backend.force_bitmap_font = false;
                     },
                     ClassicView::FileManager => {
-                        backend.force_bitmap_font = true;
-                        views::draw_file_manager_dual(
-                            &mut backend,
+                        views_sdi::update_file_manager(
+                            &mut sdi,
                             &fm_path,
                             &fm_entries,
                             fm_selected,
@@ -1678,7 +1707,9 @@ fn psp_main() {
                             fm2_selected,
                             fm2_scroll,
                             fm_active_panel,
+                            &active_theme,
                         );
+                        backend.force_bitmap_font = true;
                         chrome::draw_button_hints(
                             &mut backend,
                             &[("X", "Open"), ("O", "Back"), ("<>", "Panel"), ("^v", "Nav")],
@@ -1686,30 +1717,34 @@ fn psp_main() {
                         backend.force_bitmap_font = false;
                     },
                     ClassicView::PhotoViewer => {
-                        backend.force_bitmap_font = true;
                         if pv_viewing {
-                            views::draw_photo_view(&mut backend, pv_tex, pv_img_w, pv_img_h);
+                            views_sdi::update_photo_view(&mut sdi, pv_tex, pv_img_w, pv_img_h);
+                            backend.force_bitmap_font = true;
                             chrome::draw_button_hints(&mut backend, &[("O", "Back")]);
+                            backend.force_bitmap_font = false;
                         } else if pv_loading {
                             desktop::draw_loading_indicator(&mut backend, "Decoding image...");
                         } else {
-                            views::draw_photo_browser(
-                                &mut backend,
+                            views_sdi::update_photo_browser(
+                                &mut sdi,
                                 &pv_path,
                                 &pv_entries,
                                 pv_selected,
                                 pv_scroll,
+                                &active_theme,
                             );
+                            backend.force_bitmap_font = true;
                             chrome::draw_button_hints(
                                 &mut backend,
                                 &[("X", "View"), ("O", "Back"), ("^v", "Nav")],
                             );
+                            backend.force_bitmap_font = false;
                         }
-                        backend.force_bitmap_font = false;
                     },
                     ClassicView::MusicPlayer => {
-                        backend.force_bitmap_font = true;
                         if audio.is_playing() {
+                            // Now-playing view uses direct rendering for visualizer.
+                            backend.force_bitmap_font = true;
                             views::draw_music_player_threaded(
                                 &mut backend,
                                 &mp_file_name,
@@ -1720,34 +1755,38 @@ fn psp_main() {
                                 &mut backend,
                                 &[("X", "Pause"), ("[]", "Stop"), ("^v", "Back")],
                             );
+                            backend.force_bitmap_font = false;
                         } else {
-                            views::draw_music_browser(
-                                &mut backend,
+                            views_sdi::update_music_browser(
+                                &mut sdi,
                                 &mp_path,
                                 &mp_entries,
                                 mp_selected,
                                 mp_scroll,
+                                &active_theme,
                             );
+                            backend.force_bitmap_font = true;
                             chrome::draw_button_hints(
                                 &mut backend,
                                 &[("X", "Play"), ("O", "Back"), ("^v", "Nav")],
                             );
+                            backend.force_bitmap_font = false;
                         }
-                        backend.force_bitmap_font = false;
                     },
                     ClassicView::Browser => {
-                        backend.force_bitmap_font = true;
                         if br_loading {
                             desktop::draw_loading_indicator(&mut backend, "Loading page...");
                         } else {
-                            views::draw_browser_view(
-                                &mut backend,
+                            views_sdi::update_browser(
+                                &mut sdi,
                                 &br_url,
                                 &br_content_lines,
                                 br_scroll,
                                 &br_status_msg,
+                                &active_theme,
                             );
                         }
+                        backend.force_bitmap_font = true;
                         chrome::draw_button_hints(
                             &mut backend,
                             &[
@@ -1763,7 +1802,12 @@ fn psp_main() {
                         backend.force_bitmap_font = true;
                         match radio_status {
                             RadioStatus::Stopped => {
-                                views::draw_radio_stations(&mut backend, radio_selected, radio_scroll);
+                                views_sdi::update_radio(
+                                    &mut sdi,
+                                    radio_selected,
+                                    radio_scroll,
+                                    &active_theme,
+                                );
                                 chrome::draw_button_hints(
                                     &mut backend,
                                     &[("X", "Tune"), ("^v", "Nav"), ("O", "Back")],
@@ -1818,12 +1862,13 @@ fn psp_main() {
                                 &[("X", "Retry"), ("O", "Back")],
                             );
                         } else {
-                            views::draw_tv_channels(
-                                &mut backend,
+                            views_sdi::update_tv_channels(
+                                &mut sdi,
                                 &tv_channels,
                                 &tv_catalogs,
                                 tv_selected,
                                 tv_scroll,
+                                &active_theme,
                             );
                             chrome::draw_button_hints(
                                 &mut backend,
@@ -1984,10 +2029,18 @@ fn psp_main() {
         // - Overlay layer always (status bar, bottom bar at z=900)
         // This avoids 100+ unnecessary draw calls in non-dashboard views.
         let needs_base = match app_mode {
-            AppMode::Classic => matches!(
-                classic_view,
-                ClassicView::Dashboard | ClassicView::Terminal
-            ),
+            AppMode::Classic => {
+                // SDI base layer is needed for dashboard, terminal, and all
+                // SDI-migrated list views. Skip only when a direct-rendered
+                // overlay is active (music now-playing, radio playing, etc.).
+                let is_direct_only =
+                    (classic_view == ClassicView::MusicPlayer && audio.is_playing())
+                        || (classic_view == ClassicView::Radio
+                            && radio_status != RadioStatus::Stopped)
+                        || (classic_view == ClassicView::TvGuide
+                            && (tv_tuned.is_some() || !tv_error_msg.is_empty()));
+                !is_direct_only
+            },
             AppMode::Desktop => false, // WM draws windows directly
         };
         if needs_base {

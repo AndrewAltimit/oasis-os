@@ -1,4 +1,10 @@
 //! Classic full-screen view renderers.
+//!
+//! List-view functions (file manager, photo browser, music browser, browser,
+//! radio stations, TV channels) have been migrated to `views_sdi.rs`.  The
+//! direct-rendering functions here are retained for playback overlays that
+//! use animated content (visualizer bars, progress bars, video textures).
+#![allow(dead_code)]
 
 use oasis_backend_psp::{AudioHandle, Color, FileEntry, PspBackend, SCREEN_WIDTH, TextureId};
 

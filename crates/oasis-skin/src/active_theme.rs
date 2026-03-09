@@ -1486,6 +1486,350 @@ impl ActiveTheme {
         }
     }
 
+    /// Derive an `ActiveTheme` directly from 9 base `Color` values.
+    ///
+    /// This is a lightweight alternative to [`from_skin`] that avoids the TOML
+    /// parser and `SkinTheme` struct entirely.  All sub-themes are derived from
+    /// the same algorithm used by `from_skin`, but without any override maps or
+    /// hex-string parsing.
+    ///
+    /// # Arguments
+    /// * `background`  - Main background / wallpaper base
+    /// * `primary`     - Primary accent (highlights, active elements)
+    /// * `secondary`   - Secondary accent (borders, separators)
+    /// * `text`        - Default text color
+    /// * `dim_text`    - Dimmed / secondary text
+    /// * `status_bar`  - Status bar background
+    /// * `prompt`      - Terminal prompt color
+    /// * `output`      - Terminal output text color
+    /// * `error`       - Error / danger color
+    #[allow(clippy::too_many_arguments)]
+    pub fn from_base_colors(
+        background: Color,
+        primary: Color,
+        secondary: Color,
+        text: Color,
+        dim_text: Color,
+        status_bar: Color,
+        prompt: Color,
+        output: Color,
+        error: Color,
+    ) -> Self {
+        let dim = dim_text;
+
+        // -- Bar theme (no overrides, pure derivation) --
+        let bar = BarTheme {
+            statusbar_bg: with_alpha(status_bar, 80),
+            bg: with_alpha(status_bar, 90),
+            separator_color: with_alpha(secondary, 50),
+            battery_color: lighten(primary, 0.3),
+            version_color: text,
+            clock_color: text,
+            url_color: dim,
+            usb_color: dim,
+            tab_active_fill: with_alpha(primary, 30),
+            tab_inactive_fill: Color::rgba(0, 0, 0, 0),
+            tab_active_alpha: 180,
+            tab_inactive_alpha: 60,
+            media_tab_active: text,
+            media_tab_inactive: dim,
+            pipe_color: with_alpha(text, 60),
+            r_hint_color: with_alpha(text, 140),
+            category_label_color: with_alpha(text, 220),
+            page_dot_active: with_alpha(text, 200),
+            page_dot_inactive: with_alpha(text, 50),
+            statusbar_gradient_top: None,
+            statusbar_gradient_bottom: None,
+            gradient_top: None,
+            gradient_bottom: None,
+            text_shadow: false,
+            text_shadow_color: Color::rgba(0, 0, 0, 128),
+            version_text: "Version 0.1".to_string(),
+            category_label: "OSS".to_string(),
+            url_text: String::new(),
+            tab_active_stroke: with_alpha(text, 180),
+            tab_inactive_stroke: with_alpha(text, 60),
+        };
+
+        // -- Icon theme --
+        let icon_label_color = with_alpha(text, 230);
+        let brightness = icon_label_color.r as u16 * 3 / 10
+            + icon_label_color.g as u16 * 6 / 10
+            + icon_label_color.b as u16 / 10;
+        let icon_label_shadow = if brightness > 140 {
+            Some(Color::rgba(0, 0, 0, 120))
+        } else {
+            None
+        };
+        let icon = IconTheme {
+            body_color: text,
+            fold_color: dim,
+            outline_color: with_alpha(text, 180),
+            shadow_color: Color::rgba(0, 0, 0, 70),
+            label_color: icon_label_color,
+            label_shadow: icon_label_shadow,
+            cursor_color: with_alpha(primary, 80),
+            border_radius: 4,
+            cursor_border_radius: 6,
+            cursor_stroke_width: 2,
+            style: "document".to_string(),
+            cursor_style: "stroke".to_string(),
+            shadow_level: 1,
+            vector_preset: "altimit".to_string(),
+            idle_float: false,
+            float_amplitude: 2.0,
+            float_speed: 0.04,
+            spin_enabled: false,
+            spin_speed: 0.03,
+            pulse_enabled: false,
+            pulse_speed: 0.06,
+            blink_enabled: false,
+            blink_interval: 45,
+        };
+
+        // -- Start menu theme --
+        let menu = StartMenuTheme {
+            panel_bg: Color::rgba(20, 20, 35, 220),
+            panel_gradient_top: None,
+            panel_gradient_bottom: None,
+            panel_border: with_alpha(text, 40),
+            item_text: with_alpha(text, 220),
+            item_text_active: text,
+            highlight_color: with_alpha(primary, 80),
+            button_bg: with_alpha(primary, 200),
+            button_text: text,
+            panel_border_radius: 4,
+            panel_shadow_level: 1,
+            layout_mode: "grid".to_string(),
+            button_label: "START".to_string(),
+            button_width: 48,
+            button_height: 18,
+            button_shape: "pill".to_string(),
+            panel_width: 200,
+            columns: 2,
+            button_gradient_top: None,
+            button_gradient_bottom: None,
+            header_text: None,
+            header_bg: Color::rgba(30, 30, 50, 240),
+            header_text_color: text,
+            header_height: 0,
+            footer_enabled: false,
+            footer_bg: Color::rgba(30, 30, 50, 240),
+            footer_text_color: text,
+            footer_height: 0,
+            item_icon_size: 14,
+            item_row_height: 22,
+            item_colors: Self::derive_item_palette(primary),
+            pad_inner: 8,
+            footer_text: "Log Off  Shut Down".to_string(),
+            button_x: 4,
+            panel_x: 2,
+            item_separator: false,
+            item_separator_color: with_alpha(with_alpha(text, 40), 64),
+        };
+
+        // -- App screen theme --
+        let app_screen = AppScreenTheme {
+            bg: lighten(background, 0.02),
+            divider: lighten(background, 0.15),
+            selected_text: lighten(primary, 0.3),
+            text: lighten(dim, 0.2),
+            dim_text: dim,
+            title_bar_bg: lighten(background, 0.08),
+            title_bar_text: text,
+            title_bar_height: 22,
+            terminal_output_color: output,
+            terminal_prompt_color: prompt,
+            input_border_radius: 4,
+            selected_bg: with_alpha(primary, 40),
+            selection_border_radius: 2,
+            selection_accent_color: with_alpha(primary, 128),
+            title_bar_gradient_top: None,
+            title_bar_gradient_bottom: None,
+            title_bar_text_shadow: false,
+            title_bar_text_shadow_color: Color::rgba(0, 0, 0, 128),
+        };
+
+        // -- OSK theme --
+        let osk_theme = OskTheme {
+            key_bg: with_alpha(lighten(background, 0.05), 220),
+            key_text: text,
+            key_focus: lighten(primary, 0.3),
+            key_active: primary,
+            key_dim_text: dim,
+        };
+
+        // -- Scrollbar theme --
+        let scrollbar_theme = ScrollbarTheme {
+            track_color: with_alpha(secondary, 20),
+            thumb_color: with_alpha(secondary, 100),
+            thumb_hover_color: with_alpha(secondary, 160),
+            width: 6,
+            border_radius: 3,
+        };
+
+        // -- Wallpaper theme --
+        let wallpaper_theme = WallpaperTheme {
+            style: "gradient".to_string(),
+            stops: vec![
+                Color::rgb(245, 110, 15),
+                Color::rgb(255, 230, 30),
+                Color::rgb(230, 245, 40),
+                Color::rgb(140, 235, 50),
+                Color::rgb(200, 252, 130),
+            ],
+            wave: true,
+            wave_intensity: 1.0,
+            angle: 0.0,
+            grid_spacing: 16,
+            grid_color: lighten(background, 0.08),
+            noise_intensity: 0.3,
+            animated: false,
+        };
+
+        // -- Toast theme --
+        let toast_theme = ToastTheme {
+            info_bg: with_alpha(primary, 220),
+            success_bg: Color::rgba(60, 180, 100, 220),
+            error_bg: with_alpha(error, 220),
+            warning_bg: Color::rgba(230, 170, 40, 220),
+            text_color: text,
+            border_radius: 4,
+            ttl: 180,
+            text_shadow: false,
+            shadow_level: 1,
+            fade_frames: 10,
+            margin: 8,
+            height: 24,
+            width_fraction: 0.333,
+            gap: 4,
+            slide_in: true,
+        };
+
+        // -- UI toolkit theme (same derivation as SkinTheme::to_ui_theme) --
+        let surface = lighten(background, 0.05);
+        let surface_variant = lighten(background, 0.10);
+        let accent_hover = lighten(primary, 0.15);
+        let accent_pressed = darken(primary, 0.85);
+        let accent_subtle = with_alpha(primary, 30);
+
+        let ui_theme = oasis_ui::theme::Theme {
+            background,
+            surface,
+            surface_variant,
+            overlay: Color::rgba(0, 0, 0, 180),
+            text_primary: text,
+            text_secondary: dim,
+            text_disabled: darken(dim, 0.6),
+            text_on_accent: text,
+            accent: primary,
+            accent_hover,
+            accent_pressed,
+            accent_subtle,
+            success: Color::rgb(80, 200, 120),
+            warning: Color::rgb(255, 180, 50),
+            error,
+            info: primary,
+            border: secondary,
+            border_subtle: darken(secondary, 0.7),
+            border_strong: primary,
+            button_bg: secondary,
+            button_bg_hover: lighten(secondary, 0.15),
+            button_bg_pressed: darken(secondary, 0.85),
+            button_bg_disabled: darken(secondary, 0.5),
+            input_bg: darken(background, 0.8),
+            input_border: secondary,
+            input_border_focus: primary,
+            scrollbar_track: Color::rgba(255, 255, 255, 10),
+            scrollbar_thumb: Color::rgba(255, 255, 255, 40),
+            scrollbar_thumb_hover: Color::rgba(255, 255, 255, 80),
+            tooltip_bg: lighten(background, 0.15),
+            tooltip_text: text,
+            font_size_xs: 8,
+            font_size_sm: 8,
+            font_size_md: 8,
+            font_size_lg: 16,
+            font_size_xl: 16,
+            font_size_xxl: 24,
+            spacing_xs: 2,
+            spacing_sm: 4,
+            spacing_md: 8,
+            spacing_lg: 12,
+            spacing_xl: 16,
+            border_radius_sm: 2,
+            border_radius_md: 4,
+            border_radius_lg: 8,
+            border_radius_xl: 12,
+            shadow_card: oasis_types::shadow::Shadow::elevation(1),
+            shadow_dropdown: oasis_types::shadow::Shadow::elevation(2),
+            shadow_modal: oasis_types::shadow::Shadow::elevation(3),
+            shadow_tooltip: oasis_types::shadow::Shadow::elevation(2),
+            reduced_motion: false,
+            font_scale: 1.0,
+        };
+
+        Self {
+            bar,
+            icon,
+            menu,
+            app: app_screen,
+            osk: osk_theme,
+            scrollbar: scrollbar_theme,
+            wallpaper: wallpaper_theme,
+            toast: toast_theme,
+            grid_padding_x: 16,
+            grid_padding_y: 6,
+            terminal_border_radius: 4,
+            statusbar_height: 24,
+            bottombar_height: 24,
+            tab_row_height: 18,
+            icon_width: 42,
+            icon_height: 52,
+            font_small: 8,
+            tab_w: 45,
+            tab_h: 16,
+            tab_gap: 4,
+            tab_start_x: 34,
+            pipe_gap: 5,
+            r_hint_w: 28,
+            icon_stripe_h: 12,
+            icon_fold_size: 10,
+            icon_gfx_h: 22,
+            icon_gfx_pad: 4,
+            icon_label_pad: 4,
+            tab_w_override: None,
+            tab_h_override: None,
+            tab_gap_override: None,
+            tab_start_x_override: None,
+            screen_w: 480,
+            screen_h: 272,
+            clear_color: darken(background, 0.5),
+            terminal_line_height: 16,
+            cursor_scale: 1,
+            focus_ring_color: with_alpha(primary, 180),
+            focus_ring_width: 2,
+            focus_ring_offset: 2,
+            transition_fade_color: darken(background, 0.3),
+            font_body: 12,
+            font_hint: 10,
+            font_heading: 14,
+            terminal_cursor_blink_rate: 30,
+            cursor_lerp_speed: 0.35,
+            page_slide_duration: 6,
+            start_menu_anim_speed: 0.25,
+            press_flash_duration: 6,
+            cursor_pad: 3,
+            press_flash_lighten: 0.25,
+            app_selection_lerp_speed: 0.25,
+            page_dot_lerp_speed: 0.2,
+            app_themes: std::collections::HashMap::new(),
+            gradients: std::collections::HashMap::new(),
+            animations: std::collections::HashMap::new(),
+            widget_states: std::collections::HashMap::new(),
+            ui_theme,
+        }
+    }
+
     /// Set the screen dimensions and scale layout constants (builder pattern).
     ///
     /// Layout constants scale proportionally to `screen_w / 480`. At the PSP
@@ -1832,5 +2176,70 @@ disabled_text = "#555555"
         );
         assert!(at.widget_state_color("button", "missing_key").is_none());
         assert!(at.widget_state_color("slider", "hover_bg").is_none());
+    }
+
+    #[test]
+    fn from_base_colors_produces_valid_theme() {
+        let at = ActiveTheme::from_base_colors(
+            Color::rgb(0x0E, 0x0E, 0x1C), // background
+            Color::rgb(0x44, 0x88, 0xCC), // primary
+            Color::rgb(0x2A, 0x2A, 0x3E), // secondary
+            Color::rgb(0xE0, 0xE0, 0xF0), // text
+            Color::rgb(0x70, 0x70, 0x90), // dim_text
+            Color::rgb(0x18, 0x18, 0x2C), // status_bar
+            Color::rgb(0x44, 0xCC, 0x88), // prompt
+            Color::rgb(0xC0, 0xC0, 0xD8), // output
+            Color::rgb(0xFF, 0x44, 0x66), // error
+        );
+        // Bar theme: statusbar_bg derived from status_bar with alpha 80.
+        assert_eq!(at.bar.statusbar_bg.r, 0x18);
+        assert_eq!(at.bar.statusbar_bg.a, 80);
+        // Tab active fill from primary with alpha 30.
+        assert_eq!(at.bar.tab_active_fill.a, 30);
+        // Icon body color matches text.
+        assert_eq!(at.icon.body_color, Color::rgb(0xE0, 0xE0, 0xF0));
+        // Terminal colors match prompt/output.
+        assert_eq!(at.app.terminal_prompt_color, Color::rgb(0x44, 0xCC, 0x88));
+        assert_eq!(at.app.terminal_output_color, Color::rgb(0xC0, 0xC0, 0xD8));
+        // UI theme accent matches primary.
+        assert_eq!(at.ui_theme.accent, Color::rgb(0x44, 0x88, 0xCC));
+        // Toast error from error color.
+        assert_eq!(at.toast.error_bg.r, 0xFF);
+        assert_eq!(at.toast.error_bg.a, 220);
+        // Screen defaults.
+        assert_eq!(at.screen_w, 480);
+        assert_eq!(at.screen_h, 272);
+    }
+
+    #[test]
+    fn from_base_colors_matches_from_skin_defaults() {
+        // The SkinTheme defaults produce specific colors; from_base_colors
+        // with the same 9 colors should produce the same derivation for
+        // shared fields (no overrides path).
+        let skin = SkinTheme::default();
+        let from_skin = ActiveTheme::from_skin(&skin);
+        let from_colors = ActiveTheme::from_base_colors(
+            skin.background_color(),
+            skin.primary_color(),
+            skin.secondary_color(),
+            skin.text_color(),
+            skin.dim_text_color(),
+            crate::theme::parse_hex_color(&skin.status_bar).unwrap(),
+            skin.prompt_color(),
+            skin.output_color(),
+            skin.error_color(),
+        );
+        // Core derivation: tab fill, cursor color, battery color.
+        assert_eq!(
+            from_skin.bar.tab_active_fill,
+            from_colors.bar.tab_active_fill
+        );
+        assert_eq!(from_skin.icon.cursor_color, from_colors.icon.cursor_color);
+        assert_eq!(from_skin.bar.battery_color, from_colors.bar.battery_color);
+        assert_eq!(from_skin.bar.version_color, from_colors.bar.version_color);
+        assert_eq!(
+            from_skin.app.terminal_prompt_color,
+            from_colors.app.terminal_prompt_color
+        );
     }
 }
