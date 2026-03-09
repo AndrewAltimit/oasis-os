@@ -415,10 +415,13 @@ impl StreamingInner {
 
     /// Disable probe mode so reads block on real data instead of
     /// returning zeros.  Called after the decoder's probe phase completes.
+    ///
+    /// Uses `Release` ordering so that the store is visible to the reader
+    /// thread (which loads with `Acquire`) before any subsequent reads.
     pub(crate) fn disable_probe_mode(&self) {
         log::info!("TV: StreamingBuffer probe_mode disabled -- reads will now block");
         self.probe_mode
-            .store(false, std::sync::atomic::Ordering::Relaxed);
+            .store(false, std::sync::atomic::Ordering::Release);
     }
 
     /// Returns `true` if the download is far enough ahead of the decoder
@@ -430,7 +433,7 @@ impl StreamingInner {
         let received = s.bytes_received;
         drop(s);
 
-        let decoder = self.decoder_pos.load(std::sync::atomic::Ordering::Relaxed);
+        let decoder = self.decoder_pos.load(std::sync::atomic::Ordering::Acquire);
         should_throttle_pure(decoder, received, has_moov, buf_size)
     }
 }
@@ -606,7 +609,7 @@ impl std::io::Read for StreamingBuffer {
             let in_probe = self
                 .inner
                 .probe_mode
-                .load(std::sync::atomic::Ordering::Relaxed);
+                .load(std::sync::atomic::Ordering::Acquire);
             if in_probe {
                 // Fill with zeros up to base_offset, total_size, or
                 // buf.len() -- whichever comes first.
@@ -677,11 +680,11 @@ impl std::io::Read for StreamingBuffer {
             && !self
                 .inner
                 .probe_mode
-                .load(std::sync::atomic::Ordering::Relaxed)
+                .load(std::sync::atomic::Ordering::Acquire)
         {
             self.inner
                 .decoder_pos
-                .store(self.pos, std::sync::atomic::Ordering::Relaxed);
+                .store(self.pos, std::sync::atomic::Ordering::Release);
             self.maybe_evict();
         }
 

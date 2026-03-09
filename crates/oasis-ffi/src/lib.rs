@@ -125,6 +125,10 @@ pub struct OasisInstance {
 
 impl OasisInstance {
     /// Fire a callback if registered.
+    ///
+    /// `c_detail` is bound by the `let Ok(…)` in the `if let` chain, so the
+    /// `CString` lives for the entire block body -- the raw pointer from
+    /// `as_ptr()` is valid for the duration of the `cb()` call.
     fn fire_callback(&self, event: u32, detail: &str) {
         if let Some(cb) = self.callbacks.get(&event)
             && let Ok(c_detail) = CString::new(detail)

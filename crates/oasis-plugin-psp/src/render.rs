@@ -9,8 +9,10 @@
 use crate::config;
 use crate::font;
 
-/// VRAM stride in pixels (PSP hardware constant).
-const VRAM_STRIDE: u32 = 512;
+/// Maximum allowed framebuffer stride in pixels. PSP hardware uses 512,
+/// but games may set larger strides. We cap at 2048 to prevent integer
+/// overflow in pixel offset calculations (`py * stride + px`).
+pub const MAX_STRIDE: u32 = 2048;
 
 /// Screen dimensions.
 pub const SCREEN_WIDTH: u32 = 480;

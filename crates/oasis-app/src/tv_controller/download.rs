@@ -941,9 +941,18 @@ fn stream_download_inner(
                     // For moov-at-end: the tail probe already stored moov
                     // separately; only retain if base_offset is still 0
                     // (moov-at-start case).
-                    if s.base_offset == 0 && s.moov.is_some() && !s.buf.is_empty() {
-                        let full_header = s.buf.clone();
-                        s.moov = Some((s.base_offset, full_header));
+                    // For moov-at-start: retain the current buffer as a
+                    // combined header (ftyp + moov + mdat leader) so
+                    // symphonia can probe after the Range restart.
+                    // Only do this if moov hasn't already been retained
+                    // separately by the tail probe (moov-at-end case) --
+                    // otherwise we'd overwrite the correct moov data with
+                    // a raw buffer that isn't a valid moov atom.
+                    if s.base_offset == 0 && !s.buf.is_empty() {
+                        let current_len = s.header.as_ref().map_or(0, |h| h.len());
+                        if s.buf.len() > current_len {
+                            s.header = Some(s.buf.clone());
+                        }
                     }
                     s.base_offset = start_from;
                     s.bytes_received = start_from;
@@ -955,7 +964,7 @@ fn stream_download_inner(
                 // the seek restart offset).
                 buffer
                     .decoder_pos
-                    .store(start_from, std::sync::atomic::Ordering::Relaxed);
+                    .store(start_from, std::sync::atomic::Ordering::Release);
                 log::info!(
                     "TV: restarting download from byte {:.1}MB via Range",
                     start_from as f64 / (1024.0 * 1024.0),

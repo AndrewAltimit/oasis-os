@@ -84,6 +84,12 @@ const BTN_START: u32 = 0x8;
 /// `fb` must be a valid 32-bit ABGR framebuffer pointer with at least
 /// `stride * 272` pixels. Called from the display thread context.
 pub unsafe fn on_frame(fb: *mut u32, stride: u32) {
+    // Validate stride to prevent integer overflow in pixel offset
+    // calculations (py * stride + px). Games may pass unexpected values.
+    if stride == 0 || stride > render::MAX_STRIDE {
+        return;
+    }
+
     // Poll controller via kernel-mode driver (user-mode API doesn't work
     // from the display hook context).
     let buttons = crate::hook::poll_buttons();

@@ -1,6 +1,6 @@
 [package]
 name = "oasis-backend-sdl"
-description = "SDL2 rendering and input backend for OASIS_OS (desktop and Raspberry Pi)"
+description = "SDL3 rendering and input backend for OASIS_OS (desktop and Raspberry Pi)"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
