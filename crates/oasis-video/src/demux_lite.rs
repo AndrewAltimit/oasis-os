@@ -906,10 +906,12 @@ fn sample_pts(table: &SampleTable, sample_idx: usize) -> u64 {
     for entry in &table.stts {
         let count = entry.sample_count as usize;
         if sample + count > sample_idx {
-            dts += (sample_idx - sample) as u64 * entry.sample_delta as u64;
+            dts = dts.saturating_add(
+                ((sample_idx - sample) as u64).saturating_mul(entry.sample_delta as u64),
+            );
             break;
         }
-        dts += count as u64 * entry.sample_delta as u64;
+        dts = dts.saturating_add((count as u64).saturating_mul(entry.sample_delta as u64));
         sample += count;
     }
 
@@ -1020,13 +1022,16 @@ pub fn avcc_to_annex_b(
         };
         offset += nls;
 
-        if offset + nal_len > data.len() {
-            return Err(LiteError::Parse("NAL unit exceeds sample bounds".into()));
+        match offset.checked_add(nal_len) {
+            Some(end) if end <= data.len() => {
+                out.extend_from_slice(&ANNEX_B_START);
+                out.extend_from_slice(&data[offset..end]);
+                offset = end;
+            },
+            _ => {
+                return Err(LiteError::Parse("NAL unit exceeds sample bounds".into()));
+            },
         }
-
-        out.extend_from_slice(&ANNEX_B_START);
-        out.extend_from_slice(&data[offset..offset + nal_len]);
-        offset += nal_len;
     }
 
     Ok(out)
@@ -1061,7 +1066,7 @@ fn find_sample_at(track: &TrackInfo, target_ts: u64) -> usize {
             if dts >= target_ts {
                 return sample;
             }
-            dts += entry.sample_delta as u64;
+            dts = dts.saturating_add(entry.sample_delta as u64);
             sample += 1;
         }
     }
@@ -1638,5 +1643,80 @@ mod tests {
         // Empty stts -> loop doesn't execute, returns 0.saturating_sub(1) = 0.
         let idx = find_sample_at(&track, 5000);
         assert_eq!(idx, 0);
+    }
+
+    // ---------------------------------------------------------------
+    // Property-based tests (proptest)
+    // ---------------------------------------------------------------
+
+    mod proptests {
+        use super::*;
+        use proptest::prelude::*;
+
+        proptest! {
+            #[test]
+            fn avcc_to_annex_b_no_panic(
+                data in proptest::collection::vec(any::<u8>(), 0..4096),
+                nls in 1usize..=4,
+            ) {
+                let avcc = AvccConfig {
+                    nal_length_size: nls,
+                    sps: vec![],
+                    pps: vec![],
+                };
+                let _ = avcc_to_annex_b(&data, &avcc, true);
+                let _ = avcc_to_annex_b(&data, &avcc, false);
+            }
+
+            #[test]
+            fn sample_pts_no_panic(
+                counts in proptest::collection::vec(1u32..10000, 1..20),
+                deltas in proptest::collection::vec(1u32..100000, 1..20),
+                sample_idx in 0usize..50000,
+            ) {
+                let len = counts.len().min(deltas.len());
+                let stts: Vec<SttsEntry> = counts[..len].iter()
+                    .zip(deltas[..len].iter())
+                    .map(|(&c, &d)| SttsEntry {
+                        sample_count: c,
+                        sample_delta: d,
+                    })
+                    .collect();
+                let table = SampleTable {
+                    stts,
+                    timescale: 90000,
+                    ..Default::default()
+                };
+                let _ = sample_pts(&table, sample_idx);
+            }
+
+            #[test]
+            fn find_sample_at_no_panic(
+                counts in proptest::collection::vec(1u32..10000, 1..10),
+                deltas in proptest::collection::vec(1u32..100000, 1..10),
+                target_ts in any::<u64>(),
+            ) {
+                let len = counts.len().min(deltas.len());
+                let stts: Vec<SttsEntry> = counts[..len].iter()
+                    .zip(deltas[..len].iter())
+                    .map(|(&c, &d)| SttsEntry {
+                        sample_count: c,
+                        sample_delta: d,
+                    })
+                    .collect();
+                let table = SampleTable {
+                    stts,
+                    timescale: 90000,
+                    ..Default::default()
+                };
+                let track = TrackInfo {
+                    kind: TrackKind::Audio,
+                    table,
+                    avcc: None,
+                    aac_config: None,
+                };
+                let _ = find_sample_at(&track, target_ts);
+            }
+        }
     }
 }

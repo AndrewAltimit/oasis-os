@@ -111,6 +111,9 @@ pub(crate) fn try_parse_color(tokens: &[CssToken]) -> Option<CssColor> {
 
 pub(crate) fn parse_hex_color(hex: &str) -> Option<CssColor> {
     let hex = hex.trim_start_matches('#');
+    if !hex.is_ascii() {
+        return None;
+    }
     match hex.len() {
         3 => {
             let r = hex_digit(hex.as_bytes()[0])?;
