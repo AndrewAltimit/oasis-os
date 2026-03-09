@@ -269,6 +269,32 @@ impl LayoutBox {
         self.children.iter().any(|c| c.any_dirty())
     }
 
+    /// Find the deepest DOM node at the given point. Returns `None`
+    /// if the point is outside the layout tree or no box with a DOM
+    /// node ID contains it.
+    pub fn hit_test(&self, x: f32, y: f32) -> Option<NodeId> {
+        let d = &self.dimensions;
+        let bx = d.content.x - d.padding.left - d.border.left;
+        let by = d.content.y - d.padding.top - d.border.top;
+        let bw =
+            d.content.width + d.padding.left + d.padding.right + d.border.left + d.border.right;
+        let bh =
+            d.content.height + d.padding.top + d.padding.bottom + d.border.top + d.border.bottom;
+
+        if x < bx || x >= bx + bw || y < by || y >= by + bh {
+            return None;
+        }
+
+        // Check children deepest-first (later children paint on top).
+        for child in self.children.iter().rev() {
+            if let Some(nid) = child.hit_test(x, y) {
+                return Some(nid);
+            }
+        }
+
+        self.node
+    }
+
     /// Mark a specific node and its ancestors as dirty.
     pub fn mark_node_dirty(&mut self, target_node: NodeId) -> bool {
         if self.node == Some(target_node) {

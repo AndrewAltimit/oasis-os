@@ -90,7 +90,150 @@ pub trait ColorExt {
 
 impl ColorExt for Color {
     fn to_abgr(&self) -> u32 {
-        (self.a as u32) << 24 | (self.b as u32) << 16 | (self.g as u32) << 8 | self.r as u32
+        (self.a as u32) << 24
+            | (self.b as u32) << 16
+            | (self.g as u32) << 8
+            | self.r as u32
+    }
+}
+
+/// Decode an ABGR u32 back to `Color` (inverse of `to_abgr`).
+pub fn from_abgr(abgr: u32) -> Color {
+    Color::rgba(
+        (abgr & 0xFF) as u8,
+        ((abgr >> 8) & 0xFF) as u8,
+        ((abgr >> 16) & 0xFF) as u8,
+        ((abgr >> 24) & 0xFF) as u8,
+    )
+}
+
+#[cfg(test)]
+mod color_tests {
+    use super::*;
+
+    #[test]
+    fn to_abgr_pure_red() {
+        let c = Color::rgba(255, 0, 0, 255);
+        assert_eq!(c.to_abgr(), 0xFF00_00FF);
+    }
+
+    #[test]
+    fn to_abgr_pure_green() {
+        let c = Color::rgba(0, 255, 0, 255);
+        assert_eq!(c.to_abgr(), 0xFF00_FF00);
+    }
+
+    #[test]
+    fn to_abgr_pure_blue() {
+        let c = Color::rgba(0, 0, 255, 255);
+        assert_eq!(c.to_abgr(), 0xFFFF_0000);
+    }
+
+    #[test]
+    fn to_abgr_opaque_white() {
+        let c = Color::rgba(255, 255, 255, 255);
+        assert_eq!(c.to_abgr(), 0xFFFF_FFFF);
+    }
+
+    #[test]
+    fn to_abgr_opaque_black() {
+        let c = Color::rgba(0, 0, 0, 255);
+        assert_eq!(c.to_abgr(), 0xFF00_0000);
+    }
+
+    #[test]
+    fn to_abgr_transparent() {
+        let c = Color::rgba(0, 0, 0, 0);
+        assert_eq!(c.to_abgr(), 0x0000_0000);
+    }
+
+    #[test]
+    fn to_abgr_half_transparent_red() {
+        let c = Color::rgba(255, 0, 0, 128);
+        assert_eq!(c.to_abgr(), 0x8000_00FF);
+    }
+
+    #[test]
+    fn to_abgr_arbitrary_color() {
+        let c = Color::rgba(0x12, 0x34, 0x56, 0x78);
+        // Expected: A=0x78, B=0x56, G=0x34, R=0x12
+        assert_eq!(c.to_abgr(), 0x7856_3412);
+    }
+
+    // -- from_abgr (decode) tests --
+
+    #[test]
+    fn from_abgr_pure_red() {
+        let c = from_abgr(0xFF00_00FF);
+        assert_eq!(c, Color::rgba(255, 0, 0, 255));
+    }
+
+    #[test]
+    fn from_abgr_pure_green() {
+        let c = from_abgr(0xFF00_FF00);
+        assert_eq!(c, Color::rgba(0, 255, 0, 255));
+    }
+
+    #[test]
+    fn from_abgr_pure_blue() {
+        let c = from_abgr(0xFFFF_0000);
+        assert_eq!(c, Color::rgba(0, 0, 255, 255));
+    }
+
+    // -- Round-trip tests --
+
+    #[test]
+    fn round_trip_abgr_red() {
+        let original = Color::rgba(255, 0, 0, 255);
+        assert_eq!(from_abgr(original.to_abgr()), original);
+    }
+
+    #[test]
+    fn round_trip_abgr_green() {
+        let original = Color::rgba(0, 255, 0, 255);
+        assert_eq!(from_abgr(original.to_abgr()), original);
+    }
+
+    #[test]
+    fn round_trip_abgr_blue() {
+        let original = Color::rgba(0, 0, 255, 255);
+        assert_eq!(from_abgr(original.to_abgr()), original);
+    }
+
+    #[test]
+    fn round_trip_abgr_white() {
+        let original = Color::rgba(255, 255, 255, 255);
+        assert_eq!(from_abgr(original.to_abgr()), original);
+    }
+
+    #[test]
+    fn round_trip_abgr_black() {
+        let original = Color::rgba(0, 0, 0, 255);
+        assert_eq!(from_abgr(original.to_abgr()), original);
+    }
+
+    #[test]
+    fn round_trip_abgr_transparent() {
+        let original = Color::rgba(0, 0, 0, 0);
+        assert_eq!(from_abgr(original.to_abgr()), original);
+    }
+
+    #[test]
+    fn round_trip_abgr_arbitrary() {
+        let original = Color::rgba(0x12, 0x34, 0x56, 0x78);
+        assert_eq!(from_abgr(original.to_abgr()), original);
+    }
+
+    #[test]
+    fn round_trip_abgr_max_channels() {
+        let original = Color::rgba(255, 255, 255, 255);
+        assert_eq!(from_abgr(original.to_abgr()), original);
+    }
+
+    #[test]
+    fn round_trip_abgr_min_channels() {
+        let original = Color::rgba(0, 0, 0, 0);
+        assert_eq!(from_abgr(original.to_abgr()), original);
     }
 }
 

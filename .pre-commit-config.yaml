@@ -37,20 +37,21 @@ repos:
         types: [shell]
         args: [-x]
 
-  # Rust formatting and linting (containerized)
+  # Rust formatting (auto-fix, runs locally for speed)
   - repo: local
     hooks:
-      # oasis_os workspace (stable toolchain)
       - id: rust-fmt-oasis
         name: Rust format oasis_os
-        entry: docker compose --profile ci run --rm rust-ci cargo fmt --all -- --check
+        entry: bash -c 'source "$HOME/.cargo/env" 2>/dev/null || true; cargo fmt --all'
         language: system
-        files: '^crates/.*\.rs$'
+        files: '\.rs$'
         pass_filenames: false
 
+      # Clippy on pre-push only (too slow for every commit)
       - id: rust-clippy-oasis
         name: Rust lint oasis_os
-        entry: docker compose --profile ci run --rm rust-ci cargo clippy --workspace -- -D warnings
+        entry: bash -c 'source "$HOME/.cargo/env" 2>/dev/null || true; cargo clippy --workspace -- -D warnings'
         language: system
-        files: '^crates/.*\.rs$'
+        files: '\.rs$'
         pass_filenames: false
+        stages: [pre-push]

@@ -323,7 +323,7 @@ SDI is deliberately simple. It is not a DOM, not a layout engine, and not a reta
 | Z-ordering | `sdi_move_top("name")` | `sdi.move_to_top("name")` |
 | Theme loading | `sdi_load_state(path)` | `sdi.load_theme(path)?` |
 
-**Key traits:** `SdiCore` defines 13 required rendering methods and `SdiBackend` extends it with 30 optional accelerated primitives. The scene graph calls `backend.blit()`, `backend.clear()`, `backend.swap_buffers()` -- it never knows what surface it's drawing to.
+**Key traits:** `SdiCore` defines 13 required rendering methods and `SdiBackend` extends it with 39 optional accelerated primitives. The scene graph calls `backend.blit()`, `backend.clear()`, `backend.swap_buffers()` -- it never knows what surface it's drawing to.
 
 ### 4.2 Command Interpreter
 
@@ -475,7 +475,7 @@ The corrupted skin demonstrates that the WM's behavioral hooks (position update,
 
 ### 5.1 Rendering Backend Trait
 
-Every rendering operation passes through `SdiCore` (13 required methods) and `SdiBackend` (30 optional accelerated primitives). Four implementations exist: PSP (GU), SDL3, WASM (Canvas 2D), and UE5 (software RGBA buffer).
+Every rendering operation passes through `SdiCore` (13 required methods) and `SdiBackend` (39 optional accelerated primitives). Four implementations exist: PSP (GU), SDL3, WASM (Canvas 2D), and UE5 (software RGBA buffer).
 
 | Method | PSP (GU) | SDL3 | Framebuffer [PLANNED] | UE5 Render Target |
 |--------|---------|------|-------------|-------------------|

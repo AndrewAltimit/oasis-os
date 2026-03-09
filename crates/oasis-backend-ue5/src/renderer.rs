@@ -1383,4 +1383,302 @@ mod tests {
         assert_eq!(w, 14); // proportional: A(7)+B(7) = 14
         assert_eq!(h, 8);
     }
+
+    // ---------------------------------------------------------------
+    // lerp_u8 / lerp_color tests
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn lerp_u8_at_start() {
+        assert_eq!(lerp_u8(0, 255, 0, 10), 0);
+    }
+
+    #[test]
+    fn lerp_u8_at_end() {
+        assert_eq!(lerp_u8(0, 255, 10, 10), 255);
+    }
+
+    #[test]
+    fn lerp_u8_midpoint() {
+        // (0 * 5 + 200 * 5 + 5) / 10 = 1005/10 = 100 (with rounding)
+        let mid = lerp_u8(0, 200, 5, 10);
+        assert_eq!(mid, 100);
+    }
+
+    #[test]
+    fn lerp_u8_zero_denominator_returns_a() {
+        assert_eq!(lerp_u8(42, 200, 5, 0), 42);
+    }
+
+    #[test]
+    fn lerp_u8_same_values() {
+        assert_eq!(lerp_u8(128, 128, 3, 10), 128);
+    }
+
+    #[test]
+    fn lerp_u8_max_values() {
+        assert_eq!(lerp_u8(255, 255, 5, 10), 255);
+    }
+
+    #[test]
+    fn lerp_u8_min_values() {
+        assert_eq!(lerp_u8(0, 0, 5, 10), 0);
+    }
+
+    #[test]
+    fn lerp_color_endpoints() {
+        let a = Color::rgba(0, 0, 0, 0);
+        let b = Color::rgba(255, 255, 255, 255);
+        let at_start = lerp_color(a, b, 0, 10);
+        assert_eq!(at_start, a);
+        let at_end = lerp_color(a, b, 10, 10);
+        assert_eq!(at_end, b);
+    }
+
+    #[test]
+    fn lerp_color_midpoint() {
+        let a = Color::rgba(0, 0, 0, 0);
+        let b = Color::rgba(200, 100, 50, 250);
+        let mid = lerp_color(a, b, 5, 10);
+        assert_eq!(mid.r, 100);
+        assert_eq!(mid.g, 50);
+        assert_eq!(mid.b, 25);
+        assert_eq!(mid.a, 125);
+    }
+
+    #[test]
+    fn lerp_color_zero_denominator() {
+        let a = Color::rgb(42, 42, 42);
+        let b = Color::rgb(200, 200, 200);
+        let result = lerp_color(a, b, 5, 0);
+        assert_eq!(result, a);
+    }
+
+    // ---------------------------------------------------------------
+    // intersect_clip tests
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn intersect_clip_overlapping() {
+        let a = ClipRect {
+            x: 0,
+            y: 0,
+            w: 100,
+            h: 100,
+        };
+        let b = ClipRect {
+            x: 50,
+            y: 50,
+            w: 100,
+            h: 100,
+        };
+        let r = intersect_clip(&a, &b).unwrap();
+        assert_eq!((r.x, r.y, r.w, r.h), (50, 50, 50, 50));
+    }
+
+    #[test]
+    fn intersect_clip_no_overlap() {
+        let a = ClipRect {
+            x: 0,
+            y: 0,
+            w: 10,
+            h: 10,
+        };
+        let b = ClipRect {
+            x: 20,
+            y: 20,
+            w: 10,
+            h: 10,
+        };
+        assert!(intersect_clip(&a, &b).is_none());
+    }
+
+    #[test]
+    fn intersect_clip_touching_edge() {
+        let a = ClipRect {
+            x: 0,
+            y: 0,
+            w: 10,
+            h: 10,
+        };
+        let b = ClipRect {
+            x: 10,
+            y: 0,
+            w: 10,
+            h: 10,
+        };
+        assert!(intersect_clip(&a, &b).is_none());
+    }
+
+    #[test]
+    fn intersect_clip_contained() {
+        let outer = ClipRect {
+            x: 0,
+            y: 0,
+            w: 200,
+            h: 200,
+        };
+        let inner = ClipRect {
+            x: 10,
+            y: 20,
+            w: 50,
+            h: 30,
+        };
+        let r = intersect_clip(&outer, &inner).unwrap();
+        assert_eq!((r.x, r.y, r.w, r.h), (10, 20, 50, 30));
+    }
+
+    #[test]
+    fn intersect_clip_same_rect() {
+        let a = ClipRect {
+            x: 10,
+            y: 20,
+            w: 100,
+            h: 80,
+        };
+        let r = intersect_clip(&a, &a).unwrap();
+        assert_eq!((r.x, r.y, r.w, r.h), (10, 20, 100, 80));
+    }
+
+    // ---------------------------------------------------------------
+    // RGBA pixel format / set_pixel color tests
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn rgba_buffer_layout_red() {
+        let mut backend = Ue5Backend::new(1, 1);
+        backend.clear(Color::rgb(255, 0, 0)).unwrap();
+        let buf = backend.buffer();
+        assert_eq!(buf[0], 255); // R
+        assert_eq!(buf[1], 0); // G
+        assert_eq!(buf[2], 0); // B
+        assert_eq!(buf[3], 255); // A
+    }
+
+    #[test]
+    fn rgba_buffer_layout_green() {
+        let mut backend = Ue5Backend::new(1, 1);
+        backend.clear(Color::rgb(0, 255, 0)).unwrap();
+        let buf = backend.buffer();
+        assert_eq!(buf[0], 0);
+        assert_eq!(buf[1], 255);
+        assert_eq!(buf[2], 0);
+        assert_eq!(buf[3], 255);
+    }
+
+    #[test]
+    fn rgba_buffer_layout_blue() {
+        let mut backend = Ue5Backend::new(1, 1);
+        backend.clear(Color::rgb(0, 0, 255)).unwrap();
+        let buf = backend.buffer();
+        assert_eq!(buf[0], 0);
+        assert_eq!(buf[1], 0);
+        assert_eq!(buf[2], 255);
+        assert_eq!(buf[3], 255);
+    }
+
+    #[test]
+    fn rgba_buffer_layout_white() {
+        let mut backend = Ue5Backend::new(1, 1);
+        backend.clear(Color::WHITE).unwrap();
+        let buf = backend.buffer();
+        assert_eq!(buf[0], 255);
+        assert_eq!(buf[1], 255);
+        assert_eq!(buf[2], 255);
+        assert_eq!(buf[3], 255);
+    }
+
+    #[test]
+    fn rgba_buffer_layout_black() {
+        let mut backend = Ue5Backend::new(1, 1);
+        backend.clear(Color::BLACK).unwrap();
+        let buf = backend.buffer();
+        assert_eq!(buf[0], 0);
+        assert_eq!(buf[1], 0);
+        assert_eq!(buf[2], 0);
+        assert_eq!(buf[3], 255);
+    }
+
+    #[test]
+    fn rgba_buffer_transparent_clear() {
+        let mut backend = Ue5Backend::new(1, 1);
+        backend.clear(Color::rgba(0, 0, 0, 0)).unwrap();
+        let buf = backend.buffer();
+        assert_eq!(buf[0], 0);
+        assert_eq!(buf[1], 0);
+        assert_eq!(buf[2], 0);
+        assert_eq!(buf[3], 0);
+    }
+
+    #[test]
+    fn set_pixel_alpha_blend() {
+        let mut backend = Ue5Backend::new(1, 1);
+        // Start with white background.
+        backend.clear(Color::WHITE).unwrap();
+        // Draw 50% transparent red over it.
+        backend.set_pixel(0, 0, Color::rgba(255, 0, 0, 128));
+        let buf = backend.buffer();
+        // Red channel: (255*128 + 255*127 + 127) / 255 ~= 255
+        // Green channel: (0*128 + 255*127 + 127) / 255 ~= 127
+        assert!(buf[0] > 200); // R stays high
+        assert!(buf[1] > 100 && buf[1] < 140); // G blended ~127
+        assert!(buf[2] > 100 && buf[2] < 140); // B blended ~127
+        assert_eq!(buf[3], 255); // A always 255 after blend
+    }
+
+    #[test]
+    fn set_pixel_fully_transparent_no_change() {
+        let mut backend = Ue5Backend::new(1, 1);
+        backend.clear(Color::rgb(42, 84, 126)).unwrap();
+        backend.set_pixel(0, 0, Color::rgba(255, 255, 255, 0));
+        let buf = backend.buffer();
+        assert_eq!(buf[0], 42);
+        assert_eq!(buf[1], 84);
+        assert_eq!(buf[2], 126);
+    }
+
+    #[test]
+    fn set_pixel_out_of_bounds_no_crash() {
+        let mut backend = Ue5Backend::new(4, 4);
+        backend.clear(Color::BLACK).unwrap();
+        // Save buffer state after clear.
+        let before: Vec<u8> = backend.buffer().to_vec();
+        // Negative coordinates.
+        backend.set_pixel(-1, 0, Color::WHITE);
+        backend.set_pixel(0, -1, Color::WHITE);
+        // Beyond bounds.
+        backend.set_pixel(4, 0, Color::WHITE);
+        backend.set_pixel(0, 4, Color::WHITE);
+        // Buffer should be unchanged from the clear state.
+        assert_eq!(backend.buffer(), before.as_slice());
+    }
+
+    #[test]
+    fn rgba_round_trip_encode_decode() {
+        // Encode Color into buffer, read it back.
+        let mut backend = Ue5Backend::new(1, 1);
+        let c = Color::rgba(123, 45, 67, 255);
+        backend.clear(c).unwrap();
+        let buf = backend.buffer();
+        let decoded = Color::rgba(buf[0], buf[1], buf[2], buf[3]);
+        assert_eq!(decoded, c);
+    }
+
+    #[test]
+    fn rgba_round_trip_all_channels_max() {
+        let mut backend = Ue5Backend::new(1, 1);
+        let c = Color::rgba(255, 255, 255, 255);
+        backend.clear(c).unwrap();
+        let buf = backend.buffer();
+        assert_eq!(Color::rgba(buf[0], buf[1], buf[2], buf[3]), c);
+    }
+
+    #[test]
+    fn rgba_round_trip_all_channels_min() {
+        let mut backend = Ue5Backend::new(1, 1);
+        let c = Color::rgba(0, 0, 0, 0);
+        backend.clear(c).unwrap();
+        let buf = backend.buffer();
+        assert_eq!(Color::rgba(buf[0], buf[1], buf[2], buf[3]), c);
+    }
 }

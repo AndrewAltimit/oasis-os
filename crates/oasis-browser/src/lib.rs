@@ -239,6 +239,15 @@ pub struct BrowserWidget {
     /// Buffered JavaScript console output from the most recent page load.
     #[cfg(feature = "javascript")]
     console_output: Vec<oasis_js::ConsoleEntry>,
+
+    /// Retained JS engine for event dispatch after page load.
+    #[cfg(feature = "javascript")]
+    js_engine: Option<oasis_js::JsEngine>,
+
+    /// Shared document reference held by the JS engine's closures.
+    /// Kept alive so the engine can access the DOM for event handlers.
+    #[cfg(feature = "javascript")]
+    js_doc: Option<js_dom::SharedDoc>,
 }
 
 impl BrowserWidget {
@@ -286,6 +295,10 @@ impl BrowserWidget {
             last_hover_time: None,
             #[cfg(feature = "javascript")]
             console_output: Vec::new(),
+            #[cfg(feature = "javascript")]
+            js_engine: None,
+            #[cfg(feature = "javascript")]
+            js_doc: None,
         }
     }
 

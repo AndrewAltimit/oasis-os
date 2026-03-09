@@ -225,6 +225,10 @@ impl BrowserWidget {
         // Click in content area: leave URL bar editing.
         self.focus = Focus::Content;
 
+        // Dispatch click event to JS if an engine is retained.
+        #[cfg(feature = "javascript")]
+        self.dispatch_js_click(x, y);
+
         // Check link hit regions.
         for link in &self.link_map {
             let lx = link.rect.x;
@@ -238,6 +242,30 @@ impl BrowserWidget {
                 return;
             }
         }
+    }
+
+    /// Dispatch a JS click event using the layout tree hit test.
+    #[cfg(feature = "javascript")]
+    fn dispatch_js_click(&mut self, x: i32, y: i32) {
+        let node_id = self
+            .layout_root
+            .as_ref()
+            .and_then(|root| root.hit_test(x as f32, y as f32));
+
+        if let (Some(nid), Some(engine)) = (node_id, &self.js_engine) {
+            Self::dispatch_js_event(engine, nid, "click");
+        }
+    }
+
+    /// Dispatch a named event to JS with bubbling.
+    #[cfg(feature = "javascript")]
+    fn dispatch_js_event(engine: &oasis_js::JsEngine, node_id: NodeId, event_type: &str) {
+        let code = format!(
+            "if(typeof __oasis_dispatch_with_bubbling==='function')\
+             __oasis_dispatch_with_bubbling({},'{}',null)",
+            node_id, event_type
+        );
+        let _ = engine.eval(&code);
     }
 
     /// Handle a cursor move at window-relative coordinates.

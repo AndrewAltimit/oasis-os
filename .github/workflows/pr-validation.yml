@@ -72,6 +72,14 @@ jobs:
       - name: Clippy
         run: docker compose --profile ci run --rm rust-ci cargo clippy --workspace -- -D warnings
 
+      # -- Nightly Warnings Check (advisory) -----------------------------------
+      - name: Nightly warnings check
+        continue-on-error: true
+        run: >
+          docker compose --profile ci run --rm rust-ci
+          cargo +nightly clippy --workspace -- -D warnings
+          -W unused-comparisons
+
       # -- Documentation ------------------------------------------------------
       - name: Doc build
         run: >
@@ -128,8 +136,9 @@ jobs:
       - name: cargo-deny
         run: docker compose --profile ci run --rm rust-ci cargo deny check
 
-      # -- Benchmarks --------------------------------------------------------
+      # -- Benchmarks (disabled by default, enable via workflow_dispatch) ------
       - name: Benchmarks
+        if: github.event_name == 'workflow_dispatch'
         run: |
           set -o pipefail
           docker compose --profile ci run --rm rust-ci \
@@ -139,7 +148,7 @@ jobs:
           echo "::endgroup::"
 
       - name: Upload benchmark results
-        if: always()
+        if: github.event_name == 'workflow_dispatch'
         uses: actions/upload-artifact@v4
         with:
           name: benchmark-results

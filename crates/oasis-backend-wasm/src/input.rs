@@ -251,6 +251,44 @@ impl InputBackend for WasmInputBackend {
 // Coordinate scaling
 // ---------------------------------------------------------------------------
 
+/// Pure math for `object-fit: contain` coordinate scaling.
+///
+/// Maps a point from element-relative CSS coordinates to virtual canvas
+/// coordinates, accounting for letterboxing.
+///
+/// * `elem_w`, `elem_h` -- CSS bounding rect of the canvas element.
+/// * `rect_left`, `rect_top` -- CSS left/top of the bounding rect.
+/// * `client_x`, `client_y` -- page-relative event coordinates.
+/// * `cw`, `ch` -- virtual canvas dimensions.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn scale_point_math(
+    elem_w: f64,
+    elem_h: f64,
+    rect_left: f64,
+    rect_top: f64,
+    client_x: f64,
+    client_y: f64,
+    cw: u32,
+    ch: u32,
+) -> (i32, i32) {
+    let canvas_w = cw as f64;
+    let canvas_h = ch as f64;
+
+    // Compute rendered content rect (object-fit: contain).
+    let scale = (elem_w / canvas_w).min(elem_h / canvas_h);
+    let rendered_w = canvas_w * scale;
+    let rendered_h = canvas_h * scale;
+    let offset_x = (elem_w - rendered_w) / 2.0;
+    let offset_y = (elem_h - rendered_h) / 2.0;
+
+    // Map from viewport to rendered content area, then to virtual.
+    let rel_x = client_x - rect_left - offset_x;
+    let rel_y = client_y - rect_top - offset_y;
+    let x = (rel_x / scale) as i32;
+    let y = (rel_y / scale) as i32;
+    (x.clamp(0, cw as i32 - 1), y.clamp(0, ch as i32 - 1))
+}
+
 /// Map a viewport-relative point to virtual canvas coordinates, accounting
 /// for `object-fit: contain` letterboxing.
 fn scale_point(
@@ -261,24 +299,16 @@ fn scale_point(
     ch: u32,
 ) -> (i32, i32) {
     let rect = canvas.get_bounding_client_rect();
-    let elem_w = rect.width();
-    let elem_h = rect.height();
-    let canvas_w = cw as f64;
-    let canvas_h = ch as f64;
-
-    // Compute rendered content rect inside the element (object-fit: contain).
-    let scale = (elem_w / canvas_w).min(elem_h / canvas_h);
-    let rendered_w = canvas_w * scale;
-    let rendered_h = canvas_h * scale;
-    let offset_x = (elem_w - rendered_w) / 2.0;
-    let offset_y = (elem_h - rendered_h) / 2.0;
-
-    // Map from viewport to the rendered content area, then to virtual coords.
-    let rel_x = client_x - rect.left() - offset_x;
-    let rel_y = client_y - rect.top() - offset_y;
-    let x = (rel_x / scale) as i32;
-    let y = (rel_y / scale) as i32;
-    (x.clamp(0, cw as i32 - 1), y.clamp(0, ch as i32 - 1))
+    scale_point_math(
+        rect.width(),
+        rect.height(),
+        rect.left(),
+        rect.top(),
+        client_x,
+        client_y,
+        cw,
+        ch,
+    )
 }
 
 fn scale_mouse(canvas: &HtmlCanvasElement, me: &MouseEvent, cw: u32, ch: u32) -> (i32, i32) {
@@ -336,5 +366,207 @@ fn map_keyup(ke: &KeyboardEvent) -> Option<InputEvent> {
         "q" | "Q" => Some(InputEvent::TriggerRelease(Trigger::Left)),
         "e" | "E" => Some(InputEvent::TriggerRelease(Trigger::Right)),
         _ => None,
+    }
+}
+
+// -----------------------------------------------------------------------
+// Tests -- scale_point_math is pure, so testable on any target.
+// -----------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::scale_point_math;
+
+    // -- Identity / no-letterbox scenarios --
+
+    #[test]
+    fn exact_fit_no_letterbox() {
+        // Element is exactly 480x272 (same as virtual), no offset.
+        let (x, y) = scale_point_math(480.0, 272.0, 0.0, 0.0, 240.0, 136.0, 480, 272);
+        assert_eq!(x, 240);
+        assert_eq!(y, 136);
+    }
+
+    #[test]
+    fn exact_fit_top_left_corner() {
+        let (x, y) = scale_point_math(480.0, 272.0, 0.0, 0.0, 0.0, 0.0, 480, 272);
+        assert_eq!(x, 0);
+        assert_eq!(y, 0);
+    }
+
+    #[test]
+    fn exact_fit_bottom_right_corner() {
+        let (x, y) = scale_point_math(480.0, 272.0, 0.0, 0.0, 479.0, 271.0, 480, 272);
+        assert_eq!(x, 479);
+        assert_eq!(y, 271);
+    }
+
+    // -- Scaled-up (2x) scenarios --
+
+    #[test]
+    fn double_size_center() {
+        // Element is 960x544, virtual 480x272.
+        // scale = 2.0, no letterboxing.
+        let (x, y) = scale_point_math(960.0, 544.0, 0.0, 0.0, 480.0, 272.0, 480, 272);
+        assert_eq!(x, 240);
+        assert_eq!(y, 136);
+    }
+
+    #[test]
+    fn double_size_origin() {
+        let (x, y) = scale_point_math(960.0, 544.0, 0.0, 0.0, 0.0, 0.0, 480, 272);
+        assert_eq!(x, 0);
+        assert_eq!(y, 0);
+    }
+
+    // -- Letterbox (pillarbox) scenarios --
+
+    #[test]
+    fn horizontal_letterbox_center() {
+        // Element: 800x272 (wider than needed). Virtual: 480x272.
+        // scale = min(800/480, 272/272) = 1.0.
+        // rendered_w = 480, offset_x = (800-480)/2 = 160.
+        // Click at (400, 136) => rel_x = 400-0-160 = 240.
+        let (x, y) = scale_point_math(800.0, 272.0, 0.0, 0.0, 400.0, 136.0, 480, 272);
+        assert_eq!(x, 240);
+        assert_eq!(y, 136);
+    }
+
+    #[test]
+    fn vertical_letterbox_center() {
+        // Element: 480x600 (taller than needed). Virtual: 480x272.
+        // scale = min(480/480, 600/272) = 1.0.
+        // rendered_h = 272, offset_y = (600-272)/2 = 164.
+        // Click at (240, 300) => rel_y = 300-0-164 = 136.
+        let (x, y) = scale_point_math(480.0, 600.0, 0.0, 0.0, 240.0, 300.0, 480, 272);
+        assert_eq!(x, 240);
+        assert_eq!(y, 136);
+    }
+
+    // -- Clamping to bounds --
+
+    #[test]
+    fn negative_coords_clamp_to_zero() {
+        let (x, y) = scale_point_math(480.0, 272.0, 0.0, 0.0, -50.0, -50.0, 480, 272);
+        assert_eq!(x, 0);
+        assert_eq!(y, 0);
+    }
+
+    #[test]
+    fn beyond_canvas_clamps_to_max() {
+        let (x, y) = scale_point_math(480.0, 272.0, 0.0, 0.0, 999.0, 999.0, 480, 272);
+        assert_eq!(x, 479);
+        assert_eq!(y, 271);
+    }
+
+    #[test]
+    fn in_left_letterbox_clamps_to_zero() {
+        // Element: 800x272, virtual 480x272. offset_x = 160.
+        // Click at (100, 136) => rel_x = 100-160 = -60 => clamp to 0.
+        let (x, _y) = scale_point_math(800.0, 272.0, 0.0, 0.0, 100.0, 136.0, 480, 272);
+        assert_eq!(x, 0);
+    }
+
+    #[test]
+    fn in_right_letterbox_clamps_to_max() {
+        // offset_x = 160, rendered_w = 480. Right bar starts at 640.
+        // Click at (700, 136) => rel_x = 700-160 = 540 => 540/1 = 540
+        // clamp(0..479).
+        let (x, _y) = scale_point_math(800.0, 272.0, 0.0, 0.0, 700.0, 136.0, 480, 272);
+        assert_eq!(x, 479);
+    }
+
+    // -- Non-zero rect offset --
+
+    #[test]
+    fn rect_offset_shifts_coordinates() {
+        // Canvas is at (100, 50) on the page.
+        let (x, y) = scale_point_math(480.0, 272.0, 100.0, 50.0, 340.0, 186.0, 480, 272);
+        assert_eq!(x, 240);
+        assert_eq!(y, 136);
+    }
+
+    // -- Different aspect ratios --
+
+    #[test]
+    fn wide_element_narrow_canvas() {
+        // Element: 1920x1080, Virtual: 480x272.
+        // scale = min(1920/480, 1080/272) = min(4.0, 3.97) = 3.97.
+        // rendered_w = 480 * 3.97 = 1905.88.
+        // offset_x = (1920 - 1905.88)/2 ~= 7.06.
+        // Click at center (960, 540):
+        //   rel_x = 960 - 7.06 = 952.94 / 3.97 = 240.03 -> 240
+        //   rel_y = 540 - 0.0 / 3.97 = 136.02 -> 136
+        let (x, y) = scale_point_math(1920.0, 1080.0, 0.0, 0.0, 960.0, 540.0, 480, 272);
+        assert_eq!(x, 240);
+        assert_eq!(y, 136);
+    }
+
+    #[test]
+    fn square_element_with_psp_canvas() {
+        // Element: 500x500, Virtual: 480x272.
+        // scale = min(500/480, 500/272) = min(1.041, 1.838) = 1.041.
+        // rendered_w = 480*1.041 = 500, rendered_h = 272*1.041 = 283.3
+        // offset_x = 0, offset_y = (500-283.3)/2 = 108.3
+        let (x, y) = scale_point_math(500.0, 500.0, 0.0, 0.0, 250.0, 250.0, 480, 272);
+        assert_eq!(x, 240);
+        assert_eq!(y, 136);
+    }
+
+    // -- Edge cases --
+
+    #[test]
+    fn tiny_1x1_canvas() {
+        // Element: 100x100, Virtual: 1x1.
+        // scale = 100. rendered 100x100. offset 0,0.
+        // Click at (50, 50) => rel_x = 50/100 = 0.5 -> 0.
+        let (x, y) = scale_point_math(100.0, 100.0, 0.0, 0.0, 50.0, 50.0, 1, 1);
+        assert_eq!(x, 0);
+        assert_eq!(y, 0);
+    }
+
+    #[test]
+    fn large_virtual_small_element() {
+        // Element: 100x100, Virtual: 1024x768.
+        // scale = min(100/1024, 100/768) = 0.097.
+        // rendered_w = 1024*0.097 = 100, rendered_h = 768*0.097 = 75.
+        // offset_y = (100-75)/2 = 12.5.
+        // Click at (50, 50):
+        //   rel_x = 50/0.097 = 512 -> 512.
+        //   rel_y = (50-12.5)/0.097 = 384.
+        let (x, y) = scale_point_math(100.0, 100.0, 0.0, 0.0, 50.0, 50.0, 1024, 768);
+        assert_eq!(x, 512);
+        assert_eq!(y, 384);
+    }
+
+    #[test]
+    fn zero_size_element_clamps_safely() {
+        // Zero-size element: scale would be 0 or inf.
+        // With zero elem dimensions, scale = min(0/480, 0/272) = 0.
+        // rel_x / 0 = inf, cast to i32 = i32::MAX or similar.
+        // Clamped to (479, 271).
+        let (x, y) = scale_point_math(0.0, 0.0, 0.0, 0.0, 10.0, 10.0, 480, 272);
+        // With NaN/inf, clamp should keep within bounds.
+        assert!(x >= 0 && x <= 479);
+        assert!(y >= 0 && y <= 271);
+    }
+
+    #[test]
+    fn fractional_coordinates_truncated() {
+        // exact fit, click at (0.9, 0.9) => truncates to (0, 0).
+        let (x, y) = scale_point_math(480.0, 272.0, 0.0, 0.0, 0.9, 0.9, 480, 272);
+        assert_eq!(x, 0);
+        assert_eq!(y, 0);
+    }
+
+    #[test]
+    fn high_dpi_double_scale_with_offset() {
+        // Element at (50, 30) with size 960x544, virtual 480x272.
+        // scale = 2.0. Click at (530, 302):
+        //   rel_x = (530-50-0)/2 = 240
+        //   rel_y = (302-30-0)/2 = 136
+        let (x, y) = scale_point_math(960.0, 544.0, 50.0, 30.0, 530.0, 302.0, 480, 272);
+        assert_eq!(x, 240);
+        assert_eq!(y, 136);
     }
 }

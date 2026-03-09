@@ -1312,4 +1312,331 @@ mod tests {
             sample.timestamp_secs
         );
     }
+
+    // ---------------------------------------------------------------
+    // Error path tests: truncated / invalid / missing atom structures
+    // ---------------------------------------------------------------
+
+    /// Build a minimal MP4-like byte stream from a list of boxes.
+    /// Each entry is (fourcc, content_bytes). Size header is computed.
+    fn build_boxes(boxes: &[(&[u8; 4], &[u8])]) -> Vec<u8> {
+        let mut out = Vec::new();
+        for (fourcc, content) in boxes {
+            let size = (8 + content.len()) as u32;
+            out.extend_from_slice(&size.to_be_bytes());
+            out.extend_from_slice(*fourcc);
+            out.extend_from_slice(content);
+        }
+        out
+    }
+
+    #[test]
+    fn truncated_box_header_too_short() {
+        // Only 4 bytes — not enough for an 8-byte box header.
+        let data = vec![0x00, 0x00, 0x00, 0x10];
+        let mut cursor = Cursor::new(&data);
+        let result = read_box_header(&mut cursor).unwrap();
+        // Should return None (UnexpectedEof).
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn empty_input_returns_none() {
+        let data: Vec<u8> = Vec::new();
+        let mut cursor = Cursor::new(&data);
+        let result = read_box_header(&mut cursor).unwrap();
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn box_size_too_small_errors() {
+        // size=4 is invalid (minimum is 8).
+        let mut data = Vec::new();
+        data.extend_from_slice(&4u32.to_be_bytes());
+        data.extend_from_slice(b"test");
+        let mut cursor = Cursor::new(&data);
+        let result = read_box_header(&mut cursor);
+        assert!(result.is_err(), "box size < 8 should error");
+    }
+
+    #[test]
+    fn extended_size_too_small_errors() {
+        // size=1 (extended), extended_size=12 (< 16).
+        let mut data = Vec::new();
+        data.extend_from_slice(&1u32.to_be_bytes());
+        data.extend_from_slice(b"test");
+        data.extend_from_slice(&12u64.to_be_bytes());
+        let mut cursor = Cursor::new(&data);
+        let result = read_box_header(&mut cursor);
+        assert!(result.is_err(), "extended size < 16 should error");
+    }
+
+    #[test]
+    fn zero_size_box_extends_to_eof() {
+        // size=0 means "extends to end of file".
+        let mut data = Vec::new();
+        data.extend_from_slice(&0u32.to_be_bytes());
+        data.extend_from_slice(b"mdat");
+        data.extend_from_slice(&[0xAA; 100]); // content
+        let mut cursor = Cursor::new(&data);
+        let header = read_box_header(&mut cursor).unwrap().unwrap();
+        assert_eq!(&header.box_type, b"mdat");
+        assert_eq!(header.content_offset, 8);
+        assert_eq!(header.content_size, 100);
+    }
+
+    #[test]
+    fn box_content_exceeds_parent_is_skipped() {
+        // A box whose size exceeds the parent boundary is skipped
+        // by parse_boxes (box_end > end check).
+        let mut data = Vec::new();
+        // A box that claims 1000 bytes but file is only 16.
+        data.extend_from_slice(&1000u32.to_be_bytes());
+        data.extend_from_slice(b"ftyp");
+        data.extend_from_slice(&[0; 8]); // some content
+
+        let mut video = None;
+        let mut audio = None;
+        let mut cursor = Cursor::new(&data);
+        let result = parse_boxes(&mut cursor, 0, data.len() as u64, &mut video, &mut audio);
+        // Should succeed (box is skipped, not an error).
+        assert!(result.is_ok());
+        // No tracks discovered.
+        assert!(video.is_none());
+        assert!(audio.is_none());
+    }
+
+    #[test]
+    fn open_with_no_moov_finds_no_tracks() {
+        // A valid ftyp + mdat but no moov.
+        let data = build_boxes(&[(b"ftyp", &[0; 16]), (b"mdat", &[0; 64])]);
+        let mp4 = Mp4Lite::open(Cursor::new(data)).unwrap();
+        assert!(mp4.video_track_info().is_none());
+        assert!(mp4.audio_track_info().is_none());
+    }
+
+    #[test]
+    fn open_with_empty_moov_finds_no_tracks() {
+        // A moov box with no children (no trak).
+        let data = build_boxes(&[(b"ftyp", &[0; 16]), (b"moov", &[])]);
+        let mp4 = Mp4Lite::open(Cursor::new(data)).unwrap();
+        assert!(mp4.video_track_info().is_none());
+        assert!(mp4.audio_track_info().is_none());
+    }
+
+    #[test]
+    fn parse_moov_tracks_too_short() {
+        let result = parse_moov_tracks(&[0; 4]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn parse_moov_tracks_empty_moov() {
+        // 8-byte moov header, no children.
+        let mut data = Vec::new();
+        data.extend_from_slice(&8u32.to_be_bytes());
+        data.extend_from_slice(b"moov");
+        let (video, audio) = parse_moov_tracks(&data).unwrap();
+        assert!(video.is_none());
+        assert!(audio.is_none());
+    }
+
+    #[test]
+    fn seek_byte_from_moov_empty_returns_none() {
+        let mut data = Vec::new();
+        data.extend_from_slice(&8u32.to_be_bytes());
+        data.extend_from_slice(b"moov");
+        assert!(seek_byte_from_moov(&data, 5.0).is_none());
+    }
+
+    #[test]
+    fn empty_stts_table_pts_is_zero() {
+        let table = SampleTable::default();
+        assert_eq!(sample_pts(&table, 0), 0);
+        assert_eq!(sample_pts(&table, 100), 0);
+    }
+
+    #[test]
+    fn empty_stsz_table_sample_offset_returns_none() {
+        let table = SampleTable::default();
+        assert!(sample_file_offset(&table, 0).is_none());
+    }
+
+    #[test]
+    fn empty_stsc_table_sample_to_chunk_returns_none() {
+        let table = SampleTable {
+            stsz: vec![100; 5],
+            stco: vec![0],
+            ..Default::default()
+        };
+        // stsc is empty, so sample_to_chunk returns None.
+        assert!(sample_file_offset(&table, 0).is_none());
+    }
+
+    #[test]
+    fn empty_stco_table_sample_offset_returns_none() {
+        let table = SampleTable {
+            stsz: vec![100; 5],
+            stsc: vec![StscEntry {
+                first_chunk: 1,
+                samples_per_chunk: 5,
+            }],
+            // stco is empty.
+            ..Default::default()
+        };
+        assert!(sample_file_offset(&table, 0).is_none());
+    }
+
+    #[test]
+    fn no_stss_means_all_keyframes() {
+        let table = SampleTable {
+            stsz: vec![100; 10],
+            ..Default::default()
+        };
+        for i in 0..10 {
+            assert!(
+                is_keyframe(&table, i),
+                "sample {i} should be keyframe with empty stss"
+            );
+        }
+    }
+
+    #[test]
+    fn sample_pts_beyond_stts_range() {
+        // Ask for sample_idx beyond the range covered by stts.
+        let table = SampleTable {
+            stts: vec![SttsEntry {
+                sample_count: 2,
+                sample_delta: 1000,
+            }],
+            timescale: 1000,
+            ..Default::default()
+        };
+        // Sample 0 and 1 are within range. Sample 5 is beyond.
+        // The function accumulates and breaks, returning accumulated DTS.
+        let pts = sample_pts(&table, 5);
+        // Should be 2*1000 = 2000 (the total from the single stts entry).
+        assert_eq!(pts, 2000);
+    }
+
+    #[test]
+    fn ctts_negative_offset_clamps_to_zero() {
+        let table = SampleTable {
+            stts: vec![SttsEntry {
+                sample_count: 1,
+                sample_delta: 100,
+            }],
+            ctts: vec![CttsEntry {
+                sample_count: 1,
+                sample_offset: -500, // larger than DTS=0
+            }],
+            timescale: 1000,
+            ..Default::default()
+        };
+        // DTS=0 + CTS=-500 = -500, clamped to 0.
+        assert_eq!(sample_pts(&table, 0), 0);
+    }
+
+    #[test]
+    fn avcc_to_annex_b_empty_data() {
+        let avcc = AvccConfig {
+            nal_length_size: 4,
+            sps: vec![0x67, 0x42],
+            pps: vec![0x68, 0xCE],
+        };
+        // Empty data, keyframe -> should produce SPS + PPS only.
+        let result = avcc_to_annex_b(&[], &avcc, true).unwrap();
+        // [0,0,0,1, 0x67,0x42, 0,0,0,1, 0x68,0xCE]
+        assert_eq!(result.len(), 12);
+        assert_eq!(&result[0..4], &[0, 0, 0, 1]);
+        assert_eq!(&result[4..6], &[0x67, 0x42]);
+        assert_eq!(&result[6..10], &[0, 0, 0, 1]);
+        assert_eq!(&result[10..12], &[0x68, 0xCE]);
+    }
+
+    #[test]
+    fn avcc_to_annex_b_nal_exceeds_bounds() {
+        let avcc = AvccConfig {
+            nal_length_size: 4,
+            sps: Vec::new(),
+            pps: Vec::new(),
+        };
+        // NAL length says 1000 bytes but only 4 bytes of data follow.
+        let mut data = Vec::new();
+        data.extend_from_slice(&1000u32.to_be_bytes());
+        data.extend_from_slice(&[0xAA; 4]);
+        let result = avcc_to_annex_b(&data, &avcc, false);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn avcc_to_annex_b_invalid_nal_length_size() {
+        let avcc = AvccConfig {
+            nal_length_size: 5, // invalid
+            sps: Vec::new(),
+            pps: Vec::new(),
+        };
+        let data = vec![0; 8];
+        let result = avcc_to_annex_b(&data, &avcc, false);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn read_desc_len_single_byte() {
+        let data = [0x10]; // 0x10 = 16, no continuation bit
+        let (len, consumed) = read_desc_len(&data);
+        assert_eq!(len, 16);
+        assert_eq!(consumed, 1);
+    }
+
+    #[test]
+    fn read_desc_len_multi_byte() {
+        // 0x81, 0x00 -> (1 << 7) | 0 = 128
+        let data = [0x81, 0x00];
+        let (len, consumed) = read_desc_len(&data);
+        assert_eq!(len, 128);
+        assert_eq!(consumed, 2);
+    }
+
+    #[test]
+    fn read_desc_len_empty() {
+        let data: [u8; 0] = [];
+        let (len, consumed) = read_desc_len(&data);
+        assert_eq!(len, 0);
+        assert_eq!(consumed, 0);
+    }
+
+    #[test]
+    fn find_keyframe_before_no_stss() {
+        let track = TrackInfo {
+            kind: TrackKind::Video,
+            table: SampleTable {
+                stts: vec![SttsEntry {
+                    sample_count: 10,
+                    sample_delta: 1000,
+                }],
+                stsz: vec![100; 10],
+                timescale: 1000,
+                ..Default::default()
+            },
+            avcc: None,
+            aac_config: None,
+        };
+        // With no stss, delegates to find_sample_at.
+        let idx = find_keyframe_before(&track, 5000);
+        assert_eq!(idx, 5);
+    }
+
+    #[test]
+    fn find_sample_at_empty_stts() {
+        let track = TrackInfo {
+            kind: TrackKind::Audio,
+            table: SampleTable::default(),
+            avcc: None,
+            aac_config: None,
+        };
+        // Empty stts -> loop doesn't execute, returns 0.saturating_sub(1) = 0.
+        let idx = find_sample_at(&track, 5000);
+        assert_eq!(idx, 0);
+    }
 }
