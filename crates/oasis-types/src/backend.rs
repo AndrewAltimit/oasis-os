@@ -1755,7 +1755,7 @@ pub trait SdiVector: SdiShapes {
     fn ext_stroke_polygon(
         &mut self,
         points: &[(i32, i32)],
-        _width: u16,
+        width: u16,
         color: Color,
     ) -> Result<()> {
         if points.len() < 2 {
@@ -1768,7 +1768,7 @@ pub trait SdiVector: SdiShapes {
                 points[i].1,
                 points[j].0,
                 points[j].1,
-                1,
+                width,
                 color,
             )?;
         }
@@ -1785,17 +1785,18 @@ pub trait SdiVector: SdiShapes {
         end_angle: f32,
         color: Color,
     ) -> Result<()> {
+        let segments = arc_segments(radius, start_angle, end_angle);
         let r = radius as f32;
-        let segments = 16;
-        let span = end_angle - start_angle;
-        for i in 0..segments {
-            let a0 = start_angle + span * (i as f32 / segments as f32);
-            let a1 = start_angle + span * ((i + 1) as f32 / segments as f32);
-            let x0 = cx + (r * a0.cos()) as i32;
-            let y0 = cy + (r * a0.sin()) as i32;
-            let x1 = cx + (r * a1.cos()) as i32;
-            let y1 = cy + (r * a1.sin()) as i32;
-            self.ext_fill_triangle(cx, cy, x0, y0, x1, y1, color)?;
+        let step = (end_angle - start_angle) / segments as f32;
+        let mut prev_x = cx + (r * cos_approx_f32(start_angle)) as i32;
+        let mut prev_y = cy + (r * sin_approx_f32(start_angle)) as i32;
+        for i in 1..=segments {
+            let angle = start_angle + step * i as f32;
+            let nx = cx + (r * cos_approx_f32(angle)) as i32;
+            let ny = cy + (r * sin_approx_f32(angle)) as i32;
+            self.ext_fill_triangle(cx, cy, prev_x, prev_y, nx, ny, color)?;
+            prev_x = nx;
+            prev_y = ny;
         }
         Ok(())
     }
@@ -1808,20 +1809,21 @@ pub trait SdiVector: SdiShapes {
         radius: u16,
         start_angle: f32,
         end_angle: f32,
-        _width: u16,
+        width: u16,
         color: Color,
     ) -> Result<()> {
+        let segments = arc_segments(radius, start_angle, end_angle);
         let r = radius as f32;
-        let segments = 16;
-        let span = end_angle - start_angle;
-        for i in 0..segments {
-            let a0 = start_angle + span * (i as f32 / segments as f32);
-            let a1 = start_angle + span * ((i + 1) as f32 / segments as f32);
-            let x0 = cx + (r * a0.cos()) as i32;
-            let y0 = cy + (r * a0.sin()) as i32;
-            let x1 = cx + (r * a1.cos()) as i32;
-            let y1 = cy + (r * a1.sin()) as i32;
-            self.ext_draw_line(x0, y0, x1, y1, 1, color)?;
+        let step = (end_angle - start_angle) / segments as f32;
+        let mut prev_x = cx + (r * cos_approx_f32(start_angle)) as i32;
+        let mut prev_y = cy + (r * sin_approx_f32(start_angle)) as i32;
+        for i in 1..=segments {
+            let angle = start_angle + step * i as f32;
+            let nx = cx + (r * cos_approx_f32(angle)) as i32;
+            let ny = cy + (r * sin_approx_f32(angle)) as i32;
+            self.ext_draw_line(prev_x, prev_y, nx, ny, width, color)?;
+            prev_x = nx;
+            prev_y = ny;
         }
         Ok(())
     }
@@ -1835,17 +1837,27 @@ pub trait SdiVector: SdiShapes {
         y2: i32,
         width: u16,
         color: Color,
-        _dash: u16,
-        _gap: u16,
+        dash: u16,
+        gap: u16,
     ) -> Result<()> {
-        if y1 == y2 {
-            let lx = x1.min(x2);
-            let w = (x1 - x2).unsigned_abs();
-            self.fill_rect(lx, y1, w.max(1), width as u32, color)?;
-        } else if x1 == x2 {
-            let ly = y1.min(y2);
-            let h = (y1 - y2).unsigned_abs();
-            self.fill_rect(x1, ly, width as u32, h.max(1), color)?;
+        let dx = (x2 - x1) as f32;
+        let dy = (y2 - y1) as f32;
+        let total_len = (dx * dx + dy * dy).sqrt();
+        if total_len < 1.0 {
+            return Ok(());
+        }
+        let ux = dx / total_len;
+        let uy = dy / total_len;
+        let cycle = dash as f32 + gap as f32;
+        let mut t = 0.0f32;
+        while t < total_len {
+            let seg_end = (t + dash as f32).min(total_len);
+            let sx = x1 + (ux * t) as i32;
+            let sy = y1 + (uy * t) as i32;
+            let ex = x1 + (ux * seg_end) as i32;
+            let ey = y1 + (uy * seg_end) as i32;
+            self.ext_draw_line(sx, sy, ex, ey, width, color)?;
+            t += cycle;
         }
         Ok(())
     }
