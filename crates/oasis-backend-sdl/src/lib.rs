@@ -663,7 +663,12 @@ impl SdiBackend for SdlBackend {
                 }
             },
             ClippingRect::Zero => {
-                self.clip_stack.push(ClipRect { x: 0, y: 0, w: 0, h: 0 });
+                self.clip_stack.push(ClipRect {
+                    x: 0,
+                    y: 0,
+                    w: 0,
+                    h: 0,
+                });
                 self.canvas.set_clip_rect(Rect::new(0, 0, 0, 0));
             },
             ClippingRect::None => {
