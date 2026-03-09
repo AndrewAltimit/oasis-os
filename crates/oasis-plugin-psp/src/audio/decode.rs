@@ -23,6 +23,10 @@ use crate::overlay;
 /// 1. Scan user memory for a cluster of known sceAudiocodec NIDs
 /// 2. Find the SceLibraryStubTable entry referencing the NID table
 /// 3. Read the stubs and decode MIPS instructions for function addrs
+/// # Safety
+///
+/// Must be called from kernel mode. Scans user memory for sceAudiocodec
+/// import stubs and resolves function pointers by reading MIPS instructions.
 pub(super) unsafe fn try_codec_stub_extraction() -> bool {
     crate::debug_log(b"[OASIS] trying codec stub extraction...");
 
@@ -232,6 +236,11 @@ fn log_hex(prefix: &[u8], val: u32) {
 /// Strategy 2: sceKernelLoadModule for flash0 PRXs (kernel-loads them
 ///             so they appear in the kernel module list where
 ///             sctrlHENFindFunction can find their exports).
+///
+/// # Safety
+///
+/// Must be called from kernel mode. Resolves and calls PSP system
+/// functions via NID lookup and raw pointer transmutes.
 pub(super) unsafe fn load_av_modules() {
     // Strategy 1: sceUtilityLoadModule (loads into user space).
     // SAFETY: Resolving sceUtilityLoadModule via sctrlHENFindFunction and
@@ -287,6 +296,11 @@ pub(super) unsafe fn load_av_modules() {
 /// Try to resolve sceMp3 function pointers. Uses sctrlHENFindFunction
 /// first, then falls back to manual export table walking for user-mode
 /// modules.
+///
+/// # Safety
+///
+/// Must be called from kernel mode during single-threaded audio init.
+/// Resolves NIDs via CFW APIs and writes to module-level statics.
 pub(super) unsafe fn try_resolve_mp3() -> bool {
     // SAFETY: Resolving sceMp3 NIDs via combined resolution (sctrlHENFindFunction +
     // export table walking). Transmuting raw pointers to typed fn pointers.
@@ -368,6 +382,11 @@ pub(super) unsafe fn try_resolve_mp3() -> bool {
 
 /// Try to resolve sceAudiocodec function pointers. Uses combined
 /// resolution (sctrlHENFindFunction + export table walking).
+///
+/// # Safety
+///
+/// Must be called from kernel mode during single-threaded audio init.
+/// Resolves NIDs via CFW APIs and writes to module-level statics.
 pub(super) unsafe fn try_resolve_codec() -> bool {
     // SAFETY: Resolving sceAudiocodec NIDs via combined resolution
     // (sctrlHENFindFunction + export table walking). Transmuting raw pointers
@@ -430,6 +449,11 @@ pub(super) unsafe fn try_resolve_codec() -> bool {
 }
 
 /// Resolve all audio driver function pointers.
+///
+/// # Safety
+///
+/// Must be called from kernel mode during single-threaded init.
+/// Loads AV modules and resolves codec function pointers.
 pub(super) unsafe fn init_audio_drivers() -> bool {
     // Step 1: Resolve sceAudio driver (always available in games).
     // SAFETY: Resolving sceAudio driver NIDs via sctrlHENFindFunction and
@@ -928,6 +952,10 @@ pub(super) unsafe extern "C" fn audio_thread_entry(
 // Backend 1: sceMp3 streaming
 // ---------------------------------------------------------------------------
 
+/// # Safety
+///
+/// `path` must be a valid null-terminated byte string. `channel` must
+/// be a valid audio channel index (0-7). Calls PSP audio and I/O syscalls.
 pub(super) unsafe fn play_track_mp3(path: &[u8], channel: i32) -> i32 {
     // SAFETY: sceIoOpen with valid null-terminated path and read-only flag.
     let fd = unsafe { psp::sys::sceIoOpen(path.as_ptr(), psp::sys::IoOpenFlags::RD_ONLY, 0) };
@@ -1091,6 +1119,10 @@ pub(super) unsafe fn play_track_mp3(path: &[u8], channel: i32) -> i32 {
     result
 }
 
+/// # Safety
+///
+/// `handle` must be a valid sceMp3 handle. `fd` must be a valid open
+/// file descriptor. Calls resolved sceMp3 and sceIo syscalls.
 unsafe fn fill_stream_data(handle: i32, fd: psp::sys::SceUid) -> i32 {
     let mut dst_ptr: *mut u8 = core::ptr::null_mut();
     let mut to_write: i32 = 0;
@@ -1127,6 +1159,11 @@ unsafe fn fill_stream_data(handle: i32, fd: psp::sys::SceUid) -> i32 {
 // Backend 2: sceAudiocodec frame-by-frame
 // ---------------------------------------------------------------------------
 
+/// # Safety
+///
+/// `path` must be a valid null-terminated byte string. `channel` must
+/// be a valid audio channel index (0-7). Calls PSP audio codec and I/O
+/// syscalls via resolved function pointers.
 pub(super) unsafe fn play_track_codec(path: &[u8], channel: i32) -> i32 {
     // SAFETY: sceIoOpen with valid null-terminated path and read-only flag.
     let fd = unsafe { psp::sys::sceIoOpen(path.as_ptr(), psp::sys::IoOpenFlags::RD_ONLY, 0) };

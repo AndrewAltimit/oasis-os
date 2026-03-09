@@ -163,6 +163,7 @@ fn listener_accept_no_auth() {
 }
 
 #[test]
+#[cfg(feature = "tls-rustls")]
 fn listener_psk_auth() {
     let port = free_port();
     let config = ListenerConfig {
@@ -204,6 +205,36 @@ fn listener_psk_auth() {
     let commands = listener.poll(&mut backend);
     assert_eq!(commands.len(), 1);
     assert_eq!(commands[0].0, "help");
+
+    listener.stop();
+}
+
+#[test]
+#[cfg(not(feature = "tls-rustls"))]
+fn listener_rejects_psk_without_tls() {
+    let port = free_port();
+    let config = ListenerConfig {
+        port,
+        psk: "secret123".to_string(),
+        max_connections: 2,
+        ..ListenerConfig::default()
+    };
+    let mut listener = RemoteListener::new(config);
+    let mut backend = StdNetworkBackend::new();
+    listener.start(&mut backend).unwrap();
+
+    let mut client = TcpStream::connect(format!("127.0.0.1:{port}")).unwrap();
+    std::thread::sleep(std::time::Duration::from_millis(50));
+
+    // Accept connection -- should be immediately rejected.
+    listener.poll(&mut backend);
+    assert_eq!(listener.connection_count(), 0);
+
+    // Client should receive rejection message.
+    let mut buf = [0u8; 256];
+    let n = client.read(&mut buf).unwrap();
+    let msg = String::from_utf8_lossy(&buf[..n]);
+    assert!(msg.contains("AUTH_FAIL"));
 
     listener.stop();
 }

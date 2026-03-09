@@ -3,8 +3,13 @@
 //! Connects to a remote OASIS_OS instance (or any TCP text service),
 //! sends commands, and receives output. Designed for non-blocking polling.
 
+use std::time::Instant;
+
 use oasis_types::backend::{NetworkBackend, NetworkStream};
 use oasis_types::error::{OasisError, Result};
+
+/// Maximum time (in seconds) to wait for an authentication response.
+const AUTH_TIMEOUT_SECS: u64 = 30;
 
 /// State of the remote client connection.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -25,6 +30,8 @@ pub struct RemoteClient {
     read_buf: Vec<u8>,
     /// Lines received from the remote side.
     received_lines: Vec<String>,
+    /// When authentication was initiated (for timeout detection).
+    auth_started: Option<Instant>,
 }
 
 impl RemoteClient {
@@ -34,6 +41,7 @@ impl RemoteClient {
             state: ClientState::Disconnected,
             read_buf: Vec::with_capacity(256),
             received_lines: Vec::new(),
+            auth_started: None,
         }
     }
 
@@ -53,21 +61,31 @@ impl RemoteClient {
         let stream = backend.connect(address, port)?;
         self.stream = Some(stream);
 
-        #[cfg(not(feature = "tls-rustls"))]
-        if psk.is_some() {
-            log::warn!(
-                "Connecting WITHOUT TLS — PSK will be sent in plaintext. \
-                 Enable the `tls-rustls` feature for encrypted connections."
-            );
-        }
-
         if let Some(key) = psk {
-            // Send PSK immediately.
-            if let Some(ref mut s) = self.stream {
-                s.write(format!("{key}\n").as_bytes())
-                    .map_err(|e| OasisError::Backend(format!("auth send: {e}").into()))?;
+            #[cfg(not(feature = "tls-rustls"))]
+            {
+                let _ = key; // suppress unused variable warning
+                // Refuse to send PSK in plaintext -- close the connection.
+                if let Some(ref mut s) = self.stream {
+                    let _ = s.close();
+                }
+                self.stream = None;
+                return Err(OasisError::Backend(
+                    "PSK authentication requires TLS \u{2014} enable the \
+                     `tls-rustls` feature"
+                        .into(),
+                ));
             }
-            self.state = ClientState::Authenticating;
+            #[cfg(feature = "tls-rustls")]
+            {
+                // Send PSK over encrypted channel.
+                if let Some(ref mut s) = self.stream {
+                    s.write(format!("{key}\n").as_bytes())
+                        .map_err(|e| OasisError::Backend(format!("auth send: {e}").into()))?;
+                }
+                self.state = ClientState::Authenticating;
+                self.auth_started = Some(Instant::now());
+            }
         } else {
             self.state = ClientState::Connected;
         }
@@ -94,6 +112,17 @@ impl RemoteClient {
             return Vec::new();
         };
 
+        // Check for authentication timeout.
+        if self.state == ClientState::Authenticating
+            && let Some(started) = self.auth_started
+            && started.elapsed().as_secs() >= AUTH_TIMEOUT_SECS
+        {
+            self.disconnect();
+            self.received_lines
+                .push("Authentication timed out.".to_string());
+            return std::mem::take(&mut self.received_lines);
+        }
+
         let mut buf = [0u8; 512];
         match stream.read(&mut buf) {
             Ok(0) => {},
@@ -109,8 +138,10 @@ impl RemoteClient {
                     if self.state == ClientState::Authenticating {
                         if line == "AUTH_OK" {
                             self.state = ClientState::Connected;
+                            self.auth_started = None;
                             continue;
                         } else if line == "AUTH_FAIL" {
+                            self.auth_started = None;
                             self.disconnect();
                             self.received_lines
                                 .push("Authentication failed.".to_string());

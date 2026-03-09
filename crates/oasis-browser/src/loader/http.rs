@@ -16,6 +16,12 @@ use super::{ContentType, ResourceResponse, Url};
 /// Maximum response body size (8 MB).
 const MAX_BODY_SIZE: usize = 8 * 1024 * 1024;
 
+/// Maximum HTTP header section size (16 KB).
+///
+/// Prevents a malicious server from exhausting memory by sending an
+/// unbounded header block before the `\r\n\r\n` terminator.
+const MAX_HEADER_SIZE: usize = 16_384;
+
 /// Maximum number of redirects to follow.
 const MAX_REDIRECTS: u8 = 5;
 
@@ -174,14 +180,28 @@ fn send_request(stream: &mut impl Write, url: &Url, is_https: bool) -> Result<()
 fn read_response(stream: &mut impl Read) -> Result<Vec<u8>> {
     let mut buf = Vec::with_capacity(8192);
     let mut chunk = [0u8; 8192];
+    let mut header_complete = false;
     loop {
         match stream.read(&mut chunk) {
             Ok(0) => break,
             Ok(n) => {
-                if buf.len() + n > MAX_BODY_SIZE + 4096 {
+                if buf.len() + n > MAX_BODY_SIZE + MAX_HEADER_SIZE {
                     return Err(OasisError::Backend("response too large".into()));
                 }
                 buf.extend_from_slice(&chunk[..n]);
+
+                // Enforce header size limit before the terminator is found.
+                if !header_complete {
+                    if find_subsequence(&buf, b"\r\n\r\n").is_some()
+                        || find_subsequence(&buf, b"\n\n").is_some()
+                    {
+                        header_complete = true;
+                    } else if buf.len() > MAX_HEADER_SIZE {
+                        return Err(OasisError::Backend(
+                            "HTTP headers exceed 16 KB limit".into(),
+                        ));
+                    }
+                }
             },
             Err(e)
                 if e.kind() == io::ErrorKind::WouldBlock || e.kind() == io::ErrorKind::TimedOut =>
@@ -197,19 +217,44 @@ fn read_response(stream: &mut impl Read) -> Result<Vec<u8>> {
 }
 
 /// Parse raw bytes into status code, headers, and body.
+///
+/// Accepts both `\r\n` (standard) and bare `\n` (RFC 7230 §3.5) line
+/// endings in the header section.
 pub fn parse_response(data: &[u8]) -> Result<HttpResponse> {
-    // Find the header/body boundary (\r\n\r\n).
-    let header_end = find_subsequence(data, b"\r\n\r\n").ok_or_else(|| {
-        OasisError::Backend("malformed HTTP response: no header terminator".into())
-    })?;
+    // Find the header/body boundary.  Try canonical \r\n\r\n first,
+    // then fall back to bare \n\n (RFC 7230 §3.5 robustness).
+    let (header_end, separator_len) = if let Some(pos) = find_subsequence(data, b"\r\n\r\n") {
+        (pos, 4)
+    } else if let Some(pos) = find_subsequence(data, b"\n\n") {
+        (pos, 2)
+    } else {
+        return Err(OasisError::Backend(
+            "malformed HTTP response: no header terminator".into(),
+        ));
+    };
+
+    if header_end > MAX_HEADER_SIZE {
+        return Err(OasisError::Backend(
+            "HTTP headers exceed 16 KB limit".into(),
+        ));
+    }
 
     let header_bytes = &data[..header_end];
-    let body_start = header_end + 4;
+    let body_start = header_end + separator_len;
 
     let header_str = std::str::from_utf8(header_bytes)
         .map_err(|_| OasisError::Backend("non-UTF-8 headers".into()))?;
 
-    let mut lines = header_str.split("\r\n");
+    // Normalize \r\n to \n so the rest of the parser handles both.
+    let header_owned;
+    let header_normalized = if header_str.contains("\r\n") {
+        header_owned = header_str.replace("\r\n", "\n");
+        header_owned.as_str()
+    } else {
+        header_str
+    };
+
+    let mut lines = header_normalized.split('\n');
 
     // Status line: "HTTP/1.x STATUS REASON"
     let status_line = lines
@@ -639,5 +684,37 @@ mod tests {
             "expected HTTPS Required page, got: {body}",
         );
         let _ = handle.join();
+    }
+
+    #[test]
+    fn parse_response_lf_only() {
+        let raw = b"HTTP/1.1 200 OK\n\
+                     Content-Type: text/plain\n\
+                     Content-Length: 5\n\
+                     \n\
+                     hello";
+        let resp = parse_response(raw).unwrap();
+        assert_eq!(resp.status_code, 200);
+        assert_eq!(
+            find_header(&resp.headers, "content-type"),
+            Some("text/plain"),
+        );
+        assert_eq!(resp.body, b"hello");
+    }
+
+    #[test]
+    fn header_size_limit_enforced() {
+        // Build a response with headers exceeding MAX_HEADER_SIZE.
+        let mut huge = b"HTTP/1.1 200 OK\r\n".to_vec();
+        // Each header line ~110 bytes; 160 of them ≈ 17.6 KB > 16 KB.
+        for i in 0..160 {
+            let line = format!("X-Pad-{i}: {}\r\n", "A".repeat(90));
+            huge.extend_from_slice(line.as_bytes());
+        }
+        huge.extend_from_slice(b"\r\n");
+        huge.extend_from_slice(b"body");
+        let err = parse_response(&huge).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("16 KB"), "expected header limit error: {msg}");
     }
 }

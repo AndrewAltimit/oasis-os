@@ -374,13 +374,6 @@ fn current_track_mut<'a>(
 // Individual box parsers
 // ---------------------------------------------------------------------------
 
-#[allow(dead_code)]
-fn read_u16_be<R: Read>(r: &mut R) -> Result<u16, LiteError> {
-    let mut buf = [0u8; 2];
-    r.read_exact(&mut buf)?;
-    Ok(u16::from_be_bytes(buf))
-}
-
 fn read_u32_be<R: Read>(r: &mut R) -> Result<u32, LiteError> {
     let mut buf = [0u8; 4];
     r.read_exact(&mut buf)?;
