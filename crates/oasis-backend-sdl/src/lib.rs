@@ -662,7 +662,11 @@ impl SdiBackend for SdlBackend {
                     self.canvas.set_clip_rect(Rect::new(0, 0, 0, 0));
                 }
             },
-            _ => {
+            ClippingRect::Zero => {
+                self.clip_stack.push(ClipRect { x: 0, y: 0, w: 0, h: 0 });
+                self.canvas.set_clip_rect(Rect::new(0, 0, 0, 0));
+            },
+            ClippingRect::None => {
                 self.clip_stack.push(ClipRect {
                     x: 0,
                     y: 0,
@@ -694,7 +698,8 @@ impl SdiBackend for SdlBackend {
     fn current_clip_rect(&self) -> Option<(i32, i32, u32, u32)> {
         match self.canvas.clip_rect() {
             ClippingRect::Some(r) => Some((r.x(), r.y(), r.width(), r.height())),
-            _ => None,
+            ClippingRect::Zero => Some((0, 0, 0, 0)),
+            ClippingRect::None => None,
         }
     }
 
