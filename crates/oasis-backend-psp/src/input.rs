@@ -84,6 +84,7 @@ impl PspBackend {
 ///
 /// Returns `(dx, dy)` in pixels, or `(0, 0)` if both axes are zero.
 /// `ax` and `ay` are the deadzone-filtered analog values in `[-1.0, 1.0]`.
+#[allow(dead_code)]
 pub(crate) fn analog_to_cursor_delta(ax: f32, ay: f32) -> (i32, i32) {
     if ax == 0.0 && ay == 0.0 {
         return (0, 0);
@@ -92,6 +93,7 @@ pub(crate) fn analog_to_cursor_delta(ax: f32, ay: f32) -> (i32, i32) {
 }
 
 /// Clamp cursor position within screen bounds.
+#[allow(dead_code)]
 pub(crate) fn clamp_cursor(
     cursor_x: i32,
     cursor_y: i32,
@@ -108,6 +110,7 @@ pub(crate) fn clamp_cursor(
 /// Apply analog deadzone: returns 0.0 if `|value| < deadzone`.
 ///
 /// This mirrors the logic in `psp::input::Controller::analog_x_f32`.
+#[allow(dead_code)]
 pub(crate) fn apply_deadzone(value: f32, deadzone: f32) -> f32 {
     if value.abs() < deadzone { 0.0 } else { value }
 }

@@ -80,12 +80,14 @@ impl PspSkinPreset {
     }
 
     /// Cycle to the next preset in the list.
+    #[allow(dead_code)]
     pub(crate) fn next(self) -> Self {
         let idx = Self::ALL.iter().position(|&p| p == self).unwrap_or(0);
         Self::ALL[(idx + 1) % Self::ALL.len()]
     }
 
     /// Cycle to the previous preset in the list.
+    #[allow(dead_code)]
     pub(crate) fn prev(self) -> Self {
         let idx = Self::ALL.iter().position(|&p| p == self).unwrap_or(0);
         Self::ALL[(idx + Self::ALL.len() - 1) % Self::ALL.len()]

@@ -1,6 +1,6 @@
 //! Audio state, playlist, and helper structures.
 
-use core::sync::atomic::{AtomicBool, AtomicU8, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU8};
 
 use super::{copy_bytes, log_i32, write_u32_decimal};
 

@@ -7,7 +7,7 @@ use psp::sys::CtrlButtons;
 
 use oasis_backend_psp::{
     AudioCmd, Button, InputEvent, IoCmd, PspBackend, SCREEN_HEIGHT, SCREEN_WIDTH, SdiRegistry,
-    SfxId, TextureId, Trigger, TvCatalogRequest, WindowManager,
+    SfxId, Trigger, TvCatalogRequest, WindowManager,
 };
 
 use oasis_core::dashboard::DashboardState;
@@ -21,7 +21,6 @@ use crate::desktop;
 use crate::skins;
 use crate::theme::*;
 use crate::types::*;
-use crate::views;
 
 use oasis_backend_psp::AudioHandle;
 use oasis_backend_psp::threading::IoHandle;
@@ -703,10 +702,10 @@ fn dispatch_dashboard_confirm(
     title: &str,
     classic_view: &mut ClassicView,
     app_mode: &mut AppMode,
-    dashboard: &mut DashboardState,
+    _dashboard: &mut DashboardState,
     wm: &mut WindowManager,
     sdi: &mut SdiRegistry,
-    audio: &AudioHandle,
+    _audio: &AudioHandle,
     io: &IoHandle,
     fm: &mut FileManagerState,
     pv: &mut PhotoViewerState,

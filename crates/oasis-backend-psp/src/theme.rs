@@ -1,4 +1,5 @@
 //! Theme constants (matching oasis-core/src/theme.rs).
+#![allow(dead_code)]
 
 use oasis_backend_psp::{Color, SCREEN_HEIGHT, SCREEN_WIDTH};
 

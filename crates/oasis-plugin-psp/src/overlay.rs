@@ -540,6 +540,7 @@ fn write_u32(buf: &mut [u8], pos: usize, val: u32) -> usize {
 }
 
 /// Write a u32 as 2-digit zero-padded decimal.
+#[allow(dead_code)]
 fn write_u32_pad2(buf: &mut [u8], pos: usize, val: u32) -> usize {
     let mut p = pos;
     if p + 1 < buf.len() {

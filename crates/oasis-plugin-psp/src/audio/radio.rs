@@ -221,6 +221,7 @@ pub(super) unsafe fn play_radio_stream(station_idx: u8, channel: i32) -> i32 {
         }
     }
 
+    #[allow(unused_assignments)]
     let mut edram_allocated = false;
     // SAFETY: Volatile reads of resolved sceAudiocodec fn pointers
     // (CheckNeedMem, GetEDRAM, Init); calling with valid codec buffer.

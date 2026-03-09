@@ -90,6 +90,7 @@ impl PluginConfig {
     }
 
     /// Get music directory as a byte slice (with null terminator).
+    #[allow(dead_code)]
     pub fn music_dir_str(&self) -> &[u8] {
         &self.music_dir[..self.music_dir_len + 1]
     }
