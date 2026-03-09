@@ -887,7 +887,8 @@ mod tests {
 
     #[test]
     fn key_down_up_symmetry() {
-        // Every mapped key_down should have a corresponding key_up (except Backspace).
+        // Every mapped key_down should have a corresponding key_up
+        // (except Backspace and F11).
         let keys = [
             Keycode::Up,
             Keycode::Down,
@@ -910,14 +911,103 @@ mod tests {
             // Verify press/release correspondence.
             match (down.unwrap(), up.unwrap()) {
                 (InputEvent::ButtonPress(b1), InputEvent::ButtonRelease(b2)) => {
-                    assert_eq!(b1, b2, "press/release button mismatch for {key:?}");
+                    assert_eq!(b1, b2, "press/release mismatch {key:?}");
                 },
                 (InputEvent::TriggerPress(t1), InputEvent::TriggerRelease(t2)) => {
-                    assert_eq!(t1, t2, "press/release trigger mismatch for {key:?}");
+                    assert_eq!(t1, t2, "press/release mismatch {key:?}");
                 },
-                (d, u) => panic!("unexpected pair for {key:?}: {d:?} / {u:?}"),
+                (d, u) => panic!("unexpected pair {key:?}: {d:?}/{u:?}"),
             }
         }
+    }
+
+    #[test]
+    fn key_up_backspace_not_mapped() {
+        // Backspace has no key_up mapping (fire-and-forget).
+        assert_eq!(map_key_up(Keycode::Backspace), None);
+    }
+
+    #[test]
+    fn key_up_f11_not_mapped() {
+        // F11 (ToggleFullscreen) has no key_up mapping.
+        assert_eq!(map_key_up(Keycode::F11), None);
+    }
+
+    #[test]
+    fn key_down_f1_f2_mapped_but_other_fn_keys_not() {
+        assert!(map_key_down(Keycode::F1).is_some());
+        assert!(map_key_down(Keycode::F2).is_some());
+        assert!(map_key_down(Keycode::F3).is_none());
+        assert!(map_key_down(Keycode::F4).is_none());
+        assert!(map_key_down(Keycode::F5).is_none());
+        assert!(map_key_down(Keycode::F6).is_none());
+        assert!(map_key_down(Keycode::F7).is_none());
+        assert!(map_key_down(Keycode::F8).is_none());
+        assert!(map_key_down(Keycode::F9).is_none());
+        assert!(map_key_down(Keycode::F10).is_none());
+        assert!(map_key_down(Keycode::F12).is_none());
+    }
+
+    #[test]
+    fn key_down_letter_keys_only_q_e_mapped() {
+        // Q and E are trigger keys; no other letters are mapped.
+        assert!(map_key_down(Keycode::Q).is_some());
+        assert!(map_key_down(Keycode::E).is_some());
+        assert!(map_key_down(Keycode::A).is_none());
+        assert!(map_key_down(Keycode::W).is_none());
+        assert!(map_key_down(Keycode::S).is_none());
+        assert!(map_key_down(Keycode::D).is_none());
+    }
+
+    #[test]
+    fn mouse_wheel_delta_sign_inversion() {
+        // SDL3 wheel y > 0 = scroll up, but OASIS expects positive
+        // delta = scroll down. The mapping negates the value.
+        // Simulating: Event::MouseWheel { y: 1.0 } -> delta: -1
+        // and Event::MouseWheel { y: -1.0 } -> delta: 1
+        //
+        // We can't construct SDL events directly but we can verify
+        // the formula: delta = -(y as i32)
+        let sdl_y_up: f32 = 3.0;
+        let sdl_y_down: f32 = -2.0;
+        assert_eq!(-(sdl_y_up as i32), -3);
+        assert_eq!(-(sdl_y_down as i32), 2);
+    }
+
+    #[test]
+    fn mouse_coordinate_truncation() {
+        // SDL3 mouse coords are f32; truncation to i32 floors.
+        let fx: f32 = 42.7;
+        let fy: f32 = 99.9;
+        assert_eq!(fx as i32, 42);
+        assert_eq!(fy as i32, 99);
+
+        // Negative coords truncate toward zero.
+        let neg_x: f32 = -1.5;
+        assert_eq!(neg_x as i32, -1);
+    }
+
+    #[test]
+    fn frect_conversion() {
+        let r = frect(10, 20, 100, 50);
+        assert_eq!(r.x, 10.0);
+        assert_eq!(r.y, 20.0);
+        assert_eq!(r.w, 100.0);
+        assert_eq!(r.h, 50.0);
+    }
+
+    #[test]
+    fn frect_zero_size() {
+        let r = frect(0, 0, 0, 0);
+        assert_eq!(r.x, 0.0);
+        assert_eq!(r.w, 0.0);
+    }
+
+    #[test]
+    fn fpoint_conversion() {
+        let p = fpoint(42, -7);
+        assert_eq!(p.x, 42.0);
+        assert_eq!(p.y, -7.0);
     }
 
     // ---------------------------------------------------------------

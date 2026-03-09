@@ -74,4 +74,79 @@ mod tests {
     fn default_constructor() {
         let _backend = FfiInputBackend::default();
     }
+
+    #[test]
+    fn push_cursor_move_preserves_coordinates() {
+        let mut backend = FfiInputBackend::new();
+        backend.push_event(InputEvent::CursorMove { x: 100, y: 200 });
+        let events = backend.poll_events();
+        assert_eq!(events[0], InputEvent::CursorMove { x: 100, y: 200 });
+    }
+
+    #[test]
+    fn push_pointer_click_coordinates() {
+        let mut backend = FfiInputBackend::new();
+        backend.push_event(InputEvent::PointerClick { x: 0, y: 0 });
+        backend.push_event(InputEvent::PointerClick { x: 479, y: 271 });
+        backend.push_event(InputEvent::PointerClick { x: -1, y: -1 });
+        let events = backend.poll_events();
+        assert_eq!(events.len(), 3);
+        assert_eq!(events[0], InputEvent::PointerClick { x: 0, y: 0 });
+        assert_eq!(events[1], InputEvent::PointerClick { x: 479, y: 271 });
+        // Negative coordinates pass through (clamping is caller's
+        // responsibility in the FFI layer).
+        assert_eq!(events[2], InputEvent::PointerClick { x: -1, y: -1 });
+    }
+
+    #[test]
+    fn push_pointer_release_coordinates() {
+        let mut backend = FfiInputBackend::new();
+        backend.push_event(InputEvent::PointerRelease {
+            x: i32::MAX,
+            y: i32::MIN,
+        });
+        let events = backend.poll_events();
+        assert_eq!(
+            events[0],
+            InputEvent::PointerRelease {
+                x: i32::MAX,
+                y: i32::MIN,
+            }
+        );
+    }
+
+    #[test]
+    fn multiple_poll_drains_each_time() {
+        let mut backend = FfiInputBackend::new();
+        backend.push_event(InputEvent::FocusGained);
+        assert_eq!(backend.poll_events().len(), 1);
+        assert_eq!(backend.poll_events().len(), 0);
+        backend.push_event(InputEvent::FocusLost);
+        backend.push_event(InputEvent::Quit);
+        assert_eq!(backend.poll_events().len(), 2);
+        assert_eq!(backend.poll_events().len(), 0);
+    }
+
+    #[test]
+    fn all_button_types_round_trip() {
+        let mut backend = FfiInputBackend::new();
+        let buttons = [
+            Button::Up,
+            Button::Down,
+            Button::Left,
+            Button::Right,
+            Button::Confirm,
+            Button::Cancel,
+            Button::Triangle,
+            Button::Square,
+            Button::Start,
+            Button::Select,
+        ];
+        for btn in buttons {
+            backend.push_event(InputEvent::ButtonPress(btn));
+            backend.push_event(InputEvent::ButtonRelease(btn));
+        }
+        let events = backend.poll_events();
+        assert_eq!(events.len(), 20);
+    }
 }
