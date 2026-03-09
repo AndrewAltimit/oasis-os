@@ -1,12 +1,12 @@
 //! Desktop mode helpers and windowed content renderers.
 
 use oasis_backend_psp::{
-    AudioHandle, Color, FileEntry, PspBackend, SdiBackend, SdiRegistry, StatusBarInfo, SystemInfo,
-    TextureId, WindowConfig, WindowManager, WindowType, WmEvent, SCREEN_WIDTH,
+    AudioHandle, Color, FileEntry, PspBackend, SCREEN_WIDTH, SdiBackend, SdiRegistry,
+    StatusBarInfo, SystemInfo, TextureId, WindowConfig, WindowManager, WindowType, WmEvent,
 };
 
 use crate::theme::*;
-use crate::types::{AppMode, ClassicView, APPS};
+use crate::types::{APPS, AppMode, ClassicView};
 
 /// Check if coordinates are over a dashboard icon, returning the global index.
 pub(crate) fn hit_test_dashboard_icon(x: i32, y: i32, page: usize) -> Option<usize> {

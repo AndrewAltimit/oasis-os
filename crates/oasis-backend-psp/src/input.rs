@@ -235,8 +235,7 @@ mod tests {
 
     #[test]
     fn button_map_covers_all_buttons() {
-        let mapped: Vec<Button> =
-            BUTTON_MAP.iter().map(|(_, btn)| *btn).collect();
+        let mapped: Vec<Button> = BUTTON_MAP.iter().map(|(_, btn)| *btn).collect();
         assert!(mapped.contains(&Button::Up));
         assert!(mapped.contains(&Button::Down));
         assert!(mapped.contains(&Button::Left));
@@ -251,8 +250,7 @@ mod tests {
 
     #[test]
     fn trigger_map_covers_both_triggers() {
-        let mapped: Vec<Trigger> =
-            TRIGGER_MAP.iter().map(|(_, t)| *t).collect();
+        let mapped: Vec<Trigger> = TRIGGER_MAP.iter().map(|(_, t)| *t).collect();
         assert!(mapped.contains(&Trigger::Left));
         assert!(mapped.contains(&Trigger::Right));
     }

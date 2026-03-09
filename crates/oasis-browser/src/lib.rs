@@ -54,14 +54,16 @@ pub type ImageInfoMap = HashMap<String, (u32, u32)>;
 #[doc(hidden)]
 pub mod internals {
     pub use crate::css::cascade::{CascadeContext, style_tree};
+    pub use crate::css::default::default_stylesheet;
     pub use crate::css::parser::{Stylesheet, parse_inline_style};
-    pub use crate::css::values::ComputedStyle;
-    pub use crate::html::dom::Document;
+    pub use crate::css::values::{ComputedStyle, Display, TextDecoration};
+    pub use crate::html::dom::{Document, NodeKind, TagName};
     pub use crate::html::tokenizer::Tokenizer;
     pub use crate::html::tree_builder::TreeBuilder;
     pub use crate::layout::block::{
         StyleCache, TextMeasurer, build_layout_tree, layout_block_incremental,
     };
+    pub use crate::layout::box_model::{BoxType, LayoutBox};
     pub use crate::layout::text_cache::CachingMeasurer;
     pub use crate::paint::PaintViewport;
     pub use crate::paint::paint as paint_page;

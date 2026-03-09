@@ -1128,12 +1128,11 @@ impl std::io::Seek for StreamingBuffer {
     }
 }
 
-// SAFETY: StreamingBuffer is Send + Sync because StreamingInner uses
-// Arc<Mutex<..>> + atomics for all shared state.
-#[cfg(feature = "_video")]
-unsafe impl Send for StreamingBuffer {}
-#[cfg(feature = "_video")]
-unsafe impl Sync for StreamingBuffer {}
+// StreamingBuffer is automatically Send + Sync because all fields are:
+// - Arc<StreamingInner> (Send + Sync, all inner fields are Mutex/Atomic)
+// - u64, bool (trivially Send + Sync)
+// - Arc<AtomicBool> (Send + Sync)
+// No manual unsafe impl needed.
 
 #[cfg(feature = "_video")]
 impl oasis_video::VideoSource for StreamingBuffer {
@@ -2428,6 +2427,17 @@ fn find_tv_guide_runner<'a>(
 #[cfg(feature = "_video")]
 mod tests {
     use super::*;
+
+    // ---------------------------------------------------------------
+    // StreamingBuffer must be Send + Sync (compile-time assertion)
+    // ---------------------------------------------------------------
+
+    const _: () = {
+        fn assert_send_sync<T: Send + Sync>() {}
+        fn check() {
+            assert_send_sync::<StreamingBuffer>();
+        }
+    };
 
     // ---------------------------------------------------------------
     // should_throttle_pure tests

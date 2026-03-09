@@ -48,7 +48,9 @@ pub use procedural::{
 };
 pub use sfx::SfxId;
 pub use status::{StatusBarInfo, SystemInfo};
-pub use threading::{AudioCmd, AudioHandle, IoCmd, IoHandle, IoResponse, TvCatalogRequest, spawn_workers};
+pub use threading::{
+    AudioCmd, AudioHandle, IoCmd, IoHandle, IoResponse, TvCatalogRequest, spawn_workers,
+};
 pub use tls::PspTlsProvider;
 
 // ---------------------------------------------------------------------------
@@ -90,10 +92,7 @@ pub trait ColorExt {
 
 impl ColorExt for Color {
     fn to_abgr(&self) -> u32 {
-        (self.a as u32) << 24
-            | (self.b as u32) << 16
-            | (self.g as u32) << 8
-            | self.r as u32
+        (self.a as u32) << 24 | (self.b as u32) << 16 | (self.g as u32) << 8 | self.r as u32
     }
 }
 
@@ -652,13 +651,7 @@ impl SdiBackend for PspBackend {
         Ok(())
     }
 
-    fn fill_circle(
-        &mut self,
-        cx: i32,
-        cy: i32,
-        radius: u16,
-        color: Color,
-    ) -> OasisResult<()> {
+    fn fill_circle(&mut self, cx: i32, cy: i32, radius: u16, color: Color) -> OasisResult<()> {
         self.fill_circle_inner(cx, cy, radius, color);
         Ok(())
     }
