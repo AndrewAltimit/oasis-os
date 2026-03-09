@@ -20,8 +20,11 @@ We define **five separate backend traits** in `oasis-types`:
 1. **`SdiCore`** -- Required rendering: 13 methods (`init`, `clear`, `blit`,
    `fill_rect`, `draw_text`, `swap_buffers`, `load_texture`, `destroy_texture`,
    `set_clip_rect`, `reset_clip_rect`, `measure_text`, `read_pixels`, `shutdown`).
-2. **`SdiBackend`** -- Extends `SdiCore` with 30 optional accelerated primitives
-   (shapes, gradients, text styling, texture ops, clip/transform stacks, batching).
+2. **`SdiBackend`** -- Extends `SdiCore` with 39 optional accelerated primitives
+   (shapes, gradients, text styling, texture ops, clip/transform stacks, vector
+   graphics, batching). Also split into 8 extension traits: `SdiShapes`,
+   `SdiGradients`, `SdiAlpha`, `SdiText`, `SdiTextures`, `SdiClipTransform`,
+   `SdiVector`, `SdiBatch`.
    All have default implementations that fall back to `SdiCore` methods.
 3. **`InputBackend`** -- Input: `poll_events() -> Vec<InputEvent>`.
 4. **`NetworkBackend`** -- Networking: `listen`, `accept`, `connect`,
@@ -39,7 +42,7 @@ We define **five separate backend traits** in `oasis-types`:
   required drawing. `SdiBackend` adds optional accelerated methods. `InputBackend`
   is about events. They can be implemented by different structs if needed.
 - **Two-tier rendering.** `SdiCore` has 13 required methods that every backend
-  must implement. `SdiBackend` extends it with 30 optional methods for shapes,
+  must implement. `SdiBackend` extends it with 39 optional methods for shapes,
   gradients, and batching that fall back to `SdiCore` calls. Backends can
   progressively override for hardware acceleration.
 - **Minimal vtable.** Four small vtables instead of one large one. On PSP,
