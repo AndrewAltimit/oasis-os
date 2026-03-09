@@ -7,6 +7,8 @@
 //! Object names are prefixed per view (`radio_`, `tv_`, `photo_`, `browser_`,
 //! `music_`, `fm_`) to avoid collisions.
 
+use core::fmt::Write;
+
 use oasis_backend_psp::{Color, FileEntry, SCREEN_WIDTH, TextureId};
 use oasis_core::active_theme::ActiveTheme;
 use oasis_core::sdi::SdiRegistry;
@@ -24,6 +26,21 @@ const LIST_ROWS: usize = FM_VISIBLE_ROWS;
 const ROW_H: i32 = FM_ROW_H;
 /// Y start for list content (below header).
 const LIST_Y: i32 = FM_START_Y;
+
+// ---------------------------------------------------------------------------
+// Reusable name buffer (avoids per-frame heap allocations on PSP)
+// ---------------------------------------------------------------------------
+
+/// Format an SDI object name into a reusable buffer, returning `&str`.
+/// The buffer is cleared and rewritten on each call, so the returned
+/// reference is only valid until the next `sdi_key!` call on the same buffer.
+macro_rules! sdi_key {
+    ($buf:expr, $($arg:tt)*) => {{
+        $buf.clear();
+        write!($buf, $($arg)*).unwrap();
+        $buf.as_str()
+    }};
+}
 
 // ---------------------------------------------------------------------------
 // View lifecycle helpers
@@ -97,14 +114,15 @@ fn setup_list_bg(sdi: &mut SdiRegistry, prefix: &str) {
 /// Update common list-view background + header.
 fn update_list_bg(
     sdi: &mut SdiRegistry,
+    buf: &mut String,
     prefix: &str,
     title: &str,
     accent: Color,
     at: &ActiveTheme,
     subtitle: Option<&str>,
 ) {
-    let bg_name = format!("{prefix}bg");
-    if let Ok(obj) = sdi.get_mut(&bg_name) {
+    let name = sdi_key!(buf, "{prefix}bg");
+    if let Ok(obj) = sdi.get_mut(name) {
         obj.x = 0;
         obj.y = CONTENT_TOP as i32;
         obj.w = SCREEN_WIDTH;
@@ -115,8 +133,8 @@ fn update_list_bg(
         obj.visible = true;
     }
 
-    let hdr_name = format!("{prefix}hdr");
-    if let Ok(obj) = sdi.get_mut(&hdr_name) {
+    let name = sdi_key!(buf, "{prefix}hdr");
+    if let Ok(obj) = sdi.get_mut(name) {
         obj.x = 4;
         obj.y = CONTENT_TOP as i32 + 2;
         obj.w = 0;
@@ -128,8 +146,8 @@ fn update_list_bg(
         obj.visible = true;
     }
 
-    let hdr_sub = format!("{prefix}hdr_sub");
-    if let Ok(obj) = sdi.get_mut(&hdr_sub) {
+    let name = sdi_key!(buf, "{prefix}hdr_sub");
+    if let Ok(obj) = sdi.get_mut(name) {
         if let Some(sub) = subtitle {
             let max = 45;
             let display = if sub.len() > max {
@@ -154,13 +172,14 @@ fn update_list_bg(
 /// Update scrollbar indicator for a list view.
 fn update_scrollbar(
     sdi: &mut SdiRegistry,
+    buf: &mut String,
     prefix: &str,
     selected: usize,
     total: usize,
     at: &ActiveTheme,
 ) {
-    let scroll_name = format!("{prefix}scroll");
-    if let Ok(obj) = sdi.get_mut(&scroll_name) {
+    let name = sdi_key!(buf, "{prefix}scroll");
+    if let Ok(obj) = sdi.get_mut(name) {
         if total > LIST_ROWS {
             let ratio = selected as f32 / (total - 1).max(1) as f32;
             let track_h = CONTENT_H as i32 - 16;
@@ -182,6 +201,7 @@ fn update_scrollbar(
 #[allow(clippy::too_many_arguments)]
 fn update_list_row(
     sdi: &mut SdiRegistry,
+    buf: &mut String,
     prefix: &str,
     row_idx: usize,
     is_selected: bool,
@@ -197,8 +217,8 @@ fn update_list_row(
     let y = LIST_Y + row_idx as i32 * ROW_H;
 
     // Row highlight.
-    let bg_name = format!("{prefix}row_bg_{row_idx}");
-    if let Ok(obj) = sdi.get_mut(&bg_name) {
+    let name = sdi_key!(buf, "{prefix}row_bg_{row_idx}");
+    if let Ok(obj) = sdi.get_mut(name) {
         obj.x = 0;
         obj.y = y - 1;
         obj.w = SCREEN_WIDTH;
@@ -209,8 +229,8 @@ fn update_list_row(
     }
 
     // Icon / prefix.
-    let icon_name = format!("{prefix}row_icon_{row_idx}");
-    if let Ok(obj) = sdi.get_mut(&icon_name) {
+    let name = sdi_key!(buf, "{prefix}row_icon_{row_idx}");
+    if let Ok(obj) = sdi.get_mut(name) {
         obj.x = 4;
         obj.y = y;
         obj.text = Some(icon_text.to_string());
@@ -221,8 +241,8 @@ fn update_list_row(
     }
 
     // Name text.
-    let name_name = format!("{prefix}row_name_{row_idx}");
-    if let Ok(obj) = sdi.get_mut(&name_name) {
+    let name = sdi_key!(buf, "{prefix}row_name_{row_idx}");
+    if let Ok(obj) = sdi.get_mut(name) {
         obj.x = 32;
         obj.y = y;
         obj.text = Some(name_text.to_string());
@@ -233,8 +253,8 @@ fn update_list_row(
     }
 
     // Extra column (genre, size, etc).
-    let extra_name = format!("{prefix}row_extra_{row_idx}");
-    if let Ok(obj) = sdi.get_mut(&extra_name) {
+    let name = sdi_key!(buf, "{prefix}row_extra_{row_idx}");
+    if let Ok(obj) = sdi.get_mut(name) {
         if let Some((text, color, x)) = extra_text {
             obj.x = x;
             obj.y = y;
@@ -249,8 +269,8 @@ fn update_list_row(
     }
 
     // Second extra column.
-    let extra2_name = format!("{prefix}row_extra2_{row_idx}");
-    if let Ok(obj) = sdi.get_mut(&extra2_name) {
+    let name = sdi_key!(buf, "{prefix}row_extra2_{row_idx}");
+    if let Ok(obj) = sdi.get_mut(name) {
         if let Some((text, color, x)) = extra2_text {
             obj.x = x;
             obj.y = y;
@@ -268,11 +288,16 @@ fn update_list_row(
 }
 
 /// Hide unused rows beyond `visible_count`.
-fn hide_unused_rows(sdi: &mut SdiRegistry, prefix: &str, visible_count: usize) {
+fn hide_unused_rows(
+    sdi: &mut SdiRegistry,
+    buf: &mut String,
+    prefix: &str,
+    visible_count: usize,
+) {
     for i in visible_count..LIST_ROWS {
         for suffix in &["row_bg_", "row_icon_", "row_name_", "row_extra_", "row_extra2_"] {
-            let name = format!("{prefix}{suffix}{i}");
-            if let Ok(obj) = sdi.get_mut(&name) {
+            let name = sdi_key!(buf, "{prefix}{suffix}{i}");
+            if let Ok(obj) = sdi.get_mut(name) {
                 obj.visible = false;
             }
         }
@@ -295,8 +320,9 @@ pub(crate) fn update_radio(
     scroll: usize,
     at: &ActiveTheme,
 ) {
+    let mut buf = String::with_capacity(32);
     let accent = at.app.selected_text;
-    update_list_bg(sdi, "radio_", "RADIO", accent, at, None);
+    update_list_bg(sdi, &mut buf, "radio_", "RADIO", accent, at, None);
 
     let end = (scroll + LIST_ROWS).min(RADIO_STATIONS.len());
     let visible = end - scroll;
@@ -308,6 +334,7 @@ pub(crate) fn update_radio(
         let br_x = 480 - (br_str.len() as i32 * CHAR_W) - 4;
         update_list_row(
             sdi,
+            &mut buf,
             "radio_",
             row,
             i == selected,
@@ -321,8 +348,8 @@ pub(crate) fn update_radio(
             at,
         );
     }
-    hide_unused_rows(sdi, "radio_", visible);
-    update_scrollbar(sdi, "radio_", selected, RADIO_STATIONS.len(), at);
+    hide_unused_rows(sdi, &mut buf, "radio_", visible);
+    update_scrollbar(sdi, &mut buf, "radio_", selected, RADIO_STATIONS.len(), at);
 }
 
 // ===========================================================================
@@ -341,8 +368,9 @@ pub(crate) fn update_tv_channels(
     scroll: usize,
     at: &ActiveTheme,
 ) {
+    let mut buf = String::with_capacity(32);
     let accent = at.app.selected_text;
-    update_list_bg(sdi, "tv_", "TV GUIDE", accent, at, None);
+    update_list_bg(sdi, &mut buf, "tv_", "TV GUIDE", accent, at, None);
 
     let end = (scroll + LIST_ROWS).min(channels.len());
     let visible = end - scroll;
@@ -384,8 +412,8 @@ pub(crate) fn update_tv_channels(
         let highlight = oasis_core::color::with_alpha(accent, 100);
 
         // Row highlight.
-        let bg_name = format!("tv_row_bg_{row}");
-        if let Ok(obj) = sdi.get_mut(&bg_name) {
+        let name = sdi_key!(buf, "tv_row_bg_{row}");
+        if let Ok(obj) = sdi.get_mut(name) {
             obj.x = 0;
             obj.y = y - 1;
             obj.w = SCREEN_WIDTH;
@@ -395,8 +423,8 @@ pub(crate) fn update_tv_channels(
             obj.visible = i == selected;
         }
         // Channel number.
-        let icon_name = format!("tv_row_icon_{row}");
-        if let Ok(obj) = sdi.get_mut(&icon_name) {
+        let name = sdi_key!(buf, "tv_row_icon_{row}");
+        if let Ok(obj) = sdi.get_mut(name) {
             obj.x = 4;
             obj.y = y;
             obj.text = Some(num_str);
@@ -406,8 +434,8 @@ pub(crate) fn update_tv_channels(
             obj.visible = true;
         }
         // Call sign + name combined.
-        let name_name = format!("tv_row_name_{row}");
-        if let Ok(obj) = sdi.get_mut(&name_name) {
+        let name = sdi_key!(buf, "tv_row_name_{row}");
+        if let Ok(obj) = sdi.get_mut(name) {
             obj.x = 28;
             obj.y = y;
             obj.text = Some(format!("{:<6} {}", ch.call_sign, display_name));
@@ -417,8 +445,8 @@ pub(crate) fn update_tv_channels(
             obj.visible = true;
         }
         // Status.
-        let extra_name = format!("tv_row_extra_{row}");
-        if let Ok(obj) = sdi.get_mut(&extra_name) {
+        let name = sdi_key!(buf, "tv_row_extra_{row}");
+        if let Ok(obj) = sdi.get_mut(name) {
             if let Some((text, color, x)) = &status {
                 obj.x = *x;
                 obj.y = y;
@@ -432,8 +460,8 @@ pub(crate) fn update_tv_channels(
             }
         }
         // Genre.
-        let extra2_name = format!("tv_row_extra2_{row}");
-        if let Ok(obj) = sdi.get_mut(&extra2_name) {
+        let name = sdi_key!(buf, "tv_row_extra2_{row}");
+        if let Ok(obj) = sdi.get_mut(name) {
             obj.x = 430;
             obj.y = y;
             obj.text = Some(genre_display);
@@ -443,8 +471,8 @@ pub(crate) fn update_tv_channels(
             obj.visible = true;
         }
     }
-    hide_unused_rows(sdi, "tv_", visible);
-    update_scrollbar(sdi, "tv_", selected, channels.len(), at);
+    hide_unused_rows(sdi, &mut buf, "tv_", visible);
+    update_scrollbar(sdi, &mut buf, "tv_", selected, channels.len(), at);
 }
 
 // ===========================================================================
@@ -463,8 +491,9 @@ pub(crate) fn update_photo_browser(
     scroll: usize,
     at: &ActiveTheme,
 ) {
+    let mut buf = String::with_capacity(32);
     let accent = at.app.selected_text;
-    update_list_bg(sdi, "photo_", "PHOTO VIEWER", accent, at, Some(path));
+    update_list_bg(sdi, &mut buf, "photo_", "PHOTO VIEWER", accent, at, Some(path));
 
     let end = (scroll + LIST_ROWS).min(entries.len());
     let visible = end - scroll;
@@ -494,6 +523,7 @@ pub(crate) fn update_photo_browser(
         };
         update_list_row(
             sdi,
+            &mut buf,
             "photo_",
             row,
             i == selected,
@@ -509,8 +539,8 @@ pub(crate) fn update_photo_browser(
             at,
         );
     }
-    hide_unused_rows(sdi, "photo_", visible);
-    update_scrollbar(sdi, "photo_", selected, entries.len(), at);
+    hide_unused_rows(sdi, &mut buf, "photo_", visible);
+    update_scrollbar(sdi, &mut buf, "photo_", selected, entries.len(), at);
 }
 
 // ===========================================================================
@@ -591,8 +621,9 @@ pub(crate) fn update_music_browser(
     scroll: usize,
     at: &ActiveTheme,
 ) {
+    let mut buf = String::with_capacity(32);
     let accent = at.app.selected_text;
-    update_list_bg(sdi, "music_", "MUSIC PLAYER", accent, at, Some(path));
+    update_list_bg(sdi, &mut buf, "music_", "MUSIC PLAYER", accent, at, Some(path));
 
     let end = (scroll + LIST_ROWS).min(entries.len());
     let visible = end - scroll;
@@ -622,6 +653,7 @@ pub(crate) fn update_music_browser(
         };
         update_list_row(
             sdi,
+            &mut buf,
             "music_",
             row,
             i == selected,
@@ -637,8 +669,8 @@ pub(crate) fn update_music_browser(
             at,
         );
     }
-    hide_unused_rows(sdi, "music_", visible);
-    update_scrollbar(sdi, "music_", selected, entries.len(), at);
+    hide_unused_rows(sdi, &mut buf, "music_", visible);
+    update_scrollbar(sdi, &mut buf, "music_", selected, entries.len(), at);
 }
 
 // ===========================================================================
@@ -663,8 +695,9 @@ pub(crate) fn update_browser(
     status_msg: &str,
     at: &ActiveTheme,
 ) {
+    let mut buf = String::with_capacity(32);
     let accent = at.app.selected_text;
-    update_list_bg(sdi, "browser_", "BROWSER", accent, at, None);
+    update_list_bg(sdi, &mut buf, "browser_", "BROWSER", accent, at, None);
 
     // URL bar.
     if let Ok(obj) = sdi.get_mut("browser_url") {
@@ -701,8 +734,8 @@ pub(crate) fn update_browser(
 
     // Use the list row name objects for content lines.
     for row in 0..visible_rows.min(40) {
-        let name = format!("browser_row_name_{row}");
-        if let Ok(obj) = sdi.get_mut(&name) {
+        let name = sdi_key!(buf, "browser_row_name_{row}");
+        if let Ok(obj) = sdi.get_mut(name) {
             if scroll + row < end {
                 let y = text_start_y + row as i32 * 9;
                 obj.x = 4;
@@ -768,6 +801,7 @@ pub(crate) fn update_file_manager(
     active_panel: usize,
     at: &ActiveTheme,
 ) {
+    let mut buf = String::with_capacity(32);
     let accent = at.app.selected_text;
     let half_w = SCREEN_WIDTH / 2;
 
@@ -826,13 +860,21 @@ pub(crate) fn update_file_manager(
     }
 
     // Left panel entries.
-    update_fm_panel(sdi, "fm_l_", entries_l, selected_l, scroll_l, 0, half_w - 1, active_panel == 0, at);
+    update_fm_panel(
+        sdi, &mut buf, "fm_l_", entries_l, selected_l, scroll_l,
+        0, half_w - 1, active_panel == 0, at,
+    );
     // Right panel entries.
-    update_fm_panel(sdi, "fm_r_", entries_r, selected_r, scroll_r, half_w as i32 + 1, half_w, active_panel == 1, at);
+    update_fm_panel(
+        sdi, &mut buf, "fm_r_", entries_r, selected_r, scroll_r,
+        half_w as i32 + 1, half_w, active_panel == 1, at,
+    );
 }
 
+#[allow(clippy::too_many_arguments)]
 fn update_fm_panel(
     sdi: &mut SdiRegistry,
+    buf: &mut String,
     prefix: &str,
     entries: &[FileEntry],
     selected: usize,
@@ -865,8 +907,8 @@ fn update_fm_panel(
         };
 
         // Row highlight.
-        let bg_name = format!("{prefix}row_bg_{row}");
-        if let Ok(obj) = sdi.get_mut(&bg_name) {
+        let name = sdi_key!(buf, "{prefix}row_bg_{row}");
+        if let Ok(obj) = sdi.get_mut(name) {
             obj.x = panel_x;
             obj.y = y - 1;
             obj.w = panel_w;
@@ -875,8 +917,8 @@ fn update_fm_panel(
             obj.z = 102;
             obj.visible = i == selected && is_active;
         }
-        let icon_name = format!("{prefix}row_icon_{row}");
-        if let Ok(obj) = sdi.get_mut(&icon_name) {
+        let name = sdi_key!(buf, "{prefix}row_icon_{row}");
+        if let Ok(obj) = sdi.get_mut(name) {
             obj.x = panel_x + 2;
             obj.y = y;
             obj.text = Some(icon.to_string());
@@ -885,8 +927,8 @@ fn update_fm_panel(
             obj.z = 103;
             obj.visible = true;
         }
-        let name_name = format!("{prefix}row_name_{row}");
-        if let Ok(obj) = sdi.get_mut(&name_name) {
+        let name = sdi_key!(buf, "{prefix}row_name_{row}");
+        if let Ok(obj) = sdi.get_mut(name) {
             obj.x = panel_x + 28;
             obj.y = y;
             obj.text = Some(display);
@@ -896,20 +938,20 @@ fn update_fm_panel(
             obj.visible = true;
         }
         // Extra/extra2 not used for file manager panels.
-        let extra_name = format!("{prefix}row_extra_{row}");
-        if let Ok(obj) = sdi.get_mut(&extra_name) {
+        let name = sdi_key!(buf, "{prefix}row_extra_{row}");
+        if let Ok(obj) = sdi.get_mut(name) {
             obj.visible = false;
         }
-        let extra2_name = format!("{prefix}row_extra2_{row}");
-        if let Ok(obj) = sdi.get_mut(&extra2_name) {
+        let name = sdi_key!(buf, "{prefix}row_extra2_{row}");
+        if let Ok(obj) = sdi.get_mut(name) {
             obj.visible = false;
         }
     }
-    hide_unused_rows(sdi, prefix, visible);
+    hide_unused_rows(sdi, buf, prefix, visible);
 
     // Scrollbar.
-    let scroll_name = format!("{prefix}scroll");
-    if let Ok(obj) = sdi.get_mut(&scroll_name) {
+    let name = sdi_key!(buf, "{prefix}scroll");
+    if let Ok(obj) = sdi.get_mut(name) {
         if entries.len() > LIST_ROWS {
             let ratio = selected as f32 / (entries.len() - 1).max(1) as f32;
             let track_h = CONTENT_H as i32 - 16;
