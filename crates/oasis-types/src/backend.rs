@@ -1732,11 +1732,7 @@ impl<T: SdiBackend + ?Sized> SdiClipTransform for T {
 #[allow(clippy::too_many_arguments)]
 pub trait SdiVector: SdiShapes {
     /// Draw a filled convex polygon (triangle-fan decomposition).
-    fn ext_fill_polygon(
-        &mut self,
-        points: &[(i32, i32)],
-        color: Color,
-    ) -> Result<()> {
+    fn ext_fill_polygon(&mut self, points: &[(i32, i32)], color: Color) -> Result<()> {
         if points.len() < 3 {
             return Ok(());
         }
@@ -1744,9 +1740,7 @@ pub trait SdiVector: SdiShapes {
         for i in 1..points.len() - 1 {
             let v1 = points[i];
             let v2 = points[i + 1];
-            self.ext_fill_triangle(
-                v0.0, v0.1, v1.0, v1.1, v2.0, v2.1, color,
-            )?;
+            self.ext_fill_triangle(v0.0, v0.1, v1.0, v1.1, v2.0, v2.1, color)?;
         }
         Ok(())
     }
