@@ -1,21 +1,35 @@
 # syntax=docker/dockerfile:1.4
 # Rust CI image for oasis_os
-# Stable + nightly toolchains with SDL2 dev libs for desktop backend
+# Stable + nightly toolchains with SDL3 (built from source via sdl3 crate)
 
 FROM rust:1.93-slim
 
-# System dependencies (SDL2 dev libs for oasis-backend-sdl)
+# System dependencies (cmake for sdl3 build-from-source, xvfb for headless tests)
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,target=/var/lib/apt,sharing=locked \
     apt-get update && apt-get install -y --no-install-recommends \
     pkg-config \
     git \
     g++ \
-    libsdl2-dev \
-    libsdl2-mixer-dev \
+    make \
+    cmake \
     xvfb \
     xauth \
     libgl1-mesa-dri \
+    libxtst-dev \
+    libx11-dev \
+    libxext-dev \
+    libxrandr-dev \
+    libxcursor-dev \
+    libxi-dev \
+    libxss-dev \
+    libxkbcommon-dev \
+    libwayland-dev \
+    libdecor-0-dev \
+    libasound2-dev \
+    libpulse-dev \
+    libdbus-1-dev \
+    libudev-dev \
     valgrind \
     && rm -rf /var/lib/apt/lists/*
 

@@ -11,7 +11,7 @@ pixel buffer. The primary deployment targets are:
 - **PSP homebrew** -- single-user, no network isolation
 - **UE5 game integration** -- sandboxed inside a game process via FFI
 - **WASM browser** -- sandboxed by the browser runtime
-- **Desktop SDL2** -- developer/demo use
+- **Desktop SDL3** -- developer/demo use
 
 The framework does NOT provide OS-level process isolation or privilege
 separation. Security focuses on:

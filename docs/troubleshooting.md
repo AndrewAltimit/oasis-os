@@ -4,41 +4,39 @@ Common issues and solutions for building, testing, and running OASIS_OS.
 
 ---
 
-## SDL2 Installation
+## SDL3 Build Dependencies
 
-The desktop backend (`oasis-backend-sdl`) requires SDL2 development libraries.
+The desktop backend (`oasis-backend-sdl`) compiles SDL3 from bundled source via cmake. You need cmake, a C++ compiler, and platform development headers.
 
 **Debian / Ubuntu:**
 ```bash
-sudo apt install libsdl2-dev libsdl2-mixer-dev
+sudo apt install cmake g++ make libxtst-dev libx11-dev libxext-dev \
+  libxrandr-dev libxcursor-dev libxi-dev libxss-dev libxkbcommon-dev \
+  libwayland-dev libdecor-0-dev libasound2-dev libpulse-dev \
+  libdbus-1-dev libudev-dev
 ```
 
 **Fedora:**
 ```bash
-sudo dnf install SDL2-devel SDL2_mixer-devel
+sudo dnf install cmake gcc-c++ make libXtst-devel libX11-devel \
+  libXext-devel libXrandr-devel libXcursor-devel libXi-devel \
+  libXScrnSaver-devel libxkbcommon-devel wayland-devel \
+  libdecor-devel alsa-lib-devel pulseaudio-libs-devel \
+  dbus-devel systemd-devel
 ```
 
 **macOS (Homebrew):**
 ```bash
-brew install sdl2 sdl2_mixer
+brew install cmake
 ```
 
 **Arch Linux:**
 ```bash
-sudo pacman -S sdl2 sdl2_mixer
+sudo pacman -S cmake base-devel libxtst libxrandr libxcursor libxi \
+  libxss libxkbcommon wayland libdecor alsa-lib libpulse
 ```
 
-If `cargo build` fails with `could not find SDL2`, verify the dev packages are installed and that `pkg-config` can find them:
-
-```bash
-pkg-config --libs sdl2
-```
-
-On macOS, you may also need to set `LIBRARY_PATH`:
-
-```bash
-export LIBRARY_PATH="$(brew --prefix)/lib"
-```
+If cmake fails with `Couldn't find dependency package for XTEST` (or similar), install the missing X11 dev package (e.g. `libxtst-dev` on Debian/Ubuntu).
 
 ---
 
@@ -132,13 +130,13 @@ docker compose --profile ci build rust-ci
 
 ## Common Build Failures
 
-### Missing SDL2
+### SDL3 CMake Build Failure
 
 ```
-error: could not find system library 'sdl2' required by the 'sdl2-sys' crate
+CMake Error: Couldn't find dependency package for XTEST
 ```
 
-Install SDL2 dev libraries for your platform (see above).
+Install the missing X11/system development headers for your platform (see "SDL3 Build Dependencies" above). Common missing packages on Debian/Ubuntu: `libxtst-dev`, `libasound2-dev`, `libpulse-dev`.
 
 ### Clippy Warnings as Errors
 

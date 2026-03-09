@@ -5,31 +5,41 @@ This guide covers setting up a development environment, building, testing, and r
 ## System Requirements
 
 - **Rust:** 1.91.0 or later (uses `str::floor_char_boundary`)
-- **SDL2 development libraries** (desktop builds only)
+- **cmake + C++ compiler** (desktop builds only -- SDL3 is compiled from bundled source)
+- **X11 and audio development headers** (Linux desktop builds)
 - **Docker + Docker Compose** (optional, for CI-matching builds)
 - **cargo-psp + Rust nightly** (PSP cross-compilation only)
 
-### Installing SDL2 Dev Libraries
+### Installing Build Dependencies (Desktop)
+
+SDL3 is compiled from source automatically via the `build-from-source` cargo feature. You need cmake, a C++ compiler, and platform headers.
 
 **Debian/Ubuntu:**
 ```bash
-sudo apt install libsdl2-dev libsdl2-mixer-dev
+sudo apt install cmake g++ make libxtst-dev libx11-dev libxext-dev \
+  libxrandr-dev libxcursor-dev libxi-dev libxss-dev libxkbcommon-dev \
+  libwayland-dev libdecor-0-dev libasound2-dev libpulse-dev \
+  libdbus-1-dev libudev-dev
 ```
 
 **Fedora:**
 ```bash
-sudo dnf install SDL2-devel SDL2_mixer-devel
+sudo dnf install cmake gcc-c++ make libXtst-devel libX11-devel \
+  libXext-devel libXrandr-devel libXcursor-devel libXi-devel \
+  libXScrnSaver-devel libxkbcommon-devel wayland-devel \
+  libdecor-devel alsa-lib-devel pulseaudio-libs-devel \
+  dbus-devel systemd-devel
 ```
 
 **macOS (Homebrew):**
 ```bash
-brew install sdl2 sdl2_mixer
+brew install cmake
 ```
 
 **Arch Linux:**
 ```bash
-sudo pacman -S sdl2 sdl2_mixer
-```
+sudo pacman -S cmake base-devel libxtst libxrandr libxcursor libxi \
+  libxss libxkbcommon wayland libdecor alsa-lib libpulse
 
 ## Clone and Build
 
@@ -44,7 +54,7 @@ cargo build --release -p oasis-app
 cargo run -p oasis-app
 ```
 
-The desktop app opens an SDL2 window at 480x272 native resolution with the default "classic" skin.
+The desktop app opens an SDL3 window at 480x272 native resolution with the default "classic" skin.
 
 ### Choosing a Skin
 
@@ -125,7 +135,7 @@ Screenshots are saved to `screenshots/<skin_name>/`.
 
 ## Docker-Based Development
 
-If you prefer not to install SDL2 locally, the Docker CI container has everything pre-installed:
+If you prefer not to install build dependencies locally, the Docker CI container has everything pre-installed:
 
 ```bash
 # Build (matches CI exactly)
@@ -138,7 +148,7 @@ docker compose --profile ci run --rm rust-ci cargo test --workspace
 docker compose --profile ci run --rm rust-ci cargo clippy --workspace -- -D warnings
 ```
 
-The CI container is `rust:1.93-slim` with SDL2 dev libs, Rust nightly, and `cargo-deny`.
+The CI container is `rust:1.93-slim` with cmake, X11/audio dev headers, Rust nightly, and `cargo-deny`. SDL3 is compiled from source during the first build.
 
 ## PSP Cross-Compilation
 

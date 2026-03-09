@@ -1,12 +1,12 @@
-//! SDL2 audio backend for OASIS_OS.
+//! SDL3 audio backend for OASIS_OS.
 //!
-//! Implements `AudioBackend` using SDL2's audio queue and the `rmp3` MP3
+//! Implements `AudioBackend` using SDL3's audio stream API and the `rmp3` MP3
 //! decoder.  Incoming MP3 data (from `feed_data` or `load_track`) is decoded
 //! to PCM i16 samples via `rmp3::RawDecoder`, volume-scaled, and pushed to an
-//! `sdl2::audio::AudioQueue<i16>` for speaker output.
+//! `sdl3::audio::AudioStream` bound to the default playback device.
 //!
-//! The SDL2 audio device is opened lazily on the first decoded frame so that
-//! the sample rate and channel count come from the actual stream.
+//! The SDL3 audio device and stream are opened lazily on the first decoded
+//! frame so that the sample rate and channel count come from the actual stream.
 //!
 //! Note: Real audio output requires hardware. In CI (Docker without audio
 //! devices), `init()` may fail gracefully. The `NullAudioBackend` in
@@ -17,19 +17,19 @@ use std::collections::HashMap;
 use oasis_core::backend::{AudioBackend, AudioTrackId};
 use oasis_core::error::{OasisError, Result};
 
-/// Maximum PCM bytes to keep in the SDL2 audio queue before we stop accepting
+/// Maximum PCM bytes to keep in the SDL3 audio stream before we stop accepting
 /// more samples.  At 44 100 Hz stereo i16 this is roughly 9 seconds — enough
 /// runway to absorb decode jitter and video frame blocking without audio gaps.
 const MAX_QUEUE_BYTES: u32 = 1_600_000;
 
-/// SDL2-based audio backend with real MP3 decoding.
+/// SDL3-based audio backend with real MP3 decoding.
 pub struct SdlAudioBackend {
     /// Whether the audio subsystem has been initialized.
     initialized: bool,
-    /// SDL2 audio queue device (opened on first decoded frame).
-    device: Option<sdl2::audio::AudioQueue<i16>>,
-    /// SDL2 audio subsystem (kept alive for device lifetime).
-    audio_subsystem: Option<sdl2::AudioSubsystem>,
+    /// SDL3 audio stream owner (owns both device and stream).
+    stream_owner: Option<sdl3::audio::AudioStreamOwner>,
+    /// SDL3 audio subsystem (kept alive for device lifetime).
+    audio_subsystem: Option<sdl3::AudioSubsystem>,
     /// MP3 decoder state.
     decoder: rmp3::RawDecoder,
     /// Pending MP3 bytes not yet decoded (streaming track).
@@ -59,11 +59,11 @@ pub struct SdlAudioBackend {
 }
 
 impl SdlAudioBackend {
-    /// Create a new SDL2 audio backend (not yet initialized).
+    /// Create a new SDL3 audio backend (not yet initialized).
     pub fn new() -> Self {
         Self {
             initialized: false,
-            device: None,
+            stream_owner: None,
             audio_subsystem: None,
             decoder: rmp3::RawDecoder::new(),
             mp3_buffer: Vec::new(),
@@ -81,40 +81,66 @@ impl SdlAudioBackend {
         }
     }
 
-    /// Open an SDL2 AudioQueue with the given sample rate and channels.
+    /// Open an SDL3 audio device and stream with the given sample rate and
+    /// channels.
     fn open_device(&mut self, sample_rate: i32, channels: u8) -> Result<()> {
         let audio = self
             .audio_subsystem
             .as_ref()
             .ok_or_else(|| OasisError::Backend("audio subsystem not available".into()))?;
 
-        let spec = sdl2::audio::AudioSpecDesired {
-            freq: Some(sample_rate),
-            channels: Some(channels),
-            samples: Some(8192),
-        };
+        let spec = sdl3::audio::AudioSpec::new(
+            Some(sample_rate),
+            Some(channels as i32),
+            Some(sdl3::audio::AudioFormat::S16LE),
+        );
         let device = audio
-            .open_queue::<i16, _>(None, &spec)
-            .map_err(|e| OasisError::Backend(e.into()))?;
-        self.sample_rate = device.spec().freq;
-        self.channels = device.spec().channels as usize;
+            .open_playback_device(&spec)
+            .map_err(|e| OasisError::Backend(e.to_string().into()))?;
+        let stream = device
+            .open_device_stream(Some(&spec))
+            .map_err(|e| OasisError::Backend(e.to_string().into()))?;
+        stream
+            .resume()
+            .map_err(|e| OasisError::Backend(e.to_string().into()))?;
+        self.sample_rate = sample_rate;
+        self.channels = channels as usize;
         log::info!(
-            "SDL2 audio device opened: {}Hz, {} channels",
+            "SDL3 audio device opened: {}Hz, {} channels",
             self.sample_rate,
             self.channels,
         );
-        self.device = Some(device);
+        self.stream_owner = Some(stream);
         Ok(())
     }
 
+    /// Queue PCM i16 samples to the SDL3 audio stream.
+    fn queue_pcm(&mut self, pcm: &[i16]) -> Result<()> {
+        if let Some(ref stream) = self.stream_owner {
+            stream
+                .put_data_i16(pcm)
+                .map_err(|e| OasisError::Backend(e.to_string().into()))?;
+            self.samples_queued += pcm.len() as u64;
+        }
+        Ok(())
+    }
+
+    /// Get the number of bytes currently queued in the audio stream.
+    fn queued_bytes(&self) -> u32 {
+        self.stream_owner
+            .as_ref()
+            .and_then(|s| s.queued_bytes().ok())
+            .unwrap_or(0) as u32
+    }
+
     /// Decode available MP3 frames from `mp3_buffer` and queue PCM to the
-    /// SDL2 audio device.
+    /// SDL3 audio stream.
     ///
-    /// Throttle is applied **before** decoding: if the SDL2 queue already has
+    /// Throttle is applied **before** decoding: if the SDL3 stream already has
     /// enough audio we leave the MP3 bytes in the buffer for next time,
     /// avoiding the old bug where decoded PCM was silently dropped.
     fn decode_buffered(&mut self) -> Result<()> {
-        // If the SDL2 queue already has plenty of audio, skip decoding and
+        // If the SDL3 stream already has plenty of audio, skip decoding and
         // keep the MP3 bytes for later.  This bounds latency without losing
         // any decoded audio.
         //
@@ -123,10 +149,7 @@ impl SdlAudioBackend {
         // the queue is momentarily full — otherwise those bytes would be
         // stranded when the source reaches EOF and feed_data is never called
         // again.
-        if let Some(ref device) = self.device
-            && device.size() > MAX_QUEUE_BYTES
-            && self.mp3_buffer.len() >= 16 * 1024
-        {
+        if self.queued_bytes() > MAX_QUEUE_BYTES && self.mp3_buffer.len() >= 16 * 1024 {
             return Ok(());
         }
 
@@ -159,7 +182,7 @@ impl SdlAudioBackend {
         self.mp3_buffer.drain(..offset);
 
         // Open device on first decoded frame (need sample rate).
-        if self.device.is_none() && detected_rate > 0 && self.audio_subsystem.is_some() {
+        if self.stream_owner.is_none() && detected_rate > 0 && self.audio_subsystem.is_some() {
             self.open_device(detected_rate as i32, detected_channels as u8)?;
         }
 
@@ -176,12 +199,10 @@ impl SdlAudioBackend {
             }
 
             // Always queue decoded PCM — never drop it.
-            if let Some(ref device) = self.device {
-                device
-                    .queue_audio(&self.pcm_staging)
-                    .map_err(|e| OasisError::Backend(e.into()))?;
-                self.samples_queued += self.pcm_staging.len() as u64;
-            }
+            // Clone the staging buffer since queue_pcm borrows self mutably.
+            let staging = std::mem::take(&mut self.pcm_staging);
+            self.queue_pcm(&staging)?;
+            self.pcm_staging = staging;
         }
 
         Ok(())
@@ -201,7 +222,7 @@ impl SdlAudioBackend {
         let wav = oasis_audio::wav::decode_wav(wav_data)
             .ok_or_else(|| OasisError::Backend("invalid WAV data".into()))?;
 
-        if self.device.is_none() && self.audio_subsystem.is_some() {
+        if self.stream_owner.is_none() && self.audio_subsystem.is_some() {
             self.open_device(wav.sample_rate as i32, wav.channels as u8)?;
         }
 
@@ -214,13 +235,7 @@ impl SdlAudioBackend {
             *s = ((*s as i32 * vol) / 100) as i16;
         }
 
-        if let Some(ref device) = self.device {
-            device
-                .queue_audio(&pending_pcm)
-                .map_err(|e| OasisError::Backend(e.into()))?;
-            self.samples_queued += pending_pcm.len() as u64;
-        }
-
+        self.queue_pcm(&pending_pcm)?;
         Ok(())
     }
 
@@ -251,7 +266,7 @@ impl SdlAudioBackend {
         }
 
         // Open device if needed.
-        if self.device.is_none() && detected_rate > 0 && self.audio_subsystem.is_some() {
+        if self.stream_owner.is_none() && detected_rate > 0 && self.audio_subsystem.is_some() {
             self.open_device(detected_rate as i32, detected_channels as u8)?;
         }
 
@@ -266,12 +281,7 @@ impl SdlAudioBackend {
                 *s = ((*s as i32 * vol) / 100) as i16;
             }
 
-            if let Some(ref device) = self.device {
-                device
-                    .queue_audio(&pending_pcm)
-                    .map_err(|e| OasisError::Backend(e.into()))?;
-                self.samples_queued += pending_pcm.len() as u64;
-            }
+            self.queue_pcm(&pending_pcm)?;
         }
 
         Ok(())
@@ -286,21 +296,21 @@ impl Default for SdlAudioBackend {
 
 impl AudioBackend for SdlAudioBackend {
     fn init(&mut self) -> Result<()> {
-        // Try to initialize SDL2 audio subsystem.
+        // Try to initialize SDL3 audio subsystem.
         // In CI/headless environments this may fail — we log a warning
         // but still mark as initialized so non-audio functionality works.
-        match sdl2::init() {
+        match sdl3::init() {
             Ok(sdl) => match sdl.audio() {
                 Ok(audio) => {
                     self.audio_subsystem = Some(audio);
-                    log::info!("SDL2 audio subsystem initialized");
+                    log::info!("SDL3 audio subsystem initialized");
                 },
                 Err(e) => {
-                    log::warn!("SDL2 audio unavailable: {e}");
+                    log::warn!("SDL3 audio unavailable: {e}");
                 },
             },
             Err(e) => {
-                log::warn!("SDL2 init failed (headless?): {e}");
+                log::warn!("SDL3 init failed (headless?): {e}");
             },
         }
         self.initialized = true;
@@ -339,9 +349,9 @@ impl AudioBackend for SdlAudioBackend {
             self.decode_and_queue_all(&data)?;
         }
 
-        // Resume the SDL2 audio device so queued samples play.
-        if let Some(ref device) = self.device {
-            device.resume();
+        // Resume the SDL3 audio device so queued samples play.
+        if let Some(ref stream) = self.stream_owner {
+            let _ = stream.resume();
         }
 
         Ok(())
@@ -351,8 +361,8 @@ impl AudioBackend for SdlAudioBackend {
         if !self.playing {
             return Err(OasisError::Backend("not playing".into()));
         }
-        if let Some(ref device) = self.device {
-            device.pause();
+        if let Some(ref stream) = self.stream_owner {
+            let _ = stream.pause();
         }
         self.playing = false;
         self.paused = true;
@@ -363,8 +373,8 @@ impl AudioBackend for SdlAudioBackend {
         if !self.paused {
             return Err(OasisError::Backend("not paused".into()));
         }
-        if let Some(ref device) = self.device {
-            device.resume();
+        if let Some(ref stream) = self.stream_owner {
+            let _ = stream.resume();
         }
         self.playing = true;
         self.paused = false;
@@ -372,9 +382,11 @@ impl AudioBackend for SdlAudioBackend {
     }
 
     fn stop(&mut self) -> Result<()> {
-        if let Some(ref device) = self.device {
-            device.pause();
-            device.clear();
+        if let Some(ref stream) = self.stream_owner {
+            let _ = stream.pause();
+        }
+        if let Some(ref stream) = self.stream_owner {
+            let _ = stream.clear();
         }
         self.mp3_buffer.clear();
         self.playing = false;
@@ -398,15 +410,11 @@ impl AudioBackend for SdlAudioBackend {
 
     fn position_ms(&self) -> u64 {
         if self.sample_rate > 0 && self.channels > 0 {
-            // Subtract unplayed samples still sitting in the SDL audio queue
+            // Subtract unplayed samples still sitting in the SDL audio stream
             // so the position reflects what the user actually hears, not what
-            // has been decoded and queued.  `device.size()` returns queued
+            // has been decoded and queued.  `stream.available()` returns queued
             // bytes; each sample is i16 = 2 bytes.
-            let unplayed = self
-                .device
-                .as_ref()
-                .map(|d| d.size() as u64 / 2)
-                .unwrap_or(0);
+            let unplayed = self.queued_bytes() as u64 / 2;
             let played = self.samples_queued.saturating_sub(unplayed);
             (played / self.channels as u64) * 1000 / self.sample_rate as u64
         } else {
@@ -444,7 +452,7 @@ impl AudioBackend for SdlAudioBackend {
 
     fn shutdown(&mut self) -> Result<()> {
         self.stop()?;
-        self.device = None;
+        self.stream_owner = None;
         self.audio_subsystem = None;
         self.tracks.clear();
         self.stream_track = None;
@@ -452,7 +460,7 @@ impl AudioBackend for SdlAudioBackend {
         self.pcm_staging.clear();
         self.decoder = rmp3::RawDecoder::new();
         self.initialized = false;
-        log::info!("SDL2 audio backend shut down");
+        log::info!("SDL3 audio backend shut down");
         Ok(())
     }
 
@@ -507,7 +515,7 @@ impl AudioBackend for SdlAudioBackend {
         }
 
         // Open device lazily with the stream's format, or reopen if format changed.
-        let format_changed = self.device.is_some()
+        let format_changed = self.stream_owner.is_some()
             && (self.sample_rate != sample_rate as i32 || self.channels != channels as usize);
         if format_changed {
             log::info!(
@@ -517,15 +525,15 @@ impl AudioBackend for SdlAudioBackend {
                 sample_rate,
                 channels,
             );
-            self.device = None;
+            self.stream_owner = None;
         }
-        if self.device.is_none() && self.audio_subsystem.is_some() {
+        if self.stream_owner.is_none() && self.audio_subsystem.is_some() {
             self.open_device(sample_rate as i32, channels as u8)?;
             // Resume immediately — play() was called before the device existed.
             if self.playing
-                && let Some(ref device) = self.device
+                && let Some(ref stream) = self.stream_owner
             {
-                device.resume();
+                let _ = stream.resume();
             }
         }
 
@@ -543,19 +551,16 @@ impl AudioBackend for SdlAudioBackend {
         }
 
         // Apply backpressure: skip if queue is already full.
-        if let Some(ref device) = self.device {
-            if device.size() < MAX_QUEUE_BYTES {
-                device
-                    .queue_audio(&self.pcm_staging)
-                    .map_err(|e| OasisError::Backend(e.into()))?;
-                self.samples_queued += self.pcm_staging.len() as u64;
-            } else {
-                log::trace!(
-                    "SDL audio: queue full ({} bytes), dropping {} samples",
-                    device.size(),
-                    self.pcm_staging.len(),
-                );
-            }
+        if self.queued_bytes() < MAX_QUEUE_BYTES {
+            let staging = std::mem::take(&mut self.pcm_staging);
+            self.queue_pcm(&staging)?;
+            self.pcm_staging = staging;
+        } else {
+            log::trace!(
+                "SDL audio: queue full ({} bytes), dropping {} samples",
+                self.queued_bytes(),
+                self.pcm_staging.len(),
+            );
         }
 
         Ok(())

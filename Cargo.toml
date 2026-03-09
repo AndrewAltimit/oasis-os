@@ -60,7 +60,7 @@ thiserror = "2.0"
 anyhow = "1.0"
 
 # Graphics (desktop / Pi)
-sdl2 = "0.37"
+sdl3 = { version = "0.17", features = ["build-from-source"] }
 
 # Image encoding/decoding
 png = "0.17"

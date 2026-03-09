@@ -54,7 +54,7 @@ Primary deployment targets are: in-game computers in UE5 projects (rendered as i
 - Implement a skin system that separates visual/behavioral personality from core OS logic
 - Integrate as a native library in Unreal Engine 5 for interactive in-game computer props
 - Port the original C shell OS as the Classic skin, preserving its icon-grid dashboard and theming
-- Achieve cross-platform execution on PSP hardware (via rust-psp), PPSSPP emulator, Raspberry Pi (via SDL2/framebuffer), and UE5 (via render target)
+- Achieve cross-platform execution on PSP hardware (via rust-psp), PPSSPP emulator, Raspberry Pi (via SDL3/framebuffer), and UE5 (via render target)
 - Provide a virtual file system abstraction backed by real files, game assets, or procedural content depending on platform
 - Add remote terminal access for headless device management over TCP/IP, doubling as the primary interface for controlling remote AI agents from portable devices
 - Implement a scriptable command layer for automation and gameplay scripting
@@ -82,7 +82,7 @@ OASIS_OS follows a layered architecture with strict separation between the platf
 | Layer | Responsibility | Scope |
 |-------|---------------|-------|
 | Core Framework | Scene graph (SDI), command interpreter, virtual file system, config/theming engine, plugin interface, input event pipeline | All platforms |
-| Backends | Rendering (GU, SDL2, framebuffer, UE5 render target), input (PSP pad, keyboard/mouse, gamepad, UE5 interaction), networking (pspnet, std::net), file I/O (real FS, game assets) | Platform-specific impl |
+| Backends | Rendering (GU, SDL3, framebuffer, UE5 render target), input (PSP pad, keyboard/mouse, gamepad, UE5 interaction), networking (pspnet, std::net), file I/O (real FS, game assets) | Platform-specific impl |
 | Skins | Layout definitions, theme assets, feature gating, visual style, "personality" (which commands exist, what the file tree looks like, what apps are discoverable) | Content layer |
 | Host Application | UE5 game, PSP firmware, Linux init system, briefcase tamper services, or desktop window manager -- owns the OS instance, ticks it, provides render target and input | Integration layer |
 
@@ -110,7 +110,7 @@ oasis-os/
 |   +-- oasis-js/                    # JavaScript engine: QuickJS-NG runtime, console API, DOM manipulation
 |   +-- oasis-video/                 # Software MP4/H.264+AAC decode (symphonia + openh264, streaming VideoSource API)
 |   +-- oasis-core/                  # Coordination: 16 apps, dashboard, agent, plugin, script
-|   +-- oasis-backend-sdl/           # SDL2 rendering and input (desktop dev + Raspberry Pi)
+|   +-- oasis-backend-sdl/           # SDL3 rendering and input (desktop dev + Raspberry Pi)
 |   +-- oasis-backend-ue5/           # UE5 render target, software RGBA framebuffer, FFI input queue
 |   +-- oasis-backend-psp/           # [excluded from workspace] sceGu rendering, PSP controller, UMD browsing
 |   +-- oasis-plugin-psp/           # [excluded from workspace] kernel-mode PRX: in-game overlay + background music
@@ -227,7 +227,7 @@ thiserror = "2.0"
 anyhow = "1.0"
 
 # Graphics (desktop / Pi)
-sdl2 = "0.37"
+sdl3 = { version = "0.17", features = ["build-from-source"] }
 
 # Image encoding (screenshots)
 png = "0.17"
@@ -297,10 +297,10 @@ oasis-core = { path = "../oasis-core" }
 
 | Target | Cargo Command | Render Backend | Input Backend | VFS Backend | Status |
 |--------|--------------|----------------|---------------|-------------|--------|
-| Desktop (dev) | `cargo build --release -p oasis-app` | SDL2 | Keyboard/mouse | Real Linux FS | Implemented |
+| Desktop (dev) | `cargo build --release -p oasis-app` | SDL3 | Keyboard/mouse | Real Linux FS | Implemented |
 | PSP / PPSSPP | `cd crates/oasis-backend-psp && RUST_PSP_BUILD_STD=1 cargo +nightly psp --release` | sceGu hardware (Sprites) | PSP controller | ms0:/ real FS | Implemented |
 | UE5 (in-game) | `cargo build --release -p oasis-ffi` (cdylib) | UE5 render target | UE5 interaction | Game asset VFS | Implemented (FFI ready) |
-| Raspberry Pi (briefcase) | `cargo build --release -p oasis-app --target aarch64-unknown-linux-gnu` | SDL2 | Keyboard/gamepad | Real Linux FS | Planned (SDL2 backend works, cross-compile not yet tested) |
+| Raspberry Pi (briefcase) | `cargo build --release -p oasis-app --target aarch64-unknown-linux-gnu` | SDL3 | Keyboard/gamepad | Real Linux FS | Planned (SDL3 backend works, cross-compile not yet tested) |
 
 Note: The PSP backend is a standalone crate excluded from the workspace. It depends on `oasis-core` directly and re-exports shared types (`Color`, `Button`, `Trigger`, `TextureId`, `InputEvent`). Std support on the PSP target is provided by the rust-psp SDK's `main` branch with `RUST_PSP_BUILD_STD=1`, which builds a custom sysroot with PSP-specific PAL implementations. A `ColorExt` extension trait provides PSP-specific ABGR conversion without modifying oasis-core. The PSP backend uses sceGu hardware-accelerated 2D rendering with `Sprites` primitives and renders a PSIX-style UI (document icons, tabbed bars, chrome bezels, wave arc wallpaper) matching the desktop layout.
 
@@ -425,7 +425,7 @@ When a window's content exceeds its content area (scrolling text, tall file list
 | Backend | Clip Implementation |
 |---------|-------------------|
 | PSP (GU) | `sceGuScissor(x, y, w, h)` -- hardware scissor rectangle |
-| SDL2 | `SDL_RenderSetClipRect(&rect)` -- renderer-level clip |
+| SDL3 | `SDL_SetRenderClipRect(&rect)` -- renderer-level clip |
 | Framebuffer | Software clip during blit -- skip pixels outside rect |
 | UE5 Render Target | Software clip during blit into RGBA buffer |
 
@@ -475,19 +475,19 @@ The corrupted skin demonstrates that the WM's behavioral hooks (position update,
 
 ### 5.1 Rendering Backend Trait
 
-Every rendering operation passes through `SdiCore` (13 required methods) and `SdiBackend` (30 optional accelerated primitives). Four implementations exist: PSP (GU), SDL2, WASM (Canvas 2D), and UE5 (software RGBA buffer).
+Every rendering operation passes through `SdiCore` (13 required methods) and `SdiBackend` (30 optional accelerated primitives). Four implementations exist: PSP (GU), SDL3, WASM (Canvas 2D), and UE5 (software RGBA buffer).
 
-| Method | PSP (GU) | SDL2 | Framebuffer [PLANNED] | UE5 Render Target |
+| Method | PSP (GU) | SDL3 | Framebuffer [PLANNED] | UE5 Render Target |
 |--------|---------|------|-------------|-------------------|
 | `init()` | sceGuInit + display list | SDL_CreateWindow + Renderer | open /dev/fb0 + mmap | Allocate RGBA buffer |
-| `blit(tex, x, y, w, h)` | sceGuDrawArray (Sprites) | SDL_RenderCopy | memcpy to mapped buf | memcpy to RGBA buffer |
+| `blit(tex, x, y, w, h)` | sceGuDrawArray (Sprites) | SDL_RenderTexture | memcpy to mapped buf | memcpy to RGBA buffer |
 | `swap_buffers()` | sceGuSwapBuffers + VBlank | SDL_RenderPresent | ioctl WAITFORVSYNC | Set dirty flag (UE5 reads) |
 | `load_texture(data)` | RAM alloc (16-byte aligned) | SDL_CreateTexture | Decode to RGB buf | Decode to RGBA buf |
 | `clear(color)` | sceGuClear | SDL_RenderClear | memset framebuffer | memset RGBA buffer |
 | `shutdown()` | sceGuTerm | SDL_Destroy* | munmap + close | Free buffer |
 | `get_buffer()` | N/A | N/A | N/A | Return raw RGBA ptr |
-| `set_clip_rect(x,y,w,h)` | sceGuScissor | SDL_RenderSetClipRect | Software clip bounds | Software clip bounds |
-| `reset_clip_rect()` | sceGuScissor(full) | SDL_RenderSetClipRect(NULL) | Clear clip bounds | Clear clip bounds |
+| `set_clip_rect(x,y,w,h)` | sceGuScissor | SDL_SetRenderClipRect | Software clip bounds | Software clip bounds |
+| `reset_clip_rect()` | sceGuScissor(full) | SDL_SetRenderClipRect(NULL) | Clear clip bounds | Clear clip bounds |
 
 The UE5 backend is unique in that it doesn't own a display. It renders to a shared memory buffer that UE5 reads via `get_buffer()`. This is the zero-copy bridge: Rust writes pixels, UE5's `UpdateTextureRegions()` reads them directly.
 
@@ -766,7 +766,7 @@ The PRX is loaded by custom firmware at boot time via a `PLUGINS.TXT` entry and 
 | Plugin loading | PRX modules via `sceKernelLoadModule` | Dynamic .so via dlopen/libloading |
 | File system root | `ms0:/` (Memory Stick) | Configurable path (e.g., `/home/pi/apps/`) |
 | Power management | `scePowerGetBatteryLifePercent` | `/sys/class/power_supply/` sysfs reads |
-| Display | 480x272 fixed, 32-bit color via GU | Configurable resolution via SDL2 or fbdev |
+| Display | 480x272 fixed, 32-bit color via GU | Configurable resolution via SDL3 or fbdev |
 | Networking | sceNetInet (WiFi only, infrastructure mode) | std::net (Ethernet or WiFi, full stack) |
 | Boot flow | Custom firmware loads EBOOT.PBP | systemd service, auto-login to kiosk mode |
 
@@ -776,7 +776,7 @@ On the Raspberry Pi, OASIS_OS operates as a kiosk-mode application booting direc
 
 - **Boot-to-shell time:** Approximately 3-5 seconds on a Pi 5, from power-on to rendered dashboard.
 - **Display options:** Official Raspberry Pi touchscreen (800x480), HDMI at configurable resolution, or headless with remote terminal only.
-- **Input options:** USB keyboard/mouse, USB gamepad, GPIO-wired buttons, touchscreen (via SDL2 touch events), or remote terminal.
+- **Input options:** USB keyboard/mouse, USB gamepad, GPIO-wired buttons, touchscreen (via SDL3 touch events), or remote terminal.
 - **Systemd integration:** A `oasis-os.service` unit file manages lifecycle, restart-on-crash, and dependency on `network-online.target`.
 - **Coexistence with tamper services:** On the briefcase Pi, `oasis-os.service` runs alongside `tamper-sensor.service` and `tamper-gate.service`. OASIS_OS is the user-facing interface; the tamper services are the physical security layer. They share the Pi but do not interact directly -- the tamper system operates at the systemd level independent of whatever user-space application is running.
 
@@ -823,7 +823,7 @@ The `agent-terminal` skin is purpose-built for the briefcase use case. It presen
 3. systemd starts tamper-sensor.service + tamper-gate.service
 4. systemd starts oasis-os.service (After=tamper-gate.service)
 5. OASIS_OS initializes with agent-terminal skin
-6. Framebuffer or SDL2 backend renders dashboard to display
+6. Framebuffer or SDL3 backend renders dashboard to display
 7. Remote terminal listener binds to configured port
 8. Operator interacts via local keyboard/display or remote terminal
 ```
@@ -979,7 +979,7 @@ The VFS root, pre-populated content, and write permissions are all defined per-t
 
 | Tier | Environment | Tests | Cycle Time |
 |------|------------|-------|------------|
-| 1 -- Desktop | Native SDL2 build on dev machine | UI layout, theming, scene graph, command interpreter, plugin loading, VFS, skins | < 1 second (hot rebuild) |
+| 1 -- Desktop | Native SDL3 build on dev machine | UI layout, theming, scene graph, command interpreter, plugin loading, VFS, skins | < 1 second (hot rebuild) |
 | 2 -- PPSSPP (container) | PSP build running in MCP-patched PPSSPP container | GU rendering, PSP input, networking (infra mode), memory constraints, thread behavior, agent-assisted debugging via MCP | ~5 seconds (cross-compile + launch) |
 | 3 -- Hardware/UE5 | Real PSP + Raspberry Pi + UE5 editor | WiFi, USB, Media Engine, GPIO, boot-to-shell, in-game render target, interaction flow | ~30 seconds (deploy + reboot/PIE) |
 
@@ -1075,7 +1075,7 @@ The Dockerfile clones PPSSPP from source at a pinned commit, applies the patch s
 
 ```dockerfile
 FROM ubuntu:24.04 AS builder
-# Install PPSSPP build deps (CMake, SDL2-dev, etc.)
+# Install PPSSPP build deps (CMake, SDL3-dev, etc.)
 RUN apt-get update && apt-get install -y ...
 
 # Clone at pinned commit for reproducibility
@@ -1352,7 +1352,7 @@ The original C source (`psixpsp.7z` at repository root) contains ~15,000 lines o
 
 | Phase | Deliverable | Source | Status |
 |-------|-----------|--------|--------|
-| 1 -- Framework scaffold | SDI core + backend trait + blank screen on SDL2 + UE5 render target stub | `sdi/sdi.c`, `sdi/backends/psp/gu.c` (architecture only) | **Complete** |
+| 1 -- Framework scaffold | SDI core + backend trait + blank screen on SDL3 + UE5 render target stub | `sdi/sdi.c`, `sdi/backends/psp/gu.c` (architecture only) | **Complete** |
 | 2 -- SDI + VFS + Commands | Full scene graph, VFS trait + RealFS + MemoryVFS, command interpreter with basic commands | `sdi/sdi.c`, `sdi/png.c`, `font.c`, new VFS code | **Complete** |
 | 3 -- Classic skin | Icon grid dashboard, PBP scanning, app discovery, cursor navigation | `dashboard.c`, `pbp.c`, `image.c`, skin config | **Complete** |
 | 4 -- PSP subsystems | Input, power, time, USB, file browser, on-screen keyboard, GU backend | `input.c`, `power.c`, `time.c`, `usb.c`, `file.c`, `osk.c` | **Complete** |
@@ -1389,7 +1389,7 @@ Total estimated Rust codebase: approximately 24,000 lines, exceeding the origina
 | Skin hot-swap causes state corruption | Medium | Medium | Snapshot VFS and command state before swap; validate SDI tree consistency after rebuild |
 | UE5 version upgrade breaks FFI linkage | Low | Medium | Pin to C ABI only; no C++ mangled symbols; version the FFI header |
 | Scope creep beyond embeddable OS into general-purpose OS | Medium | Medium | Strict adherence to non-goals; resist adding package management or virtual memory |
-| SDL2 dependency issues on Pi (wayland vs X11 vs kms) | Low | Low | Provide framebuffer backend as fallback; document tested Pi OS versions |
+| SDL3 dependency issues on Pi (wayland vs X11 vs kms) | Low | Low | Provide framebuffer backend as fallback; document tested Pi OS versions |
 | Window manager hit testing incorrect under high object count | Medium | Medium | Spatial index (grid-based) for hit testing if linear scan exceeds frame budget; benchmark with 20+ open windows |
 | WM drag/resize latency from updating many SDI objects per frame | Low | Medium | Batch position updates; defer non-visible object updates; profile with Desktop skin at max window count |
 | Conflict between OASIS_OS and tamper services on Pi | Low | Low | Strict separation via systemd unit ordering; OASIS_OS reads tamper state files but never writes to them |
@@ -1401,7 +1401,7 @@ Total estimated Rust codebase: approximately 24,000 lines, exceeding the origina
 | Criterion | Verification Method |
 |----------|-------------------|
 | OASIS_OS boots to a themed dashboard on real PSP hardware | Visual verification on PSP-2000 with custom firmware |
-| OASIS_OS boots to the same dashboard on Raspberry Pi | Visual verification on Pi 5 with SDL2 or framebuffer backend |
+| OASIS_OS boots to the same dashboard on Raspberry Pi | Visual verification on Pi 5 with SDL3 or framebuffer backend |
 | In-game computer in UE5 renders a functional OS with player interaction | Play-in-Editor: interact with terminal, execute commands, browse files |
 | At least 4 distinct skins render correctly from the same core framework | Load Classic, Terminal, Tactical, and Agent Terminal skins; verify layout, features, and visuals differ |
 | Dashboard discovers and launches homebrew (PSP) / executables (Pi) / game UI (UE5) | Launch 3+ apps from dashboard on each platform |
@@ -1441,7 +1441,7 @@ Total estimated Rust codebase: approximately 24,000 lines, exceeding the origina
 | Rust FFI guide | doc.rust-lang.org/nomicon/ffi.html |
 | libloading crate | crates.io/crates/libloading |
 | Raspberry Pi OS Lite | raspberrypi.com/software/operating-systems/ |
-| SDL2 Rust bindings | github.com/Rust-SDL2/rust-sdl2 |
+| SDL3 Rust bindings | github.com/revmischa/sdl3-rs |
 | ARK-4 custom firmware | github.com/PSP-Archive/ARK-4 |
 | Infinity 2 persistent CFW | infinity.lolhax.org |
 | cargo-fuzz | github.com/rust-fuzz/cargo-fuzz |

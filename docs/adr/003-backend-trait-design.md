@@ -5,7 +5,7 @@
 
 ## Context
 
-OASIS_OS must render to SDL2, Unreal Engine 5, and PSP hardware. Each platform
+OASIS_OS must render to SDL3, Unreal Engine 5, and PSP hardware. Each platform
 has different rendering APIs, input mechanisms, networking stacks, and audio
 subsystems. We need an abstraction that:
 

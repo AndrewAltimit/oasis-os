@@ -1,9 +1,9 @@
-//! Input event handling for the SDL2 backend.
+//! Input event handling for the SDL3 backend.
 //!
-//! Maps SDL2 keyboard, mouse, and window events to OASIS_OS `InputEvent`s.
+//! Maps SDL3 keyboard, mouse, and window events to OASIS_OS `InputEvent`s.
 
-use sdl2::event::Event;
-use sdl2::keyboard::Keycode;
+use sdl3::event::Event;
+use sdl3::keyboard::Keycode;
 
 use oasis_core::input::{Button, InputEvent, Trigger};
 
@@ -21,7 +21,7 @@ impl oasis_core::backend::InputBackend for SdlBackend {
     }
 }
 
-/// Map an SDL2 event to an OASIS_OS input event.
+/// Map an SDL3 event to an OASIS_OS input event.
 pub(crate) fn map_sdl_event(event: Event) -> Option<InputEvent> {
     match event {
         Event::Quit { .. } => Some(InputEvent::Quit),
@@ -31,16 +31,27 @@ pub(crate) fn map_sdl_event(event: Event) -> Option<InputEvent> {
         Event::KeyUp {
             keycode: Some(key), ..
         } => map_key_up(key),
-        Event::MouseMotion { x, y, .. } => Some(InputEvent::CursorMove { x, y }),
-        Event::MouseButtonDown { x, y, .. } => Some(InputEvent::PointerClick { x, y }),
-        Event::MouseButtonUp { x, y, .. } => Some(InputEvent::PointerRelease { x, y }),
-        Event::MouseWheel { y, .. } => Some(InputEvent::MouseWheel { delta: -y }),
+        // SDL3 mouse coordinates are f32; truncate to i32.
+        Event::MouseMotion { x, y, .. } => Some(InputEvent::CursorMove {
+            x: x as i32,
+            y: y as i32,
+        }),
+        Event::MouseButtonDown { x, y, .. } => Some(InputEvent::PointerClick {
+            x: x as i32,
+            y: y as i32,
+        }),
+        Event::MouseButtonUp { x, y, .. } => Some(InputEvent::PointerRelease {
+            x: x as i32,
+            y: y as i32,
+        }),
+        // SDL3 mouse wheel y is f32; truncate to i32.
+        Event::MouseWheel { y, .. } => Some(InputEvent::MouseWheel { delta: -(y as i32) }),
         Event::Window {
-            win_event: sdl2::event::WindowEvent::FocusGained,
+            win_event: sdl3::event::WindowEvent::FocusGained,
             ..
         } => Some(InputEvent::FocusGained),
         Event::Window {
-            win_event: sdl2::event::WindowEvent::FocusLost,
+            win_event: sdl3::event::WindowEvent::FocusLost,
             ..
         } => Some(InputEvent::FocusLost),
         Event::TextInput { text, .. } => text.chars().next().map(InputEvent::TextInput),
