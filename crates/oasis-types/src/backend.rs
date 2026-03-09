@@ -1730,9 +1730,13 @@ impl<T: SdiBackend + ?Sized> SdiClipTransform for T {
 
 /// Vector graphics primitives (polygons, arcs, dashed lines).
 #[allow(clippy::too_many_arguments)]
-pub trait SdiVector: SdiCore {
-    /// Draw a filled convex polygon.
-    fn ext_fill_polygon(&mut self, points: &[(i32, i32)], color: Color) -> Result<()> {
+pub trait SdiVector: SdiShapes {
+    /// Draw a filled convex polygon (triangle-fan decomposition).
+    fn ext_fill_polygon(
+        &mut self,
+        points: &[(i32, i32)],
+        color: Color,
+    ) -> Result<()> {
         if points.len() < 3 {
             return Ok(());
         }
@@ -1740,16 +1744,8 @@ pub trait SdiVector: SdiCore {
         for i in 1..points.len() - 1 {
             let v1 = points[i];
             let v2 = points[i + 1];
-            let lx = v0.0.min(v1.0).min(v2.0);
-            let ly = v0.1.min(v1.1).min(v2.1);
-            let rx = v0.0.max(v1.0).max(v2.0);
-            let ry = v0.1.max(v1.1).max(v2.1);
-            self.fill_rect(
-                lx,
-                ly,
-                (rx - lx).max(1) as u32,
-                (ry - ly).max(1) as u32,
-                color,
+            self.ext_fill_triangle(
+                v0.0, v0.1, v1.0, v1.1, v2.0, v2.1, color,
             )?;
         }
         Ok(())
@@ -1759,7 +1755,7 @@ pub trait SdiVector: SdiCore {
     fn ext_stroke_polygon(
         &mut self,
         points: &[(i32, i32)],
-        width: u16,
+        _width: u16,
         color: Color,
     ) -> Result<()> {
         if points.len() < 2 {
@@ -1767,48 +1763,67 @@ pub trait SdiVector: SdiCore {
         }
         for i in 0..points.len() {
             let j = (i + 1) % points.len();
-            let lx = points[i].0.min(points[j].0);
-            let ly = points[i].1.min(points[j].1);
-            let rx = points[i].0.max(points[j].0);
-            let ry = points[i].1.max(points[j].1);
-            self.fill_rect(
-                lx,
-                ly,
-                (rx - lx).max(width as i32) as u32,
-                (ry - ly).max(width as i32) as u32,
+            self.ext_draw_line(
+                points[i].0,
+                points[i].1,
+                points[j].0,
+                points[j].1,
+                1,
                 color,
             )?;
         }
         Ok(())
     }
 
-    /// Draw a filled arc (pie wedge).
+    /// Draw a filled arc (pie wedge, approximated with triangles).
     fn ext_fill_arc(
         &mut self,
         cx: i32,
         cy: i32,
         radius: u16,
-        _start_angle: f32,
-        _end_angle: f32,
+        start_angle: f32,
+        end_angle: f32,
         color: Color,
     ) -> Result<()> {
-        let r = radius as i32;
-        self.fill_rect(cx - r, cy - r, (r * 2) as u32, (r * 2) as u32, color)
+        let r = radius as f32;
+        let segments = 16;
+        let span = end_angle - start_angle;
+        for i in 0..segments {
+            let a0 = start_angle + span * (i as f32 / segments as f32);
+            let a1 = start_angle + span * ((i + 1) as f32 / segments as f32);
+            let x0 = cx + (r * a0.cos()) as i32;
+            let y0 = cy + (r * a0.sin()) as i32;
+            let x1 = cx + (r * a1.cos()) as i32;
+            let y1 = cy + (r * a1.sin()) as i32;
+            self.ext_fill_triangle(cx, cy, x0, y0, x1, y1, color)?;
+        }
+        Ok(())
     }
 
-    /// Draw an arc stroke (partial circle outline).
+    /// Draw an arc stroke (line segments along arc).
     fn ext_stroke_arc(
         &mut self,
         cx: i32,
         cy: i32,
         radius: u16,
-        _start_angle: f32,
-        _end_angle: f32,
+        start_angle: f32,
+        end_angle: f32,
         _width: u16,
         color: Color,
     ) -> Result<()> {
-        let r = radius as i32;
-        self.fill_rect(cx - r, cy - r, (r * 2) as u32, (r * 2) as u32, color)
+        let r = radius as f32;
+        let segments = 16;
+        let span = end_angle - start_angle;
+        for i in 0..segments {
+            let a0 = start_angle + span * (i as f32 / segments as f32);
+            let a1 = start_angle + span * ((i + 1) as f32 / segments as f32);
+            let x0 = cx + (r * a0.cos()) as i32;
+            let y0 = cy + (r * a0.sin()) as i32;
+            let x1 = cx + (r * a1.cos()) as i32;
+            let y1 = cy + (r * a1.sin()) as i32;
+            self.ext_draw_line(x0, y0, x1, y1, 1, color)?;
+        }
+        Ok(())
     }
 
     /// Draw a dashed line between two points.
