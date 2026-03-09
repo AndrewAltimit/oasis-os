@@ -289,11 +289,11 @@ impl WasmBackend {
         for ch in text.chars() {
             let key = GlyphCacheKey::new(ch, font_size, color, bold, italic);
             if self.glyph_cache.contains_key(&key) {
-                // O(1) access timestamp update on cache hit.
+                // Update access timestamp on cache hit.
                 self.glyph_access_counter += 1;
                 self.glyph_access.insert(key, self.glyph_access_counter);
             } else {
-                // Evict least-recently-used entry when cache is full.
+                // Evict least-recently-used entry when cache is full (O(N) scan).
                 while self.glyph_cache.len() >= MAX_GLYPH_CACHE_SIZE {
                     if let Some((&oldest_key, _)) =
                         self.glyph_access.iter().min_by_key(|&(_, &ts)| ts)
