@@ -40,14 +40,12 @@ impl Command for ChmodCmd {
     }
     fn execute(&self, args: &[&str], env: &mut Environment<'_>) -> Result<CommandOutput> {
         if args.len() < 2 {
-            return Err(OasisError::Command(
-                "usage: chmod <mode> <file>".to_string(),
-            ));
+            return Err(OasisError::Command("usage: chmod <mode> <file>".into()));
         }
         let mode_str = args[0];
         let path = resolve_path(&env.cwd, args[1]);
         let mode = u16::from_str_radix(mode_str, 8)
-            .map_err(|_| OasisError::Command(format!("invalid octal mode: {mode_str}")))?;
+            .map_err(|_| OasisError::Command(format!("invalid octal mode: {mode_str}").into()))?;
         let mut perms = env.vfs.get_permissions(&path)?;
         perms.mode = mode;
         env.vfs.set_permissions(&path, perms)?;
@@ -78,9 +76,7 @@ impl Command for ChownCmd {
     }
     fn execute(&self, args: &[&str], env: &mut Environment<'_>) -> Result<CommandOutput> {
         if args.len() < 2 {
-            return Err(OasisError::Command(
-                "usage: chown <owner> <file>".to_string(),
-            ));
+            return Err(OasisError::Command("usage: chown <owner> <file>".into()));
         }
         let owner = args[0];
         let path = resolve_path(&env.cwd, args[1]);
@@ -163,7 +159,9 @@ impl Command for AuditCmd {
                     Ok(CommandOutput::Text("(no audit log to clear)".to_string()))
                 }
             },
-            _ => Err(OasisError::Command(format!("unknown subcommand: {subcmd}"))),
+            _ => Err(OasisError::Command(
+                format!("unknown subcommand: {subcmd}").into(),
+            )),
         }
     }
 }

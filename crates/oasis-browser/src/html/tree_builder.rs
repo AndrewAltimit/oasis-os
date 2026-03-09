@@ -1963,6 +1963,147 @@ mod tests {
         );
     }
 
+    // -- real-world tree builder compliance tests -------------------------
+
+    #[test]
+    fn implicit_head_and_body_from_bare_content() {
+        // Just a text node -- tree builder should create
+        // implicit <html>, <head>, and <body>.
+        let tokens = vec![text("hello world"), Token::Eof];
+        let doc = TreeBuilder::build(tokens);
+
+        assert!(doc.head().is_some(), "implicit head should be created");
+        assert!(doc.body().is_some(), "implicit body should be created");
+
+        // The text should be in <body>.
+        let body = doc.body().unwrap();
+        assert_eq!(doc.text_content(body), "hello world");
+    }
+
+    #[test]
+    fn mismatched_nested_formatting_b_i() {
+        // <b><i>text</b></i> -- misnested formatting tags.
+        // The text should still be present in the tree.
+        let tokens = vec![
+            start("p"),
+            start("b"),
+            start("i"),
+            text("styled text"),
+            end("b"),
+            end("i"),
+            end("p"),
+            Token::Eof,
+        ];
+        let doc = TreeBuilder::build(tokens);
+        let body = doc.body().unwrap();
+        let full_text = doc.text_content(body);
+        assert!(
+            full_text.contains("styled text"),
+            "misnested formatting should preserve text, got: {full_text}",
+        );
+    }
+
+    #[test]
+    fn table_with_direct_text_child() {
+        // Text directly inside <table> should not crash and
+        // the table structure should still be valid.
+        let tokens = vec![
+            start("table"),
+            text("stray text"),
+            start("tr"),
+            start("td"),
+            text("cell"),
+            end("td"),
+            end("tr"),
+            end("table"),
+            Token::Eof,
+        ];
+        let doc = TreeBuilder::build(tokens);
+        let body = doc.body().unwrap();
+
+        // Find the table.
+        let table = doc
+            .get(body)
+            .children
+            .iter()
+            .find(|&&id| tag_at(&doc, id) == Some(&TagName::Table))
+            .copied()
+            .expect("table should exist");
+
+        // The cell text should be present somewhere.
+        let full_text = doc.text_content(body);
+        assert!(
+            full_text.contains("cell"),
+            "table cell text should be present, got: {full_text}",
+        );
+
+        // Table should still have proper structure with tbody.
+        let has_tbody = doc
+            .get(table)
+            .children
+            .iter()
+            .any(|&id| tag_at(&doc, id) == Some(&TagName::Tbody));
+        assert!(has_tbody, "table should have implicit tbody");
+    }
+
+    #[test]
+    fn p_auto_closes_on_block_element() {
+        // <p>text<div>block</div> -- the <div> should auto-close <p>.
+        let tokens = vec![
+            start("p"),
+            text("paragraph text"),
+            start("div"),
+            text("block content"),
+            end("div"),
+            Token::Eof,
+        ];
+        let doc = TreeBuilder::build(tokens);
+        let body = doc.body().unwrap();
+
+        // Should have <p> and <div> as siblings in body, not nested.
+        let body_children = &doc.get(body).children;
+        let p_nodes: Vec<NodeId> = body_children
+            .iter()
+            .filter(|&&id| tag_at(&doc, id) == Some(&TagName::P))
+            .copied()
+            .collect();
+        let div_nodes: Vec<NodeId> = body_children
+            .iter()
+            .filter(|&&id| tag_at(&doc, id) == Some(&TagName::Div))
+            .copied()
+            .collect();
+
+        assert_eq!(p_nodes.len(), 1, "should have one <p>");
+        assert_eq!(div_nodes.len(), 1, "should have one <div>");
+        assert_eq!(doc.text_content(p_nodes[0]), "paragraph text");
+        assert_eq!(doc.text_content(div_nodes[0]), "block content");
+    }
+
+    #[test]
+    fn implicit_html_head_body_from_title() {
+        // <title> in head should create implicit structure.
+        let tokens = vec![
+            start("title"),
+            text("My Page Title"),
+            end("title"),
+            start("p"),
+            text("body content"),
+            end("p"),
+            Token::Eof,
+        ];
+        let doc = TreeBuilder::build(tokens);
+
+        assert!(doc.head().is_some(), "implicit head");
+        assert!(doc.body().is_some(), "implicit body");
+        assert_eq!(doc.title(), Some("My Page Title".to_string()));
+
+        let body = doc.body().unwrap();
+        assert!(
+            doc.text_content(body).contains("body content"),
+            "body should contain paragraph text",
+        );
+    }
+
     mod prop {
         use super::*;
         use proptest::prelude::*;

@@ -137,7 +137,7 @@ impl Command for GrepCmd {
         }
         if positional.is_empty() {
             return Err(OasisError::Command(
-                "usage: grep [-i] [-n] [-v] [-c] <pattern> [file]".to_string(),
+                "usage: grep [-i] [-n] [-v] [-c] <pattern> [file]".into(),
             ));
         }
         let pattern = positional[0];
@@ -318,8 +318,7 @@ impl Command for TeeCmd {
                 _ => {},
             }
         }
-        let file =
-            file_arg.ok_or_else(|| OasisError::Command("usage: tee [-a] <file>".to_string()))?;
+        let file = file_arg.ok_or_else(|| OasisError::Command("usage: tee [-a] <file>".into()))?;
         let path = resolve_path(&env.cwd, file);
         let input = env.stdin.clone().unwrap_or_default();
 
@@ -364,9 +363,7 @@ impl Command for TrCmd {
             }
         }
         if positional.is_empty() {
-            return Err(OasisError::Command(
-                "usage: tr [-d] <set1> [set2]".to_string(),
-            ));
+            return Err(OasisError::Command("usage: tr [-d] <set1> [set2]".into()));
         }
         let set1 = positional[0];
         let text = read_text_input(None, env)?;
@@ -439,7 +436,7 @@ impl Command for CutCmd {
         }
         if fields_str.is_empty() {
             return Err(OasisError::Command(
-                "usage: cut -d <delim> -f <fields> [file]".to_string(),
+                "usage: cut -d <delim> -f <fields> [file]".into(),
             ));
         }
         let fields = parse_field_spec(fields_str)?;
@@ -471,17 +468,17 @@ fn parse_field_spec(spec: &str) -> Result<Vec<usize>> {
         if let Some((a, b)) = part.split_once('-') {
             let start: usize = a
                 .parse()
-                .map_err(|_| OasisError::Command(format!("bad field: {part}")))?;
+                .map_err(|_| OasisError::Command(format!("bad field: {part}").into()))?;
             let end: usize = b
                 .parse()
-                .map_err(|_| OasisError::Command(format!("bad field: {part}")))?;
+                .map_err(|_| OasisError::Command(format!("bad field: {part}").into()))?;
             for f in start..=end {
                 fields.push(f);
             }
         } else {
             let f: usize = part
                 .parse()
-                .map_err(|_| OasisError::Command(format!("bad field: {part}")))?;
+                .map_err(|_| OasisError::Command(format!("bad field: {part}").into()))?;
             fields.push(f);
         }
     }
@@ -508,9 +505,7 @@ impl Command for DiffCmd {
     }
     fn execute(&self, args: &[&str], env: &mut Environment<'_>) -> Result<CommandOutput> {
         if args.len() < 2 {
-            return Err(OasisError::Command(
-                "usage: diff <file1> <file2>".to_string(),
-            ));
+            return Err(OasisError::Command("usage: diff <file1> <file2>".into()));
         }
         let path1 = resolve_path(&env.cwd, args[0]);
         let path2 = resolve_path(&env.cwd, args[1]);
@@ -570,7 +565,7 @@ fn parse_n_flag<'a>(args: &[&'a str], default: usize) -> Result<(usize, Option<&
             if i < args.len() {
                 n = args[i]
                     .parse()
-                    .map_err(|_| OasisError::Command("invalid number".to_string()))?;
+                    .map_err(|_| OasisError::Command("invalid number".into()))?;
             }
         } else {
             file = Some(args[i]);

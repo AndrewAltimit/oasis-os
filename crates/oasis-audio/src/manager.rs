@@ -59,7 +59,7 @@ impl AudioManager {
         backend: &mut dyn AudioBackend,
     ) -> Result<()> {
         if !vfs.exists(path) {
-            return Err(OasisError::Vfs(format!("file not found: {path}")));
+            return Err(OasisError::Vfs(format!("file not found: {path}").into()));
         }
         let data = vfs.read(path)?;
         let _track_id = backend.load_track(&data)?;
@@ -72,7 +72,7 @@ impl AudioManager {
     /// Play the current track (or start from the first track if none selected).
     pub fn play(&mut self, backend: &mut dyn AudioBackend) -> Result<()> {
         if self.playlist.is_empty() {
-            return Err(OasisError::Command("playlist is empty".to_string()));
+            return Err(OasisError::Command("playlist is empty".into()));
         }
         if self.playlist.current_track().is_none() {
             self.playlist.set_current(0);
@@ -89,7 +89,7 @@ impl AudioManager {
     /// Pause playback.
     pub fn pause(&mut self, backend: &mut dyn AudioBackend) -> Result<()> {
         if self.state != PlaybackState::Playing {
-            return Err(OasisError::Command("not playing".to_string()));
+            return Err(OasisError::Command("not playing".into()));
         }
         backend.pause()?;
         self.state = PlaybackState::Paused;
@@ -99,7 +99,7 @@ impl AudioManager {
     /// Resume paused playback.
     pub fn resume(&mut self, backend: &mut dyn AudioBackend) -> Result<()> {
         if self.state != PlaybackState::Paused {
-            return Err(OasisError::Command("not paused".to_string()));
+            return Err(OasisError::Command("not paused".into()));
         }
         backend.resume()?;
         self.state = PlaybackState::Playing;
@@ -241,18 +241,18 @@ impl AudioManager {
             },
             "vol" => {
                 let vol_str = parts.get(1).unwrap_or(&"");
-                let vol: u8 = vol_str
-                    .parse()
-                    .map_err(|_| OasisError::Command(format!("invalid volume: {vol_str}")))?;
+                let vol: u8 = vol_str.parse().map_err(|_| {
+                    OasisError::Command(format!("invalid volume: {vol_str}").into())
+                })?;
                 self.set_volume(vol, backend)?;
                 Ok(format!("volume: {}%", self.volume))
             },
             "repeat" => {
                 let mode_str = parts.get(1).unwrap_or(&"");
                 let mode = RepeatMode::parse(mode_str).ok_or_else(|| {
-                    OasisError::Command(format!(
-                        "invalid repeat mode: {mode_str} (use off/all/one)"
-                    ))
+                    OasisError::Command(
+                        format!("invalid repeat mode: {mode_str} (use off/all/one)").into(),
+                    )
                 })?;
                 self.set_repeat(mode);
                 Ok(format!("repeat: {mode}"))
@@ -262,7 +262,9 @@ impl AudioManager {
                 let state = if self.playlist.shuffle { "on" } else { "off" };
                 Ok(format!("shuffle: {state}"))
             },
-            _ => Err(OasisError::Command(format!("unknown audio command: {cmd}"))),
+            _ => Err(OasisError::Command(
+                format!("unknown audio command: {cmd}").into(),
+            )),
         }
     }
 }

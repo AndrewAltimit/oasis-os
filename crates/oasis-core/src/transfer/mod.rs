@@ -399,9 +399,7 @@ impl Command for FtpCmd {
                             password = Some(pass.to_string());
                             i += 2;
                         } else {
-                            return Err(OasisError::Command(
-                                "--password requires a value".to_string(),
-                            ));
+                            return Err(OasisError::Command("--password requires a value".into()));
                         }
                     } else if let Ok(p) = args[i].parse::<u16>() {
                         port = p;
@@ -425,10 +423,9 @@ impl Command for FtpCmd {
                     Ok(CommandOutput::Text("FTP: inactive".to_string()))
                 }
             },
-            _ => Err(OasisError::Command(format!(
-                "unknown subcommand: {subcmd}\nusage: {}",
-                self.usage()
-            ))),
+            _ => Err(OasisError::Command(
+                format!("unknown subcommand: {subcmd}\nusage: {}", self.usage()).into(),
+            )),
         }
     }
 }
@@ -453,11 +450,11 @@ impl Command for PushCmd {
         let src = args
             .first()
             .copied()
-            .ok_or_else(|| OasisError::Command("usage: push <source> <dest>".to_string()))?;
+            .ok_or_else(|| OasisError::Command("usage: push <source> <dest>".into()))?;
         let dest = args
             .get(1)
             .copied()
-            .ok_or_else(|| OasisError::Command("usage: push <source> <dest>".to_string()))?;
+            .ok_or_else(|| OasisError::Command("usage: push <source> <dest>".into()))?;
 
         let data = env.vfs.read(src)?;
         env.vfs.write(dest, &data)?;
@@ -488,11 +485,11 @@ impl Command for PullCmd {
         let src = args
             .first()
             .copied()
-            .ok_or_else(|| OasisError::Command("usage: pull <source> <dest>".to_string()))?;
+            .ok_or_else(|| OasisError::Command("usage: pull <source> <dest>".into()))?;
         let dest = args
             .get(1)
             .copied()
-            .ok_or_else(|| OasisError::Command("usage: pull <source> <dest>".to_string()))?;
+            .ok_or_else(|| OasisError::Command("usage: pull <source> <dest>".into()))?;
 
         let data = env.vfs.read(src)?;
         env.vfs.write(dest, &data)?;
@@ -857,7 +854,7 @@ mod tests {
             _address: &str,
             _port: u16,
         ) -> crate::error::Result<Box<dyn oasis_types::backend::NetworkStream>> {
-            Err(OasisError::Backend("mock: no outbound".to_string()))
+            Err(OasisError::Backend("mock: no outbound".into()))
         }
     }
 

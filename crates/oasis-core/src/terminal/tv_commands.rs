@@ -15,13 +15,13 @@ fn load_channels(env: &mut Environment<'_>) -> Result<ChannelConfig> {
     let path = tv_guide::TV_CHANNELS_PATH;
     if !env.vfs.exists(path) {
         return Err(OasisError::Command(
-            "No TV config found. Launch the TV Guide app first.".to_string(),
+            "No TV config found. Launch the TV Guide app first.".into(),
         ));
     }
     let data = env.vfs.read(path)?;
     let toml_str = String::from_utf8_lossy(&data);
-    let config: ChannelConfig =
-        toml::from_str(&toml_str).map_err(|e| OasisError::Command(format!("bad config: {e}")))?;
+    let config: ChannelConfig = toml::from_str(&toml_str)
+        .map_err(|e| OasisError::Command(format!("bad config: {e}").into()))?;
     Ok(config)
 }
 
@@ -51,9 +51,10 @@ impl Command for TvCmd {
                 tv_tune(ch, env)
             },
             "guide" => tv_guide(env),
-            _ => Err(OasisError::Command(format!(
-                "unknown subcommand: {subcmd}\nusage: tv [list|now|tune <ch>|guide]"
-            ))),
+            _ => Err(OasisError::Command(
+                format!("unknown subcommand: {subcmd}\nusage: tv [list|now|tune <ch>|guide]")
+                    .into(),
+            )),
         }
     }
 }
@@ -103,19 +104,19 @@ fn tv_now(env: &mut Environment<'_>) -> Result<CommandOutput> {
 fn tv_tune(ch_str: &str, env: &mut Environment<'_>) -> Result<CommandOutput> {
     if ch_str.is_empty() {
         return Err(OasisError::Command(
-            "usage: tv tune <channel_number>".to_string(),
+            "usage: tv tune <channel_number>".into(),
         ));
     }
     let ch_num: u32 = ch_str
         .parse()
-        .map_err(|_| OasisError::Command(format!("invalid channel number: {ch_str}")))?;
+        .map_err(|_| OasisError::Command(format!("invalid channel number: {ch_str}").into()))?;
 
     let config = load_channels(env)?;
     let channel = config
         .channel
         .iter()
         .find(|c| c.number == ch_num)
-        .ok_or_else(|| OasisError::Command(format!("channel {ch_num} not found")))?;
+        .ok_or_else(|| OasisError::Command(format!("channel {ch_num} not found").into()))?;
 
     // Write channel-based tune request for the app layer to resolve.
     let request = format!("tune_ch:{ch_num}");

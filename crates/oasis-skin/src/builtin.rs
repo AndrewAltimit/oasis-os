@@ -1359,18 +1359,18 @@ fn load_builtin_raw(name: &str) -> Result<Skin> {
         "vaporwave" => vaporwave_skin(),
         "highcontrast" => highcontrast_skin(),
         "altimit" => altimit_skin(),
-        _ => Err(oasis_types::error::OasisError::Config(format!(
-            "unknown built-in skin: {name}"
-        ))),
+        _ => Err(oasis_types::error::OasisError::Config(
+            format!("unknown built-in skin: {name}").into(),
+        )),
     }
 }
 
 fn load_builtin_recursive(name: &str, depth: u32) -> Result<Skin> {
     const MAX_DEPTH: u32 = 3;
     if depth > MAX_DEPTH {
-        return Err(oasis_types::error::OasisError::Config(format!(
-            "skin inheritance depth exceeds {MAX_DEPTH} for '{name}'"
-        )));
+        return Err(oasis_types::error::OasisError::Config(
+            format!("skin inheritance depth exceeds {MAX_DEPTH} for '{name}'").into(),
+        ));
     }
 
     let mut skin = load_builtin_raw(name)?;

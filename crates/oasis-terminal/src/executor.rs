@@ -183,10 +183,13 @@ impl CommandRegistry {
                     env.stdin = Some(String::from_utf8_lossy(&data).into_owned());
                 },
                 Err(e) => {
-                    return Err(OasisError::Command(format!(
-                        "cannot redirect stdin from \
+                    return Err(OasisError::Command(
+                        format!(
+                            "cannot redirect stdin from \
                          '{stdin_path}': {e}"
-                    )));
+                        )
+                        .into(),
+                    ));
                 },
             }
         }
@@ -353,10 +356,9 @@ impl CommandRegistry {
             return self.call_function(&name_lower, &args, env);
         }
 
-        Err(OasisError::Command(format!(
-            "unknown command: {}",
-            tokens[0]
-        )))
+        Err(OasisError::Command(
+            format!("unknown command: {}", tokens[0]).into(),
+        ))
     }
 
     // -- Command substitution --

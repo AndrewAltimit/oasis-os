@@ -1171,20 +1171,20 @@ pub trait BackendErrExt<T> {
 
 impl<T, E: std::fmt::Display> BackendErrExt<T> for std::result::Result<T, E> {
     fn backend_err(self) -> Result<T> {
-        self.map_err(|e| OasisError::Backend(e.to_string()))
+        self.map_err(|e| OasisError::Backend(e.to_string().into()))
     }
 }
 
 /// Look up a value in an `Option`, returning `OasisError::Backend` if `None`.
 ///
-/// Eliminates repeated `.ok_or_else(|| OasisError::Backend(format!(...)))`.
+/// Eliminates repeated `.ok_or_else(|| OasisError::Backend(format!(...).into()))`.
 pub fn backend_require<T>(opt: Option<T>, msg: &str) -> Result<T> {
     opt.ok_or_else(|| OasisError::Backend(msg.into()))
 }
 
 /// Return a "texture not found" backend error for the given id.
 pub fn texture_not_found(id: u64) -> OasisError {
-    OasisError::Backend(format!("texture not found: {id}"))
+    OasisError::Backend(format!("texture not found: {id}").into())
 }
 
 // ---------------------------------------------------------------------------
@@ -1200,13 +1200,16 @@ pub fn validate_rgba_data(width: u32, height: u32, rgba_data: &[u8]) -> Result<(
         .checked_mul(height as usize)
         .and_then(|n| n.checked_mul(4))
         .ok_or_else(|| {
-            OasisError::Backend(format!("texture dimensions overflow: {width}x{height}"))
+            OasisError::Backend(format!("texture dimensions overflow: {width}x{height}").into())
         })?;
     if rgba_data.len() != expected {
-        return Err(OasisError::Backend(format!(
-            "texture data size mismatch: expected {expected}, got {}",
-            rgba_data.len()
-        )));
+        return Err(OasisError::Backend(
+            format!(
+                "texture data size mismatch: expected {expected}, got {}",
+                rgba_data.len()
+            )
+            .into(),
+        ));
     }
     Ok(())
 }

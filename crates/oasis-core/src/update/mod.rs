@@ -91,7 +91,7 @@ fn read_version(vfs: &dyn Vfs, path: &str) -> Result<SemVer> {
     let data = vfs.read(path)?;
     let text = String::from_utf8_lossy(&data);
     SemVer::parse(&text)
-        .ok_or_else(|| OasisError::Config(format!("invalid version in {path}: {text}")))
+        .ok_or_else(|| OasisError::Config(format!("invalid version in {path}: {text}").into()))
 }
 
 // ---------------------------------------------------------------------------
@@ -134,10 +134,9 @@ impl Command for UpdateCmd {
                     Ok(CommandOutput::Text("(no update log available)".to_string()))
                 }
             },
-            _ => Err(OasisError::Command(format!(
-                "unknown subcommand: {subcmd}\nusage: {}",
-                self.usage()
-            ))),
+            _ => Err(OasisError::Command(
+                format!("unknown subcommand: {subcmd}\nusage: {}", self.usage()).into(),
+            )),
         }
     }
 }

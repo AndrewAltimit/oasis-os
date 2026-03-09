@@ -62,10 +62,10 @@ pub fn tokenize(input: &str) -> Result<Vec<String>> {
     }
 
     if in_single {
-        return Err(OasisError::Command("unterminated single quote".to_string()));
+        return Err(OasisError::Command("unterminated single quote".into()));
     }
     if in_double {
-        return Err(OasisError::Command("unterminated double quote".to_string()));
+        return Err(OasisError::Command("unterminated double quote".into()));
     }
 
     if !current.is_empty() {

@@ -61,10 +61,10 @@ impl TlsProvider for RustlsTlsProvider {
         server_name: &str,
     ) -> Result<Box<dyn NetworkStream>> {
         let sni = ServerName::try_from(server_name.to_owned())
-            .map_err(|e| OasisError::Backend(format!("invalid server name: {e}")))?;
+            .map_err(|e| OasisError::Backend(format!("invalid server name: {e}").into()))?;
 
         let conn = rustls::ClientConnection::new(Arc::clone(&self.config), sni)
-            .map_err(|e| OasisError::Backend(format!("TLS init: {e}")))?;
+            .map_err(|e| OasisError::Backend(format!("TLS init: {e}").into()))?;
 
         Ok(Box::new(RustlsStream::new(conn, stream)?))
     }
@@ -108,17 +108,17 @@ impl RustlsStream {
         let mut adapter = IoAdapter::new(&mut *inner);
         while tls.is_handshaking() {
             if std::time::Instant::now() > deadline {
-                return Err(OasisError::Backend("TLS handshake timed out".to_string()));
+                return Err(OasisError::Backend("TLS handshake timed out".into()));
             }
             if tls.wants_write() {
                 tls.write_tls(&mut adapter)
-                    .map_err(|e| OasisError::Backend(format!("TLS handshake write: {e}")))?;
+                    .map_err(|e| OasisError::Backend(format!("TLS handshake write: {e}").into()))?;
             }
             if tls.wants_read() {
                 match tls.read_tls(&mut adapter) {
                     Ok(0) => {
                         return Err(OasisError::Backend(
-                            "TLS handshake failed: peer closed connection".to_string(),
+                            "TLS handshake failed: peer closed connection".into(),
                         ));
                     },
                     Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => {
@@ -127,12 +127,15 @@ impl RustlsStream {
                         continue;
                     },
                     Err(e) => {
-                        return Err(OasisError::Backend(format!("TLS handshake read: {e}")));
+                        return Err(OasisError::Backend(
+                            format!("TLS handshake read: {e}").into(),
+                        ));
                     },
                     Ok(_) => {},
                 }
-                tls.process_new_packets()
-                    .map_err(|e| OasisError::Backend(format!("TLS handshake failed: {e}")))?;
+                tls.process_new_packets().map_err(|e| {
+                    OasisError::Backend(format!("TLS handshake failed: {e}").into())
+                })?;
             }
         }
         // Flush any remaining handshake bytes.
@@ -167,7 +170,7 @@ impl RustlsStream {
                 while self.tls.wants_write() {
                     self.tls
                         .write_tls(&mut adapter)
-                        .map_err(|e| OasisError::Backend(format!("TLS write_tls: {e}")))?;
+                        .map_err(|e| OasisError::Backend(format!("TLS write_tls: {e}").into()))?;
                 }
             }
 
@@ -182,7 +185,7 @@ impl RustlsStream {
                     return Ok(PullResult::WouldBlock);
                 },
                 Err(e) => {
-                    return Err(OasisError::Backend(format!("TLS read_tls: {e}")));
+                    return Err(OasisError::Backend(format!("TLS read_tls: {e}").into()));
                 },
                 Ok(_) => {},
             }
@@ -190,7 +193,7 @@ impl RustlsStream {
             // Decrypt.
             self.tls
                 .process_new_packets()
-                .map_err(|e| OasisError::Backend(format!("TLS process: {e}")))?;
+                .map_err(|e| OasisError::Backend(format!("TLS process: {e}").into()))?;
 
             if self.drain_reader() {
                 return Ok(PullResult::GotData);
@@ -249,13 +252,13 @@ impl NetworkStream for RustlsStream {
             .tls
             .writer()
             .write(data)
-            .map_err(|e| OasisError::Backend(format!("TLS write: {e}")))?;
+            .map_err(|e| OasisError::Backend(format!("TLS write: {e}").into()))?;
 
         // Flush the resulting ciphertext to the network.
         let mut adapter = IoAdapter::new(&mut *self.inner);
         self.tls
             .write_tls(&mut adapter)
-            .map_err(|e| OasisError::Backend(format!("TLS write_tls: {e}")))?;
+            .map_err(|e| OasisError::Backend(format!("TLS write_tls: {e}").into()))?;
 
         Ok(n)
     }
@@ -881,7 +884,7 @@ mod tests {
 
     #[test]
     fn test_oasis_err_to_io_converts_other() {
-        let oasis_err = OasisError::Backend("some error".to_string());
+        let oasis_err = OasisError::Backend("some error".into());
         let converted = oasis_err_to_io(oasis_err);
         assert_eq!(converted.kind(), io::ErrorKind::Other);
         assert!(

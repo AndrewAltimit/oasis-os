@@ -42,9 +42,9 @@ pub fn gemini_get(url: &Url, tls: Option<&dyn TlsProvider>) -> Result<ResourceRe
 
         if resp.status.is_redirect() {
             let target = &resp.meta;
-            current_url = current_url
-                .resolve(target)
-                .ok_or_else(|| OasisError::Backend(format!("bad Gemini redirect: {target}")))?;
+            current_url = current_url.resolve(target).ok_or_else(|| {
+                OasisError::Backend(format!("bad Gemini redirect: {target}").into())
+            })?;
             continue;
         }
 
@@ -86,7 +86,7 @@ pub fn gemini_get(url: &Url, tls: Option<&dyn TlsProvider>) -> Result<ResourceRe
         });
     }
 
-    Err(OasisError::Backend("too many Gemini redirects".to_string()))
+    Err(OasisError::Backend("too many Gemini redirects".into()))
 }
 
 /// Perform a single Gemini request over TLS.
@@ -108,7 +108,7 @@ fn do_gemini_request(url: &Url, tls: &dyn TlsProvider) -> Result<gemini::GeminiR
     let request = gemini::build_request(&url.to_string());
     adapter
         .write_all(&request)
-        .map_err(|e| OasisError::Backend(format!("Gemini send: {e}")))?;
+        .map_err(|e| OasisError::Backend(format!("Gemini send: {e}").into()))?;
 
     // Read response.
     let mut buf = Vec::with_capacity(8192);
@@ -118,7 +118,7 @@ fn do_gemini_request(url: &Url, tls: &dyn TlsProvider) -> Result<gemini::GeminiR
             Ok(0) => break,
             Ok(n) => {
                 if buf.len() + n > MAX_BODY_SIZE {
-                    return Err(OasisError::Backend("Gemini response too large".to_string()));
+                    return Err(OasisError::Backend("Gemini response too large".into()));
                 }
                 buf.extend_from_slice(&chunk[..n]);
             },
@@ -129,13 +129,13 @@ fn do_gemini_request(url: &Url, tls: &dyn TlsProvider) -> Result<gemini::GeminiR
                 break;
             },
             Err(e) => {
-                return Err(OasisError::Backend(format!("Gemini read: {e}")));
+                return Err(OasisError::Backend(format!("Gemini read: {e}").into()));
             },
         }
     }
 
     gemini::parse_response(&buf)
-        .ok_or_else(|| OasisError::Backend("malformed Gemini response".to_string()))
+        .ok_or_else(|| OasisError::Backend("malformed Gemini response".into()))
 }
 
 /// Open a TCP connection with a connect timeout.
@@ -144,16 +144,16 @@ fn tcp_connect(host: &str, port: u16) -> Result<TcpStream> {
 
     let addr = format!("{host}:{port}")
         .to_socket_addrs()
-        .map_err(|e| OasisError::Backend(format!("DNS resolution failed: {e}")))?
+        .map_err(|e| OasisError::Backend(format!("DNS resolution failed: {e}").into()))?
         .next()
-        .ok_or_else(|| OasisError::Backend(format!("no addresses for {host}:{port}")))?;
+        .ok_or_else(|| OasisError::Backend(format!("no addresses for {host}:{port}").into()))?;
 
     let stream = TcpStream::connect_timeout(&addr, CONNECT_TIMEOUT)
-        .map_err(|e| OasisError::Backend(format!("TCP connect failed: {e}")))?;
+        .map_err(|e| OasisError::Backend(format!("TCP connect failed: {e}").into()))?;
 
     stream
         .set_read_timeout(Some(READ_TIMEOUT))
-        .map_err(|e| OasisError::Backend(format!("set read timeout: {e}")))?;
+        .map_err(|e| OasisError::Backend(format!("set read timeout: {e}").into()))?;
 
     Ok(stream)
 }

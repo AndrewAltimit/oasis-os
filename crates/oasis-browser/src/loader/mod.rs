@@ -385,15 +385,15 @@ fn load_from_network(
     tls: Option<&dyn oasis_net::tls::TlsProvider>,
 ) -> Result<ResourceResponse> {
     let url = Url::parse(&request.url).ok_or_else(|| {
-        oasis_types::error::OasisError::Backend(format!("invalid URL: {}", request.url,))
+        oasis_types::error::OasisError::Backend(format!("invalid URL: {}", request.url,).into())
     })?;
 
     match url.scheme.as_str() {
         "http" | "https" => http::http_get(&url, tls),
         "gemini" => gemini_fetch::gemini_get(&url, tls),
-        scheme => Err(oasis_types::error::OasisError::Backend(format!(
-            "unsupported network scheme: {scheme}",
-        ))),
+        scheme => Err(oasis_types::error::OasisError::Backend(
+            format!("unsupported network scheme: {scheme}",).into(),
+        )),
     }
 }
 
@@ -403,10 +403,9 @@ fn load_from_network(
     request: &ResourceRequest,
     _tls: Option<&dyn oasis_net::tls::TlsProvider>,
 ) -> Result<ResourceResponse> {
-    Err(oasis_types::error::OasisError::Backend(format!(
-        "network loading not available in browser: {}",
-        request.url,
-    )))
+    Err(oasis_types::error::OasisError::Backend(
+        format!("network loading not available in browser: {}", request.url,).into(),
+    ))
 }
 
 // ---------------------------------------------------------------------------

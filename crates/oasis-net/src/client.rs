@@ -65,7 +65,7 @@ impl RemoteClient {
             // Send PSK immediately.
             if let Some(ref mut s) = self.stream {
                 s.write(format!("{key}\n").as_bytes())
-                    .map_err(|e| OasisError::Backend(format!("auth send: {e}")))?;
+                    .map_err(|e| OasisError::Backend(format!("auth send: {e}").into()))?;
             }
             self.state = ClientState::Authenticating;
         } else {
@@ -80,10 +80,10 @@ impl RemoteClient {
         let stream = self
             .stream
             .as_mut()
-            .ok_or_else(|| OasisError::Backend("not connected".to_string()))?;
+            .ok_or_else(|| OasisError::Backend("not connected".into()))?;
         stream
             .write(format!("{line}\n").as_bytes())
-            .map_err(|e| OasisError::Backend(format!("send: {e}")))?;
+            .map_err(|e| OasisError::Backend(format!("send: {e}").into()))?;
         Ok(())
     }
 
@@ -244,7 +244,7 @@ mod tests {
         let result = client.send("test command");
         assert!(result.is_err());
         if let Err(OasisError::Backend(msg)) = result {
-            assert_eq!(msg, "not connected");
+            assert_eq!(msg.to_string(), "not connected");
         } else {
             panic!("Expected Backend error with 'not connected' message");
         }

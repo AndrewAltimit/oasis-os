@@ -42,19 +42,18 @@ impl Command for WmCmd {
             "close" | "focus" | "minimize" | "maximize" => {
                 let id = args.get(1).copied().unwrap_or("");
                 if id.is_empty() {
-                    return Err(OasisError::Command(format!(
-                        "usage: wm {subcmd} <window-id>"
-                    )));
+                    return Err(OasisError::Command(
+                        format!("usage: wm {subcmd} <window-id>").into(),
+                    ));
                 }
                 let request = format!("{subcmd} {id}");
                 let req_path = "/var/wm/request";
                 env.vfs.write(req_path, request.as_bytes())?;
                 Ok(CommandOutput::Text(format!("WM request: {subcmd} {id}")))
             },
-            _ => Err(OasisError::Command(format!(
-                "unknown subcommand: {subcmd}\nusage: {}",
-                self.usage()
-            ))),
+            _ => Err(OasisError::Command(
+                format!("unknown subcommand: {subcmd}\nusage: {}", self.usage()).into(),
+            )),
         }
     }
 }
@@ -96,13 +95,15 @@ impl Command for SdiCmd {
             "get" => {
                 let name = args.get(1).copied().unwrap_or("");
                 if name.is_empty() {
-                    return Err(OasisError::Command("usage: sdi get <name>".to_string()));
+                    return Err(OasisError::Command("usage: sdi get <name>".into()));
                 }
                 Ok(CommandOutput::Text(format!(
                     "SDI object '{name}': (query via VFS not yet implemented)"
                 )))
             },
-            _ => Err(OasisError::Command(format!("unknown subcommand: {subcmd}"))),
+            _ => Err(OasisError::Command(
+                format!("unknown subcommand: {subcmd}").into(),
+            )),
         }
     }
 }
@@ -141,7 +142,9 @@ impl Command for ThemeCmd {
                     ))
                 }
             },
-            _ => Err(OasisError::Command(format!("unknown subcommand: {subcmd}"))),
+            _ => Err(OasisError::Command(
+                format!("unknown subcommand: {subcmd}").into(),
+            )),
         }
     }
 }
@@ -166,7 +169,7 @@ impl Command for NotifyCmd {
     }
     fn execute(&self, args: &[&str], env: &mut Environment<'_>) -> Result<CommandOutput> {
         if args.is_empty() {
-            return Err(OasisError::Command("usage: notify <message>".to_string()));
+            return Err(OasisError::Command("usage: notify <message>".into()));
         }
         let message = args.join(" ");
         // Write notification to VFS for the UI layer to pick up.

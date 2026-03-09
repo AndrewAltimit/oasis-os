@@ -7,15 +7,16 @@
 //! sub-rect blits, tinted blits, clip/transform stacks) are implemented using
 //! SDL2 renderer API calls and software rasterization helpers.
 
+mod blitting;
 mod font;
+mod input;
 pub mod network;
 mod sdl_audio;
+mod shapes;
 
 use std::collections::HashMap;
 
 use sdl2::EventPump;
-use sdl2::event::Event;
-use sdl2::keyboard::Keycode;
 use sdl2::pixels::PixelFormatEnum;
 use sdl2::rect::Rect;
 use sdl2::render::{Canvas, Texture, TextureCreator};
@@ -26,18 +27,25 @@ use oasis_core::backend::{
     validate_rgba_data,
 };
 use oasis_core::error::Result;
-use oasis_core::input::{Button, InputEvent, Trigger};
 
 pub use network::SdlNetworkBackend;
 pub use sdl_audio::SdlAudioBackend;
 
+use shapes::{intersect_clip, isqrt, lerp_color_sdl};
+
+// Re-export input helpers for tests.
+#[cfg(test)]
+use input::{map_key_down, map_key_up};
+#[cfg(test)]
+use shapes::edge_x;
+
 /// Stored clip rectangle.
 #[derive(Clone, Copy)]
-struct ClipRect {
-    x: i32,
-    y: i32,
-    w: u32,
-    h: u32,
+pub(crate) struct ClipRect {
+    pub(crate) x: i32,
+    pub(crate) y: i32,
+    pub(crate) w: u32,
+    pub(crate) h: u32,
 }
 
 /// SDL2 rendering and input backend.
@@ -51,16 +59,16 @@ struct ClipRect {
 /// The `Texture<'static>` lifetime is erased via transmute in `load_texture()` --
 /// this is sound because the `TextureCreator` always outlives the textures.
 pub struct SdlBackend {
-    canvas: Canvas<Window>,
-    event_pump: EventPump,
-    textures: HashMap<u64, Texture<'static>>,
+    pub(crate) canvas: Canvas<Window>,
+    pub(crate) event_pump: EventPump,
+    pub(crate) textures: HashMap<u64, Texture<'static>>,
     texture_creator: TextureCreator<WindowContext>,
     next_texture_id: u64,
-    clip_stack: Vec<ClipRect>,
-    translate_stack: Vec<(i32, i32)>,
-    cumulative_translate: (i32, i32),
-    viewport_w: u32,
-    viewport_h: u32,
+    pub(crate) clip_stack: Vec<ClipRect>,
+    pub(crate) translate_stack: Vec<(i32, i32)>,
+    pub(crate) cumulative_translate: (i32, i32),
+    pub(crate) viewport_w: u32,
+    pub(crate) viewport_h: u32,
 }
 
 impl SdlBackend {
@@ -100,66 +108,15 @@ impl SdlBackend {
     }
 
     /// Apply cumulative translation to coordinates.
-    fn translate(&self, x: i32, y: i32) -> (i32, i32) {
+    pub(crate) fn translate(&self, x: i32, y: i32) -> (i32, i32) {
         (
             x + self.cumulative_translate.0,
             y + self.cumulative_translate.1,
         )
     }
 
-    /// Fill a triangle using pre-translated screen coordinates.
-    ///
-    /// Used by `fill_arc` which translates the center once and computes
-    /// all vertices in screen space.
-    #[allow(clippy::too_many_arguments)]
-    fn fill_triangle_translated(
-        &mut self,
-        tx1: i32,
-        ty1: i32,
-        tx2: i32,
-        ty2: i32,
-        tx3: i32,
-        ty3: i32,
-        color: Color,
-    ) {
-        let mut verts = [(tx1, ty1), (tx2, ty2), (tx3, ty3)];
-        verts.sort_by_key(|v| v.1);
-        let (vx0, vy0) = verts[0];
-        let (vx1, vy1) = verts[1];
-        let (vx2, vy2) = verts[2];
-
-        self.set_color(color);
-        for y in vy0..=vy2 {
-            let mut x_min = i32::MAX;
-            let mut x_max = i32::MIN;
-            let x_02 = edge_x(vx0, vy0, vx2, vy2, y);
-            x_min = x_min.min(x_02);
-            x_max = x_max.max(x_02);
-            if y <= vy1 && vy0 != vy1 {
-                let x_01 = edge_x(vx0, vy0, vx1, vy1, y);
-                x_min = x_min.min(x_01);
-                x_max = x_max.max(x_01);
-            }
-            if y >= vy1 && vy1 != vy2 {
-                let x_12 = edge_x(vx1, vy1, vx2, vy2, y);
-                x_min = x_min.min(x_12);
-                x_max = x_max.max(x_12);
-            }
-            if y == vy1 {
-                x_min = x_min.min(vx1);
-                x_max = x_max.max(vx1);
-            }
-            if x_min <= x_max {
-                let _ = self.canvas.draw_line(
-                    sdl2::rect::Point::new(x_min, y),
-                    sdl2::rect::Point::new(x_max, y),
-                );
-            }
-        }
-    }
-
     /// Set the SDL draw color with optional blend mode.
-    fn set_color(&mut self, color: Color) {
+    pub(crate) fn set_color(&mut self, color: Color) {
         if color.a < 255 {
             self.canvas.set_blend_mode(sdl2::render::BlendMode::Blend);
         } else {
@@ -341,7 +298,7 @@ impl SdiBackend for SdlBackend {
     }
 
     // -------------------------------------------------------------------
-    // Extended: Shape Primitives
+    // Extended: Shape Primitives (delegated to shapes.rs)
     // -------------------------------------------------------------------
 
     fn fill_rounded_rect(
@@ -353,66 +310,7 @@ impl SdiBackend for SdlBackend {
         radius: u16,
         color: Color,
     ) -> Result<()> {
-        if radius == 0 || w == 0 || h == 0 {
-            return self.fill_rect(x, y, w, h, color);
-        }
-        let (tx, ty) = self.translate(x, y);
-        let r = (radius as u32).min(w / 2).min(h / 2) as i32;
-        self.set_color(color);
-
-        // Center body rect.
-        let _ = self
-            .canvas
-            .fill_rect(Rect::new(tx, ty + r, w, h - r as u32 * 2));
-        // Top strip.
-        let _ = self
-            .canvas
-            .fill_rect(Rect::new(tx + r, ty, w - r as u32 * 2, r as u32));
-        // Bottom strip.
-        let _ = self.canvas.fill_rect(Rect::new(
-            tx + r,
-            ty + h as i32 - r,
-            w - r as u32 * 2,
-            r as u32,
-        ));
-
-        // Corner fills using midpoint circle horizontal spans.
-        let mut cx = 0i32;
-        let mut cy = r;
-        let mut d = 1 - r;
-        while cx <= cy {
-            // Top-left + top-right.
-            let _ = self.canvas.draw_line(
-                sdl2::rect::Point::new(tx + r - cy, ty + r - cx),
-                sdl2::rect::Point::new(tx + w as i32 - 1 - r + cy, ty + r - cx),
-            );
-            if cx != cy {
-                let _ = self.canvas.draw_line(
-                    sdl2::rect::Point::new(tx + r - cx, ty + r - cy),
-                    sdl2::rect::Point::new(tx + w as i32 - 1 - r + cx, ty + r - cy),
-                );
-            }
-            // Bottom-left + bottom-right.
-            if cx != 0 {
-                let _ = self.canvas.draw_line(
-                    sdl2::rect::Point::new(tx + r - cy, ty + h as i32 - 1 - r + cx),
-                    sdl2::rect::Point::new(tx + w as i32 - 1 - r + cy, ty + h as i32 - 1 - r + cx),
-                );
-            }
-            let _ = self.canvas.draw_line(
-                sdl2::rect::Point::new(tx + r - cx, ty + h as i32 - 1 - r + cy),
-                sdl2::rect::Point::new(tx + w as i32 - 1 - r + cx, ty + h as i32 - 1 - r + cy),
-            );
-
-            cx += 1;
-            if d < 0 {
-                d += 2 * cx + 1;
-            } else {
-                cy -= 1;
-                d += 2 * (cx - cy) + 1;
-            }
-        }
-        Ok(())
+        self.shape_fill_rounded_rect(x, y, w, h, radius, color)
     }
 
     fn stroke_rect(
@@ -424,27 +322,7 @@ impl SdiBackend for SdlBackend {
         stroke_width: u16,
         color: Color,
     ) -> Result<()> {
-        let (tx, ty) = self.translate(x, y);
-        self.set_color(color);
-        if stroke_width == 1 {
-            let _ = self.canvas.draw_rect(Rect::new(tx, ty, w, h));
-        } else {
-            let sw = stroke_width as u32;
-            let _ = self.canvas.fill_rect(Rect::new(tx, ty, w, sw));
-            let _ = self
-                .canvas
-                .fill_rect(Rect::new(tx, ty + h as i32 - sw as i32, w, sw));
-            let _ =
-                self.canvas
-                    .fill_rect(Rect::new(tx, ty + sw as i32, sw, h.saturating_sub(sw * 2)));
-            let _ = self.canvas.fill_rect(Rect::new(
-                tx + w as i32 - sw as i32,
-                ty + sw as i32,
-                sw,
-                h.saturating_sub(sw * 2),
-            ));
-        }
-        Ok(())
+        self.shape_stroke_rect(x, y, w, h, stroke_width, color)
     }
 
     fn draw_line(
@@ -456,72 +334,11 @@ impl SdiBackend for SdlBackend {
         width: u16,
         color: Color,
     ) -> Result<()> {
-        let (tx1, ty1) = self.translate(x1, y1);
-        let (tx2, ty2) = self.translate(x2, y2);
-        self.set_color(color);
-        if width <= 1 {
-            let _ = self.canvas.draw_line(
-                sdl2::rect::Point::new(tx1, ty1),
-                sdl2::rect::Point::new(tx2, ty2),
-            );
-        } else {
-            // Draw multiple parallel lines for thickness.
-            let half = width as i32 / 2;
-            let dx = (tx2 - tx1) as f32;
-            let dy = (ty2 - ty1) as f32;
-            let len = (dx * dx + dy * dy).sqrt().max(1.0);
-            let nx = (-dy / len) as i32;
-            let ny = (dx / len) as i32;
-            for i in -half..=(width as i32 - half - 1) {
-                let ox = nx * i;
-                let oy = ny * i;
-                let _ = self.canvas.draw_line(
-                    sdl2::rect::Point::new(tx1 + ox, ty1 + oy),
-                    sdl2::rect::Point::new(tx2 + ox, ty2 + oy),
-                );
-            }
-        }
-        Ok(())
+        self.shape_draw_line(x1, y1, x2, y2, width, color)
     }
 
     fn fill_circle(&mut self, cx: i32, cy: i32, radius: u16, color: Color) -> Result<()> {
-        let (tcx, tcy) = self.translate(cx, cy);
-        let r = radius as i32;
-        self.set_color(color);
-
-        let mut x = 0i32;
-        let mut y = r;
-        let mut d = 1 - r;
-        while x <= y {
-            let _ = self.canvas.draw_line(
-                sdl2::rect::Point::new(tcx - y, tcy + x),
-                sdl2::rect::Point::new(tcx + y, tcy + x),
-            );
-            if x != 0 {
-                let _ = self.canvas.draw_line(
-                    sdl2::rect::Point::new(tcx - y, tcy - x),
-                    sdl2::rect::Point::new(tcx + y, tcy - x),
-                );
-            }
-            if x != y {
-                let _ = self.canvas.draw_line(
-                    sdl2::rect::Point::new(tcx - x, tcy + y),
-                    sdl2::rect::Point::new(tcx + x, tcy + y),
-                );
-                let _ = self.canvas.draw_line(
-                    sdl2::rect::Point::new(tcx - x, tcy - y),
-                    sdl2::rect::Point::new(tcx + x, tcy - y),
-                );
-            }
-            x += 1;
-            if d < 0 {
-                d += 2 * x + 1;
-            } else {
-                y -= 1;
-                d += 2 * (x - y) + 1;
-            }
-        }
-        Ok(())
+        self.shape_fill_circle(cx, cy, radius, color)
     }
 
     fn stroke_circle(
@@ -532,44 +349,7 @@ impl SdiBackend for SdlBackend {
         stroke_width: u16,
         color: Color,
     ) -> Result<()> {
-        let (tcx, tcy) = self.translate(cx, cy);
-        self.set_color(color);
-        let sw = (stroke_width as i32).max(1);
-
-        // Draw concentric circle outlines for the requested stroke width.
-        for offset in 0..sw {
-            let r = radius as i32 - offset;
-            if r <= 0 {
-                break;
-            }
-
-            let mut x = 0i32;
-            let mut y = r;
-            let mut d = 1 - r;
-            while x <= y {
-                // Plot 8 symmetric points on the perimeter.
-                for &(px, py) in &[
-                    (tcx + x, tcy + y),
-                    (tcx - x, tcy + y),
-                    (tcx + x, tcy - y),
-                    (tcx - x, tcy - y),
-                    (tcx + y, tcy + x),
-                    (tcx - y, tcy + x),
-                    (tcx + y, tcy - x),
-                    (tcx - y, tcy - x),
-                ] {
-                    let _ = self.canvas.draw_point(sdl2::rect::Point::new(px, py));
-                }
-                x += 1;
-                if d < 0 {
-                    d += 2 * x + 1;
-                } else {
-                    y -= 1;
-                    d += 2 * (x - y) + 1;
-                }
-            }
-        }
-        Ok(())
+        self.shape_stroke_circle(cx, cy, radius, stroke_width, color)
     }
 
     fn fill_triangle(
@@ -582,50 +362,63 @@ impl SdiBackend for SdlBackend {
         y3: i32,
         color: Color,
     ) -> Result<()> {
-        let (tx1, ty1) = self.translate(x1, y1);
-        let (tx2, ty2) = self.translate(x2, y2);
-        let (tx3, ty3) = self.translate(x3, y3);
+        self.shape_fill_triangle(x1, y1, x2, y2, x3, y3, color)
+    }
 
-        // Sort by y.
-        let mut verts = [(tx1, ty1), (tx2, ty2), (tx3, ty3)];
-        verts.sort_by_key(|v| v.1);
-        let (vx0, vy0) = verts[0];
-        let (vx1, vy1) = verts[1];
-        let (vx2, vy2) = verts[2];
+    fn stroke_rounded_rect(
+        &mut self,
+        x: i32,
+        y: i32,
+        w: u32,
+        h: u32,
+        radius: u16,
+        stroke_width: u16,
+        color: Color,
+    ) -> Result<()> {
+        self.shape_stroke_rounded_rect(x, y, w, h, radius, stroke_width, color)
+    }
 
-        self.set_color(color);
+    fn fill_polygon(&mut self, points: &[(i32, i32)], color: Color) -> Result<()> {
+        self.shape_fill_polygon(points, color)
+    }
 
-        for y in vy0..=vy2 {
-            let mut x_min = i32::MAX;
-            let mut x_max = i32::MIN;
+    fn fill_arc(
+        &mut self,
+        cx: i32,
+        cy: i32,
+        radius: u16,
+        start_angle: f32,
+        end_angle: f32,
+        color: Color,
+    ) -> Result<()> {
+        self.shape_fill_arc(cx, cy, radius, start_angle, end_angle, color)
+    }
 
-            let x_02 = edge_x(vx0, vy0, vx2, vy2, y);
-            x_min = x_min.min(x_02);
-            x_max = x_max.max(x_02);
+    fn stroke_arc(
+        &mut self,
+        cx: i32,
+        cy: i32,
+        radius: u16,
+        start_angle: f32,
+        end_angle: f32,
+        width: u16,
+        color: Color,
+    ) -> Result<()> {
+        self.shape_stroke_arc(cx, cy, radius, start_angle, end_angle, width, color)
+    }
 
-            if y <= vy1 && vy0 != vy1 {
-                let x_01 = edge_x(vx0, vy0, vx1, vy1, y);
-                x_min = x_min.min(x_01);
-                x_max = x_max.max(x_01);
-            }
-            if y >= vy1 && vy1 != vy2 {
-                let x_12 = edge_x(vx1, vy1, vx2, vy2, y);
-                x_min = x_min.min(x_12);
-                x_max = x_max.max(x_12);
-            }
-            if y == vy1 {
-                x_min = x_min.min(vx1);
-                x_max = x_max.max(vx1);
-            }
-
-            if x_min <= x_max {
-                let _ = self.canvas.draw_line(
-                    sdl2::rect::Point::new(x_min, y),
-                    sdl2::rect::Point::new(x_max, y),
-                );
-            }
-        }
-        Ok(())
+    fn stroke_line_dashed(
+        &mut self,
+        x1: i32,
+        y1: i32,
+        x2: i32,
+        y2: i32,
+        width: u16,
+        color: Color,
+        dash: u16,
+        gap: u16,
+    ) -> Result<()> {
+        self.shape_stroke_line_dashed(x1, y1, x2, y2, width, color, dash, gap)
     }
 
     // -------------------------------------------------------------------
@@ -676,110 +469,6 @@ impl SdiBackend for SdlBackend {
                     }
                 }
             },
-        }
-        Ok(())
-    }
-
-    fn stroke_rounded_rect(
-        &mut self,
-        x: i32,
-        y: i32,
-        w: u32,
-        h: u32,
-        radius: u16,
-        stroke_width: u16,
-        color: Color,
-    ) -> Result<()> {
-        if radius == 0 || w == 0 || h == 0 {
-            return self.stroke_rect(x, y, w, h, stroke_width, color);
-        }
-        let (tx, ty) = self.translate(x, y);
-        let r = (radius as i32).min(w as i32 / 2).min(h as i32 / 2);
-        self.set_color(color);
-
-        let sw = (stroke_width as i32).max(1);
-        for t in 0..sw {
-            // Top edge.
-            let _ = self.canvas.draw_line(
-                sdl2::rect::Point::new(tx + r, ty + t),
-                sdl2::rect::Point::new(tx + w as i32 - 1 - r, ty + t),
-            );
-            // Bottom edge.
-            let _ = self.canvas.draw_line(
-                sdl2::rect::Point::new(tx + r, ty + h as i32 - 1 - t),
-                sdl2::rect::Point::new(tx + w as i32 - 1 - r, ty + h as i32 - 1 - t),
-            );
-            // Left edge.
-            let _ = self.canvas.draw_line(
-                sdl2::rect::Point::new(tx + t, ty + r),
-                sdl2::rect::Point::new(tx + t, ty + h as i32 - 1 - r),
-            );
-            // Right edge.
-            let _ = self.canvas.draw_line(
-                sdl2::rect::Point::new(tx + w as i32 - 1 - t, ty + r),
-                sdl2::rect::Point::new(tx + w as i32 - 1 - t, ty + h as i32 - 1 - r),
-            );
-
-            // Rounded corners via midpoint circle arc.
-            let cr = r - t;
-            if cr <= 0 {
-                continue;
-            }
-            let mut cx = 0i32;
-            let mut cy = cr;
-            let mut d = 1 - cr;
-            while cx <= cy {
-                // Top-left corner.
-                let _ = self
-                    .canvas
-                    .draw_point(sdl2::rect::Point::new(tx + r - cy, ty + r - cx));
-                if cx != cy {
-                    let _ = self
-                        .canvas
-                        .draw_point(sdl2::rect::Point::new(tx + r - cx, ty + r - cy));
-                }
-                // Top-right corner.
-                let _ = self.canvas.draw_point(sdl2::rect::Point::new(
-                    tx + w as i32 - 1 - r + cy,
-                    ty + r - cx,
-                ));
-                if cx != cy {
-                    let _ = self.canvas.draw_point(sdl2::rect::Point::new(
-                        tx + w as i32 - 1 - r + cx,
-                        ty + r - cy,
-                    ));
-                }
-                // Bottom-left corner.
-                if cx != 0 {
-                    let _ = self.canvas.draw_point(sdl2::rect::Point::new(
-                        tx + r - cy,
-                        ty + h as i32 - 1 - r + cx,
-                    ));
-                }
-                let _ = self.canvas.draw_point(sdl2::rect::Point::new(
-                    tx + r - cx,
-                    ty + h as i32 - 1 - r + cy,
-                ));
-                // Bottom-right corner.
-                if cx != 0 {
-                    let _ = self.canvas.draw_point(sdl2::rect::Point::new(
-                        tx + w as i32 - 1 - r + cy,
-                        ty + h as i32 - 1 - r + cx,
-                    ));
-                }
-                let _ = self.canvas.draw_point(sdl2::rect::Point::new(
-                    tx + w as i32 - 1 - r + cx,
-                    ty + h as i32 - 1 - r + cy,
-                ));
-
-                cx += 1;
-                if d < 0 {
-                    d += 2 * cx + 1;
-                } else {
-                    cy -= 1;
-                    d += 2 * (cx - cy) + 1;
-                }
-            }
         }
         Ok(())
     }
@@ -835,193 +524,8 @@ impl SdiBackend for SdlBackend {
         Ok(())
     }
 
-    fn viewport_size(&self) -> (u32, u32) {
-        (self.viewport_w, self.viewport_h)
-    }
-
-    fn dim_screen(&mut self, alpha: u8) -> Result<()> {
-        self.fill_rect(
-            0,
-            0,
-            self.viewport_w,
-            self.viewport_h,
-            Color::rgba(0, 0, 0, alpha),
-        )
-    }
-
     // -------------------------------------------------------------------
-    // Extended: Vector Graphics Primitives
-    // -------------------------------------------------------------------
-
-    fn fill_polygon(&mut self, points: &[(i32, i32)], color: Color) -> Result<()> {
-        if points.len() < 3 {
-            return Ok(());
-        }
-        self.set_color(color);
-
-        // Collect translated, y-sorted scanline edges.
-        let translated: Vec<(i32, i32)> =
-            points.iter().map(|&(x, y)| self.translate(x, y)).collect();
-
-        let y_min = translated.iter().map(|v| v.1).min().unwrap_or(0);
-        let y_max = translated.iter().map(|v| v.1).max().unwrap_or(0);
-
-        for y in y_min..=y_max {
-            let mut x_intersections = Vec::new();
-            let n = translated.len();
-            for i in 0..n {
-                let j = (i + 1) % n;
-                let (x0, y0) = translated[i];
-                let (x1, y1) = translated[j];
-                if (y0 <= y && y1 > y) || (y1 <= y && y0 > y) {
-                    let t = (y - y0) as f32 / (y1 - y0) as f32;
-                    x_intersections.push(x0 + (t * (x1 - x0) as f32) as i32);
-                }
-            }
-            x_intersections.sort_unstable();
-            for pair in x_intersections.chunks_exact(2) {
-                let _ = self.canvas.draw_line(
-                    sdl2::rect::Point::new(pair[0], y),
-                    sdl2::rect::Point::new(pair[1], y),
-                );
-            }
-        }
-        Ok(())
-    }
-
-    fn fill_arc(
-        &mut self,
-        cx: i32,
-        cy: i32,
-        radius: u16,
-        start_angle: f32,
-        end_angle: f32,
-        color: Color,
-    ) -> Result<()> {
-        use oasis_types::backend::{arc_segments, cos_approx_f32, sin_approx_f32};
-        let (tcx, tcy) = self.translate(cx, cy);
-        self.set_color(color);
-        let segments = arc_segments(radius, start_angle, end_angle);
-        let r = radius as f32;
-        let step = (end_angle - start_angle) / segments as f32;
-
-        // Build triangle fan vertices and scanline-fill each triangle.
-        let mut prev_x = tcx + (r * cos_approx_f32(start_angle)) as i32;
-        let mut prev_y = tcy + (r * sin_approx_f32(start_angle)) as i32;
-        for i in 1..=segments {
-            let angle = start_angle + step * i as f32;
-            let nx = tcx + (r * cos_approx_f32(angle)) as i32;
-            let ny = tcy + (r * sin_approx_f32(angle)) as i32;
-            self.fill_triangle_translated(tcx, tcy, prev_x, prev_y, nx, ny, color);
-            prev_x = nx;
-            prev_y = ny;
-        }
-        Ok(())
-    }
-
-    fn stroke_arc(
-        &mut self,
-        cx: i32,
-        cy: i32,
-        radius: u16,
-        start_angle: f32,
-        end_angle: f32,
-        width: u16,
-        color: Color,
-    ) -> Result<()> {
-        use oasis_types::backend::{arc_segments, cos_approx_f32, sin_approx_f32};
-        let (tcx, tcy) = self.translate(cx, cy);
-        self.set_color(color);
-        let segments = arc_segments(radius, start_angle, end_angle);
-        let r = radius as f32;
-        let step = (end_angle - start_angle) / segments as f32;
-
-        let half = width as i32 / 2;
-        let mut prev_x = tcx + (r * cos_approx_f32(start_angle)) as i32;
-        let mut prev_y = tcy + (r * sin_approx_f32(start_angle)) as i32;
-        for i in 1..=segments {
-            let angle = start_angle + step * i as f32;
-            let nx = tcx + (r * cos_approx_f32(angle)) as i32;
-            let ny = tcy + (r * sin_approx_f32(angle)) as i32;
-            // Thicken: draw parallel lines.
-            for offset in -half..=(width as i32 - half - 1) {
-                let dx = (nx - prev_x) as f32;
-                let dy = (ny - prev_y) as f32;
-                let len = (dx * dx + dy * dy).sqrt().max(1.0);
-                let ox = (-dy / len * offset as f32) as i32;
-                let oy = (dx / len * offset as f32) as i32;
-                let _ = self.canvas.draw_line(
-                    sdl2::rect::Point::new(prev_x + ox, prev_y + oy),
-                    sdl2::rect::Point::new(nx + ox, ny + oy),
-                );
-            }
-            prev_x = nx;
-            prev_y = ny;
-        }
-        Ok(())
-    }
-
-    fn stroke_line_dashed(
-        &mut self,
-        x1: i32,
-        y1: i32,
-        x2: i32,
-        y2: i32,
-        width: u16,
-        color: Color,
-        dash: u16,
-        gap: u16,
-    ) -> Result<()> {
-        let (tx1, ty1) = self.translate(x1, y1);
-        let (tx2, ty2) = self.translate(x2, y2);
-        self.set_color(color);
-
-        let dx = (tx2 - tx1) as f32;
-        let dy = (ty2 - ty1) as f32;
-        let total_len = (dx * dx + dy * dy).sqrt();
-        if total_len < 1.0 {
-            return Ok(());
-        }
-        let ux = dx / total_len;
-        let uy = dy / total_len;
-        let cycle = dash as f32 + gap as f32;
-        let half = width as i32 / 2;
-        let mut t = 0.0f32;
-        while t < total_len {
-            let seg_end = (t + dash as f32).min(total_len);
-            let sx = tx1 + (ux * t) as i32;
-            let sy = ty1 + (uy * t) as i32;
-            let ex = tx1 + (ux * seg_end) as i32;
-            let ey = ty1 + (uy * seg_end) as i32;
-            for offset in -half..=(width as i32 - half - 1) {
-                let ox = (-uy * offset as f32) as i32;
-                let oy = (ux * offset as f32) as i32;
-                let _ = self.canvas.draw_line(
-                    sdl2::rect::Point::new(sx + ox, sy + oy),
-                    sdl2::rect::Point::new(ex + ox, ey + oy),
-                );
-            }
-            t += cycle;
-        }
-        Ok(())
-    }
-
-    // -------------------------------------------------------------------
-    // Extended: Text System
-    // -------------------------------------------------------------------
-
-    fn measure_text_height(&self, font_size: u16) -> u32 {
-        // Match WASM: font_size * 1.2 (the actual rendered row height).
-        (f64::from(font_size.max(8)) * 1.2).ceil() as u32
-    }
-
-    fn font_ascent(&self, font_size: u16) -> u32 {
-        // Match WASM: font_size * 0.85 (baseline offset from top).
-        (f64::from(font_size.max(8)) * 0.85).ceil() as u32
-    }
-
-    // -------------------------------------------------------------------
-    // Extended: Texture Operations
+    // Extended: Texture Operations (delegated to blitting.rs)
     // -------------------------------------------------------------------
 
     fn blit_sub(
@@ -1036,17 +540,7 @@ impl SdiBackend for SdlBackend {
         dst_w: u32,
         dst_h: u32,
     ) -> Result<()> {
-        let (tx, ty) = self.translate(dst_x, dst_y);
-        let texture = self
-            .textures
-            .get(&tex.0)
-            .ok_or_else(|| texture_not_found(tex.0))?;
-        let src_rect = Rect::new(src_x as i32, src_y as i32, src_w, src_h);
-        let dst_rect = Rect::new(tx, ty, dst_w, dst_h);
-        self.canvas
-            .copy(texture, src_rect, dst_rect)
-            .backend_err()?;
-        Ok(())
+        self.blit_sub_impl(tex, src_x, src_y, src_w, src_h, dst_x, dst_y, dst_w, dst_h)
     }
 
     fn blit_tinted(
@@ -1058,19 +552,7 @@ impl SdiBackend for SdlBackend {
         h: u32,
         tint: Color,
     ) -> Result<()> {
-        let (tx, ty) = self.translate(x, y);
-        let texture = self
-            .textures
-            .get_mut(&tex.0)
-            .ok_or_else(|| texture_not_found(tex.0))?;
-        texture.set_color_mod(tint.r, tint.g, tint.b);
-        texture.set_alpha_mod(tint.a);
-        let dst_rect = Rect::new(tx, ty, w, h);
-        self.canvas.copy(texture, None, dst_rect).backend_err()?;
-        // Reset modulation on the same texture.
-        texture.set_color_mod(255, 255, 255);
-        texture.set_alpha_mod(255);
-        Ok(())
+        self.blit_tinted_impl(tex, x, y, w, h, tint)
     }
 
     fn blit_sub_tinted(
@@ -1086,22 +568,9 @@ impl SdiBackend for SdlBackend {
         dst_h: u32,
         tint: Color,
     ) -> Result<()> {
-        let (tx, ty) = self.translate(dst_x, dst_y);
-        let texture = self
-            .textures
-            .get_mut(&tex.0)
-            .ok_or_else(|| texture_not_found(tex.0))?;
-        texture.set_color_mod(tint.r, tint.g, tint.b);
-        texture.set_alpha_mod(tint.a);
-        let src_rect = Rect::new(src_x as i32, src_y as i32, src_w, src_h);
-        let dst_rect = Rect::new(tx, ty, dst_w, dst_h);
-        self.canvas
-            .copy(texture, src_rect, dst_rect)
-            .backend_err()?;
-        // Reset modulation on the same texture.
-        texture.set_color_mod(255, 255, 255);
-        texture.set_alpha_mod(255);
-        Ok(())
+        self.blit_sub_tinted_impl(
+            tex, src_x, src_y, src_w, src_h, dst_x, dst_y, dst_w, dst_h, tint,
+        )
     }
 
     fn blit_flipped(
@@ -1114,16 +583,35 @@ impl SdiBackend for SdlBackend {
         flip_h: bool,
         flip_v: bool,
     ) -> Result<()> {
-        let (tx, ty) = self.translate(x, y);
-        let texture = self
-            .textures
-            .get(&tex.0)
-            .ok_or_else(|| texture_not_found(tex.0))?;
-        let dst_rect = Rect::new(tx, ty, w, h);
-        self.canvas
-            .copy_ex(texture, None, dst_rect, 0.0, None, flip_h, flip_v)
-            .backend_err()?;
-        Ok(())
+        self.blit_flipped_impl(tex, x, y, w, h, flip_h, flip_v)
+    }
+
+    fn viewport_size(&self) -> (u32, u32) {
+        (self.viewport_w, self.viewport_h)
+    }
+
+    fn dim_screen(&mut self, alpha: u8) -> Result<()> {
+        self.fill_rect(
+            0,
+            0,
+            self.viewport_w,
+            self.viewport_h,
+            Color::rgba(0, 0, 0, alpha),
+        )
+    }
+
+    // -------------------------------------------------------------------
+    // Extended: Text System
+    // -------------------------------------------------------------------
+
+    fn measure_text_height(&self, font_size: u16) -> u32 {
+        // Match WASM: font_size * 1.2 (the actual rendered row height).
+        (f64::from(font_size.max(8)) * 1.2).ceil() as u32
+    }
+
+    fn font_ascent(&self, font_size: u16) -> u32 {
+        // Match WASM: font_size * 0.85 (baseline offset from top).
+        (f64::from(font_size.max(8)) * 0.85).ceil() as u32
     }
 
     // -------------------------------------------------------------------
@@ -1200,146 +688,13 @@ impl SdiBackend for SdlBackend {
     }
 }
 
-impl oasis_core::backend::InputBackend for SdlBackend {
-    fn poll_events(&mut self) -> Vec<InputEvent> {
-        let mut events = Vec::new();
-        for event in self.event_pump.poll_iter() {
-            if let Some(e) = map_sdl_event(event) {
-                events.push(e);
-            }
-        }
-        events
-    }
-}
-
-/// Map an SDL2 event to an OASIS_OS input event.
-fn map_sdl_event(event: Event) -> Option<InputEvent> {
-    match event {
-        Event::Quit { .. } => Some(InputEvent::Quit),
-        Event::KeyDown {
-            keycode: Some(key), ..
-        } => map_key_down(key),
-        Event::KeyUp {
-            keycode: Some(key), ..
-        } => map_key_up(key),
-        Event::MouseMotion { x, y, .. } => Some(InputEvent::CursorMove { x, y }),
-        Event::MouseButtonDown { x, y, .. } => Some(InputEvent::PointerClick { x, y }),
-        Event::MouseButtonUp { x, y, .. } => Some(InputEvent::PointerRelease { x, y }),
-        Event::MouseWheel { y, .. } => Some(InputEvent::MouseWheel { delta: -y }),
-        Event::Window {
-            win_event: sdl2::event::WindowEvent::FocusGained,
-            ..
-        } => Some(InputEvent::FocusGained),
-        Event::Window {
-            win_event: sdl2::event::WindowEvent::FocusLost,
-            ..
-        } => Some(InputEvent::FocusLost),
-        Event::TextInput { text, .. } => text.chars().next().map(InputEvent::TextInput),
-        _ => None,
-    }
-}
-
-fn map_key_down(key: Keycode) -> Option<InputEvent> {
-    match key {
-        Keycode::Up => Some(InputEvent::ButtonPress(Button::Up)),
-        Keycode::Down => Some(InputEvent::ButtonPress(Button::Down)),
-        Keycode::Left => Some(InputEvent::ButtonPress(Button::Left)),
-        Keycode::Right => Some(InputEvent::ButtonPress(Button::Right)),
-        Keycode::Return => Some(InputEvent::ButtonPress(Button::Confirm)),
-        Keycode::Escape => Some(InputEvent::ButtonPress(Button::Cancel)),
-        Keycode::Space => Some(InputEvent::ButtonPress(Button::Triangle)),
-        Keycode::Tab => Some(InputEvent::ButtonPress(Button::Square)),
-        Keycode::F1 => Some(InputEvent::ButtonPress(Button::Start)),
-        Keycode::F2 => Some(InputEvent::ButtonPress(Button::Select)),
-        Keycode::Backspace => Some(InputEvent::Backspace),
-        Keycode::Q => Some(InputEvent::TriggerPress(Trigger::Left)),
-        Keycode::E => Some(InputEvent::TriggerPress(Trigger::Right)),
-        Keycode::F11 => Some(InputEvent::ToggleFullscreen),
-        _ => None,
-    }
-}
-
-fn map_key_up(key: Keycode) -> Option<InputEvent> {
-    match key {
-        Keycode::Up => Some(InputEvent::ButtonRelease(Button::Up)),
-        Keycode::Down => Some(InputEvent::ButtonRelease(Button::Down)),
-        Keycode::Left => Some(InputEvent::ButtonRelease(Button::Left)),
-        Keycode::Right => Some(InputEvent::ButtonRelease(Button::Right)),
-        Keycode::Return => Some(InputEvent::ButtonRelease(Button::Confirm)),
-        Keycode::Escape => Some(InputEvent::ButtonRelease(Button::Cancel)),
-        Keycode::Space => Some(InputEvent::ButtonRelease(Button::Triangle)),
-        Keycode::Tab => Some(InputEvent::ButtonRelease(Button::Square)),
-        Keycode::F1 => Some(InputEvent::ButtonRelease(Button::Start)),
-        Keycode::F2 => Some(InputEvent::ButtonRelease(Button::Select)),
-        Keycode::Q => Some(InputEvent::TriggerRelease(Trigger::Left)),
-        Keycode::E => Some(InputEvent::TriggerRelease(Trigger::Right)),
-        _ => None,
-    }
-}
-
-/// Compute the intersection of two clip rectangles.
-fn intersect_clip(a: &ClipRect, b: &ClipRect) -> Option<ClipRect> {
-    let ax2 = a.x.saturating_add(a.w as i32);
-    let ay2 = a.y.saturating_add(a.h as i32);
-    let bx2 = b.x.saturating_add(b.w as i32);
-    let by2 = b.y.saturating_add(b.h as i32);
-    let x = a.x.max(b.x);
-    let y = a.y.max(b.y);
-    let x2 = ax2.min(bx2);
-    let y2 = ay2.min(by2);
-    if x2 > x && y2 > y {
-        Some(ClipRect {
-            x,
-            y,
-            w: (x2 - x) as u32,
-            h: (y2 - y) as u32,
-        })
-    } else {
-        None
-    }
-}
-
-/// Compute the x coordinate along an edge at a given y.
-fn edge_x(x0: i32, y0: i32, x1: i32, y1: i32, y: i32) -> i32 {
-    if y1 == y0 {
-        return x0;
-    }
-    x0 + (x1 - x0) * (y - y0) / (y1 - y0)
-}
-
-/// Integer square root (floor).
-fn isqrt(n: i32) -> i32 {
-    if n <= 0 {
-        return 0;
-    }
-    let mut x = (n as f32).sqrt() as i32;
-    // Newton correction.
-    while x * x > n {
-        x -= 1;
-    }
-    while (x + 1) * (x + 1) <= n {
-        x += 1;
-    }
-    x
-}
-
-/// Linear interpolation between two colors.
-fn lerp_color_sdl(a: Color, b: Color, num: u32, den: u32) -> Color {
-    if den == 0 {
-        return a;
-    }
-    let inv = den - num;
-    Color::rgba(
-        ((a.r as u32 * inv + b.r as u32 * num + den / 2) / den) as u8,
-        ((a.g as u32 * inv + b.g as u32 * num + den / 2) / den) as u8,
-        ((a.b as u32 * inv + b.b as u32 * num + den / 2) / den) as u8,
-        ((a.a as u32 * inv + b.a as u32 * num + den / 2) / den) as u8,
-    )
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    use sdl2::keyboard::Keycode;
+
+    use oasis_core::input::{Button, InputEvent, Trigger};
 
     // ---------------------------------------------------------------
     // Input mapping tests

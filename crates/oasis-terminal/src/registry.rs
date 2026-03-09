@@ -174,15 +174,18 @@ impl CommandRegistry {
             .borrow()
             .get(name)
             .cloned()
-            .ok_or_else(|| OasisError::Command(format!("unknown function: {name}")))?;
+            .ok_or_else(|| OasisError::Command(format!("unknown function: {name}").into()))?;
 
         // Check recursion depth.
         let depth = self.call_depth.get();
         if depth >= MAX_CALL_DEPTH {
-            return Err(OasisError::Command(format!(
-                "{name}: maximum recursion depth ({MAX_CALL_DEPTH}) \
+            return Err(OasisError::Command(
+                format!(
+                    "{name}: maximum recursion depth ({MAX_CALL_DEPTH}) \
                  exceeded"
-            )));
+                )
+                .into(),
+            ));
         }
         self.call_depth.set(depth + 1);
 
@@ -277,14 +280,14 @@ impl CommandRegistry {
             return hist
                 .last()
                 .cloned()
-                .ok_or_else(|| OasisError::Command("!!: no previous command".to_string()));
+                .ok_or_else(|| OasisError::Command("!!: no previous command".into()));
         }
         if let Some(n_str) = input.strip_prefix('!')
             && let Ok(n) = n_str.parse::<usize>()
         {
             let hist = self.history.borrow();
             if n == 0 || n > hist.len() {
-                return Err(OasisError::Command(format!("!{n}: event not found")));
+                return Err(OasisError::Command(format!("!{n}: event not found").into()));
             }
             return Ok(hist[n - 1].clone());
         }

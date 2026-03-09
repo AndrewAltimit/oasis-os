@@ -99,10 +99,10 @@ impl Vfs for GameAssetVfs {
         match self.effective_entry(&path) {
             Some(Node::Dir) => {},
             Some(Node::File(_)) => {
-                return Err(OasisError::Vfs(format!("not a directory: {path}")));
+                return Err(OasisError::Vfs(format!("not a directory: {path}").into()));
             },
             None => {
-                return Err(OasisError::Vfs(format!("no such directory: {path}")));
+                return Err(OasisError::Vfs(format!("no such directory: {path}").into()));
             },
         }
 
@@ -152,8 +152,8 @@ impl Vfs for GameAssetVfs {
         let path = normalize(path);
         match self.effective_entry(&path) {
             Some(Node::File(data)) => Ok(data.clone()),
-            Some(Node::Dir) => Err(OasisError::Vfs(format!("is a directory: {path}"))),
-            None => Err(OasisError::Vfs(format!("no such file: {path}"))),
+            Some(Node::Dir) => Err(OasisError::Vfs(format!("is a directory: {path}").into())),
+            None => Err(OasisError::Vfs(format!("no such file: {path}").into())),
         }
     }
 
@@ -161,24 +161,24 @@ impl Vfs for GameAssetVfs {
         let path = normalize(path);
         let par = parent(&path);
         if !self.effective_dir_exists(par) {
-            return Err(OasisError::Vfs(format!(
-                "parent directory does not exist: {par}"
-            )));
+            return Err(OasisError::Vfs(
+                format!("parent directory does not exist: {par}").into(),
+            ));
         }
         // Check parent directory write permission.
         if let Some(perms) = self.permissions.get(par)
             && !perms.owner_can_write()
         {
-            return Err(OasisError::Vfs(format!(
-                "permission denied (directory read-only): {par}"
-            )));
+            return Err(OasisError::Vfs(
+                format!("permission denied (directory read-only): {par}").into(),
+            ));
         }
         if let Some(perms) = self.permissions.get(&path)
             && !perms.owner_can_write()
         {
-            return Err(OasisError::Vfs(format!(
-                "permission denied (read-only): {path}"
-            )));
+            return Err(OasisError::Vfs(
+                format!("permission denied (read-only): {path}").into(),
+            ));
         }
         self.deleted.remove(&path);
         self.permissions
@@ -199,7 +199,7 @@ impl Vfs for GameAssetVfs {
                 kind: EntryKind::Directory,
                 size: 0,
             }),
-            None => Err(OasisError::Vfs(format!("no such path: {path}"))),
+            None => Err(OasisError::Vfs(format!("no such path: {path}").into())),
         }
     }
 
@@ -217,9 +217,9 @@ impl Vfs for GameAssetVfs {
         if let Some(perms) = self.permissions.get(&par)
             && !perms.owner_can_write()
         {
-            return Err(OasisError::Vfs(format!(
-                "permission denied (directory read-only): {par}"
-            )));
+            return Err(OasisError::Vfs(
+                format!("permission denied (directory read-only): {par}").into(),
+            ));
         }
         self.deleted.remove(&path);
         self.permissions
@@ -232,24 +232,24 @@ impl Vfs for GameAssetVfs {
     fn remove(&mut self, path: &str) -> Result<()> {
         let path = normalize(path);
         if path == "/" {
-            return Err(OasisError::Vfs("cannot remove root".to_string()));
+            return Err(OasisError::Vfs("cannot remove root".into()));
         }
         // Check parent directory write permission.
         let par = parent(&path);
         if let Some(perms) = self.permissions.get(par)
             && !perms.owner_can_write()
         {
-            return Err(OasisError::Vfs(format!(
-                "permission denied (directory read-only): {par}"
-            )));
+            return Err(OasisError::Vfs(
+                format!("permission denied (directory read-only): {par}").into(),
+            ));
         }
         // Check target's own permission.
         if let Some(perms) = self.permissions.get(&path)
             && !perms.owner_can_write()
         {
-            return Err(OasisError::Vfs(format!(
-                "permission denied (read-only): {path}"
-            )));
+            return Err(OasisError::Vfs(
+                format!("permission denied (read-only): {path}").into(),
+            ));
         }
         match self.effective_entry(&path) {
             Some(Node::Dir) => {
@@ -262,12 +262,14 @@ impl Vfs for GameAssetVfs {
                     .chain(self.overlay.keys())
                     .any(|k| k.starts_with(&prefix));
                 if has_children {
-                    return Err(OasisError::Vfs(format!("directory not empty: {path}")));
+                    return Err(OasisError::Vfs(
+                        format!("directory not empty: {path}").into(),
+                    ));
                 }
             },
             Some(Node::File(_)) => {},
             None => {
-                return Err(OasisError::Vfs(format!("no such path: {path}")));
+                return Err(OasisError::Vfs(format!("no such path: {path}").into()));
             },
         }
         self.overlay.remove(&path);
@@ -280,21 +282,21 @@ impl Vfs for GameAssetVfs {
         let from = normalize(from);
         let to = normalize(to);
         if self.effective_entry(&from).is_none() {
-            return Err(OasisError::Vfs(format!("no such path: {from}")));
+            return Err(OasisError::Vfs(format!("no such path: {from}").into()));
         }
         // Only allow rename if the source exists in the overlay layer.
         // Base-layer-only entries cannot be renamed (they are immutable).
         if !self.overlay.contains_key(&from) {
-            return Err(OasisError::Vfs(format!(
-                "cannot rename base-layer entry not in overlay: {from}"
-            )));
+            return Err(OasisError::Vfs(
+                format!("cannot rename base-layer entry not in overlay: {from}").into(),
+            ));
         }
         // Ensure destination parent exists.
         let to_par = parent(&to);
         if !self.effective_dir_exists(to_par) {
-            return Err(OasisError::Vfs(format!(
-                "parent directory does not exist: {to_par}"
-            )));
+            return Err(OasisError::Vfs(
+                format!("parent directory does not exist: {to_par}").into(),
+            ));
         }
         // Collect all overlay entries to move (source + children if directory).
         let prefix = format!("{from}/");
@@ -328,7 +330,7 @@ impl Vfs for GameAssetVfs {
     fn get_permissions(&self, path: &str) -> Result<FilePermissions> {
         let path = normalize(path);
         if self.effective_entry(&path).is_none() {
-            return Err(OasisError::Vfs(format!("no such path: {path}")));
+            return Err(OasisError::Vfs(format!("no such path: {path}").into()));
         }
         Ok(self.permissions.get(&path).cloned().unwrap_or_else(|| {
             match self.effective_entry(&path) {
@@ -341,7 +343,7 @@ impl Vfs for GameAssetVfs {
     fn set_permissions(&mut self, path: &str, perms: FilePermissions) -> Result<()> {
         let path = normalize(path);
         if self.effective_entry(&path).is_none() {
-            return Err(OasisError::Vfs(format!("no such path: {path}")));
+            return Err(OasisError::Vfs(format!("no such path: {path}").into()));
         }
         self.permissions.insert(path, perms);
         Ok(())

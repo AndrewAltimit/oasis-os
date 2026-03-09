@@ -12,7 +12,7 @@ use oasis_types::error::{OasisError, Result};
 /// ```
 pub fn require_args(args: &[&str], min: usize, usage: &str) -> Result<()> {
     if args.len() < min {
-        return Err(OasisError::Command(format!("usage: {usage}")));
+        return Err(OasisError::Command(format!("usage: {usage}").into()));
     }
     Ok(())
 }
@@ -24,7 +24,7 @@ pub fn require_args(args: &[&str], min: usize, usage: &str) -> Result<()> {
 /// ```
 pub fn require_args_exact(args: &[&str], n: usize, usage: &str) -> Result<()> {
     if args.len() != n {
-        return Err(OasisError::Command(format!("usage: {usage}")));
+        return Err(OasisError::Command(format!("usage: {usage}").into()));
     }
     Ok(())
 }

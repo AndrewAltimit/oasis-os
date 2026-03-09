@@ -2303,6 +2303,142 @@ mod tests {
 
     // -- parent-last-child bottom margin collapsing --------------------
 
+    // -- real-world layout compliance tests -------------------------------
+
+    #[test]
+    fn nested_percentage_widths() {
+        // 50% of 50% of 400px = 100px.
+        let m = FixedMeasurer;
+        let mut outer = LayoutBox::new(BoxType::Block, block_style(), None);
+
+        let mut mid_style = block_style();
+        mid_style.width = Dimension::Percent(50.0);
+        let mut mid = LayoutBox::new(BoxType::Block, mid_style, None);
+
+        let mut inner_style = block_style();
+        inner_style.width = Dimension::Percent(50.0);
+        inner_style.height = Dimension::Px(10.0);
+        let inner = LayoutBox::new(BoxType::Block, inner_style, None);
+
+        mid.children = vec![inner];
+        outer.children = vec![mid];
+        outer.dimensions.content.x = 0.0;
+        outer.dimensions.content.y = 0.0;
+        layout_block(&mut outer, 400.0, &m);
+
+        let inner_width = outer.children[0].children[0].dimensions.content.width;
+        assert!(
+            (inner_width - 100.0).abs() < 0.01,
+            "50% of 50% of 400 should be 100, got {inner_width}",
+        );
+    }
+
+    #[test]
+    fn min_width_overrides_small_container() {
+        let m = FixedMeasurer;
+        let mut style = block_style();
+        style.width = Dimension::Auto;
+        style.min_width = Dimension::Px(300.0);
+        let mut lb = LayoutBox::new(BoxType::Block, style, None);
+        lb.dimensions.content.x = 0.0;
+        lb.dimensions.content.y = 0.0;
+        layout_block(&mut lb, 200.0, &m);
+        assert!(
+            lb.dimensions.content.width >= 300.0,
+            "min-width 300 should override 200px container, got {}",
+            lb.dimensions.content.width,
+        );
+    }
+
+    #[test]
+    fn max_width_caps_large_container() {
+        let m = FixedMeasurer;
+        let mut style = block_style();
+        style.width = Dimension::Auto;
+        style.max_width = Dimension::Px(200.0);
+        let mut lb = LayoutBox::new(BoxType::Block, style, None);
+        lb.dimensions.content.x = 0.0;
+        lb.dimensions.content.y = 0.0;
+        layout_block(&mut lb, 500.0, &m);
+        assert!(
+            (lb.dimensions.content.width - 200.0).abs() < 0.01,
+            "max-width 200 should cap auto width in 500px container, got {}",
+            lb.dimensions.content.width,
+        );
+    }
+
+    #[test]
+    fn display_none_excluded_from_layout_tree() {
+        // Elements with display:none are excluded from the layout tree
+        // entirely. If only a visible child is present, the parent
+        // height should reflect just that child.
+        let m = FixedMeasurer;
+        let mut parent = LayoutBox::new(BoxType::Block, block_style(), None);
+
+        let mut visible_style = block_style();
+        visible_style.height = Dimension::Px(30.0);
+
+        // Only the visible child is in the layout tree (display:none
+        // elements are filtered out during tree construction).
+        parent.children = vec![LayoutBox::new(BoxType::Block, visible_style, None)];
+        parent.dimensions.content.x = 0.0;
+        parent.dimensions.content.y = 0.0;
+        layout_block(&mut parent, 480.0, &m);
+
+        assert!(
+            (parent.dimensions.content.height - 30.0).abs() < 0.01,
+            "parent height should be 30 (only visible child), got {}",
+            parent.dimensions.content.height,
+        );
+    }
+
+    #[test]
+    fn deeply_nested_blocks_with_margins() {
+        // 10 levels of nesting, each with 2px margin.
+        let m = FixedMeasurer;
+        let depth = 10;
+
+        fn build_nested(depth: usize) -> LayoutBox {
+            let mut style = ComputedStyle::default();
+            style.display = Display::Block;
+            style.margin_left = 2.0;
+            style.margin_right = 2.0;
+            if depth == 0 {
+                style.height = Dimension::Px(10.0);
+                LayoutBox::new(BoxType::Block, style, None)
+            } else {
+                let child = build_nested(depth - 1);
+                let mut lb = LayoutBox::new(BoxType::Block, style, None);
+                lb.children = vec![child];
+                lb
+            }
+        }
+
+        let mut root = build_nested(depth);
+        root.dimensions.content.x = 0.0;
+        root.dimensions.content.y = 0.0;
+        layout_block(&mut root, 480.0, &m);
+
+        // The innermost leaf should have width reduced by horizontal
+        // margins at each nesting level. The root level itself also
+        // consumes margins, so total reduction is (depth+1)*4px.
+        let mut node = &root;
+        for _ in 0..depth {
+            node = &node.children[0];
+        }
+        // Verify the leaf is significantly narrower than the container
+        // (each level shaves off 4px of horizontal margin).
+        assert!(
+            node.dimensions.content.width < 480.0,
+            "leaf should be narrower than container",
+        );
+        assert!(
+            node.dimensions.content.width > 400.0,
+            "leaf should still have substantial width, got {}",
+            node.dimensions.content.width,
+        );
+    }
+
     #[test]
     fn parent_child_bottom_margin_collapsing() {
         let m = FixedMeasurer;

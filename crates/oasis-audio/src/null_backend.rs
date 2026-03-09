@@ -58,7 +58,9 @@ impl AudioBackend for NullAudioBackend {
 
     fn play(&mut self, track: AudioTrackId) -> Result<()> {
         if track.0 >= self.next_id {
-            return Err(OasisError::Backend(format!("track {} not loaded", track.0)));
+            return Err(OasisError::Backend(
+                format!("track {} not loaded", track.0).into(),
+            ));
         }
         self.current_track = Some(track.0);
         self.playing = true;

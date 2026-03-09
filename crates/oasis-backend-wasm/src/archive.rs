@@ -115,7 +115,7 @@ impl RadioSource for WasmArchiveSource {
 
         if let Some(ref e) = state.error {
             let msg = e.clone();
-            return Err(OasisError::Backend(msg));
+            return Err(OasisError::Backend(msg.into()));
         }
 
         if let Some(data) = state.audio_queue.pop_front() {

@@ -11,7 +11,7 @@ use super::{ContentType, ResourceRequest, ResourceResponse, Url};
 /// Load a resource from the VFS.
 pub fn load_from_vfs(vfs: &dyn Vfs, request: &ResourceRequest) -> Result<ResourceResponse> {
     let url = Url::parse(&request.url)
-        .ok_or_else(|| OasisError::Vfs(format!("invalid URL: {}", request.url)))?;
+        .ok_or_else(|| OasisError::Vfs(format!("invalid URL: {}", request.url).into()))?;
 
     let vfs_path = url_to_vfs_path(&url)?;
 
@@ -52,10 +52,9 @@ fn url_to_vfs_path(url: &Url) -> Result<String> {
             }
             Ok(path)
         },
-        _ => Err(OasisError::Vfs(format!(
-            "unsupported scheme for VFS: {}",
-            url.scheme
-        ))),
+        _ => Err(OasisError::Vfs(
+            format!("unsupported scheme for VFS: {}", url.scheme).into(),
+        )),
     }
 }
 
@@ -66,7 +65,7 @@ fn validate_path(path: &str) -> Result<()> {
     // `/sites/../../etc/passwd` that would resolve away after
     // collapsing.
     if path.split('/').any(|seg| seg == "..") {
-        return Err(OasisError::Vfs("path traversal not allowed".to_string()));
+        return Err(OasisError::Vfs("path traversal not allowed".into()));
     }
     Ok(())
 }

@@ -75,8 +75,8 @@ impl McpRegistry {
 
     /// Load from a TOML string (contents of `mcp.toml`).
     pub fn from_toml(toml_str: &str) -> Result<Self> {
-        let config: McpConfig =
-            toml::from_str(toml_str).map_err(|e| OasisError::Config(format!("mcp.toml: {e}")))?;
+        let config: McpConfig = toml::from_str(toml_str)
+            .map_err(|e| OasisError::Config(format!("mcp.toml: {e}").into()))?;
         Ok(Self {
             servers: config.server,
         })

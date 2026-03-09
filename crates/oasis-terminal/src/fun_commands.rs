@@ -50,10 +50,10 @@ impl Command for CalCmd {
         let (month, year) = if args.len() >= 2 {
             let m: u32 = args[0]
                 .parse()
-                .map_err(|_| OasisError::Command("invalid month".to_string()))?;
+                .map_err(|_| OasisError::Command("invalid month".into()))?;
             let y: i32 = args[1]
                 .parse()
-                .map_err(|_| OasisError::Command("invalid year".to_string()))?;
+                .map_err(|_| OasisError::Command("invalid year".into()))?;
             (m, y)
         } else if let Some(time) = env.time {
             if let Ok(now) = time.now() {
@@ -66,7 +66,7 @@ impl Command for CalCmd {
         };
 
         if !(1..=12).contains(&month) {
-            return Err(OasisError::Command("month must be 1-12".to_string()));
+            return Err(OasisError::Command("month must be 1-12".into()));
         }
 
         let month_names = [
@@ -188,7 +188,7 @@ impl Command for BannerCmd {
     }
     fn execute(&self, args: &[&str], _env: &mut Environment<'_>) -> Result<CommandOutput> {
         if args.is_empty() {
-            return Err(OasisError::Command("usage: banner <text>".to_string()));
+            return Err(OasisError::Command("usage: banner <text>".into()));
         }
         let text = args.join(" ").to_ascii_uppercase();
         let mut rows = vec![String::new(); 5];
@@ -337,7 +337,7 @@ impl Command for WatchCmd {
     }
     fn execute(&self, args: &[&str], _env: &mut Environment<'_>) -> Result<CommandOutput> {
         if args.is_empty() {
-            return Err(OasisError::Command("usage: watch <command>".to_string()));
+            return Err(OasisError::Command("usage: watch <command>".into()));
         }
         let cmd = args.join(" ");
         Ok(CommandOutput::Text(format!(
@@ -366,7 +366,7 @@ impl Command for TimeCmd {
     }
     fn execute(&self, args: &[&str], _env: &mut Environment<'_>) -> Result<CommandOutput> {
         if args.is_empty() {
-            return Err(OasisError::Command("usage: time <command>".to_string()));
+            return Err(OasisError::Command("usage: time <command>".into()));
         }
         let cmd = args.join(" ");
         Ok(CommandOutput::Text(format!(

@@ -63,9 +63,7 @@ impl Command for RadioCmd {
             "tune" => {
                 let target = args.get(1).copied().unwrap_or("");
                 if target.is_empty() {
-                    return Err(OasisError::Command(
-                        "usage: radio tune <name|index>".to_string(),
-                    ));
+                    return Err(OasisError::Command("usage: radio tune <name|index>".into()));
                 }
                 let request = format!("tune {target}");
                 env.vfs.write(RADIO_REQUEST_PATH, request.as_bytes())?;
@@ -91,9 +89,9 @@ impl Command for RadioCmd {
                     }
                     return Ok(CommandOutput::Text("Volume: unknown".to_string()));
                 }
-                let _vol: u8 = vol_str
-                    .parse()
-                    .map_err(|_| OasisError::Command(format!("invalid volume: {vol_str}")))?;
+                let _vol: u8 = vol_str.parse().map_err(|_| {
+                    OasisError::Command(format!("invalid volume: {vol_str}").into())
+                })?;
                 let request = format!("vol {vol_str}");
                 env.vfs.write(RADIO_REQUEST_PATH, request.as_bytes())?;
                 Ok(CommandOutput::Text(format!(
@@ -103,11 +101,11 @@ impl Command for RadioCmd {
             "fav" => {
                 let idx_str = args.get(1).copied().unwrap_or("");
                 if idx_str.is_empty() {
-                    return Err(OasisError::Command("usage: radio fav <index>".to_string()));
+                    return Err(OasisError::Command("usage: radio fav <index>".into()));
                 }
                 let _idx: usize = idx_str
                     .parse()
-                    .map_err(|_| OasisError::Command(format!("invalid index: {idx_str}")))?;
+                    .map_err(|_| OasisError::Command(format!("invalid index: {idx_str}").into()))?;
                 let request = format!("fav {idx_str}");
                 env.vfs.write(RADIO_REQUEST_PATH, request.as_bytes())?;
                 Ok(CommandOutput::Text(format!(
@@ -156,10 +154,9 @@ impl Command for RadioCmd {
                     ))
                 }
             },
-            _ => Err(OasisError::Command(format!(
-                "unknown subcommand: {subcmd}\nusage: {}",
-                self.usage()
-            ))),
+            _ => Err(OasisError::Command(
+                format!("unknown subcommand: {subcmd}\nusage: {}", self.usage()).into(),
+            )),
         }
     }
 }

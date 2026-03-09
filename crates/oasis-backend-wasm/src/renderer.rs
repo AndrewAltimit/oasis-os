@@ -18,7 +18,7 @@ use crate::font;
 // ---------------------------------------------------------------------------
 
 fn js_err<E: std::fmt::Debug>(e: E) -> OasisError {
-    OasisError::Backend(format!("{e:?}"))
+    OasisError::Backend(format!("{e:?}").into())
 }
 
 fn get_2d_context(canvas: &HtmlCanvasElement) -> Result<CanvasRenderingContext2d> {
@@ -980,7 +980,7 @@ impl SdiBackend for WasmBackend {
         // Reset dash pattern.
         self.ctx
             .set_line_dash(&js_sys::Array::new())
-            .map_err(|e| OasisError::Backend(format!("{e:?}")))?;
+            .map_err(|e| OasisError::Backend(format!("{e:?}").into()))?;
         Ok(())
     }
 

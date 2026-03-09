@@ -66,14 +66,14 @@ impl SdiRegistry {
     pub fn get(&self, name: &str) -> Result<&SdiObject> {
         self.objects
             .get(name)
-            .ok_or_else(|| OasisError::Sdi(format!("object not found: {name}")))
+            .ok_or_else(|| OasisError::Sdi(format!("object not found: {name}").into()))
     }
 
     /// Get a mutable reference to an object by name.
     pub fn get_mut(&mut self, name: &str) -> Result<&mut SdiObject> {
         self.objects
             .get_mut(name)
-            .ok_or_else(|| OasisError::Sdi(format!("object not found: {name}")))
+            .ok_or_else(|| OasisError::Sdi(format!("object not found: {name}").into()))
     }
 
     /// Remove an object from the registry.
@@ -83,7 +83,7 @@ impl SdiRegistry {
             .map(|_| {
                 self.z_dirty = true;
             })
-            .ok_or_else(|| OasisError::Sdi(format!("object not found: {name}")))
+            .ok_or_else(|| OasisError::Sdi(format!("object not found: {name}").into()))
     }
 
     /// Move an object to the top of the z-order (drawn last = on top).
@@ -146,7 +146,7 @@ impl SdiRegistry {
     /// font_size). Objects that don't exist yet are created.
     pub fn load_theme(&mut self, toml_str: &str) -> Result<()> {
         let theme: HashMap<String, ThemeEntry> =
-            toml::from_str(toml_str).map_err(|e| OasisError::Config(format!("{e}")))?;
+            toml::from_str(toml_str).map_err(|e| OasisError::Config(format!("{e}").into()))?;
 
         for (name, entry) in theme {
             if !self.contains(&name) {

@@ -1108,7 +1108,7 @@ mod tests {
         assert!(result.is_err());
         match result {
             Err(oasis_types::error::OasisError::Backend(msg)) => {
-                assert!(msg.contains("not supported"));
+                assert!(msg.to_string().contains("not supported"));
             },
             _ => panic!("expected Backend error"),
         }

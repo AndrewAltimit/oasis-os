@@ -112,16 +112,19 @@ impl PluginManager {
             .plugins
             .iter_mut()
             .find(|p| p.plugin.info().name == name)
-            .ok_or_else(|| OasisError::Plugin(format!("plugin not found: {name}")))?;
+            .ok_or_else(|| OasisError::Plugin(format!("plugin not found: {name}").into()))?;
         if loaded.state != PluginState::Registered {
-            return Err(OasisError::Plugin(format!(
-                "plugin '{name}' is already {}",
-                if loaded.state == PluginState::Active {
-                    "active"
-                } else {
-                    "stopped"
-                }
-            )));
+            return Err(OasisError::Plugin(
+                format!(
+                    "plugin '{name}' is already {}",
+                    if loaded.state == PluginState::Active {
+                        "active"
+                    } else {
+                        "stopped"
+                    }
+                )
+                .into(),
+            ));
         }
         loaded.plugin.init(&mut host)?;
         loaded.state = PluginState::Active;
@@ -173,7 +176,7 @@ impl PluginManager {
             .plugins
             .iter()
             .position(|p| p.plugin.info().name == name)
-            .ok_or_else(|| OasisError::Plugin(format!("plugin not found: {name}")))?;
+            .ok_or_else(|| OasisError::Plugin(format!("plugin not found: {name}").into()))?;
 
         let loaded = &mut self.plugins[idx];
         if loaded.state == PluginState::Active {
@@ -539,7 +542,7 @@ auto_load = true
             PluginInfo::new("fail-init", "1.0.0")
         }
         fn init(&mut self, _host: &mut PluginHost<'_>) -> Result<()> {
-            Err(OasisError::Plugin("init explosion".to_string()))
+            Err(OasisError::Plugin("init explosion".into()))
         }
         fn update(&mut self, _host: &mut PluginHost<'_>) -> Result<()> {
             Ok(())
@@ -567,7 +570,7 @@ auto_load = true
         }
         fn update(&mut self, _host: &mut PluginHost<'_>) -> Result<()> {
             self.update_count += 1;
-            Err(OasisError::Plugin("update explosion".to_string()))
+            Err(OasisError::Plugin("update explosion".into()))
         }
         fn shutdown(&mut self, _host: &mut PluginHost<'_>) -> Result<()> {
             Ok(())
@@ -587,7 +590,7 @@ auto_load = true
             Ok(())
         }
         fn shutdown(&mut self, _host: &mut PluginHost<'_>) -> Result<()> {
-            Err(OasisError::Plugin("shutdown explosion".to_string()))
+            Err(OasisError::Plugin("shutdown explosion".into()))
         }
     }
 

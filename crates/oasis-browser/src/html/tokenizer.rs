@@ -2265,6 +2265,129 @@ mod tests {
         assert_eq!(tokens.len(), 3);
     }
 
+    // -- real-world HTML compliance tests --------------------------------
+
+    #[test]
+    fn malformed_named_entity_passthrough() {
+        // Unknown named entity should be passed through verbatim.
+        let tokens = tok("&notareal;");
+        assert_eq!(tokens.len(), 1);
+        assert_eq!(tokens[0], Token::Character("&notareal;".into()));
+    }
+
+    #[test]
+    fn numeric_ref_out_of_unicode_range() {
+        // &#99999999; is beyond max Unicode codepoint (0x10FFFF).
+        // Should produce replacement character U+FFFD.
+        let tokens = tok("&#99999999;");
+        assert_eq!(tokens.len(), 1);
+        assert_eq!(tokens[0], Token::Character("\u{FFFD}".into()));
+    }
+
+    #[test]
+    fn hex_ref_out_of_unicode_range() {
+        // &#x110000; is above U+10FFFF, should produce U+FFFD.
+        let tokens = tok("&#x110000;");
+        assert_eq!(tokens.len(), 1);
+        assert_eq!(tokens[0], Token::Character("\u{FFFD}".into()));
+    }
+
+    #[test]
+    fn script_containing_script_string() {
+        // Nested "<script>" string inside script content should not
+        // start a new script element. Only "</script>" closes it.
+        let tokens = tok(r#"<script>var x = "<script>";</script>"#);
+        assert_eq!(tokens.len(), 3);
+        assert_eq!(
+            tokens[0],
+            Token::StartTag(StartTagToken {
+                name: "script".into(),
+                attributes: vec![],
+                self_closing: false,
+            })
+        );
+        assert_eq!(tokens[1], Token::Character("var x = \"<script>\";".into()));
+        assert_eq!(
+            tokens[2],
+            Token::EndTag(EndTagToken {
+                name: "script".into(),
+            })
+        );
+    }
+
+    #[test]
+    fn attribute_value_with_equals_and_ampersand() {
+        // Query strings with = and & in attribute values.
+        let tokens = tok(r#"<a href="page?a=1&b=2">link</a>"#);
+        assert_eq!(tokens.len(), 3);
+        if let Token::StartTag(ref tag) = tokens[0] {
+            assert_eq!(tag.name, "a");
+            assert_eq!(tag.attributes[0].name, "href");
+            assert_eq!(tag.attributes[0].value, "page?a=1&b=2");
+        } else {
+            panic!("expected start tag");
+        }
+    }
+
+    #[test]
+    fn multiple_whitespace_between_attributes() {
+        // Excessive whitespace (spaces, tabs, newlines) between attrs.
+        let tokens = tok("<div   class=\"a\"  \n\t  id=\"b\"  >");
+        assert_eq!(tokens.len(), 1);
+        if let Token::StartTag(ref tag) = tokens[0] {
+            assert_eq!(tag.name, "div");
+            assert_eq!(tag.attributes.len(), 2);
+            assert_eq!(tag.attributes[0].name, "class");
+            assert_eq!(tag.attributes[0].value, "a");
+            assert_eq!(tag.attributes[1].name, "id");
+            assert_eq!(tag.attributes[1].value, "b");
+        } else {
+            panic!("expected start tag");
+        }
+    }
+
+    #[test]
+    fn uppercase_tag_names_lowered() {
+        // Mixed-case tags should be normalized to lowercase.
+        let tokens = tok("<DIV class=\"test\"><SPAN>x</SPAN></DIV>");
+        assert_eq!(tokens.len(), 5);
+        if let Token::StartTag(ref tag) = tokens[0] {
+            assert_eq!(tag.name, "div");
+            assert_eq!(tag.attributes[0].value, "test");
+        } else {
+            panic!("expected div start tag");
+        }
+        if let Token::StartTag(ref tag) = tokens[1] {
+            assert_eq!(tag.name, "span");
+        } else {
+            panic!("expected span start tag");
+        }
+        if let Token::EndTag(ref tag) = tokens[3] {
+            assert_eq!(tag.name, "span");
+        } else {
+            panic!("expected span end tag");
+        }
+    }
+
+    #[test]
+    fn multiple_malformed_entities_in_text() {
+        // Mix of valid and invalid entities in one text run.
+        let tokens = tok("a&amp;b&fake;c&#60;d");
+        assert_eq!(tokens.len(), 1);
+        assert_eq!(tokens[0], Token::Character("a&b&fake;c<d".into()));
+    }
+
+    #[test]
+    fn style_element_rawtext() {
+        // Style content should preserve everything, including <tags>.
+        let tokens = tok("<style>div > p { color: red; }</style>");
+        assert_eq!(tokens.len(), 3);
+        assert_eq!(
+            tokens[1],
+            Token::Character("div > p { color: red; }".into())
+        );
+    }
+
     mod prop {
         use super::*;
         use proptest::prelude::*;

@@ -304,7 +304,7 @@ impl Command for XxdCmd {
                 if i < args.len() {
                     limit = args[i]
                         .parse()
-                        .map_err(|_| OasisError::Command("invalid length".to_string()))?;
+                        .map_err(|_| OasisError::Command("invalid length".into()))?;
                 }
             } else {
                 file_arg = Some(args[i]);
@@ -312,7 +312,7 @@ impl Command for XxdCmd {
             i += 1;
         }
         let file =
-            file_arg.ok_or_else(|| OasisError::Command("usage: xxd [-l N] <file>".to_string()))?;
+            file_arg.ok_or_else(|| OasisError::Command("usage: xxd [-l N] <file>".into()))?;
         let path = resolve_path(&env.cwd, file);
         let data = env.vfs.read(&path)?;
         let data = &data[..data.len().min(limit)];
