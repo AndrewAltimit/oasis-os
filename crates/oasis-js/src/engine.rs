@@ -1,5 +1,4 @@
 use std::cell::RefCell;
-use std::fmt;
 use std::rc::Rc;
 
 use rquickjs::{Context, Runtime};
@@ -18,23 +17,12 @@ pub enum JsValue {
 }
 
 /// An error produced by JavaScript execution.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, thiserror::Error)]
+#[error("{message}{}", stack.as_ref().map(|s| format!("\n{s}")).unwrap_or_default())]
 pub struct JsError {
     pub message: String,
     pub stack: Option<String>,
 }
-
-impl fmt::Display for JsError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.message)?;
-        if let Some(stack) = &self.stack {
-            write!(f, "\n{stack}")?;
-        }
-        Ok(())
-    }
-}
-
-impl std::error::Error for JsError {}
 
 /// JavaScript engine wrapping a QuickJS-NG runtime and context.
 ///

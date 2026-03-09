@@ -230,6 +230,18 @@ pub enum OasisError {
     #[error("plugin error: {0}")]
     Plugin(PluginError),
 
+    /// Video pipeline error (demux, decode, no track).
+    #[error("video error: {0}")]
+    Video(String),
+
+    /// JavaScript engine error.
+    #[error("JavaScript error: {0}")]
+    JavaScript(String),
+
+    /// Calculator expression error.
+    #[error("calc error: {0}")]
+    Calc(String),
+
     /// I/O error.
     #[error("I/O error: {0}")]
     Io(#[from] io::Error),

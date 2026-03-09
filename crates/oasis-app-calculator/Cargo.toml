@@ -13,6 +13,7 @@ oasis-types = { workspace = true }
 oasis-sdi = { workspace = true }
 oasis-skin = { workspace = true }
 oasis-vfs = { workspace = true }
+thiserror = { workspace = true }
 
 [lints]
 workspace = true

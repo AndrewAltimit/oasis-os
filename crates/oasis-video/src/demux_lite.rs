@@ -12,30 +12,15 @@
 use std::io::{Read, Seek, SeekFrom};
 
 /// Errors from the lightweight demuxer.
-#[derive(Debug)]
+#[derive(Debug, thiserror::Error)]
 pub enum LiteError {
-    Io(std::io::Error),
+    #[error("io: {0}")]
+    Io(#[from] std::io::Error),
+    #[error("parse: {0}")]
     Parse(String),
+    #[error("no track: {0}")]
     NoTrack(String),
 }
-
-impl From<std::io::Error> for LiteError {
-    fn from(e: std::io::Error) -> Self {
-        Self::Io(e)
-    }
-}
-
-impl std::fmt::Display for LiteError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Io(e) => write!(f, "io: {e}"),
-            Self::Parse(s) => write!(f, "parse: {s}"),
-            Self::NoTrack(s) => write!(f, "no track: {s}"),
-        }
-    }
-}
-
-impl std::error::Error for LiteError {}
 
 /// Track kind.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
