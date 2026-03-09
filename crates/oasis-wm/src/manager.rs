@@ -6,7 +6,7 @@
 
 use oasis_sdi::SdiRegistry;
 use oasis_types::backend::SdiBackend;
-use oasis_types::error::{OasisError, Result};
+use oasis_types::error::{OasisError, Result, WmError};
 use oasis_types::input::InputEvent;
 
 use super::hit_test::{ButtonKind, HitRegion, ResizeEdge, hit_test};
@@ -174,9 +174,9 @@ impl WindowManager {
     ) -> Result<WindowId> {
         // Check for duplicate id.
         if self.windows.iter().any(|w| w.id == config.id) {
-            return Err(OasisError::Wm(
-                format!("window already exists: {}", config.id).into(),
-            ));
+            return Err(OasisError::Wm(WmError::WindowAlreadyExists {
+                id: config.id.clone(),
+            }));
         }
 
         // Determine initial position.
@@ -291,7 +291,7 @@ impl WindowManager {
             .windows
             .iter()
             .position(|w| w.id == id)
-            .ok_or_else(|| OasisError::Wm(format!("window not found: {id}").into()))?;
+            .ok_or_else(|| OasisError::Wm(WmError::WindowNotFound { id: id.to_string() }))?;
 
         let was_modal = self.windows[idx].modal;
         let window = &self.windows[idx];
@@ -333,7 +333,7 @@ impl WindowManager {
             .windows
             .iter_mut()
             .find(|w| w.id == id)
-            .ok_or_else(|| OasisError::Wm(format!("window not found: {id}").into()))?;
+            .ok_or_else(|| OasisError::Wm(WmError::WindowNotFound { id: id.to_string() }))?;
 
         let raw_x = window.x + dx;
         let raw_y = window.y + dy;
@@ -367,7 +367,7 @@ impl WindowManager {
             .windows
             .iter_mut()
             .find(|w| w.id == id)
-            .ok_or_else(|| OasisError::Wm(format!("window not found: {id}").into()))?;
+            .ok_or_else(|| OasisError::Wm(WmError::WindowNotFound { id: id.to_string() }))?;
 
         window.outer_w = new_outer_w;
         window.outer_h = new_outer_h;
@@ -381,7 +381,9 @@ impl WindowManager {
     /// Bring a window to the front (topmost z-order).
     pub fn focus_window(&mut self, id: &str, sdi: &mut SdiRegistry) -> Result<()> {
         if !self.windows.iter().any(|w| w.id == id) {
-            return Err(OasisError::Wm(format!("window not found: {id}").into()));
+            return Err(OasisError::Wm(WmError::WindowNotFound {
+                id: id.to_string(),
+            }));
         }
         self.focus_window_internal(id, sdi);
         Ok(())
@@ -393,7 +395,7 @@ impl WindowManager {
             .windows
             .iter_mut()
             .find(|w| w.id == id)
-            .ok_or_else(|| OasisError::Wm(format!("window not found: {id}").into()))?;
+            .ok_or_else(|| OasisError::Wm(WmError::WindowNotFound { id: id.to_string() }))?;
 
         if !window.has_minimize_button() {
             return Err(OasisError::Wm(
@@ -437,7 +439,7 @@ impl WindowManager {
             .windows
             .iter_mut()
             .find(|w| w.id == id)
-            .ok_or_else(|| OasisError::Wm(format!("window not found: {id}").into()))?;
+            .ok_or_else(|| OasisError::Wm(WmError::WindowNotFound { id: id.to_string() }))?;
 
         if !window.has_maximize_button() {
             return Err(OasisError::Wm(
@@ -471,7 +473,7 @@ impl WindowManager {
             .windows
             .iter_mut()
             .find(|w| w.id == id)
-            .ok_or_else(|| OasisError::Wm(format!("window not found: {id}").into()))?;
+            .ok_or_else(|| OasisError::Wm(WmError::WindowNotFound { id: id.to_string() }))?;
 
         let was_minimized = window.state == WindowState::Minimized;
 
@@ -508,7 +510,7 @@ impl WindowManager {
             .windows
             .iter_mut()
             .find(|w| w.id == id)
-            .ok_or_else(|| OasisError::Wm(format!("window not found: {id}").into()))?;
+            .ok_or_else(|| OasisError::Wm(WmError::WindowNotFound { id: id.to_string() }))?;
 
         // Save current geometry for restore (separate from maximize/minimize
         // saved_geometry so we don't clobber it).
@@ -548,7 +550,7 @@ impl WindowManager {
             .windows
             .iter_mut()
             .find(|w| w.id == id)
-            .ok_or_else(|| OasisError::Wm(format!("window not found: {id}").into()))?;
+            .ok_or_else(|| OasisError::Wm(WmError::WindowNotFound { id: id.to_string() }))?;
 
         if let Some(geom) = window.kiosk_saved_geometry.take() {
             window.x = geom.x;
