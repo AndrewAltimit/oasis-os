@@ -57,7 +57,7 @@ fn ensure(sdi: &mut SdiRegistry, name: &str) {
 /// allocation + drop on every frame for static content.
 fn set_text(slot: &mut Option<String>, value: &str) {
     match slot {
-        Some(existing) if existing == value => {}
+        Some(existing) if existing == value => {},
         _ => *slot = Some(value.to_owned()),
     }
 }
@@ -77,9 +77,7 @@ fn hide_prefixed(sdi: &mut SdiRegistry, prefix: &str) {
 }
 
 /// All view prefixes.
-const VIEW_PREFIXES: &[&str] = &[
-    "radio_", "tv_", "photo_", "browser_", "music_", "fm_",
-];
+const VIEW_PREFIXES: &[&str] = &["radio_", "tv_", "photo_", "browser_", "music_", "fm_"];
 
 /// Hide all view objects (called on view transition).
 pub(crate) fn hide_all(sdi: &mut SdiRegistry) {
@@ -297,14 +295,15 @@ fn update_list_row(
 }
 
 /// Hide unused rows beyond `visible_count`.
-fn hide_unused_rows(
-    sdi: &mut SdiRegistry,
-    buf: &mut String,
-    prefix: &str,
-    visible_count: usize,
-) {
+fn hide_unused_rows(sdi: &mut SdiRegistry, buf: &mut String, prefix: &str, visible_count: usize) {
     for i in visible_count..LIST_ROWS {
-        for suffix in &["row_bg_", "row_icon_", "row_name_", "row_extra_", "row_extra2_"] {
+        for suffix in &[
+            "row_bg_",
+            "row_icon_",
+            "row_name_",
+            "row_extra_",
+            "row_extra2_",
+        ] {
             let name = sdi_key!(buf, "{prefix}{suffix}{i}");
             if let Ok(obj) = sdi.get_mut(name) {
                 obj.visible = false;
@@ -503,7 +502,15 @@ pub(crate) fn update_photo_browser(
 ) {
     let mut buf = String::with_capacity(32);
     let accent = at.app.selected_text;
-    update_list_bg(sdi, &mut buf, "photo_", "PHOTO VIEWER", accent, at, Some(path));
+    update_list_bg(
+        sdi,
+        &mut buf,
+        "photo_",
+        "PHOTO VIEWER",
+        accent,
+        at,
+        Some(path),
+    );
 
     let end = (scroll + LIST_ROWS).min(entries.len());
     let visible = end - scroll;
@@ -541,9 +548,7 @@ pub(crate) fn update_photo_browser(
             icon_clr,
             &display,
             name_color,
-            size_info
-                .as_ref()
-                .map(|(s, c, x)| (s.as_str(), *c, *x)),
+            size_info.as_ref().map(|(s, c, x)| (s.as_str(), *c, *x)),
             None,
             oasis_core::color::with_alpha(accent, 100),
             at,
@@ -633,7 +638,15 @@ pub(crate) fn update_music_browser(
 ) {
     let mut buf = String::with_capacity(32);
     let accent = at.app.selected_text;
-    update_list_bg(sdi, &mut buf, "music_", "MUSIC PLAYER", accent, at, Some(path));
+    update_list_bg(
+        sdi,
+        &mut buf,
+        "music_",
+        "MUSIC PLAYER",
+        accent,
+        at,
+        Some(path),
+    );
 
     let end = (scroll + LIST_ROWS).min(entries.len());
     let visible = end - scroll;
@@ -671,9 +684,7 @@ pub(crate) fn update_music_browser(
             icon_clr,
             &display,
             name_color,
-            size_info
-                .as_ref()
-                .map(|(s, c, x)| (s.as_str(), *c, *x)),
+            size_info.as_ref().map(|(s, c, x)| (s.as_str(), *c, *x)),
             None,
             oasis_core::color::with_alpha(accent, 100),
             at,
@@ -857,7 +868,11 @@ pub(crate) fn update_file_manager(
 
     // Active panel indicator line.
     if let Ok(obj) = sdi.get_mut("fm_indicator") {
-        obj.x = if active_panel == 0 { 0 } else { half_w as i32 + 1 };
+        obj.x = if active_panel == 0 {
+            0
+        } else {
+            half_w as i32 + 1
+        };
         obj.y = CONTENT_TOP as i32 + 12;
         obj.w = if active_panel == 0 {
             half_w - 1
@@ -872,13 +887,29 @@ pub(crate) fn update_file_manager(
 
     // Left panel entries.
     update_fm_panel(
-        sdi, &mut buf, "fm_l_", entries_l, selected_l, scroll_l,
-        0, half_w - 1, active_panel == 0, at,
+        sdi,
+        &mut buf,
+        "fm_l_",
+        entries_l,
+        selected_l,
+        scroll_l,
+        0,
+        half_w - 1,
+        active_panel == 0,
+        at,
     );
     // Right panel entries.
     update_fm_panel(
-        sdi, &mut buf, "fm_r_", entries_r, selected_r, scroll_r,
-        half_w as i32 + 1, half_w, active_panel == 1, at,
+        sdi,
+        &mut buf,
+        "fm_r_",
+        entries_r,
+        selected_r,
+        scroll_r,
+        half_w as i32 + 1,
+        half_w,
+        active_panel == 1,
+        at,
     );
 }
 

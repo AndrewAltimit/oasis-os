@@ -700,8 +700,7 @@ impl RadioStreamer {
             };
             if n > 0 {
                 // Clamp to prevent overflow if recv returns more than asked.
-                self.buf_valid =
-                    (self.buf_valid + n as usize).min(Self::BUF_SIZE);
+                self.buf_valid = (self.buf_valid + n as usize).min(Self::BUF_SIZE);
                 self.recv_fail_count = 0;
             } else if n == 0 {
                 // EOF: server closed the connection.

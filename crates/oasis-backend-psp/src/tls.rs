@@ -42,7 +42,9 @@ impl PspRng {
             let mut ctx = core::mem::MaybeUninit::uninit();
             let seed = psp::sys::sceKernelGetSystemTimeLow() as u32;
             psp::sys::sceKernelUtilsMt19937Init(ctx.as_mut_ptr(), seed);
-            Self { ctx: ctx.assume_init() }
+            Self {
+                ctx: ctx.assume_init(),
+            }
         }
     }
 }
@@ -169,9 +171,9 @@ impl TlsProvider for PspTlsProvider {
                 .iter()
                 .any(|h| h.eq_ignore_ascii_case(server_name))
         {
-            return Err(OasisError::Backend(format!(
-                "TLS rejected: '{server_name}' is not in the pinned host allowlist"
-            ).into()));
+            return Err(OasisError::Backend(
+                format!("TLS rejected: '{server_name}' is not in the pinned host allowlist").into(),
+            ));
         }
 
         let adapter = IoAdapter(stream);
@@ -206,10 +208,9 @@ impl TlsProvider for PspTlsProvider {
                 let _ = Box::from_raw(read_ptr);
                 let _ = Box::from_raw(write_ptr);
             }
-            return Err(OasisError::Backend(format!(
-                "TLS handshake failed: {:?}",
-                e
-            ).into()));
+            return Err(OasisError::Backend(
+                format!("TLS handshake failed: {:?}", e).into(),
+            ));
         }
 
         Ok(Box::new(PspTlsStream {

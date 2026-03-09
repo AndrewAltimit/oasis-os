@@ -34,8 +34,7 @@ pub(crate) const GRID_COLS: usize = 4;
 pub(crate) const GRID_ROWS: usize = 3;
 pub(crate) const GRID_PAD_X: i32 = 8;
 pub(crate) const GRID_PAD_Y: i32 = 2;
-pub(crate) const CELL_W: i32 =
-    (SCREEN_WIDTH as i32 - 2 * GRID_PAD_X) / GRID_COLS as i32;
+pub(crate) const CELL_W: i32 = (SCREEN_WIDTH as i32 - 2 * GRID_PAD_X) / GRID_COLS as i32;
 pub(crate) const CELL_H: i32 = (CONTENT_H as i32 - 2 * GRID_PAD_Y) / GRID_ROWS as i32;
 pub(crate) const ICONS_PER_PAGE: usize = GRID_COLS * GRID_ROWS;
 pub(crate) const CURSOR_PAD: i32 = 2;

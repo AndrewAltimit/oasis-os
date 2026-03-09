@@ -224,3 +224,336 @@ pub enum FormAction {
     /// A form value changed.
     ValueChanged,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // -- FormElement construction -----------------------------------
+
+    #[test]
+    fn text_input_construction() {
+        let elem = FormElement::TextInput {
+            name: "user".into(),
+            value: "alice".into(),
+            placeholder: "Enter name".into(),
+            maxlength: Some(20),
+            input_type: InputType::Text,
+        };
+        assert_eq!(elem.name(), Some("user"));
+        assert!(elem.is_focusable());
+    }
+
+    #[test]
+    fn password_input_type() {
+        let elem = FormElement::TextInput {
+            name: "pw".into(),
+            value: String::new(),
+            placeholder: String::new(),
+            maxlength: None,
+            input_type: InputType::Password,
+        };
+        assert_eq!(elem.name(), Some("pw"));
+        assert!(elem.is_focusable());
+    }
+
+    #[test]
+    fn hidden_input_not_focusable() {
+        let elem = FormElement::HiddenInput {
+            name: "csrf".into(),
+            value: "tok123".into(),
+        };
+        assert_eq!(elem.name(), Some("csrf"));
+        assert!(!elem.is_focusable());
+    }
+
+    #[test]
+    fn checkbox_construction() {
+        let elem = FormElement::Checkbox {
+            name: "agree".into(),
+            value: "yes".into(),
+            checked: true,
+            label: "I agree".into(),
+        };
+        assert_eq!(elem.name(), Some("agree"));
+        assert!(elem.is_focusable());
+    }
+
+    #[test]
+    fn radio_button_construction() {
+        let elem = FormElement::RadioButton {
+            name: "color".into(),
+            value: "red".into(),
+            checked: false,
+            group: "colors".into(),
+        };
+        assert_eq!(elem.name(), Some("color"));
+        assert!(elem.is_focusable());
+    }
+
+    #[test]
+    fn select_box_construction() {
+        let opts = vec![
+            SelectOption {
+                value: "a".into(),
+                label: "Alpha".into(),
+                disabled: false,
+            },
+            SelectOption {
+                value: "b".into(),
+                label: "Beta".into(),
+                disabled: true,
+            },
+        ];
+        let elem = FormElement::SelectBox {
+            name: "choice".into(),
+            options: opts,
+            selected_index: Some(0),
+        };
+        assert_eq!(elem.name(), Some("choice"));
+        assert!(elem.is_focusable());
+    }
+
+    #[test]
+    fn textarea_construction() {
+        let elem = FormElement::TextArea {
+            name: "bio".into(),
+            value: "Hello".into(),
+            rows: 5,
+            cols: 40,
+            placeholder: "Tell us about yourself".into(),
+        };
+        assert_eq!(elem.name(), Some("bio"));
+        assert!(elem.is_focusable());
+    }
+
+    #[test]
+    fn submit_button_construction() {
+        let elem = FormElement::SubmitButton {
+            name: "go".into(),
+            value: "submit".into(),
+            label: "Go".into(),
+        };
+        assert_eq!(elem.name(), Some("go"));
+        assert!(elem.is_focusable());
+    }
+
+    #[test]
+    fn reset_button_has_no_name() {
+        let elem = FormElement::ResetButton {
+            label: "Reset".into(),
+        };
+        assert_eq!(elem.name(), None);
+        assert!(elem.is_focusable());
+    }
+
+    // -- empty name returns None ------------------------------------
+
+    #[test]
+    fn empty_name_returns_none() {
+        let elem = FormElement::TextInput {
+            name: String::new(),
+            value: String::new(),
+            placeholder: String::new(),
+            maxlength: None,
+            input_type: InputType::Text,
+        };
+        assert_eq!(elem.name(), None);
+    }
+
+    // -- InputType equality -----------------------------------------
+
+    #[test]
+    fn input_type_variants_distinct() {
+        assert_ne!(InputType::Text, InputType::Password);
+        assert_ne!(InputType::Email, InputType::Number);
+        assert_ne!(InputType::Number, InputType::Hidden);
+        assert_eq!(InputType::Text, InputType::Text);
+    }
+
+    #[test]
+    fn input_type_debug() {
+        assert_eq!(format!("{:?}", InputType::Email), "Email");
+        assert_eq!(format!("{:?}", InputType::Password), "Password");
+    }
+
+    // -- FormMethod -------------------------------------------------
+
+    #[test]
+    fn form_method_equality() {
+        assert_eq!(FormMethod::Get, FormMethod::Get);
+        assert_eq!(FormMethod::Post, FormMethod::Post);
+        assert_ne!(FormMethod::Get, FormMethod::Post);
+    }
+
+    #[test]
+    fn form_method_debug() {
+        assert_eq!(format!("{:?}", FormMethod::Get), "Get");
+        assert_eq!(format!("{:?}", FormMethod::Post), "Post");
+    }
+
+    #[test]
+    fn form_method_is_copy() {
+        let m = FormMethod::Get;
+        let m2 = m; // Copy
+        assert_eq!(m, m2);
+    }
+
+    // -- FormData ---------------------------------------------------
+
+    #[test]
+    fn form_data_encode_empty() {
+        let fd = FormData {
+            fields: vec![],
+            method: FormMethod::Get,
+            action: "/search".into(),
+        };
+        assert_eq!(fd.encode(), "");
+    }
+
+    #[test]
+    fn form_data_encode_single() {
+        let fd = FormData {
+            fields: vec![("q".into(), "hello".into())],
+            method: FormMethod::Get,
+            action: "/search".into(),
+        };
+        assert_eq!(fd.encode(), "q=hello");
+    }
+
+    #[test]
+    fn form_data_encode_multiple() {
+        let fd = FormData {
+            fields: vec![("a".into(), "1".into()), ("b".into(), "2".into())],
+            method: FormMethod::Post,
+            action: "/submit".into(),
+        };
+        assert_eq!(fd.encode(), "a=1&b=2");
+    }
+
+    #[test]
+    fn form_data_encode_spaces_as_plus() {
+        let fd = FormData {
+            fields: vec![("q".into(), "hello world".into())],
+            method: FormMethod::Get,
+            action: "/".into(),
+        };
+        assert_eq!(fd.encode(), "q=hello+world");
+    }
+
+    #[test]
+    fn form_data_encode_special_chars() {
+        let fd = FormData {
+            fields: vec![("k".into(), "a&b=c".into())],
+            method: FormMethod::Get,
+            action: "/".into(),
+        };
+        assert_eq!(fd.encode(), "k=a%26b%3Dc");
+    }
+
+    #[test]
+    fn form_data_to_pairs() {
+        let fd = FormData {
+            fields: vec![("x".into(), "1".into()), ("y".into(), "2".into())],
+            method: FormMethod::Post,
+            action: "/".into(),
+        };
+        let pairs = fd.to_pairs();
+        assert_eq!(pairs.len(), 2);
+        assert_eq!(pairs[0], ("x".into(), "1".into()));
+        assert_eq!(pairs[1], ("y".into(), "2".into()));
+    }
+
+    // -- FormAction construction ------------------------------------
+
+    #[test]
+    fn form_action_none() {
+        let a = FormAction::None;
+        assert_eq!(a, FormAction::None);
+    }
+
+    #[test]
+    fn form_action_submit() {
+        let fd = FormData {
+            fields: vec![("q".into(), "test".into())],
+            method: FormMethod::Get,
+            action: "/search".into(),
+        };
+        let a = FormAction::Submit(fd.clone());
+        assert_eq!(a, FormAction::Submit(fd));
+    }
+
+    #[test]
+    fn form_action_focus_changed() {
+        assert_eq!(FormAction::FocusChanged, FormAction::FocusChanged);
+        assert_ne!(FormAction::FocusChanged, FormAction::None);
+    }
+
+    #[test]
+    fn form_action_value_changed() {
+        assert_eq!(FormAction::ValueChanged, FormAction::ValueChanged);
+        assert_ne!(FormAction::ValueChanged, FormAction::FocusChanged);
+    }
+
+    // -- url_encode -------------------------------------------------
+
+    #[test]
+    fn url_encode_unreserved_chars() {
+        assert_eq!(url_encode("abc-XYZ_0.9~"), "abc-XYZ_0.9~");
+    }
+
+    #[test]
+    fn url_encode_spaces() {
+        assert_eq!(url_encode("a b c"), "a+b+c");
+    }
+
+    #[test]
+    fn url_encode_special() {
+        assert_eq!(url_encode("@!"), "%40%21");
+    }
+
+    #[test]
+    fn url_encode_empty() {
+        assert_eq!(url_encode(""), "");
+    }
+
+    // -- FormKey / SelectOption Debug --------------------------------
+
+    #[test]
+    fn form_key_debug() {
+        assert_eq!(format!("{:?}", FormKey::Char('a')), "Char('a')");
+        assert_eq!(format!("{:?}", FormKey::Backspace), "Backspace");
+        assert_eq!(format!("{:?}", FormKey::Tab), "Tab");
+    }
+
+    #[test]
+    fn form_key_equality() {
+        assert_eq!(FormKey::Enter, FormKey::Enter);
+        assert_eq!(FormKey::Char('x'), FormKey::Char('x'));
+        assert_ne!(FormKey::Char('x'), FormKey::Char('y'));
+        assert_ne!(FormKey::Tab, FormKey::ShiftTab);
+    }
+
+    #[test]
+    fn select_option_equality() {
+        let a = SelectOption {
+            value: "v".into(),
+            label: "L".into(),
+            disabled: false,
+        };
+        let b = a.clone();
+        assert_eq!(a, b);
+    }
+
+    #[test]
+    fn form_element_clone_eq() {
+        let elem = FormElement::Checkbox {
+            name: "c".into(),
+            value: "on".into(),
+            checked: true,
+            label: "Check".into(),
+        };
+        let cloned = elem.clone();
+        assert_eq!(elem, cloned);
+    }
+}

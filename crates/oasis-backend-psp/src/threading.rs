@@ -14,7 +14,6 @@ use crate::audio::{AudioPlayer, RadioStreamer};
 use crate::filesystem::decode_jpeg;
 use crate::sfx::{SfxEngine, SfxId};
 
-
 // ---------------------------------------------------------------------------
 // Lock-free command and response queues (SPSC: main thread -> workers)
 // ---------------------------------------------------------------------------
@@ -94,7 +93,9 @@ pub enum AudioCmd {
         channels: u16,
     },
     /// Raw AAC frame data from demux_lite for hardware decode.
-    VideoAudioAac { data: Vec<u8> },
+    VideoAudioAac {
+        data: Vec<u8>,
+    },
     /// Stop video audio playback.
     VideoAudioStop,
     Shutdown,
@@ -351,18 +352,14 @@ impl PspAacDecoder {
             sys::sceKernelDcacheWritebackInvalidateAll();
             let ret = sys::sceAudiocodecCheckNeedMem(ptr, codec_type);
             if ret < 0 {
-                io_log(&format!(
-                    "[AUDIO] CheckNeedMem failed: {ret:#010x}"
-                ));
+                io_log(&format!("[AUDIO] CheckNeedMem failed: {ret:#010x}"));
                 return Err(ret);
             }
 
             sys::sceKernelDcacheWritebackInvalidateAll();
             let ret = sys::sceAudiocodecGetEDRAM(ptr, codec_type);
             if ret < 0 {
-                io_log(&format!(
-                    "[AUDIO] GetEDRAM failed: {ret:#010x}"
-                ));
+                io_log(&format!("[AUDIO] GetEDRAM failed: {ret:#010x}"));
                 return Err(ret);
             }
 
@@ -372,9 +369,7 @@ impl PspAacDecoder {
             sys::sceKernelDcacheWritebackInvalidateAll();
             let ret = sys::sceAudiocodecInit(ptr, codec_type);
             if ret < 0 {
-                io_log(&format!(
-                    "[AUDIO] AudiocodecInit failed: {ret:#010x}"
-                ));
+                io_log(&format!("[AUDIO] AudiocodecInit failed: {ret:#010x}"));
                 sys::sceAudiocodecReleaseEDRAM(ptr);
                 return Err(ret);
             }
@@ -408,9 +403,7 @@ impl PspAacDecoder {
         }
 
         // SAFETY: sceAudiocodecDecode operates on the aligned buffer.
-        let ret = unsafe {
-            sys::sceAudiocodecDecode(words.as_mut_ptr(), 0x1003)
-        };
+        let ret = unsafe { sys::sceAudiocodecDecode(words.as_mut_ptr(), 0x1003) };
         if ret < 0 {
             return Err(ret);
         }
@@ -458,9 +451,7 @@ fn decode_aac_frame(
                 *aac_decoder = Some(dec);
             },
             Err(e) => {
-                io_log(&format!(
-                    "[AUDIO] AAC decoder init failed: {e:#010x}"
-                ));
+                io_log(&format!("[AUDIO] AAC decoder init failed: {e:#010x}"));
                 return;
             },
         }
@@ -469,8 +460,7 @@ fn decode_aac_frame(
     // Ensure audio channel exists.
     if player.channel.is_none() {
         io_log("[AUDIO] reserving audio channel...");
-        player.channel =
-            AudioChannel::reserve(AAC_FRAME_SAMPLES, AudioFormat::Stereo).ok();
+        player.channel = AudioChannel::reserve(AAC_FRAME_SAMPLES, AudioFormat::Stereo).ok();
         if player.channel.is_some() {
             io_log("[AUDIO] audio channel reserved OK");
         } else {
@@ -482,8 +472,7 @@ fn decode_aac_frame(
 
     let mut pcm = vec![0i16; AAC_FRAME_SAMPLES as usize * 2];
 
-    static DECODE_COUNT: core::sync::atomic::AtomicU32 =
-        core::sync::atomic::AtomicU32::new(0);
+    static DECODE_COUNT: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
     let count = DECODE_COUNT.fetch_add(1, Ordering::Relaxed);
     if count < 3 {
         io_log(&format!(
@@ -496,9 +485,7 @@ fn decode_aac_frame(
     match decoder.decode(data, &mut pcm) {
         Ok(consumed) => {
             if count < 3 {
-                io_log(&format!(
-                    "[AUDIO] decode #{count} OK, consumed={consumed}"
-                ));
+                io_log(&format!("[AUDIO] decode #{count} OK, consumed={consumed}"));
             }
             if consumed == 0 {
                 return;
@@ -508,13 +495,10 @@ fn decode_aac_frame(
             }
         },
         Err(e) => {
-            static ERR_COUNT: core::sync::atomic::AtomicU32 =
-                core::sync::atomic::AtomicU32::new(0);
+            static ERR_COUNT: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
             let c = ERR_COUNT.fetch_add(1, Ordering::Relaxed);
             if c < 10 {
-                io_log(&format!(
-                    "[AUDIO] AAC decode #{count} error: {e:#010x}"
-                ));
+                io_log(&format!("[AUDIO] AAC decode #{count} error: {e:#010x}"));
             }
         },
     }
@@ -647,18 +631,11 @@ fn audio_thread_fn() {
                 aac_sample_rate = sample_rate;
                 // Reset decoder if sample rate changed.
                 aac_decoder = None;
-                io_log(&format!(
-                    "[AUDIO] AAC config: rate={sample_rate}"
-                ));
+                io_log(&format!("[AUDIO] AAC config: rate={sample_rate}"));
             },
             Some(AudioCmd::VideoAudioAac { data }) => {
                 // Decode raw AAC frame via sceAudiocodec and output PCM.
-                decode_aac_frame(
-                    &data,
-                    &mut player,
-                    &mut aac_decoder,
-                    aac_sample_rate,
-                );
+                decode_aac_frame(&data, &mut player, &mut aac_decoder, aac_sample_rate);
             },
             Some(AudioCmd::VideoAudioStop) => {
                 // Video playback ended -- flush AAC decoder state.
@@ -897,7 +874,8 @@ fn handle_tv_catalog_batch(requests: Vec<TvCatalogRequest>) {
         let mut url_bytes: Vec<u8> = req.url.as_bytes().to_vec();
         url_bytes.push(0);
 
-        let resp = match client.request(psp::sys::HttpMethod::Get, &url_bytes)
+        let resp = match client
+            .request(psp::sys::HttpMethod::Get, &url_bytes)
             .timeout(15_000)
             .send()
         {
@@ -910,7 +888,9 @@ fn handle_tv_catalog_batch(requests: Vec<TvCatalogRequest>) {
 
         io_log(&format!(
             "[IO-TV] ch={} status={} len={}",
-            req.ch_idx, resp.status_code, resp.body.len()
+            req.ch_idx,
+            resp.status_code,
+            resp.body.len()
         ));
 
         if resp.status_code < 200 || resp.status_code >= 300 {
@@ -926,13 +906,16 @@ fn handle_tv_catalog_batch(requests: Vec<TvCatalogRequest>) {
         let body_len = resp.body.len();
         let json = String::from_utf8_lossy(&resp.body).into_owned();
         drop(resp);
-        io_log(&format!("[IO-TV] parsing ch={} ({body_len} bytes)...", req.ch_idx));
-        let episodes = parse_files_lightweight(
-            &json,
-            &req.item_id,
-            req.subfolder.as_deref(),
-        );
-        io_log(&format!("[IO-TV] ch={} parsed {} episodes", req.ch_idx, episodes.len()));
+        io_log(&format!(
+            "[IO-TV] parsing ch={} ({body_len} bytes)...",
+            req.ch_idx
+        ));
+        let episodes = parse_files_lightweight(&json, &req.item_id, req.subfolder.as_deref());
+        io_log(&format!(
+            "[IO-TV] ch={} parsed {} episodes",
+            req.ch_idx,
+            episodes.len()
+        ));
 
         let _ = IO_RESP_QUEUE.push(IoResponse::TvCatalogReady {
             ch_idx: req.ch_idx,
@@ -969,11 +952,9 @@ fn parse_files_lightweight(
     // Find the "result" array.
     let result_start = match json.find("\"result\":[") {
         Some(pos) => pos + "\"result\":[".len(),
-        None => {
-            match json.find("\"result\": [") {
-                Some(pos) => pos + "\"result\": [".len(),
-                None => return Vec::new(),
-            }
+        None => match json.find("\"result\": [") {
+            Some(pos) => pos + "\"result\": [".len(),
+            None => return Vec::new(),
         },
     };
 
@@ -1076,7 +1057,11 @@ fn parse_files_lightweight(
             height,
             size_bytes,
             format: format_str.to_string(),
-            original: if original.is_empty() { None } else { Some(original.to_string()) },
+            original: if original.is_empty() {
+                None
+            } else {
+                Some(original.to_string())
+            },
         });
 
         // Cap at 50 episodes per channel to limit memory.
@@ -1168,10 +1153,7 @@ unsafe fn ensure_dl_template() -> Result<i32, String> {
     }
     io_log(&format!("[IO-DL] sceHttpInit: {ret:#x}"));
 
-    let tid = sys::sceHttpCreateTemplate(
-        b"oasis-psp/1.0\0".as_ptr() as *mut u8,
-        1, 0,
-    );
+    let tid = sys::sceHttpCreateTemplate(b"oasis-psp/1.0\0".as_ptr() as *mut u8, 1, 0);
     if tid < 0 {
         return Err(format!("template: {tid:#x}"));
     }
@@ -1201,13 +1183,10 @@ unsafe fn ensure_dl_template() -> Result<i32, String> {
 ///
 /// On redirect-loop failure (CDN requires HTTPS), returns the HTTPS
 /// redirect URL as the second element so the caller can try TLS.
-unsafe fn http_open_with_redirect(
-    url: &str,
-) -> Result<(i32, i32, u64), (String, Option<String>)> {
+unsafe fn http_open_with_redirect(url: &str) -> Result<(i32, i32, u64), (String, Option<String>)> {
     use psp::sys;
 
-    let template_id = ensure_dl_template()
-        .map_err(|e| (e, None))?;
+    let template_id = ensure_dl_template().map_err(|e| (e, None))?;
     let mut current_url = url.to_string();
     // Track the last HTTPS redirect URL for TLS fallback.
     let mut last_https_redirect: Option<String> = None;
@@ -1216,11 +1195,7 @@ unsafe fn http_open_with_redirect(
         let mut url_bytes: Vec<u8> = current_url.as_bytes().to_vec();
         url_bytes.push(0);
 
-        let conn_id = sys::sceHttpCreateConnectionWithURL(
-            template_id,
-            url_bytes.as_ptr(),
-            0,
-        );
+        let conn_id = sys::sceHttpCreateConnectionWithURL(template_id, url_bytes.as_ptr(), 0);
         if conn_id < 0 {
             return Err((format!("connect: {conn_id:#x}"), None));
         }
@@ -1244,10 +1219,7 @@ unsafe fn http_open_with_redirect(
             io_log(&format!("[IO-DL] send failed: {ret:#x}"));
             sys::sceHttpDeleteRequest(req_id);
             sys::sceHttpDeleteConnection(conn_id);
-            return Err((
-                format!("send: {ret:#x}"),
-                last_https_redirect.clone(),
-            ));
+            return Err((format!("send: {ret:#x}"), last_https_redirect.clone()));
         }
 
         let mut status_code: i32 = 0;
@@ -1262,19 +1234,13 @@ unsafe fn http_open_with_redirect(
             let mut hdr_len: u32 = 0;
             let ret = sys::sceHttpGetAllHeader(req_id, &mut hdr_ptr, &mut hdr_len);
 
-            let location_url = if ret >= 0
-                && !hdr_ptr.is_null()
-                && hdr_len > 0
-            {
+            let location_url = if ret >= 0 && !hdr_ptr.is_null() && hdr_len > 0 {
                 // SAFETY: pointer valid while request alive.
                 let hdrs = core::slice::from_raw_parts(hdr_ptr, hdr_len as usize);
                 let hdr_str = core::str::from_utf8(hdrs).unwrap_or("");
                 hdr_str
                     .lines()
-                    .find(|l| {
-                        l.len() > 9
-                            && l[..9].eq_ignore_ascii_case("location:")
-                    })
+                    .find(|l| l.len() > 9 && l[..9].eq_ignore_ascii_case("location:"))
                     .and_then(|l| l.split_once(':').map(|(_, v)| v.trim().to_string()))
             } else {
                 None
@@ -1293,9 +1259,7 @@ unsafe fn http_open_with_redirect(
                 let new_url = loc.replacen("https://", "http://", 1);
                 // Detect redirect loop: same URL after rewrite.
                 if new_url == current_url {
-                    io_log(&format!(
-                        "[IO-DL] redirect loop detected → {new_url}"
-                    ));
+                    io_log(&format!("[IO-DL] redirect loop detected → {new_url}"));
                     return Err((
                         String::from("redirect loop (CDN requires HTTPS)"),
                         last_https_redirect,
@@ -1305,10 +1269,7 @@ unsafe fn http_open_with_redirect(
                 current_url = new_url;
                 continue;
             } else {
-                return Err((
-                    format!("redirect {status_code}, no Location"),
-                    None,
-                ));
+                return Err((format!("redirect {status_code}, no Location"), None));
             }
         }
 
@@ -1324,10 +1285,7 @@ unsafe fn http_open_with_redirect(
         return Ok((req_id, conn_id, content_length));
     }
 
-    Err((
-        String::from("too many redirects"),
-        last_https_redirect,
-    ))
+    Err((String::from("too many redirects"), last_https_redirect))
 }
 
 /// Raw TCP HTTP reader — bypasses sceHttp entirely using BSD sockets.
@@ -1350,19 +1308,15 @@ impl RawHttpReader {
         Self::open_with_redirects(url, 5)
     }
 
-    fn open_with_redirects(
-        url: &str,
-        max_redirects: u32,
-    ) -> Result<(Self, u64), String> {
-        let (host, port, path, _) =
-            parse_url(url).ok_or_else(|| format!("bad URL: {url}"))?;
+    fn open_with_redirects(url: &str, max_redirects: u32) -> Result<(Self, u64), String> {
+        let (host, port, path, _) = parse_url(url).ok_or_else(|| format!("bad URL: {url}"))?;
 
         io_log(&format!("[IO-RAW] resolving {host}..."));
 
         let mut host_bytes: Vec<u8> = host.as_bytes().to_vec();
         host_bytes.push(0);
-        let addr = psp::net::resolve_hostname(&host_bytes)
-            .map_err(|e| format!("DNS {host}: {e}"))?;
+        let addr =
+            psp::net::resolve_hostname(&host_bytes).map_err(|e| format!("DNS {host}: {e}"))?;
 
         io_log(&format!(
             "[IO-RAW] resolved {host} → {}.{}.{}.{}",
@@ -1379,17 +1333,18 @@ impl RawHttpReader {
         // SAFETY: Valid socket options on PSP BSD stack.
         unsafe {
             #[repr(C)]
-            struct Timeval { tv_sec: i32, tv_usec: i32 }
-            let timeout = Timeval { tv_sec: 30, tv_usec: 0 };
-            let timeout_ptr =
-                &timeout as *const Timeval as *const core::ffi::c_void;
+            struct Timeval {
+                tv_sec: i32,
+                tv_usec: i32,
+            }
+            let timeout = Timeval {
+                tv_sec: 30,
+                tv_usec: 0,
+            };
+            let timeout_ptr = &timeout as *const Timeval as *const core::ffi::c_void;
             let timeout_len = core::mem::size_of::<Timeval>() as u32;
-            psp::sys::sceNetInetSetsockopt(
-                fd, 0xFFFF, 0x1005, timeout_ptr, timeout_len,
-            );
-            psp::sys::sceNetInetSetsockopt(
-                fd, 0xFFFF, 0x1006, timeout_ptr, timeout_len,
-            );
+            psp::sys::sceNetInetSetsockopt(fd, 0xFFFF, 0x1005, timeout_ptr, timeout_len);
+            psp::sys::sceNetInetSetsockopt(fd, 0xFFFF, 0x1006, timeout_ptr, timeout_len);
         }
 
         io_log(&format!("[IO-RAW] connecting to {host}:{port}..."));
@@ -1398,10 +1353,7 @@ impl RawHttpReader {
         // SAFETY: Blocking connect — will return when connected or on
         // TCP timeout. Port 80 is not blocked so this completes quickly.
         let ret = unsafe {
-            psp::sys::sceNetInetConnect(
-                fd, &sa,
-                core::mem::size_of::<psp::sys::sockaddr>() as u32,
-            )
+            psp::sys::sceNetInetConnect(fd, &sa, core::mem::size_of::<psp::sys::sockaddr>() as u32)
         };
         if ret < 0 {
             io_log(&format!("[IO-RAW] connect failed: {ret:#x}"));
@@ -1466,8 +1418,7 @@ impl RawHttpReader {
         let header_end = find_header_end(&hdr_buf[..hdr_len])
             .ok_or_else(|| "incomplete HTTP headers".to_string())?;
 
-        let hdr_str =
-            core::str::from_utf8(&hdr_buf[..header_end]).unwrap_or("");
+        let hdr_str = core::str::from_utf8(&hdr_buf[..header_end]).unwrap_or("");
         io_log(&format!(
             "[IO-RAW] response: {}",
             hdr_str.lines().next().unwrap_or("?")
@@ -1489,9 +1440,7 @@ impl RawHttpReader {
             }
 
             let location = hdr_str.lines().find_map(|l| {
-                if l.len() > 9
-                    && l[..9].eq_ignore_ascii_case("location:")
-                {
+                if l.len() > 9 && l[..9].eq_ignore_ascii_case("location:") {
                     l.split_once(':').map(|(_, v)| v.trim().to_string())
                 } else {
                     None
@@ -1502,10 +1451,7 @@ impl RawHttpReader {
                 // Rewrite HTTPS → HTTP for PSP.
                 let new_url = loc.replacen("https://", "http://", 1);
                 io_log(&format!("[IO-RAW] redirect → {new_url}"));
-                return Self::open_with_redirects(
-                    &new_url,
-                    max_redirects - 1,
-                );
+                return Self::open_with_redirects(&new_url, max_redirects - 1);
             }
             return Err(format!("redirect {status}, no Location"));
         }
@@ -1518,9 +1464,7 @@ impl RawHttpReader {
         let content_length: u64 = hdr_str
             .lines()
             .find_map(|l| {
-                if l.len() > 15
-                    && l[..15].eq_ignore_ascii_case("content-length:")
-                {
+                if l.len() > 15 && l[..15].eq_ignore_ascii_case("content-length:") {
                     l[15..].trim().parse().ok()
                 } else {
                     None
@@ -1567,10 +1511,7 @@ impl RawHttpReader {
 /// Abstraction over HTTP data sources.
 enum HttpDataSource {
     /// PSP's built-in HTTP library (for `http://` URLs).
-    SceHttp {
-        req_id: i32,
-        conn_id: i32,
-    },
+    SceHttp { req_id: i32, conn_id: i32 },
     /// Raw TCP + TLS 1.3 via embedded-tls (for `https://` URLs).
     Tls(TlsHttpReader),
 }
@@ -1589,9 +1530,7 @@ impl HttpDataSource {
                     )
                 }
             },
-            HttpDataSource::Tls(reader) => {
-                reader.read_data(buf).unwrap_or(0)
-            },
+            HttpDataSource::Tls(reader) => reader.read_data(buf).unwrap_or(0),
         }
     }
 
@@ -1599,10 +1538,7 @@ impl HttpDataSource {
     /// request+connection handles. The persistent template stays alive.
     fn cleanup(self) {
         match self {
-            HttpDataSource::SceHttp {
-                req_id,
-                conn_id,
-            } => {
+            HttpDataSource::SceHttp { req_id, conn_id } => {
                 // SAFETY: IDs are valid sceHttp handles.
                 unsafe {
                     psp::sys::sceHttpAbortRequest(req_id);
@@ -1648,80 +1584,62 @@ fn handle_video_download(url: String, _dest: String, tag: u32) {
     };
 
     // SAFETY: All sceHttp calls use IDs returned by prior creation.
-    let (mut source, content_length) =
-        match unsafe { http_open_with_redirect(&http_url) } {
-            Ok((req_id, conn_id, cl)) => {
-                io_log("[IO-DL] sceHttp OK");
-                (
-                    HttpDataSource::SceHttp {
-                        req_id,
-                        conn_id,
-                    },
-                    cl,
-                )
-            },
-            Err((msg, https_redirect)) => {
-                // Try TLS fallback. First try archive.org HTTPS
-                // (may redirect to a different, reachable CDN node),
-                // then try CDN HTTPS directly as a last resort.
-                let origin_tls = if url.starts_with("http://") {
-                    url.replacen("http://", "https://", 1)
-                } else {
-                    url.clone()
-                };
+    let (mut source, content_length) = match unsafe { http_open_with_redirect(&http_url) } {
+        Ok((req_id, conn_id, cl)) => {
+            io_log("[IO-DL] sceHttp OK");
+            (HttpDataSource::SceHttp { req_id, conn_id }, cl)
+        },
+        Err((msg, https_redirect)) => {
+            // Try TLS fallback. First try archive.org HTTPS
+            // (may redirect to a different, reachable CDN node),
+            // then try CDN HTTPS directly as a last resort.
+            let origin_tls = if url.starts_with("http://") {
+                url.replacen("http://", "https://", 1)
+            } else {
+                url.clone()
+            };
 
-                // Build candidate list: origin first, then CDN if different.
-                let mut tls_candidates: Vec<String> = vec![origin_tls];
-                if let Some(cdn_url) = &https_redirect {
-                    if !tls_candidates.contains(cdn_url) {
-                        tls_candidates.push(cdn_url.clone());
-                    }
+            // Build candidate list: origin first, then CDN if different.
+            let mut tls_candidates: Vec<String> = vec![origin_tls];
+            if let Some(cdn_url) = &https_redirect {
+                if !tls_candidates.contains(cdn_url) {
+                    tls_candidates.push(cdn_url.clone());
                 }
+            }
 
-                let mut last_err = msg.clone();
-                let mut found = None;
-                for (i, tls_url) in tls_candidates.iter().enumerate() {
-                    io_log(&format!(
-                        "[IO-DL] sceHttp failed ({msg}), trying TLS \
+            let mut last_err = msg.clone();
+            let mut found = None;
+            for (i, tls_url) in tls_candidates.iter().enumerate() {
+                io_log(&format!(
+                    "[IO-DL] sceHttp failed ({msg}), trying TLS \
                          #{} to {tls_url}...",
-                        i + 1
-                    ));
-                    match TlsHttpReader::open(tls_url) {
-                        Ok((reader, cl)) => {
-                            io_log(&format!(
-                                "[IO-DL] TLS fallback #{} OK, len={cl}",
-                                i + 1
-                            ));
-                            found = Some((reader, cl));
-                            break;
-                        },
-                        Err(e) => {
-                            io_log(&format!(
-                                "[IO-DL] TLS fallback #{} failed: {e}",
-                                i + 1
-                            ));
-                            last_err = e;
-                        },
-                    }
+                    i + 1
+                ));
+                match TlsHttpReader::open(tls_url) {
+                    Ok((reader, cl)) => {
+                        io_log(&format!("[IO-DL] TLS fallback #{} OK, len={cl}", i + 1));
+                        found = Some((reader, cl));
+                        break;
+                    },
+                    Err(e) => {
+                        io_log(&format!("[IO-DL] TLS fallback #{} failed: {e}", i + 1));
+                        last_err = e;
+                    },
                 }
+            }
 
-                match found {
-                    Some((reader, cl)) => {
-                        (HttpDataSource::Tls(reader), cl)
-                    },
-                    None => {
-                        let _ =
-                            IO_RESP_QUEUE.push(IoResponse::VideoError {
-                                tag,
-                                msg: format!(
-                                    "HTTP: {msg}; TLS: {last_err}"
-                                ),
-                            });
-                        return;
-                    },
-                }
-            },
-        };
+            match found {
+                Some((reader, cl)) => (HttpDataSource::Tls(reader), cl),
+                None => {
+                    let _ = IO_RESP_QUEUE.push(IoResponse::VideoError {
+                        tag,
+                        msg: format!("HTTP: {msg}; TLS: {last_err}"),
+                    });
+                    return;
+                },
+            }
+        },
+    };
 
     let total = if content_length > 0 {
         Some(content_length)
@@ -1827,10 +1745,8 @@ fn handle_video_download(url: String, _dest: String, tag: u32) {
     let audio_track = mp4.audio_track_info().cloned();
     drop(mp4);
 
-    let v_count =
-        video_track.as_ref().map_or(0, |t| t.sample_count());
-    let a_count =
-        audio_track.as_ref().map_or(0, |t| t.sample_count());
+    let v_count = video_track.as_ref().map_or(0, |t| t.sample_count());
+    let a_count = audio_track.as_ref().map_or(0, |t| t.sample_count());
     io_log(&format!(
         "[IO-DL] parsed: {v_count} video, {a_count} audio samples"
     ));
@@ -1905,9 +1821,7 @@ fn handle_video_download(url: String, _dest: String, tag: u32) {
             &video_track,
             &audio_track,
         );
-        io_log(&format!(
-            "[IO-DL] leftover processed: v={v_idx} a={a_idx}"
-        ));
+        io_log(&format!("[IO-DL] leftover processed: v={v_idx} a={a_idx}"));
     }
 
     io_log("[IO-DL] dropping moov_buf...");
@@ -1916,9 +1830,7 @@ fn handle_video_download(url: String, _dest: String, tag: u32) {
 
     let mut loop_iter = 0u32;
     loop {
-        if !crate::video::is_video_playing()
-            || DOWNLOAD_CANCEL.load(Ordering::Acquire)
-        {
+        if !crate::video::is_video_playing() || DOWNLOAD_CANCEL.load(Ordering::Acquire) {
             io_log("[IO-DL] playback stopped, ending stream");
             break;
         }
@@ -2143,10 +2055,7 @@ fn parse_url(url: &str) -> Option<(String, u16, String, bool)> {
     };
     let default_port = if is_https { 443 } else { 80 };
     let (host, port) = match host_port.find(':') {
-        Some(i) => (
-            &host_port[..i],
-            host_port[i + 1..].parse::<u16>().ok()?,
-        ),
+        Some(i) => (&host_port[..i], host_port[i + 1..].parse::<u16>().ok()?),
         None => (host_port, default_port),
     };
     Some((host.to_string(), port, path.to_string(), is_https))
@@ -2212,11 +2121,8 @@ impl embedded_io::Write for PspSocketIo {
     }
 }
 
-type PspTlsConn<'a> = embedded_tls::blocking::TlsConnection<
-    'a,
-    PspSocketIo,
-    embedded_tls::blocking::Aes128GcmSha256,
->;
+type PspTlsConn<'a> =
+    embedded_tls::blocking::TlsConnection<'a, PspSocketIo, embedded_tls::blocking::Aes128GcmSha256>;
 
 /// HTTPS reader: raw TCP socket + TLS 1.3 + HTTP/1.1.
 ///
@@ -2268,17 +2174,12 @@ impl rand_core::RngCore for IoRng {
         // SAFETY: ctx was initialized in new().
         unsafe {
             for byte in dest.iter_mut() {
-                *byte =
-                    (psp::sys::sceKernelUtilsMt19937UInt(&mut self.ctx)
-                        & 0xFF) as u8;
+                *byte = (psp::sys::sceKernelUtilsMt19937UInt(&mut self.ctx) & 0xFF) as u8;
             }
         }
     }
 
-    fn try_fill_bytes(
-        &mut self,
-        dest: &mut [u8],
-    ) -> core::result::Result<(), rand_core::Error> {
+    fn try_fill_bytes(&mut self, dest: &mut [u8]) -> core::result::Result<(), rand_core::Error> {
         self.fill_bytes(dest);
         Ok(())
     }
@@ -2296,20 +2197,16 @@ impl TlsHttpReader {
     }
 
     /// Open with redirect depth limit to prevent infinite recursion.
-    fn open_with_redirects(
-        url: &str,
-        redirects_left: u8,
-    ) -> Result<(Self, u64), String> {
-        let (host, port, path, _) =
-            parse_url(url).ok_or_else(|| format!("bad URL: {url}"))?;
+    fn open_with_redirects(url: &str, redirects_left: u8) -> Result<(Self, u64), String> {
+        let (host, port, path, _) = parse_url(url).ok_or_else(|| format!("bad URL: {url}"))?;
 
         io_log(&format!("[IO-TLS] resolving {host}..."));
 
         // DNS resolve.
         let mut host_bytes: Vec<u8> = host.as_bytes().to_vec();
         host_bytes.push(0);
-        let addr = psp::net::resolve_hostname(&host_bytes)
-            .map_err(|e| format!("DNS {host}: {e}"))?;
+        let addr =
+            psp::net::resolve_hostname(&host_bytes).map_err(|e| format!("DNS {host}: {e}"))?;
 
         io_log(&format!(
             "[IO-TLS] resolved {host} → {}.{}.{}.{}",
@@ -2341,11 +2238,7 @@ impl TlsHttpReader {
         let sa = crate::network::make_sockaddr_in_pub(addr.0, port);
         // SAFETY: Non-blocking connect returns immediately.
         unsafe {
-            psp::sys::sceNetInetConnect(
-                fd,
-                &sa,
-                core::mem::size_of::<psp::sys::sockaddr>() as u32,
-            );
+            psp::sys::sceNetInetConnect(fd, &sa, core::mem::size_of::<psp::sys::sockaddr>() as u32);
         }
 
         // Poll for connection (up to 10 seconds, 100ms intervals).
@@ -2360,17 +2253,9 @@ impl TlsHttpReader {
                 return Err("cancelled".into());
             }
 
-            let mut sa_out: psp::sys::sockaddr =
-                unsafe { core::mem::zeroed() };
-            let mut sa_len: u32 =
-                core::mem::size_of::<psp::sys::sockaddr>() as u32;
-            let ret = unsafe {
-                psp::sys::sceNetInetGetpeername(
-                    fd,
-                    &mut sa_out,
-                    &mut sa_len,
-                )
-            };
+            let mut sa_out: psp::sys::sockaddr = unsafe { core::mem::zeroed() };
+            let mut sa_len: u32 = core::mem::size_of::<psp::sys::sockaddr>() as u32;
+            let ret = unsafe { psp::sys::sceNetInetGetpeername(fd, &mut sa_out, &mut sa_len) };
             if ret == 0 {
                 connected = true;
                 break;
@@ -2414,16 +2299,10 @@ impl TlsHttpReader {
                 tv_sec: 30,
                 tv_usec: 0,
             };
-            let timeout_ptr =
-                &timeout as *const Timeval as *const core::ffi::c_void;
-            let timeout_len =
-                core::mem::size_of::<Timeval>() as u32;
-            psp::sys::sceNetInetSetsockopt(
-                fd, 0xFFFF, 0x1005, timeout_ptr, timeout_len,
-            );
-            psp::sys::sceNetInetSetsockopt(
-                fd, 0xFFFF, 0x1006, timeout_ptr, timeout_len,
-            );
+            let timeout_ptr = &timeout as *const Timeval as *const core::ffi::c_void;
+            let timeout_len = core::mem::size_of::<Timeval>() as u32;
+            psp::sys::sceNetInetSetsockopt(fd, 0xFFFF, 0x1005, timeout_ptr, timeout_len);
+            psp::sys::sceNetInetSetsockopt(fd, 0xFFFF, 0x1006, timeout_ptr, timeout_len);
         }
 
         io_log("[IO-TLS] TCP connected, starting TLS...");
@@ -2432,28 +2311,20 @@ impl TlsHttpReader {
         let socket_io = PspSocketIo { fd };
 
         const RECORD_BUF: usize = 16384 + 256;
-        let read_buf =
-            Box::leak(vec![0u8; RECORD_BUF].into_boxed_slice());
-        let write_buf =
-            Box::leak(vec![0u8; RECORD_BUF].into_boxed_slice());
+        let read_buf = Box::leak(vec![0u8; RECORD_BUF].into_boxed_slice());
+        let write_buf = Box::leak(vec![0u8; RECORD_BUF].into_boxed_slice());
         let read_buf_ptr: *mut [u8] = read_buf;
         let write_buf_ptr: *mut [u8] = write_buf;
 
-        let config = embedded_tls::blocking::TlsConfig::new()
-            .with_server_name(&host);
+        let config = embedded_tls::blocking::TlsConfig::new().with_server_name(&host);
 
         let mut tls: PspTlsConn<'static> =
-            embedded_tls::blocking::TlsConnection::new(
-                socket_io, read_buf, write_buf,
-            );
+            embedded_tls::blocking::TlsConnection::new(socket_io, read_buf, write_buf);
 
-        let provider = embedded_tls::UnsecureProvider::new::<
-            embedded_tls::blocking::Aes128GcmSha256,
-        >(IoRng::new());
-        let context = embedded_tls::blocking::TlsContext::new(
-            &config,
-            provider,
+        let provider = embedded_tls::UnsecureProvider::new::<embedded_tls::blocking::Aes128GcmSha256>(
+            IoRng::new(),
         );
+        let context = embedded_tls::blocking::TlsContext::new(&config, provider);
         io_log("[IO-TLS] starting TLS 1.3 handshake...");
         if let Err(e) = tls.open(context) {
             drop(tls);
@@ -2477,9 +2348,8 @@ impl TlsHttpReader {
              Accept: */*\r\n\
              Connection: keep-alive\r\n\r\n"
         );
-        if let Err(e) =
-            embedded_io::Write::write_all(&mut tls, request.as_bytes())
-                .and_then(|_| embedded_io::Write::flush(&mut tls))
+        if let Err(e) = embedded_io::Write::write_all(&mut tls, request.as_bytes())
+            .and_then(|_| embedded_io::Write::flush(&mut tls))
         {
             drop(tls);
             unsafe {
@@ -2499,16 +2369,11 @@ impl TlsHttpReader {
             if hdr_len >= hdr_buf.len() {
                 break;
             }
-            match embedded_io::Read::read(
-                &mut tls,
-                &mut hdr_buf[hdr_len..],
-            ) {
+            match embedded_io::Read::read(&mut tls, &mut hdr_buf[hdr_len..]) {
                 Ok(0) => break,
                 Ok(n) => {
                     hdr_len += n;
-                    if let Some(_end) =
-                        find_header_end(&hdr_buf[..hdr_len])
-                    {
+                    if let Some(_end) = find_header_end(&hdr_buf[..hdr_len]) {
                         break;
                     }
                 },
@@ -2527,8 +2392,7 @@ impl TlsHttpReader {
         let header_end = find_header_end(&hdr_buf[..hdr_len])
             .ok_or_else(|| "incomplete HTTP headers".to_string())?;
 
-        let hdr_str =
-            core::str::from_utf8(&hdr_buf[..header_end]).unwrap_or("");
+        let hdr_str = core::str::from_utf8(&hdr_buf[..header_end]).unwrap_or("");
         io_log(&format!(
             "[IO-TLS] response: {}",
             hdr_str.lines().next().unwrap_or("?")
@@ -2545,9 +2409,7 @@ impl TlsHttpReader {
         // Handle redirects (follow up to 5).
         if matches!(status, 301 | 302 | 303 | 307 | 308) {
             let location = hdr_str.lines().find_map(|l| {
-                if l.len() > 9
-                    && l[..9].eq_ignore_ascii_case("location:")
-                {
+                if l.len() > 9 && l[..9].eq_ignore_ascii_case("location:") {
                     l.split_once(':').map(|(_, v)| v.trim().to_string())
                 } else {
                     None
@@ -2567,10 +2429,7 @@ impl TlsHttpReader {
                     return Err("too many TLS redirects".into());
                 }
                 io_log(&format!("[IO-TLS] redirect → {loc}"));
-                return Self::open_with_redirects(
-                    &loc,
-                    redirects_left - 1,
-                );
+                return Self::open_with_redirects(&loc, redirects_left - 1);
             }
             return Err(format!("redirect {status}, no Location"));
         }
@@ -2589,9 +2448,7 @@ impl TlsHttpReader {
         let content_length: u64 = hdr_str
             .lines()
             .find_map(|l| {
-                if l.len() > 15
-                    && l[..15].eq_ignore_ascii_case("content-length:")
-                {
+                if l.len() > 15 && l[..15].eq_ignore_ascii_case("content-length:") {
                     l[15..].trim().parse().ok()
                 } else {
                     None

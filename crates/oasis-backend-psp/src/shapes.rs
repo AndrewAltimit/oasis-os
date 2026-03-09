@@ -146,9 +146,8 @@ impl PspBackend {
             // Allocate vertices for all scanlines (2 per line: left
             // and right endpoints as a Sprites primitive).
             let vert_count = (h as usize) * 2;
-            let verts = sys::sceGuGetMemory(
-                (vert_count * size_of::<ColorVertex>()) as i32,
-            ) as *mut ColorVertex;
+            let verts = sys::sceGuGetMemory((vert_count * size_of::<ColorVertex>()) as i32)
+                as *mut ColorVertex;
             if verts.is_null() {
                 sys::sceGuEnable(sys::GuState::Texture2D);
                 return;
@@ -207,13 +206,7 @@ impl PspBackend {
     ///
     /// The fan has `CIRCLE_SEGMENTS` outer vertices plus a center
     /// vertex. Fixed-point cos/sin avoids per-frame floating-point.
-    pub fn fill_circle_inner(
-        &mut self,
-        cx: i32,
-        cy: i32,
-        radius: u16,
-        color: Color,
-    ) {
+    pub fn fill_circle_inner(&mut self, cx: i32, cy: i32, radius: u16, color: Color) {
         if radius == 0 {
             return;
         }
@@ -227,9 +220,8 @@ impl PspBackend {
 
             // center + CIRCLE_SEGMENTS + 1 (closing vertex).
             let vert_count = CIRCLE_SEGMENTS + 2;
-            let verts = sys::sceGuGetMemory(
-                (vert_count * size_of::<ColorVertex>()) as i32,
-            ) as *mut ColorVertex;
+            let verts = sys::sceGuGetMemory((vert_count * size_of::<ColorVertex>()) as i32)
+                as *mut ColorVertex;
             if verts.is_null() {
                 sys::sceGuEnable(sys::GuState::Texture2D);
                 return;
@@ -312,9 +304,8 @@ impl PspBackend {
 
             if w <= 1 {
                 // Single line: 2 vertices.
-                let verts = sys::sceGuGetMemory(
-                    (2 * size_of::<ColorVertex>()) as i32,
-                ) as *mut ColorVertex;
+                let verts =
+                    sys::sceGuGetMemory((2 * size_of::<ColorVertex>()) as i32) as *mut ColorVertex;
                 if verts.is_null() {
                     sys::sceGuEnable(sys::GuState::Texture2D);
                     return;
@@ -358,9 +349,8 @@ impl PspBackend {
                 let half = w / 2;
                 let line_count = w as usize;
 
-                let verts = sys::sceGuGetMemory(
-                    (line_count * 2 * size_of::<ColorVertex>()) as i32,
-                ) as *mut ColorVertex;
+                let verts = sys::sceGuGetMemory((line_count * 2 * size_of::<ColorVertex>()) as i32)
+                    as *mut ColorVertex;
                 if verts.is_null() {
                     sys::sceGuEnable(sys::GuState::Texture2D);
                     return;
@@ -437,33 +427,20 @@ impl PspBackend {
                     let top_abgr = top.to_abgr();
                     let bot_abgr = bottom.to_abgr();
 
-                    let verts = sys::sceGuGetMemory(
-                        (6 * size_of::<ColorVertex>()) as i32,
-                    ) as *mut ColorVertex;
+                    let verts = sys::sceGuGetMemory((6 * size_of::<ColorVertex>()) as i32)
+                        as *mut ColorVertex;
                     if !verts.is_null() {
                         let x2 = x + w as i32;
                         let y2 = y + h as i32;
 
                         // Triangle 1: top-left, top-right, bottom-left.
-                        write_color_vert(
-                            verts, 0, top_abgr, x, y,
-                        );
-                        write_color_vert(
-                            verts, 1, top_abgr, x2, y,
-                        );
-                        write_color_vert(
-                            verts, 2, bot_abgr, x, y2,
-                        );
+                        write_color_vert(verts, 0, top_abgr, x, y);
+                        write_color_vert(verts, 1, top_abgr, x2, y);
+                        write_color_vert(verts, 2, bot_abgr, x, y2);
                         // Triangle 2: top-right, bottom-right, bottom-left.
-                        write_color_vert(
-                            verts, 3, top_abgr, x2, y,
-                        );
-                        write_color_vert(
-                            verts, 4, bot_abgr, x2, y2,
-                        );
-                        write_color_vert(
-                            verts, 5, bot_abgr, x, y2,
-                        );
+                        write_color_vert(verts, 3, top_abgr, x2, y);
+                        write_color_vert(verts, 4, bot_abgr, x2, y2);
+                        write_color_vert(verts, 5, bot_abgr, x, y2);
 
                         sys::sceGuDrawArray(
                             GuPrimitive::Triangles,
@@ -478,33 +455,20 @@ impl PspBackend {
                     let left_abgr = left.to_abgr();
                     let right_abgr = right.to_abgr();
 
-                    let verts = sys::sceGuGetMemory(
-                        (6 * size_of::<ColorVertex>()) as i32,
-                    ) as *mut ColorVertex;
+                    let verts = sys::sceGuGetMemory((6 * size_of::<ColorVertex>()) as i32)
+                        as *mut ColorVertex;
                     if !verts.is_null() {
                         let x2 = x + w as i32;
                         let y2 = y + h as i32;
 
                         // Triangle 1: top-left, top-right, bottom-left.
-                        write_color_vert(
-                            verts, 0, left_abgr, x, y,
-                        );
-                        write_color_vert(
-                            verts, 1, right_abgr, x2, y,
-                        );
-                        write_color_vert(
-                            verts, 2, left_abgr, x, y2,
-                        );
+                        write_color_vert(verts, 0, left_abgr, x, y);
+                        write_color_vert(verts, 1, right_abgr, x2, y);
+                        write_color_vert(verts, 2, left_abgr, x, y2);
                         // Triangle 2: top-right, bottom-right, bottom-left.
-                        write_color_vert(
-                            verts, 3, right_abgr, x2, y,
-                        );
-                        write_color_vert(
-                            verts, 4, right_abgr, x2, y2,
-                        );
-                        write_color_vert(
-                            verts, 5, left_abgr, x, y2,
-                        );
+                        write_color_vert(verts, 3, right_abgr, x2, y);
+                        write_color_vert(verts, 4, right_abgr, x2, y2);
+                        write_color_vert(verts, 5, left_abgr, x, y2);
 
                         sys::sceGuDrawArray(
                             GuPrimitive::Triangles,
@@ -526,9 +490,8 @@ impl PspBackend {
                     let bl = bottom_left.to_abgr();
                     let br = bottom_right.to_abgr();
 
-                    let verts = sys::sceGuGetMemory(
-                        (6 * size_of::<ColorVertex>()) as i32,
-                    ) as *mut ColorVertex;
+                    let verts = sys::sceGuGetMemory((6 * size_of::<ColorVertex>()) as i32)
+                        as *mut ColorVertex;
                     if !verts.is_null() {
                         let x2 = x + w as i32;
                         let y2 = y + h as i32;
@@ -576,13 +539,7 @@ impl PspBackend {
 /// Write a `ColorVertex` at `verts[index]`.
 ///
 /// SAFETY: Caller must ensure `verts.add(index)` is valid for a write.
-unsafe fn write_color_vert(
-    verts: *mut ColorVertex,
-    index: usize,
-    color: u32,
-    x: i32,
-    y: i32,
-) {
+unsafe fn write_color_vert(verts: *mut ColorVertex, index: usize, color: u32, x: i32, y: i32) {
     // SAFETY: Caller guarantees `verts.add(index)` is within the allocated sceGuGetMemory buffer.
     unsafe {
         ptr::write(

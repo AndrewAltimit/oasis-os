@@ -2,21 +2,25 @@
 
 ## Current State
 
-**~4,645 tests** across the workspace (up from 1,173 at initial analysis). Phases 9-14
-added extensive unit tests for new features (skins, widgets, audio, accessibility, plugins)
-and expanded integration coverage significantly. Coverage remains thin in visual regression
-and platform-specific rendering.
+**~5,377 tests** across the workspace (up from 1,173 at initial analysis). Recent work
+added ~350 new tests including integration tests across 4 crates, CSS shorthand/helpers
+tests, forms state/types tests, and UA stylesheet tests. Coverage now includes
+integration tests for VFS, window manager, terminal interpreter, and browser pipeline.
 
 | Crate | Tests (original) | Tests (current) | Assessment |
 |-------|----------------:|-----------:|------------|
 | oasis-core | 1,106 | ~3,500+ | Strong unit + integration tests |
-| oasis-ui | ~12 | ~200+ | New widget tests (ColorPicker, DatePicker, SpinBox, Table, RichText) |
-| oasis-skin | ~10 | ~150+ | All 17 skins have load/validate tests |
+| oasis-browser | ~900 | ~1,219 | Strong: shorthand, helpers, forms, default, integration tests |
+| oasis-ui | ~12 | ~754 | Comprehensive widget tests |
+| oasis-wm | ~200 | ~289 | Unit + integration tests (lifecycle, tiling, snap, desktops, drag) |
+| oasis-terminal | ~500 | ~561 | Unit + integration tests (pipelines, aliases, globs, redirects) |
+| oasis-vfs | ~70 | ~95 | Unit + integration tests (lifecycle, errors, permissions, RealVfs) |
+| oasis-skin | ~10 | ~150+ | All 18 skins have load/validate tests |
 | oasis-audio | ~20 | ~80+ | WAV decoder tests added |
 | oasis-backend-ue5 | 36 | 36 | Adequate |
 | oasis-backend-sdl | 17 | 17 | Font only, no rendering verification |
-| oasis-ffi | 14 | 14 | Basic C-ABI smoke tests |
-| oasis-app | 0 | 0 | No tests at all |
+| oasis-ffi | 14 | 43 | C-ABI smoke tests |
+| oasis-app | 0 | 43+ | E2E tests + TV Guide tests |
 | oasis-backend-psp | 0 | 0 | Excluded from workspace, crash-only CI check |
 
 ---
@@ -43,7 +47,7 @@ Several previously zero-coverage modules now have tests after phases 9-14. Remai
 | SDL backend rendering | 0 | fill_rect, blit, draw_text, rounded_rect, gradients, clip stack, transform stack | Zero rendering correctness tests |
 | SDL backend input | 0 | Keyboard/mouse/gamepad mapping | Zero input mapping tests |
 | Platform services | 12 | PowerService, TimeService, UsbService, NetworkService, OskService | Only stub implementations tested |
-| Terminal interpreter | 4 | Pipe parsing, globbing, env vars, quoting | Minimal parser tests |
+| Terminal interpreter | 534+27 | Pipe parsing, globbing, env vars, quoting, pipelines, aliases, redirects | **Resolved** -- unit + 27 integration tests |
 | Skin TOML loader | ~150+ | External skin loading from `skins/*.toml` | **Resolved** -- all 17 skins tested, malformed TOML and edge cases covered |
 | Transfer/FTP | 21 | FTP protocol state machine | No actual I/O tests |
 | Browser Gemini | 17 | Gemini protocol, TLS, content types | No real connection tests |
@@ -52,17 +56,17 @@ Several previously zero-coverage modules now have tests after phases 9-14. Remai
 
 | Category | Current | Gap |
 |----------|---------|-----|
-| Visual regression | 0 | No screenshot comparison infrastructure |
-| Integration (multi-module) | 0 | No end-to-end workflow tests |
-| Fuzz testing | 0 | HTML/CSS/Gemini parsers are fuzz-worthy |
-| Property-based | 0 | No quickcheck/proptest usage |
-| Performance/benchmark | 0 | No `criterion` benchmarks |
+| Visual regression | 18+ scenarios | Screenshot regression tests in CI (SDL + WASM Playwright) |
+| Integration (multi-module) | 67 | **Resolved** -- VFS, WM, Terminal, Browser integration tests |
+| Fuzz testing | 1 workflow | HTML/CSS/Gemini parsers have fuzz workflow |
+| Property-based | ~20 | proptest used in oasis-vfs benchmarks |
+| Performance/benchmark | ~15 | criterion benchmarks in SDI, browser, VFS, video |
 | PSP screenshot verification | 0 | PPSSPP runs but only checks crash/no-crash |
-| Browser page rendering | 0 | No verification that pages look correct |
-| Skin visual correctness | 0 | Screenshots exist but no diff tooling |
+| Browser page rendering | 9 integration | End-to-end HTML→DOM→CSS→layout pipeline tests |
+| Skin visual correctness | 18 skins | Screenshots per skin but no automated diff |
 | Accessibility | 0 | No keyboard-nav or contrast-ratio tests |
 | Concurrency/thread safety | 0 | No multi-threaded stress tests |
-| Memory/resource leaks | 0 | No leak detection |
+| Memory/resource leaks | ASAN+Valgrind | CI memory analysis workflows (non-blocking) |
 
 ---
 
@@ -600,8 +604,8 @@ Tests:
 | Phase 9: Robustness | ~40 | 0 (in-module) |
 | **Total** | **~356 new tests** | |
 
-With ~4,645 tests already passing (up from ~1,173), the remaining planned work
-would add ~200 more tests plus 60+ screenshot scenarios and 6 fuzz targets.
+With ~5,377 tests already passing (up from ~1,173), the remaining planned work
+would add ~150 more tests plus 60+ screenshot scenarios and 6 fuzz targets.
 
 ---
 

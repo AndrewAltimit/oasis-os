@@ -94,7 +94,9 @@ fn ensure_net_init() -> Result<()> {
     // both real hardware and PPSSPP.
     if let Err(e) = psp::net::connect_dialog() {
         psp::net::term();
-        return Err(OasisError::Backend(format!("WiFi connect failed: {e}").into()));
+        return Err(OasisError::Backend(
+            format!("WiFi connect failed: {e}").into(),
+        ));
     }
 
     NET_INITIALIZED.store(true, Ordering::Release);
@@ -176,10 +178,9 @@ impl NetworkStream for PspNetworkStream {
         if ret < 0 {
             // SAFETY: sceNetInetGetErrno retrieves the last socket error code.
             let errno = unsafe { sys::sceNetInetGetErrno() };
-            Err(OasisError::Backend(format!(
-                "recv failed: errno {:#x}",
-                errno as u32,
-            ).into()))
+            Err(OasisError::Backend(
+                format!("recv failed: errno {:#x}", errno as u32,).into(),
+            ))
         } else {
             Ok(ret as usize)
         }
@@ -196,10 +197,9 @@ impl NetworkStream for PspNetworkStream {
         if ret < 0 {
             // SAFETY: sceNetInetGetErrno retrieves the last socket error code.
             let errno = unsafe { sys::sceNetInetGetErrno() };
-            Err(OasisError::Backend(format!(
-                "send failed: errno {:#x}",
-                errno as u32,
-            ).into()))
+            Err(OasisError::Backend(
+                format!("send failed: errno {:#x}", errno as u32,).into(),
+            ))
         } else {
             Ok(ret as usize)
         }
@@ -271,10 +271,9 @@ impl NetworkBackend for PspNetworkBackend {
         if fd < 0 {
             // SAFETY: sceNetInetGetErrno retrieves the last socket error code.
             let errno = unsafe { sys::sceNetInetGetErrno() };
-            return Err(OasisError::Backend(format!(
-                "socket() failed: errno {:#x}",
-                errno as u32,
-            ).into()));
+            return Err(OasisError::Backend(
+                format!("socket() failed: errno {:#x}", errno as u32,).into(),
+            ));
         }
 
         // Set SO_REUSEADDR so we can rebind quickly.
@@ -311,10 +310,9 @@ impl NetworkBackend for PspNetworkBackend {
             let errno = unsafe { sys::sceNetInetGetErrno() };
             // SAFETY: fd is a valid socket; closing on bind failure.
             unsafe { sys::sceNetInetClose(fd) };
-            return Err(OasisError::Backend(format!(
-                "bind(:{port}) failed: errno {:#x}",
-                errno as u32,
-            ).into()));
+            return Err(OasisError::Backend(
+                format!("bind(:{port}) failed: errno {:#x}", errno as u32,).into(),
+            ));
         }
 
         // SAFETY: Start listening with a backlog of 4.
@@ -324,10 +322,9 @@ impl NetworkBackend for PspNetworkBackend {
             let errno = unsafe { sys::sceNetInetGetErrno() };
             // SAFETY: fd is a valid socket; closing on listen failure.
             unsafe { sys::sceNetInetClose(fd) };
-            return Err(OasisError::Backend(format!(
-                "listen(:{port}) failed: errno {:#x}",
-                errno as u32,
-            ).into()));
+            return Err(OasisError::Backend(
+                format!("listen(:{port}) failed: errno {:#x}", errno as u32,).into(),
+            ));
         }
 
         self.listener_fd = fd;
@@ -359,10 +356,9 @@ impl NetworkBackend for PspNetworkBackend {
             if errno == 0x0B || errno == 35 {
                 return Ok(None);
             }
-            return Err(OasisError::Backend(format!(
-                "accept failed: errno {:#x}",
-                errno as u32,
-            ).into()));
+            return Err(OasisError::Backend(
+                format!("accept failed: errno {:#x}", errno as u32,).into(),
+            ));
         }
 
         let (_ip, _port) = parse_sockaddr(&sa);
@@ -376,8 +372,9 @@ impl NetworkBackend for PspNetworkBackend {
         let mut host_bytes: Vec<u8> = address.as_bytes().to_vec();
         host_bytes.push(0); // null-terminate for the resolver
 
-        let addr = psp::net::resolve_hostname(&host_bytes)
-            .map_err(|e| OasisError::Backend(format!("DNS resolve '{}' failed: {e}", address,).into()))?;
+        let addr = psp::net::resolve_hostname(&host_bytes).map_err(|e| {
+            OasisError::Backend(format!("DNS resolve '{}' failed: {e}", address,).into())
+        })?;
 
         // Create TCP socket and connect.
         // SAFETY: AF_INET=2, SOCK_STREAM=1.
@@ -385,10 +382,9 @@ impl NetworkBackend for PspNetworkBackend {
         if fd < 0 {
             // SAFETY: sceNetInetGetErrno retrieves the last socket error code.
             let errno = unsafe { sys::sceNetInetGetErrno() };
-            return Err(OasisError::Backend(format!(
-                "socket() failed: errno {:#x}",
-                errno as u32,
-            ).into()));
+            return Err(OasisError::Backend(
+                format!("socket() failed: errno {:#x}", errno as u32,).into(),
+            ));
         }
 
         let sa = make_sockaddr_in(addr.0, port);
@@ -400,10 +396,13 @@ impl NetworkBackend for PspNetworkBackend {
             let errno = unsafe { sys::sceNetInetGetErrno() };
             // SAFETY: fd is a valid socket; closing on connect failure.
             unsafe { sys::sceNetInetClose(fd) };
-            return Err(OasisError::Backend(format!(
-                "connect {}:{} failed: errno {:#x}",
-                address, port, errno as u32,
-            ).into()));
+            return Err(OasisError::Backend(
+                format!(
+                    "connect {}:{} failed: errno {:#x}",
+                    address, port, errno as u32,
+                )
+                .into(),
+            ));
         }
 
         Ok(Box::new(PspNetworkStream::new(fd)))

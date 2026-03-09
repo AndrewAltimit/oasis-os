@@ -3,7 +3,7 @@
 use oasis_backend_psp::{AudioHandle, Color, PspBackend, SCREEN_WIDTH, WindowManager};
 
 use crate::theme::*;
-use crate::types::{AppEntry, APPS};
+use crate::types::{APPS, AppEntry};
 
 use oasis_backend_psp::StatusBarInfo;
 use oasis_backend_psp::SystemInfo;
@@ -99,14 +99,7 @@ fn draw_icon(backend: &mut PspBackend, app: &AppEntry, ix: i32, iy: i32) {
 }
 
 /// Draw a recognizable per-app symbol inside the icon graphic area.
-fn draw_icon_graphic(
-    backend: &mut PspBackend,
-    app_id: &str,
-    gx: i32,
-    gy: i32,
-    gw: u32,
-    gh: u32,
-) {
+fn draw_icon_graphic(backend: &mut PspBackend, app_id: &str, gx: i32, gy: i32, gw: u32, gh: u32) {
     let s = ICON_SYM_CLR;
     let cx = gx + gw as i32 / 2;
     let cy = gy + gh as i32 / 2;

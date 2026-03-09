@@ -119,15 +119,15 @@ impl PspSkinPreset {
                 Color::rgb(0xFF, 0x44, 0x66), // error
             ],
             Self::Cyberpunk => [
-                Color::rgb(0x0A, 0x0A, 0x14), // background
-                Color::rgb(0x00, 0xF0, 0xFF), // primary
-                Color::rgb(0x1A, 0x1A, 0x2E), // secondary
-                Color::rgb(0xE0, 0xF0, 0xFF), // text
-                Color::rgb(0x50, 0x60, 0x80), // dim_text
+                Color::rgb(0x0A, 0x0A, 0x14),        // background
+                Color::rgb(0x00, 0xF0, 0xFF),        // primary
+                Color::rgb(0x1A, 0x1A, 0x2E),        // secondary
+                Color::rgb(0xE0, 0xF0, 0xFF),        // text
+                Color::rgb(0x50, 0x60, 0x80),        // dim_text
                 Color::rgba(0x08, 0x08, 0x10, 0x80), // status_bar
-                Color::rgb(0x00, 0xF0, 0xFF), // prompt
-                Color::rgb(0xC0, 0xD8, 0xFF), // output
-                Color::rgb(0xFF, 0x20, 0x60), // error
+                Color::rgb(0x00, 0xF0, 0xFF),        // prompt
+                Color::rgb(0xC0, 0xD8, 0xFF),        // output
+                Color::rgb(0xFF, 0x20, 0x60),        // error
             ],
             Self::RetroCga => [
                 Color::rgb(0x00, 0x00, 0x00), // background
@@ -174,15 +174,15 @@ impl PspSkinPreset {
                 Color::rgb(0xFF, 0x33, 0x33), // error
             ],
             Self::Altimit => [
-                Color::rgb(0x08, 0x08, 0x16), // background
-                Color::rgb(0x00, 0xCC, 0x88), // primary
-                Color::rgb(0x1A, 0x1A, 0x2E), // secondary
-                Color::rgb(0xD0, 0xE8, 0xE0), // text
-                Color::rgb(0x50, 0x68, 0x60), // dim_text
+                Color::rgb(0x08, 0x08, 0x16),        // background
+                Color::rgb(0x00, 0xCC, 0x88),        // primary
+                Color::rgb(0x1A, 0x1A, 0x2E),        // secondary
+                Color::rgb(0xD0, 0xE8, 0xE0),        // text
+                Color::rgb(0x50, 0x68, 0x60),        // dim_text
                 Color::rgba(0x0A, 0x0A, 0x1A, 0x80), // status_bar
-                Color::rgb(0x00, 0xCC, 0x88), // prompt
-                Color::rgb(0xB0, 0xD8, 0xC8), // output
-                Color::rgb(0xFF, 0x44, 0x66), // error
+                Color::rgb(0x00, 0xCC, 0x88),        // prompt
+                Color::rgb(0xB0, 0xD8, 0xC8),        // output
+                Color::rgb(0xFF, 0x44, 0x66),        // error
             ],
             Self::Tactical => [
                 Color::rgb(0x0A, 0x0A, 0x0A), // background
@@ -201,8 +201,17 @@ impl PspSkinPreset {
     /// Build a full [`ActiveTheme`] from this preset with PSP-specific
     /// geometry overrides applied.
     pub(crate) fn to_active_theme(self) -> ActiveTheme {
-        let [bg, primary, secondary, text, dim_text, status_bar, prompt, output, error] =
-            self.base_colors();
+        let [
+            bg,
+            primary,
+            secondary,
+            text,
+            dim_text,
+            status_bar,
+            prompt,
+            output,
+            error,
+        ] = self.base_colors();
         let mut t = ActiveTheme::from_base_colors(
             bg, primary, secondary, text, dim_text, status_bar, prompt, output, error,
         )

@@ -142,9 +142,8 @@ impl PspFileReader {
         let mut path_bytes: Vec<u8> = path.as_bytes().to_vec();
         path_bytes.push(0);
         // SAFETY: path_bytes is a null-terminated byte string.
-        let fd = unsafe {
-            psp::sys::sceIoOpen(path_bytes.as_ptr(), psp::sys::IoOpenFlags::RD_ONLY, 0)
-        };
+        let fd =
+            unsafe { psp::sys::sceIoOpen(path_bytes.as_ptr(), psp::sys::IoOpenFlags::RD_ONLY, 0) };
         if fd < psp::sys::SceUid(0) {
             return None;
         }
@@ -156,9 +155,8 @@ impl std::io::Read for PspFileReader {
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
         // SAFETY: self.fd is a valid file descriptor opened above.
         // buf pointer and len are valid.
-        let n = unsafe {
-            psp::sys::sceIoRead(self.fd, buf.as_mut_ptr() as *mut _, buf.len() as u32)
-        };
+        let n =
+            unsafe { psp::sys::sceIoRead(self.fd, buf.as_mut_ptr() as *mut _, buf.len() as u32) };
         if n < 0 {
             Err(std::io::Error::new(
                 std::io::ErrorKind::Other,
@@ -265,10 +263,7 @@ impl PspVideoDecoder {
         // SAFETY: ptr is the same aligned buffer passed to Open.
         let ret = unsafe { psp::sys::sceVideocodecGetEDRAM(ptr, 0) };
         if ret < 0 {
-            let msg = format!(
-                "sceVideocodecGetEDRAM failed: {:#010x}",
-                ret as u32
-            );
+            let msg = format!("sceVideocodecGetEDRAM failed: {:#010x}", ret as u32);
             vlog(&format!("[VIDEO] {msg}"));
             return Err(msg);
         }
@@ -280,10 +275,7 @@ impl PspVideoDecoder {
         if ret < 0 {
             // SAFETY: Release EDRAM on init failure.
             unsafe { psp::sys::sceVideocodecReleaseEDRAM(ptr) };
-            let msg = format!(
-                "sceVideocodecInit failed: {:#010x}",
-                ret as u32
-            );
+            let msg = format!("sceVideocodecInit failed: {:#010x}", ret as u32);
             vlog(&format!("[VIDEO] {msg}"));
             return Err(msg);
         }
@@ -384,7 +376,12 @@ impl PspVideoDecoder {
             psp::dprintln!(
                 "video: first frame decoded: {}x{}, Y={:#010x} stride={} \
                  Cb={:#010x} Cr={:#010x}",
-                width, height, y_ptr, y_stride, cb_ptr, cr_ptr
+                width,
+                height,
+                y_ptr,
+                y_stride,
+                cb_ptr,
+                cr_ptr
             );
         }
 
@@ -492,7 +489,7 @@ struct Bt601Matrix([[f32; 4]; 4]);
 
 /// The BT.601 conversion matrix (constant).
 static BT601: Bt601Matrix = Bt601Matrix([
-    [1.164, 0.0, 1.596, 0.0],    // R = 1.164*(Y-16) + 1.596*(Cr-128)
+    [1.164, 0.0, 1.596, 0.0],     // R = 1.164*(Y-16) + 1.596*(Cr-128)
     [1.164, -0.392, -0.813, 0.0], // G = 1.164*(Y-16) - 0.392*(Cb-128) - 0.813*(Cr-128)
     [1.164, 2.017, 0.0, 0.0],     // B = 1.164*(Y-16) + 2.017*(Cb-128)
     [0.0, 0.0, 0.0, 1.0],         // A = passthrough (input[3] = 255)
@@ -563,15 +560,9 @@ unsafe fn yuv420_to_rgba_vfpu(
 
             // SAFETY: Pointers are valid EDRAM addresses for the decoded
             // frame. Indices are within plane dimensions (checked by caller).
-            let y_val = unsafe {
-                *y_ptr.add(row * y_stride + col)
-            } as u32;
-            let cb_val = unsafe {
-                *cb_ptr.add(chroma_row * chroma_stride + chroma_col)
-            } as u32;
-            let cr_val = unsafe {
-                *cr_ptr.add(chroma_row * chroma_stride + chroma_col)
-            } as u32;
+            let y_val = unsafe { *y_ptr.add(row * y_stride + col) } as u32;
+            let cb_val = unsafe { *cb_ptr.add(chroma_row * chroma_stride + chroma_col) } as u32;
+            let cr_val = unsafe { *cr_ptr.add(chroma_row * chroma_stride + chroma_col) } as u32;
             let alpha: u32 = 255;
 
             let r: u32;
@@ -711,7 +702,9 @@ fn play_mp4(path: &str, seek_secs: u64) -> bool {
             Some(dec)
         },
         Err(e) => {
-            vlog(&format!("[VIDEO] play_mp4: H.264 disabled ({e}), audio-only"));
+            vlog(&format!(
+                "[VIDEO] play_mp4: H.264 disabled ({e}), audio-only"
+            ));
             None
         },
     };
@@ -788,11 +781,8 @@ fn play_mp4(path: &str, seek_secs: u64) -> bool {
                             // Frame pacing: wait until the frame's PTS.
                             // This prevents dumping frames faster than
                             // the display can consume them.
-                            let pts_us =
-                                (sample.timestamp_secs * 1_000_000.0) as u64;
-                            let now_us = unsafe {
-                                psp::sys::sceKernelGetSystemTimeWide()
-                            } as u64;
+                            let pts_us = (sample.timestamp_secs * 1_000_000.0) as u64;
+                            let now_us = unsafe { psp::sys::sceKernelGetSystemTimeWide() } as u64;
                             let elapsed = now_us.wrapping_sub(start_us);
                             if pts_us > elapsed {
                                 let wait = (pts_us - elapsed) as u32;
@@ -902,11 +892,8 @@ fn play_stream() -> bool {
                         decode_count += 1;
 
                         // Frame pacing via PTS.
-                        let pts_us =
-                            (frame.timestamp_secs * 1_000_000.0) as u64;
-                        let now_us = unsafe {
-                            psp::sys::sceKernelGetSystemTimeWide()
-                        } as u64;
+                        let pts_us = (frame.timestamp_secs * 1_000_000.0) as u64;
+                        let now_us = unsafe { psp::sys::sceKernelGetSystemTimeWide() } as u64;
                         let elapsed = now_us.wrapping_sub(start_us);
                         if pts_us > elapsed {
                             let wait = (pts_us - elapsed) as u32;
