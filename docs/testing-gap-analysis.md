@@ -48,7 +48,7 @@ Several previously zero-coverage modules now have tests after phases 9-14. Remai
 | SDL backend input | 0 | Keyboard/mouse/gamepad mapping | Zero input mapping tests |
 | Platform services | 12 | PowerService, TimeService, UsbService, NetworkService, OskService | Only stub implementations tested |
 | Terminal interpreter | 534+27 | Pipe parsing, globbing, env vars, quoting, pipelines, aliases, redirects | **Resolved** -- unit + 27 integration tests |
-| Skin TOML loader | ~150+ | External skin loading from `skins/*.toml` | **Resolved** -- all 17 skins tested, malformed TOML and edge cases covered |
+| Skin TOML loader | ~150+ | External skin loading from `skins/*.toml` | **Resolved** -- all 18 skins tested, malformed TOML and edge cases covered |
 | Transfer/FTP | 21 | FTP protocol state machine | No actual I/O tests |
 | Browser Gemini | 17 | Gemini protocol, TLS, content types | No real connection tests |
 
@@ -264,9 +264,9 @@ cargo run -p oasis-app --bin screenshot-tests -- --report
 #### 3.2 Skin Screenshot Matrix
 **Effort:** Medium
 
-For each of the 17 skins (classic, xp, macos, gnome, cyberpunk, retro-cga, paper,
-win95, solarized, vaporwave, highcontrast, terminal, tactical, corrupted, desktop,
-agent-terminal, modern), capture:
+For each of the 18 skins (classic, xp, macos, gnome, cyberpunk, retro-cga, paper,
+win95, solarized, vaporwave, highcontrast, altimit, terminal, tactical, corrupted,
+desktop, agent-terminal, modern), capture:
 1. Dashboard with icons
 2. Terminal with output
 3. Start menu open
@@ -274,7 +274,7 @@ agent-terminal, modern), capture:
 5. Settings app open
 6. Browser showing a page
 
-**Total: 17 skins x 6 scenarios = 102 screenshots**
+**Total: 18 skins x 6 scenarios = 108 screenshots**
 
 Purpose: Verify skin theming applies correctly everywhere. Catch regressions where
 a skin change breaks another skin's appearance.

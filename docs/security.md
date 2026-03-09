@@ -104,7 +104,12 @@ The HTML/CSS engine (`oasis-browser`) processes untrusted content:
 `oasis-net` provides TCP networking with pre-shared key (PSK)
 authentication for remote terminal connections:
 
+- PSK authentication **requires TLS** (`tls-rustls` feature). Without
+  TLS the client refuses to transmit the key and the listener rejects
+  connections that attempt PSK auth, preventing plaintext key leakage
 - Connections require a shared secret before command execution
+- Authentication has a 30-second timeout to prevent indefinite hangs
+  from malicious or unresponsive servers
 - FTP transfers are opt-in and require explicit user action
 - FTP server supports optional password authentication (`ftp on [port] [password]`);
   after three failed login attempts the connection is dropped

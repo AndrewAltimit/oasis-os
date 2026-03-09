@@ -102,9 +102,9 @@ oasis-os/
 |   +-- oasis-sdi/                   # Scene graph: named registry, z-order, alpha, layout, theming
 |   +-- oasis-net/                   # TCP networking, PSK auth, remote terminal, FTP transfer
 |   +-- oasis-audio/                 # Audio manager, playlist, shuffle/repeat, MP3/WAV decode, ID3 parsing
-|   +-- oasis-ui/                    # 30+ widgets: Button, Card, TabBar, ListView, flex layout
+|   +-- oasis-ui/                    # 32 widgets: Button, Card, TabBar, ListView, flex layout
 |   +-- oasis-wm/                    # Window manager: lifecycle, drag/resize, hit testing, clipping
-|   +-- oasis-skin/                  # TOML skin engine, 17 skins, theme derivation from 9 base colors
+|   +-- oasis-skin/                  # TOML skin engine, 18 skins, theme derivation from 9 base colors
 |   +-- oasis-terminal/              # 90+ commands across 17 modules, shell features
 |   +-- oasis-browser/               # HTML/CSS/Gemini: DOM, CSS cascade, block/inline/table layout, JS DOM bindings
 |   +-- oasis-js/                    # JavaScript engine: QuickJS-NG runtime, console API, DOM manipulation

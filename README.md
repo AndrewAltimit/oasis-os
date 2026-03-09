@@ -106,9 +106,9 @@ oasis-os/
 |   +-- oasis-sdi/                    # Scene Display Interface: named object registry, z-order, rendering
 |   +-- oasis-net/                    # TCP networking, PSK authentication, remote terminal, FTP transfer
 |   +-- oasis-audio/                  # Audio manager, playlist, shuffle/repeat, MP3/WAV decode, ID3 parsing
-|   +-- oasis-ui/                     # 20+ widgets: Button, Card, TabBar, Panel, TextField, ListView, etc.
+|   +-- oasis-ui/                     # 32 widgets: Button, Card, TabBar, Panel, InputField, ListView, etc.
 |   +-- oasis-wm/                     # Window manager: drag/resize, hit testing, minimize/maximize/close
-|   +-- oasis-skin/                   # TOML skin engine, 17 skins, theme derivation from 9 base colors
+|   +-- oasis-skin/                   # TOML skin engine, 18 skins, theme derivation from 9 base colors
 |   +-- oasis-terminal/              # Command interpreter: 90+ commands across 17 modules, shell features
 |   +-- oasis-browser/               # HTML/CSS/Gemini browser: DOM, CSS cascade, block/inline/table layout
 |   +-- oasis-js/                    # JavaScript engine: QuickJS-NG runtime, console API, DOM bindings
@@ -149,9 +149,9 @@ oasis-os/
 | `oasis-sdi` | Scene Display Interface: named object registry with position, size, color, texture, text, z-order, gradients, shadows |
 | `oasis-net` | TCP networking with PSK authentication, remote terminal, FTP transfer |
 | `oasis-audio` | Audio manager with playlist, shuffle/repeat modes, MP3/WAV decode, ID3 tag parsing |
-| `oasis-ui` | 30+ reusable widgets: Button, Card, TabBar, Panel, TextField, ListView, ScrollView, ProgressBar, Toggle, NinePatch, flex layout |
+| `oasis-ui` | 32 reusable widgets: Button, Card, TabBar, Panel, InputField, ListView, ScrollView, ProgressBar, Toggle, NinePatch, flex layout, and more |
 | `oasis-wm` | Window manager: movable/resizable windows, titlebar buttons, hit testing, themed decorations |
-| `oasis-skin` | Data-driven TOML skin system with 18 skins (12 external TOML + 7 built-in; xp exists in both), theme derivation from 9 base colors to ~30 UI element colors |
+| `oasis-skin` | Data-driven TOML skin system with 18 skins (12 external TOML + 18 built-in; external skins also have built-in equivalents), theme derivation from 9 base colors |
 | `oasis-terminal` | Command interpreter with 90+ commands across 17 modules, shell features (variables, globs, aliases, history, piping) |
 | `oasis-browser` | Embeddable HTML/CSS/Gemini rendering engine: DOM parser, CSS cascade, block/inline/table layout, reader mode, JavaScript DOM bindings |
 | `oasis-js` | JavaScript engine wrapping QuickJS-NG via rquickjs: `console` API, inline `<script>` execution, DOM manipulation from JS |

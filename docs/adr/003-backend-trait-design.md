@@ -1,4 +1,4 @@
-# ADR-003: Backend Trait Design (Four Traits)
+# ADR-003: Backend Trait Design (Five Traits)
 
 **Status:** Accepted
 **Date:** 2025-02-12
