@@ -278,6 +278,30 @@ pub struct BarOverrides {
     /// URL text for bottom bar (default: "HTTP://OASIS.LOCAL").
     #[serde(default)]
     pub url_text: Option<String>,
+    /// Taskbar background color.
+    #[serde(default)]
+    pub taskbar_bg: Option<String>,
+    /// Taskbar active button color.
+    #[serde(default)]
+    pub taskbar_btn_active: Option<String>,
+    /// Taskbar inactive button color.
+    #[serde(default)]
+    pub taskbar_btn_inactive: Option<String>,
+    /// Taskbar minimized button color.
+    #[serde(default)]
+    pub taskbar_btn_minimized: Option<String>,
+    /// Taskbar hover button color.
+    #[serde(default)]
+    pub taskbar_btn_hover: Option<String>,
+    /// Taskbar text color.
+    #[serde(default)]
+    pub taskbar_text_color: Option<String>,
+    /// Taskbar separator line color.
+    #[serde(default)]
+    pub taskbar_separator: Option<String>,
+    /// Taskbar active indicator color.
+    #[serde(default)]
+    pub taskbar_indicator: Option<String>,
 }
 
 /// Per-element overrides for dashboard icon rendering.
@@ -360,6 +384,9 @@ pub struct WallpaperConfig {
 pub struct GeometryOverrides {
     pub statusbar_height: Option<u32>,
     pub bottombar_height: Option<u32>,
+    /// Taskbar height in pixels (default 20, 0 = disabled).
+    #[serde(default)]
+    pub taskbar_height: Option<u32>,
     pub tab_row_height: Option<u32>,
     pub icon_width: Option<u32>,
     pub icon_height: Option<u32>,

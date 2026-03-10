@@ -547,6 +547,45 @@ impl ActiveTheme {
                 .as_ref()
                 .and_then(|g| g.terminal_border_radius)
                 .unwrap_or(4),
+            taskbar_height: skin
+                .geometry
+                .as_ref()
+                .and_then(|g| g.taskbar_height)
+                .unwrap_or(20),
+            taskbar_bg: ov(
+                bar_ov.and_then(|b| b.taskbar_bg.as_ref()),
+                with_alpha(darken(primary, 0.6), 120),
+            ),
+            taskbar_gradient_top: None,
+            taskbar_gradient_bottom: None,
+            taskbar_btn_active: ov(
+                bar_ov.and_then(|b| b.taskbar_btn_active.as_ref()),
+                with_alpha(primary, 120),
+            ),
+            taskbar_btn_inactive: ov(
+                bar_ov.and_then(|b| b.taskbar_btn_inactive.as_ref()),
+                Color::rgba(255, 255, 255, 20),
+            ),
+            taskbar_btn_minimized: ov(
+                bar_ov.and_then(|b| b.taskbar_btn_minimized.as_ref()),
+                Color::rgba(255, 255, 255, 10),
+            ),
+            taskbar_btn_hover: ov(
+                bar_ov.and_then(|b| b.taskbar_btn_hover.as_ref()),
+                with_alpha(lighten(primary, 0.4), 60),
+            ),
+            taskbar_text_color: ov(
+                bar_ov.and_then(|b| b.taskbar_text_color.as_ref()),
+                Color::rgba(255, 255, 255, 220),
+            ),
+            taskbar_separator: ov(
+                bar_ov.and_then(|b| b.taskbar_separator.as_ref()),
+                Color::rgba(255, 255, 255, 50),
+            ),
+            taskbar_indicator: ov(
+                bar_ov.and_then(|b| b.taskbar_indicator.as_ref()),
+                lighten(primary, 0.3),
+            ),
             statusbar_height: skin
                 .geometry
                 .as_ref()
@@ -1046,6 +1085,17 @@ impl ActiveTheme {
             scrollbar: scrollbar_theme,
             wallpaper: wallpaper_theme,
             toast: toast_theme,
+            taskbar_height: 20,
+            taskbar_bg: with_alpha(darken(primary, 0.6), 120),
+            taskbar_gradient_top: None,
+            taskbar_gradient_bottom: None,
+            taskbar_btn_active: with_alpha(primary, 120),
+            taskbar_btn_inactive: Color::rgba(255, 255, 255, 20),
+            taskbar_btn_minimized: Color::rgba(255, 255, 255, 10),
+            taskbar_btn_hover: with_alpha(lighten(primary, 0.4), 60),
+            taskbar_text_color: Color::rgba(255, 255, 255, 220),
+            taskbar_separator: Color::rgba(255, 255, 255, 50),
+            taskbar_indicator: lighten(primary, 0.3),
             grid_padding_x: 16,
             grid_padding_y: 6,
             terminal_border_radius: 4,

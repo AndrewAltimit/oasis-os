@@ -363,6 +363,30 @@ pub struct ActiveTheme {
     /// Terminal background border radius (default 4).
     pub terminal_border_radius: u16,
 
+    // -- Taskbar (desktop window list) --
+    /// Taskbar height in pixels (default 20, 0 = disabled).
+    pub taskbar_height: u32,
+    /// Taskbar background color.
+    pub taskbar_bg: Color,
+    /// Taskbar gradient top color (None = flat fill).
+    pub taskbar_gradient_top: Option<Color>,
+    /// Taskbar gradient bottom color.
+    pub taskbar_gradient_bottom: Option<Color>,
+    /// Taskbar button color for the active/focused window.
+    pub taskbar_btn_active: Color,
+    /// Taskbar button color for normal (non-active, non-minimized) windows.
+    pub taskbar_btn_inactive: Color,
+    /// Taskbar button color for minimized windows.
+    pub taskbar_btn_minimized: Color,
+    /// Taskbar button hover color.
+    pub taskbar_btn_hover: Color,
+    /// Taskbar button text color.
+    pub taskbar_text_color: Color,
+    /// Taskbar top separator line color.
+    pub taskbar_separator: Color,
+    /// Taskbar active window indicator (underline) color.
+    pub taskbar_indicator: Color,
+
     // -- Geometry overrides --
     /// Status bar height (default 24).
     pub statusbar_height: u32,

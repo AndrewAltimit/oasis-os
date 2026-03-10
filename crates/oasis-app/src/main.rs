@@ -167,6 +167,7 @@ fn main() -> Result<()> {
             dashboard,
             status_bar: StatusBar::new(),
             bottom_bar,
+            taskbar: oasis_core::taskbar::Taskbar::new(),
             start_menu,
             mouse_cursor,
         },

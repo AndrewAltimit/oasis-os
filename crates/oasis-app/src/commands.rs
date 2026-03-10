@@ -465,6 +465,7 @@ mod tests {
                 dashboard: DashboardState::new(dash_cfg, vec![]),
                 status_bar: StatusBar::new(),
                 bottom_bar: BottomBar::new(),
+                taskbar: oasis_core::taskbar::Taskbar::new(),
                 start_menu: StartMenuState::new(StartMenuState::default_items(&active_theme)),
                 mouse_cursor: CursorState::default(),
             },

@@ -47,11 +47,12 @@ pub enum Mode {
     Desktop,
 }
 
-/// Dashboard, status/bottom bars, start menu, and mouse cursor.
+/// Dashboard, status/bottom bars, taskbar, start menu, and mouse cursor.
 pub struct UiLayer {
     pub dashboard: DashboardState,
     pub status_bar: StatusBar,
     pub bottom_bar: BottomBar,
+    pub taskbar: oasis_core::taskbar::Taskbar,
     pub start_menu: StartMenuState,
     pub mouse_cursor: CursorState,
 }
@@ -235,6 +236,7 @@ mod tests {
             dashboard: DashboardState::new(dash_cfg, vec![]),
             status_bar: StatusBar::new(),
             bottom_bar: BottomBar::new(),
+            taskbar: oasis_core::taskbar::Taskbar::new(),
             start_menu: StartMenuState::new(StartMenuState::default_items(&at)),
             mouse_cursor: CursorState::default(),
         };

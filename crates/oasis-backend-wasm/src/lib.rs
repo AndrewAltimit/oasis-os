@@ -101,6 +101,7 @@ pub struct OasisWasm {
     dashboard: DashboardState,
     status_bar: StatusBar,
     bottom_bar: BottomBar,
+    taskbar: oasis_core::taskbar::Taskbar,
     start_menu: StartMenuState,
     mouse_cursor: CursorState,
     cursor_texture: Option<TextureId>,
@@ -272,6 +273,7 @@ impl OasisWasm {
             dashboard,
             status_bar: StatusBar::new(),
             bottom_bar,
+            taskbar: oasis_core::taskbar::Taskbar::new(),
             start_menu,
             mouse_cursor,
             cursor_texture,
@@ -852,6 +854,7 @@ impl OasisWasm {
             Mode::Dashboard => {
                 terminal_sdi::set_terminal_visible(&mut self.sdi, false);
                 AppRunner::hide_sdi(&mut self.sdi);
+                self.taskbar.hide_sdi(&mut self.sdi);
 
                 if self.bottom_bar.active_tab == MediaTab::None {
                     self.dashboard.update_sdi(&mut self.sdi, &self.active_theme);
@@ -879,6 +882,7 @@ impl OasisWasm {
                 AppRunner::hide_sdi(&mut self.sdi);
                 StatusBar::hide_sdi(&mut self.sdi);
                 BottomBar::hide_sdi(&mut self.sdi);
+                self.taskbar.hide_sdi(&mut self.sdi);
                 self.start_menu.close();
                 self.start_menu.hide_sdi(&mut self.sdi);
                 terminal_sdi::hide_media_page(&mut self.sdi);
@@ -899,6 +903,7 @@ impl OasisWasm {
                 self.dashboard.hide_sdi(&mut self.sdi);
                 terminal_sdi::set_terminal_visible(&mut self.sdi, false);
                 terminal_sdi::hide_media_page(&mut self.sdi);
+                self.taskbar.hide_sdi(&mut self.sdi);
                 self.start_menu.close();
                 self.start_menu.hide_sdi(&mut self.sdi);
                 self.status_bar
@@ -919,6 +924,7 @@ impl OasisWasm {
                 if self.fullscreen_app.is_some() {
                     StatusBar::hide_sdi(&mut self.sdi);
                     BottomBar::hide_sdi(&mut self.sdi);
+                    self.taskbar.hide_sdi(&mut self.sdi);
                     if let Ok(obj) = self.sdi.get_mut("wallpaper") {
                         obj.visible = false;
                     }
@@ -932,6 +938,12 @@ impl OasisWasm {
                         &mut self.sdi,
                         &self.active_theme,
                         &self.skin.features,
+                    );
+                    self.taskbar.update_sdi(
+                        &mut self.sdi,
+                        &self.active_theme,
+                        self.wm.windows(),
+                        self.wm.active_window(),
                     );
                     if self.skin.features.start_menu {
                         self.start_menu

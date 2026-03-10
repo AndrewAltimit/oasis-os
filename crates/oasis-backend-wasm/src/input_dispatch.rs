@@ -214,6 +214,23 @@ impl OasisWasm {
                     return;
                 }
 
+                // Taskbar hit test before WM.
+                if let Some(win_id) = self.taskbar.hit_test(*x, *y, &self.active_theme) {
+                    let win_id = win_id.to_string();
+                    if self.wm.active_window() == Some(win_id.as_str()) {
+                        let _ = self.wm.minimize_window(&win_id, &mut self.sdi);
+                    } else if self
+                        .wm
+                        .get_window(&win_id)
+                        .is_some_and(|w| w.state == oasis_core::wm::window::WindowState::Minimized)
+                    {
+                        let _ = self.wm.restore_window(&win_id, &mut self.sdi);
+                    } else {
+                        let _ = self.wm.focus_window(&win_id, &mut self.sdi);
+                    }
+                    return;
+                }
+
                 let wm_event = self
                     .wm
                     .handle_input(&InputEvent::PointerClick { x: *x, y: *y }, &mut self.sdi);
@@ -271,6 +288,7 @@ impl OasisWasm {
                 }
             },
             InputEvent::CursorMove { x, y } => {
+                self.taskbar.set_hover(*x, *y, &self.active_theme);
                 self.wm
                     .handle_input(&InputEvent::CursorMove { x: *x, y: *y }, &mut self.sdi);
             },

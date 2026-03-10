@@ -71,6 +71,25 @@ pub fn handle_desktop_input(
     match event {
         InputEvent::Quit => return InputResult::Quit,
         InputEvent::PointerClick { x, y } => {
+            // Check taskbar hit before WM (taskbar sits above bottom bar).
+            if let Some(win_id) = state.ui.taskbar.hit_test(*x, *y, &state.active_theme) {
+                let win_id = win_id.to_string();
+                if state.wm.active_window() == Some(win_id.as_str()) {
+                    // Active window -- minimize it.
+                    let _ = state.wm.minimize_window(&win_id, sdi);
+                } else if state
+                    .wm
+                    .get_window(&win_id)
+                    .is_some_and(|w| w.state == oasis_core::wm::window::WindowState::Minimized)
+                {
+                    // Minimized -- restore and focus.
+                    let _ = state.wm.restore_window(&win_id, sdi);
+                } else {
+                    // Inactive, visible -- bring to front.
+                    let _ = state.wm.focus_window(&win_id, sdi);
+                }
+                return InputResult::Continue;
+            }
             let wm_event = state
                 .wm
                 .handle_input(&InputEvent::PointerClick { x: *x, y: *y }, sdi);
@@ -120,6 +139,7 @@ pub fn handle_desktop_input(
             }
         },
         InputEvent::CursorMove { x, y } => {
+            state.ui.taskbar.set_hover(*x, *y, &state.active_theme);
             state
                 .wm
                 .handle_input(&InputEvent::CursorMove { x: *x, y: *y }, sdi);
@@ -626,6 +646,7 @@ mod tests {
                 dashboard: DashboardState::new(dash_cfg, vec![]),
                 status_bar: StatusBar::new(),
                 bottom_bar: BottomBar::new(),
+                taskbar: oasis_core::taskbar::Taskbar::new(),
                 start_menu: StartMenuState::new(StartMenuState::default_items(&active_theme)),
                 mouse_cursor: CursorState::default(),
             },

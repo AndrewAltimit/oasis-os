@@ -106,6 +106,11 @@ impl WindowManager {
         self.windows.len()
     }
 
+    /// Iterate over all windows in z-order (last = topmost).
+    pub fn windows(&self) -> &[Window] {
+        &self.windows
+    }
+
     /// Returns `true` if any open window has `modal == true`.
     pub fn has_modal(&self) -> bool {
         self.windows.iter().any(|w| w.modal)

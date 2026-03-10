@@ -23,6 +23,7 @@ pub fn update_sdi(state: &mut AppState, sdi: &mut SdiRegistry) {
         Mode::Dashboard => {
             terminal_sdi::set_terminal_visible(sdi, false);
             AppRunner::hide_sdi(sdi);
+            state.ui.taskbar.hide_sdi(sdi);
 
             if state.ui.bottom_bar.active_tab == MediaTab::None {
                 state.ui.dashboard.update_sdi(sdi, &state.active_theme);
@@ -49,6 +50,7 @@ pub fn update_sdi(state: &mut AppState, sdi: &mut SdiRegistry) {
             AppRunner::hide_sdi(sdi);
             StatusBar::hide_sdi(sdi);
             BottomBar::hide_sdi(sdi);
+            state.ui.taskbar.hide_sdi(sdi);
             state.ui.start_menu.close();
             state.ui.start_menu.hide_sdi(sdi);
             terminal_sdi::hide_media_page(sdi);
@@ -69,6 +71,7 @@ pub fn update_sdi(state: &mut AppState, sdi: &mut SdiRegistry) {
             state.ui.dashboard.hide_sdi(sdi);
             terminal_sdi::set_terminal_visible(sdi, false);
             terminal_sdi::hide_media_page(sdi);
+            state.ui.taskbar.hide_sdi(sdi);
             state.ui.start_menu.close();
             state.ui.start_menu.hide_sdi(sdi);
             state
@@ -93,6 +96,7 @@ pub fn update_sdi(state: &mut AppState, sdi: &mut SdiRegistry) {
             if state.content.fullscreen_app.is_some() {
                 StatusBar::hide_sdi(sdi);
                 BottomBar::hide_sdi(sdi);
+                state.ui.taskbar.hide_sdi(sdi);
                 // Hide wallpaper so it doesn't bleed through.
                 if let Ok(obj) = sdi.get_mut("wallpaper") {
                     obj.visible = false;
@@ -106,6 +110,12 @@ pub fn update_sdi(state: &mut AppState, sdi: &mut SdiRegistry) {
                     .ui
                     .bottom_bar
                     .update_sdi(sdi, &state.active_theme, &state.skin.features);
+                state.ui.taskbar.update_sdi(
+                    sdi,
+                    &state.active_theme,
+                    state.wm.windows(),
+                    state.wm.active_window(),
+                );
             }
         },
         Mode::Osk => {
