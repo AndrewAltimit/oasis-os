@@ -28,10 +28,26 @@ pub(crate) struct Texture {
 /// On PSP-2000 and later, `sceKernelVolatileMemTryLock` provides access to an
 /// extra 4MB of RAM. This allocator hands out 16-byte-aligned chunks from that
 /// region for texture storage, freeing main heap for application data.
+///
+/// The volatile memory is unlocked on drop via `sceKernelVolatileMemUnlock`,
+/// ensuring the 4MB region is returned to the system even if the application
+/// exits abnormally (panic unwind).
 pub(crate) struct VolatileAllocator {
     base: *mut u8,
     pub(crate) size: usize,
     offset: usize,
+}
+
+impl Drop for VolatileAllocator {
+    fn drop(&mut self) {
+        // SAFETY: Unlock the volatile memory region that was acquired via
+        // sceKernelVolatileMemTryLock in PspBackend::new(). The lock ID
+        // is always 0 (the only volatile memory block on PSP).
+        unsafe {
+            psp::sys::sceKernelVolatileMemUnlock(0);
+        }
+        log::debug!("volatile memory unlocked ({} bytes)", self.size);
+    }
 }
 
 impl VolatileAllocator {
@@ -153,8 +169,16 @@ impl PspBackend {
                 if use_dma {
                     // SAFETY: src and dst are valid, non-overlapping, and
                     // src_stride > 0. Cache coherency handled above.
-                    if psp::dma::memcpy_dma(dst, src, src_stride as u32).is_ok() {
-                        continue;
+                    match psp::dma::memcpy_dma(dst, src, src_stride as u32) {
+                        Ok(()) => continue,
+                        Err(_) if row == 0 => {
+                            // Log once on first DMA failure per texture load.
+                            log::debug!(
+                                "texture: DMA memcpy failed on row 0, \
+                                 falling back to CPU copy"
+                            );
+                        },
+                        Err(_) => {},
                     }
                 }
                 // Fallback: CPU copy for small rows or DMA failure.

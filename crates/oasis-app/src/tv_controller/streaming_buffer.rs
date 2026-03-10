@@ -25,6 +25,11 @@ pub(crate) const MIN_PREBUFFER: u64 = 2 * 1024 * 1024; // 2 MB
 #[cfg(feature = "_video")]
 const INIT_WARN_THRESHOLD: usize = 128 * 1024 * 1024; // 128 MB
 
+/// Maximum valid atom size (10 GB). Atoms larger than this in a corrupt
+/// file are treated as invalid to avoid integer overflow in offset math.
+#[cfg(feature = "_video")]
+const MAX_ATOM_SIZE: u64 = 10_000_000_000;
+
 /// Sliding-window buffer state, protected by a mutex.
 #[cfg(feature = "_video")]
 pub(crate) struct SlidingState {
@@ -37,8 +42,9 @@ pub(crate) struct SlidingState {
     /// never decremented by eviction).
     pub(crate) bytes_received: u64,
     /// Retained moov atom -- copied out so it survives eviction.
-    /// `(file_offset, data)`.
-    pub(crate) moov: Option<(u64, Vec<u8>)>,
+    /// `(file_offset, data)`.  Wrapped in `Arc` to avoid redundant
+    /// multi-MB clones when multiple callers read the moov data.
+    pub(crate) moov: Option<(u64, std::sync::Arc<Vec<u8>>)>,
     /// Retained file header (ftyp atom, typically 24-32 bytes).
     /// Kept so symphonia can probe the container format after seek restart.
     pub(crate) header: Option<Vec<u8>>,
@@ -181,8 +187,8 @@ impl StreamingInner {
                 size32 as u64
             };
 
-            if atom_size < 8 {
-                break; // Invalid atom, stop scanning.
+            if !(8..=MAX_ATOM_SIZE).contains(&atom_size) {
+                break; // Invalid or implausibly large atom, stop scanning.
             }
 
             log::debug!(
@@ -209,7 +215,7 @@ impl StreamingInner {
                     "TV: retained moov atom ({} bytes) at offset {scan_pos}",
                     moov_data.len(),
                 );
-                s.moov = Some((scan_pos, moov_data));
+                s.moov = Some((scan_pos, std::sync::Arc::new(moov_data)));
             }
 
             s.atoms_scanned_to = scan_pos + atom_size;
@@ -283,7 +289,7 @@ impl StreamingInner {
                                  {scan_pos} (end of file)",
                                 moov_data.len(),
                             );
-                            s.moov = Some((scan_pos, moov_data));
+                            s.moov = Some((scan_pos, std::sync::Arc::new(moov_data)));
                         } else {
                             log::warn!(
                                 "TV: moov at offset {scan_pos} truncated \
@@ -341,13 +347,16 @@ impl StreamingInner {
     }
 
     /// Wait until moov data is available (or download finishes/cancels).
-    /// Returns a clone of the moov data if found.
-    pub(crate) fn wait_for_moov(&self, timeout: std::time::Duration) -> Option<Vec<u8>> {
+    /// Returns an `Arc` reference to the moov data (cheap clone, no copy).
+    pub(crate) fn wait_for_moov(
+        &self,
+        timeout: std::time::Duration,
+    ) -> Option<std::sync::Arc<Vec<u8>>> {
         let deadline = std::time::Instant::now() + timeout;
         let mut s = self.state.lock().unwrap_or_else(|e| e.into_inner());
         loop {
             if let Some((_, ref data)) = s.moov {
-                return Some(data.clone());
+                return Some(std::sync::Arc::clone(data));
             }
             if self.is_cancelled() {
                 return None;
@@ -362,7 +371,10 @@ impl StreamingInner {
                 // between `finish()`'s unlock and `done=true`.
                 drop(s);
                 let s2 = self.state.lock().unwrap_or_else(|e| e.into_inner());
-                return s2.moov.as_ref().map(|(_, data)| data.clone());
+                return s2
+                    .moov
+                    .as_ref()
+                    .map(|(_, data)| std::sync::Arc::clone(data));
             }
             let remaining = deadline.saturating_duration_since(std::time::Instant::now());
             if remaining.is_zero() {
@@ -701,14 +713,13 @@ impl std::io::Seek for StreamingBuffer {
                 // Wait for total_size from Content-Length header.
                 let total = self.inner.total_size.load(Ordering::Acquire);
                 if total == 0 && !self.inner.is_done() {
-                    let mut attempts = 0;
+                    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
                     loop {
                         let t = self.inner.total_size.load(Ordering::Acquire);
                         if t > 0 || self.inner.is_done() {
                             break;
                         }
-                        attempts += 1;
-                        if attempts > 300 {
+                        if std::time::Instant::now() >= deadline {
                             return Err(std::io::Error::other(
                                 "timeout waiting for content length",
                             ));

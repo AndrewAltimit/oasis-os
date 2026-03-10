@@ -16,10 +16,25 @@ use psp::sys;
 use oasis_core::backend::{NetworkBackend, NetworkStream};
 use oasis_core::error::{OasisError, Result};
 
-/// PSP socket option constants (BSD-compatible).
-const SOL_SOCKET: i32 = 0xFFFF;
-const SO_REUSEADDR: i32 = 0x0004;
-const SO_NONBLOCK: i32 = 0x0080;
+/// PSP socket option constants.
+///
+/// These are PSP-specific values that differ from standard Linux/BSD:
+/// - SOL_SOCKET is `0xFFFF` on PSP (vs `1` on Linux, `0xFFFF` on BSD/macOS)
+/// - SO_REUSEADDR is `0x0004` on PSP (vs `2` on Linux)
+/// - SO_NONBLOCK is `0x0080` on PSP (not a standard socket option on Linux)
+/// - SO_SNDTIMEO is `0x1005` on PSP (vs `0x15` on Linux)
+/// - SO_RCVTIMEO is `0x1006` on PSP (vs `0x14` on Linux)
+///
+/// These values are confirmed in the PSP SDK (pspsdk) and rust-psp source.
+pub(crate) const PSP_SOL_SOCKET: i32 = 0xFFFF;
+pub(crate) const PSP_SO_REUSEADDR: i32 = 0x0004;
+pub(crate) const PSP_SO_NONBLOCK: i32 = 0x0080;
+/// Non-blocking I/O flag used by `sceNetInetSetsockopt` for connect timeouts.
+/// This is `0x1009` on PSP (distinct from `SO_NONBLOCK=0x0080` which is the
+/// general non-blocking mode).
+pub(crate) const PSP_SO_NBIO: i32 = 0x1009;
+pub(crate) const PSP_SO_SNDTIMEO: i32 = 0x1005;
+pub(crate) const PSP_SO_RCVTIMEO: i32 = 0x1006;
 
 // ---------------------------------------------------------------------------
 // Network initialization (lazy, one-shot)
@@ -282,8 +297,8 @@ impl NetworkBackend for PspNetworkBackend {
         unsafe {
             sys::sceNetInetSetsockopt(
                 fd,
-                SOL_SOCKET,
-                SO_REUSEADDR,
+                PSP_SOL_SOCKET,
+                PSP_SO_REUSEADDR,
                 &one as *const i32 as *const c_void,
                 mem::size_of::<i32>() as u32,
             );
@@ -295,8 +310,8 @@ impl NetworkBackend for PspNetworkBackend {
         unsafe {
             sys::sceNetInetSetsockopt(
                 fd,
-                SOL_SOCKET,
-                SO_NONBLOCK,
+                PSP_SOL_SOCKET,
+                PSP_SO_NONBLOCK,
                 &nb as *const i32 as *const c_void,
                 mem::size_of::<i32>() as u32,
             );

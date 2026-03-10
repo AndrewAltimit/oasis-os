@@ -160,13 +160,13 @@ impl TlsHttpReader {
         }
 
         // Set non-blocking mode for connect with timeout.
-        // SAFETY: SO_NONBLOCK=0x1009 is a PSP-specific socket option.
+        // SAFETY: PSP_SO_NBIO enables non-blocking connect polling.
         unsafe {
             let nb: u32 = 1;
             psp::sys::sceNetInetSetsockopt(
                 fd,
-                0xFFFF,
-                0x1009,
+                crate::network::PSP_SOL_SOCKET,
+                crate::network::PSP_SO_NBIO,
                 &nb as *const u32 as *const core::ffi::c_void,
                 4,
             );
@@ -228,23 +228,36 @@ impl TlsHttpReader {
             tv_usec: i32,
         }
         unsafe {
+            // Disable non-blocking mode now that connection is established.
             let nb: u32 = 0;
             psp::sys::sceNetInetSetsockopt(
                 fd,
-                0xFFFF,
-                0x1009,
+                crate::network::PSP_SOL_SOCKET,
+                crate::network::PSP_SO_NBIO,
                 &nb as *const u32 as *const core::ffi::c_void,
                 4,
             );
-            // SOL_SOCKET=0xFFFF, SO_SNDTIMEO=0x1005, SO_RCVTIMEO=0x1006
+            // Set send/receive timeouts for the TLS stream.
             let timeout = Timeval {
                 tv_sec: 30,
                 tv_usec: 0,
             };
             let timeout_ptr = &timeout as *const Timeval as *const core::ffi::c_void;
             let timeout_len = core::mem::size_of::<Timeval>() as u32;
-            psp::sys::sceNetInetSetsockopt(fd, 0xFFFF, 0x1005, timeout_ptr, timeout_len);
-            psp::sys::sceNetInetSetsockopt(fd, 0xFFFF, 0x1006, timeout_ptr, timeout_len);
+            psp::sys::sceNetInetSetsockopt(
+                fd,
+                crate::network::PSP_SOL_SOCKET,
+                crate::network::PSP_SO_SNDTIMEO,
+                timeout_ptr,
+                timeout_len,
+            );
+            psp::sys::sceNetInetSetsockopt(
+                fd,
+                crate::network::PSP_SOL_SOCKET,
+                crate::network::PSP_SO_RCVTIMEO,
+                timeout_ptr,
+                timeout_len,
+            );
         }
 
         io_log("[IO-TLS] TCP connected, starting TLS...");
