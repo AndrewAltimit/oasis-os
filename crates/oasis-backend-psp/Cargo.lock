@@ -661,7 +661,7 @@ dependencies = [
 
 [[package]]
 name = "oasis-app-calculator"
-version = "1.0.0"
+version = "1.2.0"
 dependencies = [
  "oasis-app-core",
  "oasis-sdi",
@@ -673,7 +673,7 @@ dependencies = [
 
 [[package]]
 name = "oasis-app-clock"
-version = "1.0.0"
+version = "1.2.0"
 dependencies = [
  "oasis-app-core",
  "oasis-sdi",
@@ -684,7 +684,7 @@ dependencies = [
 
 [[package]]
 name = "oasis-app-core"
-version = "1.0.0"
+version = "1.2.0"
 dependencies = [
  "oasis-sdi",
  "oasis-skin",
@@ -695,7 +695,7 @@ dependencies = [
 
 [[package]]
 name = "oasis-app-games"
-version = "1.0.0"
+version = "1.2.0"
 dependencies = [
  "oasis-app-core",
  "oasis-sdi",
@@ -706,7 +706,7 @@ dependencies = [
 
 [[package]]
 name = "oasis-app-media"
-version = "1.0.0"
+version = "1.2.0"
 dependencies = [
  "oasis-app-core",
  "oasis-sdi",
@@ -717,7 +717,7 @@ dependencies = [
 
 [[package]]
 name = "oasis-app-paint"
-version = "1.0.0"
+version = "1.2.0"
 dependencies = [
  "oasis-app-core",
  "oasis-sdi",
@@ -728,7 +728,7 @@ dependencies = [
 
 [[package]]
 name = "oasis-app-radio"
-version = "1.0.0"
+version = "1.2.0"
 dependencies = [
  "oasis-app-core",
  "oasis-audio",
@@ -740,7 +740,7 @@ dependencies = [
 
 [[package]]
 name = "oasis-app-text-editor"
-version = "1.0.0"
+version = "1.2.0"
 dependencies = [
  "oasis-app-core",
  "oasis-sdi",
@@ -751,7 +751,7 @@ dependencies = [
 
 [[package]]
 name = "oasis-app-tv-guide"
-version = "1.0.0"
+version = "1.2.0"
 dependencies = [
  "js-sys",
  "log",
@@ -768,7 +768,7 @@ dependencies = [
 
 [[package]]
 name = "oasis-audio"
-version = "1.0.0"
+version = "1.2.0"
 dependencies = [
  "log",
  "oasis-types",
@@ -780,7 +780,7 @@ dependencies = [
 
 [[package]]
 name = "oasis-backend-psp"
-version = "1.0.0"
+version = "1.2.0"
 dependencies = [
  "embedded-io",
  "embedded-tls",
@@ -796,7 +796,7 @@ dependencies = [
 
 [[package]]
 name = "oasis-browser"
-version = "1.0.0"
+version = "1.2.0"
 dependencies = [
  "jpeg-decoder",
  "log",
@@ -810,7 +810,7 @@ dependencies = [
 
 [[package]]
 name = "oasis-core"
-version = "1.0.0"
+version = "1.2.0"
 dependencies = [
  "js-sys",
  "log",
@@ -843,7 +843,7 @@ dependencies = [
 
 [[package]]
 name = "oasis-net"
-version = "1.0.0"
+version = "1.2.0"
 dependencies = [
  "log",
  "oasis-types",
@@ -853,14 +853,14 @@ dependencies = [
 
 [[package]]
 name = "oasis-platform"
-version = "1.0.0"
+version = "1.2.0"
 dependencies = [
  "oasis-types",
 ]
 
 [[package]]
 name = "oasis-sdi"
-version = "1.0.0"
+version = "1.2.0"
 dependencies = [
  "log",
  "oasis-types",
@@ -870,7 +870,7 @@ dependencies = [
 
 [[package]]
 name = "oasis-skin"
-version = "1.0.0"
+version = "1.2.0"
 dependencies = [
  "log",
  "oasis-sdi",
@@ -883,7 +883,7 @@ dependencies = [
 
 [[package]]
 name = "oasis-terminal"
-version = "1.0.0"
+version = "1.2.0"
 dependencies = [
  "log",
  "oasis-audio",
@@ -896,7 +896,7 @@ dependencies = [
 
 [[package]]
 name = "oasis-types"
-version = "1.0.0"
+version = "1.2.0"
 dependencies = [
  "log",
  "serde",
@@ -907,28 +907,28 @@ dependencies = [
 
 [[package]]
 name = "oasis-ui"
-version = "1.0.0"
+version = "1.2.0"
 dependencies = [
  "oasis-types",
 ]
 
 [[package]]
 name = "oasis-vector"
-version = "1.0.0"
+version = "1.2.0"
 dependencies = [
  "oasis-types",
 ]
 
 [[package]]
 name = "oasis-vfs"
-version = "1.0.0"
+version = "1.2.0"
 dependencies = [
  "oasis-types",
 ]
 
 [[package]]
 name = "oasis-video"
-version = "1.0.0"
+version = "1.2.0"
 dependencies = [
  "log",
  "symphonia",
@@ -937,7 +937,7 @@ dependencies = [
 
 [[package]]
 name = "oasis-wm"
-version = "1.0.0"
+version = "1.2.0"
 dependencies = [
  "log",
  "oasis-sdi",
