@@ -165,35 +165,35 @@ impl ResourceCache {
     /// prev/next pointers before unlinking.
     fn unlink(&mut self, idx: usize) {
         let (prev, next) = {
-            let node = self.nodes[idx]
-                .as_ref()
-                .expect("LRU node missing at valid index");
+            let Some(node) = self.nodes.get(idx).and_then(|n| n.as_ref()) else {
+                return;
+            };
             (node.prev, node.next)
         };
 
         // Patch predecessor's next pointer.
         if let Some(p) = prev {
-            self.nodes[p]
-                .as_mut()
-                .expect("LRU predecessor missing")
-                .next = next;
+            if let Some(Some(pred)) = self.nodes.get_mut(p) {
+                pred.next = next;
+            }
         } else {
             self.head = next;
         }
 
         // Patch successor's prev pointer.
         if let Some(n) = next {
-            self.nodes[n].as_mut().expect("LRU successor missing").prev = prev;
+            if let Some(Some(succ)) = self.nodes.get_mut(n) {
+                succ.prev = prev;
+            }
         } else {
             self.tail = prev;
         }
 
         // Clear this node's links (still allocated in arena).
-        let node = self.nodes[idx]
-            .as_mut()
-            .expect("LRU node missing at valid index");
-        node.prev = None;
-        node.next = None;
+        if let Some(Some(node)) = self.nodes.get_mut(idx) {
+            node.prev = None;
+            node.next = None;
+        }
     }
 
     /// Remove a URL from the linked list and free its arena slot.
@@ -213,17 +213,16 @@ impl ResourceCache {
         self.unlink(idx);
 
         // Link at head.
-        let node = self.nodes[idx]
-            .as_mut()
-            .expect("LRU node missing during move_to_head");
+        let Some(Some(node)) = self.nodes.get_mut(idx) else {
+            return;
+        };
         node.prev = None;
         node.next = self.head;
 
-        if let Some(old_head) = self.head {
-            self.nodes[old_head]
-                .as_mut()
-                .expect("LRU old head missing")
-                .prev = Some(idx);
+        if let Some(old_head) = self.head
+            && let Some(Some(h)) = self.nodes.get_mut(old_head)
+        {
+            h.prev = Some(idx);
         }
         self.head = Some(idx);
         if self.tail.is_none() {
@@ -241,11 +240,10 @@ impl ResourceCache {
         let idx = self.alloc_node(node);
         self.index.insert(url.to_string(), idx);
 
-        if let Some(old_head) = self.head {
-            self.nodes[old_head]
-                .as_mut()
-                .expect("LRU old head missing during push_head")
-                .prev = Some(idx);
+        if let Some(old_head) = self.head
+            && let Some(Some(h)) = self.nodes.get_mut(old_head)
+        {
+            h.prev = Some(idx);
         }
         self.head = Some(idx);
         if self.tail.is_none() {
@@ -256,14 +254,12 @@ impl ResourceCache {
     /// Remove and return the tail (LRU) URL.
     fn pop_tail(&mut self) -> Option<String> {
         let tail_idx = self.tail?;
-        let url = self.nodes[tail_idx]
-            .as_ref()
-            .expect("LRU tail node missing")
-            .url
-            .clone();
+        let url = self.nodes.get(tail_idx)?.as_ref()?.url.clone();
         self.unlink(tail_idx);
         self.index.remove(&url);
-        self.nodes[tail_idx] = None;
+        if let Some(slot) = self.nodes.get_mut(tail_idx) {
+            *slot = None;
+        }
         self.free.push(tail_idx);
         Some(url)
     }

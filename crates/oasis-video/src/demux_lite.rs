@@ -614,12 +614,15 @@ fn parse_esds_for_asc<R: Read + Seek>(
 }
 
 /// Read an ISO base media descriptor variable-length size.
+///
+/// Uses saturating arithmetic to prevent overflow on malicious inputs
+/// (max valid value is 0x0FFFFFFF = 268 MB which fits in `usize`).
 fn read_desc_len(data: &[u8]) -> (usize, usize) {
     let mut len = 0usize;
     let mut consumed = 0;
     for &b in data.iter().take(4) {
         consumed += 1;
-        len = (len << 7) | (b as usize & 0x7F);
+        len = len.saturating_mul(128).saturating_add(b as usize & 0x7F);
         if b & 0x80 == 0 {
             break;
         }
