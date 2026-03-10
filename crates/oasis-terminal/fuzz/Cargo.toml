@@ -1,0 +1,23 @@
+[package]
+name = "oasis-terminal-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+oasis-terminal = { path = ".." }
+oasis-vfs = { path = "../../oasis-vfs" }
+oasis-types = { path = "../../oasis-types" }
+
+# Prevent this from interfering with workspaces
+[workspace]
+members = ["."]
+
+[[bin]]
+name = "fuzz_interpreter"
+path = "fuzz_targets/fuzz_interpreter.rs"
+doc = false

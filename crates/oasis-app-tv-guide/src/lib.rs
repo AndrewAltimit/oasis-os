@@ -5,6 +5,7 @@
 //! channel number so every instance computes the same "what's on" result
 //! for any given Unix timestamp.
 
+pub mod app;
 pub mod catalog;
 pub mod channel;
 pub mod guide;
@@ -12,6 +13,7 @@ pub mod schedule;
 #[cfg(any(test, feature = "test-data"))]
 pub mod test_data;
 
+pub use app::TvGuideApp;
 pub use catalog::{ChannelCatalog, VideoEpisode, select_smallest_for};
 pub use channel::{Channel, ChannelConfig, ChannelSource};
 pub use guide::TvGuideState;

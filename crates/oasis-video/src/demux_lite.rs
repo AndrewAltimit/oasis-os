@@ -145,6 +145,11 @@ pub struct Mp4Lite<R: Read + Seek> {
 /// Annex B start code (4-byte variant).
 const ANNEX_B_START: [u8; 4] = [0x00, 0x00, 0x00, 0x01];
 
+/// Maximum number of entries allowed in any sample table (stts, ctts, stsc,
+/// stco/co64, stsz, stss). Prevents OOM from malicious MP4 files that
+/// declare a count of `0xFFFF_FFFF`.
+const MAX_TABLE_ENTRIES: u32 = 10_000_000;
+
 impl<R: Read + Seek> Mp4Lite<R> {
     /// Open and parse an MP4 container.
     pub fn open(mut reader: R) -> Result<Self, LiteError> {
@@ -663,6 +668,9 @@ fn parse_stts<R: Read + Seek>(
     r.seek(SeekFrom::Start(offset))?;
     let _version_flags = read_u32_be(r)?;
     let count = read_u32_be(r)?;
+    if count > MAX_TABLE_ENTRIES {
+        return Err(LiteError::Parse("stts table too large".into()));
+    }
     let mut entries = Vec::with_capacity(count as usize);
     for _ in 0..count {
         let sample_count = read_u32_be(r)?;
@@ -689,9 +697,16 @@ fn parse_ctts<R: Read + Seek>(
     r.seek(SeekFrom::Start(offset))?;
     let _version_flags = read_u32_be(r)?;
     let count = read_u32_be(r)?;
+    if count > MAX_TABLE_ENTRIES {
+        return Err(LiteError::Parse("ctts table too large".into()));
+    }
     let mut entries = Vec::with_capacity(count as usize);
     for _ in 0..count {
         let sample_count = read_u32_be(r)?;
+        // ISO 14496-12: ctts version 1 uses signed offsets. The u32→i32
+        // reinterpretation is intentional — the bit pattern is preserved
+        // and negative composition offsets (B-frames before their reference)
+        // are represented correctly.
         let sample_offset = read_u32_be(r)? as i32;
         entries.push(CttsEntry {
             sample_count,
@@ -715,6 +730,9 @@ fn parse_stsc<R: Read + Seek>(
     r.seek(SeekFrom::Start(offset))?;
     let _version_flags = read_u32_be(r)?;
     let count = read_u32_be(r)?;
+    if count > MAX_TABLE_ENTRIES {
+        return Err(LiteError::Parse("stsc table too large".into()));
+    }
     let mut entries = Vec::with_capacity(count as usize);
     for _ in 0..count {
         let first_chunk = read_u32_be(r)?;
@@ -743,6 +761,9 @@ fn parse_stsz<R: Read + Seek>(
     let _version_flags = read_u32_be(r)?;
     let default_size = read_u32_be(r)?;
     let count = read_u32_be(r)?;
+    if count > MAX_TABLE_ENTRIES {
+        return Err(LiteError::Parse("stsz table too large".into()));
+    }
     let sizes = if default_size != 0 {
         vec![default_size; count as usize]
     } else {
@@ -769,6 +790,9 @@ fn parse_stco<R: Read + Seek>(
     r.seek(SeekFrom::Start(offset))?;
     let _version_flags = read_u32_be(r)?;
     let count = read_u32_be(r)?;
+    if count > MAX_TABLE_ENTRIES {
+        return Err(LiteError::Parse("stco table too large".into()));
+    }
     let mut offsets = Vec::with_capacity(count as usize);
     for _ in 0..count {
         offsets.push(read_u32_be(r)? as u64);
@@ -790,6 +814,9 @@ fn parse_co64<R: Read + Seek>(
     r.seek(SeekFrom::Start(offset))?;
     let _version_flags = read_u32_be(r)?;
     let count = read_u32_be(r)?;
+    if count > MAX_TABLE_ENTRIES {
+        return Err(LiteError::Parse("co64 table too large".into()));
+    }
     let mut offsets = Vec::with_capacity(count as usize);
     for _ in 0..count {
         offsets.push(read_u64_be(r)?);
@@ -811,6 +838,9 @@ fn parse_stss<R: Read + Seek>(
     r.seek(SeekFrom::Start(offset))?;
     let _version_flags = read_u32_be(r)?;
     let count = read_u32_be(r)?;
+    if count > MAX_TABLE_ENTRIES {
+        return Err(LiteError::Parse("stss table too large".into()));
+    }
     let mut samples = Vec::with_capacity(count as usize);
     for _ in 0..count {
         samples.push(read_u32_be(r)?);
@@ -867,10 +897,10 @@ fn sample_to_chunk(table: &SampleTable, sample_idx: usize) -> Option<(usize, (us
 
         for chunk in first_chunk..next_first {
             let samples_in_chunk = entry.samples_per_chunk as usize;
-            if sample_idx < sample_accum + samples_in_chunk {
+            if sample_idx < sample_accum.checked_add(samples_in_chunk)? {
                 return Some((chunk, (sample_accum, entry.samples_per_chunk)));
             }
-            sample_accum += samples_in_chunk;
+            sample_accum = sample_accum.checked_add(samples_in_chunk)?;
         }
     }
     None

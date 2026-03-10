@@ -110,10 +110,29 @@ authentication for remote terminal connections:
 - Connections require a shared secret before command execution
 - Authentication has a 30-second timeout to prevent indefinite hangs
   from malicious or unresponsive servers
+- **Line length cap** -- both client and listener enforce a
+  `MAX_LINE_LEN` (16 KB) limit on incoming data. Overlong lines
+  cause the connection to be dropped, preventing memory exhaustion
+  from malicious peers sending unbounded data without newlines
 - FTP transfers are opt-in and require explicit user action
 - FTP server supports optional password authentication (`ftp on [port] [password]`);
   after three failed login attempts the connection is dropped
 - No outbound connections are made without user initiation
+
+## MP4 Demux Safety
+
+The lightweight MP4 parser (`oasis-video/src/demux_lite.rs`) processes
+untrusted media files from the Internet Archive. Hardening measures:
+
+- **Table size cap** -- all 7 sample table parsers (`stts`, `ctts`,
+  `stsc`, `stsz`, `stco`, `co64`, `stss`) enforce a
+  `MAX_TABLE_ENTRIES` (10M) limit. Malformed files with inflated
+  counts are rejected before allocation, preventing OOM
+- **Checked arithmetic** -- the `sample_to_chunk()` accumulator uses
+  `checked_add` to prevent integer overflow from corrupt chunk tables
+- **StreamingBuffer gap handling** -- reads from evicted buffer
+  regions return `io::Error` instead of zero-filled data, preventing
+  silent decode corruption
 
 ## Thread Safety
 

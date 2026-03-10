@@ -62,17 +62,29 @@ pub(crate) struct ClipRect {
 ///
 /// Supports solid-color rects, 8x8 bitmap text, and RGBA texture loading/blitting.
 ///
-/// # Safety
+/// # Safety: field declaration order matters
 ///
 /// `Texture<'static>` lifetimes are erased via transmute in `load_texture()` --
 /// the textures actually borrow from `texture_creator` in this struct.
 /// An explicit `Drop` impl calls `self.textures.clear()` to destroy all textures
 /// while `texture_creator` is still alive, ensuring soundness regardless of
 /// field declaration order.
+///
+/// **Even though the `Drop` impl makes this safe today**, `textures` is declared
+/// before `texture_creator` as a defense-in-depth measure: Rust drops fields in
+/// declaration order, so if the explicit `Drop` impl were ever removed, the
+/// textures would still be dropped before the creator. **Do not reorder these
+/// two fields** without verifying the `Drop` impl is intact.
 pub struct SdlBackend {
     pub(crate) canvas: Canvas<Window>,
     pub(crate) event_pump: EventPump,
+    // SAFETY: Must be declared before `texture_creator`. The textures borrow
+    // from texture_creator (lifetime erased via transmute in load_texture).
+    // Rust drops fields in declaration order, so this field is dropped first.
+    // The explicit Drop impl also clears this map, but field order provides
+    // defense-in-depth. Reordering these fields without the Drop impl is UB.
     pub(crate) textures: HashMap<u64, Texture<'static>>,
+    // SAFETY: Must be declared after `textures` -- see comment above.
     texture_creator: TextureCreator<WindowContext>,
     next_texture_id: u64,
     pub(crate) clip_stack: Vec<ClipRect>,

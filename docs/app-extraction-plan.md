@@ -36,7 +36,7 @@ pattern-matches on app title and creates the appropriate `Box<dyn App>`.
 crates/oasis-core/src/apps/
 ├── mod.rs              (26 lines)   — module declarations, re-exports
 ├── app_trait.rs        (313 lines)  — App trait + ContentState
-├── runner.rs           (1,656 lines)— AppRunner: dispatch, input, inline Radio/TV
+├── runner.rs           (1,656 lines)— AppRunner: dispatch, input
 ├── runner_sdi.rs       (233 lines)  — SDI scene-graph rendering for apps
 ├── layout_calc.rs      (121 lines)  — shared layout computation
 ├── file_viewer.rs      (251 lines)  — shared file/dir viewing helpers
@@ -213,18 +213,14 @@ oasis-core gains a dependency on `oasis-app-tv-guide` for the terminal commands.
 This is acceptable — oasis-core already depends on `oasis-browser` for
 `browser_commands.rs`.
 
-#### Step 3.3: Extract TV Guide from `runner.rs` inline handling
+#### Step 3.3: Extract TV Guide from `runner.rs` inline handling — DONE
 
-TV Guide is currently a "special case" handled inline in `AppRunner` (not
-delegated via the `App` trait). Two approaches:
-
-**Option A (recommended):** Implement the `App` trait for `TvGuideState` inside
-`oasis-app-tv-guide`. The guide already has `draw_windowed()`, `handle_input()`,
-and VFS IPC — it just needs to conform to the trait interface. Then remove the
-special-case code from `runner.rs`.
-
-**Option B:** Keep the inline handling in `runner.rs` but import from the
-external crate. Simpler but doesn't clean up the architecture.
+**Completed.** TV Guide was previously a "special case" handled inline in
+`AppRunner` (not delegated via the `App` trait). Option A was implemented:
+`TvGuideApp` in `oasis-app-tv-guide/src/app.rs` implements the `App` trait,
+wrapping `TvGuideState`. The ~200 lines of special-case code were removed from
+`runner.rs` and `runner_sdi.rs`. TV Guide now uses the standard delegate
+pattern like all other extracted apps.
 
 ---
 
@@ -232,17 +228,11 @@ external crate. Simpler but doesn't clean up the architecture.
 
 #### Step 4.1: `oasis-app-radio` (~240 lines of logic)
 
-Internet Radio is currently inline in `runner.rs` with methods like
-`radio_content()`, `handle_radio_input()`, `refresh_radio()`.
-
-Extract to `crates/oasis-app-radio/src/lib.rs` implementing the `App` trait.
-
-Dependencies: `oasis-app-core`, `oasis-types`, `oasis-sdi`, `oasis-skin`,
-`oasis-vfs`, `oasis-audio` (StationRegistry, RADIO_REQUEST_PATH), `toml`,
-`serde`
-
-This also eliminates the second "special case" in `runner.rs`, making all 16
-apps use the uniform `App` trait dispatch.
+**Completed.** Internet Radio has been extracted to
+`crates/oasis-app-radio/src/lib.rs` implementing the `App` trait. The inline
+methods (`radio_content()`, `handle_radio_input()`, `refresh_radio()`) have
+been replaced with delegation to `RadioApp`. Both Radio and TV Guide now use
+the uniform `App` trait dispatch — no special-case apps remain in runner.rs.
 
 ---
 
@@ -298,7 +288,7 @@ All phases have been implemented. Final metrics:
 |--------|--------|-------|
 | oasis-core LOC | ~30,726 | ~16,495 |
 | Apps in oasis-core | 16 | 6 (5 SimpleApp + File Manager) |
-| Special-case apps in runner.rs | 2 (Radio, TV Guide) | 1 (TV Guide) |
+| Special-case apps in runner.rs | 2 (Radio, TV Guide) | 0 |
 | New workspace crates | 0 | 9 |
 | runner.rs + runner_sdi.rs LOC | 1,889 | 1,455 |
 

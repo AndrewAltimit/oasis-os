@@ -1,8 +1,6 @@
 //! App screen runner -- dispatches to extracted `App` trait implementations.
 //!
-//! All apps except TV Guide are fully delegated to their own crate.
-//! TV Guide retains inline handling due to its custom EPG grid rendering
-//! and heavy external coupling via `tv_guide_state()`.
+//! All apps are fully delegated to their own crate via `Box<dyn App>`.
 
 use crate::active_theme::ActiveTheme;
 use crate::backend::SdiBackend;
@@ -10,14 +8,11 @@ use crate::dashboard::AppEntry;
 use crate::input::Button;
 use crate::vfs::Vfs;
 
-use oasis_app_tv_guide::guide::TvGuideState;
-
 use super::app_trait::AppAction;
 
 /// Runtime state for a launched application screen.
 ///
-/// All apps are stored in the `delegate` field as `Box<dyn App>` except
-/// TV Guide, which retains inline handling via the `tv_guide` field.
+/// All apps are stored in the `delegate` field as `Box<dyn App>`.
 #[derive(Debug)]
 pub struct AppRunner {
     /// App display title.
@@ -36,8 +31,6 @@ pub struct AppRunner {
     pub cursor: usize,
     /// Pending VFS IPC request from inline apps (path, data).
     pub(crate) pending_vfs_request: Option<(String, String)>,
-    /// TV Guide state (only for "TV Guide" app).
-    pub(crate) tv_guide: Option<TvGuideState>,
     /// Extracted app implementation (Some for migrated apps).
     pub(crate) delegate: Option<Box<dyn super::app_trait::App>>,
 }
@@ -48,44 +41,39 @@ impl AppRunner {
         let title = app.title.clone();
         let path = app.path.clone();
 
-        // Try to create a delegate for extracted App trait implementations.
-        let delegate: Option<Box<dyn super::app_trait::App>> = match title.as_str() {
-            "File Manager" => Some(Box::new(super::file_manager::FileManagerApp::new(
-                &path, vfs,
-            ))),
-            "Settings" => Some(Box::new(super::simple_app::SimpleApp::settings(
+        // Create a delegate for the app's trait implementation.
+        let delegate: Box<dyn super::app_trait::App> = match title.as_str() {
+            "File Manager" => Box::new(super::file_manager::FileManagerApp::new(&path, vfs)),
+            "Settings" => Box::new(super::simple_app::SimpleApp::settings(
                 &path, "Classic", 480, 272,
-            ))),
-            "Network" => Some(Box::new(super::simple_app::SimpleApp::network(
+            )),
+            "Network" => Box::new(super::simple_app::SimpleApp::network(
                 &path, false, 9000, false,
-            ))),
-            "Package Manager" => Some(Box::new(super::simple_app::SimpleApp::package_manager(
-                &path,
-            ))),
-            "Browser" => Some(Box::new(super::simple_app::SimpleApp::browser(&path))),
-            "System Monitor" => Some(Box::new(super::simple_app::SimpleApp::system_monitor(
+            )),
+            "Package Manager" => Box::new(super::simple_app::SimpleApp::package_manager(&path)),
+            "Browser" => Box::new(super::simple_app::SimpleApp::browser(&path)),
+            "System Monitor" => Box::new(super::simple_app::SimpleApp::system_monitor(
                 &path,
                 "Desktop (SDL2)",
                 "SDL2",
                 0,
-            ))),
-            "Terminal" => Some(Box::new(super::simple_app::SimpleApp::terminal(&path))),
-            "Music Player" => Some(Box::new(oasis_app_media::BrowsingApp::music_player(
-                &path, vfs,
-            ))),
-            "Photo Viewer" => Some(Box::new(oasis_app_media::BrowsingApp::photo_viewer(
-                &path, vfs,
-            ))),
-            "Text Editor" => Some(Box::new(oasis_app_text_editor::TextEditorApp::new(&path))),
-            "Calculator" => Some(Box::new(oasis_app_calculator::CalculatorApp::new(&path))),
-            "Clock" => Some(Box::new(oasis_app_clock::ClockApp::new(&path))),
-            "Paint" => Some(Box::new(oasis_app_paint::PaintApp::new(&path))),
-            "Games" => Some(Box::new(oasis_app_games::GamesApp::new(&path))),
-            "Internet Radio" => Some(Box::new(oasis_app_radio::RadioApp::new(&path, vfs))),
-            // TV Guide has special rendering in AppRunner.
-            "TV Guide" => None,
+            )),
+            "Terminal" => Box::new(super::simple_app::SimpleApp::terminal(&path)),
+            "Music Player" => Box::new(oasis_app_media::BrowsingApp::music_player(&path, vfs)),
+            "Photo Viewer" => Box::new(oasis_app_media::BrowsingApp::photo_viewer(&path, vfs)),
+            "Text Editor" => Box::new(oasis_app_text_editor::TextEditorApp::new(&path)),
+            "Calculator" => Box::new(oasis_app_calculator::CalculatorApp::new(&path)),
+            "Clock" => Box::new(oasis_app_clock::ClockApp::new(&path)),
+            "Paint" => Box::new(oasis_app_paint::PaintApp::new(&path)),
+            "Games" => Box::new(oasis_app_games::GamesApp::new(&path)),
+            "Internet Radio" => Box::new(oasis_app_radio::RadioApp::new(&path, vfs)),
+            "TV Guide" => Box::new(oasis_app_tv_guide::TvGuideApp::new(
+                &path,
+                vfs,
+                &ActiveTheme::default(),
+            )),
             // All other apps get a generic placeholder.
-            _ => Some(Box::new(super::simple_app::SimpleApp::new(
+            _ => Box::new(super::simple_app::SimpleApp::new(
                 &title,
                 &path,
                 vec![
@@ -93,41 +81,20 @@ impl AppRunner {
                     String::new(),
                     "(No content available for this app)".to_string(),
                 ],
-            ))),
+            )),
         };
 
-        if let Some(app_impl) = delegate {
-            return Self {
-                title: app_impl.title().to_string(),
-                path: app_impl.path().to_string(),
-                lines: app_impl.lines().to_vec(),
-                scroll: 0,
-                browse_dir: app_impl.browse_dir().map(String::from),
-                viewing_file: None,
-                cursor: 0,
-                pending_vfs_request: None,
-                tv_guide: None,
-                delegate: Some(app_impl),
-            };
-        }
-
-        let mut runner = Self {
-            title: title.clone(),
-            path,
-            lines: Vec::new(),
+        Self {
+            title: delegate.title().to_string(),
+            path: delegate.path().to_string(),
+            lines: delegate.lines().to_vec(),
             scroll: 0,
-            browse_dir: None,
+            browse_dir: delegate.browse_dir().map(String::from),
             viewing_file: None,
             cursor: 0,
             pending_vfs_request: None,
-            tv_guide: None,
-            delegate: None,
-        };
-        // TV Guide is the only remaining inline app.
-        if title == "TV Guide" {
-            runner.init_tv_guide(vfs, &ActiveTheme::default());
+            delegate: Some(delegate),
         }
-        runner
     }
 
     /// Handle input while the app is active.
@@ -137,11 +104,6 @@ impl AppRunner {
             let action = app.handle_input(button, vfs);
             self.sync_from_delegate();
             return action;
-        }
-
-        // TV Guide mode (only remaining inline app).
-        if self.title == "TV Guide" {
-            return self.handle_tv_guide_input(button);
         }
 
         AppAction::None
@@ -166,11 +128,6 @@ impl AppRunner {
             return app.draw_windowed(cx, cy, cw, ch, backend, at);
         }
 
-        // TV Guide gets its own EPG grid renderer (only remaining inline app).
-        if let Some(ref guide) = self.tv_guide {
-            return guide.draw_windowed(cx, cy, cw, ch, backend, at);
-        }
-
         Ok(())
     }
 
@@ -192,7 +149,13 @@ impl AppRunner {
 
     /// Set a pending VFS IPC request (used for auto-tune in tests).
     pub fn set_pending_request(&mut self, path: String, data: String) {
-        self.pending_vfs_request = Some((path, data));
+        // For TV Guide, set the request on the TvGuideApp delegate so
+        // take_pending_request() can find it.
+        if let Some(tv) = self.delegate_as_mut::<oasis_app_tv_guide::TvGuideApp>() {
+            tv.pending_request = Some((path, data));
+        } else {
+            self.pending_vfs_request = Some((path, data));
+        }
     }
 
     /// Refresh radio display from VFS status (called each frame when visible).
@@ -207,114 +170,17 @@ impl AppRunner {
     }
 
     /// Refresh TV Guide text display after catalog changes.
+    ///
+    /// Delegates to `TvGuideApp::refresh_text()` through the delegate,
+    /// then syncs the runner's cached fields.
     pub fn refresh_tv_text(&mut self) {
-        if let Some(ref guide) = self.tv_guide {
-            let old_cursor = self.cursor;
-            let old_scroll = self.scroll;
-            self.lines = guide.text_content();
-            log::debug!("TV: refresh_tv_text -> {} lines", self.lines.len());
-            self.cursor = old_cursor;
-            self.scroll = old_scroll;
+        if let Some(tv) = self.delegate_as_mut::<oasis_app_tv_guide::TvGuideApp>() {
+            tv.refresh_text();
         }
-    }
-
-    // ---------------------------------------------------------------
-    // TV Guide helpers
-    // ---------------------------------------------------------------
-
-    /// Initialize the TV Guide app from VFS channel config.
-    fn init_tv_guide(&mut self, vfs: &dyn Vfs, at: &ActiveTheme) {
-        use oasis_app_tv_guide::TV_CHANNELS_PATH;
-        use oasis_app_tv_guide::channel::{ChannelConfig, DEFAULT_CHANNELS_TOML};
-
-        let config = if vfs.exists(TV_CHANNELS_PATH) {
-            log::debug!("TV: loading channel config from VFS");
-            let data = vfs.read(TV_CHANNELS_PATH).unwrap_or_default();
-            let text = String::from_utf8_lossy(&data);
-            ChannelConfig::from_toml(&text).unwrap_or_else(|_| {
-                ChannelConfig::from_toml(DEFAULT_CHANNELS_TOML)
-                    .expect("default channels TOML is valid")
-            })
-        } else {
-            log::debug!("TV: using default channel config");
-            ChannelConfig::from_toml(DEFAULT_CHANNELS_TOML).expect("default channels TOML is valid")
-        };
-
-        log::debug!("TV: init_tv_guide with {} channels", config.channel.len());
-        let guide = TvGuideState::new(&config, at);
-        self.lines = guide.text_content();
-        self.tv_guide = Some(guide);
-        self.cursor = 0;
-    }
-
-    /// Handle input for the TV Guide app.
-    fn handle_tv_guide_input(&mut self, button: &Button) -> AppAction {
-        use oasis_app_tv_guide::TV_REQUEST_PATH;
-
-        let Some(ref mut guide) = self.tv_guide else {
-            return AppAction::None;
-        };
-
-        match button {
-            Button::Cancel => {
-                if guide.tuned_channel.is_some() {
-                    guide.untune();
-                    AppAction::None
-                } else {
-                    AppAction::Exit
-                }
-            },
-            Button::Up => {
-                guide.select_up();
-                self.lines = guide.text_content();
-                AppAction::None
-            },
-            Button::Down => {
-                guide.select_down();
-                self.lines = guide.text_content();
-                AppAction::None
-            },
-            Button::Left => {
-                guide.scroll_left();
-                AppAction::None
-            },
-            Button::Right => {
-                guide.scroll_right();
-                AppAction::None
-            },
-            Button::Confirm => {
-                let tuned = if let Some(req) = guide.tune() {
-                    // Build direct video URL and pass via VFS IPC.
-                    let url =
-                        oasis_app_tv_guide::catalog::ChannelCatalog::download_url(&req.episode);
-                    let data = format!("tune_url {url} {}", req.seek_secs);
-                    log::info!("TV: tune CH{} -> {}", req.channel_index, req.episode.title,);
-                    self.pending_vfs_request = Some((TV_REQUEST_PATH.to_string(), data));
-                    true
-                } else {
-                    false
-                };
-                self.lines = guide.text_content();
-                if tuned {
-                    AppAction::RequestFullscreen
-                } else {
-                    AppAction::None
-                }
-            },
-            Button::Select => {
-                // Retry catalog fetch from scratch: clear existing
-                // catalogs so the `all(|c| c.is_none())` guard passes.
-                guide.reset_for_retry();
-                self.lines = guide.text_content();
-                AppAction::None
-            },
-            _ => AppAction::None,
-        }
+        self.sync_from_delegate();
     }
 
     /// Handle a content-area click for the current app.
-    ///
-    /// Delegates to the TV Guide click handler when applicable.
     pub fn handle_click(
         &mut self,
         lx: i32,
@@ -329,30 +195,17 @@ impl AppRunner {
             return action;
         }
 
-        if self.title == "TV Guide"
-            && let Some(ref mut guide) = self.tv_guide
-        {
-            if let Some(req) = guide.handle_click(lx, ly, cw, ch, fullscreen) {
-                use oasis_app_tv_guide::TV_REQUEST_PATH;
-                let url = oasis_app_tv_guide::catalog::ChannelCatalog::download_url(&req.episode);
-                let data = format!("tune_url {url} {}", req.seek_secs);
-                log::info!(
-                    "TV: click-tune CH{} -> {}",
-                    req.channel_index,
-                    req.episode.title,
-                );
-                self.pending_vfs_request = Some((TV_REQUEST_PATH.to_string(), data));
-                self.lines = guide.text_content();
-                return AppAction::RequestFullscreen;
-            }
-            self.lines = guide.text_content();
-        }
         AppAction::None
     }
 
     /// Get mutable reference to the TV guide state.
-    pub fn tv_guide_state(&mut self) -> Option<&mut TvGuideState> {
-        self.tv_guide.as_mut()
+    ///
+    /// Accesses the `TvGuideApp` delegate and returns a reference to
+    /// its inner `TvGuideState`. Used by external code (tv_controller,
+    /// WASM backend) to inject catalogs and update fetch status.
+    pub fn tv_guide_state(&mut self) -> Option<&mut oasis_app_tv_guide::guide::TvGuideState> {
+        self.delegate_as_mut::<oasis_app_tv_guide::TvGuideApp>()
+            .map(|app| &mut app.guide)
     }
 
     /// Sync AppRunner pub fields from the delegate app.

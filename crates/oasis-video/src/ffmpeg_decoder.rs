@@ -27,7 +27,9 @@ unsafe extern "C" fn read_packet(
     buf: *mut u8,
     buf_size: std::ffi::c_int,
 ) -> std::ffi::c_int {
+    // SAFETY: `opaque` is a valid `*mut IoContext` — set during avio_alloc_context.
     let ctx = unsafe { &mut *(opaque as *mut IoContext) };
+    // SAFETY: `buf` is a valid ffmpeg-allocated buffer of `buf_size` bytes.
     let slice = unsafe { std::slice::from_raw_parts_mut(buf, buf_size as usize) };
     ctx.read_count += 1;
     match ctx.source.read(slice) {
@@ -69,6 +71,7 @@ unsafe extern "C" fn seek_source(
     offset: i64,
     whence: std::ffi::c_int,
 ) -> i64 {
+    // SAFETY: `opaque` is a valid `*mut IoContext` — set during avio_alloc_context.
     let ctx = unsafe { &mut *(opaque as *mut IoContext) };
 
     // AVSEEK_SIZE: ffmpeg is asking for the total size.
@@ -175,6 +178,7 @@ impl FfmpegDecoder {
             return Err(VideoError::Demux("avformat_alloc_context failed".into()));
         }
 
+        // SAFETY: format_ctx is a freshly allocated, valid context. Assigning our AVIO.
         unsafe {
             (*format_ctx).pb = avio_ctx;
             // Hint MP4 format.
@@ -210,6 +214,7 @@ impl FfmpegDecoder {
         // Wrap in safe Input context for stream discovery.
         // We can't use ffmpeg::format::input() with custom I/O, so we inspect
         // the raw context directly.
+        // SAFETY: format_ctx is valid after successful avformat_find_stream_info.
         let nb_streams = unsafe { (*format_ctx).nb_streams } as usize;
 
         let mut video_stream_idx = None;
@@ -233,6 +238,7 @@ impl FfmpegDecoder {
             let codec_type = codecpar.codec_type;
 
             if codec_type == ffi::AVMediaType::AVMEDIA_TYPE_VIDEO && video_stream_idx.is_none() {
+                // SAFETY: stream pointer is valid within the format context.
                 let tb = unsafe { (*stream).time_base };
                 video_time_base = tb.num as f64 / tb.den as f64;
 
@@ -261,6 +267,7 @@ impl FfmpegDecoder {
             } else if codec_type == ffi::AVMediaType::AVMEDIA_TYPE_AUDIO
                 && audio_stream_idx.is_none()
             {
+                // SAFETY: stream pointer is valid within the format context.
                 let tb = unsafe { (*stream).time_base };
                 audio_time_base = tb.num as f64 / tb.den as f64;
 
@@ -321,14 +328,14 @@ impl FfmpegDecoder {
         }
 
         // SAFETY: Allocate and configure codec context.
-        let ctx = unsafe { ffi::avcodec_alloc_context3(codec) };
+        let mut ctx = unsafe { ffi::avcodec_alloc_context3(codec) };
         if ctx.is_null() {
             return Err(VideoError::Decode("avcodec_alloc_context3 failed".into()));
         }
 
         let ret = unsafe { ffi::avcodec_parameters_to_context(ctx, codecpar) };
         if ret < 0 {
-            unsafe { ffi::avcodec_free_context(&mut (ctx as *mut _)) };
+            unsafe { ffi::avcodec_free_context(&mut ctx) };
             return Err(VideoError::Decode(format!(
                 "avcodec_parameters_to_context: {}",
                 ffmpeg_error_string(ret)
@@ -337,7 +344,7 @@ impl FfmpegDecoder {
 
         let ret = unsafe { ffi::avcodec_open2(ctx, codec, std::ptr::null_mut()) };
         if ret < 0 {
-            unsafe { ffi::avcodec_free_context(&mut (ctx as *mut _)) };
+            unsafe { ffi::avcodec_free_context(&mut ctx) };
             return Err(VideoError::Decode(format!(
                 "avcodec_open2: {}",
                 ffmpeg_error_string(ret)
@@ -357,6 +364,7 @@ impl FfmpegDecoder {
     fn create_audio_decoder(
         codecpar: &ffi::AVCodecParameters,
     ) -> Result<ffmpeg::decoder::Audio, VideoError> {
+        // SAFETY: Find decoder by codec ID from ffmpeg's static registry.
         let codec = unsafe { ffi::avcodec_find_decoder(codecpar.codec_id) };
         if codec.is_null() {
             return Err(VideoError::Decode(format!(
@@ -365,29 +373,35 @@ impl FfmpegDecoder {
             )));
         }
 
-        let ctx = unsafe { ffi::avcodec_alloc_context3(codec) };
+        // SAFETY: Allocate codec context for the found decoder.
+        let mut ctx = unsafe { ffi::avcodec_alloc_context3(codec) };
         if ctx.is_null() {
             return Err(VideoError::Decode("avcodec_alloc_context3 failed".into()));
         }
 
+        // SAFETY: Copy codec parameters into context; ctx and codecpar are valid.
         let ret = unsafe { ffi::avcodec_parameters_to_context(ctx, codecpar) };
         if ret < 0 {
-            unsafe { ffi::avcodec_free_context(&mut (ctx as *mut _)) };
+            // SAFETY: Free the context we allocated on error.
+            unsafe { ffi::avcodec_free_context(&mut ctx) };
             return Err(VideoError::Decode(format!(
                 "avcodec_parameters_to_context: {}",
                 ffmpeg_error_string(ret)
             )));
         }
 
+        // SAFETY: Open the codec with the configured context.
         let ret = unsafe { ffi::avcodec_open2(ctx, codec, std::ptr::null_mut()) };
         if ret < 0 {
-            unsafe { ffi::avcodec_free_context(&mut (ctx as *mut _)) };
+            // SAFETY: Free the context we allocated on error.
+            unsafe { ffi::avcodec_free_context(&mut ctx) };
             return Err(VideoError::Decode(format!(
                 "avcodec_open2: {}",
                 ffmpeg_error_string(ret)
             )));
         }
 
+        // SAFETY: Wrap raw context in ffmpeg-next's safe wrapper, which takes ownership.
         let codec_ctx = unsafe { ffmpeg::codec::context::Context::wrap(ctx, None) };
         codec_ctx
             .decoder()
