@@ -253,15 +253,16 @@ fn handle_tune_requests(state: &mut AppState, backend: &mut impl SdiBackend, vfs
     state.tv_audio_chunks_fed = 0;
     state.tv_audio_samples_fed = 0;
 
-    // Compute preview dimensions (match guide.rs header layout).
+    // Decode at full screen resolution so the video looks sharp in both
+    // PIP and expanded (fullscreen) modes. The backend handles downscaling
+    // when blitting to the smaller PIP area.
     let at = &state.active_theme;
     let usable_h = at
         .screen_h
         .saturating_sub(at.statusbar_height + at.bottombar_height);
-    let header_h = (usable_h * 20 / 100).max(60);
-    let preview_w = (at.screen_w / 5).max(80).saturating_sub(2);
-    let preview_h = header_h.saturating_sub(16).saturating_sub(2);
-    log::info!("TV: preview {preview_w}x{preview_h}, seek={seek_secs}s");
+    let preview_w = at.screen_w;
+    let preview_h = usable_h;
+    log::info!("TV: video decode {preview_w}x{preview_h}, seek={seek_secs}s");
 
     #[cfg(feature = "_video")]
     start_video_download(state, url, seek_secs, preview_w, preview_h);

@@ -175,6 +175,17 @@ pub struct TvGuideState {
     pub preview_texture: Option<TextureId>,
     /// Download progress status text (e.g. "Downloading... 42% (1234/5678KB)").
     pub download_status: Option<String>,
+    /// Whether the video is expanded to fill the entire content area.
+    ///
+    /// When `true`, the video covers the full screen and the EPG grid is
+    /// hidden. Clicking the video toggles back to PIP mode with the guide
+    /// visible below.
+    pub video_expanded: bool,
+    /// Video volume level (0–100). Changes are communicated to the backend
+    /// via the `volume_changed` dirty flag.
+    pub volume: u8,
+    /// Set to `true` whenever `volume` changes so the backend can sync.
+    pub volume_changed: bool,
     /// Theme-derived colors for the TV Guide UI.
     pub colors: TvGuideColors,
 }
@@ -218,6 +229,9 @@ impl TvGuideState {
             scroll_offset: 0,
             preview_texture: None,
             download_status: None,
+            video_expanded: false,
+            volume: 50,
+            volume_changed: false,
             colors: TvGuideColors::from_theme(at),
         }
     }
@@ -300,10 +314,18 @@ impl TvGuideState {
     }
 
     /// Tune to the currently selected channel.
+    ///
+    /// Returns `None` (no-op) if the selected channel is already playing.
     pub fn tune(&mut self) -> Option<TuneRequest> {
         if self.selected_channel >= self.channels.len() {
             return None;
         }
+        // Ignore if already tuned to this channel.
+        if self.tuned_channel == Some(self.selected_channel) {
+            return None;
+        }
+        // Refresh time so the schedule reflects *now*, not the last render frame.
+        self.update_time();
         let catalog = self.catalogs.get(self.selected_channel)?.as_ref()?;
         let slot = schedule::schedule_at(catalog, self.current_time)?;
         self.tuned_channel = Some(self.selected_channel);
@@ -319,6 +341,7 @@ impl TvGuideState {
         self.tuned_channel = None;
         self.preview_texture = None;
         self.download_status = None;
+        self.video_expanded = false;
     }
 
     /// Get the grid's start time (aligned to 30-min boundary, with offset).
@@ -412,6 +435,12 @@ impl TvGuideState {
             }
         }
 
+        // Expanded video mode: show only the video fullscreen.
+        if self.video_expanded {
+            self.draw_expanded_video(sdi, at);
+            return;
+        }
+
         // Lerp visual selection toward visible row position.
         let vis_pos = self.selected_channel.saturating_sub(self.scroll_offset) as f32;
         self.visual_selected += (vis_pos - self.visual_selected) * at.app_selection_lerp_speed;
@@ -450,6 +479,219 @@ impl TvGuideState {
         self.draw_channel_rows(sdi, at, grid_y, label_w, grid_w, row_h);
         self.draw_selection_highlight(sdi, grid_y, sw, row_h);
         self.draw_footer(sdi, at, sw, footer_y, footer_h);
+
+        // Volume bar in footer (only visible when tuned).
+        if self.tuned_channel.is_some() {
+            self.draw_volume_bar_sdi(sdi, at, sw, usable_h, false);
+        } else {
+            // Hide volume bar when not tuned.
+            for name in &["tv_vol_bg", "tv_vol_fill", "tv_vol_label"] {
+                if let Ok(obj) = sdi.get_mut(name) {
+                    obj.visible = false;
+                }
+            }
+        }
+    }
+
+    /// Render expanded (fullscreen) video mode via SDI.
+    ///
+    /// Hides the EPG grid and shows only the video texture filling the
+    /// content area, with a small channel info overlay at the bottom.
+    fn draw_expanded_video(&self, sdi: &mut SdiRegistry, at: &ActiveTheme) {
+        let sw = at.screen_w;
+        let sh = at.screen_h;
+        let status_h = at.statusbar_height;
+        let bottom_h = at.bottombar_height;
+        let usable_h = sh.saturating_sub(status_h + bottom_h);
+
+        // Black background.
+        ensure_obj(sdi, "tv_hdr_bg");
+        if let Ok(obj) = sdi.get_mut("tv_hdr_bg") {
+            obj.x = 0;
+            obj.y = 0;
+            obj.w = sw;
+            obj.h = sh;
+            obj.color = Color::rgba(0, 0, 0, 255);
+            obj.visible = true;
+            obj.z = 100;
+        }
+
+        // Video texture fills the content area.
+        ensure_obj(sdi, "tv_hdr_preview_vid");
+        if let Ok(obj) = sdi.get_mut("tv_hdr_preview_vid") {
+            if let Some(tex) = self.preview_texture {
+                obj.x = 0;
+                obj.y = status_h as i32;
+                obj.w = sw;
+                obj.h = usable_h;
+                obj.texture = Some(tex);
+                obj.visible = true;
+                obj.z = 110;
+            } else {
+                obj.visible = false;
+                obj.texture = None;
+            }
+        }
+
+        // Loading text (centered) when no texture yet.
+        let is_loading = self.tuned_channel.is_some() && self.preview_texture.is_none();
+        let dots = match self.current_time % 4 {
+            0 => "",
+            1 => ".",
+            2 => "..",
+            _ => "...",
+        };
+        let loading_text = if let Some(ref status) = self.download_status {
+            status.clone()
+        } else {
+            format!("Loading{dots}")
+        };
+        ensure_obj(sdi, "tv_hdr_loading_text");
+        if let Ok(obj) = sdi.get_mut("tv_hdr_loading_text") {
+            obj.text = Some(loading_text);
+            obj.x = sw as i32 / 2 - 30;
+            obj.y = (status_h + usable_h / 2) as i32;
+            obj.font_size = at.font_body;
+            obj.text_color = self.colors.dim_text;
+            obj.visible = is_loading;
+            obj.z = 111;
+        }
+
+        // Small channel overlay at the bottom.
+        let overlay_h = 20u32;
+        let overlay_y = (sh - bottom_h - overlay_h) as i32;
+        ensure_obj(sdi, "tv_expanded_overlay_bg");
+        if let Ok(obj) = sdi.get_mut("tv_expanded_overlay_bg") {
+            obj.x = 0;
+            obj.y = overlay_y;
+            obj.w = sw;
+            obj.h = overlay_h;
+            obj.color = Color::rgba(0, 0, 0, 160);
+            obj.visible = true;
+            obj.z = 112;
+        }
+
+        let ch_info = self.build_channel_info();
+        let now_title = self.build_now_playing_title();
+        let overlay_text = format!("{ch_info}  |  {now_title}");
+        ensure_obj(sdi, "tv_expanded_overlay_text");
+        if let Ok(obj) = sdi.get_mut("tv_expanded_overlay_text") {
+            obj.text = Some(overlay_text);
+            obj.x = 8;
+            obj.y = overlay_y + 3;
+            obj.font_size = at.font_hint;
+            obj.text_color = self.colors.channel_label;
+            obj.visible = true;
+            obj.z = 113;
+        }
+
+        // Volume bar in expanded overlay.
+        self.draw_volume_bar_sdi(sdi, at, sw, usable_h, true);
+
+        // Hide all EPG-specific SDI objects that are not reused above.
+        for name in &[
+            "tv_hdr_grad",
+            "tv_hdr_date",
+            "tv_hdr_time",
+            "tv_hdr_ch_info",
+            "tv_hdr_location",
+            "tv_hdr_currently",
+            "tv_hdr_now_title",
+            "tv_hdr_now_detail",
+            "tv_hdr_preview_outer",
+            "tv_hdr_preview_bg",
+            "tv_hdr_live_badge",
+            "tv_hdr_live_text",
+            "tv_time_bg",
+            "tv_time_label_bg",
+            "tv_sel_bg",
+            "tv_ftr_bg",
+            "tv_ftr_nav",
+            "tv_ftr_page",
+            "tv_ftr_guide",
+        ] {
+            if let Ok(obj) = sdi.get_mut(name) {
+                obj.visible = false;
+            }
+        }
+        for col in 0..VISIBLE_TIME_SLOTS {
+            for prefix in &["tv_time_", "tv_timebg_"] {
+                let name = format!("{prefix}{col}");
+                if let Ok(obj) = sdi.get_mut(&name) {
+                    obj.visible = false;
+                }
+            }
+        }
+        for row in 0..VISIBLE_ROWS {
+            for suffix in &["_bg", "_label", "_line"] {
+                let name = format!("tv_row_{row}{suffix}");
+                if let Ok(obj) = sdi.get_mut(&name) {
+                    obj.visible = false;
+                }
+            }
+            for ci in 0..MAX_CELLS {
+                let name = format!("tv_row_{row}_cell_{ci}");
+                if let Ok(obj) = sdi.get_mut(&name) {
+                    obj.visible = false;
+                }
+                let name = format!("tv_row_{row}_cbg_{ci}");
+                if let Ok(obj) = sdi.get_mut(&name) {
+                    obj.visible = false;
+                }
+            }
+        }
+    }
+
+    /// Render the volume bar as SDI objects.
+    fn draw_volume_bar_sdi(
+        &self,
+        sdi: &mut SdiRegistry,
+        at: &ActiveTheme,
+        cw: u32,
+        ch: u32,
+        expanded: bool,
+    ) {
+        let vr = volume_bar_rect(cw, ch, expanded);
+        let fill_w = (vr.w as f32 * self.volume as f32 / 100.0) as u32;
+
+        // Track background.
+        ensure_obj(sdi, "tv_vol_bg");
+        if let Ok(obj) = sdi.get_mut("tv_vol_bg") {
+            obj.x = vr.x;
+            obj.y = vr.y;
+            obj.w = vr.w;
+            obj.h = vr.h;
+            obj.color = Color::rgba(40, 40, 50, 200);
+            obj.border_radius = Some(3);
+            obj.visible = true;
+            obj.z = 114;
+        }
+
+        // Filled portion.
+        ensure_obj(sdi, "tv_vol_fill");
+        if let Ok(obj) = sdi.get_mut("tv_vol_fill") {
+            obj.x = vr.x;
+            obj.y = vr.y;
+            obj.w = fill_w;
+            obj.h = vr.h;
+            obj.color = self.colors.playing_text;
+            obj.border_radius = Some(3);
+            obj.visible = fill_w > 0;
+            obj.z = 115;
+        }
+
+        // Label.
+        let label = format!("VOL {}%", self.volume);
+        ensure_obj(sdi, "tv_vol_label");
+        if let Ok(obj) = sdi.get_mut("tv_vol_label") {
+            obj.text = Some(label);
+            obj.x = vr.x - 50;
+            obj.y = vr.y;
+            obj.font_size = at.font_hint;
+            obj.text_color = self.colors.dim_text;
+            obj.visible = true;
+            obj.z = 116;
+        }
     }
 
     fn draw_background(&self, sdi: &mut SdiRegistry, sw: u32, sh: u32) {
@@ -1111,6 +1353,11 @@ impl TvGuideState {
         backend: &mut dyn oasis_types::backend::SdiBackend,
         at: &ActiveTheme,
     ) -> oasis_types::error::Result<()> {
+        // Expanded video mode: fill the entire content area with video.
+        if self.video_expanded {
+            return self.draw_windowed_expanded(cx, cy, cw, ch, backend, at);
+        }
+
         // Background.
         backend.fill_rect(cx, cy, cw, ch, self.colors.bg)?;
 
@@ -1301,6 +1548,106 @@ impl TvGuideState {
         );
         backend.draw_text(&nav, cx + 6, ftr_y + 2, at.font_hint, self.colors.dim_text)?;
 
+        // Volume bar in footer when tuned.
+        if self.tuned_channel.is_some() {
+            self.draw_volume_bar_windowed(cx, cy, cw, ch, backend, at, false)?;
+        }
+
+        Ok(())
+    }
+
+    /// Draw expanded (fullscreen) video in windowed rendering mode.
+    fn draw_windowed_expanded(
+        &self,
+        cx: i32,
+        cy: i32,
+        cw: u32,
+        ch: u32,
+        backend: &mut dyn oasis_types::backend::SdiBackend,
+        at: &ActiveTheme,
+    ) -> oasis_types::error::Result<()> {
+        // Black background.
+        backend.fill_rect(cx, cy, cw, ch, Color::rgba(0, 0, 0, 255))?;
+
+        // Video fills the content area.
+        if let Some(tex) = self.preview_texture {
+            backend.blit(tex, cx, cy, cw, ch)?;
+        } else if self.tuned_channel.is_some() {
+            let dots = match self.current_time % 4 {
+                0 => "",
+                1 => ".",
+                2 => "..",
+                _ => "...",
+            };
+            let loading_text = if let Some(ref status) = self.download_status {
+                status.clone()
+            } else {
+                format!("Loading{dots}")
+            };
+            backend.draw_text(
+                &loading_text,
+                cx + cw as i32 / 2 - 30,
+                cy + ch as i32 / 2 - 4,
+                at.font_body,
+                self.colors.dim_text,
+            )?;
+        }
+
+        // Small channel overlay at the bottom.
+        let overlay_h = 20u32;
+        let overlay_y = cy + ch as i32 - overlay_h as i32;
+        backend.fill_rect(cx, overlay_y, cw, overlay_h, Color::rgba(0, 0, 0, 160))?;
+        let ch_info = self.build_channel_info();
+        let now_title = self.build_now_playing_title();
+        backend.draw_text(
+            &format!("{ch_info}  |  {now_title}"),
+            cx + 8,
+            overlay_y + 3,
+            at.font_hint,
+            self.colors.channel_label,
+        )?;
+
+        // Volume bar in expanded overlay.
+        self.draw_volume_bar_windowed(cx, cy, cw, ch, backend, at, true)?;
+
+        Ok(())
+    }
+
+    /// Draw the volume bar using the backend's direct rendering.
+    #[allow(clippy::too_many_arguments)]
+    fn draw_volume_bar_windowed(
+        &self,
+        cx: i32,
+        cy: i32,
+        cw: u32,
+        ch: u32,
+        backend: &mut dyn oasis_types::backend::SdiBackend,
+        at: &ActiveTheme,
+        expanded: bool,
+    ) -> oasis_types::error::Result<()> {
+        let vr = volume_bar_rect(cw, ch, expanded);
+        let fill_w = (vr.w as f32 * self.volume as f32 / 100.0) as u32;
+
+        // Track background.
+        backend.fill_rect(
+            cx + vr.x,
+            cy + vr.y,
+            vr.w,
+            vr.h,
+            Color::rgba(40, 40, 50, 200),
+        )?;
+        // Filled portion.
+        if fill_w > 0 {
+            backend.fill_rect(cx + vr.x, cy + vr.y, fill_w, vr.h, self.colors.playing_text)?;
+        }
+        // Label.
+        backend.draw_text(
+            &format!("VOL {}%", self.volume),
+            cx + vr.x - 50,
+            cy + vr.y,
+            at.font_hint,
+            self.colors.dim_text,
+        )?;
         Ok(())
     }
 
@@ -1333,6 +1680,11 @@ impl TvGuideState {
             "tv_ftr_nav",
             "tv_ftr_page",
             "tv_ftr_guide",
+            "tv_expanded_overlay_bg",
+            "tv_expanded_overlay_text",
+            "tv_vol_bg",
+            "tv_vol_fill",
+            "tv_vol_label",
         ];
         for name in &fixed {
             if let Ok(obj) = sdi.get_mut(name) {
@@ -1392,22 +1744,60 @@ impl TvGuideState {
     /// `cw`/`ch` are the content area dimensions (needed to recompute layout).
     /// Returns `Some(TuneRequest)` if the click tuned a channel (caller should
     /// enter fullscreen), `None` if it only selected a channel or missed.
+    ///
+    /// When the video is expanded (fullscreen), any click collapses back to
+    /// PIP mode. When in PIP mode, clicking the video preview area expands
+    /// it to fullscreen.
     pub fn handle_click(
         &mut self,
         lx: i32,
         ly: i32,
-        _cw: u32,
+        cw: u32,
         ch: u32,
         fullscreen: bool,
     ) -> Option<TuneRequest> {
+        // Volume bar click (available in both expanded and PIP modes).
+        if self.tuned_channel.is_some() {
+            let vr = volume_bar_rect(cw, ch, self.video_expanded);
+            if lx >= vr.x && lx < vr.x + vr.w as i32 && ly >= vr.y && ly < vr.y + vr.h as i32 {
+                let frac = ((lx - vr.x) as f32 / vr.w as f32).clamp(0.0, 1.0);
+                self.volume = (frac * 100.0) as u8;
+                self.volume_changed = true;
+                return None;
+            }
+        }
+
+        // Expanded video: click anywhere to collapse back to PIP.
+        if self.video_expanded {
+            self.video_expanded = false;
+            return None;
+        }
+
+        // Check if clicking the video preview area (PIP) to expand.
+        if self.tuned_channel.is_some() && self.preview_texture.is_some() {
+            let usable_h = ch;
+            let min_header = if fullscreen { 60 } else { 40 };
+            let header_h = (usable_h * 20 / 100).max(min_header);
+            let preview_w = (cw * 30 / 100).max(if fullscreen { 80 } else { 60 });
+            let preview_h = header_h.saturating_sub(if fullscreen { 16 } else { 8 });
+            let preview_x = cw as i32 - preview_w as i32 - if fullscreen { 10 } else { 4 };
+            let preview_y = if fullscreen { 8i32 } else { 4i32 };
+
+            if lx >= preview_x
+                && lx < preview_x + preview_w as i32
+                && ly >= preview_y
+                && ly < preview_y + preview_h as i32
+            {
+                self.video_expanded = true;
+                return None;
+            }
+        }
+
         if self.channels.is_empty() || ly < 0 || lx < 0 {
             return None;
         }
 
         // Recompute layout from content dimensions.
-        // Fullscreen uses SDI layout minimums (update_sdi); windowed uses
-        // draw_windowed minimums. Content-local: no status_h/bottom_h offset
-        // since those are outside the window content area.
         let usable_h = ch;
         let (min_header, min_time, min_footer) = if fullscreen {
             (60, 20, 18) // matches update_sdi
@@ -1443,6 +1833,42 @@ impl TvGuideState {
             // Select this channel.
             self.selected_channel = channel_idx;
             None
+        }
+    }
+}
+
+/// Volume bar layout rectangle (x, y, w, h) relative to content origin.
+struct VolumeBarRect {
+    x: i32,
+    y: i32,
+    w: u32,
+    h: u32,
+}
+
+/// Compute the volume bar position for the bottom-right overlay area.
+///
+/// The bar sits at the right side of the overlay strip shown when tuned.
+fn volume_bar_rect(cw: u32, ch: u32, expanded: bool) -> VolumeBarRect {
+    let bar_w = (cw / 4).clamp(60, 160);
+    let bar_h = 10u32;
+    let overlay_h = 20u32;
+    let overlay_y = ch as i32 - overlay_h as i32;
+    if expanded {
+        VolumeBarRect {
+            x: cw as i32 - bar_w as i32 - 8,
+            y: overlay_y + (overlay_h as i32 - bar_h as i32) / 2,
+            w: bar_w,
+            h: bar_h,
+        }
+    } else {
+        // PIP mode: put in the footer bar area.
+        let footer_h = (ch * 5 / 100).max(14);
+        let ftr_y = ch as i32 - footer_h as i32;
+        VolumeBarRect {
+            x: cw as i32 - bar_w as i32 - 8,
+            y: ftr_y + (footer_h as i32 - bar_h as i32) / 2,
+            w: bar_w,
+            h: bar_h,
         }
     }
 }

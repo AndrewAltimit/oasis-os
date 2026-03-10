@@ -608,6 +608,21 @@ impl OasisWasm {
             }
         }
 
+        // Sync volume from guide state to the video element.
+        if self.video_player.is_active() {
+            let runner = vfs_content::find_tv_guide_runner_wasm(
+                &mut self.app_runner,
+                &mut self.open_runners,
+            );
+            if let Some(runner) = runner
+                && let Some(guide) = runner.tv_guide_state()
+                && guide.volume_changed
+            {
+                self.video_player.set_volume(guide.volume as f64 / 100.0);
+                guide.volume_changed = false;
+            }
+        }
+
         // Capture the latest video frame onto the texture canvas.
         self.video_player.tick();
 
