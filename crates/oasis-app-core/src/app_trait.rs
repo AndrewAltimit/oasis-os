@@ -27,6 +27,12 @@ pub trait App: std::fmt::Debug + Send {
     /// Handle a button press. Returns the resulting action.
     fn handle_input(&mut self, button: &Button, vfs: &dyn Vfs) -> AppAction;
 
+    /// Handle a text character input (typing). Default is no-op.
+    fn handle_text_input(&mut self, _ch: char) {}
+
+    /// Handle backspace (delete last character). Default is no-op.
+    fn handle_backspace(&mut self) {}
+
     /// Handle a click/tap in the app content area.
     ///
     /// `lx`/`ly` are local coordinates within the content area.

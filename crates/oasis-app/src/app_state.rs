@@ -47,11 +47,12 @@ pub enum Mode {
     Desktop,
 }
 
-/// Dashboard, status/bottom bars, start menu, and mouse cursor.
+/// Dashboard, status/bottom bars, taskbar, start menu, and mouse cursor.
 pub struct UiLayer {
     pub dashboard: DashboardState,
     pub status_bar: StatusBar,
     pub bottom_bar: BottomBar,
+    pub taskbar: oasis_core::taskbar::Taskbar,
     pub start_menu: StartMenuState,
     pub mouse_cursor: CursorState,
 }
@@ -63,6 +64,8 @@ pub struct TerminalLayer {
     pub input_buf: String,
     pub output_lines: Vec<String>,
     pub scroll_offset: usize,
+    /// Set when output_lines or input_buf changes; cleared after sync.
+    pub dirty: bool,
 }
 
 /// Networking: TCP backend, remote listener/client, FTP, TLS.
@@ -235,6 +238,7 @@ mod tests {
             dashboard: DashboardState::new(dash_cfg, vec![]),
             status_bar: StatusBar::new(),
             bottom_bar: BottomBar::new(),
+            taskbar: oasis_core::taskbar::Taskbar::new(),
             start_menu: StartMenuState::new(StartMenuState::default_items(&at)),
             mouse_cursor: CursorState::default(),
         };
@@ -245,6 +249,7 @@ mod tests {
             input_buf: String::new(),
             output_lines: Vec::new(),
             scroll_offset: 0,
+            dirty: true,
         };
 
         let _net = NetworkLayer {

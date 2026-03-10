@@ -106,6 +106,11 @@ impl WindowManager {
         self.windows.len()
     }
 
+    /// Iterate over all windows in z-order (last = topmost).
+    pub fn windows(&self) -> &[Window] {
+        &self.windows
+    }
+
     /// Returns `true` if any open window has `modal == true`.
     pub fn has_modal(&self) -> bool {
         self.windows.iter().any(|w| w.modal)
@@ -564,22 +569,39 @@ impl WindowManager {
     where
         F: FnMut(&str, i32, i32, u32, u32, &mut dyn SdiBackend) -> Result<()>,
     {
-        // First draw all SDI objects (frames, titlebars, etc.).
-        sdi.draw(backend)?;
+        // Collect window id prefixes so we can exclude them from the
+        // global SDI draw pass (they'll be drawn per-window instead).
+        let prefixes: Vec<String> = self.windows.iter().map(|w| format!("{}.", w.id)).collect();
+        let prefix_refs: Vec<&str> = prefixes.iter().map(|s| s.as_str()).collect();
 
-        // Then draw clipped content for each visible window.
+        // Draw non-window base SDI objects (wallpaper, dashboard, bars, etc.).
+        sdi.draw_base_excluding_prefixes(backend, &prefix_refs)?;
+
+        // Draw each window's SDI objects then content in z-order.
+        // This ensures the active (topmost) window renders over all others.
         for window in &self.windows {
             if window.state == WindowState::Minimized {
                 continue;
             }
-            let (cx, cy, cw, ch) = window.content_rect(&self.theme);
-            if cw == 0 || ch == 0 {
-                continue;
+
+            // Draw this window's SDI objects (frame, titlebar, buttons, etc.).
+            for suffix in window.sdi_suffixes() {
+                let name = window.sdi_name(suffix);
+                sdi.draw_named(&name, backend)?;
             }
-            backend.set_clip_rect(cx, cy, cw, ch)?;
-            draw_content(&window.id, cx, cy, cw, ch, backend)?;
-            backend.reset_clip_rect()?;
+
+            // Draw clipped content inside the window.
+            let (cx, cy, cw, ch) = window.content_rect(&self.theme);
+            if cw > 0 && ch > 0 {
+                backend.set_clip_rect(cx, cy, cw, ch)?;
+                draw_content(&window.id, cx, cy, cw, ch, backend)?;
+                backend.reset_clip_rect()?;
+            }
         }
+
+        // Draw non-window overlay SDI objects (cursor, start menu, toasts)
+        // AFTER windows so they render on top.
+        sdi.draw_overlay_excluding_prefixes(backend, &prefix_refs)?;
 
         Ok(())
     }

@@ -58,6 +58,7 @@ pub mod script;
 pub mod settings;
 pub mod startmenu;
 pub mod statusbar;
+pub mod taskbar;
 pub mod terminal;
 pub mod terminal_sdi;
 pub mod toast;
@@ -123,4 +124,5 @@ pub mod prelude {
     pub use crate::cursor::CursorState;
     pub use crate::startmenu::StartMenuState;
     pub use crate::statusbar::StatusBar;
+    pub use crate::taskbar::Taskbar;
 }

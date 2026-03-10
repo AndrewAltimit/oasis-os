@@ -19,6 +19,8 @@ pub enum LaunchResult {
 /// Launch an app as a floating window (Browser, generic app, or Terminal).
 ///
 /// Returns the mode to switch to. Caller must set `state.mode` accordingly.
+/// When `window_manager` is true, Terminal opens as a window; otherwise it
+/// uses fullscreen mode.
 #[allow(clippy::too_many_arguments)]
 pub fn launch_app_window(
     app: &AppEntry,
@@ -29,8 +31,10 @@ pub fn launch_app_window(
     browser_config: &BrowserConfig,
     vfs: &MemoryVfs,
     tls_provider: &RustlsTlsProvider,
+    window_manager: bool,
 ) -> LaunchResult {
-    if app.title == "Terminal" {
+    // Terminal: fullscreen mode for non-WM skins; windowed for WM skins.
+    if app.title == "Terminal" && !window_manager {
         return LaunchResult::Terminal;
     }
 

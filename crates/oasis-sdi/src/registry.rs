@@ -308,6 +308,80 @@ impl SdiRegistry {
         Ok(())
     }
 
+    /// Draw a single named object (if it exists and is visible).
+    pub fn draw_named(&self, name: &str, backend: &mut dyn SdiBackend) -> Result<()> {
+        if let Some(obj) = self.objects.get(name)
+            && obj.visible
+            && obj.alpha > 0
+        {
+            Self::draw_object(obj, backend)?;
+        }
+        Ok(())
+    }
+
+    /// Draw all visible objects EXCEPT those whose names start with any of the
+    /// given prefixes (e.g., window id prefixes). Useful for drawing
+    /// non-window objects separately from window objects.
+    pub fn draw_excluding_prefixes(
+        &mut self,
+        backend: &mut dyn SdiBackend,
+        prefixes: &[&str],
+    ) -> Result<()> {
+        self.ensure_z_sorted();
+        for list in [&self.z_sorted_base, &self.z_sorted_overlay] {
+            for name in list {
+                let obj = &self.objects[name];
+                if !obj.visible || obj.alpha == 0 {
+                    continue;
+                }
+                if prefixes.iter().any(|p| name.starts_with(p)) {
+                    continue;
+                }
+                Self::draw_object(obj, backend)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Draw only the base layer, excluding objects with given prefixes.
+    pub fn draw_base_excluding_prefixes(
+        &mut self,
+        backend: &mut dyn SdiBackend,
+        prefixes: &[&str],
+    ) -> Result<()> {
+        self.ensure_z_sorted();
+        for name in &self.z_sorted_base {
+            let obj = &self.objects[name];
+            if !obj.visible || obj.alpha == 0 {
+                continue;
+            }
+            if prefixes.iter().any(|p| name.starts_with(p)) {
+                continue;
+            }
+            Self::draw_object(obj, backend)?;
+        }
+        Ok(())
+    }
+
+    /// Draw only the overlay layer, excluding objects with given prefixes.
+    pub fn draw_overlay_excluding_prefixes(
+        &self,
+        backend: &mut dyn SdiBackend,
+        prefixes: &[&str],
+    ) -> Result<()> {
+        for name in &self.z_sorted_overlay {
+            let obj = &self.objects[name];
+            if !obj.visible || obj.alpha == 0 {
+                continue;
+            }
+            if prefixes.iter().any(|p| name.starts_with(p)) {
+                continue;
+            }
+            Self::draw_object(obj, backend)?;
+        }
+        Ok(())
+    }
+
     /// Render a single SDI object to the backend.
     ///
     /// Dispatch order for non-textured objects with nonzero area:

@@ -218,6 +218,10 @@ page_dot_inactive = "#FFFFFF32"
 # Also: separator_color, version_color, clock_color, url_color,
 #   usb_color, media_tab_active, media_tab_inactive, pipe_color,
 #   r_hint_color, category_label_color
+# Taskbar (desktop window list):
+#   taskbar_bg, taskbar_btn_active, taskbar_btn_inactive,
+#   taskbar_btn_minimized, taskbar_btn_hover, taskbar_text_color,
+#   taskbar_separator, taskbar_indicator
 ```
 
 #### Icon Overrides

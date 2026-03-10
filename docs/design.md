@@ -401,7 +401,7 @@ Each window is a `Window` struct in the WM that tracks its SDI child objects, st
 | **Move (drag)** | On titlebar drag: calculate cursor delta per frame, apply to all child object positions | `sdi.get_mut("{id}.*")?.x += dx` for every child |
 | **Resize** | On resize handle drag: update window dimensions, reposition edges and corners, notify content renderer of new available area | Reposition/resize affected child objects, `backend.set_clip_rect()` updated |
 | **Focus (bring to front)** | Move all child objects to top of z-order, mark as active, update titlebar to active color | `sdi.move_to_top("{id}.*")` for every child |
-| **Minimize** | Hide all child objects, add icon to taskbar (if skin has one) | `sdi.set_visible("{id}.*", false)`, create/show taskbar entry |
+| **Minimize** | Hide all child objects; taskbar button remains (click to restore) | `sdi.set_visible("{id}.*", false)`, taskbar `update_sdi()` shows minimized state |
 | **Maximize** | Snap window to full content area, store previous geometry for restore | Update all child positions/sizes to fill screen |
 | **Close** | Call app's shutdown hook, destroy all child SDI objects, remove from window list | `sdi.destroy("{id}.*")` for every child |
 | **Cascade** | Position newly created windows offset from the last, wrapping when reaching screen edge | Initial position = last window position + (24, 24) offset |
