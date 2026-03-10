@@ -260,7 +260,7 @@ impl ResourceCache {
                 // Corrupted tail pointer -- clear it to avoid infinite loops.
                 self.tail = None;
                 return None;
-            }
+            },
         };
         self.unlink(tail_idx);
         self.index.remove(&url);
