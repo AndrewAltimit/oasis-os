@@ -18,9 +18,6 @@ use psp::thread::ThreadBuilder;
 
 use crate::sfx::SfxId;
 
-// Re-export submodule items that are used externally or cross-module.
-pub use tls_http::TlsHttpReader;
-
 // ---------------------------------------------------------------------------
 // Lock-free command and response queues (SPSC: main thread -> workers)
 // ---------------------------------------------------------------------------

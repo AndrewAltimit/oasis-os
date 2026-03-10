@@ -4,7 +4,7 @@
 //! ICY metadata headers, and hands the socket to the audio thread.
 
 use super::{
-    find_header_end, io_log, parse_icy_metaint, parse_radio_url,
+    find_header_end, parse_icy_metaint, parse_radio_url,
     IoResponse, IO_RESP_QUEUE,
 };
 
