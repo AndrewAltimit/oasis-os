@@ -254,7 +254,14 @@ impl ResourceCache {
     /// Remove and return the tail (LRU) URL.
     fn pop_tail(&mut self) -> Option<String> {
         let tail_idx = self.tail?;
-        let url = self.nodes.get(tail_idx)?.as_ref()?.url.clone();
+        let url = match self.nodes.get(tail_idx).and_then(|s| s.as_ref()) {
+            Some(node) => node.url.clone(),
+            None => {
+                // Corrupted tail pointer -- clear it to avoid infinite loops.
+                self.tail = None;
+                return None;
+            }
+        };
         self.unlink(tail_idx);
         self.index.remove(&url);
         if let Some(slot) = self.nodes.get_mut(tail_idx) {

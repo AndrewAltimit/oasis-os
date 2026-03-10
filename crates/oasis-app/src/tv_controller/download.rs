@@ -28,9 +28,21 @@ const MAX_HEADER_SIZE: usize = 64 * 1024; // 64 KB
 
 /// Check if an I/O error is a WouldBlock (non-blocking socket not ready).
 #[cfg(feature = "_video")]
-fn is_would_block(e: &dyn std::fmt::Display) -> bool {
-    let msg = e.to_string();
-    msg.contains("WouldBlock") || msg.contains("would block")
+fn is_would_block(e: &(impl std::error::Error + 'static)) -> bool {
+    // Try to extract io::ErrorKind directly; fall back to string matching
+    // for wrapped error types (e.g. OasisError::Io).
+    if let Some(io_err) = <dyn std::error::Error>::downcast_ref::<std::io::Error>(e) {
+        return io_err.kind() == std::io::ErrorKind::WouldBlock;
+    }
+    // Walk the source chain for wrapped io::Error.
+    let mut source = e.source();
+    while let Some(src) = source {
+        if let Some(io_err) = src.downcast_ref::<std::io::Error>() {
+            return io_err.kind() == std::io::ErrorKind::WouldBlock;
+        }
+        source = src.source();
+    }
+    false
 }
 
 /// Fetch a byte range from a URL via HTTP Range request.
