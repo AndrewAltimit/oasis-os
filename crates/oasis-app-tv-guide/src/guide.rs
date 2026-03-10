@@ -314,8 +314,14 @@ impl TvGuideState {
     }
 
     /// Tune to the currently selected channel.
+    ///
+    /// Returns `None` (no-op) if the selected channel is already playing.
     pub fn tune(&mut self) -> Option<TuneRequest> {
         if self.selected_channel >= self.channels.len() {
+            return None;
+        }
+        // Ignore if already tuned to this channel.
+        if self.tuned_channel == Some(self.selected_channel) {
             return None;
         }
         // Refresh time so the schedule reflects *now*, not the last render frame.
