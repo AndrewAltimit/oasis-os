@@ -527,6 +527,50 @@ mod tests {
         assert_eq!(slot.elapsed_secs + slot.remaining_secs, 600);
     }
 
+    /// Verify the auto-advance query pattern: when the current episode has
+    /// < 5 seconds remaining, querying at `now + remaining + 1` yields a
+    /// *different* episode than the one that just ended.
+    #[test]
+    fn auto_advance_skips_to_next_episode() {
+        let catalog = make_catalog(2, 5, 1800.0); // 5 × 30min
+        // Pick a time 3 seconds before the end of the current slot.
+        let base = 1_700_000_000u64;
+        let slot = schedule_at(&catalog, base).unwrap();
+        // Jump to 3 seconds before this episode ends.
+        let near_end = slot.start_time + slot.episode.duration_secs as u64 - 3;
+        let ending_slot = schedule_at(&catalog, near_end).unwrap();
+        assert_eq!(ending_slot.remaining_secs, 3);
+        assert_eq!(ending_slot.episode.title, slot.episode.title);
+
+        // Auto-advance query: skip past the current slot end.
+        let query_time = near_end + ending_slot.remaining_secs + 1;
+        let next_slot = schedule_at(&catalog, query_time).unwrap();
+        // Must be a different episode.
+        assert_ne!(
+            next_slot.episode.title, ending_slot.episode.title,
+            "auto-advance should tune to the NEXT episode"
+        );
+        // The next episode should be at most a few seconds in.
+        assert!(
+            next_slot.elapsed_secs <= 1,
+            "next episode should just be starting (elapsed={})",
+            next_slot.elapsed_secs,
+        );
+    }
+
+    /// Verify that querying the schedule at the exact boundary between two
+    /// episodes yields the start of the next episode (elapsed = 0).
+    #[test]
+    fn schedule_at_episode_boundary_yields_next() {
+        let catalog = make_catalog(1, 3, 1000.0); // 3 × 1000s
+        let cached = CachedSchedule::new(&catalog).unwrap();
+        let first = cached.at(0).unwrap();
+        let boundary = first.start_time + first.episode.duration_secs as u64;
+        let next = cached.at(boundary).unwrap();
+        assert_eq!(next.elapsed_secs, 0);
+        assert_ne!(next.episode.title, first.episode.title);
+    }
+
     #[test]
     fn format_date_epoch() {
         // Unix epoch = Jan 1, 1970 (Thursday).

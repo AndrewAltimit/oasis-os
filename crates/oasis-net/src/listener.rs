@@ -16,10 +16,12 @@ const DEFAULT_MAX_CONNECTIONS: usize = 4;
 const MAX_LINE_LEN: usize = 1024;
 
 /// Maximum failed auth attempts before rate limiting kicks in.
-const MAX_AUTH_FAILURES: u32 = 3;
+const MAX_AUTH_FAILURES: u32 = 5;
 
-/// Rate-limit window for auth failures (seconds).
-const AUTH_RATE_LIMIT_SECS: u64 = 60;
+/// Base rate-limit window for auth failures (seconds).
+/// Doubles with each additional failure beyond the threshold
+/// (exponential backoff: 30s, 60s, 120s, ...).
+const AUTH_RATE_LIMIT_BASE_SECS: u64 = 30;
 
 /// Idle connection timeout (seconds).
 const IDLE_TIMEOUT_SECS: u64 = 300;
@@ -152,10 +154,19 @@ impl RemoteListener {
         self.connections.len()
     }
 
+    /// Compute the current rate-limit window duration.
+    /// Uses exponential backoff: base * 2^(failures - threshold) once
+    /// the failure count exceeds the threshold.
+    fn rate_limit_window(&self) -> Duration {
+        let excess = self.auth_failures.count.saturating_sub(MAX_AUTH_FAILURES);
+        let multiplier = 1u64 << excess.min(6); // cap at 64x to prevent overflow
+        Duration::from_secs(AUTH_RATE_LIMIT_BASE_SECS.saturating_mul(multiplier))
+    }
+
     /// Check whether auth rate limit is in effect.
     fn is_rate_limited(&mut self) -> bool {
         let now = Instant::now();
-        let window = Duration::from_secs(AUTH_RATE_LIMIT_SECS);
+        let window = self.rate_limit_window();
         if now.duration_since(self.auth_failures.window_start) > window {
             // Reset the window.
             self.auth_failures.count = 0;
@@ -167,12 +178,20 @@ impl RemoteListener {
     /// Record a failed auth attempt.
     fn record_auth_failure(&mut self) {
         let now = Instant::now();
-        let window = Duration::from_secs(AUTH_RATE_LIMIT_SECS);
+        let window = self.rate_limit_window();
         if now.duration_since(self.auth_failures.window_start) > window {
             self.auth_failures.count = 0;
             self.auth_failures.window_start = now;
         }
         self.auth_failures.count += 1;
+        if self.auth_failures.count >= MAX_AUTH_FAILURES {
+            log::warn!(
+                "Remote terminal: auth rate limit active ({} failures, \
+                 backoff {:.0}s)",
+                self.auth_failures.count,
+                self.rate_limit_window().as_secs_f64(),
+            );
+        }
     }
 
     /// Poll for new connections and incoming data.
@@ -456,7 +475,7 @@ mod tests {
 
         assert!(!listener.is_rate_limited());
 
-        // Record MAX_AUTH_FAILURES (3) failures
+        // Record MAX_AUTH_FAILURES (5) failures
         for _ in 0..MAX_AUTH_FAILURES {
             listener.record_auth_failure();
         }
@@ -480,6 +499,30 @@ mod tests {
     }
 
     #[test]
+    fn test_rate_limit_exponential_backoff() {
+        let config = ListenerConfig::default();
+        let mut listener = RemoteListener::new(config);
+
+        // Record failures up to the threshold.
+        for _ in 0..MAX_AUTH_FAILURES {
+            listener.record_auth_failure();
+        }
+        // Base window at threshold.
+        let base = listener.rate_limit_window();
+        assert_eq!(base.as_secs(), AUTH_RATE_LIMIT_BASE_SECS);
+
+        // One more failure doubles the window.
+        listener.record_auth_failure();
+        let doubled = listener.rate_limit_window();
+        assert_eq!(doubled.as_secs(), AUTH_RATE_LIMIT_BASE_SECS * 2);
+
+        // Two more failures -> 4x base.
+        listener.record_auth_failure();
+        let quadrupled = listener.rate_limit_window();
+        assert_eq!(quadrupled.as_secs(), AUTH_RATE_LIMIT_BASE_SECS * 4);
+    }
+
+    #[test]
     fn test_auth_state_equality() {
         assert_eq!(AuthState::AwaitingAuth, AuthState::AwaitingAuth);
         assert_eq!(AuthState::Authenticated, AuthState::Authenticated);
@@ -498,8 +541,8 @@ mod tests {
     fn test_constants() {
         assert_eq!(DEFAULT_MAX_CONNECTIONS, 4);
         assert_eq!(MAX_LINE_LEN, 1024);
-        assert_eq!(MAX_AUTH_FAILURES, 3);
-        assert_eq!(AUTH_RATE_LIMIT_SECS, 60);
+        assert_eq!(MAX_AUTH_FAILURES, 5);
+        assert_eq!(AUTH_RATE_LIMIT_BASE_SECS, 30);
         assert_eq!(IDLE_TIMEOUT_SECS, 300);
     }
 

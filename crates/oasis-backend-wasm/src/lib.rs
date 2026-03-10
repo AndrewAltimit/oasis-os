@@ -623,6 +623,11 @@ impl OasisWasm {
             }
         }
 
+        // Auto-advance to next episode when the current video ends.
+        if self.video_player.is_ended() {
+            self.auto_advance_episode();
+        }
+
         // Capture the latest video frame onto the texture canvas.
         self.video_player.tick();
 
@@ -755,6 +760,80 @@ impl OasisWasm {
 
         if let Err(e) = self.backend.swap_buffers() {
             console_log!("swap_buffers error: {e}");
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // TV Guide auto-advance
+    // -----------------------------------------------------------------------
+
+    /// When the current episode's `<video>` element fires `ended`, stop the
+    /// player and tune to whatever the deterministic schedule says should be
+    /// playing now (which will be the next episode).
+    fn auto_advance_episode(&mut self) {
+        // Gather schedule info from the guide state, then release the borrow.
+        let tune_data = {
+            let runner = vfs_content::find_tv_guide_runner_wasm(
+                &mut self.app_runner,
+                &mut self.open_runners,
+            );
+            let Some(runner) = runner else { return };
+            let Some(guide) = runner.tv_guide_state() else {
+                return;
+            };
+            let Some(channel_idx) = guide.tuned_channel else {
+                return;
+            };
+
+            // Clean up the guide's texture reference.
+            guide.preview_texture = None;
+
+            // Update the guide's clock so schedule_at returns the current slot.
+            let now = (js_sys::Date::now() / 1000.0) as u64;
+            guide.current_time = now;
+
+            let catalog = guide.catalogs.get(channel_idx).and_then(|c| c.as_ref());
+            let Some(catalog) = catalog else { return };
+
+            // If the current slot has <5s remaining, skip ahead to avoid
+            // re-tuning to the same nearly-finished episode.
+            let query_time = {
+                let Some(slot) = oasis_core::apps::tv_guide::schedule_at(catalog, now) else {
+                    return;
+                };
+                if slot.remaining_secs < 5 {
+                    now + slot.remaining_secs + 1
+                } else {
+                    now
+                }
+            };
+            let Some(slot) = oasis_core::apps::tv_guide::schedule_at(catalog, query_time) else {
+                return;
+            };
+
+            let url =
+                oasis_core::apps::tv_guide::catalog::ChannelCatalog::download_url(&slot.episode);
+            let seek_secs = slot.elapsed_secs;
+            console_log!(
+                "TV auto-advance -> {} (seek={}s, remaining={}s)",
+                slot.episode.title,
+                seek_secs,
+                slot.remaining_secs,
+            );
+            format!("tune_url {url} {seek_secs}")
+        };
+
+        // Stop the finished player (needs &mut self.video_player + backend).
+        self.video_player.stop(&mut self.backend);
+
+        // Write tune request via VFS IPC (same path as manual tune).
+        let runner =
+            vfs_content::find_tv_guide_runner_wasm(&mut self.app_runner, &mut self.open_runners);
+        if let Some(runner) = runner {
+            runner.set_pending_request(
+                oasis_core::apps::tv_guide::TV_REQUEST_PATH.to_string(),
+                tune_data,
+            );
         }
     }
 
@@ -1033,31 +1112,31 @@ impl OasisWasm {
             },
             Ok(CommandOutput::Clear) => self.output_lines.clear(),
             Ok(CommandOutput::None) => {},
-            Ok(CommandOutput::ListenToggle { .. }) => {
-                self.output_lines
-                    .push("Not available in browser.".to_string());
-            },
-            Ok(CommandOutput::RemoteConnect { .. }) => {
-                self.output_lines
-                    .push("Not available in browser.".to_string());
-            },
-            Ok(CommandOutput::FtpToggle { .. }) => {
-                self.output_lines
-                    .push("Not available in browser.".to_string());
-            },
-            Ok(CommandOutput::BrowserSandbox { enable }) => {
-                if let Some(ref mut bw) = self.browser {
-                    bw.config.features.sandbox_only = enable;
+            Ok(CommandOutput::Signal(ref sig)) => {
+                use oasis_core::terminal::CommandSignal;
+                match sig {
+                    CommandSignal::BrowserSandbox { enable } => {
+                        let enable = *enable;
+                        if let Some(ref mut bw) = self.browser {
+                            bw.config.features.sandbox_only = enable;
+                        }
+                        let st = if enable {
+                            "on (VFS only)"
+                        } else {
+                            "off (HTTP enabled)"
+                        };
+                        self.output_lines.push(format!("Browser sandbox: {st}"));
+                    },
+                    CommandSignal::SkinSwap { name } => {
+                        return Some(name.clone());
+                    },
+                    CommandSignal::ListenToggle { .. }
+                    | CommandSignal::RemoteConnect { .. }
+                    | CommandSignal::FtpToggle { .. } => {
+                        self.output_lines
+                            .push("Not available in browser.".to_string());
+                    },
                 }
-                let st = if enable {
-                    "on (VFS only)"
-                } else {
-                    "off (HTTP enabled)"
-                };
-                self.output_lines.push(format!("Browser sandbox: {st}"));
-            },
-            Ok(CommandOutput::SkinSwap { name }) => {
-                return Some(name);
             },
             Ok(CommandOutput::Multi(outputs)) => {
                 let mut skin_swap = None;

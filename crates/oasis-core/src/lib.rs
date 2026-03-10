@@ -106,7 +106,9 @@ pub mod prelude {
     pub use oasis_platform::DesktopPlatform;
 
     // Terminal
-    pub use crate::terminal::{CommandOutput, CommandRegistry, Environment, register_builtins};
+    pub use crate::terminal::{
+        CommandOutput, CommandRegistry, CommandSignal, Environment, register_builtins,
+    };
 
     // Apps / Dashboard
     pub use crate::apps::{AppAction, AppRunner};

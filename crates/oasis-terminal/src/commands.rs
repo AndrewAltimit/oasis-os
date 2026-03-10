@@ -681,13 +681,13 @@ impl Command for ListenCmd {
     }
     fn execute(&self, args: &[&str], _env: &mut Environment<'_>) -> Result<CommandOutput> {
         if args.is_empty() {
-            return Ok(CommandOutput::ListenToggle { port: 9000 });
+            return Ok(CommandOutput::listen_toggle(9000));
         }
         if args[0] == "stop" {
-            return Ok(CommandOutput::ListenToggle { port: 0 });
+            return Ok(CommandOutput::listen_toggle(0));
         }
         match args[0].parse::<u16>() {
-            Ok(port) => Ok(CommandOutput::ListenToggle { port }),
+            Ok(port) => Ok(CommandOutput::listen_toggle(port)),
             Err(_) => Err(OasisError::Command("usage: listen [port|stop]".into())),
         }
     }
@@ -719,11 +719,7 @@ impl Command for RemoteCmd {
         if let Some((addr, port_str)) = target.rsplit_once(':')
             && let Ok(port) = port_str.parse::<u16>()
         {
-            return Ok(CommandOutput::RemoteConnect {
-                address: addr.into(),
-                port,
-                psk: None,
-            });
+            return Ok(CommandOutput::remote_connect(addr.into(), port, None));
         }
 
         // Look up saved host from VFS config.
@@ -734,11 +730,11 @@ impl Command for RemoteCmd {
             if let Ok(hosts) = oasis_net::parse_hosts(&toml_str) {
                 for host in &hosts {
                     if host.name == target {
-                        return Ok(CommandOutput::RemoteConnect {
-                            address: host.address.clone(),
-                            port: host.port,
-                            psk: host.psk.clone(),
-                        });
+                        return Ok(CommandOutput::remote_connect(
+                            host.address.clone(),
+                            host.port,
+                            host.psk.clone(),
+                        ));
                     }
                 }
             }
@@ -802,6 +798,7 @@ use crate::interpreter::resolve_path;
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::CommandSignal;
     use oasis_vfs::{MemoryVfs, Vfs};
 
     fn setup() -> (CommandRegistry, MemoryVfs) {
@@ -1161,7 +1158,7 @@ mod tests {
         let (reg, mut vfs) = setup();
         let mut cwd = "/".to_string();
         match exec(&reg, &mut vfs, &mut cwd, "listen").unwrap() {
-            CommandOutput::ListenToggle { port } => assert_eq!(port, 9000),
+            CommandOutput::Signal(CommandSignal::ListenToggle { port }) => assert_eq!(port, 9000),
             _ => panic!("expected ListenToggle"),
         }
     }
@@ -1171,7 +1168,7 @@ mod tests {
         let (reg, mut vfs) = setup();
         let mut cwd = "/".to_string();
         match exec(&reg, &mut vfs, &mut cwd, "listen 8080").unwrap() {
-            CommandOutput::ListenToggle { port } => assert_eq!(port, 8080),
+            CommandOutput::Signal(CommandSignal::ListenToggle { port }) => assert_eq!(port, 8080),
             _ => panic!("expected ListenToggle"),
         }
     }
@@ -1181,7 +1178,7 @@ mod tests {
         let (reg, mut vfs) = setup();
         let mut cwd = "/".to_string();
         match exec(&reg, &mut vfs, &mut cwd, "listen stop").unwrap() {
-            CommandOutput::ListenToggle { port } => assert_eq!(port, 0),
+            CommandOutput::Signal(CommandSignal::ListenToggle { port }) => assert_eq!(port, 0),
             _ => panic!("expected ListenToggle"),
         }
     }
@@ -1191,7 +1188,7 @@ mod tests {
         let (reg, mut vfs) = setup();
         let mut cwd = "/".to_string();
         match exec(&reg, &mut vfs, &mut cwd, "remote 192.168.0.50:9000").unwrap() {
-            CommandOutput::RemoteConnect { address, port, psk } => {
+            CommandOutput::Signal(CommandSignal::RemoteConnect { address, port, psk }) => {
                 assert_eq!(address, "192.168.0.50");
                 assert_eq!(port, 9000);
                 assert!(psk.is_none());
@@ -1218,7 +1215,7 @@ psk = "secret"
         .unwrap();
         let mut cwd = "/".to_string();
         match exec(&reg, &mut vfs, &mut cwd, "remote myserver").unwrap() {
-            CommandOutput::RemoteConnect { address, port, psk } => {
+            CommandOutput::Signal(CommandSignal::RemoteConnect { address, port, psk }) => {
                 assert_eq!(address, "10.0.0.1");
                 assert_eq!(port, 8080);
                 assert_eq!(psk, Some("secret".to_string()));
@@ -1466,13 +1463,13 @@ protocol = "raw-tcp"
 
         // Switch to a skin.
         match exec(&reg, &mut vfs, &mut cwd, "skin modern").unwrap() {
-            CommandOutput::SkinSwap { name } => assert_eq!(name, "modern"),
+            CommandOutput::Signal(CommandSignal::SkinSwap { name }) => assert_eq!(name, "modern"),
             _ => panic!("expected SkinSwap"),
         }
 
         // Switch to another skin.
         match exec(&reg, &mut vfs, &mut cwd, "skin terminal").unwrap() {
-            CommandOutput::SkinSwap { name } => assert_eq!(name, "terminal"),
+            CommandOutput::Signal(CommandSignal::SkinSwap { name }) => assert_eq!(name, "terminal"),
             _ => panic!("expected SkinSwap"),
         }
     }

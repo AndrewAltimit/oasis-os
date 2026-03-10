@@ -11,8 +11,8 @@ pub mod tv_commands;
 
 // Explicit re-exports from the oasis-terminal crate.
 pub use oasis_terminal::{
-    Command, CommandOutput, CommandRegistry, Environment, cmd_helpers, populate_man_pages,
-    populate_motd, populate_profile, register_builtins,
+    Command, CommandOutput, CommandRegistry, CommandSignal, Environment, cmd_helpers,
+    populate_man_pages, populate_motd, populate_profile, register_builtins,
 };
 
 pub use agent_commands::register_agent_commands;

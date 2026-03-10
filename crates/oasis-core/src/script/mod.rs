@@ -5,7 +5,7 @@
 //! blank lines skipped. Provides `run`, `cron`, and `startup` commands.
 
 use crate::error::{OasisError, Result};
-use crate::terminal::{Command, CommandOutput, CommandRegistry, Environment};
+use crate::terminal::{Command, CommandOutput, CommandRegistry, CommandSignal, Environment};
 
 /// VFS paths for scripting configuration.
 pub const STARTUP_SCRIPT_PATH: &str = "/etc/startup.sh";
@@ -49,18 +49,18 @@ pub fn run_script(
             },
             Ok(CommandOutput::Clear) => output.push("(clear)".to_string()),
             Ok(CommandOutput::None) => {},
-            Ok(
-                CommandOutput::ListenToggle { .. }
-                | CommandOutput::RemoteConnect { .. }
-                | CommandOutput::FtpToggle { .. },
-            ) => {
+            Ok(CommandOutput::Signal(
+                CommandSignal::ListenToggle { .. }
+                | CommandSignal::RemoteConnect { .. }
+                | CommandSignal::FtpToggle { .. },
+            )) => {
                 output.push("(network command skipped in script)".to_string());
             },
-            Ok(CommandOutput::BrowserSandbox { enable }) => {
+            Ok(CommandOutput::Signal(CommandSignal::BrowserSandbox { enable })) => {
                 let state = if enable { "on" } else { "off" };
                 output.push(format!("(browser sandbox set to {state})"));
             },
-            Ok(CommandOutput::SkinSwap { name }) => {
+            Ok(CommandOutput::Signal(CommandSignal::SkinSwap { name })) => {
                 output.push(format!("(skin swap to '{name}' skipped in script)"));
             },
             Ok(CommandOutput::Multi(outputs)) => {

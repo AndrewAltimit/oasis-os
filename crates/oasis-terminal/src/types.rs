@@ -7,6 +7,43 @@ use oasis_platform::{NetworkService, PowerService, TimeService, UsbService};
 use oasis_types::error::Result;
 use oasis_vfs::Vfs;
 
+/// Signals sent from commands to the app layer.
+///
+/// These represent side-effects (connect to a host, swap a skin, etc.)
+/// rather than display output. Separated from [`CommandOutput`] so data
+/// and control flow are not mixed in the same enum.
+#[derive(Debug, Clone)]
+pub enum CommandSignal {
+    /// Start/stop the remote terminal listener.
+    ListenToggle {
+        /// Port to listen on (0 = stop).
+        port: u16,
+    },
+    /// Connect to a remote host.
+    RemoteConnect {
+        address: String,
+        port: u16,
+        psk: Option<String>,
+    },
+    /// Toggle browser sandbox mode.
+    BrowserSandbox {
+        /// `true` = sandbox on (VFS only), `false` = networking enabled.
+        enable: bool,
+    },
+    /// Swap the active skin.
+    SkinSwap {
+        /// Skin name or path to load.
+        name: String,
+    },
+    /// Start/stop the FTP file server.
+    FtpToggle {
+        /// Port to listen on (0 = stop).
+        port: u16,
+        /// Optional password for FTP authentication.
+        password: Option<String>,
+    },
+}
+
 /// Output produced by a command.
 #[derive(Debug, Clone)]
 pub enum CommandOutput {
@@ -21,37 +58,40 @@ pub enum CommandOutput {
     None,
     /// Signal to clear the terminal output buffer.
     Clear,
-    /// Signal to the app to start/stop the remote terminal listener.
-    ListenToggle {
-        /// Port to listen on (0 = stop).
-        port: u16,
-    },
-    /// Signal to the app to connect to a remote host.
-    RemoteConnect {
-        address: String,
-        port: u16,
-        psk: Option<String>,
-    },
-    /// Signal to the app to toggle browser sandbox mode.
-    BrowserSandbox {
-        /// `true` = sandbox on (VFS only), `false` = networking enabled.
-        enable: bool,
-    },
-    /// Signal to the app to swap the active skin.
-    SkinSwap {
-        /// Skin name or path to load.
-        name: String,
-    },
-    /// Signal to the app to start/stop the FTP file server.
-    FtpToggle {
-        /// Port to listen on (0 = stop).
-        port: u16,
-        /// Optional password for FTP authentication.
-        password: Option<String>,
-    },
+    /// A signal to the app layer (network, skin, etc.).
+    Signal(CommandSignal),
     /// Multiple outputs from a chained command (e.g. `skin xp ; echo Done`).
     /// Each inner output is processed in order by the app layer.
     Multi(Vec<CommandOutput>),
+}
+
+// Convenience constructors matching the old flat variant names.
+// These keep the diff smaller for callers that construct signals.
+impl CommandOutput {
+    /// Shorthand for `Signal(CommandSignal::ListenToggle { port })`.
+    pub fn listen_toggle(port: u16) -> Self {
+        Self::Signal(CommandSignal::ListenToggle { port })
+    }
+
+    /// Shorthand for `Signal(CommandSignal::RemoteConnect { .. })`.
+    pub fn remote_connect(address: String, port: u16, psk: Option<String>) -> Self {
+        Self::Signal(CommandSignal::RemoteConnect { address, port, psk })
+    }
+
+    /// Shorthand for `Signal(CommandSignal::BrowserSandbox { enable })`.
+    pub fn browser_sandbox(enable: bool) -> Self {
+        Self::Signal(CommandSignal::BrowserSandbox { enable })
+    }
+
+    /// Shorthand for `Signal(CommandSignal::SkinSwap { name })`.
+    pub fn skin_swap(name: String) -> Self {
+        Self::Signal(CommandSignal::SkinSwap { name })
+    }
+
+    /// Shorthand for `Signal(CommandSignal::FtpToggle { port, password })`.
+    pub fn ftp_toggle(port: u16, password: Option<String>) -> Self {
+        Self::Signal(CommandSignal::FtpToggle { port, password })
+    }
 }
 
 /// Shared mutable environment passed to every command.

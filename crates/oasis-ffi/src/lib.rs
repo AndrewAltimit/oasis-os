@@ -562,15 +562,18 @@ pub unsafe extern "C" fn oasis_send_command(
         },
         Ok(CommandOutput::Clear) => String::new(),
         Ok(CommandOutput::None) => String::new(),
-        Ok(CommandOutput::ListenToggle { .. })
-        | Ok(CommandOutput::RemoteConnect { .. })
-        | Ok(CommandOutput::FtpToggle { .. }) => "Not available via FFI.".to_string(),
-        Ok(CommandOutput::BrowserSandbox { enable }) => {
-            let state = if enable { "on" } else { "off" };
-            format!("Browser sandbox: {state}")
-        },
-        Ok(CommandOutput::SkinSwap { name }) => {
-            format!("Skin swap to '{name}' not available via FFI.")
+        Ok(CommandOutput::Signal(ref sig)) => {
+            use oasis_core::terminal::CommandSignal;
+            match sig {
+                CommandSignal::BrowserSandbox { enable } => {
+                    let state = if *enable { "on" } else { "off" };
+                    format!("Browser sandbox: {state}")
+                },
+                CommandSignal::SkinSwap { name } => {
+                    format!("Skin swap to '{name}' not available via FFI.")
+                },
+                _ => "Not available via FFI.".to_string(),
+            }
         },
         Ok(CommandOutput::Multi(outputs)) => {
             let mut parts = Vec::new();
@@ -586,15 +589,18 @@ pub unsafe extern "C" fn oasis_send_command(
                         out
                     },
                     CommandOutput::Clear | CommandOutput::None => continue,
-                    CommandOutput::SkinSwap { name } => {
-                        format!("Skin swap to '{name}' not available via FFI.")
-                    },
-                    CommandOutput::ListenToggle { .. }
-                    | CommandOutput::RemoteConnect { .. }
-                    | CommandOutput::FtpToggle { .. } => "Not available via FFI.".to_string(),
-                    CommandOutput::BrowserSandbox { enable } => {
-                        let state = if enable { "on" } else { "off" };
-                        format!("Browser sandbox: {state}")
+                    CommandOutput::Signal(ref sig) => {
+                        use oasis_core::terminal::CommandSignal;
+                        match sig {
+                            CommandSignal::BrowserSandbox { enable } => {
+                                let state = if *enable { "on" } else { "off" };
+                                format!("Browser sandbox: {state}")
+                            },
+                            CommandSignal::SkinSwap { name } => {
+                                format!("Skin swap to '{name}' not available via FFI.")
+                            },
+                            _ => "Not available via FFI.".to_string(),
+                        }
                     },
                     CommandOutput::Multi(_) => continue,
                 };
@@ -1054,13 +1060,18 @@ pub unsafe extern "C" fn oasis_video_is_playing(handle: *mut OasisInstance) -> i
 ///
 /// # Safety
 ///
-/// `handle` must be valid. `buf` must point to at least `w*h*4` bytes where
-/// w/h are the video dimensions. `out_w` and `out_h` must be valid pointers.
+/// `handle` must be valid. `buf` must point to at least `buf_size` bytes.
+/// `buf_size` must be >= `w*h*4` for the decoded frame dimensions.
+/// `out_w` and `out_h` must be valid pointers (or null to skip).
+///
+/// Returns 1 on success, 0 if no frame available, -1 on error (including
+/// if the destination buffer is too small for the decoded frame).
 #[cfg(feature = "_video")]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn oasis_video_next_frame(
     handle: *mut OasisInstance,
     buf: *mut u8,
+    buf_size: u32,
     out_w: *mut u32,
     out_h: *mut u32,
 ) -> i32 {
@@ -1080,10 +1091,11 @@ pub unsafe extern "C" fn oasis_video_next_frame(
     match frame {
         Some(f) => {
             let byte_len = (f.width * f.height * 4) as usize;
-            if buf.is_null() || f.rgba.len() != byte_len {
+            if buf.is_null() || f.rgba.len() != byte_len || (buf_size as usize) < byte_len {
                 return -1;
             }
-            // SAFETY: Caller guarantees destination buffer has sufficient space.
+            // SAFETY: Caller provides buf_size; we verified buf_size >= byte_len
+            // and byte_len == f.rgba.len(), so the copy is within bounds.
             unsafe {
                 std::ptr::copy_nonoverlapping(f.rgba.as_ptr(), buf, byte_len);
                 if !out_w.is_null() {

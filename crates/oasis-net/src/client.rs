@@ -81,7 +81,14 @@ impl RemoteClient {
             }
             #[cfg(feature = "tls-rustls")]
             {
-                // Send PSK over encrypted channel.
+                // The TLS handshake has already completed at this point --
+                // `backend.connect()` returns a TLS-wrapped stream when the
+                // `tls-rustls` feature is enabled.  The PSK is only sent
+                // over the encrypted channel, never in plaintext.
+                //
+                // NOTE: The server's certificate is validated by rustls
+                // against the webpki root CA bundle.  Custom certificate
+                // pinning is not yet implemented.
                 if let Some(ref mut s) = self.stream {
                     s.write(format!("{key}\n").as_bytes())
                         .map_err(|e| OasisError::Backend(format!("auth send: {e}").into()))?;
