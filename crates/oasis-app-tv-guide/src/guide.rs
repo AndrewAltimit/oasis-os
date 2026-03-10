@@ -684,7 +684,7 @@ impl TvGuideState {
             obj.font_size = at.font_hint;
             obj.text_color = self.colors.dim_text;
             obj.visible = true;
-            obj.z = 115;
+            obj.z = 116;
         }
     }
 
@@ -1566,9 +1566,20 @@ impl TvGuideState {
         // Video fills the content area.
         if let Some(tex) = self.preview_texture {
             backend.blit(tex, cx, cy, cw, ch)?;
-        } else if let Some(ref status) = self.download_status {
+        } else if self.tuned_channel.is_some() {
+            let dots = match self.current_time % 4 {
+                0 => "",
+                1 => ".",
+                2 => "..",
+                _ => "...",
+            };
+            let loading_text = if let Some(ref status) = self.download_status {
+                status.clone()
+            } else {
+                format!("Loading{dots}")
+            };
             backend.draw_text(
-                status,
+                &loading_text,
                 cx + cw as i32 / 2 - 30,
                 cy + ch as i32 / 2 - 4,
                 at.font_body,
