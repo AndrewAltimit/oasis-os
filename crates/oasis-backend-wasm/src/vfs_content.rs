@@ -37,17 +37,16 @@ pub(crate) fn find_tv_guide_runner_wasm<'a>(
         .find(|runner| runner.title == "TV Guide")
 }
 
-/// Compute the TV preview box rect `(x, y, w, h)` matching `guide.rs` layout.
+/// Compute the TV video capture dimensions `(x, y, w, h)`.
+///
+/// Captures at full screen resolution so the video looks sharp in both
+/// PIP and expanded (fullscreen) modes. The backend handles scaling
+/// when blitting to the smaller PIP area.
 pub(crate) fn tv_preview_rect(at: &ActiveTheme) -> (i32, i32, u32, u32) {
     let usable_h = at
         .screen_h
         .saturating_sub(at.statusbar_height + at.bottombar_height);
-    let header_h = (usable_h * 20 / 100).max(60);
-    let preview_w = (at.screen_w / 5).max(80);
-    let preview_h = header_h.saturating_sub(16);
-    let preview_x = at.screen_w as i32 - preview_w as i32 - 10;
-    let preview_y = at.statusbar_height as i32 + 8;
-    (preview_x, preview_y, preview_w, preview_h)
+    (0, at.statusbar_height as i32, at.screen_w, usable_h)
 }
 
 /// Check if a runner's pending request is a TV Guide tune_url (should not be

@@ -482,17 +482,21 @@ tv now          — Show what's playing now on all channels
 - Shared fetching logic between SDL and WASM where possible
 - **Deliverable:** Desktop build also shows live IA data
 
-### Step 8: Video playback (WASM — PIP)
+### Step 8: Video playback (WASM — PIP) ✅
 - Create `video.rs` in WASM backend
-- Use iframe overlay to show IA video at PIP position
+- Hidden `<video>` element with offscreen canvas capture as backend texture
 - Seek to correct position based on schedule
 - "LIVE" badge overlay
+- Video decoded at full screen resolution (sharp in both PIP and expanded modes)
 - **Deliverable:** PIP shows actual video in WASM build
 
-### Step 9: Video playback (WASM — full-screen)
-- Confirm button expands video to full content area
-- Triangle/Tab toggles between guide and full-screen
-- Audio continues when returning to guide view
+### Step 9: Video playback (WASM — full-screen) ✅
+- Click PIP video preview to expand to full content area
+- Click expanded video to collapse back to PIP with guide below
+- `video_expanded` state on `TvGuideState` drives both SDI and windowed rendering
+- Clickable volume bar (defaults to 50%) in footer (PIP) and bottom overlay (expanded)
+- Volume syncs to `<video>` element in real time
+- Audio continues when toggling between PIP and full-screen
 - **Deliverable:** Full video watching experience in WASM
 
 ### Step 10: Video playback (SDL — basic)

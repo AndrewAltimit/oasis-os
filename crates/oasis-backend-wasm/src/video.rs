@@ -277,6 +277,13 @@ impl VideoPlayer {
         self.active = false;
     }
 
+    /// Set the video element's volume (0.0–1.0).
+    pub fn set_volume(&self, volume: f64) {
+        if let Some(ref video) = self.video {
+            video.set_volume(volume.clamp(0.0, 1.0));
+        }
+    }
+
     /// Whether the player is currently loading or playing.
     pub fn is_active(&self) -> bool {
         self.active
