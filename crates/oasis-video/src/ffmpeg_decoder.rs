@@ -328,14 +328,14 @@ impl FfmpegDecoder {
         }
 
         // SAFETY: Allocate and configure codec context.
-        let ctx = unsafe { ffi::avcodec_alloc_context3(codec) };
+        let mut ctx = unsafe { ffi::avcodec_alloc_context3(codec) };
         if ctx.is_null() {
             return Err(VideoError::Decode("avcodec_alloc_context3 failed".into()));
         }
 
         let ret = unsafe { ffi::avcodec_parameters_to_context(ctx, codecpar) };
         if ret < 0 {
-            unsafe { ffi::avcodec_free_context(&mut (ctx as *mut _)) };
+            unsafe { ffi::avcodec_free_context(&mut ctx) };
             return Err(VideoError::Decode(format!(
                 "avcodec_parameters_to_context: {}",
                 ffmpeg_error_string(ret)
@@ -344,7 +344,7 @@ impl FfmpegDecoder {
 
         let ret = unsafe { ffi::avcodec_open2(ctx, codec, std::ptr::null_mut()) };
         if ret < 0 {
-            unsafe { ffi::avcodec_free_context(&mut (ctx as *mut _)) };
+            unsafe { ffi::avcodec_free_context(&mut ctx) };
             return Err(VideoError::Decode(format!(
                 "avcodec_open2: {}",
                 ffmpeg_error_string(ret)
@@ -374,7 +374,7 @@ impl FfmpegDecoder {
         }
 
         // SAFETY: Allocate codec context for the found decoder.
-        let ctx = unsafe { ffi::avcodec_alloc_context3(codec) };
+        let mut ctx = unsafe { ffi::avcodec_alloc_context3(codec) };
         if ctx.is_null() {
             return Err(VideoError::Decode("avcodec_alloc_context3 failed".into()));
         }
@@ -383,7 +383,7 @@ impl FfmpegDecoder {
         let ret = unsafe { ffi::avcodec_parameters_to_context(ctx, codecpar) };
         if ret < 0 {
             // SAFETY: Free the context we allocated on error.
-            unsafe { ffi::avcodec_free_context(&mut (ctx as *mut _)) };
+            unsafe { ffi::avcodec_free_context(&mut ctx) };
             return Err(VideoError::Decode(format!(
                 "avcodec_parameters_to_context: {}",
                 ffmpeg_error_string(ret)
@@ -394,7 +394,7 @@ impl FfmpegDecoder {
         let ret = unsafe { ffi::avcodec_open2(ctx, codec, std::ptr::null_mut()) };
         if ret < 0 {
             // SAFETY: Free the context we allocated on error.
-            unsafe { ffi::avcodec_free_context(&mut (ctx as *mut _)) };
+            unsafe { ffi::avcodec_free_context(&mut ctx) };
             return Err(VideoError::Decode(format!(
                 "avcodec_open2: {}",
                 ffmpeg_error_string(ret)
