@@ -133,19 +133,36 @@ impl SimpleApp {
         )
     }
 
-    /// Create the Terminal app (redirects to terminal mode on Confirm).
+    /// Create the Terminal app (windowed interactive terminal).
+    ///
+    /// Text input and command execution are handled by the desktop input
+    /// dispatcher, which syncs output lines back into this app via
+    /// `set_terminal_lines()`.
     pub fn terminal(path: &str) -> Self {
-        let mut app = Self::new(
+        Self::new(
             "Terminal",
             path,
             vec![
-                "Terminal".to_string(),
+                "OASIS_OS Terminal".to_string(),
                 String::new(),
-                "Press Confirm to enter terminal mode.".to_string(),
+                "Type a command and press Enter.".to_string(),
             ],
-        );
-        app.confirm_action = AppAction::SwitchToTerminal;
-        app
+        )
+    }
+
+    /// Update the display lines (used by the desktop input handler to sync
+    /// terminal output into this app's display).
+    ///
+    /// `scroll_offset` scrolls up from the bottom (0 = fully scrolled down).
+    pub fn set_lines(&mut self, lines: Vec<String>, scroll_offset: usize) {
+        let len = lines.len();
+        self.content.lines = lines;
+        if len > self.content.cached_max_visible {
+            let max_scroll = len - self.content.cached_max_visible;
+            self.content.scroll = max_scroll.saturating_sub(scroll_offset);
+        } else {
+            self.content.scroll = 0;
+        }
     }
 
     /// Create the System Monitor app.

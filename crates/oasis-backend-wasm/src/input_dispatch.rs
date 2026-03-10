@@ -215,7 +215,7 @@ impl OasisWasm {
                 }
 
                 // Taskbar hit test before WM.
-                if let Some(win_id) = self.taskbar.hit_test(*x, *y, &self.active_theme) {
+                if let Some(win_id) = self.taskbar.hit_test(*x, *y) {
                     let win_id = win_id.to_string();
                     if self.wm.active_window() == Some(win_id.as_str()) {
                         let _ = self.wm.minimize_window(&win_id, &mut self.sdi);
@@ -279,16 +279,39 @@ impl OasisWasm {
                             }
                         }
                     },
-                    WmEvent::DesktopClick(_, _) => {
+                    WmEvent::DesktopClick(dx, dy) => {
                         if self.wm.window_count() == 0 {
                             self.mode = Mode::Dashboard;
+                        } else if self.bottom_bar.active_tab == MediaTab::None {
+                            // Forward desktop clicks to dashboard icons.
+                            let cfg = &self.dashboard.config;
+                            let gx = dx - cfg.grid_x;
+                            let gy = dy - cfg.grid_y;
+                            if gx >= 0 && gy >= 0 {
+                                let col = gx as usize / cfg.cell_w as usize;
+                                let row = gy as usize / cfg.cell_h as usize;
+                                if col < cfg.grid_cols as usize && row < cfg.grid_rows as usize {
+                                    let idx = row * cfg.grid_cols as usize + col;
+                                    let page_apps = self.dashboard.current_page_apps().len();
+                                    if idx < page_apps {
+                                        if self.dashboard.selected == idx {
+                                            if let Some(app) = self.dashboard.selected_app() {
+                                                let app = app.clone();
+                                                self.launch_app_window(&app);
+                                            }
+                                        } else {
+                                            self.dashboard.selected = idx;
+                                        }
+                                    }
+                                }
+                            }
                         }
                     },
                     _ => {},
                 }
             },
             InputEvent::CursorMove { x, y } => {
-                self.taskbar.set_hover(*x, *y, &self.active_theme);
+                self.taskbar.set_hover(*x, *y);
                 self.wm
                     .handle_input(&InputEvent::CursorMove { x: *x, y: *y }, &mut self.sdi);
             },
@@ -326,34 +349,71 @@ impl OasisWasm {
                 }
             },
             InputEvent::ButtonPress(Button::Start) => {
-                self.mode = Mode::Terminal;
-            },
-            InputEvent::TextInput(ch) => {
-                if self.wm.active_window() == Some("browser")
-                    && let Some(ref mut bw) = self.browser
-                {
-                    bw.handle_input(&InputEvent::TextInput(*ch), &self.vfs);
+                if !self.skin.features.window_manager {
+                    self.mode = Mode::Terminal;
                 }
             },
-            InputEvent::Backspace => {
-                if self.wm.active_window() == Some("browser")
-                    && let Some(ref mut bw) = self.browser
-                {
-                    bw.handle_input(&InputEvent::Backspace, &self.vfs);
-                }
+            InputEvent::TextInput(ch) => match self.wm.active_window() {
+                Some("browser") => {
+                    if let Some(ref mut bw) = self.browser {
+                        bw.handle_input(&InputEvent::TextInput(*ch), &self.vfs);
+                    }
+                },
+                Some("terminal") => {
+                    self.input_buf.push(*ch);
+                },
+                _ => {},
             },
-            InputEvent::MouseWheel { delta } => {
-                if self.wm.active_window() == Some("browser")
-                    && let Some(ref mut bw) = self.browser
-                {
-                    bw.handle_input(&InputEvent::MouseWheel { delta: *delta }, &self.vfs);
-                }
+            InputEvent::Backspace => match self.wm.active_window() {
+                Some("browser") => {
+                    if let Some(ref mut bw) = self.browser {
+                        bw.handle_input(&InputEvent::Backspace, &self.vfs);
+                    }
+                },
+                Some("terminal") => {
+                    self.input_buf.pop();
+                },
+                _ => {},
+            },
+            InputEvent::MouseWheel { delta } => match self.wm.active_window() {
+                Some("browser") => {
+                    if let Some(ref mut bw) = self.browser {
+                        bw.handle_input(&InputEvent::MouseWheel { delta: *delta }, &self.vfs);
+                    }
+                },
+                Some("terminal") => {
+                    let len = self.output_lines.len() + 1;
+                    let max_visible = terminal_sdi::visible_output_lines(&self.active_theme);
+                    if len > max_visible {
+                        let max_offset = len - max_visible;
+                        if *delta < 0 {
+                            self.terminal_scroll_offset = (self.terminal_scroll_offset
+                                + (-*delta as usize) * 3)
+                                .min(max_offset);
+                        } else {
+                            self.terminal_scroll_offset = self
+                                .terminal_scroll_offset
+                                .saturating_sub(*delta as usize * 3);
+                        }
+                    }
+                },
+                _ => {},
             },
             InputEvent::ButtonPress(btn) => {
                 if let Some(active_id) = self.wm.active_window().map(|s| s.to_string()) {
                     if active_id == "browser" {
                         if let Some(ref mut bw) = self.browser {
                             bw.handle_input(&InputEvent::ButtonPress(*btn), &self.vfs);
+                        }
+                    } else if active_id == "terminal" && *btn == Button::Confirm {
+                        // Execute command in windowed terminal.
+                        let line = self.input_buf.clone();
+                        self.input_buf.clear();
+                        self.terminal_scroll_offset = 0;
+                        if !line.is_empty() {
+                            self.output_lines.push(format!("> {line}"));
+                            self.execute_terminal_command(&line);
+                            trim_output(&mut self.output_lines);
                         }
                     } else if let Some((_, runner)) = self
                         .open_runners

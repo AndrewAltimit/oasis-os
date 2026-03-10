@@ -292,6 +292,7 @@ fn main() -> Result<()> {
                 &state.browser_config,
                 &vfs,
                 &state.net.tls_provider,
+                state.skin.features.window_manager,
             );
             launch::apply_launch(result, &mut state.mode);
             log::info!("Auto-launched app: {}", app.title);
@@ -365,7 +366,7 @@ fn main() -> Result<()> {
 
             let result = match state.mode {
                 Mode::Osk => input::handle_osk_input(event, &mut state, &mut sdi),
-                Mode::Desktop => input::handle_desktop_input(event, &mut state, &mut sdi, &vfs),
+                Mode::Desktop => input::handle_desktop_input(event, &mut state, &mut sdi, &mut vfs),
                 Mode::App => input::handle_app_input(event, &mut state, &mut sdi, &vfs),
                 _ => input::handle_default_input(event, &mut state, &mut sdi, &mut vfs),
             };

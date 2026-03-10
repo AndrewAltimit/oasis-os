@@ -89,14 +89,32 @@ pub fn update_sdi(state: &mut AppState, sdi: &mut SdiRegistry) {
         Mode::Desktop => {
             terminal_sdi::set_terminal_visible(sdi, false);
             AppRunner::hide_sdi(sdi);
-            state.ui.dashboard.hide_sdi(sdi);
             terminal_sdi::hide_media_page(sdi);
-            state.ui.start_menu.close();
-            state.ui.start_menu.hide_sdi(sdi);
+
+            // Sync terminal output to the windowed terminal runner.
+            if let Some((_, runner)) = state
+                .content
+                .open_runners
+                .iter_mut()
+                .find(|(id, _)| id == "terminal")
+            {
+                let mut lines = state.terminal.output_lines.clone();
+                let prompt = format!("> {}", state.terminal.input_buf);
+                lines.push(prompt);
+                runner.set_lines(lines, state.terminal.scroll_offset);
+            }
+            // Keep dashboard icons visible behind windows.
+            if state.ui.bottom_bar.active_tab == MediaTab::None {
+                state.ui.dashboard.update_sdi(sdi, &state.active_theme);
+            } else {
+                state.ui.dashboard.hide_sdi(sdi);
+            }
             if state.content.fullscreen_app.is_some() {
                 StatusBar::hide_sdi(sdi);
                 BottomBar::hide_sdi(sdi);
                 state.ui.taskbar.hide_sdi(sdi);
+                state.ui.start_menu.close();
+                state.ui.start_menu.hide_sdi(sdi);
                 // Hide wallpaper so it doesn't bleed through.
                 if let Ok(obj) = sdi.get_mut("wallpaper") {
                     obj.visible = false;
@@ -115,7 +133,11 @@ pub fn update_sdi(state: &mut AppState, sdi: &mut SdiRegistry) {
                     &state.active_theme,
                     state.wm.windows(),
                     state.wm.active_window(),
+                    state.skin.features.start_menu,
                 );
+                if state.skin.features.start_menu {
+                    state.ui.start_menu.update_sdi(sdi, &state.active_theme);
+                }
             }
         },
         Mode::Osk => {

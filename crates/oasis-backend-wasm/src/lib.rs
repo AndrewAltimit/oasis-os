@@ -917,14 +917,32 @@ impl OasisWasm {
             Mode::Desktop => {
                 terminal_sdi::set_terminal_visible(&mut self.sdi, false);
                 AppRunner::hide_sdi(&mut self.sdi);
-                self.dashboard.hide_sdi(&mut self.sdi);
                 terminal_sdi::hide_media_page(&mut self.sdi);
-                self.start_menu.close();
-                self.start_menu.hide_sdi(&mut self.sdi);
+
+                // Sync terminal output to the windowed terminal runner.
+                if let Some((_, runner)) = self
+                    .open_runners
+                    .iter_mut()
+                    .find(|(id, _)| id == "terminal")
+                {
+                    let mut lines = self.output_lines.clone();
+                    let prompt = format!("> {}", self.input_buf);
+                    lines.push(prompt);
+                    runner.set_lines(lines, self.terminal_scroll_offset);
+                }
+
+                // Keep dashboard icons visible behind windows.
+                if self.bottom_bar.active_tab == MediaTab::None {
+                    self.dashboard.update_sdi(&mut self.sdi, &self.active_theme);
+                } else {
+                    self.dashboard.hide_sdi(&mut self.sdi);
+                }
                 if self.fullscreen_app.is_some() {
                     StatusBar::hide_sdi(&mut self.sdi);
                     BottomBar::hide_sdi(&mut self.sdi);
                     self.taskbar.hide_sdi(&mut self.sdi);
+                    self.start_menu.close();
+                    self.start_menu.hide_sdi(&mut self.sdi);
                     if let Ok(obj) = self.sdi.get_mut("wallpaper") {
                         obj.visible = false;
                     }
@@ -944,6 +962,7 @@ impl OasisWasm {
                         &self.active_theme,
                         self.wm.windows(),
                         self.wm.active_window(),
+                        self.skin.features.start_menu,
                     );
                     if self.skin.features.start_menu {
                         self.start_menu
@@ -985,7 +1004,8 @@ impl OasisWasm {
     // -----------------------------------------------------------------------
 
     fn launch_app_window(&mut self, app: &AppEntry) {
-        if app.title == "Terminal" {
+        // Terminal: fullscreen mode for non-WM skins; windowed for WM skins.
+        if app.title == "Terminal" && !self.skin.features.window_manager {
             self.mode = Mode::Terminal;
             self.active_transition = Some(self.make_transition());
             return;

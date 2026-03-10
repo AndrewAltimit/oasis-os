@@ -66,13 +66,13 @@ pub fn handle_desktop_input(
     event: &InputEvent,
     state: &mut AppState,
     sdi: &mut SdiRegistry,
-    vfs: &MemoryVfs,
+    vfs: &mut MemoryVfs,
 ) -> InputResult {
     match event {
         InputEvent::Quit => return InputResult::Quit,
         InputEvent::PointerClick { x, y } => {
             // Check taskbar hit before WM (taskbar sits above bottom bar).
-            if let Some(win_id) = state.ui.taskbar.hit_test(*x, *y, &state.active_theme) {
+            if let Some(win_id) = state.ui.taskbar.hit_test(*x, *y) {
                 let win_id = win_id.to_string();
                 if state.wm.active_window() == Some(win_id.as_str()) {
                     // Active window -- minimize it.
@@ -130,16 +130,50 @@ pub fn handle_desktop_input(
                         }
                     }
                 },
-                WmEvent::DesktopClick(_, _) => {
+                WmEvent::DesktopClick(dx, dy) => {
                     if state.wm.window_count() == 0 {
                         state.mode = Mode::Dashboard;
+                    } else if state.ui.bottom_bar.active_tab == MediaTab::None {
+                        // Forward desktop clicks to dashboard icons.
+                        let cfg = &state.ui.dashboard.config;
+                        let gx = dx - cfg.grid_x;
+                        let gy = dy - cfg.grid_y;
+                        if gx >= 0 && gy >= 0 {
+                            let col = gx as usize / cfg.cell_w as usize;
+                            let row = gy as usize / cfg.cell_h as usize;
+                            if col < cfg.grid_cols as usize && row < cfg.grid_rows as usize {
+                                let idx = row * cfg.grid_cols as usize + col;
+                                let page_apps = state.ui.dashboard.current_page_apps().len();
+                                if idx < page_apps {
+                                    if state.ui.dashboard.selected == idx {
+                                        if let Some(app) = state.ui.dashboard.selected_app() {
+                                            let app = app.clone();
+                                            let result = launch::launch_app_window(
+                                                &app,
+                                                &mut state.wm,
+                                                sdi,
+                                                &mut state.content.open_runners,
+                                                &mut state.content.browser,
+                                                &state.browser_config,
+                                                vfs,
+                                                &state.net.tls_provider,
+                                                state.skin.features.window_manager,
+                                            );
+                                            launch::apply_launch(result, &mut state.mode);
+                                        }
+                                    } else {
+                                        state.ui.dashboard.selected = idx;
+                                    }
+                                }
+                            }
+                        }
                     }
                 },
                 _ => {},
             }
         },
         InputEvent::CursorMove { x, y } => {
-            state.ui.taskbar.set_hover(*x, *y, &state.active_theme);
+            state.ui.taskbar.set_hover(*x, *y);
             state
                 .wm
                 .handle_input(&InputEvent::CursorMove { x: *x, y: *y }, sdi);
@@ -184,25 +218,53 @@ pub fn handle_desktop_input(
         InputEvent::ButtonPress(Button::Start) => {
             state.mode = Mode::Terminal;
         },
-        InputEvent::TextInput(ch) => {
-            if state.wm.active_window() == Some("browser")
-                && let Some(ref mut bw) = state.content.browser
-            {
-                bw.handle_input(&InputEvent::TextInput(*ch), vfs);
-            }
+        InputEvent::TextInput(ch) => match state.wm.active_window() {
+            Some("browser") => {
+                if let Some(ref mut bw) = state.content.browser {
+                    bw.handle_input(&InputEvent::TextInput(*ch), vfs);
+                }
+            },
+            Some("terminal") => {
+                state.terminal.input_buf.push(*ch);
+            },
+            _ => {},
         },
-        InputEvent::Backspace => {
-            if state.wm.active_window() == Some("browser")
-                && let Some(ref mut bw) = state.content.browser
-            {
-                bw.handle_input(&InputEvent::Backspace, vfs);
-            }
+        InputEvent::Backspace => match state.wm.active_window() {
+            Some("browser") => {
+                if let Some(ref mut bw) = state.content.browser {
+                    bw.handle_input(&InputEvent::Backspace, vfs);
+                }
+            },
+            Some("terminal") => {
+                state.terminal.input_buf.pop();
+            },
+            _ => {},
         },
         InputEvent::MouseWheel { delta } => {
-            if state.wm.active_window() == Some("browser")
-                && let Some(ref mut bw) = state.content.browser
-            {
-                bw.handle_input(&InputEvent::MouseWheel { delta: *delta }, vfs);
+            match state.wm.active_window() {
+                Some("browser") => {
+                    if let Some(ref mut bw) = state.content.browser {
+                        bw.handle_input(&InputEvent::MouseWheel { delta: *delta }, vfs);
+                    }
+                },
+                Some("terminal") => {
+                    let len = state.terminal.output_lines.len() + 1; // +1 for prompt
+                    let max_visible = terminal_sdi::visible_output_lines(&state.active_theme);
+                    if len > max_visible {
+                        let max_offset = len - max_visible;
+                        if *delta < 0 {
+                            state.terminal.scroll_offset = (state.terminal.scroll_offset
+                                + (-*delta as usize) * 3)
+                                .min(max_offset);
+                        } else {
+                            state.terminal.scroll_offset = state
+                                .terminal
+                                .scroll_offset
+                                .saturating_sub(*delta as usize * 3);
+                        }
+                    }
+                },
+                _ => {},
             }
         },
         InputEvent::ButtonPress(btn) => {
@@ -211,6 +273,35 @@ pub fn handle_desktop_input(
                     if let Some(ref mut bw) = state.content.browser {
                         bw.handle_input(&InputEvent::ButtonPress(*btn), vfs);
                     }
+                } else if active_id == "terminal" && *btn == Button::Confirm {
+                    // Execute command in windowed terminal.
+                    let line = state.terminal.input_buf.clone();
+                    state.terminal.input_buf.clear();
+                    state.terminal.scroll_offset = 0;
+                    if !line.is_empty() {
+                        state.terminal.output_lines.push(format!("> {line}"));
+                        let pending_skin_swap;
+                        {
+                            let mut env = Environment {
+                                cwd: state.terminal.cwd.clone(),
+                                vfs,
+                                power: Some(&state.platform),
+                                time: Some(&state.platform),
+                                usb: Some(&state.platform),
+                                network: None,
+                                tls: Some(&state.net.tls_provider),
+                                stdin: None,
+                                stderr: String::new(),
+                            };
+                            let result = state.terminal.cmd_reg.execute(&line, &mut env);
+                            state.terminal.cwd = env.cwd;
+                            pending_skin_swap = commands::process_command_output(result, state);
+                        }
+                        if let Some(name) = pending_skin_swap {
+                            commands::apply_skin_swap(&name, state, sdi, vfs);
+                        }
+                    }
+                    commands::trim_output(&mut state.terminal.output_lines);
                 } else if let Some((_, runner)) = state
                     .content
                     .open_runners
@@ -310,6 +401,7 @@ pub fn handle_default_input(
                     &state.browser_config,
                     vfs,
                     &state.net.tls_provider,
+                    state.skin.features.window_manager,
                 );
                 launch::apply_launch(result, &mut state.mode);
                 state.active_transition = Some(launch::make_transition(
@@ -362,6 +454,7 @@ pub fn handle_default_input(
                                         &state.browser_config,
                                         vfs,
                                         &state.net.tls_provider,
+                                        state.skin.features.window_manager,
                                     );
                                     launch::apply_launch(result, &mut state.mode);
                                     state.active_transition = Some(launch::make_transition(
@@ -550,6 +643,7 @@ fn handle_start_menu_action(
                     &state.browser_config,
                     vfs,
                     &state.net.tls_provider,
+                    state.skin.features.window_manager,
                 );
                 launch::apply_launch(result, &mut state.mode);
                 state.active_transition = Some(launch::make_transition(
@@ -888,7 +982,7 @@ mod tests {
 
     #[test]
     fn app_no_runner_continues() {
-        let (mut state, mut sdi, vfs) = make_test_state();
+        let (mut state, mut sdi, mut vfs) = make_test_state();
         state.mode = Mode::App;
         state.content.app_runner = None;
         // Without a runner, all events (including Quit) are no-ops.
@@ -899,7 +993,7 @@ mod tests {
             &vfs,
         );
         assert_eq!(result, InputResult::Continue);
-        let result = handle_app_input(&InputEvent::Quit, &mut state, &mut sdi, &vfs);
+        let result = handle_app_input(&InputEvent::Quit, &mut state, &mut sdi, &mut vfs);
         assert_eq!(result, InputResult::Continue);
     }
 
@@ -907,35 +1001,35 @@ mod tests {
 
     #[test]
     fn desktop_quit_returns_quit() {
-        let (mut state, mut sdi, vfs) = make_test_state();
+        let (mut state, mut sdi, mut vfs) = make_test_state();
         state.mode = Mode::Desktop;
-        let result = handle_desktop_input(&InputEvent::Quit, &mut state, &mut sdi, &vfs);
+        let result = handle_desktop_input(&InputEvent::Quit, &mut state, &mut sdi, &mut vfs);
         assert_eq!(result, InputResult::Quit);
     }
 
     #[test]
     fn desktop_start_switches_to_terminal() {
-        let (mut state, mut sdi, vfs) = make_test_state();
+        let (mut state, mut sdi, mut vfs) = make_test_state();
         state.mode = Mode::Desktop;
         handle_desktop_input(
             &InputEvent::ButtonPress(Button::Start),
             &mut state,
             &mut sdi,
-            &vfs,
+            &mut vfs,
         );
         assert_eq!(state.mode, Mode::Terminal);
     }
 
     #[test]
     fn desktop_cancel_no_windows_returns_to_dashboard() {
-        let (mut state, mut sdi, vfs) = make_test_state();
+        let (mut state, mut sdi, mut vfs) = make_test_state();
         state.mode = Mode::Desktop;
         // No windows open.
         handle_desktop_input(
             &InputEvent::ButtonPress(Button::Cancel),
             &mut state,
             &mut sdi,
-            &vfs,
+            &mut vfs,
         );
         assert_eq!(state.mode, Mode::Dashboard);
     }
@@ -1152,13 +1246,13 @@ mod tests {
 
     #[test]
     fn desktop_cursor_move_does_not_change_mode() {
-        let (mut state, mut sdi, vfs) = make_test_state();
+        let (mut state, mut sdi, mut vfs) = make_test_state();
         state.mode = Mode::Desktop;
         let result = handle_desktop_input(
             &InputEvent::CursorMove { x: 100, y: 50 },
             &mut state,
             &mut sdi,
-            &vfs,
+            &mut vfs,
         );
         assert_eq!(result, InputResult::Continue);
         assert_eq!(state.mode, Mode::Desktop);
@@ -1166,26 +1260,26 @@ mod tests {
 
     #[test]
     fn desktop_pointer_release_does_not_change_mode() {
-        let (mut state, mut sdi, vfs) = make_test_state();
+        let (mut state, mut sdi, mut vfs) = make_test_state();
         state.mode = Mode::Desktop;
         let result = handle_desktop_input(
             &InputEvent::PointerRelease { x: 100, y: 50 },
             &mut state,
             &mut sdi,
-            &vfs,
+            &mut vfs,
         );
         assert_eq!(result, InputResult::Continue);
     }
 
     #[test]
     fn desktop_click_no_windows_returns_to_dashboard() {
-        let (mut state, mut sdi, vfs) = make_test_state();
+        let (mut state, mut sdi, mut vfs) = make_test_state();
         state.mode = Mode::Desktop;
         let result = handle_desktop_input(
             &InputEvent::PointerClick { x: 100, y: 50 },
             &mut state,
             &mut sdi,
-            &vfs,
+            &mut vfs,
         );
         assert_eq!(result, InputResult::Continue);
         assert_eq!(state.mode, Mode::Dashboard);
@@ -1193,19 +1287,20 @@ mod tests {
 
     #[test]
     fn desktop_text_input_without_browser_is_noop() {
-        let (mut state, mut sdi, vfs) = make_test_state();
+        let (mut state, mut sdi, mut vfs) = make_test_state();
         state.mode = Mode::Desktop;
         state.content.browser = None;
-        let result = handle_desktop_input(&InputEvent::TextInput('a'), &mut state, &mut sdi, &vfs);
+        let result =
+            handle_desktop_input(&InputEvent::TextInput('a'), &mut state, &mut sdi, &mut vfs);
         assert_eq!(result, InputResult::Continue);
     }
 
     #[test]
     fn desktop_backspace_without_browser_is_noop() {
-        let (mut state, mut sdi, vfs) = make_test_state();
+        let (mut state, mut sdi, mut vfs) = make_test_state();
         state.mode = Mode::Desktop;
         state.content.browser = None;
-        let result = handle_desktop_input(&InputEvent::Backspace, &mut state, &mut sdi, &vfs);
+        let result = handle_desktop_input(&InputEvent::Backspace, &mut state, &mut sdi, &mut vfs);
         assert_eq!(result, InputResult::Continue);
     }
 

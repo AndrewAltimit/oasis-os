@@ -109,6 +109,28 @@ impl AppRunner {
         AppAction::None
     }
 
+    /// Forward a typed character to the app delegate.
+    pub fn handle_text_input(&mut self, ch: char) {
+        if let Some(ref mut app) = self.delegate {
+            app.handle_text_input(ch);
+        }
+    }
+
+    /// Forward a backspace to the app delegate.
+    pub fn handle_backspace(&mut self) {
+        if let Some(ref mut app) = self.delegate {
+            app.handle_backspace();
+        }
+    }
+
+    /// Update the display lines (used for syncing terminal output).
+    pub fn set_lines(&mut self, lines: Vec<String>, scroll_offset: usize) {
+        if let Some(simple) = self.delegate_as_mut::<super::simple_app::SimpleApp>() {
+            simple.set_lines(lines, scroll_offset);
+        }
+        self.sync_from_delegate();
+    }
+
     /// Render app content directly into a windowed content area.
     ///
     /// Unlike `update_sdi()` which creates named SDI objects for full-screen
@@ -375,11 +397,11 @@ mod tests {
     }
 
     #[test]
-    fn terminal_app_switches_mode() {
+    fn terminal_app_confirm_is_noop() {
         let vfs = setup_vfs();
         let mut runner = AppRunner::launch(&make_app("Terminal"), &vfs);
         let action = runner.handle_input(&Button::Confirm, &vfs);
-        assert_eq!(action, AppAction::SwitchToTerminal);
+        assert_eq!(action, AppAction::None);
     }
 
     #[test]
