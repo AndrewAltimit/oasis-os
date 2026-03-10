@@ -4,7 +4,6 @@ use crate::active_theme::ActiveTheme;
 use crate::sdi::SdiRegistry;
 
 use super::runner::AppRunner;
-use oasis_app_tv_guide::guide::TvGuideState;
 
 impl AppRunner {
     /// Render the app screen as SDI objects (single-display-interface mode).
@@ -12,12 +11,6 @@ impl AppRunner {
         // Delegate to extracted app.
         if let Some(ref mut app) = self.delegate {
             app.update_sdi(sdi, at);
-            return;
-        }
-
-        // TV Guide uses its own custom grid rendering (only remaining inline app).
-        if let Some(ref mut guide) = self.tv_guide {
-            guide.update_sdi(sdi, at);
         }
     }
 
@@ -62,6 +55,6 @@ impl AppRunner {
         }
 
         // Hide TV Guide objects.
-        TvGuideState::hide_sdi(sdi);
+        oasis_app_tv_guide::TvGuideState::hide_sdi(sdi);
     }
 }

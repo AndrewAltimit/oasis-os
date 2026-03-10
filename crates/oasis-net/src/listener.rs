@@ -280,10 +280,11 @@ impl RemoteListener {
                         }
                     }
 
-                    // Guard against overlong lines.
+                    // Guard against overlong lines -- disconnect the peer.
                     if conn.read_buf.len() > MAX_LINE_LEN {
                         conn.read_buf.clear();
-                        let _ = conn.stream.write(b"error: line too long\n> ");
+                        let _ = conn.stream.write(b"error: line too long\n");
+                        to_remove.push(idx);
                     }
                 },
                 Err(e) => {

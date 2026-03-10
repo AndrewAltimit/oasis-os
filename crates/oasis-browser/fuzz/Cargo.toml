@@ -1,0 +1,31 @@
+[package]
+name = "oasis-browser-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+oasis-browser = { path = "..", default-features = false }
+
+# Prevent this from interfering with workspaces
+[workspace]
+members = ["."]
+
+[[bin]]
+name = "fuzz_html_tokenizer"
+path = "fuzz_targets/fuzz_html_tokenizer.rs"
+doc = false
+
+[[bin]]
+name = "fuzz_css_parser"
+path = "fuzz_targets/fuzz_css_parser.rs"
+doc = false
+
+[[bin]]
+name = "fuzz_html_full_pipeline"
+path = "fuzz_targets/fuzz_html_full_pipeline.rs"
+doc = false

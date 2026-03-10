@@ -500,8 +500,6 @@ pub(crate) struct StreamingBuffer {
     pub(crate) eviction_enabled: std::sync::Arc<std::sync::atomic::AtomicBool>,
     /// Whether we've logged a "waiting for data" message (avoids log spam).
     logged_wait: bool,
-    /// Whether we've logged a "gap-fill zeros" warning (avoids log spam).
-    logged_gap: bool,
 }
 
 #[cfg(feature = "_video")]
@@ -512,7 +510,6 @@ impl StreamingBuffer {
             pos: 0,
             eviction_enabled: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
             logged_wait: false,
-            logged_gap: false,
         }
     }
 
@@ -631,25 +628,18 @@ impl std::io::Read for StreamingBuffer {
                 break n;
             }
 
-            // Position is in the gap (evicted data) -- return zeros.
-            // WARNING: this feeds zeros to the demuxer which may corrupt
-            // the stream.  Log once per gap encounter so we can diagnose.
+            // Position is in the gap (evicted data) -- the sliding window
+            // has moved past this region.  Return an error so the demuxer
+            // can handle it cleanly instead of silently processing zeros.
             if self.pos < s.base_offset {
-                if !self.logged_gap {
-                    log::warn!(
-                        "TV: StreamingBuffer gap-fill zeros at {:.1}MB \
-                         (base_offset={:.1}MB, gap={:.0}KB)",
-                        self.pos as f64 / (1024.0 * 1024.0),
-                        s.base_offset as f64 / (1024.0 * 1024.0),
-                        (s.base_offset - self.pos) as f64 / 1024.0,
-                    );
-                    self.logged_gap = true;
-                }
-                let gap_remaining = (s.base_offset - self.pos) as usize;
-                let n = buf.len().min(gap_remaining);
-                buf[..n].fill(0);
-                self.pos += n as u64;
-                break n;
+                log::warn!(
+                    "TV: StreamingBuffer read from evicted region at {:.1}MB \
+                     (base_offset={:.1}MB, gap={:.0}KB)",
+                    self.pos as f64 / (1024.0 * 1024.0),
+                    s.base_offset as f64 / (1024.0 * 1024.0),
+                    (s.base_offset - self.pos) as f64 / 1024.0,
+                );
+                return Err(std::io::Error::other("read from evicted buffer region"));
             }
 
             // Position is beyond available data.

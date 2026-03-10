@@ -11,6 +11,9 @@ use oasis_types::error::{OasisError, Result};
 /// Maximum time (in seconds) to wait for an authentication response.
 const AUTH_TIMEOUT_SECS: u64 = 30;
 
+/// Maximum bytes in a single input line (guard against unbounded buffer growth).
+const MAX_LINE_LEN: usize = 16_384;
+
 /// State of the remote client connection.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ClientState {
@@ -152,6 +155,14 @@ impl RemoteClient {
                     if !line.is_empty() {
                         self.received_lines.push(line);
                     }
+                }
+
+                // Guard against unbounded buffer growth (no newline received).
+                if self.read_buf.len() > MAX_LINE_LEN {
+                    self.read_buf.clear();
+                    self.disconnect();
+                    self.received_lines
+                        .push("Error: line too long, disconnected.".to_string());
                 }
             },
             Err(oasis_types::error::OasisError::Io(ref e))
