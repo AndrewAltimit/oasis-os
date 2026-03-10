@@ -16,6 +16,13 @@ use super::{
 // PSP AAC hardware decoder
 // ---------------------------------------------------------------------------
 
+/// PSP sceAudiocodec codec type for AAC decoding.
+const CODEC_TYPE_AAC: i32 = 0x1003;
+
+/// Maximum number of AAC decoder initialization retries before giving up.
+/// Failures may be transient (e.g., temporary EDRAM shortage).
+const AAC_INIT_MAX_RETRIES: u32 = 3;
+
 /// Raw PSP AAC hardware decoder using `sceAudiocodec*` syscalls directly.
 ///
 /// Unlike the generic `AudiocodecDecoder`, this sets `buf[10] = sample_rate`
@@ -42,20 +49,19 @@ impl PspAacDecoder {
 
         let mut buf = Box::new(AacCodecBuf { words: [0u32; 65] });
         let ptr = buf.words.as_mut_ptr();
-        let codec_type = 0x1003; // AAC
 
         // SAFETY: sceAudiocodec operates on the 64-byte-aligned buffer.
         // Flush cache before each codec call (DMA coherency).
         unsafe {
             sys::sceKernelDcacheWritebackInvalidateAll();
-            let ret = sys::sceAudiocodecCheckNeedMem(ptr, codec_type);
+            let ret = sys::sceAudiocodecCheckNeedMem(ptr, CODEC_TYPE_AAC);
             if ret < 0 {
                 io_log(&format!("[AUDIO] CheckNeedMem failed: {ret:#010x}"));
                 return Err(ret);
             }
 
             sys::sceKernelDcacheWritebackInvalidateAll();
-            let ret = sys::sceAudiocodecGetEDRAM(ptr, codec_type);
+            let ret = sys::sceAudiocodecGetEDRAM(ptr, CODEC_TYPE_AAC);
             if ret < 0 {
                 io_log(&format!("[AUDIO] GetEDRAM failed: {ret:#010x}"));
                 return Err(ret);
@@ -65,7 +71,7 @@ impl PspAacDecoder {
             buf.words[10] = sample_rate;
 
             sys::sceKernelDcacheWritebackInvalidateAll();
-            let ret = sys::sceAudiocodecInit(ptr, codec_type);
+            let ret = sys::sceAudiocodecInit(ptr, CODEC_TYPE_AAC);
             if ret < 0 {
                 io_log(&format!("[AUDIO] AudiocodecInit failed: {ret:#010x}"));
                 sys::sceAudiocodecReleaseEDRAM(ptr);
@@ -101,7 +107,7 @@ impl PspAacDecoder {
         }
 
         // SAFETY: sceAudiocodecDecode operates on the aligned buffer.
-        let ret = unsafe { sys::sceAudiocodecDecode(words.as_mut_ptr(), 0x1003) };
+        let ret = unsafe { sys::sceAudiocodecDecode(words.as_mut_ptr(), CODEC_TYPE_AAC) };
         if ret < 0 {
             return Err(ret);
         }
@@ -127,6 +133,7 @@ fn decode_aac_frame(
     player: &mut AudioPlayer,
     aac_decoder: &mut Option<PspAacDecoder>,
     aac_sample_rate: u32,
+    aac_init_failures: &mut u32,
 ) {
     use psp::audio::{AudioChannel, AudioFormat};
 
@@ -138,18 +145,31 @@ fn decode_aac_frame(
         return;
     }
 
-    // Lazily create AAC decoder (only once, don't retry on failure).
+    // Lazily create AAC decoder with retry on transient failures.
     if aac_decoder.is_none() {
+        if *aac_init_failures >= AAC_INIT_MAX_RETRIES {
+            // Permanently failed after max retries — drop frames silently.
+            return;
+        }
         io_log(&format!(
-            "[AUDIO] creating AAC decoder (rate={aac_sample_rate})..."
+            "[AUDIO] creating AAC decoder (rate={aac_sample_rate}, \
+             attempt {}/{})",
+            *aac_init_failures + 1,
+            AAC_INIT_MAX_RETRIES,
         ));
         match PspAacDecoder::init(aac_sample_rate) {
             Ok(dec) => {
                 io_log("[AUDIO] AAC decoder init OK");
                 *aac_decoder = Some(dec);
+                *aac_init_failures = 0;
             },
             Err(e) => {
-                io_log(&format!("[AUDIO] AAC decoder init failed: {e:#010x}"));
+                *aac_init_failures += 1;
+                io_log(&format!(
+                    "[AUDIO] AAC decoder init failed: {e:#010x} \
+                     (attempt {}/{})",
+                    *aac_init_failures, AAC_INIT_MAX_RETRIES,
+                ));
                 return;
             },
         }
@@ -215,6 +235,7 @@ pub(super) fn audio_thread_fn() {
     let mut radio: Option<RadioStreamer> = None;
     let mut aac_decoder: Option<PspAacDecoder> = None;
     let mut aac_sample_rate: u32 = 0;
+    let mut aac_init_failures: u32 = 0;
 
     loop {
         match AUDIO_QUEUE.pop() {
@@ -331,18 +352,26 @@ pub(super) fn audio_thread_fn() {
             }) => {
                 // Store config for lazy decoder init.
                 aac_sample_rate = sample_rate;
-                // Reset decoder if sample rate changed.
+                // Reset decoder and retry counter if sample rate changed.
                 aac_decoder = None;
+                aac_init_failures = 0;
                 io_log(&format!("[AUDIO] AAC config: rate={sample_rate}"));
             },
             Some(AudioCmd::VideoAudioAac { data }) => {
                 // Decode raw AAC frame via sceAudiocodec and output PCM.
-                decode_aac_frame(&data, &mut player, &mut aac_decoder, aac_sample_rate);
+                decode_aac_frame(
+                    &data,
+                    &mut player,
+                    &mut aac_decoder,
+                    aac_sample_rate,
+                    &mut aac_init_failures,
+                );
             },
             Some(AudioCmd::VideoAudioStop) => {
                 // Video playback ended -- flush AAC decoder state.
                 aac_decoder = None;
                 aac_sample_rate = 0;
+                aac_init_failures = 0;
             },
             Some(AudioCmd::Shutdown) => {
                 player.stop();

@@ -167,6 +167,7 @@ impl FfmpegDecoder {
         };
         if avio_ctx.is_null() {
             // SAFETY: Free the buffer we allocated since avio_alloc_context failed.
+            // SAFETY: avio_buffer was allocated by av_malloc and not yet owned by an AVIO context.
             unsafe { ffi::av_free(avio_buffer as *mut std::ffi::c_void) };
             return Err(VideoError::Demux("avio_alloc_context failed".into()));
         }
@@ -174,6 +175,7 @@ impl FfmpegDecoder {
         // SAFETY: Allocate format context and assign our AVIO.
         let format_ctx = unsafe { ffi::avformat_alloc_context() };
         if format_ctx.is_null() {
+            // SAFETY: avio_ctx was successfully allocated above; free it on error.
             unsafe { ffi::avio_context_free(&mut (avio_ctx as *mut _)) };
             return Err(VideoError::Demux("avformat_alloc_context failed".into()));
         }
@@ -333,8 +335,10 @@ impl FfmpegDecoder {
             return Err(VideoError::Decode("avcodec_alloc_context3 failed".into()));
         }
 
+        // SAFETY: ctx and codecpar are valid pointers allocated above.
         let ret = unsafe { ffi::avcodec_parameters_to_context(ctx, codecpar) };
         if ret < 0 {
+            // SAFETY: ctx was allocated by avcodec_alloc_context3; free on error.
             unsafe { ffi::avcodec_free_context(&mut ctx) };
             return Err(VideoError::Decode(format!(
                 "avcodec_parameters_to_context: {}",
@@ -342,8 +346,10 @@ impl FfmpegDecoder {
             )));
         }
 
+        // SAFETY: ctx is configured, codec is valid; open the decoder.
         let ret = unsafe { ffi::avcodec_open2(ctx, codec, std::ptr::null_mut()) };
         if ret < 0 {
+            // SAFETY: ctx was allocated by avcodec_alloc_context3; free on error.
             unsafe { ffi::avcodec_free_context(&mut ctx) };
             return Err(VideoError::Decode(format!(
                 "avcodec_open2: {}",

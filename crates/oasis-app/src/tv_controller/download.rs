@@ -21,6 +21,30 @@ const MAX_RECONNECTS: u32 = 5;
 #[cfg(feature = "_video")]
 pub(crate) const SHORT_SEEK_THRESHOLD: u64 = 4 * 1024 * 1024; // 4 MB
 
+/// Maximum HTTP header size before aborting (prevents unbounded allocation
+/// from malicious or broken servers sending endless header data).
+#[cfg(feature = "_video")]
+const MAX_HEADER_SIZE: usize = 64 * 1024; // 64 KB
+
+/// Check if an I/O error is a WouldBlock (non-blocking socket not ready).
+#[cfg(feature = "_video")]
+fn is_would_block(e: &(impl std::error::Error + 'static)) -> bool {
+    // Try to extract io::ErrorKind directly; fall back to string matching
+    // for wrapped error types (e.g. OasisError::Io).
+    if let Some(io_err) = <dyn std::error::Error>::downcast_ref::<std::io::Error>(e) {
+        return io_err.kind() == std::io::ErrorKind::WouldBlock;
+    }
+    // Walk the source chain for wrapped io::Error.
+    let mut source = e.source();
+    while let Some(src) = source {
+        if let Some(io_err) = src.downcast_ref::<std::io::Error>() {
+            return io_err.kind() == std::io::ErrorKind::WouldBlock;
+        }
+        source = src.source();
+    }
+    false
+}
+
 /// Fetch a byte range from a URL via HTTP Range request.
 /// Returns the raw body bytes on success.
 ///
@@ -78,8 +102,7 @@ fn fetch_range_inner(
         match stream.write(&req_bytes[written..]) {
             Ok(n) => written += n,
             Err(e) => {
-                let msg = format!("{e}");
-                if msg.contains("WouldBlock") || msg.contains("would block") {
+                if is_would_block(&e) {
                     std::thread::sleep(std::time::Duration::from_millis(1));
                     continue;
                 }
@@ -108,8 +131,7 @@ fn fetch_range_inner(
                 deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
             },
             Err(e) => {
-                let msg = format!("{e}");
-                if msg.contains("WouldBlock") || msg.contains("would block") {
+                if is_would_block(&e) {
                     std::thread::sleep(std::time::Duration::from_millis(1));
                     continue;
                 }
@@ -330,7 +352,7 @@ pub(crate) fn parse_tail_for_moov(
             (None, None) => {
                 // Cannot estimate -- retain moov and let decoder seek.
                 let mut s = buffer.state.lock().unwrap_or_else(|e| e.into_inner());
-                s.moov = Some((file_off, moov_data));
+                s.moov = Some((file_off, std::sync::Arc::new(moov_data)));
                 buffer.condvar.notify_all();
                 return;
             },
@@ -345,8 +367,9 @@ pub(crate) fn parse_tail_for_moov(
             seek_byte as f64 / (1024.0 * 1024.0),
             start_from as f64 / (1024.0 * 1024.0),
         );
+        let moov_arc = std::sync::Arc::new(moov_data);
         let mut s = buffer.state.lock().unwrap_or_else(|e| e.into_inner());
-        s.moov = Some((file_off, moov_data));
+        s.moov = Some((file_off, std::sync::Arc::clone(&moov_arc)));
         // Set base_offset so the main download loop knows where
         // to restart from (checked via `restart_offset`).
         if start_from > s.bytes_received + SHORT_SEEK_THRESHOLD {
@@ -373,7 +396,7 @@ pub(crate) fn parse_tail_for_moov(
     }
 
     let mut s = buffer.state.lock().unwrap_or_else(|e| e.into_inner());
-    s.moov = Some((file_off, moov_data));
+    s.moov = Some((file_off, std::sync::Arc::new(moov_data)));
     buffer.condvar.notify_all();
 }
 
@@ -469,8 +492,7 @@ fn open_range_connection_inner(
         match stream.write(&req_bytes[written..]) {
             Ok(n) => written += n,
             Err(e) => {
-                let msg = format!("{e}");
-                if msg.contains("WouldBlock") || msg.contains("would block") {
+                if is_would_block(&e) {
                     std::thread::sleep(std::time::Duration::from_millis(1));
                     continue;
                 }
@@ -494,13 +516,15 @@ fn open_range_connection_inner(
             },
             Ok(n) => {
                 header_buf.extend_from_slice(&buf[..n]);
+                if header_buf.len() > MAX_HEADER_SIZE {
+                    return Err("HTTP headers too large".into());
+                }
                 if let Some(pos) = header_buf.windows(4).position(|w| w == b"\r\n\r\n") {
                     break pos + 4;
                 }
             },
             Err(e) => {
-                let msg = format!("{e}");
-                if msg.contains("WouldBlock") || msg.contains("would block") {
+                if is_would_block(&e) {
                     std::thread::sleep(std::time::Duration::from_millis(1));
                     continue;
                 }
@@ -689,8 +713,7 @@ pub(crate) fn stream_download_range(
                     last_data_time = std::time::Instant::now();
                 },
                 Err(e) => {
-                    let msg = format!("{e}");
-                    if msg.contains("WouldBlock") || msg.contains("would block") {
+                    if is_would_block(&e) {
                         // Check for stall.
                         if last_data_time.elapsed() > STALL_TIMEOUT {
                             if reconnects >= MAX_RECONNECTS {
@@ -722,7 +745,7 @@ pub(crate) fn stream_download_range(
                     if reconnects < MAX_RECONNECTS && current_offset < total_size {
                         reconnects += 1;
                         log::warn!(
-                            "TV: read error ({msg}), reconnect \
+                            "TV: read error ({e}), reconnect \
                              {reconnects}/{MAX_RECONNECTS} from {:.1}MB",
                             current_offset as f64 / (1024.0 * 1024.0),
                         );
@@ -734,7 +757,7 @@ pub(crate) fn stream_download_range(
                         break 'outer; // partial success
                     }
                     buffer.finish();
-                    return Err(format!("read: {msg}"));
+                    return Err(format!("read: {e}"));
                 },
             }
         }
@@ -804,8 +827,7 @@ fn stream_download_inner(
         match stream.write(&req_bytes[written..]) {
             Ok(n) => written += n,
             Err(e) => {
-                let msg = format!("{e}");
-                if msg.contains("WouldBlock") || msg.contains("would block") {
+                if is_would_block(&e) {
                     std::thread::sleep(std::time::Duration::from_millis(1));
                     continue;
                 }
@@ -827,13 +849,15 @@ fn stream_download_inner(
             Ok(0) => return Err("connection closed before headers complete".to_string()),
             Ok(n) => {
                 header_buf.extend_from_slice(&buf[..n]);
+                if header_buf.len() > MAX_HEADER_SIZE {
+                    return Err("HTTP headers too large".into());
+                }
                 if let Some(pos) = header_buf.windows(4).position(|w| w == b"\r\n\r\n") {
                     break (pos, pos + 4);
                 }
             },
             Err(e) => {
-                let msg = format!("{e}");
-                if msg.contains("WouldBlock") || msg.contains("would block") {
+                if is_would_block(&e) {
                     std::thread::sleep(std::time::Duration::from_millis(1));
                     continue;
                 }
@@ -924,50 +948,44 @@ fn stream_download_inner(
         // when the tail probe finds moov (and clears the buffer), we
         // immediately issue the Range restart instead of sleeping.
         if !checked_seek_restart && seek_secs > 0 && content_length > 10 * 1024 * 1024 {
+            // CRITICAL: The restart decision and buffer mutation must happen
+            // inside a single lock acquisition to prevent a race with the
+            // tail probe thread (which also mutates base_offset/buf under
+            // the same lock). Without this, a stale base_offset read could
+            // cause a Range request to the wrong byte offset.
             let restart_from = {
-                let s = buffer.state.lock().unwrap_or_else(|e| e.into_inner());
+                let mut s = buffer.state.lock().unwrap_or_else(|e| e.into_inner());
                 if s.moov.is_some() {
                     checked_seek_restart = true;
                     // If base_offset was moved far ahead by the tail probe
                     // (moov-at-end case), restart from there.
-                    if s.base_offset > 4 * 1024 * 1024 && s.buf.len() < 1024 * 1024 {
+                    let start_from = if s.base_offset > 4 * 1024 * 1024 && s.buf.len() < 1024 * 1024
+                    {
                         Some(s.base_offset)
                     } else {
                         // moov found at start -- check if seek position is far ahead.
                         check_moov_at_start_restart(&s, seek_secs)
+                    };
+                    if let Some(start_from) = start_from {
+                        // Retain header for symphonia probe after restart.
+                        // Only do this for moov-at-start (base_offset == 0)
+                        // to avoid overwriting correct moov from tail probe.
+                        if s.base_offset == 0 && !s.buf.is_empty() {
+                            let current_len = s.header.as_ref().map_or(0, |h| h.len());
+                            if s.buf.len() > current_len {
+                                s.header = Some(s.buf.clone());
+                            }
+                        }
+                        s.base_offset = start_from;
+                        s.bytes_received = start_from;
+                        s.buf.clear();
                     }
+                    start_from
                 } else {
                     None
                 }
             };
             if let Some(start_from) = restart_from {
-                // Clear buffer and set base_offset for the restart.
-                {
-                    let mut s = buffer.state.lock().unwrap_or_else(|e| e.into_inner());
-                    // For moov-at-start: retain the entire current buffer
-                    // (ftyp + moov + mdat header) so symphonia can probe
-                    // the full atom structure after restart.  At this point
-                    // the buffer is typically only ~1-2MB.
-                    // For moov-at-end: the tail probe already stored moov
-                    // separately; only retain if base_offset is still 0
-                    // (moov-at-start case).
-                    // For moov-at-start: retain the current buffer as a
-                    // combined header (ftyp + moov + mdat leader) so
-                    // symphonia can probe after the Range restart.
-                    // Only do this if moov hasn't already been retained
-                    // separately by the tail probe (moov-at-end case) --
-                    // otherwise we'd overwrite the correct moov data with
-                    // a raw buffer that isn't a valid moov atom.
-                    if s.base_offset == 0 && !s.buf.is_empty() {
-                        let current_len = s.header.as_ref().map_or(0, |h| h.len());
-                        if s.buf.len() > current_len {
-                            s.header = Some(s.buf.clone());
-                        }
-                    }
-                    s.base_offset = start_from;
-                    s.bytes_received = start_from;
-                    s.buf.clear();
-                }
                 // Reset decoder_pos so throttle doesn't think we're
                 // far ahead of the decoder (decoder_pos was left at the
                 // probe position ~1MB while bytes_received jumps to
@@ -1082,8 +1100,7 @@ fn stream_download_inner(
                 deadline = std::time::Instant::now() + std::time::Duration::from_secs(120);
             },
             Err(e) => {
-                let msg = format!("{e}");
-                if msg.contains("WouldBlock") || msg.contains("would block") {
+                if is_would_block(&e) {
                     std::thread::sleep(std::time::Duration::from_millis(1));
                     continue;
                 }

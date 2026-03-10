@@ -125,6 +125,12 @@ impl PspBackend {
             }
 
             // Bind the font atlas; the white texel is at the bottom-right corner.
+            // Validate that the atlas pointer is in cached KSEG0 range before
+            // converting to uncached KSEG1 (ORing with 0x4000_0000).
+            debug_assert!(
+                !self.font_atlas_ptr.is_null(),
+                "font_atlas_ptr must be initialized before rendering"
+            );
             let uncached_atlas = psp::cache::UncachedPtr::from_cached_addr(self.font_atlas_ptr)
                 .as_ptr() as *const c_void;
             sys::sceGuTexMode(TexturePixelFormat::Psm8888, 0, 0, 0);

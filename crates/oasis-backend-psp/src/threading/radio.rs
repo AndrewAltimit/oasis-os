@@ -154,13 +154,15 @@ pub(super) fn handle_radio_connect(url: String) {
     let initial_data = hdr_buf[header_end..hdr_len].to_vec();
 
     // Set non-blocking for streaming.
+    // PSP socket constants: SOL_SOCKET=0xFFFF, SO_NONBLOCK=0x0080
+    // (see network.rs for full documentation of PSP-specific values).
     let nb: i32 = 1;
     // SAFETY: SO_NONBLOCK is a PSP-specific socket option.
     unsafe {
         psp::sys::sceNetInetSetsockopt(
             fd,
-            0xFFFF, // SOL_SOCKET
-            0x0080, // SO_NONBLOCK
+            crate::network::PSP_SOL_SOCKET,
+            crate::network::PSP_SO_NONBLOCK,
             &nb as *const i32 as *const c_void,
             core::mem::size_of::<i32>() as u32,
         );

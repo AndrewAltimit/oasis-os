@@ -17,6 +17,17 @@
 //! `oasis_*` function from multiple threads concurrently is undefined behavior.
 //! If you need to interact with OASIS_OS from a worker thread, synchronize
 //! access externally (e.g. via a mutex in your C++ code).
+//!
+//! Recommended UE5 integration pattern:
+//! ```cpp
+//! // Create on game thread, store in a TSharedPtr
+//! FCriticalSection OasisMutex;
+//! void* OasisHandle = oasis_create(...);
+//!
+//! // Tick on game thread only:
+//! FScopeLock Lock(&OasisMutex);
+//! oasis_tick(OasisHandle);
+//! ```
 
 use std::collections::HashMap;
 use std::ffi::{CStr, CString};
