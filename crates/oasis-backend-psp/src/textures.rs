@@ -46,7 +46,6 @@ impl Drop for VolatileAllocator {
         unsafe {
             psp::sys::sceKernelVolatileMemUnlock(0);
         }
-        log::debug!("volatile memory unlocked ({} bytes)", self.size);
     }
 }
 
@@ -169,17 +168,10 @@ impl PspBackend {
                 if use_dma {
                     // SAFETY: src and dst are valid, non-overlapping, and
                     // src_stride > 0. Cache coherency handled above.
-                    match psp::dma::memcpy_dma(dst, src, src_stride as u32) {
-                        Ok(()) => continue,
-                        Err(_) if row == 0 => {
-                            // Log once on first DMA failure per texture load.
-                            log::debug!(
-                                "texture: DMA memcpy failed on row 0, \
-                                 falling back to CPU copy"
-                            );
-                        },
-                        Err(_) => {},
+                    if psp::dma::memcpy_dma(dst, src, src_stride as u32).is_ok() {
+                        continue;
                     }
+                    // DMA failed — fall through to CPU copy.
                 }
                 // Fallback: CPU copy for small rows or DMA failure.
                 ptr::copy_nonoverlapping(src, dst, src_stride);
