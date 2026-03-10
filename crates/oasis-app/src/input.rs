@@ -216,7 +216,9 @@ pub fn handle_desktop_input(
             }
         },
         InputEvent::ButtonPress(Button::Start) => {
-            state.mode = Mode::Terminal;
+            if !state.skin.features.window_manager {
+                state.mode = Mode::Terminal;
+            }
         },
         InputEvent::TextInput(ch) => match state.wm.active_window() {
             Some("browser") => {
@@ -227,7 +229,17 @@ pub fn handle_desktop_input(
             Some("terminal") => {
                 state.terminal.input_buf.push(*ch);
             },
-            _ => {},
+            Some(active_id) => {
+                if let Some((_, runner)) = state
+                    .content
+                    .open_runners
+                    .iter_mut()
+                    .find(|(id, _)| id == active_id)
+                {
+                    runner.handle_text_input(*ch);
+                }
+            },
+            None => {},
         },
         InputEvent::Backspace => match state.wm.active_window() {
             Some("browser") => {
@@ -238,7 +250,17 @@ pub fn handle_desktop_input(
             Some("terminal") => {
                 state.terminal.input_buf.pop();
             },
-            _ => {},
+            Some(active_id) => {
+                if let Some((_, runner)) = state
+                    .content
+                    .open_runners
+                    .iter_mut()
+                    .find(|(id, _)| id == active_id)
+                {
+                    runner.handle_backspace();
+                }
+            },
+            None => {},
         },
         InputEvent::MouseWheel { delta } => {
             match state.wm.active_window() {
@@ -750,6 +772,7 @@ mod tests {
                 input_buf: String::new(),
                 output_lines: Vec::new(),
                 scroll_offset: 0,
+                dirty: true,
             },
             net: NetworkLayer {
                 backend: StdNetworkBackend::new(),

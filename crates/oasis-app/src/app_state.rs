@@ -64,6 +64,8 @@ pub struct TerminalLayer {
     pub input_buf: String,
     pub output_lines: Vec<String>,
     pub scroll_offset: usize,
+    /// Set when output_lines or input_buf changes; cleared after sync.
+    pub dirty: bool,
 }
 
 /// Networking: TCP backend, remote listener/client, FTP, TLS.
@@ -247,6 +249,7 @@ mod tests {
             input_buf: String::new(),
             output_lines: Vec::new(),
             scroll_offset: 0,
+            dirty: true,
         };
 
         let _net = NetworkLayer {

@@ -91,17 +91,20 @@ pub fn update_sdi(state: &mut AppState, sdi: &mut SdiRegistry) {
             AppRunner::hide_sdi(sdi);
             terminal_sdi::hide_media_page(sdi);
 
-            // Sync terminal output to the windowed terminal runner.
-            if let Some((_, runner)) = state
-                .content
-                .open_runners
-                .iter_mut()
-                .find(|(id, _)| id == "terminal")
-            {
-                let mut lines = state.terminal.output_lines.clone();
-                let prompt = format!("> {}", state.terminal.input_buf);
-                lines.push(prompt);
-                runner.set_lines(lines, state.terminal.scroll_offset);
+            // Sync terminal output to the windowed terminal runner (only when changed).
+            if state.terminal.dirty {
+                if let Some((_, runner)) = state
+                    .content
+                    .open_runners
+                    .iter_mut()
+                    .find(|(id, _)| id == "terminal")
+                {
+                    let mut lines = state.terminal.output_lines.clone();
+                    let prompt = format!("> {}", state.terminal.input_buf);
+                    lines.push(prompt);
+                    runner.set_lines(lines, state.terminal.scroll_offset);
+                }
+                state.terminal.dirty = false;
             }
             // Keep dashboard icons visible behind windows.
             if state.ui.bottom_bar.active_tab == MediaTab::None {

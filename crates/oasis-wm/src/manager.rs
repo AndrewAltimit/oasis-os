@@ -574,8 +574,8 @@ impl WindowManager {
         let prefixes: Vec<String> = self.windows.iter().map(|w| format!("{}.", w.id)).collect();
         let prefix_refs: Vec<&str> = prefixes.iter().map(|s| s.as_str()).collect();
 
-        // Draw all non-window SDI objects (wallpaper, dashboard, bars, etc.).
-        sdi.draw_excluding_prefixes(backend, &prefix_refs)?;
+        // Draw non-window base SDI objects (wallpaper, dashboard, bars, etc.).
+        sdi.draw_base_excluding_prefixes(backend, &prefix_refs)?;
 
         // Draw each window's SDI objects then content in z-order.
         // This ensures the active (topmost) window renders over all others.
@@ -598,6 +598,10 @@ impl WindowManager {
                 backend.reset_clip_rect()?;
             }
         }
+
+        // Draw non-window overlay SDI objects (cursor, start menu, toasts)
+        // AFTER windows so they render on top.
+        sdi.draw_overlay_excluding_prefixes(backend, &prefix_refs)?;
 
         Ok(())
     }

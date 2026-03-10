@@ -475,6 +475,7 @@ mod tests {
                 input_buf: String::new(),
                 output_lines: Vec::new(),
                 scroll_offset: 0,
+                dirty: true,
             },
             net: NetworkLayer {
                 backend: StdNetworkBackend::new(),

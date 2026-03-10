@@ -181,6 +181,7 @@ fn main() -> Result<()> {
                 String::new(),
             ],
             scroll_offset: 0,
+            dirty: true,
         },
         net: NetworkLayer {
             backend: {
@@ -373,6 +374,9 @@ fn main() -> Result<()> {
             if result == input::InputResult::Quit {
                 break 'running;
             }
+        }
+        if !events.is_empty() {
+            state.terminal.dirty = true;
         }
 
         // Poll remote listener for incoming commands.
