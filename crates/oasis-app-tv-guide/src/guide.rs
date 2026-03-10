@@ -318,6 +318,8 @@ impl TvGuideState {
         if self.selected_channel >= self.channels.len() {
             return None;
         }
+        // Refresh time so the schedule reflects *now*, not the last render frame.
+        self.update_time();
         let catalog = self.catalogs.get(self.selected_channel)?.as_ref()?;
         let slot = schedule::schedule_at(catalog, self.current_time)?;
         self.tuned_channel = Some(self.selected_channel);
