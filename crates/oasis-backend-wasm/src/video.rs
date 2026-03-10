@@ -5,6 +5,9 @@
 //! backend texture.  The existing `preview_texture` rendering path in
 //! `guide.rs` handles display — no iframe overlay needed.
 
+use std::cell::Cell;
+use std::rc::Rc;
+
 use wasm_bindgen::JsCast;
 use wasm_bindgen::prelude::*;
 use web_sys::{CanvasRenderingContext2d, HtmlCanvasElement, HtmlVideoElement};
@@ -59,8 +62,11 @@ pub struct VideoPlayer {
     active: bool,
     logged_playing: bool,
     logged_error: bool,
+    /// Set to `true` by the `<video>` `ended` event when the episode finishes.
+    ended: Rc<Cell<bool>>,
     /// Stored so it is dropped (and freed) on `stop()` instead of leaked.
     _error_handler: Option<Closure<dyn FnMut(web_sys::Event)>>,
+    _ended_handler: Option<Closure<dyn FnMut(web_sys::Event)>>,
 }
 
 impl Default for VideoPlayer {
@@ -82,7 +88,9 @@ impl VideoPlayer {
             active: false,
             logged_playing: false,
             logged_error: false,
+            ended: Rc::new(Cell::new(false)),
             _error_handler: None,
+            _ended_handler: None,
         }
     }
 
@@ -158,6 +166,18 @@ impl VideoPlayer {
             .add_event_listener_with_callback("error", error_handler.as_ref().unchecked_ref())
             .ok();
 
+        // --- Ended event listener (triggers auto-advance) ---
+        let ended_flag = Rc::new(Cell::new(false));
+        let ended_flag_clone = Rc::clone(&ended_flag);
+        let ended_handler = Closure::wrap(Box::new(move |_: web_sys::Event| {
+            vlog!("Video ended — flagging for auto-advance");
+            ended_flag_clone.set(true);
+        }) as Box<dyn FnMut(web_sys::Event)>);
+        video
+            .add_event_listener_with_callback("ended", ended_handler.as_ref().unchecked_ref())
+            .ok();
+        self.ended = ended_flag;
+
         // --- Offscreen capture canvas ---
         let capture: HtmlCanvasElement = document.create_element("canvas").ok()?.dyn_into().ok()?;
         capture.set_width(w);
@@ -204,6 +224,7 @@ impl VideoPlayer {
         self.logged_playing = false;
         self.logged_error = false;
         self._error_handler = Some(error_handler);
+        self._ended_handler = Some(ended_handler);
 
         vlog!("Video player initialized, waiting for data...");
 
@@ -267,6 +288,8 @@ impl VideoPlayer {
             }
         }
         self._error_handler = None;
+        self._ended_handler = None;
+        self.ended.set(false);
         self.capture_canvas = None;
         self.capture_ctx = None;
         if let Some(tex) = self.texture_id.take() {
@@ -287,6 +310,11 @@ impl VideoPlayer {
     /// Whether the player is currently loading or playing.
     pub fn is_active(&self) -> bool {
         self.active
+    }
+
+    /// Whether the `<video>` element fired its `ended` event (episode finished).
+    pub fn is_ended(&self) -> bool {
+        self.ended.get()
     }
 }
 

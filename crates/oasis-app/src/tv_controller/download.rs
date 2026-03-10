@@ -679,6 +679,23 @@ pub(crate) fn stream_download_range(
                 return Ok(());
             }
             if buffer.should_throttle() {
+                // Don't reset stall timer during throttle -- if the decoder
+                // is truly stuck (not just slow), we need to detect the stall
+                // and reconnect rather than sleeping forever.
+                if last_data_time.elapsed() > STALL_TIMEOUT * 3 {
+                    log::warn!(
+                        "TV: stalled while throttling ({:.0}s no decoder progress), \
+                         forcing reconnect",
+                        last_data_time.elapsed().as_secs_f64(),
+                    );
+                    if reconnects >= MAX_RECONNECTS {
+                        buffer.set_error("stall during throttle, max reconnects exhausted".into());
+                        return Ok(());
+                    }
+                    reconnects += 1;
+                    drop(stream);
+                    continue 'outer;
+                }
                 std::thread::sleep(std::time::Duration::from_millis(100));
                 was_throttled = true;
                 continue;

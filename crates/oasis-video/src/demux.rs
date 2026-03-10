@@ -174,7 +174,10 @@ fn avcc_to_annex_b(data: &[u8], nal_length_size: usize) -> Result<Vec<u8>, Video
         };
         offset += nal_length_size;
 
-        if offset + nal_len > data.len() {
+        if offset
+            .checked_add(nal_len)
+            .is_none_or(|end| end > data.len())
+        {
             return Err(VideoError::Demux("NAL unit exceeds packet bounds".into()));
         }
 
@@ -506,5 +509,20 @@ mod tests {
     fn find_avcc_returns_none_for_no_avcc() {
         let garbage = b"this is not an mp4 file at all";
         assert!(find_avcc_in_mp4(garbage).is_none());
+    }
+
+    #[test]
+    fn avcc_to_annex_b_huge_nal_length_no_overflow() {
+        // Craft a packet where the 4-byte NAL length declares 0xFFFFFFFF bytes.
+        // The bounds check must not panic from integer overflow in offset+nal_len.
+        let bad = &[0xFF, 0xFF, 0xFF, 0xFF, 0xAA, 0xBB];
+        assert!(avcc_to_annex_b(bad, 4).is_err());
+    }
+
+    #[test]
+    fn avcc_to_annex_b_empty_input() {
+        let empty: &[u8] = &[];
+        let result = avcc_to_annex_b(empty, 4).unwrap();
+        assert!(result.is_empty());
     }
 }

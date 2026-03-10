@@ -239,18 +239,18 @@ fn command_output_variants_are_debug() {
         },
         CommandOutput::None,
         CommandOutput::Clear,
-        CommandOutput::ListenToggle { port: 8080 },
-        CommandOutput::RemoteConnect {
+        CommandOutput::Signal(CommandSignal::ListenToggle { port: 8080 }),
+        CommandOutput::Signal(CommandSignal::RemoteConnect {
             address: "1.2.3.4".into(),
             port: 22,
             psk: Some("key".into()),
-        },
-        CommandOutput::BrowserSandbox { enable: true },
-        CommandOutput::SkinSwap { name: "xp".into() },
-        CommandOutput::FtpToggle {
+        }),
+        CommandOutput::Signal(CommandSignal::BrowserSandbox { enable: true }),
+        CommandOutput::Signal(CommandSignal::SkinSwap { name: "xp".into() }),
+        CommandOutput::Signal(CommandSignal::FtpToggle {
             port: 2121,
             password: None,
-        },
+        }),
     ];
     for o in &outputs {
         let _ = format!("{o:?}");

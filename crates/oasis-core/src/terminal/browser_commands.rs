@@ -352,8 +352,8 @@ impl Command for SandboxCmd {
 
     fn execute(&self, args: &[&str], _env: &mut Environment<'_>) -> Result<CommandOutput> {
         match args.first().copied() {
-            Some("on") => Ok(CommandOutput::BrowserSandbox { enable: true }),
-            Some("off") => Ok(CommandOutput::BrowserSandbox { enable: false }),
+            Some("on") => Ok(CommandOutput::browser_sandbox(true)),
+            Some("off") => Ok(CommandOutput::browser_sandbox(false)),
             _ => Ok(CommandOutput::Text(
                 "Usage: sandbox on | sandbox off\n\
                  sandbox on  — block all network requests (VFS only)\n\
@@ -367,7 +367,7 @@ impl Command for SandboxCmd {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use oasis_terminal::{CommandOutput, CommandRegistry, Environment};
+    use oasis_terminal::{CommandOutput, CommandRegistry, CommandSignal, Environment};
     use oasis_vfs::{MemoryVfs, Vfs};
 
     fn setup() -> (CommandRegistry, MemoryVfs) {
@@ -620,9 +620,10 @@ mod tests {
     #[test]
     fn sandbox_on() {
         let (reg, mut vfs) = setup();
-        let CommandOutput::BrowserSandbox { enable } = exec(&reg, &mut vfs, "sandbox on").unwrap()
+        let CommandOutput::Signal(CommandSignal::BrowserSandbox { enable }) =
+            exec(&reg, &mut vfs, "sandbox on").unwrap()
         else {
-            panic!("expected CommandOutput::BrowserSandbox");
+            panic!("expected CommandOutput::Signal(CommandSignal::BrowserSandbox)");
         };
         assert!(enable);
     }
@@ -630,9 +631,10 @@ mod tests {
     #[test]
     fn sandbox_off() {
         let (reg, mut vfs) = setup();
-        let CommandOutput::BrowserSandbox { enable } = exec(&reg, &mut vfs, "sandbox off").unwrap()
+        let CommandOutput::Signal(CommandSignal::BrowserSandbox { enable }) =
+            exec(&reg, &mut vfs, "sandbox off").unwrap()
         else {
-            panic!("expected CommandOutput::BrowserSandbox");
+            panic!("expected CommandOutput::Signal(CommandSignal::BrowserSandbox)");
         };
         assert!(!enable);
     }

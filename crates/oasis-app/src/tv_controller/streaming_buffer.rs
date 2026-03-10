@@ -489,7 +489,7 @@ pub(crate) fn linear_seek_interpolation(
         return mdat_offset;
     }
     let frac = (seek_secs / duration).clamp(0.0, 1.0);
-    mdat_offset + (frac * mdat_size as f64) as u64
+    mdat_offset.saturating_add((frac * mdat_size as f64) as u64)
 }
 
 /// A reader cursor over a `StreamingInner` sliding-window buffer.

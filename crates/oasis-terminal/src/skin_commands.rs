@@ -56,9 +56,7 @@ impl Command for SkinCmd {
             Some("current") => Ok(CommandOutput::Text(
                 "Use 'skin <name>' to switch skins.".to_string(),
             )),
-            Some(name) => Ok(CommandOutput::SkinSwap {
-                name: name.to_string(),
-            }),
+            Some(name) => Ok(CommandOutput::skin_swap(name.to_string())),
         }
     }
 }
@@ -66,6 +64,7 @@ impl Command for SkinCmd {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::CommandSignal;
     use oasis_vfs::MemoryVfs;
 
     fn make_env(vfs: &mut MemoryVfs) -> Environment<'_> {
@@ -113,7 +112,7 @@ mod tests {
         let mut env = make_env(&mut vfs);
         let out = cmd.execute(&["modern"], &mut env).unwrap();
         match out {
-            CommandOutput::SkinSwap { name } => assert_eq!(name, "modern"),
+            CommandOutput::Signal(CommandSignal::SkinSwap { name }) => assert_eq!(name, "modern"),
             _ => panic!("expected SkinSwap"),
         }
     }

@@ -213,10 +213,12 @@ int32_t oasis_video_is_playing(OasisInstance* handle);
  *
  * Takes the most recent frame (single-buffered; skips intermediate frames).
  * Copies RGBA pixels into buf, sets out_w/out_h to video dimensions.
- * buf must be at least out_w * out_h * 4 bytes.
- * Returns: 1 = new frame copied, 0 = no new frame available, -1 = error.
+ * buf_size must be >= out_w * out_h * 4 for the decoded frame dimensions.
+ * Returns: 1 = new frame copied, 0 = no new frame available,
+ *          -1 = error (including buffer too small).
  */
 int32_t oasis_video_next_frame(OasisInstance* handle, uint8_t* buf,
+                               uint32_t buf_size,
                                uint32_t* out_w, uint32_t* out_h);
 
 /* Drain decoded audio samples into a host buffer.

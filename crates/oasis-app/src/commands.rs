@@ -5,7 +5,7 @@ use oasis_core::net::{ListenerConfig, RemoteClient, RemoteListener};
 use oasis_core::sdi::SdiRegistry;
 use oasis_core::skin::{Skin, resolve_skin};
 use oasis_core::startmenu::StartMenuState;
-use oasis_core::terminal::{CommandOutput, Environment};
+use oasis_core::terminal::{CommandOutput, CommandSignal, Environment};
 use oasis_core::transfer::FtpServer;
 use oasis_core::vfs::MemoryVfs;
 
@@ -34,7 +34,7 @@ pub fn process_command_output(
         },
         Ok(CommandOutput::Clear) => state.terminal.output_lines.clear(),
         Ok(CommandOutput::None) => {},
-        Ok(CommandOutput::ListenToggle { port }) => {
+        Ok(CommandOutput::Signal(CommandSignal::ListenToggle { port })) => {
             if port == 0 {
                 if let Some(ref mut l) = state.net.listener {
                     l.stop();
@@ -79,7 +79,7 @@ pub fn process_command_output(
                 }
             }
         },
-        Ok(CommandOutput::RemoteConnect { address, port, psk }) => {
+        Ok(CommandOutput::Signal(CommandSignal::RemoteConnect { address, port, psk })) => {
             if state.net.remote_client.is_some() {
                 state
                     .terminal
@@ -104,7 +104,7 @@ pub fn process_command_output(
                 }
             }
         },
-        Ok(CommandOutput::BrowserSandbox { enable }) => {
+        Ok(CommandOutput::Signal(CommandSignal::BrowserSandbox { enable })) => {
             if let Some(ref mut bw) = state.content.browser {
                 bw.config.features.sandbox_only = enable;
             }
@@ -118,7 +118,7 @@ pub fn process_command_output(
                 .output_lines
                 .push(format!("Browser sandbox: {st}"));
         },
-        Ok(CommandOutput::FtpToggle { port, password }) => {
+        Ok(CommandOutput::Signal(CommandSignal::FtpToggle { port, password })) => {
             if port == 0 {
                 if let Some(ref mut f) = state.net.ftp_server {
                     f.stop();
@@ -160,7 +160,7 @@ pub fn process_command_output(
                 }
             }
         },
-        Ok(CommandOutput::SkinSwap { name }) => {
+        Ok(CommandOutput::Signal(CommandSignal::SkinSwap { name })) => {
             return Some(name);
         },
         Ok(CommandOutput::Multi(outputs)) => {
@@ -237,10 +237,12 @@ fn format_remote_response(
         },
         Ok(CommandOutput::Clear) => "OK".to_string(),
         Ok(CommandOutput::None) => "OK".to_string(),
-        Ok(CommandOutput::ListenToggle { .. })
-        | Ok(CommandOutput::RemoteConnect { .. })
-        | Ok(CommandOutput::FtpToggle { .. }) => "Not available via remote.".to_string(),
-        Ok(CommandOutput::BrowserSandbox { enable }) => {
+        Ok(CommandOutput::Signal(
+            CommandSignal::ListenToggle { .. }
+            | CommandSignal::RemoteConnect { .. }
+            | CommandSignal::FtpToggle { .. },
+        )) => "Not available via remote.".to_string(),
+        Ok(CommandOutput::Signal(CommandSignal::BrowserSandbox { enable })) => {
             if let Some(bw) = browser {
                 bw.config.features.sandbox_only = enable;
             }
@@ -251,7 +253,7 @@ fn format_remote_response(
             };
             format!("Browser sandbox: {st}")
         },
-        Ok(CommandOutput::SkinSwap { name }) => match resolve_skin(&name) {
+        Ok(CommandOutput::Signal(CommandSignal::SkinSwap { name })) => match resolve_skin(&name) {
             Ok(new_skin) => {
                 let sw = active_theme.screen_w;
                 let sh = active_theme.screen_h;
@@ -389,7 +391,7 @@ pub fn trim_output(output_lines: &mut Vec<String>) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use oasis_core::terminal::CommandOutput;
+    use oasis_core::terminal::{CommandOutput, CommandSignal};
 
     // -- trim_output --
 
@@ -570,9 +572,9 @@ mod tests {
     fn process_skin_swap_returns_name() {
         let mut state = make_test_state();
         let result = process_command_output(
-            Ok(CommandOutput::SkinSwap {
+            Ok(CommandOutput::Signal(CommandSignal::SkinSwap {
                 name: "tactical".to_string(),
-            }),
+            })),
             &mut state,
         );
         assert_eq!(result, Some("tactical".to_string()));
@@ -608,9 +610,9 @@ mod tests {
         let result = process_command_output(
             Ok(CommandOutput::Multi(vec![
                 CommandOutput::Text("before".to_string()),
-                CommandOutput::SkinSwap {
+                CommandOutput::Signal(CommandSignal::SkinSwap {
                     name: "corrupted".to_string(),
-                },
+                }),
             ])),
             &mut state,
         );
@@ -622,7 +624,9 @@ mod tests {
     fn process_browser_sandbox_on() {
         let mut state = make_test_state();
         let result = process_command_output(
-            Ok(CommandOutput::BrowserSandbox { enable: true }),
+            Ok(CommandOutput::Signal(CommandSignal::BrowserSandbox {
+                enable: true,
+            })),
             &mut state,
         );
         assert!(result.is_none());
@@ -635,7 +639,9 @@ mod tests {
     fn process_browser_sandbox_off() {
         let mut state = make_test_state();
         let result = process_command_output(
-            Ok(CommandOutput::BrowserSandbox { enable: false }),
+            Ok(CommandOutput::Signal(CommandSignal::BrowserSandbox {
+                enable: false,
+            })),
             &mut state,
         );
         assert!(result.is_none());
@@ -645,8 +651,12 @@ mod tests {
     #[test]
     fn process_listen_stop_no_listener() {
         let mut state = make_test_state();
-        let result =
-            process_command_output(Ok(CommandOutput::ListenToggle { port: 0 }), &mut state);
+        let result = process_command_output(
+            Ok(CommandOutput::Signal(CommandSignal::ListenToggle {
+                port: 0,
+            })),
+            &mut state,
+        );
         assert!(result.is_none());
         assert_eq!(state.terminal.output_lines[0], "No listener running.");
     }
@@ -655,10 +665,10 @@ mod tests {
     fn process_ftp_stop_no_server() {
         let mut state = make_test_state();
         let result = process_command_output(
-            Ok(CommandOutput::FtpToggle {
+            Ok(CommandOutput::Signal(CommandSignal::FtpToggle {
                 port: 0,
                 password: None,
-            }),
+            })),
             &mut state,
         );
         assert!(result.is_none());
@@ -671,11 +681,11 @@ mod tests {
         // Simulate an existing client.
         state.net.remote_client = Some(oasis_core::net::RemoteClient::new());
         let result = process_command_output(
-            Ok(CommandOutput::RemoteConnect {
+            Ok(CommandOutput::Signal(CommandSignal::RemoteConnect {
                 address: "127.0.0.1".into(),
                 port: 9999,
                 psk: None,
-            }),
+            })),
             &mut state,
         );
         assert!(result.is_none());
@@ -698,8 +708,12 @@ mod tests {
             ..oasis_core::net::ListenerConfig::default()
         };
         state.net.listener = Some(oasis_core::net::RemoteListener::new(cfg));
-        let result =
-            process_command_output(Ok(CommandOutput::ListenToggle { port: 8080 }), &mut state);
+        let result = process_command_output(
+            Ok(CommandOutput::Signal(CommandSignal::ListenToggle {
+                port: 8080,
+            })),
+            &mut state,
+        );
         assert!(result.is_none());
         assert!(state.terminal.output_lines[0].contains("already running"));
     }
@@ -709,10 +723,10 @@ mod tests {
         let mut state = make_test_state();
         state.net.ftp_server = Some(oasis_core::transfer::FtpServer::new(19000));
         let result = process_command_output(
-            Ok(CommandOutput::FtpToggle {
+            Ok(CommandOutput::Signal(CommandSignal::FtpToggle {
                 port: 21,
                 password: None,
-            }),
+            })),
             &mut state,
         );
         assert!(result.is_none());
@@ -750,12 +764,12 @@ mod tests {
         let mut state = make_test_state();
         let result = process_command_output(
             Ok(CommandOutput::Multi(vec![
-                CommandOutput::SkinSwap {
+                CommandOutput::Signal(CommandSignal::SkinSwap {
                     name: "first".to_string(),
-                },
-                CommandOutput::SkinSwap {
+                }),
+                CommandOutput::Signal(CommandSignal::SkinSwap {
                     name: "second".to_string(),
-                },
+                }),
             ])),
             &mut state,
         );

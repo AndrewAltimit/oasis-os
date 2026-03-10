@@ -408,12 +408,9 @@ impl Command for FtpCmd {
                         i += 1;
                     }
                 }
-                Ok(CommandOutput::FtpToggle { port, password })
+                Ok(CommandOutput::ftp_toggle(port, password))
             },
-            "stop" => Ok(CommandOutput::FtpToggle {
-                port: 0,
-                password: None,
-            }),
+            "stop" => Ok(CommandOutput::ftp_toggle(0, None)),
             "status" => {
                 if env.vfs.exists(FTP_STATUS_PATH) {
                     let data = env.vfs.read(FTP_STATUS_PATH)?;
@@ -510,7 +507,7 @@ pub fn register_transfer_commands(reg: &mut crate::terminal::CommandRegistry) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::terminal::CommandRegistry;
+    use crate::terminal::{CommandRegistry, CommandSignal};
     use crate::vfs::MemoryVfs;
     use std::collections::VecDeque;
     use std::sync::{Arc, Mutex};
@@ -698,10 +695,10 @@ mod tests {
     #[test]
     fn ftp_cmd_start() {
         let (reg, mut vfs) = setup();
-        let CommandOutput::FtpToggle { port, password } =
+        let CommandOutput::Signal(CommandSignal::FtpToggle { port, password }) =
             exec(&reg, &mut vfs, "ftp start 8021").unwrap()
         else {
-            panic!("expected CommandOutput::FtpToggle");
+            panic!("expected CommandOutput::Signal(CommandSignal::FtpToggle)");
         };
         assert_eq!(port, 8021);
         assert!(password.is_none());
@@ -710,10 +707,10 @@ mod tests {
     #[test]
     fn ftp_cmd_start_default_port() {
         let (reg, mut vfs) = setup();
-        let CommandOutput::FtpToggle { port, password } =
+        let CommandOutput::Signal(CommandSignal::FtpToggle { port, password }) =
             exec(&reg, &mut vfs, "ftp start").unwrap()
         else {
-            panic!("expected CommandOutput::FtpToggle");
+            panic!("expected CommandOutput::Signal(CommandSignal::FtpToggle)");
         };
         assert_eq!(port, DEFAULT_FTP_PORT);
         assert!(password.is_none());
@@ -722,9 +719,10 @@ mod tests {
     #[test]
     fn ftp_cmd_stop() {
         let (reg, mut vfs) = setup();
-        let CommandOutput::FtpToggle { port, password } = exec(&reg, &mut vfs, "ftp stop").unwrap()
+        let CommandOutput::Signal(CommandSignal::FtpToggle { port, password }) =
+            exec(&reg, &mut vfs, "ftp stop").unwrap()
         else {
-            panic!("expected CommandOutput::FtpToggle");
+            panic!("expected CommandOutput::Signal(CommandSignal::FtpToggle)");
         };
         assert_eq!(port, 0);
         assert!(password.is_none());
@@ -1026,10 +1024,10 @@ mod tests {
     #[test]
     fn ftp_cmd_start_with_password() {
         let (reg, mut vfs) = setup();
-        let CommandOutput::FtpToggle { port, password } =
+        let CommandOutput::Signal(CommandSignal::FtpToggle { port, password }) =
             exec(&reg, &mut vfs, "ftp start 8021 --password secret").unwrap()
         else {
-            panic!("expected CommandOutput::FtpToggle");
+            panic!("expected CommandOutput::Signal(CommandSignal::FtpToggle)");
         };
         assert_eq!(port, 8021);
         assert_eq!(password.as_deref(), Some("secret"));
@@ -1038,10 +1036,10 @@ mod tests {
     #[test]
     fn ftp_cmd_start_password_default_port() {
         let (reg, mut vfs) = setup();
-        let CommandOutput::FtpToggle { port, password } =
+        let CommandOutput::Signal(CommandSignal::FtpToggle { port, password }) =
             exec(&reg, &mut vfs, "ftp start --password mypass").unwrap()
         else {
-            panic!("expected CommandOutput::FtpToggle");
+            panic!("expected CommandOutput::Signal(CommandSignal::FtpToggle)");
         };
         assert_eq!(port, DEFAULT_FTP_PORT);
         assert_eq!(password.as_deref(), Some("mypass"));

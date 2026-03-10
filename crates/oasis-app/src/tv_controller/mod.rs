@@ -745,6 +745,13 @@ mod tests {
         assert_eq!(offset, 1_000_000_000);
     }
 
+    #[test]
+    fn seek_interpolation_saturates_on_large_offset() {
+        // mdat_offset near u64::MAX -- addition must saturate, not wrap.
+        let offset = linear_seek_interpolation(50.0, 100.0, u64::MAX - 100, 1000);
+        assert_eq!(offset, u64::MAX);
+    }
+
     // ---------------------------------------------------------------
     // parse_moov_duration tests
     // ---------------------------------------------------------------

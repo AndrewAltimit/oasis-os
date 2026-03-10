@@ -282,6 +282,11 @@ impl SoftwareVideoDecoder {
             // skip to next IDR, decode with SPS/PPS. If that doesn't produce
             // a frame, fall through to the normal decode loop which may trigger
             // another reinit cycle.
+            //
+            // Total packet budget across all attempts prevents unbounded
+            // silent skipping on heavily corrupted streams.
+            let mut total_packets_skipped = 0u32;
+            const MAX_TOTAL_PACKETS: u32 = 1500;
             for reinit_attempt in 0u32..3 {
                 let h264 = self
                     .h264
@@ -304,6 +309,7 @@ impl SoftwareVideoDecoder {
                             None => return Ok(None),
                         };
                         skipped_to_idr += 1;
+                        total_packets_skipped += 1;
                         if Self::contains_idr(&packet.data) {
                             log::info!("H264: found IDR after skipping {skipped_to_idr} packets");
                             // Prepend SPS/PPS to IDR for decoder reinitialization.
@@ -334,7 +340,7 @@ impl SoftwareVideoDecoder {
                             break; // IDR didn't produce frame — fall through
                             // to normal decode loop for subsequent frames.
                         }
-                        if skipped_to_idr > 2000 {
+                        if skipped_to_idr > 500 || total_packets_skipped > MAX_TOTAL_PACKETS {
                             return Err(VideoError::SkipLimit);
                         }
                     }
@@ -373,7 +379,8 @@ impl SoftwareVideoDecoder {
                     }
 
                     skipped += 1;
-                    if skipped > 500 {
+                    total_packets_skipped += 1;
+                    if skipped > 500 || total_packets_skipped > MAX_TOTAL_PACKETS {
                         return Err(VideoError::SkipLimit);
                     }
                 }

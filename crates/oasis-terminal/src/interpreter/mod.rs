@@ -16,7 +16,7 @@
 // Re-export everything so `use crate::interpreter::*` paths keep working.
 pub use crate::expander::resolve_path;
 pub use crate::registry::CommandRegistry;
-pub use crate::types::{Command, CommandOutput, Environment};
+pub use crate::types::{Command, CommandOutput, CommandSignal, Environment};
 
 // Items re-exported only for tests and internal use.
 #[cfg(test)]

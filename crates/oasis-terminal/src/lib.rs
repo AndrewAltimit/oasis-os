@@ -60,6 +60,8 @@ pub use interpreter::Command;
 pub use interpreter::CommandOutput;
 /// Registry of available commands with dispatch.
 pub use interpreter::CommandRegistry;
+/// Signals sent from commands to the app layer (network, skin, etc.).
+pub use interpreter::CommandSignal;
 /// Shared mutable environment passed to every command.
 pub use interpreter::Environment;
 /// Register network commands (wifi, ping, http) into a registry.
