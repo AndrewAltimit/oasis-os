@@ -58,7 +58,7 @@ Several previously zero-coverage modules now have tests after phases 9-14. Remai
 |----------|---------|-----|
 | Visual regression | 18+ scenarios | Screenshot regression tests in CI (SDL + WASM Playwright) |
 | Integration (multi-module) | 67 | **Resolved** -- VFS, WM, Terminal, Browser integration tests |
-| Fuzz testing | 1 workflow | HTML/CSS/Gemini parsers have fuzz workflow |
+| Fuzz testing | 4 targets | `fuzz_html_tokenizer`, `fuzz_css_parser`, `fuzz_html_full_pipeline` (browser), `fuzz_interpreter` (terminal) |
 | Property-based | ~20 | proptest used in oasis-vfs benchmarks |
 | Performance/benchmark | ~15 | criterion benchmarks in SDI, browser, VFS, video |
 | PSP screenshot verification | 0 | PPSSPP runs but only checks crash/no-crash |

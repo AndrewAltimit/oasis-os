@@ -213,18 +213,14 @@ oasis-core gains a dependency on `oasis-app-tv-guide` for the terminal commands.
 This is acceptable — oasis-core already depends on `oasis-browser` for
 `browser_commands.rs`.
 
-#### Step 3.3: Extract TV Guide from `runner.rs` inline handling
+#### Step 3.3: Extract TV Guide from `runner.rs` inline handling — DONE
 
-TV Guide is currently a "special case" handled inline in `AppRunner` (not
-delegated via the `App` trait). Two approaches:
-
-**Option A (recommended):** Implement the `App` trait for `TvGuideState` inside
-`oasis-app-tv-guide`. The guide already has `draw_windowed()`, `handle_input()`,
-and VFS IPC — it just needs to conform to the trait interface. Then remove the
-special-case code from `runner.rs`.
-
-**Option B:** Keep the inline handling in `runner.rs` but import from the
-external crate. Simpler but doesn't clean up the architecture.
+**Completed.** TV Guide was previously a "special case" handled inline in
+`AppRunner` (not delegated via the `App` trait). Option A was implemented:
+`TvGuideApp` in `oasis-app-tv-guide/src/app.rs` implements the `App` trait,
+wrapping `TvGuideState`. The ~200 lines of special-case code were removed from
+`runner.rs` and `runner_sdi.rs`. TV Guide now uses the standard delegate
+pattern like all other extracted apps.
 
 ---
 
