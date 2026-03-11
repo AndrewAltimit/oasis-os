@@ -1,0 +1,326 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>TLS 1.3 on a 2004 Handheld - OASIS_OS Developer's Journal</title>
+  <meta name="description" content="Implementing native TLS 1.3 on PSP Allegrex via pure Rust embedded-tls — privileged instruction traps, RSA handshake failures, and DNS endianness bugs.">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="../css/style.css">
+</head>
+<body>
+
+<nav class="site-nav">
+  <a class="nav-brand" href="../">OASIS_OS</a>
+  <button class="nav-toggle" id="nav-toggle" aria-label="Toggle navigation" aria-expanded="false">&#9776;</button>
+  <ul class="nav-links" id="nav-links">
+    <li><a href="../#platforms">Platforms</a></li>
+    <li><a href="../#architecture">Architecture</a></li>
+    <li><a href="./">Journal</a></li>
+    <li><a href="../demo/">Live Demo</a></li>
+  </ul>
+</nav>
+
+<header class="article-header">
+  <div class="container">
+    <a class="article-back" href="./">&larr; Developer's Journal</a>
+    <h1 class="article-title">TLS 1.3 on a 2004 Handheld: Pure Rust Cryptography on MIPS Allegrex</h1>
+    <p class="article-subtitle">
+      Sony's PSP firmware ships SSL 3.0 with root certificates from 2008.
+      Modern HTTPS servers refuse the connection. We implemented native TLS 1.3 using
+      pure Rust &mdash; and discovered three hardware-level bugs along the way.
+    </p>
+    <div class="article-meta">
+      <span>Entry 02</span>
+      <span>psp, security, embedded-tls</span>
+    </div>
+  </div>
+</header>
+
+<article class="article-content">
+
+  <h2>The Constraint</h2>
+
+  <p>
+    The PlayStation Portable's built-in SSL stack (<code>sceSsl</code>) uses root
+    certificates that expired in 2008 and speaks SSL 3.0 &mdash; a protocol version
+    that modern servers reject outright. Any PSP homebrew that wants to download from
+    HTTPS servers (which is effectively all of the modern internet) faces a wall:
+    the firmware's crypto is dead.
+  </p>
+
+  <p>
+    Existing PSP homebrew simply gave up on HTTPS. We didn't. The goal was
+    clear: implement TLS 1.3 in pure Rust, running on the PSP's 333MHz MIPS Allegrex
+    CPU, with no C dependencies, no assembly, and no certificate validation
+    (the PSP has no trusted root store, and we're connecting to known hosts).
+  </p>
+
+  <h2>The Stack</h2>
+
+  <div class="diagram">
+    <pre><code><span class="hl-bright">PSP TLS 1.3 Network Stack</span>
+
+┌──────────────────────────────────────────────────────────────┐
+│  <span class="hl-accent">Application Layer</span>                                          │
+│  HTTP client · TV Guide streaming · Internet Radio           │
+├──────────────────────────────────────────────────────────────┤
+│  <span class="hl-accent">TLS 1.3</span> — embedded-tls (pure Rust, no C/asm)              │
+│  UnsecureProvider (no cert validation)                       │
+│  <span class="hl-warn">alloc feature REQUIRED</span> (RSA signature scheme advertisement) │
+├──────────────────────────────────────────────────────────────┤
+│  <span class="hl-accent">embedded-io adapters</span>                                       │
+│  Read + Write traits wrapping raw PSP sockets                │
+├──────────────────────────────────────────────────────────────┤
+│  <span class="hl-accent">Raw TCP</span> — sceNetInet* syscalls                              │
+│  sceNetInetSocket → sceNetInetConnect → sceNetInetSend/Recv  │
+├──────────────────────────────────────────────────────────────┤
+│  <span class="hl-accent">DNS</span> — psp::net::resolve_hostname                            │
+│  <span class="hl-warn">to_ne_bytes()</span> — network byte order fix for little-endian     │
+├──────────────────────────────────────────────────────────────┤
+│  <span class="hl-dim">PSP WiFi Hardware — sceWlan* · sceNetAdhoc*</span>                  │
+└──────────────────────────────────────────────────────────────┘</code></pre>
+    <div class="diagram-caption">From WiFi radio to TLS 1.3 — every layer is Rust</div>
+  </div>
+
+  <p>
+    The implementation uses <code>embedded-tls</code>, a pure Rust TLS 1.3 library
+    designed for embedded systems. It operates over the <code>embedded_io::Read + Write</code>
+    traits, which we implement as thin wrappers around PSP's raw
+    <code>sceNetInet*</code> syscalls. No <code>std::net</code>, no libc, no OpenSSL.
+  </p>
+
+  <h2>Discovery 1: The Privileged Instruction Trap</h2>
+
+  <div class="callout discovery">
+    <div class="callout-title">Discovery</div>
+    <p>
+      <code>mfc0 $9</code> (read COP0 Count register) is <strong>privileged on PSP
+      Allegrex</strong>. On standard MIPS R4000, this instruction is available in user mode.
+      On the PSP, it causes an immediate CPU exception &mdash; crashing the application
+      with no backtrace.
+    </p>
+  </div>
+
+  <p>
+    TLS requires cryptographic randomness. The <code>embedded-tls</code> library uses a
+    seed-based RNG, and the natural choice on MIPS is to read the CPU's cycle counter
+    register (<code>$9</code> in COP0). This works on every other MIPS platform.
+  </p>
+
+  <p>
+    On the PSP Allegrex, Sony restricted COP0 access to kernel mode. User-mode code
+    that executes <code>mfc0 $9, $0</code> triggers a privileged instruction exception.
+    The crash manifests as a silent hang or address-error exception with no useful
+    diagnostic information.
+  </p>
+
+  <p>
+    <strong>Fix:</strong> Replace the COP0 counter read with
+    <code>sceKernelGetSystemTimeLow()</code>, a user-mode syscall that returns a
+    microsecond-resolution timer. Not cryptographically random, but sufficient for
+    seeding a PRNG when connecting to known hosts with certificate validation disabled.
+  </p>
+
+  <pre><code>// WRONG: crashes on PSP Allegrex (privileged instruction)
+// let seed: u32;
+// unsafe { core::arch::asm!("mfc0 {}, $9", out(reg) seed); }
+
+// CORRECT: user-mode timer syscall
+let seed = unsafe { psp::sys::sceKernelGetSystemTimeLow() } as u64;</code></pre>
+
+  <h2>Discovery 2: The RSA Handshake Failure</h2>
+
+  <p>
+    After fixing the RNG seed, TLS handshakes with <code>archive.org</code> consistently
+    failed with <code>HandshakeFailure</code>. The same code worked fine with servers
+    using ECDSA certificates. The failure was specific to RSA-signed certificates.
+  </p>
+
+  <div class="callout discovery">
+    <div class="callout-title">Discovery</div>
+    <p>
+      Without the <code>alloc</code> feature enabled in <code>embedded-tls</code>, the
+      library cannot advertise RSA signature schemes during the TLS ClientHello. The
+      server sees a client that only supports ECDSA, finds no matching signature
+      algorithm for its RSA certificate, and rejects the handshake.
+    </p>
+  </div>
+
+  <p>
+    The <code>alloc</code> feature is required because RSA signature verification uses
+    heap-allocated buffers for the modular exponentiation. Without it, the RSA code
+    paths are compiled out entirely &mdash; including the signature scheme advertisement
+    in ClientHello. The server never knows the client could handle RSA.
+  </p>
+
+  <pre><code># Cargo.toml — the alloc feature is NOT optional for RSA servers
+[dependencies]
+embedded-tls = { version = "0.17", default-features = false, features = ["alloc"] }</code></pre>
+
+  <p>
+    This is a particularly subtle failure because the TLS handshake technically
+    completes the version negotiation and cipher suite selection &mdash; it fails
+    during signature algorithm negotiation. The error message gives no indication
+    that it's a missing feature flag rather than a protocol error.
+  </p>
+
+  <h2>Discovery 3: DNS Endianness</h2>
+
+  <p>
+    With TLS working, HTTP(S) connections to <code>archive.org</code> produced
+    correct responses &mdash; but connections to CDN nodes (where archive.org redirects
+    for actual file downloads) failed silently. The resolved IP addresses were wrong.
+  </p>
+
+  <div class="callout discovery">
+    <div class="callout-title">Discovery</div>
+    <p>
+      <code>sceNetResolverStartNtoA</code> stores the resolved IP in
+      <code>in_addr</code> format (network byte order = big-endian). On the PSP's
+      little-endian MIPS, reading this as a <code>u32</code> byte-swaps it. Using
+      <code>to_be_bytes()</code> to extract octets <strong>double-swaps</strong>, producing
+      a completely wrong IP address.
+    </p>
+  </div>
+
+  <div class="diagram">
+    <pre><code><span class="hl-bright">DNS Resolution Byte Order Bug</span>
+
+Server IP (correct):      <span class="hl-accent">207.241.224.2</span>  → bytes: [CF, F1, E0, 02]
+
+sceNetResolverStartNtoA stores in_addr (network order, big-endian):
+  Memory: [CF, F1, E0, 02]
+
+Reading as u32 on little-endian MIPS:
+  u32 value = <span class="hl-warn">0x02E0_F1CF</span>  (byte-swapped by CPU)
+
+to_be_bytes() on this u32 (WRONG — double swap):
+  [02, E0, F1, CF] → <span class="hl-warn">2.224.241.207</span>
+
+<span class="hl-accent">to_ne_bytes()</span> on this u32 (CORRECT — preserves memory layout):
+  [CF, F1, E0, 02] → <span class="hl-accent">207.241.224.2</span></code></pre>
+    <div class="diagram-caption">to_be_bytes double-swaps on little-endian — use to_ne_bytes</div>
+  </div>
+
+  <p>
+    The fix is a one-line change: <code>to_be_bytes()</code> →
+    <code>to_ne_bytes()</code>. But finding it required tracing network traffic on real
+    hardware to notice that DNS responses were coming back with reversed IP octets. This
+    bug was contributed back as
+    <a href="https://github.com/AndrewAltimit/rust-psp">PR #21</a> in the rust-psp
+    SDK.
+  </p>
+
+  <h2>HTTP→HTTPS Redirect Handling</h2>
+
+  <p>
+    Archive.org's CDN randomly assigns servers per session. Some CDN nodes
+    (<code>ia*.us.archive.org</code>) serve HTTP directly. Others
+    (<code>dn*.us.archive.org</code>) respond with a 301 redirect to HTTPS.
+    This creates a uniquely PSP-specific problem:
+  </p>
+
+  <div class="diagram">
+    <pre><code><span class="hl-bright">Archive.org CDN Flow on PSP</span>
+
+<span class="hl-accent">Request:</span> GET http://archive.org/download/file.mp4
+
+<span class="hl-dim">Case A: HTTP-friendly CDN node</span>
+  302 → http://ia601234.us.archive.org/file.mp4
+  200 OK → <span class="hl-accent">stream data</span>
+
+<span class="hl-dim">Case B: HTTPS-only CDN node</span>
+  302 → http://dn543210.us.archive.org/file.mp4
+  <span class="hl-warn">301 → https://dn543210.us.archive.org/file.mp4</span>  ← redirect loop!
+
+<span class="hl-dim">PSP sceHttp default behavior:</span>
+  Auto-follows redirects → tries HTTPS → <span class="hl-warn">SSL 3.0 handshake fails</span>
+  Error: 0x80431079 (misdiagnosed as connection pool corruption)
+
+<span class="hl-dim">Fix: sceHttpDisableRedirect(template_id)</span>
+  Detect HTTP→HTTPS redirect → switch to raw TCP + embedded-tls
+  Connect to <span class="hl-accent">CDN host:443</span> → TLS 1.3 handshake → <span class="hl-accent">stream data</span></code></pre>
+    <div class="diagram-caption">CDN randomness creates a protocol-level routing problem</div>
+  </div>
+
+  <div class="callout warning">
+    <div class="callout-title">Critical Fix</div>
+    <p>
+      <code>sceHttpDisableRedirect(template_id)</code> is <strong>required</strong> on
+      PSP. Without it, the HTTP library auto-follows HTTP→HTTPS redirects, which
+      inevitably fail because the built-in SSL can't connect to modern servers. The
+      error code <code>0x80431079</code> is misleading &mdash; it was initially
+      misdiagnosed as connection pool corruption before redirect tracing revealed the
+      true cause.
+    </p>
+  </div>
+
+  <h2>The Flush Requirement</h2>
+
+  <p>
+    One final subtlety: <code>embedded-tls</code> buffers outgoing data internally for
+    record framing. After calling <code>write_all()</code> on the TLS connection, the
+    data sits in an internal buffer until <code>flush()</code> is called. On the PSP,
+    where the underlying transport is a raw socket with no Nagle algorithm, forgetting
+    <code>flush()</code> means the TLS record is never sent and the connection hangs
+    waiting for a response that will never come.
+  </p>
+
+  <pre><code>// WRONG: data sits in TLS buffer, never sent
+tls.write_all(request.as_bytes())?;
+// ... hangs forever waiting for response
+
+// CORRECT: flush pushes the TLS record out
+tls.write_all(request.as_bytes())?;
+tls.flush()?;  // ← sends the actual TLS record</code></pre>
+
+  <h2>Performance on 333MHz MIPS</h2>
+
+  <p>
+    TLS 1.3 handshakes on the PSP take approximately 2&ndash;4 seconds, dominated by
+    the key exchange computation (ECDHE with P-256). This is acceptable for the
+    use case: establishing a streaming connection that will transfer megabytes of data.
+    The per-record overhead after handshake is negligible &mdash; symmetric AES-GCM
+    encryption at 333MHz handles the streaming bitrate without issue.
+  </p>
+
+  <p>
+    The I/O thread stack was increased from 256KB to 512KB to accommodate the TLS
+    library's stack usage during key exchange. Embedded-tls allocates several
+    large buffers on the stack during handshake, and 256KB proved insufficient for
+    the RSA code path.
+  </p>
+
+  <h2>Result</h2>
+
+  <p>
+    The PSP can now connect to any TLS 1.3 server. The Internet Archive's TV Guide
+    streams audio over HTTPS from CDN nodes that refuse HTTP. Internet Radio connects
+    to stations that have migrated to HTTPS-only. The browser can load HTTPS pages.
+    All running on a 2004 handheld that Sony expected to speak SSL 3.0 to servers that
+    no longer exist.
+  </p>
+
+  <nav class="article-nav">
+    <a class="prev" href="01-unified-embedded-os.html">&larr; Prev: One Codebase, Five Platforms</a>
+    <a class="next" href="03-streaming-video.html">Next: Streaming Internet Archive Video &rarr;</a>
+  </nav>
+
+</article>
+
+<footer class="site-footer">
+  <div class="container">
+    <div class="footer-row">
+      <span>&copy; 2024&ndash;2026 OASIS_OS contributors</span>
+      <span>&middot;</span>
+      <a href="https://github.com/AndrewAltimit/oasis-os">GitHub</a>
+    </div>
+  </div>
+</footer>
+
+<script src="../js/main.js"></script>
+</body>
+</html>
