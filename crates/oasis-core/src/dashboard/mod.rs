@@ -425,7 +425,7 @@ impl DashboardState {
 
             if let Ok(cursor) = sdi.get_mut(cursor_name) {
                 cursor.visible = true;
-                cursor.overlay = true;
+                cursor.overlay = false;
 
                 // Include label area (icon + gap + 1 line of text).
                 let glyph_h = at.font_small.max(8) as u32;
