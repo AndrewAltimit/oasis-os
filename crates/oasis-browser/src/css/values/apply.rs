@@ -20,7 +20,12 @@ impl ComputedStyle {
     ///
     /// Resolves relative units (`em`, `%`) against the parent font size
     /// so the resulting computed value is in absolute pixels.
-    pub fn apply_declaration(&mut self, property: &str, value: &CssValue, parent_font_size: f32) {
+    pub(crate) fn apply_declaration(
+        &mut self,
+        property: &str,
+        value: &CssValue,
+        parent_font_size: f32,
+    ) {
         // Custom properties (--*) are stored in the properties map.
         if property.starts_with("--") {
             if let CssValue::String(ref raw) = *value {
