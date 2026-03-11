@@ -24,6 +24,7 @@ pub fn lerp_color_ratio(a: Color, b: Color, num: u32, den: u32) -> Color {
     if den == 0 {
         return a;
     }
+    let num = num.min(den);
     let inv = den - num;
     Color::rgba(
         ((a.r as u32 * inv + b.r as u32 * num + den / 2) / den) as u8,
