@@ -2,7 +2,7 @@
 
 An embeddable operating system framework in Rust. Renders a skinnable shell interface -- scene-graph UI, command interpreter, virtual file system, browser engine, plugin system, remote terminal -- anywhere you can provide a pixel buffer and an input stream.
 
-<video src="assets/oasis_demo.mp4" width="100%" autoplay loop muted playsinline></video>
+https://github.com/AndrewAltimit/oasis-os/raw/refs/heads/main/assets/oasis_demo.mp4
 
 > **[View all 18 skin screenshots](SCREENSHOTS.md)** | **[Live WASM Demo](https://andrewaltimit.github.io/oasis-os/demo/)** | **[Developer's Journal](https://andrewaltimit.github.io/oasis-os/journal/)**
 
