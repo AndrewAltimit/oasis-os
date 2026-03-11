@@ -22,6 +22,15 @@ use oasis_types::backend::SdiBackend;
 use oasis_types::input::Button;
 use oasis_vfs::Vfs;
 
+mod alarms;
+mod display;
+
+pub use alarms::{Alarm, AlarmDays};
+pub use display::{
+    date_parts, day_of_week, format_date, format_duration_friendly, format_time_hms,
+    format_time_ms, format_weekday,
+};
+
 // ---------------------------------------------------------------
 // ClockMode
 // ---------------------------------------------------------------
@@ -61,117 +70,13 @@ impl ClockMode {
     }
 
     /// Display label for this mode.
-    fn label(self) -> &'static str {
+    pub(crate) fn label(self) -> &'static str {
         match self {
             Self::Clock => "Clock",
             Self::Stopwatch => "Stopwatch",
             Self::Timer => "Timer",
             Self::Alarms => "Alarms",
         }
-    }
-}
-
-// ---------------------------------------------------------------
-// Time display helpers (pure functions)
-// ---------------------------------------------------------------
-
-/// Format seconds as "HH:MM:SS".
-pub fn format_time_hms(total_secs: u64) -> String {
-    let h = (total_secs / 3600) % 24;
-    let m = (total_secs % 3600) / 60;
-    let s = total_secs % 60;
-    format!("{h:02}:{m:02}:{s:02}")
-}
-
-/// Format seconds and milliseconds as "HH:MM:SS.mmm".
-pub fn format_time_ms(total_secs: u64, millis: u32) -> String {
-    let h = (total_secs / 3600) % 24;
-    let m = (total_secs % 3600) / 60;
-    let s = total_secs % 60;
-    let ms = millis % 1000;
-    format!("{h:02}:{m:02}:{s:02}.{ms:03}")
-}
-
-/// Format a duration in a friendly human-readable form.
-///
-/// Examples: "2h 15m 30s", "45s", "1m 5s", "0s".
-pub fn format_duration_friendly(secs: u64) -> String {
-    let h = secs / 3600;
-    let m = (secs % 3600) / 60;
-    let s = secs % 60;
-    if h > 0 && m > 0 && s > 0 {
-        format!("{h}h {m}m {s}s")
-    } else if h > 0 && m > 0 {
-        format!("{h}h {m}m")
-    } else if h > 0 && s > 0 {
-        format!("{h}h {s}s")
-    } else if h > 0 {
-        format!("{h}h")
-    } else if m > 0 && s > 0 {
-        format!("{m}m {s}s")
-    } else if m > 0 {
-        format!("{m}m")
-    } else {
-        format!("{s}s")
-    }
-}
-
-/// Extract date parts from a Unix timestamp (UTC).
-///
-/// Returns `(year, month, day, hour, minute, second)`.
-pub fn date_parts(timestamp: u64) -> (u32, u8, u8, u8, u8, u8) {
-    let secs = timestamp;
-    let hour = ((secs % 86400) / 3600) as u8;
-    let minute = ((secs % 3600) / 60) as u8;
-    let second = (secs % 60) as u8;
-
-    // Days since Unix epoch (1970-01-01).
-    let mut days = (secs / 86400) as i64;
-
-    // Civil calendar from day count (algorithm from Howard Hinnant).
-    days += 719_468; // shift epoch to 0000-03-01
-    let era = if days >= 0 {
-        days / 146_097
-    } else {
-        (days - 146_096) / 146_097
-    };
-    let doe = (days - era * 146_097) as u32; // day of era [0, 146096]
-    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146_096) / 365;
-    let y = yoe as i64 + era * 400;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let d = doy - (153 * mp + 2) / 5 + 1;
-    let m = if mp < 10 { mp + 3 } else { mp - 9 };
-    let year = if m <= 2 { y + 1 } else { y };
-
-    (year as u32, m as u8, d as u8, hour, minute, second)
-}
-
-/// Format a Unix timestamp as "YYYY-MM-DD".
-pub fn format_date(timestamp: u64) -> String {
-    let (y, m, d, _, _, _) = date_parts(timestamp);
-    format!("{y:04}-{m:02}-{d:02}")
-}
-
-/// Return the day of week for a Unix timestamp.
-///
-/// 0 = Monday, 1 = Tuesday, ..., 6 = Sunday.
-pub fn day_of_week(timestamp: u64) -> u8 {
-    // 1970-01-01 was a Thursday (index 3 if Mon=0).
-    let days = timestamp / 86400;
-    ((days + 3) % 7) as u8
-}
-
-/// Return the day-of-week name for a Unix timestamp.
-pub fn format_weekday(timestamp: u64) -> &'static str {
-    match day_of_week(timestamp) {
-        0 => "Monday",
-        1 => "Tuesday",
-        2 => "Wednesday",
-        3 => "Thursday",
-        4 => "Friday",
-        5 => "Saturday",
-        _ => "Sunday",
     }
 }
 
@@ -191,7 +96,7 @@ pub struct Stopwatch {
     /// sub-second timestamps, kept for display compatibility).
     elapsed_millis: u32,
     /// Recorded lap times.
-    laps: Vec<LapTime>,
+    pub(crate) laps: Vec<LapTime>,
 }
 
 /// A single lap recording.
@@ -297,7 +202,7 @@ impl Stopwatch {
 #[derive(Debug, Clone)]
 pub struct CountdownTimer {
     /// Total countdown duration in seconds.
-    duration_secs: u64,
+    pub(crate) duration_secs: u64,
     /// Remaining seconds (snapshot at last pause/start).
     remaining_secs: u64,
     /// Whether the timer is currently counting down.
@@ -410,152 +315,6 @@ impl CountdownTimer {
 }
 
 // ---------------------------------------------------------------
-// AlarmDays
-// ---------------------------------------------------------------
-
-/// Bitmask of days on which an alarm is active.
-///
-/// Bit 0 = Monday, bit 1 = Tuesday, ..., bit 6 = Sunday.
-#[derive(Debug, Clone)]
-pub struct AlarmDays {
-    /// Bitmask of active days.
-    pub bits: u8,
-}
-
-impl AlarmDays {
-    /// All seven days enabled.
-    pub fn every_day() -> Self {
-        Self { bits: 0b0111_1111 }
-    }
-
-    /// Monday through Friday.
-    pub fn weekdays() -> Self {
-        Self { bits: 0b0001_1111 }
-    }
-
-    /// Saturday and Sunday.
-    pub fn weekends() -> Self {
-        Self { bits: 0b0110_0000 }
-    }
-
-    /// No days enabled.
-    pub fn none() -> Self {
-        Self { bits: 0 }
-    }
-
-    /// Check whether a specific day is set (0=Mon..6=Sun).
-    pub fn is_set(&self, day: u8) -> bool {
-        if day > 6 {
-            return false;
-        }
-        self.bits & (1 << day) != 0
-    }
-
-    /// Enable a specific day.
-    pub fn set(&mut self, day: u8) {
-        if day <= 6 {
-            self.bits |= 1 << day;
-        }
-    }
-
-    /// Disable a specific day.
-    pub fn clear(&mut self, day: u8) {
-        if day <= 6 {
-            self.bits &= !(1 << day);
-        }
-    }
-
-    /// Toggle a specific day on/off.
-    pub fn toggle(&mut self, day: u8) {
-        if day <= 6 {
-            self.bits ^= 1 << day;
-        }
-    }
-
-    /// Human-readable format of the active days.
-    pub fn format(&self) -> String {
-        if self.bits == 0b0111_1111 {
-            return "Every day".to_string();
-        }
-        if self.bits == 0b0001_1111 {
-            return "Weekdays".to_string();
-        }
-        if self.bits == 0b0110_0000 {
-            return "Weekends".to_string();
-        }
-        if self.bits == 0 {
-            return "Never".to_string();
-        }
-        const NAMES: [&str; 7] = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
-        let mut parts = Vec::new();
-        for (i, name) in NAMES.iter().enumerate() {
-            if self.bits & (1 << i) != 0 {
-                parts.push(*name);
-            }
-        }
-        parts.join(" ")
-    }
-}
-
-// ---------------------------------------------------------------
-// Alarm
-// ---------------------------------------------------------------
-
-/// A scheduled alarm with hour, minute, day filter, and label.
-#[derive(Debug, Clone)]
-pub struct Alarm {
-    /// Hour (0-23).
-    pub hour: u8,
-    /// Minute (0-59).
-    pub minute: u8,
-    /// Whether the alarm is enabled.
-    pub enabled: bool,
-    /// Human-readable label.
-    pub label: String,
-    /// Which days of the week the alarm fires.
-    pub days: AlarmDays,
-}
-
-impl Alarm {
-    /// Create a new enabled alarm for every day.
-    pub fn new(hour: u8, minute: u8, label: &str) -> Self {
-        Self {
-            hour: hour.min(23),
-            minute: minute.min(59),
-            enabled: true,
-            label: label.to_string(),
-            days: AlarmDays::every_day(),
-        }
-    }
-
-    /// Check whether this alarm should ring at the given timestamp.
-    ///
-    /// Returns `true` if the alarm is enabled, the hour and minute
-    /// match, and the day of week is in the active set.
-    pub fn should_ring(&self, timestamp: u64) -> bool {
-        if !self.enabled {
-            return false;
-        }
-        let (_, _, _, h, m, _) = date_parts(timestamp);
-        if h != self.hour || m != self.minute {
-            return false;
-        }
-        let dow = day_of_week(timestamp);
-        self.days.is_set(dow)
-    }
-
-    /// Format the alarm time as "HH:MM".
-    pub fn format_time(&self) -> String {
-        format!("{:02}:{:02}", self.hour, self.minute)
-    }
-
-    /// Toggle the alarm on/off.
-    pub fn toggle(&mut self) {
-        self.enabled = !self.enabled;
-    }
-}
-
-// ---------------------------------------------------------------
 // TimerEditField
 // ---------------------------------------------------------------
 
@@ -601,17 +360,17 @@ impl TimerEditField {
 /// Clock/Timer/Stopwatch application.
 #[derive(Debug)]
 pub struct ClockApp {
-    content: ContentState,
-    mode: ClockMode,
+    pub(crate) content: ContentState,
+    pub(crate) mode: ClockMode,
     /// Current Unix timestamp, set externally each frame.
     pub current_time_secs: u64,
-    stopwatch: Stopwatch,
-    timer: CountdownTimer,
-    alarms: Vec<Alarm>,
-    alarm_cursor: usize,
-    timer_edit_field: TimerEditField,
+    pub(crate) stopwatch: Stopwatch,
+    pub(crate) timer: CountdownTimer,
+    pub(crate) alarms: Vec<Alarm>,
+    pub(crate) alarm_cursor: usize,
+    pub(crate) timer_edit_field: TimerEditField,
     /// Index of an alarm currently ringing (if any).
-    ringing_alarm: Option<usize>,
+    pub(crate) ringing_alarm: Option<usize>,
 }
 
 impl ClockApp {
@@ -628,172 +387,6 @@ impl ClockApp {
             timer_edit_field: TimerEditField::Minutes,
             ringing_alarm: None,
         }
-    }
-
-    /// Build the display lines for the current mode.
-    fn build_lines(&mut self) {
-        let now = self.current_time_secs;
-        let mut lines = Vec::new();
-
-        match self.mode {
-            ClockMode::Clock => {
-                self.build_clock_lines(now, &mut lines);
-            },
-            ClockMode::Stopwatch => {
-                self.build_stopwatch_lines(now, &mut lines);
-            },
-            ClockMode::Timer => {
-                self.build_timer_lines(now, &mut lines);
-            },
-            ClockMode::Alarms => {
-                self.build_alarm_lines(&mut lines);
-            },
-        }
-
-        // Footer: mode tabs.
-        lines.push(String::new());
-        lines.push(Self::mode_tabs(self.mode));
-
-        self.content.lines = lines;
-    }
-
-    fn build_clock_lines(&self, now: u64, lines: &mut Vec<String>) {
-        let (_, _, _, h, m, s) = date_parts(now);
-        let time_str = format!("{h:02}:{m:02}:{s:02}");
-        let date_str = format_date(now);
-        let weekday = format_weekday(now);
-
-        lines.push("Clock".to_string());
-        lines.push("\u{2500}".repeat(25));
-        lines.push(format!("  {time_str}"));
-        lines.push(format!("  {weekday}, {date_str}"));
-        lines.push("\u{2500}".repeat(25));
-    }
-
-    fn build_stopwatch_lines(&self, now: u64, lines: &mut Vec<String>) {
-        let (elapsed_s, elapsed_ms) = self.stopwatch.elapsed(now);
-        let status = if self.stopwatch.is_running() {
-            "Running"
-        } else if elapsed_s > 0 || elapsed_ms > 0 {
-            "Paused"
-        } else {
-            "Stopped"
-        };
-
-        lines.push("Stopwatch".to_string());
-        lines.push("\u{2500}".repeat(25));
-        lines.push(format!("  {}", format_time_ms(elapsed_s, elapsed_ms)));
-        lines.push(format!("  Status: {status}"));
-        lines.push("\u{2500}".repeat(25));
-        lines.push("  X=Start/Stop  /\\=Lap  []=Reset".to_string());
-
-        if !self.stopwatch.laps.is_empty() {
-            lines.push(String::new());
-            lines.push("  Laps:".to_string());
-            for lap in self.stopwatch.laps.iter().rev() {
-                lines.push(format!(
-                    "  #{:<3} Split: {}  Total: {}",
-                    lap.lap_number,
-                    format_duration_friendly(lap.split_secs),
-                    format_duration_friendly(lap.total_secs),
-                ));
-            }
-        }
-    }
-
-    fn build_timer_lines(&self, now: u64, lines: &mut Vec<String>) {
-        let remaining = self.timer.remaining(now);
-        let status = if self.timer.is_running() {
-            "Running"
-        } else if self.timer.is_finished() {
-            "Finished!"
-        } else {
-            "Paused"
-        };
-
-        let h = remaining / 3600;
-        let m = (remaining % 3600) / 60;
-        let s = remaining % 60;
-
-        // Indicate which field is selected with brackets.
-        let h_str = match self.timer_edit_field {
-            TimerEditField::Hours => format!("[{h:02}]"),
-            _ => format!(" {h:02} "),
-        };
-        let m_str = match self.timer_edit_field {
-            TimerEditField::Minutes => format!("[{m:02}]"),
-            _ => format!(" {m:02} "),
-        };
-        let s_str = match self.timer_edit_field {
-            TimerEditField::Seconds => format!("[{s:02}]"),
-            _ => format!(" {s:02} "),
-        };
-
-        lines.push("Timer".to_string());
-        lines.push("\u{2500}".repeat(25));
-        lines.push(format!("  {h_str}:{m_str}:{s_str}"));
-        lines.push(format!("  Status: {status}"));
-        lines.push(format!(
-            "  Duration: {}",
-            format_duration_friendly(self.timer.duration_secs)
-        ));
-        lines.push("\u{2500}".repeat(25));
-        lines.push("  ^v=Adjust  <>=Field  X=Go  []=Reset".to_string());
-    }
-
-    fn build_alarm_lines(&self, lines: &mut Vec<String>) {
-        lines.push("Alarms".to_string());
-        lines.push("\u{2500}".repeat(25));
-
-        if self.alarms.is_empty() {
-            lines.push("  (No alarms set)".to_string());
-        } else {
-            for (i, alarm) in self.alarms.iter().enumerate() {
-                let marker = if i == self.alarm_cursor { ">" } else { " " };
-                let state = if alarm.enabled { "ON " } else { "OFF" };
-                lines.push(format!(
-                    " {marker} {} [{state}] {} ({})",
-                    alarm.format_time(),
-                    alarm.label,
-                    alarm.days.format(),
-                ));
-            }
-        }
-
-        lines.push("\u{2500}".repeat(25));
-        lines.push("  X=Toggle  /\\=Add  []=Delete".to_string());
-
-        if let Some(idx) = self.ringing_alarm
-            && let Some(alarm) = self.alarms.get(idx)
-        {
-            lines.push(String::new());
-            lines.push(format!(
-                "  ** ALARM: {} - {} **",
-                alarm.format_time(),
-                alarm.label,
-            ));
-        }
-    }
-
-    /// Build the mode tab bar line.
-    fn mode_tabs(active: ClockMode) -> String {
-        let modes = [
-            ClockMode::Clock,
-            ClockMode::Stopwatch,
-            ClockMode::Timer,
-            ClockMode::Alarms,
-        ];
-        let tabs: Vec<String> = modes
-            .iter()
-            .map(|m| {
-                if *m == active {
-                    format!("[{}]", m.label())
-                } else {
-                    m.label().to_string()
-                }
-            })
-            .collect();
-        format!(" {}", tabs.join("  "))
     }
 
     /// Check alarms and set ringing state if any match.

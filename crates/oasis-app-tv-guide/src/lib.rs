@@ -8,6 +8,9 @@
 pub mod app;
 pub mod catalog;
 pub mod channel;
+pub mod grid_layout;
+pub mod grid_render;
+pub mod grid_state;
 pub mod guide;
 pub mod schedule;
 #[cfg(any(test, feature = "test-data"))]
