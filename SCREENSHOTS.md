@@ -34,13 +34,13 @@ All screenshots are captured via `cargo run -p oasis-app --bin oasis-screenshot 
 
 | Classic | XP | Modern |
 |:---:|:---:|:---:|
-| ![Classic](screenshots/classic/02_media.png) | ![XP](screenshots/xp/02_media.png) | ![Modern](screenshots/modern/02_media.png) |
+| ![Classic](screenshots/classic/02_media_tab.png) | ![XP](screenshots/xp/02_media_tab.png) | ![Modern](screenshots/modern/02_media_tab.png) |
 
 ## Mods Tabs
 
 | Classic | XP | Modern |
 |:---:|:---:|:---:|
-| ![Classic](screenshots/classic/03_mods.png) | ![XP](screenshots/xp/03_mods.png) | ![Modern](screenshots/modern/03_mods.png) |
+| ![Classic](screenshots/classic/03_mods_tab.png) | ![XP](screenshots/xp/03_mods_tab.png) | ![Modern](screenshots/modern/03_mods_tab.png) |
 
 ## Generating Screenshots
 
