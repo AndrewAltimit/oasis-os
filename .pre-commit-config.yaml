@@ -14,7 +14,8 @@ repos:
       - id: check-yaml
         args: [--unsafe]
       - id: check-added-large-files
-        args: [--maxkb=10000]
+        args: [--maxkb=1000]
+        exclude: '^assets/oasis_demo\.mp4$'
       - id: check-json
       - id: pretty-format-json
         args: [--autofix, --no-sort-keys]
