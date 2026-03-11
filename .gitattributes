@@ -9,4 +9,3 @@
 *.json text eol=lf
 *.yaml text eol=lf
 *.yml text eol=lf
-assets/*.mp4 filter=lfs diff=lfs merge=lfs -text
