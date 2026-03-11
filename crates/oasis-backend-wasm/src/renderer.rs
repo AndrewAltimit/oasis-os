@@ -10,6 +10,7 @@ use oasis_types::backend::{
     validate_rgba_data,
 };
 use oasis_types::error::{OasisError, Result};
+use oasis_types::geometry::ClipRect;
 
 use crate::font;
 
@@ -91,18 +92,6 @@ impl GradientCacheKey {
     fn pack_color(c: Color) -> u32 {
         (c.r as u32) << 24 | (c.g as u32) << 16 | (c.b as u32) << 8 | c.a as u32
     }
-}
-
-// ---------------------------------------------------------------------------
-// Clip rectangle
-// ---------------------------------------------------------------------------
-
-#[derive(Clone, Copy)]
-struct ClipRect {
-    x: i32,
-    y: i32,
-    w: u32,
-    h: u32,
 }
 
 // ---------------------------------------------------------------------------

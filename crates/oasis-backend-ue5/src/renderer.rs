@@ -14,6 +14,9 @@ use oasis_core::backend::{
 };
 use oasis_core::error::Result;
 use oasis_types::backend::SdiCore;
+use oasis_types::color::lerp_color_ratio;
+use oasis_types::geometry::ClipRect;
+use oasis_types::rasterize::{self, PixelSink};
 
 use crate::font;
 
@@ -41,54 +44,9 @@ pub struct Ue5Backend {
     cumulative_translate: (i32, i32),
 }
 
-#[derive(Clone, Copy)]
-struct ClipRect {
-    x: i32,
-    y: i32,
-    w: u32,
-    h: u32,
-}
-
-/// Linearly interpolate between two u8 values.
-fn lerp_u8(a: u8, b: u8, t_num: u32, t_den: u32) -> u8 {
-    if t_den == 0 {
-        return a;
-    }
-    let a32 = a as u32;
-    let b32 = b as u32;
-    ((a32 * (t_den - t_num) + b32 * t_num + t_den / 2) / t_den) as u8
-}
-
-/// Interpolate a color given a numerator and denominator.
-fn lerp_color(a: Color, b: Color, num: u32, den: u32) -> Color {
-    Color::rgba(
-        lerp_u8(a.r, b.r, num, den),
-        lerp_u8(a.g, b.g, num, den),
-        lerp_u8(a.b, b.b, num, den),
-        lerp_u8(a.a, b.a, num, den),
-    )
-}
-
-/// Compute the intersection of two clip rectangles.
+/// Compute the intersection of two clip rectangles (convenience wrapper).
 fn intersect_clip(a: &ClipRect, b: &ClipRect) -> Option<ClipRect> {
-    let ax2 = a.x.saturating_add(a.w as i32);
-    let ay2 = a.y.saturating_add(a.h as i32);
-    let bx2 = b.x.saturating_add(b.w as i32);
-    let by2 = b.y.saturating_add(b.h as i32);
-    let x = a.x.max(b.x);
-    let y = a.y.max(b.y);
-    let x2 = ax2.min(bx2);
-    let y2 = ay2.min(by2);
-    if x2 > x && y2 > y {
-        Some(ClipRect {
-            x,
-            y,
-            w: (x2 - x) as u32,
-            h: (y2 - y) as u32,
-        })
-    } else {
-        None
-    }
+    a.intersect(b)
 }
 
 impl Ue5Backend {
@@ -235,6 +193,12 @@ impl Ue5Backend {
             .and_then(|t| t.as_ref())
             .ok_or_else(|| texture_not_found(tex.0))?;
         Ok((texture.width, texture.height, Rc::clone(&texture.data)))
+    }
+}
+
+impl PixelSink for Ue5Backend {
+    fn draw_hline(&mut self, x1: i32, x2: i32, y: i32, color: Color) {
+        self.hline(x1, x2, y, color);
     }
 }
 
@@ -640,57 +604,10 @@ impl SdiBackend for Ue5Backend {
         y3: i32,
         color: Color,
     ) -> Result<()> {
-        let (tx1, ty1) = self.translate(x1, y1);
-        let (tx2, ty2) = self.translate(x2, y2);
-        let (tx3, ty3) = self.translate(x3, y3);
-
-        // Sort vertices by y-coordinate.
-        let mut verts = [(tx1, ty1), (tx2, ty2), (tx3, ty3)];
-        verts.sort_by_key(|v| v.1);
-        let (vx0, vy0) = verts[0];
-        let (vx1, vy1) = verts[1];
-        let (vx2, vy2) = verts[2];
-
-        if vy0 == vy2 {
-            // Degenerate (horizontal line).
-            let min_x = vx0.min(vx1).min(vx2);
-            let max_x = vx0.max(vx1).max(vx2);
-            self.hline(min_x, max_x, vy0, color);
-            self.dirty = true;
-            return Ok(());
-        }
-
-        // Edge-walking scanline rasterizer.
-        for y in vy0..=vy2 {
-            // Compute x extents by interpolating along edges.
-            let mut x_min = i32::MAX;
-            let mut x_max = i32::MIN;
-
-            // Edge 0->2 always spans the full height.
-            let x_02 = edge_x(vx0, vy0, vx2, vy2, y);
-            x_min = x_min.min(x_02);
-            x_max = x_max.max(x_02);
-
-            if y <= vy1 && vy0 != vy1 {
-                let x_01 = edge_x(vx0, vy0, vx1, vy1, y);
-                x_min = x_min.min(x_01);
-                x_max = x_max.max(x_01);
-            }
-            if y >= vy1 && vy1 != vy2 {
-                let x_12 = edge_x(vx1, vy1, vx2, vy2, y);
-                x_min = x_min.min(x_12);
-                x_max = x_max.max(x_12);
-            }
-            if y == vy1 {
-                // Include middle vertex.
-                x_min = x_min.min(vx1);
-                x_max = x_max.max(vx1);
-            }
-
-            if x_min <= x_max {
-                self.hline(x_min, x_max, y, color);
-            }
-        }
+        let v0 = self.translate(x1, y1);
+        let v1 = self.translate(x2, y2);
+        let v2 = self.translate(x3, y3);
+        rasterize::rasterize_triangle(self, v0, v1, v2, color);
         self.dirty = true;
         Ok(())
     }
@@ -712,14 +629,14 @@ impl SdiBackend for Ue5Backend {
             GradientStyle::Vertical { top, bottom } => {
                 let h_max = h.saturating_sub(1).max(1);
                 for dy in 0..h as i32 {
-                    let color = lerp_color(top, bottom, dy as u32, h_max);
+                    let color = lerp_color_ratio(top, bottom, dy as u32, h_max);
                     self.fill_span(ty + dy, tx, tx + w as i32, color);
                 }
             },
             GradientStyle::Horizontal { left, right } => {
                 let w_max = w.saturating_sub(1).max(1);
                 for dx in 0..w as i32 {
-                    let color = lerp_color(left, right, dx as u32, w_max);
+                    let color = lerp_color_ratio(left, right, dx as u32, w_max);
                     for dy in 0..h as i32 {
                         self.set_pixel(tx + dx, ty + dy, color);
                     }
@@ -734,10 +651,10 @@ impl SdiBackend for Ue5Backend {
                 let h_max = h.saturating_sub(1).max(1);
                 let w_max = w.saturating_sub(1).max(1);
                 for dy in 0..h as i32 {
-                    let left = lerp_color(top_left, bottom_left, dy as u32, h_max);
-                    let right = lerp_color(top_right, bottom_right, dy as u32, h_max);
+                    let left = lerp_color_ratio(top_left, bottom_left, dy as u32, h_max);
+                    let right = lerp_color_ratio(top_right, bottom_right, dy as u32, h_max);
                     for dx in 0..w as i32 {
-                        let color = lerp_color(left, right, dx as u32, w_max);
+                        let color = lerp_color_ratio(left, right, dx as u32, w_max);
                         self.set_pixel(tx + dx, ty + dy, color);
                     }
                 }
@@ -991,26 +908,9 @@ impl SdiBackend for Ue5Backend {
     }
 }
 
-/// Integer square root (floor).
+/// Integer square root (delegates to shared rasterizer).
 fn isqrt(n: u32) -> u32 {
-    if n == 0 {
-        return 0;
-    }
-    let mut x = n;
-    let mut y = x.div_ceil(2);
-    while y < x {
-        x = y;
-        y = (x + n / x) / 2;
-    }
-    x
-}
-
-/// Compute the x coordinate along an edge at a given y (linear interpolation).
-fn edge_x(x0: i32, y0: i32, x1: i32, y1: i32, y: i32) -> i32 {
-    if y1 == y0 {
-        return x0;
-    }
-    x0 + (x1 - x0) * (y - y0) / (y1 - y0)
+    rasterize::isqrt(n)
 }
 
 #[cfg(test)]
@@ -1424,162 +1324,6 @@ mod tests {
         let (w, h) = backend.measure_text_extents("AB", 8);
         assert_eq!(w, 14); // proportional: A(7)+B(7) = 14
         assert_eq!(h, 8);
-    }
-
-    // ---------------------------------------------------------------
-    // lerp_u8 / lerp_color tests
-    // ---------------------------------------------------------------
-
-    #[test]
-    fn lerp_u8_at_start() {
-        assert_eq!(lerp_u8(0, 255, 0, 10), 0);
-    }
-
-    #[test]
-    fn lerp_u8_at_end() {
-        assert_eq!(lerp_u8(0, 255, 10, 10), 255);
-    }
-
-    #[test]
-    fn lerp_u8_midpoint() {
-        // (0 * 5 + 200 * 5 + 5) / 10 = 1005/10 = 100 (with rounding)
-        let mid = lerp_u8(0, 200, 5, 10);
-        assert_eq!(mid, 100);
-    }
-
-    #[test]
-    fn lerp_u8_zero_denominator_returns_a() {
-        assert_eq!(lerp_u8(42, 200, 5, 0), 42);
-    }
-
-    #[test]
-    fn lerp_u8_same_values() {
-        assert_eq!(lerp_u8(128, 128, 3, 10), 128);
-    }
-
-    #[test]
-    fn lerp_u8_max_values() {
-        assert_eq!(lerp_u8(255, 255, 5, 10), 255);
-    }
-
-    #[test]
-    fn lerp_u8_min_values() {
-        assert_eq!(lerp_u8(0, 0, 5, 10), 0);
-    }
-
-    #[test]
-    fn lerp_color_endpoints() {
-        let a = Color::rgba(0, 0, 0, 0);
-        let b = Color::rgba(255, 255, 255, 255);
-        let at_start = lerp_color(a, b, 0, 10);
-        assert_eq!(at_start, a);
-        let at_end = lerp_color(a, b, 10, 10);
-        assert_eq!(at_end, b);
-    }
-
-    #[test]
-    fn lerp_color_midpoint() {
-        let a = Color::rgba(0, 0, 0, 0);
-        let b = Color::rgba(200, 100, 50, 250);
-        let mid = lerp_color(a, b, 5, 10);
-        assert_eq!(mid.r, 100);
-        assert_eq!(mid.g, 50);
-        assert_eq!(mid.b, 25);
-        assert_eq!(mid.a, 125);
-    }
-
-    #[test]
-    fn lerp_color_zero_denominator() {
-        let a = Color::rgb(42, 42, 42);
-        let b = Color::rgb(200, 200, 200);
-        let result = lerp_color(a, b, 5, 0);
-        assert_eq!(result, a);
-    }
-
-    // ---------------------------------------------------------------
-    // intersect_clip tests
-    // ---------------------------------------------------------------
-
-    #[test]
-    fn intersect_clip_overlapping() {
-        let a = ClipRect {
-            x: 0,
-            y: 0,
-            w: 100,
-            h: 100,
-        };
-        let b = ClipRect {
-            x: 50,
-            y: 50,
-            w: 100,
-            h: 100,
-        };
-        let r = intersect_clip(&a, &b).unwrap();
-        assert_eq!((r.x, r.y, r.w, r.h), (50, 50, 50, 50));
-    }
-
-    #[test]
-    fn intersect_clip_no_overlap() {
-        let a = ClipRect {
-            x: 0,
-            y: 0,
-            w: 10,
-            h: 10,
-        };
-        let b = ClipRect {
-            x: 20,
-            y: 20,
-            w: 10,
-            h: 10,
-        };
-        assert!(intersect_clip(&a, &b).is_none());
-    }
-
-    #[test]
-    fn intersect_clip_touching_edge() {
-        let a = ClipRect {
-            x: 0,
-            y: 0,
-            w: 10,
-            h: 10,
-        };
-        let b = ClipRect {
-            x: 10,
-            y: 0,
-            w: 10,
-            h: 10,
-        };
-        assert!(intersect_clip(&a, &b).is_none());
-    }
-
-    #[test]
-    fn intersect_clip_contained() {
-        let outer = ClipRect {
-            x: 0,
-            y: 0,
-            w: 200,
-            h: 200,
-        };
-        let inner = ClipRect {
-            x: 10,
-            y: 20,
-            w: 50,
-            h: 30,
-        };
-        let r = intersect_clip(&outer, &inner).unwrap();
-        assert_eq!((r.x, r.y, r.w, r.h), (10, 20, 50, 30));
-    }
-
-    #[test]
-    fn intersect_clip_same_rect() {
-        let a = ClipRect {
-            x: 10,
-            y: 20,
-            w: 100,
-            h: 80,
-        };
-        let r = intersect_clip(&a, &a).unwrap();
-        assert_eq!((r.x, r.y, r.w, r.h), (10, 20, 100, 80));
     }
 
     // ---------------------------------------------------------------

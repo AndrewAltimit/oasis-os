@@ -16,6 +16,23 @@ pub fn lerp_color(a: Color, b: Color, t: f32) -> Color {
     )
 }
 
+/// Linearly interpolate between two colors using integer ratio `num / den`.
+///
+/// This avoids floating-point math and is preferred for gradient scanline loops
+/// where `num` steps from `0` to `den`. Returns `a` when `den == 0`.
+pub fn lerp_color_ratio(a: Color, b: Color, num: u32, den: u32) -> Color {
+    if den == 0 {
+        return a;
+    }
+    let inv = den - num;
+    Color::rgba(
+        ((a.r as u32 * inv + b.r as u32 * num + den / 2) / den) as u8,
+        ((a.g as u32 * inv + b.g as u32 * num + den / 2) / den) as u8,
+        ((a.b as u32 * inv + b.b as u32 * num + den / 2) / den) as u8,
+        ((a.a as u32 * inv + b.a as u32 * num + den / 2) / den) as u8,
+    )
+}
+
 /// Darken a color by a factor (0.0 = black, 1.0 = unchanged).
 pub fn darken(color: Color, factor: f32) -> Color {
     let f = factor.clamp(0.0, 1.0);
@@ -207,6 +224,34 @@ mod tests {
         assert_eq!(mid.r, 100);
         assert_eq!(mid.g, 50);
         assert_eq!(mid.b, 25);
+    }
+
+    #[test]
+    fn lerp_ratio_endpoints() {
+        let a = Color::rgb(0, 0, 0);
+        let b = Color::rgb(255, 255, 255);
+        let at_start = lerp_color_ratio(a, b, 0, 10);
+        assert_eq!(at_start, a);
+        let at_end = lerp_color_ratio(a, b, 10, 10);
+        assert_eq!(at_end, b);
+    }
+
+    #[test]
+    fn lerp_ratio_midpoint() {
+        let a = Color::rgb(0, 0, 0);
+        let b = Color::rgb(200, 100, 50);
+        let mid = lerp_color_ratio(a, b, 5, 10);
+        assert_eq!(mid.r, 100);
+        assert_eq!(mid.g, 50);
+        assert_eq!(mid.b, 25);
+    }
+
+    #[test]
+    fn lerp_ratio_zero_denominator() {
+        let a = Color::rgb(42, 42, 42);
+        let b = Color::rgb(200, 200, 200);
+        let result = lerp_color_ratio(a, b, 5, 0);
+        assert_eq!(result, a);
     }
 
     #[test]

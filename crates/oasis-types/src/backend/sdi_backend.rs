@@ -281,7 +281,10 @@ pub trait SdiBackend: SdiCore {
     /// The default returns the PSP native resolution (480x272). Backends
     /// should override this to return their actual canvas size.
     fn viewport_size(&self) -> (u32, u32) {
-        (480, 272)
+        (
+            super::DEFAULT_VIEWPORT_WIDTH,
+            super::DEFAULT_VIEWPORT_HEIGHT,
+        )
     }
 
     /// Dim the entire viewport with a semi-transparent overlay.

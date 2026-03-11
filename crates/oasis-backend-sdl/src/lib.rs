@@ -27,11 +27,13 @@ use oasis_core::backend::{
     validate_rgba_data,
 };
 use oasis_core::error::Result;
+use oasis_types::color::lerp_color_ratio;
+pub use oasis_types::geometry::ClipRect;
 
 pub use network::SdlNetworkBackend;
 pub use sdl_audio::SdlAudioBackend;
 
-use shapes::{intersect_clip, isqrt, lerp_color_sdl};
+use shapes::{intersect_clip, isqrt};
 
 // Re-export input helpers for tests.
 #[cfg(test)]
@@ -47,15 +49,6 @@ pub(crate) fn frect(x: i32, y: i32, w: u32, h: u32) -> FRect {
 /// Convert integer coordinates to an `FPoint` for SDL3 renderer calls.
 pub(crate) fn fpoint(x: i32, y: i32) -> FPoint {
     FPoint::new(x as f32, y as f32)
-}
-
-/// Stored clip rectangle.
-#[derive(Clone, Copy)]
-pub(crate) struct ClipRect {
-    pub(crate) x: i32,
-    pub(crate) y: i32,
-    pub(crate) w: u32,
-    pub(crate) h: u32,
 }
 
 /// SDL3 rendering and input backend.
@@ -476,7 +469,7 @@ impl SdiBackend for SdlBackend {
             GradientStyle::Vertical { top, bottom } => {
                 let h_max = h.saturating_sub(1).max(1);
                 for dy in 0..h as i32 {
-                    let color = lerp_color_sdl(top, bottom, dy as u32, h_max);
+                    let color = lerp_color_ratio(top, bottom, dy as u32, h_max);
                     self.set_color(color);
                     let _ = self.canvas.fill_rect(frect(tx, ty + dy, w, 1));
                 }
@@ -484,7 +477,7 @@ impl SdiBackend for SdlBackend {
             GradientStyle::Horizontal { left, right } => {
                 let w_max = w.saturating_sub(1).max(1);
                 for dx in 0..w as i32 {
-                    let color = lerp_color_sdl(left, right, dx as u32, w_max);
+                    let color = lerp_color_ratio(left, right, dx as u32, w_max);
                     self.set_color(color);
                     let _ = self.canvas.fill_rect(frect(tx + dx, ty, 1, h));
                 }
@@ -498,10 +491,10 @@ impl SdiBackend for SdlBackend {
                 let h_max = h.saturating_sub(1).max(1);
                 let w_max = w.saturating_sub(1).max(1);
                 for dy in 0..h as i32 {
-                    let left = lerp_color_sdl(top_left, bottom_left, dy as u32, h_max);
-                    let right = lerp_color_sdl(top_right, bottom_right, dy as u32, h_max);
+                    let left = lerp_color_ratio(top_left, bottom_left, dy as u32, h_max);
+                    let right = lerp_color_ratio(top_right, bottom_right, dy as u32, h_max);
                     for dx in 0..w as i32 {
-                        let color = lerp_color_sdl(left, right, dx as u32, w_max);
+                        let color = lerp_color_ratio(left, right, dx as u32, w_max);
                         self.set_color(color);
                         let _ = self.canvas.fill_rect(frect(tx + dx, ty + dy, 1, 1));
                     }
@@ -535,7 +528,7 @@ impl SdiBackend for SdlBackend {
 
         // Draw scanline by scanline, clipping to the rounded rect shape.
         for dy in 0..h as i32 {
-            let color = lerp_color_sdl(top_color, bottom_color, dy as u32, h_max as u32);
+            let color = lerp_color_ratio(top_color, bottom_color, dy as u32, h_max as u32);
             self.set_color(color);
 
             // Compute horizontal inset for rounded corners.
@@ -1040,98 +1033,6 @@ mod tests {
     // ---------------------------------------------------------------
 
     #[test]
-    fn intersect_clip_overlapping() {
-        let a = ClipRect {
-            x: 0,
-            y: 0,
-            w: 100,
-            h: 100,
-        };
-        let b = ClipRect {
-            x: 50,
-            y: 50,
-            w: 100,
-            h: 100,
-        };
-        let r = intersect_clip(&a, &b).unwrap();
-        assert_eq!(r.x, 50);
-        assert_eq!(r.y, 50);
-        assert_eq!(r.w, 50);
-        assert_eq!(r.h, 50);
-    }
-
-    #[test]
-    fn intersect_clip_contained() {
-        let outer = ClipRect {
-            x: 0,
-            y: 0,
-            w: 200,
-            h: 200,
-        };
-        let inner = ClipRect {
-            x: 10,
-            y: 20,
-            w: 50,
-            h: 30,
-        };
-        let r = intersect_clip(&outer, &inner).unwrap();
-        assert_eq!(r.x, 10);
-        assert_eq!(r.y, 20);
-        assert_eq!(r.w, 50);
-        assert_eq!(r.h, 30);
-    }
-
-    #[test]
-    fn intersect_clip_no_overlap() {
-        let a = ClipRect {
-            x: 0,
-            y: 0,
-            w: 50,
-            h: 50,
-        };
-        let b = ClipRect {
-            x: 100,
-            y: 100,
-            w: 50,
-            h: 50,
-        };
-        assert!(intersect_clip(&a, &b).is_none());
-    }
-
-    #[test]
-    fn intersect_clip_touching_edge() {
-        let a = ClipRect {
-            x: 0,
-            y: 0,
-            w: 50,
-            h: 50,
-        };
-        let b = ClipRect {
-            x: 50,
-            y: 0,
-            w: 50,
-            h: 50,
-        };
-        // Touching at edge but not overlapping.
-        assert!(intersect_clip(&a, &b).is_none());
-    }
-
-    #[test]
-    fn intersect_clip_same_rect() {
-        let a = ClipRect {
-            x: 10,
-            y: 20,
-            w: 100,
-            h: 80,
-        };
-        let r = intersect_clip(&a, &a).unwrap();
-        assert_eq!(r.x, 10);
-        assert_eq!(r.y, 20);
-        assert_eq!(r.w, 100);
-        assert_eq!(r.h, 80);
-    }
-
-    #[test]
     fn isqrt_known_values() {
         assert_eq!(isqrt(0), 0);
         assert_eq!(isqrt(1), 1);
@@ -1182,34 +1083,6 @@ mod tests {
         assert_eq!(edge_x(10, 20, 50, 80, 20), 10);
         // At y=y1, should return x1.
         assert_eq!(edge_x(10, 20, 50, 80, 80), 50);
-    }
-
-    #[test]
-    fn lerp_color_sdl_endpoints() {
-        let a = Color::rgb(0, 0, 0);
-        let b = Color::rgb(255, 255, 255);
-        let at_start = lerp_color_sdl(a, b, 0, 10);
-        assert_eq!(at_start, a);
-        let at_end = lerp_color_sdl(a, b, 10, 10);
-        assert_eq!(at_end, b);
-    }
-
-    #[test]
-    fn lerp_color_sdl_midpoint() {
-        let a = Color::rgb(0, 0, 0);
-        let b = Color::rgb(200, 100, 50);
-        let mid = lerp_color_sdl(a, b, 5, 10);
-        assert_eq!(mid.r, 100);
-        assert_eq!(mid.g, 50);
-        assert_eq!(mid.b, 25);
-    }
-
-    #[test]
-    fn lerp_color_sdl_zero_denominator() {
-        let a = Color::rgb(42, 42, 42);
-        let b = Color::rgb(200, 200, 200);
-        let result = lerp_color_sdl(a, b, 5, 0);
-        assert_eq!(result, a);
     }
 
     // ---------------------------------------------------------------
