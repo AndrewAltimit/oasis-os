@@ -1644,6 +1644,107 @@ mod tests {
     }
 
     #[test]
+    fn truncated_moov_atom() {
+        // A moov atom whose declared size extends beyond the available data.
+        // The moov header says 200 bytes total, but we only provide 20.
+        let mut data = Vec::new();
+        // ftyp box (valid, 24 bytes)
+        data.extend_from_slice(&24u32.to_be_bytes());
+        data.extend_from_slice(b"ftyp");
+        data.extend_from_slice(&[0u8; 16]);
+        // moov box header claiming 200 bytes, but content is truncated
+        data.extend_from_slice(&200u32.to_be_bytes());
+        data.extend_from_slice(b"moov");
+        data.extend_from_slice(&[0u8; 4]); // only 4 bytes of "content"
+
+        // Should not panic. parse_boxes skips boxes whose end exceeds
+        // the parent boundary, so moov is skipped and no tracks found.
+        let mp4 = Mp4Lite::open(Cursor::new(data)).unwrap();
+        assert!(mp4.video_track_info().is_none());
+        assert!(mp4.audio_track_info().is_none());
+    }
+
+    #[test]
+    fn truncated_moov_atom_via_parse_moov_tracks() {
+        // A moov header that claims 200 bytes but only 20 bytes are present.
+        // parse_moov_tracks should handle gracefully (no panic).
+        let mut data = Vec::new();
+        data.extend_from_slice(&200u32.to_be_bytes());
+        data.extend_from_slice(b"moov");
+        data.extend_from_slice(&[0u8; 12]); // truncated content
+        let result = parse_moov_tracks(&data);
+        // Should succeed but find no tracks (children are truncated/skipped).
+        match result {
+            Ok((v, a)) => {
+                assert!(v.is_none());
+                assert!(a.is_none());
+            },
+            Err(_) => {
+                // An error is also acceptable -- just must not panic.
+            },
+        }
+    }
+
+    #[test]
+    fn zero_size_atom_parsing() {
+        // An atom with size=0 means "extends to end of file".
+        // Build: ftyp(24 bytes) + zero-size mdat.
+        let mut data = Vec::new();
+        // ftyp
+        data.extend_from_slice(&24u32.to_be_bytes());
+        data.extend_from_slice(b"ftyp");
+        data.extend_from_slice(&[0u8; 16]);
+        // mdat with size=0 (extends to EOF)
+        data.extend_from_slice(&0u32.to_be_bytes());
+        data.extend_from_slice(b"mdat");
+        data.extend_from_slice(&[0xAA; 50]); // payload
+
+        // Should parse without panic. No moov, so no tracks.
+        let mp4 = Mp4Lite::open(Cursor::new(data)).unwrap();
+        assert!(mp4.video_track_info().is_none());
+        assert!(mp4.audio_track_info().is_none());
+    }
+
+    #[test]
+    fn zero_size_moov_atom() {
+        // A moov atom with size=0 (extends to EOF) but no valid children.
+        let mut data = Vec::new();
+        data.extend_from_slice(&0u32.to_be_bytes());
+        data.extend_from_slice(b"moov");
+        data.extend_from_slice(&[0u8; 30]); // garbage children
+
+        let mp4 = Mp4Lite::open(Cursor::new(data)).unwrap();
+        assert!(mp4.video_track_info().is_none());
+        assert!(mp4.audio_track_info().is_none());
+    }
+
+    #[test]
+    fn empty_input_mp4lite() {
+        // Parsing an empty byte slice should return Ok with no tracks,
+        // not panic.
+        let mp4 = Mp4Lite::open(Cursor::new(Vec::<u8>::new())).unwrap();
+        assert!(mp4.video_track_info().is_none());
+        assert!(mp4.audio_track_info().is_none());
+    }
+
+    #[test]
+    fn ftyp_only_no_moov() {
+        // Just an ftyp atom with no moov. Should return no track info.
+        let ftyp_content = b"isom\x00\x00\x00\x00isomavc1";
+        let data = build_boxes(&[(b"ftyp", ftyp_content)]);
+
+        let mp4 = Mp4Lite::open(Cursor::new(data)).unwrap();
+        assert!(
+            mp4.video_track_info().is_none(),
+            "ftyp-only file should have no video track"
+        );
+        assert!(
+            mp4.audio_track_info().is_none(),
+            "ftyp-only file should have no audio track"
+        );
+    }
+
+    #[test]
     fn find_sample_at_empty_stts() {
         let track = TrackInfo {
             kind: TrackKind::Audio,

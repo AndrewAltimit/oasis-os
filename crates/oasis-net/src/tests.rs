@@ -568,3 +568,204 @@ fn client_default_not_connected() {
     let client = RemoteClient::new();
     assert!(!client.is_connected());
 }
+
+// ---------------------------------------------------------------------------
+// Edge-case integration tests (real TCP)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn listener_max_connections_reached() {
+    let port = free_port();
+    let config = ListenerConfig {
+        port,
+        psk: String::new(),
+        max_connections: 2,
+        ..ListenerConfig::default()
+    };
+    let mut listener = RemoteListener::new(config);
+    let mut backend = StdNetworkBackend::new();
+    listener.start(&mut backend).unwrap();
+
+    // Connect two clients (the maximum).
+    let _client1 = TcpStream::connect(format!("127.0.0.1:{port}")).unwrap();
+    std::thread::sleep(std::time::Duration::from_millis(50));
+    listener.poll(&mut backend);
+    assert_eq!(listener.connection_count(), 1);
+
+    let _client2 = TcpStream::connect(format!("127.0.0.1:{port}")).unwrap();
+    std::thread::sleep(std::time::Duration::from_millis(50));
+    listener.poll(&mut backend);
+    assert_eq!(listener.connection_count(), 2);
+
+    // Third connection -- should NOT be accepted.
+    let _client3 = TcpStream::connect(format!("127.0.0.1:{port}")).unwrap();
+    std::thread::sleep(std::time::Duration::from_millis(50));
+    listener.poll(&mut backend);
+    assert_eq!(listener.connection_count(), 2);
+
+    listener.stop();
+}
+
+#[test]
+fn listener_overlong_line_disconnects() {
+    let port = free_port();
+    let config = ListenerConfig {
+        port,
+        psk: String::new(),
+        max_connections: 2,
+        ..ListenerConfig::default()
+    };
+    let mut listener = RemoteListener::new(config);
+    let mut backend = StdNetworkBackend::new();
+    listener.start(&mut backend).unwrap();
+
+    let mut client = TcpStream::connect(format!("127.0.0.1:{port}")).unwrap();
+    std::thread::sleep(std::time::Duration::from_millis(50));
+    listener.poll(&mut backend);
+    assert_eq!(listener.connection_count(), 1);
+
+    // Read the welcome message so it doesn't interfere.
+    let mut buf = [0u8; 256];
+    let _ = client.read(&mut buf).unwrap();
+
+    // Send more than 1024 bytes without a newline.
+    // The listener reads in 512-byte chunks, so we need multiple polls
+    // to accumulate past MAX_LINE_LEN (1024).
+    let overlong = vec![b'A'; 2048];
+    client.write_all(&overlong).unwrap();
+    std::thread::sleep(std::time::Duration::from_millis(100));
+
+    // Poll multiple times so the 512-byte reads accumulate past 1024.
+    for _ in 0..6 {
+        listener.poll(&mut backend);
+        if listener.connection_count() == 0 {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    // Connection should be dropped due to overlong line.
+    assert_eq!(listener.connection_count(), 0);
+
+    listener.stop();
+}
+
+#[test]
+fn listener_empty_lines_ignored() {
+    let port = free_port();
+    let config = ListenerConfig {
+        port,
+        psk: String::new(),
+        max_connections: 2,
+        ..ListenerConfig::default()
+    };
+    let mut listener = RemoteListener::new(config);
+    let mut backend = StdNetworkBackend::new();
+    listener.start(&mut backend).unwrap();
+
+    let mut client = TcpStream::connect(format!("127.0.0.1:{port}")).unwrap();
+    std::thread::sleep(std::time::Duration::from_millis(50));
+    listener.poll(&mut backend);
+
+    // Read the welcome message.
+    let mut buf = [0u8; 256];
+    let _ = client.read(&mut buf).unwrap();
+
+    // Send empty lines followed by a real command.
+    client.write_all(b"\n\n\nhello\n").unwrap();
+    std::thread::sleep(std::time::Duration::from_millis(50));
+
+    let commands = listener.poll(&mut backend);
+    assert_eq!(commands.len(), 1);
+    assert_eq!(commands[0].0, "hello");
+
+    listener.stop();
+}
+
+#[test]
+fn listener_multiple_commands_in_one_read() {
+    let port = free_port();
+    let config = ListenerConfig {
+        port,
+        psk: String::new(),
+        max_connections: 2,
+        ..ListenerConfig::default()
+    };
+    let mut listener = RemoteListener::new(config);
+    let mut backend = StdNetworkBackend::new();
+    listener.start(&mut backend).unwrap();
+
+    let mut client = TcpStream::connect(format!("127.0.0.1:{port}")).unwrap();
+    std::thread::sleep(std::time::Duration::from_millis(50));
+    listener.poll(&mut backend);
+
+    // Read the welcome message.
+    let mut buf = [0u8; 256];
+    let _ = client.read(&mut buf).unwrap();
+
+    // Send three commands in a single write.
+    client.write_all(b"cmd1\ncmd2\ncmd3\n").unwrap();
+    std::thread::sleep(std::time::Duration::from_millis(50));
+
+    let commands = listener.poll(&mut backend);
+    assert_eq!(commands.len(), 3);
+    assert_eq!(commands[0].0, "cmd1");
+    assert_eq!(commands[1].0, "cmd2");
+    assert_eq!(commands[2].0, "cmd3");
+
+    listener.stop();
+}
+
+#[test]
+fn client_disconnect_and_reconnect() {
+    // Start a listener to act as the server.
+    let port = free_port();
+    let config = ListenerConfig {
+        port,
+        psk: String::new(),
+        max_connections: 2,
+        ..ListenerConfig::default()
+    };
+    let mut listener = RemoteListener::new(config);
+    let mut backend = StdNetworkBackend::new();
+    listener.start(&mut backend).unwrap();
+
+    // First connection.
+    let mut client_backend = StdNetworkBackend::new();
+    let mut client = RemoteClient::new();
+    client
+        .connect(&mut client_backend, "127.0.0.1", port, None)
+        .unwrap();
+    assert!(client.is_connected());
+    std::thread::sleep(std::time::Duration::from_millis(50));
+    listener.poll(&mut backend);
+    assert_eq!(listener.connection_count(), 1);
+
+    // Disconnect the client.
+    client.disconnect();
+    assert!(!client.is_connected());
+    assert_eq!(client.state(), ClientState::Disconnected);
+    std::thread::sleep(std::time::Duration::from_millis(50));
+
+    // Reconnect with a new client.
+    let mut client2 = RemoteClient::new();
+    client2
+        .connect(&mut client_backend, "127.0.0.1", port, None)
+        .unwrap();
+    assert!(client2.is_connected());
+    assert_eq!(client2.state(), ClientState::Connected);
+    std::thread::sleep(std::time::Duration::from_millis(50));
+
+    // Poll to accept the new connection and clean up the old one.
+    listener.poll(&mut backend);
+
+    // Send a command to verify the new connection works.
+    client2.send("test_reconnect").unwrap();
+    std::thread::sleep(std::time::Duration::from_millis(50));
+
+    let commands = listener.poll(&mut backend);
+    assert!(!commands.is_empty());
+    assert!(commands.iter().any(|(cmd, _)| cmd == "test_reconnect"));
+
+    client2.disconnect();
+    listener.stop();
+}
