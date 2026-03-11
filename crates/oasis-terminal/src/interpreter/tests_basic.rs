@@ -2,6 +2,7 @@
 
 use super::*;
 use crate::expander::{glob_match, glob_match_simple};
+use crate::test_helpers::{assert_none_output, assert_text};
 use oasis_vfs::{MemoryVfs, Vfs};
 
 struct EchoCmd;
@@ -48,10 +49,10 @@ fn register_and_execute() {
     reg.register(Box::new(EchoCmd));
     let mut vfs = MemoryVfs::new();
     let mut env = make_env(&mut vfs);
-    match reg.execute("echo hello world", &mut env).unwrap() {
-        CommandOutput::Text(s) => assert_eq!(s, "hello world"),
-        _ => panic!("expected text output"),
-    }
+    assert_eq!(
+        assert_text!(reg.execute("echo hello world", &mut env).unwrap()),
+        "hello world"
+    );
 }
 
 #[test]
@@ -72,10 +73,7 @@ fn empty_input() {
     let reg = CommandRegistry::new();
     let mut vfs = MemoryVfs::new();
     let mut env = make_env(&mut vfs);
-    match reg.execute("", &mut env).unwrap() {
-        CommandOutput::None => {},
-        _ => panic!("expected None for empty input"),
-    }
+    assert_none_output!(reg.execute("", &mut env).unwrap());
 }
 
 #[test]
@@ -92,10 +90,7 @@ fn whitespace_only_input_returns_none() {
     let reg = CommandRegistry::new();
     let mut vfs = MemoryVfs::new();
     let mut env = make_env(&mut vfs);
-    match reg.execute("   \t  ", &mut env).unwrap() {
-        CommandOutput::None => {},
-        _ => panic!("expected None for whitespace-only input"),
-    }
+    assert_none_output!(reg.execute("   \t  ", &mut env).unwrap());
 }
 
 #[test]
@@ -104,10 +99,10 @@ fn multiple_spaces_between_args() {
     reg.register(Box::new(EchoCmd));
     let mut vfs = MemoryVfs::new();
     let mut env = make_env(&mut vfs);
-    match reg.execute("echo   hello    world", &mut env).unwrap() {
-        CommandOutput::Text(s) => assert_eq!(s, "hello world"),
-        _ => panic!("expected text output"),
-    }
+    assert_eq!(
+        assert_text!(reg.execute("echo   hello    world", &mut env).unwrap()),
+        "hello world"
+    );
 }
 
 #[test]
@@ -116,10 +111,10 @@ fn leading_trailing_whitespace() {
     reg.register(Box::new(EchoCmd));
     let mut vfs = MemoryVfs::new();
     let mut env = make_env(&mut vfs);
-    match reg.execute("  echo hi  ", &mut env).unwrap() {
-        CommandOutput::Text(s) => assert_eq!(s, "hi"),
-        _ => panic!("expected text output"),
-    }
+    assert_eq!(
+        assert_text!(reg.execute("  echo hi  ", &mut env).unwrap()),
+        "hi"
+    );
 }
 
 #[test]
@@ -128,10 +123,11 @@ fn command_no_args() {
     reg.register(Box::new(EchoCmd));
     let mut vfs = MemoryVfs::new();
     let mut env = make_env(&mut vfs);
-    match reg.execute("echo", &mut env).unwrap() {
+    let result = reg.execute("echo", &mut env).unwrap();
+    match result {
         CommandOutput::Text(s) => assert_eq!(s, ""),
         CommandOutput::None => {}, // Empty echo may produce no output.
-        _ => panic!("expected text or none"),
+        other => panic!("expected text or none, got {other:?}"),
     }
 }
 
@@ -270,10 +266,7 @@ fn many_args() {
             .collect::<Vec<_>>()
             .join(" ")
     );
-    match reg.execute(&long_input, &mut env).unwrap() {
-        CommandOutput::Text(s) => assert!(s.contains("99")),
-        _ => panic!("expected text output"),
-    }
+    assert!(assert_text!(reg.execute(&long_input, &mut env).unwrap()).contains("99"));
 }
 
 #[test]
@@ -299,10 +292,10 @@ fn very_long_argument() {
     let mut env = make_env(&mut vfs);
     let long_arg = "x".repeat(50_000);
     let input = format!("echo {long_arg}");
-    match reg.execute(&input, &mut env).unwrap() {
-        CommandOutput::Text(s) => assert_eq!(s.len(), 50_000),
-        _ => panic!("expected text output"),
-    }
+    assert_eq!(
+        assert_text!(reg.execute(&input, &mut env).unwrap()).len(),
+        50_000
+    );
 }
 
 #[test]
@@ -322,10 +315,7 @@ fn tab_separated_args() {
     reg.register(Box::new(EchoCmd));
     let mut vfs = MemoryVfs::new();
     let mut env = make_env(&mut vfs);
-    match reg.execute("echo\thello\tworld", &mut env).unwrap() {
-        CommandOutput::Text(s) => assert!(s.contains("hello")),
-        _ => panic!("expected text output"),
-    }
+    assert!(assert_text!(reg.execute("echo\thello\tworld", &mut env).unwrap()).contains("hello"));
 }
 
 #[test]
@@ -343,10 +333,7 @@ fn only_spaces() {
     let reg = CommandRegistry::new();
     let mut vfs = MemoryVfs::new();
     let mut env = make_env(&mut vfs);
-    match reg.execute("     ", &mut env).unwrap() {
-        CommandOutput::None => {},
-        _ => panic!("expected None for whitespace-only"),
-    }
+    assert_none_output!(reg.execute("     ", &mut env).unwrap());
 }
 
 #[test]
@@ -355,10 +342,10 @@ fn command_case_insensitive() {
     reg.register(Box::new(EchoCmd));
     let mut vfs = MemoryVfs::new();
     let mut env = make_env(&mut vfs);
-    match reg.execute("ECHO hello", &mut env).unwrap() {
-        CommandOutput::Text(s) => assert_eq!(s, "hello"),
-        _ => panic!("expected text output"),
-    }
+    assert_eq!(
+        assert_text!(reg.execute("ECHO hello", &mut env).unwrap()),
+        "hello"
+    );
 }
 
 #[test]
@@ -377,10 +364,7 @@ fn execute_with_special_chars_in_args() {
     reg.register(Box::new(EchoCmd));
     let mut vfs = MemoryVfs::new();
     let mut env = make_env(&mut vfs);
-    match reg.execute("echo @#$%^&", &mut env).unwrap() {
-        CommandOutput::Text(s) => assert!(s.contains("@#")),
-        _ => panic!("expected text output"),
-    }
+    assert!(assert_text!(reg.execute("echo @#$%^&", &mut env).unwrap()).contains("@#"));
 }
 
 #[test]
@@ -389,19 +373,15 @@ fn execute_unicode_args() {
     reg.register(Box::new(EchoCmd));
     let mut vfs = MemoryVfs::new();
     let mut env = make_env(&mut vfs);
-    match reg
-        .execute(
+    let s = assert_text!(
+        reg.execute(
             "echo \u{3053}\u{3093}\u{306b}\u{3061}\u{306f} \u{4e16}\u{754c}",
             &mut env,
         )
         .unwrap()
-    {
-        CommandOutput::Text(s) => {
-            assert!(s.contains("\u{3053}\u{3093}\u{306b}\u{3061}\u{306f}"));
-            assert!(s.contains("\u{4e16}\u{754c}"));
-        },
-        _ => panic!("expected text output"),
-    }
+    );
+    assert!(s.contains("\u{3053}\u{3093}\u{306b}\u{3061}\u{306f}"));
+    assert!(s.contains("\u{4e16}\u{754c}"));
 }
 
 // -- Tokenizer tests --
@@ -521,10 +501,7 @@ fn history_bang_bang() {
     let mut vfs = MemoryVfs::new();
     let mut env = make_env(&mut vfs);
     reg.execute("echo hello", &mut env).unwrap();
-    match reg.execute("!!", &mut env).unwrap() {
-        CommandOutput::Text(s) => assert_eq!(s, "hello"),
-        _ => panic!("expected text output"),
-    }
+    assert_eq!(assert_text!(reg.execute("!!", &mut env).unwrap()), "hello");
 }
 
 #[test]
@@ -535,10 +512,7 @@ fn history_bang_n() {
     let mut env = make_env(&mut vfs);
     reg.execute("echo first", &mut env).unwrap();
     reg.execute("echo second", &mut env).unwrap();
-    match reg.execute("!1", &mut env).unwrap() {
-        CommandOutput::Text(s) => assert_eq!(s, "first"),
-        _ => panic!("expected text output"),
-    }
+    assert_eq!(assert_text!(reg.execute("!1", &mut env).unwrap()), "first");
 }
 
 #[test]
@@ -561,10 +535,10 @@ fn alias_expansion() {
     let mut vfs = MemoryVfs::new();
     let mut env = make_env(&mut vfs);
     reg.execute("alias hi=echo", &mut env).unwrap();
-    match reg.execute("hi hello", &mut env).unwrap() {
-        CommandOutput::Text(s) => assert_eq!(s, "hello"),
-        _ => panic!("expected text output"),
-    }
+    assert_eq!(
+        assert_text!(reg.execute("hi hello", &mut env).unwrap()),
+        "hello"
+    );
 }
 
 #[test]
@@ -573,13 +547,9 @@ fn alias_list() {
     reg.set_alias("ll", "ls -l");
     let mut vfs = MemoryVfs::new();
     let mut env = make_env(&mut vfs);
-    match reg.execute("alias", &mut env).unwrap() {
-        CommandOutput::Text(s) => {
-            assert!(s.contains("ll"));
-            assert!(s.contains("ls -l"));
-        },
-        _ => panic!("expected text output"),
-    }
+    let s = assert_text!(reg.execute("alias", &mut env).unwrap());
+    assert!(s.contains("ll"));
+    assert!(s.contains("ls -l"));
 }
 
 // -- Set/env tests --
@@ -591,10 +561,10 @@ fn set_and_expand_variable() {
     let mut vfs = MemoryVfs::new();
     let mut env = make_env(&mut vfs);
     reg.execute("set GREETING=hello", &mut env).unwrap();
-    match reg.execute("echo $GREETING", &mut env).unwrap() {
-        CommandOutput::Text(s) => assert_eq!(s, "hello"),
-        _ => panic!("expected text output"),
-    }
+    assert_eq!(
+        assert_text!(reg.execute("echo $GREETING", &mut env).unwrap()),
+        "hello"
+    );
 }
 
 #[test]
@@ -603,12 +573,7 @@ fn env_lists_variables() {
     reg.set_variable("FOO", "bar");
     let mut vfs = MemoryVfs::new();
     let mut env = make_env(&mut vfs);
-    match reg.execute("env", &mut env).unwrap() {
-        CommandOutput::Text(s) => {
-            assert!(s.contains("FOO=bar"));
-        },
-        _ => panic!("expected text output"),
-    }
+    assert!(assert_text!(reg.execute("env", &mut env).unwrap()).contains("FOO=bar"));
 }
 
 // -- Quoted args with commands --
@@ -619,10 +584,10 @@ fn quoted_args_in_command() {
     reg.register(Box::new(EchoCmd));
     let mut vfs = MemoryVfs::new();
     let mut env = make_env(&mut vfs);
-    match reg.execute("echo 'hello world'", &mut env).unwrap() {
-        CommandOutput::Text(s) => assert_eq!(s, "hello world"),
-        _ => panic!("expected text output"),
-    }
+    assert_eq!(
+        assert_text!(reg.execute("echo 'hello world'", &mut env).unwrap()),
+        "hello world"
+    );
 }
 
 // -- Path resolution --
@@ -687,14 +652,10 @@ fn glob_expansion_in_command() {
     vfs.write("/file2.txt", b"b").unwrap();
     vfs.write("/file3.md", b"c").unwrap();
     let mut env = make_env(&mut vfs);
-    match reg.execute("echo /*.txt", &mut env).unwrap() {
-        CommandOutput::Text(s) => {
-            assert!(s.contains("/file1.txt"));
-            assert!(s.contains("/file2.txt"));
-            assert!(!s.contains("file3.md"));
-        },
-        _ => panic!("expected text output"),
-    }
+    let s = assert_text!(reg.execute("echo /*.txt", &mut env).unwrap());
+    assert!(s.contains("/file1.txt"));
+    assert!(s.contains("/file2.txt"));
+    assert!(!s.contains("file3.md"));
 }
 
 // -- Brace expansion tests --
@@ -740,12 +701,10 @@ fn brace_expansion_in_command() {
     reg.register(Box::new(EchoCmd));
     let mut vfs = MemoryVfs::new();
     let mut env = make_env(&mut vfs);
-    match reg.execute("echo file.{txt,md}", &mut env).unwrap() {
-        CommandOutput::Text(s) => {
-            assert_eq!(s, "file.txt file.md");
-        },
-        _ => panic!("expected text output"),
-    }
+    assert_eq!(
+        assert_text!(reg.execute("echo file.{txt,md}", &mut env).unwrap()),
+        "file.txt file.md"
+    );
 }
 
 // -- Character class tests --
@@ -797,14 +756,10 @@ fn glob_char_class_in_command() {
     vfs.write("/file2.txt", b"b").unwrap();
     vfs.write("/file3.txt", b"c").unwrap();
     let mut env = make_env(&mut vfs);
-    match reg.execute("echo /file[12].txt", &mut env).unwrap() {
-        CommandOutput::Text(s) => {
-            assert!(s.contains("/file1.txt"));
-            assert!(s.contains("/file2.txt"));
-            assert!(!s.contains("file3.txt"));
-        },
-        _ => panic!("expected text output"),
-    }
+    let s = assert_text!(reg.execute("echo /file[12].txt", &mut env).unwrap());
+    assert!(s.contains("/file1.txt"));
+    assert!(s.contains("/file2.txt"));
+    assert!(!s.contains("file3.txt"));
 }
 
 #[test]
@@ -821,10 +776,10 @@ fn command_substitution_basic() {
     reg.register(Box::new(EchoCmd));
     let mut vfs = MemoryVfs::new();
     let mut env = make_env(&mut vfs);
-    match reg.execute("echo $(echo hello)", &mut env).unwrap() {
-        CommandOutput::Text(s) => assert_eq!(s, "hello"),
-        other => panic!("expected text, got {other:?}"),
-    }
+    assert_eq!(
+        assert_text!(reg.execute("echo $(echo hello)", &mut env).unwrap()),
+        "hello"
+    );
 }
 
 #[test]
@@ -833,15 +788,13 @@ fn command_substitution_in_args() {
     reg.register(Box::new(EchoCmd));
     let mut vfs = MemoryVfs::new();
     let mut env = make_env(&mut vfs);
-    match reg
-        .execute("echo prefix-$(echo mid)-suffix", &mut env)
-        .unwrap()
-    {
-        CommandOutput::Text(s) => {
-            assert_eq!(s, "prefix-mid-suffix");
-        },
-        other => panic!("expected text, got {other:?}"),
-    }
+    assert_eq!(
+        assert_text!(
+            reg.execute("echo prefix-$(echo mid)-suffix", &mut env)
+                .unwrap()
+        ),
+        "prefix-mid-suffix"
+    );
 }
 
 #[test]
@@ -850,15 +803,13 @@ fn command_substitution_nested() {
     reg.register(Box::new(EchoCmd));
     let mut vfs = MemoryVfs::new();
     let mut env = make_env(&mut vfs);
-    match reg
-        .execute("echo $(echo $(echo nested))", &mut env)
-        .unwrap()
-    {
-        CommandOutput::Text(s) => {
-            assert_eq!(s, "nested");
-        },
-        other => panic!("expected text, got {other:?}"),
-    }
+    assert_eq!(
+        assert_text!(
+            reg.execute("echo $(echo $(echo nested))", &mut env)
+                .unwrap()
+        ),
+        "nested"
+    );
 }
 
 #[test]
@@ -878,14 +829,10 @@ fn command_substitution_preserves_single_quotes() {
     let mut vfs = MemoryVfs::new();
     let mut env = make_env(&mut vfs);
     // $(...) inside single quotes should NOT be expanded.
-    match reg.execute("echo '$(echo nope)'", &mut env).unwrap() {
-        CommandOutput::Text(s) => {
-            assert_eq!(s, "$(echo nope)");
-        },
-        other => {
-            panic!("expected literal text, got {other:?}");
-        },
-    }
+    assert_eq!(
+        assert_text!(reg.execute("echo '$(echo nope)'", &mut env).unwrap()),
+        "$(echo nope)"
+    );
 }
 
 #[test]
@@ -894,12 +841,10 @@ fn command_substitution_multiple() {
     reg.register(Box::new(EchoCmd));
     let mut vfs = MemoryVfs::new();
     let mut env = make_env(&mut vfs);
-    match reg.execute("echo $(echo a)-$(echo b)", &mut env).unwrap() {
-        CommandOutput::Text(s) => {
-            assert_eq!(s, "a-b");
-        },
-        other => panic!("expected text, got {other:?}"),
-    }
+    assert_eq!(
+        assert_text!(reg.execute("echo $(echo a)-$(echo b)", &mut env).unwrap()),
+        "a-b"
+    );
 }
 
 #[test]
@@ -922,10 +867,8 @@ fn command_substitution_with_variable() {
     let mut env = make_env(&mut vfs);
     // Variable expansion happens after substitution, so $X in
     // the outer command should still expand.
-    match reg.execute("echo $(echo hello) $X", &mut env).unwrap() {
-        CommandOutput::Text(s) => {
-            assert_eq!(s, "hello world");
-        },
-        other => panic!("expected text, got {other:?}"),
-    }
+    assert_eq!(
+        assert_text!(reg.execute("echo $(echo hello) $X", &mut env).unwrap()),
+        "hello world"
+    );
 }

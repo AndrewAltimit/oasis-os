@@ -3,6 +3,7 @@
 
 use super::*;
 use crate::expander::glob_match;
+use crate::test_helpers::assert_text;
 use oasis_vfs::{MemoryVfs, Vfs};
 
 use super::tests_basic::make_env;
@@ -38,10 +39,10 @@ fn function_define_and_call() {
     let mut env = make_env(&mut vfs);
     reg.execute("function greet() { echo hello }", &mut env)
         .unwrap();
-    match reg.execute("greet", &mut env).unwrap() {
-        CommandOutput::Text(s) => assert_eq!(s, "hello"),
-        _ => panic!("expected text output"),
-    }
+    assert_eq!(
+        assert_text!(reg.execute("greet", &mut env).unwrap()),
+        "hello"
+    );
 }
 
 #[test]
@@ -52,10 +53,10 @@ fn function_with_args() {
     let mut env = make_env(&mut vfs);
     reg.execute("function say() { echo $1 $2 }", &mut env)
         .unwrap();
-    match reg.execute("say hello world", &mut env).unwrap() {
-        CommandOutput::Text(s) => assert_eq!(s, "hello world"),
-        _ => panic!("expected text output"),
-    }
+    assert_eq!(
+        assert_text!(reg.execute("say hello world", &mut env).unwrap()),
+        "hello world"
+    );
 }
 
 #[test]
@@ -66,10 +67,10 @@ fn function_arg_count() {
     let mut env = make_env(&mut vfs);
     reg.execute("function argc() { echo $# }", &mut env)
         .unwrap();
-    match reg.execute("argc a b c", &mut env).unwrap() {
-        CommandOutput::Text(s) => assert_eq!(s, "3"),
-        _ => panic!("expected text output"),
-    }
+    assert_eq!(
+        assert_text!(reg.execute("argc a b c", &mut env).unwrap()),
+        "3"
+    );
 }
 
 #[test]
@@ -79,10 +80,7 @@ fn function_no_parens_syntax() {
     let mut vfs = MemoryVfs::new();
     let mut env = make_env(&mut vfs);
     reg.execute("function hi { echo hi }", &mut env).unwrap();
-    match reg.execute("hi", &mut env).unwrap() {
-        CommandOutput::Text(s) => assert_eq!(s, "hi"),
-        _ => panic!("expected text output"),
-    }
+    assert_eq!(assert_text!(reg.execute("hi", &mut env).unwrap()), "hi");
 }
 
 #[test]
@@ -90,10 +88,7 @@ fn function_list() {
     let reg = CommandRegistry::new();
     let mut vfs = MemoryVfs::new();
     let mut env = make_env(&mut vfs);
-    match reg.execute("function", &mut env).unwrap() {
-        CommandOutput::Text(s) => assert!(s.contains("No functions")),
-        _ => panic!("expected text output"),
-    }
+    assert!(assert_text!(reg.execute("function", &mut env).unwrap()).contains("No functions"));
 }
 
 #[test]
@@ -104,13 +99,9 @@ fn function_list_after_define() {
     let mut env = make_env(&mut vfs);
     reg.execute("function foo() { echo bar }", &mut env)
         .unwrap();
-    match reg.execute("function", &mut env).unwrap() {
-        CommandOutput::Text(s) => {
-            assert!(s.contains("foo"));
-            assert!(s.contains("echo bar"));
-        },
-        _ => panic!("expected text output"),
-    }
+    let s = assert_text!(reg.execute("function", &mut env).unwrap());
+    assert!(s.contains("foo"));
+    assert!(s.contains("echo bar"));
 }
 
 #[test]
@@ -121,13 +112,9 @@ fn function_multi_command_body() {
     let mut env = make_env(&mut vfs);
     reg.execute("function both() { echo one ; echo two }", &mut env)
         .unwrap();
-    match reg.execute("both", &mut env).unwrap() {
-        CommandOutput::Text(s) => {
-            assert!(s.contains("one"));
-            assert!(s.contains("two"));
-        },
-        _ => panic!("expected text output"),
-    }
+    let s = assert_text!(reg.execute("both", &mut env).unwrap());
+    assert!(s.contains("one"));
+    assert!(s.contains("two"));
 }
 
 #[test]
@@ -173,10 +160,7 @@ fn function_which() {
     let mut env = make_env(&mut vfs);
     reg.execute("function myfn() { echo hi }", &mut env)
         .unwrap();
-    match reg.execute("which myfn", &mut env).unwrap() {
-        CommandOutput::Text(s) => assert!(s.contains("shell function")),
-        _ => panic!("expected text output"),
-    }
+    assert!(assert_text!(reg.execute("which myfn", &mut env).unwrap()).contains("shell function"));
 }
 
 #[test]
@@ -217,10 +201,7 @@ fn function_body_with_redirect() {
 fn run_script(reg: &CommandRegistry, vfs: &mut MemoryVfs, script: &str) -> String {
     vfs.write("/tmp/test.sh", script.as_bytes()).unwrap();
     let mut env = make_env(vfs);
-    match reg.execute("run /tmp/test.sh", &mut env).unwrap() {
-        CommandOutput::Text(s) => s,
-        other => panic!("expected text, got {:?}", other),
-    }
+    assert_text!(reg.execute("run /tmp/test.sh", &mut env).unwrap())
 }
 
 #[test]
@@ -408,10 +389,9 @@ fn script_empty() {
     vfs.mkdir("/tmp").unwrap();
     vfs.write("/tmp/empty.sh", b"# just comments\n").unwrap();
     let mut env = make_env(&mut vfs);
-    match reg.execute("run /tmp/empty.sh", &mut env).unwrap() {
-        CommandOutput::Text(s) => assert!(s.contains("empty script")),
-        _ => panic!("expected text"),
-    }
+    assert!(
+        assert_text!(reg.execute("run /tmp/empty.sh", &mut env).unwrap()).contains("empty script")
+    );
 }
 
 // ===================================================================
@@ -863,10 +843,10 @@ fn script_local_variables() {
     reg.execute("function myfn() { local X=local; echo $X }", &mut env)
         .unwrap();
 
-    match reg.execute("myfn", &mut env).unwrap() {
-        CommandOutput::Text(s) => assert_eq!(s, "local"),
-        _ => panic!("expected text"),
-    }
+    assert_eq!(
+        assert_text!(reg.execute("myfn", &mut env).unwrap()),
+        "local"
+    );
 
     assert_eq!(reg.get_variable("X"), Some("global".to_string()));
 }

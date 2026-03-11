@@ -799,6 +799,7 @@ use crate::interpreter::resolve_path;
 mod tests {
     use super::*;
     use crate::CommandSignal;
+    use crate::test_helpers::{assert_clear, assert_text};
     use oasis_vfs::{MemoryVfs, Vfs};
 
     fn setup() -> (CommandRegistry, MemoryVfs) {
@@ -838,30 +839,27 @@ mod tests {
     fn pwd_shows_cwd() {
         let (reg, mut vfs) = setup();
         let mut cwd = "/home".to_string();
-        match exec(&reg, &mut vfs, &mut cwd, "pwd").unwrap() {
-            CommandOutput::Text(s) => assert_eq!(s, "/home"),
-            _ => panic!("expected text"),
-        }
+        assert_eq!(
+            assert_text!(exec(&reg, &mut vfs, &mut cwd, "pwd").unwrap()),
+            "/home"
+        );
     }
 
     #[test]
     fn ls_root() {
         let (reg, mut vfs) = setup();
         let mut cwd = "/".to_string();
-        match exec(&reg, &mut vfs, &mut cwd, "ls").unwrap() {
-            CommandOutput::Text(s) => assert!(s.contains("home")),
-            _ => panic!("expected text"),
-        }
+        assert!(assert_text!(exec(&reg, &mut vfs, &mut cwd, "ls").unwrap()).contains("home"));
     }
 
     #[test]
     fn ls_with_path() {
         let (reg, mut vfs) = setup();
         let mut cwd = "/".to_string();
-        match exec(&reg, &mut vfs, &mut cwd, "ls /home/user").unwrap() {
-            CommandOutput::Text(s) => assert!(s.contains("readme.txt")),
-            _ => panic!("expected text"),
-        }
+        assert!(
+            assert_text!(exec(&reg, &mut vfs, &mut cwd, "ls /home/user").unwrap())
+                .contains("readme.txt")
+        );
     }
 
     #[test]
@@ -892,10 +890,10 @@ mod tests {
     fn cat_file() {
         let (reg, mut vfs) = setup();
         let mut cwd = "/".to_string();
-        match exec(&reg, &mut vfs, &mut cwd, "cat /home/user/readme.txt").unwrap() {
-            CommandOutput::Text(s) => assert_eq!(s, "Hello OASIS"),
-            _ => panic!("expected text"),
-        }
+        assert_eq!(
+            assert_text!(exec(&reg, &mut vfs, &mut cwd, "cat /home/user/readme.txt").unwrap()),
+            "Hello OASIS"
+        );
     }
 
     #[test]
@@ -925,33 +923,26 @@ mod tests {
     fn echo_output() {
         let (reg, mut vfs) = setup();
         let mut cwd = "/".to_string();
-        match exec(&reg, &mut vfs, &mut cwd, "echo hello world").unwrap() {
-            CommandOutput::Text(s) => assert_eq!(s, "hello world"),
-            _ => panic!("expected text"),
-        }
+        assert_eq!(
+            assert_text!(exec(&reg, &mut vfs, &mut cwd, "echo hello world").unwrap()),
+            "hello world"
+        );
     }
 
     #[test]
     fn clear_returns_clear() {
         let (reg, mut vfs) = setup();
         let mut cwd = "/".to_string();
-        match exec(&reg, &mut vfs, &mut cwd, "clear").unwrap() {
-            CommandOutput::Clear => {},
-            _ => panic!("expected Clear"),
-        }
+        assert_clear!(exec(&reg, &mut vfs, &mut cwd, "clear").unwrap());
     }
 
     #[test]
     fn status_shows_info() {
         let (reg, mut vfs) = setup();
         let mut cwd = "/".to_string();
-        match exec(&reg, &mut vfs, &mut cwd, "status").unwrap() {
-            CommandOutput::Text(s) => {
-                assert!(s.contains("OASIS_OS"));
-                assert!(s.contains("cwd: /"));
-            },
-            _ => panic!("expected text"),
-        }
+        let s = assert_text!(exec(&reg, &mut vfs, &mut cwd, "status").unwrap());
+        assert!(s.contains("OASIS_OS"));
+        assert!(s.contains("cwd: /"));
     }
 
     #[test]
@@ -1017,20 +1008,20 @@ mod tests {
     fn find_by_name() {
         let (reg, mut vfs) = setup();
         let mut cwd = "/".to_string();
-        match exec(&reg, &mut vfs, &mut cwd, "find / readme").unwrap() {
-            CommandOutput::Text(s) => assert!(s.contains("/home/user/readme.txt")),
-            _ => panic!("expected text"),
-        }
+        assert!(
+            assert_text!(exec(&reg, &mut vfs, &mut cwd, "find / readme").unwrap())
+                .contains("/home/user/readme.txt")
+        );
     }
 
     #[test]
     fn find_no_matches() {
         let (reg, mut vfs) = setup();
         let mut cwd = "/".to_string();
-        match exec(&reg, &mut vfs, &mut cwd, "find / zzzzz").unwrap() {
-            CommandOutput::Text(s) => assert!(s.contains("no matches")),
-            _ => panic!("expected text"),
-        }
+        assert!(
+            assert_text!(exec(&reg, &mut vfs, &mut cwd, "find / zzzzz").unwrap())
+                .contains("no matches")
+        );
     }
 
     #[test]
@@ -1046,10 +1037,9 @@ mod tests {
     fn power_no_platform() {
         let (reg, mut vfs) = setup();
         let mut cwd = "/".to_string();
-        match exec(&reg, &mut vfs, &mut cwd, "power").unwrap() {
-            CommandOutput::Text(s) => assert!(s.contains("no platform")),
-            _ => panic!("expected text"),
-        }
+        assert!(
+            assert_text!(exec(&reg, &mut vfs, &mut cwd, "power").unwrap()).contains("no platform")
+        );
     }
 
     #[test]
@@ -1068,20 +1058,16 @@ mod tests {
             stdin: None,
             stderr: String::new(),
         };
-        match reg.execute("power", &mut env).unwrap() {
-            CommandOutput::Text(s) => assert!(s.contains("NoBattery")),
-            _ => panic!("expected text"),
-        }
+        assert!(assert_text!(reg.execute("power", &mut env).unwrap()).contains("NoBattery"));
     }
 
     #[test]
     fn clock_no_platform() {
         let (reg, mut vfs) = setup();
         let mut cwd = "/".to_string();
-        match exec(&reg, &mut vfs, &mut cwd, "clock").unwrap() {
-            CommandOutput::Text(s) => assert!(s.contains("no platform")),
-            _ => panic!("expected text"),
-        }
+        assert!(
+            assert_text!(exec(&reg, &mut vfs, &mut cwd, "clock").unwrap()).contains("no platform")
+        );
     }
 
     #[test]
@@ -1100,33 +1086,28 @@ mod tests {
             stdin: None,
             stderr: String::new(),
         };
-        match reg.execute("clock", &mut env).unwrap() {
-            CommandOutput::Text(s) => {
-                assert!(s.contains("Time:"));
-                assert!(s.contains("Uptime:"));
-            },
-            _ => panic!("expected text"),
-        }
+        let s = assert_text!(reg.execute("clock", &mut env).unwrap());
+        assert!(s.contains("Time:"));
+        assert!(s.contains("Uptime:"));
     }
 
     #[test]
     fn memory_shows_info() {
         let (reg, mut vfs) = setup();
         let mut cwd = "/".to_string();
-        match exec(&reg, &mut vfs, &mut cwd, "memory").unwrap() {
-            CommandOutput::Text(s) => assert!(s.contains("OASIS_OS memory")),
-            _ => panic!("expected text"),
-        }
+        assert!(
+            assert_text!(exec(&reg, &mut vfs, &mut cwd, "memory").unwrap())
+                .contains("OASIS_OS memory")
+        );
     }
 
     #[test]
     fn usb_no_platform() {
         let (reg, mut vfs) = setup();
         let mut cwd = "/".to_string();
-        match exec(&reg, &mut vfs, &mut cwd, "usb").unwrap() {
-            CommandOutput::Text(s) => assert!(s.contains("no platform")),
-            _ => panic!("expected text"),
-        }
+        assert!(
+            assert_text!(exec(&reg, &mut vfs, &mut cwd, "usb").unwrap()).contains("no platform")
+        );
     }
 
     #[test]
@@ -1145,10 +1126,7 @@ mod tests {
             stdin: None,
             stderr: String::new(),
         };
-        match reg.execute("usb", &mut env).unwrap() {
-            CommandOutput::Text(s) => assert!(s.contains("unsupported")),
-            _ => panic!("expected text"),
-        }
+        assert!(assert_text!(reg.execute("usb", &mut env).unwrap()).contains("unsupported"));
     }
 
     // --- Phase 5: remote terminal commands ---
@@ -1242,10 +1220,10 @@ psk = "secret"
     fn hosts_no_config() {
         let (reg, mut vfs) = setup();
         let mut cwd = "/".to_string();
-        match exec(&reg, &mut vfs, &mut cwd, "hosts").unwrap() {
-            CommandOutput::Text(s) => assert!(s.contains("no hosts configured")),
-            _ => panic!("expected text"),
-        }
+        assert!(
+            assert_text!(exec(&reg, &mut vfs, &mut cwd, "hosts").unwrap())
+                .contains("no hosts configured")
+        );
     }
 
     #[test]
@@ -1270,14 +1248,10 @@ protocol = "raw-tcp"
         )
         .unwrap();
         let mut cwd = "/".to_string();
-        match exec(&reg, &mut vfs, &mut cwd, "hosts").unwrap() {
-            CommandOutput::Text(s) => {
-                assert!(s.contains("server1"));
-                assert!(s.contains("server2"));
-                assert!(s.contains("1.2.3.4"));
-            },
-            _ => panic!("expected text"),
-        }
+        let s = assert_text!(exec(&reg, &mut vfs, &mut cwd, "hosts").unwrap());
+        assert!(s.contains("server1"));
+        assert!(s.contains("server2"));
+        assert!(s.contains("1.2.3.4"));
     }
 
     // =================================================================
@@ -1304,16 +1278,13 @@ protocol = "raw-tcp"
         // Write content via VFS directly, then verify cat reads it.
         vfs.write("/projects/myapp/config.txt", b"debug=true")
             .unwrap();
-        match exec(&reg, &mut vfs, &mut cwd, "cat config.txt").unwrap() {
-            CommandOutput::Text(s) => assert_eq!(s, "debug=true"),
-            _ => panic!("expected text"),
-        }
+        assert_eq!(
+            assert_text!(exec(&reg, &mut vfs, &mut cwd, "cat config.txt").unwrap()),
+            "debug=true"
+        );
 
         // ls should show the file.
-        match exec(&reg, &mut vfs, &mut cwd, "ls").unwrap() {
-            CommandOutput::Text(s) => assert!(s.contains("config.txt")),
-            _ => panic!("expected text"),
-        }
+        assert!(assert_text!(exec(&reg, &mut vfs, &mut cwd, "ls").unwrap()).contains("config.txt"));
     }
 
     #[test]
@@ -1346,13 +1317,9 @@ protocol = "raw-tcp"
         assert!(vfs.exists("/archive/readme.txt"));
 
         // Find should locate both copies.
-        match exec(&reg, &mut vfs, &mut cwd, "find / readme").unwrap() {
-            CommandOutput::Text(s) => {
-                assert!(s.contains("/home/user/readme.bak"));
-                assert!(s.contains("/archive/readme.txt"));
-            },
-            _ => panic!("expected text"),
-        }
+        let s = assert_text!(exec(&reg, &mut vfs, &mut cwd, "find / readme").unwrap());
+        assert!(s.contains("/home/user/readme.bak"));
+        assert!(s.contains("/archive/readme.txt"));
     }
 
     #[test]
@@ -1368,10 +1335,10 @@ protocol = "raw-tcp"
         assert_eq!(cwd, "/home/user");
 
         // pwd should reflect current cwd.
-        match exec(&reg, &mut vfs, &mut cwd, "pwd").unwrap() {
-            CommandOutput::Text(s) => assert_eq!(s, "/home/user"),
-            _ => panic!("expected text"),
-        }
+        assert_eq!(
+            assert_text!(exec(&reg, &mut vfs, &mut cwd, "pwd").unwrap()),
+            "/home/user"
+        );
 
         // Go up with ..
         exec(&reg, &mut vfs, &mut cwd, "cd ..").unwrap();
@@ -1397,13 +1364,9 @@ protocol = "raw-tcp"
 
         // Write content then cat to verify.
         vfs.write("/tmp/data.log", b"line 1\nline 2").unwrap();
-        match exec(&reg, &mut vfs, &mut cwd, "cat /tmp/data.log").unwrap() {
-            CommandOutput::Text(s) => {
-                assert!(s.contains("line 1"));
-                assert!(s.contains("line 2"));
-            },
-            _ => panic!("expected text"),
-        }
+        let s = assert_text!(exec(&reg, &mut vfs, &mut cwd, "cat /tmp/data.log").unwrap());
+        assert!(s.contains("line 1"));
+        assert!(s.contains("line 2"));
 
         // Remove the file.
         exec(&reg, &mut vfs, &mut cwd, "rm /tmp/data.log").unwrap();
@@ -1427,10 +1390,9 @@ protocol = "raw-tcp"
         assert!(vfs.exists("/home/user/docs/notes.txt"));
 
         // ls relative path.
-        match exec(&reg, &mut vfs, &mut cwd, "ls docs").unwrap() {
-            CommandOutput::Text(s) => assert!(s.contains("notes.txt")),
-            _ => panic!("expected text"),
-        }
+        assert!(
+            assert_text!(exec(&reg, &mut vfs, &mut cwd, "ls docs").unwrap()).contains("notes.txt")
+        );
 
         // cp with relative paths.
         exec(
@@ -1453,13 +1415,9 @@ protocol = "raw-tcp"
         let mut cwd = "/".to_string();
 
         // List skins.
-        match exec(&reg, &mut vfs, &mut cwd, "skin list").unwrap() {
-            CommandOutput::Text(s) => {
-                assert!(s.contains("terminal"));
-                assert!(s.contains("modern"));
-            },
-            _ => panic!("expected text from skin list"),
-        }
+        let s = assert_text!(exec(&reg, &mut vfs, &mut cwd, "skin list").unwrap());
+        assert!(s.contains("terminal"));
+        assert!(s.contains("modern"));
 
         // Switch to a skin.
         match exec(&reg, &mut vfs, &mut cwd, "skin modern").unwrap() {
@@ -1492,10 +1450,10 @@ protocol = "raw-tcp"
         assert!(vfs.exists("/tmp"));
 
         // CWD still correct.
-        match exec(&reg, &mut vfs, &mut cwd, "pwd").unwrap() {
-            CommandOutput::Text(s) => assert_eq!(s, "/"),
-            _ => panic!("expected text"),
-        }
+        assert_eq!(
+            assert_text!(exec(&reg, &mut vfs, &mut cwd, "pwd").unwrap()),
+            "/"
+        );
     }
 
     #[test]
@@ -1520,9 +1478,9 @@ protocol = "raw-tcp"
 
         // Find the file from root.
         exec(&reg, &mut vfs, &mut cwd, "cd /").unwrap();
-        match exec(&reg, &mut vfs, &mut cwd, "find / leaf").unwrap() {
-            CommandOutput::Text(s) => assert!(s.contains("/a/b/c/d/leaf.txt")),
-            _ => panic!("expected text"),
-        }
+        assert!(
+            assert_text!(exec(&reg, &mut vfs, &mut cwd, "find / leaf").unwrap())
+                .contains("/a/b/c/d/leaf.txt")
+        );
     }
 }

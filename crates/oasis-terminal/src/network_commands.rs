@@ -180,6 +180,7 @@ mod tests {
     use oasis_platform::DesktopPlatform;
 
     use crate::Environment;
+    use crate::test_helpers::assert_text;
     use oasis_vfs::MemoryVfs;
 
     #[test]
@@ -198,10 +199,8 @@ mod tests {
             stdin: None,
             stderr: String::new(),
         };
-        match reg.execute("wifi", &mut env).unwrap() {
-            CommandOutput::Text(s) => assert!(s.contains("no network service")),
-            _ => panic!("expected text"),
-        }
+        let s = assert_text!(reg.execute("wifi", &mut env).unwrap());
+        assert!(s.contains("no network service"));
     }
 
     #[test]
@@ -221,13 +220,9 @@ mod tests {
             stdin: None,
             stderr: String::new(),
         };
-        match reg.execute("wifi", &mut env).unwrap() {
-            CommandOutput::Text(s) => {
-                assert!(s.contains("unavailable"));
-                assert!(s.contains("disconnected"));
-            },
-            _ => panic!("expected text"),
-        }
+        let s = assert_text!(reg.execute("wifi", &mut env).unwrap());
+        assert!(s.contains("unavailable"));
+        assert!(s.contains("disconnected"));
     }
 
     #[test]

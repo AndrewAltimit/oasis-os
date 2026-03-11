@@ -169,6 +169,7 @@ pub fn register_radio_commands(reg: &mut crate::CommandRegistry) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_helpers::assert_text;
     use crate::{CommandOutput, CommandRegistry, Environment};
     use oasis_vfs::{MemoryVfs, Vfs};
 
@@ -201,10 +202,8 @@ mod tests {
         let mut reg = CommandRegistry::new();
         register_radio_commands(&mut reg);
         let mut vfs = MemoryVfs::new();
-        match exec(&reg, &mut vfs, "radio status").unwrap() {
-            CommandOutput::Text(s) => assert!(s.contains("not initialized")),
-            _ => panic!("expected text"),
-        }
+        let s = assert_text!(exec(&reg, &mut vfs, "radio status").unwrap());
+        assert!(s.contains("not initialized"));
     }
 
     #[test]
@@ -212,22 +211,16 @@ mod tests {
         let (reg, mut vfs) = setup();
         vfs.write(RADIO_STATUS_PATH, b"State: stopped\nVolume: 80%")
             .unwrap();
-        match exec(&reg, &mut vfs, "radio").unwrap() {
-            CommandOutput::Text(s) => {
-                assert!(s.contains("stopped"));
-                assert!(s.contains("80%"));
-            },
-            _ => panic!("expected text"),
-        }
+        let s = assert_text!(exec(&reg, &mut vfs, "radio").unwrap());
+        assert!(s.contains("stopped"));
+        assert!(s.contains("80%"));
     }
 
     #[test]
     fn radio_tune_queues_request() {
         let (reg, mut vfs) = setup();
-        match exec(&reg, &mut vfs, "radio tune 0").unwrap() {
-            CommandOutput::Text(s) => assert!(s.contains("tune")),
-            _ => panic!("expected text"),
-        }
+        let s = assert_text!(exec(&reg, &mut vfs, "radio tune 0").unwrap());
+        assert!(s.contains("tune"));
         let data = vfs.read(RADIO_REQUEST_PATH).unwrap();
         assert_eq!(data, b"tune 0");
     }
@@ -241,10 +234,8 @@ mod tests {
     #[test]
     fn radio_stop_queues_request() {
         let (reg, mut vfs) = setup();
-        match exec(&reg, &mut vfs, "radio stop").unwrap() {
-            CommandOutput::Text(s) => assert!(s.contains("stop")),
-            _ => panic!("expected text"),
-        }
+        let s = assert_text!(exec(&reg, &mut vfs, "radio stop").unwrap());
+        assert!(s.contains("stop"));
         let data = vfs.read(RADIO_REQUEST_PATH).unwrap();
         assert_eq!(data, b"stop");
     }
@@ -252,10 +243,8 @@ mod tests {
     #[test]
     fn radio_vol_set() {
         let (reg, mut vfs) = setup();
-        match exec(&reg, &mut vfs, "radio vol 42").unwrap() {
-            CommandOutput::Text(s) => assert!(s.contains("42%")),
-            _ => panic!("expected text"),
-        }
+        let s = assert_text!(exec(&reg, &mut vfs, "radio vol 42").unwrap());
+        assert!(s.contains("42%"));
         let data = vfs.read(RADIO_REQUEST_PATH).unwrap();
         assert_eq!(data, b"vol 42");
     }
@@ -271,19 +260,15 @@ mod tests {
         let (reg, mut vfs) = setup();
         vfs.write(RADIO_STATUS_PATH, b"State: playing\nVolume: 65%")
             .unwrap();
-        match exec(&reg, &mut vfs, "radio vol").unwrap() {
-            CommandOutput::Text(s) => assert!(s.contains("65%")),
-            _ => panic!("expected text"),
-        }
+        let s = assert_text!(exec(&reg, &mut vfs, "radio vol").unwrap());
+        assert!(s.contains("65%"));
     }
 
     #[test]
     fn radio_fav_queues_request() {
         let (reg, mut vfs) = setup();
-        match exec(&reg, &mut vfs, "radio fav 2").unwrap() {
-            CommandOutput::Text(s) => assert!(s.contains("2")),
-            _ => panic!("expected text"),
-        }
+        let s = assert_text!(exec(&reg, &mut vfs, "radio fav 2").unwrap());
+        assert!(s.contains("2"));
         let data = vfs.read(RADIO_REQUEST_PATH).unwrap();
         assert_eq!(data, b"fav 2");
     }
@@ -297,10 +282,8 @@ mod tests {
     #[test]
     fn radio_genre_filter() {
         let (reg, mut vfs) = setup();
-        match exec(&reg, &mut vfs, "radio genre ambient").unwrap() {
-            CommandOutput::Text(s) => assert!(s.contains("ambient")),
-            _ => panic!("expected text"),
-        }
+        let s = assert_text!(exec(&reg, &mut vfs, "radio genre ambient").unwrap());
+        assert!(s.contains("ambient"));
         let data = vfs.read(RADIO_REQUEST_PATH).unwrap();
         assert_eq!(data, b"genre ambient");
     }
@@ -308,10 +291,8 @@ mod tests {
     #[test]
     fn radio_genre_list() {
         let (reg, mut vfs) = setup();
-        match exec(&reg, &mut vfs, "radio genre").unwrap() {
-            CommandOutput::Text(s) => assert!(s.contains("Genre list")),
-            _ => panic!("expected text"),
-        }
+        let s = assert_text!(exec(&reg, &mut vfs, "radio genre").unwrap());
+        assert!(s.contains("Genre list"));
     }
 
     #[test]
@@ -322,13 +303,9 @@ mod tests {
             b"State: playing\nStation: Test FM\nNow Playing: Artist - Song\nBuffer: 32 KB",
         )
         .unwrap();
-        match exec(&reg, &mut vfs, "radio info").unwrap() {
-            CommandOutput::Text(s) => {
-                assert!(s.contains("Test FM"));
-                assert!(s.contains("Artist - Song"));
-            },
-            _ => panic!("expected text"),
-        }
+        let s = assert_text!(exec(&reg, &mut vfs, "radio info").unwrap());
+        assert!(s.contains("Test FM"));
+        assert!(s.contains("Artist - Song"));
     }
 
     #[test]
@@ -336,20 +313,16 @@ mod tests {
         let mut reg = CommandRegistry::new();
         register_radio_commands(&mut reg);
         let mut vfs = MemoryVfs::new();
-        match exec(&reg, &mut vfs, "radio info").unwrap() {
-            CommandOutput::Text(s) => assert!(s.contains("not initialized")),
-            _ => panic!("expected text"),
-        }
+        let s = assert_text!(exec(&reg, &mut vfs, "radio info").unwrap());
+        assert!(s.contains("not initialized"));
     }
 
     #[test]
     fn radio_stations_with_status() {
         let (reg, mut vfs) = setup();
         vfs.write(RADIO_STATUS_PATH, b"Stations: 8").unwrap();
-        match exec(&reg, &mut vfs, "radio stations").unwrap() {
-            CommandOutput::Text(s) => assert!(s.contains("8")),
-            _ => panic!("expected text"),
-        }
+        let s = assert_text!(exec(&reg, &mut vfs, "radio stations").unwrap());
+        assert!(s.contains("8"));
     }
 
     #[test]

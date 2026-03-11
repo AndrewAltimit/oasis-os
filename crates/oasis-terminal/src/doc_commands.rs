@@ -405,6 +405,7 @@ set SHELL=oasis-sh
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_helpers::assert_text;
     use crate::{CommandOutput, CommandRegistry, Environment};
     use oasis_vfs::{MemoryVfs, Vfs};
 
@@ -436,12 +437,8 @@ mod tests {
     #[test]
     fn man_shows_page() {
         let (reg, mut vfs) = setup();
-        match exec(&reg, &mut vfs, "man ls").unwrap() {
-            CommandOutput::Text(s) => {
-                assert!(s.contains("list directory"));
-            },
-            _ => panic!("expected text"),
-        }
+        let s = assert_text!(exec(&reg, &mut vfs, "man ls").unwrap());
+        assert!(s.contains("list directory"));
     }
 
     #[test]
@@ -459,36 +456,24 @@ mod tests {
     #[test]
     fn tutorial_show_first() {
         let (reg, mut vfs) = setup();
-        match exec(&reg, &mut vfs, "tutorial").unwrap() {
-            CommandOutput::Text(s) => {
-                assert!(s.contains("Welcome"));
-            },
-            _ => panic!("expected text"),
-        }
+        let s = assert_text!(exec(&reg, &mut vfs, "tutorial").unwrap());
+        assert!(s.contains("Welcome"));
     }
 
     #[test]
     fn tutorial_list() {
         let (reg, mut vfs) = setup();
-        match exec(&reg, &mut vfs, "tutorial list").unwrap() {
-            CommandOutput::Text(s) => {
-                assert!(s.contains("Navigation"));
-                assert!(s.contains("Files"));
-            },
-            _ => panic!("expected text"),
-        }
+        let s = assert_text!(exec(&reg, &mut vfs, "tutorial list").unwrap());
+        assert!(s.contains("Navigation"));
+        assert!(s.contains("Files"));
     }
 
     #[test]
     fn tutorial_next() {
         let (reg, mut vfs) = setup();
         vfs.mkdir("/home").unwrap();
-        match exec(&reg, &mut vfs, "tutorial next").unwrap() {
-            CommandOutput::Text(s) => {
-                assert!(s.contains("Navigation"));
-            },
-            _ => panic!("expected text"),
-        }
+        let s = assert_text!(exec(&reg, &mut vfs, "tutorial next").unwrap());
+        assert!(s.contains("Navigation"));
         // Progress should be saved.
         let data = vfs.read("/home/.tutorial_progress").unwrap();
         assert_eq!(String::from_utf8_lossy(&data).trim(), "1");
@@ -498,13 +483,9 @@ mod tests {
     fn tutorial_jump() {
         let (reg, mut vfs) = setup();
         vfs.mkdir("/home").unwrap();
-        match exec(&reg, &mut vfs, "tutorial 3").unwrap() {
-            CommandOutput::Text(s) => {
-                assert!(s.contains("Files"));
-                assert!(s.contains("cat"));
-            },
-            _ => panic!("expected text"),
-        }
+        let s = assert_text!(exec(&reg, &mut vfs, "tutorial 3").unwrap());
+        assert!(s.contains("Files"));
+        assert!(s.contains("cat"));
     }
 
     #[test]
@@ -516,25 +497,19 @@ mod tests {
     #[test]
     fn motd_default() {
         let (reg, mut vfs) = setup();
-        match exec(&reg, &mut vfs, "motd").unwrap() {
-            CommandOutput::Text(s) => {
-                assert!(s.contains("OASIS OS"));
-                assert!(s.contains("help"));
-            },
-            _ => panic!("expected text"),
-        }
+        let s = assert_text!(exec(&reg, &mut vfs, "motd").unwrap());
+        assert!(s.contains("OASIS OS"));
+        assert!(s.contains("help"));
     }
 
     #[test]
     fn motd_custom() {
         let (reg, mut vfs) = setup();
         vfs.write("/etc/motd", b"Custom MOTD here").unwrap();
-        match exec(&reg, &mut vfs, "motd").unwrap() {
-            CommandOutput::Text(s) => {
-                assert_eq!(s, "Custom MOTD here");
-            },
-            _ => panic!("expected text"),
-        }
+        assert_eq!(
+            assert_text!(exec(&reg, &mut vfs, "motd").unwrap()),
+            "Custom MOTD here"
+        );
     }
 
     #[test]
