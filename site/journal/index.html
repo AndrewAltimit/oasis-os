@@ -1,0 +1,124 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Developer's Journal - OASIS_OS</title>
+  <meta name="description" content="Technical deep dives into building a unified embedded OS in Rust — from PSP homebrew to browser deployment.">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="../css/style.css">
+</head>
+<body>
+
+<nav class="site-nav">
+  <a class="nav-brand" href="../">OASIS_OS</a>
+  <button class="nav-toggle" id="nav-toggle" aria-label="Toggle navigation" aria-expanded="false">&#9776;</button>
+  <ul class="nav-links" id="nav-links">
+    <li><a href="../#platforms">Platforms</a></li>
+    <li><a href="../#features">Features</a></li>
+    <li><a href="../#architecture">Architecture</a></li>
+    <li><a href="./">Journal</a></li>
+    <li><a href="../demo/">Live Demo</a></li>
+  </ul>
+</nav>
+
+<section class="journal-hero">
+  <div class="container">
+    <h1 class="hero-title"><span class="glow">dev</span>::journal</h1>
+    <p class="hero-tagline">
+      Technical deep dives into building a unified embedded OS in Rust &mdash;
+      from reverse engineering a 2004 handheld to streaming video inside a game engine.
+    </p>
+  </div>
+</section>
+
+<section>
+  <div class="container fade-in">
+    <div class="journal-grid">
+
+      <a class="journal-card" href="01-unified-embedded-os.html">
+        <div class="journal-card-body">
+          <h3>One Codebase, Five Platforms: Architecture of a Unified Embedded OS</h3>
+          <p>How trait-based backend abstraction lets the same Rust codebase render to SDL3, WebAssembly, PSP hardware, Unreal Engine 5, and a kernel-mode overlay &mdash; without a single <code>#[cfg]</code> in core logic.</p>
+          <div class="journal-card-meta">
+            <span class="journal-tag">architecture</span>
+            <span class="journal-tag">rust</span>
+            <span class="journal-tag purple">20 crates</span>
+          </div>
+        </div>
+        <div class="journal-card-number">01</div>
+      </a>
+
+      <a class="journal-card" href="02-tls-on-psp.html">
+        <div class="journal-card-body">
+          <h3>TLS 1.3 on a 2004 Handheld: Pure Rust Cryptography on MIPS Allegrex</h3>
+          <p>Sony's firmware ships SSL 3.0 with 2008 root CAs. We implemented native TLS 1.3 via embedded-tls on bare metal &mdash; discovering privileged instruction traps, RSA handshake failures, and DNS endianness bugs along the way.</p>
+          <div class="journal-card-meta">
+            <span class="journal-tag">psp</span>
+            <span class="journal-tag">security</span>
+            <span class="journal-tag purple">embedded-tls</span>
+          </div>
+        </div>
+        <div class="journal-card-number">02</div>
+      </a>
+
+      <a class="journal-card" href="03-streaming-video.html">
+        <div class="journal-card-body">
+          <h3>Streaming Internet Archive Video Across Two Architectures</h3>
+          <p>Building a TV Guide that streams live video on desktop (symphonia + openh264 with a sliding-window buffer) and PSP (in-memory AAC hardware decode with backpressure throttling). Solving the throttle deadlock, CDN failover, and moov atom positioning.</p>
+          <div class="journal-card-meta">
+            <span class="journal-tag">video</span>
+            <span class="journal-tag">streaming</span>
+            <span class="journal-tag purple">cross-platform</span>
+          </div>
+        </div>
+        <div class="journal-card-number">03</div>
+      </a>
+
+      <a class="journal-card" href="04-rust-psp-sdk.html">
+        <div class="journal-card-body">
+          <h3>Modernizing the rust-psp SDK: Safety Hardening for Bare Metal MIPS</h3>
+          <p>Forking and hardening a Rust SDK for PSP homebrew &mdash; fixing LLVM memcpy recursion on MIPS, weak import stub flags that break real hardware, DNS byte-order bugs, and building 38 high-level modules with RAII resource management.</p>
+          <div class="journal-card-meta">
+            <span class="journal-tag">sdk</span>
+            <span class="journal-tag">safety</span>
+            <span class="journal-tag purple">829 syscalls</span>
+          </div>
+        </div>
+        <div class="journal-card-number">04</div>
+      </a>
+
+      <a class="journal-card" href="05-usb-host-mode.html">
+        <div class="journal-card-body">
+          <h3>PSP USB Host Mode: Reverse Engineering Sony's Hardware for Peripheral I/O</h3>
+          <p>An active hardware research project to enable the PSP's USB controller as a host &mdash; supplying VBUS power, enumerating devices, and communicating with microcontrollers. Firmware reverse engineering meets Rust kernel modules.</p>
+          <div class="journal-card-meta">
+            <span class="journal-tag">hardware</span>
+            <span class="journal-tag">reverse-engineering</span>
+            <span class="journal-tag purple">in progress</span>
+          </div>
+        </div>
+        <div class="journal-card-number">05</div>
+      </a>
+
+    </div>
+  </div>
+</section>
+
+<footer class="site-footer">
+  <div class="container">
+    <div class="footer-row">
+      <span>&copy; 2024&ndash;2026 OASIS_OS contributors</span>
+      <span>&middot;</span>
+      <a href="https://github.com/AndrewAltimit/oasis-os">GitHub</a>
+      <span>&middot;</span>
+      <a href="../">Home</a>
+    </div>
+  </div>
+</footer>
+
+<script src="../js/main.js"></script>
+</body>
+</html>

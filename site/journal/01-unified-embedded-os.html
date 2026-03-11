@@ -1,0 +1,321 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>One Codebase, Five Platforms - OASIS_OS Developer's Journal</title>
+  <meta name="description" content="How trait-based backend abstraction enables a single Rust OS codebase to render across SDL3, WebAssembly, PSP, Unreal Engine 5, and a kernel-mode overlay.">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="../css/style.css">
+</head>
+<body>
+
+<nav class="site-nav">
+  <a class="nav-brand" href="../">OASIS_OS</a>
+  <button class="nav-toggle" id="nav-toggle" aria-label="Toggle navigation" aria-expanded="false">&#9776;</button>
+  <ul class="nav-links" id="nav-links">
+    <li><a href="../#platforms">Platforms</a></li>
+    <li><a href="../#architecture">Architecture</a></li>
+    <li><a href="./">Journal</a></li>
+    <li><a href="../demo/">Live Demo</a></li>
+  </ul>
+</nav>
+
+<header class="article-header">
+  <div class="container">
+    <a class="article-back" href="./">&larr; Developer's Journal</a>
+    <h1 class="article-title">One Codebase, Five Platforms: Architecture of a Unified Embedded OS</h1>
+    <p class="article-subtitle">
+      How trait-based backend abstraction lets the same Rust codebase render to SDL3, WebAssembly,
+      PSP hardware, Unreal Engine 5, and a kernel-mode overlay &mdash; without a single
+      <code>#[cfg]</code> in core logic.
+    </p>
+    <div class="article-meta">
+      <span>Entry 01</span>
+      <span>20 crates</span>
+      <span>architecture, rust, traits</span>
+    </div>
+  </div>
+</header>
+
+<article class="article-content">
+
+  <h2>The Problem: One OS, Radically Different Hosts</h2>
+
+  <p>
+    OASIS_OS started as a PSP homebrew shell in 2006. Twenty years later, the same
+    codebase runs inside a web browser, on a desktop with SDL3, embedded in Unreal Engine 5
+    as an in-game terminal, and as a kernel-mode overlay drawn directly into game
+    framebuffers on the original PSP hardware.
+  </p>
+
+  <p>
+    These aren't five ports with shared libraries. It's one set of core crates &mdash;
+    UI widgets, browser engine, terminal, skin system, window manager &mdash; compiled
+    identically for each target. The only thing that changes is the backend: a thin
+    implementation of rendering, input, audio, and networking traits.
+  </p>
+
+  <h2>The Backend Trait Boundary</h2>
+
+  <p>
+    The entire platform abstraction lives in a single file:
+    <code>oasis-types/src/backend.rs</code>. Every platform interaction in the system
+    passes through one of five traits:
+  </p>
+
+  <div class="diagram">
+    <pre><code><span class="hl-bright">Backend Trait Hierarchy</span>
+
+<span class="hl-accent">SdiCore</span> <span class="hl-dim">(13 required methods — every backend must implement)</span>
+├── init, shutdown
+├── clear, swap_buffers
+├── fill_rect, blit, load_texture, destroy_texture
+├── draw_text, measure_text
+├── set_clip_rect, reset_clip_rect
+└── read_pixels
+
+<span class="hl-purple">SdiBackend</span> <span class="hl-dim">(39 optional accelerated primitives)</span>
+├── <span class="hl-accent">SdiShapes</span>      rounded_rect, circle, line, triangle, polygon
+├── <span class="hl-accent">SdiGradients</span>    linear_gradient, radial_gradient
+├── <span class="hl-accent">SdiAlpha</span>        set_global_alpha, fill_rect_alpha
+├── <span class="hl-accent">SdiText</span>         draw_text_styled, measure_text_styled
+├── <span class="hl-accent">SdiTextures</span>     blit_rotated, blit_tinted, blit_region
+├── <span class="hl-accent">SdiClipTransform</span> push_clip, pop_clip, set_transform
+├── <span class="hl-accent">SdiVector</span>       begin_path, move_to, line_to, arc, bezier, fill, stroke
+└── <span class="hl-accent">SdiBatch</span>        begin_batch, end_batch
+
+<span class="hl-accent">InputBackend</span>     poll() → Vec&lt;InputEvent&gt;
+<span class="hl-accent">NetworkBackend</span>   TCP connect, read, write
+<span class="hl-accent">AudioBackend</span>     play, pause, set_volume, load_audio</code></pre>
+    <div class="diagram-caption">The five backend traits that define the entire platform abstraction boundary</div>
+  </div>
+
+  <p>
+    <strong>SdiCore</strong> is the minimum viable backend: 13 methods that let you clear
+    a screen, draw rectangles, blit textures, render text, and read pixels back. Every
+    widget, every app, the browser engine, the terminal &mdash; they all target this
+    interface exclusively.
+  </p>
+
+  <p>
+    <strong>SdiBackend</strong> extends SdiCore with 39 optional accelerated primitives
+    split across 8 focused extension traits. Each has a default no-op or software fallback
+    implementation. If a backend supports hardware-accelerated gradients, it implements
+    <code>SdiGradients</code>. If not, the core rendering path handles it. This means a
+    new backend can ship with just 13 methods and progressively add hardware acceleration.
+  </p>
+
+  <h2>The Five Backends</h2>
+
+  <div class="diagram">
+    <pre><code><span class="hl-bright">Deployment Topology</span>
+
+                        ┌──────────────────────────────────┐
+                        │          <span class="hl-accent">oasis-core</span>              │
+                        │  16 apps · browser · terminal    │
+                        │  skin engine · window manager     │
+                        │  agent · plugins · scripting      │
+                        └──────────┬───────────────────────┘
+                                   │
+              ┌────────────────────┼────────────────────┐
+              │                    │                     │
+     ┌────────▼────────┐  ┌───────▼────────┐  ┌────────▼────────┐
+     │ <span class="hl-accent">backend-sdl</span>     │  │ <span class="hl-accent">backend-wasm</span>   │  │ <span class="hl-accent">backend-ue5</span>     │
+     │ SDL3 + OpenGL   │  │ Canvas 2D      │  │ Software RGBA   │
+     │ Linux/Mac/Win/Pi│  │ Web Audio       │  │ Unreal Engine 5 │
+     └─────────────────┘  │ DOM Input       │  └─────────────────┘
+                          └────────────────┘
+              ┌──────────────────┐    ┌───────────────────────┐
+              │ <span class="hl-purple">backend-psp</span>      │    │ <span class="hl-purple">plugin-psp</span>            │
+              │ sceGu + VRAM     │    │ Kernel PRX overlay    │
+              │ Full OS shell    │    │ Hooks sceDisplaySet   │
+              │ TLS 1.3 + Stream │    │ Draws into game FB    │
+              └──────────────────┘    └───────────────────────┘</code></pre>
+    <div class="diagram-caption">Five backends sharing one core — from game engines to bare metal MIPS</div>
+  </div>
+
+  <h3>SDL3 Desktop (oasis-backend-sdl)</h3>
+  <p>
+    The primary development backend. Uses SDL3's GPU-accelerated 2D renderer for all
+    SdiCore operations, with full SdiBackend extension coverage. Compiles SDL3 from source
+    via the <code>build-from-source</code> feature &mdash; no system SDL installation
+    required. Handles keyboard, mouse, and gamepad input; audio playback via SDL_mixer.
+  </p>
+
+  <h3>WebAssembly (oasis-backend-wasm)</h3>
+  <p>
+    Targets <code>wasm32-unknown-unknown</code> via wasm-bindgen. Renders to an HTML
+    Canvas 2D context, captures DOM keyboard/mouse events as <code>InputEvent</code>s,
+    and uses Web Audio for sound. The live demo on GitHub Pages is this backend
+    &mdash; the full OS running in your browser.
+  </p>
+
+  <h3>PSP EBOOT (oasis-backend-psp)</h3>
+  <p>
+    Native PSP rendering via <code>sceGu</code> (the PSP's OpenGL-like 3D API) with
+    textures in VRAM. The most constrained backend: 32MB RAM, 333MHz single-core MIPS,
+    480&times;272 resolution. Yet it runs the full shell with 18 skins, the browser engine,
+    90+ terminal commands, TLS 1.3 networking, and streaming media playback.
+  </p>
+
+  <h3>Unreal Engine 5 (oasis-backend-ue5 + oasis-ffi)</h3>
+  <p>
+    A software RGBA framebuffer backend exposed through a C-ABI FFI layer. UE5 (or any
+    C-compatible host) calls <code>oasis_tick()</code> each frame, reads back the pixel
+    buffer via <code>oasis_get_buffer()</code>, and uploads it as a dynamic texture.
+    The OS runs as an in-game computer terminal, complete with working browser and shell.
+  </p>
+
+  <h3>PSP Kernel PRX (oasis-plugin-psp)</h3>
+  <p>
+    The most exotic backend: a &lt;64KB kernel-mode module that runs alongside games.
+    Loaded via <code>PLUGINS.TXT</code> by custom firmware, it hooks
+    <code>sceDisplaySetFrameBuf</code> to draw overlay UI directly into the game's
+    framebuffer on every VSync. Claims a PSP audio channel for background MP3 playback.
+    No dependency on oasis-core &mdash; direct framebuffer rendering with its own
+    minimal widget set.
+  </p>
+
+  <h2>The Crate Dependency Graph</h2>
+
+  <p>
+    The workspace is organized as 20 crates with a strict dependency hierarchy. Foundation
+    types flow downward; no crate reaches up to its consumers.
+  </p>
+
+  <div class="diagram">
+    <pre><code><span class="hl-accent">oasis-types</span> <span class="hl-dim">(Color, Button, InputEvent, backend traits, error types)</span>
+├── <span class="hl-accent">oasis-vfs</span>        virtual file system: MemoryVfs, RealVfs, GameAssetVfs
+├── <span class="hl-accent">oasis-platform</span>   platform service traits: Power, Time, USB, Network, OSK
+├── <span class="hl-accent">oasis-sdi</span>        scene display interface: named objects, z-order
+├── <span class="hl-accent">oasis-net</span>        TCP networking, PSK auth, remote terminal, FTP
+├── <span class="hl-accent">oasis-audio</span>      audio manager, playlist, MP3 ID3 parsing
+├── <span class="hl-accent">oasis-ui</span>         32 widgets: Button, Card, TabBar, ListView, flex layout...
+├── <span class="hl-accent">oasis-wm</span>         window manager: drag/resize, hit testing, decorations
+├── <span class="hl-accent">oasis-skin</span>       TOML skin engine, 18 skins, theme derivation
+├── <span class="hl-accent">oasis-terminal</span>   90+ commands, shell features, variable expansion
+├── <span class="hl-accent">oasis-browser</span>    HTML/CSS/Gemini: DOM, CSS cascade, layout, JS bindings
+├── <span class="hl-accent">oasis-js</span>         QuickJS-NG runtime, console API, DOM manipulation
+├── <span class="hl-accent">oasis-video</span>      MP4/H.264+AAC decode, streaming pipelines
+├── <span class="hl-accent">oasis-vector</span>     scene graph, path ops, icons, frame animations
+└── <span class="hl-accent">oasis-core</span>       16 apps, dashboard, agent, plugin, scripting
+    ├── <span class="hl-purple">oasis-backend-sdl</span>  → <span class="hl-purple">oasis-app</span> (binary)
+    ├── <span class="hl-purple">oasis-backend-wasm</span>
+    ├── <span class="hl-purple">oasis-backend-ue5</span> → <span class="hl-purple">oasis-ffi</span> (cdylib)
+    ├── <span class="hl-purple">oasis-backend-psp</span> <span class="hl-dim">(excluded from workspace, nightly)</span>
+    └── <span class="hl-purple">oasis-plugin-psp</span>  <span class="hl-dim">(excluded from workspace, kernel mode)</span></code></pre>
+    <div class="diagram-caption">20 workspace crates — core logic never imports a backend</div>
+  </div>
+
+  <h2>Why This Works: The Key Design Decisions</h2>
+
+  <h3>No <code>#[cfg]</code> in Core</h3>
+  <p>
+    Platform-specific code is confined entirely to backend crates. The core crates
+    &mdash; <code>oasis-ui</code>, <code>oasis-browser</code>, <code>oasis-terminal</code>,
+    etc. &mdash; compile identically for every target. They accept a
+    <code>&amp;mut dyn SdiCore</code> and draw to it. This eliminates the conditional
+    compilation spaghetti that plagues most cross-platform Rust projects.
+  </p>
+
+  <h3>Progressive Capability</h3>
+  <p>
+    The split between <code>SdiCore</code> (required) and the 8 extension traits
+    (optional) means backends can ship minimal implementations and progressively add
+    hardware acceleration. The PSP backend implements <code>SdiShapes</code> using sceGu
+    hardware primitives but falls back to software for gradients. The SDL3 backend
+    implements everything. The WASM backend sits in between. Core code never cares.
+  </p>
+
+  <h3>Virtual File System</h3>
+  <p>
+    File operations go through <code>oasis-vfs</code> traits, not <code>std::fs</code>.
+    On desktop, <code>RealVfs</code> wraps the real filesystem. In UE5,
+    <code>GameAssetVfs</code> maps to Unreal's asset system with an overlay write layer.
+    On WASM, <code>MemoryVfs</code> provides a fully in-RAM filesystem. On PSP, it wraps
+    <code>sceIo*</code> syscalls. Same API, radically different storage backends.
+  </p>
+
+  <h3>Bitmap Font Independence</h3>
+  <p>
+    Every backend ships its own glyph table in <code>font.rs</code>. No FreeType, no
+    system font dependencies. <code>oasis-types</code> provides <code>glyph_advance()</code>
+    with variable per-character widths (3&ndash;8px). This means text rendering works
+    identically everywhere &mdash; including on the PSP where the system font API
+    (<code>psp::font</code>) supplements the bitmap glyphs with TrueType via a VRAM atlas.
+  </p>
+
+  <h2>What 20 Crates Buys You</h2>
+
+  <p>
+    The aggressive crate split isn't just organizational hygiene. It has concrete
+    engineering benefits:
+  </p>
+
+  <ul>
+    <li><strong>Compile-time isolation</strong> &mdash; Changing a widget in <code>oasis-ui</code>
+        doesn't recompile the browser engine. On a full rebuild, crates compile in parallel
+        across dependency layers.</li>
+    <li><strong>Feature-gated heavyweights</strong> &mdash; <code>oasis-video</code> has three
+        feature flags: <code>h264</code> (links openh264), <code>no-std-demux</code>
+        (lightweight PSP-safe parser), <code>video-decode</code> (full desktop pipeline).
+        The PSP builds with only <code>no-std-demux</code>, saving megabytes.</li>
+    <li><strong>Independent testing</strong> &mdash; <code>cargo test -p oasis-browser</code>
+        runs browser layout tests without compiling SDL3 or any backend.</li>
+    <li><strong>Clear ownership</strong> &mdash; Each crate has a single responsibility.
+        <code>oasis-skin</code> owns TOML parsing and theme derivation.
+        <code>oasis-wm</code> owns window hit testing and decorations. No god objects.</li>
+  </ul>
+
+  <div class="callout">
+    <div class="callout-title">Key Insight</div>
+    <p>
+      The trait boundary isn't just an abstraction &mdash; it's a <strong>compilation
+      firewall</strong>. Backend crates are leaf nodes in the dependency graph. They
+      depend on core; core never depends on them. This means adding a sixth backend
+      (framebuffer, Android, iOS) requires zero changes to any existing crate.
+    </p>
+  </div>
+
+  <h2>Numbers</h2>
+
+  <table>
+    <thead>
+      <tr><th>Metric</th><th>Count</th></tr>
+    </thead>
+    <tbody>
+      <tr><td>Workspace crates</td><td>20</td></tr>
+      <tr><td>Backend implementations</td><td>5</td></tr>
+      <tr><td>UI widgets</td><td>32</td></tr>
+      <tr><td>Terminal commands</td><td>90+</td></tr>
+      <tr><td>Skins (external TOML + built-in)</td><td>18</td></tr>
+      <tr><td>Apps in core</td><td>16</td></tr>
+      <tr><td>SdiCore required methods</td><td>13</td></tr>
+      <tr><td>SdiBackend extended methods</td><td>39</td></tr>
+      <tr><td>Backend trait files to implement</td><td>1 (backend.rs)</td></tr>
+    </tbody>
+  </table>
+
+  <nav class="article-nav">
+    <span></span>
+    <a class="next" href="02-tls-on-psp.html">Next: TLS 1.3 on a 2004 Handheld &rarr;</a>
+  </nav>
+
+</article>
+
+<footer class="site-footer">
+  <div class="container">
+    <div class="footer-row">
+      <span>&copy; 2024&ndash;2026 OASIS_OS contributors</span>
+      <span>&middot;</span>
+      <a href="https://github.com/AndrewAltimit/oasis-os">GitHub</a>
+    </div>
+  </div>
+</footer>
+
+<script src="../js/main.js"></script>
+</body>
+</html>

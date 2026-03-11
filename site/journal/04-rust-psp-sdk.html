@@ -1,0 +1,359 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Modernizing the rust-psp SDK - OASIS_OS Developer's Journal</title>
+  <meta name="description" content="Forking and hardening a Rust SDK for PSP homebrew — fixing LLVM memcpy recursion, weak import flags, DNS endianness, and building 38 high-level modules.">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="../css/style.css">
+</head>
+<body>
+
+<nav class="site-nav">
+  <a class="nav-brand" href="../">OASIS_OS</a>
+  <button class="nav-toggle" id="nav-toggle" aria-label="Toggle navigation" aria-expanded="false">&#9776;</button>
+  <ul class="nav-links" id="nav-links">
+    <li><a href="../#platforms">Platforms</a></li>
+    <li><a href="../#architecture">Architecture</a></li>
+    <li><a href="./">Journal</a></li>
+    <li><a href="../demo/">Live Demo</a></li>
+  </ul>
+</nav>
+
+<header class="article-header">
+  <div class="container">
+    <a class="article-back" href="./">&larr; Developer's Journal</a>
+    <h1 class="article-title">Modernizing the rust-psp SDK: Safety Hardening for Bare Metal MIPS</h1>
+    <p class="article-subtitle">
+      Forking and hardening a Rust SDK for PSP homebrew development &mdash; fixing LLVM
+      memcpy recursion on MIPS, weak import stub flags that break real hardware, and
+      building 38 high-level modules with RAII resource management.
+    </p>
+    <div class="article-meta">
+      <span>Entry 04</span>
+      <span>sdk, safety, 829 syscalls</span>
+    </div>
+  </div>
+</header>
+
+<article class="article-content">
+
+  <h2>Why Fork?</h2>
+
+  <p>
+    The <a href="https://github.com/overdrivenpotato/rust-psp">original rust-psp</a> is
+    a pioneering project that proved Rust could target the PSP's MIPS Allegrex CPU. But
+    it was designed for simple homebrew demos, not a production OS. OASIS_OS needed:
+  </p>
+
+  <ul>
+    <li>Kernel mode support for PRX plugins (syscall hooking, MMIO access)</li>
+    <li>High-level modules wrapping the 829 raw syscall bindings into safe APIs</li>
+    <li>Fixes for bugs that only manifest on real hardware (not the PPSSPP emulator)</li>
+    <li>Edition 2024 compatibility and modern Rust safety annotations</li>
+    <li>RAII resource management for audio channels, files, threads, network sockets</li>
+  </ul>
+
+  <p>
+    The fork at
+    <a href="https://github.com/AndrewAltimit/rust-psp">AndrewAltimit/rust-psp</a>
+    now contains 37,000+ lines of Rust across 50+ source files, with 38 high-level
+    SDK modules and 30 example programs.
+  </p>
+
+  <h2>The LLVM Memcpy Recursion Bug</h2>
+
+  <div class="callout discovery">
+    <div class="callout-title">Discovery: Infinite Recursion in C Intrinsics</div>
+    <p>
+      On MIPS targets, LLVM compiles <code>core::ptr::write_bytes</code> (memset),
+      <code>core::ptr::copy</code> (memmove), and <code>core::ptr::copy_nonoverlapping</code>
+      (memcpy) to calls to the C runtime functions <code>memset</code>,
+      <code>memmove</code>, and <code>memcpy</code>. If those C functions are implemented
+      in Rust using <code>core::ptr</code> operations, LLVM compiles them right back
+      into calls to themselves &mdash; causing infinite recursion.
+    </p>
+  </div>
+
+  <p>
+    This is a known LLVM behavior on MIPS (and some other targets), but it's particularly
+    insidious because:
+  </p>
+
+  <ul>
+    <li>It doesn't happen on x86, so it passes all CI tests on desktop</li>
+    <li>On PSP, it manifests as a "jump to invalid address" crash, not a stack overflow</li>
+    <li>The PSP has no stack guard page, so the recursion silently corrupts memory before crashing</li>
+    <li>Optimized builds can sometimes avoid the recursion by inlining, making the bug intermittent</li>
+  </ul>
+
+  <p>
+    The fix is to implement <code>memcpy</code>, <code>memset</code>, and
+    <code>memmove</code> using manual byte-by-byte loops that LLVM cannot lower back
+    into intrinsic calls:
+  </p>
+
+  <pre><code>#[no_mangle]
+pub unsafe extern "C" fn memset(dest: *mut u8, val: i32, n: usize) -> *mut u8 {
+    let val = val as u8;
+    let mut i = 0;
+    while i < n {
+        // Manual byte write — LLVM cannot lower this to memset
+        core::ptr::write_volatile(dest.add(i), val);
+        i += 1;
+    }
+    dest
+}</code></pre>
+
+  <p>
+    The <code>write_volatile</code> is critical: it prevents LLVM from recognizing
+    the loop as a memset pattern and "optimizing" it back into a <code>memset</code>
+    call. This is a compiler barrier, not a hardware requirement.
+  </p>
+
+  <h2>Weak Import Stub Flags</h2>
+
+  <p>
+    PSP firmware modules export functions identified by 32-bit NIDs (Name IDs). When a
+    PRX is loaded, the kernel resolves its import stubs against loaded modules. The stub
+    declaration includes a flags field that controls resolution behavior:
+  </p>
+
+  <div class="diagram">
+    <pre><code><span class="hl-bright">PSP Import Stub Resolution</span>
+
+<span class="hl-accent">psp_extern!</span> macro generates stub declarations:
+
+  struct SceStubLibraryEntry {
+      name: *const c_char,     // library name
+      <span class="hl-warn">flags: u16,</span>              // resolution flags
+      num_funcs: u16,          // number of imported functions
+      nid_table: *const u32,   // NID array
+      stub_table: *const u32,  // stub function array
+  }
+
+<span class="hl-bright">Flag Bits:</span>
+  0x0001  <span class="hl-dim">→ standard import (module must be loaded)</span>
+  <span class="hl-accent">0x0008  → weak import (module may not be loaded yet)</span>
+  0x4000  <span class="hl-dim">→ library version hint</span>
+
+<span class="hl-bright">Impact:</span>
+  <span class="hl-warn">0x4001</span> (strong)  Module fails to load if library not present
+  <span class="hl-accent">0x4009</span> (weak)    Module loads; stubs resolve later via sceUtilityLoadModule</code></pre>
+    <div class="diagram-caption">The 0x0008 bit controls whether the kernel allows deferred resolution</div>
+  </div>
+
+  <div class="callout warning">
+    <div class="callout-title">Real Hardware Failure</div>
+    <p>
+      <code>sceVideocodec</code> was declared with flags <code>0x4001</code> (strong
+      import). On the PPSSPP emulator, this worked because PPSSPP pre-loads all firmware
+      modules. On <strong>real PSP hardware</strong>, the codec modules are loaded lazily
+      via <code>sceUtilityLoadModule(MODULE_AV_CODEC)</code>. With strong imports, the
+      kernel refuses to load the PRX at boot because <code>sceVideocodec</code> isn't
+      available yet &mdash; breaking the entire application.
+    </p>
+    <p>
+      <strong>Fix:</strong> Changed <code>sceVideocodec</code> stub flags from
+      <code>0x4001</code> to <code>0x4009</code> (matching the existing
+      <code>sceAudiocodec</code> pattern). After the application calls
+      <code>sceUtilityLoadModule</code>, the kernel re-links the weak stubs to the
+      now-available codec library.
+    </p>
+  </div>
+
+  <h2>The 38 High-Level Modules</h2>
+
+  <p>
+    The raw <code>psp::sys</code> module exposes 829 syscall bindings as unsafe C-ABI
+    functions. The SDK wraps these into 38 high-level modules with safe Rust APIs:
+  </p>
+
+  <div class="diagram">
+    <pre><code><span class="hl-bright">rust-psp SDK Module Map</span>
+
+<span class="hl-accent">Threading &amp; Sync</span>
+├── thread.rs      closure-based spawn (bypasses std TLS limitation)
+├── sync.rs        SpinMutex, SpinRwLock, SpscQueue (lock-free)
+└── timer.rs       FrameTimer, alarm callbacks
+
+<span class="hl-accent">Graphics</span>
+├── gu_ext.rs      sprite batching, texture helpers
+├── framebuffer.rs double-buffering with VRAM management
+├── simd.rs        VFPU matrix/vector math (PSP's SIMD unit)
+└── screenshot.rs  BMP capture from framebuffer
+
+<span class="hl-accent">Audio</span>
+├── audio.rs       AudioChannel with RAII cleanup
+├── audio_mixer.rs multi-channel mixing
+├── audiocodec.rs  hardware AAC/MP3/ATRAC decode
+└── mp3.rs         MP3 decoder with stability guards
+
+<span class="hl-accent">Networking</span>
+├── net.rs         TcpStream, UdpSocket (RAII, Read + Write)
+├── http.rs        HttpClient with persistent templates
+└── wlan.rs        WiFi connection management
+
+<span class="hl-accent">Input &amp; UI</span>
+├── input.rs       controller with analog deadzone
+├── osk.rs         on-screen keyboard integration
+└── dialog.rs      system message dialogs
+
+<span class="hl-accent">Storage</span>
+├── io.rs          File, ReadDir (RAII handles)
+├── config.rs      binary config (RCFG format)
+└── savedata.rs    encrypted save data management
+
+<span class="hl-accent">System</span>
+├── power.rs       clock speed control, battery monitoring
+├── time.rs        Instant, Duration, system clock
+├── rtc.rs         real-time clock with timezone
+├── usb.rs         USB device mode control
+├── display.rs     VBlank sync, framerate control
+├── cache.rs       data/instruction cache management
+├── dma.rs         DMA transfer engine
+└── vram_alloc.rs  VRAM allocator (Result-based, checked math)
+
+<span class="hl-purple">Kernel Mode Only</span>
+├── me.rs          Media Engine boot, task submission
+├── hw.rs          MMIO register access
+├── hook.rs        SyscallHook (PRO-C2 stub workarounds)
+├── font.rs        system TrueType font rendering
+└── benchmark.rs   CPU cycle measurement</code></pre>
+    <div class="diagram-caption">38 modules — every one uses RAII for resource cleanup</div>
+  </div>
+
+  <h3>RAII Everywhere</h3>
+
+  <p>
+    Every resource-holding type implements <code>Drop</code>:
+  </p>
+
+  <ul>
+    <li><code>File</code> closes <code>sceIo</code> handles on drop</li>
+    <li><code>AudioChannel</code> releases the hardware channel</li>
+    <li><code>TcpStream</code> closes the socket</li>
+    <li><code>JoinHandle</code> joins the thread</li>
+    <li><code>SpriteBatch</code> flushes remaining vertices</li>
+  </ul>
+
+  <p>
+    This is especially important on the PSP, where leaked resources can't be reclaimed
+    without a full reboot. There's no OS-level cleanup of user processes &mdash; when
+    a homebrew exits, any un-freed resources stay allocated until power cycle.
+  </p>
+
+  <h2>Kernel Mode: SyscallHook</h2>
+
+  <p>
+    The PSP plugin PRX needs to hook firmware syscalls to intercept display buffer swaps.
+    The <code>SyscallHook</code> implementation handles two different CFW stub formats:
+  </p>
+
+  <div class="diagram">
+    <pre><code><span class="hl-bright">PSP Syscall Hook Mechanisms</span>
+
+<span class="hl-accent">Method 1: sctrlHENPatchSyscall</span> (preferred)
+  Original stub:
+    jr  $ra          <span class="hl-dim">← return to caller</span>
+    syscall 0xNNNN   <span class="hl-dim">← kernel trap with syscall number</span>
+
+  After patch:
+    j   hook_func    <span class="hl-dim">← jump to our hook</span>
+    nop              <span class="hl-dim">← delay slot (cleaned)</span>
+
+  <span class="hl-warn">PRO-C2 on 6.20 quirk:</span> delay slot contains garbage
+  from original stub, not nop. Must read stub bytes
+  and extract syscall number before patching.
+
+<span class="hl-accent">Method 2: Inline Hook</span> (fallback)
+  Patch first instruction of target function:
+    j   trampoline   <span class="hl-dim">← jump to our code</span>
+    nop              <span class="hl-dim">← delay slot</span>
+
+  Trampoline:
+    [save registers]
+    jal hook_func    <span class="hl-dim">← call our hook</span>
+    [restore registers]
+    [original instruction]
+    j   target+8     <span class="hl-dim">← resume original function</span></code></pre>
+    <div class="diagram-caption">Two hook mechanisms with CFW-specific quirk handling</div>
+  </div>
+
+  <h2>Edition 2024 Modernization</h2>
+
+  <p>
+    The fork updates the entire codebase to Rust edition 2024:
+  </p>
+
+  <ul>
+    <li><code>#[no_mangle]</code> → <code>#[unsafe(no_mangle)]</code> (new safety annotation)</li>
+    <li>Workspace-level lints with <code>unsafe_op_in_unsafe_fn = "warn"</code></li>
+    <li>Removed 4 stabilized nightly features</li>
+    <li><code>paste::paste</code> re-exported for macro resolution compatibility</li>
+    <li>Thread-unsafe panic counter replaced with <code>AtomicUsize</code></li>
+    <li>Allocator overflow checks via <code>checked_add</code></li>
+    <li>GU matrix bounds checking (previously unchecked array index)</li>
+    <li>Screenshot BMP serialization rewritten from <code>transmute</code> to safe
+        field-by-field writes</li>
+  </ul>
+
+  <h2>Testing on Real Hardware vs. PPSSPP</h2>
+
+  <div class="callout warning">
+    <div class="callout-title">Emulator vs. Real Hardware</div>
+    <p>
+      Multiple bugs in this list <strong>only manifest on real PSP hardware</strong>.
+      The PPSSPP emulator pre-loads all firmware modules (hiding weak import bugs),
+      doesn't enforce COP0 privilege levels (hiding the mfc0 crash), and handles
+      memcpy via native x86 (hiding the LLVM recursion). Every SDK change is tested
+      on both PSP-1000 and PSP-3000 hardware running 6.20 PRO-C2.
+    </p>
+  </div>
+
+  <p>
+    The CI pipeline includes PPSSPP headless testing for basic smoke tests, but the
+    "real" test suite is manual execution on hardware. This is a fundamental constraint
+    of bare-metal development: the emulator is a convenience tool, not a source of truth.
+  </p>
+
+  <h2>By the Numbers</h2>
+
+  <table>
+    <thead>
+      <tr><th>Metric</th><th>Value</th></tr>
+    </thead>
+    <tbody>
+      <tr><td>Lines of Rust</td><td>37,218</td></tr>
+      <tr><td>Syscall bindings</td><td>829+</td></tr>
+      <tr><td>High-level modules</td><td>38</td></tr>
+      <tr><td>Example programs</td><td>30</td></tr>
+      <tr><td>Source files</td><td>50+</td></tr>
+      <tr><td>Safety-critical fixes</td><td>8</td></tr>
+      <tr><td>PSP hardware revisions tested</td><td>2 (PSP-1000, PSP-3000)</td></tr>
+    </tbody>
+  </table>
+
+  <nav class="article-nav">
+    <a class="prev" href="03-streaming-video.html">&larr; Prev: Streaming Internet Archive Video</a>
+    <a class="next" href="05-usb-host-mode.html">Next: PSP USB Host Mode &rarr;</a>
+  </nav>
+
+</article>
+
+<footer class="site-footer">
+  <div class="container">
+    <div class="footer-row">
+      <span>&copy; 2024&ndash;2026 OASIS_OS contributors</span>
+      <span>&middot;</span>
+      <a href="https://github.com/AndrewAltimit/oasis-os">GitHub</a>
+    </div>
+  </div>
+</footer>
+
+<script src="../js/main.js"></script>
+</body>
+</html>

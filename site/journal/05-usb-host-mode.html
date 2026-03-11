@@ -1,0 +1,384 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>PSP USB Host Mode - OASIS_OS Developer's Journal</title>
+  <meta name="description" content="An active hardware research project to enable USB host mode on the PSP — reverse engineering Sony's firmware, VBUS power measurement, and Rust kernel modules.">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="../css/style.css">
+</head>
+<body>
+
+<nav class="site-nav">
+  <a class="nav-brand" href="../">OASIS_OS</a>
+  <button class="nav-toggle" id="nav-toggle" aria-label="Toggle navigation" aria-expanded="false">&#9776;</button>
+  <ul class="nav-links" id="nav-links">
+    <li><a href="../#platforms">Platforms</a></li>
+    <li><a href="../#architecture">Architecture</a></li>
+    <li><a href="./">Journal</a></li>
+    <li><a href="../demo/">Live Demo</a></li>
+  </ul>
+</nav>
+
+<header class="article-header">
+  <div class="container">
+    <a class="article-back" href="./">&larr; Developer's Journal</a>
+    <h1 class="article-title">PSP USB Host Mode: Reverse Engineering Sony's Hardware for Peripheral I/O</h1>
+    <p class="article-subtitle">
+      An active hardware research project to enable the PSP's USB controller as a host &mdash;
+      supplying VBUS power, enumerating devices, and communicating with microcontrollers via
+      USB serial. Firmware reverse engineering meets Rust kernel modules.
+    </p>
+    <div class="article-meta">
+      <span>Entry 05</span>
+      <span>hardware, reverse-engineering, in&nbsp;progress</span>
+    </div>
+  </div>
+</header>
+
+<article class="article-content">
+
+  <h2>The Premise</h2>
+
+  <p>
+    The PSP's Tachyon SoC contains a USB controller capable of both device and host
+    operation at the silicon level. Under normal operation &mdash; stock firmware or
+    custom firmware &mdash; the USB port works exclusively in device mode: the PSP
+    presents itself as a mass storage device to a connected PC.
+  </p>
+
+  <p>
+    But Sony's first-party accessories prove that host mode works. The Go!Cam camera
+    (PSP-300), 1seg TV tuner (PSP-S310), GPS receiver (PSP-290), and microphone all
+    connect via the Mini-B port with the PSP acting as host. Sony's kernel modules in
+    <code>flash0:/kd/</code> handle the mode switch, but they're undocumented and
+    restricted to specific vendor/device ID pairs.
+  </p>
+
+  <p>
+    No one has ever shipped public USB host mode homebrew for the PSP. The rust-psp SDK,
+    with its kernel mode support and 829 syscall bindings, is uniquely positioned to be
+    the first.
+  </p>
+
+  <h2>What We Know About the Hardware</h2>
+
+  <div class="diagram">
+    <pre><code><span class="hl-bright">PSP USB Hardware Architecture</span>
+
+┌──────────────────────────────────────────────────────────┐
+│                    <span class="hl-accent">Tachyon SoC</span>                          │
+│                                                          │
+│  ┌──────────────┐    ┌─────────────┐    ┌────────────┐  │
+│  │ Allegrex CPU │    │ USB Ctrlr   │    │ Syscon     │  │
+│  │ 333MHz MIPS  │◄──►│ Device/Host │◄──►│ (SPI bus)  │  │
+│  │ R4000        │    │ USB 2.0 FS  │    │ Power ctrl │  │
+│  └──────────────┘    └──────┬──────┘    └────────────┘  │
+│                             │                            │
+│                     ┌───────▼───────┐                    │
+│                     │ MMIO Regs     │                    │
+│                     │ 0xBE2xxxxx    │                    │
+│                     └───────┬───────┘                    │
+└─────────────────────────────┼────────────────────────────┘
+                              │
+                     ┌────────▼────────┐
+                     │ <span class="hl-purple">Mini-B USB Port</span>  │
+                     │ D+, D-, VBUS,   │
+                     │ GND             │
+                     │                 │
+                     │ <span class="hl-warn">VBUS: bidirectional power switch</span>
+                     │ Receives 5V in device mode
+                     │ <span class="hl-accent">Sources 5V in host mode</span>
+                     └─────────────────┘</code></pre>
+    <div class="diagram-caption">The Tachyon SoC's USB controller supports both modes — controlled via MMIO registers</div>
+  </div>
+
+  <h3>Key Hardware Facts</h3>
+
+  <ul>
+    <li>The USB controller supports USB 2.0 Full-Speed in both device and host mode</li>
+    <li>VBUS power switching is firmware-controlled, not OTG ID pin detection</li>
+    <li>The Mini-B connector is <strong>not</strong> Mini-AB (no OTG), confirming that
+        host mode is activated entirely through register writes</li>
+    <li>Memory-mapped registers at <code>0xBE2xxxxx</code> (uncached kernel address space)</li>
+    <li>Sony's accessories draw 150&ndash;300mA &mdash; the VBUS circuit must support
+        at least this range</li>
+    <li>Standard USB cables work &mdash; no special OTG wiring, ID pin grounding, or
+        modified cables needed</li>
+  </ul>
+
+  <h2>The Research Plan</h2>
+
+  <div class="timeline">
+    <div class="timeline-item">
+      <div class="timeline-date">Phase 0: Tooling &amp; Power Measurement</div>
+      <div class="timeline-title">VBUS Current Capacity Testing</div>
+      <div class="timeline-desc">
+        Using an FNIRSI FNB58 inline power meter and DROK LD25 adjustable load to
+        determine the PSP's actual VBUS current ceiling. Incrementally increase current
+        from 0.25A while monitoring voltage &mdash; record the point where VBUS drops
+        below 4.75V. Test both PSP-1000 and PSP-3000 to document per-Tachyon-revision
+        limits. Current working estimate: 300mA.
+      </div>
+    </div>
+
+    <div class="timeline-item purple">
+      <div class="timeline-date">Phase 1: Firmware Reverse Engineering</div>
+      <div class="timeline-title">USB Module Disassembly &amp; Register Mapping</div>
+      <div class="timeline-desc">
+        Decrypt and disassemble <code>usb.prx</code>, <code>usbhost.prx</code>,
+        <code>usbacc.prx</code>, and <code>usb_cam.prx</code> from 6.20 firmware using
+        PSARDumper + pspdecrypt + Ghidra with the PSP processor module. Trace
+        <code>LUI</code>/<code>ORI</code> sequences to identify USB controller register
+        addresses. Map the mode switch mechanism and VBUS power control path. Resolve
+        all <code>sceUsb*</code> NIDs for 6.20.
+      </div>
+    </div>
+
+    <div class="timeline-item">
+      <div class="timeline-date">Phase 2: Host Controller Driver</div>
+      <div class="timeline-title">MMIO Abstraction &amp; Mode Switching</div>
+      <div class="timeline-desc">
+        Implement the hardware abstraction layer in Rust: volatile MMIO register access,
+        VBUS power enable/disable with safety guards, host controller initialization,
+        SOF generation, and port status monitoring. All register access occurs in kernel
+        mode via a dedicated PRX module.
+      </div>
+    </div>
+
+    <div class="timeline-item purple">
+      <div class="timeline-date">Phase 3: USB Enumeration</div>
+      <div class="timeline-title">Device Discovery &amp; Standard Requests</div>
+      <div class="timeline-desc">
+        Endpoint Descriptor and Transfer Descriptor management in DMA-accessible uncached
+        memory. Control transfer engine for SETUP/DATA/STATUS phases. Device enumeration
+        state machine: <code>SET_ADDRESS</code>, <code>GET_DESCRIPTOR</code>,
+        <code>SET_CONFIGURATION</code>. Memory allocated via
+        <code>sceKernelAllocPartitionMemory</code> with 4KB alignment.
+      </div>
+    </div>
+
+    <div class="timeline-item">
+      <div class="timeline-date">Phase 4: CDC/ACM Serial Driver</div>
+      <div class="timeline-title">USB Serial Communication</div>
+      <div class="timeline-desc">
+        Bulk IN/OUT transfer scheduling for serial data. CDC/ACM class requests
+        (<code>SET_LINE_CODING</code>, <code>SET_CONTROL_LINE_STATE</code>). Target
+        peripheral: Luckfox Pico Pro/Ultra RV1106 running USB-CDC gadget mode. First
+        proof of concept: PSP sends serial data to a Linux SBC.
+      </div>
+    </div>
+  </div>
+
+  <h2>The Proposed API</h2>
+
+  <p>
+    The end goal is a safe Rust API for USB host operations, feature-gated behind
+    <code>usb-host</code> in the psp crate:
+  </p>
+
+  <pre><code>#![no_std]
+#![no_main]
+
+psp::module!("usb_serial_demo", 1, 0);
+
+fn psp_main() {
+    psp::enable_home_button();
+
+    // Initialize host mode, enable VBUS, wait for device
+    let mut serial = psp::usb::class::cdc::UsbSerial::open(115200)
+        .expect("Failed to open USB serial");
+
+    serial.write(b"Hello from PSP!\n").unwrap();
+
+    let mut buf = [0u8; 64];
+    loop {
+        if let Ok(n) = serial.read(&mut buf) {
+            serial.write(&buf[..n]).unwrap(); // echo
+        }
+    }
+}</code></pre>
+
+  <p>
+    Behind this simple API lies a four-layer architecture: hardware abstraction (MMIO
+    registers), host controller driver (transfer scheduling), USB class driver (CDC/ACM
+    protocol), and the user-facing safe API that bridges kernel PRX to user-mode code.
+  </p>
+
+  <div class="diagram">
+    <pre><code><span class="hl-bright">USB Host Mode Layer Architecture</span>
+
+<span class="hl-accent">Layer 4</span>  Application Code (user-mode Rust)
+         examples/usb-host-serial/
+              │
+              │ kernel syscall bridge
+              ▼
+<span class="hl-accent">Layer 3</span>  USB Class Drivers (kernel PRX)
+         psp::usb::class::{cdc, hid, msc}
+              │
+              ▼
+<span class="hl-accent">Layer 2</span>  USB Host Core (kernel PRX)
+         psp::usb::host::{controller, transfer, enumeration}
+              │
+              ▼
+<span class="hl-accent">Layer 1</span>  Hardware Abstraction (kernel PRX)
+         psp::usb::hw::{registers, interrupts, vbus}
+              │
+              │ volatile MMIO read/write
+              ▼
+<span class="hl-purple">Hardware</span> Tachyon SoC USB Controller
+         MMIO at 0xBE2xxxxx</code></pre>
+    <div class="diagram-caption">From user-mode Rust down to silicon — every layer in Rust</div>
+  </div>
+
+  <h2>Hardware Test Setup</h2>
+
+  <p>
+    Development uses real PSP hardware and USB test equipment:
+  </p>
+
+  <table>
+    <thead>
+      <tr><th>Equipment</th><th>Purpose</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>PSP-1000 (6.20 PRO-C2)</td>
+        <td>Primary test unit (original Tachyon revision)</td>
+      </tr>
+      <tr>
+        <td>PSP-3000 (6.20 PRO-C2)</td>
+        <td>Secondary test unit (newer Tachyon revision)</td>
+      </tr>
+      <tr>
+        <td>Luckfox Pico Ultra RV1106</td>
+        <td>Target peripheral: Linux SBC as USB-CDC gadget</td>
+      </tr>
+      <tr>
+        <td>Luckfox Pico Pro RV1106</td>
+        <td>Alternate target peripheral</td>
+      </tr>
+      <tr>
+        <td>FNIRSI FNB58</td>
+        <td>USB inline power meter (real-time V/I monitoring)</td>
+      </tr>
+      <tr>
+        <td>DROK LD25</td>
+        <td>Adjustable USB constant-current load (0.25&ndash;4A)</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h3>Test Configurations</h3>
+
+  <div class="diagram">
+    <pre><code><span class="hl-bright">Configuration A: Rigid Adapter Stack</span> (compact, demo-ready)
+
+  ┌────────────┐     ┌──────────────┐     ┌────────────────┐
+  │    PSP     │────►│ Mini-B → A   │────►│ A → USB-C      │
+  │  Mini-B    │     │ OTG adapter  │     │ adapter        │
+  │  port      │     │              │     │                │
+  └────────────┘     └──────────────┘     └───────┬────────┘
+                                                   │
+                                          ┌────────▼────────┐
+                                          │ Luckfox Pico    │
+                                          │ RV1106 (USB-C)  │
+                                          └─────────────────┘
+  Total: ~30mm off PSP port, zero cables
+
+<span class="hl-bright">Configuration T: VBUS Load Testing</span> (Phase 0 measurement)
+
+  ┌────────────┐     ┌──────────────┐     ┌──────────┐     ┌──────────┐
+  │    PSP     │────►│ Mini-B → A   │────►│ FNB58    │────►│ DROK     │
+  │  Mini-B    │     │ OTG adapter  │     │ monitor  │     │ LD25     │
+  │  port      │     │              │     │ V/I/W    │     │ 0.25-4A  │
+  └────────────┘     └──────────────┘     └──────────┘     └──────────┘
+  Dial current up from 0.25A in 50mA increments
+  Record voltage drop → find VBUS ceiling</code></pre>
+    <div class="diagram-caption">Adapter configurations for development and VBUS characterization</div>
+  </div>
+
+  <h2>Risk: The Unknown Register Map</h2>
+
+  <p>
+    The highest-risk element is Phase 1: the USB controller's register layout is
+    undocumented. The approach is multi-pronged:
+  </p>
+
+  <ul>
+    <li><strong>Static analysis:</strong> Disassemble Sony's USB modules, trace
+        <code>LUI</code>/<code>ORI</code> instruction pairs that construct
+        <code>0xBE2xxxxx</code> addresses</li>
+    <li><strong>Cross-reference:</strong> Compare against known USB controller IP blocks
+        (Synopsys DesignWare is a common embedded USB IP core)</li>
+    <li><strong>Differential probing:</strong> Dump register state before and after
+        Sony's USB driver loads, compare to identify which registers change</li>
+    <li><strong>Community resources:</strong> uOFW project firmware RE, PSP-RE Ghidra
+        scripts, ps2dev forum archives from 2006&ndash;2012</li>
+  </ul>
+
+  <p>
+    If the controller uses a recognizable IP block, the register map could be
+    substantially complete in weeks. If it's fully proprietary Sony silicon, this phase
+    extends significantly. Either way, the documentation will be published for the
+    PSP reverse engineering community.
+  </p>
+
+  <h2>Why This Matters</h2>
+
+  <p>
+    USB host mode on the PSP enables entirely new categories of homebrew:
+  </p>
+
+  <ul>
+    <li><strong>USB serial → microcontrollers:</strong> Talk to Arduino, ESP32, RP2040
+        over USB CDC/ACM. The PSP becomes a portable debugger or control interface.</li>
+    <li><strong>USB HID → keyboards and gamepads:</strong> Standard USB input devices
+        connected to a handheld from 2004.</li>
+    <li><strong>USB mass storage → flash drives:</strong> Read and write USB flash drives,
+        removing the Memory Stick dependency.</li>
+    <li><strong>Luckfox Pico integration:</strong> A Linux SBC drawing ~250mA connected
+        directly to the PSP's USB port &mdash; enabling camera, AI inference, or network
+        bridge capabilities through a 4cm adapter stack.</li>
+  </ul>
+
+  <p>
+    For OASIS_OS specifically, USB host mode means the PSP backend gains peripheral I/O
+    capabilities that were previously impossible. The terminal could communicate with
+    hardware, the file manager could browse USB drives, and plugins could interface with
+    external sensors. All through the same trait-based backend architecture described in
+    <a href="01-unified-embedded-os.html">Entry 01</a>.
+  </p>
+
+  <div class="callout">
+    <div class="callout-title">Status</div>
+    <p>
+      This project is in active development. Hardware has been procured and Phase 0
+      (VBUS power characterization) is beginning. Follow progress at
+      <a href="https://github.com/AndrewAltimit/rust-psp">github.com/AndrewAltimit/rust-psp</a>.
+    </p>
+  </div>
+
+  <nav class="article-nav">
+    <a class="prev" href="04-rust-psp-sdk.html">&larr; Prev: Modernizing the rust-psp SDK</a>
+    <span></span>
+  </nav>
+
+</article>
+
+<footer class="site-footer">
+  <div class="container">
+    <div class="footer-row">
+      <span>&copy; 2024&ndash;2026 OASIS_OS contributors</span>
+      <span>&middot;</span>
+      <a href="https://github.com/AndrewAltimit/oasis-os">GitHub</a>
+    </div>
+  </div>
+</footer>
+
+<script src="../js/main.js"></script>
+</body>
+</html>

@@ -1,0 +1,371 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Streaming Internet Archive Video - OASIS_OS Developer's Journal</title>
+  <meta name="description" content="Building cross-platform video streaming from the Internet Archive — desktop sliding-window buffers and PSP hardware AAC decode with backpressure throttling.">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="../css/style.css">
+</head>
+<body>
+
+<nav class="site-nav">
+  <a class="nav-brand" href="../">OASIS_OS</a>
+  <button class="nav-toggle" id="nav-toggle" aria-label="Toggle navigation" aria-expanded="false">&#9776;</button>
+  <ul class="nav-links" id="nav-links">
+    <li><a href="../#platforms">Platforms</a></li>
+    <li><a href="../#architecture">Architecture</a></li>
+    <li><a href="./">Journal</a></li>
+    <li><a href="../demo/">Live Demo</a></li>
+  </ul>
+</nav>
+
+<header class="article-header">
+  <div class="container">
+    <a class="article-back" href="./">&larr; Developer's Journal</a>
+    <h1 class="article-title">Streaming Internet Archive Video Across Two Architectures</h1>
+    <p class="article-subtitle">
+      Building a TV Guide that streams live video on desktop and audio on PSP &mdash;
+      solving the throttle deadlock, CDN failover, moov atom positioning, and the
+      fundamental challenge of progressive MP4 playback.
+    </p>
+    <div class="article-meta">
+      <span>Entry 03</span>
+      <span>video, streaming, cross-platform</span>
+    </div>
+  </div>
+</header>
+
+<article class="article-content">
+
+  <h2>The TV Guide Concept</h2>
+
+  <p>
+    The TV Guide is one of 16 apps in OASIS_OS. It presents five channels, each playing
+    content from the Internet Archive on a deterministic schedule. The scheduling uses a
+    seeded PRNG: the same seed plus the current timestamp always produces the same program
+    at the same playback position. Tune to Channel 3 at 8:42 PM and you'll see the same
+    content every time, on every device.
+  </p>
+
+  <p>
+    The challenge: MP4 files from the Internet Archive range from 50MB to 2GB, with the
+    critical <code>moov</code> atom (which contains the track tables, sample sizes, and
+    timing information) placed either at the start or the end of the file. The streaming
+    architecture must handle both cases, on two radically different platforms.
+  </p>
+
+  <h2>Desktop Architecture: StreamingBuffer</h2>
+
+  <p>
+    The desktop pipeline uses <strong>in-process progressive streaming</strong> via a
+    custom <code>StreamingBuffer</code> that implements <code>Read + Seek</code> over an
+    <code>Arc&lt;StreamingInner&gt;</code> sliding-window buffer. A background download
+    thread feeds the buffer while symphonia (audio/video demuxer) reads from it
+    simultaneously.
+  </p>
+
+  <div class="diagram">
+    <pre><code><span class="hl-bright">Desktop Streaming Pipeline</span>
+
+  <span class="hl-accent">Download Thread</span>                  <span class="hl-purple">Decode Thread</span>
+  ─────────────────                ─────────────────
+  HTTP GET file.mp4               symphonia probe
+        │                               │
+        ▼                               ▼
+  ┌─────────────────────────────────────────────┐
+  │          <span class="hl-accent">StreamingInner</span> (Arc)                │
+  │                                             │
+  │  ┌───────────────────────────────────────┐  │
+  │  │  sliding window buffer (up to 16MB)   │  │
+  │  │  [████████████░░░░░░░░░░░░░░░░░░░░░]  │  │
+  │  │   ▲ decoder_pos    ▲ bytes_received   │  │
+  │  └───────────────────────────────────────┘  │
+  │                                             │
+  │  has_moov: bool      probe_mode: bool       │
+  │  total_size: u64     duration: f64          │
+  └─────────────────────────────────────────────┘
+        │                               │
+        ▼                               ▼
+  should_throttle()              Read + Seek impl
+  backpressure gate              returns zeros in
+  if buffer too far              probe_mode
+  ahead of decoder</code></pre>
+    <div class="diagram-caption">Shared-state streaming buffer with backpressure</div>
+  </div>
+
+  <h3>The Probe Mode Problem</h3>
+
+  <p>
+    When symphonia first encounters an MP4 stream, it probes the file to find the
+    <code>moov</code> atom and read track metadata. During probing, it reads sequentially
+    through the file, skipping over the massive <code>mdat</code> (media data) atom by
+    seeking past it.
+  </p>
+
+  <p>
+    The problem: the probe reads update <code>decoder_pos</code>, but the decoder hasn't
+    actually decoded any media yet. If the download thread has received 30&ndash;300MB
+    of data by the time probing finishes, the throttle check
+    (<code>bytes_received &gt; decoder_pos + 16MB</code>) sees the buffer as "caught up"
+    and doesn't throttle. But then when the real decode starts and seeks back to the
+    beginning of <code>mdat</code>, <code>decoder_pos</code> is still at the probe
+    position &mdash; creating a permanent throttle deadlock.
+  </p>
+
+  <div class="callout discovery">
+    <div class="callout-title">The Throttle Deadlock</div>
+    <p>
+      During probe, symphonia seeks through the file updating <code>decoder_pos</code>.
+      When the download has already received 300MB and <code>decoder_pos</code> is at 1MB
+      (from probe), <code>should_throttle()</code> permanently blocks. The decode thread
+      can never read because the download thread is blocked, and the download thread is
+      blocked because it thinks it's too far ahead.
+    </p>
+    <p>
+      <strong>Fix:</strong> A <code>probe_mode</code> flag that skips
+      <code>decoder_pos</code> updates. Probe reads return zeros for <code>mdat</code>
+      content (avoiding expensive data transfer), and the decoder position is only
+      tracked once real decode begins.
+    </p>
+  </div>
+
+  <h3>Backpressure: should_throttle()</h3>
+
+  <p>
+    The throttle logic prevents unbounded memory growth while ensuring the decoder
+    always has data available:
+  </p>
+
+  <pre><code>fn should_throttle(&amp;self) -&gt; bool {
+    if self.decoder_pos &gt; 0 {
+        // Decoder is actively reading: stay 16MB ahead
+        self.bytes_received &gt; self.decoder_pos + 16 * 1024 * 1024
+    } else {
+        // Decoder hasn't started: buffer up to 16MB after moov found
+        self.has_moov &amp;&amp; self.buffer_size() &gt; 16 * 1024 * 1024
+    }
+}</code></pre>
+
+  <h3>Deferred Tail Probe</h3>
+
+  <p>
+    Some Internet Archive files have <code>moov</code> at the end. Symphonia needs the
+    moov atom before it can decode anything. Naively fetching the last 8MB at the start
+    of every stream wastes bandwidth and triggers CDN throttling. Instead, the
+    deferred tail probe only launches <strong>after &gt;8MB of body data has been
+    received without finding a moov atom</strong>. This correctly handles both
+    moov-at-start (no tail probe needed) and moov-at-end (tail probe after 8MB).
+  </p>
+
+  <h3>CDN Failover</h3>
+
+  <p>
+    Archive.org's CDN nodes (<code>dn*.us.archive.org</code>) issue time-limited
+    authentication tokens in their redirect URLs. When the streaming pipeline needs to
+    restart a download at a byte offset (after discovering moov position), Range requests
+    to the original CDN URL fail with 401 Unauthorized because the token has expired.
+  </p>
+
+  <p>
+    <strong>Fix:</strong> <code>open_range_connection()</code> routes Range requests
+    through the original <code>archive.org</code> URL, which issues a fresh 302 redirect
+    to a (possibly different) CDN node with a new token. The function follows redirect
+    chains (301/302/303/307/308) automatically.
+  </p>
+
+  <h3>Seek Restart</h3>
+
+  <p>
+    After probe discovers the moov atom position and duration, the download restarts
+    from an estimated byte offset via a Range request. The estimation uses linear
+    interpolation:
+  </p>
+
+  <pre><code>let byte_offset = (seek_seconds / total_duration) * total_file_size;</code></pre>
+
+  <p>
+    This matches symphonia's <code>SeekMode::Coarse</code> behavior and is accurate
+    enough for streaming playback. The prebuffer gate ensures at least 2MB
+    (<code>MIN_PREBUFFER</code>) of data is available before the decoder attempts to seek.
+  </p>
+
+  <h2>PSP Architecture: In-Memory Streaming</h2>
+
+  <p>
+    The PSP pipeline is fundamentally different. With only 32MB of RAM, a 333MHz CPU,
+    and no <code>std::sync</code> atomics, the desktop's <code>Arc&lt;Mutex&gt;</code>
+    sliding window isn't viable. Instead, the PSP uses <strong>sequential in-memory
+    streaming</strong> with hardware audio decode.
+  </p>
+
+  <div class="diagram">
+    <pre><code><span class="hl-bright">PSP Streaming Pipeline</span>
+
+  <span class="hl-accent">I/O Thread</span> (512KB stack)
+  ───────────────────────
+  HTTP(S) GET file.mp4
+        │
+        ▼
+  Buffer moov atom (~1-3MB)
+        │
+        ▼
+  Parse with demux_lite::Mp4Lite
+  (lightweight no-std MP4 parser)
+        │
+        ▼
+  Extract interleaved samples
+  from mdat in file-offset order
+        │
+        ├── <span class="hl-dim">Video H.264 NALUs → skip</span>
+        │   <span class="hl-dim">(ME hardware not wired for streaming)</span>
+        │
+        └── <span class="hl-accent">Audio AAC frames</span>
+            │
+            ▼
+      sceAudiocodecDecode
+      (hardware AAC decoder)
+            │
+            ▼
+      AudioChannel::output_blocking
+      (PSP audio hardware)
+            │
+            ▼
+      <span class="hl-warn">Backpressure:</span> output_blocking
+      blocks when audio queue full,
+      naturally throttling download
+      to real-time playback speed</code></pre>
+    <div class="diagram-caption">In-memory streaming with hardware decode — no disk I/O</div>
+  </div>
+
+  <h3>The No-Std Demuxer</h3>
+
+  <p>
+    The desktop uses symphonia for demuxing, but symphonia requires <code>std</code>
+    and uses <code>std::sync::Once</code> (which doesn't work on PSP's threading model).
+    The <code>oasis-video</code> crate provides <code>demux_lite::Mp4Lite</code>, a
+    lightweight MP4 parser that operates on byte slices with no allocator, no std, and
+    no synchronization primitives. It parses the <code>moov</code> atom into a flat
+    array of sample entries (offset, size, track ID, timestamp) and hands them back
+    for sequential extraction from the <code>mdat</code> stream.
+  </p>
+
+  <h3>Hardware AAC Decode</h3>
+
+  <p>
+    The PSP has a dedicated audio codec DSP accessible via <code>sceAudiocodec*</code>
+    syscalls. The I/O thread feeds AAC frames to the hardware decoder, which produces
+    PCM samples that go directly to the audio output channel. The key insight is that
+    <code>AudioChannel::output_blocking</code> blocks when the audio hardware's command
+    queue is full &mdash; which happens when playback is keeping up with decode. This
+    blocking <strong>naturally throttles the download to real-time speed</strong>, acting
+    as the PSP's equivalent of the desktop's <code>should_throttle()</code>.
+  </p>
+
+  <div class="callout">
+    <div class="callout-title">Backpressure via Audio Hardware</div>
+    <p>
+      No explicit throttle logic is needed on PSP. The audio hardware's command queue
+      has a fixed depth. When full, <code>output_blocking</code> sleeps the I/O thread.
+      Since the I/O thread is also doing the download, the HTTP connection stalls
+      naturally. When the audio output drains, the thread wakes, downloads more data,
+      decodes more frames, and the cycle continues at exactly real-time speed.
+    </p>
+  </div>
+
+  <h3>Weak Import Stubs</h3>
+
+  <p>
+    The <code>sceAudiocodec</code> and <code>sceVideocodec</code> firmware modules aren't
+    loaded at boot. They're loaded lazily via <code>sceUtilityLoadModule()</code> at
+    runtime. Their import stubs in the PRX must use the weak import flag
+    (<code>0x0008</code>) so the PSP kernel doesn't fail module loading when the codec
+    libraries aren't yet available.
+  </p>
+
+  <p>
+    <code>sceVideocodec</code> was initially declared with flag <code>0x4001</code>
+    (strong import), which broke module loading on real hardware. Changing to
+    <code>0x4009</code> (weak) fixed it &mdash; and this discovery was critical for the
+    entire video pipeline. See <a href="04-rust-psp-sdk.html">Entry 04</a> for details.
+  </p>
+
+  <h2>The Five-Channel Result</h2>
+
+  <p>
+    All five TV Guide channels work on both desktop and PSP:
+  </p>
+
+  <table>
+    <thead>
+      <tr><th>Challenge</th><th>Desktop Solution</th><th>PSP Solution</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>Demuxing</td>
+        <td>symphonia (full MP4/AAC/H.264)</td>
+        <td>demux_lite::Mp4Lite (no-std)</td>
+      </tr>
+      <tr>
+        <td>Video decode</td>
+        <td>openh264 (software)</td>
+        <td>Skipped (ME not wired)</td>
+      </tr>
+      <tr>
+        <td>Audio decode</td>
+        <td>symphonia AAC decoder</td>
+        <td>sceAudiocodec (hardware)</td>
+      </tr>
+      <tr>
+        <td>Backpressure</td>
+        <td>should_throttle() logic</td>
+        <td>Audio queue blocking</td>
+      </tr>
+      <tr>
+        <td>HTTPS</td>
+        <td>Native TLS (rustls)</td>
+        <td>embedded-tls (pure Rust TLS 1.3)</td>
+      </tr>
+      <tr>
+        <td>Moov-at-end</td>
+        <td>Deferred tail probe</td>
+        <td>Buffer full moov in RAM</td>
+      </tr>
+      <tr>
+        <td>CDN failover</td>
+        <td>Fresh redirect via archive.org</td>
+        <td>TLS fallback on 301 redirect</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <p>
+    The same <code>oasis-video</code> crate handles both paths via feature flags:
+    <code>h264</code> + <code>video-decode</code> for desktop, <code>no-std-demux</code>
+    for PSP. The TV Guide app in <code>oasis-core</code> is platform-agnostic &mdash;
+    it calls the same scheduling and playback API regardless of backend.
+  </p>
+
+  <nav class="article-nav">
+    <a class="prev" href="02-tls-on-psp.html">&larr; Prev: TLS 1.3 on a 2004 Handheld</a>
+    <a class="next" href="04-rust-psp-sdk.html">Next: Modernizing the rust-psp SDK &rarr;</a>
+  </nav>
+
+</article>
+
+<footer class="site-footer">
+  <div class="container">
+    <div class="footer-row">
+      <span>&copy; 2024&ndash;2026 OASIS_OS contributors</span>
+      <span>&middot;</span>
+      <a href="https://github.com/AndrewAltimit/oasis-os">GitHub</a>
+    </div>
+  </div>
+</footer>
+
+<script src="../js/main.js"></script>
+</body>
+</html>
