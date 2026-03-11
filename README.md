@@ -2,13 +2,13 @@
 
 An embeddable operating system framework in Rust. Renders a skinnable shell interface -- scene-graph UI, command interpreter, virtual file system, browser engine, plugin system, remote terminal -- anywhere you can provide a pixel buffer and an input stream.
 
-https://github.com/AndrewAltimit/oasis-os/raw/refs/heads/main/assets/oasis_demo.mp4
+https://github.com/user-attachments/assets/8e12988e-fb1a-4a4e-a0e5-e1f04d8cd433
 
 > **[View all 18 skin screenshots](SCREENSHOTS.md)** | **[Live WASM Demo](https://andrewaltimit.github.io/oasis-os/demo/)** | **[Developer's Journal](https://andrewaltimit.github.io/oasis-os/journal/)**
 
-| Classic | Modern | XP | macOS | Cyberpunk |
+| Altimit | Paper | XP | Win95 | Retro CGA |
 |:---:|:---:|:---:|:---:|:---:|
-| ![Classic](screenshots/classic/01_dashboard.png) | ![Modern](screenshots/modern/01_dashboard.png) | ![XP](screenshots/xp/01_dashboard.png) | ![macOS](screenshots/macos/01_dashboard.png) | ![Cyberpunk](screenshots/cyberpunk/01_dashboard.png) |
+| ![Altimit](screenshots/altimit/01_dashboard.png) | ![Paper](screenshots/paper/01_dashboard.png) | ![XP](screenshots/xp/01_dashboard.png) | ![Win95](screenshots/win95/01_dashboard.png) | ![Retro CGA](screenshots/retro-cga/01_dashboard.png) |
 
 ## Overview
 
