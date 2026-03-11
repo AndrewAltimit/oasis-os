@@ -16,6 +16,9 @@ use crate::terminal::{Command, CommandOutput, Environment};
 // agent -- list/query AI agent status
 // ---------------------------------------------------------------------------
 
+/// List or query AI agent status from `/etc/agents.toml`.
+///
+/// Subcommands: `agent list` (default), `agent status <name>`.
 pub struct AgentCmd;
 impl Command for AgentCmd {
     fn name(&self) -> &str {
@@ -83,6 +86,10 @@ impl Command for AgentCmd {
 // mcp -- browse and invoke MCP tools
 // ---------------------------------------------------------------------------
 
+/// Browse and invoke MCP (Model Context Protocol) tools.
+///
+/// Reads the MCP registry from `/etc/mcp.toml`. Subcommands:
+/// `mcp list`, `mcp <server> <tool> [args...]`.
 pub struct McpCmd;
 impl Command for McpCmd {
     fn name(&self) -> &str {
@@ -186,6 +193,11 @@ impl Command for McpCmd {
 // tamper -- display tamper system status
 // ---------------------------------------------------------------------------
 
+/// Show or control the tamper detection system.
+///
+/// Reads state from `/sys/tamper/state` and writes requests to
+/// `/sys/tamper/gate`. Subcommands: `tamper status` (default),
+/// `tamper arm`, `tamper disarm`.
 pub struct TamperCmd;
 impl Command for TamperCmd {
     fn name(&self) -> &str {
@@ -243,6 +255,10 @@ impl Command for TamperCmd {
 // board -- GitHub Projects board interaction
 // ---------------------------------------------------------------------------
 
+/// Query and interact with the GitHub Projects board.
+///
+/// Reads cached board data from `/var/board/ready.txt` and writes
+/// claim/release requests to `/var/board/claim` and `/var/board/release`.
 pub struct BoardCmd;
 impl Command for BoardCmd {
     fn name(&self) -> &str {
@@ -321,6 +337,10 @@ impl Command for BoardCmd {
 // ci -- trigger CI stages
 // ---------------------------------------------------------------------------
 
+/// Trigger CI pipeline stages.
+///
+/// Writes the requested stage name to `/var/ci/request` for the app
+/// layer to execute. Usage: `ci run <stage>`.
 pub struct CiCmd;
 impl Command for CiCmd {
     fn name(&self) -> &str {
@@ -357,6 +377,10 @@ impl Command for CiCmd {
 // health -- system health metrics
 // ---------------------------------------------------------------------------
 
+/// Display system health metrics (uptime, memory, CPU).
+///
+/// Collects live metrics via [`SystemHealth::collect()`] and formats
+/// them for terminal display.
 pub struct HealthCmd;
 impl Command for HealthCmd {
     fn name(&self) -> &str {

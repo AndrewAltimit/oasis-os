@@ -5,7 +5,22 @@ use crate::context::DrawContext;
 use crate::widget::Widget;
 use oasis_types::error::Result;
 
-/// An on/off toggle switch.
+/// An on/off toggle switch with smooth animation.
+///
+/// Call [`animate`](Self::animate) each frame with elapsed milliseconds
+/// to interpolate between states. The animation takes ~150ms.
+///
+/// # Example
+///
+/// ```ignore
+/// let mut toggle = Toggle::new(false);
+/// toggle.on = true;
+/// // Animate over several frames (16ms each):
+/// for _ in 0..10 {
+///     toggle.animate(16);
+/// }
+/// assert!((toggle.progress - 1.0).abs() < 0.1);
+/// ```
 pub struct Toggle {
     /// Whether the toggle is on.
     pub on: bool,

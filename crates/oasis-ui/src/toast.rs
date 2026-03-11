@@ -58,6 +58,13 @@ const PAD_H: u32 = 8;
 const PAD_V: u32 = 4;
 
 /// A single toast notification.
+///
+/// # Example
+///
+/// ```ignore
+/// let toast = Toast::new("Saved!", ToastLevel::Success, 120);
+/// assert!(!toast.is_expired());
+/// ```
 #[derive(Debug, Clone)]
 pub struct Toast {
     /// Message text displayed in the toast.
@@ -112,6 +119,17 @@ impl Toast {
 ///
 /// Manages a bounded queue of toasts, advancing their animations and TTLs
 /// each frame via [`tick`](Self::tick).
+///
+/// # Example
+///
+/// ```ignore
+/// let mut stack = ToastStack::new()
+///     .with_position(ToastPosition::TopRight);
+/// stack.show("Changes saved", ToastLevel::Success, 120);
+/// stack.show("Warning!", ToastLevel::Warning, 180);
+/// // Each frame:
+/// stack.tick(); // decrements TTLs, removes expired toasts
+/// ```
 #[derive(Debug)]
 pub struct ToastStack {
     /// Active and queued toasts (front = oldest).

@@ -272,6 +272,21 @@ Phase 8.1-8.2          (independent, can parallelize)
 
 **Recommended execution order:** Phase 4 (robustness) → Phase 1 (DRY backends) → Phase 3 (split files) → Phase 2 (terminal DRY) → Phase 6 (constants) → Phase 5 (API) → Phase 7 (tests) → Phase 8 (docs)
 
+---
+
+## Completion Status
+
+| Phase | Status | Notes |
+|-------|--------|-------|
+| 1 (DRY backends) | ✅ Done | Shared `ClipRect`, `lerp_color_ratio`, `PixelSink` + rasterization |
+| 2 (Terminal DRY) | ✅ Done | Test helper macros across 16 modules (~165 patterns replaced) |
+| 3 (Split files) | ✅ Done | Paint, Clock, Text Editor, TV Guide split into submodules |
+| 4 (Robustness) | ✅ Done | Audited; existing code is safe, no changes needed |
+| 5 (API tightening) | ✅ Done | `apply_declaration` → `pub(crate)`. FormManager deferred (unused code). 5.2 optional features deferred (too invasive) |
+| 6 (Constants) | ✅ Done | `DEFAULT_VIEWPORT_WIDTH/HEIGHT` extracted |
+| 7 (Tests) | ✅ Done | +8 WM edge cases, +5 net edge cases, +6 video demux edge cases |
+| 8 (Docs) | ✅ Done | Examples added to 8 UI widgets, docs for 7 command structs |
+
 Rationale: Fix safety issues first, then reduce duplication (prevents duplicating fixes), then modularize (smaller files are easier to work with), then polish.
 
 ---

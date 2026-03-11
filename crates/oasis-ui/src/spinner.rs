@@ -24,6 +24,15 @@ pub enum SpinnerStyle {
 /// Cycles through animation frames at a configurable speed. When the
 /// theme has `reduced_motion` enabled, the spinner displays a static
 /// indicator instead of animating.
+///
+/// # Example
+///
+/// ```ignore
+/// let mut spinner = Spinner::with_label("Loading...");
+/// spinner.style = SpinnerStyle::Dots;
+/// spinner.tick(160); // advance 160ms
+/// let frame = spinner.frame_index(); // cycles through 0..2
+/// ```
 pub struct Spinner {
     /// Visual style variant.
     pub style: SpinnerStyle,

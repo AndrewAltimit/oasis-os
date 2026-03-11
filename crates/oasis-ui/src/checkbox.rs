@@ -6,6 +6,15 @@ use crate::widget::Widget;
 use oasis_types::error::Result;
 
 /// A checkbox with a label.
+///
+/// # Example
+///
+/// ```ignore
+/// let mut cb = Checkbox::new("Enable notifications", false);
+/// assert!(!cb.checked);
+/// cb.toggle();
+/// assert!(cb.checked);
+/// ```
 pub struct Checkbox {
     /// Whether the checkbox is checked.
     pub checked: bool,
