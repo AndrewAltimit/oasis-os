@@ -598,26 +598,9 @@ impl SdlBackend {
 // Free helper functions
 // -------------------------------------------------------------------
 
-/// Compute the intersection of two clip rectangles.
+/// Compute the intersection of two clip rectangles (delegates to shared impl).
 pub(crate) fn intersect_clip(a: &ClipRect, b: &ClipRect) -> Option<ClipRect> {
-    let ax2 = a.x.saturating_add(a.w as i32);
-    let ay2 = a.y.saturating_add(a.h as i32);
-    let bx2 = b.x.saturating_add(b.w as i32);
-    let by2 = b.y.saturating_add(b.h as i32);
-    let x = a.x.max(b.x);
-    let y = a.y.max(b.y);
-    let x2 = ax2.min(bx2);
-    let y2 = ay2.min(by2);
-    if x2 > x && y2 > y {
-        Some(ClipRect {
-            x,
-            y,
-            w: (x2 - x) as u32,
-            h: (y2 - y) as u32,
-        })
-    } else {
-        None
-    }
+    a.intersect(b)
 }
 
 /// Compute the x coordinate along an edge at a given y.
@@ -642,18 +625,4 @@ pub(crate) fn isqrt(n: i32) -> i32 {
         x += 1;
     }
     x
-}
-
-/// Linear interpolation between two colors.
-pub(crate) fn lerp_color_sdl(a: Color, b: Color, num: u32, den: u32) -> Color {
-    if den == 0 {
-        return a;
-    }
-    let inv = den - num;
-    Color::rgba(
-        ((a.r as u32 * inv + b.r as u32 * num + den / 2) / den) as u8,
-        ((a.g as u32 * inv + b.g as u32 * num + den / 2) / den) as u8,
-        ((a.b as u32 * inv + b.b as u32 * num + den / 2) / den) as u8,
-        ((a.a as u32 * inv + b.a as u32 * num + den / 2) / den) as u8,
-    )
 }

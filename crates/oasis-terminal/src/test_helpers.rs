@@ -17,11 +17,8 @@
 //! assert!(s.contains("expected"));
 //! ```
 //!
-//! TODO: Apply these macros to the remaining ~170 match/panic patterns across all
-//! test modules (commands.rs, interpreter.rs, text_commands.rs, file_commands.rs,
-//! dev_commands.rs, fun_commands.rs, system_commands.rs, network_commands.rs,
-//! skin_commands.rs, ui_commands.rs, audio_commands.rs, doc_commands.rs,
-//! radio_commands.rs, etc.).
+//! Some match/panic patterns remain in commands.rs, interpreter tests,
+//! and control_flow.rs that could still be converted.
 
 /// Assert that a [`CommandOutput`] is `Text` and return the inner `String`.
 ///

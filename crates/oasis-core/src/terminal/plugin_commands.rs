@@ -13,6 +13,11 @@ pub const PLUGIN_STATUS_PATH: &str = "/var/plugin/status";
 /// Path where the terminal writes plugin load/unload requests.
 pub const PLUGIN_REQUEST_PATH: &str = "/var/plugin/request";
 
+/// Manage plugins via VFS-based communication with the app layer.
+///
+/// Reads plugin status from [`PLUGIN_STATUS_PATH`] and writes
+/// load/unload requests to [`PLUGIN_REQUEST_PATH`]. The app layer
+/// polls the request path and performs the actual operations.
 pub struct PluginCmd;
 impl Command for PluginCmd {
     fn name(&self) -> &str {

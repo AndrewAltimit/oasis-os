@@ -6,6 +6,19 @@ use crate::widget::Widget;
 use oasis_types::error::Result;
 
 /// A group of radio buttons where exactly one option is selected.
+///
+/// # Example
+///
+/// ```ignore
+/// let mut radio = RadioGroup::new(vec![
+///     "Small".into(), "Medium".into(), "Large".into(),
+/// ]);
+/// assert_eq!(radio.selected, 0);
+/// radio.select(1);
+/// assert_eq!(radio.options[radio.selected], "Medium");
+/// radio.select_next(); // wraps around
+/// assert_eq!(radio.selected, 2);
+/// ```
 pub struct RadioGroup {
     /// Option labels.
     pub options: Vec<String>,

@@ -389,6 +389,7 @@ pub fn register_fun_commands(reg: &mut crate::CommandRegistry) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_helpers::assert_text;
     use crate::{CommandOutput, CommandRegistry, Environment};
     use oasis_vfs::MemoryVfs;
 
@@ -412,13 +413,9 @@ mod tests {
         let mut reg = CommandRegistry::new();
         register_fun_commands(&mut reg);
         let mut vfs = MemoryVfs::new();
-        match exec(&reg, &mut vfs, "cal 1 2025").unwrap() {
-            CommandOutput::Text(s) => {
-                assert!(s.contains("January 2025"));
-                assert!(s.contains("Su Mo Tu"));
-            },
-            _ => panic!("expected text"),
-        }
+        let s = assert_text!(exec(&reg, &mut vfs, "cal 1 2025").unwrap());
+        assert!(s.contains("January 2025"));
+        assert!(s.contains("Su Mo Tu"));
     }
 
     #[test]
@@ -426,10 +423,7 @@ mod tests {
         let mut reg = CommandRegistry::new();
         register_fun_commands(&mut reg);
         let mut vfs = MemoryVfs::new();
-        match exec(&reg, &mut vfs, "fortune").unwrap() {
-            CommandOutput::Text(s) => assert!(!s.is_empty()),
-            _ => panic!("expected text"),
-        }
+        assert!(!assert_text!(exec(&reg, &mut vfs, "fortune").unwrap()).is_empty());
     }
 
     #[test]
@@ -437,13 +431,9 @@ mod tests {
         let mut reg = CommandRegistry::new();
         register_fun_commands(&mut reg);
         let mut vfs = MemoryVfs::new();
-        match exec(&reg, &mut vfs, "banner HI").unwrap() {
-            CommandOutput::Text(s) => {
-                assert_eq!(s.lines().count(), 5);
-                assert!(s.contains('#'));
-            },
-            _ => panic!("expected text"),
-        }
+        let s = assert_text!(exec(&reg, &mut vfs, "banner HI").unwrap());
+        assert_eq!(s.lines().count(), 5);
+        assert!(s.contains('#'));
     }
 
     #[test]
@@ -451,10 +441,12 @@ mod tests {
         let mut reg = CommandRegistry::new();
         register_fun_commands(&mut reg);
         let mut vfs = MemoryVfs::new();
-        match exec(&reg, &mut vfs, "matrix").unwrap() {
-            CommandOutput::Text(s) => assert_eq!(s.lines().count(), 10),
-            _ => panic!("expected text"),
-        }
+        assert_eq!(
+            assert_text!(exec(&reg, &mut vfs, "matrix").unwrap())
+                .lines()
+                .count(),
+            10
+        );
     }
 
     #[test]
@@ -462,13 +454,9 @@ mod tests {
         let mut reg = CommandRegistry::new();
         register_fun_commands(&mut reg);
         let mut vfs = MemoryVfs::new();
-        match exec(&reg, &mut vfs, "yes").unwrap() {
-            CommandOutput::Text(s) => {
-                assert_eq!(s.lines().count(), 20);
-                assert!(s.lines().all(|l| l == "y"));
-            },
-            _ => panic!("expected text"),
-        }
+        let s = assert_text!(exec(&reg, &mut vfs, "yes").unwrap());
+        assert_eq!(s.lines().count(), 20);
+        assert!(s.lines().all(|l| l == "y"));
     }
 
     #[test]
@@ -476,12 +464,11 @@ mod tests {
         let mut reg = CommandRegistry::new();
         register_fun_commands(&mut reg);
         let mut vfs = MemoryVfs::new();
-        match exec(&reg, &mut vfs, "yes oasis").unwrap() {
-            CommandOutput::Text(s) => {
-                assert!(s.lines().all(|l| l == "oasis"));
-            },
-            _ => panic!("expected text"),
-        }
+        assert!(
+            assert_text!(exec(&reg, &mut vfs, "yes oasis").unwrap())
+                .lines()
+                .all(|l| l == "oasis")
+        );
     }
 
     #[test]

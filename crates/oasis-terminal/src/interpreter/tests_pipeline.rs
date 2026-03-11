@@ -1,6 +1,7 @@
 //! Pipe, chaining, redirection, and integration tests.
 
 use super::*;
+use crate::test_helpers::{assert_none_output, assert_text};
 use oasis_vfs::{MemoryVfs, Vfs};
 
 use super::tests_basic::make_env;
@@ -53,10 +54,10 @@ fn pipe_two_commands() {
 
     let mut vfs = MemoryVfs::new();
     let mut env = make_env(&mut vfs);
-    match reg.execute("echo hello | upper", &mut env).unwrap() {
-        CommandOutput::Text(s) => assert_eq!(s, "HELLO"),
-        _ => panic!("expected text output"),
-    }
+    assert_eq!(
+        assert_text!(reg.execute("echo hello | upper", &mut env).unwrap()),
+        "HELLO"
+    );
 }
 
 // -- Chaining tests --
@@ -67,13 +68,9 @@ fn chain_semicolon() {
     reg.register(Box::new(EchoCmd));
     let mut vfs = MemoryVfs::new();
     let mut env = make_env(&mut vfs);
-    match reg.execute("echo hello ; echo world", &mut env).unwrap() {
-        CommandOutput::Text(s) => {
-            assert!(s.contains("hello"));
-            assert!(s.contains("world"));
-        },
-        _ => panic!("expected text output"),
-    }
+    let s = assert_text!(reg.execute("echo hello ; echo world", &mut env).unwrap());
+    assert!(s.contains("hello"));
+    assert!(s.contains("world"));
 }
 
 #[test]
@@ -82,13 +79,9 @@ fn chain_and_success() {
     reg.register(Box::new(EchoCmd));
     let mut vfs = MemoryVfs::new();
     let mut env = make_env(&mut vfs);
-    match reg.execute("echo first && echo second", &mut env).unwrap() {
-        CommandOutput::Text(s) => {
-            assert!(s.contains("first"));
-            assert!(s.contains("second"));
-        },
-        _ => panic!("expected text output"),
-    }
+    let s = assert_text!(reg.execute("echo first && echo second", &mut env).unwrap());
+    assert!(s.contains("first"));
+    assert!(s.contains("second"));
 }
 
 #[test]
@@ -98,16 +91,12 @@ fn chain_and_failure() {
     let mut vfs = MemoryVfs::new();
     let mut env = make_env(&mut vfs);
     // nonexistent fails -> echo after && should NOT run.
-    match reg
-        .execute("nonexistent && echo should_not_run", &mut env)
-        .unwrap()
-    {
-        CommandOutput::Text(s) => {
-            assert!(s.contains("error"));
-            assert!(!s.contains("should_not_run"));
-        },
-        _ => panic!("expected text output"),
-    }
+    let s = assert_text!(
+        reg.execute("nonexistent && echo should_not_run", &mut env)
+            .unwrap()
+    );
+    assert!(s.contains("error"));
+    assert!(!s.contains("should_not_run"));
 }
 
 #[test]
@@ -117,13 +106,9 @@ fn chain_or_success() {
     let mut vfs = MemoryVfs::new();
     let mut env = make_env(&mut vfs);
     // echo succeeds -> echo after || should NOT run.
-    match reg.execute("echo ok || echo fallback", &mut env).unwrap() {
-        CommandOutput::Text(s) => {
-            assert!(s.contains("ok"));
-            assert!(!s.contains("fallback"));
-        },
-        _ => panic!("expected text output"),
-    }
+    let s = assert_text!(reg.execute("echo ok || echo fallback", &mut env).unwrap());
+    assert!(s.contains("ok"));
+    assert!(!s.contains("fallback"));
 }
 
 #[test]
@@ -133,15 +118,13 @@ fn chain_or_failure() {
     let mut vfs = MemoryVfs::new();
     let mut env = make_env(&mut vfs);
     // nonexistent fails -> echo after || SHOULD run.
-    match reg
-        .execute("nonexistent || echo fallback", &mut env)
-        .unwrap()
-    {
-        CommandOutput::Text(s) => {
-            assert!(s.contains("fallback"));
-        },
-        _ => panic!("expected text output"),
-    }
+    assert!(
+        assert_text!(
+            reg.execute("nonexistent || echo fallback", &mut env)
+                .unwrap()
+        )
+        .contains("fallback")
+    );
 }
 
 // -- Chain preserves signals alongside text --
@@ -221,13 +204,9 @@ fn chain_text_only_merges_to_single() {
     reg.register(Box::new(EchoCmd));
     let mut vfs = MemoryVfs::new();
     let mut env = make_env(&mut vfs);
-    match reg.execute("echo hello ; echo world", &mut env).unwrap() {
-        CommandOutput::Text(s) => {
-            assert!(s.contains("hello"));
-            assert!(s.contains("world"));
-        },
-        _ => panic!("expected merged Text output"),
-    }
+    let s = assert_text!(reg.execute("echo hello ; echo world", &mut env).unwrap());
+    assert!(s.contains("hello"));
+    assert!(s.contains("world"));
 }
 
 // -- Redirection tests --
@@ -291,12 +270,7 @@ fn stderr_to_stdout_merge() {
     let mut vfs = MemoryVfs::new();
     vfs.mkdir("/tmp").unwrap();
     let mut env = make_env(&mut vfs);
-    match reg.execute("nosuchcmd 2>&1", &mut env) {
-        Ok(CommandOutput::Text(s)) => {
-            assert!(s.contains("nosuchcmd"));
-        },
-        other => panic!("expected Text with error, got {other:?}"),
-    }
+    assert!(assert_text!(reg.execute("nosuchcmd 2>&1", &mut env).unwrap()).contains("nosuchcmd"));
 }
 
 #[test]
@@ -388,10 +362,10 @@ fn pipe_chain_echo_to_echo() {
     reg.register(Box::new(EchoCmd));
     let mut vfs = MemoryVfs::new();
     let mut env = make_env(&mut vfs);
-    match reg.execute("echo hello | echo", &mut env).unwrap() {
-        CommandOutput::Text(s) => assert_eq!(s, "hello"),
-        other => panic!("expected Text, got {other:?}"),
-    }
+    assert_eq!(
+        assert_text!(reg.execute("echo hello | echo", &mut env).unwrap()),
+        "hello"
+    );
 }
 
 #[test]
@@ -400,10 +374,10 @@ fn pipe_chain_three_stages() {
     reg.register(Box::new(EchoCmd));
     let mut vfs = MemoryVfs::new();
     let mut env = make_env(&mut vfs);
-    match reg.execute("echo data | echo | echo", &mut env).unwrap() {
-        CommandOutput::Text(s) => assert_eq!(s, "data"),
-        other => panic!("expected Text, got {other:?}"),
-    }
+    assert_eq!(
+        assert_text!(reg.execute("echo data | echo | echo", &mut env).unwrap()),
+        "data"
+    );
 }
 
 #[test]
@@ -487,10 +461,7 @@ fn empty_command_returns_none() {
     let reg = CommandRegistry::new();
     let mut vfs = MemoryVfs::new();
     let mut env = make_env(&mut vfs);
-    match reg.execute("", &mut env).unwrap() {
-        CommandOutput::None => {},
-        other => panic!("expected None, got {other:?}"),
-    }
+    assert_none_output!(reg.execute("", &mut env).unwrap());
 }
 
 #[test]
@@ -498,8 +469,5 @@ fn whitespace_only_command_returns_none() {
     let reg = CommandRegistry::new();
     let mut vfs = MemoryVfs::new();
     let mut env = make_env(&mut vfs);
-    match reg.execute("   ", &mut env).unwrap() {
-        CommandOutput::None => {},
-        other => panic!("expected None, got {other:?}"),
-    }
+    assert_none_output!(reg.execute("   ", &mut env).unwrap());
 }

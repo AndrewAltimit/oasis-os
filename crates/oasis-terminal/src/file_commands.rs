@@ -386,6 +386,7 @@ pub fn register_file_commands(reg: &mut crate::CommandRegistry) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_helpers::assert_text;
     use crate::{CommandOutput, CommandRegistry, Environment};
     use oasis_vfs::{MemoryVfs, Vfs};
 
@@ -437,75 +438,54 @@ mod tests {
         vfs.write("/tmp/a.txt", b"data").unwrap();
         vfs.mkdir("/tmp/sub").unwrap();
         vfs.write("/tmp/sub/b.txt", b"data2").unwrap();
-        match exec(&reg, &mut vfs, "tree /tmp").unwrap() {
-            CommandOutput::Text(s) => {
-                assert!(s.contains("a.txt"));
-                assert!(s.contains("sub"));
-                assert!(s.contains("b.txt"));
-                assert!(s.contains("directories"));
-                assert!(s.contains("files"));
-            },
-            _ => panic!("expected text"),
-        }
+        let s = assert_text!(exec(&reg, &mut vfs, "tree /tmp").unwrap());
+        assert!(s.contains("a.txt"));
+        assert!(s.contains("sub"));
+        assert!(s.contains("b.txt"));
+        assert!(s.contains("directories"));
+        assert!(s.contains("files"));
     }
 
     #[test]
     fn du_basic() {
         let (reg, mut vfs) = setup();
         vfs.write("/tmp/file.txt", b"12345").unwrap();
-        match exec(&reg, &mut vfs, "du /tmp/file.txt").unwrap() {
-            CommandOutput::Text(s) => assert!(s.contains("5B")),
-            _ => panic!("expected text"),
-        }
+        let s = assert_text!(exec(&reg, &mut vfs, "du /tmp/file.txt").unwrap());
+        assert!(s.contains("5B"));
     }
 
     #[test]
     fn stat_file() {
         let (reg, mut vfs) = setup();
         vfs.write("/tmp/x.txt", b"hello").unwrap();
-        match exec(&reg, &mut vfs, "stat /tmp/x.txt").unwrap() {
-            CommandOutput::Text(s) => {
-                assert!(s.contains("regular file"));
-                assert!(s.contains("5"));
-            },
-            _ => panic!("expected text"),
-        }
+        let s = assert_text!(exec(&reg, &mut vfs, "stat /tmp/x.txt").unwrap());
+        assert!(s.contains("regular file"));
+        assert!(s.contains("5"));
     }
 
     #[test]
     fn stat_dir() {
         let (reg, mut vfs) = setup();
-        match exec(&reg, &mut vfs, "stat /tmp").unwrap() {
-            CommandOutput::Text(s) => assert!(s.contains("directory")),
-            _ => panic!("expected text"),
-        }
+        let s = assert_text!(exec(&reg, &mut vfs, "stat /tmp").unwrap());
+        assert!(s.contains("directory"));
     }
 
     #[test]
     fn xxd_hex_dump() {
         let (reg, mut vfs) = setup();
         vfs.write("/tmp/bin.dat", b"ABCD").unwrap();
-        match exec(&reg, &mut vfs, "xxd /tmp/bin.dat").unwrap() {
-            CommandOutput::Text(s) => {
-                assert!(s.contains("41 42 43 44"));
-                assert!(s.contains("ABCD"));
-            },
-            _ => panic!("expected text"),
-        }
+        let s = assert_text!(exec(&reg, &mut vfs, "xxd /tmp/bin.dat").unwrap());
+        assert!(s.contains("41 42 43 44"));
+        assert!(s.contains("ABCD"));
     }
 
     #[test]
     fn checksum_deterministic() {
         let (reg, mut vfs) = setup();
         vfs.write("/tmp/ck.txt", b"test data").unwrap();
-        let out1 = exec(&reg, &mut vfs, "checksum /tmp/ck.txt").unwrap();
-        let out2 = exec(&reg, &mut vfs, "checksum /tmp/ck.txt").unwrap();
-        match (out1, out2) {
-            (CommandOutput::Text(a), CommandOutput::Text(b)) => {
-                assert_eq!(a, b);
-                assert!(a.contains("9 bytes"));
-            },
-            _ => panic!("expected text"),
-        }
+        let a = assert_text!(exec(&reg, &mut vfs, "checksum /tmp/ck.txt").unwrap());
+        let b = assert_text!(exec(&reg, &mut vfs, "checksum /tmp/ck.txt").unwrap());
+        assert_eq!(a, b);
+        assert!(a.contains("9 bytes"));
     }
 }

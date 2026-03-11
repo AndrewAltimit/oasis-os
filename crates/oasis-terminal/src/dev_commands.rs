@@ -728,6 +728,7 @@ pub fn register_dev_commands(reg: &mut crate::CommandRegistry) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_helpers::assert_text;
     use crate::{CommandOutput, CommandRegistry, Environment};
     use oasis_vfs::{MemoryVfs, Vfs};
 
@@ -751,10 +752,10 @@ mod tests {
         let mut reg = CommandRegistry::new();
         register_dev_commands(&mut reg);
         let mut vfs = MemoryVfs::new();
-        match exec(&reg, &mut vfs, "base64 hello").unwrap() {
-            CommandOutput::Text(s) => assert_eq!(s, "aGVsbG8="),
-            _ => panic!("expected text"),
-        }
+        assert_eq!(
+            assert_text!(exec(&reg, &mut vfs, "base64 hello").unwrap()),
+            "aGVsbG8="
+        );
     }
 
     #[test]
@@ -762,10 +763,10 @@ mod tests {
         let mut reg = CommandRegistry::new();
         register_dev_commands(&mut reg);
         let mut vfs = MemoryVfs::new();
-        match exec(&reg, &mut vfs, "base64 -d aGVsbG8=").unwrap() {
-            CommandOutput::Text(s) => assert_eq!(s, "hello"),
-            _ => panic!("expected text"),
-        }
+        assert_eq!(
+            assert_text!(exec(&reg, &mut vfs, "base64 -d aGVsbG8=").unwrap()),
+            "hello"
+        );
     }
 
     #[test]
@@ -773,10 +774,10 @@ mod tests {
         let mut reg = CommandRegistry::new();
         register_dev_commands(&mut reg);
         let mut vfs = MemoryVfs::new();
-        match exec(&reg, &mut vfs, r#"json validate {"key":"value"}"#).unwrap() {
-            CommandOutput::Text(s) => assert!(s.contains("Valid")),
-            _ => panic!("expected text"),
-        }
+        assert!(
+            assert_text!(exec(&reg, &mut vfs, r#"json validate {"key":"value"}"#).unwrap())
+                .contains("Valid")
+        );
     }
 
     #[test]
@@ -792,13 +793,9 @@ mod tests {
         let mut reg = CommandRegistry::new();
         register_dev_commands(&mut reg);
         let mut vfs = MemoryVfs::new();
-        match exec(&reg, &mut vfs, "uuid").unwrap() {
-            CommandOutput::Text(s) => {
-                assert_eq!(s.len(), 36);
-                assert_eq!(s.matches('-').count(), 4);
-            },
-            _ => panic!("expected text"),
-        }
+        let s = assert_text!(exec(&reg, &mut vfs, "uuid").unwrap());
+        assert_eq!(s.len(), 36);
+        assert_eq!(s.matches('-').count(), 4);
     }
 
     #[test]
@@ -806,13 +803,9 @@ mod tests {
         let mut reg = CommandRegistry::new();
         register_dev_commands(&mut reg);
         let mut vfs = MemoryVfs::new();
-        match exec(&reg, &mut vfs, "seq 5").unwrap() {
-            CommandOutput::Text(s) => {
-                let lines: Vec<&str> = s.lines().collect();
-                assert_eq!(lines, ["1", "2", "3", "4", "5"]);
-            },
-            _ => panic!("expected text"),
-        }
+        let s = assert_text!(exec(&reg, &mut vfs, "seq 5").unwrap());
+        let lines: Vec<&str> = s.lines().collect();
+        assert_eq!(lines, ["1", "2", "3", "4", "5"]);
     }
 
     #[test]
@@ -820,13 +813,9 @@ mod tests {
         let mut reg = CommandRegistry::new();
         register_dev_commands(&mut reg);
         let mut vfs = MemoryVfs::new();
-        match exec(&reg, &mut vfs, "seq 3 6").unwrap() {
-            CommandOutput::Text(s) => {
-                let lines: Vec<&str> = s.lines().collect();
-                assert_eq!(lines, ["3", "4", "5", "6"]);
-            },
-            _ => panic!("expected text"),
-        }
+        let s = assert_text!(exec(&reg, &mut vfs, "seq 3 6").unwrap());
+        let lines: Vec<&str> = s.lines().collect();
+        assert_eq!(lines, ["3", "4", "5", "6"]);
     }
 
     #[test]
@@ -834,10 +823,10 @@ mod tests {
         let mut reg = CommandRegistry::new();
         register_dev_commands(&mut reg);
         let mut vfs = MemoryVfs::new();
-        match exec(&reg, &mut vfs, "expr 2 + 3 * 4").unwrap() {
-            CommandOutput::Text(s) => assert_eq!(s, "14"),
-            _ => panic!("expected text"),
-        }
+        assert_eq!(
+            assert_text!(exec(&reg, &mut vfs, "expr 2 + 3 * 4").unwrap()),
+            "14"
+        );
     }
 
     #[test]
@@ -845,10 +834,10 @@ mod tests {
         let mut reg = CommandRegistry::new();
         register_dev_commands(&mut reg);
         let mut vfs = MemoryVfs::new();
-        match exec(&reg, &mut vfs, "expr (2 + 3) * 4").unwrap() {
-            CommandOutput::Text(s) => assert_eq!(s, "20"),
-            _ => panic!("expected text"),
-        }
+        assert_eq!(
+            assert_text!(exec(&reg, &mut vfs, "expr (2 + 3) * 4").unwrap()),
+            "20"
+        );
     }
 
     #[test]
@@ -857,10 +846,10 @@ mod tests {
         register_dev_commands(&mut reg);
         let mut vfs = MemoryVfs::new();
         vfs.write("/test.txt", b"data").unwrap();
-        match exec(&reg, &mut vfs, "test -f /test.txt").unwrap() {
-            CommandOutput::Text(s) => assert_eq!(s, "true"),
-            _ => panic!("expected text"),
-        }
+        assert_eq!(
+            assert_text!(exec(&reg, &mut vfs, "test -f /test.txt").unwrap()),
+            "true"
+        );
     }
 
     #[test]
@@ -868,10 +857,10 @@ mod tests {
         let mut reg = CommandRegistry::new();
         register_dev_commands(&mut reg);
         let mut vfs = MemoryVfs::new();
-        match exec(&reg, &mut vfs, "test -f /nope.txt").unwrap() {
-            CommandOutput::Text(s) => assert_eq!(s, "false"),
-            _ => panic!("expected text"),
-        }
+        assert_eq!(
+            assert_text!(exec(&reg, &mut vfs, "test -f /nope.txt").unwrap()),
+            "false"
+        );
     }
 
     #[test]
@@ -880,10 +869,10 @@ mod tests {
         register_dev_commands(&mut reg);
         let mut vfs = MemoryVfs::new();
         vfs.mkdir("/tmp").unwrap();
-        match exec(&reg, &mut vfs, "test -d /tmp").unwrap() {
-            CommandOutput::Text(s) => assert_eq!(s, "true"),
-            _ => panic!("expected text"),
-        }
+        assert_eq!(
+            assert_text!(exec(&reg, &mut vfs, "test -d /tmp").unwrap()),
+            "true"
+        );
     }
 
     #[test]
@@ -891,10 +880,10 @@ mod tests {
         let mut reg = CommandRegistry::new();
         register_dev_commands(&mut reg);
         let mut vfs = MemoryVfs::new();
-        match exec(&reg, &mut vfs, "test foo = foo").unwrap() {
-            CommandOutput::Text(s) => assert_eq!(s, "true"),
-            _ => panic!("expected text"),
-        }
+        assert_eq!(
+            assert_text!(exec(&reg, &mut vfs, "test foo = foo").unwrap()),
+            "true"
+        );
     }
 
     #[test]
@@ -902,9 +891,9 @@ mod tests {
         let mut reg = CommandRegistry::new();
         register_dev_commands(&mut reg);
         let mut vfs = MemoryVfs::new();
-        match exec(&reg, &mut vfs, "test 3 -lt 5").unwrap() {
-            CommandOutput::Text(s) => assert_eq!(s, "true"),
-            _ => panic!("expected text"),
-        }
+        assert_eq!(
+            assert_text!(exec(&reg, &mut vfs, "test 3 -lt 5").unwrap()),
+            "true"
+        );
     }
 }

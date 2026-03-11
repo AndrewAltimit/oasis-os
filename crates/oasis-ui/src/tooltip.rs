@@ -34,6 +34,22 @@ pub enum TooltipState {
 }
 
 /// A tooltip overlay with configurable delay and positioning.
+///
+/// State machine: Hidden → Waiting (on hover) → Visible (after delay).
+/// Call [`on_hover_end`](Self::on_hover_end) to reset to Hidden.
+///
+/// # Example
+///
+/// ```ignore
+/// let mut tip = Tooltip::new("Help text")
+///     .with_position(TooltipPosition::Below)
+///     .with_delay(500);
+/// tip.on_hover_start();
+/// for _ in 0..32 { tip.tick(16); } // 512ms elapsed
+/// assert!(tip.is_visible());
+/// tip.on_hover_end();
+/// assert!(!tip.is_visible());
+/// ```
 pub struct Tooltip {
     /// Tooltip text content.
     pub text: String,

@@ -65,6 +65,7 @@ impl Command for SkinCmd {
 mod tests {
     use super::*;
     use crate::CommandSignal;
+    use crate::test_helpers::assert_text;
     use oasis_vfs::MemoryVfs;
 
     fn make_env(vfs: &mut MemoryVfs) -> Environment<'_> {
@@ -86,14 +87,9 @@ mod tests {
         let cmd = SkinCmd;
         let mut vfs = MemoryVfs::new();
         let mut env = make_env(&mut vfs);
-        let out = cmd.execute(&["list"], &mut env).unwrap();
-        match out {
-            CommandOutput::Text(s) => {
-                assert!(s.contains("terminal"));
-                assert!(s.contains("modern"));
-            },
-            _ => panic!("expected Text"),
-        }
+        let s = assert_text!(cmd.execute(&["list"], &mut env).unwrap());
+        assert!(s.contains("terminal"));
+        assert!(s.contains("modern"));
     }
 
     #[test]

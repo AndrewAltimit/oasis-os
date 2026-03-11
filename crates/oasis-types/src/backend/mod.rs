@@ -16,6 +16,11 @@ mod sdi_backend;
 mod sdi_core;
 mod types;
 
+/// Default viewport width (PSP native resolution).
+pub const DEFAULT_VIEWPORT_WIDTH: u32 = 480;
+/// Default viewport height (PSP native resolution).
+pub const DEFAULT_VIEWPORT_HEIGHT: u32 = 272;
+
 // Re-export everything so that `oasis_types::backend::*` continues to work.
 
 // -- types --

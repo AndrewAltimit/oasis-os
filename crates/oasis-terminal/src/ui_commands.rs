@@ -221,6 +221,7 @@ pub fn register_ui_commands(reg: &mut crate::CommandRegistry) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_helpers::assert_text;
     use crate::{CommandOutput, CommandRegistry, Environment};
     use oasis_vfs::{MemoryVfs, Vfs};
 
@@ -255,10 +256,8 @@ mod tests {
         let mut reg = CommandRegistry::new();
         register_ui_commands(&mut reg);
         let mut vfs = MemoryVfs::new();
-        match exec(&reg, &mut vfs, "wm list").unwrap() {
-            CommandOutput::Text(s) => assert!(s.contains("no window manager")),
-            _ => panic!("expected text"),
-        }
+        let s = assert_text!(exec(&reg, &mut vfs, "wm list").unwrap());
+        assert!(s.contains("no window manager"));
     }
 
     #[test]
@@ -272,10 +271,8 @@ mod tests {
     #[test]
     fn wm_close_queues_request() {
         let (reg, mut vfs) = setup();
-        match exec(&reg, &mut vfs, "wm close browser").unwrap() {
-            CommandOutput::Text(s) => assert!(s.contains("close browser")),
-            _ => panic!("expected text"),
-        }
+        let s = assert_text!(exec(&reg, &mut vfs, "wm close browser").unwrap());
+        assert!(s.contains("close browser"));
         let data = vfs.read("/var/wm/request").unwrap();
         assert_eq!(data, b"close browser");
     }
@@ -285,10 +282,8 @@ mod tests {
         let mut reg = CommandRegistry::new();
         register_ui_commands(&mut reg);
         let mut vfs = MemoryVfs::new();
-        match exec(&reg, &mut vfs, "sdi").unwrap() {
-            CommandOutput::Text(s) => assert!(s.contains("SDI status")),
-            _ => panic!("expected text"),
-        }
+        let s = assert_text!(exec(&reg, &mut vfs, "sdi").unwrap());
+        assert!(s.contains("SDI status"));
     }
 
     #[test]
@@ -296,19 +291,15 @@ mod tests {
         let mut reg = CommandRegistry::new();
         register_ui_commands(&mut reg);
         let mut vfs = MemoryVfs::new();
-        match exec(&reg, &mut vfs, "theme").unwrap() {
-            CommandOutput::Text(s) => assert!(s.contains("theme")),
-            _ => panic!("expected text"),
-        }
+        let s = assert_text!(exec(&reg, &mut vfs, "theme").unwrap());
+        assert!(s.contains("theme"));
     }
 
     #[test]
     fn notify_queues_message() {
         let (reg, mut vfs) = setup();
-        match exec(&reg, &mut vfs, "notify Hello World").unwrap() {
-            CommandOutput::Text(s) => assert!(s.contains("Hello World")),
-            _ => panic!("expected text"),
-        }
+        let s = assert_text!(exec(&reg, &mut vfs, "notify Hello World").unwrap());
+        assert!(s.contains("Hello World"));
         let data = vfs.read("/var/notify/message").unwrap();
         assert_eq!(data, b"Hello World");
     }
@@ -316,9 +307,7 @@ mod tests {
     #[test]
     fn screenshot_queues_request() {
         let (reg, mut vfs) = setup();
-        match exec(&reg, &mut vfs, "screenshot /tmp/shot.bmp").unwrap() {
-            CommandOutput::Text(s) => assert!(s.contains("shot.bmp")),
-            _ => panic!("expected text"),
-        }
+        let s = assert_text!(exec(&reg, &mut vfs, "screenshot /tmp/shot.bmp").unwrap());
+        assert!(s.contains("shot.bmp"));
     }
 }

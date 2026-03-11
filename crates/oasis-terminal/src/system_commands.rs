@@ -192,6 +192,7 @@ pub fn register_system_commands(reg: &mut crate::CommandRegistry) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_helpers::assert_text;
     use crate::{CommandOutput, CommandRegistry, Environment};
     use oasis_vfs::MemoryVfs;
 
@@ -215,10 +216,10 @@ mod tests {
         let mut reg = CommandRegistry::new();
         register_system_commands(&mut reg);
         let mut vfs = MemoryVfs::new();
-        match exec(&reg, &mut vfs, "whoami").unwrap() {
-            CommandOutput::Text(s) => assert_eq!(s, "oasis"),
-            _ => panic!("expected text"),
-        }
+        assert_eq!(
+            assert_text!(exec(&reg, &mut vfs, "whoami").unwrap()),
+            "oasis"
+        );
     }
 
     #[test]
@@ -226,10 +227,10 @@ mod tests {
         let mut reg = CommandRegistry::new();
         register_system_commands(&mut reg);
         let mut vfs = MemoryVfs::new();
-        match exec(&reg, &mut vfs, "hostname").unwrap() {
-            CommandOutput::Text(s) => assert_eq!(s, "oasis-os"),
-            _ => panic!("expected text"),
-        }
+        assert_eq!(
+            assert_text!(exec(&reg, &mut vfs, "hostname").unwrap()),
+            "oasis-os"
+        );
     }
 
     #[test]
@@ -237,10 +238,8 @@ mod tests {
         let mut reg = CommandRegistry::new();
         register_system_commands(&mut reg);
         let mut vfs = MemoryVfs::new();
-        match exec(&reg, &mut vfs, "uptime").unwrap() {
-            CommandOutput::Text(s) => assert!(s.contains("no time service")),
-            _ => panic!("expected text"),
-        }
+        let s = assert_text!(exec(&reg, &mut vfs, "uptime").unwrap());
+        assert!(s.contains("no time service"));
     }
 
     #[test]
@@ -248,13 +247,9 @@ mod tests {
         let mut reg = CommandRegistry::new();
         register_system_commands(&mut reg);
         let mut vfs = MemoryVfs::new();
-        match exec(&reg, &mut vfs, "df").unwrap() {
-            CommandOutput::Text(s) => {
-                assert!(s.contains("Filesystem"));
-                assert!(s.contains("vfs"));
-            },
-            _ => panic!("expected text"),
-        }
+        let s = assert_text!(exec(&reg, &mut vfs, "df").unwrap());
+        assert!(s.contains("Filesystem"));
+        assert!(s.contains("vfs"));
     }
 
     #[test]
@@ -262,10 +257,8 @@ mod tests {
         let mut reg = CommandRegistry::new();
         register_system_commands(&mut reg);
         let mut vfs = MemoryVfs::new();
-        match exec(&reg, &mut vfs, "date").unwrap() {
-            CommandOutput::Text(s) => assert!(s.contains("no time service")),
-            _ => panic!("expected text"),
-        }
+        let s = assert_text!(exec(&reg, &mut vfs, "date").unwrap());
+        assert!(s.contains("no time service"));
     }
 
     #[test]
@@ -273,10 +266,8 @@ mod tests {
         let mut reg = CommandRegistry::new();
         register_system_commands(&mut reg);
         let mut vfs = MemoryVfs::new();
-        match exec(&reg, &mut vfs, "sleep 1").unwrap() {
-            CommandOutput::Text(s) => assert!(s.contains("simulated")),
-            _ => panic!("expected text"),
-        }
+        let s = assert_text!(exec(&reg, &mut vfs, "sleep 1").unwrap());
+        assert!(s.contains("simulated"));
     }
 
     #[test]

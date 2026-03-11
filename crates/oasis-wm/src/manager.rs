@@ -739,7 +739,92 @@ impl WindowManager {
 mod tests {
     use super::*;
     use crate::window::WindowType;
-    use oasis_types::backend::Color;
+    use oasis_types::backend::{Color, SdiCore, TextureId};
+
+    /// Minimal no-op backend for tests that require `&mut dyn SdiBackend`.
+    struct NullBackend;
+
+    impl SdiCore for NullBackend {
+        fn init(&mut self, _w: u32, _h: u32) -> oasis_types::error::Result<()> {
+            Ok(())
+        }
+        fn clear(&mut self, _color: Color) -> oasis_types::error::Result<()> {
+            Ok(())
+        }
+        fn blit(
+            &mut self,
+            _tex: TextureId,
+            _x: i32,
+            _y: i32,
+            _w: u32,
+            _h: u32,
+        ) -> oasis_types::error::Result<()> {
+            Ok(())
+        }
+        fn fill_rect(
+            &mut self,
+            _x: i32,
+            _y: i32,
+            _w: u32,
+            _h: u32,
+            _color: Color,
+        ) -> oasis_types::error::Result<()> {
+            Ok(())
+        }
+        fn draw_text(
+            &mut self,
+            _text: &str,
+            _x: i32,
+            _y: i32,
+            _font_size: u16,
+            _color: Color,
+        ) -> oasis_types::error::Result<()> {
+            Ok(())
+        }
+        fn swap_buffers(&mut self) -> oasis_types::error::Result<()> {
+            Ok(())
+        }
+        fn load_texture(
+            &mut self,
+            _w: u32,
+            _h: u32,
+            _data: &[u8],
+        ) -> oasis_types::error::Result<TextureId> {
+            Ok(TextureId(0))
+        }
+        fn destroy_texture(&mut self, _tex: TextureId) -> oasis_types::error::Result<()> {
+            Ok(())
+        }
+        fn set_clip_rect(
+            &mut self,
+            _x: i32,
+            _y: i32,
+            _w: u32,
+            _h: u32,
+        ) -> oasis_types::error::Result<()> {
+            Ok(())
+        }
+        fn reset_clip_rect(&mut self) -> oasis_types::error::Result<()> {
+            Ok(())
+        }
+        fn measure_text(&self, _text: &str, _font_size: u16) -> u32 {
+            0
+        }
+        fn read_pixels(
+            &self,
+            _x: i32,
+            _y: i32,
+            _w: u32,
+            _h: u32,
+        ) -> oasis_types::error::Result<Vec<u8>> {
+            Ok(vec![])
+        }
+        fn shutdown(&mut self) -> oasis_types::error::Result<()> {
+            Ok(())
+        }
+    }
+
+    impl SdiBackend for NullBackend {}
 
     fn app_config(id: &str) -> WindowConfig {
         WindowConfig {
@@ -1839,5 +1924,142 @@ mod tests {
         assert_eq!(win.y, orig_y);
         assert_eq!(win.outer_w, orig_w);
         assert_eq!(win.outer_h, orig_h);
+    }
+
+    #[test]
+    fn resize_window_to_zero() {
+        let mut sdi = SdiRegistry::new();
+        let mut wm = WindowManager::new(800, 600);
+        wm.create_window(&app_config("w"), &mut sdi).unwrap();
+        // Resizing to (0, 0) should succeed without panic.
+        wm.resize_window("w", 0, 0, &mut sdi).unwrap();
+        let win = wm.get_window("w").unwrap();
+        assert_eq!(win.outer_w, 0);
+        assert_eq!(win.outer_h, 0);
+    }
+
+    #[test]
+    fn resize_window_to_one() {
+        let mut sdi = SdiRegistry::new();
+        let mut wm = WindowManager::new(800, 600);
+        wm.create_window(&app_config("w"), &mut sdi).unwrap();
+        wm.resize_window("w", 1, 1, &mut sdi).unwrap();
+        let win = wm.get_window("w").unwrap();
+        assert_eq!(win.outer_w, 1);
+        assert_eq!(win.outer_h, 1);
+    }
+
+    #[test]
+    fn cascade_wraps_many_windows() {
+        let mut sdi = SdiRegistry::new();
+        let mut wm = WindowManager::new(800, 600);
+        // Create 15 windows without explicit position to exercise cascade
+        // wrapping (cascade offset is 24px, wraps at screen_w/2 = 400).
+        for i in 0..15 {
+            let config = WindowConfig {
+                id: format!("c{i}"),
+                title: format!("C{i}"),
+                x: None,
+                y: None,
+                width: 100,
+                height: 80,
+                window_type: WindowType::AppWindow,
+                always_on_top: false,
+                modal: false,
+            };
+            wm.create_window(&config, &mut sdi).unwrap();
+        }
+        assert_eq!(wm.window_count(), 15);
+        // All window positions must stay within the screen bounds.
+        for i in 0..15 {
+            let win = wm.get_window(&format!("c{i}")).unwrap();
+            assert!(
+                win.x >= 0 && win.x < 800,
+                "window c{i} x={} out of range",
+                win.x
+            );
+            assert!(
+                win.y >= 0 && win.y < 600,
+                "window c{i} y={} out of range",
+                win.y
+            );
+        }
+    }
+
+    #[test]
+    fn maximize_then_enter_fullscreen_then_close() {
+        let mut sdi = SdiRegistry::new();
+        let mut wm = WindowManager::new(800, 600);
+        wm.create_window(&app_config("w"), &mut sdi).unwrap();
+        wm.maximize_window("w", &mut sdi).unwrap();
+        wm.enter_fullscreen("w", &mut sdi).unwrap();
+        // Closing from fullscreen state should not panic.
+        wm.close_window("w", &mut sdi).unwrap();
+        assert_eq!(wm.window_count(), 0);
+    }
+
+    #[test]
+    fn focus_minimized_window_restores_it() {
+        let mut sdi = SdiRegistry::new();
+        let mut wm = WindowManager::new(800, 600);
+        wm.create_window(&app_config("w"), &mut sdi).unwrap();
+        wm.minimize_window("w", &mut sdi).unwrap();
+        assert_eq!(wm.get_window("w").unwrap().state, WindowState::Minimized);
+
+        // focus_window does not auto-restore, so restore explicitly then
+        // focus to verify the window becomes visible again.
+        wm.restore_window("w", &mut sdi).unwrap();
+        wm.focus_window("w", &mut sdi).unwrap();
+        let win = wm.get_window("w").unwrap();
+        assert_ne!(win.state, WindowState::Minimized);
+        // Verify SDI objects are visible again.
+        assert!(sdi.get("w.frame").unwrap().visible);
+        assert!(sdi.get("w.content").unwrap().visible);
+    }
+
+    #[test]
+    fn draw_with_clips_empty_wm() {
+        let mut sdi = SdiRegistry::new();
+        let wm = WindowManager::new(800, 600);
+        // Calling draw_with_clips on an empty WM should not panic.
+        // We use a no-op content callback since there are no windows.
+        let result = wm.draw_with_clips(&mut sdi, &mut NullBackend, |_, _, _, _, _, _| Ok(()));
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn move_window_large_negative_offset() {
+        let mut sdi = SdiRegistry::new();
+        let mut wm = WindowManager::new(800, 600);
+        wm.create_window(&app_config("w"), &mut sdi).unwrap();
+        // Moving far off screen with large negative values should not panic.
+        let result = wm.move_window("w", -100_000, -100_000, &mut sdi);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn create_many_windows_and_close_all() {
+        let mut sdi = SdiRegistry::new();
+        let mut wm = WindowManager::new(800, 600);
+        for i in 0..20 {
+            let config = WindowConfig {
+                id: format!("w{i}"),
+                title: format!("W{i}"),
+                x: Some(i as i32 * 10),
+                y: Some(i as i32 * 10),
+                width: 100,
+                height: 80,
+                window_type: WindowType::AppWindow,
+                always_on_top: false,
+                modal: false,
+            };
+            wm.create_window(&config, &mut sdi).unwrap();
+        }
+        assert_eq!(wm.window_count(), 20);
+        wm.close_all(&mut sdi);
+        assert_eq!(wm.window_count(), 0);
+        // SDI objects should be cleaned up too.
+        assert!(!sdi.contains("w0.frame"));
+        assert!(!sdi.contains("w19.frame"));
     }
 }

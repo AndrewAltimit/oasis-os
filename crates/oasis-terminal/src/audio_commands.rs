@@ -125,6 +125,7 @@ pub fn register_audio_commands(reg: &mut crate::CommandRegistry) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_helpers::assert_text;
     use crate::{CommandOutput, CommandRegistry, Environment};
     use oasis_vfs::{MemoryVfs, Vfs};
 
@@ -158,10 +159,8 @@ mod tests {
         let mut reg = CommandRegistry::new();
         register_audio_commands(&mut reg);
         let mut vfs = MemoryVfs::new();
-        match exec(&reg, &mut vfs, "music status").unwrap() {
-            CommandOutput::Text(s) => assert!(s.contains("not initialized")),
-            _ => panic!("expected text"),
-        }
+        let s = assert_text!(exec(&reg, &mut vfs, "music status").unwrap());
+        assert!(s.contains("not initialized"));
     }
 
     #[test]
@@ -169,22 +168,16 @@ mod tests {
         let (reg, mut vfs) = setup();
         vfs.write(AUDIO_STATUS_PATH, b"State: stopped\nVolume: 80%")
             .unwrap();
-        match exec(&reg, &mut vfs, "music").unwrap() {
-            CommandOutput::Text(s) => {
-                assert!(s.contains("stopped"));
-                assert!(s.contains("80%"));
-            },
-            _ => panic!("expected text"),
-        }
+        let s = assert_text!(exec(&reg, &mut vfs, "music").unwrap());
+        assert!(s.contains("stopped"));
+        assert!(s.contains("80%"));
     }
 
     #[test]
     fn music_play_queues_request() {
         let (reg, mut vfs) = setup();
-        match exec(&reg, &mut vfs, "music play").unwrap() {
-            CommandOutput::Text(s) => assert!(s.contains("play")),
-            _ => panic!("expected text"),
-        }
+        let s = assert_text!(exec(&reg, &mut vfs, "music play").unwrap());
+        assert!(s.contains("play"));
         let data = vfs.read(AUDIO_REQUEST_PATH).unwrap();
         assert_eq!(data, b"play");
     }
@@ -192,10 +185,8 @@ mod tests {
     #[test]
     fn music_pause_queues_request() {
         let (reg, mut vfs) = setup();
-        match exec(&reg, &mut vfs, "music pause").unwrap() {
-            CommandOutput::Text(s) => assert!(s.contains("pause")),
-            _ => panic!("expected text"),
-        }
+        let s = assert_text!(exec(&reg, &mut vfs, "music pause").unwrap());
+        assert!(s.contains("pause"));
         let data = vfs.read(AUDIO_REQUEST_PATH).unwrap();
         assert_eq!(data, b"pause");
     }
@@ -203,37 +194,29 @@ mod tests {
     #[test]
     fn music_stop_queues_request() {
         let (reg, mut vfs) = setup();
-        match exec(&reg, &mut vfs, "music stop").unwrap() {
-            CommandOutput::Text(s) => assert!(s.contains("stop")),
-            _ => panic!("expected text"),
-        }
+        let s = assert_text!(exec(&reg, &mut vfs, "music stop").unwrap());
+        assert!(s.contains("stop"));
     }
 
     #[test]
     fn music_next_queues_request() {
         let (reg, mut vfs) = setup();
-        match exec(&reg, &mut vfs, "music next").unwrap() {
-            CommandOutput::Text(s) => assert!(s.contains("next")),
-            _ => panic!("expected text"),
-        }
+        let s = assert_text!(exec(&reg, &mut vfs, "music next").unwrap());
+        assert!(s.contains("next"));
     }
 
     #[test]
     fn music_prev_queues_request() {
         let (reg, mut vfs) = setup();
-        match exec(&reg, &mut vfs, "music prev").unwrap() {
-            CommandOutput::Text(s) => assert!(s.contains("prev")),
-            _ => panic!("expected text"),
-        }
+        let s = assert_text!(exec(&reg, &mut vfs, "music prev").unwrap());
+        assert!(s.contains("prev"));
     }
 
     #[test]
     fn music_vol_set() {
         let (reg, mut vfs) = setup();
-        match exec(&reg, &mut vfs, "music vol 42").unwrap() {
-            CommandOutput::Text(s) => assert!(s.contains("42%")),
-            _ => panic!("expected text"),
-        }
+        let s = assert_text!(exec(&reg, &mut vfs, "music vol 42").unwrap());
+        assert!(s.contains("42%"));
         let data = vfs.read(AUDIO_REQUEST_PATH).unwrap();
         assert_eq!(data, b"vol 42");
     }
@@ -249,19 +232,15 @@ mod tests {
         let (reg, mut vfs) = setup();
         vfs.write(AUDIO_STATUS_PATH, b"State: playing\nVolume: 65%")
             .unwrap();
-        match exec(&reg, &mut vfs, "music vol").unwrap() {
-            CommandOutput::Text(s) => assert!(s.contains("65%")),
-            _ => panic!("expected text"),
-        }
+        let s = assert_text!(exec(&reg, &mut vfs, "music vol").unwrap());
+        assert!(s.contains("65%"));
     }
 
     #[test]
     fn music_repeat_valid() {
         let (reg, mut vfs) = setup();
-        match exec(&reg, &mut vfs, "music repeat all").unwrap() {
-            CommandOutput::Text(s) => assert!(s.contains("all")),
-            _ => panic!("expected text"),
-        }
+        let s = assert_text!(exec(&reg, &mut vfs, "music repeat all").unwrap());
+        assert!(s.contains("all"));
         let data = vfs.read(AUDIO_REQUEST_PATH).unwrap();
         assert_eq!(data, b"repeat all");
     }
@@ -281,20 +260,16 @@ mod tests {
     #[test]
     fn music_shuffle_queues_request() {
         let (reg, mut vfs) = setup();
-        match exec(&reg, &mut vfs, "music shuffle").unwrap() {
-            CommandOutput::Text(s) => assert!(s.contains("shuffle")),
-            _ => panic!("expected text"),
-        }
+        let s = assert_text!(exec(&reg, &mut vfs, "music shuffle").unwrap());
+        assert!(s.contains("shuffle"));
     }
 
     #[test]
     fn music_list_with_status() {
         let (reg, mut vfs) = setup();
         vfs.write(AUDIO_STATUS_PATH, b"Playlist: 5 tracks").unwrap();
-        match exec(&reg, &mut vfs, "music list").unwrap() {
-            CommandOutput::Text(s) => assert!(s.contains("5 tracks")),
-            _ => panic!("expected text"),
-        }
+        let s = assert_text!(exec(&reg, &mut vfs, "music list").unwrap());
+        assert!(s.contains("5 tracks"));
     }
 
     #[test]
@@ -302,10 +277,8 @@ mod tests {
         let mut reg = CommandRegistry::new();
         register_audio_commands(&mut reg);
         let mut vfs = MemoryVfs::new();
-        match exec(&reg, &mut vfs, "music list").unwrap() {
-            CommandOutput::Text(s) => assert!(s.contains("no playlist")),
-            _ => panic!("expected text"),
-        }
+        let s = assert_text!(exec(&reg, &mut vfs, "music list").unwrap());
+        assert!(s.contains("no playlist"));
     }
 
     #[test]

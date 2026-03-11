@@ -364,7 +364,10 @@ pub trait SdiAlpha: SdiCore {
 
     /// Return the current viewport dimensions `(width, height)`.
     fn ext_viewport_size(&self) -> (u32, u32) {
-        (480, 272)
+        (
+            super::DEFAULT_VIEWPORT_WIDTH,
+            super::DEFAULT_VIEWPORT_HEIGHT,
+        )
     }
 
     /// Dim the entire viewport with a semi-transparent overlay.

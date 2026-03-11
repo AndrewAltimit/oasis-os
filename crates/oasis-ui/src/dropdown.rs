@@ -6,6 +6,19 @@ use crate::widget::Widget;
 use oasis_types::error::Result;
 
 /// A dropdown selector that shows a list of options when opened.
+///
+/// # Example
+///
+/// ```ignore
+/// let mut dd = Dropdown::new(vec![
+///     "Option A".into(), "Option B".into(), "Option C".into(),
+/// ]);
+/// assert_eq!(dd.selected_text(), "Option A");
+/// dd.toggle(); // open menu
+/// dd.select_next();
+/// assert_eq!(dd.selected_text(), "Option B");
+/// dd.toggle(); // close menu
+/// ```
 pub struct Dropdown {
     /// Available options.
     pub options: Vec<String>,
