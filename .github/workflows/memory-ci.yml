@@ -61,6 +61,7 @@ jobs:
           docker compose --profile ci run --rm \
             -e RUSTFLAGS="-Zsanitizer=address" \
             -e ASAN_OPTIONS="detect_leaks=1:halt_on_error=0:print_summary=1" \
+            -e LSAN_OPTIONS="suppressions=/app/lsan_suppressions.txt" \
             -e SDL_VIDEODRIVER=dummy \
             rust-ci bash -c "
               TARGET=\$(rustc -vV | awk '/^host:/ { print \$2 }')

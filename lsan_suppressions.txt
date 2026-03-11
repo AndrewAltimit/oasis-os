@@ -1,0 +1,6 @@
+# LeakSanitizer suppressions for OASIS_OS CI
+#
+# SDL3 allocates global state during library initialization that is
+# intentionally never freed (cleaned up by OS on process exit).
+# These are not bugs in our code.
+leak:libSDL3

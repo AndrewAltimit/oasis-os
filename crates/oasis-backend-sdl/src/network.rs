@@ -135,11 +135,15 @@ mod tests {
         backend.listen(port).unwrap();
 
         let mut client = TcpStream::connect(format!("127.0.0.1:{port}")).unwrap();
-        std::thread::sleep(std::time::Duration::from_millis(50));
+        // Set a read timeout so the test doesn't hang under ASAN.
+        client
+            .set_read_timeout(Some(std::time::Duration::from_secs(5)))
+            .unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(100));
 
         let mut stream = backend.accept().unwrap().unwrap();
         stream.write(b"world").unwrap();
-        std::thread::sleep(std::time::Duration::from_millis(50));
+        std::thread::sleep(std::time::Duration::from_millis(100));
 
         let mut buf = [0u8; 64];
         let n = client.read(&mut buf).unwrap();
