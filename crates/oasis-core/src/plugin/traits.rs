@@ -4,6 +4,7 @@
 //! They interact with the OS through a `PluginHost` that provides access
 //! to the SDI scene graph, command registry, and virtual file system.
 
+use crate::backend::{AudioBackend, NetworkBackend};
 use crate::error::Result;
 use crate::sdi::SdiRegistry;
 use crate::terminal::CommandRegistry;
@@ -66,7 +67,8 @@ impl PluginInfo {
 /// Host-side context passed to plugins during lifecycle calls.
 ///
 /// Provides access to OS services that plugins can use to register
-/// commands, create UI elements, read/write files, and register apps.
+/// commands, create UI elements, read/write files, play audio, and
+/// make network requests.
 pub struct PluginHost<'a> {
     /// SDI scene graph for creating/modifying UI elements.
     pub sdi: &'a mut SdiRegistry,
@@ -74,6 +76,11 @@ pub struct PluginHost<'a> {
     pub vfs: &'a mut dyn Vfs,
     /// Command registry for registering new commands.
     pub commands: &'a mut CommandRegistry,
+    /// Audio backend for playback. `None` in headless/screenshot mode.
+    pub audio: Option<&'a mut dyn AudioBackend>,
+    /// Network backend for TCP connections. `None` if networking is
+    /// unavailable.
+    pub network: Option<&'a mut dyn NetworkBackend>,
     /// Accumulator for plugin app registrations. Processed by the
     /// manager after `init()` returns.
     pub(crate) app_registrations: &'a mut Vec<PluginAppRegistration>,
@@ -151,5 +158,27 @@ mod tests {
     fn plugin_info_custom_api_version() {
         let info = PluginInfo::new("test", "1.0").with_api_version(99);
         assert_eq!(info.api_version, 99);
+    }
+
+    #[test]
+    fn plugin_host_audio_none_by_default() {
+        use crate::sdi::SdiRegistry;
+        use crate::terminal::CommandRegistry;
+        use crate::vfs::MemoryVfs;
+
+        let mut sdi = SdiRegistry::new();
+        let mut vfs = MemoryVfs::new();
+        let mut cmds = CommandRegistry::new();
+        let mut pending = Vec::new();
+        let host = PluginHost {
+            sdi: &mut sdi,
+            vfs: &mut vfs,
+            commands: &mut cmds,
+            audio: None,
+            network: None,
+            app_registrations: &mut pending,
+        };
+        assert!(host.audio.is_none());
+        assert!(host.network.is_none());
     }
 }

@@ -110,6 +110,8 @@ impl PluginManager {
             sdi,
             vfs,
             commands,
+            audio: None,
+            network: None,
             app_registrations: &mut pending_apps,
         };
         for loaded in &mut self.plugins {
@@ -137,6 +139,8 @@ impl PluginManager {
             sdi,
             vfs,
             commands,
+            audio: None,
+            network: None,
             app_registrations: &mut pending_apps,
         };
         let loaded = self
@@ -177,6 +181,8 @@ impl PluginManager {
             sdi,
             vfs,
             commands,
+            audio: None,
+            network: None,
             app_registrations: &mut pending_apps,
         };
         for loaded in &mut self.plugins {
@@ -201,6 +207,8 @@ impl PluginManager {
             sdi,
             vfs,
             commands,
+            audio: None,
+            network: None,
             app_registrations: &mut pending_apps,
         };
         for loaded in &mut self.plugins {
@@ -233,6 +241,8 @@ impl PluginManager {
                 sdi,
                 vfs,
                 commands,
+                audio: None,
+                network: None,
                 app_registrations: &mut pending_apps,
             };
             loaded.plugin.shutdown(&mut host)?;
