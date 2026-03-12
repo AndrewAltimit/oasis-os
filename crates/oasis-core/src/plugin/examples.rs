@@ -225,6 +225,16 @@ impl Plugin for NotepadPlugin {
     }
 }
 
+/// Validate and sanitize a note name to prevent path traversal.
+fn sanitize_note_name(name: &str) -> Result<&str> {
+    if name.contains('/') || name.contains('\\') || name == "." || name == ".." {
+        return Err(OasisError::Command(
+            "note name must not contain path separators".into(),
+        ));
+    }
+    Ok(name)
+}
+
 struct NoteCmd;
 impl Command for NoteCmd {
     fn name(&self) -> &str {
@@ -263,6 +273,7 @@ impl Command for NoteCmd {
                 if name.is_empty() {
                     return Err(OasisError::Command("usage: note read <name>".into()));
                 }
+                let name = sanitize_note_name(name)?;
                 let path = format!("{NOTEPAD_DIR}/{name}");
                 let data = env.vfs.read(&path)?;
                 let text = String::from_utf8_lossy(&data).into_owned();
@@ -275,6 +286,7 @@ impl Command for NoteCmd {
                         "usage: note write <name> <text...>".into(),
                     ));
                 }
+                let name = sanitize_note_name(name)?;
                 let text = args[2..].join(" ");
                 let path = format!("{NOTEPAD_DIR}/{name}");
                 env.vfs.write(&path, text.as_bytes())?;

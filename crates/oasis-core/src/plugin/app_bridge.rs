@@ -101,30 +101,9 @@ impl PluginAppRegistration {
         self
     }
 
-    /// Convert to an [`AppEntry`] for dashboard display.
-    pub fn to_app_entry(&self) -> AppEntry {
-        AppEntry {
-            title: self.title.clone(),
-            path: format!(
-                "/plugins/{}",
-                self.title
-                    .to_lowercase()
-                    .chars()
-                    .map(|c| if c.is_ascii_alphanumeric() || c == '-' {
-                        c
-                    } else {
-                        '-'
-                    })
-                    .collect::<String>()
-            ),
-            icon_png: Vec::new(),
-            color: self.color,
-        }
-    }
-
-    /// Create an [`App`] instance via the factory.
-    pub fn create_app(&self, vfs: &dyn Vfs) -> Box<dyn App> {
-        let path = format!(
+    /// Derive a VFS path from the plugin title.
+    fn vfs_path(&self) -> String {
+        format!(
             "/plugins/{}",
             self.title
                 .to_lowercase()
@@ -135,7 +114,22 @@ impl PluginAppRegistration {
                     '-'
                 })
                 .collect::<String>()
-        );
+        )
+    }
+
+    /// Convert to an [`AppEntry`] for dashboard display.
+    pub fn to_app_entry(&self) -> AppEntry {
+        AppEntry {
+            title: self.title.clone(),
+            path: self.vfs_path(),
+            icon_png: Vec::new(),
+            color: self.color,
+        }
+    }
+
+    /// Create an [`App`] instance via the factory.
+    pub fn create_app(&self, vfs: &dyn Vfs) -> Box<dyn App> {
+        let path = self.vfs_path();
         self.factory.create_app(&path, vfs)
     }
 }
