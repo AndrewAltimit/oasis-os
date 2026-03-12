@@ -6,12 +6,13 @@
 
 use serde::Deserialize;
 
-use crate::error::{OasisError, Result};
+use crate::error::{OasisError, PluginError, Result};
 use crate::sdi::SdiRegistry;
 use crate::terminal::CommandRegistry;
 use crate::vfs::Vfs;
 
-use super::traits::{Plugin, PluginHost, PluginInfo, PluginState};
+use super::app_bridge::PluginAppRegistration;
+use super::traits::{PLUGIN_API_VERSION, Plugin, PluginHost, PluginInfo, PluginState};
 
 /// A loaded plugin with its runtime state.
 struct LoadedPlugin {
@@ -61,6 +62,8 @@ pub enum PluginConfigValue {
 /// Manages the plugin lifecycle.
 pub struct PluginManager {
     plugins: Vec<LoadedPlugin>,
+    /// App registrations from plugins (populated during init).
+    plugin_apps: Vec<PluginAppRegistration>,
 }
 
 impl PluginManager {
@@ -68,6 +71,7 @@ impl PluginManager {
     pub fn new() -> Self {
         Self {
             plugins: Vec::new(),
+            plugin_apps: Vec::new(),
         }
     }
 
@@ -82,6 +86,18 @@ impl PluginManager {
         });
     }
 
+    /// Validate a plugin's API version against the host.
+    fn validate_api_version(info: &PluginInfo) -> Result<()> {
+        if info.api_version != PLUGIN_API_VERSION {
+            return Err(OasisError::Plugin(PluginError::ApiMismatch {
+                plugin: info.name.clone(),
+                expected: PLUGIN_API_VERSION,
+                found: info.api_version,
+            }));
+        }
+        Ok(())
+    }
+
     /// Initialize all registered (but not yet active) plugins.
     pub fn init_all(
         &mut self,
@@ -89,13 +105,22 @@ impl PluginManager {
         vfs: &mut dyn Vfs,
         commands: &mut CommandRegistry,
     ) -> Result<()> {
-        let mut host = PluginHost { sdi, vfs, commands };
+        let mut pending_apps = Vec::new();
+        let mut host = PluginHost {
+            sdi,
+            vfs,
+            commands,
+            app_registrations: &mut pending_apps,
+        };
         for loaded in &mut self.plugins {
             if loaded.state == PluginState::Registered {
+                Self::validate_api_version(&loaded.plugin.info())?;
                 loaded.plugin.init(&mut host)?;
                 loaded.state = PluginState::Active;
             }
         }
+        // Move collected app registrations into the manager.
+        self.plugin_apps.extend(pending_apps);
         Ok(())
     }
 
@@ -107,7 +132,13 @@ impl PluginManager {
         vfs: &mut dyn Vfs,
         commands: &mut CommandRegistry,
     ) -> Result<()> {
-        let mut host = PluginHost { sdi, vfs, commands };
+        let mut pending_apps = Vec::new();
+        let mut host = PluginHost {
+            sdi,
+            vfs,
+            commands,
+            app_registrations: &mut pending_apps,
+        };
         let loaded = self
             .plugins
             .iter_mut()
@@ -126,8 +157,11 @@ impl PluginManager {
                 .into(),
             ));
         }
+        Self::validate_api_version(&loaded.plugin.info())?;
         loaded.plugin.init(&mut host)?;
         loaded.state = PluginState::Active;
+        // Move collected app registrations into the manager.
+        self.plugin_apps.extend(pending_apps);
         Ok(())
     }
 
@@ -138,12 +172,20 @@ impl PluginManager {
         vfs: &mut dyn Vfs,
         commands: &mut CommandRegistry,
     ) -> Result<()> {
-        let mut host = PluginHost { sdi, vfs, commands };
+        let mut pending_apps = Vec::new();
+        let mut host = PluginHost {
+            sdi,
+            vfs,
+            commands,
+            app_registrations: &mut pending_apps,
+        };
         for loaded in &mut self.plugins {
             if loaded.state == PluginState::Active {
                 loaded.plugin.update(&mut host)?;
             }
         }
+        // Plugins can register apps during update too (rare but supported).
+        self.plugin_apps.extend(pending_apps);
         Ok(())
     }
 
@@ -154,7 +196,13 @@ impl PluginManager {
         vfs: &mut dyn Vfs,
         commands: &mut CommandRegistry,
     ) -> Result<()> {
-        let mut host = PluginHost { sdi, vfs, commands };
+        let mut pending_apps = Vec::new();
+        let mut host = PluginHost {
+            sdi,
+            vfs,
+            commands,
+            app_registrations: &mut pending_apps,
+        };
         for loaded in &mut self.plugins {
             if loaded.state == PluginState::Active {
                 loaded.plugin.shutdown(&mut host)?;
@@ -180,7 +228,13 @@ impl PluginManager {
 
         let loaded = &mut self.plugins[idx];
         if loaded.state == PluginState::Active {
-            let mut host = PluginHost { sdi, vfs, commands };
+            let mut pending_apps = Vec::new();
+            let mut host = PluginHost {
+                sdi,
+                vfs,
+                commands,
+                app_registrations: &mut pending_apps,
+            };
             loaded.plugin.shutdown(&mut host)?;
         }
         self.plugins.remove(idx);
@@ -211,6 +265,28 @@ impl PluginManager {
     /// Check if a plugin with the given name is loaded.
     pub fn is_loaded(&self, name: &str) -> bool {
         self.plugins.iter().any(|p| p.plugin.info().name == name)
+    }
+
+    /// Return all plugin-registered app registrations.
+    ///
+    /// The dashboard uses this to include plugin apps alongside built-in
+    /// apps. The app runner uses it to create app instances on launch.
+    pub fn plugin_apps(&self) -> &[PluginAppRegistration] {
+        &self.plugin_apps
+    }
+
+    /// Find a plugin app registration by title and create an app instance.
+    ///
+    /// Returns `None` if no plugin app with the given title exists.
+    pub fn create_plugin_app(
+        &self,
+        title: &str,
+        vfs: &dyn Vfs,
+    ) -> Option<Box<dyn oasis_app_core::App>> {
+        self.plugin_apps
+            .iter()
+            .find(|r| r.title == title)
+            .map(|r| r.create_app(vfs))
     }
 
     /// Discover plugin manifests from the VFS plugin directory.
@@ -531,6 +607,131 @@ auto_load = true
 
         mgr.shutdown_all(&mut sdi, &mut vfs, &mut cmds).unwrap();
         assert_eq!(mgr.active_count(), 0);
+    }
+
+    // -- API version validation tests --
+
+    /// Plugin with a mismatched API version.
+    struct BadVersionPlugin;
+    impl Plugin for BadVersionPlugin {
+        fn info(&self) -> PluginInfo {
+            PluginInfo::new("bad-version", "1.0.0").with_api_version(999)
+        }
+        fn init(&mut self, _host: &mut PluginHost<'_>) -> Result<()> {
+            Ok(())
+        }
+        fn update(&mut self, _host: &mut PluginHost<'_>) -> Result<()> {
+            Ok(())
+        }
+        fn shutdown(&mut self, _host: &mut PluginHost<'_>) -> Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn api_version_mismatch_init_all() {
+        let mut mgr = PluginManager::new();
+        mgr.register_static(Box::new(BadVersionPlugin));
+
+        let mut sdi = SdiRegistry::new();
+        let mut vfs = MemoryVfs::new();
+        let mut cmds = CommandRegistry::new();
+
+        let result = mgr.init_all(&mut sdi, &mut vfs, &mut cmds);
+        assert!(result.is_err());
+        let msg = result.unwrap_err().to_string();
+        assert!(msg.contains("API version mismatch"), "got: {msg}");
+        assert!(msg.contains("bad-version"), "got: {msg}");
+    }
+
+    #[test]
+    fn api_version_mismatch_init_plugin() {
+        let mut mgr = PluginManager::new();
+        mgr.register_static(Box::new(BadVersionPlugin));
+
+        let mut sdi = SdiRegistry::new();
+        let mut vfs = MemoryVfs::new();
+        let mut cmds = CommandRegistry::new();
+
+        let result = mgr.init_plugin("bad-version", &mut sdi, &mut vfs, &mut cmds);
+        assert!(result.is_err());
+        let msg = result.unwrap_err().to_string();
+        assert!(msg.contains("API version mismatch"), "got: {msg}");
+    }
+
+    // -- Plugin app registration tests --
+
+    /// Plugin that registers an app during init.
+    struct AppPlugin;
+    impl Plugin for AppPlugin {
+        fn info(&self) -> PluginInfo {
+            PluginInfo::new("app-plugin", "1.0.0")
+        }
+        fn init(&mut self, host: &mut PluginHost<'_>) -> Result<()> {
+            host.register_app(PluginAppRegistration::new(
+                "Plugin App",
+                crate::plugin::AppCategory::Utility,
+                |path, _vfs| {
+                    // Return a simple placeholder app.
+                    Box::new(crate::apps::simple_app::SimpleApp::new(
+                        "Plugin App",
+                        path,
+                        vec!["Plugin app content".to_string()],
+                    ))
+                },
+            ));
+            Ok(())
+        }
+        fn update(&mut self, _host: &mut PluginHost<'_>) -> Result<()> {
+            Ok(())
+        }
+        fn shutdown(&mut self, _host: &mut PluginHost<'_>) -> Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn plugin_registers_app() {
+        let mut mgr = PluginManager::new();
+        mgr.register_static(Box::new(AppPlugin));
+
+        let mut sdi = SdiRegistry::new();
+        let mut vfs = MemoryVfs::new();
+        let mut cmds = CommandRegistry::new();
+
+        assert!(mgr.plugin_apps().is_empty());
+        mgr.init_all(&mut sdi, &mut vfs, &mut cmds).unwrap();
+
+        assert_eq!(mgr.plugin_apps().len(), 1);
+        assert_eq!(mgr.plugin_apps()[0].title, "Plugin App");
+    }
+
+    #[test]
+    fn create_plugin_app_found() {
+        let mut mgr = PluginManager::new();
+        mgr.register_static(Box::new(AppPlugin));
+
+        let mut sdi = SdiRegistry::new();
+        let mut vfs = MemoryVfs::new();
+        let mut cmds = CommandRegistry::new();
+        mgr.init_all(&mut sdi, &mut vfs, &mut cmds).unwrap();
+
+        let app = mgr.create_plugin_app("Plugin App", &vfs);
+        assert!(app.is_some());
+        assert_eq!(app.unwrap().title(), "Plugin App");
+    }
+
+    #[test]
+    fn create_plugin_app_not_found() {
+        let mgr = PluginManager::new();
+        let vfs = MemoryVfs::new();
+        assert!(mgr.create_plugin_app("Nonexistent", &vfs).is_none());
+    }
+
+    #[test]
+    fn plugin_apps_empty_by_default() {
+        let mgr = PluginManager::new();
+        assert!(mgr.plugin_apps().is_empty());
     }
 
     // -- Phase 3.6: Plugin adversarial & edge-case tests --

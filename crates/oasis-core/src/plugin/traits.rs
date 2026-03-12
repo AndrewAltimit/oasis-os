@@ -9,6 +9,11 @@ use crate::sdi::SdiRegistry;
 use crate::terminal::CommandRegistry;
 use crate::vfs::Vfs;
 
+use super::app_bridge::PluginAppRegistration;
+
+/// Current plugin API version. Incremented on breaking changes only.
+pub const PLUGIN_API_VERSION: u32 = 1;
+
 /// Metadata about a plugin.
 #[derive(Debug, Clone)]
 pub struct PluginInfo {
@@ -20,16 +25,22 @@ pub struct PluginInfo {
     pub author: String,
     /// One-line description.
     pub description: String,
+    /// Plugin API version this plugin was compiled against.
+    /// Must match [`PLUGIN_API_VERSION`] at load time.
+    pub api_version: u32,
 }
 
 impl PluginInfo {
     /// Create a new `PluginInfo` with the given name and version.
+    ///
+    /// `api_version` defaults to [`PLUGIN_API_VERSION`].
     pub fn new(name: &str, version: &str) -> Self {
         Self {
             name: name.to_string(),
             version: version.to_string(),
             author: String::new(),
             description: String::new(),
+            api_version: PLUGIN_API_VERSION,
         }
     }
 
@@ -44,12 +55,18 @@ impl PluginInfo {
         self.description = description.to_string();
         self
     }
+
+    /// Builder method to override the API version.
+    pub fn with_api_version(mut self, api_version: u32) -> Self {
+        self.api_version = api_version;
+        self
+    }
 }
 
 /// Host-side context passed to plugins during lifecycle calls.
 ///
 /// Provides access to OS services that plugins can use to register
-/// commands, create UI elements, and read/write files.
+/// commands, create UI elements, read/write files, and register apps.
 pub struct PluginHost<'a> {
     /// SDI scene graph for creating/modifying UI elements.
     pub sdi: &'a mut SdiRegistry,
@@ -57,6 +74,19 @@ pub struct PluginHost<'a> {
     pub vfs: &'a mut dyn Vfs,
     /// Command registry for registering new commands.
     pub commands: &'a mut CommandRegistry,
+    /// Accumulator for plugin app registrations. Processed by the
+    /// manager after `init()` returns.
+    pub(crate) app_registrations: &'a mut Vec<PluginAppRegistration>,
+}
+
+impl<'a> PluginHost<'a> {
+    /// Register this plugin as a launchable app on the dashboard.
+    ///
+    /// The registration is stored and processed after `init()` returns.
+    /// The app will appear on the dashboard alongside built-in apps.
+    pub fn register_app(&mut self, registration: PluginAppRegistration) {
+        self.app_registrations.push(registration);
+    }
 }
 
 /// The plugin interface that all plugins must implement.
@@ -105,6 +135,7 @@ mod tests {
         assert_eq!(info.version, "1.0.0");
         assert_eq!(info.author, "Test Author");
         assert_eq!(info.description, "A test plugin");
+        assert_eq!(info.api_version, PLUGIN_API_VERSION);
     }
 
     #[test]
@@ -113,5 +144,12 @@ mod tests {
         assert_eq!(info.name, "minimal");
         assert!(info.author.is_empty());
         assert!(info.description.is_empty());
+        assert_eq!(info.api_version, PLUGIN_API_VERSION);
+    }
+
+    #[test]
+    fn plugin_info_custom_api_version() {
+        let info = PluginInfo::new("test", "1.0").with_api_version(99);
+        assert_eq!(info.api_version, 99);
     }
 }

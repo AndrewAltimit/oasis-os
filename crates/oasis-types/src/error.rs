@@ -146,6 +146,18 @@ pub enum PluginError {
     #[error("{phase} explosion")]
     LifecycleExplosion { phase: String },
 
+    /// The plugin's API version does not match the host.
+    #[error("plugin '{plugin}' API version mismatch: expected {expected}, found {found}")]
+    ApiMismatch {
+        plugin: String,
+        expected: u32,
+        found: u32,
+    },
+
+    /// A plugin app with this title is already registered.
+    #[error("plugin app already registered: {title}")]
+    AppAlreadyRegistered { title: String },
+
     /// Catch-all for plugin errors without a dedicated variant.
     #[error("{0}")]
     Other(String),
