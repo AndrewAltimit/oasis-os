@@ -158,6 +158,7 @@ pub fn handle_desktop_input(
                                                 vfs,
                                                 &state.net.tls_provider,
                                                 state.skin.features.window_manager,
+                                                &state.plugin_manager,
                                             );
                                             launch::apply_launch(result, &mut state.mode);
                                         }
@@ -424,6 +425,7 @@ pub fn handle_default_input(
                     vfs,
                     &state.net.tls_provider,
                     state.skin.features.window_manager,
+                    &state.plugin_manager,
                 );
                 launch::apply_launch(result, &mut state.mode);
                 state.active_transition = Some(launch::make_transition(
@@ -477,6 +479,7 @@ pub fn handle_default_input(
                                         vfs,
                                         &state.net.tls_provider,
                                         state.skin.features.window_manager,
+                                        &state.plugin_manager,
                                     );
                                     launch::apply_launch(result, &mut state.mode);
                                     state.active_transition = Some(launch::make_transition(
@@ -666,6 +669,7 @@ fn handle_start_menu_action(
                     vfs,
                     &state.net.tls_provider,
                     state.skin.features.window_manager,
+                    &state.plugin_manager,
                 );
                 launch::apply_launch(result, &mut state.mode);
                 state.active_transition = Some(launch::make_transition(
@@ -788,6 +792,7 @@ mod tests {
                 fullscreen_app: None,
             },
             osk: None,
+            plugin_manager: oasis_core::plugin::PluginManager::new(),
             wm: WindowManager::new(480, 272),
             mode: Mode::Dashboard,
             bg_color: oasis_core::backend::Color::rgb(0, 0, 0),

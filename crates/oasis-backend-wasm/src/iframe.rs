@@ -104,6 +104,34 @@ impl IframeOverlay {
         }
     }
 
+    /// Navigate the iframe to a new URL without changing its position or size.
+    ///
+    /// Only updates `src` if the URL differs from the current one.
+    /// The iframe must already be visible (otherwise use `show()`).
+    pub fn navigate(&mut self, url: &str) {
+        let needs_navigate = self.current_src.as_ref().is_none_or(|s| s != url);
+        if needs_navigate {
+            self.iframe.set_src(url);
+            self.current_src = Some(url.to_string());
+        }
+    }
+
+    /// Enable YouTube-specific sandbox permissions.
+    ///
+    /// Adds `allow-presentation` (for fullscreen player) and
+    /// `allow-autoplay` (for autoplay parameter) alongside the base
+    /// permissions. Safe to call before or after `show()`.
+    pub fn set_youtube_mode(&self) {
+        let _ = self.iframe.set_attribute(
+            "sandbox",
+            "allow-scripts allow-same-origin allow-forms allow-popups \
+             allow-presentation allow-popups-to-escape-sandbox",
+        );
+        let _ = self
+            .iframe
+            .set_attribute("allow", "autoplay; encrypted-media");
+    }
+
     /// Whether the iframe is currently visible.
     pub fn is_visible(&self) -> bool {
         self.visible

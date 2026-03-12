@@ -7,6 +7,10 @@ license.workspace = true
 repository.workspace = true
 authors.workspace = true
 
+[features]
+default = ["youtube"]
+youtube = ["oasis-core/wasm-youtube"]
+
 [lib]
 crate-type = ["cdylib", "rlib"]
 

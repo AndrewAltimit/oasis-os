@@ -16,6 +16,7 @@ documentation = "https://docs.rs/oasis-core"
 default = ["tls-rustls"]
 tls-rustls = ["oasis-net/tls-rustls"]
 javascript = ["oasis-browser/javascript"]
+wasm-youtube = []
 test-data = []
 
 [dependencies]

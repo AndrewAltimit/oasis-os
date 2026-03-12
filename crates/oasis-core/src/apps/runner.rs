@@ -72,6 +72,8 @@ impl AppRunner {
                 vfs,
                 &ActiveTheme::default(),
             )),
+            #[cfg(feature = "wasm-youtube")]
+            "Video Embed" => Box::new(super::video_embed::VideoEmbedApp::new(&path)),
             // All other apps get a generic placeholder.
             _ => Box::new(super::simple_app::SimpleApp::new(
                 &title,
@@ -84,6 +86,24 @@ impl AppRunner {
             )),
         };
 
+        Self {
+            title: delegate.title().to_string(),
+            path: delegate.path().to_string(),
+            lines: delegate.lines().to_vec(),
+            scroll: 0,
+            browse_dir: delegate.browse_dir().map(String::from),
+            viewing_file: None,
+            cursor: 0,
+            pending_vfs_request: None,
+            delegate: Some(delegate),
+        }
+    }
+
+    /// Create an `AppRunner` from a pre-built `App` delegate.
+    ///
+    /// Used by plugin apps that provide their own `App` implementation
+    /// via the plugin-to-app bridge.
+    pub fn from_delegate(delegate: Box<dyn super::app_trait::App>) -> Self {
         Self {
             title: delegate.title().to_string(),
             path: delegate.path().to_string(),
@@ -330,6 +350,21 @@ mod tests {
         let vfs = setup_vfs();
         let runner = AppRunner::launch(&make_app("Unknown App"), &vfs);
         assert!(runner.lines.iter().any(|l| l.contains("No content")));
+    }
+
+    #[test]
+    fn from_delegate_creates_runner() {
+        let delegate: Box<dyn crate::apps::app_trait::App> =
+            Box::new(crate::apps::simple_app::SimpleApp::new(
+                "Plugin Test",
+                "/plugins/test",
+                vec!["Hello from plugin".to_string()],
+            ));
+        let runner = AppRunner::from_delegate(delegate);
+        assert_eq!(runner.title, "Plugin Test");
+        assert_eq!(runner.path, "/plugins/test");
+        assert!(runner.lines.iter().any(|l| l.contains("Hello from plugin")));
+        assert!(runner.delegate.is_some());
     }
 
     #[test]

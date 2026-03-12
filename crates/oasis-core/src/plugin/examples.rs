@@ -7,6 +7,7 @@
 use crate::error::{OasisError, Result};
 use crate::terminal::{Command, CommandOutput, Environment};
 
+use super::app_bridge::{AppCategory, PluginAppRegistration};
 use super::traits::{Plugin, PluginHost, PluginInfo};
 
 // ---------------------------------------------------------------------------
@@ -188,6 +189,29 @@ impl Plugin for NotepadPlugin {
             host.vfs.mkdir(NOTEPAD_DIR)?;
         }
         host.commands.register(Box::new(NoteCmd));
+
+        // Register as a launchable dashboard app.
+        host.register_app(
+            PluginAppRegistration::new("Notepad", AppCategory::Utility, |path, _vfs| {
+                Box::new(crate::apps::simple_app::SimpleApp::new(
+                    "Notepad",
+                    path,
+                    vec![
+                        "Notepad (Plugin App)".to_string(),
+                        String::new(),
+                        "Use 'note write <name> <text>' to create notes.".to_string(),
+                        "Use 'note read <name>' to read them.".to_string(),
+                        "Use 'note list' to see all notes.".to_string(),
+                    ],
+                ))
+            })
+            .with_color(oasis_types::backend::Color {
+                r: 255,
+                g: 200,
+                b: 50,
+                a: 255,
+            }),
+        );
         Ok(())
     }
 
@@ -199,6 +223,16 @@ impl Plugin for NotepadPlugin {
         // Notes persist in VFS -- don't delete them on shutdown.
         Ok(())
     }
+}
+
+/// Validate and sanitize a note name to prevent path traversal.
+fn sanitize_note_name(name: &str) -> Result<&str> {
+    if name.contains('/') || name.contains('\\') || name == "." || name == ".." {
+        return Err(OasisError::Command(
+            "note name must not contain path separators".into(),
+        ));
+    }
+    Ok(name)
 }
 
 struct NoteCmd;
@@ -239,6 +273,7 @@ impl Command for NoteCmd {
                 if name.is_empty() {
                     return Err(OasisError::Command("usage: note read <name>".into()));
                 }
+                let name = sanitize_note_name(name)?;
                 let path = format!("{NOTEPAD_DIR}/{name}");
                 let data = env.vfs.read(&path)?;
                 let text = String::from_utf8_lossy(&data).into_owned();
@@ -251,6 +286,7 @@ impl Command for NoteCmd {
                         "usage: note write <name> <text...>".into(),
                     ));
                 }
+                let name = sanitize_note_name(name)?;
                 let text = args[2..].join(" ");
                 let path = format!("{NOTEPAD_DIR}/{name}");
                 env.vfs.write(&path, text.as_bytes())?;
@@ -298,7 +334,7 @@ mod tests {
     #[test]
     fn hello_plugin_registers_command() {
         let (mut mgr, mut sdi, mut vfs, mut cmds) = setup();
-        mgr.init_all(&mut sdi, &mut vfs, &mut cmds).unwrap();
+        mgr.init_all(&mut sdi, &mut vfs, &mut cmds);
 
         let mut env = Environment {
             cwd: "/".to_string(),
@@ -321,7 +357,7 @@ mod tests {
     #[test]
     fn hello_plugin_with_name() {
         let (mut mgr, mut sdi, mut vfs, mut cmds) = setup();
-        mgr.init_all(&mut sdi, &mut vfs, &mut cmds).unwrap();
+        mgr.init_all(&mut sdi, &mut vfs, &mut cmds);
 
         let mut env = Environment {
             cwd: "/".to_string(),
@@ -344,7 +380,7 @@ mod tests {
     #[test]
     fn clock_widget_creates_sdi() {
         let (mut mgr, mut sdi, mut vfs, mut cmds) = setup();
-        mgr.init_all(&mut sdi, &mut vfs, &mut cmds).unwrap();
+        mgr.init_all(&mut sdi, &mut vfs, &mut cmds);
 
         assert!(sdi.contains("plugin_clock"));
         let obj = sdi.get("plugin_clock").unwrap();
@@ -355,8 +391,8 @@ mod tests {
     #[test]
     fn clock_widget_update() {
         let (mut mgr, mut sdi, mut vfs, mut cmds) = setup();
-        mgr.init_all(&mut sdi, &mut vfs, &mut cmds).unwrap();
-        mgr.update_all(&mut sdi, &mut vfs, &mut cmds).unwrap();
+        mgr.init_all(&mut sdi, &mut vfs, &mut cmds);
+        mgr.update_all(&mut sdi, &mut vfs, &mut cmds);
         // Widget should still exist after update.
         assert!(sdi.contains("plugin_clock"));
     }
@@ -364,17 +400,17 @@ mod tests {
     #[test]
     fn clock_widget_cleanup_on_shutdown() {
         let (mut mgr, mut sdi, mut vfs, mut cmds) = setup();
-        mgr.init_all(&mut sdi, &mut vfs, &mut cmds).unwrap();
+        mgr.init_all(&mut sdi, &mut vfs, &mut cmds);
         assert!(sdi.contains("plugin_clock"));
 
-        mgr.shutdown_all(&mut sdi, &mut vfs, &mut cmds).unwrap();
+        mgr.shutdown_all(&mut sdi, &mut vfs, &mut cmds);
         assert!(!sdi.contains("plugin_clock"));
     }
 
     #[test]
     fn pclock_command() {
         let (mut mgr, mut sdi, mut vfs, mut cmds) = setup();
-        mgr.init_all(&mut sdi, &mut vfs, &mut cmds).unwrap();
+        mgr.init_all(&mut sdi, &mut vfs, &mut cmds);
 
         let mut env = Environment {
             cwd: "/".to_string(),
@@ -397,14 +433,14 @@ mod tests {
     #[test]
     fn notepad_creates_directory() {
         let (mut mgr, mut sdi, mut vfs, mut cmds) = setup();
-        mgr.init_all(&mut sdi, &mut vfs, &mut cmds).unwrap();
+        mgr.init_all(&mut sdi, &mut vfs, &mut cmds);
         assert!(vfs.exists("/var/notepad"));
     }
 
     #[test]
     fn notepad_write_and_read() {
         let (mut mgr, mut sdi, mut vfs, mut cmds) = setup();
-        mgr.init_all(&mut sdi, &mut vfs, &mut cmds).unwrap();
+        mgr.init_all(&mut sdi, &mut vfs, &mut cmds);
 
         let mut env = Environment {
             cwd: "/".to_string(),
@@ -437,7 +473,7 @@ mod tests {
     #[test]
     fn notepad_list_notes() {
         let (mut mgr, mut sdi, mut vfs, mut cmds) = setup();
-        mgr.init_all(&mut sdi, &mut vfs, &mut cmds).unwrap();
+        mgr.init_all(&mut sdi, &mut vfs, &mut cmds);
 
         let mut env = Environment {
             cwd: "/".to_string(),
@@ -469,7 +505,7 @@ mod tests {
     #[test]
     fn notepad_read_missing() {
         let (mut mgr, mut sdi, mut vfs, mut cmds) = setup();
-        mgr.init_all(&mut sdi, &mut vfs, &mut cmds).unwrap();
+        mgr.init_all(&mut sdi, &mut vfs, &mut cmds);
 
         let mut env = Environment {
             cwd: "/".to_string(),
@@ -489,7 +525,7 @@ mod tests {
     #[test]
     fn notepad_notes_persist_after_shutdown() {
         let (mut mgr, mut sdi, mut vfs, mut cmds) = setup();
-        mgr.init_all(&mut sdi, &mut vfs, &mut cmds).unwrap();
+        mgr.init_all(&mut sdi, &mut vfs, &mut cmds);
 
         // Write a note.
         let mut env = Environment {
@@ -507,9 +543,28 @@ mod tests {
         cmds.execute("note write test Hello", &mut env).unwrap();
 
         // Shutdown plugins.
-        mgr.shutdown_all(&mut sdi, &mut vfs, &mut cmds).unwrap();
+        mgr.shutdown_all(&mut sdi, &mut vfs, &mut cmds);
 
         // Note file should still exist in VFS.
         assert!(vfs.exists("/var/notepad/test"));
+    }
+
+    #[test]
+    fn notepad_registers_app() {
+        let (mut mgr, mut sdi, mut vfs, mut cmds) = setup();
+        mgr.init_all(&mut sdi, &mut vfs, &mut cmds);
+
+        // Notepad should have registered a dashboard app.
+        let apps = mgr.plugin_apps();
+        let notepad_app = apps.iter().find(|a| a.title == "Notepad");
+        assert!(
+            notepad_app.is_some(),
+            "Notepad plugin should register a dashboard app"
+        );
+
+        // The app factory should produce a working app.
+        let app = mgr.create_plugin_app("Notepad", &vfs);
+        assert!(app.is_some());
+        assert_eq!(app.unwrap().title(), "Notepad");
     }
 }

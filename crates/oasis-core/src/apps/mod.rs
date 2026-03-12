@@ -14,6 +14,8 @@ pub mod layout_calc;
 mod runner;
 mod runner_sdi;
 pub mod simple_app;
+#[cfg(feature = "wasm-youtube")]
+pub mod video_embed;
 
 pub use app_trait::{App, AppAction, ContentState};
 pub use runner::AppRunner;

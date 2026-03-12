@@ -33,6 +33,7 @@ use oasis_core::dashboard::{DashboardConfig, DashboardState, discover_apps};
 use oasis_core::net::{RustlsTlsProvider, StdNetworkBackend};
 use oasis_core::platform::DesktopPlatform;
 use oasis_core::platform::{PowerService, TimeService};
+use oasis_core::plugin::{PluginManager, register_builtin_plugins};
 use oasis_core::sdi::SdiRegistry;
 use oasis_core::skin::resolve_skin;
 use oasis_core::startmenu::StartMenuState;
@@ -110,18 +111,6 @@ fn main() -> Result<()> {
     oasis_core::terminal::populate_motd(&mut vfs);
     oasis_core::terminal::populate_profile(&mut vfs);
 
-    // Discover apps.
-    let apps = discover_apps(&vfs, "/apps", Some("OASISOS"))?;
-    log::info!("Discovered {} apps", apps.len());
-
-    // Set up dashboard.
-    let dash_config = DashboardConfig::from_features(&skin.features, &active_theme);
-    let dashboard = DashboardState::new(dash_config, apps);
-
-    // Set up PSIX-style bars.
-    let mut bottom_bar = BottomBar::new();
-    bottom_bar.total_pages = dashboard.page_count();
-
     // Set up command interpreter.
     let mut cmd_reg = CommandRegistry::new();
     register_builtins(&mut cmd_reg);
@@ -133,6 +122,35 @@ fn main() -> Result<()> {
     register_agent_commands(&mut cmd_reg);
     register_tv_commands(&mut cmd_reg);
     oasis_core::terminal::register_browser_commands(&mut cmd_reg);
+
+    // Initialize plugin system (uses a temporary SDI for init; the real
+    // scene graph is created after AppState assembly).
+    let mut plugin_manager = PluginManager::new();
+    register_builtin_plugins(&mut plugin_manager);
+    {
+        let mut plugin_sdi = SdiRegistry::new();
+        plugin_manager.init_all(&mut plugin_sdi, &mut vfs, &mut cmd_reg);
+    }
+    log::info!(
+        "Plugin system: {} plugins active, {} plugin apps",
+        plugin_manager.active_count(),
+        plugin_manager.plugin_apps().len(),
+    );
+
+    // Discover apps and merge plugin-registered apps.
+    let mut apps = discover_apps(&vfs, "/apps", Some("OASISOS"))?;
+    for reg in plugin_manager.plugin_apps() {
+        apps.push(reg.to_app_entry());
+    }
+    log::info!("Dashboard: {} apps (including plugin apps)", apps.len());
+
+    // Set up dashboard.
+    let dash_config = DashboardConfig::from_features(&skin.features, &active_theme);
+    let dashboard = DashboardState::new(dash_config, apps);
+
+    // Set up PSIX-style bars.
+    let mut bottom_bar = BottomBar::new();
+    bottom_bar.total_pages = dashboard.page_count();
 
     // Window manager state (Desktop mode).
     let wm = WindowManager::with_theme(
@@ -200,6 +218,7 @@ fn main() -> Result<()> {
             fullscreen_app: None,
         },
         osk: None,
+        plugin_manager,
         wm,
         mode: Mode::Dashboard,
         bg_color: clear_color,
@@ -294,6 +313,7 @@ fn main() -> Result<()> {
                 &vfs,
                 &state.net.tls_provider,
                 state.skin.features.window_manager,
+                &state.plugin_manager,
             );
             launch::apply_launch(result, &mut state.mode);
             log::info!("Auto-launched app: {}", app.title);

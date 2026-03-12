@@ -16,6 +16,7 @@ use oasis_core::dashboard::DashboardState;
 use oasis_core::net::{RemoteClient, RemoteListener, RustlsTlsProvider, StdNetworkBackend};
 use oasis_core::osk::OskState;
 use oasis_core::platform::DesktopPlatform;
+use oasis_core::plugin::PluginManager;
 use oasis_core::skin::Skin;
 use oasis_core::startmenu::StartMenuState;
 use oasis_core::statusbar::StatusBar;
@@ -98,6 +99,7 @@ pub struct AppState {
     pub net: NetworkLayer,
     pub content: ContentLayer,
     pub osk: Option<OskState>,
+    pub plugin_manager: PluginManager,
     pub wm: WindowManager,
     pub mode: Mode,
     pub bg_color: Color,
