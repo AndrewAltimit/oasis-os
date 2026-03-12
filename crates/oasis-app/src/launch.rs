@@ -2,6 +2,7 @@ use oasis_core::apps::AppRunner;
 use oasis_core::browser::{BrowserConfig, BrowserWidget};
 use oasis_core::dashboard::AppEntry;
 use oasis_core::net::RustlsTlsProvider;
+use oasis_core::plugin::PluginManager;
 use oasis_core::sdi::SdiRegistry;
 use oasis_core::transition;
 use oasis_core::vfs::MemoryVfs;
@@ -32,6 +33,7 @@ pub fn launch_app_window(
     vfs: &MemoryVfs,
     tls_provider: &RustlsTlsProvider,
     window_manager: bool,
+    plugin_manager: &PluginManager,
 ) -> LaunchResult {
     // Terminal: fullscreen mode for non-WM skins; windowed for WM skins.
     if app.title == "Terminal" && !window_manager {
@@ -81,7 +83,13 @@ pub fn launch_app_window(
             modal: false,
         };
         let _ = wm.create_window(&wc, sdi);
-        open_runners.push((win_id, AppRunner::launch(app, vfs)));
+        // Check plugin registry before hardcoded app match.
+        let runner = if let Some(delegate) = plugin_manager.create_plugin_app(&app.title, vfs) {
+            AppRunner::from_delegate(delegate)
+        } else {
+            AppRunner::launch(app, vfs)
+        };
+        open_runners.push((win_id, runner));
     }
     LaunchResult::Desktop
 }

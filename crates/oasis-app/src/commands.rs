@@ -491,6 +491,7 @@ mod tests {
                 fullscreen_app: None,
             },
             osk: None,
+            plugin_manager: oasis_core::plugin::PluginManager::new(),
             wm: WindowManager::new(480, 272),
             mode: crate::app_state::Mode::Dashboard,
             bg_color: Color::rgb(0, 0, 0),

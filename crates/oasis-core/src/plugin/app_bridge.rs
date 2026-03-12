@@ -266,7 +266,7 @@ mod tests {
         assert_eq!(regs.len(), 3);
 
         let vfs = MemoryVfs::new();
-        let titles: Vec<&str> = regs
+        let _titles: Vec<&str> = regs
             .iter()
             .map(|r| r.create_app(&vfs).title().to_string())
             .collect::<Vec<_>>()
