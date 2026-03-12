@@ -392,7 +392,7 @@ mod tests {
     fn clock_widget_update() {
         let (mut mgr, mut sdi, mut vfs, mut cmds) = setup();
         mgr.init_all(&mut sdi, &mut vfs, &mut cmds);
-        mgr.update_all(&mut sdi, &mut vfs, &mut cmds).unwrap();
+        mgr.update_all(&mut sdi, &mut vfs, &mut cmds);
         // Widget should still exist after update.
         assert!(sdi.contains("plugin_clock"));
     }
@@ -403,7 +403,7 @@ mod tests {
         mgr.init_all(&mut sdi, &mut vfs, &mut cmds);
         assert!(sdi.contains("plugin_clock"));
 
-        mgr.shutdown_all(&mut sdi, &mut vfs, &mut cmds).unwrap();
+        mgr.shutdown_all(&mut sdi, &mut vfs, &mut cmds);
         assert!(!sdi.contains("plugin_clock"));
     }
 
@@ -543,7 +543,7 @@ mod tests {
         cmds.execute("note write test Hello", &mut env).unwrap();
 
         // Shutdown plugins.
-        mgr.shutdown_all(&mut sdi, &mut vfs, &mut cmds).unwrap();
+        mgr.shutdown_all(&mut sdi, &mut vfs, &mut cmds);
 
         // Note file should still exist in VFS.
         assert!(vfs.exists("/var/notepad/test"));

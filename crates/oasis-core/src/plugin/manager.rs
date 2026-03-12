@@ -194,66 +194,86 @@ impl PluginManager {
     }
 
     /// Call `update()` on all active plugins.
+    ///
+    /// Errors from individual plugins are logged and skipped so that one
+    /// bad plugin does not prevent the rest from updating.
     pub fn update_all(
         &mut self,
         sdi: &mut SdiRegistry,
         vfs: &mut dyn Vfs,
         commands: &mut CommandRegistry,
-    ) -> Result<()> {
-        let mut pending_apps = Vec::new();
-        let mut host = PluginHost {
-            sdi,
-            vfs,
-            commands,
-            audio: None,
-            network: None,
-            backend: None,
-            app_registrations: &mut pending_apps,
-        };
-        for loaded in &mut self.plugins {
-            if loaded.state == PluginState::Active {
-                loaded.plugin.update(&mut host)?;
+    ) {
+        for i in 0..self.plugins.len() {
+            if self.plugins[i].state == PluginState::Active {
+                let name = self.plugins[i].plugin.info().name.clone();
+                let mut pending_apps = Vec::new();
+                let update_result = {
+                    let mut host = PluginHost {
+                        sdi,
+                        vfs,
+                        commands,
+                        audio: None,
+                        network: None,
+                        backend: None,
+                        app_registrations: &mut pending_apps,
+                    };
+                    self.plugins[i].plugin.update(&mut host)
+                };
+                if let Err(e) = update_result {
+                    log::error!("Failed to update plugin '{name}': {e}");
+                    continue;
+                }
+                // Plugins can register apps during update too (rare but supported).
+                // Deduplicate by title to prevent accumulation across frames.
+                for app in pending_apps {
+                    if self.plugin_apps.iter().any(|a| a.title == app.title) {
+                        log::warn!(
+                            "Plugin app '{}' already registered, ignoring duplicate",
+                            app.title,
+                        );
+                    } else {
+                        self.plugins[i]
+                            .registered_app_titles
+                            .push(app.title.clone());
+                        self.plugin_apps.push(app);
+                    }
+                }
             }
         }
-        // Plugins can register apps during update too (rare but supported).
-        // Deduplicate by title to prevent accumulation across frames.
-        for app in pending_apps {
-            if self.plugin_apps.iter().any(|a| a.title == app.title) {
-                log::warn!(
-                    "Plugin app '{}' already registered, ignoring duplicate",
-                    app.title,
-                );
-            } else {
-                self.plugin_apps.push(app);
-            }
-        }
-        Ok(())
     }
 
     /// Shutdown all active plugins.
+    ///
+    /// Errors from individual plugins are logged and skipped so that one
+    /// bad plugin does not prevent the rest from shutting down.
     pub fn shutdown_all(
         &mut self,
         sdi: &mut SdiRegistry,
         vfs: &mut dyn Vfs,
         commands: &mut CommandRegistry,
-    ) -> Result<()> {
-        let mut pending_apps = Vec::new();
-        let mut host = PluginHost {
-            sdi,
-            vfs,
-            commands,
-            audio: None,
-            network: None,
-            backend: None,
-            app_registrations: &mut pending_apps,
-        };
-        for loaded in &mut self.plugins {
-            if loaded.state == PluginState::Active {
-                loaded.plugin.shutdown(&mut host)?;
-                loaded.state = PluginState::Stopped;
+    ) {
+        for i in 0..self.plugins.len() {
+            if self.plugins[i].state == PluginState::Active {
+                let name = self.plugins[i].plugin.info().name.clone();
+                let mut pending_apps = Vec::new();
+                let shutdown_result = {
+                    let mut host = PluginHost {
+                        sdi,
+                        vfs,
+                        commands,
+                        audio: None,
+                        network: None,
+                        backend: None,
+                        app_registrations: &mut pending_apps,
+                    };
+                    self.plugins[i].plugin.shutdown(&mut host)
+                };
+                if let Err(e) = shutdown_result {
+                    log::error!("Failed to shutdown plugin '{name}': {e}");
+                }
+                self.plugins[i].state = PluginState::Stopped;
             }
         }
-        Ok(())
     }
 
     /// Shutdown and remove a plugin by name.
@@ -468,8 +488,8 @@ mod tests {
         let mut cmds = CommandRegistry::new();
         mgr.init_all(&mut sdi, &mut vfs, &mut cmds);
 
-        mgr.update_all(&mut sdi, &mut vfs, &mut cmds).unwrap();
-        mgr.update_all(&mut sdi, &mut vfs, &mut cmds).unwrap();
+        mgr.update_all(&mut sdi, &mut vfs, &mut cmds);
+        mgr.update_all(&mut sdi, &mut vfs, &mut cmds);
 
         let plugins = mgr.list();
         assert_eq!(plugins.len(), 1);
@@ -485,7 +505,7 @@ mod tests {
         let mut vfs = MemoryVfs::new();
         let mut cmds = CommandRegistry::new();
         mgr.init_all(&mut sdi, &mut vfs, &mut cmds);
-        mgr.shutdown_all(&mut sdi, &mut vfs, &mut cmds).unwrap();
+        mgr.shutdown_all(&mut sdi, &mut vfs, &mut cmds);
 
         let plugins = mgr.list();
         assert_eq!(plugins[0].1, PluginState::Stopped);
@@ -548,7 +568,7 @@ mod tests {
         mgr.init_all(&mut sdi, &mut vfs, &mut cmds);
         assert!(sdi.contains("plugin_widget"));
 
-        mgr.shutdown_all(&mut sdi, &mut vfs, &mut cmds).unwrap();
+        mgr.shutdown_all(&mut sdi, &mut vfs, &mut cmds);
         assert!(!sdi.contains("plugin_widget"));
     }
 
@@ -647,7 +667,7 @@ auto_load = true
         assert_eq!(mgr.active_count(), 2);
         assert!(sdi.contains("plugin_widget"));
 
-        mgr.update_all(&mut sdi, &mut vfs, &mut cmds).unwrap();
+        mgr.update_all(&mut sdi, &mut vfs, &mut cmds);
 
         mgr.unload("sdi-plugin", &mut sdi, &mut vfs, &mut cmds)
             .unwrap();
@@ -655,7 +675,7 @@ auto_load = true
         assert!(!sdi.contains("plugin_widget"));
         assert_eq!(mgr.active_count(), 1);
 
-        mgr.shutdown_all(&mut sdi, &mut vfs, &mut cmds).unwrap();
+        mgr.shutdown_all(&mut sdi, &mut vfs, &mut cmds);
         assert_eq!(mgr.active_count(), 0);
     }
 
@@ -928,7 +948,7 @@ auto_load = true
         let mut cmds = CommandRegistry::new();
 
         mgr.init_all(&mut sdi, &mut vfs, &mut cmds);
-        mgr.shutdown_all(&mut sdi, &mut vfs, &mut cmds).unwrap();
+        mgr.shutdown_all(&mut sdi, &mut vfs, &mut cmds);
 
         // Plugin is now Stopped -- re-init should fail.
         let result = mgr.init_plugin("test-plugin", &mut sdi, &mut vfs, &mut cmds);
@@ -937,38 +957,38 @@ auto_load = true
     }
 
     #[test]
-    fn update_all_propagates_error() {
+    fn update_all_skips_failed_plugin() {
         let mut mgr = PluginManager::new();
         mgr.register_static(Box::new(FailUpdatePlugin::new()));
+        mgr.register_static(Box::new(TestPlugin::new()));
 
         let mut sdi = SdiRegistry::new();
         let mut vfs = MemoryVfs::new();
         let mut cmds = CommandRegistry::new();
 
         mgr.init_all(&mut sdi, &mut vfs, &mut cmds);
-        let result = mgr.update_all(&mut sdi, &mut vfs, &mut cmds);
-        assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("update explosion"),);
+        assert_eq!(mgr.active_count(), 2);
+        // update_all logs the error for FailUpdatePlugin but
+        // continues to update TestPlugin without aborting.
+        mgr.update_all(&mut sdi, &mut vfs, &mut cmds);
     }
 
     #[test]
-    fn shutdown_all_propagates_error() {
+    fn shutdown_all_skips_failed_plugin() {
         let mut mgr = PluginManager::new();
         mgr.register_static(Box::new(FailShutdownPlugin));
+        mgr.register_static(Box::new(TestPlugin::new()));
 
         let mut sdi = SdiRegistry::new();
         let mut vfs = MemoryVfs::new();
         let mut cmds = CommandRegistry::new();
 
         mgr.init_all(&mut sdi, &mut vfs, &mut cmds);
-        let result = mgr.shutdown_all(&mut sdi, &mut vfs, &mut cmds);
-        assert!(result.is_err());
-        assert!(
-            result
-                .unwrap_err()
-                .to_string()
-                .contains("shutdown explosion"),
-        );
+        assert_eq!(mgr.active_count(), 2);
+        // shutdown_all logs the error for FailShutdownPlugin but
+        // continues to shut down TestPlugin. Both end up Stopped.
+        mgr.shutdown_all(&mut sdi, &mut vfs, &mut cmds);
+        assert_eq!(mgr.active_count(), 0);
     }
 
     #[test]
@@ -1036,10 +1056,9 @@ auto_load = true
         let mut vfs = MemoryVfs::new();
         let mut cmds = CommandRegistry::new();
 
-        // update_all should succeed because FailUpdatePlugin
+        // update_all is a no-op because FailUpdatePlugin
         // is in Registered state, not Active.
-        let result = mgr.update_all(&mut sdi, &mut vfs, &mut cmds);
-        assert!(result.is_ok());
+        mgr.update_all(&mut sdi, &mut vfs, &mut cmds);
     }
 
     #[test]
@@ -1053,8 +1072,7 @@ auto_load = true
 
         // Plugin is Registered, not Active -- shutdown is
         // a no-op.
-        let result = mgr.shutdown_all(&mut sdi, &mut vfs, &mut cmds);
-        assert!(result.is_ok());
+        mgr.shutdown_all(&mut sdi, &mut vfs, &mut cmds);
     }
 
     #[test]
@@ -1071,8 +1089,8 @@ auto_load = true
 
         // All lifecycle ops on empty manager should succeed.
         mgr.init_all(&mut sdi, &mut vfs, &mut cmds);
-        assert!(mgr.update_all(&mut sdi, &mut vfs, &mut cmds).is_ok());
-        assert!(mgr.shutdown_all(&mut sdi, &mut vfs, &mut cmds).is_ok());
+        mgr.update_all(&mut sdi, &mut vfs, &mut cmds);
+        mgr.shutdown_all(&mut sdi, &mut vfs, &mut cmds);
     }
 
     #[test]
@@ -1091,10 +1109,10 @@ auto_load = true
         let data = vfs.read("/plugin_data.txt").unwrap();
         assert_eq!(data, b"hello vfs");
 
-        mgr.update_all(&mut sdi, &mut vfs, &mut cmds).unwrap();
+        mgr.update_all(&mut sdi, &mut vfs, &mut cmds);
 
         // Shutdown should clean up the VFS file.
-        mgr.shutdown_all(&mut sdi, &mut vfs, &mut cmds).unwrap();
+        mgr.shutdown_all(&mut sdi, &mut vfs, &mut cmds);
         assert!(!vfs.exists("/plugin_data.txt"));
     }
 

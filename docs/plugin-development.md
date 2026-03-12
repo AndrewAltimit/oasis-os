@@ -275,7 +275,7 @@ mod tests {
         let mut vfs = MemoryVfs::new();
         let mut cmds = CommandRegistry::new();
         mgr.init_all(&mut sdi, &mut vfs, &mut cmds);
-        mgr.shutdown_all(&mut sdi, &mut vfs, &mut cmds).unwrap();
+        mgr.shutdown_all(&mut sdi, &mut vfs, &mut cmds);
 
         assert!(!sdi.contains("greet_banner"));
     }
