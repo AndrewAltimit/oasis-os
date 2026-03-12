@@ -18,6 +18,8 @@ use super::traits::{PLUGIN_API_VERSION, Plugin, PluginHost, PluginInfo, PluginSt
 struct LoadedPlugin {
     plugin: Box<dyn Plugin>,
     state: PluginState,
+    /// Titles of apps registered by this plugin (for cleanup on unload).
+    registered_app_titles: Vec<String>,
 }
 
 /// Plugin manifest from a TOML file in the VFS.
@@ -83,6 +85,7 @@ impl PluginManager {
         self.plugins.push(LoadedPlugin {
             plugin,
             state: PluginState::Registered,
+            registered_app_titles: Vec::new(),
         });
     }
 
@@ -105,25 +108,29 @@ impl PluginManager {
         vfs: &mut dyn Vfs,
         commands: &mut CommandRegistry,
     ) -> Result<()> {
-        let mut pending_apps = Vec::new();
-        let mut host = PluginHost {
-            sdi,
-            vfs,
-            commands,
-            audio: None,
-            network: None,
-            backend: None,
-            app_registrations: &mut pending_apps,
-        };
-        for loaded in &mut self.plugins {
-            if loaded.state == PluginState::Registered {
-                Self::validate_api_version(&loaded.plugin.info())?;
-                loaded.plugin.init(&mut host)?;
-                loaded.state = PluginState::Active;
+        for i in 0..self.plugins.len() {
+            if self.plugins[i].state == PluginState::Registered {
+                Self::validate_api_version(&self.plugins[i].plugin.info())?;
+                let mut pending_apps = Vec::new();
+                {
+                    let mut host = PluginHost {
+                        sdi,
+                        vfs,
+                        commands,
+                        audio: None,
+                        network: None,
+                        backend: None,
+                        app_registrations: &mut pending_apps,
+                    };
+                    self.plugins[i].plugin.init(&mut host)?;
+                }
+                self.plugins[i].state = PluginState::Active;
+                self.plugins[i]
+                    .registered_app_titles
+                    .extend(pending_apps.iter().map(|a| a.title.clone()));
+                self.plugin_apps.extend(pending_apps);
             }
         }
-        // Move collected app registrations into the manager.
-        self.plugin_apps.extend(pending_apps);
         Ok(())
     }
 
@@ -135,26 +142,16 @@ impl PluginManager {
         vfs: &mut dyn Vfs,
         commands: &mut CommandRegistry,
     ) -> Result<()> {
-        let mut pending_apps = Vec::new();
-        let mut host = PluginHost {
-            sdi,
-            vfs,
-            commands,
-            audio: None,
-            network: None,
-            backend: None,
-            app_registrations: &mut pending_apps,
-        };
-        let loaded = self
+        let idx = self
             .plugins
-            .iter_mut()
-            .find(|p| p.plugin.info().name == name)
+            .iter()
+            .position(|p| p.plugin.info().name == name)
             .ok_or_else(|| OasisError::Plugin(format!("plugin not found: {name}").into()))?;
-        if loaded.state != PluginState::Registered {
+        if self.plugins[idx].state != PluginState::Registered {
             return Err(OasisError::Plugin(
                 format!(
                     "plugin '{name}' is already {}",
-                    if loaded.state == PluginState::Active {
+                    if self.plugins[idx].state == PluginState::Active {
                         "active"
                     } else {
                         "stopped"
@@ -163,10 +160,25 @@ impl PluginManager {
                 .into(),
             ));
         }
-        Self::validate_api_version(&loaded.plugin.info())?;
-        loaded.plugin.init(&mut host)?;
-        loaded.state = PluginState::Active;
+        Self::validate_api_version(&self.plugins[idx].plugin.info())?;
+        let mut pending_apps = Vec::new();
+        {
+            let mut host = PluginHost {
+                sdi,
+                vfs,
+                commands,
+                audio: None,
+                network: None,
+                backend: None,
+                app_registrations: &mut pending_apps,
+            };
+            self.plugins[idx].plugin.init(&mut host)?;
+        }
+        self.plugins[idx].state = PluginState::Active;
         // Move collected app registrations into the manager.
+        self.plugins[idx]
+            .registered_app_titles
+            .extend(pending_apps.iter().map(|a| a.title.clone()));
         self.plugin_apps.extend(pending_apps);
         Ok(())
     }
@@ -194,7 +206,12 @@ impl PluginManager {
             }
         }
         // Plugins can register apps during update too (rare but supported).
-        self.plugin_apps.extend(pending_apps);
+        // Deduplicate by title to prevent accumulation across frames.
+        for app in pending_apps {
+            if !self.plugin_apps.iter().any(|a| a.title == app.title) {
+                self.plugin_apps.push(app);
+            }
+        }
         Ok(())
     }
 
@@ -252,6 +269,9 @@ impl PluginManager {
             };
             loaded.plugin.shutdown(&mut host)?;
         }
+        // Remove apps registered by this plugin.
+        let titles = &self.plugins[idx].registered_app_titles;
+        self.plugin_apps.retain(|a| !titles.contains(&a.title));
         self.plugins.remove(idx);
         Ok(())
     }

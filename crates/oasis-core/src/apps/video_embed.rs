@@ -106,8 +106,10 @@ impl VideoEmbedApp {
             return None;
         }
 
-        // Try to extract from youtube.com/watch?v=ID
-        if let Some(pos) = trimmed.find("v=") {
+        // Try to extract from youtube.com/watch?v=ID (require YouTube domain)
+        let is_youtube =
+            trimmed.contains("youtube.com") || trimmed.contains("youtube-nocookie.com");
+        if is_youtube && let Some(pos) = trimmed.find("v=") {
             let after_v = &trimmed[pos + 2..];
             let id = after_v.split(&['&', '#', ' '][..]).next().unwrap_or("");
             if !id.is_empty() {

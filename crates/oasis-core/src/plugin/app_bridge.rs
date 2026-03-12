@@ -105,7 +105,18 @@ impl PluginAppRegistration {
     pub fn to_app_entry(&self) -> AppEntry {
         AppEntry {
             title: self.title.clone(),
-            path: format!("/plugins/{}", self.title.to_lowercase().replace(' ', "-")),
+            path: format!(
+                "/plugins/{}",
+                self.title
+                    .to_lowercase()
+                    .chars()
+                    .map(|c| if c.is_ascii_alphanumeric() || c == '-' {
+                        c
+                    } else {
+                        '-'
+                    })
+                    .collect::<String>()
+            ),
             icon_png: Vec::new(),
             color: self.color,
         }
@@ -113,7 +124,18 @@ impl PluginAppRegistration {
 
     /// Create an [`App`] instance via the factory.
     pub fn create_app(&self, vfs: &dyn Vfs) -> Box<dyn App> {
-        let path = format!("/plugins/{}", self.title.to_lowercase().replace(' ', "-"));
+        let path = format!(
+            "/plugins/{}",
+            self.title
+                .to_lowercase()
+                .chars()
+                .map(|c| if c.is_ascii_alphanumeric() || c == '-' {
+                    c
+                } else {
+                    '-'
+                })
+                .collect::<String>()
+        );
         self.factory.create_app(&path, vfs)
     }
 }
