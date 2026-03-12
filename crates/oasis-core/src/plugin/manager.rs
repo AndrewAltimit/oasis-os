@@ -218,7 +218,12 @@ impl PluginManager {
         // Plugins can register apps during update too (rare but supported).
         // Deduplicate by title to prevent accumulation across frames.
         for app in pending_apps {
-            if !self.plugin_apps.iter().any(|a| a.title == app.title) {
+            if self.plugin_apps.iter().any(|a| a.title == app.title) {
+                log::warn!(
+                    "Plugin app '{}' already registered, ignoring duplicate",
+                    app.title,
+                );
+            } else {
                 self.plugin_apps.push(app);
             }
         }
