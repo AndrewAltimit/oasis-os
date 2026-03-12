@@ -1,7 +1,7 @@
 //! Plugin-to-app bridge: allows plugins to register as launchable dashboard apps.
 //!
 //! Plugins that want to appear on the dashboard register a
-//! [`PluginAppRegistration`] during `init()` via [`PluginHost::register_app`].
+//! [`PluginAppRegistration`] during `init()` via [`PluginHost::register_app`](super::traits::PluginHost::register_app).
 //! The registration includes a factory that creates [`App`] instances on demand.
 //!
 //! When the user launches a plugin app from the dashboard, `AppRunner` calls
