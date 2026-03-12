@@ -209,7 +209,19 @@ impl OasisWasm {
 
         // Apply skin layout and discover apps.
         skin.apply_layout(&mut sdi);
-        let apps = discover_apps(&vfs, "/apps", None).unwrap_or_default();
+        let mut apps = discover_apps(&vfs, "/apps", None).unwrap_or_default();
+        #[cfg(feature = "youtube")]
+        apps.push(AppEntry {
+            title: "Video Embed".to_string(),
+            path: "/apps/video-embed".to_string(),
+            icon_png: Vec::new(),
+            color: Color {
+                r: 255,
+                g: 0,
+                b: 0,
+                a: 255,
+            },
+        });
         let dash_config = DashboardConfig::from_features(&skin.features, &active_theme);
         let dashboard = DashboardState::new(dash_config, apps);
 
@@ -360,7 +372,30 @@ impl OasisWasm {
                 }
             }
             if let Some((path, data)) = pending {
-                let _ = self.vfs.write(&path, data.as_bytes());
+                #[cfg(feature = "youtube")]
+                if path == oasis_core::apps::video_embed::VIDEO_EMBED_REQUEST_PATH {
+                    if data.is_empty() {
+                        self.iframe.hide();
+                    } else {
+                        self.iframe.set_youtube_mode();
+                        // Position the iframe over the full app content area.
+                        let at = &self.active_theme;
+                        let cx = 0i32;
+                        let cy = at.statusbar_height as i32;
+                        let cw = self.width;
+                        let ch = self
+                            .height
+                            .saturating_sub(at.statusbar_height)
+                            .saturating_sub(at.bottombar_height);
+                        self.iframe.show(&data, cx, cy, cw, ch);
+                    }
+                } else {
+                    let _ = self.vfs.write(&path, data.as_bytes());
+                }
+                #[cfg(not(feature = "youtube"))]
+                {
+                    let _ = self.vfs.write(&path, data.as_bytes());
+                }
             }
         }
 
@@ -1200,7 +1235,19 @@ impl OasisWasm {
                 self.wm.set_theme(swapped.theme.build_wm_theme());
                 let dash_config =
                     DashboardConfig::from_features(&swapped.features, &self.active_theme);
-                let apps = discover_apps(&self.vfs, "/apps", None).unwrap_or_default();
+                let mut apps = discover_apps(&self.vfs, "/apps", None).unwrap_or_default();
+                #[cfg(feature = "youtube")]
+                apps.push(AppEntry {
+                    title: "Video Embed".to_string(),
+                    path: "/apps/video-embed".to_string(),
+                    icon_png: Vec::new(),
+                    color: Color {
+                        r: 255,
+                        g: 0,
+                        b: 0,
+                        a: 255,
+                    },
+                });
                 self.dashboard = DashboardState::new(dash_config, apps);
                 self.bottom_bar.total_pages = self.dashboard.page_count();
                 self.bottom_bar.current_page = 0;

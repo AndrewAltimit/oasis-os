@@ -6,11 +6,14 @@ This guide walks through writing a plugin for OASIS_OS. Plugins extend the syste
 
 ## Plugin Architecture
 
-Plugins interact with the OS through three services provided by `PluginHost`:
+Plugins interact with the OS through services provided by `PluginHost`:
 
 - **`sdi`** -- the SDI scene graph for creating/modifying UI elements
 - **`vfs`** -- the virtual file system for reading/writing files
 - **`commands`** -- the command registry for adding terminal commands
+- **`audio`** -- audio playback (optional, `None` in headless mode)
+- **`network`** -- TCP networking (optional, `None` if unavailable)
+- **`backend`** -- rendering backend for texture loading (optional)
 
 The plugin lifecycle is:
 
@@ -151,15 +154,43 @@ See the `NotepadPlugin` in `crates/oasis-core/src/plugin/examples.rs` for a comp
 
 `PluginHost` is the struct passed to every lifecycle method:
 
+See the full `PluginHost` struct definition below.
+
+In addition to the three core fields, `PluginHost` provides optional access to platform services:
+
 ```rust
 pub struct PluginHost<'a> {
-    pub sdi: &'a mut SdiRegistry,      // scene graph
-    pub vfs: &'a mut dyn Vfs,          // virtual file system
-    pub commands: &'a mut CommandRegistry, // command registry
+    pub sdi: &'a mut SdiRegistry,
+    pub vfs: &'a mut dyn Vfs,
+    pub commands: &'a mut CommandRegistry,
+    pub audio: Option<&'a mut dyn AudioBackend>,     // audio playback
+    pub network: Option<&'a mut dyn NetworkBackend>,  // TCP networking
+    pub backend: Option<&'a mut dyn SdiCore>,         // rendering/textures
 }
 ```
 
-All OS interaction goes through these three fields. Plugins do not have direct access to backends, rendering, or input -- they operate at the scene-graph and VFS level.
+The optional fields are `None` in headless or test contexts. Always check for `Some` before using them.
+
+### Texture Loading
+
+Plugins can load textures for use with SDI objects via the rendering backend:
+
+```rust
+fn init(&mut self, host: &mut PluginHost<'_>) -> Result<()> {
+    // Load a 16x16 RGBA texture.
+    let rgba_data = vec![0xFFu8; 16 * 16 * 4];
+    let tex = host.load_texture(16, 16, &rgba_data)?;
+    self.texture = Some(tex);
+    Ok(())
+}
+
+fn shutdown(&mut self, host: &mut PluginHost<'_>) -> Result<()> {
+    if let Some(tex) = self.texture.take() {
+        host.destroy_texture(tex)?;
+    }
+    Ok(())
+}
+```
 
 ---
 
@@ -261,9 +292,126 @@ The codebase ships three example plugins in `crates/oasis-core/src/plugin/exampl
 |--------|----------|-------------|
 | `HelloPlugin` | `hello [name]` | Simplest possible plugin -- single command |
 | `ClockWidgetPlugin` | `pclock [show\|hide]` | Creates an SDI clock widget + command |
-| `NotepadPlugin` | `note [list\|read\|write]` | VFS-backed notepad with CRUD operations |
+| `NotepadPlugin` | `note [list\|read\|write]` | VFS-backed notepad with CRUD operations + dashboard app |
 
 Study these for patterns on SDI widget creation, VFS interaction, and command registration.
+
+---
+
+## Plugin App Bridge
+
+Plugins can register as launchable dashboard apps using the **plugin-to-app bridge**. This allows plugin code to appear as a first-class app on the dashboard, with its own icon, title, and full `App` trait implementation.
+
+Source: `crates/oasis-core/src/plugin/app_bridge.rs`
+
+### Registering a Plugin App
+
+During `init()`, call `host.register_app()` with a `PluginAppRegistration`:
+
+```rust
+use oasis_core::plugin::app_bridge::{AppCategory, PluginAppRegistration};
+
+fn init(&mut self, host: &mut PluginHost<'_>) -> Result<()> {
+    host.register_app(
+        PluginAppRegistration::new(
+            "My App",
+            AppCategory::Utility,
+            |path, _vfs| {
+                Box::new(MyPluginApp::new(path))
+            },
+        )
+        .with_color(oasis_types::backend::Color {
+            r: 100, g: 200, b: 50, a: 255,
+        }),
+    );
+    Ok(())
+}
+```
+
+The factory closure is called each time the user launches the app from the dashboard.
+
+### App Categories
+
+| Category | Description |
+|----------|-------------|
+| `AppCategory::Utility` | Tools, editors, utilities |
+| `AppCategory::Media` | Music, video, photo apps |
+| `AppCategory::Game` | Games and entertainment |
+| `AppCategory::System` | System tools and monitors |
+| `AppCategory::Network` | Network and communication |
+| `AppCategory::Other` | Uncategorized |
+
+### Implementing the App Trait
+
+Your plugin app must implement the `App` trait from `oasis_core::apps::app_trait`:
+
+```rust
+use oasis_core::apps::{App, AppAction, ContentState};
+use oasis_core::input::Button;
+use oasis_core::vfs::Vfs;
+
+struct MyPluginApp {
+    content: ContentState,
+    counter: i32,
+}
+
+impl MyPluginApp {
+    fn new(path: &str) -> Self {
+        let mut content = ContentState::new("My App", path);
+        content.lines = vec![
+            "My Plugin App".to_string(),
+            String::new(),
+            "Counter: 0".to_string(),
+            String::new(),
+            "UP/DOWN to change, CANCEL to exit.".to_string(),
+        ];
+        Self { content, counter: 0 }
+    }
+
+    fn refresh_lines(&mut self) {
+        self.content.lines[2] = format!("Counter: {}", self.counter);
+    }
+}
+
+impl App for MyPluginApp {
+    fn title(&self) -> &str { &self.content.title }
+    fn path(&self) -> &str { &self.content.app_path }
+
+    fn handle_input(&mut self, button: &Button, _vfs: &dyn Vfs) -> AppAction {
+        match button {
+            Button::Cancel => AppAction::Exit,
+            Button::Up => { self.counter += 1; self.refresh_lines(); AppAction::None }
+            Button::Down => { self.counter -= 1; self.refresh_lines(); AppAction::None }
+            _ => AppAction::None,
+        }
+    }
+
+    fn lines(&self) -> &[String] { &self.content.lines }
+
+    // ... implement remaining required trait methods
+    // (see ContentState helpers for default implementations)
+}
+```
+
+The `NotepadPlugin` in `examples.rs` demonstrates registering a `SimpleApp`-based plugin app on the dashboard.
+
+---
+
+## API Versioning
+
+Plugin API compatibility is tracked via `PLUGIN_API_VERSION` (currently `1`). The version is checked at load time -- plugins compiled against a different API version will be rejected by the manager.
+
+```rust
+let info = PluginInfo::new("my-plugin", "2.0.0");
+// info.api_version defaults to PLUGIN_API_VERSION
+```
+
+**Policy:**
+- `PLUGIN_API_VERSION` is incremented only on **breaking changes** to the `Plugin` trait or `PluginHost` struct.
+- Additive changes (new `Option` fields on `PluginHost`, new methods with defaults) do **not** bump the version.
+- Plugins should always use the default `api_version` from `PluginInfo::new()` unless they need to target a specific older API.
+
+Source: `crates/oasis-core/src/plugin/traits.rs`
 
 ---
 

@@ -72,6 +72,8 @@ impl AppRunner {
                 vfs,
                 &ActiveTheme::default(),
             )),
+            #[cfg(feature = "wasm-youtube")]
+            "Video Embed" => Box::new(super::video_embed::VideoEmbedApp::new(&path)),
             // All other apps get a generic placeholder.
             _ => Box::new(super::simple_app::SimpleApp::new(
                 &title,
