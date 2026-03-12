@@ -129,7 +129,7 @@ fn main() -> Result<()> {
     register_builtin_plugins(&mut plugin_manager);
     {
         let mut plugin_sdi = SdiRegistry::new();
-        plugin_manager.init_all(&mut plugin_sdi, &mut vfs, &mut cmd_reg)?;
+        plugin_manager.init_all(&mut plugin_sdi, &mut vfs, &mut cmd_reg);
     }
     log::info!(
         "Plugin system: {} plugins active, {} plugin apps",

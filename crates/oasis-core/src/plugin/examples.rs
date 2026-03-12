@@ -334,7 +334,7 @@ mod tests {
     #[test]
     fn hello_plugin_registers_command() {
         let (mut mgr, mut sdi, mut vfs, mut cmds) = setup();
-        mgr.init_all(&mut sdi, &mut vfs, &mut cmds).unwrap();
+        mgr.init_all(&mut sdi, &mut vfs, &mut cmds);
 
         let mut env = Environment {
             cwd: "/".to_string(),
@@ -357,7 +357,7 @@ mod tests {
     #[test]
     fn hello_plugin_with_name() {
         let (mut mgr, mut sdi, mut vfs, mut cmds) = setup();
-        mgr.init_all(&mut sdi, &mut vfs, &mut cmds).unwrap();
+        mgr.init_all(&mut sdi, &mut vfs, &mut cmds);
 
         let mut env = Environment {
             cwd: "/".to_string(),
@@ -380,7 +380,7 @@ mod tests {
     #[test]
     fn clock_widget_creates_sdi() {
         let (mut mgr, mut sdi, mut vfs, mut cmds) = setup();
-        mgr.init_all(&mut sdi, &mut vfs, &mut cmds).unwrap();
+        mgr.init_all(&mut sdi, &mut vfs, &mut cmds);
 
         assert!(sdi.contains("plugin_clock"));
         let obj = sdi.get("plugin_clock").unwrap();
@@ -391,7 +391,7 @@ mod tests {
     #[test]
     fn clock_widget_update() {
         let (mut mgr, mut sdi, mut vfs, mut cmds) = setup();
-        mgr.init_all(&mut sdi, &mut vfs, &mut cmds).unwrap();
+        mgr.init_all(&mut sdi, &mut vfs, &mut cmds);
         mgr.update_all(&mut sdi, &mut vfs, &mut cmds).unwrap();
         // Widget should still exist after update.
         assert!(sdi.contains("plugin_clock"));
@@ -400,7 +400,7 @@ mod tests {
     #[test]
     fn clock_widget_cleanup_on_shutdown() {
         let (mut mgr, mut sdi, mut vfs, mut cmds) = setup();
-        mgr.init_all(&mut sdi, &mut vfs, &mut cmds).unwrap();
+        mgr.init_all(&mut sdi, &mut vfs, &mut cmds);
         assert!(sdi.contains("plugin_clock"));
 
         mgr.shutdown_all(&mut sdi, &mut vfs, &mut cmds).unwrap();
@@ -410,7 +410,7 @@ mod tests {
     #[test]
     fn pclock_command() {
         let (mut mgr, mut sdi, mut vfs, mut cmds) = setup();
-        mgr.init_all(&mut sdi, &mut vfs, &mut cmds).unwrap();
+        mgr.init_all(&mut sdi, &mut vfs, &mut cmds);
 
         let mut env = Environment {
             cwd: "/".to_string(),
@@ -433,14 +433,14 @@ mod tests {
     #[test]
     fn notepad_creates_directory() {
         let (mut mgr, mut sdi, mut vfs, mut cmds) = setup();
-        mgr.init_all(&mut sdi, &mut vfs, &mut cmds).unwrap();
+        mgr.init_all(&mut sdi, &mut vfs, &mut cmds);
         assert!(vfs.exists("/var/notepad"));
     }
 
     #[test]
     fn notepad_write_and_read() {
         let (mut mgr, mut sdi, mut vfs, mut cmds) = setup();
-        mgr.init_all(&mut sdi, &mut vfs, &mut cmds).unwrap();
+        mgr.init_all(&mut sdi, &mut vfs, &mut cmds);
 
         let mut env = Environment {
             cwd: "/".to_string(),
@@ -473,7 +473,7 @@ mod tests {
     #[test]
     fn notepad_list_notes() {
         let (mut mgr, mut sdi, mut vfs, mut cmds) = setup();
-        mgr.init_all(&mut sdi, &mut vfs, &mut cmds).unwrap();
+        mgr.init_all(&mut sdi, &mut vfs, &mut cmds);
 
         let mut env = Environment {
             cwd: "/".to_string(),
@@ -505,7 +505,7 @@ mod tests {
     #[test]
     fn notepad_read_missing() {
         let (mut mgr, mut sdi, mut vfs, mut cmds) = setup();
-        mgr.init_all(&mut sdi, &mut vfs, &mut cmds).unwrap();
+        mgr.init_all(&mut sdi, &mut vfs, &mut cmds);
 
         let mut env = Environment {
             cwd: "/".to_string(),
@@ -525,7 +525,7 @@ mod tests {
     #[test]
     fn notepad_notes_persist_after_shutdown() {
         let (mut mgr, mut sdi, mut vfs, mut cmds) = setup();
-        mgr.init_all(&mut sdi, &mut vfs, &mut cmds).unwrap();
+        mgr.init_all(&mut sdi, &mut vfs, &mut cmds);
 
         // Write a note.
         let mut env = Environment {
@@ -552,7 +552,7 @@ mod tests {
     #[test]
     fn notepad_registers_app() {
         let (mut mgr, mut sdi, mut vfs, mut cmds) = setup();
-        mgr.init_all(&mut sdi, &mut vfs, &mut cmds).unwrap();
+        mgr.init_all(&mut sdi, &mut vfs, &mut cmds);
 
         // Notepad should have registered a dashboard app.
         let apps = mgr.plugin_apps();

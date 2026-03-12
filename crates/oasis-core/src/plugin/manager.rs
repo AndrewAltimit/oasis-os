@@ -102,17 +102,24 @@ impl PluginManager {
     }
 
     /// Initialize all registered (but not yet active) plugins.
+    ///
+    /// Errors from individual plugins are logged and skipped so that one
+    /// bad plugin does not prevent the rest from loading.
     pub fn init_all(
         &mut self,
         sdi: &mut SdiRegistry,
         vfs: &mut dyn Vfs,
         commands: &mut CommandRegistry,
-    ) -> Result<()> {
+    ) {
         for i in 0..self.plugins.len() {
             if self.plugins[i].state == PluginState::Registered {
-                Self::validate_api_version(&self.plugins[i].plugin.info())?;
+                let name = self.plugins[i].plugin.info().name.clone();
+                if let Err(e) = Self::validate_api_version(&self.plugins[i].plugin.info()) {
+                    log::error!("Failed to init plugin '{name}': {e}");
+                    continue;
+                }
                 let mut pending_apps = Vec::new();
-                {
+                let init_result = {
                     let mut host = PluginHost {
                         sdi,
                         vfs,
@@ -122,7 +129,11 @@ impl PluginManager {
                         backend: None,
                         app_registrations: &mut pending_apps,
                     };
-                    self.plugins[i].plugin.init(&mut host)?;
+                    self.plugins[i].plugin.init(&mut host)
+                };
+                if let Err(e) = init_result {
+                    log::error!("Failed to init plugin '{name}': {e}");
+                    continue;
                 }
                 self.plugins[i].state = PluginState::Active;
                 self.plugins[i]
@@ -131,7 +142,6 @@ impl PluginManager {
                 self.plugin_apps.extend(pending_apps);
             }
         }
-        Ok(())
     }
 
     /// Initialize a single plugin by name.
@@ -439,7 +449,7 @@ mod tests {
         let mut sdi = SdiRegistry::new();
         let mut vfs = MemoryVfs::new();
         let mut cmds = CommandRegistry::new();
-        mgr.init_all(&mut sdi, &mut vfs, &mut cmds).unwrap();
+        mgr.init_all(&mut sdi, &mut vfs, &mut cmds);
         assert_eq!(mgr.active_count(), 1);
     }
 
@@ -451,7 +461,7 @@ mod tests {
         let mut sdi = SdiRegistry::new();
         let mut vfs = MemoryVfs::new();
         let mut cmds = CommandRegistry::new();
-        mgr.init_all(&mut sdi, &mut vfs, &mut cmds).unwrap();
+        mgr.init_all(&mut sdi, &mut vfs, &mut cmds);
 
         mgr.update_all(&mut sdi, &mut vfs, &mut cmds).unwrap();
         mgr.update_all(&mut sdi, &mut vfs, &mut cmds).unwrap();
@@ -469,7 +479,7 @@ mod tests {
         let mut sdi = SdiRegistry::new();
         let mut vfs = MemoryVfs::new();
         let mut cmds = CommandRegistry::new();
-        mgr.init_all(&mut sdi, &mut vfs, &mut cmds).unwrap();
+        mgr.init_all(&mut sdi, &mut vfs, &mut cmds);
         mgr.shutdown_all(&mut sdi, &mut vfs, &mut cmds).unwrap();
 
         let plugins = mgr.list();
@@ -485,7 +495,7 @@ mod tests {
         let mut sdi = SdiRegistry::new();
         let mut vfs = MemoryVfs::new();
         let mut cmds = CommandRegistry::new();
-        mgr.init_all(&mut sdi, &mut vfs, &mut cmds).unwrap();
+        mgr.init_all(&mut sdi, &mut vfs, &mut cmds);
         assert!(mgr.is_loaded("test-plugin"));
 
         mgr.unload("test-plugin", &mut sdi, &mut vfs, &mut cmds)
@@ -514,7 +524,7 @@ mod tests {
         let mut sdi = SdiRegistry::new();
         let mut vfs = MemoryVfs::new();
         let mut cmds = CommandRegistry::new();
-        mgr.init_all(&mut sdi, &mut vfs, &mut cmds).unwrap();
+        mgr.init_all(&mut sdi, &mut vfs, &mut cmds);
 
         assert!(sdi.contains("plugin_widget"));
         let obj = sdi.get("plugin_widget").unwrap();
@@ -530,7 +540,7 @@ mod tests {
         let mut sdi = SdiRegistry::new();
         let mut vfs = MemoryVfs::new();
         let mut cmds = CommandRegistry::new();
-        mgr.init_all(&mut sdi, &mut vfs, &mut cmds).unwrap();
+        mgr.init_all(&mut sdi, &mut vfs, &mut cmds);
         assert!(sdi.contains("plugin_widget"));
 
         mgr.shutdown_all(&mut sdi, &mut vfs, &mut cmds).unwrap();
@@ -562,7 +572,7 @@ mod tests {
         let mut sdi = SdiRegistry::new();
         let mut vfs = MemoryVfs::new();
         let mut cmds = CommandRegistry::new();
-        mgr.init_all(&mut sdi, &mut vfs, &mut cmds).unwrap();
+        mgr.init_all(&mut sdi, &mut vfs, &mut cmds);
 
         assert!(
             mgr.init_plugin("test-plugin", &mut sdi, &mut vfs, &mut cmds)
@@ -628,7 +638,7 @@ auto_load = true
         let mut vfs = MemoryVfs::new();
         let mut cmds = CommandRegistry::new();
 
-        mgr.init_all(&mut sdi, &mut vfs, &mut cmds).unwrap();
+        mgr.init_all(&mut sdi, &mut vfs, &mut cmds);
         assert_eq!(mgr.active_count(), 2);
         assert!(sdi.contains("plugin_widget"));
 
@@ -672,11 +682,11 @@ auto_load = true
         let mut vfs = MemoryVfs::new();
         let mut cmds = CommandRegistry::new();
 
-        let result = mgr.init_all(&mut sdi, &mut vfs, &mut cmds);
-        assert!(result.is_err());
-        let msg = result.unwrap_err().to_string();
-        assert!(msg.contains("API version mismatch"), "got: {msg}");
-        assert!(msg.contains("bad-version"), "got: {msg}");
+        // init_all logs the error and skips the plugin instead of
+        // propagating, so it completes without panic and the bad
+        // plugin stays inactive.
+        mgr.init_all(&mut sdi, &mut vfs, &mut cmds);
+        assert_eq!(mgr.active_count(), 0);
     }
 
     #[test]
@@ -735,7 +745,7 @@ auto_load = true
         let mut cmds = CommandRegistry::new();
 
         assert!(mgr.plugin_apps().is_empty());
-        mgr.init_all(&mut sdi, &mut vfs, &mut cmds).unwrap();
+        mgr.init_all(&mut sdi, &mut vfs, &mut cmds);
 
         assert_eq!(mgr.plugin_apps().len(), 1);
         assert_eq!(mgr.plugin_apps()[0].title, "Plugin App");
@@ -749,7 +759,7 @@ auto_load = true
         let mut sdi = SdiRegistry::new();
         let mut vfs = MemoryVfs::new();
         let mut cmds = CommandRegistry::new();
-        mgr.init_all(&mut sdi, &mut vfs, &mut cmds).unwrap();
+        mgr.init_all(&mut sdi, &mut vfs, &mut cmds);
 
         let app = mgr.create_plugin_app("Plugin App", &vfs);
         assert!(app.is_some());
@@ -876,7 +886,7 @@ auto_load = true
     }
 
     #[test]
-    fn init_all_stops_on_first_error() {
+    fn init_all_skips_failed_plugin() {
         let mut mgr = PluginManager::new();
         mgr.register_static(Box::new(FailInitPlugin));
         mgr.register_static(Box::new(TestPlugin::new()));
@@ -885,16 +895,10 @@ auto_load = true
         let mut vfs = MemoryVfs::new();
         let mut cmds = CommandRegistry::new();
 
-        let result = mgr.init_all(&mut sdi, &mut vfs, &mut cmds);
-        assert!(result.is_err());
-        let msg = result.unwrap_err().to_string();
-        assert!(
-            msg.contains("init explosion"),
-            "expected 'init explosion' in: {msg}",
-        );
-        // FailInitPlugin stays Registered, TestPlugin
-        // never reaches Active.
-        assert_eq!(mgr.active_count(), 0);
+        // init_all logs the error for FailInitPlugin but
+        // continues to successfully init TestPlugin.
+        mgr.init_all(&mut sdi, &mut vfs, &mut cmds);
+        assert_eq!(mgr.active_count(), 1);
     }
 
     #[test]
@@ -918,7 +922,7 @@ auto_load = true
         let mut vfs = MemoryVfs::new();
         let mut cmds = CommandRegistry::new();
 
-        mgr.init_all(&mut sdi, &mut vfs, &mut cmds).unwrap();
+        mgr.init_all(&mut sdi, &mut vfs, &mut cmds);
         mgr.shutdown_all(&mut sdi, &mut vfs, &mut cmds).unwrap();
 
         // Plugin is now Stopped -- re-init should fail.
@@ -936,7 +940,7 @@ auto_load = true
         let mut vfs = MemoryVfs::new();
         let mut cmds = CommandRegistry::new();
 
-        mgr.init_all(&mut sdi, &mut vfs, &mut cmds).unwrap();
+        mgr.init_all(&mut sdi, &mut vfs, &mut cmds);
         let result = mgr.update_all(&mut sdi, &mut vfs, &mut cmds);
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("update explosion"),);
@@ -951,7 +955,7 @@ auto_load = true
         let mut vfs = MemoryVfs::new();
         let mut cmds = CommandRegistry::new();
 
-        mgr.init_all(&mut sdi, &mut vfs, &mut cmds).unwrap();
+        mgr.init_all(&mut sdi, &mut vfs, &mut cmds);
         let result = mgr.shutdown_all(&mut sdi, &mut vfs, &mut cmds);
         assert!(result.is_err());
         assert!(
@@ -971,7 +975,7 @@ auto_load = true
         let mut vfs = MemoryVfs::new();
         let mut cmds = CommandRegistry::new();
 
-        mgr.init_all(&mut sdi, &mut vfs, &mut cmds).unwrap();
+        mgr.init_all(&mut sdi, &mut vfs, &mut cmds);
         let result = mgr.unload("fail-shutdown", &mut sdi, &mut vfs, &mut cmds);
         assert!(result.is_err());
     }
@@ -1061,7 +1065,7 @@ auto_load = true
         let mut cmds = CommandRegistry::new();
 
         // All lifecycle ops on empty manager should succeed.
-        assert!(mgr.init_all(&mut sdi, &mut vfs, &mut cmds).is_ok());
+        mgr.init_all(&mut sdi, &mut vfs, &mut cmds);
         assert!(mgr.update_all(&mut sdi, &mut vfs, &mut cmds).is_ok());
         assert!(mgr.shutdown_all(&mut sdi, &mut vfs, &mut cmds).is_ok());
     }
@@ -1075,7 +1079,7 @@ auto_load = true
         let mut vfs = MemoryVfs::new();
         let mut cmds = CommandRegistry::new();
 
-        mgr.init_all(&mut sdi, &mut vfs, &mut cmds).unwrap();
+        mgr.init_all(&mut sdi, &mut vfs, &mut cmds);
 
         // VfsPlugin wrote a file during init -- verify.
         assert!(vfs.exists("/plugin_data.txt"));

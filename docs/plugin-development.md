@@ -234,7 +234,7 @@ mod tests {
         let mut sdi = SdiRegistry::new();
         let mut vfs = MemoryVfs::new();
         let mut cmds = CommandRegistry::new();
-        mgr.init_all(&mut sdi, &mut vfs, &mut cmds).unwrap();
+        mgr.init_all(&mut sdi, &mut vfs, &mut cmds);
 
         let mut env = Environment {
             cwd: "/".to_string(),
@@ -261,7 +261,7 @@ mod tests {
         let mut sdi = SdiRegistry::new();
         let mut vfs = MemoryVfs::new();
         let mut cmds = CommandRegistry::new();
-        mgr.init_all(&mut sdi, &mut vfs, &mut cmds).unwrap();
+        mgr.init_all(&mut sdi, &mut vfs, &mut cmds);
 
         assert!(sdi.contains("greet_banner"));
     }
@@ -274,7 +274,7 @@ mod tests {
         let mut sdi = SdiRegistry::new();
         let mut vfs = MemoryVfs::new();
         let mut cmds = CommandRegistry::new();
-        mgr.init_all(&mut sdi, &mut vfs, &mut cmds).unwrap();
+        mgr.init_all(&mut sdi, &mut vfs, &mut cmds);
         mgr.shutdown_all(&mut sdi, &mut vfs, &mut cmds).unwrap();
 
         assert!(!sdi.contains("greet_banner"));
