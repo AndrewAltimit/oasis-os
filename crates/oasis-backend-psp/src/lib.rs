@@ -452,13 +452,21 @@ impl PspBackend {
 
     /// Finalize the current display list, swap buffers, and open the next
     /// frame.
+    ///
+    /// The GE renders the display list asynchronously after `sceGuFinish`.
+    /// By waiting for vsync *before* blocking on `sceGuSync`, the GE
+    /// executes in parallel with the vsync wait instead of sequentially,
+    /// preventing frame-doubling (60→30fps) when the display list is heavy
+    /// (e.g. window dragging, music playback bus contention).
     pub fn swap_buffers_inner(&mut self) {
         // SAFETY: GU frame lifecycle calls. DISPLAY_LIST is exclusively
         // accessed from the single-threaded main loop (init/swap_buffers).
         unsafe {
             sys::sceGuFinish();
-            sys::sceGuSync(GuSyncMode::Finish, GuSyncBehavior::Wait);
+            // Vsync first: GE renders in parallel while CPU waits for vblank.
             sys::sceDisplayWaitVblankStart();
+            // GE is likely done by now; block only if it isn't.
+            sys::sceGuSync(GuSyncMode::Finish, GuSyncBehavior::Wait);
             sys::sceGuSwapBuffers();
             sys::sceGuStart(GuContextType::Direct, &raw mut DISPLAY_LIST as *mut c_void);
         }

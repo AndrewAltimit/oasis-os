@@ -382,6 +382,47 @@ impl SdiRegistry {
         Ok(())
     }
 
+    /// Draw only the base layer, keeping objects for which `keep` returns true.
+    ///
+    /// Allocation-free alternative to `draw_base_excluding_prefixes`.
+    pub fn draw_base_filtered<F>(&mut self, backend: &mut dyn SdiBackend, keep: F) -> Result<()>
+    where
+        F: Fn(&str) -> bool,
+    {
+        self.ensure_z_sorted();
+        for name in &self.z_sorted_base {
+            let obj = &self.objects[name];
+            if !obj.visible || obj.alpha == 0 {
+                continue;
+            }
+            if !keep(name) {
+                continue;
+            }
+            Self::draw_object(obj, backend)?;
+        }
+        Ok(())
+    }
+
+    /// Draw only the overlay layer, keeping objects for which `keep` returns true.
+    ///
+    /// Allocation-free alternative to `draw_overlay_excluding_prefixes`.
+    pub fn draw_overlay_filtered<F>(&self, backend: &mut dyn SdiBackend, keep: F) -> Result<()>
+    where
+        F: Fn(&str) -> bool,
+    {
+        for name in &self.z_sorted_overlay {
+            let obj = &self.objects[name];
+            if !obj.visible || obj.alpha == 0 {
+                continue;
+            }
+            if !keep(name) {
+                continue;
+            }
+            Self::draw_object(obj, backend)?;
+        }
+        Ok(())
+    }
+
     /// Render a single SDI object to the backend.
     ///
     /// Dispatch order for non-textured objects with nonzero area:
