@@ -662,7 +662,17 @@ impl WindowManager {
             let suffixes = match window.window_type {
                 super::window::WindowType::Fullscreen => &["content"][..],
                 super::window::WindowType::Panel => {
-                    &APP_SUFFIXES[..7] // frame through content_stroke (no buttons)
+                    // frame + titlebar chrome + content, no buttons
+                    const PANEL_SUFFIXES: &[&str] = &[
+                        "frame",
+                        "titlebar",
+                        "title_text",
+                        "title_shadow",
+                        "separator",
+                        "content",
+                        "content_stroke",
+                    ];
+                    PANEL_SUFFIXES
                 },
                 _ => APP_SUFFIXES,
             };

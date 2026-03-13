@@ -626,10 +626,11 @@ fn stack_fmt<'a>(buf: &'a mut [u8; 64], args: core::fmt::Arguments<'_>) -> &'a s
     impl core::fmt::Write for BufWriter<'_> {
         fn write_str(&mut self, s: &str) -> core::fmt::Result {
             let bytes = s.as_bytes();
-            let end = (self.pos + bytes.len()).min(self.buf.len());
-            let len = end - self.pos;
-            self.buf[self.pos..end].copy_from_slice(&bytes[..len]);
-            self.pos = end;
+            let avail = self.buf.len() - self.pos;
+            // Avoid splitting a multi-byte UTF-8 character at the boundary.
+            let len = s.floor_char_boundary(bytes.len().min(avail));
+            self.buf[self.pos..self.pos + len].copy_from_slice(&bytes[..len]);
+            self.pos += len;
             Ok(())
         }
     }
