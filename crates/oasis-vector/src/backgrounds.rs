@@ -178,14 +178,18 @@ pub fn glass_shard(
     if w == 0 || h == 0 {
         return Vec::new();
     }
-    let wi = w as i32;
-    let hi = h as i32;
+    let wf = w as f32;
+    let hf = h as f32;
+    // Wrap the drift offset itself so the entire polygon moves as a unit.
+    // Per-vertex wrapping would tear the shape when it straddles the boundary.
+    let wrapped_dx = drift_x.rem_euclid(wf);
+    let wrapped_dy = drift_y.rem_euclid(hf);
     let mapped: Vec<(i32, i32)> = points
         .iter()
         .map(|&(px, py)| {
             (
-                ((px * w as f32 + drift_x) as i32).rem_euclid(wi),
-                ((py * h as f32 + drift_y) as i32).rem_euclid(hi),
+                (px * wf + wrapped_dx) as i32,
+                (py * hf + wrapped_dy) as i32,
             )
         })
         .collect();
