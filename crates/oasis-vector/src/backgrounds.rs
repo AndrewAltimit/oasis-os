@@ -175,12 +175,17 @@ pub fn glass_shard(
     drift_x: f32,
     drift_y: f32,
 ) -> Vec<VectorOp> {
+    if w == 0 || h == 0 {
+        return Vec::new();
+    }
+    let wi = w as i32;
+    let hi = h as i32;
     let mapped: Vec<(i32, i32)> = points
         .iter()
         .map(|&(px, py)| {
             (
-                (px * w as f32 + drift_x) as i32,
-                (py * h as f32 + drift_y) as i32,
+                ((px * w as f32 + drift_x) as i32).rem_euclid(wi),
+                ((py * h as f32 + drift_y) as i32).rem_euclid(hi),
             )
         })
         .collect();
