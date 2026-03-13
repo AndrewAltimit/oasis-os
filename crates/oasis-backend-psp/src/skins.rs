@@ -273,6 +273,7 @@ pub(crate) fn apply_psp_overrides(t: &mut ActiveTheme) {
             LayerKind::FloatingPolygons { .. }
                 | LayerKind::EqBars { .. }
                 | LayerKind::Waves { .. }
+                | LayerKind::Shader { .. }
         )
     });
     // Cap at 4 layers max on PSP hardware.

@@ -1259,6 +1259,11 @@ impl ActiveTheme {
                 amplitude: cfg.max_height.unwrap_or(20) as u16,
                 frequency: cfg.frequency.unwrap_or(3.0),
             },
+            "shader" => {
+                let name = cfg.shader.clone().unwrap_or_else(|| "balatro".to_string());
+                let params = parse_shader_params(cfg);
+                LayerKind::Shader { name, params }
+            },
             _ => return None,
         };
 
@@ -1304,4 +1309,56 @@ impl ActiveTheme {
             enabled: cfg.enabled.unwrap_or(true),
         })
     }
+}
+
+/// Parse shader-specific parameters from a `BackgroundLayerConfig`.
+fn parse_shader_params(
+    cfg: &crate::theme::BackgroundLayerConfig,
+) -> oasis_vector::background::ShaderParams {
+    let mut params = oasis_vector::background::ShaderParams::default();
+
+    if let Some(ref table) = cfg.shader_params {
+        // Extract color_1, color_2, color_3 as hex → [f32; 4].
+        for key in &["color_1", "color_2", "color_3"] {
+            if let Some(toml::Value::String(hex)) = table.get(*key)
+                && let Some(c) = hex_to_f32_color(hex)
+            {
+                params.colors.push(c);
+            }
+        }
+
+        // Extract named float parameters.
+        for (key, value) in table {
+            if key.starts_with("color_") {
+                continue;
+            }
+            match value {
+                toml::Value::Float(f) => {
+                    params.floats.insert(key.clone(), *f as f32);
+                },
+                toml::Value::Integer(i) => {
+                    params.floats.insert(key.clone(), *i as f32);
+                },
+                toml::Value::Boolean(b) => {
+                    params
+                        .floats
+                        .insert(key.clone(), if *b { 1.0 } else { 0.0 });
+                },
+                _ => {},
+            }
+        }
+    }
+
+    params
+}
+
+/// Parse a hex color string (e.g. "#DE4440") to `[f32; 4]` (0.0–1.0 RGBA).
+fn hex_to_f32_color(hex: &str) -> Option<[f32; 4]> {
+    let c = parse_hex_color(hex)?;
+    Some([
+        c.r as f32 / 255.0,
+        c.g as f32 / 255.0,
+        c.b as f32 / 255.0,
+        c.a as f32 / 255.0,
+    ])
 }

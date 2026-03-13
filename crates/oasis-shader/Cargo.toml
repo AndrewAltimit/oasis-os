@@ -1,0 +1,28 @@
+[package]
+name = "oasis-shader"
+description = "GPU shader background renderer for OASIS_OS (Shadertoy-style fragment shaders)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[features]
+default = []
+gl-native = ["glow"]
+gl-web = ["glow", "web-sys", "wasm-bindgen"]
+software = []
+
+[dependencies]
+glow = { version = "0.16", optional = true }
+log = { workspace = true }
+web-sys = { workspace = true, features = [
+    "WebGl2RenderingContext",
+    "HtmlCanvasElement",
+    "Document",
+    "Window",
+], optional = true }
+wasm-bindgen = { workspace = true, optional = true }
+
+[lints]
+workspace = true

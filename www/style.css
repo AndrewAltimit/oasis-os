@@ -64,6 +64,8 @@ body {
    to <canvas> elements, which causes a "zoomed-in" view on desktop. */
 #oasis {
   display: block;
+  position: relative;
+  z-index: 1;
   image-rendering: pixelated;
   image-rendering: crisp-edges;
   border: none;

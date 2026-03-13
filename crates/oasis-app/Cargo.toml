@@ -40,6 +40,7 @@ video-decode-ffmpeg = ["_video", "oasis-video/ffmpeg"]
 oasis-core = { workspace = true, features = ["tls-rustls"] }
 oasis-audio = { workspace = true }
 oasis-backend-sdl = { path = "../oasis-backend-sdl" }
+oasis-shader = { workspace = true, features = ["gl-native"] }
 oasis-video = { workspace = true, optional = true }
 log = { workspace = true }
 env_logger = { workspace = true }

@@ -22,6 +22,7 @@ video-decode-ffmpeg = ["_video", "oasis-video/ffmpeg"]
 [dependencies]
 oasis-core.workspace = true
 oasis-backend-ue5.workspace = true
+oasis-shader = { workspace = true, features = ["software"] }
 oasis-video = { workspace = true, optional = true }
 log.workspace = true
 env_logger.workspace = true

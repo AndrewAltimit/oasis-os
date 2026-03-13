@@ -44,6 +44,7 @@ use oasis_core::terminal::{
 };
 use oasis_core::toast::{ToastLevel, ToastManager};
 use oasis_core::transition;
+use oasis_core::vector_overlay::get_shader_layer;
 use oasis_core::vfs::{MemoryVfs, Vfs};
 use oasis_core::wallpaper;
 use oasis_core::wm::manager::WindowManager;
@@ -90,6 +91,15 @@ fn main() -> Result<()> {
     // Show a black frame immediately so the window isn't frozen during init.
     backend.clear(Color::rgb(0, 0, 0))?;
     backend.swap_buffers()?;
+
+    // Attempt to initialize software shader bridge for background effects.
+    let mut shader_bridge = oasis_backend_sdl::shader_bridge::SdlShaderBridge::new(
+        config.screen_width,
+        config.screen_height,
+    );
+    if shader_bridge.is_some() {
+        log::info!("Shader bridge available");
+    }
 
     // Derive runtime theme from the active skin, applying screen dimensions.
     let active_theme = ActiveTheme::from_skin(&skin.theme)
@@ -354,6 +364,12 @@ fn main() -> Result<()> {
                 state.config.screen_width,
                 state.config.screen_height,
             );
+            // Hide wallpaper SDI object when a shader layer replaces it.
+            if get_shader_layer(&state.active_theme).is_some()
+                && let Ok(obj) = sdi.get_mut("wallpaper")
+            {
+                obj.visible = false;
+            }
             log::info!("Wallpaper loaded");
 
             let (cursor_pixels, cw, ch) =
@@ -462,6 +478,24 @@ fn main() -> Result<()> {
 
         // -- Render --
         backend.clear(state.bg_color)?;
+
+        // Render shader wallpaper FIRST (replaces bg_color clear).
+        // This runs every frame so the animation stays live in all modes.
+        if let Some(ref mut bridge) = shader_bridge
+            && let Some(info) = get_shader_layer(&state.active_theme)
+        {
+            let params = oasis_shader::ShaderParams {
+                colors: info.params.colors,
+                floats: info.params.floats,
+            };
+            bridge.render_and_blit(
+                &mut backend,
+                &info.name,
+                state.frame_counter as f32 / 60.0,
+                &params,
+            );
+        }
+
         if state.mode == Mode::Desktop && state.wm.window_count() > 0 {
             state
                 .wm
@@ -489,7 +523,9 @@ fn main() -> Result<()> {
                 || !state.active_theme.background_layers.is_empty())
         {
             // Split draw: base layer → vector overlays/icons → overlay layer.
+            // Shader already rendered above as wallpaper.
             sdi.draw_base_layer(&mut backend)?;
+
             oasis_core::vector_overlay::render_vector_background(
                 &mut backend,
                 &state.active_theme,

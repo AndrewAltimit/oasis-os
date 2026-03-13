@@ -551,6 +551,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0cc23270f6e1808e30a928bdc84dea0b9b4136a8bc82338574f23baf47bbd280"
 
 [[package]]
+name = "glow"
+version = "0.16.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c5e5ea60d70410161c8bf5da3fdfeaa1c72ed2c15f8bbb9d19fe3a4fad085f08"
+dependencies = [
+ "js-sys",
+ "slotmap",
+ "wasm-bindgen",
+ "web-sys",
+]
+
+[[package]]
 name = "half"
 version = "2.7.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -812,6 +824,7 @@ dependencies = [
  "oasis-audio",
  "oasis-backend-sdl",
  "oasis-core",
+ "oasis-shader",
  "oasis-video",
  "png",
 ]
@@ -943,6 +956,7 @@ dependencies = [
  "log",
  "oasis-audio",
  "oasis-core",
+ "oasis-shader",
  "oasis-types",
  "rmp3",
  "sdl3",
@@ -970,6 +984,7 @@ dependencies = [
  "oasis-net",
  "oasis-platform",
  "oasis-sdi",
+ "oasis-shader",
  "oasis-skin",
  "oasis-terminal",
  "oasis-types",
@@ -1044,6 +1059,7 @@ dependencies = [
  "log",
  "oasis-backend-ue5",
  "oasis-core",
+ "oasis-shader",
  "oasis-video",
 ]
 
@@ -1087,6 +1103,16 @@ dependencies = [
  "proptest",
  "serde",
  "toml",
+]
+
+[[package]]
+name = "oasis-shader"
+version = "1.2.0"
+dependencies = [
+ "glow",
+ "log",
+ "wasm-bindgen",
+ "web-sys",
 ]
 
 [[package]]
@@ -1765,6 +1791,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0c790de23124f9ab44544d7ac05d60440adc586479ce501c1d6d7da3cd8c9cf5"
 
 [[package]]
+name = "slotmap"
+version = "1.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bdd58c3c93c3d278ca835519292445cb4b0d4dc59ccfdf7ceadaab3f8aeb4038"
+dependencies = [
+ "version_check",
+]
+
+[[package]]
 name = "subtle"
 version = "2.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1991,6 +2026,12 @@ name = "vcpkg"
 version = "0.2.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "accd4ea62f7bb7a82fe23066fb0957d48ef677f6eeb8215f372f52e48bb32426"
+
+[[package]]
+name = "version_check"
+version = "0.9.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
 
 [[package]]
 name = "wait-timeout"

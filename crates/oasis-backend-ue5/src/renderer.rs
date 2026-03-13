@@ -86,6 +86,26 @@ impl Ue5Backend {
         (self.width, self.height)
     }
 
+    /// Blit raw RGBA pixels into the framebuffer at the given position.
+    pub fn blit_rgba(&mut self, x: u32, y: u32, w: u32, h: u32, pixels: &[u8]) {
+        let stride = (self.width * 4) as usize;
+        let src_stride = (w * 4) as usize;
+        for row in 0..h {
+            let dy = y + row;
+            if dy >= self.height {
+                break;
+            }
+            let dst_start = (dy as usize) * stride + (x as usize) * 4;
+            let src_start = (row as usize) * src_stride;
+            let copy_w = w.min(self.width.saturating_sub(x)) as usize * 4;
+            if dst_start + copy_w <= self.buffer.len() && src_start + copy_w <= pixels.len() {
+                self.buffer[dst_start..dst_start + copy_w]
+                    .copy_from_slice(&pixels[src_start..src_start + copy_w]);
+            }
+        }
+        self.dirty = true;
+    }
+
     /// Apply cumulative translation to coordinates.
     fn translate(&self, x: i32, y: i32) -> (i32, i32) {
         (

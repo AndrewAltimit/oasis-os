@@ -16,7 +16,7 @@ pub mod render;
 pub mod scene;
 
 pub use anim::AnimClock;
-pub use background::{BackgroundLayer, BackgroundScene};
+pub use background::{BackgroundLayer, BackgroundScene, ShaderParams};
 pub use icons::IconDef;
 pub use op::VectorOp;
 pub use render::render_scene;

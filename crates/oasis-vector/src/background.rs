@@ -6,6 +6,8 @@
 //!
 //! Skins configure layers via `[[background_layers]]` TOML sections.
 
+use std::collections::HashMap;
+
 use oasis_types::backend::Color;
 
 use crate::anim::AnimClock;
@@ -66,6 +68,23 @@ pub enum LayerKind {
         amplitude: u16,
         frequency: f32,
     },
+    /// GPU fragment shader (rendered by backend, not as VectorOps).
+    ///
+    /// Shader layers are skipped by `build_ops` and handled directly by each
+    /// backend's render loop via `oasis-shader`.
+    Shader { name: String, params: ShaderParams },
+}
+
+/// Shader-specific parameters for `LayerKind::Shader`.
+///
+/// Mirrors `oasis_shader::ShaderParams` but lives in oasis-vector to avoid
+/// circular dependencies. Backends convert this to the shader crate's type.
+#[derive(Debug, Clone, Default)]
+pub struct ShaderParams {
+    /// Up to 4 configurable RGBA colors (each component 0.0–1.0).
+    pub colors: Vec<[f32; 4]>,
+    /// Named float uniforms (e.g. "speed", "contrast").
+    pub floats: HashMap<String, f32>,
 }
 
 /// Where a layer is anchored within the viewport.
@@ -313,6 +332,8 @@ impl BackgroundScene {
                 clock,
                 reduced_motion,
             ),
+            // Shader layers produce no VectorOps — rendered by each backend directly.
+            LayerKind::Shader { .. } => Vec::new(),
         }
     }
 }

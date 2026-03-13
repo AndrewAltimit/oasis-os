@@ -10,7 +10,7 @@
 use oasis_types::backend::SdiBackend;
 use oasis_types::error::Result;
 use oasis_vector::AnimClock;
-use oasis_vector::background::BackgroundScene;
+use oasis_vector::background::{BackgroundScene, LayerKind, ShaderParams};
 use oasis_vector::render::render_scene;
 use oasis_vector::scene::VectorScene;
 
@@ -57,6 +57,28 @@ pub fn render_vector_background(
     };
 
     render_scene(backend, &scene)
+}
+
+/// Information about a shader background layer, extracted from the theme.
+pub struct ShaderLayerInfo {
+    /// Shader name (matches registry key, e.g. "balatro").
+    pub name: String,
+    /// Shader-specific parameters.
+    pub params: ShaderParams,
+}
+
+/// Extract the first shader layer from the active theme (if any).
+///
+/// Backends call this to determine whether to invoke GPU shader rendering
+/// before the vector overlay pass.
+pub fn get_shader_layer(at: &ActiveTheme) -> Option<ShaderLayerInfo> {
+    at.background_layers.iter().find_map(|l| match &l.kind {
+        LayerKind::Shader { name, params } => Some(ShaderLayerInfo {
+            name: name.clone(),
+            params: params.clone(),
+        }),
+        _ => None,
+    })
 }
 
 #[cfg(test)]

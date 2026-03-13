@@ -748,6 +748,13 @@ pub struct BackgroundLayerConfig {
     /// Glass shard points (normalized 0..1).
     #[serde(default)]
     pub points: Option<Vec<[f32; 2]>>,
+    // -- Shader --
+    /// Shader name (for `kind = "shader"`).
+    #[serde(default)]
+    pub shader: Option<String>,
+    /// Shader-specific float parameters.
+    #[serde(default)]
+    pub shader_params: Option<toml::Table>,
     // -- Position --
     /// Positioning sub-table.
     #[serde(default)]

@@ -105,32 +105,23 @@ press_flash_lighten = 0.4
 [background_performance]
 complexity_budget = 5000
 
-# Primary deep waves — slow, wide swells
+# Software shader background — Balatro swirl with cyberpunk neon colors
 [[background_layers]]
-kind = "waves"
-count = 12
-max_height = 30
-frequency = 2.0
-color = "#00FFFF40"
-[background_layers.animation]
-rotate_speed = 0.18
+kind = "shader"
+shader = "balatro"
 
-# Secondary fast ripples — higher frequency, offset phase, magenta tint
-[[background_layers]]
-kind = "waves"
-count = 10
-max_height = 12
-frequency = 5.5
-color = "#FF00FF28"
-[background_layers.animation]
-rotate_speed = 0.45
-phase_offset = 1.5
-
-# Faint scanlines over the top for CRT texture
-[[background_layers]]
-kind = "scanlines"
-spacing = 3
-color = "#00FFFF10"
+[background_layers.shader_params]
+color_1 = "#00F0FF"
+color_2 = "#FF2060"
+color_3 = "#0A0A14"
+speed = 1.0
+contrast = 3.5
+spin_speed = 1.0
+spin_amount = 0.25
+pixel_filter = 745.0
+is_rotate = false
+lighting = 0.4
+spin_ease = 1.0
 
 [app_overrides]
 app_bg = "#0A0A14"
