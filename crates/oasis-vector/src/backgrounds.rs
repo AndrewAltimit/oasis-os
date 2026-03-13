@@ -301,10 +301,10 @@ pub fn floating_polygons(
         // Position: deterministic based on index, drifting over time
         let base_x = (w as f32 * ((i as f32 * 0.37 + 0.1) % 1.0)) as i32;
         let base_y = (h as f32 * ((i as f32 * 0.53 + 0.2) % 1.0)) as i32;
-        let dx = (clock.time_s * drift_x + phase * 10.0) as i32 % w as i32;
-        let dy = (clock.time_s * drift_y + phase * 7.0) as i32 % h as i32;
-        let cx = (base_x + dx) % w as i32;
-        let cy = (base_y + dy) % h as i32;
+        let dx = (clock.time_s * drift_x + phase * 10.0) as i32;
+        let dy = (clock.time_s * drift_y + phase * 7.0) as i32;
+        let cx = (base_x + dx).rem_euclid(w as i32);
+        let cy = (base_y + dy).rem_euclid(h as i32);
         let radius = 8.0 + (i as f32 * 3.7) % 12.0;
 
         let mut points = Vec::with_capacity(sides);
