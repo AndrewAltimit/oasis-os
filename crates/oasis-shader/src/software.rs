@@ -520,7 +520,7 @@ fn cell_bright(time: f32, x: f32, y: f32) -> f32 {
 /// Voronoi `ran` helper — pseudo-random 2D → 2D.
 fn voronoi_ran(x: f32, y: f32) -> (f32, f32) {
     let ax = x * (x * 127.1 + y * 311.7);
-    let ay = x * (x * 227.1 + y * 521.7);
+    let ay = y * (x * 227.1 + y * 521.7);
     let fx =
         1.0 - fract((ax.cos() * 123.6).tan() * 3533.3) * fract((ax.cos() * 123.6).tan() * 3533.3);
     let fy =
