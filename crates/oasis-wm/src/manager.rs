@@ -606,7 +606,7 @@ impl WindowManager {
         Ok(())
     }
 
-    /// Allocation-free variant of [`draw_with_clips`] for constrained targets.
+    /// Allocation-free variant of [`Self::draw_with_clips`] for constrained targets.
     ///
     /// Uses a fixed stack buffer for SDI name construction instead of
     /// `format!()`/`Vec` allocations. Suitable for PSP where heap
