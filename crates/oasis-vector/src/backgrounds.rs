@@ -186,12 +186,7 @@ pub fn glass_shard(
     let wrapped_dy = drift_y.rem_euclid(hf);
     let mapped: Vec<(i32, i32)> = points
         .iter()
-        .map(|&(px, py)| {
-            (
-                (px * wf + wrapped_dx) as i32,
-                (py * hf + wrapped_dy) as i32,
-            )
-        })
+        .map(|&(px, py)| ((px * wf + wrapped_dx) as i32, (py * hf + wrapped_dy) as i32))
         .collect();
     vec![VectorOp::FillPolygon {
         points: mapped,
