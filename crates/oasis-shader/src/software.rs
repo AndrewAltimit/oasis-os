@@ -169,10 +169,12 @@ impl SoftwareShaderRenderer {
         // Nearest-neighbour upscale to output buffer.
         for y in 0..self.height {
             let sy = (y / RENDER_SCALE).min(ih - 1);
+            let src_row = (sy * iw) as usize;
+            let dst_row = (y * self.width * 4) as usize;
             for x in 0..self.width {
-                let sx = (x / RENDER_SCALE).min(iw - 1);
-                let rgba = self.lo_buf[(sy * iw + sx) as usize];
-                let idx = ((y * self.width + x) * 4) as usize;
+                let sx = (x / RENDER_SCALE).min(iw - 1) as usize;
+                let rgba = self.lo_buf[src_row + sx];
+                let idx = dst_row + (x * 4) as usize;
                 self.pixel_buf[idx] = rgba[0];
                 self.pixel_buf[idx + 1] = rgba[1];
                 self.pixel_buf[idx + 2] = rgba[2];
