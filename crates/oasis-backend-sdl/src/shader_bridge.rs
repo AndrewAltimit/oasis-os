@@ -38,11 +38,11 @@ impl SdlShaderBridge {
     pub fn render_and_blit(
         &mut self,
         backend: &mut super::SdlBackend,
-        _shader_name: &str,
+        shader_name: &str,
         time: f32,
         params: &ShaderParams,
     ) {
-        let pixels = self.renderer.render_balatro(time, params);
+        let pixels = self.renderer.render_shader(shader_name, time, params);
 
         // Destroy previous frame's texture.
         if let Some(old) = self.cached_tex.take() {

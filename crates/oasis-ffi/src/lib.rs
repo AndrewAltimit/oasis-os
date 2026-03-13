@@ -412,7 +412,7 @@ pub unsafe extern "C" fn oasis_tick(handle: *mut OasisInstance, delta_seconds: f
         let renderer = instance.software_shader.get_or_insert_with(|| {
             oasis_shader::software::SoftwareShaderRenderer::new(instance.width, instance.height)
         });
-        let pixels = renderer.render_balatro(instance.shader_time, &params);
+        let pixels = renderer.render_shader(&info.name, instance.shader_time, &params);
         instance
             .backend
             .blit_rgba(0, 0, instance.width, instance.height, pixels);

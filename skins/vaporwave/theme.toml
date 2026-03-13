@@ -60,6 +60,14 @@ cursor_blink_rate = 30
 press_flash_duration = 6
 
 [[background_layers]]
+kind = "shader"
+shader = "city_lights"
+
+[background_layers.shader_params]
+speed = 0.8
+size = 25.0
+
+[[background_layers]]
 kind = "floating_polygons"
 count = 4
 sides = 4

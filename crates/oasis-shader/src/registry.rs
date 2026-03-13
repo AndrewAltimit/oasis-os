@@ -1,4 +1,4 @@
-//! Built-in shader name → source mapping.
+//! Built-in shader name -> source mapping.
 
 use crate::shaders;
 
@@ -6,6 +6,10 @@ use crate::shaders;
 pub fn get_shader_source(name: &str) -> Option<&'static str> {
     match name {
         "balatro" => Some(shaders::BALATRO_FRAG),
+        "voronoi" => Some(shaders::VORONOI_FRAG),
+        "city_lights" => Some(shaders::CITY_LIGHTS_FRAG),
+        "ocean_waves" => Some(shaders::OCEAN_WAVES_FRAG),
+        "calm_waves" => Some(shaders::CALM_WAVES_FRAG),
         _ => None,
     }
 }

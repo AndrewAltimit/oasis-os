@@ -36,12 +36,12 @@ impl WasmShaderBridge {
     #[cfg(target_arch = "wasm32")]
     pub fn render_frame(
         &mut self,
-        _shader_name: &str,
+        shader_name: &str,
         time: f32,
         params: &ShaderParams,
         ctx: &web_sys::CanvasRenderingContext2d,
     ) {
-        let pixels = self.renderer.render_balatro(time, params);
+        let pixels = self.renderer.render_shader(shader_name, time, params);
 
         // Create ImageData from RGBA pixel buffer and draw to canvas.
         let clamped = wasm_bindgen::Clamped(pixels);
