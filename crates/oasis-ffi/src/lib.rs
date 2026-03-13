@@ -131,6 +131,8 @@ pub struct OasisInstance {
     height: u32,
     /// Software shader renderer (CPU fallback for GPU shaders).
     software_shader: Option<oasis_shader::software::SoftwareShaderRenderer>,
+    /// Accumulated time for shader animation (seconds).
+    shader_time: f32,
     /// Background video decode thread state (when `video-decode` feature is enabled).
     #[cfg(feature = "_video")]
     video_state: Option<VideoThreadState>,
@@ -300,6 +302,7 @@ pub unsafe extern "C" fn oasis_create(
         width,
         height,
         software_shader: None,
+        shader_time: 0.0,
         #[cfg(feature = "_video")]
         video_state: None,
     };
@@ -340,11 +343,13 @@ pub unsafe extern "C" fn oasis_destroy(handle: *mut OasisInstance) {
 ///
 /// Caller must ensure single-threaded access to the handle.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn oasis_tick(handle: *mut OasisInstance, _delta_seconds: f32) {
+pub unsafe extern "C" fn oasis_tick(handle: *mut OasisInstance, delta_seconds: f32) {
     // SAFETY: Caller guarantees `handle` is valid and non-null per function safety contract.
     let Some(instance) = (unsafe { handle.as_mut() }) else {
         return;
     };
+
+    instance.shader_time += delta_seconds;
 
     // Process queued input events.
     let events = instance.input.poll_events();
@@ -407,7 +412,7 @@ pub unsafe extern "C" fn oasis_tick(handle: *mut OasisInstance, _delta_seconds: 
         let renderer = instance.software_shader.get_or_insert_with(|| {
             oasis_shader::software::SoftwareShaderRenderer::new(instance.width, instance.height)
         });
-        let pixels = renderer.render_balatro(0.0, &params);
+        let pixels = renderer.render_balatro(instance.shader_time, &params);
         instance
             .backend
             .blit_rgba(0, 0, instance.width, instance.height, pixels);

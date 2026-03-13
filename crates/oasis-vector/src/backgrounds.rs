@@ -293,6 +293,9 @@ pub fn floating_polygons(
     drift_y: f32,
     base_phase: f32,
 ) -> Vec<VectorOp> {
+    if w == 0 || h == 0 {
+        return Vec::new();
+    }
     let mut ops = Vec::new();
     let sides = sides.max(3) as usize;
 

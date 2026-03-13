@@ -271,6 +271,9 @@ impl BackgroundScene {
                 stroke_width,
             } => backgrounds::concentric_rings(cx, cy, *count, *radius, *stroke_width, color),
             LayerKind::GlassShard { points } => {
+                if w == 0 || h == 0 {
+                    return Vec::new();
+                }
                 let drift_x = if reduced_motion {
                     0.0
                 } else {
