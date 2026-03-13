@@ -1,7 +1,7 @@
 //! Factory functions for background layer elements.
 //!
-//! Each function produces a `Vec<VectorOp>` for a specific [`LayerKind`].
-//! These are the building blocks that [`BackgroundScene::build_ops()`] dispatches to.
+//! Each function produces a `Vec<VectorOp>` for a specific [`super::background::LayerKind`].
+//! These are the building blocks that [`super::background::BackgroundScene::build_ops()`] dispatches to.
 
 use oasis_types::backend::Color;
 
