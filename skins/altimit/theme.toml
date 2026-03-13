@@ -112,6 +112,27 @@ vector_pulse_speed = 0.10
 vector_blink_enabled = true
 vector_blink_interval = 30
 
+# Background decoration layers
+[background_performance]
+complexity_budget = 3000
+
+# Perspective grid floor
+[[background_layers]]
+kind = "grid"
+spacing = 30
+color = "#00CC8818"
+
+# Waves as digital ocean / "The World" terrain
+[[background_layers]]
+kind = "waves"
+count = 10
+max_height = 22
+frequency = 3.5
+color = "#00CC8840"
+[background_layers.animation]
+rotate_speed = 0.15
+
+
 [app_overrides]
 app_bg = "#080816"
 text_color = "#D0E8E0"

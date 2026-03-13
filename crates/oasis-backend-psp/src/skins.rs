@@ -8,6 +8,7 @@
 use oasis_backend_psp::Color;
 use oasis_core::active_theme::ActiveTheme;
 use oasis_core::skin::SkinFeatures;
+use oasis_core::vector::background::LayerKind;
 
 use crate::theme;
 
@@ -263,4 +264,22 @@ pub(crate) fn apply_psp_overrides(t: &mut ActiveTheme) {
     t.grid_padding_x = theme::GRID_PAD_X as u16;
     t.grid_padding_y = theme::GRID_PAD_Y as u16;
     t.cursor_pad = theme::CURSOR_PAD;
+
+    // Background layer guardrails for PSP performance.
+    // Filter out expensive layer types that strain the PSP GE.
+    t.background_layers.retain(|layer| {
+        !matches!(
+            layer.kind,
+            LayerKind::FloatingPolygons { .. }
+                | LayerKind::EqBars { .. }
+                | LayerKind::Waves { .. }
+                | LayerKind::Shader { .. }
+        )
+    });
+    // Cap at 4 layers max on PSP hardware.
+    t.background_layers.truncate(4);
+    // Tighter complexity budget for 333MHz MIPS.
+    t.background_max_layers = 4;
+    t.background_complexity_budget = t.background_complexity_budget.min(100);
+    t.background_reduced_motion = true;
 }

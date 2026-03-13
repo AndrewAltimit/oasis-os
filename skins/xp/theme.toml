@@ -90,6 +90,20 @@ focus_ring_color = "#0054E3A0"
 cursor_pad = 4
 toast_slide_in = true
 
+[[background_layers]]
+kind = "glass_shard"
+color = "#FFFFFF24"
+points = [[0.1, 0.2], [0.4, 0.05], [0.5, 0.35]]
+[background_layers.animation]
+drift_x = 2.0
+
+[[background_layers]]
+kind = "glass_shard"
+color = "#FFFFFF24"
+points = [[0.55, 0.6], [0.85, 0.45], [0.9, 0.8]]
+[background_layers.animation]
+drift_x = 1.5
+
 [app_overrides]
 text_color = "#333333"
 dim_text = "#666666"

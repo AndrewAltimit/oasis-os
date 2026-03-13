@@ -165,11 +165,20 @@ pub fn update_sdi(state: &mut AppState, sdi: &mut SdiRegistry) {
     state.ui.mouse_cursor.update_sdi(sdi);
 
     // Ensure wallpaper is visible and at lowest z (skip during fullscreen kiosk
-    // where we explicitly hide it to prevent bleed-through).
+    // where we explicitly hide it to prevent bleed-through, and skip when a
+    // shader layer replaces the wallpaper).
     let fullscreen_active =
         matches!(state.mode, Mode::Desktop) && state.content.fullscreen_app.is_some();
-    if !fullscreen_active && let Ok(obj) = sdi.get_mut("wallpaper") {
+    let shader_active = oasis_core::vector_overlay::get_shader_layer(&state.active_theme).is_some();
+    if !fullscreen_active
+        && !shader_active
+        && let Ok(obj) = sdi.get_mut("wallpaper")
+    {
         obj.visible = true;
+    }
+    // Hide opaque content_bg when shader provides the background.
+    if shader_active && let Ok(obj) = sdi.get_mut("content_bg") {
+        obj.visible = false;
     }
 }
 

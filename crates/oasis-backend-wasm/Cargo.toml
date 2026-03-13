@@ -29,6 +29,7 @@ oasis-browser = { workspace = true }
 oasis-net = { workspace = true }
 oasis-wm = { workspace = true }
 oasis-ui = { workspace = true }
+oasis-shader = { workspace = true, features = ["software"] }
 log = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

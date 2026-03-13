@@ -73,6 +73,23 @@ fn render_op(backend: &mut dyn SdiBackend, op: &VectorOp, group_alpha: u8) -> Re
             radius,
             color,
         } => backend.fill_rounded_rect(*x, *y, *w, *h, *radius, apply_alpha(*color, group_alpha)),
+        VectorOp::StrokeRoundedRect {
+            x,
+            y,
+            w,
+            h,
+            radius,
+            width,
+            color,
+        } => backend.stroke_rounded_rect(
+            *x,
+            *y,
+            *w,
+            *h,
+            *radius,
+            *width,
+            apply_alpha(*color, group_alpha),
+        ),
         VectorOp::FillPolygon { points, color } => {
             backend.fill_polygon(points, apply_alpha(*color, group_alpha))
         },

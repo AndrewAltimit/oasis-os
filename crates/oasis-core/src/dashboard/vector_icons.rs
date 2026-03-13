@@ -9,6 +9,7 @@ use oasis_types::backend::{Color, SdiBackend};
 use oasis_types::error::Result;
 use oasis_vector::anim;
 use oasis_vector::icons::{self, IconDef};
+use oasis_vector::op::VectorOp;
 use oasis_vector::render::render_scene_at;
 use oasis_vector::scene::VectorScene;
 
@@ -19,6 +20,8 @@ use super::{AppEntry, DashboardState, IconGeometry, IconNames};
 /// Get a vector icon for an app based on the preset, app index, and animation state.
 ///
 /// The "altimit" preset cycles through the 6 Altimit-inspired icons.
+/// The "geometric" preset uses circles, hexagons, and abstract shapes.
+/// The "hud" preset uses military/tactical diamond/chevron icons.
 /// When `frame` > 0, animated variants are used for icons that support animation.
 pub(super) fn icon_for_app(
     preset: &str,
@@ -29,6 +32,8 @@ pub(super) fn icon_for_app(
 ) -> IconDef {
     match preset {
         "altimit" => altimit_icon(app.color, index, frame, anim_cfg),
+        "geometric" => geometric_icon(app.color, index),
+        "hud" => hud_icon(app.color, index),
         _ => altimit_icon(app.color, index, frame, anim_cfg),
     }
 }
@@ -56,6 +61,297 @@ fn altimit_icon(color: Color, index: usize, frame: u32, cfg: &IconTheme) -> Icon
             icons::icon_data_animated(color, Color::rgb(0, 200, 100), visible)
         },
         _ => icons::icon_data(color, Color::rgb(0, 200, 100)),
+    }
+}
+
+/// Geometric icon preset — circles, hexagons, and abstract shapes.
+fn geometric_icon(color: Color, index: usize) -> IconDef {
+    let full = core::f32::consts::TAU;
+    match index % 6 {
+        0 => IconDef {
+            name: "geo_circle",
+            ops: vec![
+                VectorOp::StrokeCircle {
+                    cx: 11,
+                    cy: 11,
+                    radius: 10,
+                    width: 2,
+                    color,
+                },
+                VectorOp::FillCircle {
+                    cx: 11,
+                    cy: 11,
+                    radius: 4,
+                    color,
+                },
+            ],
+            width: 22,
+            height: 22,
+        },
+        1 => {
+            // Hexagon
+            let pts: Vec<(i32, i32)> = (0..6)
+                .map(|i| {
+                    let a = full * i as f32 / 6.0 - core::f32::consts::FRAC_PI_2;
+                    (11 + (10.0 * a.cos()) as i32, 11 + (10.0 * a.sin()) as i32)
+                })
+                .collect();
+            IconDef {
+                name: "geo_hexagon",
+                ops: vec![VectorOp::StrokePolygon {
+                    points: pts,
+                    width: 2,
+                    color,
+                }],
+                width: 22,
+                height: 22,
+            }
+        },
+        2 => IconDef {
+            name: "geo_diamond",
+            ops: vec![VectorOp::StrokePolygon {
+                points: vec![(11, 0), (22, 11), (11, 22), (0, 11)],
+                width: 2,
+                color,
+            }],
+            width: 22,
+            height: 22,
+        },
+        3 => IconDef {
+            name: "geo_triangle",
+            ops: vec![VectorOp::StrokePolygon {
+                points: vec![(11, 1), (21, 20), (1, 20)],
+                width: 2,
+                color,
+            }],
+            width: 22,
+            height: 22,
+        },
+        4 => IconDef {
+            name: "geo_square",
+            ops: vec![
+                VectorOp::StrokeRect {
+                    x: 1,
+                    y: 1,
+                    w: 20,
+                    h: 20,
+                    width: 2,
+                    color,
+                },
+                VectorOp::Line {
+                    x1: 1,
+                    y1: 1,
+                    x2: 21,
+                    y2: 21,
+                    width: 1,
+                    color,
+                },
+            ],
+            width: 22,
+            height: 22,
+        },
+        _ => {
+            // Pentagon
+            let pts: Vec<(i32, i32)> = (0..5)
+                .map(|i| {
+                    let a = full * i as f32 / 5.0 - core::f32::consts::FRAC_PI_2;
+                    (11 + (10.0 * a.cos()) as i32, 11 + (10.0 * a.sin()) as i32)
+                })
+                .collect();
+            IconDef {
+                name: "geo_pentagon",
+                ops: vec![VectorOp::StrokePolygon {
+                    points: pts,
+                    width: 2,
+                    color,
+                }],
+                width: 22,
+                height: 22,
+            }
+        },
+    }
+}
+
+/// HUD/tactical icon preset — military-style diamond and chevron shapes.
+fn hud_icon(color: Color, index: usize) -> IconDef {
+    match index % 6 {
+        0 => IconDef {
+            name: "hud_diamond",
+            ops: vec![
+                VectorOp::StrokePolygon {
+                    points: vec![(11, 0), (22, 11), (11, 22), (0, 11)],
+                    width: 1,
+                    color,
+                },
+                VectorOp::FillPolygon {
+                    points: vec![(11, 4), (18, 11), (11, 18), (4, 11)],
+                    color,
+                },
+            ],
+            width: 22,
+            height: 22,
+        },
+        1 => IconDef {
+            name: "hud_chevron_up",
+            ops: vec![
+                VectorOp::Line {
+                    x1: 2,
+                    y1: 16,
+                    x2: 11,
+                    y2: 6,
+                    width: 2,
+                    color,
+                },
+                VectorOp::Line {
+                    x1: 11,
+                    y1: 6,
+                    x2: 20,
+                    y2: 16,
+                    width: 2,
+                    color,
+                },
+            ],
+            width: 22,
+            height: 22,
+        },
+        2 => IconDef {
+            name: "hud_crosshair",
+            ops: vec![
+                VectorOp::StrokeCircle {
+                    cx: 11,
+                    cy: 11,
+                    radius: 8,
+                    width: 1,
+                    color,
+                },
+                VectorOp::Line {
+                    x1: 11,
+                    y1: 0,
+                    x2: 11,
+                    y2: 22,
+                    width: 1,
+                    color,
+                },
+                VectorOp::Line {
+                    x1: 0,
+                    y1: 11,
+                    x2: 22,
+                    y2: 11,
+                    width: 1,
+                    color,
+                },
+            ],
+            width: 22,
+            height: 22,
+        },
+        3 => IconDef {
+            name: "hud_bracket",
+            ops: vec![
+                VectorOp::Line {
+                    x1: 0,
+                    y1: 0,
+                    x2: 6,
+                    y2: 0,
+                    width: 2,
+                    color,
+                },
+                VectorOp::Line {
+                    x1: 0,
+                    y1: 0,
+                    x2: 0,
+                    y2: 6,
+                    width: 2,
+                    color,
+                },
+                VectorOp::Line {
+                    x1: 16,
+                    y1: 0,
+                    x2: 22,
+                    y2: 0,
+                    width: 2,
+                    color,
+                },
+                VectorOp::Line {
+                    x1: 22,
+                    y1: 0,
+                    x2: 22,
+                    y2: 6,
+                    width: 2,
+                    color,
+                },
+                VectorOp::Line {
+                    x1: 0,
+                    y1: 22,
+                    x2: 6,
+                    y2: 22,
+                    width: 2,
+                    color,
+                },
+                VectorOp::Line {
+                    x1: 0,
+                    y1: 16,
+                    x2: 0,
+                    y2: 22,
+                    width: 2,
+                    color,
+                },
+                VectorOp::Line {
+                    x1: 16,
+                    y1: 22,
+                    x2: 22,
+                    y2: 22,
+                    width: 2,
+                    color,
+                },
+                VectorOp::Line {
+                    x1: 22,
+                    y1: 16,
+                    x2: 22,
+                    y2: 22,
+                    width: 2,
+                    color,
+                },
+            ],
+            width: 22,
+            height: 22,
+        },
+        4 => IconDef {
+            name: "hud_arrow",
+            ops: vec![VectorOp::FillPolygon {
+                points: vec![(11, 0), (22, 22), (11, 16), (0, 22)],
+                color,
+            }],
+            width: 22,
+            height: 22,
+        },
+        _ => IconDef {
+            name: "hud_bars",
+            ops: vec![
+                VectorOp::FillRect {
+                    x: 2,
+                    y: 2,
+                    w: 18,
+                    h: 3,
+                    color,
+                },
+                VectorOp::FillRect {
+                    x: 2,
+                    y: 9,
+                    w: 18,
+                    h: 3,
+                    color,
+                },
+                VectorOp::FillRect {
+                    x: 2,
+                    y: 16,
+                    w: 18,
+                    h: 3,
+                    color,
+                },
+            ],
+            width: 22,
+            height: 22,
+        },
     }
 }
 
@@ -191,7 +487,7 @@ impl DashboardState {
             }
 
             // Center the scaled icon within the cell.
-            let ox = ix + (icon_w as i32 - scene.width as i32) / 2;
+            let mut ox = ix + (icon_w as i32 - scene.width as i32) / 2;
             let mut oy = iy + (icon_h as i32 - scene.height as i32) / 2;
 
             // Apply idle float animation (sine-wave bob).
@@ -204,7 +500,62 @@ impl DashboardState {
                 );
             }
 
-            render_scene_at(backend, &scene, ox, oy, 255)?;
+            // Entrance animation.
+            let mut alpha = 255u8;
+            if at.entrance_style != "none"
+                && let Some(elapsed) = self.entrance_elapsed_ms
+            {
+                let staggered = elapsed.saturating_sub(i as u32 * at.entrance_stagger_ms);
+                let dur = at.entrance_duration_ms;
+                match at.entrance_style.as_str() {
+                    "fade_in" => {
+                        alpha = anim::entrance_alpha(staggered, dur);
+                    },
+                    "scale_up" => {
+                        let s = anim::entrance_scale(staggered, dur);
+                        if s < 1.0 {
+                            let sw = (scene.width as f32 * s) as u32;
+                            let sh = (scene.height as f32 * s) as u32;
+                            ox += (scene.width as i32 - sw as i32) / 2;
+                            oy += (scene.height as i32 - sh as i32) / 2;
+                            for op in &mut scene.ops {
+                                op.scale(s);
+                            }
+                            scene.width = sw;
+                            scene.height = sh;
+                        }
+                    },
+                    "slide_up" => {
+                        oy += anim::entrance_slide_y(staggered, dur, 15);
+                        alpha = anim::entrance_alpha(staggered, dur);
+                    },
+                    _ => {},
+                }
+            }
+
+            // Focus glow ring.
+            if at.focus_glow && i == self.selected_index {
+                let glow_alpha = anim::pulse_alpha(frame_counter, 0.08, 100);
+                let mut gc = at.focus_glow_color;
+                gc.a = ((gc.a as u16 * glow_alpha as u16) / 255) as u8;
+                let glow_op = VectorOp::StrokeRoundedRect {
+                    x: ox - 2,
+                    y: oy - 2,
+                    w: scene.width + 4,
+                    h: scene.height + 4,
+                    radius: 4,
+                    width: 1,
+                    color: gc,
+                };
+                let glow_scene = VectorScene {
+                    width: scene.width + 4,
+                    height: scene.height + 4,
+                    ops: vec![glow_op],
+                };
+                render_scene_at(backend, &glow_scene, 0, 0, alpha)?;
+            }
+
+            render_scene_at(backend, &scene, ox, oy, alpha)?;
         }
 
         Ok(())

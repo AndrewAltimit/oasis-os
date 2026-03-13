@@ -74,6 +74,21 @@ cursor_blink_rate = 20
 
 [wallpaper]
 style = "scanlines"
+
+[[background_layers]]
+kind = "scanlines"
+spacing = 2
+color = "#00FF0030"
+
+[[background_layers]]
+kind = "pulsing_core"
+radius = 8
+color = "#00FF0045"
+[background_layers.position]
+anchor = "center"
+[background_layers.animation]
+pulse_speed = 0.5
+pulse_min_alpha = 0.3
 "##;
 
 const TERMINAL_STRINGS: &str = r#"
@@ -198,6 +213,28 @@ press_flash_duration = 0
 style = "dots"
 grid_color = "#1A1A1A"
 grid_spacing = 12
+
+[[background_layers]]
+kind = "grid"
+spacing = 40
+color = "#00FF0028"
+
+[[background_layers]]
+kind = "crosshair"
+size = 20
+color = "#00FF0038"
+[background_layers.position]
+anchor = "center"
+
+[[background_layers]]
+kind = "radar_sweep"
+radius = 80
+sweep_angle = 0.6
+color = "#00FF0030"
+[background_layers.position]
+anchor = "center"
+[background_layers.animation]
+rotate_speed = 1.0
 "##;
 
 const TACTICAL_STRINGS: &str = r#"
@@ -288,6 +325,20 @@ error = "#FF3333"
 
 [geometry]
 toast_slide_in = false
+
+[[background_layers]]
+kind = "scanlines"
+spacing = 1
+color = "#FF000030"
+
+[[background_layers]]
+kind = "floating_polygons"
+count = 2
+sides = 3
+color = "#FF000038"
+[background_layers.animation]
+drift_x = 15.0
+drift_y = 10.0
 "##;
 
 const CORRUPTED_STRINGS: &str = r#"
@@ -563,6 +614,11 @@ titlebar_gradient = true
 frame_shadow_level = 2
 frame_border_radius = 4
 button_radius = 8
+
+[[background_layers]]
+kind = "glass_shard"
+color = "#FFFFFF20"
+points = [[0.3, 0.25], [0.6, 0.1], [0.65, 0.45]]
 "##;
 
 const MODERN_STRINGS: &str = r#"
@@ -946,6 +1002,26 @@ error = "#FF4444"
 style = "grid"
 grid_color = "#0D2233"
 grid_spacing = 16
+
+[[background_layers]]
+kind = "scanlines"
+spacing = 2
+color = "#00FFFF28"
+
+[[background_layers]]
+kind = "grid"
+spacing = 30
+color = "#00FFFF28"
+
+[[background_layers]]
+kind = "pulsing_core"
+radius = 10
+color = "#00FFFF40"
+[background_layers.position]
+anchor = "center"
+[background_layers.animation]
+pulse_speed = 0.3
+pulse_min_alpha = 0.4
 "##;
 
 const AGENT_TERMINAL_STRINGS: &str = r#"

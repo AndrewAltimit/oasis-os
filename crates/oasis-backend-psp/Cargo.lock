@@ -876,6 +876,7 @@ dependencies = [
  "oasis-sdi",
  "oasis-types",
  "oasis-ui",
+ "oasis-vector",
  "oasis-wm",
  "serde",
  "toml",

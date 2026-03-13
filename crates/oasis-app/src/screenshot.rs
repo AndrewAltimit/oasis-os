@@ -385,7 +385,7 @@ fn render_and_save_inner(
     let render_once = |b: &mut SdlBackend, s: &mut SdiRegistry| -> anyhow::Result<()> {
         b.clear(clear_color)?;
         if let Some(ref v) = vector
-            && v.theme.icon.style == "vector"
+            && (v.theme.icon.style == "vector" || !v.theme.background_layers.is_empty())
         {
             s.draw_base_layer(b)?;
             oasis_core::vector_overlay::render_vector_background(b, v.theme, 30)?;

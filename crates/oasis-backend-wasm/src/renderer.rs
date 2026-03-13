@@ -161,6 +161,11 @@ impl WasmBackend {
         &self.canvas
     }
 
+    /// Get the 2D rendering context (used by shader bridge for `putImageData`).
+    pub fn ctx(&self) -> &web_sys::CanvasRenderingContext2d {
+        &self.ctx
+    }
+
     fn translate(&self, x: i32, y: i32) -> (f64, f64) {
         let (tx, ty) = self.cumulative_translate;
         ((x + tx) as f64, (y + ty) as f64)

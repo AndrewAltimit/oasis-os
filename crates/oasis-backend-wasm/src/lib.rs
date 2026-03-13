@@ -11,6 +11,7 @@ pub mod input;
 pub mod network;
 pub mod platform;
 pub mod renderer;
+pub mod shader_bridge;
 pub mod tv_catalog;
 pub mod video;
 
@@ -128,6 +129,7 @@ pub struct OasisWasm {
     pending_catalog: Option<archive::WasmArchiveCatalogFetcher>,
     video_player: video::VideoPlayer,
     pending_tv_catalog: Option<tv_catalog::WasmTvCatalogFetcher>,
+    shader_bridge: Option<shader_bridge::WasmShaderBridge>,
     /// Window id of the currently fullscreen-kiosk app (if any).
     fullscreen_app: Option<String>,
 }
@@ -242,6 +244,12 @@ impl OasisWasm {
             .load_texture(width, height, &wp_data)
             .map_err(|e| JsValue::from_str(&format!("wallpaper: {e}")))?;
         terminal_sdi::setup_wallpaper(&mut sdi, wallpaper_tex, width, height);
+        // Hide wallpaper SDI object when a shader layer replaces it.
+        if oasis_core::vector_overlay::get_shader_layer(&active_theme).is_some()
+            && let Ok(obj) = sdi.get_mut("wallpaper")
+        {
+            obj.visible = false;
+        }
 
         // Mouse cursor texture.
         let mut mouse_cursor = CursorState::new(width, height);
@@ -316,6 +324,7 @@ impl OasisWasm {
             pending_catalog: None,
             video_player,
             pending_tv_catalog: None,
+            shader_bridge: shader_bridge::WasmShaderBridge::new(width, height),
             fullscreen_app: None,
         })
     }
@@ -684,6 +693,24 @@ impl OasisWasm {
         if let Err(e) = self.backend.clear(self.bg_color) {
             console_log!("clear error: {e}");
         }
+
+        // Render shader wallpaper FIRST (replaces bg_color clear).
+        // Runs every frame so the animation stays live in all modes.
+        if let Some(ref mut bridge) = self.shader_bridge
+            && let Some(info) = oasis_core::vector_overlay::get_shader_layer(&self.active_theme)
+        {
+            let params = oasis_shader::ShaderParams {
+                colors: info.params.colors,
+                floats: info.params.floats,
+            };
+            bridge.render_frame(
+                &info.name,
+                self.frame_counter as f32 / 60.0,
+                &params,
+                self.backend.ctx(),
+            );
+        }
+
         if self.mode == Mode::Desktop && self.wm.window_count() > 0 {
             let browser = &mut self.browser;
             let iframe_ref = &mut self.iframe;
@@ -735,10 +762,15 @@ impl OasisWasm {
         } else {
             // Not in desktop mode or no windows — hide iframe.
             self.iframe.hide();
-            if self.active_theme.icon.style == "vector" && self.mode == Mode::Dashboard {
+            if self.mode == Mode::Dashboard
+                && (self.active_theme.icon.style == "vector"
+                    || !self.active_theme.background_layers.is_empty())
+            {
+                // Shader already rendered above as wallpaper.
                 if let Err(e) = self.sdi.draw_base_layer(&mut self.backend) {
                     console_log!("sdi draw_base error: {e}");
                 }
+
                 let _ = oasis_core::vector_overlay::render_vector_background(
                     &mut self.backend,
                     &self.active_theme,
@@ -1027,10 +1059,20 @@ impl OasisWasm {
         self.mouse_cursor.update_sdi(&mut self.sdi);
 
         // Ensure wallpaper is visible and at lowest z (skip during fullscreen kiosk
-        // where we explicitly hide it to prevent bleed-through).
+        // where we explicitly hide it to prevent bleed-through, and skip when a
+        // shader layer replaces the wallpaper).
         let fullscreen_active = self.mode == Mode::Desktop && self.fullscreen_app.is_some();
-        if !fullscreen_active && let Ok(obj) = self.sdi.get_mut("wallpaper") {
+        let shader_active =
+            oasis_core::vector_overlay::get_shader_layer(&self.active_theme).is_some();
+        if !fullscreen_active
+            && !shader_active
+            && let Ok(obj) = self.sdi.get_mut("wallpaper")
+        {
             obj.visible = true;
+        }
+        // Hide opaque content_bg when shader provides the background.
+        if shader_active && let Ok(obj) = self.sdi.get_mut("content_bg") {
+            obj.visible = false;
         }
     }
 

@@ -129,6 +129,10 @@ pub struct OasisInstance {
     callbacks: HashMap<u32, OasisCallback>,
     width: u32,
     height: u32,
+    /// Software shader renderer (CPU fallback for GPU shaders).
+    software_shader: Option<oasis_shader::software::SoftwareShaderRenderer>,
+    /// Accumulated time for shader animation (seconds).
+    shader_time: f32,
     /// Background video decode thread state (when `video-decode` feature is enabled).
     #[cfg(feature = "_video")]
     video_state: Option<VideoThreadState>,
@@ -297,6 +301,8 @@ pub unsafe extern "C" fn oasis_create(
         callbacks: HashMap::new(),
         width,
         height,
+        software_shader: None,
+        shader_time: 0.0,
         #[cfg(feature = "_video")]
         video_state: None,
     };
@@ -337,11 +343,13 @@ pub unsafe extern "C" fn oasis_destroy(handle: *mut OasisInstance) {
 ///
 /// Caller must ensure single-threaded access to the handle.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn oasis_tick(handle: *mut OasisInstance, _delta_seconds: f32) {
+pub unsafe extern "C" fn oasis_tick(handle: *mut OasisInstance, delta_seconds: f32) {
     // SAFETY: Caller guarantees `handle` is valid and non-null per function safety contract.
     let Some(instance) = (unsafe { handle.as_mut() }) else {
         return;
     };
+
+    instance.shader_time += delta_seconds;
 
     // Process queued input events.
     let events = instance.input.poll_events();
@@ -394,8 +402,27 @@ pub unsafe extern "C" fn oasis_tick(handle: *mut OasisInstance, _delta_seconds: 
     let _ = instance
         .backend
         .clear(oasis_core::backend::Color::rgb(10, 10, 18));
-    if instance.active_theme.icon.style == "vector" {
+
+    // Render shader wallpaper FIRST (replaces bg clear).
+    if let Some(info) = oasis_core::vector_overlay::get_shader_layer(&instance.active_theme) {
+        let params = oasis_shader::ShaderParams {
+            colors: info.params.colors,
+            floats: info.params.floats,
+        };
+        let renderer = instance.software_shader.get_or_insert_with(|| {
+            oasis_shader::software::SoftwareShaderRenderer::new(instance.width, instance.height)
+        });
+        let pixels = renderer.render_balatro(instance.shader_time, &params);
+        instance
+            .backend
+            .blit_rgba(0, 0, instance.width, instance.height, pixels);
+    }
+
+    if instance.active_theme.icon.style == "vector"
+        || !instance.active_theme.background_layers.is_empty()
+    {
         let _ = instance.sdi.draw_base_layer(&mut instance.backend);
+
         let _ = oasis_core::vector_overlay::render_vector_background(
             &mut instance.backend,
             &instance.active_theme,

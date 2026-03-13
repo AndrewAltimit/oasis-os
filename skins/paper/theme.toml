@@ -86,6 +86,12 @@ focus_ring_width = 1
 cursor_pad = 3
 toast_slide_in = false
 
+[[background_layers]]
+kind = "dot_grid"
+spacing = 24
+dot_radius = 1
+color = "#D2B48C28"
+
 [app_overrides]
 app_bg = "#FFFFFF"
 text_color = "#1A1A1A"

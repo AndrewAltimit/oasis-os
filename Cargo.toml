@@ -23,6 +23,7 @@ members = [
     "crates/oasis-app-tv-guide",
     "crates/oasis-app-radio",
     "crates/oasis-vector",
+    "crates/oasis-shader",
     "crates/oasis-core",
     "crates/oasis-backend-sdl",
     "crates/oasis-backend-ue5",
@@ -61,6 +62,9 @@ anyhow = "1.0"
 
 # Graphics (desktop / Pi)
 sdl3 = { version = "0.17", features = ["build-from-source"] }
+
+# GPU shader rendering
+glow = "0.16"
 
 # Image encoding/decoding
 png = "0.17"
@@ -133,6 +137,7 @@ oasis-app-tv-guide = { path = "crates/oasis-app-tv-guide" }
 oasis-app-radio = { path = "crates/oasis-app-radio" }
 oasis-core = { path = "crates/oasis-core", default-features = false }
 oasis-vector = { path = "crates/oasis-vector" }
+oasis-shader = { path = "crates/oasis-shader", default-features = false }
 oasis-backend-ue5 = { path = "crates/oasis-backend-ue5" }
 oasis-backend-wasm = { path = "crates/oasis-backend-wasm" }
 oasis-video = { path = "crates/oasis-video", default-features = false }

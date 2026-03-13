@@ -39,6 +39,16 @@ pub enum VectorOp {
         radius: u16,
         color: Color,
     },
+    /// Rounded rectangle outline.
+    StrokeRoundedRect {
+        x: i32,
+        y: i32,
+        w: u32,
+        h: u32,
+        radius: u16,
+        width: u16,
+        color: Color,
+    },
     /// Filled convex polygon.
     FillPolygon {
         points: Vec<(i32, i32)>,
@@ -184,6 +194,7 @@ impl VectorOp {
             | Self::FillTriangle { color: c, .. }
             | Self::Text { color: c, .. } => *c = color,
             Self::StrokeRect { color: c, .. }
+            | Self::StrokeRoundedRect { color: c, .. }
             | Self::StrokePolygon { color: c, .. }
             | Self::StrokeCircle { color: c, .. }
             | Self::StrokeArc { color: c, .. }
@@ -229,6 +240,22 @@ impl VectorOp {
                 su(w);
                 su(h);
                 su16(radius);
+            },
+            Self::StrokeRoundedRect {
+                x,
+                y,
+                w,
+                h,
+                radius,
+                width,
+                ..
+            } => {
+                s(x);
+                s(y);
+                su(w);
+                su(h);
+                su16(radius);
+                su16(width);
             },
             Self::FillPolygon { points, .. } | Self::StrokePolygon { points, .. } => {
                 for (px, py) in points.iter_mut() {
@@ -302,6 +329,7 @@ impl VectorOp {
             | Self::FillTriangle { color, .. }
             | Self::Text { color, .. }
             | Self::StrokeRect { color, .. }
+            | Self::StrokeRoundedRect { color, .. }
             | Self::StrokePolygon { color, .. }
             | Self::StrokeCircle { color, .. }
             | Self::StrokeArc { color, .. }

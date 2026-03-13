@@ -12,6 +12,7 @@ mod font;
 mod input;
 pub mod network;
 mod sdl_audio;
+pub mod shader_bridge;
 mod shapes;
 
 use std::collections::HashMap;
@@ -123,6 +124,21 @@ impl SdlBackend {
             viewport_w: width,
             viewport_h: height,
         })
+    }
+
+    /// Access the underlying SDL window.
+    pub fn window(&self) -> &sdl3::video::Window {
+        self.canvas.window()
+    }
+
+    /// Access the texture creator (for creating streaming textures).
+    pub fn texture_creator(&self) -> &TextureCreator<WindowContext> {
+        &self.texture_creator
+    }
+
+    /// Access the SDL canvas mutably (for shader blit operations).
+    pub fn canvas_mut(&mut self) -> &mut Canvas<Window> {
+        &mut self.canvas
     }
 
     /// Apply cumulative translation to coordinates.

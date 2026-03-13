@@ -60,6 +60,11 @@ font_heading = 16
 cursor_blink_rate = 25
 press_flash_duration = 4
 
+[[background_layers]]
+kind = "glass_shard"
+color = "#93A1A124"
+points = [[0.15, 0.4], [0.4, 0.2], [0.45, 0.6]]
+
 [app_overrides]
 app_bg = "#002B36"
 text_color = "#839496"
