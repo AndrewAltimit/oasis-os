@@ -355,6 +355,30 @@ pub struct ActiveTheme {
     /// Toast notifications.
     pub toast: ToastTheme,
 
+    // -- Background layers --
+    /// Data-driven background decoration layers.
+    pub background_layers: Vec<oasis_vector::BackgroundLayer>,
+    /// Maximum number of background layers to render (default 8).
+    pub background_max_layers: u8,
+    /// Whether to suppress background layer animations (default false).
+    pub background_reduced_motion: bool,
+    /// Maximum VectorOp budget for background rendering (default 200).
+    pub background_complexity_budget: u32,
+
+    // -- Icon entrance/focus animations --
+    /// Entrance animation style: "none", "fade_in", "scale_up", "slide_up".
+    pub entrance_style: String,
+    /// Entrance animation duration in milliseconds.
+    pub entrance_duration_ms: u32,
+    /// Per-icon stagger delay in milliseconds.
+    pub entrance_stagger_ms: u32,
+    /// Focus scale factor (1.0 = no scale, 1.15 = 15% grow).
+    pub focus_scale: f32,
+    /// Whether a glow ring is drawn around the focused icon.
+    pub focus_glow: bool,
+    /// Focus glow color (default: accent at 40% alpha).
+    pub focus_glow_color: Color,
+
     // -- Dashboard geometry --
     /// Dashboard grid horizontal padding (default 16).
     pub grid_padding_x: u16,

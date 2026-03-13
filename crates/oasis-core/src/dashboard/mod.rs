@@ -181,6 +181,10 @@ pub struct DashboardState {
     press_flash_index: usize,
     /// Cached icon SDI names (avoids per-frame format! allocations).
     icon_names: Vec<IconNames>,
+    /// Elapsed milliseconds since last page change (for entrance animation).
+    entrance_elapsed_ms: Option<u32>,
+    /// Currently focused icon index within the page (for focus glow).
+    selected_index: usize,
 }
 
 impl DashboardState {
@@ -200,6 +204,8 @@ impl DashboardState {
             press_flash_frame: 0,
             press_flash_index: 0,
             icon_names,
+            entrance_elapsed_ms: Some(1000),
+            selected_index: 0,
         }
     }
 
@@ -279,6 +285,7 @@ impl DashboardState {
             duration: self.config.page_slide_duration,
             direction: -1, // slide left (next)
         });
+        self.entrance_elapsed_ms = Some(0);
     }
 
     /// Switch to the previous page (wraps around) with slide animation.
@@ -300,6 +307,7 @@ impl DashboardState {
             duration: self.config.page_slide_duration,
             direction: 1, // slide right (prev)
         });
+        self.entrance_elapsed_ms = Some(0);
     }
 
     /// Advance page-slide and cursor-lerp animations by one frame.
@@ -315,6 +323,12 @@ impl DashboardState {
         if self.press_flash_frame > 0 {
             self.press_flash_frame -= 1;
         }
+        // Entrance animation.
+        if let Some(ref mut elapsed) = self.entrance_elapsed_ms {
+            *elapsed = elapsed.saturating_add(16); // ~60fps
+        }
+        // Track selected index for focus glow.
+        self.selected_index = self.selected;
     }
 
     /// Get the currently selected app entry, if any.

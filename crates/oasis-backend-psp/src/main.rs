@@ -547,7 +547,11 @@ fn psp_main() {
         // Post-SDI overlays drawn directly on the backend.
         if app_mode == AppMode::Classic {
             match classic_view {
-                ClassicView::Dashboard if !icons_hidden && active_theme.icon.style == "vector" => {
+                ClassicView::Dashboard
+                    if !icons_hidden
+                        && (active_theme.icon.style == "vector"
+                            || !active_theme.background_layers.is_empty()) =>
+                {
                     dashboard::render_vector_overlays(
                         &mut backend,
                         &mut dashboard_state,

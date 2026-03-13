@@ -102,6 +102,36 @@ cursor_pad = 3
 toast_slide_in = true
 press_flash_lighten = 0.4
 
+[background_performance]
+complexity_budget = 5000
+
+# Primary deep waves — slow, wide swells
+[[background_layers]]
+kind = "waves"
+count = 12
+max_height = 30
+frequency = 2.0
+color = "#00FFFF40"
+[background_layers.animation]
+rotate_speed = 0.18
+
+# Secondary fast ripples — higher frequency, offset phase, magenta tint
+[[background_layers]]
+kind = "waves"
+count = 10
+max_height = 12
+frequency = 5.5
+color = "#FF00FF28"
+[background_layers.animation]
+rotate_speed = 0.45
+phase_offset = 1.5
+
+# Faint scanlines over the top for CRT texture
+[[background_layers]]
+kind = "scanlines"
+spacing = 3
+color = "#00FFFF10"
+
 [app_overrides]
 app_bg = "#0A0A14"
 text_color = "#E0F0FF"

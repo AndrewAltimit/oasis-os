@@ -394,7 +394,9 @@ pub unsafe extern "C" fn oasis_tick(handle: *mut OasisInstance, _delta_seconds: 
     let _ = instance
         .backend
         .clear(oasis_core::backend::Color::rgb(10, 10, 18));
-    if instance.active_theme.icon.style == "vector" {
+    if instance.active_theme.icon.style == "vector"
+        || !instance.active_theme.background_layers.is_empty()
+    {
         let _ = instance.sdi.draw_base_layer(&mut instance.backend);
         let _ = oasis_core::vector_overlay::render_vector_background(
             &mut instance.backend,

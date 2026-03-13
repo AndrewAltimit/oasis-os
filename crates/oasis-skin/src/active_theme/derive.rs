@@ -523,6 +523,29 @@ impl ActiveTheme {
                 .unwrap_or(true),
         };
 
+        // -- Background layers --
+        let bg_perf = skin.background_performance.as_ref();
+        let bg_max_layers = bg_perf.and_then(|p| p.max_layers).unwrap_or(8);
+        let bg_reduced_motion = bg_perf.and_then(|p| p.reduced_motion).unwrap_or(false);
+        let bg_complexity_budget = bg_perf.and_then(|p| p.complexity_budget).unwrap_or(200);
+        let background_layers = skin
+            .background_layers
+            .as_ref()
+            .map(|layers| {
+                layers
+                    .iter()
+                    .take(bg_max_layers as usize)
+                    .filter_map(|cfg| Self::convert_background_layer(cfg, &ov))
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+
+        // -- Icon entrance/focus --
+        let focus_glow_color = ov(
+            ico.and_then(|i| i.focus_glow_color.as_ref()),
+            with_alpha(primary, 100),
+        );
+
         Self {
             bar,
             icon,
@@ -532,6 +555,18 @@ impl ActiveTheme {
             scrollbar: scrollbar_theme,
             wallpaper: wallpaper_theme,
             toast: toast_theme,
+            background_layers,
+            background_max_layers: bg_max_layers,
+            background_reduced_motion: bg_reduced_motion,
+            background_complexity_budget: bg_complexity_budget,
+            entrance_style: ico
+                .and_then(|i| i.entrance_style.clone())
+                .unwrap_or_else(|| "none".to_string()),
+            entrance_duration_ms: ico.and_then(|i| i.entrance_duration_ms).unwrap_or(200),
+            entrance_stagger_ms: ico.and_then(|i| i.entrance_stagger_ms).unwrap_or(30),
+            focus_scale: ico.and_then(|i| i.focus_scale).unwrap_or(1.0),
+            focus_glow: ico.and_then(|i| i.focus_glow).unwrap_or(false),
+            focus_glow_color,
             grid_padding_x: skin
                 .geometry
                 .as_ref()
@@ -1085,6 +1120,16 @@ impl ActiveTheme {
             scrollbar: scrollbar_theme,
             wallpaper: wallpaper_theme,
             toast: toast_theme,
+            background_layers: Vec::new(),
+            background_max_layers: 8,
+            background_reduced_motion: false,
+            background_complexity_budget: 200,
+            entrance_style: "none".to_string(),
+            entrance_duration_ms: 200,
+            entrance_stagger_ms: 30,
+            focus_scale: 1.0,
+            focus_glow: false,
+            focus_glow_color: with_alpha(primary, 100),
             taskbar_height: 20,
             taskbar_bg: with_alpha(darken(primary, 0.6), 120),
             taskbar_gradient_top: None,
@@ -1147,5 +1192,116 @@ impl ActiveTheme {
             widget_states: std::collections::HashMap::new(),
             ui_theme,
         }
+    }
+
+    /// Convert a TOML background layer config to a runtime `BackgroundLayer`.
+    fn convert_background_layer(
+        cfg: &crate::theme::BackgroundLayerConfig,
+        ov: &dyn Fn(Option<&String>, Color) -> Color,
+    ) -> Option<oasis_vector::BackgroundLayer> {
+        use oasis_vector::background::{
+            Anchor, BackgroundLayer, LayerAnimation, LayerKind, LayerPosition,
+        };
+
+        let color = ov(cfg.color.as_ref(), Color::rgba(255, 255, 255, 18));
+
+        let kind = match cfg.kind.as_str() {
+            "grid" => LayerKind::Grid {
+                spacing: cfg.spacing.unwrap_or(30),
+            },
+            "dot_grid" => LayerKind::DotGrid {
+                spacing: cfg.spacing.unwrap_or(20),
+                radius: cfg.dot_radius.unwrap_or(1),
+            },
+            "wireframe_sphere" => LayerKind::WireframeSphere {
+                radius: cfg.radius.unwrap_or(60),
+            },
+            "radar_sweep" => LayerKind::RadarSweep {
+                radius: cfg.radius.unwrap_or(65),
+                sweep_angle: cfg.sweep_angle.unwrap_or(0.8),
+            },
+            "concentric_rings" => LayerKind::ConcentricRings {
+                count: cfg.count.unwrap_or(3),
+                radius: cfg.radius.unwrap_or(60),
+                stroke_width: cfg.stroke_width.unwrap_or(1),
+            },
+            "glass_shard" => {
+                let pts: Vec<(f32, f32)> = cfg
+                    .points
+                    .as_ref()
+                    .map(|p| p.iter().map(|a| (a[0], a[1])).collect())
+                    .unwrap_or_default();
+                if pts.is_empty() {
+                    return None;
+                }
+                LayerKind::GlassShard { points: pts }
+            },
+            "scanlines" => LayerKind::Scanlines {
+                spacing: cfg.spacing.unwrap_or(2) as u16,
+            },
+            "eq_bars" => LayerKind::EqBars {
+                count: cfg.count.unwrap_or(5),
+                bar_width: cfg.bar_width.unwrap_or(8),
+                max_height: cfg.max_height.unwrap_or(30),
+            },
+            "crosshair" => LayerKind::Crosshair {
+                size: cfg.size.unwrap_or(20),
+            },
+            "floating_polygons" => LayerKind::FloatingPolygons {
+                count: cfg.count.unwrap_or(3),
+                sides: cfg.sides.unwrap_or(4),
+            },
+            "pulsing_core" => LayerKind::PulsingCore {
+                radius: cfg.radius.unwrap_or(10),
+            },
+            "waves" => LayerKind::Waves {
+                rows: cfg.count.unwrap_or(16),
+                amplitude: cfg.max_height.unwrap_or(20) as u16,
+                frequency: cfg.frequency.unwrap_or(3.0),
+            },
+            _ => return None,
+        };
+
+        let position = cfg
+            .position
+            .as_ref()
+            .map_or_else(LayerPosition::default, |p| {
+                let anchor = match p.anchor.as_deref().unwrap_or("center") {
+                    "top_left" => Anchor::TopLeft,
+                    "top_center" => Anchor::TopCenter,
+                    "top_right" => Anchor::TopRight,
+                    "center_left" => Anchor::CenterLeft,
+                    "center_right" => Anchor::CenterRight,
+                    "bottom_left" => Anchor::BottomLeft,
+                    "bottom_center" => Anchor::BottomCenter,
+                    "bottom_right" => Anchor::BottomRight,
+                    _ => Anchor::Center,
+                };
+                LayerPosition {
+                    anchor,
+                    offset_x: p.offset_x.unwrap_or(0.0),
+                    offset_y: p.offset_y.unwrap_or(0.0),
+                }
+            });
+
+        let animation = cfg
+            .animation
+            .as_ref()
+            .map_or_else(LayerAnimation::default, |a| LayerAnimation {
+                rotate_speed: a.rotate_speed.unwrap_or(0.0),
+                pulse_speed: a.pulse_speed.unwrap_or(0.0),
+                pulse_min_alpha: a.pulse_min_alpha.unwrap_or(0.5),
+                drift_x: a.drift_x.unwrap_or(0.0),
+                drift_y: a.drift_y.unwrap_or(0.0),
+                phase_offset: a.phase_offset.unwrap_or(0.0),
+            });
+
+        Some(BackgroundLayer {
+            kind,
+            color,
+            position,
+            animation,
+            enabled: cfg.enabled.unwrap_or(true),
+        })
     }
 }

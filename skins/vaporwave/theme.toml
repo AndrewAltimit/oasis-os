@@ -59,6 +59,34 @@ font_heading = 15
 cursor_blink_rate = 30
 press_flash_duration = 6
 
+[[background_layers]]
+kind = "floating_polygons"
+count = 4
+sides = 4
+color = "#FF69B440"
+[background_layers.animation]
+drift_x = 3.0
+drift_y = 2.0
+
+[[background_layers]]
+kind = "glass_shard"
+color = "#9B59B638"
+points = [[0.1, 0.3], [0.35, 0.1], [0.4, 0.5]]
+[background_layers.animation]
+drift_x = 1.0
+
+[[background_layers]]
+kind = "glass_shard"
+color = "#FF69B438"
+points = [[0.6, 0.7], [0.85, 0.5], [0.9, 0.9]]
+[background_layers.animation]
+drift_x = -0.5
+
+[[background_layers]]
+kind = "glass_shard"
+color = "#00CED138"
+points = [[0.3, 0.8], [0.5, 0.6], [0.55, 1.0]]
+
 [app_overrides]
 app_bg = "#1A0A2E"
 text_color = "#E0D0FF"

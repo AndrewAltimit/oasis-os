@@ -735,7 +735,10 @@ impl OasisWasm {
         } else {
             // Not in desktop mode or no windows — hide iframe.
             self.iframe.hide();
-            if self.active_theme.icon.style == "vector" && self.mode == Mode::Dashboard {
+            if self.mode == Mode::Dashboard
+                && (self.active_theme.icon.style == "vector"
+                    || !self.active_theme.background_layers.is_empty())
+            {
                 if let Err(e) = self.sdi.draw_base_layer(&mut self.backend) {
                     console_log!("sdi draw_base error: {e}");
                 }

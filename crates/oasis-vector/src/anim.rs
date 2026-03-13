@@ -1,11 +1,98 @@
-//! Animation helpers for vector icons.
+//! Animation helpers for vector icons and background layers.
 //!
 //! Frame-counter-driven animation primitives: rotation, pulse (alpha oscillation),
-//! blink (on/off toggle), and float (sine-wave vertical offset).
-//! These are applied to `VectorOp` trees at render time.
+//! blink (on/off toggle), float (sine-wave vertical offset), and entrance effects.
+//!
+//! [`AnimClock`] bridges frame-counter and time-based animation worlds.
 
 use crate::op::VectorOp;
 use oasis_types::backend::Color;
+
+/// Unified animation time source bridging frame-counter and time-based worlds.
+#[derive(Debug, Clone)]
+pub struct AnimClock {
+    /// Monotonic seconds since start.
+    pub time_s: f32,
+    /// Frame counter (backward compatibility with existing frame-based animations).
+    pub frame: u32,
+}
+
+impl AnimClock {
+    /// Create a new clock at time zero.
+    pub fn new() -> Self {
+        Self {
+            time_s: 0.0,
+            frame: 0,
+        }
+    }
+
+    /// Advance by one frame at 60fps.
+    pub fn tick_frame(&mut self) {
+        self.frame = self.frame.wrapping_add(1);
+        self.time_s += 1.0 / 60.0;
+    }
+
+    /// Advance by a delta time in milliseconds.
+    pub fn tick_dt(&mut self, dt_ms: u32) {
+        self.frame = self.frame.wrapping_add(1);
+        self.time_s += dt_ms as f32 / 1000.0;
+    }
+
+    /// Sine wave oscillator returning -1..1.
+    pub fn sine(&self, freq: f32, phase: f32) -> f32 {
+        (self.time_s * freq * core::f32::consts::TAU + phase).sin()
+    }
+
+    /// Sine wave oscillator returning 0..1.
+    pub fn sine_norm(&self, freq: f32, phase: f32) -> f32 {
+        (self.sine(freq, phase) + 1.0) * 0.5
+    }
+
+    /// Sawtooth wave returning 0..1, wrapping every `period_s` seconds.
+    pub fn sawtooth(&self, period_s: f32, phase: f32) -> f32 {
+        if period_s <= 0.0 {
+            return 0.0;
+        }
+        ((self.time_s / period_s + phase) % 1.0).abs()
+    }
+}
+
+impl Default for AnimClock {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Compute entrance scale factor (0->1) with ease-out cubic.
+pub fn entrance_scale(elapsed_ms: u32, duration_ms: u32) -> f32 {
+    if duration_ms == 0 {
+        return 1.0;
+    }
+    let t = (elapsed_ms as f32 / duration_ms as f32).min(1.0);
+    let inv = 1.0 - t;
+    1.0 - inv * inv * inv
+}
+
+/// Compute entrance alpha (0->255) with ease-out.
+pub fn entrance_alpha(elapsed_ms: u32, duration_ms: u32) -> u8 {
+    if duration_ms == 0 {
+        return 255;
+    }
+    let t = (elapsed_ms as f32 / duration_ms as f32).min(1.0);
+    let inv = 1.0 - t;
+    (255.0 * (1.0 - inv * inv)) as u8
+}
+
+/// Compute entrance vertical slide offset with ease-out.
+pub fn entrance_slide_y(elapsed_ms: u32, duration_ms: u32, dist: i32) -> i32 {
+    if duration_ms == 0 {
+        return 0;
+    }
+    let t = (elapsed_ms as f32 / duration_ms as f32).min(1.0);
+    let inv = 1.0 - t;
+    let ease = 1.0 - inv * inv * inv;
+    (dist as f32 * (1.0 - ease)) as i32
+}
 
 /// Rotate a point `(px, py)` around `(cx, cy)` by `angle` radians.
 pub fn rotate_point(px: i32, py: i32, cx: i32, cy: i32, angle: f32) -> (i32, i32) {
@@ -135,5 +222,80 @@ mod tests {
             .count();
         // Should be on for ~2/3 of the interval (30 frames)
         assert_eq!(on_count, 30);
+    }
+
+    #[test]
+    fn anim_clock_tick_frame() {
+        let mut clock = AnimClock::new();
+        assert_eq!(clock.frame, 0);
+        assert!((clock.time_s - 0.0).abs() < f32::EPSILON);
+        clock.tick_frame();
+        assert_eq!(clock.frame, 1);
+        assert!((clock.time_s - 1.0 / 60.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn anim_clock_tick_dt() {
+        let mut clock = AnimClock::new();
+        clock.tick_dt(16); // ~60fps
+        assert_eq!(clock.frame, 1);
+        assert!((clock.time_s - 0.016).abs() < 0.001);
+    }
+
+    #[test]
+    fn anim_clock_sine_range() {
+        let mut clock = AnimClock::new();
+        for _ in 0..120 {
+            let v = clock.sine(1.0, 0.0);
+            assert!((-1.0..=1.0).contains(&v));
+            let n = clock.sine_norm(1.0, 0.0);
+            assert!((0.0..=1.0).contains(&n));
+            clock.tick_frame();
+        }
+    }
+
+    #[test]
+    fn anim_clock_sawtooth_range() {
+        let mut clock = AnimClock::new();
+        for _ in 0..120 {
+            let v = clock.sawtooth(2.0, 0.0);
+            assert!((0.0..=1.0).contains(&v));
+            clock.tick_frame();
+        }
+    }
+
+    #[test]
+    fn anim_clock_sawtooth_zero_period() {
+        let clock = AnimClock::new();
+        assert!((clock.sawtooth(0.0, 0.0) - 0.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn entrance_scale_easing() {
+        assert!((entrance_scale(0, 200) - 0.0).abs() < 0.01);
+        assert!((entrance_scale(200, 200) - 1.0).abs() < 0.01);
+        assert!((entrance_scale(400, 200) - 1.0).abs() < 0.01);
+        // Midpoint should be > 0.5 (ease-out)
+        assert!(entrance_scale(100, 200) > 0.5);
+    }
+
+    #[test]
+    fn entrance_alpha_range() {
+        assert_eq!(entrance_alpha(0, 200), 0);
+        assert_eq!(entrance_alpha(200, 200), 255);
+        assert_eq!(entrance_alpha(400, 200), 255);
+    }
+
+    #[test]
+    fn entrance_slide_y_easing() {
+        assert_eq!(entrance_slide_y(0, 200, 20), 20);
+        assert_eq!(entrance_slide_y(200, 200, 20), 0);
+    }
+
+    #[test]
+    fn entrance_zero_duration() {
+        assert!((entrance_scale(0, 0) - 1.0).abs() < f32::EPSILON);
+        assert_eq!(entrance_alpha(0, 0), 255);
+        assert_eq!(entrance_slide_y(0, 0, 20), 0);
     }
 }

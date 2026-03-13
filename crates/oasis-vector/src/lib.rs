@@ -8,11 +8,15 @@
 //! vector content work identically on SDL2, WASM, PSP, and UE5 backends.
 
 pub mod anim;
+pub mod background;
+pub mod backgrounds;
 pub mod icons;
 pub mod op;
 pub mod render;
 pub mod scene;
 
+pub use anim::AnimClock;
+pub use background::{BackgroundLayer, BackgroundScene};
 pub use icons::IconDef;
 pub use op::VectorOp;
 pub use render::render_scene;

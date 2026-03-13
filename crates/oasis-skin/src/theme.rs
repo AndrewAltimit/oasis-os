@@ -103,6 +103,21 @@ pub struct SkinTheme {
     #[serde(default)]
     pub scrollbar_overrides: Option<ScrollbarOverrides>,
 
+    /// Background decoration layers for the dashboard.
+    ///
+    /// ```toml
+    /// [[background_layers]]
+    /// kind = "grid"
+    /// spacing = 30
+    /// color = "#FFFFFF12"
+    /// ```
+    #[serde(default)]
+    pub background_layers: Option<Vec<BackgroundLayerConfig>>,
+
+    /// Performance settings for background layers.
+    #[serde(default)]
+    pub background_performance: Option<BackgroundPerformanceConfig>,
+
     /// Per-app color overrides keyed by app name.
     ///
     /// Each entry maps color keys to hex color strings.
@@ -353,6 +368,24 @@ pub struct IconOverrides {
     /// LED blink interval in frames (default 45).
     #[serde(default)]
     pub vector_blink_interval: Option<u32>,
+    /// Entrance animation style: "none", "fade_in", "scale_up", "slide_up".
+    #[serde(default)]
+    pub entrance_style: Option<String>,
+    /// Entrance animation duration in milliseconds (default 200).
+    #[serde(default)]
+    pub entrance_duration_ms: Option<u32>,
+    /// Per-icon entrance stagger delay in milliseconds (default 30).
+    #[serde(default)]
+    pub entrance_stagger_ms: Option<u32>,
+    /// Focus scale factor (default 1.0; 1.15 = 15% grow on focus).
+    #[serde(default)]
+    pub focus_scale: Option<f32>,
+    /// Whether a glow ring is drawn around the focused icon.
+    #[serde(default)]
+    pub focus_glow: Option<bool>,
+    /// Focus glow color (hex, default: accent at 40% alpha).
+    #[serde(default)]
+    pub focus_glow_color: Option<String>,
 }
 
 /// Wallpaper generation configuration.
@@ -663,6 +696,120 @@ pub struct BrowserOverrides {
     pub link_color: Option<String>,
 }
 
+/// Configuration for a single background decoration layer.
+///
+/// Deserialized from `[[background_layers]]` TOML sections.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct BackgroundLayerConfig {
+    /// Layer kind: "grid", "dot_grid", "wireframe_sphere", "radar_sweep",
+    /// "concentric_rings", "glass_shard", "scanlines", "eq_bars",
+    /// "crosshair", "floating_polygons", "pulsing_core".
+    pub kind: String,
+    /// Element color (hex, default "#FFFFFF12").
+    #[serde(default)]
+    pub color: Option<String>,
+    /// Whether this layer is active (default true).
+    #[serde(default)]
+    pub enabled: Option<bool>,
+    // -- Kind-specific parameters --
+    /// Grid/dot/scanline spacing in pixels.
+    #[serde(default)]
+    pub spacing: Option<u32>,
+    /// Radius for circles, spheres, radar sweeps, cores.
+    #[serde(default)]
+    pub radius: Option<u16>,
+    /// Dot radius for dot_grid.
+    #[serde(default)]
+    pub dot_radius: Option<u16>,
+    /// Sweep angle for radar sweep (radians, default 0.8).
+    #[serde(default)]
+    pub sweep_angle: Option<f32>,
+    /// Number of rings/bars/polygons.
+    #[serde(default)]
+    pub count: Option<u8>,
+    /// Stroke width for rings.
+    #[serde(default)]
+    pub stroke_width: Option<u16>,
+    /// Polygon sides for floating_polygons.
+    #[serde(default)]
+    pub sides: Option<u8>,
+    /// Bar width for eq_bars.
+    #[serde(default)]
+    pub bar_width: Option<u32>,
+    /// Max height for eq_bars.
+    #[serde(default)]
+    pub max_height: Option<u32>,
+    /// Crosshair size.
+    #[serde(default)]
+    pub size: Option<u16>,
+    /// Wave frequency (cycles across screen width).
+    #[serde(default)]
+    pub frequency: Option<f32>,
+    /// Glass shard points (normalized 0..1).
+    #[serde(default)]
+    pub points: Option<Vec<[f32; 2]>>,
+    // -- Position --
+    /// Positioning sub-table.
+    #[serde(default)]
+    pub position: Option<LayerPositionConfig>,
+    // -- Animation --
+    /// Animation sub-table.
+    #[serde(default)]
+    pub animation: Option<LayerAnimationConfig>,
+}
+
+/// Position config for a background layer.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct LayerPositionConfig {
+    /// Anchor: "top_left", "top_center", "top_right", "center_left",
+    /// "center", "center_right", "bottom_left", "bottom_center", "bottom_right".
+    #[serde(default)]
+    pub anchor: Option<String>,
+    /// Horizontal offset as fraction of screen width.
+    #[serde(default)]
+    pub offset_x: Option<f32>,
+    /// Vertical offset as fraction of screen height.
+    #[serde(default)]
+    pub offset_y: Option<f32>,
+}
+
+/// Animation config for a background layer.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct LayerAnimationConfig {
+    /// Rotation speed in radians per second.
+    #[serde(default)]
+    pub rotate_speed: Option<f32>,
+    /// Pulse frequency in Hz.
+    #[serde(default)]
+    pub pulse_speed: Option<f32>,
+    /// Minimum alpha when pulsing (0..1).
+    #[serde(default)]
+    pub pulse_min_alpha: Option<f32>,
+    /// Horizontal drift in pixels per second.
+    #[serde(default)]
+    pub drift_x: Option<f32>,
+    /// Vertical drift in pixels per second.
+    #[serde(default)]
+    pub drift_y: Option<f32>,
+    /// Phase offset for staggering instances.
+    #[serde(default)]
+    pub phase_offset: Option<f32>,
+}
+
+/// Performance settings for background layers.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct BackgroundPerformanceConfig {
+    /// Maximum number of layers to render (default 8).
+    #[serde(default)]
+    pub max_layers: Option<u8>,
+    /// Whether to disable animations (default false).
+    #[serde(default)]
+    pub reduced_motion: Option<bool>,
+    /// Maximum number of VectorOps to emit (default 200).
+    #[serde(default)]
+    pub complexity_budget: Option<u32>,
+}
+
 /// A reusable gradient preset (two-color linear gradient).
 #[derive(Debug, Clone, Deserialize)]
 pub struct GradientPreset {
@@ -768,6 +915,8 @@ impl Default for SkinTheme {
             geometry: None,
             transition: None,
             scrollbar_overrides: None,
+            background_layers: None,
+            background_performance: None,
             app_themes: None,
             gradients: None,
             animations: None,

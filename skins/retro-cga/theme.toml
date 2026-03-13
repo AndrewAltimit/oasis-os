@@ -87,6 +87,47 @@ focus_ring_color = "#55FFFF"
 cursor_pad = 2
 toast_slide_in = false
 
+[background_performance]
+complexity_budget = 3000
+
+# Heavy CRT scanlines
+[[background_layers]]
+kind = "scanlines"
+spacing = 2
+color = "#00FF0020"
+
+# Tight, choppy waves — CRT signal interference / rolling bars
+[[background_layers]]
+kind = "waves"
+count = 8
+max_height = 10
+frequency = 7.0
+color = "#00FF0048"
+[background_layers.animation]
+rotate_speed = 0.35
+
+# Slow deep undertow — phosphor glow shift
+[[background_layers]]
+kind = "waves"
+count = 5
+max_height = 35
+frequency = 1.2
+color = "#00FF0020"
+[background_layers.animation]
+rotate_speed = 0.08
+phase_offset = 2.0
+
+# Pulsing CRT power dot
+[[background_layers]]
+kind = "pulsing_core"
+radius = 6
+color = "#00FF0030"
+[background_layers.position]
+anchor = "center"
+[background_layers.animation]
+pulse_speed = 0.4
+pulse_min_alpha = 0.2
+
 [app_overrides]
 app_bg = "#000000"
 text_color = "#FFFFFF"

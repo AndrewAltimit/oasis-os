@@ -484,7 +484,10 @@ fn main() -> Result<()> {
                         Ok(())
                     }
                 })?;
-        } else if state.active_theme.icon.style == "vector" && state.mode == Mode::Dashboard {
+        } else if state.mode == Mode::Dashboard
+            && (state.active_theme.icon.style == "vector"
+                || !state.active_theme.background_layers.is_empty())
+        {
             // Split draw: base layer → vector overlays/icons → overlay layer.
             sdi.draw_base_layer(&mut backend)?;
             oasis_core::vector_overlay::render_vector_background(

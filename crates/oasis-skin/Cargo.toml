@@ -12,6 +12,7 @@ documentation = "https://docs.rs/oasis-skin"
 oasis-types = { workspace = true }
 oasis-sdi = { workspace = true }
 oasis-ui = { workspace = true }
+oasis-vector = { workspace = true }
 oasis-wm = { workspace = true }
 serde = { workspace = true }
 toml = { workspace = true }
