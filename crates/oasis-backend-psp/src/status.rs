@@ -63,6 +63,7 @@ const MONTH_NAMES: [&str; 12] = [
 ];
 
 /// Dynamic status info polled each frame (or periodically).
+#[derive(Clone, Copy)]
 pub struct StatusBarInfo {
     /// Battery charge percentage (0-100), or -1 if no battery.
     pub battery_percent: i32,

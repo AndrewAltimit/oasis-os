@@ -289,6 +289,11 @@ fn psp_main() {
     dbg_log("[EBOOT] entering main loop");
     psp::thread::sleep_ms(400);
 
+    // Cached values for expensive kernel queries (throttled to ~4Hz).
+    let mut cached_status = StatusBarInfo::poll();
+    let mut cached_free_kb: i32 = 0;
+    let mut cached_max_blk_kb: i32 = 0;
+
     loop {
         let _dt = frame_timer.tick();
         // Log first frame only.
@@ -420,7 +425,12 @@ fn psp_main() {
         }
 
         // -- Render --
-        let status = StatusBarInfo::poll();
+        // Throttle expensive kernel syscalls to every 15th frame (~4Hz at 60fps).
+        // StatusBarInfo::poll() issues 6+ kernel calls (battery, RTC, USB, WiFi).
+        if viz_frame % 15 == 0 {
+            cached_status = StatusBarInfo::poll();
+        }
+        let status = cached_status;
         let fps = frame_timer.fps();
         let usb_active = usb_storage.is_some();
 
@@ -492,13 +502,32 @@ fn psp_main() {
             },
 
             AppMode::Desktop => {
-                // Show dashboard icons behind windows in Desktop mode.
-                if !icons_hidden {
-                    dashboard::show_dashboard_sdi(&mut dashboard_state, &mut sdi, &active_theme);
-                } else {
-                    dashboard::hide_dashboard_sdi(&mut dashboard_state, &mut sdi);
-                }
+                // Always hide SDI dashboard icons in Desktop mode -- drawing
+                // ~108 SDI objects (HashMap lookups + z-sort + prefix filter)
+                // eats the frame budget. Instead, draw icons directly via the
+                // backend which is much cheaper (direct GU calls, no SDI overhead).
+                dashboard::hide_dashboard_sdi(&mut dashboard_state, &mut sdi);
                 terminal_sdi::set_terminal_visible(&mut sdi, false);
+
+                // Draw desktop icons directly (bypasses SDI entirely).
+                if !icons_hidden {
+                    chrome::draw_dashboard(
+                        &mut backend,
+                        dashboard_state.selected,
+                        dashboard_state.page,
+                        viz_frame,
+                    );
+                }
+
+                // Throttle kernel heap queries (~4Hz). These walk kernel
+                // memory structures and are expensive on every frame.
+                if viz_frame % 15 == 0 {
+                    // SAFETY: scalar FFI returning available memory stats.
+                    unsafe {
+                        cached_free_kb = psp::sys::sceKernelTotalFreeMemSize() as i32 / 1024;
+                        cached_max_blk_kb = psp::sys::sceKernelMaxFreeMemSize() as i32 / 1024;
+                    }
+                }
 
                 render_desktop(
                     &mut backend,
@@ -509,6 +538,8 @@ fn psp_main() {
                     &sysinfo,
                     fps,
                     usb_active,
+                    cached_free_kb,
+                    cached_max_blk_kb,
                     &term,
                     &fm,
                     &pv,
@@ -1008,6 +1039,8 @@ fn render_desktop(
     sysinfo: &SystemInfo,
     fps: f32,
     usb_active: bool,
+    free_kb: i32,
+    max_blk_kb: i32,
     term: &TerminalState,
     fm: &FileManagerState,
     pv: &PhotoViewerState,
@@ -1018,16 +1051,9 @@ fn render_desktop(
     let settings_clock = config.get_i32("clock_mhz").unwrap_or(333);
     let settings_bus = config.get_i32("bus_mhz").unwrap_or(166);
     let current_vol = backend.volatile_mem_info();
-    // SAFETY: scalar FFI returning available memory stats.
-    let (free_kb, max_blk_kb) = unsafe {
-        (
-            psp::sys::sceKernelTotalFreeMemSize() as i32 / 1024,
-            psp::sys::sceKernelMaxFreeMemSize() as i32 / 1024,
-        )
-    };
 
     backend.force_bitmap_font = true;
-    let _ = wm.draw_with_clips(
+    let _ = wm.draw_with_clips_noalloc(
         sdi,
         backend,
         |window_id, cx, cy, cw, ch, be| match window_id {

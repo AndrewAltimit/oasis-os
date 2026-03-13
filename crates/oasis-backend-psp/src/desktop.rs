@@ -267,14 +267,13 @@ pub(crate) fn draw_music_windowed(
     if audio.is_playing() {
         let center_x = cx + cw as i32 / 2;
         be.draw_text(file_name, cx + 4, cy + 4, 8, Color::rgb(255, 200, 200))?;
-        let info = format!(
-            "{}Hz {}kbps {}ch",
-            audio.sample_rate(),
-            audio.bitrate(),
-            audio.channels(),
+        let mut buf = [0u8; 64];
+        let info = stack_fmt(
+            &mut buf,
+            format_args!("{}Hz {}kbps {}ch", audio.sample_rate(), audio.bitrate(), audio.channels()),
         );
         let info_x = center_x - (info.len() as i32 * 8) / 2;
-        be.draw_text(&info, info_x, cy + 18, 8, Color::rgb(180, 180, 180))?;
+        be.draw_text(info, info_x, cy + 18, 8, Color::rgb(180, 180, 180))?;
         let status = if audio.is_paused() {
             "PAUSED"
         } else {
@@ -317,13 +316,14 @@ pub(crate) fn draw_settings_windowed(
     let val = Color::WHITE;
     let mut y = cy + 16;
     let vx = cx + 110;
+    let mut buf = [0u8; 64];
 
     be.draw_text("CPU Clock:", cx + 4, y, 8, lbl)?;
-    be.draw_text(&format!("{} MHz", clock_mhz), vx, y, 8, val)?;
+    be.draw_text(stack_fmt(&mut buf, format_args!("{} MHz", clock_mhz)), vx, y, 8, val)?;
     y += 10;
 
     be.draw_text("Bus Clock:", cx + 4, y, 8, lbl)?;
-    be.draw_text(&format!("{} MHz", bus_mhz), vx, y, 8, val)?;
+    be.draw_text(stack_fmt(&mut buf, format_args!("{} MHz", bus_mhz)), vx, y, 8, val)?;
     y += 10;
 
     let profile = match clock_mhz {
@@ -344,7 +344,10 @@ pub(crate) fn draw_settings_windowed(
         let used_kb = (total - remaining) / 1024;
         let total_kb = total / 1024;
         be.draw_text("Tex Cache:", cx + 4, y, 8, lbl)?;
-        be.draw_text(&format!("{}/{} KB", used_kb, total_kb), vx, y, 8, val)?;
+        be.draw_text(
+            stack_fmt(&mut buf, format_args!("{}/{} KB", used_kb, total_kb)),
+            vx, y, 8, val,
+        )?;
     } else {
         be.draw_text("Tex Cache:", cx + 4, y, 8, lbl)?;
         be.draw_text("N/A (PSP-1000)", vx, y, 8, Color::rgb(140, 140, 140))?;
@@ -397,9 +400,10 @@ pub(crate) fn draw_network_windowed(
     y += 10;
 
     if status.battery_percent >= 0 {
+        let mut buf = [0u8; 64];
         be.draw_text("Battery:", cx + 4, y, 8, lbl)?;
         be.draw_text(
-            &format!("{}%", status.battery_percent),
+            stack_fmt(&mut buf, format_args!("{}%", status.battery_percent)),
             vx,
             y,
             8,
@@ -439,6 +443,9 @@ pub(crate) fn draw_sysmon_windowed(
     let mut y = cy + 16;
     let vx = cx + 100;
 
+    // Use a stack buffer to avoid heap allocations from format!() every frame.
+    let mut buf = [0u8; 64];
+
     let fps_clr = if fps >= 55.0 {
         Color::rgb(120, 255, 120)
     } else if fps >= 30.0 {
@@ -447,32 +454,34 @@ pub(crate) fn draw_sysmon_windowed(
         Color::rgb(255, 80, 80)
     };
     be.draw_text("FPS:", cx + 4, y, 8, lbl)?;
-    be.draw_text(&format!("{:.1}", fps), vx, y, 8, fps_clr)?;
+    let s = stack_fmt(&mut buf, format_args!("{:.1}", fps));
+    be.draw_text(s, vx, y, 8, fps_clr)?;
     y += 11;
 
     be.draw_text("CPU/Bus/ME:", cx + 4, y, 8, lbl)?;
-    be.draw_text(
-        &format!("{}/{}/{}", sysinfo.cpu_mhz, sysinfo.bus_mhz, sysinfo.me_mhz),
-        vx,
-        y,
-        8,
-        val,
-    )?;
+    let s = stack_fmt(
+        &mut buf,
+        format_args!("{}/{}/{}", sysinfo.cpu_mhz, sysinfo.bus_mhz, sysinfo.me_mhz),
+    );
+    be.draw_text(s, vx, y, 8, val)?;
     y += 11;
 
     be.draw_text("Free RAM:", cx + 4, y, 8, lbl)?;
-    be.draw_text(&format!("{} KB", free_kb), vx, y, 8, val)?;
+    let s = stack_fmt(&mut buf, format_args!("{} KB", free_kb));
+    be.draw_text(s, vx, y, 8, val)?;
     y += 11;
 
     be.draw_text("Max Block:", cx + 4, y, 8, lbl)?;
-    be.draw_text(&format!("{} KB", max_blk_kb), vx, y, 8, val)?;
+    let s = stack_fmt(&mut buf, format_args!("{} KB", max_blk_kb));
+    be.draw_text(s, vx, y, 8, val)?;
     y += 11;
 
     if let Some((total, remaining)) = vol_info {
         let used_kb = (total - remaining) / 1024;
         let total_kb = total / 1024;
         be.draw_text("Tex VRAM:", cx + 4, y, 8, lbl)?;
-        be.draw_text(&format!("{}/{} KB", used_kb, total_kb), vx, y, 8, val)?;
+        let s = stack_fmt(&mut buf, format_args!("{}/{} KB", used_kb, total_kb));
+        be.draw_text(s, vx, y, 8, val)?;
         y += 11;
     }
 
@@ -483,19 +492,19 @@ pub(crate) fn draw_sysmon_windowed(
     } else {
         Color::rgb(255, 80, 80)
     };
-    let bat_str = if status.battery_percent >= 0 {
+    be.draw_text("Battery:", cx + 4, y, 8, lbl)?;
+    let bat_s = if status.battery_percent >= 0 {
         if status.battery_charging {
-            format!("{}% CHG", status.battery_percent)
+            stack_fmt(&mut buf, format_args!("{}% CHG", status.battery_percent))
         } else {
-            format!("{}%", status.battery_percent)
+            stack_fmt(&mut buf, format_args!("{}%", status.battery_percent))
         }
     } else if status.ac_power {
-        "AC".into()
+        "AC"
     } else {
-        "N/A".into()
+        "N/A"
     };
-    be.draw_text("Battery:", cx + 4, y, 8, lbl)?;
-    be.draw_text(&bat_str, vx, y, 8, bat_clr)?;
+    be.draw_text(bat_s, vx, y, 8, bat_clr)?;
     y += 11;
 
     let wifi_str = if status.wifi_on { "ON" } else { "OFF" };
@@ -605,6 +614,31 @@ pub(crate) fn draw_radio_windowed(
 // ---------------------------------------------------------------------------
 // Loading indicator
 // ---------------------------------------------------------------------------
+
+/// Format into a stack buffer, returning a `&str`. Avoids heap allocation.
+fn stack_fmt<'a>(buf: &'a mut [u8; 64], args: core::fmt::Arguments<'_>) -> &'a str {
+    use core::fmt::Write;
+
+    struct BufWriter<'b> {
+        buf: &'b mut [u8],
+        pos: usize,
+    }
+    impl core::fmt::Write for BufWriter<'_> {
+        fn write_str(&mut self, s: &str) -> core::fmt::Result {
+            let bytes = s.as_bytes();
+            let avail = self.buf.len() - self.pos;
+            // Avoid splitting a multi-byte UTF-8 character at the boundary.
+            let len = s.floor_char_boundary(bytes.len().min(avail));
+            self.buf[self.pos..self.pos + len].copy_from_slice(&bytes[..len]);
+            self.pos += len;
+            Ok(())
+        }
+    }
+    let mut w = BufWriter { buf: &mut buf[..], pos: 0 };
+    let _ = w.write_fmt(args);
+    let n = w.pos;
+    core::str::from_utf8(&buf[..n]).unwrap_or("???")
+}
 
 pub(crate) fn draw_loading_indicator(backend: &mut PspBackend, msg: &str) {
     let bg = Color::rgba(0, 0, 0, 200);
