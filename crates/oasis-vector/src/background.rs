@@ -274,12 +274,12 @@ impl BackgroundScene {
                 let drift_x = if reduced_motion {
                     0.0
                 } else {
-                    clock.time_s * anim.drift_x
+                    (clock.time_s * anim.drift_x).rem_euclid(w as f32)
                 };
                 let drift_y = if reduced_motion {
                     0.0
                 } else {
-                    clock.time_s * anim.drift_y
+                    (clock.time_s * anim.drift_y).rem_euclid(h as f32)
                 };
                 backgrounds::glass_shard(points, w, h, color, drift_x, drift_y)
             },

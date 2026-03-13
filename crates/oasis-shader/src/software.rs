@@ -25,15 +25,19 @@ pub struct SoftwareShaderRenderer {
     width: u32,
     height: u32,
     pixel_buf: Vec<u8>,
+    lo_buf: Vec<[u8; 4]>,
 }
 
 impl SoftwareShaderRenderer {
     /// Create a new software renderer at the given output resolution.
     pub fn new(width: u32, height: u32) -> Self {
+        let iw = width.div_ceil(RENDER_SCALE);
+        let ih = height.div_ceil(RENDER_SCALE);
         Self {
             width,
             height,
             pixel_buf: vec![0u8; (width * height * 4) as usize],
+            lo_buf: vec![[0u8; 4]; (iw * ih) as usize],
         }
     }
 
@@ -42,6 +46,9 @@ impl SoftwareShaderRenderer {
         self.width = width;
         self.height = height;
         self.pixel_buf.resize((width * height * 4) as usize, 0);
+        let iw = width.div_ceil(RENDER_SCALE);
+        let ih = height.div_ceil(RENDER_SCALE);
+        self.lo_buf.resize((iw * ih) as usize, [0u8; 4]);
     }
 
     /// Render the Balatro shader to the pixel buffer. Returns RGBA slice.
@@ -87,8 +94,8 @@ impl SoftwareShaderRenderer {
         let ih = self.height.div_ceil(RENDER_SCALE);
         let scale_f = RENDER_SCALE as f32;
 
-        // Small buffer for the low-res render (stack-friendly for typical sizes).
-        let mut lo_buf = vec![[0u8; 4]; (iw * ih) as usize];
+        // Reuse cached low-res buffer.
+        self.lo_buf.resize((iw * ih) as usize, [0u8; 4]);
 
         for iy in 0..ih {
             for ix in 0..iw {
@@ -154,7 +161,7 @@ impl SoftwareShaderRenderer {
                     (base_w * c1[2] + blend * (c1[2] * c1p + c2[2] * c2p + c3[2] * c3p) + light)
                         .clamp(0.0, 1.0);
 
-                lo_buf[(iy * iw + ix) as usize] =
+                self.lo_buf[(iy * iw + ix) as usize] =
                     [(r * 255.0) as u8, (g * 255.0) as u8, (b * 255.0) as u8, 255];
             }
         }
@@ -164,7 +171,7 @@ impl SoftwareShaderRenderer {
             let sy = (y / RENDER_SCALE).min(ih - 1);
             for x in 0..self.width {
                 let sx = (x / RENDER_SCALE).min(iw - 1);
-                let rgba = lo_buf[(sy * iw + sx) as usize];
+                let rgba = self.lo_buf[(sy * iw + sx) as usize];
                 let idx = ((y * self.width + x) * 4) as usize;
                 self.pixel_buf[idx] = rgba[0];
                 self.pixel_buf[idx + 1] = rgba[1];
