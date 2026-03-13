@@ -90,6 +90,16 @@ toast_slide_in = false
 [background_performance]
 complexity_budget = 3000
 
+[[background_layers]]
+kind = "shader"
+shader = "voronoi"
+
+[background_layers.shader_params]
+color_1 = "#55FF55"
+color_2 = "#FF55FF"
+speed = 0.6
+size = 20.0
+
 # Heavy CRT scanlines
 [[background_layers]]
 kind = "scanlines"

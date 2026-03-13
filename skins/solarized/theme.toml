@@ -61,6 +61,16 @@ cursor_blink_rate = 25
 press_flash_duration = 4
 
 [[background_layers]]
+kind = "shader"
+shader = "ocean_waves"
+
+[background_layers.shader_params]
+color_1 = "#002B36"
+color_2 = "#2AA198"
+color_3 = "#268BD2"
+speed = 0.8
+
+[[background_layers]]
 kind = "glass_shard"
 color = "#93A1A124"
 points = [[0.15, 0.4], [0.4, 0.2], [0.45, 0.6]]

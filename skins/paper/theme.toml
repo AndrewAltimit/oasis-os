@@ -87,6 +87,14 @@ cursor_pad = 3
 toast_slide_in = false
 
 [[background_layers]]
+kind = "shader"
+shader = "calm_waves"
+
+[background_layers.shader_params]
+color_1 = "#B8D4E8"
+speed = 0.7
+
+[[background_layers]]
 kind = "dot_grid"
 spacing = 24
 dot_radius = 1

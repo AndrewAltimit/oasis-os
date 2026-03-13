@@ -115,7 +115,13 @@ impl ShaderRenderer {
         };
 
         // Register all known shaders.
-        for name in &["balatro"] {
+        for name in &[
+            "balatro",
+            "voronoi",
+            "city_lights",
+            "ocean_waves",
+            "calm_waves",
+        ] {
             if let Some(src) = registry::get_shader_source(name)
                 && let Err(e) = renderer.register(name, src)
             {
@@ -337,6 +343,9 @@ unsafe fn gl_render(
         }
         if let Some(loc) = gl.get_uniform_location(program, "u_spin_ease") {
             gl.uniform_1_f32(Some(&loc), get_f("spin_ease", 1.0));
+        }
+        if let Some(loc) = gl.get_uniform_location(program, "u_size") {
+            gl.uniform_1_f32(Some(&loc), get_f("size", 30.0));
         }
 
         quad::draw_fullscreen_triangle(gl, vao);
