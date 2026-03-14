@@ -1,0 +1,426 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Anatomy of the Backend Trait System - OASIS_OS Developer's Journal</title>
+  <meta name="description" content="A deep architectural walkthrough of OASIS_OS's five backend traits — how 13 required methods, 39 optional accelerated primitives, and 8 extension traits enable one codebase to render across SDL3, WebAssembly, PSP hardware, and Unreal Engine 5.">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="../css/style.css">
+</head>
+<body>
+
+<nav class="site-nav">
+  <a class="nav-brand" href="../">OASIS_OS</a>
+  <button class="nav-toggle" id="nav-toggle" aria-label="Toggle navigation" aria-expanded="false">&#9776;</button>
+  <ul class="nav-links" id="nav-links">
+    <li><a href="../#platforms">Platforms</a></li>
+    <li><a href="../#architecture">Architecture</a></li>
+    <li><a href="./">Journal</a></li>
+    <li><a href="../demo/">Live Demo</a></li>
+  </ul>
+</nav>
+
+<header class="article-header">
+  <div class="container">
+    <a class="article-back" href="./">&larr; Developer's Journal</a>
+    <h1 class="article-title">Anatomy of the Backend Trait System</h1>
+    <p class="article-subtitle">
+      How five traits, 13 required methods, 39 optional primitives, and 8 extension
+      traits let one Rust codebase draw to SDL3, Canvas&nbsp;2D, PSP hardware, and
+      a software framebuffer &mdash; without a single <code>#[cfg]</code> in
+      application code.
+    </p>
+    <div class="article-meta">
+      <span>Entry 06</span>
+      <span>34 crates</span>
+      <span>architecture, traits, rendering</span>
+    </div>
+  </div>
+</header>
+
+<article class="article-content">
+
+  <h2>The Central Idea</h2>
+
+  <p>
+    Every pixel OASIS_OS draws, every button press it reads, every audio sample it
+    plays, and every TCP byte it sends passes through one of five backend traits
+    defined in <code>oasis-types/src/backend/</code>. Application code &mdash;
+    the browser engine, 32 UI widgets, 90+ terminal commands, 18 skins, the window
+    manager &mdash; never touches platform APIs. It accepts a
+    <code>&amp;mut dyn SdiBackend</code> and draws to it.
+  </p>
+
+  <p>
+    This isn't a theoretical pattern. The same compiled crate graph runs on four
+    radically different hosts today: an SDL3 desktop window, a browser tab via
+    WebAssembly, a 333 MHz MIPS handheld from 2004, and inside Unreal Engine 5
+    as a dynamic texture.
+  </p>
+
+  <h2>Trait Architecture Overview</h2>
+
+  <div class="diagram">
+    <pre><code><span class="hl-bright">Five Backend Traits</span>
+
+<span class="hl-accent">SdiCore</span>            13 required methods &mdash; the minimum viable backend
+  &uarr; extends
+<span class="hl-purple">SdiBackend</span>         39 optional accelerated primitives, split into:
+  &#9500;&#9472; <span class="hl-accent">SdiShapes</span>       fill/stroke: rounded_rect, circle, line, triangle, polygon
+  &#9500;&#9472; <span class="hl-accent">SdiGradients</span>    linear_gradient, radial_gradient, fill_rect_gradient
+  &#9500;&#9472; <span class="hl-accent">SdiAlpha</span>        set_global_alpha, fill_rect_alpha
+  &#9500;&#9472; <span class="hl-accent">SdiText</span>         draw_text_styled (bold/italic), draw_text_wrapped
+  &#9500;&#9472; <span class="hl-accent">SdiTextures</span>     blit_rotated, blit_tinted, blit_region, blit_scaled
+  &#9500;&#9472; <span class="hl-accent">SdiClipTransform</span> push/pop_clip, push/pop_translate
+  &#9500;&#9472; <span class="hl-accent">SdiVector</span>       begin_path, move_to, line_to, arc, bezier, fill, stroke
+  &#9492;&#9472; <span class="hl-accent">SdiBatch</span>        begin_batch, end_batch
+
+<span class="hl-accent">InputBackend</span>       poll() &rarr; Vec&lt;InputEvent&gt;
+<span class="hl-accent">NetworkBackend</span>     listen, accept, connect &rarr; NetworkStream (read/write/close)
+<span class="hl-accent">AudioBackend</span>       load_track, play, pause, stop, set_volume, feed_pcm</code></pre>
+    <div class="diagram-caption">The complete platform abstraction boundary lives in oasis-types/src/backend/</div>
+  </div>
+
+  <h2>SdiCore: The 13 Methods Every Backend Must Implement</h2>
+
+  <p>
+    <code>SdiCore</code> is the rendering contract. If you can implement these 13 methods,
+    OASIS_OS will run on your platform. No more, no less.
+  </p>
+
+  <div class="diagram">
+    <pre><code><span class="hl-bright">pub trait SdiCore</span> {
+    <span class="hl-dim">// Lifecycle</span>
+    fn <span class="hl-accent">init</span>(&amp;mut self, width: u32, height: u32) -&gt; Result&lt;()&gt;;
+    fn <span class="hl-accent">shutdown</span>(&amp;mut self) -&gt; Result&lt;()&gt;;
+
+    <span class="hl-dim">// Frame cycle</span>
+    fn <span class="hl-accent">clear</span>(&amp;mut self, color: Color) -&gt; Result&lt;()&gt;;
+    fn <span class="hl-accent">swap_buffers</span>(&amp;mut self) -&gt; Result&lt;()&gt;;
+
+    <span class="hl-dim">// Primitives</span>
+    fn <span class="hl-accent">fill_rect</span>(&amp;mut self, x: i32, y: i32, w: u32, h: u32, color: Color) -&gt; Result&lt;()&gt;;
+    fn <span class="hl-accent">blit</span>(&amp;mut self, tex: TextureId, x: i32, y: i32, w: u32, h: u32) -&gt; Result&lt;()&gt;;
+
+    <span class="hl-dim">// Textures</span>
+    fn <span class="hl-accent">load_texture</span>(&amp;mut self, w: u32, h: u32, rgba: &amp;[u8]) -&gt; Result&lt;TextureId&gt;;
+    fn <span class="hl-accent">destroy_texture</span>(&amp;mut self, tex: TextureId) -&gt; Result&lt;()&gt;;
+
+    <span class="hl-dim">// Text</span>
+    fn <span class="hl-accent">draw_text</span>(&amp;mut self, text: &amp;str, x: i32, y: i32, size: u16, color: Color) -&gt; Result&lt;()&gt;;
+    fn <span class="hl-accent">measure_text</span>(&amp;self, text: &amp;str, size: u16) -&gt; u32;
+
+    <span class="hl-dim">// Clipping</span>
+    fn <span class="hl-accent">set_clip_rect</span>(&amp;mut self, x: i32, y: i32, w: u32, h: u32) -&gt; Result&lt;()&gt;;
+    fn <span class="hl-accent">reset_clip_rect</span>(&amp;mut self) -&gt; Result&lt;()&gt;;
+
+    <span class="hl-dim">// Readback</span>
+    fn <span class="hl-accent">read_pixels</span>(&amp;self, x: i32, y: i32, w: u32, h: u32) -&gt; Result&lt;Vec&lt;u8&gt;&gt;;
+}</code></pre>
+    <div class="diagram-caption">13 methods = one complete rendering backend</div>
+  </div>
+
+  <p>
+    Every widget in <code>oasis-ui</code>, every CSS box painted by
+    <code>oasis-browser</code>, every line of terminal output &mdash; they all
+    reduce to calls against this interface. <code>fill_rect</code> draws backgrounds
+    and borders. <code>blit</code> draws images and textures. <code>draw_text</code>
+    renders text. That's the entire rendering vocabulary at the core level.
+  </p>
+
+  <h2>SdiBackend: Progressive Capability via Extension Traits</h2>
+
+  <p>
+    <code>SdiBackend</code> extends <code>SdiCore</code> with 39 optional methods.
+    Each has a <strong>software fallback default implementation</strong> &mdash;
+    if a backend doesn't override <code>fill_circle</code>, the default uses the
+    midpoint circle algorithm from <code>oasis-types::rasterize</code>. If it
+    doesn't override <code>draw_text_styled</code>, the default draws
+    faux-bold via double-strike and faux-italic via pixel skew.
+  </p>
+
+  <p>
+    This means a new backend starts working with just 13 methods. Hardware acceleration
+    is added incrementally:
+  </p>
+
+  <div class="diagram">
+    <pre><code><span class="hl-bright">Backend Capability Matrix</span>
+
+                      <span class="hl-accent">SDL3</span>    <span class="hl-accent">WASM</span>    <span class="hl-accent">UE5</span>     <span class="hl-accent">PSP</span>
+SdiCore (13 req)      &#10004;       &#10004;       &#10004;       &#10004;
+SdiShapes             HW      Canvas  SW      GU
+SdiGradients          HW      Canvas  SW      GU
+SdiAlpha              HW      Canvas  SW      GU
+SdiText (styled)      bitmap  cached  bitmap  atlas+TTF
+SdiTextures           HW      Canvas  SW      GU+DMA
+SdiClipTransform      stack   Canvas  stack   GU
+SdiVector             SW      Canvas  SW      &mdash;
+SdiBatch              &mdash;      &mdash;      &mdash;      GU list
+
+<span class="hl-dim">HW = hardware-accelerated, SW = software fallback, GU = PSP Graphics Unit
+Canvas = browser Canvas 2D API, &mdash; = uses default (no-op or software)</span></code></pre>
+    <div class="diagram-caption">Each backend implements what its platform accelerates, falls back for the rest</div>
+  </div>
+
+  <h2>How a Frame Renders</h2>
+
+  <p>
+    Here's the call flow for a single frame, from the backend's main loop through
+    core rendering and back:
+  </p>
+
+  <div class="diagram">
+    <pre><code><span class="hl-bright">Frame Rendering Flow</span>
+
+<span class="hl-accent">Backend main loop</span> (SDL/WASM/PSP/UE5)
+  &#9474;
+  &#9500;&#9472; backend.<span class="hl-accent">clear</span>(bg_color)
+  &#9474;
+  &#9500;&#9472; <span class="hl-purple">oasis-core</span>::tick(&amp;mut backend, &amp;mut sdi, &amp;mut state)
+  &#9474;   &#9474;
+  &#9474;   &#9500;&#9472; dashboard.update_sdi(&amp;mut sdi, &amp;theme)  <span class="hl-dim">// creates/updates named objects</span>
+  &#9474;   &#9500;&#9472; active_app.update_sdi(&amp;mut sdi, &amp;theme)
+  &#9474;   &#9500;&#9472; status_bar.update_sdi(&amp;mut sdi, &amp;theme)
+  &#9474;   &#9492;&#9472; sdi.<span class="hl-accent">draw</span>(&amp;mut backend)                   <span class="hl-dim">// iterates objects by z-order</span>
+  &#9474;       &#9474;
+  &#9474;       &#9500;&#9472; sdi.draw_base_layer(&amp;mut backend)      <span class="hl-dim">// non-overlay objects</span>
+  &#9474;       &#9474;   &#9492;&#9472; for each visible object:
+  &#9474;       &#9474;       &#9500;&#9472; backend.<span class="hl-accent">fill_rect</span>(...)      <span class="hl-dim">// or fill_rounded_rect</span>
+  &#9474;       &#9474;       &#9500;&#9472; backend.<span class="hl-accent">blit</span>(texture, ...)  <span class="hl-dim">// if textured</span>
+  &#9474;       &#9474;       &#9492;&#9472; backend.<span class="hl-accent">draw_text</span>(...)      <span class="hl-dim">// if has text</span>
+  &#9474;       &#9492;&#9472; sdi.draw_overlay_layer(&amp;mut backend)    <span class="hl-dim">// bars, toasts, cursors</span>
+  &#9474;
+  &#9492;&#9472; backend.<span class="hl-accent">swap_buffers</span>()</code></pre>
+    <div class="diagram-caption">The SDI registry mediates between application state and backend draw calls</div>
+  </div>
+
+  <h2>The SDI Registry: Named Object Scene Graph</h2>
+
+  <p>
+    Between the backend traits and application code sits the
+    <strong>SDI (Scene Display Interface) registry</strong> &mdash; a flat collection
+    of named, positionable, blittable objects with z-ordering. It's deliberately
+    simple: no DOM, no layout engine, no retained-mode GUI framework.
+  </p>
+
+  <p>
+    Each frame, applications <em>update</em> SDI objects (position, text, color,
+    visibility), and the registry <em>draws</em> them in z-order via the backend.
+    This decouples application state from rendering:
+  </p>
+
+  <div class="diagram">
+    <pre><code><span class="hl-bright">SDI Object Properties</span>
+
+SdiObject {
+    name:            String,       <span class="hl-dim">// unique identifier</span>
+    x, y:            i32,          <span class="hl-dim">// position in virtual coords</span>
+    w, h:            u32,          <span class="hl-dim">// dimensions</span>
+    z:               i32,          <span class="hl-dim">// draw order (lower = behind)</span>
+    color:           Color,        <span class="hl-dim">// fill color (RGBA)</span>
+    alpha:           u8,           <span class="hl-dim">// object-level opacity</span>
+    visible:         bool,         <span class="hl-dim">// skip if false</span>
+    texture:         Option&lt;TextureId&gt;,
+    text:            Option&lt;String&gt;,
+    text_color:      Color,
+    font_size:       u16,
+    border_radius:   Option&lt;u16&gt;,  <span class="hl-dim">// rounded corners</span>
+    gradient_top:    Option&lt;Color&gt;, <span class="hl-dim">// vertical gradient</span>
+    gradient_bottom: Option&lt;Color&gt;,
+    shadow_level:    Option&lt;u8&gt;,   <span class="hl-dim">// elevation shadow (0-3)</span>
+    stroke_width:    Option&lt;u16&gt;,  <span class="hl-dim">// outline</span>
+    stroke_color:    Option&lt;Color&gt;,
+    overlay:         bool,         <span class="hl-dim">// drawn in overlay pass (on top)</span>
+}</code></pre>
+    <div class="diagram-caption">~108 SDI objects for a typical dashboard page (9 per icon &times; 12 icons)</div>
+  </div>
+
+  <p>
+    The registry supports two-pass rendering: <code>draw_base_layer()</code> for
+    normal objects and <code>draw_overlay_layer()</code> for status bars, toasts,
+    and cursors. On the PSP, this split is critical &mdash; drawing all ~108 objects
+    every frame drops FPS from 60 to 30, so the dashboard only redraws the base
+    layer when state changes.
+  </p>
+
+  <h2>How Each Backend Implements the Traits</h2>
+
+  <h3>SDL3 Desktop</h3>
+  <p>
+    The richest implementation. Uses SDL3's GPU-accelerated 2D renderer for all
+    <code>SdiCore</code> operations. Texture lifetimes are erased via
+    <code>transmute</code> (with a carefully ordered <code>Drop</code> impl to
+    ensure textures are destroyed before the texture creator). Shapes use a mix of
+    SDL draw calls and software rasterization. Compiles SDL3 from source via
+    the <code>build-from-source</code> feature.
+  </p>
+
+  <h3>WebAssembly</h3>
+  <p>
+    Renders to an HTML Canvas 2D context. Shapes map directly to Canvas path
+    operations (<code>arc()</code>, <code>fillRect()</code>). Glyph rendering
+    uses an LRU cache of pre-rendered Canvas elements for performance. Input comes
+    from DOM event listeners translated to <code>InputEvent</code>s. Audio uses
+    the Web Audio API.
+  </p>
+
+  <h3>PSP (sceGu)</h3>
+  <p>
+    The most constrained implementation: 333 MHz, 32 MB RAM, 480&times;272 display.
+    Uses the PSP's <code>sceGu</code> hardware graphics unit for fill, blit, and shape
+    operations via display lists. Textures must be power-of-2, 16-byte aligned, with
+    a VRAM stride of 512px. Text rendering combines a RAM-based bitmap font atlas with
+    system TrueType fonts via <code>psp::font</code>. Threading uses lock-free
+    <code>SpscQueue</code>s and atomics to avoid priority inversion on the single-core CPU.
+  </p>
+
+  <h3>Unreal Engine 5</h3>
+  <p>
+    A pure software RGBA framebuffer. Every <code>fill_rect</code>, <code>draw_text</code>,
+    and <code>blit</code> writes directly into a <code>Vec&lt;u8&gt;</code> pixel buffer.
+    The host calls <code>oasis_get_buffer()</code> via the C-ABI FFI layer to read the
+    pixels back and upload them as a dynamic UE5 texture. Shapes use the shared
+    <code>PixelSink</code> trait from <code>oasis-types::rasterize</code>.
+  </p>
+
+  <h2>The Compilation Firewall</h2>
+
+  <div class="diagram">
+    <pre><code><span class="hl-bright">Dependency Direction</span>
+
+  <span class="hl-accent">oasis-types</span>   defines backend traits
+       &#9474;
+       &#9660;
+  <span class="hl-accent">oasis-ui</span>      uses &amp;mut dyn SdiBackend
+  <span class="hl-accent">oasis-browser</span> uses &amp;mut dyn SdiBackend
+  <span class="hl-accent">oasis-terminal</span> uses &amp;mut dyn SdiBackend
+  <span class="hl-accent">oasis-core</span>    uses &amp;mut dyn SdiBackend
+       &#9474;
+       &#9660;
+  <span class="hl-purple">oasis-backend-sdl</span>  implements SdiBackend <span class="hl-dim">(&larr; leaf node)</span>
+  <span class="hl-purple">oasis-backend-wasm</span> implements SdiBackend <span class="hl-dim">(&larr; leaf node)</span>
+  <span class="hl-purple">oasis-backend-ue5</span>  implements SdiBackend <span class="hl-dim">(&larr; leaf node)</span>
+  <span class="hl-purple">oasis-backend-psp</span>  implements SdiBackend <span class="hl-dim">(&larr; leaf node)</span></code></pre>
+    <div class="diagram-caption">Backends depend on core. Core never depends on backends.</div>
+  </div>
+
+  <p>
+    This is the key architectural insight: <strong>backend crates are leaf nodes</strong>.
+    They depend on core; core never depends on them. Adding a sixth backend (Android,
+    iOS, Linux framebuffer) requires zero changes to any existing crate. You implement
+    the 13 <code>SdiCore</code> methods, wire up input polling, and the entire OS runs.
+  </p>
+
+  <div class="callout">
+    <div class="callout-title">Shared Rasterization Infrastructure</div>
+    <p>
+      Backends don't start from scratch. <code>oasis-types</code> provides shared
+      algorithms: <code>rasterize_circle()</code>, <code>rasterize_triangle()</code>,
+      <code>rasterize_rounded_rect()</code> via the <code>PixelSink</code> trait,
+      plus <code>for_each_glyph_pixel()</code> for bitmap font rendering,
+      <code>perpendicular_normal_f32()</code> for thick lines, and
+      <code>radial_extent()</code> for stroke circles. The UE5 backend's entire
+      shape rendering is built on these shared primitives.
+    </p>
+  </div>
+
+  <h2>Input, Network, and Audio Traits</h2>
+
+  <h3>InputBackend</h3>
+  <p>
+    A single method: <code>poll_events() &rarr; Vec&lt;InputEvent&gt;</code>. Each backend
+    translates its native input (SDL events, DOM events, PSP controller, UE5 callbacks)
+    into a unified <code>InputEvent</code> enum: button presses, analog sticks, mouse
+    movement, text input, and touch events. The core processes these identically
+    regardless of source.
+  </p>
+
+  <h3>NetworkBackend</h3>
+  <p>
+    TCP client/server with <code>listen()</code>, <code>accept()</code>, and
+    <code>connect()</code>. Returns <code>Box&lt;dyn NetworkStream&gt;</code> with
+    read/write/close. An optional <code>tls_provider()</code> method enables TLS
+    &mdash; desktop uses <code>rustls</code>, PSP uses <code>embedded-tls</code>
+    (pure Rust TLS 1.3 on MIPS). The remote terminal, FTP transfer, and
+    browser HTTP fetching all use this trait.
+  </p>
+
+  <h3>AudioBackend</h3>
+  <p>
+    Track-based audio with <code>load_track()</code>, <code>play()</code>,
+    <code>pause()</code>, <code>stop()</code>, and <code>set_volume()</code>.
+    Extended with <code>load_streaming()</code> and <code>feed_pcm_f32()</code>
+    for real-time audio (video playback, internet radio). SDL uses SDL3 audio,
+    WASM uses Web Audio, PSP uses <code>sceAudiocodec</code> hardware decode
+    with <code>psp::audio::AudioChannel</code>.
+  </p>
+
+  <h2>Implementing a New Backend</h2>
+
+  <p>
+    Here's what it takes to bring OASIS_OS to a new platform:
+  </p>
+
+  <table>
+    <thead>
+      <tr><th>Step</th><th>What</th><th>Effort</th></tr>
+    </thead>
+    <tbody>
+      <tr><td>1</td><td>Implement <code>SdiCore</code> (13 methods)</td><td>~200 LOC</td></tr>
+      <tr><td>2</td><td>Implement <code>InputBackend</code> (1 method)</td><td>~50 LOC</td></tr>
+      <tr><td>3</td><td>Create main loop: init, poll input, tick core, swap buffers</td><td>~30 LOC</td></tr>
+      <tr><td>4</td><td>Ship it &mdash; all 16 apps, browser, terminal work</td><td>&mdash;</td></tr>
+      <tr><td>5</td><td>Optional: add <code>NetworkBackend</code> for online features</td><td>~100 LOC</td></tr>
+      <tr><td>6</td><td>Optional: add <code>AudioBackend</code> for music/radio</td><td>~150 LOC</td></tr>
+      <tr><td>7</td><td>Optional: override <code>SdiBackend</code> extensions for HW accel</td><td>varies</td></tr>
+    </tbody>
+  </table>
+
+  <p>
+    The UE5 backend is the proof: its <code>SdiCore</code> implementation is ~250 lines
+    of pixel buffer writes, and it runs the full OS including the browser engine.
+  </p>
+
+  <h2>Numbers</h2>
+
+  <table>
+    <thead>
+      <tr><th>Metric</th><th>Count</th></tr>
+    </thead>
+    <tbody>
+      <tr><td>Backend traits</td><td>5 (SdiCore, SdiBackend, Input, Network, Audio)</td></tr>
+      <tr><td>SdiCore required methods</td><td>13</td></tr>
+      <tr><td>SdiBackend extension traits</td><td>8</td></tr>
+      <tr><td>SdiBackend optional methods</td><td>39</td></tr>
+      <tr><td>Backend implementations</td><td>4 (+ 1 kernel PRX)</td></tr>
+      <tr><td>Shared rasterization functions</td><td>8 (triangle, circle, rounded_rect, glyph, etc.)</td></tr>
+      <tr><td>Trait definition file</td><td>oasis-types/src/backend/ (6 files)</td></tr>
+      <tr><td>Minimum LOC for new backend</td><td>~280</td></tr>
+      <tr><td>Core crates using traits</td><td>all 30 (zero platform-specific code)</td></tr>
+    </tbody>
+  </table>
+
+  <nav class="article-nav">
+    <a class="prev" href="05-usb-host-mode.html">&larr; Prev: USB Host Mode</a>
+    <span></span>
+  </nav>
+
+</article>
+
+<footer class="site-footer">
+  <div class="container">
+    <div class="footer-row">
+      <span>&copy; 2024&ndash;2026 OASIS_OS contributors</span>
+      <span>&middot;</span>
+      <a href="https://github.com/AndrewAltimit/oasis-os">GitHub</a>
+    </div>
+  </div>
+</footer>
+
+<script src="../js/main.js"></script>
+</body>
+</html>

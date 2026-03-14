@@ -5,9 +5,9 @@
 
 ## Context
 
-OASIS_OS must render to SDL3, Unreal Engine 5, and PSP hardware. Each platform
-has different rendering APIs, input mechanisms, networking stacks, and audio
-subsystems. We need an abstraction that:
+OASIS_OS must render to SDL3, WebAssembly (Canvas 2D), Unreal Engine 5, and PSP
+hardware. Each platform has different rendering APIs, input mechanisms, networking
+stacks, and audio subsystems. We need an abstraction that:
 
 - Keeps core code platform-agnostic
 - Allows backends to implement only what they support
@@ -64,3 +64,7 @@ We define **five separate backend traits** in `oasis-types`:
 - `oasis-app` composes all four traits into a single application state.
 - `MockBackend` in `oasis-types` records all draw calls for test assertions.
 - New backends only need to implement `SdiCore` + `SdiBackend` + `InputBackend` at minimum.
+- Four backends implemented: SDL3 (desktop), WASM (browser), UE5 (game engine), PSP (hardware).
+- A sixth trait, `ClipboardBackend`, handles copy/paste with an `InMemoryClipboard` fallback.
+- Shared rasterization algorithms in `oasis-types::rasterize` (`PixelSink` trait) reduce
+  per-backend implementation effort for shapes, circles, and rounded rectangles.

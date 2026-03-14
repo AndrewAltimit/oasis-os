@@ -34,7 +34,7 @@
     </p>
     <div class="article-meta">
       <span>Entry 01</span>
-      <span>20 crates</span>
+      <span>34 crates</span>
       <span>architecture, rust, traits</span>
     </div>
   </div>
@@ -207,7 +207,7 @@
     ├── <span class="hl-purple">oasis-backend-ue5</span> → <span class="hl-purple">oasis-ffi</span> (cdylib)
     ├── <span class="hl-purple">oasis-backend-psp</span> <span class="hl-dim">(excluded from workspace, nightly)</span>
     └── <span class="hl-purple">oasis-plugin-psp</span>  <span class="hl-dim">(excluded from workspace, kernel mode)</span></code></pre>
-    <div class="diagram-caption">20 workspace crates — core logic never imports a backend</div>
+    <div class="diagram-caption">34 workspace crates — core logic never imports a backend</div>
   </div>
 
   <h2>Why This Works: The Key Design Decisions</h2>
@@ -287,15 +287,15 @@
       <tr><th>Metric</th><th>Count</th></tr>
     </thead>
     <tbody>
-      <tr><td>Workspace crates</td><td>20</td></tr>
+      <tr><td>Workspace crates</td><td>34</td></tr>
       <tr><td>Backend implementations</td><td>5</td></tr>
       <tr><td>UI widgets</td><td>32</td></tr>
       <tr><td>Terminal commands</td><td>90+</td></tr>
       <tr><td>Skins (external TOML + built-in)</td><td>18</td></tr>
-      <tr><td>Apps in core</td><td>16</td></tr>
+      <tr><td>Apps (12 extracted crates)</td><td>16</td></tr>
       <tr><td>SdiCore required methods</td><td>13</td></tr>
       <tr><td>SdiBackend extended methods</td><td>39</td></tr>
-      <tr><td>Backend trait files to implement</td><td>1 (backend.rs)</td></tr>
+      <tr><td>Backend trait files to implement</td><td>6 (backend/ directory)</td></tr>
     </tbody>
   </table>
 
