@@ -35,6 +35,50 @@ impl ClipRect {
     }
 }
 
+/// Integer square root (floor) for `i32` values.
+///
+/// Returns 0 for negative inputs. Uses Newton's method with integer
+/// arithmetic -- no floating-point required, making this safe for
+/// `no_std` / PSP environments.
+///
+/// Both the SDL and PSP backends need an `i32` variant for computing
+/// rounded-rectangle corner insets where the intermediate `r*r - ry*ry`
+/// expression is naturally `i32`.
+pub fn isqrt_i32(n: i32) -> i32 {
+    if n <= 0 {
+        return 0;
+    }
+    let n = n as u32;
+    let mut x = n;
+    let mut y = x.div_ceil(2);
+    while y < x {
+        x = y;
+        y = (x + n / x) / 2;
+    }
+    x as i32
+}
+
+/// Compute the horizontal inset for a rounded-rectangle scanline.
+///
+/// Given a scanline offset `dy` (0-based from the top of the rect),
+/// the total height `h`, and the corner radius `r`, returns the number
+/// of pixels to inset from each side. Returns 0 for scanlines in the
+/// straight middle section.
+///
+/// This is the shared formula used by both the SDL gradient rounded-rect
+/// fill and the PSP GU rounded-rect fill.
+pub fn rounded_rect_inset(dy: i32, h: i32, r: i32) -> i32 {
+    if dy < r {
+        let ry = r - dy;
+        r - isqrt_i32((r * r - ry * ry).max(0))
+    } else if dy >= h - r {
+        let ry = dy - (h - 1 - r);
+        r - isqrt_i32((r * r - ry * ry).max(0))
+    } else {
+        0
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -148,5 +192,59 @@ mod tests {
         assert_eq!(r.y, 0);
         assert_eq!(r.w, 20);
         assert_eq!(r.h, 20);
+    }
+
+    #[test]
+    fn isqrt_i32_known_values() {
+        assert_eq!(isqrt_i32(0), 0);
+        assert_eq!(isqrt_i32(1), 1);
+        assert_eq!(isqrt_i32(4), 2);
+        assert_eq!(isqrt_i32(9), 3);
+        assert_eq!(isqrt_i32(16), 4);
+        assert_eq!(isqrt_i32(25), 5);
+        assert_eq!(isqrt_i32(100), 10);
+    }
+
+    #[test]
+    fn isqrt_i32_non_perfect_squares() {
+        assert_eq!(isqrt_i32(2), 1);
+        assert_eq!(isqrt_i32(3), 1);
+        assert_eq!(isqrt_i32(5), 2);
+        assert_eq!(isqrt_i32(8), 2);
+        assert_eq!(isqrt_i32(10), 3);
+        assert_eq!(isqrt_i32(99), 9);
+    }
+
+    #[test]
+    fn isqrt_i32_negative() {
+        assert_eq!(isqrt_i32(-1), 0);
+        assert_eq!(isqrt_i32(-100), 0);
+    }
+
+    #[test]
+    fn rounded_rect_inset_middle_is_zero() {
+        // Middle scanlines of a 100px-tall rect with r=10 have no inset.
+        assert_eq!(rounded_rect_inset(50, 100, 10), 0);
+        assert_eq!(rounded_rect_inset(10, 100, 10), 0);
+        assert_eq!(rounded_rect_inset(89, 100, 10), 0);
+    }
+
+    #[test]
+    fn rounded_rect_inset_corners_positive() {
+        // Top and bottom corner rows should have a positive inset.
+        assert!(rounded_rect_inset(0, 100, 10) > 0);
+        assert!(rounded_rect_inset(99, 100, 10) > 0);
+    }
+
+    #[test]
+    fn rounded_rect_inset_symmetric() {
+        // Top and bottom should be symmetric.
+        let h = 50;
+        let r = 8;
+        for dy in 0..r {
+            let top = rounded_rect_inset(dy, h, r);
+            let bot = rounded_rect_inset(h - 1 - dy, h, r);
+            assert_eq!(top, bot, "asymmetric at dy={dy}");
+        }
     }
 }

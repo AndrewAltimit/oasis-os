@@ -207,19 +207,48 @@ pub trait Platform: PowerService + TimeService + UsbService + OskService {}
 // ---------------------------------------------------------------------------
 
 /// Default platform implementation for desktop/Pi using `std` facilities.
+///
+/// When the `OASIS_FIXED_TIME` environment variable is set (format:
+/// `YYYY-MM-DD HH:MM:SS`), [`TimeService::now`] returns that fixed
+/// value instead of the real wall-clock time. This makes screenshot
+/// tests deterministic -- the status bar, clock widget, etc. always
+/// show the same time.
 pub struct DesktopPlatform {
     start_time: std::time::Instant,
     osk_buffer: Option<String>,
     osk_title: Option<String>,
+    /// If set, `TimeService::now()` returns this instead of real time.
+    fixed_time: Option<SystemTime>,
 }
 
 impl DesktopPlatform {
     pub fn new() -> Self {
+        let fixed_time = std::env::var("OASIS_FIXED_TIME")
+            .ok()
+            .and_then(|s| Self::parse_fixed_time(&s));
         Self {
             start_time: std::time::Instant::now(),
             osk_buffer: None,
             osk_title: None,
+            fixed_time,
         }
+    }
+
+    /// Parse `"YYYY-MM-DD HH:MM:SS"` into a [`SystemTime`].
+    fn parse_fixed_time(s: &str) -> Option<SystemTime> {
+        // Accept "YYYY-MM-DD HH:MM:SS" or "YYYY-MM-DDTHH:MM:SS".
+        let s = s.replace('T', " ");
+        let (date, time) = s.split_once(' ')?;
+        let mut d = date.split('-');
+        let mut t = time.split(':');
+        Some(SystemTime {
+            year: d.next()?.parse().ok()?,
+            month: d.next()?.parse().ok()?,
+            day: d.next()?.parse().ok()?,
+            hour: t.next()?.parse().ok()?,
+            minute: t.next()?.parse().ok()?,
+            second: t.next()?.parse().ok()?,
+        })
     }
 }
 
@@ -246,6 +275,11 @@ impl PowerService for DesktopPlatform {
 
 impl TimeService for DesktopPlatform {
     fn now(&self) -> Result<SystemTime> {
+        // If OASIS_FIXED_TIME was set, return the frozen value.
+        if let Some(ref ft) = self.fixed_time {
+            return Ok(*ft);
+        }
+
         use std::time::SystemTime as StdTime;
         let dur = StdTime::now()
             .duration_since(StdTime::UNIX_EPOCH)
@@ -273,6 +307,10 @@ impl TimeService for DesktopPlatform {
     }
 
     fn uptime_secs(&self) -> Result<u64> {
+        // When time is fixed, always return 0 for deterministic output.
+        if self.fixed_time.is_some() {
+            return Ok(0);
+        }
         Ok(self.start_time.elapsed().as_secs())
     }
 }
@@ -1128,6 +1166,33 @@ mod tests {
             unreachable!()
         };
         assert!(msg.to_string().contains("not supported"));
+    }
+
+    // ---- parse_fixed_time tests ----
+
+    #[test]
+    fn parse_fixed_time_valid_space() {
+        let t = DesktopPlatform::parse_fixed_time("2025-06-15 12:30:45").unwrap();
+        assert_eq!(t.year, 2025);
+        assert_eq!(t.month, 6);
+        assert_eq!(t.day, 15);
+        assert_eq!(t.hour, 12);
+        assert_eq!(t.minute, 30);
+        assert_eq!(t.second, 45);
+    }
+
+    #[test]
+    fn parse_fixed_time_valid_iso() {
+        let t = DesktopPlatform::parse_fixed_time("2025-01-01T00:00:00").unwrap();
+        assert_eq!(t.year, 2025);
+        assert_eq!(t.hour, 0);
+    }
+
+    #[test]
+    fn parse_fixed_time_invalid() {
+        assert!(DesktopPlatform::parse_fixed_time("not-a-date").is_none());
+        assert!(DesktopPlatform::parse_fixed_time("").is_none());
+        assert!(DesktopPlatform::parse_fixed_time("2025-01-01").is_none());
     }
 
     // ---- Platform trait tests ----

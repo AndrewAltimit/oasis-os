@@ -27,14 +27,14 @@ pub enum ClientState {
 
 /// Outbound remote terminal client.
 pub struct RemoteClient {
-    stream: Option<Box<dyn NetworkStream>>,
-    state: ClientState,
+    pub(crate) stream: Option<Box<dyn NetworkStream>>,
+    pub(crate) state: ClientState,
     /// Accumulates received data between polls.
-    read_buf: Vec<u8>,
+    pub(crate) read_buf: Vec<u8>,
     /// Lines received from the remote side.
-    received_lines: Vec<String>,
+    pub(crate) received_lines: Vec<String>,
     /// When authentication was initiated (for timeout detection).
-    auth_started: Option<Instant>,
+    pub(crate) auth_started: Option<Instant>,
 }
 
 impl RemoteClient {
@@ -210,6 +210,7 @@ impl Default for RemoteClient {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
 

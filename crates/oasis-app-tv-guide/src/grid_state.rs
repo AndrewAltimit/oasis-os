@@ -457,3 +457,407 @@ pub struct TuneRequest {
     /// How many seconds into the episode to seek.
     pub seek_secs: u64,
 }
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used)]
+
+    use super::*;
+    use crate::catalog::{ChannelCatalog, VideoEpisode};
+    use crate::channel::{ChannelConfig, DEFAULT_CHANNELS_TOML};
+    use oasis_skin::active_theme::ActiveTheme;
+
+    fn default_state() -> TvGuideState {
+        let config = ChannelConfig::from_toml(DEFAULT_CHANNELS_TOML).unwrap();
+        TvGuideState::new(&config, &ActiveTheme::default())
+    }
+
+    fn make_episode(title: &str, duration: f64) -> VideoEpisode {
+        VideoEpisode {
+            item_id: "test-item".to_string(),
+            filename: format!("{title}.mp4"),
+            title: title.to_string(),
+            duration_secs: duration,
+            width: 640,
+            height: 480,
+            size_bytes: 50_000_000,
+            format: "MPEG4".into(),
+            original: None,
+        }
+    }
+
+    fn state_with_catalog() -> TvGuideState {
+        let config = ChannelConfig::from_toml(DEFAULT_CHANNELS_TOML).unwrap();
+        let mut state = TvGuideState::new(&config, &ActiveTheme::default());
+        let mut catalog = ChannelCatalog::new(state.channels[0].number);
+        catalog.add_episodes(vec![
+            make_episode("Alpha", 1800.0),
+            make_episode("Beta", 2400.0),
+            make_episode("Gamma", 3600.0),
+        ]);
+        state.catalogs[0] = Some(catalog);
+        state.rebuild_cached_schedule(0);
+        state
+    }
+
+    // -- build_channel_info --
+
+    #[test]
+    fn build_channel_info_first_channel() {
+        let state = default_state();
+        let info = state.build_channel_info();
+        assert_eq!(info, "RETRO 2");
+    }
+
+    #[test]
+    fn build_channel_info_navigated() {
+        let mut state = default_state();
+        state.select_down(); // channel index 1
+        let info = state.build_channel_info();
+        assert_eq!(info, "TECH 5");
+    }
+
+    #[test]
+    fn build_channel_info_empty_channels() {
+        let config: ChannelConfig = toml::from_str("channel = []").unwrap();
+        let state = TvGuideState::new(&config, &ActiveTheme::default());
+        assert_eq!(state.build_channel_info(), "TV Guide");
+    }
+
+    // -- build_channel_location --
+
+    #[test]
+    fn build_channel_location_with_location() {
+        let state = default_state();
+        let loc = state.build_channel_location();
+        assert_eq!(loc, "LOS ANGELES, CA");
+    }
+
+    #[test]
+    fn build_channel_location_without_location() {
+        let toml = r#"
+            [[channel]]
+            number = 1
+            call_sign = "TEST"
+            name = "Test"
+            genre = "comedy"
+            [[channel.source]]
+            item_id = "test-item"
+        "#;
+        let config = ChannelConfig::from_toml(toml).unwrap();
+        let state = TvGuideState::new(&config, &ActiveTheme::default());
+        assert_eq!(state.build_channel_location(), "COMEDY");
+    }
+
+    #[test]
+    fn build_channel_location_empty() {
+        let config: ChannelConfig = toml::from_str("channel = []").unwrap();
+        let state = TvGuideState::new(&config, &ActiveTheme::default());
+        assert_eq!(state.build_channel_location(), "");
+    }
+
+    // -- build_now_playing_title --
+
+    #[test]
+    fn build_now_playing_title_no_catalog() {
+        let state = default_state();
+        // No catalogs loaded, not fetched yet.
+        let title = state.build_now_playing_title();
+        assert!(title.starts_with("Loading catalog"));
+    }
+
+    #[test]
+    fn build_now_playing_title_with_error() {
+        let mut state = default_state();
+        state.fetch_attempted = true;
+        state.fetch_error = Some("connection refused".into());
+        let title = state.build_now_playing_title();
+        assert_eq!(title, "Error: connection refused");
+    }
+
+    #[test]
+    fn build_now_playing_title_fetch_done_no_content() {
+        let mut state = default_state();
+        state.fetch_attempted = true;
+        let title = state.build_now_playing_title();
+        assert_eq!(title, "No content available");
+    }
+
+    #[test]
+    fn build_now_playing_title_with_catalog() {
+        let state = state_with_catalog();
+        let title = state.build_now_playing_title();
+        // Should be uppercase and non-empty.
+        assert!(!title.is_empty());
+        assert_eq!(title, title.to_uppercase());
+    }
+
+    // -- build_now_playing_detail --
+
+    #[test]
+    fn build_now_playing_detail_with_catalog() {
+        let state = state_with_catalog();
+        let detail = state.build_now_playing_detail();
+        assert!(detail.contains("640x480"));
+        assert!(detail.contains("remaining"));
+        assert!(detail.contains('|'));
+    }
+
+    #[test]
+    fn build_now_playing_detail_no_catalog() {
+        let state = default_state();
+        assert!(state.build_now_playing_detail().is_empty());
+    }
+
+    // -- reset_for_retry --
+
+    #[test]
+    fn reset_for_retry_clears_state() {
+        let mut state = state_with_catalog();
+        state.fetch_attempted = true;
+        state.fetch_in_progress = true;
+        state.fetch_error = Some("test error".into());
+
+        state.reset_for_retry();
+
+        assert!(!state.fetch_attempted);
+        assert!(!state.fetch_in_progress);
+        assert!(state.fetch_error.is_none());
+        assert!(state.catalogs.iter().all(|c| c.is_none()));
+        assert!(state.cached_schedules.iter().all(|c| c.is_none()));
+    }
+
+    // -- untune --
+
+    #[test]
+    fn untune_clears_playback_state() {
+        let mut state = state_with_catalog();
+        state.tuned_channel = Some(0);
+        state.preview_texture = Some(oasis_types::backend::TextureId(42));
+        state.download_status = Some("Downloading...".into());
+        state.video_expanded = true;
+
+        state.untune();
+
+        assert!(state.tuned_channel.is_none());
+        assert!(state.preview_texture.is_none());
+        assert!(state.download_status.is_none());
+        assert!(!state.video_expanded);
+    }
+
+    // -- tune --
+
+    #[test]
+    fn tune_returns_request_with_catalog() {
+        let mut state = state_with_catalog();
+        let req = state.tune();
+        assert!(req.is_some());
+        let req = req.unwrap();
+        assert_eq!(req.channel_index, 0);
+        assert!(req.episode.duration_secs > 0.0);
+    }
+
+    #[test]
+    fn tune_noop_if_already_tuned() {
+        let mut state = state_with_catalog();
+        state.tune(); // first tune
+        let req = state.tune(); // should be None (already tuned to same channel)
+        assert!(req.is_none());
+    }
+
+    #[test]
+    fn tune_different_channel() {
+        let mut state = state_with_catalog();
+        // Also add catalog for channel 1.
+        let mut catalog = ChannelCatalog::new(state.channels[1].number);
+        catalog.add_episodes(vec![make_episode("Other Show", 900.0)]);
+        state.catalogs[1] = Some(catalog);
+        state.rebuild_cached_schedule(1);
+
+        state.tune(); // tune to channel 0
+        state.select_down(); // select channel 1
+        let req = state.tune(); // tune to channel 1
+        assert!(req.is_some());
+        assert_eq!(req.unwrap().channel_index, 1);
+    }
+
+    #[test]
+    fn tune_without_catalog_returns_none() {
+        let mut state = default_state();
+        assert!(state.tune().is_none());
+    }
+
+    // -- grid_start_time --
+
+    #[test]
+    fn grid_start_time_no_offset() {
+        let state = default_state();
+        let start = state.grid_start_time();
+        // Should be aligned to 30-minute boundary.
+        assert_eq!(start % 1800, 0);
+    }
+
+    #[test]
+    fn grid_start_time_positive_offset() {
+        let mut state = default_state();
+        let base = state.grid_start_time();
+        state.scroll_right();
+        assert_eq!(state.grid_start_time(), base + 1800);
+        state.scroll_right();
+        assert_eq!(state.grid_start_time(), base + 3600);
+    }
+
+    #[test]
+    fn grid_start_time_negative_offset() {
+        let mut state = default_state();
+        let base = state.grid_start_time();
+        state.scroll_left();
+        assert_eq!(state.grid_start_time(), base - 1800);
+    }
+
+    // -- volume in handle_click --
+
+    #[test]
+    fn handle_click_volume_bar_expanded() {
+        let mut state = state_with_catalog();
+        state.tuned_channel = Some(0);
+        state.video_expanded = true;
+
+        let cw = 800u32;
+        let ch = 600u32;
+        let vr = crate::grid_layout::volume_bar_rect(cw, ch, true);
+        // Click in the middle of the volume bar.
+        let click_x = vr.x + (vr.w as i32 / 2);
+        let click_y = vr.y + (vr.h as i32 / 2);
+
+        let result = state.handle_click(click_x, click_y, cw, ch, true);
+        assert!(result.is_none()); // volume click doesn't tune
+        assert!(state.volume_changed);
+        // Should be roughly 50%.
+        assert!((45..=55).contains(&state.volume));
+    }
+
+    #[test]
+    fn handle_click_volume_bar_left_edge() {
+        let mut state = state_with_catalog();
+        state.tuned_channel = Some(0);
+        state.video_expanded = true;
+
+        let cw = 800u32;
+        let ch = 600u32;
+        let vr = crate::grid_layout::volume_bar_rect(cw, ch, true);
+        // Click at left edge of volume bar.
+        let result = state.handle_click(vr.x, vr.y, cw, ch, true);
+        assert!(result.is_none());
+        assert!(state.volume_changed);
+        assert!(state.volume <= 5); // should be near 0%
+    }
+
+    // -- video expand/collapse --
+
+    #[test]
+    fn handle_click_expanded_collapses() {
+        let mut state = state_with_catalog();
+        state.tuned_channel = Some(0);
+        state.video_expanded = true;
+
+        // Click outside volume bar should collapse.
+        let result = state.handle_click(10, 10, 800, 600, true);
+        assert!(result.is_none());
+        assert!(!state.video_expanded);
+    }
+
+    // -- rebuild_cached_schedule --
+
+    #[test]
+    fn rebuild_cached_schedule_out_of_bounds() {
+        let mut state = default_state();
+        // Should not panic for out-of-bounds index.
+        state.rebuild_cached_schedule(100);
+    }
+
+    #[test]
+    fn rebuild_cached_schedule_no_catalog() {
+        let mut state = default_state();
+        // No catalog at index 0 -> cached_schedule should remain None.
+        state.rebuild_cached_schedule(0);
+        assert!(state.cached_schedules[0].is_none());
+    }
+
+    // -- text_content with tuned channel --
+
+    #[test]
+    fn text_content_shows_tuned_marker() {
+        let mut state = state_with_catalog();
+        state.tuned_channel = Some(0);
+        state.fetch_attempted = true;
+        let lines = state.text_content();
+        // The tuned channel should have a ">" marker.
+        assert!(lines.iter().any(|l| l.contains('>')));
+    }
+
+    #[test]
+    fn text_content_no_channels() {
+        let config: ChannelConfig = toml::from_str("channel = []").unwrap();
+        let state = TvGuideState::new(&config, &ActiveTheme::default());
+        let lines = state.text_content();
+        assert!(lines.iter().any(|l| l.contains("No channels configured")));
+    }
+
+    // -- select_up / select_down edge cases --
+
+    #[test]
+    fn select_down_single_channel() {
+        let toml = r#"
+            [[channel]]
+            number = 1
+            call_sign = "ONE"
+            name = "Only"
+            genre = "test"
+            [[channel.source]]
+            item_id = "test"
+        "#;
+        let config = ChannelConfig::from_toml(toml).unwrap();
+        let mut state = TvGuideState::new(&config, &ActiveTheme::default());
+        state.select_down();
+        assert_eq!(state.selected_channel, 0);
+    }
+
+    // -- time_offset --
+
+    #[test]
+    fn scroll_left_right_returns_to_origin() {
+        let mut state = default_state();
+        assert_eq!(state.time_offset, 0);
+        state.scroll_right();
+        state.scroll_right();
+        state.scroll_left();
+        state.scroll_left();
+        assert_eq!(state.time_offset, 0);
+    }
+
+    #[test]
+    fn scroll_left_goes_negative() {
+        let mut state = default_state();
+        state.scroll_left();
+        assert_eq!(state.time_offset, -1);
+        state.scroll_left();
+        assert_eq!(state.time_offset, -2);
+    }
+
+    // -- initial state --
+
+    #[test]
+    fn new_state_defaults() {
+        let state = default_state();
+        assert_eq!(state.volume, 50);
+        assert!(!state.volume_changed);
+        assert!(!state.video_expanded);
+        assert!(state.preview_texture.is_none());
+        assert!(state.download_status.is_none());
+        assert!(!state.fetch_attempted);
+        assert!(!state.fetch_in_progress);
+        assert!(state.fetch_error.is_none());
+        assert_eq!(state.time_offset, 0);
+    }
+}

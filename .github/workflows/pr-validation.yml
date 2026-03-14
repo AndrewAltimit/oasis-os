@@ -136,9 +136,18 @@ jobs:
       - name: cargo-deny
         run: docker compose --profile ci run --rm rust-ci cargo deny check
 
-      # -- Benchmarks (disabled by default, enable via workflow_dispatch) ------
+      # -- Benchmarks (regression detection) ------------------------------------
+      - name: Download main branch baseline
+        continue-on-error: true
+        uses: dawidd6/action-download-artifact@v6
+        with:
+          workflow: main-ci.yml
+          branch: main
+          name: criterion-baseline
+          path: baseline-criterion/
+          if_no_artifact_found: warn
+
       - name: Benchmarks
-        if: github.event_name == 'workflow_dispatch'
         run: |
           set -o pipefail
           docker compose --profile ci run --rm rust-ci \
@@ -147,12 +156,22 @@ jobs:
           grep -E '(time:|bench)' bench_results.txt || true
           echo "::endgroup::"
 
+      - name: Benchmark regression check
+        if: always()
+        run: |
+          bash scripts/bench-compare.sh \
+            baseline-criterion/ \
+            target/criterion/ \
+            10 \
+            >> $GITHUB_STEP_SUMMARY
+
       - name: Upload benchmark results
-        if: github.event_name == 'workflow_dispatch'
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: benchmark-results
           path: bench_results.txt
+          if-no-files-found: ignore
           retention-days: 30
 
       # -- Test Metrics -------------------------------------------------------
@@ -320,7 +339,7 @@ jobs:
   codex-review:
     name: Codex AI Code Review (DISABLED)
     needs: [fork-guard, gemini-review]
-    if: false  # Permanently disabled -- see security notice above
+    if: contains(github.event.pull_request.labels.*.name, 'enable-codex')  # Permanently disabled -- see security notice above
     runs-on: self-hosted
     timeout-minutes: 15
     continue-on-error: true

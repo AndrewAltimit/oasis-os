@@ -547,8 +547,8 @@ mod tests {
         // Clamped to (479, 271).
         let (x, y) = scale_point_math(0.0, 0.0, 0.0, 0.0, 10.0, 10.0, 480, 272);
         // With NaN/inf, clamp should keep within bounds.
-        assert!(x >= 0 && x <= 479);
-        assert!(y >= 0 && y <= 271);
+        assert!((0..=479).contains(&x));
+        assert!((0..=271).contains(&y));
     }
 
     #[test]

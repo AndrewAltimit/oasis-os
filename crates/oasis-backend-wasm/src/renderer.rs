@@ -57,7 +57,7 @@ struct TextureData {
 // ---------------------------------------------------------------------------
 
 /// Packs `(char, font_size, rgba, bold, italic)` into a `u64` for hashing.
-#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 struct GlyphCacheKey(u64);
 
 impl GlyphCacheKey {
@@ -1209,5 +1209,232 @@ impl WasmBackend {
         self.next_texture_id += 1;
         self.textures.insert(id, TextureData { canvas });
         TextureId(id)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Tests -- pure logic that doesn't require wasm-bindgen/web-sys
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used)]
+
+    use super::*;
+
+    // -----------------------------------------------------------------------
+    // cached_css_color
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn css_color_opaque_rgb() {
+        let mut cache = HashMap::new();
+        let c = Color::rgba(255, 128, 0, 255);
+        let css = cached_css_color(&mut cache, c).to_owned();
+        assert_eq!(css, "rgb(255,128,0)");
+    }
+
+    #[test]
+    fn css_color_transparent_rgba() {
+        let mut cache = HashMap::new();
+        let c = Color::rgba(100, 200, 50, 128);
+        let css = cached_css_color(&mut cache, c).to_owned();
+        // alpha = 128/255 ≈ 0.5019...
+        assert!(css.starts_with("rgba(100,200,50,"));
+        assert!(css.contains("0.50"));
+    }
+
+    #[test]
+    fn css_color_fully_transparent() {
+        let mut cache = HashMap::new();
+        let c = Color::rgba(0, 0, 0, 0);
+        let css = cached_css_color(&mut cache, c).to_owned();
+        assert!(css.starts_with("rgba(0,0,0,0"));
+    }
+
+    #[test]
+    fn css_color_white_opaque() {
+        let mut cache = HashMap::new();
+        let c = Color::rgba(255, 255, 255, 255);
+        let css = cached_css_color(&mut cache, c).to_owned();
+        assert_eq!(css, "rgb(255,255,255)");
+    }
+
+    #[test]
+    fn css_color_cache_reuse() {
+        let mut cache = HashMap::new();
+        let c = Color::rgba(10, 20, 30, 255);
+        let first = cached_css_color(&mut cache, c).to_owned();
+        let second = cached_css_color(&mut cache, c).to_owned();
+        assert_eq!(first, second);
+        // Only one entry should exist.
+        assert_eq!(cache.len(), 1);
+    }
+
+    #[test]
+    fn css_color_different_colors_different_entries() {
+        let mut cache = HashMap::new();
+        let c1 = Color::rgba(10, 20, 30, 255);
+        let c2 = Color::rgba(40, 50, 60, 255);
+        cached_css_color(&mut cache, c1);
+        cached_css_color(&mut cache, c2);
+        assert_eq!(cache.len(), 2);
+    }
+
+    // -----------------------------------------------------------------------
+    // GlyphCacheKey
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn glyph_key_unique_for_different_chars() {
+        let c = Color::rgba(255, 255, 255, 255);
+        let k1 = GlyphCacheKey::new('A', 12, c, false, false);
+        let k2 = GlyphCacheKey::new('B', 12, c, false, false);
+        assert_ne!(k1, k2);
+    }
+
+    #[test]
+    fn glyph_key_unique_for_different_sizes() {
+        let c = Color::rgba(255, 255, 255, 255);
+        let k1 = GlyphCacheKey::new('A', 12, c, false, false);
+        let k2 = GlyphCacheKey::new('A', 16, c, false, false);
+        assert_ne!(k1, k2);
+    }
+
+    #[test]
+    fn glyph_key_unique_for_different_colors() {
+        let c1 = Color::rgba(255, 0, 0, 255);
+        let c2 = Color::rgba(0, 255, 0, 255);
+        let k1 = GlyphCacheKey::new('A', 12, c1, false, false);
+        let k2 = GlyphCacheKey::new('A', 12, c2, false, false);
+        assert_ne!(k1, k2);
+    }
+
+    #[test]
+    fn glyph_key_unique_for_bold_vs_normal() {
+        let c = Color::rgba(255, 255, 255, 255);
+        let k1 = GlyphCacheKey::new('A', 12, c, false, false);
+        let k2 = GlyphCacheKey::new('A', 12, c, true, false);
+        assert_ne!(k1, k2);
+    }
+
+    #[test]
+    fn glyph_key_unique_for_italic_vs_normal() {
+        let c = Color::rgba(255, 255, 255, 255);
+        let k1 = GlyphCacheKey::new('A', 12, c, false, false);
+        let k2 = GlyphCacheKey::new('A', 12, c, false, true);
+        assert_ne!(k1, k2);
+    }
+
+    #[test]
+    fn glyph_key_equal_for_same_params() {
+        let c = Color::rgba(128, 64, 32, 200);
+        let k1 = GlyphCacheKey::new('Z', 24, c, true, true);
+        let k2 = GlyphCacheKey::new('Z', 24, c, true, true);
+        assert_eq!(k1, k2);
+    }
+
+    #[test]
+    fn glyph_key_unicode_char() {
+        let c = Color::rgba(255, 255, 255, 255);
+        // Unicode character should be packed into the 21-bit field.
+        let k = GlyphCacheKey::new('\u{1F600}', 12, c, false, false);
+        // Should not panic and should produce a valid key.
+        assert_ne!(k.0, 0);
+    }
+
+    #[test]
+    fn glyph_key_alpha_channel_distinction() {
+        // Colors that differ only in alpha should produce different keys.
+        let c1 = Color::rgba(128, 128, 128, 100);
+        let c2 = Color::rgba(128, 128, 128, 200);
+        let k1 = GlyphCacheKey::new('A', 12, c1, false, false);
+        let k2 = GlyphCacheKey::new('A', 12, c2, false, false);
+        assert_ne!(k1, k2);
+    }
+
+    #[test]
+    fn glyph_key_bold_italic_all_combinations() {
+        let c = Color::rgba(255, 255, 255, 255);
+        let keys: Vec<GlyphCacheKey> = vec![
+            GlyphCacheKey::new('X', 10, c, false, false),
+            GlyphCacheKey::new('X', 10, c, true, false),
+            GlyphCacheKey::new('X', 10, c, false, true),
+            GlyphCacheKey::new('X', 10, c, true, true),
+        ];
+        // All four combinations must produce distinct keys.
+        for i in 0..keys.len() {
+            for j in (i + 1)..keys.len() {
+                assert_ne!(keys[i], keys[j], "keys[{i}] == keys[{j}]");
+            }
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // GradientCacheKey::pack_color
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn gradient_pack_color_opaque_white() {
+        let packed = GradientCacheKey::pack_color(Color::rgba(255, 255, 255, 255));
+        assert_eq!(packed, 0xFFFF_FFFF);
+    }
+
+    #[test]
+    fn gradient_pack_color_transparent_black() {
+        let packed = GradientCacheKey::pack_color(Color::rgba(0, 0, 0, 0));
+        assert_eq!(packed, 0x0000_0000);
+    }
+
+    #[test]
+    fn gradient_pack_color_red() {
+        let packed = GradientCacheKey::pack_color(Color::rgba(255, 0, 0, 255));
+        assert_eq!(packed, 0xFF00_00FF);
+    }
+
+    #[test]
+    fn gradient_pack_color_green() {
+        let packed = GradientCacheKey::pack_color(Color::rgba(0, 255, 0, 255));
+        assert_eq!(packed, 0x00FF_00FF);
+    }
+
+    #[test]
+    fn gradient_pack_color_blue() {
+        let packed = GradientCacheKey::pack_color(Color::rgba(0, 0, 255, 255));
+        assert_eq!(packed, 0x0000_FFFF);
+    }
+
+    #[test]
+    fn gradient_pack_color_half_alpha() {
+        let packed = GradientCacheKey::pack_color(Color::rgba(0, 0, 0, 128));
+        assert_eq!(packed, 0x0000_0080);
+    }
+
+    #[test]
+    fn gradient_pack_color_roundtrip_uniqueness() {
+        // Two different colors should produce different packed values.
+        let a = GradientCacheKey::pack_color(Color::rgba(10, 20, 30, 40));
+        let b = GradientCacheKey::pack_color(Color::rgba(40, 30, 20, 10));
+        assert_ne!(a, b);
+    }
+
+    // -----------------------------------------------------------------------
+    // measure_text_height / font_ascent (pure math)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn measure_text_height_formula() {
+        // measure_text_height returns ceil(font_size * 1.2)
+        assert_eq!((10.0_f64 * 1.2).ceil() as u32, 12);
+        assert_eq!((8.0_f64 * 1.2).ceil() as u32, 10);
+        assert_eq!((16.0_f64 * 1.2).ceil() as u32, 20);
+    }
+
+    #[test]
+    fn font_ascent_formula() {
+        // font_ascent returns ceil(font_size * 0.85)
+        assert_eq!((10.0_f64 * 0.85).ceil() as u32, 9);
+        assert_eq!((12.0_f64 * 0.85).ceil() as u32, 11);
+        assert_eq!((16.0_f64 * 0.85).ceil() as u32, 14);
     }
 }

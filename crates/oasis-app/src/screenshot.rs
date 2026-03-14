@@ -402,16 +402,22 @@ fn render_and_save_inner(
      -> anyhow::Result<()> {
         b.clear(clear_color)?;
         // Render shader wallpaper first if present (replaces bg clear).
+        // OASIS_FIXED_FRAME overrides the frame number for deterministic
+        // shader captures in CI screenshot regression tests.
+        let fixed_frame: u32 = std::env::var("OASIS_FIXED_FRAME")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(30);
         if let (Some(br), Some(info)) = (bridge.as_mut(), shader_info.as_ref()) {
-            let time = 30.0 / 60.0;
+            let time = fixed_frame as f32 / 60.0;
             br.render_and_blit(b, &info.name, time, &info.params);
         }
         if let Some(ref v) = vector
             && (v.theme.icon.style == "vector" || !v.theme.background_layers.is_empty())
         {
             s.draw_base_layer(b)?;
-            oasis_core::vector_overlay::render_vector_background(b, v.theme, 30)?;
-            v.dashboard.render_vector_icons(b, v.theme, 30)?;
+            oasis_core::vector_overlay::render_vector_background(b, v.theme, fixed_frame)?;
+            v.dashboard.render_vector_icons(b, v.theme, fixed_frame)?;
             s.draw_overlay_layer(b)?;
             return Ok(());
         }

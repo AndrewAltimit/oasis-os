@@ -24,6 +24,8 @@ use psp::sys::{self, GuPrimitive, VertexType};
 
 use oasis_core::backend::{Color, GradientStyle};
 
+use oasis_core::geometry::rounded_rect_inset;
+
 use crate::{ColorExt, PspBackend, SCREEN_HEIGHT, SCREEN_WIDTH};
 
 // ---------------------------------------------------------------------------
@@ -178,15 +180,7 @@ impl PspBackend {
 
             let mut vi = 0usize;
             for dy in 0..h as i32 {
-                let inset = if dy < r {
-                    let ry = r - dy;
-                    r - isqrt_i32(r * r - ry * ry)
-                } else if dy >= h as i32 - r {
-                    let ry = dy - (h as i32 - 1 - r);
-                    r - isqrt_i32(r * r - ry * ry)
-                } else {
-                    0
-                };
+                let inset = rounded_rect_inset(dy, h as i32, r);
 
                 let lx = x + inset;
                 let rx = x + w as i32 - inset;
@@ -647,17 +641,5 @@ unsafe fn write_color_vert(verts: *mut ColorVertex, index: usize, color: u32, x:
     }
 }
 
-/// Integer square root (floor) for positive i32 values.
-fn isqrt_i32(n: i32) -> i32 {
-    if n <= 0 {
-        return 0;
-    }
-    // Newton's method with integer arithmetic.
-    let mut x = n;
-    let mut y = (x + 1) / 2;
-    while y < x {
-        x = y;
-        y = (x + n / x) / 2;
-    }
-    x
-}
+// `isqrt_i32` and `rounded_rect_inset` are now shared via
+// `oasis_core::geometry` (re-exported from `oasis_types::geometry`).

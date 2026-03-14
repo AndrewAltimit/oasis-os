@@ -101,7 +101,27 @@ jobs:
         run: |
           docker compose --profile ci run --rm \
             -e SDL_VIDEODRIVER=dummy -e SDL_RENDER_DRIVER=software \
+            -e OASIS_FIXED_TIME="2025-06-15 12:00:00" \
+            -e OASIS_FIXED_FRAME=0 \
             rust-ci cargo run -p oasis-app --bin screenshot-tests --release
+
+      - name: Screenshot regression comparison
+        if: always()
+        continue-on-error: true
+        run: |
+          if [ -d screenshots/baseline ]; then
+            bash scripts/compare-screenshots.sh \
+              --baseline screenshots/baseline \
+              --actual screenshots/tests \
+              --threshold 0.1
+          else
+            echo "No baselines found -- skipping regression comparison."
+            echo "To generate baselines, run locally:"
+            echo "  OASIS_FIXED_TIME='2025-06-15 12:00:00' OASIS_FIXED_FRAME=0 \\"
+            echo "    cargo run -p oasis-app --bin screenshot-tests --release -- --bless"
+            echo "  cp -r screenshots/tests/ screenshots/baseline/"
+            echo "Then commit screenshots/baseline/ to the repository."
+          fi
 
       - name: Upload screenshot report
         if: always()
@@ -134,6 +154,15 @@ jobs:
           path: bench_results.txt
           if-no-files-found: ignore
           retention-days: 30
+
+      - name: Upload criterion baseline
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: criterion-baseline
+          path: target/criterion/
+          if-no-files-found: ignore
+          retention-days: 90
 
       # -- Test Metrics -------------------------------------------------------
       - name: Test metrics summary

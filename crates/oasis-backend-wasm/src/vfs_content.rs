@@ -220,3 +220,165 @@ a { color: #64c8ff; }
         b"# OASIS_OS startup script\necho Welcome back!\nls /apps\n",
     );
 }
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used)]
+
+    use super::*;
+
+    // -----------------------------------------------------------------------
+    // trim_output
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn trim_output_below_limit_unchanged() {
+        let mut lines: Vec<String> = (0..10).map(|i| format!("line {i}")).collect();
+        trim_output(&mut lines);
+        assert_eq!(lines.len(), 10);
+    }
+
+    #[test]
+    fn trim_output_at_limit_unchanged() {
+        let mut lines: Vec<String> = (0..terminal_sdi::MAX_OUTPUT_LINES)
+            .map(|i| format!("line {i}"))
+            .collect();
+        trim_output(&mut lines);
+        assert_eq!(lines.len(), terminal_sdi::MAX_OUTPUT_LINES);
+    }
+
+    #[test]
+    fn trim_output_over_limit_removes_oldest() {
+        let count = terminal_sdi::MAX_OUTPUT_LINES + 5;
+        let mut lines: Vec<String> = (0..count).map(|i| format!("line {i}")).collect();
+        trim_output(&mut lines);
+        assert_eq!(lines.len(), terminal_sdi::MAX_OUTPUT_LINES);
+        // The first 5 lines should have been removed.
+        assert_eq!(lines[0], "line 5");
+    }
+
+    #[test]
+    fn trim_output_empty_vec() {
+        let mut lines: Vec<String> = Vec::new();
+        trim_output(&mut lines);
+        assert!(lines.is_empty());
+    }
+
+    #[test]
+    fn trim_output_one_over_limit() {
+        let count = terminal_sdi::MAX_OUTPUT_LINES + 1;
+        let mut lines: Vec<String> = (0..count).map(|i| format!("line {i}")).collect();
+        trim_output(&mut lines);
+        assert_eq!(lines.len(), terminal_sdi::MAX_OUTPUT_LINES);
+        assert_eq!(lines[0], "line 1");
+    }
+
+    // -----------------------------------------------------------------------
+    // tv_preview_rect
+    // -----------------------------------------------------------------------
+
+    fn make_theme(screen_w: u32, screen_h: u32, sb_h: u32, bb_h: u32) -> ActiveTheme {
+        let mut at = ActiveTheme::default();
+        at.screen_w = screen_w;
+        at.screen_h = screen_h;
+        at.statusbar_height = sb_h;
+        at.bottombar_height = bb_h;
+        at
+    }
+
+    #[test]
+    fn tv_preview_rect_default_psp() {
+        let at = make_theme(480, 272, 16, 16);
+        let (x, y, w, h) = tv_preview_rect(&at);
+        assert_eq!(x, 0);
+        assert_eq!(y, 16);
+        assert_eq!(w, 480);
+        assert_eq!(h, 272 - 16 - 16);
+    }
+
+    #[test]
+    fn tv_preview_rect_no_bars() {
+        let at = make_theme(800, 600, 0, 0);
+        let (x, y, w, h) = tv_preview_rect(&at);
+        assert_eq!(x, 0);
+        assert_eq!(y, 0);
+        assert_eq!(w, 800);
+        assert_eq!(h, 600);
+    }
+
+    #[test]
+    fn tv_preview_rect_large_bars() {
+        let at = make_theme(1024, 768, 30, 40);
+        let (x, y, w, h) = tv_preview_rect(&at);
+        assert_eq!(x, 0);
+        assert_eq!(y, 30);
+        assert_eq!(w, 1024);
+        assert_eq!(h, 768 - 30 - 40);
+    }
+
+    #[test]
+    fn tv_preview_rect_bars_exceed_height() {
+        // Degenerate case: bars taller than the screen.
+        let at = make_theme(480, 20, 15, 15);
+        let (_, _, _, h) = tv_preview_rect(&at);
+        // saturating_sub prevents underflow.
+        assert_eq!(h, 0);
+    }
+
+    // -----------------------------------------------------------------------
+    // populate_wasm_vfs (smoke test)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn populate_creates_expected_directories_and_files() {
+        let mut vfs = MemoryVfs::new();
+        populate_wasm_vfs(&mut vfs);
+
+        // Check key files exist.
+        assert!(vfs.read("/etc/hostname").is_ok());
+        assert!(vfs.read("/etc/version").is_ok());
+        assert!(vfs.read("/home/user/readme.txt").is_ok());
+        assert!(vfs.read("/home/user/notes.txt").is_ok());
+        assert!(vfs.read("/home/user/startup.sh").is_ok());
+
+        // Check hostname content.
+        let hostname = vfs.read("/etc/hostname").unwrap();
+        assert_eq!(hostname, b"oasis-wasm");
+
+        // Check version content.
+        let version = vfs.read("/etc/version").unwrap();
+        assert_eq!(version, b"1.0.0-wasm");
+    }
+
+    #[test]
+    fn populate_creates_app_directories() {
+        let mut vfs = MemoryVfs::new();
+        populate_wasm_vfs(&mut vfs);
+
+        // The VFS should have app directories (readdir returns entries).
+        let entries = vfs.readdir("/apps").unwrap_or_default();
+        assert!(!entries.is_empty());
+    }
+
+    #[test]
+    fn populate_creates_browser_pages() {
+        let mut vfs = MemoryVfs::new();
+        populate_wasm_vfs(&mut vfs);
+
+        assert!(vfs.read("/sites/home/index.html").is_ok());
+        assert!(vfs.read("/sites/home/about.html").is_ok());
+        assert!(vfs.read("/sites/home/features.html").is_ok());
+    }
+
+    #[test]
+    fn populate_creates_tv_config() {
+        let mut vfs = MemoryVfs::new();
+        populate_wasm_vfs(&mut vfs);
+
+        assert!(vfs.read("/etc/tv/channels.toml").is_ok());
+    }
+}

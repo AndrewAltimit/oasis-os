@@ -338,6 +338,7 @@ fn oasis_err_to_io(e: OasisError) -> io::Error {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
     use std::net::{TcpListener, TcpStream};
