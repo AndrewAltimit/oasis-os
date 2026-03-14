@@ -992,6 +992,7 @@ dependencies = [
  "log",
  "oasis-audio",
  "oasis-core",
+ "oasis-rasterize",
  "oasis-types",
 ]
 
@@ -1004,6 +1005,7 @@ dependencies = [
  "oasis-audio",
  "oasis-core",
  "oasis-platform",
+ "oasis-rasterize",
  "oasis-shader",
  "oasis-skin",
  "oasis-types",
@@ -1104,6 +1106,13 @@ dependencies = [
 
 [[package]]
 name = "oasis-platform"
+version = "1.2.0"
+dependencies = [
+ "oasis-types",
+]
+
+[[package]]
+name = "oasis-rasterize"
 version = "1.2.0"
 dependencies = [
  "oasis-types",

@@ -5,7 +5,7 @@
 //!
 //! All extended primitives (rounded rects, lines, circles, triangles,
 //! gradients, sub-rect blits, clip/transform stacks) are software-rasterized
-//! into the pixel buffer.
+//! into the pixel buffer via the shared `oasis-rasterize` crate.
 
 use std::rc::Rc;
 
@@ -13,11 +13,11 @@ use oasis_core::backend::{
     Color, GradientStyle, SdiBackend, TextureId, texture_not_found, validate_rgba_data,
 };
 use oasis_core::error::Result;
+use oasis_rasterize::SoftwareBuffer;
 use oasis_types::backend::SdiCore;
 use oasis_types::backend::stacks::{ClipPush, ClipStack, TranslateStack};
-use oasis_types::color::lerp_color_ratio;
 use oasis_types::geometry::ClipRect;
-use oasis_types::rasterize::{self, PixelSink};
+use oasis_types::rasterize::PixelSink;
 
 use crate::font;
 
@@ -34,15 +34,9 @@ struct Texture {
 /// The buffer is exposed to UE5 via the FFI layer. A dirty flag tracks
 /// whether the buffer has changed since the last read.
 pub struct Ue5Backend {
-    width: u32,
-    height: u32,
-    buffer: Vec<u8>,
+    fb: SoftwareBuffer,
     dirty: bool,
     textures: Vec<Option<Texture>>,
-    /// Effective clip rectangle checked by pixel drawing code.
-    /// Updated by both `set_clip_rect` (SdiCore) and `push/pop_clip_rect`
-    /// (SdiBackend).
-    clip: Option<ClipRect>,
     clip_stack: ClipStack,
     translate_stack: TranslateStack,
 }
@@ -50,14 +44,10 @@ pub struct Ue5Backend {
 impl Ue5Backend {
     /// Create a new backend with the given resolution.
     pub fn new(width: u32, height: u32) -> Self {
-        let size = (width * height * 4) as usize;
         Self {
-            width,
-            height,
-            buffer: vec![0; size],
+            fb: SoftwareBuffer::new(width, height),
             dirty: true,
             textures: Vec::new(),
-            clip: None,
             clip_stack: ClipStack::new(width, height),
             translate_stack: TranslateStack::new(),
         }
@@ -65,7 +55,7 @@ impl Ue5Backend {
 
     /// Get a read-only reference to the RGBA pixel buffer.
     pub fn buffer(&self) -> &[u8] {
-        &self.buffer
+        self.fb.data()
     }
 
     /// Whether the buffer has been modified since the last `clear_dirty()`.
@@ -80,26 +70,12 @@ impl Ue5Backend {
 
     /// Buffer dimensions.
     pub fn dimensions(&self) -> (u32, u32) {
-        (self.width, self.height)
+        (self.fb.width(), self.fb.height())
     }
 
     /// Blit raw RGBA pixels into the framebuffer at the given position.
     pub fn blit_rgba(&mut self, x: u32, y: u32, w: u32, h: u32, pixels: &[u8]) {
-        let stride = (self.width * 4) as usize;
-        let src_stride = (w * 4) as usize;
-        for row in 0..h {
-            let dy = y + row;
-            if dy >= self.height {
-                break;
-            }
-            let dst_start = (dy as usize) * stride + (x as usize) * 4;
-            let src_start = (row as usize) * src_stride;
-            let copy_w = w.min(self.width.saturating_sub(x)) as usize * 4;
-            if dst_start + copy_w <= self.buffer.len() && src_start + copy_w <= pixels.len() {
-                self.buffer[dst_start..dst_start + copy_w]
-                    .copy_from_slice(&pixels[src_start..src_start + copy_w]);
-            }
-        }
+        self.fb.blit_rgba(x, y, w, h, pixels);
         self.dirty = true;
     }
 
@@ -108,94 +84,11 @@ impl Ue5Backend {
         self.translate_stack.translate(x, y)
     }
 
-    /// Set a single pixel. Performs bounds and clip checking.
+    /// Set a single pixel with alpha blending (delegates to
+    /// [`SoftwareBuffer`]).
+    #[cfg(test)]
     fn set_pixel(&mut self, x: i32, y: i32, color: Color) {
-        if x < 0 || y < 0 {
-            return;
-        }
-        let (ux, uy) = (x as u32, y as u32);
-        if ux >= self.width || uy >= self.height {
-            return;
-        }
-        // Clip check.
-        if let Some(clip) = &self.clip
-            && (x < clip.x
-                || y < clip.y
-                || ux >= (clip.x as u32).saturating_add(clip.w)
-                || uy >= (clip.y as u32).saturating_add(clip.h))
-        {
-            return;
-        }
-        let offset = ((uy * self.width + ux) * 4) as usize;
-        // Alpha blending (source over).
-        if color.a == 255 {
-            self.buffer[offset] = color.r;
-            self.buffer[offset + 1] = color.g;
-            self.buffer[offset + 2] = color.b;
-            self.buffer[offset + 3] = 255;
-        } else if color.a > 0 {
-            let sa = color.a as u16;
-            let da = 255 - sa;
-            self.buffer[offset] =
-                ((color.r as u16 * sa + self.buffer[offset] as u16 * da + 127) / 255) as u8;
-            self.buffer[offset + 1] =
-                ((color.g as u16 * sa + self.buffer[offset + 1] as u16 * da + 127) / 255) as u8;
-            self.buffer[offset + 2] =
-                ((color.b as u16 * sa + self.buffer[offset + 2] as u16 * da + 127) / 255) as u8;
-            self.buffer[offset + 3] = 255;
-        }
-    }
-
-    /// Fill a horizontal span of pixels. Clips to bounds and active clip rect.
-    /// Much faster than per-pixel `set_pixel` for solid-color fills.
-    fn fill_span(&mut self, y: i32, x_start: i32, x_end: i32, color: Color) {
-        if y < 0 || y >= self.height as i32 {
-            return;
-        }
-        // Determine effective x range after clipping.
-        let mut xs = x_start.max(0);
-        let mut xe = x_end.min(self.width as i32);
-        if let Some(clip) = &self.clip {
-            xs = xs.max(clip.x);
-            xe = xe.min(clip.x + clip.w as i32);
-            if y < clip.y || y >= clip.y + clip.h as i32 {
-                return;
-            }
-        }
-        if xs >= xe {
-            return;
-        }
-        let row_offset = (y as usize * self.width as usize) * 4;
-        if color.a == 255 {
-            // Opaque: direct write, no blending.
-            for x in xs..xe {
-                let offset = row_offset + x as usize * 4;
-                self.buffer[offset] = color.r;
-                self.buffer[offset + 1] = color.g;
-                self.buffer[offset + 2] = color.b;
-                self.buffer[offset + 3] = 255;
-            }
-        } else if color.a > 0 {
-            let sa = color.a as u16;
-            let da = 255 - sa;
-            for x in xs..xe {
-                let offset = row_offset + x as usize * 4;
-                self.buffer[offset] =
-                    ((color.r as u16 * sa + self.buffer[offset] as u16 * da + 127) / 255) as u8;
-                self.buffer[offset + 1] =
-                    ((color.g as u16 * sa + self.buffer[offset + 1] as u16 * da + 127) / 255) as u8;
-                self.buffer[offset + 2] =
-                    ((color.b as u16 * sa + self.buffer[offset + 2] as u16 * da + 127) / 255) as u8;
-                self.buffer[offset + 3] = 255;
-            }
-        }
-    }
-
-    /// Draw a horizontal span (faster than pixel-by-pixel for solid fills).
-    fn hline(&mut self, x1: i32, x2: i32, y: i32, color: Color) {
-        let start = x1.min(x2);
-        let end = x1.max(x2) + 1; // fill_span uses exclusive end
-        self.fill_span(y, start, end, color);
+        self.fb.set_pixel(x, y, color);
     }
 
     /// Get texture data via `Rc::clone` (O(1) refcount bump, no data copy).
@@ -212,26 +105,19 @@ impl Ue5Backend {
 
 impl PixelSink for Ue5Backend {
     fn draw_hline(&mut self, x1: i32, x2: i32, y: i32, color: Color) {
-        self.hline(x1, x2, y, color);
+        self.fb.hline(x1, x2, y, color);
     }
 }
 
 impl SdiCore for Ue5Backend {
     fn init(&mut self, width: u32, height: u32) -> Result<()> {
-        self.width = width;
-        self.height = height;
-        self.buffer = vec![0; (width * height * 4) as usize];
+        self.fb.resize(width, height);
         self.dirty = true;
         Ok(())
     }
 
     fn clear(&mut self, color: Color) -> Result<()> {
-        for pixel in self.buffer.chunks_exact_mut(4) {
-            pixel[0] = color.r;
-            pixel[1] = color.g;
-            pixel[2] = color.b;
-            pixel[3] = color.a;
-        }
+        self.fb.clear(color);
         self.dirty = true;
         Ok(())
     }
@@ -241,9 +127,7 @@ impl SdiCore for Ue5Backend {
             return Ok(());
         }
         let (tx, ty) = self.translate(x, y);
-        for dy in 0..h as i32 {
-            self.fill_span(ty + dy, tx, tx + w as i32, color);
-        }
+        self.fb.fill_rect(tx, ty, w, h, color);
         self.dirty = true;
         Ok(())
     }
@@ -257,35 +141,15 @@ impl SdiCore for Ue5Backend {
         color: Color,
     ) -> Result<()> {
         let (tx, ty) = self.translate(x, y);
-        let scale = if font_size >= 8 {
-            (font_size / 8) as i32
-        } else {
-            1
-        };
-
-        let mut cx = tx;
-        for ch in text.chars() {
-            let glyph_data = font::glyph(ch);
-            let (left_pad, advance) = font::glyph_metrics(ch);
-            let left_pad = left_pad as i32;
-            for row in 0..8i32 {
-                let bits = glyph_data[row as usize];
-                for col in 0..8i32 {
-                    if bits & (0x80 >> col) != 0 {
-                        for sy in 0..scale {
-                            for sx in 0..scale {
-                                self.set_pixel(
-                                    cx + (col - left_pad) * scale + sx,
-                                    ty + row * scale + sy,
-                                    color,
-                                );
-                            }
-                        }
-                    }
-                }
-            }
-            cx += advance as i32 * scale;
-        }
+        self.fb.draw_bitmap_text(
+            text,
+            tx,
+            ty,
+            font_size,
+            color,
+            font::glyph,
+            font::glyph_metrics,
+        );
         self.dirty = true;
         Ok(())
     }
@@ -293,22 +157,7 @@ impl SdiCore for Ue5Backend {
     fn blit(&mut self, tex: TextureId, x: i32, y: i32, w: u32, h: u32) -> Result<()> {
         let (tex_w, tex_h, tex_data) = self.get_texture_data(tex)?;
         let (tx, ty) = self.translate(x, y);
-        for dy in 0..h {
-            for dx in 0..w {
-                let src_x = (dx * tex_w / w) as usize;
-                let src_y = (dy * tex_h / h) as usize;
-                let src_offset = (src_y * tex_w as usize + src_x) * 4;
-                if src_offset + 3 < tex_data.len() {
-                    let color = Color::rgba(
-                        tex_data[src_offset],
-                        tex_data[src_offset + 1],
-                        tex_data[src_offset + 2],
-                        tex_data[src_offset + 3],
-                    );
-                    self.set_pixel(tx + dx as i32, ty + dy as i32, color);
-                }
-            }
-        }
+        self.fb.blit_texture(&tex_data, tex_w, tex_h, tx, ty, w, h);
         self.dirty = true;
         Ok(())
     }
@@ -346,12 +195,13 @@ impl SdiCore for Ue5Backend {
     }
 
     fn set_clip_rect(&mut self, x: i32, y: i32, w: u32, h: u32) -> Result<()> {
-        self.clip = Some(ClipRect { x, y, w, h });
+        let clip = ClipRect { x, y, w, h };
+        self.fb.set_clip(Some(clip));
         Ok(())
     }
 
     fn reset_clip_rect(&mut self) -> Result<()> {
-        self.clip = None;
+        self.fb.set_clip(None);
         Ok(())
     }
 
@@ -360,29 +210,12 @@ impl SdiCore for Ue5Backend {
     }
 
     fn read_pixels(&self, x: i32, y: i32, w: u32, h: u32) -> Result<Vec<u8>> {
-        let mut out = vec![0u8; (w * h * 4) as usize];
-        for row in 0..h {
-            let sy = (y as u32 + row) as usize;
-            if sy >= self.height as usize {
-                continue;
-            }
-            for col in 0..w {
-                let sx = (x as u32 + col) as usize;
-                if sx >= self.width as usize {
-                    continue;
-                }
-                let src_idx = (sy * self.width as usize + sx) * 4;
-                let dst_idx = (row as usize * w as usize + col as usize) * 4;
-                out[dst_idx..dst_idx + 4].copy_from_slice(&self.buffer[src_idx..src_idx + 4]);
-            }
-        }
-        Ok(out)
+        Ok(self.fb.read_pixels(x, y, w, h))
     }
 
     fn shutdown(&mut self) -> Result<()> {
-        self.buffer.clear();
+        self.fb = SoftwareBuffer::new(0, 0);
         self.textures.clear();
-        self.clip = None;
         self.clip_stack.clear();
         self.translate_stack.clear();
         log::info!("UE5 backend shut down");
@@ -408,53 +241,7 @@ impl SdiBackend for Ue5Backend {
             return self.fill_rect(x, y, w, h, color);
         }
         let (tx, ty) = self.translate(x, y);
-        let r = (radius as u32).min(w / 2).min(h / 2) as i32;
-
-        // Center rect (full width, excluding top/bottom radius strips).
-        for dy in r..(h as i32 - r) {
-            self.hline(tx, tx + w as i32 - 1, ty + dy, color);
-        }
-
-        // Top and bottom strips with rounded corners (midpoint circle).
-        let mut cx = 0i32;
-        let mut cy = r;
-        let mut d = 1 - r;
-        while cx <= cy {
-            // Top-left to top-right scanlines.
-            self.hline(tx + r - cy, tx + w as i32 - 1 - r + cy, ty + r - cx, color);
-            if cx != 0 {
-                self.hline(
-                    tx + r - cy,
-                    tx + w as i32 - 1 - r + cy,
-                    ty + h as i32 - 1 - r + cx,
-                    color,
-                );
-            }
-            if cx != cy {
-                self.hline(tx + r - cx, tx + w as i32 - 1 - r + cx, ty + r - cy, color);
-                self.hline(
-                    tx + r - cx,
-                    tx + w as i32 - 1 - r + cx,
-                    ty + h as i32 - 1 - r + cy,
-                    color,
-                );
-            } else {
-                self.hline(
-                    tx + r - cx,
-                    tx + w as i32 - 1 - r + cx,
-                    ty + h as i32 - 1 - r + cy,
-                    color,
-                );
-            }
-
-            cx += 1;
-            if d < 0 {
-                d += 2 * cx + 1;
-            } else {
-                cy -= 1;
-                d += 2 * (cx - cy) + 1;
-            }
-        }
+        self.fb.fill_rounded_rect(tx, ty, w, h, radius, color);
         self.dirty = true;
         Ok(())
     }
@@ -468,21 +255,9 @@ impl SdiBackend for Ue5Backend {
         stroke_width: u16,
         color: Color,
     ) -> Result<()> {
-        let sw = stroke_width as u32;
-        // Top.
-        self.fill_rect(x, y, w, sw, color)?;
-        // Bottom.
-        self.fill_rect(x, y + h as i32 - sw as i32, w, sw, color)?;
-        // Left.
-        self.fill_rect(x, y + sw as i32, sw, h.saturating_sub(sw * 2), color)?;
-        // Right.
-        self.fill_rect(
-            x + w as i32 - sw as i32,
-            y + sw as i32,
-            sw,
-            h.saturating_sub(sw * 2),
-            color,
-        )?;
+        let (tx, ty) = self.translate(x, y);
+        self.fb.stroke_rect(tx, ty, w, h, stroke_width, color);
+        self.dirty = true;
         Ok(())
     }
 
@@ -497,73 +272,14 @@ impl SdiBackend for Ue5Backend {
     ) -> Result<()> {
         let (tx1, ty1) = self.translate(x1, y1);
         let (tx2, ty2) = self.translate(x2, y2);
-        let w = width as i32;
-
-        // Bresenham's line algorithm.
-        let dx = (tx2 - tx1).abs();
-        let dy = -(ty2 - ty1).abs();
-        let sx = if tx1 < tx2 { 1 } else { -1 };
-        let sy = if ty1 < ty2 { 1 } else { -1 };
-        let mut err = dx + dy;
-        let mut cx = tx1;
-        let mut cy = ty1;
-
-        loop {
-            // Draw a block of pixels for line width.
-            if w <= 1 {
-                self.set_pixel(cx, cy, color);
-            } else {
-                let half = w / 2;
-                for wy in -half..=(w - half - 1) {
-                    for wx in -half..=(w - half - 1) {
-                        self.set_pixel(cx + wx, cy + wy, color);
-                    }
-                }
-            }
-
-            if cx == tx2 && cy == ty2 {
-                break;
-            }
-            let e2 = 2 * err;
-            if e2 >= dy {
-                err += dy;
-                cx += sx;
-            }
-            if e2 <= dx {
-                err += dx;
-                cy += sy;
-            }
-        }
+        self.fb.draw_line(tx1, ty1, tx2, ty2, width, color);
         self.dirty = true;
         Ok(())
     }
 
     fn fill_circle(&mut self, cx: i32, cy: i32, radius: u16, color: Color) -> Result<()> {
         let (tcx, tcy) = self.translate(cx, cy);
-        let r = radius as i32;
-
-        // Midpoint circle algorithm with horizontal fill spans.
-        let mut x = 0i32;
-        let mut y = r;
-        let mut d = 1 - r;
-
-        while x <= y {
-            self.hline(tcx - y, tcx + y, tcy + x, color);
-            if x != 0 {
-                self.hline(tcx - y, tcx + y, tcy - x, color);
-            }
-            if x != y {
-                self.hline(tcx - x, tcx + x, tcy + y, color);
-                self.hline(tcx - x, tcx + x, tcy - y, color);
-            }
-            x += 1;
-            if d < 0 {
-                d += 2 * x + 1;
-            } else {
-                y -= 1;
-                d += 2 * (x - y) + 1;
-            }
-        }
+        self.fb.fill_circle(tcx, tcy, radius, color);
         self.dirty = true;
         Ok(())
     }
@@ -577,33 +293,7 @@ impl SdiBackend for Ue5Backend {
         color: Color,
     ) -> Result<()> {
         let (tcx, tcy) = self.translate(cx, cy);
-        let r_outer = radius as i32;
-        let r_inner = (radius as i32 - stroke_width as i32).max(0);
-
-        // Scanline approach: for each row, compute outer and inner x extents.
-        for dy in -r_outer..=r_outer {
-            let y = tcy + dy;
-            // Outer circle extent at this row.
-            let outer_sq = r_outer * r_outer - dy * dy;
-            if outer_sq < 0 {
-                continue;
-            }
-            let outer_x = isqrt(outer_sq as u32) as i32;
-
-            if r_inner > 0 {
-                let inner_sq = r_inner * r_inner - dy * dy;
-                if inner_sq > 0 {
-                    let inner_x = isqrt(inner_sq as u32) as i32;
-                    // Draw left arc.
-                    self.hline(tcx - outer_x, tcx - inner_x, y, color);
-                    // Draw right arc.
-                    self.hline(tcx + inner_x, tcx + outer_x, y, color);
-                    continue;
-                }
-            }
-            // Full span (inner circle doesn't reach this row).
-            self.hline(tcx - outer_x, tcx + outer_x, y, color);
-        }
+        self.fb.stroke_circle(tcx, tcy, radius, stroke_width, color);
         self.dirty = true;
         Ok(())
     }
@@ -621,7 +311,7 @@ impl SdiBackend for Ue5Backend {
         let v0 = self.translate(x1, y1);
         let v1 = self.translate(x2, y2);
         let v2 = self.translate(x3, y3);
-        rasterize::rasterize_triangle(self, v0, v1, v2, color);
+        self.fb.fill_triangle(v0, v1, v2, color);
         self.dirty = true;
         Ok(())
     }
@@ -641,20 +331,12 @@ impl SdiBackend for Ue5Backend {
         let (tx, ty) = self.translate(x, y);
         match *gradient {
             GradientStyle::Vertical { top, bottom } => {
-                let h_max = h.saturating_sub(1).max(1);
-                for dy in 0..h as i32 {
-                    let color = lerp_color_ratio(top, bottom, dy as u32, h_max);
-                    self.fill_span(ty + dy, tx, tx + w as i32, color);
-                }
+                self.fb
+                    .fill_rect_vertical_gradient(tx, ty, w, h, top, bottom);
             },
             GradientStyle::Horizontal { left, right } => {
-                let w_max = w.saturating_sub(1).max(1);
-                for dx in 0..w as i32 {
-                    let color = lerp_color_ratio(left, right, dx as u32, w_max);
-                    for dy in 0..h as i32 {
-                        self.set_pixel(tx + dx, ty + dy, color);
-                    }
-                }
+                self.fb
+                    .fill_rect_horizontal_gradient(tx, ty, w, h, left, right);
             },
             GradientStyle::FourCorner {
                 top_left,
@@ -662,16 +344,16 @@ impl SdiBackend for Ue5Backend {
                 bottom_left,
                 bottom_right,
             } => {
-                let h_max = h.saturating_sub(1).max(1);
-                let w_max = w.saturating_sub(1).max(1);
-                for dy in 0..h as i32 {
-                    let left = lerp_color_ratio(top_left, bottom_left, dy as u32, h_max);
-                    let right = lerp_color_ratio(top_right, bottom_right, dy as u32, h_max);
-                    for dx in 0..w as i32 {
-                        let color = lerp_color_ratio(left, right, dx as u32, w_max);
-                        self.set_pixel(tx + dx, ty + dy, color);
-                    }
-                }
+                self.fb.fill_rect_four_corner_gradient(
+                    tx,
+                    ty,
+                    w,
+                    h,
+                    top_left,
+                    top_right,
+                    bottom_left,
+                    bottom_right,
+                );
             },
         }
         self.dirty = true;
@@ -679,11 +361,17 @@ impl SdiBackend for Ue5Backend {
     }
 
     fn viewport_size(&self) -> (u32, u32) {
-        (self.width, self.height)
+        (self.fb.width(), self.fb.height())
     }
 
     fn dim_screen(&mut self, alpha: u8) -> Result<()> {
-        self.fill_rect(0, 0, self.width, self.height, Color::rgba(0, 0, 0, alpha))
+        self.fill_rect(
+            0,
+            0,
+            self.fb.width(),
+            self.fb.height(),
+            Color::rgba(0, 0, 0, alpha),
+        )
     }
 
     // -------------------------------------------------------------------
@@ -691,7 +379,6 @@ impl SdiBackend for Ue5Backend {
     // -------------------------------------------------------------------
 
     fn measure_text_height(&self, font_size: u16) -> u32 {
-        // 8x8 bitmap font: line height matches the scaled glyph height.
         let scale = if font_size >= 8 {
             (font_size / 8) as u32
         } else {
@@ -701,7 +388,6 @@ impl SdiBackend for Ue5Backend {
     }
 
     fn font_ascent(&self, font_size: u16) -> u32 {
-        // Bitmap font ascent is the full glyph height (no descenders).
         let scale = if font_size >= 8 {
             (font_size / 8) as u32
         } else {
@@ -728,22 +414,9 @@ impl SdiBackend for Ue5Backend {
     ) -> Result<()> {
         let (tex_w, _tex_h, tex_data) = self.get_texture_data(tex)?;
         let (tx, ty) = self.translate(dst_x, dst_y);
-        for dy in 0..dst_h {
-            for dx in 0..dst_w {
-                let sx = src_x + (dx * src_w / dst_w.max(1));
-                let sy = src_y + (dy * src_h / dst_h.max(1));
-                let src_offset = (sy as usize * tex_w as usize + sx as usize) * 4;
-                if src_offset + 3 < tex_data.len() {
-                    let color = Color::rgba(
-                        tex_data[src_offset],
-                        tex_data[src_offset + 1],
-                        tex_data[src_offset + 2],
-                        tex_data[src_offset + 3],
-                    );
-                    self.set_pixel(tx + dx as i32, ty + dy as i32, color);
-                }
-            }
-        }
+        self.fb.blit_texture_sub(
+            &tex_data, tex_w, src_x, src_y, src_w, src_h, tx, ty, dst_w, dst_h,
+        );
         self.dirty = true;
         Ok(())
     }
@@ -759,22 +432,8 @@ impl SdiBackend for Ue5Backend {
     ) -> Result<()> {
         let (tex_w, tex_h, tex_data) = self.get_texture_data(tex)?;
         let (tx, ty) = self.translate(x, y);
-        for dy in 0..h {
-            for dx in 0..w {
-                let src_x = (dx * tex_w / w) as usize;
-                let src_y = (dy * tex_h / h) as usize;
-                let src_offset = (src_y * tex_w as usize + src_x) * 4;
-                if src_offset + 3 < tex_data.len() {
-                    let color = Color::rgba(
-                        ((tex_data[src_offset] as u16 * tint.r as u16 + 127) / 255) as u8,
-                        ((tex_data[src_offset + 1] as u16 * tint.g as u16 + 127) / 255) as u8,
-                        ((tex_data[src_offset + 2] as u16 * tint.b as u16 + 127) / 255) as u8,
-                        ((tex_data[src_offset + 3] as u16 * tint.a as u16 + 127) / 255) as u8,
-                    );
-                    self.set_pixel(tx + dx as i32, ty + dy as i32, color);
-                }
-            }
-        }
+        self.fb
+            .blit_texture_tinted(&tex_data, tex_w, tex_h, tx, ty, w, h, tint);
         self.dirty = true;
         Ok(())
     }
@@ -794,22 +453,9 @@ impl SdiBackend for Ue5Backend {
     ) -> Result<()> {
         let (tex_w, _tex_h, tex_data) = self.get_texture_data(tex)?;
         let (tx, ty) = self.translate(dst_x, dst_y);
-        for dy in 0..dst_h {
-            for dx in 0..dst_w {
-                let sx = src_x + (dx * src_w / dst_w.max(1));
-                let sy = src_y + (dy * src_h / dst_h.max(1));
-                let src_offset = (sy as usize * tex_w as usize + sx as usize) * 4;
-                if src_offset + 3 < tex_data.len() {
-                    let color = Color::rgba(
-                        ((tex_data[src_offset] as u16 * tint.r as u16 + 127) / 255) as u8,
-                        ((tex_data[src_offset + 1] as u16 * tint.g as u16 + 127) / 255) as u8,
-                        ((tex_data[src_offset + 2] as u16 * tint.b as u16 + 127) / 255) as u8,
-                        ((tex_data[src_offset + 3] as u16 * tint.a as u16 + 127) / 255) as u8,
-                    );
-                    self.set_pixel(tx + dx as i32, ty + dy as i32, color);
-                }
-            }
-        }
+        self.fb.blit_texture_sub_tinted(
+            &tex_data, tex_w, src_x, src_y, src_w, src_h, tx, ty, dst_w, dst_h, tint,
+        );
         self.dirty = true;
         Ok(())
     }
@@ -826,30 +472,8 @@ impl SdiBackend for Ue5Backend {
     ) -> Result<()> {
         let (tex_w, tex_h, tex_data) = self.get_texture_data(tex)?;
         let (tx, ty) = self.translate(x, y);
-        for dy in 0..h {
-            for dx in 0..w {
-                let sample_x = if flip_h {
-                    ((w - 1 - dx) * tex_w / w) as usize
-                } else {
-                    (dx * tex_w / w) as usize
-                };
-                let sample_y = if flip_v {
-                    ((h - 1 - dy) * tex_h / h) as usize
-                } else {
-                    (dy * tex_h / h) as usize
-                };
-                let src_offset = (sample_y * tex_w as usize + sample_x) * 4;
-                if src_offset + 3 < tex_data.len() {
-                    let color = Color::rgba(
-                        tex_data[src_offset],
-                        tex_data[src_offset + 1],
-                        tex_data[src_offset + 2],
-                        tex_data[src_offset + 3],
-                    );
-                    self.set_pixel(tx + dx as i32, ty + dy as i32, color);
-                }
-            }
-        }
+        self.fb
+            .blit_texture_flipped(&tex_data, tex_w, tex_h, tx, ty, w, h, flip_h, flip_v);
         self.dirty = true;
         Ok(())
     }
@@ -862,26 +486,26 @@ impl SdiBackend for Ue5Backend {
         let (tx, ty) = self.translate(x, y);
         let new_clip = ClipRect { x: tx, y: ty, w, h };
         match self.clip_stack.push(new_clip) {
-            ClipPush::Clip(c) => self.clip = Some(c),
+            ClipPush::Clip(c) => self.fb.set_clip(Some(c)),
             ClipPush::Empty => {
-                self.clip = Some(ClipRect {
+                self.fb.set_clip(Some(ClipRect {
                     x: 0,
                     y: 0,
                     w: 0,
                     h: 0,
-                });
+                }));
             },
         }
         Ok(())
     }
 
     fn pop_clip_rect(&mut self) -> Result<()> {
-        self.clip = self.clip_stack.pop();
+        self.fb.set_clip(self.clip_stack.pop());
         Ok(())
     }
 
     fn current_clip_rect(&self) -> Option<(i32, i32, u32, u32)> {
-        self.clip.map(|c| (c.x, c.y, c.w, c.h))
+        self.fb.clip().map(|c| (c.x, c.y, c.w, c.h))
     }
 
     fn push_translate(&mut self, dx: i32, dy: i32) -> Result<()> {
@@ -897,11 +521,6 @@ impl SdiBackend for Ue5Backend {
     fn current_translate(&self) -> (i32, i32) {
         self.translate_stack.current()
     }
-}
-
-/// Integer square root (delegates to shared rasterizer).
-fn isqrt(n: u32) -> u32 {
-    rasterize::isqrt(n)
 }
 
 #[cfg(test)]
@@ -1395,8 +1014,6 @@ mod tests {
         // Draw 50% transparent red over it.
         backend.set_pixel(0, 0, Color::rgba(255, 0, 0, 128));
         let buf = backend.buffer();
-        // Red channel: (255*128 + 255*127 + 127) / 255 ~= 255
-        // Green channel: (0*128 + 255*127 + 127) / 255 ~= 127
         assert!(buf[0] > 200); // R stays high
         assert!(buf[1] > 100 && buf[1] < 140); // G blended ~127
         assert!(buf[2] > 100 && buf[2] < 140); // B blended ~127
@@ -1418,21 +1035,16 @@ mod tests {
     fn set_pixel_out_of_bounds_no_crash() {
         let mut backend = Ue5Backend::new(4, 4);
         backend.clear(Color::BLACK).unwrap();
-        // Save buffer state after clear.
         let before: Vec<u8> = backend.buffer().to_vec();
-        // Negative coordinates.
         backend.set_pixel(-1, 0, Color::WHITE);
         backend.set_pixel(0, -1, Color::WHITE);
-        // Beyond bounds.
         backend.set_pixel(4, 0, Color::WHITE);
         backend.set_pixel(0, 4, Color::WHITE);
-        // Buffer should be unchanged from the clear state.
         assert_eq!(backend.buffer(), before.as_slice());
     }
 
     #[test]
     fn rgba_round_trip_encode_decode() {
-        // Encode Color into buffer, read it back.
         let mut backend = Ue5Backend::new(1, 1);
         let c = Color::rgba(123, 45, 67, 255);
         backend.clear(c).unwrap();

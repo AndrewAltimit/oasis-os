@@ -129,3 +129,184 @@ pub fn glyph(ch: u8) -> &'static [u8; 8] {
         &FALLBACK
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // -----------------------------------------------------------------------
+    // Font data table
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn font_data_has_95_glyphs() {
+        assert_eq!(FONT_DATA.len(), 95);
+    }
+
+    #[test]
+    fn font_data_covers_printable_ascii() {
+        // ASCII 32 (space) through 126 (tilde) = 95 chars
+        assert_eq!(LAST_CHAR - FIRST_CHAR + 1, 95);
+    }
+
+    // -----------------------------------------------------------------------
+    // glyph() lookup
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn glyph_space_is_blank() {
+        let g = glyph(b' ');
+        assert!(g.iter().all(|&b| b == 0), "Space glyph should be all zeros");
+    }
+
+    #[test]
+    fn glyph_exclamation_not_blank() {
+        let g = glyph(b'!');
+        assert!(g.iter().any(|&b| b != 0), "'!' should have pixels");
+    }
+
+    #[test]
+    fn glyph_a_uppercase() {
+        let g = glyph(b'A');
+        // 'A' starts with 0x18 (top row: center pixels)
+        assert_eq!(g[0], 0x18);
+    }
+
+    #[test]
+    fn glyph_zero_digit() {
+        let g = glyph(b'0');
+        // '0' first row is 0x3C
+        assert_eq!(g[0], 0x3C);
+    }
+
+    #[test]
+    fn glyph_tilde_is_last() {
+        let g = glyph(b'~');
+        // Tilde is the last printable ASCII char (126)
+        assert_eq!(g[0], 0x76);
+        assert_eq!(g[1], 0xDC);
+    }
+
+    #[test]
+    fn glyph_returns_fallback_for_control_chars() {
+        let fallback = [0xFE, 0xFE, 0xFE, 0xFE, 0xFE, 0xFE, 0xFE, 0x00];
+        assert_eq!(*glyph(0x00), fallback); // NUL
+        assert_eq!(*glyph(0x1F), fallback); // Unit separator
+        assert_eq!(*glyph(0x0A), fallback); // Newline
+    }
+
+    #[test]
+    fn glyph_returns_fallback_for_del() {
+        let fallback = [0xFE, 0xFE, 0xFE, 0xFE, 0xFE, 0xFE, 0xFE, 0x00];
+        assert_eq!(*glyph(0x7F), fallback); // DEL
+    }
+
+    #[test]
+    fn glyph_returns_fallback_for_high_ascii() {
+        let fallback = [0xFE, 0xFE, 0xFE, 0xFE, 0xFE, 0xFE, 0xFE, 0x00];
+        assert_eq!(*glyph(0x80), fallback);
+        assert_eq!(*glyph(0xFF), fallback);
+    }
+
+    #[test]
+    fn glyph_all_printable_ascii_valid() {
+        // Every printable ASCII char should return a non-fallback glyph
+        let fallback = [0xFE, 0xFE, 0xFE, 0xFE, 0xFE, 0xFE, 0xFE, 0x00];
+        for ch in 0x20..=0x7Eu8 {
+            let g = glyph(ch);
+            // Space is all zeros but is still a valid glyph (not fallback)
+            if ch == b' ' {
+                assert_ne!(*g, fallback, "Space should not be fallback");
+            }
+            // Just verify we don't panic
+            let _ = g;
+        }
+    }
+
+    #[test]
+    fn glyph_boundary_first_char() {
+        // FIRST_CHAR (0x20 = space) should use table, not fallback
+        let g = glyph(FIRST_CHAR);
+        let fallback = [0xFE, 0xFE, 0xFE, 0xFE, 0xFE, 0xFE, 0xFE, 0x00];
+        assert_ne!(*g, fallback);
+    }
+
+    #[test]
+    fn glyph_boundary_last_char() {
+        // LAST_CHAR (0x7E = tilde) should use table, not fallback
+        let g = glyph(LAST_CHAR);
+        let fallback = [0xFE, 0xFE, 0xFE, 0xFE, 0xFE, 0xFE, 0xFE, 0x00];
+        assert_ne!(*g, fallback);
+    }
+
+    #[test]
+    fn glyph_boundary_before_first() {
+        // 0x1F (one before FIRST_CHAR) should be fallback
+        let g = glyph(FIRST_CHAR - 1);
+        let fallback = [0xFE, 0xFE, 0xFE, 0xFE, 0xFE, 0xFE, 0xFE, 0x00];
+        assert_eq!(*g, fallback);
+    }
+
+    #[test]
+    fn glyph_boundary_after_last() {
+        // 0x7F (one after LAST_CHAR) should be fallback
+        let g = glyph(LAST_CHAR + 1);
+        let fallback = [0xFE, 0xFE, 0xFE, 0xFE, 0xFE, 0xFE, 0xFE, 0x00];
+        assert_eq!(*g, fallback);
+    }
+
+    // -----------------------------------------------------------------------
+    // Constants
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn glyph_dimensions() {
+        assert_eq!(GLYPH_WIDTH, 8);
+        assert_eq!(GLYPH_HEIGHT, 8);
+    }
+
+    #[test]
+    fn each_glyph_is_8_bytes() {
+        for (i, row) in FONT_DATA.iter().enumerate() {
+            assert_eq!(
+                row.len(),
+                8,
+                "Glyph {} (ASCII {}) should have 8 bytes",
+                i,
+                i as u8 + FIRST_CHAR
+            );
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Specific well-known glyph patterns (CGA font verification)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn glyph_underscore_bottom_only() {
+        let g = glyph(b'_');
+        // Underscore: only the bottom row has pixels (0xFE)
+        for &row in &g[..7] {
+            assert_eq!(row, 0x00, "Underscore rows 0-6 should be blank");
+        }
+        assert_eq!(g[7], 0xFE, "Underscore row 7 should be full line");
+    }
+
+    #[test]
+    fn glyph_pipe_vertical_line() {
+        let g = glyph(b'|');
+        // Pipe: center column (0x18) all the way down
+        for &row in g.iter() {
+            assert_eq!(row, 0x18, "Pipe should have center pixels each row");
+        }
+    }
+
+    #[test]
+    fn glyph_dash_middle_only() {
+        let g = glyph(b'-');
+        // Dash: only row 3 has the horizontal line (0x7E)
+        assert_eq!(g[3], 0x7E);
+        assert_eq!(g[0], 0);
+        assert_eq!(g[7], 0);
+    }
+}

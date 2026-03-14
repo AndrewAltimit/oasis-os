@@ -10,6 +10,9 @@ pub fn get_shader_source(name: &str) -> Option<&'static str> {
         "city_lights" => Some(shaders::CITY_LIGHTS_FRAG),
         "ocean_waves" => Some(shaders::OCEAN_WAVES_FRAG),
         "calm_waves" => Some(shaders::CALM_WAVES_FRAG),
+        "starfield" => Some(shaders::STARFIELD_FRAG),
+        "plasma" => Some(shaders::PLASMA_FRAG),
+        "matrix_rain" => Some(shaders::MATRIX_RAIN_FRAG),
         _ => None,
     }
 }

@@ -31,3 +31,12 @@ pub const OCEAN_WAVES_FRAG: &str = include_str!("ocean_waves.frag");
 ///
 /// Port of <https://www.shadertoy.com/view/3fBBDc>.
 pub const CALM_WAVES_FRAG: &str = include_str!("calm_waves.frag");
+
+/// Animated starfield tunnel with twinkling stars (GLSL ES 3.00).
+pub const STARFIELD_FRAG: &str = include_str!("starfield.frag");
+
+/// Classic demoscene plasma effect with overlapping sine waves (GLSL ES 3.00).
+pub const PLASMA_FRAG: &str = include_str!("plasma.frag");
+
+/// Matrix-style digital rain with falling green characters (GLSL ES 3.00).
+pub const MATRIX_RAIN_FRAG: &str = include_str!("matrix_rain.frag");

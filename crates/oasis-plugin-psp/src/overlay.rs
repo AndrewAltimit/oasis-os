@@ -550,3 +550,232 @@ fn write_u32_pad2(buf: &mut [u8], pos: usize, val: u32) -> usize {
     }
     p
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // -----------------------------------------------------------------------
+    // OverlayState::from_u8
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn overlay_state_from_u8_hidden() {
+        assert_eq!(OverlayState::from_u8(0), OverlayState::Hidden);
+    }
+
+    #[test]
+    fn overlay_state_from_u8_osd() {
+        assert_eq!(OverlayState::from_u8(1), OverlayState::Osd);
+    }
+
+    #[test]
+    fn overlay_state_from_u8_menu() {
+        assert_eq!(OverlayState::from_u8(2), OverlayState::Menu);
+    }
+
+    #[test]
+    fn overlay_state_from_u8_invalid_defaults_hidden() {
+        assert_eq!(OverlayState::from_u8(3), OverlayState::Hidden);
+        assert_eq!(OverlayState::from_u8(255), OverlayState::Hidden);
+    }
+
+    #[test]
+    fn overlay_state_repr_values() {
+        assert_eq!(OverlayState::Hidden as u8, 0);
+        assert_eq!(OverlayState::Osd as u8, 1);
+        assert_eq!(OverlayState::Menu as u8, 2);
+    }
+
+    // -----------------------------------------------------------------------
+    // write_str
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn write_str_basic() {
+        let mut buf = [0u8; 32];
+        let p = write_str(&mut buf, 0, b"hello");
+        assert_eq!(p, 5);
+        assert_eq!(&buf[..5], b"hello");
+    }
+
+    #[test]
+    fn write_str_at_offset() {
+        let mut buf = [0u8; 32];
+        let p = write_str(&mut buf, 3, b"ABC");
+        assert_eq!(p, 6);
+        assert_eq!(&buf[3..6], b"ABC");
+    }
+
+    #[test]
+    fn write_str_truncation() {
+        let mut buf = [0u8; 4];
+        let p = write_str(&mut buf, 0, b"hello world");
+        assert_eq!(p, 4);
+        assert_eq!(&buf, b"hell");
+    }
+
+    #[test]
+    fn write_str_empty() {
+        let mut buf = [0u8; 8];
+        let p = write_str(&mut buf, 0, b"");
+        assert_eq!(p, 0);
+    }
+
+    #[test]
+    fn write_str_at_end_of_buffer() {
+        let mut buf = [0u8; 4];
+        let p = write_str(&mut buf, 4, b"x");
+        assert_eq!(p, 4); // No room
+    }
+
+    // -----------------------------------------------------------------------
+    // write_u32
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn write_u32_zero() {
+        let mut buf = [0u8; 16];
+        let p = write_u32(&mut buf, 0, 0);
+        assert_eq!(p, 1);
+        assert_eq!(buf[0], b'0');
+    }
+
+    #[test]
+    fn write_u32_single_digit() {
+        let mut buf = [0u8; 16];
+        let p = write_u32(&mut buf, 0, 7);
+        assert_eq!(p, 1);
+        assert_eq!(buf[0], b'7');
+    }
+
+    #[test]
+    fn write_u32_multi_digit() {
+        let mut buf = [0u8; 16];
+        let p = write_u32(&mut buf, 0, 333);
+        assert_eq!(p, 3);
+        assert_eq!(&buf[..3], b"333");
+    }
+
+    #[test]
+    fn write_u32_large() {
+        let mut buf = [0u8; 16];
+        let p = write_u32(&mut buf, 0, 4294967295);
+        assert_eq!(p, 10);
+        assert_eq!(&buf[..10], b"4294967295");
+    }
+
+    #[test]
+    fn write_u32_at_offset() {
+        let mut buf = [0u8; 16];
+        let p1 = write_str(&mut buf, 0, b"CPU: ");
+        let p2 = write_u32(&mut buf, p1, 333);
+        let p3 = write_str(&mut buf, p2, b"MHz");
+        assert_eq!(&buf[..p3], b"CPU: 333MHz");
+    }
+
+    #[test]
+    fn write_u32_buffer_too_small() {
+        let mut buf = [0u8; 2];
+        let p = write_u32(&mut buf, 0, 12345);
+        // Can only fit 2 digits
+        assert_eq!(p, 2);
+        assert_eq!(&buf, b"12");
+    }
+
+    #[test]
+    fn write_u32_zero_no_room() {
+        let mut buf = [0u8; 0];
+        let p = write_u32(&mut buf, 0, 0);
+        assert_eq!(p, 0);
+    }
+
+    // -----------------------------------------------------------------------
+    // write_u32_pad2
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn write_u32_pad2_single_digit() {
+        let mut buf = [0u8; 8];
+        let p = write_u32_pad2(&mut buf, 0, 5);
+        assert_eq!(p, 2);
+        assert_eq!(&buf[..2], b"05");
+    }
+
+    #[test]
+    fn write_u32_pad2_double_digit() {
+        let mut buf = [0u8; 8];
+        let p = write_u32_pad2(&mut buf, 0, 42);
+        assert_eq!(p, 2);
+        assert_eq!(&buf[..2], b"42");
+    }
+
+    #[test]
+    fn write_u32_pad2_zero() {
+        let mut buf = [0u8; 8];
+        let p = write_u32_pad2(&mut buf, 0, 0);
+        assert_eq!(p, 2);
+        assert_eq!(&buf[..2], b"00");
+    }
+
+    #[test]
+    fn write_u32_pad2_buffer_too_small() {
+        let mut buf = [0u8; 1];
+        let p = write_u32_pad2(&mut buf, 0, 5);
+        assert_eq!(p, 0); // Not enough room for 2 digits
+    }
+
+    // -----------------------------------------------------------------------
+    // Constants
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn menu_items_matches_labels() {
+        assert_eq!(MENU_ITEMS as usize, MENU_LABELS.len());
+    }
+
+    #[test]
+    fn clock_presets_valid() {
+        // Verify all presets have bus = pll / 2
+        for &(pll, cpu, bus) in &CLOCK_PRESETS {
+            assert_eq!(cpu, pll, "CPU should equal PLL");
+            assert_eq!(bus, pll / 2, "Bus should be PLL / 2");
+            assert!(pll > 0, "PLL must be positive");
+        }
+    }
+
+    #[test]
+    fn button_masks_distinct() {
+        let buttons = [
+            BTN_UP, BTN_DOWN, BTN_CROSS, BTN_L_TRIGGER, BTN_R_TRIGGER,
+            BTN_START,
+        ];
+        for i in 0..buttons.len() {
+            for j in (i + 1)..buttons.len() {
+                assert_ne!(
+                    buttons[i], buttons[j],
+                    "Button masks must be distinct"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn overlay_dimensions_fit_screen() {
+        // Overlay must fit within 480x272 PSP screen
+        assert!(OVERLAY_X + OVERLAY_W <= render::SCREEN_WIDTH);
+        assert!(OVERLAY_Y + OVERLAY_H <= 272);
+    }
+
+    #[test]
+    fn menu_items_fit_overlay() {
+        // All menu items should fit within overlay height
+        let menu_bottom = MENU_START_Y + (MENU_ITEMS as u32 * ITEM_H);
+        assert!(
+            menu_bottom <= OVERLAY_Y + OVERLAY_H,
+            "Menu items overflow overlay: bottom={} > {}",
+            menu_bottom,
+            OVERLAY_Y + OVERLAY_H
+        );
+    }
+}

@@ -5,6 +5,7 @@ use std::collections::HashMap;
 use wasm_bindgen::prelude::*;
 use web_sys::{CanvasRenderingContext2d, HtmlCanvasElement, ImageData};
 
+use oasis_rasterize::GlyphCacheKey;
 use oasis_types::backend::stacks::{ClipPush, ClipStack, TranslateStack};
 use oasis_types::backend::{
     Color, GradientStyle, SdiBackend, SdiCore, TextMetrics, TextureId, texture_not_found,
@@ -50,29 +51,6 @@ fn cached_css_color(cache: &mut HashMap<u32, String>, c: Color) -> &str {
 
 struct TextureData {
     canvas: HtmlCanvasElement,
-}
-
-// ---------------------------------------------------------------------------
-// Glyph cache key
-// ---------------------------------------------------------------------------
-
-/// Packs `(char, font_size, rgba, bold, italic)` into a `u64` for hashing.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-struct GlyphCacheKey(u64);
-
-impl GlyphCacheKey {
-    const fn new(ch: char, font_size: u16, color: Color, bold: bool, italic: bool) -> Self {
-        // char: 21 bits, font_size: 16 bits, rgba: 25 bits (r5 g5 b5 a8 + 2 flags)
-        // Total ≤ 64 bits.
-        let c = ch as u64 & 0x1F_FFFF; // 21 bits
-        let fs = (font_size as u64) & 0xFFFF; // 16 bits
-        let r5 = (color.r as u64 >> 3) & 0x1F; // 5 bits
-        let g5 = (color.g as u64 >> 3) & 0x1F; // 5 bits
-        let b5 = (color.b as u64 >> 3) & 0x1F; // 5 bits
-        let a = color.a as u64; // 8 bits
-        let flags = (bold as u64) | ((italic as u64) << 1); // 2 bits
-        Self(c | (fs << 21) | (r5 << 37) | (g5 << 42) | (b5 << 47) | (a << 52) | (flags << 60))
-    }
 }
 
 // ---------------------------------------------------------------------------

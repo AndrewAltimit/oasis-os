@@ -121,6 +121,9 @@ impl ShaderRenderer {
             "city_lights",
             "ocean_waves",
             "calm_waves",
+            "starfield",
+            "plasma",
+            "matrix_rain",
         ] {
             if let Some(src) = registry::get_shader_source(name)
                 && let Err(e) = renderer.register(name, src)
@@ -401,6 +404,25 @@ mod tests {
     #[test]
     fn registry_has_balatro() {
         assert!(registry::get_shader_source("balatro").is_some());
+    }
+
+    #[test]
+    fn registry_has_all_shaders() {
+        for name in &[
+            "balatro",
+            "voronoi",
+            "city_lights",
+            "ocean_waves",
+            "calm_waves",
+            "starfield",
+            "plasma",
+            "matrix_rain",
+        ] {
+            assert!(
+                registry::get_shader_source(name).is_some(),
+                "missing shader: {name}"
+            );
+        }
     }
 
     #[test]

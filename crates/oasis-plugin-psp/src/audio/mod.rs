@@ -318,3 +318,265 @@ pub(crate) fn find_mp3_sync(data: &[u8], start: usize) -> Option<usize> {
     }
     None
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // -----------------------------------------------------------------------
+    // copy_bytes
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn copy_bytes_basic() {
+        let mut buf = [0u8; 32];
+        let p = copy_bytes(&mut buf, 0, b"hello");
+        assert_eq!(p, 5);
+        assert_eq!(&buf[..5], b"hello");
+    }
+
+    #[test]
+    fn copy_bytes_at_offset() {
+        let mut buf = [0u8; 32];
+        let p = copy_bytes(&mut buf, 10, b"ABC");
+        assert_eq!(p, 13);
+        assert_eq!(&buf[10..13], b"ABC");
+    }
+
+    #[test]
+    fn copy_bytes_truncation() {
+        let mut buf = [0u8; 3];
+        let p = copy_bytes(&mut buf, 0, b"hello");
+        assert_eq!(p, 3);
+        assert_eq!(&buf, b"hel");
+    }
+
+    #[test]
+    fn copy_bytes_empty() {
+        let mut buf = [0u8; 8];
+        let p = copy_bytes(&mut buf, 0, b"");
+        assert_eq!(p, 0);
+    }
+
+    // -----------------------------------------------------------------------
+    // write_u32_decimal
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn write_u32_decimal_zero() {
+        let mut buf = [0u8; 16];
+        let p = write_u32_decimal(&mut buf, 0, 0);
+        assert_eq!(p, 1);
+        assert_eq!(buf[0], b'0');
+    }
+
+    #[test]
+    fn write_u32_decimal_small() {
+        let mut buf = [0u8; 16];
+        let p = write_u32_decimal(&mut buf, 0, 42);
+        assert_eq!(p, 2);
+        assert_eq!(&buf[..2], b"42");
+    }
+
+    #[test]
+    fn write_u32_decimal_large() {
+        let mut buf = [0u8; 16];
+        let p = write_u32_decimal(&mut buf, 0, 1000000);
+        assert_eq!(p, 7);
+        assert_eq!(&buf[..7], b"1000000");
+    }
+
+    #[test]
+    fn write_u32_decimal_max() {
+        let mut buf = [0u8; 16];
+        let p = write_u32_decimal(&mut buf, 0, u32::MAX);
+        assert_eq!(&buf[..p], b"4294967295");
+    }
+
+    // -----------------------------------------------------------------------
+    // write_hex32
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn write_hex32_zero() {
+        let mut buf = [0u8; 16];
+        let p = write_hex32(&mut buf, 0, 0);
+        assert_eq!(p, 8);
+        assert_eq!(&buf[..8], b"00000000");
+    }
+
+    #[test]
+    fn write_hex32_deadbeef() {
+        let mut buf = [0u8; 16];
+        let p = write_hex32(&mut buf, 0, 0xDEADBEEF);
+        assert_eq!(p, 8);
+        assert_eq!(&buf[..8], b"DEADBEEF");
+    }
+
+    #[test]
+    fn write_hex32_all_nibbles() {
+        let mut buf = [0u8; 16];
+        let p = write_hex32(&mut buf, 0, 0x01234567);
+        assert_eq!(p, 8);
+        assert_eq!(&buf[..8], b"01234567");
+    }
+
+    #[test]
+    fn write_hex32_max() {
+        let mut buf = [0u8; 16];
+        let p = write_hex32(&mut buf, 0, 0xFFFFFFFF);
+        assert_eq!(p, 8);
+        assert_eq!(&buf[..8], b"FFFFFFFF");
+    }
+
+    #[test]
+    fn write_hex32_at_offset() {
+        let mut buf = [0u8; 16];
+        let p1 = copy_bytes(&mut buf, 0, b"0x");
+        let p2 = write_hex32(&mut buf, p1, 0xCAFE);
+        assert_eq!(&buf[..p2], b"0x0000CAFE");
+    }
+
+    // -----------------------------------------------------------------------
+    // parse_icy_metaint_raw
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn parse_icy_metaint_basic() {
+        let headers = b"HTTP/1.1 200 OK\r\nicy-metaint:8192\r\n\r\n";
+        assert_eq!(parse_icy_metaint_raw(headers), Some(8192));
+    }
+
+    #[test]
+    fn parse_icy_metaint_with_space() {
+        let headers = b"icy-metaint: 16000\r\n";
+        assert_eq!(parse_icy_metaint_raw(headers), Some(16000));
+    }
+
+    #[test]
+    fn parse_icy_metaint_case_insensitive() {
+        let headers = b"ICY-METAINT:4096\r\n";
+        assert_eq!(parse_icy_metaint_raw(headers), Some(4096));
+    }
+
+    #[test]
+    fn parse_icy_metaint_mixed_case() {
+        let headers = b"Icy-MetaInt: 32768\r\n";
+        assert_eq!(parse_icy_metaint_raw(headers), Some(32768));
+    }
+
+    #[test]
+    fn parse_icy_metaint_not_found() {
+        let headers = b"HTTP/1.1 200 OK\r\ncontent-type: audio/mpeg\r\n\r\n";
+        assert_eq!(parse_icy_metaint_raw(headers), None);
+    }
+
+    #[test]
+    fn parse_icy_metaint_zero_value() {
+        let headers = b"icy-metaint:0\r\n";
+        assert_eq!(parse_icy_metaint_raw(headers), None);
+    }
+
+    #[test]
+    fn parse_icy_metaint_empty() {
+        assert_eq!(parse_icy_metaint_raw(b""), None);
+    }
+
+    // -----------------------------------------------------------------------
+    // skip_id3v2
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn skip_id3v2_no_tag() {
+        let data = [0xFF, 0xFB, 0x90, 0x00]; // MP3 sync
+        assert_eq!(skip_id3v2(&data), 0);
+    }
+
+    #[test]
+    fn skip_id3v2_valid_tag() {
+        // ID3v2 header: "ID3" + version(2) + flags(1) + size(4)
+        // Size uses syncsafe encoding: each byte's MSB is 0
+        let mut data = [0u8; 20];
+        data[0] = b'I';
+        data[1] = b'D';
+        data[2] = b'3';
+        data[3] = 4; // version major
+        data[4] = 0; // version minor
+        data[5] = 0; // flags
+        // Size: 0x00 0x00 0x01 0x00 = 128 bytes (syncsafe)
+        data[6] = 0x00;
+        data[7] = 0x00;
+        data[8] = 0x01;
+        data[9] = 0x00;
+        assert_eq!(skip_id3v2(&data), 10 + 128);
+    }
+
+    #[test]
+    fn skip_id3v2_too_short() {
+        assert_eq!(skip_id3v2(b"ID3"), 0);
+        assert_eq!(skip_id3v2(b""), 0);
+    }
+
+    #[test]
+    fn skip_id3v2_wrong_magic() {
+        let data = [b'X', b'Y', b'Z', 0, 0, 0, 0, 0, 0, 0];
+        assert_eq!(skip_id3v2(&data), 0);
+    }
+
+    // -----------------------------------------------------------------------
+    // find_mp3_sync
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn find_mp3_sync_at_start() {
+        // Valid MPEG1 Layer3 sync: 0xFF 0xFB (version=3, layer=1)
+        let data = [0xFF, 0xFB, 0x90, 0x00];
+        assert_eq!(find_mp3_sync(&data, 0), Some(0));
+    }
+
+    #[test]
+    fn find_mp3_sync_offset() {
+        // Some junk, then sync
+        let mut data = vec![0x00; 10];
+        data.push(0xFF);
+        data.push(0xFB); // MPEG1 Layer3
+        assert_eq!(find_mp3_sync(&data, 0), Some(10));
+    }
+
+    #[test]
+    fn find_mp3_sync_not_found() {
+        let data = [0x00, 0x00, 0x00, 0x00];
+        assert_eq!(find_mp3_sync(&data, 0), None);
+    }
+
+    #[test]
+    fn find_mp3_sync_with_start_offset() {
+        let mut data = vec![0xFF, 0xFB]; // sync at 0
+        data.extend_from_slice(&[0x00; 5]);
+        data.push(0xFF);
+        data.push(0xFB); // sync at 7
+        assert_eq!(find_mp3_sync(&data, 1), Some(7));
+    }
+
+    #[test]
+    fn find_mp3_sync_rejects_invalid_version() {
+        // version=1 (reserved) should be rejected
+        // 0xFF 0xE8 = 11111111 11101000 -> version=01 (reserved)
+        let data = [0xFF, 0xE8, 0x00, 0x00];
+        assert_eq!(find_mp3_sync(&data, 0), None);
+    }
+
+    #[test]
+    fn find_mp3_sync_rejects_invalid_layer() {
+        // layer=0 (reserved) should be rejected
+        // 0xFF 0xE1 = 11111111 11100001 -> layer=00 (reserved)
+        let data = [0xFF, 0xE1, 0x00, 0x00];
+        assert_eq!(find_mp3_sync(&data, 0), None);
+    }
+
+    #[test]
+    fn find_mp3_sync_too_short() {
+        assert_eq!(find_mp3_sync(&[0xFF], 0), None);
+        assert_eq!(find_mp3_sync(&[], 0), None);
+    }
+}
