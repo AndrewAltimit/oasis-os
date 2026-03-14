@@ -295,8 +295,8 @@ impl SdiRegistry {
     ) -> Result<()> {
         self.ensure_z_sorted();
         let keep = |name: &str| !prefixes.iter().any(|p| name.starts_with(p));
-        self.draw_layer_filtered(&self.z_sorted_base.clone(), backend, &keep)?;
-        self.draw_layer_filtered(&self.z_sorted_overlay.clone(), backend, &keep)
+        self.draw_layer_filtered(&self.z_sorted_base, backend, &keep)?;
+        self.draw_layer_filtered(&self.z_sorted_overlay, backend, &keep)
     }
 
     /// Draw only the base layer, excluding objects with given prefixes.
@@ -327,7 +327,7 @@ impl SdiRegistry {
         F: Fn(&str) -> bool,
     {
         self.ensure_z_sorted();
-        self.draw_layer_filtered(&self.z_sorted_base.clone(), backend, &keep)
+        self.draw_layer_filtered(&self.z_sorted_base, backend, &keep)
     }
 
     /// Draw only the overlay layer, keeping objects for which `keep` returns true.

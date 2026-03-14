@@ -858,9 +858,15 @@ jobs:
           for result in \
             "${{ needs.format.result }}" \
             "${{ needs.clippy.result }}" \
+            "${{ needs.doc-build.result }}" \
+            "${{ needs.markdown-link-check.result }}" \
             "${{ needs.test.result }}" \
             "${{ needs.cargo-deny.result }}" \
-            "${{ needs.build-and-screenshots.result }}"; do
+            "${{ needs.build-and-screenshots.result }}" \
+            "${{ needs.coverage.result }}" \
+            "${{ needs.psp-build.result }}" \
+            "${{ needs.psp-emulator-test.result }}" \
+            "${{ needs.benchmarks.result }}"; do
             if [[ "$result" == "failure" ]]; then
               FAILED=true
             fi
