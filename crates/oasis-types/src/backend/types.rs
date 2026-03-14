@@ -121,7 +121,7 @@ impl Color {
         (self.a as u32) << 24 | (self.b as u32) << 16 | (self.g as u32) << 8 | (self.r as u32)
     }
 
-    /// Decode an ABGR `u32` back to `Color` (inverse of [`to_abgr`]).
+    /// Decode an ABGR `u32` back to `Color` (inverse of [`Self::to_abgr`]).
     pub const fn from_abgr(abgr: u32) -> Self {
         Self {
             r: abgr as u8,
@@ -136,7 +136,7 @@ impl Color {
         (self.a as u32) << 24 | (self.r as u32) << 16 | (self.g as u32) << 8 | (self.b as u32)
     }
 
-    /// Decode an ARGB `u32` back to `Color` (inverse of [`to_argb`]).
+    /// Decode an ARGB `u32` back to `Color` (inverse of [`Self::to_argb`]).
     pub const fn from_argb(argb: u32) -> Self {
         Self {
             a: (argb >> 24) as u8,
