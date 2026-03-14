@@ -78,7 +78,7 @@ pub struct PaintResult {
 // -------------------------------------------------------------------
 
 /// Mutable state threaded through the recursive paint walk.
-struct PaintContext {
+pub(super) struct PaintContext {
     /// Accumulated link regions.
     links: Vec<LinkRegion>,
     /// When painting inside an `<a>` element, this holds `(href, node_id)`.
@@ -165,7 +165,7 @@ pub fn paint_link_highlight(
 // Recursive box painter
 // -------------------------------------------------------------------
 
-fn paint_box(
+pub(super) fn paint_box(
     layout_box: &LayoutBox,
     backend: &mut dyn SdiBackend,
     offset_x: i32,
@@ -365,7 +365,7 @@ fn paint_box(
 // -------------------------------------------------------------------
 
 /// Scale a color's alpha channel by an opacity factor.
-fn apply_opacity(color: Color, opacity: f32) -> Color {
+pub(super) fn apply_opacity(color: Color, opacity: f32) -> Color {
     color.apply_opacity(opacity)
 }
 
