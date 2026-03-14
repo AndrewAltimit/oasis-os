@@ -288,6 +288,24 @@ jobs:
           echo "**Commit**: ${{ github.sha }}" >> $GITHUB_STEP_SUMMARY
           echo "**Branch**: ${{ github.ref_name }}" >> $GITHUB_STEP_SUMMARY
 
+      - name: Create issue on failure
+        if: failure() && github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh issue create \
+            --title "Main CI Failed: $(date +%Y-%m-%d)" \
+            --body "$(cat <<'ISSUE_EOF'
+          ## CI Failure Report
+
+          **Commit**: ${{ github.sha }}
+          **Run**: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+
+          Please investigate and fix the issues.
+          ISSUE_EOF
+          )" \
+            --label "ci-failure,automated" || echo "::warning::Could not create failure issue"
+
   # -- Build Release Binaries (separate job, depends on CI) ----------------
   build-release-binaries:
     name: Build Release Binaries
