@@ -1531,10 +1531,7 @@ auto_load = true
             stderr: String::new(),
         };
         let out = cmds.execute("greet Rust", &mut env).unwrap();
-        let crate::terminal::CommandOutput::Text(s) = out else {
-            panic!("expected Text output");
-        };
-        assert_eq!(s, "Greetings, Rust!");
+        assert!(matches!(&out, crate::terminal::CommandOutput::Text(s) if s == "Greetings, Rust!"));
     }
 
     // -- Error handling integration tests --
@@ -1813,10 +1810,7 @@ auto_load = true
             stderr: String::new(),
         };
         let out = cmds.execute("greet", &mut env).unwrap();
-        let crate::terminal::CommandOutput::Text(s) = out else {
-            panic!("expected Text output");
-        };
-        assert_eq!(s, "Greetings, World!");
+        assert!(matches!(&out, crate::terminal::CommandOutput::Text(s) if s == "Greetings, World!"));
 
         mgr.shutdown_all(&mut sdi, &mut vfs, &mut cmds);
         assert!(counters.shutdown_called.load(Ordering::SeqCst));

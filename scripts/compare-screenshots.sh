@@ -146,7 +146,7 @@ try:
 
     a_px, aw, ah = decode_png_pixels(actual)
     b_px, bw, bh = decode_png_pixels(baseline)
-    if len(a_px) != len(b_px) or aw != bw or ah != ah:
+    if len(a_px) != len(b_px) or aw != bw or ah != bh:
         print('size_mismatch')
     else:
         total_px = aw * ah
