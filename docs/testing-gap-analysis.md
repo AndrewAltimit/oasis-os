@@ -2,10 +2,11 @@
 
 ## Current State
 
-**~5,377 tests** across the workspace (up from 1,173 at initial analysis). Recent work
-added ~350 new tests including integration tests across 4 crates, CSS shorthand/helpers
-tests, forms state/types tests, and UA stylesheet tests. Coverage now includes
-integration tests for VFS, window manager, terminal interpreter, and browser pipeline.
+**~5,873 tests** across the workspace (up from 1,173 at initial analysis). Recent work
+added tests across many crates including integration tests, CSS shorthand/helpers
+tests, forms state/types tests, UA stylesheet tests, and app extraction test coverage.
+Coverage now includes integration tests for VFS, window manager, terminal interpreter,
+and browser pipeline.
 
 | Crate | Tests (original) | Tests (current) | Assessment |
 |-------|----------------:|-----------:|------------|
@@ -604,7 +605,7 @@ Tests:
 | Phase 9: Robustness | ~40 | 0 (in-module) |
 | **Total** | **~356 new tests** | |
 
-With ~5,377 tests already passing (up from ~1,173), the remaining planned work
+With ~5,873 tests already passing (up from ~1,173), the remaining planned work
 would add ~150 more tests plus 60+ screenshot scenarios and 6 fuzz targets.
 
 ---

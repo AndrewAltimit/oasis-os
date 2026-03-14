@@ -55,7 +55,12 @@ cargo run -p oasis-app --bin oasis-screenshot
 
 ## CI Pipeline
 
-**Order:** format check -> clippy -> test -> release build -> cargo-deny -> PSP EBOOT build -> PPSSPP headless test -> screenshot regression -> benchmarks -> code coverage -> GitHub Pages deploy (WASM)
+**Order:** format check -> clippy -> doc build -> markdown link check -> test -> release build -> screenshot regression -> cargo-deny -> benchmarks -> code coverage -> PSP EBOOT build -> PPSSPP headless test -> GitHub Pages deploy (WASM)
+
+**Additional workflows:**
+- `memory-ci.yml` -- ASAN + Valgrind massif (non-blocking, `continue-on-error: true`)
+- `nightly-streaming.yml` -- Nightly streaming integration tests
+- `fuzz.yml` -- Fuzz testing
 
 All steps run via `docker compose --profile ci run --rm rust-ci`. Self-hosted runners only.
 
@@ -66,7 +71,7 @@ All steps run via `docker compose --profile ci run --rm rust-ci`. Self-hosted ru
 ### Crate Dependency Graph
 
 ```
-oasis-types     (foundation: Color, Button, InputEvent, backend traits, error types)
+oasis-types     (foundation: Color, Button, InputEvent, backend traits, error types, geometry)
 ├── oasis-vfs        (virtual file system: MemoryVfs, RealVfs, GameAssetVfs)
 ├── oasis-platform   (platform service traits: Power, Time, USB, Network, OSK)
 ├── oasis-sdi        (scene display interface: named object registry, z-order)
@@ -76,13 +81,26 @@ oasis-types     (foundation: Color, Button, InputEvent, backend traits, error ty
 ├── oasis-wm         (window manager: drag/resize, hit testing, decorations)
 ├── oasis-skin       (TOML skin engine, 18 skins, theme derivation)
 ├── oasis-terminal   (90+ commands across 17+ modules, shell features)
-├── oasis-browser    (HTML/CSS/Gemini: DOM, CSS cascade, layout engine, JS DOM bindings)
+├── oasis-browser    (HTML/CSS/Gemini: DOM, CSS cascade+@media, layout engine, JS DOM bindings)
 ├── oasis-js         (JavaScript engine: QuickJS-NG runtime, console API)
-├── oasis-video      (MP4/H.264+AAC decode; features: h264, no-std-demux, video-decode)
-└── oasis-core       (coordination: 16 apps, dashboard, agent, plugin, script)
+├── oasis-video      (MP4/H.264+AAC decode; StreamingBuffer sliding-window; features: h264, no-std-demux, video-decode)
+├── oasis-vector     (vector graphics: scene graph, path ops, icons, frame-driven animations)
+├── oasis-shader     (animated shader wallpapers: Shadertoy-style fragment shaders)
+├── oasis-app-core   (shared app framework: AppTrait, common utilities)
+├── oasis-app-games  (Games app)
+├── oasis-app-paint  (Paint app)
+├── oasis-app-clock  (Clock app)
+├── oasis-app-text-editor (Text Editor app)
+├── oasis-app-calculator  (Calculator app)
+├── oasis-app-media       (Music Player + Photo Viewer apps)
+├── oasis-app-tv-guide    (TV Guide app)
+├── oasis-app-radio       (Internet Radio app)
+├── oasis-app-settings    (Settings app)
+├── oasis-app-file-manager (File Manager app)
+└── oasis-core       (coordination: dashboard, agent, plugin, script; apps extracted to oasis-app-* crates)
     ├── oasis-backend-sdl  (SDL3 desktop/Pi rendering + input + audio)
     │   └── oasis-app      (binary entry points: oasis-app, oasis-screenshot; oasis-video[video-decode])
-    ├── oasis-backend-wasm (Canvas 2D + DOM input + Web Audio, iframe overlay)
+    ├── oasis-backend-wasm (Canvas 2D + DOM input + Web Audio, iframe overlay; feature: wasm-youtube)
     ├── oasis-backend-ue5  (software RGBA framebuffer for Unreal Engine 5)
     │   └── oasis-ffi      (cdylib C-ABI for UE5 integration; oasis-video[video-decode])
     ├── oasis-backend-psp  (excluded from workspace, PSP hardware; oasis-video[no-std-demux])
@@ -102,12 +120,12 @@ Core code never calls platform APIs directly.
 
 ### Core Modules
 
-The framework is split into 19 workspace crates. Each module below is its own crate:
+The repository contains 34 crates (32 in the workspace, 2 excluded PSP crates). Each module below is its own crate:
 
-- **oasis-types** -- Foundation types: `Color`, `Button`, `InputEvent`, backend traits, error types, TLS, bitmap font metrics
+- **oasis-types** -- Foundation types: `Color`, `Button`, `InputEvent`, backend traits (`SdiCore`, `SdiBackend`, `InputBackend`, `NetworkBackend`, `AudioBackend`), error types, TLS, bitmap font metrics, `geometry.rs` (shared shape algorithms)
 - **oasis-sdi** -- Scene Display Interface: named objects with position, size, color, texture, text, z-order, gradients, rounded corners, shadows
 - **oasis-skin** -- Data-driven TOML skin system with 18 skins (12 external TOML in `skins/`, 18 built-in). Theme derivation from 9 base colors to ~30 UI element colors.
-- **oasis-browser** -- Embeddable HTML/CSS/Gemini rendering engine: DOM parser, CSS cascade, block/inline/table layout, link navigation, reader mode, JavaScript DOM bindings
+- **oasis-browser** -- Embeddable HTML/CSS/Gemini rendering engine: DOM parser, CSS cascade with `@media` query support, block/inline/table layout, link navigation, reader mode, JavaScript DOM bindings
 - **oasis-js** -- JavaScript engine wrapping QuickJS-NG via rquickjs: `console` API, inline `<script>` execution, DOM manipulation. Feature-gated (`javascript`)
 - **oasis-ui** -- 32 reusable widgets: Button, Card, TabBar, Panel, InputField, ListView, ScrollView, ProgressBar, Toggle, NinePatch, flex layout, Accordion, Avatar, Badge, Checkbox, ColorPicker, ContextMenu, DatePicker, Divider, Dropdown, Icon, Modal, Radio, RichText, Slider, SpinBox, Spinner, SplitPane, Table, Toast, Tooltip, TreeView
 - **oasis-vfs** -- Virtual file system: `MemoryVfs` (in-RAM), `RealVfs` (disk), `GameAssetVfs` (UE5 with overlay writes)
@@ -116,8 +134,12 @@ The framework is split into 19 workspace crates. Each module below is its own cr
 - **oasis-net** -- TCP networking with PSK authentication, remote terminal, FTP transfer
 - **oasis-audio** -- Audio manager with playlist, shuffle/repeat modes, MP3 ID3 tag parsing
 - **oasis-platform** -- Platform service traits: PowerService, TimeService, UsbService, NetworkService, OskService
-- **oasis-video** -- MP4/H.264+AAC decode pipeline. Feature flags: `h264` (openh264 video decode + symphonia demux/AAC), `no-std-demux` (lightweight `demux_lite::Mp4Lite` parser, no symphonia/no std::sync::Once — PSP-safe), `video-decode` (re-exports `SoftwareVideoDecoder` for desktop/UE5). Streaming pipelines: desktop downloads MP4 then decodes in-process with PTS-based A/V sync; PSP uses `demux_lite` + `sceAudiocodec` AAC hardware decode + `sceVideocodec` H.264 (real HW only, audio-only on PPSSPP)
-- **oasis-core** -- Coordination layer: app runner with 16 apps (File Manager, Settings, Network, Music Player, Photo Viewer, Package Manager, Browser, System Monitor, TV Guide, Internet Radio, Terminal, Text Editor, Calculator, Clock, Paint, Games), dashboard, agent/MCP, plugin, scripting, status/bottom bars
+- **oasis-video** -- MP4/H.264+AAC decode pipeline. Feature flags: `h264` (openh264 video decode + symphonia demux/AAC), `no-std-demux` (lightweight `demux_lite::Mp4Lite` parser, no symphonia/no std::sync::Once — PSP-safe), `video-decode` (re-exports `SoftwareVideoDecoder` for desktop/UE5). Streaming pipelines: desktop uses `StreamingBuffer` sliding-window for progressive playback with deferred tail probe, CDN failover, and PTS-based A/V sync; PSP streams in-memory via `demux_lite` + `sceAudiocodec` AAC hardware decode + `sceVideocodec` H.264 (real HW only, audio-only on PPSSPP) with backpressure-throttled I/O
+- **oasis-vector** -- Resolution-independent vector graphics: scene graph with path-based drawing operations (fill, stroke, arcs, beziers), dashboard icons, and frame-driven animations
+- **oasis-shader** -- Animated shader wallpapers: Shadertoy-style fragment shaders (voronoi, city lights, ocean waves, calm waves, Balatro)
+- **oasis-app-core** -- Shared app framework: `AppTrait`, common utilities for extracted app crates
+- **oasis-app-*** -- 11 extracted app crates: `oasis-app-games`, `oasis-app-paint`, `oasis-app-clock`, `oasis-app-text-editor`, `oasis-app-calculator`, `oasis-app-media` (Music Player + Photo Viewer), `oasis-app-tv-guide`, `oasis-app-radio`, `oasis-app-settings`, `oasis-app-file-manager`
+- **oasis-core** -- Coordination layer: dashboard, agent/MCP, plugin, scripting, status/bottom bars, desktop taskbar. Apps extracted to `oasis-app-*` crates (remaining in-core: Browser, Network, Package Manager, System Monitor)
 
 ### FFI Boundary (oasis-ffi)
 
@@ -133,9 +155,9 @@ Proportional bitmap font rendering from glyph ink bounds. `oasis-types` provides
 - **Edition:** 2024 (let-chains, `if let ... &&` syntax is used throughout)
 - **Max line width:** 100 characters
 - **Formatting:** `cargo fmt` with `rustfmt.toml` -- 4-space indent, Unix newlines, `fn_params_layout = "Tall"`, `match_block_trailing_comma = true`
-- **Linting:** Clippy warnings are CI errors (`-D warnings`). Workspace lints: `clone_on_ref_ptr`, `dbg_macro`, `todo`, `unimplemented` = warn; `unsafe_op_in_unsafe_fn` = warn
+- **Linting:** Clippy warnings are CI errors (`-D warnings`). Workspace lints: `clone_on_ref_ptr`, `dbg_macro`, `todo`, `unimplemented` = warn; `unsafe_op_in_unsafe_fn` = warn; `unwrap_used` = **deny**
 - **Unsafe:** All unsafe blocks require `// SAFETY:` comments. Unsafe is limited to FFI boundary, SDL texture lifetime erasure, and PSP system calls.
-- **Tests:** In-module (`#[cfg(test)] mod tests`), not in a separate `tests/` directory. Dev dependency: `tempfile = "3"` for oasis-core.
+- **Tests:** In-module (`#[cfg(test)] mod tests`), not in a separate `tests/` directory. 5,800+ tests across the workspace. Dev dependency: `tempfile = "3"` for oasis-core.
 - **License:** Dual-licensed Unlicense + MIT
 
 ## Multi-Agent System
@@ -215,7 +237,7 @@ To re-enable at your own risk: set `CODEX_ENABLED=true` in your environment.
 
 ## Key Files
 
-- `docs/design.md` -- Technical design document v2.4 (~1300 lines)
+- `docs/design.md` -- Technical design document v2.4 (~1500 lines)
 - `docs/skin-authoring.md` -- Skin creation guide with full TOML reference
 - `docs/psp-modernization-plan.md` -- PSP backend modernization roadmap (9 phases, 40 steps)
 - `skins/classic/` -- Classic skin TOML configs (skin.toml, layout.toml, features.toml, theme.toml)
@@ -235,7 +257,7 @@ To re-enable at your own risk: set `CODEX_ENABLED=true` in your environment.
 Key documentation for deeper context on specific topics. Read as needed rather than loading everything.
 
 ### Architecture & Design
-- [`docs/design.md`](docs/design.md) -- Technical design document v2.4 (~1300 lines, comprehensive architecture)
+- [`docs/design.md`](docs/design.md) -- Technical design document v2.4 (~1500 lines, comprehensive architecture)
 - [`docs/adr/001-arena-based-dom.md`](docs/adr/001-arena-based-dom.md) -- ADR: Arena-based DOM allocation
 - [`docs/adr/002-vfs-abstraction.md`](docs/adr/002-vfs-abstraction.md) -- ADR: Virtual file system design
 - [`docs/adr/003-backend-trait-design.md`](docs/adr/003-backend-trait-design.md) -- ADR: Backend trait hierarchy

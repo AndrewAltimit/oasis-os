@@ -421,45 +421,36 @@ In addition to VFS-based IPC, plugins can communicate via the **event bus** -- a
 
 Source: `crates/oasis-core/src/plugin/event_bus.rs`
 
+The `EventBus` is managed by the `PluginManager`, which calls `subscribe()`, `publish()`, and `drain_for()` on behalf of plugins during lifecycle calls. The API uses a buffered drain model rather than channels.
+
 ### Publishing Events
 
 ```rust
 use oasis_core::plugin::event_bus::{EventBus, PluginEvent};
 
-fn update(&mut self, host: &mut PluginHost<'_>) -> Result<()> {
-    // Publish an event to a topic.
-    let event = PluginEvent {
-        topic: "sensor.temperature".to_string(),
-        source: "temp-monitor".to_string(),
-        data: "72.5".to_string(),
-    };
-    host.event_bus.publish(event);
-    Ok(())
-}
+// EventBus is owned by PluginManager, not PluginHost directly.
+// The manager exposes it during update cycles.
+let event = PluginEvent::new("sensor.temperature", "temp-monitor", "72.5");
+bus.publish(event);
 ```
 
-### Subscribing to Events
+### Subscribing and Draining Events
 
 ```rust
-fn init(&mut self, host: &mut PluginHost<'_>) -> Result<()> {
-    // Subscribe to a topic. Returns a receiver for incoming events.
-    let rx = host.event_bus.subscribe("sensor.temperature");
-    self.temp_rx = Some(rx);
-    Ok(())
+// Subscribe a plugin to a topic (done by PluginManager during init).
+bus.subscribe("my-plugin", "sensor.temperature");
+
+// After all plugins publish, the manager drains events for each subscriber.
+let events: Vec<PluginEvent> = bus.drain_for("my-plugin");
+for event in &events {
+    // Handle event.topic, event.source, event.data
 }
 
-fn update(&mut self, _host: &mut PluginHost<'_>) -> Result<()> {
-    // Check for events (non-blocking).
-    if let Some(ref rx) = self.temp_rx {
-        while let Ok(event) = rx.try_recv() {
-            // Handle event.data
-        }
-    }
-    Ok(())
-}
+// After all plugins have drained, clear pending events.
+bus.clear_pending();
 ```
 
-Events are string-based for cross-language compatibility. The event bus is useful for real-time notifications (e.g., state changes, sensor data), while VFS-based IPC remains better for persistent state and file-like data exchange.
+Events are string-based for cross-language compatibility. Source plugins do not receive their own events. The event bus is useful for real-time notifications (e.g., state changes, sensor data), while VFS-based IPC remains better for persistent state and file-like data exchange.
 
 ---
 
