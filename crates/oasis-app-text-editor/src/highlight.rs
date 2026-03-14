@@ -539,13 +539,14 @@ fn highlight_c_family(
             continue;
         }
 
-        // Fallback: single character.
+        // Fallback: single character (advance by full UTF-8 char width).
+        let char_len = line[pos..].chars().next().map_or(1, |c| c.len_utf8());
         spans.push(ColorSpan {
             start: pos,
-            end: pos + 1,
+            end: pos + char_len,
             kind: SyntaxKind::Normal,
         });
-        pos += 1;
+        pos += char_len;
     }
 
     (spans, in_block_comment)
@@ -1255,13 +1256,14 @@ fn highlight_shell(line: &str) -> Vec<ColorSpan> {
             continue;
         }
 
-        // Fallback.
+        // Fallback: single character (advance by full UTF-8 char width).
+        let char_len = line[pos..].chars().next().map_or(1, |c| c.len_utf8());
         spans.push(ColorSpan {
             start: pos,
-            end: pos + 1,
+            end: pos + char_len,
             kind: SyntaxKind::Normal,
         });
-        pos += 1;
+        pos += char_len;
     }
 
     spans
