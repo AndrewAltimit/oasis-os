@@ -15,7 +15,7 @@ pub use memory::MemoryVfs;
 #[cfg(not(target_arch = "wasm32"))]
 pub use real::RealVfs;
 
-use oasis_types::error::Result;
+use oasis_types::error::{OasisError, Result};
 
 /// Type of a VFS entry.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -24,6 +24,47 @@ pub enum EntryKind {
     File,
     /// Directory.
     Directory,
+}
+
+/// Access mode for permission checks.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AccessMode {
+    /// Read access (file contents or directory listing).
+    Read,
+    /// Write access (create, modify, or delete).
+    Write,
+    /// Execute access (run a script or enter a directory).
+    Execute,
+}
+
+/// Context for VFS permission checks.
+///
+/// Tracks the current user identity and whether root privileges apply.
+/// Root bypasses all permission checks.
+#[derive(Debug, Clone)]
+pub struct VfsContext {
+    /// The current user name (compared against `FilePermissions::owner`).
+    pub current_user: String,
+    /// When true, all permission checks are bypassed.
+    pub is_root: bool,
+}
+
+impl VfsContext {
+    /// Create a default context for the "oasis" user (non-root).
+    pub fn default_user() -> Self {
+        Self {
+            current_user: "oasis".to_string(),
+            is_root: false,
+        }
+    }
+
+    /// Create a root context that bypasses all permission checks.
+    pub fn root() -> Self {
+        Self {
+            current_user: "root".to_string(),
+            is_root: true,
+        }
+    }
 }
 
 /// A single entry returned by `readdir`.
@@ -49,24 +90,24 @@ pub struct VfsMetadata {
 /// Unix-style file permissions (owner + mode).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FilePermissions {
-    /// Owner of the file (default: "user").
+    /// Owner of the file (default: "oasis").
     pub owner: String,
     /// Unix-style octal mode (default: 0o644 for files, 0o755 for dirs).
     pub mode: u16,
 }
 
 impl FilePermissions {
-    /// Default permissions for a regular file (mode 0o644, owner "user").
+    /// Default permissions for a regular file (mode 0o644, owner "oasis").
     pub fn default_file() -> Self {
         Self {
-            owner: "user".to_string(),
+            owner: "oasis".to_string(),
             mode: 0o644,
         }
     }
-    /// Default permissions for a directory (mode 0o755, owner "user").
+    /// Default permissions for a directory (mode 0o755, owner "oasis").
     pub fn default_dir() -> Self {
         Self {
-            owner: "user".to_string(),
+            owner: "oasis".to_string(),
             mode: 0o755,
         }
     }
@@ -81,6 +122,41 @@ impl FilePermissions {
     /// Check if the owner has execute permission.
     pub fn owner_can_execute(&self) -> bool {
         self.mode & 0o100 != 0
+    }
+    /// Check if the "other" bits grant read permission.
+    pub fn other_can_read(&self) -> bool {
+        self.mode & 0o004 != 0
+    }
+    /// Check if the "other" bits grant write permission.
+    pub fn other_can_write(&self) -> bool {
+        self.mode & 0o002 != 0
+    }
+    /// Check if the "other" bits grant execute permission.
+    pub fn other_can_execute(&self) -> bool {
+        self.mode & 0o001 != 0
+    }
+
+    /// Check whether `ctx` has the given `mode` of access to this entry.
+    ///
+    /// Root always passes. Owner bits are used when the context user matches
+    /// the file owner; otherwise the "other" bits are checked.
+    pub fn allows(&self, ctx: &VfsContext, mode: AccessMode) -> bool {
+        if ctx.is_root {
+            return true;
+        }
+        if ctx.current_user == self.owner {
+            match mode {
+                AccessMode::Read => self.owner_can_read(),
+                AccessMode::Write => self.owner_can_write(),
+                AccessMode::Execute => self.owner_can_execute(),
+            }
+        } else {
+            match mode {
+                AccessMode::Read => self.other_can_read(),
+                AccessMode::Write => self.other_can_write(),
+                AccessMode::Execute => self.other_can_execute(),
+            }
+        }
     }
 }
 
@@ -116,4 +192,38 @@ pub trait Vfs {
     fn get_permissions(&self, path: &str) -> Result<FilePermissions>;
     /// Set permissions for a path.
     fn set_permissions(&mut self, path: &str, perms: FilePermissions) -> Result<()>;
+
+    /// Get the current VFS user context.
+    ///
+    /// Returns the default "oasis" user context. Implementations that
+    /// store their own context should override this.
+    fn context(&self) -> VfsContext {
+        VfsContext::default_user()
+    }
+
+    /// Set the VFS user context.
+    ///
+    /// Default implementation is a no-op. Implementations that store
+    /// their own context should override this.
+    fn set_context(&mut self, _ctx: VfsContext) {}
+
+    /// Check whether the current context has the given access mode for
+    /// a path. Returns `Ok(())` if allowed, or a permission-denied error.
+    ///
+    /// Default implementation looks up stored permissions and checks
+    /// against the current context. The `RealVfs` backend delegates
+    /// permission enforcement to the real OS, so it does not override
+    /// this method (the check would be redundant).
+    fn check_permission(&self, path: &str, mode: AccessMode) -> Result<()> {
+        let ctx = self.context();
+        if ctx.is_root {
+            return Ok(());
+        }
+        let perms = self.get_permissions(path)?;
+        if perms.allows(&ctx, mode) {
+            Ok(())
+        } else {
+            Err(OasisError::Vfs(format!("permission denied: {path}").into()))
+        }
+    }
 }

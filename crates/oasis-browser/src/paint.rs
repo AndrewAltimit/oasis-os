@@ -104,7 +104,15 @@ pub fn paint(
         text_overflow_ellipsis: false,
     };
 
-    paint_box(layout, backend, viewport.x, viewport.y, &mut ctx, link_map)?;
+    if let Err(e) = paint_box(layout, backend, viewport.x, viewport.y, &mut ctx, link_map) {
+        log::warn!(
+            "browser paint failed at scroll_y={}, viewport={}x{}: {e}",
+            viewport.scroll_y,
+            viewport.width,
+            viewport.height,
+        );
+        return Err(e);
+    }
 
     Ok(PaintResult {
         links: ctx.links,
@@ -178,13 +186,43 @@ fn paint_box(
     // but children may override visibility and still paint.
     if is_visible {
         // 0. Box shadow (behind background).
-        paint_box_shadow(layout_box, backend, offset_x, offset_y, ctx)?;
+        if let Err(e) = paint_box_shadow(layout_box, backend, offset_x, offset_y, ctx) {
+            let b = layout_box.dimensions.border_box();
+            log::debug!(
+                "paint box_shadow failed at ({}, {}) {}x{}: {e}",
+                b.x,
+                b.y,
+                b.width,
+                b.height,
+            );
+            return Err(e);
+        }
 
         // 1. Background
-        paint_background(layout_box, backend, offset_x, offset_y, ctx)?;
+        if let Err(e) = paint_background(layout_box, backend, offset_x, offset_y, ctx) {
+            let b = layout_box.dimensions.border_box();
+            log::debug!(
+                "paint background failed at ({}, {}) {}x{}: {e}",
+                b.x,
+                b.y,
+                b.width,
+                b.height,
+            );
+            return Err(e);
+        }
 
         // 2. Borders
-        paint_borders(layout_box, backend, offset_x, offset_y, ctx)?;
+        if let Err(e) = paint_borders(layout_box, backend, offset_x, offset_y, ctx) {
+            let b = layout_box.dimensions.border_box();
+            log::debug!(
+                "paint borders failed at ({}, {}) {}x{}: {e}",
+                b.x,
+                b.y,
+                b.width,
+                b.height,
+            );
+            return Err(e);
+        }
     }
 
     // Check overflow:hidden clipping -- if this box clips, intersect
@@ -226,8 +264,25 @@ fn paint_box(
             }
         },
         BoxType::Inline => {
-            if is_visible {
-                paint_inline_content(layout_box, backend, offset_x, offset_y, ctx, link_map)?;
+            if is_visible
+                && let Err(e) =
+                    paint_inline_content(layout_box, backend, offset_x, offset_y, ctx, link_map)
+            {
+                let c = &layout_box.dimensions.content;
+                let text_preview = layout_box
+                    .text
+                    .as_deref()
+                    .unwrap_or("")
+                    .chars()
+                    .take(40)
+                    .collect::<String>();
+                log::debug!(
+                    "paint inline failed at ({}, {}) text={:?}: {e}",
+                    c.x,
+                    c.y,
+                    text_preview,
+                );
+                return Err(e);
             }
         },
         BoxType::ListItem { marker } => {
@@ -239,8 +294,19 @@ fn paint_box(
             }
         },
         BoxType::Replaced(replaced) => {
-            if is_visible {
-                paint_replaced(replaced, layout_box, backend, offset_x, offset_y, ctx)?;
+            if is_visible
+                && let Err(e) =
+                    paint_replaced(replaced, layout_box, backend, offset_x, offset_y, ctx)
+            {
+                let c = &layout_box.dimensions.content;
+                log::debug!(
+                    "paint replaced element failed at ({}, {}) {}x{}: {e}",
+                    c.x,
+                    c.y,
+                    c.width,
+                    c.height,
+                );
+                return Err(e);
             }
         },
     }
@@ -982,10 +1048,7 @@ fn paint_replaced(
 
 /// Scale a color's alpha channel by an opacity factor.
 fn apply_opacity(color: Color, opacity: f32) -> Color {
-    if opacity >= 1.0 {
-        return color;
-    }
-    Color::rgba(color.r, color.g, color.b, (color.a as f32 * opacity) as u8)
+    color.apply_opacity(opacity)
 }
 
 /// Paint a box shadow behind the element.

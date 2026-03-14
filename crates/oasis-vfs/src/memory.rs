@@ -8,7 +8,7 @@ use std::collections::BTreeMap;
 
 use oasis_types::error::{OasisError, Result};
 
-use crate::{EntryKind, FilePermissions, Vfs, VfsEntry, VfsMetadata};
+use crate::{AccessMode, EntryKind, FilePermissions, Vfs, VfsContext, VfsEntry, VfsMetadata};
 
 #[derive(Debug, Clone)]
 enum Node {
@@ -22,6 +22,8 @@ pub struct MemoryVfs {
     /// Map of normalized paths to file/directory nodes.
     nodes: BTreeMap<String, Node>,
     permissions: BTreeMap<String, FilePermissions>,
+    /// Current user context for permission enforcement.
+    ctx: VfsContext,
 }
 
 impl MemoryVfs {
@@ -31,7 +33,11 @@ impl MemoryVfs {
         nodes.insert("/".to_string(), Node::Dir);
         let mut permissions = BTreeMap::new();
         permissions.insert("/".to_string(), FilePermissions::default_dir());
-        Self { nodes, permissions }
+        Self {
+            nodes,
+            permissions,
+            ctx: VfsContext::default_user(),
+        }
     }
 }
 
@@ -102,7 +108,9 @@ impl Vfs for MemoryVfs {
     fn readdir(&self, path: &str) -> Result<Vec<VfsEntry>> {
         let path = normalize(path);
         match self.nodes.get(path.as_ref()) {
-            Some(Node::Dir) => {},
+            Some(Node::Dir) => {
+                self.check_permission(path.as_ref(), AccessMode::Read)?;
+            },
             Some(Node::File(_)) => {
                 return Err(OasisError::Vfs(format!("not a directory: {path}").into()));
             },
@@ -150,7 +158,10 @@ impl Vfs for MemoryVfs {
     fn read(&self, path: &str) -> Result<Vec<u8>> {
         let path = normalize(path);
         match self.nodes.get(path.as_ref()) {
-            Some(Node::File(data)) => Ok(data.clone()),
+            Some(Node::File(data)) => {
+                self.check_permission(path.as_ref(), AccessMode::Read)?;
+                Ok(data.clone())
+            },
             Some(Node::Dir) => Err(OasisError::Vfs(format!("is a directory: {path}").into())),
             None => Err(OasisError::Vfs(format!("no such file: {path}").into())),
         }
@@ -166,19 +177,10 @@ impl Vfs for MemoryVfs {
             ));
         }
         // Check parent directory write permission.
-        if let Some(perms) = self.permissions.get(par)
-            && !perms.owner_can_write()
-        {
-            return Err(OasisError::Vfs(
-                format!("permission denied (directory read-only): {par}").into(),
-            ));
-        }
-        if let Some(perms) = self.permissions.get(path.as_ref())
-            && !perms.owner_can_write()
-        {
-            return Err(OasisError::Vfs(
-                format!("permission denied (read-only): {path}").into(),
-            ));
+        self.check_permission(par, AccessMode::Write)?;
+        // Check target file write permission (if it already exists).
+        if self.nodes.contains_key(path.as_ref()) {
+            self.check_permission(path.as_ref(), AccessMode::Write)?;
         }
         let owned = path.into_owned();
         self.permissions
@@ -214,13 +216,7 @@ impl Vfs for MemoryVfs {
             self.mkdir(&par)?;
         }
         // Check parent directory write permission.
-        if let Some(perms) = self.permissions.get(&par)
-            && !perms.owner_can_write()
-        {
-            return Err(OasisError::Vfs(
-                format!("permission denied (directory read-only): {par}").into(),
-            ));
-        }
+        self.check_permission(&par, AccessMode::Write)?;
         let owned = path.into_owned();
         self.permissions
             .entry(owned.clone())
@@ -236,20 +232,10 @@ impl Vfs for MemoryVfs {
         }
         // Check parent directory write permission.
         let par = parent(&path);
-        if let Some(perms) = self.permissions.get(par)
-            && !perms.owner_can_write()
-        {
-            return Err(OasisError::Vfs(
-                format!("permission denied (directory read-only): {par}").into(),
-            ));
-        }
+        self.check_permission(par, AccessMode::Write)?;
         // Check target's own permission.
-        if let Some(perms) = self.permissions.get(path.as_ref())
-            && !perms.owner_can_write()
-        {
-            return Err(OasisError::Vfs(
-                format!("permission denied (read-only): {path}").into(),
-            ));
+        if self.nodes.contains_key(path.as_ref()) {
+            self.check_permission(path.as_ref(), AccessMode::Write)?;
         }
         match self.nodes.get(path.as_ref()) {
             Some(Node::Dir) => {
@@ -343,6 +329,14 @@ impl Vfs for MemoryVfs {
         }
         self.permissions.insert(path.into_owned(), perms);
         Ok(())
+    }
+
+    fn context(&self) -> VfsContext {
+        self.ctx.clone()
+    }
+
+    fn set_context(&mut self, ctx: VfsContext) {
+        self.ctx = ctx;
     }
 }
 
@@ -736,7 +730,7 @@ mod tests {
         vfs.set_permissions(
             "/file",
             FilePermissions {
-                owner: "user".to_string(),
+                owner: "oasis".to_string(),
                 mode: 0o444,
             },
         )
@@ -752,7 +746,7 @@ mod tests {
         vfs.set_permissions(
             "/file",
             FilePermissions {
-                owner: "user".to_string(),
+                owner: "oasis".to_string(),
                 mode: 0o444,
             },
         )
@@ -761,7 +755,7 @@ mod tests {
         vfs.set_permissions(
             "/file",
             FilePermissions {
-                owner: "user".to_string(),
+                owner: "oasis".to_string(),
                 mode: 0o644,
             },
         )
@@ -793,7 +787,7 @@ mod tests {
         vfs.set_permissions(
             "/locked",
             FilePermissions {
-                owner: "user".to_string(),
+                owner: "oasis".to_string(),
                 mode: 0o555, // read + execute, no write
             },
         )
@@ -808,7 +802,7 @@ mod tests {
         vfs.set_permissions(
             "/locked",
             FilePermissions {
-                owner: "user".to_string(),
+                owner: "oasis".to_string(),
                 mode: 0o555,
             },
         )
@@ -824,7 +818,7 @@ mod tests {
         vfs.set_permissions(
             "/locked",
             FilePermissions {
-                owner: "user".to_string(),
+                owner: "oasis".to_string(),
                 mode: 0o555,
             },
         )
@@ -839,7 +833,7 @@ mod tests {
         vfs.set_permissions(
             "/file",
             FilePermissions {
-                owner: "user".to_string(),
+                owner: "oasis".to_string(),
                 mode: 0o444,
             },
         )
@@ -854,7 +848,7 @@ mod tests {
         vfs.set_permissions(
             "/tmp_file",
             FilePermissions {
-                owner: "user".to_string(),
+                owner: "oasis".to_string(),
                 mode: 0o700,
             },
         )
@@ -917,6 +911,147 @@ mod tests {
         let mut vfs = MemoryVfs::new();
         vfs.write("/file", b"data").unwrap();
         assert!(vfs.rename("/file", "/no/such/dir/file").is_err());
+    }
+
+    // -- User-aware permission enforcement tests --
+
+    #[test]
+    fn read_denied_for_non_owner_without_other_read() {
+        let mut vfs = MemoryVfs::new();
+        vfs.write("/secret", b"classified").unwrap();
+        // Owner "oasis" with mode 0o600 -- no other-read bit.
+        vfs.set_permissions(
+            "/secret",
+            FilePermissions {
+                owner: "oasis".to_string(),
+                mode: 0o600,
+            },
+        )
+        .unwrap();
+        // Switch to a different user.
+        vfs.set_context(VfsContext {
+            current_user: "guest".to_string(),
+            is_root: false,
+        });
+        assert!(vfs.read("/secret").is_err());
+    }
+
+    #[test]
+    fn read_allowed_for_non_owner_with_other_read() {
+        let mut vfs = MemoryVfs::new();
+        vfs.write("/public", b"hello").unwrap();
+        // Mode 0o644 has other-read bit set.
+        vfs.set_context(VfsContext {
+            current_user: "guest".to_string(),
+            is_root: false,
+        });
+        assert_eq!(vfs.read("/public").unwrap(), b"hello");
+    }
+
+    #[test]
+    fn write_denied_for_non_owner_without_other_write() {
+        let mut vfs = MemoryVfs::new();
+        vfs.write("/file", b"data").unwrap();
+        // Mode 0o644: owner rw, other r only.
+        vfs.set_context(VfsContext {
+            current_user: "guest".to_string(),
+            is_root: false,
+        });
+        assert!(vfs.write("/file", b"hacked").is_err());
+    }
+
+    #[test]
+    fn write_allowed_for_non_owner_with_other_write() {
+        let mut vfs = MemoryVfs::new();
+        vfs.mkdir("/tmp").unwrap();
+        // Make /tmp world-writable so guest can write into it.
+        vfs.set_permissions(
+            "/tmp",
+            FilePermissions {
+                owner: "oasis".to_string(),
+                mode: 0o777,
+            },
+        )
+        .unwrap();
+        vfs.write("/tmp/shared", b"data").unwrap();
+        vfs.set_permissions(
+            "/tmp/shared",
+            FilePermissions {
+                owner: "oasis".to_string(),
+                mode: 0o666, // everyone can read+write
+            },
+        )
+        .unwrap();
+        vfs.set_context(VfsContext {
+            current_user: "guest".to_string(),
+            is_root: false,
+        });
+        vfs.write("/tmp/shared", b"updated").unwrap();
+        assert_eq!(vfs.read("/tmp/shared").unwrap(), b"updated");
+    }
+
+    #[test]
+    fn root_bypasses_all_permission_checks() {
+        let mut vfs = MemoryVfs::new();
+        vfs.write("/locked", b"data").unwrap();
+        vfs.set_permissions(
+            "/locked",
+            FilePermissions {
+                owner: "oasis".to_string(),
+                mode: 0o000, // no permissions at all
+            },
+        )
+        .unwrap();
+        vfs.set_context(VfsContext::root());
+        // Root can read, write, and remove despite 0o000 mode.
+        assert_eq!(vfs.read("/locked").unwrap(), b"data");
+        vfs.write("/locked", b"new").unwrap();
+        assert_eq!(vfs.read("/locked").unwrap(), b"new");
+    }
+
+    #[test]
+    fn readdir_denied_for_non_owner_without_other_read() {
+        let mut vfs = MemoryVfs::new();
+        vfs.mkdir("/private").unwrap();
+        vfs.set_permissions(
+            "/private",
+            FilePermissions {
+                owner: "oasis".to_string(),
+                mode: 0o700,
+            },
+        )
+        .unwrap();
+        vfs.set_context(VfsContext {
+            current_user: "guest".to_string(),
+            is_root: false,
+        });
+        assert!(vfs.readdir("/private").is_err());
+    }
+
+    #[test]
+    fn default_context_is_oasis_user() {
+        let vfs = MemoryVfs::new();
+        let ctx = vfs.context();
+        assert_eq!(ctx.current_user, "oasis");
+        assert!(!ctx.is_root);
+    }
+
+    #[test]
+    fn chown_then_deny_original_owner() {
+        let mut vfs = MemoryVfs::new();
+        vfs.write("/file", b"data").unwrap();
+        // Change owner to "admin" with mode 0o600.
+        vfs.set_permissions(
+            "/file",
+            FilePermissions {
+                owner: "admin".to_string(),
+                mode: 0o600,
+            },
+        )
+        .unwrap();
+        // Default user "oasis" is no longer the owner, other bits = 0.
+        assert!(vfs.read("/file").is_err());
+        assert!(vfs.write("/file", b"nope").is_err());
     }
 
     mod prop {

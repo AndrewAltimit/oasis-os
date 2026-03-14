@@ -162,21 +162,51 @@ impl Command for NotifyCmd {
         "Show a notification message"
     }
     fn usage(&self) -> &str {
-        "notify <message>"
+        "notify [--level info|success|warning|error] <message>"
     }
     fn category(&self) -> &str {
         "ui"
     }
     fn execute(&self, args: &[&str], env: &mut Environment<'_>) -> Result<CommandOutput> {
         if args.is_empty() {
-            return Err(OasisError::Command("usage: notify <message>".into()));
+            return Err(OasisError::Command(
+                "usage: notify [--level info|success|warning|error] <message>".into(),
+            ));
         }
-        let message = args.join(" ");
-        // Write notification to VFS for the UI layer to pick up.
+
+        // Parse optional --level flag.
+        let (level_str, message_args) = if args.len() >= 3 && args[0] == "--level" {
+            (args[1], &args[2..])
+        } else {
+            ("info", args)
+        };
+
+        if message_args.is_empty() {
+            return Err(OasisError::Command(
+                "usage: notify [--level info|success|warning|error] <message>".into(),
+            ));
+        }
+
+        let level = match level_str {
+            "info" => "info",
+            "success" => "success",
+            "warning" | "warn" => "warning",
+            "error" | "err" => "error",
+            other => {
+                return Err(OasisError::Command(
+                    format!("unknown level: {other} (use info|success|warning|error)").into(),
+                ));
+            },
+        };
+
+        let message = message_args.join(" ");
+
+        // Write level and message to VFS for the UI layer to pick up.
+        let payload = format!("{level}:{message}");
         let notify_path = "/var/notify/message";
-        env.vfs.write(notify_path, message.as_bytes())?;
+        env.vfs.write(notify_path, payload.as_bytes())?;
         Ok(CommandOutput::Text(format!(
-            "Notification queued: {message}"
+            "Notification queued [{level}]: {message}"
         )))
     }
 }
@@ -301,7 +331,23 @@ mod tests {
         let s = assert_text!(exec(&reg, &mut vfs, "notify Hello World").unwrap());
         assert!(s.contains("Hello World"));
         let data = vfs.read("/var/notify/message").unwrap();
-        assert_eq!(data, b"Hello World");
+        assert_eq!(data, b"info:Hello World");
+    }
+
+    #[test]
+    fn notify_with_level() {
+        let (reg, mut vfs) = setup();
+        let s = assert_text!(exec(&reg, &mut vfs, "notify --level error Something broke").unwrap());
+        assert!(s.contains("[error]"));
+        let data = vfs.read("/var/notify/message").unwrap();
+        assert_eq!(data, b"error:Something broke");
+    }
+
+    #[test]
+    fn notify_unknown_level() {
+        let (reg, mut vfs) = setup();
+        let result = exec(&reg, &mut vfs, "notify --level banana oops");
+        assert!(result.is_err());
     }
 
     #[test]

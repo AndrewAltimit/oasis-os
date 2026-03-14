@@ -57,6 +57,7 @@ pub use tls::PspTlsProvider;
 // Re-exports from oasis-core
 // ---------------------------------------------------------------------------
 
+use oasis_core::backend::stacks::{ClipPush, ClipStack, TranslateStack};
 pub use oasis_core::backend::{Color, SdiBackend, SdiCore, TextureId};
 pub use oasis_core::error::{OasisError, Result as OasisResult};
 pub use oasis_core::input::{Button, InputEvent, Trigger};
@@ -79,6 +80,7 @@ use psp::sys::{
 };
 use psp::vram_alloc::get_vram_allocator;
 
+use oasis_core::geometry::ClipRect;
 use textures::{Texture, VolatileAllocator};
 
 // ---------------------------------------------------------------------------
@@ -285,6 +287,10 @@ pub struct PspBackend {
     /// When true, `draw_text_inner` skips the system font and uses the
     /// 8x8 bitmap font. Set before drawing content that needs smaller text.
     pub force_bitmap_font: bool,
+    /// Clip rectangle stack (uses GU scissor for hardware-accelerated clipping).
+    clip_stack: ClipStack,
+    /// Translation offset stack (applied to all rendering coordinates).
+    translate_stack: TranslateStack,
 }
 
 impl PspBackend {
@@ -301,6 +307,8 @@ impl PspBackend {
             system_font: None,
             volatile_alloc: None,
             force_bitmap_font: false,
+            clip_stack: ClipStack::new(SCREEN_WIDTH, SCREEN_HEIGHT),
+            translate_stack: TranslateStack::new(),
         }
     }
 
@@ -575,12 +583,14 @@ impl SdiCore for PspBackend {
     }
 
     fn blit(&mut self, tex: TextureId, x: i32, y: i32, w: u32, h: u32) -> OasisResult<()> {
-        self.blit_inner(tex, x, y, w, h);
+        let (tx, ty) = self.translate_stack.translate(x, y);
+        self.blit_inner(tex, tx, ty, w, h);
         Ok(())
     }
 
     fn fill_rect(&mut self, x: i32, y: i32, w: u32, h: u32, color: Color) -> OasisResult<()> {
-        self.fill_rect_inner(x, y, w, h, color);
+        let (tx, ty) = self.translate_stack.translate(x, y);
+        self.fill_rect_inner(tx, ty, w, h, color);
         Ok(())
     }
 
@@ -592,7 +602,8 @@ impl SdiCore for PspBackend {
         font_size: u16,
         color: Color,
     ) -> OasisResult<()> {
-        self.draw_text_inner(text, x, y, font_size, color);
+        let (tx, ty) = self.translate_stack.translate(x, y);
+        self.draw_text_inner(text, tx, ty, font_size, color);
         Ok(())
     }
 
@@ -617,7 +628,8 @@ impl SdiCore for PspBackend {
     }
 
     fn set_clip_rect(&mut self, x: i32, y: i32, w: u32, h: u32) -> OasisResult<()> {
-        self.set_clip_rect_inner(x, y, w, h);
+        let (tx, ty) = self.translate_stack.translate(x, y);
+        self.set_clip_rect_inner(tx, ty, w, h);
         Ok(())
     }
 
@@ -655,12 +667,14 @@ impl SdiBackend for PspBackend {
         radius: u16,
         color: Color,
     ) -> OasisResult<()> {
-        self.fill_rounded_rect_inner(x, y, w, h, radius, color);
+        let (tx, ty) = self.translate_stack.translate(x, y);
+        self.fill_rounded_rect_inner(tx, ty, w, h, radius, color);
         Ok(())
     }
 
     fn fill_circle(&mut self, cx: i32, cy: i32, radius: u16, color: Color) -> OasisResult<()> {
-        self.fill_circle_inner(cx, cy, radius, color);
+        let (tx, ty) = self.translate_stack.translate(cx, cy);
+        self.fill_circle_inner(tx, ty, radius, color);
         Ok(())
     }
 
@@ -673,7 +687,9 @@ impl SdiBackend for PspBackend {
         width: u16,
         color: Color,
     ) -> OasisResult<()> {
-        self.draw_line_inner(x1, y1, x2, y2, width, color);
+        let (tx1, ty1) = self.translate_stack.translate(x1, y1);
+        let (tx2, ty2) = self.translate_stack.translate(x2, y2);
+        self.draw_line_inner(tx1, ty1, tx2, ty2, width, color);
         Ok(())
     }
 
@@ -689,7 +705,8 @@ impl SdiBackend for PspBackend {
         h: u32,
         gradient: &oasis_core::backend::GradientStyle,
     ) -> OasisResult<()> {
-        self.fill_rect_gradient_inner(x, y, w, h, gradient);
+        let (tx, ty) = self.translate_stack.translate(x, y);
+        self.fill_rect_gradient_inner(tx, ty, w, h, gradient);
         Ok(())
     }
 
@@ -700,6 +717,60 @@ impl SdiBackend for PspBackend {
     fn dim_screen(&mut self, alpha: u8) -> OasisResult<()> {
         self.dim_screen_inner(alpha);
         Ok(())
+    }
+
+    // -------------------------------------------------------------------
+    // Extended: Clip and Transform Stack (GU scissor + offset tracking)
+    // -------------------------------------------------------------------
+
+    fn push_clip_rect(
+        &mut self,
+        x: i32,
+        y: i32,
+        w: u32,
+        h: u32,
+    ) -> OasisResult<()> {
+        let (tx, ty) = self.translate_stack.translate(x, y);
+        let new_clip = ClipRect { x: tx, y: ty, w, h };
+        match self.clip_stack.push(new_clip) {
+            ClipPush::Clip(c) => {
+                self.set_clip_rect_inner(c.x, c.y, c.w, c.h);
+            },
+            ClipPush::Empty => {
+                self.set_clip_rect_inner(0, 0, 0, 0);
+            },
+        }
+        Ok(())
+    }
+
+    fn pop_clip_rect(&mut self) -> OasisResult<()> {
+        match self.clip_stack.pop() {
+            Some(prev) => {
+                self.set_clip_rect_inner(prev.x, prev.y, prev.w, prev.h);
+            },
+            None => {
+                self.reset_clip_rect_inner();
+            },
+        }
+        Ok(())
+    }
+
+    fn current_clip_rect(&self) -> Option<(i32, i32, u32, u32)> {
+        self.clip_stack.current_tuple()
+    }
+
+    fn push_translate(&mut self, dx: i32, dy: i32) -> OasisResult<()> {
+        self.translate_stack.push(dx, dy);
+        Ok(())
+    }
+
+    fn pop_translate(&mut self) -> OasisResult<()> {
+        self.translate_stack.pop();
+        Ok(())
+    }
+
+    fn current_translate(&self) -> (i32, i32) {
+        self.translate_stack.current()
     }
 }
 

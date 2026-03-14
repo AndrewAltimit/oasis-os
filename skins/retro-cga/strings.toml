@@ -1,0 +1,12 @@
+boot_text = [
+    "OASIS_OS v2.2 [CGA]",
+    "VIDEO MODE: 320x200 4-COLOR",
+    "LOADING...",
+    "READY.",
+]
+prompt_format = "A> "
+title = "OASIS CGA"
+home_label = "HOME"
+welcome_message = "TYPE 'HELP' FOR COMMANDS."
+error_prefix = "ERR: "
+shutdown_message = "SYSTEM HALTED."

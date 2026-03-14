@@ -29,6 +29,8 @@ oasis-app-calculator = { workspace = true }
 oasis-app-media = { workspace = true }
 oasis-app-tv-guide = { workspace = true }
 oasis-app-radio = { workspace = true }
+oasis-app-settings = { workspace = true }
+oasis-app-file-manager = { workspace = true }
 oasis-types = { workspace = true }
 oasis-vfs = { workspace = true }
 oasis-platform = { workspace = true }

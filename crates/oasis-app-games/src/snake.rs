@@ -182,3 +182,273 @@ impl SnakeGame {
         lines
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn snake_creation() {
+        let game = SnakeGame::new(20, 15, 42);
+        assert_eq!(game.width, 20);
+        assert_eq!(game.height, 15);
+        assert_eq!(game.snake.len(), 3);
+        assert_eq!(game.score, 0);
+        assert_eq!(game.state, GameState::Playing);
+        assert_eq!(game.direction, Direction::Right);
+    }
+
+    #[test]
+    fn snake_initial_position() {
+        let game = SnakeGame::new(20, 15, 42);
+        // Head at center.
+        assert_eq!(game.snake[0], (10, 7));
+        // Body extends left.
+        assert_eq!(game.snake[1], (9, 7));
+        assert_eq!(game.snake[2], (8, 7));
+    }
+
+    #[test]
+    fn snake_movement_right() {
+        let mut game = SnakeGame::new(20, 15, 42);
+        game.speed = 1; // Move every tick.
+        let old_head = game.snake[0];
+        game.tick();
+        assert_eq!(game.snake[0], (old_head.0 + 1, old_head.1));
+    }
+
+    #[test]
+    fn snake_movement_down() {
+        let mut game = SnakeGame::new(20, 15, 42);
+        game.speed = 1;
+        game.set_direction(Direction::Down);
+        let old_head = game.snake[0];
+        game.tick();
+        assert_eq!(game.snake[0], (old_head.0, old_head.1 + 1));
+    }
+
+    #[test]
+    fn snake_movement_left() {
+        let mut game = SnakeGame::new(20, 15, 42);
+        game.speed = 1;
+        // First move down to avoid 180-degree reversal.
+        game.set_direction(Direction::Down);
+        game.tick();
+        game.set_direction(Direction::Left);
+        game.tick();
+        // After two ticks: moved down (10,8), then left (9,8).
+        assert_eq!(game.snake[0], (9, 8));
+    }
+
+    #[test]
+    fn snake_movement_up() {
+        let mut game = SnakeGame::new(20, 15, 42);
+        game.speed = 1;
+        // Move down first, then left, then up (to avoid 180-degree).
+        game.set_direction(Direction::Down);
+        game.tick(); // (10, 8)
+        game.set_direction(Direction::Left);
+        game.tick(); // (9, 8)
+        game.set_direction(Direction::Up);
+        game.tick(); // (9, 7)
+        assert_eq!(game.snake[0], (9, 7));
+    }
+
+    #[test]
+    fn snake_no_180_reverse() {
+        let mut game = SnakeGame::new(20, 15, 42);
+        game.speed = 1;
+        // Snake is moving right, trying to go left should be ignored.
+        game.set_direction(Direction::Left);
+        assert_eq!(game.next_direction, Direction::Right);
+    }
+
+    #[test]
+    fn snake_no_180_reverse_vertical() {
+        let mut game = SnakeGame::new(20, 15, 42);
+        game.speed = 1;
+        game.set_direction(Direction::Down);
+        game.tick();
+        game.direction = Direction::Down;
+        game.set_direction(Direction::Up);
+        // Should still be Down since Up is opposite.
+        assert_eq!(game.next_direction, Direction::Down);
+    }
+
+    #[test]
+    fn snake_direction_buffer() {
+        let mut game = SnakeGame::new(20, 15, 42);
+        game.set_direction(Direction::Down);
+        assert_eq!(game.next_direction, Direction::Down);
+        // Direction only applied on tick.
+        assert_eq!(game.direction, Direction::Right);
+    }
+
+    #[test]
+    fn snake_food_spawn_not_on_snake() {
+        let game = SnakeGame::new(20, 15, 42);
+        assert!(!game.snake.contains(&game.food));
+    }
+
+    #[test]
+    fn snake_collision_wall_left() {
+        let game = SnakeGame::new(20, 15, 42);
+        assert!(game.is_collision(-1, 5));
+    }
+
+    #[test]
+    fn snake_collision_wall_right() {
+        let game = SnakeGame::new(20, 15, 42);
+        assert!(game.is_collision(20, 5));
+    }
+
+    #[test]
+    fn snake_collision_wall_top() {
+        let game = SnakeGame::new(20, 15, 42);
+        assert!(game.is_collision(5, -1));
+    }
+
+    #[test]
+    fn snake_collision_wall_bottom() {
+        let game = SnakeGame::new(20, 15, 42);
+        assert!(game.is_collision(5, 15));
+    }
+
+    #[test]
+    fn snake_collision_with_body() {
+        let game = SnakeGame::new(20, 15, 42);
+        let body_pos = game.snake[1];
+        assert!(game.is_collision(body_pos.0, body_pos.1));
+    }
+
+    #[test]
+    fn snake_no_collision_empty() {
+        let game = SnakeGame::new(20, 15, 42);
+        assert!(!game.is_collision(0, 0));
+    }
+
+    #[test]
+    fn snake_growth_on_eat() {
+        let mut game = SnakeGame::new(20, 15, 42);
+        game.speed = 1;
+        // Place food directly ahead.
+        let head = game.snake[0];
+        game.food = (head.0 + 1, head.1);
+        let old_len = game.snake.len();
+        game.tick();
+        assert_eq!(game.snake.len(), old_len + 1);
+        assert_eq!(game.score, 1);
+    }
+
+    #[test]
+    fn snake_game_over_wall() {
+        let mut game = SnakeGame::new(20, 15, 42);
+        game.speed = 1;
+        // Move right until hitting the wall.
+        for _ in 0..20 {
+            game.tick();
+        }
+        assert_eq!(game.state, GameState::GameOver);
+    }
+
+    #[test]
+    fn snake_game_over_preserves_high_score() {
+        let mut game = SnakeGame::new(20, 15, 42);
+        game.speed = 1;
+        game.score = 5;
+        game.high_score = 3;
+        // Force game over by hitting wall.
+        game.snake[0] = (19, 0);
+        game.direction = Direction::Right;
+        game.next_direction = Direction::Right;
+        game.tick();
+        assert_eq!(game.state, GameState::GameOver);
+        assert_eq!(game.high_score, 5);
+    }
+
+    #[test]
+    fn snake_reset() {
+        let mut game = SnakeGame::new(20, 15, 42);
+        game.score = 10;
+        game.state = GameState::GameOver;
+        game.reset();
+        assert_eq!(game.score, 0);
+        assert_eq!(game.state, GameState::Playing);
+        assert_eq!(game.snake.len(), 3);
+        assert_eq!(game.direction, Direction::Right);
+    }
+
+    #[test]
+    fn snake_reset_keeps_high_score() {
+        let mut game = SnakeGame::new(20, 15, 42);
+        game.high_score = 10;
+        game.reset();
+        assert_eq!(game.high_score, 10);
+    }
+
+    #[test]
+    fn snake_grid_text_has_lines() {
+        let game = SnakeGame::new(20, 15, 42);
+        let lines = game.grid_text();
+        // Header + separator + 15 rows + separator + controls = 19.
+        assert_eq!(lines.len(), 19);
+        assert!(lines[0].contains("Snake"));
+        assert!(lines[0].contains("Score: 0"));
+    }
+
+    #[test]
+    fn snake_grid_text_shows_snake() {
+        let game = SnakeGame::new(20, 15, 42);
+        let lines = game.grid_text();
+        // Snake body '#' should appear in grid rows.
+        let grid_content: String = lines[2..17].join("");
+        assert!(grid_content.contains('#'));
+    }
+
+    #[test]
+    fn snake_grid_text_shows_food() {
+        let game = SnakeGame::new(20, 15, 42);
+        let lines = game.grid_text();
+        let grid_content: String = lines[2..17].join("");
+        assert!(grid_content.contains('*'));
+    }
+
+    #[test]
+    fn snake_tick_speed_control() {
+        let mut game = SnakeGame::new(20, 15, 42);
+        game.speed = 3;
+        let head_before = game.snake[0];
+        game.tick(); // counter=1
+        assert_eq!(game.snake[0], head_before);
+        game.tick(); // counter=2
+        assert_eq!(game.snake[0], head_before);
+        game.tick(); // counter=3 -> moves
+        assert_ne!(game.snake[0], head_before);
+    }
+
+    #[test]
+    fn snake_paused_no_tick() {
+        let mut game = SnakeGame::new(20, 15, 42);
+        game.speed = 1;
+        game.state = GameState::Paused;
+        let head = game.snake[0];
+        game.tick();
+        assert_eq!(game.snake[0], head);
+    }
+
+    #[test]
+    fn snake_win_fills_grid() {
+        // Use a 3x2 grid (total 6 cells) and manually set up a
+        // near-win state with 5-length snake about to eat the last food.
+        let mut game = SnakeGame::new(3, 2, 42);
+        game.speed = 1;
+        game.snake = vec![(1, 0), (0, 0), (0, 1), (1, 1), (2, 1)];
+        game.direction = Direction::Right;
+        game.next_direction = Direction::Right;
+        game.food = (2, 0);
+        game.tick();
+        // Snake ate food and now fills all 6 cells.
+        assert_eq!(game.snake.len(), 6);
+        assert_eq!(game.state, GameState::Won);
+    }
+}

@@ -16,6 +16,7 @@ software = []
 [dependencies]
 glow = { version = "0.16", optional = true }
 log = { workspace = true }
+oasis-types = { workspace = true }
 web-sys = { workspace = true, features = [
     "WebGl2RenderingContext",
     "HtmlCanvasElement",

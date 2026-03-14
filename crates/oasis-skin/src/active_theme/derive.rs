@@ -1312,10 +1312,8 @@ impl ActiveTheme {
 }
 
 /// Parse shader-specific parameters from a `BackgroundLayerConfig`.
-fn parse_shader_params(
-    cfg: &crate::theme::BackgroundLayerConfig,
-) -> oasis_vector::background::ShaderParams {
-    let mut params = oasis_vector::background::ShaderParams::default();
+fn parse_shader_params(cfg: &crate::theme::BackgroundLayerConfig) -> oasis_vector::ShaderParams {
+    let mut params = oasis_vector::ShaderParams::default();
 
     if let Some(ref table) = cfg.shader_params {
         // Extract color_1, color_2, color_3 as hex → [f32; 4].

@@ -30,3 +30,24 @@ pub enum GameState {
     GameOver,
     Won,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn direction_opposite() {
+        assert!(Direction::Up.is_opposite(Direction::Down));
+        assert!(Direction::Down.is_opposite(Direction::Up));
+        assert!(Direction::Left.is_opposite(Direction::Right));
+        assert!(Direction::Right.is_opposite(Direction::Left));
+    }
+
+    #[test]
+    fn direction_not_opposite() {
+        assert!(!Direction::Up.is_opposite(Direction::Left));
+        assert!(!Direction::Up.is_opposite(Direction::Right));
+        assert!(!Direction::Down.is_opposite(Direction::Left));
+        assert!(!Direction::Left.is_opposite(Direction::Up));
+    }
+}

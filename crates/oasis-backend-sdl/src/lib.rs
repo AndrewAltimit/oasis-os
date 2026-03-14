@@ -20,7 +20,7 @@ use std::collections::HashMap;
 use sdl3::EventPump;
 use sdl3::pixels::PixelFormat;
 use sdl3::rect::Rect;
-use sdl3::render::{Canvas, ClippingRect, FPoint, FRect, Texture, TextureCreator};
+use sdl3::render::{Canvas, FPoint, FRect, Texture, TextureCreator};
 use sdl3::video::{Window, WindowContext};
 
 use oasis_core::backend::{
@@ -28,13 +28,14 @@ use oasis_core::backend::{
     validate_rgba_data,
 };
 use oasis_core::error::Result;
+use oasis_types::backend::stacks::{ClipPush, ClipStack, TranslateStack};
 use oasis_types::color::lerp_color_ratio;
 pub use oasis_types::geometry::ClipRect;
 
 pub use network::SdlNetworkBackend;
 pub use sdl_audio::SdlAudioBackend;
 
-use shapes::{intersect_clip, isqrt};
+use shapes::isqrt;
 
 // Re-export input helpers for tests.
 #[cfg(test)]
@@ -81,9 +82,8 @@ pub struct SdlBackend {
     // SAFETY: Must be declared after `textures` -- see comment above.
     texture_creator: TextureCreator<WindowContext>,
     next_texture_id: u64,
-    pub(crate) clip_stack: Vec<ClipRect>,
-    pub(crate) translate_stack: Vec<(i32, i32)>,
-    pub(crate) cumulative_translate: (i32, i32),
+    pub(crate) clip_stack: ClipStack,
+    pub(crate) translate_stack: TranslateStack,
     pub(crate) viewport_w: u32,
     pub(crate) viewport_h: u32,
 }
@@ -118,9 +118,8 @@ impl SdlBackend {
             textures: HashMap::new(),
             texture_creator,
             next_texture_id: 1,
-            clip_stack: Vec::new(),
-            translate_stack: Vec::new(),
-            cumulative_translate: (0, 0),
+            clip_stack: ClipStack::new(width, height),
+            translate_stack: TranslateStack::new(),
             viewport_w: width,
             viewport_h: height,
         })
@@ -143,10 +142,7 @@ impl SdlBackend {
 
     /// Apply cumulative translation to coordinates.
     pub(crate) fn translate(&self, x: i32, y: i32) -> (i32, i32) {
-        (
-            x + self.cumulative_translate.0,
-            y + self.cumulative_translate.1,
-        )
+        self.translate_stack.translate(x, y)
     }
 
     /// Set the SDL draw color with optional blend mode.
@@ -668,84 +664,75 @@ impl SdiBackend for SdlBackend {
     fn push_clip_rect(&mut self, x: i32, y: i32, w: u32, h: u32) -> Result<()> {
         let (tx, ty) = self.translate(x, y);
         let new_clip = ClipRect { x: tx, y: ty, w, h };
-        match self.canvas.clip_rect() {
-            ClippingRect::Some(current_sdl) => {
-                let current = ClipRect {
-                    x: current_sdl.x(),
-                    y: current_sdl.y(),
-                    w: current_sdl.width(),
-                    h: current_sdl.height(),
-                };
-                self.clip_stack.push(current);
-                let isect = intersect_clip(&current, &new_clip);
-                if let Some(c) = isect {
-                    self.canvas.set_clip_rect(Rect::new(c.x, c.y, c.w, c.h));
-                } else {
-                    self.canvas.set_clip_rect(Rect::new(0, 0, 0, 0));
-                }
+        match self.clip_stack.push(new_clip) {
+            ClipPush::Clip(c) => {
+                self.canvas.set_clip_rect(Rect::new(c.x, c.y, c.w, c.h));
             },
-            ClippingRect::Zero => {
-                self.clip_stack.push(ClipRect {
-                    x: 0,
-                    y: 0,
-                    w: 0,
-                    h: 0,
-                });
+            ClipPush::Empty => {
                 self.canvas.set_clip_rect(Rect::new(0, 0, 0, 0));
-            },
-            ClippingRect::None => {
-                self.clip_stack.push(ClipRect {
-                    x: 0,
-                    y: 0,
-                    w: self.viewport_w,
-                    h: self.viewport_h,
-                });
-                self.canvas
-                    .set_clip_rect(Rect::new(new_clip.x, new_clip.y, new_clip.w, new_clip.h));
             },
         }
         Ok(())
     }
 
     fn pop_clip_rect(&mut self) -> Result<()> {
-        if let Some(prev) = self.clip_stack.pop() {
-            if prev.x == 0 && prev.y == 0 && prev.w == self.viewport_w && prev.h == self.viewport_h
-            {
-                self.canvas.set_clip_rect(None);
-            } else {
+        match self.clip_stack.pop() {
+            Some(prev) => {
                 self.canvas
                     .set_clip_rect(Rect::new(prev.x, prev.y, prev.w, prev.h));
-            }
-        } else {
-            self.canvas.set_clip_rect(None);
+            },
+            None => {
+                self.canvas.set_clip_rect(None);
+            },
         }
         Ok(())
     }
 
     fn current_clip_rect(&self) -> Option<(i32, i32, u32, u32)> {
-        match self.canvas.clip_rect() {
-            ClippingRect::Some(r) => Some((r.x(), r.y(), r.width(), r.height())),
-            ClippingRect::Zero => Some((0, 0, 0, 0)),
-            ClippingRect::None => None,
-        }
+        self.clip_stack.current_tuple()
     }
 
     fn push_translate(&mut self, dx: i32, dy: i32) -> Result<()> {
-        self.translate_stack.push(self.cumulative_translate);
-        self.cumulative_translate.0 += dx;
-        self.cumulative_translate.1 += dy;
+        self.translate_stack.push(dx, dy);
         Ok(())
     }
 
     fn pop_translate(&mut self) -> Result<()> {
-        if let Some(prev) = self.translate_stack.pop() {
-            self.cumulative_translate = prev;
-        }
+        self.translate_stack.pop();
         Ok(())
     }
 
     fn current_translate(&self) -> (i32, i32) {
-        self.cumulative_translate
+        self.translate_stack.current()
+    }
+}
+
+impl oasis_core::backend::ClipboardBackend for SdlBackend {
+    fn copy(&mut self, text: &str) {
+        let clipboard = self.canvas.window().subsystem().clipboard();
+        if let Err(e) = clipboard.set_clipboard_text(text) {
+            log::warn!("SDL clipboard copy failed: {e}");
+        }
+    }
+
+    fn paste(&self) -> Option<String> {
+        let clipboard = self.canvas.window().subsystem().clipboard();
+        clipboard.clipboard_text().ok().filter(|s| !s.is_empty())
+    }
+
+    fn has_content(&self) -> bool {
+        self.canvas
+            .window()
+            .subsystem()
+            .clipboard()
+            .has_clipboard_text()
+    }
+
+    fn clear(&mut self) {
+        let clipboard = self.canvas.window().subsystem().clipboard();
+        if let Err(e) = clipboard.set_clipboard_text("") {
+            log::warn!("SDL clipboard clear failed: {e}");
+        }
     }
 }
 

@@ -12,7 +12,9 @@ use crate::terminal::CommandRegistry;
 use crate::vfs::Vfs;
 
 use super::app_bridge::PluginAppRegistration;
-use super::traits::{PLUGIN_API_VERSION, Plugin, PluginHost, PluginInfo, PluginState};
+use super::traits::{
+    PLUGIN_API_VERSION, Plugin, PluginCapabilities, PluginHost, PluginInfo, PluginState,
+};
 
 /// A loaded plugin with its runtime state.
 struct LoadedPlugin {
@@ -20,6 +22,8 @@ struct LoadedPlugin {
     state: PluginState,
     /// Titles of apps registered by this plugin (for cleanup on unload).
     registered_app_titles: Vec<String>,
+    /// Cached capabilities from `plugin.capabilities()`.
+    capabilities: PluginCapabilities,
 }
 
 /// Plugin manifest from a TOML file in the VFS.
@@ -82,10 +86,12 @@ impl PluginManager {
     /// The plugin is added in `Registered` state and must be initialized
     /// via `init_all()` or `init_plugin()`.
     pub fn register_static(&mut self, plugin: Box<dyn Plugin>) {
+        let capabilities = plugin.capabilities();
         self.plugins.push(LoadedPlugin {
             plugin,
             state: PluginState::Registered,
             registered_app_titles: Vec::new(),
+            capabilities,
         });
     }
 
@@ -128,6 +134,8 @@ impl PluginManager {
                         network: None,
                         backend: None,
                         app_registrations: &mut pending_apps,
+                        capabilities: self.plugins[i].capabilities.clone(),
+                        plugin_name: name.clone(),
                     };
                     self.plugins[i].plugin.init(&mut host)
                 };
@@ -171,6 +179,7 @@ impl PluginManager {
             ));
         }
         Self::validate_api_version(&self.plugins[idx].plugin.info())?;
+        let plugin_name = self.plugins[idx].plugin.info().name.clone();
         let mut pending_apps = Vec::new();
         {
             let mut host = PluginHost {
@@ -181,6 +190,8 @@ impl PluginManager {
                 network: None,
                 backend: None,
                 app_registrations: &mut pending_apps,
+                capabilities: self.plugins[idx].capabilities.clone(),
+                plugin_name,
             };
             self.plugins[idx].plugin.init(&mut host)?;
         }
@@ -216,6 +227,8 @@ impl PluginManager {
                         network: None,
                         backend: None,
                         app_registrations: &mut pending_apps,
+                        capabilities: self.plugins[i].capabilities.clone(),
+                        plugin_name: name.clone(),
                     };
                     self.plugins[i].plugin.update(&mut host)
                 };
@@ -257,6 +270,8 @@ impl PluginManager {
                 let name = self.plugins[i].plugin.info().name.clone();
                 let mut pending_apps = Vec::new();
                 let shutdown_result = {
+                    // Grant all capabilities during shutdown so plugins
+                    // can always clean up their resources.
                     let mut host = PluginHost {
                         sdi,
                         vfs,
@@ -265,6 +280,8 @@ impl PluginManager {
                         network: None,
                         backend: None,
                         app_registrations: &mut pending_apps,
+                        capabilities: PluginCapabilities::all(),
+                        plugin_name: name.clone(),
                     };
                     self.plugins[i].plugin.shutdown(&mut host)
                 };
@@ -292,7 +309,9 @@ impl PluginManager {
 
         let loaded = &mut self.plugins[idx];
         if loaded.state == PluginState::Active {
+            let plugin_name = loaded.plugin.info().name.clone();
             let mut pending_apps = Vec::new();
+            // Grant all capabilities during shutdown for cleanup.
             let mut host = PluginHost {
                 sdi,
                 vfs,
@@ -301,6 +320,8 @@ impl PluginManager {
                 network: None,
                 backend: None,
                 app_registrations: &mut pending_apps,
+                capabilities: PluginCapabilities::all(),
+                plugin_name,
             };
             loaded.plugin.shutdown(&mut host)?;
         }
@@ -749,7 +770,7 @@ auto_load = true
                         vec!["Plugin app content".to_string()],
                     ))
                 },
-            ));
+            ))?;
             Ok(())
         }
         fn update(&mut self, _host: &mut PluginHost<'_>) -> Result<()> {

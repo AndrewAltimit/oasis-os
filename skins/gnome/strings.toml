@@ -1,0 +1,12 @@
+boot_text = [
+    "OASIS_OS v2.2 [gnome]",
+    "Loading GNOME desktop...",
+    "Activities overlay: ready",
+    "Ready.",
+]
+prompt_format = "$ "
+title = "OASIS GNOME"
+home_label = "Activities"
+welcome_message = "Welcome to OASIS GNOME. Type 'help' for commands."
+error_prefix = "error: "
+shutdown_message = "Session ended."

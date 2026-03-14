@@ -1,17 +1,23 @@
-//! Window manager: lifecycle, drag/resize, focus, and input dispatch.
+//! Window manager: core struct, accessors, geometry, and input dispatch.
 //!
 //! The WM creates and manipulates groups of SDI objects to simulate windowed
 //! interfaces. It is a consumer of the SDI API -- SDI remains a flat scene
 //! graph with no concept of grouping or hierarchy.
+//!
+//! Method implementations are split across several files:
+//! - `lifecycle.rs` — Window creation, destruction, state transitions
+//! - `focus.rs` — Focus management and z-order operations
+//! - `render.rs` — Drawing with clip rects
+//! - `sdi_objects.rs` — SDI object create/destroy/update
+//! - `drag_resize.rs` — Drag/resize state machine
 
 use oasis_sdi::SdiRegistry;
-use oasis_types::backend::SdiBackend;
 use oasis_types::error::{OasisError, Result, WmError};
 use oasis_types::input::InputEvent;
 
 use super::drag_resize::{DragState, clamp_position};
 use super::hit_test::ButtonKind;
-use super::window::{Geometry, Window, WindowConfig, WindowId, WindowState, WmTheme};
+use super::window::{Window, WindowId, WmTheme};
 
 /// Events produced by the WM in response to input.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -39,7 +45,7 @@ pub enum WmEvent {
 }
 
 /// Cascade offset between newly created windows.
-const CASCADE_OFFSET: i32 = 24;
+pub(crate) const CASCADE_OFFSET: i32 = 24;
 
 /// SDI object name for the semi-transparent modal backdrop.
 pub(crate) const MODAL_OVERLAY_ID: &str = "__wm_modal_overlay";
@@ -135,161 +141,12 @@ impl WindowManager {
         self.windows.iter().find(|w| w.id == id)
     }
 
-    /// Create a new window and register its SDI objects.
-    pub fn create_window(
-        &mut self,
-        config: &WindowConfig,
-        sdi: &mut SdiRegistry,
-    ) -> Result<WindowId> {
-        // Check for duplicate id.
-        if self.windows.iter().any(|w| w.id == config.id) {
-            return Err(OasisError::Wm(WmError::WindowAlreadyExists {
-                id: config.id.clone(),
-            }));
-        }
-
-        // Determine initial position.
-        let (x, y) = match (config.x, config.y) {
-            (Some(x), Some(y)) => (x, y),
-            _ => {
-                let pos = (self.next_cascade_x, self.next_cascade_y);
-                self.advance_cascade();
-                pos
-            },
-        };
-
-        let window = Window::new(config, x, y, &self.theme);
-        let is_modal = window.modal;
-
-        // Create modal overlay before the window if this is a modal window.
-        if is_modal {
-            self.show_modal_overlay(sdi);
-        }
-
-        // Create SDI objects for each component.
-        self.create_sdi_objects(&window, sdi);
-
-        let id = window.id.clone();
-        self.windows.push(window);
-
-        // Focus the new window (will respect z-order groups).
-        self.focus_window_internal(&id, sdi);
-
-        Ok(id)
+    /// Returns `true` if any window is currently in fullscreen kiosk mode.
+    pub fn has_fullscreen_kiosk(&self) -> bool {
+        self.windows.iter().any(|w| w.fullscreen_kiosk)
     }
 
-    /// Cycle focus to the next or previous window in z-order.
-    /// `forward=true` brings the bottom-most visible window to the top.
-    /// `forward=false` sends the top-most visible window to the bottom.
-    /// Skips minimized windows. Returns the newly focused window id, if any.
-    pub fn cycle_focus(&mut self, forward: bool, sdi: &mut SdiRegistry) -> Option<WindowId> {
-        let visible_count = self
-            .windows
-            .iter()
-            .filter(|w| w.state != WindowState::Minimized)
-            .count();
-        if visible_count < 2 {
-            return self.active_window.clone();
-        }
-        if forward {
-            // Bring the bottom-most visible window to the top.
-            let idx = self
-                .windows
-                .iter()
-                .position(|w| w.state != WindowState::Minimized)?;
-            let id = self.windows[idx].id.clone();
-            self.focus_window_internal(&id, sdi);
-            Some(id)
-        } else {
-            // Send top-most visible to bottom of its z-group, then focus
-            // the new top. Use group-aware insertion to preserve
-            // normal < always_on_top < modal ordering.
-            let top_idx = self
-                .windows
-                .iter()
-                .rposition(|w| w.state != WindowState::Minimized)?;
-            let window = self.windows.remove(top_idx);
-            let group_start = if window.modal {
-                // Bottom of modal group.
-                self.windows
-                    .iter()
-                    .position(|w| w.modal)
-                    .unwrap_or(self.windows.len())
-            } else if window.always_on_top {
-                // Bottom of always_on_top group.
-                self.windows
-                    .iter()
-                    .position(|w| w.always_on_top || w.modal)
-                    .unwrap_or(self.windows.len())
-            } else {
-                // Bottom of normal windows (index 0 or first visible).
-                self.windows
-                    .iter()
-                    .position(|w| w.state != WindowState::Minimized)
-                    .unwrap_or(0)
-            };
-            self.windows.insert(group_start, window);
-            // Focus the new top-most visible window.
-            let new_top = self
-                .windows
-                .iter()
-                .rposition(|w| w.state != WindowState::Minimized)?;
-            let id = self.windows[new_top].id.clone();
-            self.focus_window_internal(&id, sdi);
-            Some(id)
-        }
-    }
-
-    /// Close all open windows.
-    pub fn close_all(&mut self, sdi: &mut SdiRegistry) {
-        let windows = std::mem::take(&mut self.windows);
-        for window in &windows {
-            for suffix in window.sdi_suffixes() {
-                let name = window.sdi_name(suffix);
-                let _ = sdi.destroy(&name);
-            }
-        }
-        self.drag = None;
-        self.active_window = None;
-        self.hide_modal_overlay(sdi);
-    }
-
-    /// Close a window, destroying all its SDI objects.
-    pub fn close_window(&mut self, id: &str, sdi: &mut SdiRegistry) -> Result<()> {
-        let idx = self
-            .windows
-            .iter()
-            .position(|w| w.id == id)
-            .ok_or_else(|| OasisError::Wm(WmError::WindowNotFound { id: id.to_string() }))?;
-
-        let was_modal = self.windows[idx].modal;
-        let window = &self.windows[idx];
-        self.destroy_sdi_objects(window, sdi);
-        self.windows.remove(idx);
-
-        // Cancel any drag on this window.
-        if let Some(ref drag) = self.drag {
-            let drag_id = match drag {
-                DragState::Moving { window_id, .. } => window_id.clone(),
-                DragState::Resizing { window_id, .. } => window_id.clone(),
-            };
-            if drag_id == id {
-                self.drag = None;
-            }
-        }
-
-        // Update active window.
-        if self.active_window.as_deref() == Some(id) {
-            self.active_window = self.windows.last().map(|w| w.id.clone());
-        }
-
-        // Hide modal overlay if no more modal windows remain.
-        if was_modal && !self.has_modal() {
-            self.hide_modal_overlay(sdi);
-        }
-
-        Ok(())
-    }
+    // -- Geometry methods --
 
     /// Move a window by a delta. Updates all SDI object positions.
     /// The final position is clamped to keep the titlebar visible on screen.
@@ -347,205 +204,7 @@ impl WindowManager {
         Ok(())
     }
 
-    /// Bring a window to the front (topmost z-order).
-    pub fn focus_window(&mut self, id: &str, sdi: &mut SdiRegistry) -> Result<()> {
-        if !self.windows.iter().any(|w| w.id == id) {
-            return Err(OasisError::Wm(WmError::WindowNotFound {
-                id: id.to_string(),
-            }));
-        }
-        self.focus_window_internal(id, sdi);
-        Ok(())
-    }
-
-    /// Minimize a window (hide all SDI objects).
-    pub fn minimize_window(&mut self, id: &str, sdi: &mut SdiRegistry) -> Result<()> {
-        let window = self
-            .windows
-            .iter_mut()
-            .find(|w| w.id == id)
-            .ok_or_else(|| OasisError::Wm(WmError::WindowNotFound { id: id.to_string() }))?;
-
-        if !window.has_minimize_button() {
-            return Err(OasisError::Wm(
-                format!("window type does not support minimize: {id}").into(),
-            ));
-        }
-
-        if window.state == WindowState::Normal {
-            window.saved_geometry = Some(Geometry {
-                x: window.x,
-                y: window.y,
-                w: window.outer_w,
-                h: window.outer_h,
-            });
-        }
-        window.state = WindowState::Minimized;
-
-        // Hide all SDI objects.
-        for suffix in window.sdi_suffixes() {
-            let name = window.sdi_name(suffix);
-            if let Ok(obj) = sdi.get_mut(&name) {
-                obj.visible = false;
-            }
-        }
-
-        // Move focus to next topmost visible window.
-        let new_active = self
-            .windows
-            .iter()
-            .rev()
-            .find(|w| w.state != WindowState::Minimized && w.id != id)
-            .map(|w| w.id.clone());
-        self.active_window = new_active;
-
-        Ok(())
-    }
-
-    /// Maximize a window to fill the screen.
-    pub fn maximize_window(&mut self, id: &str, sdi: &mut SdiRegistry) -> Result<()> {
-        let window = self
-            .windows
-            .iter_mut()
-            .find(|w| w.id == id)
-            .ok_or_else(|| OasisError::Wm(WmError::WindowNotFound { id: id.to_string() }))?;
-
-        if !window.has_maximize_button() {
-            return Err(OasisError::Wm(
-                format!("window type does not support maximize: {id}").into(),
-            ));
-        }
-
-        // Save geometry for restore.
-        window.saved_geometry = Some(Geometry {
-            x: window.x,
-            y: window.y,
-            w: window.outer_w,
-            h: window.outer_h,
-        });
-
-        window.x = 0;
-        window.y = self.theme.maximize_top_inset as i32;
-        window.outer_w = self.screen_w;
-        window.outer_h =
-            self.screen_h - self.theme.maximize_top_inset - self.theme.maximize_bottom_inset;
-        window.state = WindowState::Maximized;
-
-        self.update_sdi_positions(id, sdi);
-
-        Ok(())
-    }
-
-    /// Restore a window from minimized or maximized state.
-    pub fn restore_window(&mut self, id: &str, sdi: &mut SdiRegistry) -> Result<()> {
-        let window = self
-            .windows
-            .iter_mut()
-            .find(|w| w.id == id)
-            .ok_or_else(|| OasisError::Wm(WmError::WindowNotFound { id: id.to_string() }))?;
-
-        let was_minimized = window.state == WindowState::Minimized;
-
-        if let Some(geom) = window.saved_geometry.take() {
-            window.x = geom.x;
-            window.y = geom.y;
-            window.outer_w = geom.w;
-            window.outer_h = geom.h;
-        }
-        window.state = WindowState::Normal;
-
-        if was_minimized {
-            // Show all SDI objects.
-            for suffix in window.sdi_suffixes() {
-                let name = window.sdi_name(suffix);
-                if let Ok(obj) = sdi.get_mut(&name) {
-                    obj.visible = true;
-                }
-            }
-        }
-
-        self.update_sdi_positions(id, sdi);
-
-        Ok(())
-    }
-
-    /// Enter fullscreen kiosk mode for the given window.
-    ///
-    /// Saves the current geometry, expands the window to fill the screen,
-    /// sets the `fullscreen_kiosk` flag, and hides all decoration SDI objects.
-    pub fn enter_fullscreen(&mut self, id: &str, sdi: &mut SdiRegistry) -> Result<()> {
-        let (sw, sh) = (self.screen_w, self.screen_h);
-        let window = self
-            .windows
-            .iter_mut()
-            .find(|w| w.id == id)
-            .ok_or_else(|| OasisError::Wm(WmError::WindowNotFound { id: id.to_string() }))?;
-
-        // Save current geometry for restore (separate from maximize/minimize
-        // saved_geometry so we don't clobber it).
-        window.kiosk_saved_geometry = Some(Geometry {
-            x: window.x,
-            y: window.y,
-            w: window.outer_w,
-            h: window.outer_h,
-        });
-
-        window.x = 0;
-        window.y = 0;
-        window.outer_w = sw;
-        window.outer_h = sh;
-        window.fullscreen_kiosk = true;
-
-        // Hide all decoration SDI objects (everything except "content").
-        for suffix in window.sdi_suffixes() {
-            if suffix != "content" {
-                let name = window.sdi_name(suffix);
-                if let Ok(obj) = sdi.get_mut(&name) {
-                    obj.visible = false;
-                }
-            }
-        }
-
-        self.update_sdi_positions(id, sdi);
-        Ok(())
-    }
-
-    /// Exit fullscreen kiosk mode for the given window.
-    ///
-    /// Restores the saved geometry, clears the `fullscreen_kiosk` flag,
-    /// and re-shows all decoration SDI objects.
-    pub fn exit_fullscreen(&mut self, id: &str, sdi: &mut SdiRegistry) -> Result<()> {
-        let window = self
-            .windows
-            .iter_mut()
-            .find(|w| w.id == id)
-            .ok_or_else(|| OasisError::Wm(WmError::WindowNotFound { id: id.to_string() }))?;
-
-        if let Some(geom) = window.kiosk_saved_geometry.take() {
-            window.x = geom.x;
-            window.y = geom.y;
-            window.outer_w = geom.w;
-            window.outer_h = geom.h;
-        }
-
-        window.fullscreen_kiosk = false;
-
-        // Re-show all decoration SDI objects.
-        for suffix in window.sdi_suffixes() {
-            let name = window.sdi_name(suffix);
-            if let Ok(obj) = sdi.get_mut(&name) {
-                obj.visible = true;
-            }
-        }
-
-        self.update_sdi_positions(id, sdi);
-        Ok(())
-    }
-
-    /// Returns `true` if any window is currently in fullscreen kiosk mode.
-    pub fn has_fullscreen_kiosk(&self) -> bool {
-        self.windows.iter().any(|w| w.fullscreen_kiosk)
-    }
+    // -- Input dispatch --
 
     /// Process an input event through the WM. Returns what happened.
     pub fn handle_input(&mut self, event: &InputEvent, sdi: &mut SdiRegistry) -> WmEvent {
@@ -556,301 +215,12 @@ impl WindowManager {
             _ => WmEvent::None,
         }
     }
-
-    /// Draw window content with clipping. The caller provides a draw callback
-    /// for each window's content. The WM sets up clip rects before each call
-    /// and resets them after.
-    pub fn draw_with_clips<F>(
-        &self,
-        sdi: &mut SdiRegistry,
-        backend: &mut dyn SdiBackend,
-        mut draw_content: F,
-    ) -> Result<()>
-    where
-        F: FnMut(&str, i32, i32, u32, u32, &mut dyn SdiBackend) -> Result<()>,
-    {
-        // Collect window id prefixes so we can exclude them from the
-        // global SDI draw pass (they'll be drawn per-window instead).
-        let prefixes: Vec<String> = self.windows.iter().map(|w| format!("{}.", w.id)).collect();
-        let prefix_refs: Vec<&str> = prefixes.iter().map(|s| s.as_str()).collect();
-
-        // Draw non-window base SDI objects (wallpaper, dashboard, bars, etc.).
-        sdi.draw_base_excluding_prefixes(backend, &prefix_refs)?;
-
-        // Draw each window's SDI objects then content in z-order.
-        // This ensures the active (topmost) window renders over all others.
-        for window in &self.windows {
-            if window.state == WindowState::Minimized {
-                continue;
-            }
-
-            // Draw this window's SDI objects (frame, titlebar, buttons, etc.).
-            for suffix in window.sdi_suffixes() {
-                let name = window.sdi_name(suffix);
-                sdi.draw_named(&name, backend)?;
-            }
-
-            // Draw clipped content inside the window.
-            let (cx, cy, cw, ch) = window.content_rect(&self.theme);
-            if cw > 0 && ch > 0 {
-                backend.set_clip_rect(cx, cy, cw, ch)?;
-                draw_content(&window.id, cx, cy, cw, ch, backend)?;
-                backend.reset_clip_rect()?;
-            }
-        }
-
-        // Draw non-window overlay SDI objects (cursor, start menu, toasts)
-        // AFTER windows so they render on top.
-        sdi.draw_overlay_excluding_prefixes(backend, &prefix_refs)?;
-
-        Ok(())
-    }
-
-    /// Allocation-free variant of [`Self::draw_with_clips`] for constrained targets.
-    ///
-    /// Uses a fixed stack buffer for SDI name construction instead of
-    /// `format!()`/`Vec` allocations. Suitable for PSP where heap
-    /// allocations in the render loop cause frame-time spikes.
-    pub fn draw_with_clips_noalloc<F>(
-        &self,
-        sdi: &mut SdiRegistry,
-        backend: &mut dyn SdiBackend,
-        mut draw_content: F,
-    ) -> Result<()>
-    where
-        F: FnMut(&str, i32, i32, u32, u32, &mut dyn SdiBackend) -> Result<()>,
-    {
-        // Stack buffer for building "{id}.{suffix}" names without allocation.
-        let mut name_buf = [0u8; 64];
-
-        // Draw non-window base SDI objects (skip window-owned ones).
-        // Callers on constrained platforms should hide expensive base objects
-        // (e.g. dashboard icons) before calling this method.
-        sdi.draw_base_filtered(backend, |obj_name| {
-            !self.windows.iter().any(|w| {
-                let id = w.id.as_str();
-                obj_name.len() > id.len()
-                    && obj_name.as_bytes()[id.len()] == b'.'
-                    && obj_name.starts_with(id)
-            })
-        })?;
-
-        // Per-window suffixes (compile-time known for AppWindow).
-        const APP_SUFFIXES: &[&str] = &[
-            "frame",
-            "titlebar",
-            "title_text",
-            "title_shadow",
-            "separator",
-            "btn_close",
-            "btn_close_glyph",
-            "btn_minimize",
-            "btn_minimize_glyph",
-            "btn_maximize",
-            "btn_maximize_glyph",
-            "content",
-            "content_stroke",
-        ];
-
-        for window in &self.windows {
-            if window.state == WindowState::Minimized {
-                continue;
-            }
-
-            // Draw this window's SDI objects using stack-formatted names.
-            let id = window.id.as_str();
-            let suffixes = match window.window_type {
-                super::window::WindowType::Fullscreen => &["content"][..],
-                super::window::WindowType::Panel => {
-                    // frame + titlebar chrome + content, no buttons
-                    const PANEL_SUFFIXES: &[&str] = &[
-                        "frame",
-                        "titlebar",
-                        "title_text",
-                        "title_shadow",
-                        "separator",
-                        "content",
-                        "content_stroke",
-                    ];
-                    PANEL_SUFFIXES
-                },
-                _ => APP_SUFFIXES,
-            };
-            for suffix in suffixes {
-                let name = fmt_sdi_name(&mut name_buf, id, suffix);
-                sdi.draw_named(name, backend)?;
-            }
-
-            // Draw clipped content.
-            let (cx, cy, cw, ch) = window.content_rect(&self.theme);
-            if cw > 0 && ch > 0 {
-                backend.set_clip_rect(cx, cy, cw, ch)?;
-                draw_content(&window.id, cx, cy, cw, ch, backend)?;
-                backend.reset_clip_rect()?;
-            }
-        }
-
-        // Draw non-window overlay SDI objects on top.
-        sdi.draw_overlay_filtered(backend, |obj_name| {
-            !self.windows.iter().any(|w| {
-                let id = w.id.as_str();
-                obj_name.len() > id.len()
-                    && obj_name.as_bytes()[id.len()] == b'.'
-                    && obj_name.starts_with(id)
-            })
-        })?;
-
-        Ok(())
-    }
-
-    // -- Internal methods --
-    // Drag/resize handlers are in drag_resize.rs (handle_click,
-    // handle_cursor_move, handle_release).
-
-    /// Move a window to the top of its z-order group and update SDI z-ordering.
-    /// Groups: normal < always_on_top < modal.
-    pub(crate) fn focus_window_internal(&mut self, id: &str, sdi: &mut SdiRegistry) {
-        if let Some(idx) = self.windows.iter().position(|w| w.id == id) {
-            let window = self.windows.remove(idx);
-            let insert_at = self.z_insert_index(&window);
-            self.windows.insert(insert_at, window);
-        }
-
-        // Re-establish SDI z-ordering for the entire window stack.
-        // This ensures groups (normal < always_on_top < modal) are correct
-        // and the modal overlay sits between non-modal and modal windows.
-        let mut overlay_moved = false;
-        for window in &self.windows {
-            // Place modal overlay once, just before the first modal window.
-            if window.modal && !overlay_moved && sdi.contains(MODAL_OVERLAY_ID) {
-                let _ = sdi.move_to_top(MODAL_OVERLAY_ID);
-                overlay_moved = true;
-            }
-            for suffix in window.sdi_suffixes() {
-                let name = window.sdi_name(suffix);
-                let _ = sdi.move_to_top(&name);
-            }
-        }
-
-        // Update titlebar colors and frame distinction for all windows.
-        for window in &self.windows {
-            let is_active = window.id == id;
-            let color = if is_active {
-                self.theme.titlebar_active_color
-            } else {
-                self.theme.titlebar_inactive_color
-            };
-            let tb_name = window.sdi_name("titlebar");
-            if let Ok(obj) = sdi.get_mut(&tb_name) {
-                obj.color = color;
-                // Update gradient colors on focus change.
-                if self.theme.titlebar_gradient {
-                    use oasis_types::color::lighten;
-                    if is_active {
-                        obj.gradient_top = Some(
-                            self.theme
-                                .titlebar_gradient_top
-                                .unwrap_or_else(|| lighten(color, 0.1)),
-                        );
-                        obj.gradient_bottom =
-                            Some(self.theme.titlebar_gradient_bottom.unwrap_or(color));
-                    } else {
-                        obj.gradient_top = Some(
-                            self.theme
-                                .titlebar_inactive_gradient_top
-                                .unwrap_or_else(|| lighten(color, 0.1)),
-                        );
-                        obj.gradient_bottom = Some(
-                            self.theme
-                                .titlebar_inactive_gradient_bottom
-                                .unwrap_or(color),
-                        );
-                    }
-                } else {
-                    obj.gradient_top = None;
-                    obj.gradient_bottom = None;
-                }
-            }
-            // Dim inactive window frames.
-            let frame_name = window.sdi_name("frame");
-            if let Ok(obj) = sdi.get_mut(&frame_name) {
-                if is_active {
-                    let fc = self.theme.frame_color;
-                    obj.color = fc;
-                    if self.theme.frame_shadow_level > 0 {
-                        obj.shadow_level = Some(self.theme.frame_shadow_level);
-                    }
-                } else {
-                    obj.color = oasis_types::color::with_alpha(
-                        self.theme.frame_color,
-                        self.theme.inactive_frame_alpha,
-                    );
-                    let reduced = self.theme.frame_shadow_level.saturating_sub(1);
-                    obj.shadow_level = if reduced > 0 { Some(reduced) } else { None };
-                }
-            }
-        }
-
-        self.active_window = Some(WindowId::from(id));
-    }
-
-    // SDI object methods (create/destroy/update/hover/modal) are in sdi_objects.rs.
-
-    /// Advance the cascade position for the next window.
-    fn advance_cascade(&mut self) {
-        self.next_cascade_x += CASCADE_OFFSET;
-        self.next_cascade_y += CASCADE_OFFSET;
-
-        // Wrap when we get close to the screen edge.
-        if self.next_cascade_x > self.screen_w as i32 / 2 {
-            self.next_cascade_x = CASCADE_OFFSET;
-        }
-        if self.next_cascade_y > self.screen_h as i32 / 2 {
-            self.next_cascade_y = CASCADE_OFFSET;
-        }
-    }
-
-    /// Compute the insertion index for a window based on z-order groups.
-    /// Groups: normal < always_on_top < modal.
-    fn z_insert_index(&self, window: &Window) -> usize {
-        if window.modal {
-            // Modal windows go to the absolute top.
-            self.windows.len()
-        } else if window.always_on_top {
-            // Above normal windows, below modal windows.
-            self.windows
-                .iter()
-                .position(|w| w.modal)
-                .unwrap_or(self.windows.len())
-        } else {
-            // Normal windows: below always_on_top and modal.
-            self.windows
-                .iter()
-                .position(|w| w.always_on_top || w.modal)
-                .unwrap_or(self.windows.len())
-        }
-    }
-}
-
-/// Format `"{id}.{suffix}"` into a stack buffer, returning `&str`.
-fn fmt_sdi_name<'a>(buf: &'a mut [u8; 64], id: &str, suffix: &str) -> &'a str {
-    let id_bytes = id.as_bytes();
-    let suf_bytes = suffix.as_bytes();
-    let total = id_bytes.len() + 1 + suf_bytes.len();
-    if total > buf.len() {
-        return "";
-    }
-    buf[..id_bytes.len()].copy_from_slice(id_bytes);
-    buf[id_bytes.len()] = b'.';
-    buf[id_bytes.len() + 1..total].copy_from_slice(suf_bytes);
-    // SAFETY: id and suffix are valid UTF-8, '.' is ASCII.
-    unsafe { core::str::from_utf8_unchecked(&buf[..total]) }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::window::WindowType;
+    use crate::window::{WindowConfig, WindowState, WindowType};
     use oasis_types::backend::{Color, SdiCore, TextureId};
 
     /// Minimal no-op backend for tests that require `&mut dyn SdiBackend`.
@@ -936,7 +306,7 @@ mod tests {
         }
     }
 
-    impl SdiBackend for NullBackend {}
+    impl oasis_types::backend::SdiBackend for NullBackend {}
 
     fn app_config(id: &str) -> WindowConfig {
         WindowConfig {
@@ -2016,20 +1386,20 @@ mod tests {
         let orig_w = orig.outer_w;
         let orig_h = orig.outer_h;
 
-        // Maximize → saved_geometry holds the Normal geometry.
+        // Maximize -> saved_geometry holds the Normal geometry.
         wm.maximize_window("w", &mut sdi).unwrap();
         assert!(wm.get_window("w").unwrap().saved_geometry.is_some());
 
-        // Enter kiosk → should NOT clobber saved_geometry.
+        // Enter kiosk -> should NOT clobber saved_geometry.
         wm.enter_fullscreen("w", &mut sdi).unwrap();
         assert!(wm.get_window("w").unwrap().saved_geometry.is_some());
         assert!(wm.get_window("w").unwrap().kiosk_saved_geometry.is_some());
 
-        // Exit kiosk → back to maximized bounds, saved_geometry still intact.
+        // Exit kiosk -> back to maximized bounds, saved_geometry still intact.
         wm.exit_fullscreen("w", &mut sdi).unwrap();
         assert!(wm.get_window("w").unwrap().saved_geometry.is_some());
 
-        // Restore from maximized → back to original Normal geometry.
+        // Restore from maximized -> back to original Normal geometry.
         wm.restore_window("w", &mut sdi).unwrap();
         let win = wm.get_window("w").unwrap();
         assert_eq!(win.x, orig_x);

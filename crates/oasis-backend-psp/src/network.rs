@@ -9,7 +9,7 @@
 
 use std::ffi::c_void;
 use std::mem;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 
 use psp::sys;
 
@@ -42,6 +42,11 @@ pub(crate) const PSP_SO_RCVTIMEO: i32 = 0x1006;
 
 /// Whether the network subsystem has been initialized.
 static NET_INITIALIZED: AtomicBool = AtomicBool::new(false);
+
+/// Whether the user has already dismissed the WiFi dialog.
+/// Once set, we never show the dialog again to avoid freezing the EBOOT.
+/// 0 = not shown, 1 = user cancelled, 2 = connection failed
+static NET_DIALOG_DISMISSED: AtomicU8 = AtomicU8::new(0);
 
 /// Public wrapper — call from main thread (shows WiFi dialog with GU rendering).
 pub fn ensure_net_init_pub() -> Result<()> {
@@ -88,6 +93,20 @@ fn ensure_net_init() -> Result<()> {
         return Ok(());
     }
 
+    // If the user already dismissed the WiFi dialog, don't show it again.
+    // Showing the dialog a second time (especially from a background thread)
+    // freezes the EBOOT because it renders via GU and sceDisplay calls.
+    let dismissed = NET_DIALOG_DISMISSED.load(Ordering::Acquire);
+    if dismissed == 1 {
+        return Err(OasisError::Backend(
+            "WiFi dialog cancelled by user".to_string().into(),
+        ));
+    } else if dismissed == 2 {
+        return Err(OasisError::Backend(
+            "WiFi connection previously failed".to_string().into(),
+        ));
+    }
+
     if !psp::wlan::is_available() {
         return Err(OasisError::Backend(
             "WLAN not available (switch off or no hardware)"
@@ -109,6 +128,13 @@ fn ensure_net_init() -> Result<()> {
     // both real hardware and PPSSPP.
     if let Err(e) = psp::net::connect_dialog() {
         psp::net::term();
+        if e.is_cancelled() {
+            NET_DIALOG_DISMISSED.store(1, Ordering::Release);
+            return Err(OasisError::Backend(
+                "WiFi dialog cancelled by user".to_string().into(),
+            ));
+        }
+        NET_DIALOG_DISMISSED.store(2, Ordering::Release);
         return Err(OasisError::Backend(
             format!("WiFi connect failed: {e}").into(),
         ));

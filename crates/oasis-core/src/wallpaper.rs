@@ -3,6 +3,9 @@
 //! Generates PSIX-style gradient wallpapers as raw RGBA pixel buffers.
 //! No external PNG files needed -- keeps CI clean and the binary self-contained.
 
+use crate::backend::Color;
+use oasis_types::color::lerp_color;
+
 /// Generate a vibrant gradient wallpaper matching PSIX's orange->yellow->green style.
 ///
 /// Returns an RGBA pixel buffer of `w * h * 4` bytes.
@@ -20,26 +23,26 @@ pub fn generate_gradient(w: u32, h: u32) -> Vec<u8> {
             // Strong horizontal sweep with subtle vertical tint.
             let t = nx * 0.88 + ny * 0.12;
 
-            let (r, g, b) = if t < 0.15 {
+            let c = if t < 0.15 {
                 // Hot orange-red -> vivid orange.
                 let s = t / 0.15;
-                lerp_rgb((245, 110, 15), (255, 170, 15), s)
+                lerp_color(Color::rgb(245, 110, 15), Color::rgb(255, 170, 15), s)
             } else if t < 0.32 {
                 // Vivid orange -> bright golden yellow.
                 let s = (t - 0.15) / 0.17;
-                lerp_rgb((255, 170, 15), (255, 230, 30), s)
+                lerp_color(Color::rgb(255, 170, 15), Color::rgb(255, 230, 30), s)
             } else if t < 0.48 {
                 // Golden yellow -> yellow-green.
                 let s = (t - 0.32) / 0.16;
-                lerp_rgb((255, 230, 30), (230, 245, 40), s)
+                lerp_color(Color::rgb(255, 230, 30), Color::rgb(230, 245, 40), s)
             } else if t < 0.65 {
                 // Yellow-green -> bright green.
                 let s = (t - 0.48) / 0.17;
-                lerp_rgb((230, 245, 40), (140, 235, 50), s)
+                lerp_color(Color::rgb(230, 245, 40), Color::rgb(140, 235, 50), s)
             } else {
                 // Bright green -> vivid lime.
                 let s = (t - 0.65) / 0.35;
-                lerp_rgb((140, 235, 50), (200, 252, 130), s)
+                lerp_color(Color::rgb(140, 235, 50), Color::rgb(200, 252, 130), s)
             };
 
             // Vertical brightness: lighter toward top, slightly darker at bottom.
@@ -63,9 +66,9 @@ pub fn generate_gradient(w: u32, h: u32) -> Vec<u8> {
             let wave = 1.0 + (arc1 + arc2 + arc3) * arc_fade;
 
             let scale = vert * wave;
-            buf[offset] = (r as f32 * scale).clamp(0.0, 255.0) as u8;
-            buf[offset + 1] = (g as f32 * scale).clamp(0.0, 255.0) as u8;
-            buf[offset + 2] = (b as f32 * scale).clamp(0.0, 255.0) as u8;
+            buf[offset] = (c.r as f32 * scale).clamp(0.0, 255.0) as u8;
+            buf[offset + 1] = (c.g as f32 * scale).clamp(0.0, 255.0) as u8;
+            buf[offset + 2] = (c.b as f32 * scale).clamp(0.0, 255.0) as u8;
             buf[offset + 3] = 255;
         }
     }
@@ -389,7 +392,7 @@ fn generate_gradient_config(
             let t = (nx * cos_a + ny * sin_a).clamp(0.0, 1.0);
 
             // Multi-stop interpolation.
-            let (r, g, b) = multi_stop_lerp(stops, t);
+            let c = multi_stop_lerp(stops, t);
 
             // Vertical brightness variation (only for wave-style wallpapers).
             let vert = if wave { 1.0 + (0.5 - ny) * 0.18 } else { 1.0 };
@@ -409,9 +412,9 @@ fn generate_gradient_config(
             };
 
             let scale = vert * wave_factor;
-            buf[offset] = (r as f32 * scale).clamp(0.0, 255.0) as u8;
-            buf[offset + 1] = (g as f32 * scale).clamp(0.0, 255.0) as u8;
-            buf[offset + 2] = (b as f32 * scale).clamp(0.0, 255.0) as u8;
+            buf[offset] = (c.r as f32 * scale).clamp(0.0, 255.0) as u8;
+            buf[offset + 1] = (c.g as f32 * scale).clamp(0.0, 255.0) as u8;
+            buf[offset + 2] = (c.b as f32 * scale).clamp(0.0, 255.0) as u8;
             buf[offset + 3] = 255;
         }
     }
@@ -420,28 +423,18 @@ fn generate_gradient_config(
 }
 
 /// Interpolate between multiple color stops.
-fn multi_stop_lerp(stops: &[crate::backend::Color], t: f32) -> (u8, u8, u8) {
+fn multi_stop_lerp(stops: &[Color], t: f32) -> Color {
     let n = stops.len();
     if n == 0 {
-        return (0, 0, 0);
+        return Color::BLACK;
     }
     if n == 1 {
-        return (stops[0].r, stops[0].g, stops[0].b);
+        return stops[0];
     }
     let segment = t * (n - 1) as f32;
     let idx = (segment as usize).min(n - 2);
     let local_t = segment - idx as f32;
-    let a = stops[idx];
-    let b = stops[idx + 1];
-    lerp_rgb((a.r, a.g, a.b), (b.r, b.g, b.b), local_t)
-}
-
-/// Linear interpolation between two RGB colors.
-fn lerp_rgb(a: (u8, u8, u8), b: (u8, u8, u8), t: f32) -> (u8, u8, u8) {
-    let r = a.0 as f32 + (b.0 as f32 - a.0 as f32) * t;
-    let g = a.1 as f32 + (b.1 as f32 - a.1 as f32) * t;
-    let b_val = a.2 as f32 + (b.2 as f32 - a.2 as f32) * t;
-    ((r + 0.5) as u8, (g + 0.5) as u8, (b_val + 0.5) as u8)
+    lerp_color(stops[idx], stops[idx + 1], local_t)
 }
 
 #[cfg(test)]

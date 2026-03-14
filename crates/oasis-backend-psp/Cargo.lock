@@ -694,6 +694,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "oasis-app-file-manager"
+version = "1.2.0"
+dependencies = [
+ "oasis-app-core",
+ "oasis-sdi",
+ "oasis-skin",
+ "oasis-types",
+ "oasis-ui",
+ "oasis-vfs",
+]
+
+[[package]]
 name = "oasis-app-games"
 version = "1.2.0"
 dependencies = [
@@ -732,6 +744,17 @@ version = "1.2.0"
 dependencies = [
  "oasis-app-core",
  "oasis-audio",
+ "oasis-sdi",
+ "oasis-skin",
+ "oasis-types",
+ "oasis-vfs",
+]
+
+[[package]]
+name = "oasis-app-settings"
+version = "1.2.0"
+dependencies = [
+ "oasis-app-core",
  "oasis-sdi",
  "oasis-skin",
  "oasis-types",
@@ -817,10 +840,12 @@ dependencies = [
  "oasis-app-calculator",
  "oasis-app-clock",
  "oasis-app-core",
+ "oasis-app-file-manager",
  "oasis-app-games",
  "oasis-app-media",
  "oasis-app-paint",
  "oasis-app-radio",
+ "oasis-app-settings",
  "oasis-app-text-editor",
  "oasis-app-tv-guide",
  "oasis-audio",
@@ -1039,7 +1064,7 @@ dependencies = [
 [[package]]
 name = "psp"
 version = "1.0.0"
-source = "git+https://github.com/AndrewAltimit/rust-psp?rev=4370415#43704150320652f72c81dc8ea22b456c90fa9ac2"
+source = "git+https://github.com/AndrewAltimit/rust-psp?rev=6634ba2#6634ba23f5f345414882064980d498e2daa93ae7"
 dependencies = [
  "bitflags 2.10.0",
  "libm",

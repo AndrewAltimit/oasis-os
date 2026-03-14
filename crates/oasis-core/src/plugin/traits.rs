@@ -15,6 +15,64 @@ use super::app_bridge::PluginAppRegistration;
 /// Current plugin API version. Incremented on breaking changes only.
 pub const PLUGIN_API_VERSION: u32 = 1;
 
+/// Declares which OS subsystems a plugin needs access to.
+///
+/// Plugins return this from [`Plugin::capabilities()`]. The default
+/// implementation grants all capabilities for backwards compatibility.
+/// `PluginHost` uses soft enforcement: access to a subsystem that the
+/// plugin did not declare logs a warning and returns an error rather
+/// than panicking.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PluginCapabilities {
+    /// Read files from the virtual file system.
+    pub vfs_read: bool,
+    /// Write files to the virtual file system.
+    pub vfs_write: bool,
+    /// Register terminal commands.
+    pub commands: bool,
+    /// Access audio playback.
+    pub audio: bool,
+    /// Access network (TCP) connections.
+    pub network: bool,
+    /// Register as a launchable dashboard app.
+    pub app_registration: bool,
+}
+
+impl Default for PluginCapabilities {
+    /// Defaults to all capabilities enabled (backwards compatible).
+    fn default() -> Self {
+        Self::all()
+    }
+}
+
+impl PluginCapabilities {
+    /// All capabilities enabled. Used as the default so existing
+    /// plugins that do not override `capabilities()` keep working.
+    pub fn all() -> Self {
+        Self {
+            vfs_read: true,
+            vfs_write: true,
+            commands: true,
+            audio: true,
+            network: true,
+            app_registration: true,
+        }
+    }
+
+    /// No capabilities enabled. Useful as a starting point for
+    /// restrictive plugins that opt in to specific subsystems.
+    pub fn none() -> Self {
+        Self {
+            vfs_read: false,
+            vfs_write: false,
+            commands: false,
+            audio: false,
+            network: false,
+            app_registration: false,
+        }
+    }
+}
+
 /// Metadata about a plugin.
 #[derive(Debug, Clone)]
 pub struct PluginInfo {
@@ -69,6 +127,10 @@ impl PluginInfo {
 /// Provides access to OS services that plugins can use to register
 /// commands, create UI elements, read/write files, play audio, and
 /// make network requests.
+///
+/// Access to subsystems is gated by [`PluginCapabilities`]. Use the
+/// `checked_*` methods for capability-aware access. Direct field access
+/// is still available for backwards compatibility but bypasses checks.
 pub struct PluginHost<'a> {
     /// SDI scene graph for creating/modifying UI elements.
     pub sdi: &'a mut SdiRegistry,
@@ -87,15 +149,121 @@ pub struct PluginHost<'a> {
     /// Accumulator for plugin app registrations. Processed by the
     /// manager after `init()` returns.
     pub(crate) app_registrations: &'a mut Vec<PluginAppRegistration>,
+    /// Capabilities declared by the plugin. Set by the manager before
+    /// each lifecycle call.
+    pub(crate) capabilities: PluginCapabilities,
+    /// Plugin name, used for capability-violation log messages.
+    pub(crate) plugin_name: String,
 }
 
 impl<'a> PluginHost<'a> {
+    /// Return the capabilities currently in effect for this plugin.
+    pub fn capabilities(&self) -> &PluginCapabilities {
+        &self.capabilities
+    }
+
     /// Register this plugin as a launchable app on the dashboard.
     ///
-    /// The registration is stored and processed after `init()` returns.
-    /// The app will appear on the dashboard alongside built-in apps.
-    pub fn register_app(&mut self, registration: PluginAppRegistration) {
+    /// Requires [`PluginCapabilities::app_registration`]. If the
+    /// capability is not declared, logs a warning and returns an error.
+    pub fn register_app(&mut self, registration: PluginAppRegistration) -> Result<()> {
+        if !self.capabilities.app_registration {
+            log::warn!(
+                "Plugin '{}' tried to register an app without app_registration capability",
+                self.plugin_name,
+            );
+            return Err(crate::error::OasisError::Plugin(
+                format!(
+                    "plugin '{}' lacks app_registration capability",
+                    self.plugin_name
+                )
+                .into(),
+            ));
+        }
         self.app_registrations.push(registration);
+        Ok(())
+    }
+
+    /// Capability-checked access to the command registry.
+    ///
+    /// Returns `Err` if `commands` capability is not declared.
+    pub fn checked_commands(&mut self) -> Result<&mut CommandRegistry> {
+        if !self.capabilities.commands {
+            log::warn!(
+                "Plugin '{}' tried to access commands without capability",
+                self.plugin_name,
+            );
+            return Err(crate::error::OasisError::Plugin(
+                format!("plugin '{}' lacks commands capability", self.plugin_name).into(),
+            ));
+        }
+        Ok(self.commands)
+    }
+
+    /// Capability-checked read access to the VFS.
+    ///
+    /// Returns `Err` if `vfs_read` capability is not declared.
+    pub fn checked_vfs_read(&self) -> Result<&dyn Vfs> {
+        if !self.capabilities.vfs_read {
+            log::warn!(
+                "Plugin '{}' tried to read VFS without vfs_read capability",
+                self.plugin_name,
+            );
+            return Err(crate::error::OasisError::Plugin(
+                format!("plugin '{}' lacks vfs_read capability", self.plugin_name).into(),
+            ));
+        }
+        Ok(self.vfs)
+    }
+
+    /// Capability-checked write access to the VFS.
+    ///
+    /// Returns `Err` if `vfs_write` capability is not declared.
+    pub fn checked_vfs_write(&mut self) -> Result<&mut dyn Vfs> {
+        if !self.capabilities.vfs_write {
+            log::warn!(
+                "Plugin '{}' tried to write VFS without vfs_write capability",
+                self.plugin_name,
+            );
+            return Err(crate::error::OasisError::Plugin(
+                format!("plugin '{}' lacks vfs_write capability", self.plugin_name).into(),
+            ));
+        }
+        Ok(self.vfs)
+    }
+
+    /// Check whether the `audio` capability is declared.
+    ///
+    /// Returns `Err` if the capability is not declared. On success the
+    /// caller can access `self.audio` directly.
+    pub fn check_audio(&self) -> Result<()> {
+        if !self.capabilities.audio {
+            log::warn!(
+                "Plugin '{}' tried to access audio without capability",
+                self.plugin_name,
+            );
+            return Err(crate::error::OasisError::Plugin(
+                format!("plugin '{}' lacks audio capability", self.plugin_name).into(),
+            ));
+        }
+        Ok(())
+    }
+
+    /// Check whether the `network` capability is declared.
+    ///
+    /// Returns `Err` if the capability is not declared. On success the
+    /// caller can access `self.network` directly.
+    pub fn check_network(&self) -> Result<()> {
+        if !self.capabilities.network {
+            log::warn!(
+                "Plugin '{}' tried to access network without capability",
+                self.plugin_name,
+            );
+            return Err(crate::error::OasisError::Plugin(
+                format!("plugin '{}' lacks network capability", self.plugin_name).into(),
+            ));
+        }
+        Ok(())
     }
 
     /// Load a texture from raw RGBA pixel data.
@@ -130,6 +298,15 @@ impl<'a> PluginHost<'a> {
 pub trait Plugin {
     /// Return plugin metadata.
     fn info(&self) -> PluginInfo;
+
+    /// Declare which OS subsystems this plugin needs.
+    ///
+    /// The default returns [`PluginCapabilities::all()`] so that existing
+    /// plugins keep working without changes. Override this to restrict
+    /// access (principle of least privilege).
+    fn capabilities(&self) -> PluginCapabilities {
+        PluginCapabilities::all()
+    }
 
     /// Initialize the plugin. Register commands, create SDI objects, etc.
     fn init(&mut self, host: &mut PluginHost<'_>) -> Result<()>;
@@ -184,6 +361,27 @@ mod tests {
         assert_eq!(info.api_version, 99);
     }
 
+    /// Helper to create a `PluginHost` for tests with the given capabilities.
+    fn make_test_host<'a>(
+        sdi: &'a mut crate::sdi::SdiRegistry,
+        vfs: &'a mut dyn crate::vfs::Vfs,
+        commands: &'a mut crate::terminal::CommandRegistry,
+        pending: &'a mut Vec<crate::plugin::PluginAppRegistration>,
+        capabilities: PluginCapabilities,
+    ) -> PluginHost<'a> {
+        PluginHost {
+            sdi,
+            vfs,
+            commands,
+            audio: None,
+            network: None,
+            backend: None,
+            app_registrations: pending,
+            capabilities,
+            plugin_name: "test".to_string(),
+        }
+    }
+
     #[test]
     fn plugin_host_optional_fields_none_by_default() {
         use crate::sdi::SdiRegistry;
@@ -194,15 +392,13 @@ mod tests {
         let mut vfs = MemoryVfs::new();
         let mut cmds = CommandRegistry::new();
         let mut pending = Vec::new();
-        let host = PluginHost {
-            sdi: &mut sdi,
-            vfs: &mut vfs,
-            commands: &mut cmds,
-            audio: None,
-            network: None,
-            backend: None,
-            app_registrations: &mut pending,
-        };
+        let host = make_test_host(
+            &mut sdi,
+            &mut vfs,
+            &mut cmds,
+            &mut pending,
+            PluginCapabilities::all(),
+        );
         assert!(host.audio.is_none());
         assert!(host.network.is_none());
         assert!(host.backend.is_none());
@@ -218,19 +414,224 @@ mod tests {
         let mut vfs = MemoryVfs::new();
         let mut cmds = CommandRegistry::new();
         let mut pending = Vec::new();
-        let mut host = PluginHost {
-            sdi: &mut sdi,
-            vfs: &mut vfs,
-            commands: &mut cmds,
-            audio: None,
-            network: None,
-            backend: None,
-            app_registrations: &mut pending,
-        };
+        let mut host = make_test_host(
+            &mut sdi,
+            &mut vfs,
+            &mut cmds,
+            &mut pending,
+            PluginCapabilities::all(),
+        );
         // Without a backend, load_texture should return an error.
         let result = host.load_texture(16, 16, &[0u8; 16 * 16 * 4]);
         assert!(result.is_err());
         let msg = result.unwrap_err().to_string();
         assert!(msg.contains("no rendering backend"), "got: {msg}");
+    }
+
+    #[test]
+    fn capabilities_all_enables_everything() {
+        let caps = PluginCapabilities::all();
+        assert!(caps.vfs_read);
+        assert!(caps.vfs_write);
+        assert!(caps.commands);
+        assert!(caps.audio);
+        assert!(caps.network);
+        assert!(caps.app_registration);
+    }
+
+    #[test]
+    fn capabilities_none_disables_everything() {
+        let caps = PluginCapabilities::none();
+        assert!(!caps.vfs_read);
+        assert!(!caps.vfs_write);
+        assert!(!caps.commands);
+        assert!(!caps.audio);
+        assert!(!caps.network);
+        assert!(!caps.app_registration);
+    }
+
+    #[test]
+    fn capabilities_default_is_all() {
+        assert_eq!(PluginCapabilities::default(), PluginCapabilities::all());
+    }
+
+    #[test]
+    fn checked_commands_denied_without_capability() {
+        use crate::sdi::SdiRegistry;
+        use crate::terminal::CommandRegistry;
+        use crate::vfs::MemoryVfs;
+
+        let mut sdi = SdiRegistry::new();
+        let mut vfs = MemoryVfs::new();
+        let mut cmds = CommandRegistry::new();
+        let mut pending = Vec::new();
+        let mut host = make_test_host(
+            &mut sdi,
+            &mut vfs,
+            &mut cmds,
+            &mut pending,
+            PluginCapabilities::none(),
+        );
+        assert!(host.checked_commands().is_err());
+    }
+
+    #[test]
+    fn checked_commands_allowed_with_capability() {
+        use crate::sdi::SdiRegistry;
+        use crate::terminal::CommandRegistry;
+        use crate::vfs::MemoryVfs;
+
+        let mut sdi = SdiRegistry::new();
+        let mut vfs = MemoryVfs::new();
+        let mut cmds = CommandRegistry::new();
+        let mut pending = Vec::new();
+        let caps = PluginCapabilities {
+            commands: true,
+            ..PluginCapabilities::none()
+        };
+        let mut host = make_test_host(&mut sdi, &mut vfs, &mut cmds, &mut pending, caps);
+        assert!(host.checked_commands().is_ok());
+    }
+
+    #[test]
+    fn checked_vfs_read_denied_without_capability() {
+        use crate::sdi::SdiRegistry;
+        use crate::terminal::CommandRegistry;
+        use crate::vfs::MemoryVfs;
+
+        let mut sdi = SdiRegistry::new();
+        let mut vfs = MemoryVfs::new();
+        let mut cmds = CommandRegistry::new();
+        let mut pending = Vec::new();
+        let host = make_test_host(
+            &mut sdi,
+            &mut vfs,
+            &mut cmds,
+            &mut pending,
+            PluginCapabilities::none(),
+        );
+        assert!(host.checked_vfs_read().is_err());
+    }
+
+    #[test]
+    fn checked_vfs_write_denied_without_capability() {
+        use crate::sdi::SdiRegistry;
+        use crate::terminal::CommandRegistry;
+        use crate::vfs::MemoryVfs;
+
+        let mut sdi = SdiRegistry::new();
+        let mut vfs = MemoryVfs::new();
+        let mut cmds = CommandRegistry::new();
+        let mut pending = Vec::new();
+        let mut host = make_test_host(
+            &mut sdi,
+            &mut vfs,
+            &mut cmds,
+            &mut pending,
+            PluginCapabilities::none(),
+        );
+        assert!(host.checked_vfs_write().is_err());
+    }
+
+    #[test]
+    fn check_audio_denied_without_capability() {
+        use crate::sdi::SdiRegistry;
+        use crate::terminal::CommandRegistry;
+        use crate::vfs::MemoryVfs;
+
+        let mut sdi = SdiRegistry::new();
+        let mut vfs = MemoryVfs::new();
+        let mut cmds = CommandRegistry::new();
+        let mut pending = Vec::new();
+        let host = make_test_host(
+            &mut sdi,
+            &mut vfs,
+            &mut cmds,
+            &mut pending,
+            PluginCapabilities::none(),
+        );
+        assert!(host.check_audio().is_err());
+    }
+
+    #[test]
+    fn check_network_denied_without_capability() {
+        use crate::sdi::SdiRegistry;
+        use crate::terminal::CommandRegistry;
+        use crate::vfs::MemoryVfs;
+
+        let mut sdi = SdiRegistry::new();
+        let mut vfs = MemoryVfs::new();
+        let mut cmds = CommandRegistry::new();
+        let mut pending = Vec::new();
+        let host = make_test_host(
+            &mut sdi,
+            &mut vfs,
+            &mut cmds,
+            &mut pending,
+            PluginCapabilities::none(),
+        );
+        assert!(host.check_network().is_err());
+    }
+
+    #[test]
+    fn register_app_denied_without_capability() {
+        use crate::sdi::SdiRegistry;
+        use crate::terminal::CommandRegistry;
+        use crate::vfs::MemoryVfs;
+
+        let mut sdi = SdiRegistry::new();
+        let mut vfs = MemoryVfs::new();
+        let mut cmds = CommandRegistry::new();
+        let mut pending = Vec::new();
+        let mut host = make_test_host(
+            &mut sdi,
+            &mut vfs,
+            &mut cmds,
+            &mut pending,
+            PluginCapabilities::none(),
+        );
+        let reg = crate::plugin::PluginAppRegistration::new(
+            "Test",
+            crate::plugin::AppCategory::Utility,
+            |path, _vfs| {
+                Box::new(crate::apps::simple_app::SimpleApp::new(
+                    "Test",
+                    path,
+                    vec![],
+                ))
+            },
+        );
+        assert!(host.register_app(reg).is_err());
+        assert!(pending.is_empty());
+    }
+
+    #[test]
+    fn register_app_allowed_with_capability() {
+        use crate::sdi::SdiRegistry;
+        use crate::terminal::CommandRegistry;
+        use crate::vfs::MemoryVfs;
+
+        let mut sdi = SdiRegistry::new();
+        let mut vfs = MemoryVfs::new();
+        let mut cmds = CommandRegistry::new();
+        let mut pending = Vec::new();
+        let caps = PluginCapabilities {
+            app_registration: true,
+            ..PluginCapabilities::none()
+        };
+        let mut host = make_test_host(&mut sdi, &mut vfs, &mut cmds, &mut pending, caps);
+        let reg = crate::plugin::PluginAppRegistration::new(
+            "Test",
+            crate::plugin::AppCategory::Utility,
+            |path, _vfs| {
+                Box::new(crate::apps::simple_app::SimpleApp::new(
+                    "Test",
+                    path,
+                    vec![],
+                ))
+            },
+        );
+        assert!(host.register_app(reg).is_ok());
+        assert_eq!(pending.len(), 1);
     }
 }

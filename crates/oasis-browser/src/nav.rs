@@ -2,7 +2,7 @@
 
 /// A single entry in the navigation history.
 #[derive(Debug, Clone)]
-pub struct HistoryEntry {
+pub struct BrowserHistoryEntry {
     pub url: String,
     pub title: String,
     pub scroll_y: i32,
@@ -19,9 +19,9 @@ pub struct Bookmark {
 
 /// Navigation controller managing history and bookmarks.
 pub struct NavigationController {
-    back_stack: Vec<HistoryEntry>,
-    forward_stack: Vec<HistoryEntry>,
-    current: Option<HistoryEntry>,
+    back_stack: Vec<BrowserHistoryEntry>,
+    forward_stack: Vec<BrowserHistoryEntry>,
+    current: Option<BrowserHistoryEntry>,
     home_url: String,
     bookmarks: Vec<Bookmark>,
 }
@@ -44,7 +44,7 @@ impl NavigationController {
             self.back_stack.push(entry);
         }
         self.forward_stack.clear();
-        self.current = Some(HistoryEntry {
+        self.current = Some(BrowserHistoryEntry {
             url: url.to_string(),
             title: title.to_string(),
             scroll_y: 0,
@@ -54,7 +54,7 @@ impl NavigationController {
     }
 
     /// Go back in history. Returns the URL to load, or None.
-    pub fn go_back(&mut self) -> Option<HistoryEntry> {
+    pub fn go_back(&mut self) -> Option<BrowserHistoryEntry> {
         let prev = self.back_stack.pop()?;
         if let Some(current) = self.current.take() {
             self.forward_stack.push(current);
@@ -64,7 +64,7 @@ impl NavigationController {
     }
 
     /// Go forward in history. Returns the URL to load, or None.
-    pub fn go_forward(&mut self) -> Option<HistoryEntry> {
+    pub fn go_forward(&mut self) -> Option<BrowserHistoryEntry> {
         let next = self.forward_stack.pop()?;
         if let Some(current) = self.current.take() {
             self.back_stack.push(current);
@@ -157,8 +157,8 @@ impl NavigationController {
     ///
     /// Returns the current page followed by back-stack entries in
     /// reverse chronological order.
-    pub fn history(&self) -> Vec<&HistoryEntry> {
-        let mut entries: Vec<&HistoryEntry> = Vec::new();
+    pub fn history(&self) -> Vec<&BrowserHistoryEntry> {
+        let mut entries: Vec<&BrowserHistoryEntry> = Vec::new();
         if let Some(current) = &self.current {
             entries.push(current);
         }

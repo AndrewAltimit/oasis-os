@@ -18,9 +18,11 @@ use oasis_vfs::Vfs;
 
 pub mod buffer;
 mod editor;
+pub mod highlight;
 mod render;
 
 pub use buffer::{EditOperation, EditorBuffer};
+pub use highlight::{FileType, detect_file_type};
 
 // ---------------------------------------------------------------
 // EditorMode
@@ -59,6 +61,7 @@ pub struct TextEditorApp {
     pub(crate) find_active: bool,
     pub(crate) undo_stack: Vec<EditOperation>,
     pub(crate) redo_stack: Vec<EditOperation>,
+    pub(crate) file_type: FileType,
 }
 
 impl TextEditorApp {
@@ -79,6 +82,7 @@ impl TextEditorApp {
             find_active: false,
             undo_stack: Vec::new(),
             redo_stack: Vec::new(),
+            file_type: FileType::Plain,
         };
         editor.rebuild_display_lines();
         editor
@@ -89,6 +93,7 @@ impl TextEditorApp {
         let file_name = path.rsplit('/').next().unwrap_or(path);
         let title = format!("Text Editor - {file_name}");
         let cs = ContentState::new(&title, "/apps/editor");
+        let ft = detect_file_type(path);
         let mut editor = Self {
             content: cs,
             buffer: EditorBuffer::from_text(content),
@@ -103,6 +108,7 @@ impl TextEditorApp {
             find_active: false,
             undo_stack: Vec::new(),
             redo_stack: Vec::new(),
+            file_type: ft,
         };
         editor.rebuild_display_lines();
         editor
@@ -148,7 +154,10 @@ impl App for TextEditorApp {
         backend: &mut dyn SdiBackend,
         at: &ActiveTheme,
     ) -> oasis_types::error::Result<()> {
-        draw_content_windowed(&self.content, cx, cy, cw, ch, backend, at)
+        if self.file_type == FileType::Plain {
+            return draw_content_windowed(&self.content, cx, cy, cw, ch, backend, at);
+        }
+        self.draw_highlighted(cx, cy, cw, ch, backend, at)
     }
 
     fn hide_sdi(&self, sdi: &mut SdiRegistry) {

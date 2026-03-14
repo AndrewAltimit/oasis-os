@@ -103,6 +103,7 @@ pub struct OasisWasm {
     status_bar: StatusBar,
     bottom_bar: BottomBar,
     taskbar: oasis_core::taskbar::Taskbar,
+    desktops: oasis_wm::DesktopManager,
     start_menu: StartMenuState,
     mouse_cursor: CursorState,
     cursor_texture: Option<TextureId>,
@@ -294,6 +295,7 @@ impl OasisWasm {
             status_bar: StatusBar::new(),
             bottom_bar,
             taskbar: oasis_core::taskbar::Taskbar::new(),
+            desktops: oasis_wm::DesktopManager::new(4),
             start_menu,
             mouse_cursor,
             cursor_texture,
@@ -699,14 +701,10 @@ impl OasisWasm {
         if let Some(ref mut bridge) = self.shader_bridge
             && let Some(info) = oasis_core::vector_overlay::get_shader_layer(&self.active_theme)
         {
-            let params = oasis_shader::ShaderParams {
-                colors: info.params.colors,
-                floats: info.params.floats,
-            };
             bridge.render_frame(
                 &info.name,
                 self.frame_counter as f32 / 60.0,
-                &params,
+                &info.params,
                 self.backend.ctx(),
             );
         }
@@ -1030,6 +1028,12 @@ impl OasisWasm {
                         self.wm.windows(),
                         self.wm.active_window(),
                         self.skin.features.start_menu,
+                    );
+                    self.taskbar.update_desktop_indicator(
+                        &mut self.sdi,
+                        &self.active_theme,
+                        self.desktops.active_desktop(),
+                        self.desktops.desktop_count(),
                     );
                     if self.skin.features.start_menu {
                         self.start_menu

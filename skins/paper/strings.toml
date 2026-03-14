@@ -1,0 +1,11 @@
+boot_text = [
+    "OASIS_OS v2.2 [paper]",
+    "Loading minimal interface...",
+    "Ready.",
+]
+prompt_format = "> "
+title = "OASIS Paper"
+home_label = "Home"
+welcome_message = "Welcome. Type 'help' for commands."
+error_prefix = "error: "
+shutdown_message = "Done."

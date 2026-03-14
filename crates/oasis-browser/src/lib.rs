@@ -38,7 +38,7 @@ pub(crate) mod test_utils;
 
 pub use config::BrowserConfig;
 pub use loader::{ContentType, ResourceResponse, ResourceSource, Url};
-pub use nav::{Bookmark, HistoryEntry, NavigationController};
+pub use nav::{Bookmark, BrowserHistoryEntry, NavigationController};
 pub use scroll::ScrollState;
 
 /// Map from img src URL -> (intrinsic_width, intrinsic_height) for decoded images.

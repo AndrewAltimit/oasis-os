@@ -56,6 +56,10 @@ pub struct StreamFrame {
 }
 
 /// A decoded video frame ready for texture upload.
+///
+/// Identical to `oasis_video::h264::DecodedFrame` but defined separately
+/// because the PSP backend is excluded from the workspace (different target
+/// architecture) and cannot depend on oasis-video's h264 module.
 pub struct DecodedFrame {
     pub rgba: Vec<u8>,
     pub width: u32,

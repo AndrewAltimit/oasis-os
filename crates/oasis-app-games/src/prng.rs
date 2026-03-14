@@ -15,3 +15,49 @@ pub(crate) fn random_range(state: &mut u64, bound: u64) -> u64 {
     }
     next_random(state) % bound
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn prng_deterministic_same_seed() {
+        let mut s1 = 123u64;
+        let mut s2 = 123u64;
+        let a = next_random(&mut s1);
+        let b = next_random(&mut s2);
+        assert_eq!(a, b);
+    }
+
+    #[test]
+    fn prng_different_seeds_differ() {
+        let mut s1 = 1u64;
+        let mut s2 = 2u64;
+        let a = next_random(&mut s1);
+        let b = next_random(&mut s2);
+        assert_ne!(a, b);
+    }
+
+    #[test]
+    fn prng_sequence_not_constant() {
+        let mut s = 42u64;
+        let a = next_random(&mut s);
+        let b = next_random(&mut s);
+        assert_ne!(a, b);
+    }
+
+    #[test]
+    fn random_range_within_bound() {
+        let mut s = 99u64;
+        for _ in 0..100 {
+            let v = random_range(&mut s, 10);
+            assert!(v < 10);
+        }
+    }
+
+    #[test]
+    fn random_range_zero_bound() {
+        let mut s = 42u64;
+        assert_eq!(random_range(&mut s, 0), 0);
+    }
+}

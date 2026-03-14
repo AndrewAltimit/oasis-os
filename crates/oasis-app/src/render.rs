@@ -138,6 +138,12 @@ pub fn update_sdi(state: &mut AppState, sdi: &mut SdiRegistry) {
                     state.wm.active_window(),
                     state.skin.features.start_menu,
                 );
+                state.ui.taskbar.update_desktop_indicator(
+                    sdi,
+                    &state.active_theme,
+                    state.ui.desktops.active_desktop(),
+                    state.ui.desktops.desktop_count(),
+                );
                 if state.skin.features.start_menu {
                     state.ui.start_menu.update_sdi(sdi, &state.active_theme);
                 }

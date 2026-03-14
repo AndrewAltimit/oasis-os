@@ -47,6 +47,73 @@ impl Color {
         }
     }
 
+    /// Darken the color by a factor (0.0 = black, 1.0 = unchanged).
+    pub fn darken(self, factor: f32) -> Self {
+        let f = factor.clamp(0.0, 1.0);
+        Self::rgba(
+            (self.r as f32 * f) as u8,
+            (self.g as f32 * f) as u8,
+            (self.b as f32 * f) as u8,
+            self.a,
+        )
+    }
+
+    /// Lighten the color by blending toward white (0.0 = unchanged, 1.0 = white).
+    pub fn lighten(self, factor: f32) -> Self {
+        self.lerp(Self::WHITE, factor)
+    }
+
+    /// Linearly interpolate between `self` and `other`.
+    ///
+    /// `t` is clamped to `[0.0, 1.0]`. Returns `self` when `t == 0.0` and
+    /// `other` when `t == 1.0`.
+    pub fn lerp(self, other: Self, t: f32) -> Self {
+        let t = t.clamp(0.0, 1.0);
+        Self::rgba(
+            (self.r as f32 + (other.r as f32 - self.r as f32) * t) as u8,
+            (self.g as f32 + (other.g as f32 - self.g as f32) * t) as u8,
+            (self.b as f32 + (other.b as f32 - self.b as f32) * t) as u8,
+            (self.a as f32 + (other.a as f32 - self.a as f32) * t) as u8,
+        )
+    }
+
+    /// Scale the alpha channel by an opacity factor (0.0..=1.0).
+    ///
+    /// Returns the color unchanged when `opacity >= 1.0`.
+    pub fn apply_opacity(self, opacity: f32) -> Self {
+        if opacity >= 1.0 {
+            return self;
+        }
+        Self::rgba(self.r, self.g, self.b, (self.a as f32 * opacity) as u8)
+    }
+
+    /// Alpha-blend `self` (foreground) over `dst` (background).
+    ///
+    /// Uses the standard Porter-Duff "source over" compositing formula.
+    pub fn alpha_over(self, dst: Self) -> Self {
+        let sa = self.a as u32;
+        if sa == 0 {
+            return dst;
+        }
+        if sa == 255 {
+            return self;
+        }
+        let da = dst.a as u32;
+        let out_a = sa + da * (255 - sa) / 255;
+        if out_a == 0 {
+            return Self::TRANSPARENT;
+        }
+        let r = (self.r as u32 * sa + dst.r as u32 * da * (255 - sa) / 255) / out_a;
+        let g = (self.g as u32 * sa + dst.g as u32 * da * (255 - sa) / 255) / out_a;
+        let b = (self.b as u32 * sa + dst.b as u32 * da * (255 - sa) / 255) / out_a;
+        Self::rgba(
+            r.min(255) as u8,
+            g.min(255) as u8,
+            b.min(255) as u8,
+            out_a.min(255) as u8,
+        )
+    }
+
     pub const BLACK: Self = Self::rgb(0, 0, 0);
     pub const WHITE: Self = Self::rgb(255, 255, 255);
     pub const TRANSPARENT: Self = Self::rgba(0, 0, 0, 0);

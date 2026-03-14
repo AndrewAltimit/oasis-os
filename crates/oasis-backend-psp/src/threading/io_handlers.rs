@@ -86,11 +86,12 @@ fn handle_read_file(path: String) {
 }
 
 fn handle_http_get(url: String, tag: u32) {
-    // Network must be initialized before HTTP.
-    if let Err(e) = crate::network::ensure_net_init_pub() {
+    // Check connectivity without showing a dialog (must not call
+    // ensure_net_init_pub from background thread -- freezes EBOOT).
+    if !psp::net::is_connected() {
         let _ = IO_RESP_QUEUE.push(IoResponse::Error {
             path: url,
-            msg: format!("net init: {e}"),
+            msg: "not connected to WiFi".to_string(),
         });
         return;
     }
@@ -135,8 +136,12 @@ fn handle_http_get(url: String, tag: u32) {
 fn handle_tv_catalog_batch(requests: Vec<TvCatalogRequest>) {
     io_log(&format!("[IO-TV] batch: {} requests", requests.len()));
 
-    if let Err(e) = crate::network::ensure_net_init_pub() {
-        io_log(&format!("[IO-TV] net init failed: {e}"));
+    // Check connectivity without showing a dialog. The WiFi dialog must
+    // only be shown from the main thread (it uses GU rendering). Calling
+    // ensure_net_init_pub() here would try to show the dialog from the
+    // I/O thread, which freezes the EBOOT.
+    if !psp::net::is_connected() {
+        io_log("[IO-TV] not connected, skipping catalog fetch");
         return;
     }
 

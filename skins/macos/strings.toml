@@ -1,0 +1,12 @@
+boot_text = [
+    "OASIS_OS v2.2 [macos]",
+    "Loading macOS interface...",
+    "Window manager: active",
+    "Ready.",
+]
+prompt_format = "~ $ "
+title = "OASIS macOS"
+home_label = "Finder"
+welcome_message = "Welcome to OASIS macOS. Type 'help' for commands."
+error_prefix = "error: "
+shutdown_message = "Session ended."

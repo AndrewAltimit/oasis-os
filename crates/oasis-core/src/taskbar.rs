@@ -3,6 +3,9 @@
 //! Renders inline within the bottom bar, to the right of the start button.
 //! Each button represents an open window; clicking focuses, minimizes, or
 //! restores the window. Buttons resize dynamically to fit all open windows.
+//!
+//! Also displays a virtual desktop indicator (e.g. "< 1/4 >") in the
+//! right portion of the bottom bar when more than one desktop exists.
 
 use oasis_types::bitmap_font::glyph_advance_scaled;
 
@@ -60,6 +63,21 @@ const BUTTON_GAP: i32 = 1;
 /// Active indicator underline height.
 const INDICATOR_H: u32 = 2;
 
+/// Width of the desktop prev/next arrow buttons.
+const DESKTOP_ARROW_W: i32 = 14;
+
+/// Horizontal gap between the desktop indicator and the right edge.
+const DESKTOP_RIGHT_MARGIN: i32 = 4;
+
+/// Result of a desktop indicator hit test.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DesktopHit {
+    /// The "previous desktop" arrow was clicked.
+    Prev,
+    /// The "next desktop" arrow was clicked.
+    Next,
+}
+
 /// A cached taskbar button for hit testing.
 #[derive(Debug, Clone)]
 struct TaskbarButton {
@@ -86,6 +104,12 @@ pub struct Taskbar {
     /// Stable ordering of window IDs (insertion order, not z-order).
     /// Windows are appended when first seen and removed when closed.
     order: Vec<String>,
+    /// Cached X position of the "prev desktop" arrow for hit testing.
+    desktop_prev_x: i32,
+    /// Cached X position of the "next desktop" arrow for hit testing.
+    desktop_next_x: i32,
+    /// Whether the desktop indicator is currently visible (>1 desktop).
+    desktop_indicator_visible: bool,
 }
 
 impl Taskbar {
@@ -99,6 +123,9 @@ impl Taskbar {
             bar_h: 0,
             start_x: 0,
             order: Vec::new(),
+            desktop_prev_x: 0,
+            desktop_next_x: 0,
+            desktop_indicator_visible: false,
         }
     }
 
@@ -288,6 +315,158 @@ impl Taskbar {
         }
         self.buttons.clear();
         self.order.clear();
+        self.hide_desktop_indicator(sdi);
+    }
+
+    /// Update the virtual desktop indicator SDI objects.
+    ///
+    /// Shows "< N/M >" in the right side of the bottom bar when more
+    /// than one desktop exists. `active` is the 0-based current desktop
+    /// index and `count` is the total number of desktops.
+    pub fn update_desktop_indicator(
+        &mut self,
+        sdi: &mut SdiRegistry,
+        at: &ActiveTheme,
+        active: usize,
+        count: usize,
+    ) {
+        if count <= 1 {
+            self.hide_desktop_indicator(sdi);
+            return;
+        }
+
+        self.desktop_indicator_visible = true;
+
+        let bar_y = (at.screen_h - at.bottombar_height) as i32;
+        let bar_h = at.bottombar_height;
+
+        // Ensure hit test geometry is set even without window buttons.
+        self.bar_y = bar_y;
+        self.bar_h = bar_h;
+        let font = at.font_small;
+
+        let label = format!("{}/{count}", active + 1);
+        let label_w = text_px(&label, font);
+
+        // Total width: [<] [label] [>] with small gaps.
+        let total_w = DESKTOP_ARROW_W + 2 + label_w + 2 + DESKTOP_ARROW_W;
+        let right_edge = at.screen_w as i32 - DESKTOP_RIGHT_MARGIN;
+        let base_x = right_edge - total_w;
+
+        let text_y = bar_y + (bar_h as i32 - font as i32) / 2;
+
+        // Prev arrow button "<".
+        let prev_x = base_x;
+        self.desktop_prev_x = prev_x;
+        ensure_rounded_fill(
+            sdi,
+            "desktop_ind_prev",
+            prev_x,
+            bar_y + 2,
+            DESKTOP_ARROW_W as u32,
+            bar_h.saturating_sub(4),
+            at.taskbar_btn_inactive,
+            2,
+        );
+        if let Ok(obj) = sdi.get_mut("desktop_ind_prev") {
+            obj.z = 901;
+            obj.overlay = true;
+        }
+        ensure_text(
+            sdi,
+            "desktop_ind_prev_text",
+            prev_x + 3,
+            text_y,
+            font,
+            at.taskbar_text_color,
+        );
+        if let Ok(obj) = sdi.get_mut("desktop_ind_prev_text") {
+            obj.text = Some("<".to_string());
+            obj.z = 902;
+            obj.overlay = true;
+        }
+
+        // Label "N/M".
+        let label_x = prev_x + DESKTOP_ARROW_W + 2;
+        ensure_text(
+            sdi,
+            "desktop_ind_label",
+            label_x,
+            text_y,
+            font,
+            at.taskbar_text_color,
+        );
+        if let Ok(obj) = sdi.get_mut("desktop_ind_label") {
+            obj.text = Some(label);
+            obj.z = 902;
+            obj.overlay = true;
+        }
+
+        // Next arrow button ">".
+        let next_x = label_x + label_w + 2;
+        self.desktop_next_x = next_x;
+        ensure_rounded_fill(
+            sdi,
+            "desktop_ind_next",
+            next_x,
+            bar_y + 2,
+            DESKTOP_ARROW_W as u32,
+            bar_h.saturating_sub(4),
+            at.taskbar_btn_inactive,
+            2,
+        );
+        if let Ok(obj) = sdi.get_mut("desktop_ind_next") {
+            obj.z = 901;
+            obj.overlay = true;
+        }
+        ensure_text(
+            sdi,
+            "desktop_ind_next_text",
+            next_x + 3,
+            text_y,
+            font,
+            at.taskbar_text_color,
+        );
+        if let Ok(obj) = sdi.get_mut("desktop_ind_next_text") {
+            obj.text = Some(">".to_string());
+            obj.z = 902;
+            obj.overlay = true;
+        }
+    }
+
+    /// Hide the desktop indicator SDI objects.
+    fn hide_desktop_indicator(&mut self, sdi: &mut SdiRegistry) {
+        self.desktop_indicator_visible = false;
+        hide_objects(
+            sdi,
+            &[
+                "desktop_ind_prev",
+                "desktop_ind_prev_text",
+                "desktop_ind_label",
+                "desktop_ind_next",
+                "desktop_ind_next_text",
+            ],
+        );
+    }
+
+    /// Hit test the desktop indicator arrows.
+    ///
+    /// Returns `Some(DesktopHit::Prev)` or `Some(DesktopHit::Next)` if a
+    /// desktop arrow was clicked, `None` otherwise.
+    pub fn desktop_hit_test(&self, x: i32, y: i32) -> Option<DesktopHit> {
+        if !self.desktop_indicator_visible {
+            return None;
+        }
+        if y < self.bar_y || y >= self.bar_y + self.bar_h as i32 {
+            return None;
+        }
+        if x >= self.desktop_prev_x && x < self.desktop_prev_x + DESKTOP_ARROW_W {
+            return Some(DesktopHit::Prev);
+        }
+        if x >= self.desktop_next_x && x < self.desktop_next_x + DESKTOP_ARROW_W {
+            return Some(DesktopHit::Next);
+        }
+        None
     }
 
     /// Hit test: returns the window id if a taskbar button was clicked.
@@ -527,5 +706,107 @@ mod tests {
         let taskbar = Taskbar::default();
         assert!(taskbar.buttons.is_empty());
         assert_eq!(taskbar.hover_index, None);
+    }
+
+    // ---------------------------------------------------------------
+    // Desktop indicator
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn desktop_indicator_hidden_for_single_desktop() {
+        let mut taskbar = Taskbar::new();
+        let mut sdi = SdiRegistry::new();
+        let at = ActiveTheme::default();
+        taskbar.update_desktop_indicator(&mut sdi, &at, 0, 1);
+        assert!(!taskbar.desktop_indicator_visible);
+        assert!(!sdi.contains("desktop_ind_prev"));
+    }
+
+    #[test]
+    fn desktop_indicator_shown_for_multiple_desktops() {
+        let mut taskbar = Taskbar::new();
+        let mut sdi = SdiRegistry::new();
+        let at = ActiveTheme::default();
+        taskbar.update_desktop_indicator(&mut sdi, &at, 0, 4);
+        assert!(taskbar.desktop_indicator_visible);
+        assert!(sdi.contains("desktop_ind_prev"));
+        assert!(sdi.contains("desktop_ind_label"));
+        assert!(sdi.contains("desktop_ind_next"));
+        // Label should show "1/4" (active=0 → display 1).
+        let label = sdi.get("desktop_ind_label").unwrap();
+        assert_eq!(label.text.as_deref(), Some("1/4"));
+    }
+
+    #[test]
+    fn desktop_indicator_label_updates() {
+        let mut taskbar = Taskbar::new();
+        let mut sdi = SdiRegistry::new();
+        let at = ActiveTheme::default();
+        taskbar.update_desktop_indicator(&mut sdi, &at, 2, 4);
+        let label = sdi.get("desktop_ind_label").unwrap();
+        assert_eq!(label.text.as_deref(), Some("3/4"));
+    }
+
+    #[test]
+    fn desktop_indicator_hidden_on_hide_sdi() {
+        let mut taskbar = Taskbar::new();
+        let mut sdi = SdiRegistry::new();
+        let at = ActiveTheme::default();
+        let windows = vec![make_window("app1", "First", WindowState::Normal)];
+        taskbar.update_sdi(&mut sdi, &at, &windows, Some("app1"), false);
+        taskbar.update_desktop_indicator(&mut sdi, &at, 0, 4);
+        assert!(taskbar.desktop_indicator_visible);
+
+        taskbar.hide_sdi(&mut sdi);
+        assert!(!taskbar.desktop_indicator_visible);
+    }
+
+    #[test]
+    fn desktop_hit_test_prev() {
+        let mut taskbar = Taskbar::new();
+        let mut sdi = SdiRegistry::new();
+        let at = ActiveTheme::default();
+        taskbar.update_desktop_indicator(&mut sdi, &at, 1, 4);
+
+        let bar_y = taskbar.bar_y;
+        let prev_x = taskbar.desktop_prev_x;
+        assert_eq!(
+            taskbar.desktop_hit_test(prev_x + 2, bar_y + 5),
+            Some(DesktopHit::Prev)
+        );
+    }
+
+    #[test]
+    fn desktop_hit_test_next() {
+        let mut taskbar = Taskbar::new();
+        let mut sdi = SdiRegistry::new();
+        let at = ActiveTheme::default();
+        taskbar.update_desktop_indicator(&mut sdi, &at, 1, 4);
+
+        let bar_y = taskbar.bar_y;
+        let next_x = taskbar.desktop_next_x;
+        assert_eq!(
+            taskbar.desktop_hit_test(next_x + 2, bar_y + 5),
+            Some(DesktopHit::Next)
+        );
+    }
+
+    #[test]
+    fn desktop_hit_test_none_when_hidden() {
+        let taskbar = Taskbar::new();
+        assert_eq!(taskbar.desktop_hit_test(100, 260), None);
+    }
+
+    #[test]
+    fn desktop_hit_test_miss_between_arrows() {
+        let mut taskbar = Taskbar::new();
+        let mut sdi = SdiRegistry::new();
+        let at = ActiveTheme::default();
+        taskbar.update_desktop_indicator(&mut sdi, &at, 0, 4);
+
+        let bar_y = taskbar.bar_y;
+        // Click between the two arrows (on the label).
+        let mid_x = taskbar.desktop_prev_x + DESKTOP_ARROW_W + 5;
+        assert_eq!(taskbar.desktop_hit_test(mid_x, bar_y + 5), None);
     }
 }

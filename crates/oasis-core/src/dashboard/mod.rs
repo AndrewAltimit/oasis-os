@@ -976,4 +976,155 @@ mod tests {
         // Page 1 has only 1 app, so selected should clamp to 0.
         assert_eq!(dash.selected, 0);
     }
+
+    // -----------------------------------------------------------------------
+    // PSP 4x3 grid navigation tests
+    //
+    // The PSP backend uses a 4-column, 3-row grid (12 icons per page).
+    // These tests exercise navigation patterns specific to that layout.
+    // -----------------------------------------------------------------------
+
+    fn psp_config() -> DashboardConfig {
+        DashboardConfig {
+            grid_cols: 4,
+            grid_rows: 3,
+            icons_per_page: 12,
+            max_pages: 4,
+            grid_x: 8,
+            grid_y: 20,
+            cell_w: 116,
+            cell_h: 72,
+            cursor_pad: 2,
+            grid_layout: GridLayout::new(4),
+            grid_w: 464,
+            grid_h: 218,
+            cursor_lerp_speed: 0.18,
+            page_slide_duration: 12,
+            press_flash_duration: 6,
+        }
+    }
+
+    #[test]
+    fn psp_grid_navigate_right_wraps_at_row_end() {
+        // PSP has 11 apps (one short of filling the 4x3 grid).
+        let mut dash = DashboardState::new(psp_config(), test_apps(11));
+        // Start at 0, go right to the end of all apps.
+        for _ in 0..10 {
+            dash.handle_input(&Button::Right);
+        }
+        assert_eq!(dash.selected, 10);
+        // One more right wraps to 0.
+        dash.handle_input(&Button::Right);
+        assert_eq!(dash.selected, 0);
+    }
+
+    #[test]
+    fn psp_grid_navigate_down_across_rows() {
+        let mut dash = DashboardState::new(psp_config(), test_apps(12));
+        // Start at position 0 (row 0, col 0).
+        assert_eq!(dash.selected, 0);
+        // Down moves to row 1, col 0 = position 4.
+        dash.handle_input(&Button::Down);
+        assert_eq!(dash.selected, 4);
+        // Down again to row 2, col 0 = position 8.
+        dash.handle_input(&Button::Down);
+        assert_eq!(dash.selected, 8);
+        // Down at bottom row: stays put.
+        dash.handle_input(&Button::Down);
+        assert_eq!(dash.selected, 8);
+    }
+
+    #[test]
+    fn psp_grid_navigate_up_at_top_stays() {
+        let mut dash = DashboardState::new(psp_config(), test_apps(12));
+        dash.selected = 2; // Row 0, col 2.
+        dash.handle_input(&Button::Up);
+        assert_eq!(dash.selected, 2); // Can't go up from row 0.
+    }
+
+    #[test]
+    fn psp_grid_navigate_left_wraps_to_last() {
+        let mut dash = DashboardState::new(psp_config(), test_apps(11));
+        assert_eq!(dash.selected, 0);
+        dash.handle_input(&Button::Left);
+        assert_eq!(dash.selected, 10); // Wraps to last app.
+    }
+
+    #[test]
+    fn psp_grid_full_page_count() {
+        // 11 apps, 12 per page => 1 page.
+        let dash = DashboardState::new(psp_config(), test_apps(11));
+        assert_eq!(dash.page_count(), 1);
+        // 13 apps, 12 per page => 2 pages.
+        let dash = DashboardState::new(psp_config(), test_apps(13));
+        assert_eq!(dash.page_count(), 2);
+        // 24 apps, 12 per page => 2 pages (exact fill).
+        let dash = DashboardState::new(psp_config(), test_apps(24));
+        assert_eq!(dash.page_count(), 2);
+    }
+
+    #[test]
+    fn psp_grid_page_switch_clamps_selected() {
+        let mut dash = DashboardState::new(psp_config(), test_apps(14));
+        // Page 0 has 12 apps, page 1 has 2.
+        dash.selected = 11; // Last on page 0.
+        dash.next_page();
+        // Page 1 has only 2 apps; selected should clamp to 0 or 1.
+        assert!(dash.selected < 2);
+    }
+
+    #[test]
+    fn psp_grid_down_blocked_by_incomplete_row() {
+        // 9 apps in a 4-col grid: rows are [0..3], [4..7], [8].
+        let mut dash = DashboardState::new(psp_config(), test_apps(9));
+        dash.selected = 5; // Row 1, col 1.
+        // Down to row 2: only position 8 exists, and 5+4=9 >= 9 apps, stays.
+        dash.handle_input(&Button::Down);
+        assert_eq!(dash.selected, 5); // Can't go down -- row 2 col 1 doesn't exist.
+    }
+
+    /// PSP uses compact grid: 4 cols, 3 rows, 12 icons per page.
+    /// `DashboardConfig::from_features` with PSP-specific ActiveTheme
+    /// overrides should produce the correct cell geometry.
+    #[test]
+    fn psp_dashboard_config_from_features() {
+        let mut psp_at = crate::active_theme::ActiveTheme::from_base_colors(
+            Color::rgb(0x1A, 0x1A, 0x2D),
+            Color::rgb(0x32, 0x64, 0xC8),
+            Color::rgb(0x50, 0x50, 0x50),
+            Color::WHITE,
+            Color::rgb(0x80, 0x80, 0x80),
+            Color::rgb(0x28, 0x3C, 0x5A),
+            Color::rgb(0x00, 0xFF, 0x00),
+            Color::rgb(0xCC, 0xCC, 0xCC),
+            Color::rgb(0xFF, 0x44, 0x44),
+        )
+        .with_screen_size(480, 272);
+
+        // Simulate PSP overrides from skins.rs::apply_psp_overrides.
+        psp_at.statusbar_height = 18;
+        psp_at.tab_row_height = 0;
+        psp_at.bottombar_height = 32;
+        psp_at.icon_width = 34;
+        psp_at.icon_height = 34;
+        psp_at.grid_padding_x = 8;
+        psp_at.grid_padding_y = 2;
+        psp_at.cursor_pad = 2;
+
+        let mut features = crate::skin::SkinFeatures::default();
+        features.grid_cols = 4;
+        features.grid_rows = 3;
+        features.icons_per_page = 12;
+
+        let config = DashboardConfig::from_features(&features, &psp_at);
+        assert_eq!(config.grid_cols, 4);
+        assert_eq!(config.grid_rows, 3);
+        assert_eq!(config.icons_per_page, 12);
+        // Content area: 272 - 18 (statusbar) - 0 (tab) - 32 (bottom) = 222
+        // Grid height: 222 - 2*2 = 218, cell height: 218 / 3 = 72
+        assert_eq!(config.cell_h, 72);
+        // Grid width: 480 - 2*8 = 464, cell width: 464 / 4 = 116
+        assert_eq!(config.cell_w, 116);
+        assert_eq!(config.cursor_pad, 2);
+    }
 }

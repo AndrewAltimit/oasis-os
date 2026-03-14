@@ -8,8 +8,11 @@
 pub mod animation;
 pub mod desktops;
 mod drag_resize;
+mod focus;
 pub mod hit_test;
+mod lifecycle;
 pub mod manager;
+mod render;
 mod sdi_objects;
 pub mod snap;
 pub mod tiling;

@@ -1,0 +1,12 @@
+boot_text = [
+    "OASIS_OS v2.2 [cyberpunk]",
+    "Neon subsystems: online",
+    "Neural link: established",
+    "Ready.",
+]
+prompt_format = "neon> "
+title = "OASIS Cyberpunk"
+home_label = "NEON"
+welcome_message = "Welcome to the neon grid. Type 'help' for commands."
+error_prefix = "FAULT: "
+shutdown_message = "Signal lost."

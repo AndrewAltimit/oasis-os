@@ -189,27 +189,13 @@ impl Canvas {
 
 /// Alpha-blend `src` over `dst`, with an extra layer opacity.
 pub(crate) fn alpha_blend(src: Color, dst: Color, layer_alpha: u8) -> Color {
-    let sa = (src.a as u32 * layer_alpha as u32) / 255;
-    if sa == 0 {
-        return dst;
-    }
-    if sa == 255 && dst.a == 0 {
-        return Color::rgba(src.r, src.g, src.b, sa as u8);
-    }
-    let da = dst.a as u32;
-    let out_a = sa + da * (255 - sa) / 255;
-    if out_a == 0 {
-        return Color::rgba(0, 0, 0, 0);
-    }
-    let r = (src.r as u32 * sa + dst.r as u32 * da * (255 - sa) / 255) / out_a;
-    let g = (src.g as u32 * sa + dst.g as u32 * da * (255 - sa) / 255) / out_a;
-    let b = (src.b as u32 * sa + dst.b as u32 * da * (255 - sa) / 255) / out_a;
-    Color::rgba(
-        r.min(255) as u8,
-        g.min(255) as u8,
-        b.min(255) as u8,
-        out_a.min(255) as u8,
-    )
+    let effective_src = Color::rgba(
+        src.r,
+        src.g,
+        src.b,
+        (src.a as u32 * layer_alpha as u32 / 255) as u8,
+    );
+    effective_src.alpha_over(dst)
 }
 
 /// Encode pixel data as a 32-bit BMP file (BGRA, bottom-up).

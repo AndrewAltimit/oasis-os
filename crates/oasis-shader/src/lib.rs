@@ -17,7 +17,7 @@ mod shaders;
 pub mod software;
 pub mod uniforms;
 
-pub use uniforms::{ShaderLayerInfo, ShaderParams};
+pub use uniforms::ShaderParams;
 
 #[cfg(feature = "glow")]
 use std::collections::HashMap;

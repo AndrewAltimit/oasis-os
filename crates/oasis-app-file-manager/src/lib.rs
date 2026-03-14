@@ -5,15 +5,20 @@
 
 use std::any::Any;
 
-use crate::active_theme::ActiveTheme;
-use crate::backend::SdiBackend;
-use crate::input::Button;
-use crate::sdi::SdiRegistry;
-use crate::ui::flex;
-use crate::vfs::Vfs;
+use oasis_app_core::render::{
+    draw_content_windowed, hide_app_sdi, render_app_chrome, render_content_sdi,
+};
+use oasis_app_core::{App, AppAction, ContentState};
+use oasis_sdi::SdiRegistry;
+use oasis_skin::ActiveTheme;
+use oasis_types::backend::SdiBackend;
+use oasis_types::input::Button;
+use oasis_ui::flex;
+use oasis_vfs::Vfs;
 
-use super::AppAction;
-use super::app_trait::{App, ContentState};
+pub use oasis_app_core::file_viewer::{
+    join_path, list_directory, parent_dir, view_audio_file, view_generic_file, view_image_file,
+};
 
 // ---------------------------------------------------------------
 // FilePanel: per-panel state for dual-panel browsing
@@ -287,7 +292,7 @@ impl FileManagerApp {
         ch: u32,
         backend: &mut dyn SdiBackend,
         at: &ActiveTheme,
-    ) -> crate::error::Result<()> {
+    ) -> oasis_types::error::Result<()> {
         let half_w = (cw / 2).saturating_sub(1);
         let divider_x = cx + half_w as i32;
 
@@ -564,7 +569,7 @@ impl App for FileManagerApp {
         ch: u32,
         backend: &mut dyn SdiBackend,
         at: &ActiveTheme,
-    ) -> crate::error::Result<()> {
+    ) -> oasis_types::error::Result<()> {
         backend.fill_rect(cx, cy, cw, ch, at.app.bg)?;
 
         if self.content.viewing_file.is_none() {
@@ -601,23 +606,15 @@ impl App for FileManagerApp {
 }
 
 // ---------------------------------------------------------------
-// Generic content rendering helpers (re-exported from oasis-app-core)
+// Tests
 // ---------------------------------------------------------------
-
-pub use oasis_app_core::file_viewer::{
-    join_path, list_directory, parent_dir, view_audio_file, view_generic_file, view_image_file,
-};
-pub use oasis_app_core::render::{
-    draw_content_windowed, hide_app_sdi, render_app_chrome, render_content_sdi,
-};
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::vfs::MemoryVfs;
+    use oasis_vfs::MemoryVfs;
 
     fn setup_vfs() -> MemoryVfs {
-        use crate::vfs::Vfs;
         let mut vfs = MemoryVfs::new();
         vfs.mkdir("/home").unwrap();
         vfs.mkdir("/home/user").unwrap();
