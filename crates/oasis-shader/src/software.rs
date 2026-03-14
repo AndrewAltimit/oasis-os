@@ -628,7 +628,8 @@ impl SoftwareShaderRenderer {
                 let fall = (cell_y + t * col_speed + col_offset) % 40.0;
 
                 let intensity = smoothstep(20.0, 0.0, fall) * smoothstep(-1.0, 0.0, fall);
-                let char_hash = hash2(cell_x + (t * 4.0).floor(), cell_y);
+                let char_hash =
+                    hash2(cell_x + (t * 4.0).floor(), cell_y + (t * 4.0).floor());
                 let intensity = intensity * (0.7 + 0.3 * char_hash);
 
                 let head = smoothstep(1.0, 0.0, fall) * 2.0;
