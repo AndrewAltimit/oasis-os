@@ -66,14 +66,17 @@ jobs:
 
       # -- Formatting -------------------------------------------------------
       - name: Format check
+        timeout-minutes: 5
         run: docker compose --profile ci run --rm rust-ci cargo fmt --all -- --check
 
       # -- Linting -----------------------------------------------------------
       - name: Clippy
+        timeout-minutes: 10
         run: docker compose --profile ci run --rm rust-ci cargo clippy --workspace -- -D warnings
 
       # -- Nightly Warnings Check (advisory) -----------------------------------
       - name: Nightly warnings check
+        timeout-minutes: 10
         continue-on-error: true
         run: >
           docker compose --profile ci run --rm rust-ci
@@ -82,6 +85,7 @@ jobs:
 
       # -- Documentation ------------------------------------------------------
       - name: Doc build
+        timeout-minutes: 10
         run: >
           docker compose --profile ci run --rm
           -e RUSTDOCFLAGS="-D warnings"
@@ -89,6 +93,7 @@ jobs:
 
       # -- Markdown Link Check ------------------------------------------------
       - name: Markdown link check
+        timeout-minutes: 5
         run: |
           set -o pipefail
           FAIL=0
@@ -107,6 +112,7 @@ jobs:
 
       # -- Tests -------------------------------------------------------------
       - name: Test
+        timeout-minutes: 15
         run: |
           set -o pipefail
           docker compose --profile ci run --rm rust-ci \
@@ -114,6 +120,7 @@ jobs:
 
       # -- Build -------------------------------------------------------------
       - name: Build (release)
+        timeout-minutes: 15
         run: docker compose --profile ci run --rm rust-ci cargo build --workspace --release
 
       # -- Screenshot Regression Tests ----------------------------------------
@@ -198,18 +205,7 @@ jobs:
 
       # -- PSP Backend Build -------------------------------------------------
       - name: Setup PSP SDK
-        run: |
-          # rust-std-src is gitignored; recreate symlink for self-hosted runner.
-          if [ ! -e "crates/oasis-backend-psp/rust-std-src" ]; then
-            RUST_PSP_DIR="${RUST_PSP_DIR:-$HOME/Documents/repos/rust-psp}"
-            if [ -d "$RUST_PSP_DIR/rust-std-src" ]; then
-              ln -sf "$RUST_PSP_DIR/rust-std-src" crates/oasis-backend-psp/rust-std-src
-              echo "Linked rust-std-src from $RUST_PSP_DIR"
-            else
-              echo "::error::rust-std-src not found at $RUST_PSP_DIR/rust-std-src"
-              exit 1
-            fi
-          fi
+        uses: ./.github/actions/setup-psp
 
       - name: Build PSP EBOOT
         run: |

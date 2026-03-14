@@ -22,6 +22,8 @@ crate-type = ["cdylib", "rlib"]
 # oasis-browser, oasis-net, oasis-ui, serde, serde_json, toml — all available
 # through oasis-core re-exports and not directly imported in this crate.
 oasis-core = { workspace = true, default-features = false }
+# Shared software rasterization: GlyphCacheKey, SoftwareBuffer
+oasis-rasterize = { workspace = true }
 # Direct imports: oasis_types::{backend, error, input, geometry} in renderer, input, network, audio, video
 oasis-types = { workspace = true }
 # Direct import: oasis_skin::resolve_skin in lib.rs

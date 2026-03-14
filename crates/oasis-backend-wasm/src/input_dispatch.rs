@@ -1,4 +1,16 @@
 //! Input dispatch methods for [`OasisWasm`].
+//!
+//! # Pattern note (D4)
+//!
+//! This module shares a structural pattern with
+//! `oasis-backend-psp/src/input_dispatch/classic.rs`: both dispatch
+//! `InputEvent` variants through a mode/view state machine (Dashboard,
+//! Terminal, app views).  However, the concrete types diverge completely
+//! (PSP takes 20+ arguments with PSP-specific hardware types; WASM uses
+//! `&mut self` on `OasisWasm`), so extracting a shared trait or generic
+//! dispatcher would add abstraction without reducing code.  If a third
+//! backend appears with the same pattern, consider a shared
+//! `InputDispatcher` trait in `oasis-types`.
 
 use oasis_core::apps::{AppAction, AppRunner};
 use oasis_core::bottombar::MediaTab;

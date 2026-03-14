@@ -114,6 +114,43 @@ impl Color {
         )
     }
 
+    /// Pack into ABGR `u32` (alpha in high byte, red in low byte).
+    ///
+    /// This is the native format for the PSP Graphics Engine (GU).
+    pub const fn to_abgr(self) -> u32 {
+        (self.a as u32) << 24 | (self.b as u32) << 16 | (self.g as u32) << 8 | (self.r as u32)
+    }
+
+    /// Decode an ABGR `u32` back to `Color` (inverse of [`Self::to_abgr`]).
+    pub const fn from_abgr(abgr: u32) -> Self {
+        Self {
+            r: abgr as u8,
+            g: (abgr >> 8) as u8,
+            b: (abgr >> 16) as u8,
+            a: (abgr >> 24) as u8,
+        }
+    }
+
+    /// Pack into ARGB `u32` (alpha in high byte, blue in low byte).
+    pub const fn to_argb(self) -> u32 {
+        (self.a as u32) << 24 | (self.r as u32) << 16 | (self.g as u32) << 8 | (self.b as u32)
+    }
+
+    /// Decode an ARGB `u32` back to `Color` (inverse of [`Self::to_argb`]).
+    pub const fn from_argb(argb: u32) -> Self {
+        Self {
+            a: (argb >> 24) as u8,
+            r: (argb >> 16) as u8,
+            g: (argb >> 8) as u8,
+            b: argb as u8,
+        }
+    }
+
+    /// Pack into RGBA `u32` (red in high byte, alpha in low byte).
+    pub const fn to_rgba_u32(self) -> u32 {
+        (self.r as u32) << 24 | (self.g as u32) << 16 | (self.b as u32) << 8 | (self.a as u32)
+    }
+
     pub const BLACK: Self = Self::rgb(0, 0, 0);
     pub const WHITE: Self = Self::rgb(255, 255, 255);
     pub const TRANSPARENT: Self = Self::rgba(0, 0, 0, 0);
@@ -415,4 +452,71 @@ pub fn validate_rgba_data(width: u32, height: u32, rgba_data: &[u8]) -> Result<(
         ));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn to_abgr_pure_red() {
+        let c = Color::rgba(255, 0, 0, 255);
+        assert_eq!(c.to_abgr(), 0xFF00_00FF);
+    }
+
+    #[test]
+    fn to_abgr_pure_green() {
+        let c = Color::rgba(0, 255, 0, 255);
+        assert_eq!(c.to_abgr(), 0xFF00_FF00);
+    }
+
+    #[test]
+    fn to_abgr_pure_blue() {
+        let c = Color::rgba(0, 0, 255, 255);
+        assert_eq!(c.to_abgr(), 0xFFFF_0000);
+    }
+
+    #[test]
+    fn to_abgr_transparent() {
+        let c = Color::rgba(0, 0, 0, 0);
+        assert_eq!(c.to_abgr(), 0x0000_0000);
+    }
+
+    #[test]
+    fn abgr_roundtrip() {
+        let original = Color::rgba(0x12, 0x34, 0x56, 0x78);
+        assert_eq!(Color::from_abgr(original.to_abgr()), original);
+    }
+
+    #[test]
+    fn to_argb_pure_red() {
+        let c = Color::rgba(255, 0, 0, 255);
+        assert_eq!(c.to_argb(), 0xFFFF_0000);
+    }
+
+    #[test]
+    fn argb_roundtrip() {
+        let original = Color::rgba(0x12, 0x34, 0x56, 0x78);
+        assert_eq!(Color::from_argb(original.to_argb()), original);
+    }
+
+    #[test]
+    fn to_rgba_u32_pure_red() {
+        let c = Color::rgba(255, 0, 0, 255);
+        assert_eq!(c.to_rgba_u32(), 0xFF00_00FF);
+    }
+
+    #[test]
+    fn all_formats_roundtrip_black() {
+        let c = Color::BLACK;
+        assert_eq!(Color::from_abgr(c.to_abgr()), c);
+        assert_eq!(Color::from_argb(c.to_argb()), c);
+    }
+
+    #[test]
+    fn all_formats_roundtrip_white() {
+        let c = Color::WHITE;
+        assert_eq!(Color::from_abgr(c.to_abgr()), c);
+        assert_eq!(Color::from_argb(c.to_argb()), c);
+    }
 }

@@ -34,7 +34,7 @@ jobs:
     name: AddressSanitizer
     runs-on: self-hosted
     timeout-minutes: 45
-    continue-on-error: true
+    continue-on-error: ${{ github.event_name == 'pull_request' }}
     steps:
       - name: Fix workspace permissions
         run: |
@@ -115,7 +115,7 @@ jobs:
     name: Valgrind Massif (Heap Profile)
     runs-on: self-hosted
     timeout-minutes: 30
-    continue-on-error: true
+    continue-on-error: ${{ github.event_name == 'pull_request' }}
     steps:
       - name: Fix workspace permissions
         run: |

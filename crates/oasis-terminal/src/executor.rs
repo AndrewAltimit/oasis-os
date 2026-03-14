@@ -92,9 +92,10 @@ impl CommandRegistry {
         if all_outputs.is_empty() {
             Ok(CommandOutput::None)
         } else if all_outputs.len() == 1 {
-            // Length is 1 so `next()` is guaranteed `Some`.
-            #[allow(clippy::unwrap_used)]
-            Ok(all_outputs.into_iter().next().unwrap())
+            Ok(all_outputs
+                .into_iter()
+                .next()
+                .unwrap_or(CommandOutput::None))
         } else {
             // Merge consecutive Text entries to reduce Multi size.
             let mut merged: Vec<CommandOutput> = Vec::new();
@@ -109,9 +110,7 @@ impl CommandRegistry {
                 merged.push(output);
             }
             if merged.len() == 1 {
-                // Length is 1 so `next()` is guaranteed `Some`.
-                #[allow(clippy::unwrap_used)]
-                Ok(merged.into_iter().next().unwrap())
+                Ok(merged.into_iter().next().unwrap_or(CommandOutput::None))
             } else {
                 Ok(CommandOutput::Multi(merged))
             }

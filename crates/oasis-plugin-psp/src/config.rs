@@ -284,3 +284,366 @@ fn parse_u8(s: &[u8]) -> Option<u8> {
     }
     Some(result as u8)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // -----------------------------------------------------------------------
+    // trim_bytes
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn trim_bytes_no_whitespace() {
+        assert_eq!(trim_bytes(b"hello"), b"hello");
+    }
+
+    #[test]
+    fn trim_bytes_leading() {
+        assert_eq!(trim_bytes(b"  hello"), b"hello");
+    }
+
+    #[test]
+    fn trim_bytes_trailing() {
+        assert_eq!(trim_bytes(b"hello  "), b"hello");
+    }
+
+    #[test]
+    fn trim_bytes_both() {
+        assert_eq!(trim_bytes(b"  hello  "), b"hello");
+    }
+
+    #[test]
+    fn trim_bytes_only_whitespace() {
+        assert_eq!(trim_bytes(b"   "), b"");
+    }
+
+    #[test]
+    fn trim_bytes_empty() {
+        assert_eq!(trim_bytes(b""), b"");
+    }
+
+    #[test]
+    fn trim_bytes_tabs_and_newlines() {
+        assert_eq!(trim_bytes(b"\t hello \n"), b"hello");
+    }
+
+    // -----------------------------------------------------------------------
+    // bytes_eq_ci
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn bytes_eq_ci_same() {
+        assert!(bytes_eq_ci(b"trigger", b"trigger"));
+    }
+
+    #[test]
+    fn bytes_eq_ci_mixed_case() {
+        assert!(bytes_eq_ci(b"Trigger", b"trigger"));
+        assert!(bytes_eq_ci(b"TRIGGER", b"trigger"));
+        assert!(bytes_eq_ci(b"tRiGgEr", b"TrIgGeR"));
+    }
+
+    #[test]
+    fn bytes_eq_ci_different_lengths() {
+        assert!(!bytes_eq_ci(b"trigger", b"trigg"));
+        assert!(!bytes_eq_ci(b"tri", b"trigger"));
+    }
+
+    #[test]
+    fn bytes_eq_ci_different_content() {
+        assert!(!bytes_eq_ci(b"trigger", b"opacity"));
+    }
+
+    #[test]
+    fn bytes_eq_ci_empty() {
+        assert!(bytes_eq_ci(b"", b""));
+    }
+
+    // -----------------------------------------------------------------------
+    // parse_u8
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn parse_u8_zero() {
+        assert_eq!(parse_u8(b"0"), Some(0));
+    }
+
+    #[test]
+    fn parse_u8_typical() {
+        assert_eq!(parse_u8(b"180"), Some(180));
+    }
+
+    #[test]
+    fn parse_u8_max() {
+        assert_eq!(parse_u8(b"255"), Some(255));
+    }
+
+    #[test]
+    fn parse_u8_overflow() {
+        assert_eq!(parse_u8(b"256"), None);
+        assert_eq!(parse_u8(b"999"), None);
+    }
+
+    #[test]
+    fn parse_u8_non_digit() {
+        assert_eq!(parse_u8(b"12a"), None);
+        assert_eq!(parse_u8(b"abc"), None);
+    }
+
+    #[test]
+    fn parse_u8_empty() {
+        assert_eq!(parse_u8(b""), None);
+    }
+
+    #[test]
+    fn parse_u8_leading_zeros() {
+        assert_eq!(parse_u8(b"007"), Some(7));
+        assert_eq!(parse_u8(b"00"), Some(0));
+    }
+
+    // -----------------------------------------------------------------------
+    // PluginConfig defaults
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn config_default_values() {
+        let cfg = PluginConfig::default();
+        assert_eq!(cfg.trigger, TriggerButton::Note);
+        assert_eq!(cfg.opacity, 180);
+        assert!(!cfg.autoplay);
+        assert_eq!(cfg.radio_station, 0);
+        assert!(!cfg.radio_mode);
+        assert!(!cfg.pip_enabled);
+        assert_eq!(cfg.music_dir_len, 11);
+        assert_eq!(&cfg.music_dir[..11], b"ms0:/MUSIC/");
+        assert_eq!(cfg.video_dir_len, 11);
+        assert_eq!(&cfg.video_dir[..11], b"ms0:/VIDEO/");
+    }
+
+    #[test]
+    fn config_music_dir_str() {
+        let cfg = PluginConfig::default();
+        // music_dir_str returns len+1 bytes (includes null terminator)
+        let s = cfg.music_dir_str();
+        assert_eq!(s.len(), 12);
+        assert_eq!(&s[..11], b"ms0:/MUSIC/");
+        assert_eq!(s[11], 0);
+    }
+
+    #[test]
+    fn config_video_dir_str() {
+        let cfg = PluginConfig::default();
+        let s = cfg.video_dir_str();
+        assert_eq!(s.len(), 12);
+        assert_eq!(&s[..11], b"ms0:/VIDEO/");
+        assert_eq!(s[11], 0);
+    }
+
+    #[test]
+    fn config_trigger_mask_note() {
+        let cfg = PluginConfig::default();
+        assert_eq!(cfg.trigger_mask(), 0x00800000);
+    }
+
+    #[test]
+    fn config_trigger_mask_screen() {
+        let mut cfg = PluginConfig::default();
+        cfg.trigger = TriggerButton::Screen;
+        assert_eq!(cfg.trigger_mask(), 0x00400000);
+    }
+
+    // -----------------------------------------------------------------------
+    // parse_config
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn parse_config_trigger_note() {
+        let mut cfg = PluginConfig::default();
+        parse_config(b"trigger = note\n", &mut cfg);
+        assert_eq!(cfg.trigger, TriggerButton::Note);
+    }
+
+    #[test]
+    fn parse_config_trigger_screen() {
+        let mut cfg = PluginConfig::default();
+        parse_config(b"trigger = screen\n", &mut cfg);
+        assert_eq!(cfg.trigger, TriggerButton::Screen);
+    }
+
+    #[test]
+    fn parse_config_trigger_case_insensitive() {
+        let mut cfg = PluginConfig::default();
+        parse_config(b"TRIGGER = SCREEN\n", &mut cfg);
+        assert_eq!(cfg.trigger, TriggerButton::Screen);
+    }
+
+    #[test]
+    fn parse_config_opacity() {
+        let mut cfg = PluginConfig::default();
+        parse_config(b"opacity = 200\n", &mut cfg);
+        assert_eq!(cfg.opacity, 200);
+    }
+
+    #[test]
+    fn parse_config_opacity_invalid() {
+        let mut cfg = PluginConfig::default();
+        parse_config(b"opacity = abc\n", &mut cfg);
+        // Should keep default
+        assert_eq!(cfg.opacity, 180);
+    }
+
+    #[test]
+    fn parse_config_autoplay_true() {
+        let mut cfg = PluginConfig::default();
+        parse_config(b"autoplay = true\n", &mut cfg);
+        assert!(cfg.autoplay);
+    }
+
+    #[test]
+    fn parse_config_autoplay_yes() {
+        let mut cfg = PluginConfig::default();
+        parse_config(b"autoplay = yes\n", &mut cfg);
+        assert!(cfg.autoplay);
+    }
+
+    #[test]
+    fn parse_config_autoplay_one() {
+        let mut cfg = PluginConfig::default();
+        parse_config(b"autoplay = 1\n", &mut cfg);
+        assert!(cfg.autoplay);
+    }
+
+    #[test]
+    fn parse_config_autoplay_false() {
+        let mut cfg = PluginConfig::default();
+        parse_config(b"autoplay = false\n", &mut cfg);
+        assert!(!cfg.autoplay);
+    }
+
+    #[test]
+    fn parse_config_music_dir() {
+        let mut cfg = PluginConfig::default();
+        parse_config(b"music_dir = ms0:/MP3/\n", &mut cfg);
+        assert_eq!(cfg.music_dir_len, 10);
+        assert_eq!(&cfg.music_dir[..10], b"ms0:/MP3/\0"[..10].as_ref());
+    }
+
+    #[test]
+    fn parse_config_video_dir() {
+        let mut cfg = PluginConfig::default();
+        parse_config(b"video_dir = ms0:/MOVIES/\n", &mut cfg);
+        assert_eq!(cfg.video_dir_len, 12);
+        assert_eq!(&cfg.video_dir[..12], b"ms0:/MOVIES/");
+    }
+
+    #[test]
+    fn parse_config_radio_station() {
+        let mut cfg = PluginConfig::default();
+        parse_config(b"radio_station = 5\n", &mut cfg);
+        assert_eq!(cfg.radio_station, 5);
+    }
+
+    #[test]
+    fn parse_config_radio_station_out_of_range() {
+        let mut cfg = PluginConfig::default();
+        parse_config(b"radio_station = 8\n", &mut cfg);
+        // Should keep default (0) because 8 >= 8
+        assert_eq!(cfg.radio_station, 0);
+    }
+
+    #[test]
+    fn parse_config_radio_mode() {
+        let mut cfg = PluginConfig::default();
+        parse_config(b"radio_mode = true\n", &mut cfg);
+        assert!(cfg.radio_mode);
+    }
+
+    #[test]
+    fn parse_config_pip_enabled() {
+        let mut cfg = PluginConfig::default();
+        parse_config(b"pip_enabled = yes\n", &mut cfg);
+        assert!(cfg.pip_enabled);
+    }
+
+    #[test]
+    fn parse_config_comments_skipped() {
+        let mut cfg = PluginConfig::default();
+        parse_config(b"# this is a comment\nopacity = 42\n", &mut cfg);
+        assert_eq!(cfg.opacity, 42);
+    }
+
+    #[test]
+    fn parse_config_empty_lines_skipped() {
+        let mut cfg = PluginConfig::default();
+        parse_config(b"\n\nopacity = 99\n\n", &mut cfg);
+        assert_eq!(cfg.opacity, 99);
+    }
+
+    #[test]
+    fn parse_config_crlf_line_endings() {
+        let mut cfg = PluginConfig::default();
+        parse_config(b"opacity = 50\r\nautoplay = true\r\n", &mut cfg);
+        assert_eq!(cfg.opacity, 50);
+        assert!(cfg.autoplay);
+    }
+
+    #[test]
+    fn parse_config_multiple_options() {
+        let mut cfg = PluginConfig::default();
+        let ini = b"trigger = screen\nopacity = 100\nautoplay = true\n\
+                     radio_station = 3\nradio_mode = yes\npip_enabled = 1\n";
+        parse_config(ini, &mut cfg);
+        assert_eq!(cfg.trigger, TriggerButton::Screen);
+        assert_eq!(cfg.opacity, 100);
+        assert!(cfg.autoplay);
+        assert_eq!(cfg.radio_station, 3);
+        assert!(cfg.radio_mode);
+        assert!(cfg.pip_enabled);
+    }
+
+    #[test]
+    fn parse_config_whitespace_around_equals() {
+        let mut cfg = PluginConfig::default();
+        parse_config(b"  opacity  =  42  \n", &mut cfg);
+        assert_eq!(cfg.opacity, 42);
+    }
+
+    #[test]
+    fn parse_config_unknown_key_ignored() {
+        let mut cfg = PluginConfig::default();
+        parse_config(b"unknown_key = whatever\nopacity = 77\n", &mut cfg);
+        assert_eq!(cfg.opacity, 77);
+    }
+
+    #[test]
+    fn parse_config_no_equals_sign() {
+        let mut cfg = PluginConfig::default();
+        // Line without '=' should be silently ignored
+        parse_config(b"this has no equals\nopacity = 33\n", &mut cfg);
+        assert_eq!(cfg.opacity, 33);
+    }
+
+    #[test]
+    fn parse_config_empty_input() {
+        let mut cfg = PluginConfig::default();
+        parse_config(b"", &mut cfg);
+        // All defaults preserved
+        assert_eq!(cfg.opacity, 180);
+        assert_eq!(cfg.trigger, TriggerButton::Note);
+    }
+
+    #[test]
+    fn parse_config_music_dir_long_truncated() {
+        let mut cfg = PluginConfig::default();
+        // Create a path longer than MAX_PATH - 1 (63 chars)
+        let mut long_ini = b"music_dir = ".to_vec();
+        for _ in 0..70 {
+            long_ini.push(b'x');
+        }
+        long_ini.push(b'\n');
+        parse_config(&long_ini, &mut cfg);
+        // Should be truncated to MAX_PATH - 1 = 63
+        assert_eq!(cfg.music_dir_len, 63);
+    }
+}

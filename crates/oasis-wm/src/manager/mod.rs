@@ -10,10 +10,14 @@
 //! - `render.rs` — Drawing with clip rects
 //! - `sdi_objects.rs` — SDI object create/destroy/update
 //! - `drag_resize.rs` — Drag/resize state machine
+//! - `input.rs` — Input dispatch
+//! - `query.rs` — Query/lookup methods and accessors
+
+mod input;
+mod query;
 
 use oasis_sdi::SdiRegistry;
 use oasis_types::error::{OasisError, Result, WmError};
-use oasis_types::input::InputEvent;
 
 use super::drag_resize::{DragState, clamp_position};
 use super::hit_test::ButtonKind;
@@ -97,55 +101,6 @@ impl WindowManager {
         }
     }
 
-    /// Get a reference to the current theme.
-    pub fn theme(&self) -> &WmTheme {
-        &self.theme
-    }
-
-    /// Replace the visual theme at runtime.
-    pub fn set_theme(&mut self, theme: WmTheme) {
-        self.theme = theme;
-    }
-
-    /// Get the number of open windows.
-    pub fn window_count(&self) -> usize {
-        self.windows.len()
-    }
-
-    /// Iterate over all windows in z-order (last = topmost).
-    pub fn windows(&self) -> &[Window] {
-        &self.windows
-    }
-
-    /// Returns `true` if any open window has `modal == true`.
-    pub fn has_modal(&self) -> bool {
-        self.windows.iter().any(|w| w.modal)
-    }
-
-    /// Returns the id of the topmost modal window, if any.
-    pub fn topmost_modal(&self) -> Option<&str> {
-        self.windows
-            .iter()
-            .rev()
-            .find(|w| w.modal)
-            .map(|w| w.id.as_str())
-    }
-
-    /// Get the active (focused) window id.
-    pub fn active_window(&self) -> Option<&str> {
-        self.active_window.as_deref()
-    }
-
-    /// Get a reference to a window by id.
-    pub fn get_window(&self, id: &str) -> Option<&Window> {
-        self.windows.iter().find(|w| w.id == id)
-    }
-
-    /// Returns `true` if any window is currently in fullscreen kiosk mode.
-    pub fn has_fullscreen_kiosk(&self) -> bool {
-        self.windows.iter().any(|w| w.fullscreen_kiosk)
-    }
-
     // -- Geometry methods --
 
     /// Move a window by a delta. Updates all SDI object positions.
@@ -202,18 +157,6 @@ impl WindowManager {
         self.update_sdi_positions(id, sdi);
 
         Ok(())
-    }
-
-    // -- Input dispatch --
-
-    /// Process an input event through the WM. Returns what happened.
-    pub fn handle_input(&mut self, event: &InputEvent, sdi: &mut SdiRegistry) -> WmEvent {
-        match event {
-            InputEvent::PointerClick { x, y } => self.handle_click(*x, *y, sdi),
-            InputEvent::CursorMove { x, y } => self.handle_cursor_move(*x, *y, sdi),
-            InputEvent::PointerRelease { .. } => self.handle_release(),
-            _ => WmEvent::None,
-        }
     }
 }
 

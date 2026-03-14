@@ -336,6 +336,236 @@ pub(super) static mut VIDEO_MP3_PATH: [u8; 128] = [0u8; 128];
 /// Whether PIP video audio is active (video module sets, audio thread reads).
 pub(super) static VIDEO_MP3_ACTIVE: AtomicBool = AtomicBool::new(false);
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // -----------------------------------------------------------------------
+    // IcyDemuxer -- pure audio data passthrough (no metadata)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn icy_demuxer_audio_only_no_meta() {
+        let mut demux = IcyDemuxer::new(100);
+        let data = [0xAAu8; 50];
+        let mut out = [0u8; 100];
+        let (written, meta) = demux.process(&data, &mut out);
+        assert_eq!(written, 50);
+        assert!(!meta);
+        assert!(out[..50].iter().all(|&b| b == 0xAA));
+    }
+
+    #[test]
+    fn icy_demuxer_exact_metaint_boundary() {
+        // When exactly metaint bytes of audio are received, next byte
+        // is the metadata length byte.
+        let metaint = 16;
+        let mut demux = IcyDemuxer::new(metaint);
+        let mut data = vec![0xBBu8; metaint];
+        // Metadata length byte = 0 means no metadata follows
+        data.push(0x00);
+        // Then more audio
+        data.extend_from_slice(&[0xCC; 8]);
+
+        let mut out = [0u8; 64];
+        let (written, meta) = demux.process(&data, &mut out);
+        assert_eq!(written, metaint + 8);
+        assert!(!meta);
+        assert!(out[..metaint].iter().all(|&b| b == 0xBB));
+        assert!(out[metaint..metaint + 8].iter().all(|&b| b == 0xCC));
+    }
+
+    #[test]
+    fn icy_demuxer_with_metadata_block() {
+        let metaint = 8;
+        let mut demux = IcyDemuxer::new(metaint);
+
+        // 8 bytes audio + meta_len_byte(1 = 16 bytes) + 16 bytes meta
+        let mut data = vec![0xAAu8; 8];
+        data.push(1); // metadata length = 1 * 16 = 16 bytes
+        let meta_content = b"StreamTitle='Test Artist - Test Song';";
+        // Pad to 16 bytes
+        let mut meta_block = [0u8; 16];
+        let copy_len = meta_content.len().min(16);
+        meta_block[..copy_len].copy_from_slice(&meta_content[..copy_len]);
+        data.extend_from_slice(&meta_block);
+        // More audio after metadata
+        data.extend_from_slice(&[0xBB; 4]);
+
+        let mut out = [0u8; 64];
+        let (written, meta_updated) = demux.process(&data, &mut out);
+        assert_eq!(written, 12); // 8 + 4
+        assert!(meta_updated);
+        assert!(out[..8].iter().all(|&b| b == 0xAA));
+        assert!(out[8..12].iter().all(|&b| b == 0xBB));
+    }
+
+    #[test]
+    fn icy_demuxer_zero_length_metadata() {
+        let metaint = 4;
+        let mut demux = IcyDemuxer::new(metaint);
+
+        // 4 bytes audio + meta_len=0 (no metadata) + 4 more audio
+        let mut data = vec![0xAA; 4];
+        data.push(0); // zero-length metadata
+        data.extend_from_slice(&[0xBB; 4]);
+
+        let mut out = [0u8; 32];
+        let (written, meta) = demux.process(&data, &mut out);
+        assert_eq!(written, 8);
+        assert!(!meta);
+    }
+
+    #[test]
+    fn icy_demuxer_split_across_calls() {
+        // Process data in multiple calls to test state persistence
+        let metaint = 4;
+        let mut demux = IcyDemuxer::new(metaint);
+
+        // First call: 2 bytes (partial audio block)
+        let mut out = [0u8; 32];
+        let (w1, _) = demux.process(&[0xAA; 2], &mut out);
+        assert_eq!(w1, 2);
+
+        // Second call: 2 more bytes (completes audio block)
+        // + meta_len=0 + 2 more audio
+        let mut data2 = vec![0xAA; 2];
+        data2.push(0); // zero meta
+        data2.extend_from_slice(&[0xBB; 2]);
+        let (w2, _) = demux.process(&data2, &mut out);
+        assert_eq!(w2, 4); // 2 audio + 2 audio after meta
+    }
+
+    #[test]
+    fn icy_demuxer_output_buffer_smaller_than_input() {
+        let metaint = 100;
+        let mut demux = IcyDemuxer::new(metaint);
+        let data = [0xAA; 50];
+        let mut out = [0u8; 10]; // Much smaller output buffer
+        let (written, _) = demux.process(&data, &mut out);
+        // Only 10 bytes fit in output
+        assert_eq!(written, 10);
+    }
+
+    // -----------------------------------------------------------------------
+    // extract_stream_title
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn extract_stream_title_basic() {
+        let meta = b"StreamTitle='Hello World';StreamUrl='';";
+        extract_stream_title(meta);
+        // SAFETY: Test reads RADIO_META after extract_stream_title wrote it.
+        let title = unsafe { &(*(&raw const RADIO_META))[..11] };
+        assert_eq!(title, b"Hello World");
+    }
+
+    #[test]
+    fn extract_stream_title_empty() {
+        // Clear from previous test
+        unsafe {
+            (*(&raw mut RADIO_META)) = [0u8; 48];
+        }
+        let meta = b"StreamTitle='';";
+        extract_stream_title(meta);
+        // Title is empty -- buffer should be all zeros
+        let title = unsafe { &(*(&raw const RADIO_META))[..] };
+        assert!(title.iter().all(|&b| b == 0));
+    }
+
+    #[test]
+    fn extract_stream_title_no_match() {
+        // Set a known value first
+        unsafe {
+            (*(&raw mut RADIO_META))[0] = b'X';
+        }
+        let meta = b"SomeOtherField='value';";
+        extract_stream_title(meta);
+        // Should not have changed RADIO_META (no StreamTitle found)
+        let first = unsafe { (*(&raw const RADIO_META))[0] };
+        assert_eq!(first, b'X');
+    }
+
+    #[test]
+    fn extract_stream_title_truncation() {
+        // Title longer than 47 chars should be truncated
+        let mut meta = b"StreamTitle='".to_vec();
+        for _ in 0..60 {
+            meta.push(b'A');
+        }
+        meta.extend_from_slice(b"';");
+        extract_stream_title(&meta);
+        // RADIO_META is 48 bytes, max title is 47
+        let title = unsafe { &(*(&raw const RADIO_META))[..] };
+        // First 47 should be 'A'
+        assert!(title[..47].iter().all(|&b| b == b'A'));
+        // Byte 47 should be null terminator
+        assert_eq!(title[47], 0);
+    }
+
+    // -----------------------------------------------------------------------
+    // Constants
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn radio_stations_count() {
+        assert_eq!(RADIO_STATIONS.len(), 8);
+    }
+
+    #[test]
+    fn radio_stations_all_have_null_terminated_host() {
+        for station in &RADIO_STATIONS {
+            assert!(
+                station.host.last() == Some(&0),
+                "Station {:?} host not null-terminated",
+                core::str::from_utf8(station.name)
+            );
+        }
+    }
+
+    #[test]
+    fn radio_stations_all_have_null_terminated_path() {
+        for station in &RADIO_STATIONS {
+            assert!(
+                station.path.last() == Some(&0),
+                "Station {:?} path not null-terminated",
+                core::str::from_utf8(station.name)
+            );
+        }
+    }
+
+    #[test]
+    fn radio_stations_all_port_80() {
+        // All SomaFM stations use port 80
+        for station in &RADIO_STATIONS {
+            assert_eq!(station.port, 80);
+        }
+    }
+
+    #[test]
+    fn codec_buffer_sizes() {
+        // MP3_SAMPLES_PER_FRAME * 4 channels * 4 frames = PCM_BUF_SIZE
+        assert_eq!(PCM_BUF_SIZE, 1152 * 4 * 4);
+        assert_eq!(CODEC_BUF_WORDS, 65);
+        assert_eq!(CODEC_WORK_SIZE, 16 * 1024);
+        assert_eq!(READ_BUF_SIZE, 64 * 1024);
+    }
+
+    #[test]
+    fn umem_size_covers_all_buffers() {
+        let expected = 64 + (CODEC_BUF_WORDS * 4) + (1152 * 2 * 2)
+            + CODEC_WORK_SIZE + READ_BUF_SIZE;
+        assert_eq!(UMEM_CODEC_SIZE, expected);
+    }
+
+    #[test]
+    fn max_playlist_and_filename() {
+        assert_eq!(MAX_PLAYLIST, 32);
+        assert_eq!(MAX_FILENAME, 128);
+        assert_eq!(MAX_SCAN_DEPTH, 4);
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Playlist scanning
 // ---------------------------------------------------------------------------

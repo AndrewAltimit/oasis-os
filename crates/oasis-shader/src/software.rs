@@ -58,6 +58,9 @@ impl SoftwareShaderRenderer {
             "city_lights" => self.render_city_lights(time, params),
             "ocean_waves" => self.render_ocean_waves(time, params),
             "calm_waves" => self.render_calm_waves(time, params),
+            "starfield" => self.render_starfield(time, params),
+            "plasma" => self.render_plasma(time, params),
+            "matrix_rain" => self.render_matrix_rain(time, params),
             _ => self.render_balatro(time, params),
         }
     }
@@ -441,6 +444,211 @@ impl SoftwareShaderRenderer {
         self.upscale(iw, ih)
     }
 
+    /// Starfield with twinkling multi-layer stars.
+    fn render_starfield(&mut self, time: f32, params: &ShaderParams) -> &[u8] {
+        let speed = *params.floats.get("speed").unwrap_or(&1.0);
+        let t = time * speed;
+        let star_col = params
+            .colors
+            .first()
+            .copied()
+            .unwrap_or([1.0, 1.0, 1.0, 1.0]);
+        let bg_col = params
+            .colors
+            .get(1)
+            .copied()
+            .unwrap_or([0.0, 0.0, 0.05, 1.0]);
+
+        let w = self.width as f32;
+        let h = self.height as f32;
+        let (iw, ih, scale_f) = self.lo_dims();
+        self.lo_buf.resize((iw * ih) as usize, [0u8; 4]);
+
+        for iy in 0..ih {
+            for ix in 0..iw {
+                let (ox, oy) = lo_to_out(ix, iy, scale_f);
+                let uv_x = (ox - 0.5 * w) / h;
+                let uv_y = (oy - 0.5 * h) / h;
+
+                let mut r = bg_col[0];
+                let mut g = bg_col[1];
+                let mut b = bg_col[2];
+
+                for layer in 0..4 {
+                    let depth = 1.0 + layer as f32 * 0.5;
+                    let scale = 20.0 * depth;
+                    let fade = 1.0 / depth;
+
+                    let st_x = uv_x * scale + t * 0.1 * depth;
+                    let st_y = uv_y * scale + t * 0.05;
+                    let cell_x = st_x.floor();
+                    let cell_y = st_y.floor();
+                    let f_x = st_x - cell_x - 0.5;
+                    let f_y = st_y - cell_y - 0.5;
+
+                    let layer_off = layer as f32 * 100.0;
+                    let h_val = hash2(cell_x + layer_off, cell_y + layer_off);
+                    let ox_off = h_val - 0.5;
+                    let oy_off = hash2(cell_x + 0.5, cell_y + 0.5) - 0.5;
+                    let dx = f_x - ox_off * 0.6;
+                    let dy = f_y - oy_off * 0.6;
+                    let d = (dx * dx + dy * dy).sqrt();
+
+                    let twinkle = 0.5 + 0.5 * (t * 3.0 + h_val * std::f32::consts::TAU).sin();
+                    let brightness = smoothstep(0.05, 0.0, d) * twinkle * fade * h_val;
+
+                    r += star_col[0] * brightness;
+                    g += star_col[1] * brightness;
+                    b += star_col[2] * brightness;
+                }
+
+                self.lo_buf[(iy * iw + ix) as usize] = [
+                    (r.clamp(0.0, 1.0) * 255.0) as u8,
+                    (g.clamp(0.0, 1.0) * 255.0) as u8,
+                    (b.clamp(0.0, 1.0) * 255.0) as u8,
+                    255,
+                ];
+            }
+        }
+
+        self.upscale(iw, ih)
+    }
+
+    /// Classic plasma effect with overlapping sine waves.
+    fn render_plasma(&mut self, time: f32, params: &ShaderParams) -> &[u8] {
+        let speed = *params.floats.get("speed").unwrap_or(&1.0);
+        let t = time * speed;
+        let c1 = params
+            .colors
+            .first()
+            .copied()
+            .unwrap_or([1.0, 0.0, 0.5, 1.0]);
+        let c2 = params
+            .colors
+            .get(1)
+            .copied()
+            .unwrap_or([0.0, 0.8, 1.0, 1.0]);
+        let c3 = params
+            .colors
+            .get(2)
+            .copied()
+            .unwrap_or([1.0, 0.9, 0.0, 1.0]);
+
+        let w = self.width as f32;
+        let h = self.height as f32;
+        let (iw, ih, scale_f) = self.lo_dims();
+        self.lo_buf.resize((iw * ih) as usize, [0u8; 4]);
+
+        for iy in 0..ih {
+            for ix in 0..iw {
+                let (ox, oy) = lo_to_out(ix, iy, scale_f);
+                let uv_x = ox / w;
+                let uv_y = oy / h;
+
+                let v1 = (uv_x * 10.0 + t).sin();
+                let v2 = (10.0 * (uv_x * (t * 0.5).sin() + uv_y * (t * 0.3).cos()) + t).sin();
+                let dx1 = uv_x - 0.5;
+                let dy1 = uv_y - 0.5;
+                let v3 = (((dx1 * dx1 + dy1 * dy1) * 100.0 + 1.0).sqrt() + t).sin();
+                let dx2 = uv_x - 0.3;
+                let dy2 = uv_y - 0.7;
+                let v4 = (((dx2 * dx2 + dy2 * dy2) * 100.0 + 1.0).sqrt() + t * 0.7).sin();
+
+                let v = (v1 + v2 + v3 + v4) * 0.25;
+                let val = v * 0.5 + 0.5;
+
+                let (r, g, b) = if val < 0.33 {
+                    let f = val * 3.0;
+                    (
+                        lerp(c1[0], c2[0], f),
+                        lerp(c1[1], c2[1], f),
+                        lerp(c1[2], c2[2], f),
+                    )
+                } else if val < 0.66 {
+                    let f = (val - 0.33) * 3.0;
+                    (
+                        lerp(c2[0], c3[0], f),
+                        lerp(c2[1], c3[1], f),
+                        lerp(c2[2], c3[2], f),
+                    )
+                } else {
+                    let f = (val - 0.66) * 3.0;
+                    (
+                        lerp(c3[0], c1[0], f),
+                        lerp(c3[1], c1[1], f),
+                        lerp(c3[2], c1[2], f),
+                    )
+                };
+
+                self.lo_buf[(iy * iw + ix) as usize] = [
+                    (r.clamp(0.0, 1.0) * 255.0) as u8,
+                    (g.clamp(0.0, 1.0) * 255.0) as u8,
+                    (b.clamp(0.0, 1.0) * 255.0) as u8,
+                    255,
+                ];
+            }
+        }
+
+        self.upscale(iw, ih)
+    }
+
+    /// Matrix digital rain effect.
+    fn render_matrix_rain(&mut self, time: f32, params: &ShaderParams) -> &[u8] {
+        let speed = *params.floats.get("speed").unwrap_or(&1.0);
+        let t = time * speed;
+        let rain_col = params
+            .colors
+            .first()
+            .copied()
+            .unwrap_or([0.0, 1.0, 0.3, 1.0]);
+        let bg_col = params
+            .colors
+            .get(1)
+            .copied()
+            .unwrap_or([0.0, 0.02, 0.0, 1.0]);
+
+        let w = self.width as f32;
+        let columns = 40.0;
+        let cell_w = w / columns;
+        let cell_h = cell_w * 1.2;
+
+        let (iw, ih, scale_f) = self.lo_dims();
+        self.lo_buf.resize((iw * ih) as usize, [0u8; 4]);
+
+        for iy in 0..ih {
+            for ix in 0..iw {
+                let (ox, oy) = lo_to_out(ix, iy, scale_f);
+                let cell_x = (ox / cell_w).floor();
+                let cell_y = (oy / cell_h).floor();
+
+                let col_hash = hash2(cell_x, 0.0);
+                let col_speed = 1.0 + col_hash * 3.0;
+                let col_offset = col_hash * 100.0;
+
+                let fall = (cell_y + t * col_speed + col_offset) % 40.0;
+
+                let intensity = smoothstep(20.0, 0.0, fall) * smoothstep(-1.0, 0.0, fall);
+                let char_hash = hash2(cell_x + (t * 4.0).floor(), cell_y + (t * 4.0).floor());
+                let intensity = intensity * (0.7 + 0.3 * char_hash);
+
+                let head = smoothstep(1.0, 0.0, fall) * 2.0;
+
+                let r = bg_col[0] + rain_col[0] * intensity + head * 0.5;
+                let g = bg_col[1] + rain_col[1] * intensity + head * 0.5;
+                let b = bg_col[2] + rain_col[2] * intensity + head * 0.5;
+
+                self.lo_buf[(iy * iw + ix) as usize] = [
+                    (r.clamp(0.0, 1.0) * 255.0) as u8,
+                    (g.clamp(0.0, 1.0) * 255.0) as u8,
+                    (b.clamp(0.0, 1.0) * 255.0) as u8,
+                    255,
+                ];
+            }
+        }
+
+        self.upscale(iw, ih)
+    }
+
     // -- helpers --
 
     fn lo_dims(&self) -> (u32, u32, f32) {
@@ -635,6 +843,35 @@ mod tests {
     }
 
     #[test]
+    fn starfield_produces_pixels() {
+        let mut r = SoftwareShaderRenderer::new(16, 16);
+        let pixels = r.render_starfield(1.0, &ShaderParams::default());
+        assert_eq!(pixels.len(), 16 * 16 * 4);
+    }
+
+    #[test]
+    fn plasma_produces_pixels() {
+        let mut r = SoftwareShaderRenderer::new(16, 16);
+        let pixels = r.render_plasma(1.0, &ShaderParams::default());
+        assert_eq!(pixels.len(), 16 * 16 * 4);
+        let has_color = pixels
+            .chunks(4)
+            .any(|px| px[0] > 0 || px[1] > 0 || px[2] > 0);
+        assert!(has_color);
+    }
+
+    #[test]
+    fn matrix_rain_produces_pixels() {
+        let mut r = SoftwareShaderRenderer::new(16, 16);
+        let pixels = r.render_matrix_rain(1.0, &ShaderParams::default());
+        assert_eq!(pixels.len(), 16 * 16 * 4);
+        let has_color = pixels
+            .chunks(4)
+            .any(|px| px[0] > 0 || px[1] > 0 || px[2] > 0);
+        assert!(has_color);
+    }
+
+    #[test]
     fn render_shader_dispatches_correctly() {
         let mut r = SoftwareShaderRenderer::new(8, 8);
         let params = ShaderParams::default();
@@ -645,6 +882,9 @@ mod tests {
             "city_lights",
             "ocean_waves",
             "calm_waves",
+            "starfield",
+            "plasma",
+            "matrix_rain",
         ] {
             let pixels = r.render_shader(name, 0.5, &params);
             assert_eq!(pixels.len(), 8 * 8 * 4);
