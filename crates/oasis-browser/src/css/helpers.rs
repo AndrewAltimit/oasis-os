@@ -218,14 +218,40 @@ pub(crate) fn named_color(name: &str) -> Option<CssColor> {
 // Media query evaluation
 // -------------------------------------------------------------------
 
-/// Evaluate a simplified media query against the OASIS viewport.
-///
-/// Supports: `screen`, `all`, `not print`, `(max-width: Xpx)`,
-/// `(min-width: Xpx)`, and comma-separated alternatives.
-/// The viewport is hardcoded to 480x272 (PSP native resolution).
-pub(crate) fn eval_media_query(query: &str) -> bool {
-    const VIEWPORT_WIDTH: f32 = 480.0;
+/// Viewport dimensions for media query evaluation.
+#[derive(Debug, Clone, Copy)]
+pub struct MediaViewport {
+    /// Viewport width in CSS pixels.
+    pub width: f32,
+    /// Viewport height in CSS pixels.
+    pub height: f32,
+}
 
+impl MediaViewport {
+    /// Default PSP viewport (480x272).
+    pub(crate) const DEFAULT: Self = Self {
+        width: 480.0,
+        height: 272.0,
+    };
+}
+
+impl Default for MediaViewport {
+    fn default() -> Self {
+        Self::DEFAULT
+    }
+}
+
+/// Evaluate a simplified media query against the default OASIS viewport.
+///
+/// Convenience wrapper around [`eval_media_query_with_viewport`] using
+/// the default 480x272 PSP viewport.
+#[cfg(test)]
+pub(crate) fn eval_media_query(query: &str) -> bool {
+    eval_media_query_with_viewport(query, MediaViewport::DEFAULT)
+}
+
+/// Evaluate a media query against a specific viewport size.
+pub(crate) fn eval_media_query_with_viewport(query: &str, viewport: MediaViewport) -> bool {
     let query = query.trim();
     if query.is_empty() {
         return true;
@@ -233,14 +259,14 @@ pub(crate) fn eval_media_query(query: &str) -> bool {
 
     // Comma-separated: any match means true.
     for part in query.split(',') {
-        if eval_single_media_query(part.trim(), VIEWPORT_WIDTH) {
+        if eval_single_media_query(part.trim(), viewport) {
             return true;
         }
     }
     false
 }
 
-pub(crate) fn eval_single_media_query(query: &str, viewport_width: f32) -> bool {
+pub(crate) fn eval_single_media_query(query: &str, viewport: MediaViewport) -> bool {
     let query = query.trim();
     if query.is_empty() || query == "all" || query == "screen" {
         return true;
@@ -249,7 +275,7 @@ pub(crate) fn eval_single_media_query(query: &str, viewport_width: f32) -> bool 
         return false;
     }
     if let Some(rest) = query.strip_prefix("not ") {
-        return !eval_single_media_query(rest, viewport_width);
+        return !eval_single_media_query(rest, viewport);
     }
     // Handle compound conditions like "screen and (max-width: 600px)".
     // Split on " and " and evaluate each part.
@@ -264,16 +290,26 @@ pub(crate) fn eval_single_media_query(query: &str, viewport_width: f32) -> bool 
         if p == "print" {
             return false;
         }
-        // Parenthesized feature: (max-width: 600px), (min-width: 320px)
+        // Parenthesized feature: (max-width: 600px), (min-width: 320px), etc.
         let inner = p.trim_start_matches('(').trim_end_matches(')').trim();
         if let Some(rest) = inner.strip_prefix("max-width:") {
             let px = parse_px_value(rest.trim());
-            if viewport_width > px {
+            if viewport.width > px {
                 return false;
             }
         } else if let Some(rest) = inner.strip_prefix("min-width:") {
             let px = parse_px_value(rest.trim());
-            if viewport_width < px {
+            if viewport.width < px {
+                return false;
+            }
+        } else if let Some(rest) = inner.strip_prefix("max-height:") {
+            let px = parse_px_value(rest.trim());
+            if viewport.height > px {
+                return false;
+            }
+        } else if let Some(rest) = inner.strip_prefix("min-height:") {
+            let px = parse_px_value(rest.trim());
+            if viewport.height < px {
                 return false;
             }
         } else if let Some(rest) = inner.strip_prefix("prefers-color-scheme:") {
@@ -870,10 +906,78 @@ mod tests {
 
     #[test]
     fn eval_single_media_query_with_viewport() {
-        assert!(eval_single_media_query("(max-width: 1024px)", 800.0));
-        assert!(!eval_single_media_query("(max-width: 600px)", 800.0));
-        assert!(eval_single_media_query("(min-width: 600px)", 800.0));
-        assert!(!eval_single_media_query("(min-width: 1024px)", 800.0));
+        let vp = MediaViewport {
+            width: 800.0,
+            height: 600.0,
+        };
+        assert!(eval_single_media_query("(max-width: 1024px)", vp));
+        assert!(!eval_single_media_query("(max-width: 600px)", vp));
+        assert!(eval_single_media_query("(min-width: 600px)", vp));
+        assert!(!eval_single_media_query("(min-width: 1024px)", vp));
+    }
+
+    #[test]
+    fn media_query_min_height_pass() {
+        let vp = MediaViewport {
+            width: 480.0,
+            height: 600.0,
+        };
+        assert!(eval_single_media_query("(min-height: 400px)", vp));
+    }
+
+    #[test]
+    fn media_query_min_height_fail() {
+        let vp = MediaViewport {
+            width: 480.0,
+            height: 300.0,
+        };
+        assert!(!eval_single_media_query("(min-height: 400px)", vp));
+    }
+
+    #[test]
+    fn media_query_max_height_pass() {
+        let vp = MediaViewport {
+            width: 480.0,
+            height: 300.0,
+        };
+        assert!(eval_single_media_query("(max-height: 400px)", vp));
+    }
+
+    #[test]
+    fn media_query_max_height_fail() {
+        let vp = MediaViewport {
+            width: 480.0,
+            height: 600.0,
+        };
+        assert!(!eval_single_media_query("(max-height: 400px)", vp));
+    }
+
+    #[test]
+    fn media_query_compound_with_height() {
+        let vp = MediaViewport {
+            width: 800.0,
+            height: 600.0,
+        };
+        assert!(eval_single_media_query(
+            "screen and (min-width: 480px) and (min-height: 400px)",
+            vp
+        ));
+        assert!(!eval_single_media_query(
+            "screen and (min-width: 480px) and (min-height: 800px)",
+            vp
+        ));
+    }
+
+    #[test]
+    fn media_query_viewport_with_viewport_fn() {
+        let vp = MediaViewport {
+            width: 1024.0,
+            height: 768.0,
+        };
+        assert!(eval_media_query_with_viewport("(min-width: 800px)", vp));
+        assert!(!eval_media_query_with_viewport("(min-width: 1200px)", vp));
+        assert!(eval_media_query_with_viewport("(max-height: 800px)", vp));
+        assert!(!eval_media_query_with_viewport("(max-height: 700px)", vp));
     }
 
     // ---------------------------------------------------------------

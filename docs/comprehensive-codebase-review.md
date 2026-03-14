@@ -418,44 +418,45 @@ Move `scripts/test-tv-streaming.sh` into a nightly CI workflow. This validates r
 
 ---
 
-## Summary: Priority Matrix
+## Summary: Implementation Status
 
-### Critical Path (do first)
+### Completed (this branch)
 
-| ID | Item | Effort | Impact |
-|----|------|--------|--------|
-| R1 | Enforce unwrap_used lint | 8-16h | Prevents production panics |
-| M1 | Extract dashboard/startmenu/taskbar/statusbar | 8-12h | 38% oasis-core reduction |
-| R4 | Add WASM backend tests | 6-8h | 5.5K LOC uncovered |
+| ID | Item | Status |
+|----|------|--------|
+| R1 | Enforce unwrap_used lint | **Done** -- upgraded from warn to deny, zero violations |
+| R2 | Replace panic! in tests | **Done** -- 40+ replacements with assert!(matches!()) |
+| R3 | Screenshot regression baselines | **Done** -- OASIS_FIXED_TIME env, compare script, CI step |
+| R4 | Add WASM backend tests | **Done** -- renderer, vfs_content, input tests |
+| R5 | TV Guide streaming tests | **Done** -- grid_layout, grid_state tests |
+| R6 | GU display list overflow detection | **Done** -- debug counters in PSP render/shapes |
+| R7 | Coverage minimum gate | **Done** -- 50% threshold (non-blocking) in CI |
+| R8 | Benchmark regression | **Done** -- criterion baseline comparison in PR CI |
+| D1 | Extract shared shape algorithms | **Done** -- geometry/rasterize in oasis-types |
+| D3 | Feature flag naming | **Done** -- youtube -> wasm-youtube |
+| D4 | Clean WASM Cargo.toml deps | **Done** -- removed redundant deps |
+| F1 | CSS @media queries | **Done** -- basic viewport queries in browser engine |
+| F3 | Plugin integration test | **Done** -- lifecycle, error handling tests |
+| F5 | Network mock server tests | **Done** -- client, listener, FTP, hosts, TLS |
+| F7 | Documentation freshness | **Done** -- status headers on 4 plan docs |
+| F8 | Nightly streaming tests | **Done** -- nightly-streaming.yml workflow |
+| M4 | Split backend/mod.rs | **Already done** -- was already split into submodules |
 
-### High Value (do soon)
+### Skipped (not worthwhile)
 
-| ID | Item | Effort | Impact |
-|----|------|--------|--------|
-| M4 | Split backend/mod.rs into modules | 2-3h | 1,835 LOC file readability |
-| R3 | Screenshot regression baselines | 4-6h | Auto-catches visual regressions |
-| R5 | TV Guide streaming tests | 4-6h | Critical feature untested |
-| D1 | Extract shared shape algorithms | 4-6h | 400 LOC dedup |
-| M2 | Extract plugin system | 4-6h | Cleaner architecture |
-| R2 | Replace panic! in tests | 2-3h | Better test diagnostics |
+| ID | Item | Reason |
+|----|------|--------|
+| M5 | Split demux_lite.rs | File is cohesive (single MP4 parser); splitting adds inter-file deps without benefit |
+| D2 | Consolidate input dispatch | PSP and WASM dispatchers are too platform-specific; an abstraction would add complexity |
 
-### Nice to Have (when time permits)
+### Deferred (follow-up PRs)
 
-| ID | Item | Effort | Impact |
-|----|------|--------|--------|
-| F1 | CSS @media queries | 8-12h | Browser responsive layout |
-| F3 | Plugin integration test in CI | 2-3h | Lifecycle validation |
-| F5 | Network mock server tests | 4-6h | TCP/FTP/TLS coverage |
-| M3 | Extract OSK | 3-4h | Reusable component |
-| M5 | Split demux_lite.rs | 2-3h | Readability |
-| D2 | Consolidate input dispatch | 3-4h | Code sharing |
-| D3 | Feature flag naming | 30m | Clarity |
-| F4 | WASM Playwright E2E tests | 6-8h | Web confidence |
-| F7 | Documentation freshness | 2-3h | Reduces confusion |
-| R7 | Coverage minimum gate | 1h | Prevents regression |
-| R8 | Benchmark regression | 3h | Performance tracking |
-| F8 | Nightly streaming tests | 3-4h | Continuous validation |
-| R6 | GU display list overflow detection | 1-2h | PSP debugging |
-| F2 | CSS Flexbox | 16-24h | Web compatibility |
-| M6 | Widget event handling trait | 8-12h | Composability |
-| F6 | PSP screenshot diff | 4-6h | Visual regression |
+| ID | Item | Reason |
+|----|------|--------|
+| M1 | Extract dashboard/startmenu/taskbar/statusbar | Requires moving oasis-core internals (transition, sdi helpers); needs dedicated PR |
+| M2 | Extract plugin system | Depends on CommandRegistry and SdiRegistry from oasis-core; needs M1 first |
+| M3 | Extract OSK | Same oasis-core internal dependencies as M2 |
+| M6 | Widget event handling trait | Large architecture change requiring careful design |
+| F2 | CSS Flexbox | 16-24h feature work; separate feature PR |
+| F4 | WASM Playwright E2E tests | Needs browser testing infrastructure (Playwright/Puppeteer) |
+| F6 | PSP screenshot diff | Needs PPSSPP baseline capture configuration |
