@@ -1,8 +1,10 @@
 //! Security and permissions commands: chmod, chown, passwd, audit.
 
-use oasis_types::error::{OasisError, Result};
+use oasis_types::error::OasisError;
+#[cfg(test)]
+use oasis_types::error::Result;
 
-use crate::interpreter::{Command, CommandOutput, Environment, resolve_path};
+use crate::interpreter::{CommandOutput, resolve_path};
 
 /// Append an entry to the VFS audit log.
 fn audit_log(vfs: &mut dyn oasis_vfs::Vfs, entry: &str) {
@@ -24,21 +26,13 @@ fn audit_log(vfs: &mut dyn oasis_vfs::Vfs, entry: &str) {
 // chmod
 // ---------------------------------------------------------------------------
 
-struct ChmodCmd;
-impl Command for ChmodCmd {
-    fn name(&self) -> &str {
-        "chmod"
-    }
-    fn description(&self) -> &str {
-        "Set file permissions (VFS metadata)"
-    }
-    fn usage(&self) -> &str {
-        "chmod <mode> <file>"
-    }
-    fn category(&self) -> &str {
-        "security"
-    }
-    fn execute(&self, args: &[&str], env: &mut Environment<'_>) -> Result<CommandOutput> {
+define_command!(
+    ChmodCmd,
+    "chmod",
+    "Set file permissions (VFS metadata)",
+    "chmod <mode> <file>",
+    "security",
+    |args, env| {
         if args.len() < 2 {
             return Err(OasisError::Command("usage: chmod <mode> <file>".into()));
         }
@@ -54,27 +48,19 @@ impl Command for ChmodCmd {
             "Set permissions on {path}: {mode_str}"
         )))
     }
-}
+);
 
 // ---------------------------------------------------------------------------
 // chown
 // ---------------------------------------------------------------------------
 
-struct ChownCmd;
-impl Command for ChownCmd {
-    fn name(&self) -> &str {
-        "chown"
-    }
-    fn description(&self) -> &str {
-        "Set file owner (VFS metadata)"
-    }
-    fn usage(&self) -> &str {
-        "chown <owner> <file>"
-    }
-    fn category(&self) -> &str {
-        "security"
-    }
-    fn execute(&self, args: &[&str], env: &mut Environment<'_>) -> Result<CommandOutput> {
+define_command!(
+    ChownCmd,
+    "chown",
+    "Set file owner (VFS metadata)",
+    "chown <owner> <file>",
+    "security",
+    |args, env| {
         if args.len() < 2 {
             return Err(OasisError::Command("usage: chown <owner> <file>".into()));
         }
@@ -86,54 +72,38 @@ impl Command for ChownCmd {
         audit_log(env.vfs, &format!("chown {owner} {path}"));
         Ok(CommandOutput::Text(format!("Set owner of {path}: {owner}")))
     }
-}
+);
 
 // ---------------------------------------------------------------------------
 // passwd
 // ---------------------------------------------------------------------------
 
-struct PasswdCmd;
-impl Command for PasswdCmd {
-    fn name(&self) -> &str {
-        "passwd"
-    }
-    fn description(&self) -> &str {
-        "Change user password (simulated)"
-    }
-    fn usage(&self) -> &str {
-        "passwd [user]"
-    }
-    fn category(&self) -> &str {
-        "security"
-    }
-    fn execute(&self, args: &[&str], _env: &mut Environment<'_>) -> Result<CommandOutput> {
+define_command!(
+    PasswdCmd,
+    "passwd",
+    "Change user password (simulated)",
+    "passwd [user]",
+    "security",
+    |args, _env| {
         let user = args.first().copied().unwrap_or("oasis");
         Ok(CommandOutput::Text(format!(
             "Password change for user '{user}' -- \
              (simulated: single-user system, no real password store)"
         )))
     }
-}
+);
 
 // ---------------------------------------------------------------------------
 // audit
 // ---------------------------------------------------------------------------
 
-struct AuditCmd;
-impl Command for AuditCmd {
-    fn name(&self) -> &str {
-        "audit"
-    }
-    fn description(&self) -> &str {
-        "Show security audit log"
-    }
-    fn usage(&self) -> &str {
-        "audit [show|clear]"
-    }
-    fn category(&self) -> &str {
-        "security"
-    }
-    fn execute(&self, args: &[&str], env: &mut Environment<'_>) -> Result<CommandOutput> {
+define_command!(
+    AuditCmd,
+    "audit",
+    "Show security audit log",
+    "audit [show|clear]",
+    "security",
+    |args, env| {
         let subcmd = args.first().copied().unwrap_or("show");
         let log_path = "/var/log/audit.log";
 
@@ -164,7 +134,7 @@ impl Command for AuditCmd {
             )),
         }
     }
-}
+);
 
 register_commands!(
     register_security_commands,

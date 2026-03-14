@@ -2,27 +2,19 @@
 
 use oasis_types::error::{OasisError, Result};
 
-use crate::interpreter::{Command, CommandOutput, Environment};
+use crate::interpreter::{CommandOutput, Environment};
 
 // ---------------------------------------------------------------------------
 // uptime
 // ---------------------------------------------------------------------------
 
-struct UptimeCmd;
-impl Command for UptimeCmd {
-    fn name(&self) -> &str {
-        "uptime"
-    }
-    fn description(&self) -> &str {
-        "Show system uptime"
-    }
-    fn usage(&self) -> &str {
-        "uptime"
-    }
-    fn category(&self) -> &str {
-        "system"
-    }
-    fn execute(&self, _args: &[&str], env: &mut Environment<'_>) -> Result<CommandOutput> {
+define_command!(
+    UptimeCmd,
+    "uptime",
+    "Show system uptime",
+    "uptime",
+    "system",
+    |_args, env| {
         if let Some(time) = env.time {
             let secs = time.uptime_secs()?;
             let days = secs / 86400;
@@ -44,28 +36,19 @@ impl Command for UptimeCmd {
             ))
         }
     }
-}
+);
 
 // ---------------------------------------------------------------------------
 // df
 // ---------------------------------------------------------------------------
 
-struct DfCmd;
-impl Command for DfCmd {
-    fn name(&self) -> &str {
-        "df"
-    }
-    fn description(&self) -> &str {
-        "Show VFS filesystem usage"
-    }
-    fn usage(&self) -> &str {
-        "df"
-    }
-    fn category(&self) -> &str {
-        "system"
-    }
-    fn execute(&self, _args: &[&str], env: &mut Environment<'_>) -> Result<CommandOutput> {
-        // Count entries recursively to approximate usage.
+define_command!(
+    DfCmd,
+    "df",
+    "Show VFS filesystem usage",
+    "df",
+    "system",
+    |_args, env| {
         let (dirs, files, total_bytes) = count_vfs_recursive(env, "/", 0)?;
         let mut lines = Vec::new();
         lines.push("Filesystem      Files  Dirs  Size".to_string());
@@ -74,7 +57,7 @@ impl Command for DfCmd {
         ));
         Ok(CommandOutput::Text(lines.join("\n")))
     }
-}
+);
 
 /// Maximum recursion depth for VFS traversal to prevent stack overflow.
 const MAX_DEPTH: usize = 64;

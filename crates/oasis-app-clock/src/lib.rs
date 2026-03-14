@@ -10,15 +10,7 @@
 //! timestamp) that is set externally by the `AppRunner` refresh cycle.
 //! No `SystemTime::now()` or `Instant::now()` calls are used.
 
-use std::any::Any;
-
-use oasis_app_core::render::{
-    draw_content_windowed, hide_app_sdi, render_app_chrome, render_content_sdi,
-};
-use oasis_app_core::{App, AppAction, ContentState};
-use oasis_sdi::SdiRegistry;
-use oasis_skin::ActiveTheme;
-use oasis_types::backend::SdiBackend;
+use oasis_app_core::{App, AppAction, ContentState, impl_content_app_methods};
 use oasis_types::input::Button;
 use oasis_vfs::Vfs;
 
@@ -507,13 +499,7 @@ impl ClockApp {
 }
 
 impl App for ClockApp {
-    fn title(&self) -> &str {
-        &self.content.title
-    }
-
-    fn path(&self) -> &str {
-        &self.content.app_path
-    }
+    impl_content_app_methods!(content);
 
     fn handle_input(&mut self, button: &Button, _vfs: &dyn Vfs) -> AppAction {
         match button {
@@ -540,41 +526,6 @@ impl App for ClockApp {
     fn refresh(&mut self, _vfs: &dyn Vfs) {
         self.check_alarms();
         self.build_lines();
-    }
-
-    fn update_sdi(&mut self, sdi: &mut SdiRegistry, at: &ActiveTheme) {
-        self.content.update_layout(at);
-        self.content.animate_selection(0.3);
-        render_app_chrome(sdi, at);
-        render_content_sdi(&self.content, sdi, at);
-    }
-
-    fn draw_windowed(
-        &self,
-        cx: i32,
-        cy: i32,
-        cw: u32,
-        ch: u32,
-        backend: &mut dyn SdiBackend,
-        at: &ActiveTheme,
-    ) -> oasis_types::error::Result<()> {
-        draw_content_windowed(&self.content, cx, cy, cw, ch, backend, at)
-    }
-
-    fn hide_sdi(&self, sdi: &mut SdiRegistry) {
-        hide_app_sdi(sdi);
-    }
-
-    fn lines(&self) -> &[String] {
-        &self.content.lines
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
-    fn as_any_mut(&mut self) -> &mut dyn Any {
-        self
     }
 }
 

@@ -3,15 +3,9 @@
 //! Displays station list from VFS config, shows playback status,
 //! and sends tune/favorite requests via VFS IPC.
 
-use oasis_app_core::render::{
-    draw_content_windowed, hide_app_sdi, render_app_chrome, render_content_sdi,
-};
-use oasis_app_core::{App, AppAction, ContentState};
+use oasis_app_core::{App, AppAction, ContentState, impl_content_app_methods};
 use oasis_audio::radio::station::StationRegistry;
 use oasis_audio::{RADIO_REQUEST_PATH, RADIO_STATUS_PATH};
-use oasis_sdi::SdiRegistry;
-use oasis_skin::ActiveTheme;
-use oasis_types::backend::SdiBackend;
 use oasis_types::input::Button;
 use oasis_vfs::Vfs;
 
@@ -34,13 +28,7 @@ impl RadioApp {
 }
 
 impl App for RadioApp {
-    fn title(&self) -> &str {
-        &self.content.title
-    }
-
-    fn path(&self) -> &str {
-        &self.content.app_path
-    }
+    impl_content_app_methods!(content);
 
     fn handle_input(&mut self, button: &Button, _vfs: &dyn Vfs) -> AppAction {
         let station_count = self
@@ -85,55 +73,12 @@ impl App for RadioApp {
         }
     }
 
-    fn update_sdi(&mut self, sdi: &mut SdiRegistry, at: &ActiveTheme) {
-        self.content.update_layout(at);
-        self.content.animate_selection(0.3);
-        render_app_chrome(sdi, at);
-        render_content_sdi(&self.content, sdi, at);
-    }
-
-    fn draw_windowed(
-        &self,
-        cx: i32,
-        cy: i32,
-        cw: u32,
-        ch: u32,
-        backend: &mut dyn SdiBackend,
-        at: &ActiveTheme,
-    ) -> oasis_types::error::Result<()> {
-        draw_content_windowed(&self.content, cx, cy, cw, ch, backend, at)
-    }
-
-    fn hide_sdi(&self, sdi: &mut SdiRegistry) {
-        hide_app_sdi(sdi);
-    }
-
-    fn take_pending_request(&mut self) -> Option<(String, String)> {
-        self.content.pending_vfs_request.take()
-    }
-
-    fn peek_pending_request(&self) -> Option<&(String, String)> {
-        self.content.pending_vfs_request.as_ref()
-    }
-
     fn refresh(&mut self, vfs: &dyn Vfs) {
         let old_cursor = self.content.cursor;
         let old_scroll = self.content.scroll;
         self.content.lines = radio_content(vfs);
         self.content.cursor = old_cursor;
         self.content.scroll = old_scroll;
-    }
-
-    fn lines(&self) -> &[String] {
-        &self.content.lines
-    }
-
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-
-    fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
-        self
     }
 }
 

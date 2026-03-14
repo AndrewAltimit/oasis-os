@@ -505,13 +505,22 @@
     <div class="arch-text">
       <p>
         Core code never calls platform APIs directly. All rendering, input, networking, and audio
-        flow through four backend traits defined in <strong>oasis-types</strong>:
-        <code>SdiBackend</code>, <code>InputBackend</code>, <code>NetworkBackend</code>, and
-        <code>AudioBackend</code>. Each platform implements these traits, allowing the entire
-        framework &mdash; UI widgets, browser engine, terminal, apps &mdash; to run unchanged
-        on any target.
+        flow through <strong>five backend traits</strong> defined in <code>oasis-types</code>.
+        The rendering trait is split into two tiers:
       </p>
-      <div class="crate-count">32 workspace crates &middot; 2 excluded PSP crates</div>
+      <ul style="margin: 0.5em 0 0.5em 1.5em; line-height: 1.8;">
+        <li><code>SdiCore</code> &mdash; <strong>13 required methods</strong> (clear, fill_rect, blit, draw_text, load_texture, etc.) &mdash; the minimum viable backend</li>
+        <li><code>SdiBackend</code> &mdash; <strong>39 optional accelerated primitives</strong> across 8 extension traits (shapes, gradients, alpha, styled text, textures, clip/transform, vector paths, batching) &mdash; each with a software fallback default</li>
+        <li><code>InputBackend</code> &mdash; unified input polling (buttons, mouse, touch, text)</li>
+        <li><code>NetworkBackend</code> &mdash; TCP client/server with optional TLS provider</li>
+        <li><code>AudioBackend</code> &mdash; track-based playback with streaming PCM support</li>
+      </ul>
+      <p style="margin-top: 0.5em;">
+        Backends are <strong>leaf nodes</strong> in the dependency graph &mdash; they depend on core;
+        core never depends on them. A new backend starts with 13 methods (~280 LOC) and the entire OS runs.
+        <a href="journal/06-backend-trait-system.html" style="color: var(--accent);">Read the full architecture deep dive &rarr;</a>
+      </p>
+      <div class="crate-count">34 workspace crates &middot; 2 excluded PSP crates &middot; 5 backend traits</div>
     </div>
   </div>
 </section>

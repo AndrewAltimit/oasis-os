@@ -3,33 +3,19 @@
 #[cfg(not(target_arch = "wasm32"))]
 use oasis_skin::Skin;
 use oasis_skin::builtin;
-use oasis_types::error::Result;
 
-use crate::{Command, CommandOutput, Environment};
+use crate::CommandOutput;
 
 register_commands!(register_skin_commands, [SkinCmd]);
 
-/// Terminal command for listing, showing, or switching UI skins.
-struct SkinCmd;
-
-impl Command for SkinCmd {
-    fn name(&self) -> &str {
-        "skin"
-    }
-
-    fn description(&self) -> &str {
-        "List, show, or switch skins"
-    }
-
-    fn usage(&self) -> &str {
-        "skin [list|current|<name>]"
-    }
-
-    fn category(&self) -> &str {
-        "ui"
-    }
-
-    fn execute(&self, args: &[&str], _env: &mut Environment<'_>) -> Result<CommandOutput> {
+// Terminal command for listing, showing, or switching UI skins.
+define_command!(
+    SkinCmd,
+    "skin",
+    "List, show, or switch skins",
+    "skin [list|current|<name>]",
+    "ui",
+    |args, _env| {
         match args.first().copied() {
             None | Some("list") => {
                 let mut lines = String::from("Built-in skins:\n");
@@ -56,13 +42,13 @@ impl Command for SkinCmd {
             Some(name) => Ok(CommandOutput::skin_swap(name.to_string())),
         }
     }
-}
+);
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::CommandSignal;
     use crate::test_helpers::assert_text;
+    use crate::{Command, CommandSignal, Environment};
     use oasis_vfs::MemoryVfs;
 
     fn make_env(vfs: &mut MemoryVfs) -> Environment<'_> {

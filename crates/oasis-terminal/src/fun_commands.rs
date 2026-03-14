@@ -1,8 +1,10 @@
 //! Fun and utility commands: cal, fortune, banner, figlet, matrix, yes, watch, time.
 
-use oasis_types::error::{OasisError, Result};
+use oasis_types::error::OasisError;
+#[cfg(test)]
+use oasis_types::error::Result;
 
-use crate::interpreter::{Command, CommandOutput, Environment};
+use crate::interpreter::CommandOutput;
 
 use crate::cmd_helpers::time_seed;
 
@@ -10,21 +12,13 @@ use crate::cmd_helpers::time_seed;
 // cal
 // ---------------------------------------------------------------------------
 
-struct CalCmd;
-impl Command for CalCmd {
-    fn name(&self) -> &str {
-        "cal"
-    }
-    fn description(&self) -> &str {
-        "Display a calendar"
-    }
-    fn usage(&self) -> &str {
-        "cal [month] [year]"
-    }
-    fn category(&self) -> &str {
-        "fun"
-    }
-    fn execute(&self, args: &[&str], env: &mut Environment<'_>) -> Result<CommandOutput> {
+define_command!(
+    CalCmd,
+    "cal",
+    "Display a calendar",
+    "cal [month] [year]",
+    "fun",
+    |args, env| {
         let (month, year) = if args.len() >= 2 {
             let m: u32 = args[0]
                 .parse()
@@ -95,7 +89,7 @@ impl Command for CalCmd {
         }
         Ok(CommandOutput::Text(lines.join("\n")))
     }
-}
+);
 
 /// Returns day of week (0=Sunday) for given date.
 fn day_of_week(year: i32, month: u32, day: u32) -> u32 {
@@ -109,21 +103,13 @@ fn day_of_week(year: i32, month: u32, day: u32) -> u32 {
 // fortune
 // ---------------------------------------------------------------------------
 
-struct FortuneCmd;
-impl Command for FortuneCmd {
-    fn name(&self) -> &str {
-        "fortune"
-    }
-    fn description(&self) -> &str {
-        "Print a random fortune"
-    }
-    fn usage(&self) -> &str {
-        "fortune"
-    }
-    fn category(&self) -> &str {
-        "fun"
-    }
-    fn execute(&self, _args: &[&str], env: &mut Environment<'_>) -> Result<CommandOutput> {
+define_command!(
+    FortuneCmd,
+    "fortune",
+    "Print a random fortune",
+    "fortune",
+    "fun",
+    |_args, env| {
         let fortunes = [
             "The best code is no code at all.",
             "There are only two hard things: cache invalidation and naming things.",
@@ -144,27 +130,19 @@ impl Command for FortuneCmd {
         let idx = seed % fortunes.len();
         Ok(CommandOutput::Text(fortunes[idx].to_string()))
     }
-}
+);
 
 // ---------------------------------------------------------------------------
 // banner
 // ---------------------------------------------------------------------------
 
-struct BannerCmd;
-impl Command for BannerCmd {
-    fn name(&self) -> &str {
-        "banner"
-    }
-    fn description(&self) -> &str {
-        "Print text in large ASCII letters"
-    }
-    fn usage(&self) -> &str {
-        "banner <text>"
-    }
-    fn category(&self) -> &str {
-        "fun"
-    }
-    fn execute(&self, args: &[&str], _env: &mut Environment<'_>) -> Result<CommandOutput> {
+define_command!(
+    BannerCmd,
+    "banner",
+    "Print text in large ASCII letters",
+    "banner <text>",
+    "fun",
+    |args, _env| {
         if args.is_empty() {
             return Err(OasisError::Command("usage: banner <text>".into()));
         }
@@ -180,7 +158,7 @@ impl Command for BannerCmd {
         }
         Ok(CommandOutput::Text(rows.join("\n")))
     }
-}
+);
 
 fn banner_glyph(ch: char) -> [&'static str; 5] {
     match ch {
@@ -230,21 +208,13 @@ fn banner_glyph(ch: char) -> [&'static str; 5] {
 // matrix
 // ---------------------------------------------------------------------------
 
-struct MatrixCmd;
-impl Command for MatrixCmd {
-    fn name(&self) -> &str {
-        "matrix"
-    }
-    fn description(&self) -> &str {
-        "Display Matrix-style rain (snapshot)"
-    }
-    fn usage(&self) -> &str {
-        "matrix"
-    }
-    fn category(&self) -> &str {
-        "fun"
-    }
-    fn execute(&self, _args: &[&str], env: &mut Environment<'_>) -> Result<CommandOutput> {
+define_command!(
+    MatrixCmd,
+    "matrix",
+    "Display Matrix-style rain (snapshot)",
+    "matrix",
+    "fun",
+    |_args, env| {
         let width = 48;
         let height = 10;
         let mut seed = time_seed(env);
@@ -268,52 +238,36 @@ impl Command for MatrixCmd {
         }
         Ok(CommandOutput::Text(lines.join("\n")))
     }
-}
+);
 
 // ---------------------------------------------------------------------------
 // yes
 // ---------------------------------------------------------------------------
 
-struct YesCmd;
-impl Command for YesCmd {
-    fn name(&self) -> &str {
-        "yes"
-    }
-    fn description(&self) -> &str {
-        "Repeat a string (limited to 20 lines)"
-    }
-    fn usage(&self) -> &str {
-        "yes [text]"
-    }
-    fn category(&self) -> &str {
-        "fun"
-    }
-    fn execute(&self, args: &[&str], _env: &mut Environment<'_>) -> Result<CommandOutput> {
+define_command!(
+    YesCmd,
+    "yes",
+    "Repeat a string (limited to 20 lines)",
+    "yes [text]",
+    "fun",
+    |args, _env| {
         let text = if args.is_empty() { "y" } else { args[0] };
         let lines: Vec<&str> = std::iter::repeat_n(text, 20).collect();
         Ok(CommandOutput::Text(lines.join("\n")))
     }
-}
+);
 
 // ---------------------------------------------------------------------------
 // watch
 // ---------------------------------------------------------------------------
 
-struct WatchCmd;
-impl Command for WatchCmd {
-    fn name(&self) -> &str {
-        "watch"
-    }
-    fn description(&self) -> &str {
-        "Execute a command (one-shot in terminal)"
-    }
-    fn usage(&self) -> &str {
-        "watch <command>"
-    }
-    fn category(&self) -> &str {
-        "fun"
-    }
-    fn execute(&self, args: &[&str], _env: &mut Environment<'_>) -> Result<CommandOutput> {
+define_command!(
+    WatchCmd,
+    "watch",
+    "Execute a command (one-shot in terminal)",
+    "watch <command>",
+    "fun",
+    |args, _env| {
         if args.is_empty() {
             return Err(OasisError::Command("usage: watch <command>".into()));
         }
@@ -322,27 +276,19 @@ impl Command for WatchCmd {
             "watch: would repeat '{cmd}' every 2s (one-shot mode)"
         )))
     }
-}
+);
 
 // ---------------------------------------------------------------------------
 // time
 // ---------------------------------------------------------------------------
 
-struct TimeCmd;
-impl Command for TimeCmd {
-    fn name(&self) -> &str {
-        "time"
-    }
-    fn description(&self) -> &str {
-        "Time a command execution (simulated)"
-    }
-    fn usage(&self) -> &str {
-        "time <command>"
-    }
-    fn category(&self) -> &str {
-        "fun"
-    }
-    fn execute(&self, args: &[&str], _env: &mut Environment<'_>) -> Result<CommandOutput> {
+define_command!(
+    TimeCmd,
+    "time",
+    "Time a command execution (simulated)",
+    "time <command>",
+    "fun",
+    |args, _env| {
         if args.is_empty() {
             return Err(OasisError::Command("usage: time <command>".into()));
         }
@@ -351,7 +297,7 @@ impl Command for TimeCmd {
             "time: '{cmd}'\nreal\t0m0.001s\nuser\t0m0.000s\nsys\t0m0.001s"
         )))
     }
-}
+);
 
 register_commands!(
     register_fun_commands,

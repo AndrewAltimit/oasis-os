@@ -5,19 +5,22 @@
 //! manifest-based discovery from the VFS.
 
 mod app_registry;
+mod discovery;
+mod host;
 mod lifecycle;
+mod validate;
 
 use serde::Deserialize;
 
-use crate::error::{OasisError, PluginError, Result};
+#[cfg(test)]
+use crate::error::OasisError;
+use crate::error::Result;
 use crate::sdi::SdiRegistry;
 use crate::terminal::CommandRegistry;
 use crate::vfs::Vfs;
 
 use super::app_bridge::PluginAppRegistration;
-use super::traits::{
-    PLUGIN_API_VERSION, Plugin, PluginCapabilities, PluginHost, PluginInfo, PluginState,
-};
+use super::traits::{Plugin, PluginCapabilities, PluginHost, PluginInfo, PluginState};
 
 /// A loaded plugin with its runtime state.
 struct LoadedPlugin {
@@ -100,14 +103,7 @@ impl PluginManager {
 
     /// Validate a plugin's API version against the host.
     fn validate_api_version(info: &PluginInfo) -> Result<()> {
-        if info.api_version != PLUGIN_API_VERSION {
-            return Err(OasisError::Plugin(PluginError::ApiMismatch {
-                plugin: info.name.clone(),
-                expected: PLUGIN_API_VERSION,
-                found: info.api_version,
-            }));
-        }
-        Ok(())
+        validate::validate_api_version(info)
     }
 
     /// Build a `PluginHost` for the given plugin index.
@@ -119,17 +115,14 @@ impl PluginManager {
         pending_apps: &'a mut Vec<PluginAppRegistration>,
         capabilities_override: Option<PluginCapabilities>,
     ) -> PluginHost<'a> {
-        PluginHost {
+        host::build_host(
+            plugin,
             sdi,
             vfs,
             commands,
-            audio: None,
-            network: None,
-            backend: None,
-            app_registrations: pending_apps,
-            capabilities: capabilities_override.unwrap_or_else(|| plugin.capabilities.clone()),
-            plugin_name: plugin.plugin.info().name.clone(),
-        }
+            pending_apps,
+            capabilities_override,
+        )
     }
 
     /// Collect app registrations from a lifecycle call into the manager.
@@ -193,30 +186,7 @@ impl PluginManager {
     /// their parsed manifests. This does NOT load the plugins -- it only
     /// discovers what's available.
     pub fn discover_manifests(vfs: &mut dyn Vfs) -> Vec<PluginManifest> {
-        let plugin_dir = "/etc/oasis-os/plugins";
-        if !vfs.exists(plugin_dir) {
-            return Vec::new();
-        }
-        let entries = match vfs.readdir(plugin_dir) {
-            Ok(e) => e,
-            Err(_) => return Vec::new(),
-        };
-
-        let mut manifests = Vec::new();
-        for entry in &entries {
-            if entry.kind == crate::vfs::EntryKind::Directory {
-                let manifest_path = format!("{plugin_dir}/{}/plugin.toml", entry.name);
-                if vfs.exists(&manifest_path)
-                    && let Ok(data) = vfs.read(&manifest_path)
-                {
-                    let toml_str = String::from_utf8_lossy(&data);
-                    if let Ok(manifest) = toml::from_str::<PluginManifest>(&toml_str) {
-                        manifests.push(manifest);
-                    }
-                }
-            }
-        }
-        manifests
+        discovery::discover_manifests(vfs)
     }
 }
 

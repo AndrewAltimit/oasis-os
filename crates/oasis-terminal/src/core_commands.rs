@@ -5,7 +5,7 @@ use oasis_types::error::{OasisError, Result};
 use oasis_vfs::EntryKind;
 
 use crate::cmd_helpers::require_args;
-use crate::interpreter::{Command, CommandOutput, Environment, resolve_path};
+use crate::interpreter::{CommandOutput, resolve_path};
 
 /// Maximum file size for `cat` display (10 MiB).
 const CAT_MAX_SIZE: usize = 10 * 1024 * 1024;
@@ -25,21 +25,13 @@ register_commands!(
 // ls
 // ---------------------------------------------------------------------------
 
-struct LsCmd;
-impl Command for LsCmd {
-    fn name(&self) -> &str {
-        "ls"
-    }
-    fn description(&self) -> &str {
-        "List directory contents"
-    }
-    fn usage(&self) -> &str {
-        "ls [path]"
-    }
-    fn category(&self) -> &str {
-        "filesystem"
-    }
-    fn execute(&self, args: &[&str], env: &mut Environment<'_>) -> Result<CommandOutput> {
+define_command!(
+    LsCmd,
+    "ls",
+    "List directory contents",
+    "ls [path]",
+    "filesystem",
+    |args, env| {
         let path = if args.is_empty() {
             env.cwd.clone()
         } else {
@@ -60,33 +52,24 @@ impl Command for LsCmd {
         }
         Ok(CommandOutput::Text(lines.join("\n")))
     }
-}
+);
 
 // ---------------------------------------------------------------------------
 // cd
 // ---------------------------------------------------------------------------
 
-struct CdCmd;
-impl Command for CdCmd {
-    fn name(&self) -> &str {
-        "cd"
-    }
-    fn description(&self) -> &str {
-        "Change working directory"
-    }
-    fn usage(&self) -> &str {
-        "cd <path>"
-    }
-    fn category(&self) -> &str {
-        "filesystem"
-    }
-    fn execute(&self, args: &[&str], env: &mut Environment<'_>) -> Result<CommandOutput> {
+define_command!(
+    CdCmd,
+    "cd",
+    "Change working directory",
+    "cd <path>",
+    "filesystem",
+    |args, env| {
         let target = if args.is_empty() {
             "/".to_string()
         } else {
             resolve_path(&env.cwd, args[0])
         };
-        // Verify it exists and is a directory.
         let meta = env.vfs.stat(&target)?;
         if meta.kind != EntryKind::Directory {
             return Err(OasisError::Command(
@@ -96,50 +79,32 @@ impl Command for CdCmd {
         env.cwd = target;
         Ok(CommandOutput::None)
     }
-}
+);
 
 // ---------------------------------------------------------------------------
 // pwd
 // ---------------------------------------------------------------------------
 
-struct PwdCmd;
-impl Command for PwdCmd {
-    fn name(&self) -> &str {
-        "pwd"
-    }
-    fn description(&self) -> &str {
-        "Print working directory"
-    }
-    fn usage(&self) -> &str {
-        "pwd"
-    }
-    fn category(&self) -> &str {
-        "filesystem"
-    }
-    fn execute(&self, _args: &[&str], env: &mut Environment<'_>) -> Result<CommandOutput> {
-        Ok(CommandOutput::Text(env.cwd.clone()))
-    }
-}
+define_command!(
+    PwdCmd,
+    "pwd",
+    "Print working directory",
+    "pwd",
+    "filesystem",
+    |_args, env| { Ok(CommandOutput::Text(env.cwd.clone())) }
+);
 
 // ---------------------------------------------------------------------------
 // cat
 // ---------------------------------------------------------------------------
 
-struct CatCmd;
-impl Command for CatCmd {
-    fn name(&self) -> &str {
-        "cat"
-    }
-    fn description(&self) -> &str {
-        "Display file contents"
-    }
-    fn usage(&self) -> &str {
-        "cat <file>"
-    }
-    fn category(&self) -> &str {
-        "filesystem"
-    }
-    fn execute(&self, args: &[&str], env: &mut Environment<'_>) -> Result<CommandOutput> {
+define_command!(
+    CatCmd,
+    "cat",
+    "Display file contents",
+    "cat <file>",
+    "filesystem",
+    |args, env| {
         require_args(args, 1, "cat <file>")?;
         let path = resolve_path(&env.cwd, args[0]);
         let meta = env.vfs.stat(&path)?;
@@ -152,147 +117,103 @@ impl Command for CatCmd {
         let text = String::from_utf8_lossy(&data).into_owned();
         Ok(CommandOutput::Text(text))
     }
-}
+);
 
 // ---------------------------------------------------------------------------
 // mkdir
 // ---------------------------------------------------------------------------
 
-struct MkdirCmd;
-impl Command for MkdirCmd {
-    fn name(&self) -> &str {
-        "mkdir"
-    }
-    fn description(&self) -> &str {
-        "Create a directory"
-    }
-    fn usage(&self) -> &str {
-        "mkdir <path>"
-    }
-    fn category(&self) -> &str {
-        "filesystem"
-    }
-    fn execute(&self, args: &[&str], env: &mut Environment<'_>) -> Result<CommandOutput> {
+define_command!(
+    MkdirCmd,
+    "mkdir",
+    "Create a directory",
+    "mkdir <path>",
+    "filesystem",
+    |args, env| {
         require_args(args, 1, "mkdir <path>")?;
         let path = resolve_path(&env.cwd, args[0]);
         env.vfs.mkdir(&path)?;
         Ok(CommandOutput::None)
     }
-}
+);
 
 // ---------------------------------------------------------------------------
 // rm
 // ---------------------------------------------------------------------------
 
-struct RmCmd;
-impl Command for RmCmd {
-    fn name(&self) -> &str {
-        "rm"
-    }
-    fn description(&self) -> &str {
-        "Remove a file or empty directory"
-    }
-    fn usage(&self) -> &str {
-        "rm <path>"
-    }
-    fn category(&self) -> &str {
-        "filesystem"
-    }
-    fn execute(&self, args: &[&str], env: &mut Environment<'_>) -> Result<CommandOutput> {
+define_command!(
+    RmCmd,
+    "rm",
+    "Remove a file or empty directory",
+    "rm <path>",
+    "filesystem",
+    |args, env| {
         require_args(args, 1, "rm <path>")?;
         let path = resolve_path(&env.cwd, args[0]);
         env.vfs.remove(&path)?;
         Ok(CommandOutput::None)
     }
-}
+);
 
 // ---------------------------------------------------------------------------
 // echo
 // ---------------------------------------------------------------------------
 
-struct EchoCmd;
-impl Command for EchoCmd {
-    fn name(&self) -> &str {
-        "echo"
-    }
-    fn description(&self) -> &str {
-        "Print text"
-    }
-    fn usage(&self) -> &str {
-        "echo [text...]"
-    }
-    fn execute(&self, args: &[&str], _env: &mut Environment<'_>) -> Result<CommandOutput> {
-        Ok(CommandOutput::Text(args.join(" ")))
-    }
-}
+define_command!(
+    EchoCmd,
+    "echo",
+    "Print text",
+    "echo [text...]",
+    "general",
+    |args, _env| { Ok(CommandOutput::Text(args.join(" "))) }
+);
 
 // ---------------------------------------------------------------------------
 // clear
 // ---------------------------------------------------------------------------
 
-struct ClearCmd;
-impl Command for ClearCmd {
-    fn name(&self) -> &str {
-        "clear"
-    }
-    fn description(&self) -> &str {
-        "Clear terminal output"
-    }
-    fn usage(&self) -> &str {
-        "clear"
-    }
-    fn execute(&self, _args: &[&str], _env: &mut Environment<'_>) -> Result<CommandOutput> {
-        Ok(CommandOutput::Clear)
-    }
-}
+define_command!(
+    ClearCmd,
+    "clear",
+    "Clear terminal output",
+    "clear",
+    "general",
+    |_args, _env| { Ok(CommandOutput::Clear) }
+);
 
 // ---------------------------------------------------------------------------
 // status
 // ---------------------------------------------------------------------------
 
-struct StatusCmd;
-impl Command for StatusCmd {
-    fn name(&self) -> &str {
-        "status"
-    }
-    fn description(&self) -> &str {
-        "Show system status"
-    }
-    fn usage(&self) -> &str {
-        "status"
-    }
-    fn execute(&self, _args: &[&str], env: &mut Environment<'_>) -> Result<CommandOutput> {
+define_command!(
+    StatusCmd,
+    "status",
+    "Show system status",
+    "status",
+    "general",
+    |_args, env| {
         let mut lines = Vec::new();
         lines.push("OASIS_OS v0.1.0".to_string());
         lines.push(format!("cwd: {}", env.cwd));
-        // Count files in VFS root.
         match env.vfs.readdir("/") {
             Ok(entries) => lines.push(format!("root entries: {}", entries.len())),
             Err(_) => lines.push("root entries: (error reading)".to_string()),
         }
         Ok(CommandOutput::Text(lines.join("\n")))
     }
-}
+);
 
 // ---------------------------------------------------------------------------
 // touch
 // ---------------------------------------------------------------------------
 
-struct TouchCmd;
-impl Command for TouchCmd {
-    fn name(&self) -> &str {
-        "touch"
-    }
-    fn description(&self) -> &str {
-        "Create an empty file"
-    }
-    fn usage(&self) -> &str {
-        "touch <file>"
-    }
-    fn category(&self) -> &str {
-        "filesystem"
-    }
-    fn execute(&self, args: &[&str], env: &mut Environment<'_>) -> Result<CommandOutput> {
+define_command!(
+    TouchCmd,
+    "touch",
+    "Create an empty file",
+    "touch <file>",
+    "filesystem",
+    |args, env| {
         require_args(args, 1, "touch <file>")?;
         let path = resolve_path(&env.cwd, args[0]);
         if !env.vfs.exists(&path) {
@@ -300,27 +221,19 @@ impl Command for TouchCmd {
         }
         Ok(CommandOutput::None)
     }
-}
+);
 
 // ---------------------------------------------------------------------------
 // cp
 // ---------------------------------------------------------------------------
 
-struct CpCmd;
-impl Command for CpCmd {
-    fn name(&self) -> &str {
-        "cp"
-    }
-    fn description(&self) -> &str {
-        "Copy a file"
-    }
-    fn usage(&self) -> &str {
-        "cp <src> <dst>"
-    }
-    fn category(&self) -> &str {
-        "filesystem"
-    }
-    fn execute(&self, args: &[&str], env: &mut Environment<'_>) -> Result<CommandOutput> {
+define_command!(
+    CpCmd,
+    "cp",
+    "Copy a file",
+    "cp <src> <dst>",
+    "filesystem",
+    |args, env| {
         require_args(args, 2, "cp <src> <dst>")?;
         let src = resolve_path(&env.cwd, args[0]);
         let dst = resolve_path(&env.cwd, args[1]);
@@ -338,27 +251,19 @@ impl Command for CpCmd {
         env.vfs.write(&dst, &data)?;
         Ok(CommandOutput::None)
     }
-}
+);
 
 // ---------------------------------------------------------------------------
 // mv
 // ---------------------------------------------------------------------------
 
-struct MvCmd;
-impl Command for MvCmd {
-    fn name(&self) -> &str {
-        "mv"
-    }
-    fn description(&self) -> &str {
-        "Move/rename a file"
-    }
-    fn usage(&self) -> &str {
-        "mv <src> <dst>"
-    }
-    fn category(&self) -> &str {
-        "filesystem"
-    }
-    fn execute(&self, args: &[&str], env: &mut Environment<'_>) -> Result<CommandOutput> {
+define_command!(
+    MvCmd,
+    "mv",
+    "Move/rename a file",
+    "mv <src> <dst>",
+    "filesystem",
+    |args, env| {
         require_args(args, 2, "mv <src> <dst>")?;
         let src = resolve_path(&env.cwd, args[0]);
         let dst = resolve_path(&env.cwd, args[1]);
@@ -377,27 +282,19 @@ impl Command for MvCmd {
         env.vfs.remove(&src)?;
         Ok(CommandOutput::None)
     }
-}
+);
 
 // ---------------------------------------------------------------------------
 // find
 // ---------------------------------------------------------------------------
 
-struct FindCmd;
-impl Command for FindCmd {
-    fn name(&self) -> &str {
-        "find"
-    }
-    fn description(&self) -> &str {
-        "Find files by name pattern"
-    }
-    fn usage(&self) -> &str {
-        "find [path] <pattern>"
-    }
-    fn category(&self) -> &str {
-        "filesystem"
-    }
-    fn execute(&self, args: &[&str], env: &mut Environment<'_>) -> Result<CommandOutput> {
+define_command!(
+    FindCmd,
+    "find",
+    "Find files by name pattern",
+    "find [path] <pattern>",
+    "filesystem",
+    |args, env| {
         let (root, pattern) = match args.len() {
             0 => {
                 return Err(OasisError::Command("usage: find [path] <pattern>".into()));
@@ -413,7 +310,7 @@ impl Command for FindCmd {
             Ok(CommandOutput::Text(results.join("\n")))
         }
     }
-}
+);
 
 /// Recursively search for files matching a simple substring pattern.
 fn find_recursive(

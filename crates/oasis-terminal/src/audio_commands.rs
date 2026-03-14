@@ -5,26 +5,18 @@
 //! and writes requests to `/var/audio/request`.
 
 use oasis_audio::{AUDIO_REQUEST_PATH, AUDIO_STATUS_PATH};
-use oasis_types::error::{OasisError, Result};
+use oasis_types::error::OasisError;
+#[cfg(test)]
+use oasis_types::error::Result;
 
-use crate::{Command, CommandOutput, Environment};
-
-/// Terminal command for controlling audio playback via VFS-based IPC.
-pub struct MusicCmd;
-impl Command for MusicCmd {
-    fn name(&self) -> &str {
-        "music"
-    }
-    fn description(&self) -> &str {
-        "Control audio playback"
-    }
-    fn usage(&self) -> &str {
-        "music [status|play|pause|resume|stop|next|prev|vol <0-100>|list|repeat <off|all|one>|shuffle]"
-    }
-    fn category(&self) -> &str {
-        "audio"
-    }
-    fn execute(&self, args: &[&str], env: &mut Environment<'_>) -> Result<CommandOutput> {
+use crate::CommandOutput;
+define_command!(
+    MusicCmd,
+    "music",
+    "Control audio playback",
+    "music [status|play|pause|resume|stop|next|prev|vol <0-100>|list|repeat <off|all|one>|shuffle]",
+    "audio",
+    |args, env| {
         let subcmd = args.first().copied().unwrap_or("status");
 
         match subcmd {
@@ -111,11 +103,11 @@ impl Command for MusicCmd {
                 }
             },
             _ => Err(OasisError::Command(
-                format!("unknown subcommand: {subcmd}\nusage: {}", self.usage()).into(),
+                format!("unknown subcommand: {subcmd}\nusage: music [play|stop|next|prev|status|list|playlist]").into(),
             )),
         }
     }
-}
+);
 
 register_commands!(register_audio_commands, [MusicCmd]);
 

@@ -4,27 +4,19 @@ use oasis_types::error::{OasisError, Result};
 use oasis_vfs::EntryKind;
 
 use crate::cmd_helpers::require_args;
-use crate::interpreter::{Command, CommandOutput, Environment, resolve_path};
+use crate::interpreter::{CommandOutput, Environment, resolve_path};
 
 // ---------------------------------------------------------------------------
 // write
 // ---------------------------------------------------------------------------
 
-struct WriteCmd;
-impl Command for WriteCmd {
-    fn name(&self) -> &str {
-        "write"
-    }
-    fn description(&self) -> &str {
-        "Write text to a file"
-    }
-    fn usage(&self) -> &str {
-        "write <file> <text...>"
-    }
-    fn category(&self) -> &str {
-        "filesystem"
-    }
-    fn execute(&self, args: &[&str], env: &mut Environment<'_>) -> Result<CommandOutput> {
+define_command!(
+    WriteCmd,
+    "write",
+    "Write text to a file",
+    "write <file> <text...>",
+    "filesystem",
+    |args, env| {
         require_args(args, 2, "write <file> <text...>")?;
         let path = resolve_path(&env.cwd, args[0]);
         let text = args[1..].join(" ");
@@ -34,27 +26,19 @@ impl Command for WriteCmd {
             text.len()
         )))
     }
-}
+);
 
 // ---------------------------------------------------------------------------
 // append
 // ---------------------------------------------------------------------------
 
-struct AppendCmd;
-impl Command for AppendCmd {
-    fn name(&self) -> &str {
-        "append"
-    }
-    fn description(&self) -> &str {
-        "Append text to a file"
-    }
-    fn usage(&self) -> &str {
-        "append <file> <text...>"
-    }
-    fn category(&self) -> &str {
-        "filesystem"
-    }
-    fn execute(&self, args: &[&str], env: &mut Environment<'_>) -> Result<CommandOutput> {
+define_command!(
+    AppendCmd,
+    "append",
+    "Append text to a file",
+    "append <file> <text...>",
+    "filesystem",
+    |args, env| {
         require_args(args, 2, "append <file> <text...>")?;
         let path = resolve_path(&env.cwd, args[0]);
         let text = args[1..].join(" ");
@@ -71,27 +55,19 @@ impl Command for AppendCmd {
             text.len()
         )))
     }
-}
+);
 
 // ---------------------------------------------------------------------------
 // tree
 // ---------------------------------------------------------------------------
 
-struct TreeCmd;
-impl Command for TreeCmd {
-    fn name(&self) -> &str {
-        "tree"
-    }
-    fn description(&self) -> &str {
-        "Display directory tree"
-    }
-    fn usage(&self) -> &str {
-        "tree [path]"
-    }
-    fn category(&self) -> &str {
-        "filesystem"
-    }
-    fn execute(&self, args: &[&str], env: &mut Environment<'_>) -> Result<CommandOutput> {
+define_command!(
+    TreeCmd,
+    "tree",
+    "Display directory tree",
+    "tree [path]",
+    "filesystem",
+    |args, env| {
         let root = if args.is_empty() {
             env.cwd.clone()
         } else {
@@ -104,7 +80,7 @@ impl Command for TreeCmd {
         lines.push(format!("\n{dirs} directories, {files} files"));
         Ok(CommandOutput::Text(lines.join("\n")))
     }
-}
+);
 
 /// Maximum recursion depth for tree/du to prevent stack overflow.
 const MAX_DEPTH: usize = 64;
@@ -166,21 +142,13 @@ fn tree_recursive(
 // du
 // ---------------------------------------------------------------------------
 
-struct DuCmd;
-impl Command for DuCmd {
-    fn name(&self) -> &str {
-        "du"
-    }
-    fn description(&self) -> &str {
-        "Show disk usage of files/directories"
-    }
-    fn usage(&self) -> &str {
-        "du [path]"
-    }
-    fn category(&self) -> &str {
-        "filesystem"
-    }
-    fn execute(&self, args: &[&str], env: &mut Environment<'_>) -> Result<CommandOutput> {
+define_command!(
+    DuCmd,
+    "du",
+    "Show disk usage of files/directories",
+    "du [path]",
+    "filesystem",
+    |args, env| {
         let root = if args.is_empty() {
             env.cwd.clone()
         } else {
@@ -198,7 +166,7 @@ impl Command for DuCmd {
         lines.push(format!("{:>8}  {root} (total)", format_size(total)));
         Ok(CommandOutput::Text(lines.join("\n")))
     }
-}
+);
 
 fn du_recursive(
     env: &mut Environment<'_>,
@@ -242,21 +210,13 @@ fn format_size(bytes: u64) -> String {
 // stat
 // ---------------------------------------------------------------------------
 
-struct StatCmd;
-impl Command for StatCmd {
-    fn name(&self) -> &str {
-        "stat"
-    }
-    fn description(&self) -> &str {
-        "Show file metadata"
-    }
-    fn usage(&self) -> &str {
-        "stat <path>"
-    }
-    fn category(&self) -> &str {
-        "filesystem"
-    }
-    fn execute(&self, args: &[&str], env: &mut Environment<'_>) -> Result<CommandOutput> {
+define_command!(
+    StatCmd,
+    "stat",
+    "Show file metadata",
+    "stat <path>",
+    "filesystem",
+    |args, env| {
         require_args(args, 1, "stat <path>")?;
         let path = resolve_path(&env.cwd, args[0]);
         let meta = env.vfs.stat(&path)?;
@@ -274,27 +234,19 @@ impl Command for StatCmd {
         ));
         Ok(CommandOutput::Text(lines.join("\n")))
     }
-}
+);
 
 // ---------------------------------------------------------------------------
 // xxd
 // ---------------------------------------------------------------------------
 
-struct XxdCmd;
-impl Command for XxdCmd {
-    fn name(&self) -> &str {
-        "xxd"
-    }
-    fn description(&self) -> &str {
-        "Hex dump a file"
-    }
-    fn usage(&self) -> &str {
-        "xxd [-l N] <file>"
-    }
-    fn category(&self) -> &str {
-        "filesystem"
-    }
-    fn execute(&self, args: &[&str], env: &mut Environment<'_>) -> Result<CommandOutput> {
+define_command!(
+    XxdCmd,
+    "xxd",
+    "Hex dump a file",
+    "xxd [-l N] <file>",
+    "filesystem",
+    |args, env| {
         let mut limit = 256usize;
         let mut file_arg = None;
         let mut i = 0;
@@ -335,27 +287,19 @@ impl Command for XxdCmd {
         }
         Ok(CommandOutput::Text(lines.join("\n")))
     }
-}
+);
 
 // ---------------------------------------------------------------------------
 // checksum
 // ---------------------------------------------------------------------------
 
-struct ChecksumCmd;
-impl Command for ChecksumCmd {
-    fn name(&self) -> &str {
-        "checksum"
-    }
-    fn description(&self) -> &str {
-        "Compute simple checksum of a file"
-    }
-    fn usage(&self) -> &str {
-        "checksum <file>"
-    }
-    fn category(&self) -> &str {
-        "filesystem"
-    }
-    fn execute(&self, args: &[&str], env: &mut Environment<'_>) -> Result<CommandOutput> {
+define_command!(
+    ChecksumCmd,
+    "checksum",
+    "Compute simple checksum of a file",
+    "checksum <file>",
+    "filesystem",
+    |args, env| {
         require_args(args, 1, "checksum <file>")?;
         let path = resolve_path(&env.cwd, args[0]);
         let data = env.vfs.read(&path)?;
@@ -370,7 +314,7 @@ impl Command for ChecksumCmd {
             data.len()
         )))
     }
-}
+);
 
 register_commands!(
     register_file_commands,

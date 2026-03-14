@@ -2,80 +2,56 @@
 
 use oasis_types::error::{OasisError, Result};
 
-use crate::interpreter::{Command, CommandOutput, Environment, resolve_path};
+use crate::interpreter::{CommandOutput, Environment, resolve_path};
 
 // ---------------------------------------------------------------------------
 // head
 // ---------------------------------------------------------------------------
 
-struct HeadCmd;
-impl Command for HeadCmd {
-    fn name(&self) -> &str {
-        "head"
-    }
-    fn description(&self) -> &str {
-        "Show first N lines of a file"
-    }
-    fn usage(&self) -> &str {
-        "head [-n N] <file>"
-    }
-    fn category(&self) -> &str {
-        "text"
-    }
-    fn execute(&self, args: &[&str], env: &mut Environment<'_>) -> Result<CommandOutput> {
+define_command!(
+    HeadCmd,
+    "head",
+    "Show first N lines of a file",
+    "head [-n N] <file>",
+    "text",
+    |args, env| {
         let (n, file) = parse_n_flag(args, 10)?;
         let text = read_text_input(file, env)?;
         let result: Vec<&str> = text.lines().take(n).collect();
         Ok(CommandOutput::Text(result.join("\n")))
     }
-}
+);
 
 // ---------------------------------------------------------------------------
 // tail
 // ---------------------------------------------------------------------------
 
-struct TailCmd;
-impl Command for TailCmd {
-    fn name(&self) -> &str {
-        "tail"
-    }
-    fn description(&self) -> &str {
-        "Show last N lines of a file"
-    }
-    fn usage(&self) -> &str {
-        "tail [-n N] <file>"
-    }
-    fn category(&self) -> &str {
-        "text"
-    }
-    fn execute(&self, args: &[&str], env: &mut Environment<'_>) -> Result<CommandOutput> {
+define_command!(
+    TailCmd,
+    "tail",
+    "Show last N lines of a file",
+    "tail [-n N] <file>",
+    "text",
+    |args, env| {
         let (n, file) = parse_n_flag(args, 10)?;
         let text = read_text_input(file, env)?;
         let lines: Vec<&str> = text.lines().collect();
         let start = lines.len().saturating_sub(n);
         Ok(CommandOutput::Text(lines[start..].join("\n")))
     }
-}
+);
 
 // ---------------------------------------------------------------------------
 // wc
 // ---------------------------------------------------------------------------
 
-struct WcCmd;
-impl Command for WcCmd {
-    fn name(&self) -> &str {
-        "wc"
-    }
-    fn description(&self) -> &str {
-        "Count lines, words, and bytes"
-    }
-    fn usage(&self) -> &str {
-        "wc [-l|-w|-c] <file>"
-    }
-    fn category(&self) -> &str {
-        "text"
-    }
-    fn execute(&self, args: &[&str], env: &mut Environment<'_>) -> Result<CommandOutput> {
+define_command!(
+    WcCmd,
+    "wc",
+    "Count lines, words, and bytes",
+    "wc [-l|-w|-c] <file>",
+    "text",
+    |args, env| {
         let mut mode = "all";
         let mut file_args = Vec::new();
         for &arg in args {
@@ -99,27 +75,19 @@ impl Command for WcCmd {
             ))),
         }
     }
-}
+);
 
 // ---------------------------------------------------------------------------
 // grep
 // ---------------------------------------------------------------------------
 
-struct GrepCmd;
-impl Command for GrepCmd {
-    fn name(&self) -> &str {
-        "grep"
-    }
-    fn description(&self) -> &str {
-        "Search for pattern in text"
-    }
-    fn usage(&self) -> &str {
-        "grep [-i] [-n] [-v] [-c] <pattern> [file]"
-    }
-    fn category(&self) -> &str {
-        "text"
-    }
-    fn execute(&self, args: &[&str], env: &mut Environment<'_>) -> Result<CommandOutput> {
+define_command!(
+    GrepCmd,
+    "grep",
+    "Search for pattern in text",
+    "grep [-i] [-n] [-v] [-c] <pattern> [file]",
+    "text",
+    |args, env| {
         let mut case_insensitive = false;
         let mut show_numbers = false;
         let mut invert = false;
@@ -174,27 +142,19 @@ impl Command for GrepCmd {
             Ok(CommandOutput::Text(matches.join("\n")))
         }
     }
-}
+);
 
 // ---------------------------------------------------------------------------
 // sort
 // ---------------------------------------------------------------------------
 
-struct SortCmd;
-impl Command for SortCmd {
-    fn name(&self) -> &str {
-        "sort"
-    }
-    fn description(&self) -> &str {
-        "Sort lines of text"
-    }
-    fn usage(&self) -> &str {
-        "sort [-r] [-n] [file]"
-    }
-    fn category(&self) -> &str {
-        "text"
-    }
-    fn execute(&self, args: &[&str], env: &mut Environment<'_>) -> Result<CommandOutput> {
+define_command!(
+    SortCmd,
+    "sort",
+    "Sort lines of text",
+    "sort [-r] [-n] [file]",
+    "text",
+    |args, env| {
         let mut reverse = false;
         let mut numeric = false;
         let mut file_arg = None;
@@ -230,27 +190,19 @@ impl Command for SortCmd {
         }
         Ok(CommandOutput::Text(lines.join("\n")))
     }
-}
+);
 
 // ---------------------------------------------------------------------------
 // uniq
 // ---------------------------------------------------------------------------
 
-struct UniqCmd;
-impl Command for UniqCmd {
-    fn name(&self) -> &str {
-        "uniq"
-    }
-    fn description(&self) -> &str {
-        "Remove adjacent duplicate lines"
-    }
-    fn usage(&self) -> &str {
-        "uniq [-c] [file]"
-    }
-    fn category(&self) -> &str {
-        "text"
-    }
-    fn execute(&self, args: &[&str], env: &mut Environment<'_>) -> Result<CommandOutput> {
+define_command!(
+    UniqCmd,
+    "uniq",
+    "Remove adjacent duplicate lines",
+    "uniq [-c] [file]",
+    "text",
+    |args, env| {
         let mut show_count = false;
         let mut file_arg = None;
         for &arg in args {
@@ -288,27 +240,19 @@ impl Command for UniqCmd {
         }
         Ok(CommandOutput::Text(result.join("\n")))
     }
-}
+);
 
 // ---------------------------------------------------------------------------
 // tee
 // ---------------------------------------------------------------------------
 
-struct TeeCmd;
-impl Command for TeeCmd {
-    fn name(&self) -> &str {
-        "tee"
-    }
-    fn description(&self) -> &str {
-        "Read stdin, write to file and stdout"
-    }
-    fn usage(&self) -> &str {
-        "tee [-a] <file>"
-    }
-    fn category(&self) -> &str {
-        "text"
-    }
-    fn execute(&self, args: &[&str], env: &mut Environment<'_>) -> Result<CommandOutput> {
+define_command!(
+    TeeCmd,
+    "tee",
+    "Read stdin, write to file and stdout",
+    "tee [-a] <file>",
+    "text",
+    |args, env| {
         let mut append = false;
         let mut file_arg = None;
         for &arg in args {
@@ -332,27 +276,19 @@ impl Command for TeeCmd {
         }
         Ok(CommandOutput::Text(input))
     }
-}
+);
 
 // ---------------------------------------------------------------------------
 // tr
 // ---------------------------------------------------------------------------
 
-struct TrCmd;
-impl Command for TrCmd {
-    fn name(&self) -> &str {
-        "tr"
-    }
-    fn description(&self) -> &str {
-        "Translate or delete characters"
-    }
-    fn usage(&self) -> &str {
-        "tr [-d] <set1> [set2]"
-    }
-    fn category(&self) -> &str {
-        "text"
-    }
-    fn execute(&self, args: &[&str], env: &mut Environment<'_>) -> Result<CommandOutput> {
+define_command!(
+    TrCmd,
+    "tr",
+    "Translate or delete characters",
+    "tr [-d] <set1> [set2]",
+    "text",
+    |args, env| {
         let mut delete = false;
         let mut positional = Vec::new();
         for &arg in args {
@@ -391,27 +327,19 @@ impl Command for TrCmd {
             Ok(CommandOutput::Text(result))
         }
     }
-}
+);
 
 // ---------------------------------------------------------------------------
 // cut
 // ---------------------------------------------------------------------------
 
-struct CutCmd;
-impl Command for CutCmd {
-    fn name(&self) -> &str {
-        "cut"
-    }
-    fn description(&self) -> &str {
-        "Extract fields or columns"
-    }
-    fn usage(&self) -> &str {
-        "cut -d <delim> -f <fields> [file]"
-    }
-    fn category(&self) -> &str {
-        "text"
-    }
-    fn execute(&self, args: &[&str], env: &mut Environment<'_>) -> Result<CommandOutput> {
+define_command!(
+    CutCmd,
+    "cut",
+    "Extract fields or columns",
+    "cut -d <delim> -f <fields> [file]",
+    "text",
+    |args, env| {
         let mut delim = "\t";
         let mut fields_str = "";
         let mut file_arg = None;
@@ -459,7 +387,7 @@ impl Command for CutCmd {
         }
         Ok(CommandOutput::Text(result.join("\n")))
     }
-}
+);
 
 /// Parse a field spec like "1,3" or "2-4" into a list of 1-based indices.
 fn parse_field_spec(spec: &str) -> Result<Vec<usize>> {
@@ -489,21 +417,13 @@ fn parse_field_spec(spec: &str) -> Result<Vec<usize>> {
 // diff
 // ---------------------------------------------------------------------------
 
-struct DiffCmd;
-impl Command for DiffCmd {
-    fn name(&self) -> &str {
-        "diff"
-    }
-    fn description(&self) -> &str {
-        "Compare two files line by line"
-    }
-    fn usage(&self) -> &str {
-        "diff <file1> <file2>"
-    }
-    fn category(&self) -> &str {
-        "text"
-    }
-    fn execute(&self, args: &[&str], env: &mut Environment<'_>) -> Result<CommandOutput> {
+define_command!(
+    DiffCmd,
+    "diff",
+    "Compare two files line by line",
+    "diff <file1> <file2>",
+    "text",
+    |args, env| {
         if args.len() < 2 {
             return Err(OasisError::Command("usage: diff <file1> <file2>".into()));
         }
@@ -548,7 +468,7 @@ impl Command for DiffCmd {
             Ok(CommandOutput::Text(output.join("\n")))
         }
     }
-}
+);
 
 // ---------------------------------------------------------------------------
 // Helpers

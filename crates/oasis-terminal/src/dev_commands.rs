@@ -1,8 +1,10 @@
 //! Developer tool commands: base64, json, uuid, seq, expr, test, xargs.
 
-use oasis_types::error::{OasisError, Result};
+use oasis_types::error::OasisError;
+#[cfg(test)]
+use oasis_types::error::Result;
 
-use crate::interpreter::{Command, CommandOutput, Environment};
+use crate::interpreter::CommandOutput;
 
 use crate::cmd_helpers::time_seed;
 
@@ -10,21 +12,13 @@ use crate::cmd_helpers::time_seed;
 // base64
 // ---------------------------------------------------------------------------
 
-struct Base64Cmd;
-impl Command for Base64Cmd {
-    fn name(&self) -> &str {
-        "base64"
-    }
-    fn description(&self) -> &str {
-        "Encode/decode base64"
-    }
-    fn usage(&self) -> &str {
-        "base64 [-d] <text>"
-    }
-    fn category(&self) -> &str {
-        "dev"
-    }
-    fn execute(&self, args: &[&str], env: &mut Environment<'_>) -> Result<CommandOutput> {
+define_command!(
+    Base64Cmd,
+    "base64",
+    "Encode/decode base64",
+    "base64 [-d] <text>",
+    "dev",
+    |args, env| {
         let mut decode = false;
         let mut text_parts = Vec::new();
         for &arg in args {
@@ -51,7 +45,7 @@ impl Command for Base64Cmd {
             Ok(CommandOutput::Text(base64_encode(input.as_bytes())))
         }
     }
-}
+);
 
 const B64_CHARS: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 
@@ -125,21 +119,13 @@ fn base64_decode(input: &str) -> std::result::Result<String, String> {
 // json
 // ---------------------------------------------------------------------------
 
-struct JsonCmd;
-impl Command for JsonCmd {
-    fn name(&self) -> &str {
-        "json"
-    }
-    fn description(&self) -> &str {
-        "Pretty-print or validate JSON"
-    }
-    fn usage(&self) -> &str {
-        "json <text> | json validate <text>"
-    }
-    fn category(&self) -> &str {
-        "dev"
-    }
-    fn execute(&self, args: &[&str], env: &mut Environment<'_>) -> Result<CommandOutput> {
+define_command!(
+    JsonCmd,
+    "json",
+    "Pretty-print or validate JSON",
+    "json <text> | json validate <text>",
+    "dev",
+    |args, env| {
         let input = if args.is_empty() {
             env.stdin.clone().unwrap_or_default()
         } else if args[0] == "validate" {
@@ -167,7 +153,7 @@ impl Command for JsonCmd {
             Err(OasisError::Command("Invalid JSON".into()))
         }
     }
-}
+);
 
 fn is_valid_json(s: &str) -> bool {
     let s = s.trim();
@@ -272,21 +258,13 @@ fn push_indent(s: &mut String, level: usize) {
 // uuid
 // ---------------------------------------------------------------------------
 
-struct UuidCmd;
-impl Command for UuidCmd {
-    fn name(&self) -> &str {
-        "uuid"
-    }
-    fn description(&self) -> &str {
-        "Generate a pseudo-random UUID v4"
-    }
-    fn usage(&self) -> &str {
-        "uuid"
-    }
-    fn category(&self) -> &str {
-        "dev"
-    }
-    fn execute(&self, _args: &[&str], env: &mut Environment<'_>) -> Result<CommandOutput> {
+define_command!(
+    UuidCmd,
+    "uuid",
+    "Generate a pseudo-random UUID v4",
+    "uuid",
+    "dev",
+    |_args, env| {
         // Simple PRNG-based UUID v4 (not cryptographic).
         let seed = time_seed(env);
 
@@ -322,27 +300,19 @@ impl Command for UuidCmd {
             bytes[15],
         )))
     }
-}
+);
 
 // ---------------------------------------------------------------------------
 // seq
 // ---------------------------------------------------------------------------
 
-struct SeqCmd;
-impl Command for SeqCmd {
-    fn name(&self) -> &str {
-        "seq"
-    }
-    fn description(&self) -> &str {
-        "Print a sequence of numbers"
-    }
-    fn usage(&self) -> &str {
-        "seq [start] <end> [step]"
-    }
-    fn category(&self) -> &str {
-        "dev"
-    }
-    fn execute(&self, args: &[&str], _env: &mut Environment<'_>) -> Result<CommandOutput> {
+define_command!(
+    SeqCmd,
+    "seq",
+    "Print a sequence of numbers",
+    "seq [start] <end> [step]",
+    "dev",
+    |args, _env| {
         let (start, end, step) = match args.len() {
             0 => {
                 return Err(OasisError::Command(
@@ -393,27 +363,19 @@ impl Command for SeqCmd {
         }
         Ok(CommandOutput::Text(result.join("\n")))
     }
-}
+);
 
 // ---------------------------------------------------------------------------
 // expr
 // ---------------------------------------------------------------------------
 
-struct ExprCmd;
-impl Command for ExprCmd {
-    fn name(&self) -> &str {
-        "expr"
-    }
-    fn description(&self) -> &str {
-        "Evaluate arithmetic expression"
-    }
-    fn usage(&self) -> &str {
-        "expr <expression>"
-    }
-    fn category(&self) -> &str {
-        "dev"
-    }
-    fn execute(&self, args: &[&str], _env: &mut Environment<'_>) -> Result<CommandOutput> {
+define_command!(
+    ExprCmd,
+    "expr",
+    "Evaluate arithmetic expression",
+    "expr <expression>",
+    "dev",
+    |args, _env| {
         if args.is_empty() {
             return Err(OasisError::Command("usage: expr <expression>".into()));
         }
@@ -429,7 +391,7 @@ impl Command for ExprCmd {
             Err(e) => Err(OasisError::Command(format!("expr: {e}").into())),
         }
     }
-}
+);
 
 /// Maximum nesting depth for parenthesised sub-expressions.
 const EXPR_MAX_DEPTH: usize = 64;
@@ -567,21 +529,13 @@ fn parse_primary(
 // test
 // ---------------------------------------------------------------------------
 
-struct TestCmd;
-impl Command for TestCmd {
-    fn name(&self) -> &str {
-        "test"
-    }
-    fn description(&self) -> &str {
-        "Evaluate conditional expression"
-    }
-    fn usage(&self) -> &str {
-        "test <expr> | test -f <file> | test -d <dir> | test <a> = <b>"
-    }
-    fn category(&self) -> &str {
-        "dev"
-    }
-    fn execute(&self, args: &[&str], env: &mut Environment<'_>) -> Result<CommandOutput> {
+define_command!(
+    TestCmd,
+    "test",
+    "Evaluate conditional expression",
+    "test <expr> | test -f <file> | test -d <dir> | test <a> = <b>",
+    "dev",
+    |args, env| {
         if args.is_empty() {
             return Ok(CommandOutput::Text("false".to_string()));
         }
@@ -648,27 +602,19 @@ impl Command for TestCmd {
             if result { "true" } else { "false" }.to_string(),
         ))
     }
-}
+);
 
 // ---------------------------------------------------------------------------
 // xargs
 // ---------------------------------------------------------------------------
 
-struct XargsCmd;
-impl Command for XargsCmd {
-    fn name(&self) -> &str {
-        "xargs"
-    }
-    fn description(&self) -> &str {
-        "Build command from stdin lines"
-    }
-    fn usage(&self) -> &str {
-        "xargs <command>"
-    }
-    fn category(&self) -> &str {
-        "dev"
-    }
-    fn execute(&self, args: &[&str], env: &mut Environment<'_>) -> Result<CommandOutput> {
+define_command!(
+    XargsCmd,
+    "xargs",
+    "Build command from stdin lines",
+    "xargs <command>",
+    "dev",
+    |args, env| {
         if args.is_empty() {
             return Err(OasisError::Command("usage: xargs <command>".into()));
         }
@@ -690,7 +636,7 @@ impl Command for XargsCmd {
             "xargs: would execute: {full_cmd}"
         )))
     }
-}
+);
 
 register_commands!(
     register_dev_commands,

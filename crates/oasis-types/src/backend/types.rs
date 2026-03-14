@@ -342,6 +342,40 @@ impl<T, E: std::fmt::Display> BackendErrExt<T> for std::result::Result<T, E> {
     }
 }
 
+/// Extension trait for converting errors with `Debug` formatting.
+///
+/// Useful for WASM `JsValue` errors that implement `Debug` but not `Display`.
+#[allow(dead_code)]
+pub trait BackendErrDebug<T> {
+    /// Convert the error to `OasisError::Backend` using `Debug` formatting.
+    fn backend_err_debug(self) -> Result<T>;
+}
+
+impl<T, E: std::fmt::Debug> BackendErrDebug<T> for std::result::Result<T, E> {
+    fn backend_err_debug(self) -> Result<T> {
+        self.map_err(|e| crate::error::OasisError::Backend(format!("{e:?}").into()))
+    }
+}
+
+/// Extension trait for adding context to backend errors.
+///
+/// Adds a prefix message to backend errors, e.g.:
+/// ```ignore
+/// socket.connect(addr).backend_err_ctx("TCP connect")?;
+/// // produces: OasisError::Backend("TCP connect: connection refused")
+/// ```
+#[allow(dead_code)]
+pub trait BackendErrCtx<T> {
+    /// Convert the error to `OasisError::Backend` with a context prefix.
+    fn backend_err_ctx(self, ctx: &str) -> Result<T>;
+}
+
+impl<T, E: std::fmt::Display> BackendErrCtx<T> for std::result::Result<T, E> {
+    fn backend_err_ctx(self, ctx: &str) -> Result<T> {
+        self.map_err(|e| crate::error::OasisError::Backend(format!("{ctx}: {e}").into()))
+    }
+}
+
 /// Look up a value in an `Option`, returning `OasisError::Backend` if `None`.
 ///
 /// Eliminates repeated `.ok_or_else(|| OasisError::Backend(format!(...).into()))`.

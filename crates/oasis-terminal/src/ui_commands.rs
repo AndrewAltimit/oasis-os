@@ -1,28 +1,22 @@
 //! Window & UI control commands: wm, sdi, theme, notify, screenshot.
 
-use oasis_types::error::{OasisError, Result};
+use oasis_types::error::OasisError;
+#[cfg(test)]
+use oasis_types::error::Result;
 
-use crate::interpreter::{Command, CommandOutput, Environment};
+use crate::interpreter::CommandOutput;
 
 // ---------------------------------------------------------------------------
 // wm
 // ---------------------------------------------------------------------------
 
-struct WmCmd;
-impl Command for WmCmd {
-    fn name(&self) -> &str {
-        "wm"
-    }
-    fn description(&self) -> &str {
-        "Window manager control"
-    }
-    fn usage(&self) -> &str {
-        "wm [list|close <id>|focus <id>|minimize <id>]"
-    }
-    fn category(&self) -> &str {
-        "ui"
-    }
-    fn execute(&self, args: &[&str], env: &mut Environment<'_>) -> Result<CommandOutput> {
+define_command!(
+    WmCmd,
+    "wm",
+    "Window manager control",
+    "wm [list|close <id>|focus <id>|minimize <id>]",
+    "ui",
+    |args, env| {
         let subcmd = args.first().copied().unwrap_or("list");
         match subcmd {
             "list" => {
@@ -52,31 +46,23 @@ impl Command for WmCmd {
                 Ok(CommandOutput::Text(format!("WM request: {subcmd} {id}")))
             },
             _ => Err(OasisError::Command(
-                format!("unknown subcommand: {subcmd}\nusage: {}", self.usage()).into(),
+                format!("unknown subcommand: {subcmd}\nusage: wm [list|close <id>|focus <id>|minimize <id>]").into(),
             )),
         }
     }
-}
+);
 
 // ---------------------------------------------------------------------------
 // sdi
 // ---------------------------------------------------------------------------
 
-struct SdiCmd;
-impl Command for SdiCmd {
-    fn name(&self) -> &str {
-        "sdi"
-    }
-    fn description(&self) -> &str {
-        "Inspect SDI scene objects"
-    }
-    fn usage(&self) -> &str {
-        "sdi [list|get <name>]"
-    }
-    fn category(&self) -> &str {
-        "ui"
-    }
-    fn execute(&self, args: &[&str], env: &mut Environment<'_>) -> Result<CommandOutput> {
+define_command!(
+    SdiCmd,
+    "sdi",
+    "Inspect SDI scene objects",
+    "sdi [list|get <name>]",
+    "ui",
+    |args, env| {
         let subcmd = args.first().copied().unwrap_or("list");
         match subcmd {
             "list" => {
@@ -106,27 +92,19 @@ impl Command for SdiCmd {
             )),
         }
     }
-}
+);
 
 // ---------------------------------------------------------------------------
 // theme
 // ---------------------------------------------------------------------------
 
-struct ThemeCmd;
-impl Command for ThemeCmd {
-    fn name(&self) -> &str {
-        "theme"
-    }
-    fn description(&self) -> &str {
-        "Show or modify current theme"
-    }
-    fn usage(&self) -> &str {
-        "theme [show|colors]"
-    }
-    fn category(&self) -> &str {
-        "ui"
-    }
-    fn execute(&self, args: &[&str], env: &mut Environment<'_>) -> Result<CommandOutput> {
+define_command!(
+    ThemeCmd,
+    "theme",
+    "Show or modify current theme",
+    "theme [show|colors]",
+    "ui",
+    |args, env| {
         let subcmd = args.first().copied().unwrap_or("show");
         match subcmd {
             "show" | "colors" => {
@@ -147,27 +125,19 @@ impl Command for ThemeCmd {
             )),
         }
     }
-}
+);
 
 // ---------------------------------------------------------------------------
 // notify
 // ---------------------------------------------------------------------------
 
-struct NotifyCmd;
-impl Command for NotifyCmd {
-    fn name(&self) -> &str {
-        "notify"
-    }
-    fn description(&self) -> &str {
-        "Show a notification message"
-    }
-    fn usage(&self) -> &str {
-        "notify [--level info|success|warning|error] <message>"
-    }
-    fn category(&self) -> &str {
-        "ui"
-    }
-    fn execute(&self, args: &[&str], env: &mut Environment<'_>) -> Result<CommandOutput> {
+define_command!(
+    NotifyCmd,
+    "notify",
+    "Show a notification message",
+    "notify [--level info|success|warning|error] <message>",
+    "ui",
+    |args, env| {
         if args.is_empty() {
             return Err(OasisError::Command(
                 "usage: notify [--level info|success|warning|error] <message>".into(),
@@ -209,27 +179,19 @@ impl Command for NotifyCmd {
             "Notification queued [{level}]: {message}"
         )))
     }
-}
+);
 
 // ---------------------------------------------------------------------------
 // screenshot
 // ---------------------------------------------------------------------------
 
-struct ScreenshotCmd;
-impl Command for ScreenshotCmd {
-    fn name(&self) -> &str {
-        "screenshot"
-    }
-    fn description(&self) -> &str {
-        "Take a screenshot"
-    }
-    fn usage(&self) -> &str {
-        "screenshot [path]"
-    }
-    fn category(&self) -> &str {
-        "ui"
-    }
-    fn execute(&self, args: &[&str], env: &mut Environment<'_>) -> Result<CommandOutput> {
+define_command!(
+    ScreenshotCmd,
+    "screenshot",
+    "Take a screenshot",
+    "screenshot [path]",
+    "ui",
+    |args, env| {
         let path = args.first().copied().unwrap_or("/tmp/screenshot.bmp");
         let req_path = "/var/screenshot/request";
         env.vfs.write(req_path, path.as_bytes())?;
@@ -237,7 +199,7 @@ impl Command for ScreenshotCmd {
             "Screenshot request queued: {path}"
         )))
     }
-}
+);
 
 register_commands!(
     register_ui_commands,

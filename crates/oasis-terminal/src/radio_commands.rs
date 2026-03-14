@@ -5,26 +5,18 @@
 //! and writes requests to `/var/radio/request`.
 
 use oasis_audio::{RADIO_REQUEST_PATH, RADIO_STATUS_PATH};
-use oasis_types::error::{OasisError, Result};
+use oasis_types::error::OasisError;
+#[cfg(test)]
+use oasis_types::error::Result;
 
-use crate::{Command, CommandOutput, Environment};
-
-/// Terminal command for controlling internet radio via VFS-based IPC.
-pub struct RadioCmd;
-impl Command for RadioCmd {
-    fn name(&self) -> &str {
-        "radio"
-    }
-    fn description(&self) -> &str {
-        "Control internet radio"
-    }
-    fn usage(&self) -> &str {
-        "radio [status|stations|tune <name|index>|stop|vol [0-100]|fav <index>|genre [name]|info]"
-    }
-    fn category(&self) -> &str {
-        "audio"
-    }
-    fn execute(&self, args: &[&str], env: &mut Environment<'_>) -> Result<CommandOutput> {
+use crate::CommandOutput;
+define_command!(
+    RadioCmd,
+    "radio",
+    "Control internet radio",
+    "radio [status|stations|tune <name|index>|stop|vol [0-100]|fav <index>|genre [name]|info]",
+    "audio",
+    |args, env| {
         let subcmd = args.first().copied().unwrap_or("status");
 
         match subcmd {
@@ -155,11 +147,12 @@ impl Command for RadioCmd {
                 }
             },
             _ => Err(OasisError::Command(
-                format!("unknown subcommand: {subcmd}\nusage: {}", self.usage()).into(),
+                format!("unknown subcommand: {subcmd}\nusage: radio [play|stop|list|status|fav]")
+                    .into(),
             )),
         }
     }
-}
+);
 
 register_commands!(register_radio_commands, [RadioCmd]);
 

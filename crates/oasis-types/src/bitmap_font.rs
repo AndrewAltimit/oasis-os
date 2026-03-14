@@ -578,6 +578,31 @@ pub fn glyph_advance_scaled(ch: char, font_size: u16) -> u32 {
     advance * fs / 8
 }
 
+/// Iterate over the set pixels of a bitmap glyph, calling `emit` for each.
+///
+/// The 8x8 bitmap glyph for `ch` is iterated row-by-row, column-by-column.
+/// For each set pixel, `emit(col - left_pad, row)` is called with the
+/// left-pad-adjusted column and the row index (both in 0..8 range).
+///
+/// This extracts the common glyph iteration loop shared by SDL, UE5, and
+/// WASM backends, eliminating duplicate bit-masking logic.
+pub fn for_each_glyph_pixel(ch: char, mut emit: impl FnMut(i32, i32)) {
+    let data = glyph(ch);
+    let (left_pad, _) = glyph_metrics(ch);
+    let left_pad = left_pad as i32;
+    for row in 0..8i32 {
+        let bits = data[row as usize];
+        if bits == 0 {
+            continue;
+        }
+        for col in 0..8i32 {
+            if bits & (0x80 >> col) != 0 {
+                emit(col - left_pad, row);
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -748,5 +773,44 @@ mod tests {
         assert!(!has_glyph('\u{4E00}'));
         let g = glyph('\u{4E00}');
         assert_eq!(g[0], 0x7E); // Tofu box.
+    }
+
+    #[test]
+    fn for_each_glyph_pixel_space_emits_nothing() {
+        let mut count = 0;
+        for_each_glyph_pixel(' ', |_, _| count += 1);
+        assert_eq!(count, 0, "space glyph should have no set pixels");
+    }
+
+    #[test]
+    fn for_each_glyph_pixel_a_emits_pixels() {
+        let mut pixels = Vec::new();
+        for_each_glyph_pixel('A', |col, row| pixels.push((col, row)));
+        assert!(pixels.len() > 10, "A should have many pixels");
+        // All rows should be in 0..8.
+        for &(_, row) in &pixels {
+            assert!(row >= 0 && row < 8);
+        }
+    }
+
+    #[test]
+    fn for_each_glyph_pixel_matches_raw_glyph() {
+        // Verify the helper matches manual iteration.
+        let ch = 'X';
+        let data = glyph(ch);
+        let (left_pad, _) = glyph_metrics(ch);
+        let left_pad = left_pad as i32;
+        let mut expected = Vec::new();
+        for row in 0..8i32 {
+            let bits = data[row as usize];
+            for col in 0..8i32 {
+                if bits & (0x80 >> col) != 0 {
+                    expected.push((col - left_pad, row));
+                }
+            }
+        }
+        let mut actual = Vec::new();
+        for_each_glyph_pixel(ch, |col, row| actual.push((col, row)));
+        assert_eq!(actual, expected);
     }
 }
