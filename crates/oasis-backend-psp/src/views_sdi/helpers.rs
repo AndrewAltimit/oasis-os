@@ -7,8 +7,9 @@ use oasis_core::sdi::SdiRegistry;
 /// reference is only valid until the next `sdi_key!` call on the same buffer.
 macro_rules! sdi_key {
     ($buf:expr, $($arg:tt)*) => {{
+        use ::core::fmt::Write as _;
         $buf.clear();
-        ::core::fmt::Write::write_fmt($buf, format_args!($($arg)*)).unwrap();
+        $buf.write_fmt(format_args!($($arg)*)).unwrap();
         $buf.as_str()
     }};
 }
