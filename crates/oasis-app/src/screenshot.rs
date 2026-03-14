@@ -108,12 +108,18 @@ fn capture_skin(skin_name: &str) -> anyhow::Result<()> {
     let mut sdi = SdiRegistry::new();
     skin.apply_layout(&mut sdi);
 
-    // Wallpaper.
-    let wallpaper_tex = {
-        let wp_data = wallpaper::generate_from_config(w, h, &active_theme);
-        backend.load_texture(w, h, &wp_data)?
-    };
-    {
+    // Wallpaper — skip for shader skins (shader replaces the wallpaper).
+    // Also hide any opaque content_bg that the skin layout creates, since
+    // it would cover the shader output.
+    let has_shader = oasis_core::vector_overlay::get_shader_layer(&active_theme).is_some();
+    if has_shader && let Ok(obj) = sdi.get_mut("content_bg") {
+        obj.visible = false;
+    }
+    if !has_shader {
+        let wallpaper_tex = {
+            let wp_data = wallpaper::generate_from_config(w, h, &active_theme);
+            backend.load_texture(w, h, &wp_data)?
+        };
         let obj = sdi.create("wallpaper");
         obj.x = 0;
         obj.y = 0;
@@ -382,8 +388,24 @@ fn render_and_save_inner(
     clear_color: Color,
     vector: Option<VectorCtx<'_>>,
 ) -> anyhow::Result<()> {
-    let render_once = |b: &mut SdlBackend, s: &mut SdiRegistry| -> anyhow::Result<()> {
+    // Create shader bridge if the theme has a shader background layer.
+    let shader_info = vector
+        .as_ref()
+        .and_then(|v| oasis_core::vector_overlay::get_shader_layer(v.theme));
+    let mut shader_bridge = shader_info
+        .as_ref()
+        .and_then(|_| oasis_backend_sdl::shader_bridge::SdlShaderBridge::new(w, h));
+
+    let render_once = |b: &mut SdlBackend,
+                       s: &mut SdiRegistry,
+                       bridge: &mut Option<oasis_backend_sdl::shader_bridge::SdlShaderBridge>|
+     -> anyhow::Result<()> {
         b.clear(clear_color)?;
+        // Render shader wallpaper first if present (replaces bg clear).
+        if let (Some(br), Some(info)) = (bridge.as_mut(), shader_info.as_ref()) {
+            let time = 30.0 / 60.0;
+            br.render_and_blit(b, &info.name, time, &info.params);
+        }
         if let Some(ref v) = vector
             && (v.theme.icon.style == "vector" || !v.theme.background_layers.is_empty())
         {
@@ -397,9 +419,9 @@ fn render_and_save_inner(
         Ok(())
     };
 
-    render_once(backend, sdi)?;
+    render_once(backend, sdi, &mut shader_bridge)?;
     backend.swap_buffers()?;
-    render_once(backend, sdi)?;
+    render_once(backend, sdi, &mut shader_bridge)?;
 
     let pixels = backend.read_pixels(0, 0, w, h)?;
     save_png(&path, w, h, &pixels)?;
