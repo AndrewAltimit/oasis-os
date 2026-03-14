@@ -8,7 +8,7 @@ use oasis_core::sdi::SdiRegistry;
 macro_rules! sdi_key {
     ($buf:expr, $($arg:tt)*) => {{
         $buf.clear();
-        ::core::fmt::Write::write_fmt(&mut $buf, format_args!($($arg)*)).unwrap();
+        ::core::fmt::Write::write_fmt($buf, format_args!($($arg)*)).unwrap();
         $buf.as_str()
     }};
 }
