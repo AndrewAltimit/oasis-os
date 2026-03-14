@@ -1,6 +1,8 @@
 //! Skin loading from TOML configuration files.
 
-use std::collections::HashMap;
+mod parsing;
+mod validation;
+
 #[cfg(not(target_arch = "wasm32"))]
 use std::path::{Path, PathBuf};
 
@@ -11,7 +13,9 @@ use oasis_types::error::{OasisError, Result};
 
 use super::corrupted::CorruptedModifiers;
 use super::strings::SkinStrings;
-use super::theme::{SkinTheme, parse_hex_color};
+use super::theme::SkinTheme;
+
+pub use parsing::{SkinLayout, SkinObjectDef};
 
 /// Top-level skin manifest (`skin.toml`).
 #[derive(Debug, Clone, Deserialize)]
@@ -43,50 +47,6 @@ fn default_width() -> u32 {
 }
 fn default_height() -> u32 {
     272
-}
-
-/// A single SDI object definition in a layout file.
-#[derive(Debug, Clone, Deserialize)]
-pub struct SkinObjectDef {
-    pub x: Option<i32>,
-    pub y: Option<i32>,
-    pub w: Option<u32>,
-    pub h: Option<u32>,
-    pub color: Option<String>,
-    pub text: Option<String>,
-    pub text_color: Option<String>,
-    pub font_size: Option<u16>,
-    pub alpha: Option<u8>,
-    pub visible: Option<bool>,
-    pub z: Option<i32>,
-    // Extended visual properties.
-    #[serde(default)]
-    pub border_radius: Option<u16>,
-    #[serde(default)]
-    pub gradient_top: Option<String>,
-    #[serde(default)]
-    pub gradient_bottom: Option<String>,
-    #[serde(default)]
-    pub shadow_level: Option<u8>,
-    #[serde(default)]
-    pub stroke_width: Option<u16>,
-    #[serde(default)]
-    pub stroke_color: Option<String>,
-    #[serde(default)]
-    pub text_shadow_dx: Option<i32>,
-    #[serde(default)]
-    pub text_shadow_dy: Option<i32>,
-    #[serde(default)]
-    pub text_shadow_color: Option<String>,
-    #[serde(default)]
-    pub shadow_color: Option<String>,
-}
-
-/// Layout: a named collection of SDI object definitions (`layout.toml`).
-#[derive(Debug, Clone, Deserialize)]
-pub struct SkinLayout {
-    #[serde(flatten)]
-    pub objects: HashMap<String, SkinObjectDef>,
 }
 
 /// Feature gates controlling which capabilities a skin exposes.
@@ -213,145 +173,6 @@ pub struct Skin {
 }
 
 impl Skin {
-    /// Validate a loaded skin and return a list of warnings.
-    ///
-    /// Checks required fields, valid hex color values, layout coordinate
-    /// bounds, and recognized feature flag values. Returns an empty `Vec`
-    /// when the skin is fully valid.
-    pub fn validate(&self) -> Vec<String> {
-        let mut warnings = Vec::new();
-
-        // -- Manifest checks --
-        if self.manifest.name.is_empty() {
-            warnings.push("manifest: name is empty".to_string());
-        }
-        if self.manifest.screen_width == 0 {
-            warnings.push("manifest: screen_width is 0".to_string());
-        }
-        if self.manifest.screen_height == 0 {
-            warnings.push("manifest: screen_height is 0".to_string());
-        }
-        // Sanity bound: screens larger than 8K are suspicious.
-        const MAX_SCREEN: u32 = 7680;
-        if self.manifest.screen_width > MAX_SCREEN {
-            warnings.push(format!(
-                "manifest: screen_width {} exceeds {}",
-                self.manifest.screen_width, MAX_SCREEN,
-            ));
-        }
-        if self.manifest.screen_height > MAX_SCREEN {
-            warnings.push(format!(
-                "manifest: screen_height {} exceeds {}",
-                self.manifest.screen_height, MAX_SCREEN,
-            ));
-        }
-
-        // -- Theme color checks --
-        let theme_colors: &[(&str, &str)] = &[
-            ("background", &self.theme.background),
-            ("primary", &self.theme.primary),
-            ("secondary", &self.theme.secondary),
-            ("text", &self.theme.text),
-            ("dim_text", &self.theme.dim_text),
-            ("status_bar", &self.theme.status_bar),
-            ("prompt", &self.theme.prompt),
-            ("output", &self.theme.output),
-            ("error", &self.theme.error),
-        ];
-        for (name, value) in theme_colors {
-            if parse_hex_color(value).is_none() {
-                warnings.push(format!("theme: invalid color for '{name}': \"{value}\""));
-            }
-        }
-        // Optional theme color fields.
-        let opt_colors: &[(&str, &Option<String>)] = &[
-            ("surface", &self.theme.surface),
-            ("accent_hover", &self.theme.accent_hover),
-        ];
-        for (name, value) in opt_colors {
-            if let Some(v) = value
-                && parse_hex_color(v).is_none()
-            {
-                warnings.push(format!("theme: invalid color for '{name}': \"{v}\""));
-            }
-        }
-
-        // -- Layout coordinate checks --
-        let sw = self.manifest.screen_width as i32;
-        let sh = self.manifest.screen_height as i32;
-        // Allow some overshoot for scrollable/off-screen elements (4x).
-        let max_coord = (sw.max(sh) * 4).max(4096);
-        for (obj_name, def) in &self.layout.objects {
-            if let Some(x) = def.x
-                && (x < -max_coord || x > max_coord)
-            {
-                warnings.push(format!(
-                    "layout: '{obj_name}' x={x} outside bounds [-{max_coord}, {max_coord}]"
-                ));
-            }
-            if let Some(y) = def.y
-                && (y < -max_coord || y > max_coord)
-            {
-                warnings.push(format!(
-                    "layout: '{obj_name}' y={y} outside bounds [-{max_coord}, {max_coord}]"
-                ));
-            }
-            if let Some(w) = def.w
-                && w > max_coord as u32
-            {
-                warnings.push(format!("layout: '{obj_name}' w={w} exceeds {max_coord}"));
-            }
-            if let Some(h) = def.h
-                && h > max_coord as u32
-            {
-                warnings.push(format!("layout: '{obj_name}' h={h} exceeds {max_coord}"));
-            }
-            // Validate color strings in layout objects.
-            let obj_colors: &[(&str, &Option<String>)] = &[
-                ("color", &def.color),
-                ("text_color", &def.text_color),
-                ("gradient_top", &def.gradient_top),
-                ("gradient_bottom", &def.gradient_bottom),
-                ("stroke_color", &def.stroke_color),
-                ("text_shadow_color", &def.text_shadow_color),
-                ("shadow_color", &def.shadow_color),
-            ];
-            for (field, value) in obj_colors {
-                if let Some(v) = value
-                    && !v.is_empty()
-                    && parse_hex_color(v).is_none()
-                {
-                    warnings.push(format!("layout: '{obj_name}' invalid {field}: \"{v}\""));
-                }
-            }
-        }
-
-        // -- Feature flag checks --
-        if self.features.grid_cols == 0 {
-            warnings.push("features: grid_cols is 0".to_string());
-        }
-        if self.features.grid_rows == 0 {
-            warnings.push("features: grid_rows is 0".to_string());
-        }
-        if self.features.dashboard_pages == 0 && self.features.dashboard {
-            warnings.push("features: dashboard is enabled but dashboard_pages is 0".to_string());
-        }
-        if self.features.icons_per_page == 0 && self.features.dashboard {
-            warnings.push("features: dashboard is enabled but icons_per_page is 0".to_string());
-        }
-        if self.features.icons_per_page > self.features.grid_cols * self.features.grid_rows {
-            warnings.push(format!(
-                "features: icons_per_page ({}) exceeds grid capacity ({}x{}={})",
-                self.features.icons_per_page,
-                self.features.grid_cols,
-                self.features.grid_rows,
-                self.features.grid_cols * self.features.grid_rows,
-            ));
-        }
-
-        warnings
-    }
-
     /// Load a skin from TOML strings (basic 3-file format for backwards compat).
     pub fn from_toml(manifest_toml: &str, layout_toml: &str, features_toml: &str) -> Result<Self> {
         Self::from_toml_full(manifest_toml, layout_toml, features_toml, "", "")
@@ -431,7 +252,7 @@ impl Skin {
     /// Apply this skin's layout to an SDI registry. Existing objects are
     /// updated, missing objects are created.
     pub fn apply_layout(&self, sdi: &mut SdiRegistry) {
-        self.apply_layout_inner(sdi, 1.0, 1.0);
+        parsing::apply_layout_inner(&self.layout, sdi, 1.0, 1.0);
     }
 
     /// Apply layout scaled from the skin's native resolution to the target
@@ -439,95 +260,12 @@ impl Skin {
     pub fn apply_layout_scaled(&self, sdi: &mut SdiRegistry, target_w: u32, target_h: u32) {
         let base_w = self.manifest.screen_width.max(1) as f64;
         let base_h = self.manifest.screen_height.max(1) as f64;
-        self.apply_layout_inner(sdi, target_w as f64 / base_w, target_h as f64 / base_h);
-    }
-
-    fn apply_layout_inner(&self, sdi: &mut SdiRegistry, sx: f64, sy: f64) {
-        for (name, def) in &self.layout.objects {
-            if !sdi.contains(name) {
-                sdi.create(name);
-            }
-            if let Ok(obj) = sdi.get_mut(name) {
-                if let Some(x) = def.x {
-                    obj.x = (x as f64 * sx) as i32;
-                }
-                if let Some(y) = def.y {
-                    obj.y = (y as f64 * sy) as i32;
-                }
-                if let Some(w) = def.w {
-                    obj.w = (w as f64 * sx) as u32;
-                }
-                if let Some(h) = def.h {
-                    obj.h = (h as f64 * sy) as u32;
-                }
-                if let Some(a) = def.alpha {
-                    obj.alpha = a;
-                }
-                if let Some(v) = def.visible {
-                    obj.visible = v;
-                }
-                if let Some(z) = def.z {
-                    obj.z = z;
-                }
-                if let Some(ref t) = def.text {
-                    obj.text = Some(t.clone());
-                }
-                if let Some(fs) = def.font_size {
-                    obj.font_size = fs;
-                }
-                if let Some(ref c) = def.color
-                    && let Some(parsed) = parse_hex_color(c)
-                {
-                    obj.color = parsed;
-                }
-                if let Some(ref c) = def.text_color
-                    && let Some(parsed) = parse_hex_color(c)
-                {
-                    obj.text_color = parsed;
-                }
-                // Extended visual properties.
-                if let Some(r) = def.border_radius {
-                    obj.border_radius = Some(r);
-                }
-                if let Some(ref c) = def.gradient_top
-                    && let Some(parsed) = parse_hex_color(c)
-                {
-                    obj.gradient_top = Some(parsed);
-                }
-                if let Some(ref c) = def.gradient_bottom
-                    && let Some(parsed) = parse_hex_color(c)
-                {
-                    obj.gradient_bottom = Some(parsed);
-                }
-                if let Some(s) = def.shadow_level {
-                    obj.shadow_level = Some(s);
-                }
-                if let Some(sw) = def.stroke_width {
-                    obj.stroke_width = Some(sw);
-                }
-                if let Some(ref c) = def.stroke_color
-                    && let Some(parsed) = parse_hex_color(c)
-                {
-                    obj.stroke_color = Some(parsed);
-                }
-                if def.text_shadow_dx.is_some() || def.text_shadow_dy.is_some() {
-                    obj.text_shadow_offset = Some((
-                        def.text_shadow_dx.unwrap_or(1),
-                        def.text_shadow_dy.unwrap_or(1),
-                    ));
-                }
-                if let Some(ref c) = def.text_shadow_color
-                    && let Some(parsed) = parse_hex_color(c)
-                {
-                    obj.text_shadow_color = Some(parsed);
-                }
-                if let Some(ref c) = def.shadow_color
-                    && let Some(parsed) = parse_hex_color(c)
-                {
-                    obj.shadow_color = Some(parsed);
-                }
-            }
-        }
+        parsing::apply_layout_inner(
+            &self.layout,
+            sdi,
+            target_w as f64 / base_w,
+            target_h as f64 / base_h,
+        );
     }
 
     /// Load a skin from a directory containing TOML files.
@@ -691,16 +429,11 @@ impl Skin {
 
         // Merge layout: parent objects fill in missing child objects.
         for (name, def) in &parent.layout.objects {
-            if !ct_layout_has(&self.layout, name) {
+            if !self.layout.objects.contains_key(name) {
                 self.layout.objects.insert(name.clone(), def.clone());
             }
         }
     }
-}
-
-/// Check if a layout already defines an object.
-fn ct_layout_has(layout: &SkinLayout, name: &str) -> bool {
-    layout.objects.contains_key(name)
 }
 
 #[cfg(test)]
@@ -1336,13 +1069,9 @@ window_manager = true
 
     #[test]
     fn manifest_unicode_name() {
-        let manifest = r#"
-name = "スキン"
-version = "1.0"
-author = "テスト"
-"#;
+        let manifest = "name = \"\u{30b9}\u{30ad}\u{30f3}\"\nversion = \"1.0\"\nauthor = \"\u{30c6}\u{30b9}\u{30c8}\"\n";
         let skin = Skin::from_toml(manifest, LAYOUT, FEATURES).unwrap();
-        assert_eq!(skin.manifest.name, "スキン");
+        assert_eq!(skin.manifest.name, "\u{30b9}\u{30ad}\u{30f3}");
     }
 
     #[test]
@@ -1421,10 +1150,10 @@ border_radius = 4
     #[test]
     fn load_macos_skin() {
         let skin = Skin::from_toml_full(
-            include_str!("../../../skins/macos/skin.toml"),
-            include_str!("../../../skins/macos/layout.toml"),
-            include_str!("../../../skins/macos/features.toml"),
-            include_str!("../../../skins/macos/theme.toml"),
+            include_str!("../../../../skins/macos/skin.toml"),
+            include_str!("../../../../skins/macos/layout.toml"),
+            include_str!("../../../../skins/macos/features.toml"),
+            include_str!("../../../../skins/macos/theme.toml"),
             "",
         )
         .unwrap();
@@ -1441,10 +1170,10 @@ border_radius = 4
     #[test]
     fn load_gnome_skin() {
         let skin = Skin::from_toml_full(
-            include_str!("../../../skins/gnome/skin.toml"),
-            include_str!("../../../skins/gnome/layout.toml"),
-            include_str!("../../../skins/gnome/features.toml"),
-            include_str!("../../../skins/gnome/theme.toml"),
+            include_str!("../../../../skins/gnome/skin.toml"),
+            include_str!("../../../../skins/gnome/layout.toml"),
+            include_str!("../../../../skins/gnome/features.toml"),
+            include_str!("../../../../skins/gnome/theme.toml"),
             "",
         )
         .unwrap();
@@ -1458,10 +1187,10 @@ border_radius = 4
     #[test]
     fn load_retro_cga_skin() {
         let skin = Skin::from_toml_full(
-            include_str!("../../../skins/retro-cga/skin.toml"),
-            include_str!("../../../skins/retro-cga/layout.toml"),
-            include_str!("../../../skins/retro-cga/features.toml"),
-            include_str!("../../../skins/retro-cga/theme.toml"),
+            include_str!("../../../../skins/retro-cga/skin.toml"),
+            include_str!("../../../../skins/retro-cga/layout.toml"),
+            include_str!("../../../../skins/retro-cga/features.toml"),
+            include_str!("../../../../skins/retro-cga/theme.toml"),
             "",
         )
         .unwrap();
@@ -1477,10 +1206,10 @@ border_radius = 4
     #[test]
     fn load_cyberpunk_skin() {
         let skin = Skin::from_toml_full(
-            include_str!("../../../skins/cyberpunk/skin.toml"),
-            include_str!("../../../skins/cyberpunk/layout.toml"),
-            include_str!("../../../skins/cyberpunk/features.toml"),
-            include_str!("../../../skins/cyberpunk/theme.toml"),
+            include_str!("../../../../skins/cyberpunk/skin.toml"),
+            include_str!("../../../../skins/cyberpunk/layout.toml"),
+            include_str!("../../../../skins/cyberpunk/features.toml"),
+            include_str!("../../../../skins/cyberpunk/theme.toml"),
             "",
         )
         .unwrap();
@@ -1495,10 +1224,10 @@ border_radius = 4
     #[test]
     fn load_paper_skin() {
         let skin = Skin::from_toml_full(
-            include_str!("../../../skins/paper/skin.toml"),
-            include_str!("../../../skins/paper/layout.toml"),
-            include_str!("../../../skins/paper/features.toml"),
-            include_str!("../../../skins/paper/theme.toml"),
+            include_str!("../../../../skins/paper/skin.toml"),
+            include_str!("../../../../skins/paper/layout.toml"),
+            include_str!("../../../../skins/paper/features.toml"),
+            include_str!("../../../../skins/paper/theme.toml"),
             "",
         )
         .unwrap();
@@ -1514,10 +1243,10 @@ border_radius = 4
     #[test]
     fn load_win95_skin() {
         let skin = Skin::from_toml_full(
-            include_str!("../../../skins/win95/skin.toml"),
-            include_str!("../../../skins/win95/layout.toml"),
-            include_str!("../../../skins/win95/features.toml"),
-            include_str!("../../../skins/win95/theme.toml"),
+            include_str!("../../../../skins/win95/skin.toml"),
+            include_str!("../../../../skins/win95/layout.toml"),
+            include_str!("../../../../skins/win95/features.toml"),
+            include_str!("../../../../skins/win95/theme.toml"),
             "",
         )
         .unwrap();
@@ -1533,10 +1262,10 @@ border_radius = 4
     #[test]
     fn load_solarized_skin() {
         let skin = Skin::from_toml_full(
-            include_str!("../../../skins/solarized/skin.toml"),
-            include_str!("../../../skins/solarized/layout.toml"),
-            include_str!("../../../skins/solarized/features.toml"),
-            include_str!("../../../skins/solarized/theme.toml"),
+            include_str!("../../../../skins/solarized/skin.toml"),
+            include_str!("../../../../skins/solarized/layout.toml"),
+            include_str!("../../../../skins/solarized/features.toml"),
+            include_str!("../../../../skins/solarized/theme.toml"),
             "",
         )
         .unwrap();
@@ -1550,10 +1279,10 @@ border_radius = 4
     #[test]
     fn load_vaporwave_skin() {
         let skin = Skin::from_toml_full(
-            include_str!("../../../skins/vaporwave/skin.toml"),
-            include_str!("../../../skins/vaporwave/layout.toml"),
-            include_str!("../../../skins/vaporwave/features.toml"),
-            include_str!("../../../skins/vaporwave/theme.toml"),
+            include_str!("../../../../skins/vaporwave/skin.toml"),
+            include_str!("../../../../skins/vaporwave/layout.toml"),
+            include_str!("../../../../skins/vaporwave/features.toml"),
+            include_str!("../../../../skins/vaporwave/theme.toml"),
             "",
         )
         .unwrap();
@@ -1567,10 +1296,10 @@ border_radius = 4
     #[test]
     fn load_highcontrast_skin() {
         let skin = Skin::from_toml_full(
-            include_str!("../../../skins/highcontrast/skin.toml"),
-            include_str!("../../../skins/highcontrast/layout.toml"),
-            include_str!("../../../skins/highcontrast/features.toml"),
-            include_str!("../../../skins/highcontrast/theme.toml"),
+            include_str!("../../../../skins/highcontrast/skin.toml"),
+            include_str!("../../../../skins/highcontrast/layout.toml"),
+            include_str!("../../../../skins/highcontrast/features.toml"),
+            include_str!("../../../../skins/highcontrast/theme.toml"),
             "",
         )
         .unwrap();
