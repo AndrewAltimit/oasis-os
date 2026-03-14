@@ -4,9 +4,10 @@
 //! and builds a typed stylesheet AST with selectors, declarations, specificity,
 //! shorthand expansion, and color parsing.
 
+pub use super::helpers::MediaViewport;
 use super::helpers::{
-    eval_media_query, is_color_property, named_color, parse_font_weight, parse_hex_color,
-    parse_unit, tokens_to_css_text, try_parse_color,
+    eval_media_query_with_viewport, is_color_property, named_color, parse_font_weight,
+    parse_hex_color, parse_unit, tokens_to_css_text, try_parse_color,
 };
 use super::shorthand::{expand_shorthands, parse_linear_gradient};
 use super::tokenizer::{CssToken, CssTokenizer};
@@ -248,9 +249,21 @@ pub struct Stylesheet {
 
 impl Stylesheet {
     /// Parse an entire CSS stylesheet.
+    ///
+    /// Uses the default 480x272 PSP viewport for `@media` evaluation.
     pub fn parse(input: &str) -> Self {
+        Self::parse_with_viewport(input, MediaViewport::DEFAULT)
+    }
+
+    /// Parse a CSS stylesheet with a specific viewport for `@media` queries.
+    ///
+    /// `@media (min-width: ...)`, `@media (max-width: ...)`,
+    /// `@media (min-height: ...)`, `@media (max-height: ...)`,
+    /// `@media screen`, `@media all`, and `@media (prefers-color-scheme: ...)`
+    /// are evaluated against the given viewport.
+    pub fn parse_with_viewport(input: &str, viewport: MediaViewport) -> Self {
         let tokens = CssTokenizer::new(input).tokenize();
-        let mut parser = CssParser::new(tokens);
+        let mut parser = CssParser::new(tokens, viewport);
         parser.parse_stylesheet()
     }
 }
@@ -258,7 +271,7 @@ impl Stylesheet {
 /// Parse an inline `style="..."` attribute into declarations.
 pub fn parse_inline_style(input: &str) -> Vec<Declaration> {
     let tokens = CssTokenizer::new(input).tokenize();
-    let mut parser = CssParser::new(tokens);
+    let mut parser = CssParser::new(tokens, MediaViewport::DEFAULT);
     parser.parse_declaration_list()
 }
 
@@ -269,11 +282,16 @@ pub fn parse_inline_style(input: &str) -> Vec<Declaration> {
 struct CssParser {
     tokens: Vec<CssToken>,
     pos: usize,
+    viewport: MediaViewport,
 }
 
 impl CssParser {
-    fn new(tokens: Vec<CssToken>) -> Self {
-        Self { tokens, pos: 0 }
+    fn new(tokens: Vec<CssToken>, viewport: MediaViewport) -> Self {
+        Self {
+            tokens,
+            pos: 0,
+            viewport,
+        }
     }
 
     // -- helpers -----------------------------------------------------
@@ -439,7 +457,7 @@ impl CssParser {
         self.expect(&CssToken::CloseBrace);
 
         // Evaluate the media condition.
-        if eval_media_query(&condition) {
+        if eval_media_query_with_viewport(&condition, self.viewport) {
             inner_rules
         } else {
             Vec::new()
@@ -1567,6 +1585,122 @@ mod tests {
         assert_eq!(sheet.rules.len(), 0);
     }
 
+    // -- @media with custom viewport ----------------------------------
+
+    #[test]
+    fn at_media_min_height_match() {
+        let vp = MediaViewport {
+            width: 480.0,
+            height: 272.0,
+        };
+        let sheet =
+            Stylesheet::parse_with_viewport("@media (min-height: 200px) { p { color: red; } }", vp);
+        assert_eq!(sheet.rules.len(), 1);
+    }
+
+    #[test]
+    fn at_media_min_height_no_match() {
+        let vp = MediaViewport {
+            width: 480.0,
+            height: 272.0,
+        };
+        let sheet =
+            Stylesheet::parse_with_viewport("@media (min-height: 600px) { p { color: red; } }", vp);
+        assert_eq!(sheet.rules.len(), 0);
+    }
+
+    #[test]
+    fn at_media_max_height_match() {
+        let vp = MediaViewport {
+            width: 480.0,
+            height: 272.0,
+        };
+        let sheet =
+            Stylesheet::parse_with_viewport("@media (max-height: 400px) { p { color: red; } }", vp);
+        assert_eq!(sheet.rules.len(), 1);
+    }
+
+    #[test]
+    fn at_media_max_height_no_match() {
+        let vp = MediaViewport {
+            width: 480.0,
+            height: 272.0,
+        };
+        let sheet =
+            Stylesheet::parse_with_viewport("@media (max-height: 200px) { p { color: red; } }", vp);
+        assert_eq!(sheet.rules.len(), 0);
+    }
+
+    #[test]
+    fn at_media_custom_viewport_width() {
+        let vp = MediaViewport {
+            width: 1024.0,
+            height: 768.0,
+        };
+        // With 1024px viewport, max-width: 320 should NOT match.
+        let sheet =
+            Stylesheet::parse_with_viewport("@media (max-width: 320px) { p { color: red; } }", vp);
+        assert_eq!(sheet.rules.len(), 0);
+        // But min-width: 800 SHOULD match.
+        let sheet =
+            Stylesheet::parse_with_viewport("@media (min-width: 800px) { p { color: red; } }", vp);
+        assert_eq!(sheet.rules.len(), 1);
+    }
+
+    #[test]
+    fn at_media_screen_and_min_width() {
+        let vp = MediaViewport {
+            width: 800.0,
+            height: 600.0,
+        };
+        let sheet = Stylesheet::parse_with_viewport(
+            "@media screen and (min-width: 480px) { p { color: red; } }",
+            vp,
+        );
+        assert_eq!(sheet.rules.len(), 1);
+    }
+
+    #[test]
+    fn at_media_all_matches() {
+        let sheet = parse("@media all { p { color: red; } }");
+        assert_eq!(sheet.rules.len(), 1);
+    }
+
+    #[test]
+    fn at_media_prefers_color_scheme_dark() {
+        let sheet = parse("@media (prefers-color-scheme: dark) { p { color: white; } }");
+        // Dark mode is always false.
+        assert_eq!(sheet.rules.len(), 0);
+    }
+
+    #[test]
+    fn at_media_prefers_color_scheme_light() {
+        let sheet = parse("@media (prefers-color-scheme: light) { p { color: black; } }");
+        // Light mode is always true.
+        assert_eq!(sheet.rules.len(), 1);
+    }
+
+    #[test]
+    fn at_media_compound_width_and_height() {
+        let vp = MediaViewport {
+            width: 800.0,
+            height: 600.0,
+        };
+        let sheet = Stylesheet::parse_with_viewport(
+            "@media (min-width: 480px) and (min-height: 400px) { \
+             p { color: red; } }",
+            vp,
+        );
+        assert_eq!(sheet.rules.len(), 1);
+        // Fail on height.
+        let sheet = Stylesheet::parse_with_viewport(
+            "@media (min-width: 480px) and (min-height: 800px) { \
+             p { color: red; } }",
+            vp,
+        );
+        assert_eq!(sheet.rules.len(), 0);
+    }
+
     // -- pseudo-class ------------------------------------------------
 
     #[test]
@@ -1847,12 +1981,15 @@ mod tests {
             .iter()
             .find(|d| d.property == "background-image")
             .expect("should have background-image");
-        if let CssValue::Gradient(ref g) = bg_image.value {
-            assert_eq!(g.direction, crate::css::values::GradientDirection::ToBottom);
-            assert_eq!(g.stops.len(), 2);
-        } else {
-            panic!("expected gradient");
-        }
+        assert!(
+            matches!(&bg_image.value, CssValue::Gradient(_)),
+            "expected gradient"
+        );
+        let CssValue::Gradient(g) = &bg_image.value else {
+            unreachable!()
+        };
+        assert_eq!(g.direction, crate::css::values::GradientDirection::ToBottom);
+        assert_eq!(g.stops.len(), 2);
     }
 
     mod prop {

@@ -1,8 +1,9 @@
 # OASIS OS Comprehensive Improvements Plan v2
 
+> **Status**: Partially complete (as of 2026-03-14). Many items from this plan have been implemented across other branches and PRs (app extraction, widget system, new apps, skins, etc.). Remaining items are tracked individually. This document is retained for historical reference.
+>
 > **Branch:** `feat/comprehensive-improvements`
 > **Date:** 2026-03-02
-> **Status:** DRAFT - Pending review
 > **Scope:** 13 phases, ~20K+ LOC, 500+ new tests
 
 ---

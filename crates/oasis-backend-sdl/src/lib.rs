@@ -35,13 +35,15 @@ pub use oasis_types::geometry::ClipRect;
 pub use network::SdlNetworkBackend;
 pub use sdl_audio::SdlAudioBackend;
 
-use shapes::isqrt;
+use oasis_types::geometry::rounded_rect_inset;
 
 // Re-export input helpers for tests.
 #[cfg(test)]
 use input::{map_key_down, map_key_up};
 #[cfg(test)]
-use shapes::edge_x;
+use oasis_types::geometry::isqrt_i32;
+#[cfg(test)]
+use oasis_types::rasterize::edge_x;
 
 /// Convert integer coordinates to an `FRect` for SDL3 renderer calls.
 pub(crate) fn frect(x: i32, y: i32, w: u32, h: u32) -> FRect {
@@ -544,17 +546,7 @@ impl SdiBackend for SdlBackend {
             self.set_color(color);
 
             // Compute horizontal inset for rounded corners.
-            let inset = if dy < r {
-                // Top corners.
-                let ry = r - dy;
-                r - isqrt((r * r - ry * ry).max(0))
-            } else if dy >= h as i32 - r {
-                // Bottom corners.
-                let ry = dy - (h as i32 - 1 - r);
-                r - isqrt((r * r - ry * ry).max(0))
-            } else {
-                0
-            };
+            let inset = rounded_rect_inset(dy, h as i32, r);
 
             let lx = tx + inset;
             let rx = tx + w as i32 - 1 - inset;
@@ -1037,29 +1029,29 @@ mod tests {
 
     #[test]
     fn isqrt_known_values() {
-        assert_eq!(isqrt(0), 0);
-        assert_eq!(isqrt(1), 1);
-        assert_eq!(isqrt(4), 2);
-        assert_eq!(isqrt(9), 3);
-        assert_eq!(isqrt(16), 4);
-        assert_eq!(isqrt(25), 5);
-        assert_eq!(isqrt(100), 10);
+        assert_eq!(isqrt_i32(0), 0);
+        assert_eq!(isqrt_i32(1), 1);
+        assert_eq!(isqrt_i32(4), 2);
+        assert_eq!(isqrt_i32(9), 3);
+        assert_eq!(isqrt_i32(16), 4);
+        assert_eq!(isqrt_i32(25), 5);
+        assert_eq!(isqrt_i32(100), 10);
     }
 
     #[test]
-    fn isqrt_non_perfect_squares() {
-        assert_eq!(isqrt(2), 1);
-        assert_eq!(isqrt(3), 1);
-        assert_eq!(isqrt(5), 2);
-        assert_eq!(isqrt(8), 2);
-        assert_eq!(isqrt(10), 3);
-        assert_eq!(isqrt(99), 9);
+    fn isqrt_known_non_perfect_squares() {
+        assert_eq!(isqrt_i32(2), 1);
+        assert_eq!(isqrt_i32(3), 1);
+        assert_eq!(isqrt_i32(5), 2);
+        assert_eq!(isqrt_i32(8), 2);
+        assert_eq!(isqrt_i32(10), 3);
+        assert_eq!(isqrt_i32(99), 9);
     }
 
     #[test]
     fn isqrt_negative() {
-        assert_eq!(isqrt(-1), 0);
-        assert_eq!(isqrt(-100), 0);
+        assert_eq!(isqrt_i32(-1), 0);
+        assert_eq!(isqrt_i32(-100), 0);
     }
 
     #[test]

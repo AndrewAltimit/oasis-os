@@ -598,26 +598,5 @@ impl SdlBackend {
 // Free helper functions
 // -------------------------------------------------------------------
 
-/// Compute the x coordinate along an edge at a given y.
-pub(crate) fn edge_x(x0: i32, y0: i32, x1: i32, y1: i32, y: i32) -> i32 {
-    if y1 == y0 {
-        return x0;
-    }
-    x0 + (x1 - x0) * (y - y0) / (y1 - y0)
-}
-
-/// Integer square root (floor).
-pub(crate) fn isqrt(n: i32) -> i32 {
-    if n <= 0 {
-        return 0;
-    }
-    let mut x = (n as f32).sqrt() as i32;
-    // Newton correction.
-    while x * x > n {
-        x -= 1;
-    }
-    while (x + 1) * (x + 1) <= n {
-        x += 1;
-    }
-    x
-}
+// `edge_x` is now shared via oasis_types.
+pub(crate) use oasis_types::rasterize::edge_x;

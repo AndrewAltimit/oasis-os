@@ -3,7 +3,7 @@
 ## An Embeddable Operating System Framework in Rust
 
 **Technical Design Document**
-Version 2.4 -- February 2026
+Version 2.5 -- March 2026
 Author: Andrew
 Classification: Personal Project -- Open Source
 
@@ -40,7 +40,7 @@ OASIS_OS is an embeddable operating system framework written in Rust. It provide
 
 The project originated as a Rust port of a PSP homebrew shell OS written in C circa 2006-2008. The original source archive (`psixpsp.7z`) is preserved at the repository root. The original architecture -- a themed dashboard driven by a custom scene-graph engine called SDI (Simple Display Interface), with platform abstraction via compile-time guards -- turned out to be a natural foundation for something more general. The trait-based backend system designed for cross-platform PSP/SDL/framebuffer portability extends cleanly to a fourth target: rendering onto a texture inside Unreal Engine 5, where in-game computer props become fully interactive systems rather than scripted UI sequences.
 
-The framework supports multiple "skins" -- visual and behavioral personalities that determine what the OS looks like and what it exposes to the user. Seventeen skins are implemented: Classic (PSIX-style icon grid dashboard), XP (Windows XP Luna-inspired blue theme with start menu), macOS (macOS-inspired desktop), GNOME (GNOME desktop style), Cyberpunk (neon cyberpunk aesthetic), Retro-CGA (CGA 4-color retro), Paper (minimalist paper/ink), Win95 (Windows 95/98 classic 3D borders), Solarized (Solarized Dark developer palette), Vaporwave (aesthetic purple/pink/cyan), High Contrast (accessibility: black/white/yellow), Terminal (green-on-black CRT), Tactical (military command console), Corrupted (glitched visual effects), Desktop (windowed environment), Agent Terminal (AI agent/MCP console), and Modern (purple accent with rounded corners). External skins are defined as TOML directories in `skins/` and embedded via `include_str!`; built-in skins are defined directly in `oasis-skin/src/builtin.rs`. All skins share the same core: scene graph, command interpreter, virtual file system, browser engine, networking, and plugin infrastructure. The skin defines layout, theme, feature gating, and visual style.
+The framework supports multiple "skins" -- visual and behavioral personalities that determine what the OS looks like and what it exposes to the user. Eighteen skins are implemented: Classic (PSIX-style icon grid dashboard), XP (Windows XP Luna-inspired blue theme with start menu), macOS (macOS-inspired desktop), GNOME (GNOME desktop style), Cyberpunk (neon cyberpunk aesthetic), Retro-CGA (CGA 4-color retro), Paper (minimalist paper/ink), Win95 (Windows 95/98 classic 3D borders), Solarized (Solarized Dark developer palette), Vaporwave (aesthetic purple/pink/cyan), High Contrast (accessibility: black/white/yellow), Terminal (green-on-black CRT), Tactical (military command console), Corrupted (glitched visual effects), Desktop (windowed environment), Agent Terminal (AI agent/MCP console), and Modern (purple accent with rounded corners). External skins are defined as TOML directories in `skins/` and embedded via `include_str!`; built-in skins are defined directly in `oasis-skin/src/builtin.rs`. All skins share the same core: scene graph, command interpreter, virtual file system, browser engine, networking, and plugin infrastructure. The skin defines layout, theme, feature gating, and visual style.
 
 Primary deployment targets are: in-game computers in UE5 projects (rendered as interactive props), real PSP hardware running modern custom firmware (6.60/6.61 with ARK-4), and the tamper-responsive briefcase system (`packages/tamper_briefcase/`) where a Raspberry Pi 5 boots directly into OASIS_OS as the field-deployable agent terminal OS. On the briefcase, OASIS_OS is the operator-facing interface for managing AI agents in untrusted environments -- the tamper detection, LUKS encryption, and cryptographic wipe services run alongside it as systemd units. On a PSP connected to infrastructure WiFi, OASIS_OS's remote terminal enables direct command sessions to machines running AI agents, making a 2005 handheld a viable field controller for the agent ecosystem described in `docs/agents/README.md`. The original C codebase (~15,000 lines) provides the proven UI design; the Rust rewrite provides memory safety, cross-platform backends, and the extensibility to support all targets from a single codebase.
 
@@ -94,9 +94,9 @@ The rust-psp SDK is an external dependency hosted at [github.com/AndrewAltimit/r
 
 ```
 oasis-os/
-+-- Cargo.toml                      # Workspace root (resolver="2", edition 2024, 19 members)
++-- Cargo.toml                      # Workspace root (resolver="2", edition 2024, 32 members)
 +-- crates/
-|   +-- oasis-types/                 # Foundation types: Color, Button, InputEvent, backend traits, errors
+|   +-- oasis-types/                 # Foundation types: Color, Button, InputEvent, geometry, backend traits, errors
 |   +-- oasis-vfs/                   # Virtual file system: MemoryVfs, RealVfs, GameAssetVfs
 |   +-- oasis-platform/              # Platform service traits: Power, Time, USB, Network, OSK
 |   +-- oasis-sdi/                   # Scene graph: named registry, z-order, alpha, layout, theming
@@ -106,14 +106,28 @@ oasis-os/
 |   +-- oasis-wm/                    # Window manager: lifecycle, drag/resize, hit testing, clipping
 |   +-- oasis-skin/                  # TOML skin engine, 18 skins, theme derivation from 9 base colors
 |   +-- oasis-terminal/              # 90+ commands across 17 modules, shell features
-|   +-- oasis-browser/               # HTML/CSS/Gemini: DOM, CSS cascade, block/inline/table layout, JS DOM bindings
+|   +-- oasis-browser/               # HTML/CSS/Gemini: DOM, CSS cascade, block/inline/table layout, @media queries, JS DOM bindings
 |   +-- oasis-js/                    # JavaScript engine: QuickJS-NG runtime, console API, DOM manipulation
 |   +-- oasis-video/                 # Software MP4/H.264+AAC decode (symphonia + openh264, streaming VideoSource API)
-|   +-- oasis-core/                  # Coordination: 16 apps, dashboard, agent, plugin, script
+|   +-- oasis-vector/                # Vector graphics: scene graph, path ops, icons, frame-driven animations
+|   +-- oasis-shader/                # Animated shader wallpapers (voronoi, city lights, ocean waves, calm waves)
+|   +-- oasis-app-core/              # Shared app infrastructure: traits, registration, common utilities
+|   +-- oasis-app-file-manager/      # File Manager app
+|   +-- oasis-app-settings/          # Settings app
+|   +-- oasis-app-media/             # Music Player + Photo Viewer apps
+|   +-- oasis-app-tv-guide/          # TV Guide (Internet Archive streaming) app
+|   +-- oasis-app-radio/             # Internet Radio app
+|   +-- oasis-app-games/             # Games app
+|   +-- oasis-app-paint/             # Paint app
+|   +-- oasis-app-clock/             # Clock app
+|   +-- oasis-app-text-editor/       # Text Editor app
+|   +-- oasis-app-calculator/        # Calculator app
+|   +-- oasis-core/                  # Coordination: dashboard, agent, plugin, script (apps extracted to oasis-app-* crates)
 |   +-- oasis-backend-sdl/           # SDL3 rendering and input (desktop dev + Raspberry Pi)
 |   +-- oasis-backend-ue5/           # UE5 render target, software RGBA framebuffer, FFI input queue
+|   +-- oasis-backend-wasm/          # Canvas 2D + DOM input + Web Audio, iframe overlay
 |   +-- oasis-backend-psp/           # [excluded from workspace] sceGu rendering, PSP controller, UMD browsing
-|   +-- oasis-plugin-psp/           # [excluded from workspace] kernel-mode PRX: in-game overlay + background music
+|   +-- oasis-plugin-psp/            # [excluded from workspace] kernel-mode PRX: in-game overlay + background music
 |   +-- oasis-ffi/                   # C FFI boundary for UE5: exported functions, opaque handles
 |   +-- oasis-app/                   # Binary entry points: desktop app + screenshot tool
 +-- skins/
@@ -190,6 +204,19 @@ members = [
     "crates/oasis-terminal",
     "crates/oasis-browser",
     "crates/oasis-js",
+    "crates/oasis-app-core",
+    "crates/oasis-app-games",
+    "crates/oasis-app-paint",
+    "crates/oasis-app-clock",
+    "crates/oasis-app-text-editor",
+    "crates/oasis-app-calculator",
+    "crates/oasis-app-media",
+    "crates/oasis-app-tv-guide",
+    "crates/oasis-app-radio",
+    "crates/oasis-app-settings",
+    "crates/oasis-app-file-manager",
+    "crates/oasis-vector",
+    "crates/oasis-shader",
     "crates/oasis-core",
     "crates/oasis-backend-sdl",
     "crates/oasis-backend-ue5",
@@ -198,15 +225,17 @@ members = [
     "crates/oasis-app",
     "crates/oasis-video",
 ]
-# PSP crate excluded from workspace -- it requires mipsel-sony-psp target
+# PSP crates excluded from workspace -- they require mipsel-sony-psp target
 # and the rust-psp SDK (github.com/AndrewAltimit/rust-psp). Build separately with cargo-psp:
 #   cd crates/oasis-backend-psp && cargo psp --release
+#   cd crates/oasis-plugin-psp && cargo psp --release
 exclude = [
     "crates/oasis-backend-psp",
+    "crates/oasis-plugin-psp",
 ]
 
 [workspace.package]
-version = "1.0.0"
+version = "1.2.0"
 edition = "2024"
 license = "MIT OR Unlicense"
 repository = "https://github.com/AndrewAltimit/oasis-os"
@@ -240,7 +269,7 @@ rustls-pki-types = "1"
 # JavaScript engine (feature-gated in oasis-browser)
 rquickjs = { version = "0.11", default-features = false, features = ["rust-alloc"] }
 
-# Internal crates (all 13 library crates)
+# Internal crates (all library crates)
 oasis-types = { path = "crates/oasis-types" }
 oasis-vfs = { path = "crates/oasis-vfs" }
 oasis-platform = { path = "crates/oasis-platform" }
@@ -253,14 +282,30 @@ oasis-skin = { path = "crates/oasis-skin" }
 oasis-terminal = { path = "crates/oasis-terminal" }
 oasis-browser = { path = "crates/oasis-browser" }
 oasis-js = { path = "crates/oasis-js" }
-oasis-core = { path = "crates/oasis-core" }
+oasis-app-core = { path = "crates/oasis-app-core" }
+oasis-app-games = { path = "crates/oasis-app-games" }
+oasis-app-paint = { path = "crates/oasis-app-paint" }
+oasis-app-clock = { path = "crates/oasis-app-clock" }
+oasis-app-text-editor = { path = "crates/oasis-app-text-editor" }
+oasis-app-calculator = { path = "crates/oasis-app-calculator" }
+oasis-app-media = { path = "crates/oasis-app-media" }
+oasis-app-tv-guide = { path = "crates/oasis-app-tv-guide" }
+oasis-app-radio = { path = "crates/oasis-app-radio" }
+oasis-app-settings = { path = "crates/oasis-app-settings" }
+oasis-app-file-manager = { path = "crates/oasis-app-file-manager" }
+oasis-core = { path = "crates/oasis-core", default-features = false }
+oasis-vector = { path = "crates/oasis-vector" }
+oasis-shader = { path = "crates/oasis-shader", default-features = false }
 oasis-backend-ue5 = { path = "crates/oasis-backend-ue5" }
+oasis-backend-wasm = { path = "crates/oasis-backend-wasm" }
+oasis-video = { path = "crates/oasis-video", default-features = false }
 
 [workspace.lints.clippy]
 clone_on_ref_ptr = "warn"
 dbg_macro = "warn"
 todo = "warn"
 unimplemented = "warn"
+unwrap_used = "deny"
 
 [workspace.lints.rust]
 unsafe_op_in_unsafe_fn = "warn"
@@ -284,7 +329,7 @@ The PSP backend crate has its own standalone `Cargo.toml` (not workspace-inherit
 
 [package]
 name = "oasis-backend-psp"
-version = "1.0.0"
+version = "1.2.0"
 edition = "2024"
 license = "MIT OR Unlicense"
 
@@ -1368,7 +1413,7 @@ The original C source (`psixpsp.7z` at repository root) contains ~15,000 lines o
 
 Phase 13 was added after the original plan. The PSP backend was initially software-rendered, then switched to sceGu hardware acceleration with `Sprites` primitives for all 2D drawing. The PSP UI now renders the full PSIX-style layout: document icons with 6 layers, tabbed status/bottom bars, chrome bezels, procedural wave arc wallpaper, and paginated grid navigation.
 
-Total estimated Rust codebase: approximately 24,000 lines, exceeding the original C codebase by ~9,000 lines due to the framework abstraction, window manager, VFS, UE5 integration, and multiple skins. The vendored ffmpeg (~176,000 lines) is eliminated entirely.
+Total Rust codebase: approximately 125,000 lines across 34 crates, substantially exceeding the original C codebase (~15,000 lines) due to the framework abstraction, 11 extracted app crates, browser engine with JS bindings, video decode pipeline, vector graphics, shader wallpapers, window manager, VFS, UE5 integration, and multiple skins. The vendored ffmpeg (~176,000 lines) is eliminated entirely.
 
 ---
 

@@ -74,9 +74,9 @@ impl RemoteConnection {
 }
 
 /// Tracks failed authentication attempts for rate limiting.
-struct AuthFailureRecord {
-    count: u32,
-    window_start: Instant,
+pub(crate) struct AuthFailureRecord {
+    pub(crate) count: u32,
+    pub(crate) window_start: Instant,
 }
 
 /// Configuration for the remote terminal listener.
@@ -110,9 +110,9 @@ impl Default for ListenerConfig {
 pub struct RemoteListener {
     config: ListenerConfig,
     connections: Vec<RemoteConnection>,
-    listening: bool,
+    pub(crate) listening: bool,
     /// Rate-limiting tracker for auth failures.
-    auth_failures: AuthFailureRecord,
+    pub(crate) auth_failures: AuthFailureRecord,
 }
 
 impl RemoteListener {
@@ -157,7 +157,7 @@ impl RemoteListener {
     /// Compute the current rate-limit window duration.
     /// Uses exponential backoff: base * 2^(failures - threshold) once
     /// the failure count exceeds the threshold.
-    fn rate_limit_window(&self) -> Duration {
+    pub(crate) fn rate_limit_window(&self) -> Duration {
         let excess = self.auth_failures.count.saturating_sub(MAX_AUTH_FAILURES);
         let multiplier = 1u64 << excess.min(6); // cap at 64x to prevent overflow
         Duration::from_secs(AUTH_RATE_LIMIT_BASE_SECS.saturating_mul(multiplier))
@@ -176,7 +176,7 @@ impl RemoteListener {
     }
 
     /// Record a failed auth attempt.
-    fn record_auth_failure(&mut self) {
+    pub(crate) fn record_auth_failure(&mut self) {
         let now = Instant::now();
         let window = self.rate_limit_window();
         if now.duration_since(self.auth_failures.window_start) > window {
@@ -364,6 +364,7 @@ impl RemoteListener {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
 

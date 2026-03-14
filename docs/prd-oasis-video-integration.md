@@ -1,5 +1,7 @@
 # PRD: oasis-video Integration
 
+> **Status**: Partially complete (as of 2026-03-14). Desktop streaming (Phases 1-2) and UE5 (Phase 4) are fully working. PSP video decode (Phase 3) has audio streaming working but H.264 ME decode and memory/FPS targets are pending. Some Phase 5 quality items remain. This document is retained for historical reference.
+
 ## Status: Streaming Cross-Platform Video Decode (Phase 1-2 Complete)
 
 ### Problem

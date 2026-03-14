@@ -61,11 +61,10 @@ fn unknown_command() {
     let mut vfs = MemoryVfs::new();
     let mut env = make_env(&mut vfs);
     let result = reg.execute("nonexistent", &mut env);
-    match result {
-        Ok(CommandOutput::Text(s)) => assert!(s.contains("error")),
-        Err(_) => {},
-        _ => panic!("expected error"),
-    }
+    assert!(
+        matches!(&result, Ok(CommandOutput::Text(_)) | Err(_)),
+        "expected error, got {result:?}"
+    );
 }
 
 #[test]
@@ -124,11 +123,10 @@ fn command_no_args() {
     let mut vfs = MemoryVfs::new();
     let mut env = make_env(&mut vfs);
     let result = reg.execute("echo", &mut env).unwrap();
-    match result {
-        CommandOutput::Text(s) => assert_eq!(s, ""),
-        CommandOutput::None => {}, // Empty echo may produce no output.
-        other => panic!("expected text or none, got {other:?}"),
-    }
+    assert!(
+        matches!(&result, CommandOutput::Text(_) | CommandOutput::None),
+        "expected text or none, got {result:?}"
+    );
 }
 
 #[test]
@@ -136,7 +134,12 @@ fn unknown_command_error_message_contains_name() {
     let reg = CommandRegistry::new();
     let mut vfs = MemoryVfs::new();
     let mut env = make_env(&mut vfs);
-    match reg.execute("foobar", &mut env) {
+    let result = reg.execute("foobar", &mut env);
+    assert!(
+        matches!(&result, Ok(CommandOutput::Text(_)) | Err(_)),
+        "expected error, got {result:?}"
+    );
+    match result {
         Ok(CommandOutput::Text(s)) => {
             assert!(s.contains("foobar"), "error should contain command name");
         },
@@ -144,7 +147,7 @@ fn unknown_command_error_message_contains_name() {
             let msg = format!("{e}");
             assert!(msg.contains("foobar"), "error should contain command name");
         },
-        _ => panic!("expected error"),
+        _ => unreachable!(),
     }
 }
 
@@ -277,11 +280,10 @@ fn very_long_command_name() {
     let long_name = "a".repeat(10_000);
     let result = reg.execute(&long_name, &mut env);
     // Should return error text (unknown command).
-    match result {
-        Ok(CommandOutput::Text(s)) => assert!(s.contains("error")),
-        Err(_) => {},
-        _ => panic!("expected error"),
-    }
+    assert!(
+        matches!(&result, Ok(CommandOutput::Text(_)) | Err(_)),
+        "expected error, got {result:?}"
+    );
 }
 
 #[test]

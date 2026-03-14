@@ -1582,15 +1582,18 @@ mod tests {
             CssToken::Ident("blue".into()),
         ];
         let grad = parse_linear_gradient(&tokens).unwrap();
-        if let GradientDirection::Angle(a) = grad.direction {
-            assert!(
-                (a - 180.0).abs() < 0.1,
-                "pi rad should be ~180deg, got {}",
-                a
-            );
-        } else {
-            panic!("expected Angle direction");
-        }
+        assert!(
+            matches!(&grad.direction, GradientDirection::Angle(_)),
+            "expected Angle direction"
+        );
+        let GradientDirection::Angle(a) = &grad.direction else {
+            unreachable!()
+        };
+        assert!(
+            (a - 180.0).abs() < 0.1,
+            "pi rad should be ~180deg, got {}",
+            a
+        );
     }
 
     #[test]
@@ -1605,11 +1608,14 @@ mod tests {
             CssToken::Ident("blue".into()),
         ];
         let grad = parse_linear_gradient(&tokens).unwrap();
-        if let GradientDirection::Angle(a) = grad.direction {
-            assert!((a - 90.0).abs() < 0.1, "100grad should be 90deg, got {}", a);
-        } else {
-            panic!("expected Angle direction");
-        }
+        assert!(
+            matches!(&grad.direction, GradientDirection::Angle(_)),
+            "expected Angle direction"
+        );
+        let GradientDirection::Angle(a) = &grad.direction else {
+            unreachable!()
+        };
+        assert!((a - 90.0).abs() < 0.1, "100grad should be 90deg, got {}", a);
     }
 
     // -- edge cases -----------------------------------------------

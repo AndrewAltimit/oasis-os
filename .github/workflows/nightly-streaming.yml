@@ -1,0 +1,173 @@
+---
+name: Nightly Streaming Test
+
+on:
+  schedule:
+    - cron: '0 4 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: nightly-streaming-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  DOCKER_BUILDKIT: 1
+  COMPOSE_DOCKER_CLI_BUILD: 1
+
+jobs:
+  streaming-test:
+    name: TV Guide Streaming
+    runs-on: self-hosted
+    timeout-minutes: 30
+    continue-on-error: true
+    steps:
+      - name: Fix workspace permissions
+        run: |
+          docker run --rm -v "$(pwd):/workspace" busybox:1.36.1 \
+            chown -Rh "$(id -u):$(id -g)" /workspace 2>/dev/null || true
+
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+          clean: true
+
+      - name: Set UID/GID
+        run: |
+          echo "USER_ID=$(id -u)" >> $GITHUB_ENV
+          echo "GROUP_ID=$(id -g)" >> $GITHUB_ENV
+
+      - name: Build CI Docker image
+        run: docker compose --profile ci build rust-ci
+
+      - name: Build oasis-app (release)
+        run: |
+          docker compose --profile ci run --rm rust-ci \
+            cargo build --release -p oasis-app
+
+      - name: Test archive.org HTTP connectivity
+        id: http_check
+        continue-on-error: true
+        run: |
+          docker compose --profile ci run --rm rust-ci bash -c "
+            echo 'Testing archive.org connectivity...'
+            HTTP_CODE=\$(curl -s -o /dev/null -w '%{http_code}' \
+              --max-time 15 --connect-timeout 10 \
+              'https://archive.org/metadata/tv-cbc-newsworld-2006-01')
+            echo \"HTTP status: \$HTTP_CODE\"
+            if [ \"\$HTTP_CODE\" -ge 200 ] && [ \"\$HTTP_CODE\" -lt 400 ]; then
+              echo 'archive.org reachable'
+              echo 'reachable=true' >> \$GITHUB_OUTPUT
+            else
+              echo 'archive.org unreachable or returned error'
+              echo 'reachable=false' >> \$GITHUB_OUTPUT
+            fi
+          "
+
+      - name: Run TV Guide streaming test (CH2)
+        id: stream_ch2
+        continue-on-error: true
+        run: |
+          docker compose --profile ci run --rm \
+            -e SDL_VIDEODRIVER=dummy \
+            -e SDL_RENDER_DRIVER=software \
+            -e OASIS_APP="TV Guide" \
+            -e OASIS_TV_CHANNEL=2 \
+            -e OASIS_TV_TIMEOUT=15 \
+            rust-ci bash -c "
+              cargo run --release -p oasis-app 2>streaming_ch2.log &
+              APP_PID=\$!
+              DEADLINE=\$((SECONDS + 75))
+              while kill -0 \$APP_PID 2>/dev/null && [ \$SECONDS -lt \$DEADLINE ]; do
+                sleep 1
+              done
+              if kill -0 \$APP_PID 2>/dev/null; then
+                kill \$APP_PID 2>/dev/null || true
+              fi
+              wait \$APP_PID 2>/dev/null || true
+
+              echo '--- CH2 Key Events ---'
+              grep -E '(auto-tune|auto-exit|decode|TV:|seeked|error|audio device)' \
+                streaming_ch2.log | grep -iv 'stbl\|atom\|fetch_tv\|background fetch\|std_backend' \
+                | head -25
+
+              HAS_AUTOTUNE=\$(grep -c 'auto-tune' streaming_ch2.log || true)
+              HAS_ERROR=\$(grep -c 'video decode error' streaming_ch2.log || true)
+              HAS_DECODE=\$(grep -c 'software decode thread started' streaming_ch2.log || true)
+              HAS_TIMEOUT=\$(grep -c 'TV test: timeout reached' streaming_ch2.log || true)
+              HAS_AUDIO=\$(grep -c 'audio device opened' streaming_ch2.log || true)
+
+              echo \"autotune=\$HAS_AUTOTUNE\" >> \$GITHUB_OUTPUT
+              echo \"errors=\$HAS_ERROR\" >> \$GITHUB_OUTPUT
+              echo \"decode=\$HAS_DECODE\" >> \$GITHUB_OUTPUT
+              echo \"timeout_exit=\$HAS_TIMEOUT\" >> \$GITHUB_OUTPUT
+              echo \"audio=\$HAS_AUDIO\" >> \$GITHUB_OUTPUT
+
+              if [ \"\$HAS_ERROR\" -gt 0 ]; then
+                echo 'FAIL: H.264 decode errors detected'
+                exit 1
+              elif [ \"\$HAS_AUTOTUNE\" -eq 0 ]; then
+                echo 'FAIL: Auto-tune never triggered'
+                exit 1
+              elif [ \"\$HAS_DECODE\" -eq 0 ]; then
+                echo 'FAIL: Decode thread never started'
+                exit 1
+              else
+                echo 'PASS: Streaming test completed without errors'
+              fi
+            "
+
+      - name: Upload streaming logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: streaming-logs
+          path: streaming_ch2.log
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - name: Streaming test summary
+        if: always()
+        run: |
+          echo "## Nightly TV Guide Streaming Test" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Date**: $(date -u +%Y-%m-%d)" >> $GITHUB_STEP_SUMMARY
+          echo "**Commit**: ${{ github.sha }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          echo "### HTTP Connectivity" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          if [[ "${{ steps.http_check.outcome }}" == "success" ]]; then
+            echo "archive.org: reachable" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "archive.org: **unreachable** (external service may be down)" >> $GITHUB_STEP_SUMMARY
+          fi
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          echo "### Streaming Test (CH2)" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Metric | Result |" >> $GITHUB_STEP_SUMMARY
+          echo "|--------|--------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Outcome | ${{ steps.stream_ch2.outcome }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Auto-tune triggered | ${{ steps.stream_ch2.outputs.autotune || 'n/a' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Decode threads started | ${{ steps.stream_ch2.outputs.decode || 'n/a' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Audio opened | ${{ steps.stream_ch2.outputs.audio || 'n/a' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| H.264 decode errors | ${{ steps.stream_ch2.outputs.errors || 'n/a' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Timeout auto-exit | ${{ steps.stream_ch2.outputs.timeout_exit || 'n/a' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          if [[ "${{ steps.stream_ch2.outcome }}" == "failure" ]]; then
+            echo "**Note:** Streaming tests depend on archive.org availability." >> $GITHUB_STEP_SUMMARY
+            echo "A failure may indicate upstream changes rather than a code regression." >> $GITHUB_STEP_SUMMARY
+          fi
+
+      - name: Fix Docker file ownership
+        if: always()
+        run: |
+          if [ -d target ]; then
+            docker run --rm -v "$(pwd)/target:/workspace" busybox:1.36.1 \
+              chown -Rh "$(id -u):$(id -g)" /workspace 2>/dev/null || true
+          fi

@@ -265,11 +265,11 @@ mod tests {
         let mut stream = backend.accept().unwrap().unwrap();
         let mut buf = [0u8; 64];
         // Non-blocking socket: read returns Ok(0) or WouldBlock.
-        match stream.read(&mut buf) {
-            Ok(0) => {},
-            Err(_) => {}, // WouldBlock is expected.
-            Ok(n) => panic!("expected 0 or error, got {n} bytes"),
-        }
+        let read_result = stream.read(&mut buf);
+        assert!(
+            matches!(&read_result, Ok(0) | Err(_)),
+            "expected 0 or error, got {read_result:?}"
+        );
     }
 
     #[test]

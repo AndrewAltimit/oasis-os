@@ -55,7 +55,7 @@ pub type ImageInfoMap = HashMap<String, (u32, u32)>;
 pub mod internals {
     pub use crate::css::cascade::{CascadeContext, style_tree};
     pub use crate::css::default::default_stylesheet;
-    pub use crate::css::parser::{Stylesheet, parse_inline_style};
+    pub use crate::css::parser::{MediaViewport, Stylesheet, parse_inline_style};
     pub use crate::css::values::{ComputedStyle, Display, TextDecoration};
     pub use crate::html::dom::{Document, NodeKind, TagName};
     pub use crate::html::tokenizer::Tokenizer;

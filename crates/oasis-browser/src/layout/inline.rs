@@ -1065,18 +1065,21 @@ mod tests {
         let frags = collect_inline_fragments(&[child], 480.0, &m);
 
         assert_eq!(frags.len(), 1);
-        if let InlineFragment::ReplacedInline { width, height, .. } = &frags[0] {
-            assert!(
-                (*width - 50.0).abs() < 0.01,
-                "CSS width should override intrinsic, got {width}",
-            );
-            assert!(
-                (*height - 30.0).abs() < 0.01,
-                "CSS height should override intrinsic, got {height}",
-            );
-        } else {
-            panic!("expected ReplacedInline fragment");
-        }
+        assert!(
+            matches!(&&frags[0], InlineFragment::ReplacedInline { .. }),
+            "expected ReplacedInline fragment"
+        );
+        let InlineFragment::ReplacedInline { width, height, .. } = &&frags[0] else {
+            unreachable!()
+        };
+        assert!(
+            (*width - 50.0).abs() < 0.01,
+            "CSS width should override intrinsic, got {width}",
+        );
+        assert!(
+            (*height - 30.0).abs() < 0.01,
+            "CSS height should override intrinsic, got {height}",
+        );
     }
 
     #[test]

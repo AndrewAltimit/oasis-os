@@ -421,6 +421,8 @@ impl Default for PluginManager {
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::unwrap_used)]
+
     use super::*;
     use crate::plugin::traits::{Plugin, PluginHost, PluginInfo};
     use crate::sdi::SdiRegistry;
@@ -1267,5 +1269,552 @@ auto_load = true
             .find(|(info, _)| info.name == "sdi-plugin")
             .unwrap();
         assert_eq!(sp.1, PluginState::Active);
+    }
+
+    // -- Integration tests: plugin lifecycle verification with shared state --
+
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+
+    /// Shared counters that survive after the plugin is moved into the manager.
+    #[derive(Clone)]
+    struct LifecycleCounters {
+        init_called: Arc<AtomicBool>,
+        update_count: Arc<AtomicU32>,
+        shutdown_called: Arc<AtomicBool>,
+    }
+
+    impl LifecycleCounters {
+        fn new() -> Self {
+            Self {
+                init_called: Arc::new(AtomicBool::new(false)),
+                update_count: Arc::new(AtomicU32::new(0)),
+                shutdown_called: Arc::new(AtomicBool::new(false)),
+            }
+        }
+    }
+
+    /// Plugin that records lifecycle calls via shared atomic counters.
+    struct TrackedPlugin {
+        counters: LifecycleCounters,
+    }
+
+    impl TrackedPlugin {
+        fn new(counters: LifecycleCounters) -> Self {
+            Self { counters }
+        }
+    }
+
+    impl Plugin for TrackedPlugin {
+        fn info(&self) -> PluginInfo {
+            PluginInfo::new("tracked", "1.0.0")
+        }
+        fn init(&mut self, _host: &mut PluginHost<'_>) -> Result<()> {
+            self.counters.init_called.store(true, Ordering::SeqCst);
+            Ok(())
+        }
+        fn update(&mut self, _host: &mut PluginHost<'_>) -> Result<()> {
+            self.counters.update_count.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        }
+        fn shutdown(&mut self, _host: &mut PluginHost<'_>) -> Result<()> {
+            self.counters.shutdown_called.store(true, Ordering::SeqCst);
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn lifecycle_init_is_called() {
+        let counters = LifecycleCounters::new();
+        let mut mgr = PluginManager::new();
+        mgr.register_static(Box::new(TrackedPlugin::new(counters.clone())));
+
+        assert!(!counters.init_called.load(Ordering::SeqCst));
+
+        let mut sdi = SdiRegistry::new();
+        let mut vfs = MemoryVfs::new();
+        let mut cmds = CommandRegistry::new();
+        mgr.init_all(&mut sdi, &mut vfs, &mut cmds);
+
+        assert!(
+            counters.init_called.load(Ordering::SeqCst),
+            "init() must be called during init_all",
+        );
+    }
+
+    #[test]
+    fn lifecycle_update_called_each_frame() {
+        let counters = LifecycleCounters::new();
+        let mut mgr = PluginManager::new();
+        mgr.register_static(Box::new(TrackedPlugin::new(counters.clone())));
+
+        let mut sdi = SdiRegistry::new();
+        let mut vfs = MemoryVfs::new();
+        let mut cmds = CommandRegistry::new();
+        mgr.init_all(&mut sdi, &mut vfs, &mut cmds);
+
+        assert_eq!(counters.update_count.load(Ordering::SeqCst), 0);
+
+        for _ in 0..5 {
+            mgr.update_all(&mut sdi, &mut vfs, &mut cmds);
+        }
+
+        assert_eq!(
+            counters.update_count.load(Ordering::SeqCst),
+            5,
+            "update() must be called once per update_all invocation",
+        );
+    }
+
+    #[test]
+    fn lifecycle_shutdown_called_on_shutdown_all() {
+        let counters = LifecycleCounters::new();
+        let mut mgr = PluginManager::new();
+        mgr.register_static(Box::new(TrackedPlugin::new(counters.clone())));
+
+        let mut sdi = SdiRegistry::new();
+        let mut vfs = MemoryVfs::new();
+        let mut cmds = CommandRegistry::new();
+        mgr.init_all(&mut sdi, &mut vfs, &mut cmds);
+
+        assert!(!counters.shutdown_called.load(Ordering::SeqCst));
+
+        mgr.shutdown_all(&mut sdi, &mut vfs, &mut cmds);
+
+        assert!(
+            counters.shutdown_called.load(Ordering::SeqCst),
+            "shutdown() must be called during shutdown_all",
+        );
+    }
+
+    #[test]
+    fn lifecycle_shutdown_called_on_unload() {
+        let counters = LifecycleCounters::new();
+        let mut mgr = PluginManager::new();
+        mgr.register_static(Box::new(TrackedPlugin::new(counters.clone())));
+
+        let mut sdi = SdiRegistry::new();
+        let mut vfs = MemoryVfs::new();
+        let mut cmds = CommandRegistry::new();
+        mgr.init_all(&mut sdi, &mut vfs, &mut cmds);
+
+        assert!(!counters.shutdown_called.load(Ordering::SeqCst));
+
+        mgr.unload("tracked", &mut sdi, &mut vfs, &mut cmds)
+            .unwrap();
+
+        assert!(
+            counters.shutdown_called.load(Ordering::SeqCst),
+            "shutdown() must be called when a plugin is unloaded",
+        );
+    }
+
+    #[test]
+    fn lifecycle_full_sequence() {
+        let counters = LifecycleCounters::new();
+        let mut mgr = PluginManager::new();
+        mgr.register_static(Box::new(TrackedPlugin::new(counters.clone())));
+
+        let mut sdi = SdiRegistry::new();
+        let mut vfs = MemoryVfs::new();
+        let mut cmds = CommandRegistry::new();
+
+        // Before init: nothing called.
+        assert!(!counters.init_called.load(Ordering::SeqCst));
+        assert_eq!(counters.update_count.load(Ordering::SeqCst), 0);
+        assert!(!counters.shutdown_called.load(Ordering::SeqCst));
+
+        // Init.
+        mgr.init_all(&mut sdi, &mut vfs, &mut cmds);
+        assert!(counters.init_called.load(Ordering::SeqCst));
+
+        // Simulate 3 frames.
+        mgr.update_all(&mut sdi, &mut vfs, &mut cmds);
+        mgr.update_all(&mut sdi, &mut vfs, &mut cmds);
+        mgr.update_all(&mut sdi, &mut vfs, &mut cmds);
+        assert_eq!(counters.update_count.load(Ordering::SeqCst), 3);
+
+        // Shutdown.
+        mgr.shutdown_all(&mut sdi, &mut vfs, &mut cmds);
+        assert!(counters.shutdown_called.load(Ordering::SeqCst));
+
+        // After shutdown, update_all must not call update.
+        mgr.update_all(&mut sdi, &mut vfs, &mut cmds);
+        assert_eq!(
+            counters.update_count.load(Ordering::SeqCst),
+            3,
+            "update() must not be called on stopped plugins",
+        );
+    }
+
+    // -- Plugin command registration integration test --
+
+    /// Plugin that registers a command during init.
+    struct CommandPlugin {
+        counters: LifecycleCounters,
+    }
+
+    impl CommandPlugin {
+        fn new(counters: LifecycleCounters) -> Self {
+            Self { counters }
+        }
+    }
+
+    struct GreetCmd;
+    impl crate::terminal::Command for GreetCmd {
+        fn name(&self) -> &str {
+            "greet"
+        }
+        fn description(&self) -> &str {
+            "Greet someone (test plugin)"
+        }
+        fn usage(&self) -> &str {
+            "greet [name]"
+        }
+        fn category(&self) -> &str {
+            "plugin"
+        }
+        fn execute(
+            &self,
+            args: &[&str],
+            _env: &mut crate::terminal::Environment<'_>,
+        ) -> Result<crate::terminal::CommandOutput> {
+            let name = if args.is_empty() { "World" } else { args[0] };
+            Ok(crate::terminal::CommandOutput::Text(format!(
+                "Greetings, {name}!",
+            )))
+        }
+    }
+
+    impl Plugin for CommandPlugin {
+        fn info(&self) -> PluginInfo {
+            PluginInfo::new("command-plugin", "1.0.0")
+        }
+        fn init(&mut self, host: &mut PluginHost<'_>) -> Result<()> {
+            self.counters.init_called.store(true, Ordering::SeqCst);
+            host.commands.register(Box::new(GreetCmd));
+            Ok(())
+        }
+        fn update(&mut self, _host: &mut PluginHost<'_>) -> Result<()> {
+            self.counters.update_count.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        }
+        fn shutdown(&mut self, _host: &mut PluginHost<'_>) -> Result<()> {
+            self.counters.shutdown_called.store(true, Ordering::SeqCst);
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn plugin_command_registration_and_execution() {
+        let counters = LifecycleCounters::new();
+        let mut mgr = PluginManager::new();
+        mgr.register_static(Box::new(CommandPlugin::new(counters.clone())));
+
+        let mut sdi = SdiRegistry::new();
+        let mut vfs = MemoryVfs::new();
+        let mut cmds = CommandRegistry::new();
+
+        mgr.init_all(&mut sdi, &mut vfs, &mut cmds);
+        assert!(counters.init_called.load(Ordering::SeqCst));
+
+        // The command registered by the plugin should be executable.
+        let mut env = crate::terminal::Environment {
+            cwd: "/".to_string(),
+            vfs: &mut vfs,
+            power: None,
+            time: None,
+            usb: None,
+            network: None,
+            tls: None,
+            stdin: None,
+            stderr: String::new(),
+        };
+        let out = cmds.execute("greet Rust", &mut env).unwrap();
+        assert!(matches!(&out, crate::terminal::CommandOutput::Text(s) if s == "Greetings, Rust!"));
+    }
+
+    // -- Error handling integration tests --
+
+    /// Plugin whose init returns an error. Uses shared state to prove
+    /// that update/shutdown are never called on a failed-init plugin.
+    struct ErrorInitPlugin {
+        counters: LifecycleCounters,
+    }
+
+    impl ErrorInitPlugin {
+        fn new(counters: LifecycleCounters) -> Self {
+            Self { counters }
+        }
+    }
+
+    impl Plugin for ErrorInitPlugin {
+        fn info(&self) -> PluginInfo {
+            PluginInfo::new("error-init", "1.0.0")
+        }
+        fn init(&mut self, _host: &mut PluginHost<'_>) -> Result<()> {
+            self.counters.init_called.store(true, Ordering::SeqCst);
+            Err(OasisError::Plugin("intentional init failure".into()))
+        }
+        fn update(&mut self, _host: &mut PluginHost<'_>) -> Result<()> {
+            self.counters.update_count.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        }
+        fn shutdown(&mut self, _host: &mut PluginHost<'_>) -> Result<()> {
+            self.counters.shutdown_called.store(true, Ordering::SeqCst);
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn error_init_plugin_never_updated_or_shutdown() {
+        let err_counters = LifecycleCounters::new();
+        let good_counters = LifecycleCounters::new();
+        let mut mgr = PluginManager::new();
+        mgr.register_static(Box::new(ErrorInitPlugin::new(err_counters.clone())));
+        mgr.register_static(Box::new(TrackedPlugin::new(good_counters.clone())));
+
+        let mut sdi = SdiRegistry::new();
+        let mut vfs = MemoryVfs::new();
+        let mut cmds = CommandRegistry::new();
+
+        mgr.init_all(&mut sdi, &mut vfs, &mut cmds);
+
+        // ErrorInitPlugin attempted init but failed.
+        assert!(err_counters.init_called.load(Ordering::SeqCst));
+        // Good plugin succeeded.
+        assert!(good_counters.init_called.load(Ordering::SeqCst));
+        assert_eq!(mgr.active_count(), 1);
+
+        mgr.update_all(&mut sdi, &mut vfs, &mut cmds);
+        mgr.update_all(&mut sdi, &mut vfs, &mut cmds);
+
+        // ErrorInitPlugin must never receive update calls.
+        assert_eq!(err_counters.update_count.load(Ordering::SeqCst), 0);
+        // Good plugin should have been updated.
+        assert_eq!(good_counters.update_count.load(Ordering::SeqCst), 2);
+
+        mgr.shutdown_all(&mut sdi, &mut vfs, &mut cmds);
+
+        // ErrorInitPlugin must never receive shutdown calls
+        // (it was never Active).
+        assert!(
+            !err_counters.shutdown_called.load(Ordering::SeqCst),
+            "failed-init plugin must not receive shutdown",
+        );
+        assert!(good_counters.shutdown_called.load(Ordering::SeqCst));
+    }
+
+    /// Plugin whose update returns an error on every call.
+    struct ErrorUpdatePlugin {
+        counters: LifecycleCounters,
+    }
+
+    impl ErrorUpdatePlugin {
+        fn new(counters: LifecycleCounters) -> Self {
+            Self { counters }
+        }
+    }
+
+    impl Plugin for ErrorUpdatePlugin {
+        fn info(&self) -> PluginInfo {
+            PluginInfo::new("error-update", "1.0.0")
+        }
+        fn init(&mut self, _host: &mut PluginHost<'_>) -> Result<()> {
+            self.counters.init_called.store(true, Ordering::SeqCst);
+            Ok(())
+        }
+        fn update(&mut self, _host: &mut PluginHost<'_>) -> Result<()> {
+            self.counters.update_count.fetch_add(1, Ordering::SeqCst);
+            Err(OasisError::Plugin("intentional update failure".into()))
+        }
+        fn shutdown(&mut self, _host: &mut PluginHost<'_>) -> Result<()> {
+            self.counters.shutdown_called.store(true, Ordering::SeqCst);
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn error_update_does_not_prevent_other_plugins() {
+        let err_counters = LifecycleCounters::new();
+        let good_counters = LifecycleCounters::new();
+        let mut mgr = PluginManager::new();
+        mgr.register_static(Box::new(ErrorUpdatePlugin::new(err_counters.clone())));
+        mgr.register_static(Box::new(TrackedPlugin::new(good_counters.clone())));
+
+        let mut sdi = SdiRegistry::new();
+        let mut vfs = MemoryVfs::new();
+        let mut cmds = CommandRegistry::new();
+
+        mgr.init_all(&mut sdi, &mut vfs, &mut cmds);
+        assert_eq!(mgr.active_count(), 2);
+
+        // Run multiple update cycles.
+        for _ in 0..3 {
+            mgr.update_all(&mut sdi, &mut vfs, &mut cmds);
+        }
+
+        // ErrorUpdatePlugin's update was called each time (errors are logged
+        // but do not remove the plugin from the active set).
+        assert_eq!(err_counters.update_count.load(Ordering::SeqCst), 3);
+        // Good plugin also updated each time.
+        assert_eq!(good_counters.update_count.load(Ordering::SeqCst), 3);
+
+        // Both can still be shut down cleanly.
+        mgr.shutdown_all(&mut sdi, &mut vfs, &mut cmds);
+        assert!(err_counters.shutdown_called.load(Ordering::SeqCst));
+        assert!(good_counters.shutdown_called.load(Ordering::SeqCst));
+    }
+
+    /// Plugin whose shutdown returns an error.
+    struct ErrorShutdownPlugin {
+        counters: LifecycleCounters,
+    }
+
+    impl ErrorShutdownPlugin {
+        fn new(counters: LifecycleCounters) -> Self {
+            Self { counters }
+        }
+    }
+
+    impl Plugin for ErrorShutdownPlugin {
+        fn info(&self) -> PluginInfo {
+            PluginInfo::new("error-shutdown", "1.0.0")
+        }
+        fn init(&mut self, _host: &mut PluginHost<'_>) -> Result<()> {
+            self.counters.init_called.store(true, Ordering::SeqCst);
+            Ok(())
+        }
+        fn update(&mut self, _host: &mut PluginHost<'_>) -> Result<()> {
+            self.counters.update_count.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        }
+        fn shutdown(&mut self, _host: &mut PluginHost<'_>) -> Result<()> {
+            self.counters.shutdown_called.store(true, Ordering::SeqCst);
+            Err(OasisError::Plugin("intentional shutdown failure".into()))
+        }
+    }
+
+    #[test]
+    fn error_shutdown_does_not_prevent_other_plugins() {
+        let err_counters = LifecycleCounters::new();
+        let good_counters = LifecycleCounters::new();
+        let mut mgr = PluginManager::new();
+        mgr.register_static(Box::new(ErrorShutdownPlugin::new(err_counters.clone())));
+        mgr.register_static(Box::new(TrackedPlugin::new(good_counters.clone())));
+
+        let mut sdi = SdiRegistry::new();
+        let mut vfs = MemoryVfs::new();
+        let mut cmds = CommandRegistry::new();
+
+        mgr.init_all(&mut sdi, &mut vfs, &mut cmds);
+        mgr.shutdown_all(&mut sdi, &mut vfs, &mut cmds);
+
+        // ErrorShutdownPlugin's shutdown was called despite the error.
+        assert!(err_counters.shutdown_called.load(Ordering::SeqCst));
+        // Good plugin's shutdown was also called.
+        assert!(good_counters.shutdown_called.load(Ordering::SeqCst));
+        // Both end up in Stopped state.
+        assert_eq!(mgr.active_count(), 0);
+    }
+
+    #[test]
+    fn unload_error_shutdown_propagates_error() {
+        let counters = LifecycleCounters::new();
+        let mut mgr = PluginManager::new();
+        mgr.register_static(Box::new(ErrorShutdownPlugin::new(counters.clone())));
+
+        let mut sdi = SdiRegistry::new();
+        let mut vfs = MemoryVfs::new();
+        let mut cmds = CommandRegistry::new();
+
+        mgr.init_all(&mut sdi, &mut vfs, &mut cmds);
+
+        // unload() propagates shutdown errors (unlike shutdown_all).
+        let result = mgr.unload("error-shutdown", &mut sdi, &mut vfs, &mut cmds);
+        assert!(result.is_err());
+        // shutdown was still called even though it returned an error.
+        assert!(counters.shutdown_called.load(Ordering::SeqCst));
+    }
+
+    // -- Capability-restricted plugin integration test --
+
+    /// Plugin that declares minimal capabilities (commands only).
+    struct RestrictedPlugin {
+        counters: LifecycleCounters,
+    }
+
+    impl RestrictedPlugin {
+        fn new(counters: LifecycleCounters) -> Self {
+            Self { counters }
+        }
+    }
+
+    impl Plugin for RestrictedPlugin {
+        fn info(&self) -> PluginInfo {
+            PluginInfo::new("restricted", "1.0.0")
+        }
+        fn capabilities(&self) -> PluginCapabilities {
+            PluginCapabilities {
+                commands: true,
+                ..PluginCapabilities::none()
+            }
+        }
+        fn init(&mut self, host: &mut PluginHost<'_>) -> Result<()> {
+            self.counters.init_called.store(true, Ordering::SeqCst);
+            // Should succeed: commands capability is declared.
+            host.checked_commands()?.register(Box::new(GreetCmd));
+            Ok(())
+        }
+        fn update(&mut self, host: &mut PluginHost<'_>) -> Result<()> {
+            self.counters.update_count.fetch_add(1, Ordering::SeqCst);
+            // VFS read should fail: vfs_read not declared.
+            assert!(host.checked_vfs_read().is_err());
+            Ok(())
+        }
+        fn shutdown(&mut self, _host: &mut PluginHost<'_>) -> Result<()> {
+            self.counters.shutdown_called.store(true, Ordering::SeqCst);
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn restricted_plugin_capabilities_enforced() {
+        let counters = LifecycleCounters::new();
+        let mut mgr = PluginManager::new();
+        mgr.register_static(Box::new(RestrictedPlugin::new(counters.clone())));
+
+        let mut sdi = SdiRegistry::new();
+        let mut vfs = MemoryVfs::new();
+        let mut cmds = CommandRegistry::new();
+
+        mgr.init_all(&mut sdi, &mut vfs, &mut cmds);
+        assert!(counters.init_called.load(Ordering::SeqCst));
+        assert_eq!(mgr.active_count(), 1);
+
+        // update exercises the VFS-read denial assertion inside the
+        // plugin's update method.
+        mgr.update_all(&mut sdi, &mut vfs, &mut cmds);
+        assert_eq!(counters.update_count.load(Ordering::SeqCst), 1);
+
+        // The registered command should be usable.
+        let mut env = crate::terminal::Environment {
+            cwd: "/".to_string(),
+            vfs: &mut vfs,
+            power: None,
+            time: None,
+            usb: None,
+            network: None,
+            tls: None,
+            stdin: None,
+            stderr: String::new(),
+        };
+        let out = cmds.execute("greet", &mut env).unwrap();
+        assert!(
+            matches!(&out, crate::terminal::CommandOutput::Text(s) if s == "Greetings, World!")
+        );
+
+        mgr.shutdown_all(&mut sdi, &mut vfs, &mut cmds);
+        assert!(counters.shutdown_called.load(Ordering::SeqCst));
     }
 }

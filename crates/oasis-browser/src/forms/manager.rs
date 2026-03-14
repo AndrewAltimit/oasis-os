@@ -827,14 +827,24 @@ mod tests {
         let mut mgr = make_manager_with_login_form();
         mgr.toggle_checkbox(0, "remember");
         // Check the internal state directly.
-        let FormElement::Checkbox { checked, .. } = &mgr.forms[0].elements[2] else {
-            panic!("expected FormElement::Checkbox");
+        let __out = &mgr.forms[0].elements[2];
+        assert!(
+            matches!(&__out, FormElement::Checkbox { .. }),
+            "expected FormElement::Checkbox, got {__out:?}"
+        );
+        let FormElement::Checkbox { checked, .. } = __out else {
+            unreachable!()
         };
         assert!(*checked);
 
         mgr.toggle_checkbox(0, "remember");
-        let FormElement::Checkbox { checked, .. } = &mgr.forms[0].elements[2] else {
-            panic!("expected FormElement::Checkbox");
+        let __out = &mgr.forms[0].elements[2];
+        assert!(
+            matches!(&__out, FormElement::Checkbox { .. }),
+            "expected FormElement::Checkbox, got {__out:?}"
+        );
+        let FormElement::Checkbox { checked, .. } = __out else {
+            unreachable!()
         };
         assert!(!*checked);
     }
@@ -950,8 +960,13 @@ mod tests {
         );
 
         mgr.select_option(fid, "size", 1);
-        let FormElement::SelectBox { selected_index, .. } = &mgr.forms[fid].elements[0] else {
-            panic!("expected FormElement::SelectBox");
+        let __out = &mgr.forms[fid].elements[0];
+        assert!(
+            matches!(&__out, FormElement::SelectBox { .. }),
+            "expected FormElement::SelectBox, got {__out:?}"
+        );
+        let FormElement::SelectBox { selected_index, .. } = __out else {
+            unreachable!()
         };
         assert_eq!(*selected_index, Some(1));
     }
@@ -982,8 +997,13 @@ mod tests {
 
         mgr.select_option(fid, "size", 1);
         // Should remain at 0 because index 1 is disabled.
-        let FormElement::SelectBox { selected_index, .. } = &mgr.forms[fid].elements[0] else {
-            panic!("expected FormElement::SelectBox");
+        let __out = &mgr.forms[fid].elements[0];
+        assert!(
+            matches!(&__out, FormElement::SelectBox { .. }),
+            "expected FormElement::SelectBox, got {__out:?}"
+        );
+        let FormElement::SelectBox { selected_index, .. } = __out else {
+            unreachable!()
         };
         assert_eq!(*selected_index, Some(0));
     }
@@ -1168,8 +1188,13 @@ mod tests {
         mgr.forms[0].cursor = 3;
 
         let result = mgr.handle_input(FormKey::Enter);
-        let FormAction::Submit(data) = result else {
-            panic!("expected FormAction::Submit, got {:?}", result);
+        let __out = result;
+        assert!(
+            matches!(&__out, FormAction::Submit(_)),
+            "expected FormAction::Submit, got {__out:?}"
+        );
+        let FormAction::Submit(data) = __out else {
+            unreachable!()
         };
         assert_eq!(data.action, "/login");
     }
@@ -1583,8 +1608,13 @@ mod tests {
         mgr.focused_element = Some("__submit__".into());
 
         let result = mgr.handle_input(FormKey::Enter);
-        let FormAction::Submit(data) = result else {
-            panic!("expected FormAction::Submit, got {:?}", result);
+        let __out = result;
+        assert!(
+            matches!(&__out, FormAction::Submit(_)),
+            "expected FormAction::Submit, got {__out:?}"
+        );
+        let FormAction::Submit(data) = __out else {
+            unreachable!()
         };
         assert_eq!(data.action, "/login");
         assert!(data.fields.iter().any(|(k, v)| k == "user" && v == "test"));

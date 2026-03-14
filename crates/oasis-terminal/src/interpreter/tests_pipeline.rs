@@ -152,16 +152,19 @@ fn chain_signal_then_text_produces_multi() {
 
     let mut vfs = MemoryVfs::new();
     let mut env = make_env(&mut vfs);
-    match reg.execute("clear ; echo Done", &mut env).unwrap() {
-        CommandOutput::Multi(outputs) => {
-            assert_eq!(outputs.len(), 2);
-            assert!(matches!(outputs[0], CommandOutput::Clear));
-            assert!(matches!(outputs[1], CommandOutput::Text(_)));
-            if let CommandOutput::Text(ref s) = outputs[1] {
-                assert_eq!(s, "Done");
-            }
-        },
-        _ => panic!("expected Multi output"),
+    let __out = reg.execute("clear ; echo Done", &mut env).unwrap();
+    assert!(
+        matches!(&__out, CommandOutput::Multi(_)),
+        "expected Multi output, got {__out:?}"
+    );
+    let CommandOutput::Multi(outputs) = __out else {
+        unreachable!()
+    };
+    assert_eq!(outputs.len(), 2);
+    assert!(matches!(outputs[0], CommandOutput::Clear));
+    assert!(matches!(outputs[1], CommandOutput::Text(_)));
+    if let CommandOutput::Text(ref s) = outputs[1] {
+        assert_eq!(s, "Done");
     }
 }
 
@@ -188,14 +191,17 @@ fn chain_text_then_signal_produces_multi() {
 
     let mut vfs = MemoryVfs::new();
     let mut env = make_env(&mut vfs);
-    match reg.execute("echo Hello ; clear", &mut env).unwrap() {
-        CommandOutput::Multi(outputs) => {
-            assert_eq!(outputs.len(), 2);
-            assert!(matches!(outputs[0], CommandOutput::Text(_)));
-            assert!(matches!(outputs[1], CommandOutput::Clear));
-        },
-        _ => panic!("expected Multi output"),
-    }
+    let __out = reg.execute("echo Hello ; clear", &mut env).unwrap();
+    assert!(
+        matches!(&__out, CommandOutput::Multi(_)),
+        "expected Multi output, got {__out:?}"
+    );
+    let CommandOutput::Multi(outputs) = __out else {
+        unreachable!()
+    };
+    assert_eq!(outputs.len(), 2);
+    assert!(matches!(outputs[0], CommandOutput::Text(_)));
+    assert!(matches!(outputs[1], CommandOutput::Clear));
 }
 
 #[test]

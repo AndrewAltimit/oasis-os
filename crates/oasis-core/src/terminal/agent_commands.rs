@@ -486,8 +486,13 @@ tools = [
     #[test]
     fn agent_list() {
         let (reg, mut vfs) = setup_agent_env();
-        let CommandOutput::Text(s) = exec(&reg, &mut vfs, "agent list").unwrap() else {
-            panic!("expected CommandOutput::Text");
+        let __out = exec(&reg, &mut vfs, "agent list").unwrap();
+        assert!(
+            matches!(&__out, CommandOutput::Text(_)),
+            "expected CommandOutput::Text, got {__out:?}"
+        );
+        let CommandOutput::Text(s) = __out else {
+            unreachable!()
         };
         assert!(s.contains("Claude Code"));
         assert!(s.contains("Gemini CLI"));
@@ -496,8 +501,13 @@ tools = [
     #[test]
     fn agent_list_default() {
         let (reg, mut vfs) = setup_agent_env();
-        let CommandOutput::Text(s) = exec(&reg, &mut vfs, "agent").unwrap() else {
-            panic!("expected CommandOutput::Text");
+        let __out = exec(&reg, &mut vfs, "agent").unwrap();
+        assert!(
+            matches!(&__out, CommandOutput::Text(_)),
+            "expected CommandOutput::Text, got {__out:?}"
+        );
+        let CommandOutput::Text(s) = __out else {
+            unreachable!()
         };
         assert!(s.contains("Claude Code"));
     }
@@ -505,8 +515,13 @@ tools = [
     #[test]
     fn agent_status_by_name() {
         let (reg, mut vfs) = setup_agent_env();
-        let CommandOutput::Text(s) = exec(&reg, &mut vfs, "agent status claude").unwrap() else {
-            panic!("expected CommandOutput::Text");
+        let __out = exec(&reg, &mut vfs, "agent status claude").unwrap();
+        assert!(
+            matches!(&__out, CommandOutput::Text(_)),
+            "expected CommandOutput::Text, got {__out:?}"
+        );
+        let CommandOutput::Text(s) = __out else {
+            unreachable!()
         };
         assert!(s.contains("Claude Code"));
         assert!(s.contains("CLI"));
@@ -523,8 +538,13 @@ tools = [
         let mut reg = CommandRegistry::new();
         register_agent_commands(&mut reg);
         let mut vfs = MemoryVfs::new();
-        let CommandOutput::Text(s) = exec(&reg, &mut vfs, "agent").unwrap() else {
-            panic!("expected CommandOutput::Text");
+        let __out = exec(&reg, &mut vfs, "agent").unwrap();
+        assert!(
+            matches!(&__out, CommandOutput::Text(_)),
+            "expected CommandOutput::Text, got {__out:?}"
+        );
+        let CommandOutput::Text(s) = __out else {
+            unreachable!()
         };
         assert!(s.contains("no agents configured"));
     }
@@ -534,8 +554,13 @@ tools = [
     #[test]
     fn mcp_list() {
         let (reg, mut vfs) = setup_agent_env();
-        let CommandOutput::Text(s) = exec(&reg, &mut vfs, "mcp list").unwrap() else {
-            panic!("expected CommandOutput::Text");
+        let __out = exec(&reg, &mut vfs, "mcp list").unwrap();
+        assert!(
+            matches!(&__out, CommandOutput::Text(_)),
+            "expected CommandOutput::Text, got {__out:?}"
+        );
+        let CommandOutput::Text(s) = __out else {
+            unreachable!()
         };
         assert!(s.contains("code-quality"));
         assert!(s.contains("lint"));
@@ -545,8 +570,13 @@ tools = [
     #[test]
     fn mcp_server_tools() {
         let (reg, mut vfs) = setup_agent_env();
-        let CommandOutput::Text(s) = exec(&reg, &mut vfs, "mcp code-quality").unwrap() else {
-            panic!("expected CommandOutput::Text");
+        let __out = exec(&reg, &mut vfs, "mcp code-quality").unwrap();
+        assert!(
+            matches!(&__out, CommandOutput::Text(_)),
+            "expected CommandOutput::Text, got {__out:?}"
+        );
+        let CommandOutput::Text(s) = __out else {
+            unreachable!()
         };
         assert!(s.contains("lint"));
         assert!(s.contains("run_tests"));
@@ -555,9 +585,13 @@ tools = [
     #[test]
     fn mcp_invoke_tool() {
         let (reg, mut vfs) = setup_agent_env();
-        let CommandOutput::Text(s) = exec(&reg, &mut vfs, "mcp code-quality lint /src").unwrap()
-        else {
-            panic!("expected CommandOutput::Text");
+        let __out = exec(&reg, &mut vfs, "mcp code-quality lint /src").unwrap();
+        assert!(
+            matches!(&__out, CommandOutput::Text(_)),
+            "expected CommandOutput::Text, got {__out:?}"
+        );
+        let CommandOutput::Text(s) = __out else {
+            unreachable!()
         };
         assert!(s.contains("MCP invoke"));
         assert!(s.contains("code-quality.lint"));
@@ -581,8 +615,13 @@ tools = [
         let mut reg = CommandRegistry::new();
         register_agent_commands(&mut reg);
         let mut vfs = MemoryVfs::new();
-        let CommandOutput::Text(s) = exec(&reg, &mut vfs, "mcp").unwrap() else {
-            panic!("expected CommandOutput::Text");
+        let __out = exec(&reg, &mut vfs, "mcp").unwrap();
+        assert!(
+            matches!(&__out, CommandOutput::Text(_)),
+            "expected CommandOutput::Text, got {__out:?}"
+        );
+        let CommandOutput::Text(s) = __out else {
+            unreachable!()
         };
         assert!(s.contains("no MCP servers configured"));
     }
@@ -592,8 +631,13 @@ tools = [
     #[test]
     fn tamper_status_no_file() {
         let (reg, mut vfs) = setup_agent_env();
-        let CommandOutput::Text(s) = exec(&reg, &mut vfs, "tamper status").unwrap() else {
-            panic!("expected CommandOutput::Text");
+        let __out = exec(&reg, &mut vfs, "tamper status").unwrap();
+        assert!(
+            matches!(&__out, CommandOutput::Text(_)),
+            "expected CommandOutput::Text, got {__out:?}"
+        );
+        let CommandOutput::Text(s) = __out else {
+            unreachable!()
         };
         assert!(s.contains("UNKNOWN"));
         assert!(s.contains("[?]"));
@@ -605,8 +649,13 @@ tools = [
         vfs.mkdir("/sys").unwrap();
         vfs.mkdir("/sys/tamper").unwrap();
         vfs.write("/sys/tamper/state", b"armed").unwrap();
-        let CommandOutput::Text(s) = exec(&reg, &mut vfs, "tamper").unwrap() else {
-            panic!("expected CommandOutput::Text");
+        let __out = exec(&reg, &mut vfs, "tamper").unwrap();
+        assert!(
+            matches!(&__out, CommandOutput::Text(_)),
+            "expected CommandOutput::Text, got {__out:?}"
+        );
+        let CommandOutput::Text(s) = __out else {
+            unreachable!()
         };
         assert!(s.contains("ARMED"));
         assert!(s.contains("[ARMED]"));
@@ -617,8 +666,13 @@ tools = [
         let (reg, mut vfs) = setup_agent_env();
         vfs.mkdir("/sys").unwrap();
         vfs.mkdir("/sys/tamper").unwrap();
-        let CommandOutput::Text(s) = exec(&reg, &mut vfs, "tamper arm").unwrap() else {
-            panic!("expected CommandOutput::Text");
+        let __out = exec(&reg, &mut vfs, "tamper arm").unwrap();
+        assert!(
+            matches!(&__out, CommandOutput::Text(_)),
+            "expected CommandOutput::Text, got {__out:?}"
+        );
+        let CommandOutput::Text(s) = __out else {
+            unreachable!()
         };
         assert!(s.contains("Arm request"));
     }
@@ -628,8 +682,13 @@ tools = [
         let (reg, mut vfs) = setup_agent_env();
         vfs.mkdir("/sys").unwrap();
         vfs.mkdir("/sys/tamper").unwrap();
-        let CommandOutput::Text(s) = exec(&reg, &mut vfs, "tamper disarm").unwrap() else {
-            panic!("expected CommandOutput::Text");
+        let __out = exec(&reg, &mut vfs, "tamper disarm").unwrap();
+        assert!(
+            matches!(&__out, CommandOutput::Text(_)),
+            "expected CommandOutput::Text, got {__out:?}"
+        );
+        let CommandOutput::Text(s) = __out else {
+            unreachable!()
         };
         assert!(s.contains("Disarm request"));
     }
@@ -639,8 +698,13 @@ tools = [
     #[test]
     fn board_query_no_data() {
         let (reg, mut vfs) = setup_agent_env();
-        let CommandOutput::Text(s) = exec(&reg, &mut vfs, "board query").unwrap() else {
-            panic!("expected CommandOutput::Text");
+        let __out = exec(&reg, &mut vfs, "board query").unwrap();
+        assert!(
+            matches!(&__out, CommandOutput::Text(_)),
+            "expected CommandOutput::Text, got {__out:?}"
+        );
+        let CommandOutput::Text(s) = __out else {
+            unreachable!()
         };
         assert!(s.contains("not available"));
     }
@@ -655,8 +719,13 @@ tools = [
             b"#142 [Todo] Fix auth edge case\n#147 [Todo] Add rate limiting",
         )
         .unwrap();
-        let CommandOutput::Text(s) = exec(&reg, &mut vfs, "board query").unwrap() else {
-            panic!("expected CommandOutput::Text");
+        let __out = exec(&reg, &mut vfs, "board query").unwrap();
+        assert!(
+            matches!(&__out, CommandOutput::Text(_)),
+            "expected CommandOutput::Text, got {__out:?}"
+        );
+        let CommandOutput::Text(s) = __out else {
+            unreachable!()
         };
         assert!(s.contains("#142"));
         assert!(s.contains("#147"));
@@ -667,8 +736,13 @@ tools = [
         let (reg, mut vfs) = setup_agent_env();
         vfs.mkdir("/var").unwrap();
         vfs.mkdir("/var/board").unwrap();
-        let CommandOutput::Text(s) = exec(&reg, &mut vfs, "board claim 142").unwrap() else {
-            panic!("expected CommandOutput::Text");
+        let __out = exec(&reg, &mut vfs, "board claim 142").unwrap();
+        assert!(
+            matches!(&__out, CommandOutput::Text(_)),
+            "expected CommandOutput::Text, got {__out:?}"
+        );
+        let CommandOutput::Text(s) = __out else {
+            unreachable!()
         };
         assert!(s.contains("#142"));
         // Verify claim file was written.
@@ -686,8 +760,13 @@ tools = [
         let (reg, mut vfs) = setup_agent_env();
         vfs.mkdir("/var").unwrap();
         vfs.mkdir("/var/board").unwrap();
-        let CommandOutput::Text(s) = exec(&reg, &mut vfs, "board release 142").unwrap() else {
-            panic!("expected CommandOutput::Text");
+        let __out = exec(&reg, &mut vfs, "board release 142").unwrap();
+        assert!(
+            matches!(&__out, CommandOutput::Text(_)),
+            "expected CommandOutput::Text, got {__out:?}"
+        );
+        let CommandOutput::Text(s) = __out else {
+            unreachable!()
         };
         assert!(s.contains("#142"));
     }
@@ -699,8 +778,13 @@ tools = [
         let (reg, mut vfs) = setup_agent_env();
         vfs.mkdir("/var").unwrap();
         vfs.mkdir("/var/ci").unwrap();
-        let CommandOutput::Text(s) = exec(&reg, &mut vfs, "ci run full").unwrap() else {
-            panic!("expected CommandOutput::Text");
+        let __out = exec(&reg, &mut vfs, "ci run full").unwrap();
+        assert!(
+            matches!(&__out, CommandOutput::Text(_)),
+            "expected CommandOutput::Text, got {__out:?}"
+        );
+        let CommandOutput::Text(s) = __out else {
+            unreachable!()
         };
         assert!(s.contains("full"));
         assert_eq!(vfs.read("/var/ci/request").unwrap(), b"full");
@@ -723,8 +807,13 @@ tools = [
     #[test]
     fn health_shows_info() {
         let (reg, mut vfs) = setup_agent_env();
-        let CommandOutput::Text(s) = exec(&reg, &mut vfs, "health").unwrap() else {
-            panic!("expected CommandOutput::Text");
+        let __out = exec(&reg, &mut vfs, "health").unwrap();
+        assert!(
+            matches!(&__out, CommandOutput::Text(_)),
+            "expected CommandOutput::Text, got {__out:?}"
+        );
+        let CommandOutput::Text(s) = __out else {
+            unreachable!()
         };
         assert!(s.contains("System Health"));
     }

@@ -8,9 +8,23 @@ use std::ffi::c_void;
 use std::mem::size_of;
 use std::ptr;
 
+#[cfg(debug_assertions)]
+use core::sync::atomic::{AtomicU32, Ordering};
+
+/// Global counter for GU display list overflow events in shapes.rs.
+/// Only active in debug builds; capped at 10 warnings to avoid spam.
+#[cfg(debug_assertions)]
+static GU_OVERFLOW_COUNT: AtomicU32 = AtomicU32::new(0);
+
+/// Maximum number of GU overflow warnings to emit before going silent.
+#[cfg(debug_assertions)]
+const GU_OVERFLOW_WARN_LIMIT: u32 = 10;
+
 use psp::sys::{self, GuPrimitive, VertexType};
 
 use oasis_core::backend::{Color, GradientStyle};
+
+use oasis_core::geometry::rounded_rect_inset;
 
 use crate::{ColorExt, PspBackend, SCREEN_HEIGHT, SCREEN_WIDTH};
 
@@ -149,21 +163,24 @@ impl PspBackend {
             let verts = sys::sceGuGetMemory((vert_count * size_of::<ColorVertex>()) as i32)
                 as *mut ColorVertex;
             if verts.is_null() {
+                #[cfg(debug_assertions)]
+                {
+                    let n = GU_OVERFLOW_COUNT.fetch_add(1, Ordering::Relaxed);
+                    if n < GU_OVERFLOW_WARN_LIMIT {
+                        psp::dprintln!(
+                            "GU display list overflow in fill_rounded_rect_inner ({}/{})",
+                            n + 1,
+                            GU_OVERFLOW_WARN_LIMIT
+                        );
+                    }
+                }
                 sys::sceGuEnable(sys::GuState::Texture2D);
                 return;
             }
 
             let mut vi = 0usize;
             for dy in 0..h as i32 {
-                let inset = if dy < r {
-                    let ry = r - dy;
-                    r - isqrt_i32(r * r - ry * ry)
-                } else if dy >= h as i32 - r {
-                    let ry = dy - (h as i32 - 1 - r);
-                    r - isqrt_i32(r * r - ry * ry)
-                } else {
-                    0
-                };
+                let inset = rounded_rect_inset(dy, h as i32, r);
 
                 let lx = x + inset;
                 let rx = x + w as i32 - inset;
@@ -223,6 +240,17 @@ impl PspBackend {
             let verts = sys::sceGuGetMemory((vert_count * size_of::<ColorVertex>()) as i32)
                 as *mut ColorVertex;
             if verts.is_null() {
+                #[cfg(debug_assertions)]
+                {
+                    let n = GU_OVERFLOW_COUNT.fetch_add(1, Ordering::Relaxed);
+                    if n < GU_OVERFLOW_WARN_LIMIT {
+                        psp::dprintln!(
+                            "GU display list overflow in fill_circle_inner ({}/{})",
+                            n + 1,
+                            GU_OVERFLOW_WARN_LIMIT
+                        );
+                    }
+                }
                 sys::sceGuEnable(sys::GuState::Texture2D);
                 return;
             }
@@ -307,6 +335,17 @@ impl PspBackend {
                 let verts =
                     sys::sceGuGetMemory((2 * size_of::<ColorVertex>()) as i32) as *mut ColorVertex;
                 if verts.is_null() {
+                    #[cfg(debug_assertions)]
+                    {
+                        let n = GU_OVERFLOW_COUNT.fetch_add(1, Ordering::Relaxed);
+                        if n < GU_OVERFLOW_WARN_LIMIT {
+                            psp::dprintln!(
+                                "GU display list overflow in draw_line_inner ({}/{})",
+                                n + 1,
+                                GU_OVERFLOW_WARN_LIMIT
+                            );
+                        }
+                    }
                     sys::sceGuEnable(sys::GuState::Texture2D);
                     return;
                 }
@@ -352,6 +391,17 @@ impl PspBackend {
                 let verts = sys::sceGuGetMemory((line_count * 2 * size_of::<ColorVertex>()) as i32)
                     as *mut ColorVertex;
                 if verts.is_null() {
+                    #[cfg(debug_assertions)]
+                    {
+                        let n = GU_OVERFLOW_COUNT.fetch_add(1, Ordering::Relaxed);
+                        if n < GU_OVERFLOW_WARN_LIMIT {
+                            psp::dprintln!(
+                                "GU display list overflow in draw_line_inner/thick ({}/{})",
+                                n + 1,
+                                GU_OVERFLOW_WARN_LIMIT
+                            );
+                        }
+                    }
                     sys::sceGuEnable(sys::GuState::Texture2D);
                     return;
                 }
@@ -429,7 +479,19 @@ impl PspBackend {
 
                     let verts = sys::sceGuGetMemory((6 * size_of::<ColorVertex>()) as i32)
                         as *mut ColorVertex;
-                    if !verts.is_null() {
+                    if verts.is_null() {
+                        #[cfg(debug_assertions)]
+                        {
+                            let n = GU_OVERFLOW_COUNT.fetch_add(1, Ordering::Relaxed);
+                            if n < GU_OVERFLOW_WARN_LIMIT {
+                                psp::dprintln!(
+                                    "GU display list overflow in gradient/vertical ({}/{})",
+                                    n + 1,
+                                    GU_OVERFLOW_WARN_LIMIT
+                                );
+                            }
+                        }
+                    } else {
                         let x2 = x + w as i32;
                         let y2 = y + h as i32;
 
@@ -457,7 +519,19 @@ impl PspBackend {
 
                     let verts = sys::sceGuGetMemory((6 * size_of::<ColorVertex>()) as i32)
                         as *mut ColorVertex;
-                    if !verts.is_null() {
+                    if verts.is_null() {
+                        #[cfg(debug_assertions)]
+                        {
+                            let n = GU_OVERFLOW_COUNT.fetch_add(1, Ordering::Relaxed);
+                            if n < GU_OVERFLOW_WARN_LIMIT {
+                                psp::dprintln!(
+                                    "GU display list overflow in gradient/horizontal ({}/{})",
+                                    n + 1,
+                                    GU_OVERFLOW_WARN_LIMIT
+                                );
+                            }
+                        }
+                    } else {
                         let x2 = x + w as i32;
                         let y2 = y + h as i32;
 
@@ -492,7 +566,19 @@ impl PspBackend {
 
                     let verts = sys::sceGuGetMemory((6 * size_of::<ColorVertex>()) as i32)
                         as *mut ColorVertex;
-                    if !verts.is_null() {
+                    if verts.is_null() {
+                        #[cfg(debug_assertions)]
+                        {
+                            let n = GU_OVERFLOW_COUNT.fetch_add(1, Ordering::Relaxed);
+                            if n < GU_OVERFLOW_WARN_LIMIT {
+                                psp::dprintln!(
+                                    "GU display list overflow in gradient/four_corner ({}/{})",
+                                    n + 1,
+                                    GU_OVERFLOW_WARN_LIMIT
+                                );
+                            }
+                        }
+                    } else {
                         let x2 = x + w as i32;
                         let y2 = y + h as i32;
 
@@ -555,17 +641,5 @@ unsafe fn write_color_vert(verts: *mut ColorVertex, index: usize, color: u32, x:
     }
 }
 
-/// Integer square root (floor) for positive i32 values.
-fn isqrt_i32(n: i32) -> i32 {
-    if n <= 0 {
-        return 0;
-    }
-    // Newton's method with integer arithmetic.
-    let mut x = n;
-    let mut y = (x + 1) / 2;
-    while y < x {
-        x = y;
-        y = (x + n / x) / 2;
-    }
-    x
-}
+// `isqrt_i32` and `rounded_rect_inset` are now shared via
+// `oasis_core::geometry` (re-exported from `oasis_types::geometry`).

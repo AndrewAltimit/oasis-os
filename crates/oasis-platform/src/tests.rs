@@ -57,10 +57,15 @@ fn usb_state_display() {
 fn desktop_osk_immediate_confirm() {
     let mut platform = DesktopPlatform::new();
     platform.open("Test", "hello").unwrap();
-    match platform.poll().unwrap() {
-        OskResult::Confirmed(s) => assert_eq!(s, "hello"),
-        other => panic!("expected Confirmed, got {other:?}"),
-    }
+    let __out = platform.poll().unwrap();
+    assert!(
+        matches!(&__out, OskResult::Confirmed(_)),
+        "expected Confirmed, got {__out:?}"
+    );
+    let OskResult::Confirmed(s) = __out else {
+        unreachable!()
+    };
+    assert_eq!(s, "hello");
 }
 
 #[test]
@@ -68,10 +73,11 @@ fn desktop_osk_close() {
     let mut platform = DesktopPlatform::new();
     platform.open("Test", "data").unwrap();
     platform.close().unwrap();
-    match platform.poll().unwrap() {
-        OskResult::Cancelled => {},
-        other => panic!("expected Cancelled after close, got {other:?}"),
-    }
+    let result = platform.poll().unwrap();
+    assert!(
+        matches!(result, OskResult::Cancelled),
+        "expected Cancelled after close, got {result:?}"
+    );
 }
 
 #[test]
@@ -265,8 +271,9 @@ fn now_returns_valid_ranges() {
 fn osk_poll_before_open() {
     let mut platform = DesktopPlatform::new();
     // Poll without opening first should return Cancelled (no buffer set).
-    match platform.poll().unwrap() {
-        OskResult::Cancelled => {},
-        other => panic!("expected Cancelled when polling without open, got {other:?}"),
-    }
+    let result = platform.poll().unwrap();
+    assert!(
+        matches!(result, OskResult::Cancelled),
+        "expected Cancelled when polling without open, got {result:?}"
+    );
 }

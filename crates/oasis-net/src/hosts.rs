@@ -42,6 +42,7 @@ pub fn parse_hosts(toml_str: &str) -> oasis_types::error::Result<Vec<HostEntry>>
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
 

@@ -138,6 +138,7 @@ impl FormState {
 /// Lightweight tag extracted from a [`FormElement`] to allow
 /// dispatching in [`super::FormManager::handle_input`] without holding
 /// a mutable borrow on the element across the entire match.
+#[derive(Debug)]
 pub(super) enum ElementKind {
     TextInput { maxlength: Option<usize> },
     TextArea,
@@ -489,21 +490,26 @@ mod tests {
             maxlength: Some(100),
             input_type: InputType::Text,
         };
-        match ElementKind::of(&elem) {
-            ElementKind::TextInput {
-                maxlength: Some(100),
-            } => {},
-            _ => panic!("expected TextInput kind"),
-        }
+        let kind = ElementKind::of(&elem);
+        assert!(
+            matches!(
+                kind,
+                ElementKind::TextInput {
+                    maxlength: Some(100),
+                }
+            ),
+            "expected TextInput kind, got {kind:?}"
+        );
     }
 
     #[test]
     fn element_kind_text_input_no_max() {
         let elem = text_input("q", "");
-        match ElementKind::of(&elem) {
-            ElementKind::TextInput { maxlength: None } => {},
-            _ => panic!("expected TextInput with no maxlength"),
-        }
+        let __out = ElementKind::of(&elem);
+        assert!(
+            matches!(&__out, ElementKind::TextInput { .. }),
+            "expected TextInput with no maxlength, got {__out:?}"
+        );
     }
 
     #[test]
@@ -527,13 +533,16 @@ mod tests {
     #[test]
     fn element_kind_radio_button() {
         let elem = radio("color", "red", "colors", true);
-        match ElementKind::of(&elem) {
-            ElementKind::RadioButton { group, value } => {
-                assert_eq!(group, "colors");
-                assert_eq!(value, "red");
-            },
-            _ => panic!("expected RadioButton kind"),
-        }
+        let __out = ElementKind::of(&elem);
+        assert!(
+            matches!(&__out, ElementKind::RadioButton { .. }),
+            "expected RadioButton kind, got {__out:?}"
+        );
+        let ElementKind::RadioButton { group, value } = __out else {
+            unreachable!()
+        };
+        assert_eq!(group, "colors");
+        assert_eq!(value, "red");
     }
 
     #[test]

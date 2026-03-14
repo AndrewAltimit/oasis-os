@@ -69,68 +69,83 @@ mod tests {
     fn double_quoted_attribute() {
         let tokens = tok(r#"<a href="http://example.com">link</a>"#);
         assert_eq!(tokens.len(), 3);
-        if let Token::StartTag(ref tag) = tokens[0] {
-            assert_eq!(tag.name, "a");
-            assert_eq!(tag.attributes.len(), 1);
-            assert_eq!(tag.attributes[0].name, "href");
-            assert_eq!(tag.attributes[0].value, "http://example.com");
-        } else {
-            panic!("expected start tag");
-        }
+        assert!(
+            matches!(&tokens[0], Token::StartTag(_)),
+            "expected start tag"
+        );
+        let Token::StartTag(tag) = &tokens[0] else {
+            unreachable!()
+        };
+        assert_eq!(tag.name, "a");
+        assert_eq!(tag.attributes.len(), 1);
+        assert_eq!(tag.attributes[0].name, "href");
+        assert_eq!(tag.attributes[0].value, "http://example.com");
     }
 
     #[test]
     fn single_quoted_attribute() {
         let tokens = tok("<div class='main'>");
         assert_eq!(tokens.len(), 1);
-        if let Token::StartTag(ref tag) = tokens[0] {
-            assert_eq!(tag.attributes[0].name, "class");
-            assert_eq!(tag.attributes[0].value, "main");
-        } else {
-            panic!("expected start tag");
-        }
+        assert!(
+            matches!(&tokens[0], Token::StartTag(_)),
+            "expected start tag"
+        );
+        let Token::StartTag(tag) = &tokens[0] else {
+            unreachable!()
+        };
+        assert_eq!(tag.attributes[0].name, "class");
+        assert_eq!(tag.attributes[0].value, "main");
     }
 
     #[test]
     fn unquoted_attribute() {
         let tokens = tok("<input type=text>");
         assert_eq!(tokens.len(), 1);
-        if let Token::StartTag(ref tag) = tokens[0] {
-            assert_eq!(tag.attributes[0].name, "type");
-            assert_eq!(tag.attributes[0].value, "text");
-        } else {
-            panic!("expected start tag");
-        }
+        assert!(
+            matches!(&tokens[0], Token::StartTag(_)),
+            "expected start tag"
+        );
+        let Token::StartTag(tag) = &tokens[0] else {
+            unreachable!()
+        };
+        assert_eq!(tag.attributes[0].name, "type");
+        assert_eq!(tag.attributes[0].value, "text");
     }
 
     #[test]
     fn boolean_attribute() {
         let tokens = tok("<input disabled>");
         assert_eq!(tokens.len(), 1);
-        if let Token::StartTag(ref tag) = tokens[0] {
-            assert_eq!(tag.attributes.len(), 1);
-            assert_eq!(tag.attributes[0].name, "disabled");
-            assert_eq!(tag.attributes[0].value, "");
-        } else {
-            panic!("expected start tag");
-        }
+        assert!(
+            matches!(&tokens[0], Token::StartTag(_)),
+            "expected start tag"
+        );
+        let Token::StartTag(tag) = &tokens[0] else {
+            unreachable!()
+        };
+        assert_eq!(tag.attributes.len(), 1);
+        assert_eq!(tag.attributes[0].name, "disabled");
+        assert_eq!(tag.attributes[0].value, "");
     }
 
     #[test]
     fn multiple_attributes() {
         let tokens = tok(r#"<input type="text" name="q" value="search">"#);
         assert_eq!(tokens.len(), 1);
-        if let Token::StartTag(ref tag) = tokens[0] {
-            assert_eq!(tag.attributes.len(), 3);
-            assert_eq!(tag.attributes[0].name, "type");
-            assert_eq!(tag.attributes[0].value, "text");
-            assert_eq!(tag.attributes[1].name, "name");
-            assert_eq!(tag.attributes[1].value, "q");
-            assert_eq!(tag.attributes[2].name, "value");
-            assert_eq!(tag.attributes[2].value, "search");
-        } else {
-            panic!("expected start tag");
-        }
+        assert!(
+            matches!(&tokens[0], Token::StartTag(_)),
+            "expected start tag"
+        );
+        let Token::StartTag(tag) = &tokens[0] else {
+            unreachable!()
+        };
+        assert_eq!(tag.attributes.len(), 3);
+        assert_eq!(tag.attributes[0].name, "type");
+        assert_eq!(tag.attributes[0].value, "text");
+        assert_eq!(tag.attributes[1].name, "name");
+        assert_eq!(tag.attributes[1].value, "q");
+        assert_eq!(tag.attributes[2].name, "value");
+        assert_eq!(tag.attributes[2].value, "search");
     }
 
     // -- character references -----------------------------------------------
@@ -173,11 +188,14 @@ mod tests {
     #[test]
     fn char_ref_in_attribute() {
         let tokens = tok(r#"<a href="?a=1&amp;b=2">x</a>"#);
-        if let Token::StartTag(ref tag) = tokens[0] {
-            assert_eq!(tag.attributes[0].value, "?a=1&b=2");
-        } else {
-            panic!("expected start tag");
-        }
+        assert!(
+            matches!(&tokens[0], Token::StartTag(_)),
+            "expected start tag"
+        );
+        let Token::StartTag(tag) = &tokens[0] else {
+            unreachable!()
+        };
+        assert_eq!(tag.attributes[0].value, "?a=1&b=2");
     }
 
     #[test]
@@ -229,11 +247,11 @@ mod tests {
     fn doctype_case_insensitive() {
         let tokens = tok("<!doctype HTML>");
         assert_eq!(tokens.len(), 1);
-        if let Token::Doctype(ref dt) = tokens[0] {
-            assert_eq!(dt.name, Some("html".into()));
-        } else {
-            panic!("expected doctype");
-        }
+        assert!(matches!(&tokens[0], Token::Doctype(_)), "expected doctype");
+        let Token::Doctype(dt) = &tokens[0] else {
+            unreachable!()
+        };
+        assert_eq!(dt.name, Some("html".into()));
     }
 
     // -- nested tags --------------------------------------------------------
@@ -451,37 +469,43 @@ mod tests {
     fn tag_name_case_insensitive() {
         let tokens = tok("<DIV>x</DIV>");
         assert_eq!(tokens.len(), 3);
-        if let Token::StartTag(ref tag) = tokens[0] {
-            assert_eq!(tag.name, "div");
-        } else {
-            panic!("expected start tag");
-        }
-        if let Token::EndTag(ref tag) = tokens[2] {
-            assert_eq!(tag.name, "div");
-        } else {
-            panic!("expected end tag");
-        }
+        assert!(
+            matches!(&tokens[0], Token::StartTag(_)),
+            "expected start tag"
+        );
+        let Token::StartTag(tag) = &tokens[0] else {
+            unreachable!()
+        };
+        assert_eq!(tag.name, "div");
+        assert!(matches!(&tokens[2], Token::EndTag(_)), "expected end tag");
+        let Token::EndTag(tag) = &tokens[2] else {
+            unreachable!()
+        };
+        assert_eq!(tag.name, "div");
     }
 
     #[test]
     fn attribute_name_case_insensitive() {
         let tokens = tok(r#"<div CLASS="x">"#);
-        if let Token::StartTag(ref tag) = tokens[0] {
-            assert_eq!(tag.attributes[0].name, "class");
-        } else {
-            panic!("expected start tag");
-        }
+        assert!(
+            matches!(&tokens[0], Token::StartTag(_)),
+            "expected start tag"
+        );
+        let Token::StartTag(tag) = &tokens[0] else {
+            unreachable!()
+        };
+        assert_eq!(tag.attributes[0].name, "class");
     }
 
     #[test]
     fn bogus_comment_from_question_mark() {
         let tokens = tok("<?xml version=\"1.0\"?>");
         assert_eq!(tokens.len(), 1);
-        if let Token::Comment(_) = tokens[0] {
-            // Good -- treated as bogus comment.
-        } else {
-            panic!("expected comment");
-        }
+        assert!(matches!(&tokens[0], Token::Comment(_)), "expected comment");
+        let Token::Comment(_) = &tokens[0] else {
+            unreachable!()
+        };
+        // Good -- treated as bogus comment.
     }
 
     #[test]
@@ -523,13 +547,16 @@ mod tests {
     fn script_with_attributes() {
         let tokens = tok(r#"<script type="text/javascript">alert(1)</script>"#);
         assert_eq!(tokens.len(), 3);
-        if let Token::StartTag(ref tag) = tokens[0] {
-            assert_eq!(tag.name, "script");
-            assert_eq!(tag.attributes[0].name, "type");
-            assert_eq!(tag.attributes[0].value, "text/javascript");
-        } else {
-            panic!("expected start tag");
-        }
+        assert!(
+            matches!(&tokens[0], Token::StartTag(_)),
+            "expected start tag"
+        );
+        let Token::StartTag(tag) = &tokens[0] else {
+            unreachable!()
+        };
+        assert_eq!(tag.name, "script");
+        assert_eq!(tag.attributes[0].name, "type");
+        assert_eq!(tag.attributes[0].value, "text/javascript");
         assert_eq!(tokens[1], Token::Character("alert(1)".into()));
     }
 
@@ -572,11 +599,14 @@ mod tests {
         let html = format!(r#"<div data="{val}"></div>"#);
         let tokens = tok(&html);
         assert_eq!(tokens.len(), 2); // start + end
-        if let Token::StartTag(ref tag) = tokens[0] {
-            assert_eq!(tag.attributes[0].value.len(), 10_000);
-        } else {
-            panic!("expected start tag");
-        }
+        assert!(
+            matches!(&tokens[0], Token::StartTag(_)),
+            "expected start tag"
+        );
+        let Token::StartTag(tag) = &tokens[0] else {
+            unreachable!()
+        };
+        assert_eq!(tag.attributes[0].value.len(), 10_000);
     }
 
     #[test]
@@ -613,31 +643,40 @@ mod tests {
         let attrs: String = (0..100).map(|i| format!(r#" a{i}="v{i}""#)).collect();
         let html = format!("<div{attrs}>x</div>");
         let tokens = tok(&html);
-        if let Token::StartTag(ref tag) = tokens[0] {
-            assert_eq!(tag.attributes.len(), 100);
-        } else {
-            panic!("expected start tag");
-        }
+        assert!(
+            matches!(&tokens[0], Token::StartTag(_)),
+            "expected start tag"
+        );
+        let Token::StartTag(tag) = &tokens[0] else {
+            unreachable!()
+        };
+        assert_eq!(tag.attributes.len(), 100);
     }
 
     #[test]
     fn unquoted_attribute_value() {
         let tokens = tok("<div class=foo></div>");
-        if let Token::StartTag(ref tag) = tokens[0] {
-            assert_eq!(tag.attributes[0].value, "foo");
-        } else {
-            panic!("expected start tag");
-        }
+        assert!(
+            matches!(&tokens[0], Token::StartTag(_)),
+            "expected start tag"
+        );
+        let Token::StartTag(tag) = &tokens[0] else {
+            unreachable!()
+        };
+        assert_eq!(tag.attributes[0].value, "foo");
     }
 
     #[test]
     fn single_quoted_attribute_edge() {
         let tokens = tok("<div class='bar'></div>");
-        if let Token::StartTag(ref tag) = tokens[0] {
-            assert_eq!(tag.attributes[0].value, "bar");
-        } else {
-            panic!("expected start tag");
-        }
+        assert!(
+            matches!(&tokens[0], Token::StartTag(_)),
+            "expected start tag"
+        );
+        let Token::StartTag(tag) = &tokens[0] else {
+            unreachable!()
+        };
+        assert_eq!(tag.attributes[0].value, "bar");
     }
 
     #[test]
@@ -766,13 +805,16 @@ mod tests {
         // Query strings with = and & in attribute values.
         let tokens = tok(r#"<a href="page?a=1&b=2">link</a>"#);
         assert_eq!(tokens.len(), 3);
-        if let Token::StartTag(ref tag) = tokens[0] {
-            assert_eq!(tag.name, "a");
-            assert_eq!(tag.attributes[0].name, "href");
-            assert_eq!(tag.attributes[0].value, "page?a=1&b=2");
-        } else {
-            panic!("expected start tag");
-        }
+        assert!(
+            matches!(&tokens[0], Token::StartTag(_)),
+            "expected start tag"
+        );
+        let Token::StartTag(tag) = &tokens[0] else {
+            unreachable!()
+        };
+        assert_eq!(tag.name, "a");
+        assert_eq!(tag.attributes[0].name, "href");
+        assert_eq!(tag.attributes[0].value, "page?a=1&b=2");
     }
 
     #[test]
@@ -780,16 +822,19 @@ mod tests {
         // Excessive whitespace (spaces, tabs, newlines) between attrs.
         let tokens = tok("<div   class=\"a\"  \n\t  id=\"b\"  >");
         assert_eq!(tokens.len(), 1);
-        if let Token::StartTag(ref tag) = tokens[0] {
-            assert_eq!(tag.name, "div");
-            assert_eq!(tag.attributes.len(), 2);
-            assert_eq!(tag.attributes[0].name, "class");
-            assert_eq!(tag.attributes[0].value, "a");
-            assert_eq!(tag.attributes[1].name, "id");
-            assert_eq!(tag.attributes[1].value, "b");
-        } else {
-            panic!("expected start tag");
-        }
+        assert!(
+            matches!(&tokens[0], Token::StartTag(_)),
+            "expected start tag"
+        );
+        let Token::StartTag(tag) = &tokens[0] else {
+            unreachable!()
+        };
+        assert_eq!(tag.name, "div");
+        assert_eq!(tag.attributes.len(), 2);
+        assert_eq!(tag.attributes[0].name, "class");
+        assert_eq!(tag.attributes[0].value, "a");
+        assert_eq!(tag.attributes[1].name, "id");
+        assert_eq!(tag.attributes[1].value, "b");
     }
 
     #[test]
@@ -797,22 +842,31 @@ mod tests {
         // Mixed-case tags should be normalized to lowercase.
         let tokens = tok("<DIV class=\"test\"><SPAN>x</SPAN></DIV>");
         assert_eq!(tokens.len(), 5);
-        if let Token::StartTag(ref tag) = tokens[0] {
-            assert_eq!(tag.name, "div");
-            assert_eq!(tag.attributes[0].value, "test");
-        } else {
-            panic!("expected div start tag");
-        }
-        if let Token::StartTag(ref tag) = tokens[1] {
-            assert_eq!(tag.name, "span");
-        } else {
-            panic!("expected span start tag");
-        }
-        if let Token::EndTag(ref tag) = tokens[3] {
-            assert_eq!(tag.name, "span");
-        } else {
-            panic!("expected span end tag");
-        }
+        assert!(
+            matches!(&tokens[0], Token::StartTag(_)),
+            "expected div start tag"
+        );
+        let Token::StartTag(tag) = &tokens[0] else {
+            unreachable!()
+        };
+        assert_eq!(tag.name, "div");
+        assert_eq!(tag.attributes[0].value, "test");
+        assert!(
+            matches!(&tokens[1], Token::StartTag(_)),
+            "expected span start tag"
+        );
+        let Token::StartTag(tag) = &tokens[1] else {
+            unreachable!()
+        };
+        assert_eq!(tag.name, "span");
+        assert!(
+            matches!(&tokens[3], Token::EndTag(_)),
+            "expected span end tag"
+        );
+        let Token::EndTag(tag) = &tokens[3] else {
+            unreachable!()
+        };
+        assert_eq!(tag.name, "span");
     }
 
     #[test]

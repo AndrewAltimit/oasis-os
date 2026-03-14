@@ -213,7 +213,7 @@ impl OasisWasm {
         // Apply skin layout and discover apps.
         skin.apply_layout(&mut sdi);
         let mut apps = discover_apps(&vfs, "/apps", None).unwrap_or_default();
-        #[cfg(feature = "youtube")]
+        #[cfg(feature = "wasm-youtube")]
         apps.push(AppEntry {
             title: "Video Embed".to_string(),
             path: "/apps/video-embed".to_string(),
@@ -383,7 +383,7 @@ impl OasisWasm {
                 }
             }
             if let Some((path, data)) = pending {
-                #[cfg(feature = "youtube")]
+                #[cfg(feature = "wasm-youtube")]
                 if path == oasis_core::apps::video_embed::VIDEO_EMBED_REQUEST_PATH {
                     if data.is_empty() {
                         self.iframe.hide();
@@ -403,7 +403,7 @@ impl OasisWasm {
                 } else {
                     let _ = self.vfs.write(&path, data.as_bytes());
                 }
-                #[cfg(not(feature = "youtube"))]
+                #[cfg(not(feature = "wasm-youtube"))]
                 {
                     let _ = self.vfs.write(&path, data.as_bytes());
                 }
@@ -1282,7 +1282,7 @@ impl OasisWasm {
                 let dash_config =
                     DashboardConfig::from_features(&swapped.features, &self.active_theme);
                 let mut apps = discover_apps(&self.vfs, "/apps", None).unwrap_or_default();
-                #[cfg(feature = "youtube")]
+                #[cfg(feature = "wasm-youtube")]
                 apps.push(AppEntry {
                     title: "Video Embed".to_string(),
                     path: "/apps/video-embed".to_string(),

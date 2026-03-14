@@ -178,15 +178,17 @@ mod tests {
     #[test]
     fn rotate_rect_produces_polygon() {
         let op = rotate_rect(0, 0, 10, 10, 0.0, Color::WHITE);
-        match op {
-            VectorOp::FillPolygon { points, .. } => {
-                assert_eq!(points.len(), 4);
-                // At 0 rotation, corners should be approximately the original
-                assert_eq!(points[0], (0, 0));
-                assert_eq!(points[1], (10, 0));
-            },
-            _ => panic!("expected FillPolygon"),
-        }
+        assert!(
+            matches!(&op, VectorOp::FillPolygon { .. }),
+            "expected FillPolygon, got {op:?}"
+        );
+        let VectorOp::FillPolygon { points, .. } = op else {
+            unreachable!()
+        };
+        assert_eq!(points.len(), 4);
+        // At 0 rotation, corners should be approximately the original;
+        assert_eq!(points[0], (0, 0));
+        assert_eq!(points[1], (10, 0));
     }
 
     #[test]

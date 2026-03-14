@@ -203,3 +203,163 @@ pub(crate) fn current_unix_time() -> u64 {
             .unwrap_or(0)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used)]
+
+    use super::*;
+
+    // -- truncate_title --
+
+    #[test]
+    fn truncate_title_empty_input() {
+        assert_eq!(truncate_title("", 10), "");
+    }
+
+    #[test]
+    fn truncate_title_exactly_three() {
+        // max_chars == 3: still uses the truncation path (3 <= 3)
+        assert_eq!(truncate_title("ABCDEF", 3), "ABC");
+    }
+
+    #[test]
+    fn truncate_title_four_chars_with_dots() {
+        // max_chars == 4 and title is longer: should show 2 chars + ".."
+        assert_eq!(truncate_title("Hello World", 4), "He..");
+    }
+
+    #[test]
+    fn truncate_title_unicode_boundary() {
+        // Multi-byte chars: floor_char_boundary should not panic.
+        let title = "\u{00e9}\u{00e9}\u{00e9}\u{00e9}\u{00e9}"; // "eeeee" (5 x 2-byte)
+        let result = truncate_title(title, 4);
+        // Should truncate safely without panicking.
+        assert!(result.len() <= 6); // at most 2 chars (4 bytes) + ".." (2 bytes)
+    }
+
+    #[test]
+    fn truncate_title_one_char() {
+        assert_eq!(truncate_title("Hello", 1), "H");
+    }
+
+    // -- volume_bar_rect --
+
+    #[test]
+    fn volume_bar_rect_expanded_basic() {
+        let r = volume_bar_rect(800, 600, true);
+        // bar_w = (800/4).clamp(60,160) = 160
+        assert_eq!(r.w, 160);
+        assert_eq!(r.h, 10);
+        // x = 800 - 160 - 8 = 632
+        assert_eq!(r.x, 632);
+        // overlay_y = 600 - 20 = 580, y = 580 + (20 - 10)/2 = 585
+        assert_eq!(r.y, 585);
+    }
+
+    #[test]
+    fn volume_bar_rect_collapsed_basic() {
+        let r = volume_bar_rect(800, 600, false);
+        assert_eq!(r.w, 160);
+        assert_eq!(r.h, 10);
+        // footer_h = (600*5/100).max(14) = 30
+        // ftr_y = 600 - 30 = 570
+        // y = 570 + (30-10)/2 = 580
+        assert_eq!(r.y, 580);
+    }
+
+    #[test]
+    fn volume_bar_rect_small_window() {
+        let r = volume_bar_rect(200, 100, true);
+        // bar_w = (200/4).clamp(60,160) = 60
+        assert_eq!(r.w, 60);
+        // x = 200 - 60 - 8 = 132
+        assert_eq!(r.x, 132);
+    }
+
+    #[test]
+    fn volume_bar_rect_tiny_height() {
+        // Even with tiny height, should not panic.
+        let r = volume_bar_rect(100, 10, false);
+        assert!(r.w >= 60);
+        assert_eq!(r.h, 10);
+    }
+
+    // -- TvGuideColors --
+
+    #[test]
+    fn tv_guide_colors_defaults_consistent() {
+        let a = TvGuideColors::defaults();
+        let b = TvGuideColors::defaults();
+        assert_eq!(a.bg, b.bg);
+        assert_eq!(a.selected_bg, b.selected_bg);
+        assert_eq!(a.live_badge, b.live_badge);
+    }
+
+    #[test]
+    fn tv_guide_colors_from_default_theme() {
+        let at = ActiveTheme::default();
+        let colors = TvGuideColors::from_theme(&at);
+        let defaults = TvGuideColors::defaults();
+        // With no app_color overrides, from_theme should match defaults.
+        assert_eq!(colors.bg, defaults.bg);
+        assert_eq!(colors.header_bg, defaults.header_bg);
+        assert_eq!(colors.selected_bg, defaults.selected_bg);
+    }
+
+    // -- SdiNames --
+
+    #[test]
+    fn sdi_names_correct_format() {
+        let names = SdiNames::new();
+        assert_eq!(names.time_cols[0], "tv_time_0");
+        assert_eq!(
+            names.time_cols[VISIBLE_TIME_SLOTS - 1],
+            format!("tv_time_{}", VISIBLE_TIME_SLOTS - 1)
+        );
+        assert_eq!(names.row_bgs[0], "tv_row_0_bg");
+        assert_eq!(names.row_labels[2], "tv_row_2_label");
+        assert_eq!(names.row_cells[1][3], "tv_row_1_cell_3");
+        assert_eq!(names.row_cell_bgs[0][0], "tv_row_0_cbg_0");
+    }
+
+    #[test]
+    fn sdi_names_array_lengths() {
+        let names = SdiNames::new();
+        assert_eq!(names.time_cols.len(), VISIBLE_TIME_SLOTS);
+        assert_eq!(names.time_bgs.len(), VISIBLE_TIME_SLOTS);
+        assert_eq!(names.row_bgs.len(), VISIBLE_ROWS);
+        assert_eq!(names.row_labels.len(), VISIBLE_ROWS);
+        assert_eq!(names.row_lines.len(), VISIBLE_ROWS);
+        assert_eq!(names.row_cells.len(), VISIBLE_ROWS);
+        assert_eq!(names.row_cells[0].len(), MAX_CELLS);
+    }
+
+    // -- ensure_obj --
+
+    #[test]
+    fn ensure_obj_creates_if_missing() {
+        let mut sdi = SdiRegistry::new();
+        assert!(!sdi.contains("test_obj"));
+        ensure_obj(&mut sdi, "test_obj");
+        assert!(sdi.contains("test_obj"));
+    }
+
+    #[test]
+    fn ensure_obj_idempotent() {
+        let mut sdi = SdiRegistry::new();
+        ensure_obj(&mut sdi, "test_obj");
+        ensure_obj(&mut sdi, "test_obj"); // should not panic
+        assert!(sdi.contains("test_obj"));
+    }
+
+    // -- constants --
+
+    #[test]
+    fn constants_sensible() {
+        assert_eq!(SLOT_DURATION, 1800); // 30 minutes
+        assert!(VISIBLE_TIME_SLOTS >= 3);
+        assert!(VISIBLE_ROWS >= 3);
+        assert!(MAX_CELLS >= 4);
+    }
+}

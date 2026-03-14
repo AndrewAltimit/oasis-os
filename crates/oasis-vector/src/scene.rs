@@ -98,13 +98,16 @@ mod tests {
         });
         parent.embed(100, 50, &child);
         assert_eq!(parent.ops.len(), 1);
-        match &parent.ops[0] {
-            VectorOp::Group { translate, ops, .. } => {
-                assert_eq!(*translate, (100, 50));
-                assert_eq!(ops.len(), 1);
-            },
-            _ => panic!("expected Group"),
-        }
+        let __out = &parent.ops[0];
+        assert!(
+            matches!(&__out, VectorOp::Group { .. }),
+            "expected Group, got {__out:?}"
+        );
+        let VectorOp::Group { translate, ops, .. } = __out else {
+            unreachable!()
+        };
+        assert_eq!(*translate, (100, 50));
+        assert_eq!(ops.len(), 1);
     }
 
     #[test]

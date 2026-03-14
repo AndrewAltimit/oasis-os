@@ -107,9 +107,13 @@ mod tests {
         let mut vfs = MemoryVfs::new();
         let mut env = make_env(&mut vfs);
         let out = cmd.execute(&["modern"], &mut env).unwrap();
-        match out {
-            CommandOutput::Signal(CommandSignal::SkinSwap { name }) => assert_eq!(name, "modern"),
-            _ => panic!("expected SkinSwap"),
-        }
+        assert!(
+            matches!(&out, CommandOutput::Signal(_)),
+            "expected SkinSwap, got {out:?}"
+        );
+        let CommandOutput::Signal(CommandSignal::SkinSwap { name }) = out else {
+            unreachable!()
+        };
+        assert_eq!(name, "modern");
     }
 }

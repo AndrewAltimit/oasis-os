@@ -6,7 +6,7 @@ This guide explains how to add new commands to the OASIS_OS terminal interpreter
 
 ## Command Architecture
 
-Commands implement the `Command` trait defined in `crates/oasis-terminal/src/interpreter.rs`. The `CommandRegistry` holds all registered commands and dispatches execution by name. Commands receive parsed arguments and a mutable `Environment` providing access to the VFS, platform services, and piped input.
+Commands implement the `Command` trait defined in `crates/oasis-terminal/src/types.rs`. The `CommandRegistry` holds all registered commands and dispatches execution by name. Commands receive parsed arguments and a mutable `Environment` providing access to the VFS, platform services, and piped input.
 
 ---
 
@@ -33,7 +33,7 @@ pub trait Command {
 }
 ```
 
-Source: `crates/oasis-terminal/src/interpreter.rs`
+Source: `crates/oasis-terminal/src/types.rs`
 
 ---
 
@@ -47,14 +47,20 @@ Commands return a `CommandOutput` enum:
 | `Table { headers, rows }` | Tabular data with header row and data rows |
 | `None` | No visible output |
 | `Clear` | Signal to clear the terminal buffer |
+| `Signal(CommandSignal)` | A signal to the app layer (see below) |
 | `Multi(Vec<CommandOutput>)` | Multiple outputs from chained commands |
-| `ListenToggle { port }` | Signal to start/stop remote terminal |
-| `RemoteConnect { address, port, psk }` | Signal to connect to remote host |
-| `SkinSwap { name }` | Signal to swap the active skin |
-| `FtpToggle { port, password }` | Signal to start/stop FTP server (optional password auth) |
-| `BrowserSandbox { enable }` | Signal to toggle browser sandbox mode |
 
-Use `Text` for most commands. The signal variants (`ListenToggle`, `SkinSwap`, etc.) are intercepted by the app layer to trigger system-level actions.
+`CommandSignal` variants (intercepted by the app layer to trigger system-level actions):
+
+| Signal | Description |
+|--------|-------------|
+| `ListenToggle { port }` | Start/stop remote terminal |
+| `RemoteConnect { address, port, psk }` | Connect to remote host |
+| `SkinSwap { name }` | Swap the active skin |
+| `FtpToggle { port, password }` | Start/stop FTP server (optional password auth) |
+| `BrowserSandbox { enable }` | Toggle browser sandbox mode |
+
+Use `Text` for most commands. Convenience constructors like `CommandOutput::listen_toggle(port)` and `CommandOutput::skin_swap(name)` are provided for creating signal variants.
 
 ---
 
@@ -88,7 +94,7 @@ Create a new file or add to an existing command module in `crates/oasis-terminal
 // In crates/oasis-terminal/src/my_commands.rs
 
 use oasis_types::error::{OasisError, Result};
-use crate::interpreter::{Command, CommandOutput, Environment};
+use crate::types::{Command, CommandOutput, Environment};
 
 struct WordCountCmd;
 
@@ -179,8 +185,11 @@ Commands are organized into modules by category:
 | `skin_commands.rs` | skin | skin, theme |
 | `ui_commands.rs` | ui | window, panel, toast |
 | `radio_commands.rs` | audio | radio |
+| `platform_commands.rs` | system | power, clock, memory, usb |
+| `remote_commands.rs` | network | listen, remote, hosts |
+| `control_flow.rs` | core | echo (control flow variant) |
 
-Additional commands (agent, plugin, script, transfer, update) are registered by `oasis-core`.
+Additional commands (agent, browser, plugin, script, transfer, tv, update) are registered by `oasis-core`.
 
 ---
 

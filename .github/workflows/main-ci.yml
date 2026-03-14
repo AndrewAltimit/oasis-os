@@ -13,6 +13,11 @@ on:
         required: false
         type: boolean
         default: false
+      run_benchmarks:
+        description: 'Run criterion benchmarks'
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -101,7 +106,27 @@ jobs:
         run: |
           docker compose --profile ci run --rm \
             -e SDL_VIDEODRIVER=dummy -e SDL_RENDER_DRIVER=software \
+            -e OASIS_FIXED_TIME="2025-06-15 12:00:00" \
+            -e OASIS_FIXED_FRAME=0 \
             rust-ci cargo run -p oasis-app --bin screenshot-tests --release
+
+      - name: Screenshot regression comparison
+        if: always()
+        continue-on-error: true
+        run: |
+          if [ -d screenshots/baseline ]; then
+            bash scripts/compare-screenshots.sh \
+              --baseline screenshots/baseline \
+              --actual screenshots/tests \
+              --threshold 0.1
+          else
+            echo "No baselines found -- skipping regression comparison."
+            echo "To generate baselines, run locally:"
+            echo "  OASIS_FIXED_TIME='2025-06-15 12:00:00' OASIS_FIXED_FRAME=0 \\"
+            echo "    cargo run -p oasis-app --bin screenshot-tests --release -- --bless"
+            echo "  cp -r screenshots/tests/ screenshots/baseline/"
+            echo "Then commit screenshots/baseline/ to the repository."
+          fi
 
       - name: Upload screenshot report
         if: always()
@@ -116,8 +141,9 @@ jobs:
       - name: cargo-deny
         run: docker compose --profile ci run --rm rust-ci cargo deny check
 
-      # -- Benchmarks --------------------------------------------------------
+      # -- Benchmarks (manual only via workflow_dispatch) ----------------------
       - name: Benchmarks
+        if: inputs.run_benchmarks == true
         run: |
           set -o pipefail
           docker compose --profile ci run --rm rust-ci \
@@ -127,13 +153,22 @@ jobs:
           echo "::endgroup::"
 
       - name: Upload benchmark results
-        if: always()
+        if: inputs.run_benchmarks == true
         uses: actions/upload-artifact@v4
         with:
           name: benchmark-results
           path: bench_results.txt
           if-no-files-found: ignore
           retention-days: 30
+
+      - name: Upload criterion baseline
+        if: inputs.run_benchmarks == true
+        uses: actions/upload-artifact@v4
+        with:
+          name: criterion-baseline
+          path: target/criterion/
+          if-no-files-found: ignore
+          retention-days: 90
 
       # -- Test Metrics -------------------------------------------------------
       - name: Test metrics summary
@@ -165,6 +200,7 @@ jobs:
             if command -v cargo-llvm-cov &>/dev/null; then
               cargo llvm-cov --workspace --no-fail-fast \
                 --ignore-filename-regex '(tests?\.rs|benches?\.rs|main\.rs)' \
+                --fail-under-lines 50 \
                 2>&1 | tee /app/coverage_output.txt
             else
               echo 'cargo-llvm-cov not available, skipping coverage'

@@ -713,10 +713,15 @@ mod tests {
         assert_eq!(icon.name, "news");
         assert_eq!(icon.ops.len(), 1);
         // Should be a polygon with 10 vertices
-        match &icon.ops[0] {
-            VectorOp::FillPolygon { points, .. } => assert_eq!(points.len(), 10),
-            _ => panic!("expected FillPolygon"),
-        }
+        let __out = &icon.ops[0];
+        assert!(
+            matches!(&__out, VectorOp::FillPolygon { .. }),
+            "expected FillPolygon, got {__out:?}"
+        );
+        let VectorOp::FillPolygon { points, .. } = __out else {
+            unreachable!()
+        };
+        assert_eq!(points.len(), 10);
     }
 
     #[test]
@@ -745,23 +750,30 @@ mod tests {
         let mut icon = icon_the_world(Color::WHITE);
         let red = Color::rgb(255, 0, 0);
         icon.recolor(red);
-        match &icon.ops[0] {
-            VectorOp::StrokeRect { color, .. } => assert_eq!(*color, red),
-            _ => panic!("expected StrokeRect"),
-        }
+        let __out = &icon.ops[0];
+        assert!(
+            matches!(&__out, VectorOp::StrokeRect { .. }),
+            "expected StrokeRect, got {__out:?}"
+        );
+        let VectorOp::StrokeRect { color, .. } = __out else {
+            unreachable!()
+        };
+        assert_eq!(*color, red);
     }
 
     #[test]
     fn test_icon_as_op() {
         let icon = icon_the_world(Color::WHITE);
         let op = icon.as_op(100, 50);
-        match op {
-            VectorOp::Group { translate, ops, .. } => {
-                assert_eq!(translate, (100, 50));
-                assert_eq!(ops.len(), 2);
-            },
-            _ => panic!("expected Group"),
-        }
+        assert!(
+            matches!(&op, VectorOp::Group { .. }),
+            "expected Group, got {op:?}"
+        );
+        let VectorOp::Group { translate, ops, .. } = op else {
+            unreachable!()
+        };
+        assert_eq!(translate, (100, 50));
+        assert_eq!(ops.len(), 2);
     }
 
     #[test]
@@ -807,28 +819,33 @@ mod tests {
     #[test]
     fn test_glass_polygon() {
         let op = glass_polygon(vec![(50, 272), (200, -20), (350, 272)], Color::WHITE, 38);
-        match op {
-            VectorOp::FillPolygon { color, points } => {
-                assert_eq!(color.a, 38);
-                assert_eq!(points.len(), 3);
-            },
-            _ => panic!("expected FillPolygon"),
-        }
+        assert!(
+            matches!(&op, VectorOp::FillPolygon { .. }),
+            "expected FillPolygon, got {op:?}"
+        );
+        let VectorOp::FillPolygon { color, points } = op else {
+            unreachable!()
+        };
+        assert_eq!(color.a, 38);
+        assert_eq!(points.len(), 3);
     }
 
     #[test]
     fn test_radar_sweep() {
         let op = radar_sweep(100, 100, 50, 0.5, 1.0, Color::rgb(255, 128, 0));
-        match op {
-            VectorOp::FillArc {
-                start_angle,
-                end_angle,
-                ..
-            } => {
-                assert!((start_angle - 1.0).abs() < 0.001);
-                assert!((end_angle - 1.5).abs() < 0.001);
-            },
-            _ => panic!("expected FillArc"),
-        }
+        assert!(
+            matches!(&op, VectorOp::FillArc { .. }),
+            "expected FillArc, got {op:?}"
+        );
+        let VectorOp::FillArc {
+            start_angle,
+            end_angle,
+            ..
+        } = op
+        else {
+            unreachable!()
+        };
+        assert!((start_angle - 1.0).abs() < 0.001);
+        assert!((end_angle - 1.5).abs() < 0.001);
     }
 }

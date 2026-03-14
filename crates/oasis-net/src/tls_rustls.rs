@@ -97,6 +97,14 @@ struct RustlsStream {
     plaintext_buf: VecDeque<u8>,
 }
 
+impl std::fmt::Debug for RustlsStream {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RustlsStream")
+            .field("plaintext_buf_len", &self.plaintext_buf.len())
+            .finish_non_exhaustive()
+    }
+}
+
 impl RustlsStream {
     /// Maximum wall-clock time for the TLS handshake.
     const HANDSHAKE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
@@ -330,6 +338,7 @@ fn oasis_err_to_io(e: OasisError) -> io::Error {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
     use std::net::{TcpListener, TcpStream};
@@ -517,10 +526,11 @@ mod tests {
         let sni = ServerName::try_from("example.com".to_owned()).unwrap();
         let conn = rustls::ClientConnection::new(Arc::clone(&provider.config), sni).unwrap();
         let result = RustlsStream::new(conn, mock);
-        let msg = match result {
-            Err(e) => e.to_string(),
-            Ok(_) => panic!("expected handshake to fail with garbage bytes"),
-        };
+        assert!(
+            result.is_err(),
+            "expected handshake to fail with garbage bytes"
+        );
+        let msg = result.unwrap_err().to_string();
         assert!(
             msg.contains("TLS handshake"),
             "expected 'TLS handshake' in error: {msg}",
@@ -535,10 +545,8 @@ mod tests {
         let sni = ServerName::try_from("example.com".to_owned()).unwrap();
         let conn = rustls::ClientConnection::new(Arc::clone(&provider.config), sni).unwrap();
         let result = RustlsStream::new(conn, mock);
-        let msg = match result {
-            Err(e) => e.to_string(),
-            Ok(_) => panic!("expected handshake to fail on EOF"),
-        };
+        assert!(result.is_err(), "expected handshake to fail on EOF");
+        let msg = result.unwrap_err().to_string();
         assert!(
             msg.contains("peer closed connection"),
             "expected 'peer closed connection' in error: {msg}",
