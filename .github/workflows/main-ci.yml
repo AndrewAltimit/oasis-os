@@ -13,6 +13,11 @@ on:
         required: false
         type: boolean
         default: false
+      run_benchmarks:
+        description: 'Run criterion benchmarks'
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -136,8 +141,9 @@ jobs:
       - name: cargo-deny
         run: docker compose --profile ci run --rm rust-ci cargo deny check
 
-      # -- Benchmarks --------------------------------------------------------
+      # -- Benchmarks (manual only via workflow_dispatch) ----------------------
       - name: Benchmarks
+        if: inputs.run_benchmarks == true
         run: |
           set -o pipefail
           docker compose --profile ci run --rm rust-ci \
@@ -147,7 +153,7 @@ jobs:
           echo "::endgroup::"
 
       - name: Upload benchmark results
-        if: always()
+        if: inputs.run_benchmarks == true
         uses: actions/upload-artifact@v4
         with:
           name: benchmark-results
@@ -156,7 +162,7 @@ jobs:
           retention-days: 30
 
       - name: Upload criterion baseline
-        if: always()
+        if: inputs.run_benchmarks == true
         uses: actions/upload-artifact@v4
         with:
           name: criterion-baseline
