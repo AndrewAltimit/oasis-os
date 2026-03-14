@@ -117,10 +117,7 @@ impl Command for MusicCmd {
     }
 }
 
-/// Register audio commands into a registry.
-pub fn register_audio_commands(reg: &mut crate::CommandRegistry) {
-    reg.register(Box::new(MusicCmd));
-}
+register_commands!(register_audio_commands, [MusicCmd]);
 
 #[cfg(test)]
 mod tests {

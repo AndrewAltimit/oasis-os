@@ -2,14 +2,9 @@
 
 use oasis_types::error::{OasisError, Result};
 
-use crate::{Command, CommandOutput, CommandRegistry, Environment};
+use crate::{Command, CommandOutput, Environment};
 
-/// Register network-related terminal commands.
-pub fn register_network_commands(reg: &mut CommandRegistry) {
-    reg.register(Box::new(WifiCmd));
-    reg.register(Box::new(PingCmd));
-    reg.register(Box::new(HttpCmd));
-}
+register_commands!(register_network_commands, [WifiCmd, PingCmd, HttpCmd]);
 
 // ---------------------------------------------------------------------------
 // wifi
@@ -179,8 +174,8 @@ mod tests {
     use super::*;
     use oasis_platform::DesktopPlatform;
 
-    use crate::Environment;
     use crate::test_helpers::assert_text;
+    use crate::{CommandRegistry, Environment};
     use oasis_vfs::MemoryVfs;
 
     #[test]

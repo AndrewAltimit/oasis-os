@@ -179,15 +179,10 @@ define_command!(
     }
 );
 
-/// Register system commands.
-pub fn register_system_commands(reg: &mut crate::CommandRegistry) {
-    reg.register(Box::new(UptimeCmd));
-    reg.register(Box::new(DfCmd));
-    reg.register(Box::new(WhoamiCmd));
-    reg.register(Box::new(HostnameCmd));
-    reg.register(Box::new(DateCmd));
-    reg.register(Box::new(SleepCmd));
-}
+register_commands!(
+    register_system_commands,
+    [UptimeCmd, DfCmd, WhoamiCmd, HostnameCmd, DateCmd, SleepCmd,]
+);
 
 #[cfg(test)]
 mod tests {

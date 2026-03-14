@@ -161,10 +161,7 @@ impl Command for RadioCmd {
     }
 }
 
-/// Register radio commands into a registry.
-pub fn register_radio_commands(reg: &mut crate::CommandRegistry) {
-    reg.register(Box::new(RadioCmd));
-}
+register_commands!(register_radio_commands, [RadioCmd]);
 
 #[cfg(test)]
 mod tests {

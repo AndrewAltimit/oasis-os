@@ -4,29 +4,7 @@ use oasis_types::error::{OasisError, Result};
 
 use crate::interpreter::{Command, CommandOutput, Environment};
 
-/// Platform-safe seed for PRNG. Uses `TimeService` when available (required on
-/// WASM where `std::time::SystemTime::now()` panics), falls back to std on native.
-fn time_seed(env: &Environment<'_>) -> u64 {
-    if let Some(time) = env.time
-        && let Ok(now) = time.now()
-    {
-        return (now.year as u64) << 40
-            | (now.month as u64) << 32
-            | (now.day as u64) << 24
-            | (now.hour as u64) << 16
-            | (now.minute as u64) << 8
-            | (now.second as u64);
-    }
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_nanos() as u64
-    }
-    #[cfg(target_arch = "wasm32")]
-    0
-}
+use crate::cmd_helpers::time_seed;
 
 // ---------------------------------------------------------------------------
 // base64
@@ -714,16 +692,12 @@ impl Command for XargsCmd {
     }
 }
 
-/// Register developer tool commands.
-pub fn register_dev_commands(reg: &mut crate::CommandRegistry) {
-    reg.register(Box::new(Base64Cmd));
-    reg.register(Box::new(JsonCmd));
-    reg.register(Box::new(UuidCmd));
-    reg.register(Box::new(SeqCmd));
-    reg.register(Box::new(ExprCmd));
-    reg.register(Box::new(TestCmd));
-    reg.register(Box::new(XargsCmd));
-}
+register_commands!(
+    register_dev_commands,
+    [
+        Base64Cmd, JsonCmd, UuidCmd, SeqCmd, ExprCmd, TestCmd, XargsCmd,
+    ]
+);
 
 #[cfg(test)]
 mod tests {

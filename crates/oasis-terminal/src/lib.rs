@@ -89,7 +89,7 @@ pub use text_commands::register_text_commands;
 pub use ui_commands::register_ui_commands;
 
 pub mod cmd_helpers;
-pub use cmd_helpers::{require_args, require_args_exact};
+pub use cmd_helpers::{require_args, require_args_exact, time_seed};
 /// Shell job (background or stopped command).
 pub use jobs::Job;
 /// Manages shell jobs (background and stopped commands).

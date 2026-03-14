@@ -7,7 +7,7 @@ use oasis_sdi::SdiRegistry;
 use oasis_types::error::{OasisError, Result, WmError};
 
 use super::manager::{MODAL_OVERLAY_ID, WindowManager};
-use super::window::{Window, WindowId, WindowState};
+use super::window::{WindowId, WindowState};
 
 impl WindowManager {
     /// Bring a window to the front (topmost z-order).
@@ -168,26 +168,5 @@ impl WindowManager {
         }
 
         self.active_window = Some(WindowId::from(id));
-    }
-
-    /// Compute the insertion index for a window based on z-order groups.
-    /// Groups: normal < always_on_top < modal.
-    pub(crate) fn z_insert_index(&self, window: &Window) -> usize {
-        if window.modal {
-            // Modal windows go to the absolute top.
-            self.windows.len()
-        } else if window.always_on_top {
-            // Above normal windows, below modal windows.
-            self.windows
-                .iter()
-                .position(|w| w.modal)
-                .unwrap_or(self.windows.len())
-        } else {
-            // Normal windows: below always_on_top and modal.
-            self.windows
-                .iter()
-                .position(|w| w.always_on_top || w.modal)
-                .unwrap_or(self.windows.len())
-        }
     }
 }

@@ -13,22 +13,13 @@ const CAT_MAX_SIZE: usize = 10 * 1024 * 1024;
 /// Maximum file size for `cp`/`mv` operations (100 MiB).
 const COPY_MAX_SIZE: usize = 100 * 1024 * 1024;
 
-/// Register core filesystem and shell commands.
-pub fn register_core_commands(reg: &mut crate::CommandRegistry) {
-    reg.register(Box::new(LsCmd));
-    reg.register(Box::new(CdCmd));
-    reg.register(Box::new(PwdCmd));
-    reg.register(Box::new(CatCmd));
-    reg.register(Box::new(MkdirCmd));
-    reg.register(Box::new(RmCmd));
-    reg.register(Box::new(EchoCmd));
-    reg.register(Box::new(ClearCmd));
-    reg.register(Box::new(StatusCmd));
-    reg.register(Box::new(TouchCmd));
-    reg.register(Box::new(CpCmd));
-    reg.register(Box::new(MvCmd));
-    reg.register(Box::new(FindCmd));
-}
+register_commands!(
+    register_core_commands,
+    [
+        LsCmd, CdCmd, PwdCmd, CatCmd, MkdirCmd, RmCmd, EchoCmd, ClearCmd, StatusCmd, TouchCmd,
+        CpCmd, MvCmd, FindCmd,
+    ]
+);
 
 // ---------------------------------------------------------------------------
 // ls

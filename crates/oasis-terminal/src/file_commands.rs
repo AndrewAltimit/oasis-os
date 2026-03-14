@@ -372,16 +372,18 @@ impl Command for ChecksumCmd {
     }
 }
 
-/// Register file utility commands.
-pub fn register_file_commands(reg: &mut crate::CommandRegistry) {
-    reg.register(Box::new(WriteCmd));
-    reg.register(Box::new(AppendCmd));
-    reg.register(Box::new(TreeCmd));
-    reg.register(Box::new(DuCmd));
-    reg.register(Box::new(StatCmd));
-    reg.register(Box::new(XxdCmd));
-    reg.register(Box::new(ChecksumCmd));
-}
+register_commands!(
+    register_file_commands,
+    [
+        WriteCmd,
+        AppendCmd,
+        TreeCmd,
+        DuCmd,
+        StatCmd,
+        XxdCmd,
+        ChecksumCmd,
+    ]
+);
 
 #[cfg(test)]
 mod tests {

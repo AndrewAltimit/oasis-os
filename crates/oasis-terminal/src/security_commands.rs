@@ -166,13 +166,10 @@ impl Command for AuditCmd {
     }
 }
 
-/// Register security commands.
-pub fn register_security_commands(reg: &mut crate::CommandRegistry) {
-    reg.register(Box::new(ChmodCmd));
-    reg.register(Box::new(ChownCmd));
-    reg.register(Box::new(PasswdCmd));
-    reg.register(Box::new(AuditCmd));
-}
+register_commands!(
+    register_security_commands,
+    [ChmodCmd, ChownCmd, PasswdCmd, AuditCmd]
+);
 
 #[cfg(test)]
 mod tests {

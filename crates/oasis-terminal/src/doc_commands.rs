@@ -287,12 +287,7 @@ fn default_motd() -> String {
         .into()
 }
 
-/// Register documentation commands.
-pub fn register_doc_commands(reg: &mut crate::CommandRegistry) {
-    reg.register(Box::new(ManCmd));
-    reg.register(Box::new(TutorialCmd));
-    reg.register(Box::new(MotdCmd));
-}
+register_commands!(register_doc_commands, [ManCmd, TutorialCmd, MotdCmd]);
 
 /// Populate default man pages in the VFS.
 ///

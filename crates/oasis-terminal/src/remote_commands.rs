@@ -5,12 +5,7 @@ use oasis_types::error::{OasisError, Result};
 use crate::cmd_helpers::require_args;
 use crate::interpreter::{Command, CommandOutput, Environment};
 
-/// Register remote terminal commands.
-pub fn register_remote_commands(reg: &mut crate::CommandRegistry) {
-    reg.register(Box::new(ListenCmd));
-    reg.register(Box::new(RemoteCmd));
-    reg.register(Box::new(HostsCmd));
-}
+register_commands!(register_remote_commands, [ListenCmd, RemoteCmd, HostsCmd]);
 
 // ---------------------------------------------------------------------------
 // listen
