@@ -355,27 +355,34 @@ mod tests {
             radius: 5,
             color: Color::WHITE,
         }]);
-        match g {
-            VectorOp::Group {
-                ops,
-                translate,
-                opacity,
-            } => {
-                assert_eq!(ops.len(), 1);
-                assert_eq!(translate, (0, 0));
-                assert_eq!(opacity, 255);
-            },
-            _ => panic!("expected Group"),
-        }
+        assert!(
+            matches!(&g, VectorOp::Group { .. }),
+            "expected Group, got {g:?}"
+        );
+        let VectorOp::Group {
+            ops,
+            translate,
+            opacity,
+        } = g
+        else {
+            unreachable!()
+        };
+        assert_eq!(ops.len(), 1);
+        assert_eq!(translate, (0, 0));
+        assert_eq!(opacity, 255);
     }
 
     #[test]
     fn test_translated() {
         let g = VectorOp::translated(10, 20, vec![]);
-        match g {
-            VectorOp::Group { translate, .. } => assert_eq!(translate, (10, 20)),
-            _ => panic!("expected Group"),
-        }
+        assert!(
+            matches!(&g, VectorOp::Group { .. }),
+            "expected Group, got {g:?}"
+        );
+        let VectorOp::Group { translate, .. } = g else {
+            unreachable!()
+        };
+        assert_eq!(translate, (10, 20));
     }
 
     #[test]
@@ -387,10 +394,14 @@ mod tests {
             color: Color::WHITE,
         };
         op.recolor(Color::rgb(255, 0, 0));
-        match op {
-            VectorOp::FillCircle { color, .. } => assert_eq!(color, Color::rgb(255, 0, 0)),
-            _ => panic!("expected FillCircle"),
-        }
+        assert!(
+            matches!(&op, VectorOp::FillCircle { .. }),
+            "expected FillCircle, got {op:?}"
+        );
+        let VectorOp::FillCircle { color, .. } = op else {
+            unreachable!()
+        };
+        assert_eq!(color, Color::rgb(255, 0, 0));
     }
 
     #[test]
@@ -413,18 +424,20 @@ mod tests {
         ]);
         let red = Color::rgb(255, 0, 0);
         g.recolor(red);
-        match g {
-            VectorOp::Group { ops, .. } => {
-                for op in &ops {
-                    match op {
-                        VectorOp::FillCircle { color, .. } | VectorOp::Line { color, .. } => {
-                            assert_eq!(*color, red);
-                        },
-                        _ => panic!("unexpected op"),
-                    }
-                }
-            },
-            _ => panic!("expected Group"),
+        assert!(
+            matches!(&g, VectorOp::Group { .. }),
+            "expected Group, got {g:?}"
+        );
+        let VectorOp::Group { ops, .. } = g else {
+            unreachable!()
+        };
+        for op in &ops {
+            match op {
+                VectorOp::FillCircle { color, .. } | VectorOp::Line { color, .. } => {
+                    assert_eq!(*color, red);
+                },
+                _ => panic!("unexpected op"),
+            }
         }
     }
 
@@ -438,12 +451,14 @@ mod tests {
             color: Color::rgba(255, 255, 255, 200),
         };
         op.modulate_alpha(128);
-        match op {
-            VectorOp::FillRect { color, .. } => {
-                // 200 * 128 / 255 = 100
-                assert_eq!(color.a, 100);
-            },
-            _ => panic!("expected FillRect"),
-        }
+        assert!(
+            matches!(&op, VectorOp::FillRect { .. }),
+            "expected FillRect, got {op:?}"
+        );
+        let VectorOp::FillRect { color, .. } = op else {
+            unreachable!()
+        };
+        // 200 * 128 / 255 = 100
+        assert_eq!(color.a, 100);
     }
 }

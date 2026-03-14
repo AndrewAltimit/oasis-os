@@ -8,8 +8,8 @@ repository.workspace = true
 authors.workspace = true
 
 [features]
-default = ["youtube"]
-youtube = ["oasis-core/wasm-youtube"]
+default = ["wasm-youtube"]
+wasm-youtube = ["oasis-core/wasm-youtube"]
 
 [lib]
 crate-type = ["cdylib", "rlib"]
@@ -17,23 +17,25 @@ crate-type = ["cdylib", "rlib"]
 [dependencies]
 # Note: `javascript` feature intentionally omitted — rquickjs-sys requires clang
 # to cross-compile QuickJS C code for wasm32-unknown-unknown.
+#
+# Redundant transitive deps removed: oasis-vfs, oasis-sdi, oasis-terminal,
+# oasis-browser, oasis-net, oasis-ui, serde, serde_json, toml — all available
+# through oasis-core re-exports and not directly imported in this crate.
 oasis-core = { workspace = true, default-features = false }
+# Direct imports: oasis_types::{backend, error, input, geometry} in renderer, input, network, audio, video
 oasis-types = { workspace = true }
-oasis-vfs = { workspace = true }
-oasis-sdi = { workspace = true }
+# Direct import: oasis_skin::resolve_skin in lib.rs
 oasis-skin = { workspace = true }
+# Direct import: oasis_platform::{PowerService, TimeService, ...} in platform.rs
 oasis-platform = { workspace = true }
+# Direct imports: oasis_audio::{radio, RadioManager, RADIO_REQUEST_PATH} in archive.rs, lib.rs
 oasis-audio = { workspace = true }
-oasis-terminal = { workspace = true }
-oasis-browser = { workspace = true }
-oasis-net = { workspace = true }
+# Direct import: oasis_wm::DesktopManager in lib.rs
 oasis-wm = { workspace = true }
-oasis-ui = { workspace = true }
+# Direct import: oasis_shader::{ShaderParams, software::SoftwareShaderRenderer} in shader_bridge.rs
 oasis-shader = { workspace = true, features = ["software"] }
+# Direct usage: log::info!, log::warn! in shader_bridge.rs, lib.rs
 log = { workspace = true }
-serde = { workspace = true }
-serde_json = { workspace = true }
-toml = { workspace = true }
 wasm-bindgen = { workspace = true }
 web-sys = { workspace = true }
 js-sys = { workspace = true }

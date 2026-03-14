@@ -1183,11 +1183,14 @@ mod tests {
 
         assert!(backend.fill_rect_count() > 0);
         // First fill_rect should be the background.
-        if let DrawCall::FillRect { color, .. } = &backend.calls[0] {
-            assert_eq!(*color, Color::rgb(255, 0, 0));
-        } else {
-            panic!("expected FillRect for background");
-        }
+        assert!(
+            matches!(&&backend.calls[0], DrawCall::FillRect { .. }),
+            "expected FillRect for background"
+        );
+        let DrawCall::FillRect { color, .. } = &&backend.calls[0] else {
+            unreachable!()
+        };
+        assert_eq!(*color, Color::rgb(255, 0, 0));
     }
 
     // ---------------------------------------------------------------
@@ -1230,12 +1233,15 @@ mod tests {
 
         // Should have exactly one fill_rect for the top border.
         assert_eq!(backend.fill_rect_count(), 1);
-        if let DrawCall::FillRect { h, color, .. } = &backend.calls[0] {
-            assert_eq!(*h, 2);
-            assert_eq!(*color, Color::BLACK);
-        } else {
-            panic!("expected border FillRect");
-        }
+        assert!(
+            matches!(&&backend.calls[0], DrawCall::FillRect { .. }),
+            "expected border FillRect"
+        );
+        let DrawCall::FillRect { h, color, .. } = &&backend.calls[0] else {
+            unreachable!()
+        };
+        assert_eq!(*h, 2);
+        assert_eq!(*color, Color::BLACK);
     }
 
     // ---------------------------------------------------------------
@@ -1346,11 +1352,14 @@ mod tests {
         paint(&lb, &mut backend, TEST_VP, &link_map).unwrap();
 
         assert!(backend.draw_text_count() > 0);
-        if let DrawCall::DrawText { text, .. } = &backend.calls[0] {
-            assert_eq!(text, "\u{2022}");
-        } else {
-            panic!("expected DrawText for disc marker");
-        }
+        assert!(
+            matches!(&&backend.calls[0], DrawCall::DrawText { .. }),
+            "expected DrawText for disc marker"
+        );
+        let DrawCall::DrawText { text, .. } = &&backend.calls[0] else {
+            unreachable!()
+        };
+        assert_eq!(text, "\u{2022}");
     }
 
     #[test]
@@ -1369,11 +1378,14 @@ mod tests {
         paint(&lb, &mut backend, TEST_VP, &link_map).unwrap();
 
         assert!(backend.draw_text_count() > 0);
-        if let DrawCall::DrawText { text, .. } = &backend.calls[0] {
-            assert_eq!(text, "3.");
-        } else {
-            panic!("expected DrawText for decimal marker");
-        }
+        assert!(
+            matches!(&&backend.calls[0], DrawCall::DrawText { .. }),
+            "expected DrawText for decimal marker"
+        );
+        let DrawCall::DrawText { text, .. } = &&backend.calls[0] else {
+            unreachable!()
+        };
+        assert_eq!(text, "3.");
     }
 
     // ---------------------------------------------------------------

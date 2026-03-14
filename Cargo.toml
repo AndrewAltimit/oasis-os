@@ -151,7 +151,7 @@ clone_on_ref_ptr = "warn"
 dbg_macro = "warn"
 todo = "warn"
 unimplemented = "warn"
-unwrap_used = "warn"
+unwrap_used = "deny"
 
 [workspace.lints.rust]
 unsafe_op_in_unsafe_fn = "warn"

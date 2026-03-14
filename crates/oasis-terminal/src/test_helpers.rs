@@ -4,10 +4,9 @@
 //! Instead of:
 //!
 //! ```ignore
-//! match result {
-//!     CommandOutput::Text(s) => assert!(s.contains("expected")),
-//!     _ => panic!("expected text"),
-//! }
+//! assert!(matches!(&result, CommandOutput::Text(_)), "expected text, got {result:?}");
+//! let CommandOutput::Text(s) = result else { unreachable!() };
+//! assert!(s.contains("expected"));
 //! ```
 //!
 //! Write:
@@ -30,34 +29,41 @@
 /// assert!(s.contains("substring"));
 /// ```
 macro_rules! assert_text {
-    ($expr:expr) => {
-        match $expr {
-            $crate::CommandOutput::Text(s) => s,
-            other => panic!("expected CommandOutput::Text, got {other:?}"),
-        }
-    };
+    ($expr:expr) => {{
+        let __val = $expr;
+        assert!(
+            matches!(&__val, $crate::CommandOutput::Text(_)),
+            "expected CommandOutput::Text, got {__val:?}"
+        );
+        let $crate::CommandOutput::Text(s) = __val else {
+            unreachable!()
+        };
+        s
+    }};
 }
 
 /// Assert that a [`CommandOutput`] is `Clear`.
 #[allow(unused_macros)]
 macro_rules! assert_clear {
-    ($expr:expr) => {
-        match $expr {
-            $crate::CommandOutput::Clear => {},
-            other => panic!("expected CommandOutput::Clear, got {other:?}"),
-        }
-    };
+    ($expr:expr) => {{
+        let __val = $expr;
+        assert!(
+            matches!(__val, $crate::CommandOutput::Clear),
+            "expected CommandOutput::Clear, got {__val:?}"
+        );
+    }};
 }
 
 /// Assert that a [`CommandOutput`] is `None` (no visible output).
 #[allow(unused_macros)]
 macro_rules! assert_none_output {
-    ($expr:expr) => {
-        match $expr {
-            $crate::CommandOutput::None => {},
-            other => panic!("expected CommandOutput::None, got {other:?}"),
-        }
-    };
+    ($expr:expr) => {{
+        let __val = $expr;
+        assert!(
+            matches!(__val, $crate::CommandOutput::None),
+            "expected CommandOutput::None, got {__val:?}"
+        );
+    }};
 }
 
 #[allow(unused_imports)]

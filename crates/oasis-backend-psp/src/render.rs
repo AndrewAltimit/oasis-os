@@ -4,6 +4,18 @@ use std::ffi::c_void;
 use std::mem::size_of;
 use std::ptr;
 
+#[cfg(debug_assertions)]
+use core::sync::atomic::{AtomicU32, Ordering};
+
+/// Global counter for GU display list overflow events in render.rs.
+/// Only active in debug builds; capped at 10 warnings to avoid spam.
+#[cfg(debug_assertions)]
+static GU_OVERFLOW_COUNT: AtomicU32 = AtomicU32::new(0);
+
+/// Maximum number of GU overflow warnings to emit before going silent.
+#[cfg(debug_assertions)]
+const GU_OVERFLOW_WARN_LIMIT: u32 = 10;
+
 use psp::sys::{
     self, ClearBuffer, GuPrimitive, MipmapLevel, TextureColorComponent, TextureEffect,
     TextureFilter, TexturePixelFormat, VertexType,
@@ -121,6 +133,17 @@ impl PspBackend {
             let verts = sys::sceGuGetMemory((2 * size_of::<TexturedColorVertex>()) as i32)
                 as *mut TexturedColorVertex;
             if verts.is_null() {
+                #[cfg(debug_assertions)]
+                {
+                    let n = GU_OVERFLOW_COUNT.fetch_add(1, Ordering::Relaxed);
+                    if n < GU_OVERFLOW_WARN_LIMIT {
+                        psp::dprintln!(
+                            "GU display list overflow in fill_rect_inner ({}/{})",
+                            n + 1,
+                            GU_OVERFLOW_WARN_LIMIT
+                        );
+                    }
+                }
                 return;
             }
 
@@ -302,6 +325,17 @@ impl PspBackend {
             let verts = sys::sceGuGetMemory((2 * size_of::<TexturedColorVertex>()) as i32)
                 as *mut TexturedColorVertex;
             if verts.is_null() {
+                #[cfg(debug_assertions)]
+                {
+                    let n = GU_OVERFLOW_COUNT.fetch_add(1, Ordering::Relaxed);
+                    if n < GU_OVERFLOW_WARN_LIMIT {
+                        psp::dprintln!(
+                            "GU display list overflow in blit_inner ({}/{})",
+                            n + 1,
+                            GU_OVERFLOW_WARN_LIMIT
+                        );
+                    }
+                }
                 return;
             }
 
@@ -384,6 +418,17 @@ impl PspBackend {
             let verts = sys::sceGuGetMemory((2 * size_of::<TexturedColorVertex>()) as i32)
                 as *mut TexturedColorVertex;
             if verts.is_null() {
+                #[cfg(debug_assertions)]
+                {
+                    let n = GU_OVERFLOW_COUNT.fetch_add(1, Ordering::Relaxed);
+                    if n < GU_OVERFLOW_WARN_LIMIT {
+                        psp::dprintln!(
+                            "GU display list overflow in blit_scaled ({}/{})",
+                            n + 1,
+                            GU_OVERFLOW_WARN_LIMIT
+                        );
+                    }
+                }
                 sys::sceGuTexFilter(TextureFilter::Nearest, TextureFilter::Nearest);
                 return;
             }

@@ -34,6 +34,10 @@ fn make_registry() -> CommandRegistry {
 /// Extract the text payload from a `CommandOutput`, panicking on
 /// any other variant.
 fn extract_text(output: CommandOutput) -> String {
+    assert!(
+        matches!(&output, CommandOutput::Text(_) | CommandOutput::Multi(_)),
+        "expected CommandOutput::Text or Multi, got {output:?}"
+    );
     match output {
         CommandOutput::Text(s) => s,
         CommandOutput::Multi(parts) => {
@@ -50,7 +54,7 @@ fn extract_text(output: CommandOutput) -> String {
                 .collect::<Vec<_>>()
                 .join("\n")
         },
-        other => panic!("expected CommandOutput::Text, got {other:?}"),
+        _ => unreachable!(),
     }
 }
 

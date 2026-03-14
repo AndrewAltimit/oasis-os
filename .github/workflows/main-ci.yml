@@ -165,6 +165,7 @@ jobs:
             if command -v cargo-llvm-cov &>/dev/null; then
               cargo llvm-cov --workspace --no-fail-fast \
                 --ignore-filename-regex '(tests?\.rs|benches?\.rs|main\.rs)' \
+                --fail-under-lines 50 \
                 2>&1 | tee /app/coverage_output.txt
             else
               echo 'cargo-llvm-cov not available, skipping coverage'

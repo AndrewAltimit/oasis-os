@@ -170,10 +170,15 @@ mod tests {
         let mut reg = CommandRegistry::new();
         register_remote_commands(&mut reg);
         let mut vfs = MemoryVfs::new();
-        match exec(&reg, &mut vfs, "listen").unwrap() {
-            CommandOutput::Signal(CommandSignal::ListenToggle { port }) => assert_eq!(port, 9000),
-            _ => panic!("expected ListenToggle"),
-        }
+        let __out = exec(&reg, &mut vfs, "listen").unwrap();
+        assert!(
+            matches!(&__out, CommandOutput::Signal(_)),
+            "expected ListenToggle, got {__out:?}"
+        );
+        let CommandOutput::Signal(CommandSignal::ListenToggle { port }) = __out else {
+            unreachable!()
+        };
+        assert_eq!(port, 9000);
     }
 
     #[test]
@@ -181,10 +186,15 @@ mod tests {
         let mut reg = CommandRegistry::new();
         register_remote_commands(&mut reg);
         let mut vfs = MemoryVfs::new();
-        match exec(&reg, &mut vfs, "listen 8080").unwrap() {
-            CommandOutput::Signal(CommandSignal::ListenToggle { port }) => assert_eq!(port, 8080),
-            _ => panic!("expected ListenToggle"),
-        }
+        let __out = exec(&reg, &mut vfs, "listen 8080").unwrap();
+        assert!(
+            matches!(&__out, CommandOutput::Signal(_)),
+            "expected ListenToggle, got {__out:?}"
+        );
+        let CommandOutput::Signal(CommandSignal::ListenToggle { port }) = __out else {
+            unreachable!()
+        };
+        assert_eq!(port, 8080);
     }
 
     #[test]
@@ -192,10 +202,15 @@ mod tests {
         let mut reg = CommandRegistry::new();
         register_remote_commands(&mut reg);
         let mut vfs = MemoryVfs::new();
-        match exec(&reg, &mut vfs, "listen stop").unwrap() {
-            CommandOutput::Signal(CommandSignal::ListenToggle { port }) => assert_eq!(port, 0),
-            _ => panic!("expected ListenToggle"),
-        }
+        let __out = exec(&reg, &mut vfs, "listen stop").unwrap();
+        assert!(
+            matches!(&__out, CommandOutput::Signal(_)),
+            "expected ListenToggle, got {__out:?}"
+        );
+        let CommandOutput::Signal(CommandSignal::ListenToggle { port }) = __out else {
+            unreachable!()
+        };
+        assert_eq!(port, 0);
     }
 
     #[test]
@@ -203,14 +218,18 @@ mod tests {
         let mut reg = CommandRegistry::new();
         register_remote_commands(&mut reg);
         let mut vfs = MemoryVfs::new();
-        match exec(&reg, &mut vfs, "remote 192.168.0.50:9000").unwrap() {
-            CommandOutput::Signal(CommandSignal::RemoteConnect { address, port, psk }) => {
-                assert_eq!(address, "192.168.0.50");
-                assert_eq!(port, 9000);
-                assert!(psk.is_none());
-            },
-            _ => panic!("expected RemoteConnect"),
-        }
+        let __out = exec(&reg, &mut vfs, "remote 192.168.0.50:9000").unwrap();
+        assert!(
+            matches!(&__out, CommandOutput::Signal(_)),
+            "expected RemoteConnect, got {__out:?}"
+        );
+        let CommandOutput::Signal(CommandSignal::RemoteConnect { address, port, psk }) = __out
+        else {
+            unreachable!()
+        };
+        assert_eq!(address, "192.168.0.50");
+        assert_eq!(port, 9000);
+        assert!(psk.is_none());
     }
 
     #[test]
@@ -230,14 +249,18 @@ psk = "secret"
 "#,
         )
         .unwrap();
-        match exec(&reg, &mut vfs, "remote myserver").unwrap() {
-            CommandOutput::Signal(CommandSignal::RemoteConnect { address, port, psk }) => {
-                assert_eq!(address, "10.0.0.1");
-                assert_eq!(port, 8080);
-                assert_eq!(psk, Some("secret".to_string()));
-            },
-            _ => panic!("expected RemoteConnect"),
-        }
+        let __out = exec(&reg, &mut vfs, "remote myserver").unwrap();
+        assert!(
+            matches!(&__out, CommandOutput::Signal(_)),
+            "expected RemoteConnect, got {__out:?}"
+        );
+        let CommandOutput::Signal(CommandSignal::RemoteConnect { address, port, psk }) = __out
+        else {
+            unreachable!()
+        };
+        assert_eq!(address, "10.0.0.1");
+        assert_eq!(port, 8080);
+        assert_eq!(psk, Some("secret".to_string()));
     }
 
     #[test]

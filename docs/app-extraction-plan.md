@@ -1,5 +1,7 @@
 # App Extraction Plan: Breaking Apps Out of oasis-core
 
+> **Status**: Complete (as of 2026-03-14). All phases implemented; 9 new app crates extracted, oasis-core reduced from ~30,726 to ~16,495 LOC. This document is retained for historical reference.
+
 ## Motivation
 
 `oasis-core` is 30,726 LOC — the largest crate in the workspace. 16 apps live

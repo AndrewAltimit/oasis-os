@@ -814,10 +814,14 @@ mod tests {
     #[test]
     fn osk_result_confirmed() {
         let result = OskResult::Confirmed("test".to_string());
-        match result {
-            OskResult::Confirmed(s) => assert_eq!(s, "test"),
-            _ => panic!("expected Confirmed"),
-        }
+        assert!(
+            matches!(&result, OskResult::Confirmed(_)),
+            "expected Confirmed, got {result:?}"
+        );
+        let OskResult::Confirmed(s) = result else {
+            unreachable!()
+        };
+        assert_eq!(s, "test");
     }
 
     #[test]
@@ -844,10 +848,15 @@ mod tests {
     fn osk_result_clone() {
         let result1 = OskResult::Confirmed("data".to_string());
         let result2 = result1.clone();
-        match (result1, result2) {
-            (OskResult::Confirmed(s1), OskResult::Confirmed(s2)) => assert_eq!(s1, s2),
-            _ => panic!("expected both to be Confirmed"),
-        }
+        let __out = (result1, result2);
+        assert!(
+            matches!(&__out, (OskResult::Confirmed(_), OskResult::Confirmed(_))),
+            "expected both to be Confirmed, got {__out:?}"
+        );
+        let (OskResult::Confirmed(s1), OskResult::Confirmed(s2)) = __out else {
+            unreachable!()
+        };
+        assert_eq!(s1, s2);
     }
 
     // ---- WifiInfo tests ----
@@ -985,10 +994,15 @@ mod tests {
     fn desktop_platform_osk_service() {
         let mut platform = DesktopPlatform::new();
         platform.open("Title", "init").unwrap();
-        match platform.poll().unwrap() {
-            OskResult::Confirmed(s) => assert_eq!(s, "init"),
-            _ => panic!("expected Confirmed"),
-        }
+        let __out = platform.poll().unwrap();
+        assert!(
+            matches!(&__out, OskResult::Confirmed(_)),
+            "expected Confirmed, got {__out:?}"
+        );
+        let OskResult::Confirmed(s) = __out else {
+            unreachable!()
+        };
+        assert_eq!(s, "init");
         platform.close().unwrap();
     }
 
@@ -1106,12 +1120,14 @@ mod tests {
         let svc = TestNetworkService;
         let result = svc.http_get("http://example.com");
         assert!(result.is_err());
-        match result {
-            Err(oasis_types::error::OasisError::Backend(msg)) => {
-                assert!(msg.to_string().contains("not supported"));
-            },
-            _ => panic!("expected Backend error"),
-        }
+        assert!(
+            matches!(&result, Err(_)),
+            "expected Backend error, got {result:?}"
+        );
+        let Err(oasis_types::error::OasisError::Backend(msg)) = result else {
+            unreachable!()
+        };
+        assert!(msg.to_string().contains("not supported"));
     }
 
     // ---- Platform trait tests ----

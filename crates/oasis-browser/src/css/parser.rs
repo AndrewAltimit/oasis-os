@@ -1847,12 +1847,15 @@ mod tests {
             .iter()
             .find(|d| d.property == "background-image")
             .expect("should have background-image");
-        if let CssValue::Gradient(ref g) = bg_image.value {
-            assert_eq!(g.direction, crate::css::values::GradientDirection::ToBottom);
-            assert_eq!(g.stops.len(), 2);
-        } else {
-            panic!("expected gradient");
-        }
+        assert!(
+            matches!(&bg_image.value, CssValue::Gradient(_)),
+            "expected gradient"
+        );
+        let CssValue::Gradient(g) = &bg_image.value else {
+            unreachable!()
+        };
+        assert_eq!(g.direction, crate::css::values::GradientDirection::ToBottom);
+        assert_eq!(g.stops.len(), 2);
     }
 
     mod prop {

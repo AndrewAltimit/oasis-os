@@ -271,10 +271,14 @@ mod tests {
         let (cx, cy, _cw, _ch) = win_top.content_rect(&theme);
         // Both windows overlap here, but top is last in the vec (topmost).
         let result = hit_test(&[win_bottom, win_top], cx + 5, cy + 5, &theme);
-        match result {
-            HitRegion::Content(id, _, _) => assert_eq!(id, "top"),
-            other => panic!("expected Content(top), got {other:?}"),
-        }
+        assert!(
+            matches!(&result, HitRegion::Content(_, _, _)),
+            "expected Content(top), got {result:?}"
+        );
+        let HitRegion::Content(id, _, _) = result else {
+            unreachable!()
+        };
+        assert_eq!(id, "top");
     }
 
     #[test]
@@ -354,10 +358,14 @@ mod tests {
         let y = win.outer_h as i32 - 2;
         let result = hit_test(&[win], x, y, &theme);
         // Dialog frame hits are content (not draggable).
-        match result {
-            HitRegion::Content(id, _, _) => assert_eq!(id, "dlg"),
-            other => panic!("expected Content for dialog frame hit, got {other:?}"),
-        }
+        assert!(
+            matches!(&result, HitRegion::Content(_, _, _)),
+            "expected Content for dialog frame hit, got {result:?}"
+        );
+        let HitRegion::Content(id, _, _) = result else {
+            unreachable!()
+        };
+        assert_eq!(id, "dlg");
     }
 
     #[test]
@@ -402,10 +410,14 @@ mod tests {
         let w3 = make_window("w3", 0, 0, 100, 100);
         let (cx, cy, _, _) = w3.content_rect(&theme);
         let result = hit_test(&[w1, w2, w3], cx + 10, cy + 10, &theme);
-        match result {
-            HitRegion::Content(id, _, _) => assert_eq!(id, "w3"),
-            other => panic!("expected Content(w3), got {other:?}"),
-        }
+        assert!(
+            matches!(&result, HitRegion::Content(_, _, _)),
+            "expected Content(w3), got {result:?}"
+        );
+        let HitRegion::Content(id, _, _) = result else {
+            unreachable!()
+        };
+        assert_eq!(id, "w3");
     }
 
     #[test]
@@ -426,14 +438,16 @@ mod tests {
         let (cx, cy, _, _) = win.content_rect(&theme);
         // Click inside content area of panel.
         let result = hit_test(&[win], cx + 10, cy + 10, &theme);
-        match result {
-            HitRegion::Content(id, lx, ly) => {
-                assert_eq!(id, "panel");
-                assert_eq!(lx, 10);
-                assert_eq!(ly, 10);
-            },
-            other => panic!("expected Content for panel, got {other:?}"),
-        }
+        assert!(
+            matches!(&result, HitRegion::Content(_, _, _)),
+            "expected Content for panel, got {result:?}"
+        );
+        let HitRegion::Content(id, lx, ly) = result else {
+            unreachable!()
+        };
+        assert_eq!(id, "panel");
+        assert_eq!(lx, 10);
+        assert_eq!(ly, 10);
     }
 
     #[test]

@@ -118,7 +118,7 @@
 | oasis-audio | 2,011 | Medium -- audio manager |
 | oasis-js | ~200 | Low -- thin wrapper |
 
-**No automated screenshot regression detection**: Screenshots are generated and uploaded as artifacts, but there's no baseline comparison or auto-fail on pixel differences.
+**No automated screenshot regression detection**: Screenshots are generated and uploaded as artifacts, but there's no baseline comparison or auto-fail on pixel differences. Note: we would need to seed the date and time so it doesnt change in screenshots and capture the screenshot on exact frames for dynamic shader wallpapers.
 
 ### 3.3 Large Files Needing Decomposition
 
