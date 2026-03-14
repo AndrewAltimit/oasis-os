@@ -15,10 +15,11 @@ use super::{
 pub(super) fn handle_radio_connect(url: String) {
     use std::ffi::c_void;
 
-    // Initialize network.
-    if let Err(e) = crate::network::ensure_net_init_pub() {
+    // Check connectivity without showing a dialog (must not call
+    // ensure_net_init_pub from background thread -- freezes EBOOT).
+    if !psp::net::is_connected() {
         let _ = IO_RESP_QUEUE.push(IoResponse::RadioError {
-            msg: format!("net init: {e}"),
+            msg: "not connected to WiFi".to_string(),
         });
         return;
     }

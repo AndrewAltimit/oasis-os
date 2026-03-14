@@ -573,10 +573,12 @@ pub(super) fn handle_video_download(url: String, _dest: String, tag: u32) {
     // Clear any previous cancellation flag.
     DOWNLOAD_CANCEL.store(false, Ordering::Release);
 
-    if let Err(e) = crate::network::ensure_net_init_pub() {
+    // Check connectivity without showing a dialog (must not call
+    // ensure_net_init_pub from background thread -- freezes EBOOT).
+    if !psp::net::is_connected() {
         let _ = IO_RESP_QUEUE.push(IoResponse::VideoError {
             tag,
-            msg: format!("net init: {e}"),
+            msg: "not connected to WiFi".to_string(),
         });
         return;
     }
