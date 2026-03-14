@@ -3,6 +3,71 @@
 //! Pure data transformation for IA metadata API responses — no network I/O.
 //! Follows the same pattern as `oasis_audio::radio::archive::ArchiveCatalog`.
 
+use std::fmt;
+
+/// Recognized video format families from Internet Archive metadata.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum VideoFormat {
+    /// MPEG-4 container (IA format string contains "mpeg4").
+    Mpeg4,
+    /// H.264 base (IA format string contains "h.264" but not "IA" suffix).
+    H264,
+    /// H.264 IA derivative (IA format string "h.264 IA" or similar).
+    H264Ia,
+    /// Generic MP4 (IA format string contains "mp4" but not "mpeg4"/"h.264").
+    Mp4,
+    /// Unrecognized / non-video format.
+    Other(String),
+}
+
+impl VideoFormat {
+    /// Parse an IA format string into a `VideoFormat` variant.
+    pub fn parse(format: &str) -> Self {
+        let lower = format.to_ascii_lowercase();
+        if lower.contains("h.264") {
+            if lower.contains("ia") {
+                Self::H264Ia
+            } else {
+                Self::H264
+            }
+        } else if lower.contains("mpeg4") {
+            Self::Mpeg4
+        } else if lower.contains("mp4") {
+            Self::Mp4
+        } else {
+            Self::Other(format.to_string())
+        }
+    }
+
+    /// Whether this format represents a playable video file.
+    pub fn is_video(&self) -> bool {
+        !matches!(self, Self::Other(_))
+    }
+
+    /// Whether this is an H.264 format (either base or IA derivative).
+    pub fn is_h264(&self) -> bool {
+        matches!(self, Self::H264 | Self::H264Ia)
+    }
+}
+
+impl fmt::Display for VideoFormat {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Mpeg4 => f.write_str("MPEG4"),
+            Self::H264 => f.write_str("h.264"),
+            Self::H264Ia => f.write_str("h.264 IA"),
+            Self::Mp4 => f.write_str("mp4"),
+            Self::Other(s) => f.write_str(s),
+        }
+    }
+}
+
+impl From<&str> for VideoFormat {
+    fn from(s: &str) -> Self {
+        Self::parse(s)
+    }
+}
+
 /// A single video episode from an Internet Archive item.
 #[derive(Debug, Clone)]
 pub struct VideoEpisode {
@@ -20,8 +85,8 @@ pub struct VideoEpisode {
     pub height: u32,
     /// File size in bytes.
     pub size_bytes: u64,
-    /// IA format string (e.g. "MPEG4", "h.264 IA").
-    pub format: String,
+    /// Parsed video format from IA metadata.
+    pub format: VideoFormat,
     /// Original filename this file derives from (IA `original` key).
     /// Present on derivative files; `None` on originals.
     pub original: Option<String>,
@@ -77,10 +142,11 @@ impl ChannelCatalog {
         let mut episodes = Vec::new();
         for file in files {
             let name = file.get("name").and_then(|v| v.as_str()).unwrap_or("");
-            let format = file.get("format").and_then(|v| v.as_str()).unwrap_or("");
+            let format_str = file.get("format").and_then(|v| v.as_str()).unwrap_or("");
+            let format = VideoFormat::parse(format_str);
 
             // Only include MP4/h.264 video files.
-            if !is_video_format(format) {
+            if !format.is_video() {
                 continue;
             }
 
@@ -129,7 +195,7 @@ impl ChannelCatalog {
                 width,
                 height,
                 size_bytes,
-                format: format.to_string(),
+                format,
                 original,
             });
         }
@@ -177,9 +243,7 @@ pub fn select_smallest_for(
     }
 
     // Partition into h.264 derivatives and others.
-    let is_h264_deriv = |ep: &&VideoEpisode| {
-        ep.format.to_ascii_lowercase().contains("h.264") && ep.original.is_some()
-    };
+    let is_h264_deriv = |ep: &&VideoEpisode| ep.format.is_h264() && ep.original.is_some();
 
     // First try: h.264 derivatives under max_bytes with acceptable width.
     let mut best: Option<&VideoEpisode> = episodes
@@ -219,12 +283,6 @@ pub fn select_smallest_for(
     }
 
     best
-}
-
-/// Check if a format string indicates a video file (MP4/h.264).
-fn is_video_format(format: &str) -> bool {
-    let f = format.to_ascii_lowercase();
-    f.contains("mpeg4") || f.contains("h.264") || f.contains("mp4")
 }
 
 /// Parse the duration field from an IA file entry.
@@ -311,10 +369,10 @@ mod tests {
         assert_eq!(episodes[0].width, 640);
         assert_eq!(episodes[0].height, 480);
         assert_eq!(episodes[0].size_bytes, 52428800);
-        assert_eq!(episodes[0].format, "MPEG4");
+        assert_eq!(episodes[0].format, VideoFormat::Mpeg4);
         assert!(episodes[0].original.is_none());
         assert_eq!(episodes[1].filename, "Videos/episode02.mp4");
-        assert_eq!(episodes[1].format, "h.264 IA");
+        assert_eq!(episodes[1].format, VideoFormat::H264Ia);
     }
 
     #[test]
@@ -475,14 +533,36 @@ mod tests {
     }
 
     #[test]
-    fn is_video_format_variants() {
-        assert!(is_video_format("MPEG4"));
-        assert!(is_video_format("h.264 IA"));
-        assert!(is_video_format("h.264"));
-        assert!(is_video_format("mp4"));
-        assert!(!is_video_format("VBR MP3"));
-        assert!(!is_video_format("JPEG"));
-        assert!(!is_video_format("Metadata"));
+    fn video_format_parsing() {
+        assert_eq!(VideoFormat::parse("MPEG4"), VideoFormat::Mpeg4);
+        assert_eq!(VideoFormat::parse("h.264 IA"), VideoFormat::H264Ia);
+        assert_eq!(VideoFormat::parse("h.264"), VideoFormat::H264);
+        assert_eq!(VideoFormat::parse("mp4"), VideoFormat::Mp4);
+        assert!(VideoFormat::parse("MPEG4").is_video());
+        assert!(VideoFormat::parse("h.264 IA").is_video());
+        assert!(VideoFormat::parse("h.264").is_video());
+        assert!(VideoFormat::parse("mp4").is_video());
+        assert!(!VideoFormat::parse("VBR MP3").is_video());
+        assert!(!VideoFormat::parse("JPEG").is_video());
+        assert!(!VideoFormat::parse("Metadata").is_video());
+    }
+
+    #[test]
+    fn video_format_is_h264() {
+        assert!(VideoFormat::H264.is_h264());
+        assert!(VideoFormat::H264Ia.is_h264());
+        assert!(!VideoFormat::Mpeg4.is_h264());
+        assert!(!VideoFormat::Mp4.is_h264());
+        assert!(!VideoFormat::Other("AVI".into()).is_h264());
+    }
+
+    #[test]
+    fn video_format_display() {
+        assert_eq!(VideoFormat::Mpeg4.to_string(), "MPEG4");
+        assert_eq!(VideoFormat::H264.to_string(), "h.264");
+        assert_eq!(VideoFormat::H264Ia.to_string(), "h.264 IA");
+        assert_eq!(VideoFormat::Mp4.to_string(), "mp4");
+        assert_eq!(VideoFormat::Other("AVI".into()).to_string(), "AVI");
     }
 
     #[test]
@@ -506,9 +586,9 @@ mod tests {
         }"#;
         let episodes = ChannelCatalog::parse_files_response(json, "item", None);
         assert_eq!(episodes.len(), 2);
-        assert_eq!(episodes[0].format, "MPEG4");
+        assert_eq!(episodes[0].format, VideoFormat::Mpeg4);
         assert!(episodes[0].original.is_none());
-        assert_eq!(episodes[1].format, "h.264 IA");
+        assert_eq!(episodes[1].format, VideoFormat::H264Ia);
         assert_eq!(episodes[1].original.as_deref(), Some("original.mp4"));
     }
 

@@ -115,6 +115,8 @@ impl PspBackend {
                 (p, Layout::new::<u8>(), true)
             } else {
                 let layout = Layout::from_size_align(buf_size, 16).ok()?;
+                // SAFETY: Layout is valid (checked by from_size_align). 16-byte aligned
+                // for GU texture requirements. Null check follows.
                 let p = unsafe { alloc(layout) };
                 if p.is_null() {
                     return None;
@@ -123,6 +125,8 @@ impl PspBackend {
             }
         } else {
             let layout = Layout::from_size_align(buf_size, 16).ok()?;
+            // SAFETY: Layout is valid (checked by from_size_align). 16-byte aligned
+            // for GU texture requirements. Null check follows.
             let p = unsafe { alloc(layout) };
             if p.is_null() {
                 return None;

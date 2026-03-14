@@ -186,7 +186,10 @@ fn decode_aac_frame(
         }
     }
 
-    let decoder = aac_decoder.as_mut().unwrap();
+    let Some(decoder) = aac_decoder.as_mut() else {
+        // Unreachable: init block above guarantees Some or early-returns.
+        return;
+    };
 
     let mut pcm = vec![0i16; AAC_FRAME_SAMPLES as usize * 2];
 

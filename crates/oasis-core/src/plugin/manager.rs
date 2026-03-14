@@ -107,6 +107,57 @@ impl PluginManager {
         Ok(())
     }
 
+    /// Build a `PluginHost` for the given plugin index.
+    fn build_host<'a>(
+        plugin: &LoadedPlugin,
+        sdi: &'a mut SdiRegistry,
+        vfs: &'a mut dyn Vfs,
+        commands: &'a mut CommandRegistry,
+        pending_apps: &'a mut Vec<PluginAppRegistration>,
+        capabilities_override: Option<PluginCapabilities>,
+    ) -> PluginHost<'a> {
+        PluginHost {
+            sdi,
+            vfs,
+            commands,
+            audio: None,
+            network: None,
+            backend: None,
+            app_registrations: pending_apps,
+            capabilities: capabilities_override.unwrap_or_else(|| plugin.capabilities.clone()),
+            plugin_name: plugin.plugin.info().name.clone(),
+        }
+    }
+
+    /// Collect app registrations from a lifecycle call into the manager.
+    fn collect_apps(
+        &mut self,
+        idx: usize,
+        pending_apps: Vec<PluginAppRegistration>,
+        deduplicate: bool,
+    ) {
+        if deduplicate {
+            for app in pending_apps {
+                if self.plugin_apps.iter().any(|a| a.title == app.title) {
+                    log::warn!(
+                        "Plugin app '{}' already registered, ignoring duplicate",
+                        app.title,
+                    );
+                } else {
+                    self.plugins[idx]
+                        .registered_app_titles
+                        .push(app.title.clone());
+                    self.plugin_apps.push(app);
+                }
+            }
+        } else {
+            self.plugins[idx]
+                .registered_app_titles
+                .extend(pending_apps.iter().map(|a| a.title.clone()));
+            self.plugin_apps.extend(pending_apps);
+        }
+    }
+
     /// Initialize all registered (but not yet active) plugins.
     ///
     /// Errors from individual plugins are logged and skipped so that one
@@ -126,17 +177,14 @@ impl PluginManager {
                 }
                 let mut pending_apps = Vec::new();
                 let init_result = {
-                    let mut host = PluginHost {
+                    let mut host = Self::build_host(
+                        &self.plugins[i],
                         sdi,
                         vfs,
                         commands,
-                        audio: None,
-                        network: None,
-                        backend: None,
-                        app_registrations: &mut pending_apps,
-                        capabilities: self.plugins[i].capabilities.clone(),
-                        plugin_name: name.clone(),
-                    };
+                        &mut pending_apps,
+                        None,
+                    );
                     self.plugins[i].plugin.init(&mut host)
                 };
                 if let Err(e) = init_result {
@@ -144,10 +192,7 @@ impl PluginManager {
                     continue;
                 }
                 self.plugins[i].state = PluginState::Active;
-                self.plugins[i]
-                    .registered_app_titles
-                    .extend(pending_apps.iter().map(|a| a.title.clone()));
-                self.plugin_apps.extend(pending_apps);
+                self.collect_apps(i, pending_apps, false);
             }
         }
     }
@@ -179,28 +224,20 @@ impl PluginManager {
             ));
         }
         Self::validate_api_version(&self.plugins[idx].plugin.info())?;
-        let plugin_name = self.plugins[idx].plugin.info().name.clone();
         let mut pending_apps = Vec::new();
         {
-            let mut host = PluginHost {
+            let mut host = Self::build_host(
+                &self.plugins[idx],
                 sdi,
                 vfs,
                 commands,
-                audio: None,
-                network: None,
-                backend: None,
-                app_registrations: &mut pending_apps,
-                capabilities: self.plugins[idx].capabilities.clone(),
-                plugin_name,
-            };
+                &mut pending_apps,
+                None,
+            );
             self.plugins[idx].plugin.init(&mut host)?;
         }
         self.plugins[idx].state = PluginState::Active;
-        // Move collected app registrations into the manager.
-        self.plugins[idx]
-            .registered_app_titles
-            .extend(pending_apps.iter().map(|a| a.title.clone()));
-        self.plugin_apps.extend(pending_apps);
+        self.collect_apps(idx, pending_apps, false);
         Ok(())
     }
 
@@ -219,38 +256,21 @@ impl PluginManager {
                 let name = self.plugins[i].plugin.info().name.clone();
                 let mut pending_apps = Vec::new();
                 let update_result = {
-                    let mut host = PluginHost {
+                    let mut host = Self::build_host(
+                        &self.plugins[i],
                         sdi,
                         vfs,
                         commands,
-                        audio: None,
-                        network: None,
-                        backend: None,
-                        app_registrations: &mut pending_apps,
-                        capabilities: self.plugins[i].capabilities.clone(),
-                        plugin_name: name.clone(),
-                    };
+                        &mut pending_apps,
+                        None,
+                    );
                     self.plugins[i].plugin.update(&mut host)
                 };
                 if let Err(e) = update_result {
                     log::error!("Failed to update plugin '{name}': {e}");
                     continue;
                 }
-                // Plugins can register apps during update too (rare but supported).
-                // Deduplicate by title to prevent accumulation across frames.
-                for app in pending_apps {
-                    if self.plugin_apps.iter().any(|a| a.title == app.title) {
-                        log::warn!(
-                            "Plugin app '{}' already registered, ignoring duplicate",
-                            app.title,
-                        );
-                    } else {
-                        self.plugins[i]
-                            .registered_app_titles
-                            .push(app.title.clone());
-                        self.plugin_apps.push(app);
-                    }
-                }
+                self.collect_apps(i, pending_apps, true);
             }
         }
     }
@@ -270,19 +290,14 @@ impl PluginManager {
                 let name = self.plugins[i].plugin.info().name.clone();
                 let mut pending_apps = Vec::new();
                 let shutdown_result = {
-                    // Grant all capabilities during shutdown so plugins
-                    // can always clean up their resources.
-                    let mut host = PluginHost {
+                    let mut host = Self::build_host(
+                        &self.plugins[i],
                         sdi,
                         vfs,
                         commands,
-                        audio: None,
-                        network: None,
-                        backend: None,
-                        app_registrations: &mut pending_apps,
-                        capabilities: PluginCapabilities::all(),
-                        plugin_name: name.clone(),
-                    };
+                        &mut pending_apps,
+                        Some(PluginCapabilities::all()),
+                    );
                     self.plugins[i].plugin.shutdown(&mut host)
                 };
                 if let Err(e) = shutdown_result {

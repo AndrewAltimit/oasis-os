@@ -145,6 +145,34 @@ impl SdiRegistry {
     /// nested keys set properties (x, y, w, h, visible, alpha, color, text,
     /// font_size). Objects that don't exist yet are created.
     pub fn load_theme(&mut self, toml_str: &str) -> Result<()> {
+        /// Apply optional fields from a theme entry to an SDI object.
+        macro_rules! apply_theme {
+            // Direct copy: entry.field -> obj.field
+            ($entry:expr, $obj:expr, copy: [$($f:ident),*]) => {
+                $(if let Some(v) = $entry.$f { $obj.$f = v; })*
+            };
+            // Clone into Option: entry.field -> obj.field = Some(clone)
+            ($entry:expr, $obj:expr, clone: [$($f:ident),*]) => {
+                $(if let Some(ref v) = $entry.$f { $obj.$f = Some(v.clone()); })*
+            };
+            // Parse hex color: entry.field -> obj.field = parsed
+            ($entry:expr, $obj:expr, color: [$($f:ident),*]) => {
+                $(if let Some(ref c) = $entry.$f
+                    && let Some(parsed) = parse_color(c)
+                { $obj.$f = parsed; })*
+            };
+            // Parse hex color into Option: entry.field -> obj.field = Some(parsed)
+            ($entry:expr, $obj:expr, opt_color: [$($f:ident),*]) => {
+                $(if let Some(ref c) = $entry.$f
+                    && let Some(parsed) = parse_color(c)
+                { $obj.$f = Some(parsed); })*
+            };
+            // Wrap in Some: entry.field -> obj.field = Some(v)
+            ($entry:expr, $obj:expr, wrap: [$($f:ident),*]) => {
+                $(if let Some(v) = $entry.$f { $obj.$f = Some(v); })*
+            };
+        }
+
         let theme: HashMap<String, ThemeEntry> =
             toml::from_str(toml_str).map_err(|e| OasisError::Config(format!("{e}").into()))?;
 
@@ -153,73 +181,11 @@ impl SdiRegistry {
                 self.create(&name);
             }
             let obj = self.get_mut(&name)?;
-            if let Some(x) = entry.x {
-                obj.x = x;
-            }
-            if let Some(y) = entry.y {
-                obj.y = y;
-            }
-            if let Some(w) = entry.w {
-                obj.w = w;
-            }
-            if let Some(h) = entry.h {
-                obj.h = h;
-            }
-            if let Some(a) = entry.alpha {
-                obj.alpha = a;
-            }
-            if let Some(v) = entry.visible {
-                obj.visible = v;
-            }
-            if let Some(ref t) = entry.text {
-                obj.text = Some(t.clone());
-            }
-            if let Some(fs) = entry.font_size {
-                obj.font_size = fs;
-            }
-            if let Some(ref c) = entry.color
-                && let Some(parsed) = parse_color(c)
-            {
-                obj.color = parsed;
-            }
-            if let Some(ref c) = entry.text_color
-                && let Some(parsed) = parse_color(c)
-            {
-                obj.text_color = parsed;
-            }
-            if let Some(o) = entry.overlay {
-                obj.overlay = o;
-            }
-            // Extended visual properties.
-            if let Some(r) = entry.border_radius {
-                obj.border_radius = Some(r);
-            }
-            if let Some(ref c) = entry.gradient_top
-                && let Some(parsed) = parse_color(c)
-            {
-                obj.gradient_top = Some(parsed);
-            }
-            if let Some(ref c) = entry.gradient_bottom
-                && let Some(parsed) = parse_color(c)
-            {
-                obj.gradient_bottom = Some(parsed);
-            }
-            if let Some(s) = entry.shadow_level {
-                obj.shadow_level = Some(s);
-            }
-            if let Some(sw) = entry.stroke_width {
-                obj.stroke_width = Some(sw);
-            }
-            if let Some(ref c) = entry.stroke_color
-                && let Some(parsed) = parse_color(c)
-            {
-                obj.stroke_color = Some(parsed);
-            }
-            if let Some(ref c) = entry.shadow_color
-                && let Some(parsed) = parse_color(c)
-            {
-                obj.shadow_color = Some(parsed);
-            }
+            apply_theme!(entry, obj, copy: [x, y, w, h, alpha, visible, font_size, overlay]);
+            apply_theme!(entry, obj, clone: [text]);
+            apply_theme!(entry, obj, color: [color, text_color]);
+            apply_theme!(entry, obj, opt_color: [gradient_top, gradient_bottom, stroke_color, shadow_color]);
+            apply_theme!(entry, obj, wrap: [border_radius, shadow_level, stroke_width]);
         }
         Ok(())
     }
@@ -328,19 +294,9 @@ impl SdiRegistry {
         prefixes: &[&str],
     ) -> Result<()> {
         self.ensure_z_sorted();
-        for list in [&self.z_sorted_base, &self.z_sorted_overlay] {
-            for name in list {
-                let obj = &self.objects[name];
-                if !obj.visible || obj.alpha == 0 {
-                    continue;
-                }
-                if prefixes.iter().any(|p| name.starts_with(p)) {
-                    continue;
-                }
-                Self::draw_object(obj, backend)?;
-            }
-        }
-        Ok(())
+        let keep = |name: &str| !prefixes.iter().any(|p| name.starts_with(p));
+        self.draw_layer_filtered(&self.z_sorted_base.clone(), backend, &keep)?;
+        self.draw_layer_filtered(&self.z_sorted_overlay.clone(), backend, &keep)
     }
 
     /// Draw only the base layer, excluding objects with given prefixes.
@@ -349,18 +305,9 @@ impl SdiRegistry {
         backend: &mut dyn SdiBackend,
         prefixes: &[&str],
     ) -> Result<()> {
-        self.ensure_z_sorted();
-        for name in &self.z_sorted_base {
-            let obj = &self.objects[name];
-            if !obj.visible || obj.alpha == 0 {
-                continue;
-            }
-            if prefixes.iter().any(|p| name.starts_with(p)) {
-                continue;
-            }
-            Self::draw_object(obj, backend)?;
-        }
-        Ok(())
+        self.draw_base_filtered(backend, |name| {
+            !prefixes.iter().any(|p| name.starts_with(p))
+        })
     }
 
     /// Draw only the overlay layer, excluding objects with given prefixes.
@@ -369,48 +316,36 @@ impl SdiRegistry {
         backend: &mut dyn SdiBackend,
         prefixes: &[&str],
     ) -> Result<()> {
-        for name in &self.z_sorted_overlay {
-            let obj = &self.objects[name];
-            if !obj.visible || obj.alpha == 0 {
-                continue;
-            }
-            if prefixes.iter().any(|p| name.starts_with(p)) {
-                continue;
-            }
-            Self::draw_object(obj, backend)?;
-        }
-        Ok(())
+        self.draw_overlay_filtered(backend, |name| {
+            !prefixes.iter().any(|p| name.starts_with(p))
+        })
     }
 
     /// Draw only the base layer, keeping objects for which `keep` returns true.
-    ///
-    /// Allocation-free alternative to `draw_base_excluding_prefixes`.
     pub fn draw_base_filtered<F>(&mut self, backend: &mut dyn SdiBackend, keep: F) -> Result<()>
     where
         F: Fn(&str) -> bool,
     {
         self.ensure_z_sorted();
-        for name in &self.z_sorted_base {
-            let obj = &self.objects[name];
-            if !obj.visible || obj.alpha == 0 {
-                continue;
-            }
-            if !keep(name) {
-                continue;
-            }
-            Self::draw_object(obj, backend)?;
-        }
-        Ok(())
+        self.draw_layer_filtered(&self.z_sorted_base.clone(), backend, &keep)
     }
 
     /// Draw only the overlay layer, keeping objects for which `keep` returns true.
-    ///
-    /// Allocation-free alternative to `draw_overlay_excluding_prefixes`.
     pub fn draw_overlay_filtered<F>(&self, backend: &mut dyn SdiBackend, keep: F) -> Result<()>
     where
         F: Fn(&str) -> bool,
     {
-        for name in &self.z_sorted_overlay {
+        self.draw_layer_filtered(&self.z_sorted_overlay, backend, &keep)
+    }
+
+    /// Internal: draw objects from a z-sorted list, applying a filter.
+    fn draw_layer_filtered(
+        &self,
+        layer: &[String],
+        backend: &mut dyn SdiBackend,
+        keep: &dyn Fn(&str) -> bool,
+    ) -> Result<()> {
+        for name in layer {
             let obj = &self.objects[name];
             if !obj.visible || obj.alpha == 0 {
                 continue;
@@ -553,21 +488,7 @@ struct ThemeEntry {
 
 /// Parse a color string like "#RRGGBB" or "#RRGGBBAA".
 fn parse_color(s: &str) -> Option<Color> {
-    let s = s.strip_prefix('#')?;
-    if s.len() == 6 {
-        let r = u8::from_str_radix(&s[0..2], 16).ok()?;
-        let g = u8::from_str_radix(&s[2..4], 16).ok()?;
-        let b = u8::from_str_radix(&s[4..6], 16).ok()?;
-        Some(Color::rgb(r, g, b))
-    } else if s.len() == 8 {
-        let r = u8::from_str_radix(&s[0..2], 16).ok()?;
-        let g = u8::from_str_radix(&s[2..4], 16).ok()?;
-        let b = u8::from_str_radix(&s[4..6], 16).ok()?;
-        let a = u8::from_str_radix(&s[6..8], 16).ok()?;
-        Some(Color::rgba(r, g, b, a))
-    } else {
-        None
-    }
+    oasis_types::color::parse_hex_color(s)
 }
 
 impl Default for SdiRegistry {

@@ -279,6 +279,138 @@ pub fn highlight_line(
 }
 
 // -----------------------------------------------------------------------
+// Shared scanning helpers
+// -----------------------------------------------------------------------
+
+/// Scan a quoted string starting at `pos` (which must point to the opening
+/// quote character). Handles backslash escapes when `with_escapes` is true.
+/// Returns the position after the closing quote (or end of bytes).
+fn scan_quoted(bytes: &[u8], pos: usize, quote: u8, with_escapes: bool) -> usize {
+    let len = bytes.len();
+    let mut p = pos + 1;
+    while p < len && bytes[p] != quote {
+        if with_escapes && bytes[p] == b'\\' && p + 1 < len {
+            p += 2;
+        } else {
+            p += 1;
+        }
+    }
+    if p < len {
+        p + 1 // skip closing quote
+    } else {
+        p
+    }
+}
+
+/// Scan a `/* ... */` block comment. `pos` should point to the first byte
+/// to scan (either the `/*` opener or continuation from previous line).
+/// When `include_opener` is true, `pos` points at `/*` and we skip 2 bytes.
+/// Returns `(end_pos, still_in_comment)`.
+fn scan_block_comment(bytes: &[u8], mut pos: usize, include_opener: bool) -> (usize, bool) {
+    let len = bytes.len();
+    if include_opener {
+        pos += 2;
+    }
+    loop {
+        if pos + 1 < len && bytes[pos] == b'*' && bytes[pos + 1] == b'/' {
+            return (pos + 2, false);
+        }
+        pos += 1;
+        if pos >= len {
+            return (len, true);
+        }
+    }
+}
+
+/// Scan contiguous ASCII whitespace starting at `pos`.
+/// Returns the position after the last whitespace byte.
+fn scan_whitespace(bytes: &[u8], mut pos: usize) -> usize {
+    let len = bytes.len();
+    while pos < len && bytes[pos].is_ascii_whitespace() {
+        pos += 1;
+    }
+    pos
+}
+
+/// Scan a C-family numeric literal (decimal, hex, float with type suffix).
+/// Returns the position after the number.
+fn scan_c_number(bytes: &[u8], mut pos: usize) -> usize {
+    let len = bytes.len();
+    // Hex: 0x...
+    if bytes[pos] == b'0' && pos + 1 < len && (bytes[pos + 1] == b'x' || bytes[pos + 1] == b'X') {
+        pos += 2;
+        while pos < len && (bytes[pos].is_ascii_hexdigit() || bytes[pos] == b'_') {
+            pos += 1;
+        }
+    } else {
+        while pos < len
+            && (bytes[pos].is_ascii_digit()
+                || bytes[pos] == b'.'
+                || bytes[pos] == b'_'
+                || bytes[pos] == b'e'
+                || bytes[pos] == b'E')
+        {
+            pos += 1;
+        }
+    }
+    // Type suffix (e.g., `42u32`, `1.0f64`).
+    while pos < len && bytes[pos].is_ascii_alphanumeric() {
+        pos += 1;
+    }
+    pos
+}
+
+/// Scan an identifier/word. Returns the position after the word.
+/// `extra_chars` lists additional bytes (beyond alphanumeric/underscore)
+/// that are part of a word (e.g., `b'-'` for shell).
+fn scan_word(bytes: &[u8], mut pos: usize, extra_chars: &[u8]) -> usize {
+    let len = bytes.len();
+    while pos < len
+        && (bytes[pos].is_ascii_alphanumeric()
+            || bytes[pos] == b'_'
+            || extra_chars.contains(&bytes[pos]))
+    {
+        pos += 1;
+    }
+    pos
+}
+
+/// Advance past a single UTF-8 character, returning the position after it.
+fn advance_utf8_char(line: &str, pos: usize) -> usize {
+    pos + line[pos..].chars().next().map_or(1, |c| c.len_utf8())
+}
+
+fn is_operator(b: u8) -> bool {
+    matches!(
+        b,
+        b'+' | b'-'
+            | b'*'
+            | b'/'
+            | b'%'
+            | b'='
+            | b'!'
+            | b'<'
+            | b'>'
+            | b'&'
+            | b'|'
+            | b'^'
+            | b'~'
+            | b'('
+            | b')'
+            | b'{'
+            | b'}'
+            | b'['
+            | b']'
+            | b';'
+            | b':'
+            | b','
+            | b'.'
+            | b'?'
+            | b'@'
+    )
+}
+
+// -----------------------------------------------------------------------
 // C-family highlighter (Rust, JavaScript)
 // -----------------------------------------------------------------------
 
@@ -301,17 +433,9 @@ fn highlight_c_family(
         // Inside a block comment: scan for `*/`.
         if in_block_comment {
             let start = pos;
-            loop {
-                if pos + 1 < len && bytes[pos] == b'*' && bytes[pos + 1] == b'/' {
-                    pos += 2;
-                    in_block_comment = false;
-                    break;
-                }
-                pos += 1;
-                if pos >= len {
-                    break;
-                }
-            }
+            let (end, still_open) = scan_block_comment(bytes, pos, false);
+            in_block_comment = still_open;
+            pos = end;
             spans.push(ColorSpan {
                 start,
                 end: pos,
@@ -333,21 +457,10 @@ fn highlight_c_family(
 
         // Block comment start: `/*`.
         if pos + 1 < len && bytes[pos] == b'/' && bytes[pos + 1] == b'*' {
-            in_block_comment = true;
             let start = pos;
-            pos += 2;
-            // Try to find `*/` on the same line.
-            loop {
-                if pos + 1 < len && bytes[pos] == b'*' && bytes[pos + 1] == b'/' {
-                    pos += 2;
-                    in_block_comment = false;
-                    break;
-                }
-                pos += 1;
-                if pos >= len {
-                    break;
-                }
-            }
+            let (end, still_open) = scan_block_comment(bytes, pos, true);
+            in_block_comment = still_open;
+            pos = end;
             spans.push(ColorSpan {
                 start,
                 end: pos,
@@ -385,64 +498,10 @@ fn highlight_c_family(
             continue;
         }
 
-        // String literal: double-quoted.
-        if bytes[pos] == b'"' {
+        // String literals: double-quoted, single-quoted, backtick (template).
+        if matches!(bytes[pos], b'"' | b'\'' | b'`') {
             let start = pos;
-            pos += 1;
-            while pos < len && bytes[pos] != b'"' {
-                if bytes[pos] == b'\\' && pos + 1 < len {
-                    pos += 2;
-                } else {
-                    pos += 1;
-                }
-            }
-            if pos < len {
-                pos += 1; // closing quote
-            }
-            spans.push(ColorSpan {
-                start,
-                end: pos,
-                kind: SyntaxKind::StringLiteral,
-            });
-            continue;
-        }
-
-        // String literal: single-quoted (char in Rust, string in JS).
-        if bytes[pos] == b'\'' {
-            let start = pos;
-            pos += 1;
-            while pos < len && bytes[pos] != b'\'' {
-                if bytes[pos] == b'\\' && pos + 1 < len {
-                    pos += 2;
-                } else {
-                    pos += 1;
-                }
-            }
-            if pos < len {
-                pos += 1;
-            }
-            spans.push(ColorSpan {
-                start,
-                end: pos,
-                kind: SyntaxKind::StringLiteral,
-            });
-            continue;
-        }
-
-        // Template literal (JS): backtick.
-        if bytes[pos] == b'`' {
-            let start = pos;
-            pos += 1;
-            while pos < len && bytes[pos] != b'`' {
-                if bytes[pos] == b'\\' && pos + 1 < len {
-                    pos += 2;
-                } else {
-                    pos += 1;
-                }
-            }
-            if pos < len {
-                pos += 1;
-            }
+            pos = scan_quoted(bytes, pos, bytes[pos], true);
             spans.push(ColorSpan {
                 start,
                 end: pos,
@@ -456,30 +515,7 @@ fn highlight_c_family(
             || (bytes[pos] == b'.' && pos + 1 < len && bytes[pos + 1].is_ascii_digit())
         {
             let start = pos;
-            // Hex: 0x...
-            if bytes[pos] == b'0'
-                && pos + 1 < len
-                && (bytes[pos + 1] == b'x' || bytes[pos + 1] == b'X')
-            {
-                pos += 2;
-                while pos < len && (bytes[pos].is_ascii_hexdigit() || bytes[pos] == b'_') {
-                    pos += 1;
-                }
-            } else {
-                while pos < len
-                    && (bytes[pos].is_ascii_digit()
-                        || bytes[pos] == b'.'
-                        || bytes[pos] == b'_'
-                        || bytes[pos] == b'e'
-                        || bytes[pos] == b'E')
-                {
-                    pos += 1;
-                }
-            }
-            // Type suffix (e.g., `42u32`, `1.0f64`).
-            while pos < len && bytes[pos].is_ascii_alphanumeric() {
-                pos += 1;
-            }
+            pos = scan_c_number(bytes, pos);
             spans.push(ColorSpan {
                 start,
                 end: pos,
@@ -491,9 +527,7 @@ fn highlight_c_family(
         // Whitespace.
         if bytes[pos].is_ascii_whitespace() {
             let start = pos;
-            while pos < len && bytes[pos].is_ascii_whitespace() {
-                pos += 1;
-            }
+            pos = scan_whitespace(bytes, pos);
             spans.push(ColorSpan {
                 start,
                 end: pos,
@@ -505,7 +539,6 @@ fn highlight_c_family(
         // Operator / punctuation.
         if is_operator(bytes[pos]) {
             let start = pos;
-            // Consume consecutive operator chars.
             while pos < len && is_operator(bytes[pos]) {
                 pos += 1;
             }
@@ -520,9 +553,7 @@ fn highlight_c_family(
         // Word (identifier / keyword).
         if bytes[pos].is_ascii_alphanumeric() || bytes[pos] == b'_' {
             let start = pos;
-            while pos < len && (bytes[pos].is_ascii_alphanumeric() || bytes[pos] == b'_') {
-                pos += 1;
-            }
+            pos = scan_word(bytes, pos, &[]);
             let word = &line[start..pos];
             let kind = if keywords.contains(&word) {
                 SyntaxKind::Keyword
@@ -540,46 +571,16 @@ fn highlight_c_family(
         }
 
         // Fallback: single character (advance by full UTF-8 char width).
-        let char_len = line[pos..].chars().next().map_or(1, |c| c.len_utf8());
+        let end = advance_utf8_char(line, pos);
         spans.push(ColorSpan {
             start: pos,
-            end: pos + char_len,
+            end,
             kind: SyntaxKind::Normal,
         });
-        pos += char_len;
+        pos = end;
     }
 
     (spans, in_block_comment)
-}
-
-fn is_operator(b: u8) -> bool {
-    matches!(
-        b,
-        b'+' | b'-'
-            | b'*'
-            | b'/'
-            | b'%'
-            | b'='
-            | b'!'
-            | b'<'
-            | b'>'
-            | b'&'
-            | b'|'
-            | b'^'
-            | b'~'
-            | b'('
-            | b')'
-            | b'{'
-            | b'}'
-            | b'['
-            | b']'
-            | b';'
-            | b':'
-            | b','
-            | b'.'
-            | b'?'
-            | b'@'
-    )
 }
 
 // -----------------------------------------------------------------------
@@ -862,17 +863,9 @@ fn highlight_css(line: &str, mut in_block_comment: bool) -> (Vec<ColorSpan>, boo
     while pos < len {
         if in_block_comment {
             let start = pos;
-            loop {
-                if pos + 1 < len && bytes[pos] == b'*' && bytes[pos + 1] == b'/' {
-                    pos += 2;
-                    in_block_comment = false;
-                    break;
-                }
-                pos += 1;
-                if pos >= len {
-                    break;
-                }
-            }
+            let (end, still_open) = scan_block_comment(bytes, pos, false);
+            in_block_comment = still_open;
+            pos = end;
             spans.push(ColorSpan {
                 start,
                 end: pos,
@@ -883,20 +876,10 @@ fn highlight_css(line: &str, mut in_block_comment: bool) -> (Vec<ColorSpan>, boo
 
         // Block comment.
         if pos + 1 < len && bytes[pos] == b'/' && bytes[pos + 1] == b'*' {
-            in_block_comment = true;
             let start = pos;
-            pos += 2;
-            loop {
-                if pos + 1 < len && bytes[pos] == b'*' && bytes[pos + 1] == b'/' {
-                    pos += 2;
-                    in_block_comment = false;
-                    break;
-                }
-                pos += 1;
-                if pos >= len {
-                    break;
-                }
-            }
+            let (end, still_open) = scan_block_comment(bytes, pos, true);
+            in_block_comment = still_open;
+            pos = end;
             spans.push(ColorSpan {
                 start,
                 end: pos,
@@ -923,20 +906,9 @@ fn highlight_css(line: &str, mut in_block_comment: bool) -> (Vec<ColorSpan>, boo
         }
 
         // String.
-        if bytes[pos] == b'"' || bytes[pos] == b'\'' {
-            let q = bytes[pos];
+        if matches!(bytes[pos], b'"' | b'\'') {
             let start = pos;
-            pos += 1;
-            while pos < len && bytes[pos] != q {
-                if bytes[pos] == b'\\' && pos + 1 < len {
-                    pos += 2;
-                } else {
-                    pos += 1;
-                }
-            }
-            if pos < len {
-                pos += 1;
-            }
+            pos = scan_quoted(bytes, pos, bytes[pos], true);
             spans.push(ColorSpan {
                 start,
                 end: pos,
@@ -983,9 +955,7 @@ fn highlight_css(line: &str, mut in_block_comment: bool) -> (Vec<ColorSpan>, boo
         // Whitespace.
         if bytes[pos].is_ascii_whitespace() {
             let start = pos;
-            while pos < len && bytes[pos].is_ascii_whitespace() {
-                pos += 1;
-            }
+            pos = scan_whitespace(bytes, pos);
             spans.push(ColorSpan {
                 start,
                 end: pos,
@@ -1124,6 +1094,43 @@ fn highlight_markdown(line: &str) -> Vec<ColorSpan> {
 // Shell highlighter
 // -----------------------------------------------------------------------
 
+/// Scan a shell variable reference: `$VAR` or `${VAR}`.
+/// `pos` must point at the `$`. Returns the position after the variable.
+fn scan_shell_variable(bytes: &[u8], pos: usize) -> usize {
+    let len = bytes.len();
+    let mut p = pos + 1;
+    if p < len && bytes[p] == b'{' {
+        p += 1;
+        while p < len && bytes[p] != b'}' {
+            p += 1;
+        }
+        if p < len {
+            p += 1;
+        }
+    } else {
+        while p < len && (bytes[p].is_ascii_alphanumeric() || bytes[p] == b'_') {
+            p += 1;
+        }
+    }
+    p
+}
+
+/// Scan a shell operator (|, ;, &&, ||, >, <, >>).
+/// Returns the position after the operator.
+fn scan_shell_operator(bytes: &[u8], pos: usize) -> usize {
+    let len = bytes.len();
+    let b = bytes[pos];
+    let mut p = pos + 1;
+    if p < len
+        && ((b == b'&' && bytes[p] == b'&')
+            || (b == b'|' && bytes[p] == b'|')
+            || (b == b'>' && bytes[p] == b'>'))
+    {
+        p += 1;
+    }
+    p
+}
+
 fn highlight_shell(line: &str) -> Vec<ColorSpan> {
     let bytes = line.as_bytes();
     let len = bytes.len();
@@ -1146,27 +1153,11 @@ fn highlight_shell(line: &str) -> Vec<ColorSpan> {
             continue;
         }
 
-        // String.
-        if bytes[pos] == b'"' || bytes[pos] == b'\'' {
-            let q = bytes[pos];
+        // String: double-quoted (with escapes), single-quoted (no escapes).
+        if matches!(bytes[pos], b'"' | b'\'') {
             let start = pos;
-            pos += 1;
-            if q == b'"' {
-                while pos < len && bytes[pos] != b'"' {
-                    if bytes[pos] == b'\\' && pos + 1 < len {
-                        pos += 2;
-                    } else {
-                        pos += 1;
-                    }
-                }
-            } else {
-                while pos < len && bytes[pos] != b'\'' {
-                    pos += 1;
-                }
-            }
-            if pos < len {
-                pos += 1;
-            }
+            let with_escapes = bytes[pos] == b'"';
+            pos = scan_quoted(bytes, pos, bytes[pos], with_escapes);
             spans.push(ColorSpan {
                 start,
                 end: pos,
@@ -1178,20 +1169,7 @@ fn highlight_shell(line: &str) -> Vec<ColorSpan> {
         // Variable: $VAR, ${VAR}.
         if bytes[pos] == b'$' && pos + 1 < len {
             let start = pos;
-            pos += 1;
-            if pos < len && bytes[pos] == b'{' {
-                pos += 1;
-                while pos < len && bytes[pos] != b'}' {
-                    pos += 1;
-                }
-                if pos < len {
-                    pos += 1;
-                }
-            } else {
-                while pos < len && (bytes[pos].is_ascii_alphanumeric() || bytes[pos] == b'_') {
-                    pos += 1;
-                }
-            }
+            pos = scan_shell_variable(bytes, pos);
             spans.push(ColorSpan {
                 start,
                 end: pos,
@@ -1203,9 +1181,7 @@ fn highlight_shell(line: &str) -> Vec<ColorSpan> {
         // Whitespace.
         if bytes[pos].is_ascii_whitespace() {
             let start = pos;
-            while pos < len && bytes[pos].is_ascii_whitespace() {
-                pos += 1;
-            }
+            pos = scan_whitespace(bytes, pos);
             spans.push(ColorSpan {
                 start,
                 end: pos,
@@ -1217,15 +1193,7 @@ fn highlight_shell(line: &str) -> Vec<ColorSpan> {
         // Operators: |, ;, &&, ||, >, <, >>.
         if matches!(bytes[pos], b'|' | b';' | b'&' | b'>' | b'<') {
             let start = pos;
-            let b = bytes[pos];
-            pos += 1;
-            if pos < len
-                && ((b == b'&' && bytes[pos] == b'&')
-                    || (b == b'|' && bytes[pos] == b'|')
-                    || (b == b'>' && bytes[pos] == b'>'))
-            {
-                pos += 1;
-            }
+            pos = scan_shell_operator(bytes, pos);
             spans.push(ColorSpan {
                 start,
                 end: pos,
@@ -1237,11 +1205,7 @@ fn highlight_shell(line: &str) -> Vec<ColorSpan> {
         // Word (identifier / keyword).
         if bytes[pos].is_ascii_alphanumeric() || bytes[pos] == b'_' || bytes[pos] == b'-' {
             let start = pos;
-            while pos < len
-                && (bytes[pos].is_ascii_alphanumeric() || bytes[pos] == b'_' || bytes[pos] == b'-')
-            {
-                pos += 1;
-            }
+            pos = scan_word(bytes, pos, b"-");
             let word = &line[start..pos];
             let kind = if SHELL_KEYWORDS.contains(&word) {
                 SyntaxKind::Keyword
@@ -1257,13 +1221,13 @@ fn highlight_shell(line: &str) -> Vec<ColorSpan> {
         }
 
         // Fallback: single character (advance by full UTF-8 char width).
-        let char_len = line[pos..].chars().next().map_or(1, |c| c.len_utf8());
+        let end = advance_utf8_char(line, pos);
         spans.push(ColorSpan {
             start: pos,
-            end: pos + char_len,
+            end,
             kind: SyntaxKind::Normal,
         });
-        pos += char_len;
+        pos = end;
     }
 
     spans

@@ -10,13 +10,18 @@
 //! - `app_states` -- per-app mutable state structs
 //! - `dashboard` -- dashboard init and SDI helpers
 //! - `input_dispatch` -- input event routing for Classic and Desktop modes
+//! - `getrandom` -- custom getrandom backends for PSP entropy
+//! - `io_poll` -- async I/O response polling
+//! - `render_classic` -- classic full-screen view rendering
+//! - `render_desktop` -- windowed desktop mode rendering
+//! - `url_text` -- URL/path text computation for status bar
 
 #![feature(restricted_std)]
 #![no_main]
 
 use oasis_backend_psp::{
-    AudioCmd, CURSOR_H, CURSOR_W, Color, InputEvent, IoResponse, PspBackend, SCREEN_HEIGHT,
-    SCREEN_WIDTH, SdiRegistry, StatusBarInfo, SystemInfo, TextureId, WindowManager,
+    CURSOR_H, CURSOR_W, Color, InputEvent, PspBackend, SCREEN_HEIGHT, SCREEN_WIDTH, SdiRegistry,
+    StatusBarInfo, SystemInfo, TextureId, WindowManager,
 };
 
 // oasis-core SDI integration types.
@@ -31,10 +36,15 @@ mod chrome;
 mod commands;
 mod dashboard;
 mod desktop;
+mod getrandom;
 mod input_dispatch;
+mod io_poll;
+mod render_classic;
+mod render_desktop;
 mod skins;
 mod theme;
 mod types;
+mod url_text;
 mod views;
 mod views_sdi;
 
@@ -48,60 +58,8 @@ use types::*;
 // load on PSP-3000 + 6.20 PRO-C.
 psp::module!("OASIS_OS", 1, 0);
 
-// ---------------------------------------------------------------------------
-// Custom getrandom backends for PSP (no native OS entropy source).
-// Uses the PSP's hardware MT19937 PRNG via sceKernelUtils.
-// ---------------------------------------------------------------------------
-
-/// getrandom 0.2 custom backend (used by transitive deps like webpki).
-mod psp_getrandom_v02 {
-    use psp::sys::{
-        sceKernelGetSystemTimeLow, sceKernelUtilsMt19937Init, sceKernelUtilsMt19937UInt,
-    };
-
-    fn psp_fill_random(buf: &mut [u8]) -> Result<(), getrandom_02::Error> {
-        // SAFETY: MT19937 context is initialized by sceKernelUtilsMt19937Init
-        // before any reads. Seed from system timer (user-mode safe).
-        // mfc0 $9 (COP0 Count) is privileged on PSP Allegrex.
-        unsafe {
-            let mut ctx = core::mem::MaybeUninit::uninit();
-            let seed = sceKernelGetSystemTimeLow() as u32;
-            sceKernelUtilsMt19937Init(ctx.as_mut_ptr(), seed);
-            let mut ctx = ctx.assume_init();
-            for byte in buf.iter_mut() {
-                *byte = (sceKernelUtilsMt19937UInt(&mut ctx) & 0xFF) as u8;
-            }
-        }
-        Ok(())
-    }
-
-    getrandom_02::register_custom_getrandom!(psp_fill_random);
-}
-
-/// getrandom 0.3 custom backend (enabled via `--cfg getrandom_backend="custom"`
-/// in `.cargo/config.toml`).
-#[unsafe(no_mangle)]
-unsafe extern "Rust" fn __getrandom_v03_custom(
-    dest: *mut u8,
-    len: usize,
-) -> Result<(), getrandom::Error> {
-    use psp::sys::{
-        sceKernelGetSystemTimeLow, sceKernelUtilsMt19937Init, sceKernelUtilsMt19937UInt,
-    };
-    // SAFETY: MT19937 context is initialized by sceKernelUtilsMt19937Init
-    // before any reads. Seed from system timer (user-mode safe).
-    // mfc0 $9 (COP0 Count) is privileged on PSP Allegrex.
-    unsafe {
-        let mut ctx = core::mem::MaybeUninit::uninit();
-        let seed = sceKernelGetSystemTimeLow() as u32;
-        sceKernelUtilsMt19937Init(ctx.as_mut_ptr(), seed);
-        let mut ctx = ctx.assume_init();
-        for i in 0..len {
-            *dest.add(i) = (sceKernelUtilsMt19937UInt(&mut ctx) & 0xFF) as u8;
-        }
-    }
-    Ok(())
-}
+// Force the getrandom module to be linked (contains registration macros).
+use getrandom as _;
 
 // ---------------------------------------------------------------------------
 // Entry point
@@ -309,7 +267,7 @@ fn psp_main() {
         }
 
         // -- Poll async I/O responses --
-        poll_io_responses(
+        io_poll::poll_io_responses(
             &io,
             &audio,
             &mut backend,
@@ -480,7 +438,7 @@ fn psp_main() {
 
         match app_mode {
             AppMode::Classic => {
-                render_classic(
+                render_classic::render_classic(
                     &mut backend,
                     &mut sdi,
                     &mut dashboard_state,
@@ -529,7 +487,7 @@ fn psp_main() {
                     }
                 }
 
-                render_desktop(
+                render_desktop::render_desktop(
                     &mut backend,
                     &mut wm,
                     &mut sdi,
@@ -552,7 +510,7 @@ fn psp_main() {
 
         // Status bar + bottom bar (always visible, drawn on top via SDI).
         active_theme.bar.url_text =
-            compute_url_text(app_mode, classic_view, &fm, fm.umd_activated, &audio, &tv);
+            url_text::compute_url_text(app_mode, classic_view, &fm, fm.umd_activated, &audio, &tv);
         status_bar.update_sdi(&mut sdi, &active_theme, &skin_features);
         bottom_bar.update_sdi(&mut sdi, &active_theme, &skin_features);
 
@@ -609,568 +567,6 @@ fn psp_main() {
         backend.blit_inner(cursor_tex, cx, cy, CURSOR_W, CURSOR_H);
 
         backend.swap_buffers_inner();
-    }
-}
-
-// ---------------------------------------------------------------------------
-// I/O response polling (extracted from main loop body)
-// ---------------------------------------------------------------------------
-
-#[allow(clippy::too_many_arguments)]
-fn poll_io_responses(
-    io: &oasis_backend_psp::threading::IoHandle,
-    audio: &oasis_backend_psp::AudioHandle,
-    backend: &mut PspBackend,
-    term: &mut TerminalState,
-    pv: &mut PhotoViewerState,
-    br: &mut BrowserState,
-    radio: &mut RadioState,
-    tv: &mut TvGuideState,
-    dbg_log: &dyn Fn(&str),
-) {
-    while let Some(resp) = io.try_recv() {
-        match resp {
-            IoResponse::TextureReady {
-                path: _,
-                width,
-                height,
-                rgba,
-            } => {
-                if pv.loading {
-                    if let Some(old) = pv.tex.take() {
-                        backend.destroy_texture_inner(old);
-                    }
-                    pv.tex = backend.load_texture_inner(width, height, &rgba);
-                    pv.img_w = width;
-                    pv.img_h = height;
-                    pv.viewing = true;
-                    pv.loading = false;
-                }
-            },
-            IoResponse::Error { path, msg } => {
-                dbg_log(&format!("[IO] error: {} - {}", path, msg));
-                term.lines.push(format!("I/O error: {} - {}", path, msg));
-                pv.loading = false;
-                if br.loading {
-                    br.loading = false;
-                    br.status_msg = format!("Error: {}", msg);
-                }
-            },
-            IoResponse::FileReady { .. } => {},
-            IoResponse::HttpDone {
-                tag,
-                status_code,
-                body,
-            } => {
-                if tag == 0xBEEF {
-                    let html = String::from_utf8_lossy(&body);
-                    let text = views::strip_html(&html);
-                    br.content_lines = views::wrap_text(&text, 58);
-                    br.scroll = 0;
-                    br.loading = false;
-                    br.status_msg = format!("HTTP {} - {} bytes", status_code, body.len());
-                } else if (tag & 0xFF00) == 0xAA00 {
-                    // Legacy TV Guide tag -- no longer used.
-                    let _ = (tag, body);
-                } else {
-                    let preview = String::from_utf8_lossy(&body[..body.len().min(256)]);
-                    term.lines.push(format!(
-                        "HTTP {status_code} ({} bytes): {preview}",
-                        body.len(),
-                    ));
-                }
-            },
-            IoResponse::TvCatalogReady { ch_idx, episodes } => {
-                dbg_log(&format!(
-                    "[TV] catalog ready ch={ch_idx} episodes={}",
-                    episodes.len()
-                ));
-                if ch_idx < tv.channels.len() {
-                    let ch = &tv.channels[ch_idx];
-                    let catalog = tv.catalogs[ch_idx].get_or_insert_with(|| {
-                        oasis_core::apps::tv_guide::ChannelCatalog::new(ch.number)
-                    });
-                    if !episodes.is_empty() {
-                        catalog.add_episodes(episodes);
-                    }
-                }
-            },
-            IoResponse::RadioConnected {
-                fd,
-                icy_metaint,
-                initial_data,
-            } => {
-                radio.status = RadioStatus::Buffering;
-                audio.send(AudioCmd::RadioStreamFromFd {
-                    fd,
-                    icy_metaint,
-                    initial_data,
-                });
-            },
-            IoResponse::RadioError { msg } => {
-                radio.status = RadioStatus::Error;
-                radio.error_msg = msg;
-            },
-            IoResponse::VideoProgress {
-                tag: _,
-                bytes,
-                total,
-            } => {
-                if let Some(t) = total {
-                    if t > 0 {
-                        tv.download_progress = bytes as f32 / t as f32;
-                    }
-                }
-            },
-            IoResponse::VideoReady { tag: _, path } => {
-                tv.downloading = false;
-                tv.download_progress = 1.0;
-                oasis_backend_psp::video::send_video_cmd(
-                    oasis_backend_psp::video::VideoCmd::Play { path, seek_secs: 0 },
-                );
-            },
-            IoResponse::VideoStreamReady { tag: _, .. } => {
-                tv.downloading = false;
-                tv.download_progress = 1.0;
-            },
-            IoResponse::VideoError { tag: _, msg } => {
-                tv.downloading = false;
-                tv.error_msg = format!("Download: {msg}");
-                tv.tuned = None;
-            },
-        }
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Classic mode rendering
-// ---------------------------------------------------------------------------
-
-#[allow(clippy::too_many_arguments)]
-fn render_classic(
-    backend: &mut PspBackend,
-    sdi: &mut SdiRegistry,
-    dashboard_state: &mut oasis_core::dashboard::DashboardState,
-    active_theme: &oasis_core::active_theme::ActiveTheme,
-    classic_view: ClassicView,
-    prev_classic_view: &mut ClassicView,
-    icons_hidden: bool,
-    fm: &mut FileManagerState,
-    pv: &mut PhotoViewerState,
-    mp: &mut MusicPlayerState,
-    br: &mut BrowserState,
-    radio: &mut RadioState,
-    tv: &mut TvGuideState,
-    term: &mut TerminalState,
-    audio: &oasis_backend_psp::AudioHandle,
-    viz_frame: u32,
-    dbg_log: &dyn Fn(&str),
-) {
-    // Lazy-load directory entries for browser modes.
-    if classic_view == ClassicView::FileManager && !fm.left.loaded {
-        fm.left.entries = oasis_backend_psp::list_directory(&fm.left.path);
-        fm.left.selected = 0;
-        fm.left.scroll = 0;
-        fm.left.loaded = true;
-    }
-    if classic_view == ClassicView::FileManager && !fm.right.loaded {
-        fm.right.entries = oasis_backend_psp::list_directory(&fm.right.path);
-        fm.right.selected = 0;
-        fm.right.scroll = 0;
-        fm.right.loaded = true;
-    }
-    if classic_view == ClassicView::PhotoViewer && !pv.loaded && !pv.viewing {
-        let all = oasis_backend_psp::list_directory(&pv.path);
-        pv.entries = all
-            .into_iter()
-            .filter(|e| {
-                e.is_dir || {
-                    let lower: String = e.name.chars().map(|c| c.to_ascii_lowercase()).collect();
-                    lower.ends_with(".jpg") || lower.ends_with(".jpeg")
-                }
-            })
-            .collect();
-        pv.selected = 0;
-        pv.scroll = 0;
-        pv.loaded = true;
-    }
-    if classic_view == ClassicView::MusicPlayer && !mp.loaded && !audio.is_playing() {
-        let all = oasis_backend_psp::list_directory(&mp.path);
-        mp.entries = all
-            .into_iter()
-            .filter(|e| {
-                e.is_dir || {
-                    let lower: String = e.name.chars().map(|c| c.to_ascii_lowercase()).collect();
-                    lower.ends_with(".mp3")
-                }
-            })
-            .collect();
-        mp.selected = 0;
-        mp.scroll = 0;
-        mp.loaded = true;
-    }
-
-    // Show or hide dashboard icons based on current view.
-    let show_dashboard = classic_view == ClassicView::Dashboard && !icons_hidden;
-    if show_dashboard {
-        dashboard::show_dashboard_sdi(dashboard_state, sdi, active_theme);
-    } else {
-        dashboard::hide_dashboard_sdi(dashboard_state, sdi);
-    }
-
-    // Show or hide terminal SDI objects.
-    if classic_view != ClassicView::Terminal {
-        terminal_sdi::set_terminal_visible(sdi, false);
-    }
-
-    // View transition: hide old SDI objects, set up new ones.
-    if classic_view != *prev_classic_view {
-        views_sdi::hide_all(sdi);
-        views_sdi::setup_view(sdi, classic_view);
-        *prev_classic_view = classic_view;
-    }
-
-    match classic_view {
-        ClassicView::Dashboard => {
-            backend.force_bitmap_font = true;
-            chrome::draw_button_hints(
-                backend,
-                &[
-                    ("X", "Open"),
-                    ("L/R", "Window"),
-                    ("Start", "Term"),
-                    ("Sel", "Desktop"),
-                ],
-            );
-            backend.force_bitmap_font = false;
-        },
-        ClassicView::Terminal => {
-            terminal_sdi::setup_terminal_objects(
-                sdi,
-                &term.lines,
-                "/",
-                &term.input,
-                term.scroll,
-                active_theme,
-                viz_frame % 30 < 15,
-            );
-            backend.force_bitmap_font = true;
-            chrome::draw_button_hints(
-                backend,
-                &[
-                    ("X", "Run"),
-                    ("[]", "OSK"),
-                    ("Up/Dn", "Scroll"),
-                    ("Start", "Back"),
-                ],
-            );
-            backend.force_bitmap_font = false;
-        },
-        ClassicView::FileManager => {
-            views_sdi::update_file_manager(
-                sdi,
-                &fm.left.path,
-                &fm.left.entries,
-                fm.left.selected,
-                fm.left.scroll,
-                &fm.right.path,
-                &fm.right.entries,
-                fm.right.selected,
-                fm.right.scroll,
-                fm.active_panel,
-                active_theme,
-            );
-            backend.force_bitmap_font = true;
-            chrome::draw_button_hints(
-                backend,
-                &[("X", "Open"), ("O", "Back"), ("<>", "Panel"), ("^v", "Nav")],
-            );
-            backend.force_bitmap_font = false;
-        },
-        ClassicView::PhotoViewer => {
-            if pv.viewing {
-                views_sdi::update_photo_view(sdi, pv.tex, pv.img_w, pv.img_h);
-                backend.force_bitmap_font = true;
-                chrome::draw_button_hints(backend, &[("O", "Back")]);
-                backend.force_bitmap_font = false;
-            } else if pv.loading {
-                desktop::draw_loading_indicator(backend, "Decoding image...");
-            } else {
-                views_sdi::update_photo_browser(
-                    sdi,
-                    &pv.path,
-                    &pv.entries,
-                    pv.selected,
-                    pv.scroll,
-                    active_theme,
-                );
-                backend.force_bitmap_font = true;
-                chrome::draw_button_hints(backend, &[("X", "View"), ("O", "Back"), ("^v", "Nav")]);
-                backend.force_bitmap_font = false;
-            }
-        },
-        ClassicView::MusicPlayer => {
-            if audio.is_playing() {
-                backend.force_bitmap_font = true;
-                views::draw_music_player_threaded(backend, &mp.file_name, audio, viz_frame);
-                chrome::draw_button_hints(
-                    backend,
-                    &[("X", "Pause"), ("[]", "Stop"), ("^v", "Back")],
-                );
-                backend.force_bitmap_font = false;
-            } else {
-                views_sdi::update_music_browser(
-                    sdi,
-                    &mp.path,
-                    &mp.entries,
-                    mp.selected,
-                    mp.scroll,
-                    active_theme,
-                );
-                backend.force_bitmap_font = true;
-                chrome::draw_button_hints(backend, &[("X", "Play"), ("O", "Back"), ("^v", "Nav")]);
-                backend.force_bitmap_font = false;
-            }
-        },
-        ClassicView::Browser => {
-            if br.loading {
-                desktop::draw_loading_indicator(backend, "Loading page...");
-            } else {
-                views_sdi::update_browser(
-                    sdi,
-                    &br.url,
-                    &br.content_lines,
-                    br.scroll,
-                    &br.status_msg,
-                    active_theme,
-                );
-            }
-            backend.force_bitmap_font = true;
-            chrome::draw_button_hints(
-                backend,
-                &[
-                    ("[]", "URL"),
-                    ("X", "Load"),
-                    ("^v", "Scroll"),
-                    ("O", "Back"),
-                ],
-            );
-            backend.force_bitmap_font = false;
-        },
-        ClassicView::Radio => {
-            backend.force_bitmap_font = true;
-            match radio.status {
-                RadioStatus::Stopped => {
-                    views_sdi::update_radio(sdi, radio.selected, radio.scroll, active_theme);
-                    chrome::draw_button_hints(
-                        backend,
-                        &[("X", "Tune"), ("^v", "Nav"), ("O", "Back")],
-                    );
-                },
-                RadioStatus::Connecting => {
-                    desktop::draw_loading_indicator(backend, "Connecting...");
-                },
-                RadioStatus::Buffering | RadioStatus::Playing => {
-                    views::draw_radio_playing(
-                        backend,
-                        &radio.station_name,
-                        &radio.now_playing,
-                        radio.status == RadioStatus::Buffering,
-                        audio,
-                        viz_frame,
-                    );
-                    chrome::draw_button_hints(
-                        backend,
-                        &[("[]", "Stop"), ("^", "Back"), ("O", "Stop+Back")],
-                    );
-                },
-                RadioStatus::Error => {
-                    views::draw_radio_error(backend, &radio.error_msg);
-                    chrome::draw_button_hints(backend, &[("X", "Retry"), ("O", "Back")]);
-                },
-            }
-            backend.force_bitmap_font = false;
-        },
-        ClassicView::TvGuide => {
-            if viz_frame < 3 || viz_frame % 60 == 0 {
-                dbg_log(&format!("[TV] render frame {}", viz_frame));
-            }
-            backend.force_bitmap_font = true;
-            if tv.tuned.is_some() {
-                views::draw_tv_playing(
-                    backend,
-                    &tv.now_playing,
-                    tv.downloading,
-                    tv.download_progress,
-                    tv.preview_tex,
-                    &tv.error_msg,
-                );
-                chrome::draw_button_hints(backend, &[("O", "Untune"), ("^", "Back")]);
-            } else if !tv.error_msg.is_empty() {
-                views::draw_tv_error(backend, &tv.error_msg);
-                chrome::draw_button_hints(backend, &[("X", "Retry"), ("O", "Back")]);
-            } else {
-                views_sdi::update_tv_channels(
-                    sdi,
-                    &tv.channels,
-                    &tv.catalogs,
-                    tv.selected,
-                    tv.scroll,
-                    active_theme,
-                );
-                chrome::draw_button_hints(backend, &[("X", "Tune"), ("^v", "Nav"), ("O", "Back")]);
-            }
-            backend.force_bitmap_font = false;
-        },
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Desktop mode rendering
-// ---------------------------------------------------------------------------
-
-#[allow(clippy::too_many_arguments)]
-fn render_desktop(
-    backend: &mut PspBackend,
-    wm: &mut WindowManager,
-    sdi: &mut SdiRegistry,
-    config: &psp::config::Config,
-    status: &StatusBarInfo,
-    sysinfo: &SystemInfo,
-    fps: f32,
-    usb_active: bool,
-    free_kb: i32,
-    max_blk_kb: i32,
-    term: &TerminalState,
-    fm: &FileManagerState,
-    pv: &PhotoViewerState,
-    mp: &MusicPlayerState,
-    audio: &oasis_backend_psp::AudioHandle,
-    _br: &BrowserState,
-) {
-    let settings_clock = config.get_i32("clock_mhz").unwrap_or(333);
-    let settings_bus = config.get_i32("bus_mhz").unwrap_or(166);
-    let current_vol = backend.volatile_mem_info();
-
-    backend.force_bitmap_font = true;
-    let _ = wm.draw_with_clips_noalloc(
-        sdi,
-        backend,
-        |window_id, cx, cy, cw, ch, be| match window_id {
-            "terminal" => {
-                desktop::draw_terminal_windowed(&term.lines, &term.input, cx, cy, cw, ch, be)
-            },
-            "filemgr" => desktop::draw_filemgr_windowed(
-                &fm.left.path,
-                &fm.left.entries,
-                fm.left.selected,
-                fm.left.scroll,
-                &fm.right.path,
-                &fm.right.entries,
-                fm.right.selected,
-                fm.right.scroll,
-                fm.active_panel,
-                cx,
-                cy,
-                cw,
-                ch,
-                be,
-            ),
-            "photos" => desktop::draw_photos_windowed(
-                pv.tex, pv.img_w, pv.img_h, pv.viewing, cx, cy, cw, ch, be,
-            ),
-            "music" => desktop::draw_music_windowed(&mp.file_name, audio, cx, cy, cw, ch, be),
-            "settings" => desktop::draw_settings_windowed(
-                settings_clock,
-                settings_bus,
-                current_vol,
-                cx,
-                cy,
-                cw,
-                ch,
-                be,
-            ),
-            "network" => desktop::draw_network_windowed(status, cx, cy, cw, ch, be),
-            "sysmon" => desktop::draw_sysmon_windowed(
-                status,
-                sysinfo,
-                fps,
-                free_kb,
-                max_blk_kb,
-                current_vol,
-                usb_active,
-                cx,
-                cy,
-                cw,
-                ch,
-                be,
-            ),
-            "browser" => desktop::draw_browser_windowed(cx, cy, cw, ch, be),
-            "packages" => desktop::draw_packages_windowed(cx, cy, cw, ch, be),
-            "radio" => desktop::draw_radio_windowed(audio, cx, cy, cw, ch, be),
-            _ => Ok(()),
-        },
-    );
-    backend.force_bitmap_font = false;
-}
-
-// ---------------------------------------------------------------------------
-// URL text computation
-// ---------------------------------------------------------------------------
-
-fn compute_url_text(
-    app_mode: AppMode,
-    classic_view: ClassicView,
-    fm: &FileManagerState,
-    umd_activated: bool,
-    audio: &oasis_backend_psp::AudioHandle,
-    tv: &TvGuideState,
-) -> String {
-    match (app_mode, classic_view) {
-        (AppMode::Desktop, _) => "SYS://DESKTOP".to_string(),
-        (_, ClassicView::Dashboard) => "SYS://DASHBOARD".to_string(),
-        (_, ClassicView::Terminal) => "SYS://TERMINAL".to_string(),
-        (_, ClassicView::FileManager) => {
-            let active_path = if fm.active_panel == 0 {
-                &fm.left.path
-            } else {
-                &fm.right.path
-            };
-            let path_part = if active_path.len() > 14 {
-                let start = active_path.ceil_char_boundary(active_path.len() - 14);
-                &active_path[start..]
-            } else {
-                active_path.as_str()
-            };
-            if umd_activated {
-                format!("UMD:{}", path_part)
-            } else {
-                format!("MSO:/{}", path_part)
-            }
-        },
-        (_, ClassicView::PhotoViewer) => "SYS://PHOTOS".to_string(),
-        (_, ClassicView::MusicPlayer) => {
-            if audio.is_playing() {
-                "SYS://NOW_PLAY".to_string()
-            } else {
-                "SYS://MUSIC".to_string()
-            }
-        },
-        (_, ClassicView::Browser) => "SYS://BROWSER".to_string(),
-        (_, ClassicView::Radio) => {
-            if audio.is_radio_streaming() {
-                "SYS://RADIO_ON".to_string()
-            } else {
-                "SYS://RADIO".to_string()
-            }
-        },
-        (_, ClassicView::TvGuide) => {
-            if tv.tuned.is_some() {
-                "SYS://TV_LIVE".to_string()
-            } else {
-                "SYS://TV_GUIDE".to_string()
-            }
-        },
     }
 }
 
