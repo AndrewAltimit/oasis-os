@@ -305,12 +305,12 @@ pub fn evaluate(expr: &str) -> Result<f64, CalcError> {
 }
 
 // ---------------------------------------------------------------
-// HistoryEntry
+// CalcHistoryEntry
 // ---------------------------------------------------------------
 
 /// A single calculation stored in history.
 #[derive(Debug, Clone)]
-pub struct HistoryEntry {
+pub struct CalcHistoryEntry {
     /// The expression that was evaluated.
     pub expression: String,
     /// The computed result.
@@ -330,7 +330,7 @@ pub struct CalculatorApp {
     /// Expression being typed by the user.
     input_buffer: String,
     /// Previous calculations.
-    history: Vec<HistoryEntry>,
+    history: Vec<CalcHistoryEntry>,
     /// Memory register (M+, MS, MR, MC).
     memory: f64,
     /// Result of the last successful evaluation.
@@ -434,7 +434,7 @@ impl CalculatorApp {
 
         match evaluate(&self.input_buffer) {
             Ok(result) => {
-                let entry = HistoryEntry {
+                let entry = CalcHistoryEntry {
                     expression: self.input_buffer.clone(),
                     result,
                 };

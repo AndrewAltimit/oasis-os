@@ -48,13 +48,17 @@ pub fn resolve_skin(name_or_path: &str) -> Result<Skin> {
     // 2. Try as a directory path.
     let path = Path::new(name_or_path);
     if path.join("skin.toml").is_file() {
-        return Skin::from_directory(path);
+        let skin = Skin::from_directory(path)?;
+        log_validation_warnings(name_or_path, &skin);
+        return Ok(skin);
     }
 
     // 3. Try ./skins/{name}/.
     let skins_dir = Path::new("skins").join(name_or_path);
     if skins_dir.join("skin.toml").is_file() {
-        return Skin::from_directory(&skins_dir);
+        let skin = Skin::from_directory(&skins_dir)?;
+        log_validation_warnings(name_or_path, &skin);
+        return Ok(skin);
     }
 
     // 4. Fallback to classic built-in skin.
@@ -75,4 +79,12 @@ pub fn resolve_skin(name_or_path: &str) -> Result<Skin> {
     // 2. Fallback to classic built-in skin.
     log::warn!("Skin '{name_or_path}' not found -- falling back to classic");
     builtin::classic_skin()
+}
+
+/// Log any validation warnings for an external skin.
+fn log_validation_warnings(name: &str, skin: &Skin) {
+    let warnings = skin.validate();
+    for w in &warnings {
+        log::warn!("Skin '{name}' validation: {w}");
+    }
 }

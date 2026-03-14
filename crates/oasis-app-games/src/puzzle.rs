@@ -264,3 +264,223 @@ impl SlidingPuzzle {
         lines
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn puzzle_creation() {
+        let puzzle = SlidingPuzzle::new(4, 42);
+        assert_eq!(puzzle.size, 4);
+        assert_eq!(puzzle.tiles.len(), 16);
+        assert_eq!(puzzle.moves, 0);
+        assert_eq!(puzzle.state, GameState::Playing);
+    }
+
+    #[test]
+    fn puzzle_contains_all_tiles() {
+        let puzzle = SlidingPuzzle::new(4, 42);
+        let mut sorted = puzzle.tiles.clone();
+        sorted.sort();
+        let expected: Vec<u8> = (0..16).collect();
+        assert_eq!(sorted, expected);
+    }
+
+    #[test]
+    fn puzzle_is_solvable_after_creation() {
+        let puzzle = SlidingPuzzle::new(4, 42);
+        assert!(SlidingPuzzle::is_solvable(&puzzle.tiles, puzzle.size));
+    }
+
+    #[test]
+    fn puzzle_is_solvable_multiple_seeds() {
+        for seed in 0..20 {
+            let puzzle = SlidingPuzzle::new(4, seed);
+            assert!(
+                SlidingPuzzle::is_solvable(&puzzle.tiles, puzzle.size),
+                "puzzle with seed {seed} should be solvable"
+            );
+        }
+    }
+
+    #[test]
+    fn puzzle_solved_state() {
+        let mut puzzle = SlidingPuzzle::new(4, 42);
+        // Set to solved state manually.
+        let total = 16usize;
+        for i in 0..total - 1 {
+            puzzle.tiles[i] = (i + 1) as u8;
+        }
+        puzzle.tiles[total - 1] = 0;
+        puzzle.empty_pos = total - 1;
+        assert!(puzzle.is_solved());
+    }
+
+    #[test]
+    fn puzzle_not_solved_initially() {
+        // With sufficient shuffling, puzzle shouldn't be in solved state.
+        let puzzle = SlidingPuzzle::new(4, 42);
+        // It is extremely unlikely but possible. Check a few seeds.
+        // For seed 42 with 200 shuffles, it should not be solved.
+        assert!(!puzzle.is_solved());
+    }
+
+    #[test]
+    fn puzzle_valid_slide() {
+        let mut puzzle = SlidingPuzzle::new(4, 42);
+        let empty = puzzle.empty_pos;
+        let s = puzzle.size as usize;
+        let row = empty / s;
+
+        // Try sliding up if possible (tile below moves up).
+        if row + 1 < s {
+            let moved = puzzle.slide(Direction::Up);
+            assert!(moved);
+            assert_eq!(puzzle.moves, 1);
+            assert_ne!(puzzle.empty_pos, empty);
+        }
+    }
+
+    #[test]
+    fn puzzle_invalid_slide() {
+        let mut puzzle = SlidingPuzzle::new(4, 42);
+        // Place empty at top-left corner.
+        let old_empty = puzzle.empty_pos;
+        // Swap empty to position 0.
+        puzzle.tiles.swap(0, old_empty);
+        puzzle.empty_pos = 0;
+
+        // Trying Down (tile above moves down) should fail at row 0.
+        let moved = puzzle.slide(Direction::Down);
+        assert!(!moved);
+
+        // Trying Right (tile to the left moves right) should fail at col 0.
+        let moved = puzzle.slide(Direction::Right);
+        assert!(!moved);
+    }
+
+    #[test]
+    fn puzzle_slide_increments_moves() {
+        let mut puzzle = SlidingPuzzle::new(4, 42);
+        let s = puzzle.size as usize;
+        let row = puzzle.empty_pos / s;
+        let col = puzzle.empty_pos % s;
+
+        let dir = if row + 1 < s {
+            Direction::Up
+        } else if col + 1 < s {
+            Direction::Left
+        } else {
+            Direction::Down
+        };
+
+        puzzle.slide(dir);
+        assert!(puzzle.moves >= 1);
+    }
+
+    #[test]
+    fn puzzle_solvability_check_solved() {
+        let tiles: Vec<u8> = vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 0];
+        assert!(SlidingPuzzle::is_solvable(&tiles, 4));
+    }
+
+    #[test]
+    fn puzzle_solvability_check_unsolvable() {
+        // Swap two tiles to create an unsolvable state.
+        let tiles: Vec<u8> = vec![2, 1, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 0];
+        assert!(!SlidingPuzzle::is_solvable(&tiles, 4));
+    }
+
+    #[test]
+    fn puzzle_solvability_odd_grid() {
+        // 3x3 solved.
+        let tiles: Vec<u8> = vec![1, 2, 3, 4, 5, 6, 7, 8, 0];
+        assert!(SlidingPuzzle::is_solvable(&tiles, 3));
+
+        // 3x3 unsolvable (swap 1 and 2).
+        let tiles: Vec<u8> = vec![2, 1, 3, 4, 5, 6, 7, 8, 0];
+        assert!(!SlidingPuzzle::is_solvable(&tiles, 3));
+    }
+
+    #[test]
+    fn puzzle_solvability_wrong_length() {
+        let tiles: Vec<u8> = vec![1, 2, 3];
+        assert!(!SlidingPuzzle::is_solvable(&tiles, 4));
+    }
+
+    #[test]
+    fn puzzle_shuffle_preserves_solvability() {
+        let mut puzzle = SlidingPuzzle::new(4, 42);
+        puzzle.shuffle(500);
+        assert!(SlidingPuzzle::is_solvable(&puzzle.tiles, puzzle.size));
+    }
+
+    #[test]
+    fn puzzle_reset() {
+        let mut puzzle = SlidingPuzzle::new(4, 42);
+        puzzle.moves = 50;
+        puzzle.state = GameState::Won;
+        puzzle.reset(99);
+        assert_eq!(puzzle.moves, 0);
+        assert_eq!(puzzle.state, GameState::Playing);
+        assert!(SlidingPuzzle::is_solvable(&puzzle.tiles, puzzle.size));
+    }
+
+    #[test]
+    fn puzzle_grid_text_has_lines() {
+        let puzzle = SlidingPuzzle::new(4, 42);
+        let lines = puzzle.grid_text();
+        // Header + separator + 4 rows + separator + controls.
+        assert_eq!(lines.len(), 8);
+        assert!(lines[0].contains("Sliding Puzzle"));
+    }
+
+    #[test]
+    fn puzzle_grid_text_shows_tiles() {
+        let puzzle = SlidingPuzzle::new(4, 42);
+        let lines = puzzle.grid_text();
+        // Grid rows should contain tile numbers.
+        let grid_text: String = lines[2..6].join(" ");
+        assert!(grid_text.contains('1'));
+    }
+
+    #[test]
+    fn puzzle_already_solved() {
+        let mut puzzle = SlidingPuzzle::new(4, 42);
+        for i in 0..15usize {
+            puzzle.tiles[i] = (i + 1) as u8;
+        }
+        puzzle.tiles[15] = 0;
+        puzzle.empty_pos = 15;
+        puzzle.state = GameState::Playing;
+        assert!(puzzle.is_solved());
+    }
+
+    #[test]
+    fn puzzle_won_on_solve() {
+        let mut puzzle = SlidingPuzzle::new(4, 42);
+        // Set up one move away from solved.
+        for i in 0..15usize {
+            puzzle.tiles[i] = (i + 1) as u8;
+        }
+        puzzle.tiles[15] = 0;
+        puzzle.empty_pos = 15;
+        // Swap 15 with empty to be one move away.
+        puzzle.tiles[15] = 15;
+        puzzle.tiles[14] = 0;
+        puzzle.empty_pos = 14;
+        puzzle.state = GameState::Playing;
+        // Slide left: tile at col+1 moves into empty (position 15 -> 14).
+        let moved = puzzle.slide(Direction::Left);
+        assert!(moved);
+        assert_eq!(puzzle.state, GameState::Won);
+    }
+
+    #[test]
+    fn puzzle_no_slide_when_won() {
+        let mut puzzle = SlidingPuzzle::new(4, 42);
+        puzzle.state = GameState::Won;
+        assert!(!puzzle.slide(Direction::Up));
+    }
+}

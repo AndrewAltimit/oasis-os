@@ -8,7 +8,7 @@ use std::collections::{HashMap, HashSet};
 
 use oasis_types::error::{OasisError, Result};
 
-use crate::{EntryKind, FilePermissions, Vfs, VfsEntry, VfsMetadata};
+use crate::{AccessMode, EntryKind, FilePermissions, Vfs, VfsContext, VfsEntry, VfsMetadata};
 
 /// An entry in the game asset VFS.
 #[derive(Debug, Clone)]
@@ -35,6 +35,8 @@ pub struct GameAssetVfs {
     /// Paths marked as deleted (hides base entries).
     deleted: HashSet<String>,
     permissions: HashMap<String, FilePermissions>,
+    /// Current user context for permission enforcement.
+    ctx: VfsContext,
 }
 
 impl GameAssetVfs {
@@ -47,6 +49,7 @@ impl GameAssetVfs {
             overlay: HashMap::new(),
             deleted: HashSet::new(),
             permissions: HashMap::new(),
+            ctx: VfsContext::default_user(),
         }
     }
 
@@ -97,7 +100,9 @@ impl Vfs for GameAssetVfs {
     fn readdir(&self, path: &str) -> Result<Vec<VfsEntry>> {
         let path = normalize(path);
         match self.effective_entry(&path) {
-            Some(Node::Dir) => {},
+            Some(Node::Dir) => {
+                self.check_permission(&path, AccessMode::Read)?;
+            },
             Some(Node::File(_)) => {
                 return Err(OasisError::Vfs(format!("not a directory: {path}").into()));
             },
@@ -151,7 +156,10 @@ impl Vfs for GameAssetVfs {
     fn read(&self, path: &str) -> Result<Vec<u8>> {
         let path = normalize(path);
         match self.effective_entry(&path) {
-            Some(Node::File(data)) => Ok(data.clone()),
+            Some(Node::File(data)) => {
+                self.check_permission(&path, AccessMode::Read)?;
+                Ok(data.clone())
+            },
             Some(Node::Dir) => Err(OasisError::Vfs(format!("is a directory: {path}").into())),
             None => Err(OasisError::Vfs(format!("no such file: {path}").into())),
         }
@@ -166,19 +174,10 @@ impl Vfs for GameAssetVfs {
             ));
         }
         // Check parent directory write permission.
-        if let Some(perms) = self.permissions.get(par)
-            && !perms.owner_can_write()
-        {
-            return Err(OasisError::Vfs(
-                format!("permission denied (directory read-only): {par}").into(),
-            ));
-        }
-        if let Some(perms) = self.permissions.get(&path)
-            && !perms.owner_can_write()
-        {
-            return Err(OasisError::Vfs(
-                format!("permission denied (read-only): {path}").into(),
-            ));
+        self.check_permission(par, AccessMode::Write)?;
+        // Check target file write permission (if it already exists).
+        if self.effective_entry(&path).is_some() {
+            self.check_permission(&path, AccessMode::Write)?;
         }
         self.deleted.remove(&path);
         self.permissions
@@ -214,13 +213,7 @@ impl Vfs for GameAssetVfs {
             self.mkdir(&par)?;
         }
         // Check parent directory write permission.
-        if let Some(perms) = self.permissions.get(&par)
-            && !perms.owner_can_write()
-        {
-            return Err(OasisError::Vfs(
-                format!("permission denied (directory read-only): {par}").into(),
-            ));
-        }
+        self.check_permission(&par, AccessMode::Write)?;
         self.deleted.remove(&path);
         self.permissions
             .entry(path.clone())
@@ -236,20 +229,10 @@ impl Vfs for GameAssetVfs {
         }
         // Check parent directory write permission.
         let par = parent(&path);
-        if let Some(perms) = self.permissions.get(par)
-            && !perms.owner_can_write()
-        {
-            return Err(OasisError::Vfs(
-                format!("permission denied (directory read-only): {par}").into(),
-            ));
-        }
+        self.check_permission(par, AccessMode::Write)?;
         // Check target's own permission.
-        if let Some(perms) = self.permissions.get(&path)
-            && !perms.owner_can_write()
-        {
-            return Err(OasisError::Vfs(
-                format!("permission denied (read-only): {path}").into(),
-            ));
+        if self.effective_entry(&path).is_some() {
+            self.check_permission(&path, AccessMode::Write)?;
         }
         match self.effective_entry(&path) {
             Some(Node::Dir) => {
@@ -347,6 +330,14 @@ impl Vfs for GameAssetVfs {
         }
         self.permissions.insert(path, perms);
         Ok(())
+    }
+
+    fn context(&self) -> VfsContext {
+        self.ctx.clone()
+    }
+
+    fn set_context(&mut self, ctx: VfsContext) {
+        self.ctx = ctx;
     }
 }
 
@@ -580,7 +571,7 @@ mod tests {
         vfs.set_permissions(
             "/etc/config",
             FilePermissions {
-                owner: "user".to_string(),
+                owner: "oasis".to_string(),
                 mode: 0o444,
             },
         )

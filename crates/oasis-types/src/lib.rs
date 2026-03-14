@@ -13,5 +13,6 @@ pub mod geometry;
 pub mod input;
 pub mod pbp;
 pub mod rasterize;
+pub mod shader;
 pub mod shadow;
 pub mod tls;

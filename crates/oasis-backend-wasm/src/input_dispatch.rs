@@ -214,6 +214,19 @@ impl OasisWasm {
                     return;
                 }
 
+                // Desktop indicator hit test.
+                if let Some(hit) = self.taskbar.desktop_hit_test(*x, *y) {
+                    match hit {
+                        oasis_core::taskbar::DesktopHit::Prev => {
+                            self.desktops.switch_prev();
+                        },
+                        oasis_core::taskbar::DesktopHit::Next => {
+                            self.desktops.switch_next();
+                        },
+                    }
+                    return;
+                }
+
                 // Taskbar hit test before WM.
                 if let Some(win_id) = self.taskbar.hit_test(*x, *y) {
                     let win_id = win_id.to_string();
@@ -445,6 +458,13 @@ impl OasisWasm {
                         }
                     }
                 }
+            },
+            // L/R triggers switch virtual desktops.
+            InputEvent::TriggerPress(Trigger::Left) => {
+                self.desktops.switch_prev();
+            },
+            InputEvent::TriggerPress(Trigger::Right) => {
+                self.desktops.switch_next();
             },
             _ => {},
         }

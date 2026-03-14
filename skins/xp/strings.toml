@@ -1,0 +1,12 @@
+boot_text = [
+    "OASIS_OS v2.2 [xp]",
+    "Loading Windows XP Luna theme...",
+    "Desktop environment: active",
+    "Ready.",
+]
+prompt_format = "C:\\> "
+title = "OASIS XP"
+home_label = "My Computer"
+welcome_message = "Welcome to OASIS XP. Type 'help' for commands."
+error_prefix = "error: "
+shutdown_message = "Windows is shutting down..."

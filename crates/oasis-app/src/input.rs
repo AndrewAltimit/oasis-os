@@ -71,6 +71,18 @@ pub fn handle_desktop_input(
     match event {
         InputEvent::Quit => return InputResult::Quit,
         InputEvent::PointerClick { x, y } => {
+            // Check desktop indicator hit (prev/next arrows).
+            if let Some(hit) = state.ui.taskbar.desktop_hit_test(*x, *y) {
+                match hit {
+                    oasis_core::taskbar::DesktopHit::Prev => {
+                        state.ui.desktops.switch_prev();
+                    },
+                    oasis_core::taskbar::DesktopHit::Next => {
+                        state.ui.desktops.switch_next();
+                    },
+                }
+                return InputResult::Continue;
+            }
             // Check taskbar hit before WM (taskbar sits above bottom bar).
             if let Some(win_id) = state.ui.taskbar.hit_test(*x, *y) {
                 let win_id = win_id.to_string();
@@ -359,6 +371,13 @@ pub fn handle_desktop_input(
                     }
                 }
             }
+        },
+        // L/R triggers switch virtual desktops.
+        InputEvent::TriggerPress(Trigger::Left) => {
+            state.ui.desktops.switch_prev();
+        },
+        InputEvent::TriggerPress(Trigger::Right) => {
+            state.ui.desktops.switch_next();
         },
         _ => {},
     }
@@ -769,6 +788,7 @@ mod tests {
                 taskbar: oasis_core::taskbar::Taskbar::new(),
                 start_menu: StartMenuState::new(StartMenuState::default_items(&active_theme)),
                 mouse_cursor: CursorState::default(),
+                desktops: oasis_core::wm::DesktopManager::new(4),
             },
             terminal: TerminalLayer {
                 cmd_reg: CommandRegistry::new(),

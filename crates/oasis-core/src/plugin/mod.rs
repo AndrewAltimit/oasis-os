@@ -17,4 +17,6 @@ pub use app_bridge::{AppCategory, PluginAppFactory, PluginAppRegistration};
 pub use event_bus::{EventBus, PluginEvent};
 pub use examples::register_builtin_plugins;
 pub use manager::{PluginManager, PluginManifest};
-pub use traits::{PLUGIN_API_VERSION, Plugin, PluginHost, PluginInfo, PluginState};
+pub use traits::{
+    PLUGIN_API_VERSION, Plugin, PluginCapabilities, PluginHost, PluginInfo, PluginState,
+};

@@ -591,4 +591,119 @@ mod tests {
         let best = select_smallest_for(&eps, 10_000_000, 320).unwrap();
         assert_eq!(best.filename, "b.mp4");
     }
+
+    // -----------------------------------------------------------------------
+    // PSP-specific video selection tests
+    //
+    // The PSP backend calls `select_smallest_for(&episodes, 20_000_000, 320)`
+    // -- 20MB max, 320px minimum width for 480x272 screen. These tests
+    // exercise the exact parameter combination used on PSP hardware.
+    // -----------------------------------------------------------------------
+
+    /// PSP constraint: 20MB max, 320px min width. h.264 derivatives preferred.
+    #[test]
+    fn select_smallest_psp_constraints_h264_preferred() {
+        let eps = vec![
+            make_ep("original.mp4", "MPEG4", None, 50_000_000, 640),
+            make_ep(
+                "derivative.mp4",
+                "h.264 IA",
+                Some("original.mp4"),
+                15_000_000,
+                320,
+            ),
+        ];
+        let best = select_smallest_for(&eps, 20_000_000, 320).unwrap();
+        assert_eq!(best.filename, "derivative.mp4");
+    }
+
+    /// PSP constraint: when only originals exist and all exceed 20MB,
+    /// the function should still return the smallest as last resort.
+    #[test]
+    fn select_smallest_psp_constraints_all_over_20mb() {
+        let eps = vec![
+            make_ep("large.mp4", "MPEG4", None, 80_000_000, 640),
+            make_ep("medium.mp4", "MPEG4", None, 40_000_000, 320),
+        ];
+        let best = select_smallest_for(&eps, 20_000_000, 320).unwrap();
+        assert_eq!(best.filename, "medium.mp4");
+    }
+
+    /// PSP constraint: prefer 320px+ width even if a smaller file exists.
+    #[test]
+    fn select_smallest_psp_prefers_320px_width() {
+        let eps = vec![
+            make_ep("tiny.mp4", "h.264 IA", Some("a.mp4"), 5_000_000, 160),
+            make_ep("good.mp4", "h.264 IA", Some("a.mp4"), 12_000_000, 320),
+        ];
+        let best = select_smallest_for(&eps, 20_000_000, 320).unwrap();
+        assert_eq!(best.filename, "good.mp4");
+    }
+
+    /// PSP constraint: if no 320px+ file fits under 20MB, fall back to
+    /// narrower h.264 derivative.
+    #[test]
+    fn select_smallest_psp_fallback_to_narrow_h264() {
+        let eps = vec![
+            make_ep("wide.mp4", "h.264 IA", Some("a.mp4"), 25_000_000, 640),
+            make_ep("narrow.mp4", "h.264 IA", Some("a.mp4"), 8_000_000, 160),
+        ];
+        let best = select_smallest_for(&eps, 20_000_000, 320).unwrap();
+        assert_eq!(best.filename, "narrow.mp4");
+    }
+
+    /// PSP constraint: with mixed format types, h.264 derivative under
+    /// 20MB with adequate width should win over larger originals.
+    #[test]
+    fn select_smallest_psp_mixed_formats() {
+        let eps = vec![
+            make_ep("original_hd.mp4", "MPEG4", None, 100_000_000, 1920),
+            make_ep(
+                "derivative_sd.mp4",
+                "h.264 IA",
+                Some("original_hd.mp4"),
+                18_000_000,
+                640,
+            ),
+            make_ep(
+                "derivative_lo.mp4",
+                "h.264 IA",
+                Some("original_hd.mp4"),
+                6_000_000,
+                320,
+            ),
+            make_ep("small_original.mp4", "MPEG4", None, 12_000_000, 320),
+        ];
+        let best = select_smallest_for(&eps, 20_000_000, 320).unwrap();
+        // Should pick the smallest h.264 derivative with >= 320px.
+        assert_eq!(best.filename, "derivative_lo.mp4");
+    }
+
+    /// PSP constraint: single episode just under 20MB.
+    #[test]
+    fn select_smallest_psp_single_episode_under_cap() {
+        let eps = vec![make_ep(
+            "episode.mp4",
+            "h.264 IA",
+            Some("orig.mp4"),
+            19_999_999,
+            480,
+        )];
+        let best = select_smallest_for(&eps, 20_000_000, 320).unwrap();
+        assert_eq!(best.filename, "episode.mp4");
+    }
+
+    /// PSP constraint: single episode exactly at 20MB (edge case).
+    #[test]
+    fn select_smallest_psp_exactly_at_cap() {
+        let eps = vec![make_ep(
+            "exact.mp4",
+            "h.264 IA",
+            Some("orig.mp4"),
+            20_000_000,
+            320,
+        )];
+        let best = select_smallest_for(&eps, 20_000_000, 320).unwrap();
+        assert_eq!(best.filename, "exact.mp4");
+    }
 }

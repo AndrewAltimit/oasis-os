@@ -8,7 +8,8 @@
 //! implements. `AppRunner` delegates to the active app implementation.
 
 mod app_trait;
-pub mod file_manager;
+/// Re-export File Manager crate for backwards compatibility.
+pub use oasis_app_file_manager as file_manager;
 pub(crate) mod file_viewer;
 pub mod layout_calc;
 mod runner;

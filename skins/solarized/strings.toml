@@ -1,0 +1,11 @@
+boot_text = [
+    "OASIS_OS v2.2 [solarized]",
+    "Loading Solarized interface...",
+    "Ready.",
+]
+prompt_format = "$ "
+title = "OASIS Solarized"
+home_label = "Home"
+welcome_message = "Welcome to OASIS Solarized. Type 'help' for commands."
+error_prefix = "error: "
+shutdown_message = "Goodbye."

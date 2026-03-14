@@ -211,7 +211,7 @@ impl Plugin for NotepadPlugin {
                 b: 50,
                 a: 255,
             }),
-        );
+        )?;
         Ok(())
     }
 

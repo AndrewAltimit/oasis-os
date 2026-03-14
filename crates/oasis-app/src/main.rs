@@ -198,6 +198,7 @@ fn main() -> Result<()> {
             taskbar: oasis_core::taskbar::Taskbar::new(),
             start_menu,
             mouse_cursor,
+            desktops: oasis_core::wm::DesktopManager::new(4),
         },
         terminal: TerminalLayer {
             cmd_reg,
@@ -484,15 +485,11 @@ fn main() -> Result<()> {
         if let Some(ref mut bridge) = shader_bridge
             && let Some(info) = get_shader_layer(&state.active_theme)
         {
-            let params = oasis_shader::ShaderParams {
-                colors: info.params.colors,
-                floats: info.params.floats,
-            };
             bridge.render_and_blit(
                 &mut backend,
                 &info.name,
                 state.frame_counter as f32 / 60.0,
-                &params,
+                &info.params,
             );
         }
 

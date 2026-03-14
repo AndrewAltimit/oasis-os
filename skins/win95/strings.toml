@@ -1,0 +1,11 @@
+boot_text = [
+    "OASIS_OS v2.2 [win95]",
+    "Loading Windows 95 interface...",
+    "Ready.",
+]
+prompt_format = "C:\\> "
+title = "OASIS Win95"
+home_label = "Start"
+welcome_message = "Welcome to OASIS Win95. Type 'help' for commands."
+error_prefix = "Error: "
+shutdown_message = "It is now safe to turn off your computer."

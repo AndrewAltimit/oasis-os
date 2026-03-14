@@ -5,6 +5,7 @@ use std::collections::HashMap;
 use wasm_bindgen::prelude::*;
 use web_sys::{CanvasRenderingContext2d, HtmlCanvasElement, ImageData};
 
+use oasis_types::backend::stacks::{ClipPush, ClipStack, TranslateStack};
 use oasis_types::backend::{
     Color, GradientStyle, SdiBackend, SdiCore, TextMetrics, TextureId, texture_not_found,
     validate_rgba_data,
@@ -111,9 +112,11 @@ pub struct WasmBackend {
     height: u32,
     textures: HashMap<u64, TextureData>,
     next_texture_id: u64,
-    clip_stack: Vec<ClipRect>,
-    translate_stack: Vec<(i32, i32)>,
-    cumulative_translate: (i32, i32),
+    clip_stack: ClipStack,
+    /// Depth counter for `set_clip_rect`/`reset_clip_rect` (SdiCore), which use
+    /// canvas `save()`/`restore()` independently of the `ClipStack`.
+    core_clip_depth: u32,
+    translate_stack: TranslateStack,
     color_cache: HashMap<u32, String>,
     glyph_cache: HashMap<GlyphCacheKey, HtmlCanvasElement>,
     /// Access timestamps for LRU eviction of glyph cache entries.
@@ -145,9 +148,9 @@ impl WasmBackend {
             height,
             textures: HashMap::new(),
             next_texture_id: 1,
-            clip_stack: Vec::new(),
-            translate_stack: Vec::new(),
-            cumulative_translate: (0, 0),
+            clip_stack: ClipStack::new(width, height),
+            core_clip_depth: 0,
+            translate_stack: TranslateStack::new(),
             color_cache: HashMap::new(),
             glyph_cache: HashMap::new(),
             glyph_access: HashMap::new(),
@@ -167,8 +170,7 @@ impl WasmBackend {
     }
 
     fn translate(&self, x: i32, y: i32) -> (f64, f64) {
-        let (tx, ty) = self.cumulative_translate;
-        ((x + tx) as f64, (y + ty) as f64)
+        self.translate_stack.translate_f64(x, y)
     }
 
     /// Create an offscreen `<canvas>` for texture operations.
@@ -401,17 +403,14 @@ impl SdiCore for WasmBackend {
         self.ctx.begin_path();
         self.ctx.rect(tx, ty, w as f64, h as f64);
         self.ctx.clip();
-        self.clip_stack.push(ClipRect {
-            x: tx as i32,
-            y: ty as i32,
-            w,
-            h,
-        });
+        self.core_clip_depth += 1;
         Ok(())
     }
 
     fn reset_clip_rect(&mut self) -> Result<()> {
-        self.clip_stack.pop();
+        if self.core_clip_depth > 0 {
+            self.core_clip_depth -= 1;
+        }
         self.ctx.restore();
         Ok(())
     }
@@ -1130,44 +1129,31 @@ impl SdiBackend for WasmBackend {
 
     fn push_clip_rect(&mut self, x: i32, y: i32, w: u32, h: u32) -> Result<()> {
         let (tx, ty) = self.translate(x, y);
-
-        // Intersect with current clip if any.
-        let clipped = if let Some(cur) = self.clip_stack.last() {
-            let cur_tx = cur.x as f64;
-            let cur_ty = cur.y as f64;
-            let cur_r = cur_tx + cur.w as f64;
-            let cur_b = cur_ty + cur.h as f64;
-            let new_r = tx + w as f64;
-            let new_b = ty + h as f64;
-            let ix = tx.max(cur_tx);
-            let iy = ty.max(cur_ty);
-            let iw = (new_r.min(cur_r) - ix).max(0.0);
-            let ih = (new_b.min(cur_b) - iy).max(0.0);
-            ClipRect {
-                x: ix as i32,
-                y: iy as i32,
-                w: iw as u32,
-                h: ih as u32,
-            }
-        } else {
-            ClipRect {
-                x: tx as i32,
-                y: ty as i32,
-                w,
-                h,
-            }
+        let new_clip = ClipRect {
+            x: tx as i32,
+            y: ty as i32,
+            w,
+            h,
+        };
+        let effective = match self.clip_stack.push(new_clip) {
+            ClipPush::Clip(c) => c,
+            ClipPush::Empty => ClipRect {
+                x: 0,
+                y: 0,
+                w: 0,
+                h: 0,
+            },
         };
 
         self.ctx.save();
         self.ctx.begin_path();
         self.ctx.rect(
-            clipped.x as f64,
-            clipped.y as f64,
-            clipped.w as f64,
-            clipped.h as f64,
+            effective.x as f64,
+            effective.y as f64,
+            effective.w as f64,
+            effective.h as f64,
         );
         self.ctx.clip();
-        self.clip_stack.push(clipped);
         Ok(())
     }
 
@@ -1178,25 +1164,21 @@ impl SdiBackend for WasmBackend {
     }
 
     fn current_clip_rect(&self) -> Option<(i32, i32, u32, u32)> {
-        self.clip_stack.last().map(|c| (c.x, c.y, c.w, c.h))
+        self.clip_stack.current_tuple()
     }
 
     fn push_translate(&mut self, dx: i32, dy: i32) -> Result<()> {
-        self.translate_stack.push(self.cumulative_translate);
-        self.cumulative_translate.0 += dx;
-        self.cumulative_translate.1 += dy;
+        self.translate_stack.push(dx, dy);
         Ok(())
     }
 
     fn pop_translate(&mut self) -> Result<()> {
-        if let Some(prev) = self.translate_stack.pop() {
-            self.cumulative_translate = prev;
-        }
+        self.translate_stack.pop();
         Ok(())
     }
 
     fn current_translate(&self) -> (i32, i32) {
-        self.cumulative_translate
+        self.translate_stack.current()
     }
 
     fn push_region(&mut self, x: i32, y: i32, w: u32, h: u32) -> Result<()> {

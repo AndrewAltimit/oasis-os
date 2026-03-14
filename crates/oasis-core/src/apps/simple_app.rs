@@ -14,7 +14,7 @@ use crate::vfs::Vfs;
 use super::AppAction;
 use super::ContentState;
 use super::app_trait::App;
-use super::file_manager::{
+use oasis_app_core::render::{
     draw_content_windowed, hide_app_sdi, render_app_chrome, render_content_sdi,
 };
 

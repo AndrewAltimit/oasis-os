@@ -24,6 +24,7 @@ use oasis_core::terminal::CommandRegistry;
 use oasis_core::toast::ToastManager;
 use oasis_core::transfer::FtpServer;
 use oasis_core::transition;
+use oasis_core::wm::DesktopManager;
 use oasis_core::wm::manager::WindowManager;
 
 /// Result of a background catalog fetch (catalog + first connected track).
@@ -56,6 +57,8 @@ pub struct UiLayer {
     pub taskbar: oasis_core::taskbar::Taskbar,
     pub start_menu: StartMenuState,
     pub mouse_cursor: CursorState,
+    /// Virtual desktop manager for desktop switching.
+    pub desktops: DesktopManager,
 }
 
 /// Terminal/shell state: command registry, CWD, I/O buffers.
@@ -243,6 +246,7 @@ mod tests {
             taskbar: oasis_core::taskbar::Taskbar::new(),
             start_menu: StartMenuState::new(StartMenuState::default_items(&at)),
             mouse_cursor: CursorState::default(),
+            desktops: DesktopManager::new(4),
         };
 
         let _terminal = TerminalLayer {

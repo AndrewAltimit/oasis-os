@@ -1,0 +1,12 @@
+boot_text = [
+    "ALTIMIT OS v1.0",
+    "Connecting to THE WORLD...",
+    "Network initialized.",
+    "Ready.",
+]
+prompt_format = ">> "
+title = "ALTIMIT"
+home_label = "THE WORLD"
+welcome_message = "Welcome to ALTIMIT. Type 'help' for commands."
+error_prefix = "ERROR: "
+shutdown_message = "Logging out..."

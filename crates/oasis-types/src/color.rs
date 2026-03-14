@@ -7,13 +7,7 @@ use crate::backend::Color;
 /// `t` is clamped to `[0.0, 1.0]`. Returns `a` when `t == 0.0` and `b` when
 /// `t == 1.0`.
 pub fn lerp_color(a: Color, b: Color, t: f32) -> Color {
-    let t = t.clamp(0.0, 1.0);
-    Color::rgba(
-        (a.r as f32 + (b.r as f32 - a.r as f32) * t) as u8,
-        (a.g as f32 + (b.g as f32 - a.g as f32) * t) as u8,
-        (a.b as f32 + (b.b as f32 - a.b as f32) * t) as u8,
-        (a.a as f32 + (b.a as f32 - a.a as f32) * t) as u8,
-    )
+    a.lerp(b, t)
 }
 
 /// Linearly interpolate between two colors using integer ratio `num / den`.
@@ -36,18 +30,12 @@ pub fn lerp_color_ratio(a: Color, b: Color, num: u32, den: u32) -> Color {
 
 /// Darken a color by a factor (0.0 = black, 1.0 = unchanged).
 pub fn darken(color: Color, factor: f32) -> Color {
-    let f = factor.clamp(0.0, 1.0);
-    Color::rgba(
-        (color.r as f32 * f) as u8,
-        (color.g as f32 * f) as u8,
-        (color.b as f32 * f) as u8,
-        color.a,
-    )
+    color.darken(factor)
 }
 
 /// Lighten a color by blending toward white (0.0 = unchanged, 1.0 = white).
 pub fn lighten(color: Color, factor: f32) -> Color {
-    lerp_color(color, Color::WHITE, factor)
+    color.lighten(factor)
 }
 
 /// Set the alpha channel of a color.

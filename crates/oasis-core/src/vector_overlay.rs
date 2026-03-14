@@ -10,7 +10,8 @@
 use oasis_types::backend::SdiBackend;
 use oasis_types::error::Result;
 use oasis_vector::AnimClock;
-use oasis_vector::background::{BackgroundScene, LayerKind, ShaderParams};
+use oasis_vector::ShaderParams;
+use oasis_vector::background::{BackgroundScene, LayerKind};
 use oasis_vector::render::render_scene;
 use oasis_vector::scene::VectorScene;
 

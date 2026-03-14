@@ -21,6 +21,7 @@ pub use oasis_types::input;
 pub use oasis_types::tls;
 
 pub use oasis_types::color;
+pub use oasis_types::geometry;
 #[doc(hidden)]
 pub use oasis_types::pbp;
 pub use oasis_types::shadow;
@@ -52,6 +53,7 @@ pub mod apps;
 pub mod bottombar;
 pub mod cursor;
 pub mod dashboard;
+pub mod notifications;
 pub mod osk;
 pub mod plugin;
 pub mod script;
@@ -80,8 +82,8 @@ pub mod wallpaper;
 pub mod prelude {
     // Backend traits
     pub use oasis_types::backend::{
-        AudioBackend, AudioTrackId, Color, InputBackend, NetworkBackend, SdiBackend, SdiCore,
-        TextureId,
+        AudioBackend, AudioTrackId, ClipboardBackend, Color, InMemoryClipboard, InputBackend,
+        NetworkBackend, SdiBackend, SdiCore, TextureId,
     };
 
     // Error handling

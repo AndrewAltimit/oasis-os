@@ -1,0 +1,11 @@
+boot_text = [
+    "OASIS_OS v2.2 [highcontrast]",
+    "Loading high contrast interface...",
+    "Ready.",
+]
+prompt_format = "> "
+title = "OASIS High Contrast"
+home_label = "Home"
+welcome_message = "Welcome to OASIS High Contrast. Type 'help' for commands."
+error_prefix = "ERROR: "
+shutdown_message = "Goodbye."

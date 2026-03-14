@@ -43,9 +43,9 @@ impl AppRunner {
 
         // Create a delegate for the app's trait implementation.
         let delegate: Box<dyn super::app_trait::App> = match title.as_str() {
-            "File Manager" => Box::new(super::file_manager::FileManagerApp::new(&path, vfs)),
-            "Settings" => Box::new(super::simple_app::SimpleApp::settings(
-                &path, "Classic", 480, 272,
+            "File Manager" => Box::new(oasis_app_file_manager::FileManagerApp::new(&path, vfs)),
+            "Settings" => Box::new(oasis_app_settings::SettingsApp::new(
+                &path, "classic", 480, 272, "SDL3",
             )),
             "Network" => Box::new(super::simple_app::SimpleApp::network(
                 &path, false, 9000, false,
@@ -443,8 +443,8 @@ mod tests {
     fn scroll_down_when_content_exceeds_view() {
         use crate::apps::simple_app::SimpleApp;
         let vfs = setup_vfs();
-        let mut runner = AppRunner::launch(&make_app("Settings"), &vfs);
-        // Settings uses delegate -- add extra lines via the delegate's content.
+        let mut runner = AppRunner::launch(&make_app("Network"), &vfs);
+        // Network uses SimpleApp delegate -- add extra lines via the delegate's content.
         let app = runner.delegate_as_mut::<SimpleApp>().unwrap();
         for i in 0..20 {
             app.content.lines.push(format!("Extra line {i}"));

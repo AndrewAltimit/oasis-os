@@ -9,11 +9,13 @@
 //! and batch methods that backends can progressively override.
 
 mod audio;
+mod clipboard;
 mod extensions;
 mod input;
 mod network;
 mod sdi_backend;
 mod sdi_core;
+pub mod stacks;
 mod types;
 
 /// Default viewport width (PSP native resolution).
@@ -49,6 +51,12 @@ pub use network::{NetworkBackend, NetworkStream};
 
 // -- audio --
 pub use audio::{AudioBackend, AudioTrackId};
+
+// -- clipboard --
+pub use clipboard::{ClipboardBackend, InMemoryClipboard};
+
+// -- shared stacks --
+pub use stacks::{ClipPush, ClipStack, TranslateStack};
 
 #[cfg(test)]
 mod tests {

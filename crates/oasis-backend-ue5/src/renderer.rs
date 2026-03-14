@@ -14,6 +14,7 @@ use oasis_core::backend::{
 };
 use oasis_core::error::Result;
 use oasis_types::backend::SdiCore;
+use oasis_types::backend::stacks::{ClipPush, ClipStack, TranslateStack};
 use oasis_types::color::lerp_color_ratio;
 use oasis_types::geometry::ClipRect;
 use oasis_types::rasterize::{self, PixelSink};
@@ -38,15 +39,12 @@ pub struct Ue5Backend {
     buffer: Vec<u8>,
     dirty: bool,
     textures: Vec<Option<Texture>>,
+    /// Effective clip rectangle checked by pixel drawing code.
+    /// Updated by both `set_clip_rect` (SdiCore) and `push/pop_clip_rect`
+    /// (SdiBackend).
     clip: Option<ClipRect>,
-    clip_stack: Vec<ClipRect>,
-    translate_stack: Vec<(i32, i32)>,
-    cumulative_translate: (i32, i32),
-}
-
-/// Compute the intersection of two clip rectangles (convenience wrapper).
-fn intersect_clip(a: &ClipRect, b: &ClipRect) -> Option<ClipRect> {
-    a.intersect(b)
+    clip_stack: ClipStack,
+    translate_stack: TranslateStack,
 }
 
 impl Ue5Backend {
@@ -60,9 +58,8 @@ impl Ue5Backend {
             dirty: true,
             textures: Vec::new(),
             clip: None,
-            clip_stack: Vec::new(),
-            translate_stack: Vec::new(),
-            cumulative_translate: (0, 0),
+            clip_stack: ClipStack::new(width, height),
+            translate_stack: TranslateStack::new(),
         }
     }
 
@@ -108,10 +105,7 @@ impl Ue5Backend {
 
     /// Apply cumulative translation to coordinates.
     fn translate(&self, x: i32, y: i32) -> (i32, i32) {
-        (
-            x + self.cumulative_translate.0,
-            y + self.cumulative_translate.1,
-        )
+        self.translate_stack.translate(x, y)
     }
 
     /// Set a single pixel. Performs bounds and clip checking.
@@ -388,9 +382,9 @@ impl SdiCore for Ue5Backend {
     fn shutdown(&mut self) -> Result<()> {
         self.buffer.clear();
         self.textures.clear();
+        self.clip = None;
         self.clip_stack.clear();
         self.translate_stack.clear();
-        self.cumulative_translate = (0, 0);
         log::info!("UE5 backend shut down");
         Ok(())
     }
@@ -867,41 +861,22 @@ impl SdiBackend for Ue5Backend {
     fn push_clip_rect(&mut self, x: i32, y: i32, w: u32, h: u32) -> Result<()> {
         let (tx, ty) = self.translate(x, y);
         let new_clip = ClipRect { x: tx, y: ty, w, h };
-        if let Some(current) = self.clip {
-            self.clip_stack.push(current);
-            self.clip = intersect_clip(&current, &new_clip).or(Some(ClipRect {
-                x: 0,
-                y: 0,
-                w: 0,
-                h: 0,
-            }));
-        } else {
-            self.clip_stack.push(ClipRect {
-                x: 0,
-                y: 0,
-                w: self.width,
-                h: self.height,
-            });
-            self.clip = Some(new_clip);
+        match self.clip_stack.push(new_clip) {
+            ClipPush::Clip(c) => self.clip = Some(c),
+            ClipPush::Empty => {
+                self.clip = Some(ClipRect {
+                    x: 0,
+                    y: 0,
+                    w: 0,
+                    h: 0,
+                });
+            },
         }
         Ok(())
     }
 
     fn pop_clip_rect(&mut self) -> Result<()> {
-        if let Some(previous) = self.clip_stack.pop() {
-            if previous.x == 0
-                && previous.y == 0
-                && previous.w == self.width
-                && previous.h == self.height
-            {
-                // Was the sentinel for "no clip active".
-                self.clip = None;
-            } else {
-                self.clip = Some(previous);
-            }
-        } else {
-            self.clip = None;
-        }
+        self.clip = self.clip_stack.pop();
         Ok(())
     }
 
@@ -910,21 +885,17 @@ impl SdiBackend for Ue5Backend {
     }
 
     fn push_translate(&mut self, dx: i32, dy: i32) -> Result<()> {
-        self.translate_stack.push(self.cumulative_translate);
-        self.cumulative_translate.0 += dx;
-        self.cumulative_translate.1 += dy;
+        self.translate_stack.push(dx, dy);
         Ok(())
     }
 
     fn pop_translate(&mut self) -> Result<()> {
-        if let Some(prev) = self.translate_stack.pop() {
-            self.cumulative_translate = prev;
-        }
+        self.translate_stack.pop();
         Ok(())
     }
 
     fn current_translate(&self) -> (i32, i32) {
-        self.cumulative_translate
+        self.translate_stack.current()
     }
 }
 

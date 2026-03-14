@@ -11,6 +11,7 @@ mod builtins;
 mod commands;
 pub mod completion;
 pub mod control_flow;
+pub mod core_commands;
 pub mod dev_commands;
 pub mod doc_commands;
 mod executor;
@@ -23,8 +24,10 @@ pub mod jobs;
 pub mod line_edit;
 pub mod network_commands;
 pub(crate) mod pipeline;
+pub mod platform_commands;
 pub mod radio_commands;
 mod registry;
+pub mod remote_commands;
 mod script;
 pub mod security_commands;
 pub mod skin_commands;
@@ -40,6 +43,8 @@ mod test_helpers;
 pub use audio_commands::register_audio_commands;
 /// Register all built-in commands (fs, system, network, audio, skin) into a registry.
 pub use commands::register_builtins;
+/// Register core filesystem and shell commands (ls, cd, pwd, cat, echo, etc.).
+pub use core_commands::register_core_commands;
 /// Register developer tool commands (base64, json, uuid, seq, expr, test, xargs).
 pub use dev_commands::register_dev_commands;
 /// Populate default man pages in the VFS.
@@ -66,8 +71,12 @@ pub use interpreter::CommandSignal;
 pub use interpreter::Environment;
 /// Register network commands (wifi, ping, http) into a registry.
 pub use network_commands::register_network_commands;
+/// Register platform service commands (power, clock, memory, usb) into a registry.
+pub use platform_commands::register_platform_commands;
 /// Register internet radio commands (radio) into a registry.
 pub use radio_commands::register_radio_commands;
+/// Register remote terminal commands (listen, remote, hosts) into a registry.
+pub use remote_commands::register_remote_commands;
 /// Register security commands (chmod, chown, passwd, audit).
 pub use security_commands::register_security_commands;
 /// Register skin management commands (skin list/switch) into a registry.

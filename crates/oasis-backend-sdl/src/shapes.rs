@@ -7,7 +7,7 @@
 use oasis_core::backend::{Color, SdiCore};
 use oasis_core::error::Result;
 
-use super::{ClipRect, SdlBackend, fpoint, frect};
+use super::{SdlBackend, fpoint, frect};
 
 // -------------------------------------------------------------------
 // Inherent shape methods on SdlBackend
@@ -597,11 +597,6 @@ impl SdlBackend {
 // -------------------------------------------------------------------
 // Free helper functions
 // -------------------------------------------------------------------
-
-/// Compute the intersection of two clip rectangles (delegates to shared impl).
-pub(crate) fn intersect_clip(a: &ClipRect, b: &ClipRect) -> Option<ClipRect> {
-    a.intersect(b)
-}
 
 /// Compute the x coordinate along an edge at a given y.
 pub(crate) fn edge_x(x0: i32, y0: i32, x1: i32, y1: i32, y: i32) -> i32 {

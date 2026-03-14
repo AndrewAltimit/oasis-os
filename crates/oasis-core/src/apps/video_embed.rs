@@ -244,7 +244,7 @@ impl App for VideoEmbedApp {
         backend: &mut dyn SdiBackend,
         at: &ActiveTheme,
     ) -> oasis_types::error::Result<()> {
-        super::file_manager::draw_content_windowed(&self.content, cx, cy, cw, ch, backend, at)
+        oasis_app_core::render::draw_content_windowed(&self.content, cx, cy, cw, ch, backend, at)
     }
 
     fn hide_sdi(&self, _sdi: &mut SdiRegistry) {}
