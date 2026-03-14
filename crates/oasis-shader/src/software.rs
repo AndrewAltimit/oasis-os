@@ -486,9 +486,10 @@ impl SoftwareShaderRenderer {
                     let f_x = st_x - cell_x - 0.5;
                     let f_y = st_y - cell_y - 0.5;
 
-                    let h_val = hash2(cell_x + layer as f32 * 100.0, cell_y);
+                    let layer_off = layer as f32 * 100.0;
+                    let h_val = hash2(cell_x + layer_off, cell_y + layer_off);
                     let ox_off = h_val - 0.5;
-                    let oy_off = hash2(cell_x + 0.5, cell_y) - 0.5;
+                    let oy_off = hash2(cell_x + 0.5, cell_y + 0.5) - 0.5;
                     let dx = f_x - ox_off * 0.6;
                     let dy = f_y - oy_off * 0.6;
                     let d = (dx * dx + dy * dy).sqrt();
