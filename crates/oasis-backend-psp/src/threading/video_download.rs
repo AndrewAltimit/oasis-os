@@ -65,8 +65,8 @@ fn find_moov_end(header_bytes: &[u8]) -> Option<u64> {
 
 /// Persistent sceHttp template ID.  Initialized once, never torn down.
 /// Mirrors how `psp::http::HttpClient` works (one template, many requests).
-/// SAFETY: Only accessed from the I/O thread (single producer).
-static mut DL_TEMPLATE_ID: i32 = -1;
+static DL_TEMPLATE_ID: core::sync::atomic::AtomicI32 =
+    core::sync::atomic::AtomicI32::new(-1);
 
 /// Ensure sceHttp is initialized and return the persistent template ID.
 ///
@@ -75,14 +75,14 @@ static mut DL_TEMPLATE_ID: i32 = -1;
 ///
 /// # Safety
 ///
-/// Must only be called from the I/O thread. Accesses mutable statics
-/// (`DL_TEMPLATE_ID`) and PSP HTTP syscalls.
+/// Must only be called from the I/O thread. Calls PSP HTTP syscalls.
 unsafe fn ensure_dl_template() -> Result<i32, String> {
+    use core::sync::atomic::Ordering;
     use psp::sys;
 
-    // SAFETY: Only accessed from the I/O thread (single producer).
-    if unsafe { DL_TEMPLATE_ID } >= 0 {
-        return Ok(unsafe { DL_TEMPLATE_ID });
+    let cached = DL_TEMPLATE_ID.load(Ordering::Relaxed);
+    if cached >= 0 {
+        return Ok(cached);
     }
 
     // SAFETY: PSP HTTP subsystem init with 128KB pool.
@@ -115,8 +115,7 @@ unsafe fn ensure_dl_template() -> Result<i32, String> {
     io_log(&format!(
         "[IO-DL] template created: {tid} (keep-alive off, redirect off)"
     ));
-    // SAFETY: Only accessed from the I/O thread (single producer).
-    unsafe { DL_TEMPLATE_ID = tid; }
+    DL_TEMPLATE_ID.store(tid, Ordering::Relaxed);
     Ok(tid)
 }
 
@@ -534,7 +533,13 @@ impl HttpDataSource {
                     )
                 }
             },
-            HttpDataSource::Tls(reader) => reader.read_data(buf).unwrap_or(0),
+            HttpDataSource::Tls(reader) => match reader.read_data(buf) {
+                Ok(n) => n,
+                Err(e) => {
+                    io_log(&format!("[IO-DL] TLS read error: {e}"));
+                    0
+                },
+            },
         }
     }
 

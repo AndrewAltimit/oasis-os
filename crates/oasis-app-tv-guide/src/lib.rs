@@ -17,7 +17,7 @@ pub mod schedule;
 pub mod test_data;
 
 pub use app::TvGuideApp;
-pub use catalog::{ChannelCatalog, VideoEpisode, select_smallest_for};
+pub use catalog::{ChannelCatalog, VideoEpisode, VideoFormat, select_smallest_for};
 pub use channel::{Channel, ChannelConfig, ChannelSource};
 pub use guide::TvGuideState;
 pub use schedule::{CachedSchedule, ScheduleSlot, schedule_at, schedule_range};

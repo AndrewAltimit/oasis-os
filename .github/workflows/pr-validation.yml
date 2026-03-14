@@ -220,7 +220,7 @@ jobs:
       - name: Run OASIS_OS EBOOT in PPSSPPHeadless
         run: |
           docker compose --profile psp run --rm -e PPSSPP_HEADLESS=1 ppsspp \
-            /roms/release/EBOOT.PBP --timeout=5 2>/dev/null || true
+            /roms/release/EBOOT.PBP --timeout=30 2>/dev/null || true
 
           if [ -f psp_output_file.log ]; then
             cat psp_output_file.log

@@ -345,7 +345,7 @@ fn parse_files_lightweight(
             width,
             height,
             size_bytes,
-            format: format_str.to_string(),
+            format: format_str.into(),
             original: if original.is_empty() {
                 None
             } else {

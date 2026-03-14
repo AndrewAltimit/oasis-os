@@ -730,6 +730,8 @@ fn play_mp4(path: &str, seek_secs: u64) -> bool {
 
     // Track playback start time for frame pacing.
     // Use u64 (sceKernelGetSystemTimeWide) to avoid overflow at ~71 minutes.
+    // SAFETY: sceKernelGetSystemTimeWide is a read-only kernel syscall that
+    // returns the 64-bit system timer in microseconds. No preconditions.
     let start_us = unsafe { psp::sys::sceKernelGetSystemTimeWide() } as u64;
 
     loop {
@@ -789,6 +791,7 @@ fn play_mp4(path: &str, seek_secs: u64) -> bool {
                             // This prevents dumping frames faster than
                             // the display can consume them.
                             let pts_us = (sample.timestamp_secs * 1_000_000.0) as u64;
+                            // SAFETY: Read-only kernel syscall returning 64-bit system timer.
                             let now_us = unsafe { psp::sys::sceKernelGetSystemTimeWide() } as u64;
                             let elapsed = now_us.wrapping_sub(start_us);
                             if pts_us > elapsed {
@@ -864,6 +867,7 @@ fn play_stream() -> bool {
     let mut h264: Option<PspVideoDecoder> = None;
 
     // Use u64 (sceKernelGetSystemTimeWide) to avoid overflow at ~71 minutes.
+    // SAFETY: Read-only kernel syscall returning 64-bit system timer.
     let start_us = unsafe { psp::sys::sceKernelGetSystemTimeWide() } as u64;
     let mut decode_count = 0u32;
 
@@ -900,6 +904,7 @@ fn play_stream() -> bool {
 
                         // Frame pacing via PTS.
                         let pts_us = (frame.timestamp_secs * 1_000_000.0) as u64;
+                        // SAFETY: Read-only kernel syscall returning 64-bit system timer.
                         let now_us = unsafe { psp::sys::sceKernelGetSystemTimeWide() } as u64;
                         let elapsed = now_us.wrapping_sub(start_us);
                         if pts_us > elapsed {

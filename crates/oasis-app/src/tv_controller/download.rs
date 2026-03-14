@@ -28,7 +28,7 @@ const MAX_HEADER_SIZE: usize = 64 * 1024; // 64 KB
 
 /// Check if an I/O error is a WouldBlock (non-blocking socket not ready).
 #[cfg(feature = "_video")]
-fn is_would_block(e: &(impl std::error::Error + 'static)) -> bool {
+pub(crate) fn is_would_block(e: &(impl std::error::Error + 'static)) -> bool {
     // Try to extract io::ErrorKind directly; fall back to string matching
     // for wrapped error types (e.g. OasisError::Io).
     if let Some(io_err) = <dyn std::error::Error>::downcast_ref::<std::io::Error>(e) {

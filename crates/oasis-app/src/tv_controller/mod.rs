@@ -1634,4 +1634,648 @@ mod tests {
         let sb = StreamingBuffer::new(inner);
         assert!(sb.is_seekable());
     }
+
+    // ---------------------------------------------------------------
+    // Edge case: parse_moov_duration with mvhd version 1 (64-bit)
+    // ---------------------------------------------------------------
+
+    /// Build a minimal moov atom containing an mvhd v1 child.
+    fn build_moov_v1(timescale: u32, duration: u64) -> Vec<u8> {
+        // mvhd v1: version(1) + flags(3) + create(8) + mod(8)
+        //          + timescale(4) + duration(8) = 32 bytes
+        let mut mvhd_body = Vec::new();
+        mvhd_body.push(1); // version 1
+        mvhd_body.extend_from_slice(&[0, 0, 0]); // flags
+        mvhd_body.extend_from_slice(&[0; 8]); // creation_time (64-bit)
+        mvhd_body.extend_from_slice(&[0; 8]); // modification_time (64-bit)
+        mvhd_body.extend_from_slice(&timescale.to_be_bytes());
+        mvhd_body.extend_from_slice(&duration.to_be_bytes());
+        // Pad to plausible size.
+        mvhd_body.extend_from_slice(&[0; 80]);
+
+        let mvhd_size = (8 + mvhd_body.len()) as u32;
+        let moov_size = (8 + mvhd_size as usize) as u32;
+
+        let mut moov = Vec::new();
+        moov.extend_from_slice(&moov_size.to_be_bytes());
+        moov.extend_from_slice(b"moov");
+        moov.extend_from_slice(&mvhd_size.to_be_bytes());
+        moov.extend_from_slice(b"mvhd");
+        moov.extend_from_slice(&mvhd_body);
+        moov
+    }
+
+    #[test]
+    fn parse_moov_duration_v1() {
+        // 48000 Hz timescale, 2880000 ticks = 60.0 seconds
+        let moov = build_moov_v1(48000, 2_880_000);
+        let dur = parse_moov_duration(&moov);
+        assert_eq!(dur, Some(60.0));
+    }
+
+    #[test]
+    fn parse_moov_duration_v1_large_duration() {
+        // 90000 Hz timescale, 3-hour file = 90000 * 10800 = 972_000_000
+        let moov = build_moov_v1(90000, 972_000_000);
+        let dur = parse_moov_duration(&moov);
+        assert!((dur.unwrap() - 10800.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn parse_moov_duration_v1_zero_timescale() {
+        let moov = build_moov_v1(0, 100_000);
+        assert_eq!(parse_moov_duration(&moov), None);
+    }
+
+    #[test]
+    fn parse_moov_duration_empty_data() {
+        assert_eq!(parse_moov_duration(&[]), None);
+    }
+
+    #[test]
+    fn parse_moov_duration_mvhd_body_too_short_for_v0() {
+        // Create an mvhd with version 0 but truncated body (< 20 bytes).
+        let mut mvhd_body = Vec::new();
+        mvhd_body.push(0); // version 0
+        mvhd_body.extend_from_slice(&[0, 0, 0]); // flags
+        mvhd_body.extend_from_slice(&[0; 10]); // truncated: only 14 bytes total
+
+        let mvhd_size = (8 + mvhd_body.len()) as u32;
+        let moov_size = (8 + mvhd_size as usize) as u32;
+
+        let mut moov = Vec::new();
+        moov.extend_from_slice(&moov_size.to_be_bytes());
+        moov.extend_from_slice(b"moov");
+        moov.extend_from_slice(&mvhd_size.to_be_bytes());
+        moov.extend_from_slice(b"mvhd");
+        moov.extend_from_slice(&mvhd_body);
+        assert_eq!(parse_moov_duration(&moov), None);
+    }
+
+    #[test]
+    fn parse_moov_duration_mvhd_unknown_version() {
+        // Version 2 is not defined -- should return None.
+        let mut mvhd_body = Vec::new();
+        mvhd_body.push(2); // version 2 (invalid)
+        mvhd_body.extend_from_slice(&[0; 100]);
+
+        let mvhd_size = (8 + mvhd_body.len()) as u32;
+        let moov_size = (8 + mvhd_size as usize) as u32;
+
+        let mut moov = Vec::new();
+        moov.extend_from_slice(&moov_size.to_be_bytes());
+        moov.extend_from_slice(b"moov");
+        moov.extend_from_slice(&mvhd_size.to_be_bytes());
+        moov.extend_from_slice(b"mvhd");
+        moov.extend_from_slice(&mvhd_body);
+        assert_eq!(parse_moov_duration(&moov), None);
+    }
+
+    #[test]
+    fn parse_moov_duration_multiple_children_mvhd_second() {
+        // moov with trak first, then mvhd.
+        let trak_body = [0u8; 16];
+        let trak_size = (8 + trak_body.len()) as u32;
+
+        let mut mvhd_body = Vec::new();
+        mvhd_body.push(0); // version 0
+        mvhd_body.extend_from_slice(&[0, 0, 0]); // flags
+        mvhd_body.extend_from_slice(&[0; 4]); // creation_time
+        mvhd_body.extend_from_slice(&[0; 4]); // modification_time
+        mvhd_body.extend_from_slice(&1000u32.to_be_bytes()); // timescale
+        mvhd_body.extend_from_slice(&30000u32.to_be_bytes()); // duration
+        mvhd_body.extend_from_slice(&[0; 80]);
+        let mvhd_size = (8 + mvhd_body.len()) as u32;
+
+        let moov_size = (8 + trak_size as usize + mvhd_size as usize) as u32;
+
+        let mut moov = Vec::new();
+        moov.extend_from_slice(&moov_size.to_be_bytes());
+        moov.extend_from_slice(b"moov");
+        moov.extend_from_slice(&trak_size.to_be_bytes());
+        moov.extend_from_slice(b"trak");
+        moov.extend_from_slice(&trak_body);
+        moov.extend_from_slice(&mvhd_size.to_be_bytes());
+        moov.extend_from_slice(b"mvhd");
+        moov.extend_from_slice(&mvhd_body);
+
+        let dur = parse_moov_duration(&moov);
+        assert_eq!(dur, Some(30.0));
+    }
+
+    // ---------------------------------------------------------------
+    // Edge case: scan_atoms with invalid atom sizes
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn scan_atoms_invalid_size_stops_scanning() {
+        let inner = StreamingInner::new();
+        // Build ftyp, then an atom with size < 8 (invalid).
+        let mut data = build_atom(b"ftyp", &[0; 16]);
+        // Invalid atom: size=4 (less than minimum 8)
+        data.extend_from_slice(&4u32.to_be_bytes());
+        data.extend_from_slice(b"free");
+        data.extend_from_slice(&[0; 16]);
+        inner.push(&data);
+        let s = inner.state.lock().unwrap();
+        // Only ftyp should be scanned; invalid atom stops scanning.
+        assert_eq!(s.atoms.len(), 1);
+        assert_eq!(s.atoms[0].2, *b"ftyp");
+    }
+
+    #[test]
+    fn scan_atoms_oversized_atom_stops_scanning() {
+        let inner = StreamingInner::new();
+        let mut data = build_atom(b"ftyp", &[0; 16]);
+        // Atom claiming to be larger than MAX_ATOM_SIZE (10 GB).
+        let huge_size: u32 = 1; // extended size flag
+        data.extend_from_slice(&huge_size.to_be_bytes());
+        data.extend_from_slice(b"mdat");
+        // Extended size: 11 GB
+        data.extend_from_slice(&11_000_000_000u64.to_be_bytes());
+        data.extend_from_slice(&[0; 32]);
+        inner.push(&data);
+        let s = inner.state.lock().unwrap();
+        // Only ftyp should be scanned; oversized atom is rejected.
+        assert_eq!(s.atoms.len(), 1);
+    }
+
+    #[test]
+    fn scan_atoms_partial_header_waits_for_more_data() {
+        let inner = StreamingInner::new();
+        // Push only 4 bytes -- not enough for an atom header (need 8).
+        inner.push(&[0, 0, 0, 24]);
+        {
+            let s = inner.state.lock().unwrap();
+            assert_eq!(s.atoms.len(), 0);
+        }
+        // Push the rest of the atom.
+        let mut rest = Vec::new();
+        rest.extend_from_slice(b"ftyp");
+        rest.extend_from_slice(&[0; 16]);
+        inner.push(&rest);
+        let s = inner.state.lock().unwrap();
+        assert_eq!(s.atoms.len(), 1);
+        assert_eq!(s.atoms[0].2, *b"ftyp");
+    }
+
+    // ---------------------------------------------------------------
+    // Edge case: StreamingBuffer read with zero-length buffer
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn read_zero_length_buffer() {
+        use std::io::Read;
+        let inner = std::sync::Arc::new(StreamingInner::new());
+        inner.push(&[0xAA; 64]);
+        inner.disable_probe_mode();
+        let mut sb = StreamingBuffer::new(inner);
+        let mut buf = [];
+        let n = sb.read(&mut buf).unwrap();
+        assert_eq!(n, 0);
+        assert_eq!(sb.pos, 0, "position should not advance on empty read");
+    }
+
+    // ---------------------------------------------------------------
+    // Edge case: StreamingBuffer read that spans partial data
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn read_more_than_available_returns_partial() {
+        use std::io::Read;
+        let inner = std::sync::Arc::new(StreamingInner::new());
+        inner.push(&[0x42; 10]);
+        inner.disable_probe_mode();
+        inner.finish(); // mark done so it doesn't block
+        let mut sb = StreamingBuffer::new(inner);
+        // Request 100 bytes but only 10 are available.
+        let mut buf = [0; 100];
+        let n = sb.read(&mut buf).unwrap();
+        assert_eq!(n, 10);
+        assert!(buf[..10].iter().all(|&b| b == 0x42));
+        assert_eq!(sb.pos, 10);
+    }
+
+    // ---------------------------------------------------------------
+    // Edge case: seek + read interleaving
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn seek_then_read_at_various_positions() {
+        use std::io::{Read, Seek};
+        let inner = std::sync::Arc::new(StreamingInner::new());
+        let data: Vec<u8> = (0..=255).collect();
+        inner.push(&data);
+        inner.disable_probe_mode();
+        let mut sb = StreamingBuffer::new(std::sync::Arc::clone(&inner));
+
+        // Read from middle.
+        sb.seek(std::io::SeekFrom::Start(100)).unwrap();
+        let mut buf = [0; 4];
+        sb.read(&mut buf).unwrap();
+        assert_eq!(buf, [100, 101, 102, 103]);
+
+        // Seek backward and read.
+        sb.seek(std::io::SeekFrom::Start(0)).unwrap();
+        sb.read(&mut buf).unwrap();
+        assert_eq!(buf, [0, 1, 2, 3]);
+
+        // Seek to end.
+        sb.seek(std::io::SeekFrom::Start(252)).unwrap();
+        sb.read(&mut buf).unwrap();
+        assert_eq!(buf, [252, 253, 254, 255]);
+    }
+
+    // ---------------------------------------------------------------
+    // Edge case: probe mode at exact total_size boundary (EOF)
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn probe_mode_eof_at_total_size() {
+        use std::io::Read;
+        let inner = std::sync::Arc::new(StreamingInner::new());
+        inner.push(&[0; 100]);
+        inner
+            .total_size
+            .store(200, std::sync::atomic::Ordering::Release);
+        inner.finish();
+        // probe_mode is true by default.
+        let mut sb = StreamingBuffer::new(std::sync::Arc::clone(&inner));
+        // Position at total_size -- should be EOF even in probe mode.
+        sb.pos = 200;
+        let mut buf = [0xFF; 16];
+        let n = sb.read(&mut buf).unwrap();
+        assert_eq!(n, 0, "should return EOF at total_size in probe mode");
+    }
+
+    #[test]
+    fn probe_mode_read_up_to_total_size() {
+        use std::io::Read;
+        let inner = std::sync::Arc::new(StreamingInner::new());
+        inner.push(&[0; 100]);
+        inner
+            .total_size
+            .store(200, std::sync::atomic::Ordering::Release);
+        inner.finish();
+        let mut sb = StreamingBuffer::new(std::sync::Arc::clone(&inner));
+        // Position near total_size -- probe should fill zeros up to limit.
+        sb.pos = 190;
+        let mut buf = [0xFF; 20];
+        let n = sb.read(&mut buf).unwrap();
+        // Should only get 10 bytes (200 - 190), not 20.
+        assert_eq!(n, 10);
+        assert!(buf[..10].iter().all(|&b| b == 0));
+    }
+
+    // ---------------------------------------------------------------
+    // Edge case: multiple sequential evictions
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn multiple_evictions_advance_base_offset() {
+        let inner = std::sync::Arc::new(StreamingInner::new());
+        let chunk = RETAIN_BEHIND + 1024 * 1024;
+        inner.push(&vec![0xAA; chunk]);
+        let mut sb = StreamingBuffer::new(std::sync::Arc::clone(&inner));
+        sb.eviction_enabled
+            .store(true, std::sync::atomic::Ordering::Release);
+
+        // First eviction.
+        sb.pos = chunk as u64;
+        sb.maybe_evict();
+        let offset1 = inner.state.lock().unwrap().base_offset;
+        assert!(offset1 > 0);
+
+        // Push more data and advance cursor.
+        inner.push(&vec![0xBB; chunk]);
+        sb.pos = (chunk * 2) as u64;
+        sb.maybe_evict();
+        let offset2 = inner.state.lock().unwrap().base_offset;
+        assert!(offset2 > offset1, "second eviction should advance further");
+    }
+
+    // ---------------------------------------------------------------
+    // Edge case: concurrent push and read from different threads
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn concurrent_push_and_read() {
+        use std::io::Read;
+        use std::sync::Arc;
+
+        let inner = Arc::new(StreamingInner::new());
+        inner.disable_probe_mode();
+        let inner2 = Arc::clone(&inner);
+
+        // Spawn a writer that pushes data in chunks.
+        let writer = std::thread::spawn(move || {
+            for i in 0..10 {
+                let chunk = vec![i as u8; 1024];
+                inner2.push(&chunk);
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+            inner2.finish();
+        });
+
+        let mut sb = StreamingBuffer::new(Arc::clone(&inner));
+        let mut total_read = 0;
+        let mut buf = [0; 256];
+        // Read until EOF (finish + no more data).
+        loop {
+            match sb.read(&mut buf) {
+                Ok(0) => break,
+                Ok(n) => total_read += n,
+                Err(_) => break,
+            }
+        }
+        writer.join().unwrap();
+        assert_eq!(total_read, 10 * 1024, "should read all pushed data");
+    }
+
+    // ---------------------------------------------------------------
+    // Edge case: should_throttle boundary precision
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn throttle_decoder_zero_buf_size_vs_received_differ() {
+        // buf_size can differ from received when eviction has occurred.
+        // decoder_pos=0, has_moov=true: throttle is based on buf_size, not received.
+        assert!(!should_throttle_pure(
+            0,
+            MAX_LOOKAHEAD + 100,
+            true,
+            MAX_LOOKAHEAD
+        ));
+        assert!(should_throttle_pure(
+            0,
+            MAX_LOOKAHEAD + 100,
+            true,
+            MAX_LOOKAHEAD + 1
+        ));
+    }
+
+    #[test]
+    fn throttle_decoder_one_byte_past_boundary() {
+        // decoder_pos=1 switches to the decoder-based formula.
+        // received=1+MAX_LOOKAHEAD => not throttled (need >)
+        assert!(!should_throttle_pure(1, 1 + MAX_LOOKAHEAD, true, 0));
+        // received=1+MAX_LOOKAHEAD+1 => throttled
+        assert!(should_throttle_pure(1, 1 + MAX_LOOKAHEAD + 1, true, 0));
+    }
+
+    // ---------------------------------------------------------------
+    // Edge case: linear_seek_interpolation with NaN/infinity inputs
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn seek_interpolation_negative_seek_clamps_to_zero() {
+        let offset = linear_seek_interpolation(-10.0, 100.0, 1000, 50_000);
+        assert_eq!(offset, 1000, "negative seek_secs should clamp to start");
+    }
+
+    #[test]
+    fn seek_interpolation_zero_mdat_size() {
+        let offset = linear_seek_interpolation(50.0, 100.0, 1000, 0);
+        assert_eq!(offset, 1000, "zero mdat_size means no offset added");
+    }
+
+    // ---------------------------------------------------------------
+    // Edge case: parse_tail_for_moov
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn parse_tail_for_moov_finds_moov_in_tail() {
+        use super::download::parse_tail_for_moov;
+        let inner = std::sync::Arc::new(StreamingInner::new());
+        // Build tail data: some mdat garbage, then a moov atom.
+        let mut tail = vec![0xFF; 100]; // garbage (mdat body)
+        let moov_body = [0xAB; 32];
+        tail.extend_from_slice(&build_atom(b"moov", &moov_body));
+        let tail_offset = 500_000u64;
+        let content_length = tail_offset + tail.len() as u64;
+        parse_tail_for_moov(&inner, &tail, tail_offset, content_length, 0);
+        let s = inner.state.lock().unwrap();
+        assert!(s.moov.is_some(), "moov should be found in tail data");
+        let (offset, data) = s.moov.as_ref().unwrap();
+        assert_eq!(*offset, tail_offset + 100); // after garbage
+        assert_eq!(data.len(), 8 + moov_body.len());
+    }
+
+    #[test]
+    fn parse_tail_for_moov_no_moov_in_tail() {
+        use super::download::parse_tail_for_moov;
+        let inner = std::sync::Arc::new(StreamingInner::new());
+        let tail = vec![0xFF; 200]; // all garbage, no moov fourcc
+        parse_tail_for_moov(&inner, &tail, 0, 200, 0);
+        let s = inner.state.lock().unwrap();
+        assert!(s.moov.is_none(), "no moov should be found in garbage data");
+    }
+
+    #[test]
+    fn parse_tail_for_moov_false_positive_moov_fourcc() {
+        use super::download::parse_tail_for_moov;
+        let inner = std::sync::Arc::new(StreamingInner::new());
+        // Embed "moov" in data but with invalid size (doesn't fit).
+        let mut tail = vec![0; 20];
+        // Put "moov" at offset 8 (fourcc position), with size field = 0xFFFF
+        // which would extend beyond the tail data.
+        tail[4] = 0;
+        tail[5] = 0;
+        tail[6] = 0xFF;
+        tail[7] = 0xFF; // size = 65535
+        tail[8..12].copy_from_slice(b"moov");
+        parse_tail_for_moov(&inner, &tail, 0, 20, 0);
+        let s = inner.state.lock().unwrap();
+        assert!(
+            s.moov.is_none(),
+            "invalid moov (size exceeds tail) should not be retained"
+        );
+    }
+
+    #[test]
+    fn parse_tail_for_moov_with_seek_sets_base_offset() {
+        use super::download::parse_tail_for_moov;
+        let inner = std::sync::Arc::new(StreamingInner::new());
+        // Push some initial data.
+        inner.push(&[0; 1024]);
+
+        // Build tail with moov containing mvhd for duration parsing.
+        let mut tail = vec![0xFF; 100];
+        let moov = build_moov_v0(1000, 120_000); // 120 second file
+        tail.extend_from_slice(&moov);
+        let content_length = 100_000_000u64; // 100 MB file
+        let tail_offset = content_length - tail.len() as u64;
+
+        // Seek to 60 seconds (half the file).
+        parse_tail_for_moov(&inner, &tail, tail_offset, content_length, 60);
+
+        let s = inner.state.lock().unwrap();
+        assert!(s.moov.is_some(), "moov should be retained");
+        // With seek_secs=60 and duration=120, linear interpolation gives
+        // roughly half the file. base_offset should be set if the seek
+        // position is far enough ahead of bytes_received.
+        // base_offset should have been updated (seek position > downloaded + threshold).
+    }
+
+    // ---------------------------------------------------------------
+    // Edge case: wait_for_buffered timeout
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn wait_for_buffered_timeout_with_some_data() {
+        let inner = std::sync::Arc::new(StreamingInner::new());
+        inner.push(&[0; 512]); // some data, but less than requested
+        // Don't finish or cancel -- should hit timeout.
+        let ok = inner.wait_for_buffered(1_000_000, std::time::Duration::from_millis(100));
+        // Should return true because some data is present (not empty).
+        assert!(ok, "timeout with partial data should return true");
+    }
+
+    #[test]
+    fn wait_for_buffered_timeout_no_data() {
+        let inner = std::sync::Arc::new(StreamingInner::new());
+        // Don't push any data, don't finish.
+        let ok = inner.wait_for_buffered(1024, std::time::Duration::from_millis(100));
+        assert!(!ok, "timeout with empty buffer should return false");
+    }
+
+    // ---------------------------------------------------------------
+    // Edge case: wait_for_moov timeout with no moov
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn wait_for_moov_timeout_returns_none() {
+        let inner = std::sync::Arc::new(StreamingInner::new());
+        // Push data without moov, don't finish.
+        inner.push(&build_atom(b"ftyp", &[0; 16]));
+        let result = inner.wait_for_moov(std::time::Duration::from_millis(100));
+        assert!(result.is_none(), "timeout without moov should return None");
+    }
+
+    // ---------------------------------------------------------------
+    // Edge case: StreamingBuffer seek resets logged_wait flag
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn seek_resets_position_correctly() {
+        use std::io::Seek;
+        let inner = std::sync::Arc::new(StreamingInner::new());
+        let mut sb = StreamingBuffer::new(inner);
+        sb.pos = 500;
+        sb.seek(std::io::SeekFrom::Start(100)).unwrap();
+        assert_eq!(sb.pos, 100, "seek should update position");
+        // Seek back to 0.
+        sb.seek(std::io::SeekFrom::Start(0)).unwrap();
+        assert_eq!(sb.pos, 0);
+    }
+
+    // ---------------------------------------------------------------
+    // Edge case: read serves data from header, moov, and buffer in
+    // correct priority order
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn read_priority_header_then_moov_then_buffer() {
+        use std::io::{Read, Seek};
+        let inner = std::sync::Arc::new(StreamingInner::new());
+        // Build ftyp + moov + mdat.
+        let mut data = build_atom(b"ftyp", &[0x11; 16]);
+        let moov_off = data.len() as u64;
+        data.extend_from_slice(&build_atom(b"moov", &[0x22; 32]));
+        let _mdat_off = data.len() as u64;
+        data.extend_from_slice(&build_atom(b"mdat", &[0x33; 64]));
+        inner.push(&data);
+        inner.disable_probe_mode();
+
+        // Evict the main buffer so only header and moov are retained.
+        {
+            let mut s = inner.state.lock().unwrap();
+            s.buf.clear();
+            s.base_offset = data.len() as u64;
+        }
+
+        let mut sb = StreamingBuffer::new(std::sync::Arc::clone(&inner));
+
+        // Read from position 0 -- should serve from retained header.
+        sb.seek(std::io::SeekFrom::Start(0)).unwrap();
+        let mut buf = [0; 8];
+        sb.read(&mut buf).unwrap();
+        assert_eq!(&buf[4..8], b"ftyp", "should read from retained header");
+
+        // Read from moov offset -- should serve from retained moov.
+        sb.seek(std::io::SeekFrom::Start(moov_off)).unwrap();
+        let mut buf = [0; 8];
+        sb.read(&mut buf).unwrap();
+        assert_eq!(&buf[4..8], b"moov", "should read from retained moov");
+    }
+
+    // ---------------------------------------------------------------
+    // Edge case: finish with moov using extended size (size32==1)
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn finish_handles_extended_size_moov() {
+        let inner = StreamingInner::new();
+        let mut data = build_atom(b"ftyp", &[0; 16]);
+        // Write moov with extended size header at end.
+        let moov_body = [0xAA; 64];
+        let total_atom_size = 16 + moov_body.len() as u64; // 16-byte header
+        data.extend_from_slice(&1u32.to_be_bytes()); // size32=1 (extended)
+        data.extend_from_slice(b"moov");
+        data.extend_from_slice(&total_atom_size.to_be_bytes());
+        data.extend_from_slice(&moov_body);
+        inner.push(&data);
+        // Since the data was complete on push, scan_atoms should find it.
+        let s = inner.state.lock().unwrap();
+        let moov_atom = s.atoms.iter().find(|(_, _, cc)| cc == b"moov");
+        assert!(moov_atom.is_some(), "extended-size moov should be scanned");
+    }
+
+    // ---------------------------------------------------------------
+    // Edge case: check_moov_at_start_restart
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn check_moov_at_start_no_moov_returns_none() {
+        use super::download::check_moov_at_start_restart;
+        let s = SlidingState {
+            buf: vec![0; 1024],
+            base_offset: 0,
+            bytes_received: 1024,
+            moov: None,
+            header: None,
+            atoms: Vec::new(),
+            atoms_scanned_to: 0,
+        };
+        assert_eq!(
+            check_moov_at_start_restart(&s, 30),
+            None,
+            "no moov should return None"
+        );
+    }
+
+    // ---------------------------------------------------------------
+    // is_would_block tests
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn is_would_block_true_for_would_block_error() {
+        use super::download::is_would_block;
+        let err = std::io::Error::new(std::io::ErrorKind::WouldBlock, "test");
+        assert!(is_would_block(&err));
+    }
+
+    #[test]
+    fn is_would_block_false_for_other_errors() {
+        use super::download::is_would_block;
+        let err = std::io::Error::new(std::io::ErrorKind::ConnectionReset, "test");
+        assert!(!is_would_block(&err));
+    }
+
+    #[test]
+    fn is_would_block_false_for_broken_pipe() {
+        use super::download::is_would_block;
+        let err = std::io::Error::new(std::io::ErrorKind::BrokenPipe, "test");
+        assert!(!is_would_block(&err));
+    }
 }

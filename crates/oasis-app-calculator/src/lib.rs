@@ -35,7 +35,13 @@ pub enum CalcError {
     /// Input was empty or whitespace-only.
     #[error("Empty expression")]
     EmptyExpression,
+    /// Expression nesting exceeds the maximum depth.
+    #[error("Expression too deeply nested (max {MAX_DEPTH} levels)")]
+    TooDeep,
 }
+
+/// Maximum recursion depth for the expression parser.
+const MAX_DEPTH: usize = 100;
 
 // ---------------------------------------------------------------
 // Tokenizer
@@ -141,11 +147,29 @@ fn tokenize(expr: &str) -> Result<Vec<Token>, CalcError> {
 struct Parser {
     tokens: Vec<Token>,
     pos: usize,
+    depth: usize,
 }
 
 impl Parser {
     fn new(tokens: Vec<Token>) -> Self {
-        Self { tokens, pos: 0 }
+        Self {
+            tokens,
+            pos: 0,
+            depth: 0,
+        }
+    }
+
+    /// Increment depth and check the limit.
+    fn enter(&mut self) -> Result<(), CalcError> {
+        self.depth += 1;
+        if self.depth > MAX_DEPTH {
+            return Err(CalcError::TooDeep);
+        }
+        Ok(())
+    }
+
+    fn leave(&mut self) {
+        self.depth -= 1;
     }
 
     fn peek(&self) -> Option<&Token> {
@@ -249,7 +273,9 @@ impl Parser {
         match self.advance() {
             Some(Token::Number(n)) => Ok(n),
             Some(Token::LeftParen) => {
+                self.enter()?;
                 let val = self.parse_expr()?;
+                self.leave();
                 match self.advance() {
                     Some(Token::RightParen) => Ok(val),
                     _ => Err(CalcError::UnmatchedParen),

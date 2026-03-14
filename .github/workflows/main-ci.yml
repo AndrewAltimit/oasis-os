@@ -34,11 +34,11 @@ env:
   COMPOSE_DOCKER_CLI_BUILD: 1
 
 jobs:
-  # -- CI Stages (containerized) -------------------------------------------
-  ci:
-    name: OASIS_OS CI
+  # -- Prepare: build Docker image once, shared by parallel jobs -----------
+  prepare:
+    name: Prepare CI image
     runs-on: self-hosted
-    timeout-minutes: 60
+    timeout-minutes: 15
     steps:
       - name: Pre-checkout cleanup
         run: |
@@ -53,7 +53,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0
+          fetch-depth: 1
           clean: true
 
       - name: Set UID/GID
@@ -64,22 +64,114 @@ jobs:
       - name: Build CI Docker image
         run: docker compose --profile ci build rust-ci
 
-      # -- Formatting -------------------------------------------------------
+  # -- Format Check (parallel) --------------------------------------------
+  format:
+    name: Format check
+    needs: prepare
+    runs-on: self-hosted
+    timeout-minutes: 15
+    steps:
+      - name: Pre-checkout cleanup
+        run: |
+          for item in .git/index.lock; do
+            [ -f "$item" ] && { sudo rm -f "$item" 2>/dev/null || true; }
+          done
+
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+          clean: true
+
+      - name: Set UID/GID
+        run: |
+          echo "USER_ID=$(id -u)" >> $GITHUB_ENV
+          echo "GROUP_ID=$(id -g)" >> $GITHUB_ENV
+
       - name: Format check
         run: docker compose --profile ci run --rm rust-ci cargo fmt --all -- --check
 
-      # -- Linting -----------------------------------------------------------
+  # -- Clippy Lint (parallel) ----------------------------------------------
+  clippy:
+    name: Clippy
+    needs: prepare
+    runs-on: self-hosted
+    timeout-minutes: 30
+    steps:
+      - name: Pre-checkout cleanup
+        run: |
+          for item in .git/index.lock; do
+            [ -f "$item" ] && { sudo rm -f "$item" 2>/dev/null || true; }
+          done
+
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+          clean: true
+
+      - name: Set UID/GID
+        run: |
+          echo "USER_ID=$(id -u)" >> $GITHUB_ENV
+          echo "GROUP_ID=$(id -g)" >> $GITHUB_ENV
+
       - name: Clippy
         run: docker compose --profile ci run --rm rust-ci cargo clippy --workspace -- -D warnings
 
-      # -- Documentation ------------------------------------------------------
+  # -- Documentation Build (parallel) -------------------------------------
+  doc-build:
+    name: Doc build
+    needs: prepare
+    runs-on: self-hosted
+    timeout-minutes: 20
+    steps:
+      - name: Pre-checkout cleanup
+        run: |
+          for item in .git/index.lock; do
+            [ -f "$item" ] && { sudo rm -f "$item" 2>/dev/null || true; }
+          done
+
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+          clean: true
+
+      - name: Set UID/GID
+        run: |
+          echo "USER_ID=$(id -u)" >> $GITHUB_ENV
+          echo "GROUP_ID=$(id -g)" >> $GITHUB_ENV
+
       - name: Doc build
         run: >
           docker compose --profile ci run --rm
           -e RUSTDOCFLAGS="-D warnings"
           rust-ci cargo doc --workspace --no-deps
 
-      # -- Markdown Link Check ------------------------------------------------
+  # -- Markdown Link Check (parallel) -------------------------------------
+  markdown-link-check:
+    name: Markdown link check
+    needs: prepare
+    runs-on: self-hosted
+    timeout-minutes: 10
+    steps:
+      - name: Pre-checkout cleanup
+        run: |
+          for item in .git/index.lock; do
+            [ -f "$item" ] && { sudo rm -f "$item" 2>/dev/null || true; }
+          done
+
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+          clean: true
+
+      - name: Set UID/GID
+        run: |
+          echo "USER_ID=$(id -u)" >> $GITHUB_ENV
+          echo "GROUP_ID=$(id -g)" >> $GITHUB_ENV
+
       - name: Markdown link check
         run: |
           FAIL=0
@@ -89,18 +181,119 @@ jobs:
           done
           exit $FAIL
 
-      # -- Tests -------------------------------------------------------------
+  # -- Tests (parallel) ----------------------------------------------------
+  test:
+    name: Test
+    needs: prepare
+    runs-on: self-hosted
+    timeout-minutes: 30
+    steps:
+      - name: Pre-checkout cleanup
+        run: |
+          for item in .git/index.lock; do
+            [ -f "$item" ] && { sudo rm -f "$item" 2>/dev/null || true; }
+          done
+
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+          clean: true
+
+      - name: Set UID/GID
+        run: |
+          echo "USER_ID=$(id -u)" >> $GITHUB_ENV
+          echo "GROUP_ID=$(id -g)" >> $GITHUB_ENV
+
       - name: Test
         run: |
           set -o pipefail
           docker compose --profile ci run --rm rust-ci \
             cargo test --workspace 2>&1 | tee test_output.txt
 
-      # -- Build -------------------------------------------------------------
+      - name: Test metrics summary
+        if: always()
+        run: |
+          if [ ! -f test_output.txt ]; then
+            echo "No test output captured (test step may have been skipped)."
+            echo "### Test Summary" >> $GITHUB_STEP_SUMMARY
+            echo "No test output available." >> $GITHUB_STEP_SUMMARY
+            exit 0
+          fi
+          PASS=$(grep -c '\.\.\.  *ok$' test_output.txt 2>/dev/null) || PASS=0
+          FAIL=$(grep -c 'FAILED$' test_output.txt 2>/dev/null) || FAIL=0
+          TOTAL=$((PASS + FAIL))
+          echo "### Test Summary" >> $GITHUB_STEP_SUMMARY
+          echo "| Metric | Count |" >> $GITHUB_STEP_SUMMARY
+          echo "|--------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Passed | $PASS |" >> $GITHUB_STEP_SUMMARY
+          echo "| Failed | $FAIL |" >> $GITHUB_STEP_SUMMARY
+          echo "| Total  | $TOTAL |" >> $GITHUB_STEP_SUMMARY
+
+      - name: Fix Docker file ownership
+        if: always()
+        run: |
+          for dir in target; do
+            if [ -d "$dir" ]; then
+              docker run --rm -v "$(pwd)/$dir:/workspace" busybox:1.36.1 \
+                chown -Rh "$(id -u):$(id -g)" /workspace 2>/dev/null || true
+            fi
+          done
+
+  # -- cargo-deny (parallel) -----------------------------------------------
+  cargo-deny:
+    name: cargo-deny
+    needs: prepare
+    runs-on: self-hosted
+    timeout-minutes: 15
+    steps:
+      - name: Pre-checkout cleanup
+        run: |
+          for item in .git/index.lock; do
+            [ -f "$item" ] && { sudo rm -f "$item" 2>/dev/null || true; }
+          done
+
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+          clean: true
+
+      - name: Set UID/GID
+        run: |
+          echo "USER_ID=$(id -u)" >> $GITHUB_ENV
+          echo "GROUP_ID=$(id -g)" >> $GITHUB_ENV
+
+      - name: cargo-deny
+        run: docker compose --profile ci run --rm rust-ci cargo deny check
+
+  # -- Release Build + Screenshot Regression (depends on test) -------------
+  build-and-screenshots:
+    name: Release build + screenshots
+    needs: test
+    runs-on: self-hosted
+    timeout-minutes: 30
+    steps:
+      - name: Pre-checkout cleanup
+        run: |
+          for item in .git/index.lock; do
+            [ -f "$item" ] && { sudo rm -f "$item" 2>/dev/null || true; }
+          done
+
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+          clean: true
+
+      - name: Set UID/GID
+        run: |
+          echo "USER_ID=$(id -u)" >> $GITHUB_ENV
+          echo "GROUP_ID=$(id -g)" >> $GITHUB_ENV
+
       - name: Build (release)
         run: docker compose --profile ci run --rm rust-ci cargo build --workspace --release
 
-      # -- Screenshot Regression Tests ----------------------------------------
       - name: Screenshot tests (generate)
         timeout-minutes: 5
         run: |
@@ -137,13 +330,42 @@ jobs:
           if-no-files-found: ignore
           retention-days: 14
 
-      # -- License / Advisory ------------------------------------------------
-      - name: cargo-deny
-        run: docker compose --profile ci run --rm rust-ci cargo deny check
+      - name: Fix Docker file ownership
+        if: always()
+        run: |
+          for dir in target; do
+            if [ -d "$dir" ]; then
+              docker run --rm -v "$(pwd)/$dir:/workspace" busybox:1.36.1 \
+                chown -Rh "$(id -u):$(id -g)" /workspace 2>/dev/null || true
+            fi
+          done
 
-      # -- Benchmarks (manual only via workflow_dispatch) ----------------------
+  # -- Benchmarks (manual, depends on test) --------------------------------
+  benchmarks:
+    name: Benchmarks
+    needs: test
+    if: inputs.run_benchmarks == true
+    runs-on: self-hosted
+    timeout-minutes: 30
+    steps:
+      - name: Pre-checkout cleanup
+        run: |
+          for item in .git/index.lock; do
+            [ -f "$item" ] && { sudo rm -f "$item" 2>/dev/null || true; }
+          done
+
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+          clean: true
+
+      - name: Set UID/GID
+        run: |
+          echo "USER_ID=$(id -u)" >> $GITHUB_ENV
+          echo "GROUP_ID=$(id -g)" >> $GITHUB_ENV
+
       - name: Benchmarks
-        if: inputs.run_benchmarks == true
         run: |
           set -o pipefail
           docker compose --profile ci run --rm rust-ci \
@@ -153,7 +375,6 @@ jobs:
           echo "::endgroup::"
 
       - name: Upload benchmark results
-        if: inputs.run_benchmarks == true
         uses: actions/upload-artifact@v4
         with:
           name: benchmark-results
@@ -162,7 +383,6 @@ jobs:
           retention-days: 30
 
       - name: Upload criterion baseline
-        if: inputs.run_benchmarks == true
         uses: actions/upload-artifact@v4
         with:
           name: criterion-baseline
@@ -170,27 +390,40 @@ jobs:
           if-no-files-found: ignore
           retention-days: 90
 
-      # -- Test Metrics -------------------------------------------------------
-      - name: Test metrics summary
+      - name: Fix Docker file ownership
         if: always()
         run: |
-          if [ ! -f test_output.txt ]; then
-            echo "No test output captured (test step may have been skipped)."
-            echo "### Test Summary" >> $GITHUB_STEP_SUMMARY
-            echo "No test output available." >> $GITHUB_STEP_SUMMARY
-            exit 0
-          fi
-          PASS=$(grep -c '\.\.\.  *ok$' test_output.txt 2>/dev/null) || PASS=0
-          FAIL=$(grep -c 'FAILED$' test_output.txt 2>/dev/null) || FAIL=0
-          TOTAL=$((PASS + FAIL))
-          echo "### Test Summary" >> $GITHUB_STEP_SUMMARY
-          echo "| Metric | Count |" >> $GITHUB_STEP_SUMMARY
-          echo "|--------|-------|" >> $GITHUB_STEP_SUMMARY
-          echo "| Passed | $PASS |" >> $GITHUB_STEP_SUMMARY
-          echo "| Failed | $FAIL |" >> $GITHUB_STEP_SUMMARY
-          echo "| Total  | $TOTAL |" >> $GITHUB_STEP_SUMMARY
+          for dir in target; do
+            if [ -d "$dir" ]; then
+              docker run --rm -v "$(pwd)/$dir:/workspace" busybox:1.36.1 \
+                chown -Rh "$(id -u):$(id -g)" /workspace 2>/dev/null || true
+            fi
+          done
 
-      # -- Coverage Metrics ----------------------------------------------------
+  # -- Coverage (parallel) -------------------------------------------------
+  coverage:
+    name: Coverage
+    needs: prepare
+    runs-on: self-hosted
+    timeout-minutes: 45
+    steps:
+      - name: Pre-checkout cleanup
+        run: |
+          for item in .git/index.lock; do
+            [ -f "$item" ] && { sudo rm -f "$item" 2>/dev/null || true; }
+          done
+
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+          clean: true
+
+      - name: Set UID/GID
+        run: |
+          echo "USER_ID=$(id -u)" >> $GITHUB_ENV
+          echo "GROUP_ID=$(id -g)" >> $GITHUB_ENV
+
       - name: Coverage (cargo-llvm-cov)
         continue-on-error: true
         run: |
@@ -200,7 +433,7 @@ jobs:
             if command -v cargo-llvm-cov &>/dev/null; then
               cargo llvm-cov --workspace --no-fail-fast \
                 --ignore-filename-regex '(tests?\.rs|benches?\.rs|main\.rs)' \
-                --fail-under-lines 50 \
+                --fail-under-lines 60 \
                 2>&1 | tee /app/coverage_output.txt
             else
               echo 'cargo-llvm-cov not available, skipping coverage'
@@ -220,7 +453,44 @@ jobs:
           tail -20 coverage_output.txt >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY
 
-      # -- PSP Backend Build -------------------------------------------------
+      - name: Fix Docker file ownership
+        if: always()
+        run: |
+          for dir in target; do
+            if [ -d "$dir" ]; then
+              docker run --rm -v "$(pwd)/$dir:/workspace" busybox:1.36.1 \
+                chown -Rh "$(id -u):$(id -g)" /workspace 2>/dev/null || true
+            fi
+          done
+
+  # -- PSP Backend Build (parallel) ----------------------------------------
+  psp-build:
+    name: PSP build
+    needs: prepare
+    runs-on: self-hosted
+    timeout-minutes: 30
+    steps:
+      - name: Pre-checkout cleanup
+        run: |
+          for item in psp_output_file.log .git/index.lock; do
+            if [ -d "$item" ] || [ -f "$item" ]; then
+              docker run --rm -v "$(pwd):/workspace" busybox:1.36.1 sh -c \
+                "rm -rf /workspace/$item" 2>/dev/null || \
+                sudo rm -rf "$item" 2>/dev/null || true
+            fi
+          done
+
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+          clean: true
+
+      - name: Set UID/GID
+        run: |
+          echo "USER_ID=$(id -u)" >> $GITHUB_ENV
+          echo "GROUP_ID=$(id -g)" >> $GITHUB_ENV
+
       - name: Setup PSP SDK
         run: |
           # rust-std-src is gitignored; recreate symlink for self-hosted runner.
@@ -249,11 +519,34 @@ jobs:
           if-no-files-found: ignore
           retention-days: 90
 
-      # -- PSP Emulator Test -------------------------------------------------
+  # -- PSP Emulator Test (depends on PSP build) ----------------------------
+  psp-emulator-test:
+    name: PSP emulator test
+    needs: psp-build
+    runs-on: self-hosted
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+          clean: true
+
+      - name: Set UID/GID
+        run: |
+          echo "USER_ID=$(id -u)" >> $GITHUB_ENV
+          echo "GROUP_ID=$(id -g)" >> $GITHUB_ENV
+
+      - name: Download PSP EBOOT
+        uses: actions/download-artifact@v4
+        with:
+          name: psp-eboot
+          path: crates/oasis-backend-psp/target/mipsel-sony-psp-std/release
+
       - name: Run OASIS_OS EBOOT in PPSSPPHeadless
         run: |
           docker compose --profile psp run --rm -e PPSSPP_HEADLESS=1 ppsspp \
-            /roms/release/EBOOT.PBP --timeout=5 2>/dev/null || true
+            /roms/release/EBOOT.PBP --timeout=30 2>/dev/null || true
 
           if [ -f psp_output_file.log ]; then
             cat psp_output_file.log
@@ -261,21 +554,10 @@ jobs:
             echo "No output log -- headless exited without crash (TIMEOUT ok)"
           fi
 
-      # -- Cleanup -----------------------------------------------------------
-      - name: Fix Docker file ownership
-        if: always()
-        run: |
-          for dir in target outputs; do
-            if [ -d "$dir" ]; then
-              docker run --rm -v "$(pwd)/$dir:/workspace" busybox:1.36.1 \
-                chown -Rh "$(id -u):$(id -g)" /workspace 2>/dev/null || true
-            fi
-          done
-
   # -- Build Release Binaries ----------------------------------------------
   build-release-binaries:
     name: Build Release Binaries
-    needs: ci
+    needs: [format, clippy, doc-build, test, cargo-deny]
     if: startsWith(github.ref, 'refs/tags/v') || github.event.inputs.create_release == 'true'
     runs-on: self-hosted
     timeout-minutes: 30
@@ -347,7 +629,7 @@ jobs:
   # -- Create GitHub Release -----------------------------------------------
   create-release:
     name: Create GitHub Release
-    needs: [ci, build-release-binaries]
+    needs: [build-release-binaries, psp-build]
     if: startsWith(github.ref, 'refs/tags/v') || github.event.inputs.create_release == 'true'
     runs-on: self-hosted
     timeout-minutes: 10
@@ -480,7 +762,7 @@ jobs:
   # -- Deploy GitHub Pages --------------------------------------------------
   deploy-pages:
     name: Deploy GitHub Pages
-    needs: ci
+    needs: [format, clippy, doc-build, test, cargo-deny]
     if: github.ref == 'refs/heads/main'
     runs-on: self-hosted
     timeout-minutes: 15
@@ -524,7 +806,21 @@ jobs:
   # -- CI Summary ----------------------------------------------------------
   notify:
     name: CI Summary
-    needs: [ci, build-release-binaries, create-release, deploy-pages]
+    needs:
+      - format
+      - clippy
+      - doc-build
+      - markdown-link-check
+      - test
+      - cargo-deny
+      - build-and-screenshots
+      - coverage
+      - psp-build
+      - psp-emulator-test
+      - benchmarks
+      - build-release-binaries
+      - create-release
+      - deploy-pages
     if: always()
     runs-on: self-hosted
     steps:
@@ -535,16 +831,50 @@ jobs:
           echo "**Commit**: ${{ github.sha }}" >> $GITHUB_STEP_SUMMARY
           echo "**Branch**: ${{ github.ref_name }}" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "| Stage | Status |" >> $GITHUB_STEP_SUMMARY
-          echo "|-------|--------|" >> $GITHUB_STEP_SUMMARY
-          echo "| CI | ${{ needs.ci.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "### CI Jobs" >> $GITHUB_STEP_SUMMARY
+          echo "| Job | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|-----|--------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Format | ${{ needs.format.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Clippy | ${{ needs.clippy.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Doc build | ${{ needs.doc-build.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Markdown links | ${{ needs.markdown-link-check.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Test | ${{ needs.test.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| cargo-deny | ${{ needs.cargo-deny.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Release build + screenshots | ${{ needs.build-and-screenshots.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Coverage | ${{ needs.coverage.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| PSP build | ${{ needs.psp-build.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| PSP emulator | ${{ needs.psp-emulator-test.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Benchmarks | ${{ needs.benchmarks.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Release Jobs" >> $GITHUB_STEP_SUMMARY
+          echo "| Job | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|-----|--------|" >> $GITHUB_STEP_SUMMARY
           echo "| Build Binaries | ${{ needs.build-release-binaries.result }} |" >> $GITHUB_STEP_SUMMARY
           echo "| GitHub Release | ${{ needs.create-release.result }} |" >> $GITHUB_STEP_SUMMARY
           echo "| GitHub Pages | ${{ needs.deploy-pages.result }} |" >> $GITHUB_STEP_SUMMARY
 
-          if [[ "${{ needs.ci.result }}" == "failure" ]]; then
+          # Fail if any required CI job failed
+          FAILED=false
+          for result in \
+            "${{ needs.format.result }}" \
+            "${{ needs.clippy.result }}" \
+            "${{ needs.doc-build.result }}" \
+            "${{ needs.markdown-link-check.result }}" \
+            "${{ needs.test.result }}" \
+            "${{ needs.cargo-deny.result }}" \
+            "${{ needs.build-and-screenshots.result }}" \
+            "${{ needs.coverage.result }}" \
+            "${{ needs.psp-build.result }}" \
+            "${{ needs.psp-emulator-test.result }}" \
+            "${{ needs.benchmarks.result }}"; do
+            if [[ "$result" == "failure" ]]; then
+              FAILED=true
+            fi
+          done
+
+          if [[ "$FAILED" == "true" ]]; then
             echo "" >> $GITHUB_STEP_SUMMARY
-            echo "CI failed - please review the logs" >> $GITHUB_STEP_SUMMARY
+            echo "One or more required CI jobs failed -- please review the logs." >> $GITHUB_STEP_SUMMARY
             exit 1
           fi
 

@@ -15,7 +15,7 @@ toml = { workspace = true }
 log = { workspace = true }
 
 [dev-dependencies]
-proptest = "1"
+proptest.workspace = true
 criterion = { version = "0.5", features = ["html_reports"] }
 
 [[bench]]

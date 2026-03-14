@@ -1315,21 +1315,7 @@ impl SkinTheme {
 
 /// Parse "#RRGGBB" or "#RRGGBBAA" into a `Color`.
 pub fn parse_hex_color(s: &str) -> Option<Color> {
-    let s = s.strip_prefix('#')?;
-    if s.len() == 6 {
-        let r = u8::from_str_radix(&s[0..2], 16).ok()?;
-        let g = u8::from_str_radix(&s[2..4], 16).ok()?;
-        let b = u8::from_str_radix(&s[4..6], 16).ok()?;
-        Some(Color::rgb(r, g, b))
-    } else if s.len() == 8 {
-        let r = u8::from_str_radix(&s[0..2], 16).ok()?;
-        let g = u8::from_str_radix(&s[2..4], 16).ok()?;
-        let b = u8::from_str_radix(&s[4..6], 16).ok()?;
-        let a = u8::from_str_radix(&s[6..8], 16).ok()?;
-        Some(Color::rgba(r, g, b, a))
-    } else {
-        None
-    }
+    oasis_types::color::parse_hex_color(s)
 }
 
 /// Compute the WCAG 2.0 relative luminance of a color.

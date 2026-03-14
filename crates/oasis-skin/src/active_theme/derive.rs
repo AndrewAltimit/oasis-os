@@ -2,6 +2,11 @@
 //!
 //! Contains `from_skin()` and `from_base_colors()` -- the two constructors
 //! that derive all UI colors from a base palette.
+//!
+//! The `from_skin()` method delegates to focused helper methods for each
+//! component: `derive_bar_theme`, `derive_icon_theme`, `derive_start_menu_theme`,
+//! `derive_app_screen_theme`, `derive_osk_theme`, `derive_scrollbar_theme`,
+//! `derive_wallpaper_theme`, `derive_toast_theme`, and `derive_background_layers`.
 
 use oasis_types::backend::Color;
 use oasis_types::color::{darken, lighten, with_alpha};
@@ -13,6 +18,11 @@ use super::{
     ActiveTheme, AppScreenTheme, BarTheme, IconTheme, OskTheme, ScrollbarTheme, StartMenuTheme,
     ToastTheme, WallpaperTheme,
 };
+
+/// Parse an optional hex color override, falling back to `fallback`.
+fn ov(opt: Option<&String>, fallback: Color) -> Color {
+    opt.and_then(|s| parse_hex_color(s)).unwrap_or(fallback)
+}
 
 impl ActiveTheme {
     /// Derive an `ActiveTheme` from the skin's base color palette.
@@ -28,519 +38,20 @@ impl ActiveTheme {
         let text = skin.text_color();
         let dim = skin.dim_text_color();
 
-        // Helper: parse an optional hex color override.
-        let ov = |opt: Option<&String>, fallback: Color| -> Color {
-            opt.and_then(|s| parse_hex_color(s)).unwrap_or(fallback)
-        };
+        let bar = Self::derive_bar_theme(skin, status_bar_color, primary, secondary, text, dim);
+        let icon = Self::derive_icon_theme(skin, primary, text, dim);
+        let menu = Self::derive_start_menu_theme(skin, primary, text);
+        let app_screen = Self::derive_app_screen_theme(skin, status_bar_color, primary, text, dim);
+        let osk_theme = Self::derive_osk_theme(skin, primary, text, dim);
+        let scrollbar_theme = Self::derive_scrollbar_theme(skin, secondary);
+        let wallpaper_theme = Self::derive_wallpaper_theme(skin);
+        let toast_theme = Self::derive_toast_theme(skin, primary, text);
+        let background_layers = Self::derive_background_layers(skin);
 
-        let bar_ov = skin.bar_overrides.as_ref();
         let ico = skin.icon_overrides.as_ref();
-        let sm = skin.start_menu_overrides.as_ref();
-        let ap = skin.app_overrides.as_ref();
-        let ok = skin.osk_overrides.as_ref();
-        let sb = skin.scrollbar_overrides.as_ref();
-
-        // -- Bar theme --
-        let bar = BarTheme {
-            statusbar_bg: ov(
-                bar_ov.and_then(|b| b.statusbar_bg.as_ref()),
-                with_alpha(status_bar_color, 80),
-            ),
-            bg: ov(
-                bar_ov.and_then(|b| b.bar_bg.as_ref()),
-                with_alpha(status_bar_color, 90),
-            ),
-            separator_color: ov(
-                bar_ov.and_then(|b| b.separator_color.as_ref()),
-                with_alpha(secondary, 50),
-            ),
-            battery_color: ov(
-                bar_ov.and_then(|b| b.battery_color.as_ref()),
-                lighten(primary, 0.3),
-            ),
-            version_color: ov(bar_ov.and_then(|b| b.version_color.as_ref()), text),
-            clock_color: ov(bar_ov.and_then(|b| b.clock_color.as_ref()), text),
-            url_color: ov(bar_ov.and_then(|b| b.url_color.as_ref()), dim),
-            usb_color: ov(bar_ov.and_then(|b| b.usb_color.as_ref()), dim),
-            tab_active_fill: ov(
-                bar_ov.and_then(|b| b.tab_active_fill.as_ref()),
-                with_alpha(primary, 30),
-            ),
-            tab_inactive_fill: Color::rgba(0, 0, 0, 0),
-            tab_active_alpha: bar_ov.and_then(|b| b.tab_active_alpha).unwrap_or(180),
-            tab_inactive_alpha: bar_ov.and_then(|b| b.tab_inactive_alpha).unwrap_or(60),
-            media_tab_active: ov(bar_ov.and_then(|b| b.media_tab_active.as_ref()), text),
-            media_tab_inactive: ov(bar_ov.and_then(|b| b.media_tab_inactive.as_ref()), dim),
-            pipe_color: ov(
-                bar_ov.and_then(|b| b.pipe_color.as_ref()),
-                with_alpha(text, 60),
-            ),
-            r_hint_color: ov(
-                bar_ov.and_then(|b| b.r_hint_color.as_ref()),
-                with_alpha(text, 140),
-            ),
-            category_label_color: ov(
-                bar_ov.and_then(|b| b.category_label_color.as_ref()),
-                with_alpha(text, 220),
-            ),
-            page_dot_active: ov(
-                bar_ov.and_then(|b| b.page_dot_active.as_ref()),
-                with_alpha(text, 200),
-            ),
-            page_dot_inactive: ov(
-                bar_ov.and_then(|b| b.page_dot_inactive.as_ref()),
-                with_alpha(text, 50),
-            ),
-            statusbar_gradient_top: Self::bar_gradient_pair(
-                skin,
-                bar_ov.and_then(|b| b.statusbar_gradient_top.as_ref()),
-                bar_ov.and_then(|b| b.statusbar_gradient_bottom.as_ref()),
-                status_bar_color,
-            )
-            .map(|(t, _)| t),
-            statusbar_gradient_bottom: Self::bar_gradient_pair(
-                skin,
-                bar_ov.and_then(|b| b.statusbar_gradient_top.as_ref()),
-                bar_ov.and_then(|b| b.statusbar_gradient_bottom.as_ref()),
-                status_bar_color,
-            )
-            .map(|(_, b)| b),
-            gradient_top: Self::bar_gradient_pair(
-                skin,
-                bar_ov.and_then(|b| b.bar_gradient_top.as_ref()),
-                bar_ov.and_then(|b| b.bar_gradient_bottom.as_ref()),
-                status_bar_color,
-            )
-            .map(|(t, _)| t),
-            gradient_bottom: Self::bar_gradient_pair(
-                skin,
-                bar_ov.and_then(|b| b.bar_gradient_top.as_ref()),
-                bar_ov.and_then(|b| b.bar_gradient_bottom.as_ref()),
-                status_bar_color,
-            )
-            .map(|(_, b)| b),
-            text_shadow: bar_ov
-                .and_then(|b| b.text_shadow)
-                .unwrap_or(skin.gradient_enabled == Some(true)),
-            text_shadow_color: ov(
-                bar_ov.and_then(|b| b.text_shadow_color.as_ref()),
-                Color::rgba(0, 0, 0, 128),
-            ),
-            version_text: bar_ov
-                .and_then(|b| b.version_text.clone())
-                .unwrap_or_else(|| "Version 0.1".to_string()),
-            category_label: bar_ov
-                .and_then(|b| b.category_label.clone())
-                .unwrap_or_else(|| "OSS".to_string()),
-            url_text: bar_ov.and_then(|b| b.url_text.clone()).unwrap_or_default(),
-            tab_active_stroke: with_alpha(
-                text,
-                bar_ov.and_then(|b| b.tab_active_alpha).unwrap_or(180),
-            ),
-            tab_inactive_stroke: with_alpha(
-                text,
-                bar_ov.and_then(|b| b.tab_inactive_alpha).unwrap_or(60),
-            ),
-        };
-
-        // -- Icon theme --
-        let icon_label_color = ov(
-            ico.and_then(|i| i.label_color.as_ref()),
-            with_alpha(text, 230),
-        );
-        let icon_label_shadow = {
-            let brightness = icon_label_color.r as u16 * 3 / 10
-                + icon_label_color.g as u16 * 6 / 10
-                + icon_label_color.b as u16 / 10;
-            if brightness > 140 {
-                Some(Color::rgba(0, 0, 0, 120))
-            } else {
-                None
-            }
-        };
-        let icon = IconTheme {
-            body_color: ov(ico.and_then(|i| i.body_color.as_ref()), text),
-            fold_color: ov(ico.and_then(|i| i.fold_color.as_ref()), dim),
-            outline_color: ov(
-                ico.and_then(|i| i.outline_color.as_ref()),
-                with_alpha(text, 180),
-            ),
-            shadow_color: ov(
-                ico.and_then(|i| i.shadow_color.as_ref()),
-                Color::rgba(0, 0, 0, 70),
-            ),
-            label_color: icon_label_color,
-            label_shadow: icon_label_shadow,
-            cursor_color: ov(
-                ico.and_then(|i| i.cursor_color.as_ref()),
-                with_alpha(primary, 80),
-            ),
-            border_radius: ico
-                .and_then(|i| i.icon_border_radius)
-                .unwrap_or_else(|| skin.border_radius.unwrap_or(4)),
-            cursor_border_radius: ico
-                .and_then(|i| i.cursor_border_radius)
-                .unwrap_or_else(|| skin.border_radius.map(|r| r + 2).unwrap_or(6)),
-            cursor_stroke_width: ico.and_then(|i| i.cursor_stroke_width).unwrap_or(2),
-            style: ico
-                .and_then(|i| i.icon_style.clone())
-                .unwrap_or_else(|| "document".to_string()),
-            cursor_style: ico
-                .and_then(|i| i.cursor_style.clone())
-                .unwrap_or_else(|| "stroke".to_string()),
-            shadow_level: skin
-                .geometry
-                .as_ref()
-                .and_then(|g| g.icon_shadow_level)
-                .unwrap_or(1),
-            vector_preset: ico
-                .and_then(|i| i.vector_preset.clone())
-                .unwrap_or_else(|| "altimit".to_string()),
-            idle_float: ico.and_then(|i| i.vector_idle_float).unwrap_or(false),
-            float_amplitude: ico.and_then(|i| i.vector_float_amplitude).unwrap_or(2.0),
-            float_speed: ico.and_then(|i| i.vector_float_speed).unwrap_or(0.04),
-            spin_enabled: ico.and_then(|i| i.vector_spin_enabled).unwrap_or(false),
-            spin_speed: ico.and_then(|i| i.vector_spin_speed).unwrap_or(0.03),
-            pulse_enabled: ico.and_then(|i| i.vector_pulse_enabled).unwrap_or(false),
-            pulse_speed: ico.and_then(|i| i.vector_pulse_speed).unwrap_or(0.06),
-            blink_enabled: ico.and_then(|i| i.vector_blink_enabled).unwrap_or(false),
-            blink_interval: ico.and_then(|i| i.vector_blink_interval).unwrap_or(45),
-        };
-
-        // -- Start menu theme --
-        let menu = StartMenuTheme {
-            panel_bg: ov(
-                sm.and_then(|s| s.panel_bg.as_ref()),
-                Color::rgba(20, 20, 35, 220),
-            ),
-            panel_gradient_top: sm
-                .and_then(|s| s.panel_gradient_top.as_ref())
-                .and_then(|s| parse_hex_color(s)),
-            panel_gradient_bottom: sm
-                .and_then(|s| s.panel_gradient_bottom.as_ref())
-                .and_then(|s| parse_hex_color(s)),
-            panel_border: ov(
-                sm.and_then(|s| s.panel_border.as_ref()),
-                with_alpha(text, 40),
-            ),
-            item_text: ov(sm.and_then(|s| s.item_text.as_ref()), with_alpha(text, 220)),
-            item_text_active: ov(sm.and_then(|s| s.item_text_active.as_ref()), text),
-            highlight_color: ov(
-                sm.and_then(|s| s.highlight_color.as_ref()),
-                with_alpha(primary, 80),
-            ),
-            button_bg: ov(
-                sm.and_then(|s| s.button_bg.as_ref()),
-                with_alpha(primary, 200),
-            ),
-            button_text: ov(sm.and_then(|s| s.button_text.as_ref()), text),
-            panel_border_radius: sm
-                .and_then(|s| s.panel_border_radius)
-                .unwrap_or_else(|| skin.border_radius.unwrap_or(4)),
-            panel_shadow_level: sm.and_then(|s| s.panel_shadow_level).unwrap_or(1),
-            layout_mode: sm
-                .and_then(|s| s.layout_mode.clone())
-                .unwrap_or_else(|| "grid".to_string()),
-            button_label: sm
-                .and_then(|s| s.button_label.clone())
-                .unwrap_or_else(|| "START".to_string()),
-            button_width: sm.and_then(|s| s.button_width).unwrap_or(48),
-            button_height: sm.and_then(|s| s.button_height).unwrap_or(18),
-            button_shape: sm
-                .and_then(|s| s.button_shape.clone())
-                .unwrap_or_else(|| "pill".to_string()),
-            panel_width: sm.and_then(|s| s.panel_width).unwrap_or(200),
-            columns: sm.and_then(|s| s.columns).unwrap_or(2).max(1),
-            button_gradient_top: sm
-                .and_then(|s| s.button_gradient_top.as_ref())
-                .and_then(|s| parse_hex_color(s)),
-            button_gradient_bottom: sm
-                .and_then(|s| s.button_gradient_bottom.as_ref())
-                .and_then(|s| parse_hex_color(s)),
-            header_text: sm.and_then(|s| s.header_text.clone()),
-            header_bg: ov(
-                sm.and_then(|s| s.header_bg.as_ref()),
-                Color::rgba(30, 30, 50, 240),
-            ),
-            header_text_color: ov(sm.and_then(|s| s.header_text_color.as_ref()), text),
-            header_height: sm.and_then(|s| s.header_height).unwrap_or(0),
-            footer_enabled: sm.and_then(|s| s.footer_enabled).unwrap_or(false),
-            footer_bg: ov(
-                sm.and_then(|s| s.footer_bg.as_ref()),
-                Color::rgba(30, 30, 50, 240),
-            ),
-            footer_text_color: ov(sm.and_then(|s| s.footer_text_color.as_ref()), text),
-            footer_height: sm.and_then(|s| s.footer_height).unwrap_or(0),
-            item_icon_size: sm.and_then(|s| s.item_icon_size).unwrap_or(14),
-            item_row_height: sm.and_then(|s| s.item_row_height).unwrap_or(22).max(1),
-            item_colors: sm
-                .and_then(|s| s.item_colors.as_ref())
-                .map(|colors| {
-                    colors
-                        .iter()
-                        .filter_map(|s| parse_hex_color(s))
-                        .collect::<Vec<_>>()
-                })
-                .filter(|v| !v.is_empty())
-                .unwrap_or_else(|| Self::derive_item_palette(primary)),
-            pad_inner: sm.and_then(|s| s.pad_inner).unwrap_or(8),
-            footer_text: sm
-                .and_then(|s| s.footer_text.clone())
-                .unwrap_or_else(|| "Log Off  Shut Down".to_string()),
-            button_x: sm.and_then(|s| s.button_x).unwrap_or(4),
-            panel_x: sm.and_then(|s| s.panel_x).unwrap_or(2),
-            item_separator: sm.and_then(|s| s.item_separator).unwrap_or(false),
-            item_separator_color: {
-                let border = ov(
-                    sm.and_then(|s| s.panel_border.as_ref()),
-                    with_alpha(text, 40),
-                );
-                ov(
-                    sm.and_then(|s| s.item_separator_color.as_ref()),
-                    with_alpha(border, 64),
-                )
-            },
-        };
-
-        // -- App screen theme --
-        let app_screen = AppScreenTheme {
-            bg: ov(
-                ap.and_then(|a| a.app_bg.as_ref()),
-                lighten(skin.background_color(), 0.02),
-            ),
-            divider: ov(
-                ap.and_then(|a| a.divider_color.as_ref()),
-                lighten(skin.background_color(), 0.15),
-            ),
-            selected_text: ov(
-                ap.and_then(|a| a.selected_text.as_ref()),
-                lighten(primary, 0.3),
-            ),
-            text: ov(ap.and_then(|a| a.text_color.as_ref()), lighten(dim, 0.2)),
-            dim_text: ov(ap.and_then(|a| a.dim_text.as_ref()), dim),
-            title_bar_bg: ov(
-                ap.and_then(|a| a.title_bar_bg.as_ref()),
-                lighten(skin.background_color(), 0.08),
-            ),
-            title_bar_text: ov(ap.and_then(|a| a.title_bar_text.as_ref()), text),
-            title_bar_height: ap.and_then(|a| a.title_bar_height).unwrap_or(22),
-            terminal_output_color: ov(
-                ap.and_then(|a| a.terminal_output_color.as_ref()),
-                skin.output_color(),
-            ),
-            terminal_prompt_color: ov(
-                ap.and_then(|a| a.terminal_prompt_color.as_ref()),
-                skin.prompt_color(),
-            ),
-            input_border_radius: ap.and_then(|a| a.input_border_radius).unwrap_or_else(|| {
-                skin.geometry
-                    .as_ref()
-                    .and_then(|g| g.terminal_border_radius)
-                    .unwrap_or(4)
-            }),
-            selected_bg: with_alpha(primary, 40),
-            selection_border_radius: ap.and_then(|a| a.selection_border_radius).unwrap_or(2),
-            selection_accent_color: ov(
-                ap.and_then(|a| a.selection_accent_color.as_ref()),
-                with_alpha(primary, 128),
-            ),
-            title_bar_gradient_top: {
-                Self::bar_gradient_pair(
-                    skin,
-                    ap.and_then(|a| a.title_bar_gradient_top.as_ref()),
-                    ap.and_then(|a| a.title_bar_gradient_bottom.as_ref()),
-                    ov(
-                        ap.and_then(|a| a.title_bar_bg.as_ref()),
-                        darken(status_bar_color, 0.8),
-                    ),
-                )
-                .map(|(t, _)| t)
-            },
-            title_bar_gradient_bottom: {
-                Self::bar_gradient_pair(
-                    skin,
-                    ap.and_then(|a| a.title_bar_gradient_top.as_ref()),
-                    ap.and_then(|a| a.title_bar_gradient_bottom.as_ref()),
-                    ov(
-                        ap.and_then(|a| a.title_bar_bg.as_ref()),
-                        darken(status_bar_color, 0.8),
-                    ),
-                )
-                .map(|(_, b)| b)
-            },
-            title_bar_text_shadow: ap
-                .and_then(|a| a.title_bar_text_shadow)
-                .unwrap_or(skin.gradient_enabled == Some(true)),
-            title_bar_text_shadow_color: ov(
-                ap.and_then(|a| a.title_bar_text_shadow_color.as_ref()),
-                Color::rgba(0, 0, 0, 128),
-            ),
-        };
-
-        // -- OSK theme --
-        let osk_theme = OskTheme {
-            key_bg: ov(
-                ok.and_then(|o| o.key_bg.as_ref()),
-                with_alpha(lighten(skin.background_color(), 0.05), 220),
-            ),
-            key_text: ov(ok.and_then(|o| o.key_text.as_ref()), text),
-            key_focus: ov(ok.and_then(|o| o.key_focus.as_ref()), lighten(primary, 0.3)),
-            key_active: ov(ok.and_then(|o| o.key_active.as_ref()), primary),
-            key_dim_text: ov(ok.and_then(|o| o.key_dim_text.as_ref()), dim),
-        };
-
-        // -- Scrollbar theme --
-        let scrollbar_theme = ScrollbarTheme {
-            track_color: ov(
-                sb.and_then(|s| s.track_color.as_ref()),
-                with_alpha(secondary, 20),
-            ),
-            thumb_color: ov(
-                sb.and_then(|s| s.thumb_color.as_ref()),
-                with_alpha(secondary, 100),
-            ),
-            thumb_hover_color: ov(
-                sb.and_then(|s| s.thumb_hover_color.as_ref()),
-                with_alpha(secondary, 160),
-            ),
-            width: sb
-                .and_then(|s| s.width)
-                .or_else(|| skin.geometry.as_ref().and_then(|g| g.scrollbar_width))
-                .unwrap_or(6),
-            border_radius: skin
-                .geometry
-                .as_ref()
-                .and_then(|g| g.scrollbar_border_radius)
-                .unwrap_or(3),
-        };
-
-        // -- Wallpaper theme --
-        let wallpaper_theme = WallpaperTheme {
-            style: skin
-                .wallpaper
-                .as_ref()
-                .and_then(|w| w.style.clone())
-                .unwrap_or_else(|| "gradient".to_string()),
-            stops: skin
-                .wallpaper
-                .as_ref()
-                .and_then(|w| {
-                    w.color_stops.as_ref().map(|stops| {
-                        stops
-                            .iter()
-                            .filter_map(|s| parse_hex_color(s))
-                            .collect::<Vec<_>>()
-                    })
-                })
-                .filter(|v| !v.is_empty())
-                .unwrap_or_else(|| {
-                    vec![
-                        Color::rgb(245, 110, 15),
-                        Color::rgb(255, 230, 30),
-                        Color::rgb(230, 245, 40),
-                        Color::rgb(140, 235, 50),
-                        Color::rgb(200, 252, 130),
-                    ]
-                }),
-            wave: skin
-                .wallpaper
-                .as_ref()
-                .and_then(|w| w.wave_enabled)
-                .unwrap_or(true),
-            wave_intensity: skin
-                .wallpaper
-                .as_ref()
-                .and_then(|w| w.wave_intensity)
-                .unwrap_or(1.0),
-            angle: skin.wallpaper.as_ref().and_then(|w| w.angle).unwrap_or(0.0),
-            grid_spacing: skin
-                .wallpaper
-                .as_ref()
-                .and_then(|w| w.grid_spacing)
-                .unwrap_or(16),
-            grid_color: skin
-                .wallpaper
-                .as_ref()
-                .and_then(|w| w.grid_color.as_ref())
-                .and_then(|s| parse_hex_color(s))
-                .unwrap_or_else(|| lighten(skin.background_color(), 0.08)),
-            noise_intensity: skin
-                .wallpaper
-                .as_ref()
-                .and_then(|w| w.noise_intensity)
-                .unwrap_or(0.3),
-            animated: skin
-                .wallpaper
-                .as_ref()
-                .and_then(|w| w.animated)
-                .unwrap_or(false),
-        };
-
-        // -- Toast theme --
-        let toast_theme = ToastTheme {
-            info_bg: with_alpha(primary, 220),
-            success_bg: Color::rgba(60, 180, 100, 220),
-            error_bg: with_alpha(skin.error_color(), 220),
-            warning_bg: Color::rgba(230, 170, 40, 220),
-            text_color: text,
-            border_radius: skin
-                .geometry
-                .as_ref()
-                .and_then(|g| g.terminal_border_radius)
-                .unwrap_or(4),
-            ttl: 180,
-            text_shadow: skin.gradient_enabled == Some(true),
-            shadow_level: 1,
-            fade_frames: skin
-                .geometry
-                .as_ref()
-                .and_then(|g| g.toast_fade_frames)
-                .unwrap_or(10),
-            margin: skin
-                .geometry
-                .as_ref()
-                .and_then(|g| g.toast_margin)
-                .unwrap_or(8),
-            height: skin
-                .geometry
-                .as_ref()
-                .and_then(|g| g.toast_height)
-                .unwrap_or(24),
-            width_fraction: skin
-                .geometry
-                .as_ref()
-                .and_then(|g| g.toast_width_fraction)
-                .unwrap_or(0.333),
-            gap: skin
-                .geometry
-                .as_ref()
-                .and_then(|g| g.toast_gap)
-                .unwrap_or(4),
-            slide_in: skin
-                .geometry
-                .as_ref()
-                .and_then(|g| g.toast_slide_in)
-                .unwrap_or(true),
-        };
-
-        // -- Background layers --
+        let bar_ov = skin.bar_overrides.as_ref();
         let bg_perf = skin.background_performance.as_ref();
-        let bg_max_layers = bg_perf.and_then(|p| p.max_layers).unwrap_or(8);
-        let bg_reduced_motion = bg_perf.and_then(|p| p.reduced_motion).unwrap_or(false);
-        let bg_complexity_budget = bg_perf.and_then(|p| p.complexity_budget).unwrap_or(200);
-        let background_layers = skin
-            .background_layers
-            .as_ref()
-            .map(|layers| {
-                layers
-                    .iter()
-                    .take(bg_max_layers as usize)
-                    .filter_map(|cfg| Self::convert_background_layer(cfg, &ov))
-                    .collect::<Vec<_>>()
-            })
-            .unwrap_or_default();
 
-        // -- Icon entrance/focus --
         let focus_glow_color = ov(
             ico.and_then(|i| i.focus_glow_color.as_ref()),
             with_alpha(primary, 100),
@@ -556,9 +67,9 @@ impl ActiveTheme {
             wallpaper: wallpaper_theme,
             toast: toast_theme,
             background_layers,
-            background_max_layers: bg_max_layers,
-            background_reduced_motion: bg_reduced_motion,
-            background_complexity_budget: bg_complexity_budget,
+            background_max_layers: bg_perf.and_then(|p| p.max_layers).unwrap_or(8),
+            background_reduced_motion: bg_perf.and_then(|p| p.reduced_motion).unwrap_or(false),
+            background_complexity_budget: bg_perf.and_then(|p| p.complexity_budget).unwrap_or(200),
             entrance_style: ico
                 .and_then(|i| i.entrance_style.clone())
                 .unwrap_or_else(|| "none".to_string()),
@@ -827,6 +338,548 @@ impl ActiveTheme {
             },
             ui_theme: skin.to_ui_theme(),
         }
+    }
+
+    /// Derive the bar (status bar + bottom bar) theme from skin overrides.
+    fn derive_bar_theme(
+        skin: &SkinTheme,
+        status_bar_color: Color,
+        primary: Color,
+        secondary: Color,
+        text: Color,
+        dim: Color,
+    ) -> BarTheme {
+        let bar_ov = skin.bar_overrides.as_ref();
+
+        BarTheme {
+            statusbar_bg: ov(
+                bar_ov.and_then(|b| b.statusbar_bg.as_ref()),
+                with_alpha(status_bar_color, 80),
+            ),
+            bg: ov(
+                bar_ov.and_then(|b| b.bar_bg.as_ref()),
+                with_alpha(status_bar_color, 90),
+            ),
+            separator_color: ov(
+                bar_ov.and_then(|b| b.separator_color.as_ref()),
+                with_alpha(secondary, 50),
+            ),
+            battery_color: ov(
+                bar_ov.and_then(|b| b.battery_color.as_ref()),
+                lighten(primary, 0.3),
+            ),
+            version_color: ov(bar_ov.and_then(|b| b.version_color.as_ref()), text),
+            clock_color: ov(bar_ov.and_then(|b| b.clock_color.as_ref()), text),
+            url_color: ov(bar_ov.and_then(|b| b.url_color.as_ref()), dim),
+            usb_color: ov(bar_ov.and_then(|b| b.usb_color.as_ref()), dim),
+            tab_active_fill: ov(
+                bar_ov.and_then(|b| b.tab_active_fill.as_ref()),
+                with_alpha(primary, 30),
+            ),
+            tab_inactive_fill: Color::rgba(0, 0, 0, 0),
+            tab_active_alpha: bar_ov.and_then(|b| b.tab_active_alpha).unwrap_or(180),
+            tab_inactive_alpha: bar_ov.and_then(|b| b.tab_inactive_alpha).unwrap_or(60),
+            media_tab_active: ov(bar_ov.and_then(|b| b.media_tab_active.as_ref()), text),
+            media_tab_inactive: ov(bar_ov.and_then(|b| b.media_tab_inactive.as_ref()), dim),
+            pipe_color: ov(
+                bar_ov.and_then(|b| b.pipe_color.as_ref()),
+                with_alpha(text, 60),
+            ),
+            r_hint_color: ov(
+                bar_ov.and_then(|b| b.r_hint_color.as_ref()),
+                with_alpha(text, 140),
+            ),
+            category_label_color: ov(
+                bar_ov.and_then(|b| b.category_label_color.as_ref()),
+                with_alpha(text, 220),
+            ),
+            page_dot_active: ov(
+                bar_ov.and_then(|b| b.page_dot_active.as_ref()),
+                with_alpha(text, 200),
+            ),
+            page_dot_inactive: ov(
+                bar_ov.and_then(|b| b.page_dot_inactive.as_ref()),
+                with_alpha(text, 50),
+            ),
+            statusbar_gradient_top: Self::bar_gradient_pair(
+                skin,
+                bar_ov.and_then(|b| b.statusbar_gradient_top.as_ref()),
+                bar_ov.and_then(|b| b.statusbar_gradient_bottom.as_ref()),
+                status_bar_color,
+            )
+            .map(|(t, _)| t),
+            statusbar_gradient_bottom: Self::bar_gradient_pair(
+                skin,
+                bar_ov.and_then(|b| b.statusbar_gradient_top.as_ref()),
+                bar_ov.and_then(|b| b.statusbar_gradient_bottom.as_ref()),
+                status_bar_color,
+            )
+            .map(|(_, b)| b),
+            gradient_top: Self::bar_gradient_pair(
+                skin,
+                bar_ov.and_then(|b| b.bar_gradient_top.as_ref()),
+                bar_ov.and_then(|b| b.bar_gradient_bottom.as_ref()),
+                status_bar_color,
+            )
+            .map(|(t, _)| t),
+            gradient_bottom: Self::bar_gradient_pair(
+                skin,
+                bar_ov.and_then(|b| b.bar_gradient_top.as_ref()),
+                bar_ov.and_then(|b| b.bar_gradient_bottom.as_ref()),
+                status_bar_color,
+            )
+            .map(|(_, b)| b),
+            text_shadow: bar_ov
+                .and_then(|b| b.text_shadow)
+                .unwrap_or(skin.gradient_enabled == Some(true)),
+            text_shadow_color: ov(
+                bar_ov.and_then(|b| b.text_shadow_color.as_ref()),
+                Color::rgba(0, 0, 0, 128),
+            ),
+            version_text: bar_ov
+                .and_then(|b| b.version_text.clone())
+                .unwrap_or_else(|| "Version 0.1".to_string()),
+            category_label: bar_ov
+                .and_then(|b| b.category_label.clone())
+                .unwrap_or_else(|| "OSS".to_string()),
+            url_text: bar_ov.and_then(|b| b.url_text.clone()).unwrap_or_default(),
+            tab_active_stroke: with_alpha(
+                text,
+                bar_ov.and_then(|b| b.tab_active_alpha).unwrap_or(180),
+            ),
+            tab_inactive_stroke: with_alpha(
+                text,
+                bar_ov.and_then(|b| b.tab_inactive_alpha).unwrap_or(60),
+            ),
+        }
+    }
+
+    /// Derive the icon theme from skin overrides.
+    fn derive_icon_theme(skin: &SkinTheme, primary: Color, text: Color, dim: Color) -> IconTheme {
+        let ico = skin.icon_overrides.as_ref();
+
+        let icon_label_color = ov(
+            ico.and_then(|i| i.label_color.as_ref()),
+            with_alpha(text, 230),
+        );
+        let icon_label_shadow = {
+            let brightness = icon_label_color.r as u16 * 3 / 10
+                + icon_label_color.g as u16 * 6 / 10
+                + icon_label_color.b as u16 / 10;
+            if brightness > 140 {
+                Some(Color::rgba(0, 0, 0, 120))
+            } else {
+                None
+            }
+        };
+
+        IconTheme {
+            body_color: ov(ico.and_then(|i| i.body_color.as_ref()), text),
+            fold_color: ov(ico.and_then(|i| i.fold_color.as_ref()), dim),
+            outline_color: ov(
+                ico.and_then(|i| i.outline_color.as_ref()),
+                with_alpha(text, 180),
+            ),
+            shadow_color: ov(
+                ico.and_then(|i| i.shadow_color.as_ref()),
+                Color::rgba(0, 0, 0, 70),
+            ),
+            label_color: icon_label_color,
+            label_shadow: icon_label_shadow,
+            cursor_color: ov(
+                ico.and_then(|i| i.cursor_color.as_ref()),
+                with_alpha(primary, 80),
+            ),
+            border_radius: ico
+                .and_then(|i| i.icon_border_radius)
+                .unwrap_or_else(|| skin.border_radius.unwrap_or(4)),
+            cursor_border_radius: ico
+                .and_then(|i| i.cursor_border_radius)
+                .unwrap_or_else(|| skin.border_radius.map(|r| r + 2).unwrap_or(6)),
+            cursor_stroke_width: ico.and_then(|i| i.cursor_stroke_width).unwrap_or(2),
+            style: ico
+                .and_then(|i| i.icon_style.clone())
+                .unwrap_or_else(|| "document".to_string()),
+            cursor_style: ico
+                .and_then(|i| i.cursor_style.clone())
+                .unwrap_or_else(|| "stroke".to_string()),
+            shadow_level: skin
+                .geometry
+                .as_ref()
+                .and_then(|g| g.icon_shadow_level)
+                .unwrap_or(1),
+            vector_preset: ico
+                .and_then(|i| i.vector_preset.clone())
+                .unwrap_or_else(|| "altimit".to_string()),
+            idle_float: ico.and_then(|i| i.vector_idle_float).unwrap_or(false),
+            float_amplitude: ico.and_then(|i| i.vector_float_amplitude).unwrap_or(2.0),
+            float_speed: ico.and_then(|i| i.vector_float_speed).unwrap_or(0.04),
+            spin_enabled: ico.and_then(|i| i.vector_spin_enabled).unwrap_or(false),
+            spin_speed: ico.and_then(|i| i.vector_spin_speed).unwrap_or(0.03),
+            pulse_enabled: ico.and_then(|i| i.vector_pulse_enabled).unwrap_or(false),
+            pulse_speed: ico.and_then(|i| i.vector_pulse_speed).unwrap_or(0.06),
+            blink_enabled: ico.and_then(|i| i.vector_blink_enabled).unwrap_or(false),
+            blink_interval: ico.and_then(|i| i.vector_blink_interval).unwrap_or(45),
+        }
+    }
+
+    /// Derive the start menu theme from skin overrides.
+    fn derive_start_menu_theme(skin: &SkinTheme, primary: Color, text: Color) -> StartMenuTheme {
+        let sm = skin.start_menu_overrides.as_ref();
+
+        StartMenuTheme {
+            panel_bg: ov(
+                sm.and_then(|s| s.panel_bg.as_ref()),
+                Color::rgba(20, 20, 35, 220),
+            ),
+            panel_gradient_top: sm
+                .and_then(|s| s.panel_gradient_top.as_ref())
+                .and_then(|s| parse_hex_color(s)),
+            panel_gradient_bottom: sm
+                .and_then(|s| s.panel_gradient_bottom.as_ref())
+                .and_then(|s| parse_hex_color(s)),
+            panel_border: ov(
+                sm.and_then(|s| s.panel_border.as_ref()),
+                with_alpha(text, 40),
+            ),
+            item_text: ov(sm.and_then(|s| s.item_text.as_ref()), with_alpha(text, 220)),
+            item_text_active: ov(sm.and_then(|s| s.item_text_active.as_ref()), text),
+            highlight_color: ov(
+                sm.and_then(|s| s.highlight_color.as_ref()),
+                with_alpha(primary, 80),
+            ),
+            button_bg: ov(
+                sm.and_then(|s| s.button_bg.as_ref()),
+                with_alpha(primary, 200),
+            ),
+            button_text: ov(sm.and_then(|s| s.button_text.as_ref()), text),
+            panel_border_radius: sm
+                .and_then(|s| s.panel_border_radius)
+                .unwrap_or_else(|| skin.border_radius.unwrap_or(4)),
+            panel_shadow_level: sm.and_then(|s| s.panel_shadow_level).unwrap_or(1),
+            layout_mode: sm
+                .and_then(|s| s.layout_mode.clone())
+                .unwrap_or_else(|| "grid".to_string()),
+            button_label: sm
+                .and_then(|s| s.button_label.clone())
+                .unwrap_or_else(|| "START".to_string()),
+            button_width: sm.and_then(|s| s.button_width).unwrap_or(48),
+            button_height: sm.and_then(|s| s.button_height).unwrap_or(18),
+            button_shape: sm
+                .and_then(|s| s.button_shape.clone())
+                .unwrap_or_else(|| "pill".to_string()),
+            panel_width: sm.and_then(|s| s.panel_width).unwrap_or(200),
+            columns: sm.and_then(|s| s.columns).unwrap_or(2).max(1),
+            button_gradient_top: sm
+                .and_then(|s| s.button_gradient_top.as_ref())
+                .and_then(|s| parse_hex_color(s)),
+            button_gradient_bottom: sm
+                .and_then(|s| s.button_gradient_bottom.as_ref())
+                .and_then(|s| parse_hex_color(s)),
+            header_text: sm.and_then(|s| s.header_text.clone()),
+            header_bg: ov(
+                sm.and_then(|s| s.header_bg.as_ref()),
+                Color::rgba(30, 30, 50, 240),
+            ),
+            header_text_color: ov(sm.and_then(|s| s.header_text_color.as_ref()), text),
+            header_height: sm.and_then(|s| s.header_height).unwrap_or(0),
+            footer_enabled: sm.and_then(|s| s.footer_enabled).unwrap_or(false),
+            footer_bg: ov(
+                sm.and_then(|s| s.footer_bg.as_ref()),
+                Color::rgba(30, 30, 50, 240),
+            ),
+            footer_text_color: ov(sm.and_then(|s| s.footer_text_color.as_ref()), text),
+            footer_height: sm.and_then(|s| s.footer_height).unwrap_or(0),
+            item_icon_size: sm.and_then(|s| s.item_icon_size).unwrap_or(14),
+            item_row_height: sm.and_then(|s| s.item_row_height).unwrap_or(22).max(1),
+            item_colors: sm
+                .and_then(|s| s.item_colors.as_ref())
+                .map(|colors| {
+                    colors
+                        .iter()
+                        .filter_map(|s| parse_hex_color(s))
+                        .collect::<Vec<_>>()
+                })
+                .filter(|v| !v.is_empty())
+                .unwrap_or_else(|| Self::derive_item_palette(primary)),
+            pad_inner: sm.and_then(|s| s.pad_inner).unwrap_or(8),
+            footer_text: sm
+                .and_then(|s| s.footer_text.clone())
+                .unwrap_or_else(|| "Log Off  Shut Down".to_string()),
+            button_x: sm.and_then(|s| s.button_x).unwrap_or(4),
+            panel_x: sm.and_then(|s| s.panel_x).unwrap_or(2),
+            item_separator: sm.and_then(|s| s.item_separator).unwrap_or(false),
+            item_separator_color: {
+                let border = ov(
+                    sm.and_then(|s| s.panel_border.as_ref()),
+                    with_alpha(text, 40),
+                );
+                ov(
+                    sm.and_then(|s| s.item_separator_color.as_ref()),
+                    with_alpha(border, 64),
+                )
+            },
+        }
+    }
+
+    /// Derive the app screen theme from skin overrides.
+    fn derive_app_screen_theme(
+        skin: &SkinTheme,
+        status_bar_color: Color,
+        primary: Color,
+        text: Color,
+        dim: Color,
+    ) -> AppScreenTheme {
+        let ap = skin.app_overrides.as_ref();
+
+        AppScreenTheme {
+            bg: ov(
+                ap.and_then(|a| a.app_bg.as_ref()),
+                lighten(skin.background_color(), 0.02),
+            ),
+            divider: ov(
+                ap.and_then(|a| a.divider_color.as_ref()),
+                lighten(skin.background_color(), 0.15),
+            ),
+            selected_text: ov(
+                ap.and_then(|a| a.selected_text.as_ref()),
+                lighten(primary, 0.3),
+            ),
+            text: ov(ap.and_then(|a| a.text_color.as_ref()), lighten(dim, 0.2)),
+            dim_text: ov(ap.and_then(|a| a.dim_text.as_ref()), dim),
+            title_bar_bg: ov(
+                ap.and_then(|a| a.title_bar_bg.as_ref()),
+                lighten(skin.background_color(), 0.08),
+            ),
+            title_bar_text: ov(ap.and_then(|a| a.title_bar_text.as_ref()), text),
+            title_bar_height: ap.and_then(|a| a.title_bar_height).unwrap_or(22),
+            terminal_output_color: ov(
+                ap.and_then(|a| a.terminal_output_color.as_ref()),
+                skin.output_color(),
+            ),
+            terminal_prompt_color: ov(
+                ap.and_then(|a| a.terminal_prompt_color.as_ref()),
+                skin.prompt_color(),
+            ),
+            input_border_radius: ap.and_then(|a| a.input_border_radius).unwrap_or_else(|| {
+                skin.geometry
+                    .as_ref()
+                    .and_then(|g| g.terminal_border_radius)
+                    .unwrap_or(4)
+            }),
+            selected_bg: with_alpha(primary, 40),
+            selection_border_radius: ap.and_then(|a| a.selection_border_radius).unwrap_or(2),
+            selection_accent_color: ov(
+                ap.and_then(|a| a.selection_accent_color.as_ref()),
+                with_alpha(primary, 128),
+            ),
+            title_bar_gradient_top: {
+                Self::bar_gradient_pair(
+                    skin,
+                    ap.and_then(|a| a.title_bar_gradient_top.as_ref()),
+                    ap.and_then(|a| a.title_bar_gradient_bottom.as_ref()),
+                    ov(
+                        ap.and_then(|a| a.title_bar_bg.as_ref()),
+                        darken(status_bar_color, 0.8),
+                    ),
+                )
+                .map(|(t, _)| t)
+            },
+            title_bar_gradient_bottom: {
+                Self::bar_gradient_pair(
+                    skin,
+                    ap.and_then(|a| a.title_bar_gradient_top.as_ref()),
+                    ap.and_then(|a| a.title_bar_gradient_bottom.as_ref()),
+                    ov(
+                        ap.and_then(|a| a.title_bar_bg.as_ref()),
+                        darken(status_bar_color, 0.8),
+                    ),
+                )
+                .map(|(_, b)| b)
+            },
+            title_bar_text_shadow: ap
+                .and_then(|a| a.title_bar_text_shadow)
+                .unwrap_or(skin.gradient_enabled == Some(true)),
+            title_bar_text_shadow_color: ov(
+                ap.and_then(|a| a.title_bar_text_shadow_color.as_ref()),
+                Color::rgba(0, 0, 0, 128),
+            ),
+        }
+    }
+
+    /// Derive the on-screen keyboard theme from skin overrides.
+    fn derive_osk_theme(skin: &SkinTheme, primary: Color, text: Color, dim: Color) -> OskTheme {
+        let ok = skin.osk_overrides.as_ref();
+
+        OskTheme {
+            key_bg: ov(
+                ok.and_then(|o| o.key_bg.as_ref()),
+                with_alpha(lighten(skin.background_color(), 0.05), 220),
+            ),
+            key_text: ov(ok.and_then(|o| o.key_text.as_ref()), text),
+            key_focus: ov(ok.and_then(|o| o.key_focus.as_ref()), lighten(primary, 0.3)),
+            key_active: ov(ok.and_then(|o| o.key_active.as_ref()), primary),
+            key_dim_text: ov(ok.and_then(|o| o.key_dim_text.as_ref()), dim),
+        }
+    }
+
+    /// Derive the scrollbar theme from skin overrides.
+    fn derive_scrollbar_theme(skin: &SkinTheme, secondary: Color) -> ScrollbarTheme {
+        let sb = skin.scrollbar_overrides.as_ref();
+
+        ScrollbarTheme {
+            track_color: ov(
+                sb.and_then(|s| s.track_color.as_ref()),
+                with_alpha(secondary, 20),
+            ),
+            thumb_color: ov(
+                sb.and_then(|s| s.thumb_color.as_ref()),
+                with_alpha(secondary, 100),
+            ),
+            thumb_hover_color: ov(
+                sb.and_then(|s| s.thumb_hover_color.as_ref()),
+                with_alpha(secondary, 160),
+            ),
+            width: sb
+                .and_then(|s| s.width)
+                .or_else(|| skin.geometry.as_ref().and_then(|g| g.scrollbar_width))
+                .unwrap_or(6),
+            border_radius: skin
+                .geometry
+                .as_ref()
+                .and_then(|g| g.scrollbar_border_radius)
+                .unwrap_or(3),
+        }
+    }
+
+    /// Derive the wallpaper theme from skin configuration.
+    fn derive_wallpaper_theme(skin: &SkinTheme) -> WallpaperTheme {
+        WallpaperTheme {
+            style: skin
+                .wallpaper
+                .as_ref()
+                .and_then(|w| w.style.clone())
+                .unwrap_or_else(|| "gradient".to_string()),
+            stops: skin
+                .wallpaper
+                .as_ref()
+                .and_then(|w| {
+                    w.color_stops.as_ref().map(|stops| {
+                        stops
+                            .iter()
+                            .filter_map(|s| parse_hex_color(s))
+                            .collect::<Vec<_>>()
+                    })
+                })
+                .filter(|v| !v.is_empty())
+                .unwrap_or_else(|| {
+                    vec![
+                        Color::rgb(245, 110, 15),
+                        Color::rgb(255, 230, 30),
+                        Color::rgb(230, 245, 40),
+                        Color::rgb(140, 235, 50),
+                        Color::rgb(200, 252, 130),
+                    ]
+                }),
+            wave: skin
+                .wallpaper
+                .as_ref()
+                .and_then(|w| w.wave_enabled)
+                .unwrap_or(true),
+            wave_intensity: skin
+                .wallpaper
+                .as_ref()
+                .and_then(|w| w.wave_intensity)
+                .unwrap_or(1.0),
+            angle: skin.wallpaper.as_ref().and_then(|w| w.angle).unwrap_or(0.0),
+            grid_spacing: skin
+                .wallpaper
+                .as_ref()
+                .and_then(|w| w.grid_spacing)
+                .unwrap_or(16),
+            grid_color: skin
+                .wallpaper
+                .as_ref()
+                .and_then(|w| w.grid_color.as_ref())
+                .and_then(|s| parse_hex_color(s))
+                .unwrap_or_else(|| lighten(skin.background_color(), 0.08)),
+            noise_intensity: skin
+                .wallpaper
+                .as_ref()
+                .and_then(|w| w.noise_intensity)
+                .unwrap_or(0.3),
+            animated: skin
+                .wallpaper
+                .as_ref()
+                .and_then(|w| w.animated)
+                .unwrap_or(false),
+        }
+    }
+
+    /// Derive the toast notification theme from skin configuration.
+    fn derive_toast_theme(skin: &SkinTheme, primary: Color, text: Color) -> ToastTheme {
+        ToastTheme {
+            info_bg: with_alpha(primary, 220),
+            success_bg: Color::rgba(60, 180, 100, 220),
+            error_bg: with_alpha(skin.error_color(), 220),
+            warning_bg: Color::rgba(230, 170, 40, 220),
+            text_color: text,
+            border_radius: skin
+                .geometry
+                .as_ref()
+                .and_then(|g| g.terminal_border_radius)
+                .unwrap_or(4),
+            ttl: 180,
+            text_shadow: skin.gradient_enabled == Some(true),
+            shadow_level: 1,
+            fade_frames: skin
+                .geometry
+                .as_ref()
+                .and_then(|g| g.toast_fade_frames)
+                .unwrap_or(10),
+            margin: skin
+                .geometry
+                .as_ref()
+                .and_then(|g| g.toast_margin)
+                .unwrap_or(8),
+            height: skin
+                .geometry
+                .as_ref()
+                .and_then(|g| g.toast_height)
+                .unwrap_or(24),
+            width_fraction: skin
+                .geometry
+                .as_ref()
+                .and_then(|g| g.toast_width_fraction)
+                .unwrap_or(0.333),
+            gap: skin
+                .geometry
+                .as_ref()
+                .and_then(|g| g.toast_gap)
+                .unwrap_or(4),
+            slide_in: skin
+                .geometry
+                .as_ref()
+                .and_then(|g| g.toast_slide_in)
+                .unwrap_or(true),
+        }
+    }
+
+    /// Derive background layers from skin configuration.
+    fn derive_background_layers(skin: &SkinTheme) -> Vec<oasis_vector::BackgroundLayer> {
+        let bg_perf = skin.background_performance.as_ref();
+        let bg_max_layers = bg_perf.and_then(|p| p.max_layers).unwrap_or(8);
+
+        skin.background_layers
+            .as_ref()
+            .map(|layers| {
+                layers
+                    .iter()
+                    .take(bg_max_layers as usize)
+                    .filter_map(|cfg| Self::convert_background_layer(cfg, &ov))
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default()
     }
 
     /// Derive an `ActiveTheme` directly from 9 base `Color` values.
@@ -1197,13 +1250,13 @@ impl ActiveTheme {
     /// Convert a TOML background layer config to a runtime `BackgroundLayer`.
     fn convert_background_layer(
         cfg: &crate::theme::BackgroundLayerConfig,
-        ov: &dyn Fn(Option<&String>, Color) -> Color,
+        ov_fn: &dyn Fn(Option<&String>, Color) -> Color,
     ) -> Option<oasis_vector::BackgroundLayer> {
         use oasis_vector::background::{
             Anchor, BackgroundLayer, LayerAnimation, LayerKind, LayerPosition,
         };
 
-        let color = ov(cfg.color.as_ref(), Color::rgba(255, 255, 255, 18));
+        let color = ov_fn(cfg.color.as_ref(), Color::rgba(255, 255, 255, 18));
 
         let kind = match cfg.kind.as_str() {
             "grid" => LayerKind::Grid {
@@ -1316,7 +1369,7 @@ fn parse_shader_params(cfg: &crate::theme::BackgroundLayerConfig) -> oasis_vecto
     let mut params = oasis_vector::ShaderParams::default();
 
     if let Some(ref table) = cfg.shader_params {
-        // Extract color_1, color_2, color_3 as hex → [f32; 4].
+        // Extract color_1, color_2, color_3 as hex -> [f32; 4].
         for key in &["color_1", "color_2", "color_3"] {
             if let Some(toml::Value::String(hex)) = table.get(*key)
                 && let Some(c) = hex_to_f32_color(hex)
@@ -1350,7 +1403,7 @@ fn parse_shader_params(cfg: &crate::theme::BackgroundLayerConfig) -> oasis_vecto
     params
 }
 
-/// Parse a hex color string (e.g. "#DE4440") to `[f32; 4]` (0.0–1.0 RGBA).
+/// Parse a hex color string (e.g. "#DE4440") to `[f32; 4]` (0.0-1.0 RGBA).
 fn hex_to_f32_color(hex: &str) -> Option<[f32; 4]> {
     let c = parse_hex_color(hex)?;
     Some([
