@@ -4,13 +4,10 @@ use oasis_types::error::Result;
 
 use crate::interpreter::{Command, CommandOutput, Environment};
 
-/// Register platform service commands.
-pub fn register_platform_commands(reg: &mut crate::CommandRegistry) {
-    reg.register(Box::new(PowerCmd));
-    reg.register(Box::new(ClockCmd));
-    reg.register(Box::new(MemoryCmd));
-    reg.register(Box::new(UsbCmd));
-}
+register_commands!(
+    register_platform_commands,
+    [PowerCmd, ClockCmd, MemoryCmd, UsbCmd]
+);
 
 // ---------------------------------------------------------------------------
 // power

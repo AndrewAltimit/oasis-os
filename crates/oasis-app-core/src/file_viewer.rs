@@ -295,3 +295,271 @@ pub fn view_generic_file(path: &str, data: &[u8]) -> Vec<String> {
     lines.push("Cancel=back".to_string());
     lines
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // -- parent_dir --
+
+    #[test]
+    fn parent_dir_root() {
+        assert_eq!(parent_dir("/"), "/");
+    }
+
+    #[test]
+    fn parent_dir_top_level() {
+        assert_eq!(parent_dir("/home"), "/");
+    }
+
+    #[test]
+    fn parent_dir_nested() {
+        assert_eq!(parent_dir("/home/user/docs"), "/home/user");
+    }
+
+    #[test]
+    fn parent_dir_trailing_slash() {
+        // Trailing slash is stripped first, so "/home/user/" -> parent of "/home/user" = "/home"
+        assert_eq!(parent_dir("/home/user/"), "/home");
+    }
+
+    #[test]
+    fn parent_dir_deep_path() {
+        assert_eq!(parent_dir("/a/b/c/d/e"), "/a/b/c/d");
+    }
+
+    // -- join_path --
+
+    #[test]
+    fn join_path_root() {
+        assert_eq!(join_path("/", "file.txt"), "/file.txt");
+    }
+
+    #[test]
+    fn join_path_subdir() {
+        assert_eq!(join_path("/home/user", "docs"), "/home/user/docs");
+    }
+
+    #[test]
+    fn join_path_no_double_slash() {
+        let result = join_path("/", "test");
+        assert!(!result.starts_with("//"));
+    }
+
+    // -- view_audio_file (WAV) --
+
+    #[test]
+    fn view_audio_wav() {
+        // Minimal WAV header: RIFF....WAVEfmt + data
+        let mut wav = vec![0u8; 44];
+        wav[..4].copy_from_slice(b"RIFF");
+        wav[8..12].copy_from_slice(b"WAVE");
+        // channels = 2
+        wav[22] = 2;
+        wav[23] = 0;
+        // sample rate = 44100 (0xAC44)
+        wav[24..28].copy_from_slice(&44100u32.to_le_bytes());
+        // bits per sample = 16
+        wav[34] = 16;
+        wav[35] = 0;
+        // data size = 176400 (1 second of stereo 16-bit 44100Hz)
+        wav[40..44].copy_from_slice(&176400u32.to_le_bytes());
+
+        let lines = view_audio_file("/music/song.wav", &wav);
+        assert!(lines.iter().any(|l| l.contains("WAV")));
+        assert!(lines.iter().any(|l| l.contains("44100")));
+        assert!(lines.iter().any(|l| l.contains("16-bit")));
+        assert!(lines.iter().any(|l| l.contains("song.wav")));
+    }
+
+    // -- view_audio_file (MP3 with sync bytes) --
+
+    #[test]
+    fn view_audio_mp3_sync() {
+        let mp3 = vec![0xFF, 0xFB, 0x90, 0x00]; // MP3 frame sync
+        let lines = view_audio_file("/music/track.mp3", &mp3);
+        assert!(lines.iter().any(|l| l.contains("MP3")));
+        assert!(lines.iter().any(|l| l.contains("track.mp3")));
+    }
+
+    // -- view_audio_file (MP3 with ID3v2 tag) --
+
+    #[test]
+    fn view_audio_mp3_id3() {
+        let mut data = Vec::new();
+        // ID3v2 header
+        data.extend_from_slice(b"ID3");
+        data.push(3); // version
+        data.push(0); // revision
+        data.push(0); // flags
+        // Tag size (syncsafe): encode 30 as syncsafe
+        // 30 = 0b0011110 -> syncsafe [0, 0, 0, 30]
+        data.extend_from_slice(&[0, 0, 0, 30]);
+        // TIT2 frame: "TestTitle"
+        data.extend_from_slice(b"TIT2");
+        let title_bytes = b"\x03TestTitle"; // encoding byte + text
+        data.extend_from_slice(&(title_bytes.len() as u32).to_be_bytes());
+        data.extend_from_slice(&[0, 0]); // flags
+        data.extend_from_slice(title_bytes);
+        // Pad to reach header_size
+        while data.len() < 40 {
+            data.push(0);
+        }
+
+        let lines = view_audio_file("/music/id3.mp3", &data);
+        assert!(lines.iter().any(|l| l.contains("MP3")));
+        assert!(lines.iter().any(|l| l.contains("TestTitle")));
+    }
+
+    // -- view_audio_file (unknown format) --
+
+    #[test]
+    fn view_audio_unknown_format() {
+        let data = vec![0x00, 0x01, 0x02, 0x03];
+        let lines = view_audio_file("/music/sound.ogg", &data);
+        assert!(lines.iter().any(|l| l.contains("ogg")));
+    }
+
+    // -- view_image_file (PNG) --
+
+    #[test]
+    fn view_image_png() {
+        let mut png = vec![0u8; 30];
+        png[..8].copy_from_slice(b"\x89PNG\r\n\x1a\n");
+        // Width = 1920 at offset 16
+        png[16..20].copy_from_slice(&1920u32.to_be_bytes());
+        // Height = 1080 at offset 20
+        png[20..24].copy_from_slice(&1080u32.to_be_bytes());
+        png[24] = 8; // bit depth
+        png[25] = 6; // color type: RGBA
+
+        let lines = view_image_file("/photos/img.png", &png);
+        assert!(lines.iter().any(|l| l.contains("PNG")));
+        assert!(lines.iter().any(|l| l.contains("1920 x 1080")));
+        assert!(lines.iter().any(|l| l.contains("RGBA")));
+    }
+
+    // -- view_image_file (JPEG) --
+
+    #[test]
+    fn view_image_jpeg() {
+        // Minimal JPEG with SOF0 marker
+        let mut jpg = vec![0xFF, 0xD8]; // SOI
+        // APP0 segment (minimal)
+        jpg.extend_from_slice(&[0xFF, 0xE0, 0x00, 0x02]);
+        // SOF0 marker
+        jpg.extend_from_slice(&[0xFF, 0xC0]);
+        jpg.extend_from_slice(&[0x00, 0x0B]); // segment length
+        jpg.push(8); // precision
+        jpg.extend_from_slice(&640u16.to_be_bytes()); // height
+        jpg.extend_from_slice(&480u16.to_be_bytes()); // width
+        jpg.push(3); // components
+        // Enough padding
+        jpg.extend_from_slice(&[0; 10]);
+
+        let lines = view_image_file("/photos/pic.jpg", &jpg);
+        assert!(lines.iter().any(|l| l.contains("JPEG")));
+        assert!(lines.iter().any(|l| l.contains("480 x 640")));
+    }
+
+    // -- view_image_file (GIF) --
+
+    #[test]
+    fn view_image_gif() {
+        let mut gif = vec![0u8; 12];
+        gif[..4].copy_from_slice(b"GIF8");
+        // Width = 320 at offset 6 (little-endian)
+        gif[6..8].copy_from_slice(&320u16.to_le_bytes());
+        // Height = 200 at offset 8
+        gif[8..10].copy_from_slice(&200u16.to_le_bytes());
+
+        let lines = view_image_file("/img/anim.gif", &gif);
+        assert!(lines.iter().any(|l| l.contains("GIF")));
+        assert!(lines.iter().any(|l| l.contains("320 x 200")));
+    }
+
+    // -- view_image_file (WebP) --
+
+    #[test]
+    fn view_image_webp() {
+        let mut webp = vec![0u8; 16];
+        webp[..4].copy_from_slice(b"RIFF");
+        webp[8..12].copy_from_slice(b"WEBP");
+
+        let lines = view_image_file("/img/photo.webp", &webp);
+        assert!(lines.iter().any(|l| l.contains("WebP")));
+    }
+
+    // -- view_image_file (unknown) --
+
+    #[test]
+    fn view_image_unknown() {
+        let data = vec![0x00, 0x01];
+        let lines = view_image_file("/img/photo.tiff", &data);
+        assert!(lines.iter().any(|l| l.contains("tiff")));
+    }
+
+    // -- view_generic_file (text) --
+
+    #[test]
+    fn view_generic_text_file() {
+        let data = b"Hello\nWorld\n";
+        let lines = view_generic_file("/docs/readme.txt", data);
+        assert!(lines.iter().any(|l| l.contains("readme.txt")));
+        assert!(lines.iter().any(|l| l == "Hello"));
+        assert!(lines.iter().any(|l| l == "World"));
+    }
+
+    #[test]
+    fn view_generic_empty_file() {
+        let lines = view_generic_file("/docs/empty.txt", b"");
+        assert!(lines.iter().any(|l| l.contains("empty file")));
+    }
+
+    // -- view_generic_file (binary) --
+
+    #[test]
+    fn view_generic_binary_file() {
+        let data: Vec<u8> = (0..200).collect();
+        let lines = view_generic_file("/bin/program", &data);
+        assert!(lines.iter().any(|l| l.contains("Binary file")));
+        assert!(lines.iter().any(|l| l.contains("200 bytes")));
+        // Should have hex dump lines
+        assert!(lines.iter().any(|l| l.starts_with("0000")));
+        // Should show "more bytes" for data > 128
+        assert!(lines.iter().any(|l| l.contains("more bytes")));
+    }
+
+    // -- parse_jpeg_dimensions --
+
+    #[test]
+    fn jpeg_dimensions_no_sof() {
+        // Just SOI + SOS (no SOF marker)
+        let data = vec![0xFF, 0xD8, 0xFF, 0xDA];
+        assert_eq!(parse_jpeg_dimensions(&data), (0, 0));
+    }
+
+    #[test]
+    fn jpeg_dimensions_truncated() {
+        let data = vec![0xFF, 0xD8];
+        assert_eq!(parse_jpeg_dimensions(&data), (0, 0));
+    }
+
+    // -- list_directory --
+
+    #[test]
+    fn list_directory_root_no_dotdot() {
+        let vfs = oasis_vfs::MemoryVfs::new();
+        let lines = list_directory(&vfs, "/");
+        // Root should NOT have ".." entry
+        assert!(!lines.iter().any(|l| l == ".."));
+    }
+
+    #[test]
+    fn list_directory_subdir_has_dotdot() {
+        let vfs = oasis_vfs::MemoryVfs::new();
+        let lines = list_directory(&vfs, "/home");
+        // Non-root should have ".." entry
+        assert!(lines.first().map(|l| l.as_str()) == Some(".."));
+    }
+}

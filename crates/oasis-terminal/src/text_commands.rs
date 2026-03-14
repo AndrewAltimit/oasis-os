@@ -588,19 +588,12 @@ fn read_text_input(file: Option<&str>, env: &mut Environment<'_>) -> Result<Stri
     }
 }
 
-/// Register text processing commands.
-pub fn register_text_commands(reg: &mut crate::CommandRegistry) {
-    reg.register(Box::new(HeadCmd));
-    reg.register(Box::new(TailCmd));
-    reg.register(Box::new(WcCmd));
-    reg.register(Box::new(GrepCmd));
-    reg.register(Box::new(SortCmd));
-    reg.register(Box::new(UniqCmd));
-    reg.register(Box::new(TeeCmd));
-    reg.register(Box::new(TrCmd));
-    reg.register(Box::new(CutCmd));
-    reg.register(Box::new(DiffCmd));
-}
+register_commands!(
+    register_text_commands,
+    [
+        HeadCmd, TailCmd, WcCmd, GrepCmd, SortCmd, UniqCmd, TeeCmd, TrCmd, CutCmd, DiffCmd,
+    ]
+);
 
 #[cfg(test)]
 mod tests {

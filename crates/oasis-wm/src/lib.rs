@@ -15,6 +15,7 @@ pub mod manager;
 mod render;
 mod sdi_objects;
 pub mod snap;
+mod stacking;
 pub mod tiling;
 pub mod window;
 

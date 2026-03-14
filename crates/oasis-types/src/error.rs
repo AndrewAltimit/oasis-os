@@ -175,8 +175,11 @@ pub enum PlatformError {
 // From<String> / From<&str> impls for backward compatibility
 // ---------------------------------------------------------------------------
 
-macro_rules! impl_from_string {
-    ($ty:ident) => {
+/// Implement `From<String>` and `From<&str>` for a domain error's `Other`
+/// variant, plus `From<DomainError> for OasisError` for the given wrapper
+/// variant.
+macro_rules! domain_error {
+    ($ty:ident => $variant:ident) => {
         impl From<String> for $ty {
             fn from(s: String) -> Self {
                 Self::Other(s)
@@ -188,17 +191,14 @@ macro_rules! impl_from_string {
                 Self::Other(s.to_owned())
             }
         }
+
+        impl From<$ty> for OasisError {
+            fn from(e: $ty) -> Self {
+                Self::$variant(e)
+            }
+        }
     };
 }
-
-impl_from_string!(SdiError);
-impl_from_string!(BackendError);
-impl_from_string!(ConfigError);
-impl_from_string!(VfsError);
-impl_from_string!(CommandError);
-impl_from_string!(WmError);
-impl_from_string!(PluginError);
-impl_from_string!(PlatformError);
 
 // ---------------------------------------------------------------------------
 // Top-level error enum
@@ -270,55 +270,16 @@ pub enum OasisError {
 /// Convenience alias.
 pub type Result<T> = std::result::Result<T, OasisError>;
 
-// Manual From impls so callers can `?` a domain error into OasisError.
-
-impl From<SdiError> for OasisError {
-    fn from(e: SdiError) -> Self {
-        Self::Sdi(e)
-    }
-}
-
-impl From<BackendError> for OasisError {
-    fn from(e: BackendError) -> Self {
-        Self::Backend(e)
-    }
-}
-
-impl From<ConfigError> for OasisError {
-    fn from(e: ConfigError) -> Self {
-        Self::Config(e)
-    }
-}
-
-impl From<VfsError> for OasisError {
-    fn from(e: VfsError) -> Self {
-        Self::Vfs(e)
-    }
-}
-
-impl From<CommandError> for OasisError {
-    fn from(e: CommandError) -> Self {
-        Self::Command(e)
-    }
-}
-
-impl From<PlatformError> for OasisError {
-    fn from(e: PlatformError) -> Self {
-        Self::Platform(e)
-    }
-}
-
-impl From<WmError> for OasisError {
-    fn from(e: WmError) -> Self {
-        Self::Wm(e)
-    }
-}
-
-impl From<PluginError> for OasisError {
-    fn from(e: PluginError) -> Self {
-        Self::Plugin(e)
-    }
-}
+// Generate From<String>, From<&str>, and From<Domain> for OasisError
+// for each domain error type in one shot.
+domain_error!(SdiError => Sdi);
+domain_error!(BackendError => Backend);
+domain_error!(ConfigError => Config);
+domain_error!(VfsError => Vfs);
+domain_error!(CommandError => Command);
+domain_error!(WmError => Wm);
+domain_error!(PluginError => Plugin);
+domain_error!(PlatformError => Platform);
 
 #[cfg(test)]
 mod tests {

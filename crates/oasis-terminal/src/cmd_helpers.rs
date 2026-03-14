@@ -29,6 +29,30 @@ pub fn require_args_exact(args: &[&str], n: usize, usage: &str) -> Result<()> {
     Ok(())
 }
 
+/// Platform-safe seed for PRNG. Uses `TimeService` when available (required on
+/// WASM where `std::time::SystemTime::now()` panics), falls back to std on native.
+pub fn time_seed(env: &crate::Environment<'_>) -> u64 {
+    if let Some(time) = env.time
+        && let Ok(now) = time.now()
+    {
+        return (now.year as u64) << 40
+            | (now.month as u64) << 32
+            | (now.day as u64) << 24
+            | (now.hour as u64) << 16
+            | (now.minute as u64) << 8
+            | (now.second as u64);
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos() as u64
+    }
+    #[cfg(target_arch = "wasm32")]
+    0
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

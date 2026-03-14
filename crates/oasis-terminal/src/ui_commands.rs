@@ -239,14 +239,10 @@ impl Command for ScreenshotCmd {
     }
 }
 
-/// Register UI control commands.
-pub fn register_ui_commands(reg: &mut crate::CommandRegistry) {
-    reg.register(Box::new(WmCmd));
-    reg.register(Box::new(SdiCmd));
-    reg.register(Box::new(ThemeCmd));
-    reg.register(Box::new(NotifyCmd));
-    reg.register(Box::new(ScreenshotCmd));
-}
+register_commands!(
+    register_ui_commands,
+    [WmCmd, SdiCmd, ThemeCmd, NotifyCmd, ScreenshotCmd]
+);
 
 #[cfg(test)]
 mod tests {

@@ -5,12 +5,9 @@ use oasis_skin::Skin;
 use oasis_skin::builtin;
 use oasis_types::error::Result;
 
-use crate::{Command, CommandOutput, CommandRegistry, Environment};
+use crate::{Command, CommandOutput, Environment};
 
-/// Register skin-related commands.
-pub fn register_skin_commands(reg: &mut CommandRegistry) {
-    reg.register(Box::new(SkinCmd));
-}
+register_commands!(register_skin_commands, [SkinCmd]);
 
 /// Terminal command for listing, showing, or switching UI skins.
 struct SkinCmd;

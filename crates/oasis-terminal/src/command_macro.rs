@@ -1,6 +1,7 @@
-//! Declarative macro for reducing command definition boilerplate.
+//! Declarative macros for reducing command definition and registration
+//! boilerplate.
 //!
-//! # Usage
+//! # `define_command!`
 //!
 //! ```ignore
 //! define_command! {
@@ -12,6 +13,15 @@
 //! ```
 //!
 //! The macro generates a unit struct and a `Command` trait implementation.
+//!
+//! # `register_commands!`
+//!
+//! ```ignore
+//! register_commands!(register_dev_commands, [Base64Cmd, JsonCmd, UuidCmd]);
+//! ```
+//!
+//! Generates a `pub fn register_*_commands(reg: &mut CommandRegistry)` that
+//! registers each listed command struct.
 
 /// Define a terminal command with minimal boilerplate.
 ///
@@ -52,6 +62,31 @@ macro_rules! define_command {
             ) -> oasis_types::error::Result<$crate::CommandOutput> {
                 $body
             }
+        }
+    };
+}
+
+/// Generate a public registration function that registers command structs.
+///
+/// # Syntax
+///
+/// ```ignore
+/// register_commands!(register_dev_commands, [Base64Cmd, JsonCmd, UuidCmd]);
+/// ```
+///
+/// Expands to:
+/// ```ignore
+/// pub fn register_dev_commands(reg: &mut crate::CommandRegistry) {
+///     reg.register(Box::new(Base64Cmd));
+///     reg.register(Box::new(JsonCmd));
+///     reg.register(Box::new(UuidCmd));
+/// }
+/// ```
+#[macro_export]
+macro_rules! register_commands {
+    ($fn_name:ident, [$($cmd:expr),+ $(,)?]) => {
+        pub fn $fn_name(reg: &mut $crate::CommandRegistry) {
+            $(reg.register(Box::new($cmd));)+
         }
     };
 }

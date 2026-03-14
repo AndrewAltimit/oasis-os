@@ -147,6 +147,27 @@ impl BrowserPluginRegistry {
     pub fn registered_schemes(&self) -> Vec<&str> {
         self.scheme_handlers.iter().map(|h| h.scheme()).collect()
     }
+
+    /// Remove a scheme handler by scheme name (case-insensitive).
+    ///
+    /// Returns `true` if a handler was removed, `false` if no handler
+    /// matched the given scheme.
+    pub fn unregister_scheme_handler(&mut self, scheme: &str) -> bool {
+        let before = self.scheme_handlers.len();
+        self.scheme_handlers
+            .retain(|h| !h.scheme().eq_ignore_ascii_case(scheme));
+        self.scheme_handlers.len() < before
+    }
+
+    /// Remove a content filter by name (exact match).
+    ///
+    /// Returns `true` if a filter was removed, `false` if no filter
+    /// matched the given name.
+    pub fn unregister_content_filter(&mut self, name: &str) -> bool {
+        let before = self.content_filters.len();
+        self.content_filters.retain(|f| f.name() != name);
+        self.content_filters.len() < before
+    }
 }
 
 impl Default for BrowserPluginRegistry {
@@ -366,5 +387,47 @@ mod tests {
         assert_eq!(url_scheme("agent://list"), Some("agent"));
         assert_eq!(url_scheme("no-scheme-here"), None);
         assert_eq!(url_scheme(""), None);
+    }
+
+    #[test]
+    fn unregister_scheme_handler() {
+        let mut reg = BrowserPluginRegistry::new();
+        reg.register_scheme_handler(Box::new(FixedSchemeHandler::new("oasis", "a")));
+        reg.register_scheme_handler(Box::new(FixedSchemeHandler::new("agent", "b")));
+
+        assert!(reg.has_scheme("oasis"));
+        assert!(reg.unregister_scheme_handler("oasis"));
+        assert!(!reg.has_scheme("oasis"));
+        assert!(reg.has_scheme("agent"));
+
+        // Removing non-existent scheme returns false.
+        assert!(!reg.unregister_scheme_handler("oasis"));
+    }
+
+    #[test]
+    fn unregister_scheme_handler_case_insensitive() {
+        let mut reg = BrowserPluginRegistry::new();
+        reg.register_scheme_handler(Box::new(FixedSchemeHandler::new("oasis", "a")));
+        assert!(reg.unregister_scheme_handler("OASIS"));
+        assert!(!reg.has_scheme("oasis"));
+    }
+
+    #[test]
+    fn unregister_content_filter() {
+        let mut reg = BrowserPluginRegistry::new();
+        reg.register_content_filter(Box::new(UppercaseFilter));
+        reg.register_content_filter(Box::new(SuffixFilter::new("!!")));
+
+        // Uppercase filter is present.
+        let result = reg.apply_filters("http://x.com", "hello");
+        assert_eq!(result, "HELLO!!");
+
+        // Remove uppercase filter.
+        assert!(reg.unregister_content_filter("uppercase"));
+        let result = reg.apply_filters("http://x.com", "hello");
+        assert_eq!(result, "hello!!");
+
+        // Removing non-existent filter returns false.
+        assert!(!reg.unregister_content_filter("uppercase"));
     }
 }
