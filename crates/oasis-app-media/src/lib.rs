@@ -7,13 +7,7 @@
 use oasis_app_core::file_viewer::{
     join_path, list_directory, parent_dir, view_audio_file, view_generic_file, view_image_file,
 };
-use oasis_app_core::render::{
-    draw_content_windowed, hide_app_sdi, render_app_chrome, render_content_sdi,
-};
-use oasis_app_core::{App, AppAction, ContentState};
-use oasis_sdi::SdiRegistry;
-use oasis_skin::ActiveTheme;
-use oasis_types::backend::SdiBackend;
+use oasis_app_core::{App, AppAction, ContentState, impl_content_app_methods};
 use oasis_types::input::Button;
 use oasis_vfs::Vfs;
 
@@ -293,13 +287,7 @@ impl BrowsingApp {
 }
 
 impl App for BrowsingApp {
-    fn title(&self) -> &str {
-        &self.content.title
-    }
-
-    fn path(&self) -> &str {
-        &self.content.app_path
-    }
+    impl_content_app_methods!(content);
 
     fn handle_input(&mut self, button: &Button, vfs: &dyn Vfs) -> AppAction {
         match button {
@@ -399,47 +387,12 @@ impl App for BrowsingApp {
         }
     }
 
-    fn update_sdi(&mut self, sdi: &mut SdiRegistry, at: &ActiveTheme) {
-        self.content.update_layout(at);
-        self.content.animate_selection(0.3);
-        render_app_chrome(sdi, at);
-        render_content_sdi(&self.content, sdi, at);
-    }
-
-    fn draw_windowed(
-        &self,
-        cx: i32,
-        cy: i32,
-        cw: u32,
-        ch: u32,
-        backend: &mut dyn SdiBackend,
-        at: &ActiveTheme,
-    ) -> oasis_types::error::Result<()> {
-        draw_content_windowed(&self.content, cx, cy, cw, ch, backend, at)
-    }
-
-    fn hide_sdi(&self, sdi: &mut SdiRegistry) {
-        hide_app_sdi(sdi);
-    }
-
-    fn lines(&self) -> &[String] {
-        &self.content.lines
-    }
-
     fn browse_dir(&self) -> Option<&str> {
         self.content.browse_dir.as_deref()
     }
 
     fn viewing_file(&self) -> Option<&str> {
         self.content.viewing_file.as_deref()
-    }
-
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-
-    fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
-        self
     }
 }
 

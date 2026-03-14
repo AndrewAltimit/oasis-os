@@ -136,16 +136,14 @@ pub(super) fn handle_radio_connect(url: String) {
         None
     };
 
-    if header_end.is_none() {
+    let Some(header_end) = header_end else {
         // SAFETY: fd is a valid socket descriptor; closing on incomplete headers.
         unsafe { psp::sys::sceNetInetClose(fd) };
         let _ = IO_RESP_QUEUE.push(IoResponse::RadioError {
             msg: "incomplete headers".into(),
         });
         return;
-    }
-
-    let header_end = header_end.unwrap();
+    };
 
     // Parse icy-metaint from headers.
     let hdr_str = String::from_utf8_lossy(&hdr_buf[..hdr_len]);

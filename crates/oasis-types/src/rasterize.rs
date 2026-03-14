@@ -175,6 +175,35 @@ pub fn rasterize_rounded_rect(
     }
 }
 
+/// Compute the perpendicular unit normal for a line direction vector.
+///
+/// Used by thick-line rendering in SDL and PSP backends. Returns `(nx, ny)`
+/// such that the normal is perpendicular to `(dx, dy)` with unit length.
+/// Returns `(0.0, 0.0)` if the input is a zero-length vector.
+pub fn perpendicular_normal_f32(dx: f32, dy: f32) -> (f32, f32) {
+    let len_sq = dx * dx + dy * dy;
+    if len_sq < f32::EPSILON {
+        return (0.0, 0.0);
+    }
+    // Use Newton's method for sqrt to avoid libm dependency.
+    let mut est = len_sq;
+    for _ in 0..8 {
+        est = 0.5 * (est + len_sq / est);
+    }
+    let len = est.max(1.0);
+    (-dy / len, dx / len)
+}
+
+/// Compute the horizontal extent of a circle at a given scanline offset.
+///
+/// For a circle of radius `r` centered at the origin, returns the x-extent
+/// at vertical offset `dy` from center: `floor(sqrt(r^2 - dy^2))`.
+/// Returns 0 when `|dy| > r`. Used by stroke-circle rendering (UE5 backend).
+pub fn radial_extent(r: i32, dy: i32) -> i32 {
+    let sq = r * r - dy * dy;
+    if sq < 0 { 0 } else { isqrt(sq as u32) as i32 }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -267,5 +296,54 @@ mod tests {
         let mut rec = SpanRecorder::new();
         rasterize_rounded_rect(&mut rec, 10, 10, 100, 50, 8, Color::WHITE);
         assert!(!rec.spans.is_empty());
+    }
+
+    #[test]
+    fn perpendicular_normal_unit_length() {
+        let (nx, ny) = perpendicular_normal_f32(3.0, 4.0);
+        let len = (nx * nx + ny * ny).sqrt();
+        assert!(
+            (len - 1.0).abs() < 0.01,
+            "normal should be unit length: {len}"
+        );
+    }
+
+    #[test]
+    fn perpendicular_normal_is_perpendicular() {
+        let (dx, dy) = (3.0f32, 4.0);
+        let (nx, ny) = perpendicular_normal_f32(dx, dy);
+        let dot = dx * nx + dy * ny;
+        assert!(
+            dot.abs() < 0.01,
+            "normal should be perpendicular: dot={dot}"
+        );
+    }
+
+    #[test]
+    fn perpendicular_normal_zero_vec() {
+        let (nx, ny) = perpendicular_normal_f32(0.0, 0.0);
+        assert_eq!(nx, 0.0);
+        assert_eq!(ny, 0.0);
+    }
+
+    #[test]
+    fn radial_extent_at_center() {
+        assert_eq!(radial_extent(10, 0), 10);
+    }
+
+    #[test]
+    fn radial_extent_at_edge() {
+        assert_eq!(radial_extent(10, 10), 0);
+    }
+
+    #[test]
+    fn radial_extent_beyond_radius() {
+        assert_eq!(radial_extent(10, 15), 0);
+    }
+
+    #[test]
+    fn radial_extent_midpoint() {
+        // At dy=6 with r=10: sqrt(100-36) = sqrt(64) = 8
+        assert_eq!(radial_extent(10, 6), 8);
     }
 }

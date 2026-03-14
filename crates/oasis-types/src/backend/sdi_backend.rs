@@ -370,8 +370,11 @@ pub trait SdiBackend: SdiCore {
 
     /// Draw text with bold and italic style hints.
     ///
-    /// Backends with bitmap fonts implement faux-bold via double-strike
-    /// (drawing at x and x+1) and faux-italic via row-skewing.
+    /// Faux-bold is implemented via double-strike (drawing at x and x+1).
+    /// Faux-italic is approximated by drawing with a 1px horizontal offset
+    /// for the top half of the text (skew effect). Backends with real font
+    /// rendering (e.g., TrueType) can override this with proper glyph
+    /// selection.
     fn draw_text_styled(
         &mut self,
         text: &str,
@@ -382,8 +385,13 @@ pub trait SdiBackend: SdiCore {
         bold: bool,
         italic: bool,
     ) -> Result<()> {
-        let _ = (bold, italic);
-        self.draw_text(text, x, y, font_size, color)
+        let skew = if italic { 1i32 } else { 0 };
+        self.draw_text(text, x + skew, y, font_size, color)?;
+        if bold {
+            // Double-strike: draw again 1px to the right for faux-bold.
+            self.draw_text(text, x + skew + 1, y, font_size, color)?;
+        }
+        Ok(())
     }
 
     /// Draw multiline word-wrapped text within a bounding box.

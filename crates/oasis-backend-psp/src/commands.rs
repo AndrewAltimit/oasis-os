@@ -178,7 +178,7 @@ pub fn execute_command(cmd: &str, config: &mut psp::config::Config) -> CommandRe
             }
         },
         _ if trimmed.starts_with("ls") => {
-            let path = trimmed.strip_prefix("ls").unwrap().trim();
+            let path = trimmed.strip_prefix("ls").unwrap_or("").trim();
             let dir = if path.is_empty() { "ms0:/" } else { path };
             let entries = oasis_backend_psp::list_directory(dir);
             if entries.is_empty() {
@@ -295,7 +295,7 @@ fn cmd_sysinfo() -> Vec<String> {
 }
 
 fn cmd_cat(trimmed: &str) -> Vec<String> {
-    let path = trimmed.strip_prefix("cat ").unwrap().trim();
+    let path = trimmed.strip_prefix("cat ").unwrap_or("").trim();
     if path.is_empty() {
         return vec!["usage: cat <path>".into()];
     }
@@ -323,7 +323,7 @@ fn cmd_cat(trimmed: &str) -> Vec<String> {
 }
 
 fn cmd_mkdir(trimmed: &str) -> Vec<String> {
-    let path = trimmed.strip_prefix("mkdir ").unwrap().trim();
+    let path = trimmed.strip_prefix("mkdir ").unwrap_or("").trim();
     if path.is_empty() {
         return vec!["usage: mkdir <path>".into()];
     }
@@ -334,7 +334,7 @@ fn cmd_mkdir(trimmed: &str) -> Vec<String> {
 }
 
 fn cmd_rm(trimmed: &str) -> Vec<String> {
-    let path = trimmed.strip_prefix("rm ").unwrap().trim();
+    let path = trimmed.strip_prefix("rm ").unwrap_or("").trim();
     if path.is_empty() {
         return vec!["usage: rm <path>".into()];
     }
@@ -421,7 +421,7 @@ fn cmd_umd() -> Vec<String> {
 }
 
 fn cmd_config(trimmed: &str, config: &mut psp::config::Config) -> Vec<String> {
-    let args = trimmed.strip_prefix("config ").unwrap().trim();
+    let args = trimmed.strip_prefix("config ").unwrap_or("").trim();
     if args.is_empty() {
         return vec!["usage: config KEY or config KEY=VALUE".into()];
     }

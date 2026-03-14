@@ -2,7 +2,7 @@
 
 use oasis_types::error::{OasisError, Result};
 
-use crate::{Command, CommandOutput, Environment};
+use crate::{CommandOutput, Environment};
 
 register_commands!(register_network_commands, [WifiCmd, PingCmd, HttpCmd]);
 
@@ -10,31 +10,23 @@ register_commands!(register_network_commands, [WifiCmd, PingCmd, HttpCmd]);
 // wifi
 // ---------------------------------------------------------------------------
 
-/// Terminal command for displaying WiFi status (hardware, connection, IP, MAC).
-struct WifiCmd;
-impl Command for WifiCmd {
-    fn name(&self) -> &str {
-        "wifi"
-    }
-    fn description(&self) -> &str {
-        "Show WiFi status"
-    }
-    fn usage(&self) -> &str {
-        "wifi [status]"
-    }
-    fn category(&self) -> &str {
-        "network"
-    }
-    fn execute(&self, args: &[&str], env: &mut Environment<'_>) -> Result<CommandOutput> {
+// WiFi status (hardware, connection, IP, MAC).
+define_command!(
+    WifiCmd,
+    "wifi",
+    "Show WiFi status",
+    "wifi [status]",
+    "network",
+    |args, env| {
         let subcmd = args.first().copied().unwrap_or("status");
         match subcmd {
             "status" | "" => wifi_status(env),
             _ => Err(OasisError::Command(
-                format!("unknown subcommand: {subcmd}\nusage: {}", self.usage()).into(),
+                format!("unknown subcommand: {subcmd}\nusage: wifi [status]").into(),
             )),
         }
     }
-}
+);
 
 fn wifi_status(env: &mut Environment<'_>) -> Result<CommandOutput> {
     let Some(net) = env.network else {
@@ -77,22 +69,14 @@ fn wifi_status(env: &mut Environment<'_>) -> Result<CommandOutput> {
 // ping (connectivity test via DNS resolve)
 // ---------------------------------------------------------------------------
 
-/// Terminal command for testing network connectivity via DNS resolution.
-struct PingCmd;
-impl Command for PingCmd {
-    fn name(&self) -> &str {
-        "ping"
-    }
-    fn description(&self) -> &str {
-        "Test network connectivity (DNS resolve)"
-    }
-    fn usage(&self) -> &str {
-        "ping <hostname>"
-    }
-    fn category(&self) -> &str {
-        "network"
-    }
-    fn execute(&self, args: &[&str], env: &mut Environment<'_>) -> Result<CommandOutput> {
+// Test network connectivity via DNS resolution.
+define_command!(
+    PingCmd,
+    "ping",
+    "Test network connectivity (DNS resolve)",
+    "ping <hostname>",
+    "network",
+    |args, env| {
         if args.is_empty() {
             return Err(OasisError::Command("usage: ping <hostname>".into()));
         }
@@ -112,28 +96,20 @@ impl Command for PingCmd {
             info.ip_address.as_deref().unwrap_or("unknown"),
         )))
     }
-}
+);
 
 // ---------------------------------------------------------------------------
 // http (HTTP GET via platform network service)
 // ---------------------------------------------------------------------------
 
-/// Terminal command for performing HTTP GET requests via platform network service.
-struct HttpCmd;
-impl Command for HttpCmd {
-    fn name(&self) -> &str {
-        "http"
-    }
-    fn description(&self) -> &str {
-        "HTTP GET request"
-    }
-    fn usage(&self) -> &str {
-        "http <url>"
-    }
-    fn category(&self) -> &str {
-        "network"
-    }
-    fn execute(&self, args: &[&str], env: &mut Environment<'_>) -> Result<CommandOutput> {
+// HTTP GET request via platform network service.
+define_command!(
+    HttpCmd,
+    "http",
+    "HTTP GET request",
+    "http <url>",
+    "network",
+    |args, env| {
         if args.is_empty() {
             return Err(OasisError::Command("usage: http <url>".into()));
         }
@@ -167,7 +143,7 @@ impl Command for HttpCmd {
             Err(e) => Ok(CommandOutput::Text(format!("http: {e}"))),
         }
     }
-}
+);
 
 #[cfg(test)]
 mod tests {

@@ -11,7 +11,10 @@ mod app_trait;
 /// Re-export File Manager crate for backwards compatibility.
 pub use oasis_app_file_manager as file_manager;
 pub(crate) mod file_viewer;
+mod input;
 pub mod layout_calc;
+mod queries;
+mod registry;
 mod runner;
 mod runner_sdi;
 pub mod simple_app;

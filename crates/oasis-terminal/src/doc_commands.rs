@@ -1,28 +1,22 @@
 //! Documentation and onboarding commands: man, tutorial, motd.
 
-use oasis_types::error::{OasisError, Result};
+use oasis_types::error::OasisError;
+#[cfg(test)]
+use oasis_types::error::Result;
 
-use crate::interpreter::{Command, CommandOutput, Environment};
+use crate::interpreter::CommandOutput;
 
 // ---------------------------------------------------------------------------
 // man
 // ---------------------------------------------------------------------------
 
-struct ManCmd;
-impl Command for ManCmd {
-    fn name(&self) -> &str {
-        "man"
-    }
-    fn description(&self) -> &str {
-        "Display manual page for a command"
-    }
-    fn usage(&self) -> &str {
-        "man <command>"
-    }
-    fn category(&self) -> &str {
-        "general"
-    }
-    fn execute(&self, args: &[&str], env: &mut Environment<'_>) -> Result<CommandOutput> {
+define_command!(
+    ManCmd,
+    "man",
+    "Display manual page for a command",
+    "man <command>",
+    "general",
+    |args, env| {
         let name = args
             .first()
             .copied()
@@ -45,7 +39,7 @@ impl Command for ManCmd {
             ))
         }
     }
-}
+);
 
 // ---------------------------------------------------------------------------
 // tutorial
@@ -149,21 +143,13 @@ const LESSONS: &[(&str, &str)] = &[
     ),
 ];
 
-struct TutorialCmd;
-impl Command for TutorialCmd {
-    fn name(&self) -> &str {
-        "tutorial"
-    }
-    fn description(&self) -> &str {
-        "Interactive terminal tutorial"
-    }
-    fn usage(&self) -> &str {
-        "tutorial [next|<lesson_number>|list]"
-    }
-    fn category(&self) -> &str {
-        "general"
-    }
-    fn execute(&self, args: &[&str], env: &mut Environment<'_>) -> Result<CommandOutput> {
+define_command!(
+    TutorialCmd,
+    "tutorial",
+    "Interactive terminal tutorial",
+    "tutorial [next|<lesson_number>|list]",
+    "general",
+    |args, env| {
         let progress_path = "/home/.tutorial_progress";
 
         // Read current progress.
@@ -235,33 +221,26 @@ impl Command for TutorialCmd {
                     )))
                 } else {
                     Err(OasisError::Command(
-                        format!("unknown subcommand: {n}\nusage: {}", self.usage()).into(),
+                        format!("unknown subcommand: {n}\nusage: tutorial [list|<number>|reset]")
+                            .into(),
                     ))
                 }
             },
         }
     }
-}
+);
 
 // ---------------------------------------------------------------------------
 // motd
 // ---------------------------------------------------------------------------
 
-struct MotdCmd;
-impl Command for MotdCmd {
-    fn name(&self) -> &str {
-        "motd"
-    }
-    fn description(&self) -> &str {
-        "Display the message of the day"
-    }
-    fn usage(&self) -> &str {
-        "motd"
-    }
-    fn category(&self) -> &str {
-        "general"
-    }
-    fn execute(&self, _args: &[&str], env: &mut Environment<'_>) -> Result<CommandOutput> {
+define_command!(
+    MotdCmd,
+    "motd",
+    "Display the message of the day",
+    "motd",
+    "general",
+    |_args, env| {
         let motd_path = "/etc/motd";
         if env.vfs.exists(motd_path) {
             let data = env.vfs.read(motd_path)?;
@@ -272,7 +251,7 @@ impl Command for MotdCmd {
             Ok(CommandOutput::Text(default_motd()))
         }
     }
-}
+);
 
 /// Default MOTD when no /etc/motd file exists.
 fn default_motd() -> String {

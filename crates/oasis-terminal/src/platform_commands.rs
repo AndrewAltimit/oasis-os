@@ -1,8 +1,9 @@
 //! Platform service commands: power, clock, memory, usb.
 
+#[cfg(test)]
 use oasis_types::error::Result;
 
-use crate::interpreter::{Command, CommandOutput, Environment};
+use crate::interpreter::CommandOutput;
 
 register_commands!(
     register_platform_commands,
@@ -13,21 +14,13 @@ register_commands!(
 // power
 // ---------------------------------------------------------------------------
 
-struct PowerCmd;
-impl Command for PowerCmd {
-    fn name(&self) -> &str {
-        "power"
-    }
-    fn description(&self) -> &str {
-        "Show power/battery status"
-    }
-    fn usage(&self) -> &str {
-        "power"
-    }
-    fn category(&self) -> &str {
-        "system"
-    }
-    fn execute(&self, _args: &[&str], env: &mut Environment<'_>) -> Result<CommandOutput> {
+define_command!(
+    PowerCmd,
+    "power",
+    "Show power/battery status",
+    "power",
+    "system",
+    |_args, env| {
         let Some(power) = env.power else {
             return Ok(CommandOutput::Text(
                 "power: no platform service available".to_string(),
@@ -51,27 +44,19 @@ impl Command for PowerCmd {
         }
         Ok(CommandOutput::Text(lines.join("\n")))
     }
-}
+);
 
 // ---------------------------------------------------------------------------
 // clock
 // ---------------------------------------------------------------------------
 
-struct ClockCmd;
-impl Command for ClockCmd {
-    fn name(&self) -> &str {
-        "clock"
-    }
-    fn description(&self) -> &str {
-        "Show current time and uptime"
-    }
-    fn usage(&self) -> &str {
-        "clock"
-    }
-    fn category(&self) -> &str {
-        "system"
-    }
-    fn execute(&self, _args: &[&str], env: &mut Environment<'_>) -> Result<CommandOutput> {
+define_command!(
+    ClockCmd,
+    "clock",
+    "Show current time and uptime",
+    "clock",
+    "system",
+    |_args, env| {
         let Some(time) = env.time else {
             return Ok(CommandOutput::Text(
                 "clock: no platform service available".to_string(),
@@ -87,27 +72,19 @@ impl Command for ClockCmd {
         lines.push(format!("Uptime: {hours}h {mins}m {secs}s"));
         Ok(CommandOutput::Text(lines.join("\n")))
     }
-}
+);
 
 // ---------------------------------------------------------------------------
 // memory
 // ---------------------------------------------------------------------------
 
-struct MemoryCmd;
-impl Command for MemoryCmd {
-    fn name(&self) -> &str {
-        "memory"
-    }
-    fn description(&self) -> &str {
-        "Show memory usage"
-    }
-    fn usage(&self) -> &str {
-        "memory"
-    }
-    fn category(&self) -> &str {
-        "system"
-    }
-    fn execute(&self, _args: &[&str], _env: &mut Environment<'_>) -> Result<CommandOutput> {
+define_command!(
+    MemoryCmd,
+    "memory",
+    "Show memory usage",
+    "memory",
+    "system",
+    |_args, _env| {
         // On desktop/Pi, report process RSS if /proc/self/status is readable.
         // On PSP, this would query sceKernelTotalFreeMemSize().
         let mut lines = Vec::new();
@@ -128,27 +105,19 @@ impl Command for MemoryCmd {
         }
         Ok(CommandOutput::Text(lines.join("\n")))
     }
-}
+);
 
 // ---------------------------------------------------------------------------
 // usb
 // ---------------------------------------------------------------------------
 
-struct UsbCmd;
-impl Command for UsbCmd {
-    fn name(&self) -> &str {
-        "usb"
-    }
-    fn description(&self) -> &str {
-        "Show USB status"
-    }
-    fn usage(&self) -> &str {
-        "usb"
-    }
-    fn category(&self) -> &str {
-        "system"
-    }
-    fn execute(&self, _args: &[&str], env: &mut Environment<'_>) -> Result<CommandOutput> {
+define_command!(
+    UsbCmd,
+    "usb",
+    "Show USB status",
+    "usb",
+    "system",
+    |_args, env| {
         let Some(usb) = env.usb else {
             return Ok(CommandOutput::Text(
                 "usb: no platform service available".to_string(),
@@ -157,7 +126,7 @@ impl Command for UsbCmd {
         let state = usb.usb_state()?;
         Ok(CommandOutput::Text(format!("USB: {state}")))
     }
-}
+);
 
 #[cfg(test)]
 mod tests {

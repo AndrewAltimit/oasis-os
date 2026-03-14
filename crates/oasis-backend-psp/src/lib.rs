@@ -341,9 +341,11 @@ impl PspBackend {
             let atlas_layout = Layout::from_size_align(atlas_size, 16).unwrap();
             let atlas_ptr = alloc(atlas_layout);
             if atlas_ptr.is_null() {
-                panic!("OASIS_OS: FATAL - font atlas allocation failed (OOM)");
+                // Graceful fallback: skip atlas font rendering, use bitmap-only.
+                self.force_bitmap_font = true;
+            } else {
+                self.font_atlas_ptr = atlas_ptr;
             }
-            self.font_atlas_ptr = atlas_ptr;
 
             // GU initialization.
             sys::sceGuInit();

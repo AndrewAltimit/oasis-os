@@ -464,7 +464,7 @@ impl AudioPlayer {
             *s = 0;
         }
 
-        let decoder = self.decoder.as_mut().unwrap();
+        let Some(decoder) = self.decoder.as_mut() else { return };
         let buf_pos = self.buf_pos;
         let buf_valid = self.buf_valid;
         let result = decoder.decode(&self.read_buf[buf_pos..buf_valid], &mut self.pcm_buf);
@@ -483,7 +483,7 @@ impl AudioPlayer {
                 self.error_count = 0;
                 self.buf_pos += consumed;
                 self.frames_decoded += 1;
-                let channel = self.channel.as_ref().unwrap();
+                let Some(channel) = self.channel.as_ref() else { return };
                 let _ = channel.output_blocking(self.hw_volume, &self.pcm_buf);
             },
             Err(_) => {
@@ -865,7 +865,7 @@ impl RadioStreamer {
             *s = 0;
         }
 
-        let decoder = player.decoder.as_mut().unwrap();
+        let Some(decoder) = player.decoder.as_mut() else { return };
         let buf_pos = self.buf_pos;
         let buf_valid = self.buf_valid;
         let result = decoder.decode(&self.read_buf[buf_pos..buf_valid], &mut player.pcm_buf);
@@ -879,7 +879,7 @@ impl RadioStreamer {
                 }
                 self.error_count = 0;
                 self.buf_pos += consumed;
-                let channel = player.channel.as_ref().unwrap();
+                let Some(channel) = player.channel.as_ref() else { return };
                 let _ = channel.output_blocking(self.hw_volume, &player.pcm_buf);
             },
             Err(_) => {

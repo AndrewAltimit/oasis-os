@@ -2,117 +2,19 @@
 //!
 //! All apps are fully delegated to their own crate via `Box<dyn App>`.
 //!
-//! App construction is driven by the [`APP_REGISTRY`] table -- a static list
-//! of `(name, factory)` pairs.  Adding a new app requires only a single entry
-//! in that table; no match arms elsewhere need to change.
+//! App construction is driven by the [`APP_REGISTRY`][super::registry::APP_REGISTRY]
+//! table -- a static list of `(name, factory)` pairs.  Adding a new app requires
+//! only a single entry in that table; no match arms elsewhere need to change.
+//!
+//! Input handling lives in [`super::input`], app-specific queries in
+//! [`super::queries`], and SDI rendering in [`super::runner_sdi`].
 
 use crate::active_theme::ActiveTheme;
 use crate::backend::SdiBackend;
 use crate::dashboard::AppEntry;
-use crate::input::Button;
 use crate::vfs::Vfs;
 
-use super::app_trait::AppAction;
-
-// ---------------------------------------------------------------------------
-// App registry
-// ---------------------------------------------------------------------------
-
-/// Factory function signature for app constructors.
-///
-/// Every registered app receives the VFS path and a reference to the virtual
-/// file system.  Apps that need additional configuration (e.g. Settings,
-/// System Monitor) bake their defaults into the closure.
-type AppFactory = fn(&str, &dyn Vfs) -> Box<dyn super::app_trait::App>;
-
-/// Static registry of `(app_title, factory)` pairs.
-///
-/// The order does not matter -- lookup is linear by title.  To register a new
-/// app, add a single entry here.
-const APP_REGISTRY: &[(&str, AppFactory)] = &[
-    ("File Manager", |path, vfs| {
-        Box::new(oasis_app_file_manager::FileManagerApp::new(path, vfs))
-    }),
-    ("Settings", |path, _vfs| {
-        Box::new(oasis_app_settings::SettingsApp::new(
-            path, "classic", 480, 272, "SDL3",
-        ))
-    }),
-    ("Network", |path, _vfs| {
-        Box::new(super::simple_app::SimpleApp::network(
-            path, false, 9000, false,
-        ))
-    }),
-    ("Package Manager", |path, _vfs| {
-        Box::new(super::simple_app::SimpleApp::package_manager(path))
-    }),
-    ("Browser", |path, _vfs| {
-        Box::new(super::simple_app::SimpleApp::browser(path))
-    }),
-    ("System Monitor", |path, _vfs| {
-        Box::new(super::simple_app::SimpleApp::system_monitor(
-            path,
-            "Desktop (SDL2)",
-            "SDL2",
-            0,
-        ))
-    }),
-    ("Terminal", |path, _vfs| {
-        Box::new(super::simple_app::SimpleApp::terminal(path))
-    }),
-    ("Music Player", |path, vfs| {
-        Box::new(oasis_app_media::BrowsingApp::music_player(path, vfs))
-    }),
-    ("Photo Viewer", |path, vfs| {
-        Box::new(oasis_app_media::BrowsingApp::photo_viewer(path, vfs))
-    }),
-    ("Text Editor", |path, _vfs| {
-        Box::new(oasis_app_text_editor::TextEditorApp::new(path))
-    }),
-    ("Calculator", |path, _vfs| {
-        Box::new(oasis_app_calculator::CalculatorApp::new(path))
-    }),
-    ("Clock", |path, _vfs| {
-        Box::new(oasis_app_clock::ClockApp::new(path))
-    }),
-    ("Paint", |path, _vfs| {
-        Box::new(oasis_app_paint::PaintApp::new(path))
-    }),
-    ("Games", |path, _vfs| {
-        Box::new(oasis_app_games::GamesApp::new(path))
-    }),
-    ("Internet Radio", |path, vfs| {
-        Box::new(oasis_app_radio::RadioApp::new(path, vfs))
-    }),
-    ("TV Guide", |path, vfs| {
-        Box::new(oasis_app_tv_guide::TvGuideApp::new(
-            path,
-            vfs,
-            &ActiveTheme::default(),
-        ))
-    }),
-];
-
-/// Look up an app by title in the registry and construct it.
-///
-/// Returns `None` if the title is not registered (falls through to the
-/// generic placeholder in `AppRunner::launch`).
-fn create_app_delegate(
-    title: &str,
-    path: &str,
-    vfs: &dyn Vfs,
-) -> Option<Box<dyn super::app_trait::App>> {
-    // Feature-gated app: Video Embed (WASM YouTube).
-    #[cfg(feature = "wasm-youtube")]
-    if title == "Video Embed" {
-        return Some(Box::new(super::video_embed::VideoEmbedApp::new(path)));
-    }
-
-    APP_REGISTRY
-        .iter()
-        .find(|(name, _)| *name == title)
-        .map(|(_, factory)| factory(path, vfs))
-}
+use super::registry::create_app_delegate;
 
 /// Runtime state for a launched application screen.
 ///
@@ -190,32 +92,6 @@ impl AppRunner {
         }
     }
 
-    /// Handle input while the app is active.
-    pub fn handle_input(&mut self, button: &Button, vfs: &dyn Vfs) -> AppAction {
-        // Delegate to extracted app if present.
-        if let Some(ref mut app) = self.delegate {
-            let action = app.handle_input(button, vfs);
-            self.sync_from_delegate();
-            return action;
-        }
-
-        AppAction::None
-    }
-
-    /// Forward a typed character to the app delegate.
-    pub fn handle_text_input(&mut self, ch: char) {
-        if let Some(ref mut app) = self.delegate {
-            app.handle_text_input(ch);
-        }
-    }
-
-    /// Forward a backspace to the app delegate.
-    pub fn handle_backspace(&mut self) {
-        if let Some(ref mut app) = self.delegate {
-            app.handle_backspace();
-        }
-    }
-
     /// Update the display lines (used for syncing terminal output).
     pub fn set_lines(&mut self, lines: Vec<String>, scroll_offset: usize) {
         if let Some(simple) = self.delegate_as_mut::<super::simple_app::SimpleApp>() {
@@ -246,89 +122,12 @@ impl AppRunner {
         Ok(())
     }
 
-    /// Peek at a pending VFS IPC request without consuming it.
-    pub fn peek_pending_request(&self) -> Option<&(String, String)> {
-        if let Some(ref app) = self.delegate {
-            return app.peek_pending_request();
-        }
-        self.pending_vfs_request.as_ref()
-    }
-
-    /// Take any pending VFS IPC request (returns path and data if present).
-    pub fn take_pending_request(&mut self) -> Option<(String, String)> {
-        if let Some(ref mut app) = self.delegate {
-            return app.take_pending_request();
-        }
-        self.pending_vfs_request.take()
-    }
-
-    /// Set a pending VFS IPC request (used for auto-tune in tests).
-    pub fn set_pending_request(&mut self, path: String, data: String) {
-        // For TV Guide, set the request on the TvGuideApp delegate so
-        // take_pending_request() can find it.
-        if let Some(tv) = self.delegate_as_mut::<oasis_app_tv_guide::TvGuideApp>() {
-            tv.pending_request = Some((path, data));
-        } else {
-            self.pending_vfs_request = Some((path, data));
-        }
-    }
-
-    /// Refresh radio display from VFS status (called each frame when visible).
-    pub fn refresh_radio(&mut self, vfs: &dyn Vfs) {
-        if self.title != "Internet Radio" {
-            return;
-        }
-        if let Some(ref mut app) = self.delegate {
-            app.refresh(vfs);
-            self.sync_from_delegate();
-        }
-    }
-
-    /// Refresh TV Guide text display after catalog changes.
-    ///
-    /// Delegates to `TvGuideApp::refresh_text()` through the delegate,
-    /// then syncs the runner's cached fields.
-    pub fn refresh_tv_text(&mut self) {
-        if let Some(tv) = self.delegate_as_mut::<oasis_app_tv_guide::TvGuideApp>() {
-            tv.refresh_text();
-        }
-        self.sync_from_delegate();
-    }
-
-    /// Handle a content-area click for the current app.
-    pub fn handle_click(
-        &mut self,
-        lx: i32,
-        ly: i32,
-        cw: u32,
-        ch: u32,
-        fullscreen: bool,
-    ) -> AppAction {
-        if let Some(ref mut app) = self.delegate {
-            let action = app.handle_click(lx, ly, cw, ch, fullscreen);
-            self.sync_from_delegate();
-            return action;
-        }
-
-        AppAction::None
-    }
-
-    /// Get mutable reference to the TV guide state.
-    ///
-    /// Accesses the `TvGuideApp` delegate and returns a reference to
-    /// its inner `TvGuideState`. Used by external code (tv_controller,
-    /// WASM backend) to inject catalogs and update fetch status.
-    pub fn tv_guide_state(&mut self) -> Option<&mut oasis_app_tv_guide::guide::TvGuideState> {
-        self.delegate_as_mut::<oasis_app_tv_guide::TvGuideApp>()
-            .map(|app| &mut app.guide)
-    }
-
     /// Sync AppRunner pub fields from the delegate app.
     ///
     /// This keeps the legacy `title`, `lines`, `browse_dir`, `viewing_file`
     /// fields in sync after delegate calls, for backward compatibility with
     /// external code that reads these fields directly.
-    fn sync_from_delegate(&mut self) {
+    pub(crate) fn sync_from_delegate(&mut self) {
         if let Some(ref app) = self.delegate {
             self.lines = app.lines().to_vec();
             self.browse_dir = app.browse_dir().map(String::from);
@@ -355,9 +154,11 @@ impl AppRunner {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::apps::AppAction;
     use crate::apps::file_viewer::{list_directory, view_audio_file, view_image_file};
     use crate::backend::Color;
     use crate::dashboard::AppEntry;
+    use crate::input::Button;
     use crate::sdi::SdiRegistry;
     use crate::vfs::MemoryVfs;
 

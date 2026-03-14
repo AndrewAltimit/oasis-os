@@ -1,9 +1,11 @@
 //! Remote terminal commands: listen, remote, hosts.
 
-use oasis_types::error::{OasisError, Result};
+use oasis_types::error::OasisError;
+#[cfg(test)]
+use oasis_types::error::Result;
 
 use crate::cmd_helpers::require_args;
-use crate::interpreter::{Command, CommandOutput, Environment};
+use crate::interpreter::CommandOutput;
 
 register_commands!(register_remote_commands, [ListenCmd, RemoteCmd, HostsCmd]);
 
@@ -11,21 +13,13 @@ register_commands!(register_remote_commands, [ListenCmd, RemoteCmd, HostsCmd]);
 // listen
 // ---------------------------------------------------------------------------
 
-struct ListenCmd;
-impl Command for ListenCmd {
-    fn name(&self) -> &str {
-        "listen"
-    }
-    fn description(&self) -> &str {
-        "Start/stop remote terminal listener"
-    }
-    fn usage(&self) -> &str {
-        "listen [port|stop]"
-    }
-    fn category(&self) -> &str {
-        "network"
-    }
-    fn execute(&self, args: &[&str], _env: &mut Environment<'_>) -> Result<CommandOutput> {
+define_command!(
+    ListenCmd,
+    "listen",
+    "Start/stop remote terminal listener",
+    "listen [port|stop]",
+    "network",
+    |args, _env| {
         if args.is_empty() {
             return Ok(CommandOutput::listen_toggle(9000));
         }
@@ -37,27 +31,19 @@ impl Command for ListenCmd {
             Err(_) => Err(OasisError::Command("usage: listen [port|stop]".into())),
         }
     }
-}
+);
 
 // ---------------------------------------------------------------------------
 // remote
 // ---------------------------------------------------------------------------
 
-struct RemoteCmd;
-impl Command for RemoteCmd {
-    fn name(&self) -> &str {
-        "remote"
-    }
-    fn description(&self) -> &str {
-        "Connect to a remote host"
-    }
-    fn usage(&self) -> &str {
-        "remote <host|addr:port>"
-    }
-    fn category(&self) -> &str {
-        "network"
-    }
-    fn execute(&self, args: &[&str], env: &mut Environment<'_>) -> Result<CommandOutput> {
+define_command!(
+    RemoteCmd,
+    "remote",
+    "Connect to a remote host",
+    "remote <host|addr:port>",
+    "network",
+    |args, env| {
         require_args(args, 1, "remote <host|addr:port>")?;
         let target = args[0];
 
@@ -91,27 +77,19 @@ impl Command for RemoteCmd {
                 .into(),
         ))
     }
-}
+);
 
 // ---------------------------------------------------------------------------
 // hosts
 // ---------------------------------------------------------------------------
 
-struct HostsCmd;
-impl Command for HostsCmd {
-    fn name(&self) -> &str {
-        "hosts"
-    }
-    fn description(&self) -> &str {
-        "List saved remote hosts"
-    }
-    fn usage(&self) -> &str {
-        "hosts"
-    }
-    fn category(&self) -> &str {
-        "network"
-    }
-    fn execute(&self, _args: &[&str], env: &mut Environment<'_>) -> Result<CommandOutput> {
+define_command!(
+    HostsCmd,
+    "hosts",
+    "List saved remote hosts",
+    "hosts",
+    "network",
+    |_args, env| {
         let hosts_path = "/etc/hosts.toml";
         if !env.vfs.exists(hosts_path) {
             return Ok(CommandOutput::Text(
@@ -136,7 +114,7 @@ impl Command for HostsCmd {
             lines.join("\n")
         )))
     }
-}
+);
 
 #[cfg(test)]
 mod tests {
