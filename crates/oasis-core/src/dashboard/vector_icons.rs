@@ -390,7 +390,7 @@ impl DashboardState {
         }
 
         // Draw label using the shared label renderer (still SDI-based).
-        Self::draw_label(
+        super::labels::draw_label(
             sdi,
             at,
             names,
