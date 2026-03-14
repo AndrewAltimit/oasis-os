@@ -65,10 +65,10 @@ impl FormManager {
         {
             match &form.elements[idx] {
                 FormElement::TextInput { value, .. } => {
-                    form.cursor = value.len();
+                    form.cursor = value.chars().count();
                 },
                 FormElement::TextArea { value, .. } => {
-                    form.cursor = value.len();
+                    form.cursor = value.chars().count();
                 },
                 _ => {
                     form.cursor = 0;
