@@ -12,8 +12,8 @@ mod frame_parser;
 mod player;
 mod radio;
 
-pub use player::AudioPlayer;
-pub use radio::RadioStreamer;
+pub(crate) use player::AudioPlayer;
+pub(crate) use radio::RadioStreamer;
 
 use oasis_core::backend::{AudioBackend, AudioTrackId};
 use oasis_core::error::{OasisError, Result};

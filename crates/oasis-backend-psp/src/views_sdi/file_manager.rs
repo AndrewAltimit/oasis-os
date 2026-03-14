@@ -129,7 +129,7 @@ pub(crate) fn update_file_manager(
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn update_fm_panel(
     sdi: &mut SdiRegistry,
-    buf: &mut String,
+    mut buf: &mut String,
     prefix: &str,
     entries: &[FileEntry],
     selected: usize,

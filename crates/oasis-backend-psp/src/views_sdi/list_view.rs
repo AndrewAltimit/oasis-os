@@ -46,7 +46,7 @@ pub(crate) fn setup_list_bg(sdi: &mut SdiRegistry, prefix: &str) {
 /// Update common list-view background + header.
 pub(crate) fn update_list_bg(
     sdi: &mut SdiRegistry,
-    buf: &mut String,
+    mut buf: &mut String,
     prefix: &str,
     title: &str,
     accent: Color,
@@ -104,7 +104,7 @@ pub(crate) fn update_list_bg(
 /// Update scrollbar indicator for a list view.
 pub(crate) fn update_scrollbar(
     sdi: &mut SdiRegistry,
-    buf: &mut String,
+    mut buf: &mut String,
     prefix: &str,
     selected: usize,
     total: usize,
@@ -133,7 +133,7 @@ pub(crate) fn update_scrollbar(
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn update_list_row(
     sdi: &mut SdiRegistry,
-    buf: &mut String,
+    mut buf: &mut String,
     prefix: &str,
     row_idx: usize,
     is_selected: bool,
@@ -222,7 +222,7 @@ pub(crate) fn update_list_row(
 /// Hide unused rows beyond `visible_count`.
 pub(crate) fn hide_unused_rows(
     sdi: &mut SdiRegistry,
-    buf: &mut String,
+    mut buf: &mut String,
     prefix: &str,
     visible_count: usize,
 ) {
