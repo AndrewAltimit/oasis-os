@@ -142,7 +142,8 @@ pub(crate) fn install(
             let mut q = tq.borrow_mut();
             let id = q.add_timeout(String::new(), delay);
             let gn = format!("__oasis_timer_cb_{id}");
-            if let Some(t) = q.timers_mut().iter_mut().find(|t| t.id() == id) {
+            // Timer was just pushed; it's always last — O(1).
+            if let Some(t) = q.timers_mut().last_mut() {
                 t.set_callback_global(gn);
             }
             id
@@ -156,7 +157,8 @@ pub(crate) fn install(
             let mut q = tq.borrow_mut();
             let id = q.add_interval(String::new(), delay);
             let gn = format!("__oasis_timer_cb_{id}");
-            if let Some(t) = q.timers_mut().iter_mut().find(|t| t.id() == id) {
+            // Timer was just pushed; it's always last — O(1).
+            if let Some(t) = q.timers_mut().last_mut() {
                 t.set_callback_global(gn);
             }
             id

@@ -16,11 +16,6 @@ pub(crate) struct Timer {
 }
 
 impl Timer {
-    /// Return the timer's ID.
-    pub(crate) fn id(&self) -> i32 {
-        self.id
-    }
-
     /// Replace the callback global name (set after allocation).
     pub(crate) fn set_callback_global(&mut self, name: String) {
         self.callback_global = name;
