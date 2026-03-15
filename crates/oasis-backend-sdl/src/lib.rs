@@ -120,6 +120,16 @@ impl SdlBackend {
                 sdl3::sys::render::SDL_SetRenderVSync(canvas.raw(), 1);
             }
         }
+
+        // Enable SDL3 text input so TextInput events are generated.
+        // Without this call, SDL3 only produces key-down/key-up events
+        // and regular character typing does not reach the application.
+        // SAFETY: canvas.window().raw() returns the valid SDL_Window
+        // pointer owned by the canvas.
+        unsafe {
+            sdl3::sys::keyboard::SDL_StartTextInput(canvas.window().raw());
+        }
+
         let event_pump = sdl.event_pump().backend_err()?;
 
         log::info!("SDL3 backend initialized: {width}x{height}");
