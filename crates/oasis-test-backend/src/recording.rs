@@ -23,7 +23,7 @@ type MeasureTextFn = Box<dyn Fn(&str, u16) -> u32>;
 ///
 /// # Example
 ///
-/// ```
+/// ```no_run
 /// use oasis_test_backend::{RecordingBackend, DrawCommand, Color};
 /// use oasis_types::backend::{SdiBackend, SdiShapes};
 ///

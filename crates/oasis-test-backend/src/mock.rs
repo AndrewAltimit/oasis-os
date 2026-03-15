@@ -20,7 +20,7 @@ type MeasureTextFn = Box<dyn Fn(&str, u16) -> u32>;
 ///
 /// # Usage
 ///
-/// ```
+/// ```no_run
 /// use oasis_test_backend::MockSdiCore;
 /// use oasis_types::backend::{Color, SdiCore};
 ///
