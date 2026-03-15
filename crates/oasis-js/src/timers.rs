@@ -93,15 +93,13 @@ impl TimerQueue {
 
         for (idx, timer) in self.timers.iter().enumerate() {
             if self.elapsed_ms >= timer.fire_at_ms {
-                if timer.interval_ms.is_some() {
+                if let Some(iv) = timer.interval_ms {
                     // Interval: call but don't delete the global.
                     callbacks.push(format!(
                         "if(typeof {g}==='function'){{{g}();}}",
                         g = timer.callback_global,
                     ));
-                    if let Some(iv) = timer.interval_ms {
-                        to_reschedule.push((idx, iv));
-                    }
+                    to_reschedule.push((idx, iv));
                 } else {
                     // Timeout: call and delete the global.
                     callbacks.push(format!(
