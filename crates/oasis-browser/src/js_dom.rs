@@ -30,7 +30,16 @@ const NO_NODE: i32 = -1;
 
 /// Install the `document` global and `Element` prototype into the JS
 /// context, backed by the given shared `Document`.
+///
+/// `url` is exposed as `window.location.href`. Pass an empty string
+/// or the page URL.
 pub fn install_document_global(ctx: &Ctx<'_>, doc: &SharedDoc) -> JsResult<()> {
+    install_document_global_with_url(ctx, doc, "")
+}
+
+/// Like [`install_document_global`] but accepts an explicit URL for
+/// `window.location`.
+pub fn install_document_global_with_url(ctx: &Ctx<'_>, doc: &SharedDoc, url: &str) -> JsResult<()> {
     let globals = ctx.globals();
 
     // -- __oasis_tagname(nid) -> String --------------------------------
@@ -273,10 +282,444 @@ pub fn install_document_global(ctx: &Ctx<'_>, doc: &SharedDoc) -> JsResult<()> {
         )?;
     }
 
+    // -- __oasis_inner_html(nid) -> String -----------------------------
+    {
+        let d = Rc::clone(doc);
+        globals.set(
+            "__oasis_inner_html",
+            Function::new(ctx.clone(), move |nid: i32| -> String {
+                let doc = d.borrow();
+                let id = nid as NodeId;
+                if id >= doc.nodes.len() {
+                    return String::new();
+                }
+                let mut out = String::new();
+                for &child in &doc.nodes[id].children {
+                    serialize_node(&doc, child, &mut out);
+                }
+                out
+            })?,
+        )?;
+    }
+
+    // -- __oasis_set_inner_html(nid, html) ----------------------------
+    {
+        let d = Rc::clone(doc);
+        globals.set(
+            "__oasis_set_inner_html",
+            Function::new(ctx.clone(), move |nid: i32, html: String| {
+                let mut doc = d.borrow_mut();
+                let id = nid as NodeId;
+                if id >= doc.nodes.len() {
+                    return;
+                }
+                // Clear existing children.
+                let old: Vec<NodeId> = doc.nodes[id].children.clone();
+                for child_id in old {
+                    doc.nodes[child_id].parent = None;
+                }
+                doc.nodes[id].children.clear();
+
+                // Parse the fragment via the tokenizer +
+                // tree builder, then transplant body children.
+                use crate::html::tokenizer::Tokenizer;
+                use crate::html::tree_builder::TreeBuilder;
+                let wrapped = format!("<html><body>{html}</body></html>");
+                let tokens = Tokenizer::new(&wrapped).tokenize();
+                let frag = TreeBuilder::build(tokens);
+                // Collect body children from fragment.
+                let body_id = frag.body();
+                let src_children: Vec<NodeId> = body_id
+                    .map(|b| frag.nodes[b].children.clone())
+                    .unwrap_or_default();
+                // Deep-copy nodes into the live document.
+                for &src_child in &src_children {
+                    let new_id = deep_copy_node(&frag, &mut doc, src_child);
+                    doc.append_child(id, new_id);
+                }
+            })?,
+        )?;
+    }
+
+    // -- __oasis_query_selector(nid, sel) -> i32 ----------------------
+    {
+        let d = Rc::clone(doc);
+        globals.set(
+            "__oasis_query_selector",
+            Function::new(ctx.clone(), move |nid: i32, sel: String| -> i32 {
+                let doc = d.borrow();
+                let id = nid as NodeId;
+                if id >= doc.nodes.len() {
+                    return NO_NODE;
+                }
+                let parsed = parse_simple_selector(&sel);
+                find_matching(&doc, id, &parsed, true)
+                    .into_iter()
+                    .next()
+                    .map_or(NO_NODE, |n| n as i32)
+            })?,
+        )?;
+    }
+
+    // -- __oasis_query_selector_all(nid, sel) -> Vec<i32> -------------
+    {
+        let d = Rc::clone(doc);
+        globals.set(
+            "__oasis_query_selector_all",
+            Function::new(ctx.clone(), move |nid: i32, sel: String| -> Vec<i32> {
+                let doc = d.borrow();
+                let id = nid as NodeId;
+                if id >= doc.nodes.len() {
+                    return Vec::new();
+                }
+                let parsed = parse_simple_selector(&sel);
+                find_matching(&doc, id, &parsed, false)
+                    .into_iter()
+                    .map(|n| n as i32)
+                    .collect()
+            })?,
+        )?;
+    }
+
+    // -- __oasis_classlist_op(nid, op, cls) -> bool -------------------
+    {
+        let d = Rc::clone(doc);
+        globals.set(
+            "__oasis_classlist_op",
+            Function::new(
+                ctx.clone(),
+                move |nid: i32, op: String, cls: String| -> bool {
+                    let mut doc = d.borrow_mut();
+                    let id = nid as NodeId;
+                    if id >= doc.nodes.len() {
+                        return false;
+                    }
+                    let e = match &mut doc.nodes[id].kind {
+                        NodeKind::Element(e) => e,
+                        _ => return false,
+                    };
+                    classlist_op(e, &op, &cls)
+                },
+            )?,
+        )?;
+    }
+
+    // -- __oasis_style_set(nid, prop, value) --------------------------
+    {
+        let d = Rc::clone(doc);
+        globals.set(
+            "__oasis_style_set",
+            Function::new(ctx.clone(), move |nid: i32, prop: String, value: String| {
+                let mut doc = d.borrow_mut();
+                let id = nid as NodeId;
+                if id >= doc.nodes.len() {
+                    return;
+                }
+                let e = match &mut doc.nodes[id].kind {
+                    NodeKind::Element(e) => e,
+                    _ => return,
+                };
+                set_inline_style(e, &prop, &value);
+            })?,
+        )?;
+    }
+
+    // -- __oasis_style_get(nid, prop) -> String -----------------------
+    {
+        let d = Rc::clone(doc);
+        globals.set(
+            "__oasis_style_get",
+            Function::new(ctx.clone(), move |nid: i32, prop: String| -> String {
+                let doc = d.borrow();
+                let id = nid as NodeId;
+                if id >= doc.nodes.len() {
+                    return String::new();
+                }
+                let e = match &doc.nodes[id].kind {
+                    NodeKind::Element(e) => e,
+                    _ => return String::new(),
+                };
+                get_inline_style(e, &prop)
+            })?,
+        )?;
+    }
+
+    // -- __oasis_location() -> String ---------------------------------
+    {
+        let url_owned = url.to_string();
+        globals.set(
+            "__oasis_location",
+            Function::new(ctx.clone(), move || -> String { url_owned.clone() })?,
+        )?;
+    }
+
     // -- JavaScript-side Element class + document global ---------------
     let _: () = ctx.eval(JS_DOM_BOOTSTRAP)?;
 
     Ok(())
+}
+
+// ------------------------------------------------------------------
+// innerHTML serialization
+// ------------------------------------------------------------------
+
+/// Serialize a DOM node (and its subtree) to an HTML string.
+fn serialize_node(doc: &Document, id: NodeId, out: &mut String) {
+    match &doc.nodes[id].kind {
+        NodeKind::Text(s) => {
+            escape_html(s, out);
+        },
+        NodeKind::Element(e) => {
+            let tag = e.tag.as_str();
+            out.push('<');
+            out.push_str(tag);
+            for attr in &e.attributes {
+                out.push(' ');
+                out.push_str(&attr.name);
+                out.push_str("=\"");
+                escape_html(&attr.value, out);
+                out.push('"');
+            }
+            if e.tag.is_void() {
+                out.push_str(" />");
+                return;
+            }
+            out.push('>');
+            for &child in &doc.nodes[id].children {
+                serialize_node(doc, child, out);
+            }
+            out.push_str("</");
+            out.push_str(tag);
+            out.push('>');
+        },
+        NodeKind::Comment(s) => {
+            out.push_str("<!--");
+            out.push_str(s);
+            out.push_str("-->");
+        },
+        NodeKind::Document => {
+            for &child in &doc.nodes[id].children {
+                serialize_node(doc, child, out);
+            }
+        },
+    }
+}
+
+/// Escape `<`, `>`, `&`, and `"` in text for HTML serialization.
+fn escape_html(s: &str, out: &mut String) {
+    for ch in s.chars() {
+        match ch {
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            '"' => out.push_str("&quot;"),
+            _ => out.push(ch),
+        }
+    }
+}
+
+/// Deep-copy a node (and its subtree) from `src` into `dst`,
+/// returning the new node ID in `dst`.
+fn deep_copy_node(src: &Document, dst: &mut Document, src_id: NodeId) -> NodeId {
+    let new_id = dst.add_node(src.nodes[src_id].kind.clone());
+    for &child_src in &src.nodes[src_id].children {
+        let child_new = deep_copy_node(src, dst, child_src);
+        dst.append_child(new_id, child_new);
+    }
+    new_id
+}
+
+// ------------------------------------------------------------------
+// Simple CSS selector matching for querySelector
+// ------------------------------------------------------------------
+
+/// A parsed simple selector for querySelector matching.
+struct SimpleSelector {
+    tag: Option<String>,
+    id: Option<String>,
+    classes: Vec<String>,
+}
+
+/// Parse a simple CSS selector string into its components.
+///
+/// Supports: tag, .class, #id, and combinations like `div.foo#bar`.
+fn parse_simple_selector(sel: &str) -> SimpleSelector {
+    let mut tag = None;
+    let mut id = None;
+    let mut classes = Vec::new();
+
+    let sel = sel.trim();
+    if sel.is_empty() {
+        return SimpleSelector { tag, id, classes };
+    }
+
+    // Split on '#' and '.' boundaries while preserving delimiters.
+    let mut tokens: Vec<(char, String)> = Vec::new();
+    let mut current = String::new();
+    let mut kind = 't'; // 't' = tag, '#' = id, '.' = class
+    for ch in sel.chars() {
+        if ch == '#' || ch == '.' {
+            if !current.is_empty() {
+                tokens.push((kind, current.clone()));
+                current.clear();
+            }
+            kind = ch;
+        } else {
+            current.push(ch);
+        }
+    }
+    if !current.is_empty() {
+        tokens.push((kind, current));
+    }
+
+    for (k, val) in tokens {
+        match k {
+            't' => tag = Some(val.to_ascii_lowercase()),
+            '#' => id = Some(val),
+            '.' => classes.push(val),
+            _ => {},
+        }
+    }
+
+    SimpleSelector { tag, id, classes }
+}
+
+/// Test whether an element matches a parsed simple selector.
+fn matches_simple_sel(elem: &ElementData, sel: &SimpleSelector) -> bool {
+    if let Some(ref t) = sel.tag
+        && !elem.tag.as_str().eq_ignore_ascii_case(t)
+    {
+        return false;
+    }
+    if let Some(ref sel_id) = sel.id
+        && elem.id() != Some(sel_id.as_str())
+    {
+        return false;
+    }
+    for cls in &sel.classes {
+        if !elem.has_class(cls) {
+            return false;
+        }
+    }
+    true
+}
+
+/// Walk the subtree rooted at `root` (excluding `root` itself)
+/// and collect matching element node IDs. If `first_only` is true,
+/// stop after the first match.
+fn find_matching(
+    doc: &Document,
+    root: NodeId,
+    sel: &SimpleSelector,
+    first_only: bool,
+) -> Vec<NodeId> {
+    let mut results = Vec::new();
+    let mut stack: Vec<NodeId> = doc.nodes[root].children.clone();
+    // Reverse so we process in document order (left to right).
+    stack.reverse();
+    while let Some(nid) = stack.pop() {
+        if let NodeKind::Element(ref e) = doc.nodes[nid].kind
+            && matches_simple_sel(e, sel)
+        {
+            results.push(nid);
+            if first_only {
+                return results;
+            }
+        }
+        // Push children in reverse order for DFS document order.
+        let children = &doc.nodes[nid].children;
+        for &child in children.iter().rev() {
+            stack.push(child);
+        }
+    }
+    results
+}
+
+// ------------------------------------------------------------------
+// classList operations
+// ------------------------------------------------------------------
+
+/// Perform a classList operation on an element's `class` attribute.
+/// Returns a bool (meaningful for "contains" and "toggle").
+fn classlist_op(elem: &mut ElementData, op: &str, cls: &str) -> bool {
+    let current = elem.get_attribute("class").unwrap_or("").to_string();
+    let mut parts: Vec<String> = current.split_ascii_whitespace().map(String::from).collect();
+
+    match op {
+        "add" => {
+            if !parts.iter().any(|c| c == cls) {
+                parts.push(cls.to_string());
+            }
+            elem.set_attribute("class", &parts.join(" "));
+            true
+        },
+        "remove" => {
+            parts.retain(|c| c != cls);
+            elem.set_attribute("class", &parts.join(" "));
+            false
+        },
+        "toggle" => {
+            let had = parts.iter().any(|c| c == cls);
+            if had {
+                parts.retain(|c| c != cls);
+            } else {
+                parts.push(cls.to_string());
+            }
+            elem.set_attribute("class", &parts.join(" "));
+            !had
+        },
+        "contains" => parts.iter().any(|c| c == cls),
+        _ => false,
+    }
+}
+
+// ------------------------------------------------------------------
+// Inline style helpers
+// ------------------------------------------------------------------
+
+/// Set a CSS property in the element's `style` attribute.
+fn set_inline_style(elem: &mut ElementData, prop: &str, value: &str) {
+    let current = elem.get_attribute("style").unwrap_or("").to_string();
+    let mut decls: Vec<(String, String)> = parse_style_attr(&current);
+    let prop_lower = prop.to_ascii_lowercase();
+    if let Some(existing) = decls.iter_mut().find(|(p, _)| *p == prop_lower) {
+        existing.1 = value.to_string();
+    } else {
+        decls.push((prop_lower, value.to_string()));
+    }
+    let rebuilt: String = decls
+        .iter()
+        .map(|(p, v)| format!("{p}: {v}"))
+        .collect::<Vec<_>>()
+        .join("; ");
+    elem.set_attribute("style", &rebuilt);
+}
+
+/// Get a CSS property value from the element's `style` attribute.
+fn get_inline_style(elem: &ElementData, prop: &str) -> String {
+    let current = elem.get_attribute("style").unwrap_or("");
+    let prop_lower = prop.to_ascii_lowercase();
+    for (p, v) in parse_style_attr(current) {
+        if p == prop_lower {
+            return v;
+        }
+    }
+    String::new()
+}
+
+/// Parse an inline `style` attribute value into property/value pairs.
+fn parse_style_attr(style: &str) -> Vec<(String, String)> {
+    let mut result = Vec::new();
+    for decl in style.split(';') {
+        let decl = decl.trim();
+        if decl.is_empty() {
+            continue;
+        }
+        if let Some((prop, val)) = decl.split_once(':') {
+            result.push((prop.trim().to_ascii_lowercase(), val.trim().to_string()));
+        }
+    }
+    result
 }
 
 /// JavaScript code that defines the `Element` wrapper and `document`
@@ -289,13 +732,22 @@ const JS_DOM_BOOTSTRAP: &str = r#"
     this.__oasis_node_id = nid;
   }
 
+  // Helper to get-or-create an Element wrapper by nid.
+  function __get_el(nid) {
+    return nid >= 0 ? new Element(nid) : null;
+  }
+
   Object.defineProperties(Element.prototype, {
     tagName: {
-      get: function() { return __oasis_tagname(this.__oasis_node_id); },
+      get: function() {
+        return __oasis_tagname(this.__oasis_node_id);
+      },
       enumerable: true
     },
     id: {
-      get: function() { return __oasis_getattr(this.__oasis_node_id, "id") || ""; },
+      get: function() {
+        return __oasis_getattr(this.__oasis_node_id, "id") || "";
+      },
       set: function(v) {
         if (v) __oasis_setattr(this.__oasis_node_id, "id", v);
         else __oasis_rmattr(this.__oasis_node_id, "id");
@@ -303,15 +755,20 @@ const JS_DOM_BOOTSTRAP: &str = r#"
       enumerable: true
     },
     textContent: {
-      get: function() { return __oasis_text(this.__oasis_node_id); },
-      set: function(v) { __oasis_settext(this.__oasis_node_id, String(v)); },
+      get: function() {
+        return __oasis_text(this.__oasis_node_id);
+      },
+      set: function(v) {
+        __oasis_settext(this.__oasis_node_id, String(v));
+      },
       enumerable: true
     },
     children: {
       get: function() {
         var ids = __oasis_children(this.__oasis_node_id);
         var result = [];
-        for (var i = 0; i < ids.length; i++) result.push(new Element(ids[i]));
+        for (var i = 0; i < ids.length; i++)
+          result.push(new Element(ids[i]));
         return result;
       },
       enumerable: true
@@ -320,6 +777,57 @@ const JS_DOM_BOOTSTRAP: &str = r#"
       get: function() {
         var pid = __oasis_parent(this.__oasis_node_id);
         return pid >= 0 ? new Element(pid) : null;
+      },
+      enumerable: true
+    },
+    innerHTML: {
+      get: function() {
+        return __oasis_inner_html(this.__oasis_node_id);
+      },
+      set: function(v) {
+        __oasis_set_inner_html(this.__oasis_node_id, String(v));
+      },
+      enumerable: true
+    },
+    classList: {
+      get: function() {
+        var self = this;
+        return {
+          add: function(c) {
+            __oasis_classlist_op(self.__oasis_node_id, 'add', c);
+          },
+          remove: function(c) {
+            __oasis_classlist_op(
+              self.__oasis_node_id, 'remove', c
+            );
+          },
+          toggle: function(c) {
+            return __oasis_classlist_op(
+              self.__oasis_node_id, 'toggle', c
+            );
+          },
+          contains: function(c) {
+            return __oasis_classlist_op(
+              self.__oasis_node_id, 'contains', c
+            );
+          }
+        };
+      },
+      enumerable: true
+    },
+    style: {
+      get: function() {
+        var self = this;
+        return {
+          setProperty: function(p, v) {
+            __oasis_style_set(
+              self.__oasis_node_id, p, String(v)
+            );
+          },
+          getPropertyValue: function(p) {
+            return __oasis_style_get(self.__oasis_node_id, p);
+          }
+        };
       },
       enumerable: true
     }
@@ -336,8 +844,22 @@ const JS_DOM_BOOTSTRAP: &str = r#"
     __oasis_rmattr(this.__oasis_node_id, name);
   };
   Element.prototype.appendChild = function(child) {
-    __oasis_append(this.__oasis_node_id, child.__oasis_node_id);
+    __oasis_append(
+      this.__oasis_node_id, child.__oasis_node_id
+    );
     return child;
+  };
+  Element.prototype.querySelector = function(sel) {
+    var nid = __oasis_query_selector(
+      this.__oasis_node_id, sel
+    );
+    return __get_el(nid);
+  };
+  Element.prototype.querySelectorAll = function(sel) {
+    var nids = __oasis_query_selector_all(
+      this.__oasis_node_id, sel
+    );
+    return nids.map(function(n) { return new Element(n); });
   };
 
   // -- Event listener support --
@@ -368,41 +890,50 @@ const JS_DOM_BOOTSTRAP: &str = r#"
   };
 
   // Expose dispatch helper for Rust-side event triggering.
-  globalThis.__oasis_dispatch_event = function(nid, type, detail) {
-    var key = nid + ":" + type;
-    var arr = __oasis_listeners[key];
-    if (!arr || arr.length === 0) return;
-    var el = new Element(nid);
-    var evt = { type: type, target: el, detail: detail || null };
-    for (var i = 0; i < arr.length; i++) arr[i].call(el, evt);
-  };
+  globalThis.__oasis_dispatch_event =
+    function(nid, type, detail) {
+      var key = nid + ":" + type;
+      var arr = __oasis_listeners[key];
+      if (!arr || arr.length === 0) return;
+      var el = new Element(nid);
+      var evt = {
+        type: type, target: el, detail: detail || null
+      };
+      for (var i = 0; i < arr.length; i++)
+        arr[i].call(el, evt);
+    };
 
   // Dispatch with bubbling: walk from target up to root.
-  globalThis.__oasis_dispatch_with_bubbling = function(nid, type, detail) {
-    var target = new Element(nid);
-    var evt = {
-      type: type,
-      detail: detail || null,
-      target: target,
-      currentTarget: null,
-      _stopped: false,
-      stopPropagation: function() { this._stopped = true; },
-      preventDefault: function() { this._defaultPrevented = true; },
-      _defaultPrevented: false
-    };
-    var current = nid;
-    while (current >= 0 && !evt._stopped) {
-      var key = current + ":" + type;
-      var arr = __oasis_listeners[key];
-      if (arr) {
-        evt.currentTarget = new Element(current);
-        for (var i = 0; i < arr.length; i++) {
-          arr[i].call(evt.currentTarget, evt);
+  globalThis.__oasis_dispatch_with_bubbling =
+    function(nid, type, detail) {
+      var target = new Element(nid);
+      var evt = {
+        type: type,
+        detail: detail || null,
+        target: target,
+        currentTarget: null,
+        _stopped: false,
+        stopPropagation: function() {
+          this._stopped = true;
+        },
+        preventDefault: function() {
+          this._defaultPrevented = true;
+        },
+        _defaultPrevented: false
+      };
+      var current = nid;
+      while (current >= 0 && !evt._stopped) {
+        var key = current + ":" + type;
+        var arr = __oasis_listeners[key];
+        if (arr) {
+          evt.currentTarget = new Element(current);
+          for (var i = 0; i < arr.length; i++) {
+            arr[i].call(evt.currentTarget, evt);
+          }
         }
+        current = __oasis_parent(current);
       }
-      current = __oasis_parent(current);
-    }
-  };
+    };
 
   var document = {
     getElementById: function(id) {
@@ -414,6 +945,20 @@ const JS_DOM_BOOTSTRAP: &str = r#"
     },
     createTextNode: function(text) {
       return new Element(__oasis_createtext(String(text)));
+    },
+    querySelector: function(sel) {
+      var b = __oasis_body();
+      if (b < 0) return null;
+      var nid = __oasis_query_selector(b, sel);
+      return __get_el(nid);
+    },
+    querySelectorAll: function(sel) {
+      var b = __oasis_body();
+      if (b < 0) return [];
+      var nids = __oasis_query_selector_all(b, sel);
+      return nids.map(function(n) {
+        return new Element(n);
+      });
     }
   };
 
@@ -434,6 +979,16 @@ const JS_DOM_BOOTSTRAP: &str = r#"
 
   globalThis.document = document;
   globalThis.Element = Element;
+  globalThis.window = globalThis;
+  Object.defineProperty(globalThis, 'location', {
+    get: function() {
+      var h = __oasis_location();
+      return {
+        href: h,
+        toString: function() { return h; }
+      };
+    }
+  });
 })();
 "#;
 
@@ -798,6 +1353,297 @@ mod tests {
             .eval("__oasis_dispatch_with_bubbling(6, 'click', null)")
             .unwrap();
         let val = engine.eval("clicked").unwrap();
+        assert_eq!(val, oasis_js::JsValue::Bool(true));
+    }
+
+    // ---------------------------------------------------------------
+    // innerHTML tests
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn inner_html_get() {
+        let (engine, _doc) = setup(sample_doc());
+        let val = engine
+            .eval("document.getElementById('main').innerHTML")
+            .unwrap();
+        // div#main contains <p>hello</p>
+        if let oasis_js::JsValue::String(s) = val {
+            assert!(
+                s.contains("<p>") && s.contains("hello"),
+                "unexpected innerHTML: {s}"
+            );
+        } else {
+            panic!("expected string");
+        }
+    }
+
+    #[test]
+    fn inner_html_set() {
+        let (engine, shared) = setup(sample_doc());
+        engine
+            .eval(
+                "document.getElementById('main').innerHTML = \
+                 '<span>new</span>'",
+            )
+            .unwrap();
+        let doc = shared.borrow();
+        let main = doc.get_element_by_id("main").expect("main");
+        let text = doc.text_content(main);
+        assert_eq!(text, "new");
+        // Should have one child: <span>
+        let children: Vec<_> = doc.nodes[main]
+            .children
+            .iter()
+            .copied()
+            .filter(|&c| matches!(doc.nodes[c].kind, NodeKind::Element(_)))
+            .collect();
+        assert_eq!(children.len(), 1);
+        let child_elem = doc.element(children[0]).expect("elem");
+        assert_eq!(child_elem.tag, TagName::Span);
+    }
+
+    #[test]
+    fn inner_html_set_empty() {
+        let (engine, shared) = setup(sample_doc());
+        engine
+            .eval("document.getElementById('main').innerHTML = ''")
+            .unwrap();
+        let doc = shared.borrow();
+        let main = doc.get_element_by_id("main").expect("main");
+        assert!(doc.nodes[main].children.is_empty());
+    }
+
+    // ---------------------------------------------------------------
+    // querySelector / querySelectorAll tests
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn query_selector_by_tag() {
+        let (engine, _doc) = setup(sample_doc());
+        let val = engine.eval("document.querySelector('p').tagName").unwrap();
+        assert_eq!(val, oasis_js::JsValue::String("P".into()));
+    }
+
+    #[test]
+    fn query_selector_by_id() {
+        let (engine, _doc) = setup(sample_doc());
+        let val = engine
+            .eval("document.querySelector('#main').tagName")
+            .unwrap();
+        assert_eq!(val, oasis_js::JsValue::String("DIV".into()));
+    }
+
+    #[test]
+    fn query_selector_by_class() {
+        let (engine, _doc) = setup(sample_doc());
+        // Add a class first, then query by it.
+        engine
+            .eval(
+                "document.getElementById('main')\
+                 .classList.add('highlight')",
+            )
+            .unwrap();
+        let val = engine
+            .eval("document.querySelector('.highlight').id")
+            .unwrap();
+        assert_eq!(val, oasis_js::JsValue::String("main".into()));
+    }
+
+    #[test]
+    fn query_selector_returns_null_for_no_match() {
+        let (engine, _doc) = setup(sample_doc());
+        let val = engine
+            .eval("document.querySelector('.nope') === null")
+            .unwrap();
+        assert_eq!(val, oasis_js::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn query_selector_all_returns_array() {
+        let (engine, _doc) = setup(sample_doc());
+        // Add another div to body for multiple matches.
+        engine
+            .eval(
+                "var d = document.createElement('div'); \
+                 document.body.appendChild(d)",
+            )
+            .unwrap();
+        let val = engine
+            .eval("document.querySelectorAll('div').length")
+            .unwrap();
+        assert_eq!(val, oasis_js::JsValue::Int(2));
+    }
+
+    #[test]
+    fn query_selector_compound() {
+        let (engine, _doc) = setup(sample_doc());
+        let val = engine
+            .eval("document.querySelector('div#main').tagName")
+            .unwrap();
+        assert_eq!(val, oasis_js::JsValue::String("DIV".into()));
+    }
+
+    #[test]
+    fn element_query_selector() {
+        let (engine, _doc) = setup(sample_doc());
+        let val = engine
+            .eval(
+                "document.getElementById('main')\
+                 .querySelector('p').textContent",
+            )
+            .unwrap();
+        assert_eq!(val, oasis_js::JsValue::String("hello".into()));
+    }
+
+    // ---------------------------------------------------------------
+    // classList tests
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn classlist_add_and_contains() {
+        let (engine, shared) = setup(sample_doc());
+        engine
+            .eval(
+                "var el = document.getElementById('main'); \
+                 el.classList.add('foo'); \
+                 el.classList.add('bar')",
+            )
+            .unwrap();
+        let doc = shared.borrow();
+        let main = doc.get_element_by_id("main").expect("main");
+        let elem = doc.element(main).expect("elem");
+        assert!(elem.has_class("foo"));
+        assert!(elem.has_class("bar"));
+    }
+
+    #[test]
+    fn classlist_remove() {
+        let (engine, shared) = setup(sample_doc());
+        engine
+            .eval(
+                "var el = document.getElementById('main'); \
+                 el.classList.add('foo'); \
+                 el.classList.add('bar'); \
+                 el.classList.remove('foo')",
+            )
+            .unwrap();
+        let doc = shared.borrow();
+        let main = doc.get_element_by_id("main").expect("main");
+        let elem = doc.element(main).expect("elem");
+        assert!(!elem.has_class("foo"));
+        assert!(elem.has_class("bar"));
+    }
+
+    #[test]
+    fn classlist_toggle() {
+        let (engine, _doc) = setup(sample_doc());
+        let val = engine
+            .eval(
+                "var el = document.getElementById('main'); \
+                 var r1 = el.classList.toggle('active'); \
+                 var r2 = el.classList.toggle('active'); \
+                 '' + r1 + ',' + r2",
+            )
+            .unwrap();
+        assert_eq!(val, oasis_js::JsValue::String("true,false".into()));
+    }
+
+    #[test]
+    fn classlist_contains() {
+        let (engine, _doc) = setup(sample_doc());
+        let val = engine
+            .eval(
+                "var el = document.getElementById('main'); \
+                 el.classList.add('yes'); \
+                 '' + el.classList.contains('yes') + ',' + \
+                 el.classList.contains('no')",
+            )
+            .unwrap();
+        assert_eq!(val, oasis_js::JsValue::String("true,false".into()));
+    }
+
+    // ---------------------------------------------------------------
+    // style tests
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn style_set_and_get() {
+        let (engine, shared) = setup(sample_doc());
+        engine
+            .eval(
+                "var el = document.getElementById('main'); \
+                 el.style.setProperty('color', 'red'); \
+                 el.style.setProperty('font-size', '14px')",
+            )
+            .unwrap();
+        let doc = shared.borrow();
+        let main = doc.get_element_by_id("main").expect("main");
+        let elem = doc.element(main).expect("elem");
+        let style = elem.get_attribute("style").expect("style");
+        assert!(style.contains("color: red"));
+        assert!(style.contains("font-size: 14px"));
+    }
+
+    #[test]
+    fn style_get_property_value() {
+        let (engine, _doc) = setup(sample_doc());
+        let val = engine
+            .eval(
+                "var el = document.getElementById('main'); \
+                 el.style.setProperty('color', 'blue'); \
+                 el.style.getPropertyValue('color')",
+            )
+            .unwrap();
+        assert_eq!(val, oasis_js::JsValue::String("blue".into()));
+    }
+
+    #[test]
+    fn style_overwrite_property() {
+        let (engine, _doc) = setup(sample_doc());
+        let val = engine
+            .eval(
+                "var el = document.getElementById('main'); \
+                 el.style.setProperty('color', 'red'); \
+                 el.style.setProperty('color', 'green'); \
+                 el.style.getPropertyValue('color')",
+            )
+            .unwrap();
+        assert_eq!(val, oasis_js::JsValue::String("green".into()));
+    }
+
+    // ---------------------------------------------------------------
+    // window.location tests
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn location_href_default() {
+        let (engine, _doc) = setup(sample_doc());
+        let val = engine.eval("location.href").unwrap();
+        assert_eq!(val, oasis_js::JsValue::String("".into()));
+    }
+
+    #[test]
+    fn location_href_with_url() {
+        let engine = JsEngine::new(8 * 1024 * 1024).unwrap();
+        let doc = sample_doc();
+        let shared: SharedDoc = Rc::new(RefCell::new(doc));
+        let s = Rc::clone(&shared);
+        engine
+            .with_context(|ctx| {
+                install_document_global_with_url(&ctx, &s, "https://example.com/page")
+            })
+            .unwrap();
+        let val = engine.eval("location.href").unwrap();
+        assert_eq!(
+            val,
+            oasis_js::JsValue::String("https://example.com/page".into())
+        );
+    }
+
+    #[test]
+    fn window_is_global_this() {
+        let (engine, _doc) = setup(sample_doc());
+        let val = engine.eval("window === globalThis").unwrap();
         assert_eq!(val, oasis_js::JsValue::Bool(true));
     }
 }

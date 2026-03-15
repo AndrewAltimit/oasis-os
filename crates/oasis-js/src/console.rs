@@ -4,6 +4,8 @@ use std::rc::Rc;
 use rquickjs::function::Rest;
 use rquickjs::{Ctx, Function, Object, Result as JsResult, Value};
 
+use crate::timers::TimerQueue;
+
 /// Severity level of a console message.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ConsoleLevel {
@@ -55,9 +57,16 @@ fn fmt_args(args: &Rest<Value<'_>>) -> String {
         .join(" ")
 }
 
-/// Install `console`, `alert`, `setTimeout`, `setInterval`, `clearTimeout`,
-/// and `clearInterval` into the given JS context.
-pub(crate) fn install(ctx: &Ctx<'_>, buf: ConsoleBuffer) -> JsResult<()> {
+/// Shared timer queue reference for closures.
+pub(crate) type SharedTimerQueue = Rc<RefCell<TimerQueue>>;
+
+/// Install `console`, `alert`, `setTimeout`, `setInterval`,
+/// `clearTimeout`, and `clearInterval` into the given JS context.
+pub(crate) fn install(
+    ctx: &Ctx<'_>,
+    buf: ConsoleBuffer,
+    timer_queue: SharedTimerQueue,
+) -> JsResult<()> {
     let globals = ctx.globals();
 
     // -- console object ------------------------------------------------
@@ -121,39 +130,81 @@ pub(crate) fn install(ctx: &Ctx<'_>, buf: ConsoleBuffer) -> JsResult<()> {
         })?,
     )?;
 
-    // -- setTimeout / setInterval stubs --------------------------------
-    let b = Rc::clone(&buf);
+    // -- Timer internals (Rust side) ------------------------------------
+    // Expose low-level helpers that only accept typed primitives
+    // (no Value<'_> + Ctx<'_> mixing). The JS wrappers below store
+    // the callback on globalThis themselves.
+
+    let tq = Rc::clone(&timer_queue);
     globals.set(
-        "setTimeout",
-        Function::new(ctx.clone(), move |_args: Rest<Value<'_>>| -> i32 {
-            b.borrow_mut().push(ConsoleEntry {
-                level: ConsoleLevel::Warn,
-                message: "setTimeout is not supported".into(),
-            });
-            0
+        "__oasis_add_timeout",
+        Function::new(ctx.clone(), move |delay: f64| -> i32 {
+            let mut q = tq.borrow_mut();
+            let id = q.add_timeout(String::new(), delay);
+            let gn = format!("__oasis_timer_cb_{id}");
+            if let Some(t) = q.timers_mut().iter_mut().find(|t| t.id() == id) {
+                t.set_callback_global(gn);
+            }
+            id
         })?,
     )?;
 
-    let b = Rc::clone(&buf);
+    let tq = Rc::clone(&timer_queue);
     globals.set(
-        "setInterval",
-        Function::new(ctx.clone(), move |_args: Rest<Value<'_>>| -> i32 {
-            b.borrow_mut().push(ConsoleEntry {
-                level: ConsoleLevel::Warn,
-                message: "setInterval is not supported".into(),
-            });
-            0
+        "__oasis_add_interval",
+        Function::new(ctx.clone(), move |delay: f64| -> i32 {
+            let mut q = tq.borrow_mut();
+            let id = q.add_interval(String::new(), delay);
+            let gn = format!("__oasis_timer_cb_{id}");
+            if let Some(t) = q.timers_mut().iter_mut().find(|t| t.id() == id) {
+                t.set_callback_global(gn);
+            }
+            id
         })?,
     )?;
 
-    // -- clearTimeout / clearInterval (no-op) --------------------------
+    let tq = Rc::clone(&timer_queue);
     globals.set(
-        "clearTimeout",
-        Function::new(ctx.clone(), |_args: Rest<Value<'_>>| {})?,
+        "__oasis_clear_timer",
+        Function::new(ctx.clone(), move |id: i32| {
+            tq.borrow_mut().clear(id);
+        })?,
     )?;
-    globals.set(
-        "clearInterval",
-        Function::new(ctx.clone(), |_args: Rest<Value<'_>>| {})?,
+
+    // -- JS wrappers for setTimeout / setInterval / clear* ------------
+    // Callback storage happens on the JS side so we avoid the
+    // rquickjs lifetime issue of mixing Ctx<'a> with Value<'b>.
+    ctx.eval::<(), _>(
+        br#"
+globalThis.setTimeout = function(cb, delay) {
+    var d = (typeof delay === 'number') ? delay : 0;
+    var id = __oasis_add_timeout(d);
+    var gn = '__oasis_timer_cb_' + id;
+    if (typeof cb === 'function') {
+        globalThis[gn] = cb;
+    } else if (typeof cb === 'string') {
+        globalThis[gn] = new Function(cb);
+    }
+    return id;
+};
+globalThis.setInterval = function(cb, delay) {
+    var d = (typeof delay === 'number') ? delay : 0;
+    var id = __oasis_add_interval(d);
+    var gn = '__oasis_timer_cb_' + id;
+    if (typeof cb === 'function') {
+        globalThis[gn] = cb;
+    } else if (typeof cb === 'string') {
+        globalThis[gn] = new Function(cb);
+    }
+    return id;
+};
+globalThis.clearTimeout = function(id) {
+    __oasis_clear_timer(id);
+};
+globalThis.clearInterval = function(id) {
+    __oasis_clear_timer(id);
+};
+"#,
     )?;
 
     Ok(())

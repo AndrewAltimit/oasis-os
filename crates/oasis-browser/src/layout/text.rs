@@ -10,20 +10,11 @@ use crate::css::values::{TextTransform, WhiteSpace};
 // Unicode fallback
 // -------------------------------------------------------------------
 
-/// Replace characters that have no bitmap font glyph with `?`.
-///
-/// This prevents filled-block rendering for non-ASCII characters like
-/// `©`, Cyrillic, CJK, etc.
+/// Pass through all characters, preserving unknown ones for tofu-box
+/// rendering by the bitmap font (which returns an outlined □ fallback
+/// for any character without a dedicated glyph).
 pub fn replace_unrenderable(text: &str) -> String {
-    text.chars()
-        .map(|ch| {
-            if oasis_types::bitmap_font::has_glyph(ch) {
-                ch
-            } else {
-                '?'
-            }
-        })
-        .collect()
+    text.to_string()
 }
 
 // -------------------------------------------------------------------
@@ -255,6 +246,22 @@ mod tests {
         fn measure_text(&self, text: &str, font_size: u16) -> u32 {
             oasis_types::backend::bitmap_measure_text(text, font_size)
         }
+    }
+
+    // -- replace_unrenderable -----------------------------------------
+
+    #[test]
+    fn unrenderable_preserves_all_chars() {
+        // Unknown characters should pass through (rendered as tofu □
+        // by the bitmap font fallback, not replaced with '?').
+        let input = "hello \u{4E00} world";
+        assert_eq!(replace_unrenderable(input), input);
+    }
+
+    #[test]
+    fn unrenderable_ascii_unchanged() {
+        let input = "Hello, World! 123";
+        assert_eq!(replace_unrenderable(input), input);
     }
 
     // -- whitespace collapsing ----------------------------------------
