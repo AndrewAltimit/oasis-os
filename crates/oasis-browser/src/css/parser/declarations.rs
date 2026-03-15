@@ -175,7 +175,10 @@ impl CssParser {
 
         match values.len() {
             0 => CssValue::Keyword(String::new()),
-            1 => values.into_iter().next().expect("len checked"),
+            1 => match values.into_iter().next() {
+                Some(v) => v,
+                None => CssValue::Keyword(String::new()),
+            },
             _ => CssValue::Multiple(values),
         }
     }

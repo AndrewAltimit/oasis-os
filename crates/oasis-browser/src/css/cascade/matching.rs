@@ -13,7 +13,7 @@ use super::super::values::ComputedStyle;
 use super::CascadeContext;
 use crate::html::dom::{Document, ElementData, NodeId, NodeKind};
 
-use std::collections::HashMap;
+use rustc_hash::FxHashMap;
 
 // -----------------------------------------------------------------------
 // Matched declaration types
@@ -221,8 +221,9 @@ pub(super) fn collect_matched_declarations(
     node_id: NodeId,
     stylesheets: &[&Stylesheet],
     index: &super::index::SelectorIndex,
-    inline_map: &HashMap<NodeId, &[super::super::parser::Declaration]>,
+    inline_map: &FxHashMap<NodeId, &[super::super::parser::Declaration]>,
     ctx: &CascadeContext<'_>,
+    tag_cache: &mut FxHashMap<String, String>,
 ) -> Vec<MatchedDeclaration> {
     let mut result = Vec::new();
 
@@ -236,8 +237,15 @@ pub(super) fn collect_matched_declarations(
     let class_str = elem.get_attribute("class").unwrap_or("");
     let classes: Vec<&str> = class_str.split_whitespace().collect();
 
+    // Use cached lowercased tag name to avoid repeated allocations.
+    // Look up by &str first; only allocate on cache misses.
+    if !tag_cache.contains_key(tag) {
+        tag_cache.insert(tag.to_string(), tag.to_ascii_lowercase());
+    }
+    let tag_lower = tag_cache.get(tag).expect("just inserted");
+
     // Get candidate rules from the index.
-    let candidates = index.candidates(tag, id, &classes);
+    let candidates = index.candidates_with_lower(tag, tag_lower, id, &classes);
 
     for candidate in &candidates {
         let rule = &stylesheets[candidate.sheet_idx].rules[candidate.rule_idx];

@@ -8,8 +8,8 @@ use web_sys::{CanvasRenderingContext2d, HtmlCanvasElement, ImageData};
 use oasis_rasterize::GlyphCacheKey;
 use oasis_types::backend::stacks::{ClipPush, ClipStack, TranslateStack};
 use oasis_types::backend::{
-    Color, GradientStyle, SdiBackend, SdiCore, TextMetrics, TextureId, texture_not_found,
-    validate_rgba_data,
+    Color, GradientStyle, SdiAlpha, SdiBatch, SdiClipTransform, SdiCore, SdiGradients, SdiShapes,
+    SdiText, SdiTextures, SdiVector, TextMetrics, TextureId, texture_not_found, validate_rgba_data,
 };
 use oasis_types::error::{OasisError, Result};
 use oasis_types::geometry::ClipRect;
@@ -423,11 +423,11 @@ impl SdiCore for WasmBackend {
 // SdiBackend — override methods
 // ---------------------------------------------------------------------------
 
-impl SdiBackend for WasmBackend {
-    // -------------------------------------------------------------------
-    // Extended: shape primitives
-    // -------------------------------------------------------------------
+// -------------------------------------------------------------------
+// SdiShapes: Shape primitives
+// -------------------------------------------------------------------
 
+impl SdiShapes for WasmBackend {
     fn fill_rounded_rect(
         &mut self,
         x: i32,
@@ -628,11 +628,13 @@ impl SdiBackend for WasmBackend {
         self.ctx.fill();
         Ok(())
     }
+}
 
-    // -------------------------------------------------------------------
-    // Extended: gradients
-    // -------------------------------------------------------------------
+// -------------------------------------------------------------------
+// SdiGradients: Gradient fills
+// -------------------------------------------------------------------
 
+impl SdiGradients for WasmBackend {
     fn fill_rect_gradient(
         &mut self,
         x: i32,
@@ -804,11 +806,13 @@ impl SdiBackend for WasmBackend {
         self.ctx.fill();
         Ok(())
     }
+}
 
-    // -------------------------------------------------------------------
-    // Extended: alpha
-    // -------------------------------------------------------------------
+// -------------------------------------------------------------------
+// SdiAlpha: Alpha and viewport
+// -------------------------------------------------------------------
 
+impl SdiAlpha for WasmBackend {
     fn fill_rect_alpha(
         &mut self,
         x: i32,
@@ -829,11 +833,13 @@ impl SdiBackend for WasmBackend {
     fn dim_screen(&mut self, alpha: u8) -> Result<()> {
         self.fill_rect(0, 0, self.width, self.height, Color::rgba(0, 0, 0, alpha))
     }
+}
 
-    // -------------------------------------------------------------------
-    // Extended: vector graphics primitives
-    // -------------------------------------------------------------------
+// -------------------------------------------------------------------
+// SdiVector: Vector graphics primitives
+// -------------------------------------------------------------------
 
+impl SdiVector for WasmBackend {
     fn fill_polygon(&mut self, points: &[(i32, i32)], color: Color) -> Result<()> {
         if points.len() < 3 || color.a == 0 {
             return Ok(());
@@ -967,11 +973,13 @@ impl SdiBackend for WasmBackend {
             .map_err(|e| OasisError::Backend(format!("{e:?}").into()))?;
         Ok(())
     }
+}
 
-    // -------------------------------------------------------------------
-    // Extended: text
-    // -------------------------------------------------------------------
+// -------------------------------------------------------------------
+// SdiText: Text system
+// -------------------------------------------------------------------
 
+impl SdiText for WasmBackend {
     fn draw_text_styled(
         &mut self,
         text: &str,
@@ -1000,11 +1008,13 @@ impl SdiBackend for WasmBackend {
             ascent: self.font_ascent(font_size),
         }
     }
+}
 
-    // -------------------------------------------------------------------
-    // Extended: texture operations
-    // -------------------------------------------------------------------
+// -------------------------------------------------------------------
+// SdiTextures: Texture operations
+// -------------------------------------------------------------------
 
+impl SdiTextures for WasmBackend {
     fn blit_sub(
         &mut self,
         tex: TextureId,
@@ -1100,11 +1110,13 @@ impl SdiBackend for WasmBackend {
         let _ = self.ctx.set_global_composite_operation(&prev_op);
         Ok(())
     }
+}
 
-    // -------------------------------------------------------------------
-    // Extended: clip & translate stacks
-    // -------------------------------------------------------------------
+// -------------------------------------------------------------------
+// SdiClipTransform: Clip and transform stacks
+// -------------------------------------------------------------------
 
+impl SdiClipTransform for WasmBackend {
     fn push_clip_rect(&mut self, x: i32, y: i32, w: u32, h: u32) -> Result<()> {
         let (tx, ty) = self.translate(x, y);
         let new_clip = ClipRect {
@@ -1172,8 +1184,14 @@ impl SdiBackend for WasmBackend {
     }
 }
 
+// -------------------------------------------------------------------
+// SdiBatch: No-op (use default impl)
+// -------------------------------------------------------------------
+
+impl SdiBatch for WasmBackend {}
+
 // ---------------------------------------------------------------------------
-// Extra public helpers (not part of SdiBackend)
+// Extra public helpers
 // ---------------------------------------------------------------------------
 
 impl WasmBackend {

@@ -731,6 +731,78 @@ mod tests {
                 let mid_y = y + h / 2.0;
                 prop_assert!(r.contains(mid_x, mid_y));
             }
+
+            /// Content width clamped between min and max produces
+            /// a valid box where min_w <= content.width <= max_w.
+            #[test]
+            fn content_width_clamped_by_min_max(
+                raw_w in 0.0f32..500.0,
+                min_w in 0.0f32..250.0,
+                max_w in 250.0f32..500.0,
+            ) {
+                let clamped = raw_w.clamp(min_w, max_w);
+                prop_assert!(clamped >= min_w - 0.001,
+                    "clamped {} < min {}", clamped, min_w);
+                prop_assert!(clamped <= max_w + 0.001,
+                    "clamped {} > max {}", clamped, max_w);
+            }
+
+            /// margin + padding + border + content == margin_box total
+            /// (verifying the additive property of all box layers).
+            #[test]
+            fn all_layers_add_up(d in arb_dimensions()) {
+                let mb = d.margin_box();
+                let total_w = d.content.width
+                    + d.padding.horizontal()
+                    + d.border.horizontal()
+                    + d.margin.horizontal();
+                let total_h = d.content.height
+                    + d.padding.vertical()
+                    + d.border.vertical()
+                    + d.margin.vertical();
+                prop_assert!(
+                    (mb.width - total_w).abs() < 0.01,
+                    "width: margin_box={}, sum={total_w}", mb.width
+                );
+                prop_assert!(
+                    (mb.height - total_h).abs() < 0.01,
+                    "height: margin_box={}, sum={total_h}", mb.height
+                );
+            }
+
+            /// padding_box position is offset from content by padding.
+            #[test]
+            fn padding_box_position_offset(d in arb_dimensions()) {
+                let pb = d.padding_box();
+                prop_assert!(
+                    (pb.x - (d.content.x - d.padding.left)).abs() < 0.001,
+                    "pb.x={}, expected={}",
+                    pb.x, d.content.x - d.padding.left
+                );
+                prop_assert!(
+                    (pb.y - (d.content.y - d.padding.top)).abs() < 0.001,
+                    "pb.y={}, expected={}",
+                    pb.y, d.content.y - d.padding.top
+                );
+            }
+
+            /// Rect::contains returns false for points just outside
+            /// each edge.
+            #[test]
+            fn rect_does_not_contain_outside_points(
+                x in -500.0f32..500.0, y in -500.0f32..500.0,
+                w in 1.0f32..500.0, h in 1.0f32..500.0,
+            ) {
+                let r = Rect::new(x, y, w, h);
+                // Just left of the rect.
+                prop_assert!(!r.contains(x - 0.01, y + h / 2.0));
+                // Just above the rect.
+                prop_assert!(!r.contains(x + w / 2.0, y - 0.01));
+                // Just right of the rect (at x + w, exclusive).
+                prop_assert!(!r.contains(x + w, y + h / 2.0));
+                // Just below the rect (at y + h, exclusive).
+                prop_assert!(!r.contains(x + w / 2.0, y + h));
+            }
         }
 
         #[test]

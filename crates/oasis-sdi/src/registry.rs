@@ -808,7 +808,14 @@ font_size = 16
         }
     }
 
-    impl SdiBackend for RecordingBackend {}
+    impl oasis_types::backend::SdiShapes for RecordingBackend {}
+    impl oasis_types::backend::SdiGradients for RecordingBackend {}
+    impl oasis_types::backend::SdiAlpha for RecordingBackend {}
+    impl oasis_types::backend::SdiText for RecordingBackend {}
+    impl oasis_types::backend::SdiTextures for RecordingBackend {}
+    impl oasis_types::backend::SdiClipTransform for RecordingBackend {}
+    impl oasis_types::backend::SdiVector for RecordingBackend {}
+    impl oasis_types::backend::SdiBatch for RecordingBackend {}
 
     #[test]
     fn draw_dispatches_fill_rect_for_colored_objects() {

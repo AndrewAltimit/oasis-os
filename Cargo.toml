@@ -34,6 +34,8 @@ members = [
     "crates/oasis-app",
     "crates/oasis-video",
     "crates/oasis-rasterize",
+    "crates/oasis-i18n",
+    "crates/oasis-test-backend",
 ]
 # PSP crate excluded from workspace -- it requires mipsel-sony-psp target
 # and the rust-psp SDK (github.com/AndrewAltimit/rust-psp). Build separately with cargo-psp:
@@ -110,6 +112,9 @@ web-sys = { version = "0.3", features = [
 js-sys = "0.3"
 wasm-bindgen-futures = "0.4"
 
+# Fast hashing
+rustc-hash = "2.1"
+
 # Audio decoding
 rmp3 = { version = "0.3", default-features = false, features = ["simd"] }
 
@@ -144,6 +149,8 @@ oasis-core = { path = "crates/oasis-core", default-features = false }
 oasis-vector = { path = "crates/oasis-vector" }
 oasis-shader = { path = "crates/oasis-shader", default-features = false }
 oasis-rasterize = { path = "crates/oasis-rasterize" }
+oasis-i18n = { path = "crates/oasis-i18n" }
+oasis-test-backend = { path = "crates/oasis-test-backend" }
 oasis-backend-ue5 = { path = "crates/oasis-backend-ue5" }
 oasis-backend-wasm = { path = "crates/oasis-backend-wasm" }
 oasis-video = { path = "crates/oasis-video", default-features = false }

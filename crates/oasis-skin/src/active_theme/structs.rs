@@ -495,6 +495,11 @@ pub struct ActiveTheme {
     pub font_hint: u16,
     /// Heading font size (section headings, media page title).
     pub font_heading: u16,
+    /// System-wide font size scale factor (0.5-3.0, default 1.0).
+    ///
+    /// Applied as a multiplier wherever font sizes are used for rendering.
+    /// Use `scaled_font_size()` to apply this factor to a raw font size.
+    pub font_scale: f32,
 
     // -- Terminal cursor blink --
     /// Cursor blink rate in frames (0 = no blink, 30 = ~0.5s at 60fps).

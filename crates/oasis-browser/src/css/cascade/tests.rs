@@ -1081,7 +1081,7 @@ fn prefers_color_scheme_dark_rejected() {
 #[test]
 fn cyclic_var_does_not_stack_overflow() {
     // `--a` references itself -- should resolve to empty (not crash).
-    let mut props = HashMap::new();
+    let mut props = rustc_hash::FxHashMap::default();
     props.insert("--a".to_string(), "var(--a)".to_string());
     let val = CssValue::Var("--a".to_string(), None);
     let resolved = var_resolve::resolve_css_var(&val, &props);
@@ -1091,7 +1091,7 @@ fn cyclic_var_does_not_stack_overflow() {
 #[test]
 fn indirect_cyclic_var_does_not_stack_overflow() {
     // `--a` -> `var(--b)`, `--b` -> `var(--a)` -- indirect cycle.
-    let mut props = HashMap::new();
+    let mut props = rustc_hash::FxHashMap::default();
     props.insert("--a".to_string(), "var(--b)".to_string());
     props.insert("--b".to_string(), "var(--a)".to_string());
     let val = CssValue::Var("--a".to_string(), None);
@@ -1195,8 +1195,18 @@ fn test_body_has_default_margin() {
     let body_id = 2; // body is node 2 in make_doc
     let ctx = ctx();
     let index = SelectorIndex::build(&[&ua]);
-    let inline_map = std::collections::HashMap::new();
-    let style = compute_style(&doc, body_id, None, &[&ua], &index, &inline_map, &ctx);
+    let inline_map = rustc_hash::FxHashMap::default();
+    let mut tag_cache = rustc_hash::FxHashMap::default();
+    let style = compute_style(
+        &doc,
+        body_id,
+        None,
+        &[&ua],
+        &index,
+        &inline_map,
+        &ctx,
+        &mut tag_cache,
+    );
     assert!(
         (style.margin_top - 8.0).abs() < 0.01,
         "body should have 8px top margin, got {}",
@@ -1314,8 +1324,18 @@ fn pseudo_element_inherits_from_parent_when_not_set() {
     let ctx = ctx();
     let p_id = 3;
     let index = SelectorIndex::build(&[&sheet]);
-    let inline_map = std::collections::HashMap::new();
-    let parent_style = compute_style(&doc, p_id, None, &[&sheet], &index, &inline_map, &ctx);
+    let inline_map = rustc_hash::FxHashMap::default();
+    let mut tag_cache = rustc_hash::FxHashMap::default();
+    let parent_style = compute_style(
+        &doc,
+        p_id,
+        None,
+        &[&sheet],
+        &index,
+        &inline_map,
+        &ctx,
+        &mut tag_cache,
+    );
     let ps = matching::resolve_pseudo_style(&doc, p_id, "before", &parent_style, &[&sheet], &ctx)
         .expect("should produce pseudo style");
     assert_eq!(ps.color, Color::rgb(0, 0, 255), "should inherit blue");

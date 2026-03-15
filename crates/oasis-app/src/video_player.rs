@@ -972,7 +972,10 @@ impl Drop for VideoPlayer {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use oasis_core::backend::{Color, SdiBackend, SdiCore, TextureId};
+    use oasis_core::backend::{
+        Color, SdiAlpha, SdiBatch, SdiClipTransform, SdiCore, SdiGradients, SdiShapes, SdiText,
+        SdiTextures, SdiVector, TextureId,
+    };
     use oasis_core::error::Result;
 
     /// Minimal mock backend for video_player tests.
@@ -1020,7 +1023,14 @@ mod tests {
         }
     }
 
-    impl SdiBackend for MockBackend {}
+    impl SdiShapes for MockBackend {}
+    impl SdiGradients for MockBackend {}
+    impl SdiAlpha for MockBackend {}
+    impl SdiText for MockBackend {}
+    impl SdiTextures for MockBackend {}
+    impl SdiClipTransform for MockBackend {}
+    impl SdiVector for MockBackend {}
+    impl SdiBatch for MockBackend {}
 
     #[test]
     fn new_is_idle() {

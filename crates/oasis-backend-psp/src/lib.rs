@@ -58,7 +58,10 @@ pub use tls::PspTlsProvider;
 // ---------------------------------------------------------------------------
 
 use oasis_core::backend::stacks::{ClipPush, ClipStack, TranslateStack};
-pub use oasis_core::backend::{Color, SdiBackend, SdiCore, TextureId};
+pub use oasis_core::backend::{
+    Color, SdiAlpha, SdiBackend, SdiBatch, SdiClipTransform, SdiCore, SdiGradients, SdiShapes,
+    SdiText, SdiTextures, SdiVector, TextureId,
+};
 pub use oasis_core::error::{OasisError, Result as OasisResult};
 pub use oasis_core::input::{Button, InputEvent, Trigger};
 pub use oasis_core::sdi::SdiRegistry;
@@ -655,11 +658,11 @@ impl SdiCore for PspBackend {
     }
 }
 
-impl SdiBackend for PspBackend {
-    // -------------------------------------------------------------------
-    // Extended: Shape Primitives (GU-accelerated)
-    // -------------------------------------------------------------------
+// -------------------------------------------------------------------
+// Extension trait implementations (GU-accelerated where possible)
+// -------------------------------------------------------------------
 
+impl SdiShapes for PspBackend {
     fn fill_rounded_rect(
         &mut self,
         x: i32,
@@ -694,11 +697,9 @@ impl SdiBackend for PspBackend {
         self.draw_line_inner(tx1, ty1, tx2, ty2, width, color);
         Ok(())
     }
+}
 
-    // -------------------------------------------------------------------
-    // Extended: Gradient Fills (GU vertex-color interpolation)
-    // -------------------------------------------------------------------
-
+impl SdiGradients for PspBackend {
     fn fill_rect_gradient(
         &mut self,
         x: i32,
@@ -711,7 +712,9 @@ impl SdiBackend for PspBackend {
         self.fill_rect_gradient_inner(tx, ty, w, h, gradient);
         Ok(())
     }
+}
 
+impl SdiAlpha for PspBackend {
     fn viewport_size(&self) -> (u32, u32) {
         (self.width, self.height)
     }
@@ -720,11 +723,12 @@ impl SdiBackend for PspBackend {
         self.dim_screen_inner(alpha);
         Ok(())
     }
+}
 
-    // -------------------------------------------------------------------
-    // Extended: Clip and Transform Stack (GU scissor + offset tracking)
-    // -------------------------------------------------------------------
+impl SdiText for PspBackend {}
+impl SdiTextures for PspBackend {}
 
+impl SdiClipTransform for PspBackend {
     fn push_clip_rect(
         &mut self,
         x: i32,
@@ -775,6 +779,9 @@ impl SdiBackend for PspBackend {
         self.translate_stack.current()
     }
 }
+
+impl SdiVector for PspBackend {}
+impl SdiBatch for PspBackend {}
 
 // ---------------------------------------------------------------------------
 // PSP-tuned WM theme (compact for 480x272 screen)

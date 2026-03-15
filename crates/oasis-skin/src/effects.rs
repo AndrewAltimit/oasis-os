@@ -37,6 +37,7 @@ pub struct CorruptedEffect {
 }
 
 impl CorruptedEffect {
+    /// Create a new corrupted effect wrapping the given modifiers.
     pub fn new(modifiers: CorruptedModifiers) -> Self {
         Self {
             modifiers,
@@ -79,6 +80,7 @@ pub struct ScanlineEffect {
 }
 
 impl ScanlineEffect {
+    /// Create a new scanline effect with the given intensity (0.0-1.0).
     pub fn new(intensity: f32) -> Self {
         Self {
             intensity: intensity.clamp(0.0, 1.0),

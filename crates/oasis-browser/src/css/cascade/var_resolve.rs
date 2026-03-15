@@ -3,7 +3,7 @@
 //! Recursively resolves `CssValue::Var` references using the element's
 //! custom property map, with cycle detection via a depth limit.
 
-use std::collections::HashMap;
+use rustc_hash::FxHashMap;
 
 use super::super::parser::{CssValue, parse_value_list};
 use super::super::tokenizer::CssTokenizer;
@@ -14,7 +14,7 @@ use super::super::tokenizer::CssTokenizer;
 /// If the custom property exists, its raw CSS text is re-tokenized and
 /// re-parsed. If not, the fallback value is used. If neither exists,
 /// an empty keyword is returned (property will be silently ignored).
-pub(super) fn resolve_css_var(value: &CssValue, props: &HashMap<String, String>) -> CssValue {
+pub(super) fn resolve_css_var(value: &CssValue, props: &FxHashMap<String, String>) -> CssValue {
     resolve_css_var_depth(value, props, 0)
 }
 
@@ -24,7 +24,7 @@ const MAX_VAR_DEPTH: u32 = 16;
 
 fn resolve_css_var_depth(
     value: &CssValue,
-    props: &HashMap<String, String>,
+    props: &FxHashMap<String, String>,
     depth: u32,
 ) -> CssValue {
     if depth >= MAX_VAR_DEPTH {
@@ -42,9 +42,12 @@ fn resolve_css_var_depth(
                 match parsed.len() {
                     0 => CssValue::Keyword(String::new()),
                     1 => {
-                        let v = parsed.into_iter().next().expect("len checked");
-                        // Handle chained var() references.
-                        resolve_css_var_depth(&v, props, depth + 1)
+                        if let Some(v) = parsed.into_iter().next() {
+                            // Handle chained var() references.
+                            resolve_css_var_depth(&v, props, depth + 1)
+                        } else {
+                            CssValue::Keyword(String::new())
+                        }
                     },
                     _ => {
                         let resolved: Vec<CssValue> = parsed

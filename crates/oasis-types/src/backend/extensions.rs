@@ -1,16 +1,18 @@
 //! Extension traits: fine-grained capability groupings.
 //!
-//! Each extension trait mirrors a subset of `SdiBackend` methods with
-//! `SdiCore` as the only supertrait. Default implementations use
-//! `SdiCore` primitives only, so types that do *not* implement
-//! `SdiBackend` can still satisfy these traits.
+//! Each extension trait mirrors a subset of the old monolithic `SdiBackend`
+//! methods, with `SdiCore` as the only supertrait.  Default implementations
+//! use `SdiCore` primitives only, so a type that implements `SdiCore` can
+//! opt into any extension trait with an empty `impl` block.
 //!
-//! A blanket impl ensures that every `SdiBackend` implementor
-//! automatically satisfies all extension traits by delegating to the
-//! corresponding `SdiBackend` methods (which may be overridden).
+//! `SdiBackend` is now a marker super-trait defined as
+//! `SdiCore + SdiShapes + SdiGradients + SdiAlpha + SdiText + SdiTextures
+//!  + SdiClipTransform + SdiVector + SdiBatch`
+//! with a blanket impl, so any type satisfying all extension traits
+//! automatically implements `SdiBackend`.
 
 use super::{
-    Color, GradientStyle, SdiBackend, SdiCore, TextureId, arc_segments, cos_approx_f32,
+    Color, GradientStyle, SdiCore, TextMetrics, TextureId, arc_segments, cos_approx_f32,
     sin_approx_f32,
 };
 use crate::error::Result;
@@ -24,7 +26,7 @@ use crate::error::Result;
 #[allow(clippy::too_many_arguments)]
 pub trait SdiShapes: SdiCore {
     /// Draw a filled rectangle with rounded corners.
-    fn ext_fill_rounded_rect(
+    fn fill_rounded_rect(
         &mut self,
         x: i32,
         y: i32,
@@ -37,7 +39,7 @@ pub trait SdiShapes: SdiCore {
     }
 
     /// Draw the outline of a rectangle.
-    fn ext_stroke_rect(
+    fn stroke_rect(
         &mut self,
         x: i32,
         y: i32,
@@ -61,7 +63,7 @@ pub trait SdiShapes: SdiCore {
     }
 
     /// Draw the outline of a rounded rectangle.
-    fn ext_stroke_rounded_rect(
+    fn stroke_rounded_rect(
         &mut self,
         x: i32,
         y: i32,
@@ -71,11 +73,11 @@ pub trait SdiShapes: SdiCore {
         stroke_width: u16,
         color: Color,
     ) -> Result<()> {
-        self.ext_stroke_rect(x, y, w, h, stroke_width, color)
+        self.stroke_rect(x, y, w, h, stroke_width, color)
     }
 
     /// Draw a line between two points.
-    fn ext_draw_line(
+    fn draw_line(
         &mut self,
         x1: i32,
         y1: i32,
@@ -120,7 +122,7 @@ pub trait SdiShapes: SdiCore {
     }
 
     /// Draw a filled circle using the midpoint circle algorithm.
-    fn ext_fill_circle(&mut self, cx: i32, cy: i32, radius: u16, color: Color) -> Result<()> {
+    fn fill_circle(&mut self, cx: i32, cy: i32, radius: u16, color: Color) -> Result<()> {
         let r = radius as i32;
         let mut x = r;
         let mut y: i32 = 0;
@@ -142,7 +144,7 @@ pub trait SdiShapes: SdiCore {
     }
 
     /// Draw a filled triangle (scanline fill).
-    fn ext_fill_triangle(
+    fn fill_triangle(
         &mut self,
         x1: i32,
         y1: i32,
@@ -198,7 +200,7 @@ pub trait SdiShapes: SdiCore {
     }
 
     /// Draw the outline of a circle.
-    fn ext_stroke_circle(
+    fn stroke_circle(
         &mut self,
         cx: i32,
         cy: i32,
@@ -207,81 +209,7 @@ pub trait SdiShapes: SdiCore {
         color: Color,
     ) -> Result<()> {
         let _ = stroke_width;
-        self.ext_fill_circle(cx, cy, radius, color)
-    }
-}
-
-/// Blanket: every `SdiBackend` automatically implements `SdiShapes`.
-impl<T: SdiBackend + ?Sized> SdiShapes for T {
-    fn ext_fill_rounded_rect(
-        &mut self,
-        x: i32,
-        y: i32,
-        w: u32,
-        h: u32,
-        radius: u16,
-        color: Color,
-    ) -> Result<()> {
-        SdiBackend::fill_rounded_rect(self, x, y, w, h, radius, color)
-    }
-    fn ext_stroke_rect(
-        &mut self,
-        x: i32,
-        y: i32,
-        w: u32,
-        h: u32,
-        stroke_width: u16,
-        color: Color,
-    ) -> Result<()> {
-        SdiBackend::stroke_rect(self, x, y, w, h, stroke_width, color)
-    }
-    fn ext_stroke_rounded_rect(
-        &mut self,
-        x: i32,
-        y: i32,
-        w: u32,
-        h: u32,
-        radius: u16,
-        stroke_width: u16,
-        color: Color,
-    ) -> Result<()> {
-        SdiBackend::stroke_rounded_rect(self, x, y, w, h, radius, stroke_width, color)
-    }
-    fn ext_draw_line(
-        &mut self,
-        x1: i32,
-        y1: i32,
-        x2: i32,
-        y2: i32,
-        width: u16,
-        color: Color,
-    ) -> Result<()> {
-        SdiBackend::draw_line(self, x1, y1, x2, y2, width, color)
-    }
-    fn ext_fill_circle(&mut self, cx: i32, cy: i32, radius: u16, color: Color) -> Result<()> {
-        SdiBackend::fill_circle(self, cx, cy, radius, color)
-    }
-    fn ext_fill_triangle(
-        &mut self,
-        x1: i32,
-        y1: i32,
-        x2: i32,
-        y2: i32,
-        x3: i32,
-        y3: i32,
-        color: Color,
-    ) -> Result<()> {
-        SdiBackend::fill_triangle(self, x1, y1, x2, y2, x3, y3, color)
-    }
-    fn ext_stroke_circle(
-        &mut self,
-        cx: i32,
-        cy: i32,
-        radius: u16,
-        stroke_width: u16,
-        color: Color,
-    ) -> Result<()> {
-        SdiBackend::stroke_circle(self, cx, cy, radius, stroke_width, color)
+        self.fill_circle(cx, cy, radius, color)
     }
 }
 
@@ -292,7 +220,7 @@ impl<T: SdiBackend + ?Sized> SdiShapes for T {
 /// Gradient fill operations.
 pub trait SdiGradients: SdiCore {
     /// Draw a filled rectangle with a gradient.
-    fn ext_fill_rect_gradient(
+    fn fill_rect_gradient(
         &mut self,
         x: i32,
         y: i32,
@@ -304,7 +232,7 @@ pub trait SdiGradients: SdiCore {
     }
 
     /// Draw a filled rounded rectangle with a gradient.
-    fn ext_fill_rounded_rect_gradient(
+    fn fill_rounded_rect_gradient(
         &mut self,
         x: i32,
         y: i32,
@@ -317,32 +245,6 @@ pub trait SdiGradients: SdiCore {
     }
 }
 
-/// Blanket: every `SdiBackend` automatically implements
-/// `SdiGradients`.
-impl<T: SdiBackend + ?Sized> SdiGradients for T {
-    fn ext_fill_rect_gradient(
-        &mut self,
-        x: i32,
-        y: i32,
-        w: u32,
-        h: u32,
-        gradient: &GradientStyle,
-    ) -> Result<()> {
-        SdiBackend::fill_rect_gradient(self, x, y, w, h, gradient)
-    }
-    fn ext_fill_rounded_rect_gradient(
-        &mut self,
-        x: i32,
-        y: i32,
-        w: u32,
-        h: u32,
-        radius: u16,
-        gradient: &GradientStyle,
-    ) -> Result<()> {
-        SdiBackend::fill_rounded_rect_gradient(self, x, y, w, h, radius, gradient)
-    }
-}
-
 // ---------------------------------------------------------------------------
 // SdiAlpha
 // ---------------------------------------------------------------------------
@@ -350,7 +252,7 @@ impl<T: SdiBackend + ?Sized> SdiGradients for T {
 /// Alpha blending and viewport utilities.
 pub trait SdiAlpha: SdiCore {
     /// Draw a filled rectangle with explicit alpha override.
-    fn ext_fill_rect_alpha(
+    fn fill_rect_alpha(
         &mut self,
         x: i32,
         y: i32,
@@ -363,7 +265,7 @@ pub trait SdiAlpha: SdiCore {
     }
 
     /// Return the current viewport dimensions `(width, height)`.
-    fn ext_viewport_size(&self) -> (u32, u32) {
+    fn viewport_size(&self) -> (u32, u32) {
         (
             super::DEFAULT_VIEWPORT_WIDTH,
             super::DEFAULT_VIEWPORT_HEIGHT,
@@ -371,30 +273,9 @@ pub trait SdiAlpha: SdiCore {
     }
 
     /// Dim the entire viewport with a semi-transparent overlay.
-    fn ext_dim_screen(&mut self, alpha: u8) -> Result<()> {
-        let (w, h) = self.ext_viewport_size();
+    fn dim_screen(&mut self, alpha: u8) -> Result<()> {
+        let (w, h) = self.viewport_size();
         self.fill_rect(0, 0, w, h, Color::rgba(0, 0, 0, alpha))
-    }
-}
-
-/// Blanket: every `SdiBackend` automatically implements `SdiAlpha`.
-impl<T: SdiBackend + ?Sized> SdiAlpha for T {
-    fn ext_fill_rect_alpha(
-        &mut self,
-        x: i32,
-        y: i32,
-        w: u32,
-        h: u32,
-        color: Color,
-        alpha: u8,
-    ) -> Result<()> {
-        SdiBackend::fill_rect_alpha(self, x, y, w, h, color, alpha)
-    }
-    fn ext_viewport_size(&self) -> (u32, u32) {
-        SdiBackend::viewport_size(self)
-    }
-    fn ext_dim_screen(&mut self, alpha: u8) -> Result<()> {
-        SdiBackend::dim_screen(self, alpha)
     }
 }
 
@@ -406,19 +287,73 @@ impl<T: SdiBackend + ?Sized> SdiAlpha for T {
 #[allow(clippy::too_many_arguments)]
 pub trait SdiText: SdiCore {
     /// Measure the height of text at the given font size.
-    fn ext_measure_text_height(&self, font_size: u16) -> u32 {
+    fn measure_text_height(&self, font_size: u16) -> u32 {
         let fs = font_size as u32;
         (fs * 6).div_ceil(5)
     }
 
     /// Measure the font's ascent.
-    fn ext_font_ascent(&self, font_size: u16) -> u32 {
+    fn font_ascent(&self, font_size: u16) -> u32 {
         let fs = font_size as u32;
         (fs * 17).div_ceil(20)
     }
 
+    /// Return full text metrics (width, height, ascent) for a string.
+    fn text_metrics(&self, text: &str, font_size: u16) -> TextMetrics {
+        TextMetrics {
+            width: self.measure_text(text, font_size),
+            height: self.measure_text_height(font_size),
+            ascent: self.font_ascent(font_size),
+        }
+    }
+
+    /// Measure both width and height of a text string.
+    fn measure_text_extents(&self, text: &str, font_size: u16) -> (u32, u32) {
+        let m = self.text_metrics(text, font_size);
+        (m.width, m.height)
+    }
+
+    /// Draw text truncated with "..." if it exceeds `max_width`.
+    ///
+    /// Returns the actual drawn width in pixels.
+    fn draw_text_ellipsis(
+        &mut self,
+        text: &str,
+        x: i32,
+        y: i32,
+        font_size: u16,
+        color: Color,
+        max_width: u32,
+    ) -> Result<u32> {
+        let text_w = self.measure_text(text, font_size);
+        if text_w <= max_width {
+            self.draw_text(text, x, y, font_size, color)?;
+            return Ok(text_w);
+        }
+        let ellipsis_w = self.measure_text("...", font_size);
+        let target = max_width.saturating_sub(ellipsis_w);
+        let mut drawn_w = 0u32;
+        let mut end_byte = 0;
+        for (i, ch) in text.char_indices() {
+            let ch_w = self.measure_text(&text[i..i + ch.len_utf8()], font_size);
+            if drawn_w + ch_w > target {
+                break;
+            }
+            drawn_w += ch_w;
+            end_byte = i + ch.len_utf8();
+        }
+        let truncated = format!("{}...", &text[..end_byte]);
+        self.draw_text(&truncated, x, y, font_size, color)?;
+        Ok(drawn_w + ellipsis_w)
+    }
+
     /// Draw text with bold and italic style hints.
-    fn ext_draw_text_styled(
+    ///
+    /// Faux-bold is implemented via double-strike (drawing at x and x+1).
+    /// The default implementation ignores `italic` because a true faux-italic
+    /// requires per-scanline skew which cannot be achieved with `draw_text`.
+    /// Backends that support italic rendering should override this method.
+    fn draw_text_styled(
         &mut self,
         text: &str,
         x: i32,
@@ -426,14 +361,19 @@ pub trait SdiText: SdiCore {
         font_size: u16,
         color: Color,
         bold: bool,
-        italic: bool,
+        _italic: bool,
     ) -> Result<()> {
-        let _ = (bold, italic);
-        self.draw_text(text, x, y, font_size, color)
+        self.draw_text(text, x, y, font_size, color)?;
+        if bold {
+            self.draw_text(text, x + 1, y, font_size, color)?;
+        }
+        Ok(())
     }
 
     /// Draw multiline word-wrapped text within a bounding box.
-    fn ext_draw_text_wrapped(
+    ///
+    /// Returns the total height used in pixels.
+    fn draw_text_wrapped(
         &mut self,
         text: &str,
         x: i32,
@@ -446,7 +386,7 @@ pub trait SdiText: SdiCore {
         let lh = if line_height > 0 {
             line_height
         } else {
-            self.ext_measure_text_height(font_size)
+            self.measure_text_height(font_size)
         };
         let mut cy = y;
         for line in text.split('\n') {
@@ -478,83 +418,6 @@ pub trait SdiText: SdiCore {
         }
         Ok((cy - y) as u32)
     }
-
-    /// Draw text truncated with "..." if it exceeds `max_width`.
-    fn ext_draw_text_ellipsis(
-        &mut self,
-        text: &str,
-        x: i32,
-        y: i32,
-        font_size: u16,
-        color: Color,
-        max_width: u32,
-    ) -> Result<u32> {
-        let text_w = self.measure_text(text, font_size);
-        if text_w <= max_width {
-            self.draw_text(text, x, y, font_size, color)?;
-            return Ok(text_w);
-        }
-        let ellipsis_w = self.measure_text("...", font_size);
-        let target = max_width.saturating_sub(ellipsis_w);
-        let mut drawn_w = 0u32;
-        let mut end_byte = 0;
-        for (i, ch) in text.char_indices() {
-            let ch_w = self.measure_text(&text[i..i + ch.len_utf8()], font_size);
-            if drawn_w + ch_w > target {
-                break;
-            }
-            drawn_w += ch_w;
-            end_byte = i + ch.len_utf8();
-        }
-        let truncated = format!("{}...", &text[..end_byte]);
-        self.draw_text(&truncated, x, y, font_size, color)?;
-        Ok(drawn_w + ellipsis_w)
-    }
-}
-
-/// Blanket: every `SdiBackend` automatically implements `SdiText`.
-impl<T: SdiBackend + ?Sized> SdiText for T {
-    fn ext_measure_text_height(&self, font_size: u16) -> u32 {
-        SdiBackend::measure_text_height(self, font_size)
-    }
-    fn ext_font_ascent(&self, font_size: u16) -> u32 {
-        SdiBackend::font_ascent(self, font_size)
-    }
-    fn ext_draw_text_styled(
-        &mut self,
-        text: &str,
-        x: i32,
-        y: i32,
-        font_size: u16,
-        color: Color,
-        bold: bool,
-        italic: bool,
-    ) -> Result<()> {
-        SdiBackend::draw_text_styled(self, text, x, y, font_size, color, bold, italic)
-    }
-    fn ext_draw_text_wrapped(
-        &mut self,
-        text: &str,
-        x: i32,
-        y: i32,
-        font_size: u16,
-        color: Color,
-        max_width: u32,
-        line_height: u32,
-    ) -> Result<u32> {
-        SdiBackend::draw_text_wrapped(self, text, x, y, font_size, color, max_width, line_height)
-    }
-    fn ext_draw_text_ellipsis(
-        &mut self,
-        text: &str,
-        x: i32,
-        y: i32,
-        font_size: u16,
-        color: Color,
-        max_width: u32,
-    ) -> Result<u32> {
-        SdiBackend::draw_text_ellipsis(self, text, x, y, font_size, color, max_width)
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -565,7 +428,7 @@ impl<T: SdiBackend + ?Sized> SdiText for T {
 #[allow(clippy::too_many_arguments)]
 pub trait SdiTextures: SdiCore {
     /// Blit a sub-rectangle from a texture.
-    fn ext_blit_sub(
+    fn blit_sub(
         &mut self,
         tex: TextureId,
         src_x: u32,
@@ -582,7 +445,7 @@ pub trait SdiTextures: SdiCore {
     }
 
     /// Blit a texture with a multiplicative color tint.
-    fn ext_blit_tinted(
+    fn blit_tinted(
         &mut self,
         tex: TextureId,
         x: i32,
@@ -596,7 +459,7 @@ pub trait SdiTextures: SdiCore {
     }
 
     /// Blit a texture sub-rectangle with a color tint.
-    fn ext_blit_sub_tinted(
+    fn blit_sub_tinted(
         &mut self,
         tex: TextureId,
         src_x: u32,
@@ -610,11 +473,11 @@ pub trait SdiTextures: SdiCore {
         tint: Color,
     ) -> Result<()> {
         let _ = tint;
-        self.ext_blit_sub(tex, src_x, src_y, src_w, src_h, dst_x, dst_y, dst_w, dst_h)
+        self.blit_sub(tex, src_x, src_y, src_w, src_h, dst_x, dst_y, dst_w, dst_h)
     }
 
     /// Blit a texture with horizontal and/or vertical flip.
-    fn ext_blit_flipped(
+    fn blit_flipped(
         &mut self,
         tex: TextureId,
         x: i32,
@@ -629,67 +492,6 @@ pub trait SdiTextures: SdiCore {
     }
 }
 
-/// Blanket: every `SdiBackend` automatically implements
-/// `SdiTextures`.
-impl<T: SdiBackend + ?Sized> SdiTextures for T {
-    fn ext_blit_sub(
-        &mut self,
-        tex: TextureId,
-        src_x: u32,
-        src_y: u32,
-        src_w: u32,
-        src_h: u32,
-        dst_x: i32,
-        dst_y: i32,
-        dst_w: u32,
-        dst_h: u32,
-    ) -> Result<()> {
-        SdiBackend::blit_sub(
-            self, tex, src_x, src_y, src_w, src_h, dst_x, dst_y, dst_w, dst_h,
-        )
-    }
-    fn ext_blit_tinted(
-        &mut self,
-        tex: TextureId,
-        x: i32,
-        y: i32,
-        w: u32,
-        h: u32,
-        tint: Color,
-    ) -> Result<()> {
-        SdiBackend::blit_tinted(self, tex, x, y, w, h, tint)
-    }
-    fn ext_blit_sub_tinted(
-        &mut self,
-        tex: TextureId,
-        src_x: u32,
-        src_y: u32,
-        src_w: u32,
-        src_h: u32,
-        dst_x: i32,
-        dst_y: i32,
-        dst_w: u32,
-        dst_h: u32,
-        tint: Color,
-    ) -> Result<()> {
-        SdiBackend::blit_sub_tinted(
-            self, tex, src_x, src_y, src_w, src_h, dst_x, dst_y, dst_w, dst_h, tint,
-        )
-    }
-    fn ext_blit_flipped(
-        &mut self,
-        tex: TextureId,
-        x: i32,
-        y: i32,
-        w: u32,
-        h: u32,
-        flip_h: bool,
-        flip_v: bool,
-    ) -> Result<()> {
-        SdiBackend::blit_flipped(self, tex, x, y, w, h, flip_h, flip_v)
-    }
-}
-
 // ---------------------------------------------------------------------------
 // SdiClipTransform
 // ---------------------------------------------------------------------------
@@ -697,41 +499,46 @@ impl<T: SdiBackend + ?Sized> SdiTextures for T {
 /// Clip rectangle and coordinate translation stack operations.
 pub trait SdiClipTransform: SdiCore {
     /// Push a clip rectangle onto the clip stack.
-    fn ext_push_clip_rect(&mut self, x: i32, y: i32, w: u32, h: u32) -> Result<()> {
+    fn push_clip_rect(&mut self, x: i32, y: i32, w: u32, h: u32) -> Result<()> {
         self.set_clip_rect(x, y, w, h)
     }
 
     /// Pop the most recently pushed clip rectangle.
-    fn ext_pop_clip_rect(&mut self) -> Result<()> {
+    fn pop_clip_rect(&mut self) -> Result<()> {
         self.reset_clip_rect()
     }
 
+    /// Query the current effective clip rectangle.
+    fn current_clip_rect(&self) -> Option<(i32, i32, u32, u32)> {
+        None
+    }
+
     /// Push a coordinate origin translation.
-    fn ext_push_translate(&mut self, dx: i32, dy: i32) -> Result<()> {
+    fn push_translate(&mut self, dx: i32, dy: i32) -> Result<()> {
         let _ = (dx, dy);
         Ok(())
     }
 
     /// Pop the most recently pushed translation.
-    fn ext_pop_translate(&mut self) -> Result<()> {
+    fn pop_translate(&mut self) -> Result<()> {
         Ok(())
     }
-}
 
-/// Blanket: every `SdiBackend` automatically implements
-/// `SdiClipTransform`.
-impl<T: SdiBackend + ?Sized> SdiClipTransform for T {
-    fn ext_push_clip_rect(&mut self, x: i32, y: i32, w: u32, h: u32) -> Result<()> {
-        SdiBackend::push_clip_rect(self, x, y, w, h)
+    /// Query the current cumulative translation offset.
+    fn current_translate(&self) -> (i32, i32) {
+        (0, 0)
     }
-    fn ext_pop_clip_rect(&mut self) -> Result<()> {
-        SdiBackend::pop_clip_rect(self)
+
+    /// Push a rendering region (translate + clip).
+    fn push_region(&mut self, x: i32, y: i32, w: u32, h: u32) -> Result<()> {
+        self.push_translate(x, y)?;
+        self.push_clip_rect(0, 0, w, h)
     }
-    fn ext_push_translate(&mut self, dx: i32, dy: i32) -> Result<()> {
-        SdiBackend::push_translate(self, dx, dy)
-    }
-    fn ext_pop_translate(&mut self) -> Result<()> {
-        SdiBackend::pop_translate(self)
+
+    /// Pop a previously pushed region.
+    fn pop_region(&mut self) -> Result<()> {
+        self.pop_clip_rect()?;
+        self.pop_translate()
     }
 }
 
@@ -743,7 +550,7 @@ impl<T: SdiBackend + ?Sized> SdiClipTransform for T {
 #[allow(clippy::too_many_arguments)]
 pub trait SdiVector: SdiShapes {
     /// Draw a filled convex polygon (triangle-fan decomposition).
-    fn ext_fill_polygon(&mut self, points: &[(i32, i32)], color: Color) -> Result<()> {
+    fn fill_polygon(&mut self, points: &[(i32, i32)], color: Color) -> Result<()> {
         if points.len() < 3 {
             return Ok(());
         }
@@ -751,24 +558,19 @@ pub trait SdiVector: SdiShapes {
         for i in 1..points.len() - 1 {
             let v1 = points[i];
             let v2 = points[i + 1];
-            self.ext_fill_triangle(v0.0, v0.1, v1.0, v1.1, v2.0, v2.1, color)?;
+            self.fill_triangle(v0.0, v0.1, v1.0, v1.1, v2.0, v2.1, color)?;
         }
         Ok(())
     }
 
     /// Draw the outline of a polygon.
-    fn ext_stroke_polygon(
-        &mut self,
-        points: &[(i32, i32)],
-        width: u16,
-        color: Color,
-    ) -> Result<()> {
+    fn stroke_polygon(&mut self, points: &[(i32, i32)], width: u16, color: Color) -> Result<()> {
         if points.len() < 2 {
             return Ok(());
         }
         for i in 0..points.len() {
             let j = (i + 1) % points.len();
-            self.ext_draw_line(
+            self.draw_line(
                 points[i].0,
                 points[i].1,
                 points[j].0,
@@ -781,7 +583,7 @@ pub trait SdiVector: SdiShapes {
     }
 
     /// Draw a filled arc (pie wedge, approximated with triangles).
-    fn ext_fill_arc(
+    fn fill_arc(
         &mut self,
         cx: i32,
         cy: i32,
@@ -799,7 +601,7 @@ pub trait SdiVector: SdiShapes {
             let angle = start_angle + step * i as f32;
             let nx = cx + (r * cos_approx_f32(angle)) as i32;
             let ny = cy + (r * sin_approx_f32(angle)) as i32;
-            self.ext_fill_triangle(cx, cy, prev_x, prev_y, nx, ny, color)?;
+            self.fill_triangle(cx, cy, prev_x, prev_y, nx, ny, color)?;
             prev_x = nx;
             prev_y = ny;
         }
@@ -807,7 +609,7 @@ pub trait SdiVector: SdiShapes {
     }
 
     /// Draw an arc stroke (line segments along arc).
-    fn ext_stroke_arc(
+    fn stroke_arc(
         &mut self,
         cx: i32,
         cy: i32,
@@ -826,7 +628,7 @@ pub trait SdiVector: SdiShapes {
             let angle = start_angle + step * i as f32;
             let nx = cx + (r * cos_approx_f32(angle)) as i32;
             let ny = cy + (r * sin_approx_f32(angle)) as i32;
-            self.ext_draw_line(prev_x, prev_y, nx, ny, width, color)?;
+            self.draw_line(prev_x, prev_y, nx, ny, width, color)?;
             prev_x = nx;
             prev_y = ny;
         }
@@ -834,7 +636,7 @@ pub trait SdiVector: SdiShapes {
     }
 
     /// Draw a dashed line between two points.
-    fn ext_stroke_line_dashed(
+    fn stroke_line_dashed(
         &mut self,
         x1: i32,
         y1: i32,
@@ -861,79 +663,20 @@ pub trait SdiVector: SdiShapes {
             let sy = y1 + (uy * t) as i32;
             let ex = x1 + (ux * seg_end) as i32;
             let ey = y1 + (uy * seg_end) as i32;
-            self.ext_draw_line(sx, sy, ex, ey, width, color)?;
+            self.draw_line(sx, sy, ex, ey, width, color)?;
             t += cycle;
         }
         Ok(())
     }
 
     /// Draw a filled polygon with a per-vertex linear gradient.
-    fn ext_fill_polygon_gradient(
+    fn fill_polygon_gradient(
         &mut self,
         points: &[(i32, i32)],
         color_start: Color,
         _color_end: Color,
     ) -> Result<()> {
-        self.ext_fill_polygon(points, color_start)
-    }
-}
-
-/// Blanket: every `SdiBackend` automatically implements `SdiVector`.
-impl<T: SdiBackend + ?Sized> SdiVector for T {
-    fn ext_fill_polygon(&mut self, points: &[(i32, i32)], color: Color) -> Result<()> {
-        SdiBackend::fill_polygon(self, points, color)
-    }
-    fn ext_stroke_polygon(
-        &mut self,
-        points: &[(i32, i32)],
-        width: u16,
-        color: Color,
-    ) -> Result<()> {
-        SdiBackend::stroke_polygon(self, points, width, color)
-    }
-    fn ext_fill_arc(
-        &mut self,
-        cx: i32,
-        cy: i32,
-        radius: u16,
-        start_angle: f32,
-        end_angle: f32,
-        color: Color,
-    ) -> Result<()> {
-        SdiBackend::fill_arc(self, cx, cy, radius, start_angle, end_angle, color)
-    }
-    fn ext_stroke_arc(
-        &mut self,
-        cx: i32,
-        cy: i32,
-        radius: u16,
-        start_angle: f32,
-        end_angle: f32,
-        width: u16,
-        color: Color,
-    ) -> Result<()> {
-        SdiBackend::stroke_arc(self, cx, cy, radius, start_angle, end_angle, width, color)
-    }
-    fn ext_stroke_line_dashed(
-        &mut self,
-        x1: i32,
-        y1: i32,
-        x2: i32,
-        y2: i32,
-        width: u16,
-        color: Color,
-        dash: u16,
-        gap: u16,
-    ) -> Result<()> {
-        SdiBackend::stroke_line_dashed(self, x1, y1, x2, y2, width, color, dash, gap)
-    }
-    fn ext_fill_polygon_gradient(
-        &mut self,
-        points: &[(i32, i32)],
-        color_start: Color,
-        color_end: Color,
-    ) -> Result<()> {
-        SdiBackend::fill_polygon_gradient(self, points, color_start, color_end)
+        self.fill_polygon(points, color_start)
     }
 }
 
@@ -944,22 +687,12 @@ impl<T: SdiBackend + ?Sized> SdiVector for T {
 /// Batch rendering operations (begin/flush command queues).
 pub trait SdiBatch: SdiCore {
     /// Begin recording draw commands into a batch.
-    fn ext_begin_batch(&mut self) -> Result<()> {
+    fn begin_batch(&mut self) -> Result<()> {
         Ok(())
     }
 
     /// Flush and execute all batched draw commands.
-    fn ext_flush_batch(&mut self) -> Result<()> {
+    fn flush_batch(&mut self) -> Result<()> {
         Ok(())
-    }
-}
-
-/// Blanket: every `SdiBackend` automatically implements `SdiBatch`.
-impl<T: SdiBackend + ?Sized> SdiBatch for T {
-    fn ext_begin_batch(&mut self) -> Result<()> {
-        SdiBackend::begin_batch(self)
-    }
-    fn ext_flush_batch(&mut self) -> Result<()> {
-        SdiBackend::flush_batch(self)
     }
 }

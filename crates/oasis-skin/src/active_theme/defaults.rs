@@ -241,6 +241,7 @@ impl Default for ActiveTheme {
             font_body: 12,
             font_hint: 10,
             font_heading: 14,
+            font_scale: 1.0,
             terminal_cursor_blink_rate: 30,
             cursor_lerp_speed: 0.35,
             page_slide_duration: 6,

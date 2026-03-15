@@ -468,7 +468,7 @@ mod tests {
     use crate::test_utils::MockBackend;
     use crate::theme::Theme;
     use crate::widget::Widget;
-    use oasis_types::backend::SdiBackend;
+    use oasis_types::backend::SdiText;
 
     #[test]
     fn new_defaults() {

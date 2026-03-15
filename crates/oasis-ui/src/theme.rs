@@ -2,6 +2,7 @@
 
 use crate::shadow::Shadow;
 use oasis_types::backend::Color;
+use oasis_types::text_direction::TextDirection;
 
 /// Complete visual theme for the UI toolkit.
 #[derive(Debug, Clone)]
@@ -127,6 +128,12 @@ pub struct Theme {
     /// Applied on top of the base font sizes. A value of 1.5 would
     /// make all text 50% larger. Clamped to `0.5..=3.0`.
     pub font_scale: f32,
+
+    /// Text direction for the UI (LTR, RTL, or Auto).
+    ///
+    /// When RTL, widgets should mirror their inline layout: text
+    /// alignment flips (start = right), and padding-left/right swap.
+    pub text_direction: TextDirection,
 }
 
 impl Theme {
@@ -243,6 +250,7 @@ impl Theme {
 
             reduced_motion: false,
             font_scale: 1.0,
+            text_direction: TextDirection::Ltr,
         }
     }
 
@@ -311,6 +319,7 @@ impl Theme {
 
             reduced_motion: false,
             font_scale: 1.0,
+            text_direction: TextDirection::Ltr,
         }
     }
 
@@ -396,6 +405,7 @@ impl Theme {
 
             reduced_motion: false,
             font_scale: 1.0,
+            text_direction: TextDirection::Ltr,
         }
     }
 
@@ -506,6 +516,22 @@ impl Theme {
 
             reduced_motion: false,
             font_scale: 1.0,
+            text_direction: TextDirection::Ltr,
+        }
+    }
+
+    /// Returns `true` if the theme's text direction is RTL.
+    pub fn is_rtl(&self) -> bool {
+        self.text_direction.is_rtl()
+    }
+
+    /// Map logical inline-start/inline-end padding to physical
+    /// left/right based on text direction.
+    pub fn resolve_inline_padding(&self, inline_start: u16, inline_end: u16) -> (u16, u16) {
+        if self.is_rtl() {
+            (inline_end, inline_start)
+        } else {
+            (inline_start, inline_end)
         }
     }
 }

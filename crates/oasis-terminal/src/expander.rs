@@ -30,8 +30,9 @@ pub fn tokenize(input: &str) -> Result<Vec<String>> {
             {
                 match next {
                     '"' | '\\' | '$' => {
-                        // peek() returned Some above, so next() is guaranteed to yield a value.
-                        current.push(chars.next().expect("peek() confirmed char available"));
+                        if let Some(escaped) = chars.next() {
+                            current.push(escaped);
+                        }
                     },
                     _ => {
                         current.push('\\');

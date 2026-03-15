@@ -73,3 +73,114 @@ pub unsafe extern "C" fn oasis_send_input(
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used)]
+
+    use super::*;
+
+    // -- button_from_code tests --
+
+    #[test]
+    fn button_code_up() {
+        assert_eq!(button_from_code(OASIS_BUTTON_UP), Some(Button::Up));
+    }
+
+    #[test]
+    fn button_code_down() {
+        assert_eq!(button_from_code(OASIS_BUTTON_DOWN), Some(Button::Down));
+    }
+
+    #[test]
+    fn button_code_left() {
+        assert_eq!(button_from_code(OASIS_BUTTON_LEFT), Some(Button::Left));
+    }
+
+    #[test]
+    fn button_code_right() {
+        assert_eq!(button_from_code(OASIS_BUTTON_RIGHT), Some(Button::Right));
+    }
+
+    #[test]
+    fn button_code_confirm() {
+        assert_eq!(
+            button_from_code(OASIS_BUTTON_CONFIRM),
+            Some(Button::Confirm)
+        );
+    }
+
+    #[test]
+    fn button_code_cancel() {
+        assert_eq!(button_from_code(OASIS_BUTTON_CANCEL), Some(Button::Cancel));
+    }
+
+    #[test]
+    fn button_code_triangle() {
+        assert_eq!(
+            button_from_code(OASIS_BUTTON_TRIANGLE),
+            Some(Button::Triangle)
+        );
+    }
+
+    #[test]
+    fn button_code_square() {
+        assert_eq!(button_from_code(OASIS_BUTTON_SQUARE), Some(Button::Square));
+    }
+
+    #[test]
+    fn button_code_start() {
+        assert_eq!(button_from_code(OASIS_BUTTON_START), Some(Button::Start));
+    }
+
+    #[test]
+    fn button_code_select() {
+        assert_eq!(button_from_code(OASIS_BUTTON_SELECT), Some(Button::Select));
+    }
+
+    #[test]
+    fn button_code_invalid_returns_none() {
+        assert_eq!(button_from_code(99), None);
+        assert_eq!(button_from_code(u32::MAX), None);
+    }
+
+    // -- trigger_from_code tests --
+
+    #[test]
+    fn trigger_code_left() {
+        assert_eq!(trigger_from_code(OASIS_TRIGGER_LEFT), Some(Trigger::Left));
+    }
+
+    #[test]
+    fn trigger_code_right() {
+        assert_eq!(trigger_from_code(OASIS_TRIGGER_RIGHT), Some(Trigger::Right));
+    }
+
+    #[test]
+    fn trigger_code_invalid_returns_none() {
+        assert_eq!(trigger_from_code(99), None);
+        assert_eq!(trigger_from_code(u32::MAX), None);
+    }
+
+    // -- Button code constant ordering --
+
+    #[test]
+    fn button_codes_are_sequential() {
+        assert_eq!(OASIS_BUTTON_UP, 0);
+        assert_eq!(OASIS_BUTTON_DOWN, 1);
+        assert_eq!(OASIS_BUTTON_LEFT, 2);
+        assert_eq!(OASIS_BUTTON_RIGHT, 3);
+        assert_eq!(OASIS_BUTTON_CONFIRM, 4);
+        assert_eq!(OASIS_BUTTON_CANCEL, 5);
+        assert_eq!(OASIS_BUTTON_TRIANGLE, 6);
+        assert_eq!(OASIS_BUTTON_SQUARE, 7);
+        assert_eq!(OASIS_BUTTON_START, 8);
+        assert_eq!(OASIS_BUTTON_SELECT, 9);
+    }
+
+    #[test]
+    fn trigger_codes_are_sequential() {
+        assert_eq!(OASIS_TRIGGER_LEFT, 0);
+        assert_eq!(OASIS_TRIGGER_RIGHT, 1);
+    }
+}

@@ -3,10 +3,11 @@
 //! Every platform implements these traits. The core framework dispatches all
 //! I/O through trait boundaries -- it never calls platform-specific APIs.
 //!
-//! The `SdiBackend` trait provides both core rendering methods (required) and
-//! extended drawing primitives (optional, with default implementations). See
-//! the "Extended Primitives" section for shape, gradient, text, texture, clip,
-//! and batch methods that backends can progressively override.
+//! `SdiBackend` is a marker super-trait combining `SdiCore` with eight
+//! extension traits (`SdiShapes`, `SdiGradients`, `SdiAlpha`, `SdiText`,
+//! `SdiTextures`, `SdiClipTransform`, `SdiVector`, `SdiBatch`).  A blanket
+//! impl ensures any type implementing `SdiCore` + all extensions
+//! automatically satisfies `SdiBackend`.
 
 mod audio;
 mod clipboard;
@@ -170,7 +171,14 @@ mod tests {
         }
     }
 
-    impl SdiBackend for RecordingBackend {}
+    impl SdiShapes for RecordingBackend {}
+    impl SdiGradients for RecordingBackend {}
+    impl SdiAlpha for RecordingBackend {}
+    impl SdiText for RecordingBackend {}
+    impl SdiTextures for RecordingBackend {}
+    impl SdiClipTransform for RecordingBackend {}
+    impl SdiVector for RecordingBackend {}
+    impl SdiBatch for RecordingBackend {}
 
     // -- Color tests --
 
@@ -1237,7 +1245,15 @@ mod tests {
                 Ok(())
             }
         }
-        impl SdiBackend for DefaultBackend {} // Empty -- all defaults!
+        impl SdiShapes for DefaultBackend {}
+        impl SdiGradients for DefaultBackend {}
+        impl SdiAlpha for DefaultBackend {}
+        impl SdiText for DefaultBackend {}
+        impl SdiTextures for DefaultBackend {}
+        impl SdiClipTransform for DefaultBackend {}
+        impl SdiVector for DefaultBackend {}
+        impl SdiBatch for DefaultBackend {}
+        // Blanket impl gives SdiBackend for free!
 
         let mut b = DefaultBackend {
             fill_rect_count: std::cell::Cell::new(0),

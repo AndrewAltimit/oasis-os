@@ -358,6 +358,13 @@ pub struct GeometryOverrides {
     /// Whether toasts slide in from the right (default true).
     #[serde(default)]
     pub toast_slide_in: Option<bool>,
+    /// System-wide font size scale factor (0.5-3.0, default 1.0).
+    ///
+    /// Applied as a multiplier wherever font sizes are used for rendering.
+    /// Values below 0.5 are clamped to 0.5; values above 3.0 are clamped
+    /// to 3.0.
+    #[serde(default)]
+    pub font_scale: Option<f32>,
 }
 
 /// Per-element overrides for the start menu popup and button.

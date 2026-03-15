@@ -11,7 +11,8 @@ use super::text::{
     split_into_words,
 };
 use crate::css::values::{
-    ComputedStyle, Dimension, OverflowWrap, TextAlign, VerticalAlign, WhiteSpace, WordBreak,
+    ComputedStyle, Dimension, OverflowWrap, TextAlign, TextDirection, VerticalAlign, WhiteSpace,
+    WordBreak,
 };
 use crate::html::dom::NodeId;
 
@@ -25,6 +26,7 @@ use crate::html::dom::NodeId;
 pub fn layout_inline(parent: &mut LayoutBox, measurer: &dyn TextMeasurer) {
     let available_width = parent.dimensions.content.width;
     let text_align = parent.style.text_align;
+    let direction = parent.style.direction;
 
     // Collect all inline fragments from the children.
     let fragments = collect_inline_fragments(&parent.children, available_width, measurer);
@@ -170,6 +172,7 @@ pub fn layout_inline(parent: &mut LayoutBox, measurer: &dyn TextMeasurer) {
             text_align,
             is_last_line,
             parent.dimensions.content.x + line_offset,
+            direction,
         );
 
         line_positions.push(cursor_y);
@@ -529,18 +532,46 @@ fn trim_line_boundary_spaces(line: &mut LineBox, measurer: &dyn TextMeasurer) {
 // Line positioning
 // -------------------------------------------------------------------
 
-/// Position fragments on a line according to the `text-align` property.
+/// Resolve text-align for a given direction context.
+///
+/// When the direction is RTL and text-align is Left (the CSS initial
+/// value), the effective alignment flips to Right (and vice versa).
+/// This implements the CSS `start`/`end` mapping without adding new
+/// TextAlign variants.
+fn resolve_text_align(text_align: TextAlign, direction: TextDirection) -> TextAlign {
+    if direction.is_rtl() {
+        match text_align {
+            TextAlign::Left => TextAlign::Right,
+            TextAlign::Right => TextAlign::Left,
+            other => other,
+        }
+    } else {
+        text_align
+    }
+}
+
+/// Position fragments on a line according to the `text-align` property
+/// and text `direction`.
 fn position_fragments_on_line(
     line: &mut LineBox,
     available_width: f32,
     text_align: TextAlign,
     is_last_line: bool,
     content_x: f32,
+    direction: TextDirection,
 ) {
     let used = line.used_width();
     let extra = (available_width - used).max(0.0);
 
-    match text_align {
+    // When direction is RTL, reverse the visual order of fragments
+    // so they flow right-to-left.
+    if direction.is_rtl() {
+        line.fragments.reverse();
+    }
+
+    let effective_align = resolve_text_align(text_align, direction);
+
+    match effective_align {
         TextAlign::Left => {
             let mut x = content_x;
             for frag in &mut line.fragments {
@@ -563,9 +594,19 @@ fn position_fragments_on_line(
             }
         },
         TextAlign::Justify => {
+            // For RTL justify, the last line is right-aligned.
+            let fallback = if direction.is_rtl() {
+                TextAlign::Right
+            } else {
+                TextAlign::Left
+            };
             if is_last_line || line.fragments.len() <= 1 {
-                // Last line or single fragment: left-align.
-                let mut x = content_x;
+                let start_x = if fallback == TextAlign::Right {
+                    content_x + extra
+                } else {
+                    content_x
+                };
+                let mut x = start_x;
                 for frag in &mut line.fragments {
                     set_fragment_x(frag, x);
                     x += frag.width();
@@ -823,7 +864,14 @@ mod tests {
             line.try_add(f);
         }
 
-        position_fragments_on_line(&mut line, 200.0, TextAlign::Left, false, 0.0);
+        position_fragments_on_line(
+            &mut line,
+            200.0,
+            TextAlign::Left,
+            false,
+            0.0,
+            TextDirection::Ltr,
+        );
 
         if let InlineFragment::Text { x, .. } = &line.fragments[0] {
             assert_eq!(*x, 0.0);
@@ -842,7 +890,14 @@ mod tests {
             line.try_add(f);
         }
 
-        position_fragments_on_line(&mut line, 200.0, TextAlign::Right, false, 0.0);
+        position_fragments_on_line(
+            &mut line,
+            200.0,
+            TextAlign::Right,
+            false,
+            0.0,
+            TextDirection::Ltr,
+        );
 
         if let InlineFragment::Text { x, .. } = &line.fragments[0] {
             // Right-aligned: x = 200 - 62 = 138 (proportional "hello"@16 = 31*2 = 62)
@@ -862,7 +917,14 @@ mod tests {
             line.try_add(f);
         }
 
-        position_fragments_on_line(&mut line, 200.0, TextAlign::Center, false, 0.0);
+        position_fragments_on_line(
+            &mut line,
+            200.0,
+            TextAlign::Center,
+            false,
+            0.0,
+            TextDirection::Ltr,
+        );
 
         if let InlineFragment::Text { x, .. } = &line.fragments[0] {
             // Centered: x = (200 - 62) / 2 = 69

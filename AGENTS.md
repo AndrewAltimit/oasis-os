@@ -263,11 +263,6 @@ Key documentation for deeper context on specific topics. Read as needed rather t
 - [`docs/adr/004-psp-two-binary-architecture.md`](docs/adr/004-psp-two-binary-architecture.md) -- ADR: PSP EBOOT + PRX split
 - [`docs/adr/005-toml-skin-system.md`](docs/adr/005-toml-skin-system.md) -- ADR: TOML skin engine
 
-### Plans & Roadmaps
-- [`docs/comprehensive-improvements-plan-v2.md`](docs/comprehensive-improvements-plan-v2.md) -- Cross-crate improvement plan
-- [`docs/browser-improvement-plan-r3.md`](docs/browser-improvement-plan-r3.md) -- Browser engine improvement plan
-- [`docs/testing-gap-analysis.md`](docs/testing-gap-analysis.md) -- Test coverage gap analysis
-
 ### Guides
 - [`docs/getting-started.md`](docs/getting-started.md) -- Getting started guide
 - [`docs/adding-commands.md`](docs/adding-commands.md) -- How to add terminal commands

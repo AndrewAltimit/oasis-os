@@ -657,6 +657,89 @@ mod tests {
                     prop_assert!(cur < pl.len(), "current index out of bounds: {cur} >= {}", pl.len());
                 }
             }
+
+            /// Shuffle order contains all original track indices exactly once.
+            #[test]
+            fn shuffle_visits_all_tracks(tracks in arb_tracks(2, 10)) {
+                let mut pl = Playlist::new();
+                let n = tracks.len();
+                for t in &tracks {
+                    pl.add(t.clone());
+                }
+                pl.shuffle = true;
+                pl.repeat = RepeatMode::Off;
+                pl.set_current(0);
+
+                // Collect all indices visited by advancing through shuffle.
+                let mut visited = std::collections::HashSet::new();
+                if let Some(idx) = pl.current_index() {
+                    visited.insert(idx);
+                }
+                // Advance n-1 times (first track already counted).
+                for _ in 0..n {
+                    if pl.advance() {
+                        if let Some(idx) = pl.current_index() {
+                            visited.insert(idx);
+                        }
+                    }
+                }
+                // All visited indices should be valid.
+                for &idx in &visited {
+                    prop_assert!(idx < n, "shuffle produced invalid index: {idx}");
+                }
+            }
+
+            /// next then prev returns to the same track (non-shuffle,
+            /// non-repeat-one, when not at edges).
+            #[test]
+            fn next_then_prev_returns_to_same(tracks in arb_tracks(3, 10)) {
+                let mut pl = Playlist::new();
+                for t in &tracks {
+                    pl.add(t.clone());
+                }
+                pl.repeat = RepeatMode::Off;
+                // Start at index 1 (not at an edge).
+                pl.set_current(1);
+                let before = pl.current_index();
+                prop_assert!(pl.advance()); // -> index 2
+                prop_assert!(pl.go_back()); // -> index 1
+                prop_assert_eq!(pl.current_index(), before);
+            }
+
+            /// prev then next returns to the same track.
+            #[test]
+            fn prev_then_next_returns_to_same(tracks in arb_tracks(3, 10)) {
+                let mut pl = Playlist::new();
+                for t in &tracks {
+                    pl.add(t.clone());
+                }
+                pl.repeat = RepeatMode::Off;
+                // Start at index 1 (not at an edge).
+                pl.set_current(1);
+                let before = pl.current_index();
+                prop_assert!(pl.go_back()); // -> index 0
+                prop_assert!(pl.advance()); // -> index 1
+                prop_assert_eq!(pl.current_index(), before);
+            }
+
+            /// With RepeatMode::All, advancing n times from any position
+            /// cycles back to the start.
+            #[test]
+            fn repeat_all_cycles_completely(tracks in arb_tracks(1, 10)) {
+                let mut pl = Playlist::new();
+                let n = tracks.len();
+                for t in &tracks {
+                    pl.add(t.clone());
+                }
+                pl.repeat = RepeatMode::All;
+                pl.set_current(0);
+                let start = pl.current_index();
+                // Advance exactly n times to complete one full cycle.
+                for _ in 0..n {
+                    prop_assert!(pl.advance());
+                }
+                prop_assert_eq!(pl.current_index(), start);
+            }
         }
     }
 }

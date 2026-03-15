@@ -456,6 +456,8 @@ pub fn validate_rgba_data(width: u32, height: u32, rgba_data: &[u8]) -> Result<(
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::unwrap_used)]
+
     use super::*;
 
     #[test]
@@ -518,5 +520,189 @@ mod tests {
         let c = Color::WHITE;
         assert_eq!(Color::from_abgr(c.to_abgr()), c);
         assert_eq!(Color::from_argb(c.to_argb()), c);
+    }
+
+    // -----------------------------------------------------------------------
+    // Item 70: Color/pixel format conversion tests (RGBA<->ABGR, ARGB, etc.)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn abgr_from_raw_known_value() {
+        // ABGR 0xAABBGGRR
+        let c = Color::from_abgr(0x80_40_20_10);
+        assert_eq!(c.r, 0x10);
+        assert_eq!(c.g, 0x20);
+        assert_eq!(c.b, 0x40);
+        assert_eq!(c.a, 0x80);
+    }
+
+    #[test]
+    fn argb_from_raw_known_value() {
+        // ARGB 0xAARRGGBB
+        let c = Color::from_argb(0x80_10_20_40);
+        assert_eq!(c.a, 0x80);
+        assert_eq!(c.r, 0x10);
+        assert_eq!(c.g, 0x20);
+        assert_eq!(c.b, 0x40);
+    }
+
+    #[test]
+    fn abgr_argb_differ_for_nonsymmetric_color() {
+        let c = Color::rgba(10, 20, 30, 255);
+        // ABGR: A=255, B=30, G=20, R=10 => 0xFF_1E_14_0A
+        // ARGB: A=255, R=10, G=20, B=30 => 0xFF_0A_14_1E
+        assert_ne!(c.to_abgr(), c.to_argb());
+        assert_eq!(c.to_abgr(), 0xFF_1E_14_0A);
+        assert_eq!(c.to_argb(), 0xFF_0A_14_1E);
+    }
+
+    #[test]
+    fn abgr_argb_equal_for_gray() {
+        // For gray (r == g == b), ABGR and ARGB differ in byte layout
+        // but only if r != b. Gray: r == g == b, so R and B are the same.
+        let c = Color::rgba(128, 128, 128, 255);
+        // ABGR: 0xFF_80_80_80, ARGB: 0xFF_80_80_80
+        assert_eq!(c.to_abgr(), c.to_argb());
+    }
+
+    #[test]
+    fn rgba_u32_layout() {
+        // RGBA u32: R in high byte, A in low byte
+        let c = Color::rgba(0xAA, 0xBB, 0xCC, 0xDD);
+        assert_eq!(c.to_rgba_u32(), 0xAA_BB_CC_DD);
+    }
+
+    #[test]
+    fn abgr_roundtrip_all_channels_distinct() {
+        let c = Color::rgba(11, 22, 33, 44);
+        assert_eq!(Color::from_abgr(c.to_abgr()), c);
+    }
+
+    #[test]
+    fn argb_roundtrip_all_channels_distinct() {
+        let c = Color::rgba(55, 66, 77, 88);
+        assert_eq!(Color::from_argb(c.to_argb()), c);
+    }
+
+    #[test]
+    fn abgr_roundtrip_boundary_values() {
+        for &c in &[
+            Color::rgba(0, 0, 0, 0),
+            Color::rgba(255, 255, 255, 255),
+            Color::rgba(255, 0, 0, 0),
+            Color::rgba(0, 255, 0, 0),
+            Color::rgba(0, 0, 255, 0),
+            Color::rgba(0, 0, 0, 255),
+        ] {
+            assert_eq!(Color::from_abgr(c.to_abgr()), c);
+        }
+    }
+
+    #[test]
+    fn argb_roundtrip_boundary_values() {
+        for &c in &[
+            Color::rgba(0, 0, 0, 0),
+            Color::rgba(255, 255, 255, 255),
+            Color::rgba(255, 0, 0, 0),
+            Color::rgba(0, 255, 0, 0),
+            Color::rgba(0, 0, 255, 0),
+            Color::rgba(0, 0, 0, 255),
+        ] {
+            assert_eq!(Color::from_argb(c.to_argb()), c);
+        }
+    }
+
+    #[test]
+    fn alpha_over_opaque_foreground() {
+        let fg = Color::rgba(100, 150, 200, 255);
+        let bg = Color::rgba(50, 50, 50, 255);
+        let result = fg.alpha_over(bg);
+        assert_eq!(result, fg);
+    }
+
+    #[test]
+    fn alpha_over_transparent_foreground() {
+        let fg = Color::rgba(100, 150, 200, 0);
+        let bg = Color::rgba(50, 60, 70, 255);
+        let result = fg.alpha_over(bg);
+        assert_eq!(result, bg);
+    }
+
+    #[test]
+    fn alpha_over_half_alpha() {
+        let fg = Color::rgba(255, 0, 0, 128);
+        let bg = Color::rgba(0, 0, 255, 255);
+        let result = fg.alpha_over(bg);
+        // Foreground red at 50% alpha over blue bg: should produce purple-ish.
+        assert!(result.r > 100);
+        assert!(result.b > 50);
+        assert_eq!(result.a, 255);
+    }
+
+    #[test]
+    fn alpha_over_both_transparent() {
+        let fg = Color::rgba(100, 100, 100, 0);
+        let bg = Color::rgba(200, 200, 200, 0);
+        let result = fg.alpha_over(bg);
+        // fg alpha is 0, returns bg which is fully transparent.
+        assert_eq!(result, bg);
+    }
+
+    #[test]
+    fn with_alpha_preserves_rgb() {
+        let c = Color::rgb(10, 20, 30);
+        let c2 = c.with_alpha(128);
+        assert_eq!(c2.r, 10);
+        assert_eq!(c2.g, 20);
+        assert_eq!(c2.b, 30);
+        assert_eq!(c2.a, 128);
+    }
+
+    #[test]
+    fn with_alpha_zero_makes_transparent() {
+        let c = Color::rgb(255, 255, 255);
+        let c2 = c.with_alpha(0);
+        assert_eq!(c2.a, 0);
+        assert_eq!(c2.r, 255);
+    }
+
+    #[test]
+    fn lerp_halfway_between_red_and_blue() {
+        let r = Color::rgb(255, 0, 0);
+        let b = Color::rgb(0, 0, 255);
+        let mid = r.lerp(b, 0.5);
+        assert_eq!(mid.r, 127);
+        assert_eq!(mid.g, 0);
+        assert_eq!(mid.b, 127);
+    }
+
+    #[test]
+    fn apply_opacity_full() {
+        let c = Color::rgba(100, 100, 100, 200);
+        let result = c.apply_opacity(1.0);
+        assert_eq!(result, c);
+    }
+
+    #[test]
+    fn apply_opacity_half() {
+        let c = Color::rgba(100, 100, 100, 200);
+        let result = c.apply_opacity(0.5);
+        assert_eq!(result.r, 100);
+        assert_eq!(result.a, 100);
+    }
+
+    #[test]
+    fn apply_opacity_zero() {
+        let c = Color::rgba(100, 100, 100, 200);
+        let result = c.apply_opacity(0.0);
+        assert_eq!(result.a, 0);
+        assert_eq!(result.r, 100);
+    }
+
+    #[test]
+    fn color_constants() {
+        assert_eq!(Color::BLACK, Color::rgb(0, 0, 0));
+        assert_eq!(Color::WHITE, Color::rgb(255, 255, 255));
+        assert_eq!(Color::TRANSPARENT, Color::rgba(0, 0, 0, 0));
     }
 }

@@ -39,24 +39,38 @@ pub enum InputEvent {
 }
 
 /// Buttons that map across all platforms.
+///
+/// On PSP: maps to face buttons and d-pad. On desktop: maps to keyboard keys.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum Button {
+    /// D-pad up / arrow key up.
     Up,
+    /// D-pad down / arrow key down.
     Down,
+    /// D-pad left / arrow key left.
     Left,
+    /// D-pad right / arrow key right.
     Right,
+    /// Confirm action (PSP Cross / Enter).
     Confirm,
+    /// Cancel action (PSP Circle / Escape).
     Cancel,
+    /// PSP Triangle / keyboard shortcut.
     Triangle,
+    /// PSP Square / keyboard shortcut.
     Square,
+    /// Start / menu button.
     Start,
+    /// Select / back button.
     Select,
 }
 
 /// Shoulder / trigger buttons.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum Trigger {
+    /// Left shoulder button (L1 / LB).
     Left,
+    /// Right shoulder button (R1 / RB).
     Right,
 }
 

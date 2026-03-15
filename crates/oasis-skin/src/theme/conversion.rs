@@ -108,6 +108,7 @@ impl SkinTheme {
 
             reduced_motion: false,
             font_scale: 1.0,
+            text_direction: oasis_types::text_direction::TextDirection::Ltr,
         }
     }
 

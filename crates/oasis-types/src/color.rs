@@ -216,7 +216,66 @@ pub fn adjust_saturation(color: Color, factor: f32) -> Color {
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::unwrap_used)]
+
     use super::*;
+
+    // -----------------------------------------------------------------------
+    // Item 70 (continued): parse_hex_color tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn parse_hex_rgb_valid() {
+        let c = parse_hex_color("#FF8040").unwrap();
+        assert_eq!(c.r, 0xFF);
+        assert_eq!(c.g, 0x80);
+        assert_eq!(c.b, 0x40);
+        assert_eq!(c.a, 255);
+    }
+
+    #[test]
+    fn parse_hex_rgba_valid() {
+        let c = parse_hex_color("#FF804080").unwrap();
+        assert_eq!(c.r, 0xFF);
+        assert_eq!(c.g, 0x80);
+        assert_eq!(c.b, 0x40);
+        assert_eq!(c.a, 0x80);
+    }
+
+    #[test]
+    fn parse_hex_black() {
+        let c = parse_hex_color("#000000").unwrap();
+        assert_eq!(c, Color::rgb(0, 0, 0));
+    }
+
+    #[test]
+    fn parse_hex_white() {
+        let c = parse_hex_color("#FFFFFF").unwrap();
+        assert_eq!(c, Color::rgb(255, 255, 255));
+    }
+
+    #[test]
+    fn parse_hex_no_hash_returns_none() {
+        assert!(parse_hex_color("FF8040").is_none());
+    }
+
+    #[test]
+    fn parse_hex_wrong_length_returns_none() {
+        assert!(parse_hex_color("#FFF").is_none());
+        assert!(parse_hex_color("#FFFFF").is_none());
+        assert!(parse_hex_color("#FFFFFFFFF").is_none());
+    }
+
+    #[test]
+    fn parse_hex_invalid_chars_returns_none() {
+        assert!(parse_hex_color("#GGHHII").is_none());
+    }
+
+    #[test]
+    fn parse_hex_transparent_black() {
+        let c = parse_hex_color("#00000000").unwrap();
+        assert_eq!(c, Color::TRANSPARENT);
+    }
 
     #[test]
     fn lerp_endpoints() {

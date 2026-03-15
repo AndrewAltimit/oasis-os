@@ -1146,6 +1146,56 @@ mod tests {
                 vfs.remove(&path).unwrap();
                 prop_assert!(!vfs.exists(&path));
             }
+
+            /// Joining path segments then splitting gives the same segments.
+            #[test]
+            fn join_then_split_roundtrips(
+                segments in proptest::collection::vec("[a-z]{1,6}", 1..5),
+            ) {
+                let joined = format!("/{}", segments.join("/"));
+                let normed = normalize(&joined);
+                // Split on '/' skipping the leading empty component.
+                let parts: Vec<&str> = normed.split('/').filter(|s| !s.is_empty()).collect();
+                prop_assert_eq!(parts.len(), segments.len());
+                for (a, b) in parts.iter().zip(segments.iter()) {
+                    prop_assert_eq!(*a, b.as_str());
+                }
+            }
+
+            /// No path can escape the VFS root -- writes with ".." components
+            /// should fail because the literal ".." parent doesn't exist.
+            #[test]
+            fn dotdot_cannot_escape_root(
+                prefix in "[a-z]{1,4}",
+                depth in 1usize..5,
+            ) {
+                let mut vfs = MemoryVfs::new();
+                vfs.mkdir(&format!("/{prefix}")).unwrap();
+                // Build a path like /prefix/../../etc
+                let dotdots: String = (0..depth).map(|_| "/..").collect();
+                let evil_path = format!("/{prefix}{dotdots}/etc/passwd");
+                let result = vfs.write(&evil_path, b"hacked");
+                // Must fail -- ".." is not a real directory.
+                prop_assert!(result.is_err(),
+                    "write to {evil_path} should fail (path traversal)");
+                // The VFS should not contain any "etc" or "passwd" at root level.
+                prop_assert!(!vfs.exists("/etc"));
+                prop_assert!(!vfs.exists("/passwd"));
+            }
+
+            /// Stat after write returns the correct file size.
+            #[test]
+            fn stat_after_write_returns_correct_size(
+                name in "[a-z]{1,8}",
+                data in proptest::collection::vec(any::<u8>(), 0..512),
+            ) {
+                let mut vfs = MemoryVfs::new();
+                let path = format!("/{name}");
+                vfs.write(&path, &data).unwrap();
+                let meta = vfs.stat(&path).unwrap();
+                prop_assert_eq!(meta.size, data.len() as u64);
+                prop_assert_eq!(meta.kind, EntryKind::File);
+            }
         }
     }
 }

@@ -1,0 +1,60 @@
+# Tritanopia-safe palette: no blue/yellow distinction needed
+# Success = green, Warning = red/magenta, Error = red
+# Links = magenta, visited = dark red
+
+background = "#1A1A1A"
+primary = "#E040A0"
+secondary = "#333333"
+text = "#F0F0F0"
+dim_text = "#999999"
+status_bar = "#262626"
+prompt = "#E040A0"
+output = "#E0E0E0"
+error = "#E03030"
+
+border_radius = 4
+shadow_intensity = 1
+gradient_enabled = false
+
+[wallpaper]
+style = "solid"
+color_stops = ["#1A1A1A"]
+
+[bar_overrides]
+statusbar_bg = "#262626"
+text_shadow = false
+
+[icon_overrides]
+body_color = "#262626"
+icon_style = "card"
+cursor_style = "fill"
+
+[app_overrides]
+app_bg = "#1A1A1A"
+text_color = "#F0F0F0"
+selection_accent_color = "#E040A060"
+
+[start_menu_overrides]
+panel_bg = "#262626"
+button_bg = "#E040A0"
+button_text = "#FFFFFF"
+button_gradient = false
+panel_width = 200
+panel_border_radius = 6
+columns = 2
+
+[browser_overrides]
+chrome_bg = "#262626"
+url_bar_bg = "#1A1A1A"
+link_color = "#E060B0"
+
+[scrollbar_overrides]
+track_color = "#262626"
+thumb_color = "#E040A0"
+
+[geometry]
+statusbar_height = 24
+bottombar_height = 26
+font_body = 12
+font_hint = 10
+font_heading = 14

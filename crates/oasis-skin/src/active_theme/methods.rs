@@ -125,6 +125,16 @@ impl ActiveTheme {
             .copied()
     }
 
+    /// Apply the system-wide font scale factor to a raw font size.
+    ///
+    /// Returns the scaled font size as a `u16`, clamped to at least 1.
+    /// The scale factor is clamped to 0.5-3.0 at construction time.
+    #[inline]
+    pub fn scaled_font_size(&self, raw_size: u16) -> u16 {
+        let scaled = (f32::from(raw_size) * self.font_scale).round() as u16;
+        scaled.max(1)
+    }
+
     /// Derive a 6-color palette from the primary color using hue-shifted offsets.
     pub(crate) fn derive_item_palette(primary: Color) -> Vec<Color> {
         vec![

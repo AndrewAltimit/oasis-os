@@ -1,0 +1,60 @@
+# Protanopia-safe palette: no red/green distinction needed
+# Success = blue, Warning = yellow/amber, Error = magenta/pink
+# Links = blue (distinguishable), visited = purple
+
+background = "#0D1117"
+primary = "#2F81F7"
+secondary = "#30363D"
+text = "#F0F6FC"
+dim_text = "#8B949E"
+status_bar = "#161B22"
+prompt = "#2F81F7"
+output = "#E6EDF3"
+error = "#DA3B8A"
+
+border_radius = 4
+shadow_intensity = 1
+gradient_enabled = false
+
+[wallpaper]
+style = "solid"
+color_stops = ["#0D1117"]
+
+[bar_overrides]
+statusbar_bg = "#161B22"
+text_shadow = false
+
+[icon_overrides]
+body_color = "#161B22"
+icon_style = "card"
+cursor_style = "fill"
+
+[app_overrides]
+app_bg = "#0D1117"
+text_color = "#F0F6FC"
+selection_accent_color = "#2F81F760"
+
+[start_menu_overrides]
+panel_bg = "#161B22"
+button_bg = "#2F81F7"
+button_text = "#FFFFFF"
+button_gradient = false
+panel_width = 200
+panel_border_radius = 6
+columns = 2
+
+[browser_overrides]
+chrome_bg = "#161B22"
+url_bar_bg = "#0D1117"
+link_color = "#58A6FF"
+
+[scrollbar_overrides]
+track_color = "#161B22"
+thumb_color = "#2F81F7"
+
+[geometry]
+statusbar_height = 24
+bottombar_height = 26
+font_body = 12
+font_hint = 10
+font_heading = 14

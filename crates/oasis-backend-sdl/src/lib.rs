@@ -24,7 +24,8 @@ use sdl3::render::{Canvas, FPoint, FRect, Texture, TextureCreator};
 use sdl3::video::{Window, WindowContext};
 
 use oasis_core::backend::{
-    BackendErrExt, Color, GradientStyle, SdiBackend, SdiCore, TextureId, texture_not_found,
+    BackendErrExt, Color, GradientStyle, SdiAlpha, SdiBatch, SdiClipTransform, SdiCore,
+    SdiGradients, SdiShapes, SdiText, SdiTextures, SdiVector, TextureId, texture_not_found,
     validate_rgba_data,
 };
 use oasis_core::error::Result;
@@ -401,67 +402,11 @@ impl SdiCore for SdlBackend {
     }
 }
 
-impl SdiBackend for SdlBackend {
-    fn draw_text_styled(
-        &mut self,
-        text: &str,
-        x: i32,
-        y: i32,
-        font_size: u16,
-        color: Color,
-        bold: bool,
-        italic: bool,
-    ) -> Result<()> {
-        if text.is_empty() || color.a == 0 || font_size == 0 {
-            return Ok(());
-        }
-        let (tx, ty) = self.translate(x, y);
-        let mut cx = tx;
+// -------------------------------------------------------------------
+// SdiShapes: Shape primitives (delegated to shapes.rs)
+// -------------------------------------------------------------------
 
-        for ch in text.chars() {
-            let key = GlyphCacheKey::new(ch, font_size, color, bold, italic);
-            if self.glyph_cache.contains_key(&key) {
-                // Cache hit: update LRU access counter.
-                self.glyph_access_counter += 1;
-                self.glyph_access.insert(key, self.glyph_access_counter);
-            } else {
-                // Evict LRU entry when cache is full.
-                while self.glyph_cache.len() >= MAX_GLYPH_CACHE_SIZE {
-                    if let Some((&oldest_key, _)) =
-                        self.glyph_access.iter().min_by_key(|&(_, &ts)| ts)
-                    {
-                        if let Some(tex_id) = self.glyph_cache.remove(&oldest_key) {
-                            self.textures.remove(&tex_id);
-                        }
-                        self.glyph_access.remove(&oldest_key);
-                    } else {
-                        break;
-                    }
-                }
-                // Render the glyph to a small RGBA buffer.
-                let tex_id = self.render_glyph_texture(ch, font_size, color, bold, italic)?;
-                self.glyph_cache.insert(key, tex_id);
-                self.glyph_access_counter += 1;
-                self.glyph_access.insert(key, self.glyph_access_counter);
-            }
-            // Blit the cached glyph texture.
-            if let Some(&tex_id) = self.glyph_cache.get(&key)
-                && let Some(texture) = self.textures.get(&tex_id)
-            {
-                let query = texture.query();
-                let _ = self
-                    .canvas
-                    .copy(texture, None, frect(cx, ty, query.width, query.height));
-            }
-            cx += oasis_types::bitmap_font::glyph_advance_scaled(ch, font_size) as i32;
-        }
-        Ok(())
-    }
-
-    // -------------------------------------------------------------------
-    // Extended: Shape Primitives (delegated to shapes.rs)
-    // -------------------------------------------------------------------
-
+impl SdiShapes for SdlBackend {
     fn fill_rounded_rect(
         &mut self,
         x: i32,
@@ -538,7 +483,13 @@ impl SdiBackend for SdlBackend {
     ) -> Result<()> {
         self.shape_stroke_rounded_rect(x, y, w, h, radius, stroke_width, color)
     }
+}
 
+// -------------------------------------------------------------------
+// SdiVector: Polygon, arc, dashed line (delegated to shapes.rs)
+// -------------------------------------------------------------------
+
+impl SdiVector for SdlBackend {
     fn fill_polygon(&mut self, points: &[(i32, i32)], color: Color) -> Result<()> {
         self.shape_fill_polygon(points, color)
     }
@@ -581,11 +532,13 @@ impl SdiBackend for SdlBackend {
     ) -> Result<()> {
         self.shape_stroke_line_dashed(x1, y1, x2, y2, width, color, dash, gap)
     }
+}
 
-    // -------------------------------------------------------------------
-    // Extended: Gradient Fills
-    // -------------------------------------------------------------------
+// -------------------------------------------------------------------
+// SdiGradients: Gradient fills
+// -------------------------------------------------------------------
 
+impl SdiGradients for SdlBackend {
     fn fill_rect_gradient(
         &mut self,
         x: i32,
@@ -674,11 +627,13 @@ impl SdiBackend for SdlBackend {
         }
         Ok(())
     }
+}
 
-    // -------------------------------------------------------------------
-    // Extended: Texture Operations (delegated to blitting.rs)
-    // -------------------------------------------------------------------
+// -------------------------------------------------------------------
+// SdiTextures: Texture operations (delegated to blitting.rs)
+// -------------------------------------------------------------------
 
+impl SdiTextures for SdlBackend {
     fn blit_sub(
         &mut self,
         tex: TextureId,
@@ -736,7 +691,13 @@ impl SdiBackend for SdlBackend {
     ) -> Result<()> {
         self.blit_flipped_impl(tex, x, y, w, h, flip_h, flip_v)
     }
+}
 
+// -------------------------------------------------------------------
+// SdiAlpha: Viewport and alpha utilities
+// -------------------------------------------------------------------
+
+impl SdiAlpha for SdlBackend {
     fn viewport_size(&self) -> (u32, u32) {
         (self.viewport_w, self.viewport_h)
     }
@@ -750,10 +711,68 @@ impl SdiBackend for SdlBackend {
             Color::rgba(0, 0, 0, alpha),
         )
     }
+}
 
-    // -------------------------------------------------------------------
-    // Extended: Text System
-    // -------------------------------------------------------------------
+// -------------------------------------------------------------------
+// SdiText: Text system
+// -------------------------------------------------------------------
+
+impl SdiText for SdlBackend {
+    fn draw_text_styled(
+        &mut self,
+        text: &str,
+        x: i32,
+        y: i32,
+        font_size: u16,
+        color: Color,
+        bold: bool,
+        italic: bool,
+    ) -> Result<()> {
+        if text.is_empty() || color.a == 0 || font_size == 0 {
+            return Ok(());
+        }
+        let (tx, ty) = self.translate(x, y);
+        let mut cx = tx;
+
+        for ch in text.chars() {
+            let key = GlyphCacheKey::new(ch, font_size, color, bold, italic);
+            if self.glyph_cache.contains_key(&key) {
+                // Cache hit: update LRU access counter.
+                self.glyph_access_counter += 1;
+                self.glyph_access.insert(key, self.glyph_access_counter);
+            } else {
+                // Evict LRU entry when cache is full.
+                while self.glyph_cache.len() >= MAX_GLYPH_CACHE_SIZE {
+                    if let Some((&oldest_key, _)) =
+                        self.glyph_access.iter().min_by_key(|&(_, &ts)| ts)
+                    {
+                        if let Some(tex_id) = self.glyph_cache.remove(&oldest_key) {
+                            self.textures.remove(&tex_id);
+                        }
+                        self.glyph_access.remove(&oldest_key);
+                    } else {
+                        break;
+                    }
+                }
+                // Render the glyph to a small RGBA buffer.
+                let tex_id = self.render_glyph_texture(ch, font_size, color, bold, italic)?;
+                self.glyph_cache.insert(key, tex_id);
+                self.glyph_access_counter += 1;
+                self.glyph_access.insert(key, self.glyph_access_counter);
+            }
+            // Blit the cached glyph texture.
+            if let Some(&tex_id) = self.glyph_cache.get(&key)
+                && let Some(texture) = self.textures.get(&tex_id)
+            {
+                let query = texture.query();
+                let _ = self
+                    .canvas
+                    .copy(texture, None, frect(cx, ty, query.width, query.height));
+            }
+            cx += oasis_types::bitmap_font::glyph_advance_scaled(ch, font_size) as i32;
+        }
+        Ok(())
+    }
 
     fn measure_text_height(&self, font_size: u16) -> u32 {
         // Match WASM: font_size * 1.2 (the actual rendered row height).
@@ -764,11 +783,13 @@ impl SdiBackend for SdlBackend {
         // Match WASM: font_size * 0.85 (baseline offset from top).
         (f64::from(font_size.max(8)) * 0.85).ceil() as u32
     }
+}
 
-    // -------------------------------------------------------------------
-    // Extended: Clip and Transform Stack
-    // -------------------------------------------------------------------
+// -------------------------------------------------------------------
+// SdiClipTransform: Clip and transform stack
+// -------------------------------------------------------------------
 
+impl SdiClipTransform for SdlBackend {
     fn push_clip_rect(&mut self, x: i32, y: i32, w: u32, h: u32) -> Result<()> {
         let (tx, ty) = self.translate(x, y);
         let new_clip = ClipRect { x: tx, y: ty, w, h };
@@ -814,6 +835,12 @@ impl SdiBackend for SdlBackend {
         self.translate_stack.current()
     }
 }
+
+// -------------------------------------------------------------------
+// SdiBatch: No-op (use default impl)
+// -------------------------------------------------------------------
+
+impl SdiBatch for SdlBackend {}
 
 impl oasis_core::backend::ClipboardBackend for SdlBackend {
     fn copy(&mut self, text: &str) {

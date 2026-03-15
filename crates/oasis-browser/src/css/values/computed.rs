@@ -1,6 +1,6 @@
 //! `ComputedStyle` struct definition, `Default` impl, and inheritance.
 
-use std::collections::HashMap;
+use rustc_hash::FxHashMap;
 
 use oasis_types::backend::Color;
 
@@ -8,8 +8,8 @@ use super::types::{
     AlignItems, BackgroundImage, BorderCollapse, BorderStyle, BoxShadow, BoxSizing, Clear,
     Dimension, Display, FlexDirection, FlexWrap, Float, FontFamily, FontStyle, FontWeight,
     GridTrackSize, JustifyContent, ListStylePosition, ListStyleType, Overflow, OverflowWrap,
-    Position, ROOT_FONT_SIZE, TextAlign, TextDecoration, TextOverflow, TextShadow, TextTransform,
-    VerticalAlign, Visibility, WhiteSpace, WordBreak,
+    Position, ROOT_FONT_SIZE, TextAlign, TextDecoration, TextDirection, TextOverflow, TextShadow,
+    TextTransform, VerticalAlign, Visibility, WhiteSpace, WordBreak,
 };
 
 /// Computed style for a DOM node after cascade resolution.
@@ -60,6 +60,7 @@ pub struct ComputedStyle {
     pub font_style: FontStyle,
     pub font_family: FontFamily,
     pub text_align: TextAlign,
+    pub direction: TextDirection,
     pub text_decoration: TextDecoration,
     pub text_indent: f32,
     pub text_transform: TextTransform,
@@ -159,7 +160,7 @@ pub struct ComputedStyle {
     pub margin_left_pct: Option<f32>,
 
     // -- CSS custom properties (--*) ------------------------------------
-    pub custom_properties: HashMap<String, String>,
+    pub custom_properties: FxHashMap<String, String>,
 }
 
 /// Standard browser defaults (CSS 2.1 initial values).
@@ -208,6 +209,7 @@ impl Default for ComputedStyle {
             font_style: FontStyle::Normal,
             font_family: FontFamily::SansSerif,
             text_align: TextAlign::Left,
+            direction: TextDirection::Ltr,
             text_decoration: TextDecoration::None,
             text_indent: 0.0,
             text_transform: TextTransform::None,
@@ -302,7 +304,7 @@ impl Default for ComputedStyle {
             margin_bottom_pct: None,
             margin_left_pct: None,
 
-            custom_properties: HashMap::new(),
+            custom_properties: FxHashMap::default(),
         }
     }
 }
@@ -320,6 +322,7 @@ impl ComputedStyle {
             font_style: parent.font_style,
             font_family: parent.font_family,
             text_align: parent.text_align,
+            direction: parent.direction,
             text_decoration: parent.text_decoration,
             text_indent: parent.text_indent,
             text_transform: parent.text_transform,

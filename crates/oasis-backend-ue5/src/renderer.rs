@@ -10,7 +10,8 @@
 use std::rc::Rc;
 
 use oasis_core::backend::{
-    Color, GradientStyle, SdiBackend, TextureId, texture_not_found, validate_rgba_data,
+    Color, GradientStyle, SdiAlpha, SdiBatch, SdiClipTransform, SdiGradients, SdiShapes, SdiText,
+    SdiTextures, SdiVector, TextureId, texture_not_found, validate_rgba_data,
 };
 use oasis_core::error::Result;
 use oasis_rasterize::SoftwareBuffer;
@@ -223,11 +224,11 @@ impl SdiCore for Ue5Backend {
     }
 }
 
-impl SdiBackend for Ue5Backend {
-    // -------------------------------------------------------------------
-    // Extended: Shape Primitives
-    // -------------------------------------------------------------------
+// -------------------------------------------------------------------
+// SdiShapes: Shape primitives
+// -------------------------------------------------------------------
 
+impl SdiShapes for Ue5Backend {
     fn fill_rounded_rect(
         &mut self,
         x: i32,
@@ -315,11 +316,19 @@ impl SdiBackend for Ue5Backend {
         self.dirty = true;
         Ok(())
     }
+}
 
-    // -------------------------------------------------------------------
-    // Extended: Gradient Fills
-    // -------------------------------------------------------------------
+// -------------------------------------------------------------------
+// SdiVector: defaults (no overrides needed)
+// -------------------------------------------------------------------
 
+impl SdiVector for Ue5Backend {}
+
+// -------------------------------------------------------------------
+// SdiGradients: Gradient fills
+// -------------------------------------------------------------------
+
+impl SdiGradients for Ue5Backend {
     fn fill_rect_gradient(
         &mut self,
         x: i32,
@@ -359,7 +368,13 @@ impl SdiBackend for Ue5Backend {
         self.dirty = true;
         Ok(())
     }
+}
 
+// -------------------------------------------------------------------
+// SdiAlpha: Viewport and alpha utilities
+// -------------------------------------------------------------------
+
+impl SdiAlpha for Ue5Backend {
     fn viewport_size(&self) -> (u32, u32) {
         (self.fb.width(), self.fb.height())
     }
@@ -373,11 +388,13 @@ impl SdiBackend for Ue5Backend {
             Color::rgba(0, 0, 0, alpha),
         )
     }
+}
 
-    // -------------------------------------------------------------------
-    // Extended: Text System
-    // -------------------------------------------------------------------
+// -------------------------------------------------------------------
+// SdiText: Text system
+// -------------------------------------------------------------------
 
+impl SdiText for Ue5Backend {
     fn measure_text_height(&self, font_size: u16) -> u32 {
         let scale = if font_size >= 8 {
             (font_size / 8) as u32
@@ -395,11 +412,13 @@ impl SdiBackend for Ue5Backend {
         };
         8 * scale
     }
+}
 
-    // -------------------------------------------------------------------
-    // Extended: Texture Operations
-    // -------------------------------------------------------------------
+// -------------------------------------------------------------------
+// SdiTextures: Texture operations
+// -------------------------------------------------------------------
 
+impl SdiTextures for Ue5Backend {
     fn blit_sub(
         &mut self,
         tex: TextureId,
@@ -477,11 +496,13 @@ impl SdiBackend for Ue5Backend {
         self.dirty = true;
         Ok(())
     }
+}
 
-    // -------------------------------------------------------------------
-    // Extended: Clip and Transform Stack
-    // -------------------------------------------------------------------
+// -------------------------------------------------------------------
+// SdiClipTransform: Clip and transform stack
+// -------------------------------------------------------------------
 
+impl SdiClipTransform for Ue5Backend {
     fn push_clip_rect(&mut self, x: i32, y: i32, w: u32, h: u32) -> Result<()> {
         let (tx, ty) = self.translate(x, y);
         let new_clip = ClipRect { x: tx, y: ty, w, h };
@@ -522,6 +543,12 @@ impl SdiBackend for Ue5Backend {
         self.translate_stack.current()
     }
 }
+
+// -------------------------------------------------------------------
+// SdiBatch: No-op (use default impl)
+// -------------------------------------------------------------------
+
+impl SdiBatch for Ue5Backend {}
 
 #[cfg(test)]
 mod tests {
