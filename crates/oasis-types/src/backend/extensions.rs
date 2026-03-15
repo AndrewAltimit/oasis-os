@@ -350,8 +350,9 @@ pub trait SdiText: SdiCore {
     /// Draw text with bold and italic style hints.
     ///
     /// Faux-bold is implemented via double-strike (drawing at x and x+1).
-    /// Faux-italic is approximated by drawing with a 1px horizontal offset
-    /// for the top half of the text (skew effect).
+    /// The default implementation ignores `italic` because a true faux-italic
+    /// requires per-scanline skew which cannot be achieved with `draw_text`.
+    /// Backends that support italic rendering should override this method.
     fn draw_text_styled(
         &mut self,
         text: &str,
@@ -360,12 +361,11 @@ pub trait SdiText: SdiCore {
         font_size: u16,
         color: Color,
         bold: bool,
-        italic: bool,
+        _italic: bool,
     ) -> Result<()> {
-        let skew = if italic { 1i32 } else { 0 };
-        self.draw_text(text, x + skew, y, font_size, color)?;
+        self.draw_text(text, x, y, font_size, color)?;
         if bold {
-            self.draw_text(text, x + skew + 1, y, font_size, color)?;
+            self.draw_text(text, x + 1, y, font_size, color)?;
         }
         Ok(())
     }
