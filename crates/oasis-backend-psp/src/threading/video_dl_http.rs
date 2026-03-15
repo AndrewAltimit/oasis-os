@@ -183,6 +183,31 @@ pub(super) unsafe fn http_open_with_redirect(
             }
 
             if let Some(loc) = location_url {
+                // Resolve relative redirect URLs against the current URL.
+                let loc = if loc.starts_with("http://") || loc.starts_with("https://") {
+                    loc
+                } else if loc.starts_with('/') {
+                    // Absolute path — extract scheme + authority from current URL.
+                    let after_scheme = if current_url.starts_with("https://") {
+                        &current_url[8..]
+                    } else if current_url.starts_with("http://") {
+                        &current_url[7..]
+                    } else {
+                        &current_url[..]
+                    };
+                    let authority_end = after_scheme.find('/').unwrap_or(after_scheme.len());
+                    let scheme_and_authority =
+                        &current_url[..current_url.len() - after_scheme.len() + authority_end];
+                    format!("{scheme_and_authority}{loc}")
+                } else {
+                    // Relative path — append to current URL's directory.
+                    let base = current_url
+                        .rfind('/')
+                        .map(|i| &current_url[..=i])
+                        .unwrap_or(&current_url);
+                    format!("{base}{loc}")
+                };
+
                 // Save HTTPS URL for TLS fallback before rewriting.
                 if loc.starts_with("https://") {
                     last_https_redirect = Some(loc.clone());
