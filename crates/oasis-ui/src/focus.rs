@@ -615,9 +615,9 @@ impl SpatialFocusManager {
             return 0;
         }
         match self.focused {
-            Some(cur) => {
-                let pos = order.iter().position(|&i| i == cur).unwrap_or(0);
-                order[(pos + 1) % order.len()]
+            Some(cur) => match order.iter().position(|&i| i == cur) {
+                Some(pos) => order[(pos + 1) % order.len()],
+                None => order[0],
             },
             None => order[0],
         }
@@ -629,13 +629,10 @@ impl SpatialFocusManager {
             return 0;
         }
         match self.focused {
-            Some(cur) => {
-                let pos = order.iter().position(|&i| i == cur).unwrap_or(0);
-                if pos == 0 {
-                    order[order.len() - 1]
-                } else {
-                    order[pos - 1]
-                }
+            Some(cur) => match order.iter().position(|&i| i == cur) {
+                Some(pos) if pos == 0 => order[order.len() - 1],
+                Some(pos) => order[pos - 1],
+                None => order[order.len() - 1],
             },
             None => order[order.len() - 1],
         }

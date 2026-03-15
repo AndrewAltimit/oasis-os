@@ -2,7 +2,7 @@ use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::rc::Rc;
 
-use rquickjs::{Ctx, Function, Object, Result as JsResult};
+use rquickjs::{Ctx, Function, Result as JsResult};
 
 /// In-memory implementation of the Web Storage API (`localStorage`).
 ///
@@ -56,24 +56,6 @@ pub(crate) type SharedStorage = Rc<RefCell<LocalStorage>>;
 /// Install the `localStorage` global object into the given JS context.
 pub(crate) fn install(ctx: &Ctx<'_>, storage: SharedStorage) -> JsResult<()> {
     let globals = ctx.globals();
-    let ls = Object::new(ctx.clone())?;
-
-    // getItem(key) -> string | null
-    let s = Rc::clone(&storage);
-    ls.set(
-        "getItem",
-        Function::new(ctx.clone(), move |key: String| -> rquickjs::Value<'_> {
-            // We cannot return Option<String> directly through the
-            // rquickjs function boundary in a way that maps to JS null,
-            // so we use the __oasis_storage_getItem + JS wrapper approach
-            // below instead.  This closure is replaced by the JS wrapper.
-            let _ = key;
-            let _ = s;
-            unreachable!()
-        })?,
-    )?;
-    // Drop the placeholder — we'll overwrite via the JS wrapper below.
-    drop(ls);
 
     // -- Low-level Rust helpers (primitives only) -----------------------
 
