@@ -72,9 +72,10 @@ impl AacDecoder {
 
         // Reuse the sample buffer if its capacity and spec still match.
         // Recreate when the audio spec changes (rare for AAC-LC) or capacity is insufficient.
-        let need_new = self.sample_buf.as_ref().is_none_or(|sb| {
-            sb.capacity() < duration || self.last_spec.as_ref() != Some(&spec)
-        });
+        let need_new = self
+            .sample_buf
+            .as_ref()
+            .is_none_or(|sb| sb.capacity() < duration || self.last_spec.as_ref() != Some(&spec));
         if need_new {
             self.sample_buf = Some(SampleBuffer::<f32>::new(duration as u64, spec));
             self.last_spec = Some(spec);

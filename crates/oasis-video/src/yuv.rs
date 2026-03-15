@@ -35,10 +35,10 @@ pub fn yuv420_to_rgba(
         // because stride_y >= w.  For U/V: uv_row + pairs (<= (w+1)/2) <= u/v.len()
         // because stride_uv >= ceil(w/2).  For dst: dst_row + w*4 <= rgba.len()
         // by construction (rgba has exactly w*h*4 bytes).
-        debug_assert!(y_row + w <= y.len());
-        debug_assert!(uv_row + w.div_ceil(2) <= u.len());
-        debug_assert!(uv_row + w.div_ceil(2) <= v.len());
-        debug_assert!(dst_row + w * 4 <= rgba.len());
+        assert!(y_row + w <= y.len());
+        assert!(uv_row + w.div_ceil(2) <= u.len());
+        assert!(uv_row + w.div_ceil(2) <= v.len());
+        assert!(dst_row + w * 4 <= rgba.len());
 
         unsafe {
             for p in 0..pairs {
