@@ -238,10 +238,14 @@ pub(super) fn collect_matched_declarations(
     let classes: Vec<&str> = class_str.split_whitespace().collect();
 
     // Use cached lowercased tag name to avoid repeated allocations.
-    let tag_lower = tag_cache
-        .entry(tag.to_string())
-        .or_insert_with(|| tag.to_ascii_lowercase())
-        .clone();
+    // Look up by &str first to avoid allocating on cache hits.
+    let tag_lower = if let Some(cached) = tag_cache.get(tag) {
+        cached.clone()
+    } else {
+        let lower = tag.to_ascii_lowercase();
+        tag_cache.insert(tag.to_string(), lower.clone());
+        lower
+    };
 
     // Get candidate rules from the index.
     let candidates = index.candidates_with_lower(tag, &tag_lower, id, &classes);

@@ -5,6 +5,7 @@
 //! `psp::sync::SpscQueue` is used directly; this module provides a portable
 //! implementation for desktop, WASM, and testing.
 
+use std::cell::UnsafeCell;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 /// A lock-free, bounded single-producer single-consumer (SPSC) ring buffer.
@@ -16,7 +17,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 /// The capacity is fixed at construction time. One slot is always kept empty
 /// to distinguish full from empty, so the usable capacity is `capacity - 1`.
 pub struct SpscQueue<T> {
-    buffer: Vec<Option<T>>,
+    buffer: Vec<UnsafeCell<Option<T>>>,
     capacity: usize,
     head: AtomicUsize, // write position (producer)
     tail: AtomicUsize, // read position (consumer)
@@ -39,7 +40,7 @@ impl<T> SpscQueue<T> {
         let actual_cap = capacity + 1;
         let mut buffer = Vec::with_capacity(actual_cap);
         for _ in 0..actual_cap {
-            buffer.push(None);
+            buffer.push(UnsafeCell::new(None));
         }
         Self {
             buffer,
@@ -61,9 +62,9 @@ impl<T> SpscQueue<T> {
         }
 
         // SAFETY: Only the producer writes to buffer[head], and we've verified
-        // the slot is not occupied (next_head != tail).
-        let slot = unsafe { &mut *(self.buffer.as_ptr().add(head) as *mut Option<T>) };
-        *slot = Some(item);
+        // the slot is not occupied (next_head != tail). UnsafeCell permits
+        // interior mutability through a shared reference.
+        unsafe { *self.buffer[head].get() = Some(item) };
 
         self.head.store(next_head, Ordering::Release);
         Ok(())
@@ -79,9 +80,9 @@ impl<T> SpscQueue<T> {
         }
 
         // SAFETY: Only the consumer reads from buffer[tail], and we've verified
-        // the slot is occupied (tail != head).
-        let slot = unsafe { &mut *(self.buffer.as_ptr().add(tail) as *mut Option<T>) };
-        let item = slot.take();
+        // the slot is occupied (tail != head). UnsafeCell permits interior
+        // mutability through a shared reference.
+        let item = unsafe { (*self.buffer[tail].get()).take() };
 
         let next_tail = (tail + 1) % self.capacity;
         self.tail.store(next_tail, Ordering::Release);
