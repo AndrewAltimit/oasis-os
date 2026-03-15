@@ -239,7 +239,6 @@ To re-enable at your own risk: set `CODEX_ENABLED=true` in your environment.
 
 - `docs/design.md` -- Technical design document v2.4 (~1500 lines)
 - `docs/skin-authoring.md` -- Skin creation guide with full TOML reference
-- `docs/psp-modernization-plan.md` -- PSP backend modernization roadmap (9 phases, 40 steps)
 - `skins/classic/` -- Classic skin TOML configs (skin.toml, layout.toml, features.toml, theme.toml)
 - `skins/xp/` -- XP skin TOML configs (Windows XP Luna-inspired theme with start menu)
 - `skins/macos/` -- macOS-inspired desktop skin
@@ -265,13 +264,9 @@ Key documentation for deeper context on specific topics. Read as needed rather t
 - [`docs/adr/005-toml-skin-system.md`](docs/adr/005-toml-skin-system.md) -- ADR: TOML skin engine
 
 ### Plans & Roadmaps
-- [`docs/psp-modernization-plan.md`](docs/psp-modernization-plan.md) -- PSP backend modernization (9 phases, 40 steps)
 - [`docs/comprehensive-improvements-plan-v2.md`](docs/comprehensive-improvements-plan-v2.md) -- Cross-crate improvement plan
 - [`docs/browser-improvement-plan-r3.md`](docs/browser-improvement-plan-r3.md) -- Browser engine improvement plan
-- [`docs/app-extraction-plan.md`](docs/app-extraction-plan.md) -- App crate extraction from oasis-core
 - [`docs/testing-gap-analysis.md`](docs/testing-gap-analysis.md) -- Test coverage gap analysis
-- [`docs/prd-oasis-video-integration.md`](docs/prd-oasis-video-integration.md) -- Video decode integration PRD
-- [`docs/internet-archive-tv-guide-plan.md`](docs/internet-archive-tv-guide-plan.md) -- TV Guide streaming plan
 
 ### Guides
 - [`docs/getting-started.md`](docs/getting-started.md) -- Getting started guide
