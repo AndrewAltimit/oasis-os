@@ -16,7 +16,7 @@ use std::time::Instant;
 /// A thread-safe presentation-timestamp clock for A/V synchronization.
 ///
 /// Audio PTS is the reference (master) clock. The video renderer queries
-/// [`should_display_frame`](Self::should_display_frame) to decide whether a
+/// [`Self::should_display_frame`](Self::should_display_frame) to decide whether a
 /// decoded video frame should be presented.
 ///
 /// Uses `Mutex<i64>` for PTS values instead of `AtomicI64` to support
@@ -79,7 +79,7 @@ impl SyncClock {
     ///
     /// When audio PTS has been updated at least once (non-zero), it is
     /// returned directly as the authoritative time source.  Before the
-    /// first audio update, the wall-clock elapsed time since [`start`]
+    /// first audio update, the wall-clock elapsed time since [`Self::start`]
     /// is used as a fallback so that video-only streams still advance.
     ///
     /// While paused, the value is frozen at the last known position.
@@ -126,8 +126,8 @@ impl SyncClock {
         frame_pts_us <= self.current_pts_us()
     }
 
-    /// Pause the clock. While paused, [`should_display_frame`] always
-    /// returns `false` and [`current_pts_us`] is frozen.
+    /// Pause the clock. While paused, [`Self::should_display_frame`] always
+    /// returns `false` and [`Self::current_pts_us`] is frozen.
     pub fn pause(&self) {
         if self.paused.swap(true, Ordering::AcqRel) {
             return; // Already paused.
@@ -155,7 +155,7 @@ impl SyncClock {
 
     /// Reset the clock to its initial state.
     ///
-    /// Clears the start time, audio PTS, and pause state. Call [`start`]
+    /// Clears the start time, audio PTS, and pause state. Call [`Self::start`]
     /// again before reusing.
     pub fn reset(&self) {
         *self.audio_pts_us.lock().unwrap_or_else(|e| e.into_inner()) = 0;
