@@ -979,6 +979,7 @@ dependencies = [
  "log",
  "oasis-audio",
  "oasis-core",
+ "oasis-rasterize",
  "oasis-shader",
  "oasis-types",
  "rmp3",

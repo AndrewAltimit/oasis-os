@@ -4,6 +4,7 @@ use std::rc::Rc;
 use rquickjs::{Context, Runtime};
 
 use crate::console::{ConsoleBuffer, ConsoleEntry, ConsoleLevel};
+use crate::timers::TimerQueue;
 
 /// A simple representation of a JavaScript return value.
 #[derive(Debug, Clone, PartialEq)]
@@ -33,6 +34,7 @@ pub struct JsEngine {
     _runtime: Runtime,
     context: Context,
     console_buf: ConsoleBuffer,
+    timer_queue: Rc<RefCell<TimerQueue>>,
 }
 
 impl JsEngine {
@@ -54,10 +56,12 @@ impl JsEngine {
         })?;
 
         let console_buf: ConsoleBuffer = Rc::new(RefCell::new(Vec::new()));
+        let timer_queue = Rc::new(RefCell::new(TimerQueue::new()));
 
         let buf = Rc::clone(&console_buf);
+        let tq = Rc::clone(&timer_queue);
         context
-            .with(|ctx| crate::console::install(&ctx, buf))
+            .with(|ctx| crate::console::install(&ctx, buf, tq))
             .map_err(|e| JsError {
                 message: format!("failed to install globals: {e}"),
                 stack: None,
@@ -67,6 +71,7 @@ impl JsEngine {
             _runtime: runtime,
             context,
             console_buf,
+            timer_queue,
         })
     }
 
@@ -74,6 +79,8 @@ impl JsEngine {
     pub fn eval(&self, script: &str) -> Result<JsValue, JsError> {
         self.context.with(|ctx| {
             let result: Result<rquickjs::Value<'_>, rquickjs::Error> = ctx.eval(script);
+            // Drain microtask queue (promise callbacks) after eval.
+            while ctx.execute_pending_job() {}
             match result {
                 Ok(val) => Ok(convert_value(&val)),
                 Err(err) => {
@@ -102,6 +109,32 @@ impl JsEngine {
     /// Take and clear the buffered console output.
     pub fn take_console_output(&self) -> Vec<ConsoleEntry> {
         std::mem::take(&mut self.console_buf.borrow_mut())
+    }
+
+    /// Advance timers by `dt_ms` and execute any callbacks that fire.
+    ///
+    /// Call this once per frame from the host (e.g. browser widget
+    /// tick).  Returns the number of callbacks that fired.
+    pub fn tick_timers(&self, dt_ms: f64) -> usize {
+        let callbacks = self.timer_queue.borrow_mut().tick(dt_ms);
+        let count = callbacks.len();
+        for cb in callbacks {
+            // Errors in timer callbacks are logged to the console
+            // buffer by `eval`, so we can ignore them here.
+            let _ = self.eval(&cb);
+        }
+        // Drain the promise microtask queue after timer callbacks.
+        self.drain_microtasks();
+        count
+    }
+
+    /// Execute all pending microtasks (promise continuations).
+    ///
+    /// QuickJS buffers resolved-promise `.then()` callbacks internally.
+    /// Call this after any JS execution that may have created or
+    /// resolved promises to ensure they run synchronously.
+    pub fn drain_microtasks(&self) {
+        self.context.with(|ctx| while ctx.execute_pending_job() {});
     }
 
     /// Run a closure with access to the raw rquickjs context.
@@ -265,20 +298,89 @@ mod tests {
     }
 
     #[test]
-    fn settimeout_stub() {
+    fn settimeout_returns_id() {
         let engine = JsEngine::new(8 * 1024 * 1024).unwrap();
         let val = engine.eval("setTimeout(() => {}, 100)").unwrap();
-        assert_eq!(val, JsValue::Int(0));
-        // Verify warning was logged.
+        // Timer IDs start at 1.
+        assert_eq!(val, JsValue::Int(1));
+        // No warning — stubs are gone.
         let out = engine.console_output();
-        assert!(out.iter().any(|e| e.level == ConsoleLevel::Warn));
+        assert!(!out.iter().any(|e| e.level == ConsoleLevel::Warn));
     }
 
     #[test]
-    fn setinterval_stub() {
+    fn setinterval_returns_id() {
         let engine = JsEngine::new(8 * 1024 * 1024).unwrap();
         let val = engine.eval("setInterval(() => {}, 100)").unwrap();
-        assert_eq!(val, JsValue::Int(0));
+        assert_eq!(val, JsValue::Int(1));
+    }
+
+    #[test]
+    fn settimeout_fires_on_tick() {
+        let engine = JsEngine::new(8 * 1024 * 1024).unwrap();
+        engine
+            .eval("setTimeout(function(){ console.log('fired'); }, 50)")
+            .unwrap();
+        // Not enough time yet.
+        engine.tick_timers(30.0);
+        let out = engine.take_console_output();
+        assert!(
+            !out.iter().any(|e| e.message == "fired"),
+            "should not fire before delay"
+        );
+
+        // Now exceed the delay.
+        engine.tick_timers(30.0);
+        let out = engine.take_console_output();
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].message, "fired");
+    }
+
+    #[test]
+    fn setinterval_fires_multiple() {
+        let engine = JsEngine::new(8 * 1024 * 1024).unwrap();
+        engine
+            .eval(
+                "var _iv_count = 0; \
+                 setInterval(function(){ \
+                     _iv_count++; \
+                     console.log('tick' + _iv_count); \
+                 }, 100)",
+            )
+            .unwrap();
+
+        engine.tick_timers(100.0);
+        let out = engine.take_console_output();
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].message, "tick1");
+
+        engine.tick_timers(100.0);
+        let out = engine.take_console_output();
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].message, "tick2");
+
+        engine.tick_timers(100.0);
+        let out = engine.take_console_output();
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].message, "tick3");
+    }
+
+    #[test]
+    fn cleartimeout_prevents_fire() {
+        let engine = JsEngine::new(8 * 1024 * 1024).unwrap();
+        engine
+            .eval(
+                "var _tid = setTimeout(\
+                     function(){ console.log('nope'); }, 50); \
+                 clearTimeout(_tid);",
+            )
+            .unwrap();
+        engine.tick_timers(100.0);
+        let out = engine.take_console_output();
+        assert!(
+            !out.iter().any(|e| e.message == "nope"),
+            "cleared timeout must not fire"
+        );
     }
 
     #[test]
@@ -404,5 +506,57 @@ mod tests {
             .unwrap();
         assert_eq!(engine.eval("counter()").unwrap(), JsValue::Int(1));
         assert_eq!(engine.eval("counter()").unwrap(), JsValue::Int(2));
+    }
+
+    // -- Promise / microtask tests --
+
+    #[test]
+    fn promise_then_runs_synchronously() {
+        let engine = JsEngine::new(8 * 1024 * 1024).unwrap();
+        engine
+            .eval(
+                "Promise.resolve(42).then(function(v) { \
+                 console.log('resolved ' + v); \
+                 })",
+            )
+            .unwrap();
+        let out = engine.console_output();
+        assert!(
+            out.iter().any(|e| e.message == "resolved 42"),
+            "promise .then should run after eval drains microtasks"
+        );
+    }
+
+    #[test]
+    fn promise_chain() {
+        let engine = JsEngine::new(8 * 1024 * 1024).unwrap();
+        engine
+            .eval(
+                "Promise.resolve(1)\
+                 .then(function(v) { return v + 1; })\
+                 .then(function(v) { console.log('chain ' + v); })",
+            )
+            .unwrap();
+        let out = engine.console_output();
+        assert!(
+            out.iter().any(|e| e.message == "chain 2"),
+            "chained promises should execute"
+        );
+    }
+
+    #[test]
+    fn promise_catch() {
+        let engine = JsEngine::new(8 * 1024 * 1024).unwrap();
+        engine
+            .eval(
+                "Promise.reject('err')\
+                 .catch(function(e) { console.log('caught ' + e); })",
+            )
+            .unwrap();
+        let out = engine.console_output();
+        assert!(
+            out.iter().any(|e| e.message == "caught err"),
+            "promise .catch should run"
+        );
     }
 }

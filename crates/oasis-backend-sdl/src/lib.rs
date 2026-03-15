@@ -35,7 +35,11 @@ pub use oasis_types::geometry::ClipRect;
 pub use network::SdlNetworkBackend;
 pub use sdl_audio::SdlAudioBackend;
 
+use oasis_rasterize::GlyphCacheKey;
 use oasis_types::geometry::rounded_rect_inset;
+
+/// Maximum number of cached glyph textures before LRU eviction kicks in.
+const MAX_GLYPH_CACHE_SIZE: usize = 2048;
 
 // Re-export input helpers for tests.
 #[cfg(test)]
@@ -81,6 +85,12 @@ pub struct SdlBackend {
     // The explicit Drop impl also clears this map, but field order provides
     // defense-in-depth. Reordering these fields without the Drop impl is UB.
     pub(crate) textures: HashMap<u64, Texture<'static>>,
+    /// Maps glyph key to a cached SDL texture ID (lives in `textures`).
+    glyph_cache: HashMap<GlyphCacheKey, u64>,
+    /// LRU access timestamps for glyph cache eviction.
+    glyph_access: HashMap<GlyphCacheKey, u64>,
+    /// Monotonic counter for LRU access tracking.
+    glyph_access_counter: u64,
     // SAFETY: Must be declared after `textures` -- see comment above.
     texture_creator: TextureCreator<WindowContext>,
     next_texture_id: u64,
@@ -110,6 +120,16 @@ impl SdlBackend {
                 sdl3::sys::render::SDL_SetRenderVSync(canvas.raw(), 1);
             }
         }
+
+        // Enable SDL3 text input so TextInput events are generated.
+        // Without this call, SDL3 only produces key-down/key-up events
+        // and regular character typing does not reach the application.
+        // SAFETY: canvas.window().raw() returns the valid SDL_Window
+        // pointer owned by the canvas.
+        unsafe {
+            sdl3::sys::keyboard::SDL_StartTextInput(canvas.window().raw());
+        }
+
         let event_pump = sdl.event_pump().backend_err()?;
 
         log::info!("SDL3 backend initialized: {width}x{height}");
@@ -118,6 +138,9 @@ impl SdlBackend {
             canvas,
             event_pump,
             textures: HashMap::new(),
+            glyph_cache: HashMap::new(),
+            glyph_access: HashMap::new(),
+            glyph_access_counter: 0,
             texture_creator,
             next_texture_id: 1,
             clip_stack: ClipStack::new(width, height),
@@ -145,6 +168,100 @@ impl SdlBackend {
     /// Apply cumulative translation to coordinates.
     pub(crate) fn translate(&self, x: i32, y: i32) -> (i32, i32) {
         self.translate_stack.translate(x, y)
+    }
+
+    /// Render a single glyph to an RGBA buffer and load it as an SDL
+    /// texture. Returns the texture ID stored in `self.textures`.
+    fn render_glyph_texture(
+        &mut self,
+        ch: char,
+        font_size: u16,
+        color: Color,
+        bold: bool,
+        italic: bool,
+    ) -> Result<u64> {
+        let fs = font_size.max(1) as i32;
+        let advance = oasis_types::bitmap_font::glyph_advance_scaled(ch, font_size) as i32;
+        let bold_extra = if bold { 1 } else { 0 };
+        let italic_extra = if italic { fs / 32 + 1 } else { 0 };
+        let gw = (advance + bold_extra + italic_extra).max(1) as u32;
+        let gh = font_size.max(1) as u32;
+        let mut rgba = vec![0u8; (gw * gh * 4) as usize];
+
+        let glyph_data = font::glyph(ch);
+        let (left_pad, _) = font::glyph_metrics(ch);
+        let left_pad = left_pad as i32;
+
+        for row in 0..8i32 {
+            let bits = glyph_data[row as usize];
+            if bits == 0 {
+                continue;
+            }
+            let oy0 = row * fs / 8;
+            let oy1 = (row + 1) * fs / 8;
+            let italic_off = if italic { (7 - row) * fs / 32 } else { 0 };
+
+            for col in 0..8i32 {
+                if bits & (0x80 >> col) == 0 {
+                    continue;
+                }
+                let src_col = col - left_pad;
+                let ox0 = src_col * fs / 8;
+                let ox1 = (src_col + 1) * fs / 8;
+                // Fill the scaled rectangle in the buffer.
+                for py in oy0..oy1.max(oy0 + 1) {
+                    for px in ox0..ox1.max(ox0 + 1) {
+                        let bx = px + italic_off;
+                        Self::set_glyph_pixel(&mut rgba, gw, gh, bx, py, color);
+                        if bold {
+                            Self::set_glyph_pixel(&mut rgba, gw, gh, bx + 1, py, color);
+                        }
+                    }
+                }
+            }
+        }
+
+        let mut texture = self
+            .texture_creator
+            .create_texture_streaming(PixelFormat::ABGR8888, gw, gh)
+            .backend_err()?;
+        texture
+            .with_lock(None, |buf: &mut [u8], pitch: usize| {
+                let row_bytes = (gw as usize) * 4;
+                for y in 0..gh as usize {
+                    let src_start = y * row_bytes;
+                    let dst_start = y * pitch;
+                    buf[dst_start..dst_start + row_bytes]
+                        .copy_from_slice(&rgba[src_start..src_start + row_bytes]);
+                }
+            })
+            .backend_err()?;
+        texture.set_blend_mode(sdl3::render::BlendMode::Blend);
+
+        // SAFETY: The texture borrows from self.texture_creator
+        // which lives in the same struct. The explicit `Drop` impl
+        // clears all textures before texture_creator is dropped.
+        let texture: Texture<'static> = unsafe { std::mem::transmute(texture) };
+
+        let id = self.next_texture_id;
+        self.next_texture_id += 1;
+        self.textures.insert(id, texture);
+        Ok(id)
+    }
+
+    /// Write a single pixel into a glyph RGBA buffer, with bounds
+    /// checking.
+    fn set_glyph_pixel(buf: &mut [u8], w: u32, h: u32, x: i32, y: i32, color: Color) {
+        if x < 0 || y < 0 || x >= w as i32 || y >= h as i32 {
+            return;
+        }
+        let offset = (y as usize * w as usize + x as usize) * 4;
+        if offset + 3 < buf.len() {
+            buf[offset] = color.r;
+            buf[offset + 1] = color.g;
+            buf[offset + 2] = color.b;
+            buf[offset + 3] = color.a;
+        }
     }
 
     /// Set the SDL draw color with optional blend mode.
@@ -295,47 +412,46 @@ impl SdiBackend for SdlBackend {
         bold: bool,
         italic: bool,
     ) -> Result<()> {
+        if text.is_empty() || color.a == 0 || font_size == 0 {
+            return Ok(());
+        }
         let (tx, ty) = self.translate(x, y);
-        let fs = font_size.max(1) as i32;
-        let sdl_color = sdl3::pixels::Color::RGBA(color.r, color.g, color.b, color.a);
-        self.canvas.set_draw_color(sdl_color);
-
         let mut cx = tx;
+
         for ch in text.chars() {
-            let glyph_data = font::glyph(ch);
-            let (left_pad, _advance) = font::glyph_metrics(ch);
-            let left_pad = left_pad as i32;
-            for row in 0..8i32 {
-                let bits = glyph_data[row as usize];
-                if bits == 0 {
-                    continue;
-                }
-                let oy0 = row * fs / 8;
-                let oy1 = (row + 1) * fs / 8;
-                let rh = (oy1 - oy0).max(1);
-                // Faux-italic: shift top rows rightward (~12-degree).
-                let italic_offset = if italic { (7 - row) * fs / 32 } else { 0 };
-                for col in 0..8i32 {
-                    if bits & (0x80 >> col) != 0 {
-                        let src_col = col - left_pad;
-                        let ox0 = src_col * fs / 8;
-                        let ox1 = (src_col + 1) * fs / 8;
-                        let rw = (ox1 - ox0).max(1);
-                        let px = cx + ox0 + italic_offset;
-                        let py = ty + oy0;
-                        if rw == 1 && rh == 1 {
-                            let _ = self.canvas.draw_point(fpoint(px, py));
-                        } else {
-                            let _ = self.canvas.fill_rect(frect(px, py, rw as u32, rh as u32));
+            let key = GlyphCacheKey::new(ch, font_size, color, bold, italic);
+            if self.glyph_cache.contains_key(&key) {
+                // Cache hit: update LRU access counter.
+                self.glyph_access_counter += 1;
+                self.glyph_access.insert(key, self.glyph_access_counter);
+            } else {
+                // Evict LRU entry when cache is full.
+                while self.glyph_cache.len() >= MAX_GLYPH_CACHE_SIZE {
+                    if let Some((&oldest_key, _)) =
+                        self.glyph_access.iter().min_by_key(|&(_, &ts)| ts)
+                    {
+                        if let Some(tex_id) = self.glyph_cache.remove(&oldest_key) {
+                            self.textures.remove(&tex_id);
                         }
-                        if bold {
-                            let _ = self.canvas.draw_point(fpoint(px + 1, py));
-                            if rh > 1 {
-                                let _ = self.canvas.fill_rect(frect(px + 1, py, 1, rh as u32));
-                            }
-                        }
+                        self.glyph_access.remove(&oldest_key);
+                    } else {
+                        break;
                     }
                 }
+                // Render the glyph to a small RGBA buffer.
+                let tex_id = self.render_glyph_texture(ch, font_size, color, bold, italic)?;
+                self.glyph_cache.insert(key, tex_id);
+                self.glyph_access_counter += 1;
+                self.glyph_access.insert(key, self.glyph_access_counter);
+            }
+            // Blit the cached glyph texture.
+            if let Some(&tex_id) = self.glyph_cache.get(&key)
+                && let Some(texture) = self.textures.get(&tex_id)
+            {
+                let query = texture.query();
+                let _ = self
+                    .canvas
+                    .copy(texture, None, frect(cx, ty, query.width, query.height));
             }
             cx += oasis_types::bitmap_font::glyph_advance_scaled(ch, font_size) as i32;
         }
@@ -736,6 +852,8 @@ impl Drop for SdlBackend {
         // would depend on struct field declaration order (Rust drops fields in
         // declaration order), which is a fragile invariant. Clearing here makes
         // the safety guarantee explicit and immune to field reordering.
+        self.glyph_cache.clear();
+        self.glyph_access.clear();
         self.textures.clear();
     }
 }
@@ -1240,5 +1358,75 @@ mod tests {
             .chunks(4)
             .all(|px| px[0] < 50 && px[1] < 50 && px[2] < 50);
         assert!(outside_dark, "outside clip should remain black");
+    }
+
+    // ---------------------------------------------------------------
+    // Glyph cache tests
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn glyph_cache_key_roundtrip() {
+        // Verify that GlyphCacheKey packing produces distinct keys
+        // for different parameters and equal keys for the same
+        // parameters.
+        let c = Color::rgba(255, 128, 64, 200);
+        let k1 = GlyphCacheKey::new('A', 16, c, false, false);
+        let k2 = GlyphCacheKey::new('A', 16, c, false, false);
+        assert_eq!(k1, k2);
+        assert_eq!(k1.raw(), k2.raw());
+
+        // Different character produces a different key.
+        let k3 = GlyphCacheKey::new('B', 16, c, false, false);
+        assert_ne!(k1, k3);
+
+        // Different font size produces a different key.
+        let k4 = GlyphCacheKey::new('A', 24, c, false, false);
+        assert_ne!(k1, k4);
+
+        // Bold flag produces a different key.
+        let k5 = GlyphCacheKey::new('A', 16, c, true, false);
+        assert_ne!(k1, k5);
+
+        // Italic flag produces a different key.
+        let k6 = GlyphCacheKey::new('A', 16, c, false, true);
+        assert_ne!(k1, k6);
+    }
+
+    #[test]
+    fn glyph_cache_fields_initialized() {
+        // Verify that glyph cache fields exist and are properly
+        // initialized (empty maps and zero counter). This test
+        // can only run when an SDL display is available.
+        let backend = match try_create_backend() {
+            Some(b) => b,
+            None => return,
+        };
+        assert!(backend.glyph_cache.is_empty());
+        assert!(backend.glyph_access.is_empty());
+        assert_eq!(backend.glyph_access_counter, 0);
+    }
+
+    #[test]
+    #[ignore]
+    fn glyph_cache_populates_on_draw() {
+        let mut backend = match try_create_backend() {
+            Some(b) => b,
+            None => return,
+        };
+        backend.clear(Color::BLACK).unwrap();
+        assert!(backend.glyph_cache.is_empty());
+        backend
+            .draw_text_styled("AB", 0, 0, 16, Color::WHITE, false, false)
+            .unwrap();
+        // Two distinct characters should create two cache entries.
+        assert_eq!(backend.glyph_cache.len(), 2);
+        assert_eq!(backend.glyph_access.len(), 2);
+
+        // Drawing the same text again should not increase cache
+        // size (cache hits).
+        backend
+            .draw_text_styled("AB", 0, 0, 16, Color::WHITE, false, false)
+            .unwrap();
+        assert_eq!(backend.glyph_cache.len(), 2);
     }
 }
