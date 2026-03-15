@@ -226,9 +226,14 @@ impl SdlBackend {
             .create_texture_streaming(PixelFormat::ABGR8888, gw, gh)
             .backend_err()?;
         texture
-            .with_lock(None, |buf: &mut [u8], _pitch: usize| {
-                let len = rgba.len().min(buf.len());
-                buf[..len].copy_from_slice(&rgba[..len]);
+            .with_lock(None, |buf: &mut [u8], pitch: usize| {
+                let row_bytes = (gw as usize) * 4;
+                for y in 0..gh as usize {
+                    let src_start = y * row_bytes;
+                    let dst_start = y * pitch;
+                    buf[dst_start..dst_start + row_bytes]
+                        .copy_from_slice(&rgba[src_start..src_start + row_bytes]);
+                }
             })
             .backend_err()?;
         texture.set_blend_mode(sdl3::render::BlendMode::Blend);

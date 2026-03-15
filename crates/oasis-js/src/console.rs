@@ -200,9 +200,11 @@ globalThis.setInterval = function(cb, delay) {
 };
 globalThis.clearTimeout = function(id) {
     __oasis_clear_timer(id);
+    delete globalThis['__oasis_timer_cb_' + id];
 };
 globalThis.clearInterval = function(id) {
     __oasis_clear_timer(id);
+    delete globalThis['__oasis_timer_cb_' + id];
 };
 "#,
     )?;
