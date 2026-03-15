@@ -182,7 +182,8 @@ impl SdiBatch for RecordingBackend {}
 
 impl SdiClipTransform for RecordingBackend {
     fn push_clip_rect(&mut self, x: i32, y: i32, w: u32, h: u32) -> Result<()> {
-        let clip = ClipRect { x, y, w, h };
+        let (tx, ty) = self.translate_stack.translate(x, y);
+        let clip = ClipRect { x: tx, y: ty, w, h };
         self.clip_stack.push(clip);
         self.commands.push(DrawCommand::PushClip { x, y, w, h });
         Ok(())
