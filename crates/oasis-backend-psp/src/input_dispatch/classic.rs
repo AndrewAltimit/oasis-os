@@ -157,7 +157,10 @@ pub(crate) fn dispatch_classic(
                 Ok(Some(text)) => {
                     term.input = text;
                 },
-                Ok(None) | Err(_) => {},
+                Ok(None) => {},
+                Err(e) => {
+                    psp::dprintln!("OSK dialog error: {e}");
+                },
             }
             backend.reinit_gu_frame();
         },
@@ -454,7 +457,10 @@ pub(crate) fn dispatch_classic(
                     br.url = text;
                     br.status_msg = String::from("Press X to load");
                 },
-                Ok(None) | Err(_) => {},
+                Ok(None) => {},
+                Err(e) => {
+                    psp::dprintln!("OSK dialog error: {e}");
+                },
             }
             backend.reinit_gu_frame();
         },

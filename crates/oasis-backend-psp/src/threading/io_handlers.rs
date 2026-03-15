@@ -62,10 +62,10 @@ fn handle_load_texture(path: String, max_w: i32, max_h: i32) {
                 });
             },
         },
-        Err(_) => {
+        Err(e) => {
             let _ = IO_RESP_QUEUE.push(IoResponse::Error {
                 path,
-                msg: "file read failed".into(),
+                msg: format!("file read failed: {e}"),
             });
         },
     }
@@ -76,10 +76,10 @@ fn handle_read_file(path: String) {
         Ok(data) => {
             let _ = IO_RESP_QUEUE.push(IoResponse::FileReady { path, data });
         },
-        Err(_) => {
+        Err(e) => {
             let _ = IO_RESP_QUEUE.push(IoResponse::Error {
                 path,
-                msg: "file not found".into(),
+                msg: format!("file read failed: {e}"),
             });
         },
     }

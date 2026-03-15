@@ -28,9 +28,9 @@ pub const DEFAULT_VIEWPORT_HEIGHT: u32 = 272;
 
 // -- types --
 pub use types::{
-    BITMAP_GLYPH_HEIGHT, BITMAP_GLYPH_WIDTH, BackendErrExt, Color, DrawCommand, GradientStyle,
-    TextMetrics, TextureId, arc_segments, backend_require, bitmap_measure_text, cos_approx_f32,
-    sin_approx_f32, texture_not_found, validate_rgba_data,
+    ArcParams, BITMAP_GLYPH_HEIGHT, BITMAP_GLYPH_WIDTH, BackendErrExt, Color, DashStyle,
+    DrawCommand, GradientStyle, StrokeStyle, TextMetrics, TextureId, arc_segments, backend_require,
+    bitmap_measure_text, cos_approx_f32, sin_approx_f32, texture_not_found, validate_rgba_data,
 };
 
 // -- core trait --

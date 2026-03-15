@@ -4,6 +4,8 @@ use std::rc::Rc;
 use rquickjs::{Context, Runtime};
 
 use crate::console::{ConsoleBuffer, ConsoleEntry, ConsoleLevel};
+use crate::fetch::{FetchHandler, SharedFetchHandler};
+use crate::storage::{LocalStorage, SharedStorage};
 use crate::timers::TimerQueue;
 
 /// A simple representation of a JavaScript return value.
@@ -35,6 +37,8 @@ pub struct JsEngine {
     context: Context,
     console_buf: ConsoleBuffer,
     timer_queue: Rc<RefCell<TimerQueue>>,
+    storage: SharedStorage,
+    fetch_handler: SharedFetchHandler,
 }
 
 impl JsEngine {
@@ -57,11 +61,20 @@ impl JsEngine {
 
         let console_buf: ConsoleBuffer = Rc::new(RefCell::new(Vec::new()));
         let timer_queue = Rc::new(RefCell::new(TimerQueue::new()));
+        let storage: SharedStorage = Rc::new(RefCell::new(LocalStorage::new()));
+        let fetch_handler: SharedFetchHandler = Rc::new(RefCell::new(None));
 
         let buf = Rc::clone(&console_buf);
         let tq = Rc::clone(&timer_queue);
+        let st = Rc::clone(&storage);
+        let fh = Rc::clone(&fetch_handler);
         context
-            .with(|ctx| crate::console::install(&ctx, buf, tq))
+            .with(|ctx| -> rquickjs::Result<()> {
+                crate::console::install(&ctx, buf, tq)?;
+                crate::storage::install(&ctx, st)?;
+                crate::fetch::install(&ctx, fh)?;
+                Ok(())
+            })
             .map_err(|e| JsError {
                 message: format!("failed to install globals: {e}"),
                 stack: None,
@@ -72,6 +85,8 @@ impl JsEngine {
             context,
             console_buf,
             timer_queue,
+            storage,
+            fetch_handler,
         })
     }
 
@@ -109,6 +124,18 @@ impl JsEngine {
     /// Take and clear the buffered console output.
     pub fn take_console_output(&self) -> Vec<ConsoleEntry> {
         std::mem::take(&mut self.console_buf.borrow_mut())
+    }
+
+    /// Return a shared reference to the in-memory `localStorage` backing
+    /// store.  Useful for snapshotting or persisting storage externally.
+    pub fn local_storage(&self) -> &SharedStorage {
+        &self.storage
+    }
+
+    /// Install a [`FetchHandler`] that will service `fetch()` calls from
+    /// JavaScript.  Replaces any previously installed handler.
+    pub fn install_fetch_handler(&self, handler: Box<dyn FetchHandler>) {
+        *self.fetch_handler.borrow_mut() = Some(handler);
     }
 
     /// Advance timers by `dt_ms` and execute any callbacks that fire.

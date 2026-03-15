@@ -446,7 +446,10 @@ impl TlsHttpReader {
 
         match embedded_io::Read::read(&mut self.tls, buf) {
             Ok(n) => Ok(n as i32),
-            Err(_) => Ok(0), // treat errors as EOF
+            Err(e) => {
+                io_log(&format!("[IO-TLS] read error (treating as EOF): {e:?}"));
+                Ok(0)
+            },
         }
     }
 

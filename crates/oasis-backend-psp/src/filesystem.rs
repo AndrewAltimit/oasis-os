@@ -22,13 +22,19 @@ pub fn list_directory(path: &str) -> Vec<FileEntry> {
 
     let dir = match psp::io::read_dir(path) {
         Ok(d) => d,
-        Err(_) => return entries,
+        Err(e) => {
+            psp::dprintln!("list_directory({path}): open failed: {e}");
+            return entries;
+        },
     };
 
     for result in dir {
         let entry = match result {
             Ok(e) => e,
-            Err(_) => break,
+            Err(e) => {
+                psp::dprintln!("list_directory({path}): entry read error: {e}");
+                break;
+            },
         };
 
         let name = match core::str::from_utf8(entry.name()) {

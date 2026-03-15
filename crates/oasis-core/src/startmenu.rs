@@ -231,10 +231,8 @@ impl StartMenuState {
         let col = self.selected % cols;
 
         match button {
-            Button::Up => {
-                if row > 0 {
-                    self.selected -= cols;
-                }
+            Button::Up if row > 0 => {
+                self.selected -= cols;
             },
             Button::Down => {
                 let new_idx = self.selected + cols;
@@ -242,15 +240,11 @@ impl StartMenuState {
                     self.selected = new_idx;
                 }
             },
-            Button::Left => {
-                if col > 0 {
-                    self.selected -= 1;
-                }
+            Button::Left if col > 0 => {
+                self.selected -= 1;
             },
-            Button::Right => {
-                if col + 1 < cols && self.selected + 1 < self.items.len() {
-                    self.selected += 1;
-                }
+            Button::Right if col + 1 < cols && self.selected + 1 < self.items.len() => {
+                self.selected += 1;
             },
             Button::Confirm => {
                 if let Some(item) = self.items.get(self.selected) {

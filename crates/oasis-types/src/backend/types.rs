@@ -326,6 +326,43 @@ impl GradientStyle {
 }
 
 // ---------------------------------------------------------------------------
+// Shape parameter structs (reduce argument counts in rendering functions)
+// ---------------------------------------------------------------------------
+
+/// Parameters for stroking (drawing outlines of) shapes.
+#[derive(Debug, Clone, Copy)]
+pub struct StrokeStyle {
+    /// Stroke width in pixels.
+    pub width: u16,
+    /// Stroke color.
+    pub color: Color,
+}
+
+/// Parameters for arc rendering.
+#[derive(Debug, Clone, Copy)]
+pub struct ArcParams {
+    /// Center X coordinate.
+    pub cx: i32,
+    /// Center Y coordinate.
+    pub cy: i32,
+    /// Arc radius in pixels.
+    pub radius: u16,
+    /// Start angle in radians.
+    pub start_angle: f32,
+    /// End angle in radians.
+    pub end_angle: f32,
+}
+
+/// Parameters for a dashed line.
+#[derive(Debug, Clone, Copy)]
+pub struct DashStyle {
+    /// Length of each dash in pixels.
+    pub dash: u16,
+    /// Length of each gap in pixels.
+    pub gap: u16,
+}
+
+// ---------------------------------------------------------------------------
 // Vector graphics helpers (used by default trait implementations)
 // ---------------------------------------------------------------------------
 
@@ -376,40 +413,6 @@ pub trait BackendErrExt<T> {
 impl<T, E: std::fmt::Display> BackendErrExt<T> for std::result::Result<T, E> {
     fn backend_err(self) -> Result<T> {
         self.map_err(|e| crate::error::OasisError::Backend(e.to_string().into()))
-    }
-}
-
-/// Extension trait for converting errors with `Debug` formatting.
-///
-/// Useful for WASM `JsValue` errors that implement `Debug` but not `Display`.
-#[allow(dead_code)]
-pub trait BackendErrDebug<T> {
-    /// Convert the error to `OasisError::Backend` using `Debug` formatting.
-    fn backend_err_debug(self) -> Result<T>;
-}
-
-impl<T, E: std::fmt::Debug> BackendErrDebug<T> for std::result::Result<T, E> {
-    fn backend_err_debug(self) -> Result<T> {
-        self.map_err(|e| crate::error::OasisError::Backend(format!("{e:?}").into()))
-    }
-}
-
-/// Extension trait for adding context to backend errors.
-///
-/// Adds a prefix message to backend errors, e.g.:
-/// ```ignore
-/// socket.connect(addr).backend_err_ctx("TCP connect")?;
-/// // produces: OasisError::Backend("TCP connect: connection refused")
-/// ```
-#[allow(dead_code)]
-pub trait BackendErrCtx<T> {
-    /// Convert the error to `OasisError::Backend` with a context prefix.
-    fn backend_err_ctx(self, ctx: &str) -> Result<T>;
-}
-
-impl<T, E: std::fmt::Display> BackendErrCtx<T> for std::result::Result<T, E> {
-    fn backend_err_ctx(self, ctx: &str) -> Result<T> {
-        self.map_err(|e| crate::error::OasisError::Backend(format!("{ctx}: {e}").into()))
     }
 }
 

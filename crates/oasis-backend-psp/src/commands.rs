@@ -861,7 +861,7 @@ fn cmd_plugin_remove() -> Vec<String> {
                 Err(e) => out.push(format!("Failed to update PLUGINS.TXT: {:?}", e)),
             }
         },
-        Err(_) => out.push(String::from("PLUGINS.TXT not found")),
+        Err(e) => out.push(format!("PLUGINS.TXT read error: {e}")),
     }
 
     out.push(String::from("Plugin removed. Reboot to deactivate."));
@@ -894,7 +894,7 @@ fn cmd_plugin_status() -> Vec<String> {
                 None => out.push(String::from("PLUGINS.TXT: not registered")),
             }
         },
-        Err(_) => out.push(String::from("PLUGINS.TXT: not found")),
+        Err(e) => out.push(format!("PLUGINS.TXT: read error: {e}")),
     }
 
     // Check if config exists

@@ -16,6 +16,12 @@ serde_json = { workspace = true }
 toml = { workspace = true }
 log = { workspace = true }
 
+# Ogg Vorbis decoding (pure Rust via symphonia)
+symphonia = { version = "0.5", default-features = false, features = [
+    "ogg",     # Ogg container demuxer
+    "vorbis",  # Vorbis codec decoder
+] }
+
 [dev-dependencies]
 proptest.workspace = true
 

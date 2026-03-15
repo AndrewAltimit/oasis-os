@@ -193,7 +193,8 @@ impl AudioPlayer {
         if self.decoder.is_none() {
             match AudiocodecDecoder::new(CodecType::Mp3) {
                 Ok(dec) => self.decoder = Some(dec),
-                Err(_) => {
+                Err(e) => {
+                    psp::dprintln!("AudiocodecDecoder init failed: {e}");
                     self.close_file();
                     return false;
                 },
@@ -204,7 +205,8 @@ impl AudioPlayer {
         if self.channel.is_none() {
             match AudioChannel::reserve(MP3_FRAME_SAMPLES, AudioFormat::Stereo) {
                 Ok(ch) => self.channel = Some(ch),
-                Err(_) => {
+                Err(e) => {
+                    psp::dprintln!("AudioChannel reserve failed: {e}");
                     self.close_file();
                     return false;
                 },
@@ -365,7 +367,10 @@ impl AudioPlayer {
                 let Some(channel) = self.channel.as_ref() else { return };
                 let _ = channel.output_blocking(self.hw_volume, &self.pcm_buf);
             },
-            Err(_) => {
+            Err(e) => {
+                if self.error_count == 0 {
+                    psp::dprintln!("MP3 decode error: {e}");
+                }
                 self.error_count += 1;
                 self.buf_pos += 1;
                 if self.error_count > 100 {

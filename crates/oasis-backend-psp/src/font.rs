@@ -88,10 +88,6 @@ impl SystemFont {
 /// Width of each glyph in pixels.
 pub const GLYPH_WIDTH: u32 = 8;
 
-/// Height of each glyph in pixels.
-#[allow(dead_code)]
-pub const GLYPH_HEIGHT: u32 = 8;
-
 /// First printable ASCII code in the table.
 const FIRST_CHAR: u8 = 0x20;
 

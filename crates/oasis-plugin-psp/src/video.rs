@@ -142,22 +142,6 @@ unsafe fn alloc_pip_buffers() -> bool {
     true
 }
 
-/// Free PIP frame buffers.
-#[allow(dead_code)]
-unsafe fn free_pip_buffers() {
-    // SAFETY: Single-threaded access; PIP_BUF_BLOCK only written from this thread.
-    let block = unsafe { PIP_BUF_BLOCK };
-    if block >= 0 {
-        // SAFETY: block is a valid memory block ID.
-        unsafe {
-            psp::sys::sceKernelFreePartitionMemory(psp::sys::SceUid(block));
-            PIP_BUF_BLOCK = -1;
-            PIP_FRAME_A = core::ptr::null_mut();
-            PIP_FRAME_B = core::ptr::null_mut();
-        }
-    }
-}
-
 // ---------------------------------------------------------------------------
 // File scanning
 // ---------------------------------------------------------------------------

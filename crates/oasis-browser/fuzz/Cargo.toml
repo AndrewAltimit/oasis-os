@@ -24,8 +24,3 @@ doc = false
 name = "fuzz_css_parser"
 path = "fuzz_targets/fuzz_css_parser.rs"
 doc = false
-
-[[bin]]
-name = "fuzz_html_full_pipeline"
-path = "fuzz_targets/fuzz_html_full_pipeline.rs"
-doc = false

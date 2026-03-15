@@ -228,10 +228,8 @@ pub fn handle_desktop_input(
                 state.mode = Mode::Dashboard;
             }
         },
-        InputEvent::ButtonPress(Button::Start) => {
-            if !state.skin.features.window_manager {
-                state.mode = Mode::Terminal;
-            }
+        InputEvent::ButtonPress(Button::Start) if !state.skin.features.window_manager => {
+            state.mode = Mode::Terminal;
         },
         InputEvent::TextInput(ch) => match state.wm.active_window() {
             Some("browser") => {
@@ -525,19 +523,14 @@ pub fn handle_default_input(
                 Mode::Desktop => Mode::Desktop,
             };
         },
-        InputEvent::ButtonPress(Button::Select) => {
-            if state.mode != Mode::Osk {
-                let osk_cfg = OskConfig {
-                    title: "On-Screen Keyboard".to_string(),
-                    ..OskConfig::for_screen(
-                        state.active_theme.screen_w,
-                        state.active_theme.screen_h,
-                    )
-                };
-                state.osk = Some(OskState::new(osk_cfg, ""));
-                state.mode = Mode::Osk;
-                log::info!("OSK opened");
-            }
+        InputEvent::ButtonPress(Button::Select) if state.mode != Mode::Osk => {
+            let osk_cfg = OskConfig {
+                title: "On-Screen Keyboard".to_string(),
+                ..OskConfig::for_screen(state.active_theme.screen_w, state.active_theme.screen_h)
+            };
+            state.osk = Some(OskState::new(osk_cfg, ""));
+            state.mode = Mode::Osk;
+            log::info!("OSK opened");
         },
 
         // L trigger: cycle top tabs (status bar).
@@ -578,22 +571,18 @@ pub fn handle_default_input(
 
         // Dashboard input: D-pad navigation.
         InputEvent::ButtonPress(btn) if state.mode == Mode::Dashboard => match btn {
-            Button::Up | Button::Down | Button::Left | Button::Right => {
-                if state.ui.bottom_bar.active_tab == MediaTab::None {
-                    state.ui.dashboard.handle_input(btn);
-                }
+            Button::Up | Button::Down | Button::Left | Button::Right
+                if state.ui.bottom_bar.active_tab == MediaTab::None =>
+            {
+                state.ui.dashboard.handle_input(btn);
             },
-            Button::Triangle => {
-                if state.ui.bottom_bar.active_tab == MediaTab::None {
-                    state.ui.dashboard.next_page();
-                    state.ui.bottom_bar.current_page = state.ui.dashboard.page;
-                }
+            Button::Triangle if state.ui.bottom_bar.active_tab == MediaTab::None => {
+                state.ui.dashboard.next_page();
+                state.ui.bottom_bar.current_page = state.ui.dashboard.page;
             },
-            Button::Square => {
-                if state.ui.bottom_bar.active_tab == MediaTab::None {
-                    state.ui.dashboard.prev_page();
-                    state.ui.bottom_bar.current_page = state.ui.dashboard.page;
-                }
+            Button::Square if state.ui.bottom_bar.active_tab == MediaTab::None => {
+                state.ui.dashboard.prev_page();
+                state.ui.bottom_bar.current_page = state.ui.dashboard.page;
             },
             _ => {},
         },

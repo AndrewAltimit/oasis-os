@@ -152,21 +152,6 @@ pub unsafe fn fill_rect(fb: *mut u32, stride: u32, x: u32, y: u32, w: u32, h: u3
     }
 }
 
-/// Flush dcache for a framebuffer region to ensure writes are visible.
-///
-/// # Safety
-/// `fb` must point to a valid memory region.
-#[allow(dead_code)]
-pub unsafe fn flush_framebuffer(fb: *mut u32, stride: u32, y: u32, h: u32) {
-    // SAFETY: Pointer arithmetic within valid framebuffer region.
-    let start = unsafe { fb.add((y * stride) as usize) } as *const u8;
-    let size = (h * stride * 4) as u32;
-    // SAFETY: Valid memory range within framebuffer.
-    unsafe {
-        psp::sys::sceKernelDcacheWritebackRange(start as *const _, size);
-    }
-}
-
 /// Blit an ABGR8888 source rectangle onto the framebuffer.
 ///
 /// Copies `src_w * src_h` pixels from `src` to `(dst_x, dst_y)` in the

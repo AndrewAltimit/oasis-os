@@ -4,7 +4,7 @@
 //! circles, triangles, polygons, arcs) and helper functions used by both
 //! this module and the parent `lib.rs` (gradients, clip intersection).
 
-use oasis_core::backend::{Color, SdiCore};
+use oasis_core::backend::{ArcParams, Color, DashStyle, SdiCore, StrokeStyle};
 use oasis_core::error::Result;
 
 use super::{SdlBackend, fpoint, frect};
@@ -62,7 +62,6 @@ impl SdlBackend {
         }
     }
 
-    #[allow(clippy::too_many_arguments)]
     pub(crate) fn shape_fill_rounded_rect(
         &mut self,
         x: i32,
@@ -131,22 +130,20 @@ impl SdlBackend {
         Ok(())
     }
 
-    #[allow(clippy::too_many_arguments)]
     pub(crate) fn shape_stroke_rect(
         &mut self,
         x: i32,
         y: i32,
         w: u32,
         h: u32,
-        stroke_width: u16,
-        color: Color,
+        stroke: StrokeStyle,
     ) -> Result<()> {
         let (tx, ty) = self.translate(x, y);
-        self.set_color(color);
-        if stroke_width == 1 {
+        self.set_color(stroke.color);
+        if stroke.width == 1 {
             let _ = self.canvas.draw_rect(frect(tx, ty, w, h));
         } else {
-            let sw = stroke_width as u32;
+            let sw = stroke.width as u32;
             let _ = self.canvas.fill_rect(frect(tx, ty, w, sw));
             let _ = self
                 .canvas
@@ -164,7 +161,6 @@ impl SdlBackend {
         Ok(())
     }
 
-    #[allow(clippy::too_many_arguments)]
     pub(crate) fn shape_draw_line(
         &mut self,
         x1: i32,
@@ -240,18 +236,16 @@ impl SdlBackend {
         Ok(())
     }
 
-    #[allow(clippy::too_many_arguments)]
     pub(crate) fn shape_stroke_circle(
         &mut self,
         cx: i32,
         cy: i32,
         radius: u16,
-        stroke_width: u16,
-        color: Color,
+        stroke: StrokeStyle,
     ) -> Result<()> {
         let (tcx, tcy) = self.translate(cx, cy);
-        self.set_color(color);
-        let sw = (stroke_width as i32).max(1);
+        self.set_color(stroke.color);
+        let sw = (stroke.width as i32).max(1);
 
         // Draw concentric circle outlines for the requested stroke width.
         for offset in 0..sw {
@@ -343,7 +337,6 @@ impl SdlBackend {
         Ok(())
     }
 
-    #[allow(clippy::too_many_arguments)]
     pub(crate) fn shape_stroke_rounded_rect(
         &mut self,
         x: i32,
@@ -351,17 +344,16 @@ impl SdlBackend {
         w: u32,
         h: u32,
         radius: u16,
-        stroke_width: u16,
-        color: Color,
+        stroke: StrokeStyle,
     ) -> Result<()> {
         if radius == 0 || w == 0 || h == 0 {
-            return self.shape_stroke_rect(x, y, w, h, stroke_width, color);
+            return self.shape_stroke_rect(x, y, w, h, stroke);
         }
         let (tx, ty) = self.translate(x, y);
         let r = (radius as i32).min(w as i32 / 2).min(h as i32 / 2);
-        self.set_color(color);
+        self.set_color(stroke.color);
 
-        let sw = (stroke_width as i32).max(1);
+        let sw = (stroke.width as i32).max(1);
         for t in 0..sw {
             // Top edge.
             let _ = self.canvas.draw_line(
@@ -475,28 +467,19 @@ impl SdlBackend {
         Ok(())
     }
 
-    #[allow(clippy::too_many_arguments)]
-    pub(crate) fn shape_fill_arc(
-        &mut self,
-        cx: i32,
-        cy: i32,
-        radius: u16,
-        start_angle: f32,
-        end_angle: f32,
-        color: Color,
-    ) -> Result<()> {
+    pub(crate) fn shape_fill_arc(&mut self, arc: ArcParams, color: Color) -> Result<()> {
         use oasis_types::backend::{arc_segments, cos_approx_f32, sin_approx_f32};
-        let (tcx, tcy) = self.translate(cx, cy);
+        let (tcx, tcy) = self.translate(arc.cx, arc.cy);
         self.set_color(color);
-        let segments = arc_segments(radius, start_angle, end_angle);
-        let r = radius as f32;
-        let step = (end_angle - start_angle) / segments as f32;
+        let segments = arc_segments(arc.radius, arc.start_angle, arc.end_angle);
+        let r = arc.radius as f32;
+        let step = (arc.end_angle - arc.start_angle) / segments as f32;
 
         // Build triangle fan vertices and scanline-fill each triangle.
-        let mut prev_x = tcx + (r * cos_approx_f32(start_angle)) as i32;
-        let mut prev_y = tcy + (r * sin_approx_f32(start_angle)) as i32;
+        let mut prev_x = tcx + (r * cos_approx_f32(arc.start_angle)) as i32;
+        let mut prev_y = tcy + (r * sin_approx_f32(arc.start_angle)) as i32;
         for i in 1..=segments {
-            let angle = start_angle + step * i as f32;
+            let angle = arc.start_angle + step * i as f32;
             let nx = tcx + (r * cos_approx_f32(angle)) as i32;
             let ny = tcy + (r * sin_approx_f32(angle)) as i32;
             self.fill_triangle_translated(tcx, tcy, prev_x, prev_y, nx, ny, color);
@@ -506,33 +489,23 @@ impl SdlBackend {
         Ok(())
     }
 
-    #[allow(clippy::too_many_arguments)]
-    pub(crate) fn shape_stroke_arc(
-        &mut self,
-        cx: i32,
-        cy: i32,
-        radius: u16,
-        start_angle: f32,
-        end_angle: f32,
-        width: u16,
-        color: Color,
-    ) -> Result<()> {
+    pub(crate) fn shape_stroke_arc(&mut self, arc: ArcParams, stroke: StrokeStyle) -> Result<()> {
         use oasis_types::backend::{arc_segments, cos_approx_f32, sin_approx_f32};
-        let (tcx, tcy) = self.translate(cx, cy);
-        self.set_color(color);
-        let segments = arc_segments(radius, start_angle, end_angle);
-        let r = radius as f32;
-        let step = (end_angle - start_angle) / segments as f32;
+        let (tcx, tcy) = self.translate(arc.cx, arc.cy);
+        self.set_color(stroke.color);
+        let segments = arc_segments(arc.radius, arc.start_angle, arc.end_angle);
+        let r = arc.radius as f32;
+        let step = (arc.end_angle - arc.start_angle) / segments as f32;
 
-        let half = width as i32 / 2;
-        let mut prev_x = tcx + (r * cos_approx_f32(start_angle)) as i32;
-        let mut prev_y = tcy + (r * sin_approx_f32(start_angle)) as i32;
+        let half = stroke.width as i32 / 2;
+        let mut prev_x = tcx + (r * cos_approx_f32(arc.start_angle)) as i32;
+        let mut prev_y = tcy + (r * sin_approx_f32(arc.start_angle)) as i32;
         for i in 1..=segments {
-            let angle = start_angle + step * i as f32;
+            let angle = arc.start_angle + step * i as f32;
             let nx = tcx + (r * cos_approx_f32(angle)) as i32;
             let ny = tcy + (r * sin_approx_f32(angle)) as i32;
             // Thicken: draw parallel lines.
-            for offset in -half..=(width as i32 - half - 1) {
+            for offset in -half..=(stroke.width as i32 - half - 1) {
                 let dx = (nx - prev_x) as f32;
                 let dy = (ny - prev_y) as f32;
                 let len = (dx * dx + dy * dy).sqrt().max(1.0);
@@ -548,21 +521,18 @@ impl SdlBackend {
         Ok(())
     }
 
-    #[allow(clippy::too_many_arguments)]
     pub(crate) fn shape_stroke_line_dashed(
         &mut self,
         x1: i32,
         y1: i32,
         x2: i32,
         y2: i32,
-        width: u16,
-        color: Color,
-        dash: u16,
-        gap: u16,
+        stroke: StrokeStyle,
+        dash_style: DashStyle,
     ) -> Result<()> {
         let (tx1, ty1) = self.translate(x1, y1);
         let (tx2, ty2) = self.translate(x2, y2);
-        self.set_color(color);
+        self.set_color(stroke.color);
 
         let dx = (tx2 - tx1) as f32;
         let dy = (ty2 - ty1) as f32;
@@ -572,16 +542,16 @@ impl SdlBackend {
         }
         let ux = dx / total_len;
         let uy = dy / total_len;
-        let cycle = dash as f32 + gap as f32;
-        let half = width as i32 / 2;
+        let cycle = dash_style.dash as f32 + dash_style.gap as f32;
+        let half = stroke.width as i32 / 2;
         let mut t = 0.0f32;
         while t < total_len {
-            let seg_end = (t + dash as f32).min(total_len);
+            let seg_end = (t + dash_style.dash as f32).min(total_len);
             let sx = tx1 + (ux * t) as i32;
             let sy = ty1 + (uy * t) as i32;
             let ex = tx1 + (ux * seg_end) as i32;
             let ey = ty1 + (uy * seg_end) as i32;
-            for offset in -half..=(width as i32 - half - 1) {
+            for offset in -half..=(stroke.width as i32 - half - 1) {
                 let ox = (-uy * offset as f32) as i32;
                 let oy = (ux * offset as f32) as i32;
                 let _ = self

@@ -539,18 +539,6 @@ fn write_u32(buf: &mut [u8], pos: usize, val: u32) -> usize {
     p
 }
 
-/// Write a u32 as 2-digit zero-padded decimal.
-#[allow(dead_code)]
-fn write_u32_pad2(buf: &mut [u8], pos: usize, val: u32) -> usize {
-    let mut p = pos;
-    if p + 1 < buf.len() {
-        buf[p] = b'0' + ((val / 10) % 10) as u8;
-        buf[p + 1] = b'0' + (val % 10) as u8;
-        p += 2;
-    }
-    p
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -688,41 +676,6 @@ mod tests {
         let mut buf = [0u8; 0];
         let p = write_u32(&mut buf, 0, 0);
         assert_eq!(p, 0);
-    }
-
-    // -----------------------------------------------------------------------
-    // write_u32_pad2
-    // -----------------------------------------------------------------------
-
-    #[test]
-    fn write_u32_pad2_single_digit() {
-        let mut buf = [0u8; 8];
-        let p = write_u32_pad2(&mut buf, 0, 5);
-        assert_eq!(p, 2);
-        assert_eq!(&buf[..2], b"05");
-    }
-
-    #[test]
-    fn write_u32_pad2_double_digit() {
-        let mut buf = [0u8; 8];
-        let p = write_u32_pad2(&mut buf, 0, 42);
-        assert_eq!(p, 2);
-        assert_eq!(&buf[..2], b"42");
-    }
-
-    #[test]
-    fn write_u32_pad2_zero() {
-        let mut buf = [0u8; 8];
-        let p = write_u32_pad2(&mut buf, 0, 0);
-        assert_eq!(p, 2);
-        assert_eq!(&buf[..2], b"00");
-    }
-
-    #[test]
-    fn write_u32_pad2_buffer_too_small() {
-        let mut buf = [0u8; 1];
-        let p = write_u32_pad2(&mut buf, 0, 5);
-        assert_eq!(p, 0); // Not enough room for 2 digits
     }
 
     // -----------------------------------------------------------------------

@@ -338,33 +338,7 @@ impl SdiGradients for Ue5Backend {
         gradient: &GradientStyle,
     ) -> Result<()> {
         let (tx, ty) = self.translate(x, y);
-        match *gradient {
-            GradientStyle::Vertical { top, bottom } => {
-                self.fb
-                    .fill_rect_vertical_gradient(tx, ty, w, h, top, bottom);
-            },
-            GradientStyle::Horizontal { left, right } => {
-                self.fb
-                    .fill_rect_horizontal_gradient(tx, ty, w, h, left, right);
-            },
-            GradientStyle::FourCorner {
-                top_left,
-                top_right,
-                bottom_left,
-                bottom_right,
-            } => {
-                self.fb.fill_rect_four_corner_gradient(
-                    tx,
-                    ty,
-                    w,
-                    h,
-                    top_left,
-                    top_right,
-                    bottom_left,
-                    bottom_right,
-                );
-            },
-        }
+        self.fb.fill_rect_gradient(tx, ty, w, h, gradient);
         self.dirty = true;
         Ok(())
     }

@@ -98,11 +98,6 @@ pub fn next_station() {
     AUDIO_CMD.store(5, Ordering::Relaxed);
 }
 
-#[allow(dead_code)]
-pub fn prev_station() {
-    AUDIO_CMD.store(6, Ordering::Relaxed);
-}
-
 pub fn is_radio_active() -> bool {
     RADIO_ACTIVE.load(Ordering::Relaxed)
 }

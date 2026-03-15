@@ -256,13 +256,19 @@ impl RadioStreamer {
         if player.decoder.is_none() {
             match AudiocodecDecoder::new(CodecType::Mp3) {
                 Ok(dec) => player.decoder = Some(dec),
-                Err(_) => return,
+                Err(e) => {
+                    psp::dprintln!("Radio: AudiocodecDecoder init failed: {e}");
+                    return;
+                },
             }
         }
         if player.channel.is_none() {
             match AudioChannel::reserve(MP3_FRAME_SAMPLES, AudioFormat::Stereo) {
                 Ok(ch) => player.channel = Some(ch),
-                Err(_) => return,
+                Err(e) => {
+                    psp::dprintln!("Radio: AudioChannel reserve failed: {e}");
+                    return;
+                },
             }
         }
 
@@ -307,7 +313,10 @@ impl RadioStreamer {
                 let Some(channel) = player.channel.as_ref() else { return };
                 let _ = channel.output_blocking(self.hw_volume, &player.pcm_buf);
             },
-            Err(_) => {
+            Err(e) => {
+                if self.error_count == 0 {
+                    psp::dprintln!("Radio: MP3 decode error: {e}");
+                }
                 self.error_count += 1;
                 self.buf_pos += 1;
             },

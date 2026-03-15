@@ -5,7 +5,7 @@
 //! cannot escape its root.
 
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Component, Path, PathBuf};
 
 use oasis_types::error::{OasisError, Result};
 
@@ -42,13 +42,15 @@ impl RealVfs {
         let relative = vfs_path.strip_prefix('/').unwrap_or(vfs_path);
         let candidate = self.root.join(relative);
 
-        // Canonicalize if path exists, otherwise check that its parent is within root.
+        // Canonicalize if path exists, otherwise check that its parent
+        // is within root.
         let resolved = if candidate.exists() {
             candidate
                 .canonicalize()
                 .map_err(|e| OasisError::Vfs(format!("cannot resolve path: {e}").into()))?
         } else {
-            // For non-existent paths (write/mkdir), verify the parent is inside root.
+            // For non-existent paths (write/mkdir), verify the parent
+            // is inside root.
             let parent = candidate
                 .parent()
                 .ok_or_else(|| OasisError::Vfs("invalid path: no parent".into()))?;
@@ -59,8 +61,18 @@ impl RealVfs {
                 if !canon_parent.starts_with(&self.root) {
                     return Err(OasisError::Vfs("path escapes VFS root".into()));
                 }
+                // Use the canonicalized parent joined with the filename
+                // to avoid TOCTOU issues with symlink replacement.
+                let file_name = candidate
+                    .file_name()
+                    .ok_or_else(|| OasisError::Vfs("invalid path: no filename".into()))?;
+                canon_parent.join(file_name)
+            } else {
+                // Normalize the candidate by walking components to strip
+                // `..` segments.  This prevents lexical bypass when
+                // neither the path nor its parent exist on disk.
+                normalize_path(&candidate)
             }
-            candidate
         };
 
         if !resolved.starts_with(&self.root) {
@@ -68,6 +80,23 @@ impl RealVfs {
         }
         Ok(resolved)
     }
+}
+
+/// Normalize a path by resolving `.` and `..` components lexically
+/// (without touching the filesystem).  This prevents path-traversal
+/// attacks when neither the target path nor its parent exist on disk.
+fn normalize_path(path: &Path) -> PathBuf {
+    let mut out = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::ParentDir => {
+                out.pop();
+            },
+            Component::CurDir => {},
+            other => out.push(other),
+        }
+    }
+    out
 }
 
 impl Vfs for RealVfs {
@@ -423,6 +452,150 @@ mod tests {
                 },
             )
             .is_err()
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn symlink_outside_root_read_blocked() {
+        use std::os::unix::fs::symlink;
+
+        let outside = tempfile::tempdir().unwrap();
+        let outside_file = outside.path().join("secret.txt");
+        fs::write(&outside_file, b"sensitive data").unwrap();
+
+        let (_dir, vfs) = temp_vfs();
+        // Create a symlink inside the VFS root pointing outside.
+        let link_path = vfs.root.join("escape_link");
+        symlink(&outside_file, &link_path).unwrap();
+
+        let result = vfs.read("/escape_link");
+        assert!(
+            result.is_err(),
+            "read through symlink outside root should fail"
+        );
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("escapes VFS root"),
+            "expected 'escapes VFS root', got: {err}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn symlink_outside_root_write_blocked() {
+        use std::os::unix::fs::symlink;
+
+        let outside = tempfile::tempdir().unwrap();
+        let outside_file = outside.path().join("target.txt");
+        fs::write(&outside_file, b"original").unwrap();
+
+        let (_dir, mut vfs) = temp_vfs();
+        let link_path = vfs.root.join("write_link");
+        symlink(&outside_file, &link_path).unwrap();
+
+        let result = vfs.write("/write_link", b"overwritten");
+        assert!(
+            result.is_err(),
+            "write through symlink outside root should fail"
+        );
+
+        // Verify the outside file was not modified.
+        let content = fs::read(&outside_file).unwrap();
+        assert_eq!(content, b"original", "outside file should not be modified");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn symlink_chain_escape_blocked() {
+        use std::os::unix::fs::symlink;
+
+        let outside = tempfile::tempdir().unwrap();
+        let outside_file = outside.path().join("chain_target.txt");
+        fs::write(&outside_file, b"chained secret").unwrap();
+
+        let (_dir, vfs) = temp_vfs();
+        // link_a -> link_b -> outside_file
+        let link_b = vfs.root.join("link_b");
+        symlink(&outside_file, &link_b).unwrap();
+        let link_a = vfs.root.join("link_a");
+        symlink(&link_b, &link_a).unwrap();
+
+        let result = vfs.read("/link_a");
+        assert!(
+            result.is_err(),
+            "read through symlink chain escaping root should fail"
+        );
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("escapes VFS root"),
+            "expected 'escapes VFS root', got: {err}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn broken_symlink_errors_gracefully() {
+        use std::os::unix::fs::symlink;
+
+        let (_dir, vfs) = temp_vfs();
+        // Point to a non-existent target inside the root.
+        let link_path = vfs.root.join("broken_link");
+        let nonexistent = vfs.root.join("does_not_exist.txt");
+        symlink(&nonexistent, &link_path).unwrap();
+
+        let result = vfs.read("/broken_link");
+        assert!(result.is_err(), "reading a broken symlink should fail");
+
+        let stat_result = vfs.stat("/broken_link");
+        assert!(stat_result.is_err(), "stat on a broken symlink should fail");
+
+        // exists() should return false for broken symlinks.
+        assert!(
+            !vfs.exists("/broken_link"),
+            "broken symlink should not 'exist'"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn directory_symlink_escape_readdir_blocked() {
+        use std::os::unix::fs::symlink;
+
+        let outside = tempfile::tempdir().unwrap();
+        fs::write(outside.path().join("private.txt"), b"private").unwrap();
+
+        let (_dir, vfs) = temp_vfs();
+        let link_path = vfs.root.join("dir_escape");
+        symlink(outside.path(), &link_path).unwrap();
+
+        let result = vfs.readdir("/dir_escape");
+        assert!(
+            result.is_err(),
+            "readdir through directory symlink outside root should fail"
+        );
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("escapes VFS root"),
+            "expected 'escapes VFS root', got: {err}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn directory_symlink_escape_stat_blocked() {
+        use std::os::unix::fs::symlink;
+
+        let outside = tempfile::tempdir().unwrap();
+
+        let (_dir, vfs) = temp_vfs();
+        let link_path = vfs.root.join("dir_stat_escape");
+        symlink(outside.path(), &link_path).unwrap();
+
+        let result = vfs.stat("/dir_stat_escape");
+        assert!(
+            result.is_err(),
+            "stat on directory symlink outside root should fail"
         );
     }
 }

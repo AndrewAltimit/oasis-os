@@ -10,6 +10,7 @@ pub mod audio_queue;
 pub mod manager;
 pub mod mixer;
 pub mod null_backend;
+pub mod ogg;
 pub mod playlist;
 pub mod radio;
 pub mod types;

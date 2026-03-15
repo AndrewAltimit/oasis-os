@@ -1,15 +1,59 @@
-//! Plugin lifecycle methods: init, update, shutdown, unload.
+//! Plugin lifecycle methods: register, init, update, shutdown, unload.
 
 use crate::error::{OasisError, Result};
 use crate::sdi::SdiRegistry;
 use crate::terminal::CommandRegistry;
 use crate::vfs::Vfs;
 
-use crate::plugin::traits::{PluginCapabilities, PluginHost, PluginState};
+use crate::plugin::app_bridge::PluginAppRegistration;
+use crate::plugin::traits::{Plugin, PluginCapabilities, PluginHost, PluginState};
 
-use super::PluginManager;
+use super::{LoadedPlugin, PluginManager};
 
 impl PluginManager {
+    /// Register a static (built-in) plugin.
+    ///
+    /// The plugin is added in `Registered` state and must be initialized
+    /// via `init_all()` or `init_plugin()`.
+    pub fn register_static(&mut self, plugin: Box<dyn Plugin>) {
+        let capabilities = plugin.capabilities();
+        self.plugins.push(LoadedPlugin {
+            plugin,
+            state: PluginState::Registered,
+            registered_app_titles: Vec::new(),
+            capabilities,
+        });
+    }
+
+    /// Collect app registrations from a lifecycle call into the manager.
+    pub(super) fn collect_apps(
+        &mut self,
+        idx: usize,
+        pending_apps: Vec<PluginAppRegistration>,
+        deduplicate: bool,
+    ) {
+        if deduplicate {
+            for app in pending_apps {
+                if self.plugin_apps.iter().any(|a| a.title == app.title) {
+                    log::warn!(
+                        "Plugin app '{}' already registered, ignoring duplicate",
+                        app.title,
+                    );
+                } else {
+                    self.plugins[idx]
+                        .registered_app_titles
+                        .push(app.title.clone());
+                    self.plugin_apps.push(app);
+                }
+            }
+        } else {
+            self.plugins[idx]
+                .registered_app_titles
+                .extend(pending_apps.iter().map(|a| a.title.clone()));
+            self.plugin_apps.extend(pending_apps);
+        }
+    }
+
     /// Initialize all registered (but not yet active) plugins.
     ///
     /// Errors from individual plugins are logged and skipped so that one

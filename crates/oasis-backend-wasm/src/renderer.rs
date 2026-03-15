@@ -6,13 +6,12 @@ use wasm_bindgen::prelude::*;
 use web_sys::{CanvasRenderingContext2d, HtmlCanvasElement, ImageData};
 
 use oasis_rasterize::GlyphCacheKey;
-use oasis_types::backend::stacks::{ClipPush, ClipStack, TranslateStack};
+use oasis_types::backend::stacks::{ClipStack, TranslateStack};
 use oasis_types::backend::{
-    Color, GradientStyle, SdiAlpha, SdiBatch, SdiClipTransform, SdiCore, SdiGradients, SdiShapes,
-    SdiText, SdiTextures, SdiVector, TextMetrics, TextureId, texture_not_found, validate_rgba_data,
+    Color, SdiAlpha, SdiBatch, SdiCore, SdiText, SdiVector, TextMetrics, TextureId,
+    texture_not_found, validate_rgba_data,
 };
 use oasis_types::error::{OasisError, Result};
-use oasis_types::geometry::ClipRect;
 
 use crate::font;
 
@@ -20,7 +19,7 @@ use crate::font;
 // Helpers
 // ---------------------------------------------------------------------------
 
-fn js_err<E: std::fmt::Debug>(e: E) -> OasisError {
+pub(crate) fn js_err<E: std::fmt::Debug>(e: E) -> OasisError {
     OasisError::Backend(format!("{e:?}").into())
 }
 
@@ -34,7 +33,7 @@ fn get_2d_context(canvas: &HtmlCanvasElement) -> Result<CanvasRenderingContext2d
 }
 
 /// Return cached CSS color string, allocating only on first use per color.
-fn cached_css_color(cache: &mut HashMap<u32, String>, c: Color) -> &str {
+pub(crate) fn cached_css_color(cache: &mut HashMap<u32, String>, c: Color) -> &str {
     let key = (c.r as u32) << 24 | (c.g as u32) << 16 | (c.b as u32) << 8 | c.a as u32;
     cache.entry(key).or_insert_with(|| {
         if c.a == 255 {
@@ -49,28 +48,8 @@ fn cached_css_color(cache: &mut HashMap<u32, String>, c: Color) -> &str {
 // Texture storage
 // ---------------------------------------------------------------------------
 
-struct TextureData {
-    canvas: HtmlCanvasElement,
-}
-
-// ---------------------------------------------------------------------------
-// Gradient cache key
-// ---------------------------------------------------------------------------
-
-#[derive(Clone, Copy, PartialEq, Eq, Hash)]
-struct GradientCacheKey {
-    kind: u8,
-    x: i32,
-    y: i32,
-    extent: u32,
-    color_a: u32,
-    color_b: u32,
-}
-
-impl GradientCacheKey {
-    fn pack_color(c: Color) -> u32 {
-        (c.r as u32) << 24 | (c.g as u32) << 16 | (c.b as u32) << 8 | c.a as u32
-    }
+pub(crate) struct TextureData {
+    pub(crate) canvas: HtmlCanvasElement,
 }
 
 // ---------------------------------------------------------------------------
@@ -80,27 +59,24 @@ impl GradientCacheKey {
 /// Maximum number of cached glyphs before LRU eviction kicks in.
 const MAX_GLYPH_CACHE_SIZE: usize = 2048;
 
-/// Maximum number of cached canvas gradients before the cache is cleared.
-const MAX_GRADIENT_CACHE_SIZE: usize = 256;
-
 pub struct WasmBackend {
-    canvas: HtmlCanvasElement,
-    ctx: CanvasRenderingContext2d,
-    width: u32,
-    height: u32,
-    textures: HashMap<u64, TextureData>,
-    next_texture_id: u64,
-    clip_stack: ClipStack,
+    pub(crate) canvas: HtmlCanvasElement,
+    pub(crate) ctx: CanvasRenderingContext2d,
+    pub(crate) width: u32,
+    pub(crate) height: u32,
+    pub(crate) textures: HashMap<u64, TextureData>,
+    pub(crate) next_texture_id: u64,
+    pub(crate) clip_stack: ClipStack,
     /// Depth counter for `set_clip_rect`/`reset_clip_rect` (SdiCore), which use
     /// canvas `save()`/`restore()` independently of the `ClipStack`.
     core_clip_depth: u32,
-    translate_stack: TranslateStack,
-    color_cache: HashMap<u32, String>,
+    pub(crate) translate_stack: TranslateStack,
+    pub(crate) color_cache: HashMap<u32, String>,
     glyph_cache: HashMap<GlyphCacheKey, HtmlCanvasElement>,
     /// Access timestamps for LRU eviction of glyph cache entries.
     glyph_access: HashMap<GlyphCacheKey, u64>,
     glyph_access_counter: u64,
-    gradient_cache: HashMap<GradientCacheKey, web_sys::CanvasGradient>,
+    pub(crate) gradient_cache: HashMap<crate::gradients::GradientCacheKey, web_sys::CanvasGradient>,
 }
 
 impl WasmBackend {
@@ -147,7 +123,7 @@ impl WasmBackend {
         &self.ctx
     }
 
-    fn translate(&self, x: i32, y: i32) -> (f64, f64) {
+    pub(crate) fn translate(&self, x: i32, y: i32) -> (f64, f64) {
         self.translate_stack.translate_f64(x, y)
     }
 
@@ -419,395 +395,6 @@ impl SdiCore for WasmBackend {
     }
 }
 
-// ---------------------------------------------------------------------------
-// SdiBackend — override methods
-// ---------------------------------------------------------------------------
-
-// -------------------------------------------------------------------
-// SdiShapes: Shape primitives
-// -------------------------------------------------------------------
-
-impl SdiShapes for WasmBackend {
-    fn fill_rounded_rect(
-        &mut self,
-        x: i32,
-        y: i32,
-        w: u32,
-        h: u32,
-        radius: u16,
-        color: Color,
-    ) -> Result<()> {
-        if w == 0 || h == 0 || color.a == 0 {
-            return Ok(());
-        }
-        let (tx, ty) = self.translate(x, y);
-        let fw = w as f64;
-        let fh = h as f64;
-        let r = f64::from(radius).min(fw / 2.0).min(fh / 2.0);
-
-        self.ctx.begin_path();
-        self.ctx.move_to(tx + r, ty);
-        self.ctx.line_to(tx + fw - r, ty);
-        self.ctx
-            .arc_to(tx + fw, ty, tx + fw, ty + r, r)
-            .map_err(js_err)?;
-        self.ctx.line_to(tx + fw, ty + fh - r);
-        self.ctx
-            .arc_to(tx + fw, ty + fh, tx + fw - r, ty + fh, r)
-            .map_err(js_err)?;
-        self.ctx.line_to(tx + r, ty + fh);
-        self.ctx
-            .arc_to(tx, ty + fh, tx, ty + fh - r, r)
-            .map_err(js_err)?;
-        self.ctx.line_to(tx, ty + r);
-        self.ctx.arc_to(tx, ty, tx + r, ty, r).map_err(js_err)?;
-        self.ctx.close_path();
-        let css = cached_css_color(&mut self.color_cache, color);
-        self.ctx.set_fill_style_str(css);
-        self.ctx.fill();
-        Ok(())
-    }
-
-    fn stroke_rect(
-        &mut self,
-        x: i32,
-        y: i32,
-        w: u32,
-        h: u32,
-        stroke_width: u16,
-        color: Color,
-    ) -> Result<()> {
-        if w == 0 || h == 0 || color.a == 0 {
-            return Ok(());
-        }
-        let (tx, ty) = self.translate(x, y);
-        let css = cached_css_color(&mut self.color_cache, color);
-        self.ctx.set_stroke_style_str(css);
-        self.ctx.set_line_width(f64::from(stroke_width));
-        let offset = f64::from(stroke_width) / 2.0;
-        self.ctx.stroke_rect(
-            tx + offset,
-            ty + offset,
-            w as f64 - f64::from(stroke_width),
-            h as f64 - f64::from(stroke_width),
-        );
-        Ok(())
-    }
-
-    fn stroke_rounded_rect(
-        &mut self,
-        x: i32,
-        y: i32,
-        w: u32,
-        h: u32,
-        radius: u16,
-        stroke_width: u16,
-        color: Color,
-    ) -> Result<()> {
-        if w == 0 || h == 0 || color.a == 0 {
-            return Ok(());
-        }
-        let (tx, ty) = self.translate(x, y);
-        let sw = f64::from(stroke_width);
-        let offset = sw / 2.0;
-        let fw = w as f64 - sw;
-        let fh = h as f64 - sw;
-        let r = f64::from(radius).min(fw / 2.0).min(fh / 2.0);
-
-        self.ctx.begin_path();
-        let bx = tx + offset;
-        let by = ty + offset;
-        self.ctx.move_to(bx + r, by);
-        self.ctx.line_to(bx + fw - r, by);
-        self.ctx
-            .arc_to(bx + fw, by, bx + fw, by + r, r)
-            .map_err(js_err)?;
-        self.ctx.line_to(bx + fw, by + fh - r);
-        self.ctx
-            .arc_to(bx + fw, by + fh, bx + fw - r, by + fh, r)
-            .map_err(js_err)?;
-        self.ctx.line_to(bx + r, by + fh);
-        self.ctx
-            .arc_to(bx, by + fh, bx, by + fh - r, r)
-            .map_err(js_err)?;
-        self.ctx.line_to(bx, by + r);
-        self.ctx.arc_to(bx, by, bx + r, by, r).map_err(js_err)?;
-        self.ctx.close_path();
-        let css = cached_css_color(&mut self.color_cache, color);
-        self.ctx.set_stroke_style_str(css);
-        self.ctx.set_line_width(sw);
-        self.ctx.stroke();
-        Ok(())
-    }
-
-    fn draw_line(
-        &mut self,
-        x1: i32,
-        y1: i32,
-        x2: i32,
-        y2: i32,
-        width: u16,
-        color: Color,
-    ) -> Result<()> {
-        if color.a == 0 {
-            return Ok(());
-        }
-        let (tx1, ty1) = self.translate(x1, y1);
-        let (tx2, ty2) = self.translate(x2, y2);
-        self.ctx.begin_path();
-        self.ctx.move_to(tx1, ty1);
-        self.ctx.line_to(tx2, ty2);
-        let css = cached_css_color(&mut self.color_cache, color);
-        self.ctx.set_stroke_style_str(css);
-        self.ctx.set_line_width(f64::from(width));
-        self.ctx.stroke();
-        Ok(())
-    }
-
-    fn fill_circle(&mut self, cx: i32, cy: i32, radius: u16, color: Color) -> Result<()> {
-        if radius == 0 || color.a == 0 {
-            return Ok(());
-        }
-        let (tx, ty) = self.translate(cx, cy);
-        self.ctx.begin_path();
-        self.ctx
-            .arc(tx, ty, f64::from(radius), 0.0, std::f64::consts::TAU)
-            .map_err(js_err)?;
-        let css = cached_css_color(&mut self.color_cache, color);
-        self.ctx.set_fill_style_str(css);
-        self.ctx.fill();
-        Ok(())
-    }
-
-    fn stroke_circle(
-        &mut self,
-        cx: i32,
-        cy: i32,
-        radius: u16,
-        stroke_width: u16,
-        color: Color,
-    ) -> Result<()> {
-        if radius == 0 || color.a == 0 {
-            return Ok(());
-        }
-        let (tx, ty) = self.translate(cx, cy);
-        self.ctx.begin_path();
-        self.ctx
-            .arc(tx, ty, f64::from(radius), 0.0, std::f64::consts::TAU)
-            .map_err(js_err)?;
-        let css = cached_css_color(&mut self.color_cache, color);
-        self.ctx.set_stroke_style_str(css);
-        self.ctx.set_line_width(f64::from(stroke_width));
-        self.ctx.stroke();
-        Ok(())
-    }
-
-    fn fill_triangle(
-        &mut self,
-        x1: i32,
-        y1: i32,
-        x2: i32,
-        y2: i32,
-        x3: i32,
-        y3: i32,
-        color: Color,
-    ) -> Result<()> {
-        if color.a == 0 {
-            return Ok(());
-        }
-        let (tx1, ty1) = self.translate(x1, y1);
-        let (tx2, ty2) = self.translate(x2, y2);
-        let (tx3, ty3) = self.translate(x3, y3);
-        self.ctx.begin_path();
-        self.ctx.move_to(tx1, ty1);
-        self.ctx.line_to(tx2, ty2);
-        self.ctx.line_to(tx3, ty3);
-        self.ctx.close_path();
-        let css = cached_css_color(&mut self.color_cache, color);
-        self.ctx.set_fill_style_str(css);
-        self.ctx.fill();
-        Ok(())
-    }
-}
-
-// -------------------------------------------------------------------
-// SdiGradients: Gradient fills
-// -------------------------------------------------------------------
-
-impl SdiGradients for WasmBackend {
-    fn fill_rect_gradient(
-        &mut self,
-        x: i32,
-        y: i32,
-        w: u32,
-        h: u32,
-        gradient: &GradientStyle,
-    ) -> Result<()> {
-        if w == 0 || h == 0 {
-            return Ok(());
-        }
-        let (tx, ty) = self.translate(x, y);
-        let fw = w as f64;
-        let fh = h as f64;
-
-        match gradient {
-            GradientStyle::Vertical { top, bottom } => {
-                let cache_key = GradientCacheKey {
-                    kind: 0,
-                    x: tx as i32,
-                    y: ty as i32,
-                    extent: h,
-                    color_a: GradientCacheKey::pack_color(*top),
-                    color_b: GradientCacheKey::pack_color(*bottom),
-                };
-                if !self.gradient_cache.contains_key(&cache_key) {
-                    let grad = self.ctx.create_linear_gradient(tx, ty, tx, ty + fh);
-                    let css_top = cached_css_color(&mut self.color_cache, *top).to_owned();
-                    let css_bot = cached_css_color(&mut self.color_cache, *bottom).to_owned();
-                    grad.add_color_stop(0.0, &css_top).map_err(js_err)?;
-                    grad.add_color_stop(1.0, &css_bot).map_err(js_err)?;
-                    if self.gradient_cache.len() >= MAX_GRADIENT_CACHE_SIZE {
-                        self.gradient_cache.clear();
-                    }
-                    self.gradient_cache.insert(cache_key, grad);
-                }
-                let grad = &self.gradient_cache[&cache_key];
-                self.ctx.set_fill_style_canvas_gradient(grad);
-                self.ctx.fill_rect(tx, ty, fw, fh);
-            },
-            GradientStyle::Horizontal { left, right } => {
-                let cache_key = GradientCacheKey {
-                    kind: 1,
-                    x: tx as i32,
-                    y: ty as i32,
-                    extent: w,
-                    color_a: GradientCacheKey::pack_color(*left),
-                    color_b: GradientCacheKey::pack_color(*right),
-                };
-                if !self.gradient_cache.contains_key(&cache_key) {
-                    let grad = self.ctx.create_linear_gradient(tx, ty, tx + fw, ty);
-                    let css_left = cached_css_color(&mut self.color_cache, *left).to_owned();
-                    let css_right = cached_css_color(&mut self.color_cache, *right).to_owned();
-                    grad.add_color_stop(0.0, &css_left).map_err(js_err)?;
-                    grad.add_color_stop(1.0, &css_right).map_err(js_err)?;
-                    if self.gradient_cache.len() >= MAX_GRADIENT_CACHE_SIZE {
-                        self.gradient_cache.clear();
-                    }
-                    self.gradient_cache.insert(cache_key, grad);
-                }
-                let grad = &self.gradient_cache[&cache_key];
-                self.ctx.set_fill_style_canvas_gradient(grad);
-                self.ctx.fill_rect(tx, ty, fw, fh);
-            },
-            GradientStyle::FourCorner {
-                top_left,
-                top_right,
-                bottom_left,
-                bottom_right,
-            } => {
-                // Approximate 4-corner gradient with two overlapping linear
-                // gradients using globalAlpha blending.
-                let prev_alpha = self.ctx.global_alpha();
-
-                // First pass: vertical gradient (top_left → bottom_left).
-                let css_tl = cached_css_color(&mut self.color_cache, *top_left).to_owned();
-                let css_bl = cached_css_color(&mut self.color_cache, *bottom_left).to_owned();
-                let grad_v = self.ctx.create_linear_gradient(tx, ty, tx, ty + fh);
-                grad_v.add_color_stop(0.0, &css_tl).map_err(js_err)?;
-                grad_v.add_color_stop(1.0, &css_bl).map_err(js_err)?;
-                self.ctx.set_fill_style_canvas_gradient(&grad_v);
-                self.ctx.fill_rect(tx, ty, fw, fh);
-
-                // Second pass: horizontal gradient with half alpha for blending.
-                self.ctx.set_global_alpha(0.5);
-                let css_tl2 = cached_css_color(&mut self.color_cache, *top_left).to_owned();
-                let css_tr = cached_css_color(&mut self.color_cache, *top_right).to_owned();
-                let grad_h = self.ctx.create_linear_gradient(tx, ty, tx + fw, ty);
-                grad_h.add_color_stop(0.0, &css_tl2).map_err(js_err)?;
-                grad_h.add_color_stop(1.0, &css_tr).map_err(js_err)?;
-                self.ctx.set_fill_style_canvas_gradient(&grad_h);
-                self.ctx.fill_rect(tx, ty, fw, fh);
-
-                self.ctx.set_global_alpha(prev_alpha);
-
-                // Note: This is an approximation. True bilinear interpolation
-                // would require per-pixel blending, but this is visually
-                // close enough for the 480x272 resolution.
-                let _ = bottom_right;
-            },
-        }
-        Ok(())
-    }
-
-    fn fill_rounded_rect_gradient(
-        &mut self,
-        x: i32,
-        y: i32,
-        w: u32,
-        h: u32,
-        radius: u16,
-        gradient: &GradientStyle,
-    ) -> Result<()> {
-        if w == 0 || h == 0 {
-            return Ok(());
-        }
-        let (tx, ty) = self.translate(x, y);
-        let fw = w as f64;
-        let fh = h as f64;
-        let r = f64::from(radius).min(fw / 2.0).min(fh / 2.0);
-
-        // Build rounded rect path.
-        self.ctx.begin_path();
-        self.ctx.move_to(tx + r, ty);
-        self.ctx.line_to(tx + fw - r, ty);
-        self.ctx
-            .arc_to(tx + fw, ty, tx + fw, ty + r, r)
-            .map_err(js_err)?;
-        self.ctx.line_to(tx + fw, ty + fh - r);
-        self.ctx
-            .arc_to(tx + fw, ty + fh, tx + fw - r, ty + fh, r)
-            .map_err(js_err)?;
-        self.ctx.line_to(tx + r, ty + fh);
-        self.ctx
-            .arc_to(tx, ty + fh, tx, ty + fh - r, r)
-            .map_err(js_err)?;
-        self.ctx.line_to(tx, ty + r);
-        self.ctx.arc_to(tx, ty, tx + r, ty, r).map_err(js_err)?;
-        self.ctx.close_path();
-
-        // Create gradient fill.
-        let grad = match gradient {
-            GradientStyle::Vertical { top, bottom } => {
-                let g = self.ctx.create_linear_gradient(tx, ty, tx, ty + fh);
-                let css_top = cached_css_color(&mut self.color_cache, *top).to_owned();
-                let css_bot = cached_css_color(&mut self.color_cache, *bottom).to_owned();
-                g.add_color_stop(0.0, &css_top).map_err(js_err)?;
-                g.add_color_stop(1.0, &css_bot).map_err(js_err)?;
-                g
-            },
-            GradientStyle::Horizontal { left, right } => {
-                let g = self.ctx.create_linear_gradient(tx, ty, tx + fw, ty);
-                let css_left = cached_css_color(&mut self.color_cache, *left).to_owned();
-                let css_right = cached_css_color(&mut self.color_cache, *right).to_owned();
-                g.add_color_stop(0.0, &css_left).map_err(js_err)?;
-                g.add_color_stop(1.0, &css_right).map_err(js_err)?;
-                g
-            },
-            _ => {
-                // Four-corner: fallback to primary color.
-                let c = gradient.primary_color();
-                let css = cached_css_color(&mut self.color_cache, c);
-                self.ctx.set_fill_style_str(css);
-                self.ctx.fill();
-                return Ok(());
-            },
-        };
-        self.ctx.set_fill_style_canvas_gradient(&grad);
-        self.ctx.fill();
-        Ok(())
-    }
-}
-
 // -------------------------------------------------------------------
 // SdiAlpha: Alpha and viewport
 // -------------------------------------------------------------------
@@ -1011,180 +598,6 @@ impl SdiText for WasmBackend {
 }
 
 // -------------------------------------------------------------------
-// SdiTextures: Texture operations
-// -------------------------------------------------------------------
-
-impl SdiTextures for WasmBackend {
-    fn blit_sub(
-        &mut self,
-        tex: TextureId,
-        src_x: u32,
-        src_y: u32,
-        src_w: u32,
-        src_h: u32,
-        dst_x: i32,
-        dst_y: i32,
-        dst_w: u32,
-        dst_h: u32,
-    ) -> Result<()> {
-        let td = self
-            .textures
-            .get(&tex.0)
-            .ok_or_else(|| texture_not_found(tex.0))?;
-        let (tx, ty) = self.translate(dst_x, dst_y);
-        self.ctx
-            .draw_image_with_html_canvas_element_and_sw_and_sh_and_dx_and_dy_and_dw_and_dh(
-                &td.canvas,
-                src_x as f64,
-                src_y as f64,
-                src_w as f64,
-                src_h as f64,
-                tx,
-                ty,
-                dst_w as f64,
-                dst_h as f64,
-            )
-            .map_err(js_err)?;
-        Ok(())
-    }
-
-    fn blit_flipped(
-        &mut self,
-        tex: TextureId,
-        x: i32,
-        y: i32,
-        w: u32,
-        h: u32,
-        flip_h: bool,
-        flip_v: bool,
-    ) -> Result<()> {
-        if !flip_h && !flip_v {
-            return self.blit(tex, x, y, w, h);
-        }
-
-        let td = self
-            .textures
-            .get(&tex.0)
-            .ok_or_else(|| texture_not_found(tex.0))?;
-
-        let (tx, ty) = self.translate(x, y);
-        let fw = w as f64;
-        let fh = h as f64;
-
-        // Apply flip via scale transform.
-        self.ctx.save();
-        let sx = if flip_h { -1.0 } else { 1.0 };
-        let sy = if flip_v { -1.0 } else { 1.0 };
-        let dx = if flip_h { -(tx + fw) } else { tx };
-        let dy = if flip_v { -(ty + fh) } else { ty };
-        self.ctx.scale(sx, sy).map_err(js_err)?;
-        self.ctx
-            .draw_image_with_html_canvas_element_and_dw_and_dh(&td.canvas, dx, dy, fw, fh)
-            .map_err(js_err)?;
-        self.ctx.restore();
-        Ok(())
-    }
-
-    fn blit_tinted(
-        &mut self,
-        tex: TextureId,
-        x: i32,
-        y: i32,
-        w: u32,
-        h: u32,
-        tint: Color,
-    ) -> Result<()> {
-        // Draw the base texture.
-        self.blit(tex, x, y, w, h)?;
-
-        // Apply tint by drawing a colored rectangle with multiply composite.
-        let (tx, ty) = self.translate(x, y);
-        let prev_op = self
-            .ctx
-            .global_composite_operation()
-            .unwrap_or_else(|_| "source-over".to_string());
-        let _ = self.ctx.set_global_composite_operation("multiply");
-        let css = cached_css_color(&mut self.color_cache, tint);
-        self.ctx.set_fill_style_str(css);
-        self.ctx.fill_rect(tx, ty, w as f64, h as f64);
-        let _ = self.ctx.set_global_composite_operation(&prev_op);
-        Ok(())
-    }
-}
-
-// -------------------------------------------------------------------
-// SdiClipTransform: Clip and transform stacks
-// -------------------------------------------------------------------
-
-impl SdiClipTransform for WasmBackend {
-    fn push_clip_rect(&mut self, x: i32, y: i32, w: u32, h: u32) -> Result<()> {
-        let (tx, ty) = self.translate(x, y);
-        let new_clip = ClipRect {
-            x: tx as i32,
-            y: ty as i32,
-            w,
-            h,
-        };
-        let effective = match self.clip_stack.push(new_clip) {
-            ClipPush::Clip(c) => c,
-            ClipPush::Empty => ClipRect {
-                x: 0,
-                y: 0,
-                w: 0,
-                h: 0,
-            },
-        };
-
-        self.ctx.save();
-        self.ctx.begin_path();
-        self.ctx.rect(
-            effective.x as f64,
-            effective.y as f64,
-            effective.w as f64,
-            effective.h as f64,
-        );
-        self.ctx.clip();
-        Ok(())
-    }
-
-    fn pop_clip_rect(&mut self) -> Result<()> {
-        self.clip_stack.pop();
-        self.ctx.restore();
-        Ok(())
-    }
-
-    fn current_clip_rect(&self) -> Option<(i32, i32, u32, u32)> {
-        self.clip_stack.current_tuple()
-    }
-
-    fn push_translate(&mut self, dx: i32, dy: i32) -> Result<()> {
-        self.translate_stack.push(dx, dy);
-        Ok(())
-    }
-
-    fn pop_translate(&mut self) -> Result<()> {
-        self.translate_stack.pop();
-        Ok(())
-    }
-
-    fn current_translate(&self) -> (i32, i32) {
-        self.translate_stack.current()
-    }
-
-    fn push_region(&mut self, x: i32, y: i32, w: u32, h: u32) -> Result<()> {
-        self.push_translate(x, y)?;
-        self.push_clip_rect(0, 0, w, h)?;
-        Ok(())
-    }
-
-    fn pop_region(&mut self) -> Result<()> {
-        self.pop_clip_rect()?;
-        self.pop_translate()?;
-        Ok(())
-    }
-}
-
-// -------------------------------------------------------------------
 // SdiBatch: No-op (use default impl)
 // -------------------------------------------------------------------
 
@@ -1217,6 +630,7 @@ mod tests {
     #![allow(clippy::unwrap_used)]
 
     use super::*;
+    use crate::gradients::GradientCacheKey;
 
     // -----------------------------------------------------------------------
     // cached_css_color

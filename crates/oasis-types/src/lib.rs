@@ -16,5 +16,6 @@ pub mod rasterize;
 pub mod shader;
 pub mod shadow;
 pub mod sync;
+pub mod sync_clock;
 pub mod text_direction;
 pub mod tls;

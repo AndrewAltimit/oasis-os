@@ -228,14 +228,14 @@ impl VideoPlayer {
         };
 
         // Take stdout handles before moving children.
-        let video_stdout = video_child
-            .stdout
-            .take()
-            .expect("video child stdout must be piped");
-        let audio_stdout = audio_child
-            .stdout
-            .take()
-            .expect("audio child stdout must be piped");
+        let Some(video_stdout) = video_child.stdout.take() else {
+            self.error_msg = Some("video child stdout not piped".into());
+            return;
+        };
+        let Some(audio_stdout) = audio_child.stdout.take() else {
+            self.error_msg = Some("audio child stdout not piped".into());
+            return;
+        };
 
         // Video reader thread: reads exact frame-sized chunks.
         let frame_size = (width * height * 4) as usize;
