@@ -213,13 +213,10 @@ Key documentation files for agents and contributors. Read these for deeper conte
 - [`docs/adr/005-toml-skin-system.md`](docs/adr/005-toml-skin-system.md) -- ADR: TOML skin engine
 
 ### Plans & Roadmaps
-- [`docs/psp-modernization-plan.md`](docs/psp-modernization-plan.md) -- PSP backend modernization (9 phases, 40 steps)
-- [`docs/comprehensive-improvements-plan-v2.md`](docs/comprehensive-improvements-plan-v2.md) -- Cross-crate improvement plan
+- [`docs/comprehensive-improvements-plan-v2.md`](docs/comprehensive-improvements-plan-v2.md) -- Cross-crate improvement plan (remaining work only)
 - [`docs/browser-improvement-plan-r3.md`](docs/browser-improvement-plan-r3.md) -- Browser engine improvement plan
-- [`docs/app-extraction-plan.md`](docs/app-extraction-plan.md) -- App crate extraction from oasis-core
+- [`docs/refactor-plan-backend-tests-js.md`](docs/refactor-plan-backend-tests-js.md) -- Backend traits, tests, JS runtime refactor plan
 - [`docs/testing-gap-analysis.md`](docs/testing-gap-analysis.md) -- Test coverage gap analysis
-- [`docs/prd-oasis-video-integration.md`](docs/prd-oasis-video-integration.md) -- Video decode integration PRD
-- [`docs/internet-archive-tv-guide-plan.md`](docs/internet-archive-tv-guide-plan.md) -- TV Guide streaming plan
 
 ### Guides
 - [`docs/getting-started.md`](docs/getting-started.md) -- Getting started guide
