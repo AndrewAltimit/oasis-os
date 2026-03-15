@@ -246,10 +246,8 @@ pub(crate) fn parse_value_list(tokens: &[CssToken]) -> Vec<CssValue> {
                     let mut comma_pos = None;
                     for (j, tok) in args.iter().enumerate() {
                         match tok {
-                            CssToken::Ident(id) if prop_name.is_none() => {
-                                if id.starts_with("--") {
-                                    prop_name = Some(id.to_ascii_lowercase());
-                                }
+                            CssToken::Ident(id) if prop_name.is_none() && id.starts_with("--") => {
+                                prop_name = Some(id.to_ascii_lowercase());
                             },
                             CssToken::Comma if prop_name.is_some() && comma_pos.is_none() => {
                                 comma_pos = Some(j);

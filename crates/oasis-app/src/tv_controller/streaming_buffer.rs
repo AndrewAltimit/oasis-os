@@ -116,10 +116,9 @@ impl StreamingInner {
         let buf_len = s.buf.len();
         if received.is_multiple_of(4 * 1024 * 1024) {
             let total = self.total_size.load(std::sync::atomic::Ordering::Relaxed);
-            let pct = if total > 0 {
-                format!(" ({}%)", received * 100 / total)
-            } else {
-                String::new()
+            let pct = match std::num::NonZero::new(total) {
+                Some(t) => format!(" ({}%)", received * 100 / t.get()),
+                None => String::new(),
             };
             log::info!(
                 "TV: download progress: {:.1}MB received{pct}, buffer={:.1}MB",

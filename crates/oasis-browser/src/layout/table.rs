@@ -839,7 +839,7 @@ fn make_empty_table(style: &ComputedStyle) -> LayoutBox {
 ///
 /// `colspan` is encoded as `min_width: Px(colspan * 1000.0)`.
 /// `rowspan` is encoded as `max_width: Px(rowspan * 1000.0)`.
-#[allow(dead_code)]
+#[cfg(test)]
 pub fn make_cell_with_spans(
     style: &ComputedStyle,
     colspan: usize,

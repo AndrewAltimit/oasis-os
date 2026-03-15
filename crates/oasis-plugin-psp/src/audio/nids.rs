@@ -47,8 +47,6 @@ pub(super) const PSP_MODULE_AV_MP3: i32 = 0x0302;
 // ---------------------------------------------------------------------------
 
 pub(super) const NID_MP3_INIT_RESOURCE: u32 = 0x35750070;
-#[allow(dead_code)]
-pub(super) const NID_MP3_TERM_RESOURCE: u32 = 0xD0A56296;
 pub(super) const NID_MP3_RESERVE_HANDLE: u32 = 0x7F2A1880;
 pub(super) const NID_MP3_RELEASE_HANDLE: u32 = 0x0DB149F4;
 pub(super) const NID_MP3_INIT: u32 = 0x44E07129;
@@ -497,7 +495,6 @@ mod tests {
     fn mp3_nids_distinct() {
         let nids = [
             NID_MP3_INIT_RESOURCE,
-            NID_MP3_TERM_RESOURCE,
             NID_MP3_RESERVE_HANDLE,
             NID_MP3_RELEASE_HANDLE,
             NID_MP3_INIT,

@@ -6,12 +6,15 @@
 pub mod archive;
 pub mod audio;
 pub mod font;
+mod gradients;
 pub mod iframe;
 pub mod input;
 pub mod network;
 pub mod platform;
 pub mod renderer;
 pub mod shader_bridge;
+mod shapes;
+mod textures;
 pub mod tv_catalog;
 pub mod video;
 

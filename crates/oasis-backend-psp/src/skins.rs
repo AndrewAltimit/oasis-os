@@ -80,20 +80,6 @@ impl PspSkinPreset {
             .unwrap_or(Self::Psix)
     }
 
-    /// Cycle to the next preset in the list.
-    #[allow(dead_code)]
-    pub(crate) fn next(self) -> Self {
-        let idx = Self::ALL.iter().position(|&p| p == self).unwrap_or(0);
-        Self::ALL[(idx + 1) % Self::ALL.len()]
-    }
-
-    /// Cycle to the previous preset in the list.
-    #[allow(dead_code)]
-    pub(crate) fn prev(self) -> Self {
-        let idx = Self::ALL.iter().position(|&p| p == self).unwrap_or(0);
-        Self::ALL[(idx + Self::ALL.len() - 1) % Self::ALL.len()]
-    }
-
     /// The 9 base colors: (background, primary, secondary, text, dim_text,
     /// status_bar, prompt, output, error).
     fn base_colors(self) -> [Color; 9] {
@@ -282,4 +268,19 @@ pub(crate) fn apply_psp_overrides(t: &mut ActiveTheme) {
     t.background_max_layers = 4;
     t.background_complexity_budget = t.background_complexity_budget.min(100);
     t.background_reduced_motion = true;
+}
+
+#[cfg(test)]
+impl PspSkinPreset {
+    /// Cycle to the next preset in the list.
+    pub(crate) fn next(self) -> Self {
+        let idx = Self::ALL.iter().position(|&p| p == self).unwrap_or(0);
+        Self::ALL[(idx + 1) % Self::ALL.len()]
+    }
+
+    /// Cycle to the previous preset in the list.
+    pub(crate) fn prev(self) -> Self {
+        let idx = Self::ALL.iter().position(|&p| p == self).unwrap_or(0);
+        Self::ALL[(idx + Self::ALL.len() - 1) % Self::ALL.len()]
+    }
 }

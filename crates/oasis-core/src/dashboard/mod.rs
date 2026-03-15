@@ -257,10 +257,8 @@ impl DashboardState {
                     self.selected = next;
                 }
             },
-            Button::Up => {
-                if self.selected >= cols {
-                    self.selected -= cols;
-                }
+            Button::Up if self.selected >= cols => {
+                self.selected -= cols;
             },
             _ => {},
         }

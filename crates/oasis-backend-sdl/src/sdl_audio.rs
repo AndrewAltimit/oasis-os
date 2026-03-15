@@ -208,14 +208,38 @@ impl SdlAudioBackend {
         Ok(())
     }
 
-    /// Decode an entire MP3 buffer and queue all PCM at once (for static
+    /// Decode an entire audio buffer and queue all PCM at once (for static
     /// tracks loaded via `load_track`).
     fn decode_and_queue_all(&mut self, audio_data: &[u8]) -> Result<()> {
-        // Try WAV first (cheap header check), then fall back to MP3.
+        // Try WAV first (cheap header check), then Ogg Vorbis, then MP3.
         if oasis_audio::wav::is_wav(audio_data) {
             return self.decode_wav_and_queue(audio_data);
         }
+        if oasis_audio::ogg::is_ogg(audio_data) {
+            return self.decode_ogg_and_queue(audio_data);
+        }
         self.decode_mp3_and_queue(audio_data)
+    }
+
+    fn decode_ogg_and_queue(&mut self, ogg_data: &[u8]) -> Result<()> {
+        let ogg = oasis_audio::ogg::decode_ogg(ogg_data)
+            .ok_or_else(|| OasisError::Backend("invalid Ogg Vorbis data".into()))?;
+
+        if self.stream_owner.is_none() && self.audio_subsystem.is_some() {
+            self.open_device(ogg.sample_rate as i32, ogg.channels as u8)?;
+        }
+
+        self.sample_rate = ogg.sample_rate as i32;
+        self.channels = ogg.channels as usize;
+
+        let mut pending_pcm = ogg.samples;
+        let vol = self.volume as i32;
+        for s in &mut pending_pcm {
+            *s = ((*s as i32 * vol) / 100) as i16;
+        }
+
+        self.queue_pcm(&pending_pcm)?;
+        Ok(())
     }
 
     fn decode_wav_and_queue(&mut self, wav_data: &[u8]) -> Result<()> {

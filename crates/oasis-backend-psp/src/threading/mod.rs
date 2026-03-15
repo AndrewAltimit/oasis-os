@@ -10,6 +10,8 @@ mod audio;
 mod io_handlers;
 mod radio;
 mod tls_http;
+mod video_dl_http;
+mod video_dl_parse;
 mod video_download;
 
 use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};

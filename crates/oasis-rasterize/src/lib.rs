@@ -15,7 +15,7 @@
 mod texture_dedup;
 pub use texture_dedup::TextureDedup;
 
-use oasis_types::backend::Color;
+use oasis_types::backend::{Color, GradientStyle};
 use oasis_types::color::lerp_color_ratio;
 use oasis_types::geometry::ClipRect;
 use oasis_types::rasterize::{self, PixelSink};
@@ -527,6 +527,38 @@ impl SoftwareBuffer {
                 let color = lerp_color_ratio(left, right, dx as u32, w_max);
                 self.set_pixel(x + dx, y + dy, color);
             }
+        }
+    }
+
+    /// Fill a rectangle with a gradient, dispatching on [`GradientStyle`].
+    ///
+    /// This is a convenience method that delegates to the appropriate
+    /// variant-specific gradient fill.
+    pub fn fill_rect_gradient(&mut self, x: i32, y: i32, w: u32, h: u32, gradient: &GradientStyle) {
+        match *gradient {
+            GradientStyle::Vertical { top, bottom } => {
+                self.fill_rect_vertical_gradient(x, y, w, h, top, bottom);
+            },
+            GradientStyle::Horizontal { left, right } => {
+                self.fill_rect_horizontal_gradient(x, y, w, h, left, right);
+            },
+            GradientStyle::FourCorner {
+                top_left,
+                top_right,
+                bottom_left,
+                bottom_right,
+            } => {
+                self.fill_rect_four_corner_gradient(
+                    x,
+                    y,
+                    w,
+                    h,
+                    top_left,
+                    top_right,
+                    bottom_left,
+                    bottom_right,
+                );
+            },
         }
     }
 

@@ -8,7 +8,10 @@
 //! SDL3 renderer API calls and software rasterization helpers.
 
 mod blitting;
+mod core_impl;
 mod font;
+mod glyph_cache;
+mod gradients;
 mod input;
 pub mod network;
 mod sdl_audio;
@@ -18,29 +21,21 @@ mod shapes;
 use std::collections::HashMap;
 
 use sdl3::EventPump;
-use sdl3::pixels::PixelFormat;
-use sdl3::rect::Rect;
 use sdl3::render::{Canvas, FPoint, FRect, Texture, TextureCreator};
 use sdl3::video::{Window, WindowContext};
 
 use oasis_core::backend::{
-    BackendErrExt, Color, GradientStyle, SdiAlpha, SdiBatch, SdiClipTransform, SdiCore,
-    SdiGradients, SdiShapes, SdiText, SdiTextures, SdiVector, TextureId, texture_not_found,
-    validate_rgba_data,
+    ArcParams, BackendErrExt, Color, DashStyle, SdiAlpha, SdiBatch, SdiClipTransform, SdiCore,
+    SdiShapes, SdiTextures, SdiVector, StrokeStyle, TextureId,
 };
 use oasis_core::error::Result;
 use oasis_types::backend::stacks::{ClipPush, ClipStack, TranslateStack};
-use oasis_types::color::lerp_color_ratio;
 pub use oasis_types::geometry::ClipRect;
 
 pub use network::SdlNetworkBackend;
 pub use sdl_audio::SdlAudioBackend;
 
 use oasis_rasterize::GlyphCacheKey;
-use oasis_types::geometry::rounded_rect_inset;
-
-/// Maximum number of cached glyph textures before LRU eviction kicks in.
-const MAX_GLYPH_CACHE_SIZE: usize = 2048;
 
 // Re-export input helpers for tests.
 #[cfg(test)]
@@ -87,14 +82,14 @@ pub struct SdlBackend {
     // defense-in-depth. Reordering these fields without the Drop impl is UB.
     pub(crate) textures: HashMap<u64, Texture<'static>>,
     /// Maps glyph key to a cached SDL texture ID (lives in `textures`).
-    glyph_cache: HashMap<GlyphCacheKey, u64>,
+    pub(crate) glyph_cache: HashMap<GlyphCacheKey, u64>,
     /// LRU access timestamps for glyph cache eviction.
-    glyph_access: HashMap<GlyphCacheKey, u64>,
+    pub(crate) glyph_access: HashMap<GlyphCacheKey, u64>,
     /// Monotonic counter for LRU access tracking.
-    glyph_access_counter: u64,
+    pub(crate) glyph_access_counter: u64,
     // SAFETY: Must be declared after `textures` -- see comment above.
-    texture_creator: TextureCreator<WindowContext>,
-    next_texture_id: u64,
+    pub(crate) texture_creator: TextureCreator<WindowContext>,
+    pub(crate) next_texture_id: u64,
     pub(crate) clip_stack: ClipStack,
     pub(crate) translate_stack: TranslateStack,
     pub(crate) viewport_w: u32,
@@ -171,100 +166,6 @@ impl SdlBackend {
         self.translate_stack.translate(x, y)
     }
 
-    /// Render a single glyph to an RGBA buffer and load it as an SDL
-    /// texture. Returns the texture ID stored in `self.textures`.
-    fn render_glyph_texture(
-        &mut self,
-        ch: char,
-        font_size: u16,
-        color: Color,
-        bold: bool,
-        italic: bool,
-    ) -> Result<u64> {
-        let fs = font_size.max(1) as i32;
-        let advance = oasis_types::bitmap_font::glyph_advance_scaled(ch, font_size) as i32;
-        let bold_extra = if bold { 1 } else { 0 };
-        let italic_extra = if italic { fs / 32 + 1 } else { 0 };
-        let gw = (advance + bold_extra + italic_extra).max(1) as u32;
-        let gh = font_size.max(1) as u32;
-        let mut rgba = vec![0u8; (gw * gh * 4) as usize];
-
-        let glyph_data = font::glyph(ch);
-        let (left_pad, _) = font::glyph_metrics(ch);
-        let left_pad = left_pad as i32;
-
-        for row in 0..8i32 {
-            let bits = glyph_data[row as usize];
-            if bits == 0 {
-                continue;
-            }
-            let oy0 = row * fs / 8;
-            let oy1 = (row + 1) * fs / 8;
-            let italic_off = if italic { (7 - row) * fs / 32 } else { 0 };
-
-            for col in 0..8i32 {
-                if bits & (0x80 >> col) == 0 {
-                    continue;
-                }
-                let src_col = col - left_pad;
-                let ox0 = src_col * fs / 8;
-                let ox1 = (src_col + 1) * fs / 8;
-                // Fill the scaled rectangle in the buffer.
-                for py in oy0..oy1.max(oy0 + 1) {
-                    for px in ox0..ox1.max(ox0 + 1) {
-                        let bx = px + italic_off;
-                        Self::set_glyph_pixel(&mut rgba, gw, gh, bx, py, color);
-                        if bold {
-                            Self::set_glyph_pixel(&mut rgba, gw, gh, bx + 1, py, color);
-                        }
-                    }
-                }
-            }
-        }
-
-        let mut texture = self
-            .texture_creator
-            .create_texture_streaming(PixelFormat::ABGR8888, gw, gh)
-            .backend_err()?;
-        texture
-            .with_lock(None, |buf: &mut [u8], pitch: usize| {
-                let row_bytes = (gw as usize) * 4;
-                for y in 0..gh as usize {
-                    let src_start = y * row_bytes;
-                    let dst_start = y * pitch;
-                    buf[dst_start..dst_start + row_bytes]
-                        .copy_from_slice(&rgba[src_start..src_start + row_bytes]);
-                }
-            })
-            .backend_err()?;
-        texture.set_blend_mode(sdl3::render::BlendMode::Blend);
-
-        // SAFETY: The texture borrows from self.texture_creator
-        // which lives in the same struct. The explicit `Drop` impl
-        // clears all textures before texture_creator is dropped.
-        let texture: Texture<'static> = unsafe { std::mem::transmute(texture) };
-
-        let id = self.next_texture_id;
-        self.next_texture_id += 1;
-        self.textures.insert(id, texture);
-        Ok(id)
-    }
-
-    /// Write a single pixel into a glyph RGBA buffer, with bounds
-    /// checking.
-    fn set_glyph_pixel(buf: &mut [u8], w: u32, h: u32, x: i32, y: i32, color: Color) {
-        if x < 0 || y < 0 || x >= w as i32 || y >= h as i32 {
-            return;
-        }
-        let offset = (y as usize * w as usize + x as usize) * 4;
-        if offset + 3 < buf.len() {
-            buf[offset] = color.r;
-            buf[offset + 1] = color.g;
-            buf[offset + 2] = color.b;
-            buf[offset + 3] = color.a;
-        }
-    }
-
     /// Set the SDL draw color with optional blend mode.
     pub(crate) fn set_color(&mut self, color: Color) {
         if color.a < 255 {
@@ -275,130 +176,6 @@ impl SdlBackend {
         self.canvas.set_draw_color(sdl3::pixels::Color::RGBA(
             color.r, color.g, color.b, color.a,
         ));
-    }
-}
-
-impl SdiCore for SdlBackend {
-    fn init(&mut self, _width: u32, _height: u32) -> Result<()> {
-        Ok(())
-    }
-
-    fn clear(&mut self, color: Color) -> Result<()> {
-        self.canvas.set_draw_color(sdl3::pixels::Color::RGBA(
-            color.r, color.g, color.b, color.a,
-        ));
-        self.canvas.clear();
-        Ok(())
-    }
-
-    fn blit(&mut self, tex: TextureId, x: i32, y: i32, w: u32, h: u32) -> Result<()> {
-        let (tx, ty) = self.translate(x, y);
-        let texture = self
-            .textures
-            .get(&tex.0)
-            .ok_or_else(|| texture_not_found(tex.0))?;
-        self.canvas
-            .copy(texture, None, frect(tx, ty, w, h))
-            .backend_err()?;
-        Ok(())
-    }
-
-    fn draw_text(
-        &mut self,
-        text: &str,
-        x: i32,
-        y: i32,
-        font_size: u16,
-        color: Color,
-    ) -> Result<()> {
-        self.draw_text_styled(text, x, y, font_size, color, false, false)
-    }
-
-    fn fill_rect(&mut self, x: i32, y: i32, w: u32, h: u32, color: Color) -> Result<()> {
-        let (tx, ty) = self.translate(x, y);
-        self.set_color(color);
-        self.canvas.fill_rect(frect(tx, ty, w, h)).backend_err()?;
-        Ok(())
-    }
-
-    fn swap_buffers(&mut self) -> Result<()> {
-        self.canvas.present();
-        Ok(())
-    }
-
-    fn load_texture(&mut self, width: u32, height: u32, rgba_data: &[u8]) -> Result<TextureId> {
-        validate_rgba_data(width, height, rgba_data)?;
-
-        let mut texture = self
-            .texture_creator
-            .create_texture_streaming(PixelFormat::ABGR8888, width, height)
-            .backend_err()?;
-
-        texture
-            .with_lock(None, |buffer: &mut [u8], _pitch: usize| {
-                buffer[..rgba_data.len()].copy_from_slice(rgba_data);
-            })
-            .backend_err()?;
-
-        texture.set_blend_mode(sdl3::render::BlendMode::Blend);
-
-        // SAFETY: The texture borrows from self.texture_creator which lives in the
-        // same struct. The explicit `Drop` impl clears all textures before
-        // texture_creator is dropped. The erased lifetime is therefore always valid.
-        let texture: Texture<'static> = unsafe { std::mem::transmute(texture) };
-
-        let id = self.next_texture_id;
-        self.next_texture_id += 1;
-        self.textures.insert(id, texture);
-        Ok(TextureId(id))
-    }
-
-    fn destroy_texture(&mut self, tex: TextureId) -> Result<()> {
-        self.textures.remove(&tex.0);
-        Ok(())
-    }
-
-    fn set_clip_rect(&mut self, x: i32, y: i32, w: u32, h: u32) -> Result<()> {
-        self.canvas.set_clip_rect(Rect::new(x, y, w, h));
-        Ok(())
-    }
-
-    fn reset_clip_rect(&mut self) -> Result<()> {
-        self.canvas.set_clip_rect(None);
-        Ok(())
-    }
-
-    fn measure_text(&self, text: &str, font_size: u16) -> u32 {
-        oasis_core::backend::bitmap_measure_text(text, font_size)
-    }
-
-    fn read_pixels(&self, x: i32, y: i32, w: u32, h: u32) -> Result<Vec<u8>> {
-        let rect = Rect::new(x, y, w, h);
-        let surface = self.canvas.read_pixels(rect).backend_err()?;
-        let pitch = surface.pitch() as usize;
-        let height = surface.height() as usize;
-        let width = surface.width() as usize;
-        let bpp = 4usize; // RGBA
-        // SAFETY: The surface was just created by read_pixels and is not
-        // shared; we only read the pixel data before it goes out of scope.
-        let data = unsafe { surface.without_lock() }.ok_or_else(|| {
-            oasis_core::error::OasisError::Backend("cannot lock surface pixels".into())
-        })?;
-        // Copy pixel data row by row (pitch may differ from width * bpp).
-        let mut pixels = Vec::with_capacity(width * height * bpp);
-        for row in 0..height {
-            let start = row * pitch;
-            let end = start + width * bpp;
-            if end <= data.len() {
-                pixels.extend_from_slice(&data[start..end]);
-            }
-        }
-        Ok(pixels)
-    }
-
-    fn shutdown(&mut self) -> Result<()> {
-        log::info!("SDL3 backend shut down");
-        Ok(())
     }
 }
 
@@ -428,7 +205,16 @@ impl SdiShapes for SdlBackend {
         stroke_width: u16,
         color: Color,
     ) -> Result<()> {
-        self.shape_stroke_rect(x, y, w, h, stroke_width, color)
+        self.shape_stroke_rect(
+            x,
+            y,
+            w,
+            h,
+            StrokeStyle {
+                width: stroke_width,
+                color,
+            },
+        )
     }
 
     fn draw_line(
@@ -455,7 +241,15 @@ impl SdiShapes for SdlBackend {
         stroke_width: u16,
         color: Color,
     ) -> Result<()> {
-        self.shape_stroke_circle(cx, cy, radius, stroke_width, color)
+        self.shape_stroke_circle(
+            cx,
+            cy,
+            radius,
+            StrokeStyle {
+                width: stroke_width,
+                color,
+            },
+        )
     }
 
     fn fill_triangle(
@@ -481,7 +275,17 @@ impl SdiShapes for SdlBackend {
         stroke_width: u16,
         color: Color,
     ) -> Result<()> {
-        self.shape_stroke_rounded_rect(x, y, w, h, radius, stroke_width, color)
+        self.shape_stroke_rounded_rect(
+            x,
+            y,
+            w,
+            h,
+            radius,
+            StrokeStyle {
+                width: stroke_width,
+                color,
+            },
+        )
     }
 }
 
@@ -503,7 +307,16 @@ impl SdiVector for SdlBackend {
         end_angle: f32,
         color: Color,
     ) -> Result<()> {
-        self.shape_fill_arc(cx, cy, radius, start_angle, end_angle, color)
+        self.shape_fill_arc(
+            ArcParams {
+                cx,
+                cy,
+                radius,
+                start_angle,
+                end_angle,
+            },
+            color,
+        )
     }
 
     fn stroke_arc(
@@ -516,7 +329,16 @@ impl SdiVector for SdlBackend {
         width: u16,
         color: Color,
     ) -> Result<()> {
-        self.shape_stroke_arc(cx, cy, radius, start_angle, end_angle, width, color)
+        self.shape_stroke_arc(
+            ArcParams {
+                cx,
+                cy,
+                radius,
+                start_angle,
+                end_angle,
+            },
+            StrokeStyle { width, color },
+        )
     }
 
     fn stroke_line_dashed(
@@ -530,102 +352,14 @@ impl SdiVector for SdlBackend {
         dash: u16,
         gap: u16,
     ) -> Result<()> {
-        self.shape_stroke_line_dashed(x1, y1, x2, y2, width, color, dash, gap)
-    }
-}
-
-// -------------------------------------------------------------------
-// SdiGradients: Gradient fills
-// -------------------------------------------------------------------
-
-impl SdiGradients for SdlBackend {
-    fn fill_rect_gradient(
-        &mut self,
-        x: i32,
-        y: i32,
-        w: u32,
-        h: u32,
-        gradient: &GradientStyle,
-    ) -> Result<()> {
-        let (tx, ty) = self.translate(x, y);
-        match *gradient {
-            GradientStyle::Vertical { top, bottom } => {
-                let h_max = h.saturating_sub(1).max(1);
-                for dy in 0..h as i32 {
-                    let color = lerp_color_ratio(top, bottom, dy as u32, h_max);
-                    self.set_color(color);
-                    let _ = self.canvas.fill_rect(frect(tx, ty + dy, w, 1));
-                }
-            },
-            GradientStyle::Horizontal { left, right } => {
-                let w_max = w.saturating_sub(1).max(1);
-                for dx in 0..w as i32 {
-                    let color = lerp_color_ratio(left, right, dx as u32, w_max);
-                    self.set_color(color);
-                    let _ = self.canvas.fill_rect(frect(tx + dx, ty, 1, h));
-                }
-            },
-            GradientStyle::FourCorner {
-                top_left,
-                top_right,
-                bottom_left,
-                bottom_right,
-            } => {
-                let h_max = h.saturating_sub(1).max(1);
-                let w_max = w.saturating_sub(1).max(1);
-                for dy in 0..h as i32 {
-                    let left = lerp_color_ratio(top_left, bottom_left, dy as u32, h_max);
-                    let right = lerp_color_ratio(top_right, bottom_right, dy as u32, h_max);
-                    for dx in 0..w as i32 {
-                        let color = lerp_color_ratio(left, right, dx as u32, w_max);
-                        self.set_color(color);
-                        let _ = self.canvas.fill_rect(frect(tx + dx, ty + dy, 1, 1));
-                    }
-                }
-            },
-        }
-        Ok(())
-    }
-
-    fn fill_rounded_rect_gradient(
-        &mut self,
-        x: i32,
-        y: i32,
-        w: u32,
-        h: u32,
-        radius: u16,
-        gradient: &GradientStyle,
-    ) -> Result<()> {
-        if radius == 0 || w == 0 || h == 0 {
-            return self.fill_rect_gradient(x, y, w, h, gradient);
-        }
-        // Currently only Vertical gradients get rounded-rect acceleration;
-        // other styles fall back to a flat rounded rect to preserve shape.
-        let (top_color, bottom_color) = match *gradient {
-            GradientStyle::Vertical { top, bottom } => (top, bottom),
-            _ => return self.fill_rounded_rect(x, y, w, h, radius, gradient.primary_color()),
-        };
-        let (tx, ty) = self.translate(x, y);
-        let r = (radius as i32).min(w as i32 / 2).min(h as i32 / 2);
-        let h_max = (h as i32 - 1).max(1);
-
-        // Draw scanline by scanline, clipping to the rounded rect shape.
-        for dy in 0..h as i32 {
-            let color = lerp_color_ratio(top_color, bottom_color, dy as u32, h_max as u32);
-            self.set_color(color);
-
-            // Compute horizontal inset for rounded corners.
-            let inset = rounded_rect_inset(dy, h as i32, r);
-
-            let lx = tx + inset;
-            let rx = tx + w as i32 - 1 - inset;
-            if lx <= rx {
-                let _ = self
-                    .canvas
-                    .fill_rect(frect(lx, ty + dy, (rx - lx + 1) as u32, 1));
-            }
-        }
-        Ok(())
+        self.shape_stroke_line_dashed(
+            x1,
+            y1,
+            x2,
+            y2,
+            StrokeStyle { width, color },
+            DashStyle { dash, gap },
+        )
     }
 }
 
@@ -714,78 +448,6 @@ impl SdiAlpha for SdlBackend {
 }
 
 // -------------------------------------------------------------------
-// SdiText: Text system
-// -------------------------------------------------------------------
-
-impl SdiText for SdlBackend {
-    fn draw_text_styled(
-        &mut self,
-        text: &str,
-        x: i32,
-        y: i32,
-        font_size: u16,
-        color: Color,
-        bold: bool,
-        italic: bool,
-    ) -> Result<()> {
-        if text.is_empty() || color.a == 0 || font_size == 0 {
-            return Ok(());
-        }
-        let (tx, ty) = self.translate(x, y);
-        let mut cx = tx;
-
-        for ch in text.chars() {
-            let key = GlyphCacheKey::new(ch, font_size, color, bold, italic);
-            if self.glyph_cache.contains_key(&key) {
-                // Cache hit: update LRU access counter.
-                self.glyph_access_counter += 1;
-                self.glyph_access.insert(key, self.glyph_access_counter);
-            } else {
-                // Evict LRU entry when cache is full.
-                while self.glyph_cache.len() >= MAX_GLYPH_CACHE_SIZE {
-                    if let Some((&oldest_key, _)) =
-                        self.glyph_access.iter().min_by_key(|&(_, &ts)| ts)
-                    {
-                        if let Some(tex_id) = self.glyph_cache.remove(&oldest_key) {
-                            self.textures.remove(&tex_id);
-                        }
-                        self.glyph_access.remove(&oldest_key);
-                    } else {
-                        break;
-                    }
-                }
-                // Render the glyph to a small RGBA buffer.
-                let tex_id = self.render_glyph_texture(ch, font_size, color, bold, italic)?;
-                self.glyph_cache.insert(key, tex_id);
-                self.glyph_access_counter += 1;
-                self.glyph_access.insert(key, self.glyph_access_counter);
-            }
-            // Blit the cached glyph texture.
-            if let Some(&tex_id) = self.glyph_cache.get(&key)
-                && let Some(texture) = self.textures.get(&tex_id)
-            {
-                let query = texture.query();
-                let _ = self
-                    .canvas
-                    .copy(texture, None, frect(cx, ty, query.width, query.height));
-            }
-            cx += oasis_types::bitmap_font::glyph_advance_scaled(ch, font_size) as i32;
-        }
-        Ok(())
-    }
-
-    fn measure_text_height(&self, font_size: u16) -> u32 {
-        // Match WASM: font_size * 1.2 (the actual rendered row height).
-        (f64::from(font_size.max(8)) * 1.2).ceil() as u32
-    }
-
-    fn font_ascent(&self, font_size: u16) -> u32 {
-        // Match WASM: font_size * 0.85 (baseline offset from top).
-        (f64::from(font_size.max(8)) * 0.85).ceil() as u32
-    }
-}
-
-// -------------------------------------------------------------------
 // SdiClipTransform: Clip and transform stack
 // -------------------------------------------------------------------
 
@@ -795,10 +457,11 @@ impl SdiClipTransform for SdlBackend {
         let new_clip = ClipRect { x: tx, y: ty, w, h };
         match self.clip_stack.push(new_clip) {
             ClipPush::Clip(c) => {
-                self.canvas.set_clip_rect(Rect::new(c.x, c.y, c.w, c.h));
+                self.canvas
+                    .set_clip_rect(sdl3::rect::Rect::new(c.x, c.y, c.w, c.h));
             },
             ClipPush::Empty => {
-                self.canvas.set_clip_rect(Rect::new(0, 0, 0, 0));
+                self.canvas.set_clip_rect(sdl3::rect::Rect::new(0, 0, 0, 0));
             },
         }
         Ok(())
@@ -808,7 +471,7 @@ impl SdiClipTransform for SdlBackend {
         match self.clip_stack.pop() {
             Some(prev) => {
                 self.canvas
-                    .set_clip_rect(Rect::new(prev.x, prev.y, prev.w, prev.h));
+                    .set_clip_rect(sdl3::rect::Rect::new(prev.x, prev.y, prev.w, prev.h));
             },
             None => {
                 self.canvas.set_clip_rect(None);
@@ -892,6 +555,7 @@ mod tests {
     use sdl3::keyboard::Keycode;
 
     use oasis_core::input::{Button, InputEvent, Trigger};
+    use oasis_types::backend::SdiText;
 
     // ---------------------------------------------------------------
     // Input mapping tests

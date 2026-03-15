@@ -198,10 +198,10 @@ impl FlexLayout {
 
         // Second pass: distribute remaining space to flex children.
         let remaining = main_total.saturating_sub(consumed);
-        if flex_total_weight > 0 {
+        if let Some(ftw) = std::num::NonZero::new(flex_total_weight) {
             for (i, child) in children.iter().enumerate() {
                 if let FlexSize::Flex(weight) = child.size {
-                    sizes[i] = remaining * weight / flex_total_weight;
+                    sizes[i] = remaining * weight / ftw;
                 }
             }
         }

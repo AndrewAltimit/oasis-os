@@ -206,6 +206,7 @@ impl FfmpegDecoder {
         // SAFETY: Find stream info.
         let ret = unsafe { ffi::avformat_find_stream_info(format_ctx, std::ptr::null_mut()) };
         if ret < 0 {
+            // SAFETY: format_ctx is valid; free on error before returning.
             unsafe { ffi::avformat_close_input(&mut (format_ctx as *mut _)) };
             return Err(VideoError::Demux(format!(
                 "avformat_find_stream_info failed: {}",
@@ -235,6 +236,7 @@ impl FfmpegDecoder {
         for i in 0..nb_streams {
             // SAFETY: Accessing stream array within bounds.
             let stream = unsafe { *(*format_ctx).streams.add(i) };
+            // SAFETY: stream is valid; codecpar is a non-null pointer set by ffmpeg.
             let codecpar = unsafe { &*(*stream).codecpar };
 
             let codec_type = codecpar.codec_type;

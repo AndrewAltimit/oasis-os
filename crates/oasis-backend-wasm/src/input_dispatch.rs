@@ -89,18 +89,13 @@ impl OasisWasm {
                     other => other,
                 };
             },
-            InputEvent::ButtonPress(Button::Select) => {
-                if self.mode != Mode::Osk {
-                    let osk_cfg = OskConfig {
-                        title: "On-Screen Keyboard".to_string(),
-                        ..OskConfig::for_screen(
-                            self.active_theme.screen_w,
-                            self.active_theme.screen_h,
-                        )
-                    };
-                    self.osk = Some(OskState::new(osk_cfg, ""));
-                    self.mode = Mode::Osk;
-                }
+            InputEvent::ButtonPress(Button::Select) if self.mode != Mode::Osk => {
+                let osk_cfg = OskConfig {
+                    title: "On-Screen Keyboard".to_string(),
+                    ..OskConfig::for_screen(self.active_theme.screen_w, self.active_theme.screen_h)
+                };
+                self.osk = Some(OskState::new(osk_cfg, ""));
+                self.mode = Mode::Osk;
             },
 
             InputEvent::ButtonPress(Button::Cancel) if self.mode == Mode::Dashboard => {},
@@ -140,22 +135,18 @@ impl OasisWasm {
 
             // Dashboard D-pad navigation.
             InputEvent::ButtonPress(btn) if self.mode == Mode::Dashboard => match btn {
-                Button::Up | Button::Down | Button::Left | Button::Right => {
-                    if self.bottom_bar.active_tab == MediaTab::None {
-                        self.dashboard.handle_input(btn);
-                    }
+                Button::Up | Button::Down | Button::Left | Button::Right
+                    if self.bottom_bar.active_tab == MediaTab::None =>
+                {
+                    self.dashboard.handle_input(btn);
                 },
-                Button::Triangle => {
-                    if self.bottom_bar.active_tab == MediaTab::None {
-                        self.dashboard.next_page();
-                        self.bottom_bar.current_page = self.dashboard.page;
-                    }
+                Button::Triangle if self.bottom_bar.active_tab == MediaTab::None => {
+                    self.dashboard.next_page();
+                    self.bottom_bar.current_page = self.dashboard.page;
                 },
-                Button::Square => {
-                    if self.bottom_bar.active_tab == MediaTab::None {
-                        self.dashboard.prev_page();
-                        self.bottom_bar.current_page = self.dashboard.page;
-                    }
+                Button::Square if self.bottom_bar.active_tab == MediaTab::None => {
+                    self.dashboard.prev_page();
+                    self.bottom_bar.current_page = self.dashboard.page;
                 },
                 _ => {},
             },
@@ -373,10 +364,8 @@ impl OasisWasm {
                     self.mode = Mode::Dashboard;
                 }
             },
-            InputEvent::ButtonPress(Button::Start) => {
-                if !self.skin.features.window_manager {
-                    self.mode = Mode::Terminal;
-                }
+            InputEvent::ButtonPress(Button::Start) if !self.skin.features.window_manager => {
+                self.mode = Mode::Terminal;
             },
             InputEvent::TextInput(ch) => match self.wm.active_window() {
                 Some("browser") => {

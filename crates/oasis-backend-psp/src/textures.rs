@@ -166,6 +166,8 @@ impl PspBackend {
             }
         }
         for row in 0..height as usize {
+            // SAFETY: src and dst are valid pointers within allocated texture
+            // and RGBA data buffers. Row indices are within bounds.
             unsafe {
                 let src = rgba_data.as_ptr().add(row * src_stride);
                 let dst = data.add(row * dst_stride);

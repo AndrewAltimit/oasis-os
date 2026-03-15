@@ -250,10 +250,8 @@ pub fn matches_empty(nodes: &[Node], node: usize) -> bool {
     for &child in &nodes[node].children {
         match &nodes[child].kind {
             NodeKind::Element(_) => return false,
-            NodeKind::Text(text) => {
-                if !text.trim().is_empty() {
-                    return false;
-                }
+            NodeKind::Text(text) if !text.trim().is_empty() => {
+                return false;
             },
             // Comments and Document nodes don't prevent :empty.
             _ => {},

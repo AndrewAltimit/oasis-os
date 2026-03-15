@@ -166,10 +166,12 @@ impl Tokenizer {
     /// Emit a start/end tag from the current tag builder, updating
     /// `last_start_tag` and the state machine as needed.
     pub(crate) fn emit_current_tag(&mut self) -> Token {
-        let tag = self
-            .current_tag
-            .take()
-            .expect("current_tag must be Some when emitting");
+        let Some(tag) = self.current_tag.take() else {
+            // State machine invariant: current_tag is always Some here.
+            // Return a harmless empty comment if the invariant is violated
+            // (defensive: avoids panicking on malformed input).
+            return Token::Comment(String::new());
+        };
         let name = tag.name.clone();
         let is_start = !tag.is_end_tag;
         let tok = tag.into_token();

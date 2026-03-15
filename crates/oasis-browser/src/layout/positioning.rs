@@ -185,7 +185,7 @@ fn offset_box(layout_box: &mut LayoutBox, dx: f32, dy: f32) {
 /// Returns a list of references sorted by z-index (ascending), then
 /// tree order for equal z-index values. This can be used by the paint
 /// module to establish stacking contexts.
-#[allow(dead_code)]
+#[cfg(test)]
 pub fn collect_stacking_order(root: &LayoutBox) -> Vec<(i32, usize, &LayoutBox)> {
     let mut items = Vec::new();
     collect_recursive(root, &mut items, 0);
@@ -194,7 +194,7 @@ pub fn collect_stacking_order(root: &LayoutBox) -> Vec<(i32, usize, &LayoutBox)>
     items
 }
 
-#[allow(dead_code)]
+#[cfg(test)]
 fn collect_recursive<'a>(
     layout_box: &'a LayoutBox,
     items: &mut Vec<(i32, usize, &'a LayoutBox)>,

@@ -262,9 +262,6 @@ pub(super) static mut UMEM_BLOCK_ID: psp::sys::SceUid = psp::sys::SceUid(0);
 pub(super) static mut UMEM_CODEC: *mut u32 = core::ptr::null_mut();
 /// Pointer to PCM buffer in user memory.
 pub(super) static mut UMEM_PCM: *mut i16 = core::ptr::null_mut();
-/// Pointer to codec working memory (replaces sceAudiocodecGetEDRAM).
-#[allow(dead_code)]
-pub(super) static mut UMEM_WORK: *mut u8 = core::ptr::null_mut();
 /// Pointer to read buffer in user memory.
 pub(super) static mut UMEM_READ: *mut u8 = core::ptr::null_mut();
 
@@ -301,24 +298,11 @@ pub(super) unsafe fn alloc_codec_user_mem() -> bool {
         let pcm_off = codec_off + CODEC_BUF_WORDS * 4;
         UMEM_PCM = base.add(pcm_off) as *mut i16;
         let work_off = pcm_off + 1152 * 2 * 2;
-        UMEM_WORK = base.add(work_off) as *mut u8;
         let read_off = work_off + CODEC_WORK_SIZE;
         UMEM_READ = base.add(read_off) as *mut u8;
     }
     log_i32(b"[OASIS] user mem @", base as i32);
     true
-}
-
-/// Free user-memory block if allocated.
-#[allow(dead_code)]
-pub(super) unsafe fn free_codec_user_mem() {
-    // SAFETY: UMEM_BLOCK_ID is valid if >= SceUid(0); freeing the partition memory.
-    unsafe {
-        if UMEM_BLOCK_ID >= psp::sys::SceUid(0) && UMEM_BLOCK_ID != psp::sys::SceUid(0) {
-            psp::sys::sceKernelFreePartitionMemory(UMEM_BLOCK_ID);
-            UMEM_BLOCK_ID = psp::sys::SceUid(0);
-        }
-    }
 }
 
 // ---------------------------------------------------------------------------

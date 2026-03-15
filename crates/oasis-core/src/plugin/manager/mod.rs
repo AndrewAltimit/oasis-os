@@ -8,6 +8,7 @@ mod app_registry;
 mod discovery;
 mod host;
 mod lifecycle;
+mod registry;
 mod validate;
 
 use serde::Deserialize;
@@ -87,20 +88,6 @@ impl PluginManager {
         }
     }
 
-    /// Register a static (built-in) plugin.
-    ///
-    /// The plugin is added in `Registered` state and must be initialized
-    /// via `init_all()` or `init_plugin()`.
-    pub fn register_static(&mut self, plugin: Box<dyn Plugin>) {
-        let capabilities = plugin.capabilities();
-        self.plugins.push(LoadedPlugin {
-            plugin,
-            state: PluginState::Registered,
-            registered_app_titles: Vec::new(),
-            capabilities,
-        });
-    }
-
     /// Validate a plugin's API version against the host.
     fn validate_api_version(info: &PluginInfo) -> Result<()> {
         validate::validate_api_version(info)
@@ -123,61 +110,6 @@ impl PluginManager {
             pending_apps,
             capabilities_override,
         )
-    }
-
-    /// Collect app registrations from a lifecycle call into the manager.
-    fn collect_apps(
-        &mut self,
-        idx: usize,
-        pending_apps: Vec<PluginAppRegistration>,
-        deduplicate: bool,
-    ) {
-        if deduplicate {
-            for app in pending_apps {
-                if self.plugin_apps.iter().any(|a| a.title == app.title) {
-                    log::warn!(
-                        "Plugin app '{}' already registered, ignoring duplicate",
-                        app.title,
-                    );
-                } else {
-                    self.plugins[idx]
-                        .registered_app_titles
-                        .push(app.title.clone());
-                    self.plugin_apps.push(app);
-                }
-            }
-        } else {
-            self.plugins[idx]
-                .registered_app_titles
-                .extend(pending_apps.iter().map(|a| a.title.clone()));
-            self.plugin_apps.extend(pending_apps);
-        }
-    }
-
-    /// List all plugins with their info and state.
-    pub fn list(&self) -> Vec<(PluginInfo, PluginState)> {
-        self.plugins
-            .iter()
-            .map(|p| (p.plugin.info(), p.state))
-            .collect()
-    }
-
-    /// Return the number of loaded plugins.
-    pub fn count(&self) -> usize {
-        self.plugins.len()
-    }
-
-    /// Return the number of active plugins.
-    pub fn active_count(&self) -> usize {
-        self.plugins
-            .iter()
-            .filter(|p| p.state == PluginState::Active)
-            .count()
-    }
-
-    /// Check if a plugin with the given name is loaded.
-    pub fn is_loaded(&self, name: &str) -> bool {
-        self.plugins.iter().any(|p| p.plugin.info().name == name)
     }
 
     /// Discover plugin manifests from the VFS plugin directory.

@@ -36,6 +36,11 @@ use serde::Deserialize;
 
 const EN_TOML: &str = include_str!("../translations/en.toml");
 const JA_TOML: &str = include_str!("../translations/ja.toml");
+const ES_TOML: &str = include_str!("../translations/es.toml");
+const DE_TOML: &str = include_str!("../translations/de.toml");
+const FR_TOML: &str = include_str!("../translations/fr.toml");
+const ZH_TOML: &str = include_str!("../translations/zh.toml");
+const KO_TOML: &str = include_str!("../translations/ko.toml");
 
 // ---------------------------------------------------------------------------
 // Locale enum
@@ -49,6 +54,16 @@ pub enum Locale {
     English = 0,
     /// Japanese.
     Japanese = 1,
+    /// Spanish.
+    Spanish = 2,
+    /// German.
+    German = 3,
+    /// French.
+    French = 4,
+    /// Chinese Simplified.
+    Chinese = 5,
+    /// Korean.
+    Korean = 6,
 }
 
 impl Locale {
@@ -58,6 +73,11 @@ impl Locale {
         match self {
             Self::English => "en",
             Self::Japanese => "ja",
+            Self::Spanish => "es",
+            Self::German => "de",
+            Self::French => "fr",
+            Self::Chinese => "zh",
+            Self::Korean => "ko",
         }
     }
 
@@ -67,13 +87,26 @@ impl Locale {
         match self {
             Self::English => "English",
             Self::Japanese => "日本語",
+            Self::Spanish => "Español",
+            Self::German => "Deutsch",
+            Self::French => "Français",
+            Self::Chinese => "简体中文",
+            Self::Korean => "한국어",
         }
     }
 
     /// List all supported locales.
     #[must_use]
     pub fn all() -> &'static [Locale] {
-        &[Self::English, Self::Japanese]
+        &[
+            Self::English,
+            Self::Japanese,
+            Self::Spanish,
+            Self::German,
+            Self::French,
+            Self::Chinese,
+            Self::Korean,
+        ]
     }
 
     /// Parse a locale from a code string. Returns `None` if unrecognized.
@@ -82,6 +115,11 @@ impl Locale {
         match code {
             "en" | "EN" | "english" | "English" => Some(Self::English),
             "ja" | "JA" | "jp" | "JP" | "japanese" | "Japanese" => Some(Self::Japanese),
+            "es" | "ES" | "spanish" | "Spanish" => Some(Self::Spanish),
+            "de" | "DE" | "german" | "German" => Some(Self::German),
+            "fr" | "FR" | "french" | "French" => Some(Self::French),
+            "zh" | "ZH" | "chinese" | "Chinese" => Some(Self::Chinese),
+            "ko" | "KO" | "korean" | "Korean" => Some(Self::Korean),
             _ => None,
         }
     }
@@ -89,6 +127,11 @@ impl Locale {
     fn from_u8(v: u8) -> Self {
         match v {
             1 => Self::Japanese,
+            2 => Self::Spanish,
+            3 => Self::German,
+            4 => Self::French,
+            5 => Self::Chinese,
+            6 => Self::Korean,
             _ => Self::English,
         }
     }
@@ -147,6 +190,11 @@ static CATALOG: LazyLock<Catalog> = LazyLock::new(|| {
     let mut locales = HashMap::new();
     locales.insert(Locale::English, parse_translations(EN_TOML));
     locales.insert(Locale::Japanese, parse_translations(JA_TOML));
+    locales.insert(Locale::Spanish, parse_translations(ES_TOML));
+    locales.insert(Locale::German, parse_translations(DE_TOML));
+    locales.insert(Locale::French, parse_translations(FR_TOML));
+    locales.insert(Locale::Chinese, parse_translations(ZH_TOML));
+    locales.insert(Locale::Korean, parse_translations(KO_TOML));
     Catalog { locales }
 });
 
@@ -317,15 +365,25 @@ mod tests {
         assert_eq!(Locale::from_code("en"), Some(Locale::English));
         assert_eq!(Locale::from_code("ja"), Some(Locale::Japanese));
         assert_eq!(Locale::from_code("jp"), Some(Locale::Japanese));
-        assert_eq!(Locale::from_code("fr"), None);
+        assert_eq!(Locale::from_code("es"), Some(Locale::Spanish));
+        assert_eq!(Locale::from_code("de"), Some(Locale::German));
+        assert_eq!(Locale::from_code("fr"), Some(Locale::French));
+        assert_eq!(Locale::from_code("zh"), Some(Locale::Chinese));
+        assert_eq!(Locale::from_code("ko"), Some(Locale::Korean));
+        assert_eq!(Locale::from_code("xx"), None);
     }
 
     #[test]
     fn test_locale_all() {
         let all = Locale::all();
-        assert_eq!(all.len(), 2);
+        assert_eq!(all.len(), 7);
         assert!(all.contains(&Locale::English));
         assert!(all.contains(&Locale::Japanese));
+        assert!(all.contains(&Locale::Spanish));
+        assert!(all.contains(&Locale::German));
+        assert!(all.contains(&Locale::French));
+        assert!(all.contains(&Locale::Chinese));
+        assert!(all.contains(&Locale::Korean));
     }
 
     #[test]
@@ -393,5 +451,106 @@ mod tests {
             translate_for("system.connected", Locale::Japanese),
             "接続済み"
         );
+    }
+
+    // --- New locale tests ---
+
+    #[test]
+    fn test_locale_codes_and_names() {
+        assert_eq!(Locale::Spanish.code(), "es");
+        assert_eq!(Locale::German.code(), "de");
+        assert_eq!(Locale::French.code(), "fr");
+        assert_eq!(Locale::Chinese.code(), "zh");
+        assert_eq!(Locale::Korean.code(), "ko");
+
+        assert_eq!(Locale::Spanish.name(), "Español");
+        assert_eq!(Locale::German.name(), "Deutsch");
+        assert_eq!(Locale::French.name(), "Français");
+        assert_eq!(Locale::Chinese.name(), "简体中文");
+        assert_eq!(Locale::Korean.name(), "한국어");
+    }
+
+    #[test]
+    fn test_spanish_translations() {
+        assert_eq!(translate_for("ui.cancel", Locale::Spanish), "Cancelar");
+        assert_eq!(translate_for("menu.file", Locale::Spanish), "Archivo");
+        assert_eq!(translate_for("app.browser", Locale::Spanish), "Navegador");
+        assert_eq!(translate_for("system.language", Locale::Spanish), "Idioma");
+    }
+
+    #[test]
+    fn test_german_translations() {
+        assert_eq!(translate_for("ui.cancel", Locale::German), "Abbrechen");
+        assert_eq!(translate_for("menu.file", Locale::German), "Datei");
+        assert_eq!(translate_for("app.browser", Locale::German), "Browser");
+        assert_eq!(translate_for("system.language", Locale::German), "Sprache");
+    }
+
+    #[test]
+    fn test_french_translations() {
+        assert_eq!(translate_for("ui.cancel", Locale::French), "Annuler");
+        assert_eq!(translate_for("menu.file", Locale::French), "Fichier");
+        assert_eq!(translate_for("app.browser", Locale::French), "Navigateur");
+        assert_eq!(translate_for("system.language", Locale::French), "Langue");
+    }
+
+    #[test]
+    fn test_chinese_translations() {
+        assert_eq!(translate_for("ui.cancel", Locale::Chinese), "取消");
+        assert_eq!(translate_for("menu.file", Locale::Chinese), "文件");
+        assert_eq!(translate_for("app.browser", Locale::Chinese), "浏览器");
+        assert_eq!(translate_for("system.language", Locale::Chinese), "语言");
+    }
+
+    #[test]
+    fn test_korean_translations() {
+        assert_eq!(translate_for("ui.cancel", Locale::Korean), "취소");
+        assert_eq!(translate_for("menu.file", Locale::Korean), "파일");
+        assert_eq!(translate_for("app.browser", Locale::Korean), "브라우저");
+        assert_eq!(translate_for("system.language", Locale::Korean), "언어");
+    }
+
+    #[test]
+    fn test_interpolation_new_locales() {
+        let es = translate_with_for("greeting.hello", &[("name", "Mundo")], Locale::Spanish);
+        assert_eq!(es, "¡Hola, Mundo!");
+
+        let de = translate_with_for("greeting.hello", &[("name", "Welt")], Locale::German);
+        assert_eq!(de, "Hallo, Welt!");
+
+        let fr = translate_with_for("greeting.hello", &[("name", "Monde")], Locale::French);
+        assert_eq!(fr, "Bonjour, Monde !");
+
+        let zh = translate_with_for("greeting.hello", &[("name", "世界")], Locale::Chinese);
+        assert_eq!(zh, "你好，世界！");
+
+        let ko = translate_with_for("greeting.hello", &[("name", "세계")], Locale::Korean);
+        assert_eq!(ko, "안녕하세요, 세계!");
+    }
+
+    #[test]
+    fn test_all_en_keys_present_in_all_locales() {
+        let catalog = &*CATALOG;
+        let en_map = catalog.locales.get(&Locale::English).expect("en catalog");
+        let en_keys: Vec<&String> = en_map.keys().collect();
+
+        for locale in Locale::all() {
+            if *locale == Locale::English {
+                continue;
+            }
+            let map = catalog
+                .locales
+                .get(locale)
+                .unwrap_or_else(|| panic!("missing catalog for {:?}", locale));
+            for key in &en_keys {
+                assert!(
+                    map.contains_key(key.as_str()),
+                    "locale {:?} ({}) is missing key: {}",
+                    locale,
+                    locale.code(),
+                    key,
+                );
+            }
+        }
     }
 }

@@ -89,12 +89,6 @@ impl PluginConfig {
         }
     }
 
-    /// Get music directory as a byte slice (with null terminator).
-    #[allow(dead_code)]
-    pub fn music_dir_str(&self) -> &[u8] {
-        &self.music_dir[..self.music_dir_len + 1]
-    }
-
     /// Get video directory as a byte slice (with null terminator).
     pub fn video_dir_str(&self) -> &[u8] {
         &self.video_dir[..self.video_dir_len + 1]
@@ -419,16 +413,6 @@ mod tests {
         assert_eq!(&cfg.music_dir[..11], b"ms0:/MUSIC/");
         assert_eq!(cfg.video_dir_len, 11);
         assert_eq!(&cfg.video_dir[..11], b"ms0:/VIDEO/");
-    }
-
-    #[test]
-    fn config_music_dir_str() {
-        let cfg = PluginConfig::default();
-        // music_dir_str returns len+1 bytes (includes null terminator)
-        let s = cfg.music_dir_str();
-        assert_eq!(s.len(), 12);
-        assert_eq!(&s[..11], b"ms0:/MUSIC/");
-        assert_eq!(s[11], 0);
     }
 
     #[test]
