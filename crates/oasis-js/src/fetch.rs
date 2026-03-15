@@ -212,6 +212,8 @@ fn parse_simple_json_object(json: &str) -> HashMap<String, String> {
     while chars.peek().is_some() {
         if let Some((key, value)) = parse_json_kv(&mut chars) {
             map.insert(key, value);
+        } else {
+            break;
         }
     }
     map
@@ -257,6 +259,7 @@ fn parse_json_string(chars: &mut std::iter::Peekable<std::str::Chars<'_>>) -> Op
                     'r' => s.push('\r'),
                     '"' => s.push('"'),
                     '\\' => s.push('\\'),
+                    '/' => s.push('/'),
                     other => {
                         s.push('\\');
                         s.push(other);

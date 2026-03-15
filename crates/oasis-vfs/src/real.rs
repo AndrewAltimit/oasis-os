@@ -61,11 +61,18 @@ impl RealVfs {
                 if !canon_parent.starts_with(&self.root) {
                     return Err(OasisError::Vfs("path escapes VFS root".into()));
                 }
+                // Use the canonicalized parent joined with the filename
+                // to avoid TOCTOU issues with symlink replacement.
+                let file_name = candidate
+                    .file_name()
+                    .ok_or_else(|| OasisError::Vfs("invalid path: no filename".into()))?;
+                canon_parent.join(file_name)
+            } else {
+                // Normalize the candidate by walking components to strip
+                // `..` segments.  This prevents lexical bypass when
+                // neither the path nor its parent exist on disk.
+                normalize_path(&candidate)
             }
-            // Normalize the candidate by walking components to strip
-            // `..` segments.  This prevents lexical bypass when
-            // neither the path nor its parent exist on disk.
-            normalize_path(&candidate)
         };
 
         if !resolved.starts_with(&self.root) {
