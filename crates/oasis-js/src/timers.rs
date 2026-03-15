@@ -101,10 +101,12 @@ impl TimerQueue {
                     ));
                     to_reschedule.push((idx, iv));
                 } else {
-                    // Timeout: call and delete the global.
+                    // Timeout: delete the global before calling so it
+                    // is cleaned up even if the callback throws.
                     callbacks.push(format!(
-                        "if(typeof {g}==='function'){{{g}();\
-                         delete globalThis.{g};}}",
+                        "var __f=globalThis.{g};\
+                         delete globalThis.{g};\
+                         if(typeof __f==='function'){{__f();}}",
                         g = timer.callback_global,
                     ));
                     to_remove.push(timer.id);
