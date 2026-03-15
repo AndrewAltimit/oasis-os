@@ -278,116 +278,109 @@ impl SoftwareVideoDecoder {
                 return Err(VideoError::NoTrack("no video track".into()));
             }
 
-            // Try up to 3 reinit cycles per call. Each cycle: reinit decoder,
-            // skip to next IDR, decode with SPS/PPS. If that doesn't produce
-            // a frame, fall through to the normal decode loop which may trigger
-            // another reinit cycle.
+            // Two-phase decode strategy for openh264 (Baseline-only decoder):
             //
-            // Total packet budget across all attempts prevents unbounded
-            // silent skipping on heavily corrupted streams.
-            let mut total_packets_skipped = 0u32;
-            const MAX_TOTAL_PACKETS: u32 = 1500;
-            for reinit_attempt in 0u32..3 {
-                let h264 = self
-                    .h264
-                    .as_mut()
-                    .expect("h264 decoder verified present above");
+            // Phase 1 (initial sync): If error_streak > 5 and we have NOT
+            //   yet produced any frames, reinit + skip to IDR. This handles
+            //   the post-seek case where the decoder needs a clean IDR.
+            //
+            // Phase 2 (steady state): Once frames have been produced, DON'T
+            //   reinit on errors — just skip failed packets. openh264 can
+            //   decode IDR frames and some P-frames from Main/High profile
+            //   content, producing ~5-10 fps even when many frames fail.
+            //   The old approach of reiniting every 6 errors would burn
+            //   60-180 packets scanning for the next IDR, causing ~5s gaps.
+            const MAX_SKIP: u32 = 600;
 
-                if h264.error_streak > 5 {
-                    log::info!(
-                        "H264: reinit attempt {} (error_streak={})",
-                        reinit_attempt + 1,
-                        h264.error_streak,
-                    );
-                    h264.reinit()?;
-                    self.demuxer.reset_params();
-                    let params = self.demuxer.parameter_sets().map(|p| p.to_vec());
-                    let mut skipped_to_idr = 0u32;
-                    loop {
-                        let packet = match self.next_packet_for(TrackKind::Video)? {
-                            Some(p) => p,
-                            None => return Ok(None),
-                        };
-                        skipped_to_idr += 1;
-                        total_packets_skipped += 1;
-                        if Self::contains_idr(&packet.data) {
-                            log::info!("H264: found IDR after skipping {skipped_to_idr} packets");
-                            // Prepend SPS/PPS to IDR for decoder reinitialization.
-                            let decode_data = if let Some(ref ps) = params {
-                                let mut buf = Vec::with_capacity(ps.len() + packet.data.len());
-                                buf.extend_from_slice(ps);
-                                buf.extend_from_slice(&packet.data);
-                                buf
-                            } else {
-                                packet.data.clone()
-                            };
-                            let h264 = self
-                                .h264
-                                .as_mut()
-                                .expect("h264 decoder verified present above");
-                            if let Some(frame) = h264.decode(&decode_data)? {
-                                if frame.width > 0 && frame.height > 0 {
-                                    self.video_width = frame.width;
-                                    self.video_height = frame.height;
-                                }
-                                return Ok(Some(VideoFrame {
-                                    rgba: frame.rgba,
-                                    width: frame.width,
-                                    height: frame.height,
-                                    timestamp_secs: packet.timestamp_secs,
-                                }));
-                            }
-                            break; // IDR didn't produce frame — fall through
-                            // to normal decode loop for subsequent frames.
-                        }
-                        if skipped_to_idr > 500 || total_packets_skipped > MAX_TOTAL_PACKETS {
-                            return Err(VideoError::SkipLimit);
-                        }
-                    }
-                }
+            let h264 = self
+                .h264
+                .as_mut()
+                .expect("h264 decoder verified present above");
 
-                // Normal decode: read packets until we produce a frame.
-                let mut skipped = 0u32;
+            // Phase 1: initial sync (only before first successful frame).
+            if h264.error_streak > 5 && self.video_width == 0 {
+                log::info!(
+                    "H264: initial sync reinit (error_streak={})",
+                    h264.error_streak,
+                );
+                h264.reinit()?;
+                self.demuxer.reset_params();
+                let params = self.demuxer.parameter_sets().map(|p| p.to_vec());
+                let mut skipped_to_idr = 0u32;
                 loop {
                     let packet = match self.next_packet_for(TrackKind::Video)? {
                         Some(p) => p,
                         None => return Ok(None),
                     };
-
-                    let h264 = self
-                        .h264
-                        .as_mut()
-                        .expect("h264 decoder verified present above");
-
-                    if let Some(frame) = h264.decode(&packet.data)? {
-                        if frame.width > 0 && frame.height > 0 {
-                            self.video_width = frame.width;
-                            self.video_height = frame.height;
+                    skipped_to_idr += 1;
+                    if Self::contains_idr(&packet.data) {
+                        log::info!("H264: found IDR after skipping {skipped_to_idr} packets");
+                        let decode_data = if let Some(ref ps) = params {
+                            let mut buf = Vec::with_capacity(ps.len() + packet.data.len());
+                            buf.extend_from_slice(ps);
+                            buf.extend_from_slice(&packet.data);
+                            buf
+                        } else {
+                            packet.data.clone()
+                        };
+                        let h264 = self
+                            .h264
+                            .as_mut()
+                            .expect("h264 decoder verified present above");
+                        if let Some(frame) = h264.decode(&decode_data)? {
+                            if frame.width > 0 && frame.height > 0 {
+                                self.video_width = frame.width;
+                                self.video_height = frame.height;
+                            }
+                            return Ok(Some(VideoFrame {
+                                rgba: frame.rgba,
+                                width: frame.width,
+                                height: frame.height,
+                                timestamp_secs: packet.timestamp_secs,
+                            }));
                         }
-                        return Ok(Some(VideoFrame {
-                            rgba: frame.rgba,
-                            width: frame.width,
-                            height: frame.height,
-                            timestamp_secs: packet.timestamp_secs,
-                        }));
+                        break; // IDR didn't produce frame — fall through.
                     }
-
-                    // When error_streak crosses threshold, break to outer
-                    // loop for reinit instead of returning SkipLimit.
-                    if h264.error_streak > 5 {
-                        break;
-                    }
-
-                    skipped += 1;
-                    total_packets_skipped += 1;
-                    if skipped > 500 || total_packets_skipped > MAX_TOTAL_PACKETS {
+                    if skipped_to_idr > MAX_SKIP {
                         return Err(VideoError::SkipLimit);
                     }
                 }
             }
 
-            // All reinit attempts exhausted.
-            Err(VideoError::SkipLimit)
+            // Phase 2: tolerant decode — skip failed packets, return any
+            // successfully decoded frame. No reinit during steady-state
+            // playback; openh264 naturally produces frames at IDR boundaries
+            // even in Main/High profile content.
+            let mut skipped = 0u32;
+            loop {
+                let packet = match self.next_packet_for(TrackKind::Video)? {
+                    Some(p) => p,
+                    None => return Ok(None),
+                };
+
+                let h264 = self
+                    .h264
+                    .as_mut()
+                    .expect("h264 decoder verified present above");
+
+                if let Some(frame) = h264.decode(&packet.data)? {
+                    if frame.width > 0 && frame.height > 0 {
+                        self.video_width = frame.width;
+                        self.video_height = frame.height;
+                    }
+                    return Ok(Some(VideoFrame {
+                        rgba: frame.rgba,
+                        width: frame.width,
+                        height: frame.height,
+                        timestamp_secs: packet.timestamp_secs,
+                    }));
+                }
+
+                skipped += 1;
+                if skipped > MAX_SKIP {
+                    return Err(VideoError::SkipLimit);
+                }
+            }
         }
     }
 

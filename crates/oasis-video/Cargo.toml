@@ -32,11 +32,10 @@ symphonia = { version = "0.5", default-features = false, features = [
 # H.264 decoding (Cisco OpenH264 C source compiled via cc)
 openh264 = { version = "0.9", optional = true }
 
-# FFmpeg via Rust bindings — static build from source, no runtime deps.
+# FFmpeg via Rust bindings — links against system ffmpeg (pkg-config).
+# For static builds (CI/shipping), add "build" + "static" features.
 # Only H.264 + AAC codecs and MP4 demuxer are needed.
 ffmpeg-next = { version = "7", optional = true, default-features = false, features = [
-    "build",
-    "static",
     "codec",
     "format",
     "software-resampling",

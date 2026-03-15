@@ -30,10 +30,12 @@ default = ["javascript", "video-decode"]
 javascript = ["oasis-core/javascript"]
 # Internal: oasis-video is available. Activated by video-decode or video-decode-ffmpeg.
 _video = ["dep:oasis-video"]
-# Software decode via openh264 (Baseline profile). Default for CI/dev.
+# Software decode via openh264 (Baseline profile). Default for CI where
+# ffmpeg dev libraries are not installed.
 video-decode = ["_video", "oasis-video/h264"]
-# Full decode via statically-linked ffmpeg (Main/High profile, SIMD).
-# For shipping desktop apps and UE5 games. Mutually exclusive with video-decode.
+# Full decode via system ffmpeg (Main/High profile, SIMD-optimized).
+# Recommended for desktop use — requires libavcodec-dev etc. on the system.
+# Build: cargo build -p oasis-app --no-default-features --features video-decode-ffmpeg,javascript
 video-decode-ffmpeg = ["_video", "oasis-video/ffmpeg"]
 
 [dependencies]

@@ -1,6 +1,6 @@
 //! AAC audio decoder wrapping symphonia's AAC codec.
 
-use symphonia::core::audio::SampleBuffer;
+use symphonia::core::audio::{SampleBuffer, SignalSpec};
 use symphonia::core::codecs::{CODEC_TYPE_AAC, CodecParameters, Decoder, DecoderOptions};
 use symphonia::core::formats::Packet;
 
@@ -18,6 +18,12 @@ pub struct AacDecoder {
     decoder: Box<dyn Decoder>,
     sample_rate: u32,
     channels: u16,
+    /// Reusable sample buffer — avoids allocating a new `SampleBuffer` on
+    /// every `decode()` call.  Recreated only when the audio spec changes
+    /// (rare for AAC-LC; can happen with HE-AAC SBR).
+    sample_buf: Option<SampleBuffer<f32>>,
+    /// Tracks the last audio spec to detect mid-stream spec changes (e.g. HE-AAC SBR).
+    last_spec: Option<SignalSpec>,
 }
 
 impl AacDecoder {
@@ -42,6 +48,8 @@ impl AacDecoder {
             decoder,
             sample_rate,
             channels,
+            sample_buf: None,
+            last_spec: None,
         })
     }
 
@@ -62,7 +70,17 @@ impl AacDecoder {
             return Ok(None);
         }
 
-        let mut sample_buf = SampleBuffer::<f32>::new(duration as u64, spec);
+        // Reuse the sample buffer if its capacity and spec still match.
+        // Recreate when the audio spec changes (rare for AAC-LC) or capacity is insufficient.
+        let need_new = self
+            .sample_buf
+            .as_ref()
+            .is_none_or(|sb| sb.capacity() < duration || self.last_spec.as_ref() != Some(&spec));
+        if need_new {
+            self.sample_buf = Some(SampleBuffer::<f32>::new(duration as u64, spec));
+            self.last_spec = Some(spec);
+        }
+        let sample_buf = self.sample_buf.as_mut().expect("just created above");
         sample_buf.copy_interleaved_ref(decoded);
 
         Ok(Some(DecodedAudio {

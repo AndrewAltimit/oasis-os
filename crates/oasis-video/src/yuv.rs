@@ -4,6 +4,10 @@
 ///
 /// `y`, `u`, `v` are the three planes.  `stride_y` / `stride_uv` are the byte
 /// strides of each plane.  Output is `width * height * 4` bytes (RGBA).
+///
+/// Processes pixel pairs sharing the same chroma sample (4:2:0 subsampling)
+/// to halve UV lookups.  Uses unchecked indexing within bounds-verified rows
+/// to eliminate per-pixel bounds checks in the inner loop.
 pub fn yuv420_to_rgba(
     y: &[u8],
     u: &[u8],
@@ -17,26 +21,69 @@ pub fn yuv420_to_rgba(
     let h = height as usize;
     let mut rgba = vec![0u8; w * h * 4];
 
+    // Number of full pixel pairs per row (rounded down).
+    let pairs = w / 2;
+    let has_odd = w & 1 != 0;
+
     for row in 0..h {
         let y_row = row * stride_y;
         let uv_row = (row / 2) * stride_uv;
         let dst_row = row * w * 4;
 
-        for col in 0..w {
-            let y_val = y[y_row + col] as i32;
-            let u_val = u[uv_row + col / 2] as i32 - 128;
-            let v_val = v[uv_row + col / 2] as i32 - 128;
+        // SAFETY: We verify that all indices accessed in the inner loop are
+        // within bounds.  For the Y plane: y_row + pairs*2 (+ 1 if odd) <= y.len()
+        // because stride_y >= w.  For U/V: uv_row + pairs (<= (w+1)/2) <= u/v.len()
+        // because stride_uv >= ceil(w/2).  For dst: dst_row + w*4 <= rgba.len()
+        // by construction (rgba has exactly w*h*4 bytes).
+        assert!(y_row + w <= y.len());
+        assert!(uv_row + w.div_ceil(2) <= u.len());
+        assert!(uv_row + w.div_ceil(2) <= v.len());
+        assert!(dst_row + w * 4 <= rgba.len());
 
-            // BT.601 conversion
-            let r = y_val + ((351 * v_val) >> 8);
-            let g = y_val - ((179 * v_val + 86 * u_val) >> 8);
-            let b = y_val + ((443 * u_val) >> 8);
+        unsafe {
+            for p in 0..pairs {
+                let col = p * 2;
+                let uv_col = p;
 
-            let dst = dst_row + col * 4;
-            rgba[dst] = r.clamp(0, 255) as u8;
-            rgba[dst + 1] = g.clamp(0, 255) as u8;
-            rgba[dst + 2] = b.clamp(0, 255) as u8;
-            rgba[dst + 3] = 255;
+                // Shared chroma for the pixel pair.
+                let u_val = *u.get_unchecked(uv_row + uv_col) as i32 - 128;
+                let v_val = *v.get_unchecked(uv_row + uv_col) as i32 - 128;
+
+                // Pre-compute chroma contributions (shared by both pixels).
+                let cr = (351 * v_val) >> 8;
+                let cg = (179 * v_val + 86 * u_val) >> 8;
+                let cb = (443 * u_val) >> 8;
+
+                // Left pixel.
+                let y0 = *y.get_unchecked(y_row + col) as i32;
+                let d0 = dst_row + col * 4;
+                *rgba.get_unchecked_mut(d0) = (y0 + cr).clamp(0, 255) as u8;
+                *rgba.get_unchecked_mut(d0 + 1) = (y0 - cg).clamp(0, 255) as u8;
+                *rgba.get_unchecked_mut(d0 + 2) = (y0 + cb).clamp(0, 255) as u8;
+                *rgba.get_unchecked_mut(d0 + 3) = 255;
+
+                // Right pixel.
+                let y1 = *y.get_unchecked(y_row + col + 1) as i32;
+                let d1 = d0 + 4;
+                *rgba.get_unchecked_mut(d1) = (y1 + cr).clamp(0, 255) as u8;
+                *rgba.get_unchecked_mut(d1 + 1) = (y1 - cg).clamp(0, 255) as u8;
+                *rgba.get_unchecked_mut(d1 + 2) = (y1 + cb).clamp(0, 255) as u8;
+                *rgba.get_unchecked_mut(d1 + 3) = 255;
+            }
+
+            // Handle odd trailing pixel (reuses last chroma column).
+            if has_odd {
+                let col = pairs * 2;
+                let u_val = *u.get_unchecked(uv_row + pairs) as i32 - 128;
+                let v_val = *v.get_unchecked(uv_row + pairs) as i32 - 128;
+                let y_val = *y.get_unchecked(y_row + col) as i32;
+                let d = dst_row + col * 4;
+                *rgba.get_unchecked_mut(d) = (y_val + ((351 * v_val) >> 8)).clamp(0, 255) as u8;
+                *rgba.get_unchecked_mut(d + 1) =
+                    (y_val - ((179 * v_val + 86 * u_val) >> 8)).clamp(0, 255) as u8;
+                *rgba.get_unchecked_mut(d + 2) = (y_val + ((443 * u_val) >> 8)).clamp(0, 255) as u8;
+                *rgba.get_unchecked_mut(d + 3) = 255;
+            }
         }
     }
 
@@ -107,6 +154,24 @@ mod tests {
         let v = vec![200];
         let rgba = yuv420_to_rgba(&y, &u, &v, 2, 2, 2, 1);
         for pixel in rgba.chunks(4) {
+            assert_eq!(pixel[3], 255);
+        }
+    }
+
+    #[test]
+    fn odd_width() {
+        // 3x2 image: pairs + remainder pixel per row.
+        let w: u32 = 3;
+        let h: u32 = 2;
+        let y = vec![128u8; (w * h) as usize];
+        let u = vec![128u8; ((w.div_ceil(2)) * ((h + 1) / 2)) as usize];
+        let v = vec![128u8; ((w.div_ceil(2)) * ((h + 1) / 2)) as usize];
+        let rgba = yuv420_to_rgba(&y, &u, &v, w, h, w as usize, (w.div_ceil(2)) as usize);
+        assert_eq!(rgba.len(), (w * h * 4) as usize);
+        for pixel in rgba.chunks(4) {
+            assert_eq!(pixel[0], 128);
+            assert_eq!(pixel[1], 128);
+            assert_eq!(pixel[2], 128);
             assert_eq!(pixel[3], 255);
         }
     }
