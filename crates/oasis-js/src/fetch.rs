@@ -117,10 +117,9 @@ pub(crate) fn install(ctx: &Ctx<'_>, handler: SharedFetchHandler) -> JsResult<()
                 match handler.fetch(request) {
                     Ok(resp) => {
                         let resp_headers = serialize_simple_json_object(&resp.headers);
-                        // Escape body for JSON embedding.
                         let escaped_body = json_escape(&resp.body);
                         format!(
-                            r#"{{"ok":true,"status":{},"body":"{}","headers":{}}}"#,
+                            r#"{{"status":{},"body":"{}","headers":{}}}"#,
                             resp.status, escaped_body, resp_headers,
                         )
                     },
@@ -270,7 +269,7 @@ fn parse_json_string(chars: &mut std::iter::Peekable<std::str::Chars<'_>>) -> Op
             s.push(c);
         }
     }
-    Some(s)
+    None // Unterminated string.
 }
 
 /// Serialize a flat `HashMap<String, String>` as a JSON object.

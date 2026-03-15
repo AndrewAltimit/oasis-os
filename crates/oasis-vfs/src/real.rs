@@ -5,7 +5,7 @@
 //! cannot escape its root.
 
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Component, Path, PathBuf};
 
 use oasis_types::error::{OasisError, Result};
 
@@ -42,13 +42,15 @@ impl RealVfs {
         let relative = vfs_path.strip_prefix('/').unwrap_or(vfs_path);
         let candidate = self.root.join(relative);
 
-        // Canonicalize if path exists, otherwise check that its parent is within root.
+        // Canonicalize if path exists, otherwise check that its parent
+        // is within root.
         let resolved = if candidate.exists() {
             candidate
                 .canonicalize()
                 .map_err(|e| OasisError::Vfs(format!("cannot resolve path: {e}").into()))?
         } else {
-            // For non-existent paths (write/mkdir), verify the parent is inside root.
+            // For non-existent paths (write/mkdir), verify the parent
+            // is inside root.
             let parent = candidate
                 .parent()
                 .ok_or_else(|| OasisError::Vfs("invalid path: no parent".into()))?;
@@ -60,7 +62,10 @@ impl RealVfs {
                     return Err(OasisError::Vfs("path escapes VFS root".into()));
                 }
             }
-            candidate
+            // Normalize the candidate by walking components to strip
+            // `..` segments.  This prevents lexical bypass when
+            // neither the path nor its parent exist on disk.
+            normalize_path(&candidate)
         };
 
         if !resolved.starts_with(&self.root) {
@@ -68,6 +73,23 @@ impl RealVfs {
         }
         Ok(resolved)
     }
+}
+
+/// Normalize a path by resolving `.` and `..` components lexically
+/// (without touching the filesystem).  This prevents path-traversal
+/// attacks when neither the target path nor its parent exist on disk.
+fn normalize_path(path: &Path) -> PathBuf {
+    let mut out = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::ParentDir => {
+                out.pop();
+            },
+            Component::CurDir => {},
+            other => out.push(other),
+        }
+    }
+    out
 }
 
 impl Vfs for RealVfs {

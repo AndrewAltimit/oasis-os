@@ -520,9 +520,11 @@ impl SpatialFocusManager {
             FocusDirection::Up
             | FocusDirection::Down
             | FocusDirection::Left
-            | FocusDirection::Right => self.spatial_move(direction),
+            | FocusDirection::Right => Some(self.spatial_move(direction)),
         };
-        self.focused = Some(new_idx);
+        if let Some(idx) = new_idx {
+            self.focused = Some(idx);
+        }
         self.focused
     }
 
@@ -609,33 +611,33 @@ impl SpatialFocusManager {
         indices
     }
 
-    fn next_tab_index(&self) -> usize {
+    fn next_tab_index(&self) -> Option<usize> {
         let order = self.tab_order();
         if order.is_empty() {
-            return 0;
+            return None;
         }
-        match self.focused {
+        Some(match self.focused {
             Some(cur) => match order.iter().position(|&i| i == cur) {
                 Some(pos) => order[(pos + 1) % order.len()],
                 None => order[0],
             },
             None => order[0],
-        }
+        })
     }
 
-    fn prev_tab_index(&self) -> usize {
+    fn prev_tab_index(&self) -> Option<usize> {
         let order = self.tab_order();
         if order.is_empty() {
-            return 0;
+            return None;
         }
-        match self.focused {
+        Some(match self.focused {
             Some(cur) => match order.iter().position(|&i| i == cur) {
-                Some(pos) if pos == 0 => order[order.len() - 1],
+                Some(0) => order[order.len() - 1],
                 Some(pos) => order[pos - 1],
                 None => order[order.len() - 1],
             },
             None => order[order.len() - 1],
-        }
+        })
     }
 
     fn spatial_move(&self, dir: FocusDirection) -> usize {
@@ -655,8 +657,8 @@ impl SpatialFocusManager {
             }
             let ix = item.bounds.cx();
             let iy = item.bounds.cy();
-            let dx = (ix - cx) as i64;
-            let dy = (iy - cy) as i64;
+            let dx = ix as i64 - cx as i64;
+            let dy = iy as i64 - cy as i64;
 
             // Filter candidates by direction.
             let valid = match dir {
