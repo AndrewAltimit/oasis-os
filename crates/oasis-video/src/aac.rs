@@ -18,6 +18,10 @@ pub struct AacDecoder {
     decoder: Box<dyn Decoder>,
     sample_rate: u32,
     channels: u16,
+    /// Reusable sample buffer — avoids allocating a new `SampleBuffer` on
+    /// every `decode()` call.  Recreated only when the audio spec changes
+    /// (rare for AAC-LC; can happen with HE-AAC SBR).
+    sample_buf: Option<SampleBuffer<f32>>,
 }
 
 impl AacDecoder {
@@ -42,6 +46,7 @@ impl AacDecoder {
             decoder,
             sample_rate,
             channels,
+            sample_buf: None,
         })
     }
 
@@ -62,7 +67,16 @@ impl AacDecoder {
             return Ok(None);
         }
 
-        let mut sample_buf = SampleBuffer::<f32>::new(duration as u64, spec);
+        // Reuse the sample buffer if its capacity and spec still match.
+        // Recreate only when the audio spec changes (rare for AAC-LC).
+        let need_new = self
+            .sample_buf
+            .as_ref()
+            .is_none_or(|sb| sb.capacity() < duration);
+        if need_new {
+            self.sample_buf = Some(SampleBuffer::<f32>::new(duration as u64, spec));
+        }
+        let sample_buf = self.sample_buf.as_mut().expect("just created above");
         sample_buf.copy_interleaved_ref(decoded);
 
         Ok(Some(DecodedAudio {

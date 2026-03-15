@@ -153,6 +153,21 @@ pub fn find_avcc_in_mp4(mp4_data: &[u8]) -> Option<AvccConfig> {
 /// with start codes.
 fn avcc_to_annex_b(data: &[u8], nal_length_size: usize) -> Result<Vec<u8>, VideoError> {
     let mut out = Vec::with_capacity(data.len() + 32);
+    avcc_to_annex_b_into(data, nal_length_size, &mut out)?;
+    Ok(out)
+}
+
+/// Convert AVCC to Annex B, reusing the provided output buffer.
+///
+/// Clears `out` before writing.  The caller retains the buffer across calls
+/// so its capacity grows to the largest packet and stays stable, eliminating
+/// per-packet allocation.
+fn avcc_to_annex_b_into(
+    data: &[u8],
+    nal_length_size: usize,
+    out: &mut Vec<u8>,
+) -> Result<(), VideoError> {
+    out.clear();
     let mut offset = 0;
 
     while offset + nal_length_size <= data.len() {
@@ -186,7 +201,7 @@ fn avcc_to_annex_b(data: &[u8], nal_length_size: usize) -> Result<Vec<u8>, Video
         offset += nal_len;
     }
 
-    Ok(out)
+    Ok(())
 }
 
 /// MP4 demuxer backed by symphonia.

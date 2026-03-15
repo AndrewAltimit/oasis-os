@@ -26,7 +26,7 @@ name = "e2e-tests"
 path = "src/e2e_tests.rs"
 
 [features]
-default = ["javascript", "video-decode"]
+default = ["javascript", "video-decode-ffmpeg"]
 javascript = ["oasis-core/javascript"]
 # Internal: oasis-video is available. Activated by video-decode or video-decode-ffmpeg.
 _video = ["dep:oasis-video"]

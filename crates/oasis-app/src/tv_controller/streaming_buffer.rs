@@ -2,9 +2,11 @@
 //! fed by a background download thread.
 
 /// How much data to retain behind the decoder's read cursor.
-/// Allows minor backward seeks without re-downloading.
+/// Allows minor backward seeks without re-downloading.  Sized to cover
+/// symphonia's internal seek-back distance when the H.264 decoder skips
+/// many packets in tolerant-decode mode (openh264 Baseline-only gaps).
 #[cfg(feature = "_video")]
-pub(crate) const RETAIN_BEHIND: usize = 4 * 1024 * 1024; // 4 MB
+pub(crate) const RETAIN_BEHIND: usize = 8 * 1024 * 1024; // 8 MB
 
 /// Maximum bytes the download thread may be ahead of the decoder's read
 /// cursor before it pauses.  Keeps memory bounded to ~16 MB lookahead.
@@ -511,6 +513,12 @@ pub(crate) struct StreamingBuffer {
     pub(crate) eviction_enabled: std::sync::Arc<std::sync::atomic::AtomicBool>,
     /// Whether we've logged a "waiting for data" message (avoids log spam).
     logged_wait: bool,
+    /// Cached header (ftyp) data — once set it never changes, so reads from
+    /// the header region can be served without acquiring the state mutex.
+    cached_header: Option<Vec<u8>>,
+    /// Cached moov atom — once set it never changes. Reads from the moov
+    /// region can be served without acquiring the state mutex.
+    cached_moov: Option<(u64, std::sync::Arc<Vec<u8>>)>,
 }
 
 #[cfg(feature = "_video")]
@@ -521,6 +529,8 @@ impl StreamingBuffer {
             pos: 0,
             eviction_enabled: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
             logged_wait: false,
+            cached_header: None,
+            cached_moov: None,
         }
     }
 
@@ -543,7 +553,11 @@ impl StreamingBuffer {
             let evict = cursor_in_buf - RETAIN_BEHIND;
             let evict = evict.min(s.buf.len());
             if evict > 0 {
-                s.buf.drain(..evict);
+                // In-place shift: copy_within avoids the Drain iterator
+                // overhead and keeps the Vec's allocation stable.
+                let new_len = s.buf.len() - evict;
+                s.buf.copy_within(evict.., 0);
+                s.buf.truncate(new_len);
                 s.base_offset += evict as u64;
                 log::debug!(
                     "TV: evicted {:.1}MB, window now {:.1}MB ({}-{})",
@@ -573,10 +587,9 @@ impl std::io::Read for StreamingBuffer {
                 return Err(std::io::Error::other(e.clone()));
             }
 
-            let s = self.inner.state.lock().unwrap_or_else(|e| e.into_inner());
-
-            // Try serving from the retained file header (ftyp).
-            if let Some(ref hdr) = s.header
+            // Try serving from cached header/moov without acquiring the lock.
+            // These are set once and never modified, so lock-free access is safe.
+            if let Some(ref hdr) = self.cached_header
                 && (self.pos as usize) < hdr.len()
             {
                 let local = self.pos as usize;
@@ -585,9 +598,44 @@ impl std::io::Read for StreamingBuffer {
                 self.pos += n as u64;
                 break n;
             }
+            if let Some((moov_off, ref moov_data)) = self.cached_moov {
+                let moov_end = moov_off + moov_data.len() as u64;
+                if self.pos >= moov_off && self.pos < moov_end {
+                    let local = (self.pos - moov_off) as usize;
+                    let n = buf.len().min(moov_data.len() - local);
+                    buf[..n].copy_from_slice(&moov_data[local..local + n]);
+                    self.pos += n as u64;
+                    break n;
+                }
+            }
 
-            // Try serving from the retained moov atom.
-            if let Some((moov_off, ref moov_data)) = s.moov {
+            let s = self.inner.state.lock().unwrap_or_else(|e| e.into_inner());
+
+            // Populate caches from state if not yet set (one-time copy).
+            if self.cached_header.is_none()
+                && let Some(ref hdr) = s.header
+            {
+                self.cached_header = Some(hdr.clone());
+            }
+            if self.cached_moov.is_none()
+                && let Some((off, ref arc)) = s.moov
+            {
+                self.cached_moov = Some((off, std::sync::Arc::clone(arc)));
+            }
+
+            // Retry header/moov from newly-populated caches before hitting
+            // the sliding buffer.  This handles the first read after moov
+            // becomes available.
+            if let Some(ref hdr) = self.cached_header
+                && (self.pos as usize) < hdr.len()
+            {
+                let local = self.pos as usize;
+                let n = buf.len().min(hdr.len() - local);
+                buf[..n].copy_from_slice(&hdr[local..local + n]);
+                self.pos += n as u64;
+                break n;
+            }
+            if let Some((moov_off, ref moov_data)) = self.cached_moov {
                 let moov_end = moov_off + moov_data.len() as u64;
                 if self.pos >= moov_off && self.pos < moov_end {
                     let local = (self.pos - moov_off) as usize;

@@ -377,7 +377,7 @@ impl VideoPlayer {
         self.frame_height = height;
 
         let (video_tx, video_rx) = mpsc::sync_channel::<VideoFrame>(4);
-        let (audio_tx, audio_rx) = mpsc::sync_channel::<SoftwareAudio>(64);
+        let (audio_tx, audio_rx) = mpsc::sync_channel::<SoftwareAudio>(256);
         let (stop_tx, stop_rx) = mpsc::channel::<()>();
 
         let target_w = width;
@@ -398,10 +398,18 @@ impl VideoPlayer {
                 },
             );
             let t0 = std::time::Instant::now();
+            // With the symphonia backend, extract avcC from moov to skip
+            // the full-file scan. With ffmpeg, it handles avcC internally.
+            #[cfg(not(feature = "video-decode-ffmpeg"))]
             let open_result = if let Some(ref moov) = moov_data {
                 let avcc = oasis_video::find_avcc_in_mp4(moov);
                 oasis_video::SoftwareVideoDecoder::open_stream_with_avcc(source, avcc)
             } else {
+                oasis_video::SoftwareVideoDecoder::open_stream(source)
+            };
+            #[cfg(feature = "video-decode-ffmpeg")]
+            let open_result = {
+                let _ = &moov_data; // suppress unused warning
                 oasis_video::SoftwareVideoDecoder::open_stream(source)
             };
             let mut decoder = match open_result {
@@ -466,7 +474,7 @@ impl VideoPlayer {
         height: u32,
     ) {
         let (video_tx, video_rx) = mpsc::sync_channel::<VideoFrame>(4);
-        let (audio_tx, audio_rx) = mpsc::sync_channel::<SoftwareAudio>(64);
+        let (audio_tx, audio_rx) = mpsc::sync_channel::<SoftwareAudio>(256);
         let (stop_tx, stop_rx) = mpsc::channel::<()>();
 
         std::thread::spawn(move || {
@@ -522,8 +530,8 @@ impl VideoPlayer {
         video_tx: mpsc::SyncSender<VideoFrame>,
         audio_tx: mpsc::SyncSender<SoftwareAudio>,
         stop_rx: mpsc::Receiver<()>,
-        target_w: u32,
-        target_h: u32,
+        _target_w: u32,
+        _target_h: u32,
     ) {
         log::info!("VideoPlayer: software decode thread started");
 
@@ -567,26 +575,13 @@ impl VideoPlayer {
                             );
                         }
                         let ts = frame.timestamp_secs;
-                        let (data, w, h) = if frame.width == target_w && frame.height == target_h {
-                            (frame.rgba, frame.width, frame.height)
-                        } else {
-                            (
-                                simple_scale(
-                                    &frame.rgba,
-                                    frame.width,
-                                    frame.height,
-                                    target_w,
-                                    target_h,
-                                ),
-                                target_w,
-                                target_h,
-                            )
-                        };
+                        // Send native-resolution frames — scaling is done on
+                        // the main thread to keep the decode thread unblocked.
                         if video_tx
                             .send(VideoFrame {
-                                data,
-                                width: w,
-                                height: h,
+                                data: frame.rgba,
+                                width: frame.width,
+                                height: frame.height,
                                 timestamp_secs: ts,
                             })
                             .is_err()
@@ -805,7 +800,18 @@ impl VideoPlayer {
             #[cfg(feature = "_video")]
             let frame_ts = frame.timestamp_secs;
 
-            match backend.load_texture(fw, fh, &frame.data) {
+            // Scale on the main thread (moved from decode thread to avoid
+            // blocking decode with CPU-intensive scaling).
+            let needs_scale = fw != self.frame_width || fh != self.frame_height;
+            let scaled;
+            let (tex_data, upload_w, upload_h) = if needs_scale {
+                scaled = simple_scale(&frame.data, fw, fh, self.frame_width, self.frame_height);
+                (scaled.as_slice(), self.frame_width, self.frame_height)
+            } else {
+                (frame.data.as_slice(), fw, fh)
+            };
+
+            match backend.load_texture(upload_w, upload_h, tex_data) {
                 Ok(tex) => {
                     self.current_texture = Some(tex);
                     self.last_frame_time = Some(Instant::now());
@@ -951,13 +957,23 @@ impl VideoPlayer {
 #[cfg(feature = "_video")]
 fn simple_scale(src: &[u8], src_w: u32, src_h: u32, dst_w: u32, dst_h: u32) -> Vec<u8> {
     let mut dst = vec![0u8; (dst_w * dst_h * 4) as usize];
+    let sw = src_w as usize;
+    let dw = dst_w as usize;
+
     for y in 0..dst_h {
-        let sy = (y * src_h / dst_h).min(src_h - 1);
-        for x in 0..dst_w {
-            let sx = (x * src_w / dst_w).min(src_w - 1);
-            let si = (sy * src_w + sx) as usize * 4;
-            let di = (y * dst_w + x) as usize * 4;
-            dst[di..di + 4].copy_from_slice(&src[si..si + 4]);
+        let sy = (y * src_h / dst_h).min(src_h - 1) as usize;
+        let src_row = sy * sw * 4;
+        let dst_row = y as usize * dw * 4;
+
+        for x in 0..dst_w as usize {
+            let sx = (x * src_w as usize / dw).min(sw - 1);
+            let si = src_row + sx * 4;
+            let di = dst_row + x * 4;
+            // SAFETY: si + 4 <= src.len() because sy < src_h and sx < src_w,
+            // di + 4 <= dst.len() because y < dst_h and x < dst_w.
+            unsafe {
+                std::ptr::copy_nonoverlapping(src.as_ptr().add(si), dst.as_mut_ptr().add(di), 4);
+            }
         }
     }
     dst
