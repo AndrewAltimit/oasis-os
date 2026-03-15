@@ -470,6 +470,71 @@ mod tests {
                 let entry = nav.go_back().unwrap();
                 prop_assert_eq!(entry.scroll_y, scroll);
             }
+
+            /// History length is always bounded by the number of
+            /// navigations performed.
+            #[test]
+            fn history_length_bounded_by_navigations(urls in arb_urls(1, 50)) {
+                let mut nav = NavigationController::new("about:home");
+                for url in &urls {
+                    nav.navigate(url, "");
+                }
+                let history = nav.history();
+                prop_assert!(
+                    history.len() <= urls.len(),
+                    "history length {} should be <= navigations {}",
+                    history.len(), urls.len()
+                );
+            }
+
+            /// Multiple back-then-forward navigations always return
+            /// to the same URL.
+            #[test]
+            fn repeated_back_forward_is_stable(urls in arb_urls(3, 10)) {
+                let mut nav = NavigationController::new("about:home");
+                for url in &urls {
+                    nav.navigate(url, "");
+                }
+                let original = nav.current_url().unwrap().to_string();
+                // Go back and forward multiple times.
+                for _ in 0..3 {
+                    nav.go_back().unwrap();
+                    nav.go_forward().unwrap();
+                    prop_assert_eq!(
+                        nav.current_url().unwrap(), original.as_str(),
+                        "back+forward should return to same URL"
+                    );
+                }
+            }
+
+            /// After going back n times and forward n times, we end
+            /// at the last URL again.
+            #[test]
+            fn back_n_forward_n_returns_to_end(urls in arb_urls(2, 10)) {
+                let mut nav = NavigationController::new("about:home");
+                for url in &urls {
+                    nav.navigate(url, "");
+                }
+                let last_url = nav.current_url().unwrap().to_string();
+                let n = urls.len() - 1;
+                for _ in 0..n {
+                    nav.go_back();
+                }
+                for _ in 0..n {
+                    nav.go_forward();
+                }
+                prop_assert_eq!(
+                    nav.current_url().unwrap(), last_url.as_str()
+                );
+            }
+
+            /// go_back returns None when back stack is empty.
+            #[test]
+            fn go_back_none_when_empty(url in arb_url()) {
+                let mut nav = NavigationController::new("about:home");
+                nav.navigate(&url, "");
+                prop_assert!(nav.go_back().is_none());
+            }
         }
     }
 }

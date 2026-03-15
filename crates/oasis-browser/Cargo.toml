@@ -18,6 +18,7 @@ oasis-vfs = { workspace = true }
 oasis-net = { workspace = true }
 oasis-skin = { workspace = true }
 oasis-js = { workspace = true, optional = true }
+rustc-hash = { workspace = true }
 serde = { workspace = true }
 log = { workspace = true }
 png = { workspace = true }

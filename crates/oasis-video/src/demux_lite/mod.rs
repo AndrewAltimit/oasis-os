@@ -539,4 +539,92 @@ mod tests {
             }
         }
     }
+
+    // ---------------------------------------------------------------
+    // Item 71: Demux_lite error path tests (truncated/missing atoms)
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn mp4lite_garbage_data_no_panic() {
+        let garbage = vec![0xDE, 0xAD, 0xBE, 0xEF, 0x00, 0x11, 0x22, 0x33];
+        let mp4 = Mp4Lite::open(Cursor::new(garbage)).unwrap();
+        assert!(mp4.video_track_info().is_none());
+        assert!(mp4.audio_track_info().is_none());
+    }
+
+    #[test]
+    fn mp4lite_single_byte_no_panic() {
+        let mp4 = Mp4Lite::open(Cursor::new(vec![0xFF])).unwrap();
+        assert!(mp4.video_track_info().is_none());
+    }
+
+    #[test]
+    fn mp4lite_next_video_without_track_errors() {
+        let mp4_data = vec![0u8; 0];
+        let mut mp4 = Mp4Lite::open(Cursor::new(mp4_data)).unwrap();
+        let result = mp4.next_video_sample();
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn mp4lite_next_audio_without_track_errors() {
+        let mp4_data = vec![0u8; 0];
+        let mut mp4 = Mp4Lite::open(Cursor::new(mp4_data)).unwrap();
+        let result = mp4.next_audio_sample();
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn mp4lite_seek_no_tracks_ok() {
+        let mp4_data = vec![0u8; 0];
+        let mut mp4 = Mp4Lite::open(Cursor::new(mp4_data)).unwrap();
+        // Seeking with no tracks should succeed (no-op).
+        mp4.seek(5.0).unwrap();
+    }
+
+    #[test]
+    fn parse_moov_tracks_garbage_content() {
+        // moov header + random bytes inside.
+        let mut data = Vec::new();
+        data.extend_from_slice(&64u32.to_be_bytes());
+        data.extend_from_slice(b"moov");
+        data.extend_from_slice(&[0xDE; 56]);
+        let (v, a) = parse_moov_tracks(&data).unwrap();
+        assert!(v.is_none());
+        assert!(a.is_none());
+    }
+
+    #[test]
+    fn seek_byte_from_moov_garbage_returns_none() {
+        let mut data = Vec::new();
+        data.extend_from_slice(&64u32.to_be_bytes());
+        data.extend_from_slice(b"moov");
+        data.extend_from_slice(&[0xFF; 56]);
+        assert!(seek_byte_from_moov(&data, 1.0).is_none());
+    }
+
+    #[test]
+    fn mp4lite_truncated_mdat_header_only() {
+        // mdat atom with valid header but size extends past EOF.
+        let mut data = Vec::new();
+        data.extend_from_slice(&1000u32.to_be_bytes());
+        data.extend_from_slice(b"mdat");
+        data.extend_from_slice(&[0xAA; 8]); // only 8 bytes, not 992
+        let mp4 = Mp4Lite::open(Cursor::new(data)).unwrap();
+        assert!(mp4.video_track_info().is_none());
+    }
+
+    #[test]
+    fn mp4lite_multiple_unknown_atoms_skipped() {
+        // Several unknown atom types should be silently skipped.
+        let mut data = Vec::new();
+        for fourcc in [b"free", b"skip", b"udta", b"meta"] {
+            data.extend_from_slice(&16u32.to_be_bytes());
+            data.extend_from_slice(fourcc);
+            data.extend_from_slice(&[0; 8]);
+        }
+        let mp4 = Mp4Lite::open(Cursor::new(data)).unwrap();
+        assert!(mp4.video_track_info().is_none());
+        assert!(mp4.audio_track_info().is_none());
+    }
 }

@@ -106,8 +106,9 @@ pub(crate) fn split_chains(input: &str) -> Result<Vec<ChainSegment>> {
             },
             '|' if brace_depth > 0 && chars.peek() == Some(&'|') => {
                 current.push(ch);
-                // peek() returned Some above, so next() is guaranteed to yield a value.
-                current.push(chars.next().expect("peek() confirmed char available"));
+                if let Some(next_ch) = chars.next() {
+                    current.push(next_ch);
+                }
             },
             '|' if chars.peek() == Some(&'|') => {
                 chars.next(); // consume second |

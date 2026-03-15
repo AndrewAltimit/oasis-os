@@ -96,3 +96,227 @@ pub(crate) fn map_key_up(key: Keycode) -> Option<InputEvent> {
         _ => None,
     }
 }
+
+// -----------------------------------------------------------------------
+// Item 69: SDL input mapping tests (20 tests)
+// -----------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used)]
+
+    use super::*;
+
+    // -- Key down mapping tests --
+
+    #[test]
+    fn keydown_arrow_up() {
+        assert_eq!(
+            map_key_down(Keycode::Up),
+            Some(InputEvent::ButtonPress(Button::Up))
+        );
+    }
+
+    #[test]
+    fn keydown_arrow_down() {
+        assert_eq!(
+            map_key_down(Keycode::Down),
+            Some(InputEvent::ButtonPress(Button::Down))
+        );
+    }
+
+    #[test]
+    fn keydown_arrow_left() {
+        assert_eq!(
+            map_key_down(Keycode::Left),
+            Some(InputEvent::ButtonPress(Button::Left))
+        );
+    }
+
+    #[test]
+    fn keydown_arrow_right() {
+        assert_eq!(
+            map_key_down(Keycode::Right),
+            Some(InputEvent::ButtonPress(Button::Right))
+        );
+    }
+
+    #[test]
+    fn keydown_return_maps_to_confirm() {
+        assert_eq!(
+            map_key_down(Keycode::Return),
+            Some(InputEvent::ButtonPress(Button::Confirm))
+        );
+    }
+
+    #[test]
+    fn keydown_escape_maps_to_cancel() {
+        assert_eq!(
+            map_key_down(Keycode::Escape),
+            Some(InputEvent::ButtonPress(Button::Cancel))
+        );
+    }
+
+    #[test]
+    fn keydown_space_maps_to_triangle() {
+        assert_eq!(
+            map_key_down(Keycode::Space),
+            Some(InputEvent::ButtonPress(Button::Triangle))
+        );
+    }
+
+    #[test]
+    fn keydown_tab_maps_to_square() {
+        assert_eq!(
+            map_key_down(Keycode::Tab),
+            Some(InputEvent::ButtonPress(Button::Square))
+        );
+    }
+
+    #[test]
+    fn keydown_f1_maps_to_start() {
+        assert_eq!(
+            map_key_down(Keycode::F1),
+            Some(InputEvent::ButtonPress(Button::Start))
+        );
+    }
+
+    #[test]
+    fn keydown_f2_maps_to_select() {
+        assert_eq!(
+            map_key_down(Keycode::F2),
+            Some(InputEvent::ButtonPress(Button::Select))
+        );
+    }
+
+    #[test]
+    fn keydown_backspace_maps_to_backspace() {
+        assert_eq!(
+            map_key_down(Keycode::Backspace),
+            Some(InputEvent::Backspace)
+        );
+    }
+
+    #[test]
+    fn keydown_q_maps_to_trigger_left() {
+        assert_eq!(
+            map_key_down(Keycode::Q),
+            Some(InputEvent::TriggerPress(Trigger::Left))
+        );
+    }
+
+    #[test]
+    fn keydown_e_maps_to_trigger_right() {
+        assert_eq!(
+            map_key_down(Keycode::E),
+            Some(InputEvent::TriggerPress(Trigger::Right))
+        );
+    }
+
+    #[test]
+    fn keydown_f11_maps_to_toggle_fullscreen() {
+        assert_eq!(
+            map_key_down(Keycode::F11),
+            Some(InputEvent::ToggleFullscreen)
+        );
+    }
+
+    #[test]
+    fn keydown_unknown_key_returns_none() {
+        assert_eq!(map_key_down(Keycode::A), None);
+        assert_eq!(map_key_down(Keycode::_0), None);
+        assert_eq!(map_key_down(Keycode::F3), None);
+    }
+
+    // -- Key up mapping tests --
+
+    #[test]
+    fn keyup_arrow_keys() {
+        assert_eq!(
+            map_key_up(Keycode::Up),
+            Some(InputEvent::ButtonRelease(Button::Up))
+        );
+        assert_eq!(
+            map_key_up(Keycode::Down),
+            Some(InputEvent::ButtonRelease(Button::Down))
+        );
+        assert_eq!(
+            map_key_up(Keycode::Left),
+            Some(InputEvent::ButtonRelease(Button::Left))
+        );
+        assert_eq!(
+            map_key_up(Keycode::Right),
+            Some(InputEvent::ButtonRelease(Button::Right))
+        );
+    }
+
+    #[test]
+    fn keyup_confirm_cancel() {
+        assert_eq!(
+            map_key_up(Keycode::Return),
+            Some(InputEvent::ButtonRelease(Button::Confirm))
+        );
+        assert_eq!(
+            map_key_up(Keycode::Escape),
+            Some(InputEvent::ButtonRelease(Button::Cancel))
+        );
+    }
+
+    #[test]
+    fn keyup_triggers() {
+        assert_eq!(
+            map_key_up(Keycode::Q),
+            Some(InputEvent::TriggerRelease(Trigger::Left))
+        );
+        assert_eq!(
+            map_key_up(Keycode::E),
+            Some(InputEvent::TriggerRelease(Trigger::Right))
+        );
+    }
+
+    #[test]
+    fn keyup_unknown_key_returns_none() {
+        assert_eq!(map_key_up(Keycode::A), None);
+        assert_eq!(map_key_up(Keycode::Backspace), None);
+        assert_eq!(map_key_up(Keycode::F11), None);
+    }
+
+    // -- Symmetry test: every key-down mapping has a matching key-up --
+
+    #[test]
+    fn keydown_keyup_symmetry() {
+        // All keys that produce a ButtonPress on down should produce
+        // a ButtonRelease on up (except Backspace and F11 which are
+        // down-only).
+        let symmetric_keys = [
+            Keycode::Up,
+            Keycode::Down,
+            Keycode::Left,
+            Keycode::Right,
+            Keycode::Return,
+            Keycode::Escape,
+            Keycode::Space,
+            Keycode::Tab,
+            Keycode::F1,
+            Keycode::F2,
+            Keycode::Q,
+            Keycode::E,
+        ];
+        for key in symmetric_keys {
+            let down = map_key_down(key);
+            let up = map_key_up(key);
+            assert!(down.is_some(), "key {key:?} should map on key-down");
+            assert!(up.is_some(), "key {key:?} should map on key-up");
+            // Verify press/release match the same logical button.
+            match (down.unwrap(), up.unwrap()) {
+                (InputEvent::ButtonPress(a), InputEvent::ButtonRelease(b)) => {
+                    assert_eq!(a, b, "key {key:?} press/release mismatch");
+                },
+                (InputEvent::TriggerPress(a), InputEvent::TriggerRelease(b)) => {
+                    assert_eq!(a, b, "key {key:?} trigger press/release mismatch");
+                },
+                (d, u) => panic!("key {key:?}: unexpected pair ({d:?}, {u:?})"),
+            }
+        }
+    }
+}

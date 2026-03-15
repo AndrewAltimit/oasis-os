@@ -25,8 +25,8 @@ pub mod generated {
 pub use classic::{classic_skin, retro_cga_skin, tactical_skin, terminal_skin, win95_skin};
 pub use modern::{agent_terminal_skin, desktop_skin, gnome_skin, macos_skin, modern_skin, xp_skin};
 pub use special::{
-    altimit_skin, corrupted_skin, cyberpunk_skin, highcontrast_skin, paper_skin, solarized_skin,
-    vaporwave_skin,
+    altimit_skin, corrupted_skin, cyberpunk_skin, highcontrast_skin, paper_skin, protanopia_skin,
+    solarized_skin, tritanopia_skin, vaporwave_skin,
 };
 
 use oasis_types::error::Result;
@@ -62,6 +62,8 @@ fn load_builtin_raw(name: &str) -> Result<Skin> {
         "vaporwave" => vaporwave_skin(),
         "highcontrast" => highcontrast_skin(),
         "altimit" => altimit_skin(),
+        "protanopia" => protanopia_skin(),
+        "tritanopia" => tritanopia_skin(),
         _ => Err(oasis_types::error::OasisError::Config(
             format!("unknown built-in skin: {name}").into(),
         )),
@@ -107,6 +109,8 @@ pub fn builtin_names() -> &'static [&'static str] {
         "vaporwave",
         "highcontrast",
         "altimit",
+        "protanopia",
+        "tritanopia",
     ]
 }
 

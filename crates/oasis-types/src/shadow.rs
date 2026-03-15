@@ -3,19 +3,28 @@
 use crate::backend::{Color, SdiBackend};
 use crate::error::Result;
 
-/// A single shadow layer.
+/// A single shadow layer in a multi-layer shadow effect.
 #[derive(Debug, Clone, Copy)]
 pub struct ShadowLayer {
+    /// Horizontal offset from the element in pixels.
     pub offset_x: i32,
+    /// Vertical offset from the element in pixels.
     pub offset_y: i32,
+    /// Additional size expansion beyond the element bounds in pixels.
     pub spread: u16,
+    /// Shadow opacity (0 = invisible, 255 = fully opaque).
     pub alpha: u8,
+    /// Shadow tint color (typically black).
     pub color: Color,
 }
 
-/// Shadow specification composed of multiple layers.
+/// Shadow specification composed of multiple concentric layers.
+///
+/// Each layer draws a filled rectangle behind the target element with
+/// increasing spread and decreasing alpha, producing a soft drop shadow.
 #[derive(Debug, Clone)]
 pub struct Shadow {
+    /// Ordered list of shadow layers, drawn back to front.
     pub layers: Vec<ShadowLayer>,
 }
 
@@ -65,7 +74,12 @@ impl Shadow {
         self.layers.len()
     }
 
-    /// Predefined elevation levels.
+    /// Create a shadow from a predefined elevation level.
+    ///
+    /// - Level 0: no shadow
+    /// - Level 1: subtle (2 layers, small offset)
+    /// - Level 2: medium (3 layers, moderate offset)
+    /// - Level 3+: prominent (4 layers, large offset)
     pub fn elevation(level: u8) -> Self {
         match level {
             0 => Shadow::none(),

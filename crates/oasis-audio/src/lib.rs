@@ -6,7 +6,9 @@
 //! is implemented per-platform: rodio/SDL2_mixer on desktop/Pi, Media
 //! Engine offloading on PSP.
 
+pub mod audio_queue;
 pub mod manager;
+pub mod mixer;
 pub mod null_backend;
 pub mod playlist;
 pub mod radio;

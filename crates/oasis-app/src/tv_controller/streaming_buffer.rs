@@ -766,6 +766,388 @@ impl std::io::Seek for StreamingBuffer {
 // - Arc<AtomicBool> (Send + Sync)
 // No manual unsafe impl needed.
 
+// ---------------------------------------------------------------------------
+// Item 72: StreamingBuffer throttle logic tests
+// Item 73: Seek interpolation boundary tests
+// ---------------------------------------------------------------------------
+
+#[cfg(all(test, feature = "_video"))]
+mod tests {
+    #![allow(clippy::unwrap_used)]
+
+    use super::*;
+    use std::sync::Arc;
+
+    // ---------------------------------------------------------------
+    // Item 72: should_throttle_pure tests (15 tests)
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn throttle_decoder_active_below_lookahead() {
+        // decoder_pos > 0 and received is within MAX_LOOKAHEAD.
+        assert!(!should_throttle_pure(
+            1_000_000,
+            1_000_000 + MAX_LOOKAHEAD,
+            true,
+            MAX_LOOKAHEAD,
+        ));
+    }
+
+    #[test]
+    fn throttle_decoder_active_above_lookahead() {
+        // decoder_pos > 0 and received exceeds MAX_LOOKAHEAD ahead.
+        assert!(should_throttle_pure(
+            1_000_000,
+            1_000_000 + MAX_LOOKAHEAD + 1,
+            true,
+            MAX_LOOKAHEAD + 1,
+        ));
+    }
+
+    #[test]
+    fn throttle_decoder_active_exactly_at_boundary() {
+        // Exactly at the boundary -- should NOT throttle.
+        assert!(!should_throttle_pure(
+            1_000_000,
+            1_000_000 + MAX_LOOKAHEAD,
+            true,
+            MAX_LOOKAHEAD,
+        ));
+    }
+
+    #[test]
+    fn throttle_decoder_zero_no_moov_no_throttle() {
+        // decoder_pos == 0, no moov -> should not throttle.
+        assert!(!should_throttle_pure(
+            0,
+            MAX_LOOKAHEAD + 1_000_000,
+            false,
+            MAX_LOOKAHEAD + 1_000_000,
+        ));
+    }
+
+    #[test]
+    fn throttle_decoder_zero_has_moov_below_lookahead() {
+        // decoder_pos == 0, moov found, buffer < MAX_LOOKAHEAD.
+        assert!(!should_throttle_pure(0, 1_000_000, true, 1_000_000));
+    }
+
+    #[test]
+    fn throttle_decoder_zero_has_moov_above_lookahead() {
+        // decoder_pos == 0, moov found, buffer > MAX_LOOKAHEAD.
+        assert!(should_throttle_pure(
+            0,
+            MAX_LOOKAHEAD + 1,
+            true,
+            MAX_LOOKAHEAD + 1,
+        ));
+    }
+
+    #[test]
+    fn throttle_decoder_zero_has_moov_exactly_at_lookahead() {
+        // Exactly at MAX_LOOKAHEAD -- should NOT throttle.
+        assert!(!should_throttle_pure(0, MAX_LOOKAHEAD, true, MAX_LOOKAHEAD));
+    }
+
+    #[test]
+    fn throttle_decoder_large_position() {
+        // Large decoder position, received just barely over threshold.
+        let dec = 100 * 1024 * 1024; // 100 MB
+        let received = dec + MAX_LOOKAHEAD + 1;
+        assert!(should_throttle_pure(dec, received, true, 50_000_000));
+    }
+
+    #[test]
+    fn throttle_decoder_large_position_within_range() {
+        let dec = 100 * 1024 * 1024;
+        let received = dec + MAX_LOOKAHEAD - 1;
+        assert!(!should_throttle_pure(dec, received, true, 50_000_000));
+    }
+
+    #[test]
+    fn throttle_decoder_zero_no_moov_large_buffer() {
+        // Even with a huge buffer, no moov means no throttle at decoder_pos=0.
+        assert!(!should_throttle_pure(0, 500_000_000, false, 500_000_000,));
+    }
+
+    #[test]
+    fn throttle_decoder_one_byte_ahead_of_zero() {
+        // decoder_pos = 1 (active), received just at threshold.
+        assert!(!should_throttle_pure(
+            1,
+            1 + MAX_LOOKAHEAD,
+            true,
+            MAX_LOOKAHEAD
+        ));
+        assert!(should_throttle_pure(
+            1,
+            1 + MAX_LOOKAHEAD + 1,
+            true,
+            MAX_LOOKAHEAD + 1
+        ));
+    }
+
+    #[test]
+    fn throttle_all_zeros() {
+        // Everything zero: decoder not started, no data. No throttle.
+        assert!(!should_throttle_pure(0, 0, false, 0));
+    }
+
+    #[test]
+    fn throttle_decoder_zero_moov_zero_buffer() {
+        // Moov found but buffer is empty. Should not throttle.
+        assert!(!should_throttle_pure(0, 0, true, 0));
+    }
+
+    #[test]
+    fn throttle_decoder_active_received_less_than_decoder() {
+        // Edge case: received < decoder (shouldn't happen but test robustness).
+        assert!(!should_throttle_pure(
+            10_000_000, 5_000_000, true, 5_000_000
+        ));
+    }
+
+    #[test]
+    fn throttle_max_u64_values_no_overflow() {
+        // Near-max values should not overflow.
+        assert!(should_throttle_pure(0, u64::MAX, true, u64::MAX));
+    }
+
+    // ---------------------------------------------------------------
+    // Item 73: Seek interpolation boundary tests (8 tests)
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn seek_interpolation_zero_duration() {
+        // Duration 0 or negative should return mdat_offset (no div by zero).
+        assert_eq!(linear_seek_interpolation(5.0, 0.0, 1000, 500_000), 1000);
+        assert_eq!(linear_seek_interpolation(5.0, -1.0, 1000, 500_000), 1000);
+    }
+
+    #[test]
+    fn seek_interpolation_start() {
+        // Seeking to 0s should return mdat_offset.
+        assert_eq!(linear_seek_interpolation(0.0, 120.0, 1000, 500_000), 1000);
+    }
+
+    #[test]
+    fn seek_interpolation_end() {
+        // Seeking to exactly duration should return mdat_offset + mdat_size.
+        assert_eq!(
+            linear_seek_interpolation(120.0, 120.0, 1000, 500_000),
+            1000 + 500_000
+        );
+    }
+
+    #[test]
+    fn seek_interpolation_midpoint() {
+        // Seeking to 50% should return mdat_offset + mdat_size/2.
+        assert_eq!(
+            linear_seek_interpolation(60.0, 120.0, 1000, 500_000),
+            1000 + 250_000
+        );
+    }
+
+    #[test]
+    fn seek_interpolation_beyond_duration_clamped() {
+        // Seeking beyond duration should clamp to 1.0.
+        assert_eq!(
+            linear_seek_interpolation(200.0, 120.0, 1000, 500_000),
+            1000 + 500_000
+        );
+    }
+
+    #[test]
+    fn seek_interpolation_negative_seek_clamped() {
+        // Negative seek time should clamp to 0.
+        assert_eq!(linear_seek_interpolation(-5.0, 120.0, 1000, 500_000), 1000);
+    }
+
+    #[test]
+    fn seek_interpolation_large_file() {
+        // 1 GB file, seek to 50%.
+        let mdat_offset = 32_768u64;
+        let mdat_size = 1_000_000_000u64;
+        let result = linear_seek_interpolation(60.0, 120.0, mdat_offset, mdat_size);
+        assert_eq!(result, mdat_offset + mdat_size / 2);
+    }
+
+    #[test]
+    fn seek_interpolation_max_mdat_no_overflow() {
+        // Near-max mdat_offset and size should use saturating_add.
+        let result = linear_seek_interpolation(60.0, 120.0, u64::MAX - 100, 200);
+        // saturating_add prevents overflow: (MAX-100) + 100 = MAX
+        assert_eq!(result, u64::MAX);
+    }
+
+    // ---------------------------------------------------------------
+    // StreamingInner / StreamingBuffer integration tests
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn streaming_inner_push_and_bytes_received() {
+        let inner = StreamingInner::new();
+        assert_eq!(inner.bytes_received(), 0);
+        inner.push(&[0xAA; 1024]);
+        assert_eq!(inner.bytes_received(), 1024);
+        inner.push(&[0xBB; 2048]);
+        assert_eq!(inner.bytes_received(), 3072);
+    }
+
+    #[test]
+    fn streaming_inner_finish_marks_done() {
+        let inner = StreamingInner::new();
+        assert!(!inner.is_done());
+        inner.finish();
+        assert!(inner.is_done());
+    }
+
+    #[test]
+    fn streaming_inner_cancel() {
+        let inner = StreamingInner::new();
+        assert!(!inner.is_cancelled());
+        inner.cancel();
+        assert!(inner.is_cancelled());
+        assert!(inner.is_done());
+    }
+
+    #[test]
+    fn streaming_inner_set_error() {
+        let inner = StreamingInner::new();
+        inner.set_error("test error".to_string());
+        assert!(inner.is_done());
+        let err = inner.error.lock().unwrap();
+        assert_eq!(err.as_deref(), Some("test error"));
+    }
+
+    #[test]
+    fn streaming_buffer_seek_start() {
+        let inner = Arc::new(StreamingInner::new());
+        let mut buf = StreamingBuffer::new(Arc::clone(&inner));
+        assert_eq!(buf.pos, 0);
+        let pos = std::io::Seek::seek(&mut buf, std::io::SeekFrom::Start(100)).unwrap();
+        assert_eq!(pos, 100);
+        assert_eq!(buf.pos, 100);
+    }
+
+    #[test]
+    fn streaming_buffer_seek_current() {
+        let inner = Arc::new(StreamingInner::new());
+        let mut buf = StreamingBuffer::new(Arc::clone(&inner));
+        buf.pos = 50;
+        let pos = std::io::Seek::seek(&mut buf, std::io::SeekFrom::Current(25)).unwrap();
+        assert_eq!(pos, 75);
+    }
+
+    #[test]
+    fn streaming_buffer_seek_negative_errors() {
+        let inner = Arc::new(StreamingInner::new());
+        let mut buf = StreamingBuffer::new(Arc::clone(&inner));
+        let result = std::io::Seek::seek(&mut buf, std::io::SeekFrom::Current(-1));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn streaming_buffer_read_from_buffer() {
+        let inner = Arc::new(StreamingInner::new());
+        inner.push(&[0x11, 0x22, 0x33, 0x44, 0x55]);
+        inner.finish();
+        inner.disable_probe_mode();
+
+        let mut buf = StreamingBuffer::new(Arc::clone(&inner));
+        let mut out = [0u8; 3];
+        let n = std::io::Read::read(&mut buf, &mut out).unwrap();
+        assert_eq!(n, 3);
+        assert_eq!(out, [0x11, 0x22, 0x33]);
+        assert_eq!(buf.pos, 3);
+    }
+
+    #[test]
+    fn streaming_buffer_read_eof_when_done() {
+        let inner = Arc::new(StreamingInner::new());
+        inner
+            .total_size
+            .store(5, std::sync::atomic::Ordering::SeqCst);
+        inner.push(&[0x11, 0x22, 0x33, 0x44, 0x55]);
+        inner.finish();
+        inner.disable_probe_mode();
+
+        let mut buf = StreamingBuffer::new(Arc::clone(&inner));
+        buf.pos = 5; // at end
+        let mut out = [0u8; 4];
+        let n = std::io::Read::read(&mut buf, &mut out).unwrap();
+        assert_eq!(n, 0); // EOF
+    }
+
+    #[test]
+    fn streaming_buffer_read_cancelled() {
+        let inner = Arc::new(StreamingInner::new());
+        inner.cancel();
+
+        let mut buf = StreamingBuffer::new(Arc::clone(&inner));
+        let mut out = [0u8; 4];
+        let result = std::io::Read::read(&mut buf, &mut out);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn streaming_buffer_probe_mode_returns_zeros() {
+        let inner = Arc::new(StreamingInner::new());
+        // probe_mode is true by default.
+        // Set total_size so the probe read has a limit.
+        inner
+            .total_size
+            .store(1000, std::sync::atomic::Ordering::SeqCst);
+
+        let mut buf = StreamingBuffer::new(Arc::clone(&inner));
+        buf.pos = 500; // beyond any buffered data
+        let mut out = [0xFFu8; 10];
+        let n = std::io::Read::read(&mut buf, &mut out).unwrap();
+        assert_eq!(n, 10);
+        assert!(
+            out.iter().all(|&b| b == 0),
+            "probe mode should return zeros"
+        );
+    }
+
+    #[test]
+    fn scan_atoms_detects_moov() {
+        let mut data = Vec::new();
+        // ftyp atom (24 bytes)
+        data.extend_from_slice(&24u32.to_be_bytes());
+        data.extend_from_slice(b"ftyp");
+        data.extend_from_slice(&[0u8; 16]);
+        // moov atom (20 bytes)
+        data.extend_from_slice(&20u32.to_be_bytes());
+        data.extend_from_slice(b"moov");
+        data.extend_from_slice(&[0u8; 12]);
+
+        let inner = StreamingInner::new();
+        inner.push(&data);
+
+        let s = inner.state.lock().unwrap();
+        assert!(s.moov.is_some(), "should detect moov atom");
+        assert_eq!(s.atoms.len(), 2);
+        assert_eq!(&s.atoms[0].2, b"ftyp");
+        assert_eq!(&s.atoms[1].2, b"moov");
+    }
+
+    #[test]
+    fn scan_atoms_skips_invalid_size() {
+        // Atom with size = 3 (< 8) should stop scanning.
+        let mut data = Vec::new();
+        data.extend_from_slice(&3u32.to_be_bytes());
+        data.extend_from_slice(b"bad!");
+        data.extend_from_slice(&[0u8; 20]);
+
+        let inner = StreamingInner::new();
+        inner.push(&data);
+
+        let s = inner.state.lock().unwrap();
+        assert!(s.atoms.is_empty());
+    }
+}
+
 #[cfg(feature = "_video")]
 impl oasis_video::VideoSource for StreamingBuffer {
     fn is_seekable(&self) -> bool {

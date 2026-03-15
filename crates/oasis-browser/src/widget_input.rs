@@ -1,9 +1,8 @@
 //! Input handling methods for [`BrowserWidget`].
 
-use std::collections::HashMap;
-
 use oasis_types::input::{Button, InputEvent, Trigger};
 use oasis_vfs::Vfs;
+use rustc_hash::FxHashMap;
 
 use crate::css;
 use crate::html;
@@ -335,7 +334,7 @@ impl BrowserWidget {
         }
 
         let index = css::cascade::SelectorIndex::build(&all_sheets);
-        let inline_map: HashMap<NodeId, &[css::parser::Declaration]> = self
+        let inline_map: FxHashMap<NodeId, &[css::parser::Declaration]> = self
             .cached_inline_styles
             .iter()
             .map(|(nid, decls)| (*nid, decls.as_slice()))
@@ -346,6 +345,7 @@ impl BrowserWidget {
         };
 
         let mut any_changed = false;
+        let mut tag_cache = FxHashMap::<String, String>::default();
         for &nid in &affected {
             let node = &doc.nodes[nid];
             if !matches!(node.kind, html::dom::NodeKind::Element(_)) {
@@ -360,6 +360,7 @@ impl BrowserWidget {
                 &index,
                 &inline_map,
                 &ctx,
+                &mut tag_cache,
             );
             if self.styles[nid].as_ref() != Some(&new_style) {
                 self.styles[nid] = Some(new_style);

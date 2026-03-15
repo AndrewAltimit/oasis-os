@@ -258,7 +258,9 @@ impl CssTokenizer {
             return CssToken::Eof;
         }
 
-        let ch = self.peek().expect("not eof");
+        let Some(ch) = self.peek() else {
+            return CssToken::Eof;
+        };
 
         // Quoted strings.
         if ch == '"' || ch == '\'' {

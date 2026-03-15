@@ -3,9 +3,13 @@
 /// Axis-aligned rectangle for clipping and layout.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ClipRect {
+    /// Left edge X coordinate.
     pub x: i32,
+    /// Top edge Y coordinate.
     pub y: i32,
+    /// Width in pixels.
     pub w: u32,
+    /// Height in pixels.
     pub h: u32,
 }
 

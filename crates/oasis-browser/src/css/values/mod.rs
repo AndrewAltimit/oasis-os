@@ -18,6 +18,6 @@ pub use types::{
     Dimension, Display, FlexDirection, FlexWrap, Float, FontFamily, FontStyle, FontWeight,
     GradientDirection, GradientStop, GridTrackSize, JustifyContent, LinearGradient,
     ListStylePosition, ListStyleType, Overflow, OverflowWrap, Position, ROOT_FONT_SIZE, TextAlign,
-    TextDecoration, TextOverflow, TextShadow, TextTransform, VerticalAlign, Visibility, WhiteSpace,
-    WordBreak,
+    TextDecoration, TextDirection, TextOverflow, TextShadow, TextTransform, VerticalAlign,
+    Visibility, WhiteSpace, WordBreak,
 };

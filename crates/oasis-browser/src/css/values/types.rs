@@ -307,3 +307,6 @@ pub enum GridTrackSize {
     Fr(f32),
     Auto,
 }
+
+/// Re-export `TextDirection` from `oasis-types` for CSS `direction` property.
+pub use oasis_types::text_direction::TextDirection;

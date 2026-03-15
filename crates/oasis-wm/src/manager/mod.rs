@@ -249,7 +249,14 @@ mod tests {
         }
     }
 
-    impl oasis_types::backend::SdiBackend for NullBackend {}
+    impl oasis_types::backend::SdiShapes for NullBackend {}
+    impl oasis_types::backend::SdiGradients for NullBackend {}
+    impl oasis_types::backend::SdiAlpha for NullBackend {}
+    impl oasis_types::backend::SdiText for NullBackend {}
+    impl oasis_types::backend::SdiTextures for NullBackend {}
+    impl oasis_types::backend::SdiClipTransform for NullBackend {}
+    impl oasis_types::backend::SdiVector for NullBackend {}
+    impl oasis_types::backend::SdiBatch for NullBackend {}
 
     fn app_config(id: &str) -> WindowConfig {
         WindowConfig {

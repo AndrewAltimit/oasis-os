@@ -20,15 +20,21 @@ pub use parsing::{SkinLayout, SkinObjectDef};
 /// Top-level skin manifest (`skin.toml`).
 #[derive(Debug, Clone, Deserialize)]
 pub struct SkinManifest {
+    /// Human-readable skin name.
     pub name: String,
+    /// Skin version string (default "1.0").
     #[serde(default = "default_version")]
     pub version: String,
+    /// Skin author name.
     #[serde(default)]
     pub author: String,
+    /// Short description of the skin.
     #[serde(default)]
     pub description: String,
+    /// Virtual screen width in pixels (default 480).
     #[serde(default = "default_width")]
     pub screen_width: u32,
+    /// Virtual screen height in pixels (default 272).
     #[serde(default = "default_height")]
     pub screen_height: u32,
     /// Parent skin to inherit from (built-in name).
@@ -162,13 +168,23 @@ impl Default for SkinFeatures {
 }
 
 /// A fully loaded skin ready for use.
+///
+/// Contains all configuration data parsed from the skin's TOML files:
+/// manifest metadata, layout definitions, feature gates, theme colors,
+/// display strings, and optional corrupted visual modifiers.
 #[derive(Debug, Clone)]
 pub struct Skin {
+    /// Skin metadata (name, version, author, screen dimensions).
     pub manifest: SkinManifest,
+    /// SDI object layout definitions.
     pub layout: SkinLayout,
+    /// Feature gates (dashboard, terminal, browser, etc.).
     pub features: SkinFeatures,
+    /// Color scheme and visual properties.
     pub theme: SkinTheme,
+    /// Localized display strings.
     pub strings: SkinStrings,
+    /// Optional corrupted visual effect modifiers.
     pub corrupted_modifiers: Option<CorruptedModifiers>,
 }
 

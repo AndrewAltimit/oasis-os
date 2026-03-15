@@ -3,7 +3,10 @@
 //! Provides a [`MockBackend`] that records all draw calls for assertion
 //! in integration and unit tests across browser modules.
 
-use oasis_types::backend::{Color, SdiBackend, SdiCore, TextureId};
+use oasis_types::backend::{
+    Color, SdiAlpha, SdiBatch, SdiClipTransform, SdiCore, SdiGradients, SdiShapes, SdiText,
+    SdiTextures, SdiVector, TextureId,
+};
 use oasis_types::error::Result;
 
 /// A recorded draw call from the mock backend.
@@ -238,4 +241,11 @@ impl SdiCore for MockBackend {
     }
 }
 
-impl SdiBackend for MockBackend {}
+impl SdiShapes for MockBackend {}
+impl SdiGradients for MockBackend {}
+impl SdiAlpha for MockBackend {}
+impl SdiText for MockBackend {}
+impl SdiTextures for MockBackend {}
+impl SdiClipTransform for MockBackend {}
+impl SdiVector for MockBackend {}
+impl SdiBatch for MockBackend {}

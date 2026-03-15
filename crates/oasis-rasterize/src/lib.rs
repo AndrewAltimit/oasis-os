@@ -8,6 +8,12 @@
 //!
 //! The crate also provides [`GlyphCacheKey`] for packing glyph parameters into
 //! a compact hash key suitable for any glyph cache implementation.
+//!
+//! [`TextureDedup`] provides content-addressed texture deduplication with LRU
+//! eviction and reference counting, shared by SDL and WASM backends.
+
+mod texture_dedup;
+pub use texture_dedup::TextureDedup;
 
 use oasis_types::backend::Color;
 use oasis_types::color::lerp_color_ratio;

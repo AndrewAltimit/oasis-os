@@ -800,4 +800,87 @@ mod tests {
         _assert_video_source::<std::fs::File>();
         _assert_video_source::<std::io::Cursor<Vec<u8>>>();
     }
+
+    // ---------------------------------------------------------------
+    // Item 76: H.264 NAL unit / SPS/PPS / IDR detection tests
+    // (contains_idr is defined here, gated on feature = "h264")
+    // ---------------------------------------------------------------
+
+    #[cfg(feature = "h264")]
+    mod nal_tests {
+        #![allow(clippy::unwrap_used)]
+
+        use super::*;
+
+        #[test]
+        fn contains_idr_4byte_start_code() {
+            // IDR NAL type = 5 (0x65 = 0b01100101, type = 5)
+            let data = [0x00, 0x00, 0x00, 0x01, 0x65, 0xAA, 0xBB];
+            assert!(SoftwareVideoDecoder::contains_idr(&data));
+        }
+
+        #[test]
+        fn contains_idr_3byte_start_code() {
+            // 3-byte start code with IDR NAL type 5
+            let data = [0x00, 0x00, 0x01, 0x65, 0xAA];
+            assert!(SoftwareVideoDecoder::contains_idr(&data));
+        }
+
+        #[test]
+        fn contains_idr_non_idr_nal() {
+            // NAL type 1 (non-IDR coded slice, 0x41 & 0x1F = 1)
+            let data = [0x00, 0x00, 0x00, 0x01, 0x41, 0xAA];
+            assert!(!SoftwareVideoDecoder::contains_idr(&data));
+        }
+
+        #[test]
+        fn contains_idr_sps_not_idr() {
+            // SPS NAL type = 7 (0x67 & 0x1F = 7)
+            let data = [0x00, 0x00, 0x00, 0x01, 0x67, 0x42, 0xC0];
+            assert!(!SoftwareVideoDecoder::contains_idr(&data));
+        }
+
+        #[test]
+        fn contains_idr_pps_not_idr() {
+            // PPS NAL type = 8 (0x68 & 0x1F = 8)
+            let data = [0x00, 0x00, 0x00, 0x01, 0x68, 0xCE];
+            assert!(!SoftwareVideoDecoder::contains_idr(&data));
+        }
+
+        #[test]
+        fn contains_idr_empty_data() {
+            assert!(!SoftwareVideoDecoder::contains_idr(&[]));
+        }
+
+        #[test]
+        fn contains_idr_too_short_for_start_code() {
+            assert!(!SoftwareVideoDecoder::contains_idr(&[0x00, 0x00]));
+            assert!(!SoftwareVideoDecoder::contains_idr(&[0x00, 0x00, 0x01]));
+        }
+
+        #[test]
+        fn contains_idr_multiple_nals_idr_second() {
+            // SPS then IDR
+            let mut data = Vec::new();
+            data.extend_from_slice(&[0x00, 0x00, 0x00, 0x01, 0x67]); // SPS
+            data.extend_from_slice(&[0x42, 0xC0, 0x1E]); // SPS data
+            data.extend_from_slice(&[0x00, 0x00, 0x00, 0x01, 0x65]); // IDR
+            data.extend_from_slice(&[0xAA, 0xBB]); // IDR data
+            assert!(SoftwareVideoDecoder::contains_idr(&data));
+        }
+
+        #[test]
+        fn contains_idr_idr_with_nal_ref_idc() {
+            // NAL byte = 0x25: nal_ref_idc=1, type=5 (IDR)
+            let data = [0x00, 0x00, 0x00, 0x01, 0x25, 0xAA];
+            assert!(SoftwareVideoDecoder::contains_idr(&data));
+        }
+
+        #[test]
+        fn contains_idr_start_code_at_end_no_nal_byte() {
+            // Start code is the last bytes, no NAL type byte follows.
+            let data = [0x00, 0x00, 0x00, 0x01];
+            assert!(!SoftwareVideoDecoder::contains_idr(&data));
+        }
+    }
 }

@@ -37,7 +37,9 @@ mod var_resolve;
 #[cfg(test)]
 mod tests;
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
+
+use rustc_hash::FxHashMap;
 
 use super::parser::{Declaration, Stylesheet};
 use super::values::ComputedStyle;
@@ -80,11 +82,16 @@ pub fn style_tree(
     let index = SelectorIndex::build(stylesheets);
 
     // Build a HashMap for O(1) inline style lookups instead of O(n) per element.
-    let inline_map: HashMap<NodeId, &[Declaration]> = inline_styles
+    let inline_map: FxHashMap<NodeId, &[Declaration]> = inline_styles
         .iter()
         .map(|(nid, decls)| (*nid, decls.as_slice()))
         .collect();
     let mut styles: Vec<Option<ComputedStyle>> = vec![None; doc.nodes.len()];
+
+    // Cache for lowercased tag names to avoid repeated allocations
+    // during selector index lookups.
+    let mut tag_cache = FxHashMap::<String, String>::default();
+
     style_subtree(
         doc,
         doc.root,
@@ -93,20 +100,23 @@ pub fn style_tree(
         &inline_map,
         &mut styles,
         ctx,
+        &mut tag_cache,
     );
     styles
 }
 
 /// Recursively compute styles depth-first so that children can inherit
 /// from their (already-computed) parent.
+#[allow(clippy::too_many_arguments)]
 fn style_subtree(
     doc: &Document,
     node_id: NodeId,
     stylesheets: &[&Stylesheet],
     index: &SelectorIndex,
-    inline_map: &HashMap<NodeId, &[Declaration]>,
+    inline_map: &FxHashMap<NodeId, &[Declaration]>,
     styles: &mut [Option<ComputedStyle>],
     ctx: &CascadeContext<'_>,
+    tag_cache: &mut FxHashMap<String, String>,
 ) {
     let node = &doc.nodes[node_id];
 
@@ -121,6 +131,7 @@ fn style_subtree(
             index,
             inline_map,
             ctx,
+            tag_cache,
         );
         styles[node_id] = Some(style);
     }
@@ -129,19 +140,30 @@ fn style_subtree(
     let num_children = doc.nodes[node_id].children.len();
     for i in 0..num_children {
         let child_id = doc.nodes[node_id].children[i];
-        style_subtree(doc, child_id, stylesheets, index, inline_map, styles, ctx);
+        style_subtree(
+            doc,
+            child_id,
+            stylesheets,
+            index,
+            inline_map,
+            styles,
+            ctx,
+            tag_cache,
+        );
     }
 }
 
 /// Compute the final style for a single element.
+#[allow(clippy::too_many_arguments)]
 pub fn compute_style(
     doc: &Document,
     node_id: NodeId,
     parent_style: Option<&ComputedStyle>,
     stylesheets: &[&Stylesheet],
     index: &SelectorIndex,
-    inline_map: &HashMap<NodeId, &[Declaration]>,
+    inline_map: &FxHashMap<NodeId, &[Declaration]>,
     ctx: &CascadeContext<'_>,
+    tag_cache: &mut FxHashMap<String, String>,
 ) -> ComputedStyle {
     // Start from inherited values if we have a parent, else defaults.
     let mut style = match parent_style {
@@ -152,8 +174,15 @@ pub fn compute_style(
     let parent_font_size = parent_style.map_or(super::values::ROOT_FONT_SIZE, |p| p.font_size);
 
     // Collect all matching declarations with their origin info.
-    let mut matched =
-        matching::collect_matched_declarations(doc, node_id, stylesheets, index, inline_map, ctx);
+    let mut matched = matching::collect_matched_declarations(
+        doc,
+        node_id,
+        stylesheets,
+        index,
+        inline_map,
+        ctx,
+        tag_cache,
+    );
 
     // Sort by cascade order: specificity, then source order.
     // `!important` declarations come after normal ones.

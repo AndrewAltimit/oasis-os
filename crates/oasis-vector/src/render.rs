@@ -231,7 +231,10 @@ fn render_op(backend: &mut dyn SdiBackend, op: &VectorOp, group_alpha: u8) -> Re
 #[cfg(test)]
 mod tests {
     use super::*;
-    use oasis_types::backend::{Color, SdiCore, TextureId};
+    use oasis_types::backend::{
+        Color, SdiAlpha, SdiBatch, SdiClipTransform, SdiCore, SdiGradients, SdiShapes, SdiText,
+        SdiTextures, SdiVector, TextureId,
+    };
     use oasis_types::error::Result;
 
     /// Minimal mock backend that records calls.
@@ -304,17 +307,7 @@ mod tests {
         }
     }
 
-    impl SdiBackend for MockBackend {
-        fn push_translate(&mut self, dx: i32, dy: i32) -> Result<()> {
-            self.calls.push(format!("push_translate({dx},{dy})"));
-            self.translate_stack.push((dx, dy));
-            Ok(())
-        }
-        fn pop_translate(&mut self) -> Result<()> {
-            self.calls.push("pop_translate".to_string());
-            self.translate_stack.pop();
-            Ok(())
-        }
+    impl SdiShapes for MockBackend {
         fn fill_circle(&mut self, cx: i32, cy: i32, radius: u16, color: Color) -> Result<()> {
             self.calls
                 .push(format!("fill_circle({cx},{cy},{radius},a={})", color.a));
@@ -330,24 +323,6 @@ mod tests {
         ) -> Result<()> {
             self.calls.push(format!(
                 "stroke_circle({cx},{cy},{radius},{width},a={})",
-                color.a
-            ));
-            Ok(())
-        }
-        fn fill_polygon(&mut self, points: &[(i32, i32)], color: Color) -> Result<()> {
-            self.calls
-                .push(format!("fill_polygon(n={},a={})", points.len(), color.a));
-            Ok(())
-        }
-        fn stroke_polygon(
-            &mut self,
-            points: &[(i32, i32)],
-            width: u16,
-            color: Color,
-        ) -> Result<()> {
-            self.calls.push(format!(
-                "stroke_polygon(n={},{width},a={})",
-                points.len(),
                 color.a
             ));
             Ok(())
@@ -368,6 +343,43 @@ mod tests {
             Ok(())
         }
     }
+    impl SdiVector for MockBackend {
+        fn fill_polygon(&mut self, points: &[(i32, i32)], color: Color) -> Result<()> {
+            self.calls
+                .push(format!("fill_polygon(n={},a={})", points.len(), color.a));
+            Ok(())
+        }
+        fn stroke_polygon(
+            &mut self,
+            points: &[(i32, i32)],
+            width: u16,
+            color: Color,
+        ) -> Result<()> {
+            self.calls.push(format!(
+                "stroke_polygon(n={},{width},a={})",
+                points.len(),
+                color.a
+            ));
+            Ok(())
+        }
+    }
+    impl SdiClipTransform for MockBackend {
+        fn push_translate(&mut self, dx: i32, dy: i32) -> Result<()> {
+            self.calls.push(format!("push_translate({dx},{dy})"));
+            self.translate_stack.push((dx, dy));
+            Ok(())
+        }
+        fn pop_translate(&mut self) -> Result<()> {
+            self.calls.push("pop_translate".to_string());
+            self.translate_stack.pop();
+            Ok(())
+        }
+    }
+    impl SdiGradients for MockBackend {}
+    impl SdiAlpha for MockBackend {}
+    impl SdiText for MockBackend {}
+    impl SdiTextures for MockBackend {}
+    impl SdiBatch for MockBackend {}
 
     #[test]
     fn test_render_empty_scene() {

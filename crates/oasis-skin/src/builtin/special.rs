@@ -295,6 +295,256 @@ pub fn highcontrast_skin() -> Result<Skin> {
     )
 }
 
+// ---------------------------------------------------------------------------
+// Protanopia-safe skin: avoids red-green confusion, uses blue/yellow/white.
+// ---------------------------------------------------------------------------
+
+const PROTANOPIA_MANIFEST: &str = r#"
+name = "protanopia"
+version = "1.0"
+author = "OASIS_OS"
+description = "Color-blind-safe theme for protanopia: avoids red-green, uses blue/yellow/white/gray"
+screen_width = 480
+screen_height = 272
+"#;
+
+const PROTANOPIA_LAYOUT: &str = r##"
+# Top bar (24px) + content area (222px) + bottom bar (26px) = 272px
+[content_bg]
+x = 0
+y = 24
+w = 480
+h = 222
+color = "#0D1117"
+"##;
+
+const PROTANOPIA_FEATURES: &str = r#"
+dashboard = true
+terminal = true
+file_browser = true
+browser = true
+window_manager = false
+dashboard_pages = 2
+icons_per_page = 9
+grid_cols = 3
+grid_rows = 3
+start_menu = true
+show_version = false
+show_tabs = false
+"#;
+
+const PROTANOPIA_THEME: &str = r##"
+# Protanopia-safe palette: no red/green distinction needed
+# Success = blue, Warning = yellow/amber, Error = magenta/pink
+background = "#0D1117"
+primary = "#2F81F7"
+secondary = "#30363D"
+text = "#F0F6FC"
+dim_text = "#8B949E"
+status_bar = "#161B22"
+prompt = "#2F81F7"
+output = "#E6EDF3"
+error = "#DA3B8A"
+
+border_radius = 4
+shadow_intensity = 1
+gradient_enabled = false
+
+[wallpaper]
+style = "solid"
+color_stops = ["#0D1117"]
+
+[bar_overrides]
+statusbar_bg = "#161B22"
+text_shadow = false
+
+[icon_overrides]
+body_color = "#161B22"
+icon_style = "card"
+cursor_style = "fill"
+
+[app_overrides]
+app_bg = "#0D1117"
+text_color = "#F0F6FC"
+selection_accent_color = "#2F81F760"
+
+[start_menu_overrides]
+panel_bg = "#161B22"
+button_bg = "#2F81F7"
+button_text = "#FFFFFF"
+button_gradient = false
+panel_width = 200
+panel_border_radius = 6
+columns = 2
+
+[browser_overrides]
+chrome_bg = "#161B22"
+url_bar_bg = "#0D1117"
+link_color = "#58A6FF"
+
+[scrollbar_overrides]
+track_color = "#161B22"
+thumb_color = "#2F81F7"
+
+[geometry]
+statusbar_height = 24
+bottombar_height = 26
+font_body = 12
+font_hint = 10
+font_heading = 14
+"##;
+
+const PROTANOPIA_STRINGS: &str = r#"
+boot_text = [
+    "OASIS_OS v2.2 [protanopia]",
+    "Loading protanopia-safe interface...",
+    "Color-blind accessibility: enabled",
+    "Ready.",
+]
+prompt_format = "> "
+title = "OASIS Protanopia"
+home_label = "Home"
+welcome_message = "Welcome to OASIS (protanopia-safe). Type 'help' for commands."
+error_prefix = "ERROR: "
+shutdown_message = "Goodbye."
+"#;
+
+// ---------------------------------------------------------------------------
+// Tritanopia-safe skin: avoids blue-yellow confusion, uses red/green/magenta.
+// ---------------------------------------------------------------------------
+
+const TRITANOPIA_MANIFEST: &str = r#"
+name = "tritanopia"
+version = "1.0"
+author = "OASIS_OS"
+description = "Color-blind-safe theme for tritanopia: avoids blue-yellow, uses red/green/magenta/cyan"
+screen_width = 480
+screen_height = 272
+"#;
+
+const TRITANOPIA_LAYOUT: &str = r##"
+# Top bar (24px) + content area (222px) + bottom bar (26px) = 272px
+[content_bg]
+x = 0
+y = 24
+w = 480
+h = 222
+color = "#1A1A1A"
+"##;
+
+const TRITANOPIA_FEATURES: &str = r#"
+dashboard = true
+terminal = true
+file_browser = true
+browser = true
+window_manager = false
+dashboard_pages = 2
+icons_per_page = 9
+grid_cols = 3
+grid_rows = 3
+start_menu = true
+show_version = false
+show_tabs = false
+"#;
+
+const TRITANOPIA_THEME: &str = r##"
+# Tritanopia-safe palette: no blue/yellow distinction needed
+# Success = green, Warning = red/magenta, Error = red
+background = "#1A1A1A"
+primary = "#E040A0"
+secondary = "#333333"
+text = "#F0F0F0"
+dim_text = "#999999"
+status_bar = "#262626"
+prompt = "#E040A0"
+output = "#E0E0E0"
+error = "#E03030"
+
+border_radius = 4
+shadow_intensity = 1
+gradient_enabled = false
+
+[wallpaper]
+style = "solid"
+color_stops = ["#1A1A1A"]
+
+[bar_overrides]
+statusbar_bg = "#262626"
+text_shadow = false
+
+[icon_overrides]
+body_color = "#262626"
+icon_style = "card"
+cursor_style = "fill"
+
+[app_overrides]
+app_bg = "#1A1A1A"
+text_color = "#F0F0F0"
+selection_accent_color = "#E040A060"
+
+[start_menu_overrides]
+panel_bg = "#262626"
+button_bg = "#E040A0"
+button_text = "#FFFFFF"
+button_gradient = false
+panel_width = 200
+panel_border_radius = 6
+columns = 2
+
+[browser_overrides]
+chrome_bg = "#262626"
+url_bar_bg = "#1A1A1A"
+link_color = "#E060B0"
+
+[scrollbar_overrides]
+track_color = "#262626"
+thumb_color = "#E040A0"
+
+[geometry]
+statusbar_height = 24
+bottombar_height = 26
+font_body = 12
+font_hint = 10
+font_heading = 14
+"##;
+
+const TRITANOPIA_STRINGS: &str = r#"
+boot_text = [
+    "OASIS_OS v2.2 [tritanopia]",
+    "Loading tritanopia-safe interface...",
+    "Color-blind accessibility: enabled",
+    "Ready.",
+]
+prompt_format = "> "
+title = "OASIS Tritanopia"
+home_label = "Home"
+welcome_message = "Welcome to OASIS (tritanopia-safe). Type 'help' for commands."
+error_prefix = "ERROR: "
+shutdown_message = "Goodbye."
+"#;
+
+/// Load the Protanopia-safe skin (avoids red-green confusion).
+pub fn protanopia_skin() -> Result<Skin> {
+    Skin::from_toml_full(
+        PROTANOPIA_MANIFEST,
+        PROTANOPIA_LAYOUT,
+        PROTANOPIA_FEATURES,
+        PROTANOPIA_THEME,
+        PROTANOPIA_STRINGS,
+    )
+}
+
+/// Load the Tritanopia-safe skin (avoids blue-yellow confusion).
+pub fn tritanopia_skin() -> Result<Skin> {
+    Skin::from_toml_full(
+        TRITANOPIA_MANIFEST,
+        TRITANOPIA_LAYOUT,
+        TRITANOPIA_FEATURES,
+        TRITANOPIA_THEME,
+        TRITANOPIA_STRINGS,
+    )
+}
+
 /// Load the Altimit skin (vector icon style).
 pub fn altimit_skin() -> Result<Skin> {
     Skin::from_toml_full(

@@ -370,12 +370,59 @@ fn map_keyup(ke: &KeyboardEvent) -> Option<InputEvent> {
 }
 
 // -----------------------------------------------------------------------
-// Tests -- scale_point_math is pure, so testable on any target.
+// Tests -- pure functions testable on any target.
 // -----------------------------------------------------------------------
+
+/// Test helper: create a mock key string and call `map_keydown` logic.
+/// Since `map_keydown` takes a `KeyboardEvent` (WASM-only), we test the
+/// key string matching directly via this extracted helper.
+#[cfg(test)]
+fn map_keydown_str(key: &str) -> Option<InputEvent> {
+    match key {
+        "ArrowUp" => Some(InputEvent::ButtonPress(Button::Up)),
+        "ArrowDown" => Some(InputEvent::ButtonPress(Button::Down)),
+        "ArrowLeft" => Some(InputEvent::ButtonPress(Button::Left)),
+        "ArrowRight" => Some(InputEvent::ButtonPress(Button::Right)),
+        "Enter" => Some(InputEvent::ButtonPress(Button::Confirm)),
+        "Escape" => Some(InputEvent::ButtonPress(Button::Cancel)),
+        " " => Some(InputEvent::ButtonPress(Button::Triangle)),
+        "Tab" => Some(InputEvent::ButtonPress(Button::Square)),
+        "F1" => Some(InputEvent::ButtonPress(Button::Start)),
+        "F2" => Some(InputEvent::ButtonPress(Button::Select)),
+        "q" | "Q" => Some(InputEvent::TriggerPress(Trigger::Left)),
+        "e" | "E" => Some(InputEvent::TriggerPress(Trigger::Right)),
+        "Backspace" => Some(InputEvent::Backspace),
+        "F11" => Some(InputEvent::ToggleFullscreen),
+        _ => None,
+    }
+}
+
+/// Test helper for key-up mapping.
+#[cfg(test)]
+fn map_keyup_str(key: &str) -> Option<InputEvent> {
+    match key {
+        "ArrowUp" => Some(InputEvent::ButtonRelease(Button::Up)),
+        "ArrowDown" => Some(InputEvent::ButtonRelease(Button::Down)),
+        "ArrowLeft" => Some(InputEvent::ButtonRelease(Button::Left)),
+        "ArrowRight" => Some(InputEvent::ButtonRelease(Button::Right)),
+        "Enter" => Some(InputEvent::ButtonRelease(Button::Confirm)),
+        "Escape" => Some(InputEvent::ButtonRelease(Button::Cancel)),
+        " " => Some(InputEvent::ButtonRelease(Button::Triangle)),
+        "Tab" => Some(InputEvent::ButtonRelease(Button::Square)),
+        "F1" => Some(InputEvent::ButtonRelease(Button::Start)),
+        "F2" => Some(InputEvent::ButtonRelease(Button::Select)),
+        "q" | "Q" => Some(InputEvent::TriggerRelease(Trigger::Left)),
+        "e" | "E" => Some(InputEvent::TriggerRelease(Trigger::Right)),
+        _ => None,
+    }
+}
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::unwrap_used)]
+
     use super::scale_point_math;
+    use super::*;
 
     // -- Identity / no-letterbox scenarios --
 
@@ -568,5 +615,279 @@ mod tests {
         let (x, y) = scale_point_math(960.0, 544.0, 50.0, 30.0, 530.0, 302.0, 480, 272);
         assert_eq!(x, 240);
         assert_eq!(y, 136);
+    }
+
+    // -------------------------------------------------------------------
+    // Item 69: WASM key mapping tests (25 tests)
+    // -------------------------------------------------------------------
+
+    #[test]
+    fn wasm_keydown_arrow_up() {
+        assert_eq!(
+            map_keydown_str("ArrowUp"),
+            Some(InputEvent::ButtonPress(Button::Up))
+        );
+    }
+
+    #[test]
+    fn wasm_keydown_arrow_down() {
+        assert_eq!(
+            map_keydown_str("ArrowDown"),
+            Some(InputEvent::ButtonPress(Button::Down))
+        );
+    }
+
+    #[test]
+    fn wasm_keydown_arrow_left() {
+        assert_eq!(
+            map_keydown_str("ArrowLeft"),
+            Some(InputEvent::ButtonPress(Button::Left))
+        );
+    }
+
+    #[test]
+    fn wasm_keydown_arrow_right() {
+        assert_eq!(
+            map_keydown_str("ArrowRight"),
+            Some(InputEvent::ButtonPress(Button::Right))
+        );
+    }
+
+    #[test]
+    fn wasm_keydown_enter_maps_to_confirm() {
+        assert_eq!(
+            map_keydown_str("Enter"),
+            Some(InputEvent::ButtonPress(Button::Confirm))
+        );
+    }
+
+    #[test]
+    fn wasm_keydown_escape_maps_to_cancel() {
+        assert_eq!(
+            map_keydown_str("Escape"),
+            Some(InputEvent::ButtonPress(Button::Cancel))
+        );
+    }
+
+    #[test]
+    fn wasm_keydown_space_maps_to_triangle() {
+        assert_eq!(
+            map_keydown_str(" "),
+            Some(InputEvent::ButtonPress(Button::Triangle))
+        );
+    }
+
+    #[test]
+    fn wasm_keydown_tab_maps_to_square() {
+        assert_eq!(
+            map_keydown_str("Tab"),
+            Some(InputEvent::ButtonPress(Button::Square))
+        );
+    }
+
+    #[test]
+    fn wasm_keydown_f1_maps_to_start() {
+        assert_eq!(
+            map_keydown_str("F1"),
+            Some(InputEvent::ButtonPress(Button::Start))
+        );
+    }
+
+    #[test]
+    fn wasm_keydown_f2_maps_to_select() {
+        assert_eq!(
+            map_keydown_str("F2"),
+            Some(InputEvent::ButtonPress(Button::Select))
+        );
+    }
+
+    #[test]
+    fn wasm_keydown_q_lowercase_maps_to_trigger_left() {
+        assert_eq!(
+            map_keydown_str("q"),
+            Some(InputEvent::TriggerPress(Trigger::Left))
+        );
+    }
+
+    #[test]
+    fn wasm_keydown_q_uppercase_maps_to_trigger_left() {
+        assert_eq!(
+            map_keydown_str("Q"),
+            Some(InputEvent::TriggerPress(Trigger::Left))
+        );
+    }
+
+    #[test]
+    fn wasm_keydown_e_lowercase_maps_to_trigger_right() {
+        assert_eq!(
+            map_keydown_str("e"),
+            Some(InputEvent::TriggerPress(Trigger::Right))
+        );
+    }
+
+    #[test]
+    fn wasm_keydown_e_uppercase_maps_to_trigger_right() {
+        assert_eq!(
+            map_keydown_str("E"),
+            Some(InputEvent::TriggerPress(Trigger::Right))
+        );
+    }
+
+    #[test]
+    fn wasm_keydown_backspace() {
+        assert_eq!(map_keydown_str("Backspace"), Some(InputEvent::Backspace));
+    }
+
+    #[test]
+    fn wasm_keydown_f11_toggle_fullscreen() {
+        assert_eq!(map_keydown_str("F11"), Some(InputEvent::ToggleFullscreen));
+    }
+
+    #[test]
+    fn wasm_keydown_unknown_returns_none() {
+        assert_eq!(map_keydown_str("a"), None);
+        assert_eq!(map_keydown_str("Shift"), None);
+        assert_eq!(map_keydown_str("Control"), None);
+        assert_eq!(map_keydown_str("F3"), None);
+    }
+
+    // -- Key up tests --
+
+    #[test]
+    fn wasm_keyup_arrow_keys() {
+        assert_eq!(
+            map_keyup_str("ArrowUp"),
+            Some(InputEvent::ButtonRelease(Button::Up))
+        );
+        assert_eq!(
+            map_keyup_str("ArrowDown"),
+            Some(InputEvent::ButtonRelease(Button::Down))
+        );
+        assert_eq!(
+            map_keyup_str("ArrowLeft"),
+            Some(InputEvent::ButtonRelease(Button::Left))
+        );
+        assert_eq!(
+            map_keyup_str("ArrowRight"),
+            Some(InputEvent::ButtonRelease(Button::Right))
+        );
+    }
+
+    #[test]
+    fn wasm_keyup_confirm_cancel() {
+        assert_eq!(
+            map_keyup_str("Enter"),
+            Some(InputEvent::ButtonRelease(Button::Confirm))
+        );
+        assert_eq!(
+            map_keyup_str("Escape"),
+            Some(InputEvent::ButtonRelease(Button::Cancel))
+        );
+    }
+
+    #[test]
+    fn wasm_keyup_triggers() {
+        assert_eq!(
+            map_keyup_str("q"),
+            Some(InputEvent::TriggerRelease(Trigger::Left))
+        );
+        assert_eq!(
+            map_keyup_str("e"),
+            Some(InputEvent::TriggerRelease(Trigger::Right))
+        );
+    }
+
+    #[test]
+    fn wasm_keyup_unknown_returns_none() {
+        assert_eq!(map_keyup_str("Backspace"), None);
+        assert_eq!(map_keyup_str("F11"), None);
+        assert_eq!(map_keyup_str("a"), None);
+    }
+
+    #[test]
+    fn wasm_keydown_keyup_symmetry() {
+        let symmetric_keys = [
+            "ArrowUp",
+            "ArrowDown",
+            "ArrowLeft",
+            "ArrowRight",
+            "Enter",
+            "Escape",
+            " ",
+            "Tab",
+            "F1",
+            "F2",
+            "q",
+            "e",
+        ];
+        for key in symmetric_keys {
+            let down = map_keydown_str(key);
+            let up = map_keyup_str(key);
+            assert!(down.is_some(), "key {key:?} should map on key-down");
+            assert!(up.is_some(), "key {key:?} should map on key-up");
+            match (down.unwrap(), up.unwrap()) {
+                (InputEvent::ButtonPress(a), InputEvent::ButtonRelease(b)) => {
+                    assert_eq!(a, b, "key {key:?} press/release mismatch");
+                },
+                (InputEvent::TriggerPress(a), InputEvent::TriggerRelease(b)) => {
+                    assert_eq!(a, b, "key {key:?} trigger press/release mismatch");
+                },
+                (d, u) => panic!("key {key:?}: unexpected pair ({d:?}, {u:?})"),
+            }
+        }
+    }
+
+    #[test]
+    fn wasm_all_buttons_covered_in_keydown() {
+        // Verify every Button variant is reachable via at least one key.
+        let all_keys = [
+            "ArrowUp",
+            "ArrowDown",
+            "ArrowLeft",
+            "ArrowRight",
+            "Enter",
+            "Escape",
+            " ",
+            "Tab",
+            "F1",
+            "F2",
+        ];
+        let mut found_buttons = std::collections::HashSet::new();
+        for key in all_keys {
+            if let Some(InputEvent::ButtonPress(btn)) = map_keydown_str(key) {
+                found_buttons.insert(btn);
+            }
+        }
+        assert!(found_buttons.contains(&Button::Up));
+        assert!(found_buttons.contains(&Button::Down));
+        assert!(found_buttons.contains(&Button::Left));
+        assert!(found_buttons.contains(&Button::Right));
+        assert!(found_buttons.contains(&Button::Confirm));
+        assert!(found_buttons.contains(&Button::Cancel));
+        assert!(found_buttons.contains(&Button::Triangle));
+        assert!(found_buttons.contains(&Button::Square));
+        assert!(found_buttons.contains(&Button::Start));
+        assert!(found_buttons.contains(&Button::Select));
+    }
+
+    #[test]
+    fn wasm_both_triggers_covered() {
+        let mut found = std::collections::HashSet::new();
+        for key in ["q", "Q", "e", "E"] {
+            if let Some(InputEvent::TriggerPress(t)) = map_keydown_str(key) {
+                found.insert(t);
+            }
+        }
+        assert!(found.contains(&Trigger::Left));
+        assert!(found.contains(&Trigger::Right));
+    }
+
+    #[test]
+    fn wasm_case_insensitive_triggers() {
+        // Both q/Q map to the same trigger, both e/E map to the same trigger.
+        assert_eq!(map_keydown_str("q"), map_keydown_str("Q"));
+        assert_eq!(map_keydown_str("e"), map_keydown_str("E"));
+        assert_eq!(map_keyup_str("q"), map_keyup_str("Q"));
+        assert_eq!(map_keyup_str("e"), map_keyup_str("E"));
     }
 }

@@ -45,8 +45,10 @@ impl InputBackend for FfiInputBackend {
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::unwrap_used)]
+
     use super::*;
-    use oasis_core::input::Button;
+    use oasis_core::input::{Button, Trigger};
 
     #[test]
     fn empty_by_default() {
@@ -148,5 +150,83 @@ mod tests {
         }
         let events = backend.poll_events();
         assert_eq!(events.len(), 20);
+    }
+
+    // -------------------------------------------------------------------
+    // Item 69: UE5/FFI input mapping tests (5 new tests)
+    // -------------------------------------------------------------------
+
+    #[test]
+    fn trigger_events_round_trip() {
+        let mut backend = FfiInputBackend::new();
+        backend.push_event(InputEvent::TriggerPress(Trigger::Left));
+        backend.push_event(InputEvent::TriggerRelease(Trigger::Left));
+        backend.push_event(InputEvent::TriggerPress(Trigger::Right));
+        backend.push_event(InputEvent::TriggerRelease(Trigger::Right));
+        let events = backend.poll_events();
+        assert_eq!(events.len(), 4);
+        assert_eq!(events[0], InputEvent::TriggerPress(Trigger::Left));
+        assert_eq!(events[1], InputEvent::TriggerRelease(Trigger::Left));
+        assert_eq!(events[2], InputEvent::TriggerPress(Trigger::Right));
+        assert_eq!(events[3], InputEvent::TriggerRelease(Trigger::Right));
+    }
+
+    #[test]
+    fn mouse_wheel_event_round_trip() {
+        let mut backend = FfiInputBackend::new();
+        backend.push_event(InputEvent::MouseWheel { delta: -3 });
+        backend.push_event(InputEvent::MouseWheel { delta: 5 });
+        let events = backend.poll_events();
+        assert_eq!(events.len(), 2);
+        assert_eq!(events[0], InputEvent::MouseWheel { delta: -3 });
+        assert_eq!(events[1], InputEvent::MouseWheel { delta: 5 });
+    }
+
+    #[test]
+    fn backspace_and_text_input_round_trip() {
+        let mut backend = FfiInputBackend::new();
+        backend.push_event(InputEvent::TextInput('H'));
+        backend.push_event(InputEvent::TextInput('i'));
+        backend.push_event(InputEvent::Backspace);
+        let events = backend.poll_events();
+        assert_eq!(events.len(), 3);
+        assert_eq!(events[0], InputEvent::TextInput('H'));
+        assert_eq!(events[1], InputEvent::TextInput('i'));
+        assert_eq!(events[2], InputEvent::Backspace);
+    }
+
+    #[test]
+    fn toggle_fullscreen_round_trip() {
+        let mut backend = FfiInputBackend::new();
+        backend.push_event(InputEvent::ToggleFullscreen);
+        let events = backend.poll_events();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0], InputEvent::ToggleFullscreen);
+    }
+
+    #[test]
+    fn interleaved_event_types_preserve_order() {
+        let mut backend = FfiInputBackend::new();
+        let expected = vec![
+            InputEvent::CursorMove { x: 10, y: 20 },
+            InputEvent::ButtonPress(Button::Confirm),
+            InputEvent::TextInput('x'),
+            InputEvent::PointerClick { x: 100, y: 200 },
+            InputEvent::TriggerPress(Trigger::Left),
+            InputEvent::Backspace,
+            InputEvent::MouseWheel { delta: -1 },
+            InputEvent::ButtonRelease(Button::Confirm),
+            InputEvent::PointerRelease { x: 100, y: 200 },
+            InputEvent::TriggerRelease(Trigger::Left),
+            InputEvent::FocusLost,
+            InputEvent::FocusGained,
+            InputEvent::ToggleFullscreen,
+            InputEvent::Quit,
+        ];
+        for e in &expected {
+            backend.push_event(e.clone());
+        }
+        let events = backend.poll_events();
+        assert_eq!(events, expected);
     }
 }

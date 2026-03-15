@@ -8,7 +8,10 @@ use oasis_browser::internals::{
     CascadeContext, PaintViewport, Stylesheet, Tokenizer, TreeBuilder, build_layout_tree,
     paint_page, style_tree,
 };
-use oasis_types::backend::{Color, SdiBackend, SdiCore, TextureId};
+use oasis_types::backend::{
+    Color, SdiAlpha, SdiBatch, SdiClipTransform, SdiCore, SdiGradients, SdiShapes, SdiText,
+    SdiTextures, SdiVector, TextureId,
+};
 use oasis_types::error::Result;
 
 /// A no-op backend that does nothing -- isolates paint logic cost from rendering.
@@ -63,7 +66,14 @@ impl SdiCore for NullBackend {
     }
 }
 
-impl SdiBackend for NullBackend {}
+impl SdiShapes for NullBackend {}
+impl SdiGradients for NullBackend {}
+impl SdiAlpha for NullBackend {}
+impl SdiText for NullBackend {}
+impl SdiTextures for NullBackend {}
+impl SdiClipTransform for NullBackend {}
+impl SdiVector for NullBackend {}
+impl SdiBatch for NullBackend {}
 
 /// Generate a page with various elements that produce paint commands.
 fn generate_mixed_page(n: usize) -> String {

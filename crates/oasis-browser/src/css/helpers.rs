@@ -36,10 +36,12 @@ pub(crate) fn parse_font_weight(tokens: &[CssToken]) -> CssValue {
         }
     }
     let values = parse_value_list(tokens);
-    if values.len() == 1 {
-        values.into_iter().next().expect("len checked")
-    } else {
-        CssValue::Multiple(values)
+    match values.len() {
+        1 => match values.into_iter().next() {
+            Some(v) => v,
+            None => CssValue::Keyword(String::new()),
+        },
+        _ => CssValue::Multiple(values),
     }
 }
 

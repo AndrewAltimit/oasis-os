@@ -235,6 +235,12 @@ impl ActiveTheme {
                 .as_ref()
                 .and_then(|g| g.font_heading)
                 .unwrap_or(14),
+            font_scale: skin
+                .geometry
+                .as_ref()
+                .and_then(|g| g.font_scale)
+                .map(|s| s.clamp(0.5, 3.0))
+                .unwrap_or(1.0),
             terminal_cursor_blink_rate: skin
                 .geometry
                 .as_ref()
@@ -1162,6 +1168,7 @@ impl ActiveTheme {
             shadow_tooltip: oasis_types::shadow::Shadow::elevation(2),
             reduced_motion: false,
             font_scale: 1.0,
+            text_direction: oasis_types::text_direction::TextDirection::Ltr,
         };
 
         Self {
@@ -1230,6 +1237,7 @@ impl ActiveTheme {
             font_body: 12,
             font_hint: 10,
             font_heading: 14,
+            font_scale: 1.0,
             terminal_cursor_blink_rate: 30,
             cursor_lerp_speed: 0.35,
             page_slide_duration: 6,

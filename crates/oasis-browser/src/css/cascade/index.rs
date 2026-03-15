@@ -4,7 +4,7 @@
 //! (ID > class > tag > universal) so that only a small subset of
 //! rules is tested against each element.
 
-use std::collections::HashMap;
+use rustc_hash::FxHashMap;
 
 use super::super::parser::{SimpleSelector, Stylesheet};
 
@@ -24,9 +24,9 @@ pub(super) struct IndexedRule {
 /// against every element -- only rules whose subject could possibly
 /// match are considered.
 pub struct SelectorIndex {
-    by_id: HashMap<String, Vec<IndexedRule>>,
-    by_class: HashMap<String, Vec<IndexedRule>>,
-    by_tag: HashMap<String, Vec<IndexedRule>>,
+    by_id: FxHashMap<String, Vec<IndexedRule>>,
+    by_class: FxHashMap<String, Vec<IndexedRule>>,
+    by_tag: FxHashMap<String, Vec<IndexedRule>>,
     universal: Vec<IndexedRule>,
 }
 
@@ -38,9 +38,9 @@ impl SelectorIndex {
     /// found: ID > class > tag > universal.
     pub fn build(stylesheets: &[&Stylesheet]) -> Self {
         let mut index = SelectorIndex {
-            by_id: HashMap::new(),
-            by_class: HashMap::new(),
-            by_tag: HashMap::new(),
+            by_id: FxHashMap::default(),
+            by_class: FxHashMap::default(),
+            by_tag: FxHashMap::default(),
             universal: Vec::new(),
         };
 
@@ -107,9 +107,29 @@ impl SelectorIndex {
 
     /// Collect candidate rules that might match an element with the
     /// given tag, id, and classes.
+    ///
+    /// Lowercases the tag name internally. For hot paths with many
+    /// elements, prefer [`candidates_with_lower`] to avoid repeated
+    /// lowercasing allocations.
+    #[cfg(test)]
     pub(super) fn candidates(
         &self,
         tag: &str,
+        id: Option<&str>,
+        classes: &[&str],
+    ) -> Vec<IndexedRule> {
+        let tag_lower = tag.to_ascii_lowercase();
+        self.candidates_with_lower(tag, &tag_lower, id, classes)
+    }
+
+    /// Collect candidate rules using a pre-lowercased tag name.
+    ///
+    /// Avoids repeated `to_ascii_lowercase()` allocations when the
+    /// caller caches lowercased tag names across elements.
+    pub(super) fn candidates_with_lower(
+        &self,
+        _tag: &str,
+        tag_lower: &str,
         id: Option<&str>,
         classes: &[&str],
     ) -> Vec<IndexedRule> {
@@ -119,8 +139,7 @@ impl SelectorIndex {
         result.extend_from_slice(&self.universal);
 
         // Tag bucket.
-        let tag_lower = tag.to_ascii_lowercase();
-        if let Some(rules) = self.by_tag.get(&tag_lower) {
+        if let Some(rules) = self.by_tag.get(tag_lower) {
             result.extend_from_slice(rules);
         }
 

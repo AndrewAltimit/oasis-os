@@ -26,7 +26,10 @@ pub trait NetworkBackend {
 
 /// A bidirectional byte stream (TCP connection).
 pub trait NetworkStream: Send {
+    /// Read up to `buf.len()` bytes into `buf`. Returns the number of bytes read.
     fn read(&mut self, buf: &mut [u8]) -> Result<usize>;
+    /// Write `data` to the stream. Returns the number of bytes written.
     fn write(&mut self, data: &[u8]) -> Result<usize>;
+    /// Close the connection and release resources.
     fn close(&mut self) -> Result<()>;
 }

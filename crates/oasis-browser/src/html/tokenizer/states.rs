@@ -100,11 +100,9 @@ impl Tokenizer {
                 Some(self.emit_current_tag())
             },
             Some(ch) => {
-                self.current_tag
-                    .as_mut()
-                    .expect("current_tag must be Some in TagName state")
-                    .name
-                    .push(ch.to_ascii_lowercase());
+                if let Some(tag) = self.current_tag.as_mut() {
+                    tag.name.push(ch.to_ascii_lowercase());
+                }
                 None
             },
             None => {
@@ -118,10 +116,9 @@ impl Tokenizer {
     pub(crate) fn state_self_closing(&mut self) -> Option<Token> {
         match self.consume() {
             Some('>') => {
-                self.current_tag
-                    .as_mut()
-                    .expect("current_tag must be Some in SelfClosing state")
-                    .self_closing = true;
+                if let Some(tag) = self.current_tag.as_mut() {
+                    tag.self_closing = true;
+                }
                 self.state = State::Data;
                 Some(self.emit_current_tag())
             },
@@ -151,21 +148,18 @@ impl Tokenizer {
                 None
             },
             Some('=') => {
-                let tag = self
-                    .current_tag
-                    .as_mut()
-                    .expect("current_tag must be Some in BeforeAttributeName state");
-                tag.finish_attribute();
-                tag.current_attr_name.push('=');
+                if let Some(tag) = self.current_tag.as_mut() {
+                    tag.finish_attribute();
+                    tag.current_attr_name.push('=');
+                }
                 self.consume();
                 self.state = State::AttributeName;
                 None
             },
             _ => {
-                self.current_tag
-                    .as_mut()
-                    .expect("current_tag must be Some in BeforeAttributeName state")
-                    .finish_attribute();
+                if let Some(tag) = self.current_tag.as_mut() {
+                    tag.finish_attribute();
+                }
                 self.state = State::AttributeName;
                 None
             },
@@ -185,11 +179,9 @@ impl Tokenizer {
                 None
             },
             Some(ch) => {
-                self.current_tag
-                    .as_mut()
-                    .expect("current_tag must be Some in AttributeName state")
-                    .current_attr_name
-                    .push(ch.to_ascii_lowercase());
+                if let Some(tag) = self.current_tag.as_mut() {
+                    tag.current_attr_name.push(ch.to_ascii_lowercase());
+                }
                 None
             },
             None => {
@@ -225,10 +217,9 @@ impl Tokenizer {
                 Some(Token::Eof)
             },
             _ => {
-                self.current_tag
-                    .as_mut()
-                    .expect("current_tag must be Some in AfterAttributeName state")
-                    .finish_attribute();
+                if let Some(tag) = self.current_tag.as_mut() {
+                    tag.finish_attribute();
+                }
                 self.state = State::AttributeName;
                 None
             },
@@ -276,11 +267,9 @@ impl Tokenizer {
                 None
             },
             Some(ch) => {
-                self.current_tag
-                    .as_mut()
-                    .expect("current_tag must be Some in attribute-value state")
-                    .current_attr_value
-                    .push(ch);
+                if let Some(tag) = self.current_tag.as_mut() {
+                    tag.current_attr_value.push(ch);
+                }
                 None
             },
             None => {
@@ -303,11 +292,9 @@ impl Tokenizer {
                 None
             },
             Some(ch) => {
-                self.current_tag
-                    .as_mut()
-                    .expect("current_tag must be Some in attribute-value state")
-                    .current_attr_value
-                    .push(ch);
+                if let Some(tag) = self.current_tag.as_mut() {
+                    tag.current_attr_value.push(ch);
+                }
                 None
             },
             None => {
@@ -334,11 +321,9 @@ impl Tokenizer {
                 Some(self.emit_current_tag())
             },
             Some(ch) => {
-                self.current_tag
-                    .as_mut()
-                    .expect("current_tag must be Some in attribute-value state")
-                    .current_attr_value
-                    .push(ch);
+                if let Some(tag) = self.current_tag.as_mut() {
+                    tag.current_attr_value.push(ch);
+                }
                 None
             },
             None => {
@@ -660,15 +645,10 @@ impl Tokenizer {
     /// as a token.
     fn consume_content_end_tag(&mut self, end_tag: &str) -> Token {
         self.pos += end_tag.len();
-        let tag_name = self
-            .last_start_tag
-            .clone()
-            .expect("last_start_tag must be set before consuming content end tag");
-        self.current_tag = Some(TagBuilder::new(true));
-        self.current_tag
-            .as_mut()
-            .expect("just set current_tag above")
-            .name = tag_name;
+        let tag_name = self.last_start_tag.clone().unwrap_or_default();
+        let mut builder = TagBuilder::new(true);
+        builder.name = tag_name;
+        self.current_tag = Some(builder);
         // Skip to `>`.
         loop {
             match self.consume() {
@@ -676,10 +656,10 @@ impl Tokenizer {
                 _ => {},
             }
         }
-        self.current_tag
-            .take()
-            .expect("current_tag must be Some when emitting content end tag")
-            .into_token()
+        match self.current_tag.take() {
+            Some(tag) => tag.into_token(),
+            None => Token::Eof,
+        }
     }
 
     /// **RawText** -- for `<script>`, `<style>`, etc.
