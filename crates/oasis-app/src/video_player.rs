@@ -956,17 +956,19 @@ impl VideoPlayer {
 /// Nearest-neighbor RGBA scale.
 #[cfg(feature = "_video")]
 fn simple_scale(src: &[u8], src_w: u32, src_h: u32, dst_w: u32, dst_h: u32) -> Vec<u8> {
-    let mut dst = vec![0u8; (dst_w * dst_h * 4) as usize];
     let sw = src_w as usize;
+    let sh = src_h as usize;
     let dw = dst_w as usize;
+    let dh = dst_h as usize;
+    let mut dst = vec![0u8; dw * dh * 4];
 
-    for y in 0..dst_h {
-        let sy = (y * src_h / dst_h).min(src_h - 1) as usize;
+    for y in 0..dh {
+        let sy = (y * sh / dh).min(sh - 1);
         let src_row = sy * sw * 4;
-        let dst_row = y as usize * dw * 4;
+        let dst_row = y * dw * 4;
 
-        for x in 0..dst_w as usize {
-            let sx = (x * src_w as usize / dw).min(sw - 1);
+        for x in 0..dw {
+            let sx = (x * sw / dw).min(sw - 1);
             let si = src_row + sx * 4;
             let di = dst_row + x * 4;
             // SAFETY: si + 4 <= src.len() because sy < src_h and sx < src_w,
