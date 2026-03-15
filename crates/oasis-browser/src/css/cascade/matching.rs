@@ -238,17 +238,14 @@ pub(super) fn collect_matched_declarations(
     let classes: Vec<&str> = class_str.split_whitespace().collect();
 
     // Use cached lowercased tag name to avoid repeated allocations.
-    // Look up by &str first to avoid allocating on cache hits.
-    let tag_lower = if let Some(cached) = tag_cache.get(tag) {
-        cached.clone()
-    } else {
-        let lower = tag.to_ascii_lowercase();
-        tag_cache.insert(tag.to_string(), lower.clone());
-        lower
-    };
+    // Look up by &str first; only allocate on cache misses.
+    if !tag_cache.contains_key(tag) {
+        tag_cache.insert(tag.to_string(), tag.to_ascii_lowercase());
+    }
+    let tag_lower = tag_cache.get(tag).expect("just inserted");
 
     // Get candidate rules from the index.
-    let candidates = index.candidates_with_lower(tag, &tag_lower, id, &classes);
+    let candidates = index.candidates_with_lower(tag, tag_lower, id, &classes);
 
     for candidate in &candidates {
         let rule = &stylesheets[candidate.sheet_idx].rules[candidate.rule_idx];

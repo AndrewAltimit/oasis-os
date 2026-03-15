@@ -176,20 +176,24 @@ impl TextureDedup {
     ///
     /// Returns `true` if the refcount reached zero and the backend should
     /// destroy the actual GPU/canvas texture. Returns `false` if the texture
-    /// still has other references (or was not tracked).
+    /// still has other references or if the texture is kept in the cache for
+    /// potential LRU reuse (refcount == 0).
     pub fn release(&mut self, texture_id: u64) -> bool {
         let Some(hash) = self.by_id.get(&texture_id).copied() else {
             // Not tracked by dedup (e.g. glyph cache textures).
             return true;
         };
         if let Some(entry) = self.by_hash.get_mut(&hash) {
-            if entry.refcount > 1 {
+            if entry.refcount > 0 {
                 entry.refcount -= 1;
-                return false;
             }
-            // Refcount hit zero -- remove from both maps.
-            self.by_hash.remove(&hash);
+            // Keep the entry in the cache even at refcount 0 so that
+            // future `acquire` calls can reuse it (LRU caching) and
+            // `evict` can safely reclaim it.
+            return false;
         }
+        // Hash entry was already removed (e.g. by eviction); clean up
+        // the reverse map and let the backend destroy the texture.
         self.by_id.remove(&texture_id);
         true
     }
@@ -197,16 +201,16 @@ impl TextureDedup {
     /// Evict least-recently-used entries until the cache is within capacity.
     ///
     /// Returns a list of texture ids that should be destroyed by the backend.
-    /// Only textures with refcount == 1 (sole reference) are eligible for
-    /// eviction.
+    /// Only textures with refcount == 0 (no active references) are eligible
+    /// for eviction -- active textures are never evicted.
     pub fn evict(&mut self) -> Vec<u64> {
         let mut evicted = Vec::new();
         while self.by_hash.len() > self.max_textures {
-            // Find the entry with the smallest last_access and refcount == 1.
+            // Find the unreferenced entry with the smallest last_access.
             let victim = self
                 .by_hash
                 .iter()
-                .filter(|(_, e)| e.refcount <= 1)
+                .filter(|(_, e)| e.refcount == 0)
                 .min_by_key(|(_, e)| e.last_access)
                 .map(|(h, e)| (*h, e.texture_id));
 
@@ -215,7 +219,7 @@ impl TextureDedup {
                 self.by_id.remove(&tid);
                 evicted.push(tid);
             } else {
-                // All entries have refcount > 1; cannot evict further.
+                // All entries have active references; cannot evict further.
                 break;
             }
         }
@@ -291,8 +295,12 @@ mod tests {
         assert_eq!(dedup.acquire(4, 4, &data), Some(10));
         // First release: refcount 2 -> 1, should NOT destroy.
         assert!(!dedup.release(10));
-        // Second release: refcount 1 -> 0, should destroy.
-        assert!(dedup.release(10));
+        // Second release: refcount 1 -> 0, kept in cache for LRU reuse.
+        assert!(!dedup.release(10));
+        // Texture is still acquirable at refcount 0 (LRU cached).
+        assert_eq!(dedup.acquire(4, 4, &data), Some(10));
+        // Release again to get back to refcount 0.
+        assert!(!dedup.release(10));
     }
 
     #[test]
@@ -311,6 +319,14 @@ mod tests {
             let data = make_rgba(2, 2, i as u8);
             dedup.insert(i, 2, 2, &data);
         }
+        // All entries have refcount 1 (active); evict cannot remove any.
+        let evicted = dedup.evict();
+        assert_eq!(evicted.len(), 0);
+        assert_eq!(dedup.len(), 5);
+
+        // Release the two oldest entries to make them evictable.
+        dedup.release(0);
+        dedup.release(1);
         let evicted = dedup.evict();
         assert_eq!(evicted.len(), 2);
         assert!(evicted.contains(&0));
@@ -319,7 +335,7 @@ mod tests {
     }
 
     #[test]
-    fn evict_skips_multi_ref_entries() {
+    fn evict_skips_active_entries() {
         let mut dedup = TextureDedup {
             max_textures: 1,
             ..TextureDedup::new()
@@ -327,11 +343,11 @@ mod tests {
         let data_a = make_rgba(2, 2, 0xAA);
         let data_b = make_rgba(2, 2, 0xBB);
         dedup.insert(1, 2, 2, &data_a);
-        // Bump refcount on entry 1 to 2.
-        dedup.acquire(2, 2, &data_a);
         dedup.insert(2, 2, 2, &data_b);
+        // Release entry 2 so it becomes evictable (refcount 0).
+        dedup.release(2);
         let evicted = dedup.evict();
-        // Only entry 2 can be evicted (refcount == 1).
+        // Only entry 2 can be evicted (refcount == 0).
         assert_eq!(evicted, vec![2]);
     }
 
