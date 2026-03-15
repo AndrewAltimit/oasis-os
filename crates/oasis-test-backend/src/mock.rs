@@ -2,7 +2,7 @@
 //!
 //! Records all method calls with their parameters and allows configuring
 //! return values (e.g., what `measure_text` returns). Implements both
-//! [`SdiCore`] and [`SdiBackend`] (with default implementations).
+//! [`SdiCore`](oasis_types::backend::SdiCore) and [`SdiBackend`](oasis_types::backend::SdiBackend) (with default implementations).
 
 use oasis_types::backend::{
     Color, SdiAlpha, SdiBatch, SdiClipTransform, SdiCore, SdiGradients, SdiShapes, SdiText,

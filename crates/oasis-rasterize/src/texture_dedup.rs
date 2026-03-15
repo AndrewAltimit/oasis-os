@@ -112,9 +112,10 @@ const DEFAULT_MAX_TEXTURES: usize = 512;
 
 /// Content-addressed texture cache with reference counting and LRU eviction.
 ///
-/// Backends call [`acquire`] when loading a texture and [`release`] when
-/// destroying one. The cache is generic over the actual GPU/canvas texture
-/// storage -- it only tracks `u64` ids and content hashes.
+/// Backends call [`TextureDedup::acquire`] when loading a texture and
+/// [`TextureDedup::release`] when destroying one. The cache is generic over
+/// the actual GPU/canvas texture storage -- it only tracks `u64` ids and
+/// content hashes.
 pub struct TextureDedup {
     /// Forward map: content hash -> cache entry.
     by_hash: HashMap<ContentHash, CacheEntry>,

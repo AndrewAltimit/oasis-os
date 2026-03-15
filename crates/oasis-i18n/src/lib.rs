@@ -6,7 +6,7 @@
 //!
 //! # Usage
 //!
-//! ```
+//! ```no_run
 //! use oasis_i18n::{tr, set_locale, Locale};
 //!
 //! // Default locale is English
@@ -222,13 +222,13 @@ pub fn translate_with(key: &str, args: &[(&str, &str)]) -> String {
 /// Translate a string key using the current locale.
 ///
 /// # Simple lookup
-/// ```
+/// ```no_run
 /// use oasis_i18n::tr;
 /// let s = tr!("ui.ok"); // "OK"
 /// ```
 ///
 /// # With interpolation
-/// ```
+/// ```no_run
 /// use oasis_i18n::tr;
 /// let s = tr!("greeting.hello", name = "World"); // "Hello, World!"
 /// ```

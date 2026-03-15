@@ -1,7 +1,7 @@
 //! Mock and recording backends for testing OASIS_OS rendering traits.
 //!
 //! Provides [`MockSdiCore`] for unit testing UI widgets, browser rendering,
-//! and other code that depends on [`SdiCore`]/[`SdiBackend`] without a real
+//! and other code that depends on [`SdiCore`](oasis_types::backend::SdiCore)/[`SdiBackend`](oasis_types::backend::SdiBackend) without a real
 //! graphics backend.
 //!
 //! Also provides [`RecordingBackend`] which extends `MockSdiCore` with full
