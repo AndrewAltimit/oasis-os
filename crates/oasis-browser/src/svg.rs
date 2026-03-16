@@ -746,6 +746,9 @@ fn parse_path_commands(d: &str) -> Vec<PathCmd> {
             },
             b'Z' => {
                 cmds.push(PathCmd::Close);
+                // Reset last_cmd so stray numbers after Z don't
+                // re-trigger the Z handler in an infinite loop.
+                last_cmd = b'M';
             },
             _ => {
                 i += 1; // skip unknown

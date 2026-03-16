@@ -208,6 +208,9 @@ impl BrowserWidget {
     const LAZY_LOAD_MARGIN: f32 = 512.0;
 
     pub fn load_next_image_batch(&mut self, vfs: &dyn Vfs, budget_ms: u32) {
+        // Promote deferred images that have scrolled into view.
+        self.promote_deferred_images();
+
         if self.pending_images.is_empty() {
             return;
         }
@@ -215,8 +218,6 @@ impl BrowserWidget {
         let start = std::time::Instant::now();
         let budget = std::time::Duration::from_millis(budget_ms as u64);
         let mut any_decoded = false;
-        let mut deferred: Vec<(String, ResourceRequest)> = Vec::new();
-
         while let Some((resolved, request)) = self.pending_images.pop() {
             // Skip if already decoded (e.g. from cache).
             if self.decoded_images.contains_key(&resolved) {
@@ -224,8 +225,10 @@ impl BrowserWidget {
             }
 
             // Lazy loading: defer images far below the viewport.
+            // Deferred images are stored separately and only re-evaluated
+            // when a scroll event occurs (see `promote_deferred_images`).
             if self.is_image_off_viewport(&resolved) {
-                deferred.push((resolved, request));
+                self.deferred_images.push((resolved, request));
                 continue;
             }
 
@@ -267,11 +270,6 @@ impl BrowserWidget {
             }
         }
 
-        // Put deferred lazy images back for next batch.
-        if !deferred.is_empty() {
-            self.pending_images.extend(deferred);
-        }
-
         if any_decoded {
             self.layout_dirty = true;
             self.rebuild_layout_with_images();
@@ -280,6 +278,34 @@ impl BrowserWidget {
         if self.pending_images.is_empty() && self.state == LoadingState::Loading {
             self.state = LoadingState::Idle;
         }
+    }
+
+    /// Re-evaluate deferred images after a scroll event.
+    ///
+    /// Moves images that are now near the viewport from `deferred_images`
+    /// back into `pending_images` for loading.
+    pub(crate) fn promote_deferred_images(&mut self) {
+        if self.deferred_images.is_empty() {
+            return;
+        }
+        // Compute viewport threshold once to avoid repeated borrows.
+        let viewport_bottom = self.scroll.scroll_y as f32 + self.window_h as f32;
+        let threshold = viewport_bottom + Self::LAZY_LOAD_MARGIN;
+
+        let layout_root = &self.layout_root;
+        let mut still_deferred = Vec::new();
+        for (resolved, request) in std::mem::take(&mut self.deferred_images) {
+            let off_viewport = layout_root
+                .as_ref()
+                .and_then(|root| find_image_y(root, &resolved))
+                .is_some_and(|y| y > threshold);
+            if off_viewport {
+                still_deferred.push((resolved, request));
+            } else {
+                self.pending_images.push((resolved, request));
+            }
+        }
+        self.deferred_images = still_deferred;
     }
 
     /// Check if an image with the given URL is far below the current viewport.
