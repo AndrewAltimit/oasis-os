@@ -55,7 +55,7 @@ pub enum SvgShape {
         y1: f32,
         x2: f32,
         y2: f32,
-        stroke: Color,
+        stroke: Option<Color>,
         stroke_width: f32,
     },
     Text {
@@ -173,7 +173,7 @@ fn parse_shape(doc: &Document, node_id: NodeId) -> Option<SvgShape> {
             let y1 = attr_f32(elem, "y1");
             let x2 = attr_f32(elem, "x2");
             let y2 = attr_f32(elem, "y2");
-            let stroke = attr_color(elem, "stroke").unwrap_or(Color::rgb(0, 0, 0));
+            let stroke = attr_color(elem, "stroke");
             let stroke_width = attr_f32_or(elem, "stroke-width", 1.0);
             Some(SvgShape::Line {
                 x1,
@@ -502,6 +502,11 @@ fn paint_shape(shape: &SvgShape, backend: &mut dyn SdiBackend, xf: &SvgTransform
             stroke,
             stroke_width,
         } => {
+            // SVG lines with stroke=none are invisible.
+            let sc = match stroke {
+                Some(c) => *c,
+                None => return Ok(()),
+            };
             // Render horizontal/vertical lines accurately; diagonal lines
             // are approximated as a filled rect between the two endpoints.
             let px1 = ox + ((x1 - vb_x) * sx) as i32;
@@ -518,7 +523,7 @@ fn paint_shape(shape: &SvgShape, backend: &mut dyn SdiBackend, xf: &SvgTransform
                 let ly = py1.min(py2);
                 let lw = (dx as u32).max(sw);
                 let lh = (dy as u32).max(sw);
-                backend.fill_rect(lx, ly, lw, lh, *stroke)?;
+                backend.fill_rect(lx, ly, lw, lh, sc)?;
             } else {
                 // Diagonal: plot 1px rects along the dominant axis
                 // (Bresenham-like approximation).
@@ -527,7 +532,7 @@ fn paint_shape(shape: &SvgShape, backend: &mut dyn SdiBackend, xf: &SvgTransform
                     let t = s as f32 / steps.max(1) as f32;
                     let px = px1 + ((px2 - px1) as f32 * t) as i32;
                     let py = py1 + ((py2 - py1) as f32 * t) as i32;
-                    backend.fill_rect(px, py, sw, sw, *stroke)?;
+                    backend.fill_rect(px, py, sw, sw, sc)?;
                 }
             }
         },
@@ -680,7 +685,7 @@ mod tests {
                 assert_eq!(*y1, 0.0);
                 assert_eq!(*x2, 200.0);
                 assert_eq!(*y2, 100.0);
-                assert_eq!(*stroke, Color::rgb(0, 0, 255));
+                assert_eq!(*stroke, Some(Color::rgb(0, 0, 255)));
             },
             _ => panic!("expected Line"),
         }
