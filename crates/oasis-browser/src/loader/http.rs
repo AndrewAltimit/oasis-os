@@ -320,8 +320,15 @@ fn do_request_with_method(
         let raw = read_response(&mut adapter)?;
         parse_response(&raw)
     } else {
-        // Try a pooled connection first.
-        let pooled = CONN_POOL.with(|pool| pool.borrow_mut().take(host, port));
+        // Try a pooled connection first, but only for idempotent methods.
+        // Re-sending a POST/PUT/PATCH on a stale connection could cause
+        // duplicate side-effects on the server.
+        let is_idempotent = matches!(method, "GET" | "HEAD" | "OPTIONS" | "TRACE");
+        let pooled = if is_idempotent {
+            CONN_POOL.with(|pool| pool.borrow_mut().take(host, port))
+        } else {
+            None
+        };
         if let Some(mut stream) = pooled {
             match try_request_on_stream(&mut stream, method, url, body, extra_headers, is_https) {
                 Ok(resp) => {

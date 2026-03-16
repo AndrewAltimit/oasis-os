@@ -611,32 +611,47 @@ fn install_document_global_full(
         )?;
     }
 
-    // -- __oasis_fetch(url) -> String -----------------------------------
+    // -- __oasis_fetch(method, url, body) -> String ----------------------
     {
         let fetch_csp = csp.cloned();
         let fetch_page_url = url.to_string();
         globals.set(
             "__oasis_fetch",
-            Function::new(ctx.clone(), move |url_str: String| -> String {
-                // Enforce CSP connect-src before making the request.
-                if let Some(ref policy) = fetch_csp
-                    && policy.is_active()
-                    && !policy.allows(
-                        &url_str,
-                        &fetch_page_url,
-                        crate::loader::csp::CspResourceType::Connect,
-                    )
-                {
-                    return String::new();
-                }
-                match crate::loader::Url::parse(&url_str) {
-                    Some(parsed_url) => match crate::loader::http::http_get(&parsed_url, None) {
-                        Ok(resp) => String::from_utf8_lossy(&resp.body).into_owned(),
-                        Err(_) => String::new(),
-                    },
-                    None => String::new(),
-                }
-            })?,
+            Function::new(
+                ctx.clone(),
+                move |method: String, url_str: String, body_str: String| -> String {
+                    // Enforce CSP connect-src before making the request.
+                    if let Some(ref policy) = fetch_csp
+                        && policy.is_active()
+                        && !policy.allows(
+                            &url_str,
+                            &fetch_page_url,
+                            crate::loader::csp::CspResourceType::Connect,
+                        )
+                    {
+                        return String::new();
+                    }
+                    let body_bytes =
+                        if body_str.is_empty() { None } else { Some(body_str.as_bytes()) };
+                    match crate::loader::Url::parse(&url_str) {
+                        Some(parsed_url) => {
+                            match crate::loader::http::http_request(
+                                &method,
+                                &parsed_url,
+                                body_bytes,
+                                &[],
+                                None,
+                            ) {
+                                Ok(resp) => {
+                                    String::from_utf8_lossy(&resp.body).into_owned()
+                                },
+                                Err(_) => String::new(),
+                            }
+                        },
+                        None => String::new(),
+                    }
+                },
+            )?,
         )?;
     }
 
@@ -663,40 +678,56 @@ fn install_document_global_full(
     }
 
     // -- localStorage / sessionStorage -----------------------------------
+    // Each storage type gets its own backing HashMap so that writes to
+    // localStorage do not leak into sessionStorage and vice-versa.
     {
-        let store = Rc::new(RefCell::new(HashMap::<String, String>::new()));
-        let s1 = Rc::clone(&store);
+        let local_store = Rc::new(RefCell::new(HashMap::<String, String>::new()));
+        let session_store = Rc::new(RefCell::new(HashMap::<String, String>::new()));
+
+        let l1 = Rc::clone(&local_store);
+        let ss1 = Rc::clone(&session_store);
         globals.set(
             "__oasis_storage_get",
-            Function::new(ctx.clone(), move |key: String| -> String {
-                s1.borrow().get(&key).cloned().unwrap_or_default()
+            Function::new(ctx.clone(), move |kind: i32, key: String| -> String {
+                let store = if kind == 0 { &l1 } else { &ss1 };
+                store.borrow().get(&key).cloned().unwrap_or_default()
             })?,
         )?;
-        let s2 = Rc::clone(&store);
+        let l2 = Rc::clone(&local_store);
+        let ss2 = Rc::clone(&session_store);
         globals.set(
             "__oasis_storage_set",
-            Function::new(ctx.clone(), move |key: String, value: String| {
-                s2.borrow_mut().insert(key, value);
+            Function::new(ctx.clone(), move |kind: i32, key: String, value: String| {
+                let store = if kind == 0 { &l2 } else { &ss2 };
+                store.borrow_mut().insert(key, value);
             })?,
         )?;
-        let s3 = Rc::clone(&store);
+        let l3 = Rc::clone(&local_store);
+        let ss3 = Rc::clone(&session_store);
         globals.set(
             "__oasis_storage_remove",
-            Function::new(ctx.clone(), move |key: String| {
-                s3.borrow_mut().remove(&key);
+            Function::new(ctx.clone(), move |kind: i32, key: String| {
+                let store = if kind == 0 { &l3 } else { &ss3 };
+                store.borrow_mut().remove(&key);
             })?,
         )?;
-        let s4 = Rc::clone(&store);
+        let l4 = Rc::clone(&local_store);
+        let ss4 = Rc::clone(&session_store);
         globals.set(
             "__oasis_storage_clear",
-            Function::new(ctx.clone(), move || {
-                s4.borrow_mut().clear();
+            Function::new(ctx.clone(), move |kind: i32| {
+                let store = if kind == 0 { &l4 } else { &ss4 };
+                store.borrow_mut().clear();
             })?,
         )?;
-        let s5 = Rc::clone(&store);
+        let l5 = Rc::clone(&local_store);
+        let ss5 = Rc::clone(&session_store);
         globals.set(
             "__oasis_storage_length",
-            Function::new(ctx.clone(), move || -> i32 { s5.borrow().len() as i32 })?,
+            Function::new(ctx.clone(), move |kind: i32| -> i32 {
+                let store = if kind == 0 { &l5 } else { &ss5 };
+                store.borrow().len() as i32
+            })?,
         )?;
     }
 
@@ -1311,7 +1342,8 @@ const JS_DOM_BOOTSTRAP: &str = r#"
   // -- fetch API (synchronous under the hood) --
   globalThis.fetch = function(url, options) {
     var method = (options && options.method) || "GET";
-    var body = __oasis_fetch(String(url));
+    var reqBody = (options && options.body) || "";
+    var body = __oasis_fetch(method, String(url), String(reqBody));
     return {
       then: function(fn) {
         var result = fn({
@@ -1336,17 +1368,18 @@ const JS_DOM_BOOTSTRAP: &str = r#"
   };
 
   // -- localStorage / sessionStorage --
-  var __make_storage = function() {
+  // kind: 0 = localStorage, 1 = sessionStorage (separate backing stores)
+  var __make_storage = function(kind) {
     return {
-      getItem: function(k) { var v = __oasis_storage_get(String(k)); return v === "" ? null : v; },
-      setItem: function(k, v) { __oasis_storage_set(String(k), String(v)); },
-      removeItem: function(k) { __oasis_storage_remove(String(k)); },
-      clear: function() { __oasis_storage_clear(); },
-      get length() { return __oasis_storage_length(); }
+      getItem: function(k) { var v = __oasis_storage_get(kind, String(k)); return v === "" ? null : v; },
+      setItem: function(k, v) { __oasis_storage_set(kind, String(k), String(v)); },
+      removeItem: function(k) { __oasis_storage_remove(kind, String(k)); },
+      clear: function() { __oasis_storage_clear(kind); },
+      get length() { return __oasis_storage_length(kind); }
     };
   };
-  globalThis.localStorage = __make_storage();
-  globalThis.sessionStorage = __make_storage();
+  globalThis.localStorage = __make_storage(0);
+  globalThis.sessionStorage = __make_storage(1);
 })();
 "#;
 

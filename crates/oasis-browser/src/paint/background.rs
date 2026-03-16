@@ -64,29 +64,6 @@ fn lerp_color(a: Color, b: Color, t: f32) -> Color {
     )
 }
 
-/// Sample the gradient color at a normalized position `t` (0.0..=1.0),
-/// with optional repeating (tiling).
-#[allow(dead_code)]
-fn sample_gradient_repeating(
-    stops: &[crate::css::values::GradientStop],
-    t: f32,
-    opacity: f32,
-    repeating: bool,
-) -> Color {
-    let t = if repeating {
-        let last_pos = stops.last().map(|s| s.position).unwrap_or(1.0);
-        let first_pos = stops.first().map(|s| s.position).unwrap_or(0.0);
-        let range = last_pos - first_pos;
-        if range > 0.0 {
-            first_pos + ((t - first_pos) % range + range) % range
-        } else {
-            t
-        }
-    } else {
-        t
-    };
-    sample_gradient(stops, t, opacity)
-}
 
 /// Sample the gradient color at a normalized position `t` (0.0..=1.0).
 fn sample_gradient(stops: &[crate::css::values::GradientStop], t: f32, opacity: f32) -> Color {

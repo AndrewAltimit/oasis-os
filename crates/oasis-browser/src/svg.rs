@@ -456,13 +456,7 @@ fn paint_shape(shape: &SvgShape, backend: &mut dyn SdiBackend, xf: &SvgTransform
             }
             if let Some(sc) = stroke {
                 let sw = (stroke_width * sx.min(sy)).max(1.0) as u16;
-                // Approximate stroke as a slightly larger circle minus fill.
-                // For simplicity, draw the outline circle.
-                let outer = radius + sw;
-                backend.fill_circle(px, py, outer, *sc)?;
-                if let Some(fc) = fill {
-                    backend.fill_circle(px, py, radius, *fc)?;
-                }
+                backend.stroke_circle(px, py, radius, sw, *sc)?;
             }
         },
         SvgShape::Ellipse {
@@ -489,21 +483,8 @@ fn paint_shape(shape: &SvgShape, backend: &mut dyn SdiBackend, xf: &SvgTransform
                 backend.fill_rounded_rect(px, py, pw, ph, r, *fc)?;
             }
             if let Some(sc) = stroke {
-                let sw = (stroke_width * sx.min(sy)).max(1.0) as u32;
-                // Top
-                backend.fill_rect(px, py, pw, sw, *sc)?;
-                // Bottom
-                backend.fill_rect(px, py + ph as i32 - sw as i32, pw, sw, *sc)?;
-                // Left (between top and bottom to avoid corner overlap)
-                backend.fill_rect(px, py + sw as i32, sw, ph.saturating_sub(sw * 2), *sc)?;
-                // Right (between top and bottom to avoid corner overlap)
-                backend.fill_rect(
-                    px + pw as i32 - sw as i32,
-                    py + sw as i32,
-                    sw,
-                    ph.saturating_sub(sw * 2),
-                    *sc,
-                )?;
+                let sw = (stroke_width * sx.min(sy)).max(1.0) as u16;
+                backend.stroke_rounded_rect(px, py, pw, ph, r, sw, *sc)?;
             }
         },
         SvgShape::Line {
