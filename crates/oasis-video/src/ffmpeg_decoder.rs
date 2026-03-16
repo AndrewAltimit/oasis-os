@@ -203,6 +203,17 @@ impl FfmpegDecoder {
             )));
         }
 
+        // Increase analyze duration and probe size so ffmpeg can detect
+        // codec parameters (especially pixel format) for streams that
+        // require more data to probe (e.g. some archive.org H.264 files).
+        // SAFETY: format_ctx is valid after successful avformat_open_input.
+        unsafe {
+            // 5 seconds in AV_TIME_BASE units.
+            (*format_ctx).max_analyze_duration = 5_000_000;
+            // 10 MB probe size (default is 5 MB).
+            (*format_ctx).probesize = 10 * 1024 * 1024;
+        }
+
         // SAFETY: Find stream info.
         let ret = unsafe { ffi::avformat_find_stream_info(format_ctx, std::ptr::null_mut()) };
         if ret < 0 {
@@ -418,11 +429,20 @@ impl FfmpegDecoder {
     }
 
     /// Create a pixel format scaler (YUV -> RGBA).
+    ///
+    /// Returns an error if the decoder's pixel format is unspecified (None),
+    /// which can happen when ffmpeg couldn't fully probe the stream.
     fn create_scaler(
         dec: &ffmpeg::decoder::Video,
     ) -> Result<ffmpeg::software::scaling::Context, VideoError> {
+        let src_fmt = dec.format();
+        if src_fmt == ffmpeg::format::Pixel::None {
+            return Err(VideoError::Decode(
+                "cannot create scaler: pixel format unspecified (probe may need more data)".into(),
+            ));
+        }
         ffmpeg::software::scaling::Context::get(
-            dec.format(),
+            src_fmt,
             dec.width(),
             dec.height(),
             ffmpeg::format::Pixel::RGBA,
@@ -544,14 +564,25 @@ impl FfmpegDecoder {
             return Ok(None);
         }
 
-        if w != self.video_width || h != self.video_height {
+        let fmt = decoded.format();
+        if fmt == ffmpeg::format::Pixel::None {
+            return Ok(None); // skip frames with unresolved pixel format
+        }
+
+        // Recreate scaler when dimensions change, or create it lazily on
+        // the first frame (handles streams where pixel format wasn't known
+        // until the first packet was decoded).
+        if self.scaler.is_none() || w != self.video_width || h != self.video_height {
             self.video_width = w;
             self.video_height = h;
-            // Recreate scaler for new dimensions.
-            self.scaler = Self::create_scaler(
-                self.video_decoder
-                    .as_ref()
-                    .expect("video decoder verified present"),
+            self.scaler = ffmpeg::software::scaling::Context::get(
+                fmt,
+                w,
+                h,
+                ffmpeg::format::Pixel::RGBA,
+                w,
+                h,
+                ffmpeg::software::scaling::Flags::BILINEAR,
             )
             .ok();
         }
