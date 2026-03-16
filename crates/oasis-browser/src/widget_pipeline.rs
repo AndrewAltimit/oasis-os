@@ -238,8 +238,9 @@ impl BrowserWidget {
                 Ok(engine) => {
                     let s = std::rc::Rc::clone(&shared);
                     let nav = std::rc::Rc::clone(&self.js_nav_actions);
+                    let js_sty = std::rc::Rc::clone(&self.js_styles);
                     if let Err(e) = engine.with_context(|ctx| {
-                        js_dom::install_document_global_with_nav(&ctx, &s, url, &nav)
+                        js_dom::install_document_global_with_styles(&ctx, &s, url, &nav, &js_sty)
                     }) {
                         log::warn!("JS DOM install failed: {}", e.message);
                         self.record_error(
@@ -247,9 +248,22 @@ impl BrowserWidget {
                             format!("JS DOM install: {}", e.message),
                         );
                     }
+                    // Install canvas 2D context bindings.
+                    let cm = std::rc::Rc::clone(&self.canvas_states);
+                    if let Err(e) =
+                        engine.with_context(|ctx| js_dom::install_canvas_bindings(&ctx, &cm))
+                    {
+                        log::warn!("Canvas bindings install failed: {}", e.message);
+                    }
                     if !scripts.is_empty() {
                         let script_refs: Vec<&str> = scripts.iter().map(String::as_str).collect();
                         engine.eval_all(&script_refs);
+                    }
+                    // Register inline event handlers (onclick, etc.)
+                    // after scripts so Element class is available.
+                    {
+                        let doc_borrow = shared.borrow();
+                        js_dom::register_inline_handlers(&engine, &doc_borrow);
                     }
                     self.console_output = engine.console_output();
                     // Retain engine + shared doc for event dispatch.
@@ -288,6 +302,12 @@ impl BrowserWidget {
             focused_node: None,
         };
         let styles = css::cascade::style_tree(&doc, &all_sheets, &inline_styles, &ctx);
+
+        // Update shared computed styles for JS getComputedStyle().
+        #[cfg(feature = "javascript")]
+        {
+            *self.js_styles.borrow_mut() = styles.clone();
+        }
 
         // Cache parsed sheets for hover restyles.
         self.cached_author_sheets = author_sheets;
@@ -338,6 +358,13 @@ impl BrowserWidget {
             Some(url),
             &image_info,
         );
+
+        // 7a. Collect canvas states from layout tree.
+        #[cfg(feature = "javascript")]
+        {
+            self.canvas_states.borrow_mut().clear();
+            crate::canvas::collect_canvas_states(&layout_root, &self.canvas_states);
+        }
 
         // 7. Store results.
         self.document = Some(doc);

@@ -39,6 +39,11 @@ pub(super) fn paint_background(
         paint_linear_gradient(backend, x, y, w, h, grad, layout_box.style.opacity)?;
     }
 
+    // Paint radial gradient background.
+    if let BackgroundImage::RadialGradient(ref grad) = layout_box.style.background_image {
+        paint_radial_gradient(backend, x, y, w, h, grad, layout_box.style.opacity)?;
+    }
+
     // Paint background image (if texture has been resolved).
     if let Some(tex) = layout_box.background_texture {
         backend.blit(tex, x, y, w, h)?;
@@ -57,6 +62,29 @@ fn lerp_color(a: Color, b: Color, t: f32) -> Color {
         (a.b as f32 * inv + b.b as f32 * t) as u8,
         (a.a as f32 * inv + b.a as f32 * t) as u8,
     )
+}
+
+/// Sample the gradient color at a normalized position `t` (0.0..=1.0),
+/// with optional repeating (tiling).
+fn sample_gradient_repeating(
+    stops: &[crate::css::values::GradientStop],
+    t: f32,
+    opacity: f32,
+    repeating: bool,
+) -> Color {
+    let t = if repeating {
+        let last_pos = stops.last().map(|s| s.position).unwrap_or(1.0);
+        let first_pos = stops.first().map(|s| s.position).unwrap_or(0.0);
+        let range = last_pos - first_pos;
+        if range > 0.0 {
+            first_pos + ((t - first_pos) % range + range) % range
+        } else {
+            t
+        }
+    } else {
+        t
+    };
+    sample_gradient(stops, t, opacity)
 }
 
 /// Sample the gradient color at a normalized position `t` (0.0..=1.0).
@@ -209,9 +237,53 @@ pub(super) fn paint_linear_gradient(
                 let dy = -(row as f32 - hh); // Y-up for math
                 let proj = dx * cos + dy * sin;
                 let t = (proj / max_proj + 1.0) / 2.0; // 0..1
-                let color = sample_gradient(&grad.stops, t, opacity);
+                let color = sample_gradient_repeating(&grad.stops, t, opacity, grad.repeating);
                 backend.fill_rect(x + col as i32, y + row as i32, 1, 1, color)?;
             }
+        }
+    }
+
+    Ok(())
+}
+
+/// Render a CSS `radial-gradient(...)` pixel-by-pixel.
+///
+/// The gradient center is always at 50% 50%. For `circle` the distance
+/// is normalised by the larger half-dimension; for `ellipse` each axis
+/// is normalised independently so the gradient stretches to fill.
+pub(super) fn paint_radial_gradient(
+    backend: &mut dyn SdiBackend,
+    x: i32,
+    y: i32,
+    w: u32,
+    h: u32,
+    grad: &crate::css::values::RadialGradient,
+    opacity: f32,
+) -> Result<()> {
+    if grad.stops.len() < 2 || w == 0 || h == 0 {
+        return Ok(());
+    }
+
+    let hw = w as f32 / 2.0;
+    let hh = h as f32 / 2.0;
+
+    for row in 0..h {
+        for col in 0..w {
+            let dx = col as f32 - hw;
+            let dy = row as f32 - hh;
+            let t = if grad.shape_circle {
+                // Circle: uniform distance normalised by the larger
+                // half-dimension so the circle fills the element.
+                let radius = hw.max(hh).max(1.0);
+                (dx * dx + dy * dy).sqrt() / radius
+            } else {
+                // Ellipse: normalise each axis independently.
+                let nx = dx / hw.max(1.0);
+                let ny = dy / hh.max(1.0);
+                (nx * nx + ny * ny).sqrt()
+            };
+            let color = sample_gradient(&grad.stops, t, opacity);
+            backend.fill_rect(x + col as i32, y + row as i32, 1, 1, color)?;
         }
     }
 

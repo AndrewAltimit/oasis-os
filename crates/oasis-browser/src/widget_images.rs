@@ -13,6 +13,80 @@ use crate::layout;
 use crate::loader::{self, ResourceRequest, ResourceSource, load_resource};
 use crate::{BrowserWidget, ImageInfoMap, LoadingState, SimpleTextMeasurer};
 
+/// Parse an HTML `srcset` attribute into a list of `(url, descriptor)` pairs.
+///
+/// Supports `<url> <N>x` (pixel density) and `<url> <N>w` (width) descriptors.
+/// Entries without a descriptor default to `1.0`.
+fn parse_srcset(srcset: &str) -> Vec<(String, f32)> {
+    let mut results = Vec::new();
+    for candidate in srcset.split(',') {
+        let candidate = candidate.trim();
+        if candidate.is_empty() {
+            continue;
+        }
+        let mut parts = candidate.split_whitespace();
+        let Some(url) = parts.next() else { continue };
+        if url.is_empty() {
+            continue;
+        }
+        let descriptor = parts.next().unwrap_or("1x");
+        let value = if let Some(w) = descriptor.strip_suffix('w') {
+            w.parse::<f32>().unwrap_or(1.0)
+        } else if let Some(x) = descriptor.strip_suffix('x') {
+            x.parse::<f32>().unwrap_or(1.0)
+        } else {
+            descriptor.parse::<f32>().unwrap_or(1.0)
+        };
+        results.push((url.to_string(), value));
+    }
+    results
+}
+
+/// Select the best image URL from a parsed `srcset` based on viewport width.
+///
+/// For `w` descriptors, picks the smallest image that is >= viewport width.
+/// For `x` descriptors, picks the closest to `1x`.
+/// Falls back to the first candidate if nothing matches well.
+fn select_best_src(srcset: &str, viewport_width: u32) -> Option<String> {
+    let candidates = parse_srcset(srcset);
+    if candidates.is_empty() {
+        return None;
+    }
+
+    // Heuristic: if any descriptor is >= 100, assume `w` descriptors.
+    let is_width = candidates.iter().any(|(_, v)| *v >= 100.0);
+    let vw = viewport_width as f32;
+
+    if is_width {
+        // Pick smallest width >= viewport, or largest overall.
+        let mut best: Option<&(String, f32)> = None;
+        for c in &candidates {
+            if c.1 >= vw {
+                match best {
+                    Some(b) if b.1 > c.1 => best = Some(c),
+                    None => best = Some(c),
+                    _ => {},
+                }
+            }
+        }
+        if best.is_none() {
+            // All are smaller than viewport -- pick largest.
+            best = candidates.iter().max_by(|a, b| a.1.total_cmp(&b.1));
+        }
+        best.map(|(url, _)| url.clone())
+    } else {
+        // `x` descriptors: pick closest to 1x.
+        candidates
+            .iter()
+            .min_by(|a, b| {
+                let da = (a.1 - 1.0).abs();
+                let db = (b.1 - 1.0).abs();
+                da.total_cmp(&db)
+            })
+            .map(|(url, _)| url.clone())
+    }
+}
+
 impl BrowserWidget {
     // ---------------------------------------------------------------
     // Image loading
@@ -36,8 +110,13 @@ impl BrowserWidget {
         for node in &doc.nodes {
             if let NodeKind::Element(elem) = &node.kind
                 && elem.tag == TagName::Img
-                && let Some(src) = elem.src()
             {
+                // Prefer srcset over src for responsive images.
+                let effective_src = elem
+                    .get_attribute("srcset")
+                    .and_then(|ss| select_best_src(ss, self.window_w));
+                let effective_src = effective_src.as_deref().or_else(|| elem.src());
+                let Some(src) = effective_src else { continue };
                 let resolved = Self::resolve_src(&base_url, src);
                 if self.decoded_images.contains_key(&resolved) {
                     continue;
@@ -306,6 +385,12 @@ impl BrowserWidget {
                 base_url.as_deref(),
                 &image_info,
             );
+            #[cfg(feature = "javascript")]
+            {
+                self.canvas_states.borrow_mut().clear();
+                crate::canvas::collect_canvas_states(&layout_root, &self.canvas_states);
+            }
+
             self.layout_root = Some(layout_root);
             self.link_map.clear();
         }

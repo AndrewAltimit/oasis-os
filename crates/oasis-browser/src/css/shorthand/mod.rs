@@ -19,7 +19,7 @@ use border::{expand_border, expand_border_side};
 use box_model::expand_box_shorthand;
 use flex::expand_flex;
 use font::expand_font;
-pub use gradient::parse_linear_gradient;
+pub use gradient::{parse_linear_gradient, parse_radial_gradient, parse_repeating_linear_gradient};
 use list::expand_list_style;
 
 use super::parser::{CssValue, Declaration};
@@ -637,6 +637,7 @@ mod tests {
         let grad = CssValue::Gradient(LinearGradient {
             direction: crate::css::values::GradientDirection::ToBottom,
             stops: vec![],
+            repeating: false,
         });
         let result = expand("background", grad.clone());
         assert_eq!(result.len(), 1);

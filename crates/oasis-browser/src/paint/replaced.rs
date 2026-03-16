@@ -144,6 +144,17 @@ pub(super) fn paint_replaced(
         ReplacedContent::Svg { element } => {
             crate::svg::paint_svg(element, backend, x, y, content.width, content.height)?;
         },
+        ReplacedContent::Canvas { state } => {
+            let s = state.borrow();
+            crate::canvas::paint_canvas(
+                &s,
+                backend,
+                x,
+                y,
+                content.width as u32,
+                content.height as u32,
+            )?;
+        },
         ReplacedContent::SubmitButton { label } => {
             let style = &layout_box.style;
             let w = content.width as u32;

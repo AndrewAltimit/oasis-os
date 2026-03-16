@@ -778,6 +778,22 @@ impl BrowserWidget {
         self.navigate_vfs(&url, vfs);
     }
 
+    /// Dispatch a form key event to the form manager and handle the
+    /// resulting action (submission, focus change, etc.).
+    ///
+    /// Returns `true` if the event was consumed by the form manager.
+    pub fn dispatch_form_key(&mut self, key: crate::forms::FormKey, vfs: &dyn Vfs) -> bool {
+        let action = self.form_manager.handle_input(key);
+        match action {
+            crate::forms::FormAction::Submit(ref data) => {
+                self.handle_form_submit(data, vfs);
+                true
+            },
+            crate::forms::FormAction::FocusChanged | crate::forms::FormAction::ValueChanged => true,
+            crate::forms::FormAction::None => false,
+        }
+    }
+
     /// Handle a form submission.
     ///
     /// For GET forms, the encoded data is appended as a query string.

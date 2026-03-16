@@ -373,6 +373,10 @@ fn replaced_dimensions(replaced: &ReplacedContent) -> (f32, f32) {
             (text_w + 20.0, 18.0) // extra space for dropdown arrow
         },
         ReplacedContent::Svg { element } => (element.width, element.height),
+        ReplacedContent::Canvas { state } => {
+            let s = state.borrow();
+            (s.width as f32, s.height as f32)
+        },
     }
 }
 

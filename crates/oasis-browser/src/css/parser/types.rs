@@ -259,6 +259,8 @@ pub enum CssValue {
     Url(String),
     /// A parsed `linear-gradient(...)` value.
     Gradient(crate::css::values::LinearGradient),
+    /// A parsed `radial-gradient(...)` value.
+    RadialGradient(crate::css::values::RadialGradient),
     /// A `calc(...)` expression (raw expression string).
     Calc(String),
 }

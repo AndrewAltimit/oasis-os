@@ -23,6 +23,8 @@ pub mod search;
 pub mod skin;
 pub mod svg;
 
+pub mod canvas;
+
 mod widget_images;
 mod widget_input;
 mod widget_paint;
@@ -286,10 +288,20 @@ pub struct BrowserWidget {
     #[cfg(feature = "javascript")]
     js_doc: Option<js_dom::SharedDoc>,
 
+    /// Shared computed styles for `getComputedStyle()` in JS.
+    /// Updated after CSS cascade so event handlers see current values.
+    #[cfg(feature = "javascript")]
+    js_styles: js_dom::SharedStyles,
+
     /// Pending navigation actions from JavaScript (`location.assign`,
     /// `history.back`/`forward`).
     #[cfg(feature = "javascript")]
     js_nav_actions: js_dom::SharedNavActions,
+
+    /// Shared canvas states keyed by DOM `NodeId`. Populated during
+    /// layout for `<canvas>` elements, accessed by JS canvas bindings.
+    #[cfg(feature = "javascript")]
+    canvas_states: canvas::SharedCanvasMap,
 
     /// CSS transition engine for smooth property interpolation.
     transition_engine: css::transition::TransitionEngine,
@@ -331,6 +343,9 @@ pub struct BrowserWidget {
     /// Accumulated errors from page loading, parsing, and JS execution
     /// for the current page. Cleared on each new navigation.
     page_errors: Vec<BrowserError>,
+
+    /// Form state manager for HTML `<form>` elements on the current page.
+    form_manager: forms::FormManager,
 }
 
 impl BrowserWidget {
@@ -387,7 +402,11 @@ impl BrowserWidget {
             #[cfg(feature = "javascript")]
             js_doc: None,
             #[cfg(feature = "javascript")]
+            js_styles: std::rc::Rc::new(std::cell::RefCell::new(Vec::new())),
+            #[cfg(feature = "javascript")]
             js_nav_actions: std::rc::Rc::new(std::cell::RefCell::new(Vec::new())),
+            #[cfg(feature = "javascript")]
+            canvas_states: std::rc::Rc::new(std::cell::RefCell::new(HashMap::new())),
             transition_engine: css::transition::TransitionEngine::new(),
             animation_engine: css::animation::AnimationEngine::new(),
             last_tick_time: None,
@@ -399,6 +418,7 @@ impl BrowserWidget {
             text_cache: layout::text_cache::new_shared_cache(),
             last_effective_font_size: effective_font,
             page_errors: Vec::new(),
+            form_manager: forms::FormManager::new(),
         }
     }
 
@@ -461,6 +481,12 @@ impl BrowserWidget {
             base_url.as_deref(),
             &image_info,
         );
+
+        #[cfg(feature = "javascript")]
+        {
+            self.canvas_states.borrow_mut().clear();
+            canvas::collect_canvas_states(&layout_root, &self.canvas_states);
+        }
 
         self.layout_root = Some(layout_root);
         self.link_map.clear();

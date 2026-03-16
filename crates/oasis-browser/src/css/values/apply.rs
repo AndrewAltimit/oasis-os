@@ -799,6 +799,8 @@ impl ComputedStyle {
                     self.background_image = BackgroundImage::Url(url.clone());
                 } else if let CssValue::Gradient(ref grad) = *value {
                     self.background_image = BackgroundImage::Gradient(grad.clone());
+                } else if let CssValue::RadialGradient(ref grad) = *value {
+                    self.background_image = BackgroundImage::RadialGradient(grad.clone());
                 }
             },
 
@@ -1974,6 +1976,7 @@ mod tests {
                     position: 1.0,
                 },
             ],
+            repeating: false,
         };
         let value = CssValue::Gradient(grad.clone());
         s.apply_declaration("background-image", &value, 16.0);

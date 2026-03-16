@@ -121,6 +121,25 @@ fn build_box_for_node(
             // Determine box type.
             let box_type = box_type_for_element(elem, &style);
 
+            // Handle <canvas> as a replaced element.
+            if elem.tag == TagName::Canvas {
+                let w = elem
+                    .get_attribute("width")
+                    .and_then(|v| v.parse::<u32>().ok())
+                    .unwrap_or(300);
+                let h = elem
+                    .get_attribute("height")
+                    .and_then(|v| v.parse::<u32>().ok())
+                    .unwrap_or(150);
+                let state = std::rc::Rc::new(std::cell::RefCell::new(
+                    crate::canvas::CanvasState::new(w, h),
+                ));
+                let replaced = ReplacedContent::Canvas { state };
+                let mut lb = LayoutBox::new(BoxType::Replaced(replaced), style, Some(node_id));
+                lb.children = Vec::new();
+                return Some(lb);
+            }
+
             // Handle <svg> as a replaced element.
             if elem.tag == TagName::Svg
                 && let Some(svg_elem) = crate::svg::parse_svg(doc, node_id)
