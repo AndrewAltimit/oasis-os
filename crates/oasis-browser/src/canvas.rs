@@ -180,10 +180,10 @@ pub fn paint_canvas(
                 backend.fill_rect(rx, ry, rw, lw, *color)?;
                 // Bottom edge
                 backend.fill_rect(rx, ry + rh as i32 - lw as i32, rw, lw, *color)?;
-                // Left edge
-                backend.fill_rect(rx, ry, lw, rh, *color)?;
-                // Right edge
-                backend.fill_rect(rx + rw as i32 - lw as i32, ry, lw, rh, *color)?;
+                // Left edge (between top and bottom to avoid corner overlap)
+                backend.fill_rect(rx, ry + lw as i32, lw, rh.saturating_sub(lw * 2), *color)?;
+                // Right edge (between top and bottom to avoid corner overlap)
+                backend.fill_rect(rx + rw as i32 - lw as i32, ry + lw as i32, lw, rh.saturating_sub(lw * 2), *color)?;
             },
             CanvasCommand::Line {
                 x1,

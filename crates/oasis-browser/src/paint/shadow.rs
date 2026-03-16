@@ -56,10 +56,10 @@ pub(super) fn paint_box_shadow(
                 backend.fill_rect(sx, sy, sw, thickness, color)?;
                 // Bottom strip
                 backend.fill_rect(sx, sy + sh as i32 - thickness as i32, sw, thickness, color)?;
-                // Left strip
-                backend.fill_rect(sx, sy, thickness, sh, color)?;
-                // Right strip
-                backend.fill_rect(sx + sw as i32 - thickness as i32, sy, thickness, sh, color)?;
+                // Left strip (between top and bottom to avoid corner overlap)
+                backend.fill_rect(sx, sy + thickness as i32, thickness, sh.saturating_sub(thickness * 2), color)?;
+                // Right strip (between top and bottom to avoid corner overlap)
+                backend.fill_rect(sx + sw as i32 - thickness as i32, sy + thickness as i32, thickness, sh.saturating_sub(thickness * 2), color)?;
             }
         } else {
             // Outer shadow.

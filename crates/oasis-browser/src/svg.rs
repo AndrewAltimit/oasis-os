@@ -28,7 +28,7 @@ pub enum SvgShape {
         y: f32,
         width: f32,
         height: f32,
-        fill: Color,
+        fill: Option<Color>,
         stroke: Option<Color>,
         stroke_width: f32,
         rx: f32,
@@ -37,7 +37,7 @@ pub enum SvgShape {
         cx: f32,
         cy: f32,
         r: f32,
-        fill: Color,
+        fill: Option<Color>,
         stroke: Option<Color>,
         stroke_width: f32,
     },
@@ -46,7 +46,7 @@ pub enum SvgShape {
         cy: f32,
         rx: f32,
         ry: f32,
-        fill: Color,
+        fill: Option<Color>,
         stroke: Option<Color>,
         stroke_width: f32,
     },
@@ -119,7 +119,7 @@ fn parse_shape(doc: &Document, node_id: NodeId) -> Option<SvgShape> {
             let y = attr_f32(elem, "y");
             let width = attr_f32(elem, "width");
             let height = attr_f32(elem, "height");
-            let fill = attr_color(elem, "fill").unwrap_or(Color::rgb(0, 0, 0));
+            let fill = attr_fill(elem);
             let stroke = attr_color(elem, "stroke");
             let stroke_width = attr_f32_or(elem, "stroke-width", 1.0);
             let rx = attr_f32(elem, "rx");
@@ -138,7 +138,7 @@ fn parse_shape(doc: &Document, node_id: NodeId) -> Option<SvgShape> {
             let cx = attr_f32(elem, "cx");
             let cy = attr_f32(elem, "cy");
             let r = attr_f32(elem, "r");
-            let fill = attr_color(elem, "fill").unwrap_or(Color::rgb(0, 0, 0));
+            let fill = attr_fill(elem);
             let stroke = attr_color(elem, "stroke");
             let stroke_width = attr_f32_or(elem, "stroke-width", 1.0);
             Some(SvgShape::Circle {
@@ -155,7 +155,7 @@ fn parse_shape(doc: &Document, node_id: NodeId) -> Option<SvgShape> {
             let cy = attr_f32(elem, "cy");
             let rx = attr_f32(elem, "rx");
             let ry = attr_f32(elem, "ry");
-            let fill = attr_color(elem, "fill").unwrap_or(Color::rgb(0, 0, 0));
+            let fill = attr_fill(elem);
             let stroke = attr_color(elem, "stroke");
             let stroke_width = attr_f32_or(elem, "stroke-width", 1.0);
             Some(SvgShape::Ellipse {
@@ -254,6 +254,15 @@ fn parse_viewbox(s: &str) -> Option<(f32, f32, f32, f32)> {
 fn attr_color(elem: &ElementData, name: &str) -> Option<Color> {
     let val = elem.get_attribute(name)?;
     parse_svg_color(val)
+}
+
+/// Parse a fill attribute, distinguishing between absent (default black)
+/// and explicitly set to `"none"` (no fill).
+fn attr_fill(elem: &ElementData) -> Option<Color> {
+    match elem.get_attribute("fill") {
+        None => Some(Color::rgb(0, 0, 0)), // SVG default fill is black
+        Some(val) => parse_svg_color(val), // "none" → None, color → Some
+    }
 }
 
 /// Parse a CSS/SVG color string.
@@ -402,11 +411,13 @@ fn paint_shape(shape: &SvgShape, backend: &mut dyn SdiBackend, xf: &SvgTransform
             if pw == 0 || ph == 0 {
                 return Ok(());
             }
-            let r = (rx * sx.min(sy)) as u16;
-            if r > 0 {
-                backend.fill_rounded_rect(px, py, pw, ph, r, *fill)?;
-            } else {
-                backend.fill_rect(px, py, pw, ph, *fill)?;
+            if let Some(fc) = fill {
+                let r = (rx * sx.min(sy)) as u16;
+                if r > 0 {
+                    backend.fill_rounded_rect(px, py, pw, ph, r, *fc)?;
+                } else {
+                    backend.fill_rect(px, py, pw, ph, *fc)?;
+                }
             }
             if let Some(sc) = stroke {
                 let sw = (stroke_width * sx.min(sy)).max(1.0) as u32;
@@ -414,10 +425,10 @@ fn paint_shape(shape: &SvgShape, backend: &mut dyn SdiBackend, xf: &SvgTransform
                 backend.fill_rect(px, py, pw, sw, *sc)?;
                 // Bottom
                 backend.fill_rect(px, py + ph as i32 - sw as i32, pw, sw, *sc)?;
-                // Left
-                backend.fill_rect(px, py, sw, ph, *sc)?;
-                // Right
-                backend.fill_rect(px + pw as i32 - sw as i32, py, sw, ph, *sc)?;
+                // Left (between top and bottom to avoid corner overlap)
+                backend.fill_rect(px, py + sw as i32, sw, ph.saturating_sub(sw * 2), *sc)?;
+                // Right (between top and bottom to avoid corner overlap)
+                backend.fill_rect(px + pw as i32 - sw as i32, py + sw as i32, sw, ph.saturating_sub(sw * 2), *sc)?;
             }
         },
         SvgShape::Circle {
@@ -434,14 +445,18 @@ fn paint_shape(shape: &SvgShape, backend: &mut dyn SdiBackend, xf: &SvgTransform
             if radius == 0 {
                 return Ok(());
             }
-            backend.fill_circle(px, py, radius, *fill)?;
+            if let Some(fc) = fill {
+                backend.fill_circle(px, py, radius, *fc)?;
+            }
             if let Some(sc) = stroke {
                 let sw = (stroke_width * sx.min(sy)).max(1.0) as u16;
                 // Approximate stroke as a slightly larger circle minus fill.
                 // For simplicity, draw the outline circle.
                 let outer = radius + sw;
                 backend.fill_circle(px, py, outer, *sc)?;
-                backend.fill_circle(px, py, radius, *fill)?;
+                if let Some(fc) = fill {
+                    backend.fill_circle(px, py, radius, *fc)?;
+                }
             }
         },
         SvgShape::Ellipse {
@@ -464,13 +479,19 @@ fn paint_shape(shape: &SvgShape, backend: &mut dyn SdiBackend, xf: &SvgTransform
                 return Ok(());
             }
             let r = (erx as u16).min(ery as u16);
-            backend.fill_rounded_rect(px, py, pw, ph, r, *fill)?;
+            if let Some(fc) = fill {
+                backend.fill_rounded_rect(px, py, pw, ph, r, *fc)?;
+            }
             if let Some(sc) = stroke {
                 let sw = (stroke_width * sx.min(sy)).max(1.0) as u32;
+                // Top
                 backend.fill_rect(px, py, pw, sw, *sc)?;
+                // Bottom
                 backend.fill_rect(px, py + ph as i32 - sw as i32, pw, sw, *sc)?;
-                backend.fill_rect(px, py, sw, ph, *sc)?;
-                backend.fill_rect(px + pw as i32 - sw as i32, py, sw, ph, *sc)?;
+                // Left (between top and bottom to avoid corner overlap)
+                backend.fill_rect(px, py + sw as i32, sw, ph.saturating_sub(sw * 2), *sc)?;
+                // Right (between top and bottom to avoid corner overlap)
+                backend.fill_rect(px + pw as i32 - sw as i32, py + sw as i32, sw, ph.saturating_sub(sw * 2), *sc)?;
             }
         },
         SvgShape::Line {
@@ -599,7 +620,7 @@ mod tests {
                 assert_eq!(*y, 5.0);
                 assert_eq!(*width, 80.0);
                 assert_eq!(*height, 40.0);
-                assert_eq!(*fill, Color::rgb(255, 0, 0));
+                assert_eq!(*fill, Some(Color::rgb(255, 0, 0)));
             },
             _ => panic!("expected Rect"),
         }
@@ -623,7 +644,7 @@ mod tests {
                 assert_eq!(*cx, 50.0);
                 assert_eq!(*cy, 50.0);
                 assert_eq!(*r, 25.0);
-                assert_eq!(*fill, Color::rgb(0, 255, 0));
+                assert_eq!(*fill, Some(Color::rgb(0, 255, 0)));
             },
             _ => panic!("expected Circle"),
         }
