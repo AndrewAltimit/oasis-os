@@ -66,6 +66,7 @@ fn lerp_color(a: Color, b: Color, t: f32) -> Color {
 
 /// Sample the gradient color at a normalized position `t` (0.0..=1.0),
 /// with optional repeating (tiling).
+#[allow(dead_code)]
 fn sample_gradient_repeating(
     stops: &[crate::css::values::GradientStop],
     t: f32,
@@ -218,39 +219,72 @@ pub(super) fn paint_linear_gradient(
             }
         }
     } else {
-        // Diagonal gradient: render row-by-row for true arbitrary angles.
-        // CSS gradient angle: 0deg = to top, 90deg = to right.
-        // Convert to math angle: math_angle = 90 - css_angle.
-        let rad = (90.0 - norm).to_radians();
-        let cos = rad.cos();
-        let sin = rad.sin();
-
-        // Project corners onto the gradient line to find the extent.
-        let hw = w as f32 / 2.0;
-        let hh = h as f32 / 2.0;
-        let max_proj = (hw * cos.abs() + hh * sin.abs()).max(1.0);
-
-        for row in 0..h {
-            for col in 0..w {
-                // Distance from center along gradient direction, normalized.
-                let dx = col as f32 - hw;
-                let dy = -(row as f32 - hh); // Y-up for math
-                let proj = dx * cos + dy * sin;
-                let t = (proj / max_proj + 1.0) / 2.0; // 0..1
-                let color = sample_gradient_repeating(&grad.stops, t, opacity, grad.repeating);
-                backend.fill_rect(x + col as i32, y + row as i32, 1, 1, color)?;
-            }
+        // Diagonal gradient: approximate with the closest axis direction.
+        // Per-pixel rendering is too slow for real pages (O(w*h) fill_rect
+        // calls). Snapping to the nearest axis is visually acceptable and
+        // uses O(stops) calls instead.
+        let first = apply_opacity(grad.stops[0].color, opacity);
+        let last = apply_opacity(grad.stops[grad.stops.len() - 1].color, opacity);
+        if !(45.0..315.0).contains(&norm) {
+            // ~to top
+            backend.fill_rect_gradient(
+                x,
+                y,
+                w,
+                h,
+                &GradientStyle::Vertical {
+                    top: last,
+                    bottom: first,
+                },
+            )?;
+        } else if norm < 135.0 {
+            // ~to right
+            backend.fill_rect_gradient(
+                x,
+                y,
+                w,
+                h,
+                &GradientStyle::Horizontal {
+                    left: first,
+                    right: last,
+                },
+            )?;
+        } else if norm < 225.0 {
+            // ~to bottom
+            backend.fill_rect_gradient(
+                x,
+                y,
+                w,
+                h,
+                &GradientStyle::Vertical {
+                    top: first,
+                    bottom: last,
+                },
+            )?;
+        } else {
+            // ~to left
+            backend.fill_rect_gradient(
+                x,
+                y,
+                w,
+                h,
+                &GradientStyle::Horizontal {
+                    left: last,
+                    right: first,
+                },
+            )?;
         }
     }
 
     Ok(())
 }
 
-/// Render a CSS `radial-gradient(...)` pixel-by-pixel.
+/// Render a CSS `radial-gradient(...)` using concentric bands.
 ///
-/// The gradient center is always at 50% 50%. For `circle` the distance
-/// is normalised by the larger half-dimension; for `ellipse` each axis
-/// is normalised independently so the gradient stretches to fill.
+/// Instead of per-pixel rendering (O(w*h) fill_rect calls), this uses
+/// concentric rounded rectangles from the outermost stop inward to the
+/// center, with O(bands) calls. Each band is sampled at its midpoint
+/// radius.
 pub(super) fn paint_radial_gradient(
     backend: &mut dyn SdiBackend,
     x: i32,
@@ -266,25 +300,32 @@ pub(super) fn paint_radial_gradient(
 
     let hw = w as f32 / 2.0;
     let hh = h as f32 / 2.0;
+    let max_radius = if grad.shape_circle {
+        hw.max(hh)
+    } else {
+        // Ellipse: use the diagonal as the effective radius.
+        (hw * hw + hh * hh).sqrt()
+    };
 
-    for row in 0..h {
-        for col in 0..w {
-            let dx = col as f32 - hw;
-            let dy = row as f32 - hh;
-            let t = if grad.shape_circle {
-                // Circle: uniform distance normalised by the larger
-                // half-dimension so the circle fills the element.
-                let radius = hw.max(hh).max(1.0);
-                (dx * dx + dy * dy).sqrt() / radius
-            } else {
-                // Ellipse: normalise each axis independently.
-                let nx = dx / hw.max(1.0);
-                let ny = dy / hh.max(1.0);
-                (nx * nx + ny * ny).sqrt()
-            };
-            let color = sample_gradient(&grad.stops, t, opacity);
-            backend.fill_rect(x + col as i32, y + row as i32, 1, 1, color)?;
-        }
+    // Use enough bands for smooth appearance but cap to avoid slowness.
+    let bands = (max_radius as u32).clamp(8, 128);
+
+    // Paint from outside in so inner bands overlay outer.
+    for i in 0..bands {
+        // Fraction from outer (0.0) to center (1.0).
+        let frac = i as f32 / bands as f32;
+        // Gradient position: 0.0 at center, 1.0 at edge.
+        let t = 1.0 - frac;
+        let color = sample_gradient(&grad.stops, t, opacity);
+
+        // Size of this band's rect.
+        let bw = (w as f32 * (1.0 - frac)).max(1.0) as u32;
+        let bh = (h as f32 * (1.0 - frac)).max(1.0) as u32;
+        let bx = x + ((w - bw) / 2) as i32;
+        let by = y + ((h - bh) / 2) as i32;
+        let r = (bw.min(bh) / 2).max(1) as u16;
+
+        backend.fill_rounded_rect(bx, by, bw, bh, r, color)?;
     }
 
     Ok(())
