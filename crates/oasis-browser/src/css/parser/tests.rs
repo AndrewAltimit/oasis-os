@@ -477,7 +477,7 @@ fn at_media_min_height_match() {
     let vp = MediaViewport {
         width: 480.0,
         height: 272.0,
-        dark_mode: false,
+        ..MediaViewport::DEFAULT
     };
     let sheet =
         Stylesheet::parse_with_viewport("@media (min-height: 200px) { p { color: red; } }", vp);
@@ -489,7 +489,7 @@ fn at_media_min_height_no_match() {
     let vp = MediaViewport {
         width: 480.0,
         height: 272.0,
-        dark_mode: false,
+        ..MediaViewport::DEFAULT
     };
     let sheet =
         Stylesheet::parse_with_viewport("@media (min-height: 600px) { p { color: red; } }", vp);
@@ -501,7 +501,7 @@ fn at_media_max_height_match() {
     let vp = MediaViewport {
         width: 480.0,
         height: 272.0,
-        dark_mode: false,
+        ..MediaViewport::DEFAULT
     };
     let sheet =
         Stylesheet::parse_with_viewport("@media (max-height: 400px) { p { color: red; } }", vp);
@@ -513,7 +513,7 @@ fn at_media_max_height_no_match() {
     let vp = MediaViewport {
         width: 480.0,
         height: 272.0,
-        dark_mode: false,
+        ..MediaViewport::DEFAULT
     };
     let sheet =
         Stylesheet::parse_with_viewport("@media (max-height: 200px) { p { color: red; } }", vp);
@@ -525,7 +525,7 @@ fn at_media_custom_viewport_width() {
     let vp = MediaViewport {
         width: 1024.0,
         height: 768.0,
-        dark_mode: false,
+        ..MediaViewport::DEFAULT
     };
     // With 1024px viewport, max-width: 320 should NOT match.
     let sheet =
@@ -542,7 +542,7 @@ fn at_media_screen_and_min_width() {
     let vp = MediaViewport {
         width: 800.0,
         height: 600.0,
-        dark_mode: false,
+        ..MediaViewport::DEFAULT
     };
     let sheet = Stylesheet::parse_with_viewport(
         "@media screen and (min-width: 480px) { p { color: red; } }",
@@ -576,7 +576,7 @@ fn at_media_compound_width_and_height() {
     let vp = MediaViewport {
         width: 800.0,
         height: 600.0,
-        dark_mode: false,
+        ..MediaViewport::DEFAULT
     };
     let sheet = Stylesheet::parse_with_viewport(
         "@media (min-width: 480px) and (min-height: 400px) { \

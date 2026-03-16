@@ -13,6 +13,53 @@ use oasis_types::backend::TextureId;
 
 use super::ResourceResponse;
 
+/// Parsed `Cache-Control` header directives.
+#[derive(Debug, Clone, Default)]
+pub struct CacheControl {
+    /// `max-age` directive in seconds (0 = not specified).
+    pub max_age: u64,
+    /// Whether `no-cache` was present.
+    pub no_cache: bool,
+    /// Whether `no-store` was present.
+    pub no_store: bool,
+    /// Timestamp (seconds since UNIX epoch) when the entry was cached.
+    pub cached_at: u64,
+}
+
+impl CacheControl {
+    /// Parse a `Cache-Control` header value.
+    pub fn parse(header: &str) -> Self {
+        let mut cc = CacheControl::default();
+        for directive in header.split(',') {
+            let d = directive.trim().to_ascii_lowercase();
+            if d == "no-cache" {
+                cc.no_cache = true;
+            } else if d == "no-store" {
+                cc.no_store = true;
+            } else if let Some(rest) = d.strip_prefix("max-age=") {
+                cc.max_age = rest.trim().parse().unwrap_or(0);
+            }
+        }
+        cc
+    }
+
+    /// Returns the UNIX timestamp at which this entry expires.
+    pub fn expires_at(&self) -> u64 {
+        self.cached_at.saturating_add(self.max_age)
+    }
+
+    /// Check whether the cache entry has expired given the current time.
+    pub fn is_expired(&self, now_secs: u64) -> bool {
+        if self.no_cache || self.no_store {
+            return true;
+        }
+        if self.max_age == 0 {
+            return false; // No max-age specified; rely on validators.
+        }
+        now_secs >= self.expires_at()
+    }
+}
+
 /// An entry in the resource cache.
 #[derive(Debug, Clone)]
 pub struct CacheEntry {

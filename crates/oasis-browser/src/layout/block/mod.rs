@@ -55,6 +55,7 @@ use super::flex::layout_flex;
 use super::float::{ClearSide, FloatContext, FloatSide};
 use super::grid::layout_grid;
 use super::inline::layout_inline;
+use super::multicol::layout_multicol;
 use super::table::layout_table;
 use crate::css::values::{
     BoxSizing, Clear, ComputedStyle, Dimension, Display, Float, Overflow, Position,
@@ -421,6 +422,9 @@ pub(crate) fn layout_block_with_height(
         layout_grid(layout_box, containing_width, measurer);
     } else if matches!(layout_box.box_type, BoxType::TableWrapper) {
         layout_table_children(layout_box, measurer);
+    } else if layout_box.style.column_count > 0 || layout_box.style.column_width > 0.0 {
+        layout_multicol(layout_box, containing_width, measurer);
+        calculate_block_height(layout_box, containing_height);
     } else {
         layout_block_children(layout_box, measurer);
         // 4. Calculate height.
@@ -559,7 +563,7 @@ fn calculate_block_width(layout_box: &mut LayoutBox, containing_width: f32) {
                     (available_for_margins - layout_box.dimensions.margin.left).max(0.0);
             }
         },
-        Dimension::Auto => {
+        Dimension::Auto | Dimension::MinContent | Dimension::MaxContent | Dimension::FitContent => {
             // Width = containing_width minus all horizontal extras.
             let w = (containing_width - total_extra).max(0.0);
             layout_box.dimensions.content.width = w;
@@ -945,7 +949,7 @@ fn calculate_block_height(layout_box: &mut LayoutBox, containing_height: Option<
                 calculate_auto_height(layout_box);
             }
         },
-        Dimension::Auto => {
+        Dimension::Auto | Dimension::MinContent | Dimension::MaxContent | Dimension::FitContent => {
             calculate_auto_height(layout_box);
         },
     }
@@ -962,7 +966,7 @@ fn calculate_block_height(layout_box: &mut LayoutBox, containing_height: Option<
                     layout_box.dimensions.content.height.max(min);
             }
         },
-        Dimension::Auto => {},
+        _ => {},
     }
     match layout_box.style.max_height {
         Dimension::Px(max) => {
@@ -975,7 +979,7 @@ fn calculate_block_height(layout_box: &mut LayoutBox, containing_height: Option<
                     layout_box.dimensions.content.height.min(max);
             }
         },
-        Dimension::Auto => {},
+        _ => {},
     }
 }
 

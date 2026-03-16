@@ -45,6 +45,11 @@ pub(crate) enum InsertionMode {
 /// stack exhaustion from pathologically deeply nested HTML.
 const MAX_NESTING_DEPTH: usize = 256;
 
+/// Maximum number of DOM nodes allowed in a document. Beyond this
+/// limit, new elements are silently dropped to prevent memory
+/// exhaustion from pathologically large documents.
+const MAX_DOM_NODES: usize = 100_000;
+
 /// Builds a DOM tree from a token stream.
 pub struct TreeBuilder {
     pub(crate) doc: Document,
@@ -79,6 +84,10 @@ impl TreeBuilder {
     pub fn build(tokens: Vec<Token>) -> Document {
         let mut builder = TreeBuilder::new();
         for token in tokens {
+            // Enforce DOM node limit to prevent memory exhaustion.
+            if builder.doc.nodes.len() >= MAX_DOM_NODES {
+                break;
+            }
             builder.process_token(token);
         }
         builder.finish()

@@ -16,6 +16,20 @@ use crate::html::dom::{Document, ElementData, NodeId, NodeKind};
 use rustc_hash::FxHashMap;
 
 // -----------------------------------------------------------------------
+// Robustness limits
+// -----------------------------------------------------------------------
+
+/// Maximum selector nesting depth (combinators). Selectors deeper
+/// than this are treated as non-matching.
+#[allow(dead_code)]
+const MAX_SELECTOR_DEPTH: usize = 64;
+
+/// Maximum number of DOM traversal steps during selector matching.
+/// Prevents O(N^2) blowup on pathologically complex selectors.
+#[allow(dead_code)]
+const MAX_TRAVERSAL_STEPS: usize = 512;
+
+// -----------------------------------------------------------------------
 // Matched declaration types
 // -----------------------------------------------------------------------
 

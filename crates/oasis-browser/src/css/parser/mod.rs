@@ -565,6 +565,19 @@ const SUPPORTED_PROPERTIES: &[&str] = &[
     "animation-direction",
     "animation-fill-mode",
     "animation-play-state",
+    "transform",
+    "transform-origin",
+    "filter",
+    "counter-reset",
+    "counter-increment",
+    "grid-auto-flow",
+    "grid-template-areas",
+    "grid-area",
+    "table-layout",
+    "will-change",
+    "column-count",
+    "column-width",
+    "columns",
 ];
 
 /// Evaluate an `@supports` condition string.

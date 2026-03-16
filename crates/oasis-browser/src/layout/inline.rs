@@ -684,6 +684,9 @@ fn align_vertically(va: VerticalAlign, frag_height: f32, line_height: f32) -> f3
         VerticalAlign::Top | VerticalAlign::TextTop | VerticalAlign::Baseline => 0.0,
         VerticalAlign::Middle => (line_height - frag_height) / 2.0,
         VerticalAlign::Bottom | VerticalAlign::TextBottom => line_height - frag_height,
+        VerticalAlign::Sub => line_height * 0.3,
+        VerticalAlign::Super => -(line_height * 0.3),
+        VerticalAlign::Length(offset) => -offset,
     }
 }
 

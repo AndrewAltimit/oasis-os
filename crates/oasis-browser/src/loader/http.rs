@@ -5,7 +5,10 @@
 
 use std::io::{self, Read, Write};
 use std::net::TcpStream;
-use std::time::Duration;
+use std::sync::Mutex;
+use std::time::{Duration, Instant};
+
+use rustc_hash::FxHashMap;
 
 use flate2::read::{DeflateDecoder, GzDecoder};
 use oasis_net::tls::TlsProvider;
@@ -31,6 +34,51 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// TCP read timeout.
 const READ_TIMEOUT: Duration = Duration::from_secs(15);
+
+/// DNS cache TTL (5 minutes).
+#[allow(dead_code)]
+const DNS_CACHE_TTL: Duration = Duration::from_secs(300);
+
+/// Global DNS cache: maps hostname -> (resolved IPs, cached time).
+type DnsCacheMap = FxHashMap<String, (Vec<std::net::IpAddr>, Instant)>;
+
+#[allow(dead_code)]
+static DNS_CACHE: std::sync::LazyLock<Mutex<DnsCacheMap>> =
+    std::sync::LazyLock::new(|| Mutex::new(FxHashMap::default()));
+
+/// Resolve a hostname using the DNS cache.
+///
+/// Returns cached addresses if still within TTL, otherwise performs a
+/// fresh DNS resolution and updates the cache.
+#[allow(dead_code)]
+pub(crate) fn dns_resolve_cached(host: &str) -> io::Result<Vec<std::net::IpAddr>> {
+    use std::net::ToSocketAddrs;
+
+    // Check cache first.
+    if let Ok(cache) = DNS_CACHE.lock()
+        && let Some((addrs, cached_at)) = cache.get(host)
+        && cached_at.elapsed() < DNS_CACHE_TTL
+    {
+        return Ok(addrs.clone());
+    }
+
+    // Fresh resolution.
+    let addrs: Vec<std::net::IpAddr> = (host, 0u16).to_socket_addrs()?.map(|sa| sa.ip()).collect();
+
+    if addrs.is_empty() {
+        return Err(io::Error::new(
+            io::ErrorKind::NotFound,
+            format!("DNS resolution failed for {host}"),
+        ));
+    }
+
+    // Update cache.
+    if let Ok(mut cache) = DNS_CACHE.lock() {
+        cache.insert(host.to_string(), (addrs.clone(), Instant::now()));
+    }
+
+    Ok(addrs)
+}
 
 /// Perform an HTTP(S) GET request for the given URL.
 ///
