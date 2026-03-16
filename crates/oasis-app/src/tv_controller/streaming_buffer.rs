@@ -835,6 +835,25 @@ impl std::io::Seek for StreamingBuffer {
         let old_pos = self.pos;
         self.pos = new_pos as u64;
         self.logged_wait = false; // reset so next wait/gap is logged
+
+        // Update decoder_pos on seek (when not in probe mode) so the
+        // throttle logic knows where the decoder needs data.  Without
+        // this, decoder_pos stays at 0 after a seek, causing the
+        // throttle to cap the buffer at MAX_LOOKAHEAD while the decoder
+        // is blocked waiting for data far beyond the buffer end.
+        if !self
+            .inner
+            .probe_mode
+            .load(std::sync::atomic::Ordering::Acquire)
+        {
+            self.inner
+                .decoder_pos
+                .store(self.pos, std::sync::atomic::Ordering::Release);
+            // Wake the download thread so it can re-check throttle
+            // with the updated decoder_pos.
+            self.inner.condvar.notify_all();
+        }
+
         // Log significant seeks (> 1MB jump) for debugging streaming issues.
         let jump = self.pos.abs_diff(old_pos);
         if jump > 1024 * 1024 {
