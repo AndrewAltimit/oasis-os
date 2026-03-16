@@ -910,6 +910,13 @@ impl ComputedStyle {
                 }
             },
 
+            // -- Tab size ---------------------------------------------------
+            "tab-size" => {
+                if let CssValue::Number(n) = value {
+                    self.tab_size = (*n as u32).max(1);
+                }
+            },
+
             // -- Multi-column -----------------------------------------------
             "column-count" => {
                 if let CssValue::Number(n) = value {
@@ -1275,6 +1282,7 @@ impl ComputedStyle {
             "counter-reset" => self.counter_reset = Vec::new(),
             "counter-increment" => self.counter_increment = Vec::new(),
             "will-change" => self.will_change_transform = false,
+            "tab-size" => self.tab_size = 8,
             "column-count" => self.column_count = 0,
             "column-width" => self.column_width = 0.0,
             "columns" => {
@@ -2012,7 +2020,7 @@ mod tests {
                     | "max-height" | "min-height"
                     | "transform-origin" | "filter"
                     | "counter-reset" | "counter-increment"
-                    | "will-change" | "column-count" | "column-width"
+                    | "will-change" | "tab-size" | "column-count" | "column-width"
                     | "columns" | "grid-auto-flow" | "grid-template-areas"
                     | "grid-area" | "table-layout"
                 ) {

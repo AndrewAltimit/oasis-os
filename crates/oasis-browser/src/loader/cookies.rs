@@ -138,6 +138,13 @@ fn parse_set_cookie(header: &str, url: &Url) -> Option<Cookie> {
         }
     }
 
+    // Domain validation (RFC 6265 ss5.3 step 6): reject cookies whose
+    // Domain attribute doesn't domain-match the origin server's host.
+    let request_host = url.host.to_lowercase();
+    if domain != request_host && !request_host.ends_with(&format!(".{domain}")) {
+        return None;
+    }
+
     Some(Cookie {
         name,
         value,
@@ -149,25 +156,51 @@ fn parse_set_cookie(header: &str, url: &Url) -> Option<Cookie> {
     })
 }
 
-/// Check whether a cookie should be sent for the given URL.
+/// Check whether a cookie should be sent for the given URL (RFC 6265 ss5.4).
 fn cookie_matches(cookie: &Cookie, url: &Url) -> bool {
     // Secure cookies only over HTTPS.
     if cookie.secure && url.scheme != "https" {
         return false;
     }
 
-    // Domain suffix match.
+    // Domain match (RFC 6265 ss5.1.3):
+    // The request host must either exactly equal the cookie domain,
+    // or be a subdomain of it (i.e. host ends with ".{domain}").
     let host = url.host.to_lowercase();
     if host != cookie.domain && !host.ends_with(&format!(".{}", cookie.domain)) {
         return false;
     }
 
-    // Path prefix match.
-    if !url.path.starts_with(&cookie.path) {
+    // Path match (RFC 6265 ss5.1.4):
+    // The request path must be equal to cookie path, or start with the
+    // cookie path followed by '/' (or the cookie path ends with '/').
+    if !path_matches(&url.path, &cookie.path) {
         return false;
     }
 
     true
+}
+
+/// RFC 6265 ss5.1.4 path matching.
+///
+/// Returns `true` if `request_path` matches `cookie_path`:
+/// - The paths are identical, OR
+/// - `cookie_path` is a prefix of `request_path` and either:
+///   - `cookie_path` ends with '/', OR
+///   - the character in `request_path` immediately after `cookie_path` is '/'
+fn path_matches(request_path: &str, cookie_path: &str) -> bool {
+    if request_path == cookie_path {
+        return true;
+    }
+    if request_path.starts_with(cookie_path) {
+        if cookie_path.ends_with('/') {
+            return true;
+        }
+        if request_path.as_bytes().get(cookie_path.len()) == Some(&b'/') {
+            return true;
+        }
+    }
+    false
 }
 
 // -------------------------------------------------------------------

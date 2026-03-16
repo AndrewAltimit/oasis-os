@@ -27,6 +27,7 @@ pub enum ImageFormat {
     Png,
     Bmp,
     Gif,
+    Webp,
     Unknown,
 }
 
@@ -44,6 +45,8 @@ pub fn detect_format(data: &[u8]) -> ImageFormat {
         ImageFormat::Bmp
     } else if data.starts_with(b"GIF8") {
         ImageFormat::Gif
+    } else if data.len() >= 12 && &data[0..4] == b"RIFF" && &data[8..12] == b"WEBP" {
+        ImageFormat::Webp
     } else {
         ImageFormat::Unknown
     }
@@ -63,6 +66,9 @@ pub fn decode_image(data: &[u8]) -> Option<DecodedImage> {
         ImageFormat::Png => decode_png(data),
         ImageFormat::Jpeg => decode_jpeg(data),
         ImageFormat::Gif => decode_gif(data),
+        // WebP requires the `image` crate's webp feature or a dedicated
+        // WebP decoder crate.  Not currently wired up.
+        ImageFormat::Webp => None,
         ImageFormat::Unknown => None,
     }?;
 

@@ -31,6 +31,7 @@ impl BrowserWidget {
         self.reader_html = None;
         self.error_message = None;
         self.page_csp = None;
+        self.page_errors.clear();
         self.decoded_images.clear();
         self.image_textures.clear();
         self.pending_images.clear();
@@ -73,10 +74,12 @@ impl BrowserWidget {
                 self.cache.set_validators(&url_str, etag, last_modified);
             },
             Err(e) => {
-                let err_resp = loader::vfs::error_page(url, &e.to_string());
+                let err_msg = e.to_string();
+                let err_resp = loader::vfs::error_page(url, &err_msg);
                 self.process_response(err_resp);
                 self.state = LoadingState::Error;
-                self.error_message = Some(e.to_string());
+                self.error_message = Some(err_msg.clone());
+                self.record_error(crate::BrowserErrorKind::Network, err_msg);
             },
         }
 
@@ -94,6 +97,7 @@ impl BrowserWidget {
         self.reader_html = None;
         self.error_message = None;
         self.page_csp = None;
+        self.page_errors.clear();
         self.decoded_images.clear();
         self.image_textures.clear();
         self.pending_images.clear();
@@ -136,10 +140,12 @@ impl BrowserWidget {
                 self.cache.set_validators(&url_str, etag, last_modified);
             },
             Err(e) => {
-                let err_resp = loader::vfs::error_page(url, &e.to_string());
+                let err_msg = e.to_string();
+                let err_resp = loader::vfs::error_page(url, &err_msg);
                 self.process_response(err_resp);
                 self.state = LoadingState::Error;
-                self.error_message = Some(e.to_string());
+                self.error_message = Some(err_msg.clone());
+                self.record_error(crate::BrowserErrorKind::Network, err_msg);
             },
         }
 
@@ -236,6 +242,10 @@ impl BrowserWidget {
                         js_dom::install_document_global_with_nav(&ctx, &s, url, &nav)
                     }) {
                         log::warn!("JS DOM install failed: {}", e.message);
+                        self.record_error(
+                            crate::BrowserErrorKind::Script,
+                            format!("JS DOM install: {}", e.message),
+                        );
                     }
                     if !scripts.is_empty() {
                         let script_refs: Vec<&str> = scripts.iter().map(String::as_str).collect();
@@ -248,6 +258,10 @@ impl BrowserWidget {
                 },
                 Err(e) => {
                     log::warn!("JS engine init failed: {}", e.message);
+                    self.record_error(
+                        crate::BrowserErrorKind::Script,
+                        format!("JS engine init: {}", e.message),
+                    );
                 },
             }
             // Clone the (possibly mutated) document for layout/paint.
@@ -278,6 +292,31 @@ impl BrowserWidget {
         // Cache parsed sheets for hover restyles.
         self.cached_author_sheets = author_sheets;
         self.cached_inline_styles = inline_styles;
+
+        // 4b. Register CSS animations with the animation engine.
+        //     Collect @keyframes from all stylesheets, then register any
+        //     node that declares `animation-name`.
+        {
+            let mut all_keyframes: Vec<&css::parser::KeyframesRule> = Vec::new();
+            all_keyframes.extend(ua_sheet.keyframes.iter());
+            for sheet in &self.cached_author_sheets {
+                all_keyframes.extend(sheet.keyframes.iter());
+            }
+            self.animation_engine = css::animation::AnimationEngine::new();
+            for (node_id, maybe_style) in styles.iter().enumerate() {
+                if let Some(computed) = maybe_style
+                    && !computed.animations.is_empty()
+                {
+                    let kf_owned: Vec<css::parser::KeyframesRule> =
+                        all_keyframes.iter().copied().cloned().collect();
+                    self.animation_engine.start_animations(
+                        node_id,
+                        &computed.animations,
+                        &kf_owned,
+                    );
+                }
+            }
+        }
 
         // 5. Build link href map from DOM.
         let href_map = Self::build_link_map(&doc);

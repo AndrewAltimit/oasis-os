@@ -389,7 +389,34 @@ pub fn make_text_fragments(
     measurer: &dyn TextMeasurer,
 ) -> Vec<InlineFragment> {
     let transformed = apply_text_transform(text, style.text_transform);
-    let collapsed = collapse_whitespace(&transformed, style.white_space);
+    // Expand tabs with custom tab-size before whitespace collapsing.
+    let tab_expanded = if style.tab_size != 8
+        && matches!(style.white_space, WhiteSpace::Pre | WhiteSpace::PreWrap)
+        && transformed.contains('\t')
+    {
+        let tab = style.tab_size as usize;
+        let mut result = String::with_capacity(transformed.len());
+        let mut col = 0usize;
+        for ch in transformed.chars() {
+            if ch == '\t' {
+                let spaces = if tab > 0 { tab - (col % tab) } else { 0 };
+                for _ in 0..spaces {
+                    result.push(' ');
+                }
+                col += spaces;
+            } else if ch == '\n' {
+                result.push(ch);
+                col = 0;
+            } else {
+                result.push(ch);
+                col += 1;
+            }
+        }
+        std::borrow::Cow::Owned(result)
+    } else {
+        std::borrow::Cow::Borrowed(transformed.as_str())
+    };
+    let collapsed = collapse_whitespace(&tab_expanded, style.white_space);
     let renderable = replace_unrenderable(&collapsed);
     let words = split_into_words(&renderable, style.white_space);
 

@@ -10,6 +10,7 @@ use std::time::{Duration, Instant};
 
 use rustc_hash::FxHashMap;
 
+use brotli::Decompressor as BrotliDecoder;
 use flate2::read::{DeflateDecoder, GzDecoder};
 use oasis_net::tls::TlsProvider;
 use oasis_types::backend::NetworkStream;
@@ -289,7 +290,7 @@ fn send_request(
          Host: {host_header}\r\n\
          User-Agent: OASIS/1.0\r\n\
          Accept: */*\r\n\
-         Accept-Encoding: gzip, deflate\r\n\
+         Accept-Encoding: gzip, deflate, br\r\n\
          Connection: close\r\n"
     );
 
@@ -484,6 +485,14 @@ fn decode_body(headers: &[(String, String)], body: Vec<u8>) -> Result<Vec<u8>> {
             decoder
                 .read_to_end(&mut decompressed)
                 .map_err(|e| OasisError::Backend(format!("deflate decode: {e}").into()))?;
+            Ok(decompressed)
+        },
+        "br" => {
+            let mut decoder = BrotliDecoder::new(&body[..], 4096);
+            let mut decompressed = Vec::new();
+            decoder
+                .read_to_end(&mut decompressed)
+                .map_err(|e| OasisError::Backend(format!("brotli decode: {e}").into()))?;
             Ok(decompressed)
         },
         _ => Ok(body),

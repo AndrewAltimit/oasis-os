@@ -100,6 +100,30 @@ pub enum LoadingState {
 }
 
 // -----------------------------------------------------------------------
+// BrowserError
+// -----------------------------------------------------------------------
+
+/// An error recorded during page loading, parsing, or rendering.
+#[derive(Debug, Clone)]
+pub struct BrowserError {
+    /// The category of error.
+    pub kind: BrowserErrorKind,
+    /// Human-readable description.
+    pub message: String,
+}
+
+/// Category of a [`BrowserError`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BrowserErrorKind {
+    /// Network or resource loading error.
+    Network,
+    /// HTML/CSS parse error.
+    Parse,
+    /// JavaScript execution error.
+    Script,
+}
+
+// -----------------------------------------------------------------------
 // SimpleTextMeasurer
 // -----------------------------------------------------------------------
 
@@ -267,12 +291,13 @@ pub struct BrowserWidget {
     js_nav_actions: js_dom::SharedNavActions,
 
     /// CSS transition engine for smooth property interpolation.
-    #[allow(dead_code)]
     transition_engine: css::transition::TransitionEngine,
 
     /// CSS animation engine for `@keyframes` animations.
-    #[allow(dead_code)]
     animation_engine: css::animation::AnimationEngine,
+
+    /// Timestamp of the last `tick()` call for computing animation deltas.
+    last_tick_time: Option<std::time::Instant>,
 
     /// Content Security Policy for the current page (parsed from HTTP
     /// response headers).
@@ -301,6 +326,10 @@ pub struct BrowserWidget {
     /// Last font size used for layout (base * zoom). When this changes
     /// the text cache is invalidated.
     last_effective_font_size: f32,
+
+    /// Accumulated errors from page loading, parsing, and JS execution
+    /// for the current page. Cleared on each new navigation.
+    page_errors: Vec<BrowserError>,
 }
 
 impl BrowserWidget {
@@ -360,6 +389,7 @@ impl BrowserWidget {
             js_nav_actions: std::rc::Rc::new(std::cell::RefCell::new(Vec::new())),
             transition_engine: css::transition::TransitionEngine::new(),
             animation_engine: css::animation::AnimationEngine::new(),
+            last_tick_time: None,
             page_csp: None,
             loading_start: None,
             search_state: String::new(),
@@ -367,6 +397,7 @@ impl BrowserWidget {
             tab_focus_index: -1,
             text_cache: layout::text_cache::new_shared_cache(),
             last_effective_font_size: effective_font,
+            page_errors: Vec::new(),
         }
     }
 
@@ -499,6 +530,22 @@ impl BrowserWidget {
     /// Get the current error message, if any.
     pub fn error_message(&self) -> Option<&str> {
         self.error_message.as_deref()
+    }
+
+    /// Accumulated errors from the current page (network, parse, JS).
+    ///
+    /// Cleared on each new navigation. Useful for developer tooling
+    /// or debugging pages that fail to load correctly.
+    pub fn errors(&self) -> &[BrowserError] {
+        &self.page_errors
+    }
+
+    /// Record a browser error for the current page.
+    pub(crate) fn record_error(&mut self, kind: BrowserErrorKind, message: impl Into<String>) {
+        self.page_errors.push(BrowserError {
+            kind,
+            message: message.into(),
+        });
     }
 
     /// Get the scroll state.

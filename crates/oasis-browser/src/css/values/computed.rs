@@ -183,6 +183,9 @@ pub struct ComputedStyle {
     // -- Will-change ---------------------------------------------------
     pub will_change_transform: bool,
 
+    // -- Tab size (for preformatted text) --------------------------------
+    pub tab_size: u32,
+
     // -- Multi-column ---------------------------------------------------
     pub column_count: u32,
     pub column_width: f32,
@@ -364,6 +367,8 @@ impl Default for ComputedStyle {
             counter_increment: Vec::new(),
 
             will_change_transform: false,
+
+            tab_size: 8,
 
             column_count: 0,
             column_width: 0.0,

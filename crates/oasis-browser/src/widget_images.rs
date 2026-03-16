@@ -21,6 +21,9 @@ impl BrowserWidget {
     /// Walk the DOM to find `<img>` elements and collect their requests
     /// into `self.pending_images` for time-sliced loading. Does NOT
     /// fetch or decode — that happens in `load_next_image_batch()`.
+    ///
+    /// Images with `loading="lazy"` are deferred to the end of the queue
+    /// so that eagerly-loaded images (the default) are fetched first.
     pub(crate) fn collect_page_image_requests(&mut self) {
         let doc = match &self.document {
             Some(d) => d,
@@ -28,7 +31,8 @@ impl BrowserWidget {
         };
         let base_url = self.nav.current_url().map(String::from);
 
-        let mut requests: Vec<(String, ResourceRequest)> = Vec::new();
+        let mut eager_requests: Vec<(String, ResourceRequest)> = Vec::new();
+        let mut lazy_requests: Vec<(String, ResourceRequest)> = Vec::new();
         for node in &doc.nodes {
             if let NodeKind::Element(elem) = &node.kind
                 && elem.tag == TagName::Img
@@ -53,7 +57,7 @@ impl BrowserWidget {
                     ResourceSource::VfsThenNetwork
                 };
                 let referrer = base_url.as_deref().and_then(loader::strip_referrer);
-                requests.push((
+                let request = (
                     resolved.clone(),
                     ResourceRequest {
                         url: resolved,
@@ -63,11 +67,24 @@ impl BrowserWidget {
                         body: None,
                         referrer,
                     },
-                ));
+                );
+
+                // Respect the `loading` attribute: "lazy" images are
+                // deferred after all eager images have been fetched.
+                let is_lazy = elem
+                    .get_attribute("loading")
+                    .is_some_and(|v| v.eq_ignore_ascii_case("lazy"));
+                if is_lazy {
+                    lazy_requests.push(request);
+                } else {
+                    eager_requests.push(request);
+                }
             }
         }
 
-        self.pending_images = requests;
+        // Eager images first, lazy images appended after.
+        eager_requests.extend(lazy_requests);
+        self.pending_images = eager_requests;
     }
 
     /// Maximum decoded image memory budget (bytes of RGBA data).

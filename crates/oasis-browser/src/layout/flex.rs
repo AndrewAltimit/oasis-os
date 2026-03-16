@@ -164,9 +164,57 @@ pub fn layout_flex(container: &mut LayoutBox, _containing_width: f32, measurer: 
             (0..n).collect()
         };
 
+        // Compute auto margin distribution per the CSS Flexbox spec:
+        // auto margins absorb free space before justify-content.
+        let mut auto_margin_offsets: Vec<(f32, f32)> = vec![(0.0, 0.0); n];
+        {
+            // Count total auto margins on the main axis.
+            let mut total_auto_count = 0usize;
+            for &idx in &order {
+                let (child_idx, _, _) = resolved_line[idx];
+                let child = &container.children[child_idx];
+                if is_row {
+                    if child.style.margin_left_auto {
+                        total_auto_count += 1;
+                    }
+                    if child.style.margin_right_auto {
+                        total_auto_count += 1;
+                    }
+                } else {
+                    if child.style.margin_top_auto {
+                        total_auto_count += 1;
+                    }
+                    if child.style.margin_bottom_auto {
+                        total_auto_count += 1;
+                    }
+                }
+            }
+            if total_auto_count > 0 && free_space > 0.0 {
+                let per_auto = free_space / total_auto_count as f32;
+                for &idx in &order {
+                    let (child_idx, _, _) = resolved_line[idx];
+                    let child = &container.children[child_idx];
+                    let (has_start, has_end) = if is_row {
+                        (child.style.margin_left_auto, child.style.margin_right_auto)
+                    } else {
+                        (child.style.margin_top_auto, child.style.margin_bottom_auto)
+                    };
+                    let start = if has_start { per_auto } else { 0.0 };
+                    let end = if has_end { per_auto } else { 0.0 };
+                    auto_margin_offsets[idx] = (start, end);
+                }
+                // Auto margins consume free space: override justify-content.
+                main_offset = 0.0;
+            }
+        }
+
         for (seq, &idx) in order.iter().enumerate() {
             let (child_idx, item_main, item_cross) = resolved_line[idx];
             let child = &mut container.children[child_idx];
+            let (auto_start, auto_end) = auto_margin_offsets[idx];
+
+            // Apply auto margin to the main-axis offset.
+            main_offset += auto_start;
 
             // Per-item align-self override, falling back to container align-items.
             let effective_align =
@@ -219,7 +267,7 @@ pub fn layout_flex(container: &mut LayoutBox, _containing_width: f32, measurer: 
                 child.dimensions.content.height = new_h;
             }
 
-            main_offset += item_main;
+            main_offset += item_main + auto_end;
             // Add gap unless this is the last item.
             if seq < n - 1 {
                 main_offset += gap + inter_gap;
