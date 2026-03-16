@@ -111,11 +111,13 @@ impl BrowserWidget {
             if let NodeKind::Element(elem) = &node.kind
                 && elem.tag == TagName::Img
             {
-                // Prefer srcset over src for responsive images.
-                let effective_src = elem
+                // Prefer srcset over src for responsive images, but only
+                // if it produces a valid-looking URL.
+                let srcset_url = elem
                     .get_attribute("srcset")
-                    .and_then(|ss| select_best_src(ss, self.window_w));
-                let effective_src = effective_src.as_deref().or_else(|| elem.src());
+                    .and_then(|ss| select_best_src(ss, self.window_w))
+                    .filter(|url| !url.is_empty() && !url.starts_with("data:"));
+                let effective_src = srcset_url.as_deref().or_else(|| elem.src());
                 let Some(src) = effective_src else { continue };
                 let resolved = Self::resolve_src(&base_url, src);
                 if self.decoded_images.contains_key(&resolved) {

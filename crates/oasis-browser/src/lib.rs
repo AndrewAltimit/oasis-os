@@ -231,6 +231,10 @@ pub struct BrowserWidget {
     /// Whether the layout tree needs rebuilding.
     layout_dirty: bool,
 
+    /// When true, the next `load_html` call skips pushing to the
+    /// navigation history. Used by back/forward cache restore.
+    skip_nav_push: bool,
+
     /// Viewport width used for the most recent layout pass.
     last_layout_w: u32,
 
@@ -382,6 +386,7 @@ impl BrowserWidget {
             window_h: 272,
             tls: None,
             layout_dirty: false,
+            skip_nav_push: false,
             last_layout_w: 480,
             visited_urls: HashSet::new(),
             hover_node: None,

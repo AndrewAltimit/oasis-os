@@ -103,6 +103,8 @@ impl BrowserWidget {
             if ct == ContentType::Html || ct == ContentType::PlainText || ct == ContentType::Unknown
             {
                 // Re-render from cached HTML without a network round-trip.
+                // Skip nav.navigate() to preserve forward stack.
+                self.skip_nav_push = true;
                 self.state = LoadingState::Loading;
                 self.selected_link = -1;
                 self.reader_mode = false;
@@ -421,8 +423,11 @@ impl BrowserWidget {
         self.layout_dirty = false;
         self.last_layout_w = self.window_w;
 
-        // 8. Update navigation.
-        self.nav.navigate(url, &title);
+        // 8. Update navigation (skip if restoring from history).
+        if !self.skip_nav_push {
+            self.nav.navigate(url, &title);
+        }
+        self.skip_nav_push = false;
     }
 
     /// Walk the DOM to build a map of `<a>` element NodeIds to their
