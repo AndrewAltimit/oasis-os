@@ -77,7 +77,7 @@ See `docs/skin-authoring.md` for the TOML skin format.
 ## Running Tests
 
 ```bash
-# Full workspace test suite (~5,800+ tests)
+# Full workspace test suite (~6,600+ tests)
 cargo test --workspace
 
 # Single crate
@@ -247,7 +247,7 @@ oasis-os/
     oasis-types/        Foundation types, backend traits
     oasis-vfs/          Virtual file system
     oasis-sdi/          Scene display interface
-    oasis-ui/           31 reusable widgets
+    oasis-ui/           32 reusable widgets
     oasis-wm/           Window manager
     oasis-skin/         TOML skin engine (18 skins)
     oasis-terminal/     90+ commands across 17+ modules
@@ -257,7 +257,7 @@ oasis-os/
     oasis-vector/       Vector graphics, scene graph, icons, animations
     oasis-shader/       GPU shader wallpapers (voronoi, city lights, ocean)
     oasis-core/         Coordination, 16 apps, dashboard
-    oasis-app-*/        12 extracted app crates (calculator, clock, games, etc.)
+    oasis-app-*/        11 extracted app crates (calculator, clock, games, etc.)
     oasis-backend-sdl/  Desktop/Raspberry Pi backend
     oasis-backend-wasm/ WebAssembly browser backend
     oasis-backend-ue5/  Unreal Engine 5 backend

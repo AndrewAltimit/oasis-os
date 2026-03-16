@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-OASIS_OS is an embeddable operating system framework in Rust (edition 2024). It provides a skinnable shell with a scene-graph UI, command interpreter, virtual file system, browser engine (HTML/CSS/Gemini), plugin system, and remote terminal. It renders to any pixel buffer + input stream. Originally ported from a PSP homebrew shell (2006-2008). Eighteen skins are implemented (12 external TOML skins, 18 built-in; external skins also have built-in equivalents).
+OASIS_OS is an embeddable operating system framework in Rust (edition 2024). It provides a skinnable shell with a scene-graph UI, command interpreter, virtual file system, browser engine (HTML/CSS/Gemini), plugin system, and remote terminal. It renders to any pixel buffer + input stream. Originally ported from a PSP homebrew shell (2006-2008). Eighteen skins are implemented (14 external TOML skins, 18 built-in; external skins also have built-in equivalents).
 
 Default virtual resolution is 480x272 (PSP native). Skins may override this (e.g. modern=800x600, xp=1024x768); the backend canvas/window scales to match.
 
@@ -93,6 +93,9 @@ oasis-types     (foundation: Color, Button, InputEvent, backend traits, error ty
 ├── oasis-video      (MP4/H.264+AAC decode; StreamingBuffer sliding-window; features: h264, no-std-demux, video-decode)
 ├── oasis-vector     (vector graphics: scene graph, path ops, icons, frame-driven animations)
 ├── oasis-shader     (animated shader wallpapers: Shadertoy-style fragment shaders)
+├── oasis-rasterize  (software rasterizer for CPU-side rendering)
+├── oasis-i18n       (internationalization support)
+├── oasis-test-backend (mock backend for testing)
 ├── oasis-app-core   (shared app framework: AppTrait, common utilities)
 ├── oasis-app-games  (Games app)
 ├── oasis-app-paint  (Paint app)
@@ -154,12 +157,12 @@ Core code never calls platform APIs directly. All platform interaction goes thro
 
 ### Core Modules
 
-The framework is split into 34 crates (32 workspace members + 2 excluded PSP crates). Each module below is its own crate (previously all in oasis-core):
+The framework is split into 37 crates (35 workspace members + 2 excluded PSP crates). Each module below is its own crate (previously all in oasis-core):
 
 - **oasis-types** -- Foundation types: `Color`, `Button`, `InputEvent`, backend traits (`SdiCore`, `SdiBackend`, `InputBackend`, `NetworkBackend`, `AudioBackend`), error types, TLS, bitmap font metrics, `geometry.rs` (shared shape algorithms)
 - **oasis-sdi** -- Scene Display Interface: named objects with position, size, color, texture, text, z-order, gradients, rounded corners, shadows
-- **oasis-skin** -- Data-driven TOML skin system with 18 skins (12 external TOML in `skins/`, 18 built-in). Theme derivation from 9 base colors.
-- **oasis-browser** -- Embeddable HTML/CSS/Gemini rendering engine: DOM parser, CSS cascade with `@media` query support, block/inline/table layout, link navigation, reader mode, JavaScript DOM bindings
+- **oasis-skin** -- Data-driven TOML skin system with 18 skins (14 external TOML in `skins/`, 18 built-in). Theme derivation from 9 base colors.
+- **oasis-browser** -- Embeddable HTML/CSS/Gemini rendering engine: DOM parser, CSS cascade with `@media`/`@supports` queries, flex/grid/table layout, `calc()`, CSS transforms, animations, transitions, cookies, gzip, CSP, link navigation, reader mode, JavaScript DOM bindings
 - **oasis-js** -- JavaScript engine wrapping QuickJS-NG via rquickjs: `console` API (log/warn/error/info), inline `<script>` execution, DOM manipulation (`document.getElementById`, `createElement`, `textContent`, attributes), retained engine with event dispatch (click bubbling via `__oasis_dispatch_with_bubbling`, `stopPropagation`/`preventDefault`). Feature-gated (`javascript`)
 - **oasis-ui** -- 32 reusable widgets: Button, Card, TabBar, Panel, InputField, ListView, ScrollView, ProgressBar, Toggle, NinePatch, flex layout, Accordion, Avatar, Badge, Checkbox, ColorPicker, ContextMenu, DatePicker, Divider, Dropdown, Icon, Modal, Radio, RichText, Slider, SpinBox, Spinner, SplitPane, Table, Toast, Tooltip, TreeView
 - **oasis-vfs** -- Virtual file system: `MemoryVfs` (in-RAM), `RealVfs` (disk), `GameAssetVfs` (UE5 with overlay writes)

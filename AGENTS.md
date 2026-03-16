@@ -55,7 +55,7 @@ cargo run -p oasis-app --bin oasis-screenshot
 
 ## CI Pipeline
 
-**Order:** format check -> clippy -> doc build -> markdown link check -> test -> release build -> screenshot regression -> cargo-deny -> benchmarks -> code coverage -> PSP EBOOT build -> PPSSPP headless test -> GitHub Pages deploy (WASM)
+**Order:** format check -> clippy -> nightly clippy (advisory) -> doc build -> markdown link check -> test -> release build -> screenshot regression -> cargo-deny -> benchmarks -> PSP EBOOT build -> PPSSPP headless test -> code coverage -> GitHub Pages deploy (WASM)
 
 **Additional workflows:**
 - `memory-ci.yml` -- ASAN + Valgrind massif (non-blocking, `continue-on-error: true`)
@@ -81,11 +81,14 @@ oasis-types     (foundation: Color, Button, InputEvent, backend traits, error ty
 ├── oasis-wm         (window manager: drag/resize, hit testing, decorations)
 ├── oasis-skin       (TOML skin engine, 18 skins, theme derivation)
 ├── oasis-terminal   (90+ commands across 17+ modules, shell features)
-├── oasis-browser    (HTML/CSS/Gemini: DOM, CSS cascade+@media, layout engine, JS DOM bindings)
+├── oasis-browser    (HTML/CSS/Gemini: DOM, CSS cascade, flex/grid layout, calc(), transforms, animations, transitions, @media/@supports, cookies, CSP, JS DOM bindings)
 ├── oasis-js         (JavaScript engine: QuickJS-NG runtime, console API)
 ├── oasis-video      (MP4/H.264+AAC decode; StreamingBuffer sliding-window; features: h264, no-std-demux, video-decode)
 ├── oasis-vector     (vector graphics: scene graph, path ops, icons, frame-driven animations)
 ├── oasis-shader     (animated shader wallpapers: Shadertoy-style fragment shaders)
+├── oasis-rasterize  (software rasterizer for CPU-side rendering)
+├── oasis-i18n       (internationalization support)
+├── oasis-test-backend (mock backend for testing)
 ├── oasis-app-core   (shared app framework: AppTrait, common utilities)
 ├── oasis-app-games  (Games app)
 ├── oasis-app-paint  (Paint app)
@@ -120,12 +123,12 @@ Core code never calls platform APIs directly.
 
 ### Core Modules
 
-The repository contains 34 crates (32 in the workspace, 2 excluded PSP crates). Each module below is its own crate:
+The repository contains 37 crates (35 in the workspace, 2 excluded PSP crates). Each module below is its own crate:
 
 - **oasis-types** -- Foundation types: `Color`, `Button`, `InputEvent`, backend traits (`SdiCore`, `SdiBackend`, `InputBackend`, `NetworkBackend`, `AudioBackend`), error types, TLS, bitmap font metrics, `geometry.rs` (shared shape algorithms)
 - **oasis-sdi** -- Scene Display Interface: named objects with position, size, color, texture, text, z-order, gradients, rounded corners, shadows
-- **oasis-skin** -- Data-driven TOML skin system with 18 skins (12 external TOML in `skins/`, 18 built-in). Theme derivation from 9 base colors to ~30 UI element colors.
-- **oasis-browser** -- Embeddable HTML/CSS/Gemini rendering engine: DOM parser, CSS cascade with `@media` query support, block/inline/table layout, link navigation, reader mode, JavaScript DOM bindings
+- **oasis-skin** -- Data-driven TOML skin system with 18 skins (14 external TOML in `skins/`, 18 built-in). Theme derivation from 9 base colors to ~30 UI element colors.
+- **oasis-browser** -- Embeddable HTML/CSS/Gemini rendering engine: DOM parser, CSS cascade with `@media`/`@supports` queries, flex/grid/table layout, `calc()`, transforms, animations, transitions, cookies, gzip, CSP, link navigation, reader mode, JavaScript DOM bindings
 - **oasis-js** -- JavaScript engine wrapping QuickJS-NG via rquickjs: `console` API, inline `<script>` execution, DOM manipulation. Feature-gated (`javascript`)
 - **oasis-ui** -- 32 reusable widgets: Button, Card, TabBar, Panel, InputField, ListView, ScrollView, ProgressBar, Toggle, NinePatch, flex layout, Accordion, Avatar, Badge, Checkbox, ColorPicker, ContextMenu, DatePicker, Divider, Dropdown, Icon, Modal, Radio, RichText, Slider, SpinBox, Spinner, SplitPane, Table, Toast, Tooltip, TreeView
 - **oasis-vfs** -- Virtual file system: `MemoryVfs` (in-RAM), `RealVfs` (disk), `GameAssetVfs` (UE5 with overlay writes)
@@ -157,7 +160,7 @@ Proportional bitmap font rendering from glyph ink bounds. `oasis-types` provides
 - **Formatting:** `cargo fmt` with `rustfmt.toml` -- 4-space indent, Unix newlines, `fn_params_layout = "Tall"`, `match_block_trailing_comma = true`
 - **Linting:** Clippy warnings are CI errors (`-D warnings`). Workspace lints: `clone_on_ref_ptr`, `dbg_macro`, `todo`, `unimplemented` = warn; `unsafe_op_in_unsafe_fn` = warn; `unwrap_used` = **deny**
 - **Unsafe:** All unsafe blocks require `// SAFETY:` comments. Unsafe is limited to FFI boundary, SDL texture lifetime erasure, and PSP system calls.
-- **Tests:** In-module (`#[cfg(test)] mod tests`), not in a separate `tests/` directory. 5,800+ tests across the workspace. Dev dependency: `tempfile = "3"` for oasis-core.
+- **Tests:** In-module (`#[cfg(test)] mod tests`), not in a separate `tests/` directory. 6,600+ tests across the workspace. Dev dependency: `tempfile = "3"` for oasis-core.
 - **License:** Dual-licensed Unlicense + MIT
 
 ## Multi-Agent System
