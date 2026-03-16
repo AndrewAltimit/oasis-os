@@ -14,10 +14,11 @@ pub mod types;
 pub use computed::ComputedStyle;
 #[allow(unused_imports)]
 pub use types::{
-    AlignItems, BackgroundImage, BorderCollapse, BorderStyle, BoxShadow, BoxSizing, Clear,
+    AlignContent, AlignItems, AlignSelf, Animation, AnimationDirection, AnimationFillMode,
+    AnimationPlayState, BackgroundImage, BorderCollapse, BorderStyle, BoxShadow, BoxSizing, Clear,
     Dimension, Display, FlexDirection, FlexWrap, Float, FontFamily, FontStyle, FontWeight,
     GradientDirection, GradientStop, GridTrackSize, JustifyContent, LinearGradient,
     ListStylePosition, ListStyleType, Overflow, OverflowWrap, Position, ROOT_FONT_SIZE, TextAlign,
-    TextDecoration, TextDirection, TextOverflow, TextShadow, TextTransform, VerticalAlign,
-    Visibility, WhiteSpace, WordBreak,
+    TextDecoration, TextDirection, TextOverflow, TextShadow, TextTransform, TimingFunction,
+    TransformFunction, Transition, VerticalAlign, Visibility, WhiteSpace, WordBreak,
 };

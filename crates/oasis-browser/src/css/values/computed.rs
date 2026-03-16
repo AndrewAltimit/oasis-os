@@ -5,11 +5,12 @@ use rustc_hash::FxHashMap;
 use oasis_types::backend::Color;
 
 use super::types::{
-    AlignItems, BackgroundImage, BorderCollapse, BorderStyle, BoxShadow, BoxSizing, Clear,
-    Dimension, Display, FlexDirection, FlexWrap, Float, FontFamily, FontStyle, FontWeight,
-    GridTrackSize, JustifyContent, ListStylePosition, ListStyleType, Overflow, OverflowWrap,
-    Position, ROOT_FONT_SIZE, TextAlign, TextDecoration, TextDirection, TextOverflow, TextShadow,
-    TextTransform, VerticalAlign, Visibility, WhiteSpace, WordBreak,
+    AlignContent, AlignItems, AlignSelf, Animation, BackgroundImage, BorderCollapse, BorderStyle,
+    BoxShadow, BoxSizing, Clear, Dimension, Display, FlexDirection, FlexWrap, Float, FontFamily,
+    FontStyle, FontWeight, GridTrackSize, JustifyContent, ListStylePosition, ListStyleType,
+    Overflow, OverflowWrap, Position, ROOT_FONT_SIZE, TextAlign, TextDecoration, TextDirection,
+    TextOverflow, TextShadow, TextTransform, Transition, VerticalAlign, Visibility, WhiteSpace,
+    WordBreak,
 };
 
 /// Computed style for a DOM node after cascade resolution.
@@ -97,9 +98,15 @@ pub struct ComputedStyle {
 
     // -- Visual effects -----------------------------------------------
     pub border_radius: f32,
-    pub box_shadow: Option<BoxShadow>,
+    pub box_shadow: Vec<BoxShadow>,
     pub text_shadow: Option<TextShadow>,
     pub opacity: f32,
+
+    // -- Outline ----------------------------------------------------------
+    pub outline_width: f32,
+    pub outline_color: Color,
+    pub outline_style: BorderStyle,
+    pub outline_offset: f32,
 
     // -- Box sizing -----------------------------------------------------
     pub box_sizing: BoxSizing,
@@ -134,6 +141,9 @@ pub struct ComputedStyle {
     pub flex_wrap: FlexWrap,
     pub justify_content: JustifyContent,
     pub align_items: AlignItems,
+    pub align_content: AlignContent,
+    pub align_self: AlignSelf,
+    pub order: i32,
     pub flex_grow: f32,
     pub flex_shrink: f32,
     pub flex_basis: Dimension,
@@ -158,6 +168,15 @@ pub struct ComputedStyle {
     pub margin_right_pct: Option<f32>,
     pub margin_bottom_pct: Option<f32>,
     pub margin_left_pct: Option<f32>,
+
+    // -- Transforms ---------------------------------------------------
+    pub transforms: Vec<super::types::TransformFunction>,
+
+    // -- Transitions ---------------------------------------------------
+    pub transitions: Vec<Transition>,
+
+    // -- Animations ---------------------------------------------------
+    pub animations: Vec<Animation>,
 
     // -- CSS custom properties (--*) ------------------------------------
     pub custom_properties: FxHashMap<String, String>,
@@ -246,9 +265,15 @@ impl Default for ComputedStyle {
 
             // Visual effects
             border_radius: 0.0,
-            box_shadow: None,
+            box_shadow: Vec::new(),
             text_shadow: None,
             opacity: 1.0,
+
+            // Outline
+            outline_width: 0.0,
+            outline_color: Color::BLACK,
+            outline_style: BorderStyle::None,
+            outline_offset: 0.0,
 
             // Box sizing
             box_sizing: BoxSizing::ContentBox,
@@ -281,6 +306,9 @@ impl Default for ComputedStyle {
             flex_wrap: FlexWrap::NoWrap,
             justify_content: JustifyContent::FlexStart,
             align_items: AlignItems::Stretch,
+            align_content: AlignContent::Stretch,
+            align_self: AlignSelf::Auto,
+            order: 0,
             flex_grow: 0.0,
             flex_shrink: 1.0,
             flex_basis: Dimension::Auto,
@@ -303,6 +331,12 @@ impl Default for ComputedStyle {
             margin_right_pct: None,
             margin_bottom_pct: None,
             margin_left_pct: None,
+
+            transforms: Vec::new(),
+
+            transitions: Vec::new(),
+
+            animations: Vec::new(),
 
             custom_properties: FxHashMap::default(),
         }

@@ -62,7 +62,7 @@ pub fn decode_image(data: &[u8]) -> Option<DecodedImage> {
         ImageFormat::Bmp => decode_bmp(data),
         ImageFormat::Png => decode_png(data),
         ImageFormat::Jpeg => decode_jpeg(data),
-        ImageFormat::Gif => None, // Requires `gif` crate
+        ImageFormat::Gif => decode_gif(data),
         ImageFormat::Unknown => None,
     }?;
 
@@ -252,6 +252,31 @@ fn decode_jpeg(data: &[u8]) -> Option<DecodedImage> {
         width: w,
         height: h,
         pixels,
+    })
+}
+
+/// Decode a GIF image using the `gif` crate (first frame only, static).
+fn decode_gif(data: &[u8]) -> Option<DecodedImage> {
+    let mut decoder = gif::DecodeOptions::new();
+    decoder.set_color_output(gif::ColorOutput::RGBA);
+    let mut reader = decoder.read_info(data).ok()?;
+    let frame = reader.read_next_frame().ok()?.cloned()?;
+
+    let w = u32::from(frame.width);
+    let h = u32::from(frame.height);
+    if w == 0 || h == 0 || w > MAX_IMAGE_DIMENSION || h > MAX_IMAGE_DIMENSION {
+        return None;
+    }
+
+    let expected_len = (w as usize) * (h as usize) * 4;
+    if frame.buffer.len() < expected_len {
+        return None;
+    }
+
+    Some(DecodedImage {
+        width: w,
+        height: h,
+        pixels: frame.buffer[..expected_len].to_vec(),
     })
 }
 

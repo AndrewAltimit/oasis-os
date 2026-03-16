@@ -19,6 +19,7 @@ pub(crate) mod paint;
 pub mod plugin;
 pub mod reader;
 pub mod scroll;
+pub mod search;
 pub mod skin;
 
 mod widget_images;
@@ -78,6 +79,8 @@ use std::collections::{HashMap, HashSet};
 use html::dom::NodeId;
 use loader::ResourceRequest;
 use loader::cache::ResourceCache;
+#[cfg(not(target_arch = "wasm32"))]
+use loader::cookies::CookieJar;
 use oasis_types::backend::TextureId;
 use paint::LinkRegion;
 
@@ -145,6 +148,10 @@ pub struct BrowserWidget {
     /// Resource cache (LRU, bounded by byte size).
     cache: ResourceCache,
 
+    /// Session-scoped cookie jar for HTTP requests.
+    #[cfg(not(target_arch = "wasm32"))]
+    cookie_jar: CookieJar,
+
     /// Current loading state.
     state: LoadingState,
 
@@ -205,6 +212,9 @@ pub struct BrowserWidget {
     /// DOM node currently under the cursor (for `:hover`).
     hover_node: Option<NodeId>,
 
+    /// DOM node that currently has keyboard/tab focus (for `:focus`).
+    focused_node: Option<NodeId>,
+
     /// Decoded image data keyed by resolved src URL.
     decoded_images: HashMap<String, image::DecodedImage>,
 
@@ -250,6 +260,31 @@ pub struct BrowserWidget {
     /// Kept alive so the engine can access the DOM for event handlers.
     #[cfg(feature = "javascript")]
     js_doc: Option<js_dom::SharedDoc>,
+
+    /// Pending navigation actions from JavaScript (`location.assign`,
+    /// `history.back`/`forward`).
+    #[cfg(feature = "javascript")]
+    js_nav_actions: js_dom::SharedNavActions,
+
+    /// CSS transition engine for smooth property interpolation.
+    #[allow(dead_code)]
+    transition_engine: css::transition::TransitionEngine,
+
+    /// CSS animation engine for `@keyframes` animations.
+    #[allow(dead_code)]
+    animation_engine: css::animation::AnimationEngine,
+
+    /// Content Security Policy for the current page (parsed from HTTP
+    /// response headers).
+    page_csp: Option<loader::csp::CspPolicy>,
+
+    /// Persistent text measurement cache shared across layout passes.
+    /// Cleared only when the effective font size changes (e.g. zoom).
+    text_cache: layout::text_cache::SharedTextCache,
+
+    /// Last font size used for layout (base * zoom). When this changes
+    /// the text cache is invalidated.
+    last_effective_font_size: f32,
 }
 
 impl BrowserWidget {
@@ -258,11 +293,14 @@ impl BrowserWidget {
         let home = config.features.home_url.clone();
         let cache_bytes = config.cache_size_bytes();
         let smooth = config.smooth_scroll;
+        let effective_font = config.default_font_size * config.zoom_level;
         Self {
             config,
             nav: NavigationController::new(&home),
             scroll: ScrollState::new(238, smooth), // 272 - 34
             cache: ResourceCache::new(cache_bytes),
+            #[cfg(not(target_arch = "wasm32"))]
+            cookie_jar: CookieJar::new(),
             state: LoadingState::Idle,
             error_message: None,
             document: None,
@@ -285,6 +323,7 @@ impl BrowserWidget {
             last_layout_w: 480,
             visited_urls: HashSet::new(),
             hover_node: None,
+            focused_node: None,
             decoded_images: HashMap::new(),
             image_textures: HashMap::new(),
             pending_images: Vec::new(),
@@ -301,6 +340,13 @@ impl BrowserWidget {
             js_engine: None,
             #[cfg(feature = "javascript")]
             js_doc: None,
+            #[cfg(feature = "javascript")]
+            js_nav_actions: std::rc::Rc::new(std::cell::RefCell::new(Vec::new())),
+            transition_engine: css::transition::TransitionEngine::new(),
+            animation_engine: css::animation::AnimationEngine::new(),
+            page_csp: None,
+            text_cache: layout::text_cache::new_shared_cache(),
+            last_effective_font_size: effective_font,
         }
     }
 
@@ -323,6 +369,7 @@ impl BrowserWidget {
         self.window_h = h;
         let vh = self.config.content_height(h) as i32;
         self.scroll.set_viewport_height(vh);
+        self.scroll.set_viewport_width(w as i32);
     }
 
     /// Returns whether the layout tree needs rebuilding.
@@ -348,13 +395,17 @@ impl BrowserWidget {
             .expect("guarded by is_none() early return above");
         let content_h = self.config.content_height(self.window_h);
         let base_url = self.nav.current_url().map(String::from);
-        let measurer = layout::text_cache::CachingMeasurer::new(&SimpleTextMeasurer);
+        let shared = std::rc::Rc::clone(&self.text_cache);
+        let measurer =
+            layout::text_cache::CachingMeasurer::with_shared(&SimpleTextMeasurer, shared);
+        let viewport_w = self.window_w as f32 / self.config.zoom_level;
+        let viewport_h = content_h as f32 / self.config.zoom_level;
         let layout_root = layout::block::build_layout_tree(
             doc,
             &self.styles,
             &measurer,
-            self.window_w as f32,
-            content_h as f32,
+            viewport_w,
+            viewport_h,
             base_url.as_deref(),
             &image_info,
         );
@@ -438,6 +489,55 @@ impl BrowserWidget {
     /// Get a mutable reference to the scroll state.
     pub fn scroll_mut(&mut self) -> &mut ScrollState {
         &mut self.scroll
+    }
+
+    // ---------------------------------------------------------------
+    // Zoom / text scaling
+    // ---------------------------------------------------------------
+
+    /// Current zoom level (1.0 = 100%).
+    pub fn zoom_level(&self) -> f32 {
+        self.config.zoom_level
+    }
+
+    /// Effective font size after applying zoom.
+    pub fn effective_font_size(&self) -> f32 {
+        self.config.default_font_size * self.config.zoom_level
+    }
+
+    /// Zoom in by 25% (max 3.0x).
+    pub fn zoom_in(&mut self) {
+        let new_zoom = (self.config.zoom_level * 1.25).min(3.0);
+        self.set_zoom(new_zoom);
+    }
+
+    /// Zoom out by 20% (min 0.5x).
+    pub fn zoom_out(&mut self) {
+        let new_zoom = (self.config.zoom_level * 0.8).max(0.5);
+        self.set_zoom(new_zoom);
+    }
+
+    /// Reset zoom to 1.0x.
+    pub fn reset_zoom(&mut self) {
+        self.set_zoom(1.0);
+    }
+
+    /// Set an explicit zoom level, clamped to 0.5..=3.0.
+    ///
+    /// Invalidates the text measurement cache and marks layout dirty.
+    fn set_zoom(&mut self, level: f32) {
+        let clamped = level.clamp(0.5, 3.0);
+        if (clamped - self.config.zoom_level).abs() < f32::EPSILON {
+            return;
+        }
+        self.config.zoom_level = clamped;
+        let new_effective = self.effective_font_size();
+        if (new_effective - self.last_effective_font_size).abs() > f32::EPSILON {
+            // Font size changed -- clear persistent text cache.
+            self.text_cache.borrow_mut().clear();
+            self.last_effective_font_size = new_effective;
+        }
+        self.layout_dirty = true;
     }
 }
 

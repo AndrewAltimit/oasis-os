@@ -278,6 +278,15 @@ pub(crate) fn parse_value_list(tokens: &[CssToken]) -> Vec<CssValue> {
                         .collect::<Vec<_>>()
                         .join("");
                     out.push(CssValue::Url(url_str));
+                } else if name.eq_ignore_ascii_case("calc") {
+                    // Preserve calc() expression as raw text for later
+                    // resolution when the containing block size is known.
+                    let args = &inner[1..]; // skip Function token
+                    let args = match args.last() {
+                        Some(CssToken::CloseParen) => &args[..args.len() - 1],
+                        _ => args,
+                    };
+                    out.push(CssValue::Calc(tokens_to_css_text(args)));
                 } else if let Some(c) = try_parse_color(inner) {
                     out.push(CssValue::Color(c));
                 } else if name.eq_ignore_ascii_case("linear-gradient") {

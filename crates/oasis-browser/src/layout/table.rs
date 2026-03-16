@@ -1352,4 +1352,141 @@ mod tests {
             "row should have 1 cell"
         );
     }
+
+    // ---------------------------------------------------------------
+    // Test 14: Nested table (table inside a table cell)
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn nested_table() {
+        let m = FixedMeasurer;
+        let style = table_style();
+
+        // Build an inner table.
+        let inner_row = make_row(vec![make_cell(30.0), make_cell(30.0)]);
+        let inner_table = layout_table(&[inner_row], &style, 100.0, &m);
+
+        // Outer table with a cell containing the inner table.
+        let mut outer_cell_style = ComputedStyle::default();
+        outer_cell_style.display = Display::TableCell;
+        outer_cell_style.width = Dimension::Px(120.0);
+        let mut outer_cell = LayoutBox::new(BoxType::TableCell, outer_cell_style, None);
+        outer_cell.children = vec![inner_table];
+
+        let outer_row = make_row(vec![outer_cell, make_cell(50.0)]);
+        let result = layout_table(&[outer_row], &style, 300.0, &m);
+
+        assert_eq!(result.children.len(), 1, "outer table should have 1 row");
+        assert_eq!(
+            result.children[0].children.len(),
+            2,
+            "outer row should have 2 cells"
+        );
+        // The first cell should contain the inner table.
+        let first_cell = &result.children[0].children[0];
+        assert!(
+            !first_cell.children.is_empty(),
+            "first cell should contain the nested table"
+        );
+    }
+
+    // ---------------------------------------------------------------
+    // Test 15: Table with explicit column widths
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn explicit_column_widths() {
+        let m = FixedMeasurer;
+        let style = table_style();
+
+        let row = make_row(vec![make_cell(100.0), make_cell(200.0)]);
+        let result = layout_table(&[row], &style, 400.0, &m);
+
+        let c0_w = result.children[0].children[0].dimensions.content.width;
+        let c1_w = result.children[0].children[1].dimensions.content.width;
+
+        assert!(
+            c0_w > 0.0 && c1_w > 0.0,
+            "both columns should have positive width"
+        );
+        // The ratio should roughly reflect 100:200 = 1:2.
+        let ratio = c1_w / c0_w.max(0.001);
+        assert!(
+            (ratio - 2.0).abs() < 0.5,
+            "column widths should be ~1:2, got ratio {ratio:.2} \
+             (c0={c0_w:.1}, c1={c1_w:.1})"
+        );
+    }
+
+    // ---------------------------------------------------------------
+    // Test 16: Table with 3 columns, border-collapse
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn three_column_border_collapse() {
+        let m = FixedMeasurer;
+        let mut style = table_style();
+        style.border_collapse = BorderCollapse::Collapse;
+
+        let row = make_row(vec![make_cell(40.0), make_cell(40.0), make_cell(40.0)]);
+        let result = layout_table(&[row], &style, 200.0, &m);
+
+        assert_eq!(result.children[0].children.len(), 3, "should have 3 cells");
+        assert!(
+            result.dimensions.content.width > 0.0,
+            "table width should be positive"
+        );
+    }
+
+    // ---------------------------------------------------------------
+    // Test 17: Single row, single cell auto sizing
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn auto_width_cell_fills_table() {
+        let m = FixedMeasurer;
+        let style = table_style();
+
+        // A cell with no explicit width -- should expand to available.
+        let mut cell_style = ComputedStyle::default();
+        cell_style.display = Display::TableCell;
+        let cell = LayoutBox::new(BoxType::TableCell, cell_style, None);
+
+        let row = make_row(vec![cell]);
+        let result = layout_table(&[row], &style, 200.0, &m);
+
+        assert_eq!(result.children.len(), 1);
+        assert_eq!(result.children[0].children.len(), 1);
+        // Cell width should be positive (at least some minimum).
+        let cell_w = result.children[0].children[0].dimensions.content.width;
+        assert!(
+            cell_w > 0.0,
+            "auto-width cell should have positive width, got {cell_w}"
+        );
+    }
+
+    // ---------------------------------------------------------------
+    // Test 18: Table with border-spacing in separate mode
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn border_spacing_adds_gaps() {
+        let m = FixedMeasurer;
+        let mut style = table_style();
+        style.border_spacing = 8.0;
+        style.border_collapse = BorderCollapse::Separate;
+
+        let row = make_row(vec![make_cell(50.0), make_cell(50.0)]);
+        let result = layout_table(&[row], &style, 300.0, &m);
+
+        // The cells should be offset by the spacing amount.
+        let c0 = &result.children[0].children[0];
+        let c1 = &result.children[0].children[1];
+        let gap = c1.dimensions.content.x - (c0.dimensions.content.x + c0.dimensions.content.width);
+        // Gap should be approximately 8px (border-spacing).
+        assert!(
+            gap >= 7.0,
+            "gap between cells ({gap:.1}) should be >= border-spacing (8)"
+        );
+    }
 }

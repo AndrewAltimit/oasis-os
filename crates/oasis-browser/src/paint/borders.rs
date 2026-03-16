@@ -17,7 +17,7 @@ pub(super) fn paint_borders(
     let d = &layout_box.dimensions;
     let style = &layout_box.style;
     let border = d.border_box();
-    let bx = (border.x + offset_x as f32) as i32;
+    let bx = (border.x - ctx.scroll_x + offset_x as f32) as i32;
     let by = (border.y - ctx.scroll_y + offset_y as f32) as i32;
     let bw = border.width as u32;
     let bh = border.height as u32;
@@ -148,5 +148,83 @@ pub(super) fn paint_border_edge(
         },
         BorderStyle::None => {},
     }
+    Ok(())
+}
+
+/// Paint the CSS `outline` around the border box.
+///
+/// The outline is drawn outside the border box, offset by `outline_offset`.
+/// Unlike borders, outlines do not take up space in the layout.
+pub(super) fn paint_outline(
+    layout_box: &LayoutBox,
+    backend: &mut dyn SdiBackend,
+    offset_x: i32,
+    offset_y: i32,
+    ctx: &PaintContext,
+) -> Result<()> {
+    let style = &layout_box.style;
+
+    if style.outline_width <= 0.0 || style.outline_style == BorderStyle::None {
+        return Ok(());
+    }
+
+    let border = layout_box.dimensions.border_box();
+    let ow = style.outline_width;
+    let oo = style.outline_offset;
+
+    // The outline box is the border box expanded by (outline_offset + outline_width).
+    let ox = (border.x - ctx.scroll_x + offset_x as f32 - oo - ow) as i32;
+    let oy = (border.y - ctx.scroll_y + offset_y as f32 - oo - ow) as i32;
+    let total_w = (border.width + 2.0 * (oo + ow)) as u32;
+    let total_h = (border.height + 2.0 * (oo + ow)) as u32;
+    let thickness = ow as u32;
+    let color = style.outline_color;
+    let outline_style = style.outline_style;
+
+    // Top
+    paint_border_edge(
+        backend,
+        ox,
+        oy,
+        total_w,
+        thickness,
+        color,
+        outline_style,
+        true,
+    )?;
+    // Bottom
+    paint_border_edge(
+        backend,
+        ox,
+        oy + total_h as i32 - thickness as i32,
+        total_w,
+        thickness,
+        color,
+        outline_style,
+        true,
+    )?;
+    // Left
+    paint_border_edge(
+        backend,
+        ox,
+        oy,
+        thickness,
+        total_h,
+        color,
+        outline_style,
+        false,
+    )?;
+    // Right
+    paint_border_edge(
+        backend,
+        ox + total_w as i32 - thickness as i32,
+        oy,
+        thickness,
+        total_h,
+        color,
+        outline_style,
+        false,
+    )?;
+
     Ok(())
 }

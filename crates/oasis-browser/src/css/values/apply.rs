@@ -8,10 +8,12 @@ use super::resolve::{
     resolve_dimension, resolve_font_size, resolve_font_weight, resolve_length, resolve_line_height,
 };
 use super::types::{
-    AlignItems, BackgroundImage, BorderCollapse, BoxSizing, Clear, Display, FlexDirection,
-    FlexWrap, Float, FontFamily, FontStyle, JustifyContent, ListStylePosition, ListStyleType,
-    Overflow, OverflowWrap, Position, TextAlign, TextDecoration, TextOverflow, TextShadow,
-    TextTransform, VerticalAlign, Visibility, WhiteSpace, WordBreak,
+    AlignContent, AlignItems, AlignSelf, Animation, AnimationDirection, AnimationFillMode,
+    AnimationPlayState, BackgroundImage, BorderCollapse, BorderStyle, BoxSizing, Clear, Display,
+    FlexDirection, FlexWrap, Float, FontFamily, FontStyle, JustifyContent, ListStylePosition,
+    ListStyleType, Overflow, OverflowWrap, Position, TextAlign, TextDecoration, TextOverflow,
+    TextShadow, TextTransform, TimingFunction, Transition, VerticalAlign, Visibility, WhiteSpace,
+    WordBreak,
 };
 use crate::css::parser::CssValue;
 
@@ -523,6 +525,8 @@ impl ComputedStyle {
                     self.overflow = match kw {
                         "visible" => Overflow::Visible,
                         "hidden" => Overflow::Hidden,
+                        "scroll" => Overflow::Scroll,
+                        "auto" => Overflow::Auto,
                         _ => return,
                     };
                 }
@@ -536,6 +540,7 @@ impl ComputedStyle {
                         "relative" => Position::Relative,
                         "absolute" => Position::Absolute,
                         "fixed" => Position::Fixed,
+                        "sticky" => Position::Sticky,
                         _ => return,
                     };
                 }
@@ -603,6 +608,38 @@ impl ComputedStyle {
                         "baseline" => AlignItems::Baseline,
                         _ => return,
                     };
+                }
+            },
+            "align-content" => {
+                if let Some(kw) = as_keyword(value) {
+                    self.align_content = match kw {
+                        "flex-start" | "start" => AlignContent::FlexStart,
+                        "flex-end" | "end" => AlignContent::FlexEnd,
+                        "center" => AlignContent::Center,
+                        "space-between" => AlignContent::SpaceBetween,
+                        "space-around" => AlignContent::SpaceAround,
+                        "space-evenly" => AlignContent::SpaceEvenly,
+                        "stretch" => AlignContent::Stretch,
+                        _ => return,
+                    };
+                }
+            },
+            "align-self" => {
+                if let Some(kw) = as_keyword(value) {
+                    self.align_self = match kw {
+                        "auto" => AlignSelf::Auto,
+                        "flex-start" | "start" => AlignSelf::FlexStart,
+                        "flex-end" | "end" => AlignSelf::FlexEnd,
+                        "center" => AlignSelf::Center,
+                        "stretch" => AlignSelf::Stretch,
+                        "baseline" => AlignSelf::Baseline,
+                        _ => return,
+                    };
+                }
+            },
+            "order" => {
+                if let CssValue::Number(n) = value {
+                    self.order = *n as i32;
                 }
             },
             "flex-grow" => {
@@ -680,7 +717,7 @@ impl ComputedStyle {
                 if let Some(kw) = as_keyword(value)
                     && kw == "none"
                 {
-                    self.box_shadow = None;
+                    self.box_shadow = Vec::new();
                 }
                 // Complex box-shadow values are parsed from the raw
                 // declaration list in the cascade.
@@ -796,9 +833,305 @@ impl ComputedStyle {
                 _ => {},
             },
 
+            // -- Outline ------------------------------------------------
+            "outline-width" => {
+                self.outline_width = resolve_length(value, parent_font_size);
+            },
+            "outline-color" => {
+                if let Some(c) = resolve_color_or_current(value, self.color) {
+                    self.outline_color = c;
+                }
+            },
+            "outline-style" => {
+                if let Some(s) = resolve_border_style(value) {
+                    self.outline_style = s;
+                }
+            },
+            "outline-offset" => {
+                self.outline_offset = resolve_length(value, parent_font_size);
+            },
+            "outline" => {
+                // Shorthand: outline: [width] [style] [color]
+                if let Some(kw) = as_keyword(value)
+                    && kw == "none"
+                {
+                    self.outline_style = BorderStyle::None;
+                    self.outline_width = 0.0;
+                    return;
+                }
+                if let CssValue::Multiple(vs) = value {
+                    for v in vs {
+                        if let Some(s) = resolve_border_style(v) {
+                            self.outline_style = s;
+                        } else if let Some(c) = resolve_color(v) {
+                            self.outline_color = c;
+                        } else {
+                            let len = resolve_length(v, parent_font_size);
+                            if len > 0.0 {
+                                self.outline_width = len;
+                            }
+                        }
+                    }
+                }
+            },
+
+            // -- Transforms -------------------------------------------------
+            "transform" => {
+                self.transforms = parse_transform(value, parent_font_size);
+            },
+
+            // -- Transitions ------------------------------------------------
+            "transition" => {
+                if let Some(t) = Self::parse_transition(value) {
+                    self.transitions = vec![t];
+                }
+            },
+
+            // -- Animations -------------------------------------------------
+            "animation" => {
+                if let Some(a) = Self::parse_animation(value) {
+                    self.animations = vec![a];
+                }
+            },
+            "animation-name" => {
+                if let Some(name) = as_keyword(value).or(match value {
+                    CssValue::String(s) => Some(s.as_str()),
+                    _ => None,
+                }) {
+                    if self.animations.is_empty() {
+                        self.animations.push(Animation {
+                            name: name.to_string(),
+                            duration_ms: 0.0,
+                            timing: TimingFunction::Ease,
+                            delay_ms: 0.0,
+                            iteration_count: 1.0,
+                            direction: AnimationDirection::Normal,
+                            fill_mode: AnimationFillMode::None,
+                            play_state: AnimationPlayState::Running,
+                        });
+                    } else {
+                        self.animations[0].name = name.to_string();
+                    }
+                }
+            },
+            "animation-duration" => {
+                if let CssValue::String(s) = value
+                    && let Some(ms) = parse_time(s)
+                {
+                    if self.animations.is_empty() {
+                        self.animations.push(Animation {
+                            name: String::new(),
+                            duration_ms: ms,
+                            timing: TimingFunction::Ease,
+                            delay_ms: 0.0,
+                            iteration_count: 1.0,
+                            direction: AnimationDirection::Normal,
+                            fill_mode: AnimationFillMode::None,
+                            play_state: AnimationPlayState::Running,
+                        });
+                    } else {
+                        self.animations[0].duration_ms = ms;
+                    }
+                }
+            },
+            "animation-timing-function" => {
+                if let Some(kw) = as_keyword(value)
+                    && let Some(tf) = parse_timing_function(kw)
+                {
+                    if self.animations.is_empty() {
+                        self.animations.push(Animation {
+                            name: String::new(),
+                            duration_ms: 0.0,
+                            timing: tf,
+                            delay_ms: 0.0,
+                            iteration_count: 1.0,
+                            direction: AnimationDirection::Normal,
+                            fill_mode: AnimationFillMode::None,
+                            play_state: AnimationPlayState::Running,
+                        });
+                    } else {
+                        self.animations[0].timing = tf;
+                    }
+                }
+            },
+            "animation-delay" => {
+                if let CssValue::String(s) = value
+                    && let Some(ms) = parse_time(s)
+                    && !self.animations.is_empty()
+                {
+                    self.animations[0].delay_ms = ms;
+                }
+            },
+            "animation-iteration-count" => {
+                if let Some(kw) = as_keyword(value) {
+                    let count = parse_iteration_count(kw);
+                    if !self.animations.is_empty() {
+                        self.animations[0].iteration_count = count;
+                    }
+                } else if let CssValue::Number(n) = value
+                    && !self.animations.is_empty()
+                {
+                    self.animations[0].iteration_count = *n;
+                }
+            },
+            "animation-direction" => {
+                if let Some(kw) = as_keyword(value)
+                    && let Some(dir) = parse_animation_direction(kw)
+                    && !self.animations.is_empty()
+                {
+                    self.animations[0].direction = dir;
+                }
+            },
+            "animation-fill-mode" => {
+                if let Some(kw) = as_keyword(value)
+                    && let Some(fm) = parse_animation_fill_mode(kw)
+                    && !self.animations.is_empty()
+                {
+                    self.animations[0].fill_mode = fm;
+                }
+            },
+            "animation-play-state" => {
+                if let Some(kw) = as_keyword(value)
+                    && let Some(ps) = parse_animation_play_state(kw)
+                    && !self.animations.is_empty()
+                {
+                    self.animations[0].play_state = ps;
+                }
+            },
+
             // Unknown properties are silently ignored (per CSS spec).
             _ => {},
         }
+    }
+
+    /// Parse a `transition` shorthand value into a [`Transition`].
+    ///
+    /// Format: `<property> <duration> [<timing>] [<delay>]`
+    /// Example: `all 0.3s ease`, `color 200ms linear 50ms`
+    fn parse_transition(value: &CssValue) -> Option<Transition> {
+        let raw = match value {
+            CssValue::String(s) => s.clone(),
+            CssValue::Keyword(s) => s.clone(),
+            CssValue::Multiple(vs) => {
+                let mut parts = Vec::new();
+                for v in vs {
+                    match v {
+                        CssValue::Keyword(s) | CssValue::String(s) => {
+                            parts.push(s.clone());
+                        },
+                        CssValue::Length(n, _) => parts.push(format!("{n}px")),
+                        CssValue::Number(n) => parts.push(format!("{n}")),
+                        _ => {},
+                    }
+                }
+                parts.join(" ")
+            },
+            _ => return None,
+        };
+
+        let tokens: Vec<&str> = raw.split_whitespace().collect();
+        if tokens.is_empty() {
+            return None;
+        }
+
+        let property = tokens[0].to_string();
+        let duration_ms = tokens.get(1).and_then(|s| parse_time(s)).unwrap_or(0.0);
+        let mut timing = TimingFunction::Ease;
+        let mut delay_ms = 0.0;
+
+        if let Some(t) = tokens.get(2) {
+            if let Some(tf) = parse_timing_function(t) {
+                timing = tf;
+                if let Some(d) = tokens.get(3) {
+                    delay_ms = parse_time(d).unwrap_or(0.0);
+                }
+            } else {
+                // Not a timing function keyword, try as delay.
+                delay_ms = parse_time(t).unwrap_or(0.0);
+            }
+        }
+
+        Some(Transition {
+            property,
+            duration_ms,
+            timing,
+            delay_ms,
+        })
+    }
+
+    /// Parse an `animation` shorthand value into an [`Animation`].
+    ///
+    /// Format: `<name> <duration> [<timing>] [<delay>] [<iteration-count>]
+    ///          [<direction>] [<fill-mode>] [<play-state>]`
+    /// Example: `spin 2s linear infinite`
+    fn parse_animation(value: &CssValue) -> Option<Animation> {
+        let raw = match value {
+            CssValue::String(s) => s.clone(),
+            CssValue::Keyword(s) => s.clone(),
+            CssValue::Multiple(vs) => {
+                let mut parts = Vec::new();
+                for v in vs {
+                    match v {
+                        CssValue::Keyword(s) | CssValue::String(s) => {
+                            parts.push(s.clone());
+                        },
+                        CssValue::Length(n, _) => parts.push(format!("{n}px")),
+                        CssValue::Number(n) => parts.push(format!("{n}")),
+                        _ => {},
+                    }
+                }
+                parts.join(" ")
+            },
+            _ => return None,
+        };
+
+        let tokens: Vec<&str> = raw.split_whitespace().collect();
+        if tokens.is_empty() {
+            return None;
+        }
+
+        let name = tokens[0].to_string();
+        let duration_ms = tokens.get(1).and_then(|s| parse_time(s)).unwrap_or(0.0);
+        let mut timing = TimingFunction::Ease;
+        let mut delay_ms = 0.0;
+        let mut iteration_count = 1.0_f32;
+        let mut direction = AnimationDirection::Normal;
+        let mut fill_mode = AnimationFillMode::None;
+        let mut play_state = AnimationPlayState::Running;
+
+        // Parse remaining tokens positionally, classifying each.
+        let mut time_idx = 0; // track which time value we're on
+        for &tok in tokens.iter().skip(2) {
+            if let Some(tf) = parse_timing_function(tok) {
+                timing = tf;
+            } else if let Some(dir) = parse_animation_direction(tok) {
+                direction = dir;
+            } else if let Some(fm) = parse_animation_fill_mode(tok) {
+                fill_mode = fm;
+            } else if let Some(ps) = parse_animation_play_state(tok) {
+                play_state = ps;
+            } else if tok == "infinite" {
+                iteration_count = f32::INFINITY;
+            } else if let Ok(n) = tok.parse::<f32>() {
+                iteration_count = n;
+            } else if let Some(ms) = parse_time(tok)
+                && time_idx == 0
+            {
+                delay_ms = ms;
+                time_idx += 1;
+            }
+        }
+
+        Some(Animation {
+            name,
+            duration_ms,
+            timing,
+            delay_ms,
+            iteration_count,
+            direction,
+            fill_mode,
+            play_state,
+        })
     }
 
     /// Reset a single property to its CSS initial value.
@@ -836,9 +1169,205 @@ impl ComputedStyle {
             "width" => self.width = initial.width,
             "height" => self.height = initial.height,
             "border-collapse" => self.border_collapse = initial.border_collapse,
+            "outline" | "outline-width" => self.outline_width = initial.outline_width,
+            "outline-color" => self.outline_color = initial.outline_color,
+            "outline-style" => self.outline_style = initial.outline_style,
+            "outline-offset" => self.outline_offset = initial.outline_offset,
+            "transform" => self.transforms = Vec::new(),
+            "animation" => self.animations = Vec::new(),
             _ => {},
         }
     }
+}
+
+/// Parse a CSS time value (e.g. `0.3s`, `200ms`) into milliseconds.
+fn parse_time(s: &str) -> Option<f32> {
+    let s = s.trim();
+    if let Some(rest) = s.strip_suffix("ms") {
+        rest.parse::<f32>().ok()
+    } else if let Some(rest) = s.strip_suffix('s') {
+        rest.parse::<f32>().ok().map(|v| v * 1000.0)
+    } else {
+        // Try bare number as seconds.
+        s.parse::<f32>().ok().map(|v| v * 1000.0)
+    }
+}
+
+/// Parse a CSS timing-function keyword.
+fn parse_timing_function(s: &str) -> Option<TimingFunction> {
+    match s {
+        "linear" => Some(TimingFunction::Linear),
+        "ease" => Some(TimingFunction::Ease),
+        "ease-in" => Some(TimingFunction::EaseIn),
+        "ease-out" => Some(TimingFunction::EaseOut),
+        "ease-in-out" => Some(TimingFunction::EaseInOut),
+        _ => None,
+    }
+}
+
+/// Parse a CSS `animation-iteration-count` value.
+fn parse_iteration_count(s: &str) -> f32 {
+    if s == "infinite" {
+        f32::INFINITY
+    } else {
+        s.parse::<f32>().unwrap_or(1.0)
+    }
+}
+
+/// Parse a CSS `animation-direction` keyword.
+fn parse_animation_direction(s: &str) -> Option<AnimationDirection> {
+    match s {
+        "normal" => Some(AnimationDirection::Normal),
+        "reverse" => Some(AnimationDirection::Reverse),
+        "alternate" => Some(AnimationDirection::Alternate),
+        "alternate-reverse" => Some(AnimationDirection::AlternateReverse),
+        _ => None,
+    }
+}
+
+/// Parse a CSS `animation-fill-mode` keyword.
+fn parse_animation_fill_mode(s: &str) -> Option<AnimationFillMode> {
+    match s {
+        "none" => Some(AnimationFillMode::None),
+        "forwards" => Some(AnimationFillMode::Forwards),
+        "backwards" => Some(AnimationFillMode::Backwards),
+        "both" => Some(AnimationFillMode::Both),
+        _ => None,
+    }
+}
+
+/// Parse a CSS `animation-play-state` keyword.
+fn parse_animation_play_state(s: &str) -> Option<AnimationPlayState> {
+    match s {
+        "running" => Some(AnimationPlayState::Running),
+        "paused" => Some(AnimationPlayState::Paused),
+        _ => None,
+    }
+}
+
+/// Parse a CSS `transform` value into a list of [`TransformFunction`]s.
+///
+/// Supports: `translate(x, y)`, `translateX(x)`, `translateY(y)`,
+/// `scale(s)`, `scale(sx, sy)`, `scaleX(sx)`, `scaleY(sy)`,
+/// `rotate(angle)`, and `none`.
+///
+/// Multiple functions can be chained: `translate(10px, 0) scale(1.5)`.
+fn parse_transform(
+    value: &CssValue,
+    parent_font_size: f32,
+) -> Vec<super::types::TransformFunction> {
+    use super::types::TransformFunction;
+
+    let raw = match value {
+        CssValue::Keyword(s) if s == "none" => return Vec::new(),
+        CssValue::Keyword(s) | CssValue::String(s) => s.clone(),
+        _ => return Vec::new(),
+    };
+
+    let mut result = Vec::new();
+    let mut rest = raw.as_str();
+
+    while !rest.is_empty() {
+        rest = rest.trim_start();
+        if rest.is_empty() {
+            break;
+        }
+        // Find function name and opening paren.
+        let Some(paren_pos) = rest.find('(') else {
+            break;
+        };
+        let func_name = rest[..paren_pos].trim();
+        let after_paren = &rest[paren_pos + 1..];
+        let Some(close_pos) = after_paren.find(')') else {
+            break;
+        };
+        let args_str = after_paren[..close_pos].trim();
+        rest = &after_paren[close_pos + 1..];
+
+        // Parse comma-separated arguments.
+        let args: Vec<&str> = args_str.split(',').map(|s| s.trim()).collect();
+
+        match func_name {
+            "translate" => {
+                let x =
+                    parse_transform_length(args.first().copied().unwrap_or("0"), parent_font_size);
+                let y =
+                    parse_transform_length(args.get(1).copied().unwrap_or("0"), parent_font_size);
+                result.push(TransformFunction::Translate(x, y));
+            },
+            "translateX" | "translatex" => {
+                let x =
+                    parse_transform_length(args.first().copied().unwrap_or("0"), parent_font_size);
+                result.push(TransformFunction::Translate(x, 0.0));
+            },
+            "translateY" | "translatey" => {
+                let y =
+                    parse_transform_length(args.first().copied().unwrap_or("0"), parent_font_size);
+                result.push(TransformFunction::Translate(0.0, y));
+            },
+            "scale" => {
+                let sx = args
+                    .first()
+                    .and_then(|s| s.parse::<f32>().ok())
+                    .unwrap_or(1.0);
+                let sy = args
+                    .get(1)
+                    .and_then(|s| s.parse::<f32>().ok())
+                    .unwrap_or(sx);
+                result.push(TransformFunction::Scale(sx, sy));
+            },
+            "scaleX" | "scalex" => {
+                let sx = args
+                    .first()
+                    .and_then(|s| s.parse::<f32>().ok())
+                    .unwrap_or(1.0);
+                result.push(TransformFunction::Scale(sx, 1.0));
+            },
+            "scaleY" | "scaley" => {
+                let sy = args
+                    .first()
+                    .and_then(|s| s.parse::<f32>().ok())
+                    .unwrap_or(1.0);
+                result.push(TransformFunction::Scale(1.0, sy));
+            },
+            "rotate" => {
+                let angle = parse_angle(args.first().copied().unwrap_or("0"));
+                result.push(TransformFunction::Rotate(angle));
+            },
+            _ => {},
+        }
+    }
+
+    // Helper: use resolve_length for px/em/rem values in transform args.
+    fn parse_transform_length(s: &str, parent_font_size: f32) -> f32 {
+        let s = s.trim();
+        if let Some(px) = s.strip_suffix("px") {
+            px.trim().parse::<f32>().unwrap_or(0.0)
+        } else if let Some(em) = s.strip_suffix("em") {
+            em.trim().parse::<f32>().unwrap_or(0.0) * parent_font_size
+        } else if let Some(rem) = s.strip_suffix("rem") {
+            rem.trim().parse::<f32>().unwrap_or(0.0) * super::types::ROOT_FONT_SIZE
+        } else {
+            // Bare number treated as px.
+            s.parse::<f32>().unwrap_or(0.0)
+        }
+    }
+
+    fn parse_angle(s: &str) -> f32 {
+        let s = s.trim();
+        if let Some(deg) = s.strip_suffix("deg") {
+            deg.trim().parse::<f32>().unwrap_or(0.0)
+        } else if let Some(rad) = s.strip_suffix("rad") {
+            rad.trim().parse::<f32>().unwrap_or(0.0).to_degrees()
+        } else if let Some(turn) = s.strip_suffix("turn") {
+            turn.trim().parse::<f32>().unwrap_or(0.0) * 360.0
+        } else {
+            // Bare number treated as degrees.
+            s.parse::<f32>().unwrap_or(0.0)
+        }
+    }
+
+    result
 }
 
 #[cfg(test)]
@@ -1126,7 +1655,8 @@ mod tests {
                     | "list-style-type" | "list-style-position"
                     | "border-collapse" | "border-spacing"
                     | "z-index" | "flex-direction" | "flex-wrap"
-                    | "justify-content" | "align-items"
+                    | "justify-content" | "align-items" | "align-content"
+                    | "align-self" | "order"
                     | "flex-grow" | "flex-shrink" | "flex-basis"
                     | "gap" | "row-gap" | "column-gap"
                     | "grid-template-columns" | "grid-template-rows"
@@ -1149,5 +1679,66 @@ mod tests {
                 prop_assert_eq!(s.color, before_color);
             }
         }
+    }
+
+    // -- Transition parsing tests ----------------------------------------
+
+    #[test]
+    fn parse_transition_all_ease() {
+        let mut s = ComputedStyle::default();
+        s.apply_declaration(
+            "transition",
+            &CssValue::String("all 0.3s ease".into()),
+            16.0,
+        );
+        assert_eq!(s.transitions.len(), 1);
+        let t = &s.transitions[0];
+        assert_eq!(t.property, "all");
+        assert!((t.duration_ms - 300.0).abs() < 0.1);
+        assert_eq!(t.timing, TimingFunction::Ease);
+        assert!((t.delay_ms).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn parse_transition_ms_with_delay() {
+        let mut s = ComputedStyle::default();
+        s.apply_declaration(
+            "transition",
+            &CssValue::String("color 200ms linear 50ms".into()),
+            16.0,
+        );
+        assert_eq!(s.transitions.len(), 1);
+        let t = &s.transitions[0];
+        assert_eq!(t.property, "color");
+        assert!((t.duration_ms - 200.0).abs() < 0.1);
+        assert_eq!(t.timing, TimingFunction::Linear);
+        assert!((t.delay_ms - 50.0).abs() < 0.1);
+    }
+
+    #[test]
+    fn parse_transition_ease_in_out() {
+        let mut s = ComputedStyle::default();
+        s.apply_declaration(
+            "transition",
+            &CssValue::String("opacity 1s ease-in-out".into()),
+            16.0,
+        );
+        assert_eq!(s.transitions.len(), 1);
+        let t = &s.transitions[0];
+        assert_eq!(t.property, "opacity");
+        assert!((t.duration_ms - 1000.0).abs() < 0.1);
+        assert_eq!(t.timing, TimingFunction::EaseInOut);
+    }
+
+    #[test]
+    fn parse_time_seconds() {
+        assert!((parse_time("0.3s").unwrap() - 300.0).abs() < 0.1);
+        assert!((parse_time("1s").unwrap() - 1000.0).abs() < 0.1);
+    }
+
+    #[test]
+    fn parse_time_milliseconds() {
+        assert!((parse_time("200ms").unwrap() - 200.0).abs() < 0.1);
+        assert!((parse_time("50ms").unwrap() - 50.0).abs() < 0.1);
     }
 }

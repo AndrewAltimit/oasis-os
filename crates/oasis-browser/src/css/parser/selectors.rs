@@ -150,6 +150,18 @@ impl CssParser {
                                 if self.peek() == &CssToken::CloseParen {
                                     self.advance();
                                 }
+                            } else if lc == "is" || lc == "where" {
+                                // Parse :is(selector-list) / :where(selector-list)
+                                let inner_list = self.parse_compound_selector_list();
+                                self.skip_whitespace();
+                                if self.peek() == &CssToken::CloseParen {
+                                    self.advance();
+                                }
+                                if lc == "is" {
+                                    parts.push(SimpleSelector::Is(inner_list));
+                                } else {
+                                    parts.push(SimpleSelector::Where(inner_list));
+                                }
                             } else {
                                 // Functional pseudo-class like :nth-child(2n+1)
                                 let arg = self.consume_until_close_paren();
@@ -173,6 +185,29 @@ impl CssParser {
         } else {
             Some(CompoundSelector { parts })
         }
+    }
+
+    /// Parse a comma-separated list of compound selectors inside `:is()` / `:where()`.
+    ///
+    /// Stops at `)` (does not consume it).
+    fn parse_compound_selector_list(&mut self) -> Vec<CompoundSelector> {
+        let mut list = Vec::new();
+        loop {
+            self.skip_whitespace();
+            if self.peek() == &CssToken::CloseParen || self.peek() == &CssToken::Eof {
+                break;
+            }
+            if let Some(compound) = self.parse_compound_selector() {
+                list.push(compound);
+            }
+            self.skip_whitespace();
+            if self.peek() == &CssToken::Comma {
+                self.advance();
+            } else {
+                break;
+            }
+        }
+        list
     }
 
     // -- attribute selector / pseudo-class helpers ---------------------

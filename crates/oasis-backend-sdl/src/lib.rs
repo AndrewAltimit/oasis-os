@@ -595,10 +595,8 @@ mod tests {
             map_key_down(Keycode::Space),
             Some(InputEvent::ButtonPress(Button::Triangle))
         );
-        assert_eq!(
-            map_key_down(Keycode::Tab),
-            Some(InputEvent::ButtonPress(Button::Square))
-        );
+        // Tab is handled in map_sdl_event (with Shift detection).
+        assert_eq!(map_key_down(Keycode::Tab), None);
     }
 
     #[test]
@@ -683,10 +681,8 @@ mod tests {
             map_key_up(Keycode::Space),
             Some(InputEvent::ButtonRelease(Button::Triangle))
         );
-        assert_eq!(
-            map_key_up(Keycode::Tab),
-            Some(InputEvent::ButtonRelease(Button::Square))
-        );
+        // Tab is handled in map_sdl_event (with Shift detection).
+        assert_eq!(map_key_up(Keycode::Tab), None);
     }
 
     #[test]
@@ -711,6 +707,7 @@ mod tests {
     fn key_down_up_symmetry() {
         // Every mapped key_down should have a corresponding key_up
         // (except Backspace and F11).
+        // Tab is handled in map_sdl_event (with Shift detection).
         let keys = [
             Keycode::Up,
             Keycode::Down,
@@ -719,7 +716,6 @@ mod tests {
             Keycode::Return,
             Keycode::Escape,
             Keycode::Space,
-            Keycode::Tab,
             Keycode::F1,
             Keycode::F2,
             Keycode::Q,

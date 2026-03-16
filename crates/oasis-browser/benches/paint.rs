@@ -138,6 +138,7 @@ fn bench_paint(c: &mut Criterion) {
                 let mut backend = NullBackend;
                 let vp = PaintViewport {
                     scroll_y: 0.0,
+                    scroll_x: 0.0,
                     x: 0,
                     y: 0,
                     width: 480.0,

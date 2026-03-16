@@ -106,6 +106,18 @@ fn build_box_for_node(
                 return None;
             }
 
+            // Hide children of closed <details> (except <summary>).
+            // A <details> element without the `open` attribute hides all
+            // non-<summary> children.
+            if elem.tag != TagName::Summary
+                && let Some(parent_id) = node.parent
+                && let NodeKind::Element(parent_elem) = &doc.get(parent_id).kind
+                && parent_elem.tag == TagName::Details
+                && parent_elem.get_attribute("open").is_none()
+            {
+                return None;
+            }
+
             // Determine box type.
             let box_type = box_type_for_element(elem, &style);
 

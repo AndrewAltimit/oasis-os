@@ -5,6 +5,7 @@
 
 use super::state::FormState;
 use super::types::{FormData, FormElement, FormMethod};
+use super::validation::ValidationError;
 
 // -----------------------------------------------------------------------
 // FormManager
@@ -19,6 +20,8 @@ pub struct FormManager {
     pub focused_form: Option<usize>,
     /// Name of the currently focused element within that form.
     pub focused_element: Option<String>,
+    /// Validation errors from the last submission attempt.
+    pub validation_errors: Vec<ValidationError>,
 }
 
 impl FormManager {
@@ -28,6 +31,7 @@ impl FormManager {
             forms: Vec::new(),
             focused_form: None,
             focused_element: None,
+            validation_errors: Vec::new(),
         }
     }
 
@@ -152,8 +156,17 @@ impl FormManager {
     }
 
     /// Submit a form by id, returning the collected data.
-    pub fn submit(&self, form_id: usize) -> Option<FormData> {
+    ///
+    /// Runs validation first. If any errors are found the errors are
+    /// stored in `self.validation_errors` and `None` is returned.
+    pub fn submit(&mut self, form_id: usize) -> Option<FormData> {
         let form = self.forms.get(form_id)?;
+        let errors = super::validation::validate_form(&form.elements);
+        if !errors.is_empty() {
+            self.validation_errors = errors;
+            return None;
+        }
+        self.validation_errors.clear();
         Some(FormData {
             fields: form.collect(),
             method: form.method,
@@ -173,6 +186,7 @@ impl FormManager {
         self.forms.clear();
         self.focused_form = None;
         self.focused_element = None;
+        self.validation_errors.clear();
     }
 }
 
@@ -205,6 +219,11 @@ mod tests {
                 placeholder: "Username".into(),
                 maxlength: Some(20),
                 input_type: InputType::Text,
+                required: false,
+                minlength: None,
+                pattern: None,
+                min: None,
+                max: None,
             },
         );
         mgr.add_element(
@@ -215,6 +234,11 @@ mod tests {
                 placeholder: "Password".into(),
                 maxlength: None,
                 input_type: InputType::Password,
+                required: false,
+                minlength: None,
+                pattern: None,
+                min: None,
+                max: None,
             },
         );
         mgr.add_element(
@@ -275,6 +299,11 @@ mod tests {
                 placeholder: "Search".into(),
                 maxlength: None,
                 input_type: InputType::Text,
+                required: false,
+                minlength: None,
+                pattern: None,
+                min: None,
+                max: None,
             },
         );
         assert_eq!(mgr.forms[fid].elements.len(), 1);
@@ -291,6 +320,11 @@ mod tests {
                 placeholder: String::new(),
                 maxlength: None,
                 input_type: InputType::Text,
+                required: false,
+                minlength: None,
+                pattern: None,
+                min: None,
+                max: None,
             },
         );
         // No panic, no forms created.
@@ -414,6 +448,11 @@ mod tests {
                 placeholder: String::new(),
                 maxlength: Some(3),
                 input_type: InputType::Text,
+                required: false,
+                minlength: None,
+                pattern: None,
+                min: None,
+                max: None,
             },
         );
         mgr.focused_form = Some(fid);
@@ -764,6 +803,11 @@ mod tests {
                 placeholder: String::new(),
                 maxlength: None,
                 input_type: InputType::Text,
+                required: false,
+                minlength: None,
+                pattern: None,
+                min: None,
+                max: None,
             },
         );
 
@@ -793,7 +837,7 @@ mod tests {
 
     #[test]
     fn unchecked_checkbox_not_in_submission() {
-        let mgr = make_manager_with_login_form();
+        let mut mgr = make_manager_with_login_form();
         let data = mgr.submit(0).expect("submit should succeed");
         let pairs = data.to_pairs();
         assert!(!pairs.iter().any(|(k, _)| k == "remember"));
@@ -821,7 +865,7 @@ mod tests {
 
     #[test]
     fn submit_nonexistent_form_returns_none() {
-        let mgr = FormManager::new();
+        let mut mgr = FormManager::new();
         assert!(mgr.submit(0).is_none());
     }
 
@@ -853,6 +897,11 @@ mod tests {
                 placeholder: String::new(),
                 maxlength: None,
                 input_type: InputType::Text,
+                required: false,
+                minlength: None,
+                pattern: None,
+                min: None,
+                max: None,
             },
         );
         mgr.add_element(
@@ -922,6 +971,11 @@ mod tests {
                 placeholder: String::new(),
                 maxlength: None,
                 input_type: InputType::Text,
+                required: false,
+                minlength: None,
+                pattern: None,
+                min: None,
+                max: None,
             },
         );
         mgr.add_element(
@@ -932,6 +986,11 @@ mod tests {
                 placeholder: String::new(),
                 maxlength: None,
                 input_type: InputType::Text,
+                required: false,
+                minlength: None,
+                pattern: None,
+                min: None,
+                max: None,
             },
         );
 
@@ -956,6 +1015,11 @@ mod tests {
                 placeholder: String::new(),
                 maxlength: None,
                 input_type: InputType::Text,
+                required: false,
+                minlength: None,
+                pattern: None,
+                min: None,
+                max: None,
             },
         );
         mgr.add_element(
@@ -966,6 +1030,11 @@ mod tests {
                 placeholder: String::new(),
                 maxlength: None,
                 input_type: InputType::Text,
+                required: false,
+                minlength: None,
+                pattern: None,
+                min: None,
+                max: None,
             },
         );
 
@@ -1073,6 +1142,9 @@ mod tests {
                 rows: 5,
                 cols: 40,
                 placeholder: "Write here".into(),
+                required: false,
+                minlength: None,
+                maxlength: None,
             },
         );
 
@@ -1092,6 +1164,9 @@ mod tests {
                 rows: 3,
                 cols: 40,
                 placeholder: String::new(),
+                required: false,
+                minlength: None,
+                maxlength: None,
             },
         );
 
@@ -1277,6 +1352,11 @@ mod tests {
                 placeholder: String::new(),
                 maxlength: None,
                 input_type: InputType::Text,
+                required: false,
+                minlength: None,
+                pattern: None,
+                min: None,
+                max: None,
             },
         );
 

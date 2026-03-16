@@ -15,7 +15,7 @@ pub(super) fn paint_list_marker(
     ctx: &PaintContext,
 ) -> Result<()> {
     let content = &layout_box.dimensions.content;
-    let x = (content.x + offset_x as f32 - 20.0) as i32;
+    let x = (content.x - ctx.scroll_x + offset_x as f32 - 20.0) as i32;
     let y = (content.y - ctx.scroll_y + offset_y as f32) as i32;
     let color = layout_box.style.color;
     let font_size = layout_box.style.font_size as u16;

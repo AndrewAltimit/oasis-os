@@ -34,6 +34,10 @@ pub enum InputEvent {
     MouseWheel { delta: i32 },
     /// Toggle fullscreen kiosk mode for the active window.
     ToggleFullscreen,
+    /// Tab key pressed (cycle focus forward).
+    Tab,
+    /// Shift+Tab key pressed (cycle focus backward).
+    ShiftTab,
     /// User requested quit (window close, etc.).
     Quit,
 }
@@ -269,6 +273,8 @@ mod tests {
             InputEvent::PointerRelease { x: 0, y: 0 },
             InputEvent::MouseWheel { delta: 1 },
             InputEvent::ToggleFullscreen,
+            InputEvent::Tab,
+            InputEvent::ShiftTab,
             InputEvent::FocusGained,
             InputEvent::FocusLost,
             InputEvent::Quit,

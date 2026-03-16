@@ -45,6 +45,10 @@ pub enum SimpleSelector {
     PseudoElement(String),
     /// Negation: `:not(selector)`.
     Not(Box<CompoundSelector>),
+    /// `:is(selector-list)` -- matches if any inner selector matches.
+    Is(Vec<CompoundSelector>),
+    /// `:where(selector-list)` -- like `:is()` but zero specificity.
+    Where(Vec<CompoundSelector>),
     /// Attribute selector: `[attr]`, `[attr=val]`, etc.
     Attribute {
         name: String,
@@ -126,23 +130,27 @@ impl Selector {
                     },
                     SimpleSelector::Not(inner) => {
                         // :not() itself doesn't count, but its argument does.
-                        for inner_simple in &inner.parts {
-                            match inner_simple {
-                                SimpleSelector::Id(_) => {
-                                    ids = ids.saturating_add(1);
-                                },
-                                SimpleSelector::Class(_)
-                                | SimpleSelector::PseudoClass(_)
-                                | SimpleSelector::PseudoClassFn(_, _)
-                                | SimpleSelector::Attribute { .. } => {
-                                    classes = classes.saturating_add(1);
-                                },
-                                SimpleSelector::Type(_) => {
-                                    types = types.saturating_add(1);
-                                },
-                                _ => {},
-                            }
-                        }
+                        let inner_spec = compound_specificity(inner);
+                        ids = ids.saturating_add(inner_spec.ids);
+                        classes = classes.saturating_add(inner_spec.classes);
+                        types = types.saturating_add(inner_spec.types);
+                    },
+                    SimpleSelector::Is(inner_list) => {
+                        // :is() takes the max specificity of its arguments.
+                        let max_spec = inner_list.iter().map(compound_specificity).max().unwrap_or(
+                            Specificity {
+                                inline: 0,
+                                ids: 0,
+                                classes: 0,
+                                types: 0,
+                            },
+                        );
+                        ids = ids.saturating_add(max_spec.ids);
+                        classes = classes.saturating_add(max_spec.classes);
+                        types = types.saturating_add(max_spec.types);
+                    },
+                    SimpleSelector::Where(_) => {
+                        // :where() contributes zero specificity.
                     },
                     SimpleSelector::Type(_) | SimpleSelector::PseudoElement(_) => {
                         types = types.saturating_add(1);
@@ -157,6 +165,62 @@ impl Selector {
             classes,
             types,
         }
+    }
+}
+
+/// Compute the specificity contribution of a single compound selector.
+///
+/// Used by `:not()` and `:is()` to determine the specificity of their
+/// inner selector arguments.
+fn compound_specificity(compound: &CompoundSelector) -> Specificity {
+    let mut ids: u8 = 0;
+    let mut classes: u8 = 0;
+    let mut types: u8 = 0;
+    for simple in &compound.parts {
+        match simple {
+            SimpleSelector::Id(_) => {
+                ids = ids.saturating_add(1);
+            },
+            SimpleSelector::Class(_)
+            | SimpleSelector::PseudoClass(_)
+            | SimpleSelector::PseudoClassFn(_, _)
+            | SimpleSelector::Attribute { .. } => {
+                classes = classes.saturating_add(1);
+            },
+            SimpleSelector::Not(inner) => {
+                let inner_spec = compound_specificity(inner);
+                ids = ids.saturating_add(inner_spec.ids);
+                classes = classes.saturating_add(inner_spec.classes);
+                types = types.saturating_add(inner_spec.types);
+            },
+            SimpleSelector::Is(inner_list) => {
+                let max_spec =
+                    inner_list
+                        .iter()
+                        .map(compound_specificity)
+                        .max()
+                        .unwrap_or(Specificity {
+                            inline: 0,
+                            ids: 0,
+                            classes: 0,
+                            types: 0,
+                        });
+                ids = ids.saturating_add(max_spec.ids);
+                classes = classes.saturating_add(max_spec.classes);
+                types = types.saturating_add(max_spec.types);
+            },
+            SimpleSelector::Where(_) => {},
+            SimpleSelector::Type(_) | SimpleSelector::PseudoElement(_) => {
+                types = types.saturating_add(1);
+            },
+            SimpleSelector::Universal => {},
+        }
+    }
+    Specificity {
+        inline: 0,
+        ids,
+        classes,
+        types,
     }
 }
 
@@ -195,6 +259,8 @@ pub enum CssValue {
     Url(String),
     /// A parsed `linear-gradient(...)` value.
     Gradient(crate::css::values::LinearGradient),
+    /// A `calc(...)` expression (raw expression string).
+    Calc(String),
 }
 
 /// Supported CSS length units.
@@ -232,8 +298,24 @@ pub struct Rule {
     pub declarations: Vec<Declaration>,
 }
 
+/// A single keyframe stop (percentage + declarations).
+#[derive(Debug, Clone, PartialEq)]
+pub struct KeyframeStop {
+    /// Percentage 0.0 ..= 100.0.
+    pub percentage: f32,
+    pub declarations: Vec<Declaration>,
+}
+
+/// A parsed `@keyframes` rule.
+#[derive(Debug, Clone, PartialEq)]
+pub struct KeyframesRule {
+    pub name: String,
+    pub stops: Vec<KeyframeStop>,
+}
+
 /// A complete parsed stylesheet.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Stylesheet {
     pub rules: Vec<Rule>,
+    pub keyframes: Vec<KeyframesRule>,
 }

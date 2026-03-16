@@ -24,6 +24,18 @@ fn text_hash(text: &str) -> u64 {
     h.finish()
 }
 
+/// Shared text measurement cache that persists across layout passes.
+///
+/// The cache is only cleared when the base font size changes (e.g.
+/// due to zoom level changes).  This avoids re-measuring the same
+/// text strings on every relayout.
+pub type SharedTextCache = std::rc::Rc<RefCell<HashMap<(u64, u16), u32>>>;
+
+/// Create a new empty shared text cache.
+pub fn new_shared_cache() -> SharedTextCache {
+    std::rc::Rc::new(RefCell::new(HashMap::new()))
+}
+
 /// A text measurer that caches results from an inner measurer.
 ///
 /// Wraps any `&dyn TextMeasurer` and stores computed widths in a
@@ -42,6 +54,8 @@ fn text_hash(text: &str) -> u64 {
 pub struct CachingMeasurer<'a> {
     inner: &'a dyn TextMeasurer,
     cache: RefCell<HashMap<(u64, u16), u32>>,
+    /// Optional shared cache that persists across layout passes.
+    shared: Option<SharedTextCache>,
 }
 
 impl<'a> CachingMeasurer<'a> {
@@ -50,22 +64,47 @@ impl<'a> CachingMeasurer<'a> {
         Self {
             inner,
             cache: RefCell::new(HashMap::new()),
+            shared: None,
+        }
+    }
+
+    /// Create a caching measurer backed by a shared persistent cache.
+    ///
+    /// Results are stored in the shared cache and survive across
+    /// layout passes. The local `cache` field is unused in this mode.
+    pub fn with_shared(inner: &'a dyn TextMeasurer, shared: SharedTextCache) -> Self {
+        Self {
+            inner,
+            cache: RefCell::new(HashMap::new()),
+            shared: Some(shared),
         }
     }
 
     /// Number of cached entries (useful for testing/benchmarking).
     pub fn len(&self) -> usize {
-        self.cache.borrow().len()
+        if let Some(shared) = &self.shared {
+            shared.borrow().len()
+        } else {
+            self.cache.borrow().len()
+        }
     }
 
     /// Whether the cache is empty.
     pub fn is_empty(&self) -> bool {
-        self.cache.borrow().is_empty()
+        if let Some(shared) = &self.shared {
+            shared.borrow().is_empty()
+        } else {
+            self.cache.borrow().is_empty()
+        }
     }
 
     /// Clear all cached entries.
     pub fn clear(&self) {
-        self.cache.borrow_mut().clear();
+        if let Some(shared) = &self.shared {
+            shared.borrow_mut().clear();
+        } else {
+            self.cache.borrow_mut().clear();
+        }
     }
 }
 
@@ -74,15 +113,23 @@ impl TextMeasurer for CachingMeasurer<'_> {
         let hash = text_hash(text);
         let key = (hash, font_size);
 
-        // Fast path: check cache first.
-        if let Some(&width) = self.cache.borrow().get(&key) {
-            return width;
+        if let Some(shared) = &self.shared {
+            // Shared persistent cache path.
+            if let Some(&width) = shared.borrow().get(&key) {
+                return width;
+            }
+            let width = self.inner.measure_text(text, font_size);
+            shared.borrow_mut().insert(key, width);
+            width
+        } else {
+            // Local per-pass cache path.
+            if let Some(&width) = self.cache.borrow().get(&key) {
+                return width;
+            }
+            let width = self.inner.measure_text(text, font_size);
+            self.cache.borrow_mut().insert(key, width);
+            width
         }
-
-        // Cache miss: delegate to inner measurer and store result.
-        let width = self.inner.measure_text(text, font_size);
-        self.cache.borrow_mut().insert(key, width);
-        width
     }
 }
 

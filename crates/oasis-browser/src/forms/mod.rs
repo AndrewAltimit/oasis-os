@@ -14,6 +14,7 @@ mod manager;
 mod serialization;
 mod state;
 mod types;
+pub mod validation;
 
 pub use manager::FormManager;
 pub use state::FormState;

@@ -8,8 +8,10 @@ use crate::html::dom::{Document, NodeId, NodeKind, TagName};
 /// Extracted article content.
 #[derive(Debug, Clone)]
 pub struct Article {
-    /// Article title (from `<title>` or first `<h1>`).
+    /// Article title (from `<title>` or first `<h1>`/`<h2>`).
     pub title: String,
+    /// Byline metadata (author, date, etc.) if detected.
+    pub byline: Option<String>,
     /// The `NodeId` of the identified article container.
     pub content_node: NodeId,
     /// Simplified HTML for re-rendering.
@@ -19,6 +21,7 @@ pub struct Article {
 /// Extract the main article content from a DOM tree.
 pub fn extract_article(doc: &Document) -> Option<Article> {
     let title = extract_title(doc);
+    let byline = extract_byline(doc);
 
     // Score every element.
     let scores = score_elements(doc);
@@ -36,22 +39,24 @@ pub fn extract_article(doc: &Document) -> Option<Article> {
     }
 
     // Extract content from the best node.
-    let html = extract_content_html(doc, best_node);
+    let html = extract_content_html(doc, best_node, &title, &byline);
 
     Some(Article {
         title,
+        byline,
         content_node: best_node,
         html,
     })
 }
 
 fn extract_title(doc: &Document) -> String {
-    // Try <title> first.
-    if let Some(title) = doc.title() {
-        return title;
+    // Prefer the first <h1> or <h2> in the body — this is typically
+    // the article heading and more descriptive than <title>.
+    if let Some(heading) = find_first_heading(doc, doc.root) {
+        return heading;
     }
-    // Try first <h1>.
-    find_first_heading(doc, doc.root).unwrap_or_default()
+    // Fall back to <title>.
+    doc.title().unwrap_or_default()
 }
 
 fn find_first_heading(doc: &Document, node_id: NodeId) -> Option<String> {
@@ -67,6 +72,65 @@ fn find_first_heading(doc: &Document, node_id: NodeId) -> Option<String> {
         }
     }
     None
+}
+
+/// Look for byline metadata (author, date) near the top of the
+/// document.  Searches for elements whose class or id contains
+/// "author", "byline", or "date".
+fn extract_byline(doc: &Document) -> Option<String> {
+    find_byline_node(doc, doc.root)
+}
+
+fn find_byline_node(doc: &Document, node_id: NodeId) -> Option<String> {
+    let node = doc.get(node_id);
+    if let NodeKind::Element(elem) = &node.kind {
+        let class_str = elem.get_attribute("class").unwrap_or("");
+        let id_str = elem.get_attribute("id").unwrap_or("");
+        let combined = format!("{} {}", class_str, id_str).to_lowercase();
+
+        for keyword in &["author", "byline", "date"] {
+            if combined.contains(keyword) {
+                let text = doc.text_content(node_id);
+                let trimmed = text.trim();
+                if !trimmed.is_empty() {
+                    return Some(trimmed.to_string());
+                }
+            }
+        }
+    }
+    for &child in &node.children {
+        if let Some(byline) = find_byline_node(doc, child) {
+            return Some(byline);
+        }
+    }
+    None
+}
+
+/// Compute link density: ratio of text inside `<a>` tags to total
+/// text length.  Returns 0.0 for empty elements.
+fn link_density(doc: &Document, node_id: NodeId) -> f32 {
+    let total = doc.text_content(node_id);
+    let total_len = total.trim().len();
+    if total_len == 0 {
+        return 0.0;
+    }
+    let link_len = link_text_length(doc, node_id);
+    link_len as f32 / total_len as f32
+}
+
+/// Recursively sum the text length inside `<a>` descendant elements.
+fn link_text_length(doc: &Document, node_id: NodeId) -> usize {
+    let node = doc.get(node_id);
+    if let NodeKind::Element(elem) = &node.kind
+        && elem.tag == TagName::A
+    {
+        return doc.text_content(node_id).trim().len();
+    }
+    let mut total = 0;
+    for &child in &node.children {
+        total += link_text_length(doc, child);
+    }
+    total
 }
 
 /// Score each element for article-ness.
@@ -142,14 +206,41 @@ fn score_elements(doc: &Document) -> Vec<f32> {
                 scores[id] += 2.0;
             }
         }
+
+        // Link density: penalize elements that are mostly links
+        // (nav bars, link lists, footer link blocks).
+        let ld = link_density(doc, id);
+        if ld > 0.5 {
+            scores[id] -= 10.0;
+        } else if ld > 0.3 {
+            scores[id] -= 3.0;
+        }
     }
 
     scores
 }
 
 /// Extract simplified HTML from the article container.
-fn extract_content_html(doc: &Document, node_id: NodeId) -> String {
+fn extract_content_html(
+    doc: &Document,
+    node_id: NodeId,
+    title: &str,
+    byline: &Option<String>,
+) -> String {
     let mut html = String::new();
+
+    // Prepend article title and byline if available.
+    if !title.is_empty() {
+        html.push_str("<h1>");
+        escape_html(title, &mut html);
+        html.push_str("</h1>");
+    }
+    if let Some(ref bl) = *byline {
+        html.push_str("<p style=\"color: #666; font-style: italic;\">");
+        escape_html(bl, &mut html);
+        html.push_str("</p>");
+    }
+
     build_reader_html(doc, node_id, &mut html);
 
     // Wrap in a reader-mode template.
@@ -162,21 +253,25 @@ fn extract_content_html(doc: &Document, node_id: NodeId) -> String {
     )
 }
 
+/// Escape HTML special characters in text content.
+fn escape_html(text: &str, out: &mut String) {
+    for ch in text.chars() {
+        match ch {
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            '&' => out.push_str("&amp;"),
+            '"' => out.push_str("&quot;"),
+            _ => out.push(ch),
+        }
+    }
+}
+
 fn build_reader_html(doc: &Document, node_id: NodeId, html: &mut String) {
     let node = doc.get(node_id);
 
     match &node.kind {
         NodeKind::Text(text) => {
-            // Escape HTML entities.
-            for ch in text.chars() {
-                match ch {
-                    '<' => html.push_str("&lt;"),
-                    '>' => html.push_str("&gt;"),
-                    '&' => html.push_str("&amp;"),
-                    '"' => html.push_str("&quot;"),
-                    _ => html.push(ch),
-                }
-            }
+            escape_html(text, html);
         },
         NodeKind::Element(elem) => {
             // Only keep certain tags in reader mode.
@@ -443,8 +538,209 @@ mod tests {
         let text = doc.add_node(NodeKind::Text("Heading Title".to_string()));
         doc.append_child(h1, text);
 
-        // No <title> element, so extract_title falls back to h1.
+        // h1 is preferred over <title>.
         let title = extract_title(&doc);
         assert_eq!(title, "Heading Title");
+    }
+
+    #[test]
+    fn title_prefers_h1_over_title_tag() {
+        let mut doc = Document::new();
+        let html = doc.add_node(NodeKind::Element(ElementData::new(TagName::Html)));
+        doc.append_child(doc.root, html);
+
+        let head = doc.add_node(NodeKind::Element(ElementData::new(TagName::Head)));
+        doc.append_child(html, head);
+        let title_el = doc.add_node(NodeKind::Element(ElementData::new(TagName::Title)));
+        doc.append_child(head, title_el);
+        let title_text = doc.add_node(NodeKind::Text("Page Title".to_string()));
+        doc.append_child(title_el, title_text);
+
+        let body = doc.add_node(NodeKind::Element(ElementData::new(TagName::Body)));
+        doc.append_child(html, body);
+        let h1 = doc.add_node(NodeKind::Element(ElementData::new(TagName::H1)));
+        doc.append_child(body, h1);
+        let h1_text = doc.add_node(NodeKind::Text("Article Heading".to_string()));
+        doc.append_child(h1, h1_text);
+
+        let title = extract_title(&doc);
+        assert_eq!(title, "Article Heading");
+    }
+
+    #[test]
+    fn title_falls_back_to_title_tag() {
+        let mut doc = Document::new();
+        let html = doc.add_node(NodeKind::Element(ElementData::new(TagName::Html)));
+        doc.append_child(doc.root, html);
+
+        let head = doc.add_node(NodeKind::Element(ElementData::new(TagName::Head)));
+        doc.append_child(html, head);
+        let title_el = doc.add_node(NodeKind::Element(ElementData::new(TagName::Title)));
+        doc.append_child(head, title_el);
+        let title_text = doc.add_node(NodeKind::Text("Fallback Title".to_string()));
+        doc.append_child(title_el, title_text);
+
+        let body = doc.add_node(NodeKind::Element(ElementData::new(TagName::Body)));
+        doc.append_child(html, body);
+        // No h1/h2 in body.
+        let p = doc.add_node(NodeKind::Element(ElementData::new(TagName::P)));
+        doc.append_child(body, p);
+        let p_text = doc.add_node(NodeKind::Text("Just a paragraph".to_string()));
+        doc.append_child(p, p_text);
+
+        let title = extract_title(&doc);
+        assert_eq!(title, "Fallback Title");
+    }
+
+    #[test]
+    fn byline_detected_from_class() {
+        let mut doc = Document::new();
+        let html = doc.add_node(NodeKind::Element(ElementData::new(TagName::Html)));
+        doc.append_child(doc.root, html);
+        let body = doc.add_node(NodeKind::Element(ElementData::new(TagName::Body)));
+        doc.append_child(html, body);
+
+        let mut byline_data = ElementData::new(TagName::Span);
+        byline_data.attributes.push(Attribute {
+            name: "class".to_string(),
+            value: "author-name".to_string(),
+        });
+        let byline = doc.add_node(NodeKind::Element(byline_data));
+        doc.append_child(body, byline);
+        let text = doc.add_node(NodeKind::Text("Jane Doe".to_string()));
+        doc.append_child(byline, text);
+
+        let result = extract_byline(&doc);
+        assert_eq!(result, Some("Jane Doe".to_string()));
+    }
+
+    #[test]
+    fn byline_none_when_absent() {
+        let mut doc = Document::new();
+        let html = doc.add_node(NodeKind::Element(ElementData::new(TagName::Html)));
+        doc.append_child(doc.root, html);
+        let body = doc.add_node(NodeKind::Element(ElementData::new(TagName::Body)));
+        doc.append_child(html, body);
+        let p = doc.add_node(NodeKind::Element(ElementData::new(TagName::P)));
+        doc.append_child(body, p);
+        let text = doc.add_node(NodeKind::Text("No byline here".to_string()));
+        doc.append_child(p, text);
+
+        assert!(extract_byline(&doc).is_none());
+    }
+
+    #[test]
+    fn link_density_penalizes_nav_like_elements() {
+        let mut doc = Document::new();
+        let html = doc.add_node(NodeKind::Element(ElementData::new(TagName::Html)));
+        doc.append_child(doc.root, html);
+
+        // A div that is mostly links should have high link density.
+        let div = doc.add_node(NodeKind::Element(ElementData::new(TagName::Div)));
+        doc.append_child(html, div);
+
+        for label in &["Home", "About", "Contact"] {
+            let a = doc.add_node(NodeKind::Element(ElementData::new(TagName::A)));
+            doc.append_child(div, a);
+            let text = doc.add_node(NodeKind::Text(label.to_string()));
+            doc.append_child(a, text);
+        }
+
+        let ld = link_density(&doc, div);
+        assert!(ld > 0.5, "link density should be > 0.5, got {}", ld);
+
+        // Scoring should penalize this element.
+        let scores = score_elements(&doc);
+        assert!(
+            scores[div] < 0.0,
+            "high link density div should have negative score, got {}",
+            scores[div]
+        );
+    }
+
+    #[test]
+    fn article_includes_byline_in_html() {
+        let mut doc = Document::new();
+        let html = doc.add_node(NodeKind::Element(ElementData::new(TagName::Html)));
+        doc.append_child(doc.root, html);
+        let body = doc.add_node(NodeKind::Element(ElementData::new(TagName::Body)));
+        doc.append_child(html, body);
+
+        // Byline element.
+        let mut bl_data = ElementData::new(TagName::Span);
+        bl_data.attributes.push(Attribute {
+            name: "class".to_string(),
+            value: "byline".to_string(),
+        });
+        let bl = doc.add_node(NodeKind::Element(bl_data));
+        doc.append_child(body, bl);
+        let bl_text = doc.add_node(NodeKind::Text("By John Smith".to_string()));
+        doc.append_child(bl, bl_text);
+
+        // Article with paragraphs.
+        let article = doc.add_node(NodeKind::Element(ElementData::new(TagName::Article)));
+        doc.append_child(body, article);
+        for text in &[
+            "First paragraph of content that is long enough \
+             to meet the scoring threshold requirement here.",
+            "Second paragraph of content that is also long \
+             enough to boost the article element score too.",
+        ] {
+            let p = doc.add_node(NodeKind::Element(ElementData::new(TagName::P)));
+            doc.append_child(article, p);
+            let t = doc.add_node(NodeKind::Text(text.to_string()));
+            doc.append_child(p, t);
+        }
+
+        let result = extract_article(&doc).expect("should extract");
+        assert_eq!(result.byline, Some("By John Smith".to_string()));
+        assert!(result.html.contains("By John Smith"));
+    }
+
+    #[test]
+    fn images_preserved_in_reader_output() {
+        let mut doc = Document::new();
+        let html = doc.add_node(NodeKind::Element(ElementData::new(TagName::Html)));
+        doc.append_child(doc.root, html);
+        let body = doc.add_node(NodeKind::Element(ElementData::new(TagName::Body)));
+        doc.append_child(html, body);
+
+        let article = doc.add_node(NodeKind::Element(ElementData::new(TagName::Article)));
+        doc.append_child(body, article);
+
+        // Image inside article.
+        let mut img_data = ElementData::new(TagName::Img);
+        img_data.attributes.push(Attribute {
+            name: "src".to_string(),
+            value: "photo.jpg".to_string(),
+        });
+        img_data.attributes.push(Attribute {
+            name: "alt".to_string(),
+            value: "A photo".to_string(),
+        });
+        let img = doc.add_node(NodeKind::Element(img_data));
+        doc.append_child(article, img);
+
+        for text in &[
+            "First paragraph of content that is long enough \
+             to meet the scoring threshold requirement here.",
+            "Second paragraph of content that is also long \
+             enough to boost the article element score too.",
+        ] {
+            let p = doc.add_node(NodeKind::Element(ElementData::new(TagName::P)));
+            doc.append_child(article, p);
+            let t = doc.add_node(NodeKind::Text(text.to_string()));
+            doc.append_child(p, t);
+        }
+
+        let result = extract_article(&doc).expect("should extract");
+        assert!(
+            result.html.contains("src=\"photo.jpg\""),
+            "image src should be preserved"
+        );
+        assert!(
+            result.html.contains("alt=\"A photo\""),
+            "image alt should be preserved"
+        );
     }
 }
