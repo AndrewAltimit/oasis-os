@@ -16,14 +16,19 @@
 //! Rust helpers into the familiar DOM API.
 
 use std::cell::RefCell;
+use std::collections::HashMap;
 use std::rc::Rc;
 
 use oasis_js::rquickjs::{Ctx, Function, Result as JsResult};
 
+use crate::css::values::ComputedStyle;
 use crate::html::dom::{Document, ElementData, NodeId, NodeKind, TagName};
 
 /// Shared, interior-mutable document used during JS execution.
 pub type SharedDoc = Rc<RefCell<Document>>;
+
+/// Shared, interior-mutable computed styles for `getComputedStyle()`.
+pub type SharedStyles = Rc<RefCell<Vec<Option<ComputedStyle>>>>;
 
 /// Sentinel returned when a DOM lookup produces no result.
 const NO_NODE: i32 = -1;
@@ -59,7 +64,7 @@ pub type SharedNavActions = Rc<RefCell<Vec<JsNavAction>>>;
 #[cfg(test)]
 pub fn install_document_global(ctx: &Ctx<'_>, doc: &SharedDoc) -> JsResult<()> {
     let nav = Rc::new(RefCell::new(Vec::new()));
-    install_document_global_full(ctx, doc, "", &nav)
+    install_document_global_full(ctx, doc, "", &nav, None, None)
 }
 
 /// Like [`install_document_global`] but accepts an explicit URL for
@@ -67,27 +72,44 @@ pub fn install_document_global(ctx: &Ctx<'_>, doc: &SharedDoc) -> JsResult<()> {
 #[cfg(test)]
 pub fn install_document_global_with_url(ctx: &Ctx<'_>, doc: &SharedDoc, url: &str) -> JsResult<()> {
     let nav = Rc::new(RefCell::new(Vec::new()));
-    install_document_global_full(ctx, doc, url, &nav)
+    install_document_global_full(ctx, doc, url, &nav, None, None)
 }
 
 /// Like [`install_document_global_with_url`] but also accepts a shared
 /// navigation action queue that JS `location.assign()` /
 /// `history.back()` / `history.forward()` will push to.
+#[allow(dead_code)]
 pub fn install_document_global_with_nav(
     ctx: &Ctx<'_>,
     doc: &SharedDoc,
     url: &str,
     nav_actions: &SharedNavActions,
 ) -> JsResult<()> {
-    install_document_global_full(ctx, doc, url, nav_actions)
+    install_document_global_full(ctx, doc, url, nav_actions, None, None)
 }
 
-/// Full installation: document global, location/history, nav actions.
+/// Like [`install_document_global_with_nav`] but also accepts an
+/// optional CSP policy to enforce `connect-src` on `fetch()` calls.
+pub fn install_document_global_with_csp(
+    ctx: &Ctx<'_>,
+    doc: &SharedDoc,
+    url: &str,
+    nav_actions: &SharedNavActions,
+    styles: &SharedStyles,
+    csp: Option<&crate::loader::csp::CspPolicy>,
+) -> JsResult<()> {
+    install_document_global_full(ctx, doc, url, nav_actions, Some(styles), csp)
+}
+
+/// Full installation: document global, location/history, nav actions,
+/// computed styles, fetch, localStorage/sessionStorage.
 fn install_document_global_full(
     ctx: &Ctx<'_>,
     doc: &SharedDoc,
     url: &str,
     nav_actions: &SharedNavActions,
+    styles: Option<&SharedStyles>,
+    csp: Option<&crate::loader::csp::CspPolicy>,
 ) -> JsResult<()> {
     let globals = ctx.globals();
 
@@ -292,6 +314,60 @@ fn install_document_global_full(
                     doc.append_child(pid, cid);
                 }
             })?,
+        )?;
+    }
+
+    // -- __oasis_remove(child_nid) -> i32 (former parent or -1) --------
+    {
+        let d = Rc::clone(doc);
+        globals.set(
+            "__oasis_remove",
+            Function::new(ctx.clone(), move |child_nid: i32| -> i32 {
+                let mut doc = d.borrow_mut();
+                let cid = child_nid as NodeId;
+                if cid >= doc.nodes.len() {
+                    return NO_NODE;
+                }
+                doc.remove_child(cid).map_or(NO_NODE, |pid| pid as i32)
+            })?,
+        )?;
+    }
+
+    // -- __oasis_insertbefore(parent_nid, new_nid, ref_nid) -----------
+    {
+        let d = Rc::clone(doc);
+        globals.set(
+            "__oasis_insertbefore",
+            Function::new(
+                ctx.clone(),
+                move |parent_nid: i32, new_nid: i32, ref_nid: i32| {
+                    let mut doc = d.borrow_mut();
+                    let pid = parent_nid as NodeId;
+                    let nid = new_nid as NodeId;
+                    if pid >= doc.nodes.len() || nid >= doc.nodes.len() {
+                        return;
+                    }
+                    // Remove new_nid from its current parent first.
+                    doc.remove_child(nid);
+                    // Find the position of ref_nid in parent's children.
+                    let pos = if ref_nid >= 0 {
+                        let rid = ref_nid as NodeId;
+                        doc.nodes[pid].children.iter().position(|&c| c == rid)
+                    } else {
+                        None
+                    };
+                    match pos {
+                        Some(idx) => {
+                            doc.nodes[pid].children.insert(idx, nid);
+                            doc.nodes[nid].parent = Some(pid);
+                        },
+                        None => {
+                            // ref_nid not found or -1: append.
+                            doc.append_child(pid, nid);
+                        },
+                    }
+                },
+            )?,
         )?;
     }
 
@@ -535,6 +611,127 @@ fn install_document_global_full(
         )?;
     }
 
+    // -- __oasis_fetch(method, url, body) -> String ----------------------
+    {
+        let fetch_csp = csp.cloned();
+        let fetch_page_url = url.to_string();
+        globals.set(
+            "__oasis_fetch",
+            Function::new(
+                ctx.clone(),
+                move |method: String, url_str: String, body_str: String| -> String {
+                    // Enforce CSP connect-src before making the request.
+                    if let Some(ref policy) = fetch_csp
+                        && policy.is_active()
+                        && !policy.allows(
+                            &url_str,
+                            &fetch_page_url,
+                            crate::loader::csp::CspResourceType::Connect,
+                        )
+                    {
+                        return String::new();
+                    }
+                    let body_bytes = if body_str.is_empty() {
+                        None
+                    } else {
+                        Some(body_str.as_bytes())
+                    };
+                    match crate::loader::Url::parse(&url_str) {
+                        Some(parsed_url) => {
+                            match crate::loader::http::http_request(
+                                &method,
+                                &parsed_url,
+                                body_bytes,
+                                &[],
+                                None,
+                            ) {
+                                Ok(resp) => String::from_utf8_lossy(&resp.body).into_owned(),
+                                Err(_) => String::new(),
+                            }
+                        },
+                        None => String::new(),
+                    }
+                },
+            )?,
+        )?;
+    }
+
+    // -- __oasis_computed_style(nid, prop) -> String ---------------------
+    {
+        let styles_ref: SharedStyles = match styles {
+            Some(s) => Rc::clone(s),
+            None => Rc::new(RefCell::new(Vec::new())),
+        };
+        globals.set(
+            "__oasis_computed_style",
+            Function::new(ctx.clone(), move |nid: i32, prop: String| -> String {
+                let styles_borrow: std::cell::Ref<'_, Vec<Option<ComputedStyle>>> =
+                    styles_ref.borrow();
+                let id = nid as NodeId;
+                if id < styles_borrow.len()
+                    && let Some(ref style) = styles_borrow[id]
+                {
+                    return style.get_property_value(&prop);
+                }
+                String::new()
+            })?,
+        )?;
+    }
+
+    // -- localStorage / sessionStorage -----------------------------------
+    // Each storage type gets its own backing HashMap so that writes to
+    // localStorage do not leak into sessionStorage and vice-versa.
+    {
+        let local_store = Rc::new(RefCell::new(HashMap::<String, String>::new()));
+        let session_store = Rc::new(RefCell::new(HashMap::<String, String>::new()));
+
+        let l1 = Rc::clone(&local_store);
+        let ss1 = Rc::clone(&session_store);
+        globals.set(
+            "__oasis_storage_get",
+            Function::new(ctx.clone(), move |kind: i32, key: String| -> String {
+                let store = if kind == 0 { &l1 } else { &ss1 };
+                store.borrow().get(&key).cloned().unwrap_or_default()
+            })?,
+        )?;
+        let l2 = Rc::clone(&local_store);
+        let ss2 = Rc::clone(&session_store);
+        globals.set(
+            "__oasis_storage_set",
+            Function::new(ctx.clone(), move |kind: i32, key: String, value: String| {
+                let store = if kind == 0 { &l2 } else { &ss2 };
+                store.borrow_mut().insert(key, value);
+            })?,
+        )?;
+        let l3 = Rc::clone(&local_store);
+        let ss3 = Rc::clone(&session_store);
+        globals.set(
+            "__oasis_storage_remove",
+            Function::new(ctx.clone(), move |kind: i32, key: String| {
+                let store = if kind == 0 { &l3 } else { &ss3 };
+                store.borrow_mut().remove(&key);
+            })?,
+        )?;
+        let l4 = Rc::clone(&local_store);
+        let ss4 = Rc::clone(&session_store);
+        globals.set(
+            "__oasis_storage_clear",
+            Function::new(ctx.clone(), move |kind: i32| {
+                let store = if kind == 0 { &l4 } else { &ss4 };
+                store.borrow_mut().clear();
+            })?,
+        )?;
+        let l5 = Rc::clone(&local_store);
+        let ss5 = Rc::clone(&session_store);
+        globals.set(
+            "__oasis_storage_length",
+            Function::new(ctx.clone(), move |kind: i32| -> i32 {
+                let store = if kind == 0 { &l5 } else { &ss5 };
+                store.borrow().len() as i32
+            })?,
+        )?;
+    }
+
     // -- JavaScript-side Element class + document global ---------------
     let _: () = ctx.eval(JS_DOM_BOOTSTRAP)?;
 
@@ -544,6 +741,41 @@ fn install_document_global_full(
 /// Drain and return all pending navigation actions from the queue.
 pub fn drain_nav_actions(nav: &SharedNavActions) -> Vec<JsNavAction> {
     std::mem::take(&mut nav.borrow_mut())
+}
+
+/// Inline event handler attribute names and the corresponding DOM
+/// event type.
+const INLINE_HANDLERS: &[(&str, &str)] = &[
+    ("onclick", "click"),
+    ("onchange", "change"),
+    ("onsubmit", "submit"),
+    ("onmouseover", "mouseover"),
+    ("onmouseout", "mouseout"),
+    ("onkeydown", "keydown"),
+    ("oninput", "input"),
+    ("onload", "load"),
+];
+
+/// Walk the DOM and register inline event handler attributes
+/// (e.g. `onclick="..."`) as `addEventListener` calls on the JS side.
+///
+/// Call this after `engine.eval_all()` in `load_html()` so that inline
+/// handlers declared in the HTML source are wired up.
+pub fn register_inline_handlers(engine: &oasis_js::JsEngine, doc: &Document) {
+    for (id, node) in doc.nodes.iter().enumerate() {
+        if let NodeKind::Element(elem) = &node.kind {
+            for &(attr_name, event_type) in INLINE_HANDLERS {
+                if let Some(handler_body) = elem.get_attribute(attr_name) {
+                    let js = format!(
+                        "(function(){{ var el = new Element({id}); \
+                         el.addEventListener(\"{event_type}\", \
+                         function(event) {{ {handler_body} }}); }})()"
+                    );
+                    let _ = engine.eval(&js);
+                }
+            }
+        }
+    }
 }
 
 // ------------------------------------------------------------------
@@ -936,6 +1168,19 @@ const JS_DOM_BOOTSTRAP: &str = r#"
     );
     return child;
   };
+  Element.prototype.removeChild = function(child) {
+    __oasis_remove(child.__oasis_node_id);
+    return child;
+  };
+  Element.prototype.insertBefore = function(newNode, refNode) {
+    var refId = refNode ? refNode.__oasis_node_id : -1;
+    __oasis_insertbefore(
+      this.__oasis_node_id,
+      newNode.__oasis_node_id,
+      refId
+    );
+    return newNode;
+  };
   Element.prototype.querySelector = function(sel) {
     var nid = __oasis_query_selector(
       this.__oasis_node_id, sel
@@ -1094,8 +1339,435 @@ const JS_DOM_BOOTSTRAP: &str = r#"
     },
     get length() { return 1; }
   };
+
+  // -- fetch API (synchronous under the hood) --
+  globalThis.fetch = function(url, options) {
+    var method = (options && options.method) || "GET";
+    var reqBody = (options && options.body) || "";
+    var body = __oasis_fetch(method, String(url), String(reqBody));
+    return {
+      then: function(fn) {
+        var result = fn({
+          ok: body.length > 0,
+          status: body.length > 0 ? 200 : 0,
+          text: function() { return { then: function(f) { return f(body); } }; },
+          json: function() { return { then: function(f) { return f(JSON.parse(body)); } }; }
+        });
+        return { then: function(f) { return f ? f(result) : result; }, catch: function() { return this; } };
+      },
+      catch: function(fn) { return this; }
+    };
+  };
+
+  // -- getComputedStyle --
+  globalThis.getComputedStyle = function(el) {
+    return {
+      getPropertyValue: function(prop) {
+        return __oasis_computed_style(el.__oasis_node_id, prop);
+      }
+    };
+  };
+
+  // -- localStorage / sessionStorage --
+  // kind: 0 = localStorage, 1 = sessionStorage (separate backing stores)
+  var __make_storage = function(kind) {
+    return {
+      getItem: function(k) { var v = __oasis_storage_get(kind, String(k)); return v === "" ? null : v; },
+      setItem: function(k, v) { __oasis_storage_set(kind, String(k), String(v)); },
+      removeItem: function(k) { __oasis_storage_remove(kind, String(k)); },
+      clear: function() { __oasis_storage_clear(kind); },
+      get length() { return __oasis_storage_length(kind); }
+    };
+  };
+  globalThis.localStorage = __make_storage(0);
+  globalThis.sessionStorage = __make_storage(1);
 })();
 "#;
+
+// ------------------------------------------------------------------
+// Canvas 2D context bindings
+// ------------------------------------------------------------------
+
+/// Install `__oasis_canvas_*` globals for `<canvas>` 2D context support.
+///
+/// Must be called after [`install_document_global_full`] since the
+/// JS bootstrap below extends `Element.prototype` with `getContext()`.
+pub fn install_canvas_bindings(
+    ctx: &Ctx<'_>,
+    canvas_map: &crate::canvas::SharedCanvasMap,
+) -> JsResult<()> {
+    let globals = ctx.globals();
+
+    // -- __oasis_canvas_fill_rect(nid, x, y, w, h) -------------------
+    {
+        let m = Rc::clone(canvas_map);
+        globals.set(
+            "__oasis_canvas_fill_rect",
+            Function::new(
+                ctx.clone(),
+                move |nid: i32, x: f64, y: f64, w: f64, h: f64| {
+                    let map = m.borrow();
+                    if let Some(state) = map.get(&(nid as NodeId)) {
+                        let mut s = state.borrow_mut();
+                        let color = s.fill_color;
+                        s.commands.push(crate::canvas::CanvasCommand::FillRect {
+                            x: x as f32,
+                            y: y as f32,
+                            w: w as f32,
+                            h: h as f32,
+                            color,
+                        });
+                    }
+                },
+            )?,
+        )?;
+    }
+
+    // -- __oasis_canvas_stroke_rect(nid, x, y, w, h) -----------------
+    {
+        let m = Rc::clone(canvas_map);
+        globals.set(
+            "__oasis_canvas_stroke_rect",
+            Function::new(
+                ctx.clone(),
+                move |nid: i32, x: f64, y: f64, w: f64, h: f64| {
+                    let map = m.borrow();
+                    if let Some(state) = map.get(&(nid as NodeId)) {
+                        let mut s = state.borrow_mut();
+                        let color = s.stroke_color;
+                        let lw = s.line_width;
+                        s.commands.push(crate::canvas::CanvasCommand::StrokeRect {
+                            x: x as f32,
+                            y: y as f32,
+                            w: w as f32,
+                            h: h as f32,
+                            color,
+                            line_width: lw,
+                        });
+                    }
+                },
+            )?,
+        )?;
+    }
+
+    // -- __oasis_canvas_clear_rect(nid, x, y, w, h) ------------------
+    {
+        let m = Rc::clone(canvas_map);
+        globals.set(
+            "__oasis_canvas_clear_rect",
+            Function::new(
+                ctx.clone(),
+                move |nid: i32, x: f64, y: f64, w: f64, h: f64| {
+                    let map = m.borrow();
+                    if let Some(state) = map.get(&(nid as NodeId)) {
+                        let mut s = state.borrow_mut();
+                        s.commands.push(crate::canvas::CanvasCommand::ClearRect {
+                            x: x as f32,
+                            y: y as f32,
+                            w: w as f32,
+                            h: h as f32,
+                        });
+                    }
+                },
+            )?,
+        )?;
+    }
+
+    // -- __oasis_canvas_fill_text(nid, text, x, y) --------------------
+    {
+        let m = Rc::clone(canvas_map);
+        globals.set(
+            "__oasis_canvas_fill_text",
+            Function::new(
+                ctx.clone(),
+                move |nid: i32, text: String, x: f64, y: f64| {
+                    let map = m.borrow();
+                    if let Some(state) = map.get(&(nid as NodeId)) {
+                        let mut s = state.borrow_mut();
+                        let color = s.fill_color;
+                        let font_size = s.font_size;
+                        s.commands.push(crate::canvas::CanvasCommand::FillText {
+                            text,
+                            x: x as f32,
+                            y: y as f32,
+                            color,
+                            font_size,
+                        });
+                    }
+                },
+            )?,
+        )?;
+    }
+
+    // -- __oasis_canvas_set_fill(nid, color_str) ----------------------
+    {
+        let m = Rc::clone(canvas_map);
+        globals.set(
+            "__oasis_canvas_set_fill",
+            Function::new(ctx.clone(), move |nid: i32, color: String| {
+                let map = m.borrow();
+                if let Some(state) = map.get(&(nid as NodeId))
+                    && let Some(c) = crate::svg::parse_svg_color(&color)
+                {
+                    state.borrow_mut().fill_color = c;
+                }
+            })?,
+        )?;
+    }
+
+    // -- __oasis_canvas_set_stroke(nid, color_str) --------------------
+    {
+        let m = Rc::clone(canvas_map);
+        globals.set(
+            "__oasis_canvas_set_stroke",
+            Function::new(ctx.clone(), move |nid: i32, color: String| {
+                let map = m.borrow();
+                if let Some(state) = map.get(&(nid as NodeId))
+                    && let Some(c) = crate::svg::parse_svg_color(&color)
+                {
+                    state.borrow_mut().stroke_color = c;
+                }
+            })?,
+        )?;
+    }
+
+    // -- __oasis_canvas_set_line_width(nid, width) --------------------
+    {
+        let m = Rc::clone(canvas_map);
+        globals.set(
+            "__oasis_canvas_set_line_width",
+            Function::new(ctx.clone(), move |nid: i32, width: f64| {
+                let map = m.borrow();
+                if let Some(state) = map.get(&(nid as NodeId)) {
+                    state.borrow_mut().line_width = width as f32;
+                }
+            })?,
+        )?;
+    }
+
+    // -- __oasis_canvas_set_font(nid, font_str) -----------------------
+    {
+        let m = Rc::clone(canvas_map);
+        globals.set(
+            "__oasis_canvas_set_font",
+            Function::new(ctx.clone(), move |nid: i32, font: String| {
+                let map = m.borrow();
+                if let Some(state) = map.get(&(nid as NodeId)) {
+                    // Extract pixel size from font string, e.g. "12px sans-serif".
+                    for part in font.split_whitespace() {
+                        if let Some(px) = part.strip_suffix("px")
+                            && let Ok(size) = px.parse::<f32>()
+                        {
+                            state.borrow_mut().font_size = size;
+                            break;
+                        }
+                    }
+                }
+            })?,
+        )?;
+    }
+
+    // -- __oasis_canvas_line(nid, x1, y1, x2, y2, is_fill) -----------
+    {
+        let m = Rc::clone(canvas_map);
+        globals.set(
+            "__oasis_canvas_line",
+            Function::new(
+                ctx.clone(),
+                move |nid: i32, x1: f64, y1: f64, x2: f64, y2: f64, is_fill: bool| {
+                    let map = m.borrow();
+                    if let Some(state) = map.get(&(nid as NodeId)) {
+                        let mut s = state.borrow_mut();
+                        let color = if is_fill {
+                            s.fill_color
+                        } else {
+                            s.stroke_color
+                        };
+                        let lw = s.line_width;
+                        s.commands.push(crate::canvas::CanvasCommand::Line {
+                            x1: x1 as f32,
+                            y1: y1 as f32,
+                            x2: x2 as f32,
+                            y2: y2 as f32,
+                            color,
+                            line_width: lw,
+                        });
+                    }
+                },
+            )?,
+        )?;
+    }
+
+    // -- __oasis_canvas_arc(nid, cx, cy, r, fill) ---------------------
+    {
+        let m = Rc::clone(canvas_map);
+        globals.set(
+            "__oasis_canvas_arc",
+            Function::new(
+                ctx.clone(),
+                move |nid: i32, cx: f64, cy: f64, r: f64, fill: bool| {
+                    let map = m.borrow();
+                    if let Some(state) = map.get(&(nid as NodeId)) {
+                        let mut s = state.borrow_mut();
+                        let color = if fill { s.fill_color } else { s.stroke_color };
+                        s.commands.push(crate::canvas::CanvasCommand::Arc {
+                            cx: cx as f32,
+                            cy: cy as f32,
+                            r: r as f32,
+                            color,
+                            fill,
+                        });
+                    }
+                },
+            )?,
+        )?;
+    }
+
+    // -- JavaScript CanvasRenderingContext2D class ---------------------
+    let _: () = ctx.eval(JS_CANVAS_BOOTSTRAP)?;
+
+    Ok(())
+}
+
+/// JavaScript code for the CanvasRenderingContext2D class and
+/// `Element.prototype.getContext()`.
+const JS_CANVAS_BOOTSTRAP: &str = r##"
+(function() {
+  "use strict";
+
+  function CanvasRenderingContext2D(nid) {
+    this.__nid = nid;
+    this._fillStyle = "#000000";
+    this._strokeStyle = "#000000";
+    this._lineWidth = 1;
+    this._font = "10px sans-serif";
+    this._pathX = 0;
+    this._pathY = 0;
+    this._pathSegments = [];
+  }
+
+  Object.defineProperties(CanvasRenderingContext2D.prototype, {
+    fillStyle: {
+      get: function() { return this._fillStyle; },
+      set: function(v) {
+        this._fillStyle = v;
+        __oasis_canvas_set_fill(this.__nid, String(v));
+      },
+      enumerable: true
+    },
+    strokeStyle: {
+      get: function() { return this._strokeStyle; },
+      set: function(v) {
+        this._strokeStyle = v;
+        __oasis_canvas_set_stroke(this.__nid, String(v));
+      },
+      enumerable: true
+    },
+    lineWidth: {
+      get: function() { return this._lineWidth; },
+      set: function(v) {
+        this._lineWidth = v;
+        __oasis_canvas_set_line_width(this.__nid, +v);
+      },
+      enumerable: true
+    },
+    font: {
+      get: function() { return this._font; },
+      set: function(v) {
+        this._font = v;
+        __oasis_canvas_set_font(this.__nid, String(v));
+      },
+      enumerable: true
+    }
+  });
+
+  CanvasRenderingContext2D.prototype.fillRect = function(x, y, w, h) {
+    __oasis_canvas_fill_rect(this.__nid, +x, +y, +w, +h);
+  };
+  CanvasRenderingContext2D.prototype.strokeRect = function(x, y, w, h) {
+    __oasis_canvas_stroke_rect(this.__nid, +x, +y, +w, +h);
+  };
+  CanvasRenderingContext2D.prototype.clearRect = function(x, y, w, h) {
+    __oasis_canvas_clear_rect(this.__nid, +x, +y, +w, +h);
+  };
+  CanvasRenderingContext2D.prototype.fillText = function(text, x, y) {
+    __oasis_canvas_fill_text(this.__nid, String(text), +x, +y);
+  };
+  CanvasRenderingContext2D.prototype.strokeText = function() {};
+  CanvasRenderingContext2D.prototype.beginPath = function() {
+    this._pathSegments = [];
+  };
+  CanvasRenderingContext2D.prototype.moveTo = function(x, y) {
+    this._pathX = +x;
+    this._pathY = +y;
+  };
+  CanvasRenderingContext2D.prototype.lineTo = function(x, y) {
+    this._pathSegments.push({
+      type: "line",
+      x1: this._pathX, y1: this._pathY,
+      x2: +x, y2: +y
+    });
+    this._pathX = +x;
+    this._pathY = +y;
+  };
+  CanvasRenderingContext2D.prototype.arc = function(cx, cy, r) {
+    this._pathSegments.push({
+      type: "arc", cx: +cx, cy: +cy, r: +r
+    });
+  };
+  CanvasRenderingContext2D.prototype.closePath = function() {};
+  CanvasRenderingContext2D.prototype.fill = function() {
+    for (var i = 0; i < this._pathSegments.length; i++) {
+      var seg = this._pathSegments[i];
+      if (seg.type === "line") {
+        __oasis_canvas_line(
+          this.__nid, seg.x1, seg.y1, seg.x2, seg.y2, true
+        );
+      } else if (seg.type === "arc") {
+        __oasis_canvas_arc(
+          this.__nid, seg.cx, seg.cy, seg.r, true
+        );
+      }
+    }
+    this._pathSegments = [];
+  };
+  CanvasRenderingContext2D.prototype.stroke = function() {
+    for (var i = 0; i < this._pathSegments.length; i++) {
+      var seg = this._pathSegments[i];
+      if (seg.type === "line") {
+        __oasis_canvas_line(
+          this.__nid, seg.x1, seg.y1, seg.x2, seg.y2, false
+        );
+      } else if (seg.type === "arc") {
+        __oasis_canvas_arc(
+          this.__nid, seg.cx, seg.cy, seg.r, false
+        );
+      }
+    }
+    this._pathSegments = [];
+  };
+  CanvasRenderingContext2D.prototype.measureText = function(text) {
+    return { width: String(text).length * 6 };
+  };
+  CanvasRenderingContext2D.prototype.save = function() {};
+  CanvasRenderingContext2D.prototype.restore = function() {};
+
+  var __canvas_contexts = {};
+
+  if (typeof Element !== "undefined") {
+    Element.prototype.getContext = function(type) {
+      if (type !== "2d") return null;
+      var nid = this.__oasis_node_id;
+      if (!__canvas_contexts[nid]) {
+        __canvas_contexts[nid] = new CanvasRenderingContext2D(nid);
+      }
+      return __canvas_contexts[nid];
+    };
+  }
+
+  globalThis.CanvasRenderingContext2D = CanvasRenderingContext2D;
+})();
+"##;
 
 // ------------------------------------------------------------------
 // Tests

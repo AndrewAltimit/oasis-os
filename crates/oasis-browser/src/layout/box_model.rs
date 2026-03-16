@@ -187,6 +187,14 @@ pub enum ReplacedContent {
     SelectBox {
         label: String,
     },
+    /// An inline `<svg>` element.
+    Svg {
+        element: Box<crate::svg::SvgElement>,
+    },
+    /// A `<canvas>` element with a shared drawing state.
+    Canvas {
+        state: std::rc::Rc<std::cell::RefCell<crate::canvas::CanvasState>>,
+    },
 }
 
 /// A single box in the layout tree.

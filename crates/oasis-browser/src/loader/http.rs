@@ -3,6 +3,7 @@
 //! Supports plain HTTP over `std::net::TcpStream` and, when a
 //! [`TlsProvider`] is supplied, HTTPS via the backend's TLS stack.
 
+use std::cell::RefCell;
 use std::io::{self, Read, Write};
 use std::net::TcpStream;
 use std::sync::Mutex;
@@ -10,6 +11,7 @@ use std::time::{Duration, Instant};
 
 use rustc_hash::FxHashMap;
 
+use brotli::Decompressor as BrotliDecoder;
 use flate2::read::{DeflateDecoder, GzDecoder};
 use oasis_net::tls::TlsProvider;
 use oasis_types::backend::NetworkStream;
@@ -35,6 +37,15 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 /// TCP read timeout.
 const READ_TIMEOUT: Duration = Duration::from_secs(15);
 
+/// Maximum idle connections per host in the connection pool.
+const MAX_CONNS_PER_HOST: usize = 2;
+
+/// Maximum total idle connections in the pool.
+const MAX_TOTAL_CONNS: usize = 8;
+
+/// Maximum age of an idle pooled connection (30 seconds).
+const POOL_IDLE_TIMEOUT: Duration = Duration::from_secs(30);
+
 /// DNS cache TTL (5 minutes).
 #[allow(dead_code)]
 const DNS_CACHE_TTL: Duration = Duration::from_secs(300);
@@ -45,6 +56,77 @@ type DnsCacheMap = FxHashMap<String, (Vec<std::net::IpAddr>, Instant)>;
 #[allow(dead_code)]
 static DNS_CACHE: std::sync::LazyLock<Mutex<DnsCacheMap>> =
     std::sync::LazyLock::new(|| Mutex::new(FxHashMap::default()));
+
+// -------------------------------------------------------------------
+// Connection pool
+// -------------------------------------------------------------------
+
+/// An idle pooled connection with its insertion timestamp.
+struct PooledConn {
+    stream: TcpStream,
+    inserted: Instant,
+}
+
+/// Simple HTTP/1.1 keep-alive connection pool.
+///
+/// Stores idle `TcpStream` connections keyed by `(host, port)`.
+/// Not thread-safe -- designed for single-threaded browser use.
+struct ConnectionPool {
+    conns: FxHashMap<(String, u16), Vec<PooledConn>>,
+    total: usize,
+}
+
+impl ConnectionPool {
+    fn new() -> Self {
+        Self {
+            conns: FxHashMap::default(),
+            total: 0,
+        }
+    }
+
+    /// Take an idle connection for the given host:port, if available.
+    ///
+    /// Expired connections are discarded silently.
+    fn take(&mut self, host: &str, port: u16) -> Option<TcpStream> {
+        let key = (host.to_string(), port);
+        let entries = self.conns.get_mut(&key)?;
+        while let Some(entry) = entries.pop() {
+            self.total -= 1;
+            if entry.inserted.elapsed() < POOL_IDLE_TIMEOUT {
+                if entries.is_empty() {
+                    self.conns.remove(&key);
+                }
+                return Some(entry.stream);
+            }
+            // Expired -- drop and try next.
+        }
+        self.conns.remove(&key);
+        None
+    }
+
+    /// Return a connection to the pool for future reuse.
+    ///
+    /// Silently drops the connection if the pool is full.
+    fn put(&mut self, host: &str, port: u16, stream: TcpStream) {
+        if self.total >= MAX_TOTAL_CONNS {
+            return; // Pool full, discard.
+        }
+        let key = (host.to_string(), port);
+        let entries = self.conns.entry(key).or_default();
+        if entries.len() >= MAX_CONNS_PER_HOST {
+            return; // Per-host limit reached, discard.
+        }
+        entries.push(PooledConn {
+            stream,
+            inserted: Instant::now(),
+        });
+        self.total += 1;
+    }
+}
+
+thread_local! {
+    static CONN_POOL: RefCell<ConnectionPool> = RefCell::new(ConnectionPool::new());
+}
 
 /// Resolve a hostname using the DNS cache.
 ///
@@ -209,6 +291,10 @@ pub struct HttpResponse {
 // -------------------------------------------------------------------
 
 /// Connect, optionally upgrade to TLS, send request, read and parse.
+///
+/// For plain HTTP, attempts to reuse a pooled keep-alive connection
+/// before opening a new one.  On success with keep-alive, the
+/// connection is returned to the pool.
 fn do_request_with_method(
     method: &str,
     url: &Url,
@@ -221,11 +307,10 @@ fn do_request_with_method(
     let default_port = if is_https { 443 } else { 80 };
     let port = url.port.unwrap_or(default_port);
 
-    let stream = tcp_connect(host, port)?;
-
     if is_https {
         let tls_provider = tls.ok_or_else(|| OasisError::Backend("TLS not available".into()))?;
 
+        let stream = tcp_connect(host, port)?;
         // Wrap the TcpStream as a NetworkStream, then upgrade to TLS.
         let net_stream: Box<dyn NetworkStream> = Box::new(oasis_net::StdNetworkStream::new(stream));
         let tls_stream = tls_provider.connect_tls(net_stream, host)?;
@@ -235,10 +320,60 @@ fn do_request_with_method(
         let raw = read_response(&mut adapter)?;
         parse_response(&raw)
     } else {
-        let mut stream = stream;
+        // Try a pooled connection first, but only for idempotent methods.
+        // Re-sending a POST/PUT/PATCH on a stale connection could cause
+        // duplicate side-effects on the server.
+        let is_idempotent = matches!(method, "GET" | "HEAD" | "OPTIONS" | "TRACE");
+        let pooled = if is_idempotent {
+            CONN_POOL.with(|pool| pool.borrow_mut().take(host, port))
+        } else {
+            None
+        };
+        if let Some(mut stream) = pooled {
+            match try_request_on_stream(&mut stream, method, url, body, extra_headers, is_https) {
+                Ok(resp) => {
+                    maybe_return_to_pool(&resp, host, port, stream);
+                    return Ok(resp);
+                },
+                Err(_) => {
+                    // Stale connection -- fall through to fresh connect.
+                },
+            }
+        }
+
+        let mut stream = tcp_connect(host, port)?;
         send_request(&mut stream, method, url, body, extra_headers, is_https)?;
         let raw = read_response(&mut stream)?;
-        parse_response(&raw)
+        let resp = parse_response(&raw)?;
+        maybe_return_to_pool(&resp, host, port, stream);
+        Ok(resp)
+    }
+}
+
+/// Attempt a full request/response cycle on an existing stream.
+///
+/// Returns `Err` on any I/O failure so the caller can retry with a fresh
+/// connection.
+fn try_request_on_stream(
+    stream: &mut TcpStream,
+    method: &str,
+    url: &Url,
+    body: Option<&[u8]>,
+    extra_headers: &[(&str, &str)],
+    is_https: bool,
+) -> Result<HttpResponse> {
+    send_request(stream, method, url, body, extra_headers, is_https)?;
+    let raw = read_response(stream)?;
+    parse_response(&raw)
+}
+
+/// Return a plain-HTTP connection to the pool if the response indicates
+/// keep-alive (HTTP/1.1 default unless `Connection: close` is present).
+fn maybe_return_to_pool(resp: &HttpResponse, host: &str, port: u16, stream: TcpStream) {
+    let dominated_close =
+        find_header(&resp.headers, "connection").is_some_and(|v| v.eq_ignore_ascii_case("close"));
+    if !dominated_close {
+        CONN_POOL.with(|pool| pool.borrow_mut().put(host, port, stream));
     }
 }
 
@@ -289,8 +424,8 @@ fn send_request(
          Host: {host_header}\r\n\
          User-Agent: OASIS/1.0\r\n\
          Accept: */*\r\n\
-         Accept-Encoding: gzip, deflate\r\n\
-         Connection: close\r\n"
+         Accept-Encoding: gzip, deflate, br\r\n\
+         Connection: keep-alive\r\n"
     );
 
     // Append extra headers.
@@ -326,11 +461,20 @@ fn send_request(
     Ok(())
 }
 
-/// Read the entire response until EOF or until the read timeout fires.
+/// Read the entire HTTP response, stopping when we have the complete body.
+///
+/// With `Connection: keep-alive` the server does not close the connection
+/// after the response, so we cannot rely on EOF. Instead we parse headers
+/// as they arrive to determine the body length:
+/// - `Content-Length`: stop after that many body bytes.
+/// - `Transfer-Encoding: chunked`: stop after the `0\r\n\r\n` terminator.
+/// - Neither: fall back to reading until EOF or timeout.
 fn read_response(stream: &mut impl Read) -> Result<Vec<u8>> {
     let mut buf = Vec::with_capacity(8192);
     let mut chunk = [0u8; 8192];
-    let mut header_complete = false;
+    let mut body_start: Option<usize> = None;
+    let mut expected_body_len: Option<usize> = None;
+    let mut is_chunked = false;
     loop {
         match stream.read(&mut chunk) {
             Ok(0) => break,
@@ -340,17 +484,58 @@ fn read_response(stream: &mut impl Read) -> Result<Vec<u8>> {
                 }
                 buf.extend_from_slice(&chunk[..n]);
 
-                // Enforce header size limit before the terminator is found.
-                if !header_complete {
-                    if find_subsequence(&buf, b"\r\n\r\n").is_some()
-                        || find_subsequence(&buf, b"\n\n").is_some()
-                    {
-                        header_complete = true;
+                // Once we find the header/body boundary, determine body length.
+                if body_start.is_none() {
+                    if let Some(pos) = find_subsequence(&buf, b"\r\n\r\n") {
+                        let hdr_end = pos + 4;
+                        body_start = Some(hdr_end);
+                        let header_bytes = std::str::from_utf8(&buf[..pos]).unwrap_or("");
+                        let header_lower = header_bytes.to_ascii_lowercase();
+                        if header_lower.contains("transfer-encoding")
+                            && header_lower.contains("chunked")
+                        {
+                            is_chunked = true;
+                        } else if let Some(cl_start) = header_lower.find("content-length:") {
+                            let after = &header_lower[cl_start + 15..];
+                            let line_end = after.find('\n').unwrap_or(after.len());
+                            if let Ok(cl) = after[..line_end].trim().parse::<usize>() {
+                                expected_body_len = Some(cl);
+                            }
+                        }
+                    } else if find_subsequence(&buf, b"\n\n").is_some() {
+                        // Bare \n\n -- fall through to EOF-based reading.
+                        body_start = Some(buf.len());
                     } else if buf.len() > MAX_HEADER_SIZE {
                         return Err(OasisError::Backend(
                             "HTTP headers exceed 16 KB limit".into(),
                         ));
                     }
+                }
+
+                // Check if we have the complete body.
+                if let Some(bs) = body_start {
+                    if let Some(expected) = expected_body_len {
+                        // Content-Length: stop once we have enough bytes.
+                        if buf.len() - bs >= expected {
+                            // Trim any excess bytes (pipelined response).
+                            buf.truncate(bs + expected);
+                            break;
+                        }
+                    } else if is_chunked {
+                        // Chunked: stop after the final `0\r\n\r\n` marker.
+                        // Only check the tail of the buffer to avoid false
+                        // positives from binary data containing the same
+                        // byte sequence mid-stream.
+                        let chunk_data = &buf[bs..];
+                        if chunk_data.ends_with(b"\r\n0\r\n\r\n")
+                            || chunk_data.ends_with(b"\r\n0\r\n")
+                            || chunk_data.ends_with(b"0\r\n\r\n")
+                            || (chunk_data.starts_with(b"0\r\n") && chunk_data.len() <= 5)
+                        {
+                            break;
+                        }
+                    }
+                    // No content-length, not chunked: read until EOF/timeout.
                 }
             },
             Err(e)
@@ -486,6 +671,14 @@ fn decode_body(headers: &[(String, String)], body: Vec<u8>) -> Result<Vec<u8>> {
                 .map_err(|e| OasisError::Backend(format!("deflate decode: {e}").into()))?;
             Ok(decompressed)
         },
+        "br" => {
+            let mut decoder = BrotliDecoder::new(&body[..], 4096);
+            let mut decompressed = Vec::new();
+            decoder
+                .read_to_end(&mut decompressed)
+                .map_err(|e| OasisError::Backend(format!("brotli decode: {e}").into()))?;
+            Ok(decompressed)
+        },
         _ => Ok(body),
     }
 }
@@ -572,7 +765,7 @@ fn decode_chunked(data: &[u8]) -> Result<Vec<u8>> {
 
 /// Whether a status code is a redirect we should follow.
 fn is_redirect(status: u16) -> bool {
-    matches!(status, 301 | 302 | 307 | 308)
+    matches!(status, 301 | 302 | 303 | 307 | 308)
 }
 
 /// Find the position of a byte subsequence in a slice.

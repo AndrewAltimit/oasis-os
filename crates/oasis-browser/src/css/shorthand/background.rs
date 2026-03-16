@@ -7,7 +7,7 @@ pub(super) fn expand_background(value: &CssValue, important: bool) -> Vec<Declar
     // Simple heuristic: if the value is a color, set background-color.
     // If the value is a url(), set background-image.
     match value {
-        CssValue::Url(_) | CssValue::Gradient(_) => {
+        CssValue::Url(_) | CssValue::Gradient(_) | CssValue::RadialGradient(_) => {
             vec![Declaration {
                 property: "background-image".into(),
                 value: value.clone(),
@@ -24,7 +24,10 @@ pub(super) fn expand_background(value: &CssValue, important: bool) -> Vec<Declar
         CssValue::Multiple(vs) => {
             let mut decls = Vec::new();
             for v in vs {
-                if matches!(v, CssValue::Url(_) | CssValue::Gradient(_)) {
+                if matches!(
+                    v,
+                    CssValue::Url(_) | CssValue::Gradient(_) | CssValue::RadialGradient(_)
+                ) {
                     decls.push(Declaration {
                         property: "background-image".into(),
                         value: v.clone(),

@@ -61,7 +61,32 @@ pub fn collapse_whitespace(text: &str, white_space: WhiteSpace) -> String {
             }
             result
         },
-        WhiteSpace::Pre | WhiteSpace::PreWrap => text.to_string(),
+        WhiteSpace::Pre | WhiteSpace::PreWrap => {
+            // Expand tabs to spaces using `tab-size` (default 8).
+            if text.contains('\t') {
+                let mut result = String::with_capacity(text.len());
+                let mut col = 0usize;
+                let tab = 8; // Default; caller should pre-expand with correct tab_size.
+                for ch in text.chars() {
+                    if ch == '\t' {
+                        let spaces = tab - (col % tab);
+                        for _ in 0..spaces {
+                            result.push(' ');
+                        }
+                        col += spaces;
+                    } else if ch == '\n' {
+                        result.push(ch);
+                        col = 0;
+                    } else {
+                        result.push(ch);
+                        col += 1;
+                    }
+                }
+                result
+            } else {
+                text.to_string()
+            }
+        },
         WhiteSpace::PreLine => {
             let mut result = String::with_capacity(text.len());
             let mut in_space = false;

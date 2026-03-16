@@ -799,6 +799,8 @@ impl ComputedStyle {
                     self.background_image = BackgroundImage::Url(url.clone());
                 } else if let CssValue::Gradient(ref grad) = *value {
                     self.background_image = BackgroundImage::Gradient(grad.clone());
+                } else if let CssValue::RadialGradient(ref grad) = *value {
+                    self.background_image = BackgroundImage::RadialGradient(grad.clone());
                 }
             },
 
@@ -907,6 +909,13 @@ impl ComputedStyle {
                 } else if let CssValue::String(s) = value {
                     self.will_change_transform =
                         s.contains("transform") || s.contains("opacity") || s.contains("filter");
+                }
+            },
+
+            // -- Tab size ---------------------------------------------------
+            "tab-size" => {
+                if let CssValue::Number(n) = value {
+                    self.tab_size = (*n as u32).max(1);
                 }
             },
 
@@ -1275,6 +1284,7 @@ impl ComputedStyle {
             "counter-reset" => self.counter_reset = Vec::new(),
             "counter-increment" => self.counter_increment = Vec::new(),
             "will-change" => self.will_change_transform = false,
+            "tab-size" => self.tab_size = 8,
             "column-count" => self.column_count = 0,
             "column-width" => self.column_width = 0.0,
             "columns" => {
@@ -1966,6 +1976,7 @@ mod tests {
                     position: 1.0,
                 },
             ],
+            repeating: false,
         };
         let value = CssValue::Gradient(grad.clone());
         s.apply_declaration("background-image", &value, 16.0);
@@ -2012,7 +2023,7 @@ mod tests {
                     | "max-height" | "min-height"
                     | "transform-origin" | "filter"
                     | "counter-reset" | "counter-increment"
-                    | "will-change" | "column-count" | "column-width"
+                    | "will-change" | "tab-size" | "column-count" | "column-width"
                     | "columns" | "grid-auto-flow" | "grid-template-areas"
                     | "grid-area" | "table-layout"
                 ) {

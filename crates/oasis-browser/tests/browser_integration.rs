@@ -571,3 +571,118 @@ fn nested_lists_display_and_indentation() {
         xs,
     );
 }
+
+// -------------------------------------------------------------------
+// Performance regression: complex page with gradients must not freeze
+// -------------------------------------------------------------------
+
+#[test]
+fn complex_page_with_gradients_completes_within_budget() {
+    use std::time::Instant;
+
+    // Simulate a Wikipedia-like page: many elements, CSS gradients,
+    // nested structure, tables, and large blocks.
+    let html = r#"<html><head><style>
+        body { background: linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%); }
+        .hero { background: radial-gradient(circle, #667eea, #764ba2);
+                width: 100%; height: 120px; }
+        .card { background: linear-gradient(to bottom, #fff, #eee);
+                border: 1px solid #ccc; padding: 8px; margin: 4px; }
+        .nav { background: linear-gradient(90deg, #333, #555); color: #fff;
+               padding: 4px 8px; }
+        table { border-collapse: collapse; width: 100%; }
+        td, th { border: 1px solid #aaa; padding: 4px; }
+    </style></head><body>
+        <div class="nav">Home | About | Contact | Help | Search</div>
+        <div class="hero"><h1>Welcome to the Encyclopedia</h1></div>
+        <div class="card"><h2>Featured Article</h2>
+            <p>Lorem ipsum dolor sit amet, consectetur adipiscing elit.
+            Sed do eiusmod tempor incididunt ut labore et dolore magna aliqua.
+            Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris.</p>
+        </div>
+        <div class="card"><h2>Did you know?</h2>
+            <ul><li>Fact one about the world</li>
+                <li>Fact two about science</li>
+                <li>Fact three about history</li>
+                <li>Fact four about technology</li></ul>
+        </div>
+        <div class="card"><h2>Statistics</h2>
+            <table>
+                <tr><th>Category</th><th>Count</th><th>Updated</th></tr>
+                <tr><td>Articles</td><td>6,800,000</td><td>Today</td></tr>
+                <tr><td>Editors</td><td>45,000</td><td>This month</td></tr>
+                <tr><td>Languages</td><td>300+</td><td>Ongoing</td></tr>
+            </table>
+        </div>
+        <div class="card"><h2>Recent Changes</h2>
+            <p>Edit 1: Updated article on quantum physics</p>
+            <p>Edit 2: Fixed citation in biology article</p>
+            <p>Edit 3: Added new section to mathematics</p>
+            <p>Edit 4: Revised geography references</p>
+        </div>
+    </body></html>"#;
+
+    let start = Instant::now();
+
+    // Phase 1: Parse + cascade.
+    let doc = parse(html);
+    let ua = default_stylesheet();
+    let author_css = doc
+        .nodes
+        .iter()
+        .enumerate()
+        .filter_map(|(id, node)| {
+            if let NodeKind::Element(data) = &node.kind {
+                if data.tag == TagName::Style {
+                    Some(doc.text_content(id))
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        })
+        .collect::<Vec<_>>();
+    let author_sheets: Vec<Stylesheet> = author_css
+        .iter()
+        .map(|css| Stylesheet::parse(css))
+        .collect();
+    let mut sheets: Vec<&Stylesheet> = vec![&ua];
+    for s in &author_sheets {
+        sheets.push(s);
+    }
+    let ctx = CascadeContext::default();
+    let styles = style_tree(&doc, &sheets, &[], &ctx);
+
+    let cascade_elapsed = start.elapsed();
+
+    // Phase 2: Layout.
+    let layout = build_layout_tree(
+        &doc,
+        &styles,
+        &FixedMeasurer,
+        480.0,
+        272.0,
+        None,
+        &HashMap::new(),
+    );
+
+    let total_elapsed = start.elapsed();
+
+    // Budget: parse + cascade + layout must complete in under 500ms.
+    // Typical time on modern hardware is ~1-5ms for this page.
+    assert!(
+        total_elapsed.as_millis() < 500,
+        "complex page pipeline took {}ms (cascade: {}ms, total: {}ms) \
+         — exceeds 500ms budget; likely a performance regression",
+        total_elapsed.as_millis(),
+        cascade_elapsed.as_millis(),
+        total_elapsed.as_millis(),
+    );
+
+    // Verify layout produced meaningful content.
+    assert!(
+        layout.dimensions.content.height > 0.0,
+        "layout should have positive height",
+    );
+}

@@ -4,6 +4,8 @@ use oasis_types::backend::{Color, SdiBackend};
 use oasis_types::error::Result;
 use oasis_vfs::Vfs;
 
+use crate::html::dom::NodeId;
+use crate::layout::box_model::{LayoutBox, Rect};
 use crate::paint;
 use crate::{BrowserWidget, Focus, LoadingState};
 
@@ -16,12 +18,37 @@ impl BrowserWidget {
     ///
     /// Draws chrome (URL bar, navigation buttons, status bar) and
     /// the page content viewport.
-    /// Per-frame update: process pending image loads within a time budget.
+    /// Per-frame update: process pending image loads within a time budget,
+    /// advance CSS animations and transitions.
     ///
     /// Call this once per frame before `paint()`. Images stream in
     /// progressively so the page is never blocked waiting for all images.
     pub fn tick(&mut self, vfs: &dyn Vfs) {
         self.load_next_image_batch(vfs, 8);
+
+        // Compute frame delta for animations/transitions.
+        let now = std::time::Instant::now();
+        let dt_ms = self
+            .last_tick_time
+            .map_or(16.0, |prev| prev.elapsed().as_secs_f32() * 1000.0);
+        self.last_tick_time = Some(now);
+
+        // Advance CSS animations and transitions.
+        let anim_active = self.animation_engine.tick(dt_ms);
+        let trans_active = self.transition_engine.tick(dt_ms);
+        if anim_active || trans_active {
+            // Animations or transitions changed values — repaint needed.
+            self.layout_dirty = true;
+        }
+
+        // Tick JS timers (setTimeout / setInterval).
+        #[cfg(feature = "javascript")]
+        if let Some(engine) = &self.js_engine {
+            let fired = engine.tick_timers(dt_ms as f64);
+            if fired > 0 {
+                self.layout_dirty = true;
+            }
+        }
 
         // Process pending JS navigation actions.
         #[cfg(feature = "javascript")]
@@ -102,6 +129,11 @@ impl BrowserWidget {
                 let link = self.link_map[idx].clone();
                 paint::paint_link_highlight(&link, backend, Color::rgb(255, 200, 0))?;
             }
+        }
+
+        // Paint focus indicator around the focused form element.
+        if let Some(focused_nid) = self.focused_node {
+            self.paint_focus_indicator(backend, focused_nid, content_y)?;
         }
 
         // Paint scrollbar when content overflows viewport.
@@ -369,5 +401,54 @@ impl BrowserWidget {
         )?;
 
         Ok(())
+    }
+
+    /// Draw a 2px focus outline around the layout box for `node_id`.
+    fn paint_focus_indicator(
+        &self,
+        backend: &mut dyn SdiBackend,
+        node_id: NodeId,
+        content_y: i32,
+    ) -> Result<()> {
+        let layout = match &self.layout_root {
+            Some(l) => l,
+            None => return Ok(()),
+        };
+        let Some(rect) = Self::find_node_rect(layout, node_id) else {
+            return Ok(());
+        };
+
+        let scroll_y = self.scroll.scroll_y as f32;
+        let scroll_x = self.scroll.scroll_x as f32;
+        let x = (rect.x - scroll_x + self.window_x as f32) as i32 - 2;
+        let y = (rect.y - scroll_y + content_y as f32) as i32 - 2;
+        let w = rect.width as u32 + 4;
+        let h = rect.height as u32 + 4;
+        let focus_color = Color::rgb(0, 120, 212); // Blue focus ring.
+        let thickness: u32 = 2;
+
+        // Top edge
+        backend.fill_rect(x, y, w, thickness, focus_color)?;
+        // Bottom edge
+        backend.fill_rect(x, y + h as i32, w, thickness, focus_color)?;
+        // Left edge
+        backend.fill_rect(x, y, thickness, h + thickness, focus_color)?;
+        // Right edge
+        backend.fill_rect(x + w as i32, y, thickness, h + thickness, focus_color)?;
+
+        Ok(())
+    }
+
+    /// Find the border-box rectangle of a layout box associated with a DOM node.
+    fn find_node_rect(layout_box: &LayoutBox, node_id: NodeId) -> Option<Rect> {
+        if layout_box.node == Some(node_id) {
+            return Some(layout_box.dimensions.border_box());
+        }
+        for child in &layout_box.children {
+            if let Some(rect) = Self::find_node_rect(child, node_id) {
+                return Some(rect);
+            }
+        }
+        None
     }
 }

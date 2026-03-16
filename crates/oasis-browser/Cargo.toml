@@ -11,6 +11,7 @@ documentation = "https://docs.rs/oasis-browser"
 [features]
 default = []
 javascript = ["dep:oasis-js"]
+webp = ["dep:image"]
 
 [dependencies]
 oasis-types = { workspace = true }
@@ -22,9 +23,11 @@ rustc-hash = { workspace = true }
 serde = { workspace = true }
 log = { workspace = true }
 flate2 = { workspace = true }
+brotli = { workspace = true }
 png = { workspace = true }
 jpeg-decoder = { workspace = true }
 gif = { workspace = true }
+image = { version = "0.25", default-features = false, features = ["webp"], optional = true }
 
 [dev-dependencies]
 proptest.workspace = true

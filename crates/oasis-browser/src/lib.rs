@@ -21,6 +21,9 @@ pub mod reader;
 pub mod scroll;
 pub mod search;
 pub mod skin;
+pub mod svg;
+
+pub mod canvas;
 
 mod widget_images;
 mod widget_input;
@@ -30,6 +33,7 @@ mod widget_pipeline;
 #[cfg(feature = "javascript")]
 mod js_dom;
 
+#[cfg(test)]
 #[cfg(test)]
 pub(crate) mod test_utils;
 
@@ -97,6 +101,30 @@ pub enum LoadingState {
     Loading,
     /// The most recent load failed.
     Error,
+}
+
+// -----------------------------------------------------------------------
+// BrowserError
+// -----------------------------------------------------------------------
+
+/// An error recorded during page loading, parsing, or rendering.
+#[derive(Debug, Clone)]
+pub struct BrowserError {
+    /// The category of error.
+    pub kind: BrowserErrorKind,
+    /// Human-readable description.
+    pub message: String,
+}
+
+/// Category of a [`BrowserError`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BrowserErrorKind {
+    /// Network or resource loading error.
+    Network,
+    /// HTML/CSS parse error.
+    Parse,
+    /// JavaScript execution error.
+    Script,
 }
 
 // -----------------------------------------------------------------------
@@ -203,6 +231,10 @@ pub struct BrowserWidget {
     /// Whether the layout tree needs rebuilding.
     layout_dirty: bool,
 
+    /// When true, the next `load_html` call skips pushing to the
+    /// navigation history. Used by back/forward cache restore.
+    skip_nav_push: bool,
+
     /// Viewport width used for the most recent layout pass.
     last_layout_w: u32,
 
@@ -261,18 +293,29 @@ pub struct BrowserWidget {
     #[cfg(feature = "javascript")]
     js_doc: Option<js_dom::SharedDoc>,
 
+    /// Shared computed styles for `getComputedStyle()` in JS.
+    /// Updated after CSS cascade so event handlers see current values.
+    #[cfg(feature = "javascript")]
+    js_styles: js_dom::SharedStyles,
+
     /// Pending navigation actions from JavaScript (`location.assign`,
     /// `history.back`/`forward`).
     #[cfg(feature = "javascript")]
     js_nav_actions: js_dom::SharedNavActions,
 
+    /// Shared canvas states keyed by DOM `NodeId`. Populated during
+    /// layout for `<canvas>` elements, accessed by JS canvas bindings.
+    #[cfg(feature = "javascript")]
+    canvas_states: canvas::SharedCanvasMap,
+
     /// CSS transition engine for smooth property interpolation.
-    #[allow(dead_code)]
     transition_engine: css::transition::TransitionEngine,
 
     /// CSS animation engine for `@keyframes` animations.
-    #[allow(dead_code)]
     animation_engine: css::animation::AnimationEngine,
+
+    /// Timestamp of the last `tick()` call for computing animation deltas.
+    last_tick_time: Option<std::time::Instant>,
 
     /// Content Security Policy for the current page (parsed from HTTP
     /// response headers).
@@ -301,6 +344,13 @@ pub struct BrowserWidget {
     /// Last font size used for layout (base * zoom). When this changes
     /// the text cache is invalidated.
     last_effective_font_size: f32,
+
+    /// Accumulated errors from page loading, parsing, and JS execution
+    /// for the current page. Cleared on each new navigation.
+    page_errors: Vec<BrowserError>,
+
+    /// Form state manager for HTML `<form>` elements on the current page.
+    form_manager: forms::FormManager,
 }
 
 impl BrowserWidget {
@@ -336,6 +386,7 @@ impl BrowserWidget {
             window_h: 272,
             tls: None,
             layout_dirty: false,
+            skip_nav_push: false,
             last_layout_w: 480,
             visited_urls: HashSet::new(),
             hover_node: None,
@@ -357,9 +408,14 @@ impl BrowserWidget {
             #[cfg(feature = "javascript")]
             js_doc: None,
             #[cfg(feature = "javascript")]
+            js_styles: std::rc::Rc::new(std::cell::RefCell::new(Vec::new())),
+            #[cfg(feature = "javascript")]
             js_nav_actions: std::rc::Rc::new(std::cell::RefCell::new(Vec::new())),
+            #[cfg(feature = "javascript")]
+            canvas_states: std::rc::Rc::new(std::cell::RefCell::new(HashMap::new())),
             transition_engine: css::transition::TransitionEngine::new(),
             animation_engine: css::animation::AnimationEngine::new(),
+            last_tick_time: None,
             page_csp: None,
             loading_start: None,
             search_state: String::new(),
@@ -367,6 +423,8 @@ impl BrowserWidget {
             tab_focus_index: -1,
             text_cache: layout::text_cache::new_shared_cache(),
             last_effective_font_size: effective_font,
+            page_errors: Vec::new(),
+            form_manager: forms::FormManager::new(),
         }
     }
 
@@ -429,6 +487,12 @@ impl BrowserWidget {
             base_url.as_deref(),
             &image_info,
         );
+
+        #[cfg(feature = "javascript")]
+        {
+            self.canvas_states.borrow_mut().clear();
+            canvas::collect_canvas_states(&layout_root, &self.canvas_states);
+        }
 
         self.layout_root = Some(layout_root);
         self.link_map.clear();
@@ -499,6 +563,22 @@ impl BrowserWidget {
     /// Get the current error message, if any.
     pub fn error_message(&self) -> Option<&str> {
         self.error_message.as_deref()
+    }
+
+    /// Accumulated errors from the current page (network, parse, JS).
+    ///
+    /// Cleared on each new navigation. Useful for developer tooling
+    /// or debugging pages that fail to load correctly.
+    pub fn errors(&self) -> &[BrowserError] {
+        &self.page_errors
+    }
+
+    /// Record a browser error for the current page.
+    pub(crate) fn record_error(&mut self, kind: BrowserErrorKind, message: impl Into<String>) {
+        self.page_errors.push(BrowserError {
+            kind,
+            message: message.into(),
+        });
     }
 
     /// Get the scroll state.

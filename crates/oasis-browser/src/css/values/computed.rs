@@ -183,6 +183,9 @@ pub struct ComputedStyle {
     // -- Will-change ---------------------------------------------------
     pub will_change_transform: bool,
 
+    // -- Tab size (for preformatted text) --------------------------------
+    pub tab_size: u32,
+
     // -- Multi-column ---------------------------------------------------
     pub column_count: u32,
     pub column_width: f32,
@@ -365,6 +368,8 @@ impl Default for ComputedStyle {
 
             will_change_transform: false,
 
+            tab_size: 8,
+
             column_count: 0,
             column_width: 0.0,
 
@@ -384,6 +389,119 @@ impl Default for ComputedStyle {
 }
 
 impl ComputedStyle {
+    /// Return the serialized CSS value for a given property name.
+    ///
+    /// Handles the ~20 most common properties queried via
+    /// `getComputedStyle().getPropertyValue()`.
+    pub fn get_property_value(&self, property: &str) -> String {
+        fn color_to_css(c: Color) -> String {
+            if c.a == 255 {
+                format!("rgb({}, {}, {})", c.r, c.g, c.b)
+            } else {
+                let a = f64::from(c.a) / 255.0;
+                format!("rgba({}, {}, {}, {a:.2})", c.r, c.g, c.b)
+            }
+        }
+        fn dim_to_css(d: Dimension) -> String {
+            match d {
+                Dimension::Auto => "auto".into(),
+                Dimension::Px(v) => format!("{v}px"),
+                Dimension::Percent(v) => format!("{v}%"),
+                Dimension::MinContent => "min-content".into(),
+                Dimension::MaxContent => "max-content".into(),
+                Dimension::FitContent => "fit-content".into(),
+            }
+        }
+        match property {
+            "color" => color_to_css(self.color),
+            "background-color" => color_to_css(self.background_color),
+            "display" => match self.display {
+                Display::Block => "block",
+                Display::Inline => "inline",
+                Display::InlineBlock => "inline-block",
+                Display::Flex => "flex",
+                Display::Grid => "grid",
+                Display::ListItem => "list-item",
+                Display::Table => "table",
+                Display::TableRow => "table-row",
+                Display::TableCell => "table-cell",
+                Display::None => "none",
+            }
+            .into(),
+            "position" => match self.position {
+                Position::Static => "static",
+                Position::Relative => "relative",
+                Position::Absolute => "absolute",
+                Position::Fixed => "fixed",
+                Position::Sticky => "sticky",
+            }
+            .into(),
+            "visibility" => match self.visibility {
+                Visibility::Visible => "visible",
+                Visibility::Hidden => "hidden",
+            }
+            .into(),
+            "font-size" => format!("{}px", self.font_size),
+            "font-weight" => match self.font_weight {
+                FontWeight::Normal => "400".into(),
+                FontWeight::Bold => "700".into(),
+            },
+            "line-height" => format!("{}px", self.line_height),
+            "width" => dim_to_css(self.width),
+            "height" => dim_to_css(self.height),
+            "margin-top" => format!("{}px", self.margin_top),
+            "margin-right" => format!("{}px", self.margin_right),
+            "margin-bottom" => format!("{}px", self.margin_bottom),
+            "margin-left" => format!("{}px", self.margin_left),
+            "padding-top" => format!("{}px", self.padding_top),
+            "padding-right" => format!("{}px", self.padding_right),
+            "padding-bottom" => format!("{}px", self.padding_bottom),
+            "padding-left" => format!("{}px", self.padding_left),
+            "border-top-width" => format!("{}px", self.border_top_width),
+            "border-right-width" => format!("{}px", self.border_right_width),
+            "border-bottom-width" => format!("{}px", self.border_bottom_width),
+            "border-left-width" => format!("{}px", self.border_left_width),
+            "opacity" => format!("{}", self.opacity),
+            "z-index" => {
+                if self.position == Position::Static {
+                    "auto".into()
+                } else {
+                    format!("{}", self.z_index)
+                }
+            },
+            "overflow" => match self.overflow {
+                Overflow::Visible => "visible",
+                Overflow::Hidden => "hidden",
+                Overflow::Scroll => "scroll",
+                Overflow::Auto => "auto",
+            }
+            .into(),
+            "text-align" => match self.text_align {
+                TextAlign::Left => "left",
+                TextAlign::Right => "right",
+                TextAlign::Center => "center",
+                TextAlign::Justify => "justify",
+            }
+            .into(),
+            "border-radius" => format!("{}px", self.border_radius),
+            "float" => match self.float {
+                Float::None => "none",
+                Float::Left => "left",
+                Float::Right => "right",
+            }
+            .into(),
+            "max-width" => dim_to_css(self.max_width),
+            "max-height" => dim_to_css(self.max_height),
+            "min-width" => dim_to_css(self.min_width),
+            "min-height" => dim_to_css(self.min_height),
+            "top" => dim_to_css(self.top),
+            "right" => dim_to_css(self.right),
+            "bottom" => dim_to_css(self.bottom),
+            "left" => dim_to_css(self.left),
+            _ => String::new(),
+        }
+    }
+
     /// Create an initial style that inherits inheritable properties from
     /// the given parent style. Non-inheritable properties keep their
     /// CSS initial values.

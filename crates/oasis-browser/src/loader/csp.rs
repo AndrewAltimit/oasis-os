@@ -1,7 +1,8 @@
-//! Minimal Content Security Policy (CSP) parser and enforcement.
+//! Content Security Policy (CSP) parser and enforcement.
 //!
-//! Supports `default-src` and `script-src` directives with source
-//! values: `'self'`, `'none'`, `*`, and explicit URL/domain patterns.
+//! Supports `default-src`, `script-src`, `style-src`, `img-src`, and
+//! `connect-src` directives with source values: `'self'`, `'none'`, `*`,
+//! and explicit URL/domain patterns.
 
 use super::Url;
 
@@ -12,6 +13,12 @@ pub struct CspPolicy {
     pub default_src: Option<Vec<CspSource>>,
     /// Allowed sources for `script-src`.
     pub script_src: Option<Vec<CspSource>>,
+    /// Allowed sources for `style-src`.
+    pub style_src: Option<Vec<CspSource>>,
+    /// Allowed sources for `img-src`.
+    pub img_src: Option<Vec<CspSource>>,
+    /// Allowed sources for `connect-src` (XHR, fetch, WebSocket).
+    pub connect_src: Option<Vec<CspSource>>,
 }
 
 /// A single CSP source expression.
@@ -50,6 +57,9 @@ pub fn parse_csp(header: &str) -> CspPolicy {
         match name.to_lowercase().as_str() {
             "default-src" => policy.default_src = Some(sources),
             "script-src" => policy.script_src = Some(sources),
+            "style-src" => policy.style_src = Some(sources),
+            "img-src" => policy.img_src = Some(sources),
+            "connect-src" => policy.connect_src = Some(sources),
             _ => {
                 // Unsupported directive -- ignore.
             },
@@ -82,7 +92,10 @@ impl CspPolicy {
     ) -> bool {
         let sources = match resource_type {
             CspResourceType::Script => self.script_src.as_ref().or(self.default_src.as_ref()),
-            _ => self.default_src.as_ref(),
+            CspResourceType::Style => self.style_src.as_ref().or(self.default_src.as_ref()),
+            CspResourceType::Image => self.img_src.as_ref().or(self.default_src.as_ref()),
+            CspResourceType::Connect => self.connect_src.as_ref().or(self.default_src.as_ref()),
+            CspResourceType::Default => self.default_src.as_ref(),
         };
 
         let Some(sources) = sources else {
@@ -117,7 +130,11 @@ impl CspPolicy {
 
     /// Returns `true` if this policy has any directives set.
     pub fn is_active(&self) -> bool {
-        self.default_src.is_some() || self.script_src.is_some()
+        self.default_src.is_some()
+            || self.script_src.is_some()
+            || self.style_src.is_some()
+            || self.img_src.is_some()
+            || self.connect_src.is_some()
     }
 }
 
@@ -130,6 +147,8 @@ pub enum CspResourceType {
     Style,
     /// Scripts (`<script>`).
     Script,
+    /// Connections (XHR, fetch, WebSocket).
+    Connect,
     /// Other or unknown resource type.
     Default,
 }

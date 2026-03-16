@@ -31,6 +31,7 @@ impl BrowserWidget {
         self.reader_html = None;
         self.error_message = None;
         self.page_csp = None;
+        self.page_errors.clear();
         self.decoded_images.clear();
         self.image_textures.clear();
         self.pending_images.clear();
@@ -73,10 +74,12 @@ impl BrowserWidget {
                 self.cache.set_validators(&url_str, etag, last_modified);
             },
             Err(e) => {
-                let err_resp = loader::vfs::error_page(url, &e.to_string());
+                let err_msg = e.to_string();
+                let err_resp = loader::vfs::error_page(url, &err_msg);
                 self.process_response(err_resp);
                 self.state = LoadingState::Error;
-                self.error_message = Some(e.to_string());
+                self.error_message = Some(err_msg.clone());
+                self.record_error(crate::BrowserErrorKind::Network, err_msg);
             },
         }
 
@@ -84,6 +87,52 @@ impl BrowserWidget {
         if !self.pending_images.is_empty() {
             self.state = LoadingState::Loading;
         }
+    }
+
+    /// Navigate using the in-memory cache if available, otherwise fetch.
+    ///
+    /// Used by back/forward navigation to avoid re-fetching pages that
+    /// were already loaded. Falls back to `navigate_vfs()` on cache miss.
+    pub fn navigate_cached_or_fetch(&mut self, url: &str, vfs: &dyn Vfs) {
+        use crate::loader::ContentType;
+
+        // Check if we have a cached response for this URL.
+        if let Some(entry) = self.cache.get(url) {
+            let body = entry.response.body.clone();
+            let ct = entry.response.content_type;
+            if ct == ContentType::Html || ct == ContentType::PlainText || ct == ContentType::Unknown
+            {
+                // Re-render from cached HTML without a network round-trip.
+                // Skip nav.navigate() to preserve forward stack.
+                self.skip_nav_push = true;
+                self.state = LoadingState::Loading;
+                self.selected_link = -1;
+                self.reader_mode = false;
+                self.reader_html = None;
+                self.error_message = None;
+                self.page_csp = None;
+                self.page_errors.clear();
+                self.decoded_images.clear();
+                self.image_textures.clear();
+                self.pending_images.clear();
+                self.decoded_image_bytes = 0;
+                self.decoded_image_lru.clear();
+                self.cached_image_info.clear();
+                self.image_info_dirty = false;
+
+                let text = String::from_utf8_lossy(&body);
+                self.load_html(&text, url);
+
+                self.collect_page_image_requests();
+                if !self.pending_images.is_empty() {
+                    self.state = LoadingState::Loading;
+                }
+                return;
+            }
+        }
+
+        // Cache miss or non-HTML content — fetch from network.
+        self.navigate_vfs(url, vfs);
     }
 
     /// Navigate to a URL using the VFS as the resource source.
@@ -94,6 +143,7 @@ impl BrowserWidget {
         self.reader_html = None;
         self.error_message = None;
         self.page_csp = None;
+        self.page_errors.clear();
         self.decoded_images.clear();
         self.image_textures.clear();
         self.pending_images.clear();
@@ -136,10 +186,12 @@ impl BrowserWidget {
                 self.cache.set_validators(&url_str, etag, last_modified);
             },
             Err(e) => {
-                let err_resp = loader::vfs::error_page(url, &e.to_string());
+                let err_msg = e.to_string();
+                let err_resp = loader::vfs::error_page(url, &err_msg);
                 self.process_response(err_resp);
                 self.state = LoadingState::Error;
-                self.error_message = Some(e.to_string());
+                self.error_message = Some(err_msg.clone());
+                self.record_error(crate::BrowserErrorKind::Network, err_msg);
             },
         }
 
@@ -232,14 +284,39 @@ impl BrowserWidget {
                 Ok(engine) => {
                     let s = std::rc::Rc::clone(&shared);
                     let nav = std::rc::Rc::clone(&self.js_nav_actions);
+                    let js_sty = std::rc::Rc::clone(&self.js_styles);
                     if let Err(e) = engine.with_context(|ctx| {
-                        js_dom::install_document_global_with_nav(&ctx, &s, url, &nav)
+                        js_dom::install_document_global_with_csp(
+                            &ctx,
+                            &s,
+                            url,
+                            &nav,
+                            &js_sty,
+                            self.page_csp.as_ref(),
+                        )
                     }) {
                         log::warn!("JS DOM install failed: {}", e.message);
+                        self.record_error(
+                            crate::BrowserErrorKind::Script,
+                            format!("JS DOM install: {}", e.message),
+                        );
+                    }
+                    // Install canvas 2D context bindings.
+                    let cm = std::rc::Rc::clone(&self.canvas_states);
+                    if let Err(e) =
+                        engine.with_context(|ctx| js_dom::install_canvas_bindings(&ctx, &cm))
+                    {
+                        log::warn!("Canvas bindings install failed: {}", e.message);
                     }
                     if !scripts.is_empty() {
                         let script_refs: Vec<&str> = scripts.iter().map(String::as_str).collect();
                         engine.eval_all(&script_refs);
+                    }
+                    // Register inline event handlers (onclick, etc.)
+                    // after scripts so Element class is available.
+                    {
+                        let doc_borrow = shared.borrow();
+                        js_dom::register_inline_handlers(&engine, &doc_borrow);
                     }
                     self.console_output = engine.console_output();
                     // Retain engine + shared doc for event dispatch.
@@ -248,6 +325,10 @@ impl BrowserWidget {
                 },
                 Err(e) => {
                     log::warn!("JS engine init failed: {}", e.message);
+                    self.record_error(
+                        crate::BrowserErrorKind::Script,
+                        format!("JS engine init: {}", e.message),
+                    );
                 },
             }
             // Clone the (possibly mutated) document for layout/paint.
@@ -275,9 +356,40 @@ impl BrowserWidget {
         };
         let styles = css::cascade::style_tree(&doc, &all_sheets, &inline_styles, &ctx);
 
+        // Update shared computed styles for JS getComputedStyle().
+        #[cfg(feature = "javascript")]
+        {
+            *self.js_styles.borrow_mut() = styles.clone();
+        }
+
         // Cache parsed sheets for hover restyles.
         self.cached_author_sheets = author_sheets;
         self.cached_inline_styles = inline_styles;
+
+        // 4b. Register CSS animations with the animation engine.
+        //     Collect @keyframes from all stylesheets, then register any
+        //     node that declares `animation-name`.
+        {
+            let mut all_keyframes: Vec<&css::parser::KeyframesRule> = Vec::new();
+            all_keyframes.extend(ua_sheet.keyframes.iter());
+            for sheet in &self.cached_author_sheets {
+                all_keyframes.extend(sheet.keyframes.iter());
+            }
+            self.animation_engine = css::animation::AnimationEngine::new();
+            for (node_id, maybe_style) in styles.iter().enumerate() {
+                if let Some(computed) = maybe_style
+                    && !computed.animations.is_empty()
+                {
+                    let kf_owned: Vec<css::parser::KeyframesRule> =
+                        all_keyframes.iter().copied().cloned().collect();
+                    self.animation_engine.start_animations(
+                        node_id,
+                        &computed.animations,
+                        &kf_owned,
+                    );
+                }
+            }
+        }
 
         // 5. Build link href map from DOM.
         let href_map = Self::build_link_map(&doc);
@@ -300,6 +412,13 @@ impl BrowserWidget {
             &image_info,
         );
 
+        // 7a. Collect canvas states from layout tree.
+        #[cfg(feature = "javascript")]
+        {
+            self.canvas_states.borrow_mut().clear();
+            crate::canvas::collect_canvas_states(&layout_root, &self.canvas_states);
+        }
+
         // 7. Store results.
         self.document = Some(doc);
         self.styles = styles;
@@ -311,8 +430,11 @@ impl BrowserWidget {
         self.layout_dirty = false;
         self.last_layout_w = self.window_w;
 
-        // 8. Update navigation.
-        self.nav.navigate(url, &title);
+        // 8. Update navigation (skip if restoring from history).
+        if !self.skip_nav_push {
+            self.nav.navigate(url, &title);
+        }
+        self.skip_nav_push = false;
     }
 
     /// Walk the DOM to build a map of `<a>` element NodeIds to their

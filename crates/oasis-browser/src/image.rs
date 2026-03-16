@@ -27,6 +27,7 @@ pub enum ImageFormat {
     Png,
     Bmp,
     Gif,
+    Webp,
     Unknown,
 }
 
@@ -44,6 +45,8 @@ pub fn detect_format(data: &[u8]) -> ImageFormat {
         ImageFormat::Bmp
     } else if data.starts_with(b"GIF8") {
         ImageFormat::Gif
+    } else if data.len() >= 12 && &data[0..4] == b"RIFF" && &data[8..12] == b"WEBP" {
+        ImageFormat::Webp
     } else {
         ImageFormat::Unknown
     }
@@ -63,6 +66,7 @@ pub fn decode_image(data: &[u8]) -> Option<DecodedImage> {
         ImageFormat::Png => decode_png(data),
         ImageFormat::Jpeg => decode_jpeg(data),
         ImageFormat::Gif => decode_gif(data),
+        ImageFormat::Webp => decode_webp(data),
         ImageFormat::Unknown => None,
     }?;
 
@@ -278,6 +282,34 @@ fn decode_gif(data: &[u8]) -> Option<DecodedImage> {
         height: h,
         pixels: frame.buffer[..expected_len].to_vec(),
     })
+}
+
+/// Decode a WebP image.
+///
+/// When the `webp` feature is enabled, uses the `image` crate's WebP
+/// decoder. Otherwise returns `None`.
+fn decode_webp(data: &[u8]) -> Option<DecodedImage> {
+    #[cfg(feature = "webp")]
+    {
+        let img = image::load_from_memory_with_format(data, image::ImageFormat::WebP).ok()?;
+        let rgba = img.to_rgba8();
+        let w = rgba.width();
+        let h = rgba.height();
+        if w > MAX_IMAGE_DIMENSION || h > MAX_IMAGE_DIMENSION {
+            return None;
+        }
+        Some(DecodedImage {
+            width: w,
+            height: h,
+            pixels: rgba.into_raw(),
+        })
+    }
+    #[cfg(not(feature = "webp"))]
+    {
+        // WebP decoding requires the `webp` feature (adds the `image` crate).
+        let _ = data;
+        None
+    }
 }
 
 /// Scale an image to fit within max dimensions, preserving aspect ratio.

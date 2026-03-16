@@ -15,6 +15,7 @@
 
 mod background;
 mod borders;
+pub(crate) mod filters;
 mod markers;
 mod replaced;
 mod shadow;
@@ -484,6 +485,20 @@ pub(super) fn paint_box(
 /// Scale a color's alpha channel by an opacity factor.
 pub(super) fn apply_opacity(color: Color, opacity: f32) -> Color {
     color.apply_opacity(opacity)
+}
+
+/// Apply CSS filter effects and opacity to a color.
+pub(super) fn apply_filters_and_opacity(
+    color: Color,
+    opacity: f32,
+    filter_list: &[crate::css::values::FilterFunction],
+) -> Color {
+    let c = if filter_list.is_empty() {
+        color
+    } else {
+        filters::apply_filters(color, filter_list)
+    };
+    c.apply_opacity(opacity)
 }
 
 /// Returns `true` if the layout box or any of its descendants is an

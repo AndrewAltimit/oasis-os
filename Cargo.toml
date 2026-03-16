@@ -115,6 +115,7 @@ wasm-bindgen-futures = "0.4"
 
 # Compression
 flate2 = "1"
+brotli = { version = "7", default-features = false, features = ["std"] }
 
 # Fast hashing
 rustc-hash = "2.1"

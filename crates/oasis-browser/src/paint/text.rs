@@ -8,7 +8,7 @@ use crate::layout::box_model::LayoutBox;
 use oasis_types::backend::SdiBackend;
 use oasis_types::error::Result;
 
-use super::{PaintContext, apply_opacity, paint_box};
+use super::{PaintContext, apply_filters_and_opacity, apply_opacity, paint_box};
 
 pub(super) fn paint_inline_content(
     layout_box: &LayoutBox,
@@ -72,7 +72,7 @@ pub(super) fn paint_text(
     let sx = (x - ctx.scroll_x + offset_x as f32) as i32;
     let sy = (y - ctx.scroll_y + offset_y as f32) as i32;
 
-    let color = apply_opacity(style.color, style.opacity);
+    let color = apply_filters_and_opacity(style.color, style.opacity, &style.filters);
     let bold = style.font_weight == crate::css::values::FontWeight::Bold;
     let italic = style.font_style == crate::css::values::FontStyle::Italic;
     let font_size = style.font_size as u16;

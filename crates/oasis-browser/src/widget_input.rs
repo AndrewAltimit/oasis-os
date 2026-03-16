@@ -247,17 +247,20 @@ impl BrowserWidget {
                 self.handle_click(*x, *y, vfs);
                 true
             },
-            // Zoom: + / - / 0 keys when not in URL bar.
-            InputEvent::TextInput('+' | '=') => {
-                self.zoom_in();
-                true
-            },
-            InputEvent::TextInput('-') => {
-                self.zoom_out();
-                true
-            },
-            InputEvent::TextInput('0') => {
-                self.reset_zoom();
+            // Dispatch keydown + input events to JS for focused nodes.
+            InputEvent::TextInput(ch) => {
+                #[cfg(feature = "javascript")]
+                if let (Some(nid), Some(engine)) = (self.focused_node, &self.js_engine) {
+                    Self::dispatch_js_key_event(engine, nid, *ch);
+                    Self::dispatch_js_event(engine, nid, "input");
+                }
+                // Zoom: + / - / 0 keys when not in URL bar.
+                match ch {
+                    '+' | '=' => self.zoom_in(),
+                    '-' => self.zoom_out(),
+                    '0' => self.reset_zoom(),
+                    _ => {},
+                }
                 true
             },
             _ => false,
@@ -569,6 +572,25 @@ impl BrowserWidget {
         let _ = engine.eval(&code);
     }
 
+    /// Dispatch a keydown event to JS with the key character as detail.
+    #[cfg(feature = "javascript")]
+    fn dispatch_js_key_event(engine: &oasis_js::JsEngine, node_id: NodeId, key: char) {
+        // Escape characters that break JS single-quoted string literals.
+        let escaped: String = match key {
+            '\\' => "\\\\".into(),
+            '\'' => "\\'".into(),
+            '\n' => "\\n".into(),
+            '\r' => "\\r".into(),
+            c => c.to_string(),
+        };
+        let code = format!(
+            "if(typeof __oasis_dispatch_with_bubbling==='function')\
+             __oasis_dispatch_with_bubbling({},'keydown','{}')",
+            node_id, escaped
+        );
+        let _ = engine.eval(&code);
+    }
+
     /// Handle a cursor move at window-relative coordinates.
     ///
     /// Hit-tests link regions to determine the hover target. If the
@@ -600,6 +622,18 @@ impl BrowserWidget {
 
             let old_hover = self.hover_node;
             self.hover_node = new_hover;
+
+            // Dispatch mouseover/mouseout events to JS.
+            #[cfg(feature = "javascript")]
+            if let Some(engine) = &self.js_engine {
+                if let Some(old_nid) = old_hover {
+                    Self::dispatch_js_event(engine, old_nid, "mouseout");
+                }
+                if let Some(new_nid) = new_hover {
+                    Self::dispatch_js_event(engine, new_nid, "mouseover");
+                }
+            }
+
             self.restyle_hover_affected(old_hover);
         }
     }
@@ -712,6 +746,8 @@ impl BrowserWidget {
     }
 
     /// Go back in history.
+    ///
+    /// Prefers loading from cache when available to avoid re-fetching.
     pub fn go_back(&mut self, vfs: &dyn Vfs) {
         // Save current scroll position.
         self.nav.update_scroll(self.scroll.scroll_y);
@@ -719,19 +755,21 @@ impl BrowserWidget {
         if let Some(entry) = self.nav.go_back() {
             let url = entry.url.clone();
             let scroll_y = entry.scroll_y;
-            self.navigate_vfs(&url, vfs);
+            self.navigate_cached_or_fetch(&url, vfs);
             self.scroll.scroll_to(scroll_y);
         }
     }
 
     /// Go forward in history.
+    ///
+    /// Prefers loading from cache when available to avoid re-fetching.
     pub fn go_forward(&mut self, vfs: &dyn Vfs) {
         self.nav.update_scroll(self.scroll.scroll_y);
 
         if let Some(entry) = self.nav.go_forward() {
             let url = entry.url.clone();
             let scroll_y = entry.scroll_y;
-            self.navigate_vfs(&url, vfs);
+            self.navigate_cached_or_fetch(&url, vfs);
             self.scroll.scroll_to(scroll_y);
         }
     }
@@ -740,6 +778,22 @@ impl BrowserWidget {
     pub fn go_home(&mut self, vfs: &dyn Vfs) {
         let url = self.nav.go_home();
         self.navigate_vfs(&url, vfs);
+    }
+
+    /// Dispatch a form key event to the form manager and handle the
+    /// resulting action (submission, focus change, etc.).
+    ///
+    /// Returns `true` if the event was consumed by the form manager.
+    pub fn dispatch_form_key(&mut self, key: crate::forms::FormKey, vfs: &dyn Vfs) -> bool {
+        let action = self.form_manager.handle_input(key);
+        match action {
+            crate::forms::FormAction::Submit(ref data) => {
+                self.handle_form_submit(data, vfs);
+                true
+            },
+            crate::forms::FormAction::FocusChanged | crate::forms::FormAction::ValueChanged => true,
+            crate::forms::FormAction::None => false,
+        }
     }
 
     /// Handle a form submission.

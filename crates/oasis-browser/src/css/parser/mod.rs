@@ -575,6 +575,7 @@ const SUPPORTED_PROPERTIES: &[&str] = &[
     "grid-area",
     "table-layout",
     "will-change",
+    "tab-size",
     "column-count",
     "column-width",
     "columns",

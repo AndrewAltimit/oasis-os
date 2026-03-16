@@ -7,7 +7,9 @@ use super::super::helpers::{
     is_color_property, named_color, parse_font_weight, parse_hex_color, parse_unit,
     tokens_to_css_text, try_parse_color,
 };
-use super::super::shorthand::parse_linear_gradient;
+use super::super::shorthand::{
+    parse_linear_gradient, parse_radial_gradient, parse_repeating_linear_gradient,
+};
 use super::super::tokenizer::CssToken;
 use super::CssParser;
 use super::types::{CssValue, Declaration};
@@ -292,6 +294,18 @@ pub(crate) fn parse_value_list(tokens: &[CssToken]) -> Vec<CssValue> {
                 } else if name.eq_ignore_ascii_case("linear-gradient") {
                     if let Some(grad) = parse_linear_gradient(inner) {
                         out.push(CssValue::Gradient(grad));
+                    } else {
+                        out.push(CssValue::Keyword(format!("{}()", name)));
+                    }
+                } else if name.eq_ignore_ascii_case("repeating-linear-gradient") {
+                    if let Some(grad) = parse_repeating_linear_gradient(inner) {
+                        out.push(CssValue::Gradient(grad));
+                    } else {
+                        out.push(CssValue::Keyword(format!("{}()", name)));
+                    }
+                } else if name.eq_ignore_ascii_case("radial-gradient") {
+                    if let Some(grad) = parse_radial_gradient(inner) {
+                        out.push(CssValue::RadialGradient(grad));
                     } else {
                         out.push(CssValue::Keyword(format!("{}()", name)));
                     }

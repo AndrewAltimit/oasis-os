@@ -303,6 +303,17 @@ pub enum GradientDirection {
 pub struct LinearGradient {
     pub direction: GradientDirection,
     pub stops: Vec<GradientStop>,
+    /// When `true`, gradient stops repeat (tiled) for
+    /// `repeating-linear-gradient()`.
+    pub repeating: bool,
+}
+
+/// A parsed CSS `radial-gradient(...)` value.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RadialGradient {
+    /// `true` = circle, `false` = ellipse (default).
+    pub shape_circle: bool,
+    pub stops: Vec<GradientStop>,
 }
 
 /// CSS `background-image` property.
@@ -311,6 +322,7 @@ pub enum BackgroundImage {
     None,
     Url(String),
     Gradient(LinearGradient),
+    RadialGradient(RadialGradient),
 }
 
 /// CSS `text-shadow` value.
