@@ -631,8 +631,11 @@ fn install_document_global_full(
                     {
                         return String::new();
                     }
-                    let body_bytes =
-                        if body_str.is_empty() { None } else { Some(body_str.as_bytes()) };
+                    let body_bytes = if body_str.is_empty() {
+                        None
+                    } else {
+                        Some(body_str.as_bytes())
+                    };
                     match crate::loader::Url::parse(&url_str) {
                         Some(parsed_url) => {
                             match crate::loader::http::http_request(
@@ -642,9 +645,7 @@ fn install_document_global_full(
                                 &[],
                                 None,
                             ) {
-                                Ok(resp) => {
-                                    String::from_utf8_lossy(&resp.body).into_owned()
-                                },
+                                Ok(resp) => String::from_utf8_lossy(&resp.body).into_owned(),
                                 Err(_) => String::new(),
                             }
                         },

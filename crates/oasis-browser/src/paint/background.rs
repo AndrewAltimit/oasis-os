@@ -64,7 +64,6 @@ fn lerp_color(a: Color, b: Color, t: f32) -> Color {
     )
 }
 
-
 /// Sample the gradient color at a normalized position `t` (0.0..=1.0).
 fn sample_gradient(stops: &[crate::css::values::GradientStop], t: f32, opacity: f32) -> Color {
     if stops.is_empty() {
