@@ -303,12 +303,13 @@ mod tests {
     #[test]
     fn evict_large_buffer_evicts_old_data() {
         let inner = std::sync::Arc::new(StreamingInner::new());
-        let data_size = RETAIN_BEHIND + 2 * 1024 * 1024;
+        // Must exceed 2 * RETAIN_BEHIND (batched eviction threshold).
+        let data_size = RETAIN_BEHIND * 2 + 2 * 1024 * 1024;
         inner.push(&vec![0xBB; data_size]);
         let mut sb = StreamingBuffer::new(std::sync::Arc::clone(&inner));
         sb.eviction_enabled
             .store(true, std::sync::atomic::Ordering::Release);
-        // Move cursor past RETAIN_BEHIND.
+        // Move cursor past 2 * RETAIN_BEHIND.
         sb.pos = data_size as u64;
         sb.maybe_evict();
         let s = inner.state.lock().unwrap();
@@ -351,16 +352,17 @@ mod tests {
     #[test]
     fn evict_preserves_data_near_cursor() {
         let inner = std::sync::Arc::new(StreamingInner::new());
-        let total = RETAIN_BEHIND * 3;
+        // 4 * RETAIN_BEHIND to ensure cursor exceeds 2x threshold.
+        let total = RETAIN_BEHIND * 4;
         inner.push(&vec![0xEE; total]);
         let mut sb = StreamingBuffer::new(std::sync::Arc::clone(&inner));
         sb.eviction_enabled
             .store(true, std::sync::atomic::Ordering::Release);
-        // Cursor at 2*RETAIN_BEHIND: evicts first RETAIN_BEHIND.
-        sb.pos = (RETAIN_BEHIND * 2) as u64;
+        // Cursor at 3*RETAIN_BEHIND: evicts first 2*RETAIN_BEHIND.
+        sb.pos = (RETAIN_BEHIND * 3) as u64;
         sb.maybe_evict();
         let s = inner.state.lock().unwrap();
-        assert_eq!(s.base_offset, RETAIN_BEHIND as u64);
+        assert_eq!(s.base_offset, (RETAIN_BEHIND * 2) as u64);
         assert_eq!(s.buf.len(), RETAIN_BEHIND * 2);
     }
 
@@ -1399,7 +1401,8 @@ mod tests {
     #[test]
     fn multiple_evictions_advance_base_offset() {
         let inner = std::sync::Arc::new(StreamingInner::new());
-        let chunk = RETAIN_BEHIND + 1024 * 1024;
+        // Chunk must exceed 2 * RETAIN_BEHIND for batched eviction.
+        let chunk = RETAIN_BEHIND * 2 + 1024 * 1024;
         inner.push(&vec![0xAA; chunk]);
         let mut sb = StreamingBuffer::new(std::sync::Arc::clone(&inner));
         sb.eviction_enabled
@@ -1706,14 +1709,13 @@ mod tests {
         let s = SlidingState {
             buf: vec![0; 1024],
             base_offset: 0,
-            bytes_received: 1024,
             moov: None,
             header: None,
             atoms: Vec::new(),
             atoms_scanned_to: 0,
         };
         assert_eq!(
-            check_moov_at_start_restart(&s, 30),
+            check_moov_at_start_restart(&s, 30, 1024),
             None,
             "no moov should return None"
         );

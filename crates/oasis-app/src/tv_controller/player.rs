@@ -83,6 +83,15 @@ pub(super) fn tick_video_player(state: &mut AppState, backend: &mut impl SdiBack
     if let Some(runner) = runner
         && let Some(guide) = runner.tv_guide_state()
     {
+        // Destroy the guide's old texture if the video player is providing
+        // a new one (prevents texture leaks from auto-advance preservation).
+        if texture.is_some()
+            && guide.preview_texture.is_some()
+            && guide.preview_texture != texture
+            && let Some(old) = guide.preview_texture.take()
+        {
+            let _ = backend.destroy_texture(old);
+        }
         guide.preview_texture = texture;
         guide.download_status = download_status;
     }
@@ -130,6 +139,8 @@ pub(super) fn detect_untune(state: &mut AppState, backend: &mut impl SdiBackend)
 ///
 /// Re-tunes to whatever the schedule says should be playing *now*,
 /// which will be the next episode since the previous one just ended.
+/// Detects rapid-retune loops (playback < 3s) and skips to the next
+/// episode to avoid infinite buffer-play-buffer cycles.
 pub(super) fn auto_advance_episode(state: &mut AppState, backend: &mut impl SdiBackend) {
     if !state.video_player.is_finished() {
         return;
@@ -149,12 +160,25 @@ pub(super) fn auto_advance_episode(state: &mut AppState, backend: &mut impl SdiB
         return;
     };
 
-    // Stop the finished player immediately to reset the `finished` flag.
-    // This prevents auto_advance from firing again on the next frame.
+    // Detect rapid-retune: if playback lasted < 3 seconds, the video
+    // is likely near EOF or has decode issues (H.264 profile mismatch).
+    // Skip ahead to the next episode instead of re-tuning the same video
+    // which would create an infinite buffer→play→buffer loop.
+    #[cfg(feature = "_video")]
+    let was_rapid = state.video_player.playback_duration_secs() < 3.0
+        && state.video_player.displayed_frames() < 60;
+    #[cfg(not(feature = "_video"))]
+    let was_rapid = false;
+
+    // Stop the finished player — but preserve the last frame texture so
+    // the user sees a still image instead of the "Loading..." screen
+    // during the brief retune/rebuffer period.
+    let last_texture = state.video_player.take_texture();
     state.video_player.stop(backend);
-    // Clear the guide's preview texture so SDI doesn't reference the
-    // destroyed texture before the next video starts.
-    guide.preview_texture = None;
+    // Assign the preserved texture back to the guide. It will be
+    // replaced by the new video's first frame once it arrives, or
+    // destroyed if the channel is untuned.
+    guide.preview_texture = last_texture;
     if let Some(track) = state.tv_audio_track.take() {
         let _ = state.audio_backend.unload_track(track);
     }
@@ -167,16 +191,18 @@ pub(super) fn auto_advance_episode(state: &mut AppState, backend: &mut impl SdiB
     guide.current_time = now;
 
     // Re-tune to whatever should be playing now. If the current slot has
-    // very little time left (<5s), skip ahead to the next episode to avoid
-    // an infinite re-tune loop (video finishes instantly, triggers another
-    // auto-advance to the same nearly-finished episode).
+    // very little time left (<5s), or if we detected a rapid-retune loop,
+    // skip ahead to the next episode to avoid infinite re-tune cycles.
     let catalog = guide.catalogs.get(channel_idx).and_then(|c| c.as_ref());
     let Some(catalog) = catalog else { return };
     let query_time = {
         let Some(slot) = oasis_core::apps::tv_guide::schedule_at(catalog, now) else {
             return;
         };
-        if slot.remaining_secs < 5 {
+        if slot.remaining_secs < 5 || was_rapid {
+            if was_rapid {
+                log::info!("TV: rapid-retune detected (playback < 3s), skipping to next episode",);
+            }
             // Jump past current slot end to get the next episode.
             now + slot.remaining_secs + 1
         } else {
