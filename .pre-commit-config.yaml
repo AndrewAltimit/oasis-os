@@ -38,7 +38,7 @@ repos:
         types: [shell]
         args: [-x]
 
-  # Rust formatting (auto-fix, runs locally for speed)
+  # Rust formatting (auto-fix, runs on every commit)
   - repo: local
     hooks:
       - id: rust-fmt-oasis
@@ -48,11 +48,35 @@ repos:
         files: '\.rs$'
         pass_filenames: false
 
-      # Clippy on pre-push only (too slow for every commit)
+      # Clippy lint (runs on every commit when .rs files change)
       - id: rust-clippy-oasis
         name: Rust lint oasis_os
         entry: bash -c 'source "$HOME/.cargo/env" 2>/dev/null || true; cargo clippy --workspace -- -D warnings'
         language: system
         files: '\.rs$'
         pass_filenames: false
+
+      # Doc build with warnings-as-errors (runs on every commit when .rs files change)
+      - id: rust-doc-oasis
+        name: Rust doc build oasis_os
+        entry: bash -c 'source "$HOME/.cargo/env" 2>/dev/null || true; RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps'
+        language: system
+        files: '\.rs$'
+        pass_filenames: false
+
+      # cargo-deny license/advisory audit (runs on pre-push when Cargo files change)
+      - id: cargo-deny-oasis
+        name: cargo-deny audit oasis_os
+        entry: bash -c 'source "$HOME/.cargo/env" 2>/dev/null || true; cargo deny check'
+        language: system
+        files: '(Cargo\.toml|Cargo\.lock|deny\.toml)$'
+        pass_filenames: false
         stages: [pre-push]
+
+      # Markdown link check (runs on every commit when .md files change)
+      - id: md-links-oasis
+        name: Markdown link check oasis_os
+        entry: bash -c 'FAIL=0; for f in *.md docs/*.md docs/adr/*.md scripts/psp-scenarios.md; do [ -e "$f" ] || continue; md-link-checker "$f" --internal-only || FAIL=1; done; exit $FAIL'
+        language: system
+        files: '\.md$'
+        pass_filenames: false
