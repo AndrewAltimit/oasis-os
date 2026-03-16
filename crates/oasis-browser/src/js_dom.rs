@@ -28,18 +28,67 @@ pub type SharedDoc = Rc<RefCell<Document>>;
 /// Sentinel returned when a DOM lookup produces no result.
 const NO_NODE: i32 = -1;
 
+// ------------------------------------------------------------------
+// Navigation action queue (JS -> browser widget)
+// ------------------------------------------------------------------
+
+/// A navigation action requested by JavaScript code.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum JsNavAction {
+    /// Navigate to a new URL (`location.assign(url)` or
+    /// `location.href = url`).
+    Navigate(String),
+    /// Go back in history (`history.back()`).
+    Back,
+    /// Go forward in history (`history.forward()`).
+    Forward,
+}
+
+/// Shared queue of pending navigation actions produced by JS.
+pub type SharedNavActions = Rc<RefCell<Vec<JsNavAction>>>;
+
 /// Install the `document` global and `Element` prototype into the JS
 /// context, backed by the given shared `Document`.
 ///
 /// `url` is exposed as `window.location.href`. Pass an empty string
 /// or the page URL.
+///
+/// Navigation actions (location.assign, history.back/forward) are
+/// silently discarded. Use [`install_document_global_with_nav`] to
+/// capture them.
+#[cfg(test)]
 pub fn install_document_global(ctx: &Ctx<'_>, doc: &SharedDoc) -> JsResult<()> {
-    install_document_global_with_url(ctx, doc, "")
+    let nav = Rc::new(RefCell::new(Vec::new()));
+    install_document_global_full(ctx, doc, "", &nav)
 }
 
 /// Like [`install_document_global`] but accepts an explicit URL for
 /// `window.location`.
+#[cfg(test)]
 pub fn install_document_global_with_url(ctx: &Ctx<'_>, doc: &SharedDoc, url: &str) -> JsResult<()> {
+    let nav = Rc::new(RefCell::new(Vec::new()));
+    install_document_global_full(ctx, doc, url, &nav)
+}
+
+/// Like [`install_document_global_with_url`] but also accepts a shared
+/// navigation action queue that JS `location.assign()` /
+/// `history.back()` / `history.forward()` will push to.
+pub fn install_document_global_with_nav(
+    ctx: &Ctx<'_>,
+    doc: &SharedDoc,
+    url: &str,
+    nav_actions: &SharedNavActions,
+) -> JsResult<()> {
+    install_document_global_full(ctx, doc, url, nav_actions)
+}
+
+/// Full installation: document global, location/history, nav actions.
+fn install_document_global_full(
+    ctx: &Ctx<'_>,
+    doc: &SharedDoc,
+    url: &str,
+    nav_actions: &SharedNavActions,
+) -> JsResult<()> {
     let globals = ctx.globals();
 
     // -- __oasis_tagname(nid) -> String --------------------------------
@@ -453,10 +502,48 @@ pub fn install_document_global_with_url(ctx: &Ctx<'_>, doc: &SharedDoc, url: &st
         )?;
     }
 
+    // -- __oasis_location_assign(url) ---------------------------------
+    {
+        let nav = Rc::clone(nav_actions);
+        globals.set(
+            "__oasis_location_assign",
+            Function::new(ctx.clone(), move |url: String| {
+                nav.borrow_mut().push(JsNavAction::Navigate(url));
+            })?,
+        )?;
+    }
+
+    // -- __oasis_history_back() ---------------------------------------
+    {
+        let nav = Rc::clone(nav_actions);
+        globals.set(
+            "__oasis_history_back",
+            Function::new(ctx.clone(), move || {
+                nav.borrow_mut().push(JsNavAction::Back);
+            })?,
+        )?;
+    }
+
+    // -- __oasis_history_forward() ------------------------------------
+    {
+        let nav = Rc::clone(nav_actions);
+        globals.set(
+            "__oasis_history_forward",
+            Function::new(ctx.clone(), move || {
+                nav.borrow_mut().push(JsNavAction::Forward);
+            })?,
+        )?;
+    }
+
     // -- JavaScript-side Element class + document global ---------------
     let _: () = ctx.eval(JS_DOM_BOOTSTRAP)?;
 
     Ok(())
+}
+
+/// Drain and return all pending navigation actions from the queue.
+pub fn drain_nav_actions(nav: &SharedNavActions) -> Vec<JsNavAction> {
+    std::mem::take(&mut nav.borrow_mut())
 }
 
 // ------------------------------------------------------------------
@@ -980,15 +1067,33 @@ const JS_DOM_BOOTSTRAP: &str = r#"
   globalThis.document = document;
   globalThis.Element = Element;
   globalThis.window = globalThis;
+
+  // -- location object with assign() and href setter --
+  var __oasis_loc = {
+    get href() { return __oasis_location(); },
+    set href(v) { __oasis_location_assign(String(v)); },
+    assign: function(url) { __oasis_location_assign(String(url)); },
+    replace: function(url) { __oasis_location_assign(String(url)); },
+    reload: function() { __oasis_location_assign(__oasis_location()); },
+    toString: function() { return __oasis_location(); }
+  };
   Object.defineProperty(globalThis, 'location', {
-    get: function() {
-      var h = __oasis_location();
-      return {
-        href: h,
-        toString: function() { return h; }
-      };
-    }
+    get: function() { return __oasis_loc; },
+    set: function(v) { __oasis_location_assign(String(v)); },
+    configurable: true
   });
+
+  // -- history object --
+  globalThis.history = {
+    back: function() { __oasis_history_back(); },
+    forward: function() { __oasis_history_forward(); },
+    go: function(delta) {
+      if (delta < 0) __oasis_history_back();
+      else if (delta > 0) __oasis_history_forward();
+      else __oasis_location_assign(__oasis_location());
+    },
+    get length() { return 1; }
+  };
 })();
 "#;
 
@@ -1645,5 +1750,148 @@ mod tests {
         let (engine, _doc) = setup(sample_doc());
         let val = engine.eval("window === globalThis").unwrap();
         assert_eq!(val, oasis_js::JsValue::Bool(true));
+    }
+
+    // ---------------------------------------------------------------
+    // Navigation action tests
+    // ---------------------------------------------------------------
+
+    /// Helper: create engine + shared doc + nav actions queue.
+    fn setup_with_nav(doc: Document, url: &str) -> (JsEngine, SharedDoc, SharedNavActions) {
+        let engine = JsEngine::new(8 * 1024 * 1024).unwrap();
+        let shared: SharedDoc = Rc::new(RefCell::new(doc));
+        let nav_actions: SharedNavActions = Rc::new(RefCell::new(Vec::new()));
+        let s = Rc::clone(&shared);
+        let n = Rc::clone(&nav_actions);
+        engine
+            .with_context(|ctx| install_document_global_with_nav(&ctx, &s, url, &n))
+            .unwrap();
+        (engine, shared, nav_actions)
+    }
+
+    #[test]
+    fn location_assign_queues_navigate() {
+        let (engine, _doc, nav) = setup_with_nav(sample_doc(), "https://example.com");
+        engine.eval("location.assign('https://other.com')").unwrap();
+        let actions = drain_nav_actions(&nav);
+        assert_eq!(actions.len(), 1);
+        assert_eq!(
+            actions[0],
+            JsNavAction::Navigate("https://other.com".into())
+        );
+    }
+
+    #[test]
+    fn location_href_setter_queues_navigate() {
+        let (engine, _doc, nav) = setup_with_nav(sample_doc(), "https://example.com");
+        engine.eval("location.href = 'https://new.com'").unwrap();
+        let actions = drain_nav_actions(&nav);
+        assert_eq!(actions.len(), 1);
+        assert_eq!(actions[0], JsNavAction::Navigate("https://new.com".into()));
+    }
+
+    #[test]
+    fn location_replace_queues_navigate() {
+        let (engine, _doc, nav) = setup_with_nav(sample_doc(), "https://example.com");
+        engine
+            .eval("location.replace('https://replaced.com')")
+            .unwrap();
+        let actions = drain_nav_actions(&nav);
+        assert_eq!(actions.len(), 1);
+        assert_eq!(
+            actions[0],
+            JsNavAction::Navigate("https://replaced.com".into())
+        );
+    }
+
+    #[test]
+    fn history_back_queues_action() {
+        let (engine, _doc, nav) = setup_with_nav(sample_doc(), "https://example.com");
+        engine.eval("history.back()").unwrap();
+        let actions = drain_nav_actions(&nav);
+        assert_eq!(actions.len(), 1);
+        assert_eq!(actions[0], JsNavAction::Back);
+    }
+
+    #[test]
+    fn history_forward_queues_action() {
+        let (engine, _doc, nav) = setup_with_nav(sample_doc(), "https://example.com");
+        engine.eval("history.forward()").unwrap();
+        let actions = drain_nav_actions(&nav);
+        assert_eq!(actions.len(), 1);
+        assert_eq!(actions[0], JsNavAction::Forward);
+    }
+
+    #[test]
+    fn history_go_negative_is_back() {
+        let (engine, _doc, nav) = setup_with_nav(sample_doc(), "https://example.com");
+        engine.eval("history.go(-1)").unwrap();
+        let actions = drain_nav_actions(&nav);
+        assert_eq!(actions.len(), 1);
+        assert_eq!(actions[0], JsNavAction::Back);
+    }
+
+    #[test]
+    fn history_go_positive_is_forward() {
+        let (engine, _doc, nav) = setup_with_nav(sample_doc(), "https://example.com");
+        engine.eval("history.go(1)").unwrap();
+        let actions = drain_nav_actions(&nav);
+        assert_eq!(actions.len(), 1);
+        assert_eq!(actions[0], JsNavAction::Forward);
+    }
+
+    #[test]
+    fn history_go_zero_reloads() {
+        let (engine, _doc, nav) = setup_with_nav(sample_doc(), "https://example.com");
+        engine.eval("history.go(0)").unwrap();
+        let actions = drain_nav_actions(&nav);
+        assert_eq!(actions.len(), 1);
+        assert_eq!(
+            actions[0],
+            JsNavAction::Navigate("https://example.com".into())
+        );
+    }
+
+    #[test]
+    fn location_href_getter_with_nav() {
+        let (engine, _doc, _nav) = setup_with_nav(sample_doc(), "https://example.com/page");
+        let val = engine.eval("location.href").unwrap();
+        assert_eq!(
+            val,
+            oasis_js::JsValue::String("https://example.com/page".into())
+        );
+    }
+
+    #[test]
+    fn location_tostring() {
+        let (engine, _doc, _nav) = setup_with_nav(sample_doc(), "https://example.com");
+        let val = engine.eval("location.toString()").unwrap();
+        assert_eq!(val, oasis_js::JsValue::String("https://example.com".into()));
+    }
+
+    #[test]
+    fn drain_nav_actions_clears_queue() {
+        let (engine, _doc, nav) = setup_with_nav(sample_doc(), "https://example.com");
+        engine.eval("history.back()").unwrap();
+        engine.eval("history.forward()").unwrap();
+        let actions = drain_nav_actions(&nav);
+        assert_eq!(actions.len(), 2);
+        // Second drain should be empty.
+        let actions2 = drain_nav_actions(&nav);
+        assert!(actions2.is_empty());
+    }
+
+    #[test]
+    fn window_location_assign_works() {
+        let (engine, _doc, nav) = setup_with_nav(sample_doc(), "https://example.com");
+        engine
+            .eval("window.location.assign('https://via-window.com')")
+            .unwrap();
+        let actions = drain_nav_actions(&nav);
+        assert_eq!(actions.len(), 1);
+        assert_eq!(
+            actions[0],
+            JsNavAction::Navigate("https://via-window.com".into())
+        );
     }
 }

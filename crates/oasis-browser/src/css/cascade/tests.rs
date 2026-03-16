@@ -243,6 +243,7 @@ fn specificity_ordering() {
     // Class rule comes first, ID rule second.
     let sheet = Stylesheet {
         rules: vec![rule_class, rule_id],
+        keyframes: vec![],
     };
     let styles = style_tree(&doc, &[&sheet], &[], &ctx());
 
@@ -274,7 +275,10 @@ fn inheritance_of_color_and_font() {
             decl("font-weight", CssValue::Number(700.0), false),
         ],
     );
-    let sheet = Stylesheet { rules: vec![rule] };
+    let sheet = Stylesheet {
+        rules: vec![rule],
+        keyframes: vec![],
+    };
     let styles = style_tree(&doc, &[&sheet], &[], &ctx());
 
     let p_style = styles[p_id].as_ref().expect("p should have style");
@@ -305,6 +309,7 @@ fn important_overrides_specificity() {
 
     let sheet = Stylesheet {
         rules: vec![rule_id, rule_type],
+        keyframes: vec![],
     };
     let styles = style_tree(&doc, &[&sheet], &[], &ctx());
     let style = styles[3].as_ref().expect("div should have style");
@@ -321,12 +326,14 @@ fn multiple_stylesheets_merged() {
             vec![simple_type_selector("p")],
             vec![decl("color", CssValue::Keyword("red".to_string()), false)],
         )],
+        keyframes: vec![],
     };
     let sheet2 = Stylesheet {
         rules: vec![make_rule(
             vec![simple_type_selector("p")],
             vec![decl("font-weight", CssValue::Number(700.0), false)],
         )],
+        keyframes: vec![],
     };
 
     let styles = style_tree(&doc, &[&sheet1, &sheet2], &[], &ctx());
@@ -345,6 +352,7 @@ fn inline_style_override() {
             vec![simple_type_selector("p")],
             vec![decl("color", CssValue::Keyword("red".to_string()), false)],
         )],
+        keyframes: vec![],
     };
 
     // Inline style says color: blue.
@@ -409,7 +417,10 @@ fn non_element_nodes_get_no_style() {
     });
 
     let doc = Document { nodes, root: 0 };
-    let sheet = Stylesheet { rules: vec![] };
+    let sheet = Stylesheet {
+        rules: vec![],
+        keyframes: vec![],
+    };
     let styles = style_tree(&doc, &[&sheet], &[], &ctx());
 
     assert!(styles[0].is_none(), "Document node");
@@ -749,6 +760,7 @@ fn hover_matches_hovered_node() {
     let hctx = CascadeContext {
         hover_node: Some(3),
         visited_urls: None,
+        focused_node: None,
     };
     let __out = &doc.nodes[3].kind;
     assert!(
@@ -787,6 +799,7 @@ fn hover_matches_ancestor_of_hovered_node() {
     let hctx = CascadeContext {
         hover_node: Some(p_id),
         visited_urls: None,
+        focused_node: None,
     };
     // <div> (ancestor) should also match :hover.
     let __out = &doc.nodes[3].kind;
@@ -817,6 +830,7 @@ fn visited_matches_with_visited_url() {
     let vctx = CascadeContext {
         hover_node: None,
         visited_urls: Some(&visited),
+        focused_node: None,
     };
     let __out = &doc.nodes[3].kind;
     assert!(
@@ -846,6 +860,7 @@ fn link_matches_unvisited_anchor() {
     let vctx = CascadeContext {
         hover_node: None,
         visited_urls: Some(&visited),
+        focused_node: None,
     };
     let __out = &doc.nodes[3].kind;
     assert!(
@@ -868,6 +883,7 @@ fn hover_style_applied_via_cascade() {
     let hctx = CascadeContext {
         hover_node: Some(3),
         visited_urls: None,
+        focused_node: None,
     };
     let styles = style_tree(&doc, &[&sheet], &[], &hctx);
     let style = styles[3].as_ref().expect("p should have style");
@@ -895,6 +911,7 @@ fn visited_style_applied_via_cascade() {
     let vctx = CascadeContext {
         hover_node: None,
         visited_urls: Some(&visited),
+        focused_node: None,
     };
     let styles = style_tree(&doc, &[&sheet], &[], &vctx);
     let style = styles[3].as_ref().expect("a should have style");
@@ -1491,6 +1508,7 @@ fn pseudo_class_with_type_selector() {
     let hctx = CascadeContext {
         hover_node: Some(3),
         visited_urls: None,
+        focused_node: None,
     };
     let styles = style_tree(&doc, &[&sheet], &[], &hctx);
     let a_style = styles[3].as_ref().expect("a should have style");
@@ -1501,6 +1519,7 @@ fn pseudo_class_with_type_selector() {
     let hctx_p = CascadeContext {
         hover_node: Some(4),
         visited_urls: None,
+        focused_node: None,
     };
     let styles2 = style_tree(&doc, &[&sheet], &[], &hctx_p);
     let p_style = styles2[4].as_ref().unwrap();
@@ -1557,6 +1576,7 @@ fn specificity_id_vs_many_classes() {
 
     let sheet = Stylesheet {
         rules: vec![rule_classes, rule_id],
+        keyframes: vec![],
     };
     let styles = style_tree(&doc, &[&sheet], &[], &ctx());
     let style = styles[3].as_ref().expect("div should have style");
@@ -1596,6 +1616,7 @@ fn important_on_inherited_vs_direct() {
                 vec![decl("color", CssValue::Keyword("blue".to_string()), false)],
             ),
         ],
+        keyframes: vec![],
     };
     let styles = style_tree(&doc, &[&sheet], &[], &ctx());
     let p_style = styles[p_id].as_ref().expect("p should have style");
@@ -1854,6 +1875,7 @@ mod prop_tests {
                         }],
                     },
                 ],
+                keyframes: vec![],
             };
             let doc = super::make_doc(vec![(TagName::Div, vec![])]);
             let styles = style_tree(&doc, &[&sheet], &[], &super::ctx());
@@ -1913,6 +1935,7 @@ mod prop_tests {
                         }],
                     },
                 ],
+                keyframes: vec![],
             };
             let styles = style_tree(&doc, &[&sheet], &[], &super::ctx());
             let p_style = styles[p_id].as_ref().expect("p should have style");
@@ -1970,6 +1993,7 @@ mod prop_tests {
                         }],
                     },
                 ],
+                keyframes: vec![],
             };
 
             // Build element with id="main" and all the extra classes.

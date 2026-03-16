@@ -56,6 +56,29 @@ pub enum AlignItems {
     Baseline,
 }
 
+/// CSS `align-content` property (cross-axis line distribution in multi-line flex).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AlignContent {
+    FlexStart,
+    FlexEnd,
+    Center,
+    SpaceBetween,
+    SpaceAround,
+    SpaceEvenly,
+    Stretch,
+}
+
+/// CSS `align-self` property (per-item cross-axis override).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AlignSelf {
+    Auto,
+    FlexStart,
+    FlexEnd,
+    Center,
+    Stretch,
+    Baseline,
+}
+
 /// CSS `flex-wrap` property.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FlexWrap {
@@ -198,6 +221,7 @@ pub enum Position {
     Relative,
     Absolute,
     Fixed,
+    Sticky,
 }
 
 /// CSS `overflow` property.
@@ -205,6 +229,8 @@ pub enum Position {
 pub enum Overflow {
     Visible,
     Hidden,
+    Scroll,
+    Auto,
 }
 
 /// CSS `word-break` property.
@@ -298,6 +324,7 @@ pub struct BoxShadow {
     pub blur: f32,
     pub spread: f32,
     pub color: Color,
+    pub inset: bool,
 }
 
 /// A single CSS Grid track size.
@@ -306,6 +333,77 @@ pub enum GridTrackSize {
     Px(f32),
     Fr(f32),
     Auto,
+    /// `minmax(min_px, max_px)` — max is `f32::MAX` for `auto`.
+    Minmax(f32, f32),
+}
+
+/// A CSS transform function.
+#[derive(Debug, Clone, PartialEq)]
+pub enum TransformFunction {
+    /// `translate(x, y)` in pixels.
+    Translate(f32, f32),
+    /// `scale(sx, sy)`.
+    Scale(f32, f32),
+    /// `rotate(angle)` in degrees.
+    Rotate(f32),
+}
+
+/// A CSS easing function.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum TimingFunction {
+    Linear,
+    Ease,
+    EaseIn,
+    EaseOut,
+    EaseInOut,
+}
+
+/// A single CSS transition declaration.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Transition {
+    pub property: String,
+    pub duration_ms: f32,
+    pub timing: TimingFunction,
+    pub delay_ms: f32,
+}
+
+/// CSS animation fill mode.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AnimationFillMode {
+    None,
+    Forwards,
+    Backwards,
+    Both,
+}
+
+/// CSS animation direction.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AnimationDirection {
+    Normal,
+    Reverse,
+    Alternate,
+    AlternateReverse,
+}
+
+/// CSS animation play state.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AnimationPlayState {
+    Running,
+    Paused,
+}
+
+/// A single CSS animation declaration.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Animation {
+    pub name: String,
+    pub duration_ms: f32,
+    pub timing: TimingFunction,
+    pub delay_ms: f32,
+    /// Iteration count. Use `f32::INFINITY` for infinite.
+    pub iteration_count: f32,
+    pub direction: AnimationDirection,
+    pub fill_mode: AnimationFillMode,
+    pub play_state: AnimationPlayState,
 }
 
 /// Re-export `TextDirection` from `oasis-types` for CSS `direction` property.

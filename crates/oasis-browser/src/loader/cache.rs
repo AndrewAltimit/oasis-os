@@ -20,6 +20,10 @@ pub struct CacheEntry {
     pub response: ResourceResponse,
     /// If the resource is an image, the decoded texture handle.
     pub texture: Option<TextureId>,
+    /// ETag from the server's response (for conditional requests).
+    pub etag: Option<String>,
+    /// Last-Modified value from the server's response.
+    pub last_modified: Option<String>,
 }
 
 // -----------------------------------------------------------------------
@@ -143,6 +147,33 @@ impl ResourceCache {
     /// Returns `true` when the cache holds no entries.
     pub fn is_empty(&self) -> bool {
         self.entries.is_empty()
+    }
+
+    /// Peek at the ETag and Last-Modified validators for a cached URL
+    /// without promoting it in the LRU list.
+    pub fn peek_validators(&self, url: &str) -> Option<(Option<String>, Option<String>)> {
+        self.entries
+            .get(url)
+            .map(|entry| (entry.etag.clone(), entry.last_modified.clone()))
+    }
+
+    /// Peek at the cached response for a URL without promoting it.
+    pub fn peek_response(&self, url: &str) -> Option<ResourceResponse> {
+        self.entries.get(url).map(|entry| entry.response.clone())
+    }
+
+    /// Update the cache validators (ETag, Last-Modified) for an
+    /// existing entry without changing its LRU position.
+    pub fn set_validators(
+        &mut self,
+        url: &str,
+        etag: Option<String>,
+        last_modified: Option<String>,
+    ) {
+        if let Some(entry) = self.entries.get_mut(url) {
+            entry.etag = etag;
+            entry.last_modified = last_modified;
+        }
     }
 
     // -------------------------------------------------------------------
@@ -292,6 +323,8 @@ mod tests {
                 status: 200,
             },
             texture: None,
+            etag: None,
+            last_modified: None,
         };
         (url.to_string(), entry)
     }

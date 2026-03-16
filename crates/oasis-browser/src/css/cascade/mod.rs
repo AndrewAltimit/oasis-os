@@ -53,8 +53,9 @@ pub use index::SelectorIndex;
 
 /// Context for stateful pseudo-class matching during cascade.
 ///
-/// Carries the current hover target and set of visited URLs so that
-/// `:hover`, `:visited`, and `:link` pseudo-classes can be evaluated.
+/// Carries the current hover target, focused element, and set of visited
+/// URLs so that `:hover`, `:visited`, `:link`, `:focus`, and
+/// `:focus-visible` pseudo-classes can be evaluated.
 #[derive(Default)]
 pub struct CascadeContext<'a> {
     /// The DOM node currently under the cursor (for `:hover`).
@@ -62,6 +63,9 @@ pub struct CascadeContext<'a> {
     pub hover_node: Option<NodeId>,
     /// Set of visited URLs (for `:visited` / `:link` on `<a>` elements).
     pub visited_urls: Option<&'a HashSet<String>>,
+    /// The DOM node that currently has keyboard focus (for `:focus` and
+    /// `:focus-visible`).
+    pub focused_node: Option<NodeId>,
 }
 
 // -----------------------------------------------------------------------

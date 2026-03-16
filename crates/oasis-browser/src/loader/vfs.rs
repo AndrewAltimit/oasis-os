@@ -108,7 +108,7 @@ pub fn error_page(url: &str, message: &str) -> ResourceResponse {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::loader::ResourceSource;
+    use crate::loader::{HttpMethod, ResourceSource};
     use oasis_vfs::MemoryVfs;
 
     /// Normalise a path by resolving `.` and `..` segments (test helper).
@@ -149,6 +149,9 @@ mod tests {
             url: "http://example.com/index.html".to_string(),
             base_url: None,
             source: ResourceSource::Vfs,
+            method: HttpMethod::Get,
+            body: None,
+            referrer: None,
         };
         let resp = load_from_vfs(&vfs, &req).unwrap();
         assert_eq!(resp.status, 200);
@@ -236,6 +239,9 @@ mod tests {
             url: "http://example.com/missing.html".to_string(),
             base_url: None,
             source: ResourceSource::Vfs,
+            method: HttpMethod::Get,
+            body: None,
+            referrer: None,
         };
         assert!(load_from_vfs(&vfs, &req).is_err());
     }
@@ -247,6 +253,9 @@ mod tests {
             url: "vfs://pages/about.html".to_string(),
             base_url: None,
             source: ResourceSource::Vfs,
+            method: HttpMethod::Get,
+            body: None,
+            referrer: None,
         };
         let resp = load_from_vfs(&vfs, &req).unwrap();
         assert_eq!(resp.status, 200);

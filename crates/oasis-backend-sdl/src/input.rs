@@ -26,8 +26,20 @@ pub(crate) fn map_sdl_event(event: Event) -> Option<InputEvent> {
     match event {
         Event::Quit { .. } => Some(InputEvent::Quit),
         Event::KeyDown {
-            keycode: Some(key), ..
-        } => map_key_down(key),
+            keycode: Some(key),
+            keymod,
+            ..
+        } => {
+            if key == Keycode::Tab {
+                if keymod
+                    .intersects(sdl3::keyboard::Mod::LSHIFTMOD | sdl3::keyboard::Mod::RSHIFTMOD)
+                {
+                    return Some(InputEvent::ShiftTab);
+                }
+                return Some(InputEvent::Tab);
+            }
+            map_key_down(key)
+        },
         Event::KeyUp {
             keycode: Some(key), ..
         } => map_key_up(key),
@@ -68,7 +80,6 @@ pub(crate) fn map_key_down(key: Keycode) -> Option<InputEvent> {
         Keycode::Return => Some(InputEvent::ButtonPress(Button::Confirm)),
         Keycode::Escape => Some(InputEvent::ButtonPress(Button::Cancel)),
         Keycode::Space => Some(InputEvent::ButtonPress(Button::Triangle)),
-        Keycode::Tab => Some(InputEvent::ButtonPress(Button::Square)),
         Keycode::F1 => Some(InputEvent::ButtonPress(Button::Start)),
         Keycode::F2 => Some(InputEvent::ButtonPress(Button::Select)),
         Keycode::Backspace => Some(InputEvent::Backspace),
@@ -88,7 +99,6 @@ pub(crate) fn map_key_up(key: Keycode) -> Option<InputEvent> {
         Keycode::Return => Some(InputEvent::ButtonRelease(Button::Confirm)),
         Keycode::Escape => Some(InputEvent::ButtonRelease(Button::Cancel)),
         Keycode::Space => Some(InputEvent::ButtonRelease(Button::Triangle)),
-        Keycode::Tab => Some(InputEvent::ButtonRelease(Button::Square)),
         Keycode::F1 => Some(InputEvent::ButtonRelease(Button::Start)),
         Keycode::F2 => Some(InputEvent::ButtonRelease(Button::Select)),
         Keycode::Q => Some(InputEvent::TriggerRelease(Trigger::Left)),
@@ -166,11 +176,10 @@ mod tests {
     }
 
     #[test]
-    fn keydown_tab_maps_to_square() {
-        assert_eq!(
-            map_key_down(Keycode::Tab),
-            Some(InputEvent::ButtonPress(Button::Square))
-        );
+    fn keydown_tab_not_in_key_down() {
+        // Tab is handled in map_sdl_event (with Shift detection), not
+        // map_key_down, so it returns None here.
+        assert_eq!(map_key_down(Keycode::Tab), None);
     }
 
     #[test]
@@ -288,6 +297,7 @@ mod tests {
         // All keys that produce a ButtonPress on down should produce
         // a ButtonRelease on up (except Backspace and F11 which are
         // down-only).
+        // Tab is handled in map_sdl_event (not map_key_down/map_key_up).
         let symmetric_keys = [
             Keycode::Up,
             Keycode::Down,
@@ -296,7 +306,6 @@ mod tests {
             Keycode::Return,
             Keycode::Escape,
             Keycode::Space,
-            Keycode::Tab,
             Keycode::F1,
             Keycode::F2,
             Keycode::Q,

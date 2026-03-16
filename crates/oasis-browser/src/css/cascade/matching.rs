@@ -618,6 +618,9 @@ fn matches_simple(
             match_pseudo_class_fn(doc, node_id, elem, name, arg)
         },
         SimpleSelector::Not(inner) => !matches_compound(doc, node_id, inner, ctx),
+        SimpleSelector::Is(inner_list) | SimpleSelector::Where(inner_list) => inner_list
+            .iter()
+            .any(|compound| matches_compound(doc, node_id, compound, ctx)),
         SimpleSelector::Attribute { name, op, value } => {
             match_attribute(elem, name, op, value.as_deref())
         },
@@ -676,6 +679,13 @@ pub(super) fn match_pseudo_class(
                     return !visited.contains(href);
                 }
                 return true; // No visited info = treat as unvisited.
+            }
+            return false;
+        },
+        "focus" | "focus-visible" => {
+            // :focus and :focus-visible match the currently focused element.
+            if let Some(focused_nid) = ctx.focused_node {
+                return focused_nid == node_id;
             }
             return false;
         },

@@ -477,6 +477,7 @@ fn at_media_min_height_match() {
     let vp = MediaViewport {
         width: 480.0,
         height: 272.0,
+        dark_mode: false,
     };
     let sheet =
         Stylesheet::parse_with_viewport("@media (min-height: 200px) { p { color: red; } }", vp);
@@ -488,6 +489,7 @@ fn at_media_min_height_no_match() {
     let vp = MediaViewport {
         width: 480.0,
         height: 272.0,
+        dark_mode: false,
     };
     let sheet =
         Stylesheet::parse_with_viewport("@media (min-height: 600px) { p { color: red; } }", vp);
@@ -499,6 +501,7 @@ fn at_media_max_height_match() {
     let vp = MediaViewport {
         width: 480.0,
         height: 272.0,
+        dark_mode: false,
     };
     let sheet =
         Stylesheet::parse_with_viewport("@media (max-height: 400px) { p { color: red; } }", vp);
@@ -510,6 +513,7 @@ fn at_media_max_height_no_match() {
     let vp = MediaViewport {
         width: 480.0,
         height: 272.0,
+        dark_mode: false,
     };
     let sheet =
         Stylesheet::parse_with_viewport("@media (max-height: 200px) { p { color: red; } }", vp);
@@ -521,6 +525,7 @@ fn at_media_custom_viewport_width() {
     let vp = MediaViewport {
         width: 1024.0,
         height: 768.0,
+        dark_mode: false,
     };
     // With 1024px viewport, max-width: 320 should NOT match.
     let sheet =
@@ -537,6 +542,7 @@ fn at_media_screen_and_min_width() {
     let vp = MediaViewport {
         width: 800.0,
         height: 600.0,
+        dark_mode: false,
     };
     let sheet = Stylesheet::parse_with_viewport(
         "@media screen and (min-width: 480px) { p { color: red; } }",
@@ -570,6 +576,7 @@ fn at_media_compound_width_and_height() {
     let vp = MediaViewport {
         width: 800.0,
         height: 600.0,
+        dark_mode: false,
     };
     let sheet = Stylesheet::parse_with_viewport(
         "@media (min-width: 480px) and (min-height: 400px) { \
@@ -967,5 +974,75 @@ mod prop {
             // but shouldn't panic).
             prop_assert!(!sheet.rules.is_empty());
         }
+    }
+
+    // -- @supports tests ------------------------------------------------
+
+    #[test]
+    fn supports_recognized_property_includes_rules() {
+        let css = "@supports (display: flex) { .flex { display: flex; } }";
+        let sheet = parse(css);
+        assert_eq!(
+            sheet.rules.len(),
+            1,
+            "supported property should include rules"
+        );
+        assert_eq!(sheet.rules[0].declarations[0].property, "display");
+    }
+
+    #[test]
+    fn supports_unrecognized_property_excludes_rules() {
+        let css = "@supports (container-type: inline-size) { .c { width: 100px; } }";
+        let sheet = parse(css);
+        assert!(
+            sheet.rules.is_empty(),
+            "unsupported property should exclude rules"
+        );
+    }
+
+    #[test]
+    fn supports_custom_property() {
+        let css = "@supports (--custom: value) { p { color: red; } }";
+        let sheet = parse(css);
+        assert_eq!(
+            sheet.rules.len(),
+            1,
+            "custom properties should be supported"
+        );
+    }
+
+    #[test]
+    fn supports_not_condition() {
+        let css = "@supports not (container-type: inline-size) { p { color: red; } }";
+        let sheet = parse(css);
+        assert_eq!(sheet.rules.len(), 1, "not unsupported should include rules");
+    }
+
+    #[test]
+    fn supports_not_recognized() {
+        let css = "@supports not (display: flex) { p { color: red; } }";
+        let sheet = parse(css);
+        assert!(sheet.rules.is_empty(), "not supported should exclude rules");
+    }
+
+    #[test]
+    fn supports_empty_condition() {
+        let css = "@supports { p { color: red; } }";
+        let sheet = parse(css);
+        assert!(sheet.rules.is_empty(), "empty condition should be false");
+    }
+
+    #[test]
+    fn supports_multiple_rules_inside() {
+        let css = "@supports (color: red) { h1 { color: red; } p { color: blue; } }";
+        let sheet = parse(css);
+        assert_eq!(sheet.rules.len(), 2);
+    }
+
+    #[test]
+    fn supports_transition_property() {
+        let css = "@supports (transition: all 0.3s) { .anim { opacity: 1; } }";
+        let sheet = parse(css);
+        assert_eq!(sheet.rules.len(), 1, "transition should be recognized");
     }
 }

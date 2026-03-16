@@ -42,6 +42,11 @@ fn apply_positioning_recursive(
         Position::Fixed => {
             apply_absolute_position(layout_box, viewport);
         },
+        Position::Sticky => {
+            // Sticky behaves like relative during layout; the scroll-based
+            // clamping is applied at paint time.
+            apply_relative_offset(layout_box, containing_block);
+        },
         Position::Static => {},
     }
 

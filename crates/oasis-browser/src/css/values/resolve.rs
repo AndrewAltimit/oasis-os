@@ -28,6 +28,8 @@ pub(super) fn as_keyword(value: &CssValue) -> Option<&str> {
 /// - `Px` and `Pt` values pass through (Pt approximated as 1.333 px).
 /// - `Em` values are multiplied by `parent_font_size`.
 /// - `Rem` values are multiplied by the root font size (16.0).
+/// - `Calc` expressions are evaluated with no containing width (percentages
+///   resolve to 0).
 /// - Percentage and keyword values resolve to 0.
 pub(super) fn resolve_length(value: &CssValue, parent_font_size: f32) -> f32 {
     match value {
@@ -36,11 +38,19 @@ pub(super) fn resolve_length(value: &CssValue, parent_font_size: f32) -> f32 {
         CssValue::Length(n, LengthUnit::Rem) => *n * ROOT_FONT_SIZE,
         CssValue::Length(n, LengthUnit::Pt) => *n * 1.333,
         CssValue::Number(n) => *n,
+        CssValue::Calc(expr) => resolve_calc(expr, parent_font_size, None).unwrap_or(0.0),
         _ => 0.0,
     }
 }
 
 /// Resolve a `CssValue` to a `Dimension` (auto / px / percent).
+///
+/// `Calc` expressions that contain only absolute units resolve to
+/// `Dimension::Px`.  Expressions mixing percentages with lengths produce
+/// a `Dimension::Calc` that is resolved later when the containing block
+/// width is known, but for simplicity we evaluate eagerly assuming a 0
+/// containing width and return `Dimension::Px` (matching how `resolve_length`
+/// handles calc).
 pub(super) fn resolve_dimension(value: &CssValue, parent_font_size: f32) -> Dimension {
     match value {
         CssValue::Keyword(kw) if kw == "auto" => Dimension::Auto,
@@ -50,6 +60,15 @@ pub(super) fn resolve_dimension(value: &CssValue, parent_font_size: f32) -> Dime
         CssValue::Length(n, LengthUnit::Rem) => Dimension::Px(*n * ROOT_FONT_SIZE),
         CssValue::Length(n, LengthUnit::Pt) => Dimension::Px(*n * 1.333),
         CssValue::Number(n) => Dimension::Px(*n),
+        CssValue::Calc(expr) => {
+            // If the expression is purely percentage-based, return Percent.
+            // Otherwise resolve to Px (percentages use containing_width=0).
+            if let Some(px) = resolve_calc(expr, parent_font_size, None) {
+                Dimension::Px(px)
+            } else {
+                Dimension::Auto
+            }
+        },
         _ => Dimension::Auto,
     }
 }
@@ -154,6 +173,9 @@ pub(super) fn resolve_font_size(value: &CssValue, parent_font_size: f32) -> f32 
         CssValue::Length(n, LengthUnit::Pt) => *n * 1.333,
         CssValue::Percentage(p) => parent_font_size * (*p / 100.0),
         CssValue::Number(n) => *n,
+        CssValue::Calc(expr) => {
+            resolve_calc(expr, parent_font_size, None).unwrap_or(parent_font_size)
+        },
         CssValue::Keyword(kw) => match kw.as_str() {
             "xx-small" => ROOT_FONT_SIZE * 0.5625,
             "x-small" => ROOT_FONT_SIZE * 0.625,
@@ -183,8 +205,255 @@ pub(super) fn resolve_line_height(value: &CssValue, font_size: f32, parent_font_
         CssValue::Length(n, LengthUnit::Rem) => *n * ROOT_FONT_SIZE,
         CssValue::Length(n, LengthUnit::Pt) => *n * 1.333,
         CssValue::Percentage(p) => font_size * (*p / 100.0),
+        CssValue::Calc(expr) => {
+            resolve_calc(expr, parent_font_size, None).unwrap_or(font_size * 1.5)
+        },
         CssValue::Keyword(kw) if kw == "normal" => font_size * 1.5,
         _ => font_size * 1.5,
+    }
+}
+
+// -----------------------------------------------------------------------
+// calc() expression evaluator
+// -----------------------------------------------------------------------
+
+/// Resolve a `calc()` expression to absolute pixels.
+///
+/// Supports `+`, `-`, `*`, `/` operators and `px`, `em`, `rem`, `pt`, `%`
+/// units.  Operator precedence: `*` and `/` bind tighter than `+` and `-`.
+/// Parenthesised sub-expressions are supported.
+///
+/// Returns `None` if parsing fails (the caller should use a fallback).
+pub(super) fn resolve_calc(
+    expr: &str,
+    parent_font_size: f32,
+    containing_width: Option<f32>,
+) -> Option<f32> {
+    let tokens = tokenize_calc(expr)?;
+    let mut pos = 0;
+    let result = parse_calc_additive(&tokens, &mut pos, parent_font_size, containing_width)?;
+    // Must have consumed all tokens.
+    if pos == tokens.len() {
+        Some(result)
+    } else {
+        None
+    }
+}
+
+/// A token in a calc expression.
+#[derive(Debug, Clone)]
+enum CalcToken {
+    Number(f32),
+    Unit(f32, CalcUnit),
+    Op(char),
+    OpenParen,
+    CloseParen,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum CalcUnit {
+    Px,
+    Em,
+    Rem,
+    Pt,
+    Percent,
+}
+
+/// Tokenize a calc expression string into `CalcToken`s.
+fn tokenize_calc(input: &str) -> Option<Vec<CalcToken>> {
+    let mut tokens = Vec::new();
+    let chars: Vec<char> = input.chars().collect();
+    let mut i = 0;
+    while i < chars.len() {
+        let ch = chars[i];
+        if ch.is_ascii_whitespace() {
+            i += 1;
+            continue;
+        }
+        if ch == '(' {
+            tokens.push(CalcToken::OpenParen);
+            i += 1;
+            continue;
+        }
+        if ch == ')' {
+            tokens.push(CalcToken::CloseParen);
+            i += 1;
+            continue;
+        }
+        if ch == '+' || ch == '/' {
+            tokens.push(CalcToken::Op(ch));
+            i += 1;
+            continue;
+        }
+        if ch == '*' {
+            tokens.push(CalcToken::Op('*'));
+            i += 1;
+            continue;
+        }
+        // `-` could be a subtraction operator or a negative sign.
+        // It is a subtraction operator if the previous token is a number,
+        // unit value, or close-paren.
+        if ch == '-' {
+            let is_binary = matches!(
+                tokens.last(),
+                Some(CalcToken::Number(_) | CalcToken::Unit(_, _) | CalcToken::CloseParen)
+            );
+            if is_binary {
+                tokens.push(CalcToken::Op('-'));
+                i += 1;
+                continue;
+            }
+            // Otherwise fall through to parse as negative number.
+        }
+        // Number (possibly negative).
+        if ch.is_ascii_digit() || ch == '.' || (ch == '-' && i + 1 < chars.len()) {
+            let start = i;
+            if ch == '-' {
+                i += 1;
+            }
+            while i < chars.len() && (chars[i].is_ascii_digit() || chars[i] == '.') {
+                i += 1;
+            }
+            let num_str: String = chars[start..i].iter().collect();
+            let value = num_str.parse::<f32>().ok()?;
+            // Check for unit suffix.
+            let unit_start = i;
+            while i < chars.len() && chars[i].is_ascii_alphabetic() {
+                i += 1;
+            }
+            if i == unit_start && i < chars.len() && chars[i] == '%' {
+                tokens.push(CalcToken::Unit(value, CalcUnit::Percent));
+                i += 1;
+            } else if i > unit_start {
+                let unit_str: String = chars[unit_start..i].iter().collect();
+                let unit = match unit_str.to_ascii_lowercase().as_str() {
+                    "px" => CalcUnit::Px,
+                    "em" => CalcUnit::Em,
+                    "rem" => CalcUnit::Rem,
+                    "pt" => CalcUnit::Pt,
+                    _ => return None,
+                };
+                tokens.push(CalcToken::Unit(value, unit));
+            } else {
+                tokens.push(CalcToken::Number(value));
+            }
+            continue;
+        }
+        // Unknown character -- bail.
+        return None;
+    }
+    Some(tokens)
+}
+
+/// Resolve a single calc value (number or unit) to pixels.
+fn calc_value_to_px(
+    value: f32,
+    unit: Option<CalcUnit>,
+    parent_font_size: f32,
+    containing_width: Option<f32>,
+) -> f32 {
+    match unit {
+        None => value,
+        Some(CalcUnit::Px) => value,
+        Some(CalcUnit::Em) => value * parent_font_size,
+        Some(CalcUnit::Rem) => value * ROOT_FONT_SIZE,
+        Some(CalcUnit::Pt) => value * 1.333,
+        Some(CalcUnit::Percent) => {
+            let base = containing_width.unwrap_or(0.0);
+            base * (value / 100.0)
+        },
+    }
+}
+
+/// Parse additive expression: term (('+' | '-') term)*
+fn parse_calc_additive(
+    tokens: &[CalcToken],
+    pos: &mut usize,
+    pfs: f32,
+    cw: Option<f32>,
+) -> Option<f32> {
+    let mut left = parse_calc_multiplicative(tokens, pos, pfs, cw)?;
+    while *pos < tokens.len() {
+        match &tokens[*pos] {
+            CalcToken::Op('+') => {
+                *pos += 1;
+                let right = parse_calc_multiplicative(tokens, pos, pfs, cw)?;
+                left += right;
+            },
+            CalcToken::Op('-') => {
+                *pos += 1;
+                let right = parse_calc_multiplicative(tokens, pos, pfs, cw)?;
+                left -= right;
+            },
+            _ => break,
+        }
+    }
+    Some(left)
+}
+
+/// Parse multiplicative expression: atom (('*' | '/') atom)*
+fn parse_calc_multiplicative(
+    tokens: &[CalcToken],
+    pos: &mut usize,
+    pfs: f32,
+    cw: Option<f32>,
+) -> Option<f32> {
+    let mut left = parse_calc_atom(tokens, pos, pfs, cw)?;
+    while *pos < tokens.len() {
+        match &tokens[*pos] {
+            CalcToken::Op('*') => {
+                *pos += 1;
+                let right = parse_calc_atom(tokens, pos, pfs, cw)?;
+                left *= right;
+            },
+            CalcToken::Op('/') => {
+                *pos += 1;
+                let right = parse_calc_atom(tokens, pos, pfs, cw)?;
+                if right == 0.0 {
+                    return None;
+                }
+                left /= right;
+            },
+            _ => break,
+        }
+    }
+    Some(left)
+}
+
+/// Parse an atom: a parenthesised expression, a number, or a unit value.
+fn parse_calc_atom(
+    tokens: &[CalcToken],
+    pos: &mut usize,
+    pfs: f32,
+    cw: Option<f32>,
+) -> Option<f32> {
+    if *pos >= tokens.len() {
+        return None;
+    }
+    match &tokens[*pos] {
+        CalcToken::OpenParen => {
+            *pos += 1;
+            let val = parse_calc_additive(tokens, pos, pfs, cw)?;
+            // Expect CloseParen.
+            if *pos < tokens.len() && matches!(tokens[*pos], CalcToken::CloseParen) {
+                *pos += 1;
+            } else {
+                return None;
+            }
+            Some(val)
+        },
+        CalcToken::Number(n) => {
+            let v = *n;
+            *pos += 1;
+            Some(calc_value_to_px(v, None, pfs, cw))
+        },
+        CalcToken::Unit(n, u) => {
+            let v = *n;
+            let unit = *u;
+            *pos += 1;
+            Some(calc_value_to_px(v, Some(unit), pfs, cw))
+        },
+        _ => None,
     }
 }
 
@@ -237,6 +506,8 @@ fn parse_single_track_str(s: &str) -> Option<GridTrackSize> {
     let s = s.trim();
     if s == "auto" {
         Some(GridTrackSize::Auto)
+    } else if let Some(inner) = s.strip_prefix("minmax(").and_then(|r| r.strip_suffix(')')) {
+        parse_minmax_args(inner)
     } else if let Some(fr) = s.strip_suffix("fr") {
         fr.trim().parse::<f32>().ok().map(GridTrackSize::Fr)
     } else if let Some(px) = s.strip_suffix("px") {
@@ -246,6 +517,40 @@ fn parse_single_track_str(s: &str) -> Option<GridTrackSize> {
     } else {
         None
     }
+}
+
+/// Parse the arguments inside a `minmax(min, max)` function call.
+fn parse_minmax_args(inner: &str) -> Option<GridTrackSize> {
+    let (min_str, max_str) = inner.split_once(',')?;
+    let min_str = min_str.trim();
+    let max_str = max_str.trim();
+
+    // Parse min: px, numeric, or auto.
+    let min_px = if min_str == "auto" {
+        0.0
+    } else if let Some(v) = min_str.strip_suffix("px") {
+        v.trim().parse::<f32>().ok()?
+    } else if let Ok(n) = min_str.parse::<f32>() {
+        n
+    } else {
+        return None;
+    };
+
+    // Parse max: auto, fr, or px.
+    let max_px = if max_str == "auto" {
+        f32::MAX
+    } else if max_str.ends_with("fr") {
+        // `fr` in max position: treat as flexible (expand to available).
+        f32::MAX
+    } else if let Some(v) = max_str.strip_suffix("px") {
+        v.trim().parse::<f32>().ok()?
+    } else if let Ok(n) = max_str.parse::<f32>() {
+        n
+    } else {
+        return None;
+    };
+
+    Some(GridTrackSize::Minmax(min_px, max_px))
 }
 
 fn parse_grid_template_str(s: &str, _parent_font_size: f32) -> Vec<GridTrackSize> {
@@ -268,6 +573,17 @@ fn parse_grid_template_str(s: &str, _parent_font_size: f32) -> Vec<GridTrackSize
                     for _ in 0..count {
                         tracks.push(track);
                     }
+                }
+                remainder = &remainder[close + 1..];
+            } else {
+                break;
+            }
+        } else if remainder.starts_with("minmax(") {
+            // Find the matching closing paren for this minmax() block.
+            if let Some(close) = remainder.find(')') {
+                let token = &remainder[..=close];
+                if let Some(track) = parse_single_track_str(token) {
+                    tracks.push(track);
                 }
                 remainder = &remainder[close + 1..];
             } else {
@@ -339,6 +655,128 @@ mod tests {
         // "none" returns empty.
         let tracks = parse_grid_template_str("none", 16.0);
         assert!(tracks.is_empty());
+    }
+
+    // -- calc() tests ---------------------------------------------------
+
+    #[test]
+    fn calc_simple_subtraction() {
+        // calc(100% - 20px) with containing width 200
+        let result = resolve_calc("100% - 20px", 16.0, Some(200.0));
+        assert_eq!(result, Some(180.0));
+    }
+
+    #[test]
+    fn calc_simple_addition() {
+        // calc(50% + 10px) with containing width 200
+        let result = resolve_calc("50% + 10px", 16.0, Some(200.0));
+        assert_eq!(result, Some(110.0));
+    }
+
+    #[test]
+    fn calc_multiplication() {
+        // calc(2 * 8px)
+        let result = resolve_calc("2 * 8px", 16.0, None);
+        assert_eq!(result, Some(16.0));
+    }
+
+    #[test]
+    fn calc_division() {
+        // calc(100px / 4)
+        let result = resolve_calc("100px / 4", 16.0, None);
+        assert_eq!(result, Some(25.0));
+    }
+
+    #[test]
+    fn calc_em_units() {
+        // calc(2em + 10px) with parent_font_size=16
+        let result = resolve_calc("2em + 10px", 16.0, None);
+        assert_eq!(result, Some(42.0));
+    }
+
+    #[test]
+    fn calc_rem_units() {
+        // calc(1rem + 4px) -- ROOT_FONT_SIZE is 8.0
+        let result = resolve_calc("1rem + 4px", 16.0, None);
+        assert_eq!(result, Some(12.0));
+    }
+
+    #[test]
+    fn calc_operator_precedence() {
+        // calc(10px + 2 * 5px) should be 10 + 10 = 20, not (10+2)*5
+        let result = resolve_calc("10px + 2 * 5px", 16.0, None);
+        assert_eq!(result, Some(20.0));
+    }
+
+    #[test]
+    fn calc_parentheses() {
+        // calc((10px + 2px) * 3) = 36
+        let result = resolve_calc("(10px + 2px) * 3", 16.0, None);
+        assert_eq!(result, Some(36.0));
+    }
+
+    #[test]
+    fn calc_negative_value() {
+        // calc(100px - 120px) = -20
+        let result = resolve_calc("100px - 120px", 16.0, None);
+        assert_eq!(result, Some(-20.0));
+    }
+
+    #[test]
+    fn calc_percentage_no_containing_width() {
+        // calc(50% + 10px) with no containing width: 50% of 0 = 0
+        let result = resolve_calc("50% + 10px", 16.0, None);
+        assert_eq!(result, Some(10.0));
+    }
+
+    #[test]
+    fn calc_division_by_zero_returns_none() {
+        let result = resolve_calc("100px / 0", 16.0, None);
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn calc_invalid_expression_returns_none() {
+        let result = resolve_calc("not valid", 16.0, None);
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn calc_resolve_length_integration() {
+        // resolve_length should handle Calc variant.
+        let val = CssValue::Calc("100px - 20px".into());
+        assert!((resolve_length(&val, 16.0) - 80.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn calc_resolve_dimension_integration() {
+        // resolve_dimension should handle Calc variant.
+        let val = CssValue::Calc("50px + 10px".into());
+        assert_eq!(resolve_dimension(&val, 16.0), Dimension::Px(60.0));
+    }
+
+    #[test]
+    fn calc_resolve_font_size_integration() {
+        let val = CssValue::Calc("1em + 4px".into());
+        let result = resolve_font_size(&val, 16.0);
+        assert!((result - 20.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn calc_css_parsing_roundtrip() {
+        // Parse "width: calc(100% - 20px);" and verify it produces
+        // CssValue::Calc.
+        use crate::css::parser::parse_inline_style;
+        let decls = parse_inline_style("width: calc(100% - 20px);");
+        assert_eq!(decls.len(), 1);
+        assert_eq!(decls[0].property, "width");
+        match &decls[0].value {
+            CssValue::Calc(expr) => {
+                assert!(expr.contains("100%"));
+                assert!(expr.contains("20px"));
+            },
+            other => panic!("Expected CssValue::Calc, got {other:?}"),
+        }
     }
 
     mod prop {

@@ -65,7 +65,7 @@ Core code never calls platform APIs directly. All rendering, input, networking, 
 - GPU shader wallpapers (Shadertoy-style: Voronoi, City Lights, Ocean Waves, Balatro)
 
 **Browser & JavaScript**
-- HTML/CSS/Gemini renderer with DOM, CSS cascade, flexbox, positioned layout, `@media` queries
+- HTML/CSS/Gemini renderer with DOM, CSS cascade, flex/grid/table layout, `calc()`, transforms, animations, `@media`/`@supports` queries, cookies, gzip
 - JavaScript engine (QuickJS-NG) with `console` API, DOM manipulation, event dispatch
 
 **Shell & Apps**
@@ -97,7 +97,7 @@ Default virtual resolution is 480x272 (PSP native). Skins may override this (e.g
 
 ## Crates
 
-34 crates (32 workspace + 2 excluded PSP crates):
+37 crates (35 workspace + 2 excluded PSP crates):
 
 | Crate | Description |
 |-------|-------------|
@@ -113,10 +113,13 @@ Default virtual resolution is 480x272 (PSP native). Skins may override this (e.g
 | `oasis-vector` | Resolution-independent vector graphics, path ops, icons, animations |
 | `oasis-shader` | Shadertoy-style animated fragment shaders |
 | **Content** | |
-| `oasis-browser` | HTML/CSS/Gemini engine: DOM, CSS cascade, flexbox, `@media`, reader mode, JS bindings |
+| `oasis-browser` | HTML/CSS/Gemini engine: DOM, CSS cascade, flex/grid layout, `calc()`, transforms, animations, transitions, `@media`/`@supports`, cookies, CSP, reader mode, JS bindings |
 | `oasis-js` | QuickJS-NG runtime: `console` API, DOM manipulation, event dispatch |
 | `oasis-terminal` | 90+ commands, 17 modules, shell features (variables, globs, aliases, piping) |
 | `oasis-video` | MP4/H.264+AAC decode, streaming `VideoSource` API, symphonia + openh264 |
+| `oasis-rasterize` | Software rasterizer for CPU-side rendering |
+| `oasis-i18n` | Internationalization support |
+| `oasis-test-backend` | Mock backend for testing |
 | **Infrastructure** | |
 | `oasis-net` | TCP networking, PSK auth, remote terminal, FTP |
 | `oasis-audio` | Playlist, MP3/WAV decode, ID3 parsing, shuffle/repeat |

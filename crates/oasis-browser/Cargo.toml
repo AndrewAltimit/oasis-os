@@ -21,8 +21,10 @@ oasis-js = { workspace = true, optional = true }
 rustc-hash = { workspace = true }
 serde = { workspace = true }
 log = { workspace = true }
+flate2 = { workspace = true }
 png = { workspace = true }
 jpeg-decoder = { workspace = true }
+gif = { workspace = true }
 
 [dev-dependencies]
 proptest.workspace = true

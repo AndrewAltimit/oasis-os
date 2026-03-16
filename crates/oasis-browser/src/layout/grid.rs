@@ -65,19 +65,76 @@ pub fn layout_grid(container: &mut LayoutBox, _containing_width: f32, measurer: 
     }
 
     // -- Phase 4: Auto-placement (assign grid cells) ---------------------
-    let mut placements: Vec<(usize, usize)> = Vec::with_capacity(num_children);
+    // Each placement is (col, row, col_span, row_span).
+    let mut placements: Vec<(usize, usize, usize, usize)> = Vec::with_capacity(num_children);
+    // Track occupied cells for auto-placement around spans.
+    let mut occupied = vec![vec![false; num_cols]; num_rows];
+
     for (i, child) in container.children.iter().enumerate() {
-        let col = if let Some(c) = child.style.grid_column_start {
-            ((c - 1).max(0) as usize).min(num_cols - 1)
-        } else {
-            i % num_cols
+        let explicit_col = child
+            .style
+            .grid_column_start
+            .map(|c| ((c - 1).max(0) as usize).min(num_cols - 1));
+        let explicit_row = child.style.grid_row_start.map(|r| (r - 1).max(0) as usize);
+
+        let (col, row) = match (explicit_col, explicit_row) {
+            (Some(c), Some(r)) => (c, r),
+            (Some(c), None) => (c, i / num_cols),
+            (None, Some(r)) => (i % num_cols, r),
+            (None, None) => {
+                // Auto-place: find next unoccupied cell.
+                let mut found = (i % num_cols, i / num_cols);
+                'search: for (r, occ_row) in occupied.iter().enumerate() {
+                    for (c, &is_occ) in occ_row.iter().enumerate().take(num_cols) {
+                        if !is_occ {
+                            found = (c, r);
+                            break 'search;
+                        }
+                    }
+                }
+                found
+            },
         };
-        let row = if let Some(r) = child.style.grid_row_start {
-            (r - 1).max(0) as usize
+
+        // Determine span from grid-column-end / grid-row-end.
+        let col_span = if let (Some(start), Some(end)) =
+            (child.style.grid_column_start, child.style.grid_column_end)
+        {
+            ((end - start).max(1) as usize).min(num_cols - col)
+        } else if let Some(end) = child.style.grid_column_end {
+            let start_line = (col + 1) as i32;
+            ((end - start_line).max(1) as usize).min(num_cols - col)
         } else {
-            i / num_cols
+            1
         };
-        placements.push((col, row));
+
+        let row_span = if let (Some(start), Some(end)) =
+            (child.style.grid_row_start, child.style.grid_row_end)
+        {
+            (end - start).max(1) as usize
+        } else if let Some(end) = child.style.grid_row_end {
+            let start_line = (row + 1) as i32;
+            (end - start_line).max(1) as usize
+        } else {
+            1
+        };
+
+        // Mark cells as occupied.
+        for occ_row in occupied
+            .iter_mut()
+            .take(num_rows.min(row + row_span))
+            .skip(row)
+        {
+            for cell in occ_row
+                .iter_mut()
+                .take(num_cols.min(col + col_span))
+                .skip(col)
+            {
+                *cell = true;
+            }
+        }
+
+        placements.push((col, row, col_span, row_span));
     }
 
     // -- Phase 5: Resolve column widths ----------------------------------
@@ -107,7 +164,7 @@ pub fn layout_grid(container: &mut LayoutBox, _containing_width: f32, measurer: 
 
     // Determine the max intrinsic height in each row.
     let mut row_content_heights: Vec<f32> = vec![0.0; num_rows];
-    for (i, &(_, row)) in placements.iter().enumerate() {
+    for (i, &(_, row, _, _)) in placements.iter().enumerate() {
         if row < num_rows {
             row_content_heights[row] = row_content_heights[row].max(child_heights[i]);
         }
@@ -142,10 +199,34 @@ pub fn layout_grid(container: &mut LayoutBox, _containing_width: f32, measurer: 
     let row_offsets = cumulative_offsets(&row_heights, row_gap);
 
     for (i, child) in container.children.iter_mut().enumerate() {
-        let (col, row) = placements[i];
+        let (col, row, col_span, row_span) = placements[i];
         let cell_x = col_offsets.get(col).copied().unwrap_or(0.0);
         let cell_y = row_offsets.get(row).copied().unwrap_or(0.0);
-        let cell_w = col_widths.get(col).copied().unwrap_or(0.0);
+
+        // Calculate the total width across spanned columns including gaps.
+        let cell_w = {
+            let mut w = 0.0f32;
+            for c in col..(col + col_span).min(num_cols) {
+                w += col_widths.get(c).copied().unwrap_or(0.0);
+            }
+            // Add gaps between spanned columns.
+            if col_span > 1 {
+                w += col_gap * (col_span as f32 - 1.0);
+            }
+            w
+        };
+
+        // Calculate the total height across spanned rows including gaps.
+        let _cell_h = {
+            let mut h = 0.0f32;
+            for r in row..(row + row_span).min(num_rows) {
+                h += row_heights.get(r).copied().unwrap_or(0.0);
+            }
+            if row_span > 1 {
+                h += row_gap * (row_span as f32 - 1.0);
+            }
+            h
+        };
 
         // Grid items stretch to fill their cell by default. Override
         // the child's width to auto so that `calculate_block_width`
@@ -190,7 +271,7 @@ fn resolve_track_sizes(
     templates: &[GridTrackSize],
     num_tracks: usize,
     available_space: f32,
-    placements: &[(usize, usize)],
+    placements: &[(usize, usize, usize, usize)],
     child_sizes: &[f32],
     is_column: bool,
 ) -> Vec<f32> {
@@ -211,24 +292,24 @@ fn resolve_track_sizes(
                 // Will be resolved in second pass.
             },
             GridTrackSize::Auto => {
-                // Use the maximum content size for items in this track.
-                let max_content = placements
-                    .iter()
-                    .enumerate()
-                    .filter(
-                        |&(_, &(col, row))| {
-                            if is_column { col == i } else { row == i }
-                        },
-                    )
-                    .map(|(idx, _)| child_sizes.get(idx).copied().unwrap_or(0.0))
-                    .fold(0.0f32, f32::max);
+                // Use the maximum content size for non-spanning items in
+                // this track.
+                let max_content = max_content_for_track(placements, child_sizes, i, is_column);
                 *size = max_content;
                 fixed_total += max_content;
+            },
+            GridTrackSize::Minmax(min, max) => {
+                // Use the maximum content size clamped to [min, max].
+                let max_content = max_content_for_track(placements, child_sizes, i, is_column);
+                let clamped = max_content.clamp(min, max);
+                *size = clamped;
+                fixed_total += clamped;
             },
         }
     }
 
-    // Second pass: distribute remaining space to fr tracks.
+    // Second pass: distribute remaining space to fr tracks, then expand
+    // Minmax tracks towards their max.
     if fr_total > 0.0 {
         let remaining = (available_space - fixed_total).max(0.0);
         for (i, size) in sizes.iter_mut().enumerate() {
@@ -238,20 +319,60 @@ fn resolve_track_sizes(
             }
         }
     } else if available_space > 0.0 && fixed_total < available_space {
-        // If no fr tracks and no explicit template for some tracks,
-        // distribute evenly among auto tracks with zero size.
-        let auto_count = sizes.iter().filter(|&&s| s == 0.0).count();
-        if auto_count > 0 {
-            let per_auto = (available_space - fixed_total) / auto_count as f32;
-            for size in &mut sizes {
-                if *size == 0.0 {
-                    *size = per_auto;
+        // Expand Minmax tracks towards their max with leftover space.
+        let mut leftover = available_space - fixed_total;
+        let mut expanded_any = false;
+        for (i, size) in sizes.iter_mut().enumerate() {
+            let track = templates.get(i).copied().unwrap_or(GridTrackSize::Auto);
+            if let GridTrackSize::Minmax(_, max) = track
+                && max > *size
+                && leftover > 0.0
+            {
+                let grow = (max - *size).min(leftover);
+                *size += grow;
+                leftover -= grow;
+                expanded_any = true;
+            }
+        }
+
+        // If no Minmax tracks were expanded, distribute evenly among
+        // auto tracks with zero size.
+        if !expanded_any {
+            let auto_count = sizes.iter().filter(|&&s| s == 0.0).count();
+            if auto_count > 0 {
+                let per_auto = (available_space - fixed_total) / auto_count as f32;
+                for size in &mut sizes {
+                    if *size == 0.0 {
+                        *size = per_auto;
+                    }
                 }
             }
         }
     }
 
     sizes
+}
+
+/// Get the maximum content size for items placed in a given track.
+/// Only considers non-spanning items (span == 1) for accurate sizing.
+fn max_content_for_track(
+    placements: &[(usize, usize, usize, usize)],
+    child_sizes: &[f32],
+    track_idx: usize,
+    is_column: bool,
+) -> f32 {
+    placements
+        .iter()
+        .enumerate()
+        .filter(|&(_, &(col, row, col_span, row_span))| {
+            if is_column {
+                col == track_idx && col_span == 1
+            } else {
+                row == track_idx && row_span == 1
+            }
+        })
+        .map(|(idx, _)| child_sizes.get(idx).copied().unwrap_or(0.0))
+        .fold(0.0f32, f32::max)
 }
 
 /// Calculate cumulative offsets from track sizes and gap.
@@ -527,7 +648,7 @@ mod tests {
             GridTrackSize::Fr(2.0),
             GridTrackSize::Fr(1.0),
         ];
-        let placements = vec![(0, 0), (1, 0), (2, 0)];
+        let placements = vec![(0, 0, 1, 1), (1, 0, 1, 1), (2, 0, 1, 1)];
         let child_sizes = vec![50.0, 50.0, 50.0];
         let sizes = resolve_track_sizes(&templates, 3, 400.0, &placements, &child_sizes, true);
         assert!((sizes[0] - 100.0).abs() < 0.1);
@@ -538,7 +659,7 @@ mod tests {
     #[test]
     fn resolve_track_sizes_mixed() {
         let templates = vec![GridTrackSize::Px(100.0), GridTrackSize::Fr(1.0)];
-        let placements = vec![(0, 0), (1, 0)];
+        let placements = vec![(0, 0, 1, 1), (1, 0, 1, 1)];
         let child_sizes = vec![50.0, 50.0];
         let sizes = resolve_track_sizes(&templates, 2, 400.0, &placements, &child_sizes, true);
         assert!((sizes[0] - 100.0).abs() < 0.1);

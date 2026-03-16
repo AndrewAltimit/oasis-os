@@ -184,6 +184,11 @@ mod tests {
             placeholder: String::new(),
             maxlength: None,
             input_type: InputType::Text,
+            required: false,
+            minlength: None,
+            pattern: None,
+            min: None,
+            max: None,
         }
     }
 
@@ -323,6 +328,9 @@ mod tests {
             rows: 3,
             cols: 40,
             placeholder: String::new(),
+            required: false,
+            minlength: None,
+            maxlength: None,
         });
         f.add_element(hidden("h", "x"));
         f.add_element(submit("go"));
@@ -433,6 +441,9 @@ mod tests {
             rows: 3,
             cols: 40,
             placeholder: String::new(),
+            required: false,
+            minlength: None,
+            maxlength: None,
         });
         let data = f.collect();
         assert_eq!(data, vec![("bio".into(), "Hello world".into())]);
@@ -489,6 +500,11 @@ mod tests {
             placeholder: String::new(),
             maxlength: Some(100),
             input_type: InputType::Text,
+            required: false,
+            minlength: None,
+            pattern: None,
+            min: None,
+            max: None,
         };
         let kind = ElementKind::of(&elem);
         assert!(
@@ -520,6 +536,9 @@ mod tests {
             rows: 3,
             cols: 40,
             placeholder: String::new(),
+            required: false,
+            minlength: None,
+            maxlength: None,
         };
         assert!(matches!(ElementKind::of(&elem), ElementKind::TextArea));
     }

@@ -161,6 +161,12 @@ summary {
     display: block;
     font-weight: bold;
 }
+summary::before {
+    content: "▶ ";
+}
+details[open] > summary::before {
+    content: "▼ ";
+}
 
 /* -- Horizontal rule ------------------------------------------------ */
 hr {
@@ -266,6 +272,13 @@ head, script, style, link, meta, title, noscript, template {
 
 input[type="hidden"] {
     display: none;
+}
+
+/* -- Focus ring ----------------------------------------------------- */
+:focus {
+    outline-width: 2px;
+    outline-style: solid;
+    outline-color: #0066cc;
 }
 "#;
 

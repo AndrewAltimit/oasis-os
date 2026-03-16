@@ -40,6 +40,16 @@ pub enum FormElement {
         placeholder: String,
         maxlength: Option<usize>,
         input_type: InputType,
+        /// Whether this field is required for submission.
+        required: bool,
+        /// Minimum character length.
+        minlength: Option<usize>,
+        /// Regex-like pattern the value must match.
+        pattern: Option<String>,
+        /// Minimum numeric value (for `InputType::Number`).
+        min: Option<f64>,
+        /// Maximum numeric value (for `InputType::Number`).
+        max: Option<f64>,
     },
     /// A checkbox.
     Checkbox {
@@ -68,6 +78,12 @@ pub enum FormElement {
         rows: u32,
         cols: u32,
         placeholder: String,
+        /// Whether this field is required for submission.
+        required: bool,
+        /// Minimum character length.
+        minlength: Option<usize>,
+        /// Maximum character length.
+        maxlength: Option<usize>,
     },
     /// A submit button.
     SubmitButton {
@@ -239,6 +255,11 @@ mod tests {
             placeholder: "Enter name".into(),
             maxlength: Some(20),
             input_type: InputType::Text,
+            required: false,
+            minlength: None,
+            pattern: None,
+            min: None,
+            max: None,
         };
         assert_eq!(elem.name(), Some("user"));
         assert!(elem.is_focusable());
@@ -252,6 +273,11 @@ mod tests {
             placeholder: String::new(),
             maxlength: None,
             input_type: InputType::Password,
+            required: false,
+            minlength: None,
+            pattern: None,
+            min: None,
+            max: None,
         };
         assert_eq!(elem.name(), Some("pw"));
         assert!(elem.is_focusable());
@@ -322,6 +348,9 @@ mod tests {
             rows: 5,
             cols: 40,
             placeholder: "Tell us about yourself".into(),
+            required: false,
+            minlength: None,
+            maxlength: None,
         };
         assert_eq!(elem.name(), Some("bio"));
         assert!(elem.is_focusable());
@@ -357,6 +386,11 @@ mod tests {
             placeholder: String::new(),
             maxlength: None,
             input_type: InputType::Text,
+            required: false,
+            minlength: None,
+            pattern: None,
+            min: None,
+            max: None,
         };
         assert_eq!(elem.name(), None);
     }

@@ -71,7 +71,7 @@ impl SearchState {
     /// Activate search with an initial query.
     ///
     /// This opens the search overlay and sets the query string.
-    /// Matches must be populated separately via [`set_matches`] or
+    /// Matches must be populated separately via [`Self::set_matches`] or
     /// the `collect_text_nodes` helper after layout.
     pub fn open(&mut self, query: &str) {
         self.active = true;

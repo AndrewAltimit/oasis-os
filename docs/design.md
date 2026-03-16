@@ -1413,7 +1413,7 @@ The original C source (`psixpsp.7z` at repository root) contains ~15,000 lines o
 
 Phase 13 was added after the original plan. The PSP backend was initially software-rendered, then switched to sceGu hardware acceleration with `Sprites` primitives for all 2D drawing. The PSP UI now renders the full PSIX-style layout: document icons with 6 layers, tabbed status/bottom bars, chrome bezels, procedural wave arc wallpaper, and paginated grid navigation.
 
-Total Rust codebase: approximately 125,000 lines across 34 crates, substantially exceeding the original C codebase (~15,000 lines) due to the framework abstraction, 11 extracted app crates, browser engine with JS bindings, video decode pipeline, vector graphics, shader wallpapers, window manager, VFS, UE5 integration, and multiple skins. The vendored ffmpeg (~176,000 lines) is eliminated entirely.
+Total Rust codebase: approximately 125,000 lines across 37 crates, substantially exceeding the original C codebase (~15,000 lines) due to the framework abstraction, 11 extracted app crates, browser engine with JS bindings, video decode pipeline, vector graphics, shader wallpapers, window manager, VFS, UE5 integration, and multiple skins. The vendored ffmpeg (~176,000 lines) is eliminated entirely.
 
 ---
 

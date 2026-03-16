@@ -22,7 +22,7 @@ pub(super) fn paint_inline_content(
     let bg = layout_box.style.background_color;
     if bg.a > 0 {
         let pb = layout_box.dimensions.padding_box();
-        let x = (pb.x + offset_x as f32) as i32;
+        let x = (pb.x - ctx.scroll_x + offset_x as f32) as i32;
         let y = (pb.y - ctx.scroll_y + offset_y as f32) as i32;
         let w = pb.width as u32;
         let h = pb.height as u32;
@@ -69,7 +69,7 @@ pub(super) fn paint_text(
     offset_y: i32,
     ctx: &PaintContext,
 ) -> Result<()> {
-    let sx = (x + offset_x as f32) as i32;
+    let sx = (x - ctx.scroll_x + offset_x as f32) as i32;
     let sy = (y - ctx.scroll_y + offset_y as f32) as i32;
 
     let color = apply_opacity(style.color, style.opacity);

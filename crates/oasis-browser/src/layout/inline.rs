@@ -1172,4 +1172,221 @@ mod tests {
             );
         }
     }
+
+    // ---------------------------------------------------------------
+    // word-break: break-all
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn word_break_break_all_splits_long_word() {
+        let m = FixedMeasurer;
+        let mut style = inline_style();
+        style.display = Display::Block;
+        style.word_break = WordBreak::BreakAll;
+
+        let mut parent = LayoutBox::new(BoxType::Anonymous, style.clone(), None);
+        parent.dimensions.content.width = 40.0; // very narrow
+        parent.dimensions.content.x = 0.0;
+        parent.dimensions.content.y = 0.0;
+
+        let mut child = LayoutBox::new(BoxType::Inline, style, None);
+        child.text = Some("abcdefghijklmnop".to_string());
+        parent.children = vec![child];
+
+        layout_inline(&mut parent, &m);
+
+        // With break-all, the long word should break into multiple lines.
+        // At ~8px per char with 40px width, ~5 chars per line.
+        // 16 chars -> at least 2 lines.
+        assert!(
+            parent.dimensions.content.height > 20.0,
+            "break-all should produce multiple lines, got height {}",
+            parent.dimensions.content.height,
+        );
+    }
+
+    // ---------------------------------------------------------------
+    // overflow-wrap: break-word
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn overflow_wrap_break_word() {
+        let m = FixedMeasurer;
+        let mut style = inline_style();
+        style.display = Display::Block;
+        style.overflow_wrap = OverflowWrap::BreakWord;
+
+        let mut parent = LayoutBox::new(BoxType::Anonymous, style.clone(), None);
+        // 80px wide -- enough for "ab " but not "ab " + the long word.
+        parent.dimensions.content.width = 80.0;
+        parent.dimensions.content.x = 0.0;
+        parent.dimensions.content.y = 0.0;
+
+        // "ab superlongwordthatdoesnotfit" -- the first word fits,
+        // but the second doesn't and must be broken with break-word.
+        let mut child = LayoutBox::new(BoxType::Inline, style, None);
+        child.text = Some("ab superlongwordthatdoesnotfit".to_string());
+        parent.children = vec![child];
+
+        layout_inline(&mut parent, &m);
+
+        // overflow-wrap: break-word should break the long word across
+        // lines, producing more than one line of height.
+        assert!(
+            parent.dimensions.content.height > 20.0,
+            "break-word should produce multiple lines, got height {}",
+            parent.dimensions.content.height,
+        );
+    }
+
+    // ---------------------------------------------------------------
+    // white-space: pre (preserve whitespace and newlines)
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn whitespace_pre_preserves_spaces() {
+        let m = FixedMeasurer;
+        let mut style = inline_style();
+        style.display = Display::Block;
+        style.white_space = WhiteSpace::Pre;
+
+        let mut parent = LayoutBox::new(BoxType::Anonymous, style.clone(), None);
+        parent.dimensions.content.width = 480.0;
+        parent.dimensions.content.x = 0.0;
+        parent.dimensions.content.y = 0.0;
+
+        let mut child = LayoutBox::new(BoxType::Inline, style, None);
+        // Pre mode should preserve the two spaces and the newline.
+        child.text = Some("hello  world\nnext line".to_string());
+        parent.children = vec![child];
+
+        layout_inline(&mut parent, &m);
+
+        // The newline in pre mode should create at least 2 lines.
+        assert!(
+            parent.dimensions.content.height > 20.0,
+            "white-space:pre should produce multiple lines for \\n, \
+             got height {}",
+            parent.dimensions.content.height,
+        );
+    }
+
+    // ---------------------------------------------------------------
+    // white-space: nowrap (no wrapping) -- already tested above,
+    // but add a more specific test
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn whitespace_nowrap_single_line_even_when_overflow() {
+        let m = FixedMeasurer;
+        let mut style = inline_style();
+        style.display = Display::Block;
+        style.white_space = WhiteSpace::NoWrap;
+
+        let mut parent = LayoutBox::new(BoxType::Anonymous, style.clone(), None);
+        parent.dimensions.content.width = 30.0; // extremely narrow
+        parent.dimensions.content.x = 0.0;
+        parent.dimensions.content.y = 0.0;
+
+        let mut child = LayoutBox::new(BoxType::Inline, style, None);
+        child.text = Some("this text is way too long".to_string());
+        parent.children = vec![child];
+
+        layout_inline(&mut parent, &m);
+
+        // With nowrap, should remain a single line height.
+        assert!(
+            parent.dimensions.content.height <= 20.0 + 0.01,
+            "nowrap should produce single line, got height {}",
+            parent.dimensions.content.height,
+        );
+    }
+
+    // ---------------------------------------------------------------
+    // Mixed inline elements (bold + normal)
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn mixed_inline_elements() {
+        let m = FixedMeasurer;
+        let style = inline_style();
+
+        let mut parent = anon_parent(480.0);
+
+        // Two inline children with different font sizes (simulating
+        // bold vs normal -- different line heights).
+        let mut normal = LayoutBox::new(BoxType::Inline, style.clone(), None);
+        normal.text = Some("hello ".to_string());
+
+        let mut bold_style = style.clone();
+        bold_style.font_size = 20.0;
+        bold_style.line_height = 24.0;
+        let mut bold = LayoutBox::new(BoxType::Inline, bold_style, None);
+        bold.text = Some("world".to_string());
+
+        parent.children = vec![normal, bold];
+
+        layout_inline(&mut parent, &m);
+
+        // Both fragments should contribute to the line height.
+        assert!(
+            parent.dimensions.content.height > 0.0,
+            "mixed inline elements should produce positive height"
+        );
+    }
+
+    // ---------------------------------------------------------------
+    // text-align: center and right via layout_inline
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn text_align_center_via_layout() {
+        let m = FixedMeasurer;
+        let mut style = inline_style();
+        style.display = Display::Block;
+        style.text_align = TextAlign::Center;
+
+        let mut parent = LayoutBox::new(BoxType::Anonymous, style.clone(), None);
+        parent.dimensions.content.width = 200.0;
+        parent.dimensions.content.x = 0.0;
+        parent.dimensions.content.y = 0.0;
+
+        let mut child = LayoutBox::new(BoxType::Inline, style, None);
+        child.text = Some("hi".to_string());
+        parent.children = vec![child];
+
+        layout_inline(&mut parent, &m);
+
+        // The text fragment should be offset toward center.
+        if !parent.children.is_empty() {
+            let x = parent.children[0].dimensions.content.x;
+            // "hi" at font_size 16 ~ 16px wide. center of 200 = 92.
+            assert!(x > 0.0, "center-aligned text should have x > 0, got {x}");
+        }
+    }
+
+    #[test]
+    fn text_align_right_via_layout() {
+        let m = FixedMeasurer;
+        let mut style = inline_style();
+        style.display = Display::Block;
+        style.text_align = TextAlign::Right;
+
+        let mut parent = LayoutBox::new(BoxType::Anonymous, style.clone(), None);
+        parent.dimensions.content.width = 200.0;
+        parent.dimensions.content.x = 0.0;
+        parent.dimensions.content.y = 0.0;
+
+        let mut child = LayoutBox::new(BoxType::Inline, style, None);
+        child.text = Some("hi".to_string());
+        parent.children = vec![child];
+
+        layout_inline(&mut parent, &m);
+
+        // The text fragment should be offset to the right.
+        if !parent.children.is_empty() {
+            let x = parent.children[0].dimensions.content.x;
+            assert!(x > 100.0, "right-aligned text should have x > 100, got {x}");
+        }
+    }
 }

@@ -19,13 +19,18 @@ use crate::reader;
 use crate::{BrowserWidget, LoadingState, SimpleTextMeasurer};
 
 impl BrowserWidget {
-    /// Navigate to a URL using the VFS as the resource source.
-    pub fn navigate_vfs(&mut self, url: &str, vfs: &dyn Vfs) {
+    /// Navigate via HTTP POST to a URL with the given body.
+    ///
+    /// Used for `<form method="post">` submissions. The encoded form
+    /// data is sent as the request body with
+    /// `Content-Type: application/x-www-form-urlencoded`.
+    pub fn navigate_post(&mut self, url: &str, body: Vec<u8>, vfs: &dyn Vfs) {
         self.state = LoadingState::Loading;
         self.selected_link = -1;
         self.reader_mode = false;
         self.reader_html = None;
         self.error_message = None;
+        self.page_csp = None;
         self.decoded_images.clear();
         self.image_textures.clear();
         self.pending_images.clear();
@@ -40,15 +45,95 @@ impl BrowserWidget {
             ResourceSource::VfsThenNetwork
         };
 
+        let referrer = self.nav.current_url().and_then(loader::strip_referrer);
         let request = ResourceRequest {
             url: url.to_string(),
             base_url: self.nav.current_url().map(String::from),
             source,
+            method: loader::HttpMethod::Post,
+            body: Some(body),
+            referrer,
         };
 
-        match load_resource(vfs, &request, self.tls.as_deref()) {
-            Ok(response) => {
-                self.process_response(response);
+        match load_resource(
+            vfs,
+            &request,
+            self.tls.as_deref(),
+            #[cfg(not(target_arch = "wasm32"))]
+            Some(&mut self.cookie_jar),
+            #[cfg(not(target_arch = "wasm32"))]
+            Some(&self.cache),
+        ) {
+            Ok(loaded) => {
+                let url_str = loaded.response.url.clone();
+                let etag = loaded.etag.clone();
+                let last_modified = loaded.last_modified.clone();
+                self.page_csp = loaded.csp;
+                self.process_response(loaded.response);
+                self.cache.set_validators(&url_str, etag, last_modified);
+            },
+            Err(e) => {
+                let err_resp = loader::vfs::error_page(url, &e.to_string());
+                self.process_response(err_resp);
+                self.state = LoadingState::Error;
+                self.error_message = Some(e.to_string());
+            },
+        }
+
+        self.collect_page_image_requests();
+        if !self.pending_images.is_empty() {
+            self.state = LoadingState::Loading;
+        }
+    }
+
+    /// Navigate to a URL using the VFS as the resource source.
+    pub fn navigate_vfs(&mut self, url: &str, vfs: &dyn Vfs) {
+        self.state = LoadingState::Loading;
+        self.selected_link = -1;
+        self.reader_mode = false;
+        self.reader_html = None;
+        self.error_message = None;
+        self.page_csp = None;
+        self.decoded_images.clear();
+        self.image_textures.clear();
+        self.pending_images.clear();
+        self.decoded_image_bytes = 0;
+        self.decoded_image_lru.clear();
+        self.cached_image_info.clear();
+        self.image_info_dirty = false;
+
+        let source = if self.config.features.sandbox_only {
+            ResourceSource::Vfs
+        } else {
+            ResourceSource::VfsThenNetwork
+        };
+
+        let referrer = self.nav.current_url().and_then(loader::strip_referrer);
+        let request = ResourceRequest {
+            url: url.to_string(),
+            base_url: self.nav.current_url().map(String::from),
+            source,
+            method: loader::HttpMethod::Get,
+            body: None,
+            referrer,
+        };
+
+        match load_resource(
+            vfs,
+            &request,
+            self.tls.as_deref(),
+            #[cfg(not(target_arch = "wasm32"))]
+            Some(&mut self.cookie_jar),
+            #[cfg(not(target_arch = "wasm32"))]
+            Some(&self.cache),
+        ) {
+            Ok(loaded) => {
+                let url_str = loaded.response.url.clone();
+                let etag = loaded.etag.clone();
+                let last_modified = loaded.last_modified.clone();
+                self.page_csp = loaded.csp;
+                self.process_response(loaded.response);
+                self.cache.set_validators(&url_str, etag, last_modified);
             },
             Err(e) => {
                 let err_resp = loader::vfs::error_page(url, &e.to_string());
@@ -78,6 +163,8 @@ impl BrowserWidget {
             CacheEntry {
                 response: response.clone(),
                 texture: None,
+                etag: None,
+                last_modified: None,
             },
         );
 
@@ -144,9 +231,10 @@ impl BrowserWidget {
             match oasis_js::JsEngine::new(8 * 1024 * 1024) {
                 Ok(engine) => {
                     let s = std::rc::Rc::clone(&shared);
-                    if let Err(e) =
-                        engine.with_context(|ctx| js_dom::install_document_global(&ctx, &s))
-                    {
+                    let nav = std::rc::Rc::clone(&self.js_nav_actions);
+                    if let Err(e) = engine.with_context(|ctx| {
+                        js_dom::install_document_global_with_nav(&ctx, &s, url, &nav)
+                    }) {
                         log::warn!("JS DOM install failed: {}", e.message);
                     }
                     if !scripts.is_empty() {
@@ -183,6 +271,7 @@ impl BrowserWidget {
         let ctx = css::cascade::CascadeContext {
             hover_node: self.hover_node,
             visited_urls: Some(&self.visited_urls),
+            focused_node: None,
         };
         let styles = css::cascade::style_tree(&doc, &all_sheets, &inline_styles, &ctx);
 
@@ -196,13 +285,17 @@ impl BrowserWidget {
         // 6. Build layout tree.
         let content_h = self.config.content_height(self.window_h);
         let image_info = self.build_image_info_map();
-        let measurer = layout::text_cache::CachingMeasurer::new(&SimpleTextMeasurer);
+        let shared = std::rc::Rc::clone(&self.text_cache);
+        let measurer =
+            layout::text_cache::CachingMeasurer::with_shared(&SimpleTextMeasurer, shared);
+        let viewport_w = self.window_w as f32 / self.config.zoom_level;
+        let viewport_h = content_h as f32 / self.config.zoom_level;
         let layout_root = layout::block::build_layout_tree(
             &doc,
             &styles,
             &measurer,
-            self.window_w as f32,
-            content_h as f32,
+            viewport_w,
+            viewport_h,
             Some(url),
             &image_info,
         );
@@ -357,6 +450,7 @@ impl BrowserWidget {
                 let reader_ctx = css::cascade::CascadeContext {
                     hover_node: None,
                     visited_urls: Some(&self.visited_urls),
+                    focused_node: None,
                 };
                 let styles = css::cascade::style_tree(&reader_doc, &[&ua_sheet], &[], &reader_ctx);
                 let href_map = Self::build_link_map(&reader_doc);

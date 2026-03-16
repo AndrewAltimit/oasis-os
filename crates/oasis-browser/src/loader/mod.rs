@@ -2,6 +2,8 @@
 //! orchestration.
 
 pub mod cache;
+pub mod cookies;
+pub mod csp;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod gemini_fetch;
 #[cfg(not(target_arch = "wasm32"))]
@@ -23,12 +25,30 @@ pub enum ResourceSource {
     VfsThenNetwork,
 }
 
+/// HTTP method for a resource request.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub enum HttpMethod {
+    /// Standard GET request (default).
+    #[default]
+    Get,
+    /// POST request with a body.
+    Post,
+}
+
 /// A request for a resource.
 #[derive(Debug, Clone)]
 pub struct ResourceRequest {
     pub url: String,
     pub base_url: Option<String>,
     pub source: ResourceSource,
+    /// HTTP method (defaults to GET).
+    pub method: HttpMethod,
+    /// Optional request body (used for POST).
+    pub body: Option<Vec<u8>>,
+    /// Optional referrer URL (privacy-stripped) to send as `Referer`
+    /// header. Set when navigating from one page to another, or when
+    /// loading sub-resources (images, stylesheets).
+    pub referrer: Option<String>,
 }
 
 /// A loaded resource.
@@ -348,6 +368,22 @@ fn resolve_path(base_dir: &str, relative: &str) -> String {
     format!("/{}", segments.join("/"))
 }
 
+/// Build a privacy-stripped referrer string from a page URL.
+///
+/// Removes fragment and query components from the URL so that
+/// sensitive data (session tokens, search queries) is not leaked
+/// to the target server.
+pub fn strip_referrer(page_url: &str) -> Option<String> {
+    let url = Url::parse(page_url)?;
+    // Return scheme://host[:port]/path (no query or fragment).
+    let mut s = format!("{}://{}", url.scheme, url.host);
+    if let Some(port) = url.port {
+        s.push_str(&format!(":{port}"));
+    }
+    s.push_str(&url.path);
+    Some(s)
+}
+
 /// Detect the content type for a URL by inspecting its file extension.
 /// Defaults to [`ContentType::Html`] when no extension is recognised.
 pub fn detect_content_type(url: &Url) -> ContentType {
@@ -363,18 +399,57 @@ pub fn detect_content_type(url: &Url) -> ContentType {
 /// VFS first and falls back to the network.
 ///
 /// `tls` is forwarded to the HTTP client for HTTPS support.
+/// `cookie_jar` is used to send/receive HTTP cookies.
+/// `cache` is consulted for conditional request headers (ETag /
+/// If-Modified-Since).
 pub fn load_resource(
     vfs_backend: &dyn oasis_vfs::Vfs,
     request: &ResourceRequest,
     tls: Option<&dyn oasis_net::tls::TlsProvider>,
-) -> Result<ResourceResponse> {
+    #[cfg(not(target_arch = "wasm32"))] cookie_jar: Option<&mut cookies::CookieJar>,
+    #[cfg(not(target_arch = "wasm32"))] resource_cache: Option<&cache::ResourceCache>,
+) -> Result<LoadedResource> {
     match request.source {
-        ResourceSource::Vfs => vfs::load_from_vfs(vfs_backend, request),
-        ResourceSource::Network => load_from_network(request, tls),
-        ResourceSource::VfsThenNetwork => match vfs::load_from_vfs(vfs_backend, request) {
-            Ok(resp) => Ok(resp),
-            Err(_) => load_from_network(request, tls),
+        ResourceSource::Vfs => {
+            vfs::load_from_vfs(vfs_backend, request).map(LoadedResource::from_response)
         },
+        #[cfg(not(target_arch = "wasm32"))]
+        ResourceSource::Network => load_from_network(request, tls, cookie_jar, resource_cache),
+        #[cfg(target_arch = "wasm32")]
+        ResourceSource::Network => {
+            load_from_network(request, tls).map(LoadedResource::from_response)
+        },
+        ResourceSource::VfsThenNetwork => match vfs::load_from_vfs(vfs_backend, request) {
+            Ok(resp) => Ok(LoadedResource::from_response(resp)),
+            #[cfg(not(target_arch = "wasm32"))]
+            Err(_) => load_from_network(request, tls, cookie_jar, resource_cache),
+            #[cfg(target_arch = "wasm32")]
+            Err(_) => load_from_network(request, tls).map(LoadedResource::from_response),
+        },
+    }
+}
+
+/// A loaded resource with optional HTTP cache metadata.
+pub struct LoadedResource {
+    /// The resource response.
+    pub response: ResourceResponse,
+    /// ETag from the server (for conditional requests).
+    pub etag: Option<String>,
+    /// Last-Modified from the server (for conditional requests).
+    pub last_modified: Option<String>,
+    /// Content-Security-Policy parsed from response headers (if present).
+    pub csp: Option<csp::CspPolicy>,
+}
+
+impl LoadedResource {
+    /// Wrap a plain response with no cache metadata.
+    pub fn from_response(response: ResourceResponse) -> Self {
+        Self {
+            response,
+            etag: None,
+            last_modified: None,
+            csp: None,
+        }
     }
 }
 
@@ -383,14 +458,94 @@ pub fn load_resource(
 fn load_from_network(
     request: &ResourceRequest,
     tls: Option<&dyn oasis_net::tls::TlsProvider>,
-) -> Result<ResourceResponse> {
+    cookie_jar: Option<&mut cookies::CookieJar>,
+    resource_cache: Option<&cache::ResourceCache>,
+) -> Result<LoadedResource> {
     let url = Url::parse(&request.url).ok_or_else(|| {
         oasis_types::error::OasisError::Backend(format!("invalid URL: {}", request.url,).into())
     })?;
 
     match url.scheme.as_str() {
-        "http" | "https" => http::http_get(&url, tls),
-        "gemini" => gemini_fetch::gemini_get(&url, tls),
+        "http" | "https" => {
+            let method = match request.method {
+                HttpMethod::Get => "GET",
+                HttpMethod::Post => "POST",
+            };
+
+            // Build extra headers for cookies, referrer, and conditional
+            // requests.
+            let mut extra: Vec<(String, String)> = Vec::new();
+
+            // Add Referer header (privacy-stripped).
+            if let Some(ref referrer) = request.referrer {
+                extra.push(("Referer".to_string(), referrer.clone()));
+            }
+
+            // Add cookies.
+            if let Some(ref jar) = cookie_jar
+                && let Some(cookie_val) = jar.cookie_header(&url)
+            {
+                extra.push(("Cookie".to_string(), cookie_val));
+            }
+
+            // Add conditional request headers from cache.
+            if let Some(rc) = resource_cache {
+                let url_str = url.to_string();
+                if let Some((etag, last_mod)) = rc.peek_validators(&url_str) {
+                    if let Some(e) = etag {
+                        extra.push(("If-None-Match".to_string(), e));
+                    }
+                    if let Some(lm) = last_mod {
+                        extra.push(("If-Modified-Since".to_string(), lm));
+                    }
+                }
+            }
+
+            let extra_refs: Vec<(&str, &str)> = extra
+                .iter()
+                .map(|(k, v)| (k.as_str(), v.as_str()))
+                .collect();
+
+            let (resp, headers) =
+                http::http_request_full(method, &url, request.body.as_deref(), &extra_refs, tls)?;
+
+            // Store Set-Cookie headers from the response.
+            if let Some(jar) = cookie_jar {
+                jar.set_cookies(&url, &headers);
+            }
+
+            // Extract cache validators.
+            let etag = http::response_find_header(&headers, "etag").map(String::from);
+            let last_modified =
+                http::response_find_header(&headers, "last-modified").map(String::from);
+
+            // Parse Content-Security-Policy header if present.
+            let csp =
+                http::response_find_header(&headers, "content-security-policy").map(csp::parse_csp);
+
+            // Handle 304 Not Modified -- return cached body.
+            if resp.status == 304
+                && let Some(rc) = resource_cache
+            {
+                let url_str = url.to_string();
+                if let Some(cached) = rc.peek_response(&url_str) {
+                    return Ok(LoadedResource {
+                        response: cached,
+                        etag,
+                        last_modified,
+                        csp,
+                    });
+                }
+            }
+
+            Ok(LoadedResource {
+                response: resp,
+                etag,
+                last_modified,
+                csp,
+            })
+        },
+        "gemini" => gemini_fetch::gemini_get(&url, tls).map(LoadedResource::from_response),
         scheme => Err(oasis_types::error::OasisError::Backend(
             format!("unsupported network scheme: {scheme}",).into(),
         )),
@@ -597,5 +752,27 @@ mod tests {
         let base = Url::parse("http://example.com/page.html").unwrap();
         let resolved = base.resolve("").unwrap();
         assert_eq!(resolved, base);
+    }
+
+    // -- strip_referrer -----------------------------------------------
+
+    #[test]
+    fn strip_referrer_removes_query_and_fragment() {
+        let referrer = strip_referrer("http://example.com/page?token=abc#section");
+        assert_eq!(referrer.as_deref(), Some("http://example.com/page"),);
+    }
+
+    #[test]
+    fn strip_referrer_preserves_path() {
+        let referrer = strip_referrer("https://example.com:8443/a/b/c.html");
+        assert_eq!(
+            referrer.as_deref(),
+            Some("https://example.com:8443/a/b/c.html"),
+        );
+    }
+
+    #[test]
+    fn strip_referrer_invalid_url_returns_none() {
+        assert_eq!(strip_referrer("not a url"), None);
     }
 }

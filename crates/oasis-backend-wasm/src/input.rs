@@ -339,7 +339,13 @@ fn map_keydown(ke: &KeyboardEvent) -> Option<InputEvent> {
         "Enter" => Some(InputEvent::ButtonPress(Button::Confirm)),
         "Escape" => Some(InputEvent::ButtonPress(Button::Cancel)),
         " " => Some(InputEvent::ButtonPress(Button::Triangle)),
-        "Tab" => Some(InputEvent::ButtonPress(Button::Square)),
+        "Tab" => {
+            if ke.shift_key() {
+                Some(InputEvent::ShiftTab)
+            } else {
+                Some(InputEvent::Tab)
+            }
+        },
         "F1" => Some(InputEvent::ButtonPress(Button::Start)),
         "F2" => Some(InputEvent::ButtonPress(Button::Select)),
         "q" | "Q" => Some(InputEvent::TriggerPress(Trigger::Left)),
@@ -360,7 +366,7 @@ fn map_keyup(ke: &KeyboardEvent) -> Option<InputEvent> {
         "Enter" => Some(InputEvent::ButtonRelease(Button::Confirm)),
         "Escape" => Some(InputEvent::ButtonRelease(Button::Cancel)),
         " " => Some(InputEvent::ButtonRelease(Button::Triangle)),
-        "Tab" => Some(InputEvent::ButtonRelease(Button::Square)),
+        "Tab" => None, // Tab is handled on keydown only.
         "F1" => Some(InputEvent::ButtonRelease(Button::Start)),
         "F2" => Some(InputEvent::ButtonRelease(Button::Select)),
         "q" | "Q" => Some(InputEvent::TriggerRelease(Trigger::Left)),
@@ -386,7 +392,7 @@ fn map_keydown_str(key: &str) -> Option<InputEvent> {
         "Enter" => Some(InputEvent::ButtonPress(Button::Confirm)),
         "Escape" => Some(InputEvent::ButtonPress(Button::Cancel)),
         " " => Some(InputEvent::ButtonPress(Button::Triangle)),
-        "Tab" => Some(InputEvent::ButtonPress(Button::Square)),
+        "Tab" => Some(InputEvent::Tab),
         "F1" => Some(InputEvent::ButtonPress(Button::Start)),
         "F2" => Some(InputEvent::ButtonPress(Button::Select)),
         "q" | "Q" => Some(InputEvent::TriggerPress(Trigger::Left)),
@@ -408,7 +414,7 @@ fn map_keyup_str(key: &str) -> Option<InputEvent> {
         "Enter" => Some(InputEvent::ButtonRelease(Button::Confirm)),
         "Escape" => Some(InputEvent::ButtonRelease(Button::Cancel)),
         " " => Some(InputEvent::ButtonRelease(Button::Triangle)),
-        "Tab" => Some(InputEvent::ButtonRelease(Button::Square)),
+        "Tab" => None, // Tab is handled on keydown only.
         "F1" => Some(InputEvent::ButtonRelease(Button::Start)),
         "F2" => Some(InputEvent::ButtonRelease(Button::Select)),
         "q" | "Q" => Some(InputEvent::TriggerRelease(Trigger::Left)),
@@ -678,11 +684,8 @@ mod tests {
     }
 
     #[test]
-    fn wasm_keydown_tab_maps_to_square() {
-        assert_eq!(
-            map_keydown_str("Tab"),
-            Some(InputEvent::ButtonPress(Button::Square))
-        );
+    fn wasm_keydown_tab_maps_to_tab() {
+        assert_eq!(map_keydown_str("Tab"), Some(InputEvent::Tab));
     }
 
     #[test]
@@ -814,7 +817,7 @@ mod tests {
             "Enter",
             "Escape",
             " ",
-            "Tab",
+            // Tab is handled as Tab/ShiftTab (not symmetric press/release).
             "F1",
             "F2",
             "q",
@@ -839,7 +842,8 @@ mod tests {
 
     #[test]
     fn wasm_all_buttons_covered_in_keydown() {
-        // Verify every Button variant is reachable via at least one key.
+        // Verify core Button variants are reachable via at least one key.
+        // Note: Square has no keydown mapping (Tab now produces Tab/ShiftTab).
         let all_keys = [
             "ArrowUp",
             "ArrowDown",
@@ -848,7 +852,6 @@ mod tests {
             "Enter",
             "Escape",
             " ",
-            "Tab",
             "F1",
             "F2",
         ];
@@ -865,7 +868,6 @@ mod tests {
         assert!(found_buttons.contains(&Button::Confirm));
         assert!(found_buttons.contains(&Button::Cancel));
         assert!(found_buttons.contains(&Button::Triangle));
-        assert!(found_buttons.contains(&Button::Square));
         assert!(found_buttons.contains(&Button::Start));
         assert!(found_buttons.contains(&Button::Select));
     }

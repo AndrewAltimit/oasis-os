@@ -22,6 +22,26 @@ impl BrowserWidget {
     /// progressively so the page is never blocked waiting for all images.
     pub fn tick(&mut self, vfs: &dyn Vfs) {
         self.load_next_image_batch(vfs, 8);
+
+        // Process pending JS navigation actions.
+        #[cfg(feature = "javascript")]
+        {
+            use crate::js_dom;
+            let actions = js_dom::drain_nav_actions(&self.js_nav_actions);
+            for action in actions {
+                match action {
+                    js_dom::JsNavAction::Navigate(url) => {
+                        self.navigate_to(&url, vfs);
+                    },
+                    js_dom::JsNavAction::Back => {
+                        self.go_back(vfs);
+                    },
+                    js_dom::JsNavAction::Forward => {
+                        self.go_forward(vfs);
+                    },
+                }
+            }
+        }
     }
 
     pub fn paint(&mut self, backend: &mut dyn SdiBackend) -> Result<()> {
@@ -63,6 +83,7 @@ impl BrowserWidget {
                 backend,
                 paint::PaintViewport {
                     scroll_y: self.scroll.scroll_y as f32,
+                    scroll_x: self.scroll.scroll_x as f32,
                     x: self.window_x,
                     y: content_y,
                     width: self.window_w as f32,

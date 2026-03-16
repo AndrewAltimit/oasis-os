@@ -26,6 +26,16 @@ pub struct ScrollState {
     scroll_velocity: f32,
     /// Whether smooth scrolling is enabled.
     smooth: bool,
+    /// Current horizontal scroll offset in pixels.
+    pub scroll_x: i32,
+    /// Target horizontal scroll offset for smooth scrolling.
+    target_scroll_x: f32,
+    /// Horizontal scroll velocity for smooth scrolling (pixels per frame).
+    velocity_x: f32,
+    /// Total content width (from layout).
+    pub content_width: i32,
+    /// Visible viewport width (from window content area).
+    pub viewport_width: i32,
 }
 
 impl ScrollState {
@@ -36,6 +46,11 @@ impl ScrollState {
             viewport_height,
             scroll_velocity: 0.0,
             smooth,
+            scroll_x: 0,
+            target_scroll_x: 0.0,
+            velocity_x: 0.0,
+            content_width: 0,
+            viewport_width: 0,
         }
     }
 
@@ -133,6 +148,40 @@ impl ScrollState {
         self.scroll_y = self.max_scroll();
     }
 
+    /// Scroll left by the given amount (pixels).
+    pub fn scroll_left(&mut self, amount: i32) {
+        if self.smooth {
+            self.velocity_x -= amount as f32;
+            self.velocity_x = self.velocity_x.max(-MAX_VELOCITY);
+        } else {
+            self.scroll_x -= amount;
+            self.clamp_x();
+        }
+    }
+
+    /// Scroll right by the given amount (pixels).
+    pub fn scroll_right(&mut self, amount: i32) {
+        if self.smooth {
+            self.velocity_x += amount as f32;
+            self.velocity_x = self.velocity_x.min(MAX_VELOCITY);
+        } else {
+            self.scroll_x += amount;
+            self.clamp_x();
+        }
+    }
+
+    /// Update content width (after layout).
+    pub fn set_content_width(&mut self, width: i32) {
+        self.content_width = width;
+        self.clamp_x();
+    }
+
+    /// Update viewport width (after window resize).
+    pub fn set_viewport_width(&mut self, width: i32) {
+        self.viewport_width = width;
+        self.clamp_x();
+    }
+
     /// Update content height (after layout).
     pub fn set_content_height(&mut self, height: i32) {
         self.content_height = height;
@@ -152,26 +201,47 @@ impl ScrollState {
             return false;
         }
 
-        if self.scroll_velocity.abs() < VELOCITY_EPSILON {
+        let mut animating_y = false;
+        if self.scroll_velocity.abs() >= VELOCITY_EPSILON {
+            self.scroll_y += self.scroll_velocity as i32;
+            self.scroll_velocity *= FRICTION;
+            self.clamp();
+
+            // If clamped to boundary, stop velocity.
+            if self.scroll_y == 0 || self.scroll_y == self.max_scroll() {
+                self.scroll_velocity = 0.0;
+            }
+            animating_y = self.scroll_velocity.abs() >= VELOCITY_EPSILON;
+        } else {
             self.scroll_velocity = 0.0;
-            return false;
         }
 
-        self.scroll_y += self.scroll_velocity as i32;
-        self.scroll_velocity *= FRICTION;
-        self.clamp();
+        let mut animating_x = false;
+        if self.velocity_x.abs() >= VELOCITY_EPSILON {
+            self.scroll_x += self.velocity_x as i32;
+            self.velocity_x *= FRICTION;
+            self.clamp_x();
 
-        // If clamped to boundary, stop velocity.
-        if self.scroll_y == 0 || self.scroll_y == self.max_scroll() {
-            self.scroll_velocity = 0.0;
+            // If clamped to boundary, stop velocity.
+            if self.scroll_x == 0 || self.scroll_x == self.max_scroll_x() {
+                self.velocity_x = 0.0;
+            }
+            animating_x = self.velocity_x.abs() >= VELOCITY_EPSILON;
+        } else {
+            self.velocity_x = 0.0;
         }
 
-        self.scroll_velocity.abs() >= VELOCITY_EPSILON
+        animating_x || animating_y
     }
 
-    /// Get the maximum scroll offset.
+    /// Get the maximum vertical scroll offset.
     pub fn max_scroll(&self) -> i32 {
         (self.content_height - self.viewport_height).max(0)
+    }
+
+    /// Get the maximum horizontal scroll offset.
+    pub fn max_scroll_x(&self) -> i32 {
+        (self.content_width - self.viewport_width).max(0)
     }
 
     /// Clamp scroll_y to valid range [0, max_scroll].
@@ -181,6 +251,16 @@ impl ScrollState {
             self.scroll_y = 0;
         } else if self.scroll_y > max {
             self.scroll_y = max;
+        }
+    }
+
+    /// Clamp scroll_x to valid range [0, max_scroll_x].
+    fn clamp_x(&mut self) {
+        let max = self.max_scroll_x();
+        if self.scroll_x < 0 {
+            self.scroll_x = 0;
+        } else if self.scroll_x > max {
+            self.scroll_x = max;
         }
     }
 
@@ -209,6 +289,10 @@ impl ScrollState {
         self.scroll_y = 0;
         self.scroll_velocity = 0.0;
         self.content_height = 0;
+        self.scroll_x = 0;
+        self.velocity_x = 0.0;
+        self.target_scroll_x = 0.0;
+        self.content_width = 0;
     }
 }
 

@@ -15,7 +15,7 @@ pub(super) fn paint_background(
     ctx: &PaintContext,
 ) -> Result<()> {
     let padding = layout_box.dimensions.padding_box();
-    let x = (padding.x + offset_x as f32) as i32;
+    let x = (padding.x - ctx.scroll_x + offset_x as f32) as i32;
     let y = (padding.y - ctx.scroll_y + offset_y as f32) as i32;
     let w = padding.width as u32;
     let h = padding.height as u32;

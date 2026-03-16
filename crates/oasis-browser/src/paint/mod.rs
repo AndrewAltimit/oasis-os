@@ -22,14 +22,16 @@ mod text;
 
 use std::collections::HashMap;
 
-use crate::css::values::{Overflow, TextOverflow, Visibility};
+use crate::css::values::{
+    Dimension, Overflow, Position, TextOverflow, TransformFunction, Visibility,
+};
 use crate::html::dom::NodeId;
 use crate::layout::box_model::{BoxType, LayoutBox, Rect};
 use oasis_types::backend::{Color, SdiBackend};
 use oasis_types::error::Result;
 
 use background::paint_background;
-use borders::paint_borders;
+use borders::{paint_borders, paint_outline};
 use markers::paint_list_marker;
 use replaced::paint_replaced;
 use shadow::paint_box_shadow;
@@ -43,11 +45,13 @@ use text::paint_inline_content;
 pub struct PaintViewport {
     /// Vertical scroll offset in pixels.
     pub scroll_y: f32,
+    /// Horizontal scroll offset in pixels.
+    pub scroll_x: f32,
     /// X origin of the viewport in screen coordinates.
     pub x: i32,
     /// Y origin of the viewport in screen coordinates.
     pub y: i32,
-    /// Viewport width (currently unused but reserved for clipping).
+    /// Viewport width for culling off-screen content.
     pub width: f32,
     /// Viewport height for culling off-screen content.
     pub height: f32,
@@ -85,8 +89,12 @@ pub(super) struct PaintContext {
     current_link: Option<(String, NodeId)>,
     /// Vertical scroll offset (content shifts up by this amount).
     scroll_y: f32,
+    /// Horizontal scroll offset (content shifts left by this amount).
+    scroll_x: f32,
     /// Viewport height for offscreen culling.
     viewport_height: f32,
+    /// Viewport width for offscreen culling.
+    viewport_width: f32,
     /// Active clipping rectangle from ancestor `overflow: hidden` boxes.
     clip_rect: Option<Rect>,
     /// When true, text overflowing the clip rect gets "..." appended.
@@ -113,7 +121,9 @@ pub fn paint(
         links: Vec::new(),
         current_link: None,
         scroll_y: viewport.scroll_y,
+        scroll_x: viewport.scroll_x,
         viewport_height: viewport.height,
+        viewport_width: viewport.width,
         clip_rect: None,
         text_overflow_ellipsis: false,
     };
@@ -173,12 +183,41 @@ pub(super) fn paint_box(
     ctx: &mut PaintContext,
     link_map: &HashMap<NodeId, String>,
 ) -> Result<()> {
+    // Compute sticky offset: if position:sticky and top is set, clamp the
+    // box so it doesn't scroll above `top` offset from the viewport top.
+    let sticky_dy = if layout_box.style.position == Position::Sticky {
+        let top_px = match layout_box.style.top {
+            Dimension::Px(t) => Some(t),
+            _ => None,
+        };
+        if let Some(top) = top_px {
+            let natural_screen_y = layout_box.dimensions.content.y - ctx.scroll_y + offset_y as f32;
+            if natural_screen_y < top {
+                (top - natural_screen_y) as i32
+            } else {
+                0
+            }
+        } else {
+            0
+        }
+    } else {
+        0
+    };
+    let offset_y = offset_y + sticky_dy;
+
     // Screen-space Y of this box (layout Y + viewport offset - scroll).
-    let screen_y = layout_box.dimensions.content.y - ctx.scroll_y;
+    let screen_y = layout_box.dimensions.content.y - ctx.scroll_y + sticky_dy as f32;
     let box_bottom = screen_y + layout_box.dimensions.margin_box().height;
 
-    // Cull boxes that are entirely above or below the viewport.
+    // Screen-space X of this box (layout X + viewport offset - scroll).
+    let screen_x = layout_box.dimensions.content.x - ctx.scroll_x;
+    let box_right = screen_x + layout_box.dimensions.margin_box().width;
+
+    // Cull boxes that are entirely outside the viewport.
     if box_bottom < 0.0 || screen_y > ctx.viewport_height {
+        return Ok(());
+    }
+    if box_right < 0.0 || screen_x > ctx.viewport_width {
         return Ok(());
     }
 
@@ -237,13 +276,29 @@ pub(super) fn paint_box(
             );
             return Err(e);
         }
+
+        // 2b. Outline (outside border box, after borders).
+        if let Err(e) = paint_outline(layout_box, backend, offset_x, offset_y, ctx) {
+            let b = layout_box.dimensions.border_box();
+            log::debug!(
+                "paint outline failed at ({}, {}) {}x{}: {e}",
+                b.x,
+                b.y,
+                b.width,
+                b.height,
+            );
+            return Err(e);
+        }
     }
 
     // Check overflow:hidden clipping -- if this box clips, intersect
     // with any existing clip from an ancestor.
     let prev_clip = ctx.clip_rect;
     let prev_ellipsis = ctx.text_overflow_ellipsis;
-    if layout_box.style.overflow == Overflow::Hidden {
+    if matches!(
+        layout_box.style.overflow,
+        Overflow::Hidden | Overflow::Scroll | Overflow::Auto
+    ) {
         let new_clip = layout_box.dimensions.content;
         ctx.clip_rect = Some(match ctx.clip_rect {
             Some(existing) => intersect_rects(existing, new_clip),
@@ -251,6 +306,16 @@ pub(super) fn paint_box(
         });
         ctx.text_overflow_ellipsis = layout_box.style.text_overflow == TextOverflow::Ellipsis;
     }
+
+    // Compute transform offset adjustments for children.
+    // Translate: add dx/dy to offset. Scale: shift from center.
+    // Rotate: no-op for now (requires backend rotation support).
+    let (tx_offset_x, tx_offset_y) = compute_transform_offsets(
+        &layout_box.style.transforms,
+        &layout_box.dimensions.content,
+        offset_x,
+        offset_y,
+    );
 
     // 3-6. Children / inline content / replaced / markers
     match &layout_box.box_type {
@@ -262,8 +327,21 @@ pub(super) fn paint_box(
         | BoxType::TableRow
         | BoxType::TableCell
         | BoxType::InlineBlock => {
-            for child in &layout_box.children {
-                // Skip children entirely outside clip rect.
+            // Stacking context: separate non-positioned (DOM order)
+            // from positioned children (sorted by z-index).
+            let mut normal_children: Vec<&LayoutBox> = Vec::new();
+            let mut positioned_children: Vec<(i32, usize, &LayoutBox)> = Vec::new();
+
+            for (idx, child) in layout_box.children.iter().enumerate() {
+                if creates_stacking_context(child) {
+                    positioned_children.push((child.style.z_index, idx, child));
+                } else {
+                    normal_children.push(child);
+                }
+            }
+
+            // Paint non-positioned children in DOM order first.
+            for child in &normal_children {
                 if let Some(clip) = &ctx.clip_rect {
                     let cb = child.dimensions.border_box();
                     if cb.y + cb.height < clip.y
@@ -274,13 +352,38 @@ pub(super) fn paint_box(
                         continue;
                     }
                 }
-                paint_box(child, backend, offset_x, offset_y, ctx, link_map)?;
+                paint_box(child, backend, tx_offset_x, tx_offset_y, ctx, link_map)?;
+            }
+
+            // Sort positioned children by z-index (stable sort
+            // preserves DOM order for equal z-index values).
+            positioned_children.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.cmp(&b.1)));
+
+            // Paint positioned children in z-order.
+            for (_, _, child) in &positioned_children {
+                if let Some(clip) = &ctx.clip_rect {
+                    let cb = child.dimensions.border_box();
+                    if cb.y + cb.height < clip.y
+                        || cb.y > clip.y + clip.height
+                        || cb.x + cb.width < clip.x
+                        || cb.x > clip.x + clip.width
+                    {
+                        continue;
+                    }
+                }
+                paint_box(child, backend, tx_offset_x, tx_offset_y, ctx, link_map)?;
             }
         },
         BoxType::Inline => {
             if is_visible
-                && let Err(e) =
-                    paint_inline_content(layout_box, backend, offset_x, offset_y, ctx, link_map)
+                && let Err(e) = paint_inline_content(
+                    layout_box,
+                    backend,
+                    tx_offset_x,
+                    tx_offset_y,
+                    ctx,
+                    link_map,
+                )
             {
                 let c = &layout_box.dimensions.content;
                 let text_preview = layout_box
@@ -301,16 +404,16 @@ pub(super) fn paint_box(
         },
         BoxType::ListItem { marker } => {
             if is_visible {
-                paint_list_marker(marker, layout_box, backend, offset_x, offset_y, ctx)?;
+                paint_list_marker(marker, layout_box, backend, tx_offset_x, tx_offset_y, ctx)?;
             }
             for child in &layout_box.children {
-                paint_box(child, backend, offset_x, offset_y, ctx, link_map)?;
+                paint_box(child, backend, tx_offset_x, tx_offset_y, ctx, link_map)?;
             }
         },
         BoxType::Replaced(replaced) => {
             if is_visible
                 && let Err(e) =
-                    paint_replaced(replaced, layout_box, backend, offset_x, offset_y, ctx)
+                    paint_replaced(replaced, layout_box, backend, tx_offset_x, tx_offset_y, ctx)
             {
                 let c = &layout_box.dimensions.content;
                 log::debug!(
@@ -336,7 +439,7 @@ pub(super) fn paint_box(
         let border = layout_box.dimensions.border_box();
         ctx.links.push(LinkRegion {
             rect: Rect {
-                x: border.x + offset_x as f32,
+                x: border.x - ctx.scroll_x + offset_x as f32,
                 y: border.y - ctx.scroll_y + offset_y as f32,
                 width: border.width,
                 height: border.height,
@@ -378,6 +481,74 @@ fn has_text_content(layout_box: &LayoutBox) -> bool {
     }
 }
 
+/// Compute offset adjustments from CSS transforms.
+///
+/// Applies translate and scale transforms in order. Translate adds dx/dy.
+/// Scale adjusts the offset from the element's center so children are
+/// painted at the scaled position. Rotate is a no-op (requires backend
+/// rotation support).
+fn compute_transform_offsets(
+    transforms: &[TransformFunction],
+    content: &Rect,
+    base_x: i32,
+    base_y: i32,
+) -> (i32, i32) {
+    if transforms.is_empty() {
+        return (base_x, base_y);
+    }
+
+    let mut dx: f32 = 0.0;
+    let mut dy: f32 = 0.0;
+
+    for tf in transforms {
+        match tf {
+            TransformFunction::Translate(tx, ty) => {
+                dx += tx;
+                dy += ty;
+            },
+            TransformFunction::Scale(sx, sy) => {
+                // Scale from center: offset by half the size change.
+                let cx = content.width / 2.0;
+                let cy = content.height / 2.0;
+                dx += cx * (1.0 - sx);
+                dy += cy * (1.0 - sy);
+            },
+            TransformFunction::Rotate(_) => {
+                // No-op: rotation requires actual backend rotation support.
+            },
+        }
+    }
+
+    (base_x + dx as i32, base_y + dy as i32)
+}
+
+/// Returns `true` if a layout box creates a new stacking context.
+///
+/// A stacking context is created by:
+/// - Positioned elements (non-static) with a non-zero z-index
+/// - Elements with opacity < 1.0
+/// - Elements with CSS transforms
+fn creates_stacking_context(layout_box: &LayoutBox) -> bool {
+    let style = &layout_box.style;
+
+    // Positioned + non-zero z-index.
+    if style.position != Position::Static && style.z_index != 0 {
+        return true;
+    }
+
+    // Opacity < 1.0 creates a stacking context.
+    if style.opacity < 1.0 {
+        return true;
+    }
+
+    // Non-empty transforms create a stacking context.
+    if !style.transforms.is_empty() {
+        return true;
+    }
+
+    false
+}
+
 /// Compute the intersection of two rectangles.
 fn intersect_rects(a: Rect, b: Rect) -> Rect {
     let x = a.x.max(b.x);
@@ -399,7 +570,7 @@ fn intersect_rects(a: Rect, b: Rect) -> Rect {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::css::values::{BorderStyle, ComputedStyle};
+    use crate::css::values::{BorderStyle, ComputedStyle, TransformFunction};
     use crate::layout::box_model::{EdgeSizes, ListMarker, Rect, ReplacedContent};
     use crate::test_utils::{DrawCall, MockBackend};
     use oasis_types::backend::Color;
@@ -407,6 +578,7 @@ mod tests {
     /// Default test viewport (480x272 at origin, no scroll).
     const TEST_VP: PaintViewport = PaintViewport {
         scroll_y: 0.0,
+        scroll_x: 0.0,
         x: 0,
         y: 0,
         width: 480.0,
@@ -853,5 +1025,114 @@ mod tests {
             assert_eq!(*h, 1);
             assert_eq!(*color, Color::rgb(128, 128, 128));
         }
+    }
+
+    // ---------------------------------------------------------------
+    // Test: stacking context helper
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn static_position_no_stacking_context() {
+        let style = ComputedStyle::default();
+        let lb = LayoutBox::new(BoxType::Block, style, None);
+        assert!(!creates_stacking_context(&lb));
+    }
+
+    #[test]
+    fn positioned_with_z_index_creates_stacking_context() {
+        let mut style = ComputedStyle::default();
+        style.position = Position::Relative;
+        style.z_index = 1;
+        let lb = LayoutBox::new(BoxType::Block, style, None);
+        assert!(creates_stacking_context(&lb));
+    }
+
+    #[test]
+    fn opacity_creates_stacking_context() {
+        let mut style = ComputedStyle::default();
+        style.opacity = 0.5;
+        let lb = LayoutBox::new(BoxType::Block, style, None);
+        assert!(creates_stacking_context(&lb));
+    }
+
+    #[test]
+    fn transform_creates_stacking_context() {
+        let mut style = ComputedStyle::default();
+        style.transforms = vec![TransformFunction::Translate(10.0, 0.0)];
+        let lb = LayoutBox::new(BoxType::Block, style, None);
+        assert!(creates_stacking_context(&lb));
+    }
+
+    #[test]
+    fn positioned_z_index_zero_no_stacking_context() {
+        let mut style = ComputedStyle::default();
+        style.position = Position::Relative;
+        style.z_index = 0;
+        let lb = LayoutBox::new(BoxType::Block, style, None);
+        assert!(!creates_stacking_context(&lb));
+    }
+
+    // ---------------------------------------------------------------
+    // Test: stacking context paint order
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn stacking_context_z_order() {
+        let mut backend = MockBackend::new();
+        let link_map = HashMap::new();
+
+        // Parent with two children:
+        // Child A: z-index=2 (red, painted second)
+        // Child B: z-index=1 (green, painted first)
+        let mut root_style = ComputedStyle::default();
+        root_style.background_color = Color::rgba(0, 0, 0, 0);
+        let mut root = make_block(0.0, 0.0, 480.0, 272.0, root_style);
+
+        // Child A: z-index=2
+        let mut style_a = ComputedStyle::default();
+        style_a.background_color = Color::rgb(255, 0, 0);
+        style_a.position = Position::Relative;
+        style_a.z_index = 2;
+        let child_a = make_block(10.0, 10.0, 50.0, 50.0, style_a);
+
+        // Child B: z-index=1
+        let mut style_b = ComputedStyle::default();
+        style_b.background_color = Color::rgb(0, 255, 0);
+        style_b.position = Position::Relative;
+        style_b.z_index = 1;
+        let child_b = make_block(10.0, 70.0, 50.0, 50.0, style_b);
+
+        // Add A first, then B in DOM order.
+        root.children.push(child_a);
+        root.children.push(child_b);
+
+        paint(&root, &mut backend, TEST_VP, &link_map).unwrap();
+
+        // Both children create stacking contexts.
+        // z-index=1 (green) should be painted before z-index=2 (red).
+        let fill_calls: Vec<_> = backend
+            .calls
+            .iter()
+            .filter_map(|c| {
+                if let DrawCall::FillRect { color, .. } = c {
+                    Some(*color)
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        assert!(fill_calls.len() >= 2, "should have at least 2 fill rects");
+        // Green (z=1) before red (z=2).
+        let green_idx = fill_calls.iter().position(|c| *c == Color::rgb(0, 255, 0));
+        let red_idx = fill_calls.iter().position(|c| *c == Color::rgb(255, 0, 0));
+        assert!(
+            green_idx.is_some() && red_idx.is_some(),
+            "both colors should be painted",
+        );
+        assert!(
+            green_idx.expect("green") < red_idx.expect("red"),
+            "z-index=1 (green) should be painted before z-index=2 (red)",
+        );
     }
 }

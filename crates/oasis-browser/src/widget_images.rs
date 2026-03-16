@@ -38,17 +38,30 @@ impl BrowserWidget {
                 if self.decoded_images.contains_key(&resolved) {
                     continue;
                 }
+                // CSP enforcement: check if the image source is allowed.
+                if let Some(ref csp) = self.page_csp
+                    && csp.is_active()
+                    && let Some(ref page) = base_url
+                    && !csp.allows(&resolved, page, crate::loader::csp::CspResourceType::Image)
+                {
+                    log::warn!("CSP blocked image: {resolved}");
+                    continue;
+                }
                 let source = if self.config.features.sandbox_only {
                     ResourceSource::Vfs
                 } else {
                     ResourceSource::VfsThenNetwork
                 };
+                let referrer = base_url.as_deref().and_then(loader::strip_referrer);
                 requests.push((
                     resolved.clone(),
                     ResourceRequest {
                         url: resolved,
                         base_url: base_url.clone(),
                         source,
+                        method: crate::loader::HttpMethod::Get,
+                        body: None,
+                        referrer,
                     },
                 ));
             }
@@ -81,8 +94,15 @@ impl BrowserWidget {
                 continue;
             }
 
-            if let Ok(response) = load_resource(vfs, &request, self.tls.as_deref())
-                && let Some(decoded) = image::decode_image(&response.body)
+            if let Ok(loaded) = load_resource(
+                vfs,
+                &request,
+                self.tls.as_deref(),
+                #[cfg(not(target_arch = "wasm32"))]
+                Some(&mut self.cookie_jar),
+                #[cfg(not(target_arch = "wasm32"))]
+                Some(&self.cache),
+            ) && let Some(decoded) = image::decode_image(&loaded.response.body)
             {
                 let img_bytes = (decoded.width * decoded.height * 4) as usize;
 
@@ -255,13 +275,17 @@ impl BrowserWidget {
         if let Some(doc) = &self.document {
             let content_h = self.config.content_height(self.window_h);
             let base_url = self.nav.current_url().map(String::from);
-            let measurer = layout::text_cache::CachingMeasurer::new(&SimpleTextMeasurer);
+            let shared = std::rc::Rc::clone(&self.text_cache);
+            let measurer =
+                layout::text_cache::CachingMeasurer::with_shared(&SimpleTextMeasurer, shared);
+            let viewport_w = self.window_w as f32 / self.config.zoom_level;
+            let viewport_h = content_h as f32 / self.config.zoom_level;
             let layout_root = layout::block::build_layout_tree(
                 doc,
                 &self.styles,
                 &measurer,
-                self.window_w as f32,
-                content_h as f32,
+                viewport_w,
+                viewport_h,
                 base_url.as_deref(),
                 &image_info,
             );

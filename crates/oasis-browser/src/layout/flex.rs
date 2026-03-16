@@ -28,7 +28,9 @@
 
 use super::block::{TextMeasurer, layout_block, resolve_edge_sizes};
 use super::box_model::*;
-use crate::css::values::{AlignItems, Dimension, FlexDirection, FlexWrap, JustifyContent};
+use crate::css::values::{
+    AlignContent, AlignItems, AlignSelf, Dimension, FlexDirection, FlexWrap, JustifyContent,
+};
 
 /// Lay out a flex container and all its children.
 ///
@@ -40,6 +42,7 @@ pub fn layout_flex(container: &mut LayoutBox, _containing_width: f32, measurer: 
     let direction = container.style.flex_direction;
     let justify = container.style.justify_content;
     let align = container.style.align_items;
+    let align_content = container.style.align_content;
     let wrap = container.style.flex_wrap;
     let gap = container.style.gap;
 
@@ -61,7 +64,7 @@ pub fn layout_flex(container: &mut LayoutBox, _containing_width: f32, measurer: 
         resolve_edge_sizes(child, content_width);
     }
 
-    // Collect flex item info.
+    // Collect flex item info, including per-item align-self and order.
     let mut items: Vec<FlexItem> = Vec::with_capacity(container.children.len());
     for (i, child) in container.children.iter_mut().enumerate() {
         let basis = resolve_flex_basis(child, is_row, content_width);
@@ -83,12 +86,17 @@ pub fn layout_flex(container: &mut LayoutBox, _containing_width: f32, measurer: 
         };
         items.push(FlexItem {
             index: i,
+            order: child.style.order,
+            align_self: child.style.align_self,
             grow: child.style.flex_grow,
             shrink: child.style.flex_shrink,
             main: intrinsic_main,
             cross: intrinsic_cross,
         });
     }
+
+    // Sort by CSS `order` property (stable sort preserves DOM order for ties).
+    items.sort_by_key(|item| item.order);
 
     // -- Phase 2: Split items into flex lines ----------------------------
     let lines = split_into_lines(&items, main_size, gap, wrap);
@@ -101,13 +109,42 @@ pub fn layout_flex(container: &mut LayoutBox, _containing_width: f32, measurer: 
     }
 
     // -- Phase 4: Position items -----------------------------------------
-    let mut cross_offset: f32 = 0.0;
-    for resolved_line in &resolved_lines {
-        // Find the max cross size in this line for alignment.
-        let line_cross = resolved_line
-            .iter()
-            .map(|&(_, _, cross)| cross)
-            .fold(0.0f32, f32::max);
+
+    // Compute per-line cross sizes for align-content distribution.
+    let line_cross_sizes: Vec<f32> = resolved_lines
+        .iter()
+        .map(|line| {
+            line.iter()
+                .map(|&(_, _, cross)| cross)
+                .fold(0.0f32, f32::max)
+        })
+        .collect();
+
+    // Total cross space used by lines + line gaps.
+    let n_lines = resolved_lines.len();
+    let total_line_cross: f32 = line_cross_sizes.iter().sum();
+    let total_line_gaps = if n_lines > 1 {
+        gap * (n_lines as f32 - 1.0)
+    } else {
+        0.0
+    };
+
+    // Determine container cross size for align-content.
+    let container_cross = if is_row {
+        match container.style.height {
+            Dimension::Px(h) => h,
+            _ => total_line_cross + total_line_gaps,
+        }
+    } else {
+        content_width
+    };
+    let free_cross = (container_cross - total_line_cross - total_line_gaps).max(0.0);
+
+    // Compute align-content distribution offsets.
+    let (mut cross_offset, cross_inter) = compute_align_content(align_content, free_cross, n_lines);
+
+    for (line_idx, resolved_line) in resolved_lines.iter().enumerate() {
+        let line_cross = line_cross_sizes[line_idx];
 
         // Calculate total main size used by items + gaps.
         let n = resolved_line.len();
@@ -131,8 +168,13 @@ pub fn layout_flex(container: &mut LayoutBox, _containing_width: f32, measurer: 
             let (child_idx, item_main, item_cross) = resolved_line[idx];
             let child = &mut container.children[child_idx];
 
+            // Per-item align-self override, falling back to container align-items.
+            let effective_align =
+                resolve_align_self(resolved_line_align_self(&items, child_idx), align);
+
             // Cross-axis alignment.
-            let cross_pos = compute_cross_alignment(align, cross_offset, line_cross, item_cross);
+            let cross_pos =
+                compute_cross_alignment(effective_align, cross_offset, line_cross, item_cross);
 
             if is_row {
                 let margin_h = child.dimensions.margin.horizontal()
@@ -184,7 +226,7 @@ pub fn layout_flex(container: &mut LayoutBox, _containing_width: f32, measurer: 
             }
         }
 
-        cross_offset += line_cross + gap;
+        cross_offset += line_cross + gap + cross_inter;
     }
 
     // -- Phase 5: Container height = sum of line cross sizes -------------
@@ -221,6 +263,8 @@ pub fn layout_flex(container: &mut LayoutBox, _containing_width: f32, measurer: 
 /// Intermediate flex item data.
 struct FlexItem {
     index: usize,
+    order: i32,
+    align_self: AlignSelf,
     grow: f32,
     shrink: f32,
     main: f32,
@@ -401,6 +445,58 @@ fn compute_cross_alignment(
         AlignItems::Center => cross_offset + (line_cross - item_cross) / 2.0,
         AlignItems::Stretch => cross_offset,
     }
+}
+
+/// Compute cross-axis line distribution from `align-content`.
+///
+/// Returns `(initial_offset, inter_line_spacing)` similar to `compute_justification`.
+fn compute_align_content(align_content: AlignContent, free_space: f32, count: usize) -> (f32, f32) {
+    if count == 0 || free_space <= 0.0 {
+        return (0.0, 0.0);
+    }
+    match align_content {
+        AlignContent::FlexStart | AlignContent::Stretch => (0.0, 0.0),
+        AlignContent::FlexEnd => (free_space, 0.0),
+        AlignContent::Center => (free_space / 2.0, 0.0),
+        AlignContent::SpaceBetween => {
+            if count <= 1 {
+                (0.0, 0.0)
+            } else {
+                (0.0, free_space / (count as f32 - 1.0))
+            }
+        },
+        AlignContent::SpaceAround => {
+            let per = free_space / count as f32;
+            (per / 2.0, per)
+        },
+        AlignContent::SpaceEvenly => {
+            let per = free_space / (count as f32 + 1.0);
+            (per, per)
+        },
+    }
+}
+
+/// Resolve `align-self` for a flex item: if `Auto`, fall back to the
+/// container's `align-items` value.
+fn resolve_align_self(align_self: AlignSelf, container_align: AlignItems) -> AlignItems {
+    match align_self {
+        AlignSelf::Auto => container_align,
+        AlignSelf::FlexStart => AlignItems::FlexStart,
+        AlignSelf::FlexEnd => AlignItems::FlexEnd,
+        AlignSelf::Center => AlignItems::Center,
+        AlignSelf::Stretch => AlignItems::Stretch,
+        AlignSelf::Baseline => AlignItems::Baseline,
+    }
+}
+
+/// Look up the `align_self` value for a child by its index in the
+/// original `items` vec.
+fn resolved_line_align_self(items: &[FlexItem], child_idx: usize) -> AlignSelf {
+    items
+        .iter()
+        .find(|item| item.index == child_idx)
+        .map(|item| item.align_self)
+        .unwrap_or(AlignSelf::Auto)
 }
 
 // -------------------------------------------------------------------

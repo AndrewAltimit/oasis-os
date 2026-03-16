@@ -220,20 +220,23 @@ pub(crate) fn named_color(name: &str) -> Option<CssColor> {
 // Media query evaluation
 // -------------------------------------------------------------------
 
-/// Viewport dimensions for media query evaluation.
+/// Viewport dimensions and preferences for media query evaluation.
 #[derive(Debug, Clone, Copy)]
 pub struct MediaViewport {
     /// Viewport width in CSS pixels.
     pub width: f32,
     /// Viewport height in CSS pixels.
     pub height: f32,
+    /// Whether the user prefers a dark color scheme.
+    pub dark_mode: bool,
 }
 
 impl MediaViewport {
-    /// Default PSP viewport (480x272).
+    /// Default PSP viewport (480x272, light mode).
     pub(crate) const DEFAULT: Self = Self {
         width: 480.0,
         height: 272.0,
+        dark_mode: false,
     };
 }
 
@@ -315,8 +318,19 @@ pub(crate) fn eval_single_media_query(query: &str, viewport: MediaViewport) -> b
                 return false;
             }
         } else if let Some(rest) = inner.strip_prefix("prefers-color-scheme:") {
-            // We always use light mode.
-            if rest.trim() != "light" {
+            let scheme = rest.trim();
+            if scheme == "dark" && !viewport.dark_mode {
+                return false;
+            }
+            if scheme == "light" && viewport.dark_mode {
+                return false;
+            }
+        } else if let Some(rest) = inner.strip_prefix("orientation:") {
+            let orient = rest.trim();
+            if orient == "portrait" && viewport.width >= viewport.height {
+                return false;
+            }
+            if orient == "landscape" && viewport.height > viewport.width {
                 return false;
             }
         } else {
@@ -911,6 +925,7 @@ mod tests {
         let vp = MediaViewport {
             width: 800.0,
             height: 600.0,
+            dark_mode: false,
         };
         assert!(eval_single_media_query("(max-width: 1024px)", vp));
         assert!(!eval_single_media_query("(max-width: 600px)", vp));
@@ -923,6 +938,7 @@ mod tests {
         let vp = MediaViewport {
             width: 480.0,
             height: 600.0,
+            dark_mode: false,
         };
         assert!(eval_single_media_query("(min-height: 400px)", vp));
     }
@@ -932,6 +948,7 @@ mod tests {
         let vp = MediaViewport {
             width: 480.0,
             height: 300.0,
+            dark_mode: false,
         };
         assert!(!eval_single_media_query("(min-height: 400px)", vp));
     }
@@ -941,6 +958,7 @@ mod tests {
         let vp = MediaViewport {
             width: 480.0,
             height: 300.0,
+            dark_mode: false,
         };
         assert!(eval_single_media_query("(max-height: 400px)", vp));
     }
@@ -950,6 +968,7 @@ mod tests {
         let vp = MediaViewport {
             width: 480.0,
             height: 600.0,
+            dark_mode: false,
         };
         assert!(!eval_single_media_query("(max-height: 400px)", vp));
     }
@@ -959,6 +978,7 @@ mod tests {
         let vp = MediaViewport {
             width: 800.0,
             height: 600.0,
+            dark_mode: false,
         };
         assert!(eval_single_media_query(
             "screen and (min-width: 480px) and (min-height: 400px)",
@@ -975,11 +995,71 @@ mod tests {
         let vp = MediaViewport {
             width: 1024.0,
             height: 768.0,
+            dark_mode: false,
         };
         assert!(eval_media_query_with_viewport("(min-width: 800px)", vp));
         assert!(!eval_media_query_with_viewport("(min-width: 1200px)", vp));
         assert!(eval_media_query_with_viewport("(max-height: 800px)", vp));
         assert!(!eval_media_query_with_viewport("(max-height: 700px)", vp));
+    }
+
+    #[test]
+    fn media_query_prefers_color_scheme_dark_mode() {
+        let vp = MediaViewport {
+            width: 480.0,
+            height: 272.0,
+            dark_mode: true,
+        };
+        assert!(eval_single_media_query("(prefers-color-scheme: dark)", vp));
+        assert!(!eval_single_media_query(
+            "(prefers-color-scheme: light)",
+            vp
+        ));
+    }
+
+    #[test]
+    fn media_query_prefers_color_scheme_light_mode() {
+        let vp = MediaViewport {
+            width: 480.0,
+            height: 272.0,
+            dark_mode: false,
+        };
+        assert!(!eval_single_media_query("(prefers-color-scheme: dark)", vp));
+        assert!(eval_single_media_query("(prefers-color-scheme: light)", vp));
+    }
+
+    #[test]
+    fn media_query_orientation_landscape() {
+        let vp = MediaViewport {
+            width: 800.0,
+            height: 600.0,
+            dark_mode: false,
+        };
+        assert!(eval_single_media_query("(orientation: landscape)", vp));
+        assert!(!eval_single_media_query("(orientation: portrait)", vp));
+    }
+
+    #[test]
+    fn media_query_orientation_portrait() {
+        let vp = MediaViewport {
+            width: 600.0,
+            height: 800.0,
+            dark_mode: false,
+        };
+        assert!(eval_single_media_query("(orientation: portrait)", vp));
+        assert!(!eval_single_media_query("(orientation: landscape)", vp));
+    }
+
+    #[test]
+    fn media_query_orientation_square_is_landscape() {
+        // When width == height, orientation is landscape (width >= height).
+        let vp = MediaViewport {
+            width: 500.0,
+            height: 500.0,
+            dark_mode: false,
+        };
+        assert!(eval_single_media_query("(orientation: landscape)", vp));
+        assert!(!eval_single_media_query("(orientation: portrait)", vp));
     }
 
     // ---------------------------------------------------------------

@@ -40,7 +40,7 @@
     <p class="hero-tagline">An embeddable operating system framework in Rust</p>
     <p class="hero-sub">
       Renders a skinnable shell &mdash; scene-graph UI, browser engine, 90+ terminal
-      commands &mdash; anywhere you can provide a pixel buffer. 34 crates, 5,800+ tests.
+      commands &mdash; anywhere you can provide a pixel buffer. 37 crates, 6,600+ tests.
     </p>
     <div class="hero-buttons">
       <a class="btn btn-primary" href="demo/">Try Live Demo</a>
@@ -411,7 +411,7 @@
     <div class="features-grid">
       <div class="feature-card">
         <h3>Browser Engine</h3>
-        <p>Full HTML/CSS/Gemini rendering engine with DOM parser, CSS cascade, block/inline/table layout, link navigation, reader mode, and JavaScript execution.</p>
+        <p>Full HTML/CSS/Gemini rendering engine with DOM parser, CSS cascade, flex/grid/table layout, calc(), transforms, animations, transitions, @supports, cookies, CSP, link navigation, reader mode, and JavaScript execution.</p>
       </div>
       <div class="feature-card">
         <h3>JavaScript Engine</h3>
@@ -427,7 +427,7 @@
       </div>
       <div class="feature-card">
         <h3>Widget Toolkit</h3>
-        <p>31 reusable widgets: Button, Card, TabBar, Panel, InputField, ListView, ScrollView, ProgressBar, Toggle, NinePatch, ColorPicker, DatePicker, SpinBox, Table, RichText, SplitPane, TreeView, and flex layout.</p>
+        <p>32 reusable widgets: Button, Card, TabBar, Panel, InputField, ListView, ScrollView, ProgressBar, Toggle, NinePatch, ColorPicker, DatePicker, SpinBox, Table, RichText, SplitPane, TreeView, Accordion, and flex layout.</p>
       </div>
       <div class="feature-card">
         <h3>Audio System</h3>
@@ -435,7 +435,7 @@
       </div>
       <div class="feature-card">
         <h3>Skin System</h3>
-        <p>18 skins (18 built-in + 12 external TOML) with theme derivation from 9 base colors. Runtime switching without restart.</p>
+        <p>20 skins (18 built-in + 14 external TOML) with theme derivation from 9 base colors. Runtime switching without restart.</p>
       </div>
       <div class="feature-card">
         <h3>Virtual File System</h3>
@@ -476,7 +476,7 @@
 <section id="architecture">
   <div class="container fade-in">
     <h2 class="section-title">Architecture</h2>
-    <p class="section-subtitle">32 workspace crates with a clean trait-based backend abstraction.</p>
+    <p class="section-subtitle">35 workspace crates with a clean trait-based backend abstraction.</p>
 
     <div class="arch-diagram">
       <pre><span class="crate-name">oasis-types</span>     (Color, Button, InputEvent, backend traits, error types)
@@ -485,17 +485,17 @@
 &#9500;&#9472;&#9472; <span class="crate-name">oasis-sdi</span>        (scene display interface: named objects, z-order)
 &#9500;&#9472;&#9472; <span class="crate-name">oasis-net</span>        (TCP networking, PSK auth, remote terminal, FTP)
 &#9500;&#9472;&#9472; <span class="crate-name">oasis-audio</span>      (audio manager, playlist, MP3/WAV decode, ID3 parsing)
-&#9500;&#9472;&#9472; <span class="crate-name">oasis-ui</span>         (31 widgets: Button, Card, TabBar, ListView, flex layout)
+&#9500;&#9472;&#9472; <span class="crate-name">oasis-ui</span>         (32 widgets: Button, Card, TabBar, ListView, flex layout)
 &#9500;&#9472;&#9472; <span class="crate-name">oasis-wm</span>         (window manager: drag/resize, hit testing, decorations)
 &#9500;&#9472;&#9472; <span class="crate-name">oasis-skin</span>       (TOML skin engine, 18 skins, theme derivation)
 &#9500;&#9472;&#9472; <span class="crate-name">oasis-terminal</span>   (90+ commands, 17 modules, shell features)
-&#9500;&#9472;&#9472; <span class="crate-name">oasis-browser</span>    (HTML/CSS/Gemini: DOM, CSS cascade, layout engine, JS bindings)
+&#9500;&#9472;&#9472; <span class="crate-name">oasis-browser</span>    (HTML/CSS/Gemini: DOM, CSS cascade, flex/grid layout, calc(), transforms, JS bindings)
 &#9500;&#9472;&#9472; <span class="crate-name">oasis-js</span>         (JavaScript engine: QuickJS-NG runtime, console, DOM)
 &#9500;&#9472;&#9472; <span class="crate-name">oasis-video</span>      (MP4/H.264+AAC decode: StreamingBuffer, progressive playback)
 &#9500;&#9472;&#9472; <span class="crate-name">oasis-vector</span>     (vector graphics: scene graph, path ops, icons, animations)
 &#9500;&#9472;&#9472; <span class="crate-name">oasis-shader</span>     (GPU shader wallpapers: voronoi, city lights, ocean waves)
 &#9492;&#9472;&#9472; <span class="crate-name">oasis-core</span>       (coordination: 16 apps, dashboard, agent, plugin, script)
-    &#9500;&#9472;&#9472; <span class="crate-name">oasis-app-*</span>        (12 extracted app crates: calculator, clock, games, etc.)
+    &#9500;&#9472;&#9472; <span class="crate-name">oasis-app-*</span>        (11 extracted app crates: calculator, clock, games, etc.)
     &#9500;&#9472;&#9472; <span class="crate-name">oasis-backend-sdl</span>  &#8594; <span class="crate-name">oasis-app</span>      (desktop binary)
     &#9500;&#9472;&#9472; <span class="crate-name">oasis-backend-wasm</span>                    (browser Canvas 2D)
     &#9500;&#9472;&#9472; <span class="crate-name">oasis-backend-ue5</span> &#8594; <span class="crate-name">oasis-ffi</span>      (UE5 C-ABI)
@@ -520,7 +520,7 @@
         core never depends on them. A new backend starts with 13 methods (~280 LOC) and the entire OS runs.
         <a href="journal/06-backend-trait-system.html" style="color: var(--accent);">Read the full architecture deep dive &rarr;</a>
       </p>
-      <div class="crate-count">34 workspace crates &middot; 2 excluded PSP crates &middot; 5 backend traits</div>
+      <div class="crate-count">35 workspace crates &middot; 2 excluded PSP crates &middot; 5 backend traits</div>
     </div>
   </div>
 </section>

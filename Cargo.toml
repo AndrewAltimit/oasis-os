@@ -74,6 +74,7 @@ glow = "0.16"
 # Image encoding/decoding
 png = "0.17"
 jpeg-decoder = "0.3"
+gif = { version = "0.14", default-features = false, features = ["std"] }
 
 # TLS (desktop -- feature-gated in oasis-core)
 rustls = { version = "0.23", default-features = false, features = ["ring", "logging", "std", "tls12"] }
@@ -111,6 +112,9 @@ web-sys = { version = "0.3", features = [
 ] }
 js-sys = "0.3"
 wasm-bindgen-futures = "0.4"
+
+# Compression
+flate2 = "1"
 
 # Fast hashing
 rustc-hash = "2.1"

@@ -2184,8 +2184,12 @@ fn hover_restyle_is_partial() {
     browser.hover_node = Some(link_node);
     browser.restyle_hover_affected(old_hover);
 
-    // Layout should be marked dirty (hover style changed).
-    assert!(browser.layout_dirty);
+    // The hover rule only changes `color` (a visual-only property),
+    // so layout_dirty should NOT be set -- only a repaint is needed.
+    assert!(
+        !browser.layout_dirty,
+        "visual-only hover change should skip relayout"
+    );
 
     // Styles should still be populated for all elements.
     let styled_count = browser.styles.iter().filter(|s| s.is_some()).count();

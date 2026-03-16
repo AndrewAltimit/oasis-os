@@ -7,6 +7,7 @@ use std::io::{self, Read, Write};
 use std::net::TcpStream;
 use std::time::Duration;
 
+use flate2::read::{DeflateDecoder, GzDecoder};
 use oasis_net::tls::TlsProvider;
 use oasis_types::backend::NetworkStream;
 use oasis_types::error::{OasisError, Result};
@@ -38,8 +39,44 @@ const READ_TIMEOUT: Duration = Duration::from_secs(15);
 ///
 /// Follows redirects (301/302/307/308) up to `MAX_REDIRECTS` hops.
 pub fn http_get(url: &Url, tls: Option<&dyn TlsProvider>) -> Result<ResourceResponse> {
+    http_request("GET", url, None, &[], tls)
+}
+
+/// Perform an HTTP(S) request with an arbitrary method, optional body,
+/// and optional extra headers.
+///
+/// When `tls` is `Some`, HTTPS URLs are supported.  When `None`, HTTPS
+/// URLs produce a user-friendly error page instead.
+///
+/// For `POST` requests with a body, `Content-Type` and `Content-Length`
+/// headers are added automatically when no explicit `Content-Type` is
+/// provided in `extra_headers`.
+///
+/// Follows redirects (301/302/307/308) up to `MAX_REDIRECTS` hops.
+/// On redirect, the method falls back to GET (as browsers do for 301/302/303).
+pub fn http_request(
+    method: &str,
+    url: &Url,
+    body: Option<&[u8]>,
+    extra_headers: &[(&str, &str)],
+    tls: Option<&dyn TlsProvider>,
+) -> Result<ResourceResponse> {
+    http_request_full(method, url, body, extra_headers, tls).map(|(resp, _headers)| resp)
+}
+
+/// Like [`http_request`] but also returns the raw response headers.
+///
+/// This is used internally by the loader to extract `Set-Cookie`,
+/// `ETag`, and `Last-Modified` headers after the request completes.
+pub fn http_request_full(
+    method: &str,
+    url: &Url,
+    body: Option<&[u8]>,
+    extra_headers: &[(&str, &str)],
+    tls: Option<&dyn TlsProvider>,
+) -> Result<(ResourceResponse, Vec<(String, String)>)> {
     if url.scheme == "https" && tls.is_none() {
-        return Ok(https_error_page(url, url));
+        return Ok((https_error_page(url, url), Vec::new()));
     }
     if url.scheme != "http" && url.scheme != "https" {
         return Err(OasisError::Backend(
@@ -48,8 +85,19 @@ pub fn http_get(url: &Url, tls: Option<&dyn TlsProvider>) -> Result<ResourceResp
     }
 
     let mut current_url = url.clone();
+    // After a redirect, the method reverts to GET (standard browser
+    // behaviour for 301/302/303).
+    let mut current_method = method.to_string();
+    let mut current_body: Option<Vec<u8>> = body.map(|b| b.to_vec());
+
     for _ in 0..MAX_REDIRECTS {
-        let resp = do_request(&current_url, tls)?;
+        let resp = do_request_with_method(
+            &current_method,
+            &current_url,
+            current_body.as_deref(),
+            extra_headers,
+            tls,
+        )?;
 
         if is_redirect(resp.status_code)
             && let Some(location) = find_header(&resp.headers, "location")
@@ -59,8 +107,13 @@ pub fn http_get(url: &Url, tls: Option<&dyn TlsProvider>) -> Result<ResourceResp
                 OasisError::Backend(format!("bad redirect Location: {location}").into())
             })?;
             if current_url.scheme == "https" && tls.is_none() {
-                return Ok(https_error_page(url, &current_url));
+                return Ok((https_error_page(url, &current_url), Vec::new()));
             }
+            // Redirects revert to GET and drop the body (per HTTP spec
+            // for 301/302/303; 307/308 should preserve, but browsers
+            // typically do not re-POST).
+            current_method = "GET".to_string();
+            current_body = None;
             continue;
         }
 
@@ -68,15 +121,24 @@ pub fn http_get(url: &Url, tls: Option<&dyn TlsProvider>) -> Result<ResourceResp
             .map(ContentType::from_mime)
             .unwrap_or_else(|| super::detect_content_type(&current_url));
 
-        return Ok(ResourceResponse {
-            url: current_url.to_string(),
-            content_type,
-            body: resp.body,
-            status: resp.status_code,
-        });
+        let headers = resp.headers;
+        return Ok((
+            ResourceResponse {
+                url: current_url.to_string(),
+                content_type,
+                body: resp.body,
+                status: resp.status_code,
+            },
+            headers,
+        ));
     }
 
     Err(OasisError::Backend("too many redirects".into()))
+}
+
+/// Case-insensitive header lookup (public for use by other loader modules).
+pub fn response_find_header<'a>(headers: &'a [(String, String)], name: &str) -> Option<&'a str> {
+    find_header(headers, name)
 }
 
 // -------------------------------------------------------------------
@@ -98,8 +160,14 @@ pub struct HttpResponse {
 // Internals
 // -------------------------------------------------------------------
 
-/// Connect, optionally upgrade to TLS, send GET, read and parse.
-fn do_request(url: &Url, tls: Option<&dyn TlsProvider>) -> Result<HttpResponse> {
+/// Connect, optionally upgrade to TLS, send request, read and parse.
+fn do_request_with_method(
+    method: &str,
+    url: &Url,
+    body: Option<&[u8]>,
+    extra_headers: &[(&str, &str)],
+    tls: Option<&dyn TlsProvider>,
+) -> Result<HttpResponse> {
     let host = &url.host;
     let is_https = url.scheme == "https";
     let default_port = if is_https { 443 } else { 80 };
@@ -115,12 +183,12 @@ fn do_request(url: &Url, tls: Option<&dyn TlsProvider>) -> Result<HttpResponse> 
         let tls_stream = tls_provider.connect_tls(net_stream, host)?;
 
         let mut adapter = NetworkStreamAdapter(tls_stream);
-        send_request(&mut adapter, url, is_https)?;
+        send_request(&mut adapter, method, url, body, extra_headers, is_https)?;
         let raw = read_response(&mut adapter)?;
         parse_response(&raw)
     } else {
         let mut stream = stream;
-        send_request(&mut stream, url, is_https)?;
+        send_request(&mut stream, method, url, body, extra_headers, is_https)?;
         let raw = read_response(&mut stream)?;
         parse_response(&raw)
     }
@@ -146,8 +214,16 @@ fn tcp_connect(host: &str, port: u16) -> Result<TcpStream> {
     Ok(stream)
 }
 
-/// Send an HTTP/1.1 GET request.
-fn send_request(stream: &mut impl Write, url: &Url, is_https: bool) -> Result<()> {
+/// Send an HTTP/1.1 request with the given method, optional body, and
+/// optional extra headers.
+fn send_request(
+    stream: &mut impl Write,
+    method: &str,
+    url: &Url,
+    body: Option<&[u8]>,
+    extra_headers: &[(&str, &str)],
+    is_https: bool,
+) -> Result<()> {
     let default_port: u16 = if is_https { 443 } else { 80 };
     let host_header = match url.port {
         Some(p) if p != default_port => format!("{}:{}", url.host, p),
@@ -160,18 +236,44 @@ fn send_request(stream: &mut impl Write, url: &Url, is_https: bool) -> Result<()
         url.path.clone()
     };
 
-    let request = format!(
-        "GET {path} HTTP/1.1\r\n\
+    let mut request = format!(
+        "{method} {path} HTTP/1.1\r\n\
          Host: {host_header}\r\n\
          User-Agent: OASIS/1.0\r\n\
          Accept: */*\r\n\
-         Connection: close\r\n\
-         \r\n"
+         Accept-Encoding: gzip, deflate\r\n\
+         Connection: close\r\n"
     );
+
+    // Append extra headers.
+    for (name, value) in extra_headers {
+        request.push_str(&format!("{name}: {value}\r\n"));
+    }
+
+    // For POST with a body, add Content-Type and Content-Length if not
+    // already provided by extra_headers.
+    if let Some(data) = body {
+        let has_ct = extra_headers
+            .iter()
+            .any(|(n, _)| n.eq_ignore_ascii_case("content-type"));
+        if !has_ct {
+            request.push_str("Content-Type: application/x-www-form-urlencoded\r\n");
+        }
+        request.push_str(&format!("Content-Length: {}\r\n", data.len()));
+    }
+
+    request.push_str("\r\n");
 
     stream
         .write_all(request.as_bytes())
         .map_err(|e| OasisError::Backend(format!("send request: {e}").into()))?;
+
+    // Write body after headers.
+    if let Some(data) = body {
+        stream
+            .write_all(data)
+            .map_err(|e| OasisError::Backend(format!("send body: {e}").into()))?;
+    }
 
     Ok(())
 }
@@ -298,11 +400,46 @@ pub fn parse_response(data: &[u8]) -> Result<HttpResponse> {
         ));
     }
 
+    // Decompress body if content-encoding is gzip or deflate.
+    let body = decode_body(&headers, body)?;
+
     Ok(HttpResponse {
         status_code,
         headers,
         body,
     })
+}
+
+/// Decompress the response body based on the `Content-Encoding` header.
+fn decode_body(headers: &[(String, String)], body: Vec<u8>) -> Result<Vec<u8>> {
+    if body.is_empty() {
+        return Ok(body);
+    }
+
+    let encoding = match find_header(headers, "content-encoding") {
+        Some(e) => e.trim().to_lowercase(),
+        None => return Ok(body),
+    };
+
+    match encoding.as_str() {
+        "gzip" => {
+            let mut decoder = GzDecoder::new(&body[..]);
+            let mut decompressed = Vec::new();
+            decoder
+                .read_to_end(&mut decompressed)
+                .map_err(|e| OasisError::Backend(format!("gzip decode: {e}").into()))?;
+            Ok(decompressed)
+        },
+        "deflate" => {
+            let mut decoder = DeflateDecoder::new(&body[..]);
+            let mut decompressed = Vec::new();
+            decoder
+                .read_to_end(&mut decompressed)
+                .map_err(|e| OasisError::Backend(format!("deflate decode: {e}").into()))?;
+            Ok(decompressed)
+        },
+        _ => Ok(body),
+    }
 }
 
 /// Parse the HTTP status code from the status line.

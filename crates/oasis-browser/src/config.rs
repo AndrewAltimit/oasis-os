@@ -77,6 +77,9 @@ pub struct BrowserConfig {
 
     /// Use themed chrome with rounded rects (true) or legacy flat chrome (false).
     pub use_themed_chrome: bool,
+
+    /// Zoom / text scaling factor (default 1.0). Range: 0.5..=3.0.
+    pub zoom_level: f32,
 }
 
 impl Default for BrowserConfig {
@@ -104,6 +107,7 @@ impl Default for BrowserConfig {
             max_redirects: 5,
             max_image_dimension: 480,
             use_themed_chrome: true,
+            zoom_level: 1.0,
         }
     }
 }
@@ -180,6 +184,7 @@ mod tests {
         assert_eq!(cfg.max_image_dimension, 480);
         assert!(!cfg.smooth_scroll);
         assert_eq!(cfg.scroll_line_px, 16);
+        assert!((cfg.zoom_level - 1.0).abs() < f32::EPSILON);
     }
 
     #[test]
