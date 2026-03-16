@@ -7,6 +7,146 @@
 use crate::html::dom::{Document, NodeId};
 use oasis_types::backend::Color;
 
+/// A 2D affine transform matrix [a, b, c, d, e, f] representing:
+///   | a c e |
+///   | b d f |
+///   | 0 0 1 |
+#[derive(Debug, Clone, Copy)]
+struct AffineTransform {
+    a: f32,
+    b: f32,
+    c: f32,
+    d: f32,
+    e: f32,
+    f: f32,
+}
+
+impl AffineTransform {
+    fn identity() -> Self {
+        Self {
+            a: 1.0,
+            b: 0.0,
+            c: 0.0,
+            d: 1.0,
+            e: 0.0,
+            f: 0.0,
+        }
+    }
+
+    fn translate(tx: f32, ty: f32) -> Self {
+        Self {
+            a: 1.0,
+            b: 0.0,
+            c: 0.0,
+            d: 1.0,
+            e: tx,
+            f: ty,
+        }
+    }
+
+    fn scale(sx: f32, sy: f32) -> Self {
+        Self {
+            a: sx,
+            b: 0.0,
+            c: 0.0,
+            d: sy,
+            e: 0.0,
+            f: 0.0,
+        }
+    }
+
+    fn rotate(angle_deg: f32) -> Self {
+        let r = angle_deg * std::f32::consts::PI / 180.0;
+        let (sin, cos) = (r.sin(), r.cos());
+        Self {
+            a: cos,
+            b: sin,
+            c: -sin,
+            d: cos,
+            e: 0.0,
+            f: 0.0,
+        }
+    }
+
+    fn multiply(&self, other: &Self) -> Self {
+        Self {
+            a: self.a * other.a + self.c * other.b,
+            b: self.b * other.a + self.d * other.b,
+            c: self.a * other.c + self.c * other.d,
+            d: self.b * other.c + self.d * other.d,
+            e: self.a * other.e + self.c * other.f + self.e,
+            f: self.b * other.e + self.d * other.f + self.f,
+        }
+    }
+
+    fn apply(&self, x: f32, y: f32) -> (f32, f32) {
+        (
+            self.a * x + self.c * y + self.e,
+            self.b * x + self.d * y + self.f,
+        )
+    }
+}
+
+/// Parse SVG `transform` attribute into an affine matrix.
+fn parse_transform_attr(s: &str) -> AffineTransform {
+    let mut result = AffineTransform::identity();
+    let mut input = s;
+    while let Some(paren_start) = input.find('(') {
+        let func_name = input[..paren_start].trim();
+        // Extract the last word (the function name) in case of chained transforms.
+        let func_name = func_name
+            .rsplit(|c: char| c.is_ascii_whitespace() || c == ',')
+            .next()
+            .unwrap_or(func_name);
+        if let Some(paren_end) = input[paren_start..].find(')') {
+            let args_str = &input[paren_start + 1..paren_start + paren_end];
+            let args: Vec<f32> = args_str
+                .split(|c: char| c == ',' || c.is_ascii_whitespace())
+                .filter(|s| !s.is_empty())
+                .filter_map(|s| s.parse::<f32>().ok())
+                .collect();
+            let t = match func_name {
+                "translate" => {
+                    let tx = args.first().copied().unwrap_or(0.0);
+                    let ty = args.get(1).copied().unwrap_or(0.0);
+                    AffineTransform::translate(tx, ty)
+                },
+                "scale" => {
+                    let sx = args.first().copied().unwrap_or(1.0);
+                    let sy = args.get(1).copied().unwrap_or(sx);
+                    AffineTransform::scale(sx, sy)
+                },
+                "rotate" => {
+                    let angle = args.first().copied().unwrap_or(0.0);
+                    if args.len() >= 3 {
+                        let cx = args[1];
+                        let cy = args[2];
+                        AffineTransform::translate(cx, cy)
+                            .multiply(&AffineTransform::rotate(angle))
+                            .multiply(&AffineTransform::translate(-cx, -cy))
+                    } else {
+                        AffineTransform::rotate(angle)
+                    }
+                },
+                "matrix" if args.len() >= 6 => AffineTransform {
+                    a: args[0],
+                    b: args[1],
+                    c: args[2],
+                    d: args[3],
+                    e: args[4],
+                    f: args[5],
+                },
+                _ => AffineTransform::identity(),
+            };
+            result = result.multiply(&t);
+            input = &input[paren_start + paren_end + 1..];
+        } else {
+            break;
+        }
+    }
+    result
+}
+
 /// A parsed SVG element ready for rendering.
 #[derive(Debug, Clone)]
 pub struct SvgElement {
@@ -65,6 +205,40 @@ pub enum SvgShape {
         fill: Color,
         font_size: f32,
     },
+    /// SVG `<path>` element — flattened to polygon points.
+    Path {
+        points: Vec<(f32, f32)>,
+        fill: Option<Color>,
+        stroke: Option<Color>,
+        stroke_width: f32,
+    },
+    /// SVG `<polygon>` element.
+    Polygon {
+        points: Vec<(f32, f32)>,
+        fill: Option<Color>,
+        stroke: Option<Color>,
+        stroke_width: f32,
+    },
+    /// SVG `<polyline>` element (no auto-close).
+    Polyline {
+        points: Vec<(f32, f32)>,
+        stroke: Option<Color>,
+        stroke_width: f32,
+    },
+}
+
+/// SVG path command (parsed from `d` attribute).
+#[derive(Debug, Clone, Copy)]
+enum PathCmd {
+    MoveTo(f32, f32),
+    LineTo(f32, f32),
+    HorizTo(f32),
+    VertTo(f32),
+    CubicTo(f32, f32, f32, f32, f32, f32),
+    SmoothCubicTo(f32, f32, f32, f32),
+    QuadTo(f32, f32, f32, f32),
+    SmoothQuadTo(f32, f32),
+    Close,
 }
 
 /// Parse an `<svg>` DOM node into an [`SvgElement`].
@@ -108,11 +282,73 @@ pub fn parse_svg(doc: &Document, svg_node: NodeId) -> Option<SvgElement> {
     })
 }
 
+/// Apply a transform to a shape's coordinates (translating key points).
+fn apply_transform_to_shape(shape: &mut SvgShape, xf: &AffineTransform) {
+    match shape {
+        SvgShape::Rect { x, y, .. } => {
+            let (nx, ny) = xf.apply(*x, *y);
+            *x = nx;
+            *y = ny;
+        },
+        SvgShape::Circle { cx, cy, .. } => {
+            let (nx, ny) = xf.apply(*cx, *cy);
+            *cx = nx;
+            *cy = ny;
+        },
+        SvgShape::Ellipse { cx, cy, .. } => {
+            let (nx, ny) = xf.apply(*cx, *cy);
+            *cx = nx;
+            *cy = ny;
+        },
+        SvgShape::Line { x1, y1, x2, y2, .. } => {
+            let (nx1, ny1) = xf.apply(*x1, *y1);
+            let (nx2, ny2) = xf.apply(*x2, *y2);
+            *x1 = nx1;
+            *y1 = ny1;
+            *x2 = nx2;
+            *y2 = ny2;
+        },
+        SvgShape::Text { x, y, .. } => {
+            let (nx, ny) = xf.apply(*x, *y);
+            *x = nx;
+            *y = ny;
+        },
+        SvgShape::Path { points, .. }
+        | SvgShape::Polygon { points, .. }
+        | SvgShape::Polyline { points, .. } => {
+            for pt in points.iter_mut() {
+                let (nx, ny) = xf.apply(pt.0, pt.1);
+                pt.0 = nx;
+                pt.1 = ny;
+            }
+        },
+    }
+}
+
 /// Parse a single SVG child element into a shape.
 fn parse_shape(doc: &Document, node_id: NodeId) -> Option<SvgShape> {
     let elem = doc.element(node_id)?;
     let tag = elem.tag.as_str();
 
+    // Parse optional transform attribute.
+    let transform = elem.get_attribute("transform").map(parse_transform_attr);
+
+    let mut shape = parse_shape_inner(doc, node_id, elem, tag)?;
+
+    if let Some(xf) = transform {
+        apply_transform_to_shape(&mut shape, &xf);
+    }
+
+    Some(shape)
+}
+
+/// Inner shape parsing (without transform application).
+fn parse_shape_inner(
+    doc: &Document,
+    node_id: NodeId,
+    elem: &ElementData,
+    tag: &str,
+) -> Option<SvgShape> {
     match tag {
         "rect" => {
             let x = attr_f32(elem, "x");
@@ -180,6 +416,56 @@ fn parse_shape(doc: &Document, node_id: NodeId) -> Option<SvgShape> {
                 y1,
                 x2,
                 y2,
+                stroke,
+                stroke_width,
+            })
+        },
+        "path" => {
+            let d = elem.get_attribute("d").unwrap_or("");
+            let points = flatten_path_data(d);
+            if points.len() < 2 {
+                return None;
+            }
+            let fill = attr_fill(elem);
+            let stroke = attr_color(elem, "stroke");
+            let stroke_width = attr_f32_or(elem, "stroke-width", 1.0);
+            Some(SvgShape::Path {
+                points,
+                fill,
+                stroke,
+                stroke_width,
+            })
+        },
+        "polygon" => {
+            let pts = elem
+                .get_attribute("points")
+                .map(parse_point_list)
+                .unwrap_or_default();
+            if pts.len() < 2 {
+                return None;
+            }
+            let fill = attr_fill(elem);
+            let stroke = attr_color(elem, "stroke");
+            let stroke_width = attr_f32_or(elem, "stroke-width", 1.0);
+            Some(SvgShape::Polygon {
+                points: pts,
+                fill,
+                stroke,
+                stroke_width,
+            })
+        },
+        "polyline" => {
+            let pts = elem
+                .get_attribute("points")
+                .map(parse_point_list)
+                .unwrap_or_default();
+            if pts.len() < 2 {
+                return None;
+            }
+            let stroke = attr_color(elem, "stroke");
+            let stroke_width = attr_f32_or(elem, "stroke-width", 1.0);
+            Some(SvgShape::Polyline {
+                points: pts,
                 stroke,
                 stroke_width,
             })
@@ -337,6 +623,393 @@ fn named_color(name: &str) -> Option<Color> {
         _ => return None,
     };
     Some(c)
+}
+
+// -------------------------------------------------------------------
+// SVG path `d` attribute parser
+// -------------------------------------------------------------------
+
+/// Parse an SVG `points` attribute (e.g. "100,10 40,198 190,78").
+fn parse_point_list(s: &str) -> Vec<(f32, f32)> {
+    let nums: Vec<f32> = s
+        .split(|c: char| c == ',' || c.is_ascii_whitespace())
+        .filter(|p| !p.is_empty())
+        .filter_map(|p| p.parse::<f32>().ok())
+        .collect();
+    nums.chunks_exact(2).map(|c| (c[0], c[1])).collect()
+}
+
+/// Parse SVG path `d` attribute into commands, then flatten curves
+/// into a polygon point list suitable for `fill_polygon`.
+fn flatten_path_data(d: &str) -> Vec<(f32, f32)> {
+    let cmds = parse_path_commands(d);
+    flatten_commands(&cmds)
+}
+
+/// Tokenize and parse SVG path `d` data into [`PathCmd`] list.
+///
+/// Supports: M/m L/l H/h V/v C/c S/s Q/q T/t Z/z.
+fn parse_path_commands(d: &str) -> Vec<PathCmd> {
+    let mut cmds = Vec::new();
+    let nums = tokenize_path(d);
+    let mut i = 0;
+    let mut last_cmd = b'M';
+    let mut cx = 0.0f32;
+    let mut cy = 0.0f32;
+
+    while i < nums.len() {
+        if let PathToken::Cmd(c) = nums[i] {
+            last_cmd = c;
+            i += 1;
+        }
+
+        let relative = last_cmd.is_ascii_lowercase();
+        let cmd_upper = last_cmd.to_ascii_uppercase();
+
+        match cmd_upper {
+            b'M' => {
+                let (x, y) = (take_num(&nums, &mut i), take_num(&nums, &mut i));
+                let (ax, ay) = if relative { (cx + x, cy + y) } else { (x, y) };
+                cmds.push(PathCmd::MoveTo(ax, ay));
+                cx = ax;
+                cy = ay;
+                // Subsequent coordinates after M are implicit LineTo.
+                last_cmd = if relative { b'l' } else { b'L' };
+            },
+            b'L' => {
+                let (x, y) = (take_num(&nums, &mut i), take_num(&nums, &mut i));
+                let (ax, ay) = if relative { (cx + x, cy + y) } else { (x, y) };
+                cmds.push(PathCmd::LineTo(ax, ay));
+                cx = ax;
+                cy = ay;
+            },
+            b'H' => {
+                let x = take_num(&nums, &mut i);
+                let ax = if relative { cx + x } else { x };
+                cmds.push(PathCmd::HorizTo(ax));
+                cx = ax;
+            },
+            b'V' => {
+                let y = take_num(&nums, &mut i);
+                let ay = if relative { cy + y } else { y };
+                cmds.push(PathCmd::VertTo(ay));
+                cy = ay;
+            },
+            b'C' => {
+                let (x1, y1) = (take_num(&nums, &mut i), take_num(&nums, &mut i));
+                let (x2, y2) = (take_num(&nums, &mut i), take_num(&nums, &mut i));
+                let (x, y) = (take_num(&nums, &mut i), take_num(&nums, &mut i));
+                let (off_x, off_y) = if relative { (cx, cy) } else { (0.0, 0.0) };
+                cmds.push(PathCmd::CubicTo(
+                    x1 + off_x,
+                    y1 + off_y,
+                    x2 + off_x,
+                    y2 + off_y,
+                    x + off_x,
+                    y + off_y,
+                ));
+                cx = x + off_x;
+                cy = y + off_y;
+            },
+            b'S' => {
+                let (x2, y2) = (take_num(&nums, &mut i), take_num(&nums, &mut i));
+                let (x, y) = (take_num(&nums, &mut i), take_num(&nums, &mut i));
+                let (off_x, off_y) = if relative { (cx, cy) } else { (0.0, 0.0) };
+                cmds.push(PathCmd::SmoothCubicTo(
+                    x2 + off_x,
+                    y2 + off_y,
+                    x + off_x,
+                    y + off_y,
+                ));
+                cx = x + off_x;
+                cy = y + off_y;
+            },
+            b'Q' => {
+                let (x1, y1) = (take_num(&nums, &mut i), take_num(&nums, &mut i));
+                let (x, y) = (take_num(&nums, &mut i), take_num(&nums, &mut i));
+                let (off_x, off_y) = if relative { (cx, cy) } else { (0.0, 0.0) };
+                cmds.push(PathCmd::QuadTo(
+                    x1 + off_x,
+                    y1 + off_y,
+                    x + off_x,
+                    y + off_y,
+                ));
+                cx = x + off_x;
+                cy = y + off_y;
+            },
+            b'T' => {
+                let (x, y) = (take_num(&nums, &mut i), take_num(&nums, &mut i));
+                let (ax, ay) = if relative { (cx + x, cy + y) } else { (x, y) };
+                cmds.push(PathCmd::SmoothQuadTo(ax, ay));
+                cx = ax;
+                cy = ay;
+            },
+            b'Z' => {
+                cmds.push(PathCmd::Close);
+                // Reset last_cmd so stray numbers after Z don't
+                // re-trigger the Z handler in an infinite loop.
+                last_cmd = b'M';
+            },
+            _ => {
+                i += 1; // skip unknown
+            },
+        }
+    }
+    cmds
+}
+
+/// Token from SVG path data: either a command letter or a number.
+#[derive(Debug, Clone)]
+enum PathToken {
+    Cmd(u8),
+    Num(f32),
+}
+
+/// Tokenize SVG path `d` data into command letters and numbers.
+fn tokenize_path(d: &str) -> Vec<PathToken> {
+    let mut tokens = Vec::new();
+    let bytes = d.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        let c = bytes[i];
+        if c.is_ascii_whitespace() || c == b',' {
+            i += 1;
+            continue;
+        }
+        if c.is_ascii_alphabetic() {
+            tokens.push(PathToken::Cmd(c));
+            i += 1;
+            continue;
+        }
+        // Parse number (including sign, decimal point, exponent).
+        let start = i;
+        if c == b'-' || c == b'+' {
+            i += 1;
+        }
+        while i < bytes.len() && (bytes[i].is_ascii_digit() || bytes[i] == b'.') {
+            i += 1;
+        }
+        // Exponent
+        if i < bytes.len() && (bytes[i] == b'e' || bytes[i] == b'E') {
+            i += 1;
+            if i < bytes.len() && (bytes[i] == b'-' || bytes[i] == b'+') {
+                i += 1;
+            }
+            while i < bytes.len() && bytes[i].is_ascii_digit() {
+                i += 1;
+            }
+        }
+        if i > start {
+            if let Ok(n) = d[start..i].parse::<f32>() {
+                tokens.push(PathToken::Num(n));
+            }
+        } else {
+            i += 1; // skip unparseable
+        }
+    }
+    tokens
+}
+
+/// Extract the next number from tokens, advancing the index.
+fn take_num(tokens: &[PathToken], i: &mut usize) -> f32 {
+    if *i < tokens.len() {
+        match &tokens[*i] {
+            PathToken::Num(n) => {
+                let v = *n;
+                *i += 1;
+                return v;
+            },
+            PathToken::Cmd(_) => return 0.0,
+        }
+    }
+    0.0
+}
+
+/// Flatten path commands into a list of polygon points.
+///
+/// Bezier curves are approximated with line segments (adaptive
+/// subdivision based on curve length).
+fn flatten_commands(cmds: &[PathCmd]) -> Vec<(f32, f32)> {
+    let mut points: Vec<(f32, f32)> = Vec::new();
+    let mut cx = 0.0f32;
+    let mut cy = 0.0f32;
+    let mut start_x = 0.0f32;
+    let mut start_y = 0.0f32;
+    let mut last_cp_x = 0.0f32;
+    let mut last_cp_y = 0.0f32;
+    let mut last_was_cubic = false;
+    let mut last_was_quad = false;
+
+    for cmd in cmds {
+        match *cmd {
+            PathCmd::MoveTo(x, y) => {
+                cx = x;
+                cy = y;
+                start_x = x;
+                start_y = y;
+                points.push((x, y));
+                last_was_cubic = false;
+                last_was_quad = false;
+            },
+            PathCmd::LineTo(x, y) => {
+                cx = x;
+                cy = y;
+                points.push((x, y));
+                last_was_cubic = false;
+                last_was_quad = false;
+            },
+            PathCmd::HorizTo(x) => {
+                cx = x;
+                points.push((cx, cy));
+                last_was_cubic = false;
+                last_was_quad = false;
+            },
+            PathCmd::VertTo(y) => {
+                cy = y;
+                points.push((cx, cy));
+                last_was_cubic = false;
+                last_was_quad = false;
+            },
+            PathCmd::CubicTo(x1, y1, x2, y2, x, y) => {
+                flatten_cubic(&mut points, cx, cy, x1, y1, x2, y2, x, y);
+                last_cp_x = x2;
+                last_cp_y = y2;
+                cx = x;
+                cy = y;
+                last_was_cubic = true;
+                last_was_quad = false;
+            },
+            PathCmd::SmoothCubicTo(x2, y2, x, y) => {
+                let (x1, y1) = if last_was_cubic {
+                    (2.0 * cx - last_cp_x, 2.0 * cy - last_cp_y)
+                } else {
+                    (cx, cy)
+                };
+                flatten_cubic(&mut points, cx, cy, x1, y1, x2, y2, x, y);
+                last_cp_x = x2;
+                last_cp_y = y2;
+                cx = x;
+                cy = y;
+                last_was_cubic = true;
+                last_was_quad = false;
+            },
+            PathCmd::QuadTo(x1, y1, x, y) => {
+                flatten_quad(&mut points, cx, cy, x1, y1, x, y);
+                last_cp_x = x1;
+                last_cp_y = y1;
+                cx = x;
+                cy = y;
+                last_was_quad = true;
+                last_was_cubic = false;
+            },
+            PathCmd::SmoothQuadTo(x, y) => {
+                let (x1, y1) = if last_was_quad {
+                    (2.0 * cx - last_cp_x, 2.0 * cy - last_cp_y)
+                } else {
+                    (cx, cy)
+                };
+                flatten_quad(&mut points, cx, cy, x1, y1, x, y);
+                last_cp_x = x1;
+                last_cp_y = y1;
+                cx = x;
+                cy = y;
+                last_was_quad = true;
+                last_was_cubic = false;
+            },
+            PathCmd::Close => {
+                if (cx - start_x).abs() > 0.01 || (cy - start_y).abs() > 0.01 {
+                    points.push((start_x, start_y));
+                }
+                cx = start_x;
+                cy = start_y;
+                last_was_cubic = false;
+                last_was_quad = false;
+            },
+        }
+    }
+    points
+}
+
+/// Flatten a cubic bezier curve into line segments.
+///
+/// Arguments: `(x0, y0)` start, `(x1, y1)` control 1, `(x2, y2)` control 2, `(x3, y3)` end.
+#[allow(clippy::too_many_arguments)]
+fn flatten_cubic(
+    points: &mut Vec<(f32, f32)>,
+    x0: f32,
+    y0: f32,
+    x1: f32,
+    y1: f32,
+    x2: f32,
+    y2: f32,
+    x3: f32,
+    y3: f32,
+) {
+    flatten_cubic_inner(points, x0, y0, x1, y1, x2, y2, x3, y3, 0);
+}
+
+/// Maximum recursion depth for Bezier curve flattening. 16 levels of
+/// subdivision produce up to 2^16 segments which is more than sufficient
+/// for any practical curve, while preventing stack overflow from
+/// pathological coordinates.
+const MAX_FLATTEN_DEPTH: u8 = 16;
+
+#[allow(clippy::too_many_arguments)]
+fn flatten_cubic_inner(
+    points: &mut Vec<(f32, f32)>,
+    x0: f32,
+    y0: f32,
+    x1: f32,
+    y1: f32,
+    x2: f32,
+    y2: f32,
+    x3: f32,
+    y3: f32,
+    depth: u8,
+) {
+    // Adaptive subdivision: estimate flatness.
+    let dx = x3 - x0;
+    let dy = y3 - y0;
+    let d = ((x1 - x3) * dy - (y1 - y3) * dx).abs() + ((x2 - x3) * dy - (y2 - y3) * dx).abs();
+    let len_sq = dx * dx + dy * dy;
+    // Tolerance: 0.5 pixels.
+    if d * d <= 0.25 * len_sq || len_sq < 1.0 || depth >= MAX_FLATTEN_DEPTH {
+        points.push((x3, y3));
+        return;
+    }
+    // De Casteljau subdivision at t=0.5.
+    let m01x = (x0 + x1) * 0.5;
+    let m01y = (y0 + y1) * 0.5;
+    let m12x = (x1 + x2) * 0.5;
+    let m12y = (y1 + y2) * 0.5;
+    let m23x = (x2 + x3) * 0.5;
+    let m23y = (y2 + y3) * 0.5;
+    let m012x = (m01x + m12x) * 0.5;
+    let m012y = (m01y + m12y) * 0.5;
+    let m123x = (m12x + m23x) * 0.5;
+    let m123y = (m12y + m23y) * 0.5;
+    let mx = (m012x + m123x) * 0.5;
+    let my = (m012y + m123y) * 0.5;
+    flatten_cubic_inner(points, x0, y0, m01x, m01y, m012x, m012y, mx, my, depth + 1);
+    flatten_cubic_inner(points, mx, my, m123x, m123y, m23x, m23y, x3, y3, depth + 1);
+}
+
+/// Flatten a quadratic bezier curve into line segments.
+fn flatten_quad(
+    points: &mut Vec<(f32, f32)>,
+    x0: f32,
+    y0: f32,
+    x1: f32,
+    y1: f32,
+    x2: f32,
+    y2: f32,
+) {
+    // Convert to cubic: CP1 = P0 + 2/3*(P1-P0), CP2 = P2 + 2/3*(P1-P2)
+    let cx1 = x0 + (2.0 / 3.0) * (x1 - x0);
+    let cy1 = y0 + (2.0 / 3.0) * (y1 - y0);
+    let cx2 = x2 + (2.0 / 3.0) * (x1 - x2);
+    let cy2 = y2 + (2.0 / 3.0) * (y1 - y2);
+    flatten_cubic(points, x0, y0, cx1, cy1, cx2, cy2, x2, y2);
 }
 
 // -------------------------------------------------------------------
@@ -543,6 +1216,115 @@ fn paint_shape(shape: &SvgShape, backend: &mut dyn SdiBackend, xf: &SvgTransform
             let py = oy + ((y - vb_y) * sy) as i32 - scaled_fs as i32;
             backend.draw_text(text, px, py, scaled_fs as u16, *fill)?;
         },
+        SvgShape::Path {
+            points,
+            fill,
+            stroke,
+            stroke_width,
+        }
+        | SvgShape::Polygon {
+            points,
+            fill,
+            stroke,
+            stroke_width,
+        } => {
+            paint_polygon_shape(points, *fill, *stroke, *stroke_width, backend, xf)?;
+        },
+        SvgShape::Polyline {
+            points,
+            stroke,
+            stroke_width,
+        } => {
+            // Polyline: stroke only, no fill.
+            if let Some(sc) = stroke {
+                let sw = (stroke_width * sx.min(sy)).max(1.0) as u32;
+                for window in points.windows(2) {
+                    let (px1, py1) = xf_point(window[0].0, window[0].1, xf);
+                    let (px2, py2) = xf_point(window[1].0, window[1].1, xf);
+                    stroke_line_bresenham(backend, px1, py1, px2, py2, sw, *sc)?;
+                }
+            }
+        },
+    }
+    Ok(())
+}
+
+/// Transform a point from SVG viewBox coordinates to screen pixels.
+fn xf_point(x: f32, y: f32, xf: &SvgTransform) -> (i32, i32) {
+    (
+        xf.ox + ((x - xf.vb_x) * xf.sx) as i32,
+        xf.oy + ((y - xf.vb_y) * xf.sy) as i32,
+    )
+}
+
+/// Paint a filled and/or stroked polygon (used by Path and Polygon shapes).
+fn paint_polygon_shape(
+    points: &[(f32, f32)],
+    fill: Option<Color>,
+    stroke: Option<Color>,
+    stroke_width: f32,
+    backend: &mut dyn SdiBackend,
+    xf: &SvgTransform,
+) -> Result<()> {
+    if points.len() < 2 {
+        return Ok(());
+    }
+    let screen_pts: Vec<(i32, i32)> = points.iter().map(|&(x, y)| xf_point(x, y, xf)).collect();
+
+    if let Some(fc) = fill {
+        backend.fill_polygon(&screen_pts, fc)?;
+    }
+    if let Some(sc) = stroke {
+        let sw = (stroke_width * xf.sx.min(xf.sy)).max(1.0) as u32;
+        for window in screen_pts.windows(2) {
+            stroke_line_bresenham(
+                backend,
+                window[0].0,
+                window[0].1,
+                window[1].0,
+                window[1].1,
+                sw,
+                sc,
+            )?;
+        }
+        // Close the path (last → first).
+        if let (Some(last), Some(first)) = (screen_pts.last(), screen_pts.first())
+            && last != first
+        {
+            stroke_line_bresenham(backend, last.0, last.1, first.0, first.1, sw, sc)?;
+        }
+    }
+    Ok(())
+}
+
+/// Stroke a line between two points using filled rectangles (Bresenham-like).
+fn stroke_line_bresenham(
+    backend: &mut dyn SdiBackend,
+    x1: i32,
+    y1: i32,
+    x2: i32,
+    y2: i32,
+    sw: u32,
+    color: Color,
+) -> Result<()> {
+    let dx = (x2 - x1).abs();
+    let dy = (y2 - y1).abs();
+    if dx == 0 && dy == 0 {
+        backend.fill_rect(x1, y1, sw, sw, color)?;
+    } else if dx == 0 || dy == 0 {
+        let lx = x1.min(x2);
+        let ly = y1.min(y2);
+        let lw = (dx as u32).max(sw);
+        let lh = (dy as u32).max(sw);
+        backend.fill_rect(lx, ly, lw, lh, color)?;
+    } else {
+        let steps = dx.max(dy);
+        for s in 0..=steps {
+            let t = s as f32 / steps.max(1) as f32;
+            let px = x1 + ((x2 - x1) as f32 * t) as i32;
+            let py = y1 + ((y2 - y1) as f32 * t) as i32;
+            backend.fill_rect(px, py, sw, sw, color)?;
+        }
     }
     Ok(())
 }

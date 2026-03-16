@@ -387,6 +387,21 @@ impl BrowserWidget {
             self.config.status_bar_text,
         )?;
 
+        // Error count indicator (left of scroll).
+        let mut right_edge = self.window_x + self.window_w as i32 - 4;
+        let error_count = self.page_errors.len();
+        if error_count > 0 {
+            let err_text = format!(
+                "{} error{}",
+                error_count,
+                if error_count == 1 { "" } else { "s" }
+            );
+            let err_w = oasis_types::backend::bitmap_measure_text(&err_text, 10) as i32;
+            let err_color = Color::rgb(220, 50, 50);
+            right_edge -= err_w + 8;
+            backend.draw_text(&err_text, right_edge, sy + 2, 10, err_color)?;
+        }
+
         // Scroll indicator on the right.
         let frac = self.scroll.scroll_fraction();
         let pct = (frac * 100.0) as u32;
@@ -394,7 +409,7 @@ impl BrowserWidget {
         let text_w = oasis_types::backend::bitmap_measure_text(&scroll_text, 10) as i32;
         backend.draw_text(
             &scroll_text,
-            self.window_x + self.window_w as i32 - text_w - 4,
+            right_edge - text_w,
             sy + 2,
             10,
             self.config.status_bar_text,

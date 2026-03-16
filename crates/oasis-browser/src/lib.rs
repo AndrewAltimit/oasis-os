@@ -256,6 +256,10 @@ pub struct BrowserWidget {
     /// Pending image requests to be processed in time-sliced batches.
     pending_images: Vec<(String, ResourceRequest)>,
 
+    /// Images deferred because they are far below the viewport.
+    /// Re-evaluated on scroll events, not every tick.
+    deferred_images: Vec<(String, ResourceRequest)>,
+
     /// Total bytes of decoded image RGBA data currently held.
     decoded_image_bytes: usize,
 
@@ -394,6 +398,7 @@ impl BrowserWidget {
             decoded_images: HashMap::new(),
             image_textures: HashMap::new(),
             pending_images: Vec::new(),
+            deferred_images: Vec::new(),
             decoded_image_bytes: 0,
             decoded_image_lru: std::collections::VecDeque::new(),
             cached_image_info: HashMap::new(),

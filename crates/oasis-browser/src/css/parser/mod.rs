@@ -16,9 +16,6 @@ pub use types::{
     KeyframesRule, LengthUnit, Rule, Selector, SimpleSelector, Specificity, Stylesheet,
 };
 
-// SelectorList is used by cascade tests and parser tests (cfg(test) only),
-// so the re-export is only needed during test builds.
-#[cfg(test)]
 pub(crate) use types::SelectorList;
 
 use super::helpers::eval_media_query_with_viewport;
@@ -44,6 +41,18 @@ impl Stylesheet {
         let mut parser = CssParser::new(tokens, viewport);
         parser.parse_stylesheet()
     }
+}
+
+/// Parse a CSS selector string into a [`SelectorList`].
+///
+/// Used by `querySelector` / `querySelectorAll` to leverage the full
+/// CSS selector engine (combinators, attribute selectors, pseudo-classes).
+#[cfg_attr(not(feature = "javascript"), allow(dead_code))]
+pub(crate) fn parse_selector_string(input: &str) -> Option<SelectorList> {
+    use super::tokenizer::CssTokenizer;
+    let tokens = CssTokenizer::new(input).tokenize();
+    let mut parser = CssParser::new(tokens, MediaViewport::DEFAULT);
+    parser.parse_selector_list()
 }
 
 /// Parse an inline `style="..."` attribute into declarations.
@@ -119,12 +128,23 @@ impl CssParser {
 
     // -- stylesheet --------------------------------------------------
 
+    /// Maximum number of CSS rules to prevent pathological stylesheets
+    /// from consuming unbounded memory during parsing.
+    const MAX_CSS_RULES: usize = 50_000;
+
     fn parse_stylesheet(&mut self) -> Stylesheet {
         let mut rules = Vec::new();
         let mut keyframes = Vec::new();
         loop {
             self.skip_whitespace();
             if self.at_eof() {
+                break;
+            }
+            if rules.len() >= Self::MAX_CSS_RULES {
+                log::warn!(
+                    "CSS rule limit reached ({}), truncating stylesheet",
+                    Self::MAX_CSS_RULES
+                );
                 break;
             }
             if let Some(lc) = self.peek_at_keyword_lc() {

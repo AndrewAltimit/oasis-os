@@ -12,8 +12,22 @@ pub fn default_stylesheet() -> Stylesheet {
 }
 
 /// Parse the built-in UA stylesheet constant into a [`Stylesheet`].
+///
+/// When the `javascript` feature is enabled, `<noscript>` is hidden
+/// (scripting is available). Without it, `<noscript>` content is
+/// rendered so users see the fallback.
 pub(crate) fn parse_ua_stylesheet() -> Stylesheet {
-    Stylesheet::parse(UA_CSS)
+    #[cfg(feature = "javascript")]
+    {
+        Stylesheet::parse(UA_CSS)
+    }
+    #[cfg(not(feature = "javascript"))]
+    {
+        // Without JS, show <noscript> content by appending an override
+        // rule rather than doing a brittle string replacement on UA_CSS.
+        let css = format!("{UA_CSS}\nnoscript {{ display: block !important; }}");
+        Stylesheet::parse(&css)
+    }
 }
 
 /// User-agent stylesheet following CSS 2.1 defaults with visual styling

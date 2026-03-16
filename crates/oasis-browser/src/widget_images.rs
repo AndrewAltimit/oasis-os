@@ -97,6 +97,28 @@ fn effective_img_src(elem: &html::dom::ElementData, viewport_w: u32) -> Option<S
     srcset_url.or_else(|| elem.src().map(String::from))
 }
 
+/// Find the Y position of a layout box whose image src resolves to `url`.
+///
+/// Walks the layout tree recursively. Returns `Some(y)` for the first
+/// matching `ReplacedContent::Image` node, or `None` if not found.
+fn find_image_y(layout_box: &layout::box_model::LayoutBox, _url: &str) -> Option<f32> {
+    // For images without a texture yet, their content.y tells us the
+    // approximate vertical position in the page.
+    if let layout::box_model::BoxType::Replaced(layout::box_model::ReplacedContent::Image {
+        texture: None,
+        ..
+    }) = &layout_box.box_type
+    {
+        return Some(layout_box.dimensions.content.y);
+    }
+    for child in &layout_box.children {
+        if let Some(y) = find_image_y(child, _url) {
+            return Some(y);
+        }
+    }
+    None
+}
+
 impl BrowserWidget {
     // ---------------------------------------------------------------
     // Image loading
@@ -182,7 +204,13 @@ impl BrowserWidget {
     /// Returns after the time budget is exhausted or all images are done.
     /// Each successful decode sets `layout_dirty` so the layout tree
     /// rebuilds with correct intrinsic dimensions.
+    /// Pixels ahead of the viewport to start loading lazy images.
+    const LAZY_LOAD_MARGIN: f32 = 512.0;
+
     pub fn load_next_image_batch(&mut self, vfs: &dyn Vfs, budget_ms: u32) {
+        // Promote deferred images that have scrolled into view.
+        self.promote_deferred_images();
+
         if self.pending_images.is_empty() {
             return;
         }
@@ -190,10 +218,17 @@ impl BrowserWidget {
         let start = std::time::Instant::now();
         let budget = std::time::Duration::from_millis(budget_ms as u64);
         let mut any_decoded = false;
-
         while let Some((resolved, request)) = self.pending_images.pop() {
             // Skip if already decoded (e.g. from cache).
             if self.decoded_images.contains_key(&resolved) {
+                continue;
+            }
+
+            // Lazy loading: defer images far below the viewport.
+            // Deferred images are stored separately and only re-evaluated
+            // when a scroll event occurs (see `promote_deferred_images`).
+            if self.is_image_off_viewport(&resolved) {
+                self.deferred_images.push((resolved, request));
                 continue;
             }
 
@@ -242,6 +277,52 @@ impl BrowserWidget {
 
         if self.pending_images.is_empty() && self.state == LoadingState::Loading {
             self.state = LoadingState::Idle;
+        }
+    }
+
+    /// Re-evaluate deferred images after a scroll event.
+    ///
+    /// Moves images that are now near the viewport from `deferred_images`
+    /// back into `pending_images` for loading.
+    pub(crate) fn promote_deferred_images(&mut self) {
+        if self.deferred_images.is_empty() {
+            return;
+        }
+        // Compute viewport threshold once to avoid repeated borrows.
+        let viewport_bottom = self.scroll.scroll_y as f32 + self.window_h as f32;
+        let threshold = viewport_bottom + Self::LAZY_LOAD_MARGIN;
+
+        let layout_root = &self.layout_root;
+        let mut still_deferred = Vec::new();
+        for (resolved, request) in std::mem::take(&mut self.deferred_images) {
+            let off_viewport = layout_root
+                .as_ref()
+                .and_then(|root| find_image_y(root, &resolved))
+                .is_some_and(|y| y > threshold);
+            if off_viewport {
+                still_deferred.push((resolved, request));
+            } else {
+                self.pending_images.push((resolved, request));
+            }
+        }
+        self.deferred_images = still_deferred;
+    }
+
+    /// Check if an image with the given URL is far below the current viewport.
+    ///
+    /// Walks the layout tree to find the image's Y position. If it's
+    /// more than [`LAZY_LOAD_MARGIN`] pixels below the viewport bottom,
+    /// returns `true` (defer loading).
+    fn is_image_off_viewport(&self, resolved_url: &str) -> bool {
+        let Some(layout_root) = &self.layout_root else {
+            return false; // No layout yet — load eagerly.
+        };
+        let viewport_bottom = self.scroll.scroll_y as f32 + self.window_h as f32;
+        // Find the image's layout position.
+        if let Some(y) = find_image_y(layout_root, resolved_url) {
+            y > viewport_bottom + Self::LAZY_LOAD_MARGIN
+        } else {
+            false // Not found in layout — load eagerly.
         }
     }
 

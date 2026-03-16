@@ -522,7 +522,7 @@ pub(super) fn selector_pseudo_element(selector: &super::super::parser::Selector)
 /// the leftmost in the source, and the last compound is the *subject*
 /// (the element being tested). Combinators link compounds and are
 /// stored as `Option<Combinator>` where `None` marks the first entry.
-pub(super) fn matches_selector(
+pub(crate) fn matches_selector(
     doc: &Document,
     node_id: NodeId,
     selector: &super::super::parser::Selector,

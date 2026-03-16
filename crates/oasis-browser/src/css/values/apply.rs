@@ -11,9 +11,9 @@ use super::types::{
     AlignContent, AlignItems, AlignSelf, Animation, AnimationDirection, AnimationFillMode,
     AnimationPlayState, BackgroundImage, BorderCollapse, BorderStyle, BoxSizing, Clear, Display,
     FlexDirection, FlexWrap, Float, FontFamily, FontStyle, JustifyContent, ListStylePosition,
-    ListStyleType, Overflow, OverflowWrap, Position, TextAlign, TextDecoration, TextOverflow,
-    TextShadow, TextTransform, TimingFunction, Transition, VerticalAlign, Visibility, WhiteSpace,
-    WordBreak,
+    ListStyleType, ObjectFit, Overflow, OverflowWrap, Position, TextAlign, TextDecoration,
+    TextOverflow, TextShadow, TextTransform, TimingFunction, Transition, VerticalAlign, Visibility,
+    WhiteSpace, WordBreak,
 };
 use crate::css::parser::CssValue;
 
@@ -424,6 +424,12 @@ impl ComputedStyle {
             },
             "line-height" => {
                 self.line_height = resolve_line_height(value, self.font_size, parent_font_size);
+                // Track unitless factor for correct inheritance (CSS 2.1 §17.21).
+                self.line_height_factor = match value {
+                    CssValue::Number(n) => Some(*n),
+                    CssValue::Keyword(kw) if kw == "normal" => Some(1.5),
+                    _ => None,
+                };
             },
             "letter-spacing" => {
                 if let Some("normal") = as_keyword(value) {
@@ -527,6 +533,20 @@ impl ComputedStyle {
                         "hidden" => Overflow::Hidden,
                         "scroll" => Overflow::Scroll,
                         "auto" => Overflow::Auto,
+                        _ => return,
+                    };
+                }
+            },
+
+            // -- Replaced element sizing ---------------------------------
+            "object-fit" => {
+                if let Some(kw) = as_keyword(value) {
+                    self.object_fit = match kw {
+                        "fill" => ObjectFit::Fill,
+                        "contain" => ObjectFit::Contain,
+                        "cover" => ObjectFit::Cover,
+                        "none" => ObjectFit::None,
+                        "scale-down" => ObjectFit::ScaleDown,
                         _ => return,
                     };
                 }
@@ -972,6 +992,12 @@ impl ComputedStyle {
                     self.grid_row_start = Some(*n as i32);
                 }
             },
+            "grid-auto-rows" => {
+                self.grid_auto_rows = parse_grid_template(value, parent_font_size);
+            },
+            "grid-auto-columns" => {
+                self.grid_auto_columns = parse_grid_template(value, parent_font_size);
+            },
 
             // -- Table layout -----------------------------------------------
             "table-layout" => {
@@ -1294,6 +1320,9 @@ impl ComputedStyle {
             "grid-auto-flow" => self.grid_auto_flow_column = false,
             "grid-template-areas" => self.grid_template_areas = Vec::new(),
             "grid-area" => self.grid_area = None,
+            "object-fit" => self.object_fit = ObjectFit::Fill,
+            "grid-auto-rows" => self.grid_auto_rows = Vec::new(),
+            "grid-auto-columns" => self.grid_auto_columns = Vec::new(),
             "table-layout" => self.table_layout_fixed = false,
             "animation" => self.animations = Vec::new(),
             _ => {},
@@ -2018,6 +2047,7 @@ mod tests {
                     | "grid-column" | "grid-column-start" | "grid-column-end"
                     | "grid-row" | "grid-row-start" | "grid-row-end"
                     | "grid-gap" | "grid-row-gap" | "grid-column-gap"
+                    | "grid-auto-rows" | "grid-auto-columns"
                     | "top" | "right" | "bottom" | "left"
                     | "max-width" | "min-width"
                     | "max-height" | "min-height"

@@ -259,9 +259,24 @@ impl BrowserWidget {
 
     /// Parse HTML, run the CSS cascade, build layout, and prepare
     /// for painting.
+    /// Maximum HTML source size accepted for parsing (10 MB).
+    const MAX_HTML_SOURCE_BYTES: usize = 10 * 1024 * 1024;
+
     pub fn load_html(&mut self, html_source: &str, url: &str) {
+        // Guard against oversized HTML input.
+        let source = if html_source.len() > Self::MAX_HTML_SOURCE_BYTES {
+            log::warn!(
+                "HTML source too large ({} bytes), truncating to {} bytes",
+                html_source.len(),
+                Self::MAX_HTML_SOURCE_BYTES,
+            );
+            &html_source[..html_source.floor_char_boundary(Self::MAX_HTML_SOURCE_BYTES)]
+        } else {
+            html_source
+        };
+
         // 1. Tokenize and build DOM.
-        let tokens = html::tokenizer::Tokenizer::new(html_source).tokenize();
+        let tokens = html::tokenizer::Tokenizer::new(source).tokenize();
         let doc = html::tree_builder::TreeBuilder::build(tokens);
 
         // 1b. Execute inline <script> blocks (if JS enabled).
@@ -318,6 +333,12 @@ impl BrowserWidget {
                         let doc_borrow = shared.borrow();
                         js_dom::register_inline_handlers(&engine, &doc_borrow);
                     }
+                    // Fire DOMContentLoaded event.
+                    let _ = engine.eval(
+                        "if (typeof document !== 'undefined' && document.dispatchEvent) { \
+                         document.dispatchEvent(new Event('DOMContentLoaded')); \
+                         }",
+                    );
                     self.console_output = engine.console_output();
                     // Retain engine + shared doc for event dispatch.
                     self.js_engine = Some(engine);
