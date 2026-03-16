@@ -41,6 +41,15 @@ impl BrowserWidget {
             self.layout_dirty = true;
         }
 
+        // Tick JS timers (setTimeout / setInterval).
+        #[cfg(feature = "javascript")]
+        if let Some(engine) = &self.js_engine {
+            let fired = engine.tick_timers(dt_ms as f64);
+            if fired > 0 {
+                self.layout_dirty = true;
+            }
+        }
+
         // Process pending JS navigation actions.
         #[cfg(feature = "javascript")]
         {

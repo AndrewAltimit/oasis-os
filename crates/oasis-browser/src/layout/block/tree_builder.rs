@@ -121,6 +121,18 @@ fn build_box_for_node(
             // Determine box type.
             let box_type = box_type_for_element(elem, &style);
 
+            // Handle <svg> as a replaced element.
+            if elem.tag == TagName::Svg
+                && let Some(svg_elem) = crate::svg::parse_svg(doc, node_id)
+            {
+                let replaced = ReplacedContent::Svg {
+                    element: Box::new(svg_elem),
+                };
+                let mut lb = LayoutBox::new(BoxType::Replaced(replaced), style, Some(node_id));
+                lb.children = Vec::new();
+                return Some(lb);
+            }
+
             // Handle <select> specially: find selected/first <option> text.
             if elem.tag == TagName::Select {
                 let label = find_select_label(doc, node_id);

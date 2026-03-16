@@ -21,6 +21,7 @@ pub mod reader;
 pub mod scroll;
 pub mod search;
 pub mod skin;
+pub mod svg;
 
 mod widget_images;
 mod widget_input;

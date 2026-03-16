@@ -247,17 +247,20 @@ impl BrowserWidget {
                 self.handle_click(*x, *y, vfs);
                 true
             },
-            // Zoom: + / - / 0 keys when not in URL bar.
-            InputEvent::TextInput('+' | '=') => {
-                self.zoom_in();
-                true
-            },
-            InputEvent::TextInput('-') => {
-                self.zoom_out();
-                true
-            },
-            InputEvent::TextInput('0') => {
-                self.reset_zoom();
+            // Dispatch keydown + input events to JS for focused nodes.
+            InputEvent::TextInput(ch) => {
+                #[cfg(feature = "javascript")]
+                if let (Some(nid), Some(engine)) = (self.focused_node, &self.js_engine) {
+                    Self::dispatch_js_key_event(engine, nid, *ch);
+                    Self::dispatch_js_event(engine, nid, "input");
+                }
+                // Zoom: + / - / 0 keys when not in URL bar.
+                match ch {
+                    '+' | '=' => self.zoom_in(),
+                    '-' => self.zoom_out(),
+                    '0' => self.reset_zoom(),
+                    _ => {},
+                }
                 true
             },
             _ => false,
@@ -569,6 +572,27 @@ impl BrowserWidget {
         let _ = engine.eval(&code);
     }
 
+    /// Dispatch a keydown event to JS with the key character as detail.
+    #[cfg(feature = "javascript")]
+    fn dispatch_js_key_event(engine: &oasis_js::JsEngine, node_id: NodeId, key: char) {
+        // Escape single quotes in the key character for the JS string.
+        let escaped = if key == '\'' { "\\'" } else { "" };
+        let code = if escaped.is_empty() {
+            format!(
+                "if(typeof __oasis_dispatch_with_bubbling==='function')\
+                 __oasis_dispatch_with_bubbling({},'keydown','{}')",
+                node_id, key
+            )
+        } else {
+            format!(
+                "if(typeof __oasis_dispatch_with_bubbling==='function')\
+                 __oasis_dispatch_with_bubbling({},'keydown','{}')",
+                node_id, escaped
+            )
+        };
+        let _ = engine.eval(&code);
+    }
+
     /// Handle a cursor move at window-relative coordinates.
     ///
     /// Hit-tests link regions to determine the hover target. If the
@@ -600,6 +624,18 @@ impl BrowserWidget {
 
             let old_hover = self.hover_node;
             self.hover_node = new_hover;
+
+            // Dispatch mouseover/mouseout events to JS.
+            #[cfg(feature = "javascript")]
+            if let Some(engine) = &self.js_engine {
+                if let Some(old_nid) = old_hover {
+                    Self::dispatch_js_event(engine, old_nid, "mouseout");
+                }
+                if let Some(new_nid) = new_hover {
+                    Self::dispatch_js_event(engine, new_nid, "mouseover");
+                }
+            }
+
             self.restyle_hover_affected(old_hover);
         }
     }

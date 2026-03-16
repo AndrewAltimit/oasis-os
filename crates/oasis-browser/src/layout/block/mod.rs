@@ -350,6 +350,7 @@ fn layout_children_incremental(
                             match rc {
                                 ReplacedContent::HorizontalRule => 2.0,
                                 ReplacedContent::Image { height, .. } => *height as f32,
+                                ReplacedContent::Svg { element } => element.height,
                                 _ => 0.0,
                             }
                         } else {
@@ -864,6 +865,7 @@ fn layout_block_children(parent: &mut LayoutBox, measurer: &dyn TextMeasurer) {
                             match rc {
                                 ReplacedContent::HorizontalRule => 2.0,
                                 ReplacedContent::Image { height, .. } => *height as f32,
+                                ReplacedContent::Svg { element } => element.height,
                                 _ => 0.0,
                             }
                         } else {

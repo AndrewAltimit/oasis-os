@@ -141,6 +141,9 @@ pub(super) fn paint_replaced(
             let arrow_x = x + w as i32 - 10;
             backend.draw_text("v", arrow_x, y + pad_top, font_size, text_color)?;
         },
+        ReplacedContent::Svg { element } => {
+            crate::svg::paint_svg(element, backend, x, y, content.width, content.height)?;
+        },
         ReplacedContent::SubmitButton { label } => {
             let style = &layout_box.style;
             let w = content.width as u32;

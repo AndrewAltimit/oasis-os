@@ -295,6 +295,60 @@ fn install_document_global_full(
         )?;
     }
 
+    // -- __oasis_remove(child_nid) -> i32 (former parent or -1) --------
+    {
+        let d = Rc::clone(doc);
+        globals.set(
+            "__oasis_remove",
+            Function::new(ctx.clone(), move |child_nid: i32| -> i32 {
+                let mut doc = d.borrow_mut();
+                let cid = child_nid as NodeId;
+                if cid >= doc.nodes.len() {
+                    return NO_NODE;
+                }
+                doc.remove_child(cid).map_or(NO_NODE, |pid| pid as i32)
+            })?,
+        )?;
+    }
+
+    // -- __oasis_insertbefore(parent_nid, new_nid, ref_nid) -----------
+    {
+        let d = Rc::clone(doc);
+        globals.set(
+            "__oasis_insertbefore",
+            Function::new(
+                ctx.clone(),
+                move |parent_nid: i32, new_nid: i32, ref_nid: i32| {
+                    let mut doc = d.borrow_mut();
+                    let pid = parent_nid as NodeId;
+                    let nid = new_nid as NodeId;
+                    if pid >= doc.nodes.len() || nid >= doc.nodes.len() {
+                        return;
+                    }
+                    // Remove new_nid from its current parent first.
+                    doc.remove_child(nid);
+                    // Find the position of ref_nid in parent's children.
+                    let pos = if ref_nid >= 0 {
+                        let rid = ref_nid as NodeId;
+                        doc.nodes[pid].children.iter().position(|&c| c == rid)
+                    } else {
+                        None
+                    };
+                    match pos {
+                        Some(idx) => {
+                            doc.nodes[pid].children.insert(idx, nid);
+                            doc.nodes[nid].parent = Some(pid);
+                        },
+                        None => {
+                            // ref_nid not found or -1: append.
+                            doc.append_child(pid, nid);
+                        },
+                    }
+                },
+            )?,
+        )?;
+    }
+
     // -- __oasis_body() -> i32 ----------------------------------------
     {
         let d = Rc::clone(doc);
@@ -935,6 +989,19 @@ const JS_DOM_BOOTSTRAP: &str = r#"
       this.__oasis_node_id, child.__oasis_node_id
     );
     return child;
+  };
+  Element.prototype.removeChild = function(child) {
+    __oasis_remove(child.__oasis_node_id);
+    return child;
+  };
+  Element.prototype.insertBefore = function(newNode, refNode) {
+    var refId = refNode ? refNode.__oasis_node_id : -1;
+    __oasis_insertbefore(
+      this.__oasis_node_id,
+      newNode.__oasis_node_id,
+      refId
+    );
+    return newNode;
   };
   Element.prototype.querySelector = function(sel) {
     var nid = __oasis_query_selector(

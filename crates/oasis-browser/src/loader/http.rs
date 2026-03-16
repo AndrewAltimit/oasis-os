@@ -3,6 +3,7 @@
 //! Supports plain HTTP over `std::net::TcpStream` and, when a
 //! [`TlsProvider`] is supplied, HTTPS via the backend's TLS stack.
 
+use std::cell::RefCell;
 use std::io::{self, Read, Write};
 use std::net::TcpStream;
 use std::sync::Mutex;
@@ -36,6 +37,15 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 /// TCP read timeout.
 const READ_TIMEOUT: Duration = Duration::from_secs(15);
 
+/// Maximum idle connections per host in the connection pool.
+const MAX_CONNS_PER_HOST: usize = 2;
+
+/// Maximum total idle connections in the pool.
+const MAX_TOTAL_CONNS: usize = 8;
+
+/// Maximum age of an idle pooled connection (30 seconds).
+const POOL_IDLE_TIMEOUT: Duration = Duration::from_secs(30);
+
 /// DNS cache TTL (5 minutes).
 #[allow(dead_code)]
 const DNS_CACHE_TTL: Duration = Duration::from_secs(300);
@@ -46,6 +56,77 @@ type DnsCacheMap = FxHashMap<String, (Vec<std::net::IpAddr>, Instant)>;
 #[allow(dead_code)]
 static DNS_CACHE: std::sync::LazyLock<Mutex<DnsCacheMap>> =
     std::sync::LazyLock::new(|| Mutex::new(FxHashMap::default()));
+
+// -------------------------------------------------------------------
+// Connection pool
+// -------------------------------------------------------------------
+
+/// An idle pooled connection with its insertion timestamp.
+struct PooledConn {
+    stream: TcpStream,
+    inserted: Instant,
+}
+
+/// Simple HTTP/1.1 keep-alive connection pool.
+///
+/// Stores idle `TcpStream` connections keyed by `(host, port)`.
+/// Not thread-safe -- designed for single-threaded browser use.
+struct ConnectionPool {
+    conns: FxHashMap<(String, u16), Vec<PooledConn>>,
+    total: usize,
+}
+
+impl ConnectionPool {
+    fn new() -> Self {
+        Self {
+            conns: FxHashMap::default(),
+            total: 0,
+        }
+    }
+
+    /// Take an idle connection for the given host:port, if available.
+    ///
+    /// Expired connections are discarded silently.
+    fn take(&mut self, host: &str, port: u16) -> Option<TcpStream> {
+        let key = (host.to_string(), port);
+        let entries = self.conns.get_mut(&key)?;
+        while let Some(entry) = entries.pop() {
+            self.total -= 1;
+            if entry.inserted.elapsed() < POOL_IDLE_TIMEOUT {
+                if entries.is_empty() {
+                    self.conns.remove(&key);
+                }
+                return Some(entry.stream);
+            }
+            // Expired -- drop and try next.
+        }
+        self.conns.remove(&key);
+        None
+    }
+
+    /// Return a connection to the pool for future reuse.
+    ///
+    /// Silently drops the connection if the pool is full.
+    fn put(&mut self, host: &str, port: u16, stream: TcpStream) {
+        if self.total >= MAX_TOTAL_CONNS {
+            return; // Pool full, discard.
+        }
+        let key = (host.to_string(), port);
+        let entries = self.conns.entry(key).or_default();
+        if entries.len() >= MAX_CONNS_PER_HOST {
+            return; // Per-host limit reached, discard.
+        }
+        entries.push(PooledConn {
+            stream,
+            inserted: Instant::now(),
+        });
+        self.total += 1;
+    }
+}
+
+thread_local! {
+    static CONN_POOL: RefCell<ConnectionPool> = RefCell::new(ConnectionPool::new());
+}
 
 /// Resolve a hostname using the DNS cache.
 ///
@@ -210,6 +291,10 @@ pub struct HttpResponse {
 // -------------------------------------------------------------------
 
 /// Connect, optionally upgrade to TLS, send request, read and parse.
+///
+/// For plain HTTP, attempts to reuse a pooled keep-alive connection
+/// before opening a new one.  On success with keep-alive, the
+/// connection is returned to the pool.
 fn do_request_with_method(
     method: &str,
     url: &Url,
@@ -222,11 +307,10 @@ fn do_request_with_method(
     let default_port = if is_https { 443 } else { 80 };
     let port = url.port.unwrap_or(default_port);
 
-    let stream = tcp_connect(host, port)?;
-
     if is_https {
         let tls_provider = tls.ok_or_else(|| OasisError::Backend("TLS not available".into()))?;
 
+        let stream = tcp_connect(host, port)?;
         // Wrap the TcpStream as a NetworkStream, then upgrade to TLS.
         let net_stream: Box<dyn NetworkStream> = Box::new(oasis_net::StdNetworkStream::new(stream));
         let tls_stream = tls_provider.connect_tls(net_stream, host)?;
@@ -236,10 +320,53 @@ fn do_request_with_method(
         let raw = read_response(&mut adapter)?;
         parse_response(&raw)
     } else {
-        let mut stream = stream;
+        // Try a pooled connection first.
+        let pooled = CONN_POOL.with(|pool| pool.borrow_mut().take(host, port));
+        if let Some(mut stream) = pooled {
+            match try_request_on_stream(&mut stream, method, url, body, extra_headers, is_https) {
+                Ok(resp) => {
+                    maybe_return_to_pool(&resp, host, port, stream);
+                    return Ok(resp);
+                },
+                Err(_) => {
+                    // Stale connection -- fall through to fresh connect.
+                },
+            }
+        }
+
+        let mut stream = tcp_connect(host, port)?;
         send_request(&mut stream, method, url, body, extra_headers, is_https)?;
         let raw = read_response(&mut stream)?;
-        parse_response(&raw)
+        let resp = parse_response(&raw)?;
+        maybe_return_to_pool(&resp, host, port, stream);
+        Ok(resp)
+    }
+}
+
+/// Attempt a full request/response cycle on an existing stream.
+///
+/// Returns `Err` on any I/O failure so the caller can retry with a fresh
+/// connection.
+fn try_request_on_stream(
+    stream: &mut TcpStream,
+    method: &str,
+    url: &Url,
+    body: Option<&[u8]>,
+    extra_headers: &[(&str, &str)],
+    is_https: bool,
+) -> Result<HttpResponse> {
+    send_request(stream, method, url, body, extra_headers, is_https)?;
+    let raw = read_response(stream)?;
+    parse_response(&raw)
+}
+
+/// Return a plain-HTTP connection to the pool if the response indicates
+/// keep-alive (HTTP/1.1 default unless `Connection: close` is present).
+fn maybe_return_to_pool(resp: &HttpResponse, host: &str, port: u16, stream: TcpStream) {
+    let dominated_close =
+        find_header(&resp.headers, "connection").is_some_and(|v| v.eq_ignore_ascii_case("close"));
+    if !dominated_close {
+        CONN_POOL.with(|pool| pool.borrow_mut().put(host, port, stream));
     }
 }
 
@@ -291,7 +418,7 @@ fn send_request(
          User-Agent: OASIS/1.0\r\n\
          Accept: */*\r\n\
          Accept-Encoding: gzip, deflate, br\r\n\
-         Connection: close\r\n"
+         Connection: keep-alive\r\n"
     );
 
     // Append extra headers.

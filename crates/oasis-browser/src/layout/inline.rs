@@ -372,6 +372,7 @@ fn replaced_dimensions(replaced: &ReplacedContent) -> (f32, f32) {
             let text_w = oasis_types::backend::bitmap_measure_text(label, 10) as f32;
             (text_w + 20.0, 18.0) // extra space for dropdown arrow
         },
+        ReplacedContent::Svg { element } => (element.width, element.height),
     }
 }
 

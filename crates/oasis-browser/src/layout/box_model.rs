@@ -187,6 +187,10 @@ pub enum ReplacedContent {
     SelectBox {
         label: String,
     },
+    /// An inline `<svg>` element.
+    Svg {
+        element: Box<crate::svg::SvgElement>,
+    },
 }
 
 /// A single box in the layout tree.
