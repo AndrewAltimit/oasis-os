@@ -100,6 +100,9 @@ pub enum Dimension {
     Auto,
     Px(f32),
     Percent(f32),
+    MinContent,
+    MaxContent,
+    FitContent,
 }
 
 /// CSS `border-style` property.
@@ -263,7 +266,7 @@ pub enum BoxSizing {
 }
 
 /// CSS `vertical-align` property (subset for inline replaced elements).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum VerticalAlign {
     Baseline,
     Top,
@@ -271,6 +274,9 @@ pub enum VerticalAlign {
     Bottom,
     TextTop,
     TextBottom,
+    Sub,
+    Super,
+    Length(f32),
 }
 
 /// A color stop in a CSS gradient.
@@ -346,6 +352,33 @@ pub enum TransformFunction {
     Scale(f32, f32),
     /// `rotate(angle)` in degrees.
     Rotate(f32),
+    /// `skew(ax, ay)` in degrees.
+    Skew(f32, f32),
+    /// `matrix(a, b, c, d, e, f)` — 2D affine transform.
+    Matrix(f32, f32, f32, f32, f32, f32),
+}
+
+/// CSS `transform-origin` value.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct TransformOrigin {
+    pub x: f32,
+    pub y: f32,
+    pub x_pct: Option<f32>,
+    pub y_pct: Option<f32>,
+}
+
+/// CSS `filter` function.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum FilterFunction {
+    Blur(f32),
+    Brightness(f32),
+    Contrast(f32),
+    Grayscale(f32),
+    Invert(f32),
+    Opacity(f32),
+    Saturate(f32),
+    Sepia(f32),
+    HueRotate(f32),
 }
 
 /// A CSS easing function.

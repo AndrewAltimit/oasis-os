@@ -278,6 +278,22 @@ pub struct BrowserWidget {
     /// response headers).
     page_csp: Option<loader::csp::CspPolicy>,
 
+    /// Timestamp when loading started (for progress bar animation).
+    #[allow(dead_code)]
+    loading_start: Option<std::time::Instant>,
+
+    /// In-page search state: the current search query (empty = inactive).
+    #[allow(dead_code)]
+    search_state: String,
+
+    /// Ordered list of focusable DOM node IDs (tabindex order).
+    #[allow(dead_code)]
+    tab_order: Vec<NodeId>,
+
+    /// Current index into `tab_order` (-1 = none).
+    #[allow(dead_code)]
+    tab_focus_index: i32,
+
     /// Persistent text measurement cache shared across layout passes.
     /// Cleared only when the effective font size changes (e.g. zoom).
     text_cache: layout::text_cache::SharedTextCache,
@@ -345,6 +361,10 @@ impl BrowserWidget {
             transition_engine: css::transition::TransitionEngine::new(),
             animation_engine: css::animation::AnimationEngine::new(),
             page_csp: None,
+            loading_start: None,
+            search_state: String::new(),
+            tab_order: Vec::new(),
+            tab_focus_index: -1,
             text_cache: layout::text_cache::new_shared_cache(),
             last_effective_font_size: effective_font,
         }

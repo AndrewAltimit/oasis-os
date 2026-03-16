@@ -777,8 +777,15 @@ impl ComputedStyle {
                         "bottom" => VerticalAlign::Bottom,
                         "text-top" => VerticalAlign::TextTop,
                         "text-bottom" => VerticalAlign::TextBottom,
+                        "sub" => VerticalAlign::Sub,
+                        "super" => VerticalAlign::Super,
                         _ => return,
                     };
+                } else {
+                    let len = resolve_length(value, parent_font_size);
+                    if len != 0.0 {
+                        self.vertical_align = VerticalAlign::Length(len);
+                    }
                 }
             },
 
@@ -872,6 +879,95 @@ impl ComputedStyle {
                             }
                         }
                     }
+                }
+            },
+
+            // -- Transform origin -------------------------------------------
+            "transform-origin" => {
+                self.transform_origin = Some(parse_transform_origin(value, parent_font_size));
+            },
+
+            // -- Filter ----------------------------------------------------
+            "filter" => {
+                self.filters = parse_filter(value);
+            },
+
+            // -- Counters --------------------------------------------------
+            "counter-reset" => {
+                self.counter_reset = parse_counter_directive(value);
+            },
+            "counter-increment" => {
+                self.counter_increment = parse_counter_directive(value);
+            },
+
+            // -- Will-change -----------------------------------------------
+            "will-change" => {
+                if let Some(kw) = as_keyword(value) {
+                    self.will_change_transform = matches!(kw, "transform" | "opacity" | "filter");
+                } else if let CssValue::String(s) = value {
+                    self.will_change_transform =
+                        s.contains("transform") || s.contains("opacity") || s.contains("filter");
+                }
+            },
+
+            // -- Multi-column -----------------------------------------------
+            "column-count" => {
+                if let CssValue::Number(n) = value {
+                    self.column_count = (*n as u32).max(1);
+                } else if as_keyword(value) == Some("auto") {
+                    self.column_count = 0;
+                }
+            },
+            "column-width" => {
+                if as_keyword(value) == Some("auto") {
+                    self.column_width = 0.0;
+                } else {
+                    self.column_width = resolve_length(value, parent_font_size);
+                }
+            },
+            "columns" => {
+                // Shorthand: columns: [count] [width]
+                if let CssValue::Multiple(vs) = value {
+                    for v in vs {
+                        if let CssValue::Number(n) = v {
+                            self.column_count = (*n as u32).max(1);
+                        } else {
+                            let len = resolve_length(v, parent_font_size);
+                            if len > 0.0 {
+                                self.column_width = len;
+                            }
+                        }
+                    }
+                } else if let CssValue::Number(n) = value {
+                    self.column_count = (*n as u32).max(1);
+                }
+            },
+
+            // -- Grid extensions -------------------------------------------
+            "grid-auto-flow" => {
+                if let Some(kw) = as_keyword(value) {
+                    self.grid_auto_flow_column = kw.contains("column");
+                } else if let CssValue::String(s) = value {
+                    self.grid_auto_flow_column = s.contains("column");
+                }
+            },
+            "grid-template-areas" => {
+                self.grid_template_areas = parse_grid_template_areas(value);
+            },
+            "grid-area" => {
+                if let Some(kw) = as_keyword(value) {
+                    self.grid_area = Some(kw.to_string());
+                } else if let CssValue::String(s) = value {
+                    self.grid_area = Some(s.clone());
+                } else if let CssValue::Number(n) = value {
+                    self.grid_row_start = Some(*n as i32);
+                }
+            },
+
+            // -- Table layout -----------------------------------------------
+            "table-layout" => {
+                if let Some(kw) = as_keyword(value) {
+                    self.table_layout_fixed = kw == "fixed";
                 }
             },
 
@@ -1174,6 +1270,21 @@ impl ComputedStyle {
             "outline-style" => self.outline_style = initial.outline_style,
             "outline-offset" => self.outline_offset = initial.outline_offset,
             "transform" => self.transforms = Vec::new(),
+            "transform-origin" => self.transform_origin = None,
+            "filter" => self.filters = Vec::new(),
+            "counter-reset" => self.counter_reset = Vec::new(),
+            "counter-increment" => self.counter_increment = Vec::new(),
+            "will-change" => self.will_change_transform = false,
+            "column-count" => self.column_count = 0,
+            "column-width" => self.column_width = 0.0,
+            "columns" => {
+                self.column_count = 0;
+                self.column_width = 0.0;
+            },
+            "grid-auto-flow" => self.grid_auto_flow_column = false,
+            "grid-template-areas" => self.grid_template_areas = Vec::new(),
+            "grid-area" => self.grid_area = None,
+            "table-layout" => self.table_layout_fixed = false,
             "animation" => self.animations = Vec::new(),
             _ => {},
         }
@@ -1334,6 +1445,30 @@ fn parse_transform(
                 let angle = parse_angle(args.first().copied().unwrap_or("0"));
                 result.push(TransformFunction::Rotate(angle));
             },
+            "skew" => {
+                let ax = parse_angle(args.first().copied().unwrap_or("0"));
+                let ay = parse_angle(args.get(1).copied().unwrap_or("0"));
+                result.push(TransformFunction::Skew(ax, ay));
+            },
+            "skewX" | "skewx" => {
+                let ax = parse_angle(args.first().copied().unwrap_or("0"));
+                result.push(TransformFunction::Skew(ax, 0.0));
+            },
+            "skewY" | "skewy" => {
+                let ay = parse_angle(args.first().copied().unwrap_or("0"));
+                result.push(TransformFunction::Skew(0.0, ay));
+            },
+            "matrix" => {
+                if args.len() >= 6 {
+                    let a = args[0].parse::<f32>().unwrap_or(1.0);
+                    let b = args[1].parse::<f32>().unwrap_or(0.0);
+                    let c = args[2].parse::<f32>().unwrap_or(0.0);
+                    let d = args[3].parse::<f32>().unwrap_or(1.0);
+                    let e = args[4].parse::<f32>().unwrap_or(0.0);
+                    let f = args[5].parse::<f32>().unwrap_or(0.0);
+                    result.push(TransformFunction::Matrix(a, b, c, d, e, f));
+                }
+            },
             _ => {},
         }
     }
@@ -1368,6 +1503,215 @@ fn parse_transform(
     }
 
     result
+}
+
+/// Parse a CSS `transform-origin` value.
+fn parse_transform_origin(
+    value: &CssValue,
+    parent_font_size: f32,
+) -> super::types::TransformOrigin {
+    use super::types::TransformOrigin;
+
+    let raw = match value {
+        CssValue::Keyword(s) | CssValue::String(s) => s.clone(),
+        CssValue::Length(_, _) => {
+            let px = resolve_length(value, parent_font_size);
+            return TransformOrigin {
+                x: px,
+                y: 0.0,
+                x_pct: None,
+                y_pct: None,
+            };
+        },
+        CssValue::Percentage(p) => {
+            return TransformOrigin {
+                x: 0.0,
+                y: 0.0,
+                x_pct: Some(*p / 100.0),
+                y_pct: Some(0.5),
+            };
+        },
+        _ => {
+            return TransformOrigin {
+                x: 0.0,
+                y: 0.0,
+                x_pct: Some(0.5),
+                y_pct: Some(0.5),
+            };
+        },
+    };
+
+    let parts: Vec<&str> = raw.split_whitespace().collect();
+    let mut x_pct: Option<f32> = None;
+    let y_pct: Option<f32>;
+    let mut x: f32 = 0.0;
+    let mut y: f32 = 0.0;
+
+    let resolve_part = |s: &str| -> (f32, Option<f32>) {
+        match s {
+            "left" => (0.0, Some(0.0)),
+            "center" => (0.0, Some(0.5)),
+            "right" => (0.0, Some(1.0)),
+            "top" => (0.0, Some(0.0)),
+            "bottom" => (0.0, Some(1.0)),
+            _ => {
+                if let Some(pct) = s.strip_suffix('%')
+                    && let Ok(v) = pct.trim().parse::<f32>()
+                {
+                    return (0.0, Some(v / 100.0));
+                }
+                if let Some(px) = s.strip_suffix("px")
+                    && let Ok(v) = px.trim().parse::<f32>()
+                {
+                    return (v, None);
+                }
+                if let Ok(v) = s.parse::<f32>() {
+                    return (v, None);
+                }
+                (0.0, Some(0.5))
+            },
+        }
+    };
+
+    if let Some(p0) = parts.first() {
+        let (px, pct) = resolve_part(p0);
+        x = px;
+        x_pct = pct;
+    }
+    if let Some(p1) = parts.get(1) {
+        let (px, pct) = resolve_part(p1);
+        y = px;
+        y_pct = pct;
+    } else {
+        // Default Y is center.
+        y_pct = Some(0.5);
+    }
+
+    TransformOrigin { x, y, x_pct, y_pct }
+}
+
+/// Parse a CSS `filter` value into a list of [`FilterFunction`]s.
+fn parse_filter(value: &CssValue) -> Vec<super::types::FilterFunction> {
+    use super::types::FilterFunction;
+
+    let raw = match value {
+        CssValue::Keyword(s) if s == "none" => return Vec::new(),
+        CssValue::Keyword(s) | CssValue::String(s) => s.clone(),
+        _ => return Vec::new(),
+    };
+
+    let mut result = Vec::new();
+    let mut rest = raw.as_str();
+
+    while !rest.is_empty() {
+        rest = rest.trim_start();
+        if rest.is_empty() {
+            break;
+        }
+        let Some(paren_pos) = rest.find('(') else {
+            break;
+        };
+        let func_name = rest[..paren_pos].trim();
+        let after_paren = &rest[paren_pos + 1..];
+        let Some(close_pos) = after_paren.find(')') else {
+            break;
+        };
+        let arg_str = after_paren[..close_pos].trim();
+        rest = &after_paren[close_pos + 1..];
+
+        let val = if let Some(pct) = arg_str.strip_suffix('%') {
+            pct.trim().parse::<f32>().unwrap_or(0.0) / 100.0
+        } else if let Some(px) = arg_str.strip_suffix("px") {
+            px.trim().parse::<f32>().unwrap_or(0.0)
+        } else if let Some(deg) = arg_str.strip_suffix("deg") {
+            deg.trim().parse::<f32>().unwrap_or(0.0)
+        } else if let Some(rad) = arg_str.strip_suffix("rad") {
+            rad.trim().parse::<f32>().unwrap_or(0.0).to_degrees()
+        } else {
+            arg_str.parse::<f32>().unwrap_or(0.0)
+        };
+
+        let f = match func_name {
+            "blur" => FilterFunction::Blur(val),
+            "brightness" => FilterFunction::Brightness(val),
+            "contrast" => FilterFunction::Contrast(val),
+            "grayscale" => FilterFunction::Grayscale(val),
+            "invert" => FilterFunction::Invert(val),
+            "opacity" => FilterFunction::Opacity(val),
+            "saturate" => FilterFunction::Saturate(val),
+            "sepia" => FilterFunction::Sepia(val),
+            "hue-rotate" => FilterFunction::HueRotate(val),
+            _ => continue,
+        };
+        result.push(f);
+    }
+
+    result
+}
+
+/// Parse a CSS `counter-reset` or `counter-increment` value.
+fn parse_counter_directive(value: &CssValue) -> Vec<(String, i32)> {
+    let raw = match value {
+        CssValue::Keyword(s) if s == "none" => return Vec::new(),
+        CssValue::Keyword(s) | CssValue::String(s) => s.clone(),
+        _ => return Vec::new(),
+    };
+
+    let mut result = Vec::new();
+    let tokens: Vec<&str> = raw.split_whitespace().collect();
+    let mut i = 0;
+    while i < tokens.len() {
+        let name = tokens[i].to_string();
+        let value = if i + 1 < tokens.len() {
+            if let Ok(v) = tokens[i + 1].parse::<i32>() {
+                i += 1;
+                v
+            } else {
+                0
+            }
+        } else {
+            0
+        };
+        result.push((name, value));
+        i += 1;
+    }
+    result
+}
+
+/// Resolve counters in a `content` property value.
+///
+/// Replaces `counter(name)` references with the current counter value.
+#[allow(dead_code)]
+fn resolve_content_counters(
+    content: &str,
+    _counters: &std::collections::HashMap<String, i32>,
+) -> String {
+    // Placeholder implementation -- returns content unchanged.
+    content.to_string()
+}
+
+/// Parse `grid-template-areas` value.
+fn parse_grid_template_areas(value: &CssValue) -> Vec<Vec<String>> {
+    let raw = match value {
+        CssValue::Keyword(s) if s == "none" => return Vec::new(),
+        CssValue::Keyword(s) | CssValue::String(s) => s.clone(),
+        _ => return Vec::new(),
+    };
+
+    let mut areas = Vec::new();
+    // Each quoted row is separated by whitespace outside quotes.
+    // For simplicity, split on '"' and take every other segment.
+    let parts: Vec<&str> = raw.split('"').collect();
+    for (i, part) in parts.iter().enumerate() {
+        if i % 2 == 1 {
+            // Inside quotes: split by whitespace.
+            let row: Vec<String> = part.split_whitespace().map(String::from).collect();
+            if !row.is_empty() {
+                areas.push(row);
+            }
+        }
+    }
+    areas
 }
 
 #[cfg(test)]
@@ -1666,6 +2010,11 @@ mod tests {
                     | "top" | "right" | "bottom" | "left"
                     | "max-width" | "min-width"
                     | "max-height" | "min-height"
+                    | "transform-origin" | "filter"
+                    | "counter-reset" | "counter-increment"
+                    | "will-change" | "column-count" | "column-width"
+                    | "columns" | "grid-auto-flow" | "grid-template-areas"
+                    | "grid-area" | "table-layout"
                 ) {
                     return Ok(());
                 }

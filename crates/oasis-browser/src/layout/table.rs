@@ -109,7 +109,28 @@ pub fn layout_table(
     measure_cell_widths(&mut tl, measurer);
 
     // Step 3: Determine column widths from cell measurements.
-    compute_column_widths(&mut tl);
+    if style.table_layout_fixed && tl.num_cols > 0 {
+        // Fixed table layout: distribute width evenly across columns.
+        let table_border_h = if border_collapse {
+            0.0
+        } else {
+            style.border_left_width + style.border_right_width
+        };
+        let table_padding_h = style.padding_left + style.padding_right;
+        let total_spacing_fixed = if border_collapse {
+            0.0
+        } else {
+            spacing * (tl.num_cols as f32 + 1.0)
+        };
+        let avail =
+            (containing_width - table_border_h - table_padding_h - total_spacing_fixed).max(0.0);
+        let even_w = avail / tl.num_cols as f32;
+        for w in &mut tl.col_widths {
+            *w = even_w;
+        }
+    } else {
+        compute_column_widths(&mut tl);
+    }
 
     // Step 4: Distribute available width across columns.
     let table_border_h = if border_collapse {

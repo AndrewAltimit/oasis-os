@@ -384,6 +384,105 @@ pub fn strip_referrer(page_url: &str) -> Option<String> {
     Some(s)
 }
 
+/// Returns `true` if `href` is a fragment-only reference (e.g. `#section`).
+pub fn is_fragment_only(href: &str) -> bool {
+    let trimmed = href.trim();
+    trimmed.starts_with('#')
+}
+
+/// Parse a `data:` URI into a `ResourceResponse`.
+///
+/// Format: `data:[<mediatype>][;base64],<data>`
+pub fn parse_data_uri(uri: &str) -> Option<ResourceResponse> {
+    let rest = uri.strip_prefix("data:")?;
+    let (meta, data) = rest.split_once(',')?;
+
+    let is_base64 = meta.ends_with(";base64");
+    let mime = if is_base64 {
+        meta.strip_suffix(";base64").unwrap_or("")
+    } else {
+        meta
+    };
+
+    let content_type = if mime.is_empty() {
+        ContentType::PlainText
+    } else {
+        ContentType::from_mime(mime)
+    };
+
+    let body = if is_base64 {
+        // Simple base64 decode (no padding validation).
+        base64_decode(data)?
+    } else {
+        // URL-decode the data.
+        url_decode(data).into_bytes()
+    };
+
+    Some(ResourceResponse {
+        url: uri.to_string(),
+        content_type,
+        body,
+        status: 200,
+    })
+}
+
+/// Simple URL percent-decoding.
+fn url_decode(s: &str) -> String {
+    let mut result = String::with_capacity(s.len());
+    let mut chars = s.chars();
+    while let Some(c) = chars.next() {
+        if c == '%' {
+            let hex: String = chars.by_ref().take(2).collect();
+            if let Ok(byte) = u8::from_str_radix(&hex, 16) {
+                result.push(byte as char);
+            } else {
+                result.push('%');
+                result.push_str(&hex);
+            }
+        } else if c == '+' {
+            result.push(' ');
+        } else {
+            result.push(c);
+        }
+    }
+    result
+}
+
+/// Minimal base64 decode (standard alphabet, ignores padding).
+fn base64_decode(input: &str) -> Option<Vec<u8>> {
+    let table = |c: u8| -> Option<u8> {
+        match c {
+            b'A'..=b'Z' => Some(c - b'A'),
+            b'a'..=b'z' => Some(c - b'a' + 26),
+            b'0'..=b'9' => Some(c - b'0' + 52),
+            b'+' => Some(62),
+            b'/' => Some(63),
+            _ => None,
+        }
+    };
+
+    let bytes: Vec<u8> = input
+        .bytes()
+        .filter(|&b| b != b'=' && b != b'\n' && b != b'\r' && b != b' ')
+        .collect();
+    let mut result = Vec::with_capacity(bytes.len() * 3 / 4);
+
+    for chunk in bytes.chunks(4) {
+        let b0 = table(*chunk.first()?)?;
+        let b1 = table(*chunk.get(1)?)?;
+        result.push((b0 << 2) | (b1 >> 4));
+        if let Some(&c2) = chunk.get(2) {
+            let b2 = table(c2)?;
+            result.push((b1 << 4) | (b2 >> 2));
+            if let Some(&c3) = chunk.get(3) {
+                let b3 = table(c3)?;
+                result.push((b2 << 6) | b3);
+            }
+        }
+    }
+    Some(result)
+}
+
 /// Detect the content type for a URL by inspecting its file extension.
 /// Defaults to [`ContentType::Html`] when no extension is recognised.
 pub fn detect_content_type(url: &Url) -> ContentType {

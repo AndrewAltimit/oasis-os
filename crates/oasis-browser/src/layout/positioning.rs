@@ -109,7 +109,7 @@ fn apply_absolute_position(layout_box: &mut LayoutBox, containing_block: &Rect) 
         (Dimension::Auto, Dimension::Percent(p)) => {
             cb.x + cb.width - cb.width * (p / 100.0) - layout_box.dimensions.margin_box().width
         },
-        (Dimension::Auto, Dimension::Auto) => {
+        _ => {
             // No offset specified: use the static position (current x).
             layout_box.dimensions.content.x
                 - layout_box.dimensions.padding.left
@@ -128,7 +128,7 @@ fn apply_absolute_position(layout_box: &mut LayoutBox, containing_block: &Rect) 
         (Dimension::Auto, Dimension::Percent(p)) => {
             cb.y + cb.height - cb.height * (p / 100.0) - layout_box.dimensions.margin_box().height
         },
-        (Dimension::Auto, Dimension::Auto) => {
+        _ => {
             layout_box.dimensions.content.y
                 - layout_box.dimensions.padding.top
                 - layout_box.dimensions.border.top
@@ -153,10 +153,10 @@ fn resolve_offset_h(left: &Dimension, right: &Dimension, container_width: f32) -
     match left {
         Dimension::Px(l) => *l,
         Dimension::Percent(p) => container_width * (p / 100.0),
-        Dimension::Auto => match right {
+        _ => match right {
             Dimension::Px(r) => -*r,
             Dimension::Percent(p) => -(container_width * (p / 100.0)),
-            Dimension::Auto => 0.0,
+            _ => 0.0,
         },
     }
 }
@@ -167,10 +167,10 @@ fn resolve_offset_v(top: &Dimension, bottom: &Dimension, container_height: f32) 
     match top {
         Dimension::Px(t) => *t,
         Dimension::Percent(p) => container_height * (p / 100.0),
-        Dimension::Auto => match bottom {
+        _ => match bottom {
             Dimension::Px(b) => -*b,
             Dimension::Percent(p) => -(container_height * (p / 100.0)),
-            Dimension::Auto => 0.0,
+            _ => 0.0,
         },
     }
 }

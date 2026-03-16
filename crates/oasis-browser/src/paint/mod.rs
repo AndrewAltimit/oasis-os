@@ -190,10 +190,24 @@ pub(super) fn paint_box(
             Dimension::Px(t) => Some(t),
             _ => None,
         };
+        let bottom_px = match layout_box.style.bottom {
+            Dimension::Px(b) => Some(b),
+            _ => None,
+        };
         if let Some(top) = top_px {
             let natural_screen_y = layout_box.dimensions.content.y - ctx.scroll_y + offset_y as f32;
             if natural_screen_y < top {
                 (top - natural_screen_y) as i32
+            } else {
+                0
+            }
+        } else if let Some(bottom) = bottom_px {
+            // Sticky bottom: clamp from viewport bottom.
+            let natural_screen_y = layout_box.dimensions.content.y - ctx.scroll_y + offset_y as f32;
+            let box_h = layout_box.dimensions.margin_box().height;
+            let threshold = ctx.viewport_height - bottom - box_h;
+            if natural_screen_y > threshold {
+                (threshold - natural_screen_y) as i32
             } else {
                 0
             }
@@ -497,29 +511,84 @@ fn compute_transform_offsets(
         return (base_x, base_y);
     }
 
-    let mut dx: f32 = 0.0;
-    let mut dy: f32 = 0.0;
+    // Use 2D affine matrix composition: [a b e; c d f; 0 0 1]
+    // Identity matrix: a=1, b=0, c=0, d=1, e=0, f=0
+    let mut a: f32 = 1.0;
+    let mut b: f32 = 0.0;
+    let mut c: f32 = 0.0;
+    let mut d: f32 = 1.0;
+    let mut e: f32 = 0.0;
+    let mut f: f32 = 0.0;
+
+    // Default transform-origin is center of the element.
+    let ox = content.width / 2.0;
+    let oy = content.height / 2.0;
+
+    // Translate to origin, apply transforms, translate back.
+    // Pre-translate: shift by -origin.
+    e -= a * ox + b * oy;
+    f -= c * ox + d * oy;
 
     for tf in transforms {
         match tf {
             TransformFunction::Translate(tx, ty) => {
-                dx += tx;
-                dy += ty;
+                e += a * tx + b * ty;
+                f += c * tx + d * ty;
             },
             TransformFunction::Scale(sx, sy) => {
-                // Scale from center: offset by half the size change.
-                let cx = content.width / 2.0;
-                let cy = content.height / 2.0;
-                dx += cx * (1.0 - sx);
-                dy += cy * (1.0 - sy);
+                a *= sx;
+                b *= sy;
+                c *= sx;
+                d *= sy;
             },
-            TransformFunction::Rotate(_) => {
-                // No-op: rotation requires actual backend rotation support.
+            TransformFunction::Rotate(deg) => {
+                let rad = deg.to_radians();
+                let cos = rad.cos();
+                let sin = rad.sin();
+                let na = a * cos + b * sin;
+                let nb = -a * sin + b * cos;
+                let nc = c * cos + d * sin;
+                let nd = -c * sin + d * cos;
+                a = na;
+                b = nb;
+                c = nc;
+                d = nd;
+            },
+            TransformFunction::Skew(ax, ay) => {
+                let tan_x = ax.to_radians().tan();
+                let tan_y = ay.to_radians().tan();
+                let na = a + b * tan_y;
+                let nb = a * tan_x + b;
+                let nc = c + d * tan_y;
+                let nd = c * tan_x + d;
+                a = na;
+                b = nb;
+                c = nc;
+                d = nd;
+            },
+            TransformFunction::Matrix(ma, mb, mc, md, me, mf) => {
+                let na = a * ma + b * mc;
+                let nb = a * mb + b * md;
+                let ne = a * me + b * mf + e;
+                let nc = c * ma + d * mc;
+                let nd = c * mb + d * md;
+                let nf = c * me + d * mf + f;
+                a = na;
+                b = nb;
+                c = nc;
+                d = nd;
+                e = ne;
+                f = nf;
             },
         }
     }
 
-    (base_x + dx as i32, base_y + dy as i32)
+    // Post-translate: shift by +origin.
+    e += a * ox + b * oy;
+    f += c * ox + d * oy;
+
+    // The effective offset is (e, f) from the composed matrix.
+    (base_x + e as i32, base_y + f as i32)
 }
 
 /// Returns `true` if a layout box creates a new stacking context.
@@ -543,6 +612,16 @@ fn creates_stacking_context(layout_box: &LayoutBox) -> bool {
 
     // Non-empty transforms create a stacking context.
     if !style.transforms.is_empty() {
+        return true;
+    }
+
+    // Filters create a stacking context.
+    if !style.filters.is_empty() {
+        return true;
+    }
+
+    // will-change: transform/opacity/filter creates a stacking context.
+    if style.will_change_transform {
         return true;
     }
 

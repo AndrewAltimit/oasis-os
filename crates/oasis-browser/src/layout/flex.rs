@@ -276,7 +276,7 @@ fn resolve_flex_basis(child: &LayoutBox, is_row: bool, containing_width: f32) ->
     match child.style.flex_basis {
         Dimension::Px(px) => px,
         Dimension::Percent(pct) => containing_width * (pct / 100.0),
-        Dimension::Auto => {
+        Dimension::Auto | Dimension::MinContent | Dimension::MaxContent | Dimension::FitContent => {
             // Fall back to width/height property.
             let dim = if is_row {
                 child.style.width
@@ -286,7 +286,7 @@ fn resolve_flex_basis(child: &LayoutBox, is_row: bool, containing_width: f32) ->
             match dim {
                 Dimension::Px(px) => px,
                 Dimension::Percent(pct) => containing_width * (pct / 100.0),
-                Dimension::Auto => 0.0,
+                _ => 0.0,
             }
         },
     }

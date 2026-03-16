@@ -35,7 +35,7 @@ impl Default for BrowserFeatures {
             reader_mode: true,
             sandbox_only: false,
             home_url: "vfs://sites/home/index.html".to_string(),
-            max_cache_mb: 2,
+            max_cache_mb: 8,
         }
     }
 }
@@ -175,7 +175,7 @@ mod tests {
         assert!(cfg.features.reader_mode);
         assert!(!cfg.features.sandbox_only);
         assert_eq!(cfg.features.home_url, "vfs://sites/home/index.html");
-        assert_eq!(cfg.features.max_cache_mb, 2);
+        assert_eq!(cfg.features.max_cache_mb, 8);
         assert_eq!(cfg.url_bar_height, 20);
         assert_eq!(cfg.status_bar_height, 14);
         assert_eq!(cfg.button_width, 20);
@@ -190,8 +190,8 @@ mod tests {
     #[test]
     fn cache_size_bytes_calculation() {
         let cfg = BrowserConfig::default();
-        // 2 MB = 2 * 1024 * 1024 = 2_097_152
-        assert_eq!(cfg.cache_size_bytes(), 2 * 1024 * 1024);
+        // 8 MB = 8 * 1024 * 1024 = 8_388_608
+        assert_eq!(cfg.cache_size_bytes(), 8 * 1024 * 1024);
     }
 
     #[test]

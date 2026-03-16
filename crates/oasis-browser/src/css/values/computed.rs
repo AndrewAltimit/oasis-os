@@ -6,11 +6,11 @@ use oasis_types::backend::Color;
 
 use super::types::{
     AlignContent, AlignItems, AlignSelf, Animation, BackgroundImage, BorderCollapse, BorderStyle,
-    BoxShadow, BoxSizing, Clear, Dimension, Display, FlexDirection, FlexWrap, Float, FontFamily,
-    FontStyle, FontWeight, GridTrackSize, JustifyContent, ListStylePosition, ListStyleType,
-    Overflow, OverflowWrap, Position, ROOT_FONT_SIZE, TextAlign, TextDecoration, TextDirection,
-    TextOverflow, TextShadow, TextTransform, Transition, VerticalAlign, Visibility, WhiteSpace,
-    WordBreak,
+    BoxShadow, BoxSizing, Clear, Dimension, Display, FilterFunction, FlexDirection, FlexWrap,
+    Float, FontFamily, FontStyle, FontWeight, GridTrackSize, JustifyContent, ListStylePosition,
+    ListStyleType, Overflow, OverflowWrap, Position, ROOT_FONT_SIZE, TextAlign, TextDecoration,
+    TextDirection, TextOverflow, TextShadow, TextTransform, TransformOrigin, Transition,
+    VerticalAlign, Visibility, WhiteSpace, WordBreak,
 };
 
 /// Computed style for a DOM node after cascade resolution.
@@ -171,6 +171,29 @@ pub struct ComputedStyle {
 
     // -- Transforms ---------------------------------------------------
     pub transforms: Vec<super::types::TransformFunction>,
+    pub transform_origin: Option<TransformOrigin>,
+
+    // -- Filters -------------------------------------------------------
+    pub filters: Vec<FilterFunction>,
+
+    // -- Counters -------------------------------------------------------
+    pub counter_reset: Vec<(String, i32)>,
+    pub counter_increment: Vec<(String, i32)>,
+
+    // -- Will-change ---------------------------------------------------
+    pub will_change_transform: bool,
+
+    // -- Multi-column ---------------------------------------------------
+    pub column_count: u32,
+    pub column_width: f32,
+
+    // -- Grid extensions ------------------------------------------------
+    pub grid_auto_flow_column: bool,
+    pub grid_template_areas: Vec<Vec<String>>,
+    pub grid_area: Option<String>,
+
+    // -- Table extensions -----------------------------------------------
+    pub table_layout_fixed: bool,
 
     // -- Transitions ---------------------------------------------------
     pub transitions: Vec<Transition>,
@@ -333,6 +356,23 @@ impl Default for ComputedStyle {
             margin_left_pct: None,
 
             transforms: Vec::new(),
+            transform_origin: None,
+
+            filters: Vec::new(),
+
+            counter_reset: Vec::new(),
+            counter_increment: Vec::new(),
+
+            will_change_transform: false,
+
+            column_count: 0,
+            column_width: 0.0,
+
+            grid_auto_flow_column: false,
+            grid_template_areas: Vec::new(),
+            grid_area: None,
+
+            table_layout_fixed: false,
 
             transitions: Vec::new(),
 

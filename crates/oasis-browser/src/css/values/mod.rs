@@ -16,9 +16,10 @@ pub use computed::ComputedStyle;
 pub use types::{
     AlignContent, AlignItems, AlignSelf, Animation, AnimationDirection, AnimationFillMode,
     AnimationPlayState, BackgroundImage, BorderCollapse, BorderStyle, BoxShadow, BoxSizing, Clear,
-    Dimension, Display, FlexDirection, FlexWrap, Float, FontFamily, FontStyle, FontWeight,
-    GradientDirection, GradientStop, GridTrackSize, JustifyContent, LinearGradient,
+    Dimension, Display, FilterFunction, FlexDirection, FlexWrap, Float, FontFamily, FontStyle,
+    FontWeight, GradientDirection, GradientStop, GridTrackSize, JustifyContent, LinearGradient,
     ListStylePosition, ListStyleType, Overflow, OverflowWrap, Position, ROOT_FONT_SIZE, TextAlign,
     TextDecoration, TextDirection, TextOverflow, TextShadow, TextTransform, TimingFunction,
-    TransformFunction, Transition, VerticalAlign, Visibility, WhiteSpace, WordBreak,
+    TransformFunction, TransformOrigin, Transition, VerticalAlign, Visibility, WhiteSpace,
+    WordBreak,
 };

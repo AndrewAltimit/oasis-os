@@ -54,6 +54,9 @@ pub(super) fn resolve_length(value: &CssValue, parent_font_size: f32) -> f32 {
 pub(super) fn resolve_dimension(value: &CssValue, parent_font_size: f32) -> Dimension {
     match value {
         CssValue::Keyword(kw) if kw == "auto" => Dimension::Auto,
+        CssValue::Keyword(kw) if kw == "min-content" => Dimension::MinContent,
+        CssValue::Keyword(kw) if kw == "max-content" => Dimension::MaxContent,
+        CssValue::Keyword(kw) if kw == "fit-content" => Dimension::FitContent,
         CssValue::Percentage(p) => Dimension::Percent(*p),
         CssValue::Length(n, LengthUnit::Px) => Dimension::Px(*n),
         CssValue::Length(n, LengthUnit::Em) => Dimension::Px(*n * parent_font_size),

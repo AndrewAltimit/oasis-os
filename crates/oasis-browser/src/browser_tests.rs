@@ -75,7 +75,7 @@ fn default_config_creation() {
     assert_eq!(config.status_bar_height, 14);
     assert_eq!(config.button_width, 20);
     assert_eq!(config.features.home_url, "vfs://sites/home/index.html");
-    assert_eq!(config.cache_size_bytes(), 2 * 1024 * 1024);
+    assert_eq!(config.cache_size_bytes(), 8 * 1024 * 1024);
     assert_eq!(config.content_height(272), 238);
 }
 
