@@ -527,8 +527,6 @@ pub(crate) struct StreamingBuffer {
     /// Whether sliding-window eviction is active. Starts `false` to allow
     /// the demuxer to `read_to_end` + `seek(Start(0))` without data loss.
     pub(crate) eviction_enabled: std::sync::Arc<std::sync::atomic::AtomicBool>,
-    /// Whether we've logged a "waiting for data" message (avoids log spam).
-    logged_wait: bool,
     /// Last time a "waiting for data" message was logged (rate-limits spam).
     last_wait_log: Option<std::time::Instant>,
     /// Cached header (ftyp) data — once set it never changes, so reads from
@@ -546,7 +544,6 @@ impl StreamingBuffer {
             inner,
             pos: 0,
             eviction_enabled: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
-            logged_wait: false,
             last_wait_log: None,
             cached_header: None,
             cached_moov: None,
@@ -733,17 +730,12 @@ impl std::io::Read for StreamingBuffer {
                 break 0; // EOF
             }
 
-            // Log once when first entering a wait state, then rate-limit
-            // to every 2 seconds to avoid spamming when the decoder is
-            // continuously starved by a slow download.
-            let should_log = if !self.logged_wait {
-                self.logged_wait = true;
-                true
-            } else {
-                self.last_wait_log
-                    .is_none_or(|t| t.elapsed().as_millis() >= 2000)
-            };
-            if should_log {
+            // Rate-limit "waiting for data" logs to every 2 seconds.
+            // Purely time-based to avoid spam from rapid seek+read cycles.
+            if self
+                .last_wait_log
+                .is_none_or(|t| t.elapsed().as_millis() >= 2000)
+            {
                 log::info!(
                     "TV: StreamingBuffer waiting for data at {:.1}MB \
                      (buffer: {:.1}MB..{:.1}MB, {:.1}MB available)",
@@ -834,7 +826,6 @@ impl std::io::Seek for StreamingBuffer {
 
         let old_pos = self.pos;
         self.pos = new_pos as u64;
-        self.logged_wait = false; // reset so next wait/gap is logged
 
         // Update decoder_pos on seek (when not in probe mode) so the
         // throttle logic knows where the decoder needs data.  Without
