@@ -40,9 +40,6 @@ pub(crate) struct SlidingState {
     pub(crate) buf: Vec<u8>,
     /// File offset of `buf[0]`. Increases as old data is evicted.
     pub(crate) base_offset: u64,
-    /// Total bytes received from the network so far (monotonically increasing,
-    /// never decremented by eviction).
-    pub(crate) bytes_received: u64,
     /// Retained moov atom -- copied out so it survives eviction.
     /// `(file_offset, data)`.  Wrapped in `Arc` to avoid redundant
     /// multi-MB clones when multiple callers read the moov data.
@@ -63,6 +60,10 @@ pub(crate) struct StreamingInner {
     pub(crate) state: std::sync::Mutex<SlidingState>,
     /// Total content length from HTTP Content-Length header.
     pub(crate) total_size: std::sync::atomic::AtomicU64,
+    /// Total bytes received from the network so far (monotonically increasing,
+    /// never decremented by eviction).  Atomic to avoid locking the state
+    /// mutex for progress/throttle checks (hot path).
+    pub(crate) bytes_received: std::sync::atomic::AtomicU64,
     /// Whether the download is complete (all data received).
     done: std::sync::atomic::AtomicBool,
     /// Whether this session has been cancelled (new channel tuned).
@@ -85,15 +86,15 @@ impl StreamingInner {
     pub(crate) fn new() -> Self {
         Self {
             state: std::sync::Mutex::new(SlidingState {
-                buf: Vec::with_capacity(4 * 1024 * 1024),
+                buf: Vec::with_capacity(8 * 1024 * 1024),
                 base_offset: 0,
-                bytes_received: 0,
                 moov: None,
                 header: None,
                 atoms: Vec::new(),
                 atoms_scanned_to: 0,
             }),
             total_size: std::sync::atomic::AtomicU64::new(0),
+            bytes_received: std::sync::atomic::AtomicU64::new(0),
             done: std::sync::atomic::AtomicBool::new(false),
             cancelled: std::sync::atomic::AtomicBool::new(false),
             error: std::sync::Mutex::new(None),
@@ -108,13 +109,17 @@ impl StreamingInner {
     pub(crate) fn push(&self, chunk: &[u8]) {
         let mut s = self.state.lock().unwrap_or_else(|e| e.into_inner());
         s.buf.extend_from_slice(chunk);
-        s.bytes_received += chunk.len() as u64;
+
+        // Update the atomic counter (lock-free reads by throttle/progress).
+        let received = self
+            .bytes_received
+            .fetch_add(chunk.len() as u64, std::sync::atomic::Ordering::Release)
+            + chunk.len() as u64;
 
         // Scan for top-level MP4 atom headers in newly arrived data.
         Self::scan_atoms(&mut s);
 
         // Log progress periodically (every 4MB).
-        let received = s.bytes_received;
         let buf_len = s.buf.len();
         if received.is_multiple_of(4 * 1024 * 1024) {
             let total = self.total_size.load(std::sync::atomic::Ordering::Relaxed);
@@ -315,11 +320,10 @@ impl StreamingInner {
     }
 
     /// Total bytes received (for progress/logging).
+    /// Lock-free read from the atomic counter.
     pub(crate) fn bytes_received(&self) -> u64 {
-        self.state
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .bytes_received
+        self.bytes_received
+            .load(std::sync::atomic::Ordering::Acquire)
     }
 
     /// Whether download is complete.
@@ -446,15 +450,27 @@ impl StreamingInner {
 
     /// Returns `true` if the download is far enough ahead of the decoder
     /// that it should pause to avoid unbounded memory growth.
+    ///
+    /// Uses only atomic loads for the fast path (decoder active). Falls back
+    /// to locking the state mutex only when `decoder_pos == 0` and we need
+    /// to check `has_moov` and `buf_size`.
     pub(crate) fn should_throttle(&self) -> bool {
+        let decoder = self.decoder_pos.load(std::sync::atomic::Ordering::Acquire);
+        let received = self
+            .bytes_received
+            .load(std::sync::atomic::Ordering::Acquire);
+
+        if decoder > 0 {
+            // Fast path: entirely lock-free.
+            return received > decoder + MAX_LOOKAHEAD;
+        }
+
+        // Slow path: need moov/buf_size from state (only during init).
         let s = self.state.lock().unwrap_or_else(|e| e.into_inner());
         let buf_size = s.buf.len() as u64;
         let has_moov = s.moov.is_some();
-        let received = s.bytes_received;
         drop(s);
-
-        let decoder = self.decoder_pos.load(std::sync::atomic::Ordering::Acquire);
-        should_throttle_pure(decoder, received, has_moov, buf_size)
+        has_moov && buf_size > MAX_LOOKAHEAD
     }
 }
 
@@ -462,7 +478,7 @@ impl StreamingInner {
 ///
 /// - `decoder_pos > 0`: throttle if `received > decoder_pos + MAX_LOOKAHEAD`
 /// - `decoder_pos == 0`: throttle if moov found AND `buf_size > MAX_LOOKAHEAD`
-#[cfg(feature = "_video")]
+#[cfg(all(test, feature = "_video"))]
 pub(crate) fn should_throttle_pure(
     decoder_pos: u64,
     bytes_received: u64,
@@ -511,8 +527,8 @@ pub(crate) struct StreamingBuffer {
     /// Whether sliding-window eviction is active. Starts `false` to allow
     /// the demuxer to `read_to_end` + `seek(Start(0))` without data loss.
     pub(crate) eviction_enabled: std::sync::Arc<std::sync::atomic::AtomicBool>,
-    /// Whether we've logged a "waiting for data" message (avoids log spam).
-    logged_wait: bool,
+    /// Last time a "waiting for data" message was logged (rate-limits spam).
+    last_wait_log: Option<std::time::Instant>,
     /// Cached header (ftyp) data — once set it never changes, so reads from
     /// the header region can be served without acquiring the state mutex.
     cached_header: Option<Vec<u8>>,
@@ -528,7 +544,7 @@ impl StreamingBuffer {
             inner,
             pos: 0,
             eviction_enabled: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
-            logged_wait: false,
+            last_wait_log: None,
             cached_header: None,
             cached_moov: None,
         }
@@ -539,6 +555,12 @@ impl StreamingBuffer {
     /// Eviction is ONLY active after `on_init` enables it (post-demuxer probe).
     /// During init the demuxer does `read_to_end()` + `seek(0)`, so ALL data
     /// must remain in the buffer -- evicting early breaks format probing.
+    ///
+    /// Uses a 2x RETAIN_BEHIND threshold to batch evictions: the cursor must
+    /// be at least 2 * RETAIN_BEHIND into the buffer before eviction triggers.
+    /// This reduces lock acquisition frequency (evictions are ~50% less
+    /// frequent) and each eviction shifts a larger block, amortizing the
+    /// `copy_within` cost.
     pub(crate) fn maybe_evict(&self) {
         if !self
             .eviction_enabled
@@ -549,7 +571,9 @@ impl StreamingBuffer {
 
         let mut s = self.inner.state.lock().unwrap_or_else(|e| e.into_inner());
         let cursor_in_buf = self.pos.saturating_sub(s.base_offset) as usize;
-        if cursor_in_buf > RETAIN_BEHIND {
+        // Only evict when cursor is 2x RETAIN_BEHIND into the buffer to
+        // batch evictions and reduce lock/memcpy frequency.
+        if cursor_in_buf > RETAIN_BEHIND * 2 {
             let evict = cursor_in_buf - RETAIN_BEHIND;
             let evict = evict.min(s.buf.len());
             if evict > 0 {
@@ -706,8 +730,12 @@ impl std::io::Read for StreamingBuffer {
                 break 0; // EOF
             }
 
-            // Log once when first entering a wait state.
-            if !self.logged_wait {
+            // Rate-limit "waiting for data" logs to every 2 seconds.
+            // Purely time-based to avoid spam from rapid seek+read cycles.
+            if self
+                .last_wait_log
+                .is_none_or(|t| t.elapsed().as_millis() >= 2000)
+            {
                 log::info!(
                     "TV: StreamingBuffer waiting for data at {:.1}MB \
                      (buffer: {:.1}MB..{:.1}MB, {:.1}MB available)",
@@ -716,7 +744,7 @@ impl std::io::Read for StreamingBuffer {
                     buf_end as f64 / (1024.0 * 1024.0),
                     s.buf.len() as f64 / (1024.0 * 1024.0),
                 );
-                self.logged_wait = true;
+                self.last_wait_log = Some(std::time::Instant::now());
             }
 
             // Block until more data arrives.
@@ -738,10 +766,16 @@ impl std::io::Read for StreamingBuffer {
                 .probe_mode
                 .load(std::sync::atomic::Ordering::Acquire)
         {
-            self.inner
+            let old_pos = self
+                .inner
                 .decoder_pos
-                .store(self.pos, std::sync::atomic::Ordering::Release);
+                .swap(self.pos, std::sync::atomic::Ordering::Release);
             self.maybe_evict();
+            // Notify the download thread if decoder advanced significantly
+            // (>256KB) so throttle-sleeping threads wake up promptly.
+            if self.pos.saturating_sub(old_pos) > 256 * 1024 {
+                self.inner.condvar.notify_all();
+            }
         }
 
         Ok(n)
@@ -792,7 +826,25 @@ impl std::io::Seek for StreamingBuffer {
 
         let old_pos = self.pos;
         self.pos = new_pos as u64;
-        self.logged_wait = false; // reset so next wait/gap is logged
+
+        // Update decoder_pos on seek (when not in probe mode) so the
+        // throttle logic knows where the decoder needs data.  Without
+        // this, decoder_pos stays at 0 after a seek, causing the
+        // throttle to cap the buffer at MAX_LOOKAHEAD while the decoder
+        // is blocked waiting for data far beyond the buffer end.
+        if !self
+            .inner
+            .probe_mode
+            .load(std::sync::atomic::Ordering::Acquire)
+        {
+            self.inner
+                .decoder_pos
+                .store(self.pos, std::sync::atomic::Ordering::Release);
+            // Wake the download thread so it can re-check throttle
+            // with the updated decoder_pos.
+            self.inner.condvar.notify_all();
+        }
+
         // Log significant seeks (> 1MB jump) for debugging streaming issues.
         let jump = self.pos.abs_diff(old_pos);
         if jump > 1024 * 1024 {

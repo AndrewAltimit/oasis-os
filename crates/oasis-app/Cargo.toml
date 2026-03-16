@@ -26,16 +26,16 @@ name = "e2e-tests"
 path = "src/e2e_tests.rs"
 
 [features]
-default = ["javascript", "video-decode"]
+default = ["javascript", "video-decode-ffmpeg"]
 javascript = ["oasis-core/javascript"]
 # Internal: oasis-video is available. Activated by video-decode or video-decode-ffmpeg.
 _video = ["dep:oasis-video"]
-# Software decode via openh264 (Baseline profile). Default for CI where
-# ffmpeg dev libraries are not installed.
+# Software decode via openh264 (Baseline profile only). Fallback for
+# environments without ffmpeg dev libraries (e.g. embedded, PSP).
+# Build: cargo build -p oasis-app --no-default-features --features video-decode,javascript
 video-decode = ["_video", "oasis-video/h264"]
 # Full decode via system ffmpeg (Main/High profile, SIMD-optimized).
-# Recommended for desktop use — requires libavcodec-dev etc. on the system.
-# Build: cargo build -p oasis-app --no-default-features --features video-decode-ffmpeg,javascript
+# Default for desktop — requires libavcodec-dev etc. on the system.
 video-decode-ffmpeg = ["_video", "oasis-video/ffmpeg"]
 
 [dependencies]

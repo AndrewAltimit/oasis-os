@@ -7,7 +7,7 @@ use super::streaming_buffer::{SlidingState, StreamingInner, linear_seek_interpol
 /// Time without receiving any body bytes before we consider the connection
 /// stalled and attempt a reconnect (inspired by ffmpeg's `reconnect_on_http`).
 #[cfg(feature = "_video")]
-const STALL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+const STALL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(3);
 
 /// Maximum number of reconnect attempts on a stalled Range download.
 #[cfg(feature = "_video")]
@@ -25,6 +25,10 @@ pub(crate) const SHORT_SEEK_THRESHOLD: u64 = 4 * 1024 * 1024; // 4 MB
 /// from malicious or broken servers sending endless header data).
 #[cfg(feature = "_video")]
 const MAX_HEADER_SIZE: usize = 64 * 1024; // 64 KB
+
+/// Maximum WouldBlock backoff (8ms). Caps the exponential growth.
+#[cfg(feature = "_video")]
+const MAX_WOULD_BLOCK_BACKOFF_MS: u64 = 8;
 
 /// Check if an I/O error is a WouldBlock (non-blocking socket not ready).
 #[cfg(feature = "_video")]
@@ -182,7 +186,11 @@ fn fetch_range_inner(
 /// Check if a moov-at-start file should restart download from a seek position.
 /// Returns `Some(byte_offset)` if restart is worthwhile.
 #[cfg(feature = "_video")]
-pub(crate) fn check_moov_at_start_restart(s: &SlidingState, seek_secs: u64) -> Option<u64> {
+pub(crate) fn check_moov_at_start_restart(
+    s: &SlidingState,
+    seek_secs: u64,
+    bytes_received: u64,
+) -> Option<u64> {
     let moov_data = s.moov.as_ref().map(|(_, d)| d)?;
 
     // Compute seek position two ways and take the minimum.
@@ -233,7 +241,7 @@ pub(crate) fn check_moov_at_start_restart(s: &SlidingState, seek_secs: u64) -> O
     };
 
     // Clamp seek byte to file boundaries.
-    let total = s.bytes_received.max(
+    let total = bytes_received.max(
         s.atoms
             .iter()
             .map(|(off, sz, _)| off + sz)
@@ -245,7 +253,7 @@ pub(crate) fn check_moov_at_start_restart(s: &SlidingState, seek_secs: u64) -> O
     // to find sync points -- its internal seek may land somewhat before
     // our estimate.
     let start_from = seek_byte.saturating_sub(2 * 1024 * 1024);
-    let downloaded = s.bytes_received;
+    let downloaded = bytes_received;
     if start_from > downloaded + SHORT_SEEK_THRESHOLD {
         log::info!(
             "TV: moov-at-start: seek={seek_secs}s -> byte ~{:.1}MB \
@@ -372,7 +380,8 @@ pub(crate) fn parse_tail_for_moov(
         s.moov = Some((file_off, std::sync::Arc::clone(&moov_arc)));
         // Set base_offset so the main download loop knows where
         // to restart from (checked via `restart_offset`).
-        if start_from > s.bytes_received + SHORT_SEEK_THRESHOLD {
+        let received = buffer.bytes_received();
+        if start_from > received + SHORT_SEEK_THRESHOLD {
             // Retain file header (ftyp + mdat header) for symphonia
             // probe.  Upgrade if current header is smaller.
             if !s.buf.is_empty() {
@@ -383,7 +392,9 @@ pub(crate) fn parse_tail_for_moov(
                 }
             }
             s.base_offset = start_from;
-            s.bytes_received = start_from;
+            buffer
+                .bytes_received
+                .store(start_from, std::sync::atomic::Ordering::Release);
             s.buf.clear();
         }
         drop(s);
@@ -665,10 +676,11 @@ pub(crate) fn stream_download_range(
             "TV: range body loop starting at {:.1}MB (reconnect {reconnects})",
             current_offset as f64 / (1024.0 * 1024.0),
         );
-        let mut buf = [0u8; 8192];
+        let mut buf = [0u8; 65536];
         let mut last_data_time = std::time::Instant::now();
         let mut was_throttled = false;
         let mut first_data_logged = current_offset > start_offset;
+        let mut wb_backoff_ms = 1u64;
 
         loop {
             if buffer.is_cancelled() {
@@ -696,7 +708,13 @@ pub(crate) fn stream_download_range(
                     drop(stream);
                     continue 'outer;
                 }
-                std::thread::sleep(std::time::Duration::from_millis(100));
+                // Use condvar wait so the decoder can wake us immediately
+                // when it catches up, instead of fixed 100ms sleep.
+                let s = buffer.state.lock().unwrap_or_else(|e| e.into_inner());
+                let _guard = buffer
+                    .condvar
+                    .wait_timeout(s, std::time::Duration::from_millis(50))
+                    .unwrap_or_else(|e| e.into_inner());
                 was_throttled = true;
                 continue;
             }
@@ -728,6 +746,7 @@ pub(crate) fn stream_download_range(
                     current_offset += n as u64;
                     buffer.push(&buf[..n]);
                     last_data_time = std::time::Instant::now();
+                    wb_backoff_ms = 1; // reset backoff on data
                 },
                 Err(e) => {
                     if is_would_block(&e) {
@@ -755,7 +774,8 @@ pub(crate) fn stream_download_range(
                             drop(stream);
                             continue 'outer;
                         }
-                        std::thread::sleep(std::time::Duration::from_millis(1));
+                        std::thread::sleep(std::time::Duration::from_millis(wb_backoff_ms));
+                        wb_backoff_ms = (wb_backoff_ms * 2).min(MAX_WOULD_BLOCK_BACKOFF_MS);
                         continue;
                     }
                     // Hard error -- try reconnect or finish.
@@ -853,9 +873,9 @@ fn stream_download_inner(
         }
     }
 
-    // Read HTTP headers.
+    // Read HTTP headers (and body — reuses the same buffer).
     let mut header_buf = Vec::with_capacity(4096);
-    let mut buf = [0u8; 8192];
+    let mut buf = [0u8; 65536];
     let mut deadline = std::time::Instant::now() + std::time::Duration::from_secs(120);
 
     let (header_end, leftover_start) = loop {
@@ -922,10 +942,15 @@ fn stream_download_inner(
     let content_length: u64 = header_str
         .lines()
         .find_map(|line| {
-            let lower = line.to_ascii_lowercase();
-            lower
-                .strip_prefix("content-length:")
-                .and_then(|v| v.trim().parse().ok())
+            // Case-insensitive prefix match without allocation.
+            if line.len() > 15
+                && line.as_bytes()[14] == b':'
+                && line[..14].eq_ignore_ascii_case("content-length")
+            {
+                line[15..].trim().parse().ok()
+            } else {
+                None
+            }
         })
         .unwrap_or(0);
 
@@ -955,6 +980,7 @@ fn stream_download_inner(
     const TAIL_PROBE_THRESHOLD: u64 = 8 * 1024 * 1024;
 
     // Stream remaining body into the shared buffer.
+    let mut wb_backoff_ms = 1u64;
     loop {
         if buffer.is_cancelled() {
             log::info!("TV: download cancelled");
@@ -981,7 +1007,7 @@ fn stream_download_inner(
                         Some(s.base_offset)
                     } else {
                         // moov found at start -- check if seek position is far ahead.
-                        check_moov_at_start_restart(&s, seek_secs)
+                        check_moov_at_start_restart(&s, seek_secs, buffer.bytes_received())
                     };
                     if let Some(start_from) = start_from {
                         // Retain header for symphonia probe after restart.
@@ -994,7 +1020,9 @@ fn stream_download_inner(
                             }
                         }
                         s.base_offset = start_from;
-                        s.bytes_received = start_from;
+                        buffer
+                            .bytes_received
+                            .store(start_from, std::sync::atomic::Ordering::Release);
                         s.buf.clear();
                     }
                     start_from
@@ -1098,8 +1126,14 @@ fn stream_download_inner(
         }
 
         // Backpressure: pause downloading when buffer is far ahead of decoder.
+        // Use condvar-based wait so the decoder can wake us immediately
+        // instead of sleeping a fixed 100ms.
         if buffer.should_throttle() {
-            std::thread::sleep(std::time::Duration::from_millis(100));
+            let s = buffer.state.lock().unwrap_or_else(|e| e.into_inner());
+            let _guard = buffer
+                .condvar
+                .wait_timeout(s, std::time::Duration::from_millis(50))
+                .unwrap_or_else(|e| e.into_inner());
             continue;
         }
 
@@ -1111,6 +1145,7 @@ fn stream_download_inner(
             Ok(0) => break,
             Ok(n) => {
                 buffer.push(&buf[..n]);
+                wb_backoff_ms = 1; // reset backoff on successful data
                 // Reset deadline on successful data receipt so long
                 // videos (and intentional throttle pauses) don't hit the
                 // timeout.
@@ -1118,7 +1153,8 @@ fn stream_download_inner(
             },
             Err(e) => {
                 if is_would_block(&e) {
-                    std::thread::sleep(std::time::Duration::from_millis(1));
+                    std::thread::sleep(std::time::Duration::from_millis(wb_backoff_ms));
+                    wb_backoff_ms = (wb_backoff_ms * 2).min(MAX_WOULD_BLOCK_BACKOFF_MS);
                     continue;
                 }
                 if buffer.bytes_received() > 0 {

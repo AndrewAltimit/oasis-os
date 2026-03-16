@@ -893,6 +893,12 @@ impl VideoPlayer {
         (self.current_texture, audio)
     }
 
+    /// Remove and return the current texture without destroying it.
+    /// Used by auto-advance to preserve the last frame during retune.
+    pub fn take_texture(&mut self) -> Option<TextureId> {
+        self.current_texture.take()
+    }
+
     /// Stop playback and clean up all resources.
     pub fn stop(&mut self, backend: &mut impl SdiBackend) {
         if let Some(tex) = self.current_texture.take() {
@@ -914,6 +920,15 @@ impl VideoPlayer {
     /// Number of frames displayed so far (for diagnostics).
     pub fn displayed_frames(&self) -> u64 {
         self.displayed_frames
+    }
+
+    /// How long the player was active (wall-clock seconds since first frame).
+    /// Returns 0.0 if playback hasn't started yet.
+    #[cfg(feature = "_video")]
+    pub fn playback_duration_secs(&self) -> f64 {
+        self.playback_start
+            .map(|s| s.elapsed().as_secs_f64())
+            .unwrap_or(0.0)
     }
 
     /// Internal cleanup: kill processes / signal threads, clear channels.

@@ -30,6 +30,12 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     libpulse-dev \
     libdbus-1-dev \
     libudev-dev \
+    libavcodec-dev \
+    libavformat-dev \
+    libavutil-dev \
+    libswscale-dev \
+    libswresample-dev \
+    libclang-dev \
     valgrind \
     && rm -rf /var/lib/apt/lists/*
 
