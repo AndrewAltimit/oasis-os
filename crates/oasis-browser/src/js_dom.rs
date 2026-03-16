@@ -477,7 +477,9 @@ fn install_document_global_full(
                 if id >= doc.nodes.len() {
                     return NO_NODE;
                 }
-                let parsed = parse_simple_selector(&sel);
+                let Some(parsed) = crate::css::parser::parse_selector_string(&sel) else {
+                    return NO_NODE;
+                };
                 find_matching(&doc, id, &parsed, true)
                     .into_iter()
                     .next()
@@ -497,7 +499,9 @@ fn install_document_global_full(
                 if id >= doc.nodes.len() {
                     return Vec::new();
                 }
-                let parsed = parse_simple_selector(&sel);
+                let Some(parsed) = crate::css::parser::parse_selector_string(&sel) else {
+                    return Vec::new();
+                };
                 find_matching(&doc, id, &parsed, false)
                     .into_iter()
                     .map(|n| n as i32)
@@ -849,96 +853,32 @@ fn deep_copy_node(src: &Document, dst: &mut Document, src_id: NodeId) -> NodeId 
 }
 
 // ------------------------------------------------------------------
-// Simple CSS selector matching for querySelector
+// CSS selector matching for querySelector / querySelectorAll
 // ------------------------------------------------------------------
 
-/// A parsed simple selector for querySelector matching.
-struct SimpleSelector {
-    tag: Option<String>,
-    id: Option<String>,
-    classes: Vec<String>,
-}
-
-/// Parse a simple CSS selector string into its components.
-///
-/// Supports: tag, .class, #id, and combinations like `div.foo#bar`.
-fn parse_simple_selector(sel: &str) -> SimpleSelector {
-    let mut tag = None;
-    let mut id = None;
-    let mut classes = Vec::new();
-
-    let sel = sel.trim();
-    if sel.is_empty() {
-        return SimpleSelector { tag, id, classes };
-    }
-
-    // Split on '#' and '.' boundaries while preserving delimiters.
-    let mut tokens: Vec<(char, String)> = Vec::new();
-    let mut current = String::new();
-    let mut kind = 't'; // 't' = tag, '#' = id, '.' = class
-    for ch in sel.chars() {
-        if ch == '#' || ch == '.' {
-            if !current.is_empty() {
-                tokens.push((kind, current.clone()));
-                current.clear();
-            }
-            kind = ch;
-        } else {
-            current.push(ch);
-        }
-    }
-    if !current.is_empty() {
-        tokens.push((kind, current));
-    }
-
-    for (k, val) in tokens {
-        match k {
-            't' => tag = Some(val.to_ascii_lowercase()),
-            '#' => id = Some(val),
-            '.' => classes.push(val),
-            _ => {},
-        }
-    }
-
-    SimpleSelector { tag, id, classes }
-}
-
-/// Test whether an element matches a parsed simple selector.
-fn matches_simple_sel(elem: &ElementData, sel: &SimpleSelector) -> bool {
-    if let Some(ref t) = sel.tag
-        && !elem.tag.as_str().eq_ignore_ascii_case(t)
-    {
-        return false;
-    }
-    if let Some(ref sel_id) = sel.id
-        && elem.id() != Some(sel_id.as_str())
-    {
-        return false;
-    }
-    for cls in &sel.classes {
-        if !elem.has_class(cls) {
-            return false;
-        }
-    }
-    true
-}
-
 /// Walk the subtree rooted at `root` (excluding `root` itself)
-/// and collect matching element node IDs. If `first_only` is true,
-/// stop after the first match.
+/// and collect element node IDs that match any selector in `sel_list`.
+/// If `first_only` is true, stop after the first match.
 fn find_matching(
     doc: &Document,
     root: NodeId,
-    sel: &SimpleSelector,
+    sel_list: &crate::css::parser::SelectorList,
     first_only: bool,
 ) -> Vec<NodeId> {
+    use crate::css::cascade::CascadeContext;
+    use crate::css::cascade::matching::matches_selector;
+
+    let ctx = CascadeContext::default();
     let mut results = Vec::new();
     let mut stack: Vec<NodeId> = doc.nodes[root].children.clone();
     // Reverse so we process in document order (left to right).
     stack.reverse();
     while let Some(nid) = stack.pop() {
-        if let NodeKind::Element(ref e) = doc.nodes[nid].kind
-            && matches_simple_sel(e, sel)
+        if matches!(doc.nodes[nid].kind, NodeKind::Element(_))
+            && sel_list
+                .selectors
+                .iter()
+                .any(|sel| matches_selector(doc, nid, sel, &ctx))
         {
             results.push(nid);
             if first_only {
@@ -1099,6 +1039,61 @@ const JS_DOM_BOOTSTRAP: &str = r#"
       },
       enumerable: true
     },
+    parentNode: {
+      get: function() {
+        var pid = __oasis_parent(this.__oasis_node_id);
+        return pid >= 0 ? new Element(pid) : null;
+      },
+      enumerable: true
+    },
+    firstChild: {
+      get: function() {
+        var ids = __oasis_children(this.__oasis_node_id);
+        return ids.length > 0 ? new Element(ids[0]) : null;
+      },
+      enumerable: true
+    },
+    lastChild: {
+      get: function() {
+        var ids = __oasis_children(this.__oasis_node_id);
+        return ids.length > 0 ? new Element(ids[ids.length - 1]) : null;
+      },
+      enumerable: true
+    },
+    childNodes: {
+      get: function() {
+        var ids = __oasis_children(this.__oasis_node_id);
+        var result = [];
+        for (var i = 0; i < ids.length; i++)
+          result.push(new Element(ids[i]));
+        return result;
+      },
+      enumerable: true
+    },
+    nextSibling: {
+      get: function() {
+        var pid = __oasis_parent(this.__oasis_node_id);
+        if (pid < 0) return null;
+        var siblings = __oasis_children(pid);
+        for (var i = 0; i < siblings.length - 1; i++) {
+          if (siblings[i] === this.__oasis_node_id) return new Element(siblings[i + 1]);
+        }
+        return null;
+      },
+      enumerable: true
+    },
+    previousSibling: {
+      get: function() {
+        var pid = __oasis_parent(this.__oasis_node_id);
+        if (pid < 0) return null;
+        var siblings = __oasis_children(pid);
+        for (var i = 1; i < siblings.length; i++) {
+          if (siblings[i] === this.__oasis_node_id) return new Element(siblings[i - 1]);
+        }
+        return null;
+      },
+      enumerable: true
+    },
     innerHTML: {
       get: function() {
         return __oasis_inner_html(this.__oasis_node_id);
@@ -1136,17 +1131,39 @@ const JS_DOM_BOOTSTRAP: &str = r#"
     },
     style: {
       get: function() {
-        var self = this;
-        return {
+        var nid = this.__oasis_node_id;
+        // Proxy-like object: direct property access (e.g. .color)
+        // maps to CSS property names via camelCase-to-kebab conversion.
+        return new Proxy({
           setProperty: function(p, v) {
-            __oasis_style_set(
-              self.__oasis_node_id, p, String(v)
-            );
+            __oasis_style_set(nid, p, String(v));
           },
           getPropertyValue: function(p) {
-            return __oasis_style_get(self.__oasis_node_id, p);
+            return __oasis_style_get(nid, p);
           }
-        };
+        }, {
+          set: function(target, prop, value) {
+            if (typeof prop === 'string') {
+              var css_prop = prop.replace(
+                /[A-Z]/g,
+                function(m) { return '-' + m.toLowerCase(); }
+              );
+              __oasis_style_set(nid, css_prop, String(value));
+            }
+            return true;
+          },
+          get: function(target, prop) {
+            if (typeof target[prop] === 'function') return target[prop];
+            if (typeof prop === 'string') {
+              var css_prop = prop.replace(
+                /[A-Z]/g,
+                function(m) { return '-' + m.toLowerCase(); }
+              );
+              return __oasis_style_get(nid, css_prop);
+            }
+            return undefined;
+          }
+        });
       },
       enumerable: true
     }
@@ -1308,6 +1325,29 @@ const JS_DOM_BOOTSTRAP: &str = r#"
       enumerable: true
     }
   });
+
+  // Give document event listener support.
+  var __doc_listeners = {};
+  document.addEventListener = function(type, fn) {
+    if (!__doc_listeners[type]) __doc_listeners[type] = [];
+    __doc_listeners[type].push(fn);
+  };
+  document.removeEventListener = function(type, fn) {
+    if (!__doc_listeners[type]) return;
+    __doc_listeners[type] = __doc_listeners[type].filter(function(f) {
+      return f !== fn;
+    });
+  };
+  document.dispatchEvent = function(evt) {
+    var type = evt && evt.type ? evt.type : evt;
+    var fns = __doc_listeners[type];
+    if (fns) for (var i = 0; i < fns.length; i++) fns[i](evt);
+  };
+
+  // Minimal Event constructor for DOMContentLoaded etc.
+  if (typeof Event === 'undefined') {
+    globalThis.Event = function(type) { this.type = type; };
+  }
 
   globalThis.document = document;
   globalThis.Element = Element;

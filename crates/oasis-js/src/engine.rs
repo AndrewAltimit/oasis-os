@@ -1,5 +1,6 @@
 use std::cell::RefCell;
 use std::rc::Rc;
+use std::time::Instant;
 
 use rquickjs::{Context, Runtime};
 
@@ -7,6 +8,9 @@ use crate::console::{ConsoleBuffer, ConsoleEntry, ConsoleLevel};
 use crate::fetch::{FetchHandler, SharedFetchHandler};
 use crate::storage::{LocalStorage, SharedStorage};
 use crate::timers::TimerQueue;
+
+/// Default maximum JS execution time per eval call (5 seconds).
+const DEFAULT_MAX_EXEC_MS: u64 = 5_000;
 
 /// A simple representation of a JavaScript return value.
 #[derive(Debug, Clone, PartialEq)]
@@ -33,12 +37,14 @@ pub struct JsError {
 /// `console_output` / `take_console_output` for reading buffered
 /// `console.log` (etc.) output.
 pub struct JsEngine {
-    _runtime: Runtime,
+    runtime: Runtime,
     context: Context,
     console_buf: ConsoleBuffer,
     timer_queue: Rc<RefCell<TimerQueue>>,
     storage: SharedStorage,
     fetch_handler: SharedFetchHandler,
+    /// Maximum execution time per eval call in milliseconds.
+    max_exec_ms: u64,
 }
 
 impl JsEngine {
@@ -81,18 +87,35 @@ impl JsEngine {
             })?;
 
         Ok(Self {
-            _runtime: runtime,
+            runtime,
             context,
             console_buf,
             timer_queue,
             storage,
             fetch_handler,
+            max_exec_ms: DEFAULT_MAX_EXEC_MS,
         })
     }
 
+    /// Set the maximum execution time per eval call in milliseconds.
+    ///
+    /// Scripts exceeding this limit are interrupted with an error.
+    /// Default is 5000ms (5 seconds).
+    pub fn set_max_exec_ms(&mut self, ms: u64) {
+        self.max_exec_ms = ms;
+    }
+
     /// Evaluate a JavaScript source string and return the result.
+    ///
+    /// Execution is interrupted if it exceeds the configured time limit
+    /// (default 5s), preventing infinite loops from freezing the host.
     pub fn eval(&self, script: &str) -> Result<JsValue, JsError> {
-        self.context.with(|ctx| {
+        // Install a time-based interrupt handler.
+        let deadline = Instant::now() + std::time::Duration::from_millis(self.max_exec_ms);
+        self.runtime
+            .set_interrupt_handler(Some(Box::new(move || Instant::now() >= deadline)));
+
+        let result = self.context.with(|ctx| {
             let result: Result<rquickjs::Value<'_>, rquickjs::Error> = ctx.eval(script);
             // Drain microtask queue (promise callbacks) after eval.
             while ctx.execute_pending_job() {}
@@ -107,7 +130,11 @@ impl JsEngine {
                     Err(js_err)
                 },
             }
-        })
+        });
+
+        // Clear the interrupt handler after execution.
+        self.runtime.set_interrupt_handler(None);
+        result
     }
 
     /// Evaluate multiple scripts in document order, returning a result
@@ -585,5 +612,29 @@ mod tests {
             out.iter().any(|e| e.message == "caught err"),
             "promise .catch should run"
         );
+    }
+
+    #[test]
+    fn infinite_loop_interrupted() {
+        let mut engine = JsEngine::new(8 * 1024 * 1024).unwrap();
+        engine.set_max_exec_ms(100); // 100ms limit
+        let start = std::time::Instant::now();
+        let result = engine.eval("while(true) {}");
+        let elapsed = start.elapsed();
+        assert!(result.is_err(), "infinite loop should be interrupted");
+        assert!(
+            elapsed.as_millis() < 2000,
+            "should interrupt within reasonable time, took {}ms",
+            elapsed.as_millis()
+        );
+    }
+
+    #[test]
+    fn normal_code_unaffected_by_limit() {
+        let mut engine = JsEngine::new(8 * 1024 * 1024).unwrap();
+        engine.set_max_exec_ms(5000);
+        assert_eq!(engine.eval("1 + 2").unwrap(), JsValue::Int(3));
+        // Engine is still usable after a previous eval.
+        assert_eq!(engine.eval("3 + 4").unwrap(), JsValue::Int(7));
     }
 }

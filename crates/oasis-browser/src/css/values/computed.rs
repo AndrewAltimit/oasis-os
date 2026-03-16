@@ -66,6 +66,11 @@ pub struct ComputedStyle {
     pub text_indent: f32,
     pub text_transform: TextTransform,
     pub line_height: f32,
+    /// Unitless line-height factor (e.g. 1.5 from `line-height: 1.5`).
+    /// When present, inherited line-height is recomputed as
+    /// `factor * child_font_size` rather than copying the parent's
+    /// computed pixel value. Per CSS 2.1 §17.21.
+    pub line_height_factor: Option<f32>,
     pub letter_spacing: f32,
     pub word_spacing: f32,
     pub white_space: WhiteSpace,
@@ -194,6 +199,8 @@ pub struct ComputedStyle {
     pub grid_auto_flow_column: bool,
     pub grid_template_areas: Vec<Vec<String>>,
     pub grid_area: Option<String>,
+    pub grid_auto_rows: Vec<GridTrackSize>,
+    pub grid_auto_columns: Vec<GridTrackSize>,
 
     // -- Table extensions -----------------------------------------------
     pub table_layout_fixed: bool,
@@ -259,6 +266,7 @@ impl Default for ComputedStyle {
             text_indent: 0.0,
             text_transform: TextTransform::None,
             line_height: base_font_size * 1.5,
+            line_height_factor: Some(1.5),
             letter_spacing: 0.0,
             word_spacing: 0.0,
             white_space: WhiteSpace::Normal,
@@ -376,6 +384,8 @@ impl Default for ComputedStyle {
             grid_auto_flow_column: false,
             grid_template_areas: Vec::new(),
             grid_area: None,
+            grid_auto_rows: Vec::new(),
+            grid_auto_columns: Vec::new(),
 
             table_layout_fixed: false,
 
@@ -519,6 +529,7 @@ impl ComputedStyle {
             text_indent: parent.text_indent,
             text_transform: parent.text_transform,
             line_height: parent.line_height,
+            line_height_factor: parent.line_height_factor,
             letter_spacing: parent.letter_spacing,
             word_spacing: parent.word_spacing,
             white_space: parent.white_space,

@@ -424,6 +424,12 @@ impl ComputedStyle {
             },
             "line-height" => {
                 self.line_height = resolve_line_height(value, self.font_size, parent_font_size);
+                // Track unitless factor for correct inheritance (CSS 2.1 §17.21).
+                self.line_height_factor = match value {
+                    CssValue::Number(n) => Some(*n),
+                    CssValue::Keyword(kw) if kw == "normal" => Some(1.5),
+                    _ => None,
+                };
             },
             "letter-spacing" => {
                 if let Some("normal") = as_keyword(value) {
@@ -972,6 +978,12 @@ impl ComputedStyle {
                     self.grid_row_start = Some(*n as i32);
                 }
             },
+            "grid-auto-rows" => {
+                self.grid_auto_rows = parse_grid_template(value, parent_font_size);
+            },
+            "grid-auto-columns" => {
+                self.grid_auto_columns = parse_grid_template(value, parent_font_size);
+            },
 
             // -- Table layout -----------------------------------------------
             "table-layout" => {
@@ -1294,6 +1306,8 @@ impl ComputedStyle {
             "grid-auto-flow" => self.grid_auto_flow_column = false,
             "grid-template-areas" => self.grid_template_areas = Vec::new(),
             "grid-area" => self.grid_area = None,
+            "grid-auto-rows" => self.grid_auto_rows = Vec::new(),
+            "grid-auto-columns" => self.grid_auto_columns = Vec::new(),
             "table-layout" => self.table_layout_fixed = false,
             "animation" => self.animations = Vec::new(),
             _ => {},
@@ -2018,6 +2032,7 @@ mod tests {
                     | "grid-column" | "grid-column-start" | "grid-column-end"
                     | "grid-row" | "grid-row-start" | "grid-row-end"
                     | "grid-gap" | "grid-row-gap" | "grid-column-gap"
+                    | "grid-auto-rows" | "grid-auto-columns"
                     | "top" | "right" | "bottom" | "left"
                     | "max-width" | "min-width"
                     | "max-height" | "min-height"

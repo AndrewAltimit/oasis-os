@@ -31,7 +31,7 @@
 //! rules is tested against each element.
 
 mod index;
-mod matching;
+pub(crate) mod matching;
 mod var_resolve;
 
 #[cfg(test)]
@@ -219,12 +219,23 @@ pub fn compute_style(
     let element_font_size = style.font_size;
 
     // Pass 3: Resolve var() references and apply all other declarations.
+    let mut has_explicit_line_height = false;
     for entry in &matched {
         if entry.property.starts_with("--") || entry.property == "font-size" {
             continue;
         }
+        if entry.property == "line-height" {
+            has_explicit_line_height = true;
+        }
         let resolved = var_resolve::resolve_css_var(&entry.value, &style.custom_properties);
         style.apply_declaration(&entry.property, &resolved, element_font_size);
+    }
+
+    // CSS 2.1 §17.21: unitless line-height inherits the *factor*, not
+    // the computed value.  If no explicit line-height was declared and
+    // the inherited factor differs from the element's font-size, recompute.
+    if !has_explicit_line_height && let Some(factor) = style.line_height_factor {
+        style.line_height = factor * element_font_size;
     }
 
     // Resolve ::before and ::after pseudo-element content and styles.

@@ -37,6 +37,11 @@ pub fn layout_grid(container: &mut LayoutBox, _containing_width: f32, measurer: 
         resolve_edge_sizes(child, content_width);
     }
 
+    let auto_rows = container.style.grid_auto_rows.clone();
+    let auto_cols = container.style.grid_auto_columns.clone();
+    let areas = container.style.grid_template_areas.clone();
+    let flow_column = container.style.grid_auto_flow_column;
+
     // -- Phase 2: Determine grid dimensions (columns x rows) -------------
     let num_cols = if col_templates.is_empty() {
         // If no columns are specified, use a single column.
@@ -48,6 +53,9 @@ pub fn layout_grid(container: &mut LayoutBox, _containing_width: f32, measurer: 
     let num_rows_explicit = row_templates.len();
     let num_rows_needed = num_children.div_ceil(num_cols);
     let num_rows = num_rows_needed.max(num_rows_explicit);
+
+    // -- Phase 2.5: Build named area map from grid-template-areas ---------
+    let area_map = build_area_map(&areas);
 
     // -- Phase 3: Layout each child to determine intrinsic sizes ----------
     let mut child_widths: Vec<f32> = Vec::with_capacity(num_children);
@@ -71,11 +79,22 @@ pub fn layout_grid(container: &mut LayoutBox, _containing_width: f32, measurer: 
     let mut occupied = vec![vec![false; num_cols]; num_rows];
 
     for (i, child) in container.children.iter().enumerate() {
-        let explicit_col = child
+        // Check for grid-area name-based placement first.
+        let area_placement = child
             .style
-            .grid_column_start
-            .map(|c| ((c - 1).max(0) as usize).min(num_cols - 1));
-        let explicit_row = child.style.grid_row_start.map(|r| (r - 1).max(0) as usize);
+            .grid_area
+            .as_ref()
+            .and_then(|name| area_map.get(name.as_str()));
+
+        let explicit_col = area_placement.map(|a| a.0).or_else(|| {
+            child
+                .style
+                .grid_column_start
+                .map(|c| ((c - 1).max(0) as usize).min(num_cols - 1))
+        });
+        let explicit_row = area_placement
+            .map(|a| a.1)
+            .or_else(|| child.style.grid_row_start.map(|r| (r - 1).max(0) as usize));
 
         let (col, row) = match (explicit_col, explicit_row) {
             (Some(c), Some(r)) => (c, r),
@@ -84,11 +103,24 @@ pub fn layout_grid(container: &mut LayoutBox, _containing_width: f32, measurer: 
             (None, None) => {
                 // Auto-place: find next unoccupied cell.
                 let mut found = (i % num_cols, i / num_cols);
-                'search: for (r, occ_row) in occupied.iter().enumerate() {
-                    for (c, &is_occ) in occ_row.iter().enumerate().take(num_cols) {
-                        if !is_occ {
-                            found = (c, r);
-                            break 'search;
+                if flow_column {
+                    // Column-major: scan columns first, then rows.
+                    'col_search: for c in 0..num_cols {
+                        for (r, occ_row) in occupied.iter().enumerate() {
+                            if !occ_row[c] {
+                                found = (c, r);
+                                break 'col_search;
+                            }
+                        }
+                    }
+                } else {
+                    // Row-major (default).
+                    'row_search: for (r, occ_row) in occupied.iter().enumerate() {
+                        for (c, &is_occ) in occ_row.iter().enumerate().take(num_cols) {
+                            if !is_occ {
+                                found = (c, r);
+                                break 'row_search;
+                            }
                         }
                     }
                 }
@@ -96,8 +128,10 @@ pub fn layout_grid(container: &mut LayoutBox, _containing_width: f32, measurer: 
             },
         };
 
-        // Determine span from grid-column-end / grid-row-end.
-        let col_span = if let (Some(start), Some(end)) =
+        // Determine span from named area, grid-column-end, or grid-row-end.
+        let col_span = if let Some(area) = area_placement {
+            area.2
+        } else if let (Some(start), Some(end)) =
             (child.style.grid_column_start, child.style.grid_column_end)
         {
             ((end - start).max(1) as usize).min(num_cols - col)
@@ -108,7 +142,9 @@ pub fn layout_grid(container: &mut LayoutBox, _containing_width: f32, measurer: 
             1
         };
 
-        let row_span = if let (Some(start), Some(end)) =
+        let row_span = if let Some(area) = area_placement {
+            area.3
+        } else if let (Some(start), Some(end)) =
             (child.style.grid_row_start, child.style.grid_row_end)
         {
             (end - start).max(1) as usize
@@ -147,6 +183,7 @@ pub fn layout_grid(container: &mut LayoutBox, _containing_width: f32, measurer: 
 
     let col_widths = resolve_track_sizes(
         &col_templates,
+        &auto_cols,
         num_cols,
         available_for_cols,
         &placements,
@@ -172,6 +209,7 @@ pub fn layout_grid(container: &mut LayoutBox, _containing_width: f32, measurer: 
 
     let row_heights = resolve_track_sizes(
         &row_templates,
+        &auto_rows,
         num_rows,
         0.0, // rows don't have a fixed container height by default
         &placements,
@@ -267,8 +305,12 @@ pub fn layout_grid(container: &mut LayoutBox, _containing_width: f32, measurer: 
 /// Fixed (`Px`) tracks get their requested size. `Auto` tracks get the
 /// maximum content size for items in that track. Remaining space is
 /// distributed proportionally among `Fr` tracks.
+///
+/// For tracks beyond the explicit grid, `auto_tracks` is used (cycling
+/// through the list). If `auto_tracks` is empty, defaults to `Auto`.
 fn resolve_track_sizes(
     templates: &[GridTrackSize],
+    auto_tracks: &[GridTrackSize],
     num_tracks: usize,
     available_space: f32,
     placements: &[(usize, usize, usize, usize)],
@@ -281,7 +323,15 @@ fn resolve_track_sizes(
 
     // First pass: assign fixed and auto sizes, accumulate fr totals.
     for (i, size) in sizes.iter_mut().enumerate() {
-        let track = templates.get(i).copied().unwrap_or(GridTrackSize::Auto);
+        // Use explicit template for tracks within the explicit grid,
+        // implicit auto-tracks for those beyond.
+        let track = if i < templates.len() {
+            templates[i]
+        } else if !auto_tracks.is_empty() {
+            auto_tracks[(i - templates.len()) % auto_tracks.len()]
+        } else {
+            GridTrackSize::Auto
+        };
         match track {
             GridTrackSize::Px(px) => {
                 *size = px;
@@ -308,13 +358,23 @@ fn resolve_track_sizes(
         }
     }
 
+    // Helper: resolve track spec for a given index (explicit or implicit).
+    let track_at = |i: usize| -> GridTrackSize {
+        if i < templates.len() {
+            templates[i]
+        } else if !auto_tracks.is_empty() {
+            auto_tracks[(i - templates.len()) % auto_tracks.len()]
+        } else {
+            GridTrackSize::Auto
+        }
+    };
+
     // Second pass: distribute remaining space to fr tracks, then expand
     // Minmax tracks towards their max.
     if fr_total > 0.0 {
         let remaining = (available_space - fixed_total).max(0.0);
         for (i, size) in sizes.iter_mut().enumerate() {
-            let track = templates.get(i).copied().unwrap_or(GridTrackSize::Auto);
-            if let GridTrackSize::Fr(fr) = track {
+            if let GridTrackSize::Fr(fr) = track_at(i) {
                 *size = (fr / fr_total) * remaining;
             }
         }
@@ -323,8 +383,7 @@ fn resolve_track_sizes(
         let mut leftover = available_space - fixed_total;
         let mut expanded_any = false;
         for (i, size) in sizes.iter_mut().enumerate() {
-            let track = templates.get(i).copied().unwrap_or(GridTrackSize::Auto);
-            if let GridTrackSize::Minmax(_, max) = track
+            if let GridTrackSize::Minmax(_, max) = track_at(i)
                 && max > *size
                 && leftover > 0.0
             {
@@ -373,6 +432,38 @@ fn max_content_for_track(
         })
         .map(|(idx, _)| child_sizes.get(idx).copied().unwrap_or(0.0))
         .fold(0.0f32, f32::max)
+}
+
+/// Build a map from area name to `(col, row, col_span, row_span)` from
+/// `grid-template-areas`. Dots (`.`) represent unnamed cells and are skipped.
+///
+/// Example:
+/// ```text
+/// "header header"
+/// "sidebar main"
+/// ```
+/// Produces: `{ "header": (0, 0, 2, 1), "sidebar": (0, 1, 1, 1), "main": (1, 1, 1, 1) }`
+fn build_area_map(
+    areas: &[Vec<String>],
+) -> std::collections::HashMap<&str, (usize, usize, usize, usize)> {
+    let mut map = std::collections::HashMap::new();
+    for (row, cells) in areas.iter().enumerate() {
+        for (col, name) in cells.iter().enumerate() {
+            if name == "." || name.is_empty() {
+                continue;
+            }
+            map.entry(name.as_str())
+                .and_modify(|&mut (start_col, start_row, ref mut cs, ref mut rs)| {
+                    // Extend the area to cover this cell.
+                    let end_col = (col + 1).max(start_col + *cs);
+                    let end_row = (row + 1).max(start_row + *rs);
+                    *cs = end_col - start_col;
+                    *rs = end_row - start_row;
+                })
+                .or_insert((col, row, 1, 1));
+        }
+    }
+    map
 }
 
 /// Calculate cumulative offsets from track sizes and gap.
@@ -650,7 +741,7 @@ mod tests {
         ];
         let placements = vec![(0, 0, 1, 1), (1, 0, 1, 1), (2, 0, 1, 1)];
         let child_sizes = vec![50.0, 50.0, 50.0];
-        let sizes = resolve_track_sizes(&templates, 3, 400.0, &placements, &child_sizes, true);
+        let sizes = resolve_track_sizes(&templates, &[], 3, 400.0, &placements, &child_sizes, true);
         assert!((sizes[0] - 100.0).abs() < 0.1);
         assert!((sizes[1] - 200.0).abs() < 0.1);
         assert!((sizes[2] - 100.0).abs() < 0.1);
@@ -661,7 +752,7 @@ mod tests {
         let templates = vec![GridTrackSize::Px(100.0), GridTrackSize::Fr(1.0)];
         let placements = vec![(0, 0, 1, 1), (1, 0, 1, 1)];
         let child_sizes = vec![50.0, 50.0];
-        let sizes = resolve_track_sizes(&templates, 2, 400.0, &placements, &child_sizes, true);
+        let sizes = resolve_track_sizes(&templates, &[], 2, 400.0, &placements, &child_sizes, true);
         assert!((sizes[0] - 100.0).abs() < 0.1);
         assert!((sizes[1] - 300.0).abs() < 0.1);
     }
