@@ -748,6 +748,8 @@ impl BrowserWidget {
     }
 
     /// Go back in history.
+    ///
+    /// Prefers loading from cache when available to avoid re-fetching.
     pub fn go_back(&mut self, vfs: &dyn Vfs) {
         // Save current scroll position.
         self.nav.update_scroll(self.scroll.scroll_y);
@@ -755,19 +757,21 @@ impl BrowserWidget {
         if let Some(entry) = self.nav.go_back() {
             let url = entry.url.clone();
             let scroll_y = entry.scroll_y;
-            self.navigate_vfs(&url, vfs);
+            self.navigate_cached_or_fetch(&url, vfs);
             self.scroll.scroll_to(scroll_y);
         }
     }
 
     /// Go forward in history.
+    ///
+    /// Prefers loading from cache when available to avoid re-fetching.
     pub fn go_forward(&mut self, vfs: &dyn Vfs) {
         self.nav.update_scroll(self.scroll.scroll_y);
 
         if let Some(entry) = self.nav.go_forward() {
             let url = entry.url.clone();
             let scroll_y = entry.scroll_y;
-            self.navigate_vfs(&url, vfs);
+            self.navigate_cached_or_fetch(&url, vfs);
             self.scroll.scroll_to(scroll_y);
         }
     }

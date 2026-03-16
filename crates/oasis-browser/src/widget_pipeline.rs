@@ -89,6 +89,50 @@ impl BrowserWidget {
         }
     }
 
+    /// Navigate using the in-memory cache if available, otherwise fetch.
+    ///
+    /// Used by back/forward navigation to avoid re-fetching pages that
+    /// were already loaded. Falls back to `navigate_vfs()` on cache miss.
+    pub fn navigate_cached_or_fetch(&mut self, url: &str, vfs: &dyn Vfs) {
+        use crate::loader::ContentType;
+
+        // Check if we have a cached response for this URL.
+        if let Some(entry) = self.cache.get(url) {
+            let body = entry.response.body.clone();
+            let ct = entry.response.content_type;
+            if ct == ContentType::Html || ct == ContentType::PlainText || ct == ContentType::Unknown
+            {
+                // Re-render from cached HTML without a network round-trip.
+                self.state = LoadingState::Loading;
+                self.selected_link = -1;
+                self.reader_mode = false;
+                self.reader_html = None;
+                self.error_message = None;
+                self.page_csp = None;
+                self.page_errors.clear();
+                self.decoded_images.clear();
+                self.image_textures.clear();
+                self.pending_images.clear();
+                self.decoded_image_bytes = 0;
+                self.decoded_image_lru.clear();
+                self.cached_image_info.clear();
+                self.image_info_dirty = false;
+
+                let text = String::from_utf8_lossy(&body);
+                self.load_html(&text, url);
+
+                self.collect_page_image_requests();
+                if !self.pending_images.is_empty() {
+                    self.state = LoadingState::Loading;
+                }
+                return;
+            }
+        }
+
+        // Cache miss or non-HTML content — fetch from network.
+        self.navigate_vfs(url, vfs);
+    }
+
     /// Navigate to a URL using the VFS as the resource source.
     pub fn navigate_vfs(&mut self, url: &str, vfs: &dyn Vfs) {
         self.state = LoadingState::Loading;
