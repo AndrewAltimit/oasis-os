@@ -525,8 +525,10 @@ fn parse_minmax_args(inner: &str) -> Option<GridTrackSize> {
     let min_str = min_str.trim();
     let max_str = max_str.trim();
 
-    // Parse min: only px values supported.
-    let min_px = if let Some(v) = min_str.strip_suffix("px") {
+    // Parse min: px, numeric, or auto.
+    let min_px = if min_str == "auto" {
+        0.0
+    } else if let Some(v) = min_str.strip_suffix("px") {
         v.trim().parse::<f32>().ok()?
     } else if let Ok(n) = min_str.parse::<f32>() {
         n

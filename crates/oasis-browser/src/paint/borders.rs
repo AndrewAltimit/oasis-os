@@ -175,8 +175,8 @@ pub(super) fn paint_outline(
     // The outline box is the border box expanded by (outline_offset + outline_width).
     let ox = (border.x - ctx.scroll_x + offset_x as f32 - oo - ow) as i32;
     let oy = (border.y - ctx.scroll_y + offset_y as f32 - oo - ow) as i32;
-    let total_w = (border.width + 2.0 * (oo + ow)) as u32;
-    let total_h = (border.height + 2.0 * (oo + ow)) as u32;
+    let total_w = (border.width + 2.0 * (oo + ow)).max(0.0) as u32;
+    let total_h = (border.height + 2.0 * (oo + ow)).max(0.0) as u32;
     let thickness = ow as u32;
     let color = style.outline_color;
     let outline_style = style.outline_style;

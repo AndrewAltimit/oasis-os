@@ -412,6 +412,10 @@ pub fn parse_response(data: &[u8]) -> Result<HttpResponse> {
 
 /// Decompress the response body based on the `Content-Encoding` header.
 fn decode_body(headers: &[(String, String)], body: Vec<u8>) -> Result<Vec<u8>> {
+    if body.is_empty() {
+        return Ok(body);
+    }
+
     let encoding = match find_header(headers, "content-encoding") {
         Some(e) => e.trim().to_lowercase(),
         None => return Ok(body),
