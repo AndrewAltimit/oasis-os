@@ -23,11 +23,10 @@ pub(crate) fn parse_ua_stylesheet() -> Stylesheet {
     }
     #[cfg(not(feature = "javascript"))]
     {
-        // Replace the noscript hidden rule with one that shows it.
-        Stylesheet::parse(&UA_CSS.replace(
-            "head, script, style, link, meta, title, noscript, template {",
-            "head, script, style, link, meta, title, template {",
-        ))
+        // Without JS, show <noscript> content by appending an override
+        // rule rather than doing a brittle string replacement on UA_CSS.
+        let css = format!("{UA_CSS}\nnoscript {{ display: block !important; }}");
+        Stylesheet::parse(&css)
     }
 }
 

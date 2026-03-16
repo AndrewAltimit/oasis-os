@@ -942,13 +942,35 @@ fn flatten_cubic(
     x3: f32,
     y3: f32,
 ) {
+    flatten_cubic_inner(points, x0, y0, x1, y1, x2, y2, x3, y3, 0);
+}
+
+/// Maximum recursion depth for Bezier curve flattening. 16 levels of
+/// subdivision produce up to 2^16 segments which is more than sufficient
+/// for any practical curve, while preventing stack overflow from
+/// pathological coordinates.
+const MAX_FLATTEN_DEPTH: u8 = 16;
+
+#[allow(clippy::too_many_arguments)]
+fn flatten_cubic_inner(
+    points: &mut Vec<(f32, f32)>,
+    x0: f32,
+    y0: f32,
+    x1: f32,
+    y1: f32,
+    x2: f32,
+    y2: f32,
+    x3: f32,
+    y3: f32,
+    depth: u8,
+) {
     // Adaptive subdivision: estimate flatness.
     let dx = x3 - x0;
     let dy = y3 - y0;
     let d = ((x1 - x3) * dy - (y1 - y3) * dx).abs() + ((x2 - x3) * dy - (y2 - y3) * dx).abs();
     let len_sq = dx * dx + dy * dy;
     // Tolerance: 0.5 pixels.
-    if d * d <= 0.25 * len_sq || len_sq < 1.0 {
+    if d * d <= 0.25 * len_sq || len_sq < 1.0 || depth >= MAX_FLATTEN_DEPTH {
         points.push((x3, y3));
         return;
     }
@@ -965,8 +987,8 @@ fn flatten_cubic(
     let m123y = (m12y + m23y) * 0.5;
     let mx = (m012x + m123x) * 0.5;
     let my = (m012y + m123y) * 0.5;
-    flatten_cubic(points, x0, y0, m01x, m01y, m012x, m012y, mx, my);
-    flatten_cubic(points, mx, my, m123x, m123y, m23x, m23y, x3, y3);
+    flatten_cubic_inner(points, x0, y0, m01x, m01y, m012x, m012y, mx, my, depth + 1);
+    flatten_cubic_inner(points, mx, my, m123x, m123y, m23x, m23y, x3, y3, depth + 1);
 }
 
 /// Flatten a quadratic bezier curve into line segments.
