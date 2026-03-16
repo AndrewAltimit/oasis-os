@@ -183,7 +183,13 @@ pub fn paint_canvas(
                 // Left edge (between top and bottom to avoid corner overlap)
                 backend.fill_rect(rx, ry + lw as i32, lw, rh.saturating_sub(lw * 2), *color)?;
                 // Right edge (between top and bottom to avoid corner overlap)
-                backend.fill_rect(rx + rw as i32 - lw as i32, ry + lw as i32, lw, rh.saturating_sub(lw * 2), *color)?;
+                backend.fill_rect(
+                    rx + rw as i32 - lw as i32,
+                    ry + lw as i32,
+                    lw,
+                    rh.saturating_sub(lw * 2),
+                    *color,
+                )?;
             },
             CanvasCommand::Line {
                 x1,

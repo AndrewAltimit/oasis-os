@@ -428,7 +428,13 @@ fn paint_shape(shape: &SvgShape, backend: &mut dyn SdiBackend, xf: &SvgTransform
                 // Left (between top and bottom to avoid corner overlap)
                 backend.fill_rect(px, py + sw as i32, sw, ph.saturating_sub(sw * 2), *sc)?;
                 // Right (between top and bottom to avoid corner overlap)
-                backend.fill_rect(px + pw as i32 - sw as i32, py + sw as i32, sw, ph.saturating_sub(sw * 2), *sc)?;
+                backend.fill_rect(
+                    px + pw as i32 - sw as i32,
+                    py + sw as i32,
+                    sw,
+                    ph.saturating_sub(sw * 2),
+                    *sc,
+                )?;
             }
         },
         SvgShape::Circle {
@@ -491,7 +497,13 @@ fn paint_shape(shape: &SvgShape, backend: &mut dyn SdiBackend, xf: &SvgTransform
                 // Left (between top and bottom to avoid corner overlap)
                 backend.fill_rect(px, py + sw as i32, sw, ph.saturating_sub(sw * 2), *sc)?;
                 // Right (between top and bottom to avoid corner overlap)
-                backend.fill_rect(px + pw as i32 - sw as i32, py + sw as i32, sw, ph.saturating_sub(sw * 2), *sc)?;
+                backend.fill_rect(
+                    px + pw as i32 - sw as i32,
+                    py + sw as i32,
+                    sw,
+                    ph.saturating_sub(sw * 2),
+                    *sc,
+                )?;
             }
         },
         SvgShape::Line {
