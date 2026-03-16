@@ -516,9 +516,14 @@ fn read_response(stream: &mut impl Read) -> Result<Vec<u8>> {
                         }
                     } else if is_chunked {
                         // Chunked: stop after the final `0\r\n\r\n` marker.
-                        if find_subsequence(&buf[bs..], b"\r\n0\r\n\r\n").is_some()
-                            || find_subsequence(&buf[bs..], b"\r\n0\r\n").is_some()
-                            || (buf[bs..].starts_with(b"0\r\n") && buf.len() - bs <= 5)
+                        // Only check the tail of the buffer to avoid false
+                        // positives from binary data containing the same
+                        // byte sequence mid-stream.
+                        let chunk_data = &buf[bs..];
+                        if chunk_data.ends_with(b"\r\n0\r\n\r\n")
+                            || chunk_data.ends_with(b"\r\n0\r\n")
+                            || chunk_data.ends_with(b"0\r\n\r\n")
+                            || (chunk_data.starts_with(b"0\r\n") && chunk_data.len() <= 5)
                         {
                             break;
                         }

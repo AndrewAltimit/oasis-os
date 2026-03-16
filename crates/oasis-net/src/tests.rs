@@ -577,35 +577,50 @@ fn client_default_not_connected() {
 
 #[test]
 fn listener_max_connections_reached() {
-    let port = free_port();
-    let config = ListenerConfig {
-        port,
-        psk: String::new(),
-        max_connections: 2,
-        ..ListenerConfig::default()
-    };
-    let mut listener = RemoteListener::new(config);
-    let mut backend = StdNetworkBackend::new();
-    listener.start(&mut backend).unwrap();
+    // Retry with fresh ports to avoid TOCTOU race with free_port() in CI.
+    let mut last_err = None;
+    for _ in 0..5 {
+        let port = free_port();
+        let config = ListenerConfig {
+            port,
+            psk: String::new(),
+            max_connections: 2,
+            ..ListenerConfig::default()
+        };
+        let mut listener = RemoteListener::new(config);
+        let mut backend = StdNetworkBackend::new();
+        match listener.start(&mut backend) {
+            Ok(()) => {
+                // Connect two clients (the maximum).
+                let _c1 = TcpStream::connect(format!("127.0.0.1:{port}")).unwrap();
+                std::thread::sleep(std::time::Duration::from_millis(50));
+                listener.poll(&mut backend);
+                assert_eq!(listener.connection_count(), 1);
 
-    // Connect two clients (the maximum).
-    let _client1 = TcpStream::connect(format!("127.0.0.1:{port}")).unwrap();
-    std::thread::sleep(std::time::Duration::from_millis(50));
-    listener.poll(&mut backend);
-    assert_eq!(listener.connection_count(), 1);
+                let _c2 = TcpStream::connect(format!("127.0.0.1:{port}")).unwrap();
+                std::thread::sleep(std::time::Duration::from_millis(50));
+                listener.poll(&mut backend);
+                assert_eq!(listener.connection_count(), 2);
 
-    let _client2 = TcpStream::connect(format!("127.0.0.1:{port}")).unwrap();
-    std::thread::sleep(std::time::Duration::from_millis(50));
-    listener.poll(&mut backend);
-    assert_eq!(listener.connection_count(), 2);
+                // Third connection -- should NOT be accepted.
+                let _c3 = TcpStream::connect(format!("127.0.0.1:{port}")).unwrap();
+                std::thread::sleep(std::time::Duration::from_millis(50));
+                listener.poll(&mut backend);
+                assert_eq!(listener.connection_count(), 2);
 
-    // Third connection -- should NOT be accepted.
-    let _client3 = TcpStream::connect(format!("127.0.0.1:{port}")).unwrap();
-    std::thread::sleep(std::time::Duration::from_millis(50));
-    listener.poll(&mut backend);
-    assert_eq!(listener.connection_count(), 2);
-
-    listener.stop();
+                listener.stop();
+                return;
+            },
+            Err(e) => {
+                last_err = Some(e);
+                continue;
+            },
+        }
+    }
+    panic!(
+        "listener_max_connections_reached: failed to bind after 5 retries: {:?}",
+        last_err
+    );
 }
 
 #[test]

@@ -64,7 +64,7 @@ pub type SharedNavActions = Rc<RefCell<Vec<JsNavAction>>>;
 #[cfg(test)]
 pub fn install_document_global(ctx: &Ctx<'_>, doc: &SharedDoc) -> JsResult<()> {
     let nav = Rc::new(RefCell::new(Vec::new()));
-    install_document_global_full(ctx, doc, "", &nav, None)
+    install_document_global_full(ctx, doc, "", &nav, None, None)
 }
 
 /// Like [`install_document_global`] but accepts an explicit URL for
@@ -72,7 +72,7 @@ pub fn install_document_global(ctx: &Ctx<'_>, doc: &SharedDoc) -> JsResult<()> {
 #[cfg(test)]
 pub fn install_document_global_with_url(ctx: &Ctx<'_>, doc: &SharedDoc, url: &str) -> JsResult<()> {
     let nav = Rc::new(RefCell::new(Vec::new()));
-    install_document_global_full(ctx, doc, url, &nav, None)
+    install_document_global_full(ctx, doc, url, &nav, None, None)
 }
 
 /// Like [`install_document_global_with_url`] but also accepts a shared
@@ -85,20 +85,20 @@ pub fn install_document_global_with_nav(
     url: &str,
     nav_actions: &SharedNavActions,
 ) -> JsResult<()> {
-    install_document_global_full(ctx, doc, url, nav_actions, None)
+    install_document_global_full(ctx, doc, url, nav_actions, None, None)
 }
 
-/// Like [`install_document_global_with_nav`] but also accepts shared
-/// computed styles for `getComputedStyle()` support. The styles
-/// container can be populated/updated after installation.
-pub fn install_document_global_with_styles(
+/// Like [`install_document_global_with_nav`] but also accepts an
+/// optional CSP policy to enforce `connect-src` on `fetch()` calls.
+pub fn install_document_global_with_csp(
     ctx: &Ctx<'_>,
     doc: &SharedDoc,
     url: &str,
     nav_actions: &SharedNavActions,
     styles: &SharedStyles,
+    csp: Option<&crate::loader::csp::CspPolicy>,
 ) -> JsResult<()> {
-    install_document_global_full(ctx, doc, url, nav_actions, Some(styles))
+    install_document_global_full(ctx, doc, url, nav_actions, Some(styles), csp)
 }
 
 /// Full installation: document global, location/history, nav actions,
@@ -109,6 +109,7 @@ fn install_document_global_full(
     url: &str,
     nav_actions: &SharedNavActions,
     styles: Option<&SharedStyles>,
+    csp: Option<&crate::loader::csp::CspPolicy>,
 ) -> JsResult<()> {
     let globals = ctx.globals();
 
@@ -612,9 +613,22 @@ fn install_document_global_full(
 
     // -- __oasis_fetch(url) -> String -----------------------------------
     {
+        let fetch_csp = csp.cloned();
+        let fetch_page_url = url.to_string();
         globals.set(
             "__oasis_fetch",
             Function::new(ctx.clone(), move |url_str: String| -> String {
+                // Enforce CSP connect-src before making the request.
+                if let Some(ref policy) = fetch_csp
+                    && policy.is_active()
+                    && !policy.allows(
+                        &url_str,
+                        &fetch_page_url,
+                        crate::loader::csp::CspResourceType::Connect,
+                    )
+                {
+                    return String::new();
+                }
                 match crate::loader::Url::parse(&url_str) {
                     Some(parsed_url) => match crate::loader::http::http_get(&parsed_url, None) {
                         Ok(resp) => String::from_utf8_lossy(&resp.body).into_owned(),

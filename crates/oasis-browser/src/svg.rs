@@ -489,11 +489,26 @@ fn paint_shape(shape: &SvgShape, backend: &mut dyn SdiBackend, xf: &SvgTransform
             let py2 = oy + ((y2 - vb_y) * sy) as i32;
             let sw = (stroke_width * sx.min(sy)).max(1.0) as u32;
 
-            let lx = px1.min(px2);
-            let ly = py1.min(py2);
-            let lw = ((px2 - px1).unsigned_abs()).max(sw);
-            let lh = ((py2 - py1).unsigned_abs()).max(sw);
-            backend.fill_rect(lx, ly, lw, lh, *stroke)?;
+            let dx = (px2 - px1).abs();
+            let dy = (py2 - py1).abs();
+            if dx == 0 || dy == 0 {
+                // Horizontal or vertical: a single rect is exact.
+                let lx = px1.min(px2);
+                let ly = py1.min(py2);
+                let lw = (dx as u32).max(sw);
+                let lh = (dy as u32).max(sw);
+                backend.fill_rect(lx, ly, lw, lh, *stroke)?;
+            } else {
+                // Diagonal: plot 1px rects along the dominant axis
+                // (Bresenham-like approximation).
+                let steps = dx.max(dy);
+                for s in 0..=steps {
+                    let t = s as f32 / steps.max(1) as f32;
+                    let px = px1 + ((px2 - px1) as f32 * t) as i32;
+                    let py = py1 + ((py2 - py1) as f32 * t) as i32;
+                    backend.fill_rect(px, py, sw, sw, *stroke)?;
+                }
+            }
         },
         SvgShape::Text {
             x,

@@ -165,57 +165,80 @@ pub(super) fn paint_linear_gradient(
         let total_len = if is_vertical { h } else { w } as f32;
         let stops = &grad.stops;
 
-        // Render each segment between adjacent stops.
-        for i in 0..stops.len() - 1 {
-            let (s0, s1) = if reverse {
-                let ri = stops.len() - 1 - i;
-                (&stops[ri], &stops[ri - 1])
+        // For repeating gradients, compute the pattern length and
+        // tile across the element.
+        let last_pos = stops.last().map(|s| s.position).unwrap_or(1.0);
+        let first_pos = stops.first().map(|s| s.position).unwrap_or(0.0);
+        let pattern_range = last_pos - first_pos;
+        let repetitions = if grad.repeating && pattern_range > 0.0 {
+            (1.0 / pattern_range).ceil() as u32
+        } else {
+            1
+        };
+
+        for rep in 0..repetitions {
+            let rep_offset = if grad.repeating {
+                rep as f32 * pattern_range
             } else {
-                (&stops[i], &stops[i + 1])
+                0.0
             };
 
-            let start_frac = if reverse {
-                1.0 - s0.position
-            } else {
-                s0.position
-            };
-            let end_frac = if reverse {
-                1.0 - s1.position
-            } else {
-                s1.position
-            };
-            let c0 = apply_opacity(s0.color, opacity);
-            let c1 = apply_opacity(s1.color, opacity);
+            // Render each segment between adjacent stops.
+            for i in 0..stops.len() - 1 {
+                let (s0, s1) = if reverse {
+                    let ri = stops.len() - 1 - i;
+                    (&stops[ri], &stops[ri - 1])
+                } else {
+                    (&stops[i], &stops[i + 1])
+                };
 
-            let start_px = (start_frac * total_len) as i32;
-            let end_px = ((end_frac * total_len) as i32).min(total_len as i32);
-            let seg_len = (end_px - start_px).max(0) as u32;
-            if seg_len == 0 {
-                continue;
-            }
+                let start_frac = if reverse {
+                    1.0 - s0.position
+                } else {
+                    s0.position
+                } + rep_offset;
+                let end_frac = if reverse {
+                    1.0 - s1.position
+                } else {
+                    s1.position
+                } + rep_offset;
+                if start_frac >= 1.0 {
+                    break;
+                }
+                let end_frac = end_frac.min(1.0);
+                let c0 = apply_opacity(s0.color, opacity);
+                let c1 = apply_opacity(s1.color, opacity);
 
-            if is_vertical {
-                backend.fill_rect_gradient(
-                    x,
-                    y + start_px,
-                    w,
-                    seg_len,
-                    &GradientStyle::Vertical {
-                        top: c0,
-                        bottom: c1,
-                    },
-                )?;
-            } else {
-                backend.fill_rect_gradient(
-                    x + start_px,
-                    y,
-                    seg_len,
-                    h,
-                    &GradientStyle::Horizontal {
-                        left: c0,
-                        right: c1,
-                    },
-                )?;
+                let start_px = (start_frac * total_len) as i32;
+                let end_px = ((end_frac * total_len) as i32).min(total_len as i32);
+                let seg_len = (end_px - start_px).max(0) as u32;
+                if seg_len == 0 {
+                    continue;
+                }
+
+                if is_vertical {
+                    backend.fill_rect_gradient(
+                        x,
+                        y + start_px,
+                        w,
+                        seg_len,
+                        &GradientStyle::Vertical {
+                            top: c0,
+                            bottom: c1,
+                        },
+                    )?;
+                } else {
+                    backend.fill_rect_gradient(
+                        x + start_px,
+                        y,
+                        seg_len,
+                        h,
+                        &GradientStyle::Horizontal {
+                            left: c0,
+                            right: c1,
+                        },
+                    )?;
+                }
             }
         }
     } else {
@@ -317,6 +340,10 @@ pub(super) fn paint_radial_gradient(
         // Gradient position: 0.0 at center, 1.0 at edge.
         let t = 1.0 - frac;
         let color = sample_gradient(&grad.stops, t, opacity);
+        // Force opaque to prevent alpha over-accumulation from
+        // overlapping concentric filled rounded rects. Element-level
+        // opacity is handled by `apply_opacity` at the call site.
+        let color = Color::rgba(color.r, color.g, color.b, 255);
 
         // Size of this band's rect.
         let bw = (w as f32 * (1.0 - frac)).max(1.0) as u32;

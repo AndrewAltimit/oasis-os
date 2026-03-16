@@ -575,21 +575,19 @@ impl BrowserWidget {
     /// Dispatch a keydown event to JS with the key character as detail.
     #[cfg(feature = "javascript")]
     fn dispatch_js_key_event(engine: &oasis_js::JsEngine, node_id: NodeId, key: char) {
-        // Escape single quotes in the key character for the JS string.
-        let escaped = if key == '\'' { "\\'" } else { "" };
-        let code = if escaped.is_empty() {
-            format!(
-                "if(typeof __oasis_dispatch_with_bubbling==='function')\
-                 __oasis_dispatch_with_bubbling({},'keydown','{}')",
-                node_id, key
-            )
-        } else {
-            format!(
-                "if(typeof __oasis_dispatch_with_bubbling==='function')\
-                 __oasis_dispatch_with_bubbling({},'keydown','{}')",
-                node_id, escaped
-            )
+        // Escape characters that break JS single-quoted string literals.
+        let escaped: String = match key {
+            '\\' => "\\\\".into(),
+            '\'' => "\\'".into(),
+            '\n' => "\\n".into(),
+            '\r' => "\\r".into(),
+            c => c.to_string(),
         };
+        let code = format!(
+            "if(typeof __oasis_dispatch_with_bubbling==='function')\
+             __oasis_dispatch_with_bubbling({},'keydown','{}')",
+            node_id, escaped
+        );
         let _ = engine.eval(&code);
     }
 

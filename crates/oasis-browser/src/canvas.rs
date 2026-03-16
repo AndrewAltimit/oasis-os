@@ -217,11 +217,15 @@ pub fn paint_canvas(
                 color,
                 fill,
             } => {
+                let rx = x + ((*cx - *r) * sx) as i32;
+                let ry = y + ((*cy - *r) * sy) as i32;
+                let d = (*r * 2.0 * sx) as u32;
+                let radius = (*r * sx) as u16;
                 if *fill {
-                    let rx = x + ((*cx - *r) * sx) as i32;
-                    let ry = y + ((*cy - *r) * sy) as i32;
-                    let d = (*r * 2.0 * sx) as u32;
-                    backend.fill_rounded_rect(rx, ry, d, d, (*r * sx) as u16, *color)?;
+                    backend.fill_rounded_rect(rx, ry, d, d, radius, *color)?;
+                } else {
+                    // Stroke: draw a ring outline.
+                    backend.stroke_rounded_rect(rx, ry, d, d, radius, 1, *color)?;
                 }
             },
         }

@@ -286,7 +286,14 @@ impl BrowserWidget {
                     let nav = std::rc::Rc::clone(&self.js_nav_actions);
                     let js_sty = std::rc::Rc::clone(&self.js_styles);
                     if let Err(e) = engine.with_context(|ctx| {
-                        js_dom::install_document_global_with_styles(&ctx, &s, url, &nav, &js_sty)
+                        js_dom::install_document_global_with_csp(
+                            &ctx,
+                            &s,
+                            url,
+                            &nav,
+                            &js_sty,
+                            self.page_csp.as_ref(),
+                        )
                     }) {
                         log::warn!("JS DOM install failed: {}", e.message);
                         self.record_error(
