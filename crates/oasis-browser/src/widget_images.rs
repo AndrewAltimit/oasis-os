@@ -87,6 +87,16 @@ fn select_best_src(srcset: &str, viewport_width: u32) -> Option<String> {
     }
 }
 
+/// Determine the effective image source URL for an `<img>` element,
+/// preferring `srcset` (if valid) over `src`.
+fn effective_img_src(elem: &html::dom::ElementData, viewport_w: u32) -> Option<String> {
+    let srcset_url = elem
+        .get_attribute("srcset")
+        .and_then(|ss| select_best_src(ss, viewport_w))
+        .filter(|url| !url.is_empty() && !url.starts_with("data:"));
+    srcset_url.or_else(|| elem.src().map(String::from))
+}
+
 impl BrowserWidget {
     // ---------------------------------------------------------------
     // Image loading
@@ -111,13 +121,8 @@ impl BrowserWidget {
             if let NodeKind::Element(elem) = &node.kind
                 && elem.tag == TagName::Img
             {
-                // Prefer srcset over src for responsive images, but only
-                // if it produces a valid-looking URL.
-                let srcset_url = elem
-                    .get_attribute("srcset")
-                    .and_then(|ss| select_best_src(ss, self.window_w))
-                    .filter(|url| !url.is_empty() && !url.starts_with("data:"));
-                let effective_src = srcset_url.as_deref().or_else(|| elem.src());
+                let effective = effective_img_src(elem, self.window_w);
+                let effective_src = effective.as_deref();
                 let Some(src) = effective_src else { continue };
                 let resolved = Self::resolve_src(&base_url, src);
                 if self.decoded_images.contains_key(&resolved) {
@@ -267,9 +272,11 @@ impl BrowserWidget {
         for node in &doc.nodes {
             if let NodeKind::Element(elem) = &node.kind
                 && elem.tag == TagName::Img
-                && let Some(src) = elem.src()
             {
-                let resolved = Self::resolve_src(&base_url, src);
+                let Some(src) = effective_img_src(elem, self.window_w) else {
+                    continue;
+                };
+                let resolved = Self::resolve_src(&base_url, &src);
                 if !self.image_textures.contains_key(&resolved)
                     && self.decoded_images.contains_key(&resolved)
                 {
@@ -320,6 +327,7 @@ impl BrowserWidget {
                 &self.document,
                 &base_url,
                 &self.image_textures,
+                self.window_w,
             );
         }
     }
@@ -331,6 +339,7 @@ impl BrowserWidget {
         doc: &Option<html::dom::Document>,
         base_url: &Option<String>,
         textures: &HashMap<String, TextureId>,
+        viewport_w: u32,
     ) {
         if let layout::box_model::BoxType::Replaced(layout::box_model::ReplacedContent::Image {
             ref mut texture,
@@ -342,9 +351,9 @@ impl BrowserWidget {
         {
             let node = doc.get(node_id);
             if let NodeKind::Element(elem) = &node.kind
-                && let Some(src) = elem.src()
+                && let Some(src) = effective_img_src(elem, viewport_w)
             {
-                let resolved = Self::resolve_src(base_url, src);
+                let resolved = Self::resolve_src(base_url, &src);
                 if let Some(&tex) = textures.get(&resolved) {
                     *texture = Some(tex);
                 }
@@ -362,7 +371,7 @@ impl BrowserWidget {
         }
 
         for child in &mut layout_box.children {
-            Self::assign_textures_recursive(child, doc, base_url, textures);
+            Self::assign_textures_recursive(child, doc, base_url, textures, viewport_w);
         }
     }
 

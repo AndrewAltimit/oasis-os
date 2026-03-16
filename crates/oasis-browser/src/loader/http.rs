@@ -753,7 +753,7 @@ fn decode_chunked(data: &[u8]) -> Result<Vec<u8>> {
 
 /// Whether a status code is a redirect we should follow.
 fn is_redirect(status: u16) -> bool {
-    matches!(status, 301 | 302 | 307 | 308)
+    matches!(status, 301 | 302 | 303 | 307 | 308)
 }
 
 /// Find the position of a byte subsequence in a slice.
