@@ -454,11 +454,20 @@ fn send_request(
     Ok(())
 }
 
-/// Read the entire response until EOF or until the read timeout fires.
+/// Read the entire HTTP response, stopping when we have the complete body.
+///
+/// With `Connection: keep-alive` the server does not close the connection
+/// after the response, so we cannot rely on EOF. Instead we parse headers
+/// as they arrive to determine the body length:
+/// - `Content-Length`: stop after that many body bytes.
+/// - `Transfer-Encoding: chunked`: stop after the `0\r\n\r\n` terminator.
+/// - Neither: fall back to reading until EOF or timeout.
 fn read_response(stream: &mut impl Read) -> Result<Vec<u8>> {
     let mut buf = Vec::with_capacity(8192);
     let mut chunk = [0u8; 8192];
-    let mut header_complete = false;
+    let mut body_start: Option<usize> = None;
+    let mut expected_body_len: Option<usize> = None;
+    let mut is_chunked = false;
     loop {
         match stream.read(&mut chunk) {
             Ok(0) => break,
@@ -468,17 +477,53 @@ fn read_response(stream: &mut impl Read) -> Result<Vec<u8>> {
                 }
                 buf.extend_from_slice(&chunk[..n]);
 
-                // Enforce header size limit before the terminator is found.
-                if !header_complete {
-                    if find_subsequence(&buf, b"\r\n\r\n").is_some()
-                        || find_subsequence(&buf, b"\n\n").is_some()
-                    {
-                        header_complete = true;
+                // Once we find the header/body boundary, determine body length.
+                if body_start.is_none() {
+                    if let Some(pos) = find_subsequence(&buf, b"\r\n\r\n") {
+                        let hdr_end = pos + 4;
+                        body_start = Some(hdr_end);
+                        let header_bytes = std::str::from_utf8(&buf[..pos]).unwrap_or("");
+                        let header_lower = header_bytes.to_ascii_lowercase();
+                        if header_lower.contains("transfer-encoding")
+                            && header_lower.contains("chunked")
+                        {
+                            is_chunked = true;
+                        } else if let Some(cl_start) = header_lower.find("content-length:") {
+                            let after = &header_lower[cl_start + 15..];
+                            let line_end = after.find('\n').unwrap_or(after.len());
+                            if let Ok(cl) = after[..line_end].trim().parse::<usize>() {
+                                expected_body_len = Some(cl);
+                            }
+                        }
+                    } else if find_subsequence(&buf, b"\n\n").is_some() {
+                        // Bare \n\n -- fall through to EOF-based reading.
+                        body_start = Some(buf.len());
                     } else if buf.len() > MAX_HEADER_SIZE {
                         return Err(OasisError::Backend(
                             "HTTP headers exceed 16 KB limit".into(),
                         ));
                     }
+                }
+
+                // Check if we have the complete body.
+                if let Some(bs) = body_start {
+                    if let Some(expected) = expected_body_len {
+                        // Content-Length: stop once we have enough bytes.
+                        if buf.len() - bs >= expected {
+                            // Trim any excess bytes (pipelined response).
+                            buf.truncate(bs + expected);
+                            break;
+                        }
+                    } else if is_chunked {
+                        // Chunked: stop after the final `0\r\n\r\n` marker.
+                        if find_subsequence(&buf[bs..], b"\r\n0\r\n\r\n").is_some()
+                            || find_subsequence(&buf[bs..], b"\r\n0\r\n").is_some()
+                            || (buf[bs..].starts_with(b"0\r\n") && buf.len() - bs <= 5)
+                        {
+                            break;
+                        }
+                    }
+                    // No content-length, not chunked: read until EOF/timeout.
                 }
             },
             Err(e)

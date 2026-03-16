@@ -34,6 +34,7 @@ mod widget_pipeline;
 mod js_dom;
 
 #[cfg(test)]
+#[cfg(test)]
 pub(crate) mod test_utils;
 
 // -----------------------------------------------------------------------
