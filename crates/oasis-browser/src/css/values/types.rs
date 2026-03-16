@@ -176,6 +176,21 @@ pub enum WhiteSpace {
     PreLine,
 }
 
+/// CSS `object-fit` property for replaced elements (images, video).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ObjectFit {
+    /// Scale the content to fill the box, distorting aspect ratio.
+    Fill,
+    /// Scale to fit within the box, preserving aspect ratio (letterbox).
+    Contain,
+    /// Scale to cover the box, preserving aspect ratio (crop).
+    Cover,
+    /// No scaling, use intrinsic size.
+    None,
+    /// Like `none` or `contain`, whichever is smaller.
+    ScaleDown,
+}
+
 /// CSS `list-style-type` property (subset).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ListStyleType {

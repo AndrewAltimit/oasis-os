@@ -18,7 +18,7 @@ pub use types::{
     AnimationPlayState, BackgroundImage, BorderCollapse, BorderStyle, BoxShadow, BoxSizing, Clear,
     Dimension, Display, FilterFunction, FlexDirection, FlexWrap, Float, FontFamily, FontStyle,
     FontWeight, GradientDirection, GradientStop, GridTrackSize, JustifyContent, LinearGradient,
-    ListStylePosition, ListStyleType, Overflow, OverflowWrap, Position, ROOT_FONT_SIZE,
+    ListStylePosition, ListStyleType, ObjectFit, Overflow, OverflowWrap, Position, ROOT_FONT_SIZE,
     RadialGradient, TextAlign, TextDecoration, TextDirection, TextOverflow, TextShadow,
     TextTransform, TimingFunction, TransformFunction, TransformOrigin, Transition, VerticalAlign,
     Visibility, WhiteSpace, WordBreak,

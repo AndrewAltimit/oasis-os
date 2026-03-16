@@ -8,9 +8,9 @@ use super::types::{
     AlignContent, AlignItems, AlignSelf, Animation, BackgroundImage, BorderCollapse, BorderStyle,
     BoxShadow, BoxSizing, Clear, Dimension, Display, FilterFunction, FlexDirection, FlexWrap,
     Float, FontFamily, FontStyle, FontWeight, GridTrackSize, JustifyContent, ListStylePosition,
-    ListStyleType, Overflow, OverflowWrap, Position, ROOT_FONT_SIZE, TextAlign, TextDecoration,
-    TextDirection, TextOverflow, TextShadow, TextTransform, TransformOrigin, Transition,
-    VerticalAlign, Visibility, WhiteSpace, WordBreak,
+    ListStyleType, ObjectFit, Overflow, OverflowWrap, Position, ROOT_FONT_SIZE, TextAlign,
+    TextDecoration, TextDirection, TextOverflow, TextShadow, TextTransform, TransformOrigin,
+    Transition, VerticalAlign, Visibility, WhiteSpace, WordBreak,
 };
 
 /// Computed style for a DOM node after cascade resolution.
@@ -100,6 +100,9 @@ pub struct ComputedStyle {
     pub bottom: Dimension,
     pub left: Dimension,
     pub z_index: i32,
+
+    // -- Replaced element sizing ----------------------------------------
+    pub object_fit: ObjectFit,
 
     // -- Visual effects -----------------------------------------------
     pub border_radius: f32,
@@ -296,6 +299,9 @@ impl Default for ComputedStyle {
             bottom: Dimension::Auto,
             left: Dimension::Auto,
             z_index: 0,
+
+            // Replaced element sizing
+            object_fit: ObjectFit::Fill,
 
             // Visual effects
             border_radius: 0.0,

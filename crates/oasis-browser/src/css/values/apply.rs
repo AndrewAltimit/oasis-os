@@ -11,9 +11,9 @@ use super::types::{
     AlignContent, AlignItems, AlignSelf, Animation, AnimationDirection, AnimationFillMode,
     AnimationPlayState, BackgroundImage, BorderCollapse, BorderStyle, BoxSizing, Clear, Display,
     FlexDirection, FlexWrap, Float, FontFamily, FontStyle, JustifyContent, ListStylePosition,
-    ListStyleType, Overflow, OverflowWrap, Position, TextAlign, TextDecoration, TextOverflow,
-    TextShadow, TextTransform, TimingFunction, Transition, VerticalAlign, Visibility, WhiteSpace,
-    WordBreak,
+    ListStyleType, ObjectFit, Overflow, OverflowWrap, Position, TextAlign, TextDecoration,
+    TextOverflow, TextShadow, TextTransform, TimingFunction, Transition, VerticalAlign, Visibility,
+    WhiteSpace, WordBreak,
 };
 use crate::css::parser::CssValue;
 
@@ -533,6 +533,20 @@ impl ComputedStyle {
                         "hidden" => Overflow::Hidden,
                         "scroll" => Overflow::Scroll,
                         "auto" => Overflow::Auto,
+                        _ => return,
+                    };
+                }
+            },
+
+            // -- Replaced element sizing ---------------------------------
+            "object-fit" => {
+                if let Some(kw) = as_keyword(value) {
+                    self.object_fit = match kw {
+                        "fill" => ObjectFit::Fill,
+                        "contain" => ObjectFit::Contain,
+                        "cover" => ObjectFit::Cover,
+                        "none" => ObjectFit::None,
+                        "scale-down" => ObjectFit::ScaleDown,
                         _ => return,
                     };
                 }
@@ -1306,6 +1320,7 @@ impl ComputedStyle {
             "grid-auto-flow" => self.grid_auto_flow_column = false,
             "grid-template-areas" => self.grid_template_areas = Vec::new(),
             "grid-area" => self.grid_area = None,
+            "object-fit" => self.object_fit = ObjectFit::Fill,
             "grid-auto-rows" => self.grid_auto_rows = Vec::new(),
             "grid-auto-columns" => self.grid_auto_columns = Vec::new(),
             "table-layout" => self.table_layout_fixed = false,
