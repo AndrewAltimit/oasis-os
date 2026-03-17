@@ -546,6 +546,7 @@ impl BrowserWidget {
                 if !self.image_textures.contains_key(&resolved)
                     && !self.image_atlas.contains(&resolved)
                     && self.decoded_images.contains_key(&resolved)
+                    && !pending.contains(&resolved)
                 {
                     pending.push(resolved);
                 }
