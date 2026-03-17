@@ -358,7 +358,8 @@ impl BrowserWidget {
                     while self.decoded_image_bytes + img_bytes > Self::IMAGE_MEMORY_BUDGET {
                         if let Some(evict_url) = self.decoded_image_lru.pop_back() {
                             if let Some(evicted) = self.decoded_images.remove(&evict_url) {
-                                let evicted_bytes = evicted.width as usize * evicted.height as usize * 4;
+                                let evicted_bytes =
+                                    evicted.width as usize * evicted.height as usize * 4;
                                 self.decoded_image_bytes -= evicted_bytes;
                                 self.image_info_dirty = true;
                             }
