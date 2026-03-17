@@ -25,6 +25,7 @@ pub mod svg;
 
 pub mod canvas;
 
+pub(crate) mod image_atlas;
 mod widget_images;
 mod widget_input;
 mod widget_paint;
@@ -265,6 +266,9 @@ pub struct BrowserWidget {
     /// GPU textures for decoded images, keyed by src URL.
     image_textures: HashMap<String, TextureId>,
 
+    /// Texture atlas for packing small images (reduces GPU bind switches).
+    image_atlas: image_atlas::ImageAtlas,
+
     /// Pending image requests to be processed in time-sliced batches.
     pending_images: Vec<(String, ResourceRequest)>,
 
@@ -427,6 +431,7 @@ impl BrowserWidget {
             #[cfg(not(target_arch = "wasm32"))]
             image_decode_in_flight: 0,
             image_textures: HashMap::new(),
+            image_atlas: image_atlas::ImageAtlas::new(),
             pending_images: Vec::new(),
             deferred_images: Vec::new(),
             decoded_image_bytes: 0,

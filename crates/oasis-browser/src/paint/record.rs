@@ -984,6 +984,7 @@ fn record_replaced(
             texture: Some(tex),
             width: img_w,
             height: img_h,
+            atlas_region,
             ..
         } => {
             let box_w = content.width as u32;
@@ -997,13 +998,27 @@ fn record_replaced(
                 x,
                 y,
             );
-            dl.push(DisplayItem::Blit {
-                texture: *tex,
-                x: blit_x,
-                y: blit_y,
-                w: blit_w,
-                h: blit_h,
-            });
+            if let Some(ar) = atlas_region {
+                dl.push(DisplayItem::BlitSub {
+                    texture: *tex,
+                    src_x: ar.x,
+                    src_y: ar.y,
+                    src_w: ar.w,
+                    src_h: ar.h,
+                    dst_x: blit_x,
+                    dst_y: blit_y,
+                    dst_w: blit_w,
+                    dst_h: blit_h,
+                });
+            } else {
+                dl.push(DisplayItem::Blit {
+                    texture: *tex,
+                    x: blit_x,
+                    y: blit_y,
+                    w: blit_w,
+                    h: blit_h,
+                });
+            }
         },
         ReplacedContent::Image { alt, .. } => {
             let w = content.width.max(16.0) as u32;

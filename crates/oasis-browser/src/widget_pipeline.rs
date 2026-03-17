@@ -34,6 +34,7 @@ impl BrowserWidget {
         self.page_errors.clear();
         self.decoded_images.clear();
         self.image_textures.clear();
+        self.image_atlas.clear_without_destroy();
         self.pending_images.clear();
         self.decoded_image_bytes = 0;
         self.decoded_image_lru.clear();
@@ -114,6 +115,7 @@ impl BrowserWidget {
                 self.page_errors.clear();
                 self.decoded_images.clear();
                 self.image_textures.clear();
+                self.image_atlas.clear_without_destroy();
                 self.pending_images.clear();
                 self.decoded_image_bytes = 0;
                 self.decoded_image_lru.clear();
@@ -146,6 +148,7 @@ impl BrowserWidget {
         self.page_errors.clear();
         self.decoded_images.clear();
         self.image_textures.clear();
+        self.image_atlas.clear_without_destroy();
         self.pending_images.clear();
         self.decoded_image_bytes = 0;
         self.decoded_image_lru.clear();

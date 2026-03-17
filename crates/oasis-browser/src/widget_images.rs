@@ -508,6 +508,10 @@ impl BrowserWidget {
 
     /// Upload decoded images as GPU textures and assign them to
     /// `ReplacedContent::Image` nodes in the layout tree.
+    ///
+    /// Small images (<= 128x128) are packed into a shared texture atlas
+    /// to reduce GPU texture bind switches during rendering. Larger
+    /// images get individual textures as before.
     pub(crate) fn ensure_image_textures(&mut self, backend: &mut dyn SdiBackend) {
         let doc = match &self.document {
             Some(d) => d,
@@ -526,20 +530,11 @@ impl BrowserWidget {
                 };
                 let resolved = Self::resolve_src(&base_url, &src);
                 if !self.image_textures.contains_key(&resolved)
+                    && !self.image_atlas.contains(&resolved)
                     && self.decoded_images.contains_key(&resolved)
                 {
                     pending.push(resolved);
                 }
-            }
-        }
-
-        // Create textures.
-        for resolved in &pending {
-            if let Some(decoded) = self.decoded_images.get(resolved)
-                && let Ok(tex) =
-                    backend.load_texture(decoded.width, decoded.height, &decoded.pixels)
-            {
-                self.image_textures.insert(resolved.clone(), tex);
             }
         }
 
@@ -550,6 +545,7 @@ impl BrowserWidget {
             {
                 let resolved = Self::resolve_src(&base_url, url);
                 if !self.image_textures.contains_key(&resolved)
+                    && !self.image_atlas.contains(&resolved)
                     && self.decoded_images.contains_key(&resolved)
                     && !pending.contains(&resolved)
                 {
@@ -558,15 +554,28 @@ impl BrowserWidget {
             }
         }
 
-        // Create textures.
+        // Create textures: pack small images into the atlas, use
+        // individual textures for larger ones.
         for resolved in &pending {
-            if let Some(decoded) = self.decoded_images.get(resolved)
-                && let Ok(tex) =
+            if let Some(decoded) = self.decoded_images.get(resolved) {
+                if crate::image_atlas::ImageAtlas::is_eligible(decoded.width, decoded.height) {
+                    // Try to pack into the atlas.
+                    self.image_atlas.insert(
+                        resolved,
+                        decoded.width,
+                        decoded.height,
+                        &decoded.pixels,
+                    );
+                } else if let Ok(tex) =
                     backend.load_texture(decoded.width, decoded.height, &decoded.pixels)
-            {
-                self.image_textures.insert(resolved.clone(), tex);
+                {
+                    self.image_textures.insert(resolved.clone(), tex);
+                }
             }
         }
+
+        // Upload any dirty atlas pages to the GPU.
+        self.image_atlas.upload_dirty(backend);
 
         // Walk layout tree and assign textures.
         if let Some(layout) = &mut self.layout_root {
@@ -575,6 +584,7 @@ impl BrowserWidget {
                 &self.document,
                 &base_url,
                 &self.image_textures,
+                &self.image_atlas,
                 self.window_w,
             );
         }
@@ -582,15 +592,20 @@ impl BrowserWidget {
 
     /// Recursively walk the layout tree and assign GPU textures to
     /// `ReplacedContent::Image` nodes and `background-image` styles.
+    ///
+    /// For images packed into the atlas, the atlas texture ID and
+    /// source region are assigned so the paint layer can use `blit_sub`.
     fn assign_textures_recursive(
         layout_box: &mut layout::box_model::LayoutBox,
         doc: &Option<html::dom::Document>,
         base_url: &Option<String>,
         textures: &HashMap<String, TextureId>,
+        atlas: &crate::image_atlas::ImageAtlas,
         viewport_w: u32,
     ) {
         if let layout::box_model::BoxType::Replaced(layout::box_model::ReplacedContent::Image {
             ref mut texture,
+            ref mut atlas_region,
             ..
         }) = layout_box.box_type
             && texture.is_none()
@@ -602,13 +617,19 @@ impl BrowserWidget {
                 && let Some(src) = effective_img_src(elem, viewport_w)
             {
                 let resolved = Self::resolve_src(base_url, &src);
-                if let Some(&tex) = textures.get(&resolved) {
+                // Check atlas first, then individual textures.
+                if let Some((atlas_tex, region)) = atlas.get(&resolved) {
+                    *texture = Some(atlas_tex);
+                    *atlas_region = Some(region);
+                } else if let Some(&tex) = textures.get(&resolved) {
                     *texture = Some(tex);
                 }
             }
         }
 
-        // Assign background-image texture.
+        // Assign background-image texture (not atlas-eligible since
+        // background images are typically tiled/stretched to arbitrary
+        // sizes and need their own texture).
         if layout_box.background_texture.is_none()
             && let css::values::BackgroundImage::Url(ref url) = layout_box.style.background_image
         {
@@ -619,7 +640,7 @@ impl BrowserWidget {
         }
 
         for child in &mut layout_box.children {
-            Self::assign_textures_recursive(child, doc, base_url, textures, viewport_w);
+            Self::assign_textures_recursive(child, doc, base_url, textures, atlas, viewport_w);
         }
     }
 

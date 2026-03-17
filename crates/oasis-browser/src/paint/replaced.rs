@@ -25,6 +25,7 @@ pub(super) fn paint_replaced(
             texture: Some(tex),
             width: img_w,
             height: img_h,
+            atlas_region,
             ..
         } => {
             let box_w = content.width as u32;
@@ -38,7 +39,11 @@ pub(super) fn paint_replaced(
                 x,
                 y,
             );
-            backend.blit(*tex, blit_x, blit_y, blit_w, blit_h)?;
+            if let Some(ar) = atlas_region {
+                backend.blit_sub(*tex, ar.x, ar.y, ar.w, ar.h, blit_x, blit_y, blit_w, blit_h)?;
+            } else {
+                backend.blit(*tex, blit_x, blit_y, blit_w, blit_h)?;
+            }
         },
         ReplacedContent::Image { alt, .. } => {
             // Broken image placeholder: thin border + alt text or X.

@@ -69,6 +69,18 @@ pub enum DisplayItem {
         w: u32,
         h: u32,
     },
+    /// Sub-rectangle blit from a texture atlas.
+    BlitSub {
+        texture: TextureId,
+        src_x: u32,
+        src_y: u32,
+        src_w: u32,
+        src_h: u32,
+        dst_x: i32,
+        dst_y: i32,
+        dst_w: u32,
+        dst_h: u32,
+    },
     /// Gradient fill.
     Gradient {
         x: i32,
@@ -119,6 +131,18 @@ impl DisplayItem {
             | DisplayItem::BorderEdge { x, y, w, h, .. }
             | DisplayItem::Shadow { x, y, w, h, .. }
             | DisplayItem::PushClip { x, y, w, h } => Some(Rect {
+                x: *x as f32,
+                y: *y as f32,
+                width: *w as f32,
+                height: *h as f32,
+            }),
+            DisplayItem::BlitSub {
+                dst_x: x,
+                dst_y: y,
+                dst_w: w,
+                dst_h: h,
+                ..
+            } => Some(Rect {
                 x: *x as f32,
                 y: *y as f32,
                 width: *w as f32,
@@ -291,6 +315,29 @@ impl DisplayList {
                 } => {
                     backend.blit(*texture, x + scroll_dx, y + scroll_dy, *w, *h)?;
                 },
+                DisplayItem::BlitSub {
+                    texture,
+                    src_x,
+                    src_y,
+                    src_w,
+                    src_h,
+                    dst_x,
+                    dst_y,
+                    dst_w,
+                    dst_h,
+                } => {
+                    backend.blit_sub(
+                        *texture,
+                        *src_x,
+                        *src_y,
+                        *src_w,
+                        *src_h,
+                        dst_x + scroll_dx,
+                        dst_y + scroll_dy,
+                        *dst_w,
+                        *dst_h,
+                    )?;
+                },
                 DisplayItem::Gradient { x, y, w, h, style } => {
                     backend.fill_rect_gradient(x + scroll_dx, y + scroll_dy, *w, *h, style)?;
                 },
@@ -461,6 +508,29 @@ impl DisplayList {
                     h,
                 } => {
                     backend.blit(*texture, x + scroll_dx, y + scroll_dy, *w, *h)?;
+                },
+                DisplayItem::BlitSub {
+                    texture,
+                    src_x,
+                    src_y,
+                    src_w,
+                    src_h,
+                    dst_x,
+                    dst_y,
+                    dst_w,
+                    dst_h,
+                } => {
+                    backend.blit_sub(
+                        *texture,
+                        *src_x,
+                        *src_y,
+                        *src_w,
+                        *src_h,
+                        dst_x + scroll_dx,
+                        dst_y + scroll_dy,
+                        *dst_w,
+                        *dst_h,
+                    )?;
                 },
                 DisplayItem::Gradient { x, y, w, h, style } => {
                     backend.fill_rect_gradient(x + scroll_dx, y + scroll_dy, *w, *h, style)?;

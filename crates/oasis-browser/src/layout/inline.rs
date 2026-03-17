@@ -1166,6 +1166,7 @@ mod tests {
             height: 80,
             texture: None,
             alt: String::new(),
+            atlas_region: None,
         };
 
         let child = LayoutBox::new(BoxType::Replaced(replaced), style, None);
@@ -1203,6 +1204,7 @@ mod tests {
             height: 80,
             texture: None,
             alt: String::new(),
+            atlas_region: None,
         };
 
         let child = LayoutBox::new(BoxType::Replaced(replaced), style, None);

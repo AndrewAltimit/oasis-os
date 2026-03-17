@@ -344,6 +344,7 @@ fn replaced_content(
                 height,
                 texture: None,
                 alt,
+                atlas_region: None,
             })
         },
         TagName::Hr => Some(ReplacedContent::HorizontalRule),
