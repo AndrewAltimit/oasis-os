@@ -112,9 +112,16 @@ fn record_box(
     let box_right = screen_x + layout_box.dimensions.margin_box().width;
 
     if box_bottom < 0.0 || screen_y > ctx.viewport_height {
+        // Close the sticky layer opened above to keep the stack balanced.
+        if is_sticky {
+            dl.push(DisplayItem::PopLayer);
+        }
         return;
     }
     if box_right < 0.0 || screen_x > ctx.viewport_width {
+        if is_sticky {
+            dl.push(DisplayItem::PopLayer);
+        }
         return;
     }
 
@@ -156,12 +163,20 @@ fn record_box(
         }
     }
 
+    // When opacity is handled by PushLayer, recording should use 1.0
+    // to avoid applying opacity twice (once during recording, once during replay).
+    let effective_opacity = if needs_layer {
+        1.0
+    } else {
+        layout_box.style.opacity
+    };
+
     if is_visible {
         // 0. Box shadow.
-        record_box_shadow(layout_box, dl, offset_x, offset_y, ctx);
+        record_box_shadow(layout_box, dl, offset_x, offset_y, ctx, effective_opacity);
 
         // 1. Background.
-        record_background(layout_box, dl, offset_x, offset_y, ctx);
+        record_background(layout_box, dl, offset_x, offset_y, ctx, effective_opacity);
 
         // 2. Borders.
         record_borders(layout_box, dl, offset_x, offset_y, ctx);
@@ -333,6 +348,7 @@ fn record_background(
     offset_x: i32,
     offset_y: i32,
     ctx: &RecordContext,
+    effective_opacity: f32,
 ) {
     let padding = layout_box.dimensions.padding_box();
     let x = (padding.x - ctx.scroll_x + offset_x as f32) as i32;
@@ -342,7 +358,7 @@ fn record_background(
 
     let bg = apply_filters_and_opacity(
         layout_box.style.background_color,
-        layout_box.style.opacity,
+        effective_opacity,
         &layout_box.style.filters,
     );
     if bg.a > 0 {
@@ -370,14 +386,14 @@ fn record_background(
     if let crate::css::values::BackgroundImage::Gradient(ref grad) =
         layout_box.style.background_image
     {
-        record_linear_gradient(dl, x, y, w, h, grad, layout_box.style.opacity);
+        record_linear_gradient(dl, x, y, w, h, grad, effective_opacity);
     }
 
     // Radial gradient.
     if let crate::css::values::BackgroundImage::RadialGradient(ref grad) =
         layout_box.style.background_image
     {
-        record_radial_gradient(dl, x, y, w, h, grad, layout_box.style.opacity);
+        record_radial_gradient(dl, x, y, w, h, grad, effective_opacity);
     }
 
     // Background image texture.
@@ -712,6 +728,7 @@ fn record_box_shadow(
     offset_x: i32,
     offset_y: i32,
     ctx: &RecordContext,
+    _effective_opacity: f32,
 ) {
     if layout_box.style.box_shadow.is_empty() {
         return;
@@ -870,7 +887,9 @@ fn record_text(
     let sx = (x - ctx.scroll_x + offset_x as f32) as i32;
     let sy = (y - ctx.scroll_y + offset_y as f32) as i32;
 
-    let color = apply_filters_and_opacity(style.color, style.opacity, &style.filters);
+    // Opacity is handled by PushLayer/PopLayer during replay — use 1.0 here
+    // to avoid doubling opacity (once in recording, once during replay).
+    let color = apply_filters_and_opacity(style.color, 1.0, &style.filters);
     let bold = style.font_weight == crate::css::values::FontWeight::Bold;
     let italic = style.font_style == crate::css::values::FontStyle::Italic;
     let font_size = style.font_size as u16;
@@ -879,8 +898,7 @@ fn record_text(
     let display_text: std::borrow::Cow<'_, str>;
     if ctx.text_overflow_ellipsis {
         if let Some(clip) = &ctx.clip_rect {
-            let max_x = (clip.x + clip.width) as i32 - offset_x;
-            let avail = (max_x - sx).max(0) as u32;
+            let avail = (clip.x + clip.width - x).max(0.0) as u32;
             let text_w = oasis_types::backend::bitmap_measure_text(text, font_size);
             if text_w > avail {
                 let ellipsis = "\u{2026}";
@@ -912,7 +930,7 @@ fn record_text(
 
     // Text shadow.
     if let Some(ref shadow) = style.text_shadow {
-        let shadow_color = apply_opacity(shadow.color, style.opacity);
+        let shadow_color = apply_opacity(shadow.color, 1.0);
         dl.push(DisplayItem::DrawText {
             text: display_text.to_string(),
             x: sx + shadow.offset_x as i32,

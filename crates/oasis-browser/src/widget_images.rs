@@ -340,13 +340,26 @@ impl BrowserWidget {
                 Some(&self.cache),
             ) {
                 // On non-WASM, dispatch to background decode thread.
+                // Falls back to synchronous decode if the channel is unavailable.
                 #[cfg(not(target_arch = "wasm32"))]
                 {
                     self.ensure_decode_thread();
-                    if let Some(ref tx) = self.image_decode_tx
-                        && tx.send((resolved, loaded.response.body)).is_ok()
-                    {
+                    let sent = if let Some(ref tx) = self.image_decode_tx {
+                        tx.send((resolved.clone(), loaded.response.body.clone()))
+                            .is_ok()
+                    } else {
+                        false
+                    };
+                    if sent {
                         self.image_decode_in_flight += 1;
+                    } else if let Some(decoded) = image::decode_image(&loaded.response.body) {
+                        // Sync fallback: channel unavailable or send failed.
+                        let img_bytes = decoded.width as usize * decoded.height as usize * 4;
+                        self.decoded_image_bytes += img_bytes;
+                        self.decoded_image_lru.push_front(resolved.clone());
+                        self.decoded_images.insert(resolved, decoded);
+                        self.image_info_dirty = true;
+                        any_decoded = true;
                     }
                 }
 
