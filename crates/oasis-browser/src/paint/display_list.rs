@@ -87,6 +87,19 @@ pub enum DisplayItem {
         style: BorderStyle,
         horizontal: bool,
     },
+    /// Box shadow (outer).
+    Shadow {
+        x: i32,
+        y: i32,
+        w: u32,
+        h: u32,
+        blur: f32,
+        spread: f32,
+        offset_x: f32,
+        offset_y: f32,
+        color: Color,
+        radius: f32,
+    },
     /// Push a clip rectangle (intersects with parent clip).
     PushClip { x: i32, y: i32, w: u32, h: u32 },
     /// Pop the most recent clip rectangle.
@@ -104,6 +117,7 @@ impl DisplayItem {
             | DisplayItem::Blit { x, y, w, h, .. }
             | DisplayItem::Gradient { x, y, w, h, .. }
             | DisplayItem::BorderEdge { x, y, w, h, .. }
+            | DisplayItem::Shadow { x, y, w, h, .. }
             | DisplayItem::PushClip { x, y, w, h } => Some(Rect {
                 x: *x as f32,
                 y: *y as f32,
@@ -300,6 +314,31 @@ impl DisplayList {
                         *horizontal,
                     )?;
                 },
+                DisplayItem::Shadow {
+                    x,
+                    y,
+                    w,
+                    h,
+                    blur,
+                    spread,
+                    offset_x,
+                    offset_y,
+                    color,
+                    radius,
+                } => {
+                    backend.fill_shadow(
+                        x + scroll_dx,
+                        y + scroll_dy,
+                        *w,
+                        *h,
+                        *blur,
+                        *spread,
+                        *offset_x,
+                        *offset_y,
+                        *color,
+                        *radius,
+                    )?;
+                },
                 DisplayItem::PushClip { x, y, w, h } => {
                     backend.set_clip_rect(x + scroll_dx, y + scroll_dy, *w, *h)?;
                 },
@@ -444,6 +483,31 @@ impl DisplayList {
                         *color,
                         *style,
                         *horizontal,
+                    )?;
+                },
+                DisplayItem::Shadow {
+                    x,
+                    y,
+                    w,
+                    h,
+                    blur,
+                    spread,
+                    offset_x,
+                    offset_y,
+                    color,
+                    radius,
+                } => {
+                    backend.fill_shadow(
+                        x + scroll_dx,
+                        y + scroll_dy,
+                        *w,
+                        *h,
+                        *blur,
+                        *spread,
+                        *offset_x,
+                        *offset_y,
+                        *color,
+                        *radius,
                     )?;
                 },
                 DisplayItem::PushClip { .. } | DisplayItem::PopClip => {

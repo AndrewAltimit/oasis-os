@@ -733,46 +733,24 @@ fn record_box_shadow(
                 });
             }
         } else {
-            let bx = (border.x - ctx.scroll_x + offset_x as f32 + shadow.offset_x - shadow.spread)
-                as i32;
-            let by = (border.y - ctx.scroll_y + offset_y as f32 + shadow.offset_y - shadow.spread)
-                as i32;
-            let bw = (border.width + shadow.spread * 2.0) as u32;
-            let bh = (border.height + shadow.spread * 2.0) as u32;
-
-            let steps = (shadow.blur as i32).max(1);
-            for i in (0..steps).rev() {
-                let t = i as f32 / steps as f32;
-                let alpha = ((shadow.color.a as f32) * (1.0 - t) * 0.4) as u8;
-                if alpha == 0 {
-                    continue;
-                }
-                let expand = i;
-                let color = Color::rgba(shadow.color.r, shadow.color.g, shadow.color.b, alpha);
-                let rx = bx - expand;
-                let ry = by - expand;
-                let rw = bw + expand as u32 * 2;
-                let rh = bh + expand as u32 * 2;
-                if radius > 0.0 {
-                    let r = (radius + expand as f32) as u16;
-                    dl.push(DisplayItem::FillRoundedRect {
-                        x: rx,
-                        y: ry,
-                        w: rw,
-                        h: rh,
-                        radius: r,
-                        color,
-                    });
-                } else {
-                    dl.push(DisplayItem::FillRect {
-                        x: rx,
-                        y: ry,
-                        w: rw,
-                        h: rh,
-                        color,
-                    });
-                }
-            }
+            // Emit a single Shadow display item — GPU backends can render
+            // this with a Gaussian blur shader during replay.
+            let sx = (border.x - ctx.scroll_x + offset_x as f32) as i32;
+            let sy = (border.y - ctx.scroll_y + offset_y as f32) as i32;
+            let sw = border.width as u32;
+            let sh = border.height as u32;
+            dl.push(DisplayItem::Shadow {
+                x: sx,
+                y: sy,
+                w: sw,
+                h: sh,
+                blur: shadow.blur,
+                spread: shadow.spread,
+                offset_x: shadow.offset_x,
+                offset_y: shadow.offset_y,
+                color: shadow.color,
+                radius,
+            });
         }
     }
 }
