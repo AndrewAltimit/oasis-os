@@ -316,6 +316,10 @@ impl BrowserWidget {
             if self.image_decode_in_flight == 0 && self.state == LoadingState::Loading {
                 self.state = LoadingState::Idle;
             }
+            #[cfg(target_arch = "wasm32")]
+            if self.state == LoadingState::Loading {
+                self.state = LoadingState::Idle;
+            }
             if any_decoded {
                 self.layout_dirty = true;
                 self.rebuild_layout_with_images();

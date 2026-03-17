@@ -292,7 +292,9 @@ impl DisplayList {
             // everything inside to nothing).
             DisplayItem::PushClip { .. } => true,
             DisplayItem::BlitSub { dst_w, dst_h, .. } => *dst_w > 0 && *dst_h > 0,
-            DisplayItem::Shadow { w, h, .. } => *w > 0 && *h > 0,
+            // Shadows are always retained: a 0x0 source with large spread/blur
+            // still produces visible pixels.
+            DisplayItem::Shadow { .. } => true,
             DisplayItem::DrawText { text, width, .. } => !text.is_empty() && *width > 0,
             // PopClip, PushLayer, PopLayer, BlurHint — always keep.
             _ => true,
