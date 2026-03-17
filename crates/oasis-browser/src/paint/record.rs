@@ -31,10 +31,14 @@ struct RecordContext {
     scroll_y: f32,
     /// Horizontal scroll offset.
     scroll_x: f32,
-    /// Viewport height for offscreen culling.
+    /// Viewport height for offscreen culling (includes buffer zone).
     viewport_height: f32,
     /// Viewport width for offscreen culling.
     viewport_width: f32,
+    /// True visible viewport height (excludes buffer zone).
+    /// Used for sticky positioning so elements stick to the visible
+    /// area, not the extended culling boundary.
+    visible_viewport_height: f32,
     /// Active clipping rectangle from ancestor `overflow: hidden` boxes.
     clip_rect: Option<Rect>,
     /// When true, text overflowing the clip rect gets "..." appended.
@@ -64,6 +68,7 @@ pub fn record(
         scroll_x: viewport.scroll_x,
         viewport_height: viewport.height,
         viewport_width: viewport.width,
+        visible_viewport_height: viewport.visible_height,
         clip_rect: None,
         text_overflow_ellipsis: false,
     };
@@ -1530,7 +1535,7 @@ fn compute_sticky_dy(layout_box: &LayoutBox, offset_y: i32, ctx: &RecordContext)
     } else if let Some(bottom) = bottom_px {
         let natural = layout_box.dimensions.content.y - ctx.scroll_y + offset_y as f32;
         let box_h = layout_box.dimensions.margin_box().height;
-        let threshold = ctx.viewport_height - bottom - box_h;
+        let threshold = ctx.visible_viewport_height - bottom - box_h;
         if natural > threshold {
             (threshold - natural) as i32
         } else {

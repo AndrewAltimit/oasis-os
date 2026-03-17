@@ -60,8 +60,11 @@ pub struct PaintViewport {
     pub y: i32,
     /// Viewport width for culling off-screen content.
     pub width: f32,
-    /// Viewport height for culling off-screen content.
+    /// Viewport height for culling off-screen content (may include buffer zone).
     pub height: f32,
+    /// True visible viewport height (excludes buffer zone).
+    /// Used for sticky positioning. Defaults to `height` if not set.
+    pub visible_height: f32,
 }
 // -------------------------------------------------------------------
 
@@ -735,6 +738,7 @@ mod tests {
         y: 0,
         width: 480.0,
         height: 272.0,
+        visible_height: 272.0,
     };
 
     // ---------------------------------------------------------------

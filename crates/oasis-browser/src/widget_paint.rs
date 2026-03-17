@@ -126,6 +126,7 @@ impl BrowserWidget {
                     y: content_y,
                     width: self.window_w as f32,
                     height: buffered_h,
+                    visible_height: content_h as f32,
                 };
 
                 // Record to display list (no draw calls emitted).
@@ -169,6 +170,7 @@ impl BrowserWidget {
                     y: content_y,
                     width: self.window_w as f32,
                     height: buffered_h,
+                    visible_height: content_h as f32,
                 };
                 let links =
                     paint::record::record(layout, viewport, &self.href_map, &mut self.display_list);
@@ -205,6 +207,7 @@ impl BrowserWidget {
                         y: content_y,
                         width: self.window_w as f32,
                         height: buffered_h,
+                        visible_height: content_h as f32,
                     };
                     let links = paint::record::record(
                         layout,
@@ -254,6 +257,7 @@ impl BrowserWidget {
                 backend,
                 self.scroll.scroll_x as f32,
                 self.scroll.scroll_y as f32,
+                content_h as f32,
                 self.window_x,
                 content_y,
             )?;
@@ -619,6 +623,7 @@ impl BrowserWidget {
         backend: &mut dyn SdiBackend,
         scroll_x: f32,
         scroll_y: f32,
+        viewport_height: f32,
         offset_x: i32,
         offset_y: i32,
     ) -> Result<()> {
@@ -636,8 +641,7 @@ impl BrowserWidget {
             } else if let Dimension::Px(bottom) = layout_box.style.bottom {
                 let natural = layout_box.dimensions.content.y - scroll_y + offset_y as f32;
                 let box_h = layout_box.dimensions.margin_box().height;
-                let viewport_h = (scroll_y + 272.0).max(0.0); // approximate
-                let threshold = viewport_h - bottom - box_h;
+                let threshold = viewport_height - bottom - box_h;
                 if natural > threshold {
                     (threshold - natural) as i32
                 } else {
@@ -682,7 +686,15 @@ impl BrowserWidget {
             }
         }
         for child in &layout_box.children {
-            Self::paint_svg_canvas_elements(child, backend, scroll_x, scroll_y, tx_x, tx_y)?;
+            Self::paint_svg_canvas_elements(
+                child,
+                backend,
+                scroll_x,
+                scroll_y,
+                viewport_height,
+                tx_x,
+                tx_y,
+            )?;
         }
         Ok(())
     }
