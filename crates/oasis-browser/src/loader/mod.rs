@@ -8,6 +8,8 @@ pub mod csp;
 pub mod gemini_fetch;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod http;
+#[cfg(feature = "psp")]
+pub mod http_psp;
 pub mod vfs;
 
 use std::fmt;
@@ -505,24 +507,28 @@ pub fn load_resource(
     vfs_backend: &dyn oasis_vfs::Vfs,
     request: &ResourceRequest,
     tls: Option<&dyn oasis_net::tls::TlsProvider>,
-    #[cfg(not(target_arch = "wasm32"))] cookie_jar: Option<&mut cookies::CookieJar>,
-    #[cfg(not(target_arch = "wasm32"))] resource_cache: Option<&cache::ResourceCache>,
+    #[cfg(not(any(target_arch = "wasm32", feature = "psp")))] cookie_jar: Option<
+        &mut cookies::CookieJar,
+    >,
+    #[cfg(not(any(target_arch = "wasm32", feature = "psp")))] resource_cache: Option<
+        &cache::ResourceCache,
+    >,
 ) -> Result<LoadedResource> {
     match request.source {
         ResourceSource::Vfs => {
             vfs::load_from_vfs(vfs_backend, request).map(LoadedResource::from_response)
         },
-        #[cfg(not(target_arch = "wasm32"))]
+        #[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
         ResourceSource::Network => load_from_network(request, tls, cookie_jar, resource_cache),
-        #[cfg(target_arch = "wasm32")]
+        #[cfg(any(target_arch = "wasm32", feature = "psp"))]
         ResourceSource::Network => {
             load_from_network(request, tls).map(LoadedResource::from_response)
         },
         ResourceSource::VfsThenNetwork => match vfs::load_from_vfs(vfs_backend, request) {
             Ok(resp) => Ok(LoadedResource::from_response(resp)),
-            #[cfg(not(target_arch = "wasm32"))]
+            #[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
             Err(_) => load_from_network(request, tls, cookie_jar, resource_cache),
-            #[cfg(target_arch = "wasm32")]
+            #[cfg(any(target_arch = "wasm32", feature = "psp"))]
             Err(_) => load_from_network(request, tls).map(LoadedResource::from_response),
         },
     }
@@ -553,7 +559,7 @@ impl LoadedResource {
 }
 
 /// Load a resource over the network (HTTP/HTTPS).
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
 fn load_from_network(
     request: &ResourceRequest,
     tls: Option<&dyn oasis_net::tls::TlsProvider>,
@@ -645,6 +651,43 @@ fn load_from_network(
             })
         },
         "gemini" => gemini_fetch::gemini_get(&url, tls).map(LoadedResource::from_response),
+        scheme => Err(oasis_types::error::OasisError::Backend(
+            format!("unsupported network scheme: {scheme}",).into(),
+        )),
+    }
+}
+
+/// PSP network loader using raw `sceNetInet*` sockets + embedded-tls.
+#[cfg(feature = "psp")]
+fn load_from_network(
+    request: &ResourceRequest,
+    tls: Option<&dyn oasis_net::tls::TlsProvider>,
+) -> Result<ResourceResponse> {
+    let url = Url::parse(&request.url).ok_or_else(|| {
+        oasis_types::error::OasisError::Backend(format!("invalid URL: {}", request.url,).into())
+    })?;
+
+    match url.scheme.as_str() {
+        "http" | "https" => {
+            let method = match request.method {
+                HttpMethod::Get => "GET",
+                HttpMethod::Post => "POST",
+            };
+
+            let mut extra: Vec<(&str, &str)> = Vec::new();
+
+            // Add Referer header (privacy-stripped).
+            let referrer_owned;
+            if let Some(ref referrer) = request.referrer {
+                referrer_owned = referrer.clone();
+                extra.push(("Referer", &referrer_owned));
+            }
+
+            let (resp, _headers) =
+                http_psp::http_request_full(method, &url, request.body.as_deref(), &extra, tls)?;
+
+            Ok(resp)
+        },
         scheme => Err(oasis_types::error::OasisError::Backend(
             format!("unsupported network scheme: {scheme}",).into(),
         )),

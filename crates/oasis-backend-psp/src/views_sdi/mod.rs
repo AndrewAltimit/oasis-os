@@ -21,6 +21,8 @@ use oasis_core::sdi::SdiRegistry;
 use crate::types::ClassicView;
 
 // Re-export all public view functions.
+// Browser SDI views retained for potential future fallback use.
+#[allow(unused_imports)]
 pub(crate) use browser::{setup_browser, update_browser};
 pub(crate) use file_manager::{setup_file_manager, update_file_manager};
 pub(crate) use helpers::hide_all;
@@ -40,7 +42,10 @@ pub(crate) fn setup_view(sdi: &mut SdiRegistry, view: ClassicView) {
             setup_photo_view(sdi);
         },
         ClassicView::MusicPlayer => setup_music_browser(sdi),
-        ClassicView::Browser => setup_browser(sdi),
+        ClassicView::Browser => {
+            // Browser now uses BrowserWidget::paint() directly.
+            // No SDI objects needed.
+        },
         ClassicView::FileManager => setup_file_manager(sdi),
         // Dashboard and Terminal already have their own SDI setup.
         ClassicView::Dashboard | ClassicView::Terminal => {},

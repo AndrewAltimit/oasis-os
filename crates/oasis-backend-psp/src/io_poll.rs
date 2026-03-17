@@ -7,7 +7,6 @@ use oasis_backend_psp::{AudioCmd, IoResponse, PspBackend};
 
 use crate::app_states::*;
 use crate::types::RadioStatus;
-use crate::views;
 
 /// Poll all pending I/O responses and update app state accordingly.
 #[allow(clippy::too_many_arguments)]
@@ -47,7 +46,7 @@ pub(crate) fn poll_io_responses(
                 pv.loading = false;
                 if br.loading {
                     br.loading = false;
-                    br.status_msg = format!("Error: {}", msg);
+                    br.status_msg = format!("Error: {msg}");
                 }
             },
             IoResponse::FileReady { .. } => {},
@@ -57,12 +56,9 @@ pub(crate) fn poll_io_responses(
                 body,
             } => {
                 if tag == 0xBEEF {
-                    let html = String::from_utf8_lossy(&body);
-                    let text = views::strip_html(&html);
-                    br.content_lines = views::wrap_text(&text, 58);
-                    br.scroll = 0;
-                    br.loading = false;
-                    br.status_msg = format!("HTTP {} - {} bytes", status_code, body.len());
+                    // Browser now uses full oasis-browser engine with its
+                    // own resource loading. Legacy text-only path removed.
+                    let _ = (status_code, body);
                 } else if (tag & 0xFF00) == 0xAA00 {
                     // Legacy TV Guide tag -- no longer used.
                     let _ = (tag, body);

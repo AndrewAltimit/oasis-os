@@ -151,26 +151,72 @@ impl MusicPlayerState {
 }
 
 // ---------------------------------------------------------------------------
-// Browser
+// Browser (full oasis-browser engine)
 // ---------------------------------------------------------------------------
 
 pub(crate) struct BrowserState {
-    pub(crate) url: String,
-    pub(crate) content_lines: Vec<String>,
-    pub(crate) scroll: usize,
-    pub(crate) loading: bool,
+    /// Full browser engine widget -- lazily initialized to save RAM.
+    /// Only allocated when the user first opens the browser.
+    pub(crate) widget: Option<oasis_browser::BrowserWidget>,
+    /// Minimal VFS for the browser (PSP has no oasis-vfs on disk).
+    pub(crate) vfs: oasis_core::vfs::MemoryVfs,
+    /// Status message for the SDI fallback display.
     pub(crate) status_msg: String,
+    /// Whether the browser is currently loading (for loading indicator).
+    pub(crate) loading: bool,
 }
 
 impl BrowserState {
     pub(crate) fn new() -> Self {
         Self {
-            url: String::from("http://info.cern.ch"),
-            content_lines: Vec::new(),
-            scroll: 0,
+            widget: None,
+            vfs: oasis_core::vfs::MemoryVfs::new(),
+            status_msg: String::from("Press [] to enter URL, X to navigate"),
             loading: false,
-            status_msg: String::from("Press [] to enter URL"),
         }
+    }
+
+    /// Ensure the BrowserWidget is initialized. Returns a mutable ref.
+    pub(crate) fn ensure_widget(&mut self) -> &mut oasis_browser::BrowserWidget {
+        if self.widget.is_none() {
+            use oasis_browser::BrowserConfig;
+            use oasis_browser::config::BrowserFeatures;
+
+            let config = BrowserConfig {
+                default_font_size: 8.0,
+                max_image_dimension: 256, // PSP VRAM constraint
+                url_bar_height: 14,
+                status_bar_height: 10,
+                smooth_scroll: false,
+                features: BrowserFeatures {
+                    enabled: true,
+                    native_engine: true,
+                    gemini: false,
+                    reader_mode: true,
+                    sandbox_only: false,
+                    home_url: "https://info.cern.ch".to_string(),
+                    max_cache_mb: 1, // PSP RAM budget -- keep small
+                    ..Default::default()
+                },
+                ..Default::default()
+            };
+            let mut widget = oasis_browser::BrowserWidget::new(config);
+            widget.set_window(0, 14, 480, 244);
+            // Attach TLS provider for HTTPS.
+            widget.set_tls_provider(Box::new(
+                oasis_backend_psp::PspTlsProvider::new(),
+            ));
+            self.widget = Some(widget);
+        }
+        self.widget.as_mut().expect("just initialized above")
+    }
+
+    /// Get the current URL for display.
+    pub(crate) fn url(&self) -> &str {
+        self.widget
+            .as_ref()
+            .and_then(|w| w.current_url())
+            .unwrap_or("https://info.cern.ch")
     }
 }
 

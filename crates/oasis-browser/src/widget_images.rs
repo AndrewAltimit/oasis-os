@@ -211,7 +211,7 @@ impl BrowserWidget {
     ///
     /// Lazily spawns a daemon thread on first call. The thread receives
     /// `(url, raw_bytes)` and sends back `(url, DecodedImage)`.
-    #[cfg(not(target_arch = "wasm32"))]
+    #[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
     fn ensure_decode_thread(&mut self) {
         if self.image_decode_tx.is_some() {
             return;
@@ -249,7 +249,7 @@ impl BrowserWidget {
     /// Collect completed image decodes from the background thread.
     ///
     /// Returns `true` if any new images were inserted.
-    #[cfg(not(target_arch = "wasm32"))]
+    #[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
     fn poll_decoded_images(&mut self) -> bool {
         let rx = match &self.image_decode_rx {
             Some(rx) => rx,
@@ -306,17 +306,17 @@ impl BrowserWidget {
         self.promote_deferred_images();
 
         // On non-WASM targets, collect any completed background decodes.
-        #[cfg(not(target_arch = "wasm32"))]
+        #[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
         let mut any_decoded = self.poll_decoded_images();
-        #[cfg(target_arch = "wasm32")]
+        #[cfg(any(target_arch = "wasm32", feature = "psp"))]
         let mut any_decoded = false;
 
         if self.pending_images.is_empty() {
-            #[cfg(not(target_arch = "wasm32"))]
+            #[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
             if self.image_decode_in_flight == 0 && self.state == LoadingState::Loading {
                 self.state = LoadingState::Idle;
             }
-            #[cfg(target_arch = "wasm32")]
+            #[cfg(any(target_arch = "wasm32", feature = "psp"))]
             if self.state == LoadingState::Loading {
                 self.state = LoadingState::Idle;
             }
@@ -346,14 +346,14 @@ impl BrowserWidget {
                 vfs,
                 &request,
                 self.tls.as_deref(),
-                #[cfg(not(target_arch = "wasm32"))]
+                #[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
                 Some(&mut self.cookie_jar),
-                #[cfg(not(target_arch = "wasm32"))]
+                #[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
                 Some(&self.cache),
             ) {
                 // On non-WASM, dispatch to background decode thread.
                 // Falls back to synchronous decode if the channel is unavailable.
-                #[cfg(not(target_arch = "wasm32"))]
+                #[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
                 {
                     self.ensure_decode_thread();
                     let sent = if let Some(ref tx) = self.image_decode_tx {
@@ -375,8 +375,8 @@ impl BrowserWidget {
                     }
                 }
 
-                // On WASM, decode synchronously (no threads available).
-                #[cfg(target_arch = "wasm32")]
+                // On WASM/PSP, decode synchronously (no threads available).
+                #[cfg(any(target_arch = "wasm32", feature = "psp"))]
                 if let Some(decoded) = image::decode_image(&loaded.response.body) {
                     let img_bytes = decoded.width as usize * decoded.height as usize * 4;
 
@@ -410,7 +410,7 @@ impl BrowserWidget {
         // On non-WASM, wait within the remaining budget for in-flight
         // decodes to complete so callers that pass a generous budget
         // (e.g. tests with 5000ms) see results immediately.
-        #[cfg(not(target_arch = "wasm32"))]
+        #[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
         if self.image_decode_in_flight > 0
             && let Some(ref rx) = self.image_decode_rx
         {
@@ -460,13 +460,13 @@ impl BrowserWidget {
         }
 
         if self.pending_images.is_empty() {
-            #[cfg(not(target_arch = "wasm32"))]
+            #[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
             {
                 if self.image_decode_in_flight == 0 && self.state == LoadingState::Loading {
                     self.state = LoadingState::Idle;
                 }
             }
-            #[cfg(target_arch = "wasm32")]
+            #[cfg(any(target_arch = "wasm32", feature = "psp"))]
             if self.state == LoadingState::Loading {
                 self.state = LoadingState::Idle;
             }
