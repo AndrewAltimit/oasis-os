@@ -276,13 +276,14 @@ pub(super) fn paint_linear_gradient(
             let c_left = sample_gradient(&grad.stops, t_left, opacity);
             let c_right = sample_gradient(&grad.stops, t_right, opacity);
 
-            let band_y = y + by as i32;
-            let band_h = if band == num_bands - 1 {
-                // Last band absorbs rounding remainder.
-                (h as i32 - by as i32) as u32
+            let start_y = by as i32;
+            let end_y = if band == num_bands - 1 {
+                h as i32
             } else {
-                band_h_f.ceil() as u32
+                ((band + 1) as f32 * band_h_f) as i32
             };
+            let band_y = y + start_y;
+            let band_h = (end_y - start_y).max(0) as u32;
             if band_h == 0 {
                 continue;
             }

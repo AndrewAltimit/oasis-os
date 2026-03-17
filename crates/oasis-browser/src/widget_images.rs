@@ -256,7 +256,19 @@ impl BrowserWidget {
             None => return false,
         };
         let mut any = false;
-        while let Ok((url, decoded)) = rx.try_recv() {
+        loop {
+            let (url, decoded) = match rx.try_recv() {
+                Ok(pair) => pair,
+                Err(std::sync::mpsc::TryRecvError::Empty) => break,
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    // Decode thread died (panic or channel closed).
+                    // Reset in-flight counter to unstick loading state.
+                    self.image_decode_in_flight = 0;
+                    self.image_decode_tx = None;
+                    self.image_decode_rx = None;
+                    break;
+                },
+            };
             self.image_decode_in_flight = self.image_decode_in_flight.saturating_sub(1);
             // Skip sentinel (failed decode) entries.
             if decoded.width == 0 && decoded.height == 0 {

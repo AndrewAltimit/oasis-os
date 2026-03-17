@@ -5,7 +5,7 @@ use oasis_types::error::Result;
 use oasis_vfs::Vfs;
 
 use crate::html::dom::NodeId;
-use crate::layout::box_model::{LayoutBox, Rect};
+use crate::layout::box_model::{BoxType, LayoutBox, Rect, ReplacedContent};
 use crate::paint;
 use crate::{BrowserWidget, Focus, LoadingState};
 
@@ -245,6 +245,18 @@ impl BrowserWidget {
                     )?;
                 }
             }
+        }
+
+        // Paint SVG/Canvas elements that can't be represented in the display list.
+        if let Some(layout) = &self.layout_root {
+            Self::paint_svg_canvas_elements(
+                layout,
+                backend,
+                self.scroll.scroll_x as f32,
+                self.scroll.scroll_y as f32,
+                self.window_x,
+                content_y,
+            )?;
         }
 
         // Paint link highlight if a link is selected.
@@ -590,5 +602,49 @@ impl BrowserWidget {
             }
         }
         None
+    }
+
+    /// Paint SVG and Canvas replaced elements via immediate-mode rendering.
+    ///
+    /// The display list recorder skips these elements because they have
+    /// complex internal drawing pipelines that can't be represented as
+    /// display items. This method walks the layout tree after display list
+    /// replay to paint them directly to the backend.
+    fn paint_svg_canvas_elements(
+        layout_box: &LayoutBox,
+        backend: &mut dyn SdiBackend,
+        scroll_x: f32,
+        scroll_y: f32,
+        offset_x: i32,
+        offset_y: i32,
+    ) -> Result<()> {
+        if let BoxType::Replaced(replaced) = &layout_box.box_type {
+            let content = &layout_box.dimensions.content;
+            let x = (content.x - scroll_x + offset_x as f32) as i32;
+            let y = (content.y - scroll_y + offset_y as f32) as i32;
+            match replaced {
+                ReplacedContent::Svg { element } => {
+                    crate::svg::paint_svg(element, backend, x, y, content.width, content.height)?;
+                },
+                ReplacedContent::Canvas { state } => {
+                    let s = state.borrow();
+                    crate::canvas::paint_canvas(
+                        &s,
+                        backend,
+                        x,
+                        y,
+                        content.width as u32,
+                        content.height as u32,
+                    )?;
+                },
+                _ => {},
+            }
+        }
+        for child in &layout_box.children {
+            Self::paint_svg_canvas_elements(
+                child, backend, scroll_x, scroll_y, offset_x, offset_y,
+            )?;
+        }
+        Ok(())
     }
 }
