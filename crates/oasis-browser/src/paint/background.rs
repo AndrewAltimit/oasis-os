@@ -331,8 +331,10 @@ pub(super) fn paint_radial_gradient(
         (hw * hw + hh * hh).sqrt()
     };
 
-    // Use enough bands for smooth appearance but cap to avoid slowness.
-    let bands = (max_radius as u32).clamp(8, 128);
+    // Use enough bands for smooth appearance but cap to limit draw calls.
+    // 48 bands is visually indistinguishable from 128 for typical radii
+    // while cutting draw calls by up to ~60%.
+    let bands = (max_radius as u32).clamp(8, 48);
 
     // Paint from outside in so inner bands overlay outer.
     for i in 0..bands {

@@ -509,7 +509,7 @@ fn record_radial_gradient(
         (hw * hw + hh * hh).sqrt()
     };
 
-    let bands = (max_radius as u32).clamp(8, 128);
+    let bands = (max_radius as u32).clamp(8, 48);
 
     for i in 0..bands {
         let frac = i as f32 / bands as f32;
