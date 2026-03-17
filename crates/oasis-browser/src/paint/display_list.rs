@@ -234,6 +234,75 @@ impl DisplayList {
         &self.items
     }
 
+    /// Compact the display list by removing degenerate items and merging
+    /// consecutive `FillRect` items that share the same color and form a
+    /// horizontal strip (same y, same height, abutting edges).
+    ///
+    /// This reduces draw call count without changing visual output or
+    /// violating paint order — only truly consecutive same-type items
+    /// are merged.
+    pub fn compact(&mut self) {
+        // Pass 1: remove zero-size items (no visual contribution).
+        self.items.retain(|item| match item {
+            DisplayItem::FillRect { w, h, .. }
+            | DisplayItem::FillRoundedRect { w, h, .. }
+            | DisplayItem::StrokeRoundedRect { w, h, .. }
+            | DisplayItem::Blit { w, h, .. }
+            | DisplayItem::Gradient { w, h, .. }
+            | DisplayItem::BorderEdge { w, h, .. }
+            | DisplayItem::PushClip { w, h, .. } => *w > 0 && *h > 0,
+            DisplayItem::BlitSub { dst_w, dst_h, .. } => *dst_w > 0 && *dst_h > 0,
+            DisplayItem::Shadow { w, h, .. } => *w > 0 && *h > 0,
+            // DrawText, PopClip — always keep.
+            _ => true,
+        });
+
+        // Pass 2: merge consecutive FillRect items with the same color and
+        // height that form a horizontal strip (same y, abutting x + w == next x).
+        if self.items.len() < 2 {
+            return;
+        }
+        let mut merged: Vec<DisplayItem> = Vec::with_capacity(self.items.len());
+        let mut drain = self.items.drain(..);
+        let mut current = drain.next().expect("len >= 2");
+
+        for next in drain {
+            if let (
+                DisplayItem::FillRect {
+                    x: cx,
+                    y: cy,
+                    w: cw,
+                    h: ch,
+                    color: cc,
+                },
+                DisplayItem::FillRect {
+                    x: nx,
+                    y: ny,
+                    w: nw,
+                    h: nh,
+                    color: nc,
+                },
+            ) = (&current, &next)
+            {
+                // Same color, same y, same height, and horizontally abutting?
+                if cc == nc && cy == ny && ch == nh && cx + *cw as i32 == *nx {
+                    current = DisplayItem::FillRect {
+                        x: *cx,
+                        y: *cy,
+                        w: cw + nw,
+                        h: *ch,
+                        color: *cc,
+                    };
+                    continue;
+                }
+            }
+            merged.push(current);
+            current = next;
+        }
+        merged.push(current);
+        self.items = merged;
+    }
+
     /// Replay all display items against the backend.
     ///
     /// This is the main rendering path. The `scroll_dx` and `scroll_dy`
@@ -770,6 +839,144 @@ mod tests {
             height: 100.0,
         };
         assert!(!rects_intersect(&a, &b));
+    }
+
+    #[test]
+    fn compact_removes_zero_size_items() {
+        let mut dl = DisplayList::new();
+        dl.push(DisplayItem::FillRect {
+            x: 0,
+            y: 0,
+            w: 0,
+            h: 10,
+            color: Color::rgb(255, 0, 0),
+        });
+        dl.push(DisplayItem::FillRect {
+            x: 0,
+            y: 0,
+            w: 10,
+            h: 0,
+            color: Color::rgb(255, 0, 0),
+        });
+        dl.push(DisplayItem::FillRect {
+            x: 0,
+            y: 0,
+            w: 10,
+            h: 10,
+            color: Color::rgb(0, 255, 0),
+        });
+        assert_eq!(dl.len(), 3);
+        dl.compact();
+        assert_eq!(dl.len(), 1);
+        if let DisplayItem::FillRect { color, .. } = &dl.items()[0] {
+            assert_eq!(*color, Color::rgb(0, 255, 0));
+        } else {
+            panic!("expected FillRect");
+        }
+    }
+
+    #[test]
+    fn compact_merges_horizontal_fill_rects() {
+        let mut dl = DisplayList::new();
+        let color = Color::rgb(100, 100, 100);
+        // Three abutting rects: (0,0,10,5), (10,0,10,5), (20,0,10,5)
+        dl.push(DisplayItem::FillRect {
+            x: 0,
+            y: 0,
+            w: 10,
+            h: 5,
+            color,
+        });
+        dl.push(DisplayItem::FillRect {
+            x: 10,
+            y: 0,
+            w: 10,
+            h: 5,
+            color,
+        });
+        dl.push(DisplayItem::FillRect {
+            x: 20,
+            y: 0,
+            w: 10,
+            h: 5,
+            color,
+        });
+        dl.compact();
+        assert_eq!(dl.len(), 1);
+        if let DisplayItem::FillRect { x, y, w, h, .. } = &dl.items()[0] {
+            assert_eq!(*x, 0);
+            assert_eq!(*y, 0);
+            assert_eq!(*w, 30);
+            assert_eq!(*h, 5);
+        } else {
+            panic!("expected FillRect");
+        }
+    }
+
+    #[test]
+    fn compact_does_not_merge_different_colors() {
+        let mut dl = DisplayList::new();
+        dl.push(DisplayItem::FillRect {
+            x: 0,
+            y: 0,
+            w: 10,
+            h: 5,
+            color: Color::rgb(255, 0, 0),
+        });
+        dl.push(DisplayItem::FillRect {
+            x: 10,
+            y: 0,
+            w: 10,
+            h: 5,
+            color: Color::rgb(0, 255, 0),
+        });
+        dl.compact();
+        assert_eq!(dl.len(), 2);
+    }
+
+    #[test]
+    fn compact_does_not_merge_non_abutting() {
+        let mut dl = DisplayList::new();
+        let color = Color::rgb(100, 100, 100);
+        dl.push(DisplayItem::FillRect {
+            x: 0,
+            y: 0,
+            w: 10,
+            h: 5,
+            color,
+        });
+        dl.push(DisplayItem::FillRect {
+            x: 15,
+            y: 0,
+            w: 10,
+            h: 5,
+            color,
+        });
+        dl.compact();
+        assert_eq!(dl.len(), 2);
+    }
+
+    #[test]
+    fn compact_preserves_non_fill_rect_items() {
+        let mut dl = DisplayList::new();
+        dl.push(DisplayItem::PushClip {
+            x: 0,
+            y: 0,
+            w: 100,
+            h: 100,
+        });
+        dl.push(DisplayItem::DrawText {
+            text: "hello".into(),
+            x: 5,
+            y: 5,
+            font_size: 12,
+            color: Color::rgb(0, 0, 0),
+            bold: false,
+            italic: false,
+        });
+        dl.push(DisplayItem::PopClip);
+        dl.compact();
+        assert_eq!(dl.len(), 3);
     }
 
     #[test]
