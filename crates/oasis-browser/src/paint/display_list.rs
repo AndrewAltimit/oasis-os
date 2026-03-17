@@ -265,7 +265,12 @@ impl DisplayList {
             | DisplayItem::Blit { w, h, .. }
             | DisplayItem::Gradient { w, h, .. }
             | DisplayItem::BorderEdge { w, h, .. }
-            | DisplayItem::PushClip { w, h, .. } => *w > 0 && *h > 0,
+            => *w > 0 && *h > 0,
+            // PushClip must never be removed — its PopClip is always
+            // retained, and removing one without the other corrupts the
+            // clip stack.  Zero-size clips are harmless (they just clip
+            // everything inside to nothing).
+            DisplayItem::PushClip { .. } => true,
             DisplayItem::BlitSub { dst_w, dst_h, .. } => *dst_w > 0 && *dst_h > 0,
             DisplayItem::Shadow { w, h, .. } => *w > 0 && *h > 0,
             // DrawText, PopClip, PushLayer, PopLayer — always keep.

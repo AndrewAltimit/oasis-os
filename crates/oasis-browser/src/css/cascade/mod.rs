@@ -60,41 +60,48 @@ pub use index::SelectorIndex;
 /// Wrapper around the styles vector that allows disjoint mutable access
 /// from parallel threads.  Safety invariant: each `NodeId` is unique in
 /// the DOM tree, so two threads never write to the same index.
+///
+/// Each element is wrapped in its own `UnsafeCell` so that concurrent
+/// `&self` access to the outer `Vec` (via `Index`, not `IndexMut`) is
+/// sound — only the per-element cell requires unsafe interior mutation.
 #[cfg(feature = "parallel-style")]
 struct ParallelStyles {
-    inner: UnsafeCell<Vec<Option<ComputedStyle>>>,
+    inner: Vec<UnsafeCell<Option<ComputedStyle>>>,
 }
 
 #[cfg(feature = "parallel-style")]
 // SAFETY: Each thread writes to a disjoint index (unique NodeId).
 // Reads only access the parent's index which is already written
-// before any child processing begins.
+// before any child processing begins.  The `UnsafeCell` is per-element,
+// so no `&mut Vec` is ever created — only individual cells are mutated.
 unsafe impl Sync for ParallelStyles {}
 
 #[cfg(feature = "parallel-style")]
 impl ParallelStyles {
     fn new(styles: Vec<Option<ComputedStyle>>) -> Self {
         Self {
-            inner: UnsafeCell::new(styles),
+            inner: styles.into_iter().map(UnsafeCell::new).collect(),
         }
     }
 
     fn set(&self, idx: usize, style: ComputedStyle) {
         // SAFETY: Only one thread ever writes to a given `idx` because
         // node IDs are unique in the tree and subtrees are disjoint.
+        // We access the Vec immutably (Index, not IndexMut) and only
+        // mutate the individual UnsafeCell.
         unsafe {
-            (*self.inner.get())[idx] = Some(style);
+            *self.inner[idx].get() = Some(style);
         }
     }
 
     fn get(&self, idx: usize) -> Option<&ComputedStyle> {
         // SAFETY: The parent node's style is fully written before any
         // child subtree begins processing, so this read is race-free.
-        unsafe { (*self.inner.get())[idx].as_ref() }
+        unsafe { (*self.inner[idx].get()).as_ref() }
     }
 
     fn into_inner(self) -> Vec<Option<ComputedStyle>> {
-        self.inner.into_inner()
+        self.inner.into_iter().map(UnsafeCell::into_inner).collect()
     }
 }
 
