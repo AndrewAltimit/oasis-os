@@ -32,7 +32,15 @@ pub fn layout_inline(parent: &mut LayoutBox, measurer: &dyn TextMeasurer) {
     let fragments = collect_inline_fragments(&parent.children, available_width, measurer);
 
     // Break fragments into line boxes.
-    let mut lines: Vec<LineBox> = Vec::new();
+    // Estimate ~1 line per 80px of content width as a rough heuristic
+    // to reduce Vec reallocations.
+    let estimated_lines = if available_width > 0.0 {
+        let total_frag_width: f32 = fragments.iter().map(InlineFragment::width).sum();
+        ((total_frag_width / available_width) as usize + 1).max(1)
+    } else {
+        1
+    };
+    let mut lines: Vec<LineBox> = Vec::with_capacity(estimated_lines);
     let text_indent = parent.style.text_indent;
     let first_line_width = (available_width - text_indent).max(0.0);
     let mut current_line = LineBox::new(first_line_width);
@@ -141,7 +149,7 @@ pub fn layout_inline(parent: &mut LayoutBox, measurer: &dyn TextMeasurer) {
     let last_line_idx = lines.len().saturating_sub(1);
 
     // Track (line, line_y) pairs for child reconstruction.
-    let mut line_positions: Vec<f32> = Vec::new();
+    let mut line_positions: Vec<f32> = Vec::with_capacity(lines.len());
 
     for (i, line) in lines.iter_mut().enumerate() {
         // Compute line height (max of fragment heights).
@@ -201,7 +209,8 @@ fn collect_inline_fragments(
     available_width: f32,
     measurer: &dyn TextMeasurer,
 ) -> Vec<InlineFragment> {
-    let mut fragments = Vec::new();
+    // Pre-allocate: most inline children produce at least one fragment.
+    let mut fragments = Vec::with_capacity(children.len());
 
     for child in children {
         match &child.box_type {
@@ -429,7 +438,7 @@ pub fn make_text_fragments(
     let letter_spacing = style.letter_spacing;
     let word_spacing = style.word_spacing;
     let space_width = measure_space(font_size, word_spacing, measurer);
-    let mut fragments = Vec::new();
+    let mut fragments = Vec::with_capacity(words.len());
 
     for word in &words {
         if word.text == "\n" {
@@ -723,7 +732,8 @@ fn align_vertically(va: VerticalAlign, frag_height: f32, line_height: f32) -> f3
 }
 
 fn lines_to_children(lines: Vec<LineBox>, line_positions: &[f32]) -> Vec<LayoutBox> {
-    let mut children = Vec::new();
+    let total_frags: usize = lines.iter().map(|l| l.fragments.len()).sum();
+    let mut children = Vec::with_capacity(total_frags);
     for (line, &line_y) in lines.into_iter().zip(line_positions.iter()) {
         let line_height = line.height;
         for frag in line.fragments {

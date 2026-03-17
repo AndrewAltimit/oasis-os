@@ -371,7 +371,8 @@ pub(super) fn paint_box(
         | BoxType::InlineBlock => {
             // Stacking context: separate non-positioned (DOM order)
             // from positioned children (sorted by z-index).
-            let mut normal_children: Vec<&LayoutBox> = Vec::new();
+            let child_count = layout_box.children.len();
+            let mut normal_children: Vec<&LayoutBox> = Vec::with_capacity(child_count);
             let mut positioned_children: Vec<(i32, usize, &LayoutBox)> = Vec::new();
 
             for (idx, child) in layout_box.children.iter().enumerate() {
@@ -382,12 +383,28 @@ pub(super) fn paint_box(
                 }
             }
 
+            // For block-flow containers (Block/Anonymous), children are
+            // sorted by Y position. We can break early once we pass the
+            // bottom of the clip rect instead of scanning all remaining
+            // children.
+            let y_sorted = matches!(
+                layout_box.box_type,
+                BoxType::Block | BoxType::Anonymous | BoxType::TableWrapper
+            );
+
             // Paint non-positioned children in DOM order first.
             for child in &normal_children {
                 if let Some(clip) = &ctx.clip_rect {
                     let cb = child.dimensions.border_box();
+                    // Child is entirely below the clip — if Y-sorted,
+                    // all subsequent children are too, so stop early.
+                    if cb.y > clip.y + clip.height {
+                        if y_sorted {
+                            break;
+                        }
+                        continue;
+                    }
                     if cb.y + cb.height < clip.y
-                        || cb.y > clip.y + clip.height
                         || cb.x + cb.width < clip.x
                         || cb.x > clip.x + clip.width
                     {
