@@ -143,6 +143,7 @@ fn bench_paint(c: &mut Criterion) {
                     y: 0,
                     width: 480.0,
                     height: 272.0,
+                    visible_height: 272.0,
                 };
                 b.iter(|| paint_page(layout, &mut backend, vp, link_map));
             },

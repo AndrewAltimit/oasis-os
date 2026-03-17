@@ -170,6 +170,10 @@ pub enum ReplacedContent {
         height: u32,
         texture: Option<TextureId>,
         alt: String,
+        /// Sub-region within an atlas texture. When `Some`, the texture
+        /// is a shared atlas and rendering should use `blit_sub` with
+        /// these source coordinates instead of blitting the full texture.
+        atlas_region: Option<crate::image_atlas::AtlasRegion>,
     },
     HorizontalRule,
     LineBreak,

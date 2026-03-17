@@ -41,7 +41,8 @@ pub use sdi_backend::SdiBackend;
 
 // -- extension traits --
 pub use extensions::{
-    SdiAlpha, SdiBatch, SdiClipTransform, SdiGradients, SdiShapes, SdiText, SdiTextures, SdiVector,
+    BlendMode, GeometryVertex, SdiAlpha, SdiBatch, SdiBlendMode, SdiClipTransform, SdiGeometry,
+    SdiGradients, SdiRenderTarget, SdiShapes, SdiText, SdiTextures, SdiVector,
 };
 
 // -- input --

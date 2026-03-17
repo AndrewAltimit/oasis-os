@@ -1119,6 +1119,7 @@ dependencies = [
  "oasis-vfs",
  "png",
  "proptest",
+ "rayon",
  "rustc-hash 2.1.1",
  "serde",
 ]

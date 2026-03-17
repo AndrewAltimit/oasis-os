@@ -25,6 +25,7 @@ pub mod svg;
 
 pub mod canvas;
 
+pub(crate) mod image_atlas;
 mod widget_images;
 mod widget_input;
 mod widget_paint;
@@ -250,8 +251,23 @@ pub struct BrowserWidget {
     /// Decoded image data keyed by resolved src URL.
     decoded_images: HashMap<String, image::DecodedImage>,
 
+    /// Channel to send `(url, raw_bytes)` to the background decode thread.
+    #[cfg(not(target_arch = "wasm32"))]
+    image_decode_tx: Option<std::sync::mpsc::Sender<(String, Vec<u8>)>>,
+
+    /// Channel to receive `(url, DecodedImage)` from the background decode thread.
+    #[cfg(not(target_arch = "wasm32"))]
+    image_decode_rx: Option<std::sync::mpsc::Receiver<(String, image::DecodedImage)>>,
+
+    /// Number of images sent to the decode thread but not yet received back.
+    #[cfg(not(target_arch = "wasm32"))]
+    image_decode_in_flight: usize,
+
     /// GPU textures for decoded images, keyed by src URL.
     image_textures: HashMap<String, TextureId>,
+
+    /// Texture atlas for packing small images (reduces GPU bind switches).
+    image_atlas: image_atlas::ImageAtlas,
 
     /// Pending image requests to be processed in time-sliced batches.
     pending_images: Vec<(String, ResourceRequest)>,
@@ -355,6 +371,34 @@ pub struct BrowserWidget {
 
     /// Form state manager for HTML `<form>` elements on the current page.
     form_manager: forms::FormManager,
+
+    /// Cached display list for the current page content.
+    /// Rebuilt only when layout changes; replayed on each frame.
+    display_list: paint::display_list::DisplayList,
+
+    /// Scroll Y position at which the display list was last recorded.
+    /// When scroll changes, we replay with adjusted offsets instead of
+    /// rebuilding. A full rebuild is forced when layout changes.
+    display_list_scroll_y: i32,
+
+    /// Scroll X position at which the display list was last recorded.
+    display_list_scroll_x: i32,
+
+    /// Dirty rectangles that need repainting (e.g. hover/focus changes).
+    /// When non-empty and no layout change occurred, only these regions
+    /// are replayed via `replay_dirty()` instead of a full `replay()`.
+    dirty_rects: Vec<layout::box_model::Rect>,
+
+    /// When true, the entire viewport needs repainting even though
+    /// the layout may not have changed (e.g. visual-only style change
+    /// without known dirty rects).
+    full_repaint_needed: bool,
+
+    /// Tile grid for tracking visible/dirty regions of the page.
+    /// Infrastructure for future GPU tile caching (render tiles as
+    /// GPU textures, only re-render newly visible tiles on scroll).
+    #[allow(dead_code)]
+    tile_grid: Option<paint::tiling::TileGrid>,
 }
 
 impl BrowserWidget {
@@ -396,7 +440,14 @@ impl BrowserWidget {
             hover_node: None,
             focused_node: None,
             decoded_images: HashMap::new(),
+            #[cfg(not(target_arch = "wasm32"))]
+            image_decode_tx: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            image_decode_rx: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            image_decode_in_flight: 0,
             image_textures: HashMap::new(),
+            image_atlas: image_atlas::ImageAtlas::new(),
             pending_images: Vec::new(),
             deferred_images: Vec::new(),
             decoded_image_bytes: 0,
@@ -430,6 +481,12 @@ impl BrowserWidget {
             last_effective_font_size: effective_font,
             page_errors: Vec::new(),
             form_manager: forms::FormManager::new(),
+            display_list: paint::display_list::DisplayList::new(),
+            display_list_scroll_y: 0,
+            display_list_scroll_x: 0,
+            dirty_rects: Vec::new(),
+            full_repaint_needed: true,
+            tile_grid: None,
         }
     }
 
@@ -458,6 +515,15 @@ impl BrowserWidget {
     /// Returns whether the layout tree needs rebuilding.
     pub fn is_layout_dirty(&self) -> bool {
         self.layout_dirty
+    }
+
+    /// Mark a screen-space rectangle as needing repaint.
+    ///
+    /// On the next `paint()` call, only display items intersecting
+    /// dirty rectangles will be replayed (via `replay_dirty()`),
+    /// skipping items outside the dirty region.
+    pub fn mark_dirty(&mut self, rect: layout::box_model::Rect) {
+        self.dirty_rects.push(rect);
     }
 
     /// Rebuild layout from cached DOM/styles if the viewport changed.

@@ -12,6 +12,7 @@ documentation = "https://docs.rs/oasis-browser"
 default = []
 javascript = ["dep:oasis-js"]
 webp = ["dep:image"]
+parallel-style = ["dep:rayon"]
 
 [dependencies]
 oasis-types = { workspace = true }
@@ -28,6 +29,7 @@ png = { workspace = true }
 jpeg-decoder = { workspace = true }
 gif = { workspace = true }
 image = { version = "0.25", default-features = false, features = ["webp"], optional = true }
+rayon = { workspace = true, optional = true }
 
 [dev-dependencies]
 proptest.workspace = true

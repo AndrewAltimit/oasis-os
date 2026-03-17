@@ -79,7 +79,7 @@ pub(super) fn build_children(
     base_url: Option<&str>,
     image_info: &HashMap<String, (u32, u32)>,
 ) -> Vec<LayoutBox> {
-    let mut boxes = Vec::new();
+    let mut boxes = Vec::with_capacity(children.len());
     for &child_id in children {
         if let Some(lb) = build_box_for_node(doc, child_id, styles, base_url, image_info) {
             boxes.push(lb);
@@ -344,6 +344,7 @@ fn replaced_content(
                 height,
                 texture: None,
                 alt,
+                atlas_region: None,
             })
         },
         TagName::Hr => Some(ReplacedContent::HorizontalRule),
@@ -556,7 +557,7 @@ pub(super) fn wrap_anonymous(
     }
 
     // Mixed: wrap runs of inline children in anonymous block boxes.
-    let mut result = Vec::new();
+    let mut result = Vec::with_capacity(children.len());
     let mut inline_run: Vec<LayoutBox> = Vec::new();
 
     for child in children {

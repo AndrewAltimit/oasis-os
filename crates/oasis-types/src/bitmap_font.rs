@@ -578,6 +578,22 @@ pub fn glyph_advance_scaled(ch: char, font_size: u16) -> u32 {
     advance * fs / 8
 }
 
+/// Fast ASCII-only glyph metrics lookup.
+///
+/// For ASCII bytes (0x20..=0x7E), returns `(left_pad, advance)` directly
+/// from the metrics table. For out-of-range bytes, returns the default `(0, 8)`.
+///
+/// This avoids the overhead of the general `glyph_metrics()` which handles
+/// Unicode via binary search over extended tables.
+#[inline(always)]
+pub fn glyph_metrics_ascii(byte: u8) -> (u8, u8) {
+    if (FIRST_CHAR..=LAST_CHAR).contains(&byte) {
+        GLYPH_METRICS[(byte - FIRST_CHAR) as usize]
+    } else {
+        (0, 8)
+    }
+}
+
 /// Iterate over the set pixels of a bitmap glyph, calling `emit` for each.
 ///
 /// The 8x8 bitmap glyph for `ch` is iterated row-by-row, column-by-column.

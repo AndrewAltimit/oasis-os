@@ -62,8 +62,6 @@ use crate::css::values::{
 };
 use crate::html::dom::NodeId;
 
-use std::collections::HashMap;
-
 // -------------------------------------------------------------------
 // TextMeasurer trait
 // -------------------------------------------------------------------
@@ -84,11 +82,11 @@ pub trait TextMeasurer {
 // -------------------------------------------------------------------
 
 /// Cache of computed edge sizes (padding/border/margin) keyed by DOM
-/// node ID. Avoids re-resolving edge sizes for nodes whose styles have
-/// not changed between incremental layout passes.
+/// node ID. Since `NodeId` is `usize`, a `Vec<Option<...>>` provides
+/// O(1) lookup without hashing overhead.
 #[derive(Debug, Default)]
 pub struct StyleCache {
-    edges: HashMap<NodeId, CachedEdges>,
+    edges: Vec<Option<CachedEdges>>,
 }
 
 /// Cached resolved edge sizes for a single layout box.
@@ -102,9 +100,7 @@ struct CachedEdges {
 impl StyleCache {
     /// Create an empty style cache.
     pub fn new() -> Self {
-        Self {
-            edges: HashMap::new(),
-        }
+        Self { edges: Vec::new() }
     }
 
     /// Store resolved edge sizes for a node.
@@ -115,31 +111,32 @@ impl StyleCache {
         border: EdgeSizes,
         margin: EdgeSizes,
     ) {
-        self.edges.insert(
-            node,
-            CachedEdges {
-                padding,
-                border,
-                margin,
-            },
-        );
+        if node >= self.edges.len() {
+            self.edges.resize(node + 1, None);
+        }
+        self.edges[node] = Some(CachedEdges {
+            padding,
+            border,
+            margin,
+        });
     }
 
     /// Retrieve cached edges for a node. Returns `None` on cache miss.
     pub fn get_edges(&self, node: NodeId) -> Option<(&EdgeSizes, &EdgeSizes, &EdgeSizes)> {
         self.edges
-            .get(&node)
+            .get(node)
+            .and_then(|slot| slot.as_ref())
             .map(|c| (&c.padding, &c.border, &c.margin))
     }
 
     /// Number of cached entries (useful for benchmarking).
     pub fn len(&self) -> usize {
-        self.edges.len()
+        self.edges.iter().filter(|e| e.is_some()).count()
     }
 
     /// Whether the cache is empty.
     pub fn is_empty(&self) -> bool {
-        self.edges.is_empty()
+        self.edges.iter().all(|e| e.is_none())
     }
 
     /// Clear all cached entries.

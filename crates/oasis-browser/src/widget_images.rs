@@ -207,17 +207,129 @@ impl BrowserWidget {
     /// Pixels ahead of the viewport to start loading lazy images.
     const LAZY_LOAD_MARGIN: f32 = 512.0;
 
+    /// Ensure the background image decode thread is running (non-WASM only).
+    ///
+    /// Lazily spawns a daemon thread on first call. The thread receives
+    /// `(url, raw_bytes)` and sends back `(url, DecodedImage)`.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn ensure_decode_thread(&mut self) {
+        if self.image_decode_tx.is_some() {
+            return;
+        }
+        let (work_tx, work_rx) = std::sync::mpsc::channel::<(String, Vec<u8>)>();
+        let (result_tx, result_rx) = std::sync::mpsc::channel::<(String, image::DecodedImage)>();
+        std::thread::Builder::new()
+            .name("img-decode".into())
+            .spawn(move || {
+                while let Ok((url, data)) = work_rx.recv() {
+                    if let Some(decoded) = image::decode_image(&data) {
+                        if result_tx.send((url, decoded)).is_err() {
+                            break; // receiver dropped
+                        }
+                    } else if result_tx
+                        .send((
+                            url,
+                            image::DecodedImage {
+                                width: 0,
+                                height: 0,
+                                pixels: Vec::new(),
+                            },
+                        ))
+                        .is_err()
+                    {
+                        break;
+                    }
+                }
+            })
+            .ok(); // If spawn fails, channels remain None → sync fallback
+        self.image_decode_tx = Some(work_tx);
+        self.image_decode_rx = Some(result_rx);
+    }
+
+    /// Collect completed image decodes from the background thread.
+    ///
+    /// Returns `true` if any new images were inserted.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn poll_decoded_images(&mut self) -> bool {
+        let rx = match &self.image_decode_rx {
+            Some(rx) => rx,
+            None => return false,
+        };
+        let mut any = false;
+        loop {
+            let (url, decoded) = match rx.try_recv() {
+                Ok(pair) => pair,
+                Err(std::sync::mpsc::TryRecvError::Empty) => break,
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    // Decode thread died (panic or channel closed).
+                    // Reset in-flight counter to unstick loading state.
+                    self.image_decode_in_flight = 0;
+                    self.image_decode_tx = None;
+                    self.image_decode_rx = None;
+                    break;
+                },
+            };
+            self.image_decode_in_flight = self.image_decode_in_flight.saturating_sub(1);
+            // Skip sentinel (failed decode) entries.
+            if decoded.width == 0 && decoded.height == 0 {
+                continue;
+            }
+            if self.decoded_images.contains_key(&url) {
+                continue;
+            }
+            let img_bytes = decoded.width as usize * decoded.height as usize * 4;
+
+            // Evict oldest decoded images if over budget.
+            while self.decoded_image_bytes + img_bytes > Self::IMAGE_MEMORY_BUDGET {
+                if let Some(evict_url) = self.decoded_image_lru.pop_back() {
+                    if let Some(evicted) = self.decoded_images.remove(&evict_url) {
+                        let evicted_bytes = evicted.width as usize * evicted.height as usize * 4;
+                        self.decoded_image_bytes -= evicted_bytes;
+                        self.image_info_dirty = true;
+                    }
+                } else {
+                    break;
+                }
+            }
+
+            self.decoded_image_bytes += img_bytes;
+            self.decoded_image_lru.push_front(url.clone());
+            self.decoded_images.insert(url, decoded);
+            self.image_info_dirty = true;
+            any = true;
+        }
+        any
+    }
+
     pub fn load_next_image_batch(&mut self, vfs: &dyn Vfs, budget_ms: u32) {
         // Promote deferred images that have scrolled into view.
         self.promote_deferred_images();
 
+        // On non-WASM targets, collect any completed background decodes.
+        #[cfg(not(target_arch = "wasm32"))]
+        let mut any_decoded = self.poll_decoded_images();
+        #[cfg(target_arch = "wasm32")]
+        let mut any_decoded = false;
+
         if self.pending_images.is_empty() {
+            #[cfg(not(target_arch = "wasm32"))]
+            if self.image_decode_in_flight == 0 && self.state == LoadingState::Loading {
+                self.state = LoadingState::Idle;
+            }
+            #[cfg(target_arch = "wasm32")]
+            if self.state == LoadingState::Loading {
+                self.state = LoadingState::Idle;
+            }
+            if any_decoded {
+                self.layout_dirty = true;
+                self.rebuild_layout_with_images();
+            }
             return;
         }
 
         let start = std::time::Instant::now();
         let budget = std::time::Duration::from_millis(budget_ms as u64);
-        let mut any_decoded = false;
+
         while let Some((resolved, request)) = self.pending_images.pop() {
             // Skip if already decoded (e.g. from cache).
             if self.decoded_images.contains_key(&resolved) {
@@ -225,8 +337,6 @@ impl BrowserWidget {
             }
 
             // Lazy loading: defer images far below the viewport.
-            // Deferred images are stored separately and only re-evaluated
-            // when a scroll event occurs (see `promote_deferred_images`).
             if self.is_image_off_viewport(&resolved) {
                 self.deferred_images.push((resolved, request));
                 continue;
@@ -240,28 +350,55 @@ impl BrowserWidget {
                 Some(&mut self.cookie_jar),
                 #[cfg(not(target_arch = "wasm32"))]
                 Some(&self.cache),
-            ) && let Some(decoded) = image::decode_image(&loaded.response.body)
-            {
-                let img_bytes = (decoded.width * decoded.height * 4) as usize;
-
-                // Evict oldest decoded images if over budget.
-                while self.decoded_image_bytes + img_bytes > Self::IMAGE_MEMORY_BUDGET {
-                    if let Some(evict_url) = self.decoded_image_lru.pop_back() {
-                        if let Some(evicted) = self.decoded_images.remove(&evict_url) {
-                            let evicted_bytes = (evicted.width * evicted.height * 4) as usize;
-                            self.decoded_image_bytes -= evicted_bytes;
-                            self.image_info_dirty = true;
-                        }
+            ) {
+                // On non-WASM, dispatch to background decode thread.
+                // Falls back to synchronous decode if the channel is unavailable.
+                #[cfg(not(target_arch = "wasm32"))]
+                {
+                    self.ensure_decode_thread();
+                    let sent = if let Some(ref tx) = self.image_decode_tx {
+                        tx.send((resolved.clone(), loaded.response.body.clone()))
+                            .is_ok()
                     } else {
-                        break;
+                        false
+                    };
+                    if sent {
+                        self.image_decode_in_flight += 1;
+                    } else if let Some(decoded) = image::decode_image(&loaded.response.body) {
+                        // Sync fallback: channel unavailable or send failed.
+                        let img_bytes = decoded.width as usize * decoded.height as usize * 4;
+                        self.decoded_image_bytes += img_bytes;
+                        self.decoded_image_lru.push_front(resolved.clone());
+                        self.decoded_images.insert(resolved, decoded);
+                        self.image_info_dirty = true;
+                        any_decoded = true;
                     }
                 }
 
-                self.decoded_image_bytes += img_bytes;
-                self.decoded_image_lru.push_front(resolved.clone());
-                self.decoded_images.insert(resolved, decoded);
-                self.image_info_dirty = true;
-                any_decoded = true;
+                // On WASM, decode synchronously (no threads available).
+                #[cfg(target_arch = "wasm32")]
+                if let Some(decoded) = image::decode_image(&loaded.response.body) {
+                    let img_bytes = decoded.width as usize * decoded.height as usize * 4;
+
+                    while self.decoded_image_bytes + img_bytes > Self::IMAGE_MEMORY_BUDGET {
+                        if let Some(evict_url) = self.decoded_image_lru.pop_back() {
+                            if let Some(evicted) = self.decoded_images.remove(&evict_url) {
+                                let evicted_bytes =
+                                    evicted.width as usize * evicted.height as usize * 4;
+                                self.decoded_image_bytes -= evicted_bytes;
+                                self.image_info_dirty = true;
+                            }
+                        } else {
+                            break;
+                        }
+                    }
+
+                    self.decoded_image_bytes += img_bytes;
+                    self.decoded_image_lru.push_front(resolved.clone());
+                    self.decoded_images.insert(resolved, decoded);
+                    self.image_info_dirty = true;
+                    any_decoded = true;
+                }
             }
 
             // Check time budget after each image.
@@ -270,13 +407,69 @@ impl BrowserWidget {
             }
         }
 
+        // On non-WASM, wait within the remaining budget for in-flight
+        // decodes to complete so callers that pass a generous budget
+        // (e.g. tests with 5000ms) see results immediately.
+        #[cfg(not(target_arch = "wasm32"))]
+        if self.image_decode_in_flight > 0
+            && let Some(ref rx) = self.image_decode_rx
+        {
+            while self.image_decode_in_flight > 0 {
+                let remaining = budget.saturating_sub(start.elapsed());
+                if remaining.is_zero() {
+                    break;
+                }
+                match rx.recv_timeout(remaining) {
+                    Ok((url, decoded)) => {
+                        self.image_decode_in_flight = self.image_decode_in_flight.saturating_sub(1);
+                        if decoded.width == 0 && decoded.height == 0 {
+                            continue;
+                        }
+                        if self.decoded_images.contains_key(&url) {
+                            continue;
+                        }
+                        let img_bytes = decoded.width as usize * decoded.height as usize * 4;
+
+                        while self.decoded_image_bytes + img_bytes > Self::IMAGE_MEMORY_BUDGET {
+                            if let Some(evict_url) = self.decoded_image_lru.pop_back() {
+                                if let Some(evicted) = self.decoded_images.remove(&evict_url) {
+                                    let evicted_bytes =
+                                        evicted.width as usize * evicted.height as usize * 4;
+                                    self.decoded_image_bytes -= evicted_bytes;
+                                    self.image_info_dirty = true;
+                                }
+                            } else {
+                                break;
+                            }
+                        }
+
+                        self.decoded_image_bytes += img_bytes;
+                        self.decoded_image_lru.push_front(url.clone());
+                        self.decoded_images.insert(url, decoded);
+                        self.image_info_dirty = true;
+                        any_decoded = true;
+                    },
+                    Err(_) => break, // timeout or disconnected
+                }
+            }
+        }
+
         if any_decoded {
             self.layout_dirty = true;
             self.rebuild_layout_with_images();
         }
 
-        if self.pending_images.is_empty() && self.state == LoadingState::Loading {
-            self.state = LoadingState::Idle;
+        if self.pending_images.is_empty() {
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                if self.image_decode_in_flight == 0 && self.state == LoadingState::Loading {
+                    self.state = LoadingState::Idle;
+                }
+            }
+            #[cfg(target_arch = "wasm32")]
+            if self.state == LoadingState::Loading {
+                self.state = LoadingState::Idle;
+            }
         }
     }
 
@@ -341,6 +534,10 @@ impl BrowserWidget {
 
     /// Upload decoded images as GPU textures and assign them to
     /// `ReplacedContent::Image` nodes in the layout tree.
+    ///
+    /// Small images (<= 128x128) are packed into a shared texture atlas
+    /// to reduce GPU texture bind switches during rendering. Larger
+    /// images get individual textures as before.
     pub(crate) fn ensure_image_textures(&mut self, backend: &mut dyn SdiBackend) {
         let doc = match &self.document {
             Some(d) => d,
@@ -359,30 +556,7 @@ impl BrowserWidget {
                 };
                 let resolved = Self::resolve_src(&base_url, &src);
                 if !self.image_textures.contains_key(&resolved)
-                    && self.decoded_images.contains_key(&resolved)
-                {
-                    pending.push(resolved);
-                }
-            }
-        }
-
-        // Create textures.
-        for resolved in &pending {
-            if let Some(decoded) = self.decoded_images.get(resolved)
-                && let Ok(tex) =
-                    backend.load_texture(decoded.width, decoded.height, &decoded.pixels)
-            {
-                self.image_textures.insert(resolved.clone(), tex);
-            }
-        }
-
-        // Also collect background-image URLs from styles.
-        for style_opt in &self.styles {
-            if let Some(style) = style_opt
-                && let css::values::BackgroundImage::Url(ref url) = style.background_image
-            {
-                let resolved = Self::resolve_src(&base_url, url);
-                if !self.image_textures.contains_key(&resolved)
+                    && !self.image_atlas.contains(&resolved)
                     && self.decoded_images.contains_key(&resolved)
                     && !pending.contains(&resolved)
                 {
@@ -391,8 +565,46 @@ impl BrowserWidget {
             }
         }
 
-        // Create textures.
+        // Collect background-image URLs from styles. These always get
+        // individual textures (not atlas-packed) because background images
+        // are typically tiled/stretched to arbitrary sizes.
+        let mut bg_pending: Vec<String> = Vec::new();
+        for style_opt in &self.styles {
+            if let Some(style) = style_opt
+                && let css::values::BackgroundImage::Url(ref url) = style.background_image
+            {
+                let resolved = Self::resolve_src(&base_url, url);
+                if !self.image_textures.contains_key(&resolved)
+                    && self.decoded_images.contains_key(&resolved)
+                    && !bg_pending.contains(&resolved)
+                {
+                    bg_pending.push(resolved);
+                }
+            }
+        }
+
+        // Create textures: pack small images into the atlas, use
+        // individual textures for larger ones.
         for resolved in &pending {
+            if let Some(decoded) = self.decoded_images.get(resolved) {
+                if crate::image_atlas::ImageAtlas::is_eligible(decoded.width, decoded.height) {
+                    // Try to pack into the atlas.
+                    self.image_atlas.insert(
+                        resolved,
+                        decoded.width,
+                        decoded.height,
+                        &decoded.pixels,
+                    );
+                } else if let Ok(tex) =
+                    backend.load_texture(decoded.width, decoded.height, &decoded.pixels)
+                {
+                    self.image_textures.insert(resolved.clone(), tex);
+                }
+            }
+        }
+
+        // Create individual textures for background images (never atlas-packed).
+        for resolved in &bg_pending {
             if let Some(decoded) = self.decoded_images.get(resolved)
                 && let Ok(tex) =
                     backend.load_texture(decoded.width, decoded.height, &decoded.pixels)
@@ -401,6 +613,9 @@ impl BrowserWidget {
             }
         }
 
+        // Upload any dirty atlas pages to the GPU.
+        self.image_atlas.upload_dirty(backend);
+
         // Walk layout tree and assign textures.
         if let Some(layout) = &mut self.layout_root {
             Self::assign_textures_recursive(
@@ -408,6 +623,7 @@ impl BrowserWidget {
                 &self.document,
                 &base_url,
                 &self.image_textures,
+                &self.image_atlas,
                 self.window_w,
             );
         }
@@ -415,15 +631,20 @@ impl BrowserWidget {
 
     /// Recursively walk the layout tree and assign GPU textures to
     /// `ReplacedContent::Image` nodes and `background-image` styles.
+    ///
+    /// For images packed into the atlas, the atlas texture ID and
+    /// source region are assigned so the paint layer can use `blit_sub`.
     fn assign_textures_recursive(
         layout_box: &mut layout::box_model::LayoutBox,
         doc: &Option<html::dom::Document>,
         base_url: &Option<String>,
         textures: &HashMap<String, TextureId>,
+        atlas: &crate::image_atlas::ImageAtlas,
         viewport_w: u32,
     ) {
         if let layout::box_model::BoxType::Replaced(layout::box_model::ReplacedContent::Image {
             ref mut texture,
+            ref mut atlas_region,
             ..
         }) = layout_box.box_type
             && texture.is_none()
@@ -435,13 +656,19 @@ impl BrowserWidget {
                 && let Some(src) = effective_img_src(elem, viewport_w)
             {
                 let resolved = Self::resolve_src(base_url, &src);
-                if let Some(&tex) = textures.get(&resolved) {
+                // Check atlas first, then individual textures.
+                if let Some((atlas_tex, region)) = atlas.get(&resolved) {
+                    *texture = Some(atlas_tex);
+                    *atlas_region = Some(region);
+                } else if let Some(&tex) = textures.get(&resolved) {
                     *texture = Some(tex);
                 }
             }
         }
 
-        // Assign background-image texture.
+        // Assign background-image texture (not atlas-eligible since
+        // background images are typically tiled/stretched to arbitrary
+        // sizes and need their own texture).
         if layout_box.background_texture.is_none()
             && let css::values::BackgroundImage::Url(ref url) = layout_box.style.background_image
         {
@@ -452,7 +679,7 @@ impl BrowserWidget {
         }
 
         for child in &mut layout_box.children {
-            Self::assign_textures_recursive(child, doc, base_url, textures, viewport_w);
+            Self::assign_textures_recursive(child, doc, base_url, textures, atlas, viewport_w);
         }
     }
 

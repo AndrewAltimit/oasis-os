@@ -65,6 +65,17 @@ fn lerp_color(a: Color, b: Color, t: f32) -> Color {
 }
 
 /// Sample the gradient color at a normalized position `t` (0.0..=1.0).
+///
+/// Exposed as `pub(crate)` for the display list recorder.
+pub(crate) fn sample_gradient_pub(
+    stops: &[crate::css::values::GradientStop],
+    t: f32,
+    opacity: f32,
+) -> Color {
+    sample_gradient(stops, t, opacity)
+}
+
+/// Sample the gradient color at a normalized position `t` (0.0..=1.0).
 fn sample_gradient(stops: &[crate::css::values::GradientStop], t: f32, opacity: f32) -> Color {
     if stops.is_empty() {
         return Color::rgba(0, 0, 0, 0);
@@ -218,58 +229,73 @@ pub(super) fn paint_linear_gradient(
             }
         }
     } else {
-        // Diagonal gradient: approximate with the closest axis direction.
-        // Per-pixel rendering is too slow for real pages (O(w*h) fill_rect
-        // calls). Snapping to the nearest axis is visually acceptable and
-        // uses O(stops) calls instead.
-        let first = apply_opacity(grad.stops[0].color, opacity);
-        let last = apply_opacity(grad.stops[grad.stops.len() - 1].color, opacity);
-        if !(45.0..315.0).contains(&norm) {
-            // ~to top
+        // Diagonal gradient: render with horizontal bands.
+        // For each band we compute the gradient position `t` at the left
+        // and right edges and emit a horizontal gradient fill with the
+        // sampled colors. This produces correct diagonal gradients with
+        // O(bands) draw calls (capped at 32).
+        let rad = norm.to_radians();
+        let dx = rad.sin();
+        let dy = -rad.cos(); // CSS: 0deg = to-top = -Y
+        let wf = w as f32;
+        let hf = h as f32;
+
+        // Project corners onto the gradient axis to find the full range.
+        // Corners: (0,0), (w,0), (0,h), (w,h). The gradient line runs
+        // through the center in direction (dx, dy). Projection of a
+        // corner (cx, cy) relative to center: dot = (cx - w/2)*dx + (cy - h/2)*dy.
+        let half_w = wf / 2.0;
+        let half_h = hf / 2.0;
+        let mut min_proj = f32::MAX;
+        let mut max_proj = f32::MIN;
+        for &(cx, cy) in &[(0.0, 0.0), (wf, 0.0), (0.0, hf), (wf, hf)] {
+            let proj = (cx - half_w) * dx + (cy - half_h) * dy;
+            if proj < min_proj {
+                min_proj = proj;
+            }
+            if proj > max_proj {
+                max_proj = proj;
+            }
+        }
+        let proj_range = max_proj - min_proj;
+        if proj_range < 0.001 {
+            return Ok(());
+        }
+
+        let num_bands = (h as usize).clamp(1, 32);
+        let band_h_f = hf / num_bands as f32;
+
+        for band in 0..num_bands {
+            let by = band as f32 * band_h_f;
+            let band_cy = by + band_h_f / 2.0; // vertical center of band
+
+            // Gradient position `t` at left edge (x=0) and right edge (x=w).
+            let t_left = ((0.0 - half_w) * dx + (band_cy - half_h) * dy - min_proj) / proj_range;
+            let t_right = ((wf - half_w) * dx + (band_cy - half_h) * dy - min_proj) / proj_range;
+
+            let c_left = sample_gradient(&grad.stops, t_left, opacity);
+            let c_right = sample_gradient(&grad.stops, t_right, opacity);
+
+            let start_y = by as i32;
+            let end_y = if band == num_bands - 1 {
+                h as i32
+            } else {
+                ((band + 1) as f32 * band_h_f) as i32
+            };
+            let band_y = y + start_y;
+            let band_h = (end_y - start_y).max(0) as u32;
+            if band_h == 0 {
+                continue;
+            }
+
             backend.fill_rect_gradient(
                 x,
-                y,
+                band_y,
                 w,
-                h,
-                &GradientStyle::Vertical {
-                    top: last,
-                    bottom: first,
-                },
-            )?;
-        } else if norm < 135.0 {
-            // ~to right
-            backend.fill_rect_gradient(
-                x,
-                y,
-                w,
-                h,
+                band_h,
                 &GradientStyle::Horizontal {
-                    left: first,
-                    right: last,
-                },
-            )?;
-        } else if norm < 225.0 {
-            // ~to bottom
-            backend.fill_rect_gradient(
-                x,
-                y,
-                w,
-                h,
-                &GradientStyle::Vertical {
-                    top: first,
-                    bottom: last,
-                },
-            )?;
-        } else {
-            // ~to left
-            backend.fill_rect_gradient(
-                x,
-                y,
-                w,
-                h,
-                &GradientStyle::Horizontal {
-                    left: last,
-                    right: first,
+                    left: c_left,
+                    right: c_right,
                 },
             )?;
         }
@@ -306,8 +332,10 @@ pub(super) fn paint_radial_gradient(
         (hw * hw + hh * hh).sqrt()
     };
 
-    // Use enough bands for smooth appearance but cap to avoid slowness.
-    let bands = (max_radius as u32).clamp(8, 128);
+    // Use enough bands for smooth appearance but cap to limit draw calls.
+    // 48 bands is visually indistinguishable from 128 for typical radii
+    // while cutting draw calls by up to ~60%.
+    let bands = (max_radius as u32).clamp(8, 48);
 
     // Paint from outside in so inner bands overlay outer.
     for i in 0..bands {

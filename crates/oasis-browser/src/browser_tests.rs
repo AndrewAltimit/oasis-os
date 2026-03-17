@@ -2037,18 +2037,19 @@ fn textures_created_during_paint() {
     browser.navigate_vfs("vfs://sites/img/index.html", &vfs);
     browser.load_next_image_batch(&vfs, 5000);
 
-    // Before paint, no textures exist.
+    // Before paint, no textures exist (neither individual nor atlas).
     assert!(
-        browser.image_textures.is_empty(),
+        browser.image_textures.is_empty() && browser.image_atlas.is_empty(),
         "textures should not exist before paint"
     );
 
     let mut backend = MockBackend::new();
     browser.paint(&mut backend).unwrap();
 
-    // After paint, texture should be created.
+    // After paint, texture should be created (small images go into the
+    // atlas, larger ones get individual textures).
     assert!(
-        !browser.image_textures.is_empty(),
+        !browser.image_textures.is_empty() || !browser.image_atlas.is_empty(),
         "textures should exist after paint"
     );
 }

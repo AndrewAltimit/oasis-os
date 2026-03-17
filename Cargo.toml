@@ -117,6 +117,9 @@ wasm-bindgen-futures = "0.4"
 flate2 = "1"
 brotli = { version = "7", default-features = false, features = ["std"] }
 
+# Parallelism
+rayon = "1.10"
+
 # Fast hashing
 rustc-hash = "2.1"
 

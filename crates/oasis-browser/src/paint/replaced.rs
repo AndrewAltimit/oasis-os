@@ -25,6 +25,7 @@ pub(super) fn paint_replaced(
             texture: Some(tex),
             width: img_w,
             height: img_h,
+            atlas_region,
             ..
         } => {
             let box_w = content.width as u32;
@@ -38,7 +39,11 @@ pub(super) fn paint_replaced(
                 x,
                 y,
             );
-            backend.blit(*tex, blit_x, blit_y, blit_w, blit_h)?;
+            if let Some(ar) = atlas_region {
+                backend.blit_sub(*tex, ar.x, ar.y, ar.w, ar.h, blit_x, blit_y, blit_w, blit_h)?;
+            } else {
+                backend.blit(*tex, blit_x, blit_y, blit_w, blit_h)?;
+            }
         },
         ReplacedContent::Image { alt, .. } => {
             // Broken image placeholder: thin border + alt text or X.
@@ -216,6 +221,21 @@ pub(super) fn paint_replaced(
     }
 
     Ok(())
+}
+
+/// Compute blit position and size for a given `object-fit` mode.
+///
+/// Exposed as `pub(crate)` for the display list recorder.
+pub(crate) fn compute_object_fit_pub(
+    fit: ObjectFit,
+    img_w: u32,
+    img_h: u32,
+    box_w: u32,
+    box_h: u32,
+    box_x: i32,
+    box_y: i32,
+) -> (i32, i32, u32, u32) {
+    compute_object_fit(fit, img_w, img_h, box_w, box_h, box_x, box_y)
 }
 
 /// Compute blit position and size for a given `object-fit` mode.
