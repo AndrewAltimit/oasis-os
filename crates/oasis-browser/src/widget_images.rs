@@ -314,10 +314,6 @@ impl BrowserWidget {
         if self.pending_images.is_empty() {
             #[cfg(not(target_arch = "wasm32"))]
             if self.image_decode_in_flight == 0 && self.state == LoadingState::Loading {
-                if any_decoded {
-                    self.layout_dirty = true;
-                    self.rebuild_layout_with_images();
-                }
                 self.state = LoadingState::Idle;
             }
             if any_decoded {
@@ -565,18 +561,20 @@ impl BrowserWidget {
             }
         }
 
-        // Also collect background-image URLs from styles.
+        // Collect background-image URLs from styles. These always get
+        // individual textures (not atlas-packed) because background images
+        // are typically tiled/stretched to arbitrary sizes.
+        let mut bg_pending: Vec<String> = Vec::new();
         for style_opt in &self.styles {
             if let Some(style) = style_opt
                 && let css::values::BackgroundImage::Url(ref url) = style.background_image
             {
                 let resolved = Self::resolve_src(&base_url, url);
                 if !self.image_textures.contains_key(&resolved)
-                    && !self.image_atlas.contains(&resolved)
                     && self.decoded_images.contains_key(&resolved)
-                    && !pending.contains(&resolved)
+                    && !bg_pending.contains(&resolved)
                 {
-                    pending.push(resolved);
+                    bg_pending.push(resolved);
                 }
             }
         }
@@ -598,6 +596,16 @@ impl BrowserWidget {
                 {
                     self.image_textures.insert(resolved.clone(), tex);
                 }
+            }
+        }
+
+        // Create individual textures for background images (never atlas-packed).
+        for resolved in &bg_pending {
+            if let Some(decoded) = self.decoded_images.get(resolved)
+                && let Ok(tex) =
+                    backend.load_texture(decoded.width, decoded.height, &decoded.pixels)
+            {
+                self.image_textures.insert(resolved.clone(), tex);
             }
         }
 
