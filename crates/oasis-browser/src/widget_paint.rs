@@ -633,6 +633,16 @@ impl BrowserWidget {
                 } else {
                     0
                 }
+            } else if let Dimension::Px(bottom) = layout_box.style.bottom {
+                let natural = layout_box.dimensions.content.y - scroll_y + offset_y as f32;
+                let box_h = layout_box.dimensions.margin_box().height;
+                let viewport_h = (scroll_y + 272.0).max(0.0); // approximate
+                let threshold = viewport_h - bottom - box_h;
+                if natural > threshold {
+                    (threshold - natural) as i32
+                } else {
+                    0
+                }
             } else {
                 0
             }

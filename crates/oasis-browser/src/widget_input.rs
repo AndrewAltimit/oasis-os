@@ -740,6 +740,19 @@ impl BrowserWidget {
         };
 
         for &nid in affected {
+            // If the affected node has CSS transforms or sticky positioning,
+            // the static layout rect doesn't reflect its actual screen position.
+            // Fall back to full repaint since computing the transformed rect
+            // would require replicating the full transform/sticky offset chain.
+            if nid < self.styles.len()
+                && let Some(ref style) = self.styles[nid]
+                && (!style.transforms.is_empty()
+                    || style.position == crate::css::values::Position::Sticky)
+            {
+                self.full_repaint_needed = true;
+                return;
+            }
+
             if let Some(rect) = Self::find_node_rect(layout, nid) {
                 // Convert layout-space rect to screen-space by applying
                 // scroll offset and window position.

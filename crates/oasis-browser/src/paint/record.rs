@@ -522,31 +522,66 @@ fn record_linear_gradient(
             }
         }
     } else {
-        // Diagonal: snap to nearest axis (same as immediate-mode path).
-        let first = apply_opacity(grad.stops[0].color, opacity);
-        let last = apply_opacity(grad.stops[grad.stops.len() - 1].color, opacity);
-        let style = if !(45.0..315.0).contains(&norm) {
-            GradientStyle::Vertical {
-                top: last,
-                bottom: first,
+        // Diagonal gradient: render with horizontal bands matching background.rs.
+        let rad = norm.to_radians();
+        let dx = rad.sin();
+        let dy = -rad.cos();
+        let wf = w as f32;
+        let hf = h as f32;
+
+        let half_w = wf / 2.0;
+        let half_h = hf / 2.0;
+        let mut min_proj = f32::MAX;
+        let mut max_proj = f32::MIN;
+        for &(cx, cy) in &[(0.0, 0.0), (wf, 0.0), (0.0, hf), (wf, hf)] {
+            let proj = (cx - half_w) * dx + (cy - half_h) * dy;
+            if proj < min_proj {
+                min_proj = proj;
             }
-        } else if norm < 135.0 {
-            GradientStyle::Horizontal {
-                left: first,
-                right: last,
+            if proj > max_proj {
+                max_proj = proj;
             }
-        } else if norm < 225.0 {
-            GradientStyle::Vertical {
-                top: first,
-                bottom: last,
+        }
+        let proj_range = max_proj - min_proj;
+        if proj_range < 0.001 {
+            return;
+        }
+
+        let num_bands = (h as usize).clamp(1, 32);
+        let band_h_f = hf / num_bands as f32;
+
+        for band in 0..num_bands {
+            let by = band as f32 * band_h_f;
+            let band_cy = by + band_h_f / 2.0;
+
+            let t_left = ((0.0 - half_w) * dx + (band_cy - half_h) * dy - min_proj) / proj_range;
+            let t_right = ((wf - half_w) * dx + (band_cy - half_h) * dy - min_proj) / proj_range;
+
+            let c_left = super::background::sample_gradient_pub(&grad.stops, t_left, opacity);
+            let c_right = super::background::sample_gradient_pub(&grad.stops, t_right, opacity);
+
+            let start_y = by as i32;
+            let end_y = if band == num_bands - 1 {
+                h as i32
+            } else {
+                ((band + 1) as f32 * band_h_f) as i32
+            };
+            let band_h_px = (end_y - start_y).max(0) as u32;
+            if band_h_px == 0 {
+                continue;
             }
-        } else {
-            GradientStyle::Horizontal {
-                left: last,
-                right: first,
-            }
-        };
-        dl.push(DisplayItem::Gradient { x, y, w, h, style });
+
+            dl.push(DisplayItem::Gradient {
+                x,
+                y: y + start_y,
+                w,
+                h: band_h_px,
+                style: GradientStyle::Horizontal {
+                    left: c_left,
+                    right: c_right,
+                },
+            });
+        }
     }
 }
 
