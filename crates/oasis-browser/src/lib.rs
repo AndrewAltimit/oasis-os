@@ -250,6 +250,18 @@ pub struct BrowserWidget {
     /// Decoded image data keyed by resolved src URL.
     decoded_images: HashMap<String, image::DecodedImage>,
 
+    /// Channel to send `(url, raw_bytes)` to the background decode thread.
+    #[cfg(not(target_arch = "wasm32"))]
+    image_decode_tx: Option<std::sync::mpsc::Sender<(String, Vec<u8>)>>,
+
+    /// Channel to receive `(url, DecodedImage)` from the background decode thread.
+    #[cfg(not(target_arch = "wasm32"))]
+    image_decode_rx: Option<std::sync::mpsc::Receiver<(String, image::DecodedImage)>>,
+
+    /// Number of images sent to the decode thread but not yet received back.
+    #[cfg(not(target_arch = "wasm32"))]
+    image_decode_in_flight: usize,
+
     /// GPU textures for decoded images, keyed by src URL.
     image_textures: HashMap<String, TextureId>,
 
@@ -408,6 +420,12 @@ impl BrowserWidget {
             hover_node: None,
             focused_node: None,
             decoded_images: HashMap::new(),
+            #[cfg(not(target_arch = "wasm32"))]
+            image_decode_tx: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            image_decode_rx: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            image_decode_in_flight: 0,
             image_textures: HashMap::new(),
             pending_images: Vec::new(),
             deferred_images: Vec::new(),

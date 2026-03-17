@@ -207,17 +207,117 @@ impl BrowserWidget {
     /// Pixels ahead of the viewport to start loading lazy images.
     const LAZY_LOAD_MARGIN: f32 = 512.0;
 
+    /// Ensure the background image decode thread is running (non-WASM only).
+    ///
+    /// Lazily spawns a daemon thread on first call. The thread receives
+    /// `(url, raw_bytes)` and sends back `(url, DecodedImage)`.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn ensure_decode_thread(&mut self) {
+        if self.image_decode_tx.is_some() {
+            return;
+        }
+        let (work_tx, work_rx) = std::sync::mpsc::channel::<(String, Vec<u8>)>();
+        let (result_tx, result_rx) = std::sync::mpsc::channel::<(String, image::DecodedImage)>();
+        std::thread::Builder::new()
+            .name("img-decode".into())
+            .spawn(move || {
+                while let Ok((url, data)) = work_rx.recv() {
+                    if let Some(decoded) = image::decode_image(&data) {
+                        if result_tx.send((url, decoded)).is_err() {
+                            break; // receiver dropped
+                        }
+                    } else if result_tx
+                        .send((
+                            url,
+                            image::DecodedImage {
+                                width: 0,
+                                height: 0,
+                                pixels: Vec::new(),
+                            },
+                        ))
+                        .is_err()
+                    {
+                        break;
+                    }
+                }
+            })
+            .ok(); // If spawn fails, channels remain None → sync fallback
+        self.image_decode_tx = Some(work_tx);
+        self.image_decode_rx = Some(result_rx);
+    }
+
+    /// Collect completed image decodes from the background thread.
+    ///
+    /// Returns `true` if any new images were inserted.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn poll_decoded_images(&mut self) -> bool {
+        let rx = match &self.image_decode_rx {
+            Some(rx) => rx,
+            None => return false,
+        };
+        let mut any = false;
+        while let Ok((url, decoded)) = rx.try_recv() {
+            self.image_decode_in_flight = self.image_decode_in_flight.saturating_sub(1);
+            // Skip sentinel (failed decode) entries.
+            if decoded.width == 0 && decoded.height == 0 {
+                continue;
+            }
+            if self.decoded_images.contains_key(&url) {
+                continue;
+            }
+            let img_bytes = (decoded.width * decoded.height * 4) as usize;
+
+            // Evict oldest decoded images if over budget.
+            while self.decoded_image_bytes + img_bytes > Self::IMAGE_MEMORY_BUDGET {
+                if let Some(evict_url) = self.decoded_image_lru.pop_back() {
+                    if let Some(evicted) = self.decoded_images.remove(&evict_url) {
+                        let evicted_bytes = (evicted.width * evicted.height * 4) as usize;
+                        self.decoded_image_bytes -= evicted_bytes;
+                        self.image_info_dirty = true;
+                    }
+                } else {
+                    break;
+                }
+            }
+
+            self.decoded_image_bytes += img_bytes;
+            self.decoded_image_lru.push_front(url.clone());
+            self.decoded_images.insert(url, decoded);
+            self.image_info_dirty = true;
+            any = true;
+        }
+        any
+    }
+
     pub fn load_next_image_batch(&mut self, vfs: &dyn Vfs, budget_ms: u32) {
         // Promote deferred images that have scrolled into view.
         self.promote_deferred_images();
 
+        // On non-WASM targets, collect any completed background decodes.
+        #[cfg(not(target_arch = "wasm32"))]
+        let mut any_decoded = self.poll_decoded_images();
+        #[cfg(target_arch = "wasm32")]
+        let mut any_decoded = false;
+
         if self.pending_images.is_empty() {
+            #[cfg(not(target_arch = "wasm32"))]
+            if self.image_decode_in_flight == 0 && self.state == LoadingState::Loading {
+                if any_decoded {
+                    self.layout_dirty = true;
+                    self.rebuild_layout_with_images();
+                }
+                self.state = LoadingState::Idle;
+            }
+            if any_decoded {
+                self.layout_dirty = true;
+                self.rebuild_layout_with_images();
+            }
             return;
         }
 
         let start = std::time::Instant::now();
         let budget = std::time::Duration::from_millis(budget_ms as u64);
-        let mut any_decoded = false;
+
         while let Some((resolved, request)) = self.pending_images.pop() {
             // Skip if already decoded (e.g. from cache).
             if self.decoded_images.contains_key(&resolved) {
@@ -225,8 +325,6 @@ impl BrowserWidget {
             }
 
             // Lazy loading: defer images far below the viewport.
-            // Deferred images are stored separately and only re-evaluated
-            // when a scroll event occurs (see `promote_deferred_images`).
             if self.is_image_off_viewport(&resolved) {
                 self.deferred_images.push((resolved, request));
                 continue;
@@ -240,28 +338,41 @@ impl BrowserWidget {
                 Some(&mut self.cookie_jar),
                 #[cfg(not(target_arch = "wasm32"))]
                 Some(&self.cache),
-            ) && let Some(decoded) = image::decode_image(&loaded.response.body)
-            {
-                let img_bytes = (decoded.width * decoded.height * 4) as usize;
-
-                // Evict oldest decoded images if over budget.
-                while self.decoded_image_bytes + img_bytes > Self::IMAGE_MEMORY_BUDGET {
-                    if let Some(evict_url) = self.decoded_image_lru.pop_back() {
-                        if let Some(evicted) = self.decoded_images.remove(&evict_url) {
-                            let evicted_bytes = (evicted.width * evicted.height * 4) as usize;
-                            self.decoded_image_bytes -= evicted_bytes;
-                            self.image_info_dirty = true;
-                        }
-                    } else {
-                        break;
+            ) {
+                // On non-WASM, dispatch to background decode thread.
+                #[cfg(not(target_arch = "wasm32"))]
+                {
+                    self.ensure_decode_thread();
+                    if let Some(ref tx) = self.image_decode_tx
+                        && tx.send((resolved, loaded.response.body)).is_ok()
+                    {
+                        self.image_decode_in_flight += 1;
                     }
                 }
 
-                self.decoded_image_bytes += img_bytes;
-                self.decoded_image_lru.push_front(resolved.clone());
-                self.decoded_images.insert(resolved, decoded);
-                self.image_info_dirty = true;
-                any_decoded = true;
+                // On WASM, decode synchronously (no threads available).
+                #[cfg(target_arch = "wasm32")]
+                if let Some(decoded) = image::decode_image(&loaded.response.body) {
+                    let img_bytes = (decoded.width * decoded.height * 4) as usize;
+
+                    while self.decoded_image_bytes + img_bytes > Self::IMAGE_MEMORY_BUDGET {
+                        if let Some(evict_url) = self.decoded_image_lru.pop_back() {
+                            if let Some(evicted) = self.decoded_images.remove(&evict_url) {
+                                let evicted_bytes = (evicted.width * evicted.height * 4) as usize;
+                                self.decoded_image_bytes -= evicted_bytes;
+                                self.image_info_dirty = true;
+                            }
+                        } else {
+                            break;
+                        }
+                    }
+
+                    self.decoded_image_bytes += img_bytes;
+                    self.decoded_image_lru.push_front(resolved.clone());
+                    self.decoded_images.insert(resolved, decoded);
+                    self.image_info_dirty = true;
+                    any_decoded = true;
+                }
             }
 
             // Check time budget after each image.
@@ -270,13 +381,69 @@ impl BrowserWidget {
             }
         }
 
+        // On non-WASM, wait within the remaining budget for in-flight
+        // decodes to complete so callers that pass a generous budget
+        // (e.g. tests with 5000ms) see results immediately.
+        #[cfg(not(target_arch = "wasm32"))]
+        if self.image_decode_in_flight > 0
+            && let Some(ref rx) = self.image_decode_rx
+        {
+            while self.image_decode_in_flight > 0 {
+                let remaining = budget.saturating_sub(start.elapsed());
+                if remaining.is_zero() {
+                    break;
+                }
+                match rx.recv_timeout(remaining) {
+                    Ok((url, decoded)) => {
+                        self.image_decode_in_flight = self.image_decode_in_flight.saturating_sub(1);
+                        if decoded.width == 0 && decoded.height == 0 {
+                            continue;
+                        }
+                        if self.decoded_images.contains_key(&url) {
+                            continue;
+                        }
+                        let img_bytes = (decoded.width * decoded.height * 4) as usize;
+
+                        while self.decoded_image_bytes + img_bytes > Self::IMAGE_MEMORY_BUDGET {
+                            if let Some(evict_url) = self.decoded_image_lru.pop_back() {
+                                if let Some(evicted) = self.decoded_images.remove(&evict_url) {
+                                    let evicted_bytes =
+                                        (evicted.width * evicted.height * 4) as usize;
+                                    self.decoded_image_bytes -= evicted_bytes;
+                                    self.image_info_dirty = true;
+                                }
+                            } else {
+                                break;
+                            }
+                        }
+
+                        self.decoded_image_bytes += img_bytes;
+                        self.decoded_image_lru.push_front(url.clone());
+                        self.decoded_images.insert(url, decoded);
+                        self.image_info_dirty = true;
+                        any_decoded = true;
+                    },
+                    Err(_) => break, // timeout or disconnected
+                }
+            }
+        }
+
         if any_decoded {
             self.layout_dirty = true;
             self.rebuild_layout_with_images();
         }
 
-        if self.pending_images.is_empty() && self.state == LoadingState::Loading {
-            self.state = LoadingState::Idle;
+        if self.pending_images.is_empty() {
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                if self.image_decode_in_flight == 0 && self.state == LoadingState::Loading {
+                    self.state = LoadingState::Idle;
+                }
+            }
+            #[cfg(target_arch = "wasm32")]
+            if self.state == LoadingState::Loading {
+                self.state = LoadingState::Idle;
+            }
         }
     }
 
